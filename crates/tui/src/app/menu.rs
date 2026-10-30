@@ -701,6 +701,8 @@ impl App {
         if own.is_empty() && pane.is_empty() {
             return;
         }
+        // However it opened (a right click too): the first step about the menu is taken.
+        self.step_taken(Action::OpenMenu);
         if !self.tabs.is_empty() {
             let t = self.tab_mut();
             t.popup = None;

@@ -2,4 +2,4 @@
 source: crates/tui/tests/flows_tips.rs
 expression: status
 ---
- NORMAL  local-pg │ Tip: F1 lists every key of the pane you are in                 │ i type · Ctrl+E run · Tab next pane · : commands · F1 help · Space more EN
+ NORMAL  local-pg │ Tip: Shift+F10 opens the actions of what is selected           │ i type · Ctrl+E run · Tab next pane · : commands · F1 help · Space more EN

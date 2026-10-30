@@ -586,12 +586,17 @@ paging_idle_timeout = "10s"    # with "hold": close it after 10 s without a page
 about a key where the screen is empty anyway: the workspace without tabs, an empty console, a
 result with nothing to show or still running, and the status bar's spare room when every key
 hint fits beside it (so not at 80 columns). The key is the one bound now, remapped keys
-included. A tip stays while you stay on the same tab and pane and moves on when you switch
-or a run starts or ends; no timer runs for it. A tip about a key you have pressed once is not
-shown again. The welcome panel lists four first steps (add a connection, run a query, open the
-action menu, the keyboard help), marked once done; `X` there or in the explorer hides them for
-good. An action you ran three times from the action menu or the `:` command line without its
-key gets one status line naming its key, once. With `tips = "off"` none of this shows.
+included, and a tip only names a key that works where it shows; none shows while a popup, a
+dialog, a menu or the command line is open. A tip stays while you stay on the same tab and pane
+and moves on when you switch or a run starts or ends; no timer runs for it. A tip about a key
+you have pressed once is not shown again. The welcome panel lists four first steps (add a
+connection, run a query, open the action menu, the keyboard help), marked once done however you
+did them (a right click opening a menu counts); `X` there or in the explorer hides them for
+good. Until they are done, the next one also takes its turn with the tips of the workspace
+without tabs and of an empty console. If you used datarig before tips existed (connections or a
+saved workspace, no `usage.toml`), the first steps count as done. An action you ran three times
+from the action menu or the `:` command line without ever pressing its key gets one status line
+naming its key, once. With `tips = "off"` none of this shows and nothing is counted or written.
 
 ### Environments
 
@@ -673,13 +678,15 @@ Data (saved queries, datarig's own `known_hosts`) and state (tabs, console buffe
 platform's data and state directories (`~/.local/share/datarig` and `~/.local/state/datarig`
 on Linux, `~/Library/Application Support/datarig` on macOS; on Windows, untested,
 `%APPDATA%\datarig` and `%LOCALAPPDATA%\datarig`), or under `$XDG_DATA_HOME` / `$XDG_STATE_HOME` when set.
-The state directory's `usage.toml` is what the tips remember: for each action id (and command
-name) how often it ran by key, from the action menu and from the command line (each count stops at
-9999), the actions whose key a status line named, and `onboarding = "done"` once the first steps
-are done or hidden. It holds no times, no statements and no names of connections or anything else
-of yours, is written when the workspace is saved and when the first steps are hidden (never per
-key), and is never sent anywhere. Delete it to see every tip again. A file that cannot be read is
-left as it is.
+The state directory's `usage.toml` is what the tips remember: for each action id that ran (and
+each command name without an action of its own) how often it ran by key, from the action menu and
+from the command line (each count stops at 9999), the actions whose key a status line named, the
+first steps taken some other way (`steps`), and `onboarding = "done"` once the first steps are done
+or hidden. It holds no times, no statements and no names of connections or anything else of yours,
+so it stays small, is written when the workspace is saved and when the first steps are hidden
+(never per key, and not with `tips = "off"`), and is never sent anywhere. Delete it while datarig
+is not running to see every tip again (with connections or a workspace there, the first steps stay
+done). A file that cannot be read is left as it is.
 `DATARIG_SECRET_STORE=memory` keeps passwords in memory only and never touches the OS keychain.
 An `[editor] mode` key from an older version is ignored (the editor has vim keys only) and
 dropped the next time the app saves the file.

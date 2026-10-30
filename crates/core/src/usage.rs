@@ -3,13 +3,15 @@
 //! run from a menu a few times can name its key once. Local only, never sent anywhere.
 //!
 //! The file holds action ids and command names with a count each (at most [`MAX_COUNT`]), the
-//! actions whose key was named once (`nudged`) and whether the first steps of the welcome panel
-//! are done (`onboarding = "done"`). No times, no statements, no names of connections or
-//! anything else of the user's:
+//! actions whose key was named once (`nudged`), the first steps taken some other way than by
+//! running their action (`steps`: a menu opened by a right click, a run from the explorer) and
+//! whether the first steps of the welcome panel are done (`onboarding = "done"`). No times, no
+//! statements, no names of connections or anything else of the user's:
 //!
 //! ```toml
 //! onboarding = "done"
 //! nudged = ["explorer.show_ddl"]
+//! steps = ["menu.open"]
 //!
 //! [keys]
 //! "query.execute_current" = 12
@@ -60,6 +62,8 @@ pub struct Usage {
     pub command: BTreeMap<String, u32>,
     /// The actions whose key a status line named once.
     pub nudged: BTreeSet<String>,
+    /// The first steps (by action id) taken without running their action.
+    pub steps: BTreeSet<String>,
     /// The first steps of the welcome panel are done or were dismissed.
     pub onboarding_done: bool,
 }
@@ -85,9 +89,16 @@ impl Usage {
             Via::Menu => &mut self.menu,
             Via::Command => &mut self.command,
         };
-        let n = counts.entry(id.to_string()).or_insert(0);
-        *n = n.saturating_add(1).min(MAX_COUNT);
-        *n
+        match counts.get_mut(id) {
+            Some(n) => {
+                *n = n.saturating_add(1).min(MAX_COUNT);
+                *n
+            }
+            None => {
+                counts.insert(id.to_string(), 1);
+                1
+            }
+        }
     }
 
     /// Every count added up.
@@ -118,9 +129,8 @@ pub fn load(path: &Path) -> Result<Usage, Unreadable> {
             }
         }
     }
-    if let Some(a) = doc.get("nudged").and_then(toml_edit::Item::as_array) {
-        u.nudged = a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
-    }
+    u.nudged = names(&doc, "nudged");
+    u.steps = names(&doc, "steps");
     u.onboarding_done = doc.get("onboarding").and_then(toml_edit::Item::as_str) == Some("done");
     Ok(u)
 }
@@ -149,18 +159,25 @@ pub fn save(path: &Path, usage: &Usage) -> std::io::Result<()> {
             t.insert(id, toml_edit::value(i64::from((*n).max(theirs).min(MAX_COUNT))));
         }
     }
-    let nudged = doc.get("nudged");
-    if !usage.nudged.is_empty() && nudged.is_none_or(|n| n.as_array().is_some()) {
-        let mut all: BTreeSet<String> = usage.nudged.clone();
-        if let Some(a) = nudged.and_then(toml_edit::Item::as_array) {
-            all.extend(a.iter().filter_map(|v| v.as_str().map(str::to_string)));
+    for (key, ours) in [("nudged", &usage.nudged), ("steps", &usage.steps)] {
+        // Something else under that name: left as it is.
+        if ours.is_empty() || doc.get(key).is_some_and(|n| n.as_array().is_none()) {
+            continue;
         }
-        doc["nudged"] = toml_edit::value(all.iter().map(String::as_str).collect::<toml_edit::Array>());
+        let mut all = names(&doc, key);
+        all.extend(ours.iter().cloned());
+        doc[key] = toml_edit::value(all.iter().map(String::as_str).collect::<toml_edit::Array>());
     }
     if usage.onboarding_done {
         doc["onboarding"] = toml_edit::value("done");
     }
     crate::fsutil::atomic_write(path, doc.to_string().as_bytes())
+}
+
+/// The strings of the array `key` (none: empty).
+fn names(doc: &toml_edit::DocumentMut, key: &str) -> BTreeSet<String> {
+    let a = doc.get(key).and_then(toml_edit::Item::as_array);
+    a.into_iter().flat_map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string))).collect()
 }
 
 /// The file as a document; `None` when it is not there.

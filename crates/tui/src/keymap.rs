@@ -126,9 +126,25 @@ pub struct HelpEntry {
     pub editor_keys: Vec<Vec<KeyChord>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Keymap {
     bindings: Vec<Bound>,
+    /// Which key map this is: each one made gets its own, so text made from another key map
+    /// (a tip naming a key) is made again.
+    id: u64,
+}
+
+impl PartialEq for Keymap {
+    fn eq(&self, other: &Self) -> bool {
+        self.bindings == other.bindings
+    }
+}
+
+impl Eq for Keymap {}
+
+fn next_id() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Resolve the default table. Entries whose keys do not parse or whose action id is unknown
@@ -149,13 +165,18 @@ fn resolve(raw: &[Binding]) -> Vec<Bound> {
 
 impl Default for Keymap {
     fn default() -> Self {
-        Self { bindings: resolve(&defaults()) }
+        Self { bindings: resolve(&defaults()), id: next_id() }
     }
 }
 
 impl Keymap {
     pub fn from_bindings(bindings: Vec<Bound>) -> Self {
-        Self { bindings }
+        Self { bindings, id: next_id() }
+    }
+
+    /// Which key map this is (no two made share it).
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     pub fn bindings(&self) -> &[Bound] {

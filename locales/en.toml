@@ -2293,7 +2293,6 @@
 # Never a key in the text: {key}, {command} and {setting} are filled in from the key bindings,
 # the command table and the settings.
 "tip_mark" = "Tip:"
-"tips.quick_connect" = "{key} connects by typing part of a connection's name"
 "tips.explorer_filter" = "{key} filters the explorer by name"
 "tips.settings" = "{key} opens the settings"
 "tips.ddl_command" = "{command} and a table's name opens the table's DDL"
@@ -2306,10 +2305,8 @@
 "tips.results_toggle" = "{key} hides the results pane and shows it again"
 "tips.new_console" = "{key} opens another console on the same connection"
 "tips.cancel" = "{key} cancels the running query"
-"tips.run_elsewhere" = "Each tab runs on its own session: {key} opens another console meanwhile"
-"tips.help" = "{key} lists every key of the pane you are in"
+"tips.run_elsewhere" = "Each console runs on its own session: {key} opens another one meanwhile"
 "tips.menu" = "{key} opens the actions of what is selected"
-"tips.commands" = "{key} finds any action by its name"
 "tips.zoom" = "{key} zooms the pane to the whole window"
 "tips.theme" = "{command} previews and picks a color theme"
 "tips.tips_off" = "Tips like this one turn off with {setting}"
@@ -2320,5 +2317,7 @@
 "onboarding.help" = "See every key in the keyboard help"
 "onboarding.dismiss" = "Hide these steps"
 "onboarding.next" = "Next step: {step} with {key} ({dismiss} hides the steps)"
-"nudge.key" = "Tip: {key} runs “{action}” here without the menu"
+"onboarding.next_step" = "Next step: {step} with {key}"
+"nudge.menu" = "{mark} {key} runs “{action}” here without the menu"
+"nudge.command" = "{mark} {key} runs “{action}” here without the command line"
 "action.tips.dismiss_onboarding" = "Hide the first steps of the welcome panel"

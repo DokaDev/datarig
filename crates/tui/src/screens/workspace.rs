@@ -1065,15 +1065,18 @@ fn draw_first_steps(app: &App, x: u16, mut y: u16, w: usize, bottom: u16, buf: &
             return;
         }
         let mut lx = x;
+        // Cut at the panel's edge however narrow it is.
+        let room = |lx: u16| w.saturating_sub(usize::from(lx - x));
         if let Some(done) = *done {
             let color = if done { th.success } else { th.fg_dim };
-            put(buf, lx, y, crate::icons::step(done, on), mark_w, Style::new().fg(color).bg(th.bg));
+            put(buf, lx, y, crate::icons::step(done, on), mark_w.min(w), Style::new().fg(color).bg(th.bg));
         }
-        lx += mark_w as u16 + 1;
-        put(buf, lx, y, k, key_w, Style::new().fg(th.accent_warm).bg(th.bg).add_modifier(Modifier::BOLD));
-        lx += key_w as u16 + 2;
+        lx = lx.saturating_add(mark_w as u16 + 1).min(x + w as u16);
+        let key_style = Style::new().fg(th.accent_warm).bg(th.bg).add_modifier(Modifier::BOLD);
+        put(buf, lx, y, k, key_w.min(room(lx)), key_style);
+        lx = lx.saturating_add(key_w as u16 + 2).min(x + w as u16);
         let fg = if i == dismiss { th.fg_muted } else { th.fg };
-        put(buf, lx, y, label, w.saturating_sub((lx - x) as usize), Style::new().fg(fg).bg(th.bg));
+        put(buf, lx, y, label, room(lx), Style::new().fg(fg).bg(th.bg));
         y += 1;
     }
     if y < bottom {

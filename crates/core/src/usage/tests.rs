@@ -24,10 +24,12 @@ fn counts_nudges_and_the_onboarding_round_trip() {
     u.bump(Via::Menu, "explorer.show_ddl");
     u.bump(Via::Command, ":theme");
     u.nudged.insert("explorer.show_ddl".into());
+    u.steps.insert("menu.open".into());
     u.onboarding_done = true;
     save(&path, &u).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("onboarding = \"done\""), "{text}");
+    assert!(text.contains("steps = [\"menu.open\"]"), "{text}");
     assert!(text.contains("\"query.execute_current\" = 2"), "{text}");
     assert_eq!(load(&path), Ok(u.clone()));
     assert_eq!(u.total(), 4);
@@ -66,8 +68,8 @@ fn an_unreadable_file_is_never_written_over() {
 fn unknown_entries_are_kept_and_counts_only_grow() {
     let d = dir("merge");
     let path = d.join(FILE);
-    let before = "# mine\nlater = \"kept\"\nonboarding = \"later-value\"\nnudged = [\"old.action\"]\n\n\
-                  [keys]\n\"future.action\" = 7\n\"query.cancel\" = 5\n\"odd\" = \"x\"\n";
+    let before = "# mine\nlater = \"kept\"\nonboarding = \"later-value\"\nnudged = [\"old.action\"]\n\
+                  steps = \"odd\"\n\n[keys]\n\"future.action\" = 7\n\"query.cancel\" = 5\n\"odd\" = \"x\"\n";
     std::fs::write(&path, before).unwrap();
     let mut u = load(&path).unwrap();
     assert!(!u.onboarding_done, "an onboarding value this version does not know is not done");
@@ -76,11 +78,17 @@ fn unknown_entries_are_kept_and_counts_only_grow() {
     u.keys.insert("query.cancel".into(), 2);
     u.bump(Via::Key, "editor.complete");
     u.nudged.insert("explorer.show_ddl".into());
+    u.steps.insert("menu.open".into());
     save(&path, &u).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
-    for kept in
-        ["# mine", "later = \"kept\"", "onboarding = \"later-value\"", "\"future.action\" = 7", "\"odd\" = \"x\""]
-    {
+    for kept in [
+        "# mine",
+        "later = \"kept\"",
+        "onboarding = \"later-value\"",
+        "steps = \"odd\"",
+        "\"future.action\" = 7",
+        "\"odd\" = \"x\"",
+    ] {
         assert!(text.contains(kept), "{kept}: {text}");
     }
     assert!(text.contains("\"query.cancel\" = 5"), "{text}");

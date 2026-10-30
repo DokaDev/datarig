@@ -242,6 +242,7 @@ impl App {
             }));
         }
         self.help_select_first_entry();
+        self.step_taken(Action::Help);
     }
 
     /// The rows of the keyboard help: a header per context, then (when the section is open)

@@ -16,8 +16,8 @@ expression: "panes.join(\"\\n\")"
 │                      ││ [Result]  Chart  Messages                            │
 │                      ││ Running… the result shows here when it comes.        │
 │                      ││                                                      │
-│                      ││ Tip: Each tab runs on its own session: Ctrl+T opens  │
-│                      ││ another console meanwhile                            │
+│                      ││ Tip: Each console runs on its own session: Ctrl+T    │
+│                      ││ opens another one meanwhile                          │
 │                      ││                                                      │
 │                      ││                                                      │
 │                      ││                                                      │

@@ -1,7 +1,7 @@
 //! Tips (`[ui] tips`): the welcome panel's first steps, one tip about a key in an empty place
 //! (the workspace without tabs, an empty console, an empty or running result, the status bar's
-//! spare room), the status line that names a key after a few runs from the command line, and
-//! the usage file they read and write.
+//! spare room), the status line that names a key after a few runs from a menu or the command
+//! line, and the usage file they read and write.
 
 mod common;
 
@@ -14,7 +14,8 @@ use datarig_core::secret::{MemoryStore, SecretStore};
 use datarig_core::usage::Via;
 use datarig_tui::app::Startup;
 use datarig_tui::app::action::Action;
-use datarig_tui::app::tips::Place;
+use datarig_tui::app::tips::{Place, STEPS};
+use datarig_tui::keymap::{Bound, Ctx, Keymap, Target, parse_keys};
 use ratatui::crossterm::event::KeyCode;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -143,14 +144,76 @@ fn tips_off_shows_the_welcome_panel_as_before_and_no_tip() {
     assert!(h.app.tip(Place::EmptyEditor).is_some());
 }
 
+/// The status line's text (all of it, however wide).
+fn status_text(h: &Harness) -> String {
+    h.app.status.as_ref().map(|s| h.app.i18n.msg(&s.msg).to_string()).unwrap_or_default()
+}
+
 #[test]
 fn the_empty_workspace_shows_the_next_step_then_a_tip() {
     let mut h = launched(&sample_config(None), Lang::En);
-    // The first connection exists: the next step is the run.
+    // The first connection exists, and without a tab nothing runs: the next step is another.
     let screen = h.screen(160, 45);
-    assert!(screen.contains("[ ] Next step: Run your first query with Ctrl+E (X hides the steps)"), "{screen}");
+    let line = screen.lines().find(|l| l.contains("Next step: ")).unwrap_or_else(|| panic!("{screen}"));
+    assert!(line.contains("[ ] Next step: ") && line.contains("(X hides the steps)"), "{line}");
+    assert!(!line.contains("Run your first query"), "{line}");
     h.keys("X");
     assert_screen!("no_tab_tip_en_80x24", Lang::En, h.draw(80, 24));
+}
+
+#[test]
+fn the_next_step_takes_turns_with_the_tips_of_the_empty_editor() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.tips.paused = false;
+    h.ctrl('t');
+    assert!(h.app.onboarding_shown());
+    let (mut steps, mut tips) = (0, 0);
+    for e in 0..10 {
+        h.app.tips.epoch = e;
+        match h.app.tip(Place::EmptyEditor) {
+            // The key that hides the steps types or edits in the editor: not named there.
+            Some(Msg::OnboardingNext { .. }) => panic!("the editor has no key that hides the steps"),
+            Some(m @ Msg::OnboardingNextStep { .. }) => {
+                let text = h.app.i18n.msg(&m).to_string();
+                assert_eq!(text, "Next step: Run your first query with Ctrl+E");
+                steps += 1;
+            }
+            Some(_) => tips += 1,
+            None => panic!("epoch {e}: no tip"),
+        }
+        // One line, never two.
+        let screen = h.screen(80, 24);
+        let lines = screen.lines().filter(|l| l.contains("Next step: ") || l.contains("Tip: ")).count();
+        assert_eq!(lines, 1, "{screen}");
+    }
+    assert!(steps > 0 && tips > 0, "{steps} steps, {tips} tips");
+}
+
+#[test]
+fn a_tip_is_back_after_a_popup_a_menu_or_the_command_line_closes() {
+    let mut h = connected();
+    h.ctrl('t');
+    let tip = h.app.tip(Place::EmptyEditor).expect("a tip");
+    let line = h.app.tip_line(Place::EmptyEditor).unwrap();
+    let start: String = line.chars().take(24).collect();
+    assert!(h.screen(80, 24).contains(&start), "{line}");
+    // The command line, the keyboard help, the leader's popup, the action menu.
+    for (name, open) in [(":", ":"), ("help", ""), ("which-key", " "), ("menu", "  ")] {
+        if open.is_empty() {
+            h.key(KeyCode::F(1));
+        } else {
+            h.keys(open);
+            // The leader's popup comes after a moment.
+            h.settle();
+        }
+        assert!(h.app.overlays.top().is_some(), "{name} open");
+        assert_eq!(h.app.tip(Place::EmptyEditor), None, "{name}: no tip under it");
+        assert!(!h.screen(80, 24).contains(&start), "{name}");
+        h.key(KeyCode::Esc);
+        assert!(h.app.overlays.top().is_none(), "{name} closed");
+        assert_eq!(h.app.tip(Place::EmptyEditor), Some(tip.clone()), "{name}: the same tip again");
+        assert!(h.screen(80, 24).contains(&start), "{name}");
+    }
 }
 
 #[test]
@@ -220,7 +283,7 @@ fn a_tip_stays_while_the_page_does_and_a_known_key_drops_out() {
 #[test]
 fn the_third_command_line_run_names_the_key_once() {
     let mut h = connected();
-    let named = "Tip: Ctrl+T runs “New console tab” here without the menu";
+    let named = "Tip: Ctrl+T runs “New console tab” here without the command line";
     for _ in 0..2 {
         h.command("tabnew");
         assert!(!h.status(160, 45).contains(named));
@@ -237,25 +300,96 @@ fn the_third_command_line_run_names_the_key_once() {
     h.ctrl('t');
     for _ in 0..4 {
         h.command("tabnew");
-        assert!(!h.status(160, 45).contains("without the menu"));
+        assert!(!h.status(160, 45).contains("without the command line"));
     }
-    // Not with tips off.
+    // Not with tips off, and nothing counted then.
     let mut h = connected();
     h.app.prefs.tips = Tips::Off;
     for _ in 0..3 {
         h.command("tabnew");
     }
-    assert!(!h.status(160, 45).contains("without the menu"));
+    assert!(!h.status(160, 45).contains("without the command line"));
+    assert_eq!(h.app.tips.usage.count(Via::Command, "tab.new_console"), 0);
+    assert_eq!(h.app.tips.usage.count(Via::Key, "commands.open"), 0);
+}
+
+#[test]
+fn the_third_menu_run_names_the_key_unless_the_key_was_used() {
+    let label = "Comment the line or the selected lines out with -- (or back in)";
+    let mut h = connected();
+    h.ctrl('t');
+    let key = h.app.key_for(Action::ToggleComment, Ctx::VimNormal);
+    let named = format!("Tip: {key} runs “{label}” here without the menu");
+    for i in 0..3 {
+        h.keys("  ");
+        h.menu_pick(label);
+        assert_eq!(status_text(&h).contains(&named), i == 2, "run {}: {}", i + 1, status_text(&h));
+    }
+    assert!(h.app.tips.usage.nudged.contains("editor.comment_toggle"));
+    // Its key used once before (an action no tip is about): never named.
+    let mut h = connected();
+    h.ctrl('t');
+    h.keys(" ec");
+    assert_eq!(h.app.tips.usage.count(Via::Key, "editor.comment_toggle"), 1);
+    for _ in 0..4 {
+        h.keys("  ");
+        h.menu_pick(label);
+        assert!(!status_text(&h).contains("without the menu"), "{}", status_text(&h));
+    }
+}
+
+#[test]
+fn a_remapped_key_is_the_one_a_nudge_names() {
+    let mut h = connected();
+    let mut bindings: Vec<Bound> =
+        h.app.keymap.bindings().iter().filter(|b| b.target != Target::Action(Action::NewTab)).cloned().collect();
+    bindings.push(Bound {
+        ctx: Ctx::Workspace,
+        keys: parse_keys("ctrl+f9").unwrap(),
+        target: Target::Action(Action::NewTab),
+        user: true,
+    });
+    h.app.keymap = Keymap::from_bindings(bindings);
+    for _ in 0..3 {
+        h.command("tabnew");
+    }
+    let status = status_text(&h);
+    assert!(status.contains("Ctrl+F9 runs “New console tab”") && !status.contains("Ctrl+T"), "{status}");
+}
+
+#[test]
+fn a_first_step_is_taken_by_any_way_to_it() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.tips.paused = false;
+    let step = |h: &Harness, a: Action| h.app.step_done(STEPS.iter().find(|s| s.action == a).unwrap());
+    assert!(step(&h, Action::NewProfile));
+    assert!(!step(&h, Action::OpenMenu) && !step(&h, Action::RunStatement));
+    // A right click opens the menu.
+    h.right_click_row("local-pg");
+    assert!(h.app.overlays.top().is_some());
+    h.key(KeyCode::Esc);
+    assert!(step(&h, Action::OpenMenu));
+    // A run that is not the run key's: the plan of the statement.
+    h.ctrl('t');
+    h.keys("i");
+    h.type_text("select 1");
+    h.key(KeyCode::Esc);
+    h.command("explain");
+    assert!(h.app.tab().exec.running.is_some());
+    assert!(step(&h, Action::RunStatement));
+    assert_eq!(h.app.tips.usage.count(Via::Key, "query.execute_current"), 0);
 }
 
 #[test]
 fn usage_is_written_with_the_workspace_and_read_at_the_next_launch() {
     let state = State::new("written");
+    // Not a first launch (that writes the file at its first save).
+    std::fs::write(state.usage(), "").unwrap();
     let mut h = launch_at(&test_db_config(), &state);
-    assert!(!state.usage().exists(), "nothing counted, nothing written");
+    assert_eq!(std::fs::read_to_string(state.usage()).unwrap(), "", "nothing counted, nothing written");
     h.key(KeyCode::F(1));
     h.key(KeyCode::Esc);
-    assert!(!state.usage().exists(), "not per key");
+    assert_eq!(std::fs::read_to_string(state.usage()).unwrap(), "", "not per key");
     h.ctrl('q');
     assert!(h.app.quit);
     let text = std::fs::read_to_string(state.usage()).unwrap();
@@ -318,10 +452,43 @@ fn without_a_writable_state_directory_usage_stays_in_memory() {
     assert_eq!(h.app.tips.usage.count(Via::Key, "help.context"), 1);
     // A second instance (read-only workspace) writes nothing either.
     let state = State::new("read-only");
+    std::fs::write(state.usage(), "").unwrap();
     let mut h = launch_at(&test_db_config(), &state);
     h.app.read_only = true;
     h.key(KeyCode::F(1));
     h.key(KeyCode::Esc);
     h.ctrl('q');
-    assert!(!state.usage().exists());
+    assert_eq!(std::fs::read_to_string(state.usage()).unwrap(), "");
+}
+
+#[test]
+fn returning_users_get_no_first_steps_and_newcomers_do() {
+    // Connections from an earlier version, no usage file yet.
+    let state = State::new("returning");
+    let mut h = launch_at(&test_db_config(), &state);
+    assert!(h.app.tips.usage.onboarding_done && !h.app.onboarding_shown());
+    h.ctrl('q');
+    let text = std::fs::read_to_string(state.usage()).unwrap();
+    assert!(text.contains("onboarding = \"done\""), "{text}");
+    drop(h);
+    // A workspace from an earlier version, no connection left.
+    let state = State::new("returning-workspace");
+    std::fs::write(state.0.join(datarig_core::workspace::FILE), "").unwrap();
+    let mut h = launch_at(&no_profiles(), &state);
+    h.key(KeyCode::Esc);
+    assert!(!h.app.onboarding_shown());
+    assert!(!h.screen(80, 24).contains("First steps"));
+    drop(h);
+    // A first launch: the first steps, and a usage file, so the next launch (with the connection
+    // added meanwhile) still shows them.
+    let state = State::new("newcomer");
+    let mut h = launch_at(&no_profiles(), &state);
+    h.key(KeyCode::Esc);
+    assert!(h.app.onboarding_shown());
+    assert!(h.screen(80, 24).contains("First steps"));
+    h.ctrl('q');
+    assert!(state.usage().exists());
+    drop(h);
+    let h = launch_at(&test_db_config(), &state);
+    assert!(h.app.onboarding_shown());
 }
