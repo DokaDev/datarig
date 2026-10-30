@@ -75,7 +75,13 @@ its self and total time, a bar of its share of the whole colored by heat, and it
 | `6` | The row flow: the rows each node passes up as a band, thick by their number, with the rows its filters removed |
 | `7` | A treemap (area = each node's own time) |
 | `8` | A box diagram (boxes joined by lines; `<` and `>` and the wheel move around a large plan) |
-| `9` | Raw: the plan as `psql` prints it (written from the JSON, nothing run again), or MySQL's own text |
+| `9` | Raw: the plan as PostgreSQL's text `EXPLAIN` reads (written from the JSON, nothing run again), or MySQL's own text |
+
+The summary view (`2`) of a PostgreSQL plan:
+
+```text
+{{#include ../screens/plan-summary-postgres.txt}}
+```
 
 `y` copies the plan as the raw view shows it, `Y` as the server sent it (its JSON, or its
 text). Large plans stay readable and fast: names are cut, layouts are bounded, and only what is

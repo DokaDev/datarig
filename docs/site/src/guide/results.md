@@ -49,6 +49,10 @@ run again for it: when the server has more rows, the line under the grid says so
 the editor's (Rust regular expressions, case sensitive unless they start with `(?i)`); matching
 cells are tinted.
 
+```text
+{{#include ../screens/grid-search.txt}}
+```
+
 ## The inspector
 
 `i` shows or hides the inspector next to the grid; `I` switches between its Row and Cell tabs.
