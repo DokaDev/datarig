@@ -45,8 +45,8 @@ is implemented, all with counts:
   keys they sit on.
 
 The complete list, with every key's exact behaviour, is in the
-[keybindings reference](../reference/keybindings.md). Not yet: macros (their keys are
-reserved), `gv`, and Ex commands other than line numbers, `:s` and `:format` (such as delete and
+[keybindings reference](../reference/keybindings.md). Not supported: macros (their keys
+are reserved), `gv`, and Ex commands other than line numbers, `:s` and `:format` (such as delete and
 global).
 
 ## Ex commands
@@ -121,9 +121,10 @@ selection, as one undo step. It never runs on its own.
 
 ## Your own editor, and suspending
 
-- `Ctrl+G` opens the query in your own editor (`$VISUAL`, else `$EDITOR`, else `vi`; for example
-  `EDITOR="code -w"`), run directly without a shell on a private temporary file. What you save
-  replaces the text as one undo step; quitting without saving (or Vim's :cq) changes nothing.
-  A table tab's query opens as a copy that comes back in a new console.
+- `Ctrl+G` opens the query in your own editor (`$VISUAL`, else `$EDITOR`, else `vi`, `notepad`
+  on Windows; arguments are allowed, for example `EDITOR="vim -n"`), run directly without a
+  shell on a private temporary file. What you save replaces the text as one undo step; quitting
+  without saving (or Vim's :cq) changes nothing. A table tab's query opens as a copy that comes
+  back in a new console.
 - `Ctrl+Z` (or `:suspend`) suspends datarig as Vim does, and the shell's `fg` brings it back
   (not on Windows). A running query keeps running on the server meanwhile.
