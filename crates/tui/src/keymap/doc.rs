@@ -15,6 +15,9 @@ pub fn render() -> String {
         "<!-- Generated from crates/tui/src/keymap/defaults.rs and the action registry. Do not edit;\n     \
          run `DATARIG_BLESS=1 cargo test -p datarig-tui --test keybindings_doc` at the repository root. -->\n\n",
     );
+    // mdBook anchors (invisible here): the docs site's Keybindings page includes this part, its
+    // Commands page the `commands` part.
+    s.push_str("<!-- ANCHOR: contexts -->\n\n");
     s.push_str(
         "Keys resolve from the current context outwards to `root`; the first binding found wins. \
          Dialogs (`overlay.*`) sit directly under `root`, so only `root` keys pass through them. The cell \
@@ -132,7 +135,6 @@ pub fn render() -> String {
     for ctx in Ctx::ALL {
         section(&mut s, &km, ctx);
     }
-    commands(&mut s);
     s.push_str("\n## Command line only\n\nActions without a default key (the command line finds them by name).\n\n");
     s.push_str("| Action | Description |\n|---|---|\n");
     for spec in action::REGISTRY {
@@ -140,6 +142,8 @@ pub fn render() -> String {
             s.push_str(&format!("| `{}` | {} |\n", spec.id, en(spec.label)));
         }
     }
+    s.push_str("\n<!-- ANCHOR_END: contexts -->\n");
+    commands(&mut s);
     s
 }
 
@@ -151,7 +155,7 @@ fn code(text: &str) -> String {
 /// The `:` commands and the settings of `:set`.
 fn commands(s: &mut String) {
     s.push_str(
-        "\n## `:` commands\n\nType them after `:` (or `Ctrl+K`). `Tab`/`Shift+Tab`, `↑`/`↓` or `Ctrl+N`/`Ctrl+P` \
+        "\n## `:` commands\n\n<!-- ANCHOR: commands -->\n\nType them after `:` (or `Ctrl+K`). `Tab`/`Shift+Tab`, `↑`/`↓` or `Ctrl+N`/`Ctrl+P` \
          pick an entry, `Enter` runs it (a command that still needs its argument is completed instead), `Esc` or \
          `Backspace` on an empty line closes. Text that is not a command searches the actions by name. A command \
          that cannot run shows an error and the line stays open.\n\n",
@@ -216,10 +220,13 @@ fn commands(s: &mut String) {
         };
         s.push_str(&format!("| `{}` | {} | {} |\n", st.key, values.join(" "), en(st.label)));
     }
+    s.push_str("\n<!-- ANCHOR_END: commands -->\n");
 }
 
-fn en(l: Label) -> &'static str {
-    l.text(Lang::En)
+/// The English text of `l` for a table cell: a `|` would end the cell and `<word>` would be read
+/// as HTML.
+fn en(l: Label) -> String {
+    l.text(Lang::En).replace('|', "\\|").replace('<', "&lt;")
 }
 
 fn section(s: &mut String, km: &Keymap, ctx: Ctx) {
