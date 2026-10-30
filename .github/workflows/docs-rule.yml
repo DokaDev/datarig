@@ -30,6 +30,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
       # The description and the commits come in through the environment, never pasted into
       # the script.
       - name: Check

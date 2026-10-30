@@ -30,6 +30,8 @@ put crates/tui/src/keymap/defaults.rs $'// keys\n'
 put crates/tui/src/keymap/tests.rs $'// tests\n'
 put crates/tui/src/app.rs $'// app\n'
 put crates/core/src/policy.rs $'// policy\n'
+put crates/core/src/theme.rs $'// theme files\n'
+put crates/core/src/paths.rs $'// paths\n'
 put locales/en.toml $'a = "A"\n'
 put locales/ko.toml $'a = "A"\n'
 put docs/site/src/SUMMARY.md $'# Summary\n'
@@ -40,6 +42,11 @@ put docs/site/src/reference/keybindings.md $'# Keybindings\n\n{{#include ../../.
 put docs/site/src/screens/main.txt $'screen\n'
 put docs/site/src/whats-new.md $'# What\'s new\n\nIntro.\n\n## 0.36.0 — 2026-10-01\n\n- Tips.\n'
 put changes/README.md $'# Changelog fragments\n'
+put changes/fixed/kept.md $'- An entry of the next release.\n'
+# Pages over 500 KB: nothing may stop reading early (SIGPIPE under pipefail).
+big=$(for i in $(seq 1 12000); do printf 'Line %d of a long page with enough text in it.\n' "$i"; done)
+put docs/site/src/big.md "# Big"$'\n\n'"$big"$'\n'
+put docs/site/src/reference/big-generated.md "# Big generated"$'\n\n<!-- Generated from somewhere. Do not edit. -->\n\n'"$big"$'\n'
 g add -A
 g commit -q -m base
 base=$(g rev-parse HEAD)
@@ -116,6 +123,57 @@ put changes/fixed/keys.md "$frag"
 expect pass "no doc change with a reason" $'Some text.\r\n\r\nno doc change: the generated reference covers it\r\n' \
   "no doc change: the generated reference covers it"
 
+case_start core-theme
+put crates/core/src/theme.rs $'// theme files 2\n'
+put changes/changed/theme.md "$frag"
+expect fail "the theme file format in core is user-visible" "" "crates/core/src/theme.rs"
+
+case_start core-paths
+put crates/core/src/paths.rs $'// paths 2\n'
+put changes/changed/paths.md "$frag"
+expect fail "paths.rs is user-visible" "" "crates/core/src/paths.rs"
+
+case_start whats-new-only
+put locales/en.toml $'a = "B"\n'
+put docs/site/src/whats-new.md $'# What\'s new\n\nIntro.\n\n- Hand-added.\n\n## 0.36.0 — 2026-10-01\n\n- Tips.\n'
+put changes/changed/label.md "$frag"
+expect fail "What's new is no page that describes a change" "" "no doc change: <why no page changes>"
+
+case_start big-page
+put locales/en.toml $'a = "B"\n'
+printf 'One more line.\n' >> "$repo/docs/site/src/big.md"
+put changes/changed/label.md "$frag"
+expect pass "a hand-written page over 500 KB counts" ""
+
+case_start big-generated
+put locales/en.toml $'a = "B"\n'
+printf 'One more line.\n' >> "$repo/docs/site/src/reference/big-generated.md"
+put changes/changed/label.md "$frag"
+expect fail "a generated page over 500 KB does not count" "" "no doc change: <why no page changes>"
+
+case_start case-insensitive
+put crates/tui/src/app.rs $'// app 2\n'
+expect pass "the prefix in any case" $'No Changelog: refactor only\n' "refactor only"
+
+case_start fenced
+put crates/tui/src/app.rs $'// app 2\n'
+expect fail "a line in a fenced code block does not count" $'Example:\n\n```text\nno changelog: example\n```\n'
+
+case_start unclosed-comment
+put crates/tui/src/app.rs $'// app 2\n'
+expect fail "a line after an unclosed comment does not count" $'<!-- a hint\nno changelog: hidden\n'
+
+case_start renamed-fragment
+put crates/tui/src/app.rs $'// app 2\n'
+g mv changes/fixed/kept.md changes/fixed/moved.md
+expect fail "a renamed fragment is no new entry" "" "adds no changelog fragment"
+
+case_start dotfile
+put crates/tui/src/app.rs $'// app 2\n'
+put changes/added/.gitkeep ""
+put changes/added/x.md "$frag"
+expect pass "dotfiles under changes/ are ignored" ""
+
 case_start visible-escape-placeholder
 put crates/tui/src/keymap/defaults.rs $'// keys 2\n'
 put changes/fixed/keys.md "$frag"
@@ -173,6 +231,16 @@ expect pass "rewording an existing fragment is checked and passes" ""
 put changes/added/old.md $'Reworded badly.\n'
 expect fail "rewording it badly fails" "" "every line is a bullet"
 base=$base_saved
+
+case_start release-rc
+perl -pi -e 's/^version = "0.36.0"/version = "0.37.0-rc.1"/' "$repo/Cargo.toml"
+expect pass "a release candidate needs no section and keeps the fragments" "" "Release candidate"
+
+case_start release-big
+perl -pi -e 's/^version = "0.36.0"/version = "0.37.0"/' "$repo/Cargo.toml"
+g rm -q changes/fixed/kept.md
+{ printf '# What\x27s new\n\n## 0.37.0 — 2026-10-30\n\n- X.\n\n'; for i in $(seq 1 12000); do printf '## 0.0.%d — 2020-01-01\n\n- Old.\n\n' "$i"; done; } > "$repo/docs/site/src/whats-new.md"
+expect pass "a release with What's new over 500 KB" "" "Release: 0.36.0 -> 0.37.0"
 
 case_start release-left
 perl -pi -e 's/^version = "0.36.0"/version = "0.37.0"/' "$repo/Cargo.toml"
