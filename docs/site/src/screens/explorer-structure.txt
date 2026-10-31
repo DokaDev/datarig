@@ -37,4 +37,4 @@
 │                users_audit…││                                                                                        │
 │              ▸ users_touch…││                                                                                        │
 ╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯
- NORMAL  local-pg │ orders  rows unknown · ~8 KB        │ Enter open · Tab next pane · : commands · F1 help · q quit EN
+ NORMAL  local-pg │ orders  rows unknown · ~8 KB   │ Enter open · Tab next pane · : commands · Space ? help · q quit EN

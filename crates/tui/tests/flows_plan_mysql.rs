@@ -178,7 +178,8 @@ fn explain_analyze_asks_for_the_measured_tree_through_the_run_checks() {
         assert!(screen.contains(want), "{want}:\n{screen}");
     }
     // MySQL reports no planning or execution time of its own: none is shown as unknown.
-    assert!(!screen.contains("planning") && !screen.contains('?'), "{screen}");
+    // (The hint line's `Space ?` aside.)
+    assert!(!screen.contains("planning") && !screen.replace("Space ?", "").contains('?'), "{screen}");
     // No buffer counts in MySQL's plans: no column for them, and no card saying they are
     // missing.
     assert!(!screen.contains("hit/read"), "{screen}");

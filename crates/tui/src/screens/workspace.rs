@@ -1047,7 +1047,7 @@ fn draw_first_steps(app: &App, x: u16, mut y: u16, w: usize, bottom: u16, buf: &
     y += 1;
     let mut rows: Vec<(Option<bool>, String, String)> = STEPS
         .iter()
-        .map(|s| (Some(app.step_done(s)), app.tip_key(s.action, s.ctx), app.i18n.label(s.label).to_string()))
+        .map(|s| (Some(app.step_done(s)), app.key_for(s.action, s.ctx), app.i18n.label(s.label).to_string()))
         .collect();
     // The key that hides the steps, under them (its label muted).
     let dismiss = rows.len();
@@ -1056,7 +1056,7 @@ fn draw_first_steps(app: &App, x: u16, mut y: u16, w: usize, bottom: u16, buf: &
         (Action::OpenCommands, Label::WelcomeCommands),
         (Action::Quit, Label::WelcomeQuit),
     ] {
-        rows.push((None, app.tip_key(a, Ctx::Welcome), app.i18n.label(label).to_string()));
+        rows.push((None, app.key_for(a, Ctx::Welcome), app.i18n.label(label).to_string()));
     }
     let mark_w = crate::text::width(crate::icons::step(false, on));
     let key_w = rows.iter().map(|(_, k, _)| crate::text::width(k)).max().unwrap_or(0).min(w / 2);

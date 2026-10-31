@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_tips.rs
-assertion_line: 95
 expression: backend
 ---
 "╭ Explorer ────────────╮╭ Welcome ─────────────────────────────────────────────╮"
@@ -26,4 +25,4 @@ expression: backend
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-"   │ Enter open · Tab next pane · : commands · F1 help · q quit · Space more EN "
+"           │ Enter open · Tab next pane · : commands · Space ? help · q quit EN "

@@ -271,7 +271,7 @@ fn a_remapped_key_shows_in_its_tip() {
     let default = app();
     for t in catalog() {
         let Subject::Action(a, ctx) = t.subject else { continue };
-        let old = default.tip_key(a, ctx);
+        let old = default.key_for(a, ctx);
         let mut app = app();
         let mut bindings: Vec<Bound> =
             Keymap::default().bindings().iter().filter(|b| b.target != Target::Action(a)).cloned().collect();
@@ -321,13 +321,13 @@ fn the_next_step_names_only_keys_that_work_where_it_shows() {
     // The explorer (the workspace without tabs) hides the steps with its key; the editor has
     // none for it (there the key types or edits).
     let menu = STEPS.iter().find(|s| s.action == Action::OpenMenu).unwrap();
-    let dismiss = app.tip_key(Action::DismissOnboarding, Ctx::Explorer);
+    let dismiss = app.key_for(Action::DismissOnboarding, Ctx::Explorer);
     assert!(text(app.step_msg(menu, Ctx::Explorer)).contains(&format!("({dismiss} hides the steps)")));
     for ctx in [Ctx::VimNormal, Ctx::VimInsert] {
         assert!(app.keymap.hint_keys(Action::DismissOnboarding, ctx, false).is_none(), "{ctx:?}");
         let run = STEPS.iter().find(|s| s.action == Action::RunStatement).unwrap();
         let t = text(app.step_msg(run, ctx));
-        assert!(!t.contains("hides") && t.contains(&app.tip_key(Action::RunStatement, ctx)), "{t}");
+        assert!(!t.contains("hides") && t.contains(&app.key_for(Action::RunStatement, ctx)), "{t}");
     }
     // No tab: running a query is not a step to take there.
     assert!(app.tabs.is_empty());
@@ -356,7 +356,7 @@ fn a_remapped_key_shows_in_the_first_steps() {
         });
         app.keymap = Keymap::from_bindings(bindings);
         // The welcome panel's row and the line of a place where its key works.
-        assert_eq!(app.tip_key(s.action, s.ctx), "Ctrl+F9", "{:?}", s.action);
+        assert_eq!(app.key_for(s.action, s.ctx), "Ctrl+F9", "{:?}", s.action);
         let t = app.i18n.msg(&app.step_msg(s, s.ctx)).to_string();
         assert!(t.contains("Ctrl+F9"), "{t}");
         let t = app.i18n.msg(&app.step_msg(s, Ctx::Explorer)).to_string();

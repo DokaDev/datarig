@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_environments.rs
-assertion_line: 535
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -13,7 +12,7 @@ expression: backend
 "│    n here makes an SSH tun…││  Ctrl+T     New console tab                                                            │"
 "│▾ Environments 4            ││  Space t u  Reopen a closed tab                                                        │"
 "│  ▸ ○ Default rules (no env…││  n          New connection                                                             │"
-"│    ● dev  standard rules   ││  F1         Keyboard help                                                              │"
+"│    ● dev  standard rules   ││  Space ?    Keyboard help                                                              │"
 "│    ● test  standard rules  ││  :          Commands                                                                   │"
 "│    ● staging  STG   asks b…││                                                                                        │"
 "│  ▾ ● prod  PROD   read-only││                                                                                        │"
@@ -42,4 +41,4 @@ expression: backend
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯"
-" Added the environments dev, test, staging, prod           │ Enter open · : commands · F1 help · q quit · Space more EN "
+" Added the environments dev, test, staging, prod      │ Enter open · : commands · Space ? help · q quit · Space more EN "

@@ -500,17 +500,19 @@ fn leader_groups_list_only_what_leads_to_an_action() {
 }
 
 #[test]
-fn hint_keys_prefer_the_innermost_usable_key() {
+fn hint_keys_name_keys_that_work_where_they_show() {
     let km = Keymap::default();
     let hint = |id: &str, ctx, enhanced| {
         km.hint_keys(action::by_id(id).unwrap().action, ctx, enhanced).map(|k| keys::label(&k))
     };
     assert_eq!(hint("query.execute_current", Ctx::VimNormal, false).as_deref(), Some("Ctrl+E"));
     assert_eq!(hint("query.execute_current", Ctx::VimNormal, true).as_deref(), Some("Ctrl+Enter"));
-    // A single key before a sequence: the help shows as F1 everywhere.
-    for ctx in [Ctx::Explorer, Ctx::Grid, Ctx::VimNormal, Ctx::VimVisual, Ctx::VimInsert] {
-        assert_eq!(hint("help.context", ctx, false).as_deref(), Some("F1"), "{ctx:?}");
+    // A key a laptop reaches without a function key: the help is `Space ?`, except in insert
+    // mode, whose keys are the editor's (no leader there): F1.
+    for ctx in [Ctx::Explorer, Ctx::Grid, Ctx::VimNormal, Ctx::VimVisual] {
+        assert_eq!(hint("help.context", ctx, false).as_deref(), Some("Space ?"), "{ctx:?}");
     }
+    assert_eq!(hint("help.context", Ctx::VimInsert, false).as_deref(), Some("F1"));
     assert_eq!(hint("commands.open", Ctx::Explorer, false).as_deref(), Some(":"));
     assert_eq!(hint("help.all", Ctx::Explorer, false), None);
     // Every hint names a real action with a key in its context.
@@ -522,13 +524,21 @@ fn hint_keys_prefer_the_innermost_usable_key() {
 }
 
 #[test]
-fn tip_keys_prefer_keys_a_laptop_reaches_and_the_users_own() {
+fn hint_keys_prefer_keys_a_laptop_reaches_and_the_users_own() {
     let menu = action::by_id("menu.open").unwrap().action;
-    let tip = |km: &Keymap, ctx| km.tip_keys(menu, ctx, false).map(|k| keys::label(&k));
+    let tip = |km: &Keymap, ctx| km.hint_keys(menu, ctx, false).map(|k| keys::label(&k));
     let km = Keymap::default();
-    // The hint line keeps its single key; a tip names the one without a function key.
-    assert_eq!(km.hint_keys(menu, Ctx::Explorer, false).map(|k| keys::label(&k)).as_deref(), Some("Shift+F10"));
+    // The one without a function key, the same everywhere the app names it.
     assert_eq!(tip(&km, Ctx::Explorer).as_deref(), Some("Space Space"));
+    // Every key named for a hint reaches its action in its context.
+    for (ctx, list) in HINTS {
+        for (id, _) in *list {
+            let a = action::by_id(id).unwrap().action;
+            let k = km.hint_keys(a, *ctx, false).unwrap();
+            assert_eq!(km.resolve_seq(*ctx, &k).0, Some(Target::Action(a)), "{} {id}", ctx.name());
+            assert!((1..k.len()).all(|n| km.resolve_seq(*ctx, &k[..n]).0.is_none()), "{} {id}", ctx.name());
+        }
+    }
     // A key of the user's own comes first, even a function key.
     let (km, issues) = user(&[("nav", "alt+m", "menu.open")]);
     assert!(issues.is_empty(), "{issues:?}");
@@ -543,7 +553,7 @@ fn tip_keys_prefer_keys_a_laptop_reaches_and_the_users_own() {
     let km = Keymap::default();
     for (ctx, list) in HINTS {
         for (id, _) in *list {
-            assert!(km.tip_keys(action::by_id(id).unwrap().action, *ctx, false).is_some(), "{} {id}", ctx.name());
+            assert!(km.hint_keys(action::by_id(id).unwrap().action, *ctx, false).is_some(), "{} {id}", ctx.name());
         }
     }
 }
@@ -580,4 +590,21 @@ fn help_opens_with_space_question_and_f1_everywhere() {
         // `?` alone opens nothing: vim's backward search in the editor, free elsewhere.
         assert_ne!(last(&km, ctx, "?"), act("help.context"), "{ctx:?}");
     }
+}
+
+/// A sequence whose first key does something of its own where it would show is never named
+/// there: the keys after it would never be read as the sequence. (A user's config cannot make
+/// one, the check refuses such a prefix; the rule holds on its own.)
+#[test]
+fn a_sequence_cut_by_a_binding_of_its_first_key_is_not_named() {
+    let help = action::by_id("help.context").unwrap().action;
+    let mut own = bound(Ctx::Nav, "y h", Target::Action(help));
+    own.user = true;
+    let km = Keymap { bindings: with(vec![own]), id: 0 };
+    let name = |ctx| km.hint_keys(help, ctx, false).map(|k| keys::label(&k));
+    // The user's own key where `y` is free, the default where `y` (copy) does something itself.
+    assert_eq!(km.resolve_seq(Ctx::Welcome, &k("y")).0, None);
+    assert_eq!(name(Ctx::Welcome).as_deref(), Some("y h"));
+    assert!(km.resolve_seq(Ctx::Grid, &k("y")).0.is_some());
+    assert_eq!(name(Ctx::Grid).as_deref(), Some("Space ?"));
 }

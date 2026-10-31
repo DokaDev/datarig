@@ -1125,7 +1125,7 @@ fn no_profiles_open_the_form_over_the_welcome_panel() {
     let screen = h.screen(80, 24);
     assert!(screen.contains("No connection profiles yet") && screen.contains("＋ New connection"), "{screen}");
     assert!(
-        screen.contains("n   New connection") && screen.contains("F1  Keyboard help"),
+        screen.contains("n        New connection") && screen.contains("Space ?  Keyboard help"),
         "the welcome keys: {screen}"
     );
     // The welcome panel has its own keys.
@@ -2232,15 +2232,17 @@ fn keyboard_help_sections_open_and_close_by_key_and_mouse() {
 fn hint_line_follows_the_context_and_the_run_key() {
     let mut h = Harness::connected(Lang::En);
     let status = |h: &mut Harness| h.status(160, 45);
-    assert!(status(&mut h).contains("i type · Ctrl+E run · Tab next pane · : commands · F1 help · Space more"));
+    // The keys a laptop reaches without a function key, as the tips name them.
+    assert!(status(&mut h).contains("i type · Ctrl+E run · Tab next pane · : commands · Space ? help · Space more"));
     h.app.set_keyboard_enhanced(true);
     assert!(status(&mut h).contains("i type · Ctrl+Enter run ·"));
     h.keys("i");
+    // `Space` types a blank while typing: the help key is F1 there.
     let insert = "Esc stop typing · Ctrl+Enter run · Ctrl+N complete · Ctrl+K commands · F1 help";
     assert!(status(&mut h).contains(insert), "{}", status(&mut h));
     h.key(KeyCode::Esc);
     h.key(KeyCode::BackTab);
-    assert!(status(&mut h).contains("Enter open · Tab next pane · : commands · F1 help · q quit · Space more"));
+    assert!(status(&mut h).contains("Enter open · Tab next pane · : commands · Space ? help · q quit · Space more"));
     // Remapped keys show up in the hint line.
     let cfg = keymap_config("[keymap.explorer]\n\"o\" = \"explorer.activate\"\n\"enter\" = \"none\"\n");
     let mut h = Harness::with_config(&cfg, Lang::En);

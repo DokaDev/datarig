@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 392
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -13,7 +12,7 @@ expression: "h.draw(w, ht).backend()"
 "│    n here makes an SSH tun…││  Ctrl+T     New console tab                                                            │"
 "│▾ Environments 1            ││  Space t u  Reopen a closed tab                                                        │"
 "│  ▸ ○ Default rules (no env…││  n          New connection                                                             │"
-"│  ▸ ○ prod  standard rules …││  F1         Keyboard help                                                              │"
+"│  ▸ ○ prod  standard rules …││  Space ?    Keyboard help                                                              │"
 "│▾ Startup SQL 4             ││  :          Commands                                                                   │"
 "│    ◇ broken  PostgreSQL · …││                                                                                        │"
 "│      statement 2: SET LOCA…││                                                                                        │"
@@ -42,4 +41,4 @@ expression: "h.draw(w, ht).backend()"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯"
-" ◇ broken  PostgreSQL · 2 statements                       │ Enter open · : commands · F1 help · q quit · Space more EN "
+" ◇ broken  PostgreSQL · 2 statements                  │ Enter open · : commands · Space ? help · q quit · Space more EN "

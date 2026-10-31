@@ -13,7 +13,7 @@ expression: t.backend()
 "│                      ││  Ctrl+T     New console tab                          │"
 "│                      ││  Space t u  Reopen a closed tab                      │"
 "│                      ││  n          New connection                           │"
-"│                      ││  F1         Keyboard help                            │"
+"│                      ││  Space ?    Keyboard help                            │"
 "│                      ││  :          Commands                                 │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

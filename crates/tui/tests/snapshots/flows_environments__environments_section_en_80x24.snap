@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_environments.rs
-assertion_line: 535
 expression: backend
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -14,7 +13,7 @@ expression: backend
 "│▾ Environments 4      ││  Ctrl+T     New console tab                          │"
 "│  ▸ ○ Default rules (…││  Space t u  Reopen a closed tab                      │"
 "│    ● dev  standard r…││  n          New connection                           │"
-"│    ● test  standard …││  F1         Keyboard help                            │"
+"│    ● test  standard …││  Space ?    Keyboard help                            │"
 "│    ● staging  STG   …││  :          Commands                                 │"
 "│  ▾ ● prod  PROD   re…││                                                      │"
 "│      ○   local-pg    ││                                                      │"

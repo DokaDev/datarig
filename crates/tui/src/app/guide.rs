@@ -504,11 +504,6 @@ impl App {
         self.key_text(a, self.keymap.hint_keys(a, ctx, self.enhanced_keys))
     }
 
-    /// The key a tip names for `a` in `ctx` ([`Keymap::tip_keys`]), else like [`App::key_for`].
-    pub fn tip_key(&self, a: Action, ctx: Ctx) -> String {
-        self.key_text(a, self.keymap.tip_keys(a, ctx, self.enhanced_keys))
-    }
-
     fn key_text(&self, a: Action, k: Option<Vec<crate::keymap::KeyChord>>) -> String {
         if let Some(k) = k {
             return keys::label(&k);

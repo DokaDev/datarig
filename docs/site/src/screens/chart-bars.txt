@@ -31,4 +31,4 @@
 │                            ││ ■ orders  ■ refunds                                                                    │
 │                            ││ ▸ 2026-09-01 · orders 37 · refunds 13 · row 1                                          │
 ╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯
- NORMAL  local-pg │ 30+ rows (more pages) · 3ms   │ v kind · x X · s values · y copy · c rows · : commands · F1 help EN
+ NORMAL  local-pg │ 30+ rows (more pages) · 3ms             │ v kind · x X · s values · y copy · c rows · : commands EN
