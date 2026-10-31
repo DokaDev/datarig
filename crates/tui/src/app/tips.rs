@@ -25,8 +25,9 @@
 //! command line) in memory and written to `<state>/usage.toml` ([`datarig_core::usage`]) when the
 //! workspace is saved (its own cadence, quitting) and when the first steps are dismissed; never
 //! per key. A use past what changes the tips (the first use, up to the nudge) waits for the save
-//! at quit, so a much used action does not rewrite the file on every autosave. With tips off nothing is counted or written. A file that cannot be read keeps the
-//! tips working from memory and is never written over.
+//! at quit, so a much used action does not rewrite the file on every autosave. With tips off
+//! nothing is counted or written. A file that cannot be read keeps the tips working from memory
+//! and is never written over.
 
 use super::command::{SETTINGS, Setting};
 use super::*;
