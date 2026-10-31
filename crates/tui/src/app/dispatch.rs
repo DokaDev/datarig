@@ -558,6 +558,7 @@ impl App {
     /// The query stopped (or the grace time is over): close the session and quit.
     pub(super) fn finish_quit(&mut self) {
         self.quitting = None;
+        self.usage_at_quit();
         self.save_workspace();
         // Exports end their files (a partial file that reads) before the process goes.
         self.end_exports_for_quit();

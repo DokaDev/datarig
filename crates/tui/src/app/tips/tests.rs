@@ -363,3 +363,20 @@ fn a_remapped_key_shows_in_the_first_steps() {
         assert!(t.contains("Ctrl+F8 hides") && !t.contains("X hides"), "{t}");
     }
 }
+
+/// A use marks the usage file for the next save only while its count can still change what
+/// the tips do (up to the nudge); later ones wait for the save at quit.
+#[test]
+fn only_counts_that_matter_rewrite_the_usage_file() {
+    let mut a = app();
+    let id = action::spec(Action::Help).id;
+    for n in 1..=NUDGE_AFTER + 2 {
+        a.tips.dirty = false;
+        a.count_use(id, Via::Menu);
+        assert_eq!(a.tips.dirty, n <= NUDGE_AFTER, "use {n}");
+    }
+    assert_eq!(a.tips.usage.count(Via::Menu, id), NUDGE_AFTER + 2);
+    // Quitting writes them.
+    a.usage_at_quit();
+    assert!(a.tips.dirty);
+}

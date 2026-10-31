@@ -311,7 +311,8 @@ fn ctrl_g_hands_the_terminal_to_the_editor_and_takes_its_text() {
     assert_eq!(std::fs::read_to_string(dir.join("stdin")).unwrap().trim(), "tty");
     assert_eq!(std::fs::read_to_string(dir.join("mode")).unwrap().trim(), "-rw-------");
     assert_eq!(std::fs::read_to_string(dir.join("given")).unwrap(), "SELECT 1\n");
-    assert!(!Path::new(args[1]).exists(), "the file is removed");
+    // Removed when the app drops it, which may be just after the screen is back.
+    wait_for("the file to be removed", 20, || !Path::new(args[1]).exists());
     let text = run.output();
     let first = text.find("\x1b[?1049h").unwrap();
     let left = first + text[first..].find("\x1b[?1049l").expect("left for the editor");
