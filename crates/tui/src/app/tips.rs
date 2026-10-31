@@ -24,7 +24,8 @@
 //! **Usage.** Every action run is counted by how it was asked for (a key, an action menu, the
 //! command line) in memory and written to `<state>/usage.toml` ([`datarig_core::usage`]) when the
 //! workspace is saved (its own cadence, quitting) and when the first steps are dismissed; never
-//! per key. With tips off nothing is counted or written. A file that cannot be read keeps the
+//! per key. A use past what changes the tips (the first use, up to the nudge) waits for the save
+//! at quit, so a much used action does not rewrite the file on every autosave. With tips off nothing is counted or written. A file that cannot be read keeps the
 //! tips working from memory and is never written over.
 
 use super::command::{SETTINGS, Setting};
@@ -160,6 +161,9 @@ pub struct TipState {
     unreadable: bool,
     /// Counted since the last write.
     dirty: bool,
+    /// Counted since the last write, but only counts past what changes the tips: written at
+    /// quit ([`App::usage_at_quit`]), where the launch after reads them.
+    behind: bool,
     /// Moves when what decides the candidates of a place changes (an action used for the first
     /// time, a first step taken, the first steps dismissed): the kept picks are made again.
     generation: u64,
@@ -236,10 +240,9 @@ impl App {
     }
 
     /// Count a use of `id` (an action id, or a command's [`command_id`]); returns the menu and
-    /// command line runs so far. The file is written again only while a count can still change
-    /// what the tips do (the first use, up to the [`NUDGE_AFTER`]th run), so a run of a much
-    /// used action does not rewrite it; past that its count in the file stays behind (it is
-    /// written with the next change).
+    /// command line runs so far. The file is written with the next workspace save only while a
+    /// count can still change what the tips do (the first use, up to the [`NUDGE_AFTER`]th
+    /// run); later counts wait for the save at quit.
     fn count_use(&mut self, id: &str, via: Via) -> u32 {
         let n = self.tips.usage.bump(via, id);
         if n == 1 {
@@ -248,6 +251,8 @@ impl App {
         }
         if n <= NUDGE_AFTER {
             self.tips.dirty = true;
+        } else {
+            self.tips.behind = true;
         }
         self.tips.usage.count(Via::Menu, id) + self.tips.usage.count(Via::Command, id)
     }
@@ -343,6 +348,14 @@ impl App {
         self.tips.generation += 1;
     }
 
+    /// Quitting: the counts held back go with the last save (the next launch's tips start from
+    /// them).
+    pub(super) fn usage_at_quit(&mut self) {
+        if self.tips.behind {
+            self.tips.dirty = true;
+        }
+    }
+
     /// Write what was counted to the usage file (with the workspace, and when the first steps
     /// are dismissed). Nothing with tips off, without a state directory this instance may write,
     /// or when the file could not be read.
@@ -352,7 +365,7 @@ impl App {
         }
         let Some(path) = self.state_dir().map(|s| s.join(usage::FILE)) else { return };
         match usage::save(&path, &self.tips.usage) {
-            Ok(()) => self.tips.dirty = false,
+            Ok(()) => (self.tips.dirty, self.tips.behind) = (false, false),
             // Damaged since launch: left alone from now on.
             Err(e) if e.kind() == std::io::ErrorKind::InvalidData => self.tips.unreadable = true,
             Err(e) => {
