@@ -3,6 +3,10 @@
 Thanks for your interest. datarig is early and changes quickly, so for anything larger than a
 small fix, please open an issue first to agree on the approach.
 
+To get oriented in the code, [DeepWiki](https://deepwiki.com/DokaDev/datarig) offers an
+auto-generated technical overview of it; the user guide is the
+[docs site](https://dokadev.github.io/datarig/), and the code is the source of truth.
+
 ## Build
 
 You need the Rust toolchain of `rust-toolchain.toml` (rustup installs it on the first `cargo`

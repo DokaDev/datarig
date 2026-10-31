@@ -1,6 +1,7 @@
 # datarig
 
 [![CI](https://github.com/DokaDev/datarig/actions/workflows/ci.yml/badge.svg)](https://github.com/DokaDev/datarig/actions/workflows/ci.yml)
+[![Ask DeepWiki](https://img.shields.io/badge/Ask-DeepWiki-blue)](https://deepwiki.com/DokaDev/datarig)
 
 A full-featured database client that lives in your terminal — light, fast, and safe by default.
 
