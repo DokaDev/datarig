@@ -31,4 +31,4 @@ expression: t.backend()
 "│                       ││                                                                         │"
 "│                       ││                                                                         │"
 "╰───────────────────────╯╰─────────────────────────────────────────────────────────────────────────╯"
-" VISUAL  local-pg │ Connected to local-pg       │ Ctrl+E run · : commands · F1 help · Space more EN "
+" VISUAL  local-pg │ Connected to local-pg  │ Ctrl+E run · : commands · Space ? help · Space more EN "

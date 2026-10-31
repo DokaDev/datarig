@@ -46,4 +46,4 @@ expression: t.backend()
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
 "╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
-" NORMAL  local-pg │ 8 rows · 12ms                                                  │ i type · Ctrl+E run · Tab next pane · : commands · F1 help · Space more EN "
+" NORMAL  local-pg │ 8 rows · 12ms                                             │ i type · Ctrl+E run · Tab next pane · : commands · Space ? help · Space more EN "

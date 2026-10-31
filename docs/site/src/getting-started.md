@@ -50,6 +50,10 @@ with Cancel focused. See [Environments and safety](guide/environments.md).
   key. A right click opens it too.
 - `:` (outside text input) or `Ctrl+K` (everywhere) opens the command line. It runs
   [commands](reference/commands.md) and finds every action by name.
+- The hint line at the bottom, the menus, the tips and the messages all name the same key for
+  an action: a key of your own when you bound one, else one that needs no function key
+  (`Space ?` rather than `F1`), except where that key types text (in insert mode the help is
+  `F1`).
 
 ## The workspace
 

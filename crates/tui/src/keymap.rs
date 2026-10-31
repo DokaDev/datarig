@@ -384,10 +384,10 @@ impl Keymap {
         out
     }
 
-    /// The keys the hint line shows for `a` in `ctx`: the innermost single key that is not
-    /// hidden by an inner binding, else the innermost sequence (`F1` rather than `Space ?`).
-    /// `Ctrl+Enter` needs the kitty keyboard protocol (`enhanced`).
-    pub fn hint_keys(&self, a: Action, ctx: Ctx, enhanced: bool) -> Option<Vec<KeyChord>> {
+    /// The innermost single key for `a` in `ctx` that is not hidden by an inner binding, else
+    /// the innermost sequence (`F1` rather than `Space ?`). `Ctrl+Enter` needs the kitty keyboard
+    /// protocol (`enhanced`).
+    fn first_keys(&self, a: Action, ctx: Ctx, enhanced: bool) -> Option<Vec<KeyChord>> {
         let chain = ctx.chain();
         let ctrl_enter = parse_keys("ctrl+enter").ok()?;
         let mut sequence = None;
@@ -408,11 +408,13 @@ impl Keymap {
         sequence
     }
 
-    /// The keys a tip names for `a` in `ctx`: a key of the user's own first; else one that needs
-    /// no function or Menu key (laptop keyboards hide those behind another key), the innermost
-    /// single key before a sequence (`Space Space` rather than `Shift+F10`); else what the hint
-    /// line shows.
-    pub fn tip_keys(&self, a: Action, ctx: Ctx, enhanced: bool) -> Option<Vec<KeyChord>> {
+    /// The keys the app names for `a` in `ctx`, wherever it names one (the hint line, menus,
+    /// tips, messages): a key of the user's own first; else one that needs no function or Menu
+    /// key (laptop keyboards hide those behind another key), the innermost single key before a
+    /// sequence (`Space Space` rather than `Shift+F10`); else the innermost key at all. A
+    /// sequence counts only when none of its first keys does something else in `ctx` (`Space`
+    /// types a blank in the editor's insert mode).
+    pub fn hint_keys(&self, a: Action, ctx: Ctx, enhanced: bool) -> Option<Vec<KeyChord>> {
         let chain = ctx.chain();
         let ctrl_enter = parse_keys("ctrl+enter").ok()?;
         let reachable = |k: &[KeyChord]| {
@@ -426,7 +428,8 @@ impl Keymap {
                 let hidden = chain[..depth]
                     .iter()
                     .any(|inner| self.bindings.iter().any(|x| x.ctx == *inner && x.keys == b.keys));
-                if !hidden && (enhanced || b.keys != ctrl_enter) {
+                let cut = (1..b.keys.len()).any(|n| self.lookup(ctx, &b.keys[..n]).0.is_some());
+                if !hidden && !cut && (enhanced || b.keys != ctrl_enter) {
                     found.push(b);
                 }
             }
@@ -437,7 +440,7 @@ impl Keymap {
         };
         match pick(true).or_else(|| found.iter().find(|b| b.user)).or_else(|| pick(false)) {
             Some(b) => Some(b.keys.clone()),
-            None => self.hint_keys(a, ctx, enhanced),
+            None => self.first_keys(a, ctx, enhanced),
         }
     }
 

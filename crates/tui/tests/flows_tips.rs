@@ -108,7 +108,7 @@ fn the_welcome_panel_shows_the_first_steps_until_they_are_hidden() {
         let screen = h.screen(80, 24);
         assert!(!screen.contains("[ ]"), "{screen}");
         if lang == Lang::En {
-            assert!(screen.contains("n   New connection"), "{screen}");
+            assert!(screen.contains("n        New connection"), "{screen}");
         }
     }
 }
@@ -134,7 +134,7 @@ fn tips_off_shows_the_welcome_panel_as_before_and_no_tip() {
     h.command("set ui.tips=off");
     assert_eq!(h.app.prefs.tips, Tips::Off);
     let screen = h.screen(80, 24);
-    assert!(screen.contains("n   New connection") && !screen.contains("[ ]"), "{screen}");
+    assert!(screen.contains("n        New connection") && !screen.contains("[ ]"), "{screen}");
     assert!(!h.app.onboarding_shown());
     let mut h = connected();
     h.ctrl('t');

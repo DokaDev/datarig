@@ -31,4 +31,4 @@ expression: backend
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯"
-" NORMAL  local-pg │ 0 rows · 3ms     │ v kind · x X · s values · y copy · c rows · : commands · F1 help · Space more EN "
+" NORMAL  local-pg │ 0 rows · 3ms             │ v kind · x X · s values · y copy · c rows · : commands · Space ? help EN "

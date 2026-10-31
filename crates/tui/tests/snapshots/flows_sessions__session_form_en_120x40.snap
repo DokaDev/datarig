@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 426
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -13,7 +12,7 @@ expression: "h.draw(w, ht).backend()"
 "│    n here makes an SSH tun…││  Ctrl+T     New console tab                                                            │"
 "│▾ Environments 1            ││  Space t u  Reopen a closed tab                                                        │"
 "│  ▸ ○ Default rules (no env…││  n          New connection                                                             │"
-"│  ▸ ○ prod  standard rules …││  F1         Keyboard help                                                              │"
+"│  ▸ ○ prod  standard rules …││  Space ?    Keyboard help                                                              │"
 "│▾ Startup SQL 4             ││  :          Commands                                                                   │"
 "│    ◇ bro╭ New Startup SQL ─────────────────────────────────────────────────────────────────────────────────╮         │"
 "│      sta│  Startup SQL                                  profiles that pick it start their sessions with it │         │"

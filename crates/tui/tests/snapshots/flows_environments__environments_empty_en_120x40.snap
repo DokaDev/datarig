@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_environments.rs
-assertion_line: 531
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -13,7 +12,7 @@ expression: backend
 "│    n here makes an SSH tun…││  Ctrl+T     New console tab                                                            │"
 "│▾ Environments 0            ││  Space t u  Reopen a closed tab                                                        │"
 "│  ▸ ○ Default rules (no env…││  n          New connection                                                             │"
-"│    ＋ Add presets: dev, te…││  F1         Keyboard help                                                              │" Hidden by multi-width symbols: [(6, " ")]
+"│    ＋ Add presets: dev, te…││  Space ?    Keyboard help                                                              │" Hidden by multi-width symbols: [(6, " ")]
 "│▾ Startup SQL 0             ││  :          Commands                                                                   │"
 "│    n here makes a list of …││                                                                                        │"
 "│                            ││                                                                                        │"
@@ -42,4 +41,4 @@ expression: backend
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯"
-"                                                           │ Enter open · : commands · F1 help · q quit · Space more EN "
+"                                                      │ Enter open · : commands · Space ? help · q quit · Space more EN "

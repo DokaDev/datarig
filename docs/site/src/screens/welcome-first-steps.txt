@@ -21,4 +21,4 @@
 │                      ││                                                      │
 │                      ││                                                      │
 ╰──────────────────────╯╰──────────────────────────────────────────────────────╯
-   │ Enter open · Tab next pane · : commands · F1 help · q quit · Space more EN
+           │ Enter open · Tab next pane · : commands · Space ? help · q quit EN

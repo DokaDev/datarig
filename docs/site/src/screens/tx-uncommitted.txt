@@ -42,4 +42,4 @@
 │                                      ││                                                                      ││                                              │
 │                                      ││                                                                      ││                                              │
 ╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
- NORMAL  local-pg │ TX open · 0 changes · 0 rows · 0:00 │ 3 rows · 3ms             │ i type · Ctrl+E run · Tab next pane · : commands · F1 help · Space more EN
+ NORMAL  local-pg │ TX open · 0 changes · 0 rows · 0:00 │ 3 rows · 3ms        │ i type · Ctrl+E run · Tab next pane · : commands · Space ? help · Space more EN

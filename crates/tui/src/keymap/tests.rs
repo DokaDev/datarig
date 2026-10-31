@@ -507,10 +507,12 @@ fn hint_keys_prefer_the_innermost_usable_key() {
     };
     assert_eq!(hint("query.execute_current", Ctx::VimNormal, false).as_deref(), Some("Ctrl+E"));
     assert_eq!(hint("query.execute_current", Ctx::VimNormal, true).as_deref(), Some("Ctrl+Enter"));
-    // A single key before a sequence: the help shows as F1 everywhere.
-    for ctx in [Ctx::Explorer, Ctx::Grid, Ctx::VimNormal, Ctx::VimVisual, Ctx::VimInsert] {
-        assert_eq!(hint("help.context", ctx, false).as_deref(), Some("F1"), "{ctx:?}");
+    // A key a laptop reaches without a function key: the help is `Space ?`, except where `Space`
+    // does something else (it types a blank in insert mode): F1 there.
+    for ctx in [Ctx::Explorer, Ctx::Grid, Ctx::VimNormal, Ctx::VimVisual] {
+        assert_eq!(hint("help.context", ctx, false).as_deref(), Some("Space ?"), "{ctx:?}");
     }
+    assert_eq!(hint("help.context", Ctx::VimInsert, false).as_deref(), Some("F1"));
     assert_eq!(hint("commands.open", Ctx::Explorer, false).as_deref(), Some(":"));
     assert_eq!(hint("help.all", Ctx::Explorer, false), None);
     // Every hint names a real action with a key in its context.
@@ -524,11 +526,18 @@ fn hint_keys_prefer_the_innermost_usable_key() {
 #[test]
 fn tip_keys_prefer_keys_a_laptop_reaches_and_the_users_own() {
     let menu = action::by_id("menu.open").unwrap().action;
-    let tip = |km: &Keymap, ctx| km.tip_keys(menu, ctx, false).map(|k| keys::label(&k));
+    let tip = |km: &Keymap, ctx| km.hint_keys(menu, ctx, false).map(|k| keys::label(&k));
     let km = Keymap::default();
-    // The hint line keeps its single key; a tip names the one without a function key.
-    assert_eq!(km.hint_keys(menu, Ctx::Explorer, false).map(|k| keys::label(&k)).as_deref(), Some("Shift+F10"));
+    // The one without a function key, the same everywhere the app names it.
     assert_eq!(tip(&km, Ctx::Explorer).as_deref(), Some("Space Space"));
+    // Every key named for a hint reaches its action in its context.
+    for (ctx, list) in HINTS {
+        for (id, _) in *list {
+            let a = action::by_id(id).unwrap().action;
+            let k = km.hint_keys(a, *ctx, false).unwrap();
+            assert_eq!(km.resolve_seq(*ctx, &k).0, Some(Target::Action(a)), "{} {id}", ctx.name());
+        }
+    }
     // A key of the user's own comes first, even a function key.
     let (km, issues) = user(&[("nav", "alt+m", "menu.open")]);
     assert!(issues.is_empty(), "{issues:?}");
@@ -543,7 +552,7 @@ fn tip_keys_prefer_keys_a_laptop_reaches_and_the_users_own() {
     let km = Keymap::default();
     for (ctx, list) in HINTS {
         for (id, _) in *list {
-            assert!(km.tip_keys(action::by_id(id).unwrap().action, *ctx, false).is_some(), "{} {id}", ctx.name());
+            assert!(km.hint_keys(action::by_id(id).unwrap().action, *ctx, false).is_some(), "{} {id}", ctx.name());
         }
     }
 }
