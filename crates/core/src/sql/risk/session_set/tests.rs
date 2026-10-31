@@ -118,6 +118,7 @@ fn the_servers_idle_limit_is_a_presets_to_set() {
     for sql in [
         "SET wait_timeout = DEFAULT",
         "SET SESSION wait_timeout = 0",
+        "SET SESSION WAIT_TIMEOUT = 0",
         "SET wait_timeout = @@global.wait_timeout",
         "SET wait_timeout = '600'",
         "SET wait_timeout = 31536001",
