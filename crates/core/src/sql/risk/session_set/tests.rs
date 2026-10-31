@@ -58,7 +58,6 @@ fn pg_refuses_what_is_not_a_session_set() {
 fn pg_refuses_the_settings_the_app_keeps() {
     let cases = [
         ("SET search_path = a", Owner::Schema),
-        ("SET idle_session_timeout = 0", Owner::IdleDisconnect),
         ("SET idle_in_transaction_session_timeout = 0", Owner::TxIdleRollback),
         ("SET default_transaction_read_only = off", Owner::ReadOnly),
         ("SET SESSION transaction_read_only = on", Owner::ReadOnly),
@@ -96,6 +95,40 @@ fn pg_settings_without_a_transaction_form() {
         pg("SET transaction_timeout = '1min'").unwrap().per_transaction,
         Some(Err(NotLocal::TransactionTimeout))
     );
+}
+
+/// The server's idle limit is a preset's to set (it is then the sessions' idle disconnect):
+/// PostgreSQL's has no form for one transaction (the server counts it only outside one), and
+/// a read-only environment allows PostgreSQL's (MySQL's idle limits are not among its safe
+/// settings).
+#[test]
+fn the_servers_idle_limit_is_a_presets_to_set() {
+    for sql in ["SET idle_session_timeout = '10min'", "SET SESSION idle_session_timeout TO 0"] {
+        let s = pg(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+        assert_eq!(s.per_transaction, Some(Err(NotLocal::IdleSession)), "{sql}");
+        assert_eq!(s.settings[0].0, "idle_session_timeout", "{sql}");
+        assert!(s.risk.read_only().is_ok(), "{sql}");
+    }
+    for sql in ["SET SESSION wait_timeout = 600", "SET @@session.wait_timeout = 600"] {
+        let s = mysql(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+        assert_eq!(s.settings, vec![("wait_timeout".to_string(), "600".to_string())], "{sql}");
+        assert!(s.risk.read_only().is_err(), "{sql}");
+    }
+    // MySQL's must be one the app reads: the server counts it inside a transaction too.
+    for sql in [
+        "SET wait_timeout = DEFAULT",
+        "SET SESSION wait_timeout = 0",
+        "SET SESSION WAIT_TIMEOUT = 0",
+        "SET wait_timeout = @@global.wait_timeout",
+        "SET wait_timeout = '600'",
+        "SET wait_timeout = 31536001",
+    ] {
+        assert_eq!(mysql(sql), Err(SetProblem::IdleValue), "{sql}");
+    }
+    assert!(matches!(
+        mysql("SET SESSION interactive_timeout = 600"),
+        Err(SetProblem::AppOwned { owner: Owner::Interactive, .. })
+    ));
 }
 
 #[test]
@@ -156,7 +189,6 @@ fn mysql_refuses_what_is_not_a_session_set() {
 #[test]
 fn mysql_refuses_the_settings_the_app_keeps() {
     let cases = [
-        ("SET SESSION wait_timeout = 10", Owner::IdleDisconnect),
         ("SET SESSION interactive_timeout = 10", Owner::Interactive),
         ("SET @@session.transaction_read_only = 0", Owner::ReadOnly),
         ("SET SESSION TRANSACTION READ WRITE", Owner::ReadOnly),
@@ -225,7 +257,7 @@ fn more_settings_the_app_keeps() {
         "SET resultset_metadata = NONE",
         "SET SESSION completion_type = 1",
         "SET `autocommit` = 1",
-        "SET SESSION `wait_timeout` = 1",
+        "SET SESSION `interactive_timeout` = 1",
     ] {
         assert!(matches!(mysql(sql), Err(SetProblem::AppOwned { .. })), "{sql}: {:?}", mysql(sql));
     }

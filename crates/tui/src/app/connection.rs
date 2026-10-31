@@ -219,17 +219,20 @@ impl App {
         t.exec.unconfirmed.clear();
         t.exec.context = None;
         t.exec.path_per_transaction = false;
+        t.exec.session_pooled = false;
         // The new session says its own language once it connects.
         t.exec.language = None;
         let context = t.context.clone();
         let session = self.open_session(cfg, SessionRole::Query, EventTarget::Tab(id), generation, context);
         let read_only = self.session_read_only(cfg);
         let lock_wait = self.effective_lock_wait(cfg);
+        let idle = self.session_plan_of(cfg).ok().and_then(|p| p.idle);
         if let Some(t) = self.tabs.get_mut(id) {
             t.exec.state = if session.is_some() { SessionState::Opening } else { SessionState::Idle };
             t.exec.session = session;
             t.exec.read_only = read_only;
             t.exec.lock_wait = lock_wait;
+            t.exec.idle = idle;
         }
         self.sync_tab_language(id);
     }

@@ -145,8 +145,8 @@ fn a_profile_whose_plan_has_an_error_does_not_connect() {
             "local-pg does not connect: statement 2 of its own startup SQL is not allowed (only SET of the session's own settings): DELETE FROM t",
         ),
         (
-            Box::new(|p| p.session_sql = vec!["SET idle_session_timeout = '1s'".into()]),
-            "local-pg does not connect: statement 1 of its own startup SQL is not allowed (idle_session_timeout: datarig closes idle sessions itself and warns first; the server's limit is only its safety net — set the environment's idle_disconnect): SET idle_session_timeout = '1s'",
+            Box::new(|p| p.session_sql = vec!["SET idle_in_transaction_session_timeout = '1s'".into()]),
+            "local-pg does not connect: statement 1 of its own startup SQL is not allowed (idle_in_transaction_session_timeout: datarig warns about an idle manual-commit transaction, rolls it back itself and keeps the session; it sets this per transaction, 30 s later, only as a backstop — set the environment's tx_idle_rollback): SET idle_in_transaction_session_timeout = '1s'",
         ),
     ];
     for (change, want) in cases {
@@ -1465,13 +1465,41 @@ fn the_session_view_shows_a_lock_wait_a_preset_overrides() {
     assert!(screen.contains("overrides environment prod: 5s"), "{screen}");
 }
 
+/// `:session` shows the server's idle limit a preset sets in place of the environment's
+/// `idle_disconnect`: PostgreSQL's on a direct connection only, MySQL's either way; one the app
+/// cannot read says the app still closes after the environment's.
+#[test]
+fn the_session_view_shows_an_idle_limit_a_preset_overrides() {
+    let view = |driver: &str, sql: &str| {
+        let mut cfg = lock_config(driver, &[sql], &[]);
+        let mut rules = cfg.policies.get(Some("prod")).unwrap();
+        rules.idle_disconnect = Some(Some(Duration::from_secs(300)));
+        cfg.policies.insert("prod", rules);
+        let mut h = connected_on(&cfg);
+        h.command("session");
+        // The view's text: each line's part inside the view's box, its wrapped lines joined, blanks
+        // collapsed.
+        let screen = h.screen(200, 40);
+        let rows: Vec<&str> = screen.lines().filter_map(|l| l.split('│').nth(4)).collect();
+        rows.join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    let screen = view("postgres", "SET idle_session_timeout = '10min'");
+    let line = "its Startup SQL “fast” on a direct connection — overrides environment prod: 5m; behind a pooler: 5m";
+    assert!(screen.contains(&format!("Idle disconnect 10m {line}")), "{screen}");
+    let screen = view("mysql", "SET SESSION wait_timeout = 600");
+    let line = "its Startup SQL “fast” — overrides environment prod: 5m";
+    assert!(screen.contains(&format!("Idle disconnect 10m {line}")), "{screen}");
+    let screen = view("postgres", "SET idle_session_timeout TO DEFAULT");
+    let line = "datarig does not read — datarig still closes the session after 5m (environment prod)";
+    assert!(screen.contains("Idle disconnect not known"), "{screen}");
+    assert!(screen.contains(line), "{screen}");
+}
+
 /// A setting the app keeps refused says why, in plain words, and where to set it instead.
 #[test]
 fn a_refused_setting_says_why_and_where_to_set_it() {
     let cases = [
-        ("postgres", "SET idle_session_timeout = 0", "set the environment's idle_disconnect"),
-        ("mysql", "SET SESSION wait_timeout = 10", "set the environment's idle_disconnect"),
-        ("mysql", "SET SESSION interactive_timeout = 10", "no effect on an open session"),
+        ("mysql", "SET SESSION interactive_timeout = 10", "no effect on an open session — set wait_timeout"),
         ("postgres", "SET idle_in_transaction_session_timeout = 0", "set the environment's tx_idle_rollback"),
         ("mysql", "SET autocommit = 0", "set the environment's commit"),
         ("mysql", "SET SESSION completion_type = 1", "set the environment's commit"),

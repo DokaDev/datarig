@@ -200,6 +200,12 @@ pub struct TabSession {
     /// The lock wait limit the tab's session was opened with: the environment's, or what its
     /// start-up statements set in its place (`None`: the server's, or one the app does not know).
     pub lock_wait: Option<std::time::Duration>,
+    /// The server's idle limit the tab's start-up statements set in place of the environment's
+    /// `idle_disconnect` when its session was opened (`None`: none sets it).
+    pub idle: Option<datarig_core::profile::session::IdleOverride>,
+    /// The session's start-up statements go in each transaction instead (a pooler:
+    /// `DbEvent::SessionPerTransaction`), so those with no such form were not sent.
+    pub session_pooled: bool,
     /// Whether the result's portal is open, and since when nobody fetched from it.
     pub paging: Paging,
     /// The statements of the last run and what each one did.
@@ -341,6 +347,8 @@ impl TabSession {
             used: None,
             idle_warned: false,
             lock_wait: None,
+            idle: None,
+            session_pooled: false,
             paging: Paging::None,
             run: super::runlog::RunLog::default(),
             steps: std::collections::BTreeMap::new(),

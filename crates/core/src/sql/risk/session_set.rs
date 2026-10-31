@@ -47,16 +47,18 @@ pub enum SetProblem {
     /// (MySQL: `SET SESSION TRANSACTION …`). Set per session, it would not hold the same on a
     /// direct connection and behind a pooler.
     TransactionOnly { name: String },
+    /// MySQL's `wait_timeout` set to a value the app does not read as a whole number of seconds
+    /// from 1 (`DEFAULT`, `0`, which the server takes as 1, an expression): the server counts it
+    /// inside a transaction too, so the app could not warn before it ends one.
+    IdleValue,
 }
 
 /// Why the app does not let a start-up statement change a setting, and what sets it instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Owner {
-    /// The app closes idle sessions itself and warns first; the server's limit is only its
-    /// safety net (the environment's `idle_disconnect`).
-    IdleDisconnect,
     /// MySQL's `interactive_timeout`: the server reads it when a session starts, so it does
-    /// nothing on one that is open (the environment's `idle_disconnect` is the limit).
+    /// nothing on one that is open (`wait_timeout`, or the environment's `idle_disconnect`, is
+    /// the limit).
     Interactive,
     /// The app warns about an idle manual-commit transaction, rolls it back itself and keeps
     /// the session; it sets this per transaction, 30 s later, only as a backstop (the
@@ -106,6 +108,10 @@ pub enum NotLocal {
     /// `transaction_timeout` (PostgreSQL 17): its timer starts when the transaction begins, so
     /// set after `BEGIN` it cannot make the server connection's own limit longer.
     TransactionTimeout,
+    /// `idle_session_timeout`: the server counts it only outside a transaction, so set for one
+    /// it does nothing, and set for the session it would end server connections other clients
+    /// share.
+    IdleSession,
 }
 
 /// A statement that may be a session's start-up setting.
@@ -127,7 +133,6 @@ pub struct SessionSet {
 /// PostgreSQL's settings the app keeps itself.
 const OWNED: &[(&str, Owner)] = &[
     ("search_path", Owner::Schema),
-    ("idle_session_timeout", Owner::IdleDisconnect),
     ("idle_in_transaction_session_timeout", Owner::TxIdleRollback),
     ("default_transaction_read_only", Owner::ReadOnly),
     ("standard_conforming_strings", Owner::Literals),
@@ -218,6 +223,7 @@ fn shape(sql: &str) -> Result<(Result<String, NotLocal>, Vec<(String, String)>),
     match name.as_str() {
         "temp_buffers" => return Ok((Err(NotLocal::TempBuffers), settings)),
         "transaction_timeout" => return Ok((Err(NotLocal::TransactionTimeout), settings)),
+        "idle_session_timeout" => return Ok((Err(NotLocal::IdleSession), settings)),
         _ => {}
     }
     Ok((set_local(sql, b), settings))

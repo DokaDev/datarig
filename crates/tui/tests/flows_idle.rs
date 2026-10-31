@@ -230,6 +230,110 @@ fn a_session_the_server_closed_for_being_idle_says_so() {
     assert!(matches!(status(&h), Some(Msg::ConnIdleClosedByServer { .. })), "{:?}", status(&h));
 }
 
+/// A profile whose start-up statement sets the server's idle limit (`idle_session_timeout`):
+/// with `SET`.
+fn idle_set_by_startup(sql: &str) -> Harness {
+    let mut cfg = config(Policy::default());
+    cfg.connections[0].session_sql = vec![sql.to_string()];
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["public".into(), "shop".into()])));
+    h.db(DbEvent::Catalog(Ok(catalog())));
+    h.sent();
+    h
+}
+
+/// A start-up statement that sets the server's idle limit is the tab's idle disconnect: the
+/// app's timer closes the tab after it (not after the environment's 5m), and the connection
+/// (its metadata session, its tunnel) stays open as long as that tab may.
+#[test]
+fn a_startup_statement_that_sets_the_servers_idle_limit_is_the_tabs_idle_disconnect() {
+    let mut h = idle_set_by_startup("SET idle_session_timeout = '10min'");
+    ran(&mut h, "SELECT 1");
+    {
+        let sessions = h.driver.sessions.lock().unwrap();
+        let query = &sessions[1].opts;
+        assert_eq!(query.session_sql.len(), 1, "the statement is sent as written");
+        assert_eq!(query.server_idle, Some(LIMIT + Duration::from_secs(60)), "the app's own first");
+    }
+    h.app.transient = None;
+    let now = h.clock.now();
+    assert_eq!(h.app.next_tick(now), Some(now + Duration::from_secs(600)), "one wakeup, at the tab's 10m");
+    h.advance(LIMIT);
+    assert!(!h.session_closed(1), "not after the environment's 5m");
+    assert!(!h.session_closed(0), "the connection stays while its tab may");
+    h.advance(Duration::from_secs(300));
+    assert!(h.session_closed(1), "closed after 10m");
+    assert!(said(&h, |m| *m == Msg::QueryIdleClosed { time: "10m".into() }));
+    assert!(h.session_closed(0), "nothing used the connection for 10m either");
+
+    // A shorter one closes the tab first; the connection keeps the environment's 5m.
+    let mut h = idle_set_by_startup("SET idle_session_timeout = '1min'");
+    ran(&mut h, "SELECT 1");
+    h.advance(Duration::from_secs(60));
+    assert!(h.session_closed(1));
+    assert!(said(&h, |m| *m == Msg::QueryIdleClosed { time: "1m".into() }));
+    assert!(!h.session_closed(0));
+    h.advance(Duration::from_secs(240));
+    assert!(h.session_closed(0), "the connection after the environment's 5m");
+
+    // `0` turns it off for that session: only the app's timer would have closed it.
+    let mut h = idle_set_by_startup("SET idle_session_timeout = 0");
+    ran(&mut h, "SELECT 1");
+    h.app.transient = None;
+    assert_eq!(h.app.next_tick(h.clock.now()), None, "never: no timer");
+
+    // A value the app does not read keeps the environment's limit on the app's side.
+    let mut h = idle_set_by_startup("SET idle_session_timeout TO DEFAULT");
+    ran(&mut h, "SELECT 1");
+    h.advance(LIMIT);
+    assert!(h.session_closed(1));
+    assert!(said(&h, |m| *m == Msg::QueryIdleClosed { time: "5m".into() }));
+}
+
+/// MySQL's `wait_timeout` the same way (no pooler there); one it does not read is refused, so the
+/// profile does not connect.
+#[test]
+fn a_mysql_wait_timeout_is_the_tabs_idle_disconnect() {
+    let mysql = |sql: &str| {
+        let mut cfg = config(Policy::default());
+        cfg.connections[0].driver = "mysql".into();
+        cfg.connections[0].session_sql = vec![sql.to_string()];
+        let driver = FakeDriver::default();
+        driver.mysql.store(true, Ordering::SeqCst);
+        Harness::with_driver(&cfg, Lang::En, driver)
+    };
+    let mut h = mysql("SET SESSION wait_timeout = 600");
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+    h.db(DbEvent::Catalog(Ok(catalog())));
+    h.sent();
+    ran(&mut h, "SELECT 1");
+    h.advance(LIMIT);
+    assert!(!h.session_closed(1), "not after the environment's 5m");
+    h.advance(Duration::from_secs(300));
+    assert!(h.session_closed(1));
+    assert!(said(&h, |m| *m == Msg::QueryIdleClosed { time: "10m".into() }));
+    let mut h = mysql("SET SESSION wait_timeout = DEFAULT");
+    h.db(DbEvent::Connected);
+    h.sent();
+    run(&mut h, "SELECT 1");
+    assert!(!h.roles().contains(&SessionRole::Query), "no query session opens: {:?}", h.roles());
+}
+
+/// Behind a pooler the statement is not sent (it has no form for one transaction): the tab keeps
+/// the environment's limit.
+#[test]
+fn behind_a_pooler_the_tab_keeps_the_environments_idle_disconnect() {
+    let mut h = idle_set_by_startup("SET idle_session_timeout = '10min'");
+    let id = run(&mut h, "SELECT 1");
+    h.tab_db(0, DbEvent::SessionPerTransaction { refused: vec![0] });
+    h.tab_db(0, DbEvent::Done { id, outcome: Outcome::Affected(0), elapsed: MS });
+    h.advance(LIMIT);
+    assert!(h.session_closed(1), "after the environment's 5m");
+    assert!(said(&h, |m| *m == Msg::QueryIdleClosed { time: "5m".into() }));
+}
+
 #[test]
 fn a_lock_wait_past_the_limit_says_how_long_it_waited() {
     let mut h = connected(Policy::default());

@@ -36,7 +36,8 @@ share, so behind a pooler datarig keeps them inside each transaction:
 - **`lock_wait`** is sent as `SET LOCAL lock_timeout` in each transaction instead of once for
   the session (see [Environments and safety](environments.md#lock-waits)).
 - **`idle_disconnect`** gets no server-side `idle_session_timeout` behind a pooler; datarig's
-  own timer still closes the tab's session.
+  own timer still closes the tab's session. A Startup SQL's `idle_session_timeout` is not sent
+  there either, so the environment's `idle_disconnect` stays the limit.
 - **Startup SQL** statements go first in every transaction as `SET LOCAL`; statements that have
   no such form are not sent, and the tab names them (see
   [Startup SQL](startup-sql.md#behind-a-connection-pooler)).

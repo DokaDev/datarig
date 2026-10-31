@@ -15,6 +15,13 @@
 //! (`ConnectOptions::server_idle`), for what the app cannot close itself (it was killed, the
 //! machine slept): a session the server closed says so as an idle close.
 //!
+//! A tab's start-up statements may set that server limit themselves (PostgreSQL's
+//! `idle_session_timeout`, MySQL's `wait_timeout`; `SessionPlan::idle`): it is then the tab's
+//! limit in place of the profile's, the app's timer and the server's on the same value (a value
+//! the app cannot read keeps the profile's limit on the app's side). Its connection stays open as
+//! long as the longest limit of its open tabs, so a tab never loses its tunnel before its own
+//! limit.
+//!
 //! The same timer rolls back a transaction opened for manual commit that sat idle for its
 //! environment's `tx_idle_rollback` (idle as above: nothing running or waiting in the tab): the
 //! app sends `ROLLBACK` on the tab's session, which stays open, and says so once the server
@@ -110,6 +117,19 @@ impl App {
         app.max(wall)
     }
 
+    /// How long tab `t`'s session may sit unused: what its start-up statements set the server's
+    /// idle limit to on its way (direct, or behind a pooler), else its profile's limit. `None`:
+    /// never closed for that.
+    pub(super) fn tab_idle_limit(&self, t: &Tab) -> Option<Duration> {
+        use datarig_core::profile::session::Wait;
+        let own = t.exec.idle.as_ref().map(|o| if t.exec.session_pooled { o.pooled } else { o.direct });
+        match own {
+            Some(Wait::Limit(d)) => Some(d),
+            Some(Wait::NoLimit) => None,
+            Some(Wait::Unknown) | None => self.idle_disconnect_of(t.profile?),
+        }
+    }
+
     /// Profile `id` was used now.
     pub(super) fn touch_profile(&mut self, id: ProfileId) {
         let at = (self.now(), self.wall_now());
@@ -139,9 +159,9 @@ impl App {
     fn idle_tabs(&self) -> Vec<(TabId, Duration, Used, bool, bool)> {
         self.tabs
             .iter()
-            .filter(|t| t.exec.session.is_some() && !self.tab_busy(t.id))
+            .filter(|t| t.exec.session.is_some() && t.profile.is_some() && !self.tab_busy(t.id))
             .filter_map(|t| {
-                let unused = self.idle_disconnect_of(t.profile?);
+                let unused = self.tab_idle_limit(t);
                 let (limit, tx) = match (unused, self.tx_rollback_of(t)) {
                     (Some(u), Some(r)) => (u.min(r), r <= u),
                     (Some(u), None) => (u, false),
@@ -155,13 +175,18 @@ impl App {
     }
 
     /// The profiles whose sessions may close for being idle: connected, nothing of theirs
-    /// running or waiting, a limit; with it and when they were last used.
+    /// running or waiting, a limit (the profile's, or a longer one of its tabs with a session
+    /// open: [`App::tab_idle_limit`]); with it and when they were last used.
     fn idle_profiles(&self) -> Vec<(ProfileId, Duration, Used)> {
         self.conns
             .iter()
             .filter(|(_, c)| c.connected && c.connecting.is_none() && c.pending.is_empty())
             .filter(|(id, _)| !self.tabs.iter().any(|t| t.profile == Some(*id) && self.tab_busy(t.id)))
-            .filter_map(|(id, c)| Some((id, self.idle_disconnect_of(id)?, c.used?)))
+            .filter_map(|(id, c)| {
+                let tabs = self.tabs.iter().filter(|t| t.profile == Some(id) && t.exec.session.is_some());
+                let limit = tabs.fold(self.idle_disconnect_of(id), |l, t| Some(l?.max(self.tab_idle_limit(t)?)));
+                Some((id, limit?, c.used?))
+            })
             .collect()
     }
 
