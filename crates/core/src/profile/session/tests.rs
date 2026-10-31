@@ -159,7 +159,7 @@ fn a_preset_of_the_other_database_is_an_error() {
 #[test]
 fn statements_are_checked_with_their_source_and_number() {
     let mut c = profile("postgres");
-    c.session_sql = vec!["SET work_mem = '1MB'".into(), "SET idle_session_timeout = '1s'".into()];
+    c.session_sql = vec!["SET work_mem = '1MB'".into(), "SET search_path = a".into()];
     match plan(&c, &Policy::default(), Defaults::default(), &[]) {
         Err(SessionError::Statement {
             source: Source::Profile,
@@ -344,4 +344,54 @@ fn a_lock_wait_not_sent_behind_a_pooler_is_known_only_when_both_ways_agree() {
     let sent = OnPooler::PerTransaction("SET LOCAL lock_timeout = '3s'".into());
     assert_eq!(wait("'3s'", Some(&sent)), Some(Wait::Limit(secs(3))));
     assert_eq!(wait("'3s'", None), Some(Wait::Limit(secs(3))));
+}
+
+/// A statement that sets the server's idle limit overrides the environment's `idle_disconnect`
+/// (PostgreSQL's `idle_session_timeout`, MySQL's `wait_timeout`); PostgreSQL's is not sent
+/// behind a pooler, where the environment's limit stays.
+#[test]
+fn the_servers_idle_limit_overrides_the_idle_disconnect() {
+    let secs = Duration::from_secs;
+    let rules = Policy { idle_disconnect: Some(Some(secs(300))), ..Policy::default() };
+    let idle = |driver: &str, preset: Option<&str>, own: &[&str]| {
+        let dbms = Dbms::of_driver(driver).unwrap();
+        let mut c = profile(driver);
+        c.policy = Some("prod".into());
+        c.session = preset.map_or(SessionRef::Inherit, |_| SessionRef::Named("p".into()));
+        c.session_sql = own.iter().map(|s| s.to_string()).collect();
+        let presets: Vec<_> = preset.map(|s| SessionPreset::new("p", dbms, vec![s.into()])).into_iter().collect();
+        plan(&c, &rules, Defaults::default(), &presets).unwrap().idle
+    };
+    let of = |source: Source, direct: Wait, pooled: Wait| Some(IdleOverride { source, direct, pooled });
+    let env = Wait::Limit(secs(300));
+    let by_preset = Source::Preset { name: "p".into(), by: PickedBy::Profile };
+    assert_eq!(idle("postgres", None, &[]), None);
+    assert_eq!(idle("postgres", None, &["SET lock_timeout = '3s'"]), None);
+    assert_eq!(
+        idle("postgres", Some("SET idle_session_timeout = '10min'"), &[]),
+        of(by_preset.clone(), Wait::Limit(secs(600)), env)
+    );
+    assert_eq!(idle("postgres", None, &["SET idle_session_timeout = 0"]), of(Source::Profile, Wait::NoLimit, env));
+    assert_eq!(
+        idle("postgres", None, &["SET idle_session_timeout TO DEFAULT"]),
+        of(Source::Profile, Wait::Unknown, env)
+    );
+    // The profile's own statement comes after the preset's: it wins.
+    assert_eq!(
+        idle("postgres", Some("SET idle_session_timeout = '10min'"), &["SET idle_session_timeout = 60000"]),
+        of(Source::Profile, Wait::Limit(secs(60)), env)
+    );
+    // MySQL has no pooler: the same either way.
+    let ten = Wait::Limit(secs(600));
+    assert_eq!(idle("mysql", Some("SET SESSION wait_timeout = 600"), &[]), of(by_preset, ten, ten));
+    assert_eq!(
+        idle("mysql", None, &["SET SESSION lock_wait_timeout = 3, wait_timeout = 600"]),
+        of(Source::Profile, ten, ten)
+    );
+    // Without an environment's limit the app never closes for being idle: that stays behind a
+    // pooler.
+    let mut c = profile("postgres");
+    c.session_sql = vec!["SET idle_session_timeout = '1h'".into()];
+    let p = plan(&c, &Policy::default(), Defaults::default(), &[]).unwrap();
+    assert_eq!(p.idle, of(Source::Profile, Wait::Limit(secs(3600)), Wait::NoLimit));
 }

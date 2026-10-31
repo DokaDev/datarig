@@ -33,6 +33,12 @@
 //! `lock_wait` for those sessions, and the plan says so with the value the server then has, as
 //! far as the app can read it ([`SessionPlan::lock_wait`]).
 //!
+//! A statement may set the server's idle limit too (PostgreSQL's `idle_session_timeout`, MySQL's
+//! `wait_timeout`): that value is then the idle disconnect of those sessions in place of the
+//! environment's `idle_disconnect` ([`SessionPlan::idle`]); the app's own timer follows it.
+//! PostgreSQL's has no form for one transaction (the server counts it only outside one), so
+//! behind a pooler it is not sent and the environment's limit stays.
+//!
 //! On PostgreSQL behind a pooler in transaction mode the session's settings would stay on server
 //! connections other clients share: there each statement goes first in every transaction as
 //! `SET LOCAL` instead ([`OnPooler`]), and one that has no such form is not sent (the profile
@@ -313,6 +319,21 @@ pub struct SessionPlan {
     /// The lock wait its statements set in place of the intent's `lock_wait` (`None`: none of
     /// them sets it).
     pub lock_wait: Option<LockWaitOverride>,
+    /// The server's idle limit its statements set in place of the intent's `idle_disconnect`
+    /// (`None`: none of them sets it).
+    pub idle: Option<IdleOverride>,
+}
+
+/// An idle limit a plan's statements set, which overrides the environment's `idle_disconnect`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IdleOverride {
+    /// Where the last statement that sets it comes from.
+    pub source: Source,
+    /// The server's limit then on a direct connection ([`Wait::NoLimit`]: never).
+    pub direct: Wait,
+    /// The same behind a pooler in transaction mode, where a statement with no form for one
+    /// transaction is not sent: the intent's limit when none is sent there.
+    pub pooled: Wait,
 }
 
 /// A lock wait limit a plan's statements set, which overrides the environment's `lock_wait`.
@@ -324,7 +345,7 @@ pub struct LockWaitOverride {
     pub wait: Wait,
 }
 
-/// A lock wait limit as the app reads a statement's value.
+/// A limit (a lock wait, an idle time) as the app reads a statement's value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Wait {
     /// A statement waits this long at most.
@@ -418,9 +439,10 @@ pub fn plan(
         if c.session != SessionRef::Inherit || !c.session_sql.is_empty() {
             return Err(SessionError::Driver(c.driver.clone()));
         }
-        return Ok(SessionPlan { items, lock_wait: None });
+        return Ok(SessionPlan { items, lock_wait: None, idle: None });
     };
     let mut waits = LockWaits::new(dbms, rules.lock_wait.unwrap_or(defaults.lock_wait));
+    let mut idle = IdleLimits::new(dbms, rules.idle_disconnect.unwrap_or(defaults.idle_disconnect));
     let mapped = rules.session.get(dbms);
     let picked = match &c.session {
         SessionRef::Off => {
@@ -445,13 +467,53 @@ pub fn plan(
         }
         let source = Source::Preset { name: p.name.clone(), by };
         for (i, s) in p.sql.iter().enumerate() {
-            items.push(statement(dbms, rules, &source, i + 1, s, &mut waits)?);
+            items.push(statement(dbms, rules, &source, i + 1, s, &mut waits, &mut idle)?);
         }
     }
     for (i, s) in c.session_sql.iter().enumerate() {
-        items.push(statement(dbms, rules, &Source::Profile, i + 1, s, &mut waits)?);
+        items.push(statement(dbms, rules, &Source::Profile, i + 1, s, &mut waits, &mut idle)?);
     }
-    Ok(SessionPlan { items, lock_wait: waits.overridden() })
+    Ok(SessionPlan { items, lock_wait: waits.overridden(), idle: idle.overridden() })
+}
+
+/// The server's idle limit of a session as a plan's statements set it, one after another.
+struct IdleLimits {
+    dbms: Dbms,
+    /// On a direct connection, and behind a pooler in transaction mode.
+    values: [Wait; 2],
+    /// Where the last statement that set it comes from.
+    source: Option<Source>,
+}
+
+impl IdleLimits {
+    /// The limit the app keeps before the statements (`idle_disconnect`; `None`: never).
+    fn new(dbms: Dbms, idle_disconnect: Option<Duration>) -> Self {
+        let first = idle_disconnect.map_or(Wait::NoLimit, Wait::Limit);
+        IdleLimits { dbms, values: [first; 2], source: None }
+    }
+
+    /// A statement of `source` that sets `settings`; `pooled` its way behind a pooler.
+    fn set(&mut self, source: &Source, settings: &[(String, String)], pooled: Option<&OnPooler>) {
+        for (name, value) in settings {
+            if !matches!(
+                (self.dbms, name.as_str()),
+                (Dbms::Postgres, "idle_session_timeout") | (Dbms::MySql, "wait_timeout")
+            ) {
+                continue;
+            }
+            let wait = wait_of(self.dbms, value);
+            self.values[0] = wait;
+            if !matches!(pooled, Some(OnPooler::Refused(_))) {
+                self.values[1] = wait;
+            }
+            self.source = Some(source.clone());
+        }
+    }
+
+    fn overridden(self) -> Option<IdleOverride> {
+        let [direct, pooled] = self.values;
+        self.source.map(|source| IdleOverride { source, direct, pooled })
+    }
 }
 
 /// The lock wait limits of a session as a plan's statements set them, one after another.
@@ -501,12 +563,15 @@ impl LockWaits {
     }
 }
 
-/// The lock wait limit `value` (as written) sets on `dbms`, as far as the app reads it.
-/// PostgreSQL's `lock_timeout`: a whole number of milliseconds, or one in quotes with one of
+/// The limit `value` (as written) sets on `dbms`, as far as the app reads it (a lock wait, or
+/// the server's idle limit: they take the same values). PostgreSQL's `lock_timeout` and
+/// `idle_session_timeout`: a whole number of milliseconds, or one in quotes with one of
 /// the units `ms`, `s`, `min`, `h`, `d` (`0`: no limit). MySQL's: a whole number of seconds, from
-/// 1 up to a year (the largest `lock_wait_timeout` takes). Other forms the server takes too
+/// 1 up to a year (the largest `lock_wait_timeout` and `wait_timeout` take). Other forms the server takes too
 /// (`' 3s'`, `'1.5s'`, `'3us'`, an expression) are `Unknown` on purpose: reading them as the
-/// server does is not worth getting a value wrong; unknown only drops the time from a message.
+/// server does is not worth getting a value wrong. For a lock wait, unknown only drops the time
+/// from a message; for the idle limit the app's timer keeps the environment's (MySQL's
+/// `wait_timeout` must be one the app reads: `SetProblem::IdleValue`).
 fn wait_of(dbms: Dbms, value: &str) -> Wait {
     let digits = |t: &str| !t.is_empty() && t.len() <= 12 && t.bytes().all(|b| b.is_ascii_digit());
     match dbms {
@@ -538,7 +603,7 @@ fn wait_of(dbms: Dbms, value: &str) -> Wait {
 }
 
 /// Statement `index` (from 1) of `source`, checked; what it sets of the lock wait goes in
-/// `waits`.
+/// `waits`, of the server's idle limit in `idle`.
 fn statement(
     dbms: Dbms,
     rules: &Policy,
@@ -546,6 +611,7 @@ fn statement(
     index: usize,
     sql: &str,
     waits: &mut LockWaits,
+    idle: &mut IdleLimits,
 ) -> Result<PlanItem, SessionError> {
     let set = Classifier::session_set(dbms.language(), sql).map_err(|problem| SessionError::Statement {
         source: source.clone(),
@@ -563,6 +629,7 @@ fn statement(
         Err(why) => OnPooler::Refused(why),
     });
     waits.set(source, &set.settings, pooled.as_ref());
+    idle.set(source, &set.settings, pooled.as_ref());
     Ok(PlanItem { what: Planned::Sql(sql.to_string()), source: source.clone(), pooled })
 }
 

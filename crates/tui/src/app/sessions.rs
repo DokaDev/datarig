@@ -138,13 +138,13 @@ impl App {
             SetProblem::Writes => Label::SetWrites,
             SetProblem::Danger(_) => Label::SetDanger,
             SetProblem::ModeDependent => Label::SetModeDependent,
+            SetProblem::IdleValue => Label::SetIdleValue,
             SetProblem::TransactionOnly { name } => {
                 return self.i18n.msg(&Msg::SetTransactionOnly { setting: name.clone() }).to_string();
             }
             SetProblem::AppOwned { name, owner } => {
                 let setting = name.clone();
                 let m = match owner {
-                    Owner::IdleDisconnect => Msg::SetReasonIdleDisconnect { setting },
                     Owner::Interactive => Msg::SetReasonInteractive { setting },
                     Owner::TxIdleRollback => Msg::SetReasonTxIdleRollback { setting },
                     Owner::ReadOnly => Msg::SetReasonReadOnly { setting },
@@ -355,8 +355,8 @@ impl App {
                             let value = d.map_or_else(|| label(off), wait_text);
                             let source = self.session_source_text(&i.source);
                             // A statement of the plan that sets the lock wait overrides it.
-                            let (value, source) = match (x, &plan.lock_wait) {
-                                (Intent::LockWait(_), Some(o)) => {
+                            let (value, source) = match (x, &plan.lock_wait, &plan.idle) {
+                                (Intent::LockWait(_), Some(o), _) => {
                                     let effective = match o.wait {
                                         Wait::Limit(d) => wait_text(d),
                                         Wait::NoLimit => label(Label::SessionViewNoLimit),
@@ -368,6 +368,32 @@ impl App {
                                         value,
                                     };
                                     (effective, self.i18n.msg(&m).to_string())
+                                }
+                                // One that sets the server's idle limit overrides the idle
+                                // disconnect (PostgreSQL's only on a direct connection: it is not
+                                // sent behind a pooler).
+                                (Intent::IdleDisconnect(_), _, Some(o)) => {
+                                    let text = |w: Wait| match w {
+                                        Wait::Limit(d) => wait_text(d),
+                                        Wait::NoLimit => label(Label::SessionViewNever),
+                                        Wait::Unknown => label(Label::SessionViewNotKnown),
+                                    };
+                                    let (by, overridden) = (self.session_source_text(&o.source), source);
+                                    let m = match (o.direct, o.pooled == o.direct) {
+                                        (Wait::Unknown, _) => Msg::SessionViewIdleNotKnown {
+                                            source: by,
+                                            overridden,
+                                            value: value.clone(),
+                                        },
+                                        (_, true) => Msg::SessionViewOverrides { source: by, overridden, value },
+                                        (_, false) => Msg::SessionViewOverridesDirect {
+                                            source: by,
+                                            overridden,
+                                            value,
+                                            pooled: text(o.pooled),
+                                        },
+                                    };
+                                    (text(o.direct), self.i18n.msg(&m).to_string())
                                 }
                                 _ => (value, source),
                             };

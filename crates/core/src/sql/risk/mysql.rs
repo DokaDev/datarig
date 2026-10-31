@@ -1768,7 +1768,6 @@ fn assignment(item: &[W]) -> Risk {
 /// MySQL's settings the app keeps itself, and why (see [`super::session_set`]).
 fn owned(name: &str) -> Option<Owner> {
     Some(match name {
-        "wait_timeout" => Owner::IdleDisconnect,
         "interactive_timeout" => Owner::Interactive,
         "transaction_read_only" | "tx_read_only" => Owner::ReadOnly,
         "autocommit" => Owner::Commit,
@@ -1807,7 +1806,17 @@ pub fn session_set(sql: &str) -> Result<SessionSet, SetProblem> {
     }
     super::session_set::judge(&risk)?;
     let settings = shapes.into_iter().next().and_then(Result::ok).unwrap_or_default();
-    let settings = settings.into_iter().filter_map(|(name, value)| Some((name?, value))).collect();
+    let settings: Vec<(String, String)> =
+        settings.into_iter().filter_map(|(name, value)| Some((name?, value))).collect();
+    // The app's idle timer follows the session's `wait_timeout`: only a value it reads.
+    let seconds = |v: &str| {
+        v.len() <= 12
+            && v.bytes().all(|b| b.is_ascii_digit())
+            && v.parse::<u64>().is_ok_and(|n| (1..=31_536_000).contains(&n))
+    };
+    if settings.iter().any(|(n, v)| n == "wait_timeout" && !seconds(v)) {
+        return Err(SetProblem::IdleValue);
+    }
     Ok(SessionSet { risk, per_transaction: None, settings })
 }
 

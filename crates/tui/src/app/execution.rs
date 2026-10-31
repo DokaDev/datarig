@@ -1260,6 +1260,7 @@ impl App {
             // The server dropped the schema's startup option (a pooler): the driver sets the
             // path in each transaction instead. Said in the run's Messages.
             DbEvent::SessionPerTransaction { .. } => {
+                t.exec.session_pooled = true;
                 if let Some(m) = &per_transaction {
                     t.exec.run.notes.push(m.clone());
                 }

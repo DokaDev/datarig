@@ -180,6 +180,10 @@ disconnect and Lock wait fields; empty takes the config's value, `"off"` turns i
   `idle_session_timeout` (version 14 or later, only on a direct connection; behind a pooler it
   would end server connections other clients share), MySQL `wait_timeout`. A session the server
   ended that way is reported as closed for being idle, not as a lost connection.
+- A [Startup SQL](startup-sql.md#idle-limit) or a profile's own `startup_sql` may set that
+  server limit itself (PostgreSQL `SET idle_session_timeout = '10min'`, MySQL
+  `SET SESSION wait_timeout = 600`): its value is then those sessions' idle disconnect, and
+  `:session` shows it with what it overrides.
 - A change of the setting applies to sessions opened after it; the app's own timer follows it
   at once.
 

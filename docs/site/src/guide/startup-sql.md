@@ -72,8 +72,37 @@ In order, a later setting of the same name winning:
 3. the profile's `startup_sql`.
 
 So a preset's or the profile's own `SET` of the lock wait overrides the environment's
-`lock_wait` for its sessions. The explorer's lookups (the metadata sessions) never get these
-settings.
+`lock_wait` for its sessions, and one of the server's idle limit (see
+[Idle limit](#idle-limit)) its `idle_disconnect`. The explorer's lookups (the metadata
+sessions) never get these settings.
+
+### Idle limit
+
+A statement may set the server's idle limit: PostgreSQL `SET idle_session_timeout = '10min'`
+(version 14 or later), MySQL `SET SESSION wait_timeout = 600`. That value is then the idle
+disconnect of those sessions instead of the environment's `idle_disconnect`:
+
+- datarig's own timer follows it: a tab's session closes after that long unused, a tab with an
+  open transaction is warned a minute before, and the message names that time. The server has
+  the same limit, so either one may end the session first; a session the server ended is
+  reported as closed for being idle.
+- The connection's other sessions and its SSH tunnel stay open as long as its longest tab limit,
+  so a tab never loses its tunnel before its own limit.
+- PostgreSQL's `0` turns the limit off for those sessions.
+- On PostgreSQL a value datarig does not read (`DEFAULT`, an expression, a unit it does not
+  read) still goes to the server, and datarig keeps closing the session after the
+  environment's `idle_disconnect` (the server does not count it inside a transaction). On MySQL
+  `wait_timeout` must be a whole number of seconds from 1: the server counts it inside a
+  transaction too, so another value (`DEFAULT`, `0`, an expression) is refused.
+- Behind a pooler PostgreSQL's is not sent (see
+  [Behind a connection pooler](#behind-a-connection-pooler)): the environment's
+  `idle_disconnect` stays there.
+- In a read-only environment PostgreSQL's is allowed; MySQL's `wait_timeout` is not (an idle
+  limit is not among the settings a read-only session may change there).
+- MySQL's `interactive_timeout` is refused: the server reads it only when a session starts, so
+  it has no effect on an open one.
+
+`:session` shows the limit that applies and what it overrides.
 
 ### Seeing what applies
 
@@ -99,8 +128,8 @@ an error shows the words its connect would refuse with.
   session may change at all.
 - **Not datarig's own settings.** What datarig manages itself is refused, with why and where to
   set it instead:
-  - `idle_session_timeout` and MySQL's `wait_timeout`: use the environment's `idle_disconnect`.
-    MySQL's `interactive_timeout` has no effect on an open session.
+  - MySQL's `interactive_timeout`: it has no effect on an open session; set `wait_timeout`
+    (see [Idle limit](#idle-limit)) or the environment's `idle_disconnect`.
   - `idle_in_transaction_session_timeout`: use `tx_idle_rollback`.
   - the read-only settings (`default_transaction_read_only`, `transaction_read_only`, MySQL's
     `tx_read_only`, `… TRANSACTION READ ONLY/WRITE`): use the environment's `read_only`.
@@ -112,7 +141,8 @@ an error shows the words its connect would refuse with.
     `standard_conforming_strings`, `application_name`, MySQL's `sql_select_limit`,
     `resultset_metadata` and `session_track_*`.
 
-  The lock wait settings and MySQL's `max_execution_time` are allowed. Settings of one
+  The lock wait settings, the server's idle limit (`idle_session_timeout`, MySQL's
+  `wait_timeout`) and MySQL's `max_execution_time` are allowed. Settings of one
   transaction only are refused too, with where the session's default is: PostgreSQL's
   `transaction_isolation` and `transaction_deferrable` (use `default_transaction_isolation`, …),
   MySQL's `SET @@transaction_isolation` without a scope (use `SET SESSION …`).
@@ -141,7 +171,9 @@ sent): statements that change who the session is (`SET ROLE`, `SET SESSION AUTHO
 a statement run outside a transaction would run as someone else), statements with no
 `SET LOCAL` form (`SET SESSION CHARACTERISTICS …`), defaults of the session's transactions
 (`default_transaction_isolation`, `default_transaction_deferrable`), and values that depend on
-what the pooled connection did before (`temp_buffers`, PostgreSQL 17's `transaction_timeout`).
+what the pooled connection did before (`temp_buffers`, PostgreSQL 17's `transaction_timeout`),
+and `idle_session_timeout` (the server counts it only outside a transaction, and set for the
+session it would end server connections other clients share).
 Behind a pooler, set the isolation in your own block instead (`BEGIN ISOLATION LEVEL …`).
 
 ## Details
