@@ -363,3 +363,17 @@ fn a_remapped_key_shows_in_the_first_steps() {
         assert!(t.contains("Ctrl+F8 hides") && !t.contains("X hides"), "{t}");
     }
 }
+
+/// A use marks the usage file for writing only while its count can still change what the tips
+/// do: up to the nudge, not on every later run.
+#[test]
+fn only_counts_that_matter_rewrite_the_usage_file() {
+    let mut a = app();
+    for n in 1..=NUDGE_AFTER + 2 {
+        a.tips.dirty = false;
+        a.dispatch_from(Action::Help, Source::Menu);
+        a.overlays.close(crate::app::overlay::OverlayKind::Help);
+        assert_eq!(a.tips.dirty, n <= NUDGE_AFTER, "use {n}");
+    }
+    assert_eq!(a.tips.usage.count(Via::Menu, action::spec(Action::Help).id), NUDGE_AFTER + 2);
+}

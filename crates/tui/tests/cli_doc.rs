@@ -167,14 +167,17 @@ fn texts() -> Vec<(String, String)> {
 /// `env::var`, `var_os` or an injected lookup (also through a `const`), and the names of an
 /// array looked up one by one just after it. Calls may go over several lines. `Command::env(k,
 /// v)` sets a child's variable and is not a read. `problems` gets every read the scan cannot
-/// name: `env::vars()`, and an `env::var` of an argument that is neither a literal nor a
-/// `const` and not in [`FORWARDED`].
+/// name: `env::vars()`, and an `env::var` or an injected lookup (`var(k)`) of an argument that
+/// is neither a literal nor a `const` and not in [`FORWARDED`].
 fn reads(problems: &mut Vec<String>) -> Vec<(String, String)> {
     let texts = texts();
     // The lookups' names as the sources write them (`xdg`: core's paths, one under `datarig`).
     let call = Regex::new(r#"(?:\b(?:var|var_os|env|xdg)|\.env\))\(\s*"([A-Z][A-Z0-9_]*)"\s*([,)])"#).unwrap();
     let std_call = Regex::new(r"\benv::var(?:_os)?\(\s*([^)]*?)\s*\)").unwrap();
     let by_const = Regex::new(r"\bvar(?:_os)?\(\s*([A-Z][A-Z0-9_]*)\s*\)").unwrap();
+    // An injected lookup of a name it was given (`var(k)`, not `env::var`, which `std_call`
+    // reads).
+    let by_arg = Regex::new(r"(^|[^:\w])var(?:_os)?\(\s*([a-z_][a-z0-9_]*)\s*\)").unwrap();
     let all = Regex::new(r"\benv::vars(?:_os)?\(").unwrap();
     let array = Regex::new(r#"\[\s*("[A-Z][A-Z0-9_]*"\s*,\s*)*"[A-Z][A-Z0-9_]*"\s*,?\s*\]"#).unwrap();
     let word = Regex::new(r#""([A-Z][A-Z0-9_]*)""#).unwrap();
@@ -207,6 +210,15 @@ fn reads(problems: &mut Vec<String>) -> Vec<(String, String)> {
                 problems.push(format!(
                     "{rel}:{}: env::var({arg}): a variable the scan cannot name",
                     line(text, c.get(0).unwrap().start())
+                ));
+            }
+        }
+        for c in by_arg.captures_iter(text) {
+            let arg = &c[2];
+            if !FORWARDED.iter().any(|(f, a, _)| f == rel && a == &arg) {
+                problems.push(format!(
+                    "{rel}:{}: var({arg}): a variable the scan cannot name",
+                    line(text, c.get(2).unwrap().start())
                 ));
             }
         }

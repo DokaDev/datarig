@@ -236,13 +236,19 @@ impl App {
     }
 
     /// Count a use of `id` (an action id, or a command's [`command_id`]); returns the menu and
-    /// command line runs so far.
+    /// command line runs so far. The file is written again only while a count can still change
+    /// what the tips do (the first use, up to the [`NUDGE_AFTER`]th run), so a run of a much
+    /// used action does not rewrite it; past that its count in the file stays behind (it is
+    /// written with the next change).
     fn count_use(&mut self, id: &str, via: Via) -> u32 {
-        if self.tips.usage.bump(via, id) == 1 {
+        let n = self.tips.usage.bump(via, id);
+        if n == 1 {
             self.tips.generation += 1;
             self.steps_follow();
         }
-        self.tips.dirty = true;
+        if n <= NUDGE_AFTER {
+            self.tips.dirty = true;
+        }
         self.tips.usage.count(Via::Menu, id) + self.tips.usage.count(Via::Command, id)
     }
 
