@@ -7,6 +7,8 @@ fn col(name: &str) -> StructureColumn {
         not_null: false,
         default: None,
         fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation: None,
     }
 }
 
@@ -29,6 +31,7 @@ fn index(name: &str, columns: &[&str], unique: bool, predicate: Option<&str>) ->
         primary: false,
         constraint: false,
         definition: String::new(),
+        valid: true,
     }
 }
 

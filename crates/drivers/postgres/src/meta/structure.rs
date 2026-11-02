@@ -19,11 +19,13 @@
 //! key) takes no lock on the table: an index key's order, operator class and collation come
 //! from `pg_index` (not `pg_get_indexdef`), as do the table's columns each key and `INCLUDE`
 //! column is (`indkey`, 0 for an expression); a trigger's `UPDATE OF` columns from `tgattr`. Its
-//! `WHEN` condition only `pg_get_triggerdef` prints ([`when_condition`]).
+//! `WHEN` condition only `pg_get_triggerdef` prints ([`when_condition`]). A column's enum labels
+//! (through domains over one) and its collation come from `pg_type`, `pg_enum` and
+//! `pg_collation`.
 
 use datarig_core::driver::DbError;
 use datarig_core::driver::structure::{
-    CheckConstraint, ColumnFill, FkAction, ForeignKey, Index, KeyConstraint, RelationKind, StructureColumn,
+    CheckConstraint, Collation, ColumnFill, FkAction, ForeignKey, Index, KeyConstraint, RelationKind, StructureColumn,
     TableStructure, Trigger, TriggerEvent, TriggerTiming,
 };
 use serde::Deserialize;
@@ -40,7 +42,15 @@ macro_rules! structure_parts {
     SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
       'name', a.attname, 'type', pg_catalog.format_type(a.atttypid, a.atttypmod),
       'not_null', a.attnotnull, 'default', pg_catalog.pg_get_expr(d.adbin, d.adrelid, true),
-      'generated', a.attgenerated::text, 'identity', a.attidentity::text) ORDER BY a.attnum)
+      'generated', a.attgenerated::text, 'identity', a.attidentity::text,
+      'enum_labels', (WITH RECURSIVE base(typ) AS (
+          SELECT a.atttypid
+          UNION ALL
+          SELECT t.typbasetype FROM base JOIN pg_catalog.pg_type t ON t.oid = base.typ WHERE t.typtype = 'd')
+        SELECT pg_catalog.json_agg(e.enumlabel ORDER BY e.enumsortorder)
+        FROM base JOIN pg_catalog.pg_enum e ON e.enumtypid = base.typ),
+      'collation', (SELECT pg_catalog.json_build_object('name', co.collname, 'deterministic', co.collisdeterministic)
+        FROM pg_catalog.pg_collation co WHERE co.oid = a.attcollation)) ORDER BY a.attnum)
     FROM pg_catalog.pg_attribute a
     LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
     WHERE a.attrelid = rel.oid AND a.attnum > 0 AND NOT a.attisdropped),
@@ -63,7 +73,7 @@ macro_rules! structure_parts {
     WHERE con.conrelid = rel.oid AND con.contype IN ('p', 'f', 'u', 'c')),
   'indexes', (
     SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
-      'name', ic.relname, 'unique', i.indisunique, 'primary', i.indisprimary,
+      'name', ic.relname, 'unique', i.indisunique, 'primary', i.indisprimary, 'valid', i.indisvalid AND i.indimmediate,
       'constraint', EXISTS (SELECT 1 FROM pg_catalog.pg_constraint x
         WHERE x.conrelid = i.indrelid AND x.conindid = i.indexrelid AND x.contype IN ('p', 'u', 'x')),
       'method', am.amname,
@@ -182,6 +192,14 @@ struct RawColumn {
     default: Option<String>,
     generated: String,
     identity: String,
+    enum_labels: Option<Vec<String>>,
+    collation: Option<RawCollation>,
+}
+
+#[derive(Deserialize)]
+struct RawCollation {
+    name: String,
+    deterministic: bool,
 }
 
 #[derive(Deserialize)]
@@ -204,6 +222,7 @@ struct RawIndex {
     name: String,
     unique: bool,
     primary: bool,
+    valid: bool,
     constraint: bool,
     method: String,
     columns: Option<Vec<String>>,
@@ -268,7 +287,17 @@ pub(crate) fn model(raw: Raw) -> Result<TableStructure, DbError> {
             };
             // A generated column's expression is its fill, not a default.
             let default = if matches!(fill, ColumnFill::Default) { c.default } else { None };
-            StructureColumn { name: c.name, type_name: c.type_name, not_null: c.not_null, default, fill }
+            let collation =
+                c.collation.map(|k| Collation { name: k.name, charset: None, deterministic: k.deterministic });
+            StructureColumn {
+                name: c.name,
+                type_name: c.type_name,
+                not_null: c.not_null,
+                default,
+                fill,
+                enum_labels: c.enum_labels.unwrap_or_default(),
+                collation,
+            }
         })
         .collect();
     for c in raw.constraints.unwrap_or_default() {
@@ -312,6 +341,7 @@ pub(crate) fn model(raw: Raw) -> Result<TableStructure, DbError> {
             primary: i.primary,
             constraint: i.constraint,
             definition: i.definition,
+            valid: i.valid,
         })
         .collect();
     s.triggers = raw.triggers.unwrap_or_default().into_iter().map(trigger).collect();

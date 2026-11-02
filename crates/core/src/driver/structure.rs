@@ -82,6 +82,26 @@ pub struct StructureColumn {
     /// The default expression, as the server prints it.
     pub default: Option<String>,
     pub fill: ColumnFill,
+    /// The labels of an enum (or of a domain over one), in the server's order; empty for any
+    /// other type (an array of an enum too).
+    pub enum_labels: Vec<String>,
+    /// How its text compares, for a column of a collatable type; `None` for another type, or
+    /// when the server did not say.
+    pub collation: Option<Collation>,
+}
+
+/// A text column's collation ([`StructureColumn::collation`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Collation {
+    /// As the server names it (PostgreSQL `default`, `C`, `und-x-icu`; MySQL
+    /// `utf8mb4_0900_ai_ci`).
+    pub name: String,
+    /// The character set of the column's values (MySQL's `utf8mb4`, `latin1`, `binary`);
+    /// `None` where it is the database's, not the column's (PostgreSQL).
+    pub charset: Option<String>,
+    /// Equal strings are equal byte for byte. A PostgreSQL ICU collation made
+    /// `deterministic = false` takes `'a'` and `'A'` (or other byte sequences) for equal.
+    pub deterministic: bool,
 }
 
 impl Index {
@@ -198,6 +218,12 @@ pub struct Index {
     pub primary: bool,
     /// It backs a constraint (the primary key, a unique or an exclusion constraint).
     pub constraint: bool,
+    /// The server uses it, and a unique one holds after every statement: PostgreSQL leaves an
+    /// index invalid when `CREATE INDEX CONCURRENTLY` fails (a unique one on values that are not
+    /// unique), and a partitioned table's until every partition has its own; a unique one of a
+    /// `DEFERRABLE` constraint holds only at its check (the commit, when deferred), so within a
+    /// transaction two rows may share a key.
+    pub valid: bool,
     /// The server's definition (`CREATE INDEX …`).
     pub definition: String,
 }

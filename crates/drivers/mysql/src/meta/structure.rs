@@ -35,7 +35,7 @@
 use crate::session::Server;
 use datarig_core::driver::DbError;
 use datarig_core::driver::structure::{
-    CheckConstraint, ColumnFill, FkAction, ForeignKey, Index, KeyConstraint, RelationKind, StructureColumn,
+    CheckConstraint, Collation, ColumnFill, FkAction, ForeignKey, Index, KeyConstraint, RelationKind, StructureColumn,
     StructureGroup, TableStructure, Trigger, TriggerEvent, TriggerTiming,
 };
 use datarig_core::sql::dialect::{Dialect, MySqlMode};
@@ -51,7 +51,8 @@ const SQL: &str = "SELECT JSON_OBJECT(
   'kind', t.TABLE_TYPE,
   'columns', (SELECT JSON_ARRAYAGG(JSON_OBJECT('position', c.ORDINAL_POSITION, 'name', c.COLUMN_NAME,
       'type', c.COLUMN_TYPE, 'data_type', c.DATA_TYPE, 'nullable', c.IS_NULLABLE, 'default', c.COLUMN_DEFAULT,
-      'extra', c.EXTRA, 'generation', c.GENERATION_EXPRESSION))
+      'extra', c.EXTRA, 'generation', c.GENERATION_EXPRESSION, 'charset', c.CHARACTER_SET_NAME,
+      'collation', c.COLLATION_NAME))
     FROM information_schema.COLUMNS c WHERE c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME),
   'indexes', (SELECT JSON_ARRAYAGG(JSON_OBJECT('name', x.INDEX_NAME, 'seq', x.SEQ_IN_INDEX,
       'column', x.COLUMN_NAME, 'expression', {expression}, 'sub_part', x.SUB_PART, 'collation', x.COLLATION,
@@ -171,6 +172,11 @@ struct RawColumn {
     default: Option<String>,
     extra: Option<String>,
     generation: Option<String>,
+    /// The character set and collation of a text column (`None` for another type).
+    #[serde(default)]
+    charset: Option<String>,
+    #[serde(default)]
+    collation: Option<String>,
 }
 
 /// One key part of an index (`STATISTICS` has a row per part).
@@ -286,6 +292,7 @@ pub(crate) fn model(
                 predicate: None,
                 constraint: false,
                 definition: String::new(),
+                valid: true,
             });
         }
         let Some(x) = s.indexes.last_mut() else { continue };
@@ -471,7 +478,25 @@ fn column(c: RawColumn, mariadb: bool, d: Dialect) -> StructureColumn {
         ColumnFill::Default => default_text(c.default, &c.data_type, &extra, mariadb, d),
         _ => None,
     };
-    StructureColumn { name: c.name, type_name: c.type_name, not_null: c.nullable == "NO", default, fill }
+    let collation = c.collation.map(|name| Collation { deterministic: byte_wise(&name), name, charset: c.charset });
+    StructureColumn {
+        enum_labels: super::enum_values(&c.type_name).unwrap_or_default(),
+        name: c.name,
+        type_name: c.type_name,
+        not_null: c.nullable == "NO",
+        default,
+        fill,
+        collation,
+    }
+}
+
+/// Collation `name` takes two strings for equal only when their bytes are: a binary one that
+/// does not pad (`utf8mb4_0900_bin`, MariaDB's `_nopad_bin`). A `_ci` one takes `'a'` for `'A'`,
+/// and one that pads (`utf8mb4_bin`, every collation before MySQL 8's `0900` ones) `'a'` for
+/// `'a '`. (Binary strings have no collation of their own: `COLLATION_NAME` is `NULL`.)
+fn byte_wise(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    name.ends_with("_0900_bin") || name.ends_with("_nopad_bin")
 }
 
 /// A column's default as SQL writes it, with what an `UPDATE` sets the column to

@@ -469,6 +469,7 @@ impl App {
             DbEvent::Page { .. }
             | DbEvent::Language(_)
             | DbEvent::Explain(_)
+            | DbEvent::Edit(_)
             | DbEvent::SessionValues(_)
             | DbEvent::ValuesNotKnown { .. }
             | DbEvent::Info { .. }
@@ -812,6 +813,8 @@ impl App {
             DbEvent::Language(lang) => self.set_profile_language(id, lang),
             // The plan format its server gives (the plan actions follow it).
             DbEvent::Explain(format) => self.conns.entry(id).explain = Some(format),
+            // The edits its server takes.
+            DbEvent::Edit(format) => self.conns.entry(id).edit = Some(format),
             // A query session's own (copying its values as SQL needs it).
             DbEvent::SessionValues(_) | DbEvent::ValuesNotKnown { .. } => {}
             // Statement events never come from the metadata session.
@@ -911,6 +914,13 @@ impl App {
         if let DbEvent::Explain(format) = ev {
             if let Some(p) = profile {
                 self.conns.entry(p).explain = Some(format);
+            }
+            return;
+        }
+        // Likewise the edits its server takes.
+        if let DbEvent::Edit(format) = ev {
+            if let Some(p) = profile {
+                self.conns.entry(p).edit = Some(format);
             }
             return;
         }
@@ -1097,6 +1107,7 @@ impl App {
             DbEvent::StatementCacheOff
             | DbEvent::Language(_)
             | DbEvent::Explain(_)
+            | DbEvent::Edit(_)
             | DbEvent::SessionValues(_)
             | DbEvent::Stopping { .. }
             | DbEvent::CancelRefused { .. }

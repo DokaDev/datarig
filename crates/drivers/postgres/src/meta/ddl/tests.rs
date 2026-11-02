@@ -26,7 +26,7 @@ fn a_relation_reads_its_catalog_codes() {
           {"name":"id","type":"integer","not_null":true,"default":null,"generated":"","identity":"a"},
           {"name":"note","type":"text","not_null":false,"default":null,"generated":"","identity":""}],
         "constraints":null,"indexes":[
-          {"name":"t_email","unique":true,"primary":false,"constraint":false,"method":"btree","columns":["email"],
+          {"name":"t_email","unique":true,"primary":false,"valid":true,"constraint":false,"method":"btree","columns":["email"],
            "options":[""],"include":null,"key_columns":["email"],"include_columns":null,"predicate":null,
            "definition":"CREATE UNIQUE INDEX t_email ON s.t USING btree (email)"}],"triggers":null},
       "ddl":{"schema":"s","name":"t","owner":"o","persistence":"u","am":"heap","options":["fillfactor=70"],

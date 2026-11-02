@@ -70,6 +70,7 @@ impl Driver for MyDriver {
             reads_held_to_end: true,
             export: true,
             manual_commit: true,
+            edit: None,
         }
     }
 

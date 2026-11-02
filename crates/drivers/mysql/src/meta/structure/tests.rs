@@ -53,6 +53,37 @@ fn a_table_reads_as_the_model_in_the_servers_order() {
 }
 
 #[test]
+fn columns_have_their_enum_labels_and_collation() {
+    let json = r#"{"kind":"BASE TABLE","trigger_privilege":true,"columns":[
+      {"position":1,"name":"st","type":"enum('new','it''s')","data_type":"enum","nullable":"YES","default":null,"extra":"","generation":"","charset":"utf8mb4","collation":"utf8mb4_0900_ai_ci"},
+      {"position":2,"name":"code","type":"varchar(8)","data_type":"varchar","nullable":"YES","default":null,"extra":"","generation":"","charset":"latin1","collation":"latin1_bin"},
+      {"position":3,"name":"raw","type":"varchar(8)","data_type":"varchar","nullable":"YES","default":null,"extra":"","generation":"","charset":"utf8mb4","collation":"utf8mb4_0900_bin"},
+      {"position":6,"name":"nopad","type":"varchar(8)","data_type":"varchar","nullable":"YES","default":null,"extra":"","generation":"","charset":"utf8mb4","collation":"UTF8MB4_NOPAD_BIN"},
+      {"position":4,"name":"n","type":"int","data_type":"int","nullable":"YES","default":null,"extra":"","generation":"","charset":null,"collation":null},
+      {"position":5,"name":"f","type":"set('a','b')","data_type":"set","nullable":"YES","default":null,"extra":"","generation":""}]}"#;
+    let s = parse_my(json).unwrap();
+    let c = |name: &str, charset: &str, deterministic| {
+        Some(Collation { name: name.into(), charset: Some(charset.into()), deterministic })
+    };
+    let got: Vec<(&str, Vec<&str>, Option<Collation>)> = s
+        .columns
+        .iter()
+        .map(|x| (x.name.as_str(), x.enum_labels.iter().map(String::as_str).collect(), x.collation.clone()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("st", vec!["new", "it's"], c("utf8mb4_0900_ai_ci", "utf8mb4", false)),
+            ("code", vec![], c("latin1_bin", "latin1", false)),
+            ("raw", vec![], c("utf8mb4_0900_bin", "utf8mb4", true)),
+            ("n", vec![], None),
+            ("f", vec![], None),
+            ("nopad", vec![], c("UTF8MB4_NOPAD_BIN", "utf8mb4", true)),
+        ]
+    );
+}
+
+#[test]
 fn columns_say_how_they_are_filled() {
     let s = parse_my(ITEMS).unwrap();
     let fills: Vec<(&str, &ColumnFill, Option<&str>, bool)> =

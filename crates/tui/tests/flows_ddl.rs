@@ -619,6 +619,7 @@ fn mysql_items_structure() -> datarig_core::driver::structure::TableStructure {
         primary: name == "PRIMARY",
         constraint: name == "PRIMARY",
         definition: String::new(),
+        valid: true,
     };
     let mut t = TableStructure::new(RelationKind::Table);
     t.columns = vec![StructureColumn {
@@ -627,6 +628,8 @@ fn mysql_items_structure() -> datarig_core::driver::structure::TableStructure {
         not_null: true,
         default: None,
         fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation: None,
     }];
     t.indexes = vec![index("PRIMARY"), index("ix_id")];
     t

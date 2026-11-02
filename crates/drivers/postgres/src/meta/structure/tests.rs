@@ -36,6 +36,32 @@ fn columns_say_how_they_are_filled() {
 }
 
 #[test]
+fn columns_have_their_enum_labels_and_collation() {
+    let json = r#"{"kind":"r","columns":[
+        {"name":"mood","type":"mood","not_null":false,"default":null,"generated":"","identity":"",
+         "enum_labels":["sad","ok","happy"],"collation":null},
+        {"name":"name","type":"text","not_null":false,"default":null,"generated":"","identity":"",
+         "enum_labels":null,"collation":{"name":"default","deterministic":true}},
+        {"name":"tag","type":"text","not_null":false,"default":null,"generated":"","identity":"",
+         "enum_labels":null,"collation":{"name":"und-ci","deterministic":false}},
+        {"name":"n","type":"integer","not_null":false,"default":null,"generated":"","identity":""}]}"#;
+    let s = parse(json).unwrap();
+    let c = |name: &str, deterministic| Some(Collation { name: name.into(), charset: None, deterministic });
+    let got: Vec<(&str, &[String], Option<Collation>)> =
+        s.columns.iter().map(|x| (x.name.as_str(), x.enum_labels.as_slice(), x.collation.clone())).collect();
+    let labels = ["sad".to_string(), "ok".into(), "happy".into()];
+    assert_eq!(
+        got,
+        [
+            ("mood", &labels[..], None),
+            ("name", &[][..], c("default", true)),
+            ("tag", &[][..], c("und-ci", false)),
+            ("n", &[][..], None),
+        ]
+    );
+}
+
+#[test]
 fn trigger_types_decode_from_their_bits() {
     let t = |tgtype, enabled: &str| {
         trigger(RawTrigger {
@@ -110,7 +136,7 @@ fn a_trigger_condition_is_its_when_clause() {
 
 #[test]
 fn index_options_follow_their_columns() {
-    let raw = r#"{"kind":"r","indexes":[{"name":"i","unique":false,"primary":false,"constraint":false,
+    let raw = r#"{"kind":"r","indexes":[{"name":"i","unique":false,"primary":false,"valid":true,"constraint":false,
         "method":"btree","columns":["created","lower(code)","id"],"options":["DESC","","COLLATE \"C\" text_pattern_ops"],
         "include":null,"predicate":null,"definition":""}]}"#;
     let s = parse(raw).unwrap();
@@ -119,9 +145,18 @@ fn index_options_follow_their_columns() {
 }
 
 #[test]
+fn an_index_says_whether_it_is_valid() {
+    let raw = r#"{"kind":"r","indexes":[{"name":"i","unique":true,"primary":false,"valid":false,"constraint":false,
+        "method":"btree","columns":["v"],"options":[""],"include":null,"predicate":null,"definition":""}]}"#;
+    assert!(!parse(raw).unwrap().indexes[0].valid);
+    let without = raw.replace(r#""valid":false,"#, "");
+    assert!(parse(&without).is_err(), "unknown is not valid");
+}
+
+#[test]
 fn index_keys_know_their_columns() {
     use datarig_core::driver::structure::{ItemColumn, StructureGroup};
-    let raw = r#"{"kind":"r","indexes":[{"name":"i","unique":false,"primary":false,"constraint":false,
+    let raw = r#"{"kind":"r","indexes":[{"name":"i","unique":false,"primary":false,"valid":true,"constraint":false,
         "method":"btree","columns":["\"Created\"","lower(code)"],"options":["DESC",""],
         "include":["\"Note\""],"key_columns":["Created",null],"include_columns":["Note"],
         "predicate":null,"definition":""}],

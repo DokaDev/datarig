@@ -388,6 +388,11 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
     let off = "WITH (autovacuum_enabled = false)";
     for sql in [
         format!("CREATE SCHEMA {s}"),
+        format!("CREATE TYPE {s}.mood AS ENUM ('sad', 'ok', 'happy')"),
+        format!("CREATE DOMAIN {s}.dmood AS {s}.mood"),
+        format!("CREATE TABLE {s}.moods (m {s}.mood, d {s}.dmood, ms {s}.mood[], c text COLLATE \"C\")"),
+        format!("CREATE TABLE {s}.dups (v int NOT NULL, w int UNIQUE DEFERRABLE)"),
+        format!("INSERT INTO {s}.dups VALUES (1), (1)"),
         format!(
             "CREATE TABLE {s}.parent (a int, b int, code text, PRIMARY KEY (a, b), CONSTRAINT parent_code_key UNIQUE (code))"
         ),
@@ -445,6 +450,9 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
     ] {
         pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
     }
+    // Building a unique index on values that are not unique fails, and leaves it invalid.
+    let failed = pg_clean::run_fresh(&url, &format!("CREATE UNIQUE INDEX CONCURRENTLY dups_v ON {s}.dups (v)"));
+    assert!(failed.is_err(), "{failed:?}");
     let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
     let mut meta = Conn::open(&proxy.url(&url), SessionRole::Meta).await;
     meta.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
@@ -459,6 +467,17 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
         assert_eq!(new.len(), 1, "{table}: one statement: {new:?}");
         result.map(|b| *b)
     };
+    // Enum labels through a domain, none for an array of the enum; a column's collation.
+    let moods = read("moods").await.expect("moods");
+    let mood = ["sad", "ok", "happy"];
+    let labels: Vec<&[String]> = moods.columns.iter().map(|c| &c.enum_labels[..]).collect();
+    assert_eq!(labels, [&mood[..], &mood[..], &[], &[]]);
+    let collations: Vec<_> = moods.columns.iter().map(|c| c.collation.clone()).collect();
+    let c = Collation { name: "C".into(), charset: None, deterministic: true };
+    assert_eq!(collations, [None, None, None, Some(c)]);
+    let dups = read("dups").await.expect("dups");
+    let valid: Vec<(&str, bool, bool)> = dups.indexes.iter().map(|x| (x.name.as_str(), x.unique, x.valid)).collect();
+    assert_eq!(valid, [("dups_v", true, false), ("dups_w_key", true, false)], "a deferrable key may not hold");
     let child = read("child").await.expect("child");
     let names = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let col = |name: &str, ty: &str, not_null: bool, default: Option<&str>, fill: ColumnFill| StructureColumn {
@@ -467,6 +486,8 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
         not_null,
         default: default.map(str::to_string),
         fill,
+        enum_labels: Vec::new(),
+        collation: None,
     };
     assert_eq!(
         child.columns,
@@ -477,7 +498,10 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
             col("qty", "integer", true, Some("1"), ColumnFill::Default),
             col("doc", "jsonb", false, None, ColumnFill::Default),
             col("twice", "integer", false, None, ColumnFill::Stored("qty * 2".into())),
-            col("note", "text", false, None, ColumnFill::Default),
+            StructureColumn {
+                collation: Some(Collation { name: "default".into(), charset: None, deterministic: true }),
+                ..col("note", "text", false, None, ColumnFill::Default)
+            },
         ]
     );
     assert_eq!(
@@ -528,6 +552,7 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
                 primary: key,
                 constraint: key,
                 definition: def.to_string(),
+                valid: true,
             }
         };
     let mut expected = [

@@ -857,6 +857,8 @@ fn order_items_structure() -> TableStructure {
         not_null,
         default: default.map(str::to_string),
         fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation: None,
     };
     let mut t = TableStructure::new(RelationKind::Table);
     t.columns = vec![
@@ -903,6 +905,7 @@ fn order_items_structure() -> TableStructure {
         primary: false,
         constraint: false,
         definition: String::new(),
+        valid: true,
     }];
     let check = |name: &str, expression: &str, cols: &[&str]| CheckConstraint {
         name: name.into(),
@@ -1108,6 +1111,8 @@ fn mysql_items_structure() -> TableStructure {
         not_null,
         default: default.map(str::to_string),
         fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation: None,
     };
     let index = |name: &str, cols: &[&str], keys: &[Option<&str>], unique: bool| Index {
         name: name.into(),
@@ -1122,6 +1127,7 @@ fn mysql_items_structure() -> TableStructure {
         primary: name == "PRIMARY",
         constraint: unique && keys.iter().all(Option::is_some),
         definition: String::new(),
+        valid: true,
     };
     let trigger = |name: &str, timing, event| Trigger {
         name: name.into(),
