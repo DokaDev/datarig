@@ -486,7 +486,8 @@ impl App {
             | DbEvent::Started { .. }
             | DbEvent::StepRows { .. }
             | DbEvent::Finished { .. }
-            | DbEvent::Exported { .. } => EventTarget::Tab(self.tab().id),
+            | DbEvent::Exported { .. }
+            | DbEvent::Applied { .. } => EventTarget::Tab(self.tab().id),
             // The attempt in progress, else the active tab's profile.
             _ => match self.latest_attempt().or(self.tab().profile) {
                 Some(id) => EventTarget::Meta(id),
@@ -839,7 +840,8 @@ impl App {
             | DbEvent::RunRolledBack { .. }
             | DbEvent::TxEnded { .. }
             | DbEvent::TxClosedBy { .. }
-            | DbEvent::Autocommit(_) => {}
+            | DbEvent::Autocommit(_)
+            | DbEvent::Applied { .. } => {}
             DbEvent::Ddl { id: request, result } => self.ddl_answered(id, None, request, result),
         }
     }
@@ -1201,6 +1203,8 @@ impl App {
                 Some(m)
             }
             DbEvent::TxEnded { .. } => None,
+            // An Apply's answer: the tab sends none.
+            DbEvent::Applied { .. } => None,
             // The app's rollback of an idle transaction failed: the session closes instead (after
             // this event), whatever the error.
             DbEvent::Failed { id: q, error, .. } if t.exec.ending.is_some_and(|e| e.id == q && e.idle.is_some()) => {
@@ -2062,7 +2066,8 @@ impl App {
             DbError::Server(s)
             | DbError::NeedsNoTransaction(s)
             | DbError::IdleInTransactionTimeout(s)
-            | DbError::IdleSessionTimeout(s) => {
+            | DbError::IdleSessionTimeout(s)
+            | DbError::LockBusy(s) => {
                 return s.clone();
             }
             DbError::LockTimeout(s) | DbError::ServerLockTimeout(s) => {

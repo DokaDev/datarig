@@ -19,7 +19,7 @@
 use crate::link::{Link, Next};
 use crate::session::{Server, Tracked, quit};
 use datarig_core::driver::structure::RelationStats;
-use datarig_core::driver::{DbCommand, DbError, DbEvent, SchemaObjects};
+use datarig_core::driver::{ApplyError, ApplyFailure, DbCommand, DbError, DbEvent, SchemaObjects};
 use datarig_core::fault::Fault;
 use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
 use datarig_core::sql::dialect::{Dialect, MySqlMode};
@@ -120,6 +120,10 @@ pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedS
                 DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id, result: Err(DbError::NotSupported) },
                 DbCommand::Export { id, .. } => {
                     DbEvent::Exported { id, result: Err(DbError::NotSupported), cancelled: false }
+                }
+                DbCommand::ApplyEdits { id, .. } => {
+                    let why = ApplyError::Db(DbError::NotSupported);
+                    DbEvent::Applied { id, result: Err(ApplyFailure { step: None, why }) }
                 }
             }
         };

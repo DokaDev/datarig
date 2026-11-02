@@ -690,6 +690,12 @@ fn cancelled_export(id: u64) -> DbEvent {
     DbEvent::Exported { id, result: Err(DbError::Cancelled), cancelled: true }
 }
 
+/// Apply `id`'s answer when it was cancelled.
+fn cancelled_apply(id: u64) -> DbEvent {
+    let why = datarig_core::driver::ApplyError::Db(DbError::Cancelled);
+    DbEvent::Applied { id, result: Err(datarig_core::driver::ApplyFailure { step: None, why }) }
+}
+
 /// The allowlist's question `id`'s answer when it was cancelled.
 fn cancelled_check(id: u64) -> DbEvent {
     DbEvent::RepeatChecked { id, result: Err(DbError::Cancelled) }
@@ -794,6 +800,13 @@ pub(crate) async fn query_loop(
                 match end_tx(&client, &mut link, &env, &mut tx, id, commit).await {
                     Ok(()) => continue,
                     Err(closed) => Stop::from(closed),
+                }
+            }
+            // Answered once; a session the UI closed meanwhile answers nothing.
+            Next::Command(DbCommand::ApplyEdits { id, steps, tx: rule }) => {
+                match apply::apply(&client, &mut link, &env, &mut tx, id, &steps, rule).await {
+                    Ok(()) => continue,
+                    Err(closed) => unanswered(&events, closed, cancelled_apply(id)),
                 }
             }
             // A fetch for a result whose portal is gone (complete, failed or closed): answered
@@ -2583,6 +2596,7 @@ fn split_page<T>(carry: &mut Option<T>, fetched: Vec<T>, page_size: usize) -> (V
     }
 }
 
+mod apply;
 mod export;
 
 #[cfg(test)]
