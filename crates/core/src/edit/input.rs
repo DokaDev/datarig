@@ -43,6 +43,11 @@ pub enum Invalid {
     BitCount { count: u32, exact: bool },
     /// Longer than the column's `max` characters.
     TooLong { max: u32 },
+    /// A number the column's floating-point type does not hold as typed: it would be stored
+    /// as `stored`.
+    Rounded { type_name: String, stored: String },
+    /// Text ending in spaces for a MySQL `CHAR` column, which drops them.
+    TrailingSpaces,
 }
 
 /// Whether `text`, typed for table column `c` on a server of dialect `d`, is a value of the
@@ -57,7 +62,7 @@ pub fn check_input(d: Dialect, c: &TableColumn, text: &str) -> Result<(), Invali
     match c.kind {
         ValueKind::Integer => integer(mysql, &ty, &col.type_name, text),
         ValueKind::Decimal => decimal(mysql, &ty, &col.type_name, text),
-        ValueKind::Float => float(mysql, text),
+        ValueKind::Float => float(mysql, &ty, &col.type_name, text),
         ValueKind::Bool => matches!(text, "true" | "false").then_some(()).ok_or(Invalid::NotBool),
         ValueKind::Date => date(mysql, text),
         ValueKind::Time => time_of_day(&ty, text),
@@ -65,7 +70,7 @@ pub fn check_input(d: Dialect, c: &TableColumn, text: &str) -> Result<(), Invali
         ValueKind::TimestampTz => timestamp(mysql, &ty, true, text),
         ValueKind::Bytes => bytes(mysql, text),
         ValueKind::Bit => bits(mysql, &ty, text),
-        ValueKind::Text => self::text(&ty, text),
+        ValueKind::Text => self::text(mysql, &ty, text),
         ValueKind::Other if !mysql && ty.name == "uuid" => uuid(text).then_some(()).ok_or(Invalid::NotUuid),
         ValueKind::Other | ValueKind::Json | ValueKind::Interval | ValueKind::Array(_) => Ok(()),
     }
@@ -190,8 +195,11 @@ fn plain_decimal(s: &str) -> Option<(bool, &str, &str)> {
 }
 
 /// A floating-point number: a decimal one with an optional exponent; PostgreSQL's also `NaN`,
-/// `Infinity` and `-Infinity`.
-fn float(mysql: bool, s: &str) -> Result<(), Invalid> {
+/// `Infinity` and `-Infinity`. It must be a value the type holds exactly as typed: the number
+/// it is read as (single or double precision) has the same shortest digits; MySQL's
+/// `FLOAT(M,D)` and `DOUBLE(M,D)` keep `D` digits after the point, and an unsigned one no
+/// negative number.
+fn float(mysql: bool, ty: &TypeName, type_name: &str, s: &str) -> Result<(), Invalid> {
     if !mysql && matches!(s, "NaN" | "Infinity" | "-Infinity") {
         return Ok(());
     }
@@ -200,7 +208,75 @@ fn float(mysql: bool, s: &str) -> Result<(), Invalid> {
         None => (s, None),
     };
     let exp_ok = exp.is_none_or(|e| !e.is_empty() && e.bytes().all(|b| b.is_ascii_digit()));
-    (plain_decimal(mantissa).is_some() && exp_ok).then_some(()).ok_or(Invalid::NotNumber)
+    if plain_decimal(mantissa).is_none() || !exp_ok {
+        return Err(Invalid::NotNumber);
+    }
+    // PostgreSQL's `float(p)` is `real` up to 24 bits, MySQL's `FLOAT(p)` too; a type this code
+    // does not know is taken as the narrower one.
+    let single = match (mysql, ty.name.as_str(), &ty.args[..]) {
+        (_, "float", [p]) => *p <= 24,
+        (false, "float" | "double precision" | "float8", _) => false,
+        (true, "double" | "double precision" | "real", _) => false,
+        _ => true,
+    };
+    let (value, stored) = if single {
+        let v: f32 = s.parse().map_err(|_| Invalid::NotNumber)?;
+        (f64::from(v), v.is_finite().then(|| format!("{v:e}")))
+    } else {
+        let v: f64 = s.parse().map_err(|_| Invalid::NotNumber)?;
+        (v, v.is_finite().then(|| format!("{v:e}")))
+    };
+    let Some(stored) = stored else { return Err(out_of_range(type_name)) };
+    let typed = digits_of(s);
+    if mysql && ty.unsigned && value < 0.0 {
+        return Err(out_of_range(type_name));
+    }
+    let rounded = |stored: String| Invalid::Rounded { type_name: type_name.to_string(), stored };
+    if typed.is_none() || typed != digits_of(&stored) {
+        return Err(rounded(plain_float(&stored)));
+    }
+    if let (true, [m, d], Some((_, digits, exp))) = (mysql, &ty.args[..], &typed) {
+        // Digits after the point, and before it.
+        let after = (digits.len() as i64 - 1 - exp).max(0);
+        let before = (exp + 1).max(0);
+        if after > i64::from(*d) {
+            return Err(rounded(format!("{value:.*}", *d as usize)));
+        }
+        if before > i64::from(m.saturating_sub(*d)) {
+            return Err(out_of_range(type_name));
+        }
+    }
+    Ok(())
+}
+
+/// A number written `-1.25e3` as its sign, its significant digits and the power of ten of the
+/// first one: `(true, "125", 3)`; zero has no digits. `None` when the exponent is too large to
+/// read.
+fn digits_of(s: &str) -> Option<(bool, String, i64)> {
+    let (negative, s) = match s.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    let (mantissa, exp) = match s.split_once(['e', 'E']) {
+        Some((m, e)) => (m, e.parse::<i64>().ok()?),
+        None => (s, 0),
+    };
+    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let all = format!("{int}{frac}");
+    let lead = all.len() - all.trim_start_matches('0').len();
+    let digits = all[lead..].trim_end_matches('0').to_string();
+    if digits.is_empty() {
+        return Some((negative, digits, 0));
+    }
+    Some((negative, digits, exp.checked_add(int.len() as i64 - 1 - lead as i64)?))
+}
+
+/// Rust's `{:e}` text of a float as a person writes it: plain unless it is very large or small.
+fn plain_float(sci: &str) -> String {
+    match sci.split_once('e').map(|(_, e)| e.parse::<i32>()) {
+        Some(Ok(exp)) if (-4..17).contains(&exp) => sci.parse::<f64>().map_or(sci.to_string(), |v| v.to_string()),
+        _ => sci.to_string(),
+    }
 }
 
 /// A date as the result shows it: `YYYY-MM-DD`, a day of the calendar. PostgreSQL's also
@@ -366,9 +442,14 @@ fn bits(mysql: bool, ty: &TypeName, s: &str) -> Result<(), Invalid> {
     }
 }
 
-/// Text no longer than a `varchar(n)` or `char(n)` holds, in characters.
-fn text(ty: &TypeName, s: &str) -> Result<(), Invalid> {
-    let limited = matches!(ty.name.as_str(), "character varying" | "varchar" | "character" | "char" | "bpchar");
+/// Text no longer than a `varchar(n)` or `char(n)` holds, in characters; for MySQL's `CHAR`,
+/// which drops trailing spaces when it reads a value back, without them.
+fn text(mysql: bool, ty: &TypeName, s: &str) -> Result<(), Invalid> {
+    let fixed = matches!(ty.name.as_str(), "character" | "char" | "bpchar");
+    let limited = fixed || matches!(ty.name.as_str(), "character varying" | "varchar");
+    if mysql && fixed && s.ends_with(' ') {
+        return Err(Invalid::TrailingSpaces);
+    }
     match ty.args[..] {
         [max] if limited && s.chars().count() > max as usize => Err(Invalid::TooLong { max }),
         _ => Ok(()),

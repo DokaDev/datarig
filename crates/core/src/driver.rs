@@ -19,6 +19,7 @@ use crate::sql::dialect::Language;
 use crate::transport::DialerRef;
 use futures::future::BoxFuture;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -323,6 +324,10 @@ pub struct Session {
     pub role: SessionRole,
     tx: UnboundedSender<DbCommand>,
     canceller: Arc<dyn Canceller>,
+    /// How many `LoadStructure` were sent, and how many of their answers came: a session
+    /// answers its commands one by one, in order, so the n-th answer is the n-th request's.
+    structures: AtomicU64,
+    structures_answered: AtomicU64,
 }
 
 impl Session {
@@ -334,16 +339,30 @@ impl Session {
         tx: UnboundedSender<DbCommand>,
         canceller: Arc<dyn Canceller>,
     ) -> Self {
-        Self { caps, role, tx, canceller }
+        Self { caps, role, tx, canceller, structures: AtomicU64::new(0), structures_answered: AtomicU64::new(0) }
     }
 
     pub fn send(&self, cmd: DbCommand) {
+        if matches!(cmd, DbCommand::LoadStructure { .. }) {
+            self.structures.fetch_add(1, Ordering::Relaxed);
+        }
         // A closed channel means the connection task ended; the UI already got the reason.
         let _ = self.tx.send(cmd);
     }
 
     pub fn cancel(&self) {
         self.canceller.cancel();
+    }
+
+    /// How many `LoadStructure` were sent on this session so far.
+    pub fn structures_asked(&self) -> u64 {
+        self.structures.load(Ordering::Relaxed)
+    }
+
+    /// A `DbEvent::Structure` of this session came: which request's answer it is (1 for the
+    /// first `LoadStructure` sent on it).
+    pub fn structure_answered(&self) -> u64 {
+        self.structures_answered.fetch_add(1, Ordering::Relaxed) + 1
     }
 
     /// Close the session: the command channel closes, and the driver cancels a statement that

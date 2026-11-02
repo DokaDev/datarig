@@ -999,6 +999,8 @@ impl App {
         };
         let connecting = profile.is_some_and(|p| self.conns.state(p) == NodeState::Connecting);
         let null = self.i18n.label(Label::ResultsNull);
+        // What a result read now is bound to: its edits are taken only while that holds.
+        let bound = self.tabs.get(id).and_then(|t| self.edit_bound(t));
         let now = self.now();
         let text = match &ev {
             // How long it waited, when the session was opened with a limit the app knows.
@@ -1488,6 +1490,7 @@ impl App {
                         let store = datarig_core::results::RowStore::new(rows, spill, limits);
                         let mut rs = ResultSet::new(cols, store, more, &null);
                         rs.read_in = read_in(&mut t.exec);
+                        rs.edit.bind(bound);
                         let n = rs.rows.len();
                         let grid = GridState::paged(page_size, t.grid.page_rows);
                         t.exec.steps.insert(index, super::tabs::Parked { rs, grid });
@@ -1618,6 +1621,7 @@ impl App {
                 let mut rs = ResultSet::new(cols, store, more, &null);
                 // Bound to the session's values now: a later `SET time_zone` is not this result's.
                 rs.read_in = read_in(&mut t.exec);
+                rs.edit.bind(bound);
                 let query = t.exec.query_id;
                 if t.exec.reading.query != query {
                     t.exec.reading = super::tabs::Reading { query, ..Default::default() };

@@ -441,3 +441,104 @@ fn json_intervals_and_arrays_are_the_server_s_to_check() {
     table(MY, "time", ValueKind::Interval, &[("-838:59:59", OK)]);
     table(PG, "integer[]", ValueKind::Array(crate::driver::ArrayElement::Number), &[("{1,2}", OK)]);
 }
+
+fn rounded(type_name: &str, stored: &str) -> Result<(), Invalid> {
+    Err(Invalid::Rounded { type_name: type_name.into(), stored: stored.into() })
+}
+
+#[test]
+fn floats_are_taken_only_as_their_type_holds_them() {
+    for ty in ["real", "float4", "float(24)"] {
+        table(
+            PG,
+            ty,
+            ValueKind::Float,
+            &[
+                ("0.123456789012", rounded(ty, "0.12345679")),
+                ("16777217", rounded(ty, "16777216")),
+                ("1e-50", rounded(ty, "0")),
+                ("1e39", range(ty)),
+                ("0.100000001", rounded(ty, "0.1")),
+            ],
+        );
+    }
+    for ty in ["float", "float(10)"] {
+        table(MY, ty, ValueKind::Float, &[("0.123456789012", rounded(ty, "0.12345679"))]);
+    }
+    for (d, ty) in [(PG, "double precision"), (PG, "float8"), (PG, "float(25)"), (MY, "double"), (MY, "real")] {
+        table(
+            d,
+            ty,
+            ValueKind::Float,
+            &[
+                ("0.123456789012", OK),
+                ("0.12345678901234567890", rounded(ty, "0.12345678901234568")),
+                ("9007199254740993", rounded(ty, "9007199254740992")),
+                ("1e309", range(ty)),
+            ],
+        );
+    }
+    table(
+        MY,
+        "double(5,2)",
+        ValueKind::Float,
+        &[("1.23", OK), ("1.230", OK), ("1.234", rounded("double(5,2)", "1.23")), ("1234", range("double(5,2)"))],
+    );
+    table(MY, "double unsigned", ValueKind::Float, &[("-1", range("double unsigned")), ("-0", OK), ("1", OK)]);
+}
+
+/// What the drivers show for a float (the shortest digits that read back to it; PostgreSQL's
+/// in fixed notation in a range of exponents, else `1e+15`) is taken back as it is.
+#[test]
+fn floats_as_the_result_shows_them_are_taken_back() {
+    let real = [
+        "0.1",
+        "-1.5",
+        "-0",
+        "0",
+        "123456",
+        "1.234567e+06",
+        "3.4028235e+38",
+        "-3.4028235e+38",
+        "1.1754944e-38",
+        "1e-45",
+        "0.0001",
+        "1e-05",
+        "0.33333334",
+        "16777216",
+    ];
+    for v in real {
+        assert_eq!(check_input(PG, &column("real", ValueKind::Float, &[]), v), OK, "real {v}");
+    }
+    let double = [
+        "0.1",
+        "0.30000000000000004",
+        "123456789012345",
+        "1e+15",
+        "1.7976931348623157e+308",
+        "2.2250738585072014e-308",
+        "5e-324",
+        "-0",
+        "1e-05",
+        "3.141592653589793",
+    ];
+    for v in double {
+        assert_eq!(check_input(PG, &column("double precision", ValueKind::Float, &[]), v), OK, "double {v}");
+    }
+    // MySQL's: a FLOAT to about six digits, a DOUBLE's shortest digits, with `e` and no sign.
+    for v in ["3.14159", "3.40282e38", "1e-7", "-1.5"] {
+        assert_eq!(check_input(MY, &column("float", ValueKind::Float, &[]), v), OK, "FLOAT {v}");
+    }
+    for v in ["0.1", "1.7976931348623157e308", "1e-7", "123456789.123"] {
+        assert_eq!(check_input(MY, &column("double", ValueKind::Float, &[]), v), OK, "DOUBLE {v}");
+    }
+}
+
+#[test]
+fn mysql_char_columns_drop_trailing_spaces() {
+    for ty in ["char(5)", "character(5)"] {
+        table(MY, ty, ValueKind::Text, &[("ab ", Err(Invalid::TrailingSpaces)), (" ab", OK), ("ab", OK)]);
+    }
+    table(MY, "varchar(5)", ValueKind::Text, &[("ab ", OK)]);
+    table(PG, "character(5)", ValueKind::Text, &[("ab ", OK)]);
+}

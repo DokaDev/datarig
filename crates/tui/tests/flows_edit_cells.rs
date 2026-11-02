@@ -625,3 +625,163 @@ fn a_changed_cell_and_the_pending_count_take_their_tokens() {
         assert_eq!(buf[(x, y as u16)].fg, th.edit_pending.fg.unwrap(), "{line}");
     }
 }
+
+/// A MySQL profile, connected, the keys of `shop.users` read, its session reading in time zone
+/// `zone` and character set `charset`; `shop.users`' id, email and a `TIMESTAMP` nickname in the
+/// grid, one row.
+fn mysql_users(zone: &str, charset: &str) -> Harness {
+    use datarig_core::driver::keys::{KeyCatalog, KeyKind, NameRule};
+    use datarig_core::driver::{ColumnOrigin, SessionValues};
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let cfg = Config {
+        connections: vec![ConnectionConfig { driver: "mysql".into(), ..ConnectionConfig::test_db() }],
+        ..Config::default()
+    };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    let mut k = KeyCatalog::default();
+    k.set_names(NameRule::MySql { tables_ignore_case: false });
+    k.set_server_zone("UTC");
+    let names = ["id", "email", "name", "nickname", "profile"];
+    k.add_table(1, "shop", "users", names.iter().enumerate().map(|(i, n)| (i as i16 + 1, n.to_string())));
+    k.mark(1, &[1], KeyKind::Primary);
+    h.db(DbEvent::Keys(Ok(k)));
+    h.db(DbEvent::SessionValues(SessionValues { time_zone: zone.into(), charset: charset.into() }));
+    let col = |name: &str, ty: &str, kind: ValueKind| {
+        let origin = ColumnOrigin::Named { schema: "shop".into(), table: "users".into(), column: name.into() };
+        ColumnMeta::new(name.into(), ty.into(), kind, Some(origin))
+    };
+    let columns = vec![
+        col("id", "bigint", ValueKind::Integer),
+        col("email", "varchar", ValueKind::Text),
+        col("nickname", "timestamp", ValueKind::TimestampTz),
+    ];
+    let rows = vec![vec![s("1"), s("a@x"), s("2024-10-27 02:30:00")]];
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", columns, rows);
+    h.sent();
+    h
+}
+
+/// `shop.users` as MySQL has it: the nickname a `TIMESTAMP`.
+fn mysql_users_structure() -> TableStructure {
+    let mut st = users_structure();
+    st.columns[0].type_name = "bigint".into();
+    st.columns[0].default = None;
+    st.columns[0].fill = ColumnFill::AutoIncrement;
+    st.columns[1].type_name = "varchar(100)".into();
+    st.columns[3].type_name = "timestamp".into();
+    st
+}
+
+#[test]
+fn a_value_not_shown_whole_is_not_edited() {
+    // A TIMESTAMP shown in a zone with daylight saving: none of the column's values.
+    let mut h = mysql_users("Europe/Berlin", "utf8mb4");
+    h.keys("lle");
+    structure(&mut h, Ok(mysql_users_structure()));
+    let Some(Msg::EditRefused { reason }) = said(&mut h) else { panic!("refused") };
+    assert!(reason.contains("nickname") && reason.contains("Europe/Berlin"), "{reason}");
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    h.keys(" dn");
+    assert!(matches!(said(&mut h), Some(Msg::EditRefused { .. })));
+    assert!(edits(&h).batch.is_empty());
+    // The id is shown whole.
+    h.keys("hhe");
+    assert_eq!(h.app.key_context(), Ctx::CellEdit);
+    // Text read in latin1: not the text.
+    let mut h = mysql_users("+00:00", "latin1");
+    h.keys("le");
+    structure(&mut h, Ok(mysql_users_structure()));
+    let Some(Msg::EditRefused { reason }) = said(&mut h) else { panic!("refused") };
+    assert!(reason.contains("row 1") && reason.contains("email") && reason.contains("latin1"), "{reason}");
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    assert!(edits(&h).batch.is_empty());
+}
+
+#[test]
+fn only_the_answer_to_the_presss_own_request_resolves_it() {
+    let mut h = users(Lang::En);
+    // Asked for before the press (by the explorer, say): its answer may be of the table as it
+    // was before an ALTER.
+    let id = h.app.profiles[0].id;
+    let cmd = DbCommand::LoadStructure { schema: "shop".into(), table: "users".into() };
+    h.app.conns.get(id).and_then(|c| c.meta.as_ref()).expect("the metadata session").send(cmd);
+    h.sent();
+    h.keys("le");
+    assert_eq!(asked(&mut h).len(), 1);
+    let mut before = users_structure();
+    before.columns[1].fill = ColumnFill::Stored("lower(name)".into());
+    structure(&mut h, Ok(before));
+    assert_eq!(h.app.key_context(), Ctx::Grid, "the older answer is not the press's");
+    assert!(matches!(edits(&h).target, Target::Loading(_)), "it still waits");
+    structure(&mut h, Ok(users_structure()));
+    assert_eq!(h.app.key_context(), Ctx::CellEdit);
+}
+
+#[test]
+fn enter_writes_nothing_once_the_environment_no_longer_lets_it() {
+    let mut h = ready(Lang::En);
+    h.keys("e");
+    h.type_text("y");
+    h.app.profiles[0].policy = Some("nowhere".into());
+    h.key(KeyCode::Enter);
+    assert!(matches!(said(&mut h), Some(Msg::EnvironmentNotFound { .. })));
+    assert!(edits(&h).batch.is_empty());
+    let mut h = ready(Lang::En);
+    h.keys("le");
+    h.app.profiles[0].policy = Some("nowhere".into());
+    h.ctrl('n');
+    assert!(matches!(said(&mut h), Some(Msg::EnvironmentNotFound { .. })));
+    assert!(edits(&h).batch.is_empty());
+}
+
+#[test]
+fn a_pick_writes_nothing_once_the_connection_changed() {
+    let (mut h, st) = enum_and_bool(Lang::En);
+    h.keys("le");
+    structure(&mut h, Ok(st));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    // The tab's session opened again meanwhile.
+    h.app.tab_mut().exec.generation += 1;
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Enter);
+    assert_eq!(said(&mut h), Some(Label::EditConnectionChanged.into()));
+    assert!(edits(&h).batch.is_empty());
+}
+
+#[test]
+fn rows_read_under_another_connection_are_not_edited() {
+    let mut h = users(Lang::En);
+    // The tab's session opened again after the rows were read.
+    h.app.tab_mut().exec.generation += 1;
+    h.keys("e");
+    assert_eq!(said(&mut h), Some(Label::EditConnectionChanged.into()));
+    assert!(asked(&mut h).is_empty());
+}
+
+#[test]
+fn a_row_shorter_than_its_columns_is_not_edited() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), vec![vec![s("1")]]);
+    h.keys("le");
+    structure(&mut h, Ok(users_structure()));
+    assert_eq!(said(&mut h), refused("row 1 could not be read"));
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+}
+
+#[test]
+fn changes_pending_on_a_result_no_longer_resolved_say_why() {
+    let mut h = ready(Lang::En);
+    h.keys("e");
+    h.type_text("y");
+    h.key(KeyCode::Enter);
+    h.app.transient = None;
+    if let Results::Rows(rs) = &mut h.app.tab_mut().results {
+        rs.edit.target = Target::Unresolved;
+    }
+    h.keys("e");
+    assert!(matches!(said(&mut h), Some(Msg::EditReadOnly { .. })));
+    assert!(asked(&mut h).is_empty());
+}

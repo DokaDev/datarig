@@ -43,8 +43,15 @@ pub enum EditAction {
 pub struct EditState {
     pub batch: EditBatch,
     pub target: Target,
-    /// What the target was resolved under: changes are taken only while it holds.
+    /// What the rows were read under: changes are taken only while it holds.
     bound: Option<Bound>,
+}
+
+impl EditState {
+    /// The rows were read under `bound` (`None`: under no profile, so never edited).
+    pub(super) fn bind(&mut self, bound: Option<Bound>) {
+        self.bound = bound;
+    }
 }
 
 /// What a result's rows are to its edits.
@@ -74,7 +81,7 @@ pub enum Why {
 /// What a result's edits are bound to: its tab's binding, profile and query session, and the
 /// database the tab works in (`None`: the profile's own).
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Bound {
+pub(super) struct Bound {
     binding: u64,
     profile: ProfileId,
     session: u64,
@@ -92,6 +99,8 @@ pub struct EditWait {
     generation: u64,
     database: Option<String>,
     result: u64,
+    /// Which `LoadStructure` of its session it waits for the answer to (they come in order).
+    ticket: u64,
     source: EditSource,
     format: EditFormat,
     then: (EditAction, (usize, usize), Option<(usize, usize)>),
@@ -178,6 +187,29 @@ fn not_whole(
     })
 }
 
+/// Why the values of column `col` in `rows` (as read, from row `first` on) are not shown whole:
+/// the column's (no row) or the first such value's row. A value that is not the value would be
+/// typed back as other text.
+fn value_not_whole(
+    d: Dialect,
+    rs: &ResultSet,
+    col: usize,
+    rows: &[Vec<Cell>],
+    first: usize,
+    server_zone: Option<&str>,
+) -> Option<(Option<usize>, export::Refused)> {
+    let m = &rs.columns[col].meta;
+    let cols = [export::SqlColumn { name: &m.name, type_name: &m.type_name, kind: m.kind, auto_increment: false }];
+    let cells = match export::sql_cells(d, &cols, &rs.read_in, server_zone) {
+        Ok(c) => c,
+        Err(r) => return Some((None, r)),
+    };
+    rows.iter().enumerate().find_map(|(k, row)| match row.get(col) {
+        Some(Some(v)) => cells.cell(0, v).err().map(|r| (Some(first + k), r)),
+        _ => None,
+    })
+}
+
 impl App {
     /// The edits tab `tab`'s server takes: as a session of its profile said (`DbEvent::Edit`),
     /// else its driver's (`Capabilities::edit`). `None` without a profile, or when the profile or
@@ -231,39 +263,59 @@ impl App {
         }
     }
 
-    /// An edit key that writes: refused with the reason when the result cannot be edited (now);
-    /// done when its target is resolved, else the table's structure is asked for and the press
-    /// waits for it.
-    fn edit_resolve(&mut self, a: EditAction) {
+    /// What results tab `t` reads now are bound to; `None` without a profile.
+    pub(super) fn edit_bound(&self, t: &Tab) -> Option<Bound> {
+        Some(Bound {
+            binding: t.binding,
+            profile: t.profile?,
+            session: t.exec.generation,
+            database: self.other_database(t).map(str::to_string),
+        })
+    }
+
+    /// Whether the active tab's shown result takes a change now: its profile connected, its
+    /// environment known and not read-only, its server taking edits, and the tab bound as when
+    /// the rows were read. Why not is said; else the profile, the format and that binding.
+    fn edit_gate(&mut self) -> Option<(ProfileId, EditFormat, Bound)> {
         let t = self.tab();
-        let Some(rs) = rows_of(t) else { return };
+        let rs = rows_of(t)?;
         let Some(pid) = t.profile.filter(|p| self.conns.is_connected(*p)) else {
-            return self.say_edit_read_only(Label::EditWhyNotConnected);
+            self.say_edit_read_only(Label::EditWhyNotConnected);
+            return None;
         };
         if let Err(e) = self.policy_of(pid) {
             let name = self.profile(pid).map(|p| p.name.clone()).unwrap_or_default();
             let n = self.unknown_environment_notice(&name, &e);
-            return self.flash(Notice::new(n.msg, Level::Info));
+            self.flash(Notice::new(n.msg, Level::Info));
+            return None;
         }
         // The environment is read-only, or was when the tab's session opened (that session is
         // read-only on the server).
         if self.read_only(pid) || (t.exec.session.is_some() && t.exec.read_only) {
-            return self.say_edit_read_only(Label::EditWhyReadOnly);
+            self.say_edit_read_only(Label::EditWhyReadOnly);
+            return None;
         }
         let Some(format) = self.tab_edit_format(t.id) else {
-            return self.say_why(&Why::Rows(ReadOnly::NoFormat));
+            self.say_why(&Why::Rows(ReadOnly::NoFormat));
+            return None;
         };
-        let bound = Bound {
-            binding: t.binding,
-            profile: pid,
-            session: t.exec.generation,
-            database: self.other_database(t).map(str::to_string),
+        // Read under another connection or database, the rows may not be the table's now.
+        let bound = self.edit_bound(t).filter(|b| rs.edit.bound.as_ref() == Some(b));
+        let Some(bound) = bound else {
+            self.flash(Notice::new(Label::EditConnectionChanged, Level::Info));
+            return None;
         };
+        Some((pid, format, bound))
+    }
+
+    /// An edit key that writes: refused with the reason when the result cannot be edited (now);
+    /// done when its target is resolved, else the table's structure is asked for and the press
+    /// waits for it.
+    fn edit_resolve(&mut self, a: EditAction) {
+        let Some((pid, format, bound)) = self.edit_gate() else { return };
+        let t = self.tab();
+        let Some(rs) = rows_of(t) else { return };
         let empty = rs.edit.batch.is_empty();
-        let moved = rs.edit.bound.as_ref().is_some_and(|b| *b != bound);
-        if moved && !empty {
-            return self.flash(Notice::new(Label::EditConnectionChanged, Level::Info));
-        }
         // What the rows are is read again while nothing is pending: the keys may have come or
         // changed since.
         let source = empty.then(|| {
@@ -275,10 +327,6 @@ impl App {
         let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
         let result = rs.id;
         let st = &mut rs.edit;
-        if moved {
-            st.target = Target::Unresolved;
-        }
-        st.bound = Some(bound.clone());
         let source = match source {
             Some(Err(r)) => {
                 let why = Why::Rows(r);
@@ -314,8 +362,8 @@ impl App {
                 self.say_why(&why);
             }
             Target::Unresolved => {
-                // A change pending means the target was resolved under this binding.
-                let Some(source) = source else { return };
+                // Changes pending on a target no longer known: what they are changes is not.
+                let Some(source) = source else { return self.say_edit_read_only(Label::EditWhyNotResolved) };
                 let cmd =
                     DbCommand::LoadStructure { schema: source.table.schema.clone(), table: source.table.name.clone() };
                 let session = match &bound.database {
@@ -324,6 +372,7 @@ impl App {
                 };
                 let Some(session) = session else { return self.say_edit_read_only(Label::EditWhyNotConnected) };
                 session.send(cmd);
+                let ticket = session.structures_asked();
                 self.touch_profile(pid);
                 let wait = EditWait {
                     tab,
@@ -332,6 +381,7 @@ impl App {
                     generation,
                     database: bound.database,
                     result,
+                    ticket,
                     source,
                     format,
                     then,
@@ -367,11 +417,22 @@ impl App {
         let Some(read) = read_rows(rs, rows.clone()) else {
             return self.say_refused(Msg::EditWhyNotRead { row: (rows.start + 1).to_string() });
         };
+        // A row with fewer values than the result has columns was not read whole.
+        if let Some(k) = read.iter().position(|r| r.len() < ncols) {
+            return self.say_refused(Msg::EditWhyNotRead { row: (rows.start + k + 1).to_string() });
+        }
         let d = self.tab_dialect(t.id);
         let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
         if let Some((r, refused)) = not_whole(d, rs, target, &read, rows.start, zone) {
             let reason = self.not_whole_reason(&refused.why);
             return self.say_refused(Msg::EditWhyNotWhole { row: (r + 1).to_string(), reason });
+        }
+        if let Some((r, refused)) = value_not_whole(d, rs, col, &read, rows.start, zone) {
+            let (column, reason) = (refused.column, self.not_whole_reason(&refused.why));
+            return self.say_refused(match r {
+                None => Msg::EditWhyColumnNotWhole { column, reason },
+                Some(r) => Msg::EditWhyValueNotWhole { row: (r + 1).to_string(), column, reason },
+            });
         }
         let cells: Vec<(usize, usize)> = rows.clone().map(|r| (r, col)).collect();
         // The cursor's value: its pending one, else as read.
@@ -442,7 +503,11 @@ impl App {
         let (tab, result, cells) = (*tab, *result, cells.clone());
         self.overlays.close(OverlayKind::Picker);
         let Outcome::Picked(v) = out else { return };
-        if !self.tabs.is_empty() && self.tab().id == tab && rows_of(self.tab()).is_some_and(|rs| rs.id == result) {
+        if !self.tabs.is_empty()
+            && self.tab().id == tab
+            && rows_of(self.tab()).is_some_and(|rs| rs.id == result)
+            && self.edit_gate().is_some()
+        {
             self.edit_write_cells(&cells, v);
         }
     }
@@ -502,7 +567,7 @@ impl App {
 
     /// `Enter` in the cell editor: the text, when it is a value of the column's type.
     fn cell_edit_enter(&mut self) {
-        let Some((cells, c)) = self.cell_edit_column() else {
+        let Some((cells, c)) = self.cell_edit_column().filter(|_| self.edit_gate().is_some()) else {
             self.tabs.active_mut().cell_edit = None;
             return;
         };
@@ -520,7 +585,7 @@ impl App {
 
     /// `Ctrl+N` or `Ctrl+D` in the cell editor: NULL or the default, when the column takes it.
     fn cell_edit_value(&mut self, v: Value) {
-        let Some((cells, c)) = self.cell_edit_column() else {
+        let Some((cells, c)) = self.cell_edit_column().filter(|_| self.edit_gate().is_some()) else {
             self.tabs.active_mut().cell_edit = None;
             return;
         };
@@ -565,6 +630,8 @@ impl App {
             I::BitCount { count, exact: true } => Msg::EditInvalidBitCountExact { bits: count.to_string() },
             I::BitCount { count, exact: false } => Msg::EditInvalidBitCountAtMost { bits: count.to_string() },
             I::TooLong { max } => Msg::EditInvalidTooLong { max: max.to_string() },
+            I::Rounded { type_name, stored } => Msg::EditInvalidRounded { type_name, stored },
+            I::TrailingSpaces => Label::EditInvalidTrailingSpaces.into(),
         };
         Err(self.i18n.msg(&msg).to_string())
     }
@@ -590,9 +657,10 @@ impl App {
     }
 
     /// The structure of `schema.table` in `profile`'s `database` came (`error`: why it could not
-    /// be read): every result waiting for it whose tab is bound as it was is resolved; the
-    /// others wait no more (their next edit key asks again). A press waiting in the active tab's
-    /// shown result is done, if the cursor and the selection are where they were.
+    /// be read): every result waiting for this answer (not an earlier request's, which may be of
+    /// the table before it changed) whose tab is bound as it was is resolved; the others wait no
+    /// more (their next edit key asks again). A press waiting in the active tab's shown result
+    /// is done, if the cursor and the selection are where they were.
     pub(super) fn edit_structure_came(
         &mut self,
         profile: ProfileId,
@@ -602,6 +670,11 @@ impl App {
         result: Result<&TableStructure, &DbError>,
         error: &str,
     ) {
+        let session = match database {
+            None => self.conns.get(profile).and_then(|c| c.meta.as_ref()),
+            Some(db) => self.conns.aux(profile, db).and_then(|a| a.session.as_ref()),
+        };
+        let answer = session.map_or(0, |s| s.structure_answered());
         let generation = self.conns.get(profile).map(|c| c.generation);
         let active = (!self.tabs.is_empty()).then(|| self.tab().id);
         let others: Vec<(TabId, Option<String>)> =
@@ -621,6 +694,7 @@ impl App {
                     || w.database.as_deref() != database
                     || w.source.table.schema != schema
                     || w.source.table.name != table
+                    || w.ticket > answer
                 {
                     continue;
                 }
@@ -630,7 +704,8 @@ impl App {
                     && bound_to == Some(profile)
                     && generation == Some(w.generation)
                     && other == w.database
-                    && w.result == rs.id;
+                    && w.result == rs.id
+                    && w.ticket == answer;
                 if !current {
                     continue;
                 }
