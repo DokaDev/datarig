@@ -133,21 +133,19 @@ impl EditSql for MySql {
         }
     }
 
-    /// `col <=> value`; a text, an enum or a set also byte for byte, after `col = '…'` under its
+    /// `col <=> value`; a text, an enum or a set also byte for byte, after `col = …` under its
     /// own collation, which an index serves and matches a superset (without it the server reads,
     /// and a locking read locks, every row).
     fn eq_exact(&self, c: &TableColumn, v: Option<&str>) -> String {
         let col = self.column(&c.column.name);
         let base = base(&c.column);
         let Some(v) = v else { return format!("{col} <=> NULL") };
-        if TEXT.contains(&base.as_str()) && c.column.collation.is_some() {
-            let near = sql_value(D, Kind::Text, Some(v));
-            return format!(
-                "{col} = {near} AND CONVERT({col} USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'{}'",
-                hex(v.as_bytes())
-            );
+        if TEXT.contains(&base.as_str()) {
+            // UTF-8 bytes, so the literal reads the same whatever the connection's character set.
+            let lit = format!("_utf8mb4 X'{}'", hex(v.as_bytes()));
+            return format!("{col} = {lit} AND CONVERT({col} USING utf8mb4) COLLATE utf8mb4_0900_bin <=> {lit}");
         }
-        if BYTES.contains(&base.as_str()) || TEXT.contains(&base.as_str()) {
+        if BYTES.contains(&base.as_str()) {
             // Bytes as the driver shows them (`0x…`), else the text's own bytes.
             let bytes = v.strip_prefix("0x").filter(|h| h.len() % 2 == 0 && h.bytes().all(|b| b.is_ascii_hexdigit()));
             let hex = bytes.map_or_else(|| hex(v.as_bytes()), str::to_ascii_uppercase);

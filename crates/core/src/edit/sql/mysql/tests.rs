@@ -119,8 +119,8 @@ fn text(s: &str) -> Value {
 /// The condition of row `r` found by its values (every column but the float).
 fn values(r: usize) -> String {
     format!(
-        "`id` <=> {r} AND `name` = 'Ab' AND CONVERT(`name` USING utf8mb4) COLLATE utf8mb4_0900_bin \
-         <=> _utf8mb4 X'4162' AND `st` = 'new' AND CONVERT(`st` USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'6E6577' AND `raw` <=> X'0AFF' \
+        "`id` <=> {r} AND `name` = _utf8mb4 X'4162' AND CONVERT(`name` USING utf8mb4) COLLATE utf8mb4_0900_bin \
+         <=> _utf8mb4 X'4162' AND `st` = _utf8mb4 X'6E6577' AND CONVERT(`st` USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'6E6577' AND `raw` <=> X'0AFF' \
          AND `price` <=> NULL"
     )
 }
@@ -131,7 +131,7 @@ fn text_compares_byte_for_byte_and_every_compare_is_null_safe() {
     let mut b = EditBatch::new();
     b.set(&[(4, 1)], &text("it's \\ x"), orig);
     b.set(&[(4, 4)], &text("2.50"), orig);
-    let w = "`id` <=> 4 AND `name` = 'Ab' AND CONVERT(`name` USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'4162' AND `price` <=> NULL";
+    let w = "`id` <=> 4 AND `name` = _utf8mb4 X'4162' AND CONVERT(`name` USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'4162' AND `price` <=> NULL";
     assert_eq!(
         run(&MY, &t, &b, &[], &[]),
         [
