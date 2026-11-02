@@ -479,3 +479,22 @@ fn the_editor_closes_when_its_result_goes() {
     assert!(h.app.tab().cell_edit.is_none());
     assert_eq!(h.app.key_context(), Ctx::Grid);
 }
+
+#[test]
+fn a_value_not_of_the_columns_type_keeps_the_editor_open() {
+    let mut h = ready(Lang::En);
+    // The id is a bigint.
+    h.keys("he");
+    clear(&mut h);
+    h.type_text("12a");
+    h.key(KeyCode::Enter);
+    assert_eq!(said(&mut h), refused("not a whole number"));
+    assert_eq!(h.app.key_context(), Ctx::CellEdit, "the text stays to be fixed");
+    assert_eq!(editor_text(&h), "12a");
+    assert_eq!(h.app.tab().cell_edit.as_ref().and_then(|e| e.error.clone()).as_deref(), Some("not a whole number"));
+    assert!(edits(&h).batch.is_empty());
+    h.key(KeyCode::Backspace);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    assert_eq!(value(&h, 0, 0), Some(Value::Text("12".into())));
+}

@@ -19,7 +19,7 @@ use crate::widgets::text_input::InputResult;
 use datarig_core::driver::structure::{ColumnFill, TableStructure};
 use datarig_core::driver::{Cell, ColumnMeta, DbError, EditFormat, ValueKind};
 use datarig_core::edit::{
-    self, ColumnReason, EditBatch, EditSource, EditTarget, Identity, ReadOnly, TableColumn, Value, Write,
+    self, ColumnReason, EditBatch, EditSource, EditTarget, Identity, Invalid, ReadOnly, TableColumn, Value, Write,
 };
 use datarig_core::export;
 use std::ops::Range;
@@ -534,8 +534,32 @@ impl App {
     }
 
     /// Whether `text` is a value of column `c`'s type in dialect `d`; why not, in words.
-    fn typed_ok(&self, _d: Dialect, _c: &TableColumn, _text: &str) -> Result<(), String> {
-        Ok(())
+    fn typed_ok(&self, d: Dialect, c: &TableColumn, text: &str) -> Result<(), String> {
+        use Invalid as I;
+        let Err(e) = edit::check_input(d, c, text) else { return Ok(()) };
+        let msg = match e {
+            I::NotLabel => Label::EditInvalidNotLabel.into(),
+            I::NotWholeNumber => Label::EditInvalidNotWholeNumber.into(),
+            I::OutOfRange { type_name } => Msg::EditInvalidOutOfRange { type_name },
+            I::NotNumber => Label::EditInvalidNotNumber.into(),
+            I::TooManyDigits { precision, scale } => {
+                Msg::EditInvalidTooManyDigits { precision: precision.to_string(), scale: scale.to_string() }
+            }
+            I::NotBool => Label::EditInvalidNotBool.into(),
+            I::NotDate => Label::EditInvalidNotDate.into(),
+            I::NotTime => Label::EditInvalidNotTime.into(),
+            I::NotTimestamp => Label::EditInvalidNotTimestamp.into(),
+            I::TooPrecise { digits } => Msg::EditInvalidTooPrecise { digits: digits.to_string() },
+            I::NotUuid => Label::EditInvalidNotUuid.into(),
+            I::NotBytes { mysql: false } => Label::EditInvalidNotBytes.into(),
+            I::NotBytes { mysql: true } => Label::EditInvalidNotBytesMysql.into(),
+            I::NotBits { mysql: false } => Label::EditInvalidNotBits.into(),
+            I::NotBits { mysql: true } => Label::EditInvalidNotBitsMysql.into(),
+            I::BitCount { count, exact: true } => Msg::EditInvalidBitCountExact { bits: count.to_string() },
+            I::BitCount { count, exact: false } => Msg::EditInvalidBitCountAtMost { bits: count.to_string() },
+            I::TooLong { max } => Msg::EditInvalidTooLong { max: max.to_string() },
+        };
+        Err(self.i18n.msg(&msg).to_string())
     }
 
     /// After every event: the cell editor closes (changing nothing) when its result is no
