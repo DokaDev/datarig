@@ -136,7 +136,7 @@ fn a_trigger_condition_is_its_when_clause() {
 
 #[test]
 fn index_options_follow_their_columns() {
-    let raw = r#"{"kind":"r","indexes":[{"name":"i","unique":false,"primary":false,"constraint":false,
+    let raw = r#"{"kind":"r","indexes":[{"name":"i","unique":false,"primary":false,"valid":true,"constraint":false,
         "method":"btree","columns":["created","lower(code)","id"],"options":["DESC","","COLLATE \"C\" text_pattern_ops"],
         "include":null,"predicate":null,"definition":""}]}"#;
     let s = parse(raw).unwrap();
@@ -145,9 +145,18 @@ fn index_options_follow_their_columns() {
 }
 
 #[test]
+fn an_index_says_whether_it_is_valid() {
+    let raw = r#"{"kind":"r","indexes":[{"name":"i","unique":true,"primary":false,"valid":false,"constraint":false,
+        "method":"btree","columns":["v"],"options":[""],"include":null,"predicate":null,"definition":""}]}"#;
+    assert!(!parse(raw).unwrap().indexes[0].valid);
+    let without = raw.replace(r#""valid":false,"#, "");
+    assert!(parse(&without).is_err(), "unknown is not valid");
+}
+
+#[test]
 fn index_keys_know_their_columns() {
     use datarig_core::driver::structure::{ItemColumn, StructureGroup};
-    let raw = r#"{"kind":"r","indexes":[{"name":"i","unique":false,"primary":false,"constraint":false,
+    let raw = r#"{"kind":"r","indexes":[{"name":"i","unique":false,"primary":false,"valid":true,"constraint":false,
         "method":"btree","columns":["\"Created\"","lower(code)"],"options":["DESC",""],
         "include":["\"Note\""],"key_columns":["Created",null],"include_columns":["Note"],
         "predicate":null,"definition":""}],

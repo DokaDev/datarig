@@ -905,6 +905,7 @@ fn order_items_structure() -> TableStructure {
         primary: false,
         constraint: false,
         definition: String::new(),
+        valid: true,
     }];
     let check = |name: &str, expression: &str, cols: &[&str]| CheckConstraint {
         name: name.into(),
@@ -1126,6 +1127,7 @@ fn mysql_items_structure() -> TableStructure {
         primary: name == "PRIMARY",
         constraint: unique && keys.iter().all(Option::is_some),
         definition: String::new(),
+        valid: true,
     };
     let trigger = |name: &str, timing, event| Trigger {
         name: name.into(),

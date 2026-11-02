@@ -292,6 +292,7 @@ pub(crate) fn model(
                 predicate: None,
                 constraint: false,
                 definition: String::new(),
+                valid: true,
             });
         }
         let Some(x) = s.indexes.last_mut() else { continue };
@@ -492,10 +493,10 @@ fn column(c: RawColumn, mariadb: bool, d: Dialect) -> StructureColumn {
 /// Collation `name` takes two strings for equal only when their bytes are: a binary one that
 /// does not pad (`utf8mb4_0900_bin`, MariaDB's `_nopad_bin`). A `_ci` one takes `'a'` for `'A'`,
 /// and one that pads (`utf8mb4_bin`, every collation before MySQL 8's `0900` ones) `'a'` for
-/// `'a '`.
+/// `'a '`. (Binary strings have no collation of their own: `COLLATION_NAME` is `NULL`.)
 fn byte_wise(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    name == "binary" || name.ends_with("_0900_bin") || name.ends_with("_nopad_bin")
+    name.ends_with("_0900_bin") || name.ends_with("_nopad_bin")
 }
 
 /// A column's default as SQL writes it, with what an `UPDATE` sets the column to

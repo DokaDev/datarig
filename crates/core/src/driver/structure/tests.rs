@@ -31,6 +31,7 @@ fn index(name: &str, columns: &[&str], unique: bool, predicate: Option<&str>) ->
         primary: false,
         constraint: false,
         definition: String::new(),
+        valid: true,
     }
 }
 

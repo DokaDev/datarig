@@ -21,9 +21,7 @@
 //! column is (`indkey`, 0 for an expression); a trigger's `UPDATE OF` columns from `tgattr`. Its
 //! `WHEN` condition only `pg_get_triggerdef` prints ([`when_condition`]). A column's enum labels
 //! (through domains over one) and its collation come from `pg_type`, `pg_enum` and
-//! `pg_collation`; whether a collation is deterministic is read through `to_jsonb` of its row, so
-//! a server before 12 (which has no such column, and only deterministic collations) reads it
-//! too.
+//! `pg_collation`.
 
 use datarig_core::driver::DbError;
 use datarig_core::driver::structure::{
@@ -51,8 +49,7 @@ macro_rules! structure_parts {
           SELECT t.typbasetype FROM base JOIN pg_catalog.pg_type t ON t.oid = base.typ WHERE t.typtype = 'd')
         SELECT pg_catalog.json_agg(e.enumlabel ORDER BY e.enumsortorder)
         FROM base JOIN pg_catalog.pg_enum e ON e.enumtypid = base.typ),
-      'collation', (SELECT pg_catalog.json_build_object('name', co.collname, 'deterministic',
-          coalesce((pg_catalog.to_jsonb(co) ->> 'collisdeterministic')::bool, true))
+      'collation', (SELECT pg_catalog.json_build_object('name', co.collname, 'deterministic', co.collisdeterministic)
         FROM pg_catalog.pg_collation co WHERE co.oid = a.attcollation)) ORDER BY a.attnum)
     FROM pg_catalog.pg_attribute a
     LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
@@ -76,7 +73,7 @@ macro_rules! structure_parts {
     WHERE con.conrelid = rel.oid AND con.contype IN ('p', 'f', 'u', 'c')),
   'indexes', (
     SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
-      'name', ic.relname, 'unique', i.indisunique, 'primary', i.indisprimary,
+      'name', ic.relname, 'unique', i.indisunique, 'primary', i.indisprimary, 'valid', i.indisvalid,
       'constraint', EXISTS (SELECT 1 FROM pg_catalog.pg_constraint x
         WHERE x.conrelid = i.indrelid AND x.conindid = i.indexrelid AND x.contype IN ('p', 'u', 'x')),
       'method', am.amname,
@@ -225,6 +222,7 @@ struct RawIndex {
     name: String,
     unique: bool,
     primary: bool,
+    valid: bool,
     constraint: bool,
     method: String,
     columns: Option<Vec<String>>,
@@ -343,6 +341,7 @@ pub(crate) fn model(raw: Raw) -> Result<TableStructure, DbError> {
             primary: i.primary,
             constraint: i.constraint,
             definition: i.definition,
+            valid: i.valid,
         })
         .collect();
     s.triggers = raw.triggers.unwrap_or_default().into_iter().map(trigger).collect();

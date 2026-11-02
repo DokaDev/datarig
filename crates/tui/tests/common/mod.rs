@@ -1156,6 +1156,7 @@ pub fn users_structure() -> TableStructure {
             primary,
             constraint,
             definition: String::new(),
+            valid: true,
         };
     let mut t = TableStructure::new(RelationKind::Table);
     t.estimated_rows = Some(11_000);

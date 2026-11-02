@@ -1,6 +1,8 @@
 use super::*;
 use crate::driver::keys::{KeyKind, NameRule, NotInsertable};
-use crate::driver::structure::{ColumnFill, Index, KeyConstraint, RelationKind, StructureColumn, TableStructure};
+use crate::driver::structure::{
+    ColumnFill, Index, KeyConstraint, RelationKind, StructureColumn, StructureGroup, TableStructure,
+};
 use crate::driver::{ColumnMeta, ColumnOrigin, KeyCatalog, ValueKind};
 use crate::sql::dialect::{Dialect, MySqlMode};
 
@@ -64,11 +66,38 @@ fn key(columns: &[&str]) -> KeyConstraint {
     }
 }
 
-/// A table of columns `cols` (name, `NOT NULL`) with primary key `pk`.
+/// A valid unique index on plain columns `cols` (the primary key's when `primary`).
+fn index(cols: &[&str], primary: bool) -> Index {
+    Index {
+        name: cols.join("_"),
+        columns: cols.iter().map(|c| c.to_string()).collect(),
+        options: Vec::new(),
+        include: Vec::new(),
+        key_columns: cols.iter().map(|c| Some(c.to_string())).collect(),
+        include_columns: Vec::new(),
+        unique: true,
+        method: "btree".into(),
+        predicate: None,
+        primary,
+        constraint: true,
+        valid: true,
+        definition: String::new(),
+    }
+}
+
+/// A table of columns `cols` (name, `NOT NULL`) with primary key `pk` (and its index).
 fn table(cols: &[(&str, bool)], pk: Option<&[&str]>) -> TableStructure {
     let mut s = TableStructure::new(RelationKind::Table);
     s.columns = cols.iter().map(|(n, nn)| scol(n, *nn)).collect();
     s.primary_key = pk.map(key);
+    s.indexes = pk.map(|k| index(k, true)).into_iter().collect();
+    s
+}
+
+/// `s` with a unique constraint on `cols` (and its index).
+fn unique(mut s: TableStructure, cols: &[&str]) -> TableStructure {
+    s.unique_constraints.push(key(cols));
+    s.indexes.push(index(cols, false));
     s
 }
 
@@ -111,6 +140,17 @@ fn rows_not_of_one_table_are_read_only_with_the_reason() {
     assert_eq!(src("SELECT id FROM app.t GROUP BY id"), refused(NotInsertable::Grouping));
     assert_eq!(src("WITH x AS (SELECT 1) SELECT id FROM app.t"), refused(NotInsertable::With));
     assert_eq!(src("SELECT id FROM app.other"), refused(NotInsertable::OtherTable));
+    assert_eq!(src("SELECT DISTINCT id FROM app.t"), refused(NotInsertable::Grouping));
+    assert_eq!(src("select distinctrow id from app.t"), refused(NotInsertable::Grouping));
+    assert_eq!(src("SELECT id, (SELECT 1) FROM app.t"), refused(NotInsertable::Subquery));
+    assert!(src("SELECT id FROM app.t WHERE id IN (SELECT DISTINCT id FROM app.t)").is_ok(), "a filter");
+    assert!(src("SELECT id, count(DISTINCT id) OVER () FROM app.t").is_err());
+    // Columns of two tables though `FROM` names one.
+    let two = [
+        int("id", 1),
+        ColumnMeta::new("x".into(), "int4".into(), ValueKind::Integer, Some(ColumnOrigin::Pg { table: 8, column: 1 })),
+    ];
+    assert_eq!(source(PG, Some(&k), &two, "SELECT * FROM app.t").map(|_| ()), refused(NotInsertable::SeveralTables));
     assert_eq!(source(PG, None, &cols, "SELECT id FROM app.t").map(|_| ()), refused(NotInsertable::NoCatalog));
     let unknown = [ColumnMeta::new(
         "id".into(),
@@ -153,35 +193,54 @@ fn a_view_is_read_only() {
 
 #[test]
 fn a_not_null_unique_key_finds_rows_when_the_primary_key_is_not_shown() {
-    let mut s = table(&[("id", true), ("email", true), ("nick", false), ("name", false)], Some(&["id"]));
-    s.unique_constraints = vec![key(&["nick"]), key(&["email"])];
+    let s = table(&[("id", true), ("email", true), ("nick", false), ("name", false)], Some(&["id"]));
+    let s = unique(unique(s, &["nick"]), &["email"]);
     let cols = [col("nick", ValueKind::Text, Some(3)), col("email", ValueKind::Text, Some(2))];
     let t = resolve(&["id", "email", "nick", "name"], &cols, &s).unwrap();
     assert_eq!(t.identity, Identity::Key { primary: false, columns: vec![1] }, "nick may be NULL");
-    // A unique index on plain columns, not partial, counts too; an expression index does not.
+    // A unique index on plain columns counts without a constraint; an expression or partial one
+    // does not.
     let mut s = table(&[("id", true), ("code", true)], None);
-    let index = |name: &str, key_columns: Vec<Option<String>>, predicate: Option<String>| Index {
-        name: name.into(),
-        columns: Vec::new(),
-        options: Vec::new(),
-        include: Vec::new(),
-        key_columns,
-        include_columns: Vec::new(),
-        unique: true,
-        method: "btree".into(),
-        predicate,
-        primary: false,
-        constraint: false,
-        definition: String::new(),
-    };
     s.indexes = vec![
-        index("expr", vec![None], None),
-        index("partial", vec![Some("id".into())], Some("id > 0".into())),
-        index("plain", vec![Some("code".into())], None),
+        Index { key_columns: vec![None], ..index(&["id"], false) },
+        Index { predicate: Some("id > 0".into()), ..index(&["id"], false) },
+        index(&["code"], false),
     ];
     let cols = [int("id", 1), col("code", ValueKind::Text, Some(2))];
     let t = resolve(&["id", "code"], &cols, &s).unwrap();
     assert_eq!(t.identity, Identity::Key { primary: false, columns: vec![1] });
+}
+
+#[test]
+fn a_key_counts_only_through_a_valid_index() {
+    // `CREATE UNIQUE INDEX CONCURRENTLY` failed on duplicates: the index is left invalid.
+    let mut s = unique(table(&[("email", true), ("name", false)], None), &["email"]);
+    s.indexes[0].valid = false;
+    let cols = [col("email", ValueKind::Text, Some(1)), col("name", ValueKind::Text, Some(2))];
+    let t = resolve(&["email", "name"], &cols, &s).unwrap();
+    assert_eq!(
+        t.identity,
+        Identity::Values { columns: vec![0, 1], duplicates: Duplicates::Refuse },
+        "not a key, but the table is keyed: never duplicates"
+    );
+    // A partitioned table's primary key while a partition lacks its index; a constraint without
+    // an index the structure lists.
+    let mut s = table(&[("id", true), ("name", false)], Some(&["id"]));
+    s.indexes[0].valid = false;
+    let cols = [int("id", 1), col("name", ValueKind::Text, Some(2))];
+    let t = resolve(&["id", "name"], &cols, &s).unwrap();
+    assert_eq!(t.identity, Identity::Values { columns: vec![0, 1], duplicates: Duplicates::Refuse });
+    s.indexes.clear();
+    let t = resolve(&["id", "name"], &cols, &s).unwrap();
+    assert_eq!(t.identity, Identity::Values { columns: vec![0, 1], duplicates: Duplicates::Refuse });
+}
+
+#[test]
+fn a_repeated_key_column_finds_rows_by_its_first_copy() {
+    let s = table(&[("id", true), ("name", false)], Some(&["id"]));
+    let cols = [col("name", ValueKind::Text, Some(2)), int("id", 1), int("id2", 1)];
+    let t = resolve(&["id", "name"], &cols, &s).unwrap();
+    assert_eq!(t.identity, Identity::Key { primary: true, columns: vec![1] });
 }
 
 #[test]
@@ -211,6 +270,38 @@ fn identical_rows_of_a_keyless_table_are_a_choice_only_when_every_column_is_show
 }
 
 #[test]
+fn a_table_keyed_only_by_a_unique_key_the_result_lacks_never_has_duplicates() {
+    let s = unique(table(&[("email", true), ("name", false)], None), &["email"]);
+    let cols = [col("name", ValueKind::Text, Some(2))];
+    let t = resolve(&["email", "name"], &cols, &s).unwrap();
+    assert_eq!(t.identity, Identity::Values { columns: vec![0], duplicates: Duplicates::Refuse });
+}
+
+#[test]
+fn rows_are_never_duplicates_when_the_structure_is_not_whole() {
+    let s = table(&[("a", false), ("b", false)], None);
+    let cols = [int("a", 1), int("b", 2)];
+    let choose = Identity::Values { columns: vec![0, 1], duplicates: Duplicates::Choose };
+    let refuse = Identity::Values { columns: vec![0, 1], duplicates: Duplicates::Refuse };
+    assert_eq!(resolve(&["a", "b"], &cols, &s).unwrap().identity, choose);
+    // The server would not list some of it (MySQL lists only the columns a user may read).
+    for g in [StructureGroup::Columns, StructureGroup::Indexes, StructureGroup::UniqueConstraints] {
+        let s = TableStructure { hidden: vec![g], ..s.clone() };
+        let t = resolve(&["a", "b"], &cols, &s).unwrap();
+        assert_eq!(t.identity, refuse, "{g:?}");
+    }
+    let s = TableStructure { hidden: vec![StructureGroup::Triggers], ..s.clone() };
+    assert_eq!(resolve(&["a", "b"], &cols, &s).unwrap().identity, choose, "triggers do not matter");
+    // A key on a column the structure does not list: unknown whether it may be NULL.
+    let mut s = unique(table(&[("a", false), ("b", false)], None), &["hidden"]);
+    s.indexes.clear();
+    assert_eq!(resolve(&["a", "b"], &cols, &s).unwrap().identity, refuse);
+    // Nor in a table others inherit from, even without a key.
+    let s = TableStructure { inherited: true, ..table(&[("a", false), ("b", false)], None) };
+    assert_eq!(resolve(&["a", "b"], &cols, &s).unwrap().identity, refuse);
+}
+
+#[test]
 fn a_key_column_that_does_not_compare_exactly_is_no_key() {
     let s = table(&[("k", true), ("name", false)], Some(&["k"]));
     let cols = [col("k", ValueKind::Other, Some(1)), col("name", ValueKind::Text, Some(2))];
@@ -229,8 +320,7 @@ fn an_inherited_tables_keys_do_not_hold() {
 
 #[test]
 fn the_formats_offers_are_taken_in_its_order() {
-    let mut s = table(&[("id", true), ("email", true)], Some(&["id"]));
-    s.unique_constraints = vec![key(&["email"])];
+    let s = unique(table(&[("id", true), ("email", true)], Some(&["id"])), &["email"]);
     let cols = [int("id", 1), col("email", ValueKind::Text, Some(2))];
     let k = catalog(&["id", "email"]);
     let src = source(PG, Some(&k), &cols, "SELECT * FROM app.t").unwrap();

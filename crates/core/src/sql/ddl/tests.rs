@@ -47,6 +47,7 @@ fn index(name: &str, definition: &str, constraint: bool) -> Index {
         primary: false,
         constraint,
         definition: definition.into(),
+        valid: true,
     }
 }
 

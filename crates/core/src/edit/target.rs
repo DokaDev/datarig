@@ -2,9 +2,10 @@
 
 use super::sql::{ColumnInfo, EditSql, Exactness, Offer};
 use crate::driver::keys::{NotInsertable, single_table};
-use crate::driver::structure::{ColumnFill, RelationKind, StructureColumn, TableStructure};
+use crate::driver::structure::{ColumnFill, Index, RelationKind, StructureColumn, StructureGroup, TableStructure};
 use crate::driver::{ColumnMeta, KeyCatalog, ValueKind};
 use crate::sql::dialect::Dialect;
+use crate::sql::lexer::{Tok, Token, lex_in};
 
 /// A table by schema and name, as the catalog has them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,6 +69,9 @@ pub fn source(
 ) -> Result<EditSource, ReadOnly> {
     use NotInsertable::*;
     let from = single_table(d, sql).map_err(ReadOnly::Source)?;
+    if distinct(d, sql) {
+        return Err(ReadOnly::Source(Grouping));
+    }
     let catalog = catalog.ok_or(ReadOnly::Source(NoCatalog))?;
     let located = cols
         .iter()
@@ -97,6 +101,31 @@ pub fn source(
         })
         .collect::<Result<_, ReadOnly>>()?;
     Ok(EditSource { table: TableRef { schema: table.schema.clone(), name: table.name.clone() }, columns })
+}
+
+/// `SELECT DISTINCT` (or MySQL's `DISTINCTROW`): a row of the result may stand for several rows
+/// of the table. Read from the words before the top level `FROM` (an aggregate's `DISTINCT` is
+/// in parentheses).
+fn distinct(d: Dialect, sql: &str) -> bool {
+    let toks: Vec<Token> = lex_in(sql, d).into_iter().filter(|t| !t.is_trivia()).collect();
+    let mut depth = 0i32;
+    for t in &toks {
+        match t.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => depth -= 1,
+            _ if depth == 0 && t.is_word() => {
+                let w = t.text(sql);
+                if w.eq_ignore_ascii_case("FROM") {
+                    return false;
+                }
+                if w.eq_ignore_ascii_case("DISTINCT") || w.eq_ignore_ascii_case("DISTINCTROW") {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// What a change does to a column.
@@ -192,10 +221,20 @@ impl EditSource {
     /// With the table's structure `s`: what each result column allows, and how a row is found,
     /// the first of the format's offers the table and result allow.
     ///
+    /// A key finds rows only through a valid index that enforces it: the primary key's, or a
+    /// unique index on plain columns, not partial, whose columns are all `NOT NULL`. (PostgreSQL
+    /// leaves an index invalid when building it failed, and the table may then hold the
+    /// duplicates it failed on.) A row is found by comparing values exactly, byte for byte, at
+    /// least as finely as any index compares them, so such a key matches one row at most,
+    /// whatever its collation or operator class.
+    ///
     /// A table others inherit from (legacy inheritance) is read with their rows, and its keys
-    /// do not hold across them: its rows are found by their values only, and never as
-    /// duplicates of each other.
+    /// do not hold across them: its rows are found by their values only. Rows the same in every
+    /// column are a choice only when the table surely may hold such rows (no key at all, none
+    /// that names a column not listed, no group the server would not list) and the result shows
+    /// every column, each exactly.
     pub fn target(&self, s: &TableStructure, f: &dyn EditSql) -> Result<EditTarget, ReadOnly> {
+        use StructureGroup as G;
         if !matches!(s.kind, RelationKind::Table | RelationKind::PartitionedTable) {
             return Err(ReadOnly::NotATable(s.kind));
         }
@@ -210,8 +249,11 @@ impl EditSource {
                 Ok(Some(TableColumn { exact, kind: src.kind, repeated: src.repeated, column }))
             })
             .collect::<Result<Vec<Option<TableColumn>>, ReadOnly>>()?;
+        // Groups whose being whole decides whether rows may be the same in every column.
+        let partial =
+            s.hidden.iter().any(|g| matches!(g, G::Columns | G::PrimaryKey | G::Indexes | G::UniqueConstraints));
         let shown = |name: &str| columns.iter().flatten().any(|c| c.column.name == name);
-        let all_columns_shown = s.columns.iter().all(|c| shown(&c.name));
+        let all_columns_shown = !s.hidden.contains(&G::Columns) && s.columns.iter().all(|c| shown(&c.name));
         // The result column of table column `name`, when it compares exactly (its first copy).
         let exact = |name: &str| {
             columns
@@ -219,27 +261,24 @@ impl EditSource {
                 .position(|c| c.as_ref().is_some_and(|c| c.column.name == name && c.exact == Exactness::Exact))
         };
         let whole = |key: &[String]| key.iter().map(|c| exact(c)).collect::<Option<Vec<usize>>>();
-        let not_null = |key: &[String]| key.iter().all(|c| s.column(c).is_some_and(|c| c.not_null));
-        // Unique keys of `NOT NULL` columns: constraints, then unique indexes on plain columns
-        // that are not partial.
-        let uniques: Vec<Vec<String>> = s
-            .unique_constraints
-            .iter()
-            .map(|u| u.columns.clone())
-            .chain(
-                s.indexes
-                    .iter()
-                    .filter(|x| x.unique && !x.primary && x.predicate.is_none())
-                    .filter_map(|x| x.key_columns.iter().cloned().collect::<Option<Vec<String>>>()),
-            )
-            .filter(|k| !k.is_empty() && not_null(k))
-            .collect();
-        let keyed = s.inherited || s.primary_key.is_some() || !uniques.is_empty();
+        // An index's key columns, when each is a plain column.
+        let plain =
+            |x: &Index| x.key_columns.iter().cloned().collect::<Option<Vec<String>>>().filter(|k| !k.is_empty());
+        let enforces = |x: &&Index| x.unique && x.valid && x.predicate.is_none();
+        let not_null = |key: &Vec<String>| key.iter().all(|c| s.column(c).is_some_and(|c| c.not_null));
+        let primary = s.indexes.iter().filter(enforces).filter(|x| x.primary).find_map(plain);
+        let uniques: Vec<Vec<String>> =
+            s.indexes.iter().filter(enforces).filter(|x| !x.primary).filter_map(plain).filter(not_null).collect();
+        // Any key (valid or not) whose columns are each `NOT NULL`, or not listed (unknown).
+        let keys = s.primary_key.iter().chain(&s.unique_constraints).map(|k| k.columns.clone());
+        let index_keys = s.indexes.iter().filter(|x| x.unique && x.predicate.is_none()).filter_map(plain);
+        let keyed = keys.chain(index_keys).any(|k| k.iter().all(|c| s.column(c).is_none_or(|c| c.not_null)));
+        let may_repeat = !s.inherited && !partial && !keyed;
         let identity = || {
             for offer in f.offers() {
                 match offer {
                     Offer::Primary if !s.inherited => {
-                        if let Some(columns) = s.primary_key.as_ref().and_then(|k| whole(&k.columns)) {
+                        if let Some(columns) = primary.as_deref().and_then(whole) {
                             return Ok(Identity::Key { primary: true, columns });
                         }
                     }
@@ -258,7 +297,7 @@ impl EditSource {
                             return Err(ReadOnly::NoExactColumn);
                         }
                         let all_exact = columns.iter().flatten().all(|c| c.exact == Exactness::Exact);
-                        let duplicates = if !keyed && all_columns_shown && all_exact {
+                        let duplicates = if may_repeat && all_columns_shown && all_exact {
                             Duplicates::Choose
                         } else {
                             Duplicates::Refuse

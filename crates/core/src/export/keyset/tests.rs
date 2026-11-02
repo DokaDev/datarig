@@ -59,6 +59,7 @@ fn index(cols: &[&str], options: &[&str]) -> Index {
         primary: false,
         constraint: true,
         definition: String::new(),
+        valid: true,
     }
 }
 
