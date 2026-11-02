@@ -74,6 +74,10 @@ pub struct Capabilities {
     /// for the user ([`TxRule::Manual`]), and ends one when asked ([`DbCommand::EndTx`]). A driver
     /// without it answers both with [`DbError::NotSupported`] and runs nothing.
     pub manual_commit: bool,
+    /// Editing a result's rows: the SQL its sessions take for a change set ([`EditFormat`]),
+    /// `None` for none (every result is read-only). A session may say otherwise for its server
+    /// once connected ([`DbEvent::Edit`]).
+    pub edit: Option<EditFormat>,
 }
 
 /// How a server's namespaces nest (`Capabilities::hierarchy`).
@@ -98,6 +102,26 @@ pub enum ExplainFormat {
     /// `sql::plan::mysql`. Each format a server may give (MySQL's JSON, MariaDB's) is a variant
     /// of its own, read by a reader of its own: see `sql::plan` for the seam.
     MySqlTree,
+}
+
+/// The SQL a driver's sessions take for edits of a result's rows (`Capabilities::edit`): how a
+/// row is found and compared, and how it is locked, changed, added and removed. The statements
+/// are written by `edit` in this crate, by one writer per format; a server that differs from
+/// its family's (another version, a fork) is a format, or a flag of one, of its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditFormat {
+    /// PostgreSQL.
+    Postgres,
+    /// MySQL.
+    MySql(MySqlEdit),
+}
+
+/// What a MySQL server offers for edits beyond the family's ([`EditFormat::MySql`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MySqlEdit {
+    /// `FOR UPDATE NOWAIT` (8.0 on): a row another session holds fails at once instead of
+    /// waiting for it.
+    pub nowait: bool,
 }
 
 /// Where a session works: a database and a schema of the profile's server,

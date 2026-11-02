@@ -23,6 +23,8 @@ fn users_structure() -> TableStructure {
         not_null: true,
         default: None,
         fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation: None,
     };
     let mut st = TableStructure::new(RelationKind::Table);
     st.columns = vec![col("id"), col("email")];

@@ -82,6 +82,26 @@ pub struct StructureColumn {
     /// The default expression, as the server prints it.
     pub default: Option<String>,
     pub fill: ColumnFill,
+    /// The labels of an enum (or of a domain over one), in the server's order; empty for any
+    /// other type (an array of an enum too).
+    pub enum_labels: Vec<String>,
+    /// How its text compares, for a column of a collatable type; `None` for another type, or
+    /// when the server did not say.
+    pub collation: Option<Collation>,
+}
+
+/// A text column's collation ([`StructureColumn::collation`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Collation {
+    /// As the server names it (PostgreSQL `default`, `C`, `und-x-icu`; MySQL
+    /// `utf8mb4_0900_ai_ci`).
+    pub name: String,
+    /// The character set of the column's values (MySQL's `utf8mb4`, `latin1`, `binary`);
+    /// `None` where it is the database's, not the column's (PostgreSQL).
+    pub charset: Option<String>,
+    /// Equal strings are equal byte for byte. A PostgreSQL ICU collation made
+    /// `deterministic = false` takes `'a'` and `'A'` (or other byte sequences) for equal.
+    pub deterministic: bool,
 }
 
 impl Index {

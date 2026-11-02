@@ -627,6 +627,8 @@ fn mysql_items_structure() -> datarig_core::driver::structure::TableStructure {
         not_null: true,
         default: None,
         fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation: None,
     }];
     t.indexes = vec![index("PRIMARY"), index("ix_id")];
     t

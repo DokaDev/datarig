@@ -45,6 +45,8 @@ fn structure(s: usize, j: usize) -> Box<TableStructure> {
         not_null: true,
         default: None,
         fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation: None,
     };
     let mut st = TableStructure::new(RelationKind::Table);
     st.columns = ["id".to_string(), "event_at".into(), format!("events_{s:02}_{j:03}_ref"), "user_id".into()]

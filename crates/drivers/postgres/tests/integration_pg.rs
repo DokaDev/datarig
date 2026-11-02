@@ -388,6 +388,9 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
     let off = "WITH (autovacuum_enabled = false)";
     for sql in [
         format!("CREATE SCHEMA {s}"),
+        format!("CREATE TYPE {s}.mood AS ENUM ('sad', 'ok', 'happy')"),
+        format!("CREATE DOMAIN {s}.dmood AS {s}.mood"),
+        format!("CREATE TABLE {s}.moods (m {s}.mood, d {s}.dmood, ms {s}.mood[], c text COLLATE \"C\")"),
         format!(
             "CREATE TABLE {s}.parent (a int, b int, code text, PRIMARY KEY (a, b), CONSTRAINT parent_code_key UNIQUE (code))"
         ),
@@ -459,6 +462,14 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
         assert_eq!(new.len(), 1, "{table}: one statement: {new:?}");
         result.map(|b| *b)
     };
+    // Enum labels through a domain, none for an array of the enum; a column's collation.
+    let moods = read("moods").await.expect("moods");
+    let mood = ["sad", "ok", "happy"];
+    let labels: Vec<&[String]> = moods.columns.iter().map(|c| &c.enum_labels[..]).collect();
+    assert_eq!(labels, [&mood[..], &mood[..], &[], &[]]);
+    let collations: Vec<_> = moods.columns.iter().map(|c| c.collation.clone()).collect();
+    let c = Collation { name: "C".into(), charset: None, deterministic: true };
+    assert_eq!(collations, [None, None, None, Some(c)]);
     let child = read("child").await.expect("child");
     let names = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let col = |name: &str, ty: &str, not_null: bool, default: Option<&str>, fill: ColumnFill| StructureColumn {
@@ -467,6 +478,8 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
         not_null,
         default: default.map(str::to_string),
         fill,
+        enum_labels: Vec::new(),
+        collation: None,
     };
     assert_eq!(
         child.columns,
@@ -477,7 +490,10 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
             col("qty", "integer", true, Some("1"), ColumnFill::Default),
             col("doc", "jsonb", false, None, ColumnFill::Default),
             col("twice", "integer", false, None, ColumnFill::Stored("qty * 2".into())),
-            col("note", "text", false, None, ColumnFill::Default),
+            StructureColumn {
+                collation: Some(Collation { name: "default".into(), charset: None, deterministic: true }),
+                ..col("note", "text", false, None, ColumnFill::Default)
+            },
         ]
     );
     assert_eq!(

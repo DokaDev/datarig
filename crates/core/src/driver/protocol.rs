@@ -793,6 +793,10 @@ pub enum DbEvent {
     /// MySQL's tree, but none on MariaDB. Sent right after `Connected`; a driver whose servers
     /// all give its format sends nothing.
     Explain(Option<super::ExplainFormat>),
+    /// The edits the session's server takes (`None`: none), where it is the server's and not
+    /// the whole driver's ([`Capabilities::edit`](super::Capabilities)). Sent right after
+    /// `Connected`; a driver whose servers all take its format sends nothing.
+    Edit(Option<super::EditFormat>),
     /// Sent right after `Connected` of a read-only session (a read-only policy) when the
     /// server did not apply the read-only default (a pooler that drops startup options): the
     /// session runs anyway, because the driver makes each transaction it opens read-only.

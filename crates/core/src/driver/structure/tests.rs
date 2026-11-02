@@ -7,6 +7,8 @@ fn col(name: &str) -> StructureColumn {
         not_null: false,
         default: None,
         fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation: None,
     }
 }
 

@@ -36,6 +36,32 @@ fn columns_say_how_they_are_filled() {
 }
 
 #[test]
+fn columns_have_their_enum_labels_and_collation() {
+    let json = r#"{"kind":"r","columns":[
+        {"name":"mood","type":"mood","not_null":false,"default":null,"generated":"","identity":"",
+         "enum_labels":["sad","ok","happy"],"collation":null},
+        {"name":"name","type":"text","not_null":false,"default":null,"generated":"","identity":"",
+         "enum_labels":null,"collation":{"name":"default","deterministic":true}},
+        {"name":"tag","type":"text","not_null":false,"default":null,"generated":"","identity":"",
+         "enum_labels":null,"collation":{"name":"und-ci","deterministic":false}},
+        {"name":"n","type":"integer","not_null":false,"default":null,"generated":"","identity":""}]}"#;
+    let s = parse(json).unwrap();
+    let c = |name: &str, deterministic| Some(Collation { name: name.into(), charset: None, deterministic });
+    let got: Vec<(&str, &[String], Option<Collation>)> =
+        s.columns.iter().map(|x| (x.name.as_str(), x.enum_labels.as_slice(), x.collation.clone())).collect();
+    let labels = ["sad".to_string(), "ok".into(), "happy".into()];
+    assert_eq!(
+        got,
+        [
+            ("mood", &labels[..], None),
+            ("name", &[][..], c("default", true)),
+            ("tag", &[][..], c("und-ci", false)),
+            ("n", &[][..], None),
+        ]
+    );
+}
+
+#[test]
 fn trigger_types_decode_from_their_bits() {
     let t = |tgtype, enabled: &str| {
         trigger(RawTrigger {

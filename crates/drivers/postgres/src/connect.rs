@@ -68,6 +68,7 @@ impl Driver for PgDriver {
             reads_held_to_end: false,
             export: true,
             manual_commit: true,
+            edit: None,
         }
     }
 

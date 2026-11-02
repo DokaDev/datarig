@@ -242,7 +242,7 @@ impl KeyCatalog {
     /// to the catalog or not), looked up by name for a [`ColumnOrigin::Named`]. Names compare by
     /// the catalog's [`NameRule`] (exactly unless the driver set another): a driver that names
     /// origins gives them as its server does, which may differ in case from its catalog.
-    fn locate(&self, o: &ColumnOrigin) -> Option<(u32, i16)> {
+    pub(crate) fn locate(&self, o: &ColumnOrigin) -> Option<(u32, i16)> {
         match o {
             ColumnOrigin::Pg { table, column } => Some((*table, *column)),
             ColumnOrigin::Named { schema, table, column } => {
@@ -563,7 +563,7 @@ pub struct FromTable {
 impl FromTable {
     /// Whether it names table `t` (without a schema, any schema: the search path is not known),
     /// the names compared by `rule`.
-    fn names(&self, t: &TableKeys, rule: NameRule) -> bool {
+    pub(crate) fn names(&self, t: &TableKeys, rule: NameRule) -> bool {
         rule.same_table(&self.name, &t.name) && self.schema.as_ref().is_none_or(|s| rule.same_table(s, &t.schema))
     }
 }

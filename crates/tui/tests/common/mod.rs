@@ -117,6 +117,7 @@ impl Driver for FakeDriver {
             reads_held_to_end: self.mysql.load(Ordering::SeqCst),
             export: true,
             manual_commit: !self.no_manual.load(Ordering::SeqCst),
+            edit: None,
         }
     }
 
@@ -1138,6 +1139,8 @@ pub fn users_structure() -> TableStructure {
         not_null,
         default: default.map(str::to_string),
         fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation: None,
     };
     let index =
         |name: &str, cols: &[&str], unique: bool, predicate: Option<&str>, primary: bool, constraint: bool| Index {
@@ -1211,6 +1214,8 @@ pub fn orders_structure() -> TableStructure {
         not_null: true,
         default: None,
         fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation: None,
     };
     let mut t = TableStructure::new(RelationKind::Table);
     t.total_bytes = Some(8192);

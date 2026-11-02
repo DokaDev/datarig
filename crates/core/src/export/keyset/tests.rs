@@ -29,6 +29,8 @@ fn structure(columns: &[(&str, bool)], pk: Option<&[&str]>, unique: &[&[&str]]) 
                 not_null: *not_null,
                 default: None,
                 fill: ColumnFill::Default,
+                enum_labels: Vec::new(),
+                collation: None,
             })
             .collect(),
         primary_key: pk.map(key),

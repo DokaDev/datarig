@@ -98,6 +98,8 @@ fn tree() -> Tree {
         not_null: false,
         default: None,
         fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation: None,
     };
     st.columns = vec![col("id"), col("email")];
     st.primary_key = Some(KeyConstraint {

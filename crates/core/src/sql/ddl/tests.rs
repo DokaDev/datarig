@@ -12,6 +12,8 @@ fn col(name: &str, type_name: &str, not_null: bool, default: Option<&str>) -> St
         not_null,
         default: default.map(str::to_string),
         fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation: None,
     }
 }
 

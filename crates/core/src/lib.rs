@@ -15,6 +15,7 @@
 //! * [`results`] — the rows of a result: a window in memory, the rest in a spill file.
 //! * [`chart`] — a result's rows as the numbers of a chart (columns, axes, sums).
 //! * [`export`] — result rows as TSV, CSV, JSON, a Markdown table or SQL INSERT statements.
+//! * [`edit`] — editing a result's rows: the table they are, which columns change, how a row is found.
 //! * [`transport`] — how a driver reaches a server through a tunnel (a [`transport::Dialer`]).
 //! * [`theme`] — user theme files (`themes/<name>.toml`), read and checked.
 //! * [`fault`] — failures as data (a kind the UI words, a detail for the error log).
@@ -25,6 +26,7 @@
 pub mod chart;
 pub mod config;
 pub mod driver;
+pub mod edit;
 pub mod export;
 pub mod fault;
 pub mod fsutil;

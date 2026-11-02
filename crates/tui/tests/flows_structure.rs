@@ -857,6 +857,8 @@ fn order_items_structure() -> TableStructure {
         not_null,
         default: default.map(str::to_string),
         fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation: None,
     };
     let mut t = TableStructure::new(RelationKind::Table);
     t.columns = vec![
@@ -1108,6 +1110,8 @@ fn mysql_items_structure() -> TableStructure {
         not_null,
         default: default.map(str::to_string),
         fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation: None,
     };
     let index = |name: &str, cols: &[&str], keys: &[Option<&str>], unique: bool| Index {
         name: name.into(),

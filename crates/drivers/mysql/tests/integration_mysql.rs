@@ -2463,6 +2463,8 @@ async fn the_metadata_session_reads_a_tables_structure() {
                body TEXT,
                twice INT GENERATED ALWAYS AS (qty * 2) STORED,
                low VARCHAR(100) GENERATED ALWAYS AS (lower(name)) VIRTUAL,
+               st ENUM('new', 'it''s') CHARACTER SET latin1 COLLATE latin1_bin,
+               raw VARCHAR(4) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin,
                UNIQUE KEY uq_name (name),
                KEY ix_prefix (body(10)),
                KEY ix_desc (qty DESC, name),
@@ -2514,8 +2516,20 @@ async fn the_metadata_session_reads_a_tables_structure() {
             ("body", "text", false, None, &ColumnFill::Default),
             ("twice", "int", false, None, &ColumnFill::Stored("`qty` * 2".into())),
             ("low", "varchar(100)", false, None, &ColumnFill::Virtual("lower(`name`)".into())),
+            ("st", "enum('new','it''s')", false, None, &ColumnFill::Default),
+            ("raw", "varchar(4)", false, None, &ColumnFill::Default),
         ]
     );
+    // Enum labels, and each text column's character set and collation (byte-wise only when
+    // binary and without padding).
+    let column = |name: &str| s.columns.iter().find(|c| c.name == name).expect(name);
+    let collation = |name: &str, charset: &str, deterministic| {
+        Some(Collation { name: name.into(), charset: Some(charset.into()), deterministic })
+    };
+    assert_eq!((column("id").enum_labels.len(), &column("id").collation), (0, &None));
+    assert_eq!(column("st").enum_labels, ["new", "it's"]);
+    assert_eq!(column("st").collation, collation("latin1_bin", "latin1", false));
+    assert_eq!(column("raw").collation, collation("utf8mb4_0900_bin", "utf8mb4", true));
     assert_eq!(
         s.primary_key.as_ref().map(|p| (p.name.as_str(), p.columns.clone())),
         Some(("PRIMARY", vec!["id".into()]))
@@ -2620,7 +2634,7 @@ async fn the_metadata_session_reads_a_tables_structure() {
     let hidden = structure_of(&mut n, &child).await.unwrap();
     assert!(hidden.triggers.is_empty());
     assert_eq!(hidden.hidden, [StructureGroup::Triggers], "unknown, not none");
-    assert_eq!(hidden.columns.len(), 10);
+    assert_eq!(hidden.columns.len(), 12);
 }
 
 /// Whether table `name` of `shop` is in the server's table cache: a table some session opened

@@ -160,6 +160,10 @@ pub struct ProfileConn {
     /// (`DbEvent::Explain`: none on MariaDB); `None` until one says, when the driver's
     /// (`Capabilities::explain`) holds.
     pub explain: Option<Option<datarig_core::driver::ExplainFormat>>,
+    /// The edits the current attempt's server takes, as a session of it said
+    /// (`DbEvent::Edit`); `None` until one says, when the driver's (`Capabilities::edit`)
+    /// holds.
+    pub edit: Option<Option<datarig_core::driver::EditFormat>>,
     /// How the current attempt's metadata session's traffic goes (`DbEvent::Encryption`, sent
     /// right before `Connected`); `None` until it says.
     pub encryption: Option<datarig_core::tls::Encryption>,
@@ -202,6 +206,7 @@ impl ProfileConn {
             tunnel_lost: None,
             language: None,
             explain: None,
+            edit: None,
             encryption: None,
             used: None,
             idle_closed: None,
@@ -299,6 +304,7 @@ impl ConnectionManager {
         c.generation = generation;
         c.encryption = None;
         c.explain = None;
+        c.edit = None;
         generation
     }
 
