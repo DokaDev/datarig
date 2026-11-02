@@ -10,7 +10,7 @@
 //! * unset with `DATARIG_REQUIRE_POOLER=1` (CI's `integration` job) -> the test fails.
 //!
 //! The tests only read: nothing is created behind the pooler (a temporary table dropped with
-//! its transaction at most).
+//! its transaction at most; the one table an Apply writes is made on the server directly).
 //!
 //! The pool has three server connections, shared by the tests here as they run side by side.
 //! While other clients hold some of them (an open block, a cancel, a lock wait) or run in
@@ -1085,5 +1085,95 @@ async fn behind_a_pooler_settings_the_server_connection_decides_are_not_sent() {
         id += 1;
         let DbEvent::Page { rows, .. } = other.run(100 + id, "SHOW temp_buffers").await else { panic!() };
         assert_eq!(rows[0][0], server, "nothing left on the server connection");
+    }
+}
+
+/// Drops a table on the server directly when it goes out of scope.
+struct DropGuard(String, String);
+
+impl Drop for DropGuard {
+    fn drop(&mut self) {
+        let _ = direct(&self.0, &format!("DROP TABLE IF EXISTS {}", self.1));
+    }
+}
+
+/// An Apply behind the pooler runs in one transaction that starts as the session's do (the lock
+/// wait limit with its `BEGIN`), committed at its end, or left open for manual commit with its
+/// idle limit: the pooled server connections keep the server's settings afterwards. Its table is
+/// made on the server directly (`DATARIG_TEST_PG_URL`), not through the pooler.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_an_apply_is_one_transaction_and_leaves_no_settings() {
+    use datarig_core::driver::ApplyTx;
+    use datarig_core::edit::{Expect, Origin, Step};
+    let Some(url) = pooler_url("behind_a_pooler_an_apply_is_one_transaction_and_leaves_no_settings") else {
+        return;
+    };
+    let Ok(server_url) = std::env::var("DATARIG_TEST_PG_URL") else {
+        assert!(std::env::var("DATARIG_REQUIRE_PG").is_err(), "DATARIG_TEST_PG_URL must be set too");
+        let _ = writeln!(std::io::stderr(), "SKIPPED: set DATARIG_TEST_PG_URL too");
+        return;
+    };
+    let _pool = POOL.read().await;
+    let table = format!("public.zz_apply_pool_{}", std::process::id());
+    let _g = DropGuard(server_url.clone(), table.clone());
+    direct(&server_url, &format!("CREATE TABLE {table} (id int PRIMARY KEY, v text)")).unwrap();
+    direct(&server_url, &format!("INSERT INTO {table} VALUES (1, 'a')")).unwrap();
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let DbEvent::Page { rows, .. } = other.run(1, "SHOW lock_timeout").await else { panic!("lock_timeout") };
+    let lock = rows[0][0].clone();
+    let DbEvent::Page { rows, .. } = other.run(2, "SHOW idle_in_transaction_session_timeout").await else {
+        panic!("idle")
+    };
+    let idle = rows[0][0].clone();
+    let opts = ConnectOptions::new(PAGE, SessionRole::Query, &format!("poola{}", std::process::id()))
+        .lock_wait(Some(Duration::from_secs(1)));
+    let mut q = Conn::open_with(&url, SessionRole::Query, opts).await;
+    let steps = |v: &str| {
+        let step = |sql: String, expect| Step { sql, expect, origin: Origin::Row(0) };
+        vec![
+            step(format!("SELECT 1 FROM {table} WHERE id = 1 FOR UPDATE NOWAIT"), Expect::Rows(1)),
+            step(
+                format!(
+                    "UPDATE {table} SET v = '{v}' WHERE id = 1 RETURNING v, \
+                     pg_catalog.current_setting('lock_timeout'), \
+                     pg_catalog.current_setting('idle_in_transaction_session_timeout')"
+                ),
+                Expect::Affected(1),
+            ),
+        ]
+    };
+    let applied = |events: &[DbEvent]| {
+        events
+            .iter()
+            .find_map(|e| match e {
+                DbEvent::Applied { result, .. } => Some(result.clone().expect("applied")),
+                _ => None,
+            })
+            .expect("an answer")
+    };
+    let events = q.events_of(DbCommand::ApplyEdits { id: 3, steps: steps("x"), tx: ApplyTx::Commit }).await;
+    let rows = applied(&events)[1].returned.clone().unwrap().1;
+    assert_eq!(rows[0][0].as_deref(), Some("x"));
+    assert_eq!(rows[0][1].as_deref(), Some("1s"), "the transaction's lock wait limit");
+    assert_eq!(direct(&server_url, &format!("SELECT v FROM {table}")).unwrap(), "x", "committed");
+    let keep = ApplyTx::Keep { idle_timeout: Some(Duration::from_secs(600)) };
+    let events = q.events_of(DbCommand::ApplyEdits { id: 4, steps: steps("y"), tx: keep }).await;
+    let rows = applied(&events)[1].returned.clone().unwrap().1;
+    assert_eq!((rows[0][1].as_deref(), rows[0][2].as_deref()), (Some("1s"), Some("10min")));
+    assert!(events.iter().any(|e| matches!(e, DbEvent::ManualBegun { id: 4, index: 0 })), "{events:?}");
+    assert_eq!(direct(&server_url, &format!("SELECT v FROM {table}")).unwrap(), "x", "not committed");
+    let events = q.events_of(DbCommand::EndTx { id: 5, commit: true }).await;
+    assert!(events.iter().any(|e| matches!(e, DbEvent::TxEnded { id: 5, .. })), "{events:?}");
+    assert_eq!(direct(&server_url, &format!("SELECT v FROM {table}")).unwrap(), "y", "committed");
+    let mut id = 10;
+    for _ in 0..8 {
+        id += 1;
+        let DbEvent::Page { rows, .. } = other.run(id, "SHOW lock_timeout").await else { panic!() };
+        assert_eq!(rows[0][0], lock, "nothing left on the server connection");
+        id += 1;
+        let DbEvent::Page { rows, .. } = other.run(id, "SHOW idle_in_transaction_session_timeout").await else {
+            panic!()
+        };
+        assert_eq!(rows[0][0], idle, "nothing left on the server connection");
     }
 }

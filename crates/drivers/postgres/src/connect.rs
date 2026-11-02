@@ -10,8 +10,8 @@ use crate::query::query_loop;
 use crate::route::{Cancel, Route, route};
 use crate::tls::{PgTls, TlsError};
 use datarig_core::driver::{
-    Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, ExplainFormat, Hierarchy, PingError,
-    PingInfo, Session, SessionRole, SessionStatement,
+    Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, EditFormat, ExplainFormat, Hierarchy,
+    PingError, PingInfo, Session, SessionRole, SessionStatement,
 };
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
@@ -68,7 +68,7 @@ impl Driver for PgDriver {
             reads_held_to_end: false,
             export: true,
             manual_commit: true,
-            edit: None,
+            edit: Some(EditFormat::Postgres),
         }
     }
 
@@ -597,6 +597,9 @@ pub(crate) fn db_error(e: &tokio_postgres::Error) -> DbError {
         // wait.
         if db.code() == &SqlState::LOCK_NOT_AVAILABLE && db.routine() == Some("ProcessInterrupts") {
             return DbError::LockTimeout(s);
+        }
+        if db.code() == &SqlState::LOCK_NOT_AVAILABLE {
+            return DbError::LockBusy(s);
         }
         return DbError::Server(s);
     }

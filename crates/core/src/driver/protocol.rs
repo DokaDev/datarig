@@ -179,6 +179,10 @@ pub enum DbError {
     /// MySQL's `innodb_lock_wait_timeout` / `lock_wait_timeout`, error 1205). The server's
     /// message. The session stays (PostgreSQL: a block it ran in is aborted as by any failure).
     LockTimeout(String),
+    /// A statement that takes its locks without waiting (`FOR UPDATE NOWAIT`, `LOCK TABLE …
+    /// NOWAIT`) found one another session holds, and failed at once (PostgreSQL's SQLSTATE
+    /// `55P03` outside a lock wait; MySQL's error 3572). The server's message.
+    LockBusy(String),
     /// As [`DbError::LockTimeout`], but the statement ran without the session's lock wait limit:
     /// the server connection's own cut it short (PostgreSQL behind a pooler: a statement outside
     /// the transactions that start with the limit, such as `CALL`, `DO` or `VACUUM`). How long it
@@ -192,6 +196,11 @@ pub enum DbError {
     /// with `datarig_` (`SAVEPOINT`, `RELEASE`, `ROLLBACK TO`): those are the session's own, and
     /// using one would break how it undoes a failed run. It was not sent.
     ReservedSavepoint,
+    /// An Apply ([`DbCommand::ApplyEdits`]) failed, and undoing what its steps did could not be
+    /// confirmed (the server refused the rollback): the session closed its connection, so the
+    /// server rolls back the transaction, the Apply's changes with the rest of it. Comes as
+    /// [`DbEvent::Lost`]'s reason, after the Apply's answer.
+    ApplyNotUndone,
     /// MySQL: an `EXPLAIN ANALYZE` of a write names tables whose changes a rollback does not undo
     /// (an engine that is not InnoDB, such as MyISAM or MEMORY, or a view, whose tables are not
     /// known), or tables whose triggers may write elsewhere: it was not sent. The tables,
@@ -240,6 +249,7 @@ impl DbError {
             | DbError::NeedsNoTransaction(s)
             | DbError::IdleInTransactionTimeout(s)
             | DbError::LockTimeout(s)
+            | DbError::LockBusy(s)
             | DbError::ServerLockTimeout(s)
             | DbError::IdleSessionTimeout(s) => Cow::Borrowed(s),
             DbError::Settings(f) | DbError::Connection(f) => Cow::Borrowed(&f.detail),
@@ -281,6 +291,7 @@ impl DbError {
             | DbError::TxNotOpened
             | DbError::CommitUnknown
             | DbError::ReservedSavepoint
+            | DbError::ApplyNotUndone
             | DbError::NotUndoable(_)
             | DbError::NotAPlainRead
             | DbError::CancelNotTaken(
@@ -538,6 +549,70 @@ pub enum DbCommand {
         sink: ExportSink,
         batch: usize,
     },
+    /// Apply a result's changes: run `steps` (an `edit::Plan`'s, written and checked by `edit`)
+    /// in order, in one transaction, each one's count compared with what it must give
+    /// ([`Expect`](crate::edit::Expect)), stopping at the first that fails or gives another
+    /// count. Answered with exactly one [`DbEvent::Applied`] of the same `id`.
+    ///
+    /// Inside a transaction block (the user's, or one opened for manual commit) it runs under a
+    /// savepoint of the driver's: released when every step stood, rolled back to otherwise, so
+    /// the block keeps what it held before and nothing is committed; an aborted block refuses it
+    /// ([`DbError::NotSupported`]) without running anything. Outside a block it opens a
+    /// transaction ([`ApplyTx`]): committed after the last step, or left open for the user to
+    /// commit (reported as one opened for manual commit, [`DbEvent::ManualBegun`] with index 0);
+    /// rolled back when a step fails. A read-only session refuses it
+    /// ([`DbError::ReadWriteRefused`]) without sending anything. A result held open ends first,
+    /// as for any other command. A cancel stops it between or during steps, and nothing stays.
+    ///
+    /// Drivers without [`Capabilities::edit`](super::Capabilities) answer
+    /// [`DbError::NotSupported`].
+    ApplyEdits {
+        id: u64,
+        steps: Vec<crate::edit::Step>,
+        tx: ApplyTx,
+    },
+}
+
+/// How [`DbCommand::ApplyEdits`] stands to a transaction when no block is open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ApplyTx {
+    /// In a transaction of its own, committed after its last step.
+    Commit,
+    /// In a transaction opened for manual commit, left open after its last step, as
+    /// [`TxStep::Open`] opens one (`idle_timeout` as for [`TxRule::Manual`]).
+    Keep { idle_timeout: Option<Duration> },
+}
+
+/// What one step of [`DbCommand::ApplyEdits`] did.
+#[derive(Clone, Debug, Default)]
+pub struct AppliedStep {
+    /// The rows it returned (a check) or changed (a write), as the server counted them.
+    pub count: u64,
+    /// The rows it returned with their columns (PostgreSQL's `RETURNING *`): the values the
+    /// table holds after it, defaults and triggers included. `None` for a check and for a write
+    /// that returns none.
+    pub returned: Option<(Vec<ColumnMeta>, Vec<Vec<Cell>>)>,
+    /// The value an `AUTO_INCREMENT` column took for an insert (MySQL), if any.
+    pub insert_id: Option<u64>,
+}
+
+/// Why [`DbCommand::ApplyEdits`] did not apply its changes. Nothing of them was kept, unless
+/// the error is [`DbError::CommitUnknown`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApplyFailure {
+    /// The step that failed (from 0); `None` for the statements around them (the transaction's
+    /// start or end).
+    pub step: Option<usize>,
+    pub why: ApplyError,
+}
+
+/// Why a step of [`DbCommand::ApplyEdits`] failed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApplyError {
+    /// It ran and gave another count than it must (`got` rows returned or changed).
+    Count { got: u64 },
+    /// It failed, or was not sent (a cancel is [`DbError::Cancelled`]).
+    Db(DbError),
 }
 
 /// Why an export's statement may run ([`DbCommand::Export`]).
@@ -1019,5 +1094,11 @@ pub enum DbEvent {
     TxEnded {
         id: u64,
         outcome: TxOutcome,
+    },
+    /// The answer to [`DbCommand::ApplyEdits`] `id`: what each step did, or why the changes were
+    /// not applied. The transaction state changes it made follow.
+    Applied {
+        id: u64,
+        result: Result<Vec<AppliedStep>, ApplyFailure>,
     },
 }

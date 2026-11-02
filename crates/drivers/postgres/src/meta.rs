@@ -17,7 +17,7 @@ use crate::connect::db_error;
 use crate::link::{Link, Next};
 use datarig_core::driver::keys::{Generated, KeyCatalog, KeyKind};
 use datarig_core::driver::structure::RelationStats;
-use datarig_core::driver::{DbCommand, DbError, DbEvent, SchemaObjects};
+use datarig_core::driver::{ApplyError, ApplyFailure, DbCommand, DbError, DbEvent, SchemaObjects};
 use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -207,6 +207,10 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
                 DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id, result: Err(DbError::NotSupported) },
                 DbCommand::Export { id, .. } => {
                     DbEvent::Exported { id, result: Err(DbError::NotSupported), cancelled: false }
+                }
+                DbCommand::ApplyEdits { id, .. } => {
+                    let why = ApplyError::Db(DbError::NotSupported);
+                    DbEvent::Applied { id, result: Err(ApplyFailure { step: None, why }) }
                 }
             }
         };

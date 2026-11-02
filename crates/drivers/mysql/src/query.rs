@@ -450,6 +450,11 @@ pub(crate) async fn query_loop(
                     },
                 )
             }
+            // Answered once; a session the UI closed meanwhile answers nothing, a lost one
+            // answers before it is said lost.
+            Next::Command(DbCommand::ApplyEdits { id, steps, tx }) => {
+                apply::apply(&mut conn, &mut link, &env, &mut s, id, &steps, tx).await
+            }
             // Nothing is held here (a held result serves its pages where it is read): an empty
             // last page, so the UI never waits for one.
             Next::Command(DbCommand::FetchMore { id }) => {
@@ -493,6 +498,10 @@ fn unanswered(events: &UnboundedSender<DbEvent>, c: DbCommand, error: &DbError) 
         DbCommand::Count { id, .. } => DbEvent::Counted { id, result: Err(error.clone()), snapshot: false },
         DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id, result: Err(error.clone()) },
         DbCommand::Export { id, .. } => DbEvent::Exported { id, result: Err(error.clone()), cancelled: false },
+        DbCommand::ApplyEdits { id, .. } => {
+            let why = datarig_core::driver::ApplyError::Db(error.clone());
+            DbEvent::Applied { id, result: Err(datarig_core::driver::ApplyFailure { step: None, why }) }
+        }
         // Nothing to answer: a page of a result that is gone, a close of one.
         _ => return,
     };
@@ -1850,6 +1859,7 @@ async fn check_repeat(
     Ok(asked_server(conn, link, env, s, sql).await?.map(|_| ()))
 }
 
+mod apply;
 mod export;
 
 #[cfg(test)]

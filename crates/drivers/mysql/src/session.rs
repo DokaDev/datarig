@@ -5,7 +5,7 @@
 
 use crate::route::{Route, io_fault};
 use crate::wire::{TlsFailed, Wire};
-use datarig_core::driver::{CancelFailure, DbError, ExplainFormat, SessionRole, SessionValues};
+use datarig_core::driver::{CancelFailure, DbError, EditFormat, ExplainFormat, MySqlEdit, SessionRole, SessionValues};
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn::{self, Scheme};
@@ -121,6 +121,7 @@ impl Target {
             .max_allowed_packet(Some(MAX_PACKET))
             .wait_timeout(Some(28_800))
             .enable_cleartext_plugin(false)
+            .client_found_rows(true)
             .server_public_key(self.server_key.clone())
             .public_key_retrieval(self.allow_key_retrieval || !route.exposed())
             .connect_attributes(attrs)
@@ -151,6 +152,13 @@ impl Server {
     /// (its plans are shaped otherwise).
     pub(crate) fn explain(&self) -> Option<ExplainFormat> {
         (!self.mariadb && self.version >= (8, 0, 16)).then_some(ExplainFormat::MySqlTree)
+    }
+
+    /// The edits the server takes: MySQL's from 8.0.17 on (`utf8mb4_0900_bin` compares text
+    /// exactly, `FOR UPDATE NOWAIT` locks without waiting), none on MariaDB (its collations and
+    /// row locks differ).
+    pub(crate) fn edit(&self) -> Option<EditFormat> {
+        (!self.mariadb && self.version >= (8, 0, 17)).then_some(EditFormat::MySql(MySqlEdit { nowait: true }))
     }
 
     /// `MySQL 8.4.6`, `MariaDB 11.4.2`.
@@ -541,17 +549,23 @@ const SECURE_TRANSPORT_REQUIRED: u16 = 3159;
 /// error of its own.
 const LOCK_WAIT_TIMEOUT: u16 = 1205;
 
+/// ER_LOCK_NOWAIT: a statement that does not wait for locks (`NOWAIT`) found one another
+/// session holds.
+const LOCK_NOWAIT: u16 = 3572;
+
 /// ER_CLIENT_INTERACTION_TIMEOUT: the server closed a session idle past its `wait_timeout`
 /// (MySQL 8.0.24 and later say so before they close it).
 const CLIENT_INTERACTION_TIMEOUT: u16 = 4031;
 
 /// The server's error `code` as the MySQL client shows it (`ERROR 1146 (42S02): Table 'shop.x'
-/// doesn't exist`): a lock wait past the limit and a close for being idle as what they are,
+/// doesn't exist`): a lock wait past the limit, a lock not waited for and a close for being idle
+/// as what they are,
 /// anything else as the server's message.
 pub(crate) fn server_error(code: u16, state: &str, message: &str) -> DbError {
     let text = format!("ERROR {code} ({state}): {message}");
     match code {
         LOCK_WAIT_TIMEOUT => DbError::LockTimeout(text),
+        LOCK_NOWAIT => DbError::LockBusy(text),
         CLIENT_INTERACTION_TIMEOUT => DbError::IdleSessionTimeout(text),
         _ => DbError::Server(text),
     }
