@@ -6,26 +6,7 @@ use crate::driver::structure::{
 use crate::driver::{ColumnMeta, ColumnOrigin, KeyCatalog, ValueKind};
 use crate::sql::dialect::{Dialect, MySqlMode};
 
-/// A format that offers every way of finding a row and takes floats, JSON and unknown types as
-/// inexact.
-struct Fake(&'static [Offer]);
-
-const ALL: Fake = Fake(&[Offer::Primary, Offer::Unique, Offer::Values]);
-
-impl EditSql for Fake {
-    fn offers(&self) -> &'static [Offer] {
-        self.0
-    }
-
-    fn exactness(&self, c: &ColumnInfo) -> Exactness {
-        match c.kind {
-            ValueKind::Float => Exactness::Inexact(Inexact::Approximate),
-            ValueKind::Json => Exactness::Inexact(Inexact::Document),
-            ValueKind::Other => Exactness::Inexact(Inexact::Unknown),
-            _ => Exactness::Exact,
-        }
-    }
-}
+use super::fake::{ALL, Fake};
 
 const PG: Dialect = Dialect::Postgres;
 
@@ -324,12 +305,12 @@ fn the_formats_offers_are_taken_in_its_order() {
     let cols = [int("id", 1), col("email", ValueKind::Text, Some(2))];
     let k = catalog(&["id", "email"]);
     let src = source(PG, Some(&k), &cols, "SELECT * FROM app.t").unwrap();
-    let t = src.target(&s, &Fake(&[Offer::Unique, Offer::Primary])).unwrap();
+    let t = src.target(&s, &Fake::offering(&[Offer::Unique, Offer::Primary])).unwrap();
     assert_eq!(t.identity, Identity::Key { primary: false, columns: vec![1] });
-    let t = src.target(&s, &Fake(&[Offer::Values])).unwrap();
+    let t = src.target(&s, &Fake::offering(&[Offer::Values])).unwrap();
     assert_eq!(t.identity, Identity::Values { columns: vec![0, 1], duplicates: Duplicates::Refuse }, "a keyed table");
     let keyless = table(&[("id", true), ("email", true)], None);
-    assert_eq!(src.target(&keyless, &Fake(&[Offer::Primary])), Err(ReadOnly::NoIdentity));
+    assert_eq!(src.target(&keyless, &Fake::offering(&[Offer::Primary])), Err(ReadOnly::NoIdentity));
 }
 
 #[test]

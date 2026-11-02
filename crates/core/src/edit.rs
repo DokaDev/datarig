@@ -14,15 +14,24 @@
 //!    anything but a projection of one table's rows is read-only.
 //! 2. [`EditSource::target`]: with the table's structure, what each column allows and how a row
 //!    is found ([`Identity`]), in the order the format prefers.
+//!
+//! The user's changes collect in an [`EditBatch`] on top of the rows as read; [`plan`] turns
+//! them into the statements of one Apply, each with the count it must give.
 
+mod batch;
+mod plan;
 mod sql;
 mod target;
 
-pub use sql::{ColumnInfo, EditSql, Exactness, Inexact, Offer};
+pub use batch::{Counts, Draft, EditBatch, RowEdit};
+pub use plan::{Choice, Expect, Facts, Origin, Plan, PlanError, Step, Where, count_statements, plan};
+pub use sql::{ColumnInfo, EditSql, Exactness, Inexact, Offer, Scope, Value};
 pub use target::{
     ColumnReason, Duplicates, EditSource, EditTarget, Identity, ReadOnly, SourceColumn, TableColumn, TableRef, Write,
     source,
 };
 
+#[cfg(test)]
+mod fake;
 #[cfg(test)]
 mod tests;

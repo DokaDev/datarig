@@ -210,6 +210,15 @@ pub struct EditTarget {
 }
 
 impl EditTarget {
+    /// The result columns that compare exactly, each table column once (its first copy).
+    pub fn exact_columns(&self) -> Vec<usize> {
+        fn exact(c: &Option<TableColumn>) -> Option<&str> {
+            c.as_ref().filter(|c| c.exact == Exactness::Exact).map(|c| c.column.name.as_str())
+        }
+        let first = |i: usize, n: &str| self.columns[..i].iter().all(|o| exact(o) != Some(n));
+        (0..self.columns.len()).filter(|&i| exact(&self.columns[i]).is_some_and(|n| first(i, n))).collect()
+    }
+
     /// Whether `w` may set result column `i`, and why not.
     pub fn allows(&self, i: usize, w: Write) -> Result<&TableColumn, ColumnReason> {
         let c = self.columns.get(i).and_then(Option::as_ref).ok_or(ColumnReason::Computed)?;
