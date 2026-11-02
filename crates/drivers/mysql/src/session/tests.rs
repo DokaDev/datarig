@@ -1270,6 +1270,9 @@ async fn an_apply_whose_rollback_is_refused_cuts_the_connection() {
     refused.extend_from_slice(&1180u16.to_le_bytes());
     refused.extend_from_slice(b"#HY000Got error during ROLLBACK");
     server.write_all(&packet(1, &refused)).await.unwrap();
+    // Asked whether a transaction is still open: it is.
+    assert_eq!(read_packet(&mut server).await.expect("a ping"), [0x0e]);
+    server.write_all(&ok_packet(0x0003)).await.unwrap();
     let after = sent_next(&mut server).await;
     assert!(after.is_none(), "nothing sent after the refused rollback: {after:?}");
     tokio::time::timeout(std::time::Duration::from_secs(5), session).await.expect("the session ends").unwrap();
@@ -1278,6 +1281,75 @@ async fn an_apply_whose_rollback_is_refused_cuts_the_connection() {
     assert_eq!(applied(&evs), [count], "{evs:?}");
     assert!(!evs.iter().any(|e| matches!(e, DbEvent::Block(true) | DbEvent::TxOpen(true))), "{evs:?}");
     assert!(matches!(evs.last(), Some(DbEvent::Lost { error: DbError::ApplyNotUndone })), "{evs:?}");
+    kills.abort();
+}
+
+/// A step that deadlocks inside the user's transaction: the server rolled all of it back, so
+/// going back to the savepoint fails (it went with it). Nothing is kept: the session asks, finds
+/// no transaction open, says the server ended it, and goes on (it is not lost).
+#[tokio::test(start_paused = true)]
+async fn an_apply_whose_step_deadlocks_in_an_open_transaction_keeps_the_session() {
+    use datarig_core::driver::{ApplyError, DbCommand, DbEvent, PagingMode, ServerEnd, TxRule};
+    let Faked { mut server, commands, mut events, session, kills, .. } = faked().await;
+    // The user's transaction is open.
+    let open = "INSERT INTO shop.t VALUES (2)";
+    commands
+        .send(DbCommand::Execute { id: 9, statements: vec![open.into()], paging: PagingMode::NoHold, tx: TxRule::Auto })
+        .unwrap();
+    assert_eq!(next_request(&mut server).await, open);
+    server.write_all(&ok_packet(0x0003)).await.unwrap();
+    commands.send(apply_command()).unwrap();
+    assert_eq!(next_request(&mut server).await, "SAVEPOINT datarig_apply");
+    server.write_all(&ok_packet(0x0003)).await.unwrap();
+    assert!(next_request(&mut server).await.starts_with("SELECT 1 FROM"));
+    server.write_all(&one_row()).await.unwrap();
+    assert!(next_request(&mut server).await.starts_with("UPDATE"));
+    let err = |code: u16, msg: &[u8]| {
+        let mut p = vec![0xff];
+        p.extend_from_slice(&code.to_le_bytes());
+        p.extend_from_slice(msg);
+        packet(1, &p)
+    };
+    server.write_all(&err(1213, b"#40001Deadlock found when trying to get lock")).await.unwrap();
+    assert_eq!(next_request(&mut server).await, "ROLLBACK TO SAVEPOINT datarig_apply");
+    server.write_all(&err(1305, b"#42000SAVEPOINT datarig_apply does not exist")).await.unwrap();
+    // Asked whether a transaction is open (a ping): none.
+    for _ in 0..2 {
+        let ping = read_packet(&mut server).await.expect("a ping");
+        assert_eq!(ping, [0x0e], "COM_PING");
+        server.write_all(&ok_packet(0x0002)).await.unwrap();
+    }
+    let evs = until_applied(&mut events).await;
+    let failure = applied(&evs).pop().unwrap().unwrap_err();
+    assert_eq!(failure.step, Some(1));
+    assert!(matches!(&failure.why, ApplyError::Db(DbError::Server(m)) if m.contains("1213")), "{failure:?}");
+    let mut more = Vec::new();
+    while let Ok(Some(ev)) = tokio::time::timeout(std::time::Duration::from_secs(30), events.recv()).await {
+        let done = matches!(ev, DbEvent::Block(false));
+        more.push(ev);
+        if done {
+            break;
+        }
+    }
+    assert!(
+        more.iter().any(|e| matches!(e, DbEvent::TxClosedBy { id: 1, how: ServerEnd::RolledBack })),
+        "{evs:?} {more:?}"
+    );
+    assert!(more.iter().any(|e| matches!(e, DbEvent::Block(false))), "{more:?}");
+    // The session goes on: the next statement is sent.
+    let next = "SELECT 1";
+    commands
+        .send(DbCommand::Execute {
+            id: 10,
+            statements: vec![next.into()],
+            paging: PagingMode::NoHold,
+            tx: TxRule::Auto,
+        })
+        .unwrap();
+    let sent = next_request(&mut server).await;
+    assert!(sent.contains("SELECT") || sent.contains("sql_select_limit"), "{sent}");
+    drop(commands);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), session).await;
     kills.abort();
 }
 

@@ -16,6 +16,7 @@ use crate::session::my_error;
 use datarig_core::driver::{AppliedStep, ApplyError, ApplyFailure, ApplyTx, DbError, DbEvent};
 use datarig_core::edit::{Expect, Step};
 use mysql_async::Conn;
+use mysql_async::consts::StatusFlags;
 use mysql_async::prelude::Queryable;
 use std::sync::atomic::Ordering;
 
@@ -166,13 +167,13 @@ pub(super) async fn apply(
         }
         let undo =
             if mode == Mode::Savepoint { format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}") } else { ROLLBACK.to_string() };
-        let undone = own(conn, link, &undo).await?.is_ok();
-        if mode == Mode::Savepoint && undone {
+        let undone = undone(conn, link, &undo).await?;
+        if mode == Mode::Savepoint && undone == Undone::Ran {
             // Gone back to it: what the steps did is undone, whether the release works or not.
             let _ = own(conn, link, &format!("RELEASE SAVEPOINT {SAVEPOINT}")).await?;
         }
         answer(Err(failure));
-        if !undone {
+        if undone == Undone::Unsure {
             return Err(not_undone(link));
         }
         // The server may have rolled the whole transaction back (a deadlock): the state as it
@@ -190,9 +191,9 @@ pub(super) async fn apply(
                 if e.is_fatal() {
                     return lost_or(e, answer);
                 }
-                let undone = own(conn, link, &format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}")).await?.is_ok();
+                let undone = undone(conn, link, &format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}")).await?;
                 answer(Err(fail(None, my_error(&e))));
-                if !undone {
+                if undone == Undone::Unsure {
                     return Err(not_undone(link));
                 }
                 if let Some(error) = after(conn, link, env, s, "", false, true, false).await? {
@@ -210,9 +211,9 @@ pub(super) async fn apply(
             }
             // Refused: the server says what it left, and it is rolled back.
             Err(e) => {
-                let undone = own(conn, link, ROLLBACK).await?.is_ok();
+                let undone = undone(conn, link, ROLLBACK).await?;
                 answer(Err(fail(None, my_error(&e))));
-                if !undone {
+                if undone == Undone::Unsure {
                     return Err(not_undone(link));
                 }
             }
@@ -227,6 +228,35 @@ pub(super) async fn apply(
         }
     }
     Ok(())
+}
+
+/// Undo what the steps did with `sql` (a rollback, or going back to the savepoint): whether
+/// nothing of it is left. When the server refuses it, it is asked whether a transaction is still
+/// open: none means the server rolled all of it back already (a deadlock, a lock wait timeout
+/// under `innodb_rollback_on_timeout`: the savepoint went with it), and nothing is kept; one
+/// open, or no answer, means it may be.
+async fn undone(conn: &mut Conn, link: &mut Link, sql: &str) -> Result<Undone, Closed> {
+    let closed =
+        |c: &Conn| c.last_ok_packet().is_some_and(|p| !p.status_flags().contains(StatusFlags::SERVER_STATUS_IN_TRANS));
+    match own(conn, link, sql).await? {
+        Ok(()) => Ok(Undone::Ran),
+        Err(e) if e.is_fatal() => Ok(Undone::Unsure),
+        Err(_) => Ok(match link.guard(None, conn.ping()).await? {
+            Ok(()) if closed(conn) => Undone::Gone,
+            _ => Undone::Unsure,
+        }),
+    }
+}
+
+/// What became of an undo ([`undone`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Undone {
+    /// It ran.
+    Ran,
+    /// It failed, and no transaction is open: the server rolled it back already.
+    Gone,
+    /// It failed, and a transaction may still hold what the steps did.
+    Unsure,
 }
 
 /// What the steps did could not be undone for sure (the server refused the rollback): the
