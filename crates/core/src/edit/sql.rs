@@ -2,6 +2,12 @@
 //! of its statements. The planner (`plan`) is the only caller of the statement builders, and it
 //! checks every statement they write before it keeps it.
 
+mod mysql;
+mod pg;
+
+pub use mysql::MySql;
+pub use pg::Postgres;
+
 use super::plan::Where;
 use super::target::{TableColumn, TableRef};
 use crate::driver::ValueKind;
@@ -128,4 +134,12 @@ pub trait EditSql {
     /// Insert one row into `t` with `cells` (column, SQL value); the other columns take their
     /// defaults (none given: every column does).
     fn insert(&self, t: &TableRef, cells: &[(&TableColumn, String)]) -> String;
+}
+
+/// The SQL of format `f`: one writer per format, chosen here and nowhere else.
+pub fn format(f: crate::driver::EditFormat) -> Box<dyn EditSql> {
+    match f {
+        crate::driver::EditFormat::Postgres => Box::new(Postgres),
+        crate::driver::EditFormat::MySql(m) => Box::new(MySql(m)),
+    }
 }
