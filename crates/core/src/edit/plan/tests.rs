@@ -343,20 +343,21 @@ fn every_write_of_any_batch_is_one_statement_with_a_condition_on_the_rows_identi
 
 #[test]
 fn only_the_planner_asks_a_format_for_an_update_or_a_delete_and_it_names_no_format() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/edit");
-    let mut files = vec![format!("{dir}.rs")];
-    let mut stack = vec![std::path::PathBuf::from(dir)];
+    use std::path::{Path, PathBuf};
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("edit");
+    let mut files = vec![dir.with_extension("rs")];
+    let mut stack = vec![dir.clone()];
     while let Some(d) = stack.pop() {
         for e in std::fs::read_dir(&d).unwrap() {
             let p = e.unwrap().path();
             if p.is_dir() {
                 stack.push(p);
             } else if p.extension().is_some_and(|x| x == "rs") && !p.ends_with("tests.rs") {
-                files.push(p.to_string_lossy().into_owned());
+                files.push(p);
             }
         }
     }
-    let callers: Vec<&String> = files
+    let callers: Vec<&PathBuf> = files
         .iter()
         .filter(|p| {
             let s = std::fs::read_to_string(p).unwrap();
@@ -370,7 +371,7 @@ fn only_the_planner_asks_a_format_for_an_update_or_a_delete_and_it_names_no_form
             })
         })
         .collect();
-    assert_eq!(callers, [&format!("{dir}/plan.rs")]);
-    let planner = std::fs::read_to_string(format!("{dir}/plan.rs")).unwrap();
+    assert_eq!(callers, [&dir.join("plan.rs")]);
+    let planner = std::fs::read_to_string(dir.join("plan.rs")).unwrap();
     assert!(!planner.contains("EditFormat"), "the planner is the same for every format");
 }
