@@ -391,7 +391,7 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
         format!("CREATE TYPE {s}.mood AS ENUM ('sad', 'ok', 'happy')"),
         format!("CREATE DOMAIN {s}.dmood AS {s}.mood"),
         format!("CREATE TABLE {s}.moods (m {s}.mood, d {s}.dmood, ms {s}.mood[], c text COLLATE \"C\")"),
-        format!("CREATE TABLE {s}.dups (v int NOT NULL)"),
+        format!("CREATE TABLE {s}.dups (v int NOT NULL, w int UNIQUE DEFERRABLE)"),
         format!("INSERT INTO {s}.dups VALUES (1), (1)"),
         format!(
             "CREATE TABLE {s}.parent (a int, b int, code text, PRIMARY KEY (a, b), CONSTRAINT parent_code_key UNIQUE (code))"
@@ -477,7 +477,7 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
     assert_eq!(collations, [None, None, None, Some(c)]);
     let dups = read("dups").await.expect("dups");
     let valid: Vec<(&str, bool, bool)> = dups.indexes.iter().map(|x| (x.name.as_str(), x.unique, x.valid)).collect();
-    assert_eq!(valid, [("dups_v", true, false)]);
+    assert_eq!(valid, [("dups_v", true, false), ("dups_w_key", true, false)], "a deferrable key may not hold");
     let child = read("child").await.expect("child");
     let names = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let col = |name: &str, ty: &str, not_null: bool, default: Option<&str>, fill: ColumnFill| StructureColumn {

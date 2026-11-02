@@ -55,7 +55,9 @@ pub trait EditSql {
     /// The ways it finds a row again, in the order it prefers them.
     fn offers(&self) -> &'static [Offer];
 
-    /// Whether values of column `c` compare exactly. A type it does not know is
-    /// [`Inexact::Unknown`]: an allowlist.
+    /// Whether values of column `c` compare exactly: the format's statements find a row by
+    /// comparing such a value byte for byte (as stored), never by the column's collation, so a
+    /// value matches only the rows that hold that very value, at least as finely as any unique
+    /// index compares. A type it does not know is [`Inexact::Unknown`]: an allowlist.
     fn exactness(&self, c: &ColumnInfo) -> Exactness;
 }

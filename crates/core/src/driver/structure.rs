@@ -218,9 +218,11 @@ pub struct Index {
     pub primary: bool,
     /// It backs a constraint (the primary key, a unique or an exclusion constraint).
     pub constraint: bool,
-    /// The server uses it, and a unique one holds: PostgreSQL leaves an index invalid when
-    /// `CREATE INDEX CONCURRENTLY` fails (a unique one on values that are not unique), and a
-    /// partitioned table's until every partition has its own.
+    /// The server uses it, and a unique one holds after every statement: PostgreSQL leaves an
+    /// index invalid when `CREATE INDEX CONCURRENTLY` fails (a unique one on values that are not
+    /// unique), and a partitioned table's until every partition has its own; a unique one of a
+    /// `DEFERRABLE` constraint holds only at its check (the commit, when deferred), so within a
+    /// transaction two rows may share a key.
     pub valid: bool,
     /// The server's definition (`CREATE INDEX …`).
     pub definition: String,

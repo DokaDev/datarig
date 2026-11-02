@@ -73,7 +73,7 @@ macro_rules! structure_parts {
     WHERE con.conrelid = rel.oid AND con.contype IN ('p', 'f', 'u', 'c')),
   'indexes', (
     SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
-      'name', ic.relname, 'unique', i.indisunique, 'primary', i.indisprimary, 'valid', i.indisvalid,
+      'name', ic.relname, 'unique', i.indisunique, 'primary', i.indisprimary, 'valid', i.indisvalid AND i.indimmediate,
       'constraint', EXISTS (SELECT 1 FROM pg_catalog.pg_constraint x
         WHERE x.conrelid = i.indrelid AND x.conindid = i.indexrelid AND x.contype IN ('p', 'u', 'x')),
       'method', am.amname,
