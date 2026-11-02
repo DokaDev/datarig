@@ -73,8 +73,12 @@ pub enum Scope {
 }
 
 /// The SQL of one edit format. Its answers depend on the format alone (and the column asked
-/// about), never on the session. The statement builders write one statement each and use the
-/// condition they are given as it is: the planner checks both.
+/// about), never on the session. The statement builders write one statement each, start it as
+/// `UPDATE <table> SET `, `DELETE FROM <table> WHERE ` or `INSERT INTO <table> ` (one space
+/// each, the table as [`EditSql::table`] writes it), and end a write with `WHERE <condition>`
+/// as it was given and one of its [`EditSql::tails`]: the planner checks all of it. Identifiers
+/// are best always quoted: a bare one that is a key word (`update`, `from`) makes the planner
+/// refuse the statement.
 pub trait EditSql {
     /// The ways it finds a row again, in the order it prefers them.
     fn offers(&self) -> &'static [Offer];
@@ -87,6 +91,9 @@ pub trait EditSql {
 
     /// The language its statements are written in (the planner reads them back in it).
     fn language(&self) -> Language;
+
+    /// Table `t` as its statements name it, exactly (the planner finds it there).
+    fn table(&self, t: &TableRef) -> String;
 
     /// Table column `name` as an identifier.
     fn column(&self, name: &str) -> String;

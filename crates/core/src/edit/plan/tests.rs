@@ -218,9 +218,11 @@ fn a_statement_that_is_not_what_it_must_be_is_an_internal_error_and_nothing_is_p
     d.delete(&[1], orig);
     let writes =
         [Broken::NoWhere, Broken::AlwaysTrue, Broken::Two, Broken::Widened, Broken::Commented, Broken::Subquery];
-    for broken in writes.into_iter().chain([Broken::WritingCheck, Broken::CommittingCheck, Broken::Swapped]) {
-        // A swapped builder breaks only updates.
-        let batches: &[&EditBatch] = if broken == Broken::Swapped { &[&b] } else { &[&b, &d] };
+    let others = [Broken::WritingCheck, Broken::CommittingCheck, Broken::Swapped, Broken::OtherTable, Broken::Joined];
+    for broken in writes.into_iter().chain(others) {
+        // A swapped or joined builder breaks only updates.
+        let only_updates = matches!(broken, Broken::Swapped | Broken::Joined);
+        let batches: &[&EditBatch] = if only_updates { &[&b] } else { &[&b, &d] };
         for batch in batches {
             let got = plan_with(&keyed(), batch, &Fake::broken(broken), &[], &[]);
             assert!(matches!(got, Err(PlanError::Internal(_))), "{broken:?}: {got:?}");
@@ -238,6 +240,33 @@ fn a_statement_that_is_not_what_it_must_be_is_an_internal_error_and_nothing_is_p
     assert!(plan_with(&t, &b, &ALL, &[(1, 2)], &[(1, Choice::One)]).is_ok());
     let got = plan_with(&t, &b, &Fake::broken(Broken::Widened), &[(1, 2)], &[(1, Choice::One)]);
     assert!(matches!(got, Err(PlanError::Internal(_))), "{got:?}");
+}
+
+#[test]
+fn names_that_are_key_words_and_values_that_look_like_the_condition_are_planned() {
+    let mut t = keyed();
+    t.columns[1].as_mut().unwrap().column.name = "update".into();
+    t.columns[2].as_mut().unwrap().column.name = "delete".into();
+    let mut b = EditBatch::new();
+    b.set(&[(1, 1)], &text("id IS NOT DISTINCT FROM '1'"), orig);
+    b.add(1, None, vec![Value::Default, text("from"), Value::Null, Value::Default]);
+    let p = plan_with(&t, &b, &ALL, &[], &[]).unwrap();
+    assert_eq!(
+        p.steps[1].sql,
+        "UPDATE app.t SET update = 'id IS NOT DISTINCT FROM ''1''' WHERE id IS NOT DISTINCT FROM '1' AND update IS NOT DISTINCT FROM 'n1'"
+    );
+    assert_eq!(p.steps[2].sql, "INSERT INTO app.t (update, delete) VALUES ('from', NULL)");
+}
+
+#[test]
+fn a_table_name_is_read_back_as_the_server_reads_it() {
+    let mut b = EditBatch::new();
+    b.set(&[(1, 1)], &text("x"), orig);
+    for (schema, name, ok) in [("app", "t", true), ("App", "T", true), ("a.b", "it's \"q\"", true)] {
+        let mut t = keyed();
+        t.table = TableRef { schema: schema.into(), name: name.into() };
+        assert_eq!(plan_with(&t, &b, &ALL, &[], &[]).is_ok(), ok, "{schema}.{name}");
+    }
 }
 
 #[test]

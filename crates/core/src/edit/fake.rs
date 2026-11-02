@@ -32,6 +32,10 @@ pub enum Broken {
     Subquery,
     /// A `DELETE` asked for an `UPDATE`.
     Swapped,
+    /// Another table's name in every statement.
+    OtherTable,
+    /// An `UPDATE` that joins another table and sets its column.
+    Joined,
 }
 
 pub struct Fake {
@@ -56,10 +60,6 @@ impl Fake {
 const D: Dialect = Dialect::Postgres;
 
 impl Fake {
-    fn table(&self, t: &TableRef) -> String {
-        format!("{}.{}", D.quote_ident(&t.schema), D.quote_ident(&t.name))
-    }
-
     /// `w` as the statement holds it: as given, unless broken so.
     fn cond(&self, w: &Where) -> String {
         match self.broken {
@@ -106,6 +106,13 @@ impl EditSql for Fake {
         Language::Sql(D)
     }
 
+    fn table(&self, t: &TableRef) -> String {
+        if self.broken == Broken::OtherTable {
+            return "app.other".into();
+        }
+        format!("{}.{}", D.quote_ident(&t.schema), D.quote_ident(&t.name))
+    }
+
     fn column(&self, name: &str) -> String {
         D.quote_ident(name)
     }
@@ -147,7 +154,9 @@ impl EditSql for Fake {
             return self.delete(t, w, scope);
         }
         let set: Vec<String> = set.iter().map(|(c, v)| format!("{} = {v}", self.column(&c.column.name))).collect();
-        Some(format!("UPDATE {} SET {}{}{}", self.table(t), set.join(", "), self.scoped(t, w, scope)?, self.tail()))
+        let set =
+            if self.broken == Broken::Joined { format!("{} FROM app.other", set.join(", ")) } else { set.join(", ") };
+        Some(format!("UPDATE {} SET {set}{}{}", self.table(t), self.scoped(t, w, scope)?, self.tail()))
     }
 
     fn delete(&self, t: &TableRef, w: &Where, scope: Scope) -> Option<String> {

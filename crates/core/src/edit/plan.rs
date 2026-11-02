@@ -13,7 +13,7 @@
 
 use super::batch::{Counts, EditBatch, RowEdit};
 use super::sql::{EditSql, Exactness, Scope, Value};
-use super::target::{ColumnReason, Duplicates, EditTarget, Identity, Write};
+use super::target::{ColumnReason, Duplicates, EditTarget, Identity, TableRef, Write};
 use crate::sql::dialect::Language;
 use crate::sql::lexer::{Tok, Token, lex_in};
 use crate::sql::risk::{Class, Classifier};
@@ -174,7 +174,7 @@ pub fn count_statements(
     for (row, e) in b.rows() {
         let w = locate(t, row, e, f, whole)?;
         let sql = f.count(&t.table, &w);
-        verify(f, &sql, Kind::Count(&w))?;
+        verify(f, &t.table, &sql, Kind::Count(&w))?;
         out.push((row, sql));
     }
     Ok(out)
@@ -204,7 +204,7 @@ pub fn plan(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Re
             },
         };
         let check = f.check(&t.table, &w);
-        verify(f, &check, Kind::Check(&w))?;
+        verify(f, &t.table, &check, Kind::Check(&w))?;
         checks.push(Step { sql: check, expect: Expect::Rows(n), origin });
         let affected = Expect::Affected(if scope == Scope::One { 1 } else { n });
         let write = if e.delete {
@@ -223,7 +223,7 @@ pub fn plan(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Re
         };
         let sql = write.ok_or(PlanError::NoOneOfK { row })?;
         let kind = if e.delete { Kind::Delete(&w, scope) } else { Kind::Update(&w, scope) };
-        verify(f, &sql, kind)?;
+        verify(f, &t.table, &sql, kind)?;
         let step = Step { sql, expect: affected, origin };
         if e.delete { deletes.push(step) } else { updates.push(step) }
     }
@@ -238,7 +238,7 @@ pub fn plan(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Re
             cells.push((col, f.value(col, v)));
         }
         let sql = f.insert(&t.table, &cells);
-        verify(f, &sql, Kind::Insert)?;
+        verify(f, &t.table, &sql, Kind::Insert)?;
         inserts.push(Step { sql, expect: Expect::Affected(1), origin });
     }
     let steps = checks.into_iter().chain(deletes).chain(updates).chain(inserts).collect();
@@ -260,7 +260,7 @@ enum Kind<'a> {
 /// Read `sql` back in the format's language: one statement, without comments, of the kind it
 /// must be, a read that changes nothing or a write of that kind; an `UPDATE` or a `DELETE` of
 /// the shape [`shaped`] allows.
-fn verify(f: &dyn EditSql, sql: &str, kind: Kind) -> Result<(), PlanError> {
+fn verify(f: &dyn EditSql, t: &TableRef, sql: &str, kind: Kind) -> Result<(), PlanError> {
     let lang = f.language();
     let Language::Sql(d) = lang;
     let bad = || PlanError::Internal(sql.to_string());
@@ -268,27 +268,57 @@ fn verify(f: &dyn EditSql, sql: &str, kind: Kind) -> Result<(), PlanError> {
     let noise = |t: &Token| {
         matches!(t.kind, Tok::LineComment | Tok::BlockComment | Tok::ExecComment | Tok::Directive | Tok::Semi)
     };
-    if split_in(sql, d).len() != 1 || toks.iter().any(noise) {
+    if split_in(sql, d).len() != 1 || toks.iter().any(noise) || !names(f, t) {
         return Err(bad());
     }
     let first = toks.first().filter(|t| t.is_word()).map(|t| t.text(sql).to_ascii_uppercase()).unwrap_or_default();
     let r = Classifier::classify_once(lang, sql);
+    // A read of the table's rows that `w` matches.
+    let reads = |w: &Where| sql.contains(&format!(" FROM {} WHERE {}", f.table(t), w.as_str()));
     let ok = match kind {
-        Kind::Count(w) => first == "SELECT" && r.class == Class::Read && !r.writes && sql.contains(w.as_str()),
-        Kind::Check(w) => {
-            first == "SELECT" && matches!(r.class, Class::Read | Class::Write) && !r.writes && sql.contains(w.as_str())
+        Kind::Count(w) => first == "SELECT" && r.class == Class::Read && !r.writes && reads(w),
+        Kind::Check(w) => first == "SELECT" && matches!(r.class, Class::Read | Class::Write) && !r.writes && reads(w),
+        Kind::Update(w, scope) => {
+            let head = format!("UPDATE {} SET ", f.table(t));
+            // What it sets: values only, from no other table.
+            let set = sql.strip_prefix(&head).and_then(|rest| rest.find(" WHERE ").map(|i| &rest[..i]));
+            let plain = set.is_some_and(|set| !has_word(set, d, &["FROM", "JOIN", "USING", "SELECT", "WHERE"]));
+            plain && write(&r) && shaped(f, sql, w, scope)
         }
-        Kind::Update(w, scope) => first == "UPDATE" && write(&r) && shaped(f, sql, w, scope),
-        Kind::Delete(w, scope) => first == "DELETE" && write(&r) && shaped(f, sql, w, scope),
+        Kind::Delete(w, scope) => {
+            sql.starts_with(&format!("DELETE FROM {} WHERE ", f.table(t))) && write(&r) && shaped(f, sql, w, scope)
+        }
         Kind::Insert => {
-            let other = ["WHERE", "UPDATE", "DELETE", "SELECT"];
-            first == "INSERT"
-                && r.writes
-                && r.class == Class::Write
-                && !toks.iter().any(|t| t.is_word() && other.iter().any(|o| t.text(sql).eq_ignore_ascii_case(o)))
+            let rest = sql.strip_prefix(&format!("INSERT INTO {} ", f.table(t)));
+            rest.is_some_and(|rest| !has_word(rest, d, &["SELECT", "WHERE"])) && r.writes && r.class == Class::Write
         }
     };
     if ok { Ok(()) } else { Err(bad()) }
+}
+
+/// The format's name of table `t` ([`EditSql::table`]) is `t`'s, as the server reads it: a schema,
+/// a dot and a name, each quoted and unquoted to the catalog's name, or bare and folded to it.
+fn names(f: &dyn EditSql, t: &TableRef) -> bool {
+    let Language::Sql(d) = f.language();
+    let text = f.table(t);
+    let toks: Vec<Token> = lex_in(&text, d).into_iter().filter(|x| !x.is_trivia()).collect();
+    let ident = |x: &Token| match x.kind {
+        Tok::QuotedIdent => d.unquote(x.text(&text)),
+        Tok::Ident | Tok::Keyword => Some(d.fold(x.text(&text))),
+        _ => None,
+    };
+    match toks.as_slice() {
+        [s, dot, n] if dot.kind == Tok::Dot => {
+            ident(s).is_some_and(|s| s == t.schema) && ident(n).is_some_and(|n| n == t.name)
+        }
+        _ => false,
+    }
+}
+
+/// `text` (in dialect `d`) has one of `words` as a word of its own (not in a string or a quoted
+/// name).
+fn has_word(text: &str, d: crate::sql::dialect::Dialect, words: &[&str]) -> bool {
+    lex_in(text, d).iter().any(|t| t.is_word() && words.iter().any(|w| t.text(text).eq_ignore_ascii_case(w)))
 }
 
 /// A write with a condition the classifier finds reads a column.
@@ -296,16 +326,17 @@ fn write(r: &crate::sql::risk::Risk) -> bool {
     r.class == Class::Write && r.writes && r.no_where.is_none()
 }
 
-/// The condition `w` is what limits the write: it is in `sql` once, right after a `WHERE`, and
-/// what follows it is one of the format's own ends ([`EditSql::tails`]); outside it the text has
-/// no `AND`, `OR` or `NOT`, and one `WHERE` (two for one of several rows, whose second is in the
-/// subquery that picks the row).
+/// The condition `w` is what limits the write: it is at the end, right after a `WHERE`, but for
+/// one of the format's own ends ([`EditSql::tails`]); the rest of the text has no `AND`, `OR` or
+/// `NOT` of its own (a second copy of the condition would), and one `WHERE` (two for one of
+/// several rows, whose second is in the subquery that picks the row).
 fn shaped(f: &dyn EditSql, sql: &str, w: &Where, scope: Scope) -> bool {
     let Language::Sql(d) = f.language();
     let w = w.as_str();
-    let Some(at) = sql.find(w) else { return false };
+    // The last: a value set may hold the condition's text in a literal.
+    let Some(at) = sql.rfind(w) else { return false };
     let (before, after) = (&sql[..at], &sql[at + w.len()..]);
-    if after.contains(w) || !before.ends_with("WHERE ") || !f.tails().contains(&after) {
+    if !before.ends_with(" WHERE ") || !f.tails().contains(&after) {
         return false;
     }
     let words = |part: &str| -> Vec<String> {
