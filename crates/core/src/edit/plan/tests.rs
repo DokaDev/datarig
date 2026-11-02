@@ -216,13 +216,40 @@ fn a_statement_that_is_not_what_it_must_be_is_an_internal_error_and_nothing_is_p
     b.set(&[(1, 1)], &text("x"), orig);
     let mut d = EditBatch::new();
     d.delete(&[1], orig);
-    for broken in [Broken::NoWhere, Broken::AlwaysTrue, Broken::Two, Broken::Widened, Broken::WritingCheck] {
-        for batch in [&b, &d] {
+    let writes =
+        [Broken::NoWhere, Broken::AlwaysTrue, Broken::Two, Broken::Widened, Broken::Commented, Broken::Subquery];
+    for broken in writes.into_iter().chain([Broken::WritingCheck, Broken::CommittingCheck, Broken::Swapped]) {
+        // A swapped builder breaks only updates.
+        let batches: &[&EditBatch] = if broken == Broken::Swapped { &[&b] } else { &[&b, &d] };
+        for batch in batches {
             let got = plan_with(&keyed(), batch, &Fake::broken(broken), &[], &[]);
             assert!(matches!(got, Err(PlanError::Internal(_))), "{broken:?}: {got:?}");
         }
     }
     assert!(plan_with(&keyed(), &b, &Fake::broken(Broken::No), &[], &[]).is_ok());
+    let mut n = EditBatch::new();
+    n.add(0, None, vec![Value::Default; 4]);
+    let got = plan_with(&keyed(), &n, &Fake::broken(Broken::InsertDeletes), &[], &[]);
+    assert!(matches!(got, Err(PlanError::Internal(_))), "{got:?}");
+    let got = count_statements(&by_values(Duplicates::Refuse), &b, &Fake::broken(Broken::DroppingCount), &all_whole);
+    assert!(matches!(got, Err(PlanError::Internal(_))), "{got:?}");
+    // One of several rows: the format's subquery form passes, the same shape widened does not.
+    let t = by_values(Duplicates::Choose);
+    assert!(plan_with(&t, &b, &ALL, &[(1, 2)], &[(1, Choice::One)]).is_ok());
+    let got = plan_with(&t, &b, &Fake::broken(Broken::Widened), &[(1, 2)], &[(1, Choice::One)]);
+    assert!(matches!(got, Err(PlanError::Internal(_))), "{got:?}");
+}
+
+#[test]
+fn a_row_without_all_its_values_as_read_is_never_found_by_null() {
+    for t in [keyed(), by_values(Duplicates::Refuse)] {
+        let mut b = EditBatch::new();
+        b.set(&[(1, 1)], &text("x"), |_| vec![Some("1".into())]);
+        let got = plan_with(&t, &b, &ALL, &[(1, 1)], &[]);
+        assert!(matches!(got, Err(PlanError::Internal(_))), "{got:?}");
+        let got = count_statements(&t, &b, &ALL, &all_whole);
+        assert!(matches!(got, Ok(ref v) if v.is_empty()) || matches!(got, Err(PlanError::Internal(_))), "{got:?}");
+    }
 }
 
 /// A small deterministic generator (xorshift), so the sweep needs no dependency.
@@ -304,10 +331,14 @@ fn only_the_planner_asks_a_format_for_an_update_or_a_delete_and_it_names_no_form
         .iter()
         .filter(|p| {
             let s = std::fs::read_to_string(p).unwrap();
-            s.contains("f.update(")
-                || s.contains("f.delete(")
-                || s.contains(".update(&t.table")
-                || s.contains(".delete(&t.table")
+            // A call of `update` or `delete` on anything but the format itself (`self`).
+            [".update(", ".delete("].iter().any(|call| {
+                s.match_indices(call).any(|(i, _)| {
+                    let before = &s[..i];
+                    let start = before.rfind(|c: char| !(c.is_alphanumeric() || c == '_')).map_or(0, |j| j + 1);
+                    !before[start..].is_empty() && &before[start..] != "self"
+                })
+            })
         })
         .collect();
     assert_eq!(callers, [&format!("{dir}/plan.rs")]);

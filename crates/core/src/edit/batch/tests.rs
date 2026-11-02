@@ -86,6 +86,10 @@ fn new_rows_are_placed_after_their_row_and_undo_keeps_their_ids() {
     let e = b.add(5, Some(a), vec![Value::Default; 3]);
     let order: Vec<u64> = b.drafts().iter().map(|x| x.id).collect();
     assert_eq!(order, [c, a, e, d]);
+    // Next to a new row, it is shown after that row's row, whatever row it was asked after.
+    let f = b.add(9, Some(c), vec![Value::Default; 3]);
+    assert_eq!((b.drafts()[1].id, b.drafts()[1].after), (f, 2));
+    b.undo();
     assert!(b.set_new(&[(e, 1)], &text("x")));
     assert_eq!(b.drafts()[2].cells[1], text("x"));
     assert!(b.remove_new(&[a]));

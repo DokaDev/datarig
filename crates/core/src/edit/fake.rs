@@ -20,6 +20,18 @@ pub enum Broken {
     Widened,
     /// A check that writes.
     WritingCheck,
+    /// A check that ends the transaction.
+    CommittingCheck,
+    /// A count that drops the table.
+    DroppingCount,
+    /// An insert that deletes.
+    InsertDeletes,
+    /// The condition in a comment, the write unlimited.
+    Commented,
+    /// The condition OR-ed into a wider one, in a subquery the classifier does not see through.
+    Subquery,
+    /// A `DELETE` asked for an `UPDATE`.
+    Swapped,
 }
 
 pub struct Fake {
@@ -54,6 +66,8 @@ impl Fake {
             Broken::NoWhere => String::new(),
             Broken::AlwaysTrue => " WHERE 1 = 1".into(),
             Broken::Widened => format!(" WHERE {} OR true", w.as_str()),
+            Broken::Commented => format!(" WHERE id > 0 /* WHERE {} */", w.as_str()),
+            Broken::Subquery => format!(" WHERE id IN (SELECT id FROM app.t WHERE {}) OR name IS NULL", w.as_str()),
             _ => format!(" WHERE {}", w.as_str()),
         }
     }
@@ -113,17 +127,25 @@ impl EditSql for Fake {
     }
 
     fn count(&self, t: &TableRef, w: &Where) -> String {
+        if self.broken == Broken::DroppingCount {
+            return format!("DROP TABLE {}", self.table(t));
+        }
         format!("SELECT count(*) FROM {} WHERE {}", self.table(t), w.as_str())
     }
 
     fn check(&self, t: &TableRef, w: &Where) -> String {
-        if self.broken == Broken::WritingCheck {
-            return format!("DELETE FROM {} WHERE {}", self.table(t), w.as_str());
+        match self.broken {
+            Broken::WritingCheck => return format!("DELETE FROM {} WHERE {}", self.table(t), w.as_str()),
+            Broken::CommittingCheck => return "COMMIT".into(),
+            _ => {}
         }
         format!("SELECT 1 FROM {} WHERE {} FOR UPDATE NOWAIT", self.table(t), w.as_str())
     }
 
     fn update(&self, t: &TableRef, set: &[(&TableColumn, String)], w: &Where, scope: Scope) -> Option<String> {
+        if self.broken == Broken::Swapped {
+            return self.delete(t, w, scope);
+        }
         let set: Vec<String> = set.iter().map(|(c, v)| format!("{} = {v}", self.column(&c.column.name))).collect();
         Some(format!("UPDATE {} SET {}{}{}", self.table(t), set.join(", "), self.scoped(t, w, scope)?, self.tail()))
     }
@@ -132,7 +154,14 @@ impl EditSql for Fake {
         Some(format!("DELETE FROM {}{}{}", self.table(t), self.scoped(t, w, scope)?, self.tail()))
     }
 
+    fn tails(&self) -> &'static [&'static str] {
+        &["", " LIMIT 1)"]
+    }
+
     fn insert(&self, t: &TableRef, cells: &[(&TableColumn, String)]) -> String {
+        if self.broken == Broken::InsertDeletes {
+            return format!("DELETE FROM {}", self.table(t));
+        }
         if cells.is_empty() {
             return format!("INSERT INTO {} DEFAULT VALUES", self.table(t));
         }

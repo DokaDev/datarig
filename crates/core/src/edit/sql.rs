@@ -113,6 +113,11 @@ pub trait EditSql {
     /// delete just one.
     fn delete(&self, t: &TableRef, w: &Where, scope: Scope) -> Option<String>;
 
+    /// What an `UPDATE` or a `DELETE` of its may hold after the condition it was given:
+    /// nothing, or its own end (`LIMIT 1`, the close of the subquery that picks one row,
+    /// `RETURNING *`), each exactly as it writes it.
+    fn tails(&self) -> &'static [&'static str];
+
     /// Insert one row into `t` with `cells` (column, SQL value); the other columns take their
     /// defaults (none given: every column does).
     fn insert(&self, t: &TableRef, cells: &[(&TableColumn, String)]) -> String;

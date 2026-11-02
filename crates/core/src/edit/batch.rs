@@ -154,15 +154,15 @@ impl EditBatch {
         })
     }
 
-    /// Add a new row with `cells`, shown after row `after` of the result (after new row
-    /// `next_to` when given, else after the others shown there); its id.
+    /// Add a new row with `cells`, shown after row `after` of the result, after the others shown
+    /// there; or, when `next_to` is a new row, right after it (and after its row). Its id.
     pub fn add(&mut self, after: usize, next_to: Option<u64>, cells: Vec<Value>) -> u64 {
         let id = self.next_draft;
         self.next_draft += 1;
         self.act(&[], true, |b| {
-            let at = match next_to.and_then(|n| b.drafts.iter().position(|d| d.id == n)) {
-                Some(i) => i + 1,
-                None => b.drafts.iter().rposition(|d| d.after <= after).map_or(0, |i| i + 1),
+            let (at, after) = match next_to.and_then(|n| b.drafts.iter().position(|d| d.id == n)) {
+                Some(i) => (i + 1, b.drafts[i].after),
+                None => (b.drafts.iter().rposition(|d| d.after <= after).map_or(0, |i| i + 1), after),
             };
             b.drafts.insert(at, Draft { id, after, cells });
         });
@@ -186,7 +186,8 @@ impl EditBatch {
     }
 
     /// Drop the changes of cells `cells` (row, column) and of new rows `ids` (whole), as one
-    /// action: a cell set goes back to its value as read, a row to be deleted is kept.
+    /// action: a cell set goes back to its value as read, and a row marked to be deleted is no
+    /// longer marked.
     pub fn revert(&mut self, cells: &[(usize, usize)], ids: &[u64]) -> bool {
         let rows: Vec<usize> = cells.iter().map(|(r, _)| *r).collect();
         self.act(&rows, !ids.is_empty(), |b| {
