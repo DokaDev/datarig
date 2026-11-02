@@ -83,6 +83,11 @@ pub(super) async fn apply(
         answer(Err(fail(None, DbError::ReadWriteRefused)));
         return Ok(());
     }
+    // The statements need what only MySQL 8.0.17 on has; the app does not send them otherwise.
+    if env.server.edit().is_none() {
+        answer(Err(fail(None, DbError::NotSupported)));
+        return Ok(());
+    }
     if steps.is_empty() {
         answer(Ok(Vec::new()));
         return Ok(());
@@ -111,12 +116,22 @@ pub(super) async fn apply(
     let mut done = Vec::with_capacity(steps.len());
     let mut failed = None;
     for (i, step) in steps.iter().enumerate() {
-        if i > 0 && env.asked.load(Ordering::SeqCst) {
+        // A cancel asked for, or a connection that runs nothing more (a kill not answered).
+        if env.asked.load(Ordering::SeqCst) || link.tainted() {
             failed = Some((fail(Some(i), DbError::Cancelled), None));
             break;
         }
         env.busy.store(true, Ordering::SeqCst);
-        let ran = link.guard(Some(env.killer), run_step(conn, &step.sql)).await?;
+        let ran = match link.guard(Some(env.killer), run_step(conn, &step.sql)).await {
+            Ok(ran) => ran,
+            // A kill that did not take cut the connection: the step ends cancelled all the same,
+            // and the server rolls back what is open as the connection ends.
+            Err(Closed::CancelNotTaken(why)) => {
+                answer(Err(fail(Some(i), DbError::Cancelled)));
+                return Err(Stop::Lost(DbError::CancelNotTaken(why)));
+            }
+            Err(Closed::Ui) => return Err(Stop::Closed),
+        };
         idle(env, link).await;
         match ran {
             Ok((count, _)) if count != wanted(step.expect) => {
@@ -133,6 +148,10 @@ pub(super) async fn apply(
             }
         }
     }
+    // A cancel asked for once the last step ran: nothing is kept.
+    if failed.is_none() && env.asked.load(Ordering::SeqCst) {
+        failed = Some((fail(None, DbError::Cancelled), None));
+    }
     // A connection that runs nothing more (a kill not answered) is cut at its next request:
     // nothing more reaches the server, which rolls back what is open as the connection ends.
     if link.tainted() {
@@ -147,14 +166,14 @@ pub(super) async fn apply(
         }
         let undo =
             if mode == Mode::Savepoint { format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}") } else { ROLLBACK.to_string() };
-        let undone = own(conn, link, &undo).await?;
-        if mode == Mode::Savepoint && undone.is_ok() {
-            let _ = own(conn, link, &format!("RELEASE SAVEPOINT {SAVEPOINT}")).await?;
+        let mut undone = own(conn, link, &undo).await?.is_ok();
+        if mode == Mode::Savepoint && undone {
+            undone = own(conn, link, &format!("RELEASE SAVEPOINT {SAVEPOINT}")).await?.is_ok();
         }
         answer(Err(failure));
-        // The server may have rolled the whole transaction back (a deadlock): the state as it
-        // says.
-        if mode == Mode::Savepoint
+        // The server may have rolled the whole transaction back (a deadlock), or kept one the
+        // undo did not end: the state as it says.
+        if (mode == Mode::Savepoint || !undone)
             && let Some(error) = after(conn, link, env, s, "", false, true, false).await?
         {
             return Err(Stop::Lost(error));
@@ -164,10 +183,15 @@ pub(super) async fn apply(
     match mode {
         Mode::Savepoint => {
             if let Err(e) = own(conn, link, &format!("RELEASE SAVEPOINT {SAVEPOINT}")).await? {
-                if !e.is_fatal() {
-                    let _ = own(conn, link, &format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}")).await?;
+                if e.is_fatal() {
+                    return lost_or(e, answer);
                 }
-                return lost_or(e, answer);
+                let _ = own(conn, link, &format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}")).await?;
+                answer(Err(fail(None, my_error(&e))));
+                if let Some(error) = after(conn, link, env, s, "", false, true, false).await? {
+                    return Err(Stop::Lost(error));
+                }
+                return Ok(());
             }
             answer(Ok(done));
         }
@@ -179,8 +203,11 @@ pub(super) async fn apply(
             }
             // Refused: the server says what it left, and it is rolled back.
             Err(e) => {
-                let _ = own(conn, link, ROLLBACK).await?;
+                let undone = own(conn, link, ROLLBACK).await?.is_ok();
                 answer(Err(fail(None, my_error(&e))));
+                if !undone && let Some(error) = after(conn, link, env, s, "", false, true, false).await? {
+                    return Err(Stop::Lost(error));
+                }
             }
         },
         Mode::Keep => {

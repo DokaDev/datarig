@@ -66,8 +66,8 @@ fn a_lock_wait_past_the_limit_and_an_idle_close_are_told_apart_from_other_errors
     assert!(
         matches!(server_error(4031, "HY000", "idle"), DbError::IdleSessionTimeout(m) if m == "ERROR 4031 (HY000): idle")
     );
-    // `NOWAIT` did not wait.
-    assert!(matches!(server_error(3572, "HY000", "nowait"), DbError::Server(_)));
+    // `NOWAIT` did not wait: a lock not waited for.
+    assert!(matches!(server_error(3572, "HY000", "nowait"), DbError::LockBusy(m) if m == "ERROR 3572 (HY000): nowait"));
 }
 
 #[test]
@@ -1125,6 +1125,127 @@ async fn an_explain_analyze_whose_kill_hangs_never_shows_its_transaction_open() 
         Some(DbEvent::Lost { error: DbError::CancelNotTaken(CancelFailure::StopPending(KILL_TIMEOUT)) }) => {}
         other => panic!("{other:?}"),
     }
+    kills.abort();
+}
+
+/// An Apply of a check and an update on the faked session (`Commit`): its steps and what the
+/// session sends, answered by the test.
+fn apply_command() -> datarig_core::driver::DbCommand {
+    use datarig_core::edit::{Expect, Origin, Step};
+    let step = |sql: &str, expect| Step { sql: sql.into(), expect, origin: Origin::Row(0) };
+    datarig_core::driver::DbCommand::ApplyEdits {
+        id: 1,
+        steps: vec![
+            step("SELECT 1 FROM `shop`.`t` WHERE `id` <=> 1 FOR UPDATE NOWAIT", Expect::Rows(1)),
+            step("UPDATE `shop`.`t` SET `v` = 'x' WHERE `id` <=> 1", Expect::Affected(1)),
+        ],
+        tx: datarig_core::driver::ApplyTx::Commit,
+    }
+}
+
+/// The text of the next request the session sends.
+async fn next_request(server: &mut tokio::io::DuplexStream) -> String {
+    let sent = read_packet(server).await.expect("a request");
+    String::from_utf8_lossy(&sent[1..]).into_owned()
+}
+
+/// A check's answer: one row, in a transaction.
+fn one_row() -> Vec<u8> {
+    let packets = [vec![1], column("1"), b"\x011".to_vec(), vec![0xfe, 0, 0, 0x03, 0, 0, 0]];
+    packets.iter().zip(1u8..).flat_map(|(p, seq)| packet(seq, p)).collect()
+}
+
+/// The session's events up to the Apply's answer.
+async fn until_applied(
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<datarig_core::driver::DbEvent>,
+) -> Vec<datarig_core::driver::DbEvent> {
+    let mut evs = Vec::new();
+    while let Ok(Some(ev)) = tokio::time::timeout(std::time::Duration::from_secs(30), events.recv()).await {
+        let done = matches!(ev, datarig_core::driver::DbEvent::Applied { .. });
+        evs.push(ev);
+        if done {
+            break;
+        }
+    }
+    evs
+}
+
+/// The answer of the Apply among `evs`.
+fn applied(evs: &[datarig_core::driver::DbEvent]) -> Vec<Result<(), datarig_core::driver::ApplyFailure>> {
+    evs.iter()
+        .filter_map(|e| match e {
+            datarig_core::driver::DbEvent::Applied { id: 1, result } => Some(result.clone().map(|_| ())),
+            _ => None,
+        })
+        .collect()
+}
+
+fn cancelled(step: Option<usize>) -> Result<(), datarig_core::driver::ApplyFailure> {
+    use datarig_core::driver::{ApplyError, ApplyFailure};
+    Err(ApplyFailure { step, why: ApplyError::Db(DbError::Cancelled) })
+}
+
+/// A cancel asked for before the first step was sent (while the transaction opened): the step
+/// is never sent, the transaction is rolled back, and the Apply answers cancelled.
+#[tokio::test(start_paused = true)]
+async fn an_apply_cancelled_before_its_first_step_sends_no_step_and_rolls_back() {
+    let Faked { mut server, asked, commands, mut events, session, kills, .. } = faked().await;
+    commands.send(apply_command()).unwrap();
+    assert_eq!(next_request(&mut server).await, "START TRANSACTION");
+    asked.store(true, Ordering::SeqCst);
+    server.write_all(&ok_packet(0x0003)).await.unwrap();
+    assert_eq!(next_request(&mut server).await, "ROLLBACK AND NO CHAIN NO RELEASE", "no step, no commit");
+    server.write_all(&ok_packet(0x0002)).await.unwrap();
+    let evs = until_applied(&mut events).await;
+    drop(commands);
+    tokio::time::timeout(std::time::Duration::from_secs(5), session).await.expect("the session ends").unwrap();
+    assert_eq!(applied(&evs), [cancelled(Some(0))], "{evs:?}");
+    kills.abort();
+}
+
+/// A cancel asked for while the last step ran: the transaction is rolled back instead of
+/// committed, and the Apply answers cancelled.
+#[tokio::test(start_paused = true)]
+async fn an_apply_cancelled_after_its_last_step_rolls_back_instead_of_committing() {
+    let Faked { mut server, asked, commands, mut events, session, kills, .. } = faked().await;
+    commands.send(apply_command()).unwrap();
+    assert_eq!(next_request(&mut server).await, "START TRANSACTION");
+    server.write_all(&ok_packet(0x0003)).await.unwrap();
+    assert!(next_request(&mut server).await.starts_with("SELECT 1 FROM"));
+    server.write_all(&one_row()).await.unwrap();
+    assert!(next_request(&mut server).await.starts_with("UPDATE"));
+    asked.store(true, Ordering::SeqCst);
+    // One row matched.
+    server.write_all(&packet(1, &[0, 1, 0, 0x03, 0, 0, 0])).await.unwrap();
+    assert_eq!(next_request(&mut server).await, "ROLLBACK AND NO CHAIN NO RELEASE", "never committed");
+    server.write_all(&ok_packet(0x0002)).await.unwrap();
+    let evs = until_applied(&mut events).await;
+    drop(commands);
+    tokio::time::timeout(std::time::Duration::from_secs(5), session).await.expect("the session ends").unwrap();
+    assert_eq!(applied(&evs), [cancelled(None)], "{evs:?}");
+    kills.abort();
+}
+
+/// A step whose kill was sent and never answered: the session cuts the connection (nothing more is sent: no commit, and the server rolls the transaction back as
+/// the connection ends), and the Apply answers cancelled before the session is lost.
+#[tokio::test(start_paused = true)]
+async fn an_apply_whose_kill_is_not_taken_answers_before_the_session_is_lost() {
+    use datarig_core::driver::DbEvent;
+    let Faked { mut server, killer, commands, mut events, session, kills, .. } = faked().await;
+    commands.send(apply_command()).unwrap();
+    assert_eq!(next_request(&mut server).await, "START TRANSACTION");
+    server.write_all(&ok_packet(0x0003)).await.unwrap();
+    assert!(next_request(&mut server).await.starts_with("SELECT 1 FROM"));
+    // The step never answers, nor does the user's kill.
+    killer.record(Kill::Failed(KillFailure::NotAnswered), || true);
+    let after = sent_next(&mut server).await;
+    assert!(after.is_none(), "nothing sent after the step: {after:?}");
+    tokio::time::timeout(std::time::Duration::from_secs(5), session).await.expect("the session ends").unwrap();
+    let evs: Vec<DbEvent> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    assert_eq!(applied(&evs), [cancelled(Some(0))], "{evs:?}");
+    let answer = evs.iter().position(|e| matches!(e, DbEvent::Applied { .. })).unwrap();
+    let lost = evs.iter().position(|e| matches!(e, DbEvent::Lost { error: DbError::CancelNotTaken(_) }));
+    assert!(lost.is_some_and(|l| l > answer), "answered, then lost: {evs:?}");
     kills.abort();
 }
 

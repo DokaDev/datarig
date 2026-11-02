@@ -5975,9 +5975,9 @@ async fn the_lock_wait_limit_cancels_a_statement_waiting_for_another_sessions_lo
     assert!(start.elapsed() < Duration::from_secs(10), "{:?}", start.elapsed());
     assert!(msg.contains("lock timeout"), "{msg}");
     assert_eq!(q.value(3, "SELECT 1").await, "1", "the session stays");
-    // `NOWAIT` did not wait: the server's failure as it is.
+    // `NOWAIT` did not wait: a lock not waited for, with the server's message.
     let DbEvent::Failed { error, .. } = q.run(4, &format!("{row} NOWAIT")).await else { panic!("NOWAIT") };
-    assert!(matches!(error, DbError::Server(_)), "{error:?}");
+    assert!(matches!(&error, DbError::LockBusy(m) if m.contains("could not obtain lock")), "{error:?}");
     // In a manual transaction: the run that waited goes back to its savepoint.
     let events = q.manual(5, &[&format!("INSERT INTO {s}.u VALUES (1)")], &[true]).await;
     assert_eq!(facts(&events), OPENED);

@@ -21,8 +21,9 @@ A MySQL profile has `driver = "mysql"`, and a URL starts with `mysql://` (or `ma
   text, `GEOMETRY` as bytes.
 - **Messages**: rows affected, the last insert id, warnings and the server's info line; errors
   with the server's error number and SQL state (`ERROR 1146 (42S02): …`). Rows affected by an
-  `UPDATE` are the rows it matched, as in PostgreSQL: a row set to the values it already had
-  counts too (the server's info line still says how many changed).
+  `UPDATE` (and `INSERT … ON DUPLICATE KEY UPDATE`, and `ROW_COUNT()`) are the rows it matched,
+  as in PostgreSQL: a row set to the values it already had counts too (the server's info line
+  still says how many changed).
 - **Transactions** as the server reports them after each statement. A statement that commits
   your open transaction by itself (DDL and others) is noted in Messages, and with manual commit
   asks first ([Manual commit](manual-commit.md)).

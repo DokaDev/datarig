@@ -1167,6 +1167,164 @@ mod terminal {
         assert!(matches!(rx.try_recv(), Ok(DbEvent::Page { id: 11, .. })));
         assert!(rx.try_recv().is_err());
     }
+
+    // ── an Apply's cancel paths, run at will (`apply::Hooks`) ──────────────────────────────
+
+    mod apply {
+        use super::super::super::apply::{Hooks, apply};
+        use super::{Session, TableGuard, connect, manual, pg_url};
+        use datarig_core::driver::{ApplyError, ApplyFailure, ApplyTx, DbError, DbEvent, TxStep};
+        use datarig_core::edit::{Expect, Origin, Step};
+        use std::sync::atomic::Ordering;
+
+        fn steps(table: &str) -> Vec<Step> {
+            let step = |sql: String, expect| Step { sql, expect, origin: Origin::Row(0) };
+            vec![
+                step(format!("SELECT 1 FROM {table} WHERE id = 1 FOR UPDATE NOWAIT"), Expect::Rows(1)),
+                step(format!("UPDATE {table} SET v = 'applied' WHERE id = 1 AND v = 'a'"), Expect::Affected(1)),
+            ]
+        }
+
+        impl Session {
+            /// Apply `steps` with `hooks`; every event it brought.
+            async fn apply(&mut self, steps: &[Step], tx: ApplyTx, hooks: &Hooks<'_>) -> Vec<DbEvent> {
+                use super::super::super::{Env, count_savepoint};
+                self.id += 1;
+                let env = Env {
+                    events: &self.events,
+                    token: &self.token,
+                    cancel: &self.cancel,
+                    failed: &self.failed,
+                    page_size: 10,
+                    read_only: false,
+                    own_read_only: false,
+                    each_tx: &[],
+                    path_per_tx: false,
+                    start_per_tx: 0,
+                    lock_per_tx: false,
+                    savepoint: count_savepoint(),
+                    before_bind: None,
+                };
+                let applied = apply(&self.client, &mut self.link, &env, &mut self.tx, self.id, steps, tx, false, hooks);
+                tokio::time::timeout(std::time::Duration::from_secs(20), applied).await.expect("it returns").ok();
+                let mut events = Vec::new();
+                while let Ok(ev) = self.rx.try_recv() {
+                    events.push(ev);
+                }
+                events
+            }
+        }
+
+        /// The one answer among `events`.
+        fn answer(events: &[DbEvent]) -> Result<(), ApplyFailure> {
+            let answers: Vec<_> = events
+                .iter()
+                .filter_map(|e| match e {
+                    DbEvent::Applied { result, .. } => Some(result.clone().map(|_| ())),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(answers.len(), 1, "exactly one answer: {events:?}");
+            answers[0].clone()
+        }
+
+        /// `v` of row 1, read on a connection of its own (what is committed).
+        async fn committed(url: &str, table: &str) -> String {
+            let (c, ..) = connect(url).await;
+            let rows = c.query(&format!("SELECT v FROM {table} WHERE id = 1"), &[]).await.unwrap();
+            rows[0].get(0)
+        }
+
+        async fn table(url: &str, name: &str) -> (String, TableGuard) {
+            let table = format!("public.zz_apply_{name}_{}", std::process::id());
+            let guard = TableGuard(url.to_string(), table.clone());
+            let (c, ..) = connect(url).await;
+            c.batch_execute(&format!(
+                "DROP TABLE IF EXISTS {table}; CREATE TABLE {table} (id int PRIMARY KEY, v text); \
+                 INSERT INTO {table} VALUES (1, 'a')"
+            ))
+            .await
+            .unwrap();
+            (table, guard)
+        }
+
+        fn cancelled(step: Option<usize>) -> Result<(), ApplyFailure> {
+            Err(ApplyFailure { step, why: ApplyError::Db(DbError::Cancelled) })
+        }
+
+        /// A cancel asked for before the first step: nothing is sent, nothing committed, no
+        /// transaction left open.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn a_cancel_before_the_first_step_applies_nothing() {
+            let Some(url) = pg_url("a_cancel_before_the_first_step_applies_nothing") else { return };
+            let (table, _g) = table(&url, "cancel_first").await;
+            let mut s = Session::open(&url).await;
+            let flag = s.cancel.clone();
+            let at_first = move |i: usize| {
+                if i == 0 {
+                    flag.store(true, Ordering::SeqCst);
+                }
+            };
+            let hooks = Hooks { before_step: Some(&at_first), ..Hooks::default() };
+            let events = s.apply(&steps(&table), ApplyTx::Commit, &hooks).await;
+            assert_eq!(answer(&events), cancelled(Some(0)));
+            assert_eq!(committed(&url, &table).await, "a");
+            assert!(!s.tx.block, "no transaction left open");
+        }
+
+        /// A cancel asked for once every step ran, before the commit: rolled back, not committed.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn a_cancel_after_the_last_step_rolls_back_instead_of_committing() {
+            let Some(url) = pg_url("a_cancel_after_the_last_step_rolls_back_instead_of_committing") else { return };
+            let (table, _g) = table(&url, "cancel_last").await;
+            let mut s = Session::open(&url).await;
+            let flag = s.cancel.clone();
+            let at_end = move |i: usize| {
+                if i == 2 {
+                    flag.store(true, Ordering::SeqCst);
+                }
+            };
+            let hooks = Hooks { before_step: Some(&at_end), ..Hooks::default() };
+            let events = s.apply(&steps(&table), ApplyTx::Commit, &hooks).await;
+            assert_eq!(answer(&events), cancelled(None));
+            assert_eq!(committed(&url, &table).await, "a");
+            assert!(!s.tx.block, "no transaction left open");
+        }
+
+        /// In a block opened for manual commit, a cancel during the Apply that also lands on its
+        /// undo (the undo's first request fails as a cancel does): the undo is sent again, so the
+        /// block is not aborted and keeps the earlier write, without the Apply's.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn a_cancel_that_lands_on_the_undo_still_leaves_the_block_usable() {
+            let Some(url) = pg_url("a_cancel_that_lands_on_the_undo_still_leaves_the_block_usable") else { return };
+            let (table, _g) = table(&url, "cancel_undo").await;
+            let mut s = Session::open(&url).await;
+            s.rule = manual(&[TxStep::Open]);
+            let events = s.run_all(&[&format!("INSERT INTO {table} VALUES (2, 'earlier')")], None).await;
+            assert!(events.iter().any(|e| matches!(e, DbEvent::ManualBegun { .. })), "{events:?}");
+            let flag = s.cancel.clone();
+            let at_second = move |i: usize| {
+                if i == 1 {
+                    flag.store(true, Ordering::SeqCst);
+                }
+            };
+            let hooks = Hooks {
+                before_step: Some(&at_second),
+                undo_first: Some("DO $$ BEGIN RAISE query_canceled; END $$"),
+                ..Hooks::default()
+            };
+            let events = s.apply(&steps(&table), ApplyTx::Commit, &hooks).await;
+            assert_eq!(answer(&events), cancelled(Some(1)));
+            assert!(!events.iter().any(|e| matches!(e, DbEvent::TxAborted(true))), "{events:?}");
+            assert!(s.tx.block && !s.tx.aborted, "the block is open and usable");
+            // In the block: the earlier write kept, the check's lock released with the savepoint.
+            let read = format!("SELECT string_agg(v, ',' ORDER BY id) FROM {table}");
+            let rows = s.client.query(&read, &[]).await.unwrap();
+            assert_eq!(rows[0].get::<_, String>(0), "a,earlier");
+            assert_eq!(committed(&url, &table).await, "a");
+            s.client.batch_execute("ROLLBACK").await.unwrap();
+        }
+    }
 }
 
 /// The client's side of a COPY is told from the statement's words: `STDIN` or `STDOUT` right

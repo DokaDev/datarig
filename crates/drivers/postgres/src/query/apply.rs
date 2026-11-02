@@ -51,9 +51,53 @@ fn wanted(expect: Expect) -> u64 {
     }
 }
 
+/// Tests: what happens at given points of an Apply, so the paths a cancel takes can be run at
+/// will.
+#[derive(Default)]
+pub(super) struct Hooks<'a> {
+    /// Runs before step `i` is sent, and with the number of steps once the last one ran (a test
+    /// asks for a cancel there).
+    #[cfg(test)]
+    pub(super) before_step: Option<&'a (dyn Fn(usize) + Sync)>,
+    /// Sent in front of the first undo, in its request (a statement that fails as a cancel that
+    /// landed on the undo does).
+    #[cfg(test)]
+    pub(super) undo_first: Option<&'a str>,
+    pub(super) _hooks: std::marker::PhantomData<&'a ()>,
+}
+
+impl Hooks<'_> {
+    fn before_step(&self, _i: usize) {
+        #[cfg(test)]
+        if let Some(h) = self.before_step {
+            h(_i);
+        }
+    }
+}
+
+/// Run `sql`, one of the driver's own statements that undo an Apply: again once when a cancel
+/// landed on it (a block it would leave aborted takes it then). Whether it ran.
+async fn undo(client: &Client, link: &mut Link, sql: &str, _hooks: &Hooks<'_>) -> Result<bool, Closed> {
+    #[cfg_attr(not(test), allow(unused_mut))]
+    let mut first = sql.to_string();
+    #[cfg(test)]
+    if let Some(pre) = _hooks.undo_first {
+        first = format!("{pre}; {sql}");
+    }
+    for text in [first.as_str(), sql] {
+        match link.guard(None, client.batch_execute(text)).await? {
+            Ok(()) => return Ok(true),
+            Err(e) if is_cancel(&e) => {}
+            Err(_) => return Ok(false),
+        }
+    }
+    Ok(false)
+}
+
 /// Apply `steps` for request `id` and answer with exactly one `Applied`, then the state. A
 /// session the UI closed meanwhile answers nothing; a cancel that could not be sent comes back
 /// for the caller to answer.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn apply(
     client: &Client,
     link: &mut Link,
@@ -62,6 +106,8 @@ pub(super) async fn apply(
     id: u64,
     steps: &[Step],
     rule: ApplyTx,
+    cache_off: bool,
+    hooks: &Hooks<'_>,
 ) -> Result<(), Closed> {
     env.cancel.store(false, Ordering::SeqCst);
     env.failed.store(false, Ordering::SeqCst);
@@ -74,6 +120,11 @@ pub(super) async fn apply(
     }
     if tx.unsure {
         probe(client, link, env, tx).await?;
+    }
+    // Whether a block is open is not known (asking failed): nothing is sent.
+    if tx.unsure {
+        answer(Err(fail(None, DbError::Closed)));
+        return Ok(());
     }
     if tx.block && tx.aborted {
         answer(Err(fail(None, DbError::NotSupported)));
@@ -108,21 +159,26 @@ pub(super) async fn apply(
     };
     if let Err(e) = link.guard(None, client.batch_execute(&start.join("; "))).await? {
         // A block opened by it is aborted, a savepoint not set: back to before it.
-        let undo = if matches!(mode, Mode::Savepoint) { "ROLLBACK TO SAVEPOINT datarig_apply" } else { "ROLLBACK" };
-        let _ = link.guard(None, client.batch_execute(undo)).await?;
+        let sql = if matches!(mode, Mode::Savepoint) { "ROLLBACK TO SAVEPOINT datarig_apply" } else { "ROLLBACK" };
+        undo(client, link, sql, hooks).await?;
         probe(client, link, env, tx).await?;
-        answer(Err(fail(None, db_error(&e))));
+        answer(Err(fail(None, step_error(&e))));
         return Ok(());
     }
     let mut done = Vec::with_capacity(steps.len());
     let mut failure = None;
     for (i, step) in steps.iter().enumerate() {
-        if i > 0 && env.cancel.load(Ordering::SeqCst) {
+        hooks.before_step(i);
+        if env.cancel.load(Ordering::SeqCst) {
             failure = Some(fail(Some(i), DbError::Cancelled));
             break;
         }
         // Every row it matches (0: no limit), so a check locks them all.
         let ran = link.guard(Some(env.token), client.execute_pipelined_wrapped(&step.sql, 0, &[], None)).await?;
+        if cache_off {
+            // A type lookup's statements go with the transaction too.
+            client.forget_typeinfo_statements();
+        }
         let ran = match ran {
             Ok(ran) => ran,
             Err(e) => {
@@ -147,9 +203,16 @@ pub(super) async fn apply(
         };
         done.push(AppliedStep { count, returned, insert_id: None });
     }
+    // A cancel asked for once the last step ran: nothing is kept.
+    if failure.is_none() {
+        hooks.before_step(steps.len());
+    }
+    if failure.is_none() && env.cancel.load(Ordering::SeqCst) {
+        failure = Some(fail(None, DbError::Cancelled));
+    }
     if let Some(failure) = failure {
-        let undo = if matches!(mode, Mode::Savepoint) { UNDO } else { "ROLLBACK" };
-        if link.guard(None, client.batch_execute(undo)).await?.is_err() {
+        let sql = if matches!(mode, Mode::Savepoint) { UNDO } else { "ROLLBACK" };
+        if !undo(client, link, sql, hooks).await? {
             probe(client, link, env, tx).await?;
         }
         answer(Err(failure));
@@ -159,7 +222,7 @@ pub(super) async fn apply(
         Mode::Savepoint => {
             let released = link.guard(None, client.batch_execute(&format!("RELEASE SAVEPOINT {SAVEPOINT}"))).await?;
             if let Err(e) = released {
-                if link.guard(None, client.batch_execute(UNDO)).await?.is_err() {
+                if !undo(client, link, UNDO, hooks).await? {
                     probe(client, link, env, tx).await?;
                 }
                 answer(Err(fail(None, db_error(&e))));

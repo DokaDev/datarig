@@ -804,7 +804,19 @@ pub(crate) async fn query_loop(
             }
             // Answered once; a session the UI closed meanwhile answers nothing.
             Next::Command(DbCommand::ApplyEdits { id, steps, tx: rule }) => {
-                match apply::apply(&client, &mut link, &env, &mut tx, id, &steps, rule).await {
+                match apply::apply(
+                    &client,
+                    &mut link,
+                    &env,
+                    &mut tx,
+                    id,
+                    &steps,
+                    rule,
+                    prepared.off,
+                    &Default::default(),
+                )
+                .await
+                {
                     Ok(()) => continue,
                     Err(closed) => unanswered(&events, closed, cancelled_apply(id)),
                 }
