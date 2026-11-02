@@ -25,7 +25,7 @@ fn scol(name: &str, ty: &str, collation: Option<&str>) -> StructureColumn {
 #[test]
 fn exact_types_are_an_allowlist() {
     let exactness = |ty: &str| {
-        let column = scol("c", ty, None);
+        let column = scol("c", ty, Some("utf8mb4_0900_ai_ci"));
         MY.exactness(&ColumnInfo { kind: ValueKind::Other, result_type: "", column: &column })
     };
     for ty in [
@@ -59,6 +59,22 @@ fn exact_types_are_an_allowlist() {
         ("vector(3)", Inexact::Unknown),
     ] {
         assert_eq!(exactness(ty), Exactness::Inexact(why), "{ty}");
+    }
+}
+
+#[test]
+fn text_is_exact_only_in_a_character_set_that_converts_one_to_one() {
+    let exactness = |charset: Option<&str>| {
+        let mut column = scol("c", "varchar(10)", Some("x"));
+        column.collation =
+            charset.map(|cs| Collation { name: format!("{cs}_bin"), charset: Some(cs.into()), deterministic: true });
+        MY.exactness(&ColumnInfo { kind: ValueKind::Text, result_type: "", column: &column })
+    };
+    for cs in ["utf8mb4", "utf8mb3", "latin1", "ascii", "UTF16"] {
+        assert_eq!(exactness(Some(cs)), Exactness::Exact, "{cs}");
+    }
+    for cs in [Some("sjis"), Some("cp932"), Some("ujis"), Some("gbk"), None] {
+        assert_eq!(exactness(cs), Exactness::Inexact(Inexact::Unknown), "{cs:?}");
     }
 }
 
@@ -103,8 +119,8 @@ fn text(s: &str) -> Value {
 /// The condition of row `r` found by its values (every column but the float).
 fn values(r: usize) -> String {
     format!(
-        "`id` <=> {r} AND CONVERT(`name` USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'4162' \
-         AND CONVERT(`st` USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'6E6577' AND `raw` <=> X'0AFF' \
+        "`id` <=> {r} AND `name` = 'Ab' AND CONVERT(`name` USING utf8mb4) COLLATE utf8mb4_0900_bin \
+         <=> _utf8mb4 X'4162' AND `st` = 'new' AND CONVERT(`st` USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'6E6577' AND `raw` <=> X'0AFF' \
          AND `price` <=> NULL"
     )
 }
@@ -115,7 +131,7 @@ fn text_compares_byte_for_byte_and_every_compare_is_null_safe() {
     let mut b = EditBatch::new();
     b.set(&[(4, 1)], &text("it's \\ x"), orig);
     b.set(&[(4, 4)], &text("2.50"), orig);
-    let w = "`id` <=> 4 AND CONVERT(`name` USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'4162' AND `price` <=> NULL";
+    let w = "`id` <=> 4 AND `name` = 'Ab' AND CONVERT(`name` USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'4162' AND `price` <=> NULL";
     assert_eq!(
         run(&MY, &t, &b, &[], &[]),
         [

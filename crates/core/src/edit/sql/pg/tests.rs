@@ -107,7 +107,7 @@ fn a_keyed_row_is_checked_then_changed_and_given_back() {
     let mut b = EditBatch::new();
     b.set(&[(4, 1)], &text("a\\b"), orig);
     b.set(&[(4, 2)], &text("x"), orig);
-    let w = r#""id" IS NOT DISTINCT FROM '4' AND "name" IS NOT DISTINCT FROM 'it''s 4' AND "note" COLLATE "C" IS NULL"#;
+    let w = r#""id" = '4' AND "name" = 'it''s 4' AND "note" IS NULL"#;
     assert_eq!(
         run(&t, &b, &[], &[]),
         [
@@ -125,7 +125,7 @@ fn a_delete_and_inserts() {
     b.add(2, None, vec![Value::Default; 4]);
     b.add(2, None, vec![text("10"), text("n"), Value::Null, Value::Default]);
     b.add(2, None, vec![Value::Default, text("m"), Value::Default, Value::Default]);
-    let w = r#""id" IS NOT DISTINCT FROM '2' AND "name" IS NOT DISTINCT FROM 'it''s 2' AND "note" COLLATE "C" IS NULL"#;
+    let w = r#""id" = '2' AND "name" = 'it''s 2' AND "note" IS NULL"#;
     assert_eq!(
         run(&t, &b, &[], &[])[1..],
         [
@@ -145,13 +145,9 @@ fn one_of_several_identical_rows_is_picked_by_its_place() {
     b.set(&[(1, 1)], &text("x"), orig);
     b.delete(&[2], orig);
     let counts = count_statements(&t, &b, &Postgres, &|_, _| true).unwrap();
-    assert!(counts[0].1.starts_with(r#"SELECT count(*) FROM "public"."Users" WHERE "id" IS NOT DISTINCT FROM '1'"#));
+    assert!(counts[0].1.starts_with(r#"SELECT count(*) FROM "public"."Users" WHERE "id" = '1'"#));
     let steps = run(&t, &b, &[(1, 3), (2, 2)], &[(1, Choice::One), (2, Choice::One)]);
-    let w = |r: usize| {
-        format!(
-            r#""id" IS NOT DISTINCT FROM '{r}' AND "name" IS NOT DISTINCT FROM 'it''s {r}' AND "note" COLLATE "C" IS NULL"#
-        )
-    };
+    let w = |r: usize| format!(r#""id" = '{r}' AND "name" = 'it''s {r}' AND "note" IS NULL"#);
     let one = |r| format!(r#"(tableoid, ctid) = (SELECT tableoid, ctid FROM "public"."Users" WHERE {} LIMIT 1)"#, w(r));
     assert_eq!(steps[2], format!(r#"DELETE FROM "public"."Users" WHERE {}"#, one(2)));
     assert_eq!(steps[3], format!(r#"UPDATE "public"."Users" SET "name" = 'x' WHERE {} RETURNING *"#, one(1)));
@@ -168,6 +164,15 @@ fn an_identity_column_of_an_existing_row_is_never_set() {
     let none = BTreeMap::new();
     let got = plan(&t, &b, &Postgres, &Facts { whole: &whole, matches: &none, choices: &BTreeMap::new() });
     assert!(matches!(got, Err(PlanError::Column { .. })), "{got:?}");
+}
+
+#[test]
+fn a_value_finds_its_row_through_an_index_and_byte_for_byte_where_the_collation_is_not() {
+    let t = target(Identity::Key { primary: true, columns: vec![0] });
+    let [_, name, note, _] = &t.columns[..] else { unreachable!() };
+    assert_eq!(Postgres.eq_exact(name.as_ref().unwrap(), Some("a")), r#""name" = 'a'"#);
+    assert_eq!(Postgres.eq_exact(note.as_ref().unwrap(), Some("a")), r#""note" = 'a' AND "note" COLLATE "C" = 'a'"#);
+    assert_eq!(Postgres.eq_exact(note.as_ref().unwrap(), None), r#""note" IS NULL"#);
 }
 
 #[test]

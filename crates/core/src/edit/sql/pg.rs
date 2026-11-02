@@ -3,8 +3,9 @@
 //! A value is written as a string literal the server reads as the column's type (`'5'`, `'t'`,
 //! `'2026-11-03'`, `'\x0102'`), in the form the result showed it, so it is the value read
 //! back; one holding a backslash is an escape string (`E'…'`), which reads the same whatever
-//! `standard_conforming_strings` is. A row is compared with `IS NOT DISTINCT FROM` (NULL-safe);
-//! a text column whose collation is not deterministic is compared under `"C"`, byte for byte.
+//! `standard_conforming_strings` is. A row is compared with `=` (`IS NULL` for NULL), which an
+//! index serves; a text column whose collation is not deterministic is also compared under
+//! `"C"`, byte for byte.
 //! Statements change the rows they find and give them back (`RETURNING *`); one of several rows
 //! the same in every column is picked by its physical place, `(tableoid, ctid)`, which holds
 //! across partitions and inheritance.
@@ -113,14 +114,16 @@ impl EditSql for Postgres {
         }
     }
 
+    /// `col = '…'` (which an index serves), and for a collation that is not deterministic also
+    /// `col COLLATE "C" = '…'` (byte for byte: the first matches a superset); `col IS NULL`.
     fn eq_exact(&self, c: &TableColumn, v: Option<&str>) -> String {
-        let mut col = self.column(&c.column.name);
+        let col = self.column(&c.column.name);
+        let Some(v) = v else { return format!("{col} IS NULL") };
+        let lit = literal(v);
         if c.column.collation.as_ref().is_some_and(|k| !k.deterministic) {
-            col.push_str(" COLLATE \"C\"");
-        }
-        match v {
-            Some(v) => format!("{col} IS NOT DISTINCT FROM {}", literal(v)),
-            None => format!("{col} IS NULL"),
+            format!("{col} = {lit} AND {col} COLLATE \"C\" = {lit}")
+        } else {
+            format!("{col} = {lit}")
         }
     }
 

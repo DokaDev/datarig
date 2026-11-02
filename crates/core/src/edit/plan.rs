@@ -76,8 +76,10 @@ pub enum Choice {
 
 /// What the planner needs beyond the batch.
 pub struct Facts<'a> {
-    /// Whether the value of cell (row, column) was read whole, so it may go in a condition (a
-    /// value cut short, or read in a character set or time zone that changes it, may not).
+    /// Whether the value of cell (row, column) was read whole, so it may go in a condition: not a
+    /// value cut short, nor one read in a character set or a time zone that changes it (a MySQL
+    /// `TIMESTAMP` shown in a zone with daylight saving is two instants in the hour the clock goes
+    /// back), as the copy as SQL refuses them (`export::NotWhole`).
     pub whole: &'a dyn Fn(usize, usize) -> bool,
     /// For rows found by their values: how many rows of the table matched, as counted
     /// ([`count_statements`]).

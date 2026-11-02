@@ -1,15 +1,17 @@
-//! MySQL's edits (8.0 on).
+//! MySQL's edits, 8.0.17 or later (the binary collation `utf8mb4_0900_bin` it compares text
+//! under).
 //!
 //! A value is written as the copy as SQL writes it (`export::sql_value`): a number bare, bytes
 //! as `X'…'`, bits as `b'…'`, text as a string literal that reads the same in any sql mode. A row
-//! is compared with `<=>` (NULL-safe). A text value (and an enum's or a set's) is compared byte for
-//! byte: the column converted to `utf8mb4` (one to one from any character set) under the binary
-//! collation that does not pad, against the value's own UTF-8 bytes, so neither a `_ci`
-//! collation (`'a'` is `'A'`) nor padding (`'a'` is `'a '`) makes another row match. One of
-//! several rows the same in every column is the first `LIMIT 1` finds.
+//! is compared with `<=>` (NULL-safe). A text value (and an enum's or a set's) is also compared
+//! byte for byte: the column converted to `utf8mb4` under the binary collation that does not pad,
+//! against the value's own UTF-8 bytes, so neither a `_ci` collation (`'a'` is `'A'`) nor padding
+//! (`'a'` is `'a '`) makes another row match; only in a character set that converts one to one
+//! ([`ONE_TO_ONE`]). One of several rows the same in every column is the first `LIMIT 1` finds.
 
 use super::{ColumnInfo, EditSql, Exactness, Inexact, Offer, Scope, Value};
 use crate::driver::MySqlEdit;
+use crate::driver::structure::StructureColumn;
 use crate::edit::plan::Where;
 use crate::edit::target::{TableColumn, TableRef};
 use crate::export::{Kind, sql_value};
@@ -56,9 +58,13 @@ const TEXT: &[&str] = &["char", "varchar", "tinytext", "text", "mediumtext", "lo
 /// Types of bytes.
 const BYTES: &[&str] = &["binary", "varbinary", "tinyblob", "blob", "mediumblob", "longblob"];
 
+/// Character sets whose every value converts to `utf8mb4` as a value of its own (no two
+/// stored values become one: `sjis` and `cp932` map several byte sequences to one character).
+const ONE_TO_ONE: &[&str] = &["utf8mb4", "utf8mb3", "utf8", "latin1", "ascii", "ucs2", "utf16", "utf16le", "utf32"];
+
 /// The first word of a column's type (`varchar(20)` → `varchar`, `int unsigned` → `int`).
-fn base(c: &TableColumn) -> String {
-    let ty = c.column.type_name.to_ascii_lowercase();
+fn base(c: &StructureColumn) -> String {
+    let ty = c.type_name.to_ascii_lowercase();
     ty.split(|ch: char| ch == '(' || ch.is_whitespace()).next().unwrap_or_default().to_string()
 }
 
@@ -84,8 +90,16 @@ impl EditSql for MySql {
     /// The types of [`EXACT`] (a text in a character set of its own included: it is compared
     /// as UTF-8); floats, JSON, spatial types and any other are not.
     fn exactness(&self, c: &ColumnInfo) -> Exactness {
-        let ty = c.column.type_name.to_ascii_lowercase();
-        let base = ty.split(|ch: char| ch == '(' || ch.is_whitespace()).next().unwrap_or_default();
+        let base = base(c.column);
+        let base = base.as_str();
+        if TEXT.contains(&base) {
+            // Its characters, in a character set that converts one to one (unknown: not).
+            let charset = c.column.collation.as_ref().and_then(|k| k.charset.as_deref());
+            return match charset {
+                Some(cs) if ONE_TO_ONE.contains(&cs.to_ascii_lowercase().as_str()) => Exactness::Exact,
+                _ => Exactness::Inexact(Inexact::Unknown),
+            };
+        }
         if EXACT.contains(&base) {
             return Exactness::Exact;
         }
@@ -119,13 +133,17 @@ impl EditSql for MySql {
         }
     }
 
+    /// `col <=> value`; a text, an enum or a set also byte for byte, after `col = '…'` under its
+    /// own collation, which an index serves and matches a superset (without it the server reads,
+    /// and a locking read locks, every row).
     fn eq_exact(&self, c: &TableColumn, v: Option<&str>) -> String {
         let col = self.column(&c.column.name);
-        let base = base(c);
+        let base = base(&c.column);
         let Some(v) = v else { return format!("{col} <=> NULL") };
         if TEXT.contains(&base.as_str()) && c.column.collation.is_some() {
+            let near = sql_value(D, Kind::Text, Some(v));
             return format!(
-                "CONVERT({col} USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'{}'",
+                "{col} = {near} AND CONVERT({col} USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'{}'",
                 hex(v.as_bytes())
             );
         }
