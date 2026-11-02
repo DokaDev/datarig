@@ -1871,6 +1871,11 @@ impl App {
         if let Some((m, _)) = &self.transient {
             return Some((m.render(&self.i18n), m.level, false));
         }
+        // Why the cell editor did not take its text, while it is open.
+        let refused = (!self.tabs.is_empty()).then(|| self.tab().cell_edit.as_ref()?.error.clone()).flatten();
+        if let Some(reason) = refused {
+            return Some((self.i18n.msg(&Msg::EditRefused { reason }), Level::Info, false));
+        }
         // An answer waits for transactions to end (whichever tab is shown).
         if let Some(m) = self.end_pending_status() {
             return Some((m, Level::Info, true));

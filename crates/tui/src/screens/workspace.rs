@@ -359,9 +359,11 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
 /// brackets, two blanks between any two. Without a row result there is one `Result` tab (for
 /// what the run said, or what is coming). Then `earlier run` when a later run returned no rows,
 /// the keys that move between the tabs, and on the right what the shown rows' transaction is
-/// (uncommitted, ended, rolled back).
+/// (uncommitted, ended, rolled back), and left of it what the rows are to their edits (how many
+/// changes are pending, editable, read-only and why), once an edit key resolved them.
 ///
-/// Room goes first to the transaction, then to the tabs: the keys show only when every whole
+/// Room goes first to the transaction, then to the edits as far as the tabs' labels (whole, else
+/// short) still fit, then to the tabs: the keys show only when every whole
 /// label fits with them. When the whole labels do not fit, every tab shows with a short label
 /// (`[1]  3  Plan  Chart  Msgs`); when even those do not fit, the shown one, Messages and as many
 /// of the shown one's neighbours as fit, `…` where some are left out (`H`/`L` reach them); at
@@ -424,8 +426,19 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     let widths = |items: &[Item]| -> Vec<usize> {
         items.iter().enumerate().map(|(k, (_, l))| crate::text::width(l) + if Some(k) == at { 2 } else { 0 }).collect()
     };
-    let every = |items: &[Item]| strip_cost(&widths(items), &(0..items.len()).collect::<Vec<_>>()) <= room;
+    let cost = |items: &[Item]| strip_cost(&widths(items), &(0..items.len()).collect::<Vec<_>>());
     let short = labels(true);
+    // The shown rows' edits, left of the transaction: as much of it as fits beside the whole
+    // labels, else beside the short ones (two blanks between).
+    let badge = match (&t.results, t.exec.view) {
+        (Results::Rows(rs), ResultView::Rows) => [cost(&full), cost(&short)]
+            .into_iter()
+            .find_map(|labels_w| app.edit_badge(rs, room.saturating_sub(labels_w + 3), bg)),
+        _ => None,
+    };
+    let badge_w = badge.as_ref().map_or(0, |(text, _)| crate::text::width(text) + 2);
+    let room = room.saturating_sub(badge_w);
+    let every = |items: &[Item]| cost(items) <= room;
     let (items, shown, whole) = if every(&full) {
         let all = (0..full.len()).collect();
         (full, all, true)
@@ -443,7 +456,7 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     let earlier = t.exec.kept_log.is_some().then(|| format!("· {}", app.i18n.label(Label::ResultsTabEarlier)));
     let mut hits = Vec::new();
     let mut x = area.x + 1;
-    let end = area.x + area.width - (tx_w as u16).min(area.width);
+    let end = area.x + area.width - ((tx_w + badge_w) as u16).min(area.width);
     let dim = Style::new().fg(th.fg_dim).bg(bg);
     let mut next = 0;
     for k in shown {
@@ -484,6 +497,10 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
         let at = (area.x + area.width).saturating_sub(w + 1).max(area.x + 1);
         let room = (area.x + area.width - at) as usize;
         put(buf, at, area.y, &text, room, Style::new().fg(color).bg(bg).add_modifier(Modifier::BOLD));
+    }
+    if let Some((text, style)) = badge {
+        let at = end + 1;
+        put(buf, at, area.y, &text, (area.x + area.width).saturating_sub(at) as usize, style);
     }
     app.strip_hits = hits;
 }

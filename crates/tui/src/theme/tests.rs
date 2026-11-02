@@ -377,6 +377,8 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         search_match: _,
         grid_match: _,
         grid_match_current: _,
+        edit_changed: _,
+        edit_pending: _,
         match_paren: _,
         read_only_mark: _,
         danger_mark: _,
@@ -397,7 +399,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 59);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 61);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -616,6 +618,31 @@ fn grid_matches_show_in_every_theme() {
         let cur = th.grid_match_current;
         let k = contrast(fg(cur), bg(cur));
         assert!(k >= 4.5, "{name}: the cursor's match's text: {k:.2}");
+    }
+}
+
+/// A changed cell shows on any row of the grid: its own text color in bold (it keeps the
+/// cell's background), apart from body text and NULL, readable on the background, the alternate
+/// rows, the selection and a selected range. The pending count reads on the strip's surface.
+#[test]
+fn changed_cells_show_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        for (token, s) in [("edit_changed", th.edit_changed), ("edit_pending", th.edit_pending)] {
+            assert!(s.add_modifier.contains(Modifier::BOLD), "{name}: {token} shows without color");
+            assert!(s.fg.is_some() && s.fg != Some(th.fg) && s.fg != Some(th.null_fg), "{name}: {token}");
+            assert_eq!(s.bg, None, "{name}: {token} hides the cell's background");
+        }
+        assert_ne!(th.edit_changed.fg, th.selection.fg, "{name}");
+    }
+    for (name, th) in rgb_themes() {
+        let c = fg(th.edit_changed);
+        for other in [th.bg, th.surface_alt, bg(th.selection), bg(th.range), bg(th.selection_unfocused())] {
+            let k = contrast(c, other);
+            assert!(k >= 3.0, "{name}: a changed cell on {other:?}: {k:.2}");
+        }
+        assert!(delta_e(c, th.fg) >= 8.0, "{name}: a changed cell looks like body text");
+        let k = contrast(fg(th.edit_pending), th.surface);
+        assert!(k >= 3.0, "{name}: the pending count: {k:.2}");
     }
 }
 

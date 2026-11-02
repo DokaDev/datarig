@@ -22,6 +22,7 @@ use datarig_core::edit::{
     self, ColumnReason, EditBatch, EditSource, EditTarget, Identity, Invalid, ReadOnly, TableColumn, Value, Write,
 };
 use datarig_core::export;
+use ratatui::style::{Color, Style};
 use std::ops::Range;
 
 /// What an edit key does to the cursor's cell (or the cells selected in one column).
@@ -524,10 +525,16 @@ impl App {
             return;
         };
         let column = c.column.name.clone();
-        match v {
-            Value::Null if c.column.not_null => return self.say_refused(Msg::EditWhyNotNull { column }),
-            Value::Default if !has_default(&c) => return self.say_refused(Msg::EditWhyNoDefault { column }),
-            _ => {}
+        let why = match v {
+            Value::Null if c.column.not_null => Some(Msg::EditWhyNotNull { column }),
+            Value::Default if !has_default(&c) => Some(Msg::EditWhyNoDefault { column }),
+            _ => None,
+        };
+        if let Some(why) = why {
+            if let Some(e) = self.tabs.active_mut().cell_edit.as_mut() {
+                e.error = Some(self.i18n.msg(&why).to_string());
+            }
+            return self.say_refused(why);
         }
         self.tabs.active_mut().cell_edit = None;
         self.edit_write_cells(&cells, v);
@@ -657,8 +664,14 @@ impl App {
 
     /// Why the result's rows cannot be edited, as the status line says it.
     fn say_why(&mut self, why: &Why) {
+        let reason = self.why_text(why);
+        self.flash(Notice::new(Msg::EditReadOnly { reason }, Level::Info));
+    }
+
+    /// Why the result's rows cannot be edited, in words.
+    fn why_text(&self, why: &Why) -> String {
         let label = |l| self.i18n.label(l).to_string();
-        let reason = match why {
+        match why {
             Why::Rows(ReadOnly::Source(n)) => self.why(n),
             Why::Rows(ReadOnly::NoFormat) => label(Label::EditWhyNoFormat),
             Why::Rows(ReadOnly::NoTableColumn) => label(Label::EditWhyNoTableColumn),
@@ -667,8 +680,66 @@ impl App {
             Why::Rows(ReadOnly::NoIdentity) => label(Label::EditWhyNoIdentity),
             Why::Rows(ReadOnly::NoExactColumn) => label(Label::EditWhyNoExactColumn),
             Why::Structure(error) => self.i18n.msg(&Msg::EditWhyStructureFailed { error: error.clone() }).to_string(),
+        }
+    }
+
+    /// How many changes of the active tab's shown result are pending.
+    pub fn edits_pending(&self) -> usize {
+        if self.tabs.is_empty() {
+            return 0;
+        }
+        rows_of(self.tab()).map_or(0, |rs| rs.edit.batch.counts().total())
+    }
+
+    /// What result `rs` is to its edits, in at most `room` columns, and its style on background
+    /// `bg`: how many changes are pending, else whether its rows can be edited (the table and how
+    /// a row is found, as room allows) or why not. Nothing before an edit key resolved it.
+    pub(crate) fn edit_badge(&self, rs: &ResultSet, room: usize, bg: Color) -> Option<(String, Style)> {
+        let th = crate::theme::cur();
+        let width = crate::text::width;
+        let fits = |text: String| (width(&text) <= room).then_some(text);
+        let pending = rs.edit.batch.counts().total();
+        if pending > 0 {
+            let text = self.i18n.msg(&Msg::EditBadgePending { count: pending as u64 }).to_string();
+            return fits(text).map(|t| (t, th.edit_pending.bg(bg)));
+        }
+        // The fullest text that fits; else `what` cut to the room left, at least a few columns
+        // of it; else `plain`.
+        let pick = |full: Vec<String>, what: &str, cut: &dyn Fn(&str) -> String, plain: Label| {
+            full.into_iter()
+                .find(|t| width(t) <= room)
+                .or_else(|| {
+                    let left = room.checked_sub(width(&cut("")))?;
+                    (left >= 4).then(|| cut(&crate::text::clip(what, left)))
+                })
+                .or_else(|| fits(self.i18n.label(plain).to_string()))
         };
-        self.flash(Notice::new(Msg::EditReadOnly { reason }, Level::Info));
+        match &rs.edit.target {
+            Target::Ready(t) => {
+                let table = format!("{}.{}", t.table.schema, t.table.name);
+                let editable =
+                    |table: &str| self.i18n.msg(&Msg::EditBadgeEditable { table: table.to_string() }).to_string();
+                let found = match &t.identity {
+                    Identity::Key { columns, .. } => {
+                        let names: Vec<&str> =
+                            columns.iter().filter_map(|&c| rs.columns.get(c)).map(|c| c.meta.name.as_str()).collect();
+                        self.i18n.msg(&Msg::EditBadgeKey { columns: names.join(", ") }).to_string()
+                    }
+                    Identity::Values { .. } => self.i18n.label(Label::EditBadgeByValues).to_string(),
+                };
+                let full = vec![format!("{} · {found}", editable(&table)), editable(&table)];
+                let text = pick(full, &table, &editable, Label::EditBadgeEditablePlain)?;
+                Some((text, Style::new().fg(th.fg_muted).bg(bg)))
+            }
+            Target::ReadOnly { why, .. } => {
+                let reason = self.why_text(why);
+                let read_only =
+                    |reason: &str| self.i18n.msg(&Msg::EditBadgeReadOnly { reason: reason.to_string() }).to_string();
+                let text = pick(vec![read_only(&reason)], &reason, &read_only, Label::EditBadgeReadOnlyPlain)?;
+                Some((text, Style::new().fg(th.fg_dim).bg(bg)))
+            }
+            Target::Unresolved | Target::Loading(_) => None,
+        }
     }
 
     /// The result is read-only now, for `why`.

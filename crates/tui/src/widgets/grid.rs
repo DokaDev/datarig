@@ -696,7 +696,8 @@ pub fn render(
             };
             put(buf, cx, y, "│", sep_style(zebra));
             // A pending value is shown instead of the value as read.
-            let (text, is_null, default) = match (rs.edit.batch.value(r, ci), rs.cell(r, ci)) {
+            let pending = rs.edit.batch.value(r, ci);
+            let (text, is_null, default) = match (pending, rs.cell(r, ci)) {
                 (Some(Value::Text(v)), _) => (sanitize_cell(v), false, false),
                 (Some(Value::Null), _) => (null_label.to_string(), true, false),
                 (Some(Value::Default), _) => (default_label.to_string(), true, true),
@@ -717,8 +718,8 @@ pub fn render(
                 Style::new().fg(th.null_fg).add_modifier(Modifier::ITALIC)
             } else {
                 Style::new().fg(th.fg)
-            }
-            .patch(bg);
+            };
+            let style = if pending.is_some() { style.patch(th.edit_changed) } else { style }.patch(bg);
             put(buf, cx + 1, y, &" ".repeat(w + 2), bg);
             let text = fit(&text, w, align);
             put(buf, cx + 2, y, &text, style);

@@ -412,8 +412,8 @@ fn a_parked_result_keeps_its_own_changes() {
 }
 
 /// `shop.users` with the nickname an enum and the profile a boolean that defaults to `true`.
-fn enum_and_bool() -> (Harness, TableStructure) {
-    let mut h = Harness::connected(Lang::En);
+fn enum_and_bool(lang: Lang) -> (Harness, TableStructure) {
+    let mut h = Harness::connected(lang);
     h.db(DbEvent::Keys(Ok(shop_keys())));
     let mut active = meta_from("profile", "bool", false, USERS, 5);
     active.kind = ValueKind::Bool;
@@ -438,7 +438,7 @@ fn picker_labels(h: &Harness) -> Vec<String> {
 
 #[test]
 fn an_enum_and_a_boolean_are_picked_from_their_values() {
-    let (mut h, st) = enum_and_bool();
+    let (mut h, st) = enum_and_bool(Lang::En);
     h.keys("le");
     structure(&mut h, Ok(st));
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
@@ -462,7 +462,7 @@ fn an_enum_and_a_boolean_are_picked_from_their_values() {
 
 #[test]
 fn the_list_of_values_closes_when_its_result_goes() {
-    let (mut h, st) = enum_and_bool();
+    let (mut h, st) = enum_and_bool(Lang::En);
     h.keys("le");
     structure(&mut h, Ok(st));
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
@@ -497,4 +497,131 @@ fn a_value_not_of_the_columns_type_keeps_the_editor_open() {
     h.key(KeyCode::Enter);
     assert_eq!(h.app.key_context(), Ctx::Grid);
     assert_eq!(value(&h, 0, 0), Some(Value::Text("12".into())));
+}
+
+/// The screens of `setup` (built in each language) at 120x40 and 80x24, as `<name>_<lang>_<size>`:
+/// English ones pinned, Korean ones checked to show their catalog's texts.
+fn screens(name: &str, setup: impl Fn(Lang) -> Harness) {
+    for lang in [Lang::En, Lang::Ko] {
+        let mut h = setup(lang);
+        let tag = format!("{lang:?}").to_lowercase();
+        for (w, hh) in [(120, 40), (80, 24)] {
+            assert_screen!(format!("{name}_{tag}_{w}x{hh}"), lang, h.draw(w, hh));
+        }
+    }
+}
+
+/// The badge of a join (after an edit key said why), the status line's notice gone.
+#[test]
+fn the_badge_says_why_a_result_is_read_only() {
+    screens("edit_badge_read_only", |lang| {
+        let mut h = Harness::connected(lang);
+        h.db(DbEvent::Keys(Ok(shop_keys())));
+        let columns = vec![meta_from("id", "int8", true, ORDERS, 1), meta_from("id", "int8", true, USERS, 1)];
+        let sql = "SELECT o.id, u.id FROM shop.orders o JOIN shop.users u ON u.id = o.user_id";
+        answer(&mut h, sql, columns, vec![vec![s("1"), s("1")]]);
+        h.keys("e");
+        h.app.transient = None;
+        h
+    });
+}
+
+#[test]
+fn the_badge_names_the_table_and_how_its_rows_are_found() {
+    screens("edit_badge_keyed", ready);
+    // Wide enough for the key.
+    insta::assert_snapshot!("edit_badge_keyed_en_160x45", ready(Lang::En).draw(160, 45).backend());
+    screens("edit_badge_by_values", |lang| {
+        let mut h = Harness::connected(lang);
+        h.db(DbEvent::Keys(Ok(shop_keys())));
+        let columns = vec![meta_from("nickname", "text", false, USERS, 4)];
+        answer(&mut h, "SELECT nickname FROM shop.users", columns, vec![vec![s("ann")], vec![s("cy")]]);
+        h.keys("e");
+        structure(&mut h, Ok(users_structure()));
+        h.key(KeyCode::Esc);
+        h.app.transient = None;
+        h
+    });
+}
+
+/// A change pending: the badge counts it, the row has `~`, the cell shows the new value, the
+/// hint line says how many and the undo key.
+#[test]
+fn a_pending_change_shows_in_the_badge_the_gutter_the_cell_and_the_hints() {
+    screens("edit_pending", |lang| {
+        let mut h = ready(lang);
+        h.keys("e");
+        h.type_text("y");
+        h.key(KeyCode::Enter);
+        h.keys("j");
+        h.app.transient = None;
+        h
+    });
+}
+
+#[test]
+fn the_editor_and_its_error_show_over_the_cell() {
+    screens("edit_editor", |lang| {
+        let mut h = ready(lang);
+        h.keys("e");
+        h.type_text("z");
+        h
+    });
+    // The reason stays on the status line while the editor is open.
+    screens("edit_editor_error", |lang| {
+        let mut h = ready(lang);
+        h.keys("he");
+        clear(&mut h);
+        h.type_text("12a");
+        h.key(KeyCode::Enter);
+        h.app.transient = None;
+        h
+    });
+}
+
+#[test]
+fn the_list_of_an_enums_values_shows_over_the_grid() {
+    screens("edit_enum_picker", |lang| {
+        let (mut h, st) = enum_and_bool(lang);
+        h.keys("le");
+        structure(&mut h, Ok(st));
+        assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+        h.app.transient = None;
+        h
+    });
+}
+
+/// In a dark and a light theme: a changed cell's text in `edit_changed` on its row's background
+/// (on the cursor's background where the cursor is), the pending count in `edit_pending`.
+#[test]
+fn a_changed_cell_and_the_pending_count_take_their_tokens() {
+    use datarig_tui::theme;
+    use ratatui::style::Modifier;
+    for th in [theme::DARK, theme::LIGHT] {
+        let mut h = ready(Lang::En);
+        h.app.theme = std::sync::Arc::new(th.clone());
+        h.keys("e");
+        h.type_text("y");
+        h.key(KeyCode::Enter);
+        h.app.transient = None;
+        let t = h.draw(120, 40);
+        let buf = t.backend().buffer();
+        let g = &h.app.tab().grid;
+        let cell = g.cell_rect(0, 1, 3).expect("on screen");
+        let at = buf[(cell.x + 1, cell.y)].clone();
+        assert_eq!((at.fg, at.bg), (th.edit_changed.fg.unwrap(), th.selection.bg.unwrap()), "under the cursor");
+        assert!(at.modifier.contains(Modifier::BOLD));
+        let other = g.cell_rect(0, 2, 3).expect("on screen");
+        assert_eq!(buf[(other.x + 1, other.y)].fg, th.fg, "a cell not changed");
+        // Off the cursor: the row's own background.
+        h.keys("j");
+        let t = h.draw(120, 40);
+        let buf = t.backend().buffer();
+        let at = buf[(cell.x + 1, cell.y)].clone();
+        assert_eq!((at.fg, at.bg), (th.edit_changed.fg.unwrap(), th.bg));
+        let screen = buffer_text(buf);
+        let (y, line) = screen.lines().enumerate().find(|(_, l)| l.contains("1 pending")).expect("the badge");
+        let x = line[..line.find("1 pending").unwrap()].chars().count() as u16;
+        assert_eq!(buf[(x, y as u16)].fg, th.edit_pending.fg.unwrap(), "{line}");
+    }
 }

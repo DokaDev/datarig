@@ -166,9 +166,19 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
         segs[i].0 = format!(" {}", clip(&name, keep));
     }
     let avail = total.saturating_sub(fixed(&segs));
-    // The hint line: as many entries as fit next to the message, best first.
+    // The hint line: as many entries as fit next to the message, best first; in the grid how
+    // many changes are pending before them (and the undo key).
+    let pending = match app.key_context() {
+        crate::keymap::Ctx::Grid | crate::keymap::Ctx::GridMatches => app.edits_pending(),
+        _ => 0,
+    };
+    let pending = (pending > 0).then(|| app.i18n.msg(&Msg::EditBadgePending { count: pending as u64 }).to_string());
     let hint_segs = |n: usize| -> Vec<(String, Style)> {
         let mut v: Vec<(String, Style)> = Vec::new();
+        if let Some(p) = &pending {
+            v.push((p.clone(), th.edit_pending.bg(th.surface)));
+            v.push((" · ".to_string(), Style::new().fg(th.fg_dim).bg(th.surface)));
+        }
         for (i, (k, label)) in hints.iter().take(n).enumerate() {
             if i > 0 {
                 v.push((" · ".to_string(), Style::new().fg(th.fg_dim).bg(th.surface)));
