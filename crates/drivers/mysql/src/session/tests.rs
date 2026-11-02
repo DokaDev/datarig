@@ -1249,6 +1249,38 @@ async fn an_apply_whose_kill_is_not_taken_answers_before_the_session_is_lost() {
     kills.abort();
 }
 
+/// A step that gives another count than it must, and the server refuses the rollback after it:
+/// the session cuts its connection (nothing more is sent, so no later `COMMIT` can keep the
+/// change; the server rolls the transaction back as the connection ends) and is lost after the
+/// Apply's answer, saying the changes were not kept.
+#[tokio::test(start_paused = true)]
+async fn an_apply_whose_rollback_is_refused_cuts_the_connection() {
+    use datarig_core::driver::{ApplyError, ApplyFailure, DbEvent};
+    let Faked { mut server, commands, mut events, session, kills, .. } = faked().await;
+    commands.send(apply_command()).unwrap();
+    assert_eq!(next_request(&mut server).await, "START TRANSACTION");
+    server.write_all(&ok_packet(0x0003)).await.unwrap();
+    assert!(next_request(&mut server).await.starts_with("SELECT 1 FROM"));
+    server.write_all(&one_row()).await.unwrap();
+    assert!(next_request(&mut server).await.starts_with("UPDATE"));
+    // No row matched.
+    server.write_all(&packet(1, &[0, 0, 0, 0x03, 0, 0, 0])).await.unwrap();
+    assert_eq!(next_request(&mut server).await, "ROLLBACK AND NO CHAIN NO RELEASE");
+    let mut refused = vec![0xff];
+    refused.extend_from_slice(&1180u16.to_le_bytes());
+    refused.extend_from_slice(b"#HY000Got error during ROLLBACK");
+    server.write_all(&packet(1, &refused)).await.unwrap();
+    let after = sent_next(&mut server).await;
+    assert!(after.is_none(), "nothing sent after the refused rollback: {after:?}");
+    tokio::time::timeout(std::time::Duration::from_secs(5), session).await.expect("the session ends").unwrap();
+    let evs: Vec<DbEvent> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    let count = Err(ApplyFailure { step: Some(1), why: ApplyError::Count { got: 0 } });
+    assert_eq!(applied(&evs), [count], "{evs:?}");
+    assert!(!evs.iter().any(|e| matches!(e, DbEvent::Block(true) | DbEvent::TxOpen(true))), "{evs:?}");
+    assert!(matches!(evs.last(), Some(DbEvent::Lost { error: DbError::ApplyNotUndone })), "{evs:?}");
+    kills.abort();
+}
+
 /// A dialer that hands out the client's ends of in-memory streams, one per dial, in order.
 struct Streams(std::sync::Mutex<std::collections::VecDeque<tokio::io::DuplexStream>>);
 

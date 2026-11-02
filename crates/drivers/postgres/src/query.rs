@@ -817,7 +817,10 @@ pub(crate) async fn query_loop(
                 )
                 .await
                 {
-                    Ok(()) => continue,
+                    Ok(None) => continue,
+                    // What it did could not be undone for sure: the connection closes as the
+                    // session ends, and the server rolls it back.
+                    Ok(Some(error)) => Stop::Lost(error),
                     Err(closed) => unanswered(&events, closed, cancelled_apply(id)),
                 }
             }

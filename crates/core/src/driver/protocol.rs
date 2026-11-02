@@ -196,6 +196,11 @@ pub enum DbError {
     /// with `datarig_` (`SAVEPOINT`, `RELEASE`, `ROLLBACK TO`): those are the session's own, and
     /// using one would break how it undoes a failed run. It was not sent.
     ReservedSavepoint,
+    /// An Apply ([`DbCommand::ApplyEdits`]) failed, and undoing what its steps did could not be
+    /// confirmed (the server refused the rollback): the session closed its connection, so the
+    /// server rolls back the transaction, the Apply's changes with the rest of it. Comes as
+    /// [`DbEvent::Lost`]'s reason, after the Apply's answer.
+    ApplyNotUndone,
     /// MySQL: an `EXPLAIN ANALYZE` of a write names tables whose changes a rollback does not undo
     /// (an engine that is not InnoDB, such as MyISAM or MEMORY, or a view, whose tables are not
     /// known), or tables whose triggers may write elsewhere: it was not sent. The tables,
@@ -286,6 +291,7 @@ impl DbError {
             | DbError::TxNotOpened
             | DbError::CommitUnknown
             | DbError::ReservedSavepoint
+            | DbError::ApplyNotUndone
             | DbError::NotUndoable(_)
             | DbError::NotAPlainRead
             | DbError::CancelNotTaken(

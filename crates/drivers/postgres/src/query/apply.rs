@@ -96,7 +96,9 @@ async fn undo(client: &Client, link: &mut Link, sql: &str, _hooks: &Hooks<'_>) -
 
 /// Apply `steps` for request `id` and answer with exactly one `Applied`, then the state. A
 /// session the UI closed meanwhile answers nothing; a cancel that could not be sent comes back
-/// for the caller to answer.
+/// for the caller to answer. `Some` when the session must end now, for that reason: what the
+/// steps did could not be undone for sure, and closing the connection makes the server roll it
+/// back (a later `COMMIT` could keep changes said not to be applied).
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn apply(
     client: &Client,
@@ -108,7 +110,7 @@ pub(super) async fn apply(
     rule: ApplyTx,
     cache_off: bool,
     hooks: &Hooks<'_>,
-) -> Result<(), Closed> {
+) -> Result<Option<DbError>, Closed> {
     env.cancel.store(false, Ordering::SeqCst);
     env.failed.store(false, Ordering::SeqCst);
     let answer = |result| {
@@ -116,7 +118,7 @@ pub(super) async fn apply(
     };
     if env.read_only {
         answer(Err(fail(None, DbError::ReadWriteRefused)));
-        return Ok(());
+        return Ok(None);
     }
     if tx.unsure {
         probe(client, link, env, tx).await?;
@@ -124,20 +126,20 @@ pub(super) async fn apply(
     // Whether a block is open is not known (asking failed): nothing is sent.
     if tx.unsure {
         answer(Err(fail(None, DbError::Closed)));
-        return Ok(());
+        return Ok(None);
     }
     if tx.block && tx.aborted {
         answer(Err(fail(None, DbError::NotSupported)));
-        return Ok(());
+        return Ok(None);
     }
     if steps.is_empty() {
         answer(Ok(Vec::new()));
-        return Ok(());
+        return Ok(None);
     }
     if client.is_closed() {
         tx.unsure = true;
         answer(Err(fail(None, DbError::Closed)));
-        return Ok(());
+        return Ok(None);
     }
     let mode = match rule {
         _ if tx.block => Mode::Savepoint,
@@ -163,7 +165,7 @@ pub(super) async fn apply(
         undo(client, link, sql, hooks).await?;
         probe(client, link, env, tx).await?;
         answer(Err(fail(None, step_error(&e))));
-        return Ok(());
+        return Ok(None);
     }
     let mut done = Vec::with_capacity(steps.len());
     let mut failure = None;
@@ -212,21 +214,23 @@ pub(super) async fn apply(
     }
     if let Some(failure) = failure {
         let sql = if matches!(mode, Mode::Savepoint) { UNDO } else { "ROLLBACK" };
-        if !undo(client, link, sql, hooks).await? {
-            probe(client, link, env, tx).await?;
-        }
+        let undone = undo(client, link, sql, hooks).await?;
         answer(Err(failure));
-        return Ok(());
+        if !undone {
+            return Ok(Some(DbError::ApplyNotUndone));
+        }
+        return Ok(None);
     }
     match mode {
         Mode::Savepoint => {
             let released = link.guard(None, client.batch_execute(&format!("RELEASE SAVEPOINT {SAVEPOINT}"))).await?;
             if let Err(e) = released {
-                if !undo(client, link, UNDO, hooks).await? {
-                    probe(client, link, env, tx).await?;
-                }
+                let undone = undo(client, link, UNDO, hooks).await?;
                 answer(Err(fail(None, db_error(&e))));
-                return Ok(());
+                if !undone {
+                    return Ok(Some(DbError::ApplyNotUndone));
+                }
+                return Ok(None);
             }
             answer(Ok(done));
         }
@@ -252,5 +256,5 @@ pub(super) async fn apply(
             env.report(tx, true);
         }
     }
-    Ok(())
+    Ok(None)
 }

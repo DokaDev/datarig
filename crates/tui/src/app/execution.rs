@@ -2090,6 +2090,7 @@ impl App {
             DbError::NoTransaction => Label::DbNoTransaction,
             DbError::TxNotOpened => Label::DbTxNotOpened,
             DbError::CommitUnknown => Label::DbCommitUnknown,
+            DbError::ApplyNotUndone => Label::DbApplyNotUndone,
             DbError::ReservedSavepoint => Label::DbReservedSavepoint,
             DbError::NotAPlainRead => Label::DbNotAPlainRead,
             DbError::SessionSql { index, statement, error } => {

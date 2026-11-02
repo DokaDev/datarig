@@ -468,6 +468,7 @@
 "db.read_only_lost" = "the session stopped being read-only on the server: datarig rolled back its transaction and closed it"
 "db.no_transaction" = "no transaction is open"
 "db.tx_not_opened" = "not sent: the server did not open a transaction for it, and without one it could not be rolled back"
+"db.apply_not_undone" = "the changes failed and undoing them could not be confirmed, so the connection was closed: the server rolls back its transaction, and none of the changes were kept (nor the rest of that transaction)"
 "db.commit_unknown" = "the connection ended while committing: whether the commit happened is not known, so check the data"
 "db.reserved_savepoint" = "savepoint names starting with datarig_ are datarig's own: choose another name"
 "db.not_a_plain_read" = "this statement asks for a read-write transaction, so it was not run as a read"

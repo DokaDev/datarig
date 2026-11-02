@@ -166,14 +166,18 @@ pub(super) async fn apply(
         }
         let undo =
             if mode == Mode::Savepoint { format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}") } else { ROLLBACK.to_string() };
-        let mut undone = own(conn, link, &undo).await?.is_ok();
+        let undone = own(conn, link, &undo).await?.is_ok();
         if mode == Mode::Savepoint && undone {
-            undone = own(conn, link, &format!("RELEASE SAVEPOINT {SAVEPOINT}")).await?.is_ok();
+            // Gone back to it: what the steps did is undone, whether the release works or not.
+            let _ = own(conn, link, &format!("RELEASE SAVEPOINT {SAVEPOINT}")).await?;
         }
         answer(Err(failure));
-        // The server may have rolled the whole transaction back (a deadlock), or kept one the
-        // undo did not end: the state as it says.
-        if (mode == Mode::Savepoint || !undone)
+        if !undone {
+            return Err(not_undone(link));
+        }
+        // The server may have rolled the whole transaction back (a deadlock): the state as it
+        // says.
+        if mode == Mode::Savepoint
             && let Some(error) = after(conn, link, env, s, "", false, true, false).await?
         {
             return Err(Stop::Lost(error));
@@ -186,8 +190,11 @@ pub(super) async fn apply(
                 if e.is_fatal() {
                     return lost_or(e, answer);
                 }
-                let _ = own(conn, link, &format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}")).await?;
+                let undone = own(conn, link, &format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}")).await?.is_ok();
                 answer(Err(fail(None, my_error(&e))));
+                if !undone {
+                    return Err(not_undone(link));
+                }
                 if let Some(error) = after(conn, link, env, s, "", false, true, false).await? {
                     return Err(Stop::Lost(error));
                 }
@@ -205,8 +212,8 @@ pub(super) async fn apply(
             Err(e) => {
                 let undone = own(conn, link, ROLLBACK).await?.is_ok();
                 answer(Err(fail(None, my_error(&e))));
-                if !undone && let Some(error) = after(conn, link, env, s, "", false, true, false).await? {
-                    return Err(Stop::Lost(error));
+                if !undone {
+                    return Err(not_undone(link));
                 }
             }
         },
@@ -220,6 +227,14 @@ pub(super) async fn apply(
         }
     }
     Ok(())
+}
+
+/// What the steps did could not be undone for sure (the server refused the rollback): the
+/// connection is cut, so the server rolls the transaction back as it ends, and the session is
+/// lost; a later `COMMIT` could otherwise keep changes said not to be applied.
+fn not_undone(link: &Link) -> Stop {
+    link.cut();
+    Stop::Lost(DbError::ApplyNotUndone)
 }
 
 /// Answer the failure of a statement of the driver's own around the steps (nothing of them was

@@ -1188,6 +1188,16 @@ mod terminal {
         impl Session {
             /// Apply `steps` with `hooks`; every event it brought.
             async fn apply(&mut self, steps: &[Step], tx: ApplyTx, hooks: &Hooks<'_>) -> Vec<DbEvent> {
+                self.apply_ending(steps, tx, hooks).await.0
+            }
+
+            /// [`Session::apply`], and why the session must end after it, if it must.
+            async fn apply_ending(
+                &mut self,
+                steps: &[Step],
+                tx: ApplyTx,
+                hooks: &Hooks<'_>,
+            ) -> (Vec<DbEvent>, Option<DbError>) {
                 use super::super::super::{Env, count_savepoint};
                 self.id += 1;
                 let env = Env {
@@ -1206,12 +1216,16 @@ mod terminal {
                     before_bind: None,
                 };
                 let applied = apply(&self.client, &mut self.link, &env, &mut self.tx, self.id, steps, tx, false, hooks);
-                tokio::time::timeout(std::time::Duration::from_secs(20), applied).await.expect("it returns").ok();
+                let ends = tokio::time::timeout(std::time::Duration::from_secs(20), applied)
+                    .await
+                    .expect("it returns")
+                    .ok()
+                    .flatten();
                 let mut events = Vec::new();
                 while let Ok(ev) = self.rx.try_recv() {
                     events.push(ev);
                 }
-                events
+                (events, ends)
             }
         }
 
@@ -1289,6 +1303,36 @@ mod terminal {
             assert_eq!(answer(&events), cancelled(None));
             assert_eq!(committed(&url, &table).await, "a");
             assert!(!s.tx.block, "no transaction left open");
+        }
+
+        /// A failed step whose undo the server refuses (its request fails): the Apply answers, then
+        /// the session must end, so the server rolls back what the steps did as its connection
+        /// closes; nothing is ever committed.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn an_undo_that_fails_ends_the_session_and_nothing_is_kept() {
+            let Some(url) = pg_url("an_undo_that_fails_ends_the_session_and_nothing_is_kept") else { return };
+            let (table, _g) = table(&url, "undo_fails").await;
+            let mut s = Session::open(&url).await;
+            let mut steps = steps(&table);
+            // The update changes the row and gives another count than it must.
+            steps[1].expect = Expect::Affected(5);
+            let hooks = Hooks { undo_first: Some("SELECT 1/0"), ..Hooks::default() };
+            let (events, ends) = s.apply_ending(&steps, ApplyTx::Commit, &hooks).await;
+            assert_eq!(answer(&events), Err(ApplyFailure { step: Some(1), why: ApplyError::Count { got: 1 } }));
+            assert_eq!(ends, Some(DbError::ApplyNotUndone), "the session ends");
+            drop(s);
+            // The server rolled the transaction back with the connection.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let (c, ..) = connect(&url).await;
+                let rows = c.query(&format!("SELECT v FROM {table} WHERE id = 1 FOR UPDATE NOWAIT"), &[]).await;
+                if let Ok(rows) = rows {
+                    assert_eq!(rows[0].get::<_, String>(0), "a");
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "the row stays locked: {rows:?}");
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
         }
 
         /// In a block opened for manual commit, a cancel during the Apply that also lands on its
