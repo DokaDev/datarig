@@ -193,6 +193,8 @@ pub enum Action {
     Chart(ChartAction),
     /// Export the shown result to a file: the export dialog.
     Export,
+    /// Change the shown result's cells.
+    Edit(super::edit::EditAction),
 }
 
 /// What the results pane of a query tab does.
@@ -586,6 +588,7 @@ const fn mv(action: Action, id: &'static str, label: Label, when: fn(&App) -> bo
     ActionSpec { action, id, label, when, repeatable: true }
 }
 
+use super::edit::EditAction as D;
 use super::grid_search::SearchAction as S;
 use ChartAction as C;
 use ExplorerAction as E;
@@ -780,6 +783,12 @@ pub const REGISTRY: &[ActionSpec] = &[
     mv(Action::GridSearch(S::Next { same: true }), "grid.search_next", Label::ActionGridSearchNext, grid_searching),
     mv(Action::GridSearch(S::Next { same: false }), "grid.search_prev", Label::ActionGridSearchPrev, grid_searching),
     act(Action::GridSearch(S::Clear), "grid.search_clear", Label::ActionGridSearchClear, grid_searching),
+    act(Action::Edit(D::Cell), "edit.cell", Label::ActionEditCell, grid_rows_focused),
+    act(Action::Edit(D::SetNull), "edit.set_null", Label::ActionEditSetNull, grid_rows_focused),
+    act(Action::Edit(D::SetDefault), "edit.set_default", Label::ActionEditSetDefault, grid_rows_focused),
+    act(Action::Edit(D::Undo), "edit.undo", Label::ActionEditUndo, grid_rows_focused),
+    act(Action::Edit(D::Redo), "edit.redo", Label::ActionEditRedo, grid_rows_focused),
+    act(Action::Edit(D::Revert), "edit.revert", Label::ActionEditRevert, grid_rows_focused),
     act(
         Action::Copy(CopyScope::Selection, CopyFormat::TsvPlain),
         "results.copy.selection.tsv",

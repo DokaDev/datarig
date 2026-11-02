@@ -239,6 +239,7 @@ impl App {
             Action::Plan(p) => self.plan_action(p),
             Action::Chart(c) => self.chart_action(c),
             Action::GridSearch(s) => self.grid_search_action(s),
+            Action::Edit(e) => self.edit_action(e),
         }
     }
 

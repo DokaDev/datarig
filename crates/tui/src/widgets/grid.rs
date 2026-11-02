@@ -7,6 +7,7 @@
 use crate::text::{Align, fit, sanitize_cell, slice_cols, width};
 use crate::theme;
 use datarig_core::driver::{Cell, ColumnMeta, KeyMarks};
+use datarig_core::edit::Value;
 use datarig_core::fault::Fault;
 use datarig_core::i18n::{I18n, Label};
 use datarig_core::results::{Row, RowStore};
@@ -48,6 +49,9 @@ pub struct ResultSet {
     /// What its values were read in (the session's time zone and character set when its first
     /// page came, and whether a later page came under others): what a copy as SQL judges it by.
     pub read_in: datarig_core::driver::ReadIn,
+    /// The user's changes of its cells and what may change them: kept with the result, so a
+    /// parked result keeps its own.
+    pub edit: Box<crate::app::edit::EditState>,
 }
 
 /// Where the pages of a result were read.
@@ -142,6 +146,7 @@ impl ResultSet {
             pages_in: PagesIn::Nothing,
             tx: None,
             read_in: Default::default(),
+            edit: Default::default(),
         }
     }
 
@@ -516,6 +521,7 @@ pub fn render(
         st.read_error = Some(e);
     }
     let not_read = i18n.label(Label::ResultsNotRead);
+    let default_label = i18n.label(Label::EditDefault);
 
     let gutter = win.end.max(1).to_string().len().max(2) + 1;
     let avail = (area.width as usize).saturating_sub(gutter);
@@ -672,6 +678,10 @@ pub fn render(
         let num_bg = if whole { th.range } else { Style::new().bg(zebra) };
         let num_style = num_bg.fg(if r == st.row { th.accent } else { th.fg_muted });
         buf.set_stringn(area.x, y, fit(&(r + 1).to_string(), gutter - 1, Align::Right), gutter - 1, num_style);
+        // A row with changes pending: `~` in the gutter's free column.
+        if rs.edit.batch.row(r).is_some() {
+            buf.set_stringn(area.x + gutter as u16 - 1, y, "~", 1, num_style);
+        }
         for &(cx, ci, w) in &layout {
             st.drawn_cells += 1;
             let col = &rs.columns[ci];
@@ -685,13 +695,25 @@ pub fn render(
                 Style::new().bg(zebra)
             };
             put(buf, cx, y, "│", sep_style(zebra));
-            let (text, is_null) = match rs.cell(r, ci) {
-                CellRef::Here(c) => cell_text(c, &null_label),
-                CellRef::NotRead => (not_read.to_string(), true),
-                CellRef::Missing => cell_text(&None, &null_label),
+            // A pending value is shown instead of the value as read.
+            let (text, is_null, default) = match (rs.edit.batch.value(r, ci), rs.cell(r, ci)) {
+                (Some(Value::Text(v)), _) => (sanitize_cell(v), false, false),
+                (Some(Value::Null), _) => (null_label.to_string(), true, false),
+                (Some(Value::Default), _) => (default_label.to_string(), true, true),
+                (None, CellRef::Here(c)) => {
+                    let (t, n) = cell_text(c, &null_label);
+                    (t, n, false)
+                }
+                (None, CellRef::NotRead) => (not_read.to_string(), true, false),
+                (None, CellRef::Missing) => {
+                    let (t, n) = cell_text(&None, &null_label);
+                    (t, n, false)
+                }
             };
             let align = if col.meta.numeric && !is_null { Align::Right } else { Align::Left };
-            let style = if is_null {
+            let style = if default {
+                Style::new().fg(th.fg_muted).add_modifier(Modifier::DIM)
+            } else if is_null {
                 Style::new().fg(th.null_fg).add_modifier(Modifier::ITALIC)
             } else {
                 Style::new().fg(th.fg)

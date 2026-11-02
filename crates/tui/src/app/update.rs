@@ -16,6 +16,7 @@ impl App {
         self.idle_tick(now);
         self.handle_event_here(ev);
         self.tips_follow();
+        self.sweep_cell_edit();
         self.sweep_as_plan();
         self.sweep_exports();
         self.keychain_offer_check();
@@ -119,6 +120,7 @@ impl App {
         self.on_app_event_here(ev);
         self.tips_follow();
         self.sweep_grid_search();
+        self.sweep_cell_edit();
         self.sweep_as_plan();
         self.sweep_exports();
         self.keychain_offer_check();
@@ -209,6 +211,8 @@ impl App {
         } else if self.overlays.is_empty() && (self.focus == Focus::Tree || self.profiles.is_empty()) {
             // The explorer or the welcome panel: a connection URL makes a new profile.
             self.paste_dsn(text);
+        } else if self.overlays.is_empty() && self.focus == Focus::Results && self.cell_edit_open() {
+            self.cell_edit_paste(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Results && self.grid_prompt_open() {
             self.grid_prompt_paste(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Editor && !self.profiles.is_empty() {
@@ -328,6 +332,7 @@ impl App {
             Ctx::Password => keys.iter().for_each(|k| self.prompt_key(k.to_event(), repeat)),
             Ctx::ExplorerFilter => keys.iter().for_each(|k| self.explorer_filter_key(k.to_event())),
             Ctx::GridSearch => keys.iter().for_each(|k| self.grid_prompt_key(k.to_event())),
+            Ctx::CellEdit => keys.iter().for_each(|k| self.cell_edit_key(k.to_event())),
             Ctx::QuickConnect => keys.iter().for_each(|k| self.quick_key(k.to_event(), repeat)),
             Ctx::TabList => keys.iter().for_each(|k| self.tab_list_key(k.to_event(), repeat)),
             Ctx::Chooser | Ctx::ChooserFilter => keys.iter().for_each(|k| self.chooser_key(k.to_event(), repeat)),

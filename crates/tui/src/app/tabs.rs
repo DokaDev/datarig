@@ -463,6 +463,8 @@ pub struct Tab {
     pub grid: GridState,
     /// The search of the grid (`/`, `?`, `n`, `N`).
     pub find: super::grid_search::GridFind,
+    /// The cell editor, while it is open over a cell of the shown result.
+    pub cell_edit: Option<super::edit::CellEdit>,
     pub exec: TabSession,
     /// The last statement outcome of this tab (the status bar shows it while the tab is active).
     pub status: Option<Notice>,
@@ -591,6 +593,7 @@ impl Tab {
             results: Results::Empty,
             grid: GridState::default(),
             find: Default::default(),
+            cell_edit: None,
             exec: TabSession::new(),
             status: None,
             doc: Doc::new(),

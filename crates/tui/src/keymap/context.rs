@@ -20,6 +20,7 @@
 //! │  ├─ editor.vim.search     [editor][text]   (the `/` and `?` prompt)
 //! │  ├─ explorer.filter       [text]
 //! │  ├─ grid.search           [text]   (the grid's `/` and `?` prompt)
+//! │  ├─ grid.edit             [text]   (the cell editor over a cell of the grid)
 //! │  └─ overlay.cell_viewer
 //! └─ overlay.*              (which-key, help, help filter, command line, quick connect,
 //!                            tab list, profile form, settings, export dialog, chooser, chooser filter, name input,
@@ -39,6 +40,7 @@ pub enum Ctx {
     Grid,
     GridMatches,
     GridSearch,
+    CellEdit,
     Inspector,
     Plan,
     Chart,
@@ -76,7 +78,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 42] = [
+    pub const ALL: [Ctx; 43] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -85,6 +87,7 @@ impl Ctx {
         Ctx::Grid,
         Ctx::GridMatches,
         Ctx::GridSearch,
+        Ctx::CellEdit,
         Ctx::Inspector,
         Ctx::Plan,
         Ctx::Chart,
@@ -132,6 +135,7 @@ impl Ctx {
             Ctx::Grid => "grid",
             Ctx::GridMatches => "grid.matches",
             Ctx::GridSearch => "grid.search",
+            Ctx::CellEdit => "grid.edit",
             Ctx::Inspector => "inspector",
             Ctx::Plan => "plan",
             Ctx::Chart => "chart",
@@ -177,9 +181,13 @@ impl Ctx {
         match self {
             Ctx::Root => None,
             Ctx::Workspace => Some(Ctx::Root),
-            Ctx::Nav | Ctx::VimInsert | Ctx::VimSearch | Ctx::ExplorerFilter | Ctx::GridSearch | Ctx::CellViewer => {
-                Some(Ctx::Workspace)
-            }
+            Ctx::Nav
+            | Ctx::VimInsert
+            | Ctx::VimSearch
+            | Ctx::ExplorerFilter
+            | Ctx::GridSearch
+            | Ctx::CellEdit
+            | Ctx::CellViewer => Some(Ctx::Workspace),
             Ctx::GridMatches => Some(Ctx::Grid),
             Ctx::Explorer
             | Ctx::Grid
@@ -208,6 +216,7 @@ impl Ctx {
                 | Ctx::VimSearch
                 | Ctx::ExplorerFilter
                 | Ctx::GridSearch
+                | Ctx::CellEdit
                 | Ctx::Commands
                 | Ctx::QuickConnect
                 | Ctx::TabList
@@ -259,6 +268,9 @@ impl Ctx {
             }
             Ctx::GridSearch => {
                 "The search prompt of `/` and `?` on the line under the grid: the cursor goes to the first matching cell while the pattern is typed, `Enter` searches (an empty pattern: the last one), `Esc` goes back to where the cursor was, `Ctrl+W` deletes the word before the cursor. The full values are searched as fetched (not the shown cut), cell by cell, row by row."
+            }
+            Ctx::CellEdit => {
+                "The cell editor (`e` in the grid) over the cell: one line, the cell's pending value or its value as read. `Enter` keeps the text (an empty text is the empty string, never NULL), `Esc` cancels, `Ctrl+N` sets NULL, `Ctrl+D` the column's default. With cells of one column selected, each takes the value, as one change (`u` undoes it). A value of several lines is not edited here; an enum or boolean column lists its values instead."
             }
             Ctx::Inspector => {
                 "The result inspector next to the grid, after a click on it: `j`/`k` move between the columns and the grid's cell follows (on the Row tab, a click on a column moves it there too), `Enter` shows the value whole."
@@ -354,6 +366,7 @@ impl Ctx {
             Ctx::Grid => Label::KeyctxGrid,
             Ctx::GridMatches => Label::KeyctxGridMatches,
             Ctx::GridSearch => Label::KeyctxGridSearch,
+            Ctx::CellEdit => Label::KeyctxGridEdit,
             Ctx::Inspector => Label::KeyctxInspector,
             Ctx::Plan => Label::KeyctxPlan,
             Ctx::Chart => Label::KeyctxChart,

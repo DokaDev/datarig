@@ -117,6 +117,12 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space ,` | `settings.open` | Settings |  |
 | `Space /` | `commands.open` | Commands |  |
 | `Space ?` | `help.context` | Keyboard help |  |
+| `Space d e` | `edit.cell` | Edit the cell (the selected cells of one column) |  |
+| `Space d n` | `edit.set_null` | Set the cell (the selected cells) to NULL |  |
+| `Space d D` | `edit.set_default` | Set the cell (the selected cells) to the column's default |  |
+| `Space d u` | `edit.undo` | Undo the last change of the result's cells |  |
+| `Space d U` | `edit.redo` | Redo the change of the result's cells undone last |  |
+| `Space d r` | `edit.revert` | Drop the pending changes of the cell (the selection) |  |
 | `Space r y t` | `results.copy.selection.tsv` | Copy selection: Without headers (TSV) |  |
 | `Space r y T` | `results.copy.selection.tsv_header` | Copy selection: With headers (TSV) |  |
 | `Space r y l` | `results.copy.selection.list` | Copy selection: Comma list |  |
@@ -168,6 +174,7 @@ Leader groups (the which-key popup lists what follows):
 | `Space r a` | Copy all fetched rows |
 | `Space x` | Transaction |
 | `Space e` | Editor |
+| `Space d` | Data |
 
 ## `explorer`
 
@@ -250,6 +257,9 @@ The result grid. The wheel scrolls the rows; a sideways wheel (a trackpad) or Sh
 | `Ctrl+A` | `grid.select_all` | Select every cell of the page |  |
 | `/` | `grid.search` | Search the fetched rows forward (a regular expression) |  |
 | `?` | `grid.search_back` | Search the fetched rows backward (a regular expression) |  |
+| `e` | `edit.cell` | Edit the cell (the selected cells of one column) |  |
+| `u` | `edit.undo` | Undo the last change of the result's cells |  |
+| `Ctrl+R` | `edit.redo` | Redo the change of the result's cells undone last |  |
 | `i` | `results.detail` | Result detail → show / hide |  |
 | `I` | `results.detail_tab` | Result detail → Cell / Row |  |
 | `z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |
@@ -280,6 +290,14 @@ The result grid while a search is on (after `/` or `?`): `n` goes to the next ma
 The search prompt of `/` and `?` on the line under the grid: the cursor goes to the first matching cell while the pattern is typed, `Enter` searches (an empty pattern: the last one), `Esc` goes back to where the cursor was, `Ctrl+W` deletes the word before the cursor. The full values are searched as fetched (not the shown cut), cell by cell, row by row. Inside `workspace`.
 
 Reserved — grid search: `Esc` `Enter` `Ctrl+W`
+
+Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
+## `grid.edit` [text]
+
+The cell editor (`e` in the grid) over the cell: one line, the cell's pending value or its value as read. `Enter` keeps the text (an empty text is the empty string, never NULL), `Esc` cancels, `Ctrl+N` sets NULL, `Ctrl+D` the column's default. With cells of one column selected, each takes the value, as one change (`u` undoes it). A value of several lines is not edited here; an enum or boolean column lists its values instead. Inside `workspace`.
+
+Reserved — cell editor: `Esc` `Enter` `Ctrl+N` `Ctrl+D`
 
 Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 

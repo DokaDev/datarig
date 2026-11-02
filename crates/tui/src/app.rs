@@ -32,6 +32,7 @@ pub mod copy;
 mod ddl;
 mod dialog_mouse;
 mod dispatch;
+pub mod edit;
 pub mod effects;
 pub mod environments;
 mod execution;
@@ -1638,6 +1639,7 @@ impl App {
                 _ if self.tabs.is_empty() => Ctx::Explorer,
                 Focus::Results | Focus::Inspector if self.plan_shown() => Ctx::Plan,
                 Focus::Results | Focus::Inspector if self.chart_shown() => Ctx::Chart,
+                Focus::Results if self.cell_edit_open() => Ctx::CellEdit,
                 Focus::Results if self.grid_prompt_open() => Ctx::GridSearch,
                 Focus::Results if self.grid_search_on() => Ctx::GridMatches,
                 Focus::Results => Ctx::Grid,

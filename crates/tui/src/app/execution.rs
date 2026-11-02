@@ -459,6 +459,7 @@ impl App {
     pub fn on_db_event(&mut self, ev: DbEvent) {
         self.on_db_event_here(ev);
         self.tips_follow();
+        self.sweep_cell_edit();
         self.sweep_as_plan();
         self.sweep_exports();
         self.keychain_offer_check();
@@ -645,6 +646,7 @@ impl App {
             }
             DbEvent::Structure { schema, table, result } => {
                 let (profile, database) = (a.profile, a.database.clone());
+                self.edit_structure_came(profile, Some(&database), &schema, &table, result.as_deref(), &text);
                 let came = self.checks_came(profile, Some(&database), &schema, &table, result.as_deref());
                 // A failure the explorer does not wait for (completion's) is not its.
                 if let Some(a) = self.conns.aux_by_id(id)
@@ -751,6 +753,7 @@ impl App {
             }
             DbEvent::Structure { schema, table, result } => {
                 self.export_structure_came(id, &schema, &table, result.as_deref());
+                self.edit_structure_came(id, None, &schema, &table, result.as_deref(), &text);
                 let came = self.checks_came(id, None, &schema, &table, result.as_deref());
                 // A failure the explorer does not wait for (completion's) is not its.
                 let tree = &mut self.conns.entry(id).tree;
