@@ -1,0 +1,481 @@
+//! Editing a result's cells: the first edit key reads the table's structure (once), and the
+//! press is done when it comes; the cell editor, NULL and DEFAULT, undo and redo, a column's
+//! selected cells as one change, the values of an enum or a boolean in a list; and the reasons
+//! a result stays read-only, each said once per press with nothing changed.
+
+mod common;
+
+use common::*;
+use datarig_core::config::Config;
+use datarig_core::driver::structure::{ColumnFill, TableStructure};
+use datarig_core::driver::{ColumnMeta, DbCommand, DbError, DbEvent, ValueKind};
+use datarig_core::edit::Value;
+use datarig_core::i18n::{Label, Lang, Msg};
+use datarig_core::policy::Policy;
+use datarig_core::profile::ConnectionConfig;
+use datarig_tui::app::edit::{EditState, Target};
+use datarig_tui::app::overlay::OverlayKind;
+use datarig_tui::app::{Focus, Results};
+use datarig_tui::keymap::Ctx;
+use ratatui::crossterm::event::{Event, KeyCode};
+use std::time::Duration;
+
+fn s(v: &str) -> Option<String> {
+    Some(v.to_string())
+}
+
+/// `shop.users`' id, email and nickname, three rows (the second without a nickname).
+fn users_columns() -> Vec<ColumnMeta> {
+    vec![
+        meta_from("id", "int8", true, USERS, 1),
+        meta_from("email", "text", false, USERS, 2),
+        meta_from("nickname", "text", false, USERS, 4),
+    ]
+}
+
+fn users_rows() -> Vec<Vec<Option<String>>> {
+    vec![vec![s("1"), s("a@x"), s("ann")], vec![s("2"), s("b@x"), None], vec![s("3"), s("c@x"), s("cy")]]
+}
+
+/// Run `sql` and let `columns` and `rows` come back as its result, the grid focused.
+fn answer(h: &mut Harness, sql: &str, columns: Vec<ColumnMeta>, rows: Vec<Vec<Option<String>>>) {
+    h.app.run(vec![sql.to_string()]);
+    let id = h.app.tab().exec.query_id;
+    h.db(DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::ZERO });
+    h.app.focus = Focus::Results;
+}
+
+/// Connected (the keys of `shop` read), the users' rows in the grid; nothing sent yet.
+fn users(lang: Lang) -> Harness {
+    let mut h = Harness::connected(lang);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows());
+    h.sent();
+    h
+}
+
+/// The structures asked for since the last call.
+fn asked(h: &mut Harness) -> Vec<(String, String)> {
+    h.sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::LoadStructure { schema, table } => Some((schema, table)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The metadata session answers with `shop.users`' structure (or why it could not be read).
+fn structure(h: &mut Harness, result: Result<TableStructure, DbError>) {
+    let name = h.app.profiles[0].name.clone();
+    let result = result.map(Box::new);
+    h.meta_db(&name, DbEvent::Structure { schema: "shop".into(), table: "users".into(), result });
+}
+
+/// The shown result's edits.
+fn edits(h: &Harness) -> &EditState {
+    match &h.app.tab().results {
+        Results::Rows(rs) => &rs.edit,
+        _ => panic!("no row result"),
+    }
+}
+
+fn value(h: &Harness, row: usize, col: usize) -> Option<Value> {
+    edits(h).batch.value(row, col).cloned()
+}
+
+/// What the status line said last (and forget it).
+fn said(h: &mut Harness) -> Option<Msg> {
+    h.app.transient.take().map(|(n, _)| n.msg)
+}
+
+/// Resolved: `e` on the first row's email, the structure answered, the editor closed again.
+fn ready(lang: Lang) -> Harness {
+    let mut h = users(lang);
+    h.keys("le");
+    structure(&mut h, Ok(users_structure()));
+    assert_eq!(h.app.key_context(), Ctx::CellEdit);
+    h.key(KeyCode::Esc);
+    h.app.transient = None;
+    h.sent();
+    h
+}
+
+fn editor_text(h: &Harness) -> String {
+    h.app.tab().cell_edit.as_ref().expect("the cell editor is open").input.text().to_string()
+}
+
+/// Clear the editor's text.
+fn clear(h: &mut Harness) {
+    for _ in 0..editor_text(h).chars().count() {
+        h.key(KeyCode::Backspace);
+    }
+}
+
+fn read_only(reason: &str) -> Option<Msg> {
+    Some(Msg::EditReadOnly { reason: reason.into() })
+}
+
+fn refused(reason: &str) -> Option<Msg> {
+    Some(Msg::EditRefused { reason: reason.into() })
+}
+
+#[test]
+fn the_first_edit_key_reads_the_structure_once_and_opens_the_editor_when_it_comes() {
+    let mut h = users(Lang::En);
+    h.keys("le");
+    assert_eq!(asked(&mut h), [("shop".to_string(), "users".to_string())]);
+    assert_eq!(said(&mut h), Some(Label::EditLoading.into()));
+    // Pressed again while it loads: said again, nothing sent.
+    h.keys("e");
+    assert_eq!(asked(&mut h), Vec::<(String, String)>::new());
+    assert_eq!(said(&mut h), Some(Label::EditLoading.into()));
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    structure(&mut h, Ok(users_structure()));
+    assert_eq!(h.app.key_context(), Ctx::CellEdit, "the press is done once the structure came");
+    assert_eq!(editor_text(&h), "a@x", "the value as read");
+    h.type_text("y");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    assert_eq!(value(&h, 0, 1), Some(Value::Text("a@xy".into())));
+    assert_eq!(edits(&h).batch.counts().total(), 1);
+    let screen = h.screen(120, 40);
+    assert!(screen.contains(" 1~│") && screen.contains("a@xy"), "{screen}");
+    assert!(!screen.contains(" 2~│"), "{screen}");
+    // Resolved: the next key opens the editor at once, on the pending value.
+    h.keys("e");
+    assert_eq!(asked(&mut h), Vec::<(String, String)>::new());
+    assert_eq!(editor_text(&h), "a@xy");
+}
+
+#[test]
+fn u_undoes_and_ctrl_r_redoes() {
+    let mut h = ready(Lang::En);
+    h.keys("e");
+    h.type_text("1");
+    h.key(KeyCode::Enter);
+    h.keys("je");
+    h.type_text("2");
+    h.key(KeyCode::Enter);
+    assert_eq!(edits(&h).batch.counts().total(), 2);
+    h.keys("u");
+    assert_eq!((value(&h, 0, 1), value(&h, 1, 1)), (Some(Value::Text("a@x1".into())), None));
+    h.keys("u");
+    assert_eq!(value(&h, 0, 1), None);
+    h.keys("u");
+    assert_eq!(said(&mut h), Some(Label::EditNothingToUndo.into()));
+    h.ctrl('r');
+    h.ctrl('r');
+    assert_eq!(value(&h, 1, 1), Some(Value::Text("b@x2".into())));
+    h.ctrl('r');
+    assert_eq!(said(&mut h), Some(Label::EditNothingToRedo.into()));
+    // The chords of `Space d` too, and revert drops the cursor's cell's change.
+    h.keys(" du");
+    assert_eq!(value(&h, 1, 1), None);
+    h.keys(" dU");
+    assert_eq!(value(&h, 1, 1), Some(Value::Text("b@x2".into())));
+    h.keys(" dr");
+    assert_eq!(value(&h, 1, 1), None);
+    h.keys(" dr");
+    assert_eq!(said(&mut h), Some(Label::EditNothingToRevert.into()));
+}
+
+#[test]
+fn an_empty_text_is_the_empty_string_and_ctrl_n_ctrl_d_set_null_and_default() {
+    let mut h = ready(Lang::En);
+    // The nickname: nullable, no default.
+    h.keys("le");
+    clear(&mut h);
+    h.key(KeyCode::Enter);
+    assert_eq!(value(&h, 0, 2), Some(Value::Text(String::new())), "never NULL");
+    h.keys("e");
+    assert_eq!(editor_text(&h), "");
+    h.ctrl('n');
+    assert_eq!(value(&h, 0, 2), Some(Value::Null));
+    h.keys("e");
+    h.ctrl('d');
+    assert_eq!(said(&mut h), refused("nickname has no default"));
+    assert_eq!(h.app.key_context(), Ctx::CellEdit, "refused: the editor stays");
+    h.key(KeyCode::Esc);
+    assert_eq!(value(&h, 0, 2), Some(Value::Null), "Esc changes nothing");
+    // The email is NOT NULL.
+    h.keys("he");
+    h.ctrl('n');
+    assert_eq!(said(&mut h), refused("email is NOT NULL"));
+    assert_eq!(h.app.key_context(), Ctx::CellEdit);
+    h.key(KeyCode::Esc);
+    assert_eq!(value(&h, 0, 1), None);
+    // The id has a default (its sequence).
+    h.keys("he");
+    h.ctrl('d');
+    assert_eq!(value(&h, 0, 0), Some(Value::Default));
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("default"), "{screen}");
+    // The actions without the editor.
+    h.keys("ll");
+    h.keys(" dn");
+    assert_eq!(value(&h, 0, 2), Some(Value::Null));
+    h.keys("h");
+    h.keys(" dn");
+    assert_eq!(said(&mut h), refused("email is NOT NULL"));
+    h.keys(" dD");
+    assert_eq!(said(&mut h), refused("email has no default"));
+}
+
+#[test]
+fn esc_cancels_and_a_paste_of_several_lines_is_refused() {
+    let mut h = ready(Lang::En);
+    h.keys("e");
+    h.type_text("zz");
+    h.event(Event::Paste("one\ntwo".into()));
+    assert_eq!(said(&mut h), Some(Label::EditPasteLines.into()));
+    assert_eq!(editor_text(&h), "a@xzz");
+    h.event(Event::Paste("!".into()));
+    assert_eq!(editor_text(&h), "a@xzz!");
+    h.key(KeyCode::Esc);
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    assert!(edits(&h).batch.is_empty());
+}
+
+#[test]
+fn a_value_of_several_lines_does_not_open_the_editor() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    let rows = vec![vec![s("1"), s("one\ntwo"), None]];
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), rows);
+    h.keys("le");
+    structure(&mut h, Ok(users_structure()));
+    assert_eq!(said(&mut h), Some(Label::EditSeveralLines.into()));
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+}
+
+#[test]
+fn cells_selected_in_one_column_take_the_value_as_one_change() {
+    let mut h = ready(Lang::En);
+    h.keys("vjj");
+    h.keys("e");
+    assert_eq!(editor_text(&h), "c@x", "the cursor's value");
+    clear(&mut h);
+    h.type_text("same");
+    h.key(KeyCode::Enter);
+    for r in 0..3 {
+        assert_eq!(value(&h, r, 1), Some(Value::Text("same".into())), "row {r}");
+    }
+    h.keys("u");
+    assert!(edits(&h).batch.is_empty(), "one undo step");
+    // Cells of two columns, or whole rows: refused (`v` first drops the selection there is).
+    h.keys("v");
+    h.keys("vl");
+    h.keys("e");
+    assert_eq!(said(&mut h), Some(Label::EditSeveralColumns.into()));
+    h.keys("v");
+    h.keys("V");
+    h.keys(" dn");
+    assert_eq!(said(&mut h), Some(Label::EditSeveralColumns.into()));
+    assert!(edits(&h).batch.is_empty());
+}
+
+#[test]
+fn a_read_only_environment_refuses_before_anything_is_asked() {
+    let mut cfg = Config {
+        connections: vec![ConnectionConfig { policy: Some("prod".into()), ..ConnectionConfig::test_db() }],
+        ..Config::default()
+    };
+    cfg.policies.insert("prod", Policy { read_only: true, ..Policy::default() });
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows());
+    h.sent();
+    h.keys("e");
+    assert_eq!(said(&mut h), read_only("the connection's environment is read-only"));
+    assert!(asked(&mut h).is_empty());
+}
+
+#[test]
+fn an_environment_that_is_not_defined_refuses() {
+    let mut h = users(Lang::En);
+    h.app.profiles[0].policy = Some("nowhere".into());
+    h.keys("e");
+    assert!(matches!(said(&mut h), Some(Msg::EnvironmentNotFound { .. })));
+    assert!(asked(&mut h).is_empty());
+}
+
+#[test]
+fn a_server_that_takes_no_edits_refuses() {
+    let mut h = users(Lang::En);
+    h.db(DbEvent::Edit(None));
+    h.keys("e");
+    assert_eq!(said(&mut h), read_only("this connection type can't edit data"));
+    assert!(asked(&mut h).is_empty());
+}
+
+#[test]
+fn a_join_is_read_only() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    let columns = vec![meta_from("id", "int8", true, ORDERS, 1), meta_from("id", "int8", true, USERS, 1)];
+    let sql = "SELECT o.id, u.id FROM shop.orders o JOIN shop.users u ON u.id = o.user_id";
+    answer(&mut h, sql, columns, vec![vec![s("1"), s("1")]]);
+    h.sent();
+    h.keys("e");
+    let Some(Msg::EditReadOnly { reason }) = said(&mut h) else { panic!("read-only") };
+    assert!(reason.starts_with("it reads more than one table"), "{reason}");
+    assert!(asked(&mut h).is_empty());
+}
+
+#[test]
+fn computed_and_generated_columns_are_refused() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    let columns = vec![
+        meta_from("id", "int8", true, USERS, 1),
+        meta("shout", "text", false, false),
+        meta_from("name", "text", false, USERS, 3),
+    ];
+    answer(
+        &mut h,
+        "SELECT id, upper(email) AS shout, name FROM shop.users",
+        columns,
+        vec![vec![s("1"), s("A@X"), s("Ann")]],
+    );
+    let mut s = users_structure();
+    s.columns[2].fill = ColumnFill::Stored("upper(email)".into());
+    h.keys("le");
+    structure(&mut h, Ok(s));
+    assert_eq!(said(&mut h), refused("shout is computed in the query, not a column of the table"));
+    h.keys("le");
+    assert_eq!(said(&mut h), refused("name is generated by the database"));
+    assert!(edits(&h).batch.is_empty());
+}
+
+#[test]
+fn a_structure_that_could_not_be_read_is_asked_again() {
+    let mut h = users(Lang::En);
+    h.keys("e");
+    assert_eq!(asked(&mut h).len(), 1);
+    structure(&mut h, Err(DbError::Server("permission denied".into())));
+    let Some(Msg::EditReadOnly { reason }) = said(&mut h) else { panic!("read-only") };
+    assert!(reason.starts_with("the table's details could not be read"), "{reason}");
+    assert!(matches!(edits(&h).target, Target::ReadOnly { retry: true, .. }));
+    h.keys("e");
+    assert_eq!(asked(&mut h).len(), 1, "unknown is not absent: asked again");
+    structure(&mut h, Ok(users_structure()));
+    assert_eq!(h.app.key_context(), Ctx::CellEdit);
+}
+
+#[test]
+fn a_structure_for_another_attempt_or_result_makes_nothing() {
+    let mut h = users(Lang::En);
+    h.keys("e");
+    assert_eq!(asked(&mut h).len(), 1);
+    // The profile connected again meanwhile: the answer is not the waiting press's.
+    let id = h.app.profiles[0].id;
+    h.app.conns.next_generation(id);
+    structure(&mut h, Ok(users_structure()));
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    assert!(matches!(edits(&h).target, Target::Unresolved), "it waits no more");
+    h.keys("e");
+    assert_eq!(asked(&mut h).len(), 1);
+    // The query ran again: a new result, which waits for nothing.
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows());
+    structure(&mut h, Ok(users_structure()));
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    assert!(h.app.tab().cell_edit.is_none());
+    assert!(matches!(edits(&h).target, Target::Unresolved));
+}
+
+#[test]
+fn a_parked_result_keeps_its_own_changes() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.app.run(vec!["SELECT id, email, nickname FROM shop.users".into(), "SELECT 2 AS b".into()]);
+    let id = h.app.tab().exec.query_id;
+    h.db(DbEvent::StepRows { id, index: 0, columns: Some(users_columns()), rows: users_rows(), more: false });
+    let columns = Some(vec![meta("b", "int4", true, false)]);
+    h.db(DbEvent::Page { id, columns, rows: vec![vec![s("2")]], more: false, elapsed: Duration::ZERO });
+    h.app.focus = Focus::Results;
+    // The first statement's result.
+    h.keys("H");
+    assert_eq!(h.app.tab().exec.shown, Some(0));
+    h.keys("le");
+    structure(&mut h, Ok(users_structure()));
+    h.type_text("!");
+    h.key(KeyCode::Enter);
+    assert_eq!(value(&h, 0, 1), Some(Value::Text("a@x!".into())));
+    // The second one has none; back on the first, its change is there.
+    h.keys("L");
+    assert_eq!(h.app.tab().exec.shown, Some(1));
+    assert!(edits(&h).batch.is_empty());
+    h.keys("H");
+    assert_eq!(value(&h, 0, 1), Some(Value::Text("a@x!".into())));
+}
+
+/// `shop.users` with the nickname an enum and the profile a boolean that defaults to `true`.
+fn enum_and_bool() -> (Harness, TableStructure) {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    let mut active = meta_from("profile", "bool", false, USERS, 5);
+    active.kind = ValueKind::Bool;
+    let columns = vec![meta_from("id", "int8", true, USERS, 1), meta_from("nickname", "mood", false, USERS, 4), active];
+    answer(&mut h, "SELECT id, nickname, profile FROM shop.users", columns, vec![vec![s("1"), s("ok"), s("true")]]);
+    h.sent();
+    let mut st = users_structure();
+    st.columns[3].type_name = "mood".into();
+    st.columns[3].enum_labels = vec!["sad".into(), "ok".into(), "happy".into()];
+    st.columns[4].type_name = "boolean".into();
+    st.columns[4].default = Some("true".into());
+    (h, st)
+}
+
+fn picker_labels(h: &Harness) -> Vec<String> {
+    use datarig_tui::app::picker::Picker;
+    match h.app.overlays.picker() {
+        Some(Picker::CellValue { list, .. }) => list.entries().iter().map(|e| e.label.clone()).collect(),
+        _ => panic!("the list of the cell's values"),
+    }
+}
+
+#[test]
+fn an_enum_and_a_boolean_are_picked_from_their_values() {
+    let (mut h, st) = enum_and_bool();
+    h.keys("le");
+    structure(&mut h, Ok(st));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    assert_eq!(picker_labels(&h), ["sad", "ok", "happy", "NULL"], "in the server's order; nullable, no default");
+    // The value as read is selected: the next one down is `happy`.
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), None);
+    assert_eq!(value(&h, 0, 1), Some(Value::Text("happy".into())));
+    h.keys("le");
+    assert_eq!(picker_labels(&h), ["true", "false", "NULL", "DEFAULT"]);
+    for _ in 0..3 {
+        h.key(KeyCode::Down);
+    }
+    h.key(KeyCode::Enter);
+    assert_eq!(value(&h, 0, 2), Some(Value::Default));
+    h.keys("e");
+    h.key(KeyCode::Esc);
+    assert_eq!(value(&h, 0, 2), Some(Value::Default), "Esc picks nothing");
+}
+
+#[test]
+fn the_list_of_values_closes_when_its_result_goes() {
+    let (mut h, st) = enum_and_bool();
+    h.keys("le");
+    structure(&mut h, Ok(st));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    answer(&mut h, "SELECT 1 AS a", vec![meta("a", "int4", true, false)], vec![vec![s("1")]]);
+    assert_eq!(h.overlay_kind(), None);
+}
+
+#[test]
+fn the_editor_closes_when_its_result_goes() {
+    let mut h = ready(Lang::En);
+    h.keys("e");
+    assert_eq!(h.app.key_context(), Ctx::CellEdit);
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows());
+    assert!(h.app.tab().cell_edit.is_none());
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+}
