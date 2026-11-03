@@ -482,11 +482,12 @@ async fn sessions_are_set_up_on_the_server_by_role_and_policy() {
 
 /// The statements test `test`'s session `id` ran, as the server recorded them
 /// (`events_statements_history`, its last ten), oldest first. The server records a statement
-/// after it answered it: an empty history is asked again for a while.
+/// after it answered it: an empty history is asked again for a while. A command that is no
+/// statement (a ping, a change of database) has no text there: it is `(no text)`.
 async fn statements_of(admin: &mut mysql_async::Conn, id: u64) -> Vec<String> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let ran: Vec<String> = admin
+        let ran: Vec<Option<String>> = admin
             .exec(
                 "SELECT h.SQL_TEXT FROM performance_schema.events_statements_history h \
                  JOIN performance_schema.threads t ON t.THREAD_ID = h.THREAD_ID \
@@ -495,6 +496,7 @@ async fn statements_of(admin: &mut mysql_async::Conn, id: u64) -> Vec<String> {
             )
             .await
             .expect("events_statements_history reads");
+        let ran: Vec<String> = ran.into_iter().map(|t| t.unwrap_or_else(|| "(no text)".into())).collect();
         if !ran.is_empty() || Instant::now() > deadline {
             return ran;
         }
@@ -1054,11 +1056,12 @@ async fn waiting_alter(admin: &str, table: &str) -> (u64, tokio::task::JoinHandl
     (id, task)
 }
 
-/// Whether connection `id` waits for a table's metadata lock, as the server shows it.
+/// Whether connection `id` waits for a table's metadata lock, as the server shows it. Its
+/// `STATE` is NULL for a moment between two states (and there is no row once it ended).
 async fn alter_waits(a: &mut mysql_async::Conn, id: u64) -> bool {
-    let state: Option<String> =
+    let state: Option<Option<String>> =
         a.query_first(format!("SELECT STATE FROM information_schema.PROCESSLIST WHERE ID = {id}")).await.unwrap();
-    state.as_deref() == Some("Waiting for table metadata lock")
+    state.flatten().as_deref() == Some("Waiting for table metadata lock")
 }
 
 /// A result on screen holds no metadata lock, so an `ALTER TABLE` of another
@@ -1577,45 +1580,8 @@ async fn a_cancel_taken_by_a_long_rollback_keeps_the_session_and_its_transaction
     a.disconnect().await.unwrap();
 }
 
-/// A statement that runs as another account only for a moment at a time (a `SQL SECURITY
-/// DEFINER` function called for every row): a kill that lands inside the function is refused,
-/// one between two calls is not. The refusal is tried again (at once, then while the session
-/// waits: the statement sends nothing), and the run ends cancelled with the session kept.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_cancel_refused_for_a_moment_is_tried_again() {
-    let test = "a_cancel_refused_for_a_moment";
-    let Some((url, admin)) = urls(test) else { return };
-    let f = format!("zz_it_rowfn_{}", std::process::id());
-    let _f = Cleanup { url: admin.clone(), sql: format!("DROP FUNCTION IF EXISTS shop.{f}") };
-    // Dropped first: nothing of the test's keeps running past it.
-    let _end = EndSessions { admin: admin.clone(), test };
-    let mut a = side(&admin).await;
-    a.query_drop(format!(
-        "CREATE FUNCTION shop.{f}(x INT) RETURNS INT DETERMINISTIC SQL SECURITY DEFINER RETURN x + 1"
-    ))
-    .await
-    .unwrap();
-    a.disconnect().await.unwrap();
-    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
-    c.session.send(DbCommand::Execute {
-        id: 1,
-        statements: vec![format!(
-            "SELECT COUNT(*) FROM shop.events a CROSS JOIN shop.events b WHERE shop.{f}(a.id) > 0"
-        )],
-        paging: PagingMode::NoHold,
-        tx: TxRule::Auto,
-    });
-    tokio::time::sleep(Duration::from_millis(1500)).await;
-    c.session.cancel();
-    let evs = c.answer(1).await;
-    assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. })), "{evs:?}");
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let lost = c.rx.try_recv();
-    assert!(!matches!(lost, Ok(DbEvent::Lost { .. })), "{lost:?}");
-    let more = c.run(2, &["SELECT 1"]).await;
-    assert!(!more.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{more:?}");
-    assert_eq!(page_of(&more).1, &vec![vec![Some("1".to_string())]]);
-}
+// The cancel of a statement that runs another account's code for every row is in
+// tests/definer_mysql.rs: it runs alone, away from the account changes made here.
 
 /// A count and the server's question run only what can be run again, which is never code of
 /// the server's (a function, a view): nothing in them runs as another account, so no kill of
@@ -4331,6 +4297,16 @@ async fn manual_commit_failures_and_implicit_commits() {
     a.disconnect().await.unwrap();
 }
 
+/// Wait (at most 30 s) until connection `other` waits for a row lock connection `ours` holds, as
+/// the server shows it.
+async fn waits_for_row(a: &mut mysql_async::Conn, other: u64, ours: u64) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !waits_on(a, other, ours).await.iter().any(|w| w.starts_with("row lock of ")) {
+        assert!(Instant::now() < deadline, "connection {other} never waited for a row of {ours}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// A deadlock between two sessions: the server rolls back the whole transaction of the one it
 /// picks (here the manual one, which changed less): its failure is the server's error 1213, and
 /// the block is said closed after it. Nothing of the transaction is left.
@@ -4341,8 +4317,11 @@ async fn a_deadlock_ends_the_manual_transaction_and_says_so() {
     let t = numbers(&admin, "deadlock", 200).await;
     let _end = EndSessions { admin: admin.clone(), test };
     let q = t.q();
+    let mut a = side(&admin).await;
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
     let mut b = side(&url).await;
+    let b_id = u64::from(b.id());
     b.query_drop("START TRANSACTION").await.unwrap();
     b.query_drop(format!("UPDATE {q} SET v = 'b' WHERE id >= 2")).await.unwrap();
     let evs = c.manual(1, &[&format!("UPDATE {q} SET v = 'c' WHERE id = 1")], &[true]).await;
@@ -4351,7 +4330,7 @@ async fn a_deadlock_ends_the_manual_transaction_and_says_so() {
     let tx = TxRule::Manual { steps: steps(&[true]), idle_timeout: None };
     let statements = vec![format!("UPDATE {q} SET v = 'c' WHERE id = 2")];
     c.session.send(DbCommand::Execute { id: 2, statements, paging: PagingMode::NoHold, tx });
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    waits_for_row(&mut a, id, b_id).await;
     b.query_drop(format!("UPDATE {q} SET v = 'b' WHERE id = 1")).await.expect("the other session goes on");
     let mut evs = c.answer(2).await;
     evs.extend(c.settled().await);
@@ -4373,7 +4352,9 @@ async fn a_deadlock_ends_the_manual_transaction_and_says_so() {
     let statements =
         vec![format!("UPDATE {q} SET v = 'c' WHERE id = 1"), format!("UPDATE {q} SET v = 'c' WHERE id = 2")];
     c.session.send(DbCommand::Execute { id: 4, statements, paging: PagingMode::NoHold, tx });
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Only once the manual session holds row 1 and waits for row 2: before, the other session
+    // would take row 1 first, and the manual one wait for it until its lock wait ran out.
+    waits_for_row(&mut a, id, b_id).await;
     b.query_drop(format!("UPDATE {q} SET v = 'b2' WHERE id = 1")).await.expect("the other session goes on");
     let mut evs = c.answer(4).await;
     evs.extend(c.settled().await);
@@ -4384,6 +4365,7 @@ async fn a_deadlock_ends_the_manual_transaction_and_says_so() {
     );
     b.query_drop("COMMIT").await.unwrap();
     b.disconnect().await.unwrap();
+    a.disconnect().await.unwrap();
 }
 
 /// A lock wait timeout (1205) and a cancel (`KILL QUERY`) inside the manual transaction undo
