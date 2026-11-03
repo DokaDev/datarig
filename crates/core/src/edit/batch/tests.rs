@@ -78,6 +78,31 @@ fn deleting_marks_rows_drops_what_they_set_and_toggles_back() {
 }
 
 #[test]
+fn rows_marked_and_new_rows_removed_together_are_one_step() {
+    let mut b = EditBatch::new();
+    let a = b.add(usize::MAX, None, vec![Value::Default; 3]);
+    let c = b.add(usize::MAX, None, vec![Value::Default; 3]);
+    assert!(b.delete_with_new(&[1, 2], &[a], orig));
+    assert!(b.deleted(1) && b.deleted(2));
+    assert_eq!(b.drafts().iter().map(|d| d.id).collect::<Vec<_>>(), [c]);
+    assert!(b.undo());
+    assert!(!b.deleted(1) && !b.deleted(2) && b.drafts().len() == 2, "one step");
+    assert!(b.redo());
+    assert_eq!(b.counts(), Counts { updates: 0, inserts: 1, deletes: 2 });
+    // Every row marked: unmarked, the new row removed all the same.
+    assert!(b.delete_with_new(&[1, 2], &[c], orig));
+    assert!(b.is_empty());
+    assert!(b.undo());
+    assert_eq!(b.counts(), Counts { updates: 0, inserts: 1, deletes: 2 });
+    // New rows only.
+    assert!(b.delete_with_new(&[], &[c], orig));
+    assert!(b.drafts().is_empty() && b.deleted(1));
+    assert!(!b.delete_with_new(&[], &[c], orig), "nothing changed: no step");
+    b.undo();
+    assert_eq!(b.drafts().len(), 1);
+}
+
+#[test]
 fn new_rows_are_placed_after_their_row_and_undo_keeps_their_ids() {
     let mut b = EditBatch::new();
     let a = b.add(5, None, vec![Value::Default; 3]);

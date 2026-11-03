@@ -141,8 +141,15 @@ impl EditBatch {
     /// Mark rows `rows` to be deleted, or, when every one of them already is, unmark them, as
     /// one action. A row marked loses the cells set in it.
     pub fn delete(&mut self, rows: &[usize], orig: impl Fn(usize) -> Vec<Cell>) -> bool {
+        self.delete_with_new(rows, &[], orig)
+    }
+
+    /// Mark (or unmark, as [`EditBatch::delete`]) rows `rows` and remove new rows `ids`, as one
+    /// action.
+    pub fn delete_with_new(&mut self, rows: &[usize], ids: &[u64], orig: impl Fn(usize) -> Vec<Cell>) -> bool {
         let unmark = !rows.is_empty() && rows.iter().all(|r| self.deleted(*r));
-        self.act(rows, false, |b| {
+        self.act(rows, !ids.is_empty(), |b| {
+            b.drafts.retain(|d| !ids.contains(&d.id));
             for &row in rows {
                 if unmark {
                     b.rows.remove(&row);
