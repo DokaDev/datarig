@@ -14,7 +14,7 @@ expression: backend
 "│    ○ Default rules (…││  6 JOIN shop.users u ON u.id = o.user_id             │"
 "│  ▸ ○ stg  manual com…│╰──────────────────────────────────────────────────────╯"
 "│                      │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮"
-"│                      ││ [Result 1]  Chart  Messages  ││ A row the Apply added│"
+"│                      ││ [1]  Chart  Msgs  in open tx ││ A row the Apply added│"
 "│                      ││   │ PK id │ UQ email │ nickna││                      │"
 "│                      ││   │ int8  │ text     │ text  ││                      │"
 "│                      ││ 1 │     1 │ z@x      │ ann!  ││                      │"

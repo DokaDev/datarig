@@ -1063,6 +1063,8 @@ fn inside_an_open_block_the_applied_changes_wait_for_its_end() {
         assert!(applied(&h).tx.is_some());
         if rolled_back {
             h.tab_db(0, DbEvent::TxClosedBy { id, how: datarig_core::driver::ServerEnd::RolledBack });
+        } else {
+            ran(&mut h, "COMMIT", "COMMIT");
         }
         h.db(DbEvent::Block(false));
         h.db(DbEvent::TxOpen(false));
@@ -1142,4 +1144,305 @@ fn the_apply_on_screen() {
         h.app.transient = None;
         h
     });
+}
+
+fn edits_mut(h: &mut Harness) -> &mut EditState {
+    match &mut h.app.tab_mut().results {
+        Results::Rows(rs) => &mut rs.edit,
+        _ => panic!("no row result"),
+    }
+}
+
+/// Run `sql` in the tab and let the server say it was done (`tag`).
+fn ran(h: &mut Harness, sql: &str, tag: &str) {
+    use datarig_core::driver::Outcome;
+    h.app.run(vec![sql.to_string()]);
+    let id = h.app.tab().exec.query_id;
+    h.db(DbEvent::Done { id, outcome: Outcome::Command(tag.into()), elapsed: Duration::ZERO });
+}
+
+/// `y` is refused while the tab waits for a commit or a rollback (the app's own for an idle
+/// transaction too): the Apply would land in a transaction that is ending.
+#[test]
+fn y_waits_while_the_tab_ends_its_transaction() {
+    use datarig_tui::app::tx::Ending;
+    let mut h = manual(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("apply");
+    h.app.tab_mut().exec.ending = Some(Ending { id: 99, commit: false, idle: None });
+    h.key(KeyCode::Char('y'));
+    assert!(no_apply_sent(&mut h), "nothing sent into a transaction that is ending");
+    assert!(edits(&h).applying.is_none());
+    assert!(h.app.tab().exec.running.is_none(), "the tab is not left busy");
+}
+
+/// The answer came for the result's Apply, but its changes are no longer the ones sent: what
+/// it did is not known, and applying them again needs the user's word.
+#[test]
+fn an_answer_to_changes_no_longer_pending_makes_the_result_unknown() {
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, _) = applies(&mut h);
+    edits_mut(&mut h).batch.discard();
+    h.db(DbEvent::Applied { id, result: Ok(stood(&steps)) });
+    assert!(edits(&h).applying.is_none());
+    assert!(edits(&h).apply_unknown, "unknown, not dropped");
+    let notes = &h.app.tab().exec.run.notes;
+    assert_eq!(notes.last().map(|n| n.msg.clone()), Some(Label::EditFailedUnknown.into()), "said");
+}
+
+/// A question asked before the Apply was sent (drop the changes?) answered while it runs:
+/// nothing changes the changes being applied.
+#[test]
+fn the_changes_are_not_dropped_while_they_are_applied() {
+    use datarig_tui::app::overlay::{Buttons, Confirm, Overlay};
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    applies(&mut h);
+    h.key(KeyCode::Esc);
+    let (tab, result) = match &h.app.tab().results {
+        Results::Rows(rs) => (h.app.tab().id, rs.id),
+        _ => unreachable!(),
+    };
+    h.app.overlays.push(Overlay::Confirm(Confirm {
+        title: Label::EditDiscardTitle,
+        text: Msg::EditDiscardText { count: 1 },
+        details: Vec::new(),
+        keys: Label::EditDiscardKeys,
+        action: ConfirmAction::DiscardEdits { tab, result },
+        folder: None,
+        path: None,
+        tx: None,
+        buttons: Buttons::default(),
+    }));
+    h.key(KeyCode::Char('y'));
+    assert_eq!(edits(&h).batch.counts().total(), 1, "the changes stay");
+    let refused = Some(Msg::EditRefused { reason: "the pending changes are being applied".into() });
+    assert_eq!(said(&mut h), refused);
+}
+
+/// Under manual commit the session was lost after the Apply's answer and before the block it
+/// opened was reported: the server rolled it back with the session.
+#[test]
+fn a_session_lost_before_the_kept_transaction_was_reported_drops_the_applied_changes() {
+    let mut h = manual(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, tx) = applies(&mut h);
+    assert!(matches!(tx, ApplyTx::Keep { .. }));
+    h.db(DbEvent::Applied { id, result: Ok(stood(&steps)) });
+    assert!(applied(&h).tx.is_some());
+    h.tab_db(0, DbEvent::Lost { error: DbError::Closed });
+    assert!(edits(&h).applied.is_none(), "the original values show again");
+    assert!(h.app.tab().exec.run.notes.iter().any(|n| n.msg == Label::EditAppliedGone.into()));
+}
+
+/// The block an Apply ran in ended without the app knowing how (`PREPARE TRANSACTION`, a
+/// procedure that ended it): the changes are not shown as committed.
+#[test]
+fn a_transaction_that_ended_unknown_drops_the_applied_changes() {
+    let mut h = ready(Lang::En);
+    h.db(DbEvent::Block(true));
+    h.db(DbEvent::TxOpen(true));
+    type_cell(&mut h, "z@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, _) = applies(&mut h);
+    h.db(DbEvent::Applied { id, result: Ok(stood(&steps)) });
+    assert!(applied(&h).tx.is_some());
+    ran(&mut h, "PREPARE TRANSACTION 'x'", "PREPARE TRANSACTION");
+    h.db(DbEvent::Block(false));
+    h.db(DbEvent::TxOpen(false));
+    assert!(edits(&h).applied.is_none(), "not shown as committed");
+    let text = "The transaction ended without the app knowing how; re-run the query to see the table";
+    let notes = &h.app.tab().exec.run.notes;
+    assert!(notes.iter().any(|n| h.app.i18n.msg(&n.msg) == text), "{notes:?}");
+}
+
+/// A savepoint statement the user ran in the block an Apply's changes are in: what the table
+/// holds is no longer known from them. Only once the server confirmed it; a committed layer
+/// stays.
+#[test]
+fn a_savepoint_statement_drops_the_uncommitted_applied_changes() {
+    use datarig_core::driver::DbEvent as E;
+    let text = "A savepoint statement ran; re-run the query to see the table";
+    for (sql, tag) in [
+        ("SAVEPOINT a", "SAVEPOINT"),
+        ("RELEASE SAVEPOINT a", "RELEASE"),
+        ("rollback to savepoint a", "ROLLBACK"),
+        ("ROLLBACK WORK TO a", "ROLLBACK"),
+    ] {
+        let mut h = ready(Lang::En);
+        h.db(E::Block(true));
+        h.db(E::TxOpen(true));
+        type_cell(&mut h, "z@x");
+        h.command("apply");
+        h.key(KeyCode::Char('y'));
+        let (id, steps, _) = applies(&mut h);
+        h.db(E::Applied { id, result: Ok(stood(&steps)) });
+        ran(&mut h, sql, tag);
+        assert!(edits(&h).applied.is_none(), "{sql}");
+        let notes = &h.app.tab().exec.run.notes;
+        assert!(notes.iter().any(|n| h.app.i18n.msg(&n.msg) == text), "{sql}: {notes:?}");
+    }
+    // Refused by the server: nothing changed.
+    let mut h = ready(Lang::En);
+    h.db(E::Block(true));
+    h.db(E::TxOpen(true));
+    type_cell(&mut h, "z@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, _) = applies(&mut h);
+    h.db(E::Applied { id, result: Ok(stood(&steps)) });
+    h.app.run(vec!["ROLLBACK TO SAVEPOINT nope".to_string()]);
+    let q = h.app.tab().exec.query_id;
+    h.db(E::Failed { id: q, error: DbError::Server("no such savepoint".into()), cancelled: false });
+    assert!(edits(&h).applied.is_some(), "a failed one changes nothing");
+    // Committed already: the table holds them whatever the savepoints do.
+    let (mut h, id, steps) = three_applying(ready(Lang::En));
+    h.db(E::Applied { id, result: Ok(three_done(&steps)) });
+    ran(&mut h, "SAVEPOINT a", "SAVEPOINT");
+    assert!(edits(&h).applied.is_some());
+}
+
+/// Only the values the Apply wrote (and every value of a row it added) take the applied tone:
+/// a value the server returned as it was read, NULL included, and one a trigger changed, do
+/// not.
+#[test]
+fn only_the_values_written_take_the_applied_tone() {
+    use datarig_tui::theme;
+    let th = theme::DARK;
+    let (mut h, id, steps) = three_applying(ready(Lang::En));
+    h.app.theme = std::sync::Arc::new(th.clone());
+    let mut done = three_done(&steps);
+    for (s, d) in steps.iter().zip(done.iter_mut()) {
+        if s.sql.starts_with("UPDATE ") {
+            // Row 1 as read (`1`, `a@x`, `ann`) with the email written; the nickname changed by
+            // a trigger.
+            d.returned = users_returned([Some("1"), Some("z@x"), Some("Ann"), Some("ann!"), Some("{}")]);
+        }
+    }
+    h.db(DbEvent::Applied { id, result: Ok(done) });
+    let t = h.draw(120, 40);
+    let buf = t.backend().buffer();
+    let g = &h.app.tab().grid;
+    let at = |r: usize, c: usize| {
+        let x = g.cell_rect(r, c, 3).expect("on screen");
+        buf[(x.x + 1, x.y)].clone()
+    };
+    assert_eq!(at(0, 1).fg, th.edit_applied.fg.unwrap(), "the email written");
+    assert_ne!(at(0, 0).fg, th.edit_applied.fg.unwrap(), "the id as read");
+    assert_ne!(at(0, 2).fg, th.edit_applied.fg.unwrap(), "the nickname a trigger changed");
+    assert_eq!(at(3, 2).fg, th.edit_applied.fg.unwrap(), "a new row's NULL");
+    // A row whose NULL came back as it was read.
+    let mut h = ready(Lang::En);
+    h.app.theme = std::sync::Arc::new(th.clone());
+    h.keys("j");
+    type_cell(&mut h, "y@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, _) = applies(&mut h);
+    let mut done = stood(&steps);
+    done.last_mut().unwrap().returned = users_returned([Some("2"), Some("y@x"), Some(""), None, Some("{}")]);
+    h.db(DbEvent::Applied { id, result: Ok(done) });
+    let t = h.draw(120, 40);
+    let buf = t.backend().buffer();
+    let g = &h.app.tab().grid;
+    let x = g.cell_rect(1, 2, 3).expect("on screen");
+    assert_ne!(buf[(x.x + 1, x.y)].fg, th.edit_applied.fg.unwrap(), "NULL as read");
+    let x = g.cell_rect(1, 1, 3).expect("on screen");
+    assert_eq!(buf[(x.x + 1, x.y)].fg, th.edit_applied.fg.unwrap(), "the email written");
+}
+
+/// A result read inside the open transaction: once an Apply changed it, the strip says the
+/// changes are not committed (not only that the rows were read in a transaction).
+#[test]
+fn the_applied_badge_wins_over_the_transactions_mark() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Block(true));
+    h.db(DbEvent::TxOpen(true));
+    let mut h = resolved(h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows(), named());
+    assert!(screen(&mut h, 120, 40).contains("uncommitted (in tx)"), "read in the transaction");
+    type_cell(&mut h, "z@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, _) = applies(&mut h);
+    h.db(DbEvent::Applied { id, result: Ok(stood(&steps)) });
+    h.app.transient = None;
+    let s = screen(&mut h, 120, 40);
+    assert!(s.contains("applied · not committed"), "{s}");
+    assert!(!s.contains("uncommitted (in tx)"), "{s}");
+}
+
+/// At 80x24 the strip has room for a short badge only: it says the rows were applied, and
+/// whether that is committed.
+#[test]
+fn the_applied_badge_fits_a_small_screen() {
+    for lang in [Lang::En, Lang::Ko] {
+        let (mut h, id, steps) = three_applying(ready(lang));
+        h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+        h.app.transient = None;
+        let want = h.app.i18n.label(Label::EditBadgeAppliedShort).to_string();
+        let s = screen(&mut h, 80, 24);
+        let chart = h.app.i18n.label(Label::ResultsTabChart).to_string();
+        let strip = s.lines().find(|l| l.contains(&chart)).unwrap_or_default().to_string();
+        assert!(strip.contains(&want), "{lang:?}: {strip}");
+        let (mut h, id, steps) = three_applying(manual(lang));
+        h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+        h.tab_db(0, DbEvent::ManualBegun { id, index: 0 });
+        h.db(DbEvent::Block(true));
+        h.db(DbEvent::TxOpen(true));
+        h.app.transient = None;
+        let want = h.app.i18n.label(Label::EditBadgeNotCommittedShort).to_string();
+        let s = screen(&mut h, 80, 24);
+        let chart = h.app.i18n.label(Label::ResultsTabChart).to_string();
+        let strip = s.lines().find(|l| l.contains(&chart)).unwrap_or_default().to_string();
+        assert!(strip.contains(&want), "{lang:?}: {strip}");
+    }
+}
+
+/// A value the server returned in another form than the result shows (PostgreSQL's text of a
+/// time stamp): written, it shows dim `re-run to see` rather than another spelling; not
+/// written, as read.
+#[test]
+fn a_value_returned_in_another_form_is_seen_by_a_run() {
+    use datarig_tui::theme;
+    use ratatui::style::Modifier;
+    let th = theme::DARK;
+    let (mut h, id, steps) = three_applying(ready(Lang::En));
+    h.app.theme = std::sync::Arc::new(th.clone());
+    let mut done = three_done(&steps);
+    for (s, d) in steps.iter().zip(done.iter_mut()) {
+        if s.sql.starts_with("UPDATE ") {
+            d.returned = users_returned([Some("1"), Some("Z@X"), Some("Ann"), Some("ANN"), Some("{}")]);
+            d.unshown = vec![1, 3];
+        } else if s.sql.starts_with("INSERT ") {
+            d.unshown = vec![0];
+        }
+    }
+    h.db(DbEvent::Applied { id, result: Ok(done) });
+    let a = applied(&h);
+    assert_eq!(a.rerun, [(0, 1)].into(), "the email written");
+    assert_eq!(a.rerun_new, [(0, 0)].into(), "the new row's id");
+    let t = h.draw(120, 40);
+    let buf = t.backend().buffer();
+    let g = &h.app.tab().grid;
+    let text = |r: usize, c: usize| {
+        let x = g.cell_rect(r, c, 3).expect("on screen");
+        (0..x.width).map(|i| buf[(x.x + i, x.y)].symbol().to_string()).collect::<String>().trim().to_string()
+    };
+    let at = |r: usize, c: usize| {
+        let x = g.cell_rect(r, c, 3).expect("on screen");
+        buf[(x.x + 1, x.y)].clone()
+    };
+    assert!(text(0, 1).starts_with("re-run"), "{}", text(0, 1));
+    assert!(at(0, 1).modifier.contains(Modifier::DIM), "dim");
+    assert_eq!(text(0, 2), "ann", "not written: as read");
+    assert!(text(3, 0).starts_with("re-r"), "{}", text(3, 0));
+    assert_eq!(text(3, 1), "n@x");
 }

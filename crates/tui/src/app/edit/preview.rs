@@ -448,6 +448,11 @@ impl App {
             Planned::Refused(e) => return self.say_cant_apply(self.plan_error_text(p, &e)),
         };
         let (tab, result, bound) = (p.tab, p.result, p.bound.clone());
+        // A run, a statement waiting for its connection, a commit or rollback not answered (the
+        // app's own for an idle transaction too): the Apply would land in what that leaves.
+        if self.tab_busy(tab) {
+            return self.flash_busy();
+        }
         if self.apply_unknown(tab, result)
             && let Some(p) = self.overlays.edit_preview_mut().filter(|p| !p.again)
         {
@@ -477,6 +482,7 @@ impl App {
         let id = self.query_seq;
         let now = self.now();
         let Some(t) = self.tabs.get_mut(tab) else { return };
+        // Checked before anything changes: nothing leaves the tab busy with nothing sent.
         let Some(profile) = t.profile.filter(|_| rows_of(t).is_some_and(|rs| rs.id == result)) else { return };
         if matches!(t.exec.paging, Paging::Open { .. }) {
             t.exec.paging = Paging::Replaced;
@@ -492,6 +498,9 @@ impl App {
             (false, ApplyTx::Commit) => None,
         };
         let session = t.exec.generation;
+        let Some(rs) = rows_of_mut(t).filter(|rs| rs.id == result) else { return };
+        let batch = rs.edit.batch.clone();
+        rs.edit.applying = Some(Box::new(Applying { id, profile, session, batch, steps: steps.clone(), tx: epoch }));
         t.exec.running = Some(Running {
             id,
             started: now,
@@ -503,13 +512,10 @@ impl App {
             export: false,
             apply: true,
         });
-        let Some(rs) = rows_of_mut(t).filter(|rs| rs.id == result) else { return };
         if let Some(p) = self.overlays.edit_preview_mut() {
             p.apply_failed = None;
             p.again = false;
         }
-        let batch = rs.edit.batch.clone();
-        rs.edit.applying = Some(Box::new(Applying { id, profile, session, batch, steps: steps.clone(), tx: epoch }));
         self.send_tab(tab, DbCommand::ApplyEdits { id, steps, tx });
     }
 
@@ -541,6 +547,10 @@ impl App {
     pub(in crate::app) fn edit_discard(&mut self, tab: TabId, result: u64) {
         let Some(t) = self.tabs.get_mut(tab) else { return };
         let Some(rs) = rows_of_mut(t).filter(|rs| rs.id == result) else { return };
+        // Asked before the Apply was sent: the changes being applied stay.
+        if rs.edit.applying.is_some() {
+            return self.say_refused(Label::EditWhyApplying.into());
+        }
         let count = rs.edit.batch.counts().total() as u64;
         if !rs.edit.batch.discard() {
             return;

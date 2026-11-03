@@ -30,23 +30,33 @@ pub struct Applying {
 pub struct Applied {
     /// Rows read whose values changed: each column's value now.
     pub set: BTreeMap<usize, BTreeMap<usize, Value>>,
+    /// The cells (row read, column) the Apply wrote: they, and the rows added, are shown as
+    /// applied (a value a trigger changed is shown as it is now, not as written).
+    pub written: BTreeSet<(usize, usize)>,
     pub deleted: BTreeSet<usize>,
     /// The rows added, each column's value (`Value::Default`: what the table filled in is not
     /// known).
     pub new: Vec<Vec<Value>>,
+    /// Cells written whose value the server returned in another form than the result shows
+    /// (row read, column; row added by its place in `new`, column): a run shows them.
+    pub rerun: BTreeSet<(usize, usize)>,
+    pub rerun_new: BTreeSet<(usize, usize)>,
     /// The user's transaction it is in until that ends (not committed yet).
     pub tx: Option<u64>,
 }
 
-/// The value result column `c` of `rs` holds in a row the server returned (`columns`, `row`):
-/// by the name of the table column it is.
-fn returned(rs: &ResultSet, c: usize, columns: &[ColumnMeta], row: &[Cell]) -> Option<Value> {
+/// The value result column `c` of `rs` holds in row `row` the server returned for step `d`: by
+/// the name of the table column it is. `Some(None)`: returned in another form than the result
+/// shows.
+fn returned(rs: &ResultSet, c: usize, d: &AppliedStep, row: &[Cell]) -> Option<Option<Value>> {
     let Target::Ready(t) = &rs.edit.target else { return None };
+    let (columns, _) = d.returned.as_ref()?;
     let name = &t.columns.get(c)?.as_ref()?.column.name;
     let i = columns.iter().position(|m| &m.name == name)?;
     Some(match row.get(i)? {
-        Some(v) => Value::Text(v.clone()),
-        None => Value::Null,
+        Some(_) if d.unshown.contains(&i) => None,
+        Some(v) => Some(Value::Text(v.clone())),
+        None => Some(Value::Null),
     })
 }
 
@@ -60,6 +70,7 @@ fn layer(rs: &ResultSet, a: &Applying, done: &[AppliedStep]) -> Applied {
             out.deleted.insert(row);
         } else {
             out.set.insert(row, e.set.clone());
+            out.written.extend(e.set.keys().map(|&c| (row, c)));
         }
     }
     let mut new: BTreeMap<u64, Vec<Value>> = a.batch.drafts().iter().map(|d| (d.id, d.cells.clone())).collect();
@@ -73,30 +84,46 @@ fn layer(rs: &ResultSet, a: &Applying, done: &[AppliedStep]) -> Applied {
         if !matches!(s.expect, Expect::Affected(_)) {
             continue;
         }
-        let back = d.returned.as_ref().and_then(|(cols, rows)| Some((cols, rows.first()?)));
+        let back = d.returned.as_ref().and_then(|(_, rows)| rows.first());
         match s.origin {
             Origin::Row(r) if !out.deleted.contains(&r) => {
-                let (Some((cols, row)), Some(e)) = (back, a.batch.row(r)) else { continue };
+                let (Some(row), Some(e)) = (back, a.batch.row(r)) else { continue };
                 let set = out.set.entry(r).or_default();
                 for c in 0..rs.columns.len() {
                     // What the server stored where it differs from the value as read (a
-                    // trigger's, a type's own form), and every value set.
-                    let Some(v) = returned(rs, c, cols, row) else { continue };
-                    let read = match e.orig.get(c) {
-                        Some(Some(t)) => Value::Text(t.clone()),
-                        _ => Value::Null,
-                    };
-                    if v != read || set.contains_key(&c) {
-                        set.insert(c, v);
+                    // trigger's), and every value set. One in another form: a value set is
+                    // seen by a run, one not set is shown as read.
+                    let written = e.set.contains_key(&c);
+                    match returned(rs, c, d, row) {
+                        None => {}
+                        Some(None) if written => {
+                            set.remove(&c);
+                            out.rerun.insert((r, c));
+                        }
+                        Some(None) => {}
+                        Some(Some(v)) => {
+                            let read = match e.orig.get(c) {
+                                Some(Some(t)) => Value::Text(t.clone()),
+                                _ => Value::Null,
+                            };
+                            if v != read || written {
+                                set.insert(c, v);
+                            }
+                        }
                     }
                 }
             }
             Origin::New(id) => {
                 let Some(cells) = new.get_mut(&id) else { continue };
-                if let Some((cols, row)) = back {
+                let at = a.batch.drafts().iter().position(|d| d.id == id).unwrap_or(usize::MAX);
+                if let Some(row) = back {
                     for (c, cell) in cells.iter_mut().enumerate() {
-                        if let Some(v) = returned(rs, c, cols, row) {
-                            *cell = v;
+                        match returned(rs, c, d, row) {
+                            Some(Some(v)) => *cell = v,
+                            Some(None) => {
+                                out.rerun_new.insert((at, c));
+                            }
+                            None => {}
                         }
                     }
                 } else if let Some(n) = d.insert_id {
@@ -134,14 +161,17 @@ impl App {
             return;
         };
         let Some(a) = rs.edit.applying.take() else { return };
-        if profile != Some(a.profile) || session != a.session || rs.edit.batch != a.batch {
-            return;
-        }
         let result_id = rs.id;
         let count = a.batch.counts().total() as u64;
         // Done: the layer, and the changes cleared with their history.
         let mut done = None;
+        let stale = profile != Some(a.profile) || session != a.session || rs.edit.batch != a.batch;
         match &result {
+            // Not for the changes as they are now: what it did is not known for them, and they
+            // are applied again only once the user says so.
+            Ok(_) if stale => rs.edit.apply_unknown = true,
+            Err(f) if f.why == ApplyError::Db(DbError::CommitUnknown) => rs.edit.apply_unknown = true,
+            _ if stale => return,
             Ok(steps) => {
                 let applied = layer(rs, &a, steps);
                 done = Some(if applied.tx.is_some() {
@@ -152,10 +182,10 @@ impl App {
                 rs.edit.applied = Some(Box::new(applied));
                 rs.edit.batch.clear();
             }
-            Err(f) if f.why == ApplyError::Db(DbError::CommitUnknown) => rs.edit.apply_unknown = true,
             Err(_) => {}
         }
         let notice = match (&result, done) {
+            _ if stale => Notice::new(Label::EditFailedUnknown, Level::Error),
             (_, Some(msg)) => {
                 if self.overlays.edit_preview().is_some_and(|p| p.tab == tab && p.result == result_id) {
                     self.overlays.close(OverlayKind::EditPreview);

@@ -127,16 +127,29 @@ impl EditState {
         self.applied_new() + self.batch.drafts().len()
     }
 
-    /// The user's transaction `epoch` ended (`rolled_back` when the app knows it rolled back):
-    /// what an Apply did in it is committed, or gone (`true`).
-    pub fn tx_ended(&mut self, epoch: u64, rolled_back: bool) -> bool {
-        let Some(a) = self.applied.as_mut().filter(|a| a.tx == Some(epoch)) else { return false };
-        if rolled_back {
+    /// The user's transaction `epoch` ended (`end`: how): what an Apply did in it is committed,
+    /// or gone, said with the label returned (rolled back, or ended the app cannot tell how).
+    pub fn tx_ended(&mut self, epoch: u64, end: tabs::TxEnd) -> Option<Label> {
+        let a = self.applied.as_mut().filter(|a| a.tx == Some(epoch))?;
+        let label = match end {
+            tabs::TxEnd::Committed => {
+                a.tx = None;
+                return None;
+            }
+            tabs::TxEnd::RolledBack => Label::EditAppliedGone,
+            tabs::TxEnd::Unknown => Label::EditAppliedUnknown,
+        };
+        self.applied = None;
+        Some(label)
+    }
+
+    /// What an Apply did in a transaction that has not ended yet goes (`true`).
+    pub fn drop_uncommitted(&mut self) -> bool {
+        let gone = self.applied.as_ref().is_some_and(|a| a.tx.is_some());
+        if gone {
             self.applied = None;
-            return true;
         }
-        a.tx = None;
-        false
+        gone
     }
 }
 
@@ -502,6 +515,12 @@ impl App {
             self.say_why(&Why::Rows(ReadOnly::NoFormat));
             return None;
         };
+        // Nothing changes the changes being applied (a cell editor or a list of values opened
+        // before the Apply was sent).
+        if rs.edit.applying.is_some() {
+            self.say_refused(Label::EditWhyApplying.into());
+            return None;
+        }
         // What an Apply changed shows over the rows as read: they are read again first.
         if rs.edit.applied.is_some() {
             self.say_refused(Label::EditWhyApplied.into());
@@ -1306,7 +1325,8 @@ impl App {
     /// What result `rs` is to its edits, in at most `room` columns, and its style on background
     /// `bg`: its changes being applied, how many are pending, what an Apply changed, else whether its rows can be edited (the table and how
     /// a row is found, as room allows) or why not. Nothing before an edit key resolved it.
-    pub(crate) fn edit_badge(&self, rs: &ResultSet, room: usize, bg: Color) -> Option<(String, Style)> {
+    /// `short`: what an Apply changed may say so in its short form.
+    pub(crate) fn edit_badge(&self, rs: &ResultSet, room: usize, short: bool, bg: Color) -> Option<(String, Style)> {
         let th = crate::theme::cur();
         let width = crate::text::width;
         let fits = |text: String| (width(&text) <= room).then_some(text);
@@ -1320,7 +1340,12 @@ impl App {
             return fits(text).map(|t| (t, th.edit_pending.bg(bg)));
         }
         if let Some(a) = &rs.edit.applied {
-            let label = if a.tx.is_some() { Label::EditBadgeNotCommitted } else { Label::EditBadgeApplied };
+            let label = match (a.tx, short) {
+                (Some(_), false) => Label::EditBadgeNotCommitted,
+                (Some(_), true) => Label::EditBadgeNotCommittedShort,
+                (None, false) => Label::EditBadgeApplied,
+                (None, true) => Label::EditBadgeAppliedShort,
+            };
             return fits(self.i18n.label(label).to_string()).map(|t| (t, th.edit_applied.bg(bg)));
         }
         // The fullest text that fits; else `what` cut to the room left, at least a few columns

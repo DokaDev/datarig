@@ -12,6 +12,7 @@
 
 use super::{Closed, Env, Link, Tx, columns_of, decode, idle_limit, probe};
 use crate::connect::{db_error, is_cancel};
+use crate::values::text_as_shown;
 use datarig_core::driver::{AppliedStep, ApplyError, ApplyFailure, ApplyTx, DbError, DbEvent};
 use datarig_core::edit::{Expect, Step};
 use std::sync::atomic::Ordering;
@@ -196,14 +197,29 @@ pub(super) async fn apply(
             failure = Some(ApplyFailure { step: Some(i), why: ApplyError::Count { got: count } });
             break;
         }
-        let returned = match (step.expect, ran.statement) {
+        let (returned, unshown) = match (step.expect, ran.statement) {
             (Expect::Affected(_), Some(stmt)) => {
                 let text = vec![0; stmt.columns().len()];
-                Some((columns_of(stmt.columns()), decode(&ran.rows, &text)))
+                let mut rows = decode(&ran.rows, &text);
+                // In the form a result shows them, else said to be in another.
+                let mut unshown = Vec::new();
+                for (c, col) in stmt.columns().iter().enumerate() {
+                    let mut alike = true;
+                    for v in rows.iter_mut().filter_map(|r| r.get_mut(c)?.as_mut()) {
+                        match text_as_shown(col.type_(), v) {
+                            Some(shown) => *v = shown,
+                            None => alike = false,
+                        }
+                    }
+                    if !alike {
+                        unshown.push(c);
+                    }
+                }
+                (Some((columns_of(stmt.columns()), rows)), unshown)
             }
-            _ => None,
+            _ => (None, Vec::new()),
         };
-        done.push(AppliedStep { count, returned, insert_id: None });
+        done.push(AppliedStep { count, returned, unshown, insert_id: None });
     }
     // A cancel asked for once the last step ran: nothing is kept.
     if failure.is_none() {

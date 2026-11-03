@@ -304,3 +304,52 @@ fn the_chart_role_of_every_type_is_what_its_name_said() {
     }
     assert!(kinds.len() >= 15, "the types reach every kind: {kinds:?}");
 }
+
+#[test]
+fn text_output_is_shown_as_a_result_shows_it_or_not_at_all() {
+    assert_eq!(text_as_shown(&Type::BOOL, "t").as_deref(), Some("true"));
+    assert_eq!(text_as_shown(&Type::BOOL, "f").as_deref(), Some("false"));
+    let alike = [
+        (Type::INT2, "-3"),
+        (Type::INT4, "42"),
+        (Type::INT8, "9007199254740993"),
+        (Type::OID, "16384"),
+        (Type::NUMERIC, "9.90"),
+        (Type::NUMERIC, "NaN"),
+        (Type::TEXT, "t"),
+        (Type::VARCHAR, "it's"),
+        (Type::BPCHAR, "ab  "),
+        (Type::NAME, "users"),
+        (Type::JSON, r#"{"a":  1}"#),
+        (Type::JSONB, r#"{"a": 1}"#),
+        (Type::UUID, "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"),
+        (Type::INT4_ARRAY, "{1,2,NULL}"),
+        (Type::BOOL_ARRAY, "{t,f}"),
+        (Type::NUMERIC_ARRAY, "{1.50}"),
+        // Read as text by a result too.
+        (Type::INT4_RANGE, "[1,5)"),
+        (Type::MONEY, "$1.00"),
+    ];
+    for (ty, v) in alike {
+        assert_eq!(text_as_shown(&ty, v).as_deref(), Some(v), "{ty}");
+    }
+    let unlike = [
+        (Type::BOOL, "yes"),
+        (Type::TIMESTAMPTZ, "2024-01-01 09:00:00+09"),
+        (Type::TIMESTAMP, "01/02/2024 00:00:00"),
+        (Type::DATE, "2024-01-01"),
+        (Type::TIME, "12:00:00"),
+        (Type::TIMETZ, "12:00:00+00"),
+        (Type::INTERVAL, "1 day"),
+        (Type::FLOAT4, "1.5"),
+        (Type::FLOAT8, "0.1"),
+        (Type::BYTEA, "\\x00ff"),
+        (Type::INET, "10.0.0.1"),
+        (Type::CIDR, "10.0.0.0/8"),
+        (Type::TEXT_ARRAY, "{a,\"b c\"}"),
+        (Type::TIMESTAMPTZ_ARRAY, "{\"2024-01-01 00:00:00+00\"}"),
+    ];
+    for (ty, v) in unlike {
+        assert_eq!(text_as_shown(&ty, v), None, "{ty}");
+    }
+}

@@ -3,6 +3,7 @@
 
 use super::persist;
 use super::runlog::StatementOutcome;
+use super::tabs::TxEnd;
 use super::*;
 use datarig_core::driver::structure::TableStructure;
 use datarig_core::driver::{CancelFailure, DbError, ReadIn, ServerEnd, TxOutcome, TxRule};
@@ -1140,7 +1141,7 @@ impl App {
             // nothing it did is kept.
             DbEvent::ManualRolledBack { id: q, index } => {
                 // Without a block reported open there is no `Block(false)` to come.
-                t.exec.closing = t.exec.in_block.then_some(true);
+                t.exec.closing = t.exec.in_block.then_some(TxEnd::RolledBack);
                 if q == t.exec.run_id {
                     let m = Notice::new(Msg::TxManualRolledBack { step: (index + 1).to_string() }, Level::Info);
                     t.exec.run.notes.push(m);
@@ -1188,7 +1189,8 @@ impl App {
                 let commit = ending.is_some_and(|e| e.commit);
                 let asked = if commit { TxOutcome::Committed } else { TxOutcome::RolledBack };
                 t.exec.last_end = Some(outcome == asked);
-                t.exec.closing = Some(outcome != TxOutcome::Committed);
+                t.exec.closing =
+                    Some(if outcome == TxOutcome::Committed { TxEnd::Committed } else { TxEnd::RolledBack });
                 let (count, rows, began, began_wall) =
                     t.exec.tx.as_ref().map_or((0, 0, now, wall), |x| (x.changes, x.rows, x.began, x.began_wall));
                 let open = wall.duration_since(began_wall).unwrap_or_else(|_| now.saturating_duration_since(began));
@@ -1240,14 +1242,14 @@ impl App {
                     // of a rollback (nor does the next run): only that the outcome is unknown.
                     DbError::CommitUnknown => {
                         t.exec.tx_open = false;
-                        t.block_ended(false);
+                        t.block_ended(TxEnd::Unknown);
                         Notice::new(Label::DbCommitUnknown, Level::Error)
                     }
                     DbError::NotSupported => Notice::new(Label::TxNotSupported, Level::Warning),
                     // The server refused the commit (a deferred constraint, a serialization
                     // failure): it rolled the transaction back.
                     _ if commit => {
-                        t.exec.closing = Some(true);
+                        t.exec.closing = Some(TxEnd::RolledBack);
                         Notice::new(Msg::TxCommitFailed { error: text.clone() }, Level::Error)
                     }
                     _ => Notice::new(Msg::TxRollbackFailed { error: text.clone() }, Level::Error),
@@ -1265,14 +1267,16 @@ impl App {
                 }
                 let count = t.exec.tx.as_ref().map_or(0, |x| x.changes);
                 let step = (t.exec.run.current().or_else(|| t.ending_statement()).unwrap_or(0) + 1).to_string();
-                let (m, rolled_back) = match how {
-                    ServerEnd::RolledBack => (Notice::new(Msg::TxServerRolledBack { count }, Level::Warning), true),
-                    ServerEnd::Committed => {
-                        (Notice::new(Msg::TxCommittedImplicitly { step, count }, Level::Warning), false)
+                let (m, end) = match how {
+                    ServerEnd::RolledBack => {
+                        (Notice::new(Msg::TxServerRolledBack { count }, Level::Warning), TxEnd::RolledBack)
                     }
-                    ServerEnd::Unknown => (Notice::new(Label::TxClosedUnknown, Level::Warning), false),
+                    ServerEnd::Committed => {
+                        (Notice::new(Msg::TxCommittedImplicitly { step, count }, Level::Warning), TxEnd::Committed)
+                    }
+                    ServerEnd::Unknown => (Notice::new(Label::TxClosedUnknown, Level::Warning), TxEnd::Unknown),
                 };
-                t.exec.closing = t.exec.in_block.then_some(rolled_back);
+                t.exec.closing = t.exec.in_block.then_some(end);
                 // A commit or rollback the server refused says so itself.
                 if t.exec.ending.is_none() {
                     t.exec.run.notes.push(m);
@@ -1380,17 +1384,17 @@ impl App {
                 None
             }
             DbEvent::Block(false) => {
-                let rolled_back = match t.exec.closing.take() {
-                    Some(rolled_back) => rolled_back,
+                let end = match t.exec.closing.take() {
+                    Some(end) => end,
                     None => {
-                        let rolled_back = t.ending_rolled_back();
-                        if let Some(i) = t.ending_statement().filter(|_| rolled_back) {
+                        let end = t.ending_outcome();
+                        if let Some(i) = t.ending_statement().filter(|_| end == TxEnd::RolledBack) {
                             t.exec.run.rolled_back(i);
                         }
-                        rolled_back
+                        end
                     }
                 };
-                t.block_ended(rolled_back);
+                t.block_ended(end);
                 None
             }
             // A count the user asked for, or one of the preview of a result's changes.
@@ -1527,6 +1531,7 @@ impl App {
                 t.exec.reading = super::tabs::Reading { query: t.exec.query_id, ..Default::default() };
                 t.exec.succeeded(Some(index));
                 t.exec.run.finished(index, &outcome, elapsed);
+                t.statement_done(index);
                 None
             }
             ev @ (DbEvent::Page { .. } | DbEvent::Done { .. } | DbEvent::Failed { .. })
@@ -1758,7 +1763,9 @@ impl App {
                     Outcome::Affected(n) => StatementOutcome::Affected(*n),
                     Outcome::Command(tag) => StatementOutcome::Command(tag.clone()),
                 };
-                t.exec.run.answered(done, Some(elapsed));
+                if let Some(i) = t.exec.run.answered(done, Some(elapsed)) {
+                    t.statement_done(i);
+                }
                 let m = Notice::new(
                     match outcome {
                         Outcome::Affected(count) => Msg::QueryDoneAffected { count, elapsed },

@@ -98,13 +98,14 @@ impl ResultSet {
         };
     }
 
-    /// The user's transaction `epoch` ended (`rolled_back` when the app knows it rolled back).
-    /// Whether what an Apply did in it is gone (rolled back with it).
-    pub fn tx_ended(&mut self, epoch: u64, rolled_back: bool) -> bool {
+    /// The user's transaction `epoch` ended (`end`: how). Whether what an Apply did in it is
+    /// gone, with the label that says why.
+    pub fn tx_ended(&mut self, epoch: u64, end: crate::app::tabs::TxEnd) -> Option<datarig_core::i18n::Label> {
         if self.tx == Some(TxMark::InTx(epoch)) {
+            let rolled_back = end == crate::app::tabs::TxEnd::RolledBack;
             self.tx = Some(if rolled_back { TxMark::RolledBack } else { TxMark::Ended });
         }
-        self.edit.tx_ended(epoch, rolled_back)
+        self.edit.tx_ended(epoch, end)
     }
 }
 
@@ -562,6 +563,7 @@ pub fn render(
     }
     let not_read = i18n.label(Label::ResultsNotRead);
     let default_label = i18n.label(Label::EditDefault);
+    let rerun_label = i18n.label(Label::EditRerunToSee);
 
     let gutter = win.end.max(1).to_string().len().max(2) + 1;
     let avail = (area.width as usize).saturating_sub(gutter);
@@ -763,7 +765,15 @@ pub fn render(
                 None if added.is_some() || pending.is_some() => None,
                 None => applied.and_then(|a| a.set.get(&r)?.get(&ci)),
             };
+            // Shown as applied: what the Apply wrote, every value of a row it added. Returned in
+            // another form than the result shows: dim, a run shows it.
+            let (written, rerun) = match (applied, added) {
+                (Some(a), Some(i)) if applied_new.is_some() => (true, a.rerun_new.contains(&(i, ci))),
+                (Some(a), None) if pending.is_none() => (a.written.contains(&(r, ci)), a.rerun.contains(&(r, ci))),
+                _ => (false, false),
+            };
             let (text, is_null, default) = match (pending.or(done), rs.cell(r, ci)) {
+                _ if rerun => (rerun_label.to_string(), true, true),
                 (Some(Value::Text(v)), _) => (sanitize_cell(v), false, false),
                 (Some(Value::Null), _) => (null_label.to_string(), true, false),
                 (Some(Value::Default), _) => (default_label.to_string(), true, true),
@@ -793,7 +803,7 @@ pub fn render(
                 (None, None) if deleted => style.patch(th.edit_deleted),
                 // What the table filled in for a new row is not known: its dim `default`.
                 (None, None) if default => style,
-                (None, None) if done.is_some() => style.patch(th.edit_applied),
+                (None, None) if done.is_some() && written => style.patch(th.edit_applied),
                 (None, None) => style,
             }
             .patch(bg);

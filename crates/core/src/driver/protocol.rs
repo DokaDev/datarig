@@ -592,6 +592,10 @@ pub struct AppliedStep {
     /// table holds after it, defaults and triggers included. `None` for a check and for a write
     /// that returns none.
     pub returned: Option<(Vec<ColumnMeta>, Vec<Vec<Cell>>)>,
+    /// The columns of `returned` (by index) whose values are not in the form a result shows
+    /// them (PostgreSQL's text output of a type a result reads otherwise, e.g. a timestamp):
+    /// only a run of the query shows them as the result does.
+    pub unshown: Vec<usize>,
     /// The value an `AUTO_INCREMENT` column took for an insert (MySQL), if any.
     pub insert_id: Option<u64>,
 }
