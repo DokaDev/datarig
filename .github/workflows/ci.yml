@@ -28,6 +28,29 @@ defaults:
     shell: bash
 
 jobs:
+  # Whether a pull request changes more than prose (.github/scripts/code-changed.sh): one that
+  # changes only README.md, CONTRIBUTING.md, docs/ or changelog fragments skips the builds,
+  # tests, clippy, integration and performance jobs below (`code` is false), while the docs
+  # site, the pages checked against the code (the `tests (ubuntu-latest)` job) and the cheap
+  # checks still run. Skipped jobs and steps report success under their own names, so nothing
+  # waits for them. Pushes to main always run everything: the release gate wants every job.
+  changes:
+    name: what changed
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.files.outputs.code }}
+    steps:
+      # The whole history: the diff is from the merge base of the pull request's two commits.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: files
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: bash .github/scripts/code-changed.sh
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
@@ -40,7 +63,8 @@ jobs:
   # offline), the same build release.yml deploys. Runs on every push and pull request like the
   # other jobs: the release gate wants each one to succeed. The generated pages and screens are
   # compared with their sources by the `test` jobs (tests/*_doc.rs, tests/book_*.rs). Also the
-  # tests of the docs rule of pull requests (docs-rule.yml) and of scripts/changes.sh.
+  # tests of the docs rule of pull requests (docs-rule.yml), of scripts/changes.sh and of
+  # .github/scripts/code-changed.sh.
   docs:
     name: docs site
     runs-on: ubuntu-latest
@@ -50,14 +74,18 @@ jobs:
         run: bash .github/scripts/docs-tools.sh
       - name: Build and check
         run: bash .github/scripts/docs-build.sh
-      - name: Tests of docs-rule.sh and changes.sh
+      - name: Tests of docs-rule.sh, changes.sh and code-changed.sh
         run: |
           bash .github/scripts/tests/docs-rule-test.sh
           bash .github/scripts/tests/changes-test.sh
+          bash .github/scripts/tests/code-changed-test.sh
 
   # On every OS the tests run on: code behind `cfg(unix)` / `cfg(windows)` warns differently.
+  # Skipped step by step for a docs-only pull request: a matrix job skipped as a whole would
+  # report one name with the matrix unexpanded instead of one per OS.
   clippy:
     name: clippy -D warnings (${{ matrix.os }})
+    needs: changes
     strategy:
       fail-fast: false
       matrix:
@@ -65,22 +93,34 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
+        if: needs.changes.outputs.code == 'true'
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.code == 'true'
       - name: C compiler and libclang for pg_query
+        if: needs.changes.outputs.code == 'true'
         run: bash .github/scripts/pg-query-build-deps.sh
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - if: needs.changes.outputs.code == 'true'
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  # For a docs-only pull request only the pages checked against the code run, on Linux (the
+  # other steps are skipped one by one, as in `clippy`).
   test:
     name: tests (${{ matrix.os }})
+    needs: changes
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      RUN: ${{ needs.changes.outputs.code == 'true' && 'all' || (matrix.os == 'ubuntu-latest' && 'docs' || 'none') }}
     steps:
       - uses: actions/checkout@v7
+        if: env.RUN != 'none'
       - uses: Swatinem/rust-cache@v2
+        if: env.RUN != 'none'
       - name: C compiler and libclang for pg_query
+        if: env.RUN != 'none'
         run: bash .github/scripts/pg-query-build-deps.sh
       # Every test target of every crate, so a new test file can never be left out. Without
       # DATARIG_TEST_PG_URL the PostgreSQL, pooler and SSH integration tests print SKIPPED; the
@@ -90,12 +130,22 @@ jobs:
       # /usr/bin/security store runs for real, on a scratch keychain file of its own that it
       # deletes again (DATARIG_TEST_SECURITY_CLI=1). --no-fail-fast: a failing test target does
       # not hide the failures of the targets after it.
-      - run: cargo test --workspace --locked --no-fail-fast
+      - if: env.RUN == 'all'
+        run: cargo test --workspace --locked --no-fail-fast
         env:
           DATARIG_TEST_SECURITY_CLI: ${{ runner.os == 'macOS' && '1' || '0' }}
+      # The tests that read README.md, CONTRIBUTING.md and docs/: the generated pages and
+      # screens against their sources, every name the pages use against the app's.
+      - name: The pages checked against the code
+        if: env.RUN == 'docs'
+        run: >-
+          cargo test -p datarig-tui --locked --no-fail-fast --test book_refs --test book_screens
+          --test cli_doc --test config_doc --test keybindings_doc --test themes_doc
 
   integration:
     name: integration (PostgreSQL 17, PgBouncer, MySQL 8.4, SSH, TLS)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -252,6 +302,8 @@ jobs:
   # scenarios run the release build in tmux (a server of their own, `-L perf`).
   perf:
     name: performance budgets
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -324,6 +376,8 @@ jobs:
   # .cargo/audit.toml (and in deny.toml).
   audit:
     name: cargo audit
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -334,6 +388,8 @@ jobs:
   # the C code notices of vendor/licenses/pg_query).
   notices:
     name: third-party notices
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
