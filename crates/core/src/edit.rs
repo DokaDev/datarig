@@ -26,7 +26,9 @@ mod target;
 
 pub use batch::{Counts, Draft, EditBatch, RowEdit};
 pub use input::{Invalid, check_input};
-pub use plan::{Choice, Expect, Facts, Origin, Plan, PlanError, Step, Where, count_statements, no_default, plan};
+pub use plan::{
+    Choice, Expect, Facts, Origin, Plan, PlanError, Step, Where, count_statements, no_default, not_shown, plan,
+};
 pub use sql::{ColumnInfo, EditSql, Exactness, Inexact, MySql, Offer, Postgres, Scope, Value, format};
 pub use target::{
     ColumnReason, Duplicates, EditSource, EditTarget, Identity, ReadOnly, SourceColumn, TableColumn, TableRef, Write,

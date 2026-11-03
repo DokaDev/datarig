@@ -109,6 +109,9 @@ pub enum PlanError {
     /// A new row leaves a column to its default that has none and takes no NULL: the server
     /// would refuse the row, or (MySQL, not strict) store an empty value of its own.
     NoDefault { origin: Origin, column: usize },
+    /// A new row leaves `column` of the table, which the result does not show, to its default,
+    /// which it lacks (as [`PlanError::NoDefault`]).
+    NotShown { origin: Origin, column: String },
     /// A statement the format wrote is not what it must be. A bug: nothing runs.
     Internal(String),
 }
@@ -203,10 +206,20 @@ pub fn no_default(t: &EditTarget, b: &EditBatch) -> Vec<(u64, usize)> {
         .collect()
 }
 
+/// The new rows of batch `b` and the columns of the table they leave to a default it lacks
+/// because the result does not show them ([`EditTarget::unshown_required`]), each new row with
+/// each column.
+pub fn not_shown(t: &EditTarget, b: &EditBatch) -> Vec<(u64, String)> {
+    b.drafts().iter().flat_map(|d| t.unshown_required.iter().map(move |c| (d.id, c.clone()))).collect()
+}
+
 /// The statements that apply batch `b` to target `t` in format `f`.
 pub fn plan(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Result<Plan, PlanError> {
     if let Some(&(id, column)) = no_default(t, b).first() {
         return Err(PlanError::NoDefault { origin: Origin::New(id), column });
+    }
+    if let Some((id, column)) = not_shown(t, b).into_iter().next() {
+        return Err(PlanError::NotShown { origin: Origin::New(id), column });
     }
     let (mut checks, mut deletes, mut updates, mut inserts) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (row, e) in b.rows() {

@@ -35,6 +35,7 @@ fn target(identity: Identity) -> EditTarget {
         ],
         identity,
         all_columns_shown: true,
+        unshown_required: Vec::new(),
     }
 }
 
@@ -406,4 +407,19 @@ fn a_new_row_leaves_no_not_null_column_without_a_default_to_its_default() {
         b.add(0, None, vec![Value::Default; 4]);
         assert_eq!(no_default(&t, &b), []);
     }
+}
+
+#[test]
+fn a_new_row_is_refused_while_the_table_has_a_column_it_must_be_given_that_the_result_does_not_show() {
+    let mut t = keyed();
+    t.unshown_required = vec!["email".into()];
+    let mut b = EditBatch::new();
+    b.set(&[(0, 1)], &text("x"), orig);
+    // Changes of rows read leave the table's other columns as they are.
+    assert_eq!(not_shown(&t, &b), []);
+    assert!(plan_with(&t, &b, &ALL, &[], &[]).is_ok());
+    let id = b.add(0, None, vec![Value::Default, text("a"), text("1"), Value::Default]);
+    assert_eq!(not_shown(&t, &b), [(id, "email".to_string())]);
+    let refused = Err(PlanError::NotShown { origin: Origin::New(id), column: "email".into() });
+    assert_eq!(plan_with(&t, &b, &ALL, &[], &[]), refused);
 }

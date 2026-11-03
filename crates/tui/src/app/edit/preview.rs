@@ -40,8 +40,9 @@ pub struct EditPreview {
 enum Planned {
     Counting,
     Failed(String),
-    /// New rows' cells (new row, column) left to a default their column lacks.
-    NoDefault(Vec<(u64, usize)>),
+    /// New rows' cells left to a default their column lacks (`PlanError::NoDefault`,
+    /// `PlanError::NotShown`).
+    NoDefault(Vec<PlanError>),
     Refused(PlanError),
     Ready(Plan),
 }
@@ -109,7 +110,7 @@ impl App {
         }
         let (tab, result, batch, target) = (t.id, rs.id, rs.edit.batch.clone(), (**target).clone());
         // Nothing is counted for changes that cannot be made anyway.
-        let counts = match edit::no_default(&target, &batch).is_empty() {
+        let counts = match edit::no_default(&target, &batch).is_empty() && edit::not_shown(&target, &batch).is_empty() {
             true => {
                 let whole = |r: usize, c: usize| !not_whole.contains(&(r, c));
                 edit::count_statements(&target, &batch, &*edit::format(format), &whole).unwrap_or_default()
@@ -187,7 +188,15 @@ impl App {
     }
 
     fn edit_planned(&self, p: &EditPreview) -> Planned {
-        let missing = edit::no_default(&p.target, &p.batch);
+        let missing: Vec<PlanError> = edit::no_default(&p.target, &p.batch)
+            .into_iter()
+            .map(|(id, column)| PlanError::NoDefault { origin: Origin::New(id), column })
+            .chain(
+                edit::not_shown(&p.target, &p.batch)
+                    .into_iter()
+                    .map(|(id, column)| PlanError::NotShown { origin: Origin::New(id), column }),
+            )
+            .collect();
         if !missing.is_empty() {
             return Planned::NoDefault(missing);
         }
@@ -245,6 +254,9 @@ impl App {
             PlanError::NoDefault { origin, column } => {
                 Msg::EditPreviewNoDefault { row: self.origin_row(p, *origin), column: self.preview_column(p, *column) }
             }
+            PlanError::NotShown { origin, column } => {
+                Msg::EditPreviewNotShown { row: self.origin_row(p, *origin), column: column.clone() }
+            }
             PlanError::Internal(_) => Label::EditPreviewInternal.into(),
         };
         self.i18n.msg(&msg).to_string()
@@ -285,9 +297,8 @@ impl App {
             Planned::Failed(error) => {
                 lines.push(PreviewLine::Problem(i18n.msg(&Msg::EditPreviewCountFailed { error }).to_string()))
             }
-            Planned::NoDefault(cells) => {
-                for (id, column) in cells {
-                    let e = PlanError::NoDefault { origin: Origin::New(id), column };
+            Planned::NoDefault(errors) => {
+                for e in errors {
                     lines.push(PreviewLine::Problem(self.plan_error_text(p, &e)));
                 }
             }
@@ -390,11 +401,7 @@ impl App {
             Planned::Failed(error) => {
                 return self.say_cant_apply(self.i18n.msg(&Msg::EditPreviewCountFailed { error }).to_string());
             }
-            Planned::NoDefault(cells) => {
-                let (id, column) = cells[0];
-                let e = PlanError::NoDefault { origin: Origin::New(id), column };
-                return self.say_cant_apply(self.plan_error_text(p, &e));
-            }
+            Planned::NoDefault(errors) => return self.say_cant_apply(self.plan_error_text(p, &errors[0])),
             Planned::Refused(e) => return self.say_cant_apply(self.plan_error_text(p, &e)),
         };
         let (tab, bound) = (p.tab, p.bound.clone());

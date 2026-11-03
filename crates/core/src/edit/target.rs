@@ -207,6 +207,9 @@ pub struct EditTarget {
     pub identity: Identity,
     /// Every column of the table is in the result.
     pub all_columns_shown: bool,
+    /// The table's columns the result does not show that a new row must be given a value:
+    /// `NOT NULL`, no default expression, neither numbered nor computed by the table.
+    pub unshown_required: Vec<String>,
 }
 
 impl EditTarget {
@@ -318,6 +321,12 @@ impl EditSource {
             Err(ReadOnly::NoIdentity)
         };
         let identity = identity()?;
-        Ok(EditTarget { table: self.table.clone(), columns, identity, all_columns_shown })
+        let unshown_required = s
+            .columns
+            .iter()
+            .filter(|c| !shown(&c.name) && c.not_null && c.default.is_none() && c.fill == ColumnFill::Default)
+            .map(|c| c.name.clone())
+            .collect();
+        Ok(EditTarget { table: self.table.clone(), columns, identity, all_columns_shown, unshown_required })
     }
 }

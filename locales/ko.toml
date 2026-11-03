@@ -2452,3 +2452,4 @@
 "edit.discard.text" = "이 결과의 대기 중인 변경 {count}건을 버릴까요?"
 "edit.discard.keys" = "y 버리기 · n/Enter 유지"
 "edit.discarded" = "대기 중인 변경 {count}건을 버렸습니다"
+"edit.preview.not_shown" = "{row}행: {column} 열은 NOT NULL이고 기본값이 없는데 결과에 없습니다. SELECT에 넣으세요"

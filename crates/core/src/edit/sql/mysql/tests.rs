@@ -97,6 +97,7 @@ fn target(identity: Identity) -> EditTarget {
         ],
         identity,
         all_columns_shown: true,
+        unshown_required: Vec::new(),
     }
 }
 

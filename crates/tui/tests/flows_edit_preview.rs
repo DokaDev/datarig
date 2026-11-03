@@ -69,6 +69,14 @@ fn resolved(
     h
 }
 
+/// `shop.users` whose `name` (NOT NULL, not in the results here) has a default: a new row may
+/// leave it out.
+fn named() -> TableStructure {
+    let mut st = users_structure();
+    st.columns[2].default = Some("''::text".into());
+    st
+}
+
 /// The users' rows by their key.
 fn ready(lang: Lang) -> Harness {
     resolved(
@@ -76,14 +84,14 @@ fn ready(lang: Lang) -> Harness {
         "SELECT id, email, nickname FROM shop.users",
         users_columns(),
         users_rows(),
-        users_structure(),
+        named(),
     )
 }
 
 /// `shop.users` without any key: its rows are found by their values. `four`: only its id,
 /// email, name and nickname (every one shown and exact: identical rows are a choice).
 fn keyless(four: bool) -> TableStructure {
-    let mut st = users_structure();
+    let mut st = named();
     st.primary_key = None;
     st.unique_constraints.clear();
     st.indexes.clear();
@@ -579,7 +587,7 @@ fn manual(lang: Lang) -> Harness {
     cfg.policies.insert("stg", Policy { commit: CommitRule::Manual, ..Policy::default() });
     let mut h = Harness::with_config(&cfg, lang);
     h.db(DbEvent::Connected);
-    resolved(h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows(), users_structure())
+    resolved(h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows(), named())
 }
 
 #[test]
@@ -621,4 +629,35 @@ fn the_preview_on_screen() {
         h.command("changes");
         h
     });
+}
+
+/// A new row leaves `name` (NOT NULL, no default) to a default it lacks when the result does
+/// not show it: the server would refuse the row, or (MySQL, not strict) store an empty name.
+/// Listed, nothing counted, `y` refused, nothing sent.
+#[test]
+fn a_new_row_is_refused_while_the_table_has_a_required_column_the_result_does_not_show() {
+    let mut h = resolved(
+        Harness::connected(Lang::En),
+        "SELECT id, email, nickname FROM shop.users",
+        users_columns(),
+        users_rows(),
+        users_structure(),
+    );
+    h.keys("ol");
+    type_cell(&mut h, "n@x");
+    h.command("changes");
+    let want = "Row 4: name is NOT NULL, has no default and is not in the result; add it to the SELECT";
+    assert_eq!(lines(&h), [PreviewLine::Problem(want.into())]);
+    assert!(!h.app.edit_preview_view().unwrap().apply);
+    h.key(KeyCode::Char('y'));
+    assert_eq!(said(&mut h), Some(Msg::EditPreviewCantApply { reason: want.into() }));
+    assert!(h.sent().is_empty(), "nothing counted, nothing applied");
+    // Changes of the rows read leave the table's other columns as they are.
+    h.key(KeyCode::Esc);
+    h.keys("G");
+    h.keys("D");
+    h.keys("gg");
+    type_cell(&mut h, "z@x");
+    h.command("changes");
+    assert!(h.app.edit_preview_view().unwrap().apply, "{:?}", lines(&h));
 }

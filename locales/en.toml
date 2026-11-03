@@ -2458,3 +2458,4 @@
 "edit.discard.text" = { one = "Drop the {count} pending change of this result?", other = "Drop the {count} pending changes of this result?" }
 "edit.discard.keys" = "y drop · n/Enter keep"
 "edit.discarded" = { one = "Dropped {count} pending change", other = "Dropped {count} pending changes" }
+"edit.preview.not_shown" = "Row {row}: {column} is NOT NULL, has no default and is not in the result; add it to the SELECT"
