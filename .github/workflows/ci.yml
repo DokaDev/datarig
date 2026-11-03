@@ -33,7 +33,8 @@ jobs:
   # tests, clippy, integration and performance jobs below (`code` is false), while the docs
   # site, the pages checked against the code (the `tests (ubuntu-latest)` job) and the cheap
   # checks still run. Each skipped check reports under its own name, as passed (a job skipped
-  # by its condition concludes `skipped`, which counts as passing), so nothing waits for it. Pushes to main always run everything: the release gate wants every job.
+  # by its condition concludes `skipped`, which counts as passing), so nothing waits for it.
+  # Pushes to main always run everything: the release gate wants every job.
   changes:
     name: what changed
     runs-on: ubuntu-latest
