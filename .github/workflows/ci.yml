@@ -204,13 +204,13 @@ jobs:
       - name: The MySQL suite through a dialer
         env:
           DATARIG_TEST_DIAL: tcp
-        run: cargo test -p datarig-driver-mysql --test integration_mysql --locked
+        run: cargo test -p datarig-driver-mysql --test integration_mysql --test definer_mysql --locked
       # The MySQL suite once more over TLS (the profile's default, PREFERRED: the service's
       # server offers TLS with its own certificate), so the session's wire works the same above it.
       - name: The MySQL suite over TLS
         env:
           DATARIG_TEST_MYSQL_SSLMODE: PREFERRED
-        run: cargo test -p datarig-driver-mysql --test integration_mysql --locked
+        run: cargo test -p datarig-driver-mysql --test integration_mysql --test definer_mysql --locked
       # The tests drop the tables they create, even when they fail (tests/pg_clean in the
       # driver crate): nothing may be left in `public`, which the init scripts leave empty.
       - name: The tests left the database clean
