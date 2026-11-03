@@ -1,0 +1,1 @@
+- `:set ui.tips=on` is taken as `always`, as the config file already reads `tips = "on"`.
