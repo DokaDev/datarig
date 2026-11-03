@@ -60,9 +60,9 @@ cargo test --workspace --locked
 
 # each driver's suite again with every connection going through a dialer, as through a tunnel
 DATARIG_TEST_DIAL=tcp cargo test -p datarig-driver-postgres --test integration_pg --locked
-DATARIG_TEST_DIAL=tcp cargo test -p datarig-driver-mysql --test integration_mysql --locked
+DATARIG_TEST_DIAL=tcp cargo test -p datarig-driver-mysql --test integration_mysql --test definer_mysql --locked
 # the MySQL suite once more over TLS
-DATARIG_TEST_MYSQL_SSLMODE=PREFERRED cargo test -p datarig-driver-mysql --test integration_mysql --locked
+DATARIG_TEST_MYSQL_SSLMODE=PREFERRED cargo test -p datarig-driver-mysql --test integration_mysql --test definer_mysql --locked
 ```
 
 The performance budgets of `crates/bench/budgets.toml`, as the `perf` job runs them (tmux,
