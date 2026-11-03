@@ -88,6 +88,9 @@ fn set_accepts_known_settings_and_values_only() {
     }
     assert_eq!(set("ui.yank_flash=off"), Ok(Setting::YankFlash(datarig_core::config::YankFlash::Off)));
     assert_eq!(set("ui.tips=off"), Ok(Setting::Tips(datarig_core::config::Tips::Off)));
+    // `on`, from before the tips had modes (the config file reads it so too): always.
+    assert_eq!(set("ui.tips=on"), Ok(Setting::Tips(datarig_core::config::Tips::Always)));
+    assert_eq!(set("ui.tips=On"), Ok(Setting::Tips(datarig_core::config::Tips::Always)));
     assert_eq!(set("editor.run_hints=off"), Ok(Setting::RunHints(datarig_core::config::RunHints::Off)));
     assert_eq!(set("explorer.size_heat=off"), Ok(Setting::SizeHeat(datarig_core::config::SizeHeat::Off)));
     assert_eq!(set("explorer.size_heat=5"), Ok(Setting::SizeHeat(datarig_core::config::SizeHeat::Five)));

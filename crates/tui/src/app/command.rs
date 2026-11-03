@@ -851,9 +851,11 @@ pub fn parse_set(arg: &str) -> Result<SetValue<'_>, SetError> {
         return Ok(SetValue::Theme(value));
     }
     let values = spec.values.fixed();
-    // `on`, the size colors' value from before there were levels, is `3` (not listed).
+    // `on`, the size colors' value from before there were levels, is `3`, and the tips' value
+    // from before they had modes is `always`, as the config file reads it (neither is listed).
     let value_lc = match (spec.key, value.to_ascii_lowercase()) {
         ("explorer.size_heat", v) if v == "on" => "3".to_string(),
+        ("ui.tips", v) if v == "on" => "always".to_string(),
         (_, v) => v,
     };
     let found = values.iter().find(|v| v.0 == value_lc).map(|v| v.1).or_else(|| duration_setting(spec, &value_lc));
