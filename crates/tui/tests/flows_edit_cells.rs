@@ -205,14 +205,8 @@ fn an_empty_text_is_the_empty_string_and_ctrl_n_ctrl_d_set_null_and_default() {
     assert_eq!(h.app.key_context(), Ctx::CellEdit);
     h.key(KeyCode::Esc);
     assert_eq!(value(&h, 0, 1), None);
-    // The id has a default (its sequence).
-    h.keys("he");
-    h.ctrl('d');
-    assert_eq!(value(&h, 0, 0), Some(Value::Default));
-    let screen = h.screen(120, 40);
-    assert!(screen.contains("default"), "{screen}");
     // The actions without the editor.
-    h.keys("ll");
+    h.keys("l");
     h.keys(" dn");
     assert_eq!(value(&h, 0, 2), Some(Value::Null));
     h.keys("h");
@@ -458,6 +452,8 @@ fn an_enum_and_a_boolean_are_picked_from_their_values() {
     h.keys("e");
     h.key(KeyCode::Esc);
     assert_eq!(value(&h, 0, 2), Some(Value::Default), "Esc picks nothing");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("default"), "{screen}");
 }
 
 #[test]
@@ -630,6 +626,11 @@ fn a_changed_cell_and_the_pending_count_take_their_tokens() {
 /// `zone` and character set `charset`; `shop.users`' id, email and a `TIMESTAMP` nickname in the
 /// grid, one row.
 fn mysql_users(zone: &str, charset: &str) -> Harness {
+    mysql_users_with(zone, charset, ("timestamp", ValueKind::TimestampTz, "2024-10-27 02:30:00"))
+}
+
+/// As [`mysql_users`], the nickname of type `nickname` (its name, kind and the row's value).
+fn mysql_users_with(zone: &str, charset: &str, nickname: (&str, ValueKind, &str)) -> Harness {
     use datarig_core::driver::keys::{KeyCatalog, KeyKind, NameRule};
     use datarig_core::driver::{ColumnOrigin, SessionValues};
     let driver = FakeDriver::default();
@@ -655,9 +656,9 @@ fn mysql_users(zone: &str, charset: &str) -> Harness {
     let columns = vec![
         col("id", "bigint", ValueKind::Integer),
         col("email", "varchar", ValueKind::Text),
-        col("nickname", "timestamp", ValueKind::TimestampTz),
+        col("nickname", nickname.0, nickname.1),
     ];
-    let rows = vec![vec![s("1"), s("a@x"), s("2024-10-27 02:30:00")]];
+    let rows = vec![vec![s("1"), s("a@x"), s(nickname.2)]];
     answer(&mut h, "SELECT id, email, nickname FROM shop.users", columns, rows);
     h.sent();
     h
@@ -683,8 +684,6 @@ fn a_value_not_shown_whole_is_not_edited() {
     let Some(Msg::EditRefused { reason }) = said(&mut h) else { panic!("refused") };
     assert!(reason.contains("nickname") && reason.contains("Europe/Berlin"), "{reason}");
     assert_eq!(h.app.key_context(), Ctx::Grid);
-    h.keys(" dn");
-    assert!(matches!(said(&mut h), Some(Msg::EditRefused { .. })));
     assert!(edits(&h).batch.is_empty());
     // The id is shown whole.
     h.keys("hhe");
@@ -784,4 +783,167 @@ fn changes_pending_on_a_result_no_longer_resolved_say_why() {
     h.keys("e");
     assert!(matches!(said(&mut h), Some(Msg::EditReadOnly { .. })));
     assert!(asked(&mut h).is_empty());
+}
+
+#[test]
+fn a_structure_asked_of_another_databases_lost_session_is_asked_again() {
+    use datarig_core::driver::{SessionContext, SessionRole};
+    use datarig_tui::app::{AppEvent, EventTarget};
+    let aux = |h: &mut Harness, ev: DbEvent| {
+        let p = h.app.profiles[0].id;
+        let a = h.app.conns.aux(p, "sales").expect("an aux session").id;
+        h.app.on_app_event(AppEvent::Db { target: EventTarget::Aux(a), generation: a, ev });
+    };
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.app.tab_mut().context = SessionContext { database: Some("sales".into()), schema: None };
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows());
+    aux(&mut h, DbEvent::Connected);
+    aux(&mut h, DbEvent::Keys(Ok(shop_keys())));
+    h.sent();
+    h.keys("le");
+    assert_eq!(asked(&mut h).len(), 1);
+    // Its session is lost before it answers: the answer never comes.
+    aux(&mut h, DbEvent::Lost { error: DbError::Closed });
+    h.app.transient = None;
+    // Not waiting for an answer that never comes: asked again, on its session opened again.
+    h.keys("e");
+    let metas = h.roles().iter().filter(|r| **r == SessionRole::Meta).count();
+    assert_eq!(metas, 3, "the database's session opened again");
+    assert_eq!(asked(&mut h).len(), 1, "asked again");
+    aux(
+        &mut h,
+        DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(Box::new(users_structure())) },
+    );
+    assert_eq!(h.app.key_context(), Ctx::CellEdit);
+}
+
+#[test]
+fn only_what_changes_how_typed_text_is_stored_refuses_an_edited_column() {
+    // A MySQL FLOAT is shown rounded, but a value it holds as typed is stored as typed.
+    let mut h = mysql_users_with("+00:00", "utf8mb4", ("float", ValueKind::Float, "3.14159"));
+    let mut st = mysql_users_structure();
+    st.columns[3].type_name = "float".into();
+    h.keys("lle");
+    structure(&mut h, Ok(st));
+    assert_eq!(h.app.key_context(), Ctx::CellEdit, "{:?}", said(&mut h));
+    clear(&mut h);
+    h.type_text("0.123456789012");
+    h.key(KeyCode::Enter);
+    assert!(matches!(said(&mut h), Some(Msg::EditRefused { .. })));
+    assert_eq!(h.app.key_context(), Ctx::CellEdit);
+    clear(&mut h);
+    h.type_text("1.5");
+    h.key(KeyCode::Enter);
+    assert_eq!(value(&h, 0, 2), Some(Value::Text("1.5".into())));
+    h.keys(" dn");
+    assert_eq!(value(&h, 0, 2), Some(Value::Null));
+    // A TIMESTAMP shown in a zone with daylight saving: NULL reads no value, a typed one is
+    // refused.
+    let mut h = mysql_users("Europe/Berlin", "utf8mb4");
+    h.keys("ll dn");
+    structure(&mut h, Ok(mysql_users_structure()));
+    assert_eq!(value(&h, 0, 2), Some(Value::Null), "{:?}", said(&mut h));
+    h.keys("e");
+    let Some(Msg::EditRefused { reason }) = said(&mut h) else { panic!("refused") };
+    assert!(reason.contains("Europe/Berlin"), "{reason}");
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+}
+
+#[test]
+fn a_click_outside_the_editor_closes_it_and_does_what_it_does() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let mut h = ready(Lang::En);
+    h.keys("e");
+    h.type_text("z");
+    h.draw(120, 40);
+    let cell = h.app.tab().grid.cell_rect(2, 2, 3).expect("on screen");
+    h.mouse(MouseEventKind::Down(MouseButton::Left), cell.x + 1, cell.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), cell.x + 1, cell.y);
+    assert!(h.app.tab().cell_edit.is_none(), "the editor closed");
+    assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (2, 2), "the click moved the cursor");
+    assert!(edits(&h).batch.is_empty(), "nothing changed");
+}
+
+#[test]
+fn the_pending_count_shows_in_korean_at_80x24() {
+    let mut h = ready(Lang::Ko);
+    h.keys("e");
+    h.type_text("y");
+    h.key(KeyCode::Enter);
+    h.app.transient = None;
+    let badge = h.app.i18n.msg(&Msg::EditBadgePending { count: 1 }).to_string();
+    let screen = h.screen(80, 24);
+    let lines: Vec<&str> = screen.lines().collect();
+    let strip = lines[..lines.len() - 1].iter().any(|l| l.contains(&badge));
+    assert!(strip, "{screen}");
+}
+
+#[test]
+fn the_editor_has_the_cells_pad_and_the_prompts_look() {
+    use datarig_tui::theme;
+    let mut h = ready(Lang::En);
+    let th = theme::DARK;
+    h.app.theme = std::sync::Arc::new(th.clone());
+    h.keys("e");
+    let t = h.draw(120, 40);
+    let buf = t.backend().buffer();
+    let cell = h.app.tab().grid.cell_rect(0, 1, 3).expect("on screen");
+    assert_eq!(buf[(cell.x, cell.y)].symbol(), " ", "a column of pad");
+    assert_eq!(buf[(cell.x + 1, cell.y)].symbol(), "a");
+    assert_eq!(buf[(cell.x + 1, cell.y)].bg, th.surface);
+    assert_ne!(Some(buf[(cell.x + 1, cell.y)].bg), th.selection.bg, "not a selected cell's look");
+}
+
+#[test]
+fn the_editors_keys_show_on_the_hint_line_and_the_loading_notice_goes() {
+    let mut h = users(Lang::En);
+    h.keys("le");
+    structure(&mut h, Ok(users_structure()));
+    assert_eq!(h.app.key_context(), Ctx::CellEdit);
+    assert_eq!(said(&mut h), None, "the details came: no longer loading");
+    let line = h.status(120, 40);
+    for hint in ["Enter keep", "Esc cancel", "Ctrl+N NULL", "Ctrl+D DEFAULT"] {
+        assert!(line.contains(hint), "{hint}: {line}");
+    }
+}
+
+#[test]
+fn a_refusal_names_the_columns_own_type() {
+    let mut h = mysql_users_with("+00:00", "utf8mb4", ("decimal", ValueKind::Decimal, "1.50"));
+    let mut st = mysql_users_structure();
+    st.columns[3].type_name = "decimal(14,2)".into();
+    h.keys("lle");
+    structure(&mut h, Ok(st));
+    clear(&mut h);
+    h.type_text("1.234");
+    h.key(KeyCode::Enter);
+    let Some(Msg::EditRefused { reason }) = said(&mut h) else { panic!("refused") };
+    assert!(reason.contains("decimal(14,2)") && !reason.contains("numeric"), "{reason}");
+}
+
+#[test]
+fn a_default_that_takes_a_new_number_is_refused_on_a_row() {
+    // The id's default calls its sequence.
+    let mut h = ready(Lang::En);
+    h.keys("h dD");
+    assert_eq!(said(&mut h), refused("id would take a new number; type a value instead"));
+    h.keys("e");
+    h.ctrl('d');
+    assert_eq!(said(&mut h), refused("id would take a new number; type a value instead"));
+    assert_eq!(h.app.key_context(), Ctx::CellEdit, "refused: the editor stays");
+    h.key(KeyCode::Esc);
+    assert!(edits(&h).batch.is_empty());
+    // MySQL's AUTO_INCREMENT.
+    let mut h = mysql_users("+00:00", "utf8mb4");
+    h.keys(" dD");
+    structure(&mut h, Ok(mysql_users_structure()));
+    assert_eq!(said(&mut h), refused("id would take a new number; type a value instead"));
+    assert!(edits(&h).batch.is_empty());
+    // An identity, in the list of a boolean's values: no DEFAULT.
+    let (mut h, mut st) = enum_and_bool(Lang::En);
+    st.columns[4].fill = ColumnFill::IdentityByDefault;
+    h.keys("lle");
+    structure(&mut h, Ok(st));
+    assert_eq!(picker_labels(&h), ["true", "false", "NULL"]);
 }

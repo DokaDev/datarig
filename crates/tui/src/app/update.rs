@@ -740,6 +740,9 @@ impl App {
         if matches!(m.kind, MouseEventKind::Down(_)) && self.close_search_prompt() {
             return;
         }
+        if matches!(m.kind, MouseEventKind::Down(_)) {
+            self.cell_edit_click(m.column, m.row);
+        }
         let (x, y) = (m.column, m.row);
         let inside = |r: Rect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
         let l = self.layout;

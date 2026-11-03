@@ -89,8 +89,8 @@ pub(super) struct Bound {
 }
 
 /// An edit key waiting for its table's structure: the tab it was pressed in, that tab's binding,
-/// the profile's attempt, the database and the result; the table and the format it is resolved
-/// in; the press, with the cursor and the selection's anchor then.
+/// the profile's attempt, the database (and its session) and the result; the table and the format
+/// it is resolved in; the press, with the cursor and the selection's anchor then.
 #[derive(Debug)]
 pub struct EditWait {
     tab: TabId,
@@ -98,6 +98,9 @@ pub struct EditWait {
     profile: ProfileId,
     generation: u64,
     database: Option<String>,
+    /// The id of the other database's session it was asked on (a session opened again has
+    /// another, and never answers what the lost one was asked).
+    aux: Option<u64>,
     result: u64,
     /// Which `LoadStructure` of its session it waits for the answer to (they come in order).
     ticket: u64,
@@ -154,6 +157,14 @@ fn has_default(c: &TableColumn) -> bool {
         )
 }
 
+/// Whether `c`'s default draws a new number (an identity, MySQL's `AUTO_INCREMENT`, a call of
+/// a sequence): an existing row set to it would take another number (MySQL stores 0), not keep
+/// its own.
+fn new_number(c: &TableColumn) -> bool {
+    matches!(c.column.fill, ColumnFill::IdentityAlways | ColumnFill::IdentityByDefault | ColumnFill::AutoIncrement)
+        || c.column.default.as_deref().is_some_and(|d| d.to_ascii_lowercase().contains("nextval("))
+}
+
 /// The first row of `rows` (as read, from row `first` on) whose value in an identity column of
 /// `t` is not shown whole, and why.
 fn not_whole(
@@ -187,9 +198,11 @@ fn not_whole(
     })
 }
 
-/// Why the values of column `col` in `rows` (as read, from row `first` on) are not shown whole:
-/// the column's (no row) or the first such value's row. A value that is not the value would be
-/// typed back as other text.
+/// Why a value typed for column `col` would not be stored as the text shown for it: the column's
+/// (no row) or the first row's whose value in `rows` (as read, from row `first` on) was read in a
+/// session that shows text or a time otherwise (its character set or time zone, not known or
+/// changed). A value shown rounded (a MySQL `FLOAT`) or not in its kind's form does not matter
+/// here: the typed text replaces it, and the editor checks that text against the type.
 fn value_not_whole(
     d: Dialect,
     rs: &ResultSet,
@@ -200,12 +213,15 @@ fn value_not_whole(
 ) -> Option<(Option<usize>, export::Refused)> {
     let m = &rs.columns[col].meta;
     let cols = [export::SqlColumn { name: &m.name, type_name: &m.type_name, kind: m.kind, auto_increment: false }];
+    use export::NotWhole as N;
+    let typed =
+        |r: &export::Refused| matches!(r.why, N::Charset(_) | N::TimeZone(_) | N::SessionUnknown | N::SessionChanged);
     let cells = match export::sql_cells(d, &cols, &rs.read_in, server_zone) {
         Ok(c) => c,
-        Err(r) => return Some((None, r)),
+        Err(r) => return typed(&r).then_some((None, r)),
     };
     rows.iter().enumerate().find_map(|(k, row)| match row.get(col) {
-        Some(Some(v)) => cells.cell(0, v).err().map(|r| (Some(first + k), r)),
+        Some(Some(v)) => cells.cell(0, v).err().filter(typed).map(|r| (Some(first + k), r)),
         _ => None,
     })
 }
@@ -323,6 +339,7 @@ impl App {
             edit::source(self.tab_dialect(t.id), self.tab_keys(t).catalog(), &cols, t.shown_sql())
         });
         let generation = self.conns.get(pid).map_or(0, |c| c.generation);
+        let aux = self.open_aux(pid, bound.database.as_deref());
         let (tab, then) = (t.id, (a, (t.grid.row, t.grid.col), t.grid.anchor));
         let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
         let result = rs.id;
@@ -344,6 +361,7 @@ impl App {
                 w.binding != bound.binding
                     || w.generation != generation
                     || w.database != bound.database
+                    || w.aux != aux
                     || w.result != result
             }
             Target::Unresolved => false,
@@ -366,6 +384,14 @@ impl App {
                 let Some(source) = source else { return self.say_edit_read_only(Label::EditWhyNotResolved) };
                 let cmd =
                     DbCommand::LoadStructure { schema: source.table.schema.clone(), table: source.table.name.clone() };
+                // Another database's session, lost or closed for being idle, opens again.
+                let aux = match &bound.database {
+                    Some(db) => {
+                        self.ensure_aux(pid, db);
+                        self.open_aux(pid, Some(db))
+                    }
+                    None => None,
+                };
                 let session = match &bound.database {
                     None => self.conns.get(pid).and_then(|c| c.meta.as_ref()),
                     Some(db) => self.conns.aux(pid, db).and_then(|a| a.session.as_ref()),
@@ -380,6 +406,7 @@ impl App {
                     profile: pid,
                     generation,
                     database: bound.database,
+                    aux,
                     result,
                     ticket,
                     source,
@@ -427,7 +454,9 @@ impl App {
             let reason = self.not_whole_reason(&refused.why);
             return self.say_refused(Msg::EditWhyNotWhole { row: (r + 1).to_string(), reason });
         }
-        if let Some((r, refused)) = value_not_whole(d, rs, col, &read, rows.start, zone) {
+        // NULL and DEFAULT read no value: only a typed one must be stored as shown.
+        let typed = a == EditAction::Cell;
+        if let Some((r, refused)) = value_not_whole(d, rs, col, &read, rows.start, zone).filter(|_| typed) {
             let (column, reason) = (refused.column, self.not_whole_reason(&refused.why));
             return self.say_refused(match r {
                 None => Msg::EditWhyColumnNotWhole { column, reason },
@@ -441,6 +470,7 @@ impl App {
         match a {
             EditAction::SetNull if c.column.not_null => self.say_refused(Msg::EditWhyNotNull { column: name }),
             EditAction::SetDefault if !has_default(&c) => self.say_refused(Msg::EditWhyNoDefault { column: name }),
+            EditAction::SetDefault if new_number(&c) => self.say_refused(Msg::EditWhyNewNumber { column: name }),
             EditAction::SetNull => self.edit_write_cells(&cells, Value::Null),
             EditAction::SetDefault => self.edit_write_cells(&cells, Value::Default),
             EditAction::Cell if !c.column.enum_labels.is_empty() || c.kind == ValueKind::Bool => {
@@ -480,7 +510,7 @@ impl App {
             let null = i18n.label(Label::ResultsNull).to_string();
             entries.push(Entry::new(Value::Null, null, i18n.label(Label::EditPickNull).to_string()));
         }
-        if has_default(c) {
+        if has_default(c) && !new_number(c) {
             let hint = c
                 .column
                 .default
@@ -554,6 +584,23 @@ impl App {
         }
     }
 
+    /// A click at (`x`, `y`) outside the open cell editor closes it, changing nothing (as `Esc`
+    /// does); the click is then handled as anywhere else.
+    pub(super) fn cell_edit_click(&mut self, x: u16, y: u16) {
+        if !self.cell_edit_open() {
+            return;
+        }
+        let t = self.tab();
+        let over = match (&t.results, &t.cell_edit) {
+            (Results::Rows(rs), Some(e)) => t.grid.cell_rect(e.at.0, e.at.1, rs.rows.len()),
+            _ => None,
+        };
+        let inside = over.is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height);
+        if !inside {
+            self.tabs.active_mut().cell_edit = None;
+        }
+    }
+
     /// Text pasted into the cell editor: one line only.
     pub(super) fn cell_edit_paste(&mut self, text: &str) {
         if text.contains(['\n', '\r']) {
@@ -593,6 +640,7 @@ impl App {
         let why = match v {
             Value::Null if c.column.not_null => Some(Msg::EditWhyNotNull { column }),
             Value::Default if !has_default(&c) => Some(Msg::EditWhyNoDefault { column }),
+            Value::Default if new_number(&c) => Some(Msg::EditWhyNewNumber { column }),
             _ => None,
         };
         if let Some(why) = why {
@@ -614,9 +662,8 @@ impl App {
             I::NotWholeNumber => Label::EditInvalidNotWholeNumber.into(),
             I::OutOfRange { type_name } => Msg::EditInvalidOutOfRange { type_name },
             I::NotNumber => Label::EditInvalidNotNumber.into(),
-            I::TooManyDigits { precision, scale } => {
-                Msg::EditInvalidTooManyDigits { precision: precision.to_string(), scale: scale.to_string() }
-            }
+            // Named as the table's structure names the type (MySQL's `decimal(14,2)`).
+            I::TooManyDigits { .. } => Msg::EditInvalidTooManyDigits { type_name: c.column.type_name.clone() },
             I::NotBool => Label::EditInvalidNotBool.into(),
             I::NotDate => Label::EditInvalidNotDate.into(),
             I::NotTime => Label::EditInvalidNotTime.into(),
@@ -675,6 +722,7 @@ impl App {
             Some(db) => self.conns.aux(profile, db).and_then(|a| a.session.as_ref()),
         };
         let answer = session.map_or(0, |s| s.structure_answered());
+        let aux = self.open_aux(profile, database);
         let generation = self.conns.get(profile).map(|c| c.generation);
         let active = (!self.tabs.is_empty()).then(|| self.tab().id);
         let others: Vec<(TabId, Option<String>)> =
@@ -704,6 +752,7 @@ impl App {
                     && bound_to == Some(profile)
                     && generation == Some(w.generation)
                     && other == w.database
+                    && w.aux == aux
                     && w.result == rs.id
                     && w.ticket == answer;
                 if !current {
@@ -726,6 +775,10 @@ impl App {
             }
         }
         let Some(((a, cursor, anchor), why)) = came else { return };
+        // The details came: the press is done or refused now, no longer loading.
+        if self.transient.as_ref().is_some_and(|(n, _)| n.msg == Label::EditLoading.into()) {
+            self.transient = None;
+        }
         let t = self.tab();
         let still = (t.grid.row, t.grid.col) == cursor && t.grid.anchor == anchor;
         if !still || self.focus != Focus::Results || self.modal_open() {
@@ -735,6 +788,13 @@ impl App {
             Some(why) => self.say_why(&why),
             None => self.edit_action(a),
         }
+    }
+
+    /// The id of `profile`'s open session in other database `database` (`None`: the profile's
+    /// own, or no session open there).
+    fn open_aux(&self, profile: ProfileId, database: Option<&str>) -> Option<u64> {
+        let a = self.conns.aux(profile, database?)?;
+        a.session.is_some().then_some(a.id)
     }
 
     /// Why the result's rows cannot be edited, as the status line says it.

@@ -10,6 +10,14 @@ use ratatui::layout::Position;
 /// The which-key popup appears when no key follows the leader within this time.
 pub const WHICH_KEY_DELAY: Duration = Duration::from_millis(300);
 
+/// The cell editor's keys on the hint line: keep the text, cancel, NULL, the default.
+const CELL_EDIT_KEYS: &[(&str, Label)] = &[
+    ("enter", Label::HintEditKeep),
+    ("esc", Label::HintCancel),
+    ("ctrl+n", Label::HintEditNull),
+    ("ctrl+d", Label::HintEditDefault),
+];
+
 /// The which-key popup: the keys that may follow `prefix`.
 pub struct WhichKey {
     /// The context the sequence was typed in (whose bindings are listed).
@@ -477,6 +485,15 @@ impl App {
         // bar says how many before it).
         if matches!(ctx, Ctx::Grid | Ctx::GridMatches) && self.edits_pending() > 0 {
             out.extend(action(("edit.undo", Label::HintUndo)));
+        }
+        // The cell editor: its own keys (not actions), while they still reach it.
+        if ctx == Ctx::CellEdit {
+            for (k, label) in CELL_EDIT_KEYS {
+                let Ok(keys) = parse_keys(k) else { continue };
+                if matches!(self.keymap.resolve_seq(ctx, &keys).0, Some(Target::Reserved(_))) {
+                    out.push((keys::label(&keys), self.i18n.label(*label)));
+                }
+            }
         }
         let basics = self.vim_basics().into_iter().filter(|b| b.0 == ctx);
         out.extend(basics.map(|(_, k, short, _)| (k, self.i18n.label(short))));

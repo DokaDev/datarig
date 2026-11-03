@@ -1350,14 +1350,19 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         app.count_grid_lookups(lookups);
     }
-    // The cell editor over its cell (the terminal's cursor in it).
+    // The cell editor over its cell, its text where the cell's is (after the cell's pad), in the
+    // look of the grid's search prompt (the terminal's cursor in it).
     let t = app.tabs.active_mut();
     if let (Results::Rows(rs), Some(e)) = (&t.results, t.cell_edit.as_mut())
         && e.result == rs.id
         && let Some(cell) = t.grid.cell_rect(e.at.0, e.at.1, rs.rows.len())
     {
-        let style = Style::new().fg(th.fg).patch(th.selection);
-        let cx = e.input.render(cell, buf, style, true, false, None);
+        let style = Style::new().fg(th.fg).bg(th.surface);
+        buf.set_style(cell, style);
+        buf.set_stringn(cell.x, cell.y, " ", 1, style);
+        let pad = u16::from(cell.width > 1);
+        let text = Rect { x: cell.x + pad, width: cell.width - pad, ..cell };
+        let cx = e.input.render(text, buf, style, true, false, None);
         app.layout.grid_prompt_cursor = Some((cx, cell.y));
     }
     if grid_was(app.tab()) != before && matches!(app.pointer_on, Some(PointerOn::Cell(..))) {
