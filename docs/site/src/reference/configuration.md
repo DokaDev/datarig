@@ -59,7 +59,7 @@ Things the whole screen shows.
 | Key | Default | Values | Description |
 |---|---|---|---|
 | `yank_flash` | `"on"` | `"on"`, `"off"` | Whether the cells a copy took from the results grid flash briefly once the copy was sent to the clipboard. A copy that fails or is refused does not flash. Also `:set ui.yank_flash`. |
-| `tips` | `"on"` | `"on"`, `"off"` | Whether empty places show a tip about a key (an empty editor or result, the workspace without tabs, spare room in the status bar), the welcome panel its first steps, and an action run from a menu a few times names its key once. Tips follow the key bindings, remapped keys included. Also `:set ui.tips`. |
+| `tips` | `"always"` | `"always"`, `"until_used"`, `"off"` (`"on"`, its old value, reads as `"always"`; `true` and `false` read as `"always"` and `"off"`) | Whether empty places show a tip about a key (an empty editor or result, the workspace without tabs, spare room in the status bar), the welcome panel its first steps, and an action run from a menu a few times names its key once. Always: the tips of a place take turns and keep coming back; a tip about a key you already used shows less often. Until used: a tip goes away once you used its key. Tips follow the key bindings, remapped keys included. Also `:set ui.tips`. |
 
 ## `[secrets]`
 

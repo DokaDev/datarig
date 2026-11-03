@@ -30,8 +30,8 @@
 //! dropped by the next save. `[explorer] size_heat` says whether, and in how many levels, the
 //! explorer colors the estimates of the largest tables of each schema (`on`, its old value,
 //! reads as `3`). `[ui] yank_flash` says whether the cells a copy took from the results grid
-//! flash briefly, `[ui] tips` whether empty places show a tip about a key (and the welcome
-//! panel its first steps).
+//! flash briefly, `[ui] tips` whether empty places show a tip about a key (always, until the
+//! key was used, or never; and the welcome panel its first steps).
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
 //! the top, or the bottom line), `detail_view` (the result inspector as a panel or a status bar
 //! preview), `clipboard` (how copies reach the clipboard) and `copy_header`
@@ -352,8 +352,9 @@ struct ExplorerSection {
 struct UiSection {
     #[serde(default)]
     yank_flash: Option<String>,
+    /// A string, or `true` / `false` written without quotes.
     #[serde(default)]
-    tips: Option<String>,
+    tips: Option<toml::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -641,21 +642,32 @@ impl Choice for YankFlash {
 
 /// `[ui] tips`: whether empty places (the welcome panel, an empty editor or result, the status
 /// bar's spare room) show a tip about a key, and running an action from the menu a few times
-/// names its key (on by default).
+/// names its key.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Tips {
+    /// Tips keep coming back, taking turns; a key already used comes up less often.
     #[default]
-    On,
+    Always,
+    /// A tip goes away once its key was used.
+    UntilUsed,
     Off,
 }
 
 impl Choice for Tips {
-    const ALL: &'static [Self] = &[Tips::On, Tips::Off];
+    const ALL: &'static [Self] = &[Tips::Always, Tips::UntilUsed, Tips::Off];
     fn as_str(self) -> &'static str {
         match self {
-            Tips::On => "on",
+            Tips::Always => "always",
+            Tips::UntilUsed => "until_used",
             Tips::Off => "off",
         }
+    }
+    /// `on` (the value before there was a choice) is `always`.
+    fn parse(s: &str) -> Option<Self> {
+        if s.eq_ignore_ascii_case("on") {
+            return Some(Tips::Always);
+        }
+        Self::ALL.iter().copied().find(|v| v.as_str().eq_ignore_ascii_case(s))
     }
 }
 
@@ -1089,7 +1101,16 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             "3, 5, off",
         )?,
         yank_flash: choice("ui.yank_flash", ui_flash, "on, off")?,
-        tips: choice("ui.tips", ui_tips, "on, off")?,
+        tips: choice(
+            "ui.tips",
+            ui_tips.map(|v| match v {
+                toml::Value::String(s) => s,
+                toml::Value::Boolean(true) => "always".into(),
+                toml::Value::Boolean(false) => "off".into(),
+                other => other.to_string(),
+            }),
+            "always, until_used, off",
+        )?,
         idle_disconnect: match &f.idle_disconnect {
             None => None,
             Some(v) => policy::parse_idle_disconnect(v)

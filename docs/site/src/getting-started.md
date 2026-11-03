@@ -102,12 +102,16 @@ unbind them with `"none"`; see the [keybindings reference](reference/keybindings
 
 ### Tips
 
-With `[ui] tips` on (the default; `:set ui.tips=off` turns it off), a dim line about a key shows
-where the screen is empty anyway: the workspace without tabs, an empty console, a result with
-nothing to show or still running, and the status bar's spare room. The key named is the one
-bound now, remapped keys included. A tip about a key you have pressed once is not shown again.
-An action you ran three times from the action menu or the command line without its key gets one
-status line naming its key, once. Nothing is sent anywhere; see
+By default a dim line about a key shows where the screen is empty anyway: the workspace without
+tabs, an empty console, a result with nothing to show or still running, and the status bar's
+spare room. The key named is the one bound now, remapped keys included. The tips of a place
+take turns as you move between tabs and panes and run queries, and they keep coming back; a key
+you have already pressed comes up less often than the ones you have not (where a place has only
+two tips, they simply alternate). `[ui] tips` (also on
+the settings screen, or `:set ui.tips=until_used`) picks how they behave: `"always"` (the
+default), `"until_used"` (a tip about a key you have pressed once is not shown again) or
+`"off"`. An action you ran three times from the action menu or the command line without its
+key gets one status line naming its key, once. Nothing is sent anywhere; see
 [where datarig keeps its files](faq.md#where-does-datarig-keep-its-files).
 
 ## Quit

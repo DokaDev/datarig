@@ -21,7 +21,7 @@ fn entries<'a>(catalog: &'a str, prefixes: &[&str]) -> Vec<(&'a str, &'a str)> {
 
 fn app() -> App {
     let mut a = App::new(&datarig_core::config::Config::default(), None, Lang::En);
-    a.prefs.tips = Tips::On;
+    a.prefs.tips = Tips::Always;
     a
 }
 
@@ -379,4 +379,108 @@ fn only_counts_that_matter_rewrite_the_usage_file() {
     // Quitting writes them.
     a.usage_at_quit();
     assert!(a.tips.dirty);
+}
+
+/// The tips of `place` in the order they take turns (the first steps left out).
+fn turns(a: &App, place: Place, ctx: Ctx) -> Vec<&'static str> {
+    a.candidates(place, ctx)
+        .into_iter()
+        .filter_map(|p| match p {
+            Pick::Tip(i) => Some(TIPS[i].id),
+            Pick::Step(_) => None,
+        })
+        .collect()
+}
+
+/// `t`'s key (or command) used once.
+fn use_tip(a: &mut App, t: &Tip) {
+    match t.subject {
+        Subject::Action(x, _) => a.tips.usage.bump(Via::Key, action::spec(x).id),
+        Subject::Command(name) => a.tips.usage.bump(Via::Command, &command_id(name)),
+        Subject::Setting(_) => panic!("{}: a setting's tip is never used", t.id),
+    };
+}
+
+/// With `always` a tip whose key was used keeps its turn, the unused ones get a second one in
+/// each round, and no tip comes twice in a row; with `until_used` it is gone.
+#[test]
+fn a_used_key_comes_up_less_often_and_goes_only_with_until_used() {
+    let fresh = turns(&app(), Place::StatusIdle, Ctx::Nav);
+    assert!(fresh.len() >= 3, "{fresh:?}");
+    let mut sorted = fresh.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), fresh.len(), "nothing used: each tip once a round, {fresh:?}");
+    let usable: Vec<&Tip> = fresh
+        .iter()
+        .map(|id| TIPS.iter().find(|t| t.id == *id).unwrap())
+        .filter(|t| !matches!(t.subject, Subject::Setting(_)))
+        .collect();
+    // Each tip used in turn (some at the ends of the round, where a second turn would follow
+    // the first one).
+    for used in &usable {
+        let mut a = app();
+        use_tip(&mut a, used);
+        let round = turns(&a, Place::StatusIdle, Ctx::Nav);
+        assert_eq!(round.iter().filter(|id| **id == used.id).count(), 1, "{}: {round:?}", used.id);
+        for id in &fresh {
+            assert!(round.contains(id), "{id} still takes its turn: {round:?}");
+        }
+        assert!(round.len() > fresh.len(), "the unused tips come up more often: {round:?}");
+        for (i, id) in round.iter().enumerate() {
+            assert_ne!(round[(i + 1) % round.len()], *id, "{id} twice in a row: {round:?}");
+        }
+        a.prefs.tips = Tips::UntilUsed;
+        let until: Vec<_> = fresh.iter().copied().filter(|id| *id != used.id).collect();
+        assert_eq!(turns(&a, Place::StatusIdle, Ctx::Nav), until);
+    }
+    // Every key used: each tip once a round again.
+    let mut a = app();
+    for t in &usable {
+        use_tip(&mut a, t);
+    }
+    let all_used = turns(&a, Place::StatusIdle, Ctx::Nav);
+    assert!(usable.iter().all(|t| all_used.iter().filter(|id| **id == t.id).count() == 1), "{all_used:?}");
+}
+
+/// No turn has the same tip beside it (the round going round included when it `wraps`).
+fn no_repeat_beside(round: &[usize], wraps: bool) -> bool {
+    let n = round.len();
+    (0..n).all(|i| match i + 1 < n {
+        true => round[i] != round[i + 1],
+        false => !wraps || n < 2 || round[i] != round[0],
+    })
+}
+
+/// Every unused tip gets its second turn wherever it fits, wherever it sits in the round, and
+/// never beside its own turn; with two tips there is no room for one.
+#[test]
+fn second_turns_go_where_no_own_turn_is_beside_them() {
+    for n in 2..=6usize {
+        let round: Vec<usize> = (0..n).collect();
+        // Each tip alone unused, then each pair.
+        let mut sets: Vec<Vec<usize>> = (0..n).map(|u| vec![u]).collect();
+        sets.extend((0..n).flat_map(|a| (a + 1..n).map(move |b| vec![a, b])).filter(|s| s.len() < n));
+        for unused in sets {
+            for wraps in [true, false] {
+                let got = second_turns(round.clone(), &unused, wraps);
+                assert!(no_repeat_beside(&got, wraps), "{n} {unused:?} {wraps}: {got:?}");
+                for t in 0..n {
+                    let turns = got.iter().filter(|&&x| x == t).count();
+                    let want = match unused.contains(&t) && (n > 2 || !wraps) {
+                        true => 2,
+                        false => 1,
+                    };
+                    assert_eq!(turns, want, "{n} {unused:?} {wraps}: tip {t} in {got:?}");
+                }
+            }
+        }
+    }
+    // The usual case keeps the round and adds the second turns at its end.
+    assert_eq!(second_turns(vec![0, 1, 2, 3], &[2, 3], true), vec![0, 1, 2, 3, 2, 3]);
+    // One unused tip at an end: its second turn goes into the round.
+    assert_eq!(second_turns(vec![0, 1, 2], &[2], true), vec![0, 2, 1, 2]);
+    assert_eq!(second_turns(vec![0, 1, 2], &[0], true), vec![0, 1, 0, 2]);
+    // Two tips take turns.
+    assert_eq!(second_turns(vec![0, 1], &[1], true), vec![0, 1]);
 }
