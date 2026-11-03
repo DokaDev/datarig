@@ -705,10 +705,20 @@ pub fn render(
         let whole = st.shape == Shape::Rows && range.as_ref().is_some_and(|(rr, _)| rr.contains(&r));
         let num_bg = if whole { th.range } else { Style::new().bg(zebra) };
         let num_style = num_bg.fg(if r == st.row { th.accent } else { th.fg_muted });
-        buf.set_stringn(area.x, y, fit(&(r + 1).to_string(), gutter - 1, Align::Right), gutter - 1, num_style);
-        // A row with changes pending: `~` in the gutter's free column.
-        if rs.edit.batch.row(r).is_some() {
-            buf.set_stringn(area.x + gutter as u16 - 1, y, "~", 1, num_style);
+        // A new row (after the rows read) has no number of the result.
+        let new = r.checked_sub(total).and_then(|i| rs.edit.batch.drafts().get(i));
+        let deleted = new.is_none() && rs.edit.batch.deleted(r);
+        let number = if new.is_some() { String::new() } else { (r + 1).to_string() };
+        buf.set_stringn(area.x, y, fit(&number, gutter - 1, Align::Right), gutter - 1, num_style);
+        // What is pending in the row, in the gutter's free column: `+` a new row, `-` a row to be
+        // deleted, `~` cells changed.
+        let mark = match (new, deleted) {
+            (Some(_), _) => Some("+"),
+            (None, true) => Some("-"),
+            (None, false) => rs.edit.batch.row(r).map(|_| "~"),
+        };
+        if let Some(mark) = mark {
+            buf.set_stringn(area.x + gutter as u16 - 1, y, mark, 1, num_style);
         }
         for &(cx, ci, w) in &layout {
             st.drawn_cells += 1;
@@ -723,8 +733,11 @@ pub fn render(
                 Style::new().bg(zebra)
             };
             put(buf, cx, y, "│", sep_style(zebra));
-            // A pending value is shown instead of the value as read.
-            let pending = rs.edit.batch.value(r, ci);
+            // A pending value is shown instead of the value as read; a new row's own values.
+            let pending = match new {
+                Some(d) => Some(d.cells.get(ci).unwrap_or(&Value::Default)),
+                None => rs.edit.batch.value(r, ci),
+            };
             let (text, is_null, default) = match (pending, rs.cell(r, ci)) {
                 (Some(Value::Text(v)), _) => (sanitize_cell(v), false, false),
                 (Some(Value::Null), _) => (null_label.to_string(), true, false),
@@ -747,7 +760,15 @@ pub fn render(
             } else {
                 Style::new().fg(th.fg)
             };
-            let style = if pending.is_some() { style.patch(th.edit_changed) } else { style }.patch(bg);
+            let style = match (new, pending) {
+                // A default keeps its dim look in a new row.
+                (Some(_), _) if default => style,
+                (Some(_), _) => style.patch(th.edit_inserted),
+                (None, Some(_)) => style.patch(th.edit_changed),
+                (None, None) if deleted => style.patch(th.edit_deleted),
+                (None, None) => style,
+            }
+            .patch(bg);
             put(buf, cx + 1, y, &" ".repeat(w + 2), bg);
             let text = fit(&text, w, align);
             put(buf, cx + 2, y, &text, style);
