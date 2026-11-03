@@ -3,6 +3,11 @@
 //! header shows the column's key marks (PK/FK/UQ) before its name. The
 //! grid shows one page of the result at a time ([`GridState::page`]); row
 //! numbers stay those of the whole result.
+//!
+//! New rows not applied yet are shown after the last row read, on the last page: row `i` of the
+//! grid is row `i` of the result while `i` is less than the rows read, else new row
+//! `i - rows read` ([`GridState::new_rows`]). Read by a row's index, a new row is no row of the
+//! result ([`CellRef::Missing`]).
 
 use crate::text::{Align, fit, sanitize_cell, slice_cols, width};
 use crate::theme;
@@ -214,6 +219,9 @@ pub struct GridState {
     /// A search's match the next render shows: (row, column, where the match starts in the
     /// cell's text as drawn, in columns). Taken by that render; only for the cursor's cell.
     pub reveal: Option<(usize, usize, usize)>,
+    /// How many new rows the grid shows after the result's last row read (set on render and by
+    /// every edit).
+    pub new_rows: usize,
 }
 
 /// What a grid selection spans.
@@ -253,15 +261,34 @@ impl GridState {
         Self { page_size, page_rows, ..Self::default() }
     }
 
-    /// The rows the grid shows of a result of `total` rows: its page (the last one when the
-    /// page is past the end).
+    /// The rows the grid shows of a result of `total` rows read: its page (the last one when the
+    /// page is past the end), the new rows after the last page's rows.
     pub fn window(&self, total: usize) -> std::ops::Range<usize> {
         if self.page_size == 0 || total == 0 {
-            return 0..total;
+            return 0..total + self.new_rows;
         }
         let last = (total - 1) / self.page_size;
         let start = self.page.min(last) * self.page_size;
-        start..(start + self.page_size).min(total)
+        let end = (start + self.page_size).min(total);
+        start..if end == total { total + self.new_rows } else { end }
+    }
+
+    /// `added` rows were read after the `read` there were: a cursor, a view or a selection's
+    /// anchor among the new rows (shown after the rows read) stays on the same new row.
+    pub fn rows_came(&mut self, read: usize, added: usize) {
+        if added == 0 || self.new_rows == 0 {
+            return;
+        }
+        let shift = |r: &mut usize| {
+            if *r >= read {
+                *r += added;
+            }
+        };
+        shift(&mut self.row);
+        shift(&mut self.top);
+        if let Some((r, _)) = self.anchor.as_mut() {
+            shift(r);
+        }
     }
 
     /// Show page `page`: the cursor goes to its first row, a selected range goes.
@@ -498,6 +525,7 @@ pub fn render(
         return;
     }
     let total = rs.rows.len();
+    st.new_rows = rs.edit.batch.drafts().len();
     // The page shown: the rows of the window, numbered as in the whole result.
     let win = st.window(total);
     let null_label = i18n.label(Label::ResultsNull);

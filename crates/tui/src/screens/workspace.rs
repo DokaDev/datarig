@@ -795,7 +795,8 @@ fn results_title(app: &App, width: u16) -> (datarig_core::i18n::Localized, Optio
     let win = t.grid.window(len);
     let paged = rs.more || len > size;
     let title = if paged && !win.is_empty() {
-        let (from, to) = (fmt_count(win.start as u64 + 1), fmt_count(win.end as u64));
+        // The rows read: the new rows after them are not numbered.
+        let (from, to) = (fmt_count(win.start as u64 + 1), fmt_count(win.end.min(len) as u64));
         app.i18n.msg(&Msg::PaneResultsRange { from, to })
     } else {
         app.i18n.msg(&Msg::PaneResultsRows { count: len as u64 })

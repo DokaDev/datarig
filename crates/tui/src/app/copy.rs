@@ -288,7 +288,9 @@ impl App {
         let Results::Rows(rs) = &t.results else { return };
         let (total, ncols) = (rs.rows.len(), rs.columns.len());
         let g = &mut t.grid;
+        // The rows read of the page: the new rows after them are not copied.
         let page = g.window(total);
+        let page = page.start..page.end.min(total);
         if page.is_empty() || ncols == 0 {
             return;
         }
@@ -313,6 +315,16 @@ impl App {
         }
     }
 
+    /// The cursor or the selection is on a new row (shown after the rows read): what it holds
+    /// is not a row of the result, and is not copied.
+    pub(super) fn on_new_rows(&self) -> bool {
+        let t = self.tab();
+        let Results::Rows(rs) = &t.results else { return false };
+        let (g, len) = (&t.grid, rs.rows.len());
+        let anchor = g.anchor.filter(|_| g.shape != Shape::Cols).is_some_and(|a| a.0 >= len);
+        g.row >= len || anchor
+    }
+
     pub(super) fn block(&self, what: CopyWhat) -> Option<Block> {
         let t = self.tab();
         let Results::Rows(rs) = &t.results else { return None };
@@ -320,6 +332,16 @@ impl App {
             return None;
         }
         let g = &t.grid;
+        // What the cursor's row decides is never the row read before a new row (the cursor is
+        // clamped below): nothing then.
+        let by_cursor = match (what, g.anchor) {
+            (CopyWhat::Every, _) | (CopyWhat::All, None) => false,
+            (_, Some(_)) => g.shape != Shape::Cols,
+            _ => true,
+        };
+        if by_cursor && self.on_new_rows() {
+            return None;
+        }
         let cursor = (g.row.min(rs.rows.len() - 1), g.col.min(rs.columns.len() - 1));
         let all_cols: Vec<usize> = (0..rs.columns.len()).collect();
         let more = rs.more || t.exec.paging.closed() || t.exec.paging == Paging::Stopped;
@@ -364,7 +386,8 @@ impl App {
     fn copy_request(&mut self, req: CopyRequest, confirmed: bool) {
         let format = req.format;
         let Some(b) = self.block(req.what) else {
-            return self.flash(Notice::new(Label::CopyNothing, Level::Warning));
+            let why = if self.on_new_rows() { Label::CopyNewRows } else { Label::CopyNothing };
+            return self.flash(Notice::new(why, Level::Warning));
         };
         let count = b.rows.len();
         if count > LARGE_COPY && !confirmed {

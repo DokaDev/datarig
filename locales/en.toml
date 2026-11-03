@@ -1079,6 +1079,7 @@
 "detail.more" = "… {key} shows the whole value"
 "detail.keys_unknown" = "The key columns could not be read"
 "detail.no_rows" = "No rows"
+"detail.new_row" = "A new row, not applied yet"
 "detail.preview" = "{column}: {value}"
 "action.results.detail" = "Result detail → show / hide"
 "action.results.detail_tab" = "Result detail → Cell / Row"
@@ -1137,6 +1138,7 @@
 "copy.failed" = "Could not copy: {error}"
 "copy.system_unavailable" = "the system clipboard is not available (clipboard = osc52 copies through the terminal)"
 "copy.nothing" = "No rows to copy"
+"copy.new_rows" = "A new row is not copied: it is not a row of the result yet"
 "copy.selecting" = "Selecting: move to extend · {copy} copies · {cancel} cancels"
 "copy.confirm.title" = "Copy this many rows?"
 "copy.confirm.text" = { one = "Copy {count} row? A copy this big can make the clipboard or the terminal slow. Only the rows fetched so far are copied.", other = "Copy {count} rows? A copy this big can make the clipboard or the terminal slow. Only the rows fetched so far are copied." }

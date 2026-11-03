@@ -564,7 +564,9 @@ impl App {
         }
         let t = self.tab();
         // The Messages of a run hide the grid: no cell to act on then.
-        let rows = t.exec.view == ResultView::Rows && matches!(&t.results, Results::Rows(rs) if !rs.rows.is_empty());
+        // A new row (shown after the rows read) is no cell of the result to act on.
+        let rows = t.exec.view == ResultView::Rows
+            && matches!(&t.results, Results::Rows(rs) if !rs.rows.is_empty() && t.grid.row < rs.rows.len());
         Some(MenuTarget::Grid {
             tab: t.id,
             binding: t.binding,
