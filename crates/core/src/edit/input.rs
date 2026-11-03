@@ -197,8 +197,9 @@ fn plain_decimal(s: &str) -> Option<(bool, &str, &str)> {
 /// A floating-point number: a decimal one with an optional exponent; PostgreSQL's also `NaN`,
 /// `Infinity` and `-Infinity`. It must be a value the type holds exactly as typed: the number
 /// it is read as (single or double precision) has the same shortest digits; MySQL's
-/// `FLOAT(M,D)` and `DOUBLE(M,D)` keep `D` digits after the point, and an unsigned one no
-/// negative number.
+/// `FLOAT(M,D)` and `DOUBLE(M,D)` keep `D` digits after the point, and take the text the server
+/// shows for a value too (its digits there, of the binary value); an unsigned one no negative
+/// number.
 fn float(mysql: bool, ty: &TypeName, type_name: &str, s: &str) -> Result<(), Invalid> {
     if !mysql && matches!(s, "NaN" | "Infinity" | "-Infinity") {
         return Ok(());
@@ -232,19 +233,21 @@ fn float(mysql: bool, ty: &TypeName, type_name: &str, s: &str) -> Result<(), Inv
         return Err(out_of_range(type_name));
     }
     let rounded = |stored: String| Invalid::Rounded { type_name: type_name.to_string(), stored };
-    if typed.is_none() || typed != digits_of(&stored) {
-        return Err(rounded(plain_float(&stored)));
+    let Some((_, digits, exp)) = &typed else { return Err(rounded(plain_float(&stored))) };
+    let exact = typed == digits_of(&stored);
+    let (true, &[m, d]) = (mysql, &ty.args[..]) else {
+        return if exact { Ok(()) } else { Err(rounded(plain_float(&stored))) };
+    };
+    // MySQL's `FLOAT(M,D)` and `DOUBLE(M,D)` are shown with `D` digits after the point, as many
+    // as the binary value has there (0.1 in a `DOUBLE(30,20)` is `0.10000000000000000555`): the
+    // text read back is taken when it is what the server shows for the number it is read as.
+    let shown = format!("{value:.*}", d as usize);
+    let after = (digits.len() as i64 - 1 - exp).max(0);
+    if after > i64::from(d) || !(exact || typed == digits_of(&shown)) {
+        return Err(rounded(shown));
     }
-    if let (true, [m, d], Some((_, digits, exp))) = (mysql, &ty.args[..], &typed) {
-        // Digits after the point, and before it.
-        let after = (digits.len() as i64 - 1 - exp).max(0);
-        let before = (exp + 1).max(0);
-        if after > i64::from(*d) {
-            return Err(rounded(format!("{value:.*}", *d as usize)));
-        }
-        if before > i64::from(m.saturating_sub(*d)) {
-            return Err(out_of_range(type_name));
-        }
+    if (exp + 1).max(0) > i64::from(m.saturating_sub(d)) {
+        return Err(out_of_range(type_name));
     }
     Ok(())
 }

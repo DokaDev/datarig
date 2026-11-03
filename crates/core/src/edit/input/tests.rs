@@ -542,3 +542,19 @@ fn mysql_char_columns_drop_trailing_spaces() {
     table(MY, "varchar(5)", ValueKind::Text, &[("ab ", OK)]);
     table(PG, "character(5)", ValueKind::Text, &[("ab ", OK)]);
 }
+
+#[test]
+fn mysql_floats_of_fixed_digits_take_back_what_the_server_shows() {
+    // DOUBLE(30,20) shows 0.1 with the digits of its binary value.
+    let double = column("double(30,20)", ValueKind::Float, &[]);
+    for v in ["0.10000000000000000555", "0.1", "0.5", "-0.10000000000000000555"] {
+        assert_eq!(check_input(MY, &double, v), OK, "DOUBLE(30,20) {v}");
+    }
+    let rounded = |stored: &str| Err(Invalid::Rounded { type_name: "double(30,20)".into(), stored: stored.into() });
+    // Read as 0.1, which the server shows otherwise.
+    assert_eq!(check_input(MY, &double, "0.1000000000000000056"), rounded("0.10000000000000000555"));
+    assert_eq!(check_input(MY, &double, "0.100000000000000005551"), rounded("0.10000000000000000555"));
+    let float = column("float(20,15)", ValueKind::Float, &[]);
+    assert_eq!(check_input(MY, &float, "0.100000001490116"), OK);
+    assert!(matches!(check_input(MY, &float, "0.100000001490117"), Err(Invalid::Rounded { .. })));
+}
