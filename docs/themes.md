@@ -108,3 +108,4 @@ Each writes a new file and never replaces one: a name that is taken, that is not
 | `edit_pending` | How many changes of a result are pending, on the result tab strip and the hint line. |
 | `edit_inserted` | The cells of a new row of the result grid, not applied yet (their text: the cell keeps its background, so it must read on the alternate rows, the selection and a selected range). |
 | `edit_deleted` | A row of the result grid to be deleted, not applied yet (its text; crossed out, so it shows without color). |
+| `edit_applied` | A value of the result grid an Apply wrote, until the query runs again (its text: the cell keeps its background; italic, so it shows without color). |
