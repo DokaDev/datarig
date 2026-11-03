@@ -700,6 +700,8 @@ fn a_value_not_shown_whole_is_not_edited() {
 #[test]
 fn a_result_read_in_a_session_that_said_its_values_as_it_connected_is_edited() {
     use datarig_core::driver::{ColumnOrigin, SessionValues};
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::copy::{CopyFormat, CopyScope};
     let col = |name: &str, kind: ValueKind| {
         let origin = ColumnOrigin::Named { schema: "shop".into(), table: "users".into(), column: name.into() };
         ColumnMeta::new(name.into(), "varchar".into(), kind, Some(origin))
@@ -717,6 +719,12 @@ fn a_result_read_in_a_session_that_said_its_values_as_it_connected_is_edited() {
     h.db(DbEvent::Page { id, columns: Some(columns()), rows: rows.clone(), more: false, elapsed: Duration::ZERO });
     h.app.focus = Focus::Results;
     h.sent();
+    // Copied as SQL too: its text is not refused.
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.app.transient = None;
+    h.app.dispatch(Action::Copy(CopyScope::Fetched, CopyFormat::SqlInsert));
+    let sql = clip.texts.lock().unwrap().last().cloned();
+    assert!(sql.as_deref().is_some_and(|s| s.contains("'a@x'")), "{sql:?} {:?}", said(&mut h));
     h.keys("le");
     structure(&mut h, Ok(mysql_users_structure()));
     assert_eq!(h.app.key_context(), Ctx::CellEdit, "{:?}", said(&mut h));
