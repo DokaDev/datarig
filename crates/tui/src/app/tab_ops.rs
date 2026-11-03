@@ -217,6 +217,10 @@ impl App {
                 return;
             }
         }
+        // Its results' pending changes go with it: asked about first.
+        if self.ask_leave(super::edit::Leave::Close(id)) {
+            return;
+        }
         if self.conflicted(Some(id)) > 0 {
             let keys = Label::TabCloseKeys;
             return self.confirm(

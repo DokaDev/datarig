@@ -284,9 +284,7 @@ impl App {
             GridAction::FirstCol => grid.col = 0,
             GridAction::LastCol => grid.col = ncols.saturating_sub(1),
             GridAction::ViewCell => {
-                let null = self.i18n.label(Label::ResultsNull);
-                let not_read = self.i18n.label(Label::ResultsNotRead);
-                if let Some((column, text)) = viewer_text(rs, grid, &null, &not_read) {
+                if let Some((column, text)) = viewer_text(rs, grid, &self.i18n) {
                     self.overlays.push(Overlay::CellViewer(Viewer { column, text, scroll: 0, view_h: 1 }));
                 }
             }
@@ -306,6 +304,10 @@ impl App {
     /// a transaction open or a tab whose text could not be saved, ask first and say what would
     /// be lost; otherwise quit at once.
     pub(super) fn request_quit(&mut self) {
+        // Changes pending in a result are lost too: asked about first.
+        if self.quitting.is_none() && !self.form_edited() && self.ask_leave(super::edit::Leave::Quit) {
+            return;
+        }
         if self.quitting.is_none() && self.form_edited() {
             // A question already up (or a password asked) is answered first: replacing it would
             // drop what its answer does.
@@ -478,6 +480,11 @@ impl App {
                 if action == ConfirmAction::ExplainAgain {
                     self.as_plan_declined();
                 }
+                // The run asked about does not run: what it took stays in the editor.
+                if let ConfirmAction::LeaveEdits(super::edit::Leave::Run(id)) = action {
+                    self.pending_leave = None;
+                    self.unstage_run(id);
+                }
                 if matches!(action, ConfirmAction::ExportStart | ConfirmAction::ExportReplace) {
                     self.export_answered(false, action == ConfirmAction::ExportReplace);
                 }
@@ -533,6 +540,7 @@ impl App {
             ConfirmAction::DiscardForm => self.cancel_form(),
             ConfirmAction::DiscardFormQuit => self.discard_forms_and_quit(),
             ConfirmAction::DiscardEdits { tab, result } => self.edit_discard(tab, result),
+            ConfirmAction::LeaveEdits(leave) => self.leave_confirmed(leave),
             ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
         }
     }

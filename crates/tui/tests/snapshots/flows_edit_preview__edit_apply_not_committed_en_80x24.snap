@@ -26,4 +26,4 @@ expression: backend
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"
 "╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
-" NORMAL  local-pg · stg │ TX open · 0 changes · 0 rows · 0:00 │ Applied 3 c… EN "
+" NORMAL  local-pg · stg │ TX open · 3 changes · 3 rows · 0:00 │ Applied 3 c… EN "

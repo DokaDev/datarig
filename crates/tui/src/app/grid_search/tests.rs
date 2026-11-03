@@ -14,7 +14,9 @@ fn search(snap: &RowsSnapshot, ncols: usize, pattern: &str, origin: CellIdx, for
     let mut firsts = Vec::new();
     let stop = AtomicBool::new(false);
     let (cells, capped) =
-        scan(snap, ncols, &re, origin, forward, cap, &stop, |c, w| firsts.push((c, w))).unwrap().unwrap();
+        scan(snap, &Overlay::new(), ncols, &re, origin, forward, cap, &stop, |c, w| firsts.push((c, w)))
+            .unwrap()
+            .unwrap();
     Found { cells, capped, firsts }
 }
 
@@ -84,7 +86,7 @@ fn a_stopped_scan_says_nothing() {
     let stop = AtomicBool::new(true);
     let re = compile("a").unwrap();
     let mut told = false;
-    assert!(scan(&s, 1, &re, 0, true, MAX_MATCHES, &stop, |_, _| told = true).unwrap().is_none());
+    assert!(scan(&s, &Overlay::new(), 1, &re, 0, true, MAX_MATCHES, &stop, |_, _| told = true).unwrap().is_none());
     assert!(!told);
 }
 
@@ -119,7 +121,7 @@ fn a_match_on_another_page_shows_that_page() {
 /// The next match from `origin` as [`seek`] finds it.
 fn seeks(snap: &RowsSnapshot, ncols: usize, pattern: &str, origin: CellIdx, forward: bool) -> Option<(CellIdx, bool)> {
     let re = compile(pattern).unwrap();
-    seek(snap, ncols, &re, origin, forward, &AtomicBool::new(false)).unwrap().unwrap()
+    seek(snap, &Overlay::new(), ncols, &re, origin, forward, &AtomicBool::new(false)).unwrap().unwrap()
 }
 
 #[test]
@@ -145,7 +147,7 @@ fn seeking_finds_the_next_match_from_the_cursor_and_around_the_ends() {
     assert_eq!(seeks(&snap, 2, "^$", 0, true), None);
     // Told to stop: nothing said.
     let re = compile("x").unwrap();
-    assert!(seek(&snap, 2, &re, 0, true, &AtomicBool::new(true)).unwrap().is_none());
+    assert!(seek(&snap, &Overlay::new(), 2, &re, 0, true, &AtomicBool::new(true)).unwrap().is_none());
 }
 
 fn rows_of(cells: &[&[Option<&str>]]) -> RowsSnapshot {

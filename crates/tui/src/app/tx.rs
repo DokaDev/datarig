@@ -128,6 +128,16 @@ impl OpenTx {
         self.log.push_back(e);
     }
 
+    /// An Apply ran in it: one entry, whose `writes` statements count as its changes.
+    pub fn book_apply(&mut self, e: TxEntry, writes: u64) {
+        self.changes += writes;
+        self.rows += e.rows;
+        if self.log.len() == TX_LOG_CAP {
+            self.log.pop_front();
+        }
+        self.log.push_back(e);
+    }
+
     /// Run `run` was rolled back by the session: what it did is not in the transaction.
     pub fn undo_run(&mut self, run: u64) {
         if let Some((r, n, rows)) = self.last_run.take_if(|(r, ..)| *r == run) {

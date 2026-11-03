@@ -37,8 +37,8 @@ pub struct Applied {
     /// The rows added, each column's value (`Value::Default`: what the table filled in is not
     /// known).
     pub new: Vec<Vec<Value>>,
-    /// Cells written whose value the server returned in another form than the result shows
-    /// (row read, column; row added by its place in `new`, column): a run shows them.
+    /// Cells whose value the server returned in another form than the result shows (row read,
+    /// column; row added by its place in `new`, column): a run shows them.
     pub rerun: BTreeSet<(usize, usize)>,
     pub rerun_new: BTreeSet<(usize, usize)>,
     /// The user's transaction it is in until that ends (not committed yet).
@@ -91,16 +91,15 @@ fn layer(rs: &ResultSet, a: &Applying, done: &[AppliedStep]) -> Applied {
                 let set = out.set.entry(r).or_default();
                 for c in 0..rs.columns.len() {
                     // What the server stored where it differs from the value as read (a
-                    // trigger's), and every value set. One in another form: a value set is
-                    // seen by a run, one not set is shown as read.
+                    // trigger's), and every value set. One in another form, set or not (a
+                    // trigger may have changed it), is seen by a run.
                     let written = e.set.contains_key(&c);
                     match returned(rs, c, d, row) {
                         None => {}
-                        Some(None) if written => {
+                        Some(None) => {
                             set.remove(&c);
                             out.rerun.insert((r, c));
                         }
-                        Some(None) => {}
                         Some(Some(v)) => {
                             let read = match e.orig.get(c) {
                                 Some(Some(t)) => Value::Text(t.clone()),
@@ -165,6 +164,8 @@ impl App {
         let count = a.batch.counts().total() as u64;
         // Done: the layer, and the changes cleared with their history.
         let mut done = None;
+        // Kept in a transaction: its number, the writes and the rows they changed.
+        let mut booked = None;
         let stale = profile != Some(a.profile) || session != a.session || rs.edit.batch != a.batch;
         match &result {
             // Not for the changes as they are now: what it did is not known for them, and they
@@ -174,6 +175,13 @@ impl App {
             _ if stale => return,
             Ok(steps) => {
                 let applied = layer(rs, &a, steps);
+                if let Some(epoch) = applied.tx {
+                    let writes: Vec<u64> = (a.steps.iter().zip(steps))
+                        .filter(|(s, _)| matches!(s.expect, Expect::Affected(_)))
+                        .map(|(_, d)| d.count)
+                        .collect();
+                    booked = Some((epoch, writes.len() as u64, writes.iter().sum::<u64>()));
+                }
                 done = Some(if applied.tx.is_some() {
                     Msg::EditAppliedKept { count }
                 } else {
@@ -183,6 +191,19 @@ impl App {
                 rs.edit.batch.clear();
             }
             Err(_) => {}
+        }
+        // What it wrote counts in the open transaction: one entry of its summary (the block an
+        // Apply opened for manual commit is reported after its answer: then).
+        if let Some((epoch, writes, rows)) = booked {
+            let sql = self.i18n.msg(&Msg::EditTxEntry { count: writes }).to_string();
+            let entry = crate::app::tx::TxEntry { run: qid, sql, rows, elapsed: None };
+            if let Some(t) = self.tabs.get_mut(tab) {
+                let open = t.exec.in_block && t.exec.tx_epoch == epoch;
+                match t.exec.tx.as_mut() {
+                    Some(tx) if open => tx.book_apply(entry, writes),
+                    _ => t.exec.apply_tx = Some((epoch, entry, writes)),
+                }
+            }
         }
         let notice = match (&result, done) {
             _ if stale => Notice::new(Label::EditFailedUnknown, Level::Error),

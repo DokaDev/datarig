@@ -65,6 +65,15 @@ pub enum EditAction {
     Discard,
 }
 
+/// What would drop a tab's pending changes, asked about first ([`App::ask_leave`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Leave {
+    /// A run in the tab (its statements wait in `App::pending_leave`): its results are replaced.
+    Run(TabId),
+    Close(TabId),
+    Quit,
+}
+
 /// A row the grid shows: a row read (by its index in the result) or a new row (by its id).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowAt {
@@ -1311,6 +1320,78 @@ impl App {
             Why::Rows(ReadOnly::NoIdentity) => label(Label::EditWhyNoIdentity),
             Why::Rows(ReadOnly::NoExactColumn) => label(Label::EditWhyNoExactColumn),
             Why::Structure(error) => self.i18n.msg(&Msg::EditWhyStructureFailed { error: error.clone() }).to_string(),
+        }
+    }
+
+    /// How many changes are pending in tab `tab`'s results (shown or parked), or in every tab's
+    /// (`None`); not those being applied.
+    fn pending_in(&self, tab: Option<TabId>) -> u64 {
+        let pending = |t: &Tab| {
+            let shown = match &t.results {
+                Results::Rows(rs) => Some(rs),
+                _ => None,
+            };
+            shown
+                .into_iter()
+                .chain(t.exec.steps.values().map(|p| &p.rs))
+                .filter(|rs| rs.edit.applying.is_none())
+                .map(|rs| rs.edit.batch.counts().total() as u64)
+                .sum::<u64>()
+        };
+        self.tabs.iter().filter(|t| tab.is_none_or(|id| t.id == id)).map(pending).sum()
+    }
+
+    /// `leave` would drop pending changes: ask first (`Enter` keeps them, `y` drops them and
+    /// goes on). Whether it asked.
+    pub(super) fn ask_leave(&mut self, leave: Leave) -> bool {
+        let tab = match leave {
+            Leave::Run(t) | Leave::Close(t) => Some(t),
+            Leave::Quit => None,
+        };
+        let count = self.pending_in(tab);
+        if count == 0 {
+            return false;
+        }
+        let text = match leave {
+            Leave::Run(_) => Msg::EditLeaveRun { count },
+            Leave::Close(_) => Msg::EditLeaveClose { count },
+            Leave::Quit => Msg::EditLeaveQuit { count },
+        };
+        self.confirm(
+            Label::EditDiscardTitle,
+            Label::EditDiscardKeys,
+            Label::EditDiscardKeys,
+            ConfirmAction::LeaveEdits(leave),
+        );
+        if let Some(c) = self.overlays.confirm_mut() {
+            c.text = text;
+        }
+        true
+    }
+
+    /// Yes to `leave`: the pending changes it would drop are dropped (each result's as one step
+    /// `u` undoes), then it goes on.
+    pub(super) fn leave_confirmed(&mut self, leave: Leave) {
+        let tab = match leave {
+            Leave::Run(t) | Leave::Close(t) => Some(t),
+            Leave::Quit => None,
+        };
+        for t in self.tabs.iter_mut().filter(|t| tab.is_none_or(|id| t.id == id)) {
+            for rs in t.row_results_mut().filter(|rs| rs.edit.applying.is_none()) {
+                rs.edit.batch.discard();
+            }
+        }
+        if !self.tabs.is_empty() {
+            self.edit_grid_sync();
+        }
+        match leave {
+            Leave::Run(t) => {
+                if let Some((id, statements)) = self.pending_leave.take().filter(|p| p.0 == t) {
+                    self.run_in(id, statements);
+                }
+            }
+            Leave::Close(t) => self.request_close(t),
+            Leave::Quit => self.request_quit(),
         }
     }
 

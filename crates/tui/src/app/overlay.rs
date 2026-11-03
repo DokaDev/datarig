@@ -167,6 +167,9 @@ pub enum ConfirmAction {
     DiscardFormQuit,
     /// Drop the pending changes of tab `tab`'s result `result`. Keeping them is the default.
     DiscardEdits { tab: super::TabId, result: u64 },
+    /// Go on with `Leave`, which drops the pending changes it would leave. Keeping them is the
+    /// default.
+    LeaveEdits(super::edit::Leave),
     /// Start an export that runs its statement again (or reads in a prod-like environment):
     /// the tab's export waits for the answer. Cancel is the default.
     ExportStart,
@@ -256,7 +259,9 @@ impl Confirm {
             ConfirmAction::DiscardForm | ConfirmAction::DiscardFormQuit => {
                 (Label::DialogButtonKeepEditing, Label::DialogButtonDiscard)
             }
-            ConfirmAction::DiscardEdits { .. } => (Label::DialogButtonKeep, Label::DialogButtonDiscard),
+            ConfirmAction::DiscardEdits { .. } | ConfirmAction::LeaveEdits(_) => {
+                (Label::DialogButtonKeep, Label::DialogButtonDiscard)
+            }
         };
         // Roll back first, commit first, then go on anyway (the server rolls back); Enter stays.
         if let Some(tx) = &self.tx {

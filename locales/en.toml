@@ -1140,6 +1140,10 @@
 "copy.system_unavailable" = "the system clipboard is not available (clipboard = osc52 copies through the terminal)"
 "copy.nothing" = "No rows to copy"
 "copy.new_rows" = "A new row is not copied: it is not a row of the result yet"
+"copy.with_pending" = "{done} (with pending changes)"
+"copy.with_deletes" = { one = "{done} (with pending changes; {count} row to be deleted)", other = "{done} (with pending changes; {count} rows to be deleted)" }
+"copy.pending_default" = "Not copied: {column} has a pending DEFAULT, which has no value yet"
+"copy.rerun" = "Not copied: {column} shows “re-run to see”; run the query again to copy it"
 "copy.selecting" = "Selecting: move to extend · {copy} copies · {cancel} cancels"
 "copy.confirm.title" = "Copy this many rows?"
 "copy.confirm.text" = { one = "Copy {count} row? A copy this big can make the clipboard or the terminal slow. Only the rows fetched so far are copied.", other = "Copy {count} rows? A copy this big can make the clipboard or the terminal slow. Only the rows fetched so far are copied." }
@@ -1370,6 +1374,7 @@
 "results.page.refused_no_hold" = "Only the first page was read: the statement stopped there and is not run again for you ({why}). Page it yourself with LIMIT/OFFSET, or set paging = \"hold\" in the profile's environment"
 "results.page.rerun" = "Ran the SELECT again for rows {from}–{to} (nothing is held open between pages); they may differ if the data changed"
 "results.page.rerun_unordered" = "Ran the SELECT again for rows {from}–{to} (nothing is held open between pages); without ORDER BY the server may return its rows in another order, so rows may repeat or be missing, and they may differ if the data changed"
+"results.page.applied" = "Changes were applied to these rows: re-run the query to see the rest"
 "repeat.not_one" = "it is not one statement"
 "repeat.not_select" = "it is not a plain SELECT"
 "repeat.writes" = "it may write, lock rows or act on the server"
@@ -2482,3 +2487,7 @@
 "edit.failed.cancelled" = "Apply cancelled; nothing was applied."
 "edit.failed.unknown" = "Apply result unknown — the connection was lost before the server confirmed. Re-run the query to check."
 "edit.preview.again" = "The last Apply's result is unknown: its changes may be in the table already. y applies them again; Enter or Esc keeps them as they are."
+"edit.leave.run" = { one = "Running a statement here replaces this tab's results: its {count} pending change is dropped.", other = "Running a statement here replaces this tab's results: their {count} pending changes are dropped." }
+"edit.leave.close" = { one = "Closing the tab drops the {count} pending change of its results.", other = "Closing the tab drops the {count} pending changes of its results." }
+"edit.leave.quit" = { one = "Quitting drops {count} pending change that was not applied.", other = "Quitting drops {count} pending changes that were not applied." }
+"edit.tx_entry" = { one = "Apply ({count} change)", other = "Apply ({count} changes)" }
