@@ -8,12 +8,12 @@ mod common;
 use common::*;
 use datarig_core::config::Config;
 use datarig_core::driver::structure::{ColumnFill, TableStructure};
-use datarig_core::driver::{ColumnMeta, DbCommand, DbError, DbEvent, ValueKind};
-use datarig_core::edit::Value;
+use datarig_core::driver::{AppliedStep, ApplyTx, ColumnMeta, DbCommand, DbError, DbEvent, ValueKind};
+use datarig_core::edit::{Expect, Step, Value};
 use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::policy::{CommitRule, Policy};
 use datarig_core::profile::ConnectionConfig;
-use datarig_tui::app::edit::{EditState, PreviewLine};
+use datarig_tui::app::edit::{Applied, EditState, PreviewLine};
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
 use datarig_tui::app::{Focus, Results};
 use datarig_tui::keymap::Ctx;
@@ -660,4 +660,486 @@ fn a_new_row_is_refused_while_the_table_has_a_required_column_the_result_does_no
     type_cell(&mut h, "z@x");
     h.command("changes");
     assert!(h.app.edit_preview_view().unwrap().apply, "{:?}", lines(&h));
+}
+
+// The Apply: sent on `y`, answered by `DbEvent::Applied`.
+
+/// The Apply sent since the last call: its id, its steps and its transaction.
+fn applies(h: &mut Harness) -> (u64, Vec<Step>, ApplyTx) {
+    let mut sent: Vec<(u64, Vec<Step>, ApplyTx)> = h
+        .sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::ApplyEdits { id, steps, tx } => Some((id, steps, tx)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent.len(), 1, "one Apply sent");
+    sent.remove(0)
+}
+
+fn no_apply_sent(h: &mut Harness) -> bool {
+    h.sent().iter().all(|c| !matches!(c, DbCommand::ApplyEdits { .. }))
+}
+
+/// Every step of `steps` stood: each gave its count, nothing returned.
+fn stood(steps: &[Step]) -> Vec<AppliedStep> {
+    let n = |s: &Step| match s.expect {
+        Expect::Rows(n) | Expect::Affected(n) => n,
+    };
+    steps.iter().map(|s| AppliedStep { count: n(s), ..AppliedStep::default() }).collect()
+}
+
+/// The columns of `shop.users` as `RETURNING *` gives them.
+type Returned = Option<(Vec<ColumnMeta>, Vec<Vec<Option<String>>>)>;
+
+fn users_returned(row: [Option<&str>; 5]) -> Returned {
+    let cols = ["id", "email", "name", "nickname", "profile"].map(|n| meta_from(n, "text", false, USERS, 1)).to_vec();
+    Some((cols, vec![row.iter().map(|v| v.map(str::to_string)).collect()]))
+}
+
+fn text(v: &str) -> Value {
+    Value::Text(v.into())
+}
+
+fn applied(h: &Harness) -> &Applied {
+    edits(h).applied.as_deref().expect("an applied layer")
+}
+
+fn screen(h: &mut Harness, w: u16, hh: u16) -> String {
+    buffer_text(h.draw(w, hh).backend().buffer())
+}
+
+/// An update, a delete and a new row, applied (`y` pressed, nothing answered yet).
+fn three_applying(mut h: Harness) -> (Harness, u64, Vec<Step>) {
+    type_cell(&mut h, "z@x");
+    h.keys("jD");
+    h.keys("ol");
+    type_cell(&mut h, "n@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, _) = applies(&mut h);
+    h.app.transient = None;
+    (h, id, steps)
+}
+
+/// The answer to `three_applying`'s Apply: every step stood, the update's and the insert's rows
+/// returned (a trigger changed the nickname; the table numbered the new row).
+fn three_done(steps: &[Step]) -> Vec<AppliedStep> {
+    let mut done = stood(steps);
+    for (s, d) in steps.iter().zip(done.iter_mut()) {
+        if s.sql.starts_with("UPDATE ") {
+            d.returned = users_returned([Some("1"), Some("z@x"), Some("Ann"), Some("ann!"), Some("{}")]);
+        } else if s.sql.starts_with("INSERT ") {
+            d.returned = users_returned([Some("4"), Some("n@x"), Some(""), None, Some("{}")]);
+        }
+    }
+    done
+}
+
+#[test]
+fn y_sends_the_apply_on_the_tabs_session_and_edits_wait_for_its_answer() {
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (_, steps, tx) = applies(&mut h);
+    assert_eq!(steps.iter().map(|s| s.sql.as_str()).collect::<Vec<_>>(), [CHECK_1, UPDATE_1]);
+    assert_eq!(tx, ApplyTx::Commit);
+    assert_eq!(h.app.key_context(), Ctx::EditPreview, "the dialog stays");
+    let v = h.app.edit_preview_view().unwrap();
+    assert_eq!(v.lines[0], PreviewLine::Note("Applying the changes…".into()));
+    assert!(!v.apply);
+    assert_eq!(h.app.edit_preview_buttons().len(), 2, "no Apply button");
+    h.key(KeyCode::Char('y'));
+    let reason = "Applying the changes…".to_string();
+    assert_eq!(said(&mut h), Some(Msg::EditPreviewCantApply { reason }));
+    assert!(no_apply_sent(&mut h), "sent once");
+    assert!(screen(&mut h, 120, 40).contains("Applying the changes…"), "the status bar says it");
+    // Nothing changes the changes while they are applied.
+    h.key(KeyCode::Esc);
+    let refused = Some(Msg::EditRefused { reason: "the pending changes are being applied".into() });
+    for keys in ["u", "D", "e", " dx", " da"] {
+        h.keys(keys);
+        assert_eq!(said(&mut h), refused, "{keys}");
+        assert!(h.app.overlays.top().is_none(), "{keys}");
+    }
+    assert_eq!(edits(&h).batch.counts().total(), 1);
+    assert!(screen(&mut h, 120, 40).contains("applying…"), "the strip says it");
+}
+
+/// The environment confirms every write: the dialog is that confirmation, nothing asks again.
+#[test]
+fn the_dialog_is_the_confirmation_of_an_environment_that_confirms_writes() {
+    use datarig_core::policy::Confirm;
+    let mut cfg = Config {
+        connections: vec![ConnectionConfig { policy: Some("stg".into()), ..ConnectionConfig::test_db() }],
+        ..Config::default()
+    };
+    cfg.policies.insert("stg", Policy { confirm: Confirm::Writes, ..Policy::default() });
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.db(DbEvent::Connected);
+    let mut h = resolved(h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows(), named());
+    h.keys("D");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    applies(&mut h);
+    assert_eq!(h.app.overlays.top().map(|o| o.kind()), Some(OverlayKind::EditPreview), "no second dialog");
+}
+
+#[test]
+fn applied_changes_show_over_the_rows_and_the_changes_are_cleared() {
+    let (mut h, id, steps) = three_applying(ready(Lang::En));
+    h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+    assert!(h.app.overlays.edit_preview().is_none(), "the dialog closed");
+    assert_eq!(said(&mut h), Some(Msg::EditApplied { count: 3 }));
+    let e = edits(&h);
+    assert!(e.batch.is_empty() && !e.batch.can_undo(), "the changes and their history are cleared");
+    assert!(e.applying.is_none());
+    let a = applied(&h);
+    // The row as the server returned it: the nickname a trigger set too.
+    assert_eq!(a.set[&0], [(1, text("z@x")), (2, text("ann!"))].into());
+    assert_eq!(a.deleted, [1].into());
+    assert_eq!(a.new, [vec![text("4"), text("n@x"), Value::Null]], "the new row as stored");
+    assert_eq!(a.tx, None);
+    let s = screen(&mut h, 120, 40);
+    assert!(s.contains("applied · re-run to refresh"), "{s}");
+    assert!(s.contains("ann!") && s.contains("n@x"), "{s}");
+    assert!(h.app.tab().exec.running.is_none(), "the tab is free");
+    // The rows are read again before they are edited again.
+    h.keys("e");
+    let reason = "changes were applied to these rows; re-run the query to edit them".to_string();
+    assert_eq!(said(&mut h), Some(Msg::EditRefused { reason }));
+    // Running the query again shows the table as it is.
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows());
+    assert!(edits(&h).applied.is_none());
+}
+
+/// A MySQL insert returns no row: the number its `AUTO_INCREMENT` column took fills that column;
+/// a column left to its default stays `default`.
+#[test]
+fn a_mysql_new_rows_number_comes_from_the_insert_id() {
+    let mut h = mysql_products();
+    h.keys("o");
+    h.keys("l");
+    type_cell(&mut h, "ink");
+    h.keys("l");
+    type_cell(&mut h, "9.99");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, tx) = applies(&mut h);
+    assert_eq!(tx, ApplyTx::Commit);
+    let mut done = stood(&steps);
+    done.last_mut().unwrap().insert_id = Some(7);
+    h.db(DbEvent::Applied { id, result: Ok(done) });
+    assert_eq!(applied(&h).new, [vec![text("7"), text("ink"), text("9.99")]]);
+}
+
+#[test]
+fn each_failure_says_why_and_the_changes_stay() {
+    use datarig_core::driver::{ApplyError, ApplyFailure};
+    let update = r#"UPDATE "shop"."users" SET "email" = 'z@x' WHERE "id" = '1' AND "email" = 'a@x' RETURNING *"#;
+    let cases: Vec<(Option<usize>, ApplyError, String)> = vec![
+        (
+            Some(0),
+            ApplyError::Count { got: 0 },
+            "Row 1 (id = 1) was changed or deleted since it was read. Nothing was applied. Re-run the query to see the current values.".into(),
+        ),
+        (Some(1), ApplyError::Count { got: 4 }, "Row 1 (id = 1) now matches 4 rows, not 1. Nothing was applied.".into()),
+        (
+            Some(0),
+            ApplyError::Db(DbError::LockBusy("could not obtain lock".into())),
+            "Row 1 (id = 1) is locked by another session. Nothing was applied.".into(),
+        ),
+        (
+            Some(1),
+            ApplyError::Db(DbError::Server("value too long".into())),
+            format!("Row 1 (id = 1): value too long. Nothing was applied. Statement: {update}"),
+        ),
+        (None, ApplyError::Db(DbError::Server("could not serialize access".into())), "could not serialize access. Nothing was applied.".into()),
+        (Some(0), ApplyError::Db(DbError::Cancelled), "Apply cancelled; nothing was applied.".into()),
+        (
+            None,
+            ApplyError::Db(DbError::ReadWriteRefused),
+            "not sent: the session is read-only and this statement asks for read-write. Nothing was applied.".into(),
+        ),
+    ];
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    for (step, why, want) in cases {
+        h.command("apply");
+        h.key(KeyCode::Char('y'));
+        let (id, _, _) = applies(&mut h);
+        h.db(DbEvent::Applied { id, result: Err(ApplyFailure { step, why }) });
+        assert_eq!(said(&mut h).map(|m| h.app.i18n.msg(&m).to_string()), Some(want.clone()));
+        let v = h.app.edit_preview_view().expect("the dialog stays");
+        assert_eq!(v.lines[0], PreviewLine::Problem(want.clone()));
+        assert!(v.apply, "it may be applied again: {want}");
+        assert_eq!(edits(&h).batch.counts().total(), 1, "the changes stay: {want}");
+        assert!(edits(&h).applied.is_none() && edits(&h).applying.is_none());
+        let notes = &h.app.tab().exec.run.notes;
+        assert_eq!(notes.last().map(|n| h.app.i18n.msg(&n.msg).to_string()), Some(want), "in the Messages");
+        h.key(KeyCode::Esc);
+    }
+}
+
+/// The connection ended while committing: whether the changes are in the table is not known.
+/// They are applied again only once the user says so again; a run reads the rows again.
+#[test]
+fn an_apply_whose_result_is_unknown_is_applied_again_only_when_asked() {
+    use datarig_core::driver::{ApplyError, ApplyFailure};
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, _, _) = applies(&mut h);
+    let why = ApplyError::Db(DbError::CommitUnknown);
+    h.db(DbEvent::Applied { id, result: Err(ApplyFailure { step: None, why }) });
+    let unknown =
+        "Apply result unknown — the connection was lost before the server confirmed. Re-run the query to check.";
+    assert_eq!(said(&mut h).map(|m| h.app.i18n.msg(&m).to_string()).as_deref(), Some(unknown));
+    let v = h.app.edit_preview_view().unwrap();
+    assert_eq!(v.lines[0], PreviewLine::Problem(unknown.into()));
+    assert!(!v.apply, "Apply is disabled");
+    h.key(KeyCode::Esc);
+    h.command("apply");
+    assert_eq!(h.app.edit_preview_view().unwrap().lines[0], PreviewLine::Problem(unknown.into()), "still");
+    h.key(KeyCode::Char('y'));
+    assert!(no_apply_sent(&mut h), "warned first");
+    let again = "The last Apply's result is unknown: its changes may be in the table already. y applies them again; Enter or Esc keeps them as they are.";
+    let v = h.app.edit_preview_view().unwrap();
+    assert_eq!(v.lines[1], PreviewLine::Problem(again.into()));
+    assert!(v.apply);
+    h.key(KeyCode::Enter);
+    assert!(no_apply_sent(&mut h), "Enter keeps them as they are");
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    h.command("apply");
+    assert!(!h.app.edit_preview_view().unwrap().apply, "warned again");
+    h.key(KeyCode::Char('y'));
+    h.key(KeyCode::Char('y'));
+    applies(&mut h);
+    // A run reads the rows again: the new result has no such doubt.
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, _, _) = applies(&mut h);
+    let why = ApplyError::Db(DbError::CommitUnknown);
+    h.db(DbEvent::Applied { id, result: Err(ApplyFailure { step: None, why }) });
+    h.key(KeyCode::Esc);
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows());
+    assert!(!edits(&h).apply_unknown);
+}
+
+/// An answer to another Apply is not this one's; an answer that comes after the session ended
+/// is never read, and the Apply's result is not known.
+#[test]
+fn a_stale_answer_is_dropped() {
+    let (mut h, id, steps) = three_applying(ready(Lang::En));
+    h.db(DbEvent::Applied { id: id + 100, result: Ok(three_done(&steps)) });
+    assert!(edits(&h).applying.is_some() && edits(&h).applied.is_none(), "still applying");
+    assert_eq!(edits(&h).batch.counts().total(), 3);
+    h.tab_db(0, DbEvent::Lost { error: DbError::Closed });
+    assert!(edits(&h).applying.is_none());
+    assert!(edits(&h).apply_unknown);
+    assert!(h.app.tab().exec.run.notes.iter().any(|n| n.msg == Label::EditFailedUnknown.into()));
+    h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+    assert!(edits(&h).applied.is_none(), "the lost session's answer is not read");
+    assert_eq!(edits(&h).batch.counts().total(), 3, "the changes stay");
+}
+
+/// The query's cancel key cancels the Apply; nothing was applied.
+#[test]
+fn the_cancel_key_cancels_the_apply() {
+    use datarig_core::driver::{ApplyError, ApplyFailure};
+    let (mut h, id, _) = three_applying(ready(Lang::En));
+    h.ctrl('c');
+    assert!(h.cancelled.load(std::sync::atomic::Ordering::SeqCst), "the session was asked to cancel");
+    h.db(DbEvent::Applied { id, result: Err(ApplyFailure { step: Some(2), why: ApplyError::Db(DbError::Cancelled) }) });
+    assert_eq!(said(&mut h), Some(Label::EditFailedCancelled.into()));
+    assert_eq!(edits(&h).batch.counts().total(), 3);
+    assert!(h.app.tab().exec.running.is_none());
+}
+
+/// Under manual commit the Apply keeps its transaction open: the changes are not committed
+/// until it ends. A commit keeps them; a rollback (the user's, the server's, a lost
+/// connection) drops them, and says so.
+#[test]
+fn under_manual_commit_the_transactions_end_decides_the_applied_changes() {
+    let open = |h: &mut Harness| {
+        let (id, steps, tx) = applies(h);
+        assert!(matches!(tx, ApplyTx::Keep { .. }), "{tx:?}");
+        h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+        assert_eq!(said(h), Some(Msg::EditAppliedKept { count: 3 }));
+        // The transaction it opened follows its answer.
+        h.tab_db(0, DbEvent::ManualBegun { id, index: 0 });
+        h.db(DbEvent::Block(true));
+        h.db(DbEvent::TxOpen(true));
+        assert!(applied(h).tx.is_some());
+        let s = screen(h, 120, 40);
+        assert!(s.contains("applied · not committed"), "{s}");
+    };
+    let gone = "The transaction was rolled back; the applied changes are gone";
+    // COMMIT.
+    let (mut h, _, _) = {
+        let mut h = manual(Lang::En);
+        type_cell(&mut h, "z@x");
+        h.keys("jD");
+        h.keys("ol");
+        type_cell(&mut h, "n@x");
+        h.command("apply");
+        h.key(KeyCode::Char('y'));
+        (h, 0, ())
+    };
+    open(&mut h);
+    h.command("commit");
+    let end = h.sent().into_iter().find_map(|c| match c {
+        DbCommand::EndTx { id, commit: true } => Some(id),
+        _ => None,
+    });
+    let end = end.expect("a commit sent");
+    h.tab_db(0, DbEvent::TxEnded { id: end, outcome: datarig_core::driver::TxOutcome::Committed });
+    h.db(DbEvent::Block(false));
+    h.db(DbEvent::TxOpen(false));
+    assert_eq!(applied(&h).tx, None, "committed");
+    assert!(screen(&mut h, 120, 40).contains("applied · re-run to refresh"));
+    // ROLLBACK, the server's rollback, a lost connection.
+    for how in ["rollback", "server", "lost"] {
+        let mut h = manual(Lang::En);
+        type_cell(&mut h, "z@x");
+        h.command("apply");
+        h.key(KeyCode::Char('y'));
+        let (id, steps, _) = applies(&mut h);
+        h.db(DbEvent::Applied { id, result: Ok(stood(&steps)) });
+        h.tab_db(0, DbEvent::ManualBegun { id, index: 0 });
+        h.db(DbEvent::Block(true));
+        h.db(DbEvent::TxOpen(true));
+        h.app.transient = None;
+        match how {
+            "rollback" => {
+                h.command("rollback");
+                let end = h.sent().into_iter().find_map(|c| match c {
+                    DbCommand::EndTx { id, commit: false } => Some(id),
+                    _ => None,
+                });
+                let outcome = datarig_core::driver::TxOutcome::RolledBack;
+                h.tab_db(0, DbEvent::TxEnded { id: end.expect("a rollback sent"), outcome });
+                h.db(DbEvent::Block(false));
+                h.db(DbEvent::TxOpen(false));
+            }
+            "server" => {
+                h.tab_db(0, DbEvent::TxClosedBy { id, how: datarig_core::driver::ServerEnd::RolledBack });
+                h.db(DbEvent::Block(false));
+                h.db(DbEvent::TxOpen(false));
+            }
+            _ => h.tab_db(0, DbEvent::Lost { error: DbError::Closed }),
+        }
+        assert!(edits(&h).applied.is_none(), "{how}: the original values show again");
+        let status = h.status(120, 40);
+        assert!(status.contains(gone), "{how}: {status}");
+        assert!(h.app.tab().exec.run.notes.iter().any(|n| n.msg == Label::EditAppliedGone.into()), "{how}");
+    }
+}
+
+/// Inside the user's open block the driver applies under a savepoint and commits nothing: the
+/// changes are not committed until the block ends.
+#[test]
+fn inside_an_open_block_the_applied_changes_wait_for_its_end() {
+    for rolled_back in [false, true] {
+        let mut h = ready(Lang::En);
+        h.db(DbEvent::Block(true));
+        h.db(DbEvent::TxOpen(true));
+        type_cell(&mut h, "z@x");
+        h.command("apply");
+        assert_eq!(
+            h.app.edit_preview_view().unwrap().footer,
+            "Runs inside the open transaction; nothing is committed."
+        );
+        h.key(KeyCode::Char('y'));
+        let (id, steps, tx) = applies(&mut h);
+        assert_eq!(tx, ApplyTx::Commit, "the driver uses a savepoint by itself");
+        h.db(DbEvent::Applied { id, result: Ok(stood(&steps)) });
+        assert_eq!(said(&mut h), Some(Msg::EditAppliedKept { count: 1 }));
+        assert!(applied(&h).tx.is_some());
+        if rolled_back {
+            h.tab_db(0, DbEvent::TxClosedBy { id, how: datarig_core::driver::ServerEnd::RolledBack });
+        }
+        h.db(DbEvent::Block(false));
+        h.db(DbEvent::TxOpen(false));
+        match rolled_back {
+            true => assert!(edits(&h).applied.is_none()),
+            false => assert_eq!(applied(&h).tx, None),
+        }
+    }
+}
+
+/// In a dark and a light theme: a value an Apply wrote in `edit_applied`, a row it deleted still
+/// crossed out, a value the table filled in for a new row dim.
+#[test]
+fn applied_values_take_their_token() {
+    use datarig_tui::theme;
+    use ratatui::style::Modifier;
+    for th in [theme::DARK, theme::LIGHT] {
+        let (mut h, id, steps) = three_applying(ready(Lang::En));
+        h.app.theme = std::sync::Arc::new(th.clone());
+        let mut done = three_done(&steps);
+        // The insert returned nothing: what the table filled in is not known.
+        if let Some(d) = done.iter_mut().zip(&steps).find(|(_, s)| s.sql.starts_with("INSERT ")).map(|(d, _)| d) {
+            d.returned = None;
+        }
+        h.db(DbEvent::Applied { id, result: Ok(done) });
+        h.keys("G");
+        let t = h.draw(120, 40);
+        let buf = t.backend().buffer();
+        let g = &h.app.tab().grid;
+        let at = |r: usize, c: usize| {
+            let x = g.cell_rect(r, c, 3).expect("on screen");
+            buf[(x.x + 1, x.y)].clone()
+        };
+        let written = at(0, 1);
+        assert_eq!((written.fg, written.bg), (th.edit_applied.fg.unwrap(), th.bg), "a value written");
+        assert!(written.modifier.contains(Modifier::ITALIC) && !written.modifier.contains(Modifier::BOLD));
+        let gone = at(1, 1);
+        assert_eq!(gone.fg, th.edit_deleted.fg.unwrap(), "a row deleted");
+        assert!(gone.modifier.contains(Modifier::CROSSED_OUT));
+        let added = at(3, 1);
+        assert_eq!(added.fg, th.edit_applied.fg.unwrap(), "a new row's value");
+        let filled = at(3, 0);
+        assert!(filled.fg == th.fg_muted && filled.modifier.contains(Modifier::DIM), "filled by the table: {filled:?}");
+        assert_eq!(at(2, 1).fg, th.fg, "a row as read");
+    }
+}
+
+#[test]
+fn the_apply_on_screen() {
+    use datarig_core::driver::{ApplyError, ApplyFailure};
+    screens("edit_apply_applying", |lang| {
+        let mut h = three_applying(ready(lang)).0;
+        // The status bar's spinner by the wall clock: its first frame.
+        let started = std::time::Instant::now() + Duration::from_secs(3600);
+        h.app.tab_mut().exec.running.as_mut().expect("applying").started = started;
+        h
+    });
+    screens("edit_apply_applied", |lang| {
+        let (mut h, id, steps) = three_applying(ready(lang));
+        h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+        h.app.transient = None;
+        h
+    });
+    screens("edit_apply_not_committed", |lang| {
+        let (mut h, id, steps) = three_applying(manual(lang));
+        h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+        h.tab_db(0, DbEvent::ManualBegun { id, index: 0 });
+        h.db(DbEvent::Block(true));
+        h.db(DbEvent::TxOpen(true));
+        h.app.transient = None;
+        h
+    });
+    screens("edit_apply_failed", |lang| {
+        let (mut h, id, _) = three_applying(ready(lang));
+        let why = ApplyError::Count { got: 0 };
+        h.db(DbEvent::Applied { id, result: Err(ApplyFailure { step: Some(0), why }) });
+        h.app.transient = None;
+        h
+    });
 }

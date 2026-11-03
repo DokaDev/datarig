@@ -87,13 +87,18 @@ pub(crate) fn draw_inspector(app: &mut App, area: Rect, buf: &mut Buffer) {
     let body = inner;
     let t = app.tab();
     let Results::Rows(rs) = &t.results else { return };
-    if rs.rows.is_empty() && rs.edit.batch.drafts().is_empty() {
+    if rs.rows.is_empty() && rs.edit.new_shown() == 0 {
         put(buf, body.x + 1, body.y, &app.i18n.label(Label::DetailNoRows), w - 1, dim());
         return;
     }
     // A new row (shown after the rows read) is no row of the result: never the one before it.
+    // Nor is a row an Apply added (shown before them).
     if t.grid.row >= rs.rows.len() {
-        put(buf, body.x + 1, body.y, &app.i18n.label(Label::DetailNewRow), w - 1, dim());
+        let label = match t.grid.row - rs.rows.len() < rs.edit.applied_new() {
+            true => Label::DetailAppliedRow,
+            false => Label::DetailNewRow,
+        };
+        put(buf, body.x + 1, body.y, &app.i18n.label(label), w - 1, dim());
         app.layout.detail_list = Rect::default();
         return;
     }

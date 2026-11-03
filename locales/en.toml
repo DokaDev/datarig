@@ -1080,6 +1080,7 @@
 "detail.keys_unknown" = "The key columns could not be read"
 "detail.no_rows" = "No rows"
 "detail.new_row" = "A new row, not applied yet"
+"detail.applied_row" = "A row the Apply added"
 "detail.preview" = "{column}: {value}"
 "action.results.detail" = "Result detail → show / hide"
 "action.results.detail_tab" = "Result detail → Cell / Row"
@@ -2459,3 +2460,20 @@
 "edit.discard.keys" = "y drop · n/Enter keep"
 "edit.discarded" = { one = "Dropped {count} pending change", other = "Dropped {count} pending changes" }
 "edit.preview.not_shown" = "Row {row}: {column} is NOT NULL, has no default and is not in the result; add it to the SELECT"
+"edit.applying" = "Applying the changes…"
+"edit.badge.applying" = "applying…"
+"edit.badge.applied" = "applied · re-run to refresh"
+"edit.badge.not_committed" = "applied · not committed"
+"edit.why.applying" = "the pending changes are being applied"
+"edit.why.applied" = "changes were applied to these rows; re-run the query to edit them"
+"edit.applied" = { one = "Applied {count} change", other = "Applied {count} changes" }
+"edit.applied_kept" = { one = "Applied {count} change; not committed yet", other = "Applied {count} changes; not committed yet" }
+"edit.applied_gone" = "The transaction was rolled back; the applied changes are gone"
+"edit.failed.changed" = "Row {row} was changed or deleted since it was read. Nothing was applied. Re-run the query to see the current values."
+"edit.failed.count" = { one = "Row {row} now matches {count} row, not {expected}. Nothing was applied.", other = "Row {row} now matches {count} rows, not {expected}. Nothing was applied." }
+"edit.failed.locked" = "Row {row} is locked by another session. Nothing was applied."
+"edit.failed.db" = "Row {row}: {error}. Nothing was applied. Statement: {sql}"
+"edit.failed.plain" = "{error}. Nothing was applied."
+"edit.failed.cancelled" = "Apply cancelled; nothing was applied."
+"edit.failed.unknown" = "Apply result unknown — the connection was lost before the server confirmed. Re-run the query to check."
+"edit.preview.again" = "The last Apply's result is unknown: its changes may be in the table already. y applies them again; Enter or Esc keeps them as they are."

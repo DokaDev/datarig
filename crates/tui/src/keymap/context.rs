@@ -345,7 +345,7 @@ impl Ctx {
                 "What the open transaction did (its statements that may have written, rows, time; how long it has been open and idle): `c` commits, `r` rolls back, `Esc` closes; a click on a button does what its key does."
             }
             Ctx::EditPreview => {
-                "A result's pending changes and the statements that apply them (`:changes`, `:apply`); Cancel has the focus: `y` applies, `c` copies the statements, `1`/`a` answer which of several identical rows a change is for, `j`/`k` scroll, `Esc` or `Enter` closes; a click on a button does what its key does."
+                "A result's pending changes and the statements that apply them (`:changes`, `:apply`); Cancel has the focus: `y` applies, `c` copies the statements, `1`/`a` answer which of several identical rows a change is for, `j`/`k` scroll, `Esc` or `Enter` closes; a click on a button does what its key does. While the changes are applied the dialog says so, and the query's cancel key cancels; it closes once they are applied, else it says why nothing was. After an Apply whose result is not known, the first `y` warns and the second applies again."
             }
             Ctx::SessionView => {
                 "What a profile's query sessions start with (`:session` or `:startup`; in the profile form `Ctrl+E`, for its unsaved values), in the order they are applied, each with where it comes from: the app's limits, the Startup SQL's statements, the profile's own; behind a pooler in transaction mode, how each PostgreSQL statement goes there. `j`/`k` scroll, `Esc` closes; a click on Close closes too."

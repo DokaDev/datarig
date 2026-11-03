@@ -468,6 +468,9 @@ pub struct Tab {
     pub exec: TabSession,
     /// The last statement outcome of this tab (the status bar shows it while the tab is active).
     pub status: Option<Notice>,
+    /// What became of an Apply's changes as its transaction or session ended: said once the
+    /// event is handled (its own outcome would replace it).
+    pub edit_said: Option<Notice>,
     /// Where the tab's text is kept.
     pub doc: Doc,
     /// The results pane's place below the editor (a query tab).
@@ -594,6 +597,7 @@ impl Tab {
             grid: GridState::default(),
             find: Default::default(),
             cell_edit: None,
+            edit_said: None,
             exec: TabSession::new(),
             status: None,
             doc: Doc::new(),
@@ -732,8 +736,9 @@ impl Tab {
     pub fn session_closed(&mut self) -> bool {
         self.exec.lost_tx |= self.exec.tx_at_risk();
         let ended = match self.exec.running.take() {
-            // An export says how it ended itself (its writer keeps what it wrote).
-            Some(r) if r.export => false,
+            // An export says how it ended itself (its writer keeps what it wrote); so does an
+            // Apply (`tx_reset`).
+            Some(r) if r.export || r.apply => false,
             Some(r) if !r.fetch && !r.count => {
                 self.exec.run.answered(super::runlog::StatementOutcome::Cancelled, None);
                 let note = Notice::new(datarig_core::i18n::Label::QueryCancelledSessionClosed, super::Level::Warning);
@@ -789,6 +794,7 @@ impl Tab {
     /// nothing asked of it is answered.
     pub fn tx_reset(&mut self) {
         self.exec.tx_open = false;
+        self.apply_unanswered();
         // The server rolls the user's transaction back when its session ends.
         self.block_ended(true);
         self.exec.ending = None;
@@ -796,8 +802,26 @@ impl Tab {
         self.exec.outside_offer = None;
     }
 
+    /// An Apply sent on the session that ended is never answered: whether its changes are in
+    /// the table is not known, and they are applied again only once the user says so. Said in
+    /// the run's Messages and, after the event, in the status bar.
+    fn apply_unanswered(&mut self) {
+        let mut unanswered = false;
+        for rs in self.row_results_mut() {
+            if rs.edit.applying.take().is_some() {
+                rs.edit.apply_unknown = true;
+                unanswered = true;
+            }
+        }
+        if unanswered {
+            let note = Notice::new(datarig_core::i18n::Label::EditFailedUnknown, super::Level::Error);
+            self.exec.run.notes.push(note.clone());
+            self.edit_said = Some(note);
+        }
+    }
+
     /// The user's transaction ended; `rolled_back` when the app knows it rolled back. Results
-    /// read in it say it ended.
+    /// read in it say it ended, and what an Apply did in it goes with a rollback (said).
     pub fn block_ended(&mut self, rolled_back: bool) {
         self.exec.tx = None;
         self.exec.manual_begun = None;
@@ -808,8 +832,14 @@ impl Tab {
         }
         self.exec.in_block = false;
         let epoch = self.exec.tx_epoch;
+        let mut gone = false;
         for rs in self.row_results_mut() {
-            rs.tx_ended(epoch, rolled_back);
+            gone |= rs.tx_ended(epoch, rolled_back);
+        }
+        if gone {
+            let note = Notice::new(datarig_core::i18n::Label::EditAppliedGone, super::Level::Warning);
+            self.exec.run.notes.push(note.clone());
+            self.edit_said = Some(note);
         }
     }
 

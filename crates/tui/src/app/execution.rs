@@ -204,6 +204,7 @@ impl App {
                 stopping: false,
                 refused: false,
                 export: false,
+                apply: false,
             });
             if t.exec.path_per_transaction {
                 t.warn_session_path();
@@ -327,7 +328,7 @@ impl App {
         if !matches!(t.results, Results::Rows(_)) {
             t.results = Results::Cancelled;
         }
-        if !r.fetch && !r.count && !r.export {
+        if !r.fetch && !r.count && !r.export && !r.apply {
             // The statement it was at is cancelled (its hint says so).
             t.exec.run.answered(StatementOutcome::Cancelled, None);
             t.run_ended(true);
@@ -399,6 +400,7 @@ impl App {
             stopping: false,
             refused: false,
             export: false,
+            apply: false,
         });
         self.send_tab(id, DbCommand::FetchMore { id: qid });
     }
@@ -1212,8 +1214,8 @@ impl App {
                 Some(m)
             }
             DbEvent::TxEnded { .. } => None,
-            // An Apply's answer: the tab sends none.
-            DbEvent::Applied { .. } => None,
+            // The answer to the Apply of a result's changes.
+            DbEvent::Applied { id: qid, result } => return self.edit_applied(id, qid, result),
             // The app's rollback of an idle transaction failed: the session closes instead (after
             // this event), whatever the error.
             DbEvent::Failed { id: q, error, .. } if t.exec.ending.is_some_and(|e| e.id == q && e.idle.is_some()) => {

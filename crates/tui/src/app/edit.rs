@@ -32,9 +32,11 @@ use datarig_core::export;
 use ratatui::style::{Color, Style};
 use std::ops::Range;
 
+mod applied;
 mod lines;
 mod preview;
 
+pub use applied::{Applied, Applying};
 pub use lines::Lines;
 pub use preview::{EditPreview, PreviewLine, PreviewView};
 
@@ -70,13 +72,15 @@ pub enum RowAt {
     New(u64),
 }
 
-/// The row the grid shows at `row` of `rs`: the rows read, then the new rows.
+/// The row the grid shows at `row` of `rs`: the rows read, then the new rows an Apply added
+/// (none of these: they are no row to edit), then the new rows.
 pub fn row_at(rs: &ResultSet, row: usize) -> Option<RowAt> {
     let len = rs.rows.len();
     if row < len {
         return Some(RowAt::Read(row));
     }
-    rs.edit.batch.drafts().get(row - len).map(|d| RowAt::New(d.id))
+    let len = len + rs.edit.applied_new();
+    rs.edit.batch.drafts().get(row.checked_sub(len)?).map(|d| RowAt::New(d.id))
 }
 
 /// Where the grid shows row `at` of `rs`.
@@ -84,7 +88,10 @@ pub fn shown_row(rs: &ResultSet, at: RowAt) -> Option<usize> {
     let len = rs.rows.len();
     match at {
         RowAt::Read(r) => (r < len).then_some(r),
-        RowAt::New(id) => rs.edit.batch.drafts().iter().position(|d| d.id == id).map(|i| len + i),
+        RowAt::New(id) => {
+            let len = len + rs.edit.applied_new();
+            rs.edit.batch.drafts().iter().position(|d| d.id == id).map(|i| len + i)
+        }
     }
 }
 
@@ -95,12 +102,41 @@ pub struct EditState {
     pub target: Target,
     /// What the rows were read under: changes are taken only while it holds.
     bound: Option<Bound>,
+    /// The Apply of the changes sent and not answered yet.
+    pub applying: Option<Box<Applying>>,
+    /// What an Apply changed, shown over the rows as read.
+    pub applied: Option<Box<Applied>>,
+    /// An Apply's result is not known (its connection ended before the server said): the
+    /// changes are applied again only once the user says so.
+    pub apply_unknown: bool,
 }
 
 impl EditState {
     /// The rows were read under `bound` (`None`: under no profile, so never edited).
     pub(super) fn bind(&mut self, bound: Option<Bound>) {
         self.bound = bound;
+    }
+
+    /// How many new rows an Apply added (shown after the rows read, before the new rows).
+    pub fn applied_new(&self) -> usize {
+        self.applied.as_ref().map_or(0, |a| a.new.len())
+    }
+
+    /// How many rows the grid shows after the rows read: those an Apply added, the new rows.
+    pub fn new_shown(&self) -> usize {
+        self.applied_new() + self.batch.drafts().len()
+    }
+
+    /// The user's transaction `epoch` ended (`rolled_back` when the app knows it rolled back):
+    /// what an Apply did in it is committed, or gone (`true`).
+    pub fn tx_ended(&mut self, epoch: u64, rolled_back: bool) -> bool {
+        let Some(a) = self.applied.as_mut().filter(|a| a.tx == Some(epoch)) else { return false };
+        if rolled_back {
+            self.applied = None;
+            return true;
+        }
+        a.tx = None;
+        false
     }
 }
 
@@ -337,6 +373,10 @@ impl App {
     }
 
     pub(super) fn edit_action(&mut self, a: EditAction) {
+        // Nothing changes the changes being applied.
+        if !self.tabs.is_empty() && rows_of(self.tab()).is_some_and(|rs| rs.edit.applying.is_some()) {
+            return self.say_refused(Label::EditWhyApplying.into());
+        }
         match a {
             EditAction::Undo | EditAction::Redo => self.edit_history(a == EditAction::Redo),
             EditAction::Revert => self.edit_revert(),
@@ -398,7 +438,7 @@ impl App {
     fn edit_grid_sync(&mut self) {
         let t = self.tabs.active_mut();
         let Some(rs) = shown_mut(&mut t.results, t.exec.view) else { return };
-        let n = rs.edit.batch.drafts().len();
+        let n = rs.edit.new_shown();
         let last = (rs.rows.len() + n).saturating_sub(1);
         let g = &mut t.grid;
         g.new_rows = n;
@@ -462,6 +502,11 @@ impl App {
             self.say_why(&Why::Rows(ReadOnly::NoFormat));
             return None;
         };
+        // What an Apply changed shows over the rows as read: they are read again first.
+        if rs.edit.applied.is_some() {
+            self.say_refused(Label::EditWhyApplied.into());
+            return None;
+        }
         // Read under another connection or database, the rows may not be the table's now.
         let bound = self.edit_bound(t).filter(|b| rs.edit.bound.as_ref() == Some(b));
         let Some(bound) = bound else {
@@ -1124,6 +1169,15 @@ impl App {
             }
         }
         self.sweep_edit_preview();
+        // What became of an Apply's changes, said after the event's own outcome.
+        let said: Vec<(TabId, Notice)> =
+            self.tabs.iter_mut().filter_map(|t| Some((t.id, t.edit_said.take()?))).collect();
+        for (id, n) in said {
+            if self.tab().id == id {
+                self.edit_grid_sync();
+            }
+            self.tab_status(id, n);
+        }
     }
 
     /// The structure of `schema.table` in `profile`'s `database` came (`error`: why it could not
@@ -1250,16 +1304,24 @@ impl App {
     }
 
     /// What result `rs` is to its edits, in at most `room` columns, and its style on background
-    /// `bg`: how many changes are pending, else whether its rows can be edited (the table and how
+    /// `bg`: its changes being applied, how many are pending, what an Apply changed, else whether its rows can be edited (the table and how
     /// a row is found, as room allows) or why not. Nothing before an edit key resolved it.
     pub(crate) fn edit_badge(&self, rs: &ResultSet, room: usize, bg: Color) -> Option<(String, Style)> {
         let th = crate::theme::cur();
         let width = crate::text::width;
         let fits = |text: String| (width(&text) <= room).then_some(text);
+        if rs.edit.applying.is_some() {
+            let text = self.i18n.label(Label::EditBadgeApplying).to_string();
+            return fits(text).map(|t| (t, th.edit_pending.bg(bg)));
+        }
         let pending = rs.edit.batch.counts().total();
         if pending > 0 {
             let text = self.i18n.msg(&Msg::EditBadgePending { count: pending as u64 }).to_string();
             return fits(text).map(|t| (t, th.edit_pending.bg(bg)));
+        }
+        if let Some(a) = &rs.edit.applied {
+            let label = if a.tx.is_some() { Label::EditBadgeNotCommitted } else { Label::EditBadgeApplied };
+            return fits(self.i18n.label(label).to_string()).map(|t| (t, th.edit_applied.bg(bg)));
         }
         // The fullest text that fits; else `what` cut to the room left, at least a few columns
         // of it; else `plain`.

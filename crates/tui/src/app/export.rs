@@ -1185,6 +1185,7 @@ impl App {
             stopping: false,
             refused: false,
             export: true,
+            apply: false,
         });
         self.export_noted(id);
         self.export_send(id, sql, guard);
