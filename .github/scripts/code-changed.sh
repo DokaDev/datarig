@@ -20,7 +20,11 @@ verdict() { # verdict <true|false> <why>
 if [[ -z ${BASE:-} || -z ${HEAD:-} ]]; then
   verdict true "Not a pull request: everything runs."
 fi
-if ! files=$(git diff --no-renames --name-only "$BASE...$HEAD"); then
+# A base commit no branch has any more (a stacked base that was rewritten) is fetched by id.
+for c in "$BASE" "$HEAD"; do
+  git cat-file -e "$c^{commit}" 2> /dev/null || git fetch -q origin "$c" 2> /dev/null || true
+done
+if ! files=$(git -c core.quotePath=false diff --no-renames --name-only "$BASE...$HEAD"); then
   verdict true "The changed files could not be read: everything runs."
 fi
 if [[ -z $files ]]; then
