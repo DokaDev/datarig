@@ -375,3 +375,35 @@ fn only_the_planner_asks_a_format_for_an_update_or_a_delete_and_it_names_no_form
     let planner = std::fs::read_to_string(dir.join("plan.rs")).unwrap();
     assert!(!planner.contains("EditFormat"), "the planner is the same for every format");
 }
+
+#[test]
+fn a_new_row_leaves_no_not_null_column_without_a_default_to_its_default() {
+    // `name` NOT NULL without a default; `id` NOT NULL numbered by the table, `score` NOT NULL
+    // with a default.
+    let mut t = keyed();
+    fn col(t: &mut EditTarget, i: usize) -> &mut StructureColumn {
+        &mut t.columns[i].as_mut().unwrap().column
+    }
+    col(&mut t, 1).not_null = true;
+    col(&mut t, 0).not_null = true;
+    col(&mut t, 0).fill = ColumnFill::IdentityByDefault;
+    col(&mut t, 2).not_null = true;
+    col(&mut t, 2).default = Some("0".into());
+    let mut b = EditBatch::new();
+    let given = b.add(0, None, vec![Value::Default, text("a"), Value::Default, Value::Default]);
+    let left = b.add(0, None, vec![Value::Default; 4]);
+    assert_eq!(no_default(&t, &b), [(left, 1)]);
+    assert_eq!(plan_with(&t, &b, &ALL, &[], &[]), Err(PlanError::NoDefault { origin: Origin::New(left), column: 1 }));
+    b.set_new(&[(left, 1)], &text("b"));
+    assert_eq!(no_default(&t, &b), []);
+    let p = plan_with(&t, &b, &ALL, &[], &[]).unwrap();
+    assert_eq!(p.steps.iter().map(|s| s.origin).collect::<Vec<_>>(), [Origin::New(given), Origin::New(left)]);
+    // Generated, auto-increment and identity columns fill themselves.
+    for fill in [ColumnFill::Stored("1".into()), ColumnFill::AutoIncrement, ColumnFill::IdentityAlways] {
+        let mut t = t.clone();
+        col(&mut t, 1).fill = fill;
+        let mut b = EditBatch::new();
+        b.add(0, None, vec![Value::Default; 4]);
+        assert_eq!(no_default(&t, &b), []);
+    }
+}
