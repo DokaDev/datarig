@@ -459,6 +459,7 @@ impl App {
     pub fn on_db_event(&mut self, ev: DbEvent) {
         self.on_db_event_here(ev);
         self.tips_follow();
+        self.sweep_cell_edit();
         self.sweep_as_plan();
         self.sweep_exports();
         self.keychain_offer_check();
@@ -645,6 +646,7 @@ impl App {
             }
             DbEvent::Structure { schema, table, result } => {
                 let (profile, database) = (a.profile, a.database.clone());
+                self.edit_structure_came(profile, Some(&database), &schema, &table, result.as_deref(), &text);
                 let came = self.checks_came(profile, Some(&database), &schema, &table, result.as_deref());
                 // A failure the explorer does not wait for (completion's) is not its.
                 if let Some(a) = self.conns.aux_by_id(id)
@@ -751,6 +753,7 @@ impl App {
             }
             DbEvent::Structure { schema, table, result } => {
                 self.export_structure_came(id, &schema, &table, result.as_deref());
+                self.edit_structure_came(id, None, &schema, &table, result.as_deref(), &text);
                 let came = self.checks_came(id, None, &schema, &table, result.as_deref());
                 // A failure the explorer does not wait for (completion's) is not its.
                 let tree = &mut self.conns.entry(id).tree;
@@ -996,6 +999,8 @@ impl App {
         };
         let connecting = profile.is_some_and(|p| self.conns.state(p) == NodeState::Connecting);
         let null = self.i18n.label(Label::ResultsNull);
+        // What a result read now is bound to: its edits are taken only while that holds.
+        let bound = self.tabs.get(id).and_then(|t| self.edit_bound(t));
         let now = self.now();
         let text = match &ev {
             // How long it waited, when the session was opened with a limit the app knows.
@@ -1485,6 +1490,7 @@ impl App {
                         let store = datarig_core::results::RowStore::new(rows, spill, limits);
                         let mut rs = ResultSet::new(cols, store, more, &null);
                         rs.read_in = read_in(&mut t.exec);
+                        rs.edit.bind(bound);
                         let n = rs.rows.len();
                         let grid = GridState::paged(page_size, t.grid.page_rows);
                         t.exec.steps.insert(index, super::tabs::Parked { rs, grid });
@@ -1615,6 +1621,7 @@ impl App {
                 let mut rs = ResultSet::new(cols, store, more, &null);
                 // Bound to the session's values now: a later `SET time_zone` is not this result's.
                 rs.read_in = read_in(&mut t.exec);
+                rs.edit.bind(bound);
                 let query = t.exec.query_id;
                 if t.exec.reading.query != query {
                     t.exec.reading = super::tabs::Reading { query, ..Default::default() };

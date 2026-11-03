@@ -117,7 +117,10 @@ impl Driver for FakeDriver {
             reads_held_to_end: self.mysql.load(Ordering::SeqCst),
             export: true,
             manual_commit: !self.no_manual.load(Ordering::SeqCst),
-            edit: None,
+            edit: Some(match self.mysql.load(Ordering::SeqCst) {
+                true => datarig_core::driver::EditFormat::MySql(Default::default()),
+                false => datarig_core::driver::EditFormat::Postgres,
+            }),
         }
     }
 

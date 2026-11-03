@@ -32,6 +32,7 @@ pub mod copy;
 mod ddl;
 mod dialog_mouse;
 mod dispatch;
+pub mod edit;
 pub mod effects;
 pub mod environments;
 mod execution;
@@ -1638,6 +1639,7 @@ impl App {
                 _ if self.tabs.is_empty() => Ctx::Explorer,
                 Focus::Results | Focus::Inspector if self.plan_shown() => Ctx::Plan,
                 Focus::Results | Focus::Inspector if self.chart_shown() => Ctx::Chart,
+                Focus::Results if self.cell_edit_open() => Ctx::CellEdit,
                 Focus::Results if self.grid_prompt_open() => Ctx::GridSearch,
                 Focus::Results if self.grid_search_on() => Ctx::GridMatches,
                 Focus::Results => Ctx::Grid,
@@ -1868,6 +1870,11 @@ impl App {
         }
         if let Some((m, _)) = &self.transient {
             return Some((m.render(&self.i18n), m.level, false));
+        }
+        // Why the cell editor did not take its text, while it is open.
+        let refused = (!self.tabs.is_empty()).then(|| self.tab().cell_edit.as_ref()?.error.clone()).flatten();
+        if let Some(reason) = refused {
+            return Some((self.i18n.msg(&Msg::EditRefused { reason }), Level::Info, false));
         }
         // An answer waits for transactions to end (whichever tab is shown).
         if let Some(m) = self.end_pending_status() {

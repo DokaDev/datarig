@@ -149,6 +149,12 @@ pub struct Theme {
     pub grid_match: Style,
     /// The grid's cursor cell while it is a match of the grid's search.
     pub grid_match_current: Style,
+    /// A cell of the result grid whose value was changed and is not applied yet: its text,
+    /// readable on the background, the alternate rows, the selection and a selected range (it
+    /// keeps the cell's background), set apart from body text also without color.
+    pub edit_changed: Style,
+    /// How many changes of a result are pending, on the result tab strip and the hint line.
+    pub edit_pending: Style,
     /// The bracket matching the one at the editor's cursor (not drawn yet).
     pub match_paren: Style,
     /// The mark of read-only rules: the lock on a profile's explorer row and its tabs, and the
@@ -237,6 +243,9 @@ pub const DARK: Theme = Theme {
         .fg(rgb(0xD8DEE9))
         .bg(rgb(0x2A3B4D))
         .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
+    // The warning color in bold: a change not applied yet.
+    edit_changed: Style::new().fg(rgb(0xE6C35C)).add_modifier(Modifier::BOLD),
+    edit_pending: Style::new().fg(rgb(0xE6C35C)).add_modifier(Modifier::BOLD),
     // The border tone as a background, lighter than the cursor line, in bold.
     match_paren: Style::new().bg(rgb(0x2E3440)).add_modifier(Modifier::BOLD),
     // Blue (the foreign key's), bold: a state to notice, not a warning.
@@ -558,6 +567,8 @@ tokens! {
         tab_active => "The active tab's fill (its bg; the alternate surface without one). An fg replaces every text color on it but the environment's badge (a connected tab's number becomes a chip of its profile's color); without one the tab's colors stay, made to read on it. A file that leaves it out but sets bg or accent, both RGB, gets that accent blended into that bg; else the fill of the theme it extends stays.",
         grid_match => "A cell of the result grid that the grid's search matches (the whole cell is tinted: its value may be cut). Keep it apart from the selection, a selected range, the alternate rows, the hover and the copy flash.",
         grid_match_current => "The grid's cursor cell while it is a match of the grid's search.",
+        edit_changed => "A cell of the result grid changed and not applied yet (its text: the cell keeps its background, so it must read on the alternate rows, the selection and a selected range).",
+        edit_pending => "How many changes of a result are pending, on the result tab strip and the hint line.",
 }
 
 /// The token names of a theme file.

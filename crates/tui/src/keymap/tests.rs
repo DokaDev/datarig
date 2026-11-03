@@ -95,6 +95,9 @@ fn contexts_form_the_planned_tree() {
     assert!(Ctx::GridSearch.is_text_input() && !Ctx::GridSearch.is_editor());
     assert_eq!(Ctx::GridMatches.chain(), [Ctx::GridMatches, Ctx::Grid, Ctx::Nav, Ctx::Workspace, Ctx::Root]);
     assert!(Ctx::GridMatches.is_mode() && !Ctx::GridMatches.is_text_input() && !Ctx::Grid.is_mode());
+    // The cell editor: text input over the grid, beside the editor.
+    assert_eq!(Ctx::CellEdit.chain(), [Ctx::CellEdit, Ctx::Workspace, Ctx::Root]);
+    assert!(Ctx::CellEdit.is_text_input() && !Ctx::CellEdit.is_editor());
 }
 
 // ── the default table ────────────────────────────────────────────────────────
@@ -465,14 +468,17 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     assert_eq!(
         keys,
         [
-            ",", "/", "1", "2", "3", "4", "5", "6", "7", "8", "9", "<", ">", "?", "Space", "b", "c", "e", "r", "s",
-            "t", "x", "z"
+            ",", "/", "1", "2", "3", "4", "5", "6", "7", "8", "9", "<", ">", "?", "Space", "b", "c", "d", "e", "r",
+            "s", "t", "x", "z"
         ],
         "the monitor has no action yet"
     );
     assert!(root.contains(&("x".into(), Child::Group(Some(Label::GroupTx)))));
     let tx: Vec<String> = shown(Ctx::Explorer, "space x").into_iter().map(|(k, _)| k).collect();
     assert_eq!(tx, ["c", "r", "s"]);
+    let data: Vec<String> = shown(Ctx::Grid, "space d").into_iter().map(|(k, _)| k).collect();
+    assert_eq!(data, ["D", "U", "e", "n", "r", "u"]);
+    assert_eq!(km.group_label(Ctx::Grid, &k("space d")), Some(Label::GroupData));
     // `Space Space`: the action menu, listed with the groups.
     assert!(root.contains(&("Space".into(), Child::Action(action::by_id("menu.open").unwrap().action))));
     let tabs: Vec<String> = shown(Ctx::VimVisual, "space t").into_iter().map(|(k, _)| k).collect();

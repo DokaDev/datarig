@@ -16,6 +16,7 @@ impl App {
         self.idle_tick(now);
         self.handle_event_here(ev);
         self.tips_follow();
+        self.sweep_cell_edit();
         self.sweep_as_plan();
         self.sweep_exports();
         self.keychain_offer_check();
@@ -119,6 +120,7 @@ impl App {
         self.on_app_event_here(ev);
         self.tips_follow();
         self.sweep_grid_search();
+        self.sweep_cell_edit();
         self.sweep_as_plan();
         self.sweep_exports();
         self.keychain_offer_check();
@@ -209,6 +211,8 @@ impl App {
         } else if self.overlays.is_empty() && (self.focus == Focus::Tree || self.profiles.is_empty()) {
             // The explorer or the welcome panel: a connection URL makes a new profile.
             self.paste_dsn(text);
+        } else if self.overlays.is_empty() && self.focus == Focus::Results && self.cell_edit_open() {
+            self.cell_edit_paste(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Results && self.grid_prompt_open() {
             self.grid_prompt_paste(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Editor && !self.profiles.is_empty() {
@@ -328,6 +332,7 @@ impl App {
             Ctx::Password => keys.iter().for_each(|k| self.prompt_key(k.to_event(), repeat)),
             Ctx::ExplorerFilter => keys.iter().for_each(|k| self.explorer_filter_key(k.to_event())),
             Ctx::GridSearch => keys.iter().for_each(|k| self.grid_prompt_key(k.to_event())),
+            Ctx::CellEdit => keys.iter().for_each(|k| self.cell_edit_key(k.to_event())),
             Ctx::QuickConnect => keys.iter().for_each(|k| self.quick_key(k.to_event(), repeat)),
             Ctx::TabList => keys.iter().for_each(|k| self.tab_list_key(k.to_event(), repeat)),
             Ctx::Chooser | Ctx::ChooserFilter => keys.iter().for_each(|k| self.chooser_key(k.to_event(), repeat)),
@@ -735,9 +740,26 @@ impl App {
         if matches!(m.kind, MouseEventKind::Down(_)) && self.close_search_prompt() {
             return;
         }
+        if let MouseEventKind::Down(b) = m.kind
+            && self.cell_edit_click(m.column, m.row, b == MouseButton::Left)
+        {
+            return;
+        }
         let (x, y) = (m.column, m.row);
         let inside = |r: Rect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
         let l = self.layout;
+        // The wheel over the grid closes the cell editor, changing nothing (as `Esc` does): it
+        // would scroll off its cell.
+        let wheel = matches!(
+            m.kind,
+            MouseEventKind::ScrollDown
+                | MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight
+        );
+        if wheel && inside(l.results) && self.cell_edit_open() {
+            self.tabs.active_mut().cell_edit = None;
+        }
         match m.kind {
             // Sideways (a trackpad, a tilting wheel): the grid's view, a few characters an event.
             MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight if inside(l.results) => {

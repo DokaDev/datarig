@@ -104,3 +104,5 @@ Each writes a new file and never replaces one: a name that is taken, that is not
 | `tab_active` | The active tab's fill (its bg; the alternate surface without one). An fg replaces every text color on it but the environment's badge (a connected tab's number becomes a chip of its profile's color); without one the tab's colors stay, made to read on it. A file that leaves it out but sets bg or accent, both RGB, gets that accent blended into that bg; else the fill of the theme it extends stays. |
 | `grid_match` | A cell of the result grid that the grid's search matches (the whole cell is tinted: its value may be cut). Keep it apart from the selection, a selected range, the alternate rows, the hover and the copy flash. |
 | `grid_match_current` | The grid's cursor cell while it is a match of the grid's search. |
+| `edit_changed` | A cell of the result grid changed and not applied yet (its text: the cell keeps its background, so it must read on the alternate rows, the selection and a selected range). |
+| `edit_pending` | How many changes of a result are pending, on the result tab strip and the hint line. |

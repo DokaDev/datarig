@@ -42,6 +42,9 @@ pub enum Picker {
     SessionTest { preset: Box<datarig_core::profile::session::SessionPreset>, list: ListPicker<ProfileId> },
     /// A session preset field of the form `form` names (a profile's, an environment's).
     Session { form: (FormKind, ProfileId), field: Field, list: ListPicker<SessionChoice> },
+    /// The value of cells `cells` (of one column) of result `result` in tab `tab`: an enum's
+    /// labels or a boolean's values, NULL and DEFAULT when the column takes them.
+    CellValue { tab: TabId, result: u64, cells: Vec<(usize, usize)>, list: ListPicker<datarig_core::edit::Value> },
 }
 
 /// `$body` with the list of whichever picker `$p` is, as `$list`.
@@ -54,6 +57,7 @@ macro_rules! with_list {
             Picker::Export { $list, .. } => $body,
             Picker::SessionTest { $list, .. } => $body,
             Picker::Session { $list, .. } => $body,
+            Picker::CellValue { $list, .. } => $body,
         }
     };
 }
@@ -92,6 +96,7 @@ impl Picker {
             Picker::Export { field, .. } => field.label(),
             Picker::SessionTest { .. } => Label::TestSessionPick,
             Picker::Session { field, .. } => field.label(),
+            Picker::CellValue { .. } => Label::EditPickTitle,
         }
     }
 
@@ -190,6 +195,10 @@ impl App {
                 let out = list.key(&key, repeat);
                 self.session_picked(form, field, out);
             }
+            Some(Picker::CellValue { list, .. }) => {
+                let out = list.key(&key, repeat);
+                self.cell_value_picked(out);
+            }
             None => {}
         }
     }
@@ -228,6 +237,10 @@ impl App {
             Some(&mut Picker::Session { form, field, ref mut list }) => {
                 let out = list.mouse(&m, now);
                 self.session_picked(form, field, out);
+            }
+            Some(Picker::CellValue { list, .. }) => {
+                let out = list.mouse(&m, now);
+                self.cell_value_picked(out);
             }
             None => {}
         }

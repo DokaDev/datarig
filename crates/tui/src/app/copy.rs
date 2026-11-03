@@ -889,7 +889,13 @@ impl App {
 
     /// Why a copy as SQL was refused for a value of a column ([`export::sql_cells`]), in words.
     pub(super) fn not_whole(&self, r: &export::Refused) -> Notice {
-        let reason = match &r.why {
+        let reason = self.not_whole_reason(&r.why);
+        Notice::new(Msg::CopySqlNotWhole { column: r.column.clone(), reason }, Level::Warning)
+    }
+
+    /// Why a value is not written whole, in words.
+    pub(super) fn not_whole_reason(&self, why: &export::NotWhole) -> String {
+        match why {
             export::NotWhole::Float => self.i18n.label(Label::CopySqlWhyFloat).to_string(),
             export::NotWhole::Charset(charset) => {
                 self.i18n.msg(&Msg::CopySqlWhyCharset { charset: charset.clone() }).to_string()
@@ -901,8 +907,7 @@ impl App {
             export::NotWhole::NotShownWhole => self.i18n.label(Label::CopySqlWhyNotShownWhole).to_string(),
             export::NotWhole::SessionUnknown => self.i18n.label(Label::CopySqlWhySessionUnknown).to_string(),
             export::NotWhole::SessionChanged => self.i18n.label(Label::CopySqlWhySessionChanged).to_string(),
-        };
-        Notice::new(Msg::CopySqlNotWhole { column: r.column.clone(), reason }, Level::Warning)
+        }
     }
 
     /// Why a copy as SQL UPDATE was refused, in words.

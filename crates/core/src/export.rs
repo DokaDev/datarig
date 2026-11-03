@@ -838,6 +838,18 @@ impl SqlCells {
             Rule::AutoIncrement => Ok(v.into()),
         }
     }
+
+    /// Why column `i` refuses every value, whatever it is (MySQL text read in a character set
+    /// that is not UTF-8, or in sessions not known or changed); `None` when it is judged per
+    /// value.
+    pub fn column_refused(&self, i: usize) -> Option<Refused> {
+        match self.rules.get(i)? {
+            Rule::Refuse(why) => {
+                Some(Refused { column: self.names.get(i).cloned().unwrap_or_default(), why: why.clone() })
+            }
+            _ => None,
+        }
+    }
 }
 
 /// Why values are not copied as an SQL `IN` list.

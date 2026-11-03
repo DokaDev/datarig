@@ -63,6 +63,7 @@ const GROUPS: &[(Ctx, &str, Label)] = &[
     (Nav, "space m", Label::GroupMonitor),
     (Nav, "space x", Label::GroupTx),
     (Nav, "space e", Label::GroupEditor),
+    (Nav, "space d", Label::GroupData),
 ];
 
 /// The hint line: per context, the most relevant actions, best first, with their
@@ -353,6 +354,16 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (GridMatches, "n", "grid.search_next"),
     (GridMatches, "N", "grid.search_prev"),
     (GridMatches, "esc", "grid.search_clear"),
+    // change the result's cells (each key says why when the rows cannot be changed)
+    (Grid, "e", "edit.cell"),
+    (Grid, "u", "edit.undo"),
+    (Grid, "ctrl+r", "edit.redo"),
+    (Nav, "space d e", "edit.cell"),
+    (Nav, "space d n", "edit.set_null"),
+    (Nav, "space d D", "edit.set_default"),
+    (Nav, "space d u", "edit.undo"),
+    (Nav, "space d U", "edit.redo"),
+    (Nav, "space d r", "edit.revert"),
     (Nav, "space r y t", "results.copy.selection.tsv"),
     (Nav, "space r y T", "results.copy.selection.tsv_header"),
     (Nav, "space r y l", "results.copy.selection.list"),
@@ -547,6 +558,8 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (ExplorerFilter, TEXT, "text input"),
     (GridSearch, &["esc", "enter", "ctrl+w"], "grid search"),
     (GridSearch, TEXT, "text input"),
+    (CellEdit, &["esc", "enter", "ctrl+n", "ctrl+d"], "cell editor"),
+    (CellEdit, TEXT, "text input"),
     (QuickConnect, &["esc", "enter", "up", "down", "ctrl+p", "ctrl+n"], "quick connect"),
     // `→`/`←` open and close the databases and schemas; the filter keeps its other
     // editing keys.
