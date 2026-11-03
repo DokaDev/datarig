@@ -27,6 +27,8 @@ has more: fetch more pages first to chart them.
 - NULLs are skipped and counted under the chart.
 - More than 50 bars or 6 series keep the largest and sum the rest into "others".
 - A result without rows or numbers, or with a single point, says why instead of drawing.
+- A result with pending or applied changes draws nothing until the query runs again: see
+  [Editing data](editing.md#export-and-the-chart).
 
 ## Keys
 

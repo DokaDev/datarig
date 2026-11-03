@@ -73,7 +73,8 @@ status.
 ## Where the rows come from
 
 - **Fetched rows** and **the selection** are read from what is already loaded; nothing is sent
-  to the server.
+  to the server. A result with pending or applied changes is not exported this way: see
+  [Editing data](editing.md#export-and-the-chart).
 - **All rows** of a result with more on the server need the statement to run again.
   - A table tab showing its whole table, with a primary key or a unique key on NOT NULL
     columns and no open transaction, is read in chunks by that key, each a read of its own that

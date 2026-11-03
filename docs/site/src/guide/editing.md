@@ -233,7 +233,9 @@ gone"). See [Manual commit](manual-commit.md#editing-data).
 Running a statement in the tab (its results are replaced), closing the tab and quitting ask
 first when changes are pending, saying how many: `y` drops them and goes on, `n` or `Enter`
 keeps them and does nothing. Changes already applied do not ask; an open transaction asks as
-usual.
+usual. Deleting a connection profile or a saved query closes its tabs without another question:
+its own question says how many pending changes go ("2 pending changes of the results are
+dropped.").
 
 ## Copy and search
 
@@ -243,6 +245,22 @@ wrote, not the value read. A copy with pending values says "(with pending change
 the copied rows marked to be deleted, which are copied as shown.
 
 - A pending DEFAULT has no value yet: a copy of it is refused, except as SQL `INSERT`, which
-  writes `DEFAULT` there. A cell showing `re-run to see` is not copied.
+  writes `DEFAULT` there. A cell showing `re-run to see` is not copied, nor is one an Apply set
+  to its default, shown `default` ("Not copied: nickname shows “default”; run the query again to
+  copy its value").
 - New rows are not copied ("A new row is not copied: it is not a row of the result yet") and the
   search does not look at them.
+
+## Export and the chart
+
+An export to a file and the chart do not take the values the grid shows over the rows:
+
+- An export of the rows held (the selection, the fetched rows, or every row of a result fetched
+  to its end) is refused while the result has pending or applied changes ("Not exported: this
+  result has pending or applied changes; apply or discard them, or run the query again"), in
+  every format.
+- An export of every row of a result the server has more of reads the rows again from the
+  server, so it holds what an Apply wrote. With changes pending it goes on, and says "The pending
+  changes are not in the file: every row is read again from the server".
+- The chart draws nothing while the result has pending or applied changes: it says "Not drawn:
+  this result has pending or applied changes. Run the query again to chart the edited values."
