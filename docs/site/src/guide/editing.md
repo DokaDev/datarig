@@ -158,7 +158,7 @@ deletes, then the statements in the order they run, each with the count it must 
 changes change.
 
 Rows found by their values are counted on the tab's own session first ("Counting matching
-rows…"; the count sees the tab's open transaction, as the Apply will). Until a plan can be
+rows…"; the count sees the tab's open transaction, as the Apply does). Until a plan can be
 made, the dialog says why and `y` says "Can't apply yet: …":
 
 - "Row 3 matches no row of the table now: it was changed or deleted. Re-run the query."
