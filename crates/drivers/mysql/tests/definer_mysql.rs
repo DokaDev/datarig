@@ -76,19 +76,28 @@ struct Conn {
 }
 
 impl Conn {
-    /// A query session of `url`'s profile for test `test`, once it connected.
+    /// A query session of `url`'s profile for test `test`, once it connected. A run over TLS
+    /// (`DATARIG_TEST_MYSQL_SSLMODE`) is over TLS indeed: the server offers it.
     async fn open(url: &str, test: &str) -> Conn {
         let (tx, rx) = unbounded_channel();
         let opts = ConnectOptions::new(500, SessionRole::Query, &tag(test)).dialer(dialer());
         let session = MyDriver.connect(&profile(url), SessionRole::Query, opts, tx);
         let mut c = Conn { session, rx };
+        let tls = std::env::var("DATARIG_TEST_MYSQL_SSLMODE").is_ok_and(|m| !m.eq_ignore_ascii_case("DISABLED"));
+        let mut encryption = None;
         loop {
             match c.next(15).await {
-                DbEvent::Connected => return c,
+                DbEvent::Encryption(e) => encryption = Some(e),
+                DbEvent::Connected => break,
                 DbEvent::ConnectFailed { error, .. } => panic!("connect failed: {error:?}"),
                 _ => {}
             }
         }
+        if tls {
+            let encrypted = matches!(encryption, Some(datarig_core::tls::Encryption::Tls { .. }));
+            assert!(encrypted, "{encryption:?}");
+        }
+        c
     }
 
     /// Every event up to and with the terminal one of run `id` (its first page, `Done` or
@@ -99,6 +108,9 @@ impl Conn {
             let ev = self.next(60).await;
             let end = matches!(&ev, DbEvent::Page { id: i, columns: Some(_), .. }
                 | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id);
+            if let DbEvent::ConnectFailed { error, .. } = &ev {
+                panic!("connect failed: {error:?}");
+            }
             out.push(ev);
             if end {
                 return out;
@@ -225,9 +237,8 @@ async fn a_cancel_refused_for_a_moment_is_tried_again() {
     assert!(!matches!(lost, Ok(DbEvent::Lost { .. })), "{lost:?}");
     let more = c.run(2, "SELECT 1").await;
     assert!(!more.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{more:?}");
-    let rows = more.iter().find_map(|e| match e {
-        DbEvent::Page { rows, .. } => Some(rows),
-        _ => None,
-    });
-    assert_eq!(rows, Some(&vec![vec![Some("1".to_string())]]), "{more:?}");
+    match more.last() {
+        Some(DbEvent::Page { columns: Some(_), rows, .. }) => assert_eq!(rows, &vec![vec![Some("1".to_string())]]),
+        other => panic!("{other:?}"),
+    }
 }
