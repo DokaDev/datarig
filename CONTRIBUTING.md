@@ -29,6 +29,10 @@ cargo test --workspace
 The PostgreSQL, PgBouncer, MySQL, SSH and TLS integration tests need the services of `dev/` and
 the environment variables listed in [dev/README.md](dev/README.md); without them they print
 `SKIPPED`. CI runs all of them, the performance budgets, `cargo deny check` and `cargo audit`.
+A pull request that changes only `README.md`, `CONTRIBUTING.md`, `docs/` or changelog
+fragments skips the builds: CI then runs the docs site, the tests that check the pages against
+the code (`book_refs`, `book_screens` and the generated pages), `rustfmt`, `cargo deny`,
+`actionlint` and the docs rule; the skipped jobs conclude `skipped`, which counts as passing.
 
 The integration job of `.github/workflows/ci.yml`, run locally against the services of `dev/`
 (the values are those of [dev/README.md](dev/README.md)):
