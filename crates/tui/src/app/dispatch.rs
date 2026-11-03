@@ -532,6 +532,7 @@ impl App {
             ConfirmAction::ExportReplace => self.export_answered(true, true),
             ConfirmAction::DiscardForm => self.cancel_form(),
             ConfirmAction::DiscardFormQuit => self.discard_forms_and_quit(),
+            ConfirmAction::DiscardEdits { tab, result } => self.edit_discard(tab, result),
             ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
         }
     }

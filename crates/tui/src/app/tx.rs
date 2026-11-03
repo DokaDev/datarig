@@ -291,12 +291,16 @@ impl App {
                 step
             })
             .collect();
-        // `tx_idle_rollback`: the app rolls the idle transaction back itself (`App::idle_tick`);
-        // PostgreSQL's server also gets the limit, [`TX_ROLLBACK_SERVER_MARGIN`] later, for the
-        // transaction only: it ends the session when the app could not (stalled, gone).
+        TxRule::Manual { steps, idle_timeout: self.manual_idle_timeout(t) }
+    }
+
+    /// The idle limit the server gets for a transaction tab `t` opens for manual commit.
+    /// `tx_idle_rollback`: the app rolls the idle transaction back itself (`App::idle_tick`);
+    /// PostgreSQL's server also gets the limit, [`TX_ROLLBACK_SERVER_MARGIN`] later, for the
+    /// transaction only: it ends the session when the app could not (stalled, gone).
+    pub(super) fn manual_idle_timeout(&self, t: &Tab) -> Option<Duration> {
         let pg = t.exec.prepared.language().dialect() == Dialect::Postgres;
-        let idle_timeout = self.tab_rules(t).tx_idle_rollback.filter(|_| pg).map(|d| d + TX_ROLLBACK_SERVER_MARGIN);
-        TxRule::Manual { steps, idle_timeout }
+        self.tab_rules(t).tx_idle_rollback.filter(|_| pg).map(|d| d + TX_ROLLBACK_SERVER_MARGIN)
     }
 
     /// What `statements` do to the transaction of tab `id`, statement by statement, as the tab

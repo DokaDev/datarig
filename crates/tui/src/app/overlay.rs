@@ -165,6 +165,8 @@ pub enum ConfirmAction {
     /// Quit although the open form (or one waiting under it) has changes that are not saved:
     /// `y` throws them away and the quit goes on. Keeping on editing is the default.
     DiscardFormQuit,
+    /// Drop the pending changes of tab `tab`'s result `result`. Keeping them is the default.
+    DiscardEdits { tab: super::TabId, result: u64 },
     /// Start an export that runs its statement again (or reads in a prod-like environment):
     /// the tab's export waits for the answer. Cancel is the default.
     ExportStart,
@@ -254,6 +256,7 @@ impl Confirm {
             ConfirmAction::DiscardForm | ConfirmAction::DiscardFormQuit => {
                 (Label::DialogButtonKeepEditing, Label::DialogButtonDiscard)
             }
+            ConfirmAction::DiscardEdits { .. } => (Label::DialogButtonKeep, Label::DialogButtonDiscard),
         };
         // Roll back first, commit first, then go on anyway (the server rolls back); Enter stays.
         if let Some(tx) = &self.tx {
@@ -390,6 +393,8 @@ pub enum Overlay {
     RunConfirm(RunConfirm),
     /// What the open transaction did.
     TxSummary(TxSummary),
+    /// A result's pending changes and the statements that apply them.
+    EditPreview(Box<super::edit::EditPreview>),
     /// What a profile's sessions start with.
     SessionView(SessionView),
     /// Do the Nerd Font icons show correctly? (asked once)
@@ -420,6 +425,7 @@ pub enum OverlayKind {
     Confirm,
     RunConfirm,
     TxSummary,
+    EditPreview,
     SessionView,
     IconsAsk,
     Busy,
@@ -446,6 +452,7 @@ impl Overlay {
             Overlay::Confirm(_) => OverlayKind::Confirm,
             Overlay::RunConfirm(_) => OverlayKind::RunConfirm,
             Overlay::TxSummary(_) => OverlayKind::TxSummary,
+            Overlay::EditPreview(_) => OverlayKind::EditPreview,
             Overlay::SessionView(_) => OverlayKind::SessionView,
             Overlay::IconsAsk(_) => OverlayKind::IconsAsk,
             Overlay::Busy(_) => OverlayKind::Busy,
@@ -499,6 +506,7 @@ impl Overlays {
             Some(Overlay::Confirm(c)) => c.buttons.press = Press::default(),
             Some(Overlay::RunConfirm(c)) => c.buttons.press = Press::default(),
             Some(Overlay::TxSummary(s)) => s.buttons.press = Press::default(),
+            Some(Overlay::EditPreview(p)) => p.buttons.press = Press::default(),
             Some(Overlay::SessionView(s)) => s.buttons.press = Press::default(),
             Some(Overlay::IconsAsk(q)) => q.buttons.press = Press::default(),
             Some(Overlay::Password(p)) => p.buttons.press = Press::default(),
@@ -687,6 +695,14 @@ impl Overlays {
 
     pub fn run_confirm_mut(&mut self) -> Option<&mut RunConfirm> {
         self.0.iter_mut().find_map(|o| if let Overlay::RunConfirm(c) = o { Some(c) } else { None })
+    }
+
+    pub fn edit_preview(&self) -> Option<&super::edit::EditPreview> {
+        self.0.iter().find_map(|o| if let Overlay::EditPreview(p) = o { Some(&**p) } else { None })
+    }
+
+    pub fn edit_preview_mut(&mut self) -> Option<&mut super::edit::EditPreview> {
+        self.0.iter_mut().find_map(|o| if let Overlay::EditPreview(p) = o { Some(&mut **p) } else { None })
     }
 
     pub fn tx_summary(&self) -> Option<&TxSummary> {

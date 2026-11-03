@@ -68,6 +68,7 @@ pub enum Ctx {
     Confirm,
     RunConfirm,
     TxSummary,
+    EditPreview,
     SessionView,
     IconsAsk,
     Busy,
@@ -80,7 +81,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 44] = [
+    pub const ALL: [Ctx; 45] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -116,6 +117,7 @@ impl Ctx {
         Ctx::Confirm,
         Ctx::RunConfirm,
         Ctx::TxSummary,
+        Ctx::EditPreview,
         Ctx::SessionView,
         Ctx::IconsAsk,
         Ctx::Busy,
@@ -165,6 +167,7 @@ impl Ctx {
             Ctx::Confirm => "overlay.confirm",
             Ctx::RunConfirm => "overlay.run_confirm",
             Ctx::TxSummary => "overlay.tx_summary",
+            Ctx::EditPreview => "overlay.edit_preview",
             Ctx::SessionView => "overlay.session_view",
             Ctx::IconsAsk => "overlay.icons_ask",
             Ctx::Busy => "overlay.busy",
@@ -341,6 +344,9 @@ impl Ctx {
             Ctx::TxSummary => {
                 "What the open transaction did (its statements that may have written, rows, time; how long it has been open and idle): `c` commits, `r` rolls back, `Esc` closes; a click on a button does what its key does."
             }
+            Ctx::EditPreview => {
+                "A result's pending changes and the statements that apply them (`:changes`, `:apply`); Cancel has the focus: `y` applies, `c` copies the statements, `1`/`a` answer which of several identical rows a change is for, `j`/`k` scroll, `Esc` or `Enter` closes; a click on a button does what its key does."
+            }
             Ctx::SessionView => {
                 "What a profile's query sessions start with (`:session` or `:startup`; in the profile form `Ctrl+E`, for its unsaved values), in the order they are applied, each with where it comes from: the app's limits, the Startup SQL's statements, the profile's own; behind a pooler in transaction mode, how each PostgreSQL statement goes there. `j`/`k` scroll, `Esc` closes; a click on Close closes too."
             }
@@ -401,6 +407,7 @@ impl Ctx {
             Ctx::Confirm => Label::KeyctxOverlayConfirm,
             Ctx::RunConfirm => Label::KeyctxOverlayRunConfirm,
             Ctx::TxSummary => Label::KeyctxOverlayTxSummary,
+            Ctx::EditPreview => Label::KeyctxOverlayEditPreview,
             Ctx::SessionView => Label::KeyctxOverlaySessionView,
             Ctx::IconsAsk => Label::KeyctxOverlayIconsAsk,
             Ctx::Busy => Label::KeyctxOverlayBusy,

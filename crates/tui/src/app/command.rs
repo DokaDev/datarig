@@ -85,6 +85,11 @@ pub enum Command {
     /// `:session`: what the explorer's (else the active tab's) profile's query sessions start
     /// with, and where each item comes from.
     Session,
+    /// `:changes`, `:apply`: the preview of the shown result's pending changes (`y` applies).
+    Changes,
+    Apply,
+    /// `:discard`: drop the shown result's pending changes (asked first).
+    Discard,
 }
 
 /// The type of a command's argument (it decides the completions).
@@ -379,6 +384,30 @@ pub const COMMANDS: &[CommandSpec] = &[
         arg: None,
         label: Label::ActionSessionShow,
         action: Some(Action::SessionView),
+    },
+    CommandSpec {
+        command: Command::Changes,
+        name: "changes",
+        aliases: &[],
+        arg: None,
+        label: Label::ActionEditPreview,
+        action: Some(Action::Edit(super::edit::EditAction::Preview)),
+    },
+    CommandSpec {
+        command: Command::Apply,
+        name: "apply",
+        aliases: &[],
+        arg: None,
+        label: Label::ActionEditApply,
+        action: Some(Action::Edit(super::edit::EditAction::Apply)),
+    },
+    CommandSpec {
+        command: Command::Discard,
+        name: "discard",
+        aliases: &[],
+        arg: None,
+        label: Label::ActionEditDiscard,
+        action: Some(Action::Edit(super::edit::EditAction::Discard)),
     },
 ];
 

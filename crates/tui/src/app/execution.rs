@@ -1391,8 +1391,11 @@ impl App {
                 t.block_ended(rolled_back);
                 None
             }
-            // A count the user asked for.
+            // A count the user asked for, or one of the preview of a result's changes.
             DbEvent::Counted { id: qid, result, snapshot } => {
+                if self.edit_preview_counted(id, qid, &result) {
+                    return;
+                }
                 return self.on_counted(id, qid, result, snapshot);
             }
             // A statement of an export.

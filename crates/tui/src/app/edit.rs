@@ -25,15 +25,18 @@ use crate::widgets::text_input::InputResult;
 use datarig_core::driver::structure::{ColumnFill, TableStructure};
 use datarig_core::driver::{ArrayElement, Cell, ColumnMeta, DbError, EditFormat, ValueKind};
 use datarig_core::edit::{
-    self, ColumnReason, EditBatch, EditSource, EditTarget, Identity, Invalid, ReadOnly, TableColumn, Value, Write,
+    self, ColumnReason, EditBatch, EditSource, EditTarget, Expect, Identity, Invalid, ReadOnly, TableColumn, Value,
+    Write,
 };
 use datarig_core::export;
 use ratatui::style::{Color, Style};
 use std::ops::Range;
 
 mod lines;
+mod preview;
 
 pub use lines::Lines;
+pub use preview::{EditPreview, PreviewLine, PreviewView};
 
 /// What an edit key does to the cursor's cell (or the cells selected in one column).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +55,12 @@ pub enum EditAction {
     CloneRow,
     /// Mark the cursor's row (the selected rows) to be deleted, or no longer; a new row goes.
     DeleteRow,
+    /// The preview of the pending changes.
+    Preview,
+    /// The preview, to apply them.
+    Apply,
+    /// Drop every pending change, once the user says so.
+    Discard,
 }
 
 /// A row the grid shows: a row read (by its index in the result) or a new row (by its id).
@@ -331,6 +340,8 @@ impl App {
         match a {
             EditAction::Undo | EditAction::Redo => self.edit_history(a == EditAction::Redo),
             EditAction::Revert => self.edit_revert(),
+            EditAction::Preview | EditAction::Apply => self.edit_preview_open(),
+            EditAction::Discard => self.edit_discard_ask(),
             EditAction::Cell
             | EditAction::SetNull
             | EditAction::SetDefault
@@ -1096,7 +1107,7 @@ impl App {
 
     /// After every event: the cell editor closes (changing nothing) when its result is no
     /// longer the one shown, its tab not the active one, or the grid lost the focus; the list of
-    /// a cell's values too.
+    /// a cell's values too, and the preview of the changes when it is no longer current.
     pub(super) fn sweep_cell_edit(&mut self) {
         let active = (!self.tabs.is_empty()).then(|| self.tab().id);
         let focused = self.focus == Focus::Results;
@@ -1112,6 +1123,7 @@ impl App {
                 self.overlays.close(OverlayKind::Picker);
             }
         }
+        self.sweep_edit_preview();
     }
 
     /// The structure of `schema.table` in `profile`'s `database` came (`error`: why it could not

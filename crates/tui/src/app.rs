@@ -1612,6 +1612,7 @@ impl App {
             Some(Overlay::Confirm(_)) => Ctx::Confirm,
             Some(Overlay::RunConfirm(_)) => Ctx::RunConfirm,
             Some(Overlay::TxSummary(_)) => Ctx::TxSummary,
+            Some(Overlay::EditPreview(_)) => Ctx::EditPreview,
             Some(Overlay::SessionView(_)) => Ctx::SessionView,
             Some(Overlay::IconsAsk(_)) => Ctx::IconsAsk,
             Some(Overlay::Help(h)) if h.filtering => Ctx::HelpFilter,

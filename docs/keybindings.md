@@ -126,6 +126,9 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space d o` | `edit.add_row` | Add a new row, shown after the rows read |  |
 | `Space d O` | `edit.clone_row` | Add a new row with the values of the cursor's row |  |
 | `Space d d` | `edit.delete_row` | Mark the row (the selected rows) to be deleted, or no longer; a new row goes |  |
+| `Space d p` | `edit.preview` | Show the pending changes and the statements that apply them |  |
+| `Space d a` | `edit.apply` | Apply the pending changes (shown first, to confirm) |  |
+| `Space d x` | `edit.discard` | Drop every pending change of the result |  |
 | `Space r y t` | `results.copy.selection.tsv` | Copy selection: Without headers (TSV) |  |
 | `Space r y T` | `results.copy.selection.tsv_header` | Copy selection: With headers (TSV) |  |
 | `Space r y l` | `results.copy.selection.list` | Copy selection: Comma list |  |
@@ -598,6 +601,12 @@ What the open transaction did (its statements that may have written, rows, time;
 
 Reserved — transaction summary: `c` `r` `Esc` `q` `Enter` `j` `k` `Down` `Up`
 
+## `overlay.edit_preview`
+
+A result's pending changes and the statements that apply them (`:changes`, `:apply`); Cancel has the focus: `y` applies, `c` copies the statements, `1`/`a` answer which of several identical rows a change is for, `j`/`k` scroll, `Esc` or `Enter` closes; a click on a button does what its key does. Inside `root`.
+
+Reserved — pending changes preview: `y` `c` `1` `a` `Esc` `q` `Enter` `j` `k` `Down` `Up`
+
 ## `overlay.session_view`
 
 What a profile's query sessions start with (`:session` or `:startup`; in the profile form `Ctrl+E`, for its unsaved values), in the order they are applied, each with where it comes from: the app's limits, the Startup SQL's statements, the profile's own; behind a pooler in transaction mode, how each PostgreSQL statement goes there. `j`/`k` scroll, `Esc` closes; a click on Close closes too. Inside `root`.
@@ -730,6 +739,9 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:rollback` | `:rb` | Roll back the open transaction |
 | `:tx` |  | What the open transaction did |
 | `:session` | `:startup` | What a profile's sessions start with, and where each setting comes from |
+| `:changes` |  | Show the pending changes and the statements that apply them |
+| `:apply` |  | Apply the pending changes (shown first, to confirm) |
+| `:discard` |  | Drop every pending change of the result |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):
 
