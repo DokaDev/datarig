@@ -179,3 +179,17 @@ fn the_format_is_chosen_by_the_drivers_word() {
     assert_eq!(crate::edit::format(EditFormat::Postgres).table(&t), "\"s\".\"t\"");
     assert_eq!(crate::edit::format(EditFormat::MySql(MySqlEdit { nowait: true })).table(&t), "`s`.`t`");
 }
+
+#[test]
+fn the_counts_of_rows_found_by_values_are_on_the_allowlist_of_a_count() {
+    let t = target(Identity::Values { columns: vec![0, 1, 2, 3, 4], duplicates: Duplicates::Refuse });
+    let mut b = EditBatch::new();
+    b.set(&[(1, 1)], &text("x"), orig);
+    b.delete(&[2], orig);
+    let whole = |_: usize, _: usize| true;
+    let counts = crate::edit::count_statements(&t, &b, &MY, &whole).unwrap();
+    assert_eq!(counts.len(), 2);
+    for (_, sql) in counts {
+        assert_eq!(crate::sql::risk::mysql::repeatable(&sql, MySqlMode::default()), Ok(()), "{sql}");
+    }
+}

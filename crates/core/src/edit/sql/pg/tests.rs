@@ -183,3 +183,17 @@ fn quoted_names_are_read_back_as_the_catalogs() {
     b.set(&[(1, 1)], &text("x"), orig);
     assert!(run(&t, &b, &[], &[])[1].starts_with(r#"UPDATE "My ""S"""."a.b" SET"#));
 }
+
+#[test]
+fn the_counts_of_rows_found_by_values_are_on_the_allowlist_of_a_count() {
+    let t = target(Identity::Values { columns: vec![0, 1, 2], duplicates: Duplicates::Refuse });
+    let mut b = EditBatch::new();
+    b.set(&[(1, 1)], &text("x"), orig);
+    b.delete(&[2], |_| vec![Some("2".into()), None, Some("ß".into()), Some("1.5".into())]);
+    let whole = |_: usize, _: usize| true;
+    let counts = count_statements(&t, &b, &Postgres, &whole).unwrap();
+    assert_eq!(counts.len(), 2);
+    for (_, sql) in counts {
+        assert_eq!(crate::sql::risk::repeat::repeatable(&sql), Ok(()), "{sql}");
+    }
+}
