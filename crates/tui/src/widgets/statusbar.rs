@@ -245,19 +245,22 @@ const NAME_MIN: usize = 8;
 
 /// The mode badge at the left end of the status bar and its style (lualine style): NORMAL,
 /// INSERT and VISUAL (V-LINE by line) in their colors, COMMAND while the `:` command line is
-/// open. `None` without an editor (no tab, a table tab) and a command line.
+/// open. `None` without an editor (no tab, a table tab) and a command line. While a cell's value
+/// is edited in several lines, that editor's (COMMAND while its `:` line is open).
 pub(crate) fn mode_badge(app: &App) -> Option<(datarig_core::i18n::Localized, Style)> {
     let th = theme::cur();
     use crate::widgets::editor::Mode;
-    let command = app.overlays.is_open(crate::app::overlay::OverlayKind::Commands);
+    let lines = app.cell_lines_open().then(|| app.tab().cell_edit.as_ref()?.lines.as_deref()).flatten();
+    let command =
+        app.overlays.is_open(crate::app::overlay::OverlayKind::Commands) || lines.is_some_and(|l| l.ex.is_some());
     // No editor on screen: no tab, or a table tab.
-    if (app.tabs.is_empty() || app.tab().is_table()) && !command {
+    if (app.tabs.is_empty() || app.tab().is_table()) && !command && lines.is_none() {
         return None;
     }
     let (label, bg) = if command {
         (Label::StatusModeCommand, th.mode_command)
     } else {
-        let ed = &app.tab().editor;
+        let ed = lines.map_or(&app.tab().editor, |l| &l.editor);
         let bg = match ed.mode {
             Mode::Normal => th.mode_normal,
             Mode::Insert => th.mode_insert,

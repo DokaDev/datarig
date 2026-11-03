@@ -550,6 +550,30 @@ const VIM_INSERT: &[&str] = &[
     "ctrl+p",
 ];
 
+/// The keys of the editor of a cell's value of several lines that are not characters: vim's
+/// (Normal and Insert mode), keeping and cancelling.
+const CELL_EDITOR: &[&str] = &[
+    "esc",
+    "enter",
+    "tab",
+    "backspace",
+    "delete",
+    "left",
+    "right",
+    "up",
+    "down",
+    "home",
+    "end",
+    "ctrl+w",
+    "ctrl+u",
+    "ctrl+r",
+    "ctrl+p",
+    "ctrl+v",
+    "ctrl+d",
+    "ctrl+f",
+    "ctrl+b",
+];
+
 /// Editing keys of a one-line text input.
 const TEXT: &[&str] = &["backspace", "delete", "left", "right", "home", "end", "ctrl+u", "ctrl+a"];
 
@@ -564,8 +588,9 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (ExplorerFilter, TEXT, "text input"),
     (GridSearch, &["esc", "enter", "ctrl+w"], "grid search"),
     (GridSearch, TEXT, "text input"),
-    (CellEdit, &["esc", "enter", "ctrl+n", "ctrl+d"], "cell editor"),
+    (CellEdit, &["esc", "enter", "ctrl+n", "ctrl+d", "ctrl+l"], "cell editor"),
     (CellEdit, TEXT, "text input"),
+    (CellEditor, CELL_EDITOR, "cell editor of several lines"),
     (QuickConnect, &["esc", "enter", "up", "down", "ctrl+p", "ctrl+n"], "quick connect"),
     // `→`/`←` open and close the databases and schemas; the filter keeps its other
     // editing keys.

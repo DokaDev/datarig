@@ -1,9 +1,11 @@
-//! Overlays anchored in the workspace: the completion popup and the cell viewer.
+//! Overlays anchored in the workspace: the completion popup, the cell viewer and the editor of a
+//! cell's value of several lines.
 
-use crate::app::App;
+use crate::app::edit::RowAt;
+use crate::app::{App, Results};
 use crate::text::{Align, clip, fit, sanitize_cell, width, wrap};
 use crate::theme;
-use datarig_core::i18n::{Localized, Msg};
+use datarig_core::i18n::{Label, Localized, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -117,4 +119,58 @@ pub(crate) fn draw_viewer(app: &mut App, content: Rect, buf: &mut Buffer) {
     for (i, l) in lines.iter().skip(v.scroll).take(vh).enumerate() {
         buf.set_stringn(inner.x + 1, inner.y + i as u16, l, text_w, Style::new().fg(th.fg).bg(th.surface));
     }
+}
+
+/// The editor of a cell's value of several lines (the active tab's open cell editor) in a box
+/// the size of the cell viewer's: the column (and that it is a new row's) in its title, the vim
+/// mode at the bottom left and how the text is kept or cancelled at the right; the `:` line on
+/// its last line while it is open. Returns where the cursor is.
+pub(crate) fn draw_cell_editor(app: &mut App, content: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    let th = theme::cur();
+    let t = app.tab();
+    let e = t.cell_edit.as_ref()?;
+    let l = e.lines.as_ref()?;
+    let column = match &t.results {
+        Results::Rows(rs) => rs.columns.get(e.at.1).map(|c| c.meta.name.clone()),
+        _ => None,
+    };
+    let column = column.unwrap_or_default();
+    let title = match e.at.0 {
+        RowAt::New(_) => Msg::EditLinesTitleNew { column },
+        RowAt::Read(_) => Msg::EditLinesTitle { column },
+    };
+    let title = app.i18n.msg(&title).to_string();
+    let mode = format!(" {} ", app.i18n.label(l.editor.mode_label()));
+    let keys = app.i18n.label(Label::EditLinesKeys).to_string();
+    let w = (content.width as u32 * 8 / 10) as u16;
+    let h = (content.height as u32 * 8 / 10) as u16;
+    let rect = Rect::new(content.x + (content.width - w) / 2, content.y + (content.height - h) / 2, w, h);
+    clear_overlay(rect, buf);
+    let room = (w as usize).saturating_sub(width(&mode) + 6);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(th.accent).bg(th.surface))
+        .style(Style::new().bg(th.surface).fg(th.fg))
+        .title(Line::from(Span::styled(
+            format!(" {} ", clip(&title, (w as usize).saturating_sub(6))),
+            Style::new().fg(th.fg).add_modifier(Modifier::BOLD),
+        )))
+        .title_bottom(Line::from(Span::styled(mode, Style::new().fg(th.fg).add_modifier(Modifier::BOLD))))
+        .title_bottom(
+            Line::from(Span::styled(format!(" {} ", clip(&keys, room)), Style::new().fg(th.fg_muted))).right_aligned(),
+        );
+    let inner = block.inner(rect);
+    block.render(rect, buf);
+    let l = app.tabs.active_mut().cell_edit.as_mut()?.lines.as_deref_mut()?;
+    let ex_h = u16::from(l.ex.is_some() && inner.height > 1);
+    let text = Rect { height: inner.height - ex_h, ..inner };
+    (l.area, l.text_area) = (rect, text);
+    let cursor = l.editor.render(text, buf, None);
+    let Some(ex) = l.ex.as_mut() else { return Some(cursor) };
+    let y = inner.y + inner.height.saturating_sub(1);
+    let style = Style::new().fg(th.fg).bg(th.surface);
+    buf.set_style(Rect { y, height: 1, ..inner }, style);
+    buf.set_stringn(inner.x, y, ":", 1, style);
+    let line = Rect { x: inner.x + 1, y, width: inner.width.saturating_sub(1), height: 1 };
+    Some((ex.render(line, buf, style, true, false, None), y))
 }

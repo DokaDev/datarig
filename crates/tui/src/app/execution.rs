@@ -944,10 +944,13 @@ impl App {
         // What the session's values are read in, from now on.
         if let DbEvent::SessionValues(v) = ev {
             if let Some(t) = self.tabs.get_mut(id) {
-                t.exec.values = Some(v);
+                // The first values a session says come as it connects, before any statement of
+                // it runs (a run that opened it waits for them): they change none. A result read
+                // before the session said any is read in values not known all the same.
+                let changed = t.exec.values.replace(v.clone()).is_some_and(|old| old != v);
                 // While a statement runs, or its result is still read (held): its result is not
                 // read in one set of values.
-                if t.exec.running.is_some() || matches!(t.exec.paging, Paging::Open { .. }) {
+                if changed && (t.exec.running.is_some() || matches!(t.exec.paging, Paging::Open { .. })) {
                     let query = t.exec.query_id;
                     if t.exec.reading.query != query {
                         t.exec.reading = super::tabs::Reading { query, ..Default::default() };

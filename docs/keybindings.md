@@ -301,9 +301,9 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `grid.edit` [text]
 
-The cell editor (`e` in the grid) over the cell: one line, the cell's pending value or its value as read. `Enter` keeps the text (an empty text is the empty string, never NULL), `Esc` cancels, `Ctrl+N` sets NULL, `Ctrl+D` the column's default. With cells of one column selected, each takes the value, as one change (`u` undoes it). A value of several lines is not edited here; an enum or boolean column lists its values instead. Inside `workspace`.
+The cell editor (`e` in the grid) over the cell: one line, the cell's pending value or its value as read. `Enter` keeps the text (an empty text is the empty string, never NULL), `Esc` cancels, `Ctrl+N` sets NULL, `Ctrl+D` the column's default. With cells of one column selected, each takes the value, as one change (`u` undoes it). `Ctrl+L` takes the text typed so far to the editor of several lines. A value of several lines, and a JSON column's, opens that editor instead; an enum or boolean column lists its values. Inside `workspace`.
 
-Reserved — cell editor: `Esc` `Enter` `Ctrl+N` `Ctrl+D`
+Reserved — cell editor: `Esc` `Enter` `Ctrl+N` `Ctrl+D` `Ctrl+L`
 
 Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
@@ -623,6 +623,12 @@ A notice that waits for background work (the launch-time move of passwords to th
 Cell value viewer. Inside `workspace`.
 
 Reserved — cell viewer: `j` `k` `Down` `Up` `PageDown` `PageUp` `Space` `g g` `G` `Esc` `q`
+
+## `overlay.cell_editor` [text]
+
+The editor of a cell's value of several lines (a value with line breaks, a JSON column's, or `Ctrl+L` in the cell editor), in a box over the screen: the query editor's vim modes, its `/` search, `:s` and registers (a yank goes to the system clipboard as `[editor] clipboard` says). In Normal mode `Enter` or `:w` (`:wq`, `:x`) keeps the text, as `Enter` in the cell editor does (line breaks as typed); `Esc` or `:q` (`:q!`) cancels. With cells of one column selected, each takes the value, as one change. A click outside the box or the wheel closes it, changing nothing. Inside `root`.
+
+Reserved — cell editor of several lines: `Esc` `Enter` `Tab` `Backspace` `Delete` `Left` `Right` `Up` `Down` `Home` `End` `Ctrl+W` `Ctrl+U` `Ctrl+R` `Ctrl+P` `Ctrl+V` `Ctrl+D` `Ctrl+F` `Ctrl+B`
 
 ## `overlay.completion` [text]
 

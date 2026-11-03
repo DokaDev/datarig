@@ -98,6 +98,9 @@ fn contexts_form_the_planned_tree() {
     // The cell editor: text input over the grid, beside the editor.
     assert_eq!(Ctx::CellEdit.chain(), [Ctx::CellEdit, Ctx::Workspace, Ctx::Root]);
     assert!(Ctx::CellEdit.is_text_input() && !Ctx::CellEdit.is_editor());
+    // Its editor of several lines: a box over the screen, only the root's keys pass.
+    assert_eq!(Ctx::CellEditor.chain(), [Ctx::CellEditor, Ctx::Root]);
+    assert!(Ctx::CellEditor.is_text_input() && !Ctx::CellEditor.is_editor());
 }
 
 // ── the default table ────────────────────────────────────────────────────────

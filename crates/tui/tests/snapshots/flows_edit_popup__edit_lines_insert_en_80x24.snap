@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_edit_popup.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Conne╭ Edit nickname ───────────────────────────────────────────────╮       │"
+"│  ▾ ●  │  1 one                                                       │der the│"
+"│    ▾ d│  2 two three                                                 │       │"
+"│      ▸│                                                              │       │"
+"│      ▸│                                                              │       │"
+"│      ▸│                                                              │       │"
+"│       │                                                              │       │"
+"│       │                                                              │───────╯"
+"│       │                                                              │ ──────╮"
+"│       │                                                              │       │"
+"│       │                                                              │       │"
+"│       │                                                              │two    │"
+"│       │                                                              │ 1}    │"
+"│       │                                                              │       │"
+"│       │                                                              │       │"
+"│       │                                                              │       │"
+"│       │                                                              │       │"
+"│       ╰ INSERT ──── Normal mode: Enter or :w keep · Esc or :q cancel ╯       │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" INSERT  local-pg │ 3 rows · 0ms                                             EN "

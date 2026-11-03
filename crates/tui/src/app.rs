@@ -1639,6 +1639,7 @@ impl App {
                 _ if self.tabs.is_empty() => Ctx::Explorer,
                 Focus::Results | Focus::Inspector if self.plan_shown() => Ctx::Plan,
                 Focus::Results | Focus::Inspector if self.chart_shown() => Ctx::Chart,
+                Focus::Results if self.cell_lines_open() => Ctx::CellEditor,
                 Focus::Results if self.cell_edit_open() => Ctx::CellEdit,
                 Focus::Results if self.grid_prompt_open() => Ctx::GridSearch,
                 Focus::Results if self.grid_search_on() => Ctx::GridMatches,

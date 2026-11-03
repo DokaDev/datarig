@@ -41,4 +41,4 @@ expression: backend
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯"
-" NORMAL  local-pg │ 3 rows · 0ms                            │ Enter keep · Esc cancel · Ctrl+N NULL · Ctrl+D DEFAULT EN "
+" NORMAL  local-pg │ 3 rows · 0ms     │ Enter keep · Esc cancel · Ctrl+N NULL · Ctrl+D DEFAULT · Ctrl+L several lines EN "
