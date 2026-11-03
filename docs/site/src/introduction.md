@@ -4,7 +4,9 @@ A full-featured database client that lives in your terminal — light, fast, and
 
 datarig is written in Rust with [Ratatui](https://ratatui.rs). It keeps several connections
 open side by side, each with its own tabs, a schema explorer, a SQL editor with vim keys, and a
-results grid that pages through large results explicitly instead of loading them whole.
+results grid that pages through large results explicitly instead of loading them whole. A
+result of one table can be [edited in the grid](guide/editing.md): the changes stay pending until
+a preview of their statements applies them.
 
 It is careful by default: statements that may do harm ask before they run, read-only profiles
 are checked before anything is sent and, on PostgreSQL, also enforced by the server, and

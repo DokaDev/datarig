@@ -135,11 +135,11 @@ their results read-only ("this connection type can't edit data").
 
 - **Finding a row.** Without the key in the result, a row is found by its values that compare
   exactly: integers, `DECIMAL`, `BIT`, `YEAR`, dates and times, bytes, and text, `ENUM` and
-  `SET` in `utf8mb4`, `utf8mb3`, `latin1`, `ascii`, `ucs2`, `utf16` or `utf32` (compared byte
+  `SET` in `utf8mb4`, `utf8mb3`, `utf8`, `latin1`, `ascii`, `ucs2`, `utf16`, `utf16le` or `utf32` (compared byte
   for byte, not by the collation). `FLOAT`, `DOUBLE`, `JSON`, geometry and text in other character sets
   (`sjis`, `cp932`, …) are not used.
 - **Identical rows.** In a table without a primary key or a `NOT NULL` unique key, when the
-  result shows every column, rows the same in all of them can be changed all at once or just one
+  result shows every column, each comparing exactly, rows the same in all of them can be changed all at once or just one
   ("[1] just one", written with `LIMIT 1`).
 - **`FLOAT`** is sent rounded, so its cells are edited one at a time, and a row is not cloned
   with one. A typed value is refused while text is read in another character set than `utf8mb4`
@@ -180,8 +180,6 @@ After a typed password is refused, datarig shows the error instead of asking aga
 
 ## Not supported
 
-- The plan view on MariaDB: the plan actions are not offered there, and `EXPLAIN` runs and
-  shows its text. MariaDB is reached through the MySQL driver.
 - The plan view on MariaDB: the plan actions are not offered there, and `EXPLAIN` runs and
   shows its text. MariaDB is reached through the MySQL driver.
 - Editing data on MariaDB and on MySQL before 8.0.17.

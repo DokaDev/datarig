@@ -56,8 +56,11 @@ view (not on MariaDB) and a typed `USE` (use `:use`).
 
 ## Why is my result read-only?
 
-The result tab strip says why after the first edit key (`e`, `o`, `D`, …), as `read-only ·
-<reason>`; the key itself says "Read-only: …" or "Can't edit: …". The usual causes:
+The edit key (`e`, `o`, `D`, …) says why in the status bar: "Read-only: …" or "Can't edit: …".
+Once the table's details are read, the result tab strip also says `read-only · <reason>` for a
+reason about the statement, the table or the rows; a reason about the connection (a read-only
+environment, a server that can't edit, a changed connection, no connection) is said by the key
+only. The usual causes:
 
 - The statement is not one `SELECT` of one plain table: a join, `WITH`, `GROUP BY` or
   `DISTINCT`, a subquery, `UNION`, a view.

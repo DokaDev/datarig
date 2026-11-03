@@ -92,9 +92,11 @@ To write a result to a file instead, see [Export](export.md). To draw it, see
 
 A result of one table can be edited in the grid: `e` edits a cell, `o` and `O` add rows, `D`
 marks rows to be deleted, and the changes stay pending until you apply them. After the first
-edit key the result tab strip says whether the rows can be edited (`editable · shop.users · key
-id`) or why not (`read-only · <reason>`), then how many changes are pending (`3 pending`) and,
-after an Apply, `applied · re-run to refresh`. See [Editing data](editing.md).
+edit key that gets as far as the table, the result tab strip says whether the rows can be edited
+(`editable · shop.users · key id`) or why not (`read-only · <reason>`; a reason about the
+connection, such as a read-only environment, is said by the key only), then how many changes are
+pending (`3 pending`) and, after an Apply, `applied · re-run to refresh`. See [Editing
+data](editing.md).
 
 ## Transactions in the results
 
