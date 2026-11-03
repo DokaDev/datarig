@@ -14,6 +14,10 @@
   every transaction of a read-only profile is opened `READ ONLY`, so even a function called
   from a `SELECT` cannot write. (MySQL works differently; see
   [MySQL](mysql.md#read-only-profiles).)
+- **Editing data.** A read-only environment refuses [editing a result](editing.md) ("Read-only:
+  the connection's environment is read-only"), and so does a tab whose session opened while it
+  was. With `confirm = "writes"` the preview of the changes is the confirmation: `y` there
+  applies, and no second dialog opens.
 - **What it is not.** The confirmation is a guardrail against mistakes in what the text shows.
   Functions called from a query, triggers, views and rules are not inspected; a read-only
   environment is the guarantee.

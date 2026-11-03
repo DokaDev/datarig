@@ -18,6 +18,7 @@
 - [Results](guide/results.md)
   - [Export](guide/export.md)
   - [Charts](guide/charts.md)
+  - [Editing data](guide/editing.md)
 - [Plans](guide/plans.md)
 - [Explorer](guide/explorer.md)
 - [MySQL](guide/mysql.md)

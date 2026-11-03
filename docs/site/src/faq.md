@@ -54,6 +54,22 @@ MySQL support is partial and MariaDB is a best effort (10.6 and newer). MySQL 5.
 refused. See [MySQL](guide/mysql.md) for what it supports and what not, including the plan
 view (not on MariaDB) and a typed `USE` (use `:use`).
 
+## Why is my result read-only?
+
+The result tab strip says why after the first edit key (`e`, `o`, `D`, …), as `read-only ·
+<reason>`; the key itself says "Read-only: …" or "Can't edit: …". The usual causes:
+
+- The statement is not one `SELECT` of one plain table: a join, `WITH`, `GROUP BY` or
+  `DISTINCT`, a subquery, `UNION`, a view.
+- The result has no key of the table and no column that compares exactly, so its rows can't be
+  found again: add the primary key to the `SELECT`.
+- The profile's environment is read-only, or the server cannot edit (MariaDB, MySQL before
+  8.0.17).
+- The tab's connection changed since the rows were read, or changes were already applied to
+  them: run the query again.
+
+Every reason is listed on [Editing data](guide/editing.md#what-can-be-edited).
+
 ## `COPY … FROM STDIN` or `COPY … TO STDOUT` fails
 
 They are not sent: their data would go through PostgreSQL's COPY sub-protocol, which the

@@ -121,6 +121,24 @@ A PostgreSQL transaction that had failed is reported as rolled back, never as co
 the connection ends while a commit is on its way, whether it happened is not known, and
 datarig says so: check the data.
 
+## Editing data
+
+An Apply of [edited data](editing.md) follows the same rules. With manual commit and no
+transaction open, it opens one and leaves it open ("Opens a transaction; nothing is
+committed."). Inside an open transaction, yours or one opened for manual commit, it runs under
+the savepoint `datarig_apply` and commits nothing ("Runs inside the open transaction; nothing is
+committed.").
+
+- The status bar counts the Apply's writes in the open transaction, and `:tx` lists it as one
+  entry, "Apply (3 changes)".
+- Until the transaction ends the result shows `applied · not committed`. A commit keeps the
+  values shown (`applied · re-run to refresh`).
+- A rollback (yours, the idle rollback, the server's, a lost connection) drops them: "The
+  transaction was rolled back; the applied changes are gone". A transaction that ended in a way
+  the app cannot tell (a `PREPARE TRANSACTION`, a procedure) drops them too.
+- A `SAVEPOINT`, `RELEASE` or `ROLLBACK TO` you run drops them as well ("A savepoint statement
+  ran; re-run the query to see the table").
+
 ## Closing, disconnecting, quitting
 
 Closing a tab, disconnecting, quitting, switching a tab's connection or database with `:use`,

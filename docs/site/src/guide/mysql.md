@@ -128,6 +128,29 @@ on datarig's: for a guarantee that does not, use an account with `SELECT` privil
 Views, triggers, generated columns and `DEFAULT` expressions are not inspected; the server
 still refuses their writes.
 
+## Editing data
+
+[Editing a result](editing.md) needs MySQL 8.0.17 or later; MariaDB and older servers show
+their results read-only ("this connection type can't edit data").
+
+- **Finding a row.** Without the key in the result, a row is found by its values that compare
+  exactly: integers, `DECIMAL`, `BIT`, `YEAR`, dates and times, bytes, and text, `ENUM` and
+  `SET` in `utf8mb4`, `utf8mb3`, `latin1`, `ascii`, `ucs2`, `utf16` or `utf32` (compared byte
+  for byte, not by the collation). `FLOAT`, `DOUBLE`, `JSON`, geometry and text in other character sets
+  (`sjis`, `cp932`, …) are not used.
+- **Identical rows.** In a table without a primary key or a `NOT NULL` unique key, when the
+  result shows every column, rows the same in all of them can be changed all at once or just one
+  ("[1] just one", written with `LIMIT 1`).
+- **`FLOAT`** is sent rounded, so its cells are edited one at a time, and a row is not cloned
+  with one. A typed value is refused while text is read in another character set than `utf8mb4`
+  or a `TIMESTAMP` in a time zone that is not a fixed offset, as Copy as SQL refuses them.
+- **Counts** are the rows matched (see Messages above), so an update to the value a row already
+  has still gives its expected count.
+- **After an Apply** MySQL returns no rows: a new row's `AUTO_INCREMENT` column shows the number
+  it took, other defaults show `default`, and a trigger's change shows after a re-run.
+- A new row leaving a `NOT NULL` column without a default to its default is refused before
+  anything is sent, so a server that is not in strict mode never stores an empty value for it.
+
 ## Passwords on a direct connection
 
 A MySQL profile uses TLS when the server offers it (`PREFERRED`; see
@@ -159,6 +182,9 @@ After a typed password is refused, datarig shows the error instead of asking aga
 
 - The plan view on MariaDB: the plan actions are not offered there, and `EXPLAIN` runs and
   shows its text. MariaDB is reached through the MySQL driver.
+- The plan view on MariaDB: the plan actions are not offered there, and `EXPLAIN` runs and
+  shows its text. MariaDB is reached through the MySQL driver.
+- Editing data on MariaDB and on MySQL before 8.0.17.
 - A `USE` typed in a console is not followed by the tab's header and completion; use `:use`.
 - The estimates are the server's (`TABLE_ROWS`), which can be far off for InnoDB.
 - A view whose table was dropped is listed without columns, and a database that does not exist
