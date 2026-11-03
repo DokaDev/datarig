@@ -7,8 +7,9 @@ A full-featured database client that lives in your terminal — light, fast, and
 
 datarig is written in Rust with [Ratatui](https://ratatui.rs). It keeps several connections
 open side by side, each with its own tabs, a schema explorer, a SQL editor with vim keys and a
-results grid that pages through large results explicitly instead of loading them whole. It is
-careful by default: dangerous statements ask first, and read-only profiles are checked before
+results grid that pages through large results explicitly instead of loading them whole. A
+result of one table can be [edited in the grid](https://dokadev.github.io/datarig/guide/editing.html):
+changes stay pending until a preview of their statements applies them. It is careful by default: dangerous statements ask first, and read-only profiles are checked before
 anything is sent and, on PostgreSQL, also enforced by the server.
 
 **Documentation: <https://dokadev.github.io/datarig/>**

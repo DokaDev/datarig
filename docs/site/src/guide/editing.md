@@ -6,11 +6,12 @@ statements that apply them and say yes; then they run in one go, each row checke
 
 ## What can be edited
 
-The first edit key on a result reads the table's details fresh (the status bar says "Loading
-the table's details…") and then does what was pressed. From then on the result tab strip says
-what the rows are to editing: `editable · shop.users · key id` (the key that finds a row), `rows
-matched by values` (no key in the result: a row is found by the values it shows), or
-`read-only · <reason>`.
+The first key that changes a cell or a row reads the table's details fresh (the status bar
+says "Loading the table's details…") and then does what was pressed. From then on the result tab
+strip says what the rows are to editing: `editable · shop.users · key id` (the key that finds a
+row), `rows matched by values` (no key in the result: a row is found by the values it shows), or
+`read-only · <reason>` for a reason about the statement, the table or finding the rows. The
+other reasons below, the connection's among them, are said by the key only.
 
 A result is editable when its statement is one `SELECT` of one plain table, its connection is
 open and may write, and its rows can be found again. A pressed key that cannot do its work says
@@ -27,9 +28,12 @@ open and may write, and its rows can be found again. A pressed key that cannot d
   again); no column of the result is a column of the table; the rows are not of a plain table
   (a view, a materialized view or a foreign table); the table changed since the query ran; its
   details could not be read.
-- **Finding the rows.** The result holds no key of the table to find its rows by, or no column of
-  the result compares exactly, so its rows can't be found again (see
-  [How a row is found](#how-a-row-is-found)).
+- **Finding the rows.** No column of the result compares exactly, so its rows can't be found
+  again (see [How a row is found](#how-a-row-is-found)).
+- **A selection.** Its cells are of more than one column ("Select cells of one column to edit
+  them together"); it holds both new rows and rows read ("Select new rows or rows read, not both,
+  to edit them together"); `D` on whole columns ("Select rows (V) to delete them, not whole
+  columns").
 - **The connection.** The tab's connection is not open; the connection's environment is
   read-only (or was when the tab's session opened); this connection type can't edit data; the
   connection changed since these rows were read (run the query again).
@@ -37,9 +41,10 @@ open and may write, and its rows can be found again. A pressed key that cannot d
   database; it is `GENERATED ALWAYS AS IDENTITY` (it takes no new value in a row read, but a new
   row may give one); it is shown more than once.
 - **A value.** A row is not shown whole, so it can't be found again; a column's values (or one
-  value) are not shown as stored, for example text read in another character set than
-  `utf8mb4` or a MySQL `TIMESTAMP` in a time zone that is not a fixed offset; a row could not be
-  read; a row is marked for deletion.
+  value) are not shown as stored, for example text read in another character set than `utf8mb4`
+  or a MySQL `TIMESTAMP` in a time zone that is not a fixed offset; a MySQL `FLOAT` column is
+  shown rounded, so its selected cells are not typed together (one at a time is); a row could
+  not be read; a row is marked for deletion; no column of the result takes a value in a new row.
 - **While applying or after.** The pending changes are being applied; changes were applied to
   these rows (re-run the query to edit them); the table's details are no longer known while
   changes are pending (run the query again).
@@ -69,17 +74,21 @@ the `Space d` group under [nav](../reference/keybindings.md#nav), the
 [preview](../reference/keybindings.md#overlayedit_preview).
 
 While changes are pending the strip shows `3 pending` and the hint line offers `Space d a`
-apply and `u` undo. Changed cells take their own color, new rows another, rows to be deleted
-are crossed out, and a cell left to its default shows a dim `default` (theme tokens
-`edit_changed`, `edit_inserted`, `edit_deleted`; see [Themes](themes.md)).
+apply and `u` undo. A pending change is a row: a row read with changed cells (two cells of one
+row are one change), a new row or a row to be deleted. The row number's gutter marks them `~`,
+`+` and `-`. Changed cells take their own color, new rows another, rows to be deleted are
+crossed out, and a cell left to its default shows a dim `default` (theme tokens
+`edit_changed`, `edit_inserted`, `edit_deleted`, and `edit_pending` for the count; see
+[Theme files](../reference/theme-files.md)).
 
 ## The cell editor
 
-`e` opens a line over the cell with its pending value, or its value as read.
+`e` opens a line over the cell with its pending value, or its value as read. A NULL or a
+pending DEFAULT opens as an empty line.
 
-- `Enter` keeps the text. An empty text is the empty string, never NULL.
+- `Enter` keeps the text. An empty text is the empty string, never NULL: `Ctrl+N` and `Ctrl+D`
+  set NULL and DEFAULT again.
 - `Esc` cancels; so does a click outside the line.
-- `Ctrl+N` sets NULL and `Ctrl+D` the column's default.
 - `Ctrl+L` takes the text typed so far to the editor of several lines.
 - With cells of one column selected, each takes the value, as one change (`u` undoes it).
 - An enum or boolean column lists its values instead, then NULL and `DEFAULT` where the column
@@ -124,7 +133,8 @@ naming the column.
 
 **New rows appear at the end of the result**, after the rows read, in the order they were added
 (on a new row, `o` and `O` put the next one right after it). The cursor goes to the new row.
-`D` on a new row removes it.
+`D` on a new row removes it. A new row has no number in the gutter; the messages number it after
+the rows read ("Row 4" after three rows).
 
 The preview refuses a new row that leaves a `NOT NULL` column without a default to its default
 ("Row 4: name is NOT NULL and has no default; give it a value"), and one of a table with such a
@@ -145,7 +155,7 @@ column that the result does not show ("…is not in the result; add it to the SE
 `Space d p` (`:changes`) and `Space d a` (`:apply`) open the same dialog, "Apply changes —
 shop.users", with Cancel focused: only `y` applies. It shows how many updates, inserts and
 deletes, then the statements in the order they run, each with the count it must give
-(`expect 1`):
+(`expect 1`). A long statement is cut to the dialog's width; `c` copies it whole.
 
 - **Row checks (lock, no waiting)** first: for every row read that changes, a `SELECT … FOR
   UPDATE NOWAIT` that finds and locks it. A row another session holds fails at once instead of
@@ -153,9 +163,9 @@ deletes, then the statements in the order they run, each with the count it must 
 - **Writes**: the deletes, then the updates, then the inserts. A `DELETE` and a statement that
   expects more than one row are drawn in the warning color.
 
-`c` copies every statement (through the `clipboard` setting), `j` and `k` scroll, `Enter`,
-`Esc` or `q` closes. The dialog closes by itself when its result, its rows' connection or the
-changes change.
+`c` copies every statement (through the `clipboard` setting), `j` and `k` (or the arrows)
+scroll, `Enter`, `Esc` or `q` closes. The dialog closes by itself when its result, its rows'
+connection or the changes change.
 
 Rows found by their values are counted on the tab's own session first ("Counting matching
 rows…"; the count sees the tab's open transaction, as the Apply does). Until a plan can be
@@ -165,8 +175,8 @@ made, the dialog says why and `y` says "Can't apply yet: …":
 - "Row 3 matches 2 rows; add the key to the SELECT to edit it": the rows may differ in what the
   result does not show.
 - "Row 3 matches 2 identical rows", with "[1] just one [a] all 2": the table has no key, the
-  result shows every column, and the rows are the same in all of them. `1` changes one of them,
-  `a` all of them (the write then expects 2).
+  result shows every column, each comparing exactly, and the rows are the same in all of them.
+  `1` changes one of them, `a` all of them (the write then expects 2).
 - "Row 3: email is not shown whole, so the row can't be found again", and the `NOT NULL` refusals
   of new rows above.
 
@@ -180,11 +190,14 @@ The footer says how the Apply stands to a transaction:
 ### How a row is found
 
 A row read is found by the table's primary key, or a `NOT NULL` unique key, when the result
-shows all its columns; else by the values of its columns that compare exactly (a
-floating-point number, JSON or a geometry does not). Values are compared byte for byte, never by the
-column's collation. An update also checks that each changed column still holds the value read,
-and a delete every column that compares exactly: a row changed elsewhere since is not
-overwritten.
+shows all its columns and each of them compares exactly; else by the values of its columns that
+compare exactly. A table others inherit from is always found by values. Floating-point numbers,
+JSON, XML, geometry and types the app does not know do not compare exactly, nor (PostgreSQL)
+arrays, intervals, a `numeric` without a scale, times with a time zone and network addresses,
+nor (MySQL) text in a character set that does not convert one to one. Values are compared byte
+for byte, never by the column's collation. An update also checks that each changed column that
+compares exactly still holds the value read, and a delete every column that compares exactly: a
+row changed elsewhere in those columns since is not overwritten.
 
 ## Apply
 
@@ -194,7 +207,9 @@ the dialog says "Applying the changes…", edit keys are refused, and the query'
 rows already read stay.
 
 Either every statement gives its count and the changes are applied ("Applied 3 changes"), or
-nothing is ("Nothing was applied", the changes stay pending and `y` may try again):
+nothing is ("Nothing was applied", the changes stay pending and `y` may try again). A row found by
+a key is named with it ("Row 3 (id = 5)"), and a statement in a message is its first line, cut
+short when long:
 
 - "Row 3 was changed or deleted since it was read. Nothing was applied. Re-run the query to see
   the current values."
@@ -217,13 +232,15 @@ rows read. The strip says `applied · re-run to refresh` (`applied · not commit
 transaction is open). These rows are not edited again: run the query first.
 
 - PostgreSQL returns each written row as stored, so a value a trigger set shows too. A value in
-  a form the grid shows differently (a timestamp, a float) shows a dim `re-run to see`.
+  a form the grid shows differently (dates and times, floats, intervals, bytea, network
+  addresses, most arrays) shows a dim `re-run to see`.
 - MySQL returns no rows: a new row's `AUTO_INCREMENT` column shows the number it took, other
   defaults stay `default`.
 - Paging on past the rows already read is refused ("Changes were applied to these rows: re-run
   the query to see the rest"): the rows the server would skip have moved.
 
-With manual commit, or inside your own transaction, the Apply is not committed: the status bar
+With manual commit, or inside your own transaction, the Apply is not committed ("Applied 3
+changes; not committed yet"): the status bar
 counts it in the open transaction, and `:tx` lists it as "Apply (3 changes)". A commit keeps the
 values shown; a rollback drops them ("The transaction was rolled back; the applied changes are
 gone"). See [Manual commit](manual-commit.md#editing-data).
