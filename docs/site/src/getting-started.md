@@ -106,7 +106,8 @@ By default a dim line about a key shows where the screen is empty anyway: the wo
 tabs, an empty console, a result with nothing to show or still running, and the status bar's
 spare room. The key named is the one bound now, remapped keys included. The tips of a place
 take turns as you move between tabs and panes and run queries, and they keep coming back; a key
-you have already pressed comes up less often than the ones you have not. `[ui] tips` (also on
+you have already pressed comes up less often than the ones you have not (where a place has only
+two tips, they simply alternate). `[ui] tips` (also on
 the settings screen, or `:set ui.tips=until_used`) picks how they behave: `"always"` (the
 default), `"until_used"` (a tip about a key you have pressed once is not shown again) or
 `"off"`. An action you ran three times from the action menu or the command line without its

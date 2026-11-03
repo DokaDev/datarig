@@ -299,8 +299,15 @@ fn a_tip_stays_while_the_page_does_and_a_known_key_comes_up_less_often() {
     let (used, rest) = run_turns(&mut h);
     assert!(used > 0, "a used key still comes up");
     assert!(used < run && rest * run > other * used, "before {run} run / {other} others, after {used} / {rest}");
-    // With `until_used` it is gone.
+    // With `until_used` it is gone, at once (the page did not turn).
+    let shows_run = (0..60).find(|&e| {
+        h.app.tips.epoch = e;
+        matches!(h.app.tip(Place::EmptyEditor), Some(Msg::TipsRun { .. }))
+    });
+    h.app.tips.epoch = shows_run.expect("the run tip has a turn");
     h.command("set ui.tips=until_used");
+    assert_eq!(h.app.tips.epoch, shows_run.unwrap());
+    assert!(!matches!(h.app.tip(Place::EmptyEditor), Some(Msg::TipsRun { .. })));
     for e in 0..12 {
         h.app.tips.epoch = e;
         assert!(!matches!(h.app.tip(Place::EmptyEditor), Some(Msg::TipsRun { .. })), "epoch {e}");
