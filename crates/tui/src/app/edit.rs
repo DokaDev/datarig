@@ -201,8 +201,10 @@ fn not_whole(
 /// Why a value typed for column `col` would not be stored as the text shown for it: the column's
 /// (no row) or the first row's whose value in `rows` (as read, from row `first` on) was read in a
 /// session that shows text or a time otherwise (its character set or time zone, not known or
-/// changed). A value shown rounded (a MySQL `FLOAT`) or not in its kind's form does not matter
-/// here: the typed text replaces it, and the editor checks that text against the type.
+/// changed). A column that refuses every value is refused whatever its rows hold (NULL too). A
+/// value not in its kind's form does not matter here: the typed text replaces it, and the editor
+/// checks that text against the type. A value shown rounded (a MySQL `FLOAT`) matters only for
+/// `many` cells: a cell shown as the typed text may hold another value, and would be kept.
 fn value_not_whole(
     d: Dialect,
     rs: &ResultSet,
@@ -210,20 +212,24 @@ fn value_not_whole(
     rows: &[Vec<Cell>],
     first: usize,
     server_zone: Option<&str>,
+    many: bool,
 ) -> Option<(Option<usize>, export::Refused)> {
     let m = &rs.columns[col].meta;
     let cols = [export::SqlColumn { name: &m.name, type_name: &m.type_name, kind: m.kind, auto_increment: false }];
     use export::NotWhole as N;
-    let typed =
-        |r: &export::Refused| matches!(r.why, N::Charset(_) | N::TimeZone(_) | N::SessionUnknown | N::SessionChanged);
+    let typed = |r: &export::Refused| {
+        matches!(r.why, N::Charset(_) | N::TimeZone(_) | N::SessionUnknown | N::SessionChanged)
+            || (many && r.why == N::Float)
+    };
     let cells = match export::sql_cells(d, &cols, &rs.read_in, server_zone) {
         Ok(c) => c,
         Err(r) => return typed(&r).then_some((None, r)),
     };
-    rows.iter().enumerate().find_map(|(k, row)| match row.get(col) {
+    let row = rows.iter().enumerate().find_map(|(k, row)| match row.get(col) {
         Some(Some(v)) => cells.cell(0, v).err().filter(typed).map(|r| (Some(first + k), r)),
         _ => None,
-    })
+    });
+    row.or_else(|| cells.column_refused(0).filter(typed).map(|r| (None, r)))
 }
 
 impl App {
@@ -456,9 +462,11 @@ impl App {
         }
         // NULL and DEFAULT read no value: only a typed one must be stored as shown.
         let typed = a == EditAction::Cell;
-        if let Some((r, refused)) = value_not_whole(d, rs, col, &read, rows.start, zone).filter(|_| typed) {
+        let many = rows.len() > 1;
+        if let Some((r, refused)) = value_not_whole(d, rs, col, &read, rows.start, zone, many).filter(|_| typed) {
             let (column, reason) = (refused.column, self.not_whole_reason(&refused.why));
             return self.say_refused(match r {
+                None if refused.why == export::NotWhole::Float => Msg::EditWhyShownRounded { column },
                 None => Msg::EditWhyColumnNotWhole { column, reason },
                 Some(r) => Msg::EditWhyValueNotWhole { row: (r + 1).to_string(), column, reason },
             });
@@ -584,11 +592,12 @@ impl App {
         }
     }
 
-    /// A click at (`x`, `y`) outside the open cell editor closes it, changing nothing (as `Esc`
-    /// does); the click is then handled as anywhere else.
-    pub(super) fn cell_edit_click(&mut self, x: u16, y: u16) {
+    /// A press at (`x`, `y`) outside the open cell editor closes it, changing nothing (as `Esc`
+    /// does); the press is then handled as anywhere else. A press inside is the editor's (a left
+    /// one moves its text cursor) and goes nowhere else: `true`.
+    pub(super) fn cell_edit_click(&mut self, x: u16, y: u16, left: bool) -> bool {
         if !self.cell_edit_open() {
-            return;
+            return false;
         }
         let t = self.tab();
         let over = match (&t.results, &t.cell_edit) {
@@ -596,9 +605,16 @@ impl App {
             _ => None,
         };
         let inside = over.is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height);
-        if !inside {
-            self.tabs.active_mut().cell_edit = None;
+        let e = self.tabs.active_mut().cell_edit.as_mut();
+        match e {
+            Some(e) if inside => {
+                if left {
+                    e.input.click(x, y);
+                }
+            }
+            _ => self.tabs.active_mut().cell_edit = None,
         }
+        inside
     }
 
     /// Text pasted into the cell editor: one line only.
@@ -620,7 +636,7 @@ impl App {
         };
         let text = self.tab().cell_edit.as_ref().map(|e| e.input.text().to_string()).unwrap_or_default();
         let d = self.tab_dialect(self.tab().id);
-        if let Err(reason) = self.typed_ok(d, &c, &text) {
+        if let Err(reason) = self.typed_whole(d, &text).and_then(|_| self.typed_ok(d, &c, &text)) {
             if let Some(e) = self.tabs.active_mut().cell_edit.as_mut() {
                 e.error = Some(reason.clone());
             }
@@ -651,6 +667,20 @@ impl App {
         }
         self.tabs.active_mut().cell_edit = None;
         self.edit_write_cells(&cells, v);
+    }
+
+    /// Whether `text`, typed in the open editor, is stored as typed: judged itself as the
+    /// column's values are ([`value_not_whole`]); why not, in words.
+    fn typed_whole(&self, d: Dialect, text: &str) -> Result<(), String> {
+        let t = self.tab();
+        let (Some(rs), Some(e)) = (rows_of(t), t.cell_edit.as_ref()) else { return Ok(()) };
+        let col = e.at.1;
+        let mut row: Vec<Cell> = vec![None; col + 1];
+        row[col] = Some(text.to_string());
+        let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
+        let Some((_, refused)) = value_not_whole(d, rs, col, &[row], 0, zone, false) else { return Ok(()) };
+        let (column, reason) = (refused.column, self.not_whole_reason(&refused.why));
+        Err(self.i18n.msg(&Msg::EditWhyColumnNotWhole { column, reason }).to_string())
     }
 
     /// Whether `text` is a value of column `c`'s type in dialect `d`; why not, in words.

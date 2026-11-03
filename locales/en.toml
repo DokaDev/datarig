@@ -2363,6 +2363,7 @@
 "edit.why.not_null" = "{column} is NOT NULL"
 "edit.why.no_default" = "{column} has no default"
 "edit.why.new_number" = "{column} would take a new number; type a value instead"
+"edit.why.shown_rounded" = "{column} is shown rounded; edit its cells one at a time"
 "edit.why.not_resolved" = "the table's details are no longer known while changes are pending; run the query again"
 "edit.several_columns" = "Select cells of one column to edit them together"
 "edit.several_lines" = "This value has several lines; the cell editor takes one line"

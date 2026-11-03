@@ -740,12 +740,26 @@ impl App {
         if matches!(m.kind, MouseEventKind::Down(_)) && self.close_search_prompt() {
             return;
         }
-        if matches!(m.kind, MouseEventKind::Down(_)) {
-            self.cell_edit_click(m.column, m.row);
+        if let MouseEventKind::Down(b) = m.kind
+            && self.cell_edit_click(m.column, m.row, b == MouseButton::Left)
+        {
+            return;
         }
         let (x, y) = (m.column, m.row);
         let inside = |r: Rect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
         let l = self.layout;
+        // The wheel over the grid closes the cell editor, changing nothing (as `Esc` does): it
+        // would scroll off its cell.
+        let wheel = matches!(
+            m.kind,
+            MouseEventKind::ScrollDown
+                | MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollLeft
+                | MouseEventKind::ScrollRight
+        );
+        if wheel && inside(l.results) && self.cell_edit_open() {
+            self.tabs.active_mut().cell_edit = None;
+        }
         match m.kind {
             // Sideways (a trackpad, a tilting wheel): the grid's view, a few characters an event.
             MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight if inside(l.results) => {

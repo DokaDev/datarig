@@ -631,6 +631,12 @@ fn mysql_users(zone: &str, charset: &str) -> Harness {
 
 /// As [`mysql_users`], the nickname of type `nickname` (its name, kind and the row's value).
 fn mysql_users_with(zone: &str, charset: &str, nickname: (&str, ValueKind, &str)) -> Harness {
+    let rows = vec![vec![s("1"), s("a@x"), s(nickname.2)]];
+    mysql_users_rows(zone, charset, (nickname.0, nickname.1), rows)
+}
+
+/// As [`mysql_users_with`], the grid's rows `rows`.
+fn mysql_users_rows(zone: &str, charset: &str, nickname: (&str, ValueKind), rows: Vec<Vec<Option<String>>>) -> Harness {
     use datarig_core::driver::keys::{KeyCatalog, KeyKind, NameRule};
     use datarig_core::driver::{ColumnOrigin, SessionValues};
     let driver = FakeDriver::default();
@@ -658,7 +664,6 @@ fn mysql_users_with(zone: &str, charset: &str, nickname: (&str, ValueKind, &str)
         col("email", "varchar", ValueKind::Text),
         col("nickname", nickname.0, nickname.1),
     ];
-    let rows = vec![vec![s("1"), s("a@x"), s(nickname.2)]];
     answer(&mut h, "SELECT id, email, nickname FROM shop.users", columns, rows);
     h.sent();
     h
@@ -946,4 +951,74 @@ fn a_default_that_takes_a_new_number_is_refused_on_a_row() {
     h.keys("lle");
     structure(&mut h, Ok(st));
     assert_eq!(picker_labels(&h), ["true", "false", "NULL"]);
+}
+
+#[test]
+fn a_value_typed_for_several_cells_shown_rounded_is_refused() {
+    let rows = vec![vec![s("1"), s("a@x"), s("3.14159")], vec![s("2"), s("b@x"), s("2.5")]];
+    let mut h = mysql_users_rows("+00:00", "utf8mb4", ("float", ValueKind::Float), rows);
+    let mut st = mysql_users_structure();
+    st.columns[3].type_name = "float".into();
+    h.keys("lle");
+    structure(&mut h, Ok(st));
+    assert_eq!(h.app.key_context(), Ctx::CellEdit, "one cell: the editor opens");
+    h.key(KeyCode::Esc);
+    h.app.transient = None;
+    // Two cells: one shown 3.14159 may hold 3.1415927, so the same text would not reach it.
+    h.keys("vje");
+    assert_eq!(said(&mut h), refused("nickname is shown rounded; edit its cells one at a time"));
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    assert!(edits(&h).batch.is_empty());
+    // NULL reads no value: taken for both.
+    h.keys(" dn");
+    assert_eq!((value(&h, 0, 2), value(&h, 1, 2)), (Some(Value::Null), Some(Value::Null)));
+}
+
+#[test]
+fn a_null_text_read_in_another_charset_takes_no_typed_text() {
+    let rows = vec![vec![s("1"), None, s("2024-01-01 00:00:00")]];
+    let mut h = mysql_users_rows("+00:00", "latin1", ("timestamp", ValueKind::TimestampTz), rows);
+    h.keys("le");
+    structure(&mut h, Ok(mysql_users_structure()));
+    let Some(Msg::EditRefused { reason }) = said(&mut h) else { panic!("refused") };
+    assert!(reason.contains("email") && reason.contains("latin1"), "{reason}");
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    assert!(edits(&h).batch.is_empty());
+}
+
+#[test]
+fn a_press_inside_the_editor_stays_in_the_editor() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let mut h = ready(Lang::En);
+    h.keys("e");
+    h.type_text("z");
+    h.draw(120, 40);
+    let cell = h.app.tab().grid.cell_rect(0, 1, 3).expect("on screen");
+    let below = h.app.tab().grid.cell_rect(2, 1, 3).expect("on screen");
+    h.mouse(MouseEventKind::Down(MouseButton::Left), cell.x + 1, cell.y);
+    assert_eq!(h.app.tab().cell_edit.as_ref().map(|e| e.input.cursor()), Some(0), "the text cursor moved");
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), below.x + 1, below.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), below.x + 1, below.y);
+    let g = &h.app.tab().grid;
+    assert_eq!((g.row, g.col, g.anchor), (0, 1, None), "the grid did not move");
+    h.mouse(MouseEventKind::Down(MouseButton::Left), cell.x + 2, cell.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), cell.x + 2, cell.y);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), cell.x + 2, cell.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), cell.x + 2, cell.y);
+    assert_eq!(h.overlay_kind(), None, "no cell viewer over the editor");
+    assert_eq!(editor_text(&h), "a@xz");
+    assert_eq!(h.app.key_context(), Ctx::CellEdit);
+}
+
+#[test]
+fn the_wheel_closes_the_editor_and_scrolls() {
+    use ratatui::crossterm::event::MouseEventKind;
+    let mut h = ready(Lang::En);
+    h.keys("e");
+    h.type_text("z");
+    h.draw(120, 40);
+    let cell = h.app.tab().grid.cell_rect(0, 1, 3).expect("on screen");
+    h.mouse(MouseEventKind::ScrollDown, cell.x + 1, cell.y);
+    assert!(h.app.tab().cell_edit.is_none(), "the editor closed");
+    assert!(edits(&h).batch.is_empty(), "nothing changed");
 }
