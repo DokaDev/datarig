@@ -123,6 +123,9 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space d u` | `edit.undo` | Undo the last change of the result's cells |  |
 | `Space d U` | `edit.redo` | Redo the change of the result's cells undone last |  |
 | `Space d r` | `edit.revert` | Drop the pending changes of the cell (the selection) |  |
+| `Space d o` | `edit.add_row` | Add a new row, shown after the rows read |  |
+| `Space d O` | `edit.clone_row` | Add a new row with the values of the cursor's row |  |
+| `Space d d` | `edit.delete_row` | Mark the row (the selected rows) to be deleted, or no longer; a new row goes |  |
 | `Space r y t` | `results.copy.selection.tsv` | Copy selection: Without headers (TSV) |  |
 | `Space r y T` | `results.copy.selection.tsv_header` | Copy selection: With headers (TSV) |  |
 | `Space r y l` | `results.copy.selection.list` | Copy selection: Comma list |  |
@@ -260,6 +263,9 @@ The result grid. The wheel scrolls the rows; a sideways wheel (a trackpad) or Sh
 | `e` | `edit.cell` | Edit the cell (the selected cells of one column) |  |
 | `u` | `edit.undo` | Undo the last change of the result's cells |  |
 | `Ctrl+R` | `edit.redo` | Redo the change of the result's cells undone last |  |
+| `o` | `edit.add_row` | Add a new row, shown after the rows read |  |
+| `O` | `edit.clone_row` | Add a new row with the values of the cursor's row |  |
+| `D` | `edit.delete_row` | Mark the row (the selected rows) to be deleted, or no longer; a new row goes |  |
 | `i` | `results.detail` | Result detail → show / hide |  |
 | `I` | `results.detail_tab` | Result detail → Cell / Row |  |
 | `z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |

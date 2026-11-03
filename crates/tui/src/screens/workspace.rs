@@ -1356,7 +1356,8 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     let t = app.tabs.active_mut();
     if let (Results::Rows(rs), Some(e)) = (&t.results, t.cell_edit.as_mut())
         && e.result == rs.id
-        && let Some(cell) = t.grid.cell_rect(e.at.0, e.at.1, rs.rows.len())
+        && let Some((row, col)) = e.shown_at(rs)
+        && let Some(cell) = t.grid.cell_rect(row, col, rs.rows.len())
     {
         let style = Style::new().fg(th.fg).bg(th.surface);
         buf.set_style(cell, style);
