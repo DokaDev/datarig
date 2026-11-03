@@ -3,6 +3,35 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.37.0 — 2026-11-03
+
+This release adds editing a result's data in the grid: change cells, add, copy and delete rows,
+then apply the changes after a preview of their exact statements.
+
+### Added
+
+- Edit a result's data in the grid: change cells (one line, or a box for values of several
+  lines and JSON), add and clone rows, mark rows to delete, undo and redo. The changes stay
+  pending until a preview shows the statements that apply them; `y` there runs them in one
+  transaction, each row checked first. See Editing data in the guide.
+
+### Changed
+
+- MySQL: the rows affected by an `UPDATE` (and by `INSERT … ON DUPLICATE KEY UPDATE`) are the
+  rows it matched, as with PostgreSQL, so a row set to the values it already had counts too;
+  `ROW_COUNT()` counts them the same way. The server's info line still says how many changed.
+- Tips keep showing: the tips of an empty place take turns and come back, and a key you have
+  already pressed comes up less often instead of never again. `[ui] tips` is now `"always"`
+  (the default), `"until_used"` (the earlier behaviour) or `"off"`; `"on"` in an existing
+  config reads as `"always"`, and `true` and `false` read as `"always"` and `"off"`.
+
+### Fixed
+
+- MySQL: Copy as SQL no longer refuses text and JSON values of a tab's first result as "read
+  across a change of the session's time zone or character set": the values a session reports as
+  it connects no longer count as a change. An export of that result as SQL to a file is no
+  longer refused for it either.
+
 ## 0.36.2 — 2026-10-31
 
 ### Changed
