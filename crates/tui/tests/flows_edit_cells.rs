@@ -1062,3 +1062,147 @@ fn the_wheel_closes_the_editor_and_scrolls() {
     assert!(h.app.tab().cell_edit.is_none(), "the editor closed");
     assert!(edits(&h).batch.is_empty(), "nothing changed");
 }
+
+/// The edits the action menu of a cell can offer, as it labels them.
+const EDIT_CELL: &str = "Edit the cell (the selected cells of one column)";
+const SET_NULL: &str = "Set the cell (the selected cells) to NULL";
+const UNDO: &str = "Undo the last change of the result's cells";
+const PREVIEW: &str = "Show the pending changes and the statements that apply them";
+const DISCARD: &str = "Drop every pending change of the result";
+const EDITS: [&str; 9] = [
+    EDIT_CELL,
+    SET_NULL,
+    "Set the cell (the selected cells) to the column's default",
+    "Add a new row, shown after the rows read",
+    "Add a new row with the values of the cursor's row",
+    "Mark the row (the selected rows) to be deleted, or no longer; a new row goes",
+    UNDO,
+    PREVIEW,
+    DISCARD,
+];
+
+/// The open menu's lines as shown: headings as `# text`, items as `label | keys`.
+fn menu_lines(h: &Harness) -> Vec<String> {
+    h.app
+        .menu_lines()
+        .into_iter()
+        .map(|(heading, label, keys)| if heading { format!("# {label}") } else { format!("{label} | {keys}") })
+        .collect()
+}
+
+/// The edits the open menu offers.
+fn menu_edits(h: &Harness) -> Vec<String> {
+    h.menu_labels().into_iter().filter(|l| EDITS.contains(&l.as_str())).collect()
+}
+
+/// Right click on the grid's cell at `row`, `col` (of the 3 rows), drawn at 120x40.
+fn right_click_cell(h: &mut Harness, row: usize, col: usize) {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    h.draw(120, 40);
+    let cell = h.app.tab().grid.cell_rect(row, col, 3).expect("on screen");
+    h.mouse(MouseEventKind::Down(MouseButton::Right), cell.x + 1, cell.y);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
+}
+
+#[test]
+fn the_menu_of_a_cell_offers_its_edits_and_edit_cell_edits_the_cell_clicked() {
+    use datarig_tui::app::edit::RowAt;
+    let mut h = users(Lang::En);
+    right_click_cell(&mut h, 1, 1);
+    let g = &h.app.tab().grid;
+    assert_eq!((g.row, g.col), (1, 1), "the clicked cell is selected first");
+    let shown = menu_lines(&h);
+    assert_eq!(shown[0], "# Cell email, row 2", "{shown:?}");
+    for item in [
+        "Edit the cell (the selected cells of one column) | e",
+        "Set the cell (the selected cells) to NULL | Space d n",
+        "Add a new row, shown after the rows read | o",
+        "Add a new row with the values of the cursor's row | O",
+        "Mark the row (the selected rows) to be deleted, or no longer; a new row goes | D",
+    ] {
+        assert!(shown.iter().any(|l| l == item), "{item}: {shown:?}");
+    }
+    // Nothing pending: nothing to undo, preview or drop.
+    let offered = menu_edits(&h);
+    assert!(![UNDO, PREVIEW, DISCARD].iter().any(|l| offered.iter().any(|o| o == l)), "{offered:?}");
+    insta::assert_snapshot!("edit_menu_editable_en_120x40", h.draw(120, 40).backend());
+    insta::assert_snapshot!("edit_menu_editable_en_80x24", h.draw(80, 24).backend());
+    // Space Space next to the selection: the same menu.
+    h.key(KeyCode::Esc);
+    h.keys("  ");
+    assert_eq!(menu_lines(&h), shown, "one menu for the mouse and the keyboard");
+    h.key(KeyCode::Esc);
+    // Edit cell runs as `e` does: the structure is read first, then that cell is edited.
+    right_click_cell(&mut h, 1, 1);
+    h.menu_pick(EDIT_CELL);
+    assert_eq!(asked(&mut h), vec![("shop".to_string(), "users".to_string())]);
+    structure(&mut h, Ok(users_structure()));
+    assert_eq!(h.app.key_context(), Ctx::CellEdit);
+    assert_eq!(h.app.tab().cell_edit.as_ref().map(|e| e.at), Some((RowAt::Read(1), 1)));
+    assert_eq!(editor_text(&h), "b@x");
+    insta::assert_snapshot!("edit_menu_cell_edit_en_120x40", h.draw(120, 40).backend());
+}
+
+#[test]
+fn set_null_and_the_preview_from_the_menu() {
+    let mut h = ready(Lang::En);
+    right_click_cell(&mut h, 2, 2);
+    h.menu_pick(SET_NULL);
+    assert_eq!(value(&h, 2, 2), Some(Value::Null), "pending on the cell clicked");
+    assert_eq!(h.overlay_kind(), None);
+    // The table known: email takes no NULL; the changes pending can be undone, previewed, dropped.
+    right_click_cell(&mut h, 0, 1);
+    let offered = menu_edits(&h);
+    assert!(!offered.iter().any(|l| l == SET_NULL), "a NOT NULL column: {offered:?}");
+    for item in [EDIT_CELL, UNDO, PREVIEW, DISCARD] {
+        assert!(offered.iter().any(|l| l == item), "{item}: {offered:?}");
+    }
+    insta::assert_snapshot!("edit_menu_pending_en_120x40", h.draw(120, 40).backend());
+    h.menu_pick(PREVIEW);
+    assert_eq!(h.app.key_context(), Ctx::EditPreview, "the preview, as Space d p opens it");
+    h.key(KeyCode::Esc);
+    // Undo from the menu: as `u`.
+    right_click_cell(&mut h, 0, 1);
+    h.menu_pick(UNDO);
+    assert!(edits(&h).batch.is_empty());
+    right_click_cell(&mut h, 0, 1);
+    assert!(!h.menu_labels().iter().any(|l| l == UNDO || l == PREVIEW), "nothing pending again");
+}
+
+#[test]
+fn a_result_that_cannot_be_edited_offers_no_edits() {
+    // A join.
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    let columns = vec![meta_from("id", "int8", true, ORDERS, 1), meta_from("id", "int8", true, USERS, 1)];
+    let sql = "SELECT o.id, u.id FROM shop.orders o JOIN shop.users u ON u.id = o.user_id";
+    answer(&mut h, sql, columns, vec![vec![s("1"), s("1")]]);
+    h.draw(120, 40);
+    h.keys("  ");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
+    assert_eq!(menu_edits(&h), Vec::<String>::new());
+    assert!(h.menu_labels().iter().any(|l| l == "Copy the cell (a selected range as TSV)"), "the rest stays");
+    insta::assert_snapshot!("edit_menu_read_only_en_120x40", h.draw(120, 40).backend());
+    // A read-only environment.
+    let mut cfg = Config {
+        connections: vec![ConnectionConfig { policy: Some("prod".into()), ..ConnectionConfig::test_db() }],
+        ..Config::default()
+    };
+    cfg.policies.insert("prod", Policy { read_only: true, ..Policy::default() });
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows());
+    right_click_cell(&mut h, 0, 1);
+    assert_eq!(menu_edits(&h), Vec::<String>::new(), "read-only environment");
+    // A server that takes no edits.
+    let mut h = users(Lang::En);
+    h.db(DbEvent::Edit(None));
+    right_click_cell(&mut h, 0, 1);
+    assert_eq!(menu_edits(&h), Vec::<String>::new(), "no edits on this server");
+    // The connection lost.
+    let mut h = users(Lang::En);
+    h.db(DbEvent::Lost { error: DbError::Closed });
+    right_click_cell(&mut h, 0, 1);
+    assert_eq!(menu_edits(&h), Vec::<String>::new(), "not connected");
+}

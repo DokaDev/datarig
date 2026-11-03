@@ -6,7 +6,8 @@
 //! or selection, a tab, the editor's statement or selection), then the pane's own, each with the
 //! key that runs it in that pane. The explorer's come from its key bindings (the list the
 //! keyboard help shows), so an action added to the explorer shows up here too; what cannot run
-//! on the node is left out. The grid's copies open a second level, the formats.
+//! on the node is left out. The grid's copies open a second level, the formats; its edits are
+//! listed only while their keys would act on the cell (a read-only result offers none).
 //!
 //! Typing filters the items: names that start with the text first, then names with a word that
 //! starts with it, then names that have its letters in order. When no item matches, every action
@@ -17,6 +18,7 @@
 
 use super::action::{ChartAction, PanelAction, PlanAction, PlanView};
 use super::copy::{CopyFormat, CopyScope};
+use super::edit::EditAction;
 use super::tabs::ResultView;
 use super::*;
 use crate::keymap::{Target, keys};
@@ -49,6 +51,20 @@ const GRID_MENU: &[Action] = &[
     Action::ToggleDetail,
     Action::Grid(GridAction::CopyCell),
     Action::Grid(GridAction::CopyRow),
+];
+
+/// The edits of the grid's cell or selection, after its copies: each only while its key would
+/// act now ([`App::edit_offered`]).
+const EDIT_MENU: &[EditAction] = &[
+    EditAction::Cell,
+    EditAction::SetNull,
+    EditAction::SetDefault,
+    EditAction::AddRow,
+    EditAction::CloneRow,
+    EditAction::DeleteRow,
+    EditAction::Undo,
+    EditAction::Preview,
+    EditAction::Discard,
 ];
 
 /// The results pane's actions, after the copies of every row.
@@ -820,6 +836,9 @@ impl App {
         let mut pane = Vec::new();
         if rows {
             own.push(MenuItem::Scope(MenuScope::Copy(CopyScope::Selection)));
+            let edits: Vec<Action> =
+                EDIT_MENU.iter().filter(|e| self.edit_offered(**e)).map(|e| Action::Edit(*e)).collect();
+            own.extend(self.available(&edits));
             pane.push(MenuItem::Scope(MenuScope::Copy(CopyScope::Fetched)));
             if self.can_fetch_rest() {
                 pane.push(MenuItem::Scope(MenuScope::FetchFirst));

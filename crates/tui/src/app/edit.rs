@@ -502,46 +502,113 @@ impl App {
     /// environment known and not read-only, its server taking edits, and the tab bound as when
     /// the rows were read. Why not is said; else the profile, the format and that binding.
     fn edit_gate(&mut self) -> Option<(ProfileId, EditFormat, Bound)> {
+        match self.edit_check() {
+            Ok(ok) => Some(ok),
+            Err(why) => {
+                if let Some(n) = why {
+                    self.flash(n);
+                }
+                None
+            }
+        }
+    }
+
+    /// [`App::edit_gate`] without saying anything: else what says why not (nothing without a
+    /// row result).
+    fn edit_check(&self) -> Result<(ProfileId, EditFormat, Bound), Option<Notice>> {
         let t = self.tab();
-        let rs = rows_of(t)?;
+        let rs = rows_of(t).ok_or(None)?;
         let Some(pid) = t.profile.filter(|p| self.conns.is_connected(*p)) else {
-            self.say_edit_read_only(Label::EditWhyNotConnected);
-            return None;
+            return Err(Some(self.read_only_notice(Label::EditWhyNotConnected)));
         };
         if let Err(e) = self.policy_of(pid) {
             let name = self.profile(pid).map(|p| p.name.clone()).unwrap_or_default();
             let n = self.unknown_environment_notice(&name, &e);
-            self.flash(Notice::new(n.msg, Level::Info));
-            return None;
+            return Err(Some(Notice::new(n.msg, Level::Info)));
         }
         // The environment is read-only, or was when the tab's session opened (that session is
         // read-only on the server).
         if self.read_only(pid) || (t.exec.session.is_some() && t.exec.read_only) {
-            self.say_edit_read_only(Label::EditWhyReadOnly);
-            return None;
+            return Err(Some(self.read_only_notice(Label::EditWhyReadOnly)));
         }
         let Some(format) = self.tab_edit_format(t.id) else {
-            self.say_why(&Why::Rows(ReadOnly::NoFormat));
-            return None;
+            return Err(Some(self.why_notice(&Why::Rows(ReadOnly::NoFormat))));
         };
         // Nothing changes the changes being applied (a cell editor or a list of values opened
         // before the Apply was sent).
         if rs.edit.applying.is_some() {
-            self.say_refused(Label::EditWhyApplying.into());
-            return None;
+            return Err(Some(self.refused_notice(Label::EditWhyApplying.into())));
         }
         // What an Apply changed shows over the rows as read: they are read again first.
         if rs.edit.applied.is_some() {
-            self.say_refused(Label::EditWhyApplied.into());
-            return None;
+            return Err(Some(self.refused_notice(Label::EditWhyApplied.into())));
         }
         // Read under another connection or database, the rows may not be the table's now.
         let bound = self.edit_bound(t).filter(|b| rs.edit.bound.as_ref() == Some(b));
         let Some(bound) = bound else {
-            self.flash(Notice::new(Label::EditConnectionChanged, Level::Info));
-            return None;
+            return Err(Some(Notice::new(Label::EditConnectionChanged, Level::Info)));
         };
-        Some((pid, format, bound))
+        Ok((pid, format, bound))
+    }
+
+    /// The table `rs` (tab `t`'s shown result) reads, as its statement and columns say, while
+    /// nothing is pending (`None` then: the keys may have come or changed since it was resolved).
+    fn edit_source(&self, t: &Tab, rs: &ResultSet) -> Option<Result<EditSource, ReadOnly>> {
+        rs.edit.batch.is_empty().then(|| {
+            let cols: Vec<ColumnMeta> = rs.columns.iter().map(|c| c.meta.clone()).collect();
+            edit::source(self.tab_dialect(t.id), self.tab_keys(t).catalog(), &cols, t.shown_sql())
+        })
+    }
+
+    /// Whether edit action `a` would act on the active tab's shown result and its cursor's cell
+    /// now, as far as its key would find out without reading anything (the action menu offers
+    /// only those): nothing refused for the result, its table, the cursor's row or its column.
+    pub(super) fn edit_offered(&self, a: EditAction) -> bool {
+        if self.tabs.is_empty() {
+            return false;
+        }
+        let t = self.tab();
+        let Some(rs) = rows_of(t) else { return false };
+        if rs.edit.applying.is_some() {
+            return false;
+        }
+        let batch = &rs.edit.batch;
+        // Whether it sets the cursor's cell (its column must take it).
+        let cell = match a {
+            EditAction::Undo => return batch.can_undo(),
+            EditAction::Redo => return batch.can_redo(),
+            EditAction::Revert | EditAction::Discard => return !batch.is_empty(),
+            EditAction::Preview | EditAction::Apply => {
+                return self.edit_check().is_ok()
+                    && !batch.is_empty()
+                    && matches!(rs.edit.target, Target::Ready(_))
+                    && !self.tab_busy(t.id);
+            }
+            EditAction::Cell | EditAction::SetNull | EditAction::SetDefault => true,
+            EditAction::AddRow | EditAction::CloneRow | EditAction::DeleteRow => false,
+        };
+        if self.edit_check().is_err() {
+            return false;
+        }
+        // As the key resolves it: a statement or columns that are not one table's, a table
+        // known to be read-only, or changes pending on a table no longer known.
+        let target = match (&rs.edit.target, self.edit_source(t, rs)) {
+            (_, Some(Err(_))) | (Target::ReadOnly { retry: false, .. }, _) => return false,
+            (Target::Unresolved | Target::ReadOnly { .. }, None) => return false,
+            (Target::Ready(r), None) => Some(r),
+            (Target::Ready(r), Some(Ok(s))) if s.table == r.table => Some(r),
+            _ => None,
+        };
+        let (row, col) = (t.grid.row, t.grid.col);
+        // What the column of the cursor's read row takes, once the table is known.
+        if !cell || row >= rs.rows.len() {
+            return true;
+        }
+        if batch.deleted(row) {
+            return false;
+        }
+        let Some(target) = target else { return true };
+        target.allows(col, Write::Update).is_ok_and(|c| column_refusal(a, c, String::new()).is_none())
     }
 
     /// An edit key that writes: refused with the reason when the result cannot be edited (now);
@@ -551,13 +618,9 @@ impl App {
         let Some((pid, format, bound)) = self.edit_gate() else { return };
         let t = self.tab();
         let Some(rs) = rows_of(t) else { return };
-        let empty = rs.edit.batch.is_empty();
         // What the rows are is read again while nothing is pending: the keys may have come or
         // changed since.
-        let source = empty.then(|| {
-            let cols: Vec<ColumnMeta> = rs.columns.iter().map(|c| c.meta.clone()).collect();
-            edit::source(self.tab_dialect(t.id), self.tab_keys(t).catalog(), &cols, t.shown_sql())
-        });
+        let source = self.edit_source(t, rs);
         let generation = self.conns.get(pid).map_or(0, |c| c.generation);
         let aux = self.open_aux(pid, bound.database.as_deref());
         let (tab, then) = (t.id, (a, (t.grid.row, t.grid.col), t.grid.anchor));
@@ -705,10 +768,10 @@ impl App {
         // The cursor's value: its pending one, else as read.
         let pending = rs.edit.batch.value(row, col).cloned();
         let stored = read.get(row - rows.start).and_then(|r| r.get(col)).cloned().flatten();
+        if let Some(why) = column_refusal(a, &c, name) {
+            return self.say_refused(why);
+        }
         match a {
-            EditAction::SetNull if c.column.not_null => self.say_refused(Msg::EditWhyNotNull { column: name }),
-            EditAction::SetDefault if !has_default(&c) => self.say_refused(Msg::EditWhyNoDefault { column: name }),
-            EditAction::SetDefault if new_number(&c) => self.say_refused(Msg::EditWhyNewNumber { column: name }),
             EditAction::SetNull => self.edit_write_cells(&cells, Value::Null),
             EditAction::SetDefault => self.edit_write_cells(&cells, Value::Default),
             EditAction::Cell if !c.column.enum_labels.is_empty() || c.kind == ValueKind::Bool => {
@@ -1304,8 +1367,12 @@ impl App {
 
     /// Why the result's rows cannot be edited, as the status line says it.
     fn say_why(&mut self, why: &Why) {
-        let reason = self.why_text(why);
-        self.flash(Notice::new(Msg::EditReadOnly { reason }, Level::Info));
+        let n = self.why_notice(why);
+        self.flash(n);
+    }
+
+    fn why_notice(&self, why: &Why) -> Notice {
+        Notice::new(Msg::EditReadOnly { reason: self.why_text(why) }, Level::Info)
     }
 
     /// Why the result's rows cannot be edited, in words.
@@ -1470,14 +1537,32 @@ impl App {
 
     /// The result is read-only now, for `why`.
     fn say_edit_read_only(&mut self, why: Label) {
-        let reason = self.i18n.label(why).to_string();
-        self.flash(Notice::new(Msg::EditReadOnly { reason }, Level::Info));
+        let n = self.read_only_notice(why);
+        self.flash(n);
+    }
+
+    fn read_only_notice(&self, why: Label) -> Notice {
+        Notice::new(Msg::EditReadOnly { reason: self.i18n.label(why).to_string() }, Level::Info)
     }
 
     /// This change cannot be made, for `why`.
     fn say_refused(&mut self, why: Msg) {
-        let reason = self.i18n.msg(&why).to_string();
-        self.flash(Notice::new(Msg::EditRefused { reason }, Level::Info));
+        let n = self.refused_notice(why);
+        self.flash(n);
+    }
+
+    fn refused_notice(&self, why: Msg) -> Notice {
+        Notice::new(Msg::EditRefused { reason: self.i18n.msg(&why).to_string() }, Level::Info)
+    }
+}
+
+/// Why `a` cannot set column `c` (named `column`) of a row read, whatever its rows are.
+fn column_refusal(a: EditAction, c: &TableColumn, column: String) -> Option<Msg> {
+    match a {
+        EditAction::SetNull if c.column.not_null => Some(Msg::EditWhyNotNull { column }),
+        EditAction::SetDefault if !has_default(c) => Some(Msg::EditWhyNoDefault { column }),
+        EditAction::SetDefault if new_number(c) => Some(Msg::EditWhyNewNumber { column }),
+        _ => None,
     }
 }
 
