@@ -2379,6 +2379,7 @@
 "edit.why.no_insert_column" = "no column of the result takes a value in a new row"
 "edit.why.clone_not_whole" = "{column} is not shown whole; it can't be copied"
 "edit.why.row_deleted" = "row {row} is marked for deletion"
+"edit.why.line_breaks" = "{column} mixes kinds of line break; it can't be edited here"
 "edit.several_columns" = "Select cells of one column to edit them together"
 "edit.mixed_rows" = "Select new rows or rows read, not both, to edit them together"
 "edit.delete_columns" = "Select rows (V) to delete them, not whole columns"

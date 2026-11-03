@@ -17,6 +17,21 @@ pub struct Lines {
     /// Where the box and the editor's text were drawn last (for the mouse).
     pub area: Rect,
     pub text_area: Rect,
+    /// The value's line breaks are `\r\n`: the editor's lines are joined with them again.
+    pub crlf: bool,
+}
+
+impl Lines {
+    /// The text typed so far, its lines joined as the value's were.
+    pub fn text(&self) -> String {
+        let text = self.editor.text();
+        if self.crlf { text.replace('\n', "\r\n") } else { text }
+    }
+}
+
+/// Whether `text`'s line breaks are all `\r\n` (some, and no other `\r` or `\n`).
+fn crlf(text: &str) -> bool {
+    text.contains("\r\n") && !text.replace("\r\n", "").contains(['\r', '\n'])
 }
 
 impl App {
@@ -26,8 +41,13 @@ impl App {
     }
 
     /// Open cell editor `e` in the active tab; with `lines`, `text` in the editor of several
-    /// lines (Normal mode, on the first line).
+    /// lines (Normal mode, on the first line). A text whose line breaks are not all `\n` or all
+    /// `\r\n` is not opened: the editor would not keep them.
     pub(super) fn open_cell_edit(&mut self, e: CellEdit, text: &str, lines: bool) {
+        if lines && text.contains('\r') && !crlf(text) {
+            let column = rows_of(self.tab()).and_then(|rs| rs.columns.get(e.at.1)).map(|c| c.meta.name.clone());
+            return self.say_refused(Msg::EditWhyLineBreaks { column: column.unwrap_or_default() });
+        }
         self.tabs.active_mut().cell_edit = Some(e);
         if lines {
             self.cell_edit_to_lines_at(text, false);
@@ -44,12 +64,13 @@ impl App {
     fn cell_edit_to_lines_at(&mut self, text: &str, typing: bool) {
         let lang = Language::Sql(self.tab_dialect(self.tab().id));
         let Some(e) = self.tabs.active_mut().cell_edit.as_mut() else { return };
-        let mut editor = Editor::new(text);
+        let crlf = crlf(text);
+        let mut editor = Editor::new(&if crlf { text.replace("\r\n", "\n") } else { text.to_string() });
         editor.set_language(lang);
         if typing {
             editor.handle_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT));
         }
-        e.lines = Some(Box::new(Lines { editor, ex: None, area: Rect::default(), text_area: Rect::default() }));
+        e.lines = Some(Box::new(Lines { editor, ex: None, area: Rect::default(), text_area: Rect::default(), crlf }));
     }
 
     fn cell_lines(&mut self) -> Option<&mut Lines> {

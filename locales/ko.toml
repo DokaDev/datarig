@@ -2373,6 +2373,7 @@
 "edit.why.no_insert_column" = "새 행에 값을 넣을 수 있는 열이 결과에 없습니다"
 "edit.why.clone_not_whole" = "{column} 값이 그대로 표시되지 않아 복사할 수 없습니다"
 "edit.why.row_deleted" = "{row}행은 삭제로 표시되어 있습니다"
+"edit.why.line_breaks" = "{column} 열은 줄바꿈 방식이 섞여 있어 여기서 편집할 수 없습니다"
 "edit.several_columns" = "함께 편집하려면 한 열의 셀만 선택하세요"
 "edit.mixed_rows" = "함께 편집하려면 새 행이나 읽은 행 중 한쪽만 선택하세요"
 "edit.delete_columns" = "삭제하려면 열 전체가 아닌 행을 선택하세요 (V)"

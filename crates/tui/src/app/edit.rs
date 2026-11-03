@@ -177,7 +177,7 @@ impl CellEdit {
     /// The text typed so far.
     pub fn text(&self) -> String {
         match &self.lines {
-            Some(l) => l.editor.text(),
+            Some(l) => l.text(),
             None => self.input.text().to_string(),
         }
     }

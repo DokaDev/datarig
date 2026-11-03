@@ -48,9 +48,14 @@ fn answer(h: &mut Harness, rows: Vec<Vec<Option<String>>>) {
 /// Resolved (the structure read on an `e` on the first email, cancelled), the cursor there,
 /// nothing sent or said since.
 fn ready(lang: Lang) -> Harness {
+    ready_with(lang, rows())
+}
+
+/// As [`ready`], the grid's rows `rows`.
+fn ready_with(lang: Lang, rows: Vec<Vec<Option<String>>>) -> Harness {
     let mut h = Harness::connected(lang);
     h.db(DbEvent::Keys(Ok(shop_keys())));
-    answer(&mut h, rows());
+    answer(&mut h, rows);
     h.keys("le");
     let name = h.app.profiles[0].name.clone();
     let result = Ok(Box::new(users_structure()));
@@ -357,4 +362,56 @@ fn the_keys_read_in_korean() {
     let screen = h.screen(80, 24);
     assert!(screen.contains(&ko(Label::EditLinesKeys).to_string()), "{screen}");
     assert!(screen.contains(&ko(Label::StatusModeNormal).to_string()), "{screen}");
+}
+
+/// The first two rows' nicknames: `first` and `second`.
+fn nicknames(first: &str, second: &str) -> Vec<Vec<Option<String>>> {
+    let mut rows = rows();
+    rows[0][2] = s(first);
+    rows[1][2] = s(second);
+    rows
+}
+
+#[test]
+fn a_value_of_windows_line_breaks_keeps_them() {
+    let mut h = ready_with(Lang::En, nicknames("one\r\ntwo", "a\r\nb\r\n"));
+    h.keys("le");
+    assert_eq!(h.app.key_context(), Ctx::CellEditor);
+    // Typed at the first line's end, and a line opened below it.
+    h.keys("A");
+    h.type_text("X");
+    h.key(KeyCode::Esc);
+    h.keys("o");
+    h.type_text("new");
+    h.key(KeyCode::Esc);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    assert_eq!(value(&h, 0, 2), Some(Value::Text("oneX\r\nnew\r\ntwo".into())), "\\r\\n throughout");
+    // Kept as it was: no change.
+    h.keys("je");
+    assert_eq!(h.app.key_context(), Ctx::CellEditor);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    assert_eq!(value(&h, 1, 2), None, "unchanged");
+}
+
+#[test]
+fn a_value_of_mixed_line_breaks_is_not_edited() {
+    for value in ["one\r\ntwo\nthree", "one\rtwo"] {
+        let mut h = ready_with(Lang::En, nicknames(value, "x"));
+        h.keys("le");
+        assert_eq!(h.app.key_context(), Ctx::Grid, "{value:?}");
+        let Some(Msg::EditRefused { reason }) = said(&mut h) else { panic!("refused: {value:?}") };
+        assert_eq!(reason, "nickname mixes kinds of line break; it can't be edited here");
+        assert!(edits(&h).batch.is_empty());
+    }
+}
+
+#[test]
+fn ctrl_k_does_not_open_the_command_line_over_it() {
+    let mut h = ready(Lang::En);
+    h.keys("lle");
+    h.ctrl('k');
+    assert_eq!(h.overlay_kind(), None, "no command line");
+    assert_eq!(h.app.key_context(), Ctx::CellEditor);
 }

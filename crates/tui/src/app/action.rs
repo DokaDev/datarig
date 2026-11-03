@@ -288,6 +288,12 @@ fn anywhere(_: &App) -> bool {
     true
 }
 
+/// The editor of a cell's value of several lines is not open: the command line's commands
+/// would act on the tab's text, not the cell's.
+fn not_in_cell_lines(a: &App) -> bool {
+    !a.cell_lines_open()
+}
+
 /// The platform can suspend the program (Unix).
 fn can_suspend(_: &App) -> bool {
     super::effects::SUSPEND_SUPPORTED
@@ -630,7 +636,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::SetLanguage(LangSetting::Auto), "ui.language.auto", Label::ActionUiLanguageAuto, anywhere),
     act(Action::FocusNext, "pane.next", Label::ActionPaneNext, panes),
     act(Action::FocusPrev, "pane.prev", Label::ActionPanePrev, panes),
-    act(Action::OpenCommands, "commands.open", Label::ActionCommandsOpen, anywhere),
+    act(Action::OpenCommands, "commands.open", Label::ActionCommandsOpen, not_in_cell_lines),
     act(Action::OpenMenu, "menu.open", Label::ActionMenuOpen, drawn),
     act(Action::Quit, "app.quit", Label::ActionAppQuit, anywhere),
     act(Action::Suspend, "app.suspend", Label::ActionAppSuspend, can_suspend),
