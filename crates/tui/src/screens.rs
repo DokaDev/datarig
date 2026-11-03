@@ -16,7 +16,7 @@ use crate::widgets::dialog::{draw_busy, draw_confirm, draw_prompt};
 use crate::widgets::form::draw_profile_form;
 use crate::widgets::guide::{draw_help, draw_which_key};
 use crate::widgets::menu::draw_context_menu;
-use crate::widgets::popup::draw_viewer;
+use crate::widgets::popup::{draw_cell_editor, draw_viewer};
 use crate::widgets::quick::draw_quick_connect;
 use datarig_core::i18n::Msg;
 use ratatui::Frame;
@@ -50,7 +50,16 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 /// The workspace below the overlays; returns where the hardware cursor belongs.
 pub fn draw_screen(f: &mut Frame, app: &mut App) -> Option<(u16, u16)> {
     let _theme = theme::scope(app.theme.clone());
-    draw_workspace(f, app)
+    let cursor = draw_workspace(f, app);
+    if !app.cell_lines_open() {
+        return cursor;
+    }
+    // The editor of a cell's value of several lines, over the workspace dimmed (the status line
+    // stays as it is: it says why a text was not taken).
+    let area = f.area();
+    let content = Rect::new(area.x, area.y, area.width, area.height - 1);
+    theme::cur().dim_area(f.buffer_mut(), content);
+    draw_cell_editor(app, content, f.buffer_mut())
 }
 
 /// The overlays, bottom to top, on the screen drawn by [`draw_screen`]. Each one clears only

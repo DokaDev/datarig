@@ -333,6 +333,7 @@ impl App {
             Ctx::ExplorerFilter => keys.iter().for_each(|k| self.explorer_filter_key(k.to_event())),
             Ctx::GridSearch => keys.iter().for_each(|k| self.grid_prompt_key(k.to_event())),
             Ctx::CellEdit => keys.iter().for_each(|k| self.cell_edit_key(k.to_event())),
+            Ctx::CellEditor => keys.iter().for_each(|k| self.cell_lines_key(k.to_event())),
             Ctx::QuickConnect => keys.iter().for_each(|k| self.quick_key(k.to_event(), repeat)),
             Ctx::TabList => keys.iter().for_each(|k| self.tab_list_key(k.to_event(), repeat)),
             Ctx::Chooser | Ctx::ChooserFilter => keys.iter().for_each(|k| self.chooser_key(k.to_event(), repeat)),
@@ -590,24 +591,16 @@ impl App {
         }
     }
 
-    pub(super) fn editor_key(&mut self, key: KeyEvent) {
-        // The system clipboard is read only for the command that puts it (`"+p`).
-        if self.tab().editor.reads_clipboard(&key) {
-            let text = self.editor_clipboard_text();
-            self.tab_mut().editor.set_clipboard_text(text.as_deref());
-        }
-        let pairs = self.prefs.auto_pairs == datarig_core::config::AutoPairs::On;
-        let soft_tab = self.prefs.soft_tab_backspace == datarig_core::config::SoftTabBackspace::On;
-        let t = self.tabs.active_mut();
-        t.editor.auto_pairs = pairs;
-        t.editor.soft_tab_backspace = soft_tab;
-        let ev = t.editor.handle_key(key);
-        let refused = t.editor.take_refused();
-        let problem = t.editor.take_register_problem();
-        let search = t.editor.take_search_notice();
-        let mark = t.editor.take_mark_notice();
-        let ex = t.editor.take_ex_notice();
-        if let Some(y) = t.editor.take_yank() {
+    /// What editor `ed` (the active tab's, or the cell editor's of several lines) has to say
+    /// after a key: a register it could not use, a search's, a mark's or an editor command's
+    /// notice; a yank goes to the system clipboard as `[editor] clipboard` says.
+    pub(super) fn editor_said(&mut self, ed: fn(&mut Self) -> Option<&mut crate::widgets::editor::Editor>) {
+        let Some(e) = ed(self) else { return };
+        let problem = e.take_register_problem();
+        let search = e.take_search_notice();
+        let mark = e.take_mark_notice();
+        let ex = e.take_ex_notice();
+        if let Some(y) = e.take_yank() {
             self.editor_yanked(y);
         }
         if let Some(p) = problem {
@@ -630,6 +623,22 @@ impl App {
         if let Some(e) = ex {
             self.flash(Notice::new(super::cmdline::ex_error(e), Level::Error));
         }
+    }
+
+    pub(super) fn editor_key(&mut self, key: KeyEvent) {
+        // The system clipboard is read only for the command that puts it (`"+p`).
+        if self.tab().editor.reads_clipboard(&key) {
+            let text = self.editor_clipboard_text();
+            self.tab_mut().editor.set_clipboard_text(text.as_deref());
+        }
+        let pairs = self.prefs.auto_pairs == datarig_core::config::AutoPairs::On;
+        let soft_tab = self.prefs.soft_tab_backspace == datarig_core::config::SoftTabBackspace::On;
+        let t = self.tabs.active_mut();
+        t.editor.auto_pairs = pairs;
+        t.editor.soft_tab_backspace = soft_tab;
+        let ev = t.editor.handle_key(key);
+        let refused = t.editor.take_refused();
+        self.editor_said(|a| Some(&mut a.tab_mut().editor));
         if refused {
             self.say_read_only();
         }
@@ -749,7 +758,7 @@ impl App {
         let inside = |r: Rect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
         let l = self.layout;
         // The wheel over the grid closes the cell editor, changing nothing (as `Esc` does): it
-        // would scroll off its cell.
+        // would scroll off its cell. The editor of several lines closes on any wheel.
         let wheel = matches!(
             m.kind,
             MouseEventKind::ScrollDown
@@ -757,7 +766,7 @@ impl App {
                 | MouseEventKind::ScrollLeft
                 | MouseEventKind::ScrollRight
         );
-        if wheel && inside(l.results) && self.cell_edit_open() {
+        if wheel && (inside(l.results) || self.cell_lines_open()) && self.cell_edit_open() {
             self.tabs.active_mut().cell_edit = None;
         }
         match m.kind {

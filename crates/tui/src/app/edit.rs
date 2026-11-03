@@ -8,8 +8,10 @@
 //! what may have changed since (the connection, its environment, the statement's table), and
 //! refuses with the reason, once per press, changing nothing.
 //!
-//! A cell is edited in a line drawn over it (`Ctx::CellEdit`), an enum or boolean column's in a
-//! list of its values. Cells selected in one column take the same value, as one change.
+//! A cell is edited in a line drawn over it (`Ctx::CellEdit`), a value of several lines or a
+//! JSON column's in the query editor's widget in a box (`Ctx::CellEditor`, [`lines`]), an enum or
+//! boolean column's in a list of its values. Cells selected in one column take the same value,
+//! as one change.
 //!
 //! New rows are added (every value the column's default, or a copy of the cursor's row) and
 //! shown after the rows read, in the order they were added; rows read are marked to be deleted,
@@ -21,13 +23,17 @@ use crate::widgets::grid::Shape;
 use crate::widgets::list_picker::{Entry, ListPicker, Outcome};
 use crate::widgets::text_input::InputResult;
 use datarig_core::driver::structure::{ColumnFill, TableStructure};
-use datarig_core::driver::{Cell, ColumnMeta, DbError, EditFormat, ValueKind};
+use datarig_core::driver::{ArrayElement, Cell, ColumnMeta, DbError, EditFormat, ValueKind};
 use datarig_core::edit::{
     self, ColumnReason, EditBatch, EditSource, EditTarget, Identity, Invalid, ReadOnly, TableColumn, Value, Write,
 };
 use datarig_core::export;
 use ratatui::style::{Color, Style};
 use std::ops::Range;
+
+mod lines;
+
+pub use lines::Lines;
 
 /// What an edit key does to the cursor's cell (or the cells selected in one column).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,6 +157,8 @@ pub struct CellEdit {
     pub at: (RowAt, usize),
     pub cells: Vec<(RowAt, usize)>,
     pub input: TextInput,
+    /// The text in the editor of several lines, which takes the place of `input` once open.
+    pub lines: Option<Box<Lines>>,
     /// Why the text typed was not taken.
     pub error: Option<String>,
 }
@@ -165,6 +173,20 @@ impl CellEdit {
     fn new_row(&self) -> bool {
         matches!(self.at.0, RowAt::New(_))
     }
+
+    /// The text typed so far.
+    pub fn text(&self) -> String {
+        match &self.lines {
+            Some(l) => l.editor.text(),
+            None => self.input.text().to_string(),
+        }
+    }
+}
+
+/// Whether column `c`'s values are edited in several lines whatever they hold: JSON, an array
+/// of JSON values.
+fn in_lines(c: &TableColumn) -> bool {
+    matches!(c.kind, ValueKind::Json | ValueKind::Array(ArrayElement::Json))
 }
 
 /// The row result tab `t` shows.
@@ -616,13 +638,14 @@ impl App {
                     Some(Value::Null | Value::Default) => String::new(),
                     None => stored.unwrap_or_default(),
                 };
-                if text.contains(['\n', '\r']) {
-                    return self.flash(Notice::new(Label::EditSeveralLines, Level::Info));
-                }
                 let result = rs.id;
                 let at = (RowAt::Read(row), col);
-                self.tabs.active_mut().cell_edit =
-                    Some(CellEdit { result, at, cells, input: TextInput::new(&text), error: None });
+                let lines = text.contains(['\n', '\r']) || in_lines(&c);
+                self.open_cell_edit(
+                    CellEdit { result, at, cells, input: TextInput::new(&text), lines: None, error: None },
+                    &text,
+                    lines,
+                );
             }
             _ => {}
         }
@@ -666,12 +689,14 @@ impl App {
                     Some(Value::Text(s)) => s,
                     _ => String::new(),
                 };
-                if text.contains(['\n', '\r']) {
-                    return self.flash(Notice::new(Label::EditSeveralLines, Level::Info));
-                }
                 let result = rs.id;
-                self.tabs.active_mut().cell_edit =
-                    Some(CellEdit { result, at: (at, col), cells, input: TextInput::new(&text), error: None });
+                let lines = text.contains(['\n', '\r']) || in_lines(&c);
+                let input = TextInput::new(&text);
+                self.open_cell_edit(
+                    CellEdit { result, at: (at, col), cells, input, lines: None, error: None },
+                    &text,
+                    lines,
+                );
             }
             _ => {}
         }
@@ -918,8 +943,8 @@ impl App {
     }
 
     /// A key while the cell editor is open: `Enter` keeps the text (an empty one is the empty
-    /// string), `Esc` cancels, `Ctrl+N` sets NULL and `Ctrl+D` the default; any other key edits
-    /// the text.
+    /// string), `Esc` cancels, `Ctrl+N` sets NULL and `Ctrl+D` the default, `Ctrl+L` takes the
+    /// text to the editor of several lines; any other key edits the text.
     pub(super) fn cell_edit_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
@@ -927,6 +952,7 @@ impl App {
             KeyCode::Enter => self.cell_edit_enter(),
             KeyCode::Char('n') if ctrl => self.cell_edit_value(Value::Null),
             KeyCode::Char('d') if ctrl => self.cell_edit_value(Value::Default),
+            KeyCode::Char('l') if ctrl => self.cell_edit_to_lines(),
             _ => {
                 if let Some(e) = self.tabs.active_mut().cell_edit.as_mut()
                     && e.input.handle_key(&key) == InputResult::Changed
@@ -943,6 +969,9 @@ impl App {
     pub(super) fn cell_edit_click(&mut self, x: u16, y: u16, left: bool) -> bool {
         if !self.cell_edit_open() {
             return false;
+        }
+        if self.cell_lines_open() {
+            return self.cell_lines_click(x, y, left);
         }
         let t = self.tab();
         let over = match (&t.results, &t.cell_edit) {
@@ -962,8 +991,11 @@ impl App {
         inside
     }
 
-    /// Text pasted into the cell editor: one line only.
+    /// Text pasted into the cell editor: one line only (the editor of several lines takes any).
     pub(super) fn cell_edit_paste(&mut self, text: &str) {
+        if self.cell_lines_open() {
+            return self.cell_lines_paste(text);
+        }
         if text.contains(['\n', '\r']) {
             return self.flash(Notice::new(Label::EditPasteLines, Level::Info));
         }
@@ -973,13 +1005,14 @@ impl App {
         }
     }
 
-    /// `Enter` in the cell editor: the text, when it is a value of the column's type.
+    /// `Enter` in the cell editor (`Enter` in Normal mode or `:w` in the editor of several lines):
+    /// the text, when it is a value of the column's type.
     fn cell_edit_enter(&mut self) {
         let Some((cells, c)) = self.cell_edit_column().filter(|_| self.edit_gate().is_some()) else {
             self.tabs.active_mut().cell_edit = None;
             return;
         };
-        let text = self.tab().cell_edit.as_ref().map(|e| e.input.text().to_string()).unwrap_or_default();
+        let text = self.tab().cell_edit.as_ref().map(CellEdit::text).unwrap_or_default();
         let d = self.tab_dialect(self.tab().id);
         if let Err(reason) = self.typed_whole(d, &text).and_then(|_| self.typed_ok(d, &c, &text)) {
             if let Some(e) = self.tabs.active_mut().cell_edit.as_mut() {

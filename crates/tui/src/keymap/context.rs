@@ -22,6 +22,7 @@
 //! │  ├─ grid.search           [text]   (the grid's `/` and `?` prompt)
 //! │  ├─ grid.edit             [text]   (the cell editor over a cell of the grid)
 //! │  └─ overlay.cell_viewer
+//! ├─ overlay.cell_editor    [text]   (a cell's value of several lines, in vim modes)
 //! └─ overlay.*              (which-key, help, help filter, command line, quick connect,
 //!                            tab list, profile form, settings, export dialog, chooser, chooser filter, name input,
 //!                            saved-queries tree and its name field, action menu, password,
@@ -71,6 +72,7 @@ pub enum Ctx {
     IconsAsk,
     Busy,
     CellViewer,
+    CellEditor,
     Completion,
     WhichKey,
     Help,
@@ -78,7 +80,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 43] = [
+    pub const ALL: [Ctx; 44] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -118,6 +120,7 @@ impl Ctx {
         Ctx::IconsAsk,
         Ctx::Busy,
         Ctx::CellViewer,
+        Ctx::CellEditor,
         Ctx::Completion,
         Ctx::WhichKey,
         Ctx::Help,
@@ -166,6 +169,7 @@ impl Ctx {
             Ctx::IconsAsk => "overlay.icons_ask",
             Ctx::Busy => "overlay.busy",
             Ctx::CellViewer => "overlay.cell_viewer",
+            Ctx::CellEditor => "overlay.cell_editor",
             Ctx::Completion => "overlay.completion",
             Ctx::WhichKey => "overlay.which_key",
             Ctx::Help => "overlay.help",
@@ -217,6 +221,7 @@ impl Ctx {
                 | Ctx::ExplorerFilter
                 | Ctx::GridSearch
                 | Ctx::CellEdit
+                | Ctx::CellEditor
                 | Ctx::Commands
                 | Ctx::QuickConnect
                 | Ctx::TabList
@@ -270,7 +275,7 @@ impl Ctx {
                 "The search prompt of `/` and `?` on the line under the grid: the cursor goes to the first matching cell while the pattern is typed, `Enter` searches (an empty pattern: the last one), `Esc` goes back to where the cursor was, `Ctrl+W` deletes the word before the cursor. The full values are searched as fetched (not the shown cut), cell by cell, row by row."
             }
             Ctx::CellEdit => {
-                "The cell editor (`e` in the grid) over the cell: one line, the cell's pending value or its value as read. `Enter` keeps the text (an empty text is the empty string, never NULL), `Esc` cancels, `Ctrl+N` sets NULL, `Ctrl+D` the column's default. With cells of one column selected, each takes the value, as one change (`u` undoes it). A value of several lines is not edited here; an enum or boolean column lists its values instead."
+                "The cell editor (`e` in the grid) over the cell: one line, the cell's pending value or its value as read. `Enter` keeps the text (an empty text is the empty string, never NULL), `Esc` cancels, `Ctrl+N` sets NULL, `Ctrl+D` the column's default. With cells of one column selected, each takes the value, as one change (`u` undoes it). `Ctrl+L` takes the text typed so far to the editor of several lines. A value of several lines, and a JSON column's, opens that editor instead; an enum or boolean column lists its values."
             }
             Ctx::Inspector => {
                 "The result inspector next to the grid, after a click on it: `j`/`k` move between the columns and the grid's cell follows (on the Row tab, a click on a column moves it there too), `Enter` shows the value whole."
@@ -346,6 +351,9 @@ impl Ctx {
                 "A notice that waits for background work (the launch-time move of passwords to the keychain); `Ctrl+C` quits there too."
             }
             Ctx::CellViewer => "Cell value viewer.",
+            Ctx::CellEditor => {
+                "The editor of a cell's value of several lines (a value with line breaks, a JSON column's, or `Ctrl+L` in the cell editor), in a box over the screen: the query editor's vim modes, its `/` search, `:s` and registers (a yank goes to the system clipboard as `[editor] clipboard` says). In Normal mode `Enter` or `:w` (`:wq`, `:x`) keeps the text, as `Enter` in the cell editor does (line breaks as typed); `Esc` or `:q` (`:q!`) cancels. With cells of one column selected, each takes the value, as one change. A click outside the box or the wheel closes it, changing nothing."
+            }
             Ctx::Completion => "Completion popup in the editor (keys it does not use go to the editor).",
             Ctx::WhichKey => "Which-key popup of an unfinished leader sequence (other keys continue the sequence).",
             Ctx::Help => {
@@ -397,6 +405,7 @@ impl Ctx {
             Ctx::IconsAsk => Label::KeyctxOverlayIconsAsk,
             Ctx::Busy => Label::KeyctxOverlayBusy,
             Ctx::CellViewer => Label::KeyctxOverlayCellViewer,
+            Ctx::CellEditor => Label::KeyctxOverlayCellEditor,
             Ctx::Completion => Label::KeyctxOverlayCompletion,
             Ctx::WhichKey => Label::KeyctxOverlayWhichKey,
             Ctx::Help => Label::KeyctxOverlayHelp,

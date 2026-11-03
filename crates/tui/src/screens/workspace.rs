@@ -1356,6 +1356,7 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     let t = app.tabs.active_mut();
     if let (Results::Rows(rs), Some(e)) = (&t.results, t.cell_edit.as_mut())
         && e.result == rs.id
+        && e.lines.is_none()
         && let Some((row, col)) = e.shown_at(rs)
         && let Some(cell) = t.grid.cell_rect(row, col, rs.rows.len())
     {

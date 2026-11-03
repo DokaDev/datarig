@@ -232,18 +232,6 @@ fn esc_cancels_and_a_paste_of_several_lines_is_refused() {
 }
 
 #[test]
-fn a_value_of_several_lines_does_not_open_the_editor() {
-    let mut h = Harness::connected(Lang::En);
-    h.db(DbEvent::Keys(Ok(shop_keys())));
-    let rows = vec![vec![s("1"), s("one\ntwo"), None]];
-    answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), rows);
-    h.keys("le");
-    structure(&mut h, Ok(users_structure()));
-    assert_eq!(said(&mut h), Some(Label::EditSeveralLines.into()));
-    assert_eq!(h.app.key_context(), Ctx::Grid);
-}
-
-#[test]
 fn cells_selected_in_one_column_take_the_value_as_one_change() {
     let mut h = ready(Lang::En);
     h.keys("vjj");

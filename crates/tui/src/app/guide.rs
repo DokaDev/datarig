@@ -16,6 +16,7 @@ const CELL_EDIT_KEYS: &[(&str, Label)] = &[
     ("esc", Label::HintCancel),
     ("ctrl+n", Label::HintEditNull),
     ("ctrl+d", Label::HintEditDefault),
+    ("ctrl+l", Label::HintEditLines),
 ];
 
 /// The which-key popup: the keys that may follow `prefix`.
