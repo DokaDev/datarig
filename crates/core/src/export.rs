@@ -434,6 +434,18 @@ fn negative_zero(s: &str) -> bool {
 /// are always quoted. An unknown table is written as [`TABLE_PLACEHOLDER`] with the result's
 /// column names.
 pub fn sql_insert(d: Dialect, target: &Target, columns: &[Column], rows: &[Row]) -> String {
+    sql_insert_with(d, target, columns, rows, &|_, _| false)
+}
+
+/// [`sql_insert`], writing `DEFAULT` for each value `default(row, column)` says (by its place in
+/// `rows` and `columns`): a value left to the column's default, which has none yet.
+pub fn sql_insert_with(
+    d: Dialect,
+    target: &Target,
+    columns: &[Column],
+    rows: &[Row],
+    default: &dyn Fn(usize, usize) -> bool,
+) -> String {
     let (table, names, overriding): (String, Vec<&str>, bool) = match target {
         Target::Table { schema, name, columns: cols, overriding } => {
             (format!("{}.{}", d.force_quote_ident(schema), d.force_quote_ident(name)), cols.clone(), *overriding)
@@ -447,8 +459,15 @@ pub fn sql_insert(d: Dialect, target: &Target, columns: &[Column], rows: &[Row])
     let list = names.iter().map(|n| d.force_quote_ident(n)).collect::<Vec<_>>().join(", ");
     let value = |c: &Column, v: Option<&str>| sql_value(d, c.kind, v);
     rows.iter()
-        .map(|r| {
-            let values = columns.iter().zip(r).map(|(c, v)| value(c, *v)).collect::<Vec<_>>().join(", ");
+        .enumerate()
+        .map(|(i, r)| {
+            let values = columns
+                .iter()
+                .zip(r)
+                .enumerate()
+                .map(|(j, (c, v))| if default(i, j) { "DEFAULT".to_string() } else { value(c, *v) })
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("INSERT INTO {table} ({list}){overriding} VALUES ({values});")
         })
         .collect::<Vec<_>>()
