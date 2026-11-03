@@ -663,7 +663,7 @@ pub fn render(
     if let Some((r, c, at)) = st.reveal.take()
         && (r, c) == (st.row, st.col)
         && !st.detached
-        && let CellRef::Here(Some(v)) = rs.cell(r, c)
+        && let Shown::Text(Some(v)) = rs.shown(r, c)
     {
         let (text, w) = (sanitize_cell(v), widths[c]);
         let tw = width(&text);

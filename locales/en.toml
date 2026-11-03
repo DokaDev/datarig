@@ -686,6 +686,7 @@
 "explorer.delete_password_keychain" = "Its password saved in the OS keychain is removed too."
 "explorer.delete_password_file" = "Its password saved in the secrets file is removed too."
 "explorer.delete_tabs" = { one = "Its open tab will close.", other = "Its {count} open tabs will close." }
+"explorer.delete_pending" = { one = "{count} pending change of the results is dropped.", other = "{count} pending changes of the results are dropped." }
 "explorer.delete_tab_running" = "A query is still running in tab {tab}. Deleting cancels it; its results are lost."
 "explorer.delete_tab_tx" = "A transaction is open in tab {tab}. Deleting rolls it back; its uncommitted changes are lost."
 "explorer.delete_tab_running_tx" = "A query is running and a transaction is open in tab {tab}. Deleting cancels the query and rolls the transaction back; uncommitted changes are lost."
@@ -1144,6 +1145,7 @@
 "copy.with_deletes" = { one = "{done} (with pending changes; {count} row to be deleted)", other = "{done} (with pending changes; {count} rows to be deleted)" }
 "copy.pending_default" = "Not copied: {column} has a pending DEFAULT, which has no value yet"
 "copy.rerun" = "Not copied: {column} shows “re-run to see”; run the query again to copy it"
+"copy.applied_default" = "Not copied: {column} shows “default”; run the query again to copy its value"
 "copy.selecting" = "Selecting: move to extend · {copy} copies · {cancel} cancels"
 "copy.confirm.title" = "Copy this many rows?"
 "copy.confirm.text" = { one = "Copy {count} row? A copy this big can make the clipboard or the terminal slow. Only the rows fetched so far are copied.", other = "Copy {count} rows? A copy this big can make the clipboard or the terminal slow. Only the rows fetched so far are copied." }
@@ -1828,6 +1830,7 @@
 "chart.unsuitable.one_point" = "Only one point to draw: nothing to compare it with."
 "chart.keys_hint" = "{x} X column · {y} values · {by} series by a column · {kind} kind"
 "chart.unreadable" = "The rows could not be read from the result's spill file; the error log has the details."
+"chart.edited" = "Not drawn: this result has pending or applied changes. Run the query again to chart the edited values."
 "chart.too_small" = "Too small to draw a chart."
 "chart.note.nulls" = { one = "{count} NULL skipped", other = "{count} NULLs skipped" }
 "chart.note.not_numbers" = { one = "{count} value not a number skipped", other = "{count} values not numbers skipped" }
@@ -1968,6 +1971,8 @@
 "export.bad_delimiter" = "Not exported: a double quote or a line break cannot separate CSV values"
 "export.bad_null" = "Not exported: the text for NULL holds the delimiter, a double quote or a line break"
 "export.nothing" = "Nothing to export: the tab shows no rows"
+"export.edited" = "Not exported: this result has pending or applied changes; apply or discard them, or run the query again"
+"export.pending_left_out" = "The pending changes are not in the file: every row is read again from the server"
 "export.stale" = "Not exported: the result is not from this tab's session as it is now; run the statement again first"
 "export.unsupported_driver" = "This connection's driver cannot read every row for an export; export the fetched rows (:export fetched)"
 "export.tx_aborted" = "Not exported: the transaction is aborted (a statement in it failed); end it with ROLLBACK first"

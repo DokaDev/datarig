@@ -751,12 +751,18 @@ impl App {
         };
         // Every row of a result fetched to its end is the rows fetched.
         let db = req.scope == ExportScope::All && b.partial;
-        let (intent, read_in, snapshot) = {
+        let (intent, read_in, snapshot, pending) = {
             let t = self.tab();
             let Results::Rows(rs) = &t.results else { return };
+            // The rows held are written as read, not as the grid shows them over pending or
+            // applied changes: refused. Every row read again holds the applied ones.
+            if !db && (!rs.edit.batch.is_empty() || rs.edit.applied.is_some()) {
+                return self.flash(Notice::new(Label::ExportEdited, Level::Warning));
+            }
+            let pending = !rs.edit.batch.is_empty();
             let read_in = if db { ReadIn::first(t.exec.values.as_ref()) } else { rs.read_in.clone() };
             let snapshot = if db { None } else { Some(rs.rows.snapshot(b.rows.clone())) };
-            (Intent::of(t), read_in, snapshot)
+            (Intent::of(t), read_in, snapshot, pending)
         };
         let spec = match self.export_spec(&b.cols, &req, &read_in) {
             Ok(s) => s,
@@ -772,6 +778,9 @@ impl App {
         };
         if db && let Err(n) = self.export_db_checks(id) {
             return self.tab_status(id, n);
+        }
+        if db && pending {
+            self.flash(Notice::new(Label::ExportPendingLeftOut, Level::Warning));
         }
         self.exports.seq += 1;
         let total = snapshot.as_ref().map(|s| (s.len() as u64, true));

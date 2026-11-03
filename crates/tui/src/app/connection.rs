@@ -606,6 +606,12 @@ impl App {
         if count > 0 {
             details.push(Msg::ExplorerDeleteTabs { count });
         }
+        // Its tabs close at once: their results' pending changes go without another question.
+        let pending: u64 =
+            self.tabs.iter().filter(|t| t.profile == Some(id)).map(|t| self.pending_in(Some(t.id))).sum();
+        if pending > 0 {
+            details.push(Msg::ExplorerDeletePending { count: pending });
+        }
         for (i, t) in self.tabs.iter().enumerate().filter(|(_, t)| t.profile == Some(id)) {
             let tab = (i + 1).to_string();
             details.extend(match (t.exec.running.is_some(), t.exec.tx_at_risk(), self.is_queued(t.id)) {

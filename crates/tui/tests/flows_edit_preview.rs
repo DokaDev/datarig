@@ -1758,3 +1758,138 @@ fn the_hint_line_offers_no_view_on_a_new_row() {
     h.keys("k");
     assert!(view(&h));
 }
+
+/// An export of the rows held would write them as read, not as the grid shows them: refused
+/// while some are pending or applied, in every scope that writes them and every format.
+#[test]
+fn an_export_of_the_rows_held_is_refused_while_they_are_edited() {
+    let dir = std::env::temp_dir().join(format!("datarig-edit-export-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let refused =
+        "Not exported: this result has pending or applied changes; apply or discard them, or run the query again";
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    let (pending, id, steps) = three_applying(ready(Lang::En));
+    let mut applied_h = pending;
+    applied_h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+    applied_h.app.transient = None;
+    for (n, h) in [&mut h, &mut applied_h].into_iter().enumerate() {
+        for (i, (format, scope)) in
+            [("csv", "fetched"), ("json", "selection"), ("xlsx", "all"), ("insert", "fetched")].into_iter().enumerate()
+        {
+            let path = dir.join(format!("{n}-{i}.out"));
+            if scope == "selection" {
+                h.keys("ggvj");
+            }
+            h.command(&format!("export {format} {scope} {}", path.display()));
+            assert_eq!(said_text(h), refused, "{format} {scope}");
+            assert!(!h.app.exporting(h.app.tab().id), "{format} {scope}");
+            assert!(!path.exists(), "{format} {scope}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every row read again from the server: allowed, but it says the pending changes are not in
+/// the file.
+#[test]
+fn an_export_of_every_row_says_the_pending_changes_are_left_out() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.app.run(vec!["SELECT id, email, nickname FROM shop.users".into()]);
+    let qid = h.app.tab().exec.query_id;
+    h.db(DbEvent::Page {
+        id: qid,
+        columns: Some(users_columns()),
+        rows: users_rows(),
+        more: true,
+        elapsed: Duration::ZERO,
+    });
+    h.app.focus = Focus::Results;
+    h.keys("le");
+    structure(&mut h, named());
+    h.key(KeyCode::Esc);
+    h.app.transient = None;
+    type_cell(&mut h, "z@x");
+    h.app.transient = None;
+    let path = std::env::temp_dir().join(format!("datarig-edit-export-all-{}.csv", std::process::id()));
+    h.command(&format!("export csv all {}", path.display()));
+    let note = "The pending changes are not in the file: every row is read again from the server";
+    let details: Vec<String> = h
+        .app
+        .overlays
+        .confirm()
+        .map(|c| c.details.iter().map(|d| h.app.i18n.msg(d).to_string()).collect())
+        .unwrap_or_default();
+    let s = said_text(&mut h);
+    assert!(s == note || details.iter().any(|d| d == note), "{s} / {details:?}");
+    assert!(h.app.exporting(h.app.tab().id), "the export goes on");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The chart would draw the values as read: while some are pending or applied it says why it
+/// draws nothing.
+#[test]
+fn the_chart_draws_nothing_while_the_rows_are_edited() {
+    let why = "Not drawn: this result has pending or applied changes. Run the query again to chart the edited values.";
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.keys("c");
+    let s = screen(&mut h, 160, 40);
+    assert!(s.contains(why), "{s}");
+    let (mut h, id, steps) = three_applying(ready(Lang::En));
+    h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+    h.app.transient = None;
+    h.keys("c");
+    let s = screen(&mut h, 160, 40);
+    assert!(s.contains(why), "{s}");
+    // Without changes it draws again.
+    let mut h = ready(Lang::En);
+    h.keys("c");
+    let s = screen(&mut h, 160, 40);
+    assert!(!s.contains(why), "{s}");
+}
+
+/// Deleting the profile closes its tabs: the question says how many pending changes go.
+#[test]
+fn deleting_the_profile_says_the_pending_changes_it_drops() {
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.keys("jD");
+    let name = h.app.profiles[0].name.clone();
+    h.explore(&name);
+    h.keys("d");
+    let details: Vec<String> = h
+        .app
+        .overlays
+        .confirm()
+        .map(|c| c.details.iter().map(|d| h.app.i18n.msg(d).to_string()).collect())
+        .unwrap_or_default();
+    assert!(details.iter().any(|d| d == "2 pending changes of the results are dropped."), "{details:?}");
+}
+
+/// A value an Apply wrote as DEFAULT is shown `default`: a copy says that, not `re-run to see`.
+#[test]
+fn a_copy_of_an_applied_default_says_default() {
+    let mut st = named();
+    st.columns[3].default = Some("'anon'::text".into());
+    let mut h = resolved(
+        Harness::connected(Lang::En),
+        "SELECT id, email, nickname FROM shop.users",
+        users_columns(),
+        users_rows(),
+        st,
+    );
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.keys("l");
+    h.keys(" dD");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, _) = applies(&mut h);
+    h.db(DbEvent::Applied { id, result: Ok(stood(&steps)) });
+    h.app.transient = None;
+    h.keys("y");
+    assert_eq!(clip.last(), None, "not copied");
+    assert_eq!(said_text(&mut h), "Not copied: nickname shows “default”; run the query again to copy its value");
+}

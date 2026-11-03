@@ -1022,7 +1022,8 @@ fn over_block(rs: &ResultSet, b: &Block, insert: bool) -> Result<(bool, u64), Ms
                 Some(Over::Pending(Value::Default)) if !insert => {
                     return Err(Msg::CopyPendingDefault { column: column() });
                 }
-                Some(Over::Rerun | Over::Applied(Value::Default)) => return Err(Msg::CopyRerun { column: column() }),
+                Some(Over::Rerun) => return Err(Msg::CopyRerun { column: column() }),
+                Some(Over::Applied(Value::Default)) => return Err(Msg::CopyAppliedDefault { column: column() }),
                 Some(Over::Pending(_)) => pending = true,
                 Some(Over::Applied(_)) | None => {}
             }

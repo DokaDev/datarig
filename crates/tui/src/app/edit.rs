@@ -1325,7 +1325,7 @@ impl App {
 
     /// How many changes are pending in tab `tab`'s results (shown or parked), or in every tab's
     /// (`None`); not those being applied.
-    fn pending_in(&self, tab: Option<TabId>) -> u64 {
+    pub(super) fn pending_in(&self, tab: Option<TabId>) -> u64 {
         let pending = |t: &Tab| {
             let shown = match &t.results {
                 Results::Rows(rs) => Some(rs),

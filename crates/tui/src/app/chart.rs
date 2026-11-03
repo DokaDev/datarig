@@ -59,6 +59,8 @@ pub struct Source {
     pub result: u64,
     pub rows: usize,
     pub spec: Spec,
+    /// Some of its values were pending or applied changes (not drawn).
+    pub edited: bool,
 }
 
 /// What the Chart tab draws.
@@ -68,6 +70,8 @@ pub enum Drawn {
     Unsuitable(Unsuitable),
     /// The rows could not be read (the spill file).
     Unreadable(datarig_core::fault::Fault),
+    /// The rows are drawn as read only: some of their values are pending or applied changes.
+    Edited,
 }
 
 /// A line chart drawn in braille dots, kept until its numbers or its size change.
@@ -162,11 +166,13 @@ impl ChartTab {
         // The scale and the bars' direction draw the same numbers.
         let kind = if self.spec.kind.bars() { Kind::Bar } else { Kind::Line };
         let spec = Spec { kind, log: false, ..self.spec.clone() };
-        let source = Source { result: rs.id, rows: rs.rows.len(), spec };
+        let edited = !rs.edit.batch.is_empty() || rs.edit.applied.is_some();
+        let source = Source { result: rs.id, rows: rs.rows.len(), spec, edited };
         if self.built.as_ref().is_some_and(|(s, _)| *s == source) {
             return;
         }
         let drawn = match self.unsuitable {
+            _ if edited => Drawn::Edited,
             Some(u) => Drawn::Unsuitable(u),
             None => {
                 let columns: Vec<datarig_core::driver::ColumnMeta> =

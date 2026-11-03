@@ -1835,3 +1835,40 @@ fn recover_keeps_a_closed_consoles_number() {
     assert_eq!(h.app.tab().editor.text(), "select 3");
     assert_eq!(h.app.tab().doc.console_no, 3, "back under its own number");
 }
+
+/// Deleting a saved query closes its tab: the question says how many pending changes of its
+/// results go with it.
+#[test]
+fn deleting_a_saved_query_says_the_pending_changes_it_drops() {
+    use datarig_tui::app::Results;
+    let dirs = Dirs::new("delete-pending");
+    let cfg = config();
+    let mut h = launch(&cfg, &dirs);
+    connect(&mut h, "local-pg");
+    type_sql(&mut h, "select 1 as n");
+    save_as(&mut h, "q");
+    h.app.run(vec!["select 1 as n".into()]);
+    let id = h.app.tab().exec.query_id;
+    h.db(DbEvent::Page {
+        id,
+        columns: Some(vec![meta("n", "int4", true, false)]),
+        rows: vec![vec![Some("1".into())]],
+        more: false,
+        elapsed: Duration::ZERO,
+    });
+    match &mut h.app.tab_mut().results {
+        Results::Rows(rs) => {
+            rs.edit.batch.add(1, None, Vec::new());
+        }
+        _ => panic!("no row result"),
+    }
+    select_row(&mut h, "q");
+    h.keys("d");
+    let details: Vec<String> = h
+        .app
+        .overlays
+        .confirm()
+        .map(|c| c.details.iter().map(|d| h.app.i18n.msg(d).to_string()).collect())
+        .unwrap_or_default();
+    assert!(details.iter().any(|d| d == "1 pending change of the results is dropped."), "{details:?}");
+}
