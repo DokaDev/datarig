@@ -168,6 +168,7 @@ pub(crate) fn draw_into(cx: &Look, c: &mut ChartTab, info: Info, area: Rect, buf
         Some(Drawn::Model(m)) => draw_model(cx, c, &m, body, buf),
         Some(Drawn::Unsuitable(u)) => message(cx, &unsuitable(cx, u), body, buf),
         Some(Drawn::Unreadable(_)) => message(cx, &[cx.i18n.label(Label::ChartUnreadable).to_string()], body, buf),
+        Some(Drawn::Edited) => message(cx, &[cx.i18n.label(Label::ChartEdited).to_string()], body, buf),
         None => {}
     }
 }

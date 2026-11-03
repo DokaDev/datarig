@@ -13,7 +13,7 @@ use crate::icons;
 use crate::keymap::Ctx;
 use crate::text::{clip, sanitize_cell, width, wrap};
 use crate::theme;
-use crate::widgets::grid::{CellRef, ResultSet, viewer_text};
+use crate::widgets::grid::{ResultSet, Shown, viewer_text};
 use crate::widgets::{panel, put};
 use datarig_core::driver::KeyMarks;
 use datarig_core::i18n::{I18n, Label, Localized, Msg};
@@ -158,12 +158,12 @@ fn draw_cell(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mu
     put(buf, x + used, y, &column.meta.name, w.saturating_sub(used as usize), bold);
     y += 1;
     let not_read = app.i18n.label(Label::ResultsNotRead);
-    let cell = rs.cell(row, col);
+    let cell = rs.shown(row, col);
     let value = match cell {
-        CellRef::Here(c) => c.as_deref(),
+        Shown::Text(v) => v,
         _ => None,
     };
-    if cell == CellRef::NotRead {
+    if cell == Shown::NotRead {
         put(buf, x, y, &not_read, w, dim());
         return;
     }
@@ -173,8 +173,7 @@ fn draw_cell(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mu
     if y >= bottom {
         return;
     }
-    let null = app.i18n.label(Label::ResultsNull);
-    let text = viewer_text(rs, &t.grid, &null, &not_read).map(|(_, t)| t).unwrap_or_default();
+    let text = viewer_text(rs, &t.grid, &app.i18n).map(|(_, t)| t).unwrap_or_default();
     let style = if value.is_none() {
         Style::new().fg(th.null_fg).bg(th.bg).add_modifier(Modifier::ITALIC)
     } else {
@@ -255,14 +254,15 @@ fn draw_row(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut
         let left = w.saturating_sub((cx - x) as usize);
         cx += put(buf, cx, y, &name, left, Style::new().fg(th.fg_muted).patch(bg).add_modifier(Modifier::BOLD));
         let left = w.saturating_sub((cx - x) as usize);
-        match rs.cell(row, ci) {
-            CellRef::Here(Some(v)) => {
+        match rs.shown(row, ci) {
+            Shown::Text(Some(v)) => {
                 put(buf, cx, y, &clip(&sanitize_cell(v), left), left, Style::new().fg(th.fg).patch(bg))
             }
-            CellRef::Here(None) | CellRef::Missing => {
+            Shown::Text(None) | Shown::Missing => {
                 put(buf, cx, y, &null, left, Style::new().fg(th.null_fg).patch(bg).add_modifier(Modifier::ITALIC))
             }
-            CellRef::NotRead => put(buf, cx, y, &app.i18n.label(Label::ResultsNotRead), left, dim().patch(bg)),
+            Shown::Label(l) => put(buf, cx, y, &app.i18n.label(l), left, dim().patch(bg)),
+            Shown::NotRead => put(buf, cx, y, &app.i18n.label(Label::ResultsNotRead), left, dim().patch(bg)),
         };
         y += 1;
     }
@@ -274,11 +274,12 @@ pub(crate) fn preview(app: &App) -> Option<Localized> {
     let t = app.tab();
     let Results::Rows(rs) = &t.results else { return None };
     let column = rs.columns.get(t.grid.col)?;
-    let value = match rs.cell(t.grid.row, t.grid.col) {
-        CellRef::Here(Some(v)) => sanitize_cell(v),
-        CellRef::Here(None) => app.i18n.label(Label::ResultsNull).to_string(),
-        CellRef::NotRead => app.i18n.label(Label::ResultsNotRead).to_string(),
-        CellRef::Missing => return None,
+    let value = match rs.shown(t.grid.row, t.grid.col) {
+        Shown::Text(Some(v)) => sanitize_cell(v),
+        Shown::Text(None) => app.i18n.label(Label::ResultsNull).to_string(),
+        Shown::Label(l) => app.i18n.label(l).to_string(),
+        Shown::NotRead => app.i18n.label(Label::ResultsNotRead).to_string(),
+        Shown::Missing => return None,
     };
     Some(app.i18n.msg(&Msg::DetailPreview { column: column.meta.name.clone(), value }))
 }

@@ -177,6 +177,73 @@ impl ResultSet {
             Row::Missing => CellRef::Missing,
         }
     }
+
+    /// What the grid shows instead of the value as read in cell (`row`, `col`) of a row read:
+    /// a pending value, else what an Apply wrote there (or the table holds since), or that a
+    /// run shows it. `None`: the value as read.
+    pub fn over(&self, row: usize, col: usize) -> Option<Over<'_>> {
+        if row >= self.rows.len() {
+            return None;
+        }
+        if let Some(v) = self.edit.batch.value(row, col) {
+            return Some(Over::Pending(v));
+        }
+        let a = self.edit.applied.as_deref()?;
+        if a.rerun.contains(&(row, col)) {
+            return Some(Over::Rerun);
+        }
+        a.set.get(&row)?.get(&col).map(Over::Applied)
+    }
+
+    /// Cell (`row`, `col`) as the grid shows it: the value as read, or the value over it.
+    pub fn shown(&self, row: usize, col: usize) -> Shown<'_> {
+        match self.over(row, col) {
+            Some(o) => match o.cell() {
+                Some(v) => Shown::Text(v),
+                None if o == Over::Rerun => Shown::Label(Label::EditRerunToSee),
+                None => Shown::Label(Label::EditDefault),
+            },
+            None => match self.cell(row, col) {
+                CellRef::Here(c) => Shown::Text(c.as_deref()),
+                CellRef::NotRead => Shown::NotRead,
+                CellRef::Missing => Shown::Missing,
+            },
+        }
+    }
+}
+
+/// A cell as the grid shows it ([`ResultSet::shown`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shown<'a> {
+    /// A value (`None`: NULL).
+    Text(Option<&'a str>),
+    /// No value yet, said by this label (`default`, `re-run to see`).
+    Label(Label),
+    NotRead,
+    Missing,
+}
+
+/// What the grid shows over a value as read ([`ResultSet::over`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Over<'a> {
+    /// A change not applied yet.
+    Pending(&'a Value),
+    /// What an Apply wrote, or the table returned for it (`Value::Default`: not known).
+    Applied(&'a Value),
+    /// The table returned it in another form than the result shows: only a run shows it.
+    Rerun,
+}
+
+impl<'a> Over<'a> {
+    /// Its value as a cell (`Some(None)`: NULL); `None` when it has none to show (a DEFAULT, a
+    /// value only a run shows).
+    pub fn cell(self) -> Option<Option<&'a str>> {
+        match self {
+            Over::Pending(Value::Text(v)) | Over::Applied(Value::Text(v)) => Some(Some(v)),
+            Over::Pending(Value::Null) | Over::Applied(Value::Null) => Some(None),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Default, Clone, Debug)]
@@ -596,7 +663,7 @@ pub fn render(
     if let Some((r, c, at)) = st.reveal.take()
         && (r, c) == (st.row, st.col)
         && !st.detached
-        && let CellRef::Here(Some(v)) = rs.cell(r, c)
+        && let Shown::Text(Some(v)) = rs.shown(r, c)
     {
         let (text, w) = (sanitize_cell(v), widths[c]);
         let tw = width(&text);
@@ -818,22 +885,20 @@ pub fn render(
     }
 }
 
-/// Full value for the cell viewer; json/jsonb pretty-printed. A cell whose row is not in memory
-/// is `not_read`.
-pub fn viewer_text(rs: &ResultSet, st: &GridState, null_label: &str, not_read: &str) -> Option<(String, String)> {
+/// Full value for the cell viewer, as the grid shows it; json/jsonb pretty-printed. A cell
+/// whose row is not in memory is "not read".
+pub fn viewer_text(rs: &ResultSet, st: &GridState, i18n: &I18n) -> Option<(String, String)> {
     let col = rs.columns.get(st.col)?;
-    let cell = match rs.cell(st.row, st.col) {
-        CellRef::Here(c) => c,
-        CellRef::NotRead => return Some((col.meta.name.clone(), not_read.to_string())),
-        CellRef::Missing => return None,
-    };
-    let text = match cell {
-        None => null_label.to_string(),
-        Some(v) if col.meta.json => serde_json::from_str::<serde_json::Value>(v)
+    let text = match rs.shown(st.row, st.col) {
+        Shown::Missing => return None,
+        Shown::NotRead => i18n.label(Label::ResultsNotRead).to_string(),
+        Shown::Label(l) => i18n.label(l).to_string(),
+        Shown::Text(None) => i18n.label(Label::ResultsNull).to_string(),
+        Shown::Text(Some(v)) if col.meta.json => serde_json::from_str::<serde_json::Value>(v)
             .ok()
             .and_then(|j| serde_json::to_string_pretty(&j).ok())
-            .unwrap_or_else(|| v.clone()),
-        Some(v) => v.clone(),
+            .unwrap_or_else(|| v.to_string()),
+        Shown::Text(Some(v)) => v.to_string(),
     };
     Some((col.meta.name.clone(), text))
 }

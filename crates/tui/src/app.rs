@@ -594,6 +594,8 @@ pub struct App {
     yank_notices: copy::YankNotices,
     /// A large copy waiting for its confirmation.
     pending_copy: Option<(copy::Intent, copy::CopyRequest)>,
+    /// A run that waits for the answer whether to drop the pending changes of its tab.
+    pending_leave: Option<(TabId, Vec<String>)>,
     /// "Fetch every row, then copy" waiting for its confirmation: the format.
     pending_fetch_copy: Option<(copy::Intent, copy::CopyFormat)>,
     /// An `EXPLAIN ANALYZE` to run again in the plan format once confirmed, with the result it was
@@ -986,6 +988,7 @@ impl App {
             editing: None,
             yank_notices: copy::YankNotices::default(),
             pending_copy: None,
+            pending_leave: None,
             pending_fetch_copy: None,
             pending_as_plan: None,
             text_plan_cache: Default::default(),

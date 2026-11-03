@@ -104,6 +104,18 @@ fn sql_quotes_identifiers_and_literals() {
 }
 
 #[test]
+fn sql_insert_writes_default_where_it_is_asked_to() {
+    let t = Target::Table { schema: "s", name: "t", columns: vec!["a", "b"], overriding: false };
+    let c = [col("a", Kind::Number), col("b", Kind::Text)];
+    let rows = [vec![Some("1"), Some("x")], vec![Some("2"), None]];
+    assert_eq!(
+        sql_insert_with(PG, &t, &c, &rows, &|i, j| (i, j) == (0, 1)),
+        "INSERT INTO \"s\".\"t\" (\"a\", \"b\") VALUES (1, DEFAULT);\n\
+         INSERT INTO \"s\".\"t\" (\"a\", \"b\") VALUES (2, NULL);"
+    );
+}
+
+#[test]
 fn sql_insert_names_the_table_or_a_placeholder() {
     let target = Target::Table {
         schema: "shop",

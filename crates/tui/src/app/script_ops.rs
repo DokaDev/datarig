@@ -425,12 +425,16 @@ impl App {
 
     /// `d` on a saved query (or `Space s d` on its tab): ask first.
     pub(super) fn request_delete_script(&mut self, path: String) {
-        let open = self.tabs.find_script(&path).is_some();
-        let details = if open {
-            vec![Msg::ScriptsDeleteOpenTab { key: self.key_for(Action::ReopenTab, Ctx::Nav) }]
-        } else {
-            Vec::new()
-        };
+        let open = self.tabs.find_script(&path);
+        let mut details = Vec::new();
+        if let Some(tab) = open {
+            details.push(Msg::ScriptsDeleteOpenTab { key: self.key_for(Action::ReopenTab, Ctx::Nav) });
+            // The tab closes at once: its results' pending changes go without another question.
+            let count = self.pending_in(Some(tab));
+            if count > 0 {
+                details.push(Msg::ExplorerDeletePending { count });
+            }
+        }
         self.overlays.close(OverlayKind::Commands);
         self.overlays.push(Overlay::Confirm(Confirm {
             title: Label::ExplorerDeleteTitle,

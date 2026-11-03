@@ -1427,7 +1427,7 @@ fn a_value_returned_in_another_form_is_seen_by_a_run() {
     }
     h.db(DbEvent::Applied { id, result: Ok(done) });
     let a = applied(&h);
-    assert_eq!(a.rerun, [(0, 1)].into(), "the email written");
+    assert_eq!(a.rerun, [(0, 1), (0, 2)].into(), "the email written, the nickname not written");
     assert_eq!(a.rerun_new, [(0, 0)].into(), "the new row's id");
     let t = h.draw(120, 40);
     let buf = t.backend().buffer();
@@ -1442,7 +1442,454 @@ fn a_value_returned_in_another_form_is_seen_by_a_run() {
     };
     assert!(text(0, 1).starts_with("re-run"), "{}", text(0, 1));
     assert!(at(0, 1).modifier.contains(Modifier::DIM), "dim");
-    assert_eq!(text(0, 2), "ann", "not written: as read");
+    assert!(text(0, 2).starts_with("re-run"), "not written, it may have changed: {}", text(0, 2));
     assert!(text(3, 0).starts_with("re-r"), "{}", text(3, 0));
     assert_eq!(text(3, 1), "n@x");
+}
+
+// Leaving pending changes; pending and applied values in what the grid's other views show.
+
+/// What the last flash said, in English.
+fn said_text(h: &mut Harness) -> String {
+    said(h).map(|m| h.app.i18n.msg(&m).to_string()).unwrap_or_default()
+}
+
+/// The text of the question asked, if one is.
+fn asked(h: &Harness) -> Option<String> {
+    h.app.overlays.confirm().map(|c| h.app.i18n.msg(&c.text).to_string())
+}
+
+fn executed(h: &mut Harness) -> Vec<Vec<String>> {
+    h.sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::Execute { statements, .. } => Some(statements),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Running a statement in the tab, closing the tab and quitting ask first while changes are
+/// pending: `Enter` keeps them (nothing runs, closes or quits), `y` drops them and goes on.
+#[test]
+fn leaving_pending_changes_asks_first() {
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.app.run(vec!["SELECT 1".into()]);
+    let run = "Running a statement here replaces this tab's results: its 1 pending change is dropped.";
+    assert_eq!(asked(&h).as_deref(), Some(run), "asks before the run");
+    assert!(executed(&mut h).is_empty());
+    h.key(KeyCode::Enter);
+    assert!(h.app.overlays.confirm().is_none());
+    assert!(executed(&mut h).is_empty(), "kept: nothing runs");
+    assert_eq!(edits(&h).batch.counts().total(), 1);
+    h.app.run(vec!["SELECT 1".into()]);
+    h.key(KeyCode::Char('y'));
+    assert_eq!(executed(&mut h), [vec!["SELECT 1".to_string()]], "dropped: it runs");
+    assert!(edits(&h).batch.is_empty());
+
+    // Closing the tab.
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("tabnew");
+    assert_eq!(h.app.tabs.len(), 2);
+    h.app.tabs.activate(0);
+    h.command("tabclose");
+    assert_eq!(asked(&h).as_deref(), Some("Closing the tab drops the 1 pending change of its results."));
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tabs.len(), 2, "kept: the tab stays");
+    h.command("tabclose");
+    h.key(KeyCode::Char('y'));
+    assert_eq!(h.app.tabs.len(), 1, "dropped: the tab closes");
+
+    // Quitting.
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("q");
+    assert_eq!(asked(&h).as_deref(), Some("Quitting drops 1 pending change that was not applied."));
+    h.key(KeyCode::Enter);
+    assert!(!h.app.quit);
+    h.command("q");
+    h.key(KeyCode::Char('y'));
+    assert!(h.app.quit, "dropped: the app quits");
+
+    // Applied changes are no pending ones: nothing asks.
+    let (mut h, id, steps) = three_applying(ready(Lang::En));
+    h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+    h.app.run(vec!["SELECT 1".into()]);
+    assert_eq!(asked(&h), None);
+    assert_eq!(executed(&mut h), [vec!["SELECT 1".to_string()]]);
+}
+
+/// A copy takes the values the grid shows: pending ones and applied ones, and says so when
+/// some are pending; a row to be deleted is copied as shown and counted in the message; a cell
+/// shown as `re-run to see` is not copied.
+#[test]
+fn a_copy_takes_the_values_shown() {
+    let mut h = ready(Lang::En);
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    type_cell(&mut h, "z@x");
+    h.keys("y");
+    assert_eq!(clip.last().as_deref(), Some("z@x"), "the pending value");
+    let s = said_text(&mut h);
+    assert!(s.ends_with(" (with pending changes)"), "{s}");
+    h.keys("Y");
+    assert_eq!(clip.last().as_deref(), Some("1\tz@x\tann"));
+    h.keys("jD");
+    h.command("copy tsv all");
+    let all = clip.last().unwrap_or_default();
+    assert!(all.contains("z@x") && all.contains("b@x") && !all.contains("a@x"), "{all}");
+    let s = said_text(&mut h);
+    assert!(s.ends_with(" (with pending changes; 1 row to be deleted)"), "{s}");
+    // Applied values; one returned in another form is refused.
+    let (mut h, id, steps) = three_applying(ready(Lang::En));
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    let mut done = three_done(&steps);
+    for (s, d) in steps.iter().zip(done.iter_mut()) {
+        if s.sql.starts_with("UPDATE ") {
+            d.returned = users_returned([Some("1"), Some("z@x"), Some("Ann"), Some("ann!"), Some("{}")]);
+        }
+    }
+    h.db(DbEvent::Applied { id, result: Ok(done) });
+    h.app.transient = None;
+    h.keys("gg");
+    h.keys("Y");
+    assert_eq!(clip.last().as_deref(), Some("1\tz@x\tann!"), "the values applied");
+    let s = said_text(&mut h);
+    assert!(!s.contains("pending"), "{s}");
+    let (mut h, id, steps) = three_applying(ready(Lang::En));
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    let mut done = three_done(&steps);
+    for (s, d) in steps.iter().zip(done.iter_mut()) {
+        if s.sql.starts_with("UPDATE ") {
+            d.unshown = vec![1];
+        }
+    }
+    h.db(DbEvent::Applied { id, result: Ok(done) });
+    h.app.transient = None;
+    h.keys("gg");
+    h.keys("y");
+    assert_eq!(clip.last(), None, "not copied");
+    assert_eq!(said_text(&mut h), "Not copied: email shows “re-run to see”; run the query again to copy it");
+}
+
+/// A pending DEFAULT has no value yet: a text copy refuses it; an SQL INSERT writes `DEFAULT`
+/// (its VALUES take it); every other SQL form refuses it.
+#[test]
+fn a_pending_default_is_copied_only_into_an_insert() {
+    let mut st = named();
+    st.columns[3].default = Some("'anon'::text".into());
+    let mut h = resolved(
+        Harness::connected(Lang::En),
+        "SELECT id, email, nickname FROM shop.users",
+        users_columns(),
+        users_rows(),
+        st,
+    );
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.keys("l");
+    h.keys(" dD");
+    assert_eq!(edits(&h).batch.value(0, 2), Some(&Value::Default));
+    h.app.transient = None;
+    let refused = "Not copied: nickname has a pending DEFAULT, which has no value yet";
+    h.keys("y");
+    assert_eq!(said_text(&mut h), refused);
+    assert_eq!(clip.last(), None);
+    h.command("copy csv all");
+    assert_eq!(said_text(&mut h), refused);
+    h.command("copy update all");
+    assert_eq!(said_text(&mut h), refused);
+    assert_eq!(clip.last(), None);
+    h.command("copy insert all");
+    let text = clip.last().unwrap_or_default();
+    let first = text.lines().next().unwrap_or_default().to_string();
+    assert!(first.ends_with("'a@x', DEFAULT);"), "{text}");
+    assert!(text.lines().nth(1).is_some_and(|l| l.ends_with("'b@x', NULL);")), "{text}");
+    let s = said_text(&mut h);
+    assert!(s.ends_with(" (with pending changes)"), "{s}");
+}
+
+/// The grid's search looks at the values shown: a pending value is found, the value it
+/// replaces is not.
+#[test]
+fn the_grid_search_finds_the_values_shown() {
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.keys("jjh");
+    h.keys("/");
+    h.type_text("z@x");
+    h.key(KeyCode::Enter);
+    assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (0, 1), "the pending value is found");
+    h.key(KeyCode::Esc);
+    h.keys("jj");
+    h.keys("/");
+    h.type_text("a@x");
+    h.key(KeyCode::Enter);
+    assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (2, 1), "the value replaced is not");
+}
+
+/// The cell viewer and the inspector show the value the grid shows.
+#[test]
+fn the_viewer_and_the_inspector_show_the_values_shown() {
+    use datarig_tui::app::overlay::Overlay;
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.key(KeyCode::Enter);
+    let text = match h.app.overlays.top() {
+        Some(Overlay::CellViewer(v)) => v.text.clone(),
+        _ => panic!("no viewer"),
+    };
+    assert_eq!(text, "z@x");
+    h.key(KeyCode::Esc);
+    // The inspector is shown beside a wide enough grid.
+    let t = h.draw(160, 45);
+    let d = h.app.layout.detail;
+    let buf = t.backend().buffer();
+    let inside: String = (d.y..d.y + d.height)
+        .map(|y| (d.x..d.x + d.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(inside.contains("z@x") && !inside.contains("a@x"), "{inside}");
+}
+
+/// An unwritten column whose returned value is in another form than the result shows: it may
+/// have changed (a trigger), so a run shows it.
+#[test]
+fn a_value_not_written_returned_in_another_form_is_seen_by_a_run() {
+    let (mut h, id, steps) = three_applying(ready(Lang::En));
+    let mut done = three_done(&steps);
+    for (s, d) in steps.iter().zip(done.iter_mut()) {
+        if s.sql.starts_with("UPDATE ") {
+            d.unshown = vec![3];
+        }
+    }
+    h.db(DbEvent::Applied { id, result: Ok(done) });
+    assert!(applied(&h).rerun.contains(&(0, 2)), "{:?}", applied(&h).rerun);
+    let s = screen(&mut h, 120, 40);
+    let row = s.lines().find(|l| l.contains("z@x")).unwrap_or_default().to_string();
+    assert!(row.contains("re-run") && !row.contains("ann"), "{row}");
+}
+
+/// An Apply that stays in the open transaction counts there: its writes in the status bar's
+/// changes, one entry in the transaction's summary, and the commit says them.
+#[test]
+fn a_kept_apply_counts_in_the_open_transaction() {
+    let mut h = manual(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.keys("jD");
+    h.keys("ol");
+    type_cell(&mut h, "n@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, _) = applies(&mut h);
+    h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+    h.tab_db(0, DbEvent::ManualBegun { id, index: 0 });
+    h.db(DbEvent::Block(true));
+    h.db(DbEvent::TxOpen(true));
+    let status = h.app.tx_status().unwrap_or_default();
+    assert!(status.contains("3 changes · 3 rows"), "{status}");
+    let log: Vec<String> =
+        h.app.tab().exec.tx.as_ref().map(|t| t.log.iter().map(|e| e.sql.clone()).collect()).unwrap_or_default();
+    assert_eq!(log, ["Apply (3 changes)"]);
+    h.app.transient = None;
+    h.command("commit");
+    let end = h.sent().into_iter().find_map(|c| match c {
+        DbCommand::EndTx { id, commit: true } => Some(id),
+        _ => None,
+    });
+    h.tab_db(0, DbEvent::TxEnded { id: end.expect("a commit"), outcome: datarig_core::driver::TxOutcome::Committed });
+    let notes = &h.app.tab().exec.run.notes;
+    assert!(notes.iter().any(|n| matches!(n.msg, Msg::TxCommitted { count: 3, .. })), "{notes:?}");
+    // Inside the user's own block: counted at once.
+    let mut h = ready(Lang::En);
+    h.db(DbEvent::Block(true));
+    h.db(DbEvent::TxOpen(true));
+    type_cell(&mut h, "z@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, _) = applies(&mut h);
+    h.db(DbEvent::Applied { id, result: Ok(stood(&steps)) });
+    let status = h.app.tx_status().unwrap_or_default();
+    assert!(status.contains("1 change · 1 row"), "{status}");
+}
+
+/// Paging past the rows read after an Apply would run the statement again from an offset the
+/// Apply moved (deleted rows shift the rest up): refused, the query is run again instead.
+#[test]
+fn paging_on_after_an_apply_is_refused() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.app.run(vec!["SELECT id, email, nickname FROM shop.users".into()]);
+    let qid = h.app.tab().exec.query_id;
+    h.db(DbEvent::Page {
+        id: qid,
+        columns: Some(users_columns()),
+        rows: users_rows(),
+        more: true,
+        elapsed: Duration::ZERO,
+    });
+    h.app.focus = Focus::Results;
+    h.keys("le");
+    structure(&mut h, named());
+    h.key(KeyCode::Esc);
+    h.app.transient = None;
+    h.keys("jD");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, _) = applies(&mut h);
+    h.db(DbEvent::Applied { id, result: Ok(stood(&steps)) });
+    h.app.transient = None;
+    h.keys("n");
+    let sent = h.sent();
+    assert!(!sent.iter().any(|c| matches!(c, DbCommand::Resume { .. })), "{sent:?}");
+    assert_eq!(said_text(&mut h), "Changes were applied to these rows: re-run the query to see the rest");
+}
+
+/// `Enter` views a cell of a row read; on a new row it does nothing, and the hint line does not
+/// offer it.
+#[test]
+fn the_hint_line_offers_no_view_on_a_new_row() {
+    let mut h = ready(Lang::En);
+    let view = |h: &Harness| h.app.hints().iter().any(|(_, l)| &**l == "view cell");
+    assert!(view(&h));
+    h.keys("o");
+    assert!(h.app.tab().grid.row >= 3);
+    assert!(!view(&h), "{:?}", h.app.hints());
+    h.keys("k");
+    assert!(view(&h));
+}
+
+/// An export of the rows held would write them as read, not as the grid shows them: refused
+/// while some are pending or applied, in every scope that writes them and every format.
+#[test]
+fn an_export_of_the_rows_held_is_refused_while_they_are_edited() {
+    let dir = std::env::temp_dir().join(format!("datarig-edit-export-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let refused =
+        "Not exported: this result has pending or applied changes; apply or discard them, or run the query again";
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    let (pending, id, steps) = three_applying(ready(Lang::En));
+    let mut applied_h = pending;
+    applied_h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+    applied_h.app.transient = None;
+    for (n, h) in [&mut h, &mut applied_h].into_iter().enumerate() {
+        for (i, (format, scope)) in
+            [("csv", "fetched"), ("json", "selection"), ("xlsx", "all"), ("insert", "fetched")].into_iter().enumerate()
+        {
+            let path = dir.join(format!("{n}-{i}.out"));
+            if scope == "selection" {
+                h.keys("ggvj");
+            }
+            h.command(&format!("export {format} {scope} {}", path.display()));
+            assert_eq!(said_text(h), refused, "{format} {scope}");
+            assert!(!h.app.exporting(h.app.tab().id), "{format} {scope}");
+            assert!(!path.exists(), "{format} {scope}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every row read again from the server: allowed, but it says the pending changes are not in
+/// the file.
+#[test]
+fn an_export_of_every_row_says_the_pending_changes_are_left_out() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.app.run(vec!["SELECT id, email, nickname FROM shop.users".into()]);
+    let qid = h.app.tab().exec.query_id;
+    h.db(DbEvent::Page {
+        id: qid,
+        columns: Some(users_columns()),
+        rows: users_rows(),
+        more: true,
+        elapsed: Duration::ZERO,
+    });
+    h.app.focus = Focus::Results;
+    h.keys("le");
+    structure(&mut h, named());
+    h.key(KeyCode::Esc);
+    h.app.transient = None;
+    type_cell(&mut h, "z@x");
+    h.app.transient = None;
+    let path = std::env::temp_dir().join(format!("datarig-edit-export-all-{}.csv", std::process::id()));
+    h.command(&format!("export csv all {}", path.display()));
+    let note = "The pending changes are not in the file: every row is read again from the server";
+    let details: Vec<String> = h
+        .app
+        .overlays
+        .confirm()
+        .map(|c| c.details.iter().map(|d| h.app.i18n.msg(d).to_string()).collect())
+        .unwrap_or_default();
+    let s = said_text(&mut h);
+    assert!(s == note || details.iter().any(|d| d == note), "{s} / {details:?}");
+    assert!(h.app.exporting(h.app.tab().id), "the export goes on");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The chart would draw the values as read: while some are pending or applied it says why it
+/// draws nothing.
+#[test]
+fn the_chart_draws_nothing_while_the_rows_are_edited() {
+    let why = "Not drawn: this result has pending or applied changes. Run the query again to chart the edited values.";
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.keys("c");
+    let s = screen(&mut h, 160, 40);
+    assert!(s.contains(why), "{s}");
+    let (mut h, id, steps) = three_applying(ready(Lang::En));
+    h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+    h.app.transient = None;
+    h.keys("c");
+    let s = screen(&mut h, 160, 40);
+    assert!(s.contains(why), "{s}");
+    // Without changes it draws again.
+    let mut h = ready(Lang::En);
+    h.keys("c");
+    let s = screen(&mut h, 160, 40);
+    assert!(!s.contains(why), "{s}");
+}
+
+/// Deleting the profile closes its tabs: the question says how many pending changes go.
+#[test]
+fn deleting_the_profile_says_the_pending_changes_it_drops() {
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.keys("jD");
+    let name = h.app.profiles[0].name.clone();
+    h.explore(&name);
+    h.keys("d");
+    let details: Vec<String> = h
+        .app
+        .overlays
+        .confirm()
+        .map(|c| c.details.iter().map(|d| h.app.i18n.msg(d).to_string()).collect())
+        .unwrap_or_default();
+    assert!(details.iter().any(|d| d == "2 pending changes of the results are dropped."), "{details:?}");
+}
+
+/// A value an Apply wrote as DEFAULT is shown `default`: a copy says that, not `re-run to see`.
+#[test]
+fn a_copy_of_an_applied_default_says_default() {
+    let mut st = named();
+    st.columns[3].default = Some("'anon'::text".into());
+    let mut h = resolved(
+        Harness::connected(Lang::En),
+        "SELECT id, email, nickname FROM shop.users",
+        users_columns(),
+        users_rows(),
+        st,
+    );
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.keys("l");
+    h.keys(" dD");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, _) = applies(&mut h);
+    h.db(DbEvent::Applied { id, result: Ok(stood(&steps)) });
+    h.app.transient = None;
+    h.keys("y");
+    assert_eq!(clip.last(), None, "not copied");
+    assert_eq!(said_text(&mut h), "Not copied: nickname shows “default”; run the query again to copy its value");
 }

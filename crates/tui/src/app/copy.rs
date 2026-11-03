@@ -18,11 +18,12 @@
 use super::*;
 use crate::clipboard::{self, Method, Plan};
 use crate::widgets::editor::Yank;
-use crate::widgets::grid::Shape;
+use crate::widgets::grid::{Over, Shape};
 use datarig_core::config::{ClipboardSetting, CopyHeader, EditorClipboard};
 use datarig_core::driver::keys::{
     Generated, InsertPlan, NotInsertable, NotUpdatable, insert_into, insert_source, update_source,
 };
+use datarig_core::edit::Value;
 use datarig_core::export::{self, Kind, Target};
 use datarig_core::fault::{ErrorLog, Fault};
 use datarig_core::sql::dialect::Dialect;
@@ -398,6 +399,15 @@ impl App {
             }
             return;
         }
+        // What the grid shows over the rows as read is copied: said when some is pending; a
+        // value it shows that has none yet is not copied.
+        let (pending, deleted) = {
+            let Results::Rows(rs) = &self.tab().results else { return };
+            match over_block(rs, &b, format == CopyFormat::SqlInsert) {
+                Ok(p) => p,
+                Err(why) => return self.flash(Notice::new(why, Level::Warning)),
+            }
+        };
         // Generated columns left out of an SQL INSERT copy.
         let mut skipped = String::new();
         // `:copy insert` of rows that are not a projection of that table: said after the copy.
@@ -443,14 +453,27 @@ impl App {
                     .collect();
                 export::sql_cells(d, &cols, &rs.read_in, keys.and_then(|k| k.server_zone()))
             };
-            // The chosen columns of the rows of `b`, `COPY_CHUNK` at a time, into `write`.
-            let stream = |write: &mut dyn FnMut(&[export::Row])| {
+            // The chosen columns of the rows of `b` as the grid shows them, `COPY_CHUNK` at a
+            // time, into `write` with the row the chunk starts at.
+            let overlaid = !rs.edit.batch.is_empty() || rs.edit.applied.is_some();
+            let stream = |write: &mut dyn FnMut(&[export::Row], usize)| {
+                let mut at = b.rows.start;
                 rs.rows.for_each_chunk(b.rows.clone(), COPY_CHUNK, |chunk| {
                     let rows: Vec<export::Row> = chunk
                         .iter()
-                        .map(|r| b.cols.iter().map(|&c| r.get(c).and_then(|v| v.as_deref())).collect())
+                        .enumerate()
+                        .map(|(i, r)| {
+                            b.cols
+                                .iter()
+                                .map(|&c| match overlaid.then(|| rs.over(at + i, c)).flatten() {
+                                    Some(o) => o.cell().flatten(),
+                                    None => r.get(c).and_then(|v| v.as_deref()),
+                                })
+                                .collect()
+                        })
                         .collect();
-                    write(&rows);
+                    write(&rows, at);
+                    at += chunk.len();
                 })
             };
             let format = match format {
@@ -472,11 +495,11 @@ impl App {
             let written: Result<String, Fault> = match (format, req.format) {
                 (Some(f), _) => {
                     let mut w = export::Writer::new(f, &columns);
-                    stream(&mut |rows| w.rows(rows)).map(|()| w.finish())
+                    stream(&mut |rows, _| w.rows(rows)).map(|()| w.finish())
                 }
                 (None, CopyFormat::Tsv | CopyFormat::TsvPlain) => {
                     let mut cell = String::new();
-                    stream(&mut |rows| {
+                    stream(&mut |rows, _| {
                         cell = rows.first().and_then(|r| r[0]).unwrap_or_default().to_string();
                     })
                     .map(|()| cell)
@@ -491,7 +514,7 @@ impl App {
                         Err(r) => return self.flash(self.not_whole(&r)),
                     };
                     let mut values: Vec<Option<String>> = Vec::new();
-                    let read = stream(&mut |rows| {
+                    let read = stream(&mut |rows, _| {
                         let rows = written_as(&cells, rows, &mut refused);
                         values.extend(rows.iter().map(|r| r[0].as_deref().map(str::to_string)));
                     });
@@ -529,7 +552,7 @@ impl App {
                         Err(r) => return self.flash(self.not_whole(&r)),
                     };
                     let mut w = export::Writer::new(export::Format::Update(d, target), &columns);
-                    stream(&mut |rows| {
+                    stream(&mut |rows, _| {
                         let rows = written_as(&cells, rows, &mut refused);
                         let rows: Vec<export::Row> =
                             rows.iter().map(|r| r.iter().map(|v| v.as_deref()).collect()).collect();
@@ -571,14 +594,25 @@ impl App {
                         Err(r) => return self.flash(self.not_whole(&r)),
                     };
                     let columns: Vec<_> = written.iter().map(|w| columns[w.0]).collect();
-                    let mut w = export::Writer::new(export::Format::Sql(d, target), &columns);
-                    stream(&mut |rows| {
+                    // A value left to its pending DEFAULT is written `DEFAULT`.
+                    let default = |r: usize, j: usize| {
+                        matches!(rs.over(r, b.cols[written[j].0]), Some(Over::Pending(Value::Default)))
+                    };
+                    let defaults = overlaid && b.rows.clone().any(|r| (0..written.len()).any(|j| default(r, j)));
+                    let mut w = export::Writer::new(export::Format::Sql(d, target.clone()), &columns);
+                    let mut parts: Vec<String> = Vec::new();
+                    stream(&mut |rows, at| {
                         let rows = written_as(&cells, rows, &mut refused);
                         let rows: Vec<export::Row> =
                             rows.iter().map(|r| written.iter().map(|w| r[w.0].as_deref()).collect()).collect();
-                        w.rows(&rows);
+                        if defaults {
+                            parts
+                                .push(export::sql_insert_with(d, &target, &columns, &rows, &|i, j| default(at + i, j)));
+                        } else {
+                            w.rows(&rows);
+                        }
                     })
-                    .map(|()| w.finish())
+                    .map(|()| if defaults { parts.join("\n") } else { w.finish() })
                 }
             };
             match written {
@@ -612,6 +646,11 @@ impl App {
             Msg::CopyDoneFetched { count: count as u64, format: format_name, method }
         } else {
             Msg::CopyDoneRows { count: count as u64, format: format_name, method }
+        };
+        let done = match (pending, deleted) {
+            (false, _) => done,
+            (true, 0) => Msg::CopyWithPending { done: self.i18n.msg(&done).to_string() },
+            (true, count) => Msg::CopyWithDeletes { done: self.i18n.msg(&done).to_string(), count },
         };
         self.flash_copied(b.rows, wrote_cols.unwrap_or(b.cols));
         self.tab_mut().grid.anchor = None;
@@ -963,6 +1002,36 @@ mod tests;
 
 /// The values of `rows` as the SQL formats write them ([`export::SqlCells::cell`]); the first
 /// one that is not written whole is kept in `refused` (the copy is then refused).
+/// What the grid shows over the rows as read in block `b` of `rs`: whether some of it is pending
+/// (a value, a row to be deleted) and how many of its rows are to be deleted; or why it is not
+/// copied: a value it shows has none yet (a pending DEFAULT, except in an INSERT (`insert`),
+/// where it is written `DEFAULT`; one only a run shows).
+fn over_block(rs: &ResultSet, b: &Block, insert: bool) -> Result<(bool, u64), Msg> {
+    let in_block = |r: &usize| b.rows.contains(r);
+    let mut rows: std::collections::BTreeSet<usize> = rs.edit.batch.rows().map(|(r, _)| r).filter(in_block).collect();
+    if let Some(a) = rs.edit.applied.as_deref() {
+        rows.extend(a.set.keys().copied().filter(in_block));
+        rows.extend(a.rerun.iter().map(|&(r, _)| r).filter(in_block));
+    }
+    let deleted = rows.iter().filter(|&&r| rs.edit.batch.deleted(r)).count() as u64;
+    let mut pending = deleted > 0;
+    for &r in &rows {
+        for &c in &b.cols {
+            let column = || rs.columns[c].meta.name.clone();
+            match rs.over(r, c) {
+                Some(Over::Pending(Value::Default)) if !insert => {
+                    return Err(Msg::CopyPendingDefault { column: column() });
+                }
+                Some(Over::Rerun) => return Err(Msg::CopyRerun { column: column() }),
+                Some(Over::Applied(Value::Default)) => return Err(Msg::CopyAppliedDefault { column: column() }),
+                Some(Over::Pending(_)) => pending = true,
+                Some(Over::Applied(_)) | None => {}
+            }
+        }
+    }
+    Ok((pending, deleted))
+}
+
 fn written_as<'a>(
     cells: &export::SqlCells,
     rows: &'a [export::Row],

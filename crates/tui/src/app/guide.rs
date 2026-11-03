@@ -499,8 +499,13 @@ impl App {
         }
         let basics = self.vim_basics().into_iter().filter(|b| b.0 == ctx);
         out.extend(basics.map(|(_, k, short, _)| (k, self.i18n.label(short))));
+        // `Enter` views a cell of a row read; on a new row (or one an Apply added) it does
+        // nothing, so it is not offered there.
+        let t = self.tab();
+        let past_rows = matches!(&t.results, Results::Rows(rs) if t.grid.row >= rs.rows.len());
         if let Some((_, list)) = HINTS.iter().find(|(c, _)| *c == ctx) {
-            out.extend(list.iter().copied().filter_map(action));
+            let shown = list.iter().copied().filter(|(id, _)| !(past_rows && *id == "grid.view_cell"));
+            out.extend(shown.filter_map(action));
         }
         let leader = parse_keys(LEADER).unwrap_or_default();
         if !self.keymap.children(ctx, &leader).is_empty() {

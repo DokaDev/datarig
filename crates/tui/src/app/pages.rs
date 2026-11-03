@@ -141,12 +141,17 @@ impl App {
         if !more {
             return self.flash(Notice::new(Label::ResultsPageLast, Level::Info));
         }
+        // An Apply changed the table under these rows (a deleted row moves the rows after it
+        // up, an added one may move them down): the statement run again past the rows read
+        // would skip or repeat rows. Only a run of the query shows the rest.
+        let applied = rs.edit.applied.is_some();
         let (id, paging) = (t.id, t.exec.paging);
         match paging {
             Paging::Open { .. } if self.answer_here() => {
                 self.tab_mut().exec.want_page = Some(next);
                 self.fetch_page(id);
             }
+            p if p.closed() && applied => self.flash(Notice::new(Label::ResultsPageApplied, Level::Warning)),
             p if p.closed() && (self.answer_here() || self.kept_answer_here()) => self.resume(id, next),
             Paging::Stopped => {
                 let count = len as u64;

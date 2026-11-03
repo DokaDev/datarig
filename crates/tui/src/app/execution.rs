@@ -67,6 +67,11 @@ impl App {
         let Some(pid) = t.profile else {
             return self.open_quick(QuickPurpose::Bind { tab: id, run: Some(statements) });
         };
+        // A run replaces the tab's results, and their pending changes with them: asked first.
+        if self.ask_leave(super::edit::Leave::Run(id)) {
+            self.pending_leave = Some((id, statements));
+            return;
+        }
         // Checked before anything is queued or sent.
         if let Some(refused) = self.unsupported(id, &statements) {
             self.unstage_run(id);

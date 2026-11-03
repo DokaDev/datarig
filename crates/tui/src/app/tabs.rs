@@ -288,6 +288,9 @@ pub struct TabSession {
     /// The transaction block open on `session` (`DbEvent::Block`), when it began and what it
     /// did, as far as the app follows it.
     pub tx: Option<super::tx::OpenTx>,
+    /// An Apply left the transaction it ran in open for manual commit (its number), before
+    /// that transaction's block was reported: it goes into `tx` once the block begins.
+    pub apply_tx: Option<(u64, super::tx::TxEntry, u64)>,
     /// `DbEvent::ManualBegun` of run `.0` at statement `.1`: the block that follows is one the
     /// session opened for manual commit.
     pub manual_begun: Option<(u64, usize)>,
@@ -376,6 +379,7 @@ impl TabSession {
             values: None,
             reading: Reading::default(),
             tx: None,
+            apply_tx: None,
             manual_begun: None,
             tx_from: None,
             run_id: 0,
@@ -796,6 +800,9 @@ impl Tab {
             self.exec.in_block = true;
             let mut tx = super::tx::OpenTx::new(manual, began, wall);
             tx.rollback = rollback.filter(|_| manual);
+            if let Some((_, entry, writes)) = self.exec.apply_tx.take().filter(|a| a.0 == self.exec.tx_epoch) {
+                tx.book_apply(entry, writes);
+            }
             self.exec.tx = Some(tx);
         }
     }

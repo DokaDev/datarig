@@ -26,4 +26,4 @@ expression: backend
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"
 "╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
-" NORMAL  local-pg │ Applied 3 changes        │ Enter view cell · n next page EN "
+" NORMAL  local-pg │ Applied 3 changes      │ n next page · y copy · v select EN "

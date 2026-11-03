@@ -3,7 +3,8 @@
 //! the search is on, `n` and `N` go from match to match (`grid.matches`), and `Esc` ends it.
 //!
 //! What is searched: the full value of every cell of the rows fetched so far (in memory and in
-//! the spill file), as the driver gave it (not the cut the grid shows), with the editor's
+//! the spill file), as the driver gave it (not the cut the grid shows), or the value the grid
+//! shows over it (a pending one, one an Apply wrote: [`Overlay`]), with the editor's
 //! pattern rules (a Rust regular expression, case sensitive unless it starts with `(?i)`). NULL
 //! never matches; column names are not searched. A match is a cell, in row-major order (left to
 //! right, then the next row); a cell matching twice counts once. Nothing is fetched or run for
@@ -18,7 +19,7 @@
 
 use super::*;
 use crate::text::{sanitize_cell, width};
-use crate::widgets::grid::CellRef;
+use crate::widgets::grid::Shown;
 use crate::widgets::search::{SearchNotice, compile};
 use crate::widgets::text_input::InputResult;
 use datarig_core::fault::Fault;
@@ -40,6 +41,21 @@ const CHUNK: usize = 1024;
 
 /// A cell of a result in row-major order: `row * columns + column`.
 pub type CellIdx = u64;
+
+/// The values the grid shows over the rows as read (pending ones, those an Apply wrote), by
+/// (row, column): a search looks at them instead (`None`: nothing to match, as NULL).
+pub type Overlay = std::collections::BTreeMap<(usize, usize), Option<String>>;
+
+/// The [`Overlay`] of `rs` as it is now.
+fn overlay(rs: &ResultSet) -> Overlay {
+    let mut cells: std::collections::BTreeSet<(usize, usize)> =
+        rs.edit.batch.rows().flat_map(|(r, e)| e.set.keys().map(move |&c| (r, c))).collect();
+    if let Some(a) = rs.edit.applied.as_deref() {
+        cells.extend(a.set.iter().flat_map(|(&r, m)| m.keys().map(move |&c| (r, c))));
+        cells.extend(a.rerun.iter().copied());
+    }
+    cells.into_iter().filter_map(|(r, c)| Some(((r, c), rs.over(r, c)?.cell().flatten().map(str::to_string)))).collect()
+}
 
 /// What the grid's search keys do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -95,12 +111,18 @@ pub struct Matches {
     cells: Vec<CellIdx>,
     /// There were more than [`MAX_MATCHES`]: `cells` has the first ones.
     capped: bool,
+    /// The values searched over the rows as read.
+    over: Arc<Overlay>,
 }
 
 impl Matches {
-    /// Whether these are the matches of `rs` as it is now (no rows came since).
+    /// Whether these are the matches of `rs` as it is now (no rows came since, no value shown
+    /// changed).
     fn current(&self, rs: &ResultSet) -> bool {
-        self.result == rs.id && self.rows == rs.rows.len() && self.ncols == rs.columns.len()
+        self.result == rs.id
+            && self.rows == rs.rows.len()
+            && self.ncols == rs.columns.len()
+            && *self.over == overlay(rs)
     }
 
     /// Whether cell (row, col) is a match.
@@ -159,6 +181,7 @@ struct Running {
     /// Its first match came.
     found_one: bool,
     stop: Arc<AtomicBool>,
+    over: Arc<Overlay>,
 }
 
 impl Drop for Running {
@@ -305,6 +328,7 @@ fn cell(row: usize, col: usize, ncols: usize) -> CellIdx {
 #[allow(clippy::too_many_arguments)]
 pub fn scan(
     snap: &RowsSnapshot,
+    over: &Overlay,
     ncols: usize,
     re: &Regex,
     origin: CellIdx,
@@ -326,6 +350,7 @@ pub fn scan(
         }
         for r in chunk {
             for (c, v) in r.iter().take(ncols).enumerate() {
+                let v = over.get(&(row, c)).map_or(v.as_deref(), |o| o.as_deref());
                 let Some(v) = v else { continue };
                 if !re.is_match(v) {
                     continue;
@@ -383,6 +408,7 @@ pub fn scan(
 /// matches.
 pub fn seek(
     snap: &RowsSnapshot,
+    over: &Overlay,
     ncols: usize,
     re: &Regex,
     origin: CellIdx,
@@ -395,7 +421,7 @@ pub fn seek(
     }
     let orow = ((origin / ncols as CellIdx) as usize).min(len - 1);
     let find = |range: Range<usize>, last: bool, keep: &dyn Fn(CellIdx) -> bool| {
-        find_in(snap, ncols, re, stop, range, last, keep)
+        find_in(snap, over, ncols, re, stop, range, last, keep)
     };
     let first =
         if forward { find(orow..len, false, &|c| c > origin)? } else { find(0..orow + 1, true, &|c| c < origin)? };
@@ -416,8 +442,10 @@ pub fn seek(
 /// The first matching cell of rows `range` that `keep` takes, or the last one (`last`: the
 /// rows are read a chunk at a time from the end of the range back). `Ok(None)` when `stop` was
 /// set.
+#[allow(clippy::too_many_arguments)]
 fn find_in(
     snap: &RowsSnapshot,
+    over: &Overlay,
     ncols: usize,
     re: &Regex,
     stop: &AtomicBool,
@@ -435,8 +463,9 @@ fn find_in(
             }
             for (i, r) in rows.iter().enumerate() {
                 for (c, v) in r.iter().take(ncols).enumerate() {
+                    let v = over.get(&(at + i, c)).map_or(v.as_deref(), |o| o.as_deref());
                     let at = cell(at + i, c, ncols);
-                    if v.as_deref().is_some_and(|v| re.is_match(v)) && keep(at) {
+                    if v.is_some_and(|v| re.is_match(v)) && keep(at) {
                         found = Some(at);
                         if !last {
                             return false;
@@ -506,7 +535,7 @@ fn reveal(t: &mut Tab, re: &Regex) {
     let g = &mut t.grid;
     let Results::Rows(rs) = &mut t.results else { return };
     g.load_selected(rs);
-    if let CellRef::Here(Some(v)) = rs.cell(g.row, g.col)
+    if let Shown::Text(Some(v)) = rs.shown(g.row, g.col)
         && let Some(m) = re.find(v)
     {
         g.reveal = Some((g.row, g.col, width(&sanitize_cell(&v[..m.start()]))));
@@ -765,6 +794,7 @@ impl App {
         if ncols == 0 {
             return t.find.pending.clear();
         }
+        let over = Arc::new(overlay(rs));
         let snap = match rs.rows.snapshot(0..rows) {
             Ok(s) => s,
             Err(f) => {
@@ -793,6 +823,7 @@ impl App {
             from,
             found_one: false,
             stop: stop.clone(),
+            over: over.clone(),
         };
         match purpose {
             Purpose::Seek => t.find.seek = Some(job),
@@ -805,7 +836,7 @@ impl App {
         std::thread::spawn(move || {
             let first = |cell, wrapped| reply.send(News::First { cell, wrapped });
             let r = match purpose {
-                Purpose::Seek => seek(&snap, ncols, &re, origin, forward, &stop).map(|found| {
+                Purpose::Seek => seek(&snap, &over, ncols, &re, origin, forward, &stop).map(|found| {
                     found.map(|f| {
                         if let Some((cell, wrapped)) = f {
                             first(cell, wrapped);
@@ -813,7 +844,7 @@ impl App {
                         (Vec::new(), false)
                     })
                 }),
-                _ => scan(&snap, ncols, &re, origin, forward, cap, &stop, first),
+                _ => scan(&snap, &over, ncols, &re, origin, forward, cap, &stop, first),
             };
             reply.done(r);
         });
@@ -918,7 +949,14 @@ impl App {
                 }
                 match r {
                     Ok(Some((cells, capped))) => {
-                        let m = Matches { result: job.result, rows: job.rows, ncols: job.ncols, cells, capped };
+                        let m = Matches {
+                            result: job.result,
+                            rows: job.rows,
+                            ncols: job.ncols,
+                            cells,
+                            capped,
+                            over: job.over.clone(),
+                        };
                         match job.purpose {
                             Purpose::Preview => {
                                 if let Some(p) = t.find.prompt.as_mut() {
