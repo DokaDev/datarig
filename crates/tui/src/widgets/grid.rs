@@ -3,6 +3,11 @@
 //! header shows the column's key marks (PK/FK/UQ) before its name. The
 //! grid shows one page of the result at a time ([`GridState::page`]); row
 //! numbers stay those of the whole result.
+//!
+//! New rows not applied yet are shown after the last row read, on the last page: row `i` of the
+//! grid is row `i` of the result while `i` is less than the rows read, else new row
+//! `i - rows read` ([`GridState::new_rows`]). Read by a row's index, a new row is no row of the
+//! result ([`CellRef::Missing`]).
 
 use crate::text::{Align, fit, sanitize_cell, slice_cols, width};
 use crate::theme;
@@ -214,6 +219,9 @@ pub struct GridState {
     /// A search's match the next render shows: (row, column, where the match starts in the
     /// cell's text as drawn, in columns). Taken by that render; only for the cursor's cell.
     pub reveal: Option<(usize, usize, usize)>,
+    /// How many new rows the grid shows after the result's last row read (set on render and by
+    /// every edit).
+    pub new_rows: usize,
 }
 
 /// What a grid selection spans.
@@ -253,15 +261,43 @@ impl GridState {
         Self { page_size, page_rows, ..Self::default() }
     }
 
-    /// The rows the grid shows of a result of `total` rows: its page (the last one when the
-    /// page is past the end).
+    /// The rows the grid shows of a result of `total` rows read: its page (the last one when the
+    /// page is past the end), the new rows after the last page's rows.
     pub fn window(&self, total: usize) -> std::ops::Range<usize> {
         if self.page_size == 0 || total == 0 {
-            return 0..total;
+            return 0..total + self.new_rows;
         }
         let last = (total - 1) / self.page_size;
         let start = self.page.min(last) * self.page_size;
-        start..(start + self.page_size).min(total)
+        let end = (start + self.page_size).min(total);
+        start..if end == total { total + self.new_rows } else { end }
+    }
+
+    /// `added` rows were read after the `read` there were: a cursor, a view or a selection's
+    /// anchor among the new rows (shown after the rows read) stays on the same new row, and the
+    /// page shown is the cursor's. A selection from a row read to a new row goes (it would take
+    /// in the rows that came).
+    pub fn rows_came(&mut self, read: usize, added: usize) {
+        if added == 0 || self.new_rows == 0 {
+            return;
+        }
+        let on_new = self.row >= read;
+        if self.shape != Shape::Cols && self.anchor.is_some_and(|(r, _)| (r >= read) != on_new) {
+            self.anchor = None;
+        }
+        let shift = |r: &mut usize| {
+            if *r >= read {
+                *r += added;
+            }
+        };
+        shift(&mut self.row);
+        shift(&mut self.top);
+        if let Some((r, _)) = self.anchor.as_mut() {
+            shift(r);
+        }
+        if on_new && self.page_size > 0 {
+            self.page = (read + added - 1) / self.page_size;
+        }
     }
 
     /// Show page `page`: the cursor goes to its first row, a selected range goes.
@@ -498,6 +534,7 @@ pub fn render(
         return;
     }
     let total = rs.rows.len();
+    st.new_rows = rs.edit.batch.drafts().len();
     // The page shown: the rows of the window, numbered as in the whole result.
     let win = st.window(total);
     let null_label = i18n.label(Label::ResultsNull);
@@ -677,10 +714,20 @@ pub fn render(
         let whole = st.shape == Shape::Rows && range.as_ref().is_some_and(|(rr, _)| rr.contains(&r));
         let num_bg = if whole { th.range } else { Style::new().bg(zebra) };
         let num_style = num_bg.fg(if r == st.row { th.accent } else { th.fg_muted });
-        buf.set_stringn(area.x, y, fit(&(r + 1).to_string(), gutter - 1, Align::Right), gutter - 1, num_style);
-        // A row with changes pending: `~` in the gutter's free column.
-        if rs.edit.batch.row(r).is_some() {
-            buf.set_stringn(area.x + gutter as u16 - 1, y, "~", 1, num_style);
+        // A new row (after the rows read) has no number of the result.
+        let new = r.checked_sub(total).and_then(|i| rs.edit.batch.drafts().get(i));
+        let deleted = new.is_none() && rs.edit.batch.deleted(r);
+        let number = if new.is_some() { String::new() } else { (r + 1).to_string() };
+        buf.set_stringn(area.x, y, fit(&number, gutter - 1, Align::Right), gutter - 1, num_style);
+        // What is pending in the row, in the gutter's free column: `+` a new row, `-` a row to be
+        // deleted, `~` cells changed.
+        let mark = match (new, deleted) {
+            (Some(_), _) => Some("+"),
+            (None, true) => Some("-"),
+            (None, false) => rs.edit.batch.row(r).map(|_| "~"),
+        };
+        if let Some(mark) = mark {
+            buf.set_stringn(area.x + gutter as u16 - 1, y, mark, 1, num_style);
         }
         for &(cx, ci, w) in &layout {
             st.drawn_cells += 1;
@@ -695,8 +742,11 @@ pub fn render(
                 Style::new().bg(zebra)
             };
             put(buf, cx, y, "│", sep_style(zebra));
-            // A pending value is shown instead of the value as read.
-            let pending = rs.edit.batch.value(r, ci);
+            // A pending value is shown instead of the value as read; a new row's own values.
+            let pending = match new {
+                Some(d) => Some(d.cells.get(ci).unwrap_or(&Value::Default)),
+                None => rs.edit.batch.value(r, ci),
+            };
             let (text, is_null, default) = match (pending, rs.cell(r, ci)) {
                 (Some(Value::Text(v)), _) => (sanitize_cell(v), false, false),
                 (Some(Value::Null), _) => (null_label.to_string(), true, false),
@@ -719,7 +769,15 @@ pub fn render(
             } else {
                 Style::new().fg(th.fg)
             };
-            let style = if pending.is_some() { style.patch(th.edit_changed) } else { style }.patch(bg);
+            let style = match (new, pending) {
+                // A default keeps its dim look in a new row.
+                (Some(_), _) if default => style,
+                (Some(_), _) => style.patch(th.edit_inserted),
+                (None, Some(_)) => style.patch(th.edit_changed),
+                (None, None) if deleted => style.patch(th.edit_deleted),
+                (None, None) => style,
+            }
+            .patch(bg);
             put(buf, cx + 1, y, &" ".repeat(w + 2), bg);
             let text = fit(&text, w, align);
             put(buf, cx + 2, y, &text, style);

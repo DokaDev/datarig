@@ -44,7 +44,12 @@ pub enum Picker {
     Session { form: (FormKind, ProfileId), field: Field, list: ListPicker<SessionChoice> },
     /// The value of cells `cells` (of one column) of result `result` in tab `tab`: an enum's
     /// labels or a boolean's values, NULL and DEFAULT when the column takes them.
-    CellValue { tab: TabId, result: u64, cells: Vec<(usize, usize)>, list: ListPicker<datarig_core::edit::Value> },
+    CellValue {
+        tab: TabId,
+        result: u64,
+        cells: Vec<(super::edit::RowAt, usize)>,
+        list: ListPicker<datarig_core::edit::Value>,
+    },
 }
 
 /// `$body` with the list of whichever picker `$p` is, as `$list`.

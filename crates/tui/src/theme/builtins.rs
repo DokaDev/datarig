@@ -6,8 +6,10 @@
 //! (`tab_active`, mostly the accent blended into the background). The result grid's search
 //! matches (`grid_match`) take each theme's search colors, and the cursor's match
 //! (`grid_match_current`) the selection with its text in bold and underlined. Changed cells and the
-//! count of pending changes (`edit_changed`, `edit_pending`) take the warning color in bold. Every
-//! theme passes the checks of `theme/tests.rs`.
+//! count of pending changes (`edit_changed`, `edit_pending`) take the warning color in bold, a new
+//! row's cells (`edit_inserted`) the success color in bold, and a row to be deleted
+//! (`edit_deleted`) the muted text crossed out (dim in `terminal`). Every theme passes the checks
+//! of `theme/tests.rs`.
 
 use super::{Dim, Theme, rgb};
 use ratatui::style::{Color, Modifier, Style};
@@ -74,6 +76,8 @@ pub const TERMINAL: Theme = Theme {
     // The yellow of warnings, in bold: shows on the reversed selection too.
     edit_changed: Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
     edit_pending: Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+    edit_inserted: Style::new().fg(Color::Green).add_modifier(Modifier::BOLD),
+    edit_deleted: Style::new().add_modifier(Modifier::DIM.union(Modifier::CROSSED_OUT)),
     match_paren: Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     // The bright blue: the plain one is too dark on many terminals' black.
     read_only_mark: Style::new().fg(Color::LightBlue).add_modifier(Modifier::BOLD),
@@ -145,6 +149,8 @@ pub const LIGHT: Theme = Theme {
         .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     edit_changed: Style::new().fg(rgb(0x8A6100)).add_modifier(Modifier::BOLD),
     edit_pending: Style::new().fg(rgb(0x8A6100)).add_modifier(Modifier::BOLD),
+    edit_inserted: Style::new().fg(rgb(0x1A7F37)).add_modifier(Modifier::BOLD),
+    edit_deleted: Style::new().fg(rgb(0x59636E)).add_modifier(Modifier::CROSSED_OUT),
     match_paren: Style::new().bg(rgb(0xC9CED6)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x0550AE)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xC0262D)).add_modifier(Modifier::BOLD),
@@ -215,6 +221,8 @@ pub const HIGH_CONTRAST: Theme = Theme {
         .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     edit_changed: Style::new().fg(rgb(0xFFFF00)).add_modifier(Modifier::BOLD),
     edit_pending: Style::new().fg(rgb(0xFFFF00)).add_modifier(Modifier::BOLD),
+    edit_inserted: Style::new().fg(rgb(0x00FF66)).add_modifier(Modifier::BOLD),
+    edit_deleted: Style::new().fg(rgb(0xD0D0D0)).add_modifier(Modifier::CROSSED_OUT),
     match_paren: Style::new().bg(rgb(0xFFFFFF)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x66B3FF)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xFF4040)).add_modifier(Modifier::BOLD),
@@ -286,6 +294,9 @@ pub const CATPPUCCIN_MOCHA: Theme = Theme {
         .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     edit_changed: Style::new().fg(rgb(0xF9E2AF)).add_modifier(Modifier::BOLD),
     edit_pending: Style::new().fg(rgb(0xF9E2AF)).add_modifier(Modifier::BOLD),
+    edit_inserted: Style::new().fg(rgb(0xA6E3A1)).add_modifier(Modifier::BOLD),
+    // Overlay 2, lighter than the muted text, to read on the selection.
+    edit_deleted: Style::new().fg(rgb(0x9399B2)).add_modifier(Modifier::CROSSED_OUT),
     match_paren: Style::new().bg(rgb(0x45475A)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x89B4FA)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xF38BA8)).add_modifier(Modifier::BOLD),
@@ -361,6 +372,9 @@ pub const CATPPUCCIN_LATTE: Theme = Theme {
     // The warning color darkened for contrast on the selection: 0xB07017 reads below 3:1.
     edit_changed: Style::new().fg(rgb(0x965E12)).add_modifier(Modifier::BOLD),
     edit_pending: Style::new().fg(rgb(0x965E12)).add_modifier(Modifier::BOLD),
+    // The green darkened for 3:1 on the selection.
+    edit_inserted: Style::new().fg(rgb(0x2E7A1F)).add_modifier(Modifier::BOLD),
+    edit_deleted: Style::new().fg(rgb(0x6C6F85)).add_modifier(Modifier::CROSSED_OUT),
     match_paren: Style::new().bg(rgb(0xBCC0CC)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x1A5AD8)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xD20F39)).add_modifier(Modifier::BOLD),
@@ -434,6 +448,9 @@ pub const TOKYO_NIGHT_NIGHT: Theme = Theme {
         .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     edit_changed: Style::new().fg(rgb(0xE0AF68)).add_modifier(Modifier::BOLD),
     edit_pending: Style::new().fg(rgb(0xE0AF68)).add_modifier(Modifier::BOLD),
+    edit_inserted: Style::new().fg(rgb(0x9ECE6A)).add_modifier(Modifier::BOLD),
+    // The dark foreground, lighter than the muted text, to read on the selection.
+    edit_deleted: Style::new().fg(rgb(0xA9B1D6)).add_modifier(Modifier::CROSSED_OUT),
     match_paren: Style::new().bg(rgb(0x414868)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x7AA2F7)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xF7768E)).add_modifier(Modifier::BOLD),
@@ -510,6 +527,9 @@ pub const TOKYO_NIGHT_DAY: Theme = Theme {
     // The warning color darkened for contrast on the selection: 0x8C6C3E reads below 3:1.
     edit_changed: Style::new().fg(rgb(0x7A5D33)).add_modifier(Modifier::BOLD),
     edit_pending: Style::new().fg(rgb(0x7A5D33)).add_modifier(Modifier::BOLD),
+    // The green darkened for 3:1 on the selection.
+    edit_inserted: Style::new().fg(rgb(0x4A6630)).add_modifier(Modifier::BOLD),
+    edit_deleted: Style::new().fg(rgb(0x68709A)).add_modifier(Modifier::CROSSED_OUT),
     match_paren: Style::new().bg(rgb(0xA8AECB)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x285FAD)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xC64343)).add_modifier(Modifier::BOLD),
@@ -582,6 +602,8 @@ pub const GRUVBOX_DARK: Theme = Theme {
         .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     edit_changed: Style::new().fg(rgb(0xFABD2F)).add_modifier(Modifier::BOLD),
     edit_pending: Style::new().fg(rgb(0xFABD2F)).add_modifier(Modifier::BOLD),
+    edit_inserted: Style::new().fg(rgb(0xB8BB26)).add_modifier(Modifier::BOLD),
+    edit_deleted: Style::new().fg(rgb(0xA89984)).add_modifier(Modifier::CROSSED_OUT),
     match_paren: Style::new().bg(rgb(0x504945)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x83A598)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xFB4934)).add_modifier(Modifier::BOLD),
@@ -656,6 +678,9 @@ pub const GRUVBOX_LIGHT: Theme = Theme {
     // The warning color darkened for contrast on the selection: 0xAA7016 reads below 3:1.
     edit_changed: Style::new().fg(rgb(0x946010)).add_modifier(Modifier::BOLD),
     edit_pending: Style::new().fg(rgb(0x946010)).add_modifier(Modifier::BOLD),
+    // The green darkened for 3:1 on the selection.
+    edit_inserted: Style::new().fg(rgb(0x66620B)).add_modifier(Modifier::BOLD),
+    edit_deleted: Style::new().fg(rgb(0x7C6F64)).add_modifier(Modifier::CROSSED_OUT),
     match_paren: Style::new().bg(rgb(0xD5C4A1)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x076678)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0x9D0006)).add_modifier(Modifier::BOLD),
@@ -730,6 +755,8 @@ pub const NORD: Theme = Theme {
         .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     edit_changed: Style::new().fg(rgb(0xEBCB8B)).add_modifier(Modifier::BOLD),
     edit_pending: Style::new().fg(rgb(0xEBCB8B)).add_modifier(Modifier::BOLD),
+    edit_inserted: Style::new().fg(rgb(0xA3BE8C)).add_modifier(Modifier::BOLD),
+    edit_deleted: Style::new().fg(rgb(0x9AA3B5)).add_modifier(Modifier::CROSSED_OUT),
     match_paren: Style::new().bg(rgb(0x4C566A)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x88C0D0)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xBF616A)).add_modifier(Modifier::BOLD),
@@ -804,6 +831,8 @@ pub const DRACULA: Theme = Theme {
         .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     edit_changed: Style::new().fg(rgb(0xF1FA8C)).add_modifier(Modifier::BOLD),
     edit_pending: Style::new().fg(rgb(0xF1FA8C)).add_modifier(Modifier::BOLD),
+    edit_inserted: Style::new().fg(rgb(0x50FA7B)).add_modifier(Modifier::BOLD),
+    edit_deleted: Style::new().fg(rgb(0x8C96BF)).add_modifier(Modifier::CROSSED_OUT),
     match_paren: Style::new().bg(rgb(0x44475A)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x8BE9FD)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xFF5555)).add_modifier(Modifier::BOLD),

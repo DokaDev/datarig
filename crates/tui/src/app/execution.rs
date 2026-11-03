@@ -420,7 +420,8 @@ impl App {
         let t = self.tab();
         let Results::Rows(rs) = &t.results else { return };
         let len = rs.rows.len();
-        if !t.grid.at_page_end(len) || (t.grid.window(len).end == len && !rs.more) {
+        // The last page ends with the rows read (and the new rows after them).
+        if !t.grid.at_page_end(len) || (t.grid.window(len).end >= len && !rs.more) {
             return;
         }
         // `n` is the search's while one is on: the next page's key there.
@@ -1500,10 +1501,12 @@ impl App {
                         let rs = &mut p.rs;
                         rs.read_in.page(t.exec.values.as_ref());
                         if rs.more {
+                            let read = rs.rows.len();
                             rs.more = match rs.rows.append(rows) {
                                 Ok(a) => more && !a.capped,
                                 Err(_) => false,
                             };
+                            p.grid.rows_came(read, rs.rows.len() - read);
                         }
                         rs.rows.len()
                     }
@@ -1544,7 +1547,10 @@ impl App {
                 match (answer, r) {
                     (Some((rs, grid)), Some(r)) if same => {
                         rs.read_in.page(values.as_ref());
-                        match rs.rows.append(rows) {
+                        let read = rs.rows.len();
+                        let appended = rs.rows.append(rows);
+                        grid.rows_came(read, rs.rows.len() - read);
+                        match appended {
                             Ok(a) if a.capped => {
                                 let count = rs.rows.len() as u64;
                                 let limit = fmt_bytes(limits.cap.unwrap_or(0));
@@ -1685,7 +1691,10 @@ impl App {
                 let m = match answer {
                     Some((rs, grid)) => {
                         rs.read_in.page(values.as_ref());
-                        match rs.rows.append(rows) {
+                        let read = rs.rows.len();
+                        let appended = rs.rows.append(rows);
+                        grid.rows_came(read, rs.rows.len() - read);
+                        match appended {
                             Ok(a) if a.capped => {
                                 let count = rs.rows.len() as u64;
                                 let limit = fmt_bytes(limits.cap.unwrap_or(0));

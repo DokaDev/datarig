@@ -10,6 +10,10 @@
 //!
 //! A cell is edited in a line drawn over it (`Ctx::CellEdit`), an enum or boolean column's in a
 //! list of its values. Cells selected in one column take the same value, as one change.
+//!
+//! New rows are added (every value the column's default, or a copy of the cursor's row) and
+//! shown after the rows read, in the order they were added; rows read are marked to be deleted,
+//! new rows removed.
 
 use super::picker::Picker;
 use super::*;
@@ -34,8 +38,39 @@ pub enum EditAction {
     SetDefault,
     Undo,
     Redo,
-    /// Drop the pending changes of the cell or of the selection.
+    /// Drop the pending changes of the cell or of the selection (a new row in it goes whole).
     Revert,
+    /// A new row below the cursor's.
+    AddRow,
+    /// A new row with the values of the cursor's.
+    CloneRow,
+    /// Mark the cursor's row (the selected rows) to be deleted, or no longer; a new row goes.
+    DeleteRow,
+}
+
+/// A row the grid shows: a row read (by its index in the result) or a new row (by its id).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowAt {
+    Read(usize),
+    New(u64),
+}
+
+/// The row the grid shows at `row` of `rs`: the rows read, then the new rows.
+pub fn row_at(rs: &ResultSet, row: usize) -> Option<RowAt> {
+    let len = rs.rows.len();
+    if row < len {
+        return Some(RowAt::Read(row));
+    }
+    rs.edit.batch.drafts().get(row - len).map(|d| RowAt::New(d.id))
+}
+
+/// Where the grid shows row `at` of `rs`.
+pub fn shown_row(rs: &ResultSet, at: RowAt) -> Option<usize> {
+    let len = rs.rows.len();
+    match at {
+        RowAt::Read(r) => (r < len).then_some(r),
+        RowAt::New(id) => rs.edit.batch.drafts().iter().position(|d| d.id == id).map(|i| len + i),
+    }
 }
 
 /// A result's pending changes and what may change it.
@@ -113,11 +148,23 @@ pub struct EditWait {
 /// cells selected in its column, else that one cell) on `Enter`.
 pub struct CellEdit {
     pub result: u64,
-    pub at: (usize, usize),
-    pub cells: Vec<(usize, usize)>,
+    pub at: (RowAt, usize),
+    pub cells: Vec<(RowAt, usize)>,
     pub input: TextInput,
     /// Why the text typed was not taken.
     pub error: Option<String>,
+}
+
+impl CellEdit {
+    /// The grid's row and column of its cell, while `rs` shows it.
+    pub fn shown_at(&self, rs: &ResultSet) -> Option<(usize, usize)> {
+        shown_row(rs, self.at.0).map(|r| (r, self.at.1))
+    }
+
+    /// Its cells are of a new row.
+    fn new_row(&self) -> bool {
+        matches!(self.at.0, RowAt::New(_))
+    }
 }
 
 /// The row result tab `t` shows.
@@ -232,6 +279,15 @@ fn value_not_whole(
     row.or_else(|| cells.column_refused(0).filter(typed).map(|r| (None, r)))
 }
 
+/// Whether value `text` of column `col` (as read) is shown whole, so a copy of it is the value
+/// itself: as an SQL copy judges it ([`export::sql_cells`]: a MySQL `FLOAT` shown rounded, bytes
+/// not in their form, text or a time read in a session that shows it otherwise).
+fn shown_whole(d: Dialect, rs: &ResultSet, col: usize, text: &str, server_zone: Option<&str>) -> bool {
+    let m = &rs.columns[col].meta;
+    let cols = [export::SqlColumn { name: &m.name, type_name: &m.type_name, kind: m.kind, auto_increment: false }];
+    export::sql_cells(d, &cols, &rs.read_in, server_zone).is_ok_and(|c| c.cell(0, text).is_ok())
+}
+
 impl App {
     /// The edits tab `tab`'s server takes: as a session of its profile said (`DbEvent::Edit`),
     /// else its driver's (`Capabilities::edit`). `None` without a profile, or when the profile or
@@ -253,7 +309,12 @@ impl App {
         match a {
             EditAction::Undo | EditAction::Redo => self.edit_history(a == EditAction::Redo),
             EditAction::Revert => self.edit_revert(),
-            EditAction::Cell | EditAction::SetNull | EditAction::SetDefault => self.edit_resolve(a),
+            EditAction::Cell
+            | EditAction::SetNull
+            | EditAction::SetDefault
+            | EditAction::AddRow
+            | EditAction::CloneRow
+            | EditAction::DeleteRow => self.edit_resolve(a),
         }
     }
 
@@ -261,13 +322,15 @@ impl App {
     fn edit_history(&mut self, redo: bool) {
         let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
         let done = if redo { rs.edit.batch.redo() } else { rs.edit.batch.undo() };
+        self.edit_grid_sync();
         if !done {
             let says = if redo { Label::EditNothingToRedo } else { Label::EditNothingToUndo };
             self.flash(Notice::new(says, Level::Info));
         }
     }
 
-    /// Drop the pending changes of the cursor's cell, or of the selected cells.
+    /// Drop the pending changes of the cursor's cell, or of the selected cells: a row marked to
+    /// be deleted among them is no longer marked, a new row's cell goes back to its default.
     fn edit_revert(&mut self) {
         let t = self.tabs.active_mut();
         let (grid, Some(rs)) = (&t.grid, shown_mut(&mut t.results, t.exec.view)) else { return };
@@ -278,11 +341,56 @@ impl App {
             .batch
             .rows()
             .filter(|(r, _)| rows.contains(r))
-            .flat_map(|(r, e)| e.set.keys().filter(|c| cols.contains(c)).map(move |c| (r, *c)))
+            .flat_map(|(r, e)| {
+                let marked = e.delete.then_some((r, cols.start));
+                e.set.keys().filter(|c| cols.contains(c)).map(move |c| (r, *c)).chain(marked)
+            })
             .collect();
-        if cells.is_empty() || !rs.edit.batch.revert(&cells, &[]) {
+        let new: Vec<(u64, usize)> = rows
+            .filter_map(|r| match row_at(rs, r) {
+                Some(RowAt::New(id)) => Some(id),
+                _ => None,
+            })
+            .flat_map(|id| cols.clone().map(move |c| (id, c)))
+            .collect();
+        let done = !(cells.is_empty() && new.is_empty()) && rs.edit.batch.revert(&cells, &new);
+        self.edit_grid_sync();
+        if !done {
             self.flash(Notice::new(Label::EditNothingToRevert, Level::Info));
         }
+    }
+
+    /// The active tab's grid after its shown result's new rows changed: it counts them, and its
+    /// cursor and a selection's anchor stay on rows it shows.
+    fn edit_grid_sync(&mut self) {
+        let t = self.tabs.active_mut();
+        let Some(rs) = shown_mut(&mut t.results, t.exec.view) else { return };
+        let n = rs.edit.batch.drafts().len();
+        let last = (rs.rows.len() + n).saturating_sub(1);
+        let g = &mut t.grid;
+        g.new_rows = n;
+        g.row = g.row.min(last);
+        if let Some(a) = g.anchor.as_mut() {
+            a.0 = a.0.min(last);
+        }
+    }
+
+    /// The cursor to row `at` of the shown result, column `col` (its page shown), the selection
+    /// dropped.
+    fn edit_cursor_to(&mut self, at: RowAt, col: usize) {
+        self.edit_grid_sync();
+        let t = self.tabs.active_mut();
+        let Some(rs) = shown_mut(&mut t.results, t.exec.view) else { return };
+        let (Some(row), len) = (shown_row(rs, at), rs.rows.len()) else { return };
+        let g = &mut t.grid;
+        if !g.window(len).contains(&row) && g.page_size > 0 {
+            // New rows are on the last page.
+            g.page = len.saturating_sub(1) / g.page_size;
+        }
+        (g.row, g.col) = (row, col);
+        g.anchor = None;
+        g.detached = false;
+        self.selecting_done();
     }
 
     /// What results tab `t` reads now are bound to; `None` without a profile.
@@ -430,11 +538,18 @@ impl App {
     /// An edit key on a resolved result: the cursor's cell, or the cells selected in its
     /// column; each row must be found again by values shown whole.
     fn edit_ready(&mut self, a: EditAction, target: &EditTarget) {
+        match a {
+            EditAction::AddRow => return self.edit_add_row(target),
+            EditAction::CloneRow => return self.edit_clone_row(target),
+            EditAction::DeleteRow => return self.edit_delete_rows(target),
+            _ => {}
+        }
         let t = self.tab();
         let Some(rs) = rows_of(t) else { return };
         let (total, ncols) = (rs.rows.len(), rs.columns.len());
         let (row, col) = (t.grid.row, t.grid.col);
-        if row >= total || col >= ncols {
+        let shown = total + rs.edit.batch.drafts().len();
+        if row >= shown || col >= ncols {
             return;
         }
         let rows = match t.grid.selection(total, ncols) {
@@ -442,6 +557,15 @@ impl App {
             Some((rows, cols)) if t.grid.shape == Shape::Cells && cols.len() == 1 => rows,
             Some(_) => return self.flash(Notice::new(Label::EditSeveralColumns, Level::Info)),
         };
+        if rows.end > total {
+            if rows.start < total {
+                return self.flash(Notice::new(Label::EditMixedRows, Level::Info));
+            }
+            return self.edit_new_cells(a, target, rows, col);
+        }
+        if let Some(r) = rows.clone().find(|r| rs.edit.batch.deleted(*r)) {
+            return self.say_refused(Msg::EditWhyRowDeleted { row: (r + 1).to_string() });
+        }
         let name = rs.columns[col].meta.name.clone();
         let c = match target.allows(col, Write::Update) {
             Ok(c) => c.clone(),
@@ -471,7 +595,7 @@ impl App {
                 Some(r) => Msg::EditWhyValueNotWhole { row: (r + 1).to_string(), column, reason },
             });
         }
-        let cells: Vec<(usize, usize)> = rows.clone().map(|r| (r, col)).collect();
+        let cells: Vec<(RowAt, usize)> = rows.clone().map(|r| (RowAt::Read(r), col)).collect();
         // The cursor's value: its pending one, else as read.
         let pending = rs.edit.batch.value(row, col).cloned();
         let stored = read.get(row - rows.start).and_then(|r| r.get(col)).cloned().flatten();
@@ -484,7 +608,7 @@ impl App {
             EditAction::Cell if !c.column.enum_labels.is_empty() || c.kind == ValueKind::Bool => {
                 let current = pending.or_else(|| Some(stored.map_or(Value::Null, Value::Text)));
                 let result = rs.id;
-                self.open_cell_picker(&c, cells, result, current);
+                self.open_cell_picker(&c, cells, result, current, false);
             }
             EditAction::Cell => {
                 let text = match pending {
@@ -496,16 +620,216 @@ impl App {
                     return self.flash(Notice::new(Label::EditSeveralLines, Level::Info));
                 }
                 let result = rs.id;
+                let at = (RowAt::Read(row), col);
                 self.tabs.active_mut().cell_edit =
-                    Some(CellEdit { result, at: (row, col), cells, input: TextInput::new(&text), error: None });
+                    Some(CellEdit { result, at, cells, input: TextInput::new(&text), error: None });
             }
-            EditAction::Undo | EditAction::Redo | EditAction::Revert => {}
+            _ => {}
         }
     }
 
+    /// An edit key on cells of new rows `rows` (as the grid shows them) in column `col`: the
+    /// column must take a value in a new row; no row is found again, so nothing is read. Any
+    /// column that takes one takes its default.
+    fn edit_new_cells(&mut self, a: EditAction, target: &EditTarget, rows: Range<usize>, col: usize) {
+        let t = self.tab();
+        let Some(rs) = rows_of(t) else { return };
+        let ids: Vec<RowAt> = rows.clone().filter_map(|r| row_at(rs, r)).collect();
+        let Some(at @ RowAt::New(id)) = row_at(rs, t.grid.row).filter(|_| ids.len() == rows.len()) else { return };
+        let name = rs.columns[col].meta.name.clone();
+        let c = match target.allows(col, Write::Insert) {
+            Ok(c) => c.clone(),
+            Err(r) => return self.say_refused(column_reason(r, name)),
+        };
+        let d = self.tab_dialect(t.id);
+        let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
+        // A typed value is stored as shown only in a session that shows it so (a new row holds
+        // no value shown rounded).
+        let typed = a == EditAction::Cell;
+        if let Some((_, refused)) = value_not_whole(d, rs, col, &[], 0, zone, false).filter(|_| typed) {
+            let (column, reason) = (refused.column, self.not_whole_reason(&refused.why));
+            return self.say_refused(Msg::EditWhyColumnNotWhole { column, reason });
+        }
+        let current = rs.edit.batch.drafts().iter().find(|d| d.id == id).and_then(|d| d.cells.get(col)).cloned();
+        let cells: Vec<(RowAt, usize)> = ids.into_iter().map(|r| (r, col)).collect();
+        match a {
+            EditAction::SetNull if c.column.not_null => self.say_refused(Msg::EditWhyNotNull { column: name }),
+            EditAction::SetNull => self.edit_write_cells(&cells, Value::Null),
+            // A new row takes any column's default, a new number too.
+            EditAction::SetDefault => self.edit_write_cells(&cells, Value::Default),
+            EditAction::Cell if !c.column.enum_labels.is_empty() || c.kind == ValueKind::Bool => {
+                let result = rs.id;
+                self.open_cell_picker(&c, cells, result, current, true);
+            }
+            EditAction::Cell => {
+                let text = match current {
+                    Some(Value::Text(s)) => s,
+                    _ => String::new(),
+                };
+                if text.contains(['\n', '\r']) {
+                    return self.flash(Notice::new(Label::EditSeveralLines, Level::Info));
+                }
+                let result = rs.id;
+                self.tabs.active_mut().cell_edit =
+                    Some(CellEdit { result, at: (at, col), cells, input: TextInput::new(&text), error: None });
+            }
+            _ => {}
+        }
+    }
+
+    /// Whether every column of `target` refuses a value in a new row: why, said.
+    fn no_insert(&mut self, target: &EditTarget, ncols: usize) -> Option<usize> {
+        let first = (0..ncols).find(|&c| target.allows(c, Write::Insert).is_ok());
+        if first.is_none() {
+            self.say_refused(Label::EditWhyNoInsertColumn.into());
+        }
+        first
+    }
+
+    /// `o`: a new row, every value its column's default, below the cursor's row (right after
+    /// the cursor's new row; else after the other new rows). The cursor goes to its first column
+    /// that takes a value.
+    fn edit_add_row(&mut self, target: &EditTarget) {
+        let t = self.tab();
+        let Some(rs) = rows_of(t) else { return };
+        let ncols = rs.columns.len();
+        let next_to = match row_at(rs, t.grid.row) {
+            Some(RowAt::New(id)) => Some(id),
+            _ => None,
+        };
+        let Some(first) = self.no_insert(target, ncols) else { return };
+        let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
+        // Every new row is shown after the rows read: in the order of the batch.
+        let id = rs.edit.batch.add(usize::MAX, next_to, vec![Value::Default; ncols]);
+        self.edit_cursor_to(RowAt::New(id), first);
+    }
+
+    /// `O`: a new row with the values of the cursor's row (a row read: its pending values, else
+    /// as read), but what the table gives a new row itself: the key's columns, a number drawn
+    /// (an identity, `AUTO_INCREMENT`, a sequence), a generated or computed column take their
+    /// default. A value as read must be shown whole, else the copy is refused.
+    fn edit_clone_row(&mut self, target: &EditTarget) {
+        let t = self.tab();
+        let Some(rs) = rows_of(t) else { return };
+        let ncols = rs.columns.len();
+        let Some(at) = row_at(rs, t.grid.row) else { return };
+        if self.no_insert(target, ncols).is_none() {
+            return;
+        }
+        let t = self.tab();
+        let Some(rs) = rows_of(t) else { return };
+        // The values, and the one as read of each cell not set.
+        let (values, read): (Vec<Value>, Vec<Option<String>>) = match at {
+            RowAt::New(id) => {
+                let Some(d) = rs.edit.batch.drafts().iter().find(|d| d.id == id) else { return };
+                (d.cells.clone(), vec![None; ncols])
+            }
+            RowAt::Read(r) => {
+                let row = read_rows(rs, r..r + 1).and_then(|mut v| v.pop()).filter(|row| row.len() >= ncols);
+                let Some(row) = row else {
+                    return self.say_refused(Msg::EditWhyNotRead { row: (r + 1).to_string() });
+                };
+                (0..ncols)
+                    .map(|c| match rs.edit.batch.value(r, c) {
+                        Some(v) => (v.clone(), None),
+                        None => (row[c].clone().map_or(Value::Null, Value::Text), row[c].clone()),
+                    })
+                    .unzip()
+            }
+        };
+        let keys: &[usize] = match &target.identity {
+            Identity::Key { columns, .. } => columns,
+            Identity::Values { .. } => &[],
+        };
+        let d = self.tab_dialect(t.id);
+        let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
+        let mut cells = Vec::with_capacity(ncols);
+        for (c, (v, as_read)) in values.into_iter().zip(read).enumerate() {
+            let own = keys.contains(&c) || target.allows(c, Write::Insert).map_or(true, new_number);
+            if own {
+                cells.push(Value::Default);
+                continue;
+            }
+            if let Some(text) = as_read
+                && !shown_whole(d, rs, c, &text, zone)
+            {
+                let column = rs.columns[c].meta.name.clone();
+                return self.say_refused(Msg::EditWhyCloneNotWhole { column });
+            }
+            cells.push(v);
+        }
+        let next_to = match at {
+            RowAt::New(id) => Some(id),
+            RowAt::Read(_) => None,
+        };
+        let col = t.grid.col;
+        let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
+        let id = rs.edit.batch.add(usize::MAX, next_to, cells);
+        self.edit_cursor_to(RowAt::New(id), col);
+    }
+
+    /// `D`: the cursor's row, or the rows of the selection (not whole columns): rows read are
+    /// marked to be deleted (unmarked when every one is), new rows removed, as one change. A row
+    /// read must be found again by values shown whole.
+    fn edit_delete_rows(&mut self, target: &EditTarget) {
+        let t = self.tab();
+        let Some(rs) = rows_of(t) else { return };
+        let (len, ncols) = (rs.rows.len(), rs.columns.len());
+        let shown = len + rs.edit.batch.drafts().len();
+        let rows = match t.grid.selection(len, ncols) {
+            None => t.grid.row..t.grid.row + 1,
+            Some(_) if t.grid.shape == Shape::Cols => {
+                return self.flash(Notice::new(Label::EditDeleteColumns, Level::Info));
+            }
+            Some((rows, _)) => rows,
+        };
+        let rows = rows.start..rows.end.min(shown);
+        if rows.is_empty() {
+            return;
+        }
+        let read = rows.start.min(len)..rows.end.min(len);
+        let ids: Vec<u64> = (rows.start.max(len)..rows.end)
+            .filter_map(|r| match row_at(rs, r) {
+                Some(RowAt::New(id)) => Some(id),
+                _ => None,
+            })
+            .collect();
+        let mut orig = Vec::new();
+        if !read.is_empty() {
+            let Some(got) = read_rows(rs, read.clone()) else {
+                return self.say_refused(Msg::EditWhyNotRead { row: (read.start + 1).to_string() });
+            };
+            if let Some(k) = got.iter().position(|r| r.len() < ncols) {
+                return self.say_refused(Msg::EditWhyNotRead { row: (read.start + k + 1).to_string() });
+            }
+            let d = self.tab_dialect(t.id);
+            let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
+            if let Some((r, refused)) = not_whole(d, rs, target, &got, read.start, zone) {
+                let reason = self.not_whole_reason(&refused.why);
+                return self.say_refused(Msg::EditWhyNotWhole { row: (r + 1).to_string(), reason });
+            }
+            orig = got;
+        }
+        let first = read.start;
+        let marked: Vec<usize> = read.collect();
+        let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
+        rs.edit.batch.delete_with_new(&marked, &ids, |r| orig.get(r - first).cloned().unwrap_or_default());
+        self.tab_mut().grid.anchor = None;
+        self.selecting_done();
+        self.edit_grid_sync();
+    }
+
     /// The list of the values of an enum or boolean column `c`, then NULL and DEFAULT when it
-    /// takes them; a pick goes into `cells` of result `result`.
-    fn open_cell_picker(&mut self, c: &TableColumn, cells: Vec<(usize, usize)>, result: u64, current: Option<Value>) {
+    /// takes them (DEFAULT always in a new row, `new_row`); a pick goes into `cells` of result
+    /// `result`.
+    fn open_cell_picker(
+        &mut self,
+        c: &TableColumn,
+        cells: Vec<(RowAt, usize)>,
+        result: u64,
+        current: Option<Value>,
+        new_row: bool,
+    ) {
         let i18n = &self.i18n;
         let labels: Vec<String> = match c.column.enum_labels.is_empty() {
             false => c.column.enum_labels.clone(),
@@ -518,7 +842,7 @@ impl App {
             let null = i18n.label(Label::ResultsNull).to_string();
             entries.push(Entry::new(Value::Null, null, i18n.label(Label::EditPickNull).to_string()));
         }
-        if has_default(c) && !new_number(c) {
+        if new_row || (has_default(c) && !new_number(c)) {
             let hint = c
                 .column
                 .default
@@ -550,25 +874,46 @@ impl App {
         }
     }
 
-    /// Set `cells` (rows of one column, in order) of the active tab's shown result to `v`, as one
-    /// change.
-    fn edit_write_cells(&mut self, cells: &[(usize, usize)], v: Value) {
+    /// Set `cells` (rows of one column, in order: rows read, or new rows) of the active tab's
+    /// shown result to `v`, as one change.
+    fn edit_write_cells(&mut self, cells: &[(RowAt, usize)], v: Value) {
+        let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
+        let new: Vec<(u64, usize)> = cells
+            .iter()
+            .filter_map(|&(r, c)| match r {
+                RowAt::New(id) => Some((id, c)),
+                RowAt::Read(_) => None,
+            })
+            .collect();
+        if !new.is_empty() {
+            if new.len() == cells.len() {
+                rs.edit.batch.set_new(&new, &v);
+            }
+            return;
+        }
+        let cells: Vec<(usize, usize)> = cells
+            .iter()
+            .filter_map(|&(r, c)| match r {
+                RowAt::Read(r) => Some((r, c)),
+                RowAt::New(_) => None,
+            })
+            .collect();
         let (Some(first), Some(last)) = (cells.first(), cells.last()) else { return };
         let first = first.0;
-        let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
         let Some(read) = read_rows(rs, first..last.0 + 1) else {
             return self.say_refused(Msg::EditWhyNotRead { row: (first + 1).to_string() });
         };
-        rs.edit.batch.set(cells, &v, |r| read.get(r - first).cloned().unwrap_or_default());
+        rs.edit.batch.set(&cells, &v, |r| read.get(r - first).cloned().unwrap_or_default());
     }
 
     /// The open cell editor's cells and their table column, while its result is resolved.
-    fn cell_edit_column(&self) -> Option<(Vec<(usize, usize)>, TableColumn)> {
+    fn cell_edit_column(&self) -> Option<(Vec<(RowAt, usize)>, TableColumn)> {
         let t = self.tab();
         let e = t.cell_edit.as_ref()?;
         let rs = rows_of(t).filter(|rs| rs.id == e.result)?;
         let Target::Ready(target) = &rs.edit.target else { return None };
-        let c = target.allows(e.at.1, Write::Update).ok()?;
+        let w = if e.new_row() { Write::Insert } else { Write::Update };
+        let c = target.allows(e.at.1, w).ok()?;
         Some((e.cells.clone(), c.clone()))
     }
 
@@ -601,7 +946,7 @@ impl App {
         }
         let t = self.tab();
         let over = match (&t.results, &t.cell_edit) {
-            (Results::Rows(rs), Some(e)) => t.grid.cell_rect(e.at.0, e.at.1, rs.rows.len()),
+            (Results::Rows(rs), Some(e)) => e.shown_at(rs).and_then(|(r, c)| t.grid.cell_rect(r, c, rs.rows.len())),
             _ => None,
         };
         let inside = over.is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height);
@@ -653,8 +998,11 @@ impl App {
             return;
         };
         let column = c.column.name.clone();
+        // A new row takes any column's default.
+        let new_row = self.tab().cell_edit.as_ref().is_some_and(|e| e.new_row());
         let why = match v {
             Value::Null if c.column.not_null => Some(Msg::EditWhyNotNull { column }),
+            Value::Default if new_row => None,
             Value::Default if !has_default(&c) => Some(Msg::EditWhyNoDefault { column }),
             Value::Default if new_number(&c) => Some(Msg::EditWhyNewNumber { column }),
             _ => None,

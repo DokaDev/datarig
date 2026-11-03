@@ -477,7 +477,7 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     let tx: Vec<String> = shown(Ctx::Explorer, "space x").into_iter().map(|(k, _)| k).collect();
     assert_eq!(tx, ["c", "r", "s"]);
     let data: Vec<String> = shown(Ctx::Grid, "space d").into_iter().map(|(k, _)| k).collect();
-    assert_eq!(data, ["D", "U", "e", "n", "r", "u"]);
+    assert_eq!(data, ["D", "O", "U", "d", "e", "n", "o", "r", "u"]);
     assert_eq!(km.group_label(Ctx::Grid, &k("space d")), Some(Label::GroupData));
     // `Space Space`: the action menu, listed with the groups.
     assert!(root.contains(&("Space".into(), Child::Action(action::by_id("menu.open").unwrap().action))));

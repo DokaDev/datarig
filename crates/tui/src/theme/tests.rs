@@ -379,6 +379,8 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         grid_match_current: _,
         edit_changed: _,
         edit_pending: _,
+        edit_inserted: _,
+        edit_deleted: _,
         match_paren: _,
         read_only_mark: _,
         danger_mark: _,
@@ -399,7 +401,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 61);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 63);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -643,6 +645,33 @@ fn changed_cells_show_in_every_theme() {
         assert!(delta_e(c, th.fg) >= 8.0, "{name}: a changed cell looks like body text");
         let k = contrast(fg(th.edit_pending), th.surface);
         assert!(k >= 3.0, "{name}: the pending count: {k:.2}");
+    }
+}
+
+/// A new row's cells show as a changed cell does, apart from it and from body text; a row to be
+/// deleted is crossed out, readable on the background, the alternate rows and the selections.
+#[test]
+fn new_and_deleted_rows_show_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        let s = th.edit_inserted;
+        assert!(s.add_modifier.contains(Modifier::BOLD), "{name}: edit_inserted shows without color");
+        assert!(s.fg.is_some() && s.fg != Some(th.fg) && s.fg != Some(th.null_fg), "{name}: edit_inserted");
+        assert!(s.fg != th.edit_changed.fg && s.fg != th.selection.fg, "{name}: edit_inserted");
+        assert_eq!(s.bg, None, "{name}: edit_inserted hides the cell's background");
+        let d = th.edit_deleted;
+        assert!(d.add_modifier.contains(Modifier::CROSSED_OUT), "{name}: edit_deleted shows without color");
+        assert!(d.fg != Some(th.fg) && d.bg.is_none(), "{name}: edit_deleted");
+    }
+    for (name, th) in rgb_themes() {
+        let (n, d) = (fg(th.edit_inserted), fg(th.edit_deleted));
+        for other in [th.bg, th.surface_alt, bg(th.selection), bg(th.range), bg(th.selection_unfocused())] {
+            let k = contrast(n, other);
+            assert!(k >= 3.0, "{name}: a new row's cell on {other:?}: {k:.2}");
+            let k = contrast(d, other);
+            assert!(k >= 2.5, "{name}: a row to be deleted on {other:?}: {k:.2}");
+        }
+        assert!(delta_e(n, th.fg) >= 8.0, "{name}: a new row looks like body text");
+        assert!(delta_e(n, fg(th.edit_changed)) >= 8.0, "{name}: a new row looks like a changed cell");
     }
 }
 

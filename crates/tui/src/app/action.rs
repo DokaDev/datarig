@@ -789,6 +789,9 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Edit(D::Undo), "edit.undo", Label::ActionEditUndo, grid_rows_focused),
     act(Action::Edit(D::Redo), "edit.redo", Label::ActionEditRedo, grid_rows_focused),
     act(Action::Edit(D::Revert), "edit.revert", Label::ActionEditRevert, grid_rows_focused),
+    act(Action::Edit(D::AddRow), "edit.add_row", Label::ActionEditAddRow, grid_rows_focused),
+    act(Action::Edit(D::CloneRow), "edit.clone_row", Label::ActionEditCloneRow, grid_rows_focused),
+    act(Action::Edit(D::DeleteRow), "edit.delete_row", Label::ActionEditDeleteRow, grid_rows_focused),
     act(
         Action::Copy(CopyScope::Selection, CopyFormat::TsvPlain),
         "results.copy.selection.tsv",
