@@ -21,7 +21,7 @@ fn entries<'a>(catalog: &'a str, prefixes: &[&str]) -> Vec<(&'a str, &'a str)> {
 
 fn app() -> App {
     let mut a = App::new(&datarig_core::config::Config::default(), None, Lang::En);
-    a.prefs.tips = Tips::On;
+    a.prefs.tips = Tips::Always;
     a
 }
 
@@ -379,4 +379,86 @@ fn only_counts_that_matter_rewrite_the_usage_file() {
     // Quitting writes them.
     a.usage_at_quit();
     assert!(a.tips.dirty);
+}
+
+/// The tips of `place` in the order they take turns (the first steps left out).
+fn turns(a: &App, place: Place, ctx: Ctx) -> Vec<&'static str> {
+    a.candidates(place, ctx)
+        .into_iter()
+        .filter_map(|p| match p {
+            Pick::Tip(i) => Some(TIPS[i].id),
+            Pick::Step(_) => None,
+        })
+        .collect()
+}
+
+/// `t`'s key (or command) used once.
+fn use_tip(a: &mut App, t: &Tip) {
+    match t.subject {
+        Subject::Action(x, _) => a.tips.usage.bump(Via::Key, action::spec(x).id),
+        Subject::Command(name) => a.tips.usage.bump(Via::Command, &command_id(name)),
+        Subject::Setting(_) => panic!("{}: a setting's tip is never used", t.id),
+    };
+}
+
+/// With `always` a tip whose key was used keeps its turn, the unused ones get a second one in
+/// each round, and no tip comes twice in a row; with `until_used` it is gone.
+#[test]
+fn a_used_key_comes_up_less_often_and_goes_only_with_until_used() {
+    let fresh = turns(&app(), Place::StatusIdle, Ctx::Nav);
+    assert!(fresh.len() >= 3, "{fresh:?}");
+    let mut sorted = fresh.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), fresh.len(), "nothing used: each tip once a round, {fresh:?}");
+    let usable: Vec<&Tip> = fresh
+        .iter()
+        .map(|id| TIPS.iter().find(|t| t.id == *id).unwrap())
+        .filter(|t| !matches!(t.subject, Subject::Setting(_)))
+        .collect();
+    // Each tip used in turn (some at the ends of the round, where a second turn would follow
+    // the first one).
+    for used in &usable {
+        let mut a = app();
+        use_tip(&mut a, used);
+        let round = turns(&a, Place::StatusIdle, Ctx::Nav);
+        assert_eq!(round.iter().filter(|id| **id == used.id).count(), 1, "{}: {round:?}", used.id);
+        for id in &fresh {
+            assert!(round.contains(id), "{id} still takes its turn: {round:?}");
+        }
+        assert!(round.len() > fresh.len(), "the unused tips come up more often: {round:?}");
+        for (i, id) in round.iter().enumerate() {
+            assert_ne!(round[(i + 1) % round.len()], *id, "{id} twice in a row: {round:?}");
+        }
+        a.prefs.tips = Tips::UntilUsed;
+        let until: Vec<_> = fresh.iter().copied().filter(|id| *id != used.id).collect();
+        assert_eq!(turns(&a, Place::StatusIdle, Ctx::Nav), until);
+    }
+    // Every key used: each tip once a round again.
+    let mut a = app();
+    for t in &usable {
+        use_tip(&mut a, t);
+    }
+    let all_used = turns(&a, Place::StatusIdle, Ctx::Nav);
+    assert!(usable.iter().all(|t| all_used.iter().filter(|id| **id == t.id).count() == 1), "{all_used:?}");
+}
+
+/// Only one tip whose key was not used yet, at an end of the round: its second turn would follow
+/// its first, so it has just the one.
+#[test]
+fn the_one_unused_tip_never_shows_twice_in_a_row() {
+    let fresh = turns(&app(), Place::StatusIdle, Ctx::Nav);
+    for keep in [0, fresh.len() - 1] {
+        let mut a = app();
+        for id in &fresh {
+            let t = TIPS.iter().find(|t| t.id == *id).unwrap();
+            if *id != fresh[keep] && !matches!(t.subject, Subject::Setting(_)) {
+                use_tip(&mut a, t);
+            }
+        }
+        let round = turns(&a, Place::StatusIdle, Ctx::Nav);
+        for (i, id) in round.iter().enumerate() {
+            assert_ne!(round[(i + 1) % round.len()], *id, "{id} twice in a row: {round:?}");
+        }
+    }
 }

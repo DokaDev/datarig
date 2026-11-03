@@ -86,8 +86,8 @@ untested.
 `usage.toml` is what the [tips](getting-started.md#tips) remember: per action how often it ran
 by key, from the action menu and from the command line, and which first steps are done. It
 holds no times, statements or names of yours, is never sent anywhere, and is not written with
-`[ui] tips = "off"`. Delete it while datarig is not running to see every tip again (with connections or a saved
-workspace there, the first steps stay done). If you used datarig before tips existed, the first
+`[ui] tips = "off"`. With `[ui] tips = "until_used"`, delete it while datarig is not running to see every tip
+again (with connections or a saved workspace there, the first steps stay done). If you used datarig before tips existed, the first
 steps count as done.
 
 ## The config file has an `[editor] mode` key

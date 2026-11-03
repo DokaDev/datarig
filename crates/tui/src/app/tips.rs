@@ -11,9 +11,12 @@
 //!
 //! **Which tip.** The candidates of a place are the next first step not taken whose key works
 //! there (in the empty workspace and the empty editor, while the first steps show), then its tips
-//! whose action can run now, has a key where the keys go now and was never run by a key (a key
-//! the user knows needs no tip), in catalog order; a tip about a command or a setting only where
-//! `:` opens the command line. The tip shown is `candidates[epoch % len]`; the epoch moves only
+//! whose action can run now and has a key where the keys go now, in catalog order; a tip about a
+//! command or a setting only where `:` opens the command line. With `always` (the default) every
+//! such tip keeps taking its turn, and when some keys were used and some not, the unused ones take
+//! a second turn in each round, so a key the user knows comes up less often but never goes away;
+//! with `until_used` a tip whose key (or command) was used once is not a candidate any more. The
+//! tip shown is `candidates[epoch % len]`; the epoch moves only
 //! when the user turns a page (another tab or pane, a run that starts or ends) and at launch (from
 //! the counts of the usage file), so a screen keeps its tip while it is looked at and no timer
 //! ever runs for a tip. While a popup, a dialog, a menu or the command line is open no place has
@@ -216,8 +219,9 @@ pub enum Source {
 
 impl App {
     /// Run `a` as [`App::dispatch`] does, counting it by where it came from (tips on): a tip
-    /// about a key the user knows goes away, and the third run from a menu or the command line
-    /// of an action with a key here names that key once.
+    /// about a key the user knows comes up less often (or goes away, with `until_used`), and the
+    /// third run from a menu or the command line of an action with a key here names that key
+    /// once.
     pub fn dispatch_from(&mut self, a: Action, source: Source) {
         let via = match source {
             Source::Key => Via::Key,
@@ -460,14 +464,25 @@ impl App {
     }
 
     /// The candidates of `place` with the keys going to `ctx`: the next first step, then the
-    /// open tips (not one about that step's action).
+    /// open tips (not one about that step's action). With `always`, when some of them were used
+    /// and some not, the unused ones follow once more, never the same tip twice in a row (the
+    /// round going round included).
     fn candidates(&self, place: Place, ctx: Ctx) -> Vec<Pick> {
         let step = matches!(place, Place::NoTab | Place::EmptyEditor).then(|| self.next_step(ctx)).flatten();
         let about_step =
             |t: &Tip| step.is_some_and(|s| matches!(t.subject, Subject::Action(a, _) if a == STEPS[s].action));
-        let tips = (0..TIPS.len())
-            .filter(|&i| TIPS[i].place == place && !about_step(&TIPS[i]) && self.tip_open(&TIPS[i], ctx));
-        step.map(Pick::Step).into_iter().chain(tips.map(Pick::Tip)).collect()
+        let mut tips: Vec<usize> = (0..TIPS.len())
+            .filter(|&i| TIPS[i].place == place && !about_step(&TIPS[i]) && self.tip_open(&TIPS[i], ctx))
+            .collect();
+        let unused: Vec<usize> = tips.iter().copied().filter(|&i| !self.tip_used(&TIPS[i])).collect();
+        if self.prefs.tips == Tips::Always && !unused.is_empty() && unused.len() < tips.len() {
+            tips.extend(unused);
+            tips.dedup();
+            if tips.len() > 1 && tips.first() == tips.last() {
+                tips.pop();
+            }
+        }
+        step.map(Pick::Step).into_iter().chain(tips.into_iter().map(Pick::Tip)).collect()
     }
 
     /// The mark of a tip: the glyph, or the catalog's `Tip:` with icons off.
@@ -479,21 +494,30 @@ impl App {
     }
 
     /// `t` can be shown with the keys going to `ctx`: its action can run, its context is in
-    /// `ctx`'s chain (the key it names works here) and has a key for it that was never used; its
-    /// command was never run and its setting is not set so already, and `:` opens the command
-    /// line here.
+    /// `ctx`'s chain (the key it names works here) and has a key for it; its setting is not set
+    /// so already, and `:` opens the command line here for a command or a setting. With
+    /// `until_used`, also never used ([`App::tip_used`]).
     fn tip_open(&self, t: &Tip, ctx: Ctx) -> bool {
-        let u = &self.tips.usage;
-        match t.subject {
+        let here = match t.subject {
             Subject::Action(a, at) => {
-                let spec = action::spec(a);
-                (spec.when)(self)
+                (action::spec(a).when)(self)
                     && ctx.chain().contains(&at)
                     && self.keymap.hint_keys(a, at, self.enhanced_keys).is_some()
-                    && u.count(Via::Key, spec.id) == 0
             }
-            Subject::Command(name) => self.colon_opens_commands(ctx) && u.count(Via::Command, &command_id(name)) == 0,
+            Subject::Command(_) => self.colon_opens_commands(ctx),
             Subject::Setting(s) => self.colon_opens_commands(ctx) && !self.setting_is(s),
+        };
+        here && (self.prefs.tips != Tips::UntilUsed || !self.tip_used(t))
+    }
+
+    /// What `t` is about was used: its action run by a key, its command run. A setting's tip
+    /// never counts as used (it goes once the setting is set so).
+    fn tip_used(&self, t: &Tip) -> bool {
+        let u = &self.tips.usage;
+        match t.subject {
+            Subject::Action(a, _) => u.count(Via::Key, action::spec(a).id) > 0,
+            Subject::Command(name) => u.count(Via::Command, &command_id(name)) > 0,
+            Subject::Setting(_) => false,
         }
     }
 
@@ -533,9 +557,9 @@ impl App {
         self.tips_on() && !self.tips.usage.onboarding_done && !STEPS.iter().all(|s| self.step_done(s))
     }
 
-    /// `[ui] tips` is on (and the session does not pause them).
+    /// `[ui] tips` is not off (and the session does not pause them).
     fn tips_on(&self) -> bool {
-        self.prefs.tips == Tips::On && !self.tips.paused
+        self.prefs.tips != Tips::Off && !self.tips.paused
     }
 
     /// Step `s` was taken: its action ran (by key, menu or command line) or the step was taken

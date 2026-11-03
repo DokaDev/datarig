@@ -730,7 +730,8 @@ pub const SETTINGS: &[SettingSpec] = &[
         about: Label::SettingTipsAbout,
         group: SettingGroup::Display,
         values: Values::Fixed(&[
-            ("on", Setting::Tips(Tips::On), Label::SettingTipsOn),
+            ("always", Setting::Tips(Tips::Always), Label::SettingTipsAlways),
+            ("until_used", Setting::Tips(Tips::UntilUsed), Label::SettingTipsUntilUsed),
             ("off", Setting::Tips(Tips::Off), Label::SettingTipsOff),
         ]),
     },

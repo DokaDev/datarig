@@ -237,7 +237,14 @@ pub const KEYS: &[KeyDoc] = &[
     key("explorer", "size_heat", "3", "`3`, `5`, `\"off\"` (`\"on\"`, its old value, reads as `3`)", ""),
     // [ui]
     key("ui", "yank_flash", "\"on\"", "`\"on\"`, `\"off\"`", ""),
-    key("ui", "tips", "\"on\"", "`\"on\"`, `\"off\"`", ""),
+    key(
+        "ui",
+        "tips",
+        "\"always\"",
+        "`\"always\"`, `\"until_used\"`, `\"off\"` (`\"on\"`, its old value, reads as `\"always\"`; `true` \
+         and `false` read as `\"always\"` and `\"off\"`)",
+        "",
+    ),
     // [secrets]
     key(
         "secrets",

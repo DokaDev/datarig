@@ -653,7 +653,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             keychain_access: KeychainAccess::Direct,
             size_heat: SizeHeat::Three,
             yank_flash: YankFlash::On,
-            tips: Tips::On,
+            tips: Tips::Always,
             idle_disconnect: None,
             lock_wait: None,
         }
@@ -861,24 +861,43 @@ fn the_yank_flash_is_on_by_default_and_can_be_turned_off() {
 }
 
 #[test]
-fn tips_are_on_by_default_and_can_be_turned_off() {
-    assert_eq!(parse("").unwrap().prefs.tips, Tips::On);
+fn tips_show_always_by_default_until_used_or_never() {
+    assert_eq!(parse("").unwrap().prefs.tips, Tips::Always);
     assert_eq!(parse("[ui]\ntips = \"off\"\n").unwrap().prefs.tips, Tips::Off);
-    assert_eq!(parse("[ui]\ntips = \"on\"\n").unwrap().prefs.tips, Tips::On);
-    assert_eq!(
-        parse("[ui]\ntips = \"some\"\n").unwrap_err(),
-        ConfigError::Value { key: "ui.tips".into(), value: "some".into(), profile: None, allowed: Some("on, off") }
-    );
+    assert_eq!(parse("[ui]\ntips = \"always\"\n").unwrap().prefs.tips, Tips::Always);
+    assert_eq!(parse("[ui]\ntips = \"until_used\"\n").unwrap().prefs.tips, Tips::UntilUsed);
+    // Files written before there was a choice, and plain booleans.
+    assert_eq!(parse("[ui]\ntips = \"on\"\n").unwrap().prefs.tips, Tips::Always);
+    assert_eq!(parse("[ui]\ntips = true\n").unwrap().prefs.tips, Tips::Always);
+    assert_eq!(parse("[ui]\ntips = false\n").unwrap().prefs.tips, Tips::Off);
+    for (text, value) in [("\"some\"", "some"), ("3", "3")] {
+        assert_eq!(
+            parse(&format!("[ui]\ntips = {text}\n")).unwrap_err(),
+            ConfigError::Value {
+                key: "ui.tips".into(),
+                value: value.into(),
+                profile: None,
+                allowed: Some("always, until_used, off")
+            }
+        );
+    }
     let path = temp_file("tips");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "[ui]\nyank_flash = \"off\"\n").unwrap();
-    let prefs = Prefs { tips: Tips::Off, yank_flash: YankFlash::Off, ..Prefs::default() };
-    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
-    let text = std::fs::read_to_string(&path).unwrap();
-    assert!(text.contains("[ui]\nyank_flash = \"off\"\ntips = \"off\"\n"), "{text}");
-    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    for tips in [Tips::Off, Tips::UntilUsed] {
+        let prefs = Prefs { tips, yank_flash: YankFlash::Off, ..Prefs::default() };
+        save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(&format!("[ui]\nyank_flash = \"off\"\ntips = \"{}\"\n", tips.as_str())), "{text}");
+        assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    }
     save(&path, settings("en"), None).unwrap();
-    assert!(!std::fs::read_to_string(&path).unwrap().contains("tips"), "on is the default: the key goes");
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("tips"), "always is the default: the key goes");
+    // The old value is the default's: the next save drops it, and nothing changes.
+    std::fs::write(&path, "[ui]\ntips = \"on\"\n").unwrap();
+    assert_eq!(load(Some(path.clone())).0.prefs.tips, Tips::Always);
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("tips"));
 }
 
 #[test]
