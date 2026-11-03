@@ -482,11 +482,12 @@ async fn sessions_are_set_up_on_the_server_by_role_and_policy() {
 
 /// The statements test `test`'s session `id` ran, as the server recorded them
 /// (`events_statements_history`, its last ten), oldest first. The server records a statement
-/// after it answered it: an empty history is asked again for a while.
+/// after it answered it: an empty history is asked again for a while. A command that is no
+/// statement (a ping, a change of database) has no text there: it is `(no text)`.
 async fn statements_of(admin: &mut mysql_async::Conn, id: u64) -> Vec<String> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let ran: Vec<String> = admin
+        let ran: Vec<Option<String>> = admin
             .exec(
                 "SELECT h.SQL_TEXT FROM performance_schema.events_statements_history h \
                  JOIN performance_schema.threads t ON t.THREAD_ID = h.THREAD_ID \
@@ -495,6 +496,7 @@ async fn statements_of(admin: &mut mysql_async::Conn, id: u64) -> Vec<String> {
             )
             .await
             .expect("events_statements_history reads");
+        let ran: Vec<String> = ran.into_iter().map(|t| t.unwrap_or_else(|| "(no text)".into())).collect();
         if !ran.is_empty() || Instant::now() > deadline {
             return ran;
         }
