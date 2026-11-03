@@ -274,10 +274,16 @@ impl GridState {
     }
 
     /// `added` rows were read after the `read` there were: a cursor, a view or a selection's
-    /// anchor among the new rows (shown after the rows read) stays on the same new row.
+    /// anchor among the new rows (shown after the rows read) stays on the same new row, and the
+    /// page shown is the cursor's. A selection from a row read to a new row goes (it would take
+    /// in the rows that came).
     pub fn rows_came(&mut self, read: usize, added: usize) {
         if added == 0 || self.new_rows == 0 {
             return;
+        }
+        let on_new = self.row >= read;
+        if self.shape != Shape::Cols && self.anchor.is_some_and(|(r, _)| (r >= read) != on_new) {
+            self.anchor = None;
         }
         let shift = |r: &mut usize| {
             if *r >= read {
@@ -288,6 +294,9 @@ impl GridState {
         shift(&mut self.top);
         if let Some((r, _)) = self.anchor.as_mut() {
             shift(r);
+        }
+        if on_new && self.page_size > 0 {
+            self.page = (read + added - 1) / self.page_size;
         }
     }
 

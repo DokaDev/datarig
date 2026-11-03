@@ -329,8 +329,8 @@ impl App {
         }
     }
 
-    /// Drop the pending changes of the cursor's cell, or of the selected cells; a new row among
-    /// them goes whole.
+    /// Drop the pending changes of the cursor's cell, or of the selected cells: a row marked to
+    /// be deleted among them is no longer marked, a new row's cell goes back to its default.
     fn edit_revert(&mut self) {
         let t = self.tabs.active_mut();
         let (grid, Some(rs)) = (&t.grid, shown_mut(&mut t.results, t.exec.view)) else { return };
@@ -341,15 +341,19 @@ impl App {
             .batch
             .rows()
             .filter(|(r, _)| rows.contains(r))
-            .flat_map(|(r, e)| e.set.keys().filter(|c| cols.contains(c)).map(move |c| (r, *c)))
+            .flat_map(|(r, e)| {
+                let marked = e.delete.then_some((r, cols.start));
+                e.set.keys().filter(|c| cols.contains(c)).map(move |c| (r, *c)).chain(marked)
+            })
             .collect();
-        let ids: Vec<u64> = rows
+        let new: Vec<(u64, usize)> = rows
             .filter_map(|r| match row_at(rs, r) {
                 Some(RowAt::New(id)) => Some(id),
                 _ => None,
             })
+            .flat_map(|id| cols.clone().map(move |c| (id, c)))
             .collect();
-        let done = !(cells.is_empty() && ids.is_empty()) && rs.edit.batch.revert(&cells, &ids);
+        let done = !(cells.is_empty() && new.is_empty()) && rs.edit.batch.revert(&cells, &new);
         self.edit_grid_sync();
         if !done {
             self.flash(Notice::new(Label::EditNothingToRevert, Level::Info));

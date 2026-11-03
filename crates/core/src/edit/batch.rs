@@ -192,12 +192,12 @@ impl EditBatch {
         self.act(&[], true, |b| b.drafts.retain(|d| !ids.contains(&d.id)))
     }
 
-    /// Drop the changes of cells `cells` (row, column) and of new rows `ids` (whole), as one
-    /// action: a cell set goes back to its value as read, and a row marked to be deleted is no
-    /// longer marked.
-    pub fn revert(&mut self, cells: &[(usize, usize)], ids: &[u64]) -> bool {
+    /// Drop the changes of cells `cells` (row, column) and of new rows' cells `new` (new row,
+    /// column), as one action: a cell set goes back to its value as read, a row marked to be
+    /// deleted is no longer marked, and a new row's cell goes back to its default.
+    pub fn revert(&mut self, cells: &[(usize, usize)], new: &[(u64, usize)]) -> bool {
         let rows: Vec<usize> = cells.iter().map(|(r, _)| *r).collect();
-        self.act(&rows, !ids.is_empty(), |b| {
+        self.act(&rows, !new.is_empty(), |b| {
             for &(row, col) in cells {
                 let Some(e) = b.rows.get_mut(&row) else { continue };
                 if e.delete {
@@ -209,7 +209,11 @@ impl EditBatch {
                     b.rows.remove(&row);
                 }
             }
-            b.drafts.retain(|d| !ids.contains(&d.id));
+            for &(id, col) in new {
+                if let Some(c) = b.drafts.iter_mut().find(|d| d.id == id).and_then(|d| d.cells.get_mut(col)) {
+                    *c = Value::Default;
+                }
+            }
         })
     }
 

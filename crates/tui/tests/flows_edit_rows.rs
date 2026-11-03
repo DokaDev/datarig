@@ -307,6 +307,33 @@ fn d_marks_a_row_to_be_deleted_and_again_no_longer() {
 }
 
 #[test]
+fn revert_on_a_row_marked_for_deletion_unmarks_it() {
+    let mut h = ready(Lang::En);
+    h.keys("jD");
+    h.keys(" dr");
+    assert_eq!(said(&mut h), None);
+    assert!(edits(&h).batch.is_empty());
+    h.keys("u");
+    assert!(edits(&h).batch.deleted(1));
+}
+
+#[test]
+fn revert_over_rows_read_and_new_rows_is_one_change() {
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "x@x");
+    h.keys("jjDol");
+    type_cell(&mut h, "y@x");
+    assert_eq!(drafts(&h), [vec![Value::Default, text("y@x"), Value::Default]]);
+    h.keys("Vkkk dr");
+    assert_ne!(said(&mut h), Some(Label::EditNothingToRevert.into()));
+    assert_eq!(counts(&h), Counts { updates: 0, inserts: 1, deletes: 0 });
+    assert_eq!(drafts(&h), [vec![Value::Default; 3]], "a new row's cells go back to their default");
+    h.keys("u");
+    assert_eq!(counts(&h), Counts { updates: 1, inserts: 1, deletes: 1 }, "one undo brings all back");
+    assert_eq!(drafts(&h)[0][1], text("y@x"));
+}
+
+#[test]
 fn d_on_a_new_row_removes_it() {
     let mut h = ready(Lang::En);
     h.keys("oD");
@@ -374,12 +401,15 @@ fn a_new_rows_cells_are_edited_by_what_a_new_row_takes() {
     assert_eq!(drafts(&h)[0][0], Value::Default);
     h.ctrl('r');
     assert_eq!(drafts(&h)[0][0], text("7"));
-    // Revert drops the new row whole.
+    // Revert sets the cell back to its default; the new row stays.
     h.keys(" dr");
-    assert!(drafts(&h).is_empty());
+    assert_eq!(drafts(&h), [vec![Value::Default, Value::Default, Value::Default]]);
+    h.keys(" dr");
+    assert_eq!(said(&mut h), Some(Label::EditNothingToRevert.into()));
     h.keys("u");
     assert_eq!(drafts(&h)[0][0], text("7"));
     // A selection of new rows and rows read is not edited together.
+    h.keys("k");
     assert_eq!(cursor(&h).0, 2);
     h.keys("vje");
     assert_eq!(said(&mut h), Some(Label::EditMixedRows.into()));
@@ -427,10 +457,35 @@ fn rows_read_later_come_before_the_new_rows() {
     h.db(DbEvent::Page { id: query, columns: None, rows, more: false, elapsed: Duration::ZERO });
     assert_eq!(cursor(&h).0, 5, "still on the new row");
     assert_eq!(edits(&h).batch.drafts()[0].id, id);
-    assert_eq!(h.app.tab().grid.anchor.map(|a| a.0), Some(2), "a row read stays");
+    // A selection from a row read to a new row would take in the rows that came: it goes.
+    assert_eq!(h.app.tab().grid.anchor, None, "the selection goes");
     let screen = h.screen(120, 40);
     let at = |t: &str| screen.find(t).unwrap_or_else(|| panic!("{t}:\n{screen}"));
     assert!(at(" 5 │") < at("  +│"), "{screen}");
+    h.keys("D");
+    assert_eq!(counts(&h), Counts::default(), "only the new row goes, no row that came is marked");
+}
+
+#[test]
+fn rows_that_come_keep_the_cursor_on_its_new_row_and_its_page() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.page_size = 3;
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows(), true);
+    h.sent();
+    h.keys("le");
+    structure(&mut h, Ok(users_structure()));
+    h.key(KeyCode::Esc);
+    h.keys("o");
+    assert_eq!(cursor(&h).0, 3);
+    let query = h.app.tab().exec.query_id;
+    let rows = vec![vec![s("4"), s("d@x"), None], vec![s("5"), s("e@x"), None]];
+    h.db(DbEvent::Page { id: query, columns: None, rows, more: false, elapsed: Duration::ZERO });
+    h.draw(120, 40);
+    assert_eq!(cursor(&h).0, 5, "still on the new row, drawn");
+    assert_eq!(h.app.tab().grid.page, 1, "the page the new row is on");
+    h.keys("D");
+    assert_eq!(counts(&h), Counts::default(), "the new row goes, not the row read before it");
 }
 
 #[test]

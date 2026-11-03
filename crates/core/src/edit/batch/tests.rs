@@ -129,17 +129,20 @@ fn new_rows_are_placed_after_their_row_and_undo_keeps_their_ids() {
 }
 
 #[test]
-fn reverting_drops_the_changes_of_cells_and_new_rows() {
+fn reverting_drops_the_changes_of_cells_and_sets_new_rows_cells_to_their_default() {
     let mut b = EditBatch::new();
     b.set(&[(1, 0), (1, 1)], &text("7"), orig);
     b.delete(&[2], orig);
-    let n = b.add(1, None, vec![Value::Default; 3]);
-    assert!(b.revert(&[(1, 0), (2, 0)], &[n]));
+    let n = b.add(1, None, vec![text("a"), text("b"), Value::Null]);
+    assert!(b.revert(&[(1, 0), (2, 0)], &[(n, 0), (n, 2)]));
     assert_eq!((b.value(1, 0), b.value(1, 1)), (None, Some(&text("7"))));
     assert!(!b.deleted(2), "a row's deletion goes with any of its cells");
-    assert!(b.drafts().is_empty());
+    assert_eq!(b.drafts()[0].cells, [Value::Default, text("b"), Value::Default], "the new row stays");
     b.undo();
-    assert!(b.deleted(2) && b.value(1, 0).is_some() && b.drafts().len() == 1, "one step");
+    assert!(b.deleted(2) && b.value(1, 0).is_some(), "one step");
+    assert_eq!(b.drafts()[0].cells[0], text("a"));
+    b.redo();
+    assert!(!b.revert(&[], &[(n, 0)]), "a default is nothing to revert");
 }
 
 #[test]
