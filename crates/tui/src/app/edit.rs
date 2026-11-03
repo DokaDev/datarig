@@ -639,14 +639,12 @@ impl App {
         };
         let d = self.tab_dialect(t.id);
         let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
-        // A typed value is stored as shown only in a session that shows it so.
+        // A typed value is stored as shown only in a session that shows it so (a new row holds
+        // no value shown rounded).
         let typed = a == EditAction::Cell;
-        if let Some((_, refused)) = value_not_whole(d, rs, col, &[], 0, zone, ids.len() > 1).filter(|_| typed) {
+        if let Some((_, refused)) = value_not_whole(d, rs, col, &[], 0, zone, false).filter(|_| typed) {
             let (column, reason) = (refused.column, self.not_whole_reason(&refused.why));
-            return self.say_refused(match refused.why {
-                export::NotWhole::Float => Msg::EditWhyShownRounded { column },
-                _ => Msg::EditWhyColumnNotWhole { column, reason },
-            });
+            return self.say_refused(Msg::EditWhyColumnNotWhole { column, reason });
         }
         let current = rs.edit.batch.drafts().iter().find(|d| d.id == id).and_then(|d| d.cells.get(col)).cloned();
         let cells: Vec<(RowAt, usize)> = ids.into_iter().map(|r| (r, col)).collect();
