@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_edit_preview.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ◆ ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432 · stg            │"
+"│  ▾ ●   local-pg ◆    ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│ ╭ Apply changes — shop.users ──────────────────────────────────────────────╮ │"
+"│ │ 1 update · 1 insert · 1 delete                                           │ │"
+"│ │                                                                          │ │"
+"│▾│ Row checks (lock, no waiting)                                            │ │"
+"│ │   SELECT 1 FROM "shop"."users" WHERE "id" = '1' AND "email" =…  expect 1 │ │"
+"│ │   SELECT 1 FROM "shop"."users" WHERE "id" = '2' AND "email" =…  expect 1 │─╯"
+"│ │ Writes                                                                   │─╮"
+"│ │   DELETE FROM "shop"."users" WHERE "id" = '2' AND "email" = '…  expect 1 │…│"
+"│ │   UPDATE "shop"."users" SET "email" = 'z@x' WHERE "id" = '1' …  expect 1 │ │"
+"│ │   INSERT INTO "shop"."users" ("email") VALUES ('n@x') RETURNI…  expect 1 │ │"
+"│ │                                                                          │ │"
+"│ │ Runs inside the open transaction; nothing is committed.                  │ │"
+"│ │                                                                          │ │"
+"│ │                  [ Cancel ]     Copy SQL       Apply                     │ │"
+"│ ╰──────────────────── y apply · c copy SQL · j/k scroll · Enter/Esc cancel ╯ │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" NORMAL  local-pg · stg │ TX open · 0 changes · 0 rows · 0:00 │ 3 rows · 0ms EN "

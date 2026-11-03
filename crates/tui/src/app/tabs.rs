@@ -299,8 +299,8 @@ pub struct TabSession {
     /// The statements of run `.0` before `.1` are in `tx`'s log already (or never go there).
     pub booked: (u64, usize),
     /// How the block that ends next ended, when the app knows it from what came before (its
-    /// `EndTx` answer, the server ending it): `true` rolled back.
-    pub closing: Option<bool>,
+    /// `EndTx` answer, the server ending it).
+    pub closing: Option<TxEnd>,
     /// A commit or a rollback asked for (`DbCommand::EndTx`) that has not been answered.
     pub ending: Option<super::tx::Ending>,
     /// How the last one asked for ended: as asked (`true`: committed, rolled back), or not (a
@@ -439,6 +439,16 @@ pub struct ValuesWait {
     pub literal: usize,
 }
 
+/// How the user's transaction ended, as far as the app can tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TxEnd {
+    Committed,
+    RolledBack,
+    /// It ended, and the app cannot tell how (a `PREPARE TRANSACTION`, a procedure that ended
+    /// it, a commit whose answer never came).
+    Unknown,
+}
+
 pub struct Tab {
     pub id: TabId,
     pub kind: TabKind,
@@ -468,6 +478,9 @@ pub struct Tab {
     pub exec: TabSession,
     /// The last statement outcome of this tab (the status bar shows it while the tab is active).
     pub status: Option<Notice>,
+    /// What became of an Apply's changes as its transaction or session ended: said once the
+    /// event is handled (its own outcome would replace it).
+    pub edit_said: Option<Notice>,
     /// Where the tab's text is kept.
     pub doc: Doc,
     /// The results pane's place below the editor (a query tab).
@@ -594,6 +607,7 @@ impl Tab {
             grid: GridState::default(),
             find: Default::default(),
             cell_edit: None,
+            edit_said: None,
             exec: TabSession::new(),
             status: None,
             doc: Doc::new(),
@@ -732,8 +746,9 @@ impl Tab {
     pub fn session_closed(&mut self) -> bool {
         self.exec.lost_tx |= self.exec.tx_at_risk();
         let ended = match self.exec.running.take() {
-            // An export says how it ended itself (its writer keeps what it wrote).
-            Some(r) if r.export => false,
+            // An export says how it ended itself (its writer keeps what it wrote); so does an
+            // Apply (`tx_reset`).
+            Some(r) if r.export || r.apply => false,
             Some(r) if !r.fetch && !r.count => {
                 self.exec.run.answered(super::runlog::StatementOutcome::Cancelled, None);
                 let note = Notice::new(datarig_core::i18n::Label::QueryCancelledSessionClosed, super::Level::Warning);
@@ -789,16 +804,38 @@ impl Tab {
     /// nothing asked of it is answered.
     pub fn tx_reset(&mut self) {
         self.exec.tx_open = false;
+        self.apply_unanswered();
         // The server rolls the user's transaction back when its session ends.
-        self.block_ended(true);
+        self.block_ended(TxEnd::RolledBack);
+        // So it did the one an Apply left open whose opening was not reported yet (the Apply's
+        // answer comes first).
+        self.applied_gone(datarig_core::i18n::Label::EditAppliedGone);
         self.exec.ending = None;
         self.exec.autocommit_off = false;
         self.exec.outside_offer = None;
     }
 
-    /// The user's transaction ended; `rolled_back` when the app knows it rolled back. Results
-    /// read in it say it ended.
-    pub fn block_ended(&mut self, rolled_back: bool) {
+    /// An Apply sent on the session that ended is never answered: whether its changes are in
+    /// the table is not known, and they are applied again only once the user says so. Said in
+    /// the run's Messages and, after the event, in the status bar.
+    fn apply_unanswered(&mut self) {
+        let mut unanswered = false;
+        for rs in self.row_results_mut() {
+            if rs.edit.applying.take().is_some() {
+                rs.edit.apply_unknown = true;
+                unanswered = true;
+            }
+        }
+        if unanswered {
+            let note = Notice::new(datarig_core::i18n::Label::EditFailedUnknown, super::Level::Error);
+            self.exec.run.notes.push(note.clone());
+            self.edit_said = Some(note);
+        }
+    }
+
+    /// The user's transaction ended (`end`: how, as far as the app can tell). Results read in
+    /// it say it ended, and what an Apply did in it goes unless it was committed (said).
+    pub fn block_ended(&mut self, end: TxEnd) {
         self.exec.tx = None;
         self.exec.manual_begun = None;
         self.exec.tx_from = None;
@@ -808,31 +845,76 @@ impl Tab {
         }
         self.exec.in_block = false;
         let epoch = self.exec.tx_epoch;
+        let mut gone = None;
         for rs in self.row_results_mut() {
-            rs.tx_ended(epoch, rolled_back);
+            gone = rs.tx_ended(epoch, end).or(gone);
+        }
+        if let Some(label) = gone {
+            self.edit_gone(label);
         }
     }
 
-    /// Whether the statement that ended the user's transaction rolled it back, as far as the
-    /// app can tell: `ROLLBACK`/`ABORT`, a `COMMIT`/`END` of an aborted block, a `COMMIT` that
-    /// failed (the server rolls back). Anything else (a `COMMIT`, a `PREPARE TRANSACTION`, what
-    /// the app cannot tell) is not known to have rolled back.
-    pub fn ending_rolled_back(&self) -> bool {
-        use super::runlog::StatementOutcome as O;
-        let log = &self.exec.run;
-        let Some(s) = self.ending_statement().and_then(|i| log.statements.get(i)) else { return false };
-        let words: Vec<String> = datarig_core::sql::lexer::lex_in(&s.sql, self.exec.prepared.language().dialect())
+    /// What an Apply did in a transaction that has not ended yet goes from every result of the
+    /// tab, said with `label` (the table may no longer hold it).
+    fn applied_gone(&mut self, label: datarig_core::i18n::Label) {
+        let mut gone = false;
+        for rs in self.row_results_mut() {
+            gone |= rs.edit.drop_uncommitted();
+        }
+        if gone {
+            self.edit_gone(label);
+        }
+    }
+
+    /// Applied changes went: said in the run's Messages and, after the event, the status bar.
+    fn edit_gone(&mut self, label: datarig_core::i18n::Label) {
+        let note = Notice::new(label, super::Level::Warning);
+        self.exec.run.notes.push(note.clone());
+        self.edit_said = Some(note);
+    }
+
+    /// Statement `i` of the run succeeded: a savepoint statement (`SAVEPOINT`, `RELEASE`,
+    /// `ROLLBACK TO`) in the transaction an Apply's changes are in leaves what the table holds
+    /// unknown from them; they go, said.
+    pub fn statement_done(&mut self, i: usize) {
+        let Some(s) = self.exec.run.statements.get(i) else { return };
+        let words = self.first_words(&s.sql, 4);
+        let first = words.first().map(String::as_str);
+        let to = || {
+            words.iter().skip(1).take_while(|w| matches!(w.as_str(), "WORK" | "TRANSACTION" | "TO")).any(|w| w == "TO")
+        };
+        if matches!(first, Some("SAVEPOINT" | "RELEASE")) || (first == Some("ROLLBACK") && to()) {
+            self.applied_gone(datarig_core::i18n::Label::EditAppliedSavepoint);
+        }
+    }
+
+    /// The first `n` words of `sql`, in capitals.
+    fn first_words(&self, sql: &str, n: usize) -> Vec<String> {
+        datarig_core::sql::lexer::lex_in(sql, self.exec.prepared.language().dialect())
             .into_iter()
             .filter(|t| t.is_word())
-            .take(2)
-            .map(|t| t.text(&s.sql).to_ascii_uppercase())
-            .collect();
+            .take(n)
+            .map(|t| t.text(sql).to_ascii_uppercase())
+            .collect()
+    }
+
+    /// How the statement that ended the user's transaction ended it, as far as the app can
+    /// tell: rolled back by `ROLLBACK`/`ABORT`, a `COMMIT`/`END` of an aborted block, a
+    /// `COMMIT` that failed (the server rolls back); committed by any other `COMMIT`/`END`.
+    /// Anything else (a `PREPARE TRANSACTION`, a procedure that ended it, what the app cannot
+    /// tell) is unknown.
+    pub fn ending_outcome(&self) -> TxEnd {
+        use super::runlog::StatementOutcome as O;
+        let log = &self.exec.run;
+        let Some(s) = self.ending_statement().and_then(|i| log.statements.get(i)) else { return TxEnd::Unknown };
+        let words = self.first_words(&s.sql, 2);
         let first = words.first().map(String::as_str);
         let to = words.get(1).is_some_and(|w| w == "TO");
         match first {
-            Some("ROLLBACK" | "ABORT") => !to,
-            Some("COMMIT" | "END") => self.exec.tx_aborted || matches!(s.outcome, O::Failed(_)),
-            _ => false,
+            Some("ROLLBACK" | "ABORT") if !to => TxEnd::RolledBack,
+            Some("COMMIT" | "END") if self.exec.tx_aborted || matches!(s.outcome, O::Failed(_)) => TxEnd::RolledBack,
+            Some("COMMIT" | "END") => TxEnd::Committed,
+            _ => TxEnd::Unknown,
         }
     }
 

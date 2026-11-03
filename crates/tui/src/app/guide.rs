@@ -464,7 +464,7 @@ impl App {
 
     /// The hint line: the most relevant keys of the current context (key, short label), best
     /// first (in the vim editor where typing starts or stops, after a running query's cancel
-    /// key; in the grid the undo key first while changes are pending), then `Space` when the
+    /// key; in the grid the apply and undo keys first while changes are pending), then `Space` when the
     /// leader works here. The run key is the one the terminal
     /// can send (`Ctrl+Enter` only with the kitty keyboard protocol).
     pub fn hints(&self) -> Vec<(String, Localized)> {
@@ -482,9 +482,10 @@ impl App {
         if self.tab_busy(self.tab().id) {
             out.extend(action(("query.cancel", Label::HintCancel)));
         }
-        // Changes pending in the shown result: the key that undoes the last one (the status
-        // bar says how many before it).
+        // Changes pending in the shown result: the key that applies them and the one that undoes
+        // the last (the status bar says how many before them).
         if matches!(ctx, Ctx::Grid | Ctx::GridMatches) && self.edits_pending() > 0 {
+            out.extend(action(("edit.apply", Label::HintApply)));
             out.extend(action(("edit.undo", Label::HintUndo)));
         }
         // The cell editor: its own keys (not actions), while they still reach it.

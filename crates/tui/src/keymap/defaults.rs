@@ -370,6 +370,9 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Nav, "space d o", "edit.add_row"),
     (Nav, "space d O", "edit.clone_row"),
     (Nav, "space d d", "edit.delete_row"),
+    (Nav, "space d p", "edit.preview"),
+    (Nav, "space d a", "edit.apply"),
+    (Nav, "space d x", "edit.discard"),
     (Nav, "space r y t", "results.copy.selection.tsv"),
     (Nav, "space r y T", "results.copy.selection.tsv_header"),
     (Nav, "space r y l", "results.copy.selection.list"),
@@ -661,6 +664,7 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
         "run confirmation (Cancel has the focus)",
     ),
     (TxSummary, &["c", "r", "esc", "q", "enter", "j", "k", "down", "up"], "transaction summary"),
+    (EditPreview, &["y", "c", "1", "a", "esc", "q", "enter", "j", "k", "down", "up"], "pending changes preview"),
     (SessionView, &["esc", "q", "enter", "j", "k", "down", "up"], "session settings"),
     (
         IconsAsk,

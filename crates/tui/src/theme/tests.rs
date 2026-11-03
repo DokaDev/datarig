@@ -381,6 +381,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         edit_pending: _,
         edit_inserted: _,
         edit_deleted: _,
+        edit_applied: _,
         match_paren: _,
         read_only_mark: _,
         danger_mark: _,
@@ -401,7 +402,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 63);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 64);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -672,6 +673,34 @@ fn new_and_deleted_rows_show_in_every_theme() {
         }
         assert!(delta_e(n, th.fg) >= 8.0, "{name}: a new row looks like body text");
         assert!(delta_e(n, fg(th.edit_changed)) >= 8.0, "{name}: a new row looks like a changed cell");
+    }
+}
+
+/// A value an Apply wrote shows on any row of the grid in its own text color, in italics (it
+/// keeps the cell's background), apart from body text, NULL and the pending changes, readable
+/// on the background, the alternate rows, the selection and a selected range.
+#[test]
+fn applied_values_show_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        let s = th.edit_applied;
+        assert!(s.add_modifier.contains(Modifier::ITALIC), "{name}: edit_applied shows without color");
+        assert!(!s.add_modifier.contains(Modifier::BOLD), "{name}: edit_applied is lighter than a pending change");
+        assert!(s.fg.is_some() && s.fg != Some(th.fg) && s.fg != Some(th.null_fg), "{name}: edit_applied");
+        for other in [th.edit_changed, th.edit_inserted, th.edit_deleted] {
+            assert!(s.fg != other.fg, "{name}: edit_applied looks like {other:?}");
+        }
+        assert_eq!(s.bg, None, "{name}: edit_applied hides the cell's background");
+    }
+    for (name, th) in rgb_themes() {
+        let a = fg(th.edit_applied);
+        for other in [th.bg, th.surface_alt, bg(th.selection), bg(th.range), bg(th.selection_unfocused())] {
+            let k = contrast(a, other);
+            assert!(k >= 3.0, "{name}: an applied value on {other:?}: {k:.2}");
+        }
+        assert!(delta_e(a, th.fg) >= 8.0, "{name}: an applied value looks like body text");
+        for (token, s) in [("edit_changed", th.edit_changed), ("edit_inserted", th.edit_inserted)] {
+            assert!(delta_e(a, fg(s)) >= 8.0, "{name}: an applied value looks like {token}");
+        }
     }
 }
 

@@ -7,7 +7,8 @@
 //! New rows not applied yet are shown after the last row read, on the last page: row `i` of the
 //! grid is row `i` of the result while `i` is less than the rows read, else new row
 //! `i - rows read` ([`GridState::new_rows`]). Read by a row's index, a new row is no row of the
-//! result ([`CellRef::Missing`]).
+//! result ([`CellRef::Missing`]). The new rows an Apply added come first among them, and the
+//! values it wrote show over the rows as read, until the query runs again.
 
 use crate::text::{Align, fit, sanitize_cell, slice_cols, width};
 use crate::theme;
@@ -97,11 +98,14 @@ impl ResultSet {
         };
     }
 
-    /// The user's transaction `epoch` ended (`rolled_back` when the app knows it rolled back).
-    pub fn tx_ended(&mut self, epoch: u64, rolled_back: bool) {
+    /// The user's transaction `epoch` ended (`end`: how). Whether what an Apply did in it is
+    /// gone, with the label that says why.
+    pub fn tx_ended(&mut self, epoch: u64, end: crate::app::tabs::TxEnd) -> Option<datarig_core::i18n::Label> {
         if self.tx == Some(TxMark::InTx(epoch)) {
+            let rolled_back = end == crate::app::tabs::TxEnd::RolledBack;
             self.tx = Some(if rolled_back { TxMark::RolledBack } else { TxMark::Ended });
         }
+        self.edit.tx_ended(epoch, end)
     }
 }
 
@@ -534,7 +538,7 @@ pub fn render(
         return;
     }
     let total = rs.rows.len();
-    st.new_rows = rs.edit.batch.drafts().len();
+    st.new_rows = rs.edit.new_shown();
     // The page shown: the rows of the window, numbered as in the whole result.
     let win = st.window(total);
     let null_label = i18n.label(Label::ResultsNull);
@@ -559,6 +563,7 @@ pub fn render(
     }
     let not_read = i18n.label(Label::ResultsNotRead);
     let default_label = i18n.label(Label::EditDefault);
+    let rerun_label = i18n.label(Label::EditRerunToSee);
 
     let gutter = win.end.max(1).to_string().len().max(2) + 1;
     let avail = (area.width as usize).saturating_sub(gutter);
@@ -714,10 +719,16 @@ pub fn render(
         let whole = st.shape == Shape::Rows && range.as_ref().is_some_and(|(rr, _)| rr.contains(&r));
         let num_bg = if whole { th.range } else { Style::new().bg(zebra) };
         let num_style = num_bg.fg(if r == st.row { th.accent } else { th.fg_muted });
-        // A new row (after the rows read) has no number of the result.
-        let new = r.checked_sub(total).and_then(|i| rs.edit.batch.drafts().get(i));
-        let deleted = new.is_none() && rs.edit.batch.deleted(r);
-        let number = if new.is_some() { String::new() } else { (r + 1).to_string() };
+        // A new row (after the rows read, and those an Apply added) has no number of the result.
+        let applied = rs.edit.applied.as_deref();
+        let added = r.checked_sub(total);
+        let applied_new = added.and_then(|i| applied?.new.get(i));
+        let new = added.and_then(|i| i.checked_sub(rs.edit.applied_new())).and_then(|i| rs.edit.batch.drafts().get(i));
+        // Deleted by an Apply: it stays, crossed out.
+        let deleted = added.is_none()
+            && (rs.edit.batch.deleted(r)
+                || (applied.is_some_and(|a| a.deleted.contains(&r)) && rs.edit.batch.row(r).is_none()));
+        let number = if added.is_some() { String::new() } else { (r + 1).to_string() };
         buf.set_stringn(area.x, y, fit(&number, gutter - 1, Align::Right), gutter - 1, num_style);
         // What is pending in the row, in the gutter's free column: `+` a new row, `-` a row to be
         // deleted, `~` cells changed.
@@ -742,12 +753,27 @@ pub fn render(
                 Style::new().bg(zebra)
             };
             put(buf, cx, y, "│", sep_style(zebra));
-            // A pending value is shown instead of the value as read; a new row's own values.
+            // A pending value is shown instead of the value as read; a new row's own values. So is
+            // a value an Apply wrote, when nothing is pending there.
             let pending = match new {
                 Some(d) => Some(d.cells.get(ci).unwrap_or(&Value::Default)),
+                None if added.is_some() => None,
                 None => rs.edit.batch.value(r, ci),
             };
-            let (text, is_null, default) = match (pending, rs.cell(r, ci)) {
+            let done = match applied_new {
+                Some(cells) => Some(cells.get(ci).unwrap_or(&Value::Default)),
+                None if added.is_some() || pending.is_some() => None,
+                None => applied.and_then(|a| a.set.get(&r)?.get(&ci)),
+            };
+            // Shown as applied: what the Apply wrote, every value of a row it added. Returned in
+            // another form than the result shows: dim, a run shows it.
+            let (written, rerun) = match (applied, added) {
+                (Some(a), Some(i)) if applied_new.is_some() => (true, a.rerun_new.contains(&(i, ci))),
+                (Some(a), None) if pending.is_none() => (a.written.contains(&(r, ci)), a.rerun.contains(&(r, ci))),
+                _ => (false, false),
+            };
+            let (text, is_null, default) = match (pending.or(done), rs.cell(r, ci)) {
+                _ if rerun => (rerun_label.to_string(), true, true),
                 (Some(Value::Text(v)), _) => (sanitize_cell(v), false, false),
                 (Some(Value::Null), _) => (null_label.to_string(), true, false),
                 (Some(Value::Default), _) => (default_label.to_string(), true, true),
@@ -775,6 +801,9 @@ pub fn render(
                 (Some(_), _) => style.patch(th.edit_inserted),
                 (None, Some(_)) => style.patch(th.edit_changed),
                 (None, None) if deleted => style.patch(th.edit_deleted),
+                // What the table filled in for a new row is not known: its dim `default`.
+                (None, None) if default => style,
+                (None, None) if done.is_some() && written => style.patch(th.edit_applied),
                 (None, None) => style,
             }
             .patch(bg);

@@ -206,6 +206,42 @@ fn count_failure(step: usize, got: u64) -> ApplyFailure {
     ApplyFailure { step: Some(step), why: ApplyError::Count { got } }
 }
 
+/// The rows an update and an insert return are in the form the result shows its rows (a
+/// boolean as `true`), or said to be in another (a time stamp, which a run shows).
+#[tokio::test(flavor = "multi_thread")]
+async fn returned_rows_are_in_the_results_form_or_said_not_to_be() {
+    let Some(url) = pg_url("returned_rows_are_in_the_results_form_or_said_not_to_be") else {
+        return;
+    };
+    let name = table("forms");
+    let _g = Guard(url.clone(), format!("DROP TABLE IF EXISTS public.{name}"));
+    let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    c.ok(&format!(
+        "CREATE TABLE public.{name} (id int PRIMARY KEY, b bool NOT NULL DEFAULT true, \
+         at timestamptz NOT NULL DEFAULT '2024-01-02 03:04:05+00')"
+    ))
+    .await;
+    c.ok(&format!("INSERT INTO public.{name} (id, b) VALUES (1, false)")).await;
+    let select = format!("SELECT id, b, at FROM public.{name} ORDER BY id");
+    let (_, read) = c.read(&select).await;
+    assert_eq!(read[0][1].as_deref(), Some("false"), "the result's form");
+    let e = Editing::new(&url, &mut c, &name, &select).await;
+    let mut b = EditBatch::new();
+    b.set(&[(0, 0)], &text("5"), e.orig());
+    b.add(1, None, vec![text("2"), Value::Default, Value::Default]);
+    let plan = e.plan(&mut c, &b, &[]).await;
+    let (_, result) = c.apply(plan.steps.clone(), ApplyTx::Commit).await;
+    let done = result.expect("applied");
+    for (s, d) in plan.steps.iter().zip(&done) {
+        let Some((cols, rows)) = &d.returned else { continue };
+        assert_eq!(cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "b", "at"], "{}", s.sql);
+        let b = if s.sql.starts_with("UPDATE") { "false" } else { "true" };
+        assert_eq!(rows[0][1].as_deref(), Some(b), "{}", s.sql);
+        assert_eq!(d.unshown, [2], "{}", s.sql);
+    }
+    assert_eq!(done.iter().filter(|d| d.returned.is_some()).count(), 2);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_keyed_update_delete_and_insert_commit_together_and_return_the_stored_rows() {
     let Some(url) = pg_url("a_keyed_update_delete_and_insert_commit_together_and_return_the_stored_rows") else {

@@ -242,6 +242,7 @@ impl App {
             stopping: false,
             refused: false,
             export: false,
+            apply: false,
         });
         t.exec.run.notes.push(note.clone());
         self.tab_status(id, note);
@@ -298,6 +299,7 @@ impl App {
             stopping: false,
             refused: false,
             export: false,
+            apply: false,
         });
         let note = Notice::new(Msg::ResultsCountSent { sql: super::runlog::excerpt(&sql, 120) }, Level::Info);
         t.exec.run.notes.push(note.clone());

@@ -244,6 +244,53 @@ fn fmt_micros_time(micros: i64) -> String {
     if frac == 0 { base } else { format!("{base}.{}", format!("{frac:06}").trim_end_matches('0')) }
 }
 
+/// A value of type `ty` as PostgreSQL's text output gives it (`text`), in the form a result
+/// shows it ([`format_value`] of the format [`format_code`] picks), when the two can be made
+/// the same: a boolean's `t`/`f` as `true`/`false`; a number, a string, JSON, a uuid and an
+/// array of numbers or booleans are written alike; a type a result reads as text is that
+/// text. `None` for the rest (dates and times, intervals, floats, bytea, network addresses,
+/// other arrays): their text depends on the session's settings or is written otherwise.
+pub fn text_as_shown(ty: &Type, text: &str) -> Option<String> {
+    let alike = |ty: &Type| {
+        matches!(
+            *ty,
+            Type::INT2
+                | Type::INT4
+                | Type::INT8
+                | Type::OID
+                | Type::NUMERIC
+                | Type::TEXT
+                | Type::VARCHAR
+                | Type::BPCHAR
+                | Type::NAME
+                | Type::JSON
+                | Type::JSONB
+                | Type::UUID
+        )
+    };
+    match ty.kind() {
+        Kind::Domain(inner) => return text_as_shown(inner, text),
+        // Numbers and booleans need no quotes, and `array_out` writes booleans as `t` / `f`,
+        // as a result does.
+        Kind::Array(elem)
+            if matches!(*elem, Type::INT2 | Type::INT4 | Type::INT8 | Type::OID | Type::NUMERIC | Type::BOOL) =>
+        {
+            return Some(text.to_string());
+        }
+        _ => {}
+    }
+    match *ty {
+        Type::BOOL => match text {
+            "t" => Some("true".into()),
+            "f" => Some("false".into()),
+            _ => None,
+        },
+        _ if alike(ty) => Some(text.to_string()),
+        _ if !decodes_binary(ty) => Some(text.to_string()),
+        _ => None,
+    }
+}
+
 /// The display text of a value of type `ty` fetched in the format [`format_code`] picked:
 /// decoded from binary, or PostgreSQL's text output as it is (`text`).
 pub fn format_value(ty: &Type, raw: &[u8], text: bool) -> String {

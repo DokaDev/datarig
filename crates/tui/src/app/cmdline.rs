@@ -791,7 +791,10 @@ impl App {
                 command::Command::Commit
                 | command::Command::Rollback
                 | command::Command::Tx
-                | command::Command::Session,
+                | command::Command::Session
+                | command::Command::Changes
+                | command::Command::Apply
+                | command::Command::Discard,
                 Some(a),
             ) => {
                 if !arg.is_empty() {

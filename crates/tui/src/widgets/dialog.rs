@@ -447,6 +447,85 @@ pub(crate) fn draw_tx_summary(app: &mut App, area: Rect, buf: &mut Buffer) {
     button_row(buf, inner, y, &labels, Some(0), &mut s.buttons, when);
 }
 
+/// The preview of a result's pending changes: how many of each kind, then the row checks and
+/// the writes, each statement on a line with the count it must give (as many as fit, scrolled
+/// with `j`/`k`), or why nothing can be applied yet; how the Apply stands to a transaction, then
+/// the buttons (Cancel first, focused). Deletes and changes of several rows are in the risk tone.
+pub(crate) fn draw_edit_preview(app: &mut App, area: Rect, buf: &mut Buffer) {
+    use crate::app::edit::PreviewLine;
+    use crate::text::width;
+    let th = theme::cur();
+    let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::EditPreview), app.now());
+    let Some(v) = app.edit_preview_view() else { return };
+    let keys = app.i18n.label(Label::EditPreviewKeys);
+    let w = area.width.saturating_sub(4).min(120);
+    // Text from the inner edge (a column of margin each side).
+    let iw = (w as usize).saturating_sub(4);
+    let surface = |fg| Style::new().fg(fg).bg(th.surface);
+    let risk = surface(th.warning).add_modifier(Modifier::BOLD);
+    // The body's rows: a statement on one line (a line break in a value as one character), its
+    // count at the end; words wrapped.
+    let mut rows: Vec<Vec<(String, Style)>> = Vec::new();
+    let wrapped = |text: &str, style: Style, rows: &mut Vec<Vec<(String, Style)>>| {
+        rows.extend(wrap_words(text, iw).into_iter().map(|l| vec![(l, style)]));
+    };
+    for l in &v.lines {
+        match l {
+            PreviewLine::Head(text) => rows.push(vec![(text.clone(), surface(th.fg).add_modifier(Modifier::BOLD))]),
+            PreviewLine::Step { sql, expect, risky } => {
+                let tail = format!("  {expect}");
+                let room = iw.saturating_sub(2 + width(&tail));
+                let sql = clip(&crate::text::sanitize_cell(sql), room.max(8));
+                let pad = room.saturating_sub(width(&sql));
+                let style = if *risky { risk } else { surface(th.fg) };
+                rows.push(vec![(format!("  {sql}{}", " ".repeat(pad)), style), (tail, surface(th.fg_muted))]);
+            }
+            PreviewLine::Choose { text, keys } => {
+                wrapped(&format!("! {text}"), risk, &mut rows);
+                rows.push(vec![(format!("  {keys}"), surface(th.fg))]);
+            }
+            PreviewLine::Note(text) => wrapped(text, surface(th.fg_muted), &mut rows),
+            PreviewLine::Problem(text) => wrapped(text, surface(th.error), &mut rows),
+        }
+    }
+    // Border (2), the summary, a blank line, the body, a blank line, the footer, a blank line,
+    // the buttons.
+    let fixed = 8usize;
+    let room = (area.height as usize).saturating_sub(fixed).max(1);
+    let shown = rows.len().max(1).min(room);
+    let rect = centered(area, w, (fixed + shown) as u16);
+    let inner = modal(rect, &v.title, &keys, buf);
+    let x = inner.x + 1;
+    let end = inner.x + inner.width.saturating_sub(1);
+    let line = |buf: &mut Buffer, y: u16, parts: &[(String, Style)]| {
+        let mut cx = x;
+        for (text, style) in parts {
+            if cx >= end {
+                break;
+            }
+            cx += put(buf, cx, y, text, (end - cx) as usize, *style) as u16;
+        }
+    };
+    let mut y = inner.y;
+    line(buf, y, &[(v.summary.clone(), surface(th.fg).add_modifier(Modifier::BOLD))]);
+    y += 2;
+    // The scroll keeps the last row on screen.
+    let max_scroll = rows.len().saturating_sub(shown);
+    let scroll = app.overlays.edit_preview().map_or(0, |p| p.scroll).min(max_scroll);
+    if let Some(p) = app.overlays.edit_preview_mut() {
+        p.scroll = scroll;
+    }
+    for (k, parts) in rows.iter().enumerate().skip(scroll).take(shown) {
+        line(buf, y + (k - scroll) as u16, parts);
+    }
+    y += shown as u16 + 1;
+    line(buf, y, &[(v.footer.clone(), surface(th.fg))]);
+    y += 2;
+    let labels: Vec<Localized> = app.edit_preview_buttons().iter().map(|(l, _)| app.i18n.label(*l)).collect();
+    let Some(p) = app.overlays.edit_preview_mut() else { return };
+    button_row(buf, inner, y, &labels, Some(0), &mut p.buttons, when);
+}
+
 /// The session view: the profile, its database and environment, then the items of its plan in
 /// order (the app's limits with their values, each statement under where it comes from and,
 /// on PostgreSQL, how it goes behind a pooler; as many as fit, scrolled with `j`/`k`), the

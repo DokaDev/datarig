@@ -230,6 +230,8 @@ pub struct Running {
     /// A statement of an export to a file (`DbCommand::Export`): its rows go to the export's
     /// writer, never to the tab's result.
     pub export: bool,
+    /// The Apply of a result's changes (`DbCommand::ApplyEdits`): no statement of a run.
+    pub apply: bool,
 }
 
 pub struct Popup {
@@ -1612,6 +1614,7 @@ impl App {
             Some(Overlay::Confirm(_)) => Ctx::Confirm,
             Some(Overlay::RunConfirm(_)) => Ctx::RunConfirm,
             Some(Overlay::TxSummary(_)) => Ctx::TxSummary,
+            Some(Overlay::EditPreview(_)) => Ctx::EditPreview,
             Some(Overlay::SessionView(_)) => Ctx::SessionView,
             Some(Overlay::IconsAsk(_)) => Ctx::IconsAsk,
             Some(Overlay::Help(h)) if h.filtering => Ctx::HelpFilter,
@@ -1890,6 +1893,8 @@ impl App {
                 self.i18n.label(Label::QueryCancellingServer)
             } else if r.cancelling.is_some() {
                 self.i18n.label(Label::QueryCancelling)
+            } else if r.apply {
+                self.i18n.label(Label::EditApplying)
             } else if r.export {
                 let id = self.tab().id;
                 self.export_progress(id).map_or_else(|| self.i18n.label(Label::ExportRunning), |m| self.i18n.msg(&m))

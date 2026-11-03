@@ -237,7 +237,7 @@ fn draw_editor(app: &mut App, area: Rect, buf: &mut Buffer) -> (u16, u16) {
     let running = t
         .exec
         .running
-        .filter(|r| !r.fetch && !r.count && !r.export && t.editor.active_run() == Some(r.id))
+        .filter(|r| !r.fetch && !r.count && !r.export && !r.apply && t.editor.active_run() == Some(r.id))
         .and_then(|r| t.exec.run.current().map(|i| (i, crate::widgets::spinner_at(r.started, now))));
     let editor = &mut app.tabs.active_mut().editor;
     editor.set_running(running);
@@ -380,6 +380,8 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
         _ => false,
     };
     let tx = match (&t.results, t.exec.view) {
+        // Changes an Apply left uncommitted in it: the edits' badge says so instead.
+        (Results::Rows(rs), ResultView::Rows) if rs.edit.applied.as_ref().is_some_and(|a| a.tx.is_some()) => None,
         (Results::Rows(rs), ResultView::Rows) => rs.tx,
         _ => None,
     };
@@ -429,11 +431,12 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     let cost = |items: &[Item]| strip_cost(&widths(items), &(0..items.len()).collect::<Vec<_>>());
     let short = labels(true);
     // The shown rows' edits, left of the transaction: as much of it as fits beside the whole
-    // labels, else beside the short ones (two blanks between).
+    // labels, else beside the short ones, else its short form beside those (two blanks
+    // between).
     let badge = match (&t.results, t.exec.view) {
-        (Results::Rows(rs), ResultView::Rows) => [cost(&full), cost(&short)]
+        (Results::Rows(rs), ResultView::Rows) => [(cost(&full), false), (cost(&short), false), (cost(&short), true)]
             .into_iter()
-            .find_map(|labels_w| app.edit_badge(rs, room.saturating_sub(labels_w + 3), bg)),
+            .find_map(|(labels_w, small)| app.edit_badge(rs, room.saturating_sub(labels_w + 3), small, bg)),
         _ => None,
     };
     let badge_w = badge.as_ref().map_or(0, |(text, _)| crate::text::width(text) + 2);

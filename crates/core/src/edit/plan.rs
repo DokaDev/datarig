@@ -14,6 +14,7 @@
 use super::batch::{Counts, EditBatch, RowEdit};
 use super::sql::{EditSql, Exactness, Scope, Value};
 use super::target::{ColumnReason, Duplicates, EditTarget, Identity, TableRef, Write};
+use crate::driver::structure::ColumnFill;
 use crate::sql::dialect::Language;
 use crate::sql::lexer::{Tok, Token, lex_in};
 use crate::sql::risk::{Class, Classifier};
@@ -105,6 +106,12 @@ pub enum PlanError {
     Choose { row: usize, matches: u64 },
     /// The format cannot change just one of several rows.
     NoOneOfK { row: usize },
+    /// A new row leaves a column to its default that has none and takes no NULL: the server
+    /// would refuse the row, or (MySQL, not strict) store an empty value of its own.
+    NoDefault { origin: Origin, column: usize },
+    /// A new row leaves `column` of the table, which the result does not show, to its default,
+    /// which it lacks (as [`PlanError::NoDefault`]).
+    NotShown { origin: Origin, column: String },
     /// A statement the format wrote is not what it must be. A bug: nothing runs.
     Internal(String),
 }
@@ -182,8 +189,38 @@ pub fn count_statements(
     Ok(out)
 }
 
+/// The cells of new rows left to their column's default (new row, result column) where the
+/// column has none: `NOT NULL`, no default expression, not numbered nor computed by the table.
+pub fn no_default(t: &EditTarget, b: &EditBatch) -> Vec<(u64, usize)> {
+    let none = |c: usize| {
+        t.columns
+            .get(c)
+            .and_then(Option::as_ref)
+            .is_some_and(|c| c.column.not_null && c.column.default.is_none() && c.column.fill == ColumnFill::Default)
+    };
+    b.drafts()
+        .iter()
+        .flat_map(|d| d.cells.iter().enumerate().map(move |(c, v)| (d.id, c, v)))
+        .filter(|&(_, c, v)| *v == Value::Default && none(c))
+        .map(|(id, c, _)| (id, c))
+        .collect()
+}
+
+/// The new rows of batch `b` and the columns of the table they leave to a default it lacks
+/// because the result does not show them ([`EditTarget::unshown_required`]), each new row with
+/// each column.
+pub fn not_shown(t: &EditTarget, b: &EditBatch) -> Vec<(u64, String)> {
+    b.drafts().iter().flat_map(|d| t.unshown_required.iter().map(move |c| (d.id, c.clone()))).collect()
+}
+
 /// The statements that apply batch `b` to target `t` in format `f`.
 pub fn plan(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Result<Plan, PlanError> {
+    if let Some(&(id, column)) = no_default(t, b).first() {
+        return Err(PlanError::NoDefault { origin: Origin::New(id), column });
+    }
+    if let Some((id, column)) = not_shown(t, b).into_iter().next() {
+        return Err(PlanError::NotShown { origin: Origin::New(id), column });
+    }
     let (mut checks, mut deletes, mut updates, mut inserts) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (row, e) in b.rows() {
         let origin = Origin::Row(row);

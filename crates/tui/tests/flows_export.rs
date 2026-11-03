@@ -999,3 +999,49 @@ fn an_export_leaves_the_open_manual_transaction_as_it_was() {
     h.tab_db(0, DbEvent::Exported { id: eid, result: Err(DbError::Server("deadlock".into())), cancelled: false });
     pump_until(&mut h, "the end", done);
 }
+
+/// A MySQL tab's first run opens its session, which says its time zone and character set as it
+/// connects, before the statement runs: its result's text is exported as SQL, not refused as
+/// read across a change of them.
+#[test]
+fn a_mysql_tabs_first_result_is_exported_as_sql() {
+    use datarig_core::config::Config;
+    use datarig_core::driver::keys::{KeyCatalog, KeyKind, NameRule};
+    use datarig_core::driver::{ColumnOrigin, SessionValues, ValueKind};
+    use datarig_core::profile::ConnectionConfig;
+    let dir = scratch("mysql-first");
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let cfg = Config {
+        connections: vec![ConnectionConfig { driver: "mysql".into(), ..ConnectionConfig::test_db() }],
+        ..Config::default()
+    };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    let mut k = KeyCatalog::default();
+    k.set_names(NameRule::MySql { tables_ignore_case: false });
+    k.set_server_zone("UTC");
+    k.add_table(1, "shop", "users", [(1, "id".to_string()), (2, "email".to_string())]);
+    k.mark(1, &[1], KeyKind::Primary);
+    h.db(DbEvent::Keys(Ok(k)));
+    let col = |name: &str, kind: ValueKind| {
+        let origin = ColumnOrigin::Named { schema: "shop".into(), table: "users".into(), column: name.into() };
+        ColumnMeta::new(name.into(), "varchar".into(), kind, Some(origin))
+    };
+    h.app.run(vec!["SELECT id, email FROM shop.users".to_string()]);
+    h.db(DbEvent::SessionValues(SessionValues { time_zone: "SYSTEM".into(), charset: "utf8mb4".into() }));
+    let id = h.app.tab().exec.query_id;
+    let columns = vec![col("id", ValueKind::Integer), col("email", ValueKind::Text)];
+    let rows = vec![vec![Some("1".into()), Some("a@x".into())]];
+    h.db(DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::ZERO });
+    let path = dir.join("u.sql");
+    h.command(&format!("export {}", path.display()));
+    pump_until(&mut h, "the end", done);
+    let flash = h.app.transient.as_ref().map(|(n, _)| n.render(&h.app.i18n).to_string()).unwrap_or_default();
+    assert_eq!(
+        std::fs::read_to_string(&path).ok().as_deref(),
+        Some("INSERT INTO `shop`.`users` (`id`, `email`) VALUES (1, 'a@x');\n"),
+        "{flash} {}",
+        status(&h)
+    );
+}

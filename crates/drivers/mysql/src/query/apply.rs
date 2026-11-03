@@ -141,7 +141,7 @@ pub(super) async fn apply(
             }
             Ok((count, insert_id)) => {
                 let insert_id = insert_id.filter(|_| matches!(step.expect, Expect::Affected(_)));
-                done.push(AppliedStep { count, returned: None, insert_id });
+                done.push(AppliedStep { count, returned: None, unshown: Vec::new(), insert_id });
             }
             Err(e) => {
                 failed = Some((fail(Some(i), failure(&e).0), Some(e)));

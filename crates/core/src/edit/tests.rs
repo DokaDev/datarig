@@ -234,6 +234,22 @@ fn without_the_key_rows_are_found_by_their_values_and_never_as_duplicates() {
 }
 
 #[test]
+fn the_columns_a_new_row_must_be_given_that_the_result_does_not_show_are_kept() {
+    let mut s = table(
+        &[("id", true), ("name", false), ("email", true), ("code", true), ("n", true), ("g", true)],
+        Some(&["id"]),
+    );
+    s.columns[3].default = Some("'x'".into());
+    s.columns[4].fill = ColumnFill::AutoIncrement;
+    s.columns[5].fill = ColumnFill::Stored("1".into());
+    let names = ["id", "name", "email", "code", "n", "g"];
+    let t = resolve(&names, &[int("id", 1)], &s).unwrap();
+    assert_eq!(t.unshown_required, ["email"], "NOT NULL, no default, filled by nothing, not shown");
+    let t = resolve(&names, &[int("id", 1), col("email", ValueKind::Text, Some(3))], &s).unwrap();
+    assert!(t.unshown_required.is_empty(), "shown: the result's own check");
+}
+
+#[test]
 fn identical_rows_of_a_keyless_table_are_a_choice_only_when_every_column_is_shown_exactly() {
     let s = table(&[("a", false), ("b", false)], None);
     let names = ["a", "b"];
