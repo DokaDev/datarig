@@ -625,8 +625,26 @@ fn mysql_users_with(zone: &str, charset: &str, nickname: (&str, ValueKind, &str)
 
 /// As [`mysql_users_with`], the grid's rows `rows`.
 fn mysql_users_rows(zone: &str, charset: &str, nickname: (&str, ValueKind), rows: Vec<Vec<Option<String>>>) -> Harness {
-    use datarig_core::driver::keys::{KeyCatalog, KeyKind, NameRule};
     use datarig_core::driver::{ColumnOrigin, SessionValues};
+    let mut h = mysql_profile();
+    h.db(DbEvent::SessionValues(SessionValues { time_zone: zone.into(), charset: charset.into() }));
+    let col = |name: &str, ty: &str, kind: ValueKind| {
+        let origin = ColumnOrigin::Named { schema: "shop".into(), table: "users".into(), column: name.into() };
+        ColumnMeta::new(name.into(), ty.into(), kind, Some(origin))
+    };
+    let columns = vec![
+        col("id", "bigint", ValueKind::Integer),
+        col("email", "varchar", ValueKind::Text),
+        col("nickname", nickname.0, nickname.1),
+    ];
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", columns, rows);
+    h.sent();
+    h
+}
+
+/// A MySQL profile, connected, the keys of `shop.users` read; its session said nothing yet.
+fn mysql_profile() -> Harness {
+    use datarig_core::driver::keys::{KeyCatalog, KeyKind, NameRule};
     let driver = FakeDriver::default();
     driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
     let cfg = Config {
@@ -642,18 +660,6 @@ fn mysql_users_rows(zone: &str, charset: &str, nickname: (&str, ValueKind), rows
     k.add_table(1, "shop", "users", names.iter().enumerate().map(|(i, n)| (i as i16 + 1, n.to_string())));
     k.mark(1, &[1], KeyKind::Primary);
     h.db(DbEvent::Keys(Ok(k)));
-    h.db(DbEvent::SessionValues(SessionValues { time_zone: zone.into(), charset: charset.into() }));
-    let col = |name: &str, ty: &str, kind: ValueKind| {
-        let origin = ColumnOrigin::Named { schema: "shop".into(), table: "users".into(), column: name.into() };
-        ColumnMeta::new(name.into(), ty.into(), kind, Some(origin))
-    };
-    let columns = vec![
-        col("id", "bigint", ValueKind::Integer),
-        col("email", "varchar", ValueKind::Text),
-        col("nickname", nickname.0, nickname.1),
-    ];
-    answer(&mut h, "SELECT id, email, nickname FROM shop.users", columns, rows);
-    h.sent();
     h
 }
 
@@ -689,6 +695,44 @@ fn a_value_not_shown_whole_is_not_edited() {
     assert!(reason.contains("row 1") && reason.contains("email") && reason.contains("latin1"), "{reason}");
     assert_eq!(h.app.key_context(), Ctx::Grid);
     assert!(edits(&h).batch.is_empty());
+}
+
+#[test]
+fn a_result_read_in_a_session_that_said_its_values_as_it_connected_is_edited() {
+    use datarig_core::driver::{ColumnOrigin, SessionValues};
+    let col = |name: &str, kind: ValueKind| {
+        let origin = ColumnOrigin::Named { schema: "shop".into(), table: "users".into(), column: name.into() };
+        ColumnMeta::new(name.into(), "varchar".into(), kind, Some(origin))
+    };
+    let columns =
+        || vec![col("id", ValueKind::Integer), col("email", ValueKind::Text), col("nickname", ValueKind::Text)];
+    let values = |zone: &str| SessionValues { time_zone: zone.into(), charset: "utf8mb4".into() };
+    let mut h = mysql_profile();
+    // The tab's first run opens its session, which says its values as it connects, before the
+    // statement runs.
+    h.app.run(vec!["SELECT id, email, nickname FROM shop.users".to_string()]);
+    h.db(DbEvent::SessionValues(values("SYSTEM")));
+    let id = h.app.tab().exec.query_id;
+    let rows = vec![vec![s("1"), s("a@x"), s("one")]];
+    h.db(DbEvent::Page { id, columns: Some(columns()), rows: rows.clone(), more: false, elapsed: Duration::ZERO });
+    h.app.focus = Focus::Results;
+    h.sent();
+    h.keys("le");
+    structure(&mut h, Ok(mysql_users_structure()));
+    assert_eq!(h.app.key_context(), Ctx::CellEdit, "{:?}", said(&mut h));
+    h.key(KeyCode::Esc);
+    // Values that change while a statement runs: its result is still refused.
+    h.app.run(vec!["SELECT id, email, nickname FROM shop.users".to_string()]);
+    h.db(DbEvent::SessionValues(values("+02:00")));
+    let id = h.app.tab().exec.query_id;
+    h.db(DbEvent::Page { id, columns: Some(columns()), rows, more: false, elapsed: Duration::ZERO });
+    h.app.focus = Focus::Results;
+    h.app.transient = None;
+    assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (0, 0));
+    h.keys("le");
+    structure(&mut h, Ok(mysql_users_structure()));
+    let Some(Msg::EditRefused { reason }) = said(&mut h) else { panic!("refused") };
+    assert!(reason.contains("across a change"), "{reason}");
 }
 
 #[test]
