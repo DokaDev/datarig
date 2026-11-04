@@ -3,6 +3,40 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.38.0 — 2026-11-04
+
+Pending changes get their own Changes tab, Apply asks on the status line, and a range copied elsewhere can be pasted into the result grid.
+
+### Added
+
+- A range pasted into the result grid with the terminal's own paste (`Cmd+V`, `Ctrl+Shift+V`)
+  becomes pending changes from the cursor or the selection's corner: read as TSV, CSV, one
+  column or one value (the status line names the format, and `Space d V` reads it again as the
+  next one; text with commas and no tab asks first whether it is CSV, `c`, or one column, `1`), rows past the last added as new rows, one step `u` undoes. One value fills every
+  selected cell. A paste that does not fit (too wide, a column that takes no value, a row marked
+  for deletion, rows past the last row read while the server has more) is refused whole, with
+  the reason; one of more than 1,000 rows asks first. `\N` pastes NULL (setting
+  `edit.paste_null`); an empty field is an empty value. Values a column does not take are kept,
+  marked `!` in the gutter (theme token `edit_invalid`) and listed first in the Changes tab, and
+  the changes are not applied until they are fixed. `Space d v` pastes the system clipboard with
+  `clipboard = "system"`, or `"auto"` outside SSH. For about a second after a status-line question or a
+  waiting Apply ends without its answer, `y`, `n`, `c` and `1` do nothing in the results and say
+  they were ignored, so a late `y` never copies a cell over the clipboard.
+
+### Changed
+
+- A result with pending changes has a Changes tab in its result strip: one line per changed
+  cell, every reason they can't be applied yet first, each with its row; `Enter` shows the cell
+  in the grid, `s` switches to the statements that apply them, `c` copies them exactly as they
+  are sent. `Space d p` and `:changes` show the tab. `ui.changes_view` picks the view the tab
+  opens in.
+- `Space d a` and `:apply` ask on the status line instead of opening a dialog: only `y`
+  applies, any other key, a click or a paste cancels. Rows found by their values are counted
+  again first (any key, a click or a paste meanwhile stops waiting); problems show in the Changes tab instead of a question. The dialog opens only for
+  a choice among identical rows, an Apply whose result is unknown, and environments with
+  `confirm = "writes"`. After an Apply the Changes tab shows what was applied and the statements
+  sent until the query runs again, or why nothing was, the failing statement marked.
+
 ## 0.37.1 — 2026-11-04
 
 This patch adds the edits of a cell to the grid's right-click menu and makes the preview of
