@@ -180,7 +180,9 @@ be read; `j` and `k` scroll line by line.
 On MySQL a text value is compared by its UTF-8 bytes, so the statement holds it as
 `_utf8mb4 X'…'`. A statement with such values is followed by a dim line that starts with `↳`
 and reads them back in order, `column = 'text'` (a long text cut with `…`; bytes that are not
-UTF-8 text say how many there are):
+UTF-8 text say how many there are), grouped by where they are: `set` for the values an update
+writes, `where` for those a row is found by, `values` for those an insert adds. An update can
+name a column in both, its new value and the one it is found by:
 
 ```text
   UPDATE `shop`.`people` SET `note` = _utf8mb4 X'615C62' WHERE  expect 1
@@ -189,11 +191,13 @@ UTF-8 text say how many there are):
     X'706C61696E206E616D65' AND `note` = _utf8mb4 X'6F6C64' AND
     CONVERT(`note` USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4
     X'6F6C64'
-    ↳ note = 'a\b', name = 'plain name', note = 'old'
+    ↳ set note = 'a\b' · where name = 'plain name', note = 'old'
 ```
 
 That line is not SQL: it is never sent to the server, and `c` copies the statements exactly as
-they are sent, without it.
+they are sent, without it. A literal longer than a few hundred bytes is also shown shortened, its
+start and end around how many bytes are left out (`…786400 more bytes…`); it is copied and sent
+whole.
 
 - **Row checks (lock, no waiting)** first: for every row read that changes, a `SELECT … FOR
   UPDATE NOWAIT` that finds and locks it. A row another session holds fails at once instead of

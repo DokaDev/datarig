@@ -1960,7 +1960,8 @@ fn mysql_note_previewed(lang: Lang, rows: Vec<Vec<Option<String>>>, note: &str) 
     type_cell(&mut h, note);
     h.command("changes");
     let asked = counts(&mut h);
-    assert_eq!(asked.len(), 1, "the row is counted");
+    let why = || format!("{:.400?} {:.400?}", h.app.edit_preview_view().map(|v| v.lines), h.app.transient);
+    assert_eq!(asked.len(), 1, "the row is counted: {}", why());
     h.db(DbEvent::Counted { id: asked[0].0, result: Ok(1), snapshot: false });
     h.app.transient = None;
     h
@@ -1990,16 +1991,17 @@ fn a_mysql_statements_text_bytes_are_read_back_under_it() {
     );
     let read = format!("name = '{name}', note = 'old'");
     assert_eq!(v.lines[1], step(&check, 1, false));
-    assert_eq!(v.lines[2], PreviewLine::Values(read.clone()));
+    assert_eq!(v.lines[2], PreviewLine::Values(format!("where {read}")));
     assert_eq!(v.lines[3], head("Writes"));
     let PreviewLine::Step { sql, .. } = &v.lines[4] else { panic!("the update: {:?}", v.lines[4]) };
     assert!(sql.starts_with(&format!("UPDATE `shop`.`people` SET `note` = _utf8mb4 X'{}' WHERE ", hex("new \\ note"))));
-    assert_eq!(v.lines[5], PreviewLine::Values(format!("note = 'new \\ note', {read}")));
+    // The column written and found by, told apart.
+    assert_eq!(v.lines[5], PreviewLine::Values(format!("set note = 'new \\ note' \u{B7} where {read}")));
     assert_eq!(v.lines.len(), 6);
     // Shown under each statement, marked.
     let screen = screen(&mut h, 120, 40);
-    assert_eq!(screen.matches(&format!("\u{21B3} {read}")).count(), 1, "{screen}");
-    assert!(screen.contains("\u{21B3} note = 'new \\ note', name = "), "{screen}");
+    assert_eq!(screen.matches(&format!("\u{21B3} where {read}")).count(), 1, "{screen}");
+    assert!(screen.contains("\u{21B3} set note = 'new \\ note' \u{B7} where name = "), "{screen}");
 }
 
 /// The read-back values are display only: Copy SQL copies exactly the statements that are sent,
@@ -2146,4 +2148,34 @@ fn the_keys_leave_the_border_before_the_corner() {
         assert_eq!(buf[(right - 1, bottom)].symbol(), "\u{2500}", "at {w}x{hh}: {}", cols(buf, bottom, left, right));
         assert!(cols(buf, bottom, left, right).ends_with("Enter/Esc cancel \u{2500}\u{256F}"), "at {w}x{hh}");
     }
+}
+
+/// A long text in a value (48 KiB: its statements stay under the size the safety checks read):
+/// its literals are shortened on screen (their start, how many
+/// bytes are not shown, their end), so the body takes a few rows; it is laid out once per
+/// width, not for every frame; what is copied and sent is the whole statement.
+#[test]
+fn a_long_value_is_shown_shortened_and_laid_out_once_per_width() {
+    // The name (not the note typed into) holds it.
+    let old = "lorem ipsum ".repeat(1 << 12);
+    let mut h = mysql_note_previewed(Lang::En, people(&old, "old"), "a\\b");
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    let builds = |h: &Harness| h.app.overlays.edit_preview().expect("open").body_builds;
+    let screen1 = screen(&mut h, 120, 40);
+    assert_eq!(builds(&h), 1);
+    let rows = h.app.overlays.edit_preview().unwrap().body_rows().unwrap();
+    assert!(rows < 30, "{rows} rows:\n{screen1}");
+    assert!(screen1.contains("more bytes\u{2026}"), "{screen1}");
+    assert!(screen1.contains("\u{21B3} where name = 'lorem ipsum lorem ipsum "), "{screen1}");
+    assert!(screen1.contains("\u{2026}', note = 'old'"), "{screen1}");
+    h.keys("j");
+    let _ = screen(&mut h, 120, 40);
+    assert_eq!(builds(&h), 1, "the same width: not laid out again");
+    let _ = screen(&mut h, 80, 24);
+    assert_eq!(builds(&h), 2, "another width");
+    h.key(KeyCode::Char('c'));
+    let hex: String = old.bytes().map(|b| format!("{b:02X}")).collect();
+    let copied = clip.last().expect("copied");
+    assert_eq!(copied.matches(&hex).count(), 4, "every literal whole");
+    assert!(!copied.contains("more bytes"));
 }

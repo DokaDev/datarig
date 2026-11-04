@@ -12,14 +12,42 @@ pub(super) enum Decoded {
     Bytes(usize),
 }
 
+/// Where in its statement a literal is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Part {
+    /// An UPDATE's `SET`: the value written.
+    Set,
+    /// What a row is found by.
+    Where,
+    /// An INSERT's values.
+    Values,
+}
+
+/// `column = 'text'` as the preview says it: a line break, a tab or another control character
+/// (in either) as one character, the text cut at `max` columns with `…` (only its start is
+/// looked at, however long it is).
+pub(super) fn text_pair(column: &str, text: &str, max: usize) -> String {
+    use crate::text::{clip, sanitize_cell, width};
+    let head: String = text.chars().take(max * 4).collect();
+    let mut shown = clip(&sanitize_cell(&head), max);
+    if head.len() < text.len() && width(&shown) <= max && !shown.ends_with('\u{2026}') {
+        shown = clip(&format!("{shown}\u{2026}"), max);
+    }
+    format!("{} = '{shown}'", sanitize_cell(column))
+}
+
 /// The `_utf8mb4 X'…'` literals of `sql` (in dialect `d`) a column is set to or compared with,
-/// in order, with that column's name: `col = lit` and `col <=> lit`, and an INSERT's values by
-/// their place in its column list. A literal after anything else (the column converted and
+/// in order, with where each is and that column's name: `col = lit` and `col <=> lit` (in an
+/// UPDATE's `SET` the value written, elsewhere what the row is found by), and an INSERT's values
+/// by their place in its column list. A literal after anything else (the column converted and
 /// compared again byte for byte) repeats the one before it and is left out.
-pub(super) fn text_literals(sql: &str, d: Dialect) -> Vec<(String, Decoded)> {
+pub(super) fn text_literals(sql: &str, d: Dialect) -> Vec<(Part, String, Decoded)> {
     let toks: Vec<Token> = lex_in(sql, d).into_iter().filter(|t| !t.is_trivia()).collect();
     let word = |t: &Token, w: &str| t.is_word() && t.text(sql).eq_ignore_ascii_case(w);
     let insert = toks.first().is_some_and(|t| word(t, "INSERT"));
+    let update = toks.first().is_some_and(|t| word(t, "UPDATE"));
+    // Inside an UPDATE's `SET` (from it to its `WHERE`).
+    let mut set = false;
     let mut columns: Vec<String> = Vec::new();
     let (mut depth, mut groups, mut place, mut values) = (0usize, 0usize, 0usize, false);
     let mut out = Vec::new();
@@ -35,14 +63,20 @@ pub(super) fn text_literals(sql: &str, d: Dialect) -> Vec<(String, Decoded)> {
             Tok::RParen => depth = depth.saturating_sub(1),
             Tok::Comma if depth == 1 => place += 1,
             _ if depth == 0 && word(t, "VALUES") => values = true,
+            _ if depth == 0 && update && word(t, "SET") => set = true,
+            _ if depth == 0 && word(t, "WHERE") => set = false,
             Tok::QuotedIdent if insert && depth == 1 && groups == 1 && !values => columns.push(unquote(t.text(sql))),
             Tok::Str if i > 0 && word(&toks[i - 1], "_utf8mb4") => {
                 let Some(bytes) = hex_bytes(t.text(sql)) else { continue };
-                let column = compared(sql, &toks[..i - 1])
-                    .or_else(|| (insert && values && depth == 1).then(|| columns.get(place).cloned()).flatten());
-                if let Some(c) = column {
+                let part = if set { Part::Set } else { Part::Where };
+                let column = compared(sql, &toks[..i - 1]).map(|c| (part, c)).or_else(|| {
+                    (insert && values && depth == 1)
+                        .then(|| columns.get(place).map(|c| (Part::Values, c.clone())))
+                        .flatten()
+                });
+                if let Some((part, c)) = column {
                     let v = String::from_utf8(bytes).map_or_else(|e| Decoded::Bytes(e.as_bytes().len()), Decoded::Text);
-                    out.push((c, v));
+                    out.push((part, c, v));
                 }
             }
             _ => {}

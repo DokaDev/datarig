@@ -44,6 +44,28 @@ pub struct EditPreview {
     /// The first line of the body on screen.
     pub scroll: usize,
     pub buttons: Buttons,
+    /// The body as last laid out (rebuilt when its width, the theme or its lines change).
+    pub(crate) body: Option<PreviewBody>,
+    /// How many times the body was laid out.
+    pub body_builds: u64,
+    /// The line of text values read back from each statement, by the language and the statement (statements are
+    /// planned again for every frame; reading their values back is not).
+    literals: std::cell::RefCell<Vec<(Lang, String, Option<String>)>>,
+}
+
+impl EditPreview {
+    /// How many rows the body was last laid out in (`None`: not drawn yet).
+    pub fn body_rows(&self) -> Option<usize> {
+        self.body.as_ref().map(|b| b.rows.len())
+    }
+}
+
+/// The preview's body laid out in rows of text and style, for the lines and width it was made for.
+pub(crate) struct PreviewBody {
+    pub(crate) width: usize,
+    pub(crate) theme: std::sync::Arc<crate::theme::Theme>,
+    pub(crate) lines: Vec<PreviewLine>,
+    pub(crate) rows: Vec<Vec<(String, Style)>>,
 }
 
 /// Where the preview's plan stands.
@@ -161,6 +183,9 @@ impl App {
             again: false,
             scroll: 0,
             buttons: Buttons::default(),
+            body: None,
+            body_builds: 0,
+            literals: Default::default(),
         };
         self.overlays.push(Overlay::EditPreview(Box::new(p)));
     }
@@ -355,9 +380,8 @@ impl App {
                         expect: i18n.msg(&Msg::EditPreviewExpect { count: n }).to_string(),
                         risky: delete || n > 1,
                     });
-                    let values = literals::text_literals(&s.sql, dialect);
-                    if !values.is_empty() {
-                        lines.push(PreviewLine::Values(self.values_text(&values)));
+                    if let Some(text) = self.read_back(p, &s.sql, dialect) {
+                        lines.push(PreviewLine::Values(text));
                     }
                 }
             }
@@ -387,15 +411,50 @@ impl App {
 
     /// Read-back values as the preview says them: `column = 'text'` (a line break as one
     /// character, a long text cut), or how many bytes a value that is not text has.
-    fn values_text(&self, values: &[(String, literals::Decoded)]) -> String {
-        use crate::text::{clip, sanitize_cell};
-        let one = |(column, v): &(String, literals::Decoded)| match v {
-            literals::Decoded::Text(t) => format!("{column} = '{}'", clip(&sanitize_cell(t), VALUE_W)),
+    /// Read-back values as the preview says them, by where they are in their statement (`set
+    /// note = 'text', … · where name = 'text'`): `column = 'text'` (a line break as one
+    /// character, a long text cut), or how many bytes a value that is not text has.
+    fn values_text(&self, values: &[(literals::Part, String, literals::Decoded)]) -> String {
+        let one = |column: &str, v: &literals::Decoded| match v {
+            literals::Decoded::Text(t) => literals::text_pair(column, t, VALUE_W),
             literals::Decoded::Bytes(n) => {
-                format!("{column} = {}", self.i18n.msg(&Msg::EditPreviewNotText { count: *n as u64 }))
+                let not_text = self.i18n.msg(&Msg::EditPreviewNotText { count: *n as u64 });
+                format!("{} = {not_text}", crate::text::sanitize_cell(column))
             }
         };
-        values.iter().map(one).collect::<Vec<_>>().join(", ")
+        let mut groups: Vec<(literals::Part, Vec<String>)> = Vec::new();
+        for (part, column, v) in values {
+            match groups.last_mut() {
+                Some((p, pairs)) if p == part => pairs.push(one(column, v)),
+                _ => groups.push((*part, vec![one(column, v)])),
+            }
+        }
+        let label = |p: literals::Part| {
+            self.i18n.label(match p {
+                literals::Part::Set => Label::EditPreviewPartSet,
+                literals::Part::Where => Label::EditPreviewPartWhere,
+                literals::Part::Values => Label::EditPreviewPartValues,
+            })
+        };
+        groups
+            .iter()
+            .map(|(p, pairs)| format!("{} {}", label(*p), pairs.join(", ")))
+            .collect::<Vec<_>>()
+            .join(" \u{B7} ")
+    }
+
+    /// The text values statement `sql` of preview `p` carries as bytes, read back as the
+    /// preview says them (`None`: it carries none); worked out once per statement.
+    fn read_back(&self, p: &EditPreview, sql: &str, d: Dialect) -> Option<String> {
+        let mut cache = p.literals.borrow_mut();
+        let lang = self.i18n.lang;
+        if let Some((_, _, text)) = cache.iter().find(|(l, s, _)| *l == lang && s == sql) {
+            return text.clone();
+        }
+        let values = literals::text_literals(sql, d);
+        let text = (!values.is_empty()).then(|| self.values_text(&values));
+        cache.push((lang, sql.to_string(), text.clone()));
+        text
     }
 
     /// Tab `tab`'s result `result` is being applied.

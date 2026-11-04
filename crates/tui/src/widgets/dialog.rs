@@ -460,8 +460,6 @@ pub(crate) fn draw_tx_summary(app: &mut App, area: Rect, buf: &mut Buffer) {
 /// the Apply stands to a transaction, then the buttons (Cancel first, focused). Deletes and
 /// changes of several rows have a `!` and their count in the risk tone.
 pub(crate) fn draw_edit_preview(app: &mut App, area: Rect, buf: &mut Buffer) {
-    use crate::app::edit::PreviewLine;
-    use crate::text::width;
     let th = theme::cur();
     let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::EditPreview), app.now());
     let Some(v) = app.edit_preview_view() else { return };
@@ -470,48 +468,24 @@ pub(crate) fn draw_edit_preview(app: &mut App, area: Rect, buf: &mut Buffer) {
     // Text from the inner edge (a column of margin each side).
     let iw = (w as usize).saturating_sub(4);
     let surface = |fg| Style::new().fg(fg).bg(th.surface);
-    let risk = surface(th.warning).add_modifier(Modifier::BOLD);
-    // The body's rows: a statement from column 2, wrapped under itself from column 4 (a line
-    // break in a value as one character), its count at the end of its first row; its values read
-    // back from column 4, wrapped from column 6; words wrapped.
-    let mut rows: Vec<Vec<(String, Style)>> = Vec::new();
-    let wrapped = |text: &str, style: Style, rows: &mut Vec<Vec<(String, Style)>>| {
-        rows.extend(wrap_words(text, iw).into_iter().map(|l| vec![(l, style)]));
-    };
-    for l in &v.lines {
-        match l {
-            PreviewLine::Head(text) => rows.push(vec![(text.clone(), surface(th.fg).add_modifier(Modifier::BOLD))]),
-            PreviewLine::Step { sql, expect, risky } => {
-                let tail = format!("  {expect}");
-                let first = iw.saturating_sub(2 + width(&tail)).max(8);
-                let more = iw.saturating_sub(4).max(8);
-                let mut parts = wrap_cells(sql_cells(sql, v.dialect, th.surface), first, more).into_iter();
-                let head = parts.next().unwrap_or_default();
-                let pad = first.saturating_sub(head.iter().map(|(g, _)| width(g)).sum());
-                let (mark, tone) = if *risky { ("! ", risk) } else { ("  ", surface(th.fg_muted)) };
-                let mut row = vec![(mark.to_string(), tone)];
-                row.extend(runs(head));
-                row.extend([(" ".repeat(pad), surface(th.fg)), (tail, tone)]);
-                rows.push(row);
-                for p in parts {
-                    rows.push(std::iter::once(("    ".to_string(), surface(th.fg))).chain(runs(p)).collect());
-                }
-            }
-            PreviewLine::Values(text) => {
-                let style = surface(th.fg_dim).add_modifier(Modifier::ITALIC);
-                for (k, r) in crate::text::wrap_exact(text, iw.saturating_sub(6)).into_iter().enumerate() {
-                    let lead = if k == 0 { "    \u{21B3} " } else { "      " };
-                    rows.push(vec![(lead.to_string(), style), (r.trim_start().to_string(), style)]);
-                }
-            }
-            PreviewLine::Choose { text, keys } => {
-                wrapped(&format!("! {text}"), risk, &mut rows);
-                rows.push(vec![(format!("  {keys}"), surface(th.fg))]);
-            }
-            PreviewLine::Note(text) => wrapped(text, surface(th.fg_muted), &mut rows),
-            PreviewLine::Problem(text) => wrapped(text, surface(th.error), &mut rows),
+    // The body, laid out again only for other lines, another width or another theme.
+    let current = app
+        .overlays
+        .edit_preview()
+        .and_then(|p| p.body.as_ref())
+        .is_some_and(|b| b.width == iw && std::sync::Arc::ptr_eq(&b.theme, &app.theme) && b.lines == v.lines);
+    if !current {
+        let cut = |n: usize| app.i18n.msg(&Msg::EditPreviewCut { count: n as u64 }).to_string();
+        let rows = preview_rows(&v, iw, &cut);
+        let theme = app.theme.clone();
+        if let Some(p) = app.overlays.edit_preview_mut() {
+            p.body = Some(crate::app::edit::PreviewBody { width: iw, theme, lines: v.lines.clone(), rows });
+            p.body_builds += 1;
         }
     }
+    // Taken out while drawn, put back after.
+    let Some(body) = app.overlays.edit_preview_mut().and_then(|p| p.body.take()) else { return };
+    let rows = &body.rows;
     // Border (2), the summary, a blank line, the body, a blank line, the footer, a blank line,
     // the buttons.
     let fixed = 8usize;
@@ -539,7 +513,7 @@ pub(crate) fn draw_edit_preview(app: &mut App, area: Rect, buf: &mut Buffer) {
     if let Some(p) = app.overlays.edit_preview_mut() {
         p.scroll = scroll;
     }
-    for (k, parts) in rows.iter().enumerate().skip(scroll).take(shown) {
+    for (k, parts) in body.rows.iter().enumerate().skip(scroll).take(shown) {
         line(buf, y + (k - scroll) as u16, parts);
     }
     y += shown as u16 + 1;
@@ -547,71 +521,180 @@ pub(crate) fn draw_edit_preview(app: &mut App, area: Rect, buf: &mut Buffer) {
     y += 2;
     let labels: Vec<Localized> = app.edit_preview_buttons().iter().map(|(l, _)| app.i18n.label(*l)).collect();
     let Some(p) = app.overlays.edit_preview_mut() else { return };
+    p.body = Some(body);
     button_row(buf, inner, y, &labels, Some(0), &mut p.buttons, when);
 }
 
+/// The rows of a preview's body `v` in `iw` columns: a statement from column 2, wrapped under
+/// itself from column 4 (a line break in a value as one character, a long literal shortened
+/// with `cut` saying how many bytes are not shown), its count at the end of its first row; its
+/// values read back from column 4, wrapped from column 6; words wrapped.
+fn preview_rows(
+    v: &crate::app::edit::PreviewView,
+    iw: usize,
+    cut: &dyn Fn(usize) -> String,
+) -> Vec<Vec<(String, Style)>> {
+    use crate::app::edit::PreviewLine;
+    use crate::text::width;
+    let th = theme::cur();
+    let surface = |fg| Style::new().fg(fg).bg(th.surface);
+    let risk = surface(th.warning).add_modifier(Modifier::BOLD);
+    let dim = surface(th.fg_dim).add_modifier(Modifier::ITALIC);
+    let mut rows: Vec<Vec<(String, Style)>> = Vec::new();
+    let wrapped = |text: &str, style: Style, rows: &mut Vec<Vec<(String, Style)>>| {
+        rows.extend(wrap_words(text, iw).into_iter().map(|l| vec![(l, style)]));
+    };
+    for l in &v.lines {
+        match l {
+            PreviewLine::Head(text) => rows.push(vec![(text.clone(), surface(th.fg).add_modifier(Modifier::BOLD))]),
+            PreviewLine::Step { sql, expect, risky } => {
+                let tail = format!("  {expect}");
+                let first = iw.saturating_sub(2 + width(&tail)).max(8);
+                let more = iw.saturating_sub(4).max(8);
+                let cells = sql_cells(sql, v.dialect, th.surface, &|n| (cut(n), dim));
+                let mut parts = wrap_cells(cells, first, more).into_iter();
+                let head = parts.next().unwrap_or_default();
+                let pad = first.saturating_sub(head.iter().map(|g| g.width).sum());
+                let (mark, tone) = if *risky { ("! ", risk) } else { ("  ", surface(th.fg_muted)) };
+                let mut row = vec![(mark.to_string(), tone)];
+                row.extend(runs(head));
+                row.extend([(" ".repeat(pad), surface(th.fg)), (tail, tone)]);
+                rows.push(row);
+                for p in parts {
+                    rows.push(std::iter::once(("    ".to_string(), surface(th.fg))).chain(runs(p)).collect());
+                }
+            }
+            PreviewLine::Values(text) => {
+                for (k, r) in crate::text::wrap_exact(text, iw.saturating_sub(6)).into_iter().enumerate() {
+                    let lead = if k == 0 { "    \u{21B3} " } else { "      " };
+                    rows.push(vec![(lead.to_string(), dim), (r.trim_start().to_string(), dim)]);
+                }
+            }
+            PreviewLine::Choose { text, keys } => {
+                wrapped(&format!("! {text}"), risk, &mut rows);
+                rows.push(vec![(format!("  {keys}"), surface(th.fg))]);
+            }
+            PreviewLine::Note(text) => wrapped(text, surface(th.fg_muted), &mut rows),
+            PreviewLine::Problem(text) => wrapped(text, surface(th.error), &mut rows),
+        }
+    }
+    rows
+}
+
+/// A grapheme of a statement as drawn (or the note of what a long literal leaves out): its
+/// text, style and width.
+struct Glyph<'a> {
+    text: std::borrow::Cow<'a, str>,
+    style: Style,
+    width: usize,
+}
+
+impl<'a> Glyph<'a> {
+    /// Grapheme `g` in `style`; a line break, a tab or another control character as one character.
+    fn new(g: &'a str, style: Style) -> Self {
+        let text = if g.chars().any(char::is_control) {
+            std::borrow::Cow::Owned(crate::text::sanitize_cell(g))
+        } else {
+            std::borrow::Cow::Borrowed(g)
+        };
+        let width = crate::text::width(&text);
+        Glyph { text, style, width }
+    }
+}
+
+/// A literal or quoted name longer than this many bytes is shown shortened.
+const LONG_TOKEN: usize = 256;
+/// The graphemes shown of a shortened literal's start, and of its end.
+const LONG_HEAD: usize = 64;
+const LONG_TAIL: usize = 16;
+
 /// The graphemes of statement `sql` (in dialect `d`) on background `bg`, each in its syntax
-/// color as the editor gives it; a line break, a tab or another control character as one
-/// character.
-fn sql_cells(sql: &str, d: datarig_core::sql::dialect::Dialect, bg: ratatui::style::Color) -> Vec<(String, Style)> {
+/// color as the editor gives it. A literal longer than [`LONG_TOKEN`] bytes shows its start and
+/// its end around `cut` of the bytes between (what it says, in its style), so that a huge value
+/// is only looked at once; what is copied and sent is `sql` itself.
+fn sql_cells<'a>(
+    sql: &'a str,
+    d: datarig_core::sql::dialect::Dialect,
+    bg: ratatui::style::Color,
+    cut: &dyn Fn(usize) -> (String, Style),
+) -> Vec<Glyph<'a>> {
     use datarig_core::sql::lexer::{Tok, lex_in};
     use unicode_segmentation::UnicodeSegmentation;
     let th = theme::cur();
     let toks = lex_in(sql, d);
     let mut out = Vec::new();
-    let mut ti = 0;
-    for (at, g) in sql.grapheme_indices(true) {
-        while ti < toks.len() && toks[ti].end <= at {
-            ti += 1;
+    let push = |text: &'a str, style: Style, out: &mut Vec<Glyph<'a>>| {
+        out.extend(text.graphemes(true).map(|g| Glyph::new(g, style)));
+    };
+    let mut at = 0;
+    for (i, t) in toks.iter().enumerate() {
+        // Anything the lexer left between tokens, as plain text.
+        if t.start > at {
+            push(&sql[at..t.start], Style::new().fg(th.fg).bg(bg), &mut out);
         }
-        let style = match toks.get(ti) {
-            Some(t) if t.start <= at => {
-                let call = t.kind == Tok::Ident && toks.get(ti + 1).is_some_and(|n| n.kind == Tok::LParen);
-                th.syntax(t.kind, call)
+        at = t.end;
+        let call = t.kind == Tok::Ident && toks.get(i + 1).is_some_and(|n| n.kind == Tok::LParen);
+        let style = th.syntax(t.kind, call).bg(bg);
+        let text = t.text(sql);
+        if text.len() > LONG_TOKEN && matches!(t.kind, Tok::Str | Tok::Dollar | Tok::QuotedIdent) {
+            let head = text.grapheme_indices(true).nth(LONG_HEAD).map_or(text.len(), |(k, _)| k);
+            let tail = text.grapheme_indices(true).nth_back(LONG_TAIL - 1).map_or(0, |(k, _)| k);
+            if tail > head {
+                push(&text[..head], style, &mut out);
+                let (note, note_style) = cut(tail - head);
+                let width = crate::text::width(&note);
+                out.push(Glyph { text: std::borrow::Cow::Owned(note), style: note_style, width });
+                push(&text[tail..], style, &mut out);
+                continue;
             }
-            _ => Style::new().fg(th.fg),
-        };
-        out.push((crate::text::sanitize_cell(g), style.bg(bg)));
+        }
+        push(text, style, &mut out);
+    }
+    if at < sql.len() {
+        push(&sql[at..], Style::new().fg(th.fg).bg(bg), &mut out);
     }
     out
 }
 
-/// `cells` (graphemes and their styles) in rows of `first` columns, then of `more`: broken at
-/// the last blank that fits (the blank dropped), a run without one where it no longer fits.
-fn wrap_cells(cells: Vec<(String, Style)>, first: usize, more: usize) -> Vec<Vec<(String, Style)>> {
-    let mut out: Vec<Vec<(String, Style)>> = Vec::new();
-    let mut line: Vec<(String, Style)> = Vec::new();
-    let w = |l: &[(String, Style)]| l.iter().map(|(g, _)| crate::text::width(g)).sum::<usize>();
-    for (g, style) in cells {
-        let gw = crate::text::width(&g);
-        let limit = if out.is_empty() { first } else { more };
+/// `cells` in rows of `first` columns, then of `more`: broken at the last blank that fits (the
+/// blank dropped), a run without one where it no longer fits.
+fn wrap_cells(cells: Vec<Glyph<'_>>, first: usize, more: usize) -> Vec<Vec<Glyph<'_>>> {
+    let mut out: Vec<Vec<Glyph>> = Vec::new();
+    let mut line: Vec<Glyph> = Vec::new();
+    // The width of `line`.
+    let mut w = 0;
+    for g in cells {
+        let blank = g.text == " ";
         // A blank that does not fit is the break itself.
-        if g == " " && !line.is_empty() && w(&line) + gw > limit {
+        if blank && !line.is_empty() && w + g.width > if out.is_empty() { first } else { more } {
             out.push(std::mem::take(&mut line));
+            w = 0;
             continue;
         }
-        while !line.is_empty() && w(&line) + gw > if out.is_empty() { first } else { more } {
-            let blank = line.iter().rposition(|(c, _)| c == " ").filter(|&b| b > 0);
-            let rest = blank.map(|b| line.split_off(b).into_iter().skip(1).collect()).unwrap_or_default();
+        while !line.is_empty() && w + g.width > if out.is_empty() { first } else { more } {
+            let at = line.iter().rposition(|c| c.text == " ").filter(|&b| b > 0);
+            let rest: Vec<Glyph> = at.map(|b| line.split_off(b).into_iter().skip(1).collect()).unwrap_or_default();
+            w = rest.iter().map(|c| c.width).sum();
             out.push(std::mem::replace(&mut line, rest));
         }
         // A row after a break starts with what follows the blanks.
-        if g == " " && line.is_empty() && !out.is_empty() {
+        if blank && line.is_empty() && !out.is_empty() {
             continue;
         }
-        line.push((g, style));
+        w += g.width;
+        line.push(g);
     }
     out.push(line);
     out
 }
 
 /// Graphemes of one style joined: the spans of a row.
-fn runs(cells: Vec<(String, Style)>) -> Vec<(String, Style)> {
+fn runs(cells: Vec<Glyph<'_>>) -> Vec<(String, Style)> {
     let mut out: Vec<(String, Style)> = Vec::new();
-    for (g, style) in cells {
+    for g in cells {
         match out.last_mut() {
-            Some((text, s)) if *s == style => text.push_str(&g),
-            _ => out.push((g, style)),
+            Some((text, s)) if *s == g.style => text.push_str(&g.text),
+            _ => out.push((g.text.into_owned(), g.style)),
         }
     }
     out
@@ -758,3 +841,6 @@ pub(crate) fn draw_session_view(app: &mut App, area: Rect, buf: &mut Buffer) {
     (s.scroll, s.max_scroll) = (scroll, max_scroll);
     button_row(buf, inner, y, &labels, Some(0), &mut s.buttons, when);
 }
+
+#[cfg(test)]
+mod tests;
