@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 1268
+assertion_line: 1290
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -24,6 +24,6 @@ expression: "h.draw(80, 24).backend()"
 "│ │ Applied in this order: a later setting of the same name wins             │ │"
 "│ │                                                                          │ │"
 "│ │                                [ Close ]                                 │ │"
-"│ ╰────────────────────────────────────────────────── j/k scroll · Esc close ╯ │"
+"│ ╰───────────────────────────────────────────────── j/k scroll · Esc close ─╯ │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
 "                                                                             EN "

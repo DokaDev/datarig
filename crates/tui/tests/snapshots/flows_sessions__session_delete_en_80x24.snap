@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 527
+assertion_line: 735
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -19,7 +19,7 @@ expression: "h.draw(80, 24).backend()"
 "│      sta│ connect until that is changed.                           │         │"
 "│    ◇ fk_│                                                          │         │"
 "│  ▸ ◇ my_│                 [ Cancel ]     Delete                    │         │"
-"│  ▸ ◇ rep╰─────────────────────────────── y delete · n/Enter cancel ╯         │"
+"│  ▸ ◇ rep╰────────────────────────────── y delete · n/Enter cancel ─╯         │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

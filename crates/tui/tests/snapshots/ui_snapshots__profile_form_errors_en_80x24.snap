@@ -22,7 +22,7 @@ expression: t.backend()
 "│ │                    Test    Save    Cancel                                │t│"
 "│ │                                                                          │ │"
 "│ │                                                                          │ │"
-"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc canc… ─╯ │"
 "│                      ││                                                      │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
 " NORMAL  local-pg │ Connected to local-pg                                    EN "

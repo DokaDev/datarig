@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 778
+assertion_line: 997
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -25,7 +25,7 @@ expression: "h.draw(w, ht).backend()"
 "│         │ Paging idle │ fk_off  1 statement                                                  │ff           │         │"
 "│         │ Spill limit │ my_ro   1 statement                                                  │, 2GB or off │         │"
 "│         │ Idle disconn│ New Startup SQL…                                                     │ when unuse… │         │"
-"│         │ Lock wait   ╰───────────────────────────────── Enter pick · ↑↓ select · Esc cancel ╯for a lock:… │         │"
+"│         │ Lock wait   ╰──────────────────────────────── Enter pick · ↑↓ select · Esc cancel ─╯for a lock:… │         │"
 "│         │ Startup SQL (PG)     reporting ▾   Enter list                                                    │         │"
 "│         │ Startup SQL (MySQL)  None ▾   Enter list                                                         │         │"
 "│         │                                                                                                  │         │"
@@ -34,7 +34,7 @@ expression: "h.draw(w, ht).backend()"
 "│         │                       Save    Cancel                                                             │         │"
 "│         │                                                                                                  │         │"
 "│         │                                                                                                  │         │"
-"│         ╰────────────────────────────────────────────────────────── Tab/↑↓ move · Ctrl+S save · Esc cancel ╯         │"
+"│         ╰───────────────────────────────────────────────────────── Tab/↑↓ move · Ctrl+S save · Esc cancel ─╯         │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"

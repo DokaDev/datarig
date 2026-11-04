@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 1136
+assertion_line: 1160
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ ╭ Session settings — local-pg ─────────────────────────────────────────────╮─╮"
@@ -25,5 +25,5 @@ expression: "h.draw(80, 24).backend()"
 "│ │ Applied in this order: a later setting of the same name wins             │ │"
 "│ │                                                                          │ │"
 "│ │                                [ Close ]                                 │ │"
-"╰─╰────────────────────────────────────────────────── j/k scroll · Esc close ╯─╯"
+"╰─╰───────────────────────────────────────────────── j/k scroll · Esc close ─╯─╯"
 "                                                                             EN "

@@ -38,6 +38,7 @@ mod preview;
 
 pub use applied::{Applied, Applying};
 pub use lines::Lines;
+pub(crate) use preview::PreviewBody;
 pub use preview::{EditPreview, PreviewLine, PreviewView};
 
 /// What an edit key does to the cursor's cell (or the cells selected in one column).

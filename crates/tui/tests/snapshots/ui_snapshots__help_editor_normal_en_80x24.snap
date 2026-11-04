@@ -23,6 +23,6 @@ expression: backend
 "│ │   Save query as…                          Space s a                      │ │"
 "│ │   Rename this saved query                 Space s r                      │ │"
 "│ │   Open a saved query                      Space s o                      │ │"
-"│ ╰─────────────────── ↑↓ move · Enter run/open · l/h open/close · Esc close ╯ │"
+"│ ╰────────────────── ↑↓ move · Enter run/open · l/h open/close · Esc close ─╯ │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
 " NORMAL  local-pg │ Connected to local-pg                                    EN "

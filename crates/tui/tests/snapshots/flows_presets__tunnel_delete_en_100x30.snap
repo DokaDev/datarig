@@ -21,7 +21,7 @@ expression: backend
 "│                   │ Its SSH secret saved in the OS keychain is removed too.  │                   │"
 "│                   │                                                          │                   │"
 "│                   │                 [ Cancel ]     Delete                    │                   │"
-"│                   ╰─────────────────────────────── y delete · n/Enter cancel ╯                   │"
+"│                   ╰────────────────────────────── y delete · n/Enter cancel ─╯                   │"
 "│                       ││                                                                         │"
 "│                       ││                                                                         │"
 "│                       ││                                                                         │"

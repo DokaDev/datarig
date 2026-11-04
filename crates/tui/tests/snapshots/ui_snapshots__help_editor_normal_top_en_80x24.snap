@@ -23,6 +23,6 @@ expression: backend
 "│ │   Move tab with keys                      Space t g                      │ │"
 "│ │   Go to tab 1                             Space 1                        │ │"
 "│ │   Go to tab 2                             Space 2                        │ │"
-"│ ╰─────────────────── ↑↓ move · Enter run/open · l/h open/close · Esc close ╯ │"
+"│ ╰────────────────── ↑↓ move · Enter run/open · l/h open/close · Esc close ─╯ │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
 " NORMAL  local-pg │ Connected to local-pg                                    EN "

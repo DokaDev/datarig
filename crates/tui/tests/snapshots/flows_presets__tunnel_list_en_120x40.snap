@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_presets.rs
-assertion_line: 1220
+assertion_line: 1224
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -26,12 +26,12 @@ expression: backend
 "│         │                     │ lab                ec2-user@lab-bastion.internal:22… │                     │         │"
 "│         │                     │ this profile only                                    │                     │         │"
 "│         │                     │ New SSH tunnel…                                      │                     │         │"
-"│         │                     ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯                     │         │"
+"│         │                     ╰──────────────── Enter pick · ↑↓ select · Esc cancel ─╯                     │         │"
 "│         │                                                                                                  │         │"
 "│         │                    Test    Save    Cancel                                                        │         │"
 "│         │                                                                                                  │         │"
 "│         │                                                                                                  │         │"
-"│         ╰───────────────────────── Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯         │"
+"│         ╰──────────────────────── Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ─╯         │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"

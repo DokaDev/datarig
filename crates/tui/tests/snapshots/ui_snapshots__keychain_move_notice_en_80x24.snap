@@ -16,7 +16,7 @@ expression: backend
 "│    n her│ Moving saved passwords to the system keychain… (your OS  │         │"
 "│         │ may ask for permission)                                  │         │"
 "│         │                                                          │         │"
-"│         ╰─────────────────────────────────────────── q/Ctrl+C quit ╯         │"
+"│         ╰────────────────────────────────────────── q/Ctrl+C quit ─╯         │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

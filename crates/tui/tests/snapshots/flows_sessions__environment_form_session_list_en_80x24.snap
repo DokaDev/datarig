@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 778
+assertion_line: 997
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ ╭ Environment — prod ──────────────────────────────────────────────────────╮─╮"
@@ -17,7 +17,7 @@ expression: "h.draw(w, ht).backend()"
 "│▾│ │ fk_off  1 statement                                                  │ │ │"
 "│ │ │ my_ro   1 statement                                                  │ │ │"
 "│ │ │ New Startup SQL…                                                     │ │ │"
-"│ │ ╰───────────────────────────────── Enter pick · ↑↓ select · Esc cancel ╯ │ │"
+"│ │ ╰──────────────────────────────── Enter pick · ↑↓ select · Esc cancel ─╯ │ │"
 "│ │ Lock wait                                   empty: the config's · wait … │ │"
 "│ │ Startup SQL (PG)     reporting ▾   Enter list                            │ │"
 "│ │ Startup SQL (MySQL)  None ▾   Enter list                                 │ │"
@@ -25,5 +25,5 @@ expression: "h.draw(w, ht).backend()"
 "│ │ Used by              local-pg                                            │ │"
 "│ │                                                                          │ │"
 "│ │                       Save    Cancel                                     │ │"
-"╰─╰────────────────────────────────── Tab/↑↓ move · Ctrl+S save · Esc cancel ╯─╯"
+"╰─╰───────────────────────────────── Tab/↑↓ move · Ctrl+S save · Esc cancel ─╯─╯"
 " ○ prod  standard rules · 1 profile                                          EN "

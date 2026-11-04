@@ -30,8 +30,8 @@ expression: s
 │                             │ │ HTML table     .html                                                                         │ │                             │
 │                             │ │ XML            .xml                                                                          │ │                             │
 │                             │ │ SQL INSERT     a column is computed, not a column of the table                               │ │                             │
-│                             ╰─│ SQL UPDATE     a column is computed, not a column of the table                               │ ╯                             │
-│                               ╰───────────────────────────────────────────────────────── Enter pick · ↑↓ select · Esc cancel ╯                               │
+│                             ╰─│ SQL UPDATE     a column is computed, not a column of the table                               │─╯                             │
+│                               ╰──────────────────────────────────────────────────────── Enter pick · ↑↓ select · Esc cancel ─╯                               │
 │                                      ││                                                                      ││                                              │
 │                                      ││                                                                      ││                                              │
 │                                      ││                                                                      ││                                              │

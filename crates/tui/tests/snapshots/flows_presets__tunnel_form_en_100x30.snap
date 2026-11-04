@@ -25,7 +25,7 @@ expression: backend
 "│ │                    Test    Save    Cancel                                                    │ │"
 "│ │                                                                                              │ │"
 "│ │                                                                                              │ │"
-"│ ╰──────────────────────────────────────── Tab/↑↓ move · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│ ╰─────────────────────────────────────── Tab/↑↓ move · Ctrl+T test · Ctrl+S save · Esc cancel ─╯ │"
 "│                       ││                                                                         │"
 "│                       ││                                                                         │"
 "│                       ││                                                                         │"

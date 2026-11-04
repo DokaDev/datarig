@@ -44,6 +44,6 @@ expression: backend
 "│                             │   Move tab left                                                   Space t <                      │                             │"
 "│                             │   Move tab right                                                  Space t >                      │                             │"
 "│                             │   Move tab with keys                                              Space t g                      │                             │"
-"│                             ╰─────────────────────────────────────────── ↑↓ move · Enter run/open · l/h open/close · Esc close ╯                             │"
+"│                             ╰────────────────────────────────────────── ↑↓ move · Enter run/open · l/h open/close · Esc close ─╯                             │"
 "╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
 " NORMAL  local-pg │ Connected to local-pg                                                                                                                    EN "

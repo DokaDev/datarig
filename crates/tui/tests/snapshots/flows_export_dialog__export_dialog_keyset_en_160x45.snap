@@ -30,7 +30,7 @@ expression: s
 │                             │ File       ~/Downloads/users-YYYYMMDD-HHMMSS.csv                                       [Browse…] │                             │
 │                             │                                                                                                  │                             │
 │                             │                                     [ Export ]     Cancel                                        │                             │
-│                             ╰──────────────────────────────────── Tab/↑↓ field · Enter list or export · ←→ change · Esc cancel ╯                             │
+│                             ╰─────────────────────────────────── Tab/↑↓ field · Enter list or export · ←→ change · Esc cancel ─╯                             │
 │                                      ││ 8 │    7 │ u7@x  │ n    │ NULL     │ NULL                            ││                                              │
 │                                      ││ 9 │    8 │ u8@x  │ n    │ NULL     │ NULL                            ││                                              │
 │                                      ││10 │    9 │ u9@x  │ n    │ NULL     │ NULL                            ││                                              │

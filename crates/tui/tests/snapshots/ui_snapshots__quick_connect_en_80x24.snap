@@ -17,7 +17,7 @@ expression: backend
 "│   │ ▸ ○   orders-stage  work/                                            │   │"
 "│   │ ▸ ⠋   orders-prod  work/prod/                                        │_at│"
 "│   │ ▸ ✕   分析-replica  work/prod/                                       │   │" Hidden by multi-width symbols: [(13, " "), (15, " ")]
-"│   ╰── Enter pick · → databases, schemas · ← back · ↑↓ select · Esc close ╯   │"
+"│   ╰─ Enter pick · → databases, schemas · ← back · ↑↓ select · Esc close ─╯   │"
 "│                      ││ 14                                                   │"
 "│                      ││ 15 SELECT $$a body; with a semicolon$$ AS dollar, 'it│"
 "│                      ││ 16                                                   │"

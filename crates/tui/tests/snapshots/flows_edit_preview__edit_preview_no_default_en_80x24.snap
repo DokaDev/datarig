@@ -17,7 +17,7 @@ expression: backend
 "│ │ Runs in one transaction; commits at the end.                             │ │"
 "│ │                                                                          │ │"
 "│ │                        [ Cancel ]     Copy SQL                           │ │"
-"│ ╰──────────────────── y apply · c copy SQL · j/k scroll · Enter/Esc cancel ╯ │"
+"│ ╰─────────────────── y apply · c copy SQL · j/k scroll · Enter/Esc cancel ─╯ │"
 "│                      ││ 3 │     3 │ c@x      │ cy    ││                      │"
 "│                      ││  +│ defa… │ default  │ defaul││                      │"
 "│                      ││                              ││                      │"

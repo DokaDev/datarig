@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 1292
+assertion_line: 1317
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ────────────╮╭ Welcome ─────────────────────────────────────────────╮"
@@ -18,7 +18,7 @@ expression: "h.draw(w, ht).backend()"
 "│ │ the app's limits and its Startup SQL                                     │ │"
 "│ │                                                                          │ │"
 "│ │                                [ Close ]                                 │ │"
-"│ ╰────────────────────────────────────────────────── j/k scroll · Esc close ╯ │"
+"│ ╰───────────────────────────────────────────────── j/k scroll · Esc close ─╯ │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
