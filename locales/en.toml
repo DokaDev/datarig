@@ -2465,6 +2465,7 @@
 "edit.preview.tx_inside" = "Runs inside the open transaction; nothing is committed."
 "edit.preview.tx_opens" = "Opens a transaction; nothing is committed."
 "edit.preview.keys" = "y apply · c copy SQL · j/k scroll · Enter/Esc cancel"
+"edit.preview.keys_choose" = "1 just one · a all · y apply · c copy SQL · j/k scroll · Enter/Esc cancel"
 "edit.preview.apply" = "Apply"
 "edit.preview.copy" = "Copy SQL"
 "edit.preview.copied" = { one = "Copied {count} statement ({method})", other = "Copied {count} statements ({method})" }
@@ -2542,6 +2543,11 @@
 "edit.ask.apply" = { one = "Apply {count} change to {table} ({summary})?", other = "Apply {count} changes to {table} ({summary})?" }
 "edit.ask.apply_short" = { one = "Apply {count} change? y/n", other = "Apply {count} changes? y/n" }
 "edit.ask.apply_short_deletes" = { one = "Apply {count} change ({deletes})? y/n", other = "Apply {count} changes ({deletes})? y/n" }
+"edit.ask.apply_mid" = { one = "Apply {count} change ({summary})?", other = "Apply {count} changes ({summary})?" }
+"edit.ask.apply_short_tx" = { one = "Apply {count} change, {tx}? y/n", other = "Apply {count} changes, {tx}? y/n" }
+"edit.ask.apply_short_deletes_tx" = { one = "Apply {count} change ({deletes}), {tx}? y/n", other = "Apply {count} changes ({deletes}), {tx}? y/n" }
+"edit.ask.tx_opens" = "nothing committed"
+"edit.ask.tx_inside" = "in the open transaction"
 "edit.ask.keys" = "y apply · any other key cancels"
 "edit.ask.cancelled" = "Apply cancelled"
 "edit.ask.moved" = "Apply cancelled: the changes changed"

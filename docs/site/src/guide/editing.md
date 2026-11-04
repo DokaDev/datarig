@@ -264,8 +264,11 @@ needs no count.
 `Space d a` (`:apply`, or "Apply the pending changes" in the action menu) works from the grid
 and from the Changes tab. The rows found by their values are counted afresh first, every time,
 whatever the Changes tab counted before; the count sees the tab's open transaction, as the
-Apply does. The status bar says `Checking 3 rows…` until the answers come; `Esc` stops waiting.
-A change made before they come drops the Apply: "Changes changed — press Space d a again".
+Apply does. The status bar says `Checking 3 rows…` until the answers come. Meanwhile any key
+(`Esc` too), a click, the wheel or a paste stops waiting ("Apply cancelled") and does nothing
+else, so none of them is taken by the question that follows; a dialog that opens or a run in the
+tab cancels it too. Changes that move before the answers come drop the Apply: "Changes changed —
+press Space d a again".
 
 When the changes can't be applied yet, nothing is asked: the Changes tab takes the focus with
 the first problem selected, and the status bar says "Can't apply: 2 problems — see Changes".
@@ -285,10 +288,12 @@ Apply 3 changes to shop.users (2 updates · 1 delete)?  y apply · any other key
 
 Only `y` applies. Any other key (`Enter`, `Esc`, `n`, any letter), a click or a paste cancels
 ("Apply cancelled") and does nothing else: it never reaches the grid. Where the window is narrow
-the question is short, `Apply 3 changes (1 delete)? y/n`, the deletes always named. With
+the question leaves out the table, then the kinds but the deletes, and at its shortest is
+`Apply 3 changes (1 delete)? y/n`, the deletes always named. With
 [manual commit](manual-commit.md) the question also says how the Apply stands to a transaction
 ("Opens a transaction; nothing is committed.", or "Runs inside the open transaction; nothing is
-committed."). The question is for the changes as they were asked about: a change, another tab,
+committed."); the shortest form says it too: `Apply 3 changes (1 delete), nothing committed? y/n`
+or `…, in the open transaction? y/n`. The question is for the changes as they were asked about: a change, another tab,
 a run, a transaction that begins or ends, or a lost connection drops it ("Apply cancelled: the
 changes changed").
 

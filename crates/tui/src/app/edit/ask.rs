@@ -1,5 +1,6 @@
 //! Asking for an Apply (`space d a`, `:apply`): the rows found by their values are counted
-//! afresh on the tab's session first (the status bar says so; `Esc` stops waiting), then the
+//! afresh on the tab's session first (the status bar says so; any key, a click or a paste stops
+//! waiting and does nothing else, so none can be taken by what the answers bring), then the
 //! changes go one of three ways. While any of them cannot be applied, nothing is asked: the
 //! Changes tab shows them, the first selected. A choice among identical rows, an Apply whose
 //! result is not known, or an environment that confirms every write opens the preview, the
@@ -15,12 +16,11 @@ use super::*;
 use datarig_core::driver::ApplyTx;
 use datarig_core::edit::PlanError;
 
-/// A question in the status bar, in place of its segments: `text`, or `short` where it does not
-/// fit, in the tone of `tone`; what `y` does.
+/// A question in the status bar, in place of its segments: the first of `forms` (longest first)
+/// that fits, in the tone of `tone`; what `y` does.
 #[derive(Debug)]
 pub struct StatusAsk {
-    pub text: String,
-    pub short: String,
+    pub forms: Vec<String>,
     pub tone: Level,
     pub action: AskAction,
 }
@@ -33,15 +33,15 @@ pub enum AskAction {
 }
 
 /// The changes an Apply was asked for: the tab, its result, what the rows were read under, the
-/// revision of the changes and a digest of the statements; how the tab stood to a transaction
-/// then.
+/// revision of the changes and the statements, which `y` sends; how the tab stood to a
+/// transaction then.
 #[derive(Debug)]
 pub struct ApplyAsk {
     tab: TabId,
     result: u64,
     bound: Bound,
     revision: u64,
-    plan_digest: u64,
+    steps: Vec<edit::Step>,
     tx: (bool, u64, bool),
 }
 
@@ -55,20 +55,6 @@ pub struct ApplyWait {
     format: EditFormat,
     /// How many rows are counted.
     pub rows: u64,
-}
-
-/// A digest of `steps`: what each runs and the count it must give.
-fn digest(steps: &[edit::Step]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    for s in steps {
-        s.sql.hash(&mut h);
-        match s.expect {
-            Expect::Rows(n) => (0u8, n).hash(&mut h),
-            Expect::Affected(n) => (1u8, n).hash(&mut h),
-        }
-    }
-    h.finish()
 }
 
 impl App {
@@ -121,29 +107,31 @@ impl App {
             return self.flash(Notice::new(Msg::EditAskProblems { count }, Level::Info));
         }
         let choose = matches!(m.planned, Planned::Refused(PlanError::Choose { .. }));
-        let writes = t.profile.is_some_and(|p| self.policy_of(p).is_ok_and(|p| p.confirm.writes()));
+        // An environment that can't be read confirms every write.
+        let writes = t.profile.is_some_and(|p| !self.policy_of(p).is_ok_and(|p| !p.confirm.writes()));
         if choose || writes || rs.edit.apply_unknown {
             return self.edit_preview_push(format, bound);
         }
         let Planned::Ready(plan) = &m.planned else {
             return self.say_cant_apply(m.why_not.clone().unwrap_or_default());
         };
-        let (text, short) = self.apply_ask_text(t, rs, &m);
+        let forms = self.apply_ask_forms(t, rs, &m);
         let action = AskAction::ApplyEdits(ApplyAsk {
             tab,
             result,
             bound,
             revision: rs.edit.batch.revision(),
-            plan_digest: digest(&plan.steps),
+            steps: plan.steps.clone(),
             tx: self.tx_seen(t),
         });
-        self.ask = Some(StatusAsk { text, short, tone: Level::Warning, action });
+        self.ask = Some(StatusAsk { forms, tone: Level::Warning, action });
     }
 
-    /// The question of an Apply of `rs`'s changes (`m`) in tab `t`: how many, to which table and
-    /// of which kinds, how it stands to an open transaction or one manual commit opens, the
-    /// keys; and its short form (how many, the deletes).
-    fn apply_ask_text(&self, t: &Tab, rs: &ResultSet, m: &ChangesModel) -> (String, String) {
+    /// The question of an Apply of `rs`'s changes (`m`) in tab `t`, longest first: how many, to
+    /// which table and of which kinds, how it stands to an open transaction or one manual commit
+    /// opens, the keys; the same without the table, then with only the deletes of the kinds; how
+    /// many, the deletes and, short, how it stands to a transaction.
+    fn apply_ask_forms(&self, t: &Tab, rs: &ResultSet, m: &ChangesModel) -> Vec<String> {
         let i18n = &self.i18n;
         let c = rs.edit.batch.counts();
         let count = c.total() as u64;
@@ -151,21 +139,39 @@ impl App {
             Target::Ready(x) => format!("{}.{}", x.table.schema, x.table.name),
             _ => String::new(),
         };
-        let mut text = i18n.msg(&Msg::EditAskApply { count, table, summary: m.summary.clone() }).to_string();
-        if t.exec.user_tx() || self.manual_commit(t.id) {
-            text.push(' ');
-            text.push_str(&self.preview_tx_text(t.id));
-        }
-        text.push_str("  ");
-        text.push_str(&i18n.label(Label::EditAskKeys).to_string());
-        let short = match c.deletes as u64 {
-            0 => Msg::EditAskApplyShort { count },
-            n => {
-                let deletes = i18n.msg(&Msg::EditPreviewDeletes { count: n }).to_string();
-                Msg::EditAskApplyShortDeletes { count, deletes }
-            }
+        let summary = m.summary.clone();
+        let tx = match () {
+            _ if t.exec.user_tx() => Some(Label::EditAskTxInside),
+            _ if self.manual_commit(t.id) => Some(Label::EditAskTxOpens),
+            _ => None,
         };
-        (text, i18n.msg(&short).to_string())
+        let long = |head: Msg| {
+            let mut text = i18n.msg(&head).to_string();
+            if tx.is_some() {
+                text.push(' ');
+                text.push_str(&self.preview_tx_text(t.id));
+            }
+            text.push_str("  ");
+            text.push_str(&i18n.label(Label::EditAskKeys).to_string());
+            text
+        };
+        let deletes =
+            (c.deletes > 0).then(|| i18n.msg(&Msg::EditPreviewDeletes { count: c.deletes as u64 }).to_string());
+        let mut forms = vec![
+            long(Msg::EditAskApply { count, table, summary: summary.clone() }),
+            long(Msg::EditAskApplyMid { count, summary: summary.clone() }),
+        ];
+        if let Some(d) = deletes.as_ref().filter(|d| **d != summary) {
+            forms.push(long(Msg::EditAskApplyMid { count, summary: d.clone() }));
+        }
+        let short = match (deletes, tx.map(|l| i18n.label(l).to_string())) {
+            (None, None) => Msg::EditAskApplyShort { count },
+            (Some(deletes), None) => Msg::EditAskApplyShortDeletes { count, deletes },
+            (None, Some(tx)) => Msg::EditAskApplyShortTx { count, tx },
+            (Some(deletes), Some(tx)) => Msg::EditAskApplyShortDeletesTx { count, deletes, tx },
+        };
+        forms.push(i18n.msg(&short).to_string());
+        forms
     }
 
     /// The Changes tab of the shown result with the focus, its first line (a problem) selected.
@@ -198,19 +204,21 @@ impl App {
             && self.edit_check().is_ok_and(|(_, _, b)| b == a.bound);
         let format = self.tab_edit_format(t.id);
         same && format.and_then(|f| self.changes_model(t.id, rs.id, f)).is_some_and(|m| match &m.planned {
-            Planned::Ready(plan) => digest(&plan.steps) == a.plan_digest,
+            Planned::Ready(plan) => plan.steps == a.steps,
             _ => false,
         })
     }
 
-    /// The Apply waiting for its counts is still for the active tab's shown result as it was.
+    /// The Apply waiting for its counts is still for the active tab's shown result as it was,
+    /// no dialog open and the tab idle.
     fn wait_current(&self, w: &ApplyWait) -> bool {
-        if self.tabs.is_empty() {
+        if self.tabs.is_empty() || self.modal_open() {
             return false;
         }
         let t = self.tab();
         t.id == w.tab
             && t.exec.session.is_some()
+            && !self.tab_busy(t.id)
             && rows_of(t).is_some_and(|rs| rs.id == w.result && rs.edit.bound.as_ref() == Some(&w.bound))
             && self.edit_bound(t).as_ref() == Some(&w.bound)
     }
@@ -232,42 +240,40 @@ impl App {
         if yes { self.status_ask_yes() } else { self.status_ask_cancel() }
     }
 
-    /// A click, the wheel or a paste while the status bar asks: it cancels.
+    /// Any input but `y` while the status bar asks (another key, a click, the wheel, a paste):
+    /// it cancels.
     pub(in crate::app) fn status_ask_cancel(&mut self) {
         if self.ask.take().is_some() {
             self.flash(Notice::new(Label::EditAskCancelled, Level::Info));
         }
     }
 
-    /// `y`: the changes as they were asked about go to the tab's session.
+    /// `y`: the statements asked about, still those of the changes, go to the tab's session.
     fn status_ask_yes(&mut self) {
         let Some(ask) = self.ask.take() else { return };
         let AskAction::ApplyEdits(a) = ask.action;
         if !self.ask_current(&a) {
             return self.flash(Notice::new(Label::EditAskMoved, Level::Info));
         }
-        let Some(format) = self.tab_edit_format(a.tab) else { return };
-        let Some(m) = self.changes_model(a.tab, a.result, format) else { return };
-        let Planned::Ready(plan) = &m.planned else { return };
         let tx = match self.tabs.get(a.tab) {
             Some(t) if self.manual_commit(a.tab) => ApplyTx::Keep { idle_timeout: self.manual_idle_timeout(t) },
             _ => ApplyTx::Commit,
         };
-        self.send_apply(a.tab, a.result, plan.steps.clone(), tx);
+        self.send_apply(a.tab, a.result, a.steps, tx);
     }
 
-    /// `Esc` while an Apply waits for its counts: it waits no more (`true`).
-    pub(in crate::app) fn apply_wait_esc(&mut self) -> bool {
-        if self.apply_wait.take().is_none() {
-            return false;
+    /// Any key (`Esc` too), a click, the wheel or a paste while an Apply waits for its counts:
+    /// it waits no more, said.
+    pub(in crate::app) fn apply_wait_cancel(&mut self) {
+        if self.apply_wait.take().is_some() {
+            self.flash(Notice::new(Label::EditAskCancelled, Level::Info));
         }
-        self.flash(Notice::new(Label::EditAskCancelled, Level::Info));
-        true
     }
 
-    /// After every event: a question about changes that moved is dropped, said; an Apply whose
-    /// counts all came goes on, one whose changes moved is dropped, said.
-    pub(super) fn sweep_status_ask(&mut self) {
+    /// After every event and timer: a question about changes that moved is dropped, said; an
+    /// Apply whose counts all came goes on, one whose changes moved is dropped, said, and one
+    /// whose tab changed, ran or has a dialog open is cancelled.
+    pub(in crate::app) fn sweep_status_ask(&mut self) {
         if let Some(StatusAsk { action: AskAction::ApplyEdits(a), .. }) = &self.ask
             && !self.ask_current(a)
         {
@@ -280,6 +286,8 @@ impl App {
             return self.flash(Notice::new(Label::EditAskCancelled, Level::Info));
         }
         let Some(rs) = rows_of(self.tab()) else { return };
+        // The counts are those of this revision: the Changes tab may have counted it afresh
+        // meanwhile, and the Apply then takes those answers.
         if rs.edit.batch.revision() != w.revision || rs.edit.checks.for_revision() != w.revision {
             self.apply_wait = None;
             let keys = self.apply_keys();
@@ -299,10 +307,10 @@ impl App {
         keys.map(|k| crate::keymap::keys::label(&k)).unwrap_or_default()
     }
 
-    /// What the status bar says in place of its segments while it asks: the text, its short
-    /// form and its tone.
-    pub fn status_ask_line(&self) -> Option<(String, String, Level)> {
-        self.ask.as_ref().map(|a| (a.text.clone(), a.short.clone(), a.tone))
+    /// What the status bar says in place of its segments while it asks: its forms, longest
+    /// first, and its tone.
+    pub fn status_ask_line(&self) -> Option<(Vec<String>, Level)> {
+        self.ask.as_ref().map(|a| (a.forms.clone(), a.tone))
     }
 
     /// What the status bar says while an Apply waits for its counts.

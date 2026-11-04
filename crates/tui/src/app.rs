@@ -1823,6 +1823,8 @@ impl App {
         self.changes_count_tick(now);
         self.tx_idle_tick(now);
         self.idle_tick(now);
+        // A timer may move what the status bar asks about (an idle transaction rolled back).
+        self.sweep_status_ask();
         self.autosave_tick(now);
         // Aux sessions no tab works in, unused for a while, close; what they read stays.
         let idle: Vec<u64> = self

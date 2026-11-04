@@ -25,7 +25,7 @@ expression: backend
 "│ │ Runs in one transaction; commits at the end.                                                                     │ │"
 "│ │                                                                                                                  │ │"
 "│ │                                            [ Cancel ]     Copy SQL                                               │ │"
-"│ ╰─────────────────────────────────────────────────────────── y apply · c copy SQL · j/k scroll · Enter/Esc cancel ─╯ │"
+"│ ╰────────────────────────────────────── 1 just one · a all · y apply · c copy SQL · j/k scroll · Enter/Esc cancel ─╯ │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"

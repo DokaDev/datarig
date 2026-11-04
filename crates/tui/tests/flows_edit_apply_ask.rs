@@ -10,17 +10,20 @@ mod common;
 use common::*;
 use datarig_core::config::Config;
 use datarig_core::driver::structure::TableStructure;
-use datarig_core::driver::{AppliedStep, ApplyError, ApplyFailure, ApplyTx, ColumnMeta, DbCommand, DbError, DbEvent};
+use datarig_core::driver::{
+    AppliedStep, ApplyError, ApplyFailure, ApplyTx, ColumnMeta, DbCommand, DbError, DbEvent, Outcome,
+};
 use datarig_core::edit::{Expect, Step};
 use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::policy::{CommitRule, Confirm, Policy};
 use datarig_core::profile::ConnectionConfig;
+use datarig_tui::app::action::Action;
 use datarig_tui::app::edit::{EditState, PreviewLine, Target};
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::tabs::ResultView;
 use datarig_tui::app::{Focus, Results};
 use datarig_tui::keymap::Ctx;
-use ratatui::crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use std::time::Duration;
 
 fn s(v: &str) -> Option<String> {
@@ -168,7 +171,12 @@ fn applies(h: &mut Harness) -> Option<(u64, Vec<Step>, ApplyTx)> {
 
 /// What the status bar asks.
 fn asked(h: &Harness) -> Option<String> {
-    h.app.status_ask_line().map(|(text, _, _)| text)
+    h.app.status_ask_line().and_then(|(forms, _)| forms.first().cloned())
+}
+
+/// The shortest form of what the status bar asks.
+fn shortest(h: &Harness) -> Option<String> {
+    h.app.status_ask_line().and_then(|(forms, _)| forms.last().cloned())
 }
 
 /// Every step of `steps` stood, affecting the rows it expected, nothing returned.
@@ -245,21 +253,67 @@ fn the_question_says_how_the_apply_stands_to_a_transaction() {
     assert!(text.contains("? Runs inside the open transaction; nothing is committed.  y apply"), "{text}");
 }
 
+/// Where the whole question does not fit, the table goes first, then the breakdown; how the
+/// Apply stands to a transaction stays, short at the end.
+#[test]
+fn the_transaction_note_stays_when_the_question_is_shortened() {
+    let mut h = manual(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.keys(" da");
+    let s = h.status(120, 40);
+    assert!(
+        s.contains("Apply 1 change to shop.users (1 update)? Opens a transaction; nothing is committed.  y apply"),
+        "{s}"
+    );
+    let s = h.status(110, 40);
+    assert!(s.contains("Apply 1 change (1 update)? Opens a transaction; nothing is committed.  y apply"), "{s}");
+    let s = h.status(80, 24);
+    assert!(s.contains("Apply 1 change, nothing committed? y/n"), "{s}");
+    // Inside an open block, with a delete.
+    let mut h = ready(Lang::En);
+    h.tab_db(0, DbEvent::Block(true));
+    h.tab_db(0, DbEvent::TxOpen(true));
+    type_cell(&mut h, "z@x");
+    h.keys("jD");
+    h.keys(" da");
+    let s = h.status(130, 40);
+    assert!(
+        s.contains(
+            "Apply 2 changes (1 update · 1 delete)? Runs inside the open transaction; nothing is committed.  y apply"
+        ),
+        "{s}"
+    );
+    let s = h.status(120, 40);
+    assert!(
+        s.contains("Apply 2 changes (1 delete)? Runs inside the open transaction; nothing is committed.  y apply"),
+        "{s}"
+    );
+    let s = h.status(80, 24);
+    assert!(s.contains("Apply 2 changes (1 delete), in the open transaction? y/n"), "{s}");
+    // In Korean the short form says it too.
+    let mut h = manual(Lang::Ko);
+    type_cell(&mut h, "z@x");
+    h.keys(" da");
+    let s = h.status(80, 24);
+    assert!(s.contains(Label::EditAskTxOpens.text(Lang::Ko)), "{s}");
+}
+
 #[test]
 fn a_narrow_window_asks_in_short_naming_the_deletes() {
     let mut h = two_asked(Lang::En);
+    assert_eq!(shortest(&h).as_deref(), Some("Apply 2 changes (1 delete)? y/n"));
     let status = h.status(80, 24);
-    assert!(status.contains("Apply 2 changes (1 delete)? y/n"), "{status}");
+    assert!(status.contains("Apply 2 changes (1 update · 1 delete)?  y apply"), "{status}");
     let status = h.status(120, 40);
     assert!(status.contains("Apply 2 changes to shop.users (1 update · 1 delete)?"), "{status}");
     let mut h = ready(Lang::En);
     h.keys("D");
     h.keys(" da");
-    assert_eq!(h.app.status_ask_line().map(|(_, short, _)| short).as_deref(), Some("Apply 1 change (1 delete)? y/n"));
+    assert_eq!(shortest(&h).as_deref(), Some("Apply 1 change (1 delete)? y/n"));
     let mut h = ready(Lang::En);
     type_cell(&mut h, "z@x");
     h.keys(" da");
-    assert_eq!(h.app.status_ask_line().map(|(_, short, _)| short).as_deref(), Some("Apply 1 change? y/n"));
+    assert_eq!(shortest(&h).as_deref(), Some("Apply 1 change? y/n"));
 }
 
 /// Where the grid is and what is pending: nothing of it may move while the question cancels.
@@ -284,6 +338,11 @@ fn every_other_key_a_click_or_a_paste_cancels_and_does_nothing_else() {
         (KeyCode::Char('y'), KeyModifiers::CONTROL),
         (KeyCode::Down, KeyModifiers::NONE),
         (KeyCode::Tab, KeyModifiers::NONE),
+        (KeyCode::Char('c'), KeyModifiers::CONTROL),
+        (KeyCode::F(5), KeyModifiers::NONE),
+        (KeyCode::Char('y'), KeyModifiers::ALT),
+        // `y` typed with a Korean input source, with Ctrl.
+        (KeyCode::Char('\u{315B}'), KeyModifiers::CONTROL),
     ];
     for (code, mods) in keys {
         let mut h = two_asked(Lang::En);
@@ -319,6 +378,132 @@ fn every_other_key_a_click_or_a_paste_cancels_and_does_nothing_else() {
     assert_eq!(said(&mut h), Some(Label::EditAskCancelled.into()));
     assert_eq!(grid_state(&h), before);
     assert!(applies(&mut h).is_none(), "a pasted y is not a y");
+    // A key typed with the focus in the SQL editor's Insert mode goes nowhere else either.
+    let mut h = two_asked(Lang::En);
+    h.app.focus = Focus::Editor;
+    h.app.tab_mut().editor.mode = datarig_tui::widgets::editor::Mode::Insert;
+    let text = h.app.tab().editor.text();
+    h.keys("x");
+    assert!(asked(&h).is_none());
+    assert_eq!(said(&mut h), Some(Label::EditAskCancelled.into()));
+    assert_eq!(h.app.tab().editor.text(), text, "nothing typed");
+    assert!(applies(&mut h).is_none());
+    // A held `y` does nothing; a release, the end of a drag or a drag do not cancel.
+    let mut h = two_asked(Lang::En);
+    let _ = h.draw(120, 40);
+    let g = h.app.layout.results;
+    h.key_kind(KeyCode::Char('y'), KeyModifiers::NONE, KeyEventKind::Repeat);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), g.x + 8, g.y + 5);
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), g.x + 9, g.y + 5);
+    assert!(asked(&h).is_some(), "still asked");
+    assert!(applies(&mut h).is_none(), "a held y is not a y");
+    // `y` typed with a Korean input source is the `y` the grid reads there: it applies.
+    h.key(KeyCode::Char('\u{315B}'));
+    assert!(applies(&mut h).is_some());
+}
+
+/// The users' rows found by their values in `h`, an update typed and its Apply asked for: it
+/// waits for the count (whose id is returned).
+fn waiting(mut h: Harness) -> (Harness, u64) {
+    type_cell(&mut h, "z@x");
+    h.sent();
+    h.keys(" da");
+    let asked_counts = counts(&mut h);
+    assert_eq!(asked_counts.len(), 1);
+    assert!(h.app.apply_wait.is_some());
+    h.app.transient = None;
+    (h, asked_counts[0].0)
+}
+
+/// The users' rows found by their values, in an environment that confirms every write.
+fn writes_by_values() -> Harness {
+    resolved(in_env(Policy { confirm: Confirm::Writes, ..Policy::default() }, Lang::En), keyless(false))
+}
+
+/// While the Apply waits for its counts, a key, a click, the wheel or a paste stops the wait and
+/// goes nowhere else: it can't be taken by the question (or the dialog) that comes with the
+/// answers.
+#[test]
+fn input_while_the_apply_waits_stops_it_and_never_becomes_its_y() {
+    let at = |h: &Harness| (h.app.layout.results.x + 8, h.app.layout.results.y + 5);
+    type Input = (&'static str, fn(&mut Harness));
+    let inputs: Vec<Input> = vec![
+        ("y", |h| h.keys("y")),
+        ("yy", |h| h.keys("yy")),
+        ("x", |h| h.keys("x")),
+        ("Esc", |h| h.key(KeyCode::Esc)),
+        ("Enter", |h| h.key(KeyCode::Enter)),
+        ("Ctrl+C", |h| h.ctrl('c')),
+        ("held y", |h| h.key_kind(KeyCode::Char('y'), KeyModifiers::NONE, KeyEventKind::Repeat)),
+        ("click", |h| {
+            let (x, y) = (h.app.layout.results.x + 8, h.app.layout.results.y + 5);
+            h.mouse(MouseEventKind::Down(MouseButton::Left), x, y)
+        }),
+        ("wheel", |h| {
+            let (x, y) = (h.app.layout.results.x + 8, h.app.layout.results.y + 5);
+            h.mouse(MouseEventKind::ScrollDown, x, y)
+        }),
+        ("paste", |h| h.event(Event::Paste("y".into()))),
+    ];
+    for writes in [false, true] {
+        for (name, input) in &inputs {
+            let (mut h, id) = waiting(if writes { writes_by_values() } else { by_values(Lang::En) });
+            let clip = FakeClipboard::attach(&mut h, false, &[]);
+            let _ = h.draw(120, 40);
+            let before = grid_state(&h);
+            input(&mut h);
+            assert!(h.app.apply_wait.is_none(), "{name} (writes {writes}): stops waiting");
+            // The second `y` of `yy` is the grid's own again (it copies the cell).
+            let copied = *name == "yy";
+            let notice = said(&mut h);
+            if !copied {
+                assert_eq!(notice, Some(Label::EditAskCancelled.into()), "{name}");
+                assert_eq!(clip.last(), None, "{name}: nothing copied");
+            }
+            h.db(DbEvent::Counted { id, result: Ok(1), snapshot: false });
+            assert!(asked(&h).is_none(), "{name} (writes {writes}): nothing asked");
+            assert!(h.app.overlays.top().is_none(), "{name} (writes {writes}): no dialog");
+            assert!(applies(&mut h).is_none(), "{name}: nothing sent");
+            assert_eq!(grid_state(&h), before, "{name}: the grid untouched");
+        }
+    }
+    // A release or a drag leaves the wait; the answer then asks, and `y` applies.
+    let (mut h, id) = waiting(by_values(Lang::En));
+    let _ = h.draw(120, 40);
+    let (x, y) = at(&h);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), x + 1, y);
+    assert!(h.app.apply_wait.is_some(), "still waiting");
+    h.db(DbEvent::Counted { id, result: Ok(1), snapshot: false });
+    assert!(asked(&h).is_some());
+    h.key(KeyCode::Char('y'));
+    assert!(applies(&mut h).is_some());
+}
+
+/// A dialog open or a run in the tab when the answers come: the Apply is cancelled, nothing is
+/// asked and no dialog of its own opens over it.
+#[test]
+fn a_dialog_or_a_run_while_the_apply_waits_cancels_it() {
+    for writes in [false, true] {
+        let (mut h, id) = waiting(if writes { writes_by_values() } else { by_values(Lang::En) });
+        h.app.dispatch(Action::Help);
+        assert!(h.app.modal_open(), "a dialog is open");
+        let open = h.overlay_kind();
+        h.db(DbEvent::Counted { id, result: Ok(1), snapshot: false });
+        assert!(h.app.apply_wait.is_none(), "writes {writes}");
+        assert_eq!(said(&mut h), Some(Label::EditAskCancelled.into()), "writes {writes}");
+        assert!(asked(&h).is_none(), "writes {writes}");
+        assert_eq!(h.overlay_kind(), open, "writes {writes}: nothing opened over it");
+        assert!(applies(&mut h).is_none());
+    }
+    let (mut h, id) = waiting(by_values(Lang::En));
+    h.app.run(vec!["SELECT 1".into()]);
+    h.db(DbEvent::Counted { id, result: Ok(1), snapshot: false });
+    assert!(h.app.apply_wait.is_none());
+    assert_eq!(said(&mut h), Some(Label::EditAskCancelled.into()));
+    assert!(asked(&h).is_none());
+    assert_ne!(h.overlay_kind(), Some(OverlayKind::EditPreview));
+    assert!(applies(&mut h).is_none());
 }
 
 /// A trigger that moves what the question is about drops it, said; `y` then does nothing.
@@ -362,6 +547,52 @@ fn the_question_is_dropped_when_what_it_asks_about_moves() {
     assert_eq!(said(&mut h), moved);
     h.key(KeyCode::Char('y'));
     assert!(applies(&mut h).is_none(), "nothing sent");
+    // The open transaction ended (a commit or a rollback).
+    let mut h = ready(Lang::En);
+    h.tab_db(0, DbEvent::Block(true));
+    h.tab_db(0, DbEvent::TxOpen(true));
+    type_cell(&mut h, "z@x");
+    h.keys(" da");
+    assert!(asked(&h).is_some());
+    h.tab_db(0, DbEvent::Block(false));
+    h.tab_db(0, DbEvent::TxOpen(false));
+    assert!(asked(&h).is_none());
+    assert_eq!(said(&mut h), moved);
+    // An idle transaction rolled back by the app.
+    let rules =
+        Policy { commit: CommitRule::Manual, tx_idle_rollback: Some(Duration::from_secs(90)), ..Policy::default() };
+    let mut h = in_env(rules, Lang::En);
+    h.app.run(vec!["UPDATE shop.users SET email = email".into()]);
+    if h.overlay_kind() == Some(OverlayKind::RunConfirm) {
+        h.keys("y");
+    }
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Done { id, outcome: Outcome::Affected(3), elapsed: Duration::ZERO });
+    h.tab_db(0, DbEvent::ManualBegun { id, index: 0 });
+    h.tab_db(0, DbEvent::Block(true));
+    h.tab_db(0, DbEvent::TxOpen(true));
+    assert!(h.app.tab().exec.user_tx());
+    let mut h = resolved(h, named());
+    type_cell(&mut h, "z@x");
+    h.keys(" da");
+    assert!(asked(&h).is_some());
+    h.advance(Duration::from_secs(91));
+    assert!(h.app.tab_busy(h.app.tab().id), "rolling back");
+    assert!(asked(&h).is_none());
+    h.key(KeyCode::Char('y'));
+    assert!(applies(&mut h).is_none());
+    // Manual commit turned on for the environment.
+    let mut h = two_asked(Lang::En);
+    h.app.policies.insert("default", Policy { commit: CommitRule::Manual, ..Policy::default() });
+    h.db(DbEvent::Counted { id: 999_999, result: Ok(1), snapshot: false });
+    assert!(asked(&h).is_none());
+    assert_eq!(said(&mut h), moved);
+    // A dialog opened over it.
+    let mut h = two_asked(Lang::En);
+    h.app.dispatch(Action::Help);
+    h.db(DbEvent::Counted { id: 999_999, result: Ok(1), snapshot: false });
+    assert!(asked(&h).is_none());
+    assert_eq!(said(&mut h), moved);
 }
 
 #[test]
@@ -422,11 +653,18 @@ fn identical_rows_open_the_dialog_and_the_tab_says_the_apply_asks() {
     h.keys("s");
     let s = screen(&mut h, 120, 40);
     assert!(s.contains("The Apply asks which") && !s.contains("[1] just one"), "{s}");
-    // In the dialog, `a` answers and `y` applies.
+    // In the dialog, `a` answers and `y` applies; the footer names the answers, and why `y`
+    // could not apply before goes with the answer.
     h.keys(" da");
     let asked_counts = counts(&mut h);
     h.db(DbEvent::Counted { id: asked_counts[0].0, result: Ok(2), snapshot: false });
+    let s = screen(&mut h, 120, 40);
+    assert!(s.contains("1 just one · a all · y apply · c copy SQL"), "{s}");
+    h.key(KeyCode::Char('y'));
+    assert!(matches!(said(&mut h), Some(Msg::EditPreviewCantApply { .. })));
+    h.key(KeyCode::Char('y'));
     h.key(KeyCode::Char('a'));
+    assert!(h.app.transient.is_none(), "{:?}", h.app.transient);
     h.key(KeyCode::Char('y'));
     assert!(applies(&mut h).is_some());
 }
@@ -475,15 +713,19 @@ fn the_rows_are_counted_again_on_every_apply_and_an_edit_drops_the_wait() {
     h.db(DbEvent::Counted { id: asked_counts[0].0, result: Ok(1), snapshot: false });
     assert!(asked(&h).is_none(), "an answer after Esc asks nothing");
     // An edit before the answer drops the Apply.
+    // An edit before the answer (made under it: a key would stop the wait) drops the Apply.
     h.keys("H");
     h.keys(" da");
     let asked_counts = counts(&mut h);
-    h.keys("j");
-    type_cell(&mut h, "y@x");
+    edits_mut(&mut h).batch.undo();
+    h.db(DbEvent::Counted { id: 999_999, result: Ok(1), snapshot: false });
     assert!(h.app.apply_wait.is_none());
     assert_eq!(said(&mut h), Some(Msg::EditAskChanged { keys: "Space d a".into() }));
     h.db(DbEvent::Counted { id: asked_counts[0].0, result: Ok(1), snapshot: false });
     assert!(asked(&h).is_none() && h.app.overlays.top().is_none(), "the stale answer asks nothing");
+    edits_mut(&mut h).batch.redo();
+    h.keys("j");
+    type_cell(&mut h, "y@x");
     // Counted for the changes as they are: asked.
     h.keys(" da");
     let asked_counts = counts(&mut h);
@@ -511,6 +753,7 @@ fn the_changes_tab_shows_what_was_applied_until_the_query_runs_again() {
     assert_eq!(h.app.key_context(), Ctx::Changes, "the tab stays after the Apply");
     let s = screen(&mut h, 120, 40);
     assert!(s.contains("Applied · re-run to refresh"), "{s}");
+    assert!(!s.contains("d a apply"), "no Apply offered with nothing pending: {s}");
     assert!(s.contains("- id=2") && s.contains("~ id=1") && s.contains("'a@x' → 'z@x'"), "{s}");
     // The statements sent, copied whole.
     let clip = FakeClipboard::attach(&mut h, false, &[]);

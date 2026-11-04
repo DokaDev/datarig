@@ -280,6 +280,7 @@ impl App {
                 if let Some(rs) = self.tabs.get_mut(p.tab).and_then(rows_of_mut).filter(|rs| rs.id == p.result) {
                     rs.edit.checks.choose(row, if k == '1' { Choice::One } else { Choice::All });
                 }
+                self.clear_cant_apply();
             }
             _ => {}
         }
@@ -346,10 +347,19 @@ impl App {
         self.flash(Notice::new(Msg::EditPreviewCantApply { reason }, Level::Info));
     }
 
+    /// Why the changes couldn't be applied, in the status bar, is over: a choice was made or
+    /// the Apply sent.
+    fn clear_cant_apply(&mut self) {
+        if self.transient.as_ref().is_some_and(|(n, _)| matches!(n.msg, Msg::EditPreviewCantApply { .. })) {
+            self.transient = None;
+        }
+    }
+
     /// The Apply of `steps` (the changes of tab `tab`'s result `result`) on the tab's session,
     /// in a transaction as `tx` says; bound to what it was sent for. A held result's portal is
     /// closed first (its rows stay). The preview stays open, saying it applies.
     pub(super) fn send_apply(&mut self, tab: TabId, result: u64, steps: Vec<edit::Step>, tx: ApplyTx) {
+        self.clear_cant_apply();
         self.query_seq += 1;
         let id = self.query_seq;
         let now = self.now();

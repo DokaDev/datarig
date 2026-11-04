@@ -23,6 +23,6 @@ expression: backend
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││ ──────────────────────────────────────────────────── │"
-"│                      ││                                            s c Enter │"
+"│                      ││                     s SQL · c copy SQL · Enter go to │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
 " NORMAL  local-pg │ Applied 2 changes             │ Enter go to · s SQL/list EN "

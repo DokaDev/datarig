@@ -5,7 +5,7 @@
   opens in.
 - `Space d a` and `:apply` ask on the status line instead of opening a dialog: only `y`
   applies, any other key, a click or a paste cancels. Rows found by their values are counted
-  again first; problems show in the Changes tab instead of a question. The dialog opens only for
+  again first (any key, a click or a paste meanwhile stops waiting); problems show in the Changes tab instead of a question. The dialog opens only for
   a choice among identical rows, an Apply whose result is unknown, and environments with
   `confirm = "writes"`. After an Apply the Changes tab shows what was applied and the statements
   sent until the query runs again, or why nothing was, the failing statement marked.

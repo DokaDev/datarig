@@ -25,4 +25,4 @@ expression: backend
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"
 "╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
-" Apply 2 changes (1 delete)? y/n                                                "
+" Apply 2 changes (1 update · 1 delete)?  y apply · any other key cancels        "

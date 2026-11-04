@@ -288,15 +288,17 @@ impl App {
     }
 
     /// The keys of the Changes tab under it: each with what it does, or (`short`) the keys
-    /// alone.
+    /// alone. The Apply only while changes are pending.
     pub(crate) fn changes_keys(&self, short: bool) -> String {
         let view = if self.changes_sql() { Label::HintChangesList } else { Label::HintChangesSql };
-        let keys = [
+        let mut keys = vec![
             (Action::Changes(ChangesAction::ToggleView), view),
             (Action::Changes(ChangesAction::CopySql), Label::HintCopySql),
             (Action::Changes(ChangesAction::Goto), Label::HintGoto),
-            (Action::Edit(EditAction::Apply), Label::HintApply),
         ];
+        if rows_of(self.tab()).is_some_and(|rs| !rs.edit.batch.is_empty()) {
+            keys.push((Action::Edit(EditAction::Apply), Label::HintApply));
+        }
         let bound = keys.iter().filter_map(|&(a, l)| {
             let k = self.keymap.hint_keys(a, Ctx::Changes, self.enhanced_keys)?;
             Some((crate::keymap::keys::label(&k), l))

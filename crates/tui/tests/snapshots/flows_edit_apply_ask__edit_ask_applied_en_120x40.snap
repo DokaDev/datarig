@@ -39,6 +39,6 @@ expression: backend
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││ ────────────────────────────────────────────────────────────────────────────────────── │"
-"│                            ││                                     s SQL · c copy SQL · Enter go to · Space d a apply │"
+"│                            ││                                                       s SQL · c copy SQL · Enter go to │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯"
-" NORMAL  local-pg │ Applied 2 changes           │ Enter go to · s SQL/list · c copy SQL · Space d a apply · Esc back EN "
+" NORMAL  local-pg │ Applied 2 changes                │ Enter go to · s SQL/list · c copy SQL · Esc back · : commands EN "
