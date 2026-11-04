@@ -333,9 +333,10 @@ result tabs: `Changes 3`, or `Chg3` where the strip is narrow. A narrow strip ke
 fits next to the shown tab and Messages. `Space d p` (`:changes`) shows it with the focus; `H`
 and `L` (`Space r [` and `Space r ]`) reach it as any result tab. It shows the changes of the
 result last shown in the grid. After an Apply it stays, as `Applied` (`Appl`), to show what was
-applied (see [After an Apply](#after-an-apply)); a plain `Changes` says so while an Apply runs, after one whose result is not known, and after
-the applied changes were rolled back; it goes once nothing is pending and nothing was applied,
-or when the query runs again. When another result of the tab
+applied (see [After an Apply](#after-an-apply)). A plain `Changes` stays after the applied
+changes were rolled back, and after an Apply whose result is not known once its pending changes
+are dropped. It goes once nothing is pending and nothing was applied, or when the query runs
+again. When another result of the tab
 has pending changes too, a line says so: `Result 2 also has 1 pending`.
 
 Its first line names the result and the table, and says how many updates, inserts, deletes and
