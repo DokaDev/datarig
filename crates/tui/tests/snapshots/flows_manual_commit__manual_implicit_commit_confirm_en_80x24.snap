@@ -16,7 +16,7 @@ expression: backend
 "│ │      ALTER TABLE users ADD COLUMN zz_c int                               │ │"
 "│ │                                                                          │s│"
 "│ │                           [ Cancel ]     Run                             │ │"
-"│ ╰─────────────────────── y run · Enter chooses · Tab switch · n/Esc cancel ╯ │"
+"│ ╰────────────────────── y run · Enter chooses · Tab switch · n/Esc cancel ─╯ │"
 "│                      ││   r)                                                 │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

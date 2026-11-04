@@ -16,7 +16,7 @@ expression: backend
 "│           │                                                      │           │"
 "│           │                                                      │           │"
 "│           │                 [ OK ]     Cancel                    │ created_at│"
-"│           ╰───────────────────────────── Enter save · Esc cancel ╯           │"
+"│           ╰──────────────────────────── Enter save · Esc cancel ─╯           │"
 "│                      ││ 13 SELECT analytics.slow(30);                        │"
 "│                      ││ 14                                                   │"
 "│                      ││ 15 SELECT $$a body; with a semicolon$$ AS dollar, 'it│"

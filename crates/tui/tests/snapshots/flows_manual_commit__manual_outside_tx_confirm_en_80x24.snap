@@ -17,7 +17,7 @@ expression: backend
 "│ │      DROP TABLE shop.reviews                                             │ │"
 "│ │                                                                          │ │"
 "│ │                           [ Cancel ]     Run                             │ │"
-"│ ╰─────────────────────── y run · Enter chooses · Tab switch · n/Esc cancel ╯ │"
+"│ ╰────────────────────── y run · Enter chooses · Tab switch · n/Esc cancel ─╯ │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

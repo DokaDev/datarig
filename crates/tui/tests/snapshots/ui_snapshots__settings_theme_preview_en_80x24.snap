@@ -23,6 +23,6 @@ expression: backend
 "│ │   Flash copied cells        ‹ on            ›  On, copied cells flash b… │ │"
 "│ │ Clipboard                                                                │ │"
 "│ │   Clipboard                 ‹ auto          ›  Automatic: OSC 52 over S… │ │"
-"│ ╰─────────────────────────────────────── j/k move · h/l change · Esc close ╯ │"
+"│ ╰────────────────────────────────────── j/k move · h/l change · Esc close ─╯ │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
 " NORMAL  local-pg │ Connected to local-pg                                    EN "

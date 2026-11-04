@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_form_discard.rs
-assertion_line: 108
+assertion_line: 109
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -24,14 +24,14 @@ expression: "h.draw(w, ht).backend()"
 "│         │ Password storage  │ The changes in this form are not saved. Discard them?    │                   │         │"
 "│         │ Password          │                                                          │                   │         │"
 "│         │ Database          │              [ Keep editing ]     Discard                │                   │         │"
-"│         │                   ╰──────────────────────── y discard · n/Enter keep editing ╯                   │         │"
+"│         │                   ╰─────────────────────── y discard · n/Enter keep editing ─╯                   │         │"
 "│         │ DSN               postgres://datarig@127.0.0.1:55432/datarig?sslmode=disable                     │         │"
 "│         │                                                                                                  │         │"
 "│         │                                                                                                  │         │"
 "│         │                    Test    Save    Cancel                                                        │         │"
 "│         │                                                                                                  │         │"
 "│         │                                                                                                  │         │"
-"│         ╰───────────────────────── Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯         │"
+"│         ╰──────────────────────── Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ─╯         │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"

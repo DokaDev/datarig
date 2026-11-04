@@ -172,14 +172,34 @@ column that the result does not show ("…is not in the result; add it to the SE
 
 `Space d p` (`:changes`) and `Space d a` (`:apply`) open the same dialog, "Apply changes —
 shop.users", with Cancel focused: only `y` applies. It shows how many updates, inserts and
-deletes, then the statements in the order they run, each with the count it must give
-(`expect 1`). A long statement is cut to the dialog's width; `c` copies it whole.
+deletes, then the statements in the order they run, in the editor's syntax colors, each with
+the count it must give (`expect 1`) at the end of its first line. A statement longer than the
+dialog is wide wraps over as many lines as it needs, indented under its first, so all of it can
+be read; `j` and `k` scroll line by line.
+
+On MySQL a text value is compared by its UTF-8 bytes, so the statement holds it as
+`_utf8mb4 X'…'`. A statement with such values is followed by a dim line that starts with `↳`
+and reads them back in order, `column = 'text'` (a long text cut with `…`; bytes that are not
+UTF-8 text say how many there are):
+
+```text
+  UPDATE `shop`.`people` SET `note` = _utf8mb4 X'615C62' WHERE  expect 1
+    `id` <=> 1 AND `name` = _utf8mb4 X'706C61696E206E616D65' AND
+    CONVERT(`name` USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4
+    X'706C61696E206E616D65' AND `note` = _utf8mb4 X'6F6C64' AND
+    CONVERT(`note` USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4
+    X'6F6C64'
+    ↳ note = 'a\b', name = 'plain name', note = 'old'
+```
+
+That line is not SQL: it is never sent to the server, and `c` copies the statements exactly as
+they are sent, without it.
 
 - **Row checks (lock, no waiting)** first: for every row read that changes, a `SELECT … FOR
   UPDATE NOWAIT` that finds and locks it. A row another session holds fails at once instead of
   waiting.
 - **Writes**: the deletes, then the updates, then the inserts. A `DELETE` and a statement that
-  expects more than one row are drawn in the warning color.
+  expects more than one row are marked `!`, their count in the warning color.
 
 `c` copies every statement (through the `clipboard` setting), `j` and `k` (or the arrows)
 scroll, `Enter`, `Esc` or `q` closes. The dialog closes by itself when its result, its rows'

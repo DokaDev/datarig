@@ -28,20 +28,26 @@ pub(crate) fn centered(area: Rect, w: u16, h: u16) -> Rect {
 pub(crate) fn modal(rect: Rect, title: &Localized, footer: &Localized, buf: &mut Buffer) -> Rect {
     let th = theme::cur();
     clear_overlay(rect, buf);
+    let border = Style::new().fg(th.accent).bg(th.surface);
     let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(th.accent).bg(th.surface))
+        .border_style(border)
         .style(Style::new().bg(th.surface).fg(th.fg))
         .title(Line::from(Span::styled(
             format!(" {} ", clip(title, (rect.width as usize).saturating_sub(6))),
             Style::new().fg(th.fg).add_modifier(Modifier::BOLD),
         )));
+    // The footer's keys end a border cell before the corner, and a long one starts a cell after
+    // the other corner (cut with `…` where it does not fit).
     if !footer.is_empty() {
         block = block.title_bottom(
-            Line::from(Span::styled(
-                format!(" {} ", clip(footer, (rect.width as usize).saturating_sub(4))),
-                Style::new().fg(th.fg_muted),
-            ))
+            Line::from(vec![
+                Span::styled(
+                    format!(" {} ", clip(footer, (rect.width as usize).saturating_sub(6))),
+                    Style::new().fg(th.fg_muted),
+                ),
+                Span::styled(BorderType::Rounded.to_border_set().horizontal_bottom, border),
+            ])
             .right_aligned(),
         );
     }
@@ -448,9 +454,11 @@ pub(crate) fn draw_tx_summary(app: &mut App, area: Rect, buf: &mut Buffer) {
 }
 
 /// The preview of a result's pending changes: how many of each kind, then the row checks and
-/// the writes, each statement on a line with the count it must give (as many as fit, scrolled
-/// with `j`/`k`), or why nothing can be applied yet; how the Apply stands to a transaction, then
-/// the buttons (Cancel first, focused). Deletes and changes of several rows are in the risk tone.
+/// the writes, each statement in the editor's colors over as many lines as it takes (the count
+/// it must give at the end of its first; the text values it carries as bytes read back under it,
+/// dim), or why nothing can be applied yet (as many lines as fit, scrolled with `j`/`k`); how
+/// the Apply stands to a transaction, then the buttons (Cancel first, focused). Deletes and
+/// changes of several rows have a `!` and their count in the risk tone.
 pub(crate) fn draw_edit_preview(app: &mut App, area: Rect, buf: &mut Buffer) {
     use crate::app::edit::PreviewLine;
     use crate::text::width;
@@ -463,8 +471,9 @@ pub(crate) fn draw_edit_preview(app: &mut App, area: Rect, buf: &mut Buffer) {
     let iw = (w as usize).saturating_sub(4);
     let surface = |fg| Style::new().fg(fg).bg(th.surface);
     let risk = surface(th.warning).add_modifier(Modifier::BOLD);
-    // The body's rows: a statement on one line (a line break in a value as one character), its
-    // count at the end; words wrapped.
+    // The body's rows: a statement from column 2, wrapped under itself from column 4 (a line
+    // break in a value as one character), its count at the end of its first row; its values read
+    // back from column 4, wrapped from column 6; words wrapped.
     let mut rows: Vec<Vec<(String, Style)>> = Vec::new();
     let wrapped = |text: &str, style: Style, rows: &mut Vec<Vec<(String, Style)>>| {
         rows.extend(wrap_words(text, iw).into_iter().map(|l| vec![(l, style)]));
@@ -474,11 +483,26 @@ pub(crate) fn draw_edit_preview(app: &mut App, area: Rect, buf: &mut Buffer) {
             PreviewLine::Head(text) => rows.push(vec![(text.clone(), surface(th.fg).add_modifier(Modifier::BOLD))]),
             PreviewLine::Step { sql, expect, risky } => {
                 let tail = format!("  {expect}");
-                let room = iw.saturating_sub(2 + width(&tail));
-                let sql = clip(&crate::text::sanitize_cell(sql), room.max(8));
-                let pad = room.saturating_sub(width(&sql));
-                let style = if *risky { risk } else { surface(th.fg) };
-                rows.push(vec![(format!("  {sql}{}", " ".repeat(pad)), style), (tail, surface(th.fg_muted))]);
+                let first = iw.saturating_sub(2 + width(&tail)).max(8);
+                let more = iw.saturating_sub(4).max(8);
+                let mut parts = wrap_cells(sql_cells(sql, v.dialect, th.surface), first, more).into_iter();
+                let head = parts.next().unwrap_or_default();
+                let pad = first.saturating_sub(head.iter().map(|(g, _)| width(g)).sum());
+                let (mark, tone) = if *risky { ("! ", risk) } else { ("  ", surface(th.fg_muted)) };
+                let mut row = vec![(mark.to_string(), tone)];
+                row.extend(runs(head));
+                row.extend([(" ".repeat(pad), surface(th.fg)), (tail, tone)]);
+                rows.push(row);
+                for p in parts {
+                    rows.push(std::iter::once(("    ".to_string(), surface(th.fg))).chain(runs(p)).collect());
+                }
+            }
+            PreviewLine::Values(text) => {
+                let style = surface(th.fg_dim).add_modifier(Modifier::ITALIC);
+                for (k, r) in crate::text::wrap_exact(text, iw.saturating_sub(6)).into_iter().enumerate() {
+                    let lead = if k == 0 { "    \u{21B3} " } else { "      " };
+                    rows.push(vec![(lead.to_string(), style), (r.trim_start().to_string(), style)]);
+                }
             }
             PreviewLine::Choose { text, keys } => {
                 wrapped(&format!("! {text}"), risk, &mut rows);
@@ -524,6 +548,73 @@ pub(crate) fn draw_edit_preview(app: &mut App, area: Rect, buf: &mut Buffer) {
     let labels: Vec<Localized> = app.edit_preview_buttons().iter().map(|(l, _)| app.i18n.label(*l)).collect();
     let Some(p) = app.overlays.edit_preview_mut() else { return };
     button_row(buf, inner, y, &labels, Some(0), &mut p.buttons, when);
+}
+
+/// The graphemes of statement `sql` (in dialect `d`) on background `bg`, each in its syntax
+/// color as the editor gives it; a line break, a tab or another control character as one
+/// character.
+fn sql_cells(sql: &str, d: datarig_core::sql::dialect::Dialect, bg: ratatui::style::Color) -> Vec<(String, Style)> {
+    use datarig_core::sql::lexer::{Tok, lex_in};
+    use unicode_segmentation::UnicodeSegmentation;
+    let th = theme::cur();
+    let toks = lex_in(sql, d);
+    let mut out = Vec::new();
+    let mut ti = 0;
+    for (at, g) in sql.grapheme_indices(true) {
+        while ti < toks.len() && toks[ti].end <= at {
+            ti += 1;
+        }
+        let style = match toks.get(ti) {
+            Some(t) if t.start <= at => {
+                let call = t.kind == Tok::Ident && toks.get(ti + 1).is_some_and(|n| n.kind == Tok::LParen);
+                th.syntax(t.kind, call)
+            }
+            _ => Style::new().fg(th.fg),
+        };
+        out.push((crate::text::sanitize_cell(g), style.bg(bg)));
+    }
+    out
+}
+
+/// `cells` (graphemes and their styles) in rows of `first` columns, then of `more`: broken at
+/// the last blank that fits (the blank dropped), a run without one where it no longer fits.
+fn wrap_cells(cells: Vec<(String, Style)>, first: usize, more: usize) -> Vec<Vec<(String, Style)>> {
+    let mut out: Vec<Vec<(String, Style)>> = Vec::new();
+    let mut line: Vec<(String, Style)> = Vec::new();
+    let w = |l: &[(String, Style)]| l.iter().map(|(g, _)| crate::text::width(g)).sum::<usize>();
+    for (g, style) in cells {
+        let gw = crate::text::width(&g);
+        let limit = if out.is_empty() { first } else { more };
+        // A blank that does not fit is the break itself.
+        if g == " " && !line.is_empty() && w(&line) + gw > limit {
+            out.push(std::mem::take(&mut line));
+            continue;
+        }
+        while !line.is_empty() && w(&line) + gw > if out.is_empty() { first } else { more } {
+            let blank = line.iter().rposition(|(c, _)| c == " ").filter(|&b| b > 0);
+            let rest = blank.map(|b| line.split_off(b).into_iter().skip(1).collect()).unwrap_or_default();
+            out.push(std::mem::replace(&mut line, rest));
+        }
+        // A row after a break starts with what follows the blanks.
+        if g == " " && line.is_empty() && !out.is_empty() {
+            continue;
+        }
+        line.push((g, style));
+    }
+    out.push(line);
+    out
+}
+
+/// Graphemes of one style joined: the spans of a row.
+fn runs(cells: Vec<(String, Style)>) -> Vec<(String, Style)> {
+    let mut out: Vec<(String, Style)> = Vec::new();
+    for (g, style) in cells {
+        match out.last_mut() {
+            Some((text, s)) if *s == style => text.push_str(&g),
+            _ => out.push((g, style)),
+        }
+    }
+    out
 }
 
 /// The session view: the profile, its database and environment, then the items of its plan in

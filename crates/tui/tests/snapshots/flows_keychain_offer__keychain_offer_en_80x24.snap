@@ -18,7 +18,7 @@ expression: "o.h.draw(w, hh).backend()"
 "│  ▸ ○ Def│ saved passwords through the `security` tool.             │         │"
 "│    ＋ Ad│                                                          │         │" Hidden by multi-width symbols: [(6, " ")]
 "│▾ Startup│            No, keep asking       Yes, switch             │         │"
-"│    n her╰─────── y switch · n keep asking · Esc/Enter decide later ╯         │"
+"│    n her╰────── y switch · n keep asking · Esc/Enter decide later ─╯         │"
 "│▾ Saved queries 0     ││                                                      │"
 "│    Ctrl+S in a conso…││                                                      │"
 "│                      ││                                                      │"

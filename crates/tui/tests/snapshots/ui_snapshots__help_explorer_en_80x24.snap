@@ -23,6 +23,6 @@ expression: backend
 "│ │   Test connection                         t                              │ │"
 "│ │   Disconnect                              x                              │ │"
 "│ │   New console on this connection          o                              │ │"
-"│ ╰─────────────────── ↑↓ move · Enter run/open · l/h open/close · Esc close ╯ │"
+"│ ╰────────────────── ↑↓ move · Enter run/open · l/h open/close · Esc close ─╯ │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
 " NORMAL  local-pg │ Connected to local-pg                                    EN "

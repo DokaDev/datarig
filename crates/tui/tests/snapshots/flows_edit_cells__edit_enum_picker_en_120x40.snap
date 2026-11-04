@@ -24,7 +24,7 @@ expression: backend
 "│                            ││ │ ok                                                   │ofile: true                    │"
 "│                            ││ │ happy                                                │                               │"
 "│                            ││ │ NULL   no value                                      │                               │"
-"│                            ││ ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯                               │"
+"│                            ││ ╰──────────────── Enter pick · ↑↓ select · Esc cancel ─╯                               │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"

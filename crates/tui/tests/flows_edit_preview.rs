@@ -1893,3 +1893,257 @@ fn a_copy_of_an_applied_default_says_default() {
     assert_eq!(clip.last(), None, "not copied");
     assert_eq!(said_text(&mut h), "Not copied: nickname shows “default”; run the query again to copy its value");
 }
+
+/// A MySQL profile whose tab shows `shop.people` (no key: its rows are found by their values),
+/// a text `name` and `note` in `utf8mb4`, with `rows`; resolved, nothing sent.
+fn mysql_people(lang: Lang, rows: Vec<Vec<Option<String>>>) -> Harness {
+    use datarig_core::driver::keys::{KeyCatalog, NameRule};
+    use datarig_core::driver::structure::{Collation, StructureColumn};
+    use datarig_core::driver::{ColumnOrigin, SessionValues};
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let cfg = Config {
+        connections: vec![ConnectionConfig { driver: "mysql".into(), ..ConnectionConfig::test_db() }],
+        ..Config::default()
+    };
+    let mut h = Harness::with_driver(&cfg, lang, driver);
+    h.db(DbEvent::Connected);
+    let mut k = KeyCatalog::default();
+    k.set_names(NameRule::MySql { tables_ignore_case: false });
+    k.set_server_zone("UTC");
+    let names = ["id", "name", "note"];
+    k.add_table(1, "shop", "people", names.iter().enumerate().map(|(i, n)| (i as i16 + 1, n.to_string())));
+    h.db(DbEvent::Keys(Ok(k)));
+    let col = |name: &str, ty: &str, kind: ValueKind| {
+        let origin = ColumnOrigin::Named { schema: "shop".into(), table: "people".into(), column: name.into() };
+        ColumnMeta::new(name.into(), ty.into(), kind, Some(origin))
+    };
+    let columns = vec![
+        col("id", "int", ValueKind::Integer),
+        col("name", "varchar", ValueKind::Text),
+        col("note", "text", ValueKind::Text),
+    ];
+    h.app.run(vec!["SELECT id, name, note FROM shop.people".to_string()]);
+    h.db(DbEvent::SessionValues(SessionValues { time_zone: "SYSTEM".into(), charset: "utf8mb4".into() }));
+    let id = h.app.tab().exec.query_id;
+    h.db(DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::ZERO });
+    h.app.focus = Focus::Results;
+    let utf8 =
+        Some(Collation { name: "utf8mb4_0900_ai_ci".into(), charset: Some("utf8mb4".into()), deterministic: true });
+    let column = |name: &str, ty: &str, collation: Option<Collation>| StructureColumn {
+        name: name.into(),
+        type_name: ty.into(),
+        not_null: false,
+        default: None,
+        fill: ColumnFill::Default,
+        enum_labels: Vec::new(),
+        collation,
+    };
+    let mut st = TableStructure::new(datarig_core::driver::structure::RelationKind::Table);
+    st.columns =
+        vec![column("id", "int", None), column("name", "varchar(200)", utf8.clone()), column("note", "text", utf8)];
+    h.keys("le");
+    let name = h.app.profiles[0].name.clone();
+    h.meta_db(&name, DbEvent::Structure { schema: "shop".into(), table: "people".into(), result: Ok(Box::new(st)) });
+    assert_eq!(h.app.key_context(), Ctx::CellEdit, "{:?}", said(&mut h));
+    h.key(KeyCode::Esc);
+    h.app.transient = None;
+    h.sent();
+    h
+}
+
+/// The first row's note of `mysql_people` set to `note` (a backslash makes it a literal of its
+/// bytes), previewed, its row counted once.
+fn mysql_note_previewed(lang: Lang, rows: Vec<Vec<Option<String>>>, note: &str) -> Harness {
+    let mut h = mysql_people(lang, rows);
+    h.keys("l");
+    type_cell(&mut h, note);
+    h.command("changes");
+    let asked = counts(&mut h);
+    assert_eq!(asked.len(), 1, "the row is counted");
+    h.db(DbEvent::Counted { id: asked[0].0, result: Ok(1), snapshot: false });
+    h.app.transient = None;
+    h
+}
+
+fn people(name: &str, note: &str) -> Vec<Vec<Option<String>>> {
+    vec![vec![s("1"), s(name), s(note)]]
+}
+
+/// MySQL compares text by its UTF-8 bytes (`_utf8mb4 X'…'`): each statement that carries such
+/// literals is followed by a line, not SQL, that reads them back as `column = 'text'` in order:
+/// the set value, then the compared ones (once each), Hangul included.
+#[test]
+fn a_mysql_statements_text_bytes_are_read_back_under_it() {
+    // A Korean name (escapes: no Hangul in source).
+    let name = "\u{AE40}\u{B3D9}\u{D718}";
+    let mut h = mysql_note_previewed(Lang::En, people(name, "old"), "new \\ note");
+    let v = h.app.edit_preview_view().expect("open");
+    assert!(v.apply);
+    let hex = |t: &str| t.bytes().map(|b| format!("{b:02X}")).collect::<String>();
+    let check = format!(
+        "SELECT 1 FROM `shop`.`people` WHERE `id` <=> 1 AND `name` = _utf8mb4 X'{n}' AND CONVERT(`name` USING utf8mb4) \
+         COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'{n}' AND `note` = _utf8mb4 X'{o}' AND CONVERT(`note` USING utf8mb4) \
+         COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'{o}' FOR UPDATE",
+        n = hex(name),
+        o = hex("old"),
+    );
+    let read = format!("name = '{name}', note = 'old'");
+    assert_eq!(v.lines[1], step(&check, 1, false));
+    assert_eq!(v.lines[2], PreviewLine::Values(read.clone()));
+    assert_eq!(v.lines[3], head("Writes"));
+    let PreviewLine::Step { sql, .. } = &v.lines[4] else { panic!("the update: {:?}", v.lines[4]) };
+    assert!(sql.starts_with(&format!("UPDATE `shop`.`people` SET `note` = _utf8mb4 X'{}' WHERE ", hex("new \\ note"))));
+    assert_eq!(v.lines[5], PreviewLine::Values(format!("note = 'new \\ note', {read}")));
+    assert_eq!(v.lines.len(), 6);
+    // Shown under each statement, marked.
+    let screen = screen(&mut h, 120, 40);
+    assert_eq!(screen.matches(&format!("\u{21B3} {read}")).count(), 1, "{screen}");
+    assert!(screen.contains("\u{21B3} note = 'new \\ note', name = "), "{screen}");
+}
+
+/// The read-back values are display only: Copy SQL copies exactly the statements that are sent,
+/// each ended with `;`, and the Apply sends them as planned.
+#[test]
+fn copy_sql_copies_what_is_sent_and_not_the_values_read_back() {
+    let mut h = mysql_note_previewed(Lang::En, people("Ann", "old"), "a\\b");
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    let v = h.app.edit_preview_view().expect("open");
+    assert!(v.lines.iter().any(|l| matches!(l, PreviewLine::Values(_))));
+    h.key(KeyCode::Char('c'));
+    h.key(KeyCode::Char('y'));
+    let (_, steps, _) = applies(&mut h);
+    let sent: String = steps.iter().map(|s| format!("{};\n", s.sql)).collect();
+    let copied = clip.last().expect("copied");
+    assert_eq!(copied, sent);
+    assert!(!copied.contains('\u{21B3}') && !copied.contains("name = 'Ann'"), "{copied}");
+    let shown: Vec<&str> = v
+        .lines
+        .iter()
+        .filter_map(|l| if let PreviewLine::Step { sql, .. } = l { Some(sql.as_str()) } else { None })
+        .collect();
+    assert_eq!(shown, steps.iter().map(|s| s.sql.as_str()).collect::<Vec<_>>(), "shown whole, as sent");
+}
+
+/// The text of row `y` of `buf` from column `from` to `to` (both included).
+fn cols(buf: &ratatui::buffer::Buffer, y: u16, from: u16, to: u16) -> String {
+    (from..=to).map(|x| buf[(x, y)].symbol()).collect()
+}
+
+/// The preview's box on `buf`: its top and bottom rows, its left and right columns.
+fn dialog_box(buf: &ratatui::buffer::Buffer) -> (u16, u16, u16, u16) {
+    let area = buf.area;
+    let corner = (0..area.height).flat_map(|y| (0..area.width).map(move |x| (x, y))).find(|&(x, y)| {
+        buf[(x, y)].symbol() == "\u{256D}" && cols(buf, y, x + 1, (x + 14).min(area.width - 1)) == " Apply changes"
+    });
+    let (left, top) = corner.expect("the dialog");
+    let right = (left + 1..area.width).find(|&x| buf[(x, top)].symbol() == "\u{256E}").expect("its corner");
+    let bottom = (top + 1..area.height).find(|&y| buf[(left, y)].symbol() == "\u{2570}").expect("its bottom");
+    (top, bottom, left, right)
+}
+
+/// A statement wider than the dialog is wrapped over as many rows as it takes, every character
+/// shown (nothing cut with `…`): its count at the end of its first row, the rest under it.
+#[test]
+fn a_long_statement_wraps_whole_with_its_count_on_its_first_row() {
+    let mut h = mysql_note_previewed(Lang::En, people("plain name", "old"), "a\\b");
+    let v = h.app.edit_preview_view().expect("open");
+    for (w, hh) in [(120, 40), (80, 24)] {
+        let t = h.draw(w, hh);
+        let buf = t.backend().buffer();
+        let (top, bottom, left, right) = dialog_box(buf);
+        let rows: Vec<String> = (top..=bottom).map(|y| cols(buf, y, left + 1, right - 1)).collect();
+        let first = rows.iter().position(|r| r.contains("SELECT 1 FROM `shop`.`people`")).expect("the check");
+        assert!(rows[first].trim_end().ends_with("expect 1"), "{}", rows[first]);
+        // The check's rows, joined back, are the statement.
+        let inner = |r: &str| r.trim().trim_end_matches("expect 1").trim().to_string();
+        let mut joined = inner(&rows[first]);
+        let mut y = first + 1;
+        while !rows[y].contains('\u{21B3}') {
+            joined.push(' ');
+            joined.push_str(&inner(&rows[y]));
+            y += 1;
+        }
+        assert!(y > first + 1, "wrapped at {w}x{hh}");
+        let PreviewLine::Step { sql, .. } = &v.lines[1] else { panic!() };
+        assert_eq!(&joined, sql, "whole at {w}x{hh}");
+        assert!(!rows[first..y].iter().any(|r| r.contains('\u{2026}')), "nothing cut at {w}x{hh}");
+    }
+}
+
+/// The statements take the editor's syntax colors on the dialog's surface: a keyword as the
+/// editor draws one, a quoted name, a string.
+#[test]
+fn the_statements_take_the_editors_syntax_colors() {
+    use datarig_tui::theme;
+    for th in [theme::DARK, theme::LIGHT] {
+        let mut h = ready(Lang::En);
+        h.app.theme = std::sync::Arc::new(th.clone());
+        type_cell(&mut h, "z@x");
+        h.command("changes");
+        let t = h.draw(120, 40);
+        let buf = t.backend().buffer();
+        let (x, y) = (0..40u16)
+            .find_map(|y| {
+                row_text(buf, y).find("UPDATE \"shop\"").map(|i| (row_text(buf, y)[..i].chars().count() as u16, y))
+            })
+            .expect("the update on screen");
+        let at = |dx: u16| buf[(x + dx, y)].clone();
+        let keyword = th.syntax(datarig_core::sql::lexer::Tok::Keyword, false);
+        assert_eq!((at(0).fg, at(0).bg), (keyword.fg.unwrap(), th.surface), "UPDATE");
+        assert_eq!(at(0).modifier, keyword.add_modifier, "UPDATE");
+        let quoted = th.syntax(datarig_core::sql::lexer::Tok::QuotedIdent, false);
+        assert_eq!(at(7).fg, quoted.fg.unwrap(), "\"shop\"");
+        let row = row_text(buf, y);
+        let lit = row.find("'z@x'").expect("the value");
+        let string = th.syntax(datarig_core::sql::lexer::Tok::Str, false);
+        assert_eq!(buf[(row[..lit].chars().count() as u16, y)].fg, string.fg.unwrap(), "'z@x'");
+        assert_ne!(keyword.fg, string.fg);
+    }
+}
+
+/// The dialog clears its whole box: the editor's text, on screen under it before it opened, is
+/// not seen through it anywhere, at either size.
+#[test]
+fn the_preview_clears_what_is_under_it() {
+    let lines: Vec<String> = (0..60).map(|i| format!("-- BLEED{i:02} {}", "BLEED ".repeat(30))).collect();
+    let mut h = mysql_people(Lang::En, people("plain name", "old"));
+    h.app.tab_mut().editor = datarig_tui::widgets::editor::Editor::new(&lines.join("\n"));
+    let sizes = [(120u16, 40u16), (80, 24)];
+    let before: Vec<_> = sizes.iter().map(|&(w, hh)| h.draw(w, hh)).collect();
+    h.keys("l");
+    type_cell(&mut h, "a\\b");
+    h.command("changes");
+    let asked = counts(&mut h);
+    h.db(DbEvent::Counted { id: asked[0].0, result: Ok(1), snapshot: false });
+    for (&(w, hh), before) in sizes.iter().zip(&before) {
+        let after = h.draw(w, hh);
+        let buf = after.backend().buffer();
+        let (top, bottom, left, right) = dialog_box(buf);
+        let under = (top..=bottom).map(|y| cols(before.backend().buffer(), y, left, right));
+        assert!(under.filter(|r| r.contains("BLEED")).count() > 3, "the editor under it at {w}x{hh}");
+        for y in top..=bottom {
+            let r = cols(buf, y, left, right);
+            assert!(!r.contains("BLEED"), "seen through at {w}x{hh}: {r}\n{}", buffer_text(buf));
+        }
+    }
+}
+
+#[test]
+fn the_mysql_preview_on_screen() {
+    screens("edit_preview_mysql", |lang| mysql_note_previewed(lang, people("plain name", "old"), "a\\b"));
+}
+
+/// The keys on the bottom border end a border cell before its corner, as wide as the dialog is.
+#[test]
+fn the_keys_leave_the_border_before_the_corner() {
+    let mut h = mysql_note_previewed(Lang::En, people("plain name", "old"), "a\\b");
+    for (w, hh) in [(120u16, 40u16), (80, 24)] {
+        let t = h.draw(w, hh);
+        let buf = t.backend().buffer();
+        let (_, bottom, left, right) = dialog_box(buf);
+        assert_eq!(buf[(right, bottom)].symbol(), "\u{256F}");
+        assert_eq!(buf[(right - 1, bottom)].symbol(), "\u{2500}", "at {w}x{hh}: {}", cols(buf, bottom, left, right));
+        assert!(cols(buf, bottom, left, right).ends_with("Enter/Esc cancel \u{2500}\u{256F}"), "at {w}x{hh}");
+    }
+}

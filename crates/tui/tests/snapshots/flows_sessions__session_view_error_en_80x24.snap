@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 1021
+assertion_line: 1274
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -18,7 +18,7 @@ expression: "h.draw(80, 24).backend()"
 "│ │ The profile does not connect until this is fixed                         │ │"
 "│ │                                                                          │ │"
 "│ │                                [ Close ]                                 │ │"
-"│ ╰────────────────────────────────────────────────── j/k scroll · Esc close ╯ │"
+"│ ╰───────────────────────────────────────────────── j/k scroll · Esc close ─╯ │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

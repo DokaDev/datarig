@@ -15,7 +15,7 @@ expression: backend
 "│           │                                                      │           │"
 "│           │ just now · select 'second closed';                   │           │"
 "│           │ just now · select 'first closed';                    │           │"
-"│           ╰─────── ↑↓ select · / filter · Enter pick · Esc close ╯ created_at│"
+"│           ╰────── ↑↓ select · / filter · Enter pick · Esc close ─╯ created_at│"
 "│                      ││ 12                                                   │"
 "│                      ││ 13 SELECT analytics.slow(30);                        │"
 "│                      ││ 14                                                   │"

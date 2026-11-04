@@ -16,7 +16,7 @@ expression: backend
 "│           │ ok                                                   │           │"
 "│           │ happy                                                │ok         │"
 "│           │ NULL   no value                                      │rue        │"
-"│           ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯           │"
+"│           ╰──────────────── Enter pick · ↑↓ select · Esc cancel ─╯           │"
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"

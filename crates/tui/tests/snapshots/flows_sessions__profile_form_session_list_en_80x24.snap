@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 873
+assertion_line: 879
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -18,12 +18,12 @@ expression: "h.draw(w, ht).backend()"
 "│ │ │ broken                     2 statements                              │ │ │"
 "│ │ │ reporting                  2 statements                              │ │ │"
 "│ │ │ New Startup SQL…                                                     │ │ │"
-"│ │ ╰───────────────────────────────── Enter pick · ↑↓ select · Esc cancel ╯ │ │"
+"│ │ ╰──────────────────────────────── Enter pick · ↑↓ select · Esc cancel ─╯ │ │"
 "│ │                                                                          │ │"
 "│ │                    Test    Save    Cancel                                │ │"
 "│ │                                                                          │ │"
 "│ │                                                                          │ │"
-"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc canc… ─╯ │"
 "│                      ││                                                      │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
 "                                                                             EN "

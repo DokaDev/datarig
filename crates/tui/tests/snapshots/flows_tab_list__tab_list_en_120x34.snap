@@ -22,7 +22,7 @@ expression: backend
 "│         │  1 ◆  console 1   console    local-pg · datarig                                                  │         │"
 "│         │ Recently closed                                                                                  │         │"
 "│         │       console 3   console    local-pg · datarig.shop                                             │         │"
-"│         ╰───────────────────────────────────────────── Enter go · Ctrl+D close tab · ↑↓ select · Esc close ╯         │"
+"│         ╰──────────────────────────────────────────── Enter go · Ctrl+D close tab · ↑↓ select · Esc close ─╯         │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"

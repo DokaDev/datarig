@@ -27,7 +27,7 @@ expression: backend
 "│                                      ││ │ Tab 2: 1 change (1 row) uncommitted for 0:00                             │                                         │"
 "│                                      ││ │                                                                          │                                         │"
 "│                                      ││ │       [ Stay ]     Roll back first       Commit first       Quit         │                                         │"
-"│                                      ││ ╰────── c commit · r roll back · y quit anyway (rolls back) · Enter/n stay ╯                                         │"
+"│                                      ││ ╰───── c commit · r roll back · y quit anyway (rolls back) · Enter/n stay ─╯                                         │"
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"

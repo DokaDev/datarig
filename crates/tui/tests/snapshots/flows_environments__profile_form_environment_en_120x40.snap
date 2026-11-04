@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
-assertion_line: 549
+assertion_line: 557
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -31,7 +31,7 @@ expression: backend
 "│         │                    Test    Save    Cancel                                                        │         │"
 "│         │                                                                                                  │         │"
 "│         │                                                                                                  │         │"
-"│         ╰───────────────────────── Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯         │"
+"│         ╰──────────────────────── Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ─╯         │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"

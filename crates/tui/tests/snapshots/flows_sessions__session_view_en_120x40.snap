@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 1081
+assertion_line: 1105
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
@@ -32,7 +32,7 @@ expression: "h.draw(w, ht).backend()"
 "│    │ Applied in this order: a later setting of the same name wins                                               │    │"
 "│    │                                                                                                            │    │"
 "│    │                                                 [ Close ]                                                  │    │"
-"│    ╰──────────────────────────────────────────────────────────────────────────────────── j/k scroll · Esc close ╯    │"
+"│    ╰─────────────────────────────────────────────────────────────────────────────────── j/k scroll · Esc close ─╯    │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"

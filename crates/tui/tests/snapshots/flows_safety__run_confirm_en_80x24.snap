@@ -19,7 +19,7 @@ expression: backend
 "│ │      INSERT INTO shop.audit_log (note) VALUES ('中文 備註')              │ │" Hidden by multi-width symbols: [(53, " "), (55, " "), (58, " "), (60, " ")]
 "│ │                                                                          │ │"
 "│ │                           [ Cancel ]     Run                             │ │"
-"│ ╰─────────────────────── y run · Enter chooses · Tab switch · n/Esc cancel ╯ │"
+"│ ╰────────────────────── y run · Enter chooses · Tab switch · n/Esc cancel ─╯ │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

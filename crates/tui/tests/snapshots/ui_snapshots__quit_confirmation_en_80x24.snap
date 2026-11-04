@@ -16,7 +16,7 @@ expression: backend
 "│         │ uncommitted changes are lost.                            │         │"
 "│         │                                                          │         │"
 "│         │                   [ Stay ]     Quit                      │reated_at│"
-"│         ╰─────────────────────────────────── y quit · n/Enter stay ╯         │"
+"│         ╰────────────────────────────────── y quit · n/Enter stay ─╯         │"
 "│                      ││ 13 SELECT analytics.slow(30);                        │"
 "│                      ││ 14                                                   │"
 "│                      ││ 15 SELECT $$a body; with a semicolon$$ AS dollar, 'it│"

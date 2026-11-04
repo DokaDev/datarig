@@ -16,7 +16,7 @@ expression: backend
 "│         │ Not saved: permission denied                             │         │"
 "│         │                                                          │         │"
 "│         │                   [ Keep ]     Close                     │reated_at│"
-"│         ╰────────────────────────────────── y close · n/Enter keep ╯         │"
+"│         ╰───────────────────────────────── y close · n/Enter keep ─╯         │"
 "│                      ││ 13 SELECT analytics.slow(30);                        │"
 "│                      ││ 14                                                   │"
 "│                      ││ 15 SELECT $$a body; with a semicolon$$ AS dollar, 'it│"

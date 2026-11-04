@@ -16,7 +16,7 @@ expression: t.backend()
 "│  ▾│ ▸ ○  orders-stage  work/                                            │   │"
 "│   │ ▸ ⠋  orders-prod  work/prod/                                        │   │"
 "│   │ ▸ ✕  分析-replica  work/prod/                                       │_at│" Hidden by multi-width symbols: [(13, " "), (15, " ")]
-"│   ╰── Enter pick · → databases, schemas · ← back · ↑↓ select · Esc close ╯   │"
+"│   ╰─ Enter pick · → databases, schemas · ← back · ↑↓ select · Esc close ─╯   │"
 "│      ▸ 󱋣 shop        ││ 13 SELECT analytics.slow(30);                        │"
 "│                      ││ 14                                                   │"
 "│                      ││ 15 SELECT $$a body; with a semicolon$$ AS dollar, 'it│"

@@ -27,7 +27,7 @@ expression: backend
 "│                                      ││   │ ▸ ○   orders-stage  work/                                            │                                           │"
 "│                                      ││   │ ▸ ⠋   orders-prod  work/prod/                                        │                                           │"
 "│                                      ││   │ ▸ ✕   分析-replica  work/prod/                                       │                                           │" Hidden by multi-width symbols: [(53, " "), (55, " ")]
-"│                                      ││   ╰── Enter pick · → databases, schemas · ← back · ↑↓ select · Esc close ╯                                           │"
+"│                                      ││   ╰─ Enter pick · → databases, schemas · ← back · ↑↓ select · Esc close ─╯                                           │"
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"

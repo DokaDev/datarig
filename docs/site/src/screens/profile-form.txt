@@ -28,7 +28,7 @@
 │                             │                    Test    Save    Cancel                                                        │                             │
 │                             │                                                                                                  │                             │
 │                             │                                                                                                  │                             │
-│                             ╰───────────────────────── Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯                             │
+│                             ╰──────────────────────── Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ─╯                             │
 │                                      ││                                                                                                                      │
 │                                      ││                                                                                                                      │
 │                                      ││                                                                                                                      │

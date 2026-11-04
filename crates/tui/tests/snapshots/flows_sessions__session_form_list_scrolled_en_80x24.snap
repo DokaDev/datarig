@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 632
+assertion_line: 638
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ ╭ Startup SQL — reporting ─────────────────────────────────────────────────╮─╮"
@@ -25,5 +25,5 @@ expression: "h.draw(80, 24).backend()"
 "│ │              Test    Save    Cancel                                      │ │"
 "│ │                                                                          │ │"
 "│ │                                                                          │ │"
-"╰─╰──────────────────── Tab/↑↓ move · Ctrl+T test · Ctrl+S save · Esc cancel ╯─╯"
+"╰─╰─────────────────── Tab/↑↓ move · Ctrl+T test · Ctrl+S save · Esc cancel ─╯─╯"
 " ◇ reporting  PostgreSQL · 2 statements · 1 profile                          EN "

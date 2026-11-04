@@ -30,7 +30,7 @@ expression: s
 │                             │ File       ~/Downloads/console 1-YYYYMMDD-HHMMSS.csv                                   [Browse…] │                             │
 │                             │                                                                                                  │                             │
 │                             │                                     [ Export ]     Cancel                                        │                             │
-│                             ╰──────────────────────────────────── Tab/↑↓ field · Enter list or export · ←→ change · Esc cancel ╯                             │
+│                             ╰─────────────────────────────────── Tab/↑↓ field · Enter list or export · ←→ change · Esc cancel ─╯                             │
 │                                      ││                                                                      ││                                              │
 │                                      ││                                                                      ││                                              │
 │                                      ││                                                                      ││                                              │

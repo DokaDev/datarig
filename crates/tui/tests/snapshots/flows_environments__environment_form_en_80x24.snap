@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
-assertion_line: 537
+assertion_line: 545
 expression: backend
 ---
 "╭ ╭ Environment — prod ──────────────────────────────────────────────────────╮─╮"
@@ -25,5 +25,5 @@ expression: backend
 "│ │ Used by              local-pg                                            │ │"
 "│ │                                                                          │ │"
 "│ │                       Save    Cancel                                     │ │"
-"╰─╰────────────────────────────────── Tab/↑↓ move · Ctrl+S save · Esc cancel ╯─╯"
+"╰─╰───────────────────────────────── Tab/↑↓ move · Ctrl+S save · Esc cancel ─╯─╯"
 " Added the environments dev, test, staging, prod                             EN "

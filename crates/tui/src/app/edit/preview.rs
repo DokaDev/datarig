@@ -18,6 +18,8 @@ use datarig_core::driver::ApplyTx;
 use datarig_core::edit::{Choice, Facts, Origin, Plan, PlanError};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod literals;
+
 /// The open preview of tab `tab`'s result `result`: the changes and the target it was opened
 /// on, what was counted, and the user's choices.
 pub struct EditPreview {
@@ -71,9 +73,15 @@ pub enum PreviewLine {
         text: String,
         keys: String,
     },
+    /// The text values the statement before carries as their bytes, read back (`column =
+    /// 'text'`, ...): shown under it, not SQL, never sent or copied.
+    Values(String),
     Note(String),
     Problem(String),
 }
+
+/// The longest a read-back value is shown, in columns (the rest cut with `…`).
+const VALUE_W: usize = 40;
 
 /// The preview as drawn.
 pub struct PreviewView {
@@ -84,6 +92,8 @@ pub struct PreviewView {
     pub footer: String,
     /// `y` applies.
     pub apply: bool,
+    /// The statements' dialect (their colors).
+    pub dialect: Dialect,
 }
 
 impl App {
@@ -300,6 +310,7 @@ impl App {
         .map(|m| i18n.msg(&m).to_string())
         .collect::<Vec<_>>()
         .join(" · ");
+        let dialect = edit::format(p.format).language().dialect();
         let mut lines = Vec::new();
         let mut apply = false;
         match self.edit_planned(p) {
@@ -344,6 +355,10 @@ impl App {
                         expect: i18n.msg(&Msg::EditPreviewExpect { count: n }).to_string(),
                         risky: delete || n > 1,
                     });
+                    let values = literals::text_literals(&s.sql, dialect);
+                    if !values.is_empty() {
+                        lines.push(PreviewLine::Values(self.values_text(&values)));
+                    }
                 }
             }
         }
@@ -367,7 +382,20 @@ impl App {
         }
         first.extend(lines);
         let footer = self.preview_tx_text(p.tab);
-        Some(PreviewView { title, summary, lines: first, footer, apply })
+        Some(PreviewView { title, summary, lines: first, footer, apply, dialect })
+    }
+
+    /// Read-back values as the preview says them: `column = 'text'` (a line break as one
+    /// character, a long text cut), or how many bytes a value that is not text has.
+    fn values_text(&self, values: &[(String, literals::Decoded)]) -> String {
+        use crate::text::{clip, sanitize_cell};
+        let one = |(column, v): &(String, literals::Decoded)| match v {
+            literals::Decoded::Text(t) => format!("{column} = '{}'", clip(&sanitize_cell(t), VALUE_W)),
+            literals::Decoded::Bytes(n) => {
+                format!("{column} = {}", self.i18n.msg(&Msg::EditPreviewNotText { count: *n as u64 }))
+            }
+        };
+        values.iter().map(one).collect::<Vec<_>>().join(", ")
     }
 
     /// Tab `tab`'s result `result` is being applied.

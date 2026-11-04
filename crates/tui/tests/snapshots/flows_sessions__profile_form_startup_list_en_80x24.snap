@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 912
+assertion_line: 919
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ ╭ Edit connection — local-pg ──────────────────────────────────────────────╮─╮"
@@ -25,5 +25,5 @@ expression: "h.draw(w, ht).backend()"
 "│ │                    Test    Save    Cancel                                │ │"
 "│ │                                                                          │ │"
 "│ │                                                                          │ │"
-"╰─╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯─╯"
+"╰─╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc canc… ─╯─╯"
 "                                                                             EN "
