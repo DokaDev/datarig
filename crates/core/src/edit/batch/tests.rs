@@ -199,3 +199,18 @@ fn every_change_moves_the_revision_and_reads_and_no_ops_do_not() {
     assert!(!b.remove_new(&[99]) && !b.discard());
     assert_eq!(b.revision(), at, "reads and actions that change nothing keep it");
 }
+
+/// What was sent to be applied is compared by its changes and their history: an undo and a redo
+/// since move the revision but leave the batch as it was.
+#[test]
+fn batches_are_equal_by_their_changes_and_history_not_their_revision() {
+    let mut b = EditBatch::new();
+    b.set(&[(1, 1)], &text("x"), orig);
+    let sent = b.clone();
+    b.undo();
+    b.redo();
+    assert_ne!(b.revision(), sent.revision());
+    assert_eq!(b, sent);
+    b.undo();
+    assert_ne!(b, sent, "the change undone");
+}

@@ -155,13 +155,14 @@ impl App {
     }
 
     /// The count `qid` of tab `tab` came: one of a result's checks, when it asked it (`true`).
-    /// An answer for changes that moved since it was asked is dropped.
+    /// It is recorded whether the preview is open or not (closed, it is there when the changes
+    /// are shown again); an answer for changes that moved since it was asked is dropped.
     pub(in crate::app) fn edit_preview_counted(&mut self, tab: TabId, qid: u64, result: &Result<u64, DbError>) -> bool {
         let text = result.as_ref().err().map(|e| self.db_error_text(e));
         let Some(t) = self.tabs.get_mut(tab) else { return false };
-        let asked = |rs: &&mut crate::widgets::grid::ResultSet| rs.edit.checks.asked.iter().any(|(id, _)| *id == qid);
+        let asked = |rs: &&mut crate::widgets::grid::ResultSet| rs.edit.checks.asked().iter().any(|(id, _)| *id == qid);
         let Some(rs) = t.row_results_mut().find(asked) else { return false };
-        if rs.edit.checks.for_revision == rs.edit.batch.revision() {
+        if rs.edit.checks.for_revision() == rs.edit.batch.revision() {
             rs.edit.checks.answered(qid, result.as_ref().map(|n| *n).map_err(|_| text));
         }
         true

@@ -4,31 +4,58 @@
 //!
 //! The model is made from the changes and what was counted for them ([`Checks`], kept with the
 //! result), and kept with the result while neither moves: it is not made again for every frame.
+//! What else it reads is read as it is when it is made, also while the preview is open: the
+//! server's time zone and the session's values the rows were read in (which say whether a value
+//! as read is shown whole).
 
 use super::preview::{PreviewLine, VALUE_W, literals};
 use super::*;
+use datarig_core::driver::ReadIn;
 use datarig_core::edit::{Choice, Facts, Origin, Plan, PlanError, RowEdit};
 use datarig_core::i18n::{Lang, Localized};
 use std::cell::{Cell as Count, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-/// What was counted for a result's changes, and the user's choices of identical rows.
+/// What was counted for a result's changes, and the user's choices of identical rows. Changed
+/// only by its methods, each of which moves its version.
 #[derive(Debug, Default)]
 pub struct Checks {
-    /// Counts asked and not answered yet: their id and the row each counts.
-    pub asked: Vec<(u64, usize)>,
-    pub matches: BTreeMap<usize, u64>,
-    pub choices: BTreeMap<usize, Choice>,
-    /// Why the rows could not be counted.
-    pub failed: Option<String>,
-    /// The revision of the changes they are for ([`EditBatch::revision`]).
-    pub for_revision: u64,
+    asked: Vec<(u64, usize)>,
+    matches: BTreeMap<usize, u64>,
+    choices: BTreeMap<usize, Choice>,
+    failed: Option<String>,
+    for_revision: u64,
     /// Moves on every change of these.
     version: u64,
 }
 
 impl Checks {
+    /// Counts asked and not answered yet: their id and the row each counts.
+    pub fn asked(&self) -> &[(u64, usize)] {
+        &self.asked
+    }
+
+    /// The rows of the table each changed row matched.
+    pub fn matches(&self) -> &BTreeMap<usize, u64> {
+        &self.matches
+    }
+
+    /// The user's choices of rows that match several identical rows.
+    pub fn choices(&self) -> &BTreeMap<usize, Choice> {
+        &self.choices
+    }
+
+    /// Why the rows could not be counted.
+    pub fn failed(&self) -> Option<&str> {
+        self.failed.as_deref()
+    }
+
+    /// The revision of the changes they are for ([`EditBatch::revision`]).
+    pub fn for_revision(&self) -> u64 {
+        self.for_revision
+    }
+
     /// Asked again for the changes at `revision`: counts `asked`, nothing answered or chosen.
     pub(super) fn restart(&mut self, revision: u64, asked: Vec<(u64, usize)>) {
         *self = Checks { asked, for_revision: revision, version: self.version + 1, ..Checks::default() };
@@ -133,7 +160,7 @@ pub struct ChangesModel {
 }
 
 /// What a model was made for: the result, the revision of its changes, of what was counted, and
-/// what its words depend on.
+/// what its words and the values shown whole depend on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ModelKey {
     result: u64,
@@ -144,17 +171,23 @@ struct ModelKey {
     /// The rows the grid shows before the new rows.
     before_new: usize,
     zone: Option<String>,
+    /// The tab's dialect and the session's values the rows were read in: whether a value as read
+    /// is shown whole.
+    dialect: Dialect,
+    read_in: ReadIn,
 }
 
 /// A result's changes model as last made.
 #[derive(Debug, Default)]
 pub struct ModelCache {
     made: RefCell<Option<(ModelKey, EditTarget, Arc<ChangesModel>)>>,
+    /// How many times a model was made: read only by tests, which see from it whether the
+    /// model was kept.
     builds: Count<u64>,
 }
 
 impl ModelCache {
-    /// How many times a model was made.
+    /// How many times a model was made (for tests: whether the model was kept).
     pub fn builds(&self) -> u64 {
         self.builds.get()
     }
@@ -256,7 +289,8 @@ impl App {
 
     /// The model of tab `tab`'s shown result's changes, while it is result `result` and its target
     /// is resolved, in format `format`; made again only when the changes, what was counted for
-    /// them, the target, the language or the rows shown before the new rows moved.
+    /// them, the target, the language, the rows shown before the new rows, the server's time
+    /// zone or the session's values the rows were read in moved.
     pub(crate) fn changes_model(&self, tab: TabId, result: u64, format: EditFormat) -> Option<Arc<ChangesModel>> {
         let t = self.tabs.get(tab)?;
         let rs = rows_of(t).filter(|rs| rs.id == result)?;
@@ -270,6 +304,8 @@ impl App {
             lang: self.i18n.lang,
             before_new: rs.rows.len() + rs.edit.applied_new(),
             zone: zone.map(str::to_string),
+            dialect: self.tab_dialect(t.id),
+            read_in: rs.read_in.clone(),
         };
         let cache = &rs.edit.changes;
         if let Some((k, x, m)) = &*cache.made.borrow()

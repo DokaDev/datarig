@@ -247,8 +247,10 @@ pub fn plan(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Re
 
 /// Every reason the changes cannot be applied, of every row, in the order [`plan`] meets them:
 /// the checks [`plan`] makes of each row and new row, without the statements, so the first is
-/// the one [`plan`] stops at. A statement the format writes wrong ([`PlanError::Internal`]) is
-/// found only by [`plan`].
+/// the one [`plan`] stops at. A row or a target that is not as it must be
+/// ([`PlanError::Internal`]: a row without its values as read, a condition on a computed column)
+/// is among them; a statement the format writes wrong (also [`PlanError::Internal`]) is found
+/// only by [`plan`], which reads each one back.
 pub fn plan_problems(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Vec<PlanError> {
     let mut out: Vec<PlanError> = no_default(t, b)
         .into_iter()

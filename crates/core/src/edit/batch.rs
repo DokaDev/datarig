@@ -53,8 +53,9 @@ struct Step {
     drafts: Option<Vec<Draft>>,
 }
 
-/// The pending changes of one result.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// The pending changes of one result. Two batches are equal when their changes and their history
+/// are: the revision says only how often a batch moved.
+#[derive(Clone, Debug, Default, Eq)]
 pub struct EditBatch {
     rows: BTreeMap<usize, RowEdit>,
     drafts: Vec<Draft>,
@@ -62,6 +63,13 @@ pub struct EditBatch {
     undo: Vec<Step>,
     redo: Vec<Step>,
     revision: u64,
+}
+
+impl PartialEq for EditBatch {
+    fn eq(&self, o: &Self) -> bool {
+        (&self.rows, &self.drafts, self.next_draft, &self.undo, &self.redo)
+            == (&o.rows, &o.drafts, o.next_draft, &o.undo, &o.redo)
+    }
 }
 
 impl EditBatch {

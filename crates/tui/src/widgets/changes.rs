@@ -7,10 +7,10 @@ use crate::theme;
 use datarig_core::sql::dialect::Dialect;
 use ratatui::style::{Modifier, Style};
 
-/// The rows of a preview's body `lines` (statements in dialect `d`) in `iw` columns: a statement from column 2, wrapped under
-/// itself from column 4 (a line break in a value as one character, a long literal shortened
-/// with `cut` saying how many bytes are not shown), its count at the end of its first row; its
-/// values read back from column 4, wrapped from column 6; words wrapped.
+/// The rows of a preview's body `lines` (statements in dialect `d`) in `iw` columns: a statement
+/// from column 2, wrapped under itself from column 4 (a line break in a value as one character,
+/// a long literal shortened with `cut` saying how many bytes are not shown), its count at the end
+/// of its first row; its values read back from column 4, wrapped from column 6; words wrapped.
 pub(crate) fn preview_rows(
     lines: &[PreviewLine],
     d: Dialect,

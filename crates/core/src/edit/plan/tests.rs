@@ -518,4 +518,14 @@ fn a_batch_the_plan_takes_has_no_problem_and_one_it_refuses_has_its_error_first(
             assert_eq!(problems.first(), Some(&e));
         }
     }
+    // A key value not shown whole: that row's problem, the other row is fine.
+    let mut cut = EditBatch::new();
+    cut.set(&[(5, 1)], &text("x"), orig);
+    cut.set(&[(6, 1)], &text("x"), orig);
+    let whole = |row: usize, col: usize| !(row == 5 && col == 0);
+    let none = BTreeMap::new();
+    let facts = Facts { whole: &whole, matches: &none, choices: &BTreeMap::new() };
+    let not_whole = PlanError::NotWhole { row: 5, column: 0 };
+    assert_eq!(plan(&keyed(), &cut, &ALL, &facts).err(), Some(not_whole.clone()));
+    assert_eq!(plan_problems(&keyed(), &cut, &ALL, &facts), [not_whole]);
 }
