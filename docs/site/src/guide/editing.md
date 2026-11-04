@@ -196,7 +196,7 @@ name a column in both, its new value and the one it is found by:
 
 That line is not SQL: it is never sent to the server, and `c` copies the statements exactly as
 they are sent, without it. A literal longer than a few hundred bytes is also shown shortened, its
-start and end around how many bytes are left out (`…786400 more bytes…`); it is copied and sent
+start and end around how many characters are left out (`…786400 more characters…`); it is copied and sent
 whole.
 
 - **Row checks (lock, no waiting)** first: for every row read that changes, a `SELECT … FOR

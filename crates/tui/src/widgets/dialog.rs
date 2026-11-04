@@ -610,8 +610,8 @@ const LONG_TAIL: usize = 16;
 
 /// The graphemes of statement `sql` (in dialect `d`) on background `bg`, each in its syntax
 /// color as the editor gives it. A literal longer than [`LONG_TOKEN`] bytes shows its start and
-/// its end around `cut` of the bytes between (what it says, in its style), so that a huge value
-/// is only looked at once; what is copied and sent is `sql` itself.
+/// its end around `cut` of how many characters are between (what it says, in its style), so
+/// that a huge value is only looked at once; what is copied and sent is `sql` itself.
 fn sql_cells<'a>(
     sql: &'a str,
     d: datarig_core::sql::dialect::Dialect,
@@ -641,7 +641,7 @@ fn sql_cells<'a>(
             let tail = text.grapheme_indices(true).nth_back(LONG_TAIL - 1).map_or(0, |(k, _)| k);
             if tail > head {
                 push(&text[..head], style, &mut out);
-                let (note, note_style) = cut(tail - head);
+                let (note, note_style) = cut(text[head..tail].graphemes(true).count());
                 let width = crate::text::width(&note);
                 out.push(Glyph { text: std::borrow::Cow::Owned(note), style: note_style, width });
                 push(&text[tail..], style, &mut out);

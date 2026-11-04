@@ -409,8 +409,6 @@ impl App {
         Some(PreviewView { title, summary, lines: first, footer, apply, dialect })
     }
 
-    /// Read-back values as the preview says them: `column = 'text'` (a line break as one
-    /// character, a long text cut), or how many bytes a value that is not text has.
     /// Read-back values as the preview says them, by where they are in their statement (`set
     /// note = 'text', … · where name = 'text'`): `column = 'text'` (a line break as one
     /// character, a long text cut), or how many bytes a value that is not text has.

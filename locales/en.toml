@@ -2445,7 +2445,7 @@
 "edit.preview.writes" = "Writes"
 "edit.preview.expect" = { one = "expect {count}", other = "expect {count}" }
 "edit.preview.not_text" = { one = "(not UTF-8 text: {count} byte)", other = "(not UTF-8 text: {count} bytes)" }
-"edit.preview.cut" = { one = "…{count} more byte…", other = "…{count} more bytes…" }
+"edit.preview.cut" = { one = "…{count} more character…", other = "…{count} more characters…" }
 "edit.preview.part_set" = "set"
 "edit.preview.part_where" = "where"
 "edit.preview.part_values" = "values"

@@ -2439,7 +2439,7 @@
 "edit.preview.writes" = "쓰기"
 "edit.preview.expect" = "{count}건 예상"
 "edit.preview.not_text" = "(UTF-8 텍스트 아님: {count}바이트)"
-"edit.preview.cut" = "…{count}바이트 더…"
+"edit.preview.cut" = "…{count}자 더…"
 "edit.preview.part_set" = "바꿀 값"
 "edit.preview.part_where" = "찾을 값"
 "edit.preview.part_values" = "넣을 값"

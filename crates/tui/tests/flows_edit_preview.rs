@@ -2165,7 +2165,7 @@ fn a_long_value_is_shown_shortened_and_laid_out_once_per_width() {
     assert_eq!(builds(&h), 1);
     let rows = h.app.overlays.edit_preview().unwrap().body_rows().unwrap();
     assert!(rows < 30, "{rows} rows:\n{screen1}");
-    assert!(screen1.contains("more bytes\u{2026}"), "{screen1}");
+    assert!(screen1.contains("more characters\u{2026}"), "{screen1}");
     assert!(screen1.contains("\u{21B3} where name = 'lorem ipsum lorem ipsum "), "{screen1}");
     assert!(screen1.contains("\u{2026}', note = 'old'"), "{screen1}");
     h.keys("j");
@@ -2177,5 +2177,5 @@ fn a_long_value_is_shown_shortened_and_laid_out_once_per_width() {
     let hex: String = old.bytes().map(|b| format!("{b:02X}")).collect();
     let copied = clip.last().expect("copied");
     assert_eq!(copied.matches(&hex).count(), 4, "every literal whole");
-    assert!(!copied.contains("more bytes"));
+    assert!(!copied.contains("more characters"));
 }
