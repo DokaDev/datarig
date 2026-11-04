@@ -42,11 +42,11 @@ mod preview;
 mod tab;
 
 pub use applied::{Applied, ApplyFailed, Applying};
-pub use ask::{ApplyAsk, ApplyWait, AskAction, StatusAsk};
+pub use ask::{ANSWER_GUARD, ApplyAsk, ApplyWait, AskAction, StatusAsk};
 pub use changes::{ChangesModel, Checks, ListLine, Mark, ModelCache, Pointer, Problem};
 pub use lines::Lines;
 pub use paste::{
-    ASK_ROWS, CLIPBOARD_TIMEOUT, ClipAnswer, ClipReads, InvalidCache, Invalids, LastPaste, PasteAsk, PasteIn,
+    ASK_ROWS, CLIPBOARD_TIMEOUT, ClipAnswer, ClipReads, CsvAsk, InvalidCache, Invalids, LastPaste, PasteAsk, PasteIn,
 };
 pub(crate) use preview::PreviewBody;
 pub use preview::{EditPreview, PreviewLine, PreviewView};

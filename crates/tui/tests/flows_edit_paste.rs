@@ -18,11 +18,11 @@ use datarig_core::profile::ConnectionConfig;
 use datarig_tui::app::Focus;
 use datarig_tui::app::Results;
 use datarig_tui::app::action::Action;
-use datarig_tui::app::edit::{Applied, EditState, RowAt};
+use datarig_tui::app::edit::{ANSWER_GUARD, Applied, EditState, RowAt};
 use datarig_tui::app::paging::Paging;
 use datarig_tui::app::tabs::ResultView;
 use datarig_tui::keymap::Ctx;
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use std::time::Duration;
 
 fn s(v: &str) -> Option<String> {
@@ -333,6 +333,7 @@ fn the_paste_tab_of_changes_says_to_paste_into_the_grid() {
 fn space_d_capital_v_reads_the_last_paste_again_in_its_place() {
     let mut h = ready(Lang::En);
     paste(&mut h, "q@x,qq\n");
+    h.keys("c");
     assert_eq!((pending(&h, 0, 1), pending(&h, 0, 2)), (Some(t("q@x")), Some(t("qq"))));
     assert!(said(&mut h).starts_with("Pasted as CSV"));
     h.keys(" dV");
@@ -614,6 +615,7 @@ fn a_clipboard_answer_after_an_apply_question_or_the_cell_editor_pastes_nothing(
 fn space_d_capital_v_reads_the_paste_again_once_it_is_the_newest_change_again() {
     let mut h = ready(Lang::En);
     paste(&mut h, "q@x,qq\n");
+    h.keys("c");
     h.keys("j");
     type_cell(&mut h, "s@x");
     h.keys("u");
@@ -758,4 +760,216 @@ fn the_paste_summary_keeps_its_invalid_values_and_undo_key_at_80_columns() {
     paste(&mut h, "a\tb\tc\n");
     let line = status_at(&mut h, 80);
     assert!(line.contains("Not pasted: 3 columns wide; 2 fit from the cursor"), "{line}");
+}
+
+/// The forms of the status line's question, longest first.
+fn asked_forms(h: &Harness) -> Vec<String> {
+    h.app.status_ask_line().map(|(f, _)| f).unwrap_or_default()
+}
+
+#[test]
+fn text_with_commas_asks_csv_or_one_column_and_c_or_1_reads_it_so() {
+    let mut h = ready(Lang::En);
+    let before = revision(&h);
+    paste(&mut h, "q@x,qq\nr@x,rr\n");
+    assert_eq!(h.app.key_context(), Ctx::StatusAsk);
+    assert_eq!(
+        asked_forms(&h),
+        [
+            "Read as CSV (2 columns) or one column? c / 1 · any other key cancels",
+            "Read as CSV (2 columns) or one column? c / 1",
+            "CSV (2 columns) or one column? c / 1",
+        ]
+    );
+    assert_eq!(revision(&h), before, "nothing before the answer");
+    // `c`: CSV.
+    h.keys("c");
+    assert!(h.app.status_ask_line().is_none());
+    let cells = |h: &Harness| [pending(h, 0, 1), pending(h, 0, 2), pending(h, 1, 1), pending(h, 1, 2)];
+    assert_eq!(cells(&h), [Some(t("q@x")), Some(t("qq")), Some(t("r@x")), Some(t("rr"))]);
+    assert_eq!(said(&mut h), "Pasted as CSV · 2 rows × 2 columns · 4 cells changed · u undo");
+    assert_eq!(revision(&h), before + 1, "one step");
+    // `space d V` goes on from CSV.
+    h.keys(" dV");
+    assert!(said(&mut h).starts_with("Pasted as one value"));
+    h.keys("u");
+    assert!(edits(&h).batch.is_empty());
+    // `1`: one column, the commas the values'.
+    paste(&mut h, "q@x,qq\nr@x,rr\n");
+    h.keys("1");
+    assert_eq!(cells(&h), [Some(t("q@x,qq")), None, Some(t("r@x,rr")), None]);
+    assert_eq!(said(&mut h), "Pasted as one column · 2 rows × 1 column · 2 cells changed · u undo");
+    h.keys(" dV");
+    assert!(said(&mut h).starts_with("Pasted as one value"));
+    assert_eq!(pending(&h, 0, 1), Some(t("q@x,qq\nr@x,rr")));
+}
+
+#[test]
+fn a_line_with_commas_asks_csv_or_one_value_and_any_other_input_cancels_it() {
+    let mut h = ready(Lang::En);
+    let before = revision(&h);
+    let cursor = |h: &Harness| (h.app.tab().grid.row, h.app.tab().grid.col);
+    let at = cursor(&h);
+    let _ = h.draw(120, 40);
+    type Input = (&'static str, fn(&mut Harness));
+    let inputs: Vec<Input> = vec![
+        ("Esc", |h| h.key(KeyCode::Esc)),
+        ("j", |h| h.keys("j")),
+        ("y", |h| h.keys("y")),
+        ("click", |h| {
+            let (x, y) = (h.app.layout.results.x + 8, h.app.layout.results.y + 5);
+            h.mouse(MouseEventKind::Down(MouseButton::Left), x, y)
+        }),
+        ("paste", |h| paste(h, "zz")),
+    ];
+    for (name, input) in &inputs {
+        paste(&mut h, "q@x,qq");
+        assert_eq!(asked_forms(&h)[1], "Read as CSV (2 columns) or one value? c / 1", "{name}");
+        input(&mut h);
+        assert!(h.app.status_ask_line().is_none(), "{name}");
+        assert_eq!(said(&mut h), "Paste cancelled", "{name}");
+        assert_eq!(revision(&h), before, "{name}: nothing changed");
+        assert_eq!(cursor(&h), at, "{name}: the input was taken");
+    }
+    // `1`: one value.
+    paste(&mut h, "q@x,qq");
+    h.keys("1");
+    assert_eq!((pending(&h, 0, 1), pending(&h, 0, 2)), (Some(t("q@x,qq")), None));
+    assert!(said(&mut h).starts_with("Pasted as one value"));
+}
+
+#[test]
+fn the_question_about_commas_is_withdrawn_when_the_changes_or_the_tab_move() {
+    let mut h = ready(Lang::En);
+    paste(&mut h, "q@x,qq");
+    if let Results::Rows(rs) = &mut h.app.tab_mut().results {
+        rs.edit.batch.set(&[(1, 1)], &t("w@x"), |_| vec![s("2"), s("b@x"), None]);
+    }
+    let before = revision(&h);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    assert!(h.app.status_ask_line().is_none());
+    assert_eq!(said(&mut h), "Paste cancelled: the rows changed");
+    assert_eq!((revision(&h), pending(&h, 0, 1)), (before, None), "nothing pasted");
+    // Another tab.
+    let mut h = ready(Lang::En);
+    paste(&mut h, "q@x,qq");
+    h.app.dispatch(Action::NewTab);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    assert!(h.app.status_ask_line().is_none());
+    assert_eq!(said(&mut h), "Paste cancelled: the rows changed");
+}
+
+#[test]
+fn a_column_copied_whose_values_have_commas_is_asked_about_not_split() {
+    let mut h = ready(Lang::En);
+    let c = clipboard(&mut h);
+    type_cell(&mut h, "a,b");
+    h.keys("j");
+    type_cell(&mut h, "c,d");
+    h.keys("kvjy");
+    // The column with its header: as CSV, rows of other widths.
+    let copy = c.last().expect("the column copied");
+    assert_eq!(copy, "email\na,b\nc,d");
+    h.keys("kl");
+    h.app.transient = None;
+    let before = revision(&h);
+    paste(&mut h, &copy);
+    assert_eq!(
+        asked_forms(&h),
+        [
+            "Not CSV (row 2 has 2 values, row 1 has 1); read as one column? 1 · any other key cancels",
+            "Not CSV; read as one column? 1",
+        ]
+    );
+    assert_eq!(revision(&h), before, "not split before the answer");
+    // `c` does not read it: it cancels.
+    h.keys("c");
+    assert_eq!(said(&mut h), "Paste cancelled");
+    assert_eq!(revision(&h), before);
+    h.advance(ANSWER_GUARD);
+    paste(&mut h, &copy);
+    h.keys("1");
+    let column: Vec<_> = (0..3).map(|r| pending(&h, r, 2)).collect();
+    assert_eq!(column, [Some(t("email")), Some(t("a,b")), Some(t("c,d"))]);
+}
+
+#[test]
+fn the_question_reads_whole_at_80_columns() {
+    for lang in [Lang::En, Lang::Ko] {
+        let mut h = ready(lang);
+        paste(&mut h, "q@x,qq\nr@x,rr");
+        let line = status_at(&mut h, 80);
+        assert!(line.contains("c / 1") && !line.contains('\u{2026}'), "{lang:?}: {line}");
+    }
+}
+
+/// A `y` (U+315B with a Korean input source too) in the window after a question ended without
+/// its answer: nothing copied, `said` and the key said to be ignored; held too. Then `j` moves
+/// the cursor and, a second after, `y` copies.
+fn answer_keys_are_ignored_for_a_second(h: &mut Harness, said_then: &str) {
+    let c = clipboard(h);
+    let state = |h: &Harness| (h.app.tab().grid.row, h.app.tab().grid.col, h.app.tab().grid.anchor, revision(h));
+    let before = state(h);
+    h.keys("y");
+    assert_eq!(c.last(), None, "nothing copied");
+    assert_eq!(said(h), format!("{said_then} · y ignored"));
+    h.key_kind(KeyCode::Char('y'), KeyModifiers::NONE, KeyEventKind::Repeat);
+    h.type_text("\u{315B}");
+    h.keys("nc1");
+    assert_eq!(c.last(), None, "held, Korean or another answer key: nothing copied");
+    assert_eq!(state(h), before, "nothing else done");
+    h.advance(ANSWER_GUARD - Duration::from_millis(1));
+    h.keys("y");
+    assert_eq!(c.last(), None, "still within the second");
+    h.app.transient = None;
+    h.keys("j");
+    assert_eq!(h.app.tab().grid.row, before.0 + 1, "other keys pass");
+    h.keys("k");
+    h.advance(Duration::from_millis(1));
+    h.keys("y");
+    assert!(c.last().is_some(), "a second after, y copies as usual");
+}
+
+#[test]
+fn a_y_right_after_a_question_was_withdrawn_is_ignored_for_a_second() {
+    let mut h = ready(Lang::En);
+    h.keys("l");
+    let text: String = (0..1_001).map(|i| format!("n{i}\n")).collect();
+    paste(&mut h, &text);
+    assert_eq!(h.app.key_context(), Ctx::StatusAsk);
+    if let Results::Rows(rs) = &mut h.app.tab_mut().results {
+        rs.edit.batch.set(&[(0, 1)], &t("w@x"), |_| vec![s("1"), s("a@x"), s("ann")]);
+    }
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    assert!(h.app.status_ask_line().is_none());
+    assert_eq!(said(&mut h), "Paste cancelled: the rows changed");
+    answer_keys_are_ignored_for_a_second(&mut h, "Question withdrawn — the changes moved");
+}
+
+#[test]
+fn a_y_right_after_a_question_was_cancelled_by_another_key_is_ignored_for_a_second() {
+    let big: String = (0..1_001).map(|i| format!("n{i}\n")).collect();
+    for ask in ["apply", "paste", "csv"] {
+        let mut h = ready(Lang::En);
+        let cancelled = match ask {
+            "apply" => {
+                type_cell(&mut h, "z@x");
+                h.keys(" da");
+                "Apply cancelled"
+            }
+            "paste" => {
+                h.keys("l");
+                paste(&mut h, &big);
+                "Paste cancelled"
+            }
+            _ => {
+                paste(&mut h, "q@x,qq");
+                "Paste cancelled"
+            }
+        };
+        assert_eq!(h.app.key_context(), Ctx::StatusAsk, "{ask}");
+        h.keys("a");
+        assert_eq!(said(&mut h), cancelled, "{ask}");
+        answer_keys_are_ignored_for_a_second(&mut h, cancelled);
+    }
 }

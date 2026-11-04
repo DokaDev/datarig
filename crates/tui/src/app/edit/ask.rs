@@ -10,11 +10,36 @@
 //!
 //! The question is for the changes as they were asked about: an edit, another connection or
 //! session, a transaction that began or ended, another tab or a run drops it, said.
+//!
+//! A question (or an Apply waiting for its counts) that ends without its answer, cancelled or
+//! dropped, leaves [`ANSWER_GUARD`] in which the keys that answer questions do nothing in the
+//! results but say they were ignored: one pressed as it went is never taken by the grid
+//! (where `y` copies over the clipboard).
 
 use super::changes::{ChangesModel, Planned};
 use super::*;
 use datarig_core::driver::ApplyTx;
 use datarig_core::edit::PlanError;
+use datarig_core::edit::paste::Format;
+
+/// How long after a question ended without its answer its answer keys are ignored.
+pub const ANSWER_GUARD: Duration = Duration::from_secs(1);
+
+/// The keys that answer a question of the status bar (as typed on QWERTY).
+const ANSWER_KEYS: [char; 4] = ['y', 'n', 'c', '1'];
+
+/// The key `key` types as QWERTY has it (a jamo typed with a Korean input source: its key),
+/// without Ctrl, Alt or Super.
+fn typed_key(key: &KeyEvent) -> Option<char> {
+    if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) {
+        return None;
+    }
+    let KeyCode::Char(c) = key.code else { return None };
+    match crate::input::hangul::keys(c) {
+        Some(k) => (k.len() == 1).then(|| k[0]),
+        None => Some(c),
+    }
+}
 
 /// A question in the status bar, in place of its segments: the first of `forms` (longest first)
 /// that fits, in the tone of `tone`; what `y` does.
@@ -32,6 +57,8 @@ pub enum AskAction {
     ApplyEdits(ApplyAsk),
     /// Paste many rows, as they were asked about.
     Paste(Box<super::PasteAsk>),
+    /// Read text with commas as CSV (`c`) or one column (`1`).
+    Csv(Box<super::CsvAsk>),
 }
 
 /// The changes an Apply was asked for: the tab, its result, what the rows were read under, the
@@ -225,21 +252,48 @@ impl App {
             && self.edit_bound(t).as_ref() == Some(&w.bound)
     }
 
-    /// A key while the status bar asks: `y` applies, any other key cancels; neither does
-    /// anything else. A held key does nothing.
+    /// A key while the status bar asks: `y` (`c` or `1` for text with commas) answers, any
+    /// other key cancels; neither does anything else. A held key does nothing.
     pub(in crate::app) fn status_ask_key(&mut self, key: KeyEvent, repeat: bool) {
         if repeat {
             return;
         }
-        let plain = !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
-        let yes = plain
-            && match key.code {
-                KeyCode::Char('y') => true,
-                // `y` typed with a Korean input source.
-                KeyCode::Char(c) => crate::input::hangul::keys(c).is_some_and(|k| k == ['y']),
-                _ => false,
+        let typed = typed_key(&key);
+        if let Some(StatusAsk { action: AskAction::Csv(a), .. }) = &self.ask {
+            let format = match typed {
+                Some('c') => a.csv.map(|_| Format::Csv),
+                Some('1') => a.plain,
+                _ => None,
             };
-        if yes { self.status_ask_yes() } else { self.status_ask_cancel() }
+            if let Some(f) = format
+                && let Some(StatusAsk { action: AskAction::Csv(a), .. }) = self.ask.take()
+            {
+                return self.csv_ask_answer(*a, f);
+            }
+            return self.status_ask_cancel();
+        }
+        if typed == Some('y') { self.status_ask_yes() } else { self.status_ask_cancel() }
+    }
+
+    /// A question (or an Apply waiting for its counts) ended without its answer, said with
+    /// `said`: its answer keys are ignored for [`ANSWER_GUARD`].
+    pub(in crate::app) fn ask_ended(&mut self, said: Label) {
+        self.ask_gone = Some((self.now() + ANSWER_GUARD, said));
+    }
+
+    /// `key` is an answer key pressed in the results within [`ANSWER_GUARD`] of a question that
+    /// ended without its answer: taken, said, doing nothing else.
+    pub(in crate::app) fn answer_swallowed(&mut self, key: &KeyEvent) -> bool {
+        let Some((until, said)) = self.ask_gone else { return false };
+        if self.now() >= until {
+            self.ask_gone = None;
+            return false;
+        }
+        let results = self.focus == Focus::Results && !self.cell_edit_open() && !self.grid_prompt_open();
+        let Some(k) = typed_key(key).filter(|k| results && ANSWER_KEYS.contains(k)) else { return false };
+        let said = self.i18n.label(said).to_string();
+        self.flash(Notice::new(Msg::EditAskIgnored { said, key: k.to_string() }, Level::Info));
+        true
     }
 
     /// Any input but `y` while the status bar asks (another key, a click, the wheel, a paste):
@@ -251,8 +305,10 @@ impl App {
                 self.paste_ask_dropped(*p);
                 Label::EditPasteCancelled
             }
+            Some(AskAction::Csv(_)) => Label::EditPasteCancelled,
             None => return,
         };
+        self.ask_ended(said);
         self.flash(Notice::new(said, Level::Info));
     }
 
@@ -262,8 +318,11 @@ impl App {
         let a = match ask.action {
             AskAction::ApplyEdits(a) => a,
             AskAction::Paste(p) => return self.paste_ask_yes(*p),
+            // Answered by `c` or `1` only.
+            AskAction::Csv(_) => return,
         };
         if !self.ask_current(&a) {
+            self.ask_ended(Label::EditAskWithdrawn);
             return self.flash(Notice::new(Label::EditAskMoved, Level::Info));
         }
         let tx = match self.tabs.get(a.tab) {
@@ -277,6 +336,7 @@ impl App {
     /// it waits no more, said.
     pub(in crate::app) fn apply_wait_cancel(&mut self) {
         if self.apply_wait.take().is_some() {
+            self.ask_ended(Label::EditAskCancelled);
             self.flash(Notice::new(Label::EditAskCancelled, Level::Info));
         }
     }
@@ -289,6 +349,7 @@ impl App {
             && !self.ask_current(a)
         {
             self.ask = None;
+            self.ask_ended(Label::EditAskWithdrawn);
             self.flash(Notice::new(Label::EditAskMoved, Level::Info));
         }
         if let Some(StatusAsk { action: AskAction::Paste(a), .. }) = &self.ask
@@ -297,11 +358,20 @@ impl App {
             if let Some(StatusAsk { action: AskAction::Paste(a), .. }) = self.ask.take() {
                 self.paste_ask_dropped(*a);
             }
+            self.ask_ended(Label::EditAskWithdrawn);
+            self.flash(Notice::new(Label::EditPasteMoved, Level::Info));
+        }
+        if let Some(StatusAsk { action: AskAction::Csv(a), .. }) = &self.ask
+            && !self.csv_current(a)
+        {
+            self.ask = None;
+            self.ask_ended(Label::EditAskWithdrawn);
             self.flash(Notice::new(Label::EditPasteMoved, Level::Info));
         }
         let Some(w) = &self.apply_wait else { return };
         if !self.wait_current(w) {
             self.apply_wait = None;
+            self.ask_ended(Label::EditAskWithdrawn);
             return self.flash(Notice::new(Label::EditAskCancelled, Level::Info));
         }
         let Some(rs) = rows_of(self.tab()) else { return };
@@ -309,6 +379,7 @@ impl App {
         // meanwhile, and the Apply then takes those answers.
         if rs.edit.batch.revision() != w.revision || rs.edit.checks.for_revision() != w.revision {
             self.apply_wait = None;
+            self.ask_ended(Label::EditAskWithdrawn);
             let keys = self.apply_keys();
             return self.flash(Notice::new(Msg::EditAskChanged { keys }, Level::Info));
         }

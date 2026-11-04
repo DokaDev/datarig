@@ -1,6 +1,9 @@
 //! Text pasted into a result's cells, read as rows of values ([`parse`]): tab-separated,
 //! comma-separated, one value per line, or one value.
 //!
+//! Commas without a tab are not guessed at: such text is CSV, or values with commas in them,
+//! and is read only as asked ([`PasteError::Ambiguous`]).
+//!
 //! Nothing is guessed beyond the format: rows of different widths, a line end that is a lone
 //! carriage return and a quote left open are refused, never padded or repaired. A value is the
 //! text as pasted; only an unquoted field that is exactly the NULL token is NULL. Nothing read
@@ -90,18 +93,39 @@ pub enum PasteError {
     /// Row `row` has `values` values, and row `first_row` (the first with any) has
     /// `first_values`.
     Ragged { row: usize, values: usize, first_row: usize, first_values: usize },
+    /// The text has a comma outside quotes and no tab: it is CSV, or one value per line (one
+    /// value) whose values have commas in them, and which one is not guessed. `csv`: how many
+    /// columns it is as CSV, or why CSV cannot read it; `plain`: the format it is as one value
+    /// per line or one value ([`Format::Column`], [`Format::One`]), or why that cannot read it.
+    /// One of them reads it: when neither does, [`parse`] refuses it as CSV does.
+    Ambiguous { csv: Result<usize, Box<PasteError>>, plain: Result<Format, Box<PasteError>> },
 }
 
-/// Read `text` in the format it is in: TSV when it has a tab outside quotes, else CSV when its
-/// first line (that is not empty) has a comma outside quotes, else one value per line when it
-/// has a line break outside quotes (before its final line end), else one value. A quote left
-/// open is refused ([`PasteError::Quote`]): what it hides is not known.
+/// Read `text` in the format it is in: TSV when it has a tab outside quotes; else, when it has
+/// a comma outside quotes, it may be CSV or values with commas in them, which is not guessed
+/// ([`PasteError::Ambiguous`]: the caller reads it with [`parse_as`]); else one value per line
+/// when it has a line break outside quotes (before its final line end), else one value. A quote
+/// left open is refused ([`PasteError::Quote`]): what it hides is not known.
 pub fn parse(text: &str, opts: &PasteOpts) -> Result<Pasted, PasteError> {
     let text = unmarked(text);
     if text.len() > MAX_BYTES {
         return Err(PasteError::TooLarge { bytes: text.len(), max: MAX_BYTES });
     }
-    read(text, detect(text)?, opts)
+    match detect(text)? {
+        Some(format) => read(text, format, opts),
+        None => Err(ambiguous(text, opts)),
+    }
+}
+
+/// Why `text`, with a comma outside quotes and no tab, is read only as asked: what it is as
+/// CSV and as one value per line (one value); the CSV refusal when neither reads it.
+fn ambiguous(text: &str, opts: &PasteOpts) -> PasteError {
+    let csv = read(text, Format::Csv, opts).map(|p| p.width());
+    let plain = plain(unended(text)).and_then(|f| read(text, f, opts).map(|_| f));
+    match (csv, plain) {
+        (Err(e), Err(_)) => e,
+        (csv, plain) => PasteError::Ambiguous { csv: csv.map_err(Box::new), plain: plain.map_err(Box::new) },
+    }
 }
 
 /// Read `text` as `format`.
@@ -171,32 +195,37 @@ fn is_blank(r: &[Field]) -> bool {
     matches!(r, [Field { text, quoted: false }] if text.is_empty())
 }
 
-/// The format [`parse`] reads `text` in. A quote left open hides the rest of the text, so what
-/// it hides is not known: unless what comes before it names a format (which then refuses the
-/// quote), it is refused.
-fn detect(text: &str) -> Result<Format, PasteError> {
+/// The format [`parse`] reads `text` in; `None`: it has a comma outside quotes (and no tab), so
+/// it is read only as asked. A quote left open hides the rest of the text, so what it hides is
+/// not known: unless what comes before it names a format (which then refuses the quote), it is
+/// refused.
+fn detect(text: &str) -> Result<Option<Format>, PasteError> {
     let t = unended(text);
     if seen(t, Some('\t')).any {
-        Ok(Format::Tsv)
-    } else if seen(t.trim_start_matches(['\n', '\r']), Some(',')).first {
-        Ok(Format::Csv)
+        Ok(Some(Format::Tsv))
+    } else if seen(t, Some(',')).any {
+        Ok(None)
     } else {
-        let lines = seen(t, None);
-        if lines.lines {
-            Ok(Format::Column)
-        } else if lines.open {
-            Err(PasteError::Quote { row: 1 })
-        } else {
-            Ok(Format::One)
-        }
+        plain(t).map(Some)
+    }
+}
+
+/// The format of `t` (without its final line end) read without delimiters: one value per line
+/// when it has a line break outside quotes, else one value; a quote left open is refused.
+fn plain(t: &str) -> Result<Format, PasteError> {
+    let lines = seen(t, None);
+    if lines.lines {
+        Ok(Format::Column)
+    } else if lines.open {
+        Err(PasteError::Quote { row: 1 })
+    } else {
+        Ok(Format::One)
     }
 }
 
 /// What [`seen`] found outside quotes.
 #[derive(Default)]
 struct Seen {
-    /// The delimiter, on the first line.
-    first: bool,
     /// The delimiter, anywhere.
     any: bool,
     /// A line break.
@@ -226,7 +255,6 @@ fn seen(text: &str, delim: Option<char>) -> Seen {
             start = false;
         } else if Some(c) == delim {
             out.any = true;
-            out.first |= !out.lines;
             start = true;
         } else if c == '\n' {
             out.lines = true;

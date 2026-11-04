@@ -2553,6 +2553,8 @@
 "edit.ask.keys" = "y apply · any other key cancels"
 "edit.ask.cancelled" = "Apply cancelled"
 "edit.ask.moved" = "Apply cancelled: the changes changed"
+"edit.ask.withdrawn" = "Question withdrawn — the changes moved"
+"edit.ask.ignored" = "{said} · {key} ignored"
 "edit.ask.checking" = { one = "Checking {count} row…", other = "Checking {count} rows…" }
 "edit.ask.changed" = "Changes changed — press {keys} again"
 "edit.ask.problems" = { one = "Can't apply: {count} problem — see Changes", other = "Can't apply: {count} problems — see Changes" }
@@ -2612,6 +2614,13 @@
 "edit.paste.ask_short" = "Paste {rows} rows? y"
 "edit.paste.cancelled" = "Paste cancelled"
 "edit.paste.moved" = "Paste cancelled: the rows changed"
+"edit.paste.ask_csv" = "Read as CSV ({columns}) or {plain}? c / 1 · any other key cancels"
+"edit.paste.ask_csv_mid" = "Read as CSV ({columns}) or {plain}? c / 1"
+"edit.paste.ask_csv_short" = "CSV ({columns}) or {plain}? c / 1"
+"edit.paste.ask_csv_only" = "Read as CSV ({columns})? c · any other key cancels"
+"edit.paste.ask_csv_only_short" = "Read as CSV ({columns})? c"
+"edit.paste.ask_plain_only" = "Not CSV ({reason}); read as {plain}? 1 · any other key cancels"
+"edit.paste.ask_plain_only_short" = "Not CSV; read as {plain}? 1"
 "edit.paste.reread_none" = "Nothing to re-read: the last change was not a paste"
 "edit.paste.needs_system" = "Reading the clipboard needs clipboard = \"system\"; paste with your terminal instead"
 "edit.paste.read_failed" = "Could not read the clipboard: {error}"

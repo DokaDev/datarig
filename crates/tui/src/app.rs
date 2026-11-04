@@ -586,6 +586,9 @@ pub struct App {
     pub ask: Option<edit::StatusAsk>,
     /// An Apply waiting for the counts of its rows found by their values.
     pub apply_wait: Option<edit::ApplyWait>,
+    /// A question (or a waiting Apply) ended without its answer: until when its answer keys are
+    /// ignored, and what it said.
+    pub(crate) ask_gone: Option<(Instant, Label)>,
     /// Text pasted into the grid, waiting for its result's table to be known.
     pub(crate) paste_in: Option<edit::PasteIn>,
     /// The last paste into a grid: `space d V` reads it again while it is the newest change.
@@ -1004,6 +1007,7 @@ impl App {
             changes_body: None,
             ask: None,
             apply_wait: None,
+            ask_gone: None,
             paste_in: None,
             last_paste: None,
             clip_reads: Default::default(),

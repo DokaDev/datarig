@@ -579,7 +579,9 @@ async fn a_pasted_block_overwrites_two_rows_and_adds_one() {
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
     let select = format!("SELECT id, v, n, w FROM {} ORDER BY id", t.q());
     let e = Editing::new(&url, &mut c, &t, &select).await;
-    let pasted = edit::paste::parse("a1,10,x1\nb1,20,\\N\nc1,30,z1\n", &Default::default()).expect("CSV");
+    let pasted =
+        edit::paste::parse_as("a1,10,x1\nb1,20,\\N\nc1,30,z1\n", edit::paste::Format::Csv, &Default::default())
+            .expect("CSV");
     assert_eq!(pasted.format, edit::paste::Format::Csv);
     let mut ops = edit::PasteOps { width: 4, ..Default::default() };
     for (r, row) in pasted.rows.iter().enumerate() {

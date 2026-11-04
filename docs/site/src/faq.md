@@ -87,6 +87,8 @@ says why ("Not pasted: …"). The usual causes:
 - It runs past the end where the table can't take new rows from this result.
 - The text can't be read: rows of different widths, a quote never closed, a carriage return
   alone. `Space d V` reads the same text again as the next format (TSV, CSV, one value).
+- Text with commas and no tab is not pasted until you answer: the status line asks whether to
+  read it as CSV (`c`) or as one column (`1`), since the commas can be the values' own.
 - It is larger than 5,000 rows or 1 MiB.
 - The result can't be edited at all (see above).
 

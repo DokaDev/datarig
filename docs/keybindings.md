@@ -702,7 +702,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 The status bar's one-line question before an Apply of a result's changes: `y` applies them; any other key, a click or a paste cancels, and does nothing else. Inside `root`.
 
-Reserved — the status bar's question: y does it, any other key cancels: `y`
+Reserved — the status bar's question: y does it (c or 1: text with commas read as CSV or one column), any other key cancels: `y` `c` `1`
 
 ## Command line only
 

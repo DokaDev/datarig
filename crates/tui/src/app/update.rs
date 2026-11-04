@@ -91,6 +91,14 @@ impl App {
             }
             return self.after_input();
         }
+        // A key that answers questions, right after one ended without its answer: ignored.
+        if let Event::Key(k) = ev
+            && !self.modal_open()
+            && keyboard::key_use(&keyboard::normalize(k)) != KeyUse::Ignore
+            && self.answer_swallowed(&keyboard::normalize(k))
+        {
+            return self.after_input();
+        }
         match ev {
             Event::Key(k) => {
                 let k = keyboard::normalize(k);

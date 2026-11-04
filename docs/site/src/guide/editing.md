@@ -187,9 +187,26 @@ stay (`Pasted as TSV · 3 rows × 4 columns · 1 invalid · u undo`).
 The text is read as:
 
 - **TSV** when it has a tab outside quotes (a spreadsheet's copy),
-- else **CSV** when its first line has a comma outside quotes,
+- else, when it has a comma outside quotes, **CSV or one column** (one value for a single
+  line): which one is asked, never guessed (below),
 - else **one column**, a value per line, when it has several lines,
 - else **one value**.
+
+Text with commas and no tab can be CSV, or a column whose values hold commas (`1,5`, `Smith,
+John`). The status line asks:
+
+```text
+Read as CSV (3 columns) or one column? c / 1 · any other key cancels
+```
+
+`c` pastes it as CSV, `1` as one column (`… or one value?` for a single line). Esc, any other
+key, a click or another paste cancels ("Paste cancelled") and does nothing else. The answer then
+pastes as any paste does: its refusals, its question about many rows and the status line naming
+the format. When only one of the two reads the text, only that key is offered: `Not CSV (row 2
+has 2 values, row 1 has 1); read as one column? 1`. When neither does, the paste is refused
+with the CSV reason. The question is for the grid as it was: a change, another tab or a
+dialog drops it ("Paste cancelled: the rows changed"). It works the same for the
+terminal's paste and for `Space d v`.
 
 Both TSV and CSV take quoted fields (`"a""b"`, line breaks inside quotes), as spreadsheets write
 cells that hold tabs, line breaks or quotes. A quote in the middle of a field that does not start
@@ -197,8 +214,7 @@ with one is part of the text. Line ends may be `\n` or `\r\n`; a carriage return
 quotes is refused. Empty lines inside the block are rows of empty values. Every row must have as
 many values as the first: `row 3 has 4 values, row 1 has 3` is refused, never padded or shifted.
 
-When the text was read the wrong way (a one-column copy whose values hold commas reads as CSV),
-`Space d V` reads the last paste again as the next format, TSV → CSV → one value → TSV: it undoes
+When the text was read the wrong way, `Space d V` reads the last paste again as the next format, TSV → CSV → one value → TSV: it undoes
 the paste and pastes the same text again at the same cursor and selection. It works while that
 paste is the newest change, again after undoing a later one; otherwise it says "Nothing to
 re-read: the last change was not a paste". When the new reading is refused, or its question
@@ -435,6 +451,13 @@ committed."); the shortest form says it too: `Apply 3 changes (1 delete), nothin
 or `…, in the open transaction? y/n`. The question is for the changes as they were asked about: a change, another tab,
 a run, a transaction that begins or ends, or a lost connection drops it ("Apply cancelled: the
 changes changed").
+
+When a question on the status line (this one, a paste of many rows, CSV or one column) or the
+wait for the counts ends without its answer, cancelled by a key or dropped because something
+moved, the keys that answer questions (`y`, `n`, `c`, `1`, on a Korean layout too) do nothing in
+the results for about a second, and say so: "Question withdrawn — the changes moved · y
+ignored", or "Apply cancelled · y ignored". A `y` pressed just as the question went never copies
+a cell over the clipboard. Other keys work as usual.
 
 ### The Apply dialog
 

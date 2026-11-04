@@ -453,13 +453,15 @@ fn input_while_the_apply_waits_stops_it_and_never_becomes_its_y() {
             let before = grid_state(&h);
             input(&mut h);
             assert!(h.app.apply_wait.is_none(), "{name} (writes {writes}): stops waiting");
-            // The second `y` of `yy` is the grid's own again (it copies the cell).
-            let copied = *name == "yy";
+            // The second `y` of `yy` comes right after the wait ended: ignored, never the
+            // grid's (which copies the cell).
             let notice = said(&mut h);
-            if !copied {
-                assert_eq!(notice, Some(Label::EditAskCancelled.into()), "{name}");
-                assert_eq!(clip.last(), None, "{name}: nothing copied");
-            }
+            let want = match *name {
+                "yy" => Msg::EditAskIgnored { said: "Apply cancelled".into(), key: "y".into() },
+                _ => Label::EditAskCancelled.into(),
+            };
+            assert_eq!(notice, Some(want), "{name}");
+            assert_eq!(clip.last(), None, "{name}: nothing copied");
             h.db(DbEvent::Counted { id, result: Ok(1), snapshot: false });
             assert!(asked(&h).is_none(), "{name} (writes {writes}): nothing asked");
             assert!(h.app.overlays.top().is_none(), "{name} (writes {writes}): no dialog");

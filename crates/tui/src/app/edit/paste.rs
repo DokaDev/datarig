@@ -6,6 +6,9 @@
 //! shows them and the rows as it shows them: rows read, then new rows; rows past the last one
 //! are new rows. It lands as pending changes, one step `u` undoes.
 //!
+//! Text with commas and no tab is CSV, or one column (one value) of values with commas in
+//! them: the status line asks which (`c` or `1`; [`CsvAsk`]), never guessing.
+//!
 //! A paste that does not fit is refused whole, said, changing nothing: wider than the columns
 //! from the cursor, over a column that takes no value or a row marked for deletion, past the
 //! last row read while the server has more, or past the end where no row can be added. A paste
@@ -91,6 +94,22 @@ pub struct PasteAsk {
     plan: PastePlan,
     last: LastPaste,
     again: Option<LastPaste>,
+}
+
+/// Text with commas and no tab waiting for `c` (CSV) or `1` (one column, or one value): its
+/// tab, result and binding, the revision of the changes and the grid spot it was pasted at;
+/// the text; how many columns it is as CSV and the format it is as one column, those that read
+/// it.
+#[derive(Debug)]
+pub struct CsvAsk {
+    tab: TabId,
+    result: u64,
+    bound: Bound,
+    revision: u64,
+    at: Spot,
+    text: String,
+    pub(super) csv: Option<usize>,
+    pub(super) plain: Option<Format>,
 }
 
 /// What a paste does, every check passed: its cells and new rows, the rows read it changes (as
@@ -421,6 +440,20 @@ impl App {
         let mut last = LastPaste { tab, result, revision, step: None, text, format, at };
         let pasted = match read {
             Ok(x) => x,
+            // Commas and no tab: which it is is asked.
+            Err(PasteError::Ambiguous { csv, plain }) => {
+                let gate = if self.ask.is_some() { None } else { self.edit_gate() };
+                let Some((_, _, bound)) = gate else {
+                    self.paste_not_done(last, again);
+                    return self.flash(Notice::new(Label::EditPasteCancelled, Level::Info));
+                };
+                let forms = self.csv_ask_forms(&csv, &plain);
+                let (csv, plain) = (csv.ok(), plain.ok());
+                let text = last.text;
+                let ask = CsvAsk { tab, result, bound, revision, at, text, csv, plain };
+                self.ask = Some(StatusAsk { forms, tone: Level::Warning, action: AskAction::Csv(Box::new(ask)) });
+                return;
+            }
             Err(e) => {
                 let reason = self.paste_error_text(&e, next_format(last.format));
                 self.paste_not_done(last, again);
@@ -451,6 +484,70 @@ impl App {
         self.paste_do(plan, last, again);
     }
 
+    /// The status line's question about text with commas, longest first: CSV of `csv` columns or
+    /// `plain` (one column, one value), those that read it; the other one's refusal said.
+    fn csv_ask_forms(
+        &self,
+        csv: &Result<usize, Box<PasteError>>,
+        plain: &Result<Format, Box<PasteError>>,
+    ) -> Vec<String> {
+        let i18n = &self.i18n;
+        let columns = |n: usize| i18n.msg(&Msg::EditPasteColumns { count: n as u64 }).to_string();
+        let plain_name = |f: Format| i18n.label(format_label(f)).to_string();
+        let msgs = match (csv, plain) {
+            (Ok(n), Ok(f)) => {
+                let (columns, plain) = (columns(*n), plain_name(*f));
+                vec![
+                    Msg::EditPasteAskCsv { columns: columns.clone(), plain: plain.clone() },
+                    Msg::EditPasteAskCsvMid { columns: columns.clone(), plain: plain.clone() },
+                    Msg::EditPasteAskCsvShort { columns, plain },
+                ]
+            }
+            (Ok(n), Err(_)) => {
+                let columns = columns(*n);
+                vec![Msg::EditPasteAskCsvOnly { columns: columns.clone() }, Msg::EditPasteAskCsvOnlyShort { columns }]
+            }
+            (Err(e), Ok(f)) => {
+                let (reason, _) = self.paste_error_msg(e);
+                let (reason, plain) = (i18n.msg(&reason).to_string(), plain_name(*f));
+                vec![
+                    Msg::EditPasteAskPlainOnly { reason, plain: plain.clone() },
+                    Msg::EditPasteAskPlainOnlyShort { plain },
+                ]
+            }
+            // The core says the CSV refusal when neither reads it.
+            (Err(_), Err(_)) => vec![Label::EditPreviewInternal.into()],
+        };
+        msgs.iter().map(|m| i18n.msg(m).to_string()).collect()
+    }
+
+    /// `c` (`format` CSV) or `1` (one column, one value) to the question about text with
+    /// commas: the text read so, through the paste's own way (its refusals, its question about
+    /// many rows), when the changes, the result, its binding and the grid are as they were when
+    /// it asked; else said.
+    pub(super) fn csv_ask_answer(&mut self, a: CsvAsk, format: Format) {
+        if !self.csv_current(&a) {
+            self.ask_ended(Label::EditAskWithdrawn);
+            return self.flash(Notice::new(Label::EditPasteMoved, Level::Info));
+        }
+        self.paste_in = Some(PasteIn { tab: a.tab, result: a.result, text: a.text, format: Some(format), again: None });
+        self.edit_action(EditAction::Pasted);
+    }
+
+    /// The question about text with commas is still about the active tab's shown result as it
+    /// was asked: the same changes, binding, cursor and selection, no dialog open.
+    pub(super) fn csv_current(&self, a: &CsvAsk) -> bool {
+        if self.tabs.is_empty() || self.modal_open() {
+            return false;
+        }
+        let t = self.tab();
+        t.id == a.tab
+            && t.exec.view == tabs::ResultView::Rows
+            && rows_of(t).is_some_and(|rs| rs.id == a.result && rs.edit.batch.revision() == a.revision)
+            && Spot { cursor: (t.grid.row, t.grid.col), anchor: t.grid.anchor, shape: t.grid.shape } == a.at
+            && self.edit_check().is_ok_and(|(_, _, b)| b == a.bound)
+    }
+
     /// The status line's question about a paste that changes `rows` rows, longest first.
     fn paste_ask_forms(&self, rows: usize, plan: &PastePlan) -> Vec<String> {
         let rows = fmt_count(rows as u64);
@@ -466,6 +563,7 @@ impl App {
     pub(super) fn paste_ask_yes(&mut self, a: PasteAsk) {
         if !self.paste_current(&a) {
             self.paste_ask_dropped(a);
+            self.ask_ended(Label::EditAskWithdrawn);
             return self.flash(Notice::new(Label::EditPasteMoved, Level::Info));
         }
         self.paste_do(a.plan, a.last, a.again);
@@ -589,7 +687,19 @@ impl App {
     /// Why text could not be read as a paste (`next`: the format `space d V` reads it as), in
     /// words.
     fn paste_error_text(&self, e: &PasteError, next: Format) -> Refusal {
-        let (msg, short) = match e {
+        let (msg, short) = self.paste_error_msg(e);
+        let (hint, short_hint) = match e {
+            PasteError::Empty | PasteError::TooLarge { .. } | PasteError::TooManyRows { .. } => Default::default(),
+            _ => self.reread_hint(next),
+        };
+        let reason = self.i18n.msg(&msg).to_string();
+        let short = self.i18n.msg(short.as_ref().unwrap_or(&msg)).to_string();
+        (format!("{reason}{hint}"), Some(format!("{short}{short_hint}")))
+    }
+
+    /// Why text could not be read as a paste, and in fewer words when there are.
+    fn paste_error_msg(&self, e: &PasteError) -> (Msg, Option<Msg>) {
+        match e {
             PasteError::Empty => (Label::EditPasteEmptyText.into(), None),
             PasteError::TooLarge { bytes, max } => (Msg::EditPasteTooLarge { size: mib(*bytes), max: mib(*max) }, None),
             // It stopped reading one row past the most it takes: the size is not known.
@@ -608,14 +718,9 @@ impl App {
                 };
                 (Msg::EditPasteRagged { row, count: *values as u64, first, first_values }, Some(short))
             }
-        };
-        let (hint, short_hint) = match e {
-            PasteError::Empty | PasteError::TooLarge { .. } | PasteError::TooManyRows { .. } => Default::default(),
-            _ => self.reread_hint(next),
-        };
-        let reason = self.i18n.msg(&msg).to_string();
-        let short = self.i18n.msg(short.as_ref().unwrap_or(&msg)).to_string();
-        (format!("{reason}{hint}"), Some(format!("{short}{short_hint}")))
+            // Asked about before it is read (never read again so: a reread names its format).
+            PasteError::Ambiguous { .. } => (Label::EditPreviewInternal.into(), None),
+        }
     }
 
     /// Why the batch refused a paste, in words (the checks before it make these rare).
