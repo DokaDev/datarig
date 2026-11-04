@@ -4,39 +4,31 @@
 //!
 //! Rows found by their values are counted first, with plain reads on the tab's own session (they
 //! see its open transaction, as the Apply will): until every count came the dialog says it
-//! counts, and a failure is shown instead of the statements. The plan is made from the changes
-//! as the dialog opened on; a change of the result, its rows' connection or its changes closes
+//! counts, and a failure is shown instead of the statements. What it shows is the changes'
+//! model ([`ChangesModel`]); a change of the result, its rows' connection or its changes closes
 //! the dialog.
 //!
 //! `y` sends the Apply on the tab's session: the dialog says it applies until the answer comes
 //! (the query's cancel key cancels it), closes once the changes are applied, and says why when
 //! nothing was.
 
+use super::changes::{ChangesModel, Planned};
 use super::*;
 use crate::app::overlay::Buttons;
 use datarig_core::driver::ApplyTx;
-use datarig_core::edit::{Choice, Facts, Origin, Plan, PlanError};
-use std::collections::{BTreeMap, BTreeSet};
+use datarig_core::edit::{Choice, PlanError};
 
-mod literals;
+pub(super) mod literals;
 
-/// The open preview of tab `tab`'s result `result`: the changes and the target it was opened
-/// on, what was counted, and the user's choices.
+/// The open preview of tab `tab`'s result `result`: the revision of the changes, the target and
+/// the format it was opened on.
 pub struct EditPreview {
     pub tab: TabId,
     pub result: u64,
     bound: Bound,
-    batch: EditBatch,
+    revision: u64,
     target: EditTarget,
     format: EditFormat,
-    /// Cells (row, column) whose value as read is not shown whole.
-    not_whole: BTreeSet<(usize, usize)>,
-    /// Counts asked and not answered yet: their id and the row each counts.
-    asked: Vec<(u64, usize)>,
-    matches: BTreeMap<usize, u64>,
-    choices: BTreeMap<usize, Choice>,
-    /// Why the rows could not be counted.
-    failed: Option<String>,
     /// Why the last Apply applied nothing.
     pub(super) apply_failed: Option<String>,
     /// After an Apply whose result is not known, `y` was pressed once: the next applies again.
@@ -48,9 +40,6 @@ pub struct EditPreview {
     pub(crate) body: Option<PreviewBody>,
     /// How many times the body was laid out.
     pub body_builds: u64,
-    /// The line of text values read back from each statement, by the language and the statement (statements are
-    /// planned again for every frame; reading their values back is not).
-    literals: std::cell::RefCell<Vec<(Lang, String, Option<String>)>>,
 }
 
 impl EditPreview {
@@ -66,17 +55,6 @@ pub(crate) struct PreviewBody {
     pub(crate) theme: std::sync::Arc<crate::theme::Theme>,
     pub(crate) lines: Vec<PreviewLine>,
     pub(crate) rows: Vec<Vec<(String, Style)>>,
-}
-
-/// Where the preview's plan stands.
-enum Planned {
-    Counting,
-    Failed(String),
-    /// New rows' cells left to a default their column lacks (`PlanError::NoDefault`,
-    /// `PlanError::NotShown`).
-    NoDefault(Vec<PlanError>),
-    Refused(PlanError),
-    Ready(Plan),
 }
 
 /// A line of the preview's body.
@@ -103,7 +81,7 @@ pub enum PreviewLine {
 }
 
 /// The longest a read-back value is shown, in columns (the rest cut with `…`).
-const VALUE_W: usize = 40;
+pub(super) const VALUE_W: usize = 40;
 
 /// The preview as drawn.
 pub struct PreviewView {
@@ -135,25 +113,14 @@ impl App {
         if self.tab_busy(t.id) {
             return self.flash_busy();
         }
-        let d = self.tab_dialect(t.id);
-        let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
-        let mut not_whole = BTreeSet::new();
-        for (row, e) in rs.edit.batch.rows() {
-            for (c, v) in e.orig.iter().enumerate() {
-                if let Some(v) = v
-                    && c < rs.columns.len()
-                    && !shown_whole(d, rs, c, v, zone)
-                {
-                    not_whole.insert((row, c));
-                }
-            }
-        }
-        let (tab, result, batch, target) = (t.id, rs.id, rs.edit.batch.clone(), (**target).clone());
+        let not_whole = self.cells_not_whole(t, rs);
+        let (tab, result, revision, target) = (t.id, rs.id, rs.edit.batch.revision(), (**target).clone());
+        let batch = &rs.edit.batch;
         // Nothing is counted for changes that cannot be made anyway.
-        let counts = match edit::no_default(&target, &batch).is_empty() && edit::not_shown(&target, &batch).is_empty() {
+        let counts = match edit::no_default(&target, batch).is_empty() && edit::not_shown(&target, batch).is_empty() {
             true => {
                 let whole = |r: usize, c: usize| !not_whole.contains(&(r, c));
-                edit::count_statements(&target, &batch, &*edit::format(format), &whole).unwrap_or_default()
+                edit::count_statements(&target, batch, &*edit::format(format), &whole).unwrap_or_default()
             }
             false => Vec::new(),
         };
@@ -164,6 +131,9 @@ impl App {
             self.send_tab(tab, DbCommand::Count { id, sql });
             asked.push((id, row));
         }
+        if let Some(rs) = self.tabs.get_mut(tab).and_then(rows_of_mut) {
+            rs.edit.checks.restart(revision, asked);
+        }
         self.overlays.close(OverlayKind::Commands);
         self.overlays.close(OverlayKind::WhichKey);
         self.key_state.clear();
@@ -171,40 +141,29 @@ impl App {
             tab,
             result,
             bound,
-            batch,
+            revision,
             target,
             format,
-            not_whole,
-            asked,
-            matches: BTreeMap::new(),
-            choices: BTreeMap::new(),
-            failed: None,
             apply_failed: None,
             again: false,
             scroll: 0,
             buttons: Buttons::default(),
             body: None,
             body_builds: 0,
-            literals: Default::default(),
         };
         self.overlays.push(Overlay::EditPreview(Box::new(p)));
     }
 
-    /// The count `qid` of tab `tab` came: the preview's, when it asked it (`true`).
+    /// The count `qid` of tab `tab` came: one of a result's checks, when it asked it (`true`).
+    /// It is recorded whether the preview is open or not (closed, it is there when the changes
+    /// are shown again); an answer for changes that moved since it was asked is dropped.
     pub(in crate::app) fn edit_preview_counted(&mut self, tab: TabId, qid: u64, result: &Result<u64, DbError>) -> bool {
         let text = result.as_ref().err().map(|e| self.db_error_text(e));
-        let Some(p) = self.overlays.edit_preview_mut().filter(|p| p.tab == tab) else { return false };
-        let Some(k) = p.asked.iter().position(|(id, _)| *id == qid) else { return false };
-        let (_, row) = p.asked.remove(k);
-        match (result, text) {
-            (Ok(n), _) => {
-                p.matches.insert(row, *n);
-            }
-            // The other counts are not waited for.
-            (Err(_), text) => {
-                p.failed = text;
-                p.asked.clear();
-            }
+        let Some(t) = self.tabs.get_mut(tab) else { return false };
+        let asked = |rs: &&mut crate::widgets::grid::ResultSet| rs.edit.checks.asked().iter().any(|(id, _)| *id == qid);
+        let Some(rs) = t.row_results_mut().find(asked) else { return false };
+        if rs.edit.checks.for_revision() == rs.edit.batch.revision() {
+            rs.edit.checks.answered(qid, result.as_ref().map(|n| *n).map_err(|_| text));
         }
         true
     }
@@ -219,7 +178,7 @@ impl App {
         let Some(rs) = rows_of(t).filter(|rs| rs.id == p.result) else { return false };
         let ready = matches!(&rs.edit.target, Target::Ready(x) if **x == p.target);
         ready
-            && rs.edit.batch == p.batch
+            && rs.edit.batch.revision() == p.revision
             && rs.edit.bound.as_ref() == Some(&p.bound)
             && self.edit_bound(t) == Some(p.bound.clone())
     }
@@ -230,81 +189,6 @@ impl App {
             self.overlays.close(OverlayKind::EditPreview);
             self.flash(Notice::new(Label::EditPreviewClosed, Level::Info));
         }
-    }
-
-    fn edit_planned(&self, p: &EditPreview) -> Planned {
-        let missing: Vec<PlanError> = edit::no_default(&p.target, &p.batch)
-            .into_iter()
-            .map(|(id, column)| PlanError::NoDefault { origin: Origin::New(id), column })
-            .chain(
-                edit::not_shown(&p.target, &p.batch)
-                    .into_iter()
-                    .map(|(id, column)| PlanError::NotShown { origin: Origin::New(id), column }),
-            )
-            .collect();
-        if !missing.is_empty() {
-            return Planned::NoDefault(missing);
-        }
-        if let Some(e) = &p.failed {
-            return Planned::Failed(e.clone());
-        }
-        if !p.asked.is_empty() {
-            return Planned::Counting;
-        }
-        let whole = |r: usize, c: usize| !p.not_whole.contains(&(r, c));
-        let facts = Facts { whole: &whole, matches: &p.matches, choices: &p.choices };
-        match edit::plan(&p.target, &p.batch, &*edit::format(p.format), &facts) {
-            Ok(plan) => Planned::Ready(plan),
-            Err(e) => Planned::Refused(e),
-        }
-    }
-
-    /// The row the grid shows for `origin`, counted from 1, as text.
-    fn origin_row(&self, p: &EditPreview, origin: Origin) -> String {
-        let shown = match origin {
-            Origin::Row(r) => Some(r),
-            Origin::New(id) => {
-                let len = self.tabs.get(p.tab).and_then(rows_of).map_or(0, |rs| rs.rows.len() + rs.edit.applied_new());
-                p.batch.drafts().iter().position(|d| d.id == id).map(|i| len + i)
-            }
-        };
-        shown.map_or_else(|| "?".to_string(), |r| (r + 1).to_string())
-    }
-
-    /// The name of result column `c` of the preview's result.
-    fn preview_column(&self, p: &EditPreview, c: usize) -> String {
-        let rs = self.tabs.get(p.tab).and_then(rows_of);
-        rs.and_then(|rs| rs.columns.get(c)).map(|c| c.meta.name.clone()).unwrap_or_default()
-    }
-
-    /// Why the plan was refused, in words.
-    fn plan_error_text(&self, p: &EditPreview, e: &PlanError) -> String {
-        let row = |r: usize| self.origin_row(p, Origin::Row(r));
-        let msg = match e {
-            PlanError::Column { origin, column, why } => {
-                let reason = self.i18n.msg(&column_reason(*why, self.preview_column(p, *column))).to_string();
-                Msg::EditPreviewColumn { row: self.origin_row(p, *origin), reason }
-            }
-            PlanError::NotWhole { row: r, column } => {
-                Msg::EditPreviewNotWhole { row: row(*r), column: self.preview_column(p, *column) }
-            }
-            PlanError::NotCounted { row: r } => Msg::EditPreviewNotCounted { row: row(*r) },
-            PlanError::Gone { row: r } => Msg::EditPreviewGone { row: row(*r) },
-            PlanError::Ambiguous { row: r, matches } => Msg::EditPreviewAmbiguous { row: row(*r), count: *matches },
-            PlanError::Choose { row: r, matches } => Msg::EditPreviewChoose { row: row(*r), count: *matches },
-            PlanError::NoOneOfK { row: r } => {
-                let count = p.matches.get(r).copied().unwrap_or(0);
-                Msg::EditPreviewNoOneOfK { row: row(*r), count }
-            }
-            PlanError::NoDefault { origin, column } => {
-                Msg::EditPreviewNoDefault { row: self.origin_row(p, *origin), column: self.preview_column(p, *column) }
-            }
-            PlanError::NotShown { origin, column } => {
-                Msg::EditPreviewNotShown { row: self.origin_row(p, *origin), column: column.clone() }
-            }
-            PlanError::Internal(_) => Label::EditPreviewInternal.into(),
-        };
-        self.i18n.msg(&msg).to_string()
     }
 
     /// How an Apply in tab `tab` stands to a transaction now, in words: inside the open one,
@@ -318,74 +202,18 @@ impl App {
         self.i18n.label(label).to_string()
     }
 
+    /// The model of the open preview's changes (`None`: none is open, or its result is not shown).
+    fn edit_preview_model(&self) -> Option<std::sync::Arc<ChangesModel>> {
+        let p = self.overlays.edit_preview()?;
+        self.changes_model(p.tab, p.result, p.format)
+    }
+
     /// What the open preview shows (`None`: none is open).
     pub fn edit_preview_view(&self) -> Option<PreviewView> {
         let p = self.overlays.edit_preview()?;
+        let m = self.edit_preview_model()?;
         let i18n = &self.i18n;
-        let table = format!("{}.{}", p.target.table.schema, p.target.table.name);
-        let title = i18n.msg(&Msg::EditPreviewTitle { table });
-        let c = p.batch.counts();
-        let summary = [
-            (c.updates > 0).then_some(Msg::EditPreviewUpdates { count: c.updates as u64 }),
-            (c.inserts > 0).then_some(Msg::EditPreviewInserts { count: c.inserts as u64 }),
-            (c.deletes > 0).then_some(Msg::EditPreviewDeletes { count: c.deletes as u64 }),
-        ]
-        .into_iter()
-        .flatten()
-        .map(|m| i18n.msg(&m).to_string())
-        .collect::<Vec<_>>()
-        .join(" · ");
-        let dialect = edit::format(p.format).language().dialect();
-        let mut lines = Vec::new();
-        let mut apply = false;
-        match self.edit_planned(p) {
-            Planned::Counting => lines.push(PreviewLine::Note(i18n.label(Label::EditPreviewCounting).to_string())),
-            Planned::Failed(error) => {
-                lines.push(PreviewLine::Problem(i18n.msg(&Msg::EditPreviewCountFailed { error }).to_string()))
-            }
-            Planned::NoDefault(errors) => {
-                for e in errors {
-                    lines.push(PreviewLine::Problem(self.plan_error_text(p, &e)));
-                }
-            }
-            Planned::Refused(e @ PlanError::Choose { matches, .. }) => {
-                let keys = i18n.msg(&Msg::EditPreviewChooseKeys { count: matches }).to_string();
-                lines.push(PreviewLine::Choose { text: self.plan_error_text(p, &e), keys });
-            }
-            Planned::Refused(e) => lines.push(PreviewLine::Problem(self.plan_error_text(p, &e))),
-            Planned::Ready(plan) => {
-                apply = true;
-                let checks: Vec<&edit::Step> =
-                    plan.steps.iter().filter(|s| matches!(s.expect, Expect::Rows(_))).collect();
-                if !checks.is_empty() {
-                    let nowait = checks.iter().all(|s| s.sql.ends_with(" NOWAIT"));
-                    let head = if nowait { Label::EditPreviewChecks } else { Label::EditPreviewChecksWait };
-                    lines.push(PreviewLine::Head(i18n.label(head).to_string()));
-                }
-                let mut writes = false;
-                for s in &plan.steps {
-                    let n = match s.expect {
-                        Expect::Rows(n) => n,
-                        Expect::Affected(n) => {
-                            if !writes {
-                                writes = true;
-                                lines.push(PreviewLine::Head(i18n.label(Label::EditPreviewWrites).to_string()));
-                            }
-                            n
-                        }
-                    };
-                    let delete = matches!(s.expect, Expect::Affected(_)) && s.sql.starts_with("DELETE ");
-                    lines.push(PreviewLine::Step {
-                        sql: s.sql.clone(),
-                        expect: i18n.msg(&Msg::EditPreviewExpect { count: n }).to_string(),
-                        risky: delete || n > 1,
-                    });
-                    if let Some(text) = self.read_back(p, &s.sql, dialect) {
-                        lines.push(PreviewLine::Values(text));
-                    }
-                }
-            }
-        }
+        let mut apply = matches!(m.planned, Planned::Ready(_));
         // Sent and not answered yet; or why the last Apply applied nothing.
         let mut first = Vec::new();
         let rs = self.tabs.get(p.tab).and_then(rows_of).filter(|rs| rs.id == p.result);
@@ -404,55 +232,16 @@ impl App {
             }
             apply &= p.again;
         }
-        first.extend(lines);
+        first.extend(m.sql.iter().cloned());
         let footer = self.preview_tx_text(p.tab);
-        Some(PreviewView { title, summary, lines: first, footer, apply, dialect })
-    }
-
-    /// Read-back values as the preview says them, by where they are in their statement (`set
-    /// note = 'text', … · where name = 'text'`): `column = 'text'` (a line break as one
-    /// character, a long text cut), or how many bytes a value that is not text has.
-    fn values_text(&self, values: &[(literals::Part, String, literals::Decoded)]) -> String {
-        let one = |column: &str, v: &literals::Decoded| match v {
-            literals::Decoded::Text(t) => literals::text_pair(column, t, VALUE_W),
-            literals::Decoded::Bytes(n) => {
-                let not_text = self.i18n.msg(&Msg::EditPreviewNotText { count: *n as u64 });
-                format!("{} = {not_text}", crate::text::sanitize_cell(column))
-            }
-        };
-        let mut groups: Vec<(literals::Part, Vec<String>)> = Vec::new();
-        for (part, column, v) in values {
-            match groups.last_mut() {
-                Some((p, pairs)) if p == part => pairs.push(one(column, v)),
-                _ => groups.push((*part, vec![one(column, v)])),
-            }
-        }
-        let label = |p: literals::Part| {
-            self.i18n.label(match p {
-                literals::Part::Set => Label::EditPreviewPartSet,
-                literals::Part::Where => Label::EditPreviewPartWhere,
-                literals::Part::Values => Label::EditPreviewPartValues,
-            })
-        };
-        groups
-            .iter()
-            .map(|(p, pairs)| format!("{} {}", label(*p), pairs.join(", ")))
-            .collect::<Vec<_>>()
-            .join(" \u{B7} ")
-    }
-
-    /// The text values statement `sql` of preview `p` carries as bytes, read back as the
-    /// preview says them (`None`: it carries none); worked out once per statement.
-    fn read_back(&self, p: &EditPreview, sql: &str, d: Dialect) -> Option<String> {
-        let mut cache = p.literals.borrow_mut();
-        let lang = self.i18n.lang;
-        if let Some((_, _, text)) = cache.iter().find(|(l, s, _)| *l == lang && s == sql) {
-            return text.clone();
-        }
-        let values = literals::text_literals(sql, d);
-        let text = (!values.is_empty()).then(|| self.values_text(&values));
-        cache.push((lang, sql.to_string(), text.clone()));
-        text
+        Some(PreviewView {
+            title: m.title.clone(),
+            summary: m.summary.clone(),
+            lines: first,
+            footer,
+            apply,
+            dialect: m.dialect,
+        })
     }
 
     /// Tab `tab`'s result `result` is being applied.
@@ -488,11 +277,12 @@ impl App {
             KeyCode::Char('c') => self.edit_preview_copy(),
             KeyCode::Char('y') => self.edit_preview_apply(),
             KeyCode::Char(k @ ('1' | 'a')) => {
+                let Some(m) = self.edit_preview_model() else { return };
+                let Planned::Refused(PlanError::Choose { row, .. }) = &m.planned else { return };
+                let row = *row;
                 let Some(p) = self.overlays.edit_preview() else { return };
-                if let Planned::Refused(PlanError::Choose { row, .. }) = self.edit_planned(p)
-                    && let Some(p) = self.overlays.edit_preview_mut()
-                {
-                    p.choices.insert(row, if k == '1' { Choice::One } else { Choice::All });
+                if let Some(rs) = self.tabs.get_mut(p.tab).and_then(rows_of_mut).filter(|rs| rs.id == p.result) {
+                    rs.edit.checks.choose(row, if k == '1' { Choice::One } else { Choice::All });
                 }
             }
             _ => {}
@@ -501,8 +291,8 @@ impl App {
 
     /// `c`: every statement of the plan, in order, to the clipboard.
     fn edit_preview_copy(&mut self) {
-        let Some(p) = self.overlays.edit_preview() else { return };
-        let Planned::Ready(plan) = self.edit_planned(p) else {
+        let Some(m) = self.edit_preview_model() else { return };
+        let Planned::Ready(plan) = &m.planned else {
             return self.flash(Notice::new(Label::EditPreviewNothingToCopy, Level::Info));
         };
         let text: String = plan.steps.iter().map(|s| format!("{};\n", s.sql)).collect();
@@ -523,14 +313,9 @@ impl App {
         if self.applying(p.tab, p.result) {
             return self.say_cant_apply(self.i18n.label(Label::EditApplying).to_string());
         }
-        let plan = match self.edit_planned(p) {
-            Planned::Ready(plan) => plan,
-            Planned::Counting => return self.say_cant_apply(self.i18n.label(Label::EditPreviewCounting).to_string()),
-            Planned::Failed(error) => {
-                return self.say_cant_apply(self.i18n.msg(&Msg::EditPreviewCountFailed { error }).to_string());
-            }
-            Planned::NoDefault(errors) => return self.say_cant_apply(self.plan_error_text(p, &errors[0])),
-            Planned::Refused(e) => return self.say_cant_apply(self.plan_error_text(p, &e)),
+        let Some(m) = self.edit_preview_model() else { return };
+        let Planned::Ready(plan) = &m.planned else {
+            return self.say_cant_apply(m.why_not.clone().unwrap_or_default());
         };
         let (tab, result, bound) = (p.tab, p.result, p.bound.clone());
         // A run, a statement waiting for its connection, a commit or rollback not answered (the
@@ -552,7 +337,7 @@ impl App {
             Some(t) if self.manual_commit(tab) => ApplyTx::Keep { idle_timeout: self.manual_idle_timeout(t) },
             _ => ApplyTx::Commit,
         };
-        self.send_apply(tab, result, plan.steps, tx);
+        self.send_apply(tab, result, plan.steps.clone(), tx);
     }
 
     fn say_cant_apply(&mut self, reason: String) {

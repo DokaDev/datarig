@@ -53,14 +53,23 @@ struct Step {
     drafts: Option<Vec<Draft>>,
 }
 
-/// The pending changes of one result.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// The pending changes of one result. Two batches are equal when their changes and their history
+/// are: the revision says only how often a batch moved.
+#[derive(Clone, Debug, Default, Eq)]
 pub struct EditBatch {
     rows: BTreeMap<usize, RowEdit>,
     drafts: Vec<Draft>,
     next_draft: u64,
     undo: Vec<Step>,
     redo: Vec<Step>,
+    revision: u64,
+}
+
+impl PartialEq for EditBatch {
+    fn eq(&self, o: &Self) -> bool {
+        (&self.rows, &self.drafts, self.next_draft, &self.undo, &self.redo)
+            == (&o.rows, &o.drafts, o.next_draft, &o.undo, &o.redo)
+    }
 }
 
 impl EditBatch {
@@ -101,6 +110,12 @@ impl EditBatch {
     /// The new rows, in the order they are shown.
     pub fn drafts(&self) -> &[Draft] {
         &self.drafts
+    }
+
+    /// A number that moves on every change of the batch or its history, so what is derived from
+    /// it can be kept while it stays.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn can_undo(&self) -> bool {
@@ -228,8 +243,8 @@ impl EditBatch {
 
     /// Forget every change and its history: after the changes were applied.
     pub fn clear(&mut self) {
-        let next_draft = self.next_draft;
-        *self = Self { next_draft, ..Self::default() };
+        let (next_draft, revision) = (self.next_draft, self.revision + 1);
+        *self = Self { next_draft, revision, ..Self::default() };
     }
 
     /// Undo the last action; whether there was one.
@@ -237,6 +252,7 @@ impl EditBatch {
         let Some(step) = self.undo.pop() else { return false };
         let back = self.swap(step);
         self.redo.push(back);
+        self.revision += 1;
         true
     }
 
@@ -245,6 +261,7 @@ impl EditBatch {
         let Some(step) = self.redo.pop() else { return false };
         let back = self.swap(step);
         self.undo.push(back);
+        self.revision += 1;
         true
     }
 
@@ -280,6 +297,7 @@ impl EditBatch {
         if changed {
             self.undo.push(before);
             self.redo.clear();
+            self.revision += 1;
         }
         changed
     }

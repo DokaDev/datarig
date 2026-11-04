@@ -8,12 +8,14 @@ mod common;
 use common::*;
 use datarig_core::config::Config;
 use datarig_core::driver::structure::{ColumnFill, TableStructure};
-use datarig_core::driver::{AppliedStep, ApplyTx, ColumnMeta, DbCommand, DbError, DbEvent, ValueKind};
+use datarig_core::driver::{
+    AppliedStep, ApplyTx, ColumnMeta, DbCommand, DbError, DbEvent, EditFormat, MySqlEdit, ReadIn, ValueKind,
+};
 use datarig_core::edit::{Expect, Step, Value};
 use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::policy::{CommitRule, Policy};
 use datarig_core::profile::ConnectionConfig;
-use datarig_tui::app::edit::{Applied, EditState, PreviewLine};
+use datarig_tui::app::edit::{Applied, ChangesModel, EditState, PreviewLine, RowAt, Target};
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
 use datarig_tui::app::{Focus, Results};
 use datarig_tui::keymap::Ctx;
@@ -282,6 +284,161 @@ fn rows_found_by_their_values_are_counted_on_the_tab_first() {
     assert!(h.app.edit_preview_view().unwrap().apply);
 }
 
+/// What the preview shows is made once for the changes and what was counted for them, not for
+/// every frame: again only when an answer comes or the changes move.
+#[test]
+fn the_changes_are_planned_once_per_revision_not_for_every_frame() {
+    let mut h = by_values(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("changes");
+    let asked = counts(&mut h);
+    let builds = |h: &Harness| edits(h).changes.builds();
+    let _ = screen(&mut h, 120, 40);
+    let at = builds(&h);
+    for _ in 0..3 {
+        let _ = screen(&mut h, 120, 40);
+    }
+    assert_eq!(builds(&h), at, "kept for three frames");
+    h.db(DbEvent::Counted { id: asked[0].0, result: Ok(1), snapshot: false });
+    for _ in 0..3 {
+        let _ = screen(&mut h, 120, 40);
+    }
+    assert!(h.app.edit_preview_view().unwrap().apply);
+    assert_eq!(builds(&h), at + 1, "once more for the answer");
+    let before = builds(&h);
+    h.key(KeyCode::Esc);
+    type_cell(&mut h, "y@x");
+    h.command("changes");
+    let asked = counts(&mut h);
+    h.db(DbEvent::Counted { id: asked[0].0, result: Ok(1), snapshot: false });
+    let _ = screen(&mut h, 80, 24);
+    let at = builds(&h);
+    assert!(at > before, "made again for the changes as they are now");
+    for _ in 0..3 {
+        let _ = screen(&mut h, 80, 24);
+    }
+    assert_eq!(builds(&h), at, "and kept");
+}
+
+/// A count that comes for changes that moved since it was asked (the preview closed, a cell
+/// edited) is dropped: nothing is recorded for it, and the changes as they are now are not
+/// counted.
+#[test]
+fn a_count_for_changes_that_moved_is_dropped_and_the_changes_are_not_counted() {
+    let mut h = by_values(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("changes");
+    let asked = counts(&mut h);
+    assert_eq!(asked.len(), 1);
+    h.key(KeyCode::Esc);
+    type_cell(&mut h, "y@x");
+    let _ = h.app.shown_changes().expect("a model");
+    let at = edits(&h).changes.builds();
+    h.db(DbEvent::Counted { id: asked[0].0, result: Ok(1), snapshot: false });
+    assert!(edits(&h).checks.matches().is_empty(), "nothing recorded for the old changes");
+    let m = h.app.shown_changes().expect("a model");
+    assert_eq!(edits(&h).changes.builds(), at, "what was counted did not move");
+    assert_eq!(m.sql, [PreviewLine::Problem("Row 1 was not counted".into())]);
+}
+
+/// `mysql_note_previewed`'s first row's note set and counted, its changes shown: how many times
+/// they were made, kept while nothing they read moves.
+fn kept(h: &mut Harness) -> u64 {
+    let _ = h.app.shown_changes().expect("a model");
+    let at = edits(h).changes.builds();
+    let _ = h.app.shown_changes();
+    assert_eq!(edits(h).changes.builds(), at, "kept while nothing moves");
+    at
+}
+
+/// The changes shown again were made again (`at`: how many times before) once `what` moved,
+/// though neither the changes nor what was counted for them did.
+fn made_again(h: &mut Harness, at: u64, what: &str) -> std::sync::Arc<ChangesModel> {
+    let m = h.app.shown_changes().expect("a model");
+    assert_eq!(edits(h).changes.builds(), at + 1, "made again when {what} moved");
+    m
+}
+
+fn noted() -> Harness {
+    mysql_note_previewed(Lang::En, people("Ann", "old"), "new")
+}
+
+fn rows_mut(h: &mut Harness) -> &mut datarig_tui::widgets::grid::ResultSet {
+    match &mut h.app.tab_mut().results {
+        Results::Rows(rs) => rs,
+        _ => panic!("no row result"),
+    }
+}
+
+/// The session's values change between two pages of the rows: a text as read is no longer known
+/// to be shown whole, so the plan is refused, though the changes did not move.
+#[test]
+fn the_changes_are_made_again_when_the_values_the_rows_were_read_in_move() {
+    let mut h = noted();
+    let m = h.app.shown_changes().expect("a model");
+    let ready = m.sql.iter().any(|l| matches!(l, PreviewLine::Step { .. }));
+    assert!(m.problems.is_empty() && ready, "{:?}", m.sql);
+    let at = kept(&mut h);
+    rows_mut(&mut h).read_in = ReadIn::Changed;
+    let m = made_again(&mut h, at, "the values the rows were read in");
+    let found: Vec<_> = m.problems.iter().map(|p| (p.text.as_str(), p.at)).collect();
+    let text = "Row 1: name is not shown whole, so the row can't be found again";
+    assert_eq!(found, [(text, Some((RowAt::Read(0), Some(1))))]);
+    assert_eq!(m.sql, [PreviewLine::Problem(text.into())]);
+}
+
+#[test]
+fn the_changes_are_made_again_when_the_target_moves() {
+    let mut h = noted();
+    let at = kept(&mut h);
+    let Target::Ready(t) = &mut rows_mut(&mut h).edit.target else { panic!("resolved") };
+    t.all_columns_shown = !t.all_columns_shown;
+    made_again(&mut h, at, "the target");
+}
+
+#[test]
+fn the_changes_are_made_again_when_the_language_moves() {
+    let mut h = noted();
+    let at = kept(&mut h);
+    h.app.i18n.set_lang(Lang::Ko);
+    made_again(&mut h, at, "the language");
+}
+
+#[test]
+fn the_changes_are_made_again_when_the_servers_time_zone_moves() {
+    use datarig_core::driver::keys::{KeyCatalog, NameRule};
+    let mut h = noted();
+    let at = kept(&mut h);
+    let mut k = KeyCatalog::default();
+    k.set_names(NameRule::MySql { tables_ignore_case: false });
+    k.set_server_zone("+02:00");
+    k.add_table(
+        1,
+        "shop",
+        "people",
+        ["id", "name", "note"].iter().enumerate().map(|(i, n)| (i as i16 + 1, n.to_string())),
+    );
+    h.db(DbEvent::Keys(Ok(k)));
+    made_again(&mut h, at, "the server's time zone");
+}
+
+#[test]
+fn the_changes_are_made_again_when_the_rows_before_the_new_rows_move() {
+    let mut h = noted();
+    let at = kept(&mut h);
+    rows_mut(&mut h).edit.applied = Some(Box::new(Applied { new: vec![Vec::new()], ..Applied::default() }));
+    made_again(&mut h, at, "the rows an Apply added");
+}
+
+#[test]
+fn the_changes_are_made_again_when_the_format_moves() {
+    let mut h = noted();
+    h.db(DbEvent::Edit(Some(EditFormat::MySql(MySqlEdit { nowait: false }))));
+    let at = kept(&mut h);
+    h.db(DbEvent::Edit(Some(EditFormat::MySql(MySqlEdit { nowait: true }))));
+    made_again(&mut h, at, "the format");
+}
+
 #[test]
 fn a_row_gone_ambiguous_or_not_counted_is_said_and_nothing_can_be_applied() {
     let mut h = by_values(Lang::En);
@@ -305,6 +462,29 @@ fn a_row_gone_ambiguous_or_not_counted_is_said_and_nothing_can_be_applied() {
         assert!(matches!(said(&mut h), Some(Msg::EditPreviewCantApply { .. })));
         h.key(KeyCode::Esc);
     }
+}
+
+/// The changes hold every row's problem, each with its row; the dialog says the first.
+#[test]
+fn every_rows_problem_is_in_the_changes_with_its_row_and_the_dialog_says_the_first() {
+    let mut h = by_values(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.keys("j");
+    type_cell(&mut h, "y@x");
+    h.command("changes");
+    let asked = counts(&mut h);
+    assert_eq!(asked.len(), 2);
+    h.db(DbEvent::Counted { id: asked[0].0, result: Ok(0), snapshot: false });
+    h.db(DbEvent::Counted { id: asked[1].0, result: Ok(2), snapshot: false });
+    let m = h.app.shown_changes().expect("a model");
+    let found: Vec<_> = m.problems.iter().map(|p| (p.text.as_str(), p.at)).collect();
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found[0].0.starts_with("Row 1 matches no row of the table now"), "{found:?}");
+    assert!(found[1].0.starts_with("Row 2 matches 2 rows"), "{found:?}");
+    assert_eq!((found[0].1, found[1].1), (Some((RowAt::Read(0), None)), Some((RowAt::Read(1), None))));
+    assert_eq!(lines(&h), [PreviewLine::Problem(m.problems[0].text.clone())]);
+    let cells: Vec<_> = m.list.iter().map(|l| (l.at, l.col, l.new.as_deref())).collect();
+    assert_eq!(cells, [(RowAt::Read(0), Some(1), Some("'z@x'")), (RowAt::Read(1), Some(1), Some("'y@x'"))]);
 }
 
 #[test]

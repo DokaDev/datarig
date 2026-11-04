@@ -13,6 +13,7 @@ pub mod tabbar;
 pub mod text_input;
 pub mod tree;
 
+pub(crate) mod changes;
 pub(crate) mod chooser;
 pub(crate) mod cmdline;
 pub(crate) mod dialog;

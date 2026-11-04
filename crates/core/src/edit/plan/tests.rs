@@ -423,3 +423,109 @@ fn a_new_row_is_refused_while_the_table_has_a_column_it_must_be_given_that_the_r
     let refused = Err(PlanError::NotShown { origin: Origin::New(id), column: "email".into() });
     assert_eq!(plan_with(&t, &b, &ALL, &[], &[]), refused);
 }
+
+fn problems_with(
+    t: &EditTarget,
+    b: &EditBatch,
+    f: &Fake,
+    matches: &[(usize, u64)],
+    choices: &[(usize, Choice)],
+) -> Vec<PlanError> {
+    let matches: BTreeMap<usize, u64> = matches.iter().copied().collect();
+    let choices: BTreeMap<usize, Choice> = choices.iter().copied().collect();
+    plan_problems(t, b, f, &Facts { whole: &all_whole, matches: &matches, choices: &choices })
+}
+
+#[test]
+fn every_row_s_problem_is_listed_in_the_order_the_plan_meets_them() {
+    let mut t = by_values(Duplicates::Choose);
+    t.columns[1].as_mut().unwrap().column.not_null = true;
+    t.unshown_required = vec!["email".into()];
+    let mut b = EditBatch::new();
+    b.set(&[(1, 3)], &text("X"), orig);
+    b.set(&[(2, 1)], &text("x"), orig);
+    b.set(&[(3, 1)], &text("x"), orig);
+    b.delete(&[4], orig);
+    b.set(&[(5, 1)], &text("x"), orig);
+    b.set(&[(6, 1)], &text("x"), orig);
+    let id = b.add(0, None, vec![Value::Default, Value::Default, Value::Default, text("X")]);
+    let no_one = Fake { one: false, ..ALL };
+    let matches = [(2, 0), (3, 3), (4, 1), (5, 2), (6, 2)];
+    let got = problems_with(&t, &b, &no_one, &matches, &[(5, Choice::One), (6, Choice::All)]);
+    let new = Origin::New(id);
+    assert_eq!(
+        got,
+        [
+            PlanError::NoDefault { origin: new, column: 1 },
+            PlanError::NotShown { origin: new, column: "email".into() },
+            PlanError::Column { origin: Origin::Row(1), column: 3, why: ColumnReason::Computed },
+            PlanError::Gone { row: 2 },
+            PlanError::Choose { row: 3, matches: 3 },
+            PlanError::NoOneOfK { row: 5 },
+            PlanError::Column { origin: new, column: 3, why: ColumnReason::Computed },
+        ],
+        "rows 4 and 6 are fine"
+    );
+    let err = plan_with(&t, &b, &no_one, &matches, &[(5, Choice::One), (6, Choice::All)]);
+    assert_eq!(err, Err(got[0].clone()), "the plan stops at the first");
+    // Uncounted rows found by their values.
+    assert_eq!(
+        problems_with(&by_values(Duplicates::Refuse), &b, &ALL, &[(3, 2)], &[]),
+        [
+            PlanError::Column { origin: Origin::Row(1), column: 3, why: ColumnReason::Computed },
+            PlanError::NotCounted { row: 2 },
+            PlanError::Ambiguous { row: 3, matches: 2 },
+            PlanError::NotCounted { row: 4 },
+            PlanError::NotCounted { row: 5 },
+            PlanError::NotCounted { row: 6 },
+            PlanError::Column { origin: new, column: 3, why: ColumnReason::Computed },
+        ]
+    );
+}
+
+/// A target, a batch, a format, the rows counted and the choices.
+type Case = (EditTarget, EditBatch, Fake, Vec<(usize, u64)>, Vec<(usize, Choice)>);
+
+#[test]
+fn a_batch_the_plan_takes_has_no_problem_and_one_it_refuses_has_its_error_first() {
+    let mut clean = EditBatch::new();
+    clean.set(&[(1, 1)], &text("x"), orig);
+    clean.delete(&[2], orig);
+    clean.add(0, None, vec![Value::Default, text("a"), Value::Null, Value::Default]);
+    for t in [keyed(), by_values(Duplicates::Refuse), by_values(Duplicates::Choose)] {
+        assert!(plan_with(&t, &clean, &ALL, &[(1, 1), (2, 1)], &[]).is_ok());
+        assert_eq!(problems_with(&t, &clean, &ALL, &[(1, 1), (2, 1)], &[]), []);
+    }
+    assert_eq!(problems_with(&keyed(), &EditBatch::new(), &ALL, &[], &[]), []);
+    // Each refusal alone: the plan errs exactly when there are problems, with the first.
+    let mut cases: Vec<Case> = Vec::new();
+    let mut b = EditBatch::new();
+    b.set(&[(3, 1)], &text("x"), orig);
+    for (m, c) in
+        [(vec![], vec![]), (vec![(3, 0)], vec![]), (vec![(3, 2)], vec![]), (vec![(3, 2)], vec![(3, Choice::One)])]
+    {
+        cases.push((by_values(Duplicates::Choose), b.clone(), Fake { one: false, ..ALL }, m.clone(), c.clone()));
+        cases.push((by_values(Duplicates::Refuse), b.clone(), ALL, m, c));
+    }
+    let mut computed = EditBatch::new();
+    computed.set(&[(1, 3)], &text("X"), orig);
+    cases.push((keyed(), computed, ALL, vec![], vec![]));
+    for (t, b, f, m, c) in &cases {
+        let plan = plan_with(t, b, f, m, c);
+        let problems = problems_with(t, b, f, m, c);
+        assert_eq!(plan.is_err(), !problems.is_empty(), "{plan:?} {problems:?}");
+        if let Err(e) = plan {
+            assert_eq!(problems.first(), Some(&e));
+        }
+    }
+    // A key value not shown whole: that row's problem, the other row is fine.
+    let mut cut = EditBatch::new();
+    cut.set(&[(5, 1)], &text("x"), orig);
+    cut.set(&[(6, 1)], &text("x"), orig);
+    let whole = |row: usize, col: usize| !(row == 5 && col == 0);
+    let none = BTreeMap::new();
+    let facts = Facts { whole: &whole, matches: &none, choices: &BTreeMap::new() };
+    let not_whole = PlanError::NotWhole { row: 5, column: 0 };
+    assert_eq!(plan(&keyed(), &cut, &ALL, &facts).err(), Some(not_whole.clone()));
+    assert_eq!(plan_problems(&keyed(), &cut, &ALL, &facts), [not_whole]);
+}

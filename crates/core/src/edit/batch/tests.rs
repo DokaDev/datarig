@@ -158,3 +158,59 @@ fn discarding_is_one_step_and_clearing_forgets_the_history() {
     assert!(b.is_empty() && !b.can_undo() && !b.can_redo());
     assert_ne!(b.add(1, None, vec![]), n, "new ids stay new");
 }
+
+#[test]
+fn every_change_moves_the_revision_and_reads_and_no_ops_do_not() {
+    let mut b = EditBatch::new();
+    let mut last = b.revision();
+    let mut moved = |b: &EditBatch, what: &str| {
+        assert!(b.revision() > last, "{what} moves the revision");
+        last = b.revision();
+    };
+    b.set(&[(1, 1)], &text("x"), orig);
+    moved(&b, "set");
+    b.delete(&[2], orig);
+    moved(&b, "delete");
+    let n = b.add(1, None, vec![Value::Default; 3]);
+    moved(&b, "add");
+    b.set_new(&[(n, 0)], &text("a"));
+    moved(&b, "set_new");
+    b.revert(&[(1, 1)], &[]);
+    moved(&b, "revert");
+    b.delete_with_new(&[3], &[n], orig);
+    moved(&b, "delete_with_new");
+    b.undo();
+    moved(&b, "undo");
+    b.redo();
+    moved(&b, "redo");
+    b.undo();
+    moved(&b, "undo");
+    b.remove_new(&[n]);
+    moved(&b, "remove_new");
+    b.discard();
+    moved(&b, "discard");
+    b.clear();
+    moved(&b, "clear");
+    let at = b.revision();
+    let _ = (b.is_empty(), b.counts(), b.rows().count(), b.drafts().len(), b.can_undo(), b.can_redo());
+    let _ = (b.row(1), b.value(1, 1), b.deleted(2));
+    assert!(!b.undo() && !b.redo());
+    assert!(!b.set(&[(1, 1)], &text("n1"), orig), "a cell set to its value as read changes nothing");
+    assert!(!b.remove_new(&[99]) && !b.discard());
+    assert_eq!(b.revision(), at, "reads and actions that change nothing keep it");
+}
+
+/// What was sent to be applied is compared by its changes and their history: an undo and a redo
+/// since move the revision but leave the batch as it was.
+#[test]
+fn batches_are_equal_by_their_changes_and_history_not_their_revision() {
+    let mut b = EditBatch::new();
+    b.set(&[(1, 1)], &text("x"), orig);
+    let sent = b.clone();
+    b.undo();
+    b.redo();
+    assert_ne!(b.revision(), sent.revision());
+    assert_eq!(b, sent);
+    b.undo();
+    assert_ne!(b, sent, "the change undone");
+}
