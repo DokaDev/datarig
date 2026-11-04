@@ -636,7 +636,7 @@ Reserved — transaction summary: `c` `r` `Esc` `q` `Enter` `j` `k` `Down` `Up`
 
 ## `overlay.edit_preview`
 
-A result's pending changes and the statements that apply them (`:changes`, `:apply`); Cancel has the focus: `y` applies, `c` copies the statements, `1`/`a` answer which of several identical rows a change is for, `j`/`k` scroll, `Esc` or `Enter` closes; a click on a button does what its key does. While the changes are applied the dialog says so, and the query's cancel key cancels; it closes once they are applied, else it says why nothing was. After an Apply whose result is not known, the first `y` warns and the second applies again. Inside `root`.
+The statements an Apply is about to send, when they must be seen first (a choice among identical rows, an Apply whose result is not known, an environment that confirms writes); Cancel has the focus: `y` applies, `c` copies the statements, `1`/`a` answer which of several identical rows a change is for, `j`/`k` scroll, `Esc` or `Enter` closes; a click on a button does what its key does. While the changes are applied the dialog says so, and the query's cancel key cancels; it closes once they are applied, else it says why nothing was. After an Apply whose result is not known, the first `y` warns and the second applies again. Inside `root`.
 
 Reserved — pending changes preview: `y` `c` `1` `a` `Esc` `q` `Enter` `j` `k` `Down` `Up`
 
