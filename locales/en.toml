@@ -2553,7 +2553,6 @@
 "edit.ask.keys" = "y apply · any other key cancels"
 "edit.ask.cancelled" = "Apply cancelled"
 "edit.ask.moved" = "Apply cancelled: the changes changed"
-"edit.ask.withdrawn" = "Question withdrawn — the changes moved"
 "edit.ask.ignored" = "{said} · {key} ignored"
 "edit.ask.checking" = { one = "Checking {count} row…", other = "Checking {count} rows…" }
 "edit.ask.changed" = "Changes changed — press {keys} again"

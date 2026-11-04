@@ -415,6 +415,13 @@ impl App {
         }
     }
 
+    /// The question about text with commas not answered (another key, or dropped): `space d V`
+    /// reads the text it asked about.
+    pub(super) fn csv_ask_dropped(&mut self, a: CsvAsk) {
+        let CsvAsk { tab, result, revision, at, text, .. } = a;
+        self.paste_not_done(LastPaste { tab, result, revision, step: None, text, format: None, at }, None);
+    }
+
     /// How many rows `plan` changes on the active tab's shown result: rows with a value set to
     /// another one, and the rows it adds.
     fn paste_changed_rows(&self, plan: &PastePlan) -> usize {
@@ -527,8 +534,8 @@ impl App {
     /// it asked; else said.
     pub(super) fn csv_ask_answer(&mut self, a: CsvAsk, format: Format) {
         if !self.csv_current(&a) {
-            self.ask_ended(Label::EditAskWithdrawn);
-            return self.flash(Notice::new(Label::EditPasteMoved, Level::Info));
+            self.csv_ask_dropped(a);
+            return self.ask_ended(Label::EditPasteMoved);
         }
         self.paste_in = Some(PasteIn { tab: a.tab, result: a.result, text: a.text, format: Some(format), again: None });
         self.edit_action(EditAction::Pasted);
@@ -563,8 +570,7 @@ impl App {
     pub(super) fn paste_ask_yes(&mut self, a: PasteAsk) {
         if !self.paste_current(&a) {
             self.paste_ask_dropped(a);
-            self.ask_ended(Label::EditAskWithdrawn);
-            return self.flash(Notice::new(Label::EditPasteMoved, Level::Info));
+            return self.ask_ended(Label::EditPasteMoved);
         }
         self.paste_do(a.plan, a.last, a.again);
     }

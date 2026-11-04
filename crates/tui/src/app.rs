@@ -588,7 +588,7 @@ pub struct App {
     pub apply_wait: Option<edit::ApplyWait>,
     /// A question (or a waiting Apply) ended without its answer: until when its answer keys are
     /// ignored, and what it said.
-    pub(crate) ask_gone: Option<(Instant, Label)>,
+    pub(crate) ask_gone: Option<(Instant, Msg)>,
     /// Text pasted into the grid, waiting for its result's table to be known.
     pub(crate) paste_in: Option<edit::PasteIn>,
     /// The last paste into a grid: `space d V` reads it again while it is the newest change.

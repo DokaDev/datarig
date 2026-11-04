@@ -2547,7 +2547,6 @@
 "edit.ask.keys" = "y 적용 · 다른 키는 취소"
 "edit.ask.cancelled" = "적용을 취소했습니다"
 "edit.ask.moved" = "적용을 취소했습니다: 변경이 바뀌었습니다"
-"edit.ask.withdrawn" = "질문을 거두었습니다 — 변경이 바뀌었습니다"
 "edit.ask.ignored" = "{said} · {key} 키는 무시했습니다"
 "edit.ask.checking" = "{count}개 행을 확인하는 중…"
 "edit.ask.changed" = "변경이 바뀌었습니다 — {keys}를 다시 누르세요"

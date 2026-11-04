@@ -904,8 +904,8 @@ fn the_question_reads_whole_at_80_columns() {
 }
 
 /// A `y` (U+315B with a Korean input source too) in the window after a question ended without
-/// its answer: nothing copied, `said` and the key said to be ignored; held too. Then `j` moves
-/// the cursor and, a second after, `y` copies.
+/// its answer: nothing copied, `said` and the key said to be ignored; held too, and `n` and `c`
+/// as Korean jamo (U+315C, U+314A). Then `j` moves the cursor and, a second after, `y` copies.
 fn answer_keys_are_ignored_for_a_second(h: &mut Harness, said_then: &str) {
     let c = clipboard(h);
     let state = |h: &Harness| (h.app.tab().grid.row, h.app.tab().grid.col, h.app.tab().grid.anchor, revision(h));
@@ -915,6 +915,10 @@ fn answer_keys_are_ignored_for_a_second(h: &mut Harness, said_then: &str) {
     assert_eq!(said(h), format!("{said_then} · y ignored"));
     h.key_kind(KeyCode::Char('y'), KeyModifiers::NONE, KeyEventKind::Repeat);
     h.type_text("\u{315B}");
+    for (jamo, key) in [("\u{315C}", 'n'), ("\u{314A}", 'c')] {
+        h.type_text(jamo);
+        assert_eq!(said(h), format!("{said_then} · {key} ignored"));
+    }
     h.keys("nc1");
     assert_eq!(c.last(), None, "held, Korean or another answer key: nothing copied");
     assert_eq!(state(h), before, "nothing else done");
@@ -943,7 +947,51 @@ fn a_y_right_after_a_question_was_withdrawn_is_ignored_for_a_second() {
     h.db(DbEvent::Keys(Ok(shop_keys())));
     assert!(h.app.status_ask_line().is_none());
     assert_eq!(said(&mut h), "Paste cancelled: the rows changed");
-    answer_keys_are_ignored_for_a_second(&mut h, "Question withdrawn — the changes moved");
+    answer_keys_are_ignored_for_a_second(&mut h, "Paste cancelled: the rows changed");
+}
+
+#[test]
+fn a_y_with_the_focus_on_the_inspector_right_after_a_question_ended_is_ignored_too() {
+    let mut h = ready(Lang::En);
+    let c = clipboard(&mut h);
+    paste(&mut h, "q@x,qq");
+    h.keys("a");
+    assert_eq!(said(&mut h), "Paste cancelled");
+    // The chart with the focus on the inspector: `y` copies its data.
+    h.keys("L");
+    let _ = h.draw(120, 40);
+    h.app.focus = Focus::Inspector;
+    assert_eq!(h.app.key_context(), Ctx::Chart);
+    h.keys("y");
+    assert_eq!(c.last(), None, "nothing copied");
+    assert_eq!(said(&mut h), "Paste cancelled · y ignored");
+    h.advance(ANSWER_GUARD);
+    h.keys("y");
+    assert!(c.last().is_some(), "a second after, y copies the chart's data");
+}
+
+#[test]
+fn the_text_of_a_question_about_commas_not_answered_is_read_again_by_space_d_v() {
+    for drop in ["key", "moved"] {
+        let mut h = ready(Lang::En);
+        paste(&mut h, "q@x,qq");
+        assert_eq!(h.app.key_context(), Ctx::StatusAsk, "{drop}");
+        match drop {
+            "key" => h.keys("a"),
+            _ => {
+                // The cursor moved away and back: the question is withdrawn, the changes as
+                // they were.
+                h.app.tab_mut().grid.row = 1;
+                h.db(DbEvent::Keys(Ok(shop_keys())));
+                h.app.tab_mut().grid.row = 0;
+            }
+        }
+        assert!(h.app.status_ask_line().is_none(), "{drop}");
+        h.advance(ANSWER_GUARD);
+        h.app.transient = None;
+        h.keys(" dV");
+        assert_eq!(pending(&h, 0, 1), Some(t("q@x,qq")), "{drop}: read as one value");
+    }
 }
 
 #[test]
