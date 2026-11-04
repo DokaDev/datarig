@@ -33,12 +33,14 @@ use ratatui::style::{Color, Style};
 use std::ops::Range;
 
 mod applied;
+mod ask;
 mod changes;
 mod lines;
 mod preview;
 mod tab;
 
-pub use applied::{Applied, Applying};
+pub use applied::{Applied, ApplyFailed, Applying};
+pub use ask::{ApplyAsk, ApplyWait, AskAction, StatusAsk};
 pub use changes::{ChangesModel, Checks, ListLine, Mark, ModelCache, Pointer, Problem};
 pub use lines::Lines;
 pub(crate) use preview::PreviewBody;
@@ -65,7 +67,7 @@ pub enum EditAction {
     DeleteRow,
     /// The pending changes in the Changes tab.
     Preview,
-    /// The preview, to apply them.
+    /// Apply them, once asked (the preview first when it is needed).
     Apply,
     /// Drop every pending change, once the user says so.
     Discard,
@@ -130,6 +132,11 @@ pub struct EditState {
     pub changes: ModelCache,
     /// Where the Changes tab of the result is.
     pub cursor: ChangesCursor,
+    /// Why the last Apply applied nothing, for the changes as they were then.
+    pub failed: Option<ApplyFailed>,
+    /// What an Apply did went with its transaction, said with this until the query runs
+    /// again.
+    pub gone: Option<Label>,
 }
 
 impl EditState {
@@ -161,17 +168,44 @@ impl EditState {
             tabs::TxEnd::Unknown => Label::EditAppliedUnknown,
         };
         self.applied = None;
+        self.gone = Some(label);
         Some(label)
     }
 
-    /// What an Apply did in a transaction that has not ended yet goes (`true`).
-    pub fn drop_uncommitted(&mut self) -> bool {
+    /// What an Apply did in a transaction that has not ended yet goes (`true`), said with
+    /// `label` until the query runs again.
+    pub fn drop_uncommitted(&mut self, label: Label) -> bool {
         let gone = self.applied.as_ref().is_some_and(|a| a.tx.is_some());
         if gone {
             self.applied = None;
+            self.gone = Some(label);
         }
         gone
     }
+
+    /// What the Changes tab of the result is about: its pending changes (being applied too),
+    /// what an Apply changed, or nothing but what it says (an Apply whose result is not known,
+    /// applied changes gone); `None`: there is no Changes tab.
+    pub fn tab_shows(&self) -> Option<TabShows> {
+        if !self.batch.is_empty() {
+            return Some(TabShows::Pending(self.batch.counts().total() as u64));
+        }
+        if self.applied.is_some() {
+            return Some(TabShows::Applied);
+        }
+        (self.applying.is_some() || self.apply_unknown || self.gone.is_some()).then_some(TabShows::Said)
+    }
+}
+
+/// What a result's Changes tab is about ([`EditState::tab_shows`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabShows {
+    /// This many pending changes.
+    Pending(u64),
+    /// What an Apply changed.
+    Applied,
+    /// Only what it says.
+    Said,
 }
 
 /// What a result's rows are to its edits.
@@ -445,7 +479,7 @@ impl App {
         match a {
             EditAction::Undo | EditAction::Redo => self.edit_history(a == EditAction::Redo),
             EditAction::Revert => self.edit_revert(),
-            EditAction::Apply => self.edit_preview_open(),
+            EditAction::Apply => self.apply_request(),
             EditAction::Preview => self.changes_open(),
             EditAction::Discard => self.edit_discard_ask(),
             EditAction::Cell
@@ -1399,6 +1433,7 @@ impl App {
             }
         }
         self.sweep_edit_preview();
+        self.sweep_status_ask();
         self.sweep_changes();
         // What became of an Apply's changes, said after the event's own outcome.
         let said: Vec<(TabId, Notice)> =

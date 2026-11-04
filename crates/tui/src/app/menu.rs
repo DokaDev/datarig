@@ -64,6 +64,7 @@ const EDIT_MENU: &[EditAction] = &[
     EditAction::DeleteRow,
     EditAction::Undo,
     EditAction::Preview,
+    EditAction::Apply,
     EditAction::Discard,
 ];
 

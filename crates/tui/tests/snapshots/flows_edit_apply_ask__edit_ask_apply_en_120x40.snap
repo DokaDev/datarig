@@ -1,5 +1,5 @@
 ---
-source: crates/tui/tests/flows_edit_preview.rs
+source: crates/tui/tests/flows_edit_apply_ask.rs
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
@@ -17,15 +17,15 @@ expression: backend
 "│                            ││ 10                                                                                     │"
 "│                            ││ 11 SELECT * FROM analytics.events ORDER BY created_at DESC;                            │"
 "│                            ││ 12                                                                                     │"
-"│ ╭ Apply changes — shop.users ──────────────────────────────────────────────────────────────────────────────────────╮─╯"
-"│ │ 1 update                                                                                                         │─╮"
-"│ │                                                                                                                  │ │"
-"│ │ Counting matching rows…                                                                                          │ │"
-"│ │                                                                                                                  │ │"
-"│ │ Runs in one transaction; commits at the end.                                                                     │ │"
-"│ │                                                                                                                  │ │"
-"│ │                                            [ Cancel ]     Copy SQL                                               │ │"
-"│ ╰─────────────────────────────────────────────────────────── y apply · c copy SQL · j/k scroll · Enter/Esc cancel ─╯ │"
+"│                            │╰────────────────────────────────────────────────────────────────────────────────────────╯"
+"│                            │╭ Results · 3 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮"
+"│                            ││ [Result 1]  Changes 2  Chart  Messages   2 pending ││ PK id: 2                         │"
+"│                            ││   │ PK id │ UQ email │ nickname                    ││ UQ email: b@x                    │"
+"│                            ││   │ int8  │ text     │ text                        ││ nickname: NULL                   │"
+"│                            ││ 1~│     1 │ z@x      │ ann                         ││                                  │"
+"│                            ││ 2-│     2 │ b@x      │ NULL                        ││                                  │"
+"│                            ││ 3 │     3 │ c@x      │ cy                          ││                                  │"
+"│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
@@ -41,4 +41,4 @@ expression: backend
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯"
-" NORMAL  local-pg │ 3 rows · 0ms                                                                                     EN "
+" Apply 2 changes to shop.users (1 update · 1 delete)?  y apply · any other key cancels                                  "

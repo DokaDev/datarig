@@ -22,6 +22,22 @@ use datarig_tui::keymap::Ctx;
 use ratatui::crossterm::event::KeyCode;
 use std::time::Duration;
 
+/// The profile's environment confirms every write: an Apply shows the preview before `y`.
+fn writes_config() -> Config {
+    use datarig_core::policy::Confirm;
+    let mut cfg = Config {
+        connections: vec![ConnectionConfig { policy: Some("stg".into()), ..ConnectionConfig::test_db() }],
+        ..Config::default()
+    };
+    cfg.policies.insert("stg", Policy { confirm: Confirm::Writes, ..Policy::default() });
+    cfg
+}
+
+/// Connected under [`writes_config`].
+fn connected(lang: Lang) -> Harness {
+    Harness::connected_with(&writes_config(), lang)
+}
+
 fn s(v: &str) -> Option<String> {
     Some(v.to_string())
 }
@@ -81,13 +97,7 @@ fn named() -> TableStructure {
 
 /// The users' rows by their key.
 fn ready(lang: Lang) -> Harness {
-    resolved(
-        Harness::connected(lang),
-        "SELECT id, email, nickname FROM shop.users",
-        users_columns(),
-        users_rows(),
-        named(),
-    )
+    resolved(connected(lang), "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows(), named())
 }
 
 /// `shop.users` without any key: its rows are found by their values. `four`: only its id,
@@ -106,7 +116,7 @@ fn keyless(four: bool) -> TableStructure {
 /// The users' id, email and nickname, found by their values (identical rows are refused).
 fn by_values(lang: Lang) -> Harness {
     resolved(
-        Harness::connected(lang),
+        connected(lang),
         "SELECT id, email, nickname FROM shop.users",
         users_columns(),
         users_rows(),
@@ -123,7 +133,7 @@ fn identical(lang: Lang) -> Harness {
         meta_from("nickname", "text", false, USERS, 4),
     ];
     let rows = vec![vec![s("1"), s("a@x"), s("Ann"), s("ann")], vec![s("1"), s("a@x"), s("Ann"), s("ann")]];
-    resolved(Harness::connected(lang), "SELECT id, email, name, nickname FROM shop.users", columns, rows, keyless(true))
+    resolved(connected(lang), "SELECT id, email, name, nickname FROM shop.users", columns, rows, keyless(true))
 }
 
 fn edits(h: &Harness) -> &EditState {
@@ -150,6 +160,18 @@ fn type_cell(h: &mut Harness, v: &str) {
 
 fn lines(h: &Harness) -> Vec<PreviewLine> {
     h.app.edit_preview_view().expect("the preview is open").lines
+}
+
+/// An Apply refused for the changes' problems: nothing asked, the Changes tab shows them with
+/// the focus, the first selected, and the status says how many; their texts.
+fn blocked(h: &mut Harness) -> Vec<String> {
+    assert!(h.app.overlays.top().is_none() && h.app.ask.is_none(), "nothing asked");
+    assert_eq!(h.app.key_context(), Ctx::Changes);
+    assert_eq!(edits(h).cursor.line, 0, "the first problem selected");
+    let m = h.app.shown_changes().expect("a model");
+    assert_eq!(said(h), Some(Msg::EditAskProblems { count: m.problems.len() as u64 }));
+    assert!(!h.sent().iter().any(|c| matches!(c, DbCommand::ApplyEdits { .. })), "nothing applied");
+    m.problems.iter().map(|p| p.text.clone()).collect()
 }
 
 fn step(sql: &str, n: u64, risky: bool) -> PreviewLine {
@@ -261,15 +283,14 @@ fn rows_found_by_their_values_are_counted_on_the_tab_first() {
     let condition = r#""id" = '1' AND "email" = 'a@x' AND "nickname" = 'ann'"#;
     assert_eq!(asked.len(), 1);
     assert_eq!(asked[0].1, format!(r#"SELECT count(*) FROM "shop"."users" WHERE {condition}"#));
-    assert_eq!(lines(&h), [PreviewLine::Note("Counting matching rows…".into())]);
-    assert!(!h.app.edit_preview_view().unwrap().apply);
-    h.key(KeyCode::Char('y'));
-    let reason = "Counting matching rows…".to_string();
-    assert_eq!(said(&mut h), Some(Msg::EditPreviewCantApply { reason }));
-    // Another count's answer is not the preview's.
+    // The dialog waits for the count; the status bar says so.
+    assert!(h.app.overlays.edit_preview().is_none());
+    assert_eq!(h.app.apply_wait_text().as_deref(), Some("Checking 1 row…"));
+    // Another count's answer is not the Apply's.
     h.db(DbEvent::Counted { id: asked[0].0 + 100, result: Ok(5), snapshot: false });
-    assert_eq!(lines(&h), [PreviewLine::Note("Counting matching rows…".into())]);
+    assert!(h.app.overlays.edit_preview().is_none());
     h.db(DbEvent::Counted { id: asked[0].0, result: Ok(1), snapshot: false });
+    assert!(h.app.apply_wait_text().is_none());
     assert_eq!(
         lines(&h),
         [
@@ -449,22 +470,17 @@ fn a_row_gone_ambiguous_or_not_counted_is_said_and_nothing_can_be_applied() {
         h.command("apply");
         let asked = counts(&mut h);
         h.db(DbEvent::Counted { id: asked[0].0, result: answer, snapshot: false });
-        let v = h.app.edit_preview_view().unwrap();
-        assert!(!v.apply, "{want}");
-        match &v.lines[..] {
-            [PreviewLine::Problem(text)] => assert!(text.starts_with(want), "{text}"),
+        match &blocked(&mut h)[..] {
+            [text] => assert!(text.starts_with(want), "{text}"),
             other => panic!("{other:?}"),
         }
-        assert_eq!(h.app.edit_preview_buttons().len(), 2, "no Apply button");
-        h.key(KeyCode::Char('y'));
-        assert!(matches!(said(&mut h), Some(Msg::EditPreviewCantApply { .. })));
-        h.key(KeyCode::Esc);
+        assert!(h.app.overlays.edit_preview().is_none(), "no dialog");
     }
 }
 
-/// The changes hold every row's problem, each with its row; the dialog says the first.
+/// The changes hold every row's problem, each with its row; the Apply shows them all.
 #[test]
-fn every_rows_problem_is_in_the_changes_with_its_row_and_the_dialog_says_the_first() {
+fn every_rows_problem_is_in_the_changes_with_its_row_and_the_apply_shows_them() {
     let mut h = by_values(Lang::En);
     type_cell(&mut h, "z@x");
     h.keys("j");
@@ -480,7 +496,7 @@ fn every_rows_problem_is_in_the_changes_with_its_row_and_the_dialog_says_the_fir
     assert!(found[0].0.starts_with("Row 1 matches no row of the table now"), "{found:?}");
     assert!(found[1].0.starts_with("Row 2 matches 2 rows"), "{found:?}");
     assert_eq!((found[0].1, found[1].1), (Some((RowAt::Read(0), None)), Some((RowAt::Read(1), None))));
-    assert_eq!(lines(&h), [PreviewLine::Problem(m.problems[0].text.clone())]);
+    assert_eq!(blocked(&mut h).len(), 2);
     let cells: Vec<_> = m.list.iter().map(|l| (l.at, l.col, l.new.as_deref())).collect();
     assert_eq!(cells, [(RowAt::Read(0), Some(1), Some("'z@x'")), (RowAt::Read(1), Some(1), Some("'y@x'"))]);
 }
@@ -529,12 +545,9 @@ fn a_new_row_leaving_a_not_null_column_without_a_default_is_listed_and_not_count
     h.keys("jo");
     h.command("apply");
     assert!(counts(&mut h).is_empty(), "nothing is counted for changes that cannot be made");
-    let want =
-        |row: u32| PreviewLine::Problem(format!("Row {row}: email is NOT NULL and has no default; give it a value"));
-    assert_eq!(lines(&h), [want(4), want(5)]);
-    h.key(KeyCode::Char('y'));
-    assert!(matches!(said(&mut h), Some(Msg::EditPreviewCantApply { .. })));
-    h.key(KeyCode::Esc);
+    let want = |row: u32| format!("Row {row}: email is NOT NULL and has no default; give it a value");
+    assert_eq!(blocked(&mut h), [want(4), want(5)]);
+    h.keys("H");
     h.keys("Gk");
     h.keys("l");
     type_cell(&mut h, "n@x");
@@ -556,14 +569,11 @@ fn c_copies_every_statement_through_the_clipboard_setting() {
     assert_eq!(clip.last(), Some(format!("{CHECK_1};\n{UPDATE_1};\n")));
     assert!(matches!(said(&mut h), Some(Msg::EditPreviewCopied { count: 2, .. })));
     assert_eq!(h.app.key_context(), Ctx::EditPreview, "the dialog stays");
-    // Nothing to copy while counting.
+    // While the rows are counted there is no dialog to copy from yet.
     let mut h = by_values(Lang::En);
-    let clip = FakeClipboard::attach(&mut h, false, &[]);
     type_cell(&mut h, "z@x");
     h.command("apply");
-    h.key(KeyCode::Char('c'));
-    assert_eq!(said(&mut h), Some(Label::EditPreviewNothingToCopy.into()));
-    assert_eq!(clip.last(), None);
+    assert!(h.app.overlays.edit_preview().is_none(), "the dialog waits for the counts");
 }
 
 #[test]
@@ -572,7 +582,10 @@ fn the_footer_says_how_the_apply_stands_to_a_transaction() {
         connections: vec![ConnectionConfig { policy: Some("stg".into()), ..ConnectionConfig::test_db() }],
         ..Config::default()
     };
-    cfg.policies.insert("stg", Policy { commit: CommitRule::Manual, ..Policy::default() });
+    cfg.policies.insert(
+        "stg",
+        Policy { commit: CommitRule::Manual, confirm: datarig_core::policy::Confirm::Writes, ..Policy::default() },
+    );
     let mut h = resolved(
         {
             let mut h = Harness::with_config(&cfg, Lang::En);
@@ -654,8 +667,12 @@ fn mysql_products() -> Harness {
     let driver = FakeDriver::default();
     driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
     let cfg = Config {
-        connections: vec![ConnectionConfig { driver: "mysql".into(), ..ConnectionConfig::test_db() }],
-        ..Config::default()
+        connections: vec![ConnectionConfig {
+            driver: "mysql".into(),
+            policy: Some("stg".into()),
+            ..ConnectionConfig::test_db()
+        }],
+        ..writes_config()
     };
     let mut h = Harness::with_driver(&cfg, Lang::En, driver);
     h.db(DbEvent::Connected);
@@ -717,9 +734,9 @@ fn a_mysql_new_rows_decimal_is_typed_and_its_not_null_columns_must_be_given() {
     let mut h = mysql_products();
     h.keys("o");
     h.command("apply");
-    let want = |c: &str| PreviewLine::Problem(format!("Row 2: {c} is NOT NULL and has no default; give it a value"));
-    assert_eq!(lines(&h), [want("name"), want("price")]);
-    h.key(KeyCode::Esc);
+    let want = |c: &str| format!("Row 2: {c} is NOT NULL and has no default; give it a value");
+    assert_eq!(blocked(&mut h), [want("name"), want("price")]);
+    h.keys("H");
     h.keys("$");
     type_cell(&mut h, "9.99");
     assert_eq!(said(&mut h), None, "not refused");
@@ -762,7 +779,10 @@ fn manual(lang: Lang) -> Harness {
         connections: vec![ConnectionConfig { policy: Some("stg".into()), ..ConnectionConfig::test_db() }],
         ..Config::default()
     };
-    cfg.policies.insert("stg", Policy { commit: CommitRule::Manual, ..Policy::default() });
+    cfg.policies.insert(
+        "stg",
+        Policy { commit: CommitRule::Manual, confirm: datarig_core::policy::Confirm::Writes, ..Policy::default() },
+    );
     let mut h = Harness::with_config(&cfg, lang);
     h.db(DbEvent::Connected);
     resolved(h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows(), named())
@@ -786,13 +806,15 @@ fn the_preview_on_screen() {
         h.db(DbEvent::Counted { id: asked[0].0, result: Ok(3), snapshot: false });
         h
     });
-    screens("edit_preview_counting", |lang| {
-        let mut h = by_values(lang);
-        type_cell(&mut h, "z@x");
-        h.command("apply");
-        h
-    });
-    screens("edit_preview_count_failed", |lang| {
+    // The Apply waits for the count, the status bar says so (no dialog yet).
+    let mut h = by_values(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("apply");
+    for (w, hh) in [(120, 40), (80, 24)] {
+        assert_screen!(format!("edit_apply_checking_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
+    }
+    // Problems: the Changes tab shows them instead of a dialog.
+    screens("edit_apply_count_failed", |lang| {
         let mut h = by_values(lang);
         type_cell(&mut h, "z@x");
         h.command("apply");
@@ -801,7 +823,7 @@ fn the_preview_on_screen() {
         h.db(DbEvent::Counted { id: asked[0].0, result, snapshot: false });
         h
     });
-    screens("edit_preview_no_default", |lang| {
+    screens("edit_apply_no_default", |lang| {
         let mut h = ready(lang);
         h.keys("o");
         h.command("apply");
@@ -815,7 +837,7 @@ fn the_preview_on_screen() {
 #[test]
 fn a_new_row_is_refused_while_the_table_has_a_required_column_the_result_does_not_show() {
     let mut h = resolved(
-        Harness::connected(Lang::En),
+        connected(Lang::En),
         "SELECT id, email, nickname FROM shop.users",
         users_columns(),
         users_rows(),
@@ -825,13 +847,10 @@ fn a_new_row_is_refused_while_the_table_has_a_required_column_the_result_does_no
     type_cell(&mut h, "n@x");
     h.command("apply");
     let want = "Row 4: name is NOT NULL, has no default and is not in the result; add it to the SELECT";
-    assert_eq!(lines(&h), [PreviewLine::Problem(want.into())]);
-    assert!(!h.app.edit_preview_view().unwrap().apply);
-    h.key(KeyCode::Char('y'));
-    assert_eq!(said(&mut h), Some(Msg::EditPreviewCantApply { reason: want.into() }));
-    assert!(h.sent().is_empty(), "nothing counted, nothing applied");
+    assert!(h.sent().iter().all(|c| !matches!(c, DbCommand::Count { .. })), "nothing counted");
+    assert_eq!(blocked(&mut h), [want.to_string()]);
     // Changes of the rows read leave the table's other columns as they are.
-    h.key(KeyCode::Esc);
+    h.keys("H");
     h.keys("G");
     h.keys("D");
     h.keys("gg");
@@ -981,7 +1000,7 @@ fn applied_changes_show_over_the_rows_and_the_changes_are_cleared() {
     assert_eq!(a.new, [vec![text("4"), text("n@x"), Value::Null]], "the new row as stored");
     assert_eq!(a.tx, None);
     let s = screen(&mut h, 120, 40);
-    assert!(s.contains("applied · re-run to refresh"), "{s}");
+    assert!(s.contains("]  Applied  Chart") && s.contains("applied"), "the strip and the badge: {s}");
     assert!(s.contains("ann!") && s.contains("n@x"), "{s}");
     assert!(h.app.tab().exec.running.is_none(), "the tab is free");
     // The rows are read again before they are edited again.
@@ -1180,7 +1199,8 @@ fn under_manual_commit_the_transactions_end_decides_the_applied_changes() {
     h.db(DbEvent::Block(false));
     h.db(DbEvent::TxOpen(false));
     assert_eq!(applied(&h).tx, None, "committed");
-    assert!(screen(&mut h, 120, 40).contains("applied · re-run to refresh"));
+    h.command("changes");
+    assert!(screen(&mut h, 120, 40).contains("Applied · re-run to refresh"));
     // ROLLBACK, the server's rollback, a lost connection.
     for how in ["rollback", "server", "lost"] {
         let mut h = manual(Lang::En);
@@ -1541,7 +1561,7 @@ fn only_the_values_written_take_the_applied_tone() {
 /// changes are not committed (not only that the rows were read in a transaction).
 #[test]
 fn the_applied_badge_wins_over_the_transactions_mark() {
-    let mut h = Harness::connected(Lang::En);
+    let mut h = connected(Lang::En);
     h.db(DbEvent::Block(true));
     h.db(DbEvent::TxOpen(true));
     let mut h = resolved(h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows(), named());
@@ -1557,15 +1577,15 @@ fn the_applied_badge_wins_over_the_transactions_mark() {
     assert!(!s.contains("uncommitted (in tx)"), "{s}");
 }
 
-/// At 80x24 the strip has room for a short badge only: it says the rows were applied, and
-/// whether that is committed.
+/// At 80x24 the strip has room for short labels only: its Changes tab says the rows were
+/// applied, and that tab whether that is committed.
 #[test]
 fn the_applied_badge_fits_a_small_screen() {
     for lang in [Lang::En, Lang::Ko] {
         let (mut h, id, steps) = three_applying(ready(lang));
         h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
         h.app.transient = None;
-        let want = h.app.i18n.label(Label::EditBadgeAppliedShort).to_string();
+        let want = h.app.i18n.label(Label::ResultsTabAppliedShort).to_string();
         let s = screen(&mut h, 80, 24);
         let chart = h.app.i18n.label(Label::ResultsTabChart).to_string();
         let strip = s.lines().find(|l| l.contains(&chart)).unwrap_or_default().to_string();
@@ -1576,11 +1596,10 @@ fn the_applied_badge_fits_a_small_screen() {
         h.db(DbEvent::Block(true));
         h.db(DbEvent::TxOpen(true));
         h.app.transient = None;
-        let want = h.app.i18n.label(Label::EditBadgeNotCommittedShort).to_string();
+        h.command("changes");
+        let want = h.app.i18n.label(Label::ChangesAppliedKept).to_string();
         let s = screen(&mut h, 80, 24);
-        let chart = h.app.i18n.label(Label::ResultsTabChart).to_string();
-        let strip = s.lines().find(|l| l.contains(&chart)).unwrap_or_default().to_string();
-        assert!(strip.contains(&want), "{lang:?}: {strip}");
+        assert!(s.contains(&want), "{lang:?}: {s}");
     }
 }
 
@@ -1757,13 +1776,8 @@ fn a_copy_takes_the_values_shown() {
 fn a_pending_default_is_copied_only_into_an_insert() {
     let mut st = named();
     st.columns[3].default = Some("'anon'::text".into());
-    let mut h = resolved(
-        Harness::connected(Lang::En),
-        "SELECT id, email, nickname FROM shop.users",
-        users_columns(),
-        users_rows(),
-        st,
-    );
+    let mut h =
+        resolved(connected(Lang::En), "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows(), st);
     let clip = FakeClipboard::attach(&mut h, false, &[]);
     h.keys("l");
     h.keys(" dD");
@@ -1895,7 +1909,7 @@ fn a_kept_apply_counts_in_the_open_transaction() {
 /// Apply moved (deleted rows shift the rest up): refused, the query is run again instead.
 #[test]
 fn paging_on_after_an_apply_is_refused() {
-    let mut h = Harness::connected(Lang::En);
+    let mut h = connected(Lang::En);
     h.db(DbEvent::Keys(Ok(shop_keys())));
     h.app.run(vec!["SELECT id, email, nickname FROM shop.users".into()]);
     let qid = h.app.tab().exec.query_id;
@@ -1976,7 +1990,7 @@ fn an_export_of_the_rows_held_is_refused_while_they_are_edited() {
 /// the file.
 #[test]
 fn an_export_of_every_row_says_the_pending_changes_are_left_out() {
-    let mut h = Harness::connected(Lang::En);
+    let mut h = connected(Lang::En);
     h.db(DbEvent::Keys(Ok(shop_keys())));
     h.app.run(vec!["SELECT id, email, nickname FROM shop.users".into()]);
     let qid = h.app.tab().exec.query_id;
@@ -2057,13 +2071,8 @@ fn deleting_the_profile_says_the_pending_changes_it_drops() {
 fn a_copy_of_an_applied_default_says_default() {
     let mut st = named();
     st.columns[3].default = Some("'anon'::text".into());
-    let mut h = resolved(
-        Harness::connected(Lang::En),
-        "SELECT id, email, nickname FROM shop.users",
-        users_columns(),
-        users_rows(),
-        st,
-    );
+    let mut h =
+        resolved(connected(Lang::En), "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows(), st);
     let clip = FakeClipboard::attach(&mut h, false, &[]);
     h.keys("l");
     h.keys(" dD");
@@ -2086,8 +2095,12 @@ fn mysql_people(lang: Lang, rows: Vec<Vec<Option<String>>>) -> Harness {
     let driver = FakeDriver::default();
     driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
     let cfg = Config {
-        connections: vec![ConnectionConfig { driver: "mysql".into(), ..ConnectionConfig::test_db() }],
-        ..Config::default()
+        connections: vec![ConnectionConfig {
+            driver: "mysql".into(),
+            policy: Some("stg".into()),
+            ..ConnectionConfig::test_db()
+        }],
+        ..writes_config()
     };
     let mut h = Harness::with_driver(&cfg, lang, driver);
     h.db(DbEvent::Connected);

@@ -664,9 +664,10 @@ impl Tab {
         v
     }
 
-    /// The shown row result has pending changes: the Changes tab is there.
+    /// The shown row result has something for the Changes tab: pending changes, changes being
+    /// applied or applied, an Apply whose result is not known, applied changes gone.
     pub fn has_changes(&self) -> bool {
-        matches!(&self.results, super::Results::Rows(rs) if !rs.edit.batch.is_empty())
+        matches!(&self.results, super::Results::Rows(rs) if rs.edit.tab_shows().is_some())
     }
 
     /// Show the row result of statement `i` (the shown one is parked with its grid first).
@@ -873,7 +874,7 @@ impl Tab {
     fn applied_gone(&mut self, label: datarig_core::i18n::Label) {
         let mut gone = false;
         for rs in self.row_results_mut() {
-            gone |= rs.edit.drop_uncommitted();
+            gone |= rs.edit.drop_uncommitted(label);
         }
         if gone {
             self.edit_gone(label);

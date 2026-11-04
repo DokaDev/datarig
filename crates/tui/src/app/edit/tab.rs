@@ -42,6 +42,8 @@ pub struct ChangesCursor {
     pub scroll: usize,
     pub sql_scroll: usize,
     pub page: usize,
+    /// The statements scroll to the one that failed when they are next drawn.
+    pub seek: bool,
 }
 
 /// The active tab's shown result and the revision of its changes, and since when they are so.
@@ -187,7 +189,8 @@ impl App {
     fn changes_copy(&mut self) {
         let Some(m) = self.shown_changes() else { return };
         let n = match &m.planned {
-            Planned::Ready(plan) => return self.copy_steps(plan),
+            Planned::Ready(plan) => return self.copy_steps(&plan.steps),
+            Planned::Sent(steps) => return self.copy_steps(steps),
             _ => m.problems.len() as u64,
         };
         let msg = match n {
@@ -197,14 +200,31 @@ impl App {
         self.flash(Notice::new(msg, Level::Info));
     }
 
-    /// The statements the Changes tab shows: the preview's, rows still to be counted said so.
+    /// The statements the Changes tab shows: the preview's, rows still to be counted said so,
+    /// a choice among identical rows said to be made when applying, the statement the last
+    /// Apply failed at marked.
     pub(crate) fn changes_sql_lines(&self, m: &ChangesModel) -> Vec<PreviewLine> {
-        match &m.planned {
-            Planned::Refused(PlanError::NotCounted { .. }) => {
-                vec![PreviewLine::Note(self.i18n.label(Label::EditPreviewCounting).to_string())]
-            }
-            _ => m.sql.clone(),
+        if let Planned::Refused(PlanError::NotCounted { .. }) = &m.planned {
+            return vec![PreviewLine::Note(self.i18n.label(Label::EditPreviewCounting).to_string())];
         }
+        let failed = rows_of(self.tab())
+            .and_then(|rs| rs.edit.failed.as_ref().filter(|f| f.revision == rs.edit.batch.revision()))
+            .and_then(|f| f.sql.clone());
+        let mut marked = false;
+        m.sql
+            .iter()
+            .map(|l| match l {
+                PreviewLine::Choose { text, .. } => PreviewLine::Choose {
+                    text: text.clone(),
+                    keys: self.i18n.label(Label::ChangesChooseOnApply).to_string(),
+                },
+                PreviewLine::Step { sql, expect, .. } if !marked && failed.as_deref() == Some(sql.as_str()) => {
+                    marked = true;
+                    PreviewLine::Failed { sql: sql.clone(), expect: expect.clone() }
+                }
+                l => l.clone(),
+            })
+            .collect()
     }
 
     /// The Changes tab's first line: which result and table (`Changes — Result 1 · shop.users`),
@@ -225,14 +245,28 @@ impl App {
         (title, m.summary.clone(), problems)
     }
 
-    /// Where the Apply of the shown result's changes stands, when it says something: being
-    /// applied, or not known to have been (`true`: a problem).
-    pub(crate) fn changes_status(&self) -> Option<(String, bool)> {
+    /// Where the Apply of the shown result's changes stands, when it says something, in its
+    /// tone: being applied; applied (committed or not); gone with its transaction; not known to
+    /// have been; why the last one applied nothing.
+    pub(crate) fn changes_status(&self) -> Option<(String, Level)> {
         let rs = rows_of(self.tab())?;
+        let i18n = &self.i18n;
         if rs.edit.applying.is_some() {
-            return Some((self.i18n.label(Label::EditApplying).to_string(), false));
+            let count = rs.edit.batch.counts().total() as u64;
+            return Some((i18n.msg(&Msg::ChangesApplying { count }).to_string(), Level::Info));
         }
-        rs.edit.apply_unknown.then(|| (self.i18n.label(Label::EditFailedUnknown).to_string(), true))
+        if let Some(a) = rs.edit.applied.as_ref().filter(|_| rs.edit.batch.is_empty()) {
+            let label = if a.tx.is_some() { Label::ChangesAppliedKept } else { Label::ChangesApplied };
+            return Some((i18n.label(label).to_string(), Level::Success));
+        }
+        if let Some(label) = rs.edit.gone.filter(|_| rs.edit.batch.is_empty()) {
+            return Some((i18n.label(label).to_string(), Level::Warning));
+        }
+        if rs.edit.apply_unknown {
+            return Some((i18n.label(Label::EditFailedUnknown).to_string(), Level::Error));
+        }
+        let f = rs.edit.failed.as_ref().filter(|f| f.revision == rs.edit.batch.revision())?;
+        Some((f.text.clone(), Level::Error))
     }
 
     /// Another result of the active tab has pending changes too: which and how many.
@@ -244,9 +278,13 @@ impl App {
         Some(self.i18n.msg(&Msg::ChangesOtherPending { result, count }).to_string())
     }
 
-    /// How an Apply of the active tab's changes stands to a transaction, in words.
+    /// How an Apply of the active tab's changes stands to a transaction, in words (nothing
+    /// while none is pending).
     pub(crate) fn changes_tx_text(&self) -> String {
-        self.preview_tx_text(self.tab().id)
+        match rows_of(self.tab()) {
+            Some(rs) if !rs.edit.batch.is_empty() => self.preview_tx_text(self.tab().id),
+            _ => String::new(),
+        }
     }
 
     /// The keys of the Changes tab under it: each with what it does, or (`short`) the keys

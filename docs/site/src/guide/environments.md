@@ -16,8 +16,9 @@
   [MySQL](mysql.md#read-only-profiles).)
 - **Editing data.** A read-only environment refuses [editing a result](editing.md) ("Read-only:
   the connection's environment is read-only"), and so does a tab whose session opened while it
-  was. With `confirm = "writes"` the Apply dialog is the confirmation: `y` there
-  applies, and no second dialog opens.
+  was. With `confirm = "writes"` an Apply shows its statements in the Apply dialog before
+  `y` applies them (elsewhere it asks on the status line); that dialog is the confirmation, no
+  second one opens.
 - **What it is not.** The confirmation is a guardrail against mistakes in what the text shows.
   Functions called from a query, triggers, views and rules are not inspected; a read-only
   environment is the guarantee.

@@ -25,6 +25,7 @@
 //! │  ├─ grid.edit             [text]   (the cell editor over a cell of the grid)
 //! │  └─ overlay.cell_viewer
 //! ├─ overlay.cell_editor    [text]   (a cell's value of several lines, in vim modes)
+//! ├─ status.ask             (the status bar's question: `y` does it, any other key cancels)
 //! └─ overlay.*              (which-key, help, help filter, command line, quick connect,
 //!                            tab list, profile form, settings, export dialog, chooser, chooser filter, name input,
 //!                            saved-queries tree and its name field, action menu, password,
@@ -81,10 +82,11 @@ pub enum Ctx {
     WhichKey,
     Help,
     HelpFilter,
+    StatusAsk,
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 46] = [
+    pub const ALL: [Ctx; 47] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -131,6 +133,7 @@ impl Ctx {
         Ctx::WhichKey,
         Ctx::Help,
         Ctx::HelpFilter,
+        Ctx::StatusAsk,
     ];
 
     /// Name used in `[keymap.<name>]` and the docs.
@@ -182,6 +185,7 @@ impl Ctx {
             Ctx::WhichKey => "overlay.which_key",
             Ctx::Help => "overlay.help",
             Ctx::HelpFilter => "overlay.help.filter",
+            Ctx::StatusAsk => "status.ask",
         }
     }
 
@@ -375,6 +379,9 @@ impl Ctx {
                 "Keyboard help: one list of every context; the sections of the context it was opened from come first, open; the pointer selects the row under it."
             }
             Ctx::HelpFilter => "The `/` filter of the keyboard help.",
+            Ctx::StatusAsk => {
+                "The status bar's one-line question before an Apply of a result's changes: `y` applies them; any other key, a click or a paste cancels, and does nothing else."
+            }
         }
     }
 
@@ -427,6 +434,7 @@ impl Ctx {
             Ctx::WhichKey => Label::KeyctxOverlayWhichKey,
             Ctx::Help => Label::KeyctxOverlayHelp,
             Ctx::HelpFilter => Label::KeyctxOverlayHelpFilter,
+            Ctx::StatusAsk => Label::KeyctxStatusAsk,
         }
     }
 }

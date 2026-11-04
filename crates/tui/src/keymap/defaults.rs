@@ -695,6 +695,7 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (Password, &["esc", "enter", "tab", "shift+tab"], "password prompt"),
     (Password, TEXT, "text input"),
     (Confirm, &["y", "n", "enter", "esc"], "confirmation (Enter keeps what would be lost)"),
+    (StatusAsk, &["y"], "the status bar's question: y does it, any other key cancels"),
     (
         RunConfirm,
         &["y", "n", "enter", "esc", "tab", "shift+tab", "left", "right", "h", "l"],

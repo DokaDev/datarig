@@ -2431,7 +2431,7 @@
 "edit.invalid.rounded" = "{type_name} would store it rounded, as {stored}"
 "edit.invalid.trailing_spaces" = "ends in spaces, which a CHAR column drops"
 "action.edit.preview" = "Show changes"
-"action.edit.apply" = "Apply the pending changes (shown first, to confirm)"
+"action.edit.apply" = "Apply the pending changes (asked first)"
 "action.edit.discard" = "Drop every pending change of the result"
 "hint.apply" = "apply"
 "keyctx.overlay.edit_preview" = "Pending changes"
@@ -2537,3 +2537,24 @@
 "setting.changes_view.sql" = "SQL, the statements that apply them"
 "export.edited_pending" = "Not exported: this result has pending changes; apply or discard them, or run the query again — see Changes"
 "chart.edited_pending" = "Not drawn: this result has pending changes. Apply or discard them, or run the query again — see Changes"
+
+# Asking for an Apply
+"edit.ask.apply" = { one = "Apply {count} change to {table} ({summary})?", other = "Apply {count} changes to {table} ({summary})?" }
+"edit.ask.apply_short" = { one = "Apply {count} change? y/n", other = "Apply {count} changes? y/n" }
+"edit.ask.apply_short_deletes" = { one = "Apply {count} change ({deletes})? y/n", other = "Apply {count} changes ({deletes})? y/n" }
+"edit.ask.keys" = "y apply · any other key cancels"
+"edit.ask.cancelled" = "Apply cancelled"
+"edit.ask.moved" = "Apply cancelled: the changes changed"
+"edit.ask.checking" = { one = "Checking {count} row…", other = "Checking {count} rows…" }
+"edit.ask.changed" = "Changes changed — press {keys} again"
+"edit.ask.problems" = { one = "Can't apply: {count} problem — see Changes", other = "Can't apply: {count} problems — see Changes" }
+"keyctx.status_ask" = "Status bar question"
+"changes.applying" = { one = "Applying {count} change…", other = "Applying {count} changes…" }
+"changes.applied" = "Applied · re-run to refresh"
+"changes.applied_kept" = "Applied · not committed"
+"changes.choose_on_apply" = "The Apply asks which"
+"results.tab.applied" = "Applied"
+"results.tab.applied_short" = "Appl"
+"results.tab.changes_plain" = "Changes"
+"results.tab.changes_plain_short" = "Chg"
+"tips.changes_view" = "{setting} shows the SQL of the changes first"

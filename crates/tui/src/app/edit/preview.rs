@@ -1,10 +1,9 @@
-//! The preview of a result's pending changes (`:changes`, `:apply`): the statements that apply
-//! them, each with the count it must give, in a dialog that is also the question whether to
-//! apply them. Cancel is the default: only `y` applies.
+//! The preview of a result's pending changes before an Apply that needs one ([`super::ask`]): the
+//! statements that apply them, each with the count it must give, in a dialog that is also the
+//! question whether to apply them. Cancel is the default: only `y` applies.
 //!
-//! Rows found by their values are counted first, with plain reads on the tab's own session (they
-//! see its open transaction, as the Apply will): until every count came the dialog says it
-//! counts, and a failure is shown instead of the statements. What it shows is the changes'
+//! It opens once the rows found by their values are counted (with plain reads on the tab's own
+//! session: they see its open transaction, as the Apply will). What it shows is the changes'
 //! model ([`ChangesModel`]); a change of the result, its rows' connection or its changes closes
 //! the dialog.
 //!
@@ -29,8 +28,6 @@ pub struct EditPreview {
     revision: u64,
     target: EditTarget,
     format: EditFormat,
-    /// Why the last Apply applied nothing.
-    pub(super) apply_failed: Option<String>,
     /// After an Apply whose result is not known, `y` was pressed once: the next applies again.
     again: bool,
     /// The first line of the body on screen.
@@ -68,6 +65,11 @@ pub enum PreviewLine {
         expect: String,
         risky: bool,
     },
+    /// The statement the last Apply failed at, with the count it had to give.
+    Failed {
+        sql: String,
+        expect: String,
+    },
     /// A row that matches several identical rows: which to change.
     Choose {
         text: String,
@@ -97,26 +99,13 @@ pub struct PreviewView {
 }
 
 impl App {
-    /// `space d a`, `:apply`: the preview of the shown result's pending changes. Refused as an
-    /// edit key is, and with nothing pending; the rows found by their values are counted first.
-    pub(super) fn edit_preview_open(&mut self) {
-        let Some((_, format, bound)) = self.edit_gate() else { return };
+    /// The preview of the shown result's pending changes, as counted for them, before an Apply
+    /// (`bound`: what the rows were read under, `format`: the edits the server takes).
+    pub(super) fn edit_preview_push(&mut self, format: EditFormat, bound: Bound) {
         let t = self.tab();
         let Some(rs) = rows_of(t) else { return };
-        if rs.edit.batch.is_empty() {
-            return self.flash(Notice::new(Label::EditNothingPending, Level::Info));
-        }
-        let Target::Ready(target) = &rs.edit.target else {
-            return self.say_edit_read_only(Label::EditWhyNotResolved);
-        };
-        if self.tab_busy(t.id) {
-            return self.flash_busy();
-        }
+        let Target::Ready(target) = &rs.edit.target else { return };
         let (tab, result, revision, target) = (t.id, rs.id, rs.edit.batch.revision(), (**target).clone());
-        self.send_counts(tab, format);
-        self.overlays.close(OverlayKind::Commands);
-        self.overlays.close(OverlayKind::WhichKey);
-        self.key_state.clear();
         let p = EditPreview {
             tab,
             result,
@@ -124,7 +113,6 @@ impl App {
             revision,
             target,
             format,
-            apply_failed: None,
             again: false,
             scroll: 0,
             buttons: Buttons::default(),
@@ -228,8 +216,8 @@ impl App {
         if rs.is_some_and(|rs| rs.edit.applying.is_some()) {
             first.push(PreviewLine::Note(i18n.label(Label::EditApplying).to_string()));
             apply = false;
-        } else if let Some(e) = &p.apply_failed {
-            first.push(PreviewLine::Problem(e.clone()));
+        } else if let Some(e) = rs.and_then(|rs| rs.edit.failed.as_ref().filter(|f| f.revision == p.revision)) {
+            first.push(PreviewLine::Problem(e.text.clone()));
         } else if rs.is_some_and(|rs| rs.edit.apply_unknown) {
             first.push(PreviewLine::Problem(i18n.label(Label::EditFailedUnknown).to_string()));
         }
@@ -303,14 +291,14 @@ impl App {
         let Planned::Ready(plan) = &m.planned else {
             return self.flash(Notice::new(Label::EditPreviewNothingToCopy, Level::Info));
         };
-        self.copy_steps(plan);
+        self.copy_steps(&plan.steps);
     }
 
-    /// Every statement of `plan`, in order and whole, to the clipboard: each as it is sent,
-    /// with `;` and a line break after it.
-    pub(super) fn copy_steps(&mut self, plan: &edit::Plan) {
-        let text: String = plan.steps.iter().map(|s| format!("{};\n", s.sql)).collect();
-        let count = plan.steps.len() as u64;
+    /// Statements `steps`, in order and whole, to the clipboard: each as it is sent, with `;`
+    /// and a line break after it.
+    pub(super) fn copy_steps(&mut self, steps: &[edit::Step]) {
+        let text: String = steps.iter().map(|s| format!("{};\n", s.sql)).collect();
+        let count = steps.len() as u64;
         let done = match self.deliver(&text) {
             Ok(m) => Notice::new(Msg::EditPreviewCopied { count, method: self.method_text(m) }, Level::Success),
             Err(msg) => Notice::new(msg, Level::Error),
@@ -354,14 +342,14 @@ impl App {
         self.send_apply(tab, result, plan.steps.clone(), tx);
     }
 
-    fn say_cant_apply(&mut self, reason: String) {
+    pub(super) fn say_cant_apply(&mut self, reason: String) {
         self.flash(Notice::new(Msg::EditPreviewCantApply { reason }, Level::Info));
     }
 
     /// The Apply of `steps` (the changes of tab `tab`'s result `result`) on the tab's session,
     /// in a transaction as `tx` says; bound to what it was sent for. A held result's portal is
     /// closed first (its rows stay). The preview stays open, saying it applies.
-    fn send_apply(&mut self, tab: TabId, result: u64, steps: Vec<edit::Step>, tx: ApplyTx) {
+    pub(super) fn send_apply(&mut self, tab: TabId, result: u64, steps: Vec<edit::Step>, tx: ApplyTx) {
         self.query_seq += 1;
         let id = self.query_seq;
         let now = self.now();
@@ -384,6 +372,7 @@ impl App {
         let session = t.exec.generation;
         let Some(rs) = rows_of_mut(t).filter(|rs| rs.id == result) else { return };
         let batch = rs.edit.batch.clone();
+        rs.edit.failed = None;
         rs.edit.applying = Some(Box::new(Applying { id, profile, session, batch, steps: steps.clone(), tx: epoch }));
         t.exec.running = Some(Running {
             id,
@@ -397,9 +386,9 @@ impl App {
             apply: true,
         });
         if let Some(p) = self.overlays.edit_preview_mut() {
-            p.apply_failed = None;
             p.again = false;
         }
+        self.changes_body = None;
         self.send_tab(tab, DbCommand::ApplyEdits { id, steps, tx });
     }
 
