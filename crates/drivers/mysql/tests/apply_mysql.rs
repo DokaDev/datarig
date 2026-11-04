@@ -2,8 +2,9 @@
 //! `integration_mysql`), with the statements `edit` writes for a result read by the session: row
 //! checks lock without waiting, a write counts the rows it matched (a value set to what it was
 //! too), text compares exactly (case, trailing spaces), one of identical rows changes just one,
-//! a failed step leaves nothing behind, and manual commit keeps the transaction open. Tables are
-//! `shop.zz_it_apply_*` of this process, dropped when each test ends.
+//! a failed step leaves nothing behind, and manual commit keeps the transaction open. A range
+//! pasted into a result goes through the same pipeline. Tables are `shop.zz_it_apply_*` of this
+//! process, dropped when each test ends.
 
 use datarig_core::driver::{
     AppliedStep, ApplyError, ApplyFailure, ApplyTx, Cell, ColumnMeta, ConnectOptions, DbCommand, DbError, DbEvent,
@@ -98,9 +99,14 @@ struct Conn {
 
 impl Conn {
     async fn open(url: &str, role: SessionRole, read_only: bool) -> Conn {
+        Conn::open_paged(url, role, read_only, 500).await
+    }
+
+    /// [`Conn::open`] with pages of `page` rows.
+    async fn open_paged(url: &str, role: SessionRole, read_only: bool, page: usize) -> Conn {
         let (tx, rx) = unbounded_channel();
         let tag = format!("it{}-apply", std::process::id());
-        let opts = ConnectOptions::new(500, role, &tag).read_only(read_only);
+        let opts = ConnectOptions::new(page, role, &tag).read_only(read_only);
         let session = MyDriver.connect(&profile(url), role, opts, tx);
         let mut c = Conn { session, rx, id: 0, dialect: Dialect::MySql(Default::default()), edit: None };
         for ev in c.collect(|e| matches!(e, DbEvent::Edit(_)), 15).await {
@@ -541,4 +547,85 @@ async fn a_read_only_session_refuses_an_apply_unsent() {
     let failure = ro.apply(plan.steps, ApplyTx::Commit).await.unwrap_err();
     assert_eq!(failure, ApplyFailure { step: None, why: ApplyError::Db(DbError::ReadWriteRefused) });
     assert_eq!(cells(&c.rows(&select).await), [vec![Some("1"), Some("a")]]);
+}
+
+/// A 3×3 block pasted from the second column of the first row: two rows overwritten, one new row
+/// (its key left to `AUTO_INCREMENT`), read, laid over the rows as one step, planned and applied.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pasted_block_overwrites_two_rows_and_adds_one() {
+    let Some(url) = url("a_pasted_block_overwrites_two_rows_and_adds_one") else {
+        return;
+    };
+    let t = Table::make(
+        &url,
+        "paste",
+        &[
+            "CREATE TABLE {t} (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(20), n INT NOT NULL DEFAULT 7, \
+             w VARCHAR(20))",
+            "INSERT INTO {t} (v, n, w) VALUES ('a', 1, 'x'), ('b', 2, NULL)",
+        ],
+    )
+    .await;
+    let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    let select = format!("SELECT id, v, n, w FROM {} ORDER BY id", t.q());
+    let e = Editing::new(&url, &mut c, &t, &select).await;
+    let pasted = edit::paste::parse("a1,10,x1\nb1,20,\\N\nc1,30,z1\n", &Default::default()).expect("CSV");
+    assert_eq!(pasted.format, edit::paste::Format::Csv);
+    let mut ops = edit::PasteOps { width: 4, ..Default::default() };
+    for (r, row) in pasted.rows.iter().enumerate() {
+        let cells = row.iter().enumerate().map(|(k, v)| (k + 1, v.clone()));
+        if r < 2 {
+            ops.set.extend(cells.map(|(col, v)| ((r, col), v)));
+        } else {
+            let mut new = vec![Value::Default; 4];
+            for (col, v) in cells {
+                new[col] = v;
+            }
+            ops.add.push(new);
+        }
+    }
+    let mut b = EditBatch::new();
+    let done = b.paste(ops, e.orig()).expect("pasted");
+    assert_eq!((done.changed, done.added.len()), (5, 1));
+    let plan = e.plan(&mut c, &b, &[]).await;
+    c.apply(plan.steps, ApplyTx::Commit).await.expect("applied");
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let rows = other.rows(&select).await;
+    assert_eq!(
+        cells(&rows),
+        [
+            vec![Some("1"), Some("a1"), Some("10"), Some("x1")],
+            vec![Some("2"), Some("b1"), Some("20"), None],
+            vec![Some("3"), Some("c1"), Some("30"), Some("z1")]
+        ]
+    );
+}
+
+/// 1,000 keyed updates from one paste: a check and a write each, one statement per step (the
+/// executor sends them one by one, between the transaction's start and its commit), so at most
+/// 2 + 2 × 1,000 statements.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paste_of_a_thousand_keyed_updates_stays_within_its_statements() {
+    let Some(url) = url("a_paste_of_a_thousand_keyed_updates_stays_within_its_statements") else {
+        return;
+    };
+    let values: Vec<String> = (1..=1_000).map(|i| format!("({i}, 'old')")).collect();
+    let insert = format!("INSERT INTO {{t}} VALUES {}", values.join(", "));
+    let t = Table::make(&url, "paste_1k", &["CREATE TABLE {t} (id INT PRIMARY KEY, v VARCHAR(20))", &insert]).await;
+    let mut c = Conn::open_paged(&url, SessionRole::Query, false, 2_000).await;
+    let select = format!("SELECT id, v FROM {} ORDER BY id", t.q());
+    let e = Editing::new(&url, &mut c, &t, &select).await;
+    assert_eq!(e.rows.len(), 1_000);
+    let text: String = (1..=1_000).map(|i| format!("new {i}\n")).collect();
+    let pasted = edit::paste::parse(&text, &Default::default()).expect("one column");
+    let mut ops = edit::PasteOps { width: 2, ..Default::default() };
+    ops.set = pasted.rows.iter().enumerate().map(|(r, row)| ((r, 1), row[0].clone())).collect();
+    let mut b = EditBatch::new();
+    assert_eq!(b.paste(ops, e.orig()).expect("pasted").changed, 1_000);
+    let plan = e.plan(&mut c, &b, &[]).await;
+    assert!(plan.steps.len() <= 2 * 1_000, "{} statements besides the transaction's", plan.steps.len());
+    let done = c.apply(plan.steps, ApplyTx::Commit).await.expect("applied");
+    assert_eq!(done.len(), 2_000);
+    let rows = c.rows(&format!("SELECT count(*) FROM {} WHERE v LIKE 'new %'", t.q())).await;
+    assert_eq!(rows[0][0].as_deref(), Some("1000"));
 }
