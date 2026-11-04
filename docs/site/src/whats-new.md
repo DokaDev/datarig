@@ -3,6 +3,32 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.37.1 — 2026-11-04
+
+This patch adds the edits of a cell to the grid's right-click menu and makes the preview of
+pending changes readable.
+
+### Added
+
+- The grid's right-click menu (and `Space Space`) lists the edits of the cell: edit it, set it
+  to NULL or DEFAULT, add or copy a row, mark it to be deleted, and, with changes pending, undo,
+  preview and discard. Only the edits that can act on the cell are listed.
+
+### Changed
+
+- The preview of pending changes shows each statement in the editor's syntax colors: a long one
+  wraps over as many lines as it needs, its expected count on its first line, and a literal of
+  more than a few hundred bytes shows its start and end around how many characters are left
+  out. On MySQL, a statement that compares text by its bytes (`_utf8mb4 X'…'`) is followed by a
+  dim `↳ set column = 'text' · where column = 'text'` line that reads the values back; that line is
+  not SQL, and Copy SQL copies the statements whole without it.
+
+### Fixed
+
+- The keys on a dialog's bottom border no longer run into its corner: a border cell is left on
+  each side, and keys too long for the dialog are cut with `…`.
+- `:set ui.tips=on` is taken as `always`, as the config file already reads `tips = "on"`.
+
 ## 0.37.0 — 2026-11-03
 
 This release adds editing a result's data in the grid: change cells, add, copy and delete rows,
