@@ -250,8 +250,9 @@ impl App {
     }
 
     /// Show the result tab `delta` places away (the row results of the run in their order, or
-    /// the one result tab without them, the plan when there is one, next to them, then the
-    /// chart of the shown one and the Messages), wrapping around.
+    /// the one result tab without them, the Changes of the shown one while it has some, the plan
+    /// when there is one, next to them, then the chart of the shown one and the Messages),
+    /// wrapping around.
     pub(super) fn cycle_result_tab(&mut self, delta: isize) {
         use super::tabs::ResultView;
         let t = self.tab_mut();
@@ -259,6 +260,9 @@ impl App {
             t.result_tabs().into_iter().map(|i| (ResultView::Rows, Some(i))).collect();
         if views.is_empty() {
             views.push((ResultView::Rows, None));
+        }
+        if t.has_changes() {
+            views.push((ResultView::Changes, None));
         }
         if t.exec.plan.is_some() {
             views.push((ResultView::Plan, None));

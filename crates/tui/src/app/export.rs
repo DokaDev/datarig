@@ -756,7 +756,10 @@ impl App {
             let Results::Rows(rs) = &t.results else { return };
             // The rows held are written as read, not as the grid shows them over pending or
             // applied changes: refused. Every row read again holds the applied ones.
-            if !db && (!rs.edit.batch.is_empty() || rs.edit.applied.is_some()) {
+            if !db && !rs.edit.batch.is_empty() {
+                return self.flash(Notice::new(Label::ExportEditedPending, Level::Warning));
+            }
+            if !db && rs.edit.applied.is_some() {
                 return self.flash(Notice::new(Label::ExportEdited, Level::Warning));
             }
             let pending = !rs.edit.batch.is_empty();

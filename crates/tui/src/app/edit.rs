@@ -36,12 +36,15 @@ mod applied;
 mod changes;
 mod lines;
 mod preview;
+mod tab;
 
 pub use applied::{Applied, Applying};
 pub use changes::{ChangesModel, Checks, ListLine, Mark, ModelCache, Pointer, Problem};
 pub use lines::Lines;
 pub(crate) use preview::PreviewBody;
 pub use preview::{EditPreview, PreviewLine, PreviewView};
+pub(crate) use tab::Seen;
+pub use tab::{COUNT_SETTLE, ChangesAction, ChangesCursor};
 
 /// What an edit key does to the cursor's cell (or the cells selected in one column).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,7 +63,7 @@ pub enum EditAction {
     CloneRow,
     /// Mark the cursor's row (the selected rows) to be deleted, or unmark it; a new row is removed.
     DeleteRow,
-    /// The preview of the pending changes.
+    /// The pending changes in the Changes tab.
     Preview,
     /// The preview, to apply them.
     Apply,
@@ -125,6 +128,8 @@ pub struct EditState {
     pub checks: Checks,
     /// The changes as shown, as last made.
     pub changes: ModelCache,
+    /// Where the Changes tab of the result is.
+    pub cursor: ChangesCursor,
 }
 
 impl EditState {
@@ -278,12 +283,17 @@ fn in_lines(c: &TableColumn) -> bool {
     matches!(c.kind, ValueKind::Json | ValueKind::Array(ArrayElement::Json))
 }
 
-/// The row result tab `t` shows.
+/// The row result tab `t` shows: in the grid, or its changes in the Changes tab.
 fn rows_of(t: &Tab) -> Option<&ResultSet> {
     match &t.results {
-        Results::Rows(rs) if t.exec.view == tabs::ResultView::Rows => Some(rs),
+        Results::Rows(rs) if edited_view(t.exec.view) => Some(rs),
         _ => None,
     }
+}
+
+/// The pane shows a row result's rows (`view`) or its changes.
+fn edited_view(view: tabs::ResultView) -> bool {
+    matches!(view, tabs::ResultView::Rows | tabs::ResultView::Changes)
 }
 
 fn rows_of_mut(t: &mut Tab) -> Option<&mut ResultSet> {
@@ -293,7 +303,7 @@ fn rows_of_mut(t: &mut Tab) -> Option<&mut ResultSet> {
 /// The row result `results` holds, while the pane shows rows (`view`).
 fn shown_mut(results: &mut Results, view: tabs::ResultView) -> Option<&mut ResultSet> {
     match results {
-        Results::Rows(rs) if view == tabs::ResultView::Rows => Some(rs),
+        Results::Rows(rs) if edited_view(view) => Some(rs),
         _ => None,
     }
 }
@@ -417,6 +427,17 @@ impl App {
     }
 
     pub(super) fn edit_action(&mut self, a: EditAction) {
+        if a == EditAction::Preview {
+            return self.changes_open();
+        }
+        // A key for the cursor's cell from the Changes tab: the grid again, at the selected
+        // line's cell.
+        if !matches!(a, EditAction::Undo | EditAction::Redo | EditAction::Apply | EditAction::Discard)
+            && self.changes_shown()
+            && !self.changes_to_grid()
+        {
+            return;
+        }
         // Nothing changes the changes being applied.
         if !self.tabs.is_empty() && rows_of(self.tab()).is_some_and(|rs| rs.edit.applying.is_some()) {
             return self.say_refused(Label::EditWhyApplying.into());
@@ -424,7 +445,8 @@ impl App {
         match a {
             EditAction::Undo | EditAction::Redo => self.edit_history(a == EditAction::Redo),
             EditAction::Revert => self.edit_revert(),
-            EditAction::Preview | EditAction::Apply => self.edit_preview_open(),
+            EditAction::Apply => self.edit_preview_open(),
+            EditAction::Preview => self.changes_open(),
             EditAction::Discard => self.edit_discard_ask(),
             EditAction::Cell
             | EditAction::SetNull
@@ -604,8 +626,8 @@ impl App {
         match a {
             EditAction::Undo => return batch.can_undo(),
             EditAction::Redo => return batch.can_redo(),
-            EditAction::Revert | EditAction::Discard => return !batch.is_empty(),
-            EditAction::Preview | EditAction::Apply => {
+            EditAction::Revert | EditAction::Discard | EditAction::Preview => return !batch.is_empty(),
+            EditAction::Apply => {
                 return self.edit_check().is_ok()
                     && !batch.is_empty()
                     && matches!(rs.edit.target, Target::Ready(_))
@@ -1370,6 +1392,7 @@ impl App {
             }
         }
         self.sweep_edit_preview();
+        self.sweep_changes();
         // What became of an Apply's changes, said after the event's own outcome.
         let said: Vec<(TabId, Notice)> =
             self.tabs.iter_mut().filter_map(|t| Some((t.id, t.edit_said.take()?))).collect();

@@ -245,6 +245,7 @@ pub const KEYS: &[KeyDoc] = &[
          and `false` read as `\"always\"` and `\"off\"`)",
         "",
     ),
+    key("ui", "changes_view", "\"list\"", "`\"list\"`, `\"sql\"`", ""),
     // [secrets]
     key(
         "secrets",

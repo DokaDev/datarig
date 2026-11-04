@@ -571,6 +571,13 @@ pub struct App {
     pub hangul_hint: Option<Instant>,
     /// Cells a copy just took from the result grid, flashing (see [`yank_flash`]).
     pub copy_flash: Option<yank_flash::CopyFlash>,
+    /// The view of the Changes tab `s` chose for this run (`None`: `[ui] changes_view`).
+    pub changes_view: Option<datarig_core::config::ChangesView>,
+    /// The active tab's shown result and the revision of its changes as last seen, and since
+    /// when: the counts of the Changes tab wait for the changes to settle.
+    pub(crate) changes_seen: Option<edit::Seen>,
+    /// The SQL view of the Changes tab as last laid out.
+    pub(crate) changes_body: Option<edit::PreviewBody>,
     pub lang_setting: LangSetting,
     /// `[secrets] default_source`: the password source a new profile starts with.
     pub default_source: DefaultSource,
@@ -977,6 +984,9 @@ impl App {
             keymap_notices: keymap_issues.iter().map(issue_msg).collect(),
             hangul_hint: None,
             copy_flash: None,
+            changes_view: None,
+            changes_seen: None,
+            changes_body: None,
             lang_setting: LangSetting::parse(&cfg.language),
             default_source: cfg.default_source,
             prefs: cfg.prefs,
@@ -1645,6 +1655,7 @@ impl App {
                 _ if self.tabs.is_empty() => Ctx::Explorer,
                 Focus::Results | Focus::Inspector if self.plan_shown() => Ctx::Plan,
                 Focus::Results | Focus::Inspector if self.chart_shown() => Ctx::Chart,
+                Focus::Results | Focus::Inspector if self.changes_shown() => Ctx::Changes,
                 Focus::Results if self.cell_lines_open() => Ctx::CellEditor,
                 Focus::Results if self.cell_edit_open() => Ctx::CellEdit,
                 Focus::Results if self.grid_prompt_open() => Ctx::GridSearch,
@@ -1717,6 +1728,7 @@ impl App {
             || self.tx_tick_due(self.now()).is_some()
             || self.tx_idle_due().is_some()
             || self.idle_due(self.now()).is_some()
+            || self.changes_count_due().is_some()
     }
 
     /// Aux session `a` is open and no tab works in its database: it closes
@@ -1787,6 +1799,9 @@ impl App {
         if let Some(due) = self.idle_due(now) {
             at(due);
         }
+        if let Some(due) = self.changes_count_due() {
+            at(due);
+        }
         // Never sooner than a fine tick, never in the past.
         next.map(|n| n.max(now + Duration::from_millis(1)))
     }
@@ -1795,6 +1810,7 @@ impl App {
     /// portals). Called on every tick with the current time.
     pub fn on_tick(&mut self, now: Instant) {
         self.which_key_tick(now);
+        self.changes_count_tick(now);
         self.tx_idle_tick(now);
         self.idle_tick(now);
         self.autosave_tick(now);

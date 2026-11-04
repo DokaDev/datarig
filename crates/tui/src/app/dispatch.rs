@@ -240,6 +240,7 @@ impl App {
             Action::Chart(c) => self.chart_action(c),
             Action::GridSearch(s) => self.grid_search_action(s),
             Action::Edit(e) => self.edit_action(e),
+            Action::Changes(c) => self.changes_action(c),
         }
     }
 

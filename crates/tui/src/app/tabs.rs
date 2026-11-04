@@ -166,6 +166,8 @@ pub enum ResultView {
     Plan,
     /// The shown row result as a chart (`TabSession::chart`).
     Chart,
+    /// The pending changes of the shown row result, while it has some.
+    Changes,
 }
 
 /// The tab's query session and what runs on it.
@@ -660,6 +662,11 @@ impl Tab {
         }
         v.sort_unstable();
         v
+    }
+
+    /// The shown row result has pending changes: the Changes tab is there.
+    pub fn has_changes(&self) -> bool {
+        matches!(&self.results, super::Results::Rows(rs) if !rs.edit.batch.is_empty())
     }
 
     /// Show the row result of statement `i` (the shown one is parked with its grid first).

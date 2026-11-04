@@ -63,18 +63,19 @@ In the grid:
 | `D` (`Space d d`) | Mark the row (the selected rows) to be deleted, or unmark it; a new row is removed |
 | `Space d r` | Drop the pending changes of the cell (the selection) |
 | `u` (`Space d u`), `Ctrl+R` (`Space d U`) | Undo, redo |
-| `Space d p` (`:changes`) | Show the pending changes and the statements that apply them |
-| `Space d a` (`:apply`) | The same, to apply them |
+| `Space d p` (`:changes`) | Show the pending changes in the [Changes tab](#the-changes-tab) |
+| `Space d a` (`:apply`) | Show the statements that apply them in a dialog, to apply them |
 | `Space d x` (`:discard`) | Drop every pending change of the result (it asks first) |
 
 The full lists are in the keybindings reference: the [grid](../reference/keybindings.md#grid),
 the `Space d` group under [nav](../reference/keybindings.md#nav), the
 [cell editor](../reference/keybindings.md#gridedit-text), the
-[editor of several lines](../reference/keybindings.md#overlaycell_editor-text) and the
-[preview](../reference/keybindings.md#overlayedit_preview).
+[editor of several lines](../reference/keybindings.md#overlaycell_editor-text), the
+[Changes tab](../reference/keybindings.md#changes) and the
+[Apply dialog](../reference/keybindings.md#overlayedit_preview).
 
-While changes are pending the strip shows `3 pending` and the hint line offers `Space d a`
-apply and `u` undo. A pending change is a row: a row read with changed cells (two cells of one
+While changes are pending the strip shows `3 pending` and a Changes tab, and the hint line
+offers `Space d a` apply and `u` undo. A pending change is a row: a row read with changed cells (two cells of one
 row are one change), a new row or a row to be deleted. The row number's gutter marks them `~`,
 `+` and `-`. Changed cells take their own color, new rows another, rows to be deleted are
 crossed out, and a cell left to its default shows a dim `default` (theme tokens
@@ -87,8 +88,8 @@ A right click on a cell selects it and opens the action menu; inside a selected 
 the range, and the menu is the selection's (`Space Space` opens the same one next to the
 selection). Its first section lists the edits after the copies, each with its key: edit the
 cell, set it to NULL or to the column's default, add a row, add a copy of the row, mark the row
-to be deleted; once changes are pending, undo, the preview of the pending changes and dropping
-them. On a new row it lists only its edits: nothing there reads a row of the result. An item
+to be deleted; once changes are pending, undo, showing the changes (the Changes tab) and
+dropping them. On a new row it lists only its edits: nothing there reads a row of the result. An item
 runs as its key does.
 
 The menu lists only the edits whose keys would act: each is checked as its key checks before
@@ -168,14 +169,53 @@ column that the result does not show ("…is not in the result; add it to the SE
 - `Space d x` (`:discard`) asks "Drop the pending changes?": `y` drops them, `n` or `Enter`
   keeps them.
 
-## The preview
+## The Changes tab
 
-`Space d p` (`:changes`) and `Space d a` (`:apply`) open the same dialog, "Apply changes —
-shop.users", with Cancel focused: only `y` applies. It shows how many updates, inserts and
-deletes, then the statements in the order they run, in the editor's syntax colors, each with
-the count it must give (`expect 1`) at the end of its first line. A statement longer than the
-dialog is wide wraps over as many lines as it needs, indented under its first, so all of it can
-be read; `j` and `k` scroll line by line.
+While the shown result has pending changes, the result tab strip has a **Changes** tab after its
+result tabs: `Changes 3`, or `Chg 3` where the strip is narrow. A narrow strip keeps it, as it
+keeps Messages. `Space d p` (`:changes`) shows it with the focus; `H` and `L` (`Space r [` and
+`Space r ]`) reach it as any result tab. It shows the changes of the result last shown in the
+grid, and goes once nothing is pending. When another result of the tab has pending changes too,
+its second line says so: `Result 2 also has 1 pending · L to switch`.
+
+Its first line names the result and the table, and says how many updates, inserts, deletes and
+problems there are. Then one line per change, deletes first, then updates (a line per changed
+cell), then new rows:
+
+```text
+ Changes — Result 1 · shop.users                        2 updates · 1 insert · 1 delete
+ - id=2   delete
+ ~ id=1   email     'a@x' → 'z@x'
+ ~ id=3   nickname  'cy' → NULL
+ + new 1  id=DEFAULT · email='n@x' · nickname=DEFAULT
+```
+
+- The marks are the gutter's: `~` a changed cell, `+` a new row, `-` a row to be deleted, in
+  their colors (`edit_changed`, `edit_inserted`, `edit_deleted`); they read without colors too.
+- A row found by its key is named by the key's values (`id=2`, `a=1,b=2`); a row found by its
+  values by its row in the grid, `row 31  (located by its values)`; a new row by its place
+  among the new rows, `new 1`.
+- Values are literals as they were read and as they are to be (`'text'`, `NULL`, `DEFAULT`), a
+  long text cut at 40 characters with `…`, as the statements read them back. A line longer than
+  the pane is cut with `…`.
+- Every reason the changes can't be applied yet comes first, marked `!`, for every row (not
+  only the first): a new row's `NOT NULL` column without a default, a row that matches no row or
+  several rows, a count that failed.
+
+`j` and `k` select a line, `Ctrl+D` and `Ctrl+U` move half a page, `g g` and `G` go to the first
+and the last. `Enter` shows the line's row and column in the grid (a row the grid no longer has
+is said). `u` and `Ctrl+R` undo and redo, and the `Space d` keys work as in the grid: an edit of
+a cell goes to the grid at the selected line's cell first. Under the list the tab says how the
+Apply stands to a transaction (as the Apply dialog's footer does), and its keys where they fit.
+
+### The SQL view
+
+`s` switches between the list and the statements that apply the changes, for the rest of the
+run. `ui.changes_view = "sql"` (`:set ui.changes_view=sql`, or the settings screen) opens the tab
+in the statements; `"list"` is the default. The statements are shown as the Apply dialog shows
+them: in the order they run, in the editor's syntax colors, each with the count it must give
+(`expect 1`) at the end of its first line, a statement longer than the pane wrapped under its
+first line.
 
 On MySQL a text value is compared by its UTF-8 bytes, so the statement holds it as
 `_utf8mb4 X'…'`. A statement with such values is followed by a dim line that starts with `↳`
@@ -205,11 +245,24 @@ whole.
 - **Writes**: the deletes, then the updates, then the inserts. A `DELETE` and a statement that
   expects more than one row are marked `!`, their count in the warning color.
 
-`c` copies every statement (through the `clipboard` setting), `j` and `k` (or the arrows)
-scroll, `Enter`, `Esc` or `q` closes. The dialog closes by itself when its result, its rows'
-connection or the changes change.
+`c` copies every statement exactly as it is sent, each followed by `;` and a line break (through
+the `clipboard` setting), in both views. While the statements are not final it copies nothing
+and says why: "Not copied: the SQL is not final yet: 2 problems", or "…: the rows are still
+being counted".
 
-Rows found by their values are counted on the tab's own session first ("Counting matching
+Rows found by their values are counted on the tab's own session while the tab is shown, half
+a second after the last change, once for each state of the changes ("Counting matching rows…"
+until the answers come; the count sees the tab's open transaction, as the Apply does). The list
+needs no count.
+
+## The Apply dialog
+
+`Space d a` (`:apply`) opens a dialog, "Apply changes — shop.users", with Cancel focused: only
+`y` applies. It shows how many updates, inserts and deletes, then the statements as the SQL view
+shows them; `j` and `k` scroll line by line, `c` copies them, `Enter`, `Esc` or `q` closes. The
+dialog closes by itself when its result, its rows' connection or the changes change.
+
+The rows found by their values are counted afresh first ("Counting matching
 rows…"; the count sees the tab's open transaction, as the Apply does). Until a plan can be
 made, the dialog says why and `y` says "Can't apply yet: …":
 
@@ -260,7 +313,7 @@ short when long:
 - "Row 3: <the server's error>. Nothing was applied. Statement: <the statement>"
 - "Apply cancelled; nothing was applied."
 - "Apply result unknown — the connection was lost before the server confirmed. Re-run the query
-  to check." The changes may be in the table already: the next `y` in the preview warns, and
+  to check." The changes may be in the table already: the next `y` in the Apply dialog warns, and
   only a second `y` applies them again.
 
 An environment that asks before every write (`confirm = "writes"`) takes this dialog as its
@@ -316,10 +369,13 @@ An export to a file and the chart do not take the values the grid shows over the
 
 - An export of the rows held (the selection, the fetched rows, or every row of a result fetched
   to its end) is refused while the result has pending or applied changes ("Not exported: this
-  result has pending or applied changes; apply or discard them, or run the query again"), in
-  every format.
+  result has pending changes; apply or discard them, or run the query again — see Changes"; with
+  changes applied, "Not exported: this result has pending or applied changes; apply or discard
+  them, or run the query again"), in every format.
 - An export of every row of a result the server has more of reads the rows again from the
   server, so it holds what an Apply wrote. With changes pending it goes on, and says "The pending
   changes are not in the file: every row is read again from the server".
 - The chart draws nothing while the result has pending or applied changes: it says "Not drawn:
-  this result has pending or applied changes. Run the query again to chart the edited values."
+  this result has pending changes. Apply or discard them, or run the query again — see Changes",
+  or, once they are applied, "Not drawn: this result has pending or applied changes. Run the
+  query again to chart the edited values."

@@ -13,7 +13,7 @@ expression: backend
 "│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
 "│                      │╰──────────────────────────────────────────────────────╯"
 "│                      │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮"
-"│                      ││ [1]  Chart  Msgs   1 pending ││ PK id: 2             │"
+"│                      ││ [1]  Chg 1  Chart  Msgs      ││ PK id: 2             │"
 "│                      ││   │ PK id │ UQ email │ nickna││ UQ email: b@x        │"
 "│                      ││   │ int8  │ text     │ text  ││ nickname: NULL       │"
 "│                      ││ 1 │     1 │ a@x      │ ann   ││                      │"

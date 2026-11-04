@@ -195,6 +195,8 @@ pub enum Action {
     Export,
     /// Change the shown result's cells.
     Edit(super::edit::EditAction),
+    /// The Changes tab of the results pane.
+    Changes(super::edit::ChangesAction),
 }
 
 /// What the results pane of a query tab does.
@@ -481,6 +483,21 @@ fn grid_rows_focused(a: &App) -> bool {
     grid_focused(a) && rows_shown(a)
 }
 
+/// The grid or the Changes tab has the focus: the edit keys act on the shown result.
+fn edit_focused(a: &App) -> bool {
+    grid_rows_focused(a) || changes_focused(a)
+}
+
+/// The edit keys act, or the active tab's shown result has pending changes to show.
+fn changes_reachable(a: &App) -> bool {
+    edit_focused(a) || (has_tab(a) && a.tab().has_changes())
+}
+
+/// The Changes tab has the focus.
+fn changes_focused(a: &App) -> bool {
+    grid_focused(a) && a.changes_shown()
+}
+
 /// A search of the focused grid is on: `n` and `N` go to its matches.
 fn grid_searching(a: &App) -> bool {
     grid_rows_focused(a) && a.grid_search_on()
@@ -594,6 +611,7 @@ const fn mv(action: Action, id: &'static str, label: Label, when: fn(&App) -> bo
     ActionSpec { action, id, label, when, repeatable: true }
 }
 
+use super::edit::ChangesAction as K;
 use super::edit::EditAction as D;
 use super::grid_search::SearchAction as S;
 use ChartAction as C;
@@ -789,18 +807,27 @@ pub const REGISTRY: &[ActionSpec] = &[
     mv(Action::GridSearch(S::Next { same: true }), "grid.search_next", Label::ActionGridSearchNext, grid_searching),
     mv(Action::GridSearch(S::Next { same: false }), "grid.search_prev", Label::ActionGridSearchPrev, grid_searching),
     act(Action::GridSearch(S::Clear), "grid.search_clear", Label::ActionGridSearchClear, grid_searching),
-    act(Action::Edit(D::Cell), "edit.cell", Label::ActionEditCell, grid_rows_focused),
-    act(Action::Edit(D::SetNull), "edit.set_null", Label::ActionEditSetNull, grid_rows_focused),
-    act(Action::Edit(D::SetDefault), "edit.set_default", Label::ActionEditSetDefault, grid_rows_focused),
-    act(Action::Edit(D::Undo), "edit.undo", Label::ActionEditUndo, grid_rows_focused),
-    act(Action::Edit(D::Redo), "edit.redo", Label::ActionEditRedo, grid_rows_focused),
-    act(Action::Edit(D::Revert), "edit.revert", Label::ActionEditRevert, grid_rows_focused),
-    act(Action::Edit(D::AddRow), "edit.add_row", Label::ActionEditAddRow, grid_rows_focused),
-    act(Action::Edit(D::CloneRow), "edit.clone_row", Label::ActionEditCloneRow, grid_rows_focused),
-    act(Action::Edit(D::DeleteRow), "edit.delete_row", Label::ActionEditDeleteRow, grid_rows_focused),
-    act(Action::Edit(D::Preview), "edit.preview", Label::ActionEditPreview, grid_rows_focused),
-    act(Action::Edit(D::Apply), "edit.apply", Label::ActionEditApply, grid_rows_focused),
-    act(Action::Edit(D::Discard), "edit.discard", Label::ActionEditDiscard, grid_rows_focused),
+    act(Action::Edit(D::Cell), "edit.cell", Label::ActionEditCell, edit_focused),
+    act(Action::Edit(D::SetNull), "edit.set_null", Label::ActionEditSetNull, edit_focused),
+    act(Action::Edit(D::SetDefault), "edit.set_default", Label::ActionEditSetDefault, edit_focused),
+    act(Action::Edit(D::Undo), "edit.undo", Label::ActionEditUndo, edit_focused),
+    act(Action::Edit(D::Redo), "edit.redo", Label::ActionEditRedo, edit_focused),
+    act(Action::Edit(D::Revert), "edit.revert", Label::ActionEditRevert, edit_focused),
+    act(Action::Edit(D::AddRow), "edit.add_row", Label::ActionEditAddRow, edit_focused),
+    act(Action::Edit(D::CloneRow), "edit.clone_row", Label::ActionEditCloneRow, edit_focused),
+    act(Action::Edit(D::DeleteRow), "edit.delete_row", Label::ActionEditDeleteRow, edit_focused),
+    act(Action::Edit(D::Preview), "edit.preview", Label::ActionEditPreview, changes_reachable),
+    act(Action::Edit(D::Apply), "edit.apply", Label::ActionEditApply, edit_focused),
+    act(Action::Edit(D::Discard), "edit.discard", Label::ActionEditDiscard, edit_focused),
+    mv(Action::Changes(K::Down), "changes.down", Label::ActionChangesDown, changes_focused),
+    mv(Action::Changes(K::Up), "changes.up", Label::ActionChangesUp, changes_focused),
+    mv(Action::Changes(K::HalfDown), "changes.half_down", Label::ActionChangesHalfDown, changes_focused),
+    mv(Action::Changes(K::HalfUp), "changes.half_up", Label::ActionChangesHalfUp, changes_focused),
+    act(Action::Changes(K::Top), "changes.top", Label::ActionChangesTop, changes_focused),
+    act(Action::Changes(K::Bottom), "changes.bottom", Label::ActionChangesBottom, changes_focused),
+    act(Action::Changes(K::Goto), "changes.goto", Label::ActionChangesGoto, changes_focused),
+    act(Action::Changes(K::ToggleView), "changes.view", Label::ActionChangesView, changes_focused),
+    act(Action::Changes(K::CopySql), "changes.copy_sql", Label::ActionChangesCopySql, changes_focused),
     act(
         Action::Copy(CopyScope::Selection, CopyFormat::TsvPlain),
         "results.copy.selection.tsv",

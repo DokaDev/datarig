@@ -1,8 +1,10 @@
 # Results
 
 A run's results open in the results pane below the editor. Each row result gets a result tab
-of its own, after a Messages tab with each statement's outcome and before a Chart tab. In the
-results pane `H` and `L` move between the tabs; `Space r [` and `Space r ]` do it from anywhere.
+of its own, after a Messages tab with each statement's outcome and before a Chart tab. While
+the shown result has pending changes, a Changes tab follows the result tabs (see
+[The Changes tab](editing.md#the-changes-tab)). In the results pane `H` and `L` move between the
+tabs; `Space r [` and `Space r ]` do it from anywhere.
 
 ```text
 {{#include ../screens/grid-keys.txt}}

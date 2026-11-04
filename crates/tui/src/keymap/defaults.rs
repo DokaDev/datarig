@@ -190,6 +190,18 @@ pub const HINTS: &[(Ctx, &[(&str, Label)])] = &[
             ("help.context", Label::HintHelp),
         ],
     ),
+    (
+        Changes,
+        &[
+            ("changes.goto", Label::HintGoto),
+            ("changes.view", Label::HintChangesView),
+            ("changes.copy_sql", Label::HintCopySql),
+            ("edit.apply", Label::HintApply),
+            ("pane.back", Label::HintBack),
+            ("commands.open", Label::HintCommands),
+            ("help.context", Label::HintHelp),
+        ],
+    ),
 ];
 
 /// Where vim starts and stops typing, for people new to it: the hint line of Normal mode
@@ -510,6 +522,31 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Chart, "H", "results.tab.prev"),
     (Chart, "esc", "pane.back"),
     (Chart, "q", "pane.back"),
+    // the Changes tab of the results pane
+    (Changes, "j", "changes.down"),
+    (Changes, "down", "changes.down"),
+    (Changes, "k", "changes.up"),
+    (Changes, "up", "changes.up"),
+    (Changes, "ctrl+d", "changes.half_down"),
+    (Changes, "pagedown", "changes.half_down"),
+    (Changes, "ctrl+u", "changes.half_up"),
+    (Changes, "pageup", "changes.half_up"),
+    (Changes, "g g", "changes.top"),
+    (Changes, "home", "changes.top"),
+    (Changes, "G", "changes.bottom"),
+    (Changes, "end", "changes.bottom"),
+    (Changes, "enter", "changes.goto"),
+    (Changes, "s", "changes.view"),
+    (Changes, "c", "changes.copy_sql"),
+    (Changes, "u", "edit.undo"),
+    (Changes, "ctrl+r", "edit.redo"),
+    (Changes, "z", "results.panel.maximize"),
+    (Changes, "+", "results.panel.grow"),
+    (Changes, "-", "results.panel.shrink"),
+    (Changes, "L", "results.tab.next"),
+    (Changes, "H", "results.tab.prev"),
+    (Changes, "esc", "pane.back"),
+    (Changes, "q", "pane.back"),
     // editor
     (VimInsert, "ctrl+n", "editor.complete"),
     // a DDL tab (read-only): read again, open in a console
