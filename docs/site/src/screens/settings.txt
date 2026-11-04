@@ -17,8 +17,8 @@
 │ │ Results                                                                  │ │
 │ │   Cell detail               ‹ panel         ›  A panel on the right of … │t│
 │ │   Flash copied cells        ‹ on            ›  On, copied cells flash b… │ │
+│ │   Changes tab view          ‹ list          ›  List, one line per chang… │ │
 │ │ Clipboard                                                                │ │
-│ │   Clipboard                 ‹ auto          ›  Automatic: OSC 52 over S… │ │
 │ ╰────────────────────────────────────── j/k move · h/l change · Esc close ─╯ │
 ╰──────────────────────╯╰──────────────────────────────────────────────────────╯
  NORMAL  local-pg │ Connected to local-pg                                    EN

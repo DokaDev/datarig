@@ -126,7 +126,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space d o` | `edit.add_row` | Add a new row, shown after the rows read |  |
 | `Space d O` | `edit.clone_row` | Add a new row with the values of the cursor's row |  |
 | `Space d d` | `edit.delete_row` | Mark the row (the selected rows) to be deleted, or unmark it; a new row is removed |  |
-| `Space d p` | `edit.preview` | Show the pending changes and the statements that apply them |  |
+| `Space d p` | `edit.preview` | Show changes |  |
 | `Space d a` | `edit.apply` | Apply the pending changes (shown first, to confirm) |  |
 | `Space d x` | `edit.discard` | Drop every pending change of the result |  |
 | `Space r y t` | `results.copy.selection.tsv` | Copy selection: Without headers (TSV) |  |
@@ -404,6 +404,37 @@ The Chart tab of the results pane (`c` in the grid, or its tab in the strip; it 
 | `y` | `chart.copy_data` | Chart: copy its numbers as TSV |  |
 | `Y` | `chart.copy_text` | Chart: copy the drawing as text |  |
 | `c` | `results.chart` | Results → show as a chart / as rows |  |
+| `z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |
+| `+` | `results.panel.grow` | Results pane → taller | ✓ |
+| `-` | `results.panel.shrink` | Results pane → shorter | ✓ |
+| `L` | `results.tab.next` | Result tabs → next |  |
+| `H` | `results.tab.prev` | Result tabs → previous |  |
+| `Esc` | `pane.back` | Back to the editor |  |
+| `q` | `pane.back` | Back to the editor |  |
+
+## `changes`
+
+The Changes tab of the results pane (`:changes`, `Space d p`, or its tab in the strip while the shown result has pending changes): one line per changed cell, every reason they can't be applied first, or (`s`) the statements that apply them. `j`/`k` select a line (scroll the statements), `Ctrl+D`/`Ctrl+U` half a page, `g g`/`G` the first and the last, `Enter` shows the line's row and column in the grid, `s` switches between the list and the statements for this run, `c` copies the statements as they would be sent. The `Space d` keys work here as in the grid. Inside `nav`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `j` | `changes.down` | Changes: next line | ✓ |
+| `Down` | `changes.down` | Changes: next line | ✓ |
+| `k` | `changes.up` | Changes: previous line | ✓ |
+| `Up` | `changes.up` | Changes: previous line | ✓ |
+| `Ctrl+D` | `changes.half_down` | Changes: half a page down | ✓ |
+| `PageDown` | `changes.half_down` | Changes: half a page down | ✓ |
+| `Ctrl+U` | `changes.half_up` | Changes: half a page up | ✓ |
+| `PageUp` | `changes.half_up` | Changes: half a page up | ✓ |
+| `g g` | `changes.top` | Changes: first line |  |
+| `Home` | `changes.top` | Changes: first line |  |
+| `G` | `changes.bottom` | Changes: last line |  |
+| `End` | `changes.bottom` | Changes: last line |  |
+| `Enter` | `changes.goto` | Changes: show the line's row and column in the grid |  |
+| `s` | `changes.view` | Changes: switch between the list and the SQL |  |
+| `c` | `changes.copy_sql` | Changes: copy the SQL as it would be sent |  |
+| `u` | `edit.undo` | Undo the last change of the result's cells |  |
+| `Ctrl+R` | `edit.redo` | Redo the change of the result's cells undone last |  |
 | `z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |
 | `+` | `results.panel.grow` | Results pane → taller | ✓ |
 | `-` | `results.panel.shrink` | Results pane → shorter | ✓ |
@@ -739,7 +770,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:rollback` | `:rb` | Roll back the open transaction |
 | `:tx` |  | What the open transaction did |
 | `:session` | `:startup` | What a profile's sessions start with, and where each setting comes from |
-| `:changes` |  | Show the pending changes and the statements that apply them |
+| `:changes` |  | Show changes |
 | `:apply` |  | Apply the pending changes (shown first, to confirm) |
 | `:discard` |  | Drop every pending change of the result |
 
@@ -765,6 +796,7 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `secrets.macos_keychain_access` | `direct` `security_tool` | macOS keychain access |
 | `explorer.size_heat` | `3` `5` `off` | Explorer: size colors |
 | `ui.yank_flash` | `on` `off` | Flash copied cells |
+| `ui.changes_view` | `list` `sql` | Changes tab view |
 | `ui.tips` | `always` `until_used` `off` | Tips |
 | `idle_disconnect` | `off` `5m` `10m` `30m` `1h` | Close idle connections |
 | `lock_wait` | `off` `5s` `10s` `30s` `1m` | Lock wait limit |

@@ -796,6 +796,11 @@ impl App {
                 } else if inside(l.results) && self.tab().exec.view == tabs::ResultView::Messages {
                     let s = &mut self.tab_mut().exec.messages_scroll;
                     *s = (*s as isize + d).max(0) as usize;
+                } else if inside(l.results) && self.changes_shown() {
+                    let step = if d > 0 { edit::ChangesAction::Down } else { edit::ChangesAction::Up };
+                    for _ in 0..d.unsigned_abs() {
+                        self.changes_action(step);
+                    }
                 } else if inside(l.results) && self.plan_shown() {
                     self.plan_scroll(d, m.modifiers.contains(KeyModifiers::SHIFT));
                 } else if inside(l.results) && self.chart_shown() {
@@ -995,6 +1000,9 @@ impl App {
                 self.last_click = None;
             }
             self.plan_click(x, y, double);
+        } else if inside(l.results) && self.changes_shown() {
+            // The Changes tab takes the keys; the grid behind it is not touched.
+            self.focus = Focus::Results;
         } else if inside(l.results) && self.chart_shown() {
             self.focus = Focus::Results;
             // A second click on the same point shows its row.

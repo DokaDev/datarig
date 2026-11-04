@@ -476,7 +476,7 @@ pub(crate) fn draw_edit_preview(app: &mut App, area: Rect, buf: &mut Buffer) {
         .is_some_and(|b| b.width == iw && std::sync::Arc::ptr_eq(&b.theme, &app.theme) && b.lines == v.lines);
     if !current {
         let cut = |n: usize| app.i18n.msg(&Msg::EditPreviewCut { count: n as u64 }).to_string();
-        let rows = crate::widgets::changes::preview_rows(&v.lines, v.dialect, iw, &cut);
+        let rows = crate::widgets::changes::preview_rows(&v.lines, v.dialect, iw, &cut, th.surface);
         let theme = app.theme.clone();
         if let Some(p) = app.overlays.edit_preview_mut() {
             p.body = Some(crate::app::edit::PreviewBody { width: iw, theme, lines: v.lines.clone(), rows });

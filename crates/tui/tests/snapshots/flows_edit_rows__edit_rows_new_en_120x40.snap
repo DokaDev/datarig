@@ -19,7 +19,7 @@ expression: backend
 "│                            ││ 12                                                                                     │"
 "│                            │╰────────────────────────────────────────────────────────────────────────────────────────╯"
 "│                            │╭ Results · 3 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮"
-"│                            ││ [Result 1]  Chart  Messages         H/L  2 pending ││ A new row, not applied yet       │"
+"│                            ││ [Result 1]  Changes 2  Chart  Messages   2 pending ││ A new row, not applied yet       │"
 "│                            ││   │ PK id │ UQ email │ nickname                    ││                                  │"
 "│                            ││   │ int8  │ text     │ text                        ││                                  │"
 "│                            ││ 1 │     1 │ a@x      │ ann                         ││                                  │"

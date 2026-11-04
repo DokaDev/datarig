@@ -97,9 +97,8 @@ pub struct PreviewView {
 }
 
 impl App {
-    /// `space d p` / `space d a`, `:changes` / `:apply`: the preview of the shown result's
-    /// pending changes. Refused as an edit key is, and with nothing pending; the rows found by
-    /// their values are counted first.
+    /// `space d a`, `:apply`: the preview of the shown result's pending changes. Refused as an
+    /// edit key is, and with nothing pending; the rows found by their values are counted first.
     pub(super) fn edit_preview_open(&mut self) {
         let Some((_, format, bound)) = self.edit_gate() else { return };
         let t = self.tab();
@@ -113,27 +112,8 @@ impl App {
         if self.tab_busy(t.id) {
             return self.flash_busy();
         }
-        let not_whole = self.cells_not_whole(t, rs);
         let (tab, result, revision, target) = (t.id, rs.id, rs.edit.batch.revision(), (**target).clone());
-        let batch = &rs.edit.batch;
-        // Nothing is counted for changes that cannot be made anyway.
-        let counts = match edit::no_default(&target, batch).is_empty() && edit::not_shown(&target, batch).is_empty() {
-            true => {
-                let whole = |r: usize, c: usize| !not_whole.contains(&(r, c));
-                edit::count_statements(&target, batch, &*edit::format(format), &whole).unwrap_or_default()
-            }
-            false => Vec::new(),
-        };
-        let mut asked = Vec::with_capacity(counts.len());
-        for (row, sql) in counts {
-            self.query_seq += 1;
-            let id = self.query_seq;
-            self.send_tab(tab, DbCommand::Count { id, sql });
-            asked.push((id, row));
-        }
-        if let Some(rs) = self.tabs.get_mut(tab).and_then(rows_of_mut) {
-            rs.edit.checks.restart(revision, asked);
-        }
+        self.send_counts(tab, format);
         self.overlays.close(OverlayKind::Commands);
         self.overlays.close(OverlayKind::WhichKey);
         self.key_state.clear();
@@ -152,6 +132,34 @@ impl App {
             body_builds: 0,
         };
         self.overlays.push(Overlay::EditPreview(Box::new(p)));
+    }
+
+    /// The rows of tab `tab`'s shown result's changes found by their values counted afresh,
+    /// in format `format`, on the tab's session: the result's checks start again for the
+    /// changes as they are (none are asked for changes that cannot be made anyway).
+    pub(super) fn send_counts(&mut self, tab: TabId, format: EditFormat) {
+        let Some(t) = self.tabs.get(tab) else { return };
+        let Some(rs) = rows_of(t) else { return };
+        let Target::Ready(target) = &rs.edit.target else { return };
+        let not_whole = self.cells_not_whole(t, rs);
+        let (revision, batch) = (rs.edit.batch.revision(), &rs.edit.batch);
+        let counts = match edit::no_default(target, batch).is_empty() && edit::not_shown(target, batch).is_empty() {
+            true => {
+                let whole = |r: usize, c: usize| !not_whole.contains(&(r, c));
+                edit::count_statements(target, batch, &*edit::format(format), &whole).unwrap_or_default()
+            }
+            false => Vec::new(),
+        };
+        let mut asked = Vec::with_capacity(counts.len());
+        for (row, sql) in counts {
+            self.query_seq += 1;
+            let id = self.query_seq;
+            self.send_tab(tab, DbCommand::Count { id, sql });
+            asked.push((id, row));
+        }
+        if let Some(rs) = self.tabs.get_mut(tab).and_then(rows_of_mut) {
+            rs.edit.checks.restart(revision, asked);
+        }
     }
 
     /// The count `qid` of tab `tab` came: one of a result's checks, when it asked it (`true`).
@@ -193,7 +201,7 @@ impl App {
 
     /// How an Apply in tab `tab` stands to a transaction now, in words: inside the open one,
     /// opening one for manual commit, or committed at its end.
-    fn preview_tx_text(&self, tab: TabId) -> String {
+    pub(super) fn preview_tx_text(&self, tab: TabId) -> String {
         let label = match self.tabs.get(tab) {
             Some(t) if t.exec.user_tx() => Label::EditPreviewTxInside,
             _ if self.manual_commit(tab) => Label::EditPreviewTxOpens,
@@ -295,6 +303,12 @@ impl App {
         let Planned::Ready(plan) = &m.planned else {
             return self.flash(Notice::new(Label::EditPreviewNothingToCopy, Level::Info));
         };
+        self.copy_steps(plan);
+    }
+
+    /// Every statement of `plan`, in order and whole, to the clipboard: each as it is sent,
+    /// with `;` and a line break after it.
+    pub(super) fn copy_steps(&mut self, plan: &edit::Plan) {
         let text: String = plan.steps.iter().map(|s| format!("{};\n", s.sql)).collect();
         let count = plan.steps.len() as u64;
         let done = match self.deliver(&text) {

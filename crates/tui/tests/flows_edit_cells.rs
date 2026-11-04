@@ -918,9 +918,11 @@ fn the_pending_count_shows_in_korean_at_80x24() {
     h.key(KeyCode::Enter);
     h.app.transient = None;
     let badge = h.app.i18n.msg(&Msg::EditBadgePending { count: 1 }).to_string();
+    let tab = h.app.i18n.msg(&Msg::ResultsTabChangesShort { count: 1 }).to_string();
     let screen = h.screen(80, 24);
     let lines: Vec<&str> = screen.lines().collect();
-    let strip = lines[..lines.len() - 1].iter().any(|l| l.contains(&badge));
+    // In the badge, or (where the strip has no room for it) in the Changes tab's label.
+    let strip = lines[..lines.len() - 1].iter().any(|l| l.contains(&badge) || l.contains(&tab));
     assert!(strip, "{screen}");
 }
 
@@ -1067,7 +1069,7 @@ fn the_wheel_closes_the_editor_and_scrolls() {
 const EDIT_CELL: &str = "Edit the cell (the selected cells of one column)";
 const SET_NULL: &str = "Set the cell (the selected cells) to NULL";
 const UNDO: &str = "Undo the last change of the result's cells";
-const PREVIEW: &str = "Show the pending changes and the statements that apply them";
+const PREVIEW: &str = "Show changes";
 const DISCARD: &str = "Drop every pending change of the result";
 const SET_DEFAULT: &str = "Set the cell (the selected cells) to the column's default";
 const ADD_ROW: &str = "Add a new row, shown after the rows read";
@@ -1153,8 +1155,9 @@ fn set_null_and_the_preview_from_the_menu() {
     }
     insta::assert_snapshot!("edit_menu_pending_en_120x40", h.draw(120, 40).backend());
     h.menu_pick(PREVIEW);
-    assert_eq!(h.app.key_context(), Ctx::EditPreview, "the preview, as Space d p opens it");
-    h.key(KeyCode::Esc);
+    assert_eq!(h.app.key_context(), Ctx::Changes, "the Changes tab, as Space d p shows it");
+    h.keys("H");
+    assert_eq!(h.app.key_context(), Ctx::Grid);
     // Undo from the menu: as `u`.
     right_click_cell(&mut h, 0, 1);
     h.menu_pick(UNDO);

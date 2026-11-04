@@ -12,6 +12,8 @@
 //! │  │  │  └─ grid.matches     (a search of the grid is on: `n`/`N` go to its matches)
 //! │  │  ├─ inspector          (the result inspector panel, once clicked)
 //! │  │  ├─ plan               (the Plan tab of the results pane)
+//! │  │  ├─ chart              (the Chart tab of the results pane)
+//! │  │  ├─ changes            (the Changes tab of the results pane)
 //! │  │  ├─ welcome            (no profiles: the panel on the right)
 //! │  │  ├─ editor.vim.normal  [editor]
 //! │  │  │  └─ editor.ddl      [editor]   (a DDL tab's read-only text, vim Normal)
@@ -45,6 +47,7 @@ pub enum Ctx {
     Inspector,
     Plan,
     Chart,
+    Changes,
     Welcome,
     VimNormal,
     VimVisual,
@@ -81,7 +84,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 45] = [
+    pub const ALL: [Ctx; 46] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -94,6 +97,7 @@ impl Ctx {
         Ctx::Inspector,
         Ctx::Plan,
         Ctx::Chart,
+        Ctx::Changes,
         Ctx::Welcome,
         Ctx::VimNormal,
         Ctx::VimVisual,
@@ -144,6 +148,7 @@ impl Ctx {
             Ctx::Inspector => "inspector",
             Ctx::Plan => "plan",
             Ctx::Chart => "chart",
+            Ctx::Changes => "changes",
             Ctx::Welcome => "welcome",
             Ctx::VimNormal => "editor.vim.normal",
             Ctx::VimVisual => "editor.vim.visual",
@@ -201,6 +206,7 @@ impl Ctx {
             | Ctx::Inspector
             | Ctx::Plan
             | Ctx::Chart
+            | Ctx::Changes
             | Ctx::Welcome
             | Ctx::VimNormal
             | Ctx::VimVisual => Some(Ctx::Nav),
@@ -288,6 +294,9 @@ impl Ctx {
             }
             Ctx::Chart => {
                 "The Chart tab of the results pane (`c` in the grid, or its tab in the strip; it is drawn only once viewed): the fetched rows of the shown result as bars or lines, nothing run again. The arrows and `h`/`j`/`k`/`l` move the cursor along the bars or points (the other direction picks a series), `Enter` shows the point's row in the grid, `v`/`V` and the digits pick the kind, `x`/`s`/`b` choose the X column, the values and a column that splits them into series, `S` a logarithmic scale, `y`/`Y` copy the numbers as TSV or the drawing as text; a click picks a point, a kind or a column choice."
+            }
+            Ctx::Changes => {
+                "The Changes tab of the results pane (`:changes`, `Space d p`, or its tab in the strip while the shown result has pending changes): one line per changed cell, every reason they can't be applied first, or (`s`) the statements that apply them. `j`/`k` select a line (scroll the statements), `Ctrl+D`/`Ctrl+U` half a page, `g g`/`G` the first and the last, `Enter` shows the line's row and column in the grid, `s` switches between the list and the statements for this run, `c` copies the statements as they would be sent. The `Space d` keys work here as in the grid."
             }
             Ctx::Welcome => "The welcome panel shown while there is no connection profile.",
             Ctx::VimNormal => "Query editor, vim Normal mode (`i` starts typing).",
@@ -384,6 +393,7 @@ impl Ctx {
             Ctx::Inspector => Label::KeyctxInspector,
             Ctx::Plan => Label::KeyctxPlan,
             Ctx::Chart => Label::KeyctxChart,
+            Ctx::Changes => Label::KeyctxChanges,
             Ctx::Welcome => Label::KeyctxWelcome,
             Ctx::VimNormal => Label::KeyctxEditorVimNormal,
             Ctx::VimVisual => Label::KeyctxEditorVimVisual,

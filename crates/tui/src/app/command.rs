@@ -13,6 +13,7 @@
 //! [`complete_arg`].
 
 use super::action::{Action, LangSetting};
+use datarig_core::config::ChangesView;
 use datarig_core::config::{
     AutoPairs, ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
     IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat, SoftTabBackspace, Tips, YankFlash,
@@ -482,6 +483,7 @@ pub enum Setting {
     SizeHeat(SizeHeat),
     YankFlash(YankFlash),
     Tips(Tips),
+    ChangesView(ChangesView),
     /// `idle_disconnect` (`None`: off).
     IdleDisconnect(Option<Duration>),
     /// `lock_wait` (`None`: off).
@@ -751,6 +753,16 @@ pub const SETTINGS: &[SettingSpec] = &[
         values: Values::Fixed(&[
             ("on", Setting::YankFlash(YankFlash::On), Label::SettingYankFlashOn),
             ("off", Setting::YankFlash(YankFlash::Off), Label::SettingYankFlashOff),
+        ]),
+    },
+    SettingSpec {
+        key: "ui.changes_view",
+        label: Label::SettingChangesView,
+        about: Label::SettingChangesViewAbout,
+        group: SettingGroup::Results,
+        values: Values::Fixed(&[
+            ("list", Setting::ChangesView(ChangesView::List), Label::SettingChangesViewList),
+            ("sql", Setting::ChangesView(ChangesView::Sql), Label::SettingChangesViewSql),
         ]),
     },
     SettingSpec {

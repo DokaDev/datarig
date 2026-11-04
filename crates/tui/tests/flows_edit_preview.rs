@@ -1,4 +1,4 @@
-//! The preview of a result's pending changes (`space d p` / `space d a`, `:changes` / `:apply`):
+//! The preview of a result's pending changes (`space d a`, `:apply`):
 //! the statements that apply them, each with the count it must give; rows found by their values
 //! counted first on the tab's session; why nothing can be applied yet; the transaction the Apply
 //! runs in. `space d x` / `:discard` drops the changes once the user says so.
@@ -178,7 +178,7 @@ const UPDATE_1: &str = r#"UPDATE "shop"."users" SET "email" = 'z@x' WHERE "id" =
 fn a_keyed_change_shows_its_check_and_its_write_and_cancel_is_the_default() {
     let mut h = ready(Lang::En);
     type_cell(&mut h, "z@x");
-    h.keys(" dp");
+    h.keys(" da");
     assert_eq!(h.app.key_context(), Ctx::EditPreview);
     assert!(counts(&mut h).is_empty(), "a row found by its key is not counted");
     let v = h.app.edit_preview_view().unwrap();
@@ -194,15 +194,13 @@ fn a_keyed_change_shows_its_check_and_its_write_and_cancel_is_the_default() {
     h.key(KeyCode::Enter);
     assert_eq!(h.app.key_context(), Ctx::Grid);
     h.keys(" da");
-    assert_eq!(h.app.key_context(), Ctx::EditPreview, "space d a opens the same dialog");
+    assert_eq!(h.app.key_context(), Ctx::EditPreview, "space d a opens the same dialog again");
     h.key(KeyCode::Esc);
     assert_eq!(h.app.key_context(), Ctx::Grid);
     assert_eq!(edits(&h).batch.counts().total(), 1);
-    for cmd in ["changes", "apply"] {
-        h.command(cmd);
-        assert_eq!(h.app.key_context(), Ctx::EditPreview, ":{cmd}");
-        h.key(KeyCode::Char('q'));
-    }
+    h.command("apply");
+    assert_eq!(h.app.key_context(), Ctx::EditPreview, ":apply");
+    h.key(KeyCode::Char('q'));
     assert!(h.sent().iter().all(|c| !matches!(c, DbCommand::ApplyEdits { .. })), "nothing applied");
 }
 
@@ -212,7 +210,7 @@ fn deletes_and_new_rows_come_after_the_checks_in_the_risk_tone_for_deletes() {
     h.keys("jD");
     h.keys("ol");
     type_cell(&mut h, "n@x");
-    h.command("changes");
+    h.command("apply");
     let v = h.app.edit_preview_view().unwrap();
     assert_eq!(v.summary, "1 insert · 1 delete");
     assert_eq!(
@@ -258,7 +256,7 @@ fn nothing_pending_and_a_read_only_environment_are_refused_before_the_dialog() {
 fn rows_found_by_their_values_are_counted_on_the_tab_first() {
     let mut h = by_values(Lang::En);
     type_cell(&mut h, "z@x");
-    h.command("changes");
+    h.command("apply");
     let asked = counts(&mut h);
     let condition = r#""id" = '1' AND "email" = 'a@x' AND "nickname" = 'ann'"#;
     assert_eq!(asked.len(), 1);
@@ -290,7 +288,7 @@ fn rows_found_by_their_values_are_counted_on_the_tab_first() {
 fn the_changes_are_planned_once_per_revision_not_for_every_frame() {
     let mut h = by_values(Lang::En);
     type_cell(&mut h, "z@x");
-    h.command("changes");
+    h.command("apply");
     let asked = counts(&mut h);
     let builds = |h: &Harness| edits(h).changes.builds();
     let _ = screen(&mut h, 120, 40);
@@ -308,7 +306,7 @@ fn the_changes_are_planned_once_per_revision_not_for_every_frame() {
     let before = builds(&h);
     h.key(KeyCode::Esc);
     type_cell(&mut h, "y@x");
-    h.command("changes");
+    h.command("apply");
     let asked = counts(&mut h);
     h.db(DbEvent::Counted { id: asked[0].0, result: Ok(1), snapshot: false });
     let _ = screen(&mut h, 80, 24);
@@ -327,7 +325,7 @@ fn the_changes_are_planned_once_per_revision_not_for_every_frame() {
 fn a_count_for_changes_that_moved_is_dropped_and_the_changes_are_not_counted() {
     let mut h = by_values(Lang::En);
     type_cell(&mut h, "z@x");
-    h.command("changes");
+    h.command("apply");
     let asked = counts(&mut h);
     assert_eq!(asked.len(), 1);
     h.key(KeyCode::Esc);
@@ -448,7 +446,7 @@ fn a_row_gone_ambiguous_or_not_counted_is_said_and_nothing_can_be_applied() {
         (Ok(2), "Row 1 matches 2 rows; add the key to the SELECT to edit it"),
         (Err(DbError::Server("canceling statement".into())), "Couldn't count the matching rows: canceling statement"),
     ] {
-        h.command("changes");
+        h.command("apply");
         let asked = counts(&mut h);
         h.db(DbEvent::Counted { id: asked[0].0, result: answer, snapshot: false });
         let v = h.app.edit_preview_view().unwrap();
@@ -471,7 +469,7 @@ fn every_rows_problem_is_in_the_changes_with_its_row_and_the_dialog_says_the_fir
     type_cell(&mut h, "z@x");
     h.keys("j");
     type_cell(&mut h, "y@x");
-    h.command("changes");
+    h.command("apply");
     let asked = counts(&mut h);
     assert_eq!(asked.len(), 2);
     h.db(DbEvent::Counted { id: asked[0].0, result: Ok(0), snapshot: false });
@@ -491,7 +489,7 @@ fn every_rows_problem_is_in_the_changes_with_its_row_and_the_dialog_says_the_fir
 fn identical_rows_wait_for_one_or_all() {
     let mut h = identical(Lang::En);
     type_cell(&mut h, "z@x");
-    h.command("changes");
+    h.command("apply");
     let asked = counts(&mut h);
     h.db(DbEvent::Counted { id: asked[0].0, result: Ok(3), snapshot: false });
     assert_eq!(
@@ -509,7 +507,7 @@ fn identical_rows_wait_for_one_or_all() {
     assert!(matches!(&all[3], PreviewLine::Step { expect, risky: true, .. } if expect == "expect 3"), "{all:?}");
     h.key(KeyCode::Esc);
     // Asked again when opened again: the count and the answer.
-    h.command("changes");
+    h.command("apply");
     let asked = counts(&mut h);
     h.db(DbEvent::Counted { id: asked[0].0, result: Ok(3), snapshot: false });
     h.key(KeyCode::Char('1'));
@@ -529,7 +527,7 @@ fn a_new_row_leaving_a_not_null_column_without_a_default_is_listed_and_not_count
     let mut h = by_values(Lang::En);
     h.keys("o");
     h.keys("jo");
-    h.command("changes");
+    h.command("apply");
     assert!(counts(&mut h).is_empty(), "nothing is counted for changes that cannot be made");
     let want =
         |row: u32| PreviewLine::Problem(format!("Row {row}: email is NOT NULL and has no default; give it a value"));
@@ -542,7 +540,7 @@ fn a_new_row_leaving_a_not_null_column_without_a_default_is_listed_and_not_count
     type_cell(&mut h, "n@x");
     h.keys("j");
     type_cell(&mut h, "m@x");
-    h.command("changes");
+    h.command("apply");
     let v = h.app.edit_preview_view().unwrap();
     assert!(v.apply);
     assert_eq!(v.summary, "2 inserts");
@@ -553,7 +551,7 @@ fn c_copies_every_statement_through_the_clipboard_setting() {
     let mut h = ready(Lang::En);
     let clip = FakeClipboard::attach(&mut h, false, &[]);
     type_cell(&mut h, "z@x");
-    h.command("changes");
+    h.command("apply");
     h.key(KeyCode::Char('c'));
     assert_eq!(clip.last(), Some(format!("{CHECK_1};\n{UPDATE_1};\n")));
     assert!(matches!(said(&mut h), Some(Msg::EditPreviewCopied { count: 2, .. })));
@@ -562,7 +560,7 @@ fn c_copies_every_statement_through_the_clipboard_setting() {
     let mut h = by_values(Lang::En);
     let clip = FakeClipboard::attach(&mut h, false, &[]);
     type_cell(&mut h, "z@x");
-    h.command("changes");
+    h.command("apply");
     h.key(KeyCode::Char('c'));
     assert_eq!(said(&mut h), Some(Label::EditPreviewNothingToCopy.into()));
     assert_eq!(clip.last(), None);
@@ -587,12 +585,12 @@ fn the_footer_says_how_the_apply_stands_to_a_transaction() {
         users_structure(),
     );
     type_cell(&mut h, "z@x");
-    h.command("changes");
+    h.command("apply");
     assert_eq!(h.app.edit_preview_view().unwrap().footer, "Opens a transaction; nothing is committed.");
     h.key(KeyCode::Esc);
     h.tab_db(0, DbEvent::Block(true));
     h.tab_db(0, DbEvent::TxOpen(true));
-    h.command("changes");
+    h.command("apply");
     assert_eq!(h.app.edit_preview_view().unwrap().footer, "Runs inside the open transaction; nothing is committed.");
 }
 
@@ -600,14 +598,14 @@ fn the_footer_says_how_the_apply_stands_to_a_transaction() {
 fn the_preview_closes_when_its_result_is_replaced_or_its_session_lost() {
     let mut h = ready(Lang::En);
     type_cell(&mut h, "z@x");
-    h.command("changes");
+    h.command("apply");
     answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows());
     assert!(h.app.overlays.edit_preview().is_none());
     assert_eq!(said(&mut h), Some(Label::EditPreviewClosed.into()));
     // The tab's session lost while it counts: no answer comes there any more.
     let mut h = by_values(Lang::En);
     type_cell(&mut h, "z@x");
-    h.command("changes");
+    h.command("apply");
     assert_eq!(counts(&mut h).len(), 1);
     h.tab_db(0, DbEvent::Lost { error: DbError::Closed });
     assert!(h.app.overlays.edit_preview().is_none());
@@ -718,7 +716,7 @@ fn mysql_products() -> Harness {
 fn a_mysql_new_rows_decimal_is_typed_and_its_not_null_columns_must_be_given() {
     let mut h = mysql_products();
     h.keys("o");
-    h.command("changes");
+    h.command("apply");
     let want = |c: &str| PreviewLine::Problem(format!("Row 2: {c} is NOT NULL and has no default; give it a value"));
     assert_eq!(lines(&h), [want("name"), want("price")]);
     h.key(KeyCode::Esc);
@@ -729,7 +727,7 @@ fn a_mysql_new_rows_decimal_is_typed_and_its_not_null_columns_must_be_given() {
     type_cell(&mut h, "ink");
     let new = &edits(&h).batch.drafts()[0].cells;
     assert_eq!(new[1..], [Value::Text("ink".into()), Value::Text("9.99".into())]);
-    h.command("changes");
+    h.command("apply");
     let v = h.app.edit_preview_view().unwrap();
     assert!(v.apply);
     assert_eq!(v.lines[1], step("INSERT INTO `shop`.`products` (`name`, `price`) VALUES ('ink', 9.99)", 1, false));
@@ -753,7 +751,7 @@ fn three_changes(mut h: Harness) -> Harness {
     h.keys("jD");
     h.keys("ol");
     type_cell(&mut h, "n@x");
-    h.command("changes");
+    h.command("apply");
     h.app.transient = None;
     h
 }
@@ -783,7 +781,7 @@ fn the_preview_on_screen() {
     screens("edit_preview_choose", |lang| {
         let mut h = identical(lang);
         type_cell(&mut h, "z@x");
-        h.command("changes");
+        h.command("apply");
         let asked = counts(&mut h);
         h.db(DbEvent::Counted { id: asked[0].0, result: Ok(3), snapshot: false });
         h
@@ -791,13 +789,13 @@ fn the_preview_on_screen() {
     screens("edit_preview_counting", |lang| {
         let mut h = by_values(lang);
         type_cell(&mut h, "z@x");
-        h.command("changes");
+        h.command("apply");
         h
     });
     screens("edit_preview_count_failed", |lang| {
         let mut h = by_values(lang);
         type_cell(&mut h, "z@x");
-        h.command("changes");
+        h.command("apply");
         let asked = counts(&mut h);
         let result = Err(DbError::Server("canceling statement due to lock timeout".into()));
         h.db(DbEvent::Counted { id: asked[0].0, result, snapshot: false });
@@ -806,7 +804,7 @@ fn the_preview_on_screen() {
     screens("edit_preview_no_default", |lang| {
         let mut h = ready(lang);
         h.keys("o");
-        h.command("changes");
+        h.command("apply");
         h
     });
 }
@@ -825,7 +823,7 @@ fn a_new_row_is_refused_while_the_table_has_a_required_column_the_result_does_no
     );
     h.keys("ol");
     type_cell(&mut h, "n@x");
-    h.command("changes");
+    h.command("apply");
     let want = "Row 4: name is NOT NULL, has no default and is not in the result; add it to the SELECT";
     assert_eq!(lines(&h), [PreviewLine::Problem(want.into())]);
     assert!(!h.app.edit_preview_view().unwrap().apply);
@@ -838,7 +836,7 @@ fn a_new_row_is_refused_while_the_table_has_a_required_column_the_result_does_no
     h.keys("D");
     h.keys("gg");
     type_cell(&mut h, "z@x");
-    h.command("changes");
+    h.command("apply");
     assert!(h.app.edit_preview_view().unwrap().apply, "{:?}", lines(&h));
 }
 
@@ -1954,7 +1952,10 @@ fn an_export_of_the_rows_held_is_refused_while_they_are_edited() {
     let mut applied_h = pending;
     applied_h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
     applied_h.app.transient = None;
+    let pending_refused = "Not exported: this result has pending changes; apply or discard them, or run the query \
+                           again — see Changes";
     for (n, h) in [&mut h, &mut applied_h].into_iter().enumerate() {
+        let refused = if n == 0 { pending_refused } else { refused };
         for (i, (format, scope)) in
             [("csv", "fetched"), ("json", "selection"), ("xlsx", "all"), ("insert", "fetched")].into_iter().enumerate()
         {
@@ -2013,11 +2014,13 @@ fn an_export_of_every_row_says_the_pending_changes_are_left_out() {
 #[test]
 fn the_chart_draws_nothing_while_the_rows_are_edited() {
     let why = "Not drawn: this result has pending or applied changes. Run the query again to chart the edited values.";
+    let pending = "Not drawn: this result has pending changes. Apply or discard them, or run the query again — see \
+                   Changes";
     let mut h = ready(Lang::En);
     type_cell(&mut h, "z@x");
     h.keys("c");
     let s = screen(&mut h, 160, 40);
-    assert!(s.contains(why), "{s}");
+    assert!(s.contains(pending), "{s}");
     let (mut h, id, steps) = three_applying(ready(Lang::En));
     h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
     h.app.transient = None;
@@ -2138,7 +2141,7 @@ fn mysql_note_previewed(lang: Lang, rows: Vec<Vec<Option<String>>>, note: &str) 
     let mut h = mysql_people(lang, rows);
     h.keys("l");
     type_cell(&mut h, note);
-    h.command("changes");
+    h.command("apply");
     let asked = counts(&mut h);
     let why = || format!("{:.400?} {:.400?}", h.app.edit_preview_view().map(|v| v.lines), h.app.transient);
     assert_eq!(asked.len(), 1, "the row is counted: {}", why());
@@ -2262,7 +2265,7 @@ fn the_statements_take_the_editors_syntax_colors() {
         let mut h = ready(Lang::En);
         h.app.theme = std::sync::Arc::new(th.clone());
         type_cell(&mut h, "z@x");
-        h.command("changes");
+        h.command("apply");
         let t = h.draw(120, 40);
         let buf = t.backend().buffer();
         let (x, y) = (0..40u16)
@@ -2295,7 +2298,7 @@ fn the_preview_clears_what_is_under_it() {
     let before: Vec<_> = sizes.iter().map(|&(w, hh)| h.draw(w, hh)).collect();
     h.keys("l");
     type_cell(&mut h, "a\\b");
-    h.command("changes");
+    h.command("apply");
     let asked = counts(&mut h);
     h.db(DbEvent::Counted { id: asked[0].0, result: Ok(1), snapshot: false });
     for (&(w, hh), before) in sizes.iter().zip(&before) {

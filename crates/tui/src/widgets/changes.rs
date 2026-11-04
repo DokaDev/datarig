@@ -1,25 +1,33 @@
 //! The changes of a result drawn: the statements that apply them, in the editor's colors, each
-//! wrapped under itself with the count it must give and the text values it carries read back.
+//! wrapped under itself with the count it must give and the text values it carries read back;
+//! and the Changes tab of the results pane, with its list of the changed cells.
 
-use crate::app::edit::PreviewLine;
+use crate::app::App;
+use crate::app::edit::{ChangesModel, Mark, Pointer, PreviewLine};
 use crate::text::wrap_words;
 use crate::theme;
+use crate::widgets::put;
+use datarig_core::i18n::{Label, Msg};
 use datarig_core::sql::dialect::Dialect;
-use ratatui::style::{Modifier, Style};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
 
-/// The rows of a preview's body `lines` (statements in dialect `d`) in `iw` columns: a statement
-/// from column 2, wrapped under itself from column 4 (a line break in a value as one character,
-/// a long literal shortened with `cut` saying how many bytes are not shown), its count at the end
-/// of its first row; its values read back from column 4, wrapped from column 6; words wrapped.
+/// The rows of a preview's body `lines` (statements in dialect `d`) in `iw` columns on background
+/// `bg`: a statement from column 2, wrapped under itself from column 4 (a line break in a value as
+/// one character, a long literal shortened with `cut` saying how many bytes are not shown), its
+/// count at the end of its first row; its values read back from column 4, wrapped from column 6;
+/// words wrapped.
 pub(crate) fn preview_rows(
     lines: &[PreviewLine],
     d: Dialect,
     iw: usize,
     cut: &dyn Fn(usize) -> String,
+    bg: Color,
 ) -> Vec<Vec<(String, Style)>> {
     use crate::text::width;
     let th = theme::cur();
-    let surface = |fg| Style::new().fg(fg).bg(th.surface);
+    let surface = |fg| Style::new().fg(fg).bg(bg);
     let risk = surface(th.warning).add_modifier(Modifier::BOLD);
     let dim = surface(th.fg_dim).add_modifier(Modifier::ITALIC);
     let mut rows: Vec<Vec<(String, Style)>> = Vec::new();
@@ -33,7 +41,7 @@ pub(crate) fn preview_rows(
                 let tail = format!("  {expect}");
                 let first = iw.saturating_sub(2 + width(&tail)).max(8);
                 let more = iw.saturating_sub(4).max(8);
-                let cells = sql_cells(sql, d, th.surface, &|n| (cut(n), dim));
+                let cells = sql_cells(sql, d, bg, &|n| (cut(n), dim));
                 let mut parts = wrap_cells(cells, first, more).into_iter();
                 let head = parts.next().unwrap_or_default();
                 let pad = first.saturating_sub(head.iter().map(|g| g.width).sum());
@@ -180,4 +188,219 @@ fn runs(cells: Vec<Glyph<'_>>) -> Vec<(String, Style)> {
         }
     }
     out
+}
+
+/// `spans` cut to `w` columns, `…` where something is left out.
+fn cut_spans(spans: Vec<(String, Style)>, w: usize) -> Vec<(String, Style)> {
+    use crate::text::{clip, width};
+    let mut left = w;
+    let mut out = Vec::new();
+    let n = spans.len();
+    for (k, (text, style)) in spans.into_iter().enumerate() {
+        let tw = width(&text);
+        if tw < left || (tw == left && k + 1 == n) {
+            left -= tw;
+            out.push((text, style));
+            continue;
+        }
+        // The last column that fits says something follows.
+        let cut = if tw > left { clip(&text, left) } else { clip(&format!("{text}\u{2026}"), left) };
+        out.push((cut, style));
+        break;
+    }
+    out
+}
+
+/// How a line of the list names its row: by its key, its row in the grid, or as a new row.
+fn pointer_text(app: &App, p: &Pointer) -> String {
+    match p {
+        Pointer::Key(k) => k.clone(),
+        Pointer::Row(n) => app.i18n.msg(&Msg::ChangesRow { n: n.to_string() }).to_string(),
+        Pointer::New(n) => app.i18n.msg(&Msg::ChangesNew { n: n.to_string() }).to_string(),
+    }
+}
+
+/// The rows of the Changes tab's list in `w` columns, each with the line of the list it shows:
+/// every problem (`!`, its words wrapped), then one row per changed cell (`~`), deleted row
+/// (`-`) and new row (`+`), its row named on its first line, cut to the width.
+fn list_rows(app: &App, m: &ChangesModel, w: usize) -> Vec<(usize, Vec<(String, Style)>)> {
+    use crate::text::{fit, width, wrap_words};
+    let th = theme::cur();
+    let base = |fg| Style::new().fg(fg).bg(th.bg);
+    let token = |s: Style| s.bg(th.bg).remove_modifier(Modifier::CROSSED_OUT);
+    let mut rows = Vec::new();
+    for (k, p) in m.problems.iter().enumerate() {
+        for (j, r) in wrap_words(&p.text, w.saturating_sub(2).max(8)).into_iter().enumerate() {
+            let lead = if j == 0 { "! " } else { "  " };
+            rows.push((k, vec![(lead.to_string(), base(th.error).add_modifier(Modifier::BOLD)), (r, base(th.error))]));
+        }
+    }
+    let pointers: Vec<Option<String>> = m.list.iter().map(|l| l.row.as_ref().map(|p| pointer_text(app, p))).collect();
+    let pw = pointers.iter().flatten().map(|p| width(p)).max().unwrap_or(0);
+    let cw = m.list.iter().filter(|l| l.col.is_some()).map(|l| width(&l.column)).max().unwrap_or(0).min(24);
+    let by_values = app.i18n.label(Label::ChangesByValues).to_string();
+    let delete = app.i18n.label(Label::ChangesDelete).to_string();
+    for (k, (l, pointer)) in m.list.iter().zip(&pointers).enumerate() {
+        let (mark, tone) = match l.mark {
+            Mark::Changed => ("~", token(th.edit_changed)),
+            Mark::Inserted => ("+", token(th.edit_inserted)),
+            Mark::Deleted => ("-", token(th.edit_deleted)),
+        };
+        let ptr = fit(pointer.as_deref().unwrap_or(""), pw, crate::text::Align::Left);
+        let mut spans = vec![(format!("{mark} "), tone), (format!("{ptr}  "), base(th.fg))];
+        match (l.mark, l.col) {
+            (Mark::Deleted, _) => spans.push((delete.clone(), base(th.fg_muted))),
+            (_, Some(_)) => {
+                let column = fit(&l.column, cw, crate::text::Align::Left);
+                let (old, new) = (l.old.as_deref().unwrap_or(""), l.new.as_deref().unwrap_or(""));
+                spans.push((format!("{column}  "), base(th.fg_muted)));
+                spans.push((format!("{old} \u{2192} {new}"), base(th.fg)));
+            }
+            (_, None) => spans.push((l.new.clone().unwrap_or_default(), base(th.fg))),
+        }
+        if matches!(l.row, Some(Pointer::Row(_))) {
+            spans.push((format!("  {by_values}"), base(th.fg_dim).add_modifier(Modifier::ITALIC)));
+        }
+        rows.push((m.problems.len() + k, cut_spans(spans, w)));
+    }
+    rows
+}
+
+/// The Changes tab of the shown result in `area`: its first line (the result and the table,
+/// how many changes of each kind and how many problems), what the Apply is doing, another
+/// result's pending changes, then the list or the statements, and under them how the Apply
+/// stands to a transaction with the tab's keys. In a short pane the keys go first, then the line
+/// above them; the first line always stays.
+pub(crate) fn draw_changes(app: &mut App, area: Rect, buf: &mut Buffer) {
+    use crate::text::width;
+    let th = theme::cur();
+    buf.set_style(area, th.base());
+    let Some(m) = app.shown_changes() else { return };
+    if area.height == 0 || area.width < 4 {
+        return;
+    }
+    let base = |fg| Style::new().fg(fg).bg(th.bg);
+    let iw = area.width as usize - 2;
+    let x = area.x + 1;
+    let line = |buf: &mut Buffer, y: u16, parts: &[(String, Style)]| {
+        let mut cx = x;
+        for (text, style) in parts {
+            let room = (x as usize + iw).saturating_sub(cx as usize);
+            if room == 0 {
+                break;
+            }
+            cx += put(buf, cx, y, text, room, *style);
+        }
+    };
+    let bottom = area.y + area.height;
+    let mut y = area.y;
+    // The first line: the problems' count first to stay, then the summary, then the title.
+    let (title, summary, problems) = app.changes_head(&m);
+    let mut right: Vec<(String, Style)> = Vec::new();
+    if !summary.is_empty() {
+        right.push((summary, base(th.fg_muted)));
+    }
+    if let Some(p) = problems {
+        if !right.is_empty() {
+            right.push((" \u{B7} ".into(), base(th.fg_muted)));
+        }
+        right.push((p, base(th.error).add_modifier(Modifier::BOLD)));
+    }
+    let rw = |r: &[(String, Style)]| r.iter().map(|(t, _)| width(t)).sum::<usize>();
+    if rw(&right) + 2 + width(&title).min(12) > iw {
+        right.retain(|(_, s)| s.fg == Some(th.error));
+    }
+    let room = iw.saturating_sub(rw(&right) + if right.is_empty() { 0 } else { 2 });
+    line(buf, y, &cut_spans(vec![(title, base(th.fg).add_modifier(Modifier::BOLD))], room));
+    let w = rw(&right);
+    if w > 0 && w <= iw {
+        let rx = x + (iw - w) as u16;
+        let mut cx = rx;
+        for (text, style) in &right {
+            cx += put(buf, cx, y, text, (x as usize + iw).saturating_sub(cx as usize), *style);
+        }
+    }
+    y += 1;
+    let mut extra: Vec<Vec<(String, Style)>> = Vec::new();
+    if let Some((text, problem)) = app.changes_status() {
+        let tone = if problem { base(th.error) } else { base(th.accent) };
+        extra.push(cut_spans(vec![(text, tone)], iw));
+    }
+    if let Some(note) = app.changes_note() {
+        extra.push(cut_spans(vec![(note, base(th.warning))], iw));
+    }
+    let avail = bottom.saturating_sub(y) as usize;
+    let footer = match avail.saturating_sub(extra.len()) {
+        n if n >= 6 => 2,
+        n if n >= 3 => 1,
+        _ => 0,
+    };
+    for e in extra.iter().take(avail.saturating_sub(footer + 1)) {
+        line(buf, y, e);
+        y += 1;
+    }
+    let body_h = bottom.saturating_sub(y) as usize - footer;
+    let focused = app.focus == crate::app::Focus::Results;
+    let mut c = app.changes_cursor().unwrap_or_default();
+    c.page = body_h;
+    if app.changes_sql() {
+        // Laid out again only for another model of the changes (made once for each state of
+        // them and what was counted), width or theme.
+        let current = app.changes_body.as_ref().is_some_and(|(made, b)| {
+            std::sync::Arc::ptr_eq(made, &m) && b.width == iw && std::sync::Arc::ptr_eq(&b.theme, &app.theme)
+        });
+        if !current {
+            let lines = app.changes_sql_lines(&m);
+            let cut = |n: usize| app.i18n.msg(&Msg::EditPreviewCut { count: n as u64 }).to_string();
+            let rows = preview_rows(&lines, m.dialect, iw, &cut, th.bg);
+            let theme = app.theme.clone();
+            app.changes_body = Some((m.clone(), crate::app::edit::PreviewBody { width: iw, theme, lines, rows }));
+        }
+        let rows = app.changes_body.as_ref().map(|(_, b)| b.rows.as_slice()).unwrap_or_default();
+        c.sql_scroll = c.sql_scroll.min(rows.len().saturating_sub(body_h));
+        for (k, parts) in rows.iter().skip(c.sql_scroll).take(body_h).enumerate() {
+            line(buf, y + k as u16, parts);
+        }
+    } else {
+        let rows = list_rows(app, &m, iw);
+        let last = (m.problems.len() + m.list.len()).saturating_sub(1);
+        c.line = c.line.min(last);
+        // The selected line on screen, whole when it fits.
+        let first = rows.iter().position(|(k, _)| *k == c.line).unwrap_or(0);
+        let end = rows.iter().rposition(|(k, _)| *k == c.line).map_or(first, |e| e + 1);
+        if first < c.scroll {
+            c.scroll = first;
+        } else if end > c.scroll + body_h {
+            c.scroll = end.saturating_sub(body_h).min(first);
+        }
+        c.scroll = c.scroll.min(rows.len().saturating_sub(body_h));
+        let selected = th.selection;
+        for (k, (entry, parts)) in rows.iter().skip(c.scroll).take(body_h).enumerate() {
+            let yy = y + k as u16;
+            if focused && *entry == c.line {
+                let lit: Vec<(String, Style)> = parts.iter().map(|(t, s)| (t.clone(), s.patch(selected))).collect();
+                buf.set_style(Rect { x, y: yy, width: iw as u16, height: 1 }, Style::new().bg(th.bg).patch(selected));
+                line(buf, yy, &lit);
+            } else {
+                line(buf, yy, parts);
+            }
+        }
+    }
+    if let Some(cursor) = app.changes_cursor_mut() {
+        *cursor = c;
+    }
+    y += body_h as u16;
+    if footer == 2 {
+        line(buf, y, &[("\u{2500}".repeat(iw), base(th.border))]);
+        y += 1;
+    }
+    if footer > 0 {
+        let tx = app.changes_tx_text();
+        let keys =
+            [app.changes_keys(false), app.changes_keys(true)].into_iter().find(|k| width(&tx) + 3 + width(k) <= iw);
+        line(buf, y, &cut_spans(vec![(tx, base(th.fg_muted))], iw));
+        if let Some(k) = keys.filter(|k| !k.is_empty()) {
+            put(buf, x + (iw - width(&k)) as u16, y, &k, width(&k), base(th.fg_dim));
+        }
+    }
 }

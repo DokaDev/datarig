@@ -654,6 +654,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             size_heat: SizeHeat::Three,
             yank_flash: YankFlash::On,
             tips: Tips::Always,
+            changes_view: ChangesView::List,
             idle_disconnect: None,
             lock_wait: None,
         }
@@ -831,6 +832,32 @@ fn the_size_heat_of_the_explorer_is_three_levels_by_default_five_or_off() {
     assert_eq!(load(Some(path.clone())).0.prefs, five);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("size_heat"), "3 is the default: the key goes");
+}
+
+#[test]
+fn the_changes_tab_opens_in_its_list_unless_the_sql_is_chosen() {
+    assert_eq!(parse("").unwrap().prefs.changes_view, ChangesView::List);
+    assert_eq!(parse("[ui]\nchanges_view = \"sql\"\n").unwrap().prefs.changes_view, ChangesView::Sql);
+    assert_eq!(parse("[ui]\nchanges_view = \"list\"\n").unwrap().prefs.changes_view, ChangesView::List);
+    assert_eq!(
+        parse("[ui]\nchanges_view = \"grid\"\n").unwrap_err(),
+        ConfigError::Value {
+            key: "ui.changes_view".into(),
+            value: "grid".into(),
+            profile: None,
+            allowed: Some("list, sql")
+        }
+    );
+    let path = temp_file("changes_view");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "").unwrap();
+    let prefs = Prefs { changes_view: ChangesView::Sql, ..Prefs::default() };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[ui]\nchanges_view = \"sql\"\n"), "{text}");
+    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("changes_view"), "list is the default: the key goes");
 }
 
 #[test]

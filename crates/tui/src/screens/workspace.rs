@@ -337,12 +337,16 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     };
     // Another view than the rows: no grid, so no cell of it is under the pointer (it would
     // still be lit when the rows come back).
-    let rows = app.tab().exec.view != ResultView::Messages && !app.plan_shown() && !app.chart_shown();
+    let rows = !matches!(app.tab().exec.view, ResultView::Messages | ResultView::Changes)
+        && !app.plan_shown()
+        && !app.chart_shown();
     if !rows && matches!(app.pointer_on, Some(PointerOn::Cell(..))) {
         app.pointer_on = None;
     }
     if app.tab().exec.view == ResultView::Messages {
         draw_messages(app, content, buf);
+    } else if app.changes_shown() {
+        crate::widgets::changes::draw_changes(app, content, buf);
     } else if app.plan_shown() {
         crate::widgets::plan::draw_plan(app, content, buf);
     } else if app.chart_shown() {
@@ -355,8 +359,9 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
 }
 
-/// The result tab strip: `[Result 1]  Result 3  Plan  Chart  Messages`, the shown one in
-/// brackets, two blanks between any two. Without a row result there is one `Result` tab (for
+/// The result tab strip: `[Result 1]  Result 3  Changes 2  Plan  Chart  Messages`, the shown
+/// one in brackets, two blanks between any two; the Changes of the shown result while it has
+/// pending changes. Without a row result there is one `Result` tab (for
 /// what the run said, or what is coming). Then `earlier run` when a later run returned no rows,
 /// the keys that move between the tabs, and on the right what the shown rows' transaction is
 /// (uncommitted, ended, rolled back), and left of it what the rows are to their edits (how many
@@ -365,7 +370,8 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
 /// Room goes first to the transaction, then to the edits as far as the tabs' labels (whole, else
 /// short) still fit, then to the tabs: the keys show only when every whole
 /// label fits with them. When the whole labels do not fit, every tab shows with a short label
-/// (`[1]  3  Plan  Chart  Msgs`); when even those do not fit, the shown one, Messages and as many
+/// (`[1]  3  Chg2  Plan  Chart  Msgs`); when even those do not fit, the shown one, the Changes,
+/// Messages and as many
 /// of the shown one's neighbours as fit, `…` where some are left out (`H`/`L` reach them); at
 /// last the shown one alone. `earlier run` goes first. Records where each tab is.
 fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
@@ -395,6 +401,11 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     });
     let tabs = t.result_tabs();
     let plan = t.exec.plan.is_some();
+    // The shown result's pending changes, counted.
+    let changes = match &t.results {
+        Results::Rows(rs) if !rs.edit.batch.is_empty() => Some(rs.edit.batch.counts().total() as u64),
+        _ => None,
+    };
     type Item = ((Option<usize>, ResultView), String);
     let labels = |short: bool| -> Vec<Item> {
         let mut v: Vec<Item> = tabs
@@ -409,6 +420,10 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
             .collect();
         if v.is_empty() {
             v.push(((None, ResultView::Rows), app.i18n.label(Label::ResultsTabRows).to_string()));
+        }
+        if let Some(count) = changes {
+            let msg = if short { Msg::ResultsTabChangesShort { count } } else { Msg::ResultsTabChanges { count } };
+            v.push(((None, ResultView::Changes), app.i18n.msg(&msg).to_string()));
         }
         if plan {
             v.push(((None, ResultView::Plan), app.i18n.label(Label::ResultsTabPlan).to_string()));
@@ -449,7 +464,8 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
         let all = (0..short.len()).collect();
         (short, all, false)
     } else {
-        let shown = strip_window(&widths(&short), at, room).unwrap_or_else(|| {
+        let keep = short.iter().position(|(k, _)| k.1 == ResultView::Changes);
+        let shown = strip_window(&widths(&short), at, keep, room).unwrap_or_else(|| {
             // Not even that: the shown one alone, when it fits (the transaction comes first).
             let k = at.unwrap_or(short.len() - 1);
             if widths(&short)[k] <= room { vec![k] } else { Vec::new() }
@@ -519,6 +535,8 @@ fn strip_keys(app: &App) -> Option<String> {
         Ctx::Plan
     } else if app.chart_shown() {
         Ctx::Chart
+    } else if app.changes_shown() {
+        Ctx::Changes
     } else {
         Ctx::Grid
     };
@@ -536,13 +554,20 @@ fn strip_cost(widths: &[usize], shown: &[usize]) -> usize {
 }
 
 /// Which of the strip's labels (their widths `widths`, Messages last) to draw in `room` columns
-/// when they do not all fit: the shown one (`at`) and Messages, and the others nearest the shown
-/// one while they fit. `None` when the shown one and Messages do not fit.
-fn strip_window(widths: &[usize], at: Option<usize>, room: usize) -> Option<Vec<usize>> {
+/// when they do not all fit: the shown one (`at`), the Changes (`keep`) and Messages, and the
+/// others nearest the shown one while they fit. The Changes are left out first when the three do
+/// not fit.
+/// `None` when the shown one and Messages do not fit.
+fn strip_window(widths: &[usize], at: Option<usize>, keep: Option<usize>, room: usize) -> Option<Vec<usize>> {
     let last = widths.len().checked_sub(1)?;
     let at = at.unwrap_or(0);
     let mut shown = vec![at, last];
+    shown.extend(keep);
+    shown.sort_unstable();
     shown.dedup();
+    if strip_cost(widths, &shown) > room {
+        shown.retain(|k| Some(*k) != keep || *k == at);
+    }
     if strip_cost(widths, &shown) > room {
         return None;
     }
@@ -552,6 +577,12 @@ fn strip_window(widths: &[usize], at: Option<usize>, room: usize) -> Option<Vec<
     while sides.iter().any(Option::is_some) {
         for (n, side) in sides.iter_mut().enumerate() {
             let Some(k) = *side else { continue };
+            let step = |k: usize| if n == 0 { k.checked_sub(1) } else { Some(k + 1).filter(|k| *k < last) };
+            // The Changes kept already.
+            if shown.contains(&k) {
+                *side = step(k);
+                continue;
+            }
             let mut more = shown.clone();
             more.push(k);
             more.sort_unstable();
@@ -560,7 +591,7 @@ fn strip_window(widths: &[usize], at: Option<usize>, room: usize) -> Option<Vec<
                 continue;
             }
             shown = more;
-            *side = if n == 0 { k.checked_sub(1) } else { Some(k + 1).filter(|k| *k < last) };
+            *side = step(k);
         }
     }
     Some(shown)
@@ -1408,3 +1439,6 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         app.results_read_failed(&fault);
     }
 }
+
+#[cfg(test)]
+mod tests;

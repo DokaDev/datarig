@@ -31,7 +31,8 @@
 //! explorer colors the estimates of the largest tables of each schema (`on`, its old value,
 //! reads as `3`). `[ui] yank_flash` says whether the cells a copy took from the results grid
 //! flash briefly, `[ui] tips` whether empty places show a tip about a key (always, until the
-//! key was used, or never; and the welcome panel its first steps).
+//! key was used, or never; and the welcome panel its first steps), `[ui] changes_view` which
+//! view the Changes tab of a result opens in (its list of changed cells, or its SQL).
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
 //! the top, or the bottom line), `detail_view` (the result inspector as a panel or a status bar
 //! preview), `clipboard` (how copies reach the clipboard) and `copy_header`
@@ -355,6 +356,8 @@ struct UiSection {
     /// A string, or `true` / `false` written without quotes.
     #[serde(default)]
     tips: Option<toml::Value>,
+    #[serde(default)]
+    changes_view: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -640,6 +643,26 @@ impl Choice for YankFlash {
     }
 }
 
+/// `[ui] changes_view`: the view the Changes tab of a result opens in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ChangesView {
+    /// One line per changed cell.
+    #[default]
+    List,
+    /// The statements that apply the changes.
+    Sql,
+}
+
+impl Choice for ChangesView {
+    const ALL: &'static [Self] = &[ChangesView::List, ChangesView::Sql];
+    fn as_str(self) -> &'static str {
+        match self {
+            ChangesView::List => "list",
+            ChangesView::Sql => "sql",
+        }
+    }
+}
+
 /// `[ui] tips`: whether empty places (the welcome panel, an empty editor or result, the status
 /// bar's spare room) show a tip about a key, and running an action from the menu a few times
 /// names its key.
@@ -763,6 +786,8 @@ pub struct Prefs {
     pub yank_flash: YankFlash,
     /// `[ui] tips`.
     pub tips: Tips,
+    /// `[ui] changes_view`.
+    pub changes_view: ChangesView,
     /// `idle_disconnect`: how long a profile's connection may sit unused before its sessions
     /// close (`None`: never); an environment may say otherwise.
     pub idle_disconnect: Option<std::time::Duration>,
@@ -790,6 +815,7 @@ impl Default for Prefs {
             size_heat: SizeHeat::default(),
             yank_flash: YankFlash::default(),
             tips: Tips::default(),
+            changes_view: ChangesView::default(),
             idle_disconnect: None,
             lock_wait: None,
         }
@@ -1061,7 +1087,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             )
         })
         .unwrap_or_default();
-    let (ui_flash, ui_tips) = f.ui.map(|u| (u.yank_flash, u.tips)).unwrap_or_default();
+    let (ui_flash, ui_tips, ui_changes) = f.ui.map(|u| (u.yank_flash, u.tips, u.changes_view)).unwrap_or_default();
     let (default_source, keychain_access) =
         f.secrets.map(|s| (s.default_source, s.macos_keychain_access)).unwrap_or_default();
     let default_source = match default_source {
@@ -1111,6 +1137,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             }),
             "always, until_used, off",
         )?,
+        changes_view: choice("ui.changes_view", ui_changes, "list, sql")?,
         idle_disconnect: match &f.idle_disconnect {
             None => None,
             Some(v) => policy::parse_idle_disconnect(v)
@@ -1578,6 +1605,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "ui", "yank_flash", flash)?;
     let tips = (prefs.tips.as_str().into(), prefs.tips == Tips::default());
     orphans += &nested_setting(&mut doc, "ui", "tips", tips)?;
+    let changes = (prefs.changes_view.as_str().into(), prefs.changes_view == ChangesView::default());
+    orphans += &nested_setting(&mut doc, "ui", "changes_view", changes)?;
     let source = (default_source.as_str().into(), default_source == DefaultSource::Auto);
     orphans += &nested_setting(&mut doc, "secrets", "default_source", source)?;
     let access = (prefs.keychain_access.as_str().into(), prefs.keychain_access == KeychainAccess::default());

@@ -93,6 +93,7 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::SizeHeat(_)
         | Setting::YankFlash(_)
         | Setting::Tips(_)
+        | Setting::ChangesView(_)
         | Setting::IdleDisconnect(_)
         | Setting::LockWait(_) => None,
     }
@@ -883,6 +884,11 @@ impl App {
             Setting::SizeHeat(h) => self.set_prefs(s, |x| x.size_heat = h),
             Setting::YankFlash(f) => self.set_prefs(s, |x| x.yank_flash = f),
             Setting::Tips(t) => self.set_prefs(s, |x| x.tips = t),
+            Setting::ChangesView(v) => {
+                // The view `s` chose for this run gives way to the setting.
+                self.changes_view = None;
+                self.set_prefs(s, |x| x.changes_view = v)
+            }
             Setting::IdleDisconnect(d) => self.set_prefs(s, |x| x.idle_disconnect = d),
             Setting::LockWait(d) => self.set_prefs(s, |x| x.lock_wait = d),
         }

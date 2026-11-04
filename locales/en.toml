@@ -2430,7 +2430,7 @@
 "edit.invalid.too_long" = "longer than {max} characters"
 "edit.invalid.rounded" = "{type_name} would store it rounded, as {stored}"
 "edit.invalid.trailing_spaces" = "ends in spaces, which a CHAR column drops"
-"action.edit.preview" = "Show the pending changes and the statements that apply them"
+"action.edit.preview" = "Show changes"
 "action.edit.apply" = "Apply the pending changes (shown first, to confirm)"
 "action.edit.discard" = "Drop every pending change of the result"
 "hint.apply" = "apply"
@@ -2502,3 +2502,38 @@
 "edit.leave.close" = { one = "Closing the tab drops the {count} pending change of its results.", other = "Closing the tab drops the {count} pending changes of its results." }
 "edit.leave.quit" = { one = "Quitting drops {count} pending change that was not applied.", other = "Quitting drops {count} pending changes that were not applied." }
 "edit.tx_entry" = { one = "Apply ({count} change)", other = "Apply ({count} changes)" }
+
+# The Changes tab of a result
+"results.tab.changes" = { one = "Changes {count}", other = "Changes {count}" }
+"results.tab.changes_short" = { one = "Chg{count}", other = "Chg{count}" }
+"keyctx.changes" = "Changes"
+"action.changes.down" = "Changes: next line"
+"action.changes.up" = "Changes: previous line"
+"action.changes.half_down" = "Changes: half a page down"
+"action.changes.half_up" = "Changes: half a page up"
+"action.changes.top" = "Changes: first line"
+"action.changes.bottom" = "Changes: last line"
+"action.changes.goto" = "Changes: show the line's row and column in the grid"
+"action.changes.view" = "Changes: switch between the list and the SQL"
+"action.changes.copy_sql" = "Changes: copy the SQL as it would be sent"
+"hint.goto" = "go to"
+"hint.copy_sql" = "copy SQL"
+"hint.changes_view" = "SQL/list"
+"hint.changes_sql" = "SQL"
+"hint.changes_list" = "list"
+"changes.title" = "Changes — {result} · {table}"
+"changes.problems" = { one = "{count} problem", other = "{count} problems" }
+"changes.row" = "row {n}"
+"changes.new" = "new {n}"
+"changes.by_values" = "(located by its values)"
+"changes.delete" = "delete"
+"changes.other_pending" = { one = "{result} also has {count} pending", other = "{result} also has {count} pending" }
+"changes.row_not_loaded" = "That row is not in the grid any more; run the query again to see it"
+"changes.copy_not_final" = { one = "Not copied: the SQL is not final yet: {count} problem", other = "Not copied: the SQL is not final yet: {count} problems" }
+"changes.copy_counting" = "Not copied: the SQL is not final yet: the rows are still being counted"
+"setting.changes_view" = "Changes tab view"
+"setting.changes_view.about" = "What the Changes tab of a result shows first: one line per changed cell, or the statements that apply the changes. In the Changes tab, s switches between them for this run."
+"setting.changes_view.list" = "List, one line per changed cell"
+"setting.changes_view.sql" = "SQL, the statements that apply them"
+"export.edited_pending" = "Not exported: this result has pending changes; apply or discard them, or run the query again — see Changes"
+"chart.edited_pending" = "Not drawn: this result has pending changes. Apply or discard them, or run the query again — see Changes"
