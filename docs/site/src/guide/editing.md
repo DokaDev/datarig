@@ -66,6 +66,9 @@ In the grid:
 | `Space d p` (`:changes`) | Show the pending changes in the [Changes tab](#the-changes-tab) |
 | `Space d a` (`:apply`) | [Apply](#apply) them, once asked on the status line (in a dialog when one is needed) |
 | `Space d x` (`:discard`) | Drop every pending change of the result (it asks first) |
+| Your terminal's paste (`Cmd+V`, `Ctrl+Shift+V`) | [Paste a range](#pasting-a-range) at the cursor |
+| `Space d v` | Paste the system clipboard at the cursor (with `clipboard = "auto"` or `"system"`) |
+| `Space d V` | Read the last paste again as the next format, in its place |
 
 The full lists are in the keybindings reference: the [grid](../reference/keybindings.md#grid),
 the `Space d` group under [nav](../reference/keybindings.md#nav), the
@@ -160,10 +163,134 @@ The preview refuses a new row that leaves a `NOT NULL` column without a default 
 ("Row 4: name is NOT NULL and has no default; give it a value"), and one of a table with such a
 column that the result does not show ("…is not in the result; add it to the SELECT").
 
+## Pasting a range
+
+Cells copied from a spreadsheet, another grid or a text file paste into the grid with the
+terminal's own paste (`Cmd+V`, `Ctrl+Shift+V`): put the cursor on the top-left cell the range
+goes to and paste. The terminal sends the text itself, so the app reads no clipboard: this works
+over SSH and in tmux, whatever `clipboard` is set to. The paste lands as pending changes, like
+typed values: marked in the grid, listed in the Changes tab, and nothing is sent until
+[Apply](#apply).
+
+The status line says how the text was read and what it did:
+
+```
+Pasted as TSV · 3 rows × 4 columns · 5 cells changed · 1 new row · 1 invalid (row 14 · price) · u undo
+```
+
+### Formats
+
+The text is read as:
+
+- **TSV** when it has a tab outside quotes (a spreadsheet's copy),
+- else **CSV** when its first line has a comma outside quotes,
+- else **one column**, a value per line, when it has several lines,
+- else **one value**.
+
+Both TSV and CSV take quoted fields (`"a""b"`, line breaks inside quotes), as spreadsheets write
+cells that hold tabs, line breaks or quotes. A quote in the middle of a field that does not start
+with one is part of the text. Line ends may be `\n` or `\r\n`; a carriage return alone outside
+quotes is refused. Empty lines inside the block are rows of empty values. Every row must have as
+many values as the first: `row 3 has 4 values, row 1 has 3` is refused, never padded or shifted.
+
+When the text was read the wrong way (a one-column copy whose values hold commas reads as CSV),
+`Space d V` reads the last paste again as the next format, TSV → CSV → one value → TSV: it undoes
+the paste and pastes the same text again at the same cursor and selection. It works while that
+paste is the newest change; otherwise it says "Nothing to re-read: the last change was not a
+paste". Text that can't be read at all (a quote never closed) names `Space d V` and the format it
+tries next.
+
+### Where it goes
+
+Columns go by the grid's column order from the cursor's column; rows go down the grid's rows:
+the rows read, then the new rows.
+
+| Clipboard | Selection | Result |
+|---|---|---|
+| one value | one cell | sets that cell |
+| one value | several cells | sets every selected cell (each checked for its own column) |
+| a block | the cursor | the block from the cursor |
+| a block | several cells | the block from the selection's top-left corner; the selection's size does not matter, and the status line says `pasted 3×4 at the selection's corner` |
+
+Rows past the last row become **new rows at the end** of the result, as `o` adds them: the
+columns outside the pasted range are left to their default, and the key's columns, identities
+and `AUTO_INCREMENT` columns too unless the range sets them. A value equal to the cell's value
+as read changes nothing. The cursor goes to the range's first cell.
+
+### When a paste is refused
+
+A paste that does not fit is refused as a whole, saying why, and nothing changes:
+
+- wider than the columns from the cursor to the last one: "the paste is 5 columns wide; 3
+  columns from the cursor to the last column"
+- a column in the range that takes no value (computed in the query, generated, an identity that
+  is always generated, a column the result has twice)
+- a row in the range marked for deletion: "row 12 is marked for deletion"
+- rows past the last row read while the server has more rows: "the result has more rows on the
+  server; fetch them (n) or paste fewer rows". Otherwise rows meant to overwrite the rows not
+  fetched yet would become new rows.
+- rows past the end where no row can be added: no column of the result takes a value in a new
+  row, or the table has a `NOT NULL` column without a default that the result does not show
+- a result that can't be edited, or whose changes are being applied
+- more than **5,000 rows** or **1 MiB** of text
+
+In the Changes tab a paste says "Paste into the grid". With the cell editor open, a paste goes
+into the editor as before (the one-line editor takes no line breaks).
+
+A paste that changes more than **1,000 rows** asks first on the status line:
+`Paste 2,400 rows (1,900 new)? y paste · any other key cancels`. Any other key, a click or
+another paste cancels it and does nothing else.
+
+### NULL and empty values
+
+An unquoted field that is exactly `\N` is NULL, the form both servers' own dumps write NULL in.
+The setting `edit.paste_null` (`:set edit.paste_null=NULL`, or the settings screen) makes the
+word `NULL` the token instead, or `none` for no token. A quoted `"\N"` is always the text.
+
+**An empty field is an empty value, never NULL.** For a text column that is the empty string; a
+column of another type does not take it, so it is marked invalid with "empty value — paste \N
+for NULL". A paste never gives `DEFAULT`: the text `DEFAULT` is the text.
+
+### Invalid values
+
+Every pasted value is checked as a typed one is (see [Value checks](#value-checks)), and NULL
+against `NOT NULL`. Nothing is converted: a value its column does not take is kept, so you see
+it, and marked:
+
+- the row's gutter shows `!` (over `~` and `+`), the cell is in the theme token `edit_invalid`
+- the badge counts them: `5 pending · 1 invalid`
+- the Changes tab lists them first, with the reason: "Row 14 · price: not a number: 'abc'"
+- the changes are not applied while any value is invalid (Apply shows the Changes tab instead)
+
+Fix a value with `e`: the editor opens with the pasted text and says why it was not taken. Or
+drop it with `Space d r`, or undo the paste.
+
+### Undo
+
+A paste is one change: `u` undoes all of it, the new rows too, and `Ctrl+R` redoes it.
+
+### `Space d v` and the clipboard setting
+
+`Space d v` reads the system clipboard and pastes its text at the cursor, the same way. It reads
+the clipboard only when you press it, and only with `clipboard = "auto"` (outside SSH) or
+`"system"`; with `clipboard = "osc52"` (and `auto` over SSH) it says "Reading the clipboard needs
+clipboard = "system"; paste with your terminal instead". A clipboard that does not answer within
+2 seconds pastes nothing.
+
+A terminal without bracketed paste sends a paste as typed keys instead: they act as keys in the
+grid. Use `Space d v` there, where a system clipboard exists.
+
+### Pasting the app's own copies
+
+The grid's own TSV and CSV copies (`Space r y`) paste back as the same cells, with three
+exceptions: a text cell that is exactly `\N` pastes back as NULL; NULL is copied as an empty
+field, so it pastes back as an empty value; and in a copy of one column, a last cell that is
+empty (NULL, or an empty text) is lost, since the copy does not end its last line.
+
 ## Undo, revert, discard
 
 - `u` undoes the last change of the result and `Ctrl+R` redoes it. A change of several selected
-  cells, a delete of several rows and a discard are one step each.
+  cells, a delete of several rows, a paste and a discard are one step each.
 - `Space d r` drops the pending changes of the cell, or of the selection: a value goes back to
   the value as read, a row marked to be deleted is no longer marked, and **a new row's cell goes
   back to its default** (a cloned row's too, not to the copied value).

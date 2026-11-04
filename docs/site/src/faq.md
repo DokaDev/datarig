@@ -73,6 +73,27 @@ only. The usual causes:
 
 Every reason is listed on [Editing data](guide/editing.md#what-can-be-edited).
 
+## Why was my paste refused?
+
+A range pasted into the grid is refused as a whole, never shifted or cut, and the status line
+says why ("Not pasted: …"). The usual causes:
+
+- It is wider than the columns from the cursor to the last column: put the cursor further left.
+- A column in the range takes no value (computed, generated, an identity always generated), or
+  a row in it is marked for deletion.
+- It runs past the last row read while the server has more rows: fetch them first, or paste
+  fewer rows (otherwise the rows meant to be overwritten would become new rows).
+- It runs past the end where the table can't take new rows from this result.
+- The text can't be read: rows of different widths, a quote never closed, a carriage return
+  alone. `Space d V` reads the same text again as the next format (TSV, CSV, one value).
+- It is larger than 5,000 rows or 1 MiB.
+- The result can't be edited at all (see above).
+
+A paste that went in but shows `!` in the gutter has values their columns don't take: they are
+kept, listed first in the Changes tab, and block the Apply until fixed (`e`), dropped
+(`Space d r`) or undone. An empty field is an empty value: paste `\N` for NULL. See
+[Pasting a range](guide/editing.md#pasting-a-range).
+
 ## `COPY … FROM STDIN` or `COPY … TO STDOUT` fails
 
 They are not sent: their data would go through PostgreSQL's COPY sub-protocol, which the
