@@ -1,0 +1,534 @@
+//! A result's pending changes as they are shown: how many of each kind, every reason they
+//! cannot be applied yet (each with the row and the column it is about), one line per changed
+//! cell, and the statements that apply them ([`ChangesModel`]).
+//!
+//! The model is made from the changes and what was counted for them ([`Checks`], kept with the
+//! result), and kept with the result while neither moves: it is not made again for every frame.
+
+use super::preview::{PreviewLine, VALUE_W, literals};
+use super::*;
+use datarig_core::edit::{Choice, Facts, Origin, Plan, PlanError, RowEdit};
+use datarig_core::i18n::{Lang, Localized};
+use std::cell::{Cell as Count, RefCell};
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+/// What was counted for a result's changes, and the user's choices of identical rows.
+#[derive(Debug, Default)]
+pub struct Checks {
+    /// Counts asked and not answered yet: their id and the row each counts.
+    pub asked: Vec<(u64, usize)>,
+    pub matches: BTreeMap<usize, u64>,
+    pub choices: BTreeMap<usize, Choice>,
+    /// Why the rows could not be counted.
+    pub failed: Option<String>,
+    /// The revision of the changes they are for ([`EditBatch::revision`]).
+    pub for_revision: u64,
+    /// Moves on every change of these.
+    version: u64,
+}
+
+impl Checks {
+    /// Asked again for the changes at `revision`: counts `asked`, nothing answered or chosen.
+    pub(super) fn restart(&mut self, revision: u64, asked: Vec<(u64, usize)>) {
+        *self = Checks { asked, for_revision: revision, version: self.version + 1, ..Checks::default() };
+    }
+
+    /// The answer to count `qid`: the rows it matched, or why it failed (the other counts are
+    /// then not waited for).
+    pub(super) fn answered(&mut self, qid: u64, result: Result<u64, Option<String>>) {
+        let Some(k) = self.asked.iter().position(|(id, _)| *id == qid) else { return };
+        let (_, row) = self.asked.remove(k);
+        match result {
+            Ok(n) => {
+                self.matches.insert(row, n);
+            }
+            Err(text) => {
+                self.failed = text;
+                self.asked.clear();
+            }
+        }
+        self.version += 1;
+    }
+
+    /// The user's choice for row `row`, which matches several identical rows.
+    pub(super) fn choose(&mut self, row: usize, choice: Choice) {
+        self.choices.insert(row, choice);
+        self.version += 1;
+    }
+}
+
+/// Where the plan of a result's changes stands.
+#[derive(Debug)]
+pub(super) enum Planned {
+    Counting,
+    Failed(String),
+    /// New rows' cells left to a default their column lacks (`PlanError::NoDefault`,
+    /// `PlanError::NotShown`).
+    NoDefault(Vec<PlanError>),
+    Refused(PlanError),
+    Ready(Plan),
+}
+
+/// A reason the changes cannot be applied yet, with the row (and the column) it is about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Problem {
+    pub text: String,
+    pub at: Option<(RowAt, Option<usize>)>,
+}
+
+/// What a line of the changes does to its row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mark {
+    Changed,
+    Inserted,
+    Deleted,
+}
+
+/// How a line names its row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Pointer {
+    /// By its key's values as read (`id=16`, `a=1,b=2`).
+    Key(String),
+    /// A row found by its values: its row in the grid, counted from 1.
+    Row(usize),
+    /// A new row: which one, counted from 1 in the order the grid shows them.
+    New(usize),
+}
+
+/// One changed cell (a whole row for a delete and a new row).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListLine {
+    pub mark: Mark,
+    pub at: RowAt,
+    /// The cell's column (`None`: the whole row).
+    pub col: Option<usize>,
+    /// The row's name, on its first line only.
+    pub row: Option<Pointer>,
+    /// The column's name (empty for the whole row).
+    pub column: String,
+    /// The value as read, as a literal.
+    pub old: Option<String>,
+    /// The value it is to be, as a literal; a new row's cells as `column=value · …`.
+    pub new: Option<String>,
+}
+
+/// A result's pending changes as they are shown.
+#[derive(Debug)]
+pub struct ChangesModel {
+    pub title: Localized,
+    /// How many of each kind (`2 updates · 1 insert`).
+    pub summary: String,
+    /// Every reason they cannot be applied yet, the count's failure first.
+    pub problems: Vec<Problem>,
+    /// The changed cells: deletes, updates and inserts, as the plan orders them.
+    pub list: Vec<ListLine>,
+    /// The statements as the preview shows them, or why there are none yet.
+    pub sql: Vec<PreviewLine>,
+    /// The statements' dialect (their colors).
+    pub dialect: Dialect,
+    pub(super) planned: Planned,
+    /// Why the changes cannot be applied now, in words (`None`: they can).
+    pub(super) why_not: Option<String>,
+}
+
+/// What a model was made for: the result, the revision of its changes, of what was counted, and
+/// what its words depend on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ModelKey {
+    result: u64,
+    revision: u64,
+    checks: u64,
+    format: EditFormat,
+    lang: Lang,
+    /// The rows the grid shows before the new rows.
+    before_new: usize,
+    zone: Option<String>,
+}
+
+/// A result's changes model as last made.
+#[derive(Debug, Default)]
+pub struct ModelCache {
+    made: RefCell<Option<(ModelKey, EditTarget, Arc<ChangesModel>)>>,
+    builds: Count<u64>,
+}
+
+impl ModelCache {
+    /// How many times a model was made.
+    pub fn builds(&self) -> u64 {
+        self.builds.get()
+    }
+}
+
+/// The cells (row, column) of `rs`'s changed rows whose value as read is not shown whole.
+fn not_whole(d: Dialect, rs: &ResultSet, zone: Option<&str>) -> BTreeSet<(usize, usize)> {
+    let mut out = BTreeSet::new();
+    for (row, e) in rs.edit.batch.rows() {
+        for (c, v) in e.orig.iter().enumerate() {
+            if let Some(v) = v
+                && c < rs.columns.len()
+                && !shown_whole(d, rs, c, v, zone)
+            {
+                out.insert((row, c));
+            }
+        }
+    }
+    out
+}
+
+/// `v` as a line of the changes says it: a text quoted and cut as the preview's values are.
+fn literal(v: &Value) -> String {
+    match v {
+        Value::Text(t) => literals::quoted(t, VALUE_W),
+        Value::Null => "NULL".into(),
+        Value::Default => "DEFAULT".into(),
+    }
+}
+
+/// The longest a key pointer is, in columns.
+const POINTER_W: usize = 24;
+
+/// The lines of `batch`'s changes to the rows of `target` (`names`: the result's column names):
+/// deletes, then updates, then new rows; one line per changed cell, the row named on its first.
+pub(super) fn list_lines(target: &EditTarget, batch: &EditBatch, names: &[String]) -> Vec<ListLine> {
+    let name = |c: usize| crate::text::sanitize_cell(names.get(c).map_or("", String::as_str));
+    let pointer = |row: usize, e: &RowEdit| match &target.identity {
+        Identity::Key { columns, .. } => {
+            let parts: Vec<String> = columns
+                .iter()
+                .map(|&c| {
+                    let v = e.orig.get(c).cloned().flatten();
+                    format!("{}={}", name(c), v.as_deref().map_or("NULL".into(), crate::text::sanitize_cell))
+                })
+                .collect();
+            Pointer::Key(crate::text::clip(&parts.join(","), POINTER_W))
+        }
+        Identity::Values { .. } => Pointer::Row(row + 1),
+    };
+    let mut out = Vec::new();
+    for (row, e) in batch.rows().filter(|(_, e)| e.delete) {
+        let (at, row) = (RowAt::Read(row), Some(pointer(row, e)));
+        out.push(ListLine { mark: Mark::Deleted, at, col: None, row, column: String::new(), old: None, new: None });
+    }
+    for (row, e) in batch.rows().filter(|(_, e)| !e.delete) {
+        for (k, (&c, v)) in e.set.iter().enumerate() {
+            let old = Some(e.orig.get(c).cloned().flatten().map_or(Value::Null, Value::Text));
+            out.push(ListLine {
+                mark: Mark::Changed,
+                at: RowAt::Read(row),
+                col: Some(c),
+                row: (k == 0).then(|| pointer(row, e)),
+                column: name(c),
+                old: old.as_ref().map(literal),
+                new: Some(literal(v)),
+            });
+        }
+    }
+    for (i, d) in batch.drafts().iter().enumerate() {
+        // A computed column takes no value.
+        let cells: Vec<String> = (d.cells.iter().enumerate())
+            .filter(|(c, v)| target.columns.get(*c).is_some_and(Option::is_some) || **v != Value::Default)
+            .map(|(c, v)| format!("{}={}", name(c), literal(v)))
+            .collect();
+        out.push(ListLine {
+            mark: Mark::Inserted,
+            at: RowAt::New(d.id),
+            col: None,
+            row: Some(Pointer::New(i + 1)),
+            column: String::new(),
+            old: None,
+            new: Some(cells.join(" \u{B7} ")),
+        });
+    }
+    out
+}
+
+impl App {
+    /// The model of the active tab's shown result's changes, in the format its server takes.
+    pub fn shown_changes(&self) -> Option<Arc<ChangesModel>> {
+        if self.tabs.is_empty() {
+            return None;
+        }
+        let t = self.tab();
+        let rs = rows_of(t)?;
+        self.changes_model(t.id, rs.id, self.tab_edit_format(t.id)?)
+    }
+
+    /// The model of tab `tab`'s shown result's changes, while it is result `result` and its target
+    /// is resolved, in format `format`; made again only when the changes, what was counted for
+    /// them, the target, the language or the rows shown before the new rows moved.
+    pub(crate) fn changes_model(&self, tab: TabId, result: u64, format: EditFormat) -> Option<Arc<ChangesModel>> {
+        let t = self.tabs.get(tab)?;
+        let rs = rows_of(t).filter(|rs| rs.id == result)?;
+        let Target::Ready(target) = &rs.edit.target else { return None };
+        let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
+        let key = ModelKey {
+            result,
+            revision: rs.edit.batch.revision(),
+            checks: rs.edit.checks.version,
+            format,
+            lang: self.i18n.lang,
+            before_new: rs.rows.len() + rs.edit.applied_new(),
+            zone: zone.map(str::to_string),
+        };
+        let cache = &rs.edit.changes;
+        if let Some((k, x, m)) = &*cache.made.borrow()
+            && *k == key
+            && *x == **target
+        {
+            return Some(m.clone());
+        }
+        let m = Arc::new(self.make_changes(t, rs, target, format, zone));
+        cache.builds.set(cache.builds.get() + 1);
+        *cache.made.borrow_mut() = Some((key, (**target).clone(), m.clone()));
+        Some(m)
+    }
+
+    /// The cells (row, column) of `rs`'s changed rows (shown in tab `t`) whose value as read is
+    /// not shown whole.
+    pub(super) fn cells_not_whole(&self, t: &Tab, rs: &ResultSet) -> BTreeSet<(usize, usize)> {
+        let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
+        not_whole(self.tab_dialect(t.id), rs, zone)
+    }
+
+    fn make_changes(
+        &self,
+        t: &Tab,
+        rs: &ResultSet,
+        target: &EditTarget,
+        format: EditFormat,
+        zone: Option<&str>,
+    ) -> ChangesModel {
+        let i18n = &self.i18n;
+        let batch = &rs.edit.batch;
+        let table = format!("{}.{}", target.table.schema, target.table.name);
+        let title = i18n.msg(&Msg::EditPreviewTitle { table });
+        let c = batch.counts();
+        let summary = [
+            (c.updates > 0).then_some(Msg::EditPreviewUpdates { count: c.updates as u64 }),
+            (c.inserts > 0).then_some(Msg::EditPreviewInserts { count: c.inserts as u64 }),
+            (c.deletes > 0).then_some(Msg::EditPreviewDeletes { count: c.deletes as u64 }),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|m| i18n.msg(&m).to_string())
+        .collect::<Vec<_>>()
+        .join(" · ");
+        let f = edit::format(format);
+        let dialect = f.language().dialect();
+        let not_whole = not_whole(self.tab_dialect(t.id), rs, zone);
+        let whole = |r: usize, c: usize| !not_whole.contains(&(r, c));
+        // What was counted for other changes is not theirs.
+        let none = Checks::default();
+        let checks = if rs.edit.checks.for_revision == batch.revision() { &rs.edit.checks } else { &none };
+        let facts = Facts { whole: &whole, matches: &checks.matches, choices: &checks.choices };
+        let planned = planned(target, batch, &*f, checks, &facts);
+        let text = |e: &PlanError| self.plan_error_text(rs, &checks.matches, e);
+        // Every row's problem; rows still to be counted are none.
+        let mut problems = Vec::new();
+        if let Some(error) = &checks.failed {
+            let text = i18n.msg(&Msg::EditPreviewCountFailed { error: error.clone() }).to_string();
+            problems.push(Problem { text, at: None });
+        }
+        let all = edit::plan_problems(target, batch, &*f, &facts);
+        let refused = match &planned {
+            Planned::Refused(e) if !all.contains(e) => Some(e),
+            _ => None,
+        };
+        for e in all.iter().filter(|e| !matches!(e, PlanError::NotCounted { .. })).chain(refused) {
+            problems.push(Problem { text: text(e), at: problem_at(e) });
+        }
+        let names: Vec<String> = rs.columns.iter().map(|c| c.meta.name.clone()).collect();
+        let list = list_lines(target, batch, &names);
+        let mut sql = Vec::new();
+        let why_not = match &planned {
+            Planned::Counting => Some(i18n.label(Label::EditPreviewCounting).to_string()),
+            Planned::Failed(error) => Some(i18n.msg(&Msg::EditPreviewCountFailed { error: error.clone() }).to_string()),
+            Planned::NoDefault(errors) => Some(text(&errors[0])),
+            Planned::Refused(e) => Some(text(e)),
+            Planned::Ready(_) => None,
+        };
+        match &planned {
+            Planned::Counting => sql.push(PreviewLine::Note(i18n.label(Label::EditPreviewCounting).to_string())),
+            Planned::Failed(error) => sql.push(PreviewLine::Problem(
+                i18n.msg(&Msg::EditPreviewCountFailed { error: error.clone() }).to_string(),
+            )),
+            Planned::NoDefault(errors) => {
+                for e in errors {
+                    sql.push(PreviewLine::Problem(text(e)));
+                }
+            }
+            Planned::Refused(e @ PlanError::Choose { matches, .. }) => {
+                let keys = i18n.msg(&Msg::EditPreviewChooseKeys { count: *matches }).to_string();
+                sql.push(PreviewLine::Choose { text: text(e), keys });
+            }
+            Planned::Refused(e) => sql.push(PreviewLine::Problem(text(e))),
+            Planned::Ready(plan) => {
+                let checks: Vec<&edit::Step> =
+                    plan.steps.iter().filter(|s| matches!(s.expect, Expect::Rows(_))).collect();
+                if !checks.is_empty() {
+                    let nowait = checks.iter().all(|s| s.sql.ends_with(" NOWAIT"));
+                    let head = if nowait { Label::EditPreviewChecks } else { Label::EditPreviewChecksWait };
+                    sql.push(PreviewLine::Head(i18n.label(head).to_string()));
+                }
+                let mut writes = false;
+                for s in &plan.steps {
+                    let n = match s.expect {
+                        Expect::Rows(n) => n,
+                        Expect::Affected(n) => {
+                            if !writes {
+                                writes = true;
+                                sql.push(PreviewLine::Head(i18n.label(Label::EditPreviewWrites).to_string()));
+                            }
+                            n
+                        }
+                    };
+                    let delete = matches!(s.expect, Expect::Affected(_)) && s.sql.starts_with("DELETE ");
+                    sql.push(PreviewLine::Step {
+                        sql: s.sql.clone(),
+                        expect: i18n.msg(&Msg::EditPreviewExpect { count: n }).to_string(),
+                        risky: delete || n > 1,
+                    });
+                    if let Some(text) = self.read_back(&s.sql, dialect) {
+                        sql.push(PreviewLine::Values(text));
+                    }
+                }
+            }
+        }
+        ChangesModel { title, summary, problems, list, sql, dialect, planned, why_not }
+    }
+
+    /// The row the grid shows for `origin` of `rs`, counted from 1, as text.
+    fn origin_row(&self, rs: &ResultSet, origin: Origin) -> String {
+        let shown = match origin {
+            Origin::Row(r) => Some(r),
+            Origin::New(id) => shown_row(rs, RowAt::New(id)),
+        };
+        shown.map_or_else(|| "?".to_string(), |r| (r + 1).to_string())
+    }
+
+    /// The name of result column `c` of `rs`.
+    fn preview_column(&self, rs: &ResultSet, c: usize) -> String {
+        rs.columns.get(c).map(|c| c.meta.name.clone()).unwrap_or_default()
+    }
+
+    /// Why the plan of `rs`'s changes was refused (`matches`: the rows counted), in words.
+    fn plan_error_text(&self, rs: &ResultSet, matches: &BTreeMap<usize, u64>, e: &PlanError) -> String {
+        let row = |r: usize| self.origin_row(rs, Origin::Row(r));
+        let msg = match e {
+            PlanError::Column { origin, column, why } => {
+                let reason = self.i18n.msg(&column_reason(*why, self.preview_column(rs, *column))).to_string();
+                Msg::EditPreviewColumn { row: self.origin_row(rs, *origin), reason }
+            }
+            PlanError::NotWhole { row: r, column } => {
+                Msg::EditPreviewNotWhole { row: row(*r), column: self.preview_column(rs, *column) }
+            }
+            PlanError::NotCounted { row: r } => Msg::EditPreviewNotCounted { row: row(*r) },
+            PlanError::Gone { row: r } => Msg::EditPreviewGone { row: row(*r) },
+            PlanError::Ambiguous { row: r, matches } => Msg::EditPreviewAmbiguous { row: row(*r), count: *matches },
+            PlanError::Choose { row: r, matches } => Msg::EditPreviewChoose { row: row(*r), count: *matches },
+            PlanError::NoOneOfK { row: r } => {
+                let count = matches.get(r).copied().unwrap_or(0);
+                Msg::EditPreviewNoOneOfK { row: row(*r), count }
+            }
+            PlanError::NoDefault { origin, column } => Msg::EditPreviewNoDefault {
+                row: self.origin_row(rs, *origin),
+                column: self.preview_column(rs, *column),
+            },
+            PlanError::NotShown { origin, column } => {
+                Msg::EditPreviewNotShown { row: self.origin_row(rs, *origin), column: column.clone() }
+            }
+            PlanError::Internal(_) => Label::EditPreviewInternal.into(),
+        };
+        self.i18n.msg(&msg).to_string()
+    }
+
+    /// Read-back values as the preview says them, by where they are in their statement (`set
+    /// note = 'text', … · where name = 'text'`): `column = 'text'` (a line break as one
+    /// character, a long text cut), or how many bytes a value that is not text has.
+    fn values_text(&self, values: &[(literals::Part, String, literals::Decoded)]) -> String {
+        let one = |column: &str, v: &literals::Decoded| match v {
+            literals::Decoded::Text(t) => literals::text_pair(column, t, VALUE_W),
+            literals::Decoded::Bytes(n) => {
+                let not_text = self.i18n.msg(&Msg::EditPreviewNotText { count: *n as u64 });
+                format!("{} = {not_text}", crate::text::sanitize_cell(column))
+            }
+        };
+        let mut groups: Vec<(literals::Part, Vec<String>)> = Vec::new();
+        for (part, column, v) in values {
+            match groups.last_mut() {
+                Some((p, pairs)) if p == part => pairs.push(one(column, v)),
+                _ => groups.push((*part, vec![one(column, v)])),
+            }
+        }
+        let label = |p: literals::Part| {
+            self.i18n.label(match p {
+                literals::Part::Set => Label::EditPreviewPartSet,
+                literals::Part::Where => Label::EditPreviewPartWhere,
+                literals::Part::Values => Label::EditPreviewPartValues,
+            })
+        };
+        groups
+            .iter()
+            .map(|(p, pairs)| format!("{} {}", label(*p), pairs.join(", ")))
+            .collect::<Vec<_>>()
+            .join(" \u{B7} ")
+    }
+
+    /// The text values statement `sql` carries as bytes, read back as the preview says them
+    /// (`None`: it carries none).
+    fn read_back(&self, sql: &str, d: Dialect) -> Option<String> {
+        let values = literals::text_literals(sql, d);
+        (!values.is_empty()).then(|| self.values_text(&values))
+    }
+}
+
+/// Where the plan of `batch`'s changes to `target` stands, with what was counted (`checks`).
+fn planned(target: &EditTarget, batch: &EditBatch, f: &dyn edit::EditSql, checks: &Checks, facts: &Facts) -> Planned {
+    let missing: Vec<PlanError> = edit::no_default(target, batch)
+        .into_iter()
+        .map(|(id, column)| PlanError::NoDefault { origin: Origin::New(id), column })
+        .chain(
+            edit::not_shown(target, batch)
+                .into_iter()
+                .map(|(id, column)| PlanError::NotShown { origin: Origin::New(id), column }),
+        )
+        .collect();
+    if !missing.is_empty() {
+        return Planned::NoDefault(missing);
+    }
+    if let Some(e) = &checks.failed {
+        return Planned::Failed(e.clone());
+    }
+    if !checks.asked.is_empty() {
+        return Planned::Counting;
+    }
+    match edit::plan(target, batch, f, facts) {
+        Ok(plan) => Planned::Ready(plan),
+        Err(e) => Planned::Refused(e),
+    }
+}
+
+/// The row and the column problem `e` is about.
+fn problem_at(e: &PlanError) -> Option<(RowAt, Option<usize>)> {
+    let at = |o: &Origin| match *o {
+        Origin::Row(r) => RowAt::Read(r),
+        Origin::New(id) => RowAt::New(id),
+    };
+    match e {
+        PlanError::Column { origin, column, .. } | PlanError::NoDefault { origin, column } => {
+            Some((at(origin), Some(*column)))
+        }
+        PlanError::NotShown { origin, .. } => Some((at(origin), None)),
+        PlanError::NotWhole { row, column } => Some((RowAt::Read(*row), Some(*column))),
+        PlanError::NotCounted { row }
+        | PlanError::Gone { row }
+        | PlanError::Ambiguous { row, .. }
+        | PlanError::Choose { row, .. }
+        | PlanError::NoOneOfK { row } => Some((RowAt::Read(*row), None)),
+        PlanError::Internal(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests;

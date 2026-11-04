@@ -6,7 +6,7 @@ use datarig_core::sql::lexer::{Tok, Token, lex_in};
 
 /// What a literal's bytes are.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Decoded {
+pub(in crate::app::edit) enum Decoded {
     Text(String),
     /// Not UTF-8: this many bytes.
     Bytes(usize),
@@ -14,7 +14,7 @@ pub(super) enum Decoded {
 
 /// Where in its statement a literal is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Part {
+pub(in crate::app::edit) enum Part {
     /// An UPDATE's `SET`: the value written.
     Set,
     /// What a row is found by.
@@ -26,14 +26,19 @@ pub(super) enum Part {
 /// `column = 'text'` as the preview says it: a line break, a tab or another control character
 /// (in either) as one character, the text cut at `max` columns with `…` (only its start is
 /// looked at, however long it is).
-pub(super) fn text_pair(column: &str, text: &str, max: usize) -> String {
+pub(in crate::app::edit) fn text_pair(column: &str, text: &str, max: usize) -> String {
+    format!("{} = {}", crate::text::sanitize_cell(column), quoted(text, max))
+}
+
+/// `'text'` as the preview says a text value ([`text_pair`]).
+pub(in crate::app::edit) fn quoted(text: &str, max: usize) -> String {
     use crate::text::{clip, sanitize_cell, width};
     let head: String = text.chars().take(max * 4).collect();
     let mut shown = clip(&sanitize_cell(&head), max);
     if head.len() < text.len() && width(&shown) <= max && !shown.ends_with('\u{2026}') {
         shown = clip(&format!("{shown}\u{2026}"), max);
     }
-    format!("{} = '{shown}'", sanitize_cell(column))
+    format!("'{shown}'")
 }
 
 /// The `_utf8mb4 X'…'` literals of `sql` (in dialect `d`) a column is set to or compared with,
@@ -41,7 +46,7 @@ pub(super) fn text_pair(column: &str, text: &str, max: usize) -> String {
 /// UPDATE's `SET` the value written, elsewhere what the row is found by), and an INSERT's values
 /// by their place in its column list. A literal after anything else (the column converted and
 /// compared again byte for byte) repeats the one before it and is left out.
-pub(super) fn text_literals(sql: &str, d: Dialect) -> Vec<(Part, String, Decoded)> {
+pub(in crate::app::edit) fn text_literals(sql: &str, d: Dialect) -> Vec<(Part, String, Decoded)> {
     let toks: Vec<Token> = lex_in(sql, d).into_iter().filter(|t| !t.is_trivia()).collect();
     let word = |t: &Token, w: &str| t.is_word() && t.text(sql).eq_ignore_ascii_case(w);
     let insert = toks.first().is_some_and(|t| word(t, "INSERT"));

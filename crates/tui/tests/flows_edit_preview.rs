@@ -13,7 +13,7 @@ use datarig_core::edit::{Expect, Step, Value};
 use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::policy::{CommitRule, Policy};
 use datarig_core::profile::ConnectionConfig;
-use datarig_tui::app::edit::{Applied, EditState, PreviewLine};
+use datarig_tui::app::edit::{Applied, EditState, PreviewLine, RowAt};
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
 use datarig_tui::app::{Focus, Results};
 use datarig_tui::keymap::Ctx;
@@ -282,6 +282,36 @@ fn rows_found_by_their_values_are_counted_on_the_tab_first() {
     assert!(h.app.edit_preview_view().unwrap().apply);
 }
 
+/// What the preview shows is made once for the changes and what was counted for them, not for
+/// every frame: again only when an answer comes or the changes move.
+#[test]
+fn the_changes_are_planned_once_per_revision_not_for_every_frame() {
+    let mut h = by_values(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("changes");
+    let asked = counts(&mut h);
+    let builds = |h: &Harness| edits(h).changes.builds();
+    for _ in 0..3 {
+        let _ = screen(&mut h, 120, 40);
+    }
+    assert_eq!(builds(&h), 1, "once for three frames");
+    h.db(DbEvent::Counted { id: asked[0].0, result: Ok(1), snapshot: false });
+    for _ in 0..3 {
+        let _ = screen(&mut h, 120, 40);
+    }
+    assert!(h.app.edit_preview_view().unwrap().apply);
+    assert_eq!(builds(&h), 2, "once more for the answer");
+    h.key(KeyCode::Esc);
+    type_cell(&mut h, "y@x");
+    h.command("changes");
+    let asked = counts(&mut h);
+    h.db(DbEvent::Counted { id: asked[0].0, result: Ok(1), snapshot: false });
+    for _ in 0..3 {
+        let _ = screen(&mut h, 80, 24);
+    }
+    assert_eq!(builds(&h), 3, "once for the changes as they are now");
+}
+
 #[test]
 fn a_row_gone_ambiguous_or_not_counted_is_said_and_nothing_can_be_applied() {
     let mut h = by_values(Lang::En);
@@ -305,6 +335,29 @@ fn a_row_gone_ambiguous_or_not_counted_is_said_and_nothing_can_be_applied() {
         assert!(matches!(said(&mut h), Some(Msg::EditPreviewCantApply { .. })));
         h.key(KeyCode::Esc);
     }
+}
+
+/// The changes hold every row's problem, each with its row; the dialog says the first.
+#[test]
+fn every_rows_problem_is_in_the_changes_with_its_row_and_the_dialog_says_the_first() {
+    let mut h = by_values(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.keys("j");
+    type_cell(&mut h, "y@x");
+    h.command("changes");
+    let asked = counts(&mut h);
+    assert_eq!(asked.len(), 2);
+    h.db(DbEvent::Counted { id: asked[0].0, result: Ok(0), snapshot: false });
+    h.db(DbEvent::Counted { id: asked[1].0, result: Ok(2), snapshot: false });
+    let m = h.app.shown_changes().expect("a model");
+    let found: Vec<_> = m.problems.iter().map(|p| (p.text.as_str(), p.at)).collect();
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found[0].0.starts_with("Row 1 matches no row of the table now"), "{found:?}");
+    assert!(found[1].0.starts_with("Row 2 matches 2 rows"), "{found:?}");
+    assert_eq!((found[0].1, found[1].1), (Some((RowAt::Read(0), None)), Some((RowAt::Read(1), None))));
+    assert_eq!(lines(&h), [PreviewLine::Problem(m.problems[0].text.clone())]);
+    let cells: Vec<_> = m.list.iter().map(|l| (l.at, l.col, l.new.as_deref())).collect();
+    assert_eq!(cells, [(RowAt::Read(0), Some(1), Some("'z@x'")), (RowAt::Read(1), Some(1), Some("'y@x'"))]);
 }
 
 #[test]

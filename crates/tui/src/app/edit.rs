@@ -33,10 +33,12 @@ use ratatui::style::{Color, Style};
 use std::ops::Range;
 
 mod applied;
+mod changes;
 mod lines;
 mod preview;
 
 pub use applied::{Applied, Applying};
+pub use changes::{ChangesModel, Checks, ListLine, Mark, ModelCache, Pointer, Problem};
 pub use lines::Lines;
 pub(crate) use preview::PreviewBody;
 pub use preview::{EditPreview, PreviewLine, PreviewView};
@@ -119,6 +121,10 @@ pub struct EditState {
     /// An Apply's result is not known (its connection ended before the server said): the
     /// changes are applied again only once the user says so.
     pub apply_unknown: bool,
+    /// What was counted for the changes, and the user's choices.
+    pub checks: Checks,
+    /// The changes as shown, as last made.
+    pub changes: ModelCache,
 }
 
 impl EditState {
