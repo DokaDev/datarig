@@ -1069,17 +1069,11 @@ const SET_NULL: &str = "Set the cell (the selected cells) to NULL";
 const UNDO: &str = "Undo the last change of the result's cells";
 const PREVIEW: &str = "Show the pending changes and the statements that apply them";
 const DISCARD: &str = "Drop every pending change of the result";
-const EDITS: [&str; 9] = [
-    EDIT_CELL,
-    SET_NULL,
-    "Set the cell (the selected cells) to the column's default",
-    "Add a new row, shown after the rows read",
-    "Add a new row with the values of the cursor's row",
-    "Mark the row (the selected rows) to be deleted, or no longer; a new row goes",
-    UNDO,
-    PREVIEW,
-    DISCARD,
-];
+const SET_DEFAULT: &str = "Set the cell (the selected cells) to the column's default";
+const ADD_ROW: &str = "Add a new row, shown after the rows read";
+const CLONE_ROW: &str = "Add a new row with the values of the cursor's row";
+const DELETE_ROW: &str = "Mark the row (the selected rows) to be deleted, or unmark it; a new row is removed";
+const EDITS: [&str; 9] = [EDIT_CELL, SET_NULL, SET_DEFAULT, ADD_ROW, CLONE_ROW, DELETE_ROW, UNDO, PREVIEW, DISCARD];
 
 /// The open menu's lines as shown: headings as `# text`, items as `label | keys`.
 fn menu_lines(h: &Harness) -> Vec<String> {
@@ -1118,7 +1112,7 @@ fn the_menu_of_a_cell_offers_its_edits_and_edit_cell_edits_the_cell_clicked() {
         "Set the cell (the selected cells) to NULL | Space d n",
         "Add a new row, shown after the rows read | o",
         "Add a new row with the values of the cursor's row | O",
-        "Mark the row (the selected rows) to be deleted, or no longer; a new row goes | D",
+        "Mark the row (the selected rows) to be deleted, or unmark it; a new row is removed | D",
     ] {
         assert!(shown.iter().any(|l| l == item), "{item}: {shown:?}");
     }
@@ -1205,4 +1199,113 @@ fn a_result_that_cannot_be_edited_offers_no_edits() {
     h.db(DbEvent::Lost { error: DbError::Closed });
     right_click_cell(&mut h, 0, 1);
     assert_eq!(menu_edits(&h), Vec::<String>::new(), "not connected");
+}
+
+#[test]
+fn a_selection_offers_only_the_edits_it_takes() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let mut h = ready(Lang::En);
+    // Space Space on cells of two columns: the selection's menu, no edit of cells.
+    h.keys("ggvjl");
+    h.draw(120, 40);
+    h.keys("  ");
+    assert_eq!(menu_lines(&h)[0], "# Selection");
+    let offered = menu_edits(&h);
+    assert_eq!(offered, vec![ADD_ROW, CLONE_ROW, DELETE_ROW], "several columns: {offered:?}");
+    h.key(KeyCode::Esc);
+    h.keys("e");
+    assert_eq!(said(&mut h), Some(Label::EditSeveralColumns.into()), "as the key says");
+    // A right click inside the range keeps it: the same menu.
+    let cell = h.app.tab().grid.cell_rect(1, 1, 3).expect("on screen");
+    h.mouse(MouseEventKind::Down(MouseButton::Right), cell.x + 1, cell.y);
+    assert_eq!(menu_lines(&h)[0], "# Selection");
+    assert_eq!(menu_edits(&h), offered);
+    h.key(KeyCode::Esc);
+    // Cells of one column, nickname: what it takes (NULL, no default).
+    h.key(KeyCode::Esc);
+    h.keys("ggvj");
+    assert_eq!(h.app.tab().grid.col, 2);
+    h.keys("  ");
+    assert_eq!(menu_edits(&h), vec![EDIT_CELL, SET_NULL, ADD_ROW, CLONE_ROW, DELETE_ROW]);
+    h.key(KeyCode::Esc);
+    h.key(KeyCode::Esc);
+    // A whole column: no row to delete.
+    h.draw(120, 40);
+    let g = h.app.tab().grid.clone();
+    let (x, y) = (g.hit_cols[1].0 + 1, g.header_y);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+    h.keys("  ");
+    assert!(!menu_edits(&h).iter().any(|l| l == DELETE_ROW), "{:?}", menu_edits(&h));
+    h.key(KeyCode::Esc);
+    h.keys("D");
+    assert_eq!(said(&mut h), Some(Label::EditDeleteColumns.into()));
+}
+
+#[test]
+fn a_row_marked_to_be_deleted_offers_no_change_of_its_cells() {
+    let mut h = ready(Lang::En);
+    h.keys("D");
+    assert!(edits(&h).batch.deleted(0));
+    right_click_cell(&mut h, 0, 2);
+    let offered = menu_edits(&h);
+    for item in [EDIT_CELL, SET_NULL, SET_DEFAULT] {
+        assert!(!offered.iter().any(|l| l == item), "{item}: {offered:?}");
+    }
+    for item in [DELETE_ROW, CLONE_ROW, UNDO, PREVIEW, DISCARD] {
+        assert!(offered.iter().any(|l| l == item), "{item}: {offered:?}");
+    }
+    // Unmarked from the menu, as `D` does.
+    h.menu_pick(DELETE_ROW);
+    assert!(!edits(&h).batch.deleted(0));
+}
+
+#[test]
+fn a_new_row_offers_its_edits_and_nothing_that_reads_a_row() {
+    use datarig_tui::app::edit::RowAt;
+    let mut h = ready(Lang::En);
+    h.keys("Go");
+    assert_eq!(edits(&h).batch.drafts().len(), 1);
+    let id = edits(&h).batch.drafts()[0].id;
+    // The new row is the grid's 4th: its nickname.
+    right_click_cell(&mut h, 3, 2);
+    let g = &h.app.tab().grid;
+    assert_eq!((g.row, g.col), (3, 2), "the new row's cell is selected");
+    let shown = menu_lines(&h);
+    assert_eq!(shown[0], "# Cell nickname, new row", "{shown:?}");
+    assert_eq!(
+        menu_edits(&h),
+        vec![EDIT_CELL, SET_NULL, SET_DEFAULT, ADD_ROW, CLONE_ROW, DELETE_ROW, UNDO, PREVIEW, DISCARD]
+    );
+    let labels = h.menu_labels();
+    for item in [
+        "Results: view cell value",
+        "Result detail → show / hide",
+        "Copy the cell (a selected range as TSV)",
+        "Copy the row (the selected rows) as TSV",
+        "Copy selection ▸",
+        "Copy all fetched rows ▸",
+    ] {
+        assert!(!labels.iter().any(|l| l == item), "{item}: {labels:?}");
+    }
+    insta::assert_snapshot!("edit_menu_new_row_en_120x40", h.draw(120, 40).backend());
+    insta::assert_snapshot!("edit_menu_new_row_en_80x24", h.draw(80, 24).backend());
+    h.key(KeyCode::Esc);
+    // email takes no NULL, in a new row too.
+    right_click_cell(&mut h, 3, 1);
+    assert!(!menu_edits(&h).iter().any(|l| l == SET_NULL));
+    h.key(KeyCode::Esc);
+    // Set NULL, then Edit cell on that new row's cell, as the keys.
+    right_click_cell(&mut h, 3, 2);
+    h.menu_pick(SET_NULL);
+    assert_eq!(edits(&h).batch.drafts()[0].cells[2], Value::Null);
+    right_click_cell(&mut h, 3, 2);
+    h.menu_pick(EDIT_CELL);
+    assert_eq!(h.app.key_context(), Ctx::CellEdit);
+    assert_eq!(h.app.tab().cell_edit.as_ref().map(|e| e.at), Some((RowAt::New(id), 2)));
+    h.key(KeyCode::Esc);
+    // Mark delete removes the new row.
+    right_click_cell(&mut h, 3, 2);
+    h.menu_pick(DELETE_ROW);
+    assert!(edits(&h).batch.drafts().is_empty());
 }

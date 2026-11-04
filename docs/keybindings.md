@@ -125,7 +125,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space d r` | `edit.revert` | Drop the pending changes of the cell (the selection) |  |
 | `Space d o` | `edit.add_row` | Add a new row, shown after the rows read |  |
 | `Space d O` | `edit.clone_row` | Add a new row with the values of the cursor's row |  |
-| `Space d d` | `edit.delete_row` | Mark the row (the selected rows) to be deleted, or no longer; a new row goes |  |
+| `Space d d` | `edit.delete_row` | Mark the row (the selected rows) to be deleted, or unmark it; a new row is removed |  |
 | `Space d p` | `edit.preview` | Show the pending changes and the statements that apply them |  |
 | `Space d a` | `edit.apply` | Apply the pending changes (shown first, to confirm) |  |
 | `Space d x` | `edit.discard` | Drop every pending change of the result |  |
@@ -268,7 +268,7 @@ The result grid. The wheel scrolls the rows; a sideways wheel (a trackpad) or Sh
 | `Ctrl+R` | `edit.redo` | Redo the change of the result's cells undone last |  |
 | `o` | `edit.add_row` | Add a new row, shown after the rows read |  |
 | `O` | `edit.clone_row` | Add a new row with the values of the cursor's row |  |
-| `D` | `edit.delete_row` | Mark the row (the selected rows) to be deleted, or no longer; a new row goes |  |
+| `D` | `edit.delete_row` | Mark the row (the selected rows) to be deleted, or unmark it; a new row is removed |  |
 | `i` | `results.detail` | Result detail → show / hide |  |
 | `I` | `results.detail_tab` | Result detail → Cell / Row |  |
 | `z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |

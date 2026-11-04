@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_edit_cells.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"╭──────────────────────────────────────────────────────────────────────────────╮"
+"│ › type to filter                                                             │"
+"│ Cell nickname, new row                                                       │"
+"│  Edit the cell (the selected cells of one column)                          e │"
+"│  Set the cell (the selected cells) to NULL                         Space d n │"
+"│  Set the cell (the selected cells) to the column's default         Space d D │"
+"│  Add a new row, shown after the rows read                                  o │"
+"│  Add a new row with the values of the cursor's row                         O │"
+"│  Mark the row (the selected rows) to be deleted, or unmark it; a …         D │"
+"│  Undo the last change of the result's cells                                u │"
+"│  Show the pending changes and the statements that apply them       Space d p │"
+"│  Drop every pending change of the result                           Space d x │"
+"│ Results                                                                      │"
+"│  Results → export to a file…                                       Space r e │"
+"│  Select every cell of the page                                        Ctrl+A │"
+"│  Results → show as a chart / as rows                                       c │"
+"│  Results → count every row (runs a count query)                            # │"
+"│  Result tabs → next                                                        L │"
+"│  Result tabs → previous                                                    H │"
+"│  Results pane → zoom (maximise) / restore                                  z │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │ 3 rows · 0ms                                             EN "

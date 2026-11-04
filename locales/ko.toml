@@ -860,6 +860,7 @@
 "action.menu.open" = "동작 메뉴"
 "action.tab.menu" = "탭 메뉴"
 "menu.heading.cell" = "{column} 셀, {row}행"
+"menu.heading.new_cell" = "{column} 셀, 새 행"
 "menu.heading.selection" = "선택 영역"
 "menu.heading.statement" = "커서가 있는 문장"
 "menu.heading.all_actions" = "모든 동작"
