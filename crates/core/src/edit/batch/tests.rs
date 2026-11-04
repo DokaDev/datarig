@@ -259,7 +259,7 @@ fn a_paste_of_the_values_already_there_changes_nothing() {
     let mut b = EditBatch::new();
     let ops = paste_ops(&[((1, 0), text("1")), ((1, 1), text("n1")), ((1, 2), Value::Null)], &[], &[]);
     let at = b.revision();
-    assert_eq!(b.paste(ops, orig), Ok(PasteResult { changed: 0, added: Vec::new() }));
+    assert_eq!(b.paste(ops, orig), Ok(PasteResult { changed: 0, rows: 0, added: Vec::new() }));
     assert!(b.is_empty() && !b.can_undo());
     assert_eq!(b.revision(), at);
     // A cell pasted back to its value as read is no longer changed.
@@ -320,4 +320,25 @@ fn a_new_row_pasted_has_the_results_width_with_nothing_else_set() {
     assert_eq!(b.paste(ops, orig), Err(PasteRefused::Width { values: 2, width: 3 }));
     assert_eq!(b, EditBatch::new());
     assert_eq!(b.paste(paste_ops(&[], &[], &[vec![text("z"); 3]]), orig).map(|r| r.added.len()), Ok(1));
+}
+
+#[test]
+fn an_action_keeps_its_id_while_it_is_undone_and_redone_and_a_paste_counts_the_rows_it_changes() {
+    let mut b = EditBatch::new();
+    assert_eq!((b.last_step(), b.next_redo()), (None, None));
+    b.set(&[(1, 1)], &text("x"), orig);
+    let first = b.last_step().expect("a step");
+    let r = b.paste(paste_ops(&[((1, 1), text("x")), ((2, 0), text("7")), ((2, 1), text("y"))], &[], &[]), orig);
+    let r = r.unwrap();
+    assert_eq!((r.changed, r.rows), (2, 1), "row 1 already had x: one row changes");
+    let second = b.last_step().expect("a step");
+    assert_ne!(first, second);
+    assert!(b.undo());
+    assert_eq!((b.last_step(), b.next_redo()), (Some(first), Some(second)));
+    assert!(b.redo());
+    assert_eq!(b.last_step(), Some(second), "the same action again");
+    // A new action has a new id, after the history is cleared too.
+    b.clear();
+    b.set(&[(3, 1)], &text("z"), orig);
+    assert!(b.last_step().is_some_and(|id| id != first && id != second));
 }

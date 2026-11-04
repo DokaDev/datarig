@@ -25,4 +25,4 @@ expression: "screen(&mut h, w, hh)"
 │                      ││                              ││                      │
 │                      ││                              ││                      │
 ╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯
- NORMAL  local-pg │ Pasted as TSV · 2 rows × 2 columns · 4 cells c… · u undo EN
+ NORMAL  local-pg │ Pasted as TSV · 2 rows × 2 columns · 1 invalid · u undo  EN

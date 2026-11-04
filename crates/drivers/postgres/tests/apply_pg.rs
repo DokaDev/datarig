@@ -136,10 +136,20 @@ impl Conn {
         steps: Vec<edit::Step>,
         tx: ApplyTx,
     ) -> (Vec<DbEvent>, Result<Vec<AppliedStep>, ApplyFailure>) {
+        self.apply_within(steps, tx, 30).await
+    }
+
+    /// [`Conn::apply`], its answer awaited up to `secs` seconds.
+    async fn apply_within(
+        &mut self,
+        steps: Vec<edit::Step>,
+        tx: ApplyTx,
+        secs: u64,
+    ) -> (Vec<DbEvent>, Result<Vec<AppliedStep>, ApplyFailure>) {
         self.id += 1;
         let id = self.id;
         self.session.send(DbCommand::ApplyEdits { id, steps, tx });
-        let mut seen = self.collect(|e| matches!(e, DbEvent::Applied { id: i, .. } if *i == id), 30).await;
+        let mut seen = self.collect(|e| matches!(e, DbEvent::Applied { id: i, .. } if *i == id), secs).await;
         match seen.pop() {
             Some(DbEvent::Applied { result, .. }) => (seen, result),
             _ => unreachable!(),
@@ -556,6 +566,10 @@ async fn a_pasted_block_overwrites_two_rows_and_adds_one() {
     assert!(b.is_empty());
 }
 
+/// How long the Apply of 2,000 statements, sent one by one, may take: a slow runner needs
+/// far more than the other tests' wait.
+const PASTE_1K_SECS: u64 = 180;
+
 /// 1,000 keyed updates from one paste: a check and a write each, between `BEGIN` and `COMMIT`,
 /// so at most 2 + 2 × 1,000 statements go to the server (counted at the wire, as `Parse` and
 /// simple `Query` messages: each one is waited for).
@@ -582,7 +596,7 @@ async fn a_paste_of_a_thousand_keyed_updates_stays_within_its_statements() {
     let plan = e.plan(&mut c, &b, &[]).await;
     assert_eq!(plan.steps.len(), 2_000, "a check and a write per row");
     let before = proxy.sent().len();
-    let (_, result) = c.apply(plan.steps, ApplyTx::Commit).await;
+    let (_, result) = c.apply_within(plan.steps, ApplyTx::Commit, PASTE_1K_SECS).await;
     assert_eq!(result.expect("applied").len(), 2_000);
     let sent = proxy.sent().len() - before;
     assert!(sent <= 2 + 2 * 1_000, "{sent} statements sent");

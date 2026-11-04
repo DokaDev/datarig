@@ -172,10 +172,20 @@ impl Conn {
     }
 
     async fn apply(&mut self, steps: Vec<edit::Step>, tx: ApplyTx) -> Result<Vec<AppliedStep>, ApplyFailure> {
+        self.apply_within(steps, tx, 30).await
+    }
+
+    /// [`Conn::apply`], its answer awaited up to `secs` seconds.
+    async fn apply_within(
+        &mut self,
+        steps: Vec<edit::Step>,
+        tx: ApplyTx,
+        secs: u64,
+    ) -> Result<Vec<AppliedStep>, ApplyFailure> {
         self.id += 1;
         let id = self.id;
         self.session.send(DbCommand::ApplyEdits { id, steps, tx });
-        match self.wait(|e| matches!(e, DbEvent::Applied { id: i, .. } if *i == id), 30).await {
+        match self.wait(|e| matches!(e, DbEvent::Applied { id: i, .. } if *i == id), secs).await {
             DbEvent::Applied { result, .. } => result,
             _ => unreachable!(),
         }
@@ -601,6 +611,10 @@ async fn a_pasted_block_overwrites_two_rows_and_adds_one() {
     );
 }
 
+/// How long the Apply of 2,000 statements, sent one by one, may take: a slow runner needs
+/// far more than the other tests' wait.
+const PASTE_1K_SECS: u64 = 180;
+
 /// 1,000 keyed updates from one paste: a check and a write each, one statement per step (the
 /// executor sends them one by one, between the transaction's start and its commit), so at most
 /// 2 + 2 × 1,000 statements.
@@ -624,7 +638,7 @@ async fn a_paste_of_a_thousand_keyed_updates_stays_within_its_statements() {
     assert_eq!(b.paste(ops, e.orig()).expect("pasted").changed, 1_000);
     let plan = e.plan(&mut c, &b, &[]).await;
     assert!(plan.steps.len() <= 2 * 1_000, "{} statements besides the transaction's", plan.steps.len());
-    let done = c.apply(plan.steps, ApplyTx::Commit).await.expect("applied");
+    let done = c.apply_within(plan.steps, ApplyTx::Commit, PASTE_1K_SECS).await.expect("applied");
     assert_eq!(done.len(), 2_000);
     let rows = c.rows(&format!("SELECT count(*) FROM {} WHERE v LIKE 'new %'", t.q())).await;
     assert_eq!(rows[0][0].as_deref(), Some("1000"));

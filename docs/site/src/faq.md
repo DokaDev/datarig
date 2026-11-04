@@ -82,7 +82,8 @@ says why ("Not pasted: …"). The usual causes:
 - A column in the range takes no value (computed, generated, an identity always generated), or
   a row in it is marked for deletion.
 - It runs past the last row read while the server has more rows: fetch them first, or paste
-  fewer rows (otherwise the rows meant to be overwritten would become new rows).
+  fewer rows (otherwise the rows meant to be overwritten would become new rows). Where the next
+  page shows other rows in place of these, paste fewer rows.
 - It runs past the end where the table can't take new rows from this result.
 - The text can't be read: rows of different widths, a quote never closed, a carriage return
   alone. `Space d V` reads the same text again as the next format (TSV, CSV, one value).

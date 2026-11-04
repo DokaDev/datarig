@@ -247,7 +247,10 @@ impl App {
     pub(in crate::app) fn status_ask_cancel(&mut self) {
         let said = match self.ask.take().map(|a| a.action) {
             Some(AskAction::ApplyEdits(_)) => Label::EditAskCancelled,
-            Some(AskAction::Paste(_)) => Label::EditPasteCancelled,
+            Some(AskAction::Paste(p)) => {
+                self.paste_ask_dropped(*p);
+                Label::EditPasteCancelled
+            }
             None => return,
         };
         self.flash(Notice::new(said, Level::Info));
@@ -291,7 +294,9 @@ impl App {
         if let Some(StatusAsk { action: AskAction::Paste(a), .. }) = &self.ask
             && !self.paste_current(a)
         {
-            self.ask = None;
+            if let Some(StatusAsk { action: AskAction::Paste(a), .. }) = self.ask.take() {
+                self.paste_ask_dropped(*a);
+            }
             self.flash(Notice::new(Label::EditPasteMoved, Level::Info));
         }
         let Some(w) = &self.apply_wait else { return };

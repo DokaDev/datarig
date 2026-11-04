@@ -17,10 +17,12 @@ use datarig_core::policy::Policy;
 use datarig_core::profile::ConnectionConfig;
 use datarig_tui::app::Focus;
 use datarig_tui::app::Results;
-use datarig_tui::app::edit::{EditState, RowAt};
+use datarig_tui::app::action::Action;
+use datarig_tui::app::edit::{Applied, EditState, RowAt};
+use datarig_tui::app::paging::Paging;
 use datarig_tui::app::tabs::ResultView;
 use datarig_tui::keymap::Ctx;
-use ratatui::crossterm::event::{Event, KeyCode};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use std::time::Duration;
 
 fn s(v: &str) -> Option<String> {
@@ -302,7 +304,7 @@ fn a_paste_into_a_read_only_result_or_one_being_applied_is_refused() {
 #[test]
 fn text_that_cannot_be_read_is_refused_and_space_d_capital_v_reads_it_as_one_value() {
     let mut h = ready(Lang::En);
-    refused(&mut h, "a\tb\nc\n", "row 2 has 1 values, row 1 has 2 · Space d V reads it again as one value");
+    refused(&mut h, "a\tb\nc\n", "row 2 has 1 value, row 1 has 2 · Space d V reads it again as one value");
     // A lone quote: not closed.
     refused(
         &mut h,
@@ -359,7 +361,7 @@ fn invalid_values_are_kept_marked_listed_first_and_block_the_apply() {
     assert_eq!(pending(&h, 0, 0), Some(t("abc")));
     assert_eq!(pending(&h, 1, 0), Some(t("")));
     let text = said(&mut h);
-    assert!(text.contains("2 cells changed · 2 invalid (first: row 1 · id) · u undo"), "{text}");
+    assert!(text.contains("2 rows × 1 column · 2 invalid (first: row 1 · id) · 2 cells changed · u undo"), "{text}");
     let inv = h.app.shown_invalid().expect("resolved");
     assert_eq!(inv.cells.get(&(RowAt::Read(0), 0)).map(String::as_str), Some("not a whole number: 'abc'"));
     assert_eq!(inv.cells.get(&(RowAt::Read(1), 0)).map(String::as_str), Some("empty value — paste \\N for NULL"));
@@ -390,6 +392,9 @@ fn an_invalid_value_is_fixed_in_the_cell_editor_which_says_why() {
     let e = h.app.tab().cell_edit.as_ref().expect("the editor");
     assert_eq!(e.input.text(), "abc", "the pasted text");
     assert_eq!(e.error.as_deref(), Some("not a whole number: 'abc'"));
+    // Said as the value's reason, not as a refusal: the editor is open.
+    let line = h.app.status_line().map(|(m, _, _)| m.to_string());
+    assert_eq!(line.as_deref(), Some("Not valid: not a whole number: 'abc'"));
     for _ in 0..3 {
         h.key(KeyCode::Backspace);
     }
@@ -507,4 +512,250 @@ fn snapshots_of_a_paste_with_an_invalid_value() {
         h.keys(" dp");
         insta::assert_snapshot!(format!("paste_changes_en_{w}x{hh}"), screen(&mut h, w, hh));
     }
+}
+
+/// Keys `keys` handed to the app without the answers of the reads they start.
+fn keys_now(h: &mut Harness, keys: &str) {
+    for c in keys.chars() {
+        let m = if c.is_ascii_uppercase() { KeyModifiers::SHIFT } else { KeyModifiers::NONE };
+        h.app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char(c), m)));
+    }
+}
+
+/// The status line as drawn `w` columns wide (24 rows).
+fn status_at(h: &mut Harness, w: u16) -> String {
+    screen(h, w, 24).lines().last().unwrap_or_default().to_string()
+}
+
+#[test]
+fn a_reread_that_is_refused_puts_the_paste_back_as_it_was() {
+    let mut h = ready(Lang::En);
+    // Two columns wide as TSV, three as CSV.
+    paste(&mut h, "a\tb,c,d");
+    assert_eq!((pending(&h, 0, 1), pending(&h, 0, 2)), (Some(t("a")), Some(t("b,c,d"))));
+    h.app.transient = None;
+    let batch = edits(&h).batch.clone();
+    h.keys(" dV");
+    assert_eq!(said(&mut h), "Not pasted: the paste is 3 columns wide; 2 columns from the cursor to the last column");
+    assert_eq!(edits(&h).batch, batch, "the TSV paste is back, its history too");
+    assert_eq!((pending(&h, 0, 1), pending(&h, 0, 2)), (Some(t("a")), Some(t("b,c,d"))));
+    // It is still the paste read again: as the format after CSV, in its place.
+    h.keys(" dV");
+    assert!(said(&mut h).starts_with("Pasted as one value"));
+    assert_eq!((pending(&h, 0, 1), pending(&h, 0, 2)), (Some(t("a\tb,c,d")), None));
+    h.keys("u");
+    assert!(edits(&h).batch.is_empty(), "one step");
+}
+
+#[test]
+fn a_reread_of_many_rows_cancelled_or_dropped_puts_the_paste_back() {
+    // Two columns as TSV, one as CSV: 1,001 rows either way.
+    let text: String = (0..1_001).map(|i| format!("v{i}\tw{i}\n")).collect();
+    for how in ["cancel", "sweep"] {
+        let mut h = ready(Lang::En);
+        paste(&mut h, &text);
+        h.keys("y");
+        assert!(said(&mut h).starts_with("Pasted as TSV"), "{how}");
+        let batch = edits(&h).batch.clone();
+        h.keys(" dV");
+        assert_eq!(h.app.key_context(), Ctx::StatusAsk, "{how}");
+        match how {
+            "cancel" => {
+                h.keys("j");
+                assert_eq!(said(&mut h), "Paste cancelled");
+            }
+            _ => {
+                h.app.dispatch(Action::Help);
+                h.db(DbEvent::Keys(Ok(shop_keys())));
+                assert!(h.app.status_ask_line().is_none());
+                assert_eq!(said(&mut h), "Paste cancelled: the rows changed");
+                h.key(KeyCode::Esc);
+            }
+        }
+        assert_eq!(edits(&h).batch, batch, "{how}: the TSV paste is back");
+        assert_eq!(pending(&h, 0, 1), Some(t("v0")), "{how}");
+    }
+}
+
+#[test]
+fn a_clipboard_answer_after_an_apply_question_or_the_cell_editor_pastes_nothing() {
+    let big: String = (0..1_001).map(|i| format!("n{i}\n")).collect();
+    for text in ["q@x", big.as_str()] {
+        let mut h = ready(Lang::En);
+        let c = clipboard(&mut h);
+        h.app.prefs.clipboard = ClipboardSetting::System;
+        paste(&mut h, "z@x");
+        h.app.transient = None;
+        c.hold(text);
+        keys_now(&mut h, " dv");
+        keys_now(&mut h, " da");
+        let asked = h.app.status_ask_line().map(|(f, _)| f).expect("the Apply question");
+        let batch = edits(&h).batch.clone();
+        h.app.pump_clipboard_reads(Duration::from_secs(30));
+        assert_eq!(c.read_count(), 1);
+        assert_eq!(edits(&h).batch, batch, "nothing pasted");
+        assert_eq!(h.app.status_ask_line().map(|(f, _)| f), Some(asked), "the Apply question stays");
+    }
+    // The cell editor opened before the answer.
+    let mut h = ready(Lang::En);
+    let c = clipboard(&mut h);
+    h.app.prefs.clipboard = ClipboardSetting::System;
+    c.hold("q@x");
+    keys_now(&mut h, " dv");
+    keys_now(&mut h, "e");
+    assert!(h.app.cell_edit_open());
+    h.app.pump_clipboard_reads(Duration::from_secs(30));
+    assert!(edits(&h).batch.is_empty(), "nothing pasted under the editor");
+    assert!(h.app.cell_edit_open());
+    assert_eq!(said(&mut h), "The clipboard's text came after the grid moved; nothing pasted");
+}
+
+#[test]
+fn space_d_capital_v_reads_the_paste_again_once_it_is_the_newest_change_again() {
+    let mut h = ready(Lang::En);
+    paste(&mut h, "q@x,qq\n");
+    h.keys("j");
+    type_cell(&mut h, "s@x");
+    h.keys("u");
+    h.app.transient = None;
+    h.keys("k dV");
+    assert!(said(&mut h).starts_with("Pasted as one value"));
+    assert_eq!((pending(&h, 0, 1), pending(&h, 0, 2)), (Some(t("q@x,qq")), None));
+    assert_eq!(pending(&h, 1, 1), None);
+    // Two reads again are still one step.
+    h.keys(" dV");
+    assert!(said(&mut h).starts_with("Pasted as TSV"));
+    h.keys("u");
+    assert!(edits(&h).batch.is_empty());
+}
+
+#[test]
+fn one_value_fills_a_selection_from_the_rows_read_into_new_rows_while_the_server_has_more() {
+    let mut h = resolved(Harness::connected(Lang::En), named(), true);
+    h.app.tab_mut().exec.paging = Paging::Open { since: std::time::Instant::now(), in_block: false };
+    h.keys("jjo");
+    if h.app.cell_edit_open() {
+        h.key(KeyCode::Esc);
+    }
+    assert_eq!(drafts(&h).len(), 1);
+    h.app.transient = None;
+    // From row 3's nickname to the new row's.
+    let g = &mut h.app.tab_mut().grid;
+    (g.row, g.col) = (2, 2);
+    h.keys("vj");
+    paste(&mut h, "zed");
+    assert!(said(&mut h).starts_with("Pasted as one value"));
+    assert_eq!(pending(&h, 2, 2), Some(t("zed")));
+    assert_eq!(drafts(&h)[0][2], t("zed"));
+    // A block starting on the new row may add rows while the server has more.
+    h.keys("j");
+    paste(&mut h, "p\nq\n");
+    assert_eq!(drafts(&h).len(), 2);
+    assert_eq!(drafts(&h)[1][2], t("q"));
+}
+
+#[test]
+fn the_refusal_past_the_rows_read_says_what_to_do_as_the_next_page_would() {
+    for (paging, reason) in [
+        (
+            Paging::Open { since: std::time::Instant::now(), in_block: false },
+            "the result has more rows on the server; fetch them (n) or paste fewer rows",
+        ),
+        (Paging::Released, "the result has more rows on the server, not read here; paste fewer rows"),
+    ] {
+        let mut h = resolved(Harness::connected(Lang::En), named(), true);
+        h.app.tab_mut().exec.paging = paging;
+        h.keys("jj");
+        refused(&mut h, "a\nb\n", reason);
+    }
+}
+
+#[test]
+fn a_paste_over_an_identity_always_or_a_repeated_column_or_applied_rows_is_refused() {
+    let mut st = named();
+    st.columns[0].fill = ColumnFill::IdentityAlways;
+    let mut h = resolved(Harness::connected(Lang::En), st, false);
+    h.keys("h");
+    refused(&mut h, "5", "id is GENERATED ALWAYS AS IDENTITY");
+    // A column shown twice.
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.app.run(vec!["SELECT id, email, email FROM shop.users".to_string()]);
+    let id = h.app.tab().exec.query_id;
+    let columns = vec![
+        meta_from("id", "int8", true, USERS, 1),
+        meta_from("email", "text", false, USERS, 2),
+        meta_from("email", "text", false, USERS, 2),
+    ];
+    let rows = vec![vec![s("1"), s("a@x"), s("a@x")]];
+    h.db(DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::ZERO });
+    h.app.focus = Focus::Results;
+    h.keys("l");
+    paste(&mut h, "x@x");
+    structure(&mut h, named());
+    assert_eq!(said(&mut h), "Not pasted: email is shown more than once");
+    assert!(edits(&h).batch.is_empty());
+    // Rows an Apply changed.
+    let mut h = ready(Lang::En);
+    if let Results::Rows(rs) = &mut h.app.tab_mut().results {
+        rs.edit.applied = Some(Box::new(Applied { new: vec![Vec::new()], ..Applied::default() }));
+    }
+    paste(&mut h, "x@x");
+    assert_eq!(said(&mut h), format!("Can't edit: {}", h.app.i18n.label(Label::EditWhyApplied)));
+    assert!(edits(&h).batch.is_empty());
+}
+
+#[test]
+fn a_paste_while_messages_or_a_plan_is_shown_says_to_paste_into_the_grid() {
+    let mut h = ready(Lang::En);
+    h.app.tab_mut().exec.view = ResultView::Messages;
+    paste(&mut h, "q@x");
+    assert_eq!(said(&mut h), "Paste into the grid");
+    assert!(edits(&h).batch.is_empty());
+}
+
+#[test]
+fn many_rows_ask_only_when_more_than_a_thousand_change() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.app.run(vec![SQL.to_string()]);
+    let id = h.app.tab().exec.query_id;
+    let rows: Vec<Vec<Option<String>>> =
+        (0..1_001).map(|i| vec![s(&i.to_string()), s(&format!("{i}@x")), s(&format!("n{i}"))]).collect();
+    h.db(DbEvent::Page { id, columns: Some(users_columns()), rows, more: false, elapsed: Duration::ZERO });
+    h.app.focus = Focus::Results;
+    h.keys("le");
+    structure(&mut h, named());
+    h.key(KeyCode::Esc);
+    h.keys("l");
+    h.app.transient = None;
+    // The values already there, but row 1's: one row changes.
+    let same: String = (0..1_001).map(|i| if i == 0 { "m0\n".to_string() } else { format!("n{i}\n") }).collect();
+    paste(&mut h, &same);
+    assert!(h.app.status_ask_line().is_none(), "one row changes");
+    assert!(said(&mut h).starts_with("Pasted as one column · 1,001 rows × 1 column · 1 cell changed"));
+    h.keys("u");
+    let other: String = (0..1_001).map(|i| format!("m{i}\n")).collect();
+    paste(&mut h, &other);
+    let forms = h.app.status_ask_line().map(|(f, _)| f).expect("asked");
+    assert_eq!(forms[0], "Paste 1,001 rows? y paste · any other key cancels");
+}
+
+#[test]
+fn the_paste_summary_keeps_its_invalid_values_and_undo_key_at_80_columns() {
+    for lang in [Lang::En, Lang::Ko] {
+        let mut h = ready(lang);
+        h.keys("h");
+        paste(&mut h, "abc");
+        let line = status_at(&mut h, 80);
+        let invalid = h.app.i18n.msg(&Msg::EditPasteInvalidCount { count: 1 }).to_string();
+        let undo = h.app.i18n.msg(&Msg::EditPasteUndo { key: "u".into() }).to_string();
+        assert!(line.contains(&invalid) && line.contains(&undo), "{lang:?}: {line}");
+        assert!(!line.contains('\u{2026}'), "{lang:?}: nothing cut: {line}");
+    }
+    // A refusal's reason reads whole.
+    let mut h = ready(Lang::En);
+    paste(&mut h, "a\tb\tc\n");
+    let line = status_at(&mut h, 80);
+    assert!(line.contains("Not pasted: 3 columns wide; 2 fit from the cursor"), "{line}");
 }

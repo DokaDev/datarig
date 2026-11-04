@@ -557,6 +557,8 @@ pub struct App {
     pub shared: tunnel::SharedTunnels,
     pub status: Option<Notice>,
     pub transient: Option<(Notice, Instant)>,
+    /// Shorter forms of the notice `transient` holds when it is this message.
+    transient_shorter: Option<(Msg, Vec<Msg>)>,
     pub quit: bool,
     pub layout: Layout,
     pub keymap: Keymap,
@@ -987,6 +989,7 @@ impl App {
             shared: tunnel::SharedTunnels::default(),
             status: status.clone(),
             transient: None,
+            transient_shorter: None,
             quit: false,
             layout: Layout::default(),
             keymap,
@@ -1904,6 +1907,17 @@ impl App {
     }
 
     /// Message for the status bar: transient > running > last status.
+    /// The shorter forms of the notice the status line shows, longest first (none while it
+    /// shows something else, or a notice flashed without them).
+    pub fn status_shorter(&self) -> Vec<String> {
+        match (&self.transient, &self.transient_shorter) {
+            (Some((n, _)), Some((of, forms))) if !self.tab_grabbed() && n.msg == *of => {
+                forms.iter().map(|m| self.i18n.msg(m).to_string()).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     pub fn status_line(&mut self) -> Option<(Localized, Level, bool)> {
         // A tab moved by keys: how (no timer: it stays while the move does).
         if self.tab_grabbed() {
@@ -1921,10 +1935,14 @@ impl App {
         if let Some(text) = self.apply_wait_text() {
             return Some((Localized::verbatim(text), Level::Info, true));
         }
-        // Why the cell editor did not take its text, while it is open.
-        let refused = (!self.tabs.is_empty()).then(|| self.tab().cell_edit.as_ref()?.error.clone()).flatten();
-        if let Some(reason) = refused {
-            return Some((self.i18n.msg(&Msg::EditRefused { reason }), Level::Info, false));
+        // Why the cell editor did not take its text, or why the value it opened with is not
+        // valid, while it is open.
+        let refused = (!self.tabs.is_empty()).then(|| self.tab().cell_edit.as_ref()).flatten();
+        if let Some(e) = refused
+            && let Some(reason) = e.error.clone()
+        {
+            let msg = if e.invalid { Msg::EditNotValid { reason } } else { Msg::EditRefused { reason } };
+            return Some((self.i18n.msg(&msg), Level::Info, false));
         }
         // An answer waits for transactions to end (whichever tab is shown).
         if let Some(m) = self.end_pending_status() {
@@ -2069,6 +2087,12 @@ impl App {
 
     fn flash(&mut self, m: Notice) {
         self.transient = Some((m, Instant::now()));
+    }
+
+    /// [`App::flash`] `m`, with forms of it for a status bar too narrow for it, longest first.
+    fn flash_shorter(&mut self, m: Notice, shorter: Vec<Msg>) {
+        self.transient_shorter = Some((m.msg.clone(), shorter));
+        self.flash(m);
     }
 
     /// Show `m` in the status bar, unless the active tab's own warning is there and `m` is less

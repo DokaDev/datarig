@@ -175,8 +175,12 @@ typed values: marked in the grid, listed in the Changes tab, and nothing is sent
 The status line says how the text was read and what it did:
 
 ```
-Pasted as TSV · 3 rows × 4 columns · 5 cells changed · 1 new row · 1 invalid (row 14 · price) · u undo
+Pasted as TSV · 3 rows × 4 columns · 1 invalid (row 14 · price) · 5 cells changed · 1 new row · u undo
 ```
+
+Where the status bar is too narrow for all of it, the counts of cells and new rows go first,
+then the invalid cell's name: the format, the size, how many values are invalid and the undo key
+stay (`Pasted as TSV · 3 rows × 4 columns · 1 invalid · u undo`).
 
 ### Formats
 
@@ -196,8 +200,10 @@ many values as the first: `row 3 has 4 values, row 1 has 3` is refused, never pa
 When the text was read the wrong way (a one-column copy whose values hold commas reads as CSV),
 `Space d V` reads the last paste again as the next format, TSV → CSV → one value → TSV: it undoes
 the paste and pastes the same text again at the same cursor and selection. It works while that
-paste is the newest change; otherwise it says "Nothing to re-read: the last change was not a
-paste". Text that can't be read at all (a quote never closed) names `Space d V` and the format it
+paste is the newest change, again after undoing a later one; otherwise it says "Nothing to
+re-read: the last change was not a paste". When the new reading is refused, or its question
+about many rows is cancelled, the paste stays as it was and the next `Space d V` tries the
+format after that one. Text that can't be read at all (a quote never closed) names `Space d V` and the format it
 tries next.
 
 ### Where it goes
@@ -228,17 +234,22 @@ A paste that does not fit is refused as a whole, saying why, and nothing changes
 - a row in the range marked for deletion: "row 12 is marked for deletion"
 - rows past the last row read while the server has more rows: "the result has more rows on the
   server; fetch them (n) or paste fewer rows". Otherwise rows meant to overwrite the rows not
-  fetched yet would become new rows.
+  fetched yet would become new rows. When the next page runs the query again and shows other
+  rows in place of these (`next page re-runs`), it says "the result has more rows on the server,
+  not read here; paste fewer rows". One value filling a selection adds no row, so it is not
+  refused for this.
 - rows past the end where no row can be added: no column of the result takes a value in a new
   row, or the table has a `NOT NULL` column without a default that the result does not show
 - a result that can't be edited, or whose changes are being applied
 - more than **5,000 rows** or **1 MiB** of text
 
-In the Changes tab a paste says "Paste into the grid". With the cell editor open, a paste goes
+In the Changes tab, or with the messages, a plan or a chart shown, a paste says "Paste into the
+grid". With the cell editor open, a paste goes
 into the editor as before (the one-line editor takes no line breaks).
 
-A paste that changes more than **1,000 rows** asks first on the status line:
-`Paste 2,400 rows (1,900 new)? y paste · any other key cancels`. Any other key, a click or
+A paste that changes more than **1,000 rows** (rows with a value set to another one, and new
+rows) asks first on the status line: `Paste 2,400 rows (1,900 new)? y paste · any other key
+cancels`. Any other key, a click or
 another paste cancels it and does nothing else.
 
 ### NULL and empty values
@@ -262,7 +273,8 @@ it, and marked:
 - the Changes tab lists them first, with the reason: "Row 14 · price: not a number: 'abc'"
 - the changes are not applied while any value is invalid (Apply shows the Changes tab instead)
 
-Fix a value with `e`: the editor opens with the pasted text and says why it was not taken. Or
+Fix a value with `e`: the editor opens with the pasted text and says why it is not valid ("Not
+valid: not a number: 'abc'"). Or
 drop it with `Space d r`, or undo the paste.
 
 ### Undo

@@ -300,8 +300,10 @@ pub struct CellEdit {
     pub input: TextInput,
     /// The text in the editor of several lines, which takes the place of `input` once open.
     pub lines: Option<Box<Lines>>,
-    /// Why the text typed was not taken.
+    /// Why the text typed was not taken; or (`invalid`) why the value it opened with is not
+    /// one its column takes.
     pub error: Option<String>,
+    pub invalid: bool,
 }
 
 impl CellEdit {
@@ -848,8 +850,9 @@ impl App {
                         let lines = text.contains(['\n', '\r']) || in_lines(&c);
                         let input = TextInput::new(&text);
                         let error = self.invalid_reason(at, col);
+                        let invalid = error.is_some();
                         self.open_cell_edit(
-                            CellEdit { result, at: (at, col), cells, input, lines: None, error },
+                            CellEdit { result, at: (at, col), cells, input, lines: None, error, invalid },
                             &text,
                             lines,
                         );
@@ -878,8 +881,10 @@ impl App {
                         let at = (RowAt::Read(row), col);
                         let lines = text.contains(['\n', '\r']) || in_lines(&c);
                         let error = self.invalid_reason(at.0, col);
+                        let invalid = error.is_some();
                         let input = TextInput::new(&text);
-                        self.open_cell_edit(CellEdit { result, at, cells, input, lines: None, error }, &text, lines);
+                        let e = CellEdit { result, at, cells, input, lines: None, error, invalid };
+                        self.open_cell_edit(e, &text, lines);
                     }
                     _ => {}
                 }
@@ -1354,6 +1359,7 @@ impl App {
         if let Err(reason) = self.typed_whole(d, &text).and_then(|_| self.typed_ok(d, &c, &text)) {
             if let Some(e) = self.tabs.active_mut().cell_edit.as_mut() {
                 e.error = Some(reason.clone());
+                e.invalid = false;
             }
             return self.flash(Notice::new(Msg::EditRefused { reason }, Level::Info));
         }
@@ -1380,6 +1386,7 @@ impl App {
         if let Some(why) = why {
             if let Some(e) = self.tabs.active_mut().cell_edit.as_mut() {
                 e.error = Some(self.i18n.msg(&why).to_string());
+                e.invalid = false;
             }
             return self.say_refused(why);
         }
