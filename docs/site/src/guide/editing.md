@@ -67,7 +67,7 @@ In the grid:
 | `Space d a` (`:apply`) | [Apply](#apply) them, once asked on the status line (in a dialog when one is needed) |
 | `Space d x` (`:discard`) | Drop every pending change of the result (it asks first) |
 | Your terminal's paste (`Cmd+V`, `Ctrl+Shift+V`) | [Paste a range](#pasting-a-range) at the cursor |
-| `Space d v` | Paste the system clipboard at the cursor (with `clipboard = "auto"` or `"system"`) |
+| `Space d v` | Paste the system clipboard at the cursor (with `clipboard = "system"`, or `"auto"` outside SSH) |
 | `Space d V` | Read the last paste again as the next format, in its place |
 
 The full lists are in the keybindings reference: the [grid](../reference/keybindings.md#grid),
@@ -159,7 +159,7 @@ naming the column.
 `D` on a new row removes it. A new row has no number in the gutter; the messages number it after
 the rows read ("Row 4" after three rows).
 
-The preview refuses a new row that leaves a `NOT NULL` column without a default to its default
+The Changes tab lists, and an Apply refuses, a new row that leaves a `NOT NULL` column without a default to its default
 ("Row 4: name is NOT NULL and has no default; give it a value"), and one of a table with such a
 column that the result does not show ("…is not in the result; add it to the SELECT").
 
@@ -180,7 +180,7 @@ Pasted as TSV · 3 rows × 4 columns · 1 invalid (row 14 · price) · 5 cells c
 
 Where the status bar is too narrow for all of it, the counts of cells and new rows go first,
 then the invalid cell's name: the format, the size, how many values are invalid and the undo key
-stay (`Pasted as TSV · 3 rows × 4 columns · 1 invalid · u undo`).
+stay (`Pasted as TSV · 3 rows × 4 columns · 1 invalid · u undo`); at its narrowest the format goes too (`Pasted · 3×4 · 1 invalid · u undo`).
 
 ### Formats
 
@@ -219,8 +219,8 @@ the paste and pastes the same text again at the same cursor and selection. It wo
 paste is the newest change, again after undoing a later one; otherwise it says "Nothing to
 re-read: the last change was not a paste". When the new reading is refused, or its question
 about many rows is cancelled, the paste stays as it was and the next `Space d V` tries the
-format after that one. Text that can't be read at all (a quote never closed) names `Space d V` and the format it
-tries next.
+format after that one. Text that can't be read at all (a quote never closed, rows of different widths, a lone carriage
+return) names `Space d V` and the format it tries next.
 
 ### Where it goes
 
@@ -237,7 +237,7 @@ the rows read, then the new rows.
 Rows past the last row become **new rows at the end** of the result, as `o` adds them: the
 columns outside the pasted range are left to their default, and the key's columns, identities
 and `AUTO_INCREMENT` columns too unless the range sets them. A value equal to the cell's value
-as read changes nothing. The cursor goes to the range's first cell.
+as read leaves the cell unchanged; if the cell had a pending edit, that edit is dropped. The cursor goes to the range's first cell.
 
 ### When a paste is refused
 
@@ -250,10 +250,11 @@ A paste that does not fit is refused as a whole, saying why, and nothing changes
 - a row in the range marked for deletion: "row 12 is marked for deletion"
 - rows past the last row read while the server has more rows: "the result has more rows on the
   server; fetch them (n) or paste fewer rows". Otherwise rows meant to overwrite the rows not
-  fetched yet would become new rows. When the next page runs the query again and shows other
-  rows in place of these (`next page re-runs`), it says "the result has more rows on the server,
+  fetched yet would become new rows. When the result's cursor is no longer open (the next page
+  runs the query again, or there is none), it says "the result has more rows on the server,
   not read here; paste fewer rows". One value filling a selection adds no row, so it is not
   refused for this.
+- a row in the range that can't be found again (its values are not shown whole)
 - rows past the end where no row can be added: no column of the result takes a value in a new
   row, or the table has a `NOT NULL` column without a default that the result does not show
 - a result that can't be edited, or whose changes are being applied
@@ -311,9 +312,9 @@ grid. Use `Space d v` there, where a system clipboard exists.
 ### Pasting the app's own copies
 
 The grid's own TSV and CSV copies (`Space r y`) paste back as the same cells, with three
-exceptions: a text cell that is exactly `\N` pastes back as NULL; NULL is copied as an empty
+exceptions: a text cell that is exactly the NULL token (`\N` by default) pastes back as NULL; NULL is copied as an empty
 field, so it pastes back as an empty value; and in a copy of one column, a last cell that is
-empty (NULL, or an empty text) is lost, since the copy does not end its last line.
+NULL (in a TSV copy, an empty text too) is lost, since the copy does not end its last line.
 
 ## Undo, revert, discard
 
@@ -332,9 +333,11 @@ result tabs: `Changes 3`, or `Chg3` where the strip is narrow. A narrow strip ke
 fits next to the shown tab and Messages. `Space d p` (`:changes`) shows it with the focus; `H`
 and `L` (`Space r [` and `Space r ]`) reach it as any result tab. It shows the changes of the
 result last shown in the grid. After an Apply it stays, as `Applied` (`Appl`), to show what was
-applied (see [After an Apply](#after-an-apply)); it goes once nothing is pending and nothing was
-applied, or when the query runs again. When another result of the tab
-has pending changes too, its second line says so: `Result 2 also has 1 pending`.
+applied (see [After an Apply](#after-an-apply)). A plain `Changes` stays after the applied
+changes were rolled back, and after an Apply whose result is not known once its pending changes
+are dropped. It goes once nothing is pending and nothing was applied, or when the query runs
+again. When another result of the tab
+has pending changes too, a line says so: `Result 2 also has 1 pending`.
 
 Its first line names the result and the table, and says how many updates, inserts, deletes and
 problems there are. Then one line per change, deletes first, then updates (a line per changed
@@ -416,7 +419,7 @@ needs no count.
 
 ## Apply
 
-`Space d a` (`:apply`, or "Apply the pending changes" in the action menu) works from the grid
+`Space d a` (`:apply`, or "Apply the pending changes (asked first)" in the action menu) works from the grid
 and from the Changes tab. The rows found by their values are counted afresh first, every time,
 whatever the Changes tab counted before; the count sees the tab's open transaction, as the
 Apply does. The status bar says `Checking 3 rows…` until the answers come. Meanwhile any key
@@ -496,8 +499,8 @@ row changed elsewhere in those columns since is not overwritten.
 
 ### While it runs
 
-`y` sends every statement on the tab's own session. While it runs the strip says `applying…`,
-the Changes tab says "Applying 3 changes…" over the statements being sent, edit keys are
+`y` sends every statement on the tab's own session. While it runs the strip (in the grid view) says `applying…`,
+the Changes tab says "Applying 3 changes…" over the list (or the statements) being sent, edit keys are
 refused, and the query's cancel key (`Ctrl+C`) cancels it. When the result's pages are held
 open, the cursor is closed first; the rows already read stay.
 
@@ -521,8 +524,8 @@ message is its first line, cut short when long:
 
 The result shows what the Apply did over the rows as read, until the query runs again: written
 values in italic (theme token `edit_applied`), deleted rows crossed out, the rows added after the
-rows read. The strip says `applied` (`applied · not committed` while its transaction is open,
-where it fits). These rows are not edited again: run the query first.
+rows read. The strip says `applied · re-run to refresh` (`applied · not committed` while its
+transaction is open; `applied` and `in open tx` where the strip is narrow). These rows are not edited again: run the query first.
 
 The Changes tab stays as `Applied`, until the query runs again: its list is what was applied,
 its SQL view the statements that were sent (`c` still copies them), and its second line says

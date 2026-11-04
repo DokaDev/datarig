@@ -1,7 +1,7 @@
 # Results
 
 A run's results open in the results pane below the editor. Each row result gets a result tab
-of its own, after a Messages tab with each statement's outcome and before a Chart tab. While
+of its own, before the Plan, Chart and Messages tabs (Messages holds each statement's outcome). While
 the shown result has pending changes, a Changes tab follows the result tabs (see
 [The Changes tab](editing.md#the-changes-tab)). In the results pane `H` and `L` move between the
 tabs; `Space r [` and `Space r ]` do it from anywhere.

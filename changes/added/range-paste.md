@@ -8,6 +8,6 @@
   `edit.paste_null`); an empty field is an empty value. Values a column does not take are kept,
   marked `!` in the gutter (theme token `edit_invalid`) and listed first in the Changes tab, and
   the changes are not applied until they are fixed. `Space d v` pastes the system clipboard with
-  `clipboard = "auto"` or `"system"`. For about a second after a status-line question or a
+  `clipboard = "system"`, or `"auto"` outside SSH. For about a second after a status-line question or a
   waiting Apply ends without its answer, `y`, `n`, `c` and `1` do nothing in the results and say
   they were ignored, so a late `y` never copies a cell over the clipboard.
