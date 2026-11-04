@@ -3,7 +3,6 @@ source: crates/tui/tests/flows_edit_cells.rs
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
-"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "╭──────────────────────────────────────────────────────────────────────────────╮"
 "│ › type to filter                                                             │"
 "│ Cell nickname, new row                                                       │"
@@ -15,6 +14,7 @@ expression: "h.draw(80, 24).backend()"
 "│  Mark the row (the selected rows) to be deleted, or unmark it; a …         D │"
 "│  Undo the last change of the result's cells                                u │"
 "│  Show changes                                                      Space d p │"
+"│  Apply the pending changes (asked first)                           Space d a │"
 "│  Drop every pending change of the result                           Space d x │"
 "│ Results                                                                      │"
 "│  Results → export to a file…                                       Space r e │"

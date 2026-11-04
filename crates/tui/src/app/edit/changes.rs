@@ -95,6 +95,8 @@ pub(super) enum Planned {
     NoDefault(Vec<PlanError>),
     Refused(PlanError),
     Ready(Plan),
+    /// Applied: the statements sent.
+    Sent(Vec<edit::Step>),
 }
 
 /// A reason the changes cannot be applied yet, with the row (and the column) it is about.
@@ -102,6 +104,8 @@ pub(super) enum Planned {
 pub struct Problem {
     pub text: String,
     pub at: Option<(RowAt, Option<usize>)>,
+    /// A row that matches several identical rows: the Apply asks which.
+    pub choice: bool,
 }
 
 /// What a line of the changes does to its row.
@@ -171,6 +175,8 @@ struct ModelKey {
     /// The rows the grid shows before the new rows.
     before_new: usize,
     zone: Option<String>,
+    /// Made from what an Apply changed (no change pending).
+    applied: bool,
     /// The tab's dialect and the session's values the rows were read in: whether a value as read
     /// is shown whole.
     dialect: Dialect,
@@ -304,6 +310,7 @@ impl App {
             lang: self.i18n.lang,
             before_new: rs.rows.len() + rs.edit.applied_new(),
             zone: zone.map(str::to_string),
+            applied: rs.edit.batch.is_empty() && rs.edit.applied.is_some(),
             dialect: self.tab_dialect(t.id),
             read_in: rs.read_in.clone(),
         };
@@ -336,7 +343,9 @@ impl App {
         zone: Option<&str>,
     ) -> ChangesModel {
         let i18n = &self.i18n;
-        let batch = &rs.edit.batch;
+        // Nothing pending after an Apply: what it changed, and the statements it sent.
+        let applied = rs.edit.applied.as_deref().filter(|_| rs.edit.batch.is_empty());
+        let batch = applied.map_or(&rs.edit.batch, |a| &a.batch);
         let table = format!("{}.{}", target.table.schema, target.table.name);
         let title = i18n.msg(&Msg::EditPreviewTitle { table });
         let c = batch.counts();
@@ -352,6 +361,14 @@ impl App {
         .join(" · ");
         let f = edit::format(format);
         let dialect = f.language().dialect();
+        let names: Vec<String> = rs.columns.iter().map(|c| c.meta.name.clone()).collect();
+        if let Some(a) = applied {
+            let list = list_lines(target, batch, &names);
+            let sql = self.step_lines(&a.sent, dialect);
+            let planned = Planned::Sent(a.sent.clone());
+            let why_not = Some(i18n.label(Label::EditWhyApplied).to_string());
+            return ChangesModel { title, summary, problems: Vec::new(), list, sql, dialect, planned, why_not };
+        }
         let not_whole = not_whole(self.tab_dialect(t.id), rs, zone);
         let whole = |r: usize, c: usize| !not_whole.contains(&(r, c));
         // What was counted for other changes is not theirs.
@@ -364,7 +381,7 @@ impl App {
         let mut problems = Vec::new();
         if let Some(error) = &checks.failed {
             let text = i18n.msg(&Msg::EditPreviewCountFailed { error: error.clone() }).to_string();
-            problems.push(Problem { text, at: None });
+            problems.push(Problem { text, at: None, choice: false });
         }
         let all = edit::plan_problems(target, batch, &*f, &facts);
         let refused = match &planned {
@@ -372,9 +389,9 @@ impl App {
             _ => None,
         };
         for e in all.iter().filter(|e| !matches!(e, PlanError::NotCounted { .. })).chain(refused) {
-            problems.push(Problem { text: text(e), at: problem_at(e) });
+            let choice = matches!(e, PlanError::Choose { .. });
+            problems.push(Problem { text: text(e), at: problem_at(e), choice });
         }
-        let names: Vec<String> = rs.columns.iter().map(|c| c.meta.name.clone()).collect();
         let list = list_lines(target, batch, &names);
         let mut sql = Vec::new();
         let why_not = match &planned {
@@ -382,7 +399,7 @@ impl App {
             Planned::Failed(error) => Some(i18n.msg(&Msg::EditPreviewCountFailed { error: error.clone() }).to_string()),
             Planned::NoDefault(errors) => Some(text(&errors[0])),
             Planned::Refused(e) => Some(text(e)),
-            Planned::Ready(_) => None,
+            Planned::Ready(_) | Planned::Sent(_) => None,
         };
         match &planned {
             Planned::Counting => sql.push(PreviewLine::Note(i18n.label(Label::EditPreviewCounting).to_string())),
@@ -399,39 +416,46 @@ impl App {
                 sql.push(PreviewLine::Choose { text: text(e), keys });
             }
             Planned::Refused(e) => sql.push(PreviewLine::Problem(text(e))),
-            Planned::Ready(plan) => {
-                let checks: Vec<&edit::Step> =
-                    plan.steps.iter().filter(|s| matches!(s.expect, Expect::Rows(_))).collect();
-                if !checks.is_empty() {
-                    let nowait = checks.iter().all(|s| s.sql.ends_with(" NOWAIT"));
-                    let head = if nowait { Label::EditPreviewChecks } else { Label::EditPreviewChecksWait };
-                    sql.push(PreviewLine::Head(i18n.label(head).to_string()));
-                }
-                let mut writes = false;
-                for s in &plan.steps {
-                    let n = match s.expect {
-                        Expect::Rows(n) => n,
-                        Expect::Affected(n) => {
-                            if !writes {
-                                writes = true;
-                                sql.push(PreviewLine::Head(i18n.label(Label::EditPreviewWrites).to_string()));
-                            }
-                            n
-                        }
-                    };
-                    let delete = matches!(s.expect, Expect::Affected(_)) && s.sql.starts_with("DELETE ");
-                    sql.push(PreviewLine::Step {
-                        sql: s.sql.clone(),
-                        expect: i18n.msg(&Msg::EditPreviewExpect { count: n }).to_string(),
-                        risky: delete || n > 1,
-                    });
-                    if let Some(text) = self.read_back(&s.sql, dialect) {
-                        sql.push(PreviewLine::Values(text));
-                    }
-                }
-            }
+            Planned::Ready(plan) => sql = self.step_lines(&plan.steps, dialect),
+            Planned::Sent(steps) => sql = self.step_lines(steps, dialect),
         }
         ChangesModel { title, summary, problems, list, sql, dialect, planned, why_not }
+    }
+
+    /// Statements `steps` (in dialect `dialect`) as the preview shows them: the row checks, then
+    /// the writes, each with the count it must give and the text values it carries read back.
+    fn step_lines(&self, steps: &[edit::Step], dialect: Dialect) -> Vec<PreviewLine> {
+        let i18n = &self.i18n;
+        let mut sql = Vec::new();
+        let checks: Vec<&edit::Step> = steps.iter().filter(|s| matches!(s.expect, Expect::Rows(_))).collect();
+        if !checks.is_empty() {
+            let nowait = checks.iter().all(|s| s.sql.ends_with(" NOWAIT"));
+            let head = if nowait { Label::EditPreviewChecks } else { Label::EditPreviewChecksWait };
+            sql.push(PreviewLine::Head(i18n.label(head).to_string()));
+        }
+        let mut writes = false;
+        for s in steps {
+            let n = match s.expect {
+                Expect::Rows(n) => n,
+                Expect::Affected(n) => {
+                    if !writes {
+                        writes = true;
+                        sql.push(PreviewLine::Head(i18n.label(Label::EditPreviewWrites).to_string()));
+                    }
+                    n
+                }
+            };
+            let delete = matches!(s.expect, Expect::Affected(_)) && s.sql.starts_with("DELETE ");
+            sql.push(PreviewLine::Step {
+                sql: s.sql.clone(),
+                expect: i18n.msg(&Msg::EditPreviewExpect { count: n }).to_string(),
+                risky: delete || n > 1,
+            });
+            if let Some(text) = self.read_back(&s.sql, dialect) {
+                sql.push(PreviewLine::Values(text));
+            }
+        }
+        sql
     }
 
     /// The row the grid shows for `origin` of `rs`, counted from 1, as text.

@@ -63,6 +63,34 @@ impl App {
         {
             self.end_tab_drag();
         }
+        // The status bar's question takes the press, the click and the paste: only `y` does
+        // it, anything else cancels it, and nothing goes on to what is under it. So does an
+        // Apply waiting for its counts, which any of them stops: none can be taken by the
+        // question or the dialog the answers bring.
+        let asked = self.ask.is_some();
+        if (asked || self.apply_wait.is_some()) && !self.modal_open() {
+            match ev {
+                Event::Key(k) => {
+                    let k = keyboard::normalize(k);
+                    match keyboard::key_use(&k) {
+                        KeyUse::Ignore => {}
+                        u if asked => self.status_ask_key(k, u == KeyUse::Repeat),
+                        _ => self.apply_wait_cancel(),
+                    }
+                }
+                Event::Mouse(m) if !matches!(m.kind, MouseEventKind::Up(_) | MouseEventKind::Drag(_)) => {
+                    if asked {
+                        self.status_ask_cancel()
+                    } else {
+                        self.apply_wait_cancel()
+                    }
+                }
+                Event::Paste(_) if asked => self.status_ask_cancel(),
+                Event::Paste(_) => self.apply_wait_cancel(),
+                _ => {}
+            }
+            return self.after_input();
+        }
         match ev {
             Event::Key(k) => {
                 let k = keyboard::normalize(k);

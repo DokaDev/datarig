@@ -578,6 +578,10 @@ pub struct App {
     pub(crate) changes_seen: Option<edit::Seen>,
     /// The SQL view of the Changes tab as last laid out, and the model of the changes it is of.
     pub(crate) changes_body: Option<(std::sync::Arc<edit::ChangesModel>, edit::PreviewBody)>,
+    /// The question the status bar asks in place of its segments (`y` does it).
+    pub ask: Option<edit::StatusAsk>,
+    /// An Apply waiting for the counts of its rows found by their values.
+    pub apply_wait: Option<edit::ApplyWait>,
     pub lang_setting: LangSetting,
     /// `[secrets] default_source`: the password source a new profile starts with.
     pub default_source: DefaultSource,
@@ -987,6 +991,8 @@ impl App {
             changes_view: None,
             changes_seen: None,
             changes_body: None,
+            ask: None,
+            apply_wait: None,
             lang_setting: LangSetting::parse(&cfg.language),
             default_source: cfg.default_source,
             prefs: cfg.prefs,
@@ -1617,6 +1623,10 @@ impl App {
     }
 
     fn context_of(&self, top: Option<&Overlay>) -> Ctx {
+        // The status bar's question takes every key before what is under it (not a dialog's).
+        if self.ask.is_some() && !self.modal_open() {
+            return Ctx::StatusAsk;
+        }
         match top {
             Some(Overlay::Commands(_)) => Ctx::Commands,
             Some(Overlay::Password(_)) => Ctx::Password,
@@ -1813,6 +1823,8 @@ impl App {
         self.changes_count_tick(now);
         self.tx_idle_tick(now);
         self.idle_tick(now);
+        // A timer may move what the status bar asks about (an idle transaction rolled back).
+        self.sweep_status_ask();
         self.autosave_tick(now);
         // Aux sessions no tab works in, unused for a while, close; what they read stays.
         let idle: Vec<u64> = self
@@ -1893,6 +1905,10 @@ impl App {
         }
         if let Some((m, _)) = &self.transient {
             return Some((m.render(&self.i18n), m.level, false));
+        }
+        // An Apply waits for the counts of its rows.
+        if let Some(text) = self.apply_wait_text() {
+            return Some((Localized::verbatim(text), Level::Info, true));
         }
         // Why the cell editor did not take its text, while it is open.
         let refused = (!self.tabs.is_empty()).then(|| self.tab().cell_edit.as_ref()?.error.clone()).flatten();

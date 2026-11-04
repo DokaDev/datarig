@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_edit_preview.rs
-assertion_line: 565
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ◆ ×                                                                          "
@@ -12,7 +11,7 @@ expression: backend
 "│      Loading…              ││  4 SELECT u.name, o.status, o.total_amount                                             │"
 "│▾ Environments 1            ││  5 FROM shop.orders o                                                                  │"
 "│    ○ Default rules (no env…││  6 JOIN shop.users u ON u.id = o.user_id                                               │"
-"│  ▸ ○ stg  manual commit · …││  7 WHERE o.status = 'paid';                                                            │"
+"│  ▸ ○ stg  asks before ever…││  7 WHERE o.status = 'paid';                                                            │"
 "│                            ││  8                                                                                     │"
 "│                            ││  9 SELECT * FROM analytics.events;                                                     │"
 "│                            ││ 10                                                                                     │"
@@ -20,7 +19,7 @@ expression: backend
 "│                            ││ 12                                                                                     │"
 "│                            │╰────────────────────────────────────────────────────────────────────────────────────────╯"
 "│                            │╭ Results · 3 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮"
-"│                            ││ [1]  Chart  Msgs           applied · not committed ││ A row the Apply added            │"
+"│                            ││ [1]  Appl  Chart  Msgs     applied · not committed ││ A row the Apply added            │"
 "│                            ││   │ PK id │ UQ email │ nickname                    ││                                  │"
 "│                            ││   │ int8  │ text     │ text                        ││                                  │"
 "│                            ││ 1 │     1 │ z@x      │ ann!                        ││                                  │"

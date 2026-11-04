@@ -49,6 +49,18 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let bar = Style::new().bg(th.surface).fg(th.fg);
     buf.set_style(area, bar);
     let total = area.width as usize;
+    // A question takes the whole bar: its longest form that fits, else what fits of the
+    // shortest.
+    if let Some((forms, level)) = app.status_ask_line() {
+        let room = total.saturating_sub(2);
+        let line = match forms.iter().find(|f| width(f) <= room) {
+            Some(f) => f.clone(),
+            None => clip(forms.last().map_or("", String::as_str), room),
+        };
+        let style = Style::new().fg(level_color(level)).bg(th.surface).add_modifier(Modifier::BOLD);
+        crate::widgets::put(buf, area.x + 1, area.y, &line, room, style);
+        return;
+    }
     let sep = " │ ";
     let sep_style = Style::new().fg(th.border).bg(th.surface);
 

@@ -127,7 +127,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space d O` | `edit.clone_row` | Add a new row with the values of the cursor's row |  |
 | `Space d d` | `edit.delete_row` | Mark the row (the selected rows) to be deleted, or unmark it; a new row is removed |  |
 | `Space d p` | `edit.preview` | Show changes |  |
-| `Space d a` | `edit.apply` | Apply the pending changes (shown first, to confirm) |  |
+| `Space d a` | `edit.apply` | Apply the pending changes (asked first) |  |
 | `Space d x` | `edit.discard` | Drop every pending change of the result |  |
 | `Space r y t` | `results.copy.selection.tsv` | Copy selection: Without headers (TSV) |  |
 | `Space r y T` | `results.copy.selection.tsv_header` | Copy selection: With headers (TSV) |  |
@@ -696,6 +696,12 @@ Reserved — keyboard help filter: `Esc` `Enter` `Down` `Up`
 
 Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
+## `status.ask`
+
+The status bar's one-line question before an Apply of a result's changes: `y` applies them; any other key, a click or a paste cancels, and does nothing else. Inside `root`.
+
+Reserved — the status bar's question: y does it, any other key cancels: `y`
+
 ## Command line only
 
 Actions without a default key (the command line finds them by name).
@@ -771,7 +777,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:tx` |  | What the open transaction did |
 | `:session` | `:startup` | What a profile's sessions start with, and where each setting comes from |
 | `:changes` |  | Show changes |
-| `:apply` |  | Apply the pending changes (shown first, to confirm) |
+| `:apply` |  | Apply the pending changes (asked first) |
 | `:discard` |  | Drop every pending change of the result |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):

@@ -633,7 +633,12 @@ impl Harness {
 
     /// Connected, schemas listed, catalog loaded (as the driver would report it).
     pub fn connected(lang: Lang) -> Self {
-        let mut h = Self::new(lang);
+        Self::connected_with(&test_db_config(), lang)
+    }
+
+    /// [`Harness::connected`] with `cfg` as the configuration.
+    pub fn connected_with(cfg: &Config, lang: Lang) -> Self {
+        let mut h = Self::with_config(cfg, lang);
         h.db(DbEvent::Connected);
         h.db(DbEvent::Schemas(Ok(vec!["analytics".into(), "public".into(), "shop".into()])));
         h.db(DbEvent::Catalog(Ok(catalog())));

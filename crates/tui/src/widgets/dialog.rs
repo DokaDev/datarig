@@ -463,8 +463,13 @@ pub(crate) fn draw_edit_preview(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::EditPreview), app.now());
     let Some(v) = app.edit_preview_view() else { return };
-    let keys = app.i18n.label(Label::EditPreviewKeys);
     let w = area.width.saturating_sub(4).min(120);
+    // With a choice among identical rows open, its keys too where they fit.
+    let choose = app.i18n.label(Label::EditPreviewKeysChoose);
+    let keys = match v.lines.iter().any(|l| matches!(l, crate::app::edit::PreviewLine::Choose { .. })) {
+        true if crate::text::width(&choose) <= (w as usize).saturating_sub(6) => choose,
+        _ => app.i18n.label(Label::EditPreviewKeys),
+    };
     // Text from the inner edge (a column of margin each side).
     let iw = (w as usize).saturating_sub(4);
     let surface = |fg| Style::new().fg(fg).bg(th.surface);

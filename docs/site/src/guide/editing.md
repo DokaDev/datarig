@@ -64,14 +64,15 @@ In the grid:
 | `Space d r` | Drop the pending changes of the cell (the selection) |
 | `u` (`Space d u`), `Ctrl+R` (`Space d U`) | Undo, redo |
 | `Space d p` (`:changes`) | Show the pending changes in the [Changes tab](#the-changes-tab) |
-| `Space d a` (`:apply`) | Show the statements that apply them in a dialog, to apply them |
+| `Space d a` (`:apply`) | [Apply](#apply) them, once asked on the status line (in a dialog when one is needed) |
 | `Space d x` (`:discard`) | Drop every pending change of the result (it asks first) |
 
 The full lists are in the keybindings reference: the [grid](../reference/keybindings.md#grid),
 the `Space d` group under [nav](../reference/keybindings.md#nav), the
 [cell editor](../reference/keybindings.md#gridedit-text), the
 [editor of several lines](../reference/keybindings.md#overlaycell_editor-text), the
-[Changes tab](../reference/keybindings.md#changes) and the
+[Changes tab](../reference/keybindings.md#changes), the
+[status line question](../reference/keybindings.md#statusask) and the
 [Apply dialog](../reference/keybindings.md#overlayedit_preview).
 
 While changes are pending the strip shows `3 pending` and a Changes tab, and the hint line
@@ -175,7 +176,9 @@ While the shown result has pending changes, the result tab strip has a **Changes
 result tabs: `Changes 3`, or `Chg3` where the strip is narrow. A narrow strip keeps it while it
 fits next to the shown tab and Messages. `Space d p` (`:changes`) shows it with the focus; `H`
 and `L` (`Space r [` and `Space r ]`) reach it as any result tab. It shows the changes of the
-result last shown in the grid, and goes once nothing is pending. When another result of the tab
+result last shown in the grid. After an Apply it stays, as `Applied` (`Appl`), to show what was
+applied (see [After an Apply](#after-an-apply)); it goes once nothing is pending and nothing was
+applied, or when the query runs again. When another result of the tab
 has pending changes too, its second line says so: `Result 2 also has 1 pending`.
 
 Its first line names the result and the table, and says how many updates, inserts, deletes and
@@ -200,7 +203,8 @@ cell), then new rows:
   the pane is cut with `…`.
 - Every reason the changes can't be applied yet comes first, marked `!`, for every row (not
   only the first): a new row's `NOT NULL` column without a default, a row that matches no row or
-  several rows, a count that failed.
+  several rows, a count that failed. A row that matches several identical rows is listed too:
+  which of them to change is asked when you apply.
 
 `j` and `k` select a line, `Ctrl+D` and `Ctrl+U` move half a page, `g g` and `G` go to the first
 and the last. `Enter` shows the line's row and column in the grid (a row the grid no longer has
@@ -255,27 +259,61 @@ a second after the last change, once for each state of the changes ("Counting ma
 until the answers come; the count sees the tab's open transaction, as the Apply does). The list
 needs no count.
 
-## The Apply dialog
+## Apply
 
-`Space d a` (`:apply`) opens a dialog, "Apply changes — shop.users", with Cancel focused: only
-`y` applies. It shows how many updates, inserts and deletes, then the statements as the SQL view
-shows them; `j` and `k` scroll line by line, `c` copies them, `Enter`, `Esc` or `q` closes. The
-dialog closes by itself when its result, its rows' connection or the changes change.
+`Space d a` (`:apply`, or "Apply the pending changes" in the action menu) works from the grid
+and from the Changes tab. The rows found by their values are counted afresh first, every time,
+whatever the Changes tab counted before; the count sees the tab's open transaction, as the
+Apply does. The status bar says `Checking 3 rows…` until the answers come. Meanwhile any key
+(`Esc` too), a click, the wheel or a paste stops waiting ("Apply cancelled") and does nothing
+else, so none of them is taken by the question that follows; a dialog that opens or a run in the
+tab cancels it too. Changes that move before the answers come drop the Apply: "Changes changed —
+press Space d a again".
 
-The rows found by their values are counted afresh first ("Counting matching
-rows…"; the count sees the tab's open transaction, as the Apply does). Until a plan can be
-made, the dialog says why and `y` says "Can't apply yet: …":
+When the changes can't be applied yet, nothing is asked: the Changes tab takes the focus with
+the first problem selected, and the status bar says "Can't apply: 2 problems — see Changes".
+The problems are those of the list above, for instance:
 
 - "Row 3 matches no row of the table now: it was changed or deleted. Re-run the query."
 - "Row 3 matches 2 rows; add the key to the SELECT to edit it": the rows may differ in what the
   result does not show.
-- "Row 3 matches 2 identical rows", with "[1] just one [a] all 2": the table has no key, the
-  result shows every column, each comparing exactly, and the rows are the same in all of them.
-  `1` changes one of them, `a` all of them (the write then expects 2).
 - "Row 3: email is not shown whole, so the row can't be found again", and the `NOT NULL` refusals
   of new rows above.
 
-The footer says how the Apply stands to a transaction:
+Otherwise the status bar asks, on one line in the warning color:
+
+```text
+Apply 3 changes to shop.users (2 updates · 1 delete)?  y apply · any other key cancels
+```
+
+Only `y` applies. Any other key (`Enter`, `Esc`, `n`, any letter), a click or a paste cancels
+("Apply cancelled") and does nothing else: it never reaches the grid. Where the window is narrow
+the question leaves out the table, then the kinds but the deletes, and at its shortest is
+`Apply 3 changes (1 delete)? y/n`, the deletes always named. With
+[manual commit](manual-commit.md) the question also says how the Apply stands to a transaction
+("Opens a transaction; nothing is committed.", or "Runs inside the open transaction; nothing is
+committed."); the shortest form says it too: `Apply 3 changes (1 delete), nothing committed? y/n`
+or `…, in the open transaction? y/n`. The question is for the changes as they were asked about: a change, another tab,
+a run, a transaction that begins or ends, or a lost connection drops it ("Apply cancelled: the
+changes changed").
+
+### The Apply dialog
+
+A dialog, "Apply changes — shop.users", takes the place of the question when the statements
+must be seen before `y`:
+
+- a row matches several identical rows: "Row 3 matches 2 identical rows", with "[1] just one
+  [a] all 2". The table has no key, the result shows every column, each comparing exactly, and
+  the rows are the same in all of them. `1` changes one of them, `a` all of them (the write then
+  expects 2).
+- the last Apply's result is unknown (below): the first `y` warns, a second `y` applies again.
+- the profile's [environment](environments.md) asks before every write (`confirm = "writes"`):
+  the dialog is that question, no second one opens.
+
+Cancel has the focus: only `y` applies. The dialog shows how many updates, inserts and deletes,
+then the statements as the SQL view shows them; `j` and `k` scroll line by line, `c` copies them,
+`Enter`, `Esc` or `q` closes. It closes by itself when its result, its rows' connection or the
+changes change. Its footer says how the Apply stands to a transaction:
 
 - "Runs in one transaction; commits at the end." (automatic commit)
 - "Opens a transaction; nothing is committed." ([manual commit](manual-commit.md), none open)
@@ -294,17 +332,18 @@ for byte, never by the column's collation. An update also checks that each chang
 compares exactly still holds the value read, and a delete every column that compares exactly: a
 row changed elsewhere in those columns since is not overwritten.
 
-## Apply
+### While it runs
 
 `y` sends every statement on the tab's own session. While it runs the strip says `applying…`,
-the dialog says "Applying the changes…", edit keys are refused, and the query's cancel key
-(`Ctrl+C`) cancels it. When the result's pages are held open, the cursor is closed first; the
-rows already read stay.
+the Changes tab says "Applying 3 changes…" over the statements being sent, edit keys are
+refused, and the query's cancel key (`Ctrl+C`) cancels it. When the result's pages are held
+open, the cursor is closed first; the rows already read stay.
 
 Either every statement gives its count and the changes are applied ("Applied 3 changes"), or
-nothing is ("Nothing was applied", the changes stay pending and `y` may try again). A row found by
-a key is named with it ("Row 3 (id = 5)"), and a statement in a message is its first line, cut
-short when long:
+nothing is ("Nothing was applied", the changes stay pending and may be applied again). Why is said
+on the Changes tab's second line, and in its SQL view the statement that failed is marked `!` and
+scrolled to. A row found by a key is named with it ("Row 3 (id = 5)"), and a statement in a
+message is its first line, cut short when long:
 
 - "Row 3 was changed or deleted since it was read. Nothing was applied. Re-run the query to see
   the current values."
@@ -313,18 +352,19 @@ short when long:
 - "Row 3: <the server's error>. Nothing was applied. Statement: <the statement>"
 - "Apply cancelled; nothing was applied."
 - "Apply result unknown — the connection was lost before the server confirmed. Re-run the query
-  to check." The changes may be in the table already: the next `y` in the Apply dialog warns, and
-  only a second `y` applies them again.
-
-An environment that asks before every write (`confirm = "writes"`) takes this dialog as its
-question; no second one opens.
+  to check." The changes may be in the table already: the next Apply opens the dialog, whose
+  first `y` warns, and only a second `y` applies them again.
 
 ## After an Apply
 
 The result shows what the Apply did over the rows as read, until the query runs again: written
 values in italic (theme token `edit_applied`), deleted rows crossed out, the rows added after the
-rows read. The strip says `applied · re-run to refresh` (`applied · not committed` while its
-transaction is open). These rows are not edited again: run the query first.
+rows read. The strip says `applied` (`applied · not committed` while its transaction is open,
+where it fits). These rows are not edited again: run the query first.
+
+The Changes tab stays as `Applied`, until the query runs again: its list is what was applied,
+its SQL view the statements that were sent (`c` still copies them), and its second line says
+"Applied · re-run to refresh", or "Applied · not committed" while the transaction is open.
 
 - PostgreSQL returns each written row as stored, so a value a trigger set shows too. A value in
   a form the grid shows differently (dates and times, floats, intervals, bytea, network
@@ -338,7 +378,8 @@ With manual commit, or inside your own transaction, the Apply is not committed (
 changes; not committed yet"): the status bar
 counts it in the open transaction, and `:tx` lists it as "Apply (3 changes)". A commit keeps the
 values shown; a rollback drops them ("The transaction was rolled back; the applied changes are
-gone"). See [Manual commit](manual-commit.md#editing-data).
+gone"), and the Changes tab says so until the query runs again. See
+[Manual commit](manual-commit.md#editing-data).
 
 ## Leaving with changes pending
 

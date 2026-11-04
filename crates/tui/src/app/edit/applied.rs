@@ -43,6 +43,18 @@ pub struct Applied {
     pub rerun_new: BTreeSet<(usize, usize)>,
     /// The user's transaction it is in until that ends (not committed yet).
     pub tx: Option<u64>,
+    /// The changes it applied, and the statements it sent for them.
+    pub batch: EditBatch,
+    pub sent: Vec<Step>,
+}
+
+/// Why an Apply applied nothing: what it said, the statement that failed (when one did), for
+/// the changes at `revision`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApplyFailed {
+    pub text: String,
+    pub sql: Option<String>,
+    pub revision: u64,
 }
 
 /// The value result column `c` of `rs` holds in row `row` the server returned for step `d`: by
@@ -64,7 +76,7 @@ fn returned(rs: &ResultSet, c: usize, d: &AppliedStep, row: &[Cell]) -> Option<O
 /// as sent, or as the server returned the row; the rows added, with what the server returned
 /// for them, else the number an `AUTO_INCREMENT` column took.
 fn layer(rs: &ResultSet, a: &Applying, done: &[AppliedStep]) -> Applied {
-    let mut out = Applied { tx: a.tx, ..Applied::default() };
+    let mut out = Applied { tx: a.tx, batch: a.batch.clone(), sent: a.steps.clone(), ..Applied::default() };
     for (row, e) in a.batch.rows() {
         if e.delete {
             out.deleted.insert(row);
@@ -219,9 +231,13 @@ impl App {
                 let level =
                     if matches!(f.why, ApplyError::Db(DbError::Cancelled)) { Level::Warning } else { Level::Error };
                 let text = self.i18n.msg(&msg).to_string();
-                if let Some(p) = self.overlays.edit_preview_mut().filter(|p| p.tab == tab && p.result == result_id) {
-                    p.apply_failed = Some(text);
+                let sql = f.step.and_then(|i| a.steps.get(i)).map(|s| s.sql.clone());
+                if let Some(rs) = self.tabs.get_mut(tab).and_then(|t| t.row_results_mut().find(|rs| rs.id == result_id))
+                {
+                    rs.edit.failed = Some(ApplyFailed { text, sql, revision: rs.edit.batch.revision() });
+                    rs.edit.cursor.seek = true;
                 }
+                self.changes_body = None;
                 Notice::new(msg, level)
             }
         };

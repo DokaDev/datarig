@@ -37,7 +37,7 @@ use super::command::{SETTINGS, Setting};
 use super::*;
 use crate::keymap::keys;
 use crate::keymap::{KeyChord, Target};
-use datarig_core::config::Tips;
+use datarig_core::config::{ChangesView, Tips};
 use datarig_core::i18n::Lang;
 use datarig_core::usage::{self, Usage, Via};
 use std::cell::RefCell;
@@ -127,6 +127,9 @@ const TIPS: &[Tip] = &[
     tip("menu", Place::StatusIdle, Subject::Action(Action::OpenMenu, Ctx::Nav), |key| Msg::TipsMenu { key }),
     tip("zoom", Place::StatusIdle, Subject::Action(Action::Zoom, Ctx::Nav), |key| Msg::TipsZoom { key }),
     tip("theme", Place::StatusIdle, Subject::Command("theme"), |command| Msg::TipsTheme { command }),
+    tip("changes_view", Place::StatusIdle, Subject::Setting(Setting::ChangesView(ChangesView::Sql)), |setting| {
+        Msg::TipsChangesView { setting }
+    }),
     tip("tips_off", Place::StatusIdle, Subject::Setting(Setting::Tips(Tips::Off)), |setting| Msg::TipsTipsOff {
         setting,
     }),

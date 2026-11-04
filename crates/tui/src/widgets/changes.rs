@@ -34,25 +34,32 @@ pub(crate) fn preview_rows(
     let wrapped = |text: &str, style: Style, rows: &mut Vec<Vec<(String, Style)>>| {
         rows.extend(wrap_words(text, iw).into_iter().map(|l| vec![(l, style)]));
     };
+    // A statement after its mark, wrapped under itself, its count at the end of its first row.
+    let step = |sql: &str, expect: &str, mark: &str, tone: Style, rows: &mut Vec<Vec<(String, Style)>>| {
+        let tail = format!("  {expect}");
+        let first = iw.saturating_sub(2 + width(&tail)).max(8);
+        let more = iw.saturating_sub(4).max(8);
+        let cells = sql_cells(sql, d, bg, &|n| (cut(n), dim));
+        let mut parts = wrap_cells(cells, first, more).into_iter();
+        let head = parts.next().unwrap_or_default();
+        let pad = first.saturating_sub(head.iter().map(|g| g.width).sum());
+        let mut row = vec![(mark.to_string(), tone)];
+        row.extend(runs(head));
+        row.extend([(" ".repeat(pad), surface(th.fg)), (tail, tone)]);
+        rows.push(row);
+        for p in parts {
+            rows.push(std::iter::once(("    ".to_string(), surface(th.fg))).chain(runs(p)).collect());
+        }
+    };
     for l in lines {
         match l {
             PreviewLine::Head(text) => rows.push(vec![(text.clone(), surface(th.fg).add_modifier(Modifier::BOLD))]),
             PreviewLine::Step { sql, expect, risky } => {
-                let tail = format!("  {expect}");
-                let first = iw.saturating_sub(2 + width(&tail)).max(8);
-                let more = iw.saturating_sub(4).max(8);
-                let cells = sql_cells(sql, d, bg, &|n| (cut(n), dim));
-                let mut parts = wrap_cells(cells, first, more).into_iter();
-                let head = parts.next().unwrap_or_default();
-                let pad = first.saturating_sub(head.iter().map(|g| g.width).sum());
                 let (mark, tone) = if *risky { ("! ", risk) } else { ("  ", surface(th.fg_muted)) };
-                let mut row = vec![(mark.to_string(), tone)];
-                row.extend(runs(head));
-                row.extend([(" ".repeat(pad), surface(th.fg)), (tail, tone)]);
-                rows.push(row);
-                for p in parts {
-                    rows.push(std::iter::once(("    ".to_string(), surface(th.fg))).chain(runs(p)).collect());
-                }
+                step(sql, expect, mark, tone, &mut rows);
+            }
+            PreviewLine::Failed { sql, expect } => {
+                step(sql, expect, "! ", surface(th.error).add_modifier(Modifier::BOLD), &mut rows)
             }
             PreviewLine::Values(text) => {
                 for (k, r) in crate::text::wrap_exact(text, iw.saturating_sub(6)).into_iter().enumerate() {
@@ -322,8 +329,11 @@ pub(crate) fn draw_changes(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
     y += 1;
     let mut extra: Vec<Vec<(String, Style)>> = Vec::new();
-    if let Some((text, problem)) = app.changes_status() {
-        let tone = if problem { base(th.error) } else { base(th.accent) };
+    if let Some((text, level)) = app.changes_status() {
+        let tone = match level {
+            crate::app::Level::Info => base(th.accent),
+            l => base(crate::widgets::statusbar::level_color(l)),
+        };
         extra.push(cut_spans(vec![(text, tone)], iw));
     }
     if let Some(note) = app.changes_note() {
@@ -355,6 +365,14 @@ pub(crate) fn draw_changes(app: &mut App, area: Rect, buf: &mut Buffer) {
             let rows = preview_rows(&lines, m.dialect, iw, &cut, th.bg);
             let theme = app.theme.clone();
             app.changes_body = Some((m.clone(), crate::app::edit::PreviewBody { width: iw, theme, lines, rows }));
+        }
+        // The statement the last Apply failed at on screen, once.
+        if std::mem::take(&mut c.seek)
+            && let Some((_, b)) = &app.changes_body
+            && let Some(k) = b.lines.iter().position(|l| matches!(l, PreviewLine::Failed { .. }))
+        {
+            let cut = |n: usize| app.i18n.msg(&Msg::EditPreviewCut { count: n as u64 }).to_string();
+            c.sql_scroll = preview_rows(&b.lines[..k], m.dialect, iw, &cut, th.bg).len();
         }
         let rows = app.changes_body.as_ref().map(|(_, b)| b.rows.as_slice()).unwrap_or_default();
         c.sql_scroll = c.sql_scroll.min(rows.len().saturating_sub(body_h));

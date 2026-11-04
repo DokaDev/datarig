@@ -401,9 +401,9 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     });
     let tabs = t.result_tabs();
     let plan = t.exec.plan.is_some();
-    // The shown result's pending changes, counted.
+    // The shown result's Changes tab: its pending changes counted, or what an Apply did.
     let changes = match &t.results {
-        Results::Rows(rs) if !rs.edit.batch.is_empty() => Some(rs.edit.batch.counts().total() as u64),
+        Results::Rows(rs) => rs.edit.tab_shows(),
         _ => None,
     };
     type Item = ((Option<usize>, ResultView), String);
@@ -421,9 +421,17 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
         if v.is_empty() {
             v.push(((None, ResultView::Rows), app.i18n.label(Label::ResultsTabRows).to_string()));
         }
-        if let Some(count) = changes {
-            let msg = if short { Msg::ResultsTabChangesShort { count } } else { Msg::ResultsTabChanges { count } };
-            v.push(((None, ResultView::Changes), app.i18n.msg(&msg).to_string()));
+        if let Some(shows) = changes {
+            use crate::app::edit::TabShows;
+            let text = match (shows, short) {
+                (TabShows::Pending(count), false) => app.i18n.msg(&Msg::ResultsTabChanges { count }).to_string(),
+                (TabShows::Pending(count), true) => app.i18n.msg(&Msg::ResultsTabChangesShort { count }).to_string(),
+                (TabShows::Applied, false) => app.i18n.label(Label::ResultsTabApplied).to_string(),
+                (TabShows::Applied, true) => app.i18n.label(Label::ResultsTabAppliedShort).to_string(),
+                (TabShows::Said, false) => app.i18n.label(Label::ResultsTabChangesPlain).to_string(),
+                (TabShows::Said, true) => app.i18n.label(Label::ResultsTabChangesPlainShort).to_string(),
+            };
+            v.push(((None, ResultView::Changes), text));
         }
         if plan {
             v.push(((None, ResultView::Plan), app.i18n.label(Label::ResultsTabPlan).to_string()));

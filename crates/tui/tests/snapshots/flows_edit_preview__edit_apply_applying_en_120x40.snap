@@ -1,19 +1,18 @@
 ---
 source: crates/tui/tests/flows_edit_preview.rs
-assertion_line: 565
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ ⠋ console 1 ×                                                                            "
 "│  ＋ New connection         │╭ Query · console 1 ─────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1             ││ local-pg / datarig  127.0.0.1:55432                        Space c s switch connection │"
+"│▾ Connections 1             ││ local-pg / datarig  127.0.0.1:55432 · stg                  Space c s switch connection │"
 "│  ▾ ●   local-pg            ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor                           │" Hidden by multi-width symbols: [(47, " ")]
 "│    ▾ datarig default       ││  2▎SELECT * FROM shop.users WHERE id <= 8;                                             │"
 "│      ▸ analytics           ││  3                                                                                     │"
 "│      ▸ public              ││  4 SELECT u.name, o.status, o.total_amount                                             │"
 "│      ▸ shop                ││  5 FROM shop.orders o                                                                  │"
-"│                            ││  6 JOIN shop.users u ON u.id = o.user_id                                               │"
-"│                            ││  7 WHERE o.status = 'paid';                                                            │"
-"│                            ││  8                                                                                     │"
+"│▾ Environments 1            ││  6 JOIN shop.users u ON u.id = o.user_id                                               │"
+"│    ○ Default rules (no env…││  7 WHERE o.status = 'paid';                                                            │"
+"│  ▸ ○ stg  asks before ever…││  8                                                                                     │"
 "│ ╭ Apply changes — shop.users ──────────────────────────────────────────────────────────────────────────────────────╮ │"
 "│ │ 1 update · 1 insert · 1 delete                                                                                   │ │"
 "│ │                                                                                                                  │ │"
@@ -42,4 +41,4 @@ expression: backend
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯"
-" NORMAL  local-pg │ ⠋ Applying the changes…                                                          │ Ctrl+C cancel EN "
+" NORMAL  local-pg · stg │ ⠋ Applying the changes…                                                    │ Ctrl+C cancel EN "

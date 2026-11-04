@@ -129,6 +129,8 @@ committed."). Inside an open transaction, yours or one opened for manual commit,
 the savepoint `datarig_apply` and commits nothing ("Runs inside the open transaction; nothing is
 committed.").
 
+- The status line question says so: "Apply 1 change to shop.users (1 update)? Opens a
+  transaction; nothing is committed.  y apply · any other key cancels".
 - The status bar counts the Apply's writes in the open transaction, and `:tx` lists it as one
   entry, "Apply (3 changes)".
 - Until the transaction ends the result shows `applied · not committed`. A commit keeps the
