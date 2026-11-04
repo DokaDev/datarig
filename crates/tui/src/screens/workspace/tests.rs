@@ -1,6 +1,6 @@
 use super::*;
 
-/// `1  2  3  Chg 2  Chart  Msgs`: the label widths of three results, the Changes, the Chart
+/// `1  2  3  Chg12  Chart  Msgs`: the label widths of three results, the Changes, the Chart
 /// and Messages.
 const WIDTHS: [usize; 6] = [1, 1, 1, 5, 5, 4];
 

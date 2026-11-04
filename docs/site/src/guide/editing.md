@@ -172,11 +172,11 @@ column that the result does not show ("…is not in the result; add it to the SE
 ## The Changes tab
 
 While the shown result has pending changes, the result tab strip has a **Changes** tab after its
-result tabs: `Changes 3`, or `Chg 3` where the strip is narrow. A narrow strip keeps it, as it
-keeps Messages. `Space d p` (`:changes`) shows it with the focus; `H` and `L` (`Space r [` and
-`Space r ]`) reach it as any result tab. It shows the changes of the result last shown in the
-grid, and goes once nothing is pending. When another result of the tab has pending changes too,
-its second line says so: `Result 2 also has 1 pending · L to switch`.
+result tabs: `Changes 3`, or `Chg3` where the strip is narrow. A narrow strip keeps it while it
+fits next to the shown tab and Messages. `Space d p` (`:changes`) shows it with the focus; `H`
+and `L` (`Space r [` and `Space r ]`) reach it as any result tab. It shows the changes of the
+result last shown in the grid, and goes once nothing is pending. When another result of the tab
+has pending changes too, its second line says so: `Result 2 also has 1 pending`.
 
 Its first line names the result and the table, and says how many updates, inserts, deletes and
 problems there are. Then one line per change, deletes first, then updates (a line per changed

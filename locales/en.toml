@@ -2505,7 +2505,7 @@
 
 # The Changes tab of a result
 "results.tab.changes" = { one = "Changes {count}", other = "Changes {count}" }
-"results.tab.changes_short" = { one = "Chg {count}", other = "Chg {count}" }
+"results.tab.changes_short" = { one = "Chg{count}", other = "Chg{count}" }
 "keyctx.changes" = "Changes"
 "action.changes.down" = "Changes: next line"
 "action.changes.up" = "Changes: previous line"
@@ -2527,7 +2527,7 @@
 "changes.new" = "new {n}"
 "changes.by_values" = "(located by its values)"
 "changes.delete" = "delete"
-"changes.other_pending" = { one = "{result} also has {count} pending · {key} to switch", other = "{result} also has {count} pending · {key} to switch" }
+"changes.other_pending" = { one = "{result} also has {count} pending", other = "{result} also has {count} pending" }
 "changes.row_not_loaded" = "That row is not in the grid any more; run the query again to see it"
 "changes.copy_not_final" = { one = "Not copied: the SQL is not final yet: {count} problem", other = "Not copied: the SQL is not final yet: {count} problems" }
 "changes.copy_counting" = "Not copied: the SQL is not final yet: the rows are still being counted"

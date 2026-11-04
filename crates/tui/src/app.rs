@@ -576,8 +576,8 @@ pub struct App {
     /// The active tab's shown result and the revision of its changes as last seen, and since
     /// when: the counts of the Changes tab wait for the changes to settle.
     pub(crate) changes_seen: Option<edit::Seen>,
-    /// The SQL view of the Changes tab as last laid out.
-    pub(crate) changes_body: Option<edit::PreviewBody>,
+    /// The SQL view of the Changes tab as last laid out, and the model of the changes it is of.
+    pub(crate) changes_body: Option<(std::sync::Arc<edit::ChangesModel>, edit::PreviewBody)>,
     pub lang_setting: LangSetting,
     /// `[secrets] default_source`: the password source a new profile starts with.
     pub default_source: DefaultSource,

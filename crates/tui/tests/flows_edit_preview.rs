@@ -325,7 +325,7 @@ fn the_changes_are_planned_once_per_revision_not_for_every_frame() {
 fn a_count_for_changes_that_moved_is_dropped_and_the_changes_are_not_counted() {
     let mut h = by_values(Lang::En);
     type_cell(&mut h, "z@x");
-    h.command("changes");
+    h.command("apply");
     let asked = counts(&mut h);
     assert_eq!(asked.len(), 1);
     h.key(KeyCode::Esc);

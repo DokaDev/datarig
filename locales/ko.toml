@@ -2499,7 +2499,7 @@
 
 # The Changes tab of a result
 "results.tab.changes" = "변경 {count}건"
-"results.tab.changes_short" = "변경 {count}"
+"results.tab.changes_short" = "변{count}"
 "keyctx.changes" = "변경 사항"
 "action.changes.down" = "변경 사항: 다음 줄"
 "action.changes.up" = "변경 사항: 이전 줄"
@@ -2521,7 +2521,7 @@
 "changes.new" = "새 행 {n}"
 "changes.by_values" = "(값으로 찾는 행)"
 "changes.delete" = "삭제"
-"changes.other_pending" = "{result}에도 대기 중인 변경 {count}건 · {key}로 전환"
+"changes.other_pending" = "{result}에도 대기 중인 변경 {count}건"
 "changes.row_not_loaded" = "그 행은 더 이상 그리드에 없습니다. 보려면 쿼리를 다시 실행하세요"
 "changes.copy_not_final" = "복사하지 않음: SQL이 아직 확정되지 않았습니다: 문제 {count}개"
 "changes.copy_counting" = "복사하지 않음: SQL이 아직 확정되지 않았습니다: 행을 세는 중입니다"

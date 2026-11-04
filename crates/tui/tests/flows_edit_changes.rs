@@ -231,12 +231,12 @@ fn h_and_l_cycle_through_it_and_the_strip_keeps_it_when_narrow() {
         }
     }
     let short = short.expect("short labels");
-    assert!(short.contains("1  [Chg 2]  Chart  Msgs"), "{short}");
+    assert!(short.contains("1  [Chg2]  Chart  Msgs"), "{short}");
     // The rows with the inspector open: the shown one, the Changes and Messages stay.
     h.keys("H");
     h.keys("i");
     let narrow = strip(&mut h, 80);
-    assert!(narrow.contains("[1]") && narrow.contains("Chg 2") && narrow.contains("Msgs"), "{narrow}");
+    assert!(narrow.contains("[1]") && narrow.contains("Chg2") && narrow.contains("Msgs"), "{narrow}");
 }
 
 #[test]
@@ -462,7 +462,7 @@ fn two_results(mut h: Harness) -> Harness {
 }
 
 #[test]
-fn another_result_with_pending_changes_is_named_with_the_key_that_goes_there() {
+fn another_result_with_pending_changes_is_named() {
     let mut h = two_results(Harness::connected(Lang::En));
     h.keys("le");
     structure(&mut h, named());
@@ -476,7 +476,7 @@ fn another_result_with_pending_changes_is_named_with_the_key_that_goes_there() {
     h.command("changes");
     let lines = pane(&mut h, 120, 40);
     assert!(lines[0].contains("Changes — Result 1 · shop.users"), "{lines:#?}");
-    assert!(lines[1].contains("Result 2 also has 1 pending · L to switch"), "{lines:#?}");
+    assert_eq!(lines[1].trim(), "Result 2 also has 1 pending", "no key that would not go there: {lines:#?}");
 }
 
 /// The screens of `setup` (built in each language) at 120x40 and 80x24, as
@@ -519,7 +519,82 @@ fn the_changes_tab_on_screen() {
 fn the_short_label_is_short_in_every_language() {
     for lang in [Lang::En, Lang::Ko] {
         let i18n = datarig_core::i18n::I18n::new(lang);
-        let short = i18n.msg(&Msg::ResultsTabChangesShort { count: 3 }).to_string();
-        assert!(datarig_tui::text::width(&short) <= 6, "{short}");
+        for count in [3, 99, 999] {
+            let short = i18n.msg(&Msg::ResultsTabChangesShort { count }).to_string();
+            assert!(datarig_tui::text::width(&short) <= 6, "{short}");
+        }
     }
+}
+
+/// `Enter` on a line whose row read is on another page: that row's page, the row on screen.
+#[test]
+fn enter_shows_a_row_on_another_page_on_its_own_page() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.page_size = 2;
+    let mut h = resolved(h, named());
+    type_cell(&mut h, "z@x");
+    h.keys("n");
+    assert_eq!(h.app.tab().grid.page, 1, "the last page shown");
+    h.command("changes");
+    h.key(KeyCode::Enter);
+    h.draw(120, 40);
+    let g = &h.app.tab().grid;
+    assert_eq!((view(&h), g.page, g.row, g.col, g.top), (ResultView::Rows, 0, 0, 1, 0));
+}
+
+/// An edit key in the statements (no line selected) shows the grid and does nothing else: no
+/// action on the grid's cursor or a selection left there before.
+#[test]
+fn an_edit_key_in_the_statements_only_shows_the_grid() {
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.keys("jVj");
+    assert!(h.app.tab().grid.anchor.is_some(), "rows 2 and 3 selected");
+    h.command("changes");
+    h.keys("s");
+    h.keys(" dd");
+    assert_eq!(view(&h), ResultView::Rows);
+    assert_eq!(edits(&h).batch.counts().total(), 1, "nothing marked for deletion");
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+}
+
+/// The tab shown with the cell editor open: the editor closes, no editor stays behind it.
+#[test]
+fn no_cell_editor_stays_open_behind_the_tab() {
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.keys("e");
+    assert!(h.app.cell_edit_open());
+    h.app.tab_mut().exec.view = ResultView::Changes;
+    h.keys("j");
+    assert!(!h.app.cell_edit_open(), "closed");
+}
+
+/// While the changes are being applied an edit key in the tab is refused there, the tab kept.
+#[test]
+fn an_edit_key_while_applying_is_refused_in_the_tab() {
+    let mut h = ready(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    assert!(edits(&h).applying.is_some(), "applying");
+    h.key(KeyCode::Esc);
+    h.command("changes");
+    assert_eq!(view(&h), ResultView::Changes);
+    h.app.transient = None;
+    h.keys(" de");
+    assert_eq!(view(&h), ResultView::Changes, "the tab kept");
+    assert!(matches!(said(&mut h), Some(Msg::EditRefused { .. })));
+}
+
+/// Nothing is counted for a Changes tab while another tab is active.
+#[test]
+fn no_counts_while_another_tab_is_active() {
+    let mut h = by_values(Lang::En);
+    type_cell(&mut h, "z@x");
+    h.command("changes");
+    h.command("tabnew");
+    assert_eq!(h.app.tabs.len(), 2);
+    h.advance(Duration::from_secs(2));
+    assert!(counts(&mut h).is_empty(), "the other tab counts nothing");
 }

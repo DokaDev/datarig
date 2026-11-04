@@ -370,7 +370,7 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
 /// Room goes first to the transaction, then to the edits as far as the tabs' labels (whole, else
 /// short) still fit, then to the tabs: the keys show only when every whole
 /// label fits with them. When the whole labels do not fit, every tab shows with a short label
-/// (`[1]  3  Chg 2  Plan  Chart  Msgs`); when even those do not fit, the shown one, the Changes,
+/// (`[1]  3  Chg2  Plan  Chart  Msgs`); when even those do not fit, the shown one, the Changes,
 /// Messages and as many
 /// of the shown one's neighbours as fit, `…` where some are left out (`H`/`L` reach them); at
 /// last the shown one alone. `earlier run` goes first. Records where each tab is.

@@ -430,6 +430,10 @@ impl App {
         if a == EditAction::Preview {
             return self.changes_open();
         }
+        // Nothing changes the changes being applied.
+        if !self.tabs.is_empty() && rows_of(self.tab()).is_some_and(|rs| rs.edit.applying.is_some()) {
+            return self.say_refused(Label::EditWhyApplying.into());
+        }
         // A key for the cursor's cell from the Changes tab: the grid again, at the selected
         // line's cell.
         if !matches!(a, EditAction::Undo | EditAction::Redo | EditAction::Apply | EditAction::Discard)
@@ -437,10 +441,6 @@ impl App {
             && !self.changes_to_grid()
         {
             return;
-        }
-        // Nothing changes the changes being applied.
-        if !self.tabs.is_empty() && rows_of(self.tab()).is_some_and(|rs| rs.edit.applying.is_some()) {
-            return self.say_refused(Label::EditWhyApplying.into());
         }
         match a {
             EditAction::Undo | EditAction::Redo => self.edit_history(a == EditAction::Redo),
@@ -523,8 +523,11 @@ impl App {
         let (Some(row), len) = (shown_row(rs, at), rs.rows.len()) else { return };
         let g = &mut t.grid;
         if !g.window(len).contains(&row) && g.page_size > 0 {
-            // New rows are on the last page.
-            g.page = len.saturating_sub(1) / g.page_size;
+            // A row read is on its own page, on screen; new rows are on the last page.
+            match at {
+                RowAt::Read(_) => (g.page, g.top) = (row / g.page_size, row),
+                RowAt::New(_) => g.page = len.saturating_sub(1) / g.page_size,
+            }
         }
         (g.row, g.col) = (row, col);
         g.anchor = None;
@@ -1374,19 +1377,23 @@ impl App {
     }
 
     /// After every event: the cell editor closes (changing nothing) when its result is no
-    /// longer the one shown, its tab not the active one, or the grid lost the focus; the list of
-    /// a cell's values too, and the preview of the changes when it is no longer current.
+    /// longer the one shown in the grid, its tab not the active one, or the grid lost the focus;
+    /// the list of a cell's values too, and the preview of the changes when it is no longer
+    /// current.
     pub(super) fn sweep_cell_edit(&mut self) {
         let active = (!self.tabs.is_empty()).then(|| self.tab().id);
         let focused = self.focus == Focus::Results;
         for t in self.tabs.iter_mut() {
             let Some(e) = &t.cell_edit else { continue };
-            if !focused || Some(t.id) != active || rows_of(t).is_none_or(|rs| rs.id != e.result) {
+            let grid = t.exec.view == tabs::ResultView::Rows;
+            if !focused || !grid || Some(t.id) != active || rows_of(t).is_none_or(|rs| rs.id != e.result) {
                 t.cell_edit = None;
             }
         }
         if let Some(Picker::CellValue { tab, result, .. }) = self.overlays.picker() {
-            let holds = active == Some(*tab) && rows_of(self.tab()).is_some_and(|rs| rs.id == *result);
+            let holds = active == Some(*tab)
+                && self.tab().exec.view == tabs::ResultView::Rows
+                && rows_of(self.tab()).is_some_and(|rs| rs.id == *result);
             if !holds {
                 self.overlays.close(OverlayKind::Picker);
             }

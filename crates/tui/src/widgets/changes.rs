@@ -344,18 +344,19 @@ pub(crate) fn draw_changes(app: &mut App, area: Rect, buf: &mut Buffer) {
     let mut c = app.changes_cursor().unwrap_or_default();
     c.page = body_h;
     if app.changes_sql() {
-        let lines = app.changes_sql_lines(&m);
-        let current = app
-            .changes_body
-            .as_ref()
-            .is_some_and(|b| b.width == iw && std::sync::Arc::ptr_eq(&b.theme, &app.theme) && b.lines == lines);
+        // Laid out again only for another model of the changes (made once for each state of
+        // them and what was counted), width or theme.
+        let current = app.changes_body.as_ref().is_some_and(|(made, b)| {
+            std::sync::Arc::ptr_eq(made, &m) && b.width == iw && std::sync::Arc::ptr_eq(&b.theme, &app.theme)
+        });
         if !current {
+            let lines = app.changes_sql_lines(&m);
             let cut = |n: usize| app.i18n.msg(&Msg::EditPreviewCut { count: n as u64 }).to_string();
             let rows = preview_rows(&lines, m.dialect, iw, &cut, th.bg);
             let theme = app.theme.clone();
-            app.changes_body = Some(crate::app::edit::PreviewBody { width: iw, theme, lines, rows });
+            app.changes_body = Some((m.clone(), crate::app::edit::PreviewBody { width: iw, theme, lines, rows }));
         }
-        let rows = app.changes_body.as_ref().map(|b| b.rows.as_slice()).unwrap_or_default();
+        let rows = app.changes_body.as_ref().map(|(_, b)| b.rows.as_slice()).unwrap_or_default();
         c.sql_scroll = c.sql_scroll.min(rows.len().saturating_sub(body_h));
         for (k, parts) in rows.iter().skip(c.sql_scroll).take(body_h).enumerate() {
             line(buf, y + k as u16, parts);

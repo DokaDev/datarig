@@ -169,14 +169,15 @@ impl App {
     }
 
     /// An edit key for the cursor's cell pressed in the Changes tab: the grid, at the selected
-    /// line's row and column when it has one. `false`: its row is not in the grid any more.
+    /// line's row and column. `false`: the key does nothing more, as the line has no row (or the
+    /// statements are shown: the grid, as it was) or its row is not in the grid any more.
     pub(super) fn changes_to_grid(&mut self) -> bool {
         match self.changes_point() {
             Went::There => true,
             Went::NotLoaded => false,
             Went::Nowhere => {
                 self.tab_mut().exec.view = tabs::ResultView::Rows;
-                true
+                false
             }
         }
     }
@@ -234,15 +235,13 @@ impl App {
         rs.edit.apply_unknown.then(|| (self.i18n.label(Label::EditFailedUnknown).to_string(), true))
     }
 
-    /// Another result of the active tab has pending changes too: which and how many, and the
-    /// key that moves there.
+    /// Another result of the active tab has pending changes too: which and how many.
     pub(crate) fn changes_note(&self) -> Option<String> {
         let t = self.tab();
         let (i, p) = t.exec.steps.iter().find(|(_, p)| !p.rs.edit.batch.is_empty())?;
         let result = self.i18n.msg(&Msg::ResultsTabResult { n: (i + 1).to_string() }).to_string();
         let count = p.rs.edit.batch.counts().total() as u64;
-        let key = self.key_for(Action::ResultTab(*i > t.exec.shown.unwrap_or(0)), Ctx::Changes);
-        Some(self.i18n.msg(&Msg::ChangesOtherPending { result, count, key }).to_string())
+        Some(self.i18n.msg(&Msg::ChangesOtherPending { result, count }).to_string())
     }
 
     /// How an Apply of the active tab's changes stands to a transaction, in words.
