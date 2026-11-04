@@ -247,7 +247,9 @@ fn the_set_settings_are_documented_with_their_defaults() {
     let app = App::new(&Config::default(), None, Lang::En);
     for (i, st) in SETTINGS.iter().enumerate() {
         let k = KEYS.iter().find(|k| k.path() == st.key).unwrap_or_else(|| panic!("{}: not documented", st.key));
-        let default = k.default.unwrap_or_else(|| panic!("{}: no default", st.key)).trim_matches('"');
+        // A string as TOML writes it: a backslash is doubled.
+        let default =
+            k.default.unwrap_or_else(|| panic!("{}: no default", st.key)).trim_matches('"').replace("\\\\", "\\");
         let now = match st.values {
             Values::Themes => Config::default().theme,
             v => v.fixed()[app.setting_value(i).unwrap_or_else(|| panic!("{}: no value", st.key))].0.to_string(),
@@ -315,7 +317,10 @@ fn code_values() -> Vec<(String, Vec<String>)> {
         .map(|st| {
             // An integer setting is written without quotes.
             let names = st.values.fixed().iter().map(|v| v.0);
-            let names = names.map(|n| if n.parse::<i64>().is_ok() { n.to_string() } else { format!("\"{n}\"") });
+            let names = names.map(|n| match n.parse::<i64>() {
+                Ok(_) => n.to_string(),
+                Err(_) => format!("\"{}\"", n.replace('\\', "\\\\")),
+            });
             (st.key.to_string(), names.collect())
         })
         .collect();

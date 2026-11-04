@@ -400,6 +400,8 @@ pub enum AppEvent {
     Folder(folder_read::FolderAnswer),
     /// A search job of a result grid answered.
     GridSearch(grid_search::Answer),
+    /// A read of the system clipboard answered.
+    Clipboard(edit::ClipAnswer),
 }
 
 /// Which session a driver event comes from.
@@ -582,6 +584,12 @@ pub struct App {
     pub ask: Option<edit::StatusAsk>,
     /// An Apply waiting for the counts of its rows found by their values.
     pub apply_wait: Option<edit::ApplyWait>,
+    /// Text pasted into the grid, waiting for its result's table to be known.
+    pub(crate) paste_in: Option<edit::PasteIn>,
+    /// The last paste into a grid: `space d V` reads it again while it is the newest change.
+    pub(crate) last_paste: Option<edit::LastPaste>,
+    /// The reads of the system clipboard `space d v` makes.
+    pub(crate) clip_reads: edit::ClipReads,
     pub lang_setting: LangSetting,
     /// `[secrets] default_source`: the password source a new profile starts with.
     pub default_source: DefaultSource,
@@ -993,6 +1001,9 @@ impl App {
             changes_body: None,
             ask: None,
             apply_wait: None,
+            paste_in: None,
+            last_paste: None,
+            clip_reads: Default::default(),
             lang_setting: LangSetting::parse(&cfg.language),
             default_source: cfg.default_source,
             prefs: cfg.prefs,

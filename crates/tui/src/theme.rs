@@ -165,6 +165,10 @@ pub struct Theme {
     /// than a pending change (not bold), readable as [`Theme::edit_changed`] is, set apart from
     /// pending changes and body text also without color (italic).
     pub edit_applied: Style,
+    /// A value of the result grid a paste put in a cell that its column does not take, not
+    /// applied yet: its text, in the error color, set apart from the other changes also without
+    /// color (underlined).
+    pub edit_invalid: Style,
     /// The bracket matching the one at the editor's cursor (not drawn yet).
     pub match_paren: Style,
     /// The mark of read-only rules: the lock on a profile's explorer row and its tabs, and the
@@ -261,6 +265,8 @@ pub const DARK: Theme = Theme {
     edit_deleted: Style::new().fg(rgb(0x8A93A6)).add_modifier(Modifier::CROSSED_OUT),
     // The read-only mark's blue in italics: a change made, lighter than one pending.
     edit_applied: Style::new().fg(rgb(0x61AFEF)).add_modifier(Modifier::ITALIC),
+    // The error color, bold and underlined: a value its column does not take.
+    edit_invalid: Style::new().fg(rgb(0xE06C75)).add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     // The border tone as a background, lighter than the cursor line, in bold.
     match_paren: Style::new().bg(rgb(0x2E3440)).add_modifier(Modifier::BOLD),
     // Blue (the foreign key's), bold: a state to notice, not a warning.
@@ -587,6 +593,7 @@ tokens! {
         edit_inserted => "The cells of a new row of the result grid, not applied yet (their text: the cell keeps its background, so it must read on the alternate rows, the selection and a selected range).",
         edit_deleted => "A row of the result grid to be deleted, not applied yet (its text; crossed out, so it shows without color).",
         edit_applied => "A value of the result grid an Apply wrote, until the query runs again (its text: the cell keeps its background; italic, so it shows without color).",
+        edit_invalid => "A value a paste put in a cell of the result grid that its column does not take, not applied yet (its text: the cell keeps its background; underlined, so it shows without color).",
 }
 
 /// The token names of a theme file.

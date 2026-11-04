@@ -402,8 +402,12 @@ fn the_changes_are_made_again_when_the_values_the_rows_were_read_in_move() {
     let m = made_again(&mut h, at, "the values the rows were read in");
     let found: Vec<_> = m.problems.iter().map(|p| (p.text.as_str(), p.at)).collect();
     let text = "Row 1: name is not shown whole, so the row can't be found again";
-    assert_eq!(found, [(text, Some((RowAt::Read(0), Some(1))))]);
-    assert_eq!(m.sql, [PreviewLine::Problem(text.into())]);
+    // The value typed for `note` is no longer known to be stored as typed either: it is invalid
+    // now, listed first.
+    let note = "Row 1 · note: note was read across a change of the session's time zone or character set \
+                (run it again to copy it), so its values can't be edited as shown";
+    assert_eq!(found, [(note, Some((RowAt::Read(0), Some(2)))), (text, Some((RowAt::Read(0), Some(1))))]);
+    assert_eq!(m.sql, [PreviewLine::Problem(note.into())]);
 }
 
 #[test]

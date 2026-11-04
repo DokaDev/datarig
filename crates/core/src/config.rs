@@ -33,6 +33,7 @@
 //! flash briefly, `[ui] tips` whether empty places show a tip about a key (always, until the
 //! key was used, or never; and the welcome panel its first steps), `[ui] changes_view` which
 //! view the Changes tab of a result opens in (its list of changed cells, or its SQL).
+//! `[edit] paste_null` is the text a range pasted into a result reads as NULL (unquoted).
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
 //! the top, or the bottom line), `detail_view` (the result inspector as a panel or a status bar
 //! preview), `clipboard` (how copies reach the clipboard) and `copy_header`
@@ -124,6 +125,8 @@ struct FileConfig {
     explorer: Option<ExplorerSection>,
     #[serde(default)]
     ui: Option<UiSection>,
+    #[serde(default)]
+    edit: Option<EditSection>,
     #[serde(default)]
     secrets: Option<SecretsSection>,
     #[serde(default)]
@@ -358,6 +361,13 @@ struct UiSection {
     tips: Option<toml::Value>,
     #[serde(default)]
     changes_view: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditSection {
+    #[serde(default)]
+    paste_null: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -663,6 +673,44 @@ impl Choice for ChangesView {
     }
 }
 
+/// `[edit] paste_null`: the text an unquoted field of a range pasted into a result reads as
+/// NULL. The default is `\N`, the form both servers' own dumps write NULL in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PasteNull {
+    #[default]
+    BackslashN,
+    /// The word `NULL`.
+    Null,
+    /// No text is NULL: every field is a value.
+    None,
+}
+
+impl Choice for PasteNull {
+    const ALL: &'static [Self] = &[PasteNull::BackslashN, PasteNull::Null, PasteNull::None];
+    fn as_str(self) -> &'static str {
+        match self {
+            PasteNull::BackslashN => "\\N",
+            PasteNull::Null => "NULL",
+            PasteNull::None => "none",
+        }
+    }
+    // Exactly as written: `\n` is no token.
+    fn parse(s: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|v| v.as_str() == s)
+    }
+}
+
+impl PasteNull {
+    /// The text read as NULL (empty: none).
+    pub fn token(self) -> &'static str {
+        match self {
+            PasteNull::BackslashN => "\\N",
+            PasteNull::Null => "NULL",
+            PasteNull::None => "",
+        }
+    }
+}
+
 /// `[ui] tips`: whether empty places (the welcome panel, an empty editor or result, the status
 /// bar's spare room) show a tip about a key, and running an action from the menu a few times
 /// names its key.
@@ -788,6 +836,8 @@ pub struct Prefs {
     pub tips: Tips,
     /// `[ui] changes_view`.
     pub changes_view: ChangesView,
+    /// `[edit] paste_null`.
+    pub paste_null: PasteNull,
     /// `idle_disconnect`: how long a profile's connection may sit unused before its sessions
     /// close (`None`: never); an environment may say otherwise.
     pub idle_disconnect: Option<std::time::Duration>,
@@ -816,6 +866,7 @@ impl Default for Prefs {
             yank_flash: YankFlash::default(),
             tips: Tips::default(),
             changes_view: ChangesView::default(),
+            paste_null: PasteNull::default(),
             idle_disconnect: None,
             lock_wait: None,
         }
@@ -1088,6 +1139,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         })
         .unwrap_or_default();
     let (ui_flash, ui_tips, ui_changes) = f.ui.map(|u| (u.yank_flash, u.tips, u.changes_view)).unwrap_or_default();
+    let paste_null = f.edit.and_then(|e| e.paste_null);
     let (default_source, keychain_access) =
         f.secrets.map(|s| (s.default_source, s.macos_keychain_access)).unwrap_or_default();
     let default_source = match default_source {
@@ -1138,6 +1190,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             "always, until_used, off",
         )?,
         changes_view: choice("ui.changes_view", ui_changes, "list, sql")?,
+        paste_null: choice("edit.paste_null", paste_null, "\\N, NULL, none")?,
         idle_disconnect: match &f.idle_disconnect {
             None => None,
             Some(v) => policy::parse_idle_disconnect(v)
@@ -1607,6 +1660,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "ui", "tips", tips)?;
     let changes = (prefs.changes_view.as_str().into(), prefs.changes_view == ChangesView::default());
     orphans += &nested_setting(&mut doc, "ui", "changes_view", changes)?;
+    let null = (prefs.paste_null.as_str().into(), prefs.paste_null == PasteNull::default());
+    orphans += &nested_setting(&mut doc, "edit", "paste_null", null)?;
     let source = (default_source.as_str().into(), default_source == DefaultSource::Auto);
     orphans += &nested_setting(&mut doc, "secrets", "default_source", source)?;
     let access = (prefs.keychain_access.as_str().into(), prefs.keychain_access == KeychainAccess::default());

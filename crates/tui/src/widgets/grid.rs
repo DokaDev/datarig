@@ -579,12 +579,13 @@ fn cell_text(cell: &Cell, null_label: &str) -> (String, bool) {
     }
 }
 
-/// How the grid draws: the column headers' key marks (by column, empty: none) and whether they
-/// are Nerd Font glyphs.
+/// How the grid draws: the column headers' key marks (by column, empty: none), whether they
+/// are Nerd Font glyphs, and the changed cells whose value their column does not take.
 #[derive(Clone, Copy, Default)]
 pub struct Look<'a> {
     pub marks: &'a [KeyMarks],
     pub icons: bool,
+    pub invalid: Option<&'a std::collections::BTreeMap<(crate::app::edit::RowAt, usize), String>>,
 }
 
 pub fn render(
@@ -797,15 +798,26 @@ pub fn render(
                 || (applied.is_some_and(|a| a.deleted.contains(&r)) && rs.edit.batch.row(r).is_none()));
         let number = if added.is_some() { String::new() } else { (r + 1).to_string() };
         buf.set_stringn(area.x, y, fit(&number, gutter - 1, Align::Right), gutter - 1, num_style);
-        // What is pending in the row, in the gutter's free column: `+` a new row, `-` a row to be
-        // deleted, `~` cells changed.
+        // What is pending in the row, in the gutter's free column: `!` a value its column does
+        // not take, `+` a new row, `-` a row to be deleted, `~` cells changed.
+        use crate::app::edit::RowAt;
+        let at = match (added, new) {
+            (None, _) => Some(RowAt::Read(r)),
+            (Some(_), Some(d)) => Some(RowAt::New(d.id)),
+            (Some(_), None) => None,
+        };
+        let bad = |c: usize| at.is_some_and(|a| look.invalid.is_some_and(|m| m.contains_key(&(a, c))));
+        let row_bad =
+            at.is_some_and(|a| look.invalid.is_some_and(|m| m.range((a, 0)..=(a, usize::MAX)).next().is_some()));
         let mark = match (new, deleted) {
+            _ if row_bad => Some("!"),
             (Some(_), _) => Some("+"),
             (None, true) => Some("-"),
             (None, false) => rs.edit.batch.row(r).map(|_| "~"),
         };
         if let Some(mark) = mark {
-            buf.set_stringn(area.x + gutter as u16 - 1, y, mark, 1, num_style);
+            let style = if row_bad { num_bg.fg(th.error) } else { num_style };
+            buf.set_stringn(area.x + gutter as u16 - 1, y, mark, 1, style);
         }
         for &(cx, ci, w) in &layout {
             st.drawn_cells += 1;
@@ -863,6 +875,7 @@ pub fn render(
                 Style::new().fg(th.fg)
             };
             let style = match (new, pending) {
+                _ if bad(ci) => style.patch(th.edit_invalid),
                 // A default keeps its dim look in a new row.
                 (Some(_), _) if default => style,
                 (Some(_), _) => style.patch(th.edit_inserted),

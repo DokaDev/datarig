@@ -177,6 +177,7 @@ impl App {
             AppEvent::Export(ev) => self.on_export_event(ev),
             AppEvent::Folder(a) => self.on_folder_answer(a),
             AppEvent::GridSearch(a) => self.on_grid_search_answer(a),
+            AppEvent::Clipboard(a) => self.on_clipboard_answer(a),
         }
         // What an open quick connect list waits for may have arrived.
         if self.overlays.quick().is_some() {
@@ -244,6 +245,9 @@ impl App {
             self.cell_edit_paste(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Results && self.grid_prompt_open() {
             self.grid_prompt_paste(text);
+        } else if self.overlays.is_empty() && self.focus == Focus::Results && !self.tabs.is_empty() {
+            // A range into the grid's rows.
+            self.grid_paste(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Editor && !self.profiles.is_empty() {
             let t = self.tab_mut();
             let ev = t.editor.paste(text);

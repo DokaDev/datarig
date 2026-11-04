@@ -385,6 +385,8 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Nav, "space d p", "edit.preview"),
     (Nav, "space d a", "edit.apply"),
     (Nav, "space d x", "edit.discard"),
+    (Nav, "space d v", "edit.paste"),
+    (Nav, "space d V", "edit.paste_as"),
     (Nav, "space r y t", "results.copy.selection.tsv"),
     (Nav, "space r y T", "results.copy.selection.tsv_header"),
     (Nav, "space r y l", "results.copy.selection.list"),

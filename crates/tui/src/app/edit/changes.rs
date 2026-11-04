@@ -181,6 +181,8 @@ struct ModelKey {
     /// is shown whole.
     dialect: Dialect,
     read_in: ReadIn,
+    /// The NULL token a paste reads (an empty pasted value's problem names it).
+    null: datarig_core::config::PasteNull,
 }
 
 /// A result's changes model as last made.
@@ -313,6 +315,7 @@ impl App {
             applied: rs.edit.batch.is_empty() && rs.edit.applied.is_some(),
             dialect: self.tab_dialect(t.id),
             read_in: rs.read_in.clone(),
+            null: self.prefs.paste_null,
         };
         let cache = &rs.edit.changes;
         if let Some((k, x, m)) = &*cache.made.borrow()
@@ -374,15 +377,17 @@ impl App {
         // What was counted for other changes is not theirs.
         let none = Checks::default();
         let checks = if rs.edit.checks.for_revision == batch.revision() { &rs.edit.checks } else { &none };
+        // The invalid cells and the revision they were found for, from one snapshot.
+        let invalid = self.invalid_cells(t, rs);
         let facts = Facts {
             whole: &whole,
             matches: &checks.matches,
             choices: &checks.choices,
-            invalid: &BTreeSet::new(),
-            invalid_for: batch.revision(),
+            invalid: &invalid.set,
+            invalid_for: invalid.revision,
         };
         let planned = planned(target, batch, &*f, checks, &facts);
-        let text = |e: &PlanError| self.plan_error_text(rs, &checks.matches, e);
+        let text = |e: &PlanError| self.plan_error_text(rs, &checks.matches, &invalid, e);
         // Every row's problem; rows still to be counted are none.
         let mut problems = Vec::new();
         if let Some(error) = &checks.failed {
@@ -479,11 +484,26 @@ impl App {
     }
 
     /// Why the plan of `rs`'s changes was refused (`matches`: the rows counted), in words.
-    fn plan_error_text(&self, rs: &ResultSet, matches: &BTreeMap<usize, u64>, e: &PlanError) -> String {
+    fn plan_error_text(
+        &self,
+        rs: &ResultSet,
+        matches: &BTreeMap<usize, u64>,
+        invalid: &super::Invalids,
+        e: &PlanError,
+    ) -> String {
         let row = |r: usize| self.origin_row(rs, Origin::Row(r));
         let msg = match e {
             PlanError::Invalid { origin, column } => {
-                Msg::EditPreviewInvalid { row: self.origin_row(rs, *origin), column: self.preview_column(rs, *column) }
+                let at = match *origin {
+                    Origin::Row(r) => RowAt::Read(r),
+                    Origin::New(id) => RowAt::New(id),
+                };
+                let reason = invalid.cells.get(&(at, *column)).cloned();
+                let (row, column) = (self.origin_row(rs, *origin), self.preview_column(rs, *column));
+                match reason {
+                    Some(reason) => Msg::EditPreviewInvalidWhy { row, column, reason },
+                    None => Msg::EditPreviewInvalid { row, column },
+                }
             }
             PlanError::Column { origin, column, why } => {
                 let reason = self.i18n.msg(&column_reason(*why, self.preview_column(rs, *column))).to_string();

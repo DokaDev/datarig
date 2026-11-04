@@ -30,6 +30,8 @@ pub struct StatusAsk {
 pub enum AskAction {
     /// Apply the changes as they were asked about.
     ApplyEdits(ApplyAsk),
+    /// Paste many rows, as they were asked about.
+    Paste(Box<super::PasteAsk>),
 }
 
 /// The changes an Apply was asked for: the tab, its result, what the rows were read under, the
@@ -243,15 +245,21 @@ impl App {
     /// Any input but `y` while the status bar asks (another key, a click, the wheel, a paste):
     /// it cancels.
     pub(in crate::app) fn status_ask_cancel(&mut self) {
-        if self.ask.take().is_some() {
-            self.flash(Notice::new(Label::EditAskCancelled, Level::Info));
-        }
+        let said = match self.ask.take().map(|a| a.action) {
+            Some(AskAction::ApplyEdits(_)) => Label::EditAskCancelled,
+            Some(AskAction::Paste(_)) => Label::EditPasteCancelled,
+            None => return,
+        };
+        self.flash(Notice::new(said, Level::Info));
     }
 
     /// `y`: the statements asked about, still those of the changes, go to the tab's session.
     fn status_ask_yes(&mut self) {
         let Some(ask) = self.ask.take() else { return };
-        let AskAction::ApplyEdits(a) = ask.action;
+        let a = match ask.action {
+            AskAction::ApplyEdits(a) => a,
+            AskAction::Paste(p) => return self.paste_ask_yes(*p),
+        };
         if !self.ask_current(&a) {
             return self.flash(Notice::new(Label::EditAskMoved, Level::Info));
         }
@@ -279,6 +287,12 @@ impl App {
         {
             self.ask = None;
             self.flash(Notice::new(Label::EditAskMoved, Level::Info));
+        }
+        if let Some(StatusAsk { action: AskAction::Paste(a), .. }) = &self.ask
+            && !self.paste_current(a)
+        {
+            self.ask = None;
+            self.flash(Notice::new(Label::EditPasteMoved, Level::Info));
         }
         let Some(w) = &self.apply_wait else { return };
         if !self.wait_current(w) {
