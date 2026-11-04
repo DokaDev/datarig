@@ -11,9 +11,9 @@
 //! condition as it was given and nothing else ([`shaped`]). Anything else is an internal error,
 //! and nothing runs.
 
-use super::batch::{Counts, EditBatch, RowEdit};
+use super::batch::{Counts, Draft, EditBatch, RowEdit};
 use super::sql::{EditSql, Exactness, Scope, Value};
-use super::target::{ColumnReason, Duplicates, EditTarget, Identity, TableRef, Write};
+use super::target::{ColumnReason, Duplicates, EditTarget, Identity, TableColumn, TableRef, Write};
 use crate::driver::structure::ColumnFill;
 use crate::sql::dialect::Language;
 use crate::sql::lexer::{Tok, Token, lex_in};
@@ -224,64 +224,119 @@ pub fn plan(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Re
     let (mut checks, mut deletes, mut updates, mut inserts) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (row, e) in b.rows() {
         let origin = Origin::Row(row);
-        for &c in e.set.keys() {
-            t.allows(c, Write::Update).map_err(|why| PlanError::Column { origin, column: c, why })?;
-        }
-        let w = locate(t, row, e, f, facts.whole)?;
-        let (n, scope) = match &t.identity {
-            Identity::Key { .. } => (1, Scope::All),
-            Identity::Values { duplicates, .. } => match facts.matches.get(&row).copied() {
-                None => return Err(PlanError::NotCounted { row }),
-                Some(0) => return Err(PlanError::Gone { row }),
-                Some(1) => (1, Scope::All),
-                Some(k) => match (duplicates, facts.choices.get(&row)) {
-                    (Duplicates::Refuse, _) => return Err(PlanError::Ambiguous { row, matches: k }),
-                    (Duplicates::Choose, None) => return Err(PlanError::Choose { row, matches: k }),
-                    (Duplicates::Choose, Some(Choice::All)) => (k, Scope::All),
-                    (Duplicates::Choose, Some(Choice::One)) => (k, Scope::One),
-                },
-            },
-        };
+        let (w, n, scope) = row_checks(t, row, e, f, facts)?;
         let check = f.check(&t.table, &w);
         verify(f, &t.table, &check, Kind::Check(&w))?;
         checks.push(Step { sql: check, expect: Expect::Rows(n), origin });
         let affected = Expect::Affected(if scope == Scope::One { 1 } else { n });
-        let write = if e.delete {
-            f.delete(&t.table, &w, scope)
-        } else {
-            let set = e
-                .set
-                .iter()
-                .map(|(c, v)| {
-                    let col =
-                        t.columns.get(*c).and_then(Option::as_ref).ok_or_else(|| internal("a computed column set"))?;
-                    Ok((col, f.value(col, v)))
-                })
-                .collect::<Result<Vec<_>, PlanError>>()?;
-            f.update(&t.table, &set, &w, scope)
-        };
-        let sql = write.ok_or(PlanError::NoOneOfK { row })?;
+        let sql = write_sql(t, row, e, f, &w, scope)?;
         let kind = if e.delete { Kind::Delete(&w, scope) } else { Kind::Update(&w, scope) };
         verify(f, &t.table, &sql, kind)?;
         let step = Step { sql, expect: affected, origin };
         if e.delete { deletes.push(step) } else { updates.push(step) }
     }
     for d in b.drafts() {
-        let origin = Origin::New(d.id);
-        let mut cells = Vec::new();
-        for (c, v) in d.cells.iter().enumerate() {
-            if *v == Value::Default {
-                continue;
-            }
-            let col = t.allows(c, Write::Insert).map_err(|why| PlanError::Column { origin, column: c, why })?;
-            cells.push((col, f.value(col, v)));
-        }
+        let cells = insert_cells(t, d)?.into_iter().map(|(col, v)| (col, f.value(col, v))).collect::<Vec<_>>();
         let sql = f.insert(&t.table, &cells);
         verify(f, &t.table, &sql, Kind::Insert)?;
-        inserts.push(Step { sql, expect: Expect::Affected(1), origin });
+        inserts.push(Step { sql, expect: Expect::Affected(1), origin: Origin::New(d.id) });
     }
     let steps = checks.into_iter().chain(deletes).chain(updates).chain(inserts).collect();
     Ok(Plan { steps, counts: b.counts() })
+}
+
+/// Every reason the changes cannot be applied, of every row, in the order [`plan`] meets them:
+/// the checks [`plan`] makes of each row and new row, without the statements, so the first is
+/// the one [`plan`] stops at. A statement the format writes wrong ([`PlanError::Internal`]) is
+/// found only by [`plan`].
+pub fn plan_problems(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Vec<PlanError> {
+    let mut out: Vec<PlanError> = no_default(t, b)
+        .into_iter()
+        .map(|(id, column)| PlanError::NoDefault { origin: Origin::New(id), column })
+        .chain(not_shown(t, b).into_iter().map(|(id, column)| PlanError::NotShown { origin: Origin::New(id), column }))
+        .collect();
+    for (row, e) in b.rows() {
+        // The write is made only to learn whether the format can change one of several rows.
+        let checked = row_checks(t, row, e, f, facts).and_then(|(w, _, scope)| {
+            if scope == Scope::One { write_sql(t, row, e, f, &w, scope).map(drop) } else { Ok(()) }
+        });
+        out.extend(checked.err());
+    }
+    out.extend(b.drafts().iter().filter_map(|d| insert_cells(t, d).err()));
+    out
+}
+
+/// The checks of changed row `row` (`e` its changes) before any statement: the cells it sets may
+/// be set, the condition that finds it, and how many rows of the table that is (with the scope of
+/// its write).
+fn row_checks(
+    t: &EditTarget,
+    row: usize,
+    e: &RowEdit,
+    f: &dyn EditSql,
+    facts: &Facts,
+) -> Result<(Where, u64, Scope), PlanError> {
+    let origin = Origin::Row(row);
+    for &c in e.set.keys() {
+        t.allows(c, Write::Update).map_err(|why| PlanError::Column { origin, column: c, why })?;
+    }
+    let w = locate(t, row, e, f, facts.whole)?;
+    let (n, scope) = match &t.identity {
+        Identity::Key { .. } => (1, Scope::All),
+        Identity::Values { duplicates, .. } => match facts.matches.get(&row).copied() {
+            None => return Err(PlanError::NotCounted { row }),
+            Some(0) => return Err(PlanError::Gone { row }),
+            Some(1) => (1, Scope::All),
+            Some(k) => match (duplicates, facts.choices.get(&row)) {
+                (Duplicates::Refuse, _) => return Err(PlanError::Ambiguous { row, matches: k }),
+                (Duplicates::Choose, None) => return Err(PlanError::Choose { row, matches: k }),
+                (Duplicates::Choose, Some(Choice::All)) => (k, Scope::All),
+                (Duplicates::Choose, Some(Choice::One)) => (k, Scope::One),
+            },
+        },
+    };
+    Ok((w, n, scope))
+}
+
+/// The `DELETE` or `UPDATE` of changed row `row`, as the format writes it (not yet read back).
+fn write_sql(
+    t: &EditTarget,
+    row: usize,
+    e: &RowEdit,
+    f: &dyn EditSql,
+    w: &Where,
+    scope: Scope,
+) -> Result<String, PlanError> {
+    let write = if e.delete {
+        f.delete(&t.table, w, scope)
+    } else {
+        let set = e
+            .set
+            .iter()
+            .map(|(c, v)| {
+                let col =
+                    t.columns.get(*c).and_then(Option::as_ref).ok_or_else(|| internal("a computed column set"))?;
+                Ok((col, f.value(col, v)))
+            })
+            .collect::<Result<Vec<_>, PlanError>>()?;
+        f.update(&t.table, &set, w, scope)
+    };
+    write.ok_or(PlanError::NoOneOfK { row })
+}
+
+/// The cells new row `d` gives (every one not left to its default), each with its column, which
+/// must take it.
+fn insert_cells<'a>(t: &'a EditTarget, d: &'a Draft) -> Result<Vec<(&'a TableColumn, &'a Value)>, PlanError> {
+    let origin = Origin::New(d.id);
+    d.cells
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| **v != Value::Default)
+        .map(|(c, v)| {
+            let col = t.allows(c, Write::Insert).map_err(|why| PlanError::Column { origin, column: c, why })?;
+            Ok((col, v))
+        })
+        .collect()
 }
 
 /// What a statement must be.

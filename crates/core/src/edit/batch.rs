@@ -61,6 +61,7 @@ pub struct EditBatch {
     next_draft: u64,
     undo: Vec<Step>,
     redo: Vec<Step>,
+    revision: u64,
 }
 
 impl EditBatch {
@@ -101,6 +102,12 @@ impl EditBatch {
     /// The new rows, in the order they are shown.
     pub fn drafts(&self) -> &[Draft] {
         &self.drafts
+    }
+
+    /// A number that moves on every change of the batch or its history, so what is derived from
+    /// it can be kept while it stays.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn can_undo(&self) -> bool {
@@ -228,8 +235,8 @@ impl EditBatch {
 
     /// Forget every change and its history: after the changes were applied.
     pub fn clear(&mut self) {
-        let next_draft = self.next_draft;
-        *self = Self { next_draft, ..Self::default() };
+        let (next_draft, revision) = (self.next_draft, self.revision + 1);
+        *self = Self { next_draft, revision, ..Self::default() };
     }
 
     /// Undo the last action; whether there was one.
@@ -237,6 +244,7 @@ impl EditBatch {
         let Some(step) = self.undo.pop() else { return false };
         let back = self.swap(step);
         self.redo.push(back);
+        self.revision += 1;
         true
     }
 
@@ -245,6 +253,7 @@ impl EditBatch {
         let Some(step) = self.redo.pop() else { return false };
         let back = self.swap(step);
         self.undo.push(back);
+        self.revision += 1;
         true
     }
 
@@ -280,6 +289,7 @@ impl EditBatch {
         if changed {
             self.undo.push(before);
             self.redo.clear();
+            self.revision += 1;
         }
         changed
     }
