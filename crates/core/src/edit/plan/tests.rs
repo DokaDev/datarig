@@ -69,7 +69,18 @@ fn plan_with(
 ) -> Result<Plan, PlanError> {
     let matches: BTreeMap<usize, u64> = matches.iter().copied().collect();
     let choices: BTreeMap<usize, Choice> = choices.iter().copied().collect();
-    plan(t, b, f, &Facts { whole: &all_whole, matches: &matches, choices: &choices, invalid: &BTreeSet::new() })
+    plan(
+        t,
+        b,
+        f,
+        &Facts {
+            whole: &all_whole,
+            matches: &matches,
+            choices: &choices,
+            invalid: &BTreeSet::new(),
+            invalid_for: b.revision(),
+        },
+    )
 }
 
 fn steps(p: &Plan) -> Vec<(&str, Expect)> {
@@ -106,7 +117,13 @@ fn an_inexact_or_cut_value_is_left_out_of_the_lost_update_check_but_not_out_of_t
         &keyed(),
         &b,
         &ALL,
-        &Facts { whole: &whole, matches: &none, choices: &BTreeMap::new(), invalid: &BTreeSet::new() },
+        &Facts {
+            whole: &whole,
+            matches: &none,
+            choices: &BTreeMap::new(),
+            invalid: &BTreeSet::new(),
+            invalid_for: b.revision(),
+        },
     )
     .unwrap();
     assert!(p.steps[3].sql.ends_with(r#"WHERE id IS NOT DISTINCT FROM '5'"#), "{}", p.steps[3].sql);
@@ -115,7 +132,13 @@ fn an_inexact_or_cut_value_is_left_out_of_the_lost_update_check_but_not_out_of_t
         &keyed(),
         &b,
         &ALL,
-        &Facts { whole: &whole, matches: &none, choices: &BTreeMap::new(), invalid: &BTreeSet::new() },
+        &Facts {
+            whole: &whole,
+            matches: &none,
+            choices: &BTreeMap::new(),
+            invalid: &BTreeSet::new(),
+            invalid_for: b.revision(),
+        },
     );
     assert_eq!(err, Err(PlanError::NotWhole { row: 5, column: 0 }));
 }
@@ -448,7 +471,13 @@ fn problems_with(
         t,
         b,
         f,
-        &Facts { whole: &all_whole, matches: &matches, choices: &choices, invalid: &BTreeSet::new() },
+        &Facts {
+            whole: &all_whole,
+            matches: &matches,
+            choices: &choices,
+            invalid: &BTreeSet::new(),
+            invalid_for: b.revision(),
+        },
     )
 }
 
@@ -540,7 +569,13 @@ fn a_batch_the_plan_takes_has_no_problem_and_one_it_refuses_has_its_error_first(
     cut.set(&[(6, 1)], &text("x"), orig);
     let whole = |row: usize, col: usize| !(row == 5 && col == 0);
     let none = BTreeMap::new();
-    let facts = Facts { whole: &whole, matches: &none, choices: &BTreeMap::new(), invalid: &BTreeSet::new() };
+    let facts = Facts {
+        whole: &whole,
+        matches: &none,
+        choices: &BTreeMap::new(),
+        invalid: &BTreeSet::new(),
+        invalid_for: cut.revision(),
+    };
     let not_whole = PlanError::NotWhole { row: 5, column: 0 };
     assert_eq!(plan(&keyed(), &cut, &ALL, &facts).err(), Some(not_whole.clone()));
     assert_eq!(plan_problems(&keyed(), &cut, &ALL, &facts), [not_whole]);
@@ -554,7 +589,8 @@ fn a_cell_known_invalid_stops_the_plan_before_any_statement() {
     let n = b.add(usize::MAX, None, vec![Value::Default, text("x"), text("not a number"), Value::Default]);
     let none = BTreeMap::new();
     let with = |invalid: &BTreeSet<(Origin, usize)>| {
-        let facts = Facts { whole: &all_whole, matches: &none, choices: &none_chosen(), invalid };
+        let facts =
+            Facts { whole: &all_whole, matches: &none, choices: &none_chosen(), invalid, invalid_for: b.revision() };
         (plan(&keyed(), &b, &ALL, &facts), plan_problems(&keyed(), &b, &ALL, &facts))
     };
     let (p, problems) = with(&BTreeSet::new());
@@ -565,9 +601,31 @@ fn a_cell_known_invalid_stops_the_plan_before_any_statement() {
     let new = PlanError::Invalid { origin: Origin::New(n), column: 2 };
     assert_eq!(p, Err(row.clone()), "no steps");
     assert_eq!(problems, [row, new], "every invalid cell");
-    // A cell no longer set (or of a row to be deleted, or of a new row gone) is not the plan's.
-    let stale = BTreeSet::from([(Origin::Row(9), 1), (Origin::Row(4), 0), (Origin::New(n + 1), 0)]);
+    // A cell no longer set (or of a row to be deleted, of a new row gone, or of a new row left
+    // to its default) is not the plan's.
+    let stale =
+        BTreeSet::from([(Origin::Row(9), 1), (Origin::Row(4), 0), (Origin::New(n + 1), 0), (Origin::New(n), 0)]);
     assert!(with(&stale).0.is_ok());
+}
+
+#[test]
+fn invalid_cells_found_for_another_revision_stop_the_plan() {
+    let mut b = EditBatch::new();
+    b.set(&[(4, 1)], &text("ok"), orig);
+    let found_for = b.revision();
+    // A cell set since: whether it is invalid is not known.
+    b.set(&[(5, 1)], &text("not checked"), orig);
+    let none = BTreeMap::new();
+    let invalid = BTreeSet::new();
+    let facts =
+        Facts { whole: &all_whole, matches: &none, choices: &none_chosen(), invalid: &invalid, invalid_for: found_for };
+    let p = plan(&keyed(), &b, &ALL, &facts);
+    assert!(matches!(p, Err(PlanError::Internal(_))), "{p:?}");
+    let problems = plan_problems(&keyed(), &b, &ALL, &facts);
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert_eq!(Some(&p.unwrap_err()), problems.first());
+    let facts = Facts { invalid_for: b.revision(), ..facts };
+    assert!(plan(&keyed(), &b, &ALL, &facts).is_ok());
 }
 
 fn none_chosen() -> BTreeMap<usize, Choice> {
@@ -586,11 +644,16 @@ fn no_plan_sends_an_invalid_value() {
     };
     for _ in 0..300 {
         let mut b = EditBatch::new();
+        // Each value names its cell, so a statement that sends it shows.
         for _ in 0..pick(4) {
-            b.set(&[(pick(6) as usize, 1 + pick(2) as usize)], &text("v"), orig);
+            let (r, c) = (pick(6) as usize, 1 + pick(2) as usize);
+            b.set(&[(r, c)], &text(&format!("r{r}c{c}z")), orig);
         }
-        for _ in 0..pick(3) {
-            b.add(usize::MAX, None, vec![Value::Default, text("x"), Value::Default, Value::Default]);
+        // New rows are numbered from 0.
+        for id in 0..pick(3) {
+            let score = if pick(2) == 0 { Value::Default } else { text(&format!("d{id}c2z")) };
+            let n = b.add(usize::MAX, None, vec![Value::Default, text(&format!("d{id}c1z")), score, Value::Default]);
+            assert_eq!(n, id);
         }
         if pick(3) == 0 {
             b.delete(&[pick(6) as usize], orig);
@@ -603,14 +666,32 @@ fn no_plan_sends_an_invalid_value() {
             .collect();
         let touched = invalid.iter().any(|&(o, c)| match o {
             Origin::Row(r) => b.value(r, c).is_some(),
-            Origin::New(id) => b.drafts().iter().any(|d| d.id == id),
+            Origin::New(id) => {
+                b.drafts().iter().any(|d| d.id == id && d.cells.get(c).is_some_and(|v| *v != Value::Default))
+            }
         });
-        let facts = Facts { whole: &all_whole, matches: &none, choices: &none_chosen(), invalid: &invalid };
+        let facts = Facts {
+            whole: &all_whole,
+            matches: &none,
+            choices: &none_chosen(),
+            invalid: &invalid,
+            invalid_for: b.revision(),
+        };
         let p = plan(&keyed(), &b, &ALL, &facts);
         if touched {
             assert!(matches!(p, Err(PlanError::Invalid { .. })), "{p:?}");
         } else {
             assert!(!matches!(p, Err(PlanError::Invalid { .. })), "{p:?}");
+        }
+        // On what is made, not how it is decided: no statement sends an invalid cell's value.
+        if let Ok(p) = &p {
+            for &(o, c) in &invalid {
+                let value = match o {
+                    Origin::Row(r) => format!("r{r}c{c}z"),
+                    Origin::New(id) => format!("d{id}c{c}z"),
+                };
+                assert!(p.steps.iter().all(|s| !s.sql.contains(&value)), "{value} sent: {p:?}");
+            }
         }
     }
 }

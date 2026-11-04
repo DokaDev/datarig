@@ -216,7 +216,7 @@ fn batches_are_equal_by_their_changes_and_history_not_their_revision() {
 }
 
 fn paste_ops(set: &[((usize, usize), Value)], set_new: &[((u64, usize), Value)], add: &[Vec<Value>]) -> PasteOps {
-    PasteOps { set: set.to_vec(), set_new: set_new.to_vec(), add: add.to_vec() }
+    PasteOps { width: 3, set: set.to_vec(), set_new: set_new.to_vec(), add: add.to_vec() }
 }
 
 #[test]
@@ -283,6 +283,8 @@ fn a_paste_with_anything_it_cannot_do_changes_nothing() {
         (paste_ops(&[((2, 5), text("z"))], &[], &[]), PasteRefused::NoColumn { column: 5, width: 3 }),
         (paste_ops(&good, &[], &[vec![text("z"); 3], vec![text("z"); 2]]), PasteRefused::Width { values: 2, width: 3 }),
         (paste_ops(&good, &[], &[vec![text("z"); 4]]), PasteRefused::Width { values: 4, width: 3 }),
+        // The result's width, with nothing else to tell it.
+        (paste_ops(&[], &[], &[vec![text("z"); 2]]), PasteRefused::Width { values: 2, width: 3 }),
         (paste_ops(&good, &[((n, 0), Value::Default)], &[]), PasteRefused::Default),
         (paste_ops(&[good.clone(), vec![((2, 1), Value::Default)]].concat(), &[], &[]), PasteRefused::Default),
     ];
@@ -294,4 +296,28 @@ fn a_paste_with_anything_it_cannot_do_changes_nothing() {
         assert_eq!(b.revision(), at, "{why:?}");
         assert_eq!(b.next_draft, base.next_draft, "{why:?}");
     }
+}
+
+#[test]
+fn a_cell_pasted_twice_takes_the_later_value_and_counts_once() {
+    let mut b = EditBatch::new();
+    let n = b.add(usize::MAX, None, vec![Value::Default; 3]);
+    let ops = paste_ops(
+        &[((1, 1), text("a")), ((1, 1), text("b")), ((2, 0), text("x")), ((2, 0), text("2"))],
+        &[((n, 0), text("c")), ((n, 0), text("d"))],
+        &[],
+    );
+    let r = b.paste(ops, orig).unwrap();
+    assert_eq!(r.changed, 2, "(1, 1) once, (n, 0) once; (2, 0) ends as read");
+    assert_eq!((b.value(1, 1), b.value(2, 0)), (Some(&text("b")), None));
+    assert_eq!(b.drafts()[0].cells[0], text("d"));
+}
+
+#[test]
+fn a_new_row_pasted_has_the_results_width_with_nothing_else_set() {
+    let mut b = EditBatch::new();
+    let ops = paste_ops(&[], &[], &[vec![text("z"); 2], vec![text("z"); 2]]);
+    assert_eq!(b.paste(ops, orig), Err(PasteRefused::Width { values: 2, width: 3 }));
+    assert_eq!(b, EditBatch::new());
+    assert_eq!(b.paste(paste_ops(&[], &[], &[vec![text("z"); 3]]), orig).map(|r| r.added.len()), Ok(1));
 }

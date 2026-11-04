@@ -51,6 +51,32 @@ fn quotes_are_read_as_rfc_4180_in_tsv_and_csv() {
 }
 
 #[test]
+fn a_quote_left_open_is_refused_and_never_read_as_one_value() {
+    // What the open quote hides (tabs, line breaks) is not known: no format is guessed.
+    assert_eq!(read("\"abc\tdef\nx\ty"), Err(PasteError::Quote { row: 1 }));
+    assert_eq!(read("\"a\nb"), Err(PasteError::Quote { row: 1 }));
+    assert_eq!(read("\""), Err(PasteError::Quote { row: 1 }));
+    assert_eq!(read("\"Hello\n"), Err(PasteError::Quote { row: 1 }));
+    // After a line break: one value per line, which refuses it in its row.
+    assert_eq!(read("a\n\"b\tc"), Err(PasteError::Quote { row: 2 }));
+    // Read as one value on purpose, it is the text as it is.
+    let one = parse_as("\"abc\tdef\nx\ty", Format::One, &PasteOpts::default());
+    assert_eq!(one.map(|p| p.rows), Ok(rows(&[&["\"abc\tdef\nx\ty"]])));
+    // A quote closed and followed by text is one value as it is.
+    assert_eq!(ok("\"Hello\" world"), (Format::One, rows(&[&["\"Hello\" world"]])));
+}
+
+#[test]
+fn a_byte_order_mark_at_the_start_is_not_read() {
+    assert_eq!(ok("\u{FEFF}\"a,b\",c"), (Format::Csv, rows(&[&["a,b", "c"]])));
+    assert_eq!(ok("\u{FEFF}a\tb"), (Format::Tsv, rows(&[&["a", "b"]])));
+    let p = parse_as("\u{FEFF}\"x\"", Format::Column, &PasteOpts::default());
+    assert_eq!(p.map(|p| p.rows), Ok(rows(&[&["x"]])));
+    // Only one, and only at the start.
+    assert_eq!(ok("a\u{FEFF}").1, rows(&[&["a\u{FEFF}"]]));
+}
+
+#[test]
 fn line_ends_are_lf_or_crlf_and_a_lone_cr_is_refused() {
     assert_eq!(ok("a\tb\r\nc\td\r\n"), (Format::Tsv, rows(&[&["a", "b"], &["c", "d"]])));
     assert_eq!(read("a\tb\rc\td"), Err(PasteError::LoneCr { row: 1 }));
@@ -64,10 +90,22 @@ fn line_ends_are_lf_or_crlf_and_a_lone_cr_is_refused() {
 }
 
 #[test]
-fn trailing_empty_lines_are_dropped_and_inner_ones_are_rows_of_empty_values() {
-    assert_eq!(ok("a\tb\n\n\n"), (Format::Tsv, rows(&[&["a", "b"]])));
+fn one_final_line_end_is_dropped_and_empty_lines_are_rows() {
+    assert_eq!(ok("a\tb\n"), (Format::Tsv, rows(&[&["a", "b"]])));
+    assert_eq!(ok("a\tb\r\n"), (Format::Tsv, rows(&[&["a", "b"]])));
     assert_eq!(ok("a\tb\n\nc\td\n"), (Format::Tsv, rows(&[&["a", "b"], &["", ""], &["c", "d"]])));
+    // An empty line at the start is a row of empty values.
     assert_eq!(ok("\na,b"), (Format::Csv, rows(&[&["", ""], &["a", "b"]])));
+    assert_eq!(ok("\na\tb\n"), (Format::Tsv, rows(&[&["", ""], &["a", "b"]])));
+    // An empty line at the end is a row of one empty value: kept by one value per line, refused
+    // by wider rows.
+    assert_eq!(read("a\tb\n\n"), Err(PasteError::Ragged { row: 2, values: 1, first_row: 1, first_values: 2 }));
+    assert_eq!(read("a\tb\n\n\n"), Err(PasteError::Ragged { row: 2, values: 1, first_row: 1, first_values: 2 }));
+    assert_eq!(ok("a\n"), (Format::One, rows(&[&["a"]])));
+    assert_eq!(ok("a\n\n"), (Format::Column, rows(&[&["a"], &[""]])));
+    // A spreadsheet's column (a, empty, empty) ends every line.
+    assert_eq!(ok("a\r\n\r\n\r\n"), (Format::Column, rows(&[&["a"], &[""], &[""]])));
+    assert_eq!(ok("\na\n"), (Format::Column, rows(&[&[""], &["a"]])));
     assert_eq!(ok("a\n\nb"), (Format::Column, rows(&[&["a"], &[""], &["b"]])));
     // A row of empty values is no empty line.
     assert_eq!(ok("a\tb\n\t\n"), (Format::Tsv, rows(&[&["a", "b"], &["", ""]])));
@@ -93,6 +131,12 @@ fn a_paste_has_at_most_5000_rows_and_1_mib() {
     let big = "x".repeat(MAX_BYTES + 1);
     assert_eq!(read(&big), Err(PasteError::TooLarge { bytes: MAX_BYTES + 1, max: MAX_BYTES }));
     assert!(read(&"x".repeat(MAX_BYTES)).is_ok());
+    // Reading stops at the first row past the limit, before the rest is looked at.
+    assert_eq!(
+        read(&format!("{}x\ry", lines(MAX_ROWS + 1))),
+        Err(PasteError::TooManyRows { rows: MAX_ROWS + 1, max: MAX_ROWS })
+    );
+    assert_eq!(read(&"\n".repeat(MAX_ROWS + 1)), Err(PasteError::TooManyRows { rows: MAX_ROWS + 1, max: MAX_ROWS }));
 }
 
 #[test]
@@ -165,17 +209,28 @@ impl Gen {
                 s.push_str(p);
             }
         }
-        // The NULL token as a whole value is read as NULL: a case of its own.
+        // Known loss: the copies write a text that is the NULL token as it is, so it reads back
+        // as NULL.
         Some(if s == "\\N" { "x".into() } else { s })
     }
 }
 
-/// Rows the copy writers write, and what each cell must read back as (NULL is written as an
-/// empty field, read back as an empty text).
+/// Rows the copy writers write, and what each cell must read back as.
+///
+/// Known losses of the copies as they are, left out here: NULL is written as an empty field, so
+/// it reads back as an empty text (below); a text that is the NULL token reads back as NULL
+/// ([`Gen::cell`]); in one column, the last cell written as an empty field (NULL, or an empty
+/// text in TSV) is an empty last line, which the final line end drops.
 fn corpus(g: &mut Gen, tabs: bool) -> (Vec<Vec<Option<String>>>, Vec<Vec<Value>>) {
-    let width = 2 + g.next(4) as usize;
+    let width = 1 + g.next(5) as usize;
     let height = 1 + g.next(6) as usize;
-    let cells: Vec<Vec<Option<String>>> = (0..height).map(|_| (0..width).map(|_| g.cell(tabs)).collect()).collect();
+    let mut cells: Vec<Vec<Option<String>>> = (0..height).map(|_| (0..width).map(|_| g.cell(tabs)).collect()).collect();
+    if width == 1 {
+        let last = &mut cells[height - 1][0];
+        if last.as_deref().is_none_or(str::is_empty) {
+            *last = Some("a".into());
+        }
+    }
     let want = cells.iter().map(|r| r.iter().map(|c| text(c.as_deref().unwrap_or(""))).collect()).collect();
     (cells, want)
 }
@@ -190,8 +245,14 @@ fn what_the_tsv_and_csv_copies_write_reads_back_as_the_same_cells() {
         let columns: Vec<Column> = (0..cells[0].len()).map(|_| Column { name: "c", kind: Kind::Text }).collect();
         let row_refs: Vec<export::Row> = cells.iter().map(|r| r.iter().map(|c| c.as_deref()).collect()).collect();
         let tsv = export::tsv(&columns, &row_refs, false);
-        assert_eq!(parse(&tsv, &opts), Ok(Pasted { format: Format::Tsv, rows: want.clone() }), "{tsv:?}");
         let csv = export::csv(&columns, &row_refs, false);
+        if columns.len() == 1 {
+            // One column: one value per line, whatever its values look like.
+            assert_eq!(parse_as(&tsv, Format::Column, &opts).map(|p| p.rows), Ok(want.clone()), "{tsv:?}");
+            assert_eq!(parse_as(&csv, Format::Column, &opts).map(|p| p.rows), Ok(want), "{csv:?}");
+            continue;
+        }
+        assert_eq!(parse(&tsv, &opts), Ok(Pasted { format: Format::Tsv, rows: want.clone() }), "{tsv:?}");
         assert_eq!(parse_as(&csv, Format::Csv, &opts).map(|p| p.rows), Ok(want.clone()), "{csv:?}");
         if !tabs {
             assert_eq!(parse(&csv, &opts), Ok(Pasted { format: Format::Csv, rows: want }), "{csv:?}");

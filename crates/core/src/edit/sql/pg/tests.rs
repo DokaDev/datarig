@@ -98,7 +98,13 @@ fn run(t: &EditTarget, b: &EditBatch, matches: &[(usize, u64)], choices: &[(usiz
         t,
         b,
         &Postgres,
-        &Facts { whole: &whole, matches: &matches, choices: &choices, invalid: &BTreeSet::new() },
+        &Facts {
+            whole: &whole,
+            matches: &matches,
+            choices: &choices,
+            invalid: &BTreeSet::new(),
+            invalid_for: b.revision(),
+        },
     );
     p.unwrap_or_else(|e| panic!("{e:?}")).steps.into_iter().map(|s| s.sql).collect()
 }
@@ -172,7 +178,13 @@ fn an_identity_column_of_an_existing_row_is_never_set() {
         &t,
         &b,
         &Postgres,
-        &Facts { whole: &whole, matches: &none, choices: &BTreeMap::new(), invalid: &BTreeSet::new() },
+        &Facts {
+            whole: &whole,
+            matches: &none,
+            choices: &BTreeMap::new(),
+            invalid: &BTreeSet::new(),
+            invalid_for: b.revision(),
+        },
     );
     assert!(matches!(got, Err(PlanError::Column { .. })), "{got:?}");
 }

@@ -5,6 +5,11 @@
 //! carriage return and a quote left open are refused, never padded or repaired. A value is the
 //! text as pasted; only an unquoted field that is exactly the NULL token is NULL. Nothing read
 //! here is a column's default.
+//!
+//! One final line end is the last line's, as spreadsheets end every line; an empty line before
+//! it is a row (of one empty value, so one value per line keeps an empty last cell, and rows of
+//! more values refuse it as of another width). Empty lines at the start and inside are rows of
+//! empty values. A byte order mark at the start is not part of the text.
 
 use super::sql::Value;
 
@@ -75,7 +80,7 @@ pub enum PasteError {
     Empty,
     /// More than `max` bytes of text.
     TooLarge { bytes: usize, max: usize },
-    /// More than `max` rows.
+    /// More than `max` rows (`rows`: as many as were read before it stopped).
     TooManyRows { rows: usize, max: usize },
     /// Row `row` has a carriage return that ends no line (not followed by a line feed) outside
     /// quotes.
@@ -88,24 +93,47 @@ pub enum PasteError {
 }
 
 /// Read `text` in the format it is in: TSV when it has a tab outside quotes, else CSV when its
-/// first line (that is not empty) has a comma outside quotes, else one value per line when it has a line break
-/// outside quotes, else one value.
+/// first line (that is not empty) has a comma outside quotes, else one value per line when it
+/// has a line break outside quotes (before its final line end), else one value. A quote left
+/// open is refused ([`PasteError::Quote`]): what it hides is not known.
 pub fn parse(text: &str, opts: &PasteOpts) -> Result<Pasted, PasteError> {
-    parse_as(text, detect(text), opts)
+    let text = unmarked(text);
+    if text.len() > MAX_BYTES {
+        return Err(PasteError::TooLarge { bytes: text.len(), max: MAX_BYTES });
+    }
+    read(text, detect(text)?, opts)
 }
 
 /// Read `text` as `format`.
 ///
 /// Line ends are `\n` or `\r\n` (outside quotes; inside quotes every character is the value's).
-/// Trailing empty lines are dropped; an empty line inside is a row of empty values. TSV, CSV and
-/// one value per line take quotes as RFC 4180 does: a field that starts with `"` runs to the next
-/// lone `"`, with `""` for a quote, and may hold delimiters and line breaks; a quote anywhere else
-/// is a character of the value. One value is the text with its trailing line ends dropped, its
-/// `\r\n` read as `\n`; when it is one quoted field as a whole, the field's text.
+/// One final line end ends the last line; an empty line before it is a row of one empty value,
+/// and an empty line before any other row is a row of empty values. TSV, CSV and one value per
+/// line take quotes as RFC 4180 does: a field that starts with `"` runs to the next lone `"`,
+/// with `""` for a quote, and may hold delimiters and line breaks; a quote anywhere else is a
+/// character of the value. One value is the text without its final line end, its `\r\n` read
+/// as `\n`; when it is one quoted field as a whole, the field's text, else the text as it is
+/// (a quote left open too).
 pub fn parse_as(text: &str, format: Format, opts: &PasteOpts) -> Result<Pasted, PasteError> {
+    let text = unmarked(text);
     if text.len() > MAX_BYTES {
         return Err(PasteError::TooLarge { bytes: text.len(), max: MAX_BYTES });
     }
+    read(text, format, opts)
+}
+
+/// `text` without one byte order mark at its start.
+fn unmarked(text: &str) -> &str {
+    text.strip_prefix('\u{FEFF}').unwrap_or(text)
+}
+
+/// `text` without one final line end.
+fn unended(text: &str) -> &str {
+    text.strip_suffix('\n').map_or(text, |t| t.strip_suffix('\r').unwrap_or(t))
+}
+
+/// Read `text` (of at most [`MAX_BYTES`]) as `format`.
+fn read(text: &str, format: Format, opts: &PasteOpts) -> Result<Pasted, PasteError> {
     let null = |f: Field| match f {
         Field { text, quoted: false } if !opts.null.is_empty() && text == opts.null => Value::Null,
         Field { text, .. } => Value::Text(text),
@@ -117,13 +145,11 @@ pub fn parse_as(text: &str, format: Format, opts: &PasteOpts) -> Result<Pasted, 
         Format::One => vec![vec![one(text)?]],
     };
     let first = records.iter().position(|r| !is_blank(r)).ok_or(PasteError::Empty)?;
+    let last = records.iter().rposition(|r| !is_blank(r)).unwrap_or(first);
     let width = records[first].len();
-    if records.len() > MAX_ROWS {
-        return Err(PasteError::TooManyRows { rows: records.len(), max: MAX_ROWS });
-    }
     let mut rows = Vec::with_capacity(records.len());
     for (i, r) in records.into_iter().enumerate() {
-        if is_blank(&r) {
+        if is_blank(&r) && i < last {
             rows.push(vec![Value::Text(String::new()); width]);
         } else if r.len() != width {
             return Err(PasteError::Ragged { row: i + 1, values: r.len(), first_row: first + 1, first_values: width });
@@ -145,32 +171,51 @@ fn is_blank(r: &[Field]) -> bool {
     matches!(r, [Field { text, quoted: false }] if text.is_empty())
 }
 
-/// The format [`parse`] reads `text` in.
-fn detect(text: &str) -> Format {
-    let t = text.trim_end_matches(['\n', '\r']);
-    if seen(t, Some('\t')).1 {
-        Format::Tsv
-    } else if seen(t.trim_start_matches(['\n', '\r']), Some(',')).0 {
-        Format::Csv
-    } else if seen(t, None).2 {
-        Format::Column
+/// The format [`parse`] reads `text` in. A quote left open hides the rest of the text, so what
+/// it hides is not known: unless what comes before it names a format (which then refuses the
+/// quote), it is refused.
+fn detect(text: &str) -> Result<Format, PasteError> {
+    let t = unended(text);
+    if seen(t, Some('\t')).any {
+        Ok(Format::Tsv)
+    } else if seen(t.trim_start_matches(['\n', '\r']), Some(',')).first {
+        Ok(Format::Csv)
     } else {
-        Format::One
+        let lines = seen(t, None);
+        if lines.lines {
+            Ok(Format::Column)
+        } else if lines.open {
+            Err(PasteError::Quote { row: 1 })
+        } else {
+            Ok(Format::One)
+        }
     }
 }
 
-/// Whether `text`, split at `delim` with fields quoted as [`parse_as`] reads them, has `delim`
-/// outside quotes on its first line, `delim` outside quotes anywhere, and a line break outside
-/// quotes. A quote left open hides the rest of the text.
-fn seen(text: &str, delim: Option<char>) -> (bool, bool, bool) {
-    let (mut first, mut any, mut lines) = (false, false, false);
+/// What [`seen`] found outside quotes.
+#[derive(Default)]
+struct Seen {
+    /// The delimiter, on the first line.
+    first: bool,
+    /// The delimiter, anywhere.
+    any: bool,
+    /// A line break.
+    lines: bool,
+    /// A quote that is never closed (it hides the rest of the text).
+    open: bool,
+}
+
+/// What `text`, split at `delim` with fields quoted as [`parse_as`] reads them, has outside
+/// quotes.
+fn seen(text: &str, delim: Option<char>) -> Seen {
+    let mut out = Seen::default();
     let mut start = true;
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         if start && c == '"' {
             loop {
                 match chars.next() {
-                    None => return (first, any, lines),
+                    None => return Seen { open: true, ..out },
                     Some('"') if chars.peek() == Some(&'"') => {
                         chars.next();
                     }
@@ -180,20 +225,21 @@ fn seen(text: &str, delim: Option<char>) -> (bool, bool, bool) {
             }
             start = false;
         } else if Some(c) == delim {
-            any = true;
-            first |= !lines;
+            out.any = true;
+            out.first |= !out.lines;
             start = true;
         } else if c == '\n' {
-            lines = true;
+            out.lines = true;
             start = true;
         } else {
             start = false;
         }
     }
-    (first, any, lines)
+    out
 }
 
-/// The records of `text`, its fields split at `delim` (none: one field per record).
+/// The records of `text`, its fields split at `delim` (none: one field per record); a line end
+/// ends its record, so a final one adds none. It stops at the first record past [`MAX_ROWS`].
 fn records(text: &str, delim: Option<char>) -> Result<Vec<Vec<Field>>, PasteError> {
     let mut out: Vec<Vec<Field>> = Vec::new();
     let mut row: Vec<Field> = Vec::new();
@@ -246,25 +292,25 @@ fn records(text: &str, delim: Option<char>) -> Result<Vec<Vec<Field>>, PasteErro
         if end {
             row.push(std::mem::replace(&mut field, Field { text: String::new(), quoted: false }));
             out.push(std::mem::take(&mut row));
+            if out.len() > MAX_ROWS {
+                return Err(PasteError::TooManyRows { rows: out.len(), max: MAX_ROWS });
+            }
             (start, fresh) = (true, true);
         }
     }
     if !fresh {
         row.push(field);
         out.push(row);
-    }
-    while out.last().is_some_and(|r| is_blank(r)) {
-        out.pop();
+        if out.len() > MAX_ROWS {
+            return Err(PasteError::TooManyRows { rows: out.len(), max: MAX_ROWS });
+        }
     }
     Ok(out)
 }
 
 /// The text as one value ([`Format::One`]).
 fn one(text: &str) -> Result<Field, PasteError> {
-    let mut s = text;
-    while let Some(t) = s.strip_suffix('\n') {
-        s = t.strip_suffix('\r').unwrap_or(t);
-    }
+    let s = unended(text);
     if s.is_empty() {
         return Err(PasteError::Empty);
     }

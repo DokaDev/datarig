@@ -48,9 +48,12 @@ impl Counts {
 /// The cells a paste sets and the new rows it adds ([`EditBatch::paste`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PasteOps {
-    /// Cells (row, column) of the result's rows, with their values.
+    /// How many columns the result has.
+    pub width: usize,
+    /// Cells (row, column) of the result's rows, with their values; a cell listed again takes
+    /// the later value.
     pub set: Vec<((usize, usize), Value)>,
-    /// Cells (new row, column) of new rows, with their values.
+    /// Cells (new row, column) of new rows, with their values; as `set`.
     pub set_new: Vec<((u64, usize), Value)>,
     /// New rows to add after every other, each with a value per result column.
     pub add: Vec<Vec<Value>>,
@@ -244,11 +247,14 @@ impl EditBatch {
     }
 
     /// Paste: set cells of the result's rows and of new rows, each to its own value, and add new
-    /// rows after every other, as one action. `orig` gives a row's values as read, and with them
-    /// the result's width. Everything is checked before anything changes, so either all of it
-    /// lands or nothing does. A cell set to its value as read is no longer changed.
+    /// rows after every other, as one action. `orig` gives a row's values as read; a new row
+    /// added has a value for each of the result's columns. Everything is checked before anything
+    /// changes, so either all of it lands or nothing does. A cell set to its value as read is no
+    /// longer changed.
     pub fn paste(&mut self, ops: PasteOps, orig: impl Fn(usize) -> Vec<Cell>) -> Result<PasteResult, PasteRefused> {
-        let PasteOps { set, set_new, add } = ops;
+        let PasteOps { width, set, set_new, add } = ops;
+        let set: Vec<((usize, usize), Value)> = set.into_iter().collect::<BTreeMap<_, _>>().into_iter().collect();
+        let set_new: Vec<((u64, usize), Value)> = set_new.into_iter().collect::<BTreeMap<_, _>>().into_iter().collect();
         let mut read: BTreeMap<usize, Vec<Cell>> = BTreeMap::new();
         for &((row, col), ref v) in &set {
             if self.deleted(row) {
@@ -274,12 +280,8 @@ impl EditBatch {
                 return Err(PasteRefused::Default);
             }
         }
-        let width = read.values().next().map(Vec::len).or_else(|| self.drafts.first().map(|d| d.cells.len()));
-        if let Some(first) = add.first() {
-            let width = width.unwrap_or(first.len());
-            if let Some(r) = add.iter().find(|r| r.len() != width) {
-                return Err(PasteRefused::Width { values: r.len(), width });
-            }
+        if let Some(r) = add.iter().find(|r| r.len() != width) {
+            return Err(PasteRefused::Width { values: r.len(), width });
         }
         let changed = set
             .iter()

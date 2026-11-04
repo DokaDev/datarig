@@ -374,8 +374,13 @@ impl App {
         // What was counted for other changes is not theirs.
         let none = Checks::default();
         let checks = if rs.edit.checks.for_revision == batch.revision() { &rs.edit.checks } else { &none };
-        let facts =
-            Facts { whole: &whole, matches: &checks.matches, choices: &checks.choices, invalid: &BTreeSet::new() };
+        let facts = Facts {
+            whole: &whole,
+            matches: &checks.matches,
+            choices: &checks.choices,
+            invalid: &BTreeSet::new(),
+            invalid_for: batch.revision(),
+        };
         let planned = planned(target, batch, &*f, checks, &facts);
         let text = |e: &PlanError| self.plan_error_text(rs, &checks.matches, e);
         // Every row's problem; rows still to be counted are none.

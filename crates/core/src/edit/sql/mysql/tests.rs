@@ -109,7 +109,18 @@ fn run(f: &MySql, t: &EditTarget, b: &EditBatch, matches: &[(usize, u64)], choic
     let matches: BTreeMap<usize, u64> = matches.iter().copied().collect();
     let choices: BTreeMap<usize, Choice> = choices.iter().copied().collect();
     let whole = |_: usize, _: usize| true;
-    let p = plan(t, b, f, &Facts { whole: &whole, matches: &matches, choices: &choices, invalid: &BTreeSet::new() });
+    let p = plan(
+        t,
+        b,
+        f,
+        &Facts {
+            whole: &whole,
+            matches: &matches,
+            choices: &choices,
+            invalid: &BTreeSet::new(),
+            invalid_for: b.revision(),
+        },
+    );
     p.unwrap_or_else(|e| panic!("{e:?}")).steps.into_iter().map(|s| s.sql).collect()
 }
 

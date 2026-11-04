@@ -90,6 +90,9 @@ pub struct Facts<'a> {
     /// Cells (row or new row, result column) known to hold a value that is not one of their
     /// column's type, as checked where they were set: none of them is ever sent.
     pub invalid: &'a BTreeSet<(Origin, usize)>,
+    /// The batch revision ([`EditBatch::revision`]) `invalid` was found for: for any other, it is
+    /// not known which cells are invalid, and nothing is planned.
+    pub invalid_for: u64,
 }
 
 /// Why the changes cannot be applied as they are.
@@ -219,11 +222,21 @@ pub fn not_shown(t: &EditTarget, b: &EditBatch) -> Vec<(u64, String)> {
 }
 
 /// The cells of batch `b` that [`Facts::invalid`] has, each as its problem, in order: cells set
-/// in rows of the result (not ones a row to be deleted had), then cells of new rows.
+/// in rows of the result (not ones a row to be deleted had), then cells of new rows that are not
+/// left to their default. When the set was found for another revision of `b`, that alone.
 fn invalid(b: &EditBatch, facts: &Facts) -> Vec<PlanError> {
+    if facts.invalid_for != b.revision() {
+        return vec![PlanError::Internal(format!(
+            "invalid cells found for revision {}, the changes are at {}",
+            facts.invalid_for,
+            b.revision()
+        ))];
+    }
     let touched = |o: Origin, c: usize| match o {
         Origin::Row(r) => b.value(r, c).is_some(),
-        Origin::New(id) => b.drafts().iter().any(|d| d.id == id && c < d.cells.len()),
+        Origin::New(id) => {
+            b.drafts().iter().any(|d| d.id == id && d.cells.get(c).is_some_and(|v| *v != Value::Default))
+        }
     };
     facts
         .invalid
@@ -234,7 +247,7 @@ fn invalid(b: &EditBatch, facts: &Facts) -> Vec<PlanError> {
 }
 
 /// The statements that apply batch `b` to target `t` in format `f`. Nothing is made while a cell
-/// it sets is invalid.
+/// it sets is invalid, nor while the invalid cells are not known for this revision of `b`.
 pub fn plan(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Result<Plan, PlanError> {
     if let Some(e) = invalid(b, facts).into_iter().next() {
         return Err(e);
@@ -271,13 +284,16 @@ pub fn plan(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Re
 
 /// Every reason the changes cannot be applied, of every row, in the order [`plan`] meets them:
 /// every invalid cell first, then the checks [`plan`] makes of each row and new row, without the
-/// statements, so the first is
-/// the one [`plan`] stops at. A row or a target that is not as it must be
-/// ([`PlanError::Internal`]: a row without its values as read, a condition on a computed column)
-/// is among them; a statement the format writes wrong (also [`PlanError::Internal`]) is found
-/// only by [`plan`], which reads each one back.
+/// statements, so the first is the one [`plan`] stops at. A row or a target that is not as it
+/// must be ([`PlanError::Internal`]: a row without its values as read, a condition on a computed
+/// column) is among them; a statement the format writes wrong (also [`PlanError::Internal`]) is
+/// found only by [`plan`], which reads each one back. Invalid cells found for another revision
+/// are the only problem ([`PlanError::Internal`]).
 pub fn plan_problems(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Vec<PlanError> {
     let mut out: Vec<PlanError> = invalid(b, facts);
+    if matches!(out.first(), Some(PlanError::Internal(_))) {
+        return out;
+    }
     out.extend(
         no_default(t, b)
             .into_iter()

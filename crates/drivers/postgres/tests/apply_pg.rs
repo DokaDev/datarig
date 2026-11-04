@@ -197,7 +197,13 @@ impl Editing {
             &self.target,
             b,
             &*self.format,
-            &Facts { whole: &whole, matches: &matches, choices: &choices, invalid: &BTreeSet::new() },
+            &Facts {
+                whole: &whole,
+                matches: &matches,
+                choices: &choices,
+                invalid: &BTreeSet::new(),
+                invalid_for: b.revision(),
+            },
         )
         .expect("a plan")
     }
