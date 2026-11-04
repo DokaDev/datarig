@@ -2499,7 +2499,7 @@
 
 # The Changes tab of a result
 "results.tab.changes" = "변경 {count}건"
-"results.tab.changes_short" = "변{count}"
+"results.tab.changes_short" = "변경{count}"
 "keyctx.changes" = "변경 사항"
 "action.changes.down" = "변경 사항: 다음 줄"
 "action.changes.up" = "변경 사항: 이전 줄"

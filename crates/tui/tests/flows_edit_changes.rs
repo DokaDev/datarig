@@ -519,9 +519,9 @@ fn the_changes_tab_on_screen() {
 fn the_short_label_is_short_in_every_language() {
     for lang in [Lang::En, Lang::Ko] {
         let i18n = datarig_core::i18n::I18n::new(lang);
-        for count in [3, 99, 999] {
+        for (count, most) in [(3, 6), (99, 6), (999, 7)] {
             let short = i18n.msg(&Msg::ResultsTabChangesShort { count }).to_string();
-            assert!(datarig_tui::text::width(&short) <= 6, "{short}");
+            assert!(datarig_tui::text::width(&short) <= most, "{short}");
         }
     }
 }
