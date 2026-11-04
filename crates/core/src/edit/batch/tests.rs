@@ -214,3 +214,84 @@ fn batches_are_equal_by_their_changes_and_history_not_their_revision() {
     b.undo();
     assert_ne!(b, sent, "the change undone");
 }
+
+fn paste_ops(set: &[((usize, usize), Value)], set_new: &[((u64, usize), Value)], add: &[Vec<Value>]) -> PasteOps {
+    PasteOps { set: set.to_vec(), set_new: set_new.to_vec(), add: add.to_vec() }
+}
+
+#[test]
+fn a_paste_is_one_step_that_undo_takes_back_whole_and_redo_brings_back() {
+    let mut b = EditBatch::new();
+    let n = b.add(usize::MAX, None, vec![Value::Default; 3]);
+    b.set(&[(2, 1)], &text("before"), orig);
+    let before = b.clone();
+    let at = b.revision();
+    let ops = paste_ops(
+        &[((1, 1), text("a")), ((2, 1), text("b")), ((2, 2), Value::Null)],
+        &[((n, 0), text("9"))],
+        &[vec![text("7"), text("x"), Value::Default], vec![Value::Null, text("y"), Value::Default]],
+    );
+    let r = b.paste(ops, orig).unwrap();
+    assert_eq!(b.revision(), at + 1, "the revision moves once");
+    assert_eq!(r.changed, 3, "(2, 2) was NULL as read: no change");
+    assert_eq!(r.added.len(), 2);
+    assert_eq!((b.value(1, 1), b.value(2, 1), b.value(2, 2)), (Some(&text("a")), Some(&text("b")), None));
+    let drafts: Vec<(u64, Vec<Value>)> = b.drafts().iter().map(|d| (d.id, d.cells.clone())).collect();
+    assert_eq!(
+        drafts,
+        [
+            (n, vec![text("9"), Value::Default, Value::Default]),
+            (r.added[0], vec![text("7"), text("x"), Value::Default]),
+            (r.added[1], vec![Value::Null, text("y"), Value::Default]),
+        ]
+    );
+    let after = b.clone();
+    assert!(b.undo());
+    assert_eq!((&b.rows, &b.drafts), (&before.rows, &before.drafts), "undo restores exactly");
+    assert!(b.undo(), "the edits before the paste are their own steps");
+    assert!(b.redo() && b.redo());
+    assert_eq!((&b.rows, &b.drafts), (&after.rows, &after.drafts), "redo re-applies the whole paste");
+    assert!(!b.redo());
+}
+
+#[test]
+fn a_paste_of_the_values_already_there_changes_nothing() {
+    let mut b = EditBatch::new();
+    let ops = paste_ops(&[((1, 0), text("1")), ((1, 1), text("n1")), ((1, 2), Value::Null)], &[], &[]);
+    let at = b.revision();
+    assert_eq!(b.paste(ops, orig), Ok(PasteResult { changed: 0, added: Vec::new() }));
+    assert!(b.is_empty() && !b.can_undo());
+    assert_eq!(b.revision(), at);
+    // A cell pasted back to its value as read is no longer changed.
+    b.set(&[(1, 1)], &text("x"), orig);
+    let r = b.paste(paste_ops(&[((1, 1), text("n1")), ((1, 0), text("5"))], &[], &[]), orig).unwrap();
+    assert_eq!(r.changed, 2);
+    assert_eq!(b.row(1).unwrap().set, BTreeMap::from([(0, text("5"))]));
+}
+
+#[test]
+fn a_paste_with_anything_it_cannot_do_changes_nothing() {
+    let mut base = EditBatch::new();
+    let n = base.add(usize::MAX, None, vec![Value::Default; 3]);
+    base.delete(&[4], orig);
+    base.set(&[(1, 1)], &text("x"), orig);
+    let good = vec![((1, 1), text("y")), ((2, 0), text("7"))];
+    let cases: Vec<(PasteOps, PasteRefused)> = vec![
+        (paste_ops(&[good.clone(), vec![((4, 1), text("z"))]].concat(), &[], &[]), PasteRefused::Deleted { row: 4 }),
+        (paste_ops(&good, &[((99, 0), text("z"))], &[]), PasteRefused::NoDraft { id: 99 }),
+        (paste_ops(&good, &[((n, 3), text("z"))], &[]), PasteRefused::NoColumn { column: 3, width: 3 }),
+        (paste_ops(&[((2, 5), text("z"))], &[], &[]), PasteRefused::NoColumn { column: 5, width: 3 }),
+        (paste_ops(&good, &[], &[vec![text("z"); 3], vec![text("z"); 2]]), PasteRefused::Width { values: 2, width: 3 }),
+        (paste_ops(&good, &[], &[vec![text("z"); 4]]), PasteRefused::Width { values: 4, width: 3 }),
+        (paste_ops(&good, &[((n, 0), Value::Default)], &[]), PasteRefused::Default),
+        (paste_ops(&[good.clone(), vec![((2, 1), Value::Default)]].concat(), &[], &[]), PasteRefused::Default),
+    ];
+    for (ops, why) in cases {
+        let mut b = base.clone();
+        let at = b.revision();
+        assert_eq!(b.paste(ops, orig), Err(why.clone()));
+        assert_eq!(b, base, "{why:?}: nothing changed");
+        assert_eq!(b.revision(), at, "{why:?}");
+        assert_eq!(b.next_draft, base.next_draft, "{why:?}");
+    }
+}

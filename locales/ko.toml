@@ -2449,6 +2449,7 @@
 "edit.preview.gone" = "{row}행과 일치하는 행이 이제 테이블에 없습니다. 바뀌었거나 삭제되었습니다. 쿼리를 다시 실행하세요."
 "edit.preview.ambiguous" = "{row}행이 {count}개 행과 일치합니다. 편집하려면 SELECT에 키를 넣으세요"
 "edit.preview.not_whole" = "{row}행: {column} 값이 다 보이지 않아 행을 다시 찾을 수 없습니다"
+"edit.preview.invalid" = "{row}행: {column} 값이 열의 형식에 맞지 않습니다. 고치거나 되돌리세요"
 "edit.preview.not_counted" = "{row}행을 세지 않았습니다"
 "edit.preview.no_one_of_k" = "{row}행이 똑같은 행 {count}개와 일치하는데, 이 데이터베이스는 하나만 바꿀 수 없습니다"
 "edit.preview.column" = "{row}행: {reason}"

@@ -374,7 +374,8 @@ impl App {
         // What was counted for other changes is not theirs.
         let none = Checks::default();
         let checks = if rs.edit.checks.for_revision == batch.revision() { &rs.edit.checks } else { &none };
-        let facts = Facts { whole: &whole, matches: &checks.matches, choices: &checks.choices };
+        let facts =
+            Facts { whole: &whole, matches: &checks.matches, choices: &checks.choices, invalid: &BTreeSet::new() };
         let planned = planned(target, batch, &*f, checks, &facts);
         let text = |e: &PlanError| self.plan_error_text(rs, &checks.matches, e);
         // Every row's problem; rows still to be counted are none.
@@ -476,6 +477,9 @@ impl App {
     fn plan_error_text(&self, rs: &ResultSet, matches: &BTreeMap<usize, u64>, e: &PlanError) -> String {
         let row = |r: usize| self.origin_row(rs, Origin::Row(r));
         let msg = match e {
+            PlanError::Invalid { origin, column } => {
+                Msg::EditPreviewInvalid { row: self.origin_row(rs, *origin), column: self.preview_column(rs, *column) }
+            }
             PlanError::Column { origin, column, why } => {
                 let reason = self.i18n.msg(&column_reason(*why, self.preview_column(rs, *column))).to_string();
                 Msg::EditPreviewColumn { row: self.origin_row(rs, *origin), reason }
@@ -576,9 +580,9 @@ fn problem_at(e: &PlanError) -> Option<(RowAt, Option<usize>)> {
         Origin::New(id) => RowAt::New(id),
     };
     match e {
-        PlanError::Column { origin, column, .. } | PlanError::NoDefault { origin, column } => {
-            Some((at(origin), Some(*column)))
-        }
+        PlanError::Column { origin, column, .. }
+        | PlanError::NoDefault { origin, column }
+        | PlanError::Invalid { origin, column } => Some((at(origin), Some(*column))),
         PlanError::NotShown { origin, .. } => Some((at(origin), None)),
         PlanError::NotWhole { row, column } => Some((RowAt::Read(*row), Some(*column))),
         PlanError::NotCounted { row }

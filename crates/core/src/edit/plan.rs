@@ -19,7 +19,7 @@ use crate::sql::dialect::Language;
 use crate::sql::lexer::{Tok, Token, lex_in};
 use crate::sql::risk::{Class, Classifier};
 use crate::sql::split::split_in;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The condition that finds a row: never empty, and made only here.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,7 +46,7 @@ pub enum Expect {
 }
 
 /// What a statement is for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Origin {
     /// A row of the result (its index in the row store).
     Row(usize),
@@ -87,11 +87,16 @@ pub struct Facts<'a> {
     pub matches: &'a BTreeMap<usize, u64>,
     /// For rows that matched several rows the same in every column: the user's choice.
     pub choices: &'a BTreeMap<usize, Choice>,
+    /// Cells (row or new row, result column) known to hold a value that is not one of their
+    /// column's type, as checked where they were set: none of them is ever sent.
+    pub invalid: &'a BTreeSet<(Origin, usize)>,
 }
 
 /// Why the changes cannot be applied as they are.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlanError {
+    /// A cell set holds a value its column does not take ([`Facts::invalid`]).
+    Invalid { origin: Origin, column: usize },
     /// A cell is set that may not be.
     Column { origin: Origin, column: usize, why: ColumnReason },
     /// A value that finds the row was not read whole.
@@ -213,8 +218,27 @@ pub fn not_shown(t: &EditTarget, b: &EditBatch) -> Vec<(u64, String)> {
     b.drafts().iter().flat_map(|d| t.unshown_required.iter().map(move |c| (d.id, c.clone()))).collect()
 }
 
-/// The statements that apply batch `b` to target `t` in format `f`.
+/// The cells of batch `b` that [`Facts::invalid`] has, each as its problem, in order: cells set
+/// in rows of the result (not ones a row to be deleted had), then cells of new rows.
+fn invalid(b: &EditBatch, facts: &Facts) -> Vec<PlanError> {
+    let touched = |o: Origin, c: usize| match o {
+        Origin::Row(r) => b.value(r, c).is_some(),
+        Origin::New(id) => b.drafts().iter().any(|d| d.id == id && c < d.cells.len()),
+    };
+    facts
+        .invalid
+        .iter()
+        .filter(|&&(o, c)| touched(o, c))
+        .map(|&(origin, column)| PlanError::Invalid { origin, column })
+        .collect()
+}
+
+/// The statements that apply batch `b` to target `t` in format `f`. Nothing is made while a cell
+/// it sets is invalid.
 pub fn plan(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Result<Plan, PlanError> {
+    if let Some(e) = invalid(b, facts).into_iter().next() {
+        return Err(e);
+    }
     if let Some(&(id, column)) = no_default(t, b).first() {
         return Err(PlanError::NoDefault { origin: Origin::New(id), column });
     }
@@ -246,17 +270,22 @@ pub fn plan(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Re
 }
 
 /// Every reason the changes cannot be applied, of every row, in the order [`plan`] meets them:
-/// the checks [`plan`] makes of each row and new row, without the statements, so the first is
+/// every invalid cell first, then the checks [`plan`] makes of each row and new row, without the
+/// statements, so the first is
 /// the one [`plan`] stops at. A row or a target that is not as it must be
 /// ([`PlanError::Internal`]: a row without its values as read, a condition on a computed column)
 /// is among them; a statement the format writes wrong (also [`PlanError::Internal`]) is found
 /// only by [`plan`], which reads each one back.
 pub fn plan_problems(t: &EditTarget, b: &EditBatch, f: &dyn EditSql, facts: &Facts) -> Vec<PlanError> {
-    let mut out: Vec<PlanError> = no_default(t, b)
-        .into_iter()
-        .map(|(id, column)| PlanError::NoDefault { origin: Origin::New(id), column })
-        .chain(not_shown(t, b).into_iter().map(|(id, column)| PlanError::NotShown { origin: Origin::New(id), column }))
-        .collect();
+    let mut out: Vec<PlanError> = invalid(b, facts);
+    out.extend(
+        no_default(t, b)
+            .into_iter()
+            .map(|(id, column)| PlanError::NoDefault { origin: Origin::New(id), column })
+            .chain(
+                not_shown(t, b).into_iter().map(|(id, column)| PlanError::NotShown { origin: Origin::New(id), column }),
+            ),
+    );
     for (row, e) in b.rows() {
         // The write is made only to learn whether the format can change one of several rows.
         let checked = row_checks(t, row, e, f, facts).and_then(|(w, _, scope)| {

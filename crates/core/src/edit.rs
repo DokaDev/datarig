@@ -16,15 +16,17 @@
 //!    is found ([`Identity`]), in the order the format prefers.
 //!
 //! The user's changes collect in an [`EditBatch`] on top of the rows as read; [`plan`] turns
-//! them into the statements of one Apply, each with the count it must give.
+//! them into the statements of one Apply, each with the count it must give. Text pasted into the
+//! cells is read as rows of values by [`paste::parse`].
 
 mod batch;
 mod input;
+pub mod paste;
 mod plan;
 mod sql;
 mod target;
 
-pub use batch::{Counts, Draft, EditBatch, RowEdit};
+pub use batch::{Counts, Draft, EditBatch, PasteOps, PasteRefused, PasteResult, RowEdit};
 pub use input::{Invalid, check_input};
 pub use plan::{
     Choice, Expect, Facts, Origin, Plan, PlanError, Step, Where, count_statements, no_default, not_shown, plan,
