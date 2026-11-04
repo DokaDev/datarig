@@ -14,7 +14,7 @@ use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_driver_mysql::MyDriver;
 use mysql_async::prelude::Queryable;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
@@ -234,7 +234,18 @@ impl Editing {
         let whole = |_: usize, _: usize| true;
         let matches = self.counts(c, b).await;
         let choices: BTreeMap<usize, Choice> = choices.iter().copied().collect();
-        edit::plan(&self.target, b, &*self.format, &Facts { whole: &whole, matches: &matches, choices: &choices })
+        edit::plan(
+            &self.target,
+            b,
+            &*self.format,
+            &Facts {
+                whole: &whole,
+                matches: &matches,
+                choices: &choices,
+                invalid: &BTreeSet::new(),
+                invalid_for: b.revision(),
+            },
+        )
     }
 
     async fn plan(&self, c: &mut Conn, b: &EditBatch, choices: &[(usize, Choice)]) -> Plan {

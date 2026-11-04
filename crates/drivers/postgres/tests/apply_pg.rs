@@ -15,7 +15,7 @@ use datarig_core::edit::{self, Choice, EditBatch, EditTarget, Expect, Facts, Pla
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::Dialect;
 use datarig_driver_postgres::PgDriver;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
@@ -193,8 +193,19 @@ impl Editing {
             matches.insert(row, n);
         }
         let choices: BTreeMap<usize, Choice> = choices.iter().copied().collect();
-        edit::plan(&self.target, b, &*self.format, &Facts { whole: &whole, matches: &matches, choices: &choices })
-            .expect("a plan")
+        edit::plan(
+            &self.target,
+            b,
+            &*self.format,
+            &Facts {
+                whole: &whole,
+                matches: &matches,
+                choices: &choices,
+                invalid: &BTreeSet::new(),
+                invalid_for: b.revision(),
+            },
+        )
+        .expect("a plan")
     }
 }
 

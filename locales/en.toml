@@ -2455,6 +2455,7 @@
 "edit.preview.gone" = "Row {row} matches no row of the table now: it was changed or deleted. Re-run the query."
 "edit.preview.ambiguous" = { one = "Row {row} matches {count} row; add the key to the SELECT to edit it", other = "Row {row} matches {count} rows; add the key to the SELECT to edit it" }
 "edit.preview.not_whole" = "Row {row}: {column} is not shown whole, so the row can't be found again"
+"edit.preview.invalid" = "Row {row}: {column} holds a value its column does not take; fix it or revert it"
 "edit.preview.not_counted" = "Row {row} was not counted"
 "edit.preview.no_one_of_k" = { one = "Row {row} matches {count} identical row, and this database can't change just one", other = "Row {row} matches {count} identical rows, and this database can't change just one" }
 "edit.preview.column" = "Row {row}: {reason}"

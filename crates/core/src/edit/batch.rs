@@ -45,6 +45,45 @@ impl Counts {
     }
 }
 
+/// The cells a paste sets and the new rows it adds ([`EditBatch::paste`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PasteOps {
+    /// How many columns the result has.
+    pub width: usize,
+    /// Cells (row, column) of the result's rows, with their values; a cell listed again takes
+    /// the later value.
+    pub set: Vec<((usize, usize), Value)>,
+    /// Cells (new row, column) of new rows, with their values; as `set`.
+    pub set_new: Vec<((u64, usize), Value)>,
+    /// New rows to add after every other, each with a value per result column.
+    pub add: Vec<Vec<Value>>,
+}
+
+/// What a paste changed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PasteResult {
+    /// How many cells it set to another value than the one they had.
+    pub changed: usize,
+    /// The new rows it added, in order.
+    pub added: Vec<u64>,
+}
+
+/// Why a paste was refused (then nothing changed).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PasteRefused {
+    /// Row `row` is to be deleted.
+    Deleted { row: usize },
+    /// There is no new row `id`.
+    NoDraft { id: u64 },
+    /// The result has no column `column` (`width` columns).
+    NoColumn { column: usize, width: usize },
+    /// A new row to add has `values` values, the result `width` columns.
+    Width { values: usize, width: usize },
+    /// A cell of a row of the result or of a new row is set to its column's default: a paste
+    /// never gives that.
+    Default,
+}
+
 /// What one user action changed, to undo it: the touched rows as they were, and the new rows
 /// as they were when it touched any.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -205,6 +244,88 @@ impl EditBatch {
     /// Remove new rows `ids`, as one action.
     pub fn remove_new(&mut self, ids: &[u64]) -> bool {
         self.act(&[], true, |b| b.drafts.retain(|d| !ids.contains(&d.id)))
+    }
+
+    /// Paste: set cells of the result's rows and of new rows, each to its own value, and add new
+    /// rows after every other, as one action. `orig` gives a row's values as read; a new row
+    /// added has a value for each of the result's columns. Everything is checked before anything
+    /// changes, so either all of it lands or nothing does. A cell set to its value as read is no
+    /// longer changed.
+    pub fn paste(&mut self, ops: PasteOps, orig: impl Fn(usize) -> Vec<Cell>) -> Result<PasteResult, PasteRefused> {
+        let PasteOps { width, set, set_new, add } = ops;
+        let set: Vec<((usize, usize), Value)> = set.into_iter().collect::<BTreeMap<_, _>>().into_iter().collect();
+        let set_new: Vec<((u64, usize), Value)> = set_new.into_iter().collect::<BTreeMap<_, _>>().into_iter().collect();
+        let mut read: BTreeMap<usize, Vec<Cell>> = BTreeMap::new();
+        for &((row, col), ref v) in &set {
+            if self.deleted(row) {
+                return Err(PasteRefused::Deleted { row });
+            }
+            let width = read
+                .entry(row)
+                .or_insert_with(|| self.rows.get(&row).map_or_else(|| orig(row), |e| e.orig.clone()))
+                .len();
+            if col >= width {
+                return Err(PasteRefused::NoColumn { column: col, width });
+            }
+            if *v == Value::Default {
+                return Err(PasteRefused::Default);
+            }
+        }
+        for &((id, col), ref v) in &set_new {
+            let d = self.drafts.iter().find(|d| d.id == id).ok_or(PasteRefused::NoDraft { id })?;
+            if col >= d.cells.len() {
+                return Err(PasteRefused::NoColumn { column: col, width: d.cells.len() });
+            }
+            if *v == Value::Default {
+                return Err(PasteRefused::Default);
+            }
+        }
+        if let Some(r) = add.iter().find(|r| r.len() != width) {
+            return Err(PasteRefused::Width { values: r.len(), width });
+        }
+        let changed = set
+            .iter()
+            .filter(|((r, c), v)| match self.value(*r, *c) {
+                Some(now) => now != v,
+                None => !same(v, read[r].get(*c)),
+            })
+            .count()
+            + set_new
+                .iter()
+                .filter(|((id, c), v)| {
+                    self.drafts.iter().find(|d| d.id == *id).and_then(|d| d.cells.get(*c)) != Some(v)
+                })
+                .count();
+        let ids: Vec<u64> = (self.next_draft..).take(add.len()).collect();
+        self.next_draft += add.len() as u64;
+        let rows: Vec<usize> = read.keys().copied().collect();
+        let drafts = !set_new.is_empty() || !add.is_empty();
+        self.act(&rows, drafts, |b| {
+            for ((row, col), v) in set {
+                let e = b.rows.entry(row).or_insert_with(|| RowEdit {
+                    orig: read[&row].clone(),
+                    set: BTreeMap::new(),
+                    delete: false,
+                });
+                if same(&v, e.orig.get(col)) {
+                    e.set.remove(&col);
+                } else {
+                    e.set.insert(col, v);
+                }
+                if e.set.is_empty() {
+                    b.rows.remove(&row);
+                }
+            }
+            for ((id, col), v) in set_new {
+                if let Some(c) = b.drafts.iter_mut().find(|d| d.id == id).and_then(|d| d.cells.get_mut(col)) {
+                    *c = v;
+                }
+            }
+            for (&id, cells) in ids.iter().zip(add) {
+                b.drafts.push(Draft { id, after: usize::MAX, cells });
+            }
+        });
+        Ok(PasteResult { changed, added: ids })
     }
 
     /// Drop the changes of cells `cells` (row, column) and of new rows' cells `new` (new row,
