@@ -6,7 +6,8 @@
 //! or selection, a tab, the editor's statement or selection), then the pane's own, each with the
 //! key that runs it in that pane. The explorer's come from its key bindings (the list the
 //! keyboard help shows), so an action added to the explorer shows up here too; what cannot run
-//! on the node is left out. The grid's copies open a second level, the formats.
+//! on the node is left out. The grid's copies open a second level, the formats; its edits are
+//! listed only while their keys would act on the cell (a read-only result offers none).
 //!
 //! Typing filters the items: names that start with the text first, then names with a word that
 //! starts with it, then names that have its letters in order. When no item matches, every action
@@ -17,6 +18,7 @@
 
 use super::action::{ChartAction, PanelAction, PlanAction, PlanView};
 use super::copy::{CopyFormat, CopyScope};
+use super::edit::EditAction;
 use super::tabs::ResultView;
 use super::*;
 use crate::keymap::{Target, keys};
@@ -49,6 +51,20 @@ const GRID_MENU: &[Action] = &[
     Action::ToggleDetail,
     Action::Grid(GridAction::CopyCell),
     Action::Grid(GridAction::CopyRow),
+];
+
+/// The edits of the grid's cell or selection, after its copies: each only while its key would
+/// act now ([`App::edit_offered`]).
+const EDIT_MENU: &[EditAction] = &[
+    EditAction::Cell,
+    EditAction::SetNull,
+    EditAction::SetDefault,
+    EditAction::AddRow,
+    EditAction::CloneRow,
+    EditAction::DeleteRow,
+    EditAction::Undo,
+    EditAction::Preview,
+    EditAction::Discard,
 ];
 
 /// The results pane's actions, after the copies of every row.
@@ -563,10 +579,10 @@ impl App {
             return None;
         }
         let t = self.tab();
-        // The Messages of a run hide the grid: no cell to act on then.
-        // A new row (shown after the rows read) is no cell of the result to act on.
+        // The Messages of a run hide the grid: no cell to act on then. A new row (shown after the
+        // rows read) is a cell too, for its edits only.
         let rows = t.exec.view == ResultView::Rows
-            && matches!(&t.results, Results::Rows(rs) if !rs.rows.is_empty() && t.grid.row < rs.rows.len());
+            && matches!(&t.results, Results::Rows(rs) if t.grid.row < rs.rows.len() + rs.edit.new_shown());
         Some(MenuTarget::Grid {
             tab: t.id,
             binding: t.binding,
@@ -815,11 +831,23 @@ impl App {
         let back = self.focus;
         self.focus = Focus::Results;
         let Some(target) = self.grid_target() else { return };
-        let rows = matches!(&target, MenuTarget::Grid { cell: Some(_), .. });
-        let mut own = if rows { self.available(GRID_MENU) } else { Vec::new() };
+        let cell = match &target {
+            MenuTarget::Grid { cell, .. } => *cell,
+            _ => None,
+        };
+        // A new row is no row of the result: nothing reads it but its edits.
+        let read = cell.is_some_and(|(row, _)| row < self.shown_rows_read());
+        let mut own = if read { self.available(GRID_MENU) } else { Vec::new() };
         let mut pane = Vec::new();
-        if rows {
+        if read {
             own.push(MenuItem::Scope(MenuScope::Copy(CopyScope::Selection)));
+        }
+        if cell.is_some() {
+            let edits: Vec<Action> =
+                EDIT_MENU.iter().filter(|e| self.edit_offered(**e)).map(|e| Action::Edit(*e)).collect();
+            own.extend(self.available(&edits));
+        }
+        if read {
             pane.push(MenuItem::Scope(MenuScope::Copy(CopyScope::Fetched)));
             if self.can_fetch_rest() {
                 pane.push(MenuItem::Scope(MenuScope::FetchFirst));
@@ -829,6 +857,14 @@ impl App {
         self.push_menu_from(back, Ctx::Grid, target, own, pane, at);
         if !self.overlays.is_open(OverlayKind::ContextMenu) {
             self.focus = back;
+        }
+    }
+
+    /// How many rows the active tab's shown result read (the rows after them are new rows).
+    fn shown_rows_read(&self) -> usize {
+        match &self.tab().results {
+            Results::Rows(rs) => rs.rows.len(),
+            _ => 0,
         }
     }
 
@@ -1270,6 +1306,9 @@ impl App {
                     Results::Rows(rs) => rs.columns.get(*col).map(|c| c.meta.name.clone()).unwrap_or_default(),
                     _ => String::new(),
                 };
+                if *row >= self.shown_rows_read() {
+                    return self.i18n.msg(&Msg::MenuHeadingNewCell { column });
+                }
                 self.i18n.msg(&Msg::MenuHeadingCell { column, row: (row + 1).to_string() })
             }
             (Heading::Target, MenuTarget::Editor { mode: Mode::Visual, .. }) => {

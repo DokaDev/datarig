@@ -55,7 +55,7 @@ pub enum EditAction {
     AddRow,
     /// A new row with the values of the cursor's.
     CloneRow,
-    /// Mark the cursor's row (the selected rows) to be deleted, or no longer; a new row goes.
+    /// Mark the cursor's row (the selected rows) to be deleted, or unmark it; a new row is removed.
     DeleteRow,
     /// The preview of the pending changes.
     Preview,
@@ -215,6 +215,21 @@ pub struct EditWait {
     source: EditSource,
     format: EditFormat,
     then: (EditAction, (usize, usize), Option<(usize, usize)>),
+}
+
+/// What an edit key that sets cells acts on, every check passed: rows read `rows` (as read,
+/// `read`), or new rows' `cells` (the cursor's new row `at`, id `id`); and the column.
+enum CellsPlan {
+    Read { rows: Range<usize>, c: TableColumn, read: Vec<Vec<Cell>> },
+    New { at: RowAt, id: u64, cells: Vec<(RowAt, usize)>, c: TableColumn },
+}
+
+/// What `D` changes: rows read `marked` (as read in `orig`, from row `first`) and new rows `ids`.
+struct DeletePlan {
+    first: usize,
+    marked: Vec<usize>,
+    ids: Vec<u64>,
+    orig: Vec<Vec<Cell>>,
 }
 
 /// The cell editor: a line over cell `at` of result `result`, whose text goes into `cells` (the
@@ -502,46 +517,118 @@ impl App {
     /// environment known and not read-only, its server taking edits, and the tab bound as when
     /// the rows were read. Why not is said; else the profile, the format and that binding.
     fn edit_gate(&mut self) -> Option<(ProfileId, EditFormat, Bound)> {
+        match self.edit_check() {
+            Ok(ok) => Some(ok),
+            Err(why) => {
+                self.say_not(why);
+                None
+            }
+        }
+    }
+
+    /// Say why an edit key did nothing, if there is something to say.
+    fn say_not(&mut self, why: Option<Notice>) {
+        if let Some(n) = why {
+            self.flash(n);
+        }
+    }
+
+    /// [`App::edit_gate`] without saying anything: else what says why not (nothing without a
+    /// row result).
+    fn edit_check(&self) -> Result<(ProfileId, EditFormat, Bound), Option<Notice>> {
         let t = self.tab();
-        let rs = rows_of(t)?;
+        let rs = rows_of(t).ok_or(None)?;
         let Some(pid) = t.profile.filter(|p| self.conns.is_connected(*p)) else {
-            self.say_edit_read_only(Label::EditWhyNotConnected);
-            return None;
+            return Err(Some(self.read_only_notice(Label::EditWhyNotConnected)));
         };
         if let Err(e) = self.policy_of(pid) {
             let name = self.profile(pid).map(|p| p.name.clone()).unwrap_or_default();
             let n = self.unknown_environment_notice(&name, &e);
-            self.flash(Notice::new(n.msg, Level::Info));
-            return None;
+            return Err(Some(Notice::new(n.msg, Level::Info)));
         }
         // The environment is read-only, or was when the tab's session opened (that session is
         // read-only on the server).
         if self.read_only(pid) || (t.exec.session.is_some() && t.exec.read_only) {
-            self.say_edit_read_only(Label::EditWhyReadOnly);
-            return None;
+            return Err(Some(self.read_only_notice(Label::EditWhyReadOnly)));
         }
         let Some(format) = self.tab_edit_format(t.id) else {
-            self.say_why(&Why::Rows(ReadOnly::NoFormat));
-            return None;
+            return Err(Some(self.why_notice(&Why::Rows(ReadOnly::NoFormat))));
         };
         // Nothing changes the changes being applied (a cell editor or a list of values opened
         // before the Apply was sent).
         if rs.edit.applying.is_some() {
-            self.say_refused(Label::EditWhyApplying.into());
-            return None;
+            return Err(Some(self.refused_notice(Label::EditWhyApplying.into())));
         }
         // What an Apply changed shows over the rows as read: they are read again first.
         if rs.edit.applied.is_some() {
-            self.say_refused(Label::EditWhyApplied.into());
-            return None;
+            return Err(Some(self.refused_notice(Label::EditWhyApplied.into())));
         }
         // Read under another connection or database, the rows may not be the table's now.
         let bound = self.edit_bound(t).filter(|b| rs.edit.bound.as_ref() == Some(b));
         let Some(bound) = bound else {
-            self.flash(Notice::new(Label::EditConnectionChanged, Level::Info));
-            return None;
+            return Err(Some(Notice::new(Label::EditConnectionChanged, Level::Info)));
         };
-        Some((pid, format, bound))
+        Ok((pid, format, bound))
+    }
+
+    /// The table `rs` (tab `t`'s shown result) reads, as its statement and columns say, while
+    /// nothing is pending (`None` then: the keys may have come or changed since it was resolved).
+    fn edit_source(&self, t: &Tab, rs: &ResultSet) -> Option<Result<EditSource, ReadOnly>> {
+        rs.edit.batch.is_empty().then(|| {
+            let cols: Vec<ColumnMeta> = rs.columns.iter().map(|c| c.meta.clone()).collect();
+            edit::source(self.tab_dialect(t.id), self.tab_keys(t).catalog(), &cols, t.shown_sql())
+        })
+    }
+
+    /// Whether edit action `a` would act on the active tab's shown result, its cursor and its
+    /// selection now, by the checks its key makes before it changes anything (the action menu
+    /// offers only those). Before the key first read the table's details, what its columns
+    /// take is not known: only the result, the cursor and the selection are checked then.
+    pub(super) fn edit_offered(&self, a: EditAction) -> bool {
+        if self.tabs.is_empty() {
+            return false;
+        }
+        let t = self.tab();
+        let Some(rs) = rows_of(t) else { return false };
+        if rs.edit.applying.is_some() {
+            return false;
+        }
+        let batch = &rs.edit.batch;
+        match a {
+            EditAction::Undo => return batch.can_undo(),
+            EditAction::Redo => return batch.can_redo(),
+            EditAction::Revert | EditAction::Discard => return !batch.is_empty(),
+            EditAction::Preview | EditAction::Apply => {
+                return self.edit_check().is_ok()
+                    && !batch.is_empty()
+                    && matches!(rs.edit.target, Target::Ready(_))
+                    && !self.tab_busy(t.id);
+            }
+            _ => {}
+        }
+        if self.edit_check().is_err() {
+            return false;
+        }
+        // As the key resolves it: a statement or columns that are not one table's, a table
+        // known to be read-only, or changes pending on a table no longer known.
+        let target = match (&rs.edit.target, self.edit_source(t, rs)) {
+            (_, Some(Err(_))) | (Target::ReadOnly { retry: false, .. }, _) => return false,
+            (Target::Unresolved | Target::ReadOnly { .. }, None) => return false,
+            (Target::Ready(r), None) => Some(r),
+            (Target::Ready(r), Some(Ok(s))) if s.table == r.table => Some(r),
+            _ => None,
+        };
+        match target {
+            // Every check the key makes before it changes anything.
+            Some(target) => self.edit_acts(a, target),
+            // The table's details are read by the key first: what its columns take is not
+            // known yet, only what the cursor and the selection allow.
+            None => match a {
+                EditAction::Cell | EditAction::SetNull | EditAction::SetDefault => self.cells_rows().is_ok(),
+                EditAction::DeleteRow => self.delete_rows().is_ok(),
+                _ => true,
+            },
+        }
     }
 
     /// An edit key that writes: refused with the reason when the result cannot be edited (now);
@@ -551,13 +638,9 @@ impl App {
         let Some((pid, format, bound)) = self.edit_gate() else { return };
         let t = self.tab();
         let Some(rs) = rows_of(t) else { return };
-        let empty = rs.edit.batch.is_empty();
         // What the rows are is read again while nothing is pending: the keys may have come or
         // changed since.
-        let source = empty.then(|| {
-            let cols: Vec<ColumnMeta> = rs.columns.iter().map(|c| c.meta.clone()).collect();
-            edit::source(self.tab_dialect(t.id), self.tab_keys(t).catalog(), &cols, t.shown_sql())
-        });
+        let source = self.edit_source(t, rs);
         let generation = self.conns.get(pid).map_or(0, |c| c.generation);
         let aux = self.open_aux(pid, bound.database.as_deref());
         let (tab, then) = (t.id, (a, (t.grid.row, t.grid.col), t.grid.anchor));
@@ -650,149 +733,207 @@ impl App {
             EditAction::DeleteRow => return self.edit_delete_rows(target),
             _ => {}
         }
+        let plan = match self.cells_plan(a, target) {
+            Ok(p) => p,
+            Err(why) => return self.say_not(why),
+        };
         let t = self.tab();
         let Some(rs) = rows_of(t) else { return };
+        let (row, col) = (t.grid.row, t.grid.col);
+        let result = rs.id;
+        match plan {
+            CellsPlan::New { at, id, cells, c } => {
+                let current =
+                    rs.edit.batch.drafts().iter().find(|d| d.id == id).and_then(|d| d.cells.get(col)).cloned();
+                match a {
+                    EditAction::SetNull => self.edit_write_cells(&cells, Value::Null),
+                    // A new row takes any column's default, a new number too.
+                    EditAction::SetDefault => self.edit_write_cells(&cells, Value::Default),
+                    EditAction::Cell if !c.column.enum_labels.is_empty() || c.kind == ValueKind::Bool => {
+                        self.open_cell_picker(&c, cells, result, current, true);
+                    }
+                    EditAction::Cell => {
+                        let text = match current {
+                            Some(Value::Text(s)) => s,
+                            _ => String::new(),
+                        };
+                        let lines = text.contains(['\n', '\r']) || in_lines(&c);
+                        let input = TextInput::new(&text);
+                        self.open_cell_edit(
+                            CellEdit { result, at: (at, col), cells, input, lines: None, error: None },
+                            &text,
+                            lines,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            CellsPlan::Read { rows, c, read } => {
+                let cells: Vec<(RowAt, usize)> = rows.clone().map(|r| (RowAt::Read(r), col)).collect();
+                // The cursor's value: its pending one, else as read.
+                let pending = rs.edit.batch.value(row, col).cloned();
+                let stored = read.get(row - rows.start).and_then(|r| r.get(col)).cloned().flatten();
+                match a {
+                    EditAction::SetNull => self.edit_write_cells(&cells, Value::Null),
+                    EditAction::SetDefault => self.edit_write_cells(&cells, Value::Default),
+                    EditAction::Cell if !c.column.enum_labels.is_empty() || c.kind == ValueKind::Bool => {
+                        let current = pending.or_else(|| Some(stored.map_or(Value::Null, Value::Text)));
+                        self.open_cell_picker(&c, cells, result, current, false);
+                    }
+                    EditAction::Cell => {
+                        let text = match pending {
+                            Some(Value::Text(s)) => s,
+                            Some(Value::Null | Value::Default) => String::new(),
+                            None => stored.unwrap_or_default(),
+                        };
+                        let at = (RowAt::Read(row), col);
+                        let lines = text.contains(['\n', '\r']) || in_lines(&c);
+                        self.open_cell_edit(
+                            CellEdit { result, at, cells, input: TextInput::new(&text), lines: None, error: None },
+                            &text,
+                            lines,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Whether edit key `a` would act on a result resolved to `target`, by the checks it makes
+    /// before it changes anything ([`App::edit_ready`]).
+    fn edit_acts(&self, a: EditAction, target: &EditTarget) -> bool {
+        match a {
+            EditAction::Cell | EditAction::SetNull | EditAction::SetDefault => self.cells_plan(a, target).is_ok(),
+            EditAction::AddRow => {
+                rows_of(self.tab()).is_some_and(|rs| self.insert_column(target, rs.columns.len()).is_ok())
+            }
+            EditAction::CloneRow => self.clone_plan(target).is_ok(),
+            EditAction::DeleteRow => self.delete_plan(target).is_ok(),
+            _ => true,
+        }
+    }
+
+    /// The rows an edit key that sets cells acts on, by the cursor and the selection alone
+    /// (nothing about the table): the cursor's, or those selected in one column; new rows or
+    /// rows read, not both; no row read marked to be deleted. Else what says why not (nothing
+    /// when the cursor is on no cell).
+    fn cells_rows(&self) -> Result<Range<usize>, Option<Notice>> {
+        let t = self.tab();
+        let rs = rows_of(t).ok_or(None)?;
         let (total, ncols) = (rs.rows.len(), rs.columns.len());
         let (row, col) = (t.grid.row, t.grid.col);
         let shown = total + rs.edit.batch.drafts().len();
         if row >= shown || col >= ncols {
-            return;
+            return Err(None);
         }
         let rows = match t.grid.selection(total, ncols) {
             None => row..row + 1,
             Some((rows, cols)) if t.grid.shape == Shape::Cells && cols.len() == 1 => rows,
-            Some(_) => return self.flash(Notice::new(Label::EditSeveralColumns, Level::Info)),
+            Some(_) => return Err(Some(Notice::new(Label::EditSeveralColumns, Level::Info))),
         };
         if rows.end > total {
             if rows.start < total {
-                return self.flash(Notice::new(Label::EditMixedRows, Level::Info));
+                return Err(Some(Notice::new(Label::EditMixedRows, Level::Info)));
             }
-            return self.edit_new_cells(a, target, rows, col);
+            return Ok(rows);
         }
         if let Some(r) = rows.clone().find(|r| rs.edit.batch.deleted(*r)) {
-            return self.say_refused(Msg::EditWhyRowDeleted { row: (r + 1).to_string() });
+            return Err(Some(self.refused_notice(Msg::EditWhyRowDeleted { row: (r + 1).to_string() })));
         }
+        Ok(rows)
+    }
+
+    /// What an edit key that sets cells does on a result resolved to `target`, once every check
+    /// passed; else what says why not.
+    fn cells_plan(&self, a: EditAction, target: &EditTarget) -> Result<CellsPlan, Option<Notice>> {
+        let rows = self.cells_rows()?;
+        let t = self.tab();
+        let rs = rows_of(t).ok_or(None)?;
+        let (total, ncols) = (rs.rows.len(), rs.columns.len());
+        let col = t.grid.col;
+        if rows.end > total {
+            return self.new_cells_plan(a, target, rows, col);
+        }
+        let refused = |why: Msg| Some(self.refused_notice(why));
         let name = rs.columns[col].meta.name.clone();
         let c = match target.allows(col, Write::Update) {
             Ok(c) => c.clone(),
-            Err(r) => return self.say_refused(column_reason(r, name)),
+            Err(r) => return Err(refused(column_reason(r, name))),
         };
         let Some(read) = read_rows(rs, rows.clone()) else {
-            return self.say_refused(Msg::EditWhyNotRead { row: (rows.start + 1).to_string() });
+            return Err(refused(Msg::EditWhyNotRead { row: (rows.start + 1).to_string() }));
         };
         // A row with fewer values than the result has columns was not read whole.
         if let Some(k) = read.iter().position(|r| r.len() < ncols) {
-            return self.say_refused(Msg::EditWhyNotRead { row: (rows.start + k + 1).to_string() });
+            return Err(refused(Msg::EditWhyNotRead { row: (rows.start + k + 1).to_string() }));
         }
         let d = self.tab_dialect(t.id);
         let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
-        if let Some((r, refused)) = not_whole(d, rs, target, &read, rows.start, zone) {
-            let reason = self.not_whole_reason(&refused.why);
-            return self.say_refused(Msg::EditWhyNotWhole { row: (r + 1).to_string(), reason });
+        if let Some((r, why)) = not_whole(d, rs, target, &read, rows.start, zone) {
+            let reason = self.not_whole_reason(&why.why);
+            return Err(refused(Msg::EditWhyNotWhole { row: (r + 1).to_string(), reason }));
         }
         // NULL and DEFAULT read no value: only a typed one must be stored as shown.
         let typed = a == EditAction::Cell;
         let many = rows.len() > 1;
-        if let Some((r, refused)) = value_not_whole(d, rs, col, &read, rows.start, zone, many).filter(|_| typed) {
-            let (column, reason) = (refused.column, self.not_whole_reason(&refused.why));
-            return self.say_refused(match r {
-                None if refused.why == export::NotWhole::Float => Msg::EditWhyShownRounded { column },
+        if let Some((r, why)) = value_not_whole(d, rs, col, &read, rows.start, zone, many).filter(|_| typed) {
+            let (column, reason) = (why.column, self.not_whole_reason(&why.why));
+            return Err(refused(match r {
+                None if why.why == export::NotWhole::Float => Msg::EditWhyShownRounded { column },
                 None => Msg::EditWhyColumnNotWhole { column, reason },
                 Some(r) => Msg::EditWhyValueNotWhole { row: (r + 1).to_string(), column, reason },
-            });
+            }));
         }
-        let cells: Vec<(RowAt, usize)> = rows.clone().map(|r| (RowAt::Read(r), col)).collect();
-        // The cursor's value: its pending one, else as read.
-        let pending = rs.edit.batch.value(row, col).cloned();
-        let stored = read.get(row - rows.start).and_then(|r| r.get(col)).cloned().flatten();
-        match a {
-            EditAction::SetNull if c.column.not_null => self.say_refused(Msg::EditWhyNotNull { column: name }),
-            EditAction::SetDefault if !has_default(&c) => self.say_refused(Msg::EditWhyNoDefault { column: name }),
-            EditAction::SetDefault if new_number(&c) => self.say_refused(Msg::EditWhyNewNumber { column: name }),
-            EditAction::SetNull => self.edit_write_cells(&cells, Value::Null),
-            EditAction::SetDefault => self.edit_write_cells(&cells, Value::Default),
-            EditAction::Cell if !c.column.enum_labels.is_empty() || c.kind == ValueKind::Bool => {
-                let current = pending.or_else(|| Some(stored.map_or(Value::Null, Value::Text)));
-                let result = rs.id;
-                self.open_cell_picker(&c, cells, result, current, false);
-            }
-            EditAction::Cell => {
-                let text = match pending {
-                    Some(Value::Text(s)) => s,
-                    Some(Value::Null | Value::Default) => String::new(),
-                    None => stored.unwrap_or_default(),
-                };
-                let result = rs.id;
-                let at = (RowAt::Read(row), col);
-                let lines = text.contains(['\n', '\r']) || in_lines(&c);
-                self.open_cell_edit(
-                    CellEdit { result, at, cells, input: TextInput::new(&text), lines: None, error: None },
-                    &text,
-                    lines,
-                );
-            }
-            _ => {}
+        if let Some(why) = column_refusal(a, &c, name) {
+            return Err(refused(why));
         }
+        Ok(CellsPlan::Read { rows, c, read })
     }
 
     /// An edit key on cells of new rows `rows` (as the grid shows them) in column `col`: the
     /// column must take a value in a new row; no row is found again, so nothing is read. Any
     /// column that takes one takes its default.
-    fn edit_new_cells(&mut self, a: EditAction, target: &EditTarget, rows: Range<usize>, col: usize) {
+    fn new_cells_plan(
+        &self,
+        a: EditAction,
+        target: &EditTarget,
+        rows: Range<usize>,
+        col: usize,
+    ) -> Result<CellsPlan, Option<Notice>> {
         let t = self.tab();
-        let Some(rs) = rows_of(t) else { return };
+        let rs = rows_of(t).ok_or(None)?;
         let ids: Vec<RowAt> = rows.clone().filter_map(|r| row_at(rs, r)).collect();
-        let Some(at @ RowAt::New(id)) = row_at(rs, t.grid.row).filter(|_| ids.len() == rows.len()) else { return };
+        let Some(at @ RowAt::New(id)) = row_at(rs, t.grid.row).filter(|_| ids.len() == rows.len()) else {
+            return Err(None);
+        };
+        let refused = |why: Msg| Some(self.refused_notice(why));
         let name = rs.columns[col].meta.name.clone();
         let c = match target.allows(col, Write::Insert) {
             Ok(c) => c.clone(),
-            Err(r) => return self.say_refused(column_reason(r, name)),
+            Err(r) => return Err(refused(column_reason(r, name))),
         };
         let d = self.tab_dialect(t.id);
         let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
         // A typed value is stored as shown only in a session that shows it so (a new row holds
         // no value shown rounded).
         let typed = a == EditAction::Cell;
-        if let Some((_, refused)) = value_not_whole(d, rs, col, &[], 0, zone, false).filter(|_| typed) {
-            let (column, reason) = (refused.column, self.not_whole_reason(&refused.why));
-            return self.say_refused(Msg::EditWhyColumnNotWhole { column, reason });
+        if let Some((_, why)) = value_not_whole(d, rs, col, &[], 0, zone, false).filter(|_| typed) {
+            let (column, reason) = (why.column, self.not_whole_reason(&why.why));
+            return Err(refused(Msg::EditWhyColumnNotWhole { column, reason }));
         }
-        let current = rs.edit.batch.drafts().iter().find(|d| d.id == id).and_then(|d| d.cells.get(col)).cloned();
+        if a == EditAction::SetNull && c.column.not_null {
+            return Err(refused(Msg::EditWhyNotNull { column: name }));
+        }
         let cells: Vec<(RowAt, usize)> = ids.into_iter().map(|r| (r, col)).collect();
-        match a {
-            EditAction::SetNull if c.column.not_null => self.say_refused(Msg::EditWhyNotNull { column: name }),
-            EditAction::SetNull => self.edit_write_cells(&cells, Value::Null),
-            // A new row takes any column's default, a new number too.
-            EditAction::SetDefault => self.edit_write_cells(&cells, Value::Default),
-            EditAction::Cell if !c.column.enum_labels.is_empty() || c.kind == ValueKind::Bool => {
-                let result = rs.id;
-                self.open_cell_picker(&c, cells, result, current, true);
-            }
-            EditAction::Cell => {
-                let text = match current {
-                    Some(Value::Text(s)) => s,
-                    _ => String::new(),
-                };
-                let result = rs.id;
-                let lines = text.contains(['\n', '\r']) || in_lines(&c);
-                let input = TextInput::new(&text);
-                self.open_cell_edit(
-                    CellEdit { result, at: (at, col), cells, input, lines: None, error: None },
-                    &text,
-                    lines,
-                );
-            }
-            _ => {}
-        }
+        Ok(CellsPlan::New { at, id, cells, c })
     }
 
-    /// Whether every column of `target` refuses a value in a new row: why, said.
-    fn no_insert(&mut self, target: &EditTarget, ncols: usize) -> Option<usize> {
-        let first = (0..ncols).find(|&c| target.allows(c, Write::Insert).is_ok());
-        if first.is_none() {
-            self.say_refused(Label::EditWhyNoInsertColumn.into());
-        }
-        first
+    /// The first column of `target` that takes a value in a new row; else why none does.
+    fn insert_column(&self, target: &EditTarget, ncols: usize) -> Result<usize, Option<Notice>> {
+        (0..ncols)
+            .find(|&c| target.allows(c, Write::Insert).is_ok())
+            .ok_or_else(|| Some(self.refused_notice(Label::EditWhyNoInsertColumn.into())))
     }
 
     /// `o`: a new row, every value its column's default, below the cursor's row (right after
@@ -806,7 +947,10 @@ impl App {
             Some(RowAt::New(id)) => Some(id),
             _ => None,
         };
-        let Some(first) = self.no_insert(target, ncols) else { return };
+        let first = match self.insert_column(target, ncols) {
+            Ok(c) => c,
+            Err(why) => return self.say_not(why),
+        };
         let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
         // Every new row is shown after the rows read: in the order of the batch.
         let id = rs.edit.batch.add(usize::MAX, next_to, vec![Value::Default; ncols]);
@@ -818,25 +962,33 @@ impl App {
     /// (an identity, `AUTO_INCREMENT`, a sequence), a generated or computed column take their
     /// default. A value as read must be shown whole, else the copy is refused.
     fn edit_clone_row(&mut self, target: &EditTarget) {
+        let (cells, next_to) = match self.clone_plan(target) {
+            Ok(p) => p,
+            Err(why) => return self.say_not(why),
+        };
+        let col = self.tab().grid.col;
+        let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
+        let id = rs.edit.batch.add(usize::MAX, next_to, cells);
+        self.edit_cursor_to(RowAt::New(id), col);
+    }
+
+    /// The values of the row `O` adds, and the new row it goes after; else why not.
+    fn clone_plan(&self, target: &EditTarget) -> Result<(Vec<Value>, Option<u64>), Option<Notice>> {
         let t = self.tab();
-        let Some(rs) = rows_of(t) else { return };
+        let rs = rows_of(t).ok_or(None)?;
         let ncols = rs.columns.len();
-        let Some(at) = row_at(rs, t.grid.row) else { return };
-        if self.no_insert(target, ncols).is_none() {
-            return;
-        }
-        let t = self.tab();
-        let Some(rs) = rows_of(t) else { return };
+        let at = row_at(rs, t.grid.row).ok_or(None)?;
+        self.insert_column(target, ncols)?;
         // The values, and the one as read of each cell not set.
         let (values, read): (Vec<Value>, Vec<Option<String>>) = match at {
             RowAt::New(id) => {
-                let Some(d) = rs.edit.batch.drafts().iter().find(|d| d.id == id) else { return };
+                let d = rs.edit.batch.drafts().iter().find(|d| d.id == id).ok_or(None)?;
                 (d.cells.clone(), vec![None; ncols])
             }
             RowAt::Read(r) => {
                 let row = read_rows(rs, r..r + 1).and_then(|mut v| v.pop()).filter(|row| row.len() >= ncols);
                 let Some(row) = row else {
-                    return self.say_refused(Msg::EditWhyNotRead { row: (r + 1).to_string() });
+                    return Err(Some(self.refused_notice(Msg::EditWhyNotRead { row: (r + 1).to_string() })));
                 };
                 (0..ncols)
                     .map(|c| match rs.edit.batch.value(r, c) {
@@ -863,7 +1015,7 @@ impl App {
                 && !shown_whole(d, rs, c, &text, zone)
             {
                 let column = rs.columns[c].meta.name.clone();
-                return self.say_refused(Msg::EditWhyCloneNotWhole { column });
+                return Err(Some(self.refused_notice(Msg::EditWhyCloneNotWhole { column })));
             }
             cells.push(v);
         }
@@ -871,31 +1023,35 @@ impl App {
             RowAt::New(id) => Some(id),
             RowAt::Read(_) => None,
         };
-        let col = t.grid.col;
-        let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
-        let id = rs.edit.batch.add(usize::MAX, next_to, cells);
-        self.edit_cursor_to(RowAt::New(id), col);
+        Ok((cells, next_to))
     }
 
-    /// `D`: the cursor's row, or the rows of the selection (not whole columns): rows read are
-    /// marked to be deleted (unmarked when every one is), new rows removed, as one change. A row
-    /// read must be found again by values shown whole.
-    fn edit_delete_rows(&mut self, target: &EditTarget) {
+    /// The rows `D` acts on, by the cursor and the selection alone: the cursor's, or the
+    /// selected rows (not whole columns). Else what says why not.
+    fn delete_rows(&self) -> Result<Range<usize>, Option<Notice>> {
         let t = self.tab();
-        let Some(rs) = rows_of(t) else { return };
+        let rs = rows_of(t).ok_or(None)?;
         let (len, ncols) = (rs.rows.len(), rs.columns.len());
         let shown = len + rs.edit.batch.drafts().len();
         let rows = match t.grid.selection(len, ncols) {
             None => t.grid.row..t.grid.row + 1,
             Some(_) if t.grid.shape == Shape::Cols => {
-                return self.flash(Notice::new(Label::EditDeleteColumns, Level::Info));
+                return Err(Some(Notice::new(Label::EditDeleteColumns, Level::Info)));
             }
             Some((rows, _)) => rows,
         };
         let rows = rows.start..rows.end.min(shown);
-        if rows.is_empty() {
-            return;
-        }
+        if rows.is_empty() { Err(None) } else { Ok(rows) }
+    }
+
+    /// What `D` changes on a result resolved to `target`: the rows read it marks (from the
+    /// first, as read) and the new rows it removes; else why not. A row read must be found
+    /// again by values shown whole.
+    fn delete_plan(&self, target: &EditTarget) -> Result<DeletePlan, Option<Notice>> {
+        let rows = self.delete_rows()?;
+        let t = self.tab();
+        let rs = rows_of(t).ok_or(None)?;
+        let (len, ncols) = (rs.rows.len(), rs.columns.len());
         let read = rows.start.min(len)..rows.end.min(len);
         let ids: Vec<u64> = (rows.start.max(len)..rows.end)
             .filter_map(|r| match row_at(rs, r) {
@@ -903,26 +1059,36 @@ impl App {
                 _ => None,
             })
             .collect();
+        let refused = |why: Msg| Some(self.refused_notice(why));
         let mut orig = Vec::new();
         if !read.is_empty() {
             let Some(got) = read_rows(rs, read.clone()) else {
-                return self.say_refused(Msg::EditWhyNotRead { row: (read.start + 1).to_string() });
+                return Err(refused(Msg::EditWhyNotRead { row: (read.start + 1).to_string() }));
             };
             if let Some(k) = got.iter().position(|r| r.len() < ncols) {
-                return self.say_refused(Msg::EditWhyNotRead { row: (read.start + k + 1).to_string() });
+                return Err(refused(Msg::EditWhyNotRead { row: (read.start + k + 1).to_string() }));
             }
             let d = self.tab_dialect(t.id);
             let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
-            if let Some((r, refused)) = not_whole(d, rs, target, &got, read.start, zone) {
-                let reason = self.not_whole_reason(&refused.why);
-                return self.say_refused(Msg::EditWhyNotWhole { row: (r + 1).to_string(), reason });
+            if let Some((r, why)) = not_whole(d, rs, target, &got, read.start, zone) {
+                let reason = self.not_whole_reason(&why.why);
+                return Err(refused(Msg::EditWhyNotWhole { row: (r + 1).to_string(), reason }));
             }
             orig = got;
         }
-        let first = read.start;
-        let marked: Vec<usize> = read.collect();
+        Ok(DeletePlan { first: read.start, marked: read.collect(), ids, orig })
+    }
+
+    /// `D`: the cursor's row, or the rows of the selection (not whole columns): rows read are
+    /// marked to be deleted (unmarked when every one is), new rows removed, as one change.
+    fn edit_delete_rows(&mut self, target: &EditTarget) {
+        let p = match self.delete_plan(target) {
+            Ok(p) => p,
+            Err(why) => return self.say_not(why),
+        };
         let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
-        rs.edit.batch.delete_with_new(&marked, &ids, |r| orig.get(r - first).cloned().unwrap_or_default());
+        let (first, orig) = (p.first, p.orig);
+        rs.edit.batch.delete_with_new(&p.marked, &p.ids, |r| orig.get(r - first).cloned().unwrap_or_default());
         self.tab_mut().grid.anchor = None;
         self.selecting_done();
         self.edit_grid_sync();
@@ -1304,8 +1470,12 @@ impl App {
 
     /// Why the result's rows cannot be edited, as the status line says it.
     fn say_why(&mut self, why: &Why) {
-        let reason = self.why_text(why);
-        self.flash(Notice::new(Msg::EditReadOnly { reason }, Level::Info));
+        let n = self.why_notice(why);
+        self.flash(n);
+    }
+
+    fn why_notice(&self, why: &Why) -> Notice {
+        Notice::new(Msg::EditReadOnly { reason: self.why_text(why) }, Level::Info)
     }
 
     /// Why the result's rows cannot be edited, in words.
@@ -1470,14 +1640,32 @@ impl App {
 
     /// The result is read-only now, for `why`.
     fn say_edit_read_only(&mut self, why: Label) {
-        let reason = self.i18n.label(why).to_string();
-        self.flash(Notice::new(Msg::EditReadOnly { reason }, Level::Info));
+        let n = self.read_only_notice(why);
+        self.flash(n);
+    }
+
+    fn read_only_notice(&self, why: Label) -> Notice {
+        Notice::new(Msg::EditReadOnly { reason: self.i18n.label(why).to_string() }, Level::Info)
     }
 
     /// This change cannot be made, for `why`.
     fn say_refused(&mut self, why: Msg) {
-        let reason = self.i18n.msg(&why).to_string();
-        self.flash(Notice::new(Msg::EditRefused { reason }, Level::Info));
+        let n = self.refused_notice(why);
+        self.flash(n);
+    }
+
+    fn refused_notice(&self, why: Msg) -> Notice {
+        Notice::new(Msg::EditRefused { reason: self.i18n.msg(&why).to_string() }, Level::Info)
+    }
+}
+
+/// Why `a` cannot set column `c` (named `column`) of a row read, whatever its rows are.
+fn column_refusal(a: EditAction, c: &TableColumn, column: String) -> Option<Msg> {
+    match a {
+        EditAction::SetNull if c.column.not_null => Some(Msg::EditWhyNotNull { column }),
+        EditAction::SetDefault if !has_default(c) => Some(Msg::EditWhyNoDefault { column }),
+        EditAction::SetDefault if new_number(c) => Some(Msg::EditWhyNewNumber { column }),
+        _ => None,
     }
 }
 

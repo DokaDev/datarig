@@ -60,7 +60,7 @@ In the grid:
 | `Space d D` | Set the cell (the selected cells) to the column's default |
 | `o` (`Space d o`) | Add a new row, every value its column's default |
 | `O` (`Space d O`) | Add a new row with the values of the cursor's row |
-| `D` (`Space d d`) | Mark the row (the selected rows) to be deleted, or no longer; a new row goes |
+| `D` (`Space d d`) | Mark the row (the selected rows) to be deleted, or unmark it; a new row is removed |
 | `Space d r` | Drop the pending changes of the cell (the selection) |
 | `u` (`Space d u`), `Ctrl+R` (`Space d U`) | Undo, redo |
 | `Space d p` (`:changes`) | Show the pending changes and the statements that apply them |
@@ -80,6 +80,24 @@ row are one change), a new row or a row to be deleted. The row number's gutter m
 crossed out, and a cell left to its default shows a dim `default` (theme tokens
 `edit_changed`, `edit_inserted`, `edit_deleted`, and `edit_pending` for the count; see
 [Theme files](../reference/theme-files.md)).
+
+### With the mouse
+
+A right click on a cell selects it and opens the action menu; inside a selected range it keeps
+the range, and the menu is the selection's (`Space Space` opens the same one next to the
+selection). Its first section lists the edits after the copies, each with its key: edit the
+cell, set it to NULL or to the column's default, add a row, add a copy of the row, mark the row
+to be deleted; once changes are pending, undo, the preview of the pending changes and dropping
+them. On a new row it lists only its edits: nothing there reads a row of the result. An item
+runs as its key does.
+
+The menu lists only the edits whose keys would act: each is checked as its key checks before
+it changes anything. A result that can't be edited (a join, a read-only environment, a
+connection that is not open, a connection type that can't edit data) offers no edits but
+undoing or dropping the changes already pending. A selection of several columns offers no edit
+of cells, whole columns no deletion, and a row marked to be deleted no change of its cells.
+Until the first edit key has read the table's details, what its columns take is not known yet:
+the menu then offers NULL and DEFAULT on any column, and the key says why when one refuses it.
 
 ## The cell editor
 
