@@ -1242,7 +1242,12 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         _ => Vec::new(),
     };
-    let look = crate::widgets::grid::Look { marks: &marks, icons: app.icons_on() };
+    let invalid = app.shown_invalid();
+    let look = crate::widgets::grid::Look {
+        marks: &marks,
+        icons: app.icons_on(),
+        invalid: invalid.as_deref().map(|i| &i.cells),
+    };
     // The portal belongs to the last statement of the rows' run: only its rows page.
     let answer = app.tab().exec.shown.is_some() && app.tab().exec.shown == app.tab().answer_index();
     // `n` is the search's while one is on, and typed while its prompt is open: the next page's

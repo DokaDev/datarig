@@ -18,7 +18,7 @@ use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::policy::{CommitRule, Confirm, Policy};
 use datarig_core::profile::ConnectionConfig;
 use datarig_tui::app::action::Action;
-use datarig_tui::app::edit::{EditState, PreviewLine, Target};
+use datarig_tui::app::edit::{ANSWER_GUARD, EditState, PreviewLine, Target};
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::tabs::ResultView;
 use datarig_tui::app::{Focus, Results};
@@ -453,13 +453,15 @@ fn input_while_the_apply_waits_stops_it_and_never_becomes_its_y() {
             let before = grid_state(&h);
             input(&mut h);
             assert!(h.app.apply_wait.is_none(), "{name} (writes {writes}): stops waiting");
-            // The second `y` of `yy` is the grid's own again (it copies the cell).
-            let copied = *name == "yy";
+            // The second `y` of `yy` comes right after the wait ended: ignored, never the
+            // grid's (which copies the cell).
             let notice = said(&mut h);
-            if !copied {
-                assert_eq!(notice, Some(Label::EditAskCancelled.into()), "{name}");
-                assert_eq!(clip.last(), None, "{name}: nothing copied");
-            }
+            let want = match *name {
+                "yy" => Msg::EditAskIgnored { said: "Apply cancelled".into(), key: "y".into() },
+                _ => Label::EditAskCancelled.into(),
+            };
+            assert_eq!(notice, Some(want), "{name}");
+            assert_eq!(clip.last(), None, "{name}: nothing copied");
             h.db(DbEvent::Counted { id, result: Ok(1), snapshot: false });
             assert!(asked(&h).is_none(), "{name} (writes {writes}): nothing asked");
             assert!(h.app.overlays.top().is_none(), "{name} (writes {writes}): no dialog");
@@ -478,6 +480,30 @@ fn input_while_the_apply_waits_stops_it_and_never_becomes_its_y() {
     assert!(asked(&h).is_some());
     h.key(KeyCode::Char('y'));
     assert!(applies(&mut h).is_some());
+}
+
+/// The answers come with a problem: no question, the Changes tab shows it; a key typed for the
+/// question that did not come is ignored for a second (`c` there copies the SQL), then works.
+#[test]
+fn an_apply_that_waited_and_has_problems_ignores_the_answer_keys_for_a_second() {
+    let (mut h, id) = waiting(by_values(Lang::En));
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.db(DbEvent::Counted { id, result: Ok(0), snapshot: false });
+    assert!(asked(&h).is_none() && h.app.overlays.top().is_none(), "nothing asked");
+    let Some(problems) = said(&mut h) else { panic!("the problems said") };
+    assert!(matches!(problems, Msg::EditAskProblems { .. }), "{problems:?}");
+    assert_eq!(h.app.key_context(), Ctx::Changes);
+    let said_then = h.app.i18n.msg(&problems).to_string();
+    for key in ['y', 'c'] {
+        h.key(KeyCode::Char(key));
+        assert_eq!(clip.last(), None, "{key}: nothing copied");
+        assert_eq!(said(&mut h), Some(Msg::EditAskIgnored { said: said_then.clone(), key: key.to_string() }));
+    }
+    h.advance(ANSWER_GUARD);
+    h.key(KeyCode::Char('c'));
+    // The Changes tab's `c` again (the SQL not final yet: said so).
+    assert!(matches!(said(&mut h), Some(Msg::ChangesCopyNotFinal { .. })), "a second after, c works");
+    assert!(applies(&mut h).is_none());
 }
 
 /// A dialog open or a run in the tab when the answers come: the Apply is cancelled, nothing is

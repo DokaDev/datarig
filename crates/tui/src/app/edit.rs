@@ -15,7 +15,8 @@
 //!
 //! New rows are added (every value the column's default, or a copy of the cursor's row) and
 //! shown after the rows read, in the order they were added; rows read are marked to be deleted,
-//! new rows removed.
+//! new rows removed. A range pasted into the grid sets many cells and adds rows at once
+//! ([`paste`]).
 
 use super::picker::Picker;
 use super::*;
@@ -36,13 +37,17 @@ mod applied;
 mod ask;
 mod changes;
 mod lines;
+mod paste;
 mod preview;
 mod tab;
 
 pub use applied::{Applied, ApplyFailed, Applying};
-pub use ask::{ApplyAsk, ApplyWait, AskAction, StatusAsk};
+pub use ask::{ANSWER_GUARD, ApplyAsk, ApplyWait, AskAction, StatusAsk};
 pub use changes::{ChangesModel, Checks, ListLine, Mark, ModelCache, Pointer, Problem};
 pub use lines::Lines;
+pub use paste::{
+    ASK_ROWS, CLIPBOARD_TIMEOUT, ClipAnswer, ClipReads, CsvAsk, InvalidCache, Invalids, LastPaste, PasteAsk, PasteIn,
+};
 pub(crate) use preview::PreviewBody;
 pub use preview::{EditPreview, PreviewLine, PreviewView};
 pub(crate) use tab::Seen;
@@ -71,6 +76,12 @@ pub enum EditAction {
     Apply,
     /// Drop every pending change, once the user says so.
     Discard,
+    /// Paste the system clipboard's text at the cursor (`space d v`).
+    Paste,
+    /// Read the last paste again as the next format, in its place (`space d V`).
+    PasteAs,
+    /// Paste the text waiting in [`App::paste_in`] (a terminal's paste, the clipboard's text).
+    Pasted,
 }
 
 /// What would drop a tab's pending changes, asked about first ([`App::ask_leave`]).
@@ -83,7 +94,7 @@ pub enum Leave {
 }
 
 /// A row the grid shows: a row read (by its index in the result) or a new row (by its id).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RowAt {
     Read(usize),
     New(u64),
@@ -137,6 +148,8 @@ pub struct EditState {
     /// What an Apply did went with its transaction, said with this until the query runs
     /// again.
     pub gone: Option<Label>,
+    /// The cells of the changes whose value their column does not take, as last found.
+    pub invalid: InvalidCache,
 }
 
 impl EditState {
@@ -287,8 +300,10 @@ pub struct CellEdit {
     pub input: TextInput,
     /// The text in the editor of several lines, which takes the place of `input` once open.
     pub lines: Option<Box<Lines>>,
-    /// Why the text typed was not taken.
+    /// Why the text typed was not taken; or (`invalid`) why the value it opened with is not
+    /// one its column takes.
     pub error: Option<String>,
+    pub invalid: bool,
 }
 
 impl CellEdit {
@@ -464,6 +479,9 @@ impl App {
         if a == EditAction::Preview {
             return self.changes_open();
         }
+        if matches!(a, EditAction::Paste | EditAction::PasteAs | EditAction::Pasted) && self.changes_shown() {
+            return self.flash(Notice::new(Label::EditPasteGridOnly, Level::Info));
+        }
         // Nothing changes the changes being applied.
         if !self.tabs.is_empty() && rows_of(self.tab()).is_some_and(|rs| rs.edit.applying.is_some()) {
             return self.say_refused(Label::EditWhyApplying.into());
@@ -482,12 +500,15 @@ impl App {
             EditAction::Apply => self.apply_request(),
             EditAction::Preview => self.changes_open(),
             EditAction::Discard => self.edit_discard_ask(),
+            EditAction::Paste => self.paste_key(),
+            EditAction::PasteAs => self.paste_again(),
             EditAction::Cell
             | EditAction::SetNull
             | EditAction::SetDefault
             | EditAction::AddRow
             | EditAction::CloneRow
-            | EditAction::DeleteRow => self.edit_resolve(a),
+            | EditAction::DeleteRow
+            | EditAction::Pasted => self.edit_resolve(a),
         }
     }
 
@@ -664,6 +685,8 @@ impl App {
             EditAction::Undo => return batch.can_undo(),
             EditAction::Redo => return batch.can_redo(),
             EditAction::Revert | EditAction::Discard | EditAction::Preview => return !batch.is_empty(),
+            EditAction::Paste | EditAction::Pasted => return self.edit_check().is_ok(),
+            EditAction::PasteAs => return self.edit_check().is_ok() && self.last_paste.is_some(),
             EditAction::Apply => {
                 return self.edit_check().is_ok()
                     && !batch.is_empty()
@@ -797,6 +820,7 @@ impl App {
             EditAction::AddRow => return self.edit_add_row(target),
             EditAction::CloneRow => return self.edit_clone_row(target),
             EditAction::DeleteRow => return self.edit_delete_rows(target),
+            EditAction::Pasted => return self.edit_paste(target),
             _ => {}
         }
         let plan = match self.cells_plan(a, target) {
@@ -825,8 +849,10 @@ impl App {
                         };
                         let lines = text.contains(['\n', '\r']) || in_lines(&c);
                         let input = TextInput::new(&text);
+                        let error = self.invalid_reason(at, col);
+                        let invalid = error.is_some();
                         self.open_cell_edit(
-                            CellEdit { result, at: (at, col), cells, input, lines: None, error: None },
+                            CellEdit { result, at: (at, col), cells, input, lines: None, error, invalid },
                             &text,
                             lines,
                         );
@@ -854,11 +880,11 @@ impl App {
                         };
                         let at = (RowAt::Read(row), col);
                         let lines = text.contains(['\n', '\r']) || in_lines(&c);
-                        self.open_cell_edit(
-                            CellEdit { result, at, cells, input: TextInput::new(&text), lines: None, error: None },
-                            &text,
-                            lines,
-                        );
+                        let error = self.invalid_reason(at.0, col);
+                        let invalid = error.is_some();
+                        let input = TextInput::new(&text);
+                        let e = CellEdit { result, at, cells, input, lines: None, error, invalid };
+                        self.open_cell_edit(e, &text, lines);
                     }
                     _ => {}
                 }
@@ -1333,6 +1359,7 @@ impl App {
         if let Err(reason) = self.typed_whole(d, &text).and_then(|_| self.typed_ok(d, &c, &text)) {
             if let Some(e) = self.tabs.active_mut().cell_edit.as_mut() {
                 e.error = Some(reason.clone());
+                e.invalid = false;
             }
             return self.flash(Notice::new(Msg::EditRefused { reason }, Level::Info));
         }
@@ -1359,6 +1386,7 @@ impl App {
         if let Some(why) = why {
             if let Some(e) = self.tabs.active_mut().cell_edit.as_mut() {
                 e.error = Some(self.i18n.msg(&why).to_string());
+                e.invalid = false;
             }
             return self.say_refused(why);
         }
@@ -1658,6 +1686,15 @@ impl App {
             return fits(text).map(|t| (t, th.edit_pending.bg(bg)));
         }
         let pending = rs.edit.batch.counts().total();
+        let invalid = self.invalid_count(rs) as u64;
+        if pending > 0 && invalid > 0 {
+            let p = datarig_core::i18n::fmt_count(pending as u64);
+            let long = Msg::EditBadgePendingInvalid { pending: p.clone(), count: invalid };
+            let text = self.i18n.msg(&long).to_string();
+            let short = self.i18n.msg(&Msg::EditBadgePendingInvalidShort { pending: p, count: invalid }).to_string();
+            let text = fits(text).or_else(|| fits(short));
+            return text.map(|t| (t, th.edit_pending.bg(bg)));
+        }
         if pending > 0 {
             let text = self.i18n.msg(&Msg::EditBadgePending { count: pending as u64 }).to_string();
             return fits(text).map(|t| (t, th.edit_pending.bg(bg)));

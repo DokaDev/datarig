@@ -94,6 +94,7 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::YankFlash(_)
         | Setting::Tips(_)
         | Setting::ChangesView(_)
+        | Setting::PasteNull(_)
         | Setting::IdleDisconnect(_)
         | Setting::LockWait(_) => None,
     }
@@ -889,6 +890,7 @@ impl App {
                 self.changes_view = None;
                 self.set_prefs(s, |x| x.changes_view = v)
             }
+            Setting::PasteNull(n) => self.set_prefs(s, |x| x.paste_null = n),
             Setting::IdleDisconnect(d) => self.set_prefs(s, |x| x.idle_disconnect = d),
             Setting::LockWait(d) => self.set_prefs(s, |x| x.lock_wait = d),
         }

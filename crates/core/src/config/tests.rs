@@ -655,6 +655,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             yank_flash: YankFlash::On,
             tips: Tips::Always,
             changes_view: ChangesView::List,
+            paste_null: PasteNull::BackslashN,
             idle_disconnect: None,
             lock_wait: None,
         }
@@ -858,6 +859,34 @@ fn the_changes_tab_opens_in_its_list_unless_the_sql_is_chosen() {
     assert_eq!(load(Some(path.clone())).0.prefs, prefs);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("changes_view"), "list is the default: the key goes");
+}
+
+#[test]
+fn a_paste_reads_backslash_n_as_null_unless_another_token_is_chosen() {
+    assert_eq!(parse("").unwrap().prefs.paste_null, PasteNull::BackslashN);
+    assert_eq!(PasteNull::BackslashN.token(), "\\N");
+    assert_eq!(parse("[edit]\npaste_null = 'NULL'\n").unwrap().prefs.paste_null, PasteNull::Null);
+    assert_eq!(parse("[edit]\npaste_null = \"none\"\n").unwrap().prefs.paste_null.token(), "");
+    assert_eq!(parse("[edit]\npaste_null = '\\N'\n").unwrap().prefs.paste_null, PasteNull::BackslashN);
+    assert_eq!(
+        parse("[edit]\npaste_null = '\\n'\n").unwrap_err(),
+        ConfigError::Value {
+            key: "edit.paste_null".into(),
+            value: "\\n".into(),
+            profile: None,
+            allowed: Some("\\N, NULL, none")
+        }
+    );
+    let path = temp_file("paste_null");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "").unwrap();
+    let prefs = Prefs { paste_null: PasteNull::Null, ..Prefs::default() };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[edit]\npaste_null = \"NULL\"\n"), "{text}");
+    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("paste_null"), "\\N is the default: the key goes");
 }
 
 #[test]

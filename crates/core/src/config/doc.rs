@@ -80,6 +80,7 @@ pub const TABLES: &[TableDoc] = &[
     TableDoc { name: "editor", header: "[editor]", about: "The query editor.", alias_of: None },
     TableDoc { name: "explorer", header: "[explorer]", about: "The explorer.", alias_of: None },
     TableDoc { name: "ui", header: "[ui]", about: "Things the whole screen shows.", alias_of: None },
+    TableDoc { name: "edit", header: "[edit]", about: "Editing a result's rows.", alias_of: None },
     TableDoc { name: "secrets", header: "[secrets]", about: "Passwords and the OS keychain.", alias_of: None },
     TableDoc { name: "commands", header: "[commands]", about: "The `:` command line.", alias_of: None },
     TableDoc {
@@ -246,6 +247,8 @@ pub const KEYS: &[KeyDoc] = &[
         "",
     ),
     key("ui", "changes_view", "\"list\"", "`\"list\"`, `\"sql\"`", ""),
+    // [edit]
+    key("edit", "paste_null", "\"\\\\N\"", "`\"\\\\N\"`, `\"NULL\"`, `\"none\"`", ""),
     // [secrets]
     key(
         "secrets",

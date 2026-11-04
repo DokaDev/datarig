@@ -382,6 +382,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         edit_inserted: _,
         edit_deleted: _,
         edit_applied: _,
+        edit_invalid: _,
         match_paren: _,
         read_only_mark: _,
         danger_mark: _,
@@ -402,7 +403,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 64);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 65);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -673,6 +674,41 @@ fn new_and_deleted_rows_show_in_every_theme() {
         }
         assert!(delta_e(n, th.fg) >= 8.0, "{name}: a new row looks like body text");
         assert!(delta_e(n, fg(th.edit_changed)) >= 8.0, "{name}: a new row looks like a changed cell");
+    }
+}
+
+/// A value a paste put in a cell that its column does not take shows in every built-in theme
+/// in the theme's error color (darker on a light theme, lighter where a dark one's would not
+/// read on the selection), bold and underlined (it keeps the
+/// cell's background), apart from the other changes, readable on the background, the alternate
+/// rows, the selection and a selected range.
+#[test]
+fn invalid_values_show_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        let s = th.edit_invalid;
+        assert!(s.add_modifier.contains(Modifier::UNDERLINED), "{name}: edit_invalid shows without color");
+        assert!(s.fg.is_some() && s.fg != Some(th.fg) && s.fg != Some(th.null_fg), "{name}: edit_invalid");
+        for other in [th.edit_changed, th.edit_inserted, th.edit_deleted, th.edit_applied] {
+            assert!(s.fg != other.fg, "{name}: edit_invalid looks like {other:?}");
+        }
+        assert_eq!(s.bg, None, "{name}: edit_invalid hides the cell's background");
+    }
+    for (name, th) in rgb_themes() {
+        let i = fg(th.edit_invalid);
+        let (black, white) = (Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 255));
+        if contrast(th.bg, white) > contrast(th.bg, black) {
+            // The error color, lighter where it would not read on the selection.
+            assert!(contrast(i, black) >= contrast(th.error, black), "{name}: edit_invalid is the error color");
+        } else {
+            assert!(
+                contrast(i, white) > contrast(th.error, white),
+                "{name}: edit_invalid is darker than the error color"
+            );
+        }
+        for other in [th.bg, th.surface_alt, bg(th.selection), bg(th.range), bg(th.selection_unfocused())] {
+            let k = contrast(i, other);
+            assert!(k >= 3.0, "{name}: an invalid value on {other:?}: {k:.2}");
+        }
     }
 }
 

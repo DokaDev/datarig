@@ -129,6 +129,8 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space d p` | `edit.preview` | Show changes |  |
 | `Space d a` | `edit.apply` | Apply the pending changes (asked first) |  |
 | `Space d x` | `edit.discard` | Drop every pending change of the result |  |
+| `Space d v` | `edit.paste` | Paste the system clipboard into the grid |  |
+| `Space d V` | `edit.paste_as` | Paste again, read as the next format |  |
 | `Space r y t` | `results.copy.selection.tsv` | Copy selection: Without headers (TSV) |  |
 | `Space r y T` | `results.copy.selection.tsv_header` | Copy selection: With headers (TSV) |  |
 | `Space r y l` | `results.copy.selection.list` | Copy selection: Comma list |  |
@@ -700,7 +702,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 The status bar's one-line question before an Apply of a result's changes: `y` applies them; any other key, a click or a paste cancels, and does nothing else. Inside `root`.
 
-Reserved — the status bar's question: y does it, any other key cancels: `y`
+Reserved — the status bar's question: y does it (c or 1: text with commas read as CSV or one column), any other key cancels: `y` `c` `1`
 
 ## Command line only
 
@@ -803,6 +805,7 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `explorer.size_heat` | `3` `5` `off` | Explorer: size colors |
 | `ui.yank_flash` | `on` `off` | Flash copied cells |
 | `ui.changes_view` | `list` `sql` | Changes tab view |
+| `edit.paste_null` | `\N` `NULL` `none` | Paste NULL token |
 | `ui.tips` | `always` `until_used` `off` | Tips |
 | `idle_disconnect` | `off` `5m` `10m` `30m` `1h` | Close idle connections |
 | `lock_wait` | `off` `5s` `10s` `30s` `1m` | Lock wait limit |

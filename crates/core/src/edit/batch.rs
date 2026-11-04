@@ -64,6 +64,9 @@ pub struct PasteOps {
 pub struct PasteResult {
     /// How many cells it set to another value than the one they had.
     pub changed: usize,
+    /// How many rows it changed: rows of the result and new rows with a cell set to another
+    /// value, and the new rows it added.
+    pub rows: usize,
     /// The new rows it added, in order.
     pub added: Vec<u64>,
 }
@@ -85,11 +88,12 @@ pub enum PasteRefused {
 }
 
 /// What one user action changed, to undo it: the touched rows as they were, and the new rows
-/// as they were when it touched any.
+/// as they were when it touched any; `id` names the action, undone or not.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Step {
     rows: Vec<(usize, Option<RowEdit>)>,
     drafts: Option<Vec<Draft>>,
+    id: u64,
 }
 
 /// The pending changes of one result. Two batches are equal when their changes and their history
@@ -102,6 +106,7 @@ pub struct EditBatch {
     undo: Vec<Step>,
     redo: Vec<Step>,
     revision: u64,
+    next_step: u64,
 }
 
 impl PartialEq for EditBatch {
@@ -163,6 +168,17 @@ impl EditBatch {
 
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
+    }
+
+    /// The id of the action `undo` takes back next: it stays the same while that action is done,
+    /// undone and redone, and no other action has it.
+    pub fn last_step(&self) -> Option<u64> {
+        self.undo.last().map(|s| s.id)
+    }
+
+    /// The id of the action `redo` brings back next.
+    pub fn next_redo(&self) -> Option<u64> {
+        self.redo.last().map(|s| s.id)
     }
 
     /// Set cells `cells` (row, column) of the result's rows to `v`, as one action; `orig` gives a
@@ -283,19 +299,24 @@ impl EditBatch {
         if let Some(r) = add.iter().find(|r| r.len() != width) {
             return Err(PasteRefused::Width { values: r.len(), width });
         }
-        let changed = set
+        let mut cells: Vec<usize> = set
             .iter()
             .filter(|((r, c), v)| match self.value(*r, *c) {
                 Some(now) => now != v,
                 None => !same(v, read[r].get(*c)),
             })
-            .count()
-            + set_new
-                .iter()
-                .filter(|((id, c), v)| {
-                    self.drafts.iter().find(|d| d.id == *id).and_then(|d| d.cells.get(*c)) != Some(v)
-                })
-                .count();
+            .map(|((r, _), _)| *r)
+            .collect();
+        let mut new_cells: Vec<u64> = set_new
+            .iter()
+            .filter(|((id, c), v)| self.drafts.iter().find(|d| d.id == *id).and_then(|d| d.cells.get(*c)) != Some(v))
+            .map(|((id, _), _)| *id)
+            .collect();
+        let changed = cells.len() + new_cells.len();
+        // `set` and `set_new` are in row order: a row's cells are next to each other.
+        cells.dedup();
+        new_cells.dedup();
+        let changed_rows = cells.len() + new_cells.len() + add.len();
         let ids: Vec<u64> = (self.next_draft..).take(add.len()).collect();
         self.next_draft += add.len() as u64;
         let rows: Vec<usize> = read.keys().copied().collect();
@@ -325,7 +346,7 @@ impl EditBatch {
                 b.drafts.push(Draft { id, after: usize::MAX, cells });
             }
         });
-        Ok(PasteResult { changed, added: ids })
+        Ok(PasteResult { changed, rows: changed_rows, added: ids })
     }
 
     /// Drop the changes of cells `cells` (row, column) and of new rows' cells `new` (new row,
@@ -364,8 +385,8 @@ impl EditBatch {
 
     /// Forget every change and its history: after the changes were applied.
     pub fn clear(&mut self) {
-        let (next_draft, revision) = (self.next_draft, self.revision + 1);
-        *self = Self { next_draft, revision, ..Self::default() };
+        let (next_draft, next_step, revision) = (self.next_draft, self.next_step, self.revision + 1);
+        *self = Self { next_draft, next_step, revision, ..Self::default() };
     }
 
     /// Undo the last action; whether there was one.
@@ -388,7 +409,7 @@ impl EditBatch {
 
     /// Put back what `step` holds, and return what was there instead.
     fn swap(&mut self, step: Step) -> Step {
-        let mut back = Step::default();
+        let mut back = Step { id: step.id, ..Step::default() };
         for (row, was) in step.rows {
             let now = match was {
                 Some(e) => self.rows.insert(row, e),
@@ -411,11 +432,13 @@ impl EditBatch {
         let before = Step {
             rows: keys.iter().map(|r| (*r, self.rows.get(r).cloned())).collect(),
             drafts: drafts.then(|| self.drafts.clone()),
+            id: self.next_step,
         };
         f(self);
         let changed = before.rows.iter().any(|(r, was)| self.rows.get(r) != was.as_ref())
             || before.drafts.as_ref().is_some_and(|d| *d != self.drafts);
         if changed {
+            self.next_step += 1;
             self.undo.push(before);
             self.redo.clear();
             self.revision += 1;

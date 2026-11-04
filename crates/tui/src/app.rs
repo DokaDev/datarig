@@ -400,6 +400,8 @@ pub enum AppEvent {
     Folder(folder_read::FolderAnswer),
     /// A search job of a result grid answered.
     GridSearch(grid_search::Answer),
+    /// A read of the system clipboard answered.
+    Clipboard(edit::ClipAnswer),
 }
 
 /// Which session a driver event comes from.
@@ -555,6 +557,8 @@ pub struct App {
     pub shared: tunnel::SharedTunnels,
     pub status: Option<Notice>,
     pub transient: Option<(Notice, Instant)>,
+    /// Shorter forms of the notice `transient` holds when it is this message.
+    transient_shorter: Option<(Msg, Vec<Msg>)>,
     pub quit: bool,
     pub layout: Layout,
     pub keymap: Keymap,
@@ -582,6 +586,15 @@ pub struct App {
     pub ask: Option<edit::StatusAsk>,
     /// An Apply waiting for the counts of its rows found by their values.
     pub apply_wait: Option<edit::ApplyWait>,
+    /// A question (or a waiting Apply) ended without its answer: until when its answer keys are
+    /// ignored, and what it said.
+    pub(crate) ask_gone: Option<(Instant, Msg)>,
+    /// Text pasted into the grid, waiting for its result's table to be known.
+    pub(crate) paste_in: Option<edit::PasteIn>,
+    /// The last paste into a grid: `space d V` reads it again while it is the newest change.
+    pub(crate) last_paste: Option<edit::LastPaste>,
+    /// The reads of the system clipboard `space d v` makes.
+    pub(crate) clip_reads: edit::ClipReads,
     pub lang_setting: LangSetting,
     /// `[secrets] default_source`: the password source a new profile starts with.
     pub default_source: DefaultSource,
@@ -979,6 +992,7 @@ impl App {
             shared: tunnel::SharedTunnels::default(),
             status: status.clone(),
             transient: None,
+            transient_shorter: None,
             quit: false,
             layout: Layout::default(),
             keymap,
@@ -993,6 +1007,10 @@ impl App {
             changes_body: None,
             ask: None,
             apply_wait: None,
+            ask_gone: None,
+            paste_in: None,
+            last_paste: None,
+            clip_reads: Default::default(),
             lang_setting: LangSetting::parse(&cfg.language),
             default_source: cfg.default_source,
             prefs: cfg.prefs,
@@ -1893,6 +1911,17 @@ impl App {
     }
 
     /// Message for the status bar: transient > running > last status.
+    /// The shorter forms of the notice the status line shows, longest first (none while it
+    /// shows something else, or a notice flashed without them).
+    pub fn status_shorter(&self) -> Vec<String> {
+        match (&self.transient, &self.transient_shorter) {
+            (Some((n, _)), Some((of, forms))) if !self.tab_grabbed() && n.msg == *of => {
+                forms.iter().map(|m| self.i18n.msg(m).to_string()).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     pub fn status_line(&mut self) -> Option<(Localized, Level, bool)> {
         // A tab moved by keys: how (no timer: it stays while the move does).
         if self.tab_grabbed() {
@@ -1910,10 +1939,14 @@ impl App {
         if let Some(text) = self.apply_wait_text() {
             return Some((Localized::verbatim(text), Level::Info, true));
         }
-        // Why the cell editor did not take its text, while it is open.
-        let refused = (!self.tabs.is_empty()).then(|| self.tab().cell_edit.as_ref()?.error.clone()).flatten();
-        if let Some(reason) = refused {
-            return Some((self.i18n.msg(&Msg::EditRefused { reason }), Level::Info, false));
+        // Why the cell editor did not take its text, or why the value it opened with is not
+        // valid, while it is open.
+        let refused = (!self.tabs.is_empty()).then(|| self.tab().cell_edit.as_ref()).flatten();
+        if let Some(e) = refused
+            && let Some(reason) = e.error.clone()
+        {
+            let msg = if e.invalid { Msg::EditNotValid { reason } } else { Msg::EditRefused { reason } };
+            return Some((self.i18n.msg(&msg), Level::Info, false));
         }
         // An answer waits for transactions to end (whichever tab is shown).
         if let Some(m) = self.end_pending_status() {
@@ -2058,6 +2091,12 @@ impl App {
 
     fn flash(&mut self, m: Notice) {
         self.transient = Some((m, Instant::now()));
+    }
+
+    /// [`App::flash`] `m`, with forms of it for a status bar too narrow for it, longest first.
+    fn flash_shorter(&mut self, m: Notice, shorter: Vec<Msg>) {
+        self.transient_shorter = Some((m.msg.clone(), shorter));
+        self.flash(m);
     }
 
     /// Show `m` in the status bar, unless the active tab's own warning is there and `m` is less

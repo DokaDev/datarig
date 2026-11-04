@@ -62,6 +62,14 @@ Things the whole screen shows.
 | `tips` | `"always"` | `"always"`, `"until_used"`, `"off"` (`"on"`, its old value, reads as `"always"`; `true` and `false` read as `"always"` and `"off"`) | Whether empty places show a tip about a key (an empty editor or result, the workspace without tabs, spare room in the status bar), the welcome panel its first steps, and an action run from a menu a few times names its key once. Always: the tips of a place take turns and keep coming back; a tip about a key you already used shows less often. Until used: a tip goes away once you used its key. Tips follow the key bindings, remapped keys included. Also `:set ui.tips`. |
 | `changes_view` | `"list"` | `"list"`, `"sql"` | What the Changes tab of a result shows first: one line per changed cell, or the statements that apply the changes. In the Changes tab, s switches between them for this run. Also `:set ui.changes_view`. |
 
+## `[edit]`
+
+Editing a result's rows.
+
+| Key | Default | Values | Description |
+|---|---|---|---|
+| `paste_null` | `"\\N"` | `"\\N"`, `"NULL"`, `"none"` | The text an unquoted field of a range pasted into a result reads as NULL. An empty field is an empty value, never NULL. Also `:set edit.paste_null`. |
+
 ## `[secrets]`
 
 Passwords and the OS keychain.

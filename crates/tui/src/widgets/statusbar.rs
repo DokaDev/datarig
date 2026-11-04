@@ -86,6 +86,7 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let lang = lang_segment(app);
     let hints = app.hints();
     let status = app.status_line();
+    let shorter = app.status_shorter();
     // `detail_view = statusbar`: the selected cell in the message's place while the grid has
     // the focus (a fresh notice still comes first).
     let preview = (app.detail.visible
@@ -227,8 +228,15 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
     let mut used = 0;
     for (s, st) in msg_segs {
+        let room = msg_room.saturating_sub(used);
+        // Too long: its longest shorter form that fits, else the shortest.
+        let s = match shorter.iter().find(|f| width(f) <= room) {
+            _ if width(&s) <= room || shorter.is_empty() => s,
+            Some(f) => f.clone(),
+            None => shorter.last().cloned().unwrap_or(s),
+        };
         // Cut in the middle: the end of a message says what to do.
-        let c = clip_middle(&s, msg_room.saturating_sub(used));
+        let c = clip_middle(&s, room);
         used += width(&c);
         segs.push((c, st));
     }

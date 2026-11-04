@@ -18,20 +18,33 @@ fn ok(s: &str) -> (Format, Vec<Vec<Value>>) {
     (p.format, p.rows)
 }
 
+/// `s` read as CSV, as asked.
+fn csv(s: &str) -> Result<Vec<Vec<Value>>, PasteError> {
+    parse_as(s, Format::Csv, &PasteOpts::default()).map(|p| p.rows)
+}
+
+fn ambiguous(csv: Result<usize, PasteError>, plain: Result<Format, PasteError>) -> Result<Pasted, PasteError> {
+    Err(PasteError::Ambiguous { csv: csv.map_err(Box::new), plain: plain.map_err(Box::new) })
+}
+
 #[test]
-fn the_format_is_tsv_then_csv_then_one_value_per_line_then_one_value() {
+fn the_format_is_tsv_then_one_value_per_line_then_one_value_and_commas_are_asked_about() {
     assert_eq!(ok("a\tb\nc\td"), (Format::Tsv, rows(&[&["a", "b"], &["c", "d"]])));
-    assert_eq!(ok("a,b\nc,d"), (Format::Csv, rows(&[&["a", "b"], &["c", "d"]])));
+    assert_eq!(read("a,b\nc,d"), ambiguous(Ok(2), Ok(Format::Column)));
+    assert_eq!(csv("a,b\nc,d"), Ok(rows(&[&["a", "b"], &["c", "d"]])));
     assert_eq!(ok("a\nb\n"), (Format::Column, rows(&[&["a"], &["b"]])));
     assert_eq!(ok("a b"), (Format::One, rows(&[&["a b"]])));
-    // A tab anywhere wins over commas; a comma only on a later line is not CSV.
+    // A tab anywhere wins over commas.
     assert_eq!(read("a,b\nc\td"), Err(PasteError::Ragged { row: 2, values: 2, first_row: 1, first_values: 1 }));
-    assert_eq!(ok("a\nb,c").0, Format::Column);
+    // A comma on any line is asked about.
+    let ragged = PasteError::Ragged { row: 2, values: 2, first_row: 1, first_values: 1 };
+    assert_eq!(read("a\nb,c"), ambiguous(Err(ragged), Ok(Format::Column)));
     // A comma inside a TSV cell is the cell's.
     assert_eq!(ok("1,5\tx"), (Format::Tsv, rows(&[&["1,5", "x"]])));
     // A tab inside a CSV quote is the value's, and not a TSV.
-    assert_eq!(ok("\"a\tb\",c"), (Format::Csv, rows(&[&["a\tb", "c"]])));
-    // A comma inside a quote on the first line is not CSV.
+    assert_eq!(read("\"a\tb\",c"), ambiguous(Ok(2), Ok(Format::One)));
+    assert_eq!(csv("\"a\tb\",c"), Ok(rows(&[&["a\tb", "c"]])));
+    // A comma inside a quote is not asked about.
     assert_eq!(ok("\"a,b\"\n\"c,d\""), (Format::Column, rows(&[&["a,b"], &["c,d"]])));
     // A line break inside a quote is not a second line.
     assert_eq!(ok("\"a\nb\""), (Format::One, rows(&[&["a\nb"]])));
@@ -40,7 +53,7 @@ fn the_format_is_tsv_then_csv_then_one_value_per_line_then_one_value() {
 #[test]
 fn quotes_are_read_as_rfc_4180_in_tsv_and_csv() {
     assert_eq!(ok("\"a\"\"b\"\tc"), (Format::Tsv, rows(&[&["a\"b", "c"]])));
-    assert_eq!(ok("\"x\ny\",z\nu,v"), (Format::Csv, rows(&[&["x\ny", "z"], &["u", "v"]])));
+    assert_eq!(csv("\"x\ny\",z\nu,v"), Ok(rows(&[&["x\ny", "z"], &["u", "v"]])));
     assert_eq!(ok("\"\"\t\"\t\""), (Format::Tsv, rows(&[&["", "\t"]])));
     // A quote inside an unquoted field is a character of it.
     assert_eq!(ok("say \"hi\"\tb"), (Format::Tsv, rows(&[&["say \"hi\"", "b"]])));
@@ -68,7 +81,7 @@ fn a_quote_left_open_is_refused_and_never_read_as_one_value() {
 
 #[test]
 fn a_byte_order_mark_at_the_start_is_not_read() {
-    assert_eq!(ok("\u{FEFF}\"a,b\",c"), (Format::Csv, rows(&[&["a,b", "c"]])));
+    assert_eq!(csv("\u{FEFF}\"a,b\",c"), Ok(rows(&[&["a,b", "c"]])));
     assert_eq!(ok("\u{FEFF}a\tb"), (Format::Tsv, rows(&[&["a", "b"]])));
     let p = parse_as("\u{FEFF}\"x\"", Format::Column, &PasteOpts::default());
     assert_eq!(p.map(|p| p.rows), Ok(rows(&[&["x"]])));
@@ -95,7 +108,7 @@ fn one_final_line_end_is_dropped_and_empty_lines_are_rows() {
     assert_eq!(ok("a\tb\r\n"), (Format::Tsv, rows(&[&["a", "b"]])));
     assert_eq!(ok("a\tb\n\nc\td\n"), (Format::Tsv, rows(&[&["a", "b"], &["", ""], &["c", "d"]])));
     // An empty line at the start is a row of empty values.
-    assert_eq!(ok("\na,b"), (Format::Csv, rows(&[&["", ""], &["a", "b"]])));
+    assert_eq!(csv("\na,b"), Ok(rows(&[&["", ""], &["a", "b"]])));
     assert_eq!(ok("\na\tb\n"), (Format::Tsv, rows(&[&["", ""], &["a", "b"]])));
     // An empty line at the end is a row of one empty value: kept by one value per line, refused
     // by wider rows.
@@ -119,8 +132,8 @@ fn rows_of_another_width_are_refused() {
         read("a\tb\tc\nd\te\tf\ng\th\ti\tj"),
         Err(PasteError::Ragged { row: 3, values: 4, first_row: 1, first_values: 3 })
     );
-    assert_eq!(read("a,b\nc"), Err(PasteError::Ragged { row: 2, values: 1, first_row: 1, first_values: 2 }));
-    assert_eq!(read("\na,b\nc,d,e"), Err(PasteError::Ragged { row: 3, values: 3, first_row: 2, first_values: 2 }));
+    assert_eq!(csv("a,b\nc"), Err(PasteError::Ragged { row: 2, values: 1, first_row: 1, first_values: 2 }));
+    assert_eq!(csv("\na,b\nc,d,e"), Err(PasteError::Ragged { row: 3, values: 3, first_row: 2, first_values: 2 }));
 }
 
 #[test]
@@ -146,10 +159,10 @@ fn only_an_unquoted_null_token_is_null_and_an_empty_field_is_an_empty_text() {
     assert_eq!(ok("\\N").1, [vec![Value::Null]]);
     assert_eq!(ok("\"\\N\"").1, [vec![text("\\N")]]);
     let opts = PasteOpts { null: "NULL".into() };
-    assert_eq!(parse("\\N,NULL", &opts).unwrap().rows, [vec![text("\\N"), Value::Null]]);
+    assert_eq!(parse_as("\\N,NULL", Format::Csv, &opts).unwrap().rows, [vec![text("\\N"), Value::Null]]);
     // No token: an empty field stays an empty text.
     let opts = PasteOpts { null: String::new() };
-    assert_eq!(parse("a,", &opts).unwrap().rows, [vec![text("a"), text("")]]);
+    assert_eq!(parse_as("a,", Format::Csv, &opts).unwrap().rows, [vec![text("a"), text("")]]);
     assert!(ok("DEFAULT\t\\N").1.iter().flatten().all(|v| *v != Value::Default));
 }
 
@@ -247,15 +260,47 @@ fn what_the_tsv_and_csv_copies_write_reads_back_as_the_same_cells() {
         let tsv = export::tsv(&columns, &row_refs, false);
         let csv = export::csv(&columns, &row_refs, false);
         if columns.len() == 1 {
-            // One column: one value per line, whatever its values look like.
+            // One column: one value per line, whatever its values look like; without tabs, as
+            // it looks, commas in its values asked about, never split.
             assert_eq!(parse_as(&tsv, Format::Column, &opts).map(|p| p.rows), Ok(want.clone()), "{tsv:?}");
-            assert_eq!(parse_as(&csv, Format::Column, &opts).map(|p| p.rows), Ok(want), "{csv:?}");
+            assert_eq!(parse_as(&csv, Format::Column, &opts).map(|p| p.rows), Ok(want.clone()), "{csv:?}");
+            for copy in [&tsv, &csv].into_iter().filter(|_| !tabs) {
+                let got = match parse(copy, &opts) {
+                    Err(PasteError::Ambiguous { plain: Ok(f), .. }) => parse_as(copy, f, &opts),
+                    got => got,
+                };
+                assert_eq!(got.map(|p| p.rows), Ok(want.clone()), "{copy:?}");
+            }
             continue;
         }
         assert_eq!(parse(&tsv, &opts), Ok(Pasted { format: Format::Tsv, rows: want.clone() }), "{tsv:?}");
         assert_eq!(parse_as(&csv, Format::Csv, &opts).map(|p| p.rows), Ok(want.clone()), "{csv:?}");
         if !tabs {
-            assert_eq!(parse(&csv, &opts), Ok(Pasted { format: Format::Csv, rows: want }), "{csv:?}");
+            // CSV is never guessed: asked about, as wide as it is.
+            let width = cells[0].len();
+            assert!(
+                matches!(parse(&csv, &opts), Err(PasteError::Ambiguous { csv: Ok(w), .. }) if w == width),
+                "{csv:?}"
+            );
         }
     }
+}
+
+#[test]
+fn commas_without_a_tab_are_asked_about_with_what_each_reading_gives() {
+    // One line: CSV, or one value.
+    assert_eq!(read("q@x,qq"), ambiguous(Ok(2), Ok(Format::One)));
+    assert_eq!(read("1,5\n"), ambiguous(Ok(2), Ok(Format::One)));
+    // A column copied whose values have commas: never split.
+    let copy = export::tsv(&[Column { name: "c", kind: Kind::Text }], &[vec![Some("1,5")], vec![Some("x")]], false);
+    let ragged = PasteError::Ragged { row: 2, values: 1, first_row: 1, first_values: 2 };
+    assert_eq!(read(&copy), ambiguous(Err(ragged), Ok(Format::Column)));
+    assert_eq!(parse_as(&copy, Format::Column, &PasteOpts::default()).unwrap().rows, rows(&[&["1,5"], &["x"]]));
+    // Only one reading reads it: the other one's refusal is said.
+    assert_eq!(read("\"a\",b\nc,d"), ambiguous(Ok(2), Err(PasteError::Quote { row: 1 })));
+    assert_eq!(read("a,\"b"), ambiguous(Err(PasteError::Quote { row: 1 }), Ok(Format::One)));
+    // Neither: refused as CSV refuses it.
+    assert_eq!(read("a,b\n\"c"), Err(PasteError::Quote { row: 2 }));
+    // No comma outside quotes: nothing to ask.
+    assert_eq!(ok("\"a,b\""), (Format::One, rows(&[&["a,b"]])));
 }

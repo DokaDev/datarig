@@ -10,11 +10,36 @@
 //!
 //! The question is for the changes as they were asked about: an edit, another connection or
 //! session, a transaction that began or ended, another tab or a run drops it, said.
+//!
+//! A question (or an Apply waiting for its counts) that ends without its answer, cancelled or
+//! dropped, or a wait whose answers ask nothing, leaves [`ANSWER_GUARD`] in which the keys that
+//! answer questions do nothing in the results but say they were ignored, with what was said: one
+//! pressed as it went is never taken by the grid (where `y` copies over the clipboard).
 
 use super::changes::{ChangesModel, Planned};
 use super::*;
 use datarig_core::driver::ApplyTx;
 use datarig_core::edit::PlanError;
+use datarig_core::edit::paste::Format;
+
+/// How long after a question ended without its answer its answer keys are ignored.
+pub const ANSWER_GUARD: Duration = Duration::from_secs(1);
+
+/// The keys that answer a question of the status bar (as typed on QWERTY).
+const ANSWER_KEYS: [char; 4] = ['y', 'n', 'c', '1'];
+
+/// The key `key` types as QWERTY has it (a jamo typed with a Korean input source: its key),
+/// without Ctrl, Alt or Super.
+fn typed_key(key: &KeyEvent) -> Option<char> {
+    if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER) {
+        return None;
+    }
+    let KeyCode::Char(c) = key.code else { return None };
+    match crate::input::hangul::keys(c) {
+        Some(k) => (k.len() == 1).then(|| k[0]),
+        None => Some(c),
+    }
+}
 
 /// A question in the status bar, in place of its segments: the first of `forms` (longest first)
 /// that fits, in the tone of `tone`; what `y` does.
@@ -30,6 +55,10 @@ pub struct StatusAsk {
 pub enum AskAction {
     /// Apply the changes as they were asked about.
     ApplyEdits(ApplyAsk),
+    /// Paste many rows, as they were asked about.
+    Paste(Box<super::PasteAsk>),
+    /// Read text with commas as CSV (`c`) or one column (`1`).
+    Csv(Box<super::CsvAsk>),
 }
 
 /// The changes an Apply was asked for: the tab, its result, what the rows were read under, the
@@ -92,19 +121,21 @@ impl App {
             self.apply_wait = Some(ApplyWait { tab, result, bound, revision, format, rows });
             return;
         }
-        self.apply_decide(tab, result, bound, format);
+        self.apply_decide(tab, result, bound, format, false);
     }
 
     /// The counts of an Apply came (or none was needed): the changes' problems in the Changes
-    /// tab, the preview, or the question in the status bar.
-    fn apply_decide(&mut self, tab: TabId, result: u64, bound: Bound, format: EditFormat) {
+    /// tab, the preview, or the question in the status bar. Not asked after a wait (`waited`),
+    /// its answer keys are ignored a while: one typed for the question never lands elsewhere.
+    fn apply_decide(&mut self, tab: TabId, result: u64, bound: Bound, format: EditFormat, waited: bool) {
         let Some(m) = self.changes_model(tab, result, format) else { return };
         let Some(t) = self.tabs.get(tab) else { return };
         let Some(rs) = rows_of(t).filter(|rs| rs.id == result) else { return };
         let count = m.problems.iter().filter(|p| !p.choice).count() as u64;
         if count > 0 {
             self.changes_show_problems();
-            return self.flash(Notice::new(Msg::EditAskProblems { count }, Level::Info));
+            let said = Msg::EditAskProblems { count };
+            return if waited { self.ask_ended(said) } else { self.flash(Notice::new(said, Level::Info)) };
         }
         let choose = matches!(m.planned, Planned::Refused(PlanError::Choose { .. }));
         // An environment that can't be read confirms every write.
@@ -113,7 +144,12 @@ impl App {
             return self.edit_preview_push(format, bound);
         }
         let Planned::Ready(plan) = &m.planned else {
-            return self.say_cant_apply(m.why_not.clone().unwrap_or_default());
+            let reason = m.why_not.clone().unwrap_or_default();
+            return if waited {
+                self.ask_ended(Msg::EditPreviewCantApply { reason })
+            } else {
+                self.say_cant_apply(reason)
+            };
         };
         let forms = self.apply_ask_forms(t, rs, &m);
         let action = AskAction::ApplyEdits(ApplyAsk {
@@ -223,37 +259,86 @@ impl App {
             && self.edit_bound(t).as_ref() == Some(&w.bound)
     }
 
-    /// A key while the status bar asks: `y` applies, any other key cancels; neither does
-    /// anything else. A held key does nothing.
+    /// A key while the status bar asks: `y` (`c` or `1` for text with commas) answers, any
+    /// other key cancels; neither does anything else. A held key does nothing.
     pub(in crate::app) fn status_ask_key(&mut self, key: KeyEvent, repeat: bool) {
         if repeat {
             return;
         }
-        let plain = !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
-        let yes = plain
-            && match key.code {
-                KeyCode::Char('y') => true,
-                // `y` typed with a Korean input source.
-                KeyCode::Char(c) => crate::input::hangul::keys(c).is_some_and(|k| k == ['y']),
-                _ => false,
+        let typed = typed_key(&key);
+        if let Some(StatusAsk { action: AskAction::Csv(a), .. }) = &self.ask {
+            let format = match typed {
+                Some('c') => a.csv.map(|_| Format::Csv),
+                Some('1') => a.plain,
+                _ => None,
             };
-        if yes { self.status_ask_yes() } else { self.status_ask_cancel() }
+            if let Some(f) = format
+                && let Some(StatusAsk { action: AskAction::Csv(a), .. }) = self.ask.take()
+            {
+                return self.csv_ask_answer(*a, f);
+            }
+            return self.status_ask_cancel();
+        }
+        if typed == Some('y') { self.status_ask_yes() } else { self.status_ask_cancel() }
+    }
+
+    /// A question (or an Apply waiting for its counts) ended without its answer: `said` is
+    /// said, and its answer keys are ignored for [`ANSWER_GUARD`].
+    pub(in crate::app) fn ask_ended(&mut self, said: impl Into<Msg>) {
+        let said = said.into();
+        self.ask_gone = Some((self.now() + ANSWER_GUARD, said.clone()));
+        self.flash(Notice::new(said, Level::Info));
+    }
+
+    /// `key` is an answer key pressed in the results within [`ANSWER_GUARD`] of a question that
+    /// ended without its answer: taken, said, doing nothing else.
+    pub(in crate::app) fn answer_swallowed(&mut self, key: &KeyEvent) -> bool {
+        let Some((until, said)) = &self.ask_gone else { return false };
+        if self.now() >= *until {
+            self.ask_gone = None;
+            return false;
+        }
+        // The inspector's keys copy too (a plan's text, a chart's data).
+        let results = match self.focus {
+            Focus::Results => !self.cell_edit_open() && !self.grid_prompt_open(),
+            Focus::Inspector => true,
+            Focus::Tree | Focus::Editor => false,
+        };
+        let Some(k) = typed_key(key).filter(|k| results && ANSWER_KEYS.contains(k)) else { return false };
+        let said = self.i18n.msg(said).to_string();
+        self.flash(Notice::new(Msg::EditAskIgnored { said, key: k.to_string() }, Level::Info));
+        true
     }
 
     /// Any input but `y` while the status bar asks (another key, a click, the wheel, a paste):
     /// it cancels.
     pub(in crate::app) fn status_ask_cancel(&mut self) {
-        if self.ask.take().is_some() {
-            self.flash(Notice::new(Label::EditAskCancelled, Level::Info));
-        }
+        let said = match self.ask.take().map(|a| a.action) {
+            Some(AskAction::ApplyEdits(_)) => Label::EditAskCancelled,
+            Some(AskAction::Paste(p)) => {
+                self.paste_ask_dropped(*p);
+                Label::EditPasteCancelled
+            }
+            Some(AskAction::Csv(a)) => {
+                self.csv_ask_dropped(*a);
+                Label::EditPasteCancelled
+            }
+            None => return,
+        };
+        self.ask_ended(said);
     }
 
     /// `y`: the statements asked about, still those of the changes, go to the tab's session.
     fn status_ask_yes(&mut self) {
         let Some(ask) = self.ask.take() else { return };
-        let AskAction::ApplyEdits(a) = ask.action;
+        let a = match ask.action {
+            AskAction::ApplyEdits(a) => a,
+            AskAction::Paste(p) => return self.paste_ask_yes(*p),
+            // Answered by `c` or `1` only.
+            AskAction::Csv(_) => return,
+        };
         if !self.ask_current(&a) {
-            return self.flash(Notice::new(Label::EditAskMoved, Level::Info));
+            return self.ask_ended(Label::EditAskMoved);
         }
         let tx = match self.tabs.get(a.tab) {
             Some(t) if self.manual_commit(a.tab) => ApplyTx::Keep { idle_timeout: self.manual_idle_timeout(t) },
@@ -266,7 +351,7 @@ impl App {
     /// it waits no more, said.
     pub(in crate::app) fn apply_wait_cancel(&mut self) {
         if self.apply_wait.take().is_some() {
-            self.flash(Notice::new(Label::EditAskCancelled, Level::Info));
+            self.ask_ended(Label::EditAskCancelled);
         }
     }
 
@@ -278,12 +363,28 @@ impl App {
             && !self.ask_current(a)
         {
             self.ask = None;
-            self.flash(Notice::new(Label::EditAskMoved, Level::Info));
+            self.ask_ended(Label::EditAskMoved);
+        }
+        if let Some(StatusAsk { action: AskAction::Paste(a), .. }) = &self.ask
+            && !self.paste_current(a)
+        {
+            if let Some(StatusAsk { action: AskAction::Paste(a), .. }) = self.ask.take() {
+                self.paste_ask_dropped(*a);
+            }
+            self.ask_ended(Label::EditPasteMoved);
+        }
+        if let Some(StatusAsk { action: AskAction::Csv(a), .. }) = &self.ask
+            && !self.csv_current(a)
+        {
+            if let Some(StatusAsk { action: AskAction::Csv(a), .. }) = self.ask.take() {
+                self.csv_ask_dropped(*a);
+            }
+            self.ask_ended(Label::EditPasteMoved);
         }
         let Some(w) = &self.apply_wait else { return };
         if !self.wait_current(w) {
             self.apply_wait = None;
-            return self.flash(Notice::new(Label::EditAskCancelled, Level::Info));
+            return self.ask_ended(Label::EditAskCancelled);
         }
         let Some(rs) = rows_of(self.tab()) else { return };
         // The counts are those of this revision: the Changes tab may have counted it afresh
@@ -291,13 +392,13 @@ impl App {
         if rs.edit.batch.revision() != w.revision || rs.edit.checks.for_revision() != w.revision {
             self.apply_wait = None;
             let keys = self.apply_keys();
-            return self.flash(Notice::new(Msg::EditAskChanged { keys }, Level::Info));
+            return self.ask_ended(Msg::EditAskChanged { keys });
         }
         if !rs.edit.checks.asked().is_empty() {
             return;
         }
         let Some(w) = self.apply_wait.take() else { return };
-        self.apply_decide(w.tab, w.result, w.bound, w.format);
+        self.apply_decide(w.tab, w.result, w.bound, w.format, true);
     }
 
     /// The keys of `edit.apply` in the grid, as the hints say them.

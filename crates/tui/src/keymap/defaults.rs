@@ -385,6 +385,8 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Nav, "space d p", "edit.preview"),
     (Nav, "space d a", "edit.apply"),
     (Nav, "space d x", "edit.discard"),
+    (Nav, "space d v", "edit.paste"),
+    (Nav, "space d V", "edit.paste_as"),
     (Nav, "space r y t", "results.copy.selection.tsv"),
     (Nav, "space r y T", "results.copy.selection.tsv_header"),
     (Nav, "space r y l", "results.copy.selection.list"),
@@ -695,7 +697,11 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (Password, &["esc", "enter", "tab", "shift+tab"], "password prompt"),
     (Password, TEXT, "text input"),
     (Confirm, &["y", "n", "enter", "esc"], "confirmation (Enter keeps what would be lost)"),
-    (StatusAsk, &["y"], "the status bar's question: y does it, any other key cancels"),
+    (
+        StatusAsk,
+        &["y", "c", "1"],
+        "the status bar's question: y does it (c or 1: text with commas read as CSV or one column), any other key cancels",
+    ),
     (
         RunConfirm,
         &["y", "n", "enter", "esc", "tab", "shift+tab", "left", "right", "h", "l"],

@@ -13,11 +13,11 @@
 //! [`complete_arg`].
 
 use super::action::{Action, LangSetting};
-use datarig_core::config::ChangesView;
 use datarig_core::config::{
     AutoPairs, ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
     IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat, SoftTabBackspace, Tips, YankFlash,
 };
+use datarig_core::config::{ChangesView, PasteNull};
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
 use std::time::Duration;
@@ -484,6 +484,7 @@ pub enum Setting {
     YankFlash(YankFlash),
     Tips(Tips),
     ChangesView(ChangesView),
+    PasteNull(PasteNull),
     /// `idle_disconnect` (`None`: off).
     IdleDisconnect(Option<Duration>),
     /// `lock_wait` (`None`: off).
@@ -766,6 +767,17 @@ pub const SETTINGS: &[SettingSpec] = &[
         ]),
     },
     SettingSpec {
+        key: "edit.paste_null",
+        label: Label::SettingPasteNull,
+        about: Label::SettingPasteNullAbout,
+        group: SettingGroup::Results,
+        values: Values::Fixed(&[
+            ("\\N", Setting::PasteNull(PasteNull::BackslashN), Label::SettingPasteNullBackslashN),
+            ("NULL", Setting::PasteNull(PasteNull::Null), Label::SettingPasteNullNull),
+            ("none", Setting::PasteNull(PasteNull::None), Label::SettingPasteNullNone),
+        ]),
+    },
+    SettingSpec {
         key: "ui.tips",
         label: Label::SettingTips,
         about: Label::SettingTipsAbout,
@@ -870,7 +882,10 @@ pub fn parse_set(arg: &str) -> Result<SetValue<'_>, SetError> {
         ("ui.tips", v) if v == "on" => "always".to_string(),
         (_, v) => v,
     };
-    let found = values.iter().find(|v| v.0 == value_lc).map(|v| v.1).or_else(|| duration_setting(spec, &value_lc));
+    // A value written in capitals (`edit.paste_null`'s `\N`, `NULL`) is taken as written.
+    let found = (values.iter().find(|v| v.0 == value).or_else(|| values.iter().find(|v| v.0 == value_lc)))
+        .map(|v| v.1)
+        .or_else(|| duration_setting(spec, &value_lc));
     found.map(SetValue::Setting).ok_or_else(|| SetError::BadValue {
         key: spec.key,
         value: value.to_string(),
