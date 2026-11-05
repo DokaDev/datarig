@@ -620,16 +620,23 @@ impl App {
     }
 
     /// A character was typed in Insert mode: refine an open popup at once, otherwise
-    /// schedule it (after `.`, a string's opening quote, or once the identifier has
-    /// `COMPLETION_MIN_PREFIX` chars; an identifier character typed while it is scheduled
-    /// keeps it so: `shop.u`, `'p`).
+    /// schedule it `[editor] completion_delay_ms` from now, opened at that deadline (after `.`,
+    /// a string's opening quote, or once the identifier has `COMPLETION_MIN_PREFIX` chars; an
+    /// identifier character typed while it is scheduled keeps it so: `shop.u`, `'p`); with no
+    /// delay it opens at once.
     pub(super) fn on_typed(&mut self, c: char) {
         let quote = self.tab_dialect(self.tab().id).string_quotes().contains(&c);
         let pending = is_ident_char(c) && self.tab().completion_due.is_some();
         if self.tab().popup.is_some() {
             self.update_completion(false);
         } else if c == '.' || quote || pending || self.ident_prefix_len() >= COMPLETION_MIN_PREFIX {
-            self.tab_mut().completion_due = Some(Instant::now() + COMPLETION_DEBOUNCE);
+            let delay = Duration::from_millis(self.prefs.completion_delay.millis());
+            if delay.is_zero() {
+                self.tab_mut().completion_due = None;
+                self.update_completion(false);
+            } else {
+                self.tab_mut().completion_due = Some(self.now() + delay);
+            }
         } else {
             self.tab_mut().completion_due = None;
         }

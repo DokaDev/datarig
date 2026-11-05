@@ -647,6 +647,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             editor_clipboard: EditorClipboard::On,
             format_case: KeywordCase::Preserve,
             format_indent: FormatIndent::Four,
+            completion_delay: CompletionDelay::Ms60,
             auto_pairs: AutoPairs::Off,
             soft_tab_backspace: SoftTabBackspace::On,
             run_hints: RunHints::On,
@@ -2463,4 +2464,35 @@ fn old_startup_keys_keep_their_text_until_what_they_say_changes() {
     assert_eq!(back.connections[1].session, SessionRef::Off);
     assert_eq!(back.policies.environment("test").unwrap().policy.session.mysql.as_deref(), Some("mine"));
     assert_eq!(back.sessions.len(), 2);
+}
+
+/// `[editor] completion_delay_ms`: one of the delays the settings offer (60 without it, 0 opens
+/// at once), a number; written only when not the default.
+#[test]
+fn completion_delay_is_read_checked_and_saved() {
+    assert_eq!(parse("").unwrap().prefs.completion_delay, CompletionDelay::Ms60);
+    assert_eq!(parse("[editor]\ncompletion_delay_ms = 0\n").unwrap().prefs.completion_delay, CompletionDelay::Off);
+    assert_eq!(CompletionDelay::Off.millis(), 0);
+    let cfg = parse("[editor]\ncompletion_delay_ms = 150\n").unwrap();
+    assert_eq!((cfg.prefs.completion_delay, cfg.prefs.completion_delay.millis()), (CompletionDelay::Ms150, 150));
+    assert_eq!(
+        parse("[editor]\ncompletion_delay_ms = 70\n").unwrap_err(),
+        ConfigError::Value {
+            key: "editor.completion_delay_ms".into(),
+            value: "70".into(),
+            profile: None,
+            allowed: Some("60, 0, 30, 100, 150, 250")
+        }
+    );
+    assert!(parse("[editor]\ncompletion_delay_ms = \"60\"\n").is_err(), "a number, not a string");
+    let path = temp_file("completion_delay");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "").unwrap();
+    let prefs = Prefs { completion_delay: CompletionDelay::Off, ..Prefs::default() };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[editor]\ncompletion_delay_ms = 0\n"), "{text}");
+    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("completion_delay"), "60 is the default: the key goes");
 }

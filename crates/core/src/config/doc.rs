@@ -231,6 +231,7 @@ pub const KEYS: &[KeyDoc] = &[
     key("editor", "clipboard", "\"on\"", "`\"on\"`, `\"off\"`", ""),
     key("editor", "format_keyword_case", "\"preserve\"", "`\"preserve\"`, `\"upper\"`, `\"lower\"`", ""),
     key("editor", "format_indent", "4", "`4`, `2`", ""),
+    key("editor", "completion_delay_ms", "60", "`60`, `0`, `30`, `100`, `150`, `250`", ""),
     key("editor", "auto_pairs", "\"off\"", "`\"off\"`, `\"on\"`", ""),
     key("editor", "soft_tab_backspace", "\"on\"", "`\"on\"`, `\"off\"`", ""),
     key("editor", "run_hints", "\"on\"", "`\"on\"`, `\"off\"`", ""),

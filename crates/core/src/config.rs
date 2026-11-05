@@ -25,7 +25,8 @@
 //! quotes typed in Insert mode get their closing character, `[editor] soft_tab_backspace`
 //! whether Backspace in Insert mode deletes the spaces back to the tab stop at once,
 //! `[editor] run_hints` whether the editor shows what a statement's last run did after its
-//! last line. The retired
+//! last line, `[editor] completion_delay_ms` how long the completion popup waits after the last
+//! keystroke before it opens by itself. The retired
 //! `[editor] mode` key (the editor has vim keys only) is accepted with any value, ignored and
 //! dropped by the next save. `[explorer] size_heat` says whether, and in how many levels, the
 //! explorer colors the estimates of the largest tables of each schema (`on`, its old value,
@@ -342,6 +343,8 @@ struct EditorSection {
     soft_tab_backspace: Option<String>,
     #[serde(default)]
     run_hints: Option<String>,
+    #[serde(default)]
+    completion_delay_ms: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -575,6 +578,53 @@ impl Choice for FormatIndent {
         match self {
             FormatIndent::Four => "4",
             FormatIndent::Two => "2",
+        }
+    }
+}
+
+/// `[editor] completion_delay_ms`: how long the completion popup waits after the last keystroke
+/// before it opens by itself (`0`: at once). Nothing opens before it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CompletionDelay {
+    Off,
+    Ms30,
+    #[default]
+    Ms60,
+    Ms100,
+    Ms150,
+    Ms250,
+}
+
+impl CompletionDelay {
+    pub fn millis(self) -> u64 {
+        match self {
+            CompletionDelay::Off => 0,
+            CompletionDelay::Ms30 => 30,
+            CompletionDelay::Ms60 => 60,
+            CompletionDelay::Ms100 => 100,
+            CompletionDelay::Ms150 => 150,
+            CompletionDelay::Ms250 => 250,
+        }
+    }
+}
+
+impl Choice for CompletionDelay {
+    const ALL: &'static [Self] = &[
+        CompletionDelay::Ms60,
+        CompletionDelay::Off,
+        CompletionDelay::Ms30,
+        CompletionDelay::Ms100,
+        CompletionDelay::Ms150,
+        CompletionDelay::Ms250,
+    ];
+    fn as_str(self) -> &'static str {
+        match self {
+            CompletionDelay::Off => "0",
+            CompletionDelay::Ms30 => "30",
+            CompletionDelay::Ms60 => "60",
+            CompletionDelay::Ms100 => "100",
+            CompletionDelay::Ms150 => "150",
+            CompletionDelay::Ms250 => "250",
         }
     }
 }
@@ -844,6 +894,8 @@ pub struct Prefs {
     pub format_case: KeywordCase,
     /// `[editor] format_indent`.
     pub format_indent: FormatIndent,
+    /// `[editor] completion_delay_ms`.
+    pub completion_delay: CompletionDelay,
     /// `[editor] auto_pairs`.
     pub auto_pairs: AutoPairs,
     /// `[editor] soft_tab_backspace`.
@@ -884,6 +936,7 @@ impl Default for Prefs {
             editor_clipboard: EditorClipboard::default(),
             format_case: KeywordCase::default(),
             format_indent: FormatIndent::default(),
+            completion_delay: CompletionDelay::default(),
             auto_pairs: AutoPairs::default(),
             soft_tab_backspace: SoftTabBackspace::default(),
             run_hints: RunHints::default(),
@@ -1151,7 +1204,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         None => policy::SpillLimit::default(),
         Some(v) => policy::parse_size(v).map_err(|e| bad("spill_limit", e).allowed(Some(SIZES)))?,
     };
-    let (cursor_shape, editor_clipboard, format_case, format_indent, auto_pairs, soft_tab, run_hints) = f
+    let (cursor_shape, editor_clipboard, format_case, format_indent, auto_pairs, soft_tab, run_hints, delay) = f
         .editor
         .map(|e| {
             (
@@ -1162,6 +1215,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
                 e.auto_pairs,
                 e.soft_tab_backspace,
                 e.run_hints,
+                e.completion_delay_ms,
             )
         })
         .unwrap_or_default();
@@ -1193,6 +1247,11 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             None => FormatIndent::default(),
             Some(n) => FormatIndent::parse(&n.to_string())
                 .ok_or_else(|| bad("editor.format_indent", n).allowed(Some("4, 2")))?,
+        },
+        completion_delay: match delay {
+            None => CompletionDelay::default(),
+            Some(n) => CompletionDelay::parse(&n.to_string())
+                .ok_or_else(|| bad("editor.completion_delay_ms", n).allowed(Some("60, 0, 30, 100, 150, 250")))?,
         },
         auto_pairs: choice("editor.auto_pairs", auto_pairs, "off, on")?,
         soft_tab_backspace: choice("editor.soft_tab_backspace", soft_tab, "on, off")?,
@@ -1675,6 +1734,11 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "editor", "format_keyword_case", case)?;
     let indent = (i64::from(prefs.format_indent.spaces()).into(), prefs.format_indent == FormatIndent::default());
     orphans += &nested_setting(&mut doc, "editor", "format_indent", indent)?;
+    let delay = (
+        i64::try_from(prefs.completion_delay.millis()).unwrap_or(0).into(),
+        prefs.completion_delay == CompletionDelay::default(),
+    );
+    orphans += &nested_setting(&mut doc, "editor", "completion_delay_ms", delay)?;
     let pairs = (prefs.auto_pairs.as_str().into(), prefs.auto_pairs == AutoPairs::default());
     orphans += &nested_setting(&mut doc, "editor", "auto_pairs", pairs)?;
     let soft = (prefs.soft_tab_backspace.as_str().into(), prefs.soft_tab_backspace == SoftTabBackspace::default());

@@ -67,7 +67,14 @@ In Visual mode `:` starts the line with `'<,'>`, as Vim does. The full syntax is
 ## Completion
 
 `Ctrl+N` or `F4` in Insert mode shows completions of schemas, tables and columns (aliases
-included).
+included) at once.
+
+The popup also opens by itself while you type: once a name has two characters, after a `.` or
+after a string's opening quote, as soon as no key came for `[editor] completion_delay_ms`
+(60 ms; `0`, `30`, `100`, `150` or `250` in the settings screen or with
+`:set editor.completion_delay_ms=…`). Nothing opens before that; with `0` it opens with the
+key itself. While it is open, typing narrows it at once. `Esc` closes it, and it does not come
+back by itself until you type again.
 
 - Names go in as SQL: a name that is not a plain lower-case word (`MixedCase`, `Order Lines`) or
   is a reserved word goes in quoted.

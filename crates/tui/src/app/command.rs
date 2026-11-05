@@ -17,7 +17,7 @@ use datarig_core::config::{
     AutoPairs, ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
     IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat, SoftTabBackspace, Tips, YankFlash,
 };
-use datarig_core::config::{ChangesView, PasteNull, UiBackground};
+use datarig_core::config::{ChangesView, CompletionDelay, PasteNull, UiBackground};
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
 use std::time::Duration;
@@ -488,6 +488,7 @@ pub enum Setting {
     ChangesView(ChangesView),
     Background(UiBackground),
     PasteNull(PasteNull),
+    CompletionDelay(CompletionDelay),
     /// `idle_disconnect` (`None`: off).
     IdleDisconnect(Option<Duration>),
     /// `lock_wait` (`None`: off).
@@ -826,6 +827,20 @@ pub const SETTINGS: &[SettingSpec] = &[
             ("10s", Setting::LockWait(secs(10)), Label::SettingLockWaitOn),
             ("30s", Setting::LockWait(secs(30)), Label::SettingLockWaitOn),
             ("1m", Setting::LockWait(secs(60)), Label::SettingLockWaitOn),
+        ]),
+    },
+    SettingSpec {
+        key: "editor.completion_delay_ms",
+        label: Label::SettingCompletionDelay,
+        about: Label::SettingCompletionDelayAbout,
+        group: SettingGroup::Editor,
+        values: Values::Fixed(&[
+            ("60", Setting::CompletionDelay(CompletionDelay::Ms60), Label::SettingCompletionDelayMs),
+            ("0", Setting::CompletionDelay(CompletionDelay::Off), Label::SettingCompletionDelayNow),
+            ("30", Setting::CompletionDelay(CompletionDelay::Ms30), Label::SettingCompletionDelayMs),
+            ("100", Setting::CompletionDelay(CompletionDelay::Ms100), Label::SettingCompletionDelayMs),
+            ("150", Setting::CompletionDelay(CompletionDelay::Ms150), Label::SettingCompletionDelayMs),
+            ("250", Setting::CompletionDelay(CompletionDelay::Ms250), Label::SettingCompletionDelayMs),
         ]),
     },
 ];

@@ -4,9 +4,9 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│ ╭ Settings ────────────────────────────────────────────────────────────────╮─╮"
-"│▾│   Auto-pairs                ‹ off           ›  Off, every key types its… │ │"
-"│ │   Backspace to tab stop     ‹ on            ›  On, spaces back to the t… │e│"
-"│ │   Run hints                 ‹ on            ›  On, the outcome after ea… │ │"
+"│▾│   Backspace to tab stop     ‹ on            ›  On, spaces back to the t… │ │"
+"│ │   Run hints                 ‹ on            ›  On, the outcome after ea… │e│"
+"│ │   Completion delay (ms)     ‹ 60            ›  Opens once no key came f… │ │"
 "│ │ Results                                                                  │ │"
 "│ │   Cell detail               ‹ panel         ›  A panel on the right of … │ │"
 "│ │   Flash copied cells        ‹ on            ›  On, copied cells flash b… │ │"
