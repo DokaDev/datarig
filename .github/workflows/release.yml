@@ -281,14 +281,24 @@ jobs:
           bash .github/scripts/homebrew-formula.sh "$TAG" "$base" dist > datarig.rb
           bash .github/scripts/release-tap.sh "$TAG" datarig.rb
 
+  # The README recordings of a stable release (demo.yml), recorded with the tag's own datarig
+  # for the `pages` job. A tape that no longer matches the screens fails here, and the site is
+  # then not deployed: fix the tape, then re-run (the release and the tap are not affected).
+  demo:
+    name: demo recordings
+    needs: [plan, release]
+    if: needs.plan.outputs.publish == 'true' && needs.plan.outputs.prerelease == 'false'
+    uses: ./.github/workflows/demo.yml
+
   # The docs site of a stable release, from its tag: built and checked like the `docs` job of
-  # ci.yml, then deployed to GitHub Pages (https://dokadev.github.io/datarig/). Only after the
-  # release is published, never for a release candidate, a pull request or a manual run. The
-  # Homebrew tap does not wait for it: a failed deploy leaves the release and the tap as they
-  # are and can be re-run on its own. The `github-pages` environment must allow tags `v*`.
+  # ci.yml, then deployed to GitHub Pages (https://dokadev.github.io/datarig/) with the
+  # recordings under demo/ (https://dokadev.github.io/datarig/demo/hero.gif, ...). Only after
+  # the release is published, never for a release candidate, a pull request or a manual run.
+  # The Homebrew tap does not wait for it: a failed deploy leaves the release and the tap as
+  # they are and can be re-run on its own. The `github-pages` environment must allow tags `v*`.
   pages:
     name: docs site (GitHub Pages)
-    needs: [plan, release]
+    needs: [plan, release, demo]
     if: needs.plan.outputs.publish == 'true' && needs.plan.outputs.prerelease == 'false'
     runs-on: ubuntu-latest
     permissions:
@@ -309,6 +319,10 @@ jobs:
         run: bash .github/scripts/docs-tools.sh
       - name: Build and check
         run: bash .github/scripts/docs-build.sh
+      - uses: actions/download-artifact@v8
+        with:
+          name: demo
+          path: docs/site/book/demo
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:

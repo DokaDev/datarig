@@ -143,6 +143,25 @@ mdbook serve docs/site
 - CI builds the site on every push and pull request and checks every link and anchor offline.
   The site is deployed only from a stable release tag, by the release workflow.
 
+### The README recordings
+
+The GIFs and stills of the README are never captured by hand: CI records them with
+[VHS](https://github.com/charmbracelet/vhs) from the tapes in `docs/demo/tapes`, against the
+made-up data of `docs/demo/compose.yml` (its own containers and ports, apart from `dev/`), and
+the release workflow publishes them with the docs site under `demo/`. Every tape waits for the
+text it expects on the screen, so a change that moves a screen fails the `Demo` workflow
+(`.github/workflows/demo.yml`) until the tape is updated. It runs on pull requests that change
+`docs/demo` and on the release pull request; run it by hand from the Actions tab to preview the
+recordings of a branch (they are in the run's `demo` artifact). To record locally, with
+`vhs`, `ttyd`, `ffmpeg` and JetBrainsMono Nerd Font installed:
+
+```sh
+sh docs/demo/make-certs.sh     # the demo databases' TLS certificates, in docs/demo/.certs
+docker compose -f docs/demo/compose.yml up -d --wait
+DATARIG_BIN=target/release/datarig docs/demo/render.sh demo-out        # or: ... demo-out hero
+docker compose -f docs/demo/compose.yml down
+```
+
 ### The docs rule of pull requests
 
 `.github/workflows/docs-rule.yml` checks every pull request (and again when its description

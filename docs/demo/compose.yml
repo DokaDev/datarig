@@ -1,0 +1,75 @@
+# The databases of the README recordings (docs/demo/render.sh): a PostgreSQL and a MySQL with
+# made-up demo data, apart from the test databases of dev/ (own project name, own ports, data in
+# tmpfs, so `down` leaves nothing behind). Every credential is a throwaway. Both take TLS with
+# the certificates of make-certs.sh (DATARIG_DEMO_CERTS, default docs/demo/.certs), which the
+# demo profiles verify.
+#   sh docs/demo/make-certs.sh
+#   docker compose -f docs/demo/compose.yml up -d --wait
+#   docker compose -f docs/demo/compose.yml down
+name: datarig-demo
+
+services:
+  demo-postgres:
+    image: postgres:17
+    container_name: datarig-demo-pg
+    environment:
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: demo
+      POSTGRES_DB: acme
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+      LANG: C.UTF-8
+    ports:
+      - "127.0.0.1:55499:5432"
+    volumes:
+      - ./seed/postgres:/docker-entrypoint-initdb.d:ro
+      - ${DATARIG_DEMO_CERTS:-./.certs}:/src:ro
+    # The key must belong to the server's user with no access for others.
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        mkdir -p /certs && cp /src/server.crt /src/server.key /certs/ &&
+        chown postgres /certs/* && chmod 600 /certs/server.key &&
+        exec docker-entrypoint.sh postgres -c ssl=on
+        -c ssl_cert_file=/certs/server.crt -c ssl_key_file=/certs/server.key
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      # Over TCP and on the last table: the entrypoint's temporary server (while the seed runs)
+      # listens on the socket only.
+      test: ["CMD-SHELL", "PGPASSWORD=demo psql -h 127.0.0.1 -U demo -d acme -tAc 'SELECT 1 FROM store.order_items LIMIT 1' | grep -q 1"]
+      interval: 2s
+      timeout: 3s
+      retries: 90
+
+  demo-mysql:
+    image: mysql:8.4
+    container_name: datarig-demo-mysql
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        mkdir -p /certs && cp /src/ca.crt /src/server.crt /src/server.key /certs/ &&
+        chown mysql /certs/* && chmod 600 /certs/server.key &&
+        exec docker-entrypoint.sh mysqld --character-set-server=utf8mb4
+        --collation-server=utf8mb4_0900_ai_ci --ssl-ca=/certs/ca.crt
+        --ssl-cert=/certs/server.crt --ssl-key=/certs/server.key
+    environment:
+      MYSQL_USER: demo
+      MYSQL_PASSWORD: demo
+      MYSQL_DATABASE: billing
+      MYSQL_ROOT_PASSWORD: demo-root
+    ports:
+      - "127.0.0.1:53399:3306"
+    volumes:
+      - ./seed/mysql:/docker-entrypoint-initdb.d:ro
+      - ${DATARIG_DEMO_CERTS:-./.certs}:/src:ro
+    tmpfs:
+      - /var/lib/mysql
+    # Healthy only once the seed ran: the entrypoint's temporary server listens on no TCP port.
+    healthcheck:
+      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -udemo -pdemo billing -e 'SELECT 1 FROM payments LIMIT 1'"]
+      interval: 2s
+      timeout: 3s
+      retries: 120
