@@ -22,12 +22,12 @@ Type "jj"
 Sleep 400ms
 Enter
 Wait+Screen /acme\.store\.customers/
-Wait+Screen /Showing \d+ rows/
+Wait+Screen /Bram Driftwood/
 Sleep 1.2s
 
 # Into the grid, to the `city` of the first row, and edit it.
 Tab
-Wait+Screen /editable · store\.customers/
+Wait+Screen /Enter view cell/
 Sleep 300ms
 Type "lll"
 Sleep 500ms

@@ -13,9 +13,9 @@ Wait+Screen /orders/
 Type "jjjj"
 Enter
 Wait+Screen /acme\.store\.orders/
-Wait+Screen /Showing \d+ rows/
+Wait+Screen /Heron Express/
 Tab
-Wait+Screen /editable · store\.orders/
+Wait+Screen /Enter view cell/
 Sleep 300ms
 # The cell inspector off, for the columns.
 Type "i"
