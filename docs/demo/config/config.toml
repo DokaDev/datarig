@@ -1,6 +1,7 @@
 # The configuration of the README recordings (docs/demo/render.sh copies it to a scratch
 # XDG_CONFIG_HOME). Every profile points at the demo databases of docs/demo/compose.yml; the
-# passwords come from DATARIG_DEMO_PASSWORD, set by render.sh.
+# passwords come from DATARIG_DEMO_PASSWORD, and render.sh puts the demo CA's path
+# (make-certs.sh) in place of DEMO_CA.
 version = 2
 icons = "on"
 theme = "tokyo-night"
@@ -36,6 +37,8 @@ user = "demo"
 database = "acme"
 policy = "prod"
 icon = "shield"
+sslmode = "verify-full"
+sslrootcert = "DEMO_CA"
 password_source = "env"
 password_env = "DATARIG_DEMO_PASSWORD"
 
@@ -49,6 +52,8 @@ user = "demo"
 database = "acme"
 policy = "staging"
 icon = "postgres"
+sslmode = "verify-full"
+sslrootcert = "DEMO_CA"
 password_source = "env"
 password_env = "DATARIG_DEMO_PASSWORD"
 
@@ -62,6 +67,8 @@ user = "demo"
 database = "billing"
 policy = "prod"
 icon = "mysql"
+sslmode = "VERIFY_IDENTITY"
+sslrootcert = "DEMO_CA"
 password_source = "env"
 password_env = "DATARIG_DEMO_PASSWORD"
 
@@ -74,5 +81,7 @@ port = 55499
 user = "demo"
 database = "acme"
 icon = "laptop"
+sslmode = "verify-full"
+sslrootcert = "DEMO_CA"
 password_source = "env"
 password_env = "DATARIG_DEMO_PASSWORD"

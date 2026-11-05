@@ -3,7 +3,8 @@
 # into <out-dir> as <name>.gif plus the stills the tapes take (<name>.png).
 #   docs/demo/render.sh <out-dir> [tape-name...]
 # Needs vhs, ttyd, ffmpeg and JetBrainsMono Nerd Font (.github/scripts/demo-tools.sh installs
-# them on CI), the demo databases of docs/demo/compose.yml, and datarig on the PATH (or
+# them on CI), the demo databases of docs/demo/compose.yml with the certificates of
+# make-certs.sh (DATARIG_DEMO_CERTS, default docs/demo/.certs), and datarig on the PATH (or
 # DATARIG_BIN, the binary to record). In each tape datarig runs with docs/demo/config in a
 # scratch configuration, state and data directory of its own and an in-memory secret store, so
 # nothing outside that directory is read or written. A tape whose Wait does not match the screen fails
@@ -26,6 +27,9 @@ for tool in vhs ttyd ffmpeg; do
   command -v "$tool" >/dev/null || { echo "$tool is not on the PATH" >&2; exit 1; }
 done
 "$real" --version
+certs=${DATARIG_DEMO_CERTS:-$demo/.certs}
+[ -f "$certs/ca.crt" ] || { echo "no demo CA in $certs (docs/demo/make-certs.sh)" >&2; exit 1; }
+ca=$(cd "$certs" && pwd)/ca.crt
 
 if [ $# -eq 0 ]; then
   for tape in "$demo"/tapes/*.tape; do
@@ -41,7 +45,7 @@ for name in "$@"; do
   [ -f "$demo/tapes/$name.tape" ] || { echo "no tape $name" >&2; exit 2; }
   run=$scratch/$name
   mkdir -p "$run/work" "$run/bin" "$run/config/datarig" "$run/state" "$run/data" "$run/tmp"
-  cp "$demo/config/config.toml" "$run/config/datarig/config.toml"
+  sed "s|\"DEMO_CA\"|\"$ca\"|" "$demo/config/config.toml" > "$run/config/datarig/config.toml"
   cp "$demo/tapes/$name.tape" "$demo/tapes/settings.tape" "$run/work/"
   # The tape's `datarig`: the scratch directories are datarig's alone (VHS's browser keeps the
   # usual ones, where it finds the font).

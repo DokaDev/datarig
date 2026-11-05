@@ -14,7 +14,7 @@ Sleep 1.5s
 Type "jj"
 Sleep 600ms
 Enter
-Wait+Screen /Connected to billing-prod/
+Wait+Screen /Connected to billing-prod · TLS [0-9.]+, server verified/
 Sleep 800ms
 Type "j"
 Sleep 300ms

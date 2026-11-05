@@ -38,7 +38,9 @@ Type "Harborview"
 Sleep 300ms
 Enter
 Wait+Screen /1 pending/
-Sleep 1.2s
+Sleep 600ms
+Screenshot hero.png
+Sleep 600ms
 
 # The pending change, then the statements that will run.
 Space
@@ -53,9 +55,7 @@ Sleep 2.5s
 Space
 Type "da"
 Wait+Screen /Apply changes — store\.customers/
-Sleep 1s
-Screenshot hero.png
-Sleep 1.5s
+Sleep 2.5s
 Type "y"
 Wait+Screen /Applied 1 change/
 Sleep 3s

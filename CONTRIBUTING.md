@@ -156,6 +156,7 @@ recordings of a branch (they are in the run's `demo` artifact). To record locall
 `vhs`, `ttyd`, `ffmpeg` and JetBrainsMono Nerd Font installed:
 
 ```sh
+sh docs/demo/make-certs.sh     # the demo databases' TLS certificates, in docs/demo/.certs
 docker compose -f docs/demo/compose.yml up -d --wait
 DATARIG_BIN=target/release/datarig docs/demo/render.sh demo-out        # or: ... demo-out hero
 docker compose -f docs/demo/compose.yml down
