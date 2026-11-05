@@ -44,7 +44,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # Saved even when a tape fails, so fixing one does not rebuild datarig.
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: C compiler and libclang for pg_query
         run: bash .github/scripts/pg-query-build-deps.sh
       - run: cargo build --release --locked -p datarig-tui

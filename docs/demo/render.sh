@@ -4,9 +4,9 @@
 #   docs/demo/render.sh <out-dir> [tape-name...]
 # Needs vhs, ttyd, ffmpeg and JetBrainsMono Nerd Font (.github/scripts/demo-tools.sh installs
 # them on CI), the demo databases of docs/demo/compose.yml, and datarig on the PATH (or
-# DATARIG_BIN, the binary to record). Each tape runs datarig with docs/demo/config in a scratch
-# configuration, state and data directory of its own and an in-memory secret store, so nothing
-# outside that directory is read or written. A tape whose Wait does not match the screen fails
+# DATARIG_BIN, the binary to record). In each tape datarig runs with docs/demo/config in a
+# scratch configuration, state and data directory of its own and an in-memory secret store, so
+# nothing outside that directory is read or written. A tape whose Wait does not match the screen fails
 # the run: the recordings never show a screen datarig no longer has.
 set -euo pipefail
 
@@ -19,16 +19,13 @@ mkdir -p "$1"
 out=$(cd "$1" && pwd)
 shift
 
-if [ -n "${DATARIG_BIN:-}" ]; then
-  bindir=$(mktemp -d)
-  ln -s "$(cd "$(dirname "$DATARIG_BIN")" && pwd)/$(basename "$DATARIG_BIN")" "$bindir/datarig"
-  PATH="$bindir:$PATH"
-fi
-command -v datarig >/dev/null || { echo "datarig is not on the PATH (or set DATARIG_BIN)" >&2; exit 1; }
+real=${DATARIG_BIN:-$(command -v datarig || true)}
+[ -n "$real" ] && [ -x "$real" ] || { echo "datarig is not on the PATH (or set DATARIG_BIN)" >&2; exit 1; }
+real=$(cd "$(dirname "$real")" && pwd)/$(basename "$real")
 for tool in vhs ttyd ffmpeg; do
   command -v "$tool" >/dev/null || { echo "$tool is not on the PATH" >&2; exit 1; }
 done
-datarig --version
+"$real" --version
 
 if [ $# -eq 0 ]; then
   for tape in "$demo"/tapes/*.tape; do
@@ -43,16 +40,23 @@ failed=()
 for name in "$@"; do
   [ -f "$demo/tapes/$name.tape" ] || { echo "no tape $name" >&2; exit 2; }
   run=$scratch/$name
-  mkdir -p "$run/work" "$run/config/datarig" "$run/state" "$run/data" "$run/tmp"
+  mkdir -p "$run/work" "$run/bin" "$run/config/datarig" "$run/state" "$run/data" "$run/tmp"
   cp "$demo/config/config.toml" "$run/config/datarig/config.toml"
   cp "$demo/tapes/$name.tape" "$demo/tapes/settings.tape" "$run/work/"
+  # The tape's `datarig`: the scratch directories are datarig's alone (VHS's browser keeps the
+  # usual ones, where it finds the font).
+  cat > "$run/bin/datarig" <<WRAPPER
+#!/bin/sh
+export DATARIG_SECRET_STORE=memory DATARIG_DEMO_PASSWORD=demo
+export XDG_CONFIG_HOME='$run/config' XDG_STATE_HOME='$run/state' XDG_DATA_HOME='$run/data' TMPDIR='$run/tmp'
+unset DATARIG_STATE_DIR DATARIG_DATA_DIR TMUX
+exec '$real' "\$@"
+WRAPPER
+  chmod +x "$run/bin/datarig"
   echo "::group::$name"
   if (
     cd "$run/work"
-    export DATARIG_SECRET_STORE=memory DATARIG_DEMO_PASSWORD=demo LANG=C.UTF-8 TZ=UTC \
-      XDG_CONFIG_HOME="$run/config" XDG_STATE_HOME="$run/state" XDG_DATA_HOME="$run/data" \
-      TMPDIR="$run/tmp"
-    unset DATARIG_STATE_DIR DATARIG_DATA_DIR TMUX
+    export PATH="$run/bin:$PATH" LANG=C.UTF-8 TZ=UTC
     vhs "$name.tape" -o "$out/$name.gif"
   ); then
     for png in "$run/work"/*.png; do
