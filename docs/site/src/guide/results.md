@@ -34,13 +34,17 @@ the count matches the pages you saw.
   it; then the view moves just enough to show that cell whole.
 - `Enter` shows the cell's value whole in the cell viewer.
 - The cursor's row is tinted (its number in the accent), its cell more strongly, and so is its
-  column's header. On the `terminal` theme the row keeps your terminal's background: the row's
+  column's header (a selected range tints its columns' headers instead). A new row keeps its
+  own tint and shows the cursor by its number. On the `terminal` theme the row keeps your terminal's background: the row's
   number and the underlined header show where the cursor is.
 - `v` selects a range of cells, `V` whole rows, `Ctrl+A` every cell of the page; the mouse
-  selects too. The selection is one tinted block, the separators between its columns included;
-  its rows carry the row tint and their numbers, and its columns' headers, are tinted too. The
-  theme tokens `grid_cursor_row` and `grid_cursor_header` set the tints.
-- While a selection is there and the grid has the focus, the status line sums it up: its size,
+  selects too. The selection is one tinted block, the separators between its columns included.
+  The rows of a range of cells or of whole rows take the row tint and a tinted number; the
+  selected columns' headers are tinted too (whole columns tint their headers and cells, not the
+  row numbers). The theme tokens `grid_cursor_row` and `grid_cursor_header` set the tints.
+- While a selection is there and the grid has the focus, the status line sums it up (a fresh
+  message comes first; in a narrow window the least and greatest values, then NULL, then the
+  average, are left out): its size,
   then for numbers (every selected column an integer, decimal or floating-point one) the sum,
   average, least and greatest value, else how many distinct values; and how many are NULL, as in
   `5 rows × 1 column · sum 1,013.00 · avg 253.25 · min 0.25 · max 1,000 · NULL 1`. Integers and

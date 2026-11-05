@@ -106,10 +106,12 @@ environment, a connection that is not open, a connection type that can't edit da
 once, on "Edit the cell" (for example `read-only`, `not connected`, `not editable`), and offers
 no other edit but undo, the Changes tab and dropping the changes already pending (none of them
 while those are being applied). On a result that can be edited, an edit that does not act on
-this cell or selection is dimmed `not here`: setting NULL on a NOT NULL column, setting the
-default of a column that has none, editing cells of several columns at once; adding a row to a
-table none of whose columns shown takes a value is dimmed `no column to fill`. Undo, the Changes tab and dropping the changes are listed only while changes are
-pending. Until the first edit key has read the table's details, what its columns take is not
+this cell or selection is dimmed `not here`: for example setting NULL on a NOT NULL column,
+setting the default of a column that has none, editing cells of several columns at once,
+editing a column the server computes, deleting whole columns, or changing a cell of a row
+marked to be deleted. Adding a row to a table none of whose columns shown takes a value is
+dimmed `no column to fill`. Undo, the Changes tab and dropping the changes are listed only
+while changes are pending. Until the first edit key has read the table's details, what its columns take is not
 known yet: the menu then offers NULL and DEFAULT on any column, and the key says why when one
 refuses it.
 

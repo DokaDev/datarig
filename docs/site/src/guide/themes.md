@@ -75,10 +75,12 @@ theme is then used and saved, and its path is shown.
 ### Tokens added since your file was written
 
 When a version of datarig adds tokens, a theme file written before does not list them: they
-take their value from the theme it extends (the grid's cursor tints are made from the file's
-own colors). The first time such a file is used, at launch or when you choose it, the status
+take their value from the theme it extends (except the grid's cursor tints, made from the
+file's own colors when it sets its own `bg` or `selection`, for the header `surface` or
+`selection`, and those are RGB colors). The first time such a file is used, at launch or when you choose it, the status
 line says how many tokens it does not list. It says so once, and again only when the tokens it
-does not list change (a later version adds more, say).
+does not list change (the note is kept in the state folder; where that cannot be read or
+written, it is said each time).
 
 `:theme update` (the current theme) or `:theme update <name>` adds them to the file, each under
 its description and commented out with the value it takes now, at the end of its section
