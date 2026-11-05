@@ -711,7 +711,7 @@ impl App {
     /// ([`export::sql_cells`]: a MySQL `FLOAT`, bytes not in their form, text or a time read in a
     /// session that shows them otherwise), whose text would store another one.
     fn grid_copy_of(&self, rs: &ResultSet, b: &Block) -> Result<edit::GridCopy, Option<Msg>> {
-        let key = || self.key_for(Action::Edit(edit::EditAction::PasteRegister), Ctx::Grid);
+        let key = || self.key_for(Action::Edit(edit::EditAction::PasteRows), Ctx::Grid);
         if b.rows.len() > MAX_PASTE_ROWS {
             return Err(Some(Msg::CopyRegisterTooMany { key: key(), max: fmt_count(MAX_PASTE_ROWS as u64) }));
         }

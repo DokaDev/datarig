@@ -1323,7 +1323,7 @@ fn a_mysql_value_not_shown_as_stored_is_not_kept_for_g_p() {
         h.keys(keys);
         h.keys("y");
         let text = said_text(&mut h);
-        let kept = format!("Not kept for g p: column \u{201C}{column}\u{201D} ");
+        let kept = format!("Not kept for p: column \u{201C}{column}\u{201D} ");
         assert!(text.starts_with(&kept), "{text}");
         h.keys("gp");
         assert!(said_text(&mut h).starts_with("Nothing copied to paste"));
@@ -1486,7 +1486,7 @@ fn a_pending_mysql_timestamp_of_a_zone_without_a_fixed_offset_is_not_kept() {
     }
     h.keys("lly");
     let text = said_text(&mut h);
-    assert!(text.starts_with("Not kept for g p: column \u{201C}nickname\u{201D} "), "{text}");
+    assert!(text.starts_with("Not kept for p: column \u{201C}nickname\u{201D} "), "{text}");
 }
 
 #[test]

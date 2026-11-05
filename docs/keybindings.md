@@ -131,7 +131,8 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space d x` | `edit.discard` | Drop every pending change of the result |  |
 | `Space d v` | `edit.paste` | Paste the system clipboard into the grid |  |
 | `Space d V` | `edit.paste_as` | Paste again, read as the next format |  |
-| `Space d y` | `edit.paste_register` | Paste the cells last copied in the grid |  |
+| `Space d y` | `edit.paste_register` | Paste the cells last copied in the grid over the cells at the cursor |  |
+| `Space d Y` | `edit.paste_rows` | Paste the cells last copied in the grid as new rows |  |
 | `Space r y t` | `results.copy.selection.tsv` | Copy selection: Without headers (TSV) |  |
 | `Space r y T` | `results.copy.selection.tsv_header` | Copy selection: With headers (TSV) |  |
 | `Space r y l` | `results.copy.selection.list` | Copy selection: Comma list |  |
@@ -272,7 +273,8 @@ The result grid. The wheel scrolls the rows; a sideways wheel (a trackpad) or Sh
 | `o` | `edit.add_row` | Add a new row, shown after the rows read |  |
 | `O` | `edit.clone_row` | Add a new row with the values of the cursor's row |  |
 | `D` | `edit.delete_row` | Mark the row (the selected rows) to be deleted, or unmark it; a new row is removed |  |
-| `g p` | `edit.paste_register` | Paste the cells last copied in the grid |  |
+| `p` | `edit.paste_rows` | Paste the cells last copied in the grid as new rows |  |
+| `g p` | `edit.paste_register` | Paste the cells last copied in the grid over the cells at the cursor |  |
 | `i` | `results.detail` | Result detail → show / hide |  |
 | `I` | `results.detail_tab` | Result detail → Cell / Row |  |
 | `z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |

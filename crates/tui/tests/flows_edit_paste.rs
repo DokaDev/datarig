@@ -1216,12 +1216,9 @@ mod grid_copy {
     fn g_p_with_nothing_copied_says_how_to_copy() {
         let mut h = ready();
         h.keys("gp");
-        assert_eq!(
-            said(&mut h),
-            "Nothing copied to paste: y copies a cell or a range, Y a row, then g p pastes it at the cursor"
-        );
+        assert_eq!(said(&mut h), "Nothing copied to paste: y copies a cell or a range, Y a row, then g p pastes it");
         assert!(edits(&h).batch.is_empty());
-        assert_eq!(cursor(&h), (0, 1), "p (the previous page) did not run either");
+        assert_eq!(cursor(&h), (0, 1), "nothing moved");
     }
 
     #[test]
@@ -1306,7 +1303,7 @@ mod grid_copy {
         let mut h = ready_with(Harness::connected(Lang::En), many(5_001));
         h.app.tab_mut().grid.anchor = Some((5_000, 1));
         h.keys("y");
-        assert_eq!(said(&mut h), "Not kept for g p: more than 5,000 rows, the most a paste takes");
+        assert_eq!(said(&mut h), "Not kept for p: more than 5,000 rows, the most a paste takes");
         let status = h.app.status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default();
         assert!(status.starts_with("Copied 5,001 rows"), "the copy itself is done: {status}");
         h.keys("gp");
@@ -1366,7 +1363,7 @@ mod grid_copy {
         h.app.prefs.clipboard = ClipboardSetting::System;
         let _c = FakeClipboard::attach(&mut h, true, &[]);
         h.keys("jY");
-        assert_eq!(said(&mut h), "Not kept for g p: row 2 was not read whole");
+        assert_eq!(said(&mut h), "Not kept for p: row 2 was not read whole");
         let status = h.app.status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default();
         assert!(status.starts_with("Could not copy"), "{status}");
         h.keys("kgp");
@@ -1381,7 +1378,7 @@ mod grid_copy {
         let mut h = ready_with(Harness::connected(Lang::En), rows);
         h.app.prefs.clipboard = ClipboardSetting::Osc52;
         h.keys("vjy");
-        assert_eq!(said(&mut h), "Not kept for g p: more than 32 MiB of values");
+        assert_eq!(said(&mut h), "Not kept for p: more than 32 MiB of values");
         h.keys("gp");
         assert!(said(&mut h).starts_with("Nothing copied to paste"));
     }
@@ -1428,5 +1425,153 @@ mod grid_copy {
         assert_eq!(pending(&h, 1, 2), Some(t("2024-01-01 09:00:00+09")));
         assert!(said(&mut h).starts_with("Pasted the copied cells"));
         assert!(h.app.shown_invalid().unwrap().cells.is_empty());
+    }
+
+    #[test]
+    fn p_appends_the_copied_cells_as_new_rows_one_step_a_press() {
+        let mut h = ready();
+        h.keys("vly");
+        let before = revision(&h);
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![Value::Default, t("a@x"), t("ann")]]);
+        assert_eq!(revision(&h), before + 1, "one step");
+        assert_eq!(said(&mut h), "Pasted the copied cells as new rows · 1 row × 2 columns · 1 new row · u undo");
+        h.keys("pp");
+        assert_eq!(drafts(&h).len(), 3, "each p adds another copy");
+        assert_eq!(revision(&h), before + 3);
+        assert_eq!(cursor(&h), (5, 1), "on the last copy's first cell");
+        h.keys("u");
+        assert_eq!(drafts(&h).len(), 2, "u takes one press back");
+    }
+
+    #[test]
+    fn p_sets_only_the_columns_copied_wherever_the_cursor_is() {
+        let mut h = ready();
+        // Row 2's nickname, NULL.
+        h.keys("jly");
+        h.keys("hh");
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![Value::Default, Value::Default, Value::Null]]);
+        // The email is NOT NULL without a default: marked as needing a value.
+        let inv = h.app.shown_invalid().unwrap();
+        assert!(inv.no_default.iter().any(|&(at, c)| matches!(at, RowAt::New(_)) && c == 1), "{inv:?}");
+    }
+
+    #[test]
+    fn the_copy_holds_values_only_never_a_header() {
+        let mut h = ready();
+        h.app.prefs.clipboard = ClipboardSetting::System;
+        let c = FakeClipboard::attach(&mut h, false, &[]);
+        h.keys("vjly");
+        assert!(c.last().unwrap_or_default().starts_with("email\tnickname\n"), "the clipboard's copy has its header");
+        h.keys("p");
+        assert_eq!(
+            drafts(&h),
+            vec![vec![Value::Default, t("a@x"), t("ann")], vec![Value::Default, t("b@x"), Value::Null]]
+        );
+        // Every cell of the page, and whole rows: values only too.
+        h.keys("u");
+        h.ctrl('a');
+        h.keys("yp");
+        assert_eq!(drafts(&h).len(), 3);
+        assert_eq!(drafts(&h)[0], vec![t("1"), t("a@x"), t("ann")]);
+        h.keys("u");
+        h.keys("ggVjY");
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![t("1"), t("a@x"), t("ann")], vec![t("2"), t("b@x"), Value::Null]]);
+    }
+
+    /// `shop.orders` as the driver reports it: an identity-free serial key, a user and a status.
+    fn orders_structure() -> TableStructure {
+        use datarig_core::driver::structure::*;
+        let col = |name: &str, ty: &str, not_null: bool, default: Option<&str>| StructureColumn {
+            name: name.into(),
+            type_name: ty.into(),
+            not_null,
+            default: default.map(str::to_string),
+            fill: ColumnFill::Default,
+            enum_labels: Vec::new(),
+            collation: None,
+        };
+        let mut t = TableStructure::new(RelationKind::Table);
+        t.columns = vec![
+            col("id", "bigint", true, Some("nextval('shop.orders_id_seq'::regclass)")),
+            col("user_id", "bigint", false, None),
+            col("status", "text", false, None),
+            col("total_amount", "numeric", false, None),
+        ];
+        t.primary_key =
+            Some(KeyConstraint { name: "orders_pkey".into(), columns: vec!["id".into()], definition: String::new() });
+        t
+    }
+
+    /// A new tab with the orders' ids and statuses, resolved; the grid focused, nothing said.
+    fn orders_tab(h: &mut Harness) {
+        h.ctrl('t');
+        h.app.run(vec!["SELECT id, status FROM shop.orders".to_string()]);
+        let id = h.app.tab().exec.query_id;
+        let columns = vec![meta_from("id", "int8", true, ORDERS, 1), meta_from("status", "text", false, ORDERS, 3)];
+        h.db(DbEvent::Page {
+            id,
+            columns: Some(columns),
+            rows: vec![vec![s("7"), s("paid")]],
+            more: false,
+            elapsed: Duration::ZERO,
+        });
+        h.app.focus = Focus::Results;
+        h.keys("le");
+        let name = h.app.profiles[0].name.clone();
+        let result = Ok(Box::new(orders_structure()));
+        h.meta_db(&name, DbEvent::Structure { schema: "shop".into(), table: "orders".into(), result });
+        h.key(KeyCode::Esc);
+        h.app.transient = None;
+        h.sent();
+    }
+
+    #[test]
+    fn p_into_another_table_maps_by_position_checks_types_and_refuses_a_wider_copy() {
+        let mut h = ready();
+        // The whole users row: wider than the orders' two columns.
+        h.keys("Y");
+        orders_tab(&mut h);
+        let before = revision(&h);
+        h.keys("p");
+        assert_eq!(said(&mut h), "Not pasted: the copy is 3 columns wide; this result has 2");
+        assert_eq!(revision(&h), before);
+        // Email and nickname: the id and the status, by position.
+        h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        h.keys("vly");
+        h.key_mod(KeyCode::PageDown, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        h.app.focus = Focus::Results;
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![t("a@x"), t("ann")]]);
+        let inv = h.app.shown_invalid().unwrap();
+        let bad: Vec<usize> = inv.cells.keys().map(|&(_, c)| c).collect();
+        assert_eq!(bad, [0], "the email is no id: {inv:?}");
+    }
+
+    #[test]
+    fn p_is_refused_on_a_read_only_result_and_asks_for_more_than_a_thousand_rows() {
+        let mut cfg = Config {
+            connections: vec![ConnectionConfig { policy: Some("prod".into()), ..ConnectionConfig::test_db() }],
+            ..Config::default()
+        };
+        cfg.policies.insert("prod", Policy { read_only: true, ..Policy::default() });
+        let mut h = Harness::connected_with(&cfg, Lang::En);
+        answer_rows(&mut h, users_rows());
+        h.keys("yp");
+        assert_eq!(said(&mut h), "Read-only: the connection's environment is read-only");
+        assert!(edits(&h).batch.is_empty());
+        // More than a thousand new rows ask first.
+        let mut h = ready_with(Harness::connected(Lang::En), many(1_001));
+        h.app.tab_mut().grid.anchor = Some((1_000, 1));
+        h.keys("y");
+        let before = revision(&h);
+        h.keys("p");
+        let forms = h.app.status_ask_line().map(|(f, _)| f).expect("asked");
+        assert_eq!(forms[0], "Paste 1,001 rows (1,001 new)? y paste · any other key cancels");
+        assert_eq!(revision(&h), before);
+        h.keys("y");
+        assert_eq!(drafts(&h).len(), 1_001);
     }
 }

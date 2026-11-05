@@ -1,3 +1,4 @@
-- `g p` (`Space d y`) in the result grid pastes the cells last copied with `y` or `Y`, exactly
-  as the grid showed them (NULL stays NULL), at the cursor of any result in any tab, as one
-  step `u` undoes. It reads no clipboard, so it works whatever `clipboard` is set to.
+- The cells last copied with `y` or `Y` in the result grid paste back exactly as the grid
+  showed them (NULL stays NULL), in any result in any tab, without reading any clipboard:
+  `p` adds them as new rows (each press another copy), `g p` pastes them over the cells at
+  the cursor. Each is one step `u` undoes.

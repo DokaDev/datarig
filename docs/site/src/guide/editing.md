@@ -335,17 +335,27 @@ To move cells within the app without these exceptions, use `y` and `g p`
 
 `y` (a cell, or the selected range) and `Y` (the row, or the selected rows) copy to the
 clipboard as before, and the app also keeps the cells themselves: each value exactly as the
-grid shows it, a pending change included, and NULL as NULL. `g p` (`Space d y`) pastes them at
-the cursor, in this result or any other, in any tab, until you copy again or quit. No clipboard
-is read or written for it, so it works over SSH and in tmux, whatever `clipboard` and
-`[editor] clipboard` are set to.
+grid shows it, a pending change included, NULL as NULL, and never a header line. They stay,
+for this result or any other, in any tab, until you copy again or quit. No clipboard is read or
+written for them, so this works over SSH and in tmux, whatever `clipboard` and
+`[editor] clipboard` are set to. Two keys paste them:
 
-The cells land the way a [pasted range](#pasting-a-range) does: from the cursor (one cell
-copied fills every selected cell), rows past the last one are new rows, the same refusals,
-one step `u` undoes, and a question first when more than 1,000 rows change. Nothing is read
-as text, so there is no question about commas, and `Space d V` has nothing to read again.
+- `p` (`Space d Y`) adds them as **new rows** after the last row, wherever the cursor is.
+  Each `p` adds another copy, one step `u` undoes each. Copied from this result's table, each
+  value goes to its own column (a column not copied is left to its default, and one that needs
+  a value is marked); copied from another table or result, the values go by position from the
+  first column, and a copy wider than the result is refused.
+- `g p` (`Space d y`) pastes them **over the cells** at the cursor, the way a
+  [pasted range](#pasting-a-range) does: from the cursor (one cell copied fills every selected
+  cell), and rows past the last one are new rows.
+
+Both are refused the way a paste is (a read-only result, more rows on the server, a table with
+a required column the result does not show, …), are one step `u` undoes, and ask first when
+more than 1,000 rows change. Nothing is read as text, so there is no question about commas, and
+`Space d V` has nothing to read again.
 
 ```
+Pasted the copied cells as new rows · 2 rows × 2 columns · 2 new rows · u undo
 Pasted the copied cells · 2 rows × 2 columns · 2 cells changed · 1 new row · u undo
 ```
 
@@ -354,9 +364,9 @@ number column is kept and marked invalid, and the changes are not applied until 
 
 What is not kept says why, and the copy to the clipboard is done (or fails) anyway:
 
-- more than 5,000 rows, the most a paste takes ("Not kept for g p: more than 5,000 rows, the
+- more than 5,000 rows, the most a paste takes ("Not kept for p: more than 5,000 rows, the
   most a paste takes");
-- more than 32 MiB of values ("Not kept for g p: more than 32 MiB of values");
+- more than 32 MiB of values ("Not kept for p: more than 32 MiB of values");
 - a row not read whole;
 - a MySQL value the grid does not show as stored: a `FLOAT` (the server sends it rounded),
   bytes or bits not in their form, text read in a character set other than `utf8mb4`, a

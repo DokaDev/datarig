@@ -258,7 +258,8 @@ fn g_p_pastes_the_grids_copy_and_brackets_page() {
     assert_eq!(last(&km, Ctx::Grid, "]"), act("results.page.next"));
     assert_eq!(last(&km, Ctx::Grid, "n"), act("results.page.next"));
     assert_eq!(last(&km, Ctx::Grid, "space r p"), act("results.page.prev"));
-    assert_ne!(last(&km, Ctx::Grid, "p"), act("results.page.prev"), "p is no page key");
+    assert_eq!(last(&km, Ctx::Grid, "p"), act("edit.paste_rows"), "p is no page key: it pastes new rows");
+    assert_eq!(last(&km, Ctx::Grid, "space d Y"), act("edit.paste_rows"));
     // While a search is on, `n` is its next match and `]` still the next page.
     assert_eq!(last(&km, Ctx::GridMatches, "n"), act("grid.search_next"));
     assert_eq!(last(&km, Ctx::GridMatches, "]"), act("results.page.next"));
@@ -512,7 +513,7 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     let tx: Vec<String> = shown(Ctx::Explorer, "space x").into_iter().map(|(k, _)| k).collect();
     assert_eq!(tx, ["c", "r", "s"]);
     let data: Vec<String> = shown(Ctx::Grid, "space d").into_iter().map(|(k, _)| k).collect();
-    assert_eq!(data, ["D", "O", "U", "V", "a", "d", "e", "n", "o", "p", "r", "u", "v", "x", "y"]);
+    assert_eq!(data, ["D", "O", "U", "V", "Y", "a", "d", "e", "n", "o", "p", "r", "u", "v", "x", "y"]);
     assert_eq!(km.group_label(Ctx::Grid, &k("space d")), Some(Label::GroupData));
     // `Space Space`: the action menu, listed with the groups.
     assert!(root.contains(&("Space".into(), Child::Action(action::by_id("menu.open").unwrap().action))));

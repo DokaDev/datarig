@@ -83,6 +83,8 @@ pub enum EditAction {
     PasteAs,
     /// Paste the cells `y` or `Y` last copied in a grid at the cursor (`g p`).
     PasteRegister,
+    /// Add the cells `y` or `Y` last copied in a grid as new rows after the last one (`p`).
+    PasteRows,
     /// Paste the text waiting in [`App::paste_in`] (a terminal's paste, the clipboard's text).
     Pasted,
 }
@@ -482,8 +484,14 @@ impl App {
         if a == EditAction::Preview {
             return self.changes_open();
         }
-        if matches!(a, EditAction::Paste | EditAction::PasteAs | EditAction::PasteRegister | EditAction::Pasted)
-            && self.changes_shown()
+        if matches!(
+            a,
+            EditAction::Paste
+                | EditAction::PasteAs
+                | EditAction::PasteRegister
+                | EditAction::PasteRows
+                | EditAction::Pasted
+        ) && self.changes_shown()
         {
             return self.flash(Notice::new(Label::EditPasteGridOnly, Level::Info));
         }
@@ -507,7 +515,8 @@ impl App {
             EditAction::Discard => self.edit_discard_ask(),
             EditAction::Paste => self.paste_key(),
             EditAction::PasteAs => self.paste_again(),
-            EditAction::PasteRegister => self.paste_register(),
+            EditAction::PasteRegister => self.paste_register(false),
+            EditAction::PasteRows => self.paste_register(true),
             EditAction::Cell
             | EditAction::SetNull
             | EditAction::SetDefault
@@ -693,7 +702,9 @@ impl App {
             EditAction::Revert | EditAction::Discard | EditAction::Preview => return !batch.is_empty(),
             EditAction::Paste | EditAction::Pasted => return self.edit_check().is_ok(),
             EditAction::PasteAs => return self.edit_check().is_ok() && self.last_paste.is_some(),
-            EditAction::PasteRegister => return self.edit_check().is_ok() && self.grid_copy.is_some(),
+            EditAction::PasteRegister | EditAction::PasteRows => {
+                return self.edit_check().is_ok() && self.grid_copy.is_some();
+            }
             EditAction::Apply => {
                 return self.edit_check().is_ok()
                     && !batch.is_empty()
