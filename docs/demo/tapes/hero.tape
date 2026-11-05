@@ -25,9 +25,13 @@ Wait+Screen /acme\.store\.customers/
 Wait+Screen /Bram Driftwood/
 Sleep 1.2s
 
-# Into the grid, to the `city` of the first row, and edit it.
+# Into the grid, with the cell inspector off so every column fits whole (next to it, moving to
+# `city` would scroll the grid sideways and clip the names), to the `city` of the first row.
 Tab
 Wait+Screen /Enter view cell/
+Type "i"
+Wait+Screen /newsletter/
+Wait+Screen /Dex Copperkettle/
 Sleep 300ms
 Type "lll"
 Sleep 500ms
@@ -38,6 +42,9 @@ Type "Harborview"
 Sleep 300ms
 Enter
 Wait+Screen /1 pending/
+# Still unscrolled: whole names and the name header.
+Wait+Screen /Dex Copperkettle/
+Wait+Screen /name\s+│/
 Sleep 600ms
 Screenshot hero.png
 Sleep 600ms
