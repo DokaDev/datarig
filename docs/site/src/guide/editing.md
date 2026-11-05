@@ -192,6 +192,12 @@ Where the status bar is too narrow for all of it, the counts of cells and new ro
 then the invalid cell's name: the format, the size, how many values are invalid and the undo key
 stay (`Pasted as TSV · 3 rows × 4 columns · 1 invalid · u undo`); at its narrowest the format goes too (`Pasted · 3×4 · 1 invalid · u undo`).
 
+A first line whose fields are exactly the names of the columns the paste lands in, in order
+from the cursor's column (a copy with its header line, from the app or a spreadsheet), is a
+header, not values: it is skipped, and the status line says so first
+(`Pasted as TSV · Header row skipped · Space d V keeps it · …`). `Space d V` reads the text again
+keeping that line, in the paste's place. A single line is never skipped.
+
 ### Formats
 
 The text is read as:

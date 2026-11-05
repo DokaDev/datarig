@@ -1038,6 +1038,53 @@ fn a_y_right_after_a_question_was_cancelled_by_another_key_is_ignored_for_a_seco
     }
 }
 
+/// The owner's case: a range copied with its header line (`copy_header`), pasted with the
+/// terminal's paste below the last row. The header named the result's columns and became a new
+/// row of invalid values; it is skipped, and said, and `space d V` keeps it.
+#[test]
+fn a_header_line_naming_the_columns_is_skipped_and_space_d_capital_v_keeps_it() {
+    let mut h = ready(Lang::En);
+    h.keys("jj");
+    let before = revision(&h);
+    paste(&mut h, "email\tnickname\nx@x\tbo\ny@y\t\\N\n");
+    assert_eq!(pending(&h, 2, 1), Some(t("x@x")));
+    assert_eq!(pending(&h, 2, 2), Some(t("bo")));
+    assert_eq!(drafts(&h), vec![vec![Value::Default, t("y@y"), Value::Null]], "no row of the header");
+    assert_eq!(revision(&h), before + 1);
+    assert_eq!(
+        said(&mut h),
+        "Pasted as TSV \u{b7} Header row skipped \u{b7} Space d V keeps it \u{b7} 2 rows \u{d7} 2 columns \u{b7} 2 cells \
+         changed \u{b7} 1 new row \u{b7} u undo"
+    );
+    assert!(h.app.shown_invalid().unwrap().cells.is_empty());
+    // `space d V` reads it again keeping the header line, in the paste's place.
+    h.keys(" dV");
+    assert_eq!(pending(&h, 2, 1), Some(t("email")));
+    assert_eq!(drafts(&h), vec![vec![Value::Default, t("x@x"), t("bo")], vec![Value::Default, t("y@y"), Value::Null]]);
+    let text = said(&mut h);
+    assert!(text.starts_with("Pasted as TSV \u{b7} 3 rows"), "{text}");
+    // Then on to the next format, as before.
+    h.keys(" dV");
+    assert!(said(&mut h).starts_with("Pasted as CSV"));
+}
+
+#[test]
+fn a_first_line_that_is_not_the_columns_names_is_pasted() {
+    let mut h = ready(Lang::En);
+    // Other names, or the names from another column on: values.
+    paste(&mut h, "mail\tnickname\nx@x\tbo\n");
+    assert_eq!(pending(&h, 0, 1), Some(t("mail")));
+    h.keys("u");
+    h.keys("h");
+    paste(&mut h, "email\tnickname\n1\tx@x\n");
+    assert_eq!(pending(&h, 0, 1), Some(t("nickname")), "not the names of the columns from the cursor");
+    h.keys("u");
+    // A single line is never a header.
+    h.keys("l");
+    paste(&mut h, "email\tnickname\n");
+    assert_eq!(pending(&h, 0, 1), Some(t("email")));
+}
+
 /// Cells copied in the grid (`y`, `Y`) are kept as they are shown, NULL as NULL, and `g p`
 /// pastes them at the cursor through the paste's own way: cells set, rows past the end new
 /// rows, values a column does not take kept and marked, one step `u` undoes, refused whole when

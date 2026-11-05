@@ -2607,6 +2607,7 @@
 "edit.paste.done_short" = "Pasted · {details}"
 "edit.paste.register_done" = "Pasted the copied cells · {details}"
 "edit.paste.rows_done" = "Pasted the copied cells as new rows · {details}"
+"edit.paste.header_skipped" = "Header row skipped · {key} keeps it"
 "edit.paste.rows_too_wide" = "the copy is {width} columns wide; this result has {room}"
 "edit.paste.rows_more" = "the result has more rows on the server, and new rows go after the last one: fetch them ({key}) first"
 "edit.paste.rows_more_paged" = "the result has more rows on the server, not read here; new rows go after the last one"

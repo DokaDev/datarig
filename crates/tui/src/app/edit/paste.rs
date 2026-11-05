@@ -53,6 +53,8 @@ pub struct PasteIn {
     copy: Option<Arc<GridCopy>>,
     /// `p`: the copy goes in as new rows after the last one.
     rows: bool,
+    /// A first line naming the columns is pasted as values, not skipped (`space d V`).
+    keep_header: bool,
 }
 
 /// The cells `y` or `Y` last copied in a grid, which `g p` pastes: a row of values each, as
@@ -69,7 +71,8 @@ pub struct GridCopy {
 /// The last paste into a grid, read again by `space d V` while it is the newest change: the
 /// undo step it added (`None`: none, then while the changes are at `revision`), its text and
 /// the format it was read as (`None`: it could not be read), the cursor and the selection it
-/// was pasted at.
+/// was pasted at, and whether its first line was skipped as the columns' names (`space d V`
+/// then reads it again keeping that line).
 #[derive(Debug)]
 pub struct LastPaste {
     tab: TabId,
@@ -79,6 +82,7 @@ pub struct LastPaste {
     text: String,
     format: Option<Format>,
     at: Spot,
+    header: bool,
 }
 
 impl LastPaste {
@@ -148,6 +152,7 @@ struct PastePlan {
     new: usize,
     map: Vec<(usize, usize)>,
     as_rows: bool,
+    header: bool,
 }
 
 /// Why a paste is refused, in words, and in fewer words for a narrow status bar.
@@ -257,6 +262,7 @@ impl App {
             again: None,
             copy: None,
             rows: false,
+            keep_header: false,
         });
         self.edit_action(EditAction::Pasted);
     }
@@ -281,7 +287,8 @@ impl App {
         let Some(rs) = rows_of(t) else { return };
         let (tab, result) = (t.id, rs.id);
         let copy = Some(copy);
-        self.paste_in = Some(PasteIn { tab, result, text: String::new(), format: None, again: None, copy, rows });
+        let text = String::new();
+        self.paste_in = Some(PasteIn { tab, result, text, format: None, again: None, copy, rows, keep_header: false });
         self.edit_action(EditAction::Pasted);
     }
 
@@ -426,9 +433,12 @@ impl App {
         g.anchor = last.at.anchor;
         g.shape = last.at.shape;
         self.edit_grid_sync();
-        let format = Some(next_format(last.format));
+        // A first line skipped as the columns' names: the same format again, keeping it.
+        let keep_header = last.header;
+        let format = Some(last.format.filter(|_| keep_header).unwrap_or_else(|| next_format(last.format)));
         let (tab, result, text) = (last.tab, last.result, last.text.clone());
-        self.paste_in = Some(PasteIn { tab, result, text, format, again: Some(last), copy: None, rows: false });
+        self.paste_in =
+            Some(PasteIn { tab, result, text, format, again: Some(last), copy: None, rows: false, keep_header });
         self.edit_action(EditAction::Pasted);
         // Not read now (refused before it, or waiting for the table): the paste as it was.
         if let Some(PasteIn { again: Some(again), .. }) = self.paste_in.take_if(|p| p.again.is_some()) {
@@ -479,7 +489,8 @@ impl App {
     /// reads the text it asked about.
     pub(super) fn csv_ask_dropped(&mut self, a: CsvAsk) {
         let CsvAsk { tab, result, revision, at, text, .. } = a;
-        self.paste_not_done(Some(LastPaste { tab, result, revision, step: None, text, format: None, at }), None);
+        let last = LastPaste { tab, result, revision, step: None, text, format: None, at, header: false };
+        self.paste_not_done(Some(last), None);
     }
 
     /// How many rows `plan` changes on the active tab's shown result: rows with a value set to
@@ -498,7 +509,7 @@ impl App {
         let at = Spot { cursor: (t.grid.row, t.grid.col), anchor: t.grid.anchor, shape: t.grid.shape };
         let (tab, result, revision) = (t.id, rs.id, rs.edit.batch.revision());
         let Some(p) = self.paste_in.take_if(|p| p.tab == tab && p.result == result) else { return };
-        let PasteIn { text, format, again, copy, rows, .. } = p;
+        let PasteIn { text, format, again, copy, rows, keep_header, .. } = p;
         if let Some(copy) = copy {
             if rows {
                 return match self.copy_rows_plan(target, &copy) {
@@ -506,14 +517,14 @@ impl App {
                     Err(reason) => self.paste_refused(reason),
                 };
             }
-            return self.paste_rows(target, &copy.rows, None, Some(&copy), None, None);
+            return self.paste_rows(target, &copy.rows, None, Some(&copy), None, None, false);
         }
         let opts = PasteOpts { null: self.prefs.paste_null.token().to_string() };
         let read = match format {
             None => paste::parse(&text, &opts),
             Some(f) => paste::parse_as(&text, f, &opts),
         };
-        let mut last = LastPaste { tab, result, revision, step: None, text, format, at };
+        let mut last = LastPaste { tab, result, revision, step: None, text, format, at, header: false };
         let pasted = match read {
             Ok(x) => x,
             // Commas and no tab: which it is is asked.
@@ -537,13 +548,30 @@ impl App {
             }
         };
         last.format = Some(pasted.format);
-        self.paste_rows(target, &pasted.rows, Some(pasted.format), None, Some(last), again);
+        // A first line that names the columns it lands in, in order, is a header: skipped.
+        let header = !keep_header && pasted.rows.len() > 1 && self.names_columns(&pasted.rows[0]);
+        last.header = header;
+        let rows = if header { &pasted.rows[1..] } else { &pasted.rows[..] };
+        self.paste_rows(target, rows, Some(pasted.format), None, Some(last), again, header);
+    }
+
+    /// Values `line` are the names of the active tab's shown result's columns from where a
+    /// paste starts (the selection's top-left corner, else the cursor), one each, in order.
+    fn names_columns(&self, line: &[Value]) -> bool {
+        let t = self.tab();
+        let Some(rs) = rows_of(t) else { return false };
+        let c0 = t.grid.selection(rs.rows.len(), rs.columns.len()).map_or(t.grid.col, |(_, c)| c.start);
+        line.iter().enumerate().all(|(k, v)| match v {
+            Value::Text(s) => rs.columns.get(c0 + k).is_some_and(|c| c.meta.name == *s),
+            _ => false,
+        })
     }
 
     /// Paste `rows` (read as `format`; `None`: cells copied in a grid) on the active tab's shown
     /// result, resolved to `target`: laid over the grid and checked; done, asked about when it
     /// changes many rows, or refused, said. `copy`: the cells copied in a grid they are;
-    /// `last`: the paste as `space d V` reads it again.
+    /// `last`: the paste as `space d V` reads it again; `header`: its first line was skipped.
+    #[allow(clippy::too_many_arguments)]
     fn paste_rows(
         &mut self,
         target: &EditTarget,
@@ -552,9 +580,10 @@ impl App {
         copy: Option<&GridCopy>,
         last: Option<LastPaste>,
         again: Option<LastPaste>,
+        header: bool,
     ) {
         let plan = match self.paste_plan(target, rows, format) {
-            Ok(p) => p,
+            Ok(p) => PastePlan { header, ..p },
             Err(reason) => {
                 self.paste_not_done(last, again);
                 return self.paste_refused(reason);
@@ -642,7 +671,16 @@ impl App {
             return self.ask_ended(Label::EditPasteMoved);
         }
         let (tab, result, text) = (a.tab, a.result, a.text);
-        self.paste_in = Some(PasteIn { tab, result, text, format: Some(format), again: None, copy: None, rows: false });
+        self.paste_in = Some(PasteIn {
+            tab,
+            result,
+            text,
+            format: Some(format),
+            again: None,
+            copy: None,
+            rows: false,
+            keep_header: false,
+        });
         self.edit_action(EditAction::Pasted);
     }
 
@@ -695,7 +733,7 @@ impl App {
     /// Do paste `plan` (read at `last`): one step of the changes; the cursor on its first cell,
     /// the selection dropped; what it did said.
     fn paste_do(&mut self, plan: PastePlan, last: Option<LastPaste>, again: Option<LastPaste>) {
-        let PastePlan { ops, first, read, top, size, format, corner, map, as_rows, .. } = plan;
+        let PastePlan { ops, first, read, top, size, format, corner, map, as_rows, header, .. } = plan;
         let pasted: Vec<(RowAt, usize)> = (ops.set.iter().map(|((r, c), _)| (RowAt::Read(*r), *c)))
             .chain(ops.set_new.iter().map(|((id, c), _)| (RowAt::New(*id), *c)))
             .collect();
@@ -761,8 +799,14 @@ impl App {
         let level = if count.is_some() { Level::Warning } else { Level::Info };
         let undo = self.keymap.hint_keys(Action::Edit(EditAction::Undo), Ctx::Grid, self.enhanced_keys);
         let undo = undo.map(|k| i18n.msg(&Msg::EditPasteUndo { key: crate::keymap::keys::label(&k) }).to_string());
+        // A header line skipped: said in every form, with the key that keeps it.
+        let header = header.then(|| {
+            let key = self.key_for(Action::Edit(EditAction::PasteAs), Ctx::Grid);
+            i18n.msg(&Msg::EditPasteHeaderSkipped { key }).to_string()
+        });
         let details = |size: &str, invalid: &Option<String>, more: &[String]| {
-            let parts = [size.to_string()].into_iter().chain(invalid.clone()).chain(more.iter().cloned());
+            let parts =
+                header.clone().into_iter().chain([size.to_string()]).chain(invalid.clone()).chain(more.iter().cloned());
             parts.chain(undo.clone()).collect::<Vec<_>>().join(" \u{B7} ")
         };
         let format = format.map(|f| i18n.label(format_label(f)).to_string());
@@ -1003,6 +1047,7 @@ impl App {
         Ok(PastePlan {
             map,
             as_rows: false,
+            header: false,
             ops,
             first: read_range.start,
             read,
@@ -1098,6 +1143,7 @@ impl App {
             new: h,
             map: map.into_iter().enumerate().collect(),
             as_rows: true,
+            header: false,
         })
     }
 
