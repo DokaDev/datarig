@@ -2,6 +2,8 @@
 
 A full-featured database client that lives in your terminal — light, fast, and safe by default.
 
+![Editing a table in datarig: a cell is changed, the Changes tab shows the exact SQL, and Apply asks first](https://dokadev.github.io/datarig/demo/hero.gif)
+
 datarig is written in Rust with [Ratatui](https://ratatui.rs). It keeps several connections
 open side by side, each with its own tabs, a schema explorer, a SQL editor with vim keys, and a
 results grid that pages through large results explicitly instead of loading them whole. A
