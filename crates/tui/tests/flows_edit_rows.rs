@@ -883,6 +883,26 @@ fn a_new_row_is_tinted_as_a_whole() {
     }
 }
 
+/// A string default that reads like a marker (empty, the NULL label, or in angle brackets) is
+/// shown quoted; an expression longer than the cell's share is cut with `…`.
+#[test]
+fn a_default_that_reads_like_a_marker_is_quoted_and_a_long_expression_is_cut() {
+    let mut t = all_shown();
+    t.columns[1].default = Some("concat('aaaaaaaaaa'::text, 'bbbbbbbbbb'::text)".into());
+    let mut h = ready_with(Lang::En, t);
+    h.keys("o");
+    let line = grid_row(&mut h, 3, 120, 40);
+    assert!(line.contains("\u{2502} <default: concat('aaaaaaaaaa'\u{2026}> \u{2502}"), "{line:?}");
+    for (default, shown) in [("'NULL'::text", "'NULL'"), ("''::text", "''"), ("'<x>'::text", "'<x>'")] {
+        let mut t = all_shown();
+        t.columns[1].default = Some(default.into());
+        let mut h = ready_with(Lang::En, t);
+        h.keys("o");
+        let line = grid_row(&mut h, 3, 120, 40);
+        assert!(line.contains(&format!("\u{2502} {shown} ")), "{default}: {line:?}");
+    }
+}
+
 /// The defaults shown and the numbered gutter at both sizes.
 #[test]
 fn a_new_rows_defaults_and_number_show() {

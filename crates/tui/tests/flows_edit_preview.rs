@@ -1039,6 +1039,17 @@ fn applied_changes_show_over_the_rows_and_the_changes_are_cleared() {
     assert!(edits(&h).applied.is_none());
 }
 
+/// Rows an Apply added are numbered after the rows read, as new rows are: the gutter's numbers
+/// run on.
+#[test]
+fn rows_an_apply_added_keep_the_row_numbers_running() {
+    let (mut h, id, steps) = three_applying(ready(Lang::En));
+    h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+    let s = screen(&mut h, 120, 40);
+    let line = s.lines().find(|l| l.contains("n@x")).unwrap_or_default().to_string();
+    assert!(line.contains("\u{2502} 4 \u{2502}"), "the added row: {line:?}\n{s}");
+}
+
 /// A MySQL insert returns no row: the number its `AUTO_INCREMENT` column took fills that column;
 /// a column left to its default stays `default`.
 #[test]

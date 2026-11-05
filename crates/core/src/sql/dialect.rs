@@ -451,8 +451,37 @@ impl Dialect {
         let text = |t: &lexer::Token| t.text(sql);
         let word =
             |t: &lexer::Token, w: &str| matches!(t.kind, Tok::Keyword | Tok::Ident) && text(t).eq_ignore_ascii_case(w);
+        // MySQL: a string's character set introducer (`_utf8mb4'x'`) goes.
+        let introducer = |i: &lexer::Token, s: &lexer::Token| {
+            matches!(self, Self::MySql(_)) && i.kind == Tok::Ident && text(i).starts_with('_') && i.end == s.start
+        };
         let (value, rest) = match toks.as_slice() {
-            [s, rest @ ..] if s.kind == Tok::Str => (Constant::Value(self.unquote_literal(text(s))?), rest),
+            // A constant in parentheses with a cast after them (PostgreSQL prints `0::numeric`
+            // as `(0)::numeric`).
+            [open, ..] if open.kind == Tok::LParen => {
+                let mut depth = 0usize;
+                let close = toks.iter().position(|t| {
+                    match t.kind {
+                        Tok::LParen => depth += 1,
+                        Tok::RParen => depth = depth.saturating_sub(1),
+                        _ => {}
+                    }
+                    t.kind == Tok::RParen && depth == 0
+                })?;
+                (self.constant(&sql[open.end..toks[close].start])?, &toks[close + 1..])
+            }
+            [i, s, rest @ ..] if s.kind == Tok::Str && introducer(i, s) => {
+                (Constant::Value(self.unquote_literal(text(s))?), rest)
+            }
+            [s, rest @ ..] if s.kind == Tok::Str => {
+                let t = text(s);
+                // An introducer the lexer took into the string's token.
+                let t = match self {
+                    Self::MySql(_) if t.starts_with('_') => &t[t.find(self.string_quotes())?..],
+                    _ => t,
+                };
+                (Constant::Value(self.unquote_literal(t)?), rest)
+            }
             [sign, n, rest @ ..]
                 if sign.kind == Tok::Op && matches!(text(sign), "-" | "+") && n.kind == Tok::Number =>
             {
@@ -501,7 +530,15 @@ impl Dialect {
     pub fn insert_default(self, default: &str) -> &str {
         match self {
             Self::Postgres => default,
-            Self::MySql(_) => default.find(" ON UPDATE ").map_or(default, |i| &default[..i]),
+            Self::MySql(_) => {
+                // `ON UPDATE` as words, not inside a string.
+                let toks: Vec<lexer::Token> =
+                    lexer::lex_in(default, self).into_iter().filter(|t| !t.is_trivia()).collect();
+                let at = toks.windows(2).find(|w| {
+                    w[0].text(default).eq_ignore_ascii_case("on") && w[1].text(default).eq_ignore_ascii_case("update")
+                });
+                at.map_or(default, |w| default[..w[0].start].trim_end())
+            }
         }
     }
 }

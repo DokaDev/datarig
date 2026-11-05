@@ -160,14 +160,15 @@ naming the column.
 (on a new row, `o` and `O` put the next one right after it). The cursor goes to the new row.
 `D` on a new row removes it. A new row is tinted as a whole (theme token `edit_inserted_row`:
 its cells, the separators and its number), and the gutter numbers it after the rows read
-(`4+`, `5+` after three rows); the messages name it as the Changes tab does, by its place among
-the new rows (`new 1`).
+(`4+`, `5+` after three rows; rows an Apply added are numbered the same way). The number counts
+the rows read so far: when the next page is read, the new rows' numbers move after it. The
+messages name a new row as the Changes tab does, by its place among the new rows (`new 1`).
 
 A cell left to its column's default shows, muted, what the server will put there:
 
 | Column | Shown |
 |---|---|
-| a constant default (`'ACTIVE'::character varying`, `0`, `'{}'::jsonb`) | its value: `ACTIVE`, `0`, `{}` |
+| a constant default (`'ACTIVE'::character varying`, `0`, `'{}'::jsonb`) | its value: `ACTIVE`, `0`, `{}`; a text that reads like one of these marks (empty, `NULL`, `<…>`) in quotes |
 | an identity, `AUTO_INCREMENT`, a sequence (`serial`), a generated column | `<generated>` |
 | another default (`now()`, `CURRENT_TIMESTAMP`) | `<default: now()>`, a long one cut short |
 | no default, takes NULL | `NULL` |

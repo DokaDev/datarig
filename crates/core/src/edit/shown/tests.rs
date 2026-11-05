@@ -42,6 +42,11 @@ fn postgres_defaults_show_their_value_or_expression() {
     assert_eq!(shown(PG, true, Some("1.5")), value("1.5"));
     assert_eq!(shown(PG, true, Some("(-1)")), value("-1"));
     assert_eq!(shown(PG, true, Some("'-1'::integer")), value("-1"));
+    // `DEFAULT 0::numeric`, as PostgreSQL prints it.
+    assert_eq!(shown(PG, true, Some("(0)::numeric")), value("0"));
+    assert_eq!(shown(PG, true, Some("(-1)::numeric")), value("-1"));
+    assert_eq!(shown(PG, true, Some("('x'::text)::character varying")), value("x"));
+    assert_eq!(shown(PG, true, Some("(0) + 1")), expr("(0) + 1"));
     assert_eq!(shown(PG, true, Some("true")), value("true"));
     assert_eq!(shown(PG, false, Some("NULL::character varying")), Null);
     assert_eq!(shown(PG, true, Some("now()")), expr("now()"));
@@ -68,9 +73,19 @@ fn mysql_defaults_show_their_value_or_expression() {
     assert_eq!(shown(MY, true, Some("(1.5)")), value("1.5"));
     // A PostgreSQL cast is no MySQL syntax: not taken for a constant.
     assert_eq!(shown(MY, true, Some("'a'::text")), expr("'a'::text"));
-    // A session in ANSI_QUOTES mode: the server still prints defaults in its default mode.
+    // What an `UPDATE` sets is split off outside quotes only.
+    assert_eq!(shown(MY, true, Some("'a ON UPDATE b'")), value("a ON UPDATE b"));
+    assert_eq!(shown(MY, true, Some("'a ON UPDATE b' ON UPDATE CURRENT_TIMESTAMP")), value("a ON UPDATE b"));
+    // An expression default of a string, after the driver's unescaping: the character set's
+    // introducer goes.
+    assert_eq!(shown(MY, true, Some("(_utf8mb4'')")), value(""));
+    assert_eq!(shown(MY, true, Some("(_utf8mb4'it''s')")), value("it's"));
+    // The driver quotes a literal in the session's mode: read back in the same mode.
+    let nbe = Dialect::MySql(MySqlMode { no_backslash_escapes: true, ..MySqlMode::default() });
+    assert_eq!(shown(nbe, true, Some(&nbe.quote_literal("a\\b"))), value("a\\b"));
+    assert_eq!(shown(MY, true, Some(&MY.quote_literal("a\\b"))), value("a\\b"));
     let ansi = Dialect::MySql(MySqlMode { ansi_quotes: true, ..MySqlMode::default() });
-    assert_eq!(shown(ansi, true, Some("\"x\"")), value("x"));
+    assert_eq!(shown(ansi, true, Some(&ansi.quote_literal("x"))), value("x"));
     // Nothing draws a number in MySQL but AUTO_INCREMENT.
     assert_eq!(shown(MY, true, Some("(nextval(s))")), expr("nextval(s)"));
 }

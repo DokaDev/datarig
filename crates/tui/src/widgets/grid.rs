@@ -660,6 +660,10 @@ pub fn render(
             DefaultShown::Needed => None,
             DefaultShown::Generated => Some((generated_label.to_string(), false)),
             DefaultShown::Null => Some((null_label.to_string(), false)),
+            // A string that reads like a marker (empty, NULL, `<…>`) is quoted.
+            DefaultShown::Value(v) if v.is_empty() || v.eq_ignore_ascii_case(&null_label) || v.starts_with('<') => {
+                Some((format!("'{}'", sanitize_cell(v)), false))
+            }
             DefaultShown::Value(v) => Some((sanitize_cell(v), true)),
             DefaultShown::Expression(e) => {
                 let e = sanitize_cell(e);
@@ -858,9 +862,8 @@ pub fn render(
         let deleted = added.is_none()
             && (rs.edit.batch.deleted(r)
                 || (applied.is_some_and(|a| a.deleted.contains(&r)) && rs.edit.batch.row(r).is_none()));
-        // A new row continues the numbers (the messages call it so); a row an Apply added has
-        // none of the result.
-        let number = if added.is_some() && new.is_none() { String::new() } else { (r + 1).to_string() };
+        // Rows an Apply added and new rows continue the numbers of the rows read.
+        let number = (r + 1).to_string();
         buf.set_stringn(area.x, y, fit(&number, gutter - 1, Align::Right), gutter - 1, num_style);
         // What is pending in the row, in the gutter's free column ([`row_mark`]).
         use crate::app::edit::RowAt;
@@ -976,8 +979,9 @@ pub fn render(
             put(buf, cx + 1, y, &" ".repeat(w + 2), bg);
             let text = fit(&text, w, align);
             put(buf, cx + 2, y, &text, style);
-            // NULL (and a row not read) keeps its own look.
-            if !is_null {
+            // NULL (and a row not read) keeps its own look; what a new row's default shows is
+            // marked where the view cuts it off, as a value is.
+            if !is_null || drafted.is_some() {
                 edge_mark(buf, cx + 2, w, &text, y, bg);
             }
         }

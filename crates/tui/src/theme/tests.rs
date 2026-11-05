@@ -1195,7 +1195,8 @@ fn the_active_tab_stands_apart_from_every_other_background_in_every_theme() {
 
 /// A new row's background in every built-in theme that draws with RGB: its values (body text,
 /// `edit_inserted`), its defaults (muted text), the mark of a cell that needs a value
-/// (`edit_invalid`) and the gutter's `!` (the error color) read on it (3:1 or more); it stands
+/// (`edit_invalid`), the gutter's `!` (the error color) and the cursor row's number (the accent)
+/// read on it (3:1 or more); it stands
 /// apart (ΔE) from the background and the alternate rows, so the row reads as new, and from
 /// the cursor (focused or not) and a selected range, which replace it on their cells; and it
 /// does not vanish into them in 256 colors. The terminal theme keeps the terminal's
@@ -1211,6 +1212,7 @@ fn new_rows_have_a_background_of_their_own() {
             ("a new value", fg(th.edit_inserted)),
             ("a value needed", fg(th.edit_invalid)),
             ("the gutter's !", th.error),
+            ("the cursor row's number", th.accent),
         ] {
             let k = contrast(c, row);
             assert!(k >= 3.0, "{name}: {what} on a new row: {k:.2}");

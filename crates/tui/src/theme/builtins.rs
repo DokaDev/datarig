@@ -551,7 +551,7 @@ pub const TOKYO_NIGHT_DAY: Theme = Theme {
     edit_pending: Style::new().fg(rgb(0x7A5D33)).add_modifier(Modifier::BOLD),
     // The green darkened for 3:1 on the selection.
     edit_inserted: Style::new().fg(rgb(0x4A6630)).add_modifier(Modifier::BOLD),
-    edit_inserted_row: rgb(0xCDD2CF),
+    edit_inserted_row: rgb(0xE4EEEA),
     edit_deleted: Style::new().fg(rgb(0x68709A)).add_modifier(Modifier::CROSSED_OUT),
     edit_applied: Style::new().fg(rgb(0x285FAD)).add_modifier(Modifier::ITALIC),
     edit_invalid: Style::new().fg(rgb(0xA63838)).add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
