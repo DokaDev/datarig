@@ -25,4 +25,4 @@ expression: t.backend()
 "│                      ││ 7 in ASCII User     │ ascii_o││                      │"
 "│                      ││ 8   ＡＢＣ 半角 ｱｲｳ │ é combi││                      │" Hidden by multi-width symbols: [(31, " "), (33, " "), (35, " "), (38, " "), (40, " ")]
 "╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
-" NORMAL  local-pg │ Selecting: move to extend · y copies · Esc cancels       EN "
+" NORMAL  local-pg │ 2 rows × 5 columns · 9 distinct values · NULL 1          EN "

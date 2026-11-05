@@ -156,6 +156,7 @@ impl App {
         self.on_app_event_here(ev);
         self.tips_follow();
         self.sweep_grid_search();
+        self.sync_grid_summary();
         self.sweep_cell_edit();
         self.sweep_as_plan();
         self.sweep_exports();
@@ -185,6 +186,7 @@ impl App {
             AppEvent::Export(ev) => self.on_export_event(ev),
             AppEvent::Folder(a) => self.on_folder_answer(a),
             AppEvent::GridSearch(a) => self.on_grid_search_answer(a),
+            AppEvent::GridSummary(a) => self.on_grid_summary(a),
             AppEvent::Clipboard(a) => self.on_clipboard_answer(a),
         }
         // What an open quick connect list waits for may have arrived.
