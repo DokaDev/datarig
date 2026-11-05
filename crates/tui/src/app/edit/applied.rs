@@ -281,8 +281,8 @@ impl App {
         }
     }
 
-    /// The row the grid showed for `origin` when Apply `a` was sent, counted from 1, with its
-    /// key as read (`12 (id = 5)`) when its rows are found by a key.
+    /// The row of `origin` when Apply `a` was sent, named as the Changes tab's list names it
+    /// (`id=5`, `row 31`, `new 1`).
     fn applied_row(&self, tab: TabId, result: u64, a: &Applying, origin: Origin) -> String {
         let t = self.tabs.get(tab);
         let rs = t.and_then(|t| {
@@ -293,38 +293,10 @@ impl App {
             shown.or_else(|| t.exec.steps.values().map(|p| &p.rs).find(|rs| rs.id == result))
         });
         let Some(rs) = rs else { return "?".to_string() };
-        match origin {
-            Origin::New(id) => {
-                let len = rs.rows.len() + rs.edit.applied_new();
-                a.batch
-                    .drafts()
-                    .iter()
-                    .position(|d| d.id == id)
-                    .map_or_else(|| "?".to_string(), |i| (len + i + 1).to_string())
-            }
-            Origin::Row(r) => {
-                let key = match (&rs.edit.target, a.batch.row(r)) {
-                    (Target::Ready(t), Some(e)) => match &t.identity {
-                        Identity::Key { columns, .. } => {
-                            let parts: Vec<String> = columns
-                                .iter()
-                                .filter_map(|&c| {
-                                    let name = &rs.columns.get(c)?.meta.name;
-                                    let v = e.orig.get(c)?.as_deref()?;
-                                    Some(format!("{name} = {}", crate::text::clip(&crate::text::sanitize_cell(v), 40)))
-                                })
-                                .collect();
-                            (parts.len() == columns.len()).then(|| parts.join(", "))
-                        }
-                        Identity::Values { .. } => None,
-                    },
-                    _ => None,
-                };
-                match key {
-                    Some(k) => format!("{} ({k})", r + 1),
-                    None => (r + 1).to_string(),
-                }
-            }
-        }
+        let at = match origin {
+            Origin::Row(r) => RowAt::Read(r),
+            Origin::New(id) => RowAt::New(id),
+        };
+        self.row_name_in(rs, &a.batch, at)
     }
 }

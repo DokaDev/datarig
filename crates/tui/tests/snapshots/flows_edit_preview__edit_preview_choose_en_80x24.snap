@@ -11,7 +11,7 @@ expression: backend
 "│ ╭ Apply changes — shop.users ──────────────────────────────────────────────╮ │"
 "│ │ 1 update                                                                 │ │"
 "│▾│                                                                          │ │"
-"│ │ ! Row 1 matches 3 identical rows                                         │─╯"
+"│ │ ! row 1 · matches 3 identical rows                                       │─╯"
 "│ │   [1] just one   [a] all 3                                               │─╮"
 "│ │                                                                          │ │"
 "│ │ Runs in one transaction; commits at the end.                             │ │"

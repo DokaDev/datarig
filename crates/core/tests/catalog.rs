@@ -319,6 +319,8 @@ const SAME_IN_KO: &[&str] = &[
     "ssh.failed",
     "edit.paste.value_reason",
     "edit.badge.pending_invalid_short",
+    "edit.preview.at_row",
+    "edit.preview.invalid_why",
     // SQL's own keyword, shown as the value.
     "results.null",
     // Short marks that fit a tab title or a tree row; the help explains them.

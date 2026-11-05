@@ -65,7 +65,7 @@ fn every_changed_cell_is_a_line_grouped_by_row_deletes_then_updates_then_new_row
             set(1, key("id=1"), "name", "'n1'", "'x'"),
             set(2, None, "note", "NULL", "'it's'"),
             ListLine {
-                new: Some("id=DEFAULT \u{B7} name='Kim' \u{B7} note=NULL".into()),
+                new: Some("name='Kim' \u{B7} note=NULL \u{B7} DEFAULT \u{D7}1".into()),
                 ..line(Mark::Inserted, RowAt::New(id), None, Some(Pointer::New(1)), "")
             },
         ]
@@ -95,4 +95,87 @@ fn rows_found_by_values_are_named_by_their_grid_row_and_keys_and_values_are_cut(
     let new = got[0].new.as_deref().unwrap();
     assert!(new.starts_with("'a") && new.ends_with("\u{2026}'") && !new.contains('\n'), "{new}");
     assert!(crate::text::width(new) <= 42, "{new}");
+}
+
+#[test]
+fn a_new_row_lists_the_values_set_and_counts_the_columns_left_to_their_default() {
+    let t = target(Identity::Key { primary: true, columns: vec![0] });
+    let new = |cells: Vec<Value>| {
+        let mut b = EditBatch::new();
+        b.add(9, None, cells);
+        list_lines(&t, &b, &names()).remove(0).new.unwrap()
+    };
+    // Every column set: no count; the computed column is never one.
+    assert_eq!(new(vec![text("1"), text("a"), Value::Null, Value::Default]), "id='1' \u{B7} name='a' \u{B7} note=NULL");
+    assert_eq!(new(vec![Value::Default; 4]), "DEFAULT \u{D7}3");
+    assert_eq!(new(vec![Value::Default, Value::Default, text("x"), Value::Default]), "note='x' \u{B7} DEFAULT \u{D7}2");
+}
+
+#[test]
+fn control_characters_of_values_names_and_keys_are_shown_escaped() {
+    let t = target(Identity::Key { primary: true, columns: vec![1] });
+    let mut names = names();
+    names[2] = "no\tte".into();
+    let mut b = EditBatch::new();
+    b.set(&[(0, 2)], &text("a\u{7}b\r\nc\td \\n \\q \u{1b}\u{7f}\u{85}"), |r| {
+        let mut o = orig(r);
+        o[1] = Some("k\ny".into());
+        o
+    });
+    let got = list_lines(&t, &b, &names);
+    assert_eq!(got[0].row, Some(Pointer::Key(r"name=k\ny".into())));
+    assert_eq!(got[0].column, r"no\tte");
+    assert_eq!(got[0].new.as_deref(), Some(r"'a\x07b\r\nc\td \\n \q \x1b\x7f\u{85}'"));
+    // A new row's too.
+    let mut b = EditBatch::new();
+    b.add(9, None, vec![Value::Default, text("x\ny"), Value::Default, Value::Default]);
+    assert_eq!(list_lines(&t, &b, &names)[0].new.as_deref(), Some("name='x\\ny' \u{B7} DEFAULT \u{D7}2"));
+}
+
+#[test]
+fn a_cut_never_splits_an_escape() {
+    let t = target(Identity::Key { primary: true, columns: vec![1] });
+    let mut b = EditBatch::new();
+    let value = format!("{}\u{7}yyyy", "x".repeat(38));
+    b.set(&[(0, 2)], &text(&value), |r| {
+        let mut o = orig(r);
+        o[1] = Some(format!("{}\nzzz", "y".repeat(17)));
+        o
+    });
+    let got = list_lines(&t, &b, &names());
+    assert_eq!(got[0].new.as_deref(), Some(format!("'{}\u{2026}'", "x".repeat(38)).as_str()));
+    assert_eq!(got[0].row, Some(Pointer::Key(format!("name={}\u{2026}", "y".repeat(17)))));
+}
+
+#[test]
+fn a_row_s_problems_follow_its_lines_and_a_row_with_no_line_is_named_before_its_own() {
+    let t = target(Identity::Key { primary: true, columns: vec![0] });
+    let mut b = EditBatch::new();
+    let id = b.add(9, None, vec![Value::Default; 4]);
+    b.set(&[(1, 1), (1, 2)], &text("x"), orig);
+    b.delete(&[4], orig);
+    let list = list_lines(&t, &b, &names());
+    let problem =
+        |at: Option<(RowAt, Option<usize>)>| Problem { text: String::new(), bare: String::new(), at, choice: false };
+    let problems = [
+        problem(Some((RowAt::New(id), Some(1)))),
+        problem(Some((RowAt::Read(7), None))),
+        problem(None),
+        problem(Some((RowAt::Read(1), Some(2)))),
+        problem(Some((RowAt::Read(4), None))),
+        problem(Some((RowAt::New(id), None))),
+    ];
+    let got = entries(&problems, &list, |at| row_pointer(Some(&t), &b, &names(), at).unwrap());
+    use ListEntry::{Line, Problem as P, Row};
+    assert_eq!(
+        got,
+        [P(2), Line(0), P(4), Line(1), Line(2), P(3), Line(3), P(0), P(5), Row(RowAt::Read(7), Pointer::Row(8)), P(1)]
+    );
+    // How a problem names its row: as the list does.
+    assert_eq!(row_pointer(Some(&t), &b, &names(), RowAt::Read(1)), Some(Pointer::Key("id=1".into())));
+    assert_eq!(row_pointer(Some(&t), &b, &names(), RowAt::New(id)), Some(Pointer::New(1)));
+    // Without a target: a row read by its row in the grid; a new row that is gone is none.
+    assert_eq!(row_pointer(None, &b, &names(), RowAt::Read(1)), Some(Pointer::Row(2)));
+    assert_eq!(row_pointer(None, &b, &names(), RowAt::New(id)), Some(Pointer::New(1)));
+    assert_eq!(row_pointer(None, &b, &names(), RowAt::New(id + 1)), None);
 }

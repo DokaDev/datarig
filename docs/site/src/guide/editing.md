@@ -157,11 +157,11 @@ naming the column.
 
 **New rows appear at the end of the result**, after the rows read, in the order they were added
 (on a new row, `o` and `O` put the next one right after it). The cursor goes to the new row.
-`D` on a new row removes it. A new row has no number in the gutter; the messages number it after
-the rows read ("Row 4" after three rows).
+`D` on a new row removes it. A new row has no number in the gutter; the messages name it as the
+Changes tab does, by its place among the new rows (`new 1`).
 
 The Changes tab lists, and an Apply refuses, a new row that leaves a `NOT NULL` column without
-a default to its default ("Row 4: name is NOT NULL and has no default; give it a value"), and
+a default to its default ("new 1 · name is NOT NULL and has no default; give it a value"), and
 one of a table with such a column that the result does not show ("…is not in the result; add
 it to the SELECT").
 
@@ -185,7 +185,7 @@ typed values: marked in the grid, listed in the Changes tab, and nothing is sent
 The status line says how the text was read and what it did:
 
 ```
-Pasted as TSV · 3 rows × 4 columns · 1 invalid (row 14 · price) · 5 cells changed · 1 new row · u undo
+Pasted as TSV · 3 rows × 4 columns · 1 invalid (id=14 · price) · 5 cells changed · 1 new row · u undo
 ```
 
 Where the status bar is too narrow for all of it, the counts of cells and new rows go first,
@@ -299,7 +299,8 @@ it, and marked:
   its value still shown, also under the cursor; the gutter's `!` also marks a new row an Apply
   is refused for (see [New rows](#new-rows))
 - the badge counts them: `5 pending · 1 invalid`
-- the Changes tab lists them first, with the reason: "Row 14 · price: not a number: 'abc'"
+- the Changes tab lists each under its row, with the reason: "price: not a number: 'abc'"
+  (elsewhere with the row named: "id=14 · price: not a number: 'abc'")
 - the changes are not applied while any value is invalid (Apply shows the Changes tab instead)
 
 Fix a value with `e`: the editor opens with the pasted text and says why it is not valid ("Not
@@ -353,28 +354,42 @@ has pending changes too, a line says so: `Result 2 also has 1 pending`.
 
 Its first line names the result and the table, and says how many updates, inserts, deletes and
 problems there are. Then one line per change, deletes first, then updates (a line per changed
-cell), then new rows:
+cell), then new rows, each row's problems under it:
 
 ```text
- Changes — Result 1 · shop.users                        2 updates · 1 insert · 1 delete
+ Changes — Result 1 · shop.users              2 updates · 2 inserts · 1 delete · 1 problem
  - id=2   delete
  ~ id=1   email     'a@x' → 'z@x'
  ~ id=3   nickname  'cy' → NULL
- + new 1  id=DEFAULT · email='n@x' · nickname=DEFAULT
+ + new 1  email='n@x' · DEFAULT ×2
+ + new 2  DEFAULT ×3
+   ! email is NOT NULL and has no default; give it a value
 ```
 
 - The marks are the gutter's: `~` a changed cell, `+` a new row, `-` a row to be deleted, in
   their colors (`edit_changed`, `edit_inserted`, `edit_deleted`); they read without colors too.
 - A row found by its key is named by the key's values (`id=2`, `a=1,b=2`); a row found by its
   values by its row in the grid, `row 31  (located by its values)`; a new row by its place
-  among the new rows, `new 1`.
+  among the new rows, `new 1`. A row is named the same way wherever a problem is about it: in
+  the statements, the Apply's messages, the cell editor and the inspector (`new 1 · email is
+  NOT NULL …`).
 - Values are literals as they were read and as they are to be (`'text'`, `NULL`, `DEFAULT`), a
-  long text cut at 40 characters with `…`, as the statements read them back. A line longer than
-  the pane is cut with `…`.
-- Every reason the changes can't be applied yet comes first, marked `!`, for every row (not
-  only the first): a new row's `NOT NULL` column without a default, a row that matches no row or
-  several rows, a count that failed. A row that matches several identical rows is listed too:
-  which of them to change is asked when you apply.
+  long text cut at 40 characters with `…`. A new row lists the values set, then how many of its
+  columns are left to their default (`DEFAULT ×2`, left out when none is); a column left to a
+  default it lacks is named in the problem under the row. A line longer than the pane is cut
+  with `…`.
+- Control characters in values, column names and the table's name are spelled out: `\n`,
+  `\r`, `\t`, `\x07` (`\u{85}` for one above `\x7f`), and so are the characters that turn the
+  direction of text or are not seen (`\u{202e}`, `\u{200b}`). A value cut short is cut before
+  an escape, never in it. A backslash is doubled where what follows
+  it would read as one of these (`'a\\nb'` is the text `a\nb`), and shown as it is elsewhere
+  (`'a\b'`). This is only how the list shows them: the statements, and what `c` copies,
+  carry the values as they are.
+- Every reason the changes can't be applied yet is marked `!`, for every row (not only the
+  first): under the row's lines, without its name, for a new row's `NOT NULL` column without a
+  default, a row that matches no row or several rows; first, for what is about no row, such as
+  a count that failed. A row that matches several identical rows is listed too: which of them
+  to change is asked when you apply.
 
 `j` and `k` select a line, `Ctrl+D` and `Ctrl+U` move half a page, `g g` and `G` go to the first
 and the last. `Enter` shows the line's row and column in the grid (a row the grid no longer has
@@ -444,10 +459,10 @@ When the changes can't be applied yet, nothing is asked: the Changes tab takes t
 the first problem selected, and the status bar says "Can't apply: 2 problems — see Changes".
 The problems are those of the list above, for instance:
 
-- "Row 3 matches no row of the table now: it was changed or deleted. Re-run the query."
-- "Row 3 matches 2 rows; add the key to the SELECT to edit it": the rows may differ in what the
+- "row 3 · matches no row of the table now: it was changed or deleted. Re-run the query."
+- "row 3 · matches 2 rows; add the key to the SELECT to edit it": the rows may differ in what the
   result does not show.
-- "Row 3: email is not shown whole, so the row can't be found again", and the `NOT NULL` refusals
+- "row 3 · email is not shown whole, so the row can't be found again", and the `NOT NULL` refusals
   of new rows above.
 
 Otherwise the status bar asks, on one line in the warning color:
@@ -479,7 +494,7 @@ a cell over the clipboard. Other keys work as usual.
 A dialog, "Apply changes — shop.users", takes the place of the question when the statements
 must be seen before `y`:
 
-- a row matches several identical rows: "Row 3 matches 2 identical rows", with "[1] just one
+- a row matches several identical rows: "row 3 · matches 2 identical rows", with "[1] just one
   [a] all 2". The table has no key, the result shows every column, each comparing exactly, and
   the rows are the same in all of them. `1` changes one of them, `a` all of them (the write then
   expects 2).
@@ -519,14 +534,14 @@ open, the cursor is closed first; the rows already read stay.
 Either every statement gives its count and the changes are applied ("Applied 3 changes"), or
 nothing is ("Nothing was applied", the changes stay pending and may be applied again). Why is said
 on the Changes tab's second line, and in its SQL view the statement that failed is marked `!` and
-scrolled to. A row found by a key is named with it ("Row 3 (id = 5)"), and a statement in a
-message is its first line, cut short when long:
+scrolled to. A row is named as the Changes tab names it (`id=5`, `row 3`, `new 1`), and a
+statement in a message is its first line, cut short when long:
 
-- "Row 3 was changed or deleted since it was read. Nothing was applied. Re-run the query to see
-  the current values."
-- "Row 3 now matches 2 rows, not 1. Nothing was applied."
-- "Row 3 is locked by another session. Nothing was applied."
-- "Row 3: <the server's error>. Nothing was applied. Statement: <the statement>"
+- "id=5 · was changed or deleted since it was read. Nothing was applied. Re-run the query to
+  see the current values."
+- "row 3 · now matches 2 rows, not 1. Nothing was applied."
+- "id=5 · is locked by another session. Nothing was applied."
+- "new 1 · <the server's error>. Nothing was applied. Statement: <the statement>"
 - "Apply cancelled; nothing was applied."
 - "Apply result unknown — the connection was lost before the server confirmed. Re-run the query
   to check." The changes may be in the table already: the next Apply opens the dialog, whose

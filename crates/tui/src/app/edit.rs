@@ -43,7 +43,7 @@ mod tab;
 
 pub use applied::{Applied, ApplyFailed, Applying};
 pub use ask::{ANSWER_GUARD, ApplyAsk, ApplyWait, AskAction, StatusAsk};
-pub use changes::{ChangesModel, Checks, ListLine, Mark, ModelCache, Pointer, Problem};
+pub use changes::{ChangesModel, Checks, ListEntry, ListLine, Mark, ModelCache, Pointer, Problem, pointer_text};
 pub use lines::Lines;
 pub use paste::{
     ASK_ROWS, CLIPBOARD_TIMEOUT, ClipAnswer, ClipReads, CsvAsk, InvalidCache, Invalids, LastPaste, PasteAsk, PasteIn,
@@ -954,7 +954,7 @@ impl App {
             return self.new_cells_plan(a, target, rows, col);
         }
         let refused = |why: Msg| Some(self.refused_notice(why));
-        let name = rs.columns[col].meta.name.clone();
+        let name = crate::text::escape_controls(&rs.columns[col].meta.name);
         let c = match target.allows(col, Write::Update) {
             Ok(c) => c.clone(),
             Err(r) => return Err(refused(column_reason(r, name))),
@@ -976,7 +976,7 @@ impl App {
         let typed = a == EditAction::Cell;
         let many = rows.len() > 1;
         if let Some((r, why)) = value_not_whole(d, rs, col, &read, rows.start, zone, many).filter(|_| typed) {
-            let (column, reason) = (why.column, self.not_whole_reason(&why.why));
+            let (column, reason) = (crate::text::escape_controls(&why.column), self.not_whole_reason(&why.why));
             return Err(refused(match r {
                 None if why.why == export::NotWhole::Float => Msg::EditWhyShownRounded { column },
                 None => Msg::EditWhyColumnNotWhole { column, reason },
@@ -1006,7 +1006,7 @@ impl App {
             return Err(None);
         };
         let refused = |why: Msg| Some(self.refused_notice(why));
-        let name = rs.columns[col].meta.name.clone();
+        let name = crate::text::escape_controls(&rs.columns[col].meta.name);
         let c = match target.allows(col, Write::Insert) {
             Ok(c) => c.clone(),
             Err(r) => return Err(refused(column_reason(r, name))),
@@ -1017,7 +1017,7 @@ impl App {
         // no value shown rounded).
         let typed = a == EditAction::Cell;
         if let Some((_, why)) = value_not_whole(d, rs, col, &[], 0, zone, false).filter(|_| typed) {
-            let (column, reason) = (why.column, self.not_whole_reason(&why.why));
+            let (column, reason) = (crate::text::escape_controls(&why.column), self.not_whole_reason(&why.why));
             return Err(refused(Msg::EditWhyColumnNotWhole { column, reason }));
         }
         if a == EditAction::SetNull && c.column.not_null {
@@ -1379,7 +1379,7 @@ impl App {
             self.tabs.active_mut().cell_edit = None;
             return;
         };
-        let column = c.column.name.clone();
+        let column = crate::text::escape_controls(&c.column.name);
         // A new row takes any column's default.
         let new_row = self.tab().cell_edit.as_ref().is_some_and(|e| e.new_row());
         let why = match v {
@@ -1410,7 +1410,7 @@ impl App {
         row[col] = Some(text.to_string());
         let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
         let Some((_, refused)) = value_not_whole(d, rs, col, &[row], 0, zone, false) else { return Ok(()) };
-        let (column, reason) = (refused.column, self.not_whole_reason(&refused.why));
+        let (column, reason) = (crate::text::escape_controls(&refused.column), self.not_whole_reason(&refused.why));
         Err(self.i18n.msg(&Msg::EditWhyColumnNotWhole { column, reason }).to_string())
     }
 
@@ -1727,13 +1727,14 @@ impl App {
         };
         match &rs.edit.target {
             Target::Ready(t) => {
-                let table = format!("{}.{}", t.table.schema, t.table.name);
+                let table = crate::text::escape_controls(&format!("{}.{}", t.table.schema, t.table.name));
                 let editable =
                     |table: &str| self.i18n.msg(&Msg::EditBadgeEditable { table: table.to_string() }).to_string();
                 let found = match &t.identity {
                     Identity::Key { columns, .. } => {
-                        let names: Vec<&str> =
-                            columns.iter().filter_map(|&c| rs.columns.get(c)).map(|c| c.meta.name.as_str()).collect();
+                        let names: Vec<String> = (columns.iter().filter_map(|&c| rs.columns.get(c)))
+                            .map(|c| crate::text::escape_controls(&c.meta.name))
+                            .collect();
                         self.i18n.msg(&Msg::EditBadgeKey { columns: names.join(", ") }).to_string()
                     }
                     Identity::Values { .. } => self.i18n.label(Label::EditBadgeByValues).to_string(),

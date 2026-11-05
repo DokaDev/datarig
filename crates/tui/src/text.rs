@@ -45,6 +45,71 @@ pub fn sanitize_cell(s: &str) -> String {
     out
 }
 
+/// A character [`escape_controls`] spells out: a control character, a line or paragraph
+/// separator, or one that changes the direction or is not seen (a zero width space, a byte
+/// order mark). The zero width joiners stay: emoji and scripts are made with them.
+fn spelled(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{200B}' | '\u{200E}' | '\u{200F}' | '\u{2028}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}')
+}
+
+/// `s` on one line with its control characters spelled out, as the Changes tab shows values and
+/// names: `\n`, `\r`, `\t`, `\x07` for another C0 one and DEL, `\u{85}` for a C1 one (and for
+/// the others [`spelled`] names: `\u{202e}`). A backslash is doubled only where what follows it
+/// would read as one of these (`n`, `r`, `t`, `x`, `u`, a backslash, or a character spelled
+/// out), so `a\b` stays as it is while every escape still reads back to one character.
+pub fn escape_controls(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\\' => {
+                let reads_as_escape =
+                    chars.peek().is_some_and(|&n| spelled(n) || matches!(n, 'n' | 'r' | 't' | 'x' | 'u' | '\\'));
+                out.push_str(if reads_as_escape { "\\\\" } else { "\\" });
+            }
+            c if spelled(c) && (c as u32) < 0x80 => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c if spelled(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Text made by [`escape_controls`] clipped to at most `w` columns, as [`clip`] does, but never
+/// in an escape: the cut moves back to where the escape starts.
+pub fn clip_escaped(s: &str, w: usize) -> String {
+    if width(s) <= w {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut acc = 0;
+    let mut rest = s;
+    while !rest.is_empty() {
+        let len = match rest.as_bytes() {
+            [b'\\', b'n' | b'r' | b't' | b'\\', ..] => 2,
+            [b'\\', b'x', ..] => 4.min(rest.len()),
+            [b'\\', b'u', b'{', ..] => rest.find('}').map_or(rest.len(), |e| e + 1),
+            _ => rest.graphemes(true).next().map_or(rest.len(), str::len),
+        };
+        let (token, tail) = rest.split_at(len);
+        let tw = width(token);
+        if acc + tw + 1 > w {
+            break;
+        }
+        out.push_str(token);
+        acc += tw;
+        rest = tail;
+    }
+    if w > 0 {
+        out.push('\u{2026}');
+    }
+    out
+}
+
 /// Truncate `s` so that it occupies exactly `w` columns, ending with `…`.
 /// Never splits a grapheme cluster. If a wide grapheme leaves one column free,
 /// that column is padded with a space. Caller guarantees `width(s) > w`.

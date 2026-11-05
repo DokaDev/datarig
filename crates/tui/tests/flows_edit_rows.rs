@@ -740,13 +740,13 @@ fn a_new_row_an_apply_refuses_is_marked_and_says_why() {
     // The badge, short at 120x40: one pending, two problems (the email, the row's `name`).
     let screen = h.screen(120, 40);
     assert!(screen.contains("1 \u{b7} 2!"), "{screen}");
-    assert!(screen.contains("Row 4: email is NOT NULL"), "the inspector says why:\n{screen}");
+    assert!(screen.contains("new 1 \u{b7} email is NOT NULL"), "the inspector says why:\n{screen}");
     // The cell editor: not invalid, it needs a value.
     h.keys("e");
     let e = h.app.tab().cell_edit.as_ref().expect("the editor");
     assert_eq!((e.error.as_deref(), e.invalid), (Some("email has no default"), false));
     assert!(h.status(120, 40).contains("Can't edit: email has no default"), "{}", h.status(120, 40));
-    assert!(!h.status(120, 40).contains("Row 4"), "{}", h.status(120, 40));
+    assert!(!h.status(120, 40).contains("new 1"), "{}", h.status(120, 40));
     h.key(KeyCode::Esc);
     type_cell(&mut h, "n@x");
     h.app.transient = None;

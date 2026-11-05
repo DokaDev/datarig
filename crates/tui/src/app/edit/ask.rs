@@ -133,7 +133,8 @@ impl App {
         let Some(rs) = rows_of(t).filter(|rs| rs.id == result) else { return };
         let count = m.problems.iter().filter(|p| !p.choice).count() as u64;
         if count > 0 {
-            self.changes_show_problems();
+            let first = m.entries.iter().position(|e| matches!(e, ListEntry::Problem(k) if !m.problems[*k].choice));
+            self.changes_show_problems(first.unwrap_or(0));
             let said = Msg::EditAskProblems { count };
             return if waited { self.ask_ended(said) } else { self.flash(Notice::new(said, Level::Info)) };
         }
@@ -172,7 +173,7 @@ impl App {
         let c = rs.edit.batch.counts();
         let count = c.total() as u64;
         let table = match &rs.edit.target {
-            Target::Ready(x) => format!("{}.{}", x.table.schema, x.table.name),
+            Target::Ready(x) => crate::text::escape_controls(&format!("{}.{}", x.table.schema, x.table.name)),
             _ => String::new(),
         };
         let summary = m.summary.clone();
@@ -210,14 +211,14 @@ impl App {
         forms
     }
 
-    /// The Changes tab of the shown result with the focus, its first line (a problem) selected.
-    fn changes_show_problems(&mut self) {
+    /// The Changes tab of the shown result with the focus, its line `line` (a problem) selected.
+    fn changes_show_problems(&mut self, line: usize) {
         let t = self.tab_mut();
         t.exec.view = tabs::ResultView::Changes;
         t.pane.hidden = false;
         self.focus = Focus::Results;
         if let Some(c) = self.changes_cursor_mut() {
-            c.line = 0;
+            c.line = line;
             c.scroll = 0;
         }
     }

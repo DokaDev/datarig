@@ -21,9 +21,9 @@ expression: "screen(&mut h, w, hh)"
 │                            │╭ Results · 3 rows ──────────────────────────────────────────────────────────────────────╮
 │                            ││ Result 1  [Changes 2]  Chart  Messages                                             H/L │
 │                            ││ Changes — Result 1 · shop.users                                  2 updates · 1 problem │
-│                            ││ ! Row 1 · id: not a whole number: 'abc'                                                │
 │                            ││ ~ id=1  id     '1' → 'abc'                                                             │
 │                            ││ ~       email  'a@x' → 'z@x'                                                           │
+│                            ││   ! id: not a whole number: 'abc'                                                      │
 │                            ││ ~ id=2  id     '2' → '9'                                                               │
 │                            ││ ~       email  'b@x' → 'y@x'                                                           │
 │                            ││                                                                                        │

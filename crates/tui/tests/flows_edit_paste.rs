@@ -354,6 +354,20 @@ fn space_d_capital_v_reads_the_last_paste_again_in_its_place() {
     assert_eq!(revision(&h), before);
 }
 
+/// An invalid pasted value's control characters are spelled out once, wherever it is said.
+#[test]
+fn an_invalid_pasted_value_says_its_control_characters_once() {
+    let mut h = ready(Lang::En);
+    h.keys("h");
+    paste(&mut h, "a\u{7}b\\n");
+    let why = r"not a whole number: 'a\x07b\\n'";
+    let inv = h.app.shown_invalid().expect("resolved");
+    assert_eq!(inv.cells.get(&(RowAt::Read(0), 0)).map(String::as_str), Some(why));
+    let m = h.app.shown_changes().expect("a model");
+    assert_eq!(m.problems[0].text, format!("id=1 \u{B7} id: {why}"));
+    assert_eq!(m.problems[0].bare, format!("id: {why}"));
+}
+
 #[test]
 fn invalid_values_are_kept_marked_listed_first_and_block_the_apply() {
     let mut h = ready(Lang::En);
@@ -362,7 +376,7 @@ fn invalid_values_are_kept_marked_listed_first_and_block_the_apply() {
     assert_eq!(pending(&h, 0, 0), Some(t("abc")));
     assert_eq!(pending(&h, 1, 0), Some(t("")));
     let text = said(&mut h);
-    assert!(text.contains("2 rows × 1 column · 2 invalid (first: row 1 · id) · 2 cells changed · u undo"), "{text}");
+    assert!(text.contains("2 rows × 1 column · 2 invalid (first: id=1 · id) · 2 cells changed · u undo"), "{text}");
     let inv = h.app.shown_invalid().expect("resolved");
     assert_eq!(inv.cells.get(&(RowAt::Read(0), 0)).map(String::as_str), Some("not a whole number: 'abc'"));
     assert_eq!(inv.cells.get(&(RowAt::Read(1), 0)).map(String::as_str), Some("empty value — paste \\N for NULL"));
@@ -370,8 +384,10 @@ fn invalid_values_are_kept_marked_listed_first_and_block_the_apply() {
     assert!(grid_line(&mut h, 0).contains("│ 1!│   abc │"), "{:?}", grid_line(&mut h, 0));
     // The Changes tab lists them first, with the reason.
     let m = h.app.shown_changes().expect("a model");
-    assert_eq!(m.problems[0].text, "Row 1 · id: not a whole number: 'abc'");
-    assert_eq!(m.problems[1].text, "Row 2 · id: empty value — paste \\N for NULL");
+    assert_eq!(m.problems[0].text, "id=1 · id: not a whole number: 'abc'");
+    assert_eq!(m.problems[1].text, "id=2 · id: empty value — paste \\N for NULL");
+    // Listed under their rows, without the rows' names.
+    assert_eq!(m.problems[0].bare, "id: not a whole number: 'abc'");
     // The Apply is refused: the problems shown, nothing sent.
     h.sent();
     h.keys(" da");

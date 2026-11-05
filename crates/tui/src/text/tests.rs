@@ -167,3 +167,31 @@ fn slice_cols_blanks_a_wide_character_cut_by_an_edge() {
         }
     }
 }
+
+#[test]
+fn control_characters_are_spelled_out_and_a_backslash_doubled_only_before_an_escape() {
+    assert_eq!(escape_controls("plain \u{1F418} text"), "plain \u{1F418} text");
+    assert_eq!(escape_controls("a\r\nb\tc\u{7}d"), r"a\r\nb\tc\x07d");
+    assert_eq!(escape_controls("\u{0}\u{1b}\u{7f}\u{85}\u{9f}\u{2028}"), r"\x00\x1b\x7f\u{85}\u{9f}\u{2028}");
+    // A backslash stays one unless what follows would read as an escape.
+    assert_eq!(escape_controls(r"a\b\db"), r"a\b\db");
+    assert_eq!(escape_controls(r"a\nb \t \x41 \u \\ end\"), r"a\\nb \\t \\x41 \\u \\\ end\");
+    assert_eq!(escape_controls("\\\n"), r"\\\n");
+}
+
+#[test]
+fn direction_and_unseen_characters_are_spelled_out_and_joiners_kept() {
+    assert_eq!(escape_controls("a\u{202E}b\u{200B}c\u{FEFF}"), r"a\u{202e}b\u{200b}c\u{feff}");
+    let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+    assert_eq!(escape_controls(family), family);
+}
+
+#[test]
+fn an_escaped_text_is_cut_before_an_escape_never_in_it() {
+    assert_eq!(clip_escaped(r"abc\x07def", 5), "abc\u{2026}");
+    assert_eq!(clip_escaped(r"abc\x07def", 8), "abc\\x07\u{2026}");
+    assert_eq!(clip_escaped(r"ab\u{85}cd", 7), "ab\u{2026}");
+    assert_eq!(clip_escaped(r"ab\\n", 4), "ab\u{2026}");
+    assert_eq!(clip_escaped(r"ab\c", 4), r"ab\c");
+    assert_eq!(clip_escaped("short", 9), "short");
+}

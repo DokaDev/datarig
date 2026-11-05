@@ -15,7 +15,7 @@ use datarig_core::edit::{Expect, Step, Value};
 use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::policy::{CommitRule, Policy};
 use datarig_core::profile::ConnectionConfig;
-use datarig_tui::app::edit::{Applied, ChangesModel, EditState, PreviewLine, RowAt, Target};
+use datarig_tui::app::edit::{Applied, ChangesModel, EditState, ListEntry, PreviewLine, RowAt, Target};
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
 use datarig_tui::app::{Focus, Results};
 use datarig_tui::keymap::Ctx;
@@ -167,8 +167,10 @@ fn lines(h: &Harness) -> Vec<PreviewLine> {
 fn blocked(h: &mut Harness) -> Vec<String> {
     assert!(h.app.overlays.top().is_none() && h.app.ask.is_none(), "nothing asked");
     assert_eq!(h.app.key_context(), Ctx::Changes);
-    assert_eq!(edits(h).cursor.line, 0, "the first problem selected");
     let m = h.app.shown_changes().expect("a model");
+    // A row's problems are listed under its lines.
+    let first = m.entries.iter().position(|e| matches!(e, ListEntry::Problem(_)));
+    assert_eq!(Some(edits(h).cursor.line), first, "the first problem selected");
     assert_eq!(said(h), Some(Msg::EditAskProblems { count: m.problems.len() as u64 }));
     assert!(!h.sent().iter().any(|c| matches!(c, DbCommand::ApplyEdits { .. })), "nothing applied");
     m.problems.iter().map(|p| p.text.clone()).collect()
@@ -357,7 +359,7 @@ fn a_count_for_changes_that_moved_is_dropped_and_the_changes_are_not_counted() {
     assert!(edits(&h).checks.matches().is_empty(), "nothing recorded for the old changes");
     let m = h.app.shown_changes().expect("a model");
     assert_eq!(edits(&h).changes.builds(), at, "what was counted did not move");
-    assert_eq!(m.sql, [PreviewLine::Problem("Row 1 was not counted".into())]);
+    assert_eq!(m.sql, [PreviewLine::Problem("row 1 \u{B7} was not counted".into())]);
 }
 
 /// `mysql_note_previewed`'s first row's note set and counted, its changes shown: how many times
@@ -401,10 +403,10 @@ fn the_changes_are_made_again_when_the_values_the_rows_were_read_in_move() {
     rows_mut(&mut h).read_in = ReadIn::Changed;
     let m = made_again(&mut h, at, "the values the rows were read in");
     let found: Vec<_> = m.problems.iter().map(|p| (p.text.as_str(), p.at)).collect();
-    let text = "Row 1: name is not shown whole, so the row can't be found again";
+    let text = "row 1 \u{B7} name is not shown whole, so the row can't be found again";
     // The value typed for `note` is no longer known to be stored as typed either: it is invalid
     // now, listed first.
-    let note = "Row 1 · note: note was read across a change of the session's time zone or character set \
+    let note = "row 1 · note: note was read across a change of the session's time zone or character set \
                 (run it again to copy it), so its values can't be edited as shown";
     assert_eq!(found, [(note, Some((RowAt::Read(0), Some(2)))), (text, Some((RowAt::Read(0), Some(1))))]);
     assert_eq!(m.sql, [PreviewLine::Problem(note.into())]);
@@ -467,8 +469,8 @@ fn a_row_gone_ambiguous_or_not_counted_is_said_and_nothing_can_be_applied() {
     let mut h = by_values(Lang::En);
     type_cell(&mut h, "z@x");
     for (answer, want) in [
-        (Ok(0), "Row 1 matches no row of the table now: it was changed or deleted. Re-run the query."),
-        (Ok(2), "Row 1 matches 2 rows; add the key to the SELECT to edit it"),
+        (Ok(0), "row 1 \u{B7} matches no row of the table now: it was changed or deleted. Re-run the query."),
+        (Ok(2), "row 1 \u{B7} matches 2 rows; add the key to the SELECT to edit it"),
         (Err(DbError::Server("canceling statement".into())), "Couldn't count the matching rows: canceling statement"),
     ] {
         h.command("apply");
@@ -497,8 +499,8 @@ fn every_rows_problem_is_in_the_changes_with_its_row_and_the_apply_shows_them() 
     let m = h.app.shown_changes().expect("a model");
     let found: Vec<_> = m.problems.iter().map(|p| (p.text.as_str(), p.at)).collect();
     assert_eq!(found.len(), 2, "{found:?}");
-    assert!(found[0].0.starts_with("Row 1 matches no row of the table now"), "{found:?}");
-    assert!(found[1].0.starts_with("Row 2 matches 2 rows"), "{found:?}");
+    assert!(found[0].0.starts_with("row 1 \u{B7} matches no row of the table now"), "{found:?}");
+    assert!(found[1].0.starts_with("row 2 \u{B7} matches 2 rows"), "{found:?}");
     assert_eq!((found[0].1, found[1].1), (Some((RowAt::Read(0), None)), Some((RowAt::Read(1), None))));
     assert_eq!(blocked(&mut h).len(), 2);
     let cells: Vec<_> = m.list.iter().map(|l| (l.at, l.col, l.new.as_deref())).collect();
@@ -515,7 +517,7 @@ fn identical_rows_wait_for_one_or_all() {
     assert_eq!(
         lines(&h),
         [PreviewLine::Choose {
-            text: "Row 1 matches 3 identical rows".into(),
+            text: "row 1 \u{B7} matches 3 identical rows".into(),
             keys: "[1] just one   [a] all 3".into()
         }]
     );
@@ -549,8 +551,8 @@ fn a_new_row_leaving_a_not_null_column_without_a_default_is_listed_and_not_count
     h.keys("jo");
     h.command("apply");
     assert!(counts(&mut h).is_empty(), "nothing is counted for changes that cannot be made");
-    let want = |row: u32| format!("Row {row}: email is NOT NULL and has no default; give it a value");
-    assert_eq!(blocked(&mut h), [want(4), want(5)]);
+    let want = |n: u32| format!("new {n} \u{B7} email is NOT NULL and has no default; give it a value");
+    assert_eq!(blocked(&mut h), [want(1), want(2)]);
     h.keys("H");
     h.keys("Gk");
     h.keys("l");
@@ -738,7 +740,7 @@ fn a_mysql_new_rows_decimal_is_typed_and_its_not_null_columns_must_be_given() {
     let mut h = mysql_products();
     h.keys("o");
     h.command("apply");
-    let want = |c: &str| format!("Row 2: {c} is NOT NULL and has no default; give it a value");
+    let want = |c: &str| format!("new 1 \u{B7} {c} is NOT NULL and has no default; give it a value");
     assert_eq!(blocked(&mut h), [want("name"), want("price")]);
     h.keys("H");
     h.keys("$");
@@ -850,7 +852,7 @@ fn a_new_row_is_refused_while_the_table_has_a_required_column_the_result_does_no
     h.keys("ol");
     type_cell(&mut h, "n@x");
     h.command("apply");
-    let want = "Row 4: name is NOT NULL, has no default and is not in the result; add it to the SELECT";
+    let want = "new 1 \u{B7} name is NOT NULL, has no default and is not in the result; add it to the SELECT";
     assert!(h.sent().iter().all(|c| !matches!(c, DbCommand::Count { .. })), "nothing counted");
     assert_eq!(blocked(&mut h), [want.to_string()]);
     // Changes of the rows read leave the table's other columns as they are.
@@ -1044,18 +1046,18 @@ fn each_failure_says_why_and_the_changes_stay() {
         (
             Some(0),
             ApplyError::Count { got: 0 },
-            "Row 1 (id = 1) was changed or deleted since it was read. Nothing was applied. Re-run the query to see the current values.".into(),
+            "id=1 \u{B7} was changed or deleted since it was read. Nothing was applied. Re-run the query to see the current values.".into(),
         ),
-        (Some(1), ApplyError::Count { got: 4 }, "Row 1 (id = 1) now matches 4 rows, not 1. Nothing was applied.".into()),
+        (Some(1), ApplyError::Count { got: 4 }, "id=1 \u{B7} now matches 4 rows, not 1. Nothing was applied.".into()),
         (
             Some(0),
             ApplyError::Db(DbError::LockBusy("could not obtain lock".into())),
-            "Row 1 (id = 1) is locked by another session. Nothing was applied.".into(),
+            "id=1 \u{B7} is locked by another session. Nothing was applied.".into(),
         ),
         (
             Some(1),
             ApplyError::Db(DbError::Server("value too long".into())),
-            format!("Row 1 (id = 1): value too long. Nothing was applied. Statement: {update}"),
+            format!("id=1 \u{B7} value too long. Nothing was applied. Statement: {update}"),
         ),
         (None, ApplyError::Db(DbError::Server("could not serialize access".into())), "could not serialize access. Nothing was applied.".into()),
         (Some(0), ApplyError::Db(DbError::Cancelled), "Apply cancelled; nothing was applied.".into()),
@@ -1082,6 +1084,26 @@ fn each_failure_says_why_and_the_changes_stay() {
         assert_eq!(notes.last().map(|n| h.app.i18n.msg(&n.msg).to_string()), Some(want), "in the Messages");
         h.key(KeyCode::Esc);
     }
+}
+
+/// A failure of a new row's insert names it as the Changes tab does.
+#[test]
+fn a_failure_names_a_new_row_as_the_list_does() {
+    use datarig_core::driver::{ApplyError, ApplyFailure};
+    let mut h = mysql_products();
+    h.keys("o");
+    h.keys("l");
+    type_cell(&mut h, "ink");
+    h.keys("l");
+    type_cell(&mut h, "9.99");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, _) = applies(&mut h);
+    let step = steps.iter().position(|s| s.sql.starts_with("INSERT "));
+    let why = ApplyError::Db(DbError::Server("duplicate key".into()));
+    h.db(DbEvent::Applied { id, result: Err(ApplyFailure { step, why }) });
+    let text = said(&mut h).map(|m| h.app.i18n.msg(&m).to_string()).expect("said");
+    assert!(text.starts_with("new 1 \u{B7} duplicate key. Nothing was applied."), "{text}");
 }
 
 /// The connection ended while committing: whether the changes are in the table is not known.
@@ -2378,4 +2400,45 @@ fn a_long_value_is_shown_shortened_and_laid_out_once_per_width() {
     let copied = clip.last().expect("copied");
     assert_eq!(copied.matches(&hex).count(), 4, "every literal whole");
     assert!(!copied.contains("more characters"));
+}
+
+/// A table whose name has a control character: the Apply's question and the dialog's title
+/// spell it out.
+#[test]
+fn a_table_name_s_control_character_is_spelled_out_in_the_apply() {
+    use datarig_core::driver::keys::{KeyCatalog, KeyKind};
+    let table = "t\nx";
+    let names = ["id", "email", "name", "nickname", "profile"];
+    let keys = || {
+        let mut k = KeyCatalog::default();
+        k.add_table(USERS, "shop", table, names.iter().enumerate().map(|(i, n)| (i as i16 + 1, n.to_string())));
+        k.mark(USERS, &[1], KeyKind::Primary);
+        k
+    };
+    let resolve = |mut h: Harness| {
+        h.db(DbEvent::Keys(Ok(keys())));
+        answer(&mut h, "SELECT id, email, nickname FROM shop.\"t\nx\"", users_columns(), users_rows());
+        h.keys("le");
+        let name = h.app.profiles[0].name.clone();
+        let st = Box::new(named());
+        h.meta_db(&name, DbEvent::Structure { schema: "shop".into(), table: table.into(), result: Ok(st) });
+        h.key(KeyCode::Esc);
+        h.app.transient = None;
+        h
+    };
+    // The grid's badge names the table so too.
+    let mut h = resolve(Harness::connected(Lang::En));
+    let screen = h.screen(160, 45);
+    assert!(screen.contains(r"shop.t\nx"), "{screen}");
+    // The question, where nothing confirms writes.
+    type_cell(&mut h, "z@x");
+    h.keys(" da");
+    let question = h.app.status_ask_line().and_then(|(forms, _)| forms.first().cloned()).expect("asked");
+    assert!(question.contains(r"shop.t\nx") && !question.contains('\n'), "{question}");
+    // The dialog, where every write is confirmed.
+    let mut h = resolve(connected(Lang::En));
+    type_cell(&mut h, "z@x");
+    h.keys(" da");
+    let v = h.app.edit_preview_view().expect("the dialog");
+    assert_eq!(v.title.to_string(), r"Apply changes — shop.t\nx");
 }
