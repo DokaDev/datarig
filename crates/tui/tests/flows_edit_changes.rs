@@ -359,6 +359,24 @@ fn a_problem_is_listed_under_its_row_and_named_as_the_list_names_it() {
     assert_eq!((view(&h), edits(&h).cursor.line), (ResultView::Changes, 2), "the first problem");
 }
 
+/// Moving up into a row's problems keeps the row's own line on screen when it fits.
+#[test]
+fn a_row_s_line_stays_on_screen_over_its_selected_problem() {
+    let mut h = resolved(Harness::connected(Lang::En), users_structure());
+    for _ in 0..5 {
+        h.keys("o");
+    }
+    h.command("changes");
+    // Five new rows, each with two problems: fifteen lines, more than the pane shows.
+    h.keys("G");
+    pane(&mut h, 120, 24);
+    h.keys(&"k".repeat(12));
+    assert_eq!(edits(&h).cursor.line, 2, "new 1's second problem");
+    let lines = pane(&mut h, 120, 24);
+    assert!(!lines.iter().any(|l| l.starts_with(" + new 5")), "more than the pane shows: {lines:#?}");
+    assert!(lines.iter().any(|l| l.starts_with(" + new 1")), "{lines:#?}");
+}
+
 /// Control characters of values are shown escaped in the list (a backslash doubled where it
 /// would read as an escape); the statements copied carry them as they are.
 #[test]

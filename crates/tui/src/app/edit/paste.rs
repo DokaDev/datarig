@@ -650,7 +650,7 @@ impl App {
             Some(&&(at, c)) => {
                 let rs = rows_of(t);
                 let row = rs.map_or_else(|| "?".into(), |rs| self.row_name(rs, at));
-                let column = rs.and_then(|rs| rs.columns.get(c)).map(|c| c.meta.name.clone()).unwrap_or_default();
+                let column = rs.map(|rs| self.preview_column(rs, c)).unwrap_or_default();
                 let n = bad.len() as u64;
                 let named = i18n.msg(&Msg::EditPasteInvalid { count: n, row, column }).to_string();
                 (Some(named), Some(i18n.msg(&Msg::EditPasteInvalidCount { count: n }).to_string()))
@@ -917,7 +917,7 @@ impl App {
         let mut out = Invalids { revision, ..Invalids::default() };
         let mut check = |at: RowAt, c: usize, v: &Value, w: Write| {
             let Ok(tc) = target.allows(c, w) else { return };
-            let column = tc.column.name.clone();
+            let column = crate::text::escape_controls(&tc.column.name);
             let why = match v {
                 Value::Default => None,
                 Value::Null => tc.column.not_null.then(|| self.i18n.msg(&Msg::EditWhyNotNull { column }).to_string()),
@@ -941,7 +941,8 @@ impl App {
                     match refused {
                         Some(r) => {
                             let reason = self.not_whole_reason(&r.why);
-                            Some(self.i18n.msg(&Msg::EditWhyColumnNotWhole { column: r.column, reason }).to_string())
+                            let column = crate::text::escape_controls(&r.column);
+                            Some(self.i18n.msg(&Msg::EditWhyColumnNotWhole { column, reason }).to_string())
                         }
                         None => match self.typed_ok(d, tc, s) {
                             Ok(()) => None,
@@ -952,7 +953,7 @@ impl App {
                                 Some(self.i18n.label(Label::EditPasteEmptyValuePlain).to_string())
                             }
                             Err(reason) => {
-                                let value = super::preview::literals::quoted(s, super::preview::VALUE_W);
+                                let value = super::preview::literals::quoted_escaped(s, super::preview::VALUE_W);
                                 Some(self.i18n.msg(&Msg::EditPasteValueReason { reason, value }).to_string())
                             }
                         },
@@ -1008,7 +1009,7 @@ impl App {
         let rs = rows_of(self.tab())?;
         let column = self.preview_column(rs, col);
         let bare = self.i18n.msg(&Msg::EditPreviewNoDefault { column }).to_string();
-        Some(self.at_row(rs, RowAt::New(id), &crate::text::escape_controls(&bare)))
+        Some(self.at_row(rs, RowAt::New(id), &bare))
     }
 
     /// How many problems of `rs`'s changes the grid marks, when it is the active tab's shown

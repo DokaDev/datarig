@@ -185,7 +185,7 @@ typed values: marked in the grid, listed in the Changes tab, and nothing is sent
 The status line says how the text was read and what it did:
 
 ```
-Pasted as TSV · 3 rows × 4 columns · 1 invalid (row 14 · price) · 5 cells changed · 1 new row · u undo
+Pasted as TSV · 3 rows × 4 columns · 1 invalid (id=14 · price) · 5 cells changed · 1 new row · u undo
 ```
 
 Where the status bar is too narrow for all of it, the counts of cells and new rows go first,
@@ -379,7 +379,9 @@ cell), then new rows, each row's problems under it:
   default it lacks is named in the problem under the row. A line longer than the pane is cut
   with `…`.
 - Control characters in values, column names and the table's name are spelled out: `\n`,
-  `\r`, `\t`, `\x07` (`\u{85}` for one above `\x7f`). A backslash is doubled where what follows
+  `\r`, `\t`, `\x07` (`\u{85}` for one above `\x7f`), and so are the characters that turn the
+  direction of text or are not seen (`\u{202e}`, `\u{200b}`). A value cut short is cut before
+  an escape, never in it. A backslash is doubled where what follows
   it would read as one of these (`'a\\nb'` is the text `a\nb`), and shown as it is elsewhere
   (`'a\b'`). This is only how the list shows them: the statements, and what `c` copies,
   carry the values as they are.
@@ -532,14 +534,14 @@ open, the cursor is closed first; the rows already read stay.
 Either every statement gives its count and the changes are applied ("Applied 3 changes"), or
 nothing is ("Nothing was applied", the changes stay pending and may be applied again). Why is said
 on the Changes tab's second line, and in its SQL view the statement that failed is marked `!` and
-scrolled to. A row found by a key is named with it ("Row 3 (id = 5)"), and a statement in a
-message is its first line, cut short when long:
+scrolled to. A row is named as the Changes tab names it (`id=5`, `row 3`, `new 1`), and a
+statement in a message is its first line, cut short when long:
 
-- "Row 3 was changed or deleted since it was read. Nothing was applied. Re-run the query to see
-  the current values."
-- "Row 3 now matches 2 rows, not 1. Nothing was applied."
-- "Row 3 is locked by another session. Nothing was applied."
-- "Row 3: <the server's error>. Nothing was applied. Statement: <the statement>"
+- "id=5 · was changed or deleted since it was read. Nothing was applied. Re-run the query to
+  see the current values."
+- "row 3 · now matches 2 rows, not 1. Nothing was applied."
+- "id=5 · is locked by another session. Nothing was applied."
+- "new 1 · <the server's error>. Nothing was applied. Statement: <the statement>"
 - "Apply cancelled; nothing was applied."
 - "Apply result unknown — the connection was lost before the server confirmed. Re-run the query
   to check." The changes may be in the table already: the next Apply opens the dialog, whose

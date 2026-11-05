@@ -2494,10 +2494,10 @@
 "edit.applied_gone" = "The transaction was rolled back; the applied changes are gone"
 "edit.applied_unknown" = "The transaction ended without the app knowing how; re-run the query to see the table"
 "edit.applied_savepoint" = "A savepoint statement ran; re-run the query to see the table"
-"edit.failed.changed" = "Row {row} was changed or deleted since it was read. Nothing was applied. Re-run the query to see the current values."
-"edit.failed.count" = { one = "Row {row} now matches {count} row, not {expected}. Nothing was applied.", other = "Row {row} now matches {count} rows, not {expected}. Nothing was applied." }
-"edit.failed.locked" = "Row {row} is locked by another session. Nothing was applied."
-"edit.failed.db" = "Row {row}: {error}. Nothing was applied. Statement: {sql}"
+"edit.failed.changed" = "{row} · was changed or deleted since it was read. Nothing was applied. Re-run the query to see the current values."
+"edit.failed.count" = { one = "{row} · now matches {count} row, not {expected}. Nothing was applied.", other = "{row} · now matches {count} rows, not {expected}. Nothing was applied." }
+"edit.failed.locked" = "{row} · is locked by another session. Nothing was applied."
+"edit.failed.db" = "{row} · {error}. Nothing was applied. Statement: {sql}"
 "edit.failed.plain" = "{error}. Nothing was applied."
 "edit.failed.cancelled" = "Apply cancelled; nothing was applied."
 "edit.failed.unknown" = "Apply result unknown — the connection was lost before the server confirmed. Re-run the query to check."

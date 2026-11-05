@@ -354,6 +354,20 @@ fn space_d_capital_v_reads_the_last_paste_again_in_its_place() {
     assert_eq!(revision(&h), before);
 }
 
+/// An invalid pasted value's control characters are spelled out once, wherever it is said.
+#[test]
+fn an_invalid_pasted_value_says_its_control_characters_once() {
+    let mut h = ready(Lang::En);
+    h.keys("h");
+    paste(&mut h, "a\u{7}b\\n");
+    let why = r"not a whole number: 'a\x07b\\n'";
+    let inv = h.app.shown_invalid().expect("resolved");
+    assert_eq!(inv.cells.get(&(RowAt::Read(0), 0)).map(String::as_str), Some(why));
+    let m = h.app.shown_changes().expect("a model");
+    assert_eq!(m.problems[0].text, format!("id=1 \u{B7} id: {why}"));
+    assert_eq!(m.problems[0].bare, format!("id: {why}"));
+}
+
 #[test]
 fn invalid_values_are_kept_marked_listed_first_and_block_the_apply() {
     let mut h = ready(Lang::En);

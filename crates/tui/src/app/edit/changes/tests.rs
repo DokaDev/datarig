@@ -133,6 +133,21 @@ fn control_characters_of_values_names_and_keys_are_shown_escaped() {
 }
 
 #[test]
+fn a_cut_never_splits_an_escape() {
+    let t = target(Identity::Key { primary: true, columns: vec![1] });
+    let mut b = EditBatch::new();
+    let value = format!("{}\u{7}yyyy", "x".repeat(38));
+    b.set(&[(0, 2)], &text(&value), |r| {
+        let mut o = orig(r);
+        o[1] = Some(format!("{}\nzzz", "y".repeat(17)));
+        o
+    });
+    let got = list_lines(&t, &b, &names());
+    assert_eq!(got[0].new.as_deref(), Some(format!("'{}\u{2026}'", "x".repeat(38)).as_str()));
+    assert_eq!(got[0].row, Some(Pointer::Key(format!("name={}\u{2026}", "y".repeat(17)))));
+}
+
+#[test]
 fn a_row_s_problems_follow_its_lines_and_a_row_with_no_line_is_named_before_its_own() {
     let t = target(Identity::Key { primary: true, columns: vec![0] });
     let mut b = EditBatch::new();
@@ -150,13 +165,17 @@ fn a_row_s_problems_follow_its_lines_and_a_row_with_no_line_is_named_before_its_
         problem(Some((RowAt::Read(4), None))),
         problem(Some((RowAt::New(id), None))),
     ];
-    let got = entries(&problems, &list, |at| row_pointer(&t, &b, &names(), at));
+    let got = entries(&problems, &list, |at| row_pointer(Some(&t), &b, &names(), at).unwrap());
     use ListEntry::{Line, Problem as P, Row};
     assert_eq!(
         got,
         [P(2), Line(0), P(4), Line(1), Line(2), P(3), Line(3), P(0), P(5), Row(RowAt::Read(7), Pointer::Row(8)), P(1)]
     );
     // How a problem names its row: as the list does.
-    assert_eq!(row_pointer(&t, &b, &names(), RowAt::Read(1)), Pointer::Key("id=1".into()));
-    assert_eq!(row_pointer(&t, &b, &names(), RowAt::New(id)), Pointer::New(1));
+    assert_eq!(row_pointer(Some(&t), &b, &names(), RowAt::Read(1)), Some(Pointer::Key("id=1".into())));
+    assert_eq!(row_pointer(Some(&t), &b, &names(), RowAt::New(id)), Some(Pointer::New(1)));
+    // Without a target: a row read by its row in the grid; a new row that is gone is none.
+    assert_eq!(row_pointer(None, &b, &names(), RowAt::Read(1)), Some(Pointer::Row(2)));
+    assert_eq!(row_pointer(None, &b, &names(), RowAt::New(id)), Some(Pointer::New(1)));
+    assert_eq!(row_pointer(None, &b, &names(), RowAt::New(id + 1)), None);
 }

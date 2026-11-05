@@ -173,7 +173,7 @@ impl App {
         let c = rs.edit.batch.counts();
         let count = c.total() as u64;
         let table = match &rs.edit.target {
-            Target::Ready(x) => format!("{}.{}", x.table.schema, x.table.name),
+            Target::Ready(x) => crate::text::escape_controls(&format!("{}.{}", x.table.schema, x.table.name)),
             _ => String::new(),
         };
         let summary = m.summary.clone();

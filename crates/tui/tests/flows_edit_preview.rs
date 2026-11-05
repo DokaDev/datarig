@@ -1046,18 +1046,18 @@ fn each_failure_says_why_and_the_changes_stay() {
         (
             Some(0),
             ApplyError::Count { got: 0 },
-            "Row 1 (id = 1) was changed or deleted since it was read. Nothing was applied. Re-run the query to see the current values.".into(),
+            "id=1 \u{B7} was changed or deleted since it was read. Nothing was applied. Re-run the query to see the current values.".into(),
         ),
-        (Some(1), ApplyError::Count { got: 4 }, "Row 1 (id = 1) now matches 4 rows, not 1. Nothing was applied.".into()),
+        (Some(1), ApplyError::Count { got: 4 }, "id=1 \u{B7} now matches 4 rows, not 1. Nothing was applied.".into()),
         (
             Some(0),
             ApplyError::Db(DbError::LockBusy("could not obtain lock".into())),
-            "Row 1 (id = 1) is locked by another session. Nothing was applied.".into(),
+            "id=1 \u{B7} is locked by another session. Nothing was applied.".into(),
         ),
         (
             Some(1),
             ApplyError::Db(DbError::Server("value too long".into())),
-            format!("Row 1 (id = 1): value too long. Nothing was applied. Statement: {update}"),
+            format!("id=1 \u{B7} value too long. Nothing was applied. Statement: {update}"),
         ),
         (None, ApplyError::Db(DbError::Server("could not serialize access".into())), "could not serialize access. Nothing was applied.".into()),
         (Some(0), ApplyError::Db(DbError::Cancelled), "Apply cancelled; nothing was applied.".into()),
@@ -1084,6 +1084,26 @@ fn each_failure_says_why_and_the_changes_stay() {
         assert_eq!(notes.last().map(|n| h.app.i18n.msg(&n.msg).to_string()), Some(want), "in the Messages");
         h.key(KeyCode::Esc);
     }
+}
+
+/// A failure of a new row's insert names it as the Changes tab does.
+#[test]
+fn a_failure_names_a_new_row_as_the_list_does() {
+    use datarig_core::driver::{ApplyError, ApplyFailure};
+    let mut h = mysql_products();
+    h.keys("o");
+    h.keys("l");
+    type_cell(&mut h, "ink");
+    h.keys("l");
+    type_cell(&mut h, "9.99");
+    h.command("apply");
+    h.key(KeyCode::Char('y'));
+    let (id, steps, _) = applies(&mut h);
+    let step = steps.iter().position(|s| s.sql.starts_with("INSERT "));
+    let why = ApplyError::Db(DbError::Server("duplicate key".into()));
+    h.db(DbEvent::Applied { id, result: Err(ApplyFailure { step, why }) });
+    let text = said(&mut h).map(|m| h.app.i18n.msg(&m).to_string()).expect("said");
+    assert!(text.starts_with("new 1 \u{B7} duplicate key. Nothing was applied."), "{text}");
 }
 
 /// The connection ended while committing: whether the changes are in the table is not known.

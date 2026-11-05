@@ -401,9 +401,25 @@ pub(crate) fn draw_changes(app: &mut App, area: Rect, buf: &mut Buffer) {
         let rows = list_rows(app, &m, iw);
         let last = m.entries.len().saturating_sub(1);
         c.line = c.line.min(last);
-        // The selected line on screen, whole when it fits.
+        // The selected line on screen, whole when it fits; a row's problem with the row's
+        // first line too when they fit.
         let first = rows.iter().position(|(k, _)| *k == c.line).unwrap_or(0);
         let end = rows.iter().rposition(|(k, _)| *k == c.line).map_or(first, |e| e + 1);
+        let row_at = match m.entries.get(c.line) {
+            Some(ListEntry::Problem(i)) => m.problems.get(*i).and_then(|p| p.at).map(|(at, _)| at),
+            _ => None,
+        };
+        let head = row_at.and_then(|at| {
+            m.entries.iter().position(|e| match e {
+                ListEntry::Line(j) => m.list.get(*j).is_some_and(|l| l.at == at),
+                ListEntry::Row(a, _) => *a == at,
+                ListEntry::Problem(_) => false,
+            })
+        });
+        let first = head
+            .and_then(|e| rows.iter().position(|(k, _)| *k == e))
+            .filter(|&top| end - top <= body_h)
+            .unwrap_or(first);
         if first < c.scroll {
             c.scroll = first;
         } else if end > c.scroll + body_h {

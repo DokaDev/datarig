@@ -836,7 +836,7 @@ fn a_failure_marks_its_statement_and_the_changes_stay() {
     h.command("changes");
     h.keys("s");
     let s = screen(&mut h, 80, 24);
-    assert!(s.contains("Row 2 (id = 2) was changed or deleted since it was read"), "{s}");
+    assert!(s.contains("id=2 \u{b7} was changed or deleted since it was read"), "{s}");
     assert!(s.contains("! DELETE FROM \"shop\".\"users\""), "the failing statement on screen, marked: {s}");
     assert!(edits(&h).cursor.sql_scroll > 0, "scrolled to it");
     // Asked again, it may be applied again.
