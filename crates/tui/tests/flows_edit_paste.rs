@@ -1621,4 +1621,17 @@ mod grid_copy {
         h.keys("y");
         assert_eq!(drafts(&h).len(), 1_001);
     }
+
+    #[test]
+    fn p_shows_the_page_with_the_new_rows() {
+        let mut h = ready();
+        h.keys("y");
+        // Pages of two rows, the first one shown: the new rows are on the last page.
+        let g = &mut h.app.tab_mut().grid;
+        (g.page_size, g.page, g.top) = (2, 0, 0);
+        h.keys("p");
+        let g = &h.app.tab().grid;
+        assert_eq!((g.row, g.col), (3, 1));
+        assert_eq!(g.page, 1, "the page of the new row is shown");
+    }
 }

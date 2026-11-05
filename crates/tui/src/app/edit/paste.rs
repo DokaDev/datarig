@@ -763,6 +763,10 @@ impl App {
         t.grid.detached = false;
         self.selecting_done();
         self.edit_grid_sync();
+        // New rows added after the last one: their page is shown.
+        if let Some(&id) = done.added.first().filter(|_| as_rows) {
+            self.edit_cursor_to(RowAt::New(id), top.1);
+        }
         // What it did, the first invalid cell named; shorter forms drop the counts of cells and
         // new rows, then name no cell, then the size in words, then the format.
         let i18n = &self.i18n;
