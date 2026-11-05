@@ -1488,3 +1488,26 @@ fn a_pending_mysql_timestamp_of_a_zone_without_a_fixed_offset_is_not_kept() {
     let text = said_text(&mut h);
     assert!(text.starts_with("Not kept for g p: column \u{201C}nickname\u{201D} "), "{text}");
 }
+
+#[test]
+fn a_mysql_timestamp_is_not_pasted_into_a_result_read_in_system_when_the_servers_zone_is_not_known() {
+    use datarig_core::driver::keys::{KeyCatalog, KeyKind, NameRule};
+    let mut h = mysql_users("+00:00", "utf8mb4");
+    h.keys("lly");
+    // The keys read again without the server's own zone.
+    let mut k = KeyCatalog::default();
+    k.set_names(NameRule::MySql { tables_ignore_case: false });
+    let names = ["id", "email", "name", "nickname", "profile"];
+    k.add_table(1, "shop", "users", names.iter().enumerate().map(|(i, n)| (i as i16 + 1, n.to_string())));
+    k.mark(1, &[1], KeyKind::Primary);
+    h.db(DbEvent::Keys(Ok(k)));
+    mysql_again(&mut h, "SYSTEM", "timestamp", ValueKind::TimestampTz);
+    h.keys("llgp");
+    structure(&mut h, Ok(mysql_users_structure()));
+    assert_eq!(
+        said_text(&mut h),
+        "Not pasted: column \u{201C}nickname\u{201D} was copied in time zone +00:00; this result was read in the \
+         server's time zone, which is not known"
+    );
+    assert!(edits(&h).batch.is_empty());
+}

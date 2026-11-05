@@ -1399,4 +1399,34 @@ mod grid_copy {
         h.keys("jgp");
         assert!(said(&mut h).starts_with("Nothing copied to paste"), "the cell copied before is gone");
     }
+
+    #[test]
+    fn a_timestamptz_copied_on_postgresql_pastes_into_a_timestamptz() {
+        use datarig_core::driver::ValueKind;
+        let mut h = Harness::connected(Lang::En);
+        h.db(DbEvent::Keys(Ok(shop_keys())));
+        h.app.run(vec![SQL.to_string()]);
+        let id = h.app.tab().exec.query_id;
+        let mut columns = users_columns();
+        let origin = columns[2].origin.clone();
+        columns[2] = ColumnMeta::new("nickname".into(), "timestamptz".into(), ValueKind::TimestampTz, origin);
+        let rows = vec![
+            vec![s("1"), s("a@x"), s("2024-01-01 09:00:00+09")],
+            vec![s("2"), s("b@x"), s("2024-06-01 00:00:00+00")],
+        ];
+        h.db(DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::ZERO });
+        h.app.focus = Focus::Results;
+        let mut st = named();
+        st.columns[3].type_name = "timestamp with time zone".into();
+        h.keys("le");
+        structure(&mut h, st);
+        h.key(KeyCode::Esc);
+        h.app.transient = None;
+        // Its text has its offset: the same instant in any session.
+        h.keys("ly");
+        h.keys("jgp");
+        assert_eq!(pending(&h, 1, 2), Some(t("2024-01-01 09:00:00+09")));
+        assert!(said(&mut h).starts_with("Pasted the copied cells"));
+        assert!(h.app.shown_invalid().unwrap().cells.is_empty());
+    }
 }

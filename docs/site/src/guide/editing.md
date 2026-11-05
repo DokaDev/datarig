@@ -381,8 +381,8 @@ instant stays the same; else it says why and pastes nothing:
   the copy's and run the query again;
 - a PostgreSQL `timestamptz`, which reads such text in its session's zone.
 
-A `TIMESTAMP` value pending in a result read in a zone without a fixed offset (or not known) is
-not kept either. Into a column without a zone (`DATETIME`, `timestamp`, text) the text pastes as
+A `TIMESTAMP` value pending in a result read in a zone without a fixed offset, in a zone not
+known, or in a session whose zone changed while its rows were read is not kept either. Into a column without a zone (`DATETIME`, `timestamp`, text) the text pastes as
 it was shown.
 
 ## Undo, revert, discard
