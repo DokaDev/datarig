@@ -4,6 +4,8 @@
 # runners: with the default delay (60 ms) every popup of 160 trials showed within 75-100 ms; a
 # 120 ms debounce (the earlier behaviour) cannot show one in 120 ms, and that build and a 250 ms
 # delay failed every bound up to 150 ms on the first trial. So a slower popup fails the render.
+# If a runner stall ever fails a check with the default delay, raise the bound to 150 ms: the
+# earlier behaviour still failed there on every first trial.
 Require datarig
 Source settings.tape
 
