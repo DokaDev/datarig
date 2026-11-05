@@ -1765,6 +1765,114 @@ fn grid_copy_menu_and_range_en_ko_sizes() {
     assert_eq!(buf[(x, y)].bg, theme::DARK.range.bg.unwrap(), "the range's first cell");
 }
 
+/// The grid's cursor: its row tinted as a whole (cells, separators and number, the number in
+/// the accent), its cell on the selection, its column's header tinted; the other rows keep their
+/// stripes. Then a range of cells: every selected row's number and the cells outside the block
+/// on the row tint, the block one piece (the separator between its columns on the range too, not
+/// the one before it), the selected columns' headers on the range. Dark, light and the
+/// terminal's colors (no tint there: the number and the underlined header say it), small and
+/// large.
+#[test]
+fn grid_cursor_cue_and_block_dark_light_terminal_sizes() {
+    use ratatui::style::{Color, Modifier};
+    for (name, th) in [("dark", &theme::DARK), ("light", &theme::LIGHT), ("terminal", &theme::TERMINAL)] {
+        for (w, hh) in [(80, 24), (120, 40)] {
+            let mut h = with_edge_results(Lang::En);
+            h.app.theme = std::sync::Arc::new(th.clone());
+            h.key(KeyCode::Tab);
+            h.keys("jl");
+            let t = h.draw(w, hh);
+            insta::assert_snapshot!(format!("grid_cursor_{name}_{w}x{hh}"), t.backend());
+            let g = h.app.tab().grid.clone();
+            let buf = t.backend().buffer();
+            let at = |r: usize, c: usize| g.cell_rect(r, c, 8).expect("on screen");
+            // The separator before column `c` on row `r`, and the header's.
+            let sep = |r: usize, c: usize| {
+                let a = at(r, c);
+                buf[(a.x - 1, a.y)].clone()
+            };
+            let head = |c: usize, line: u16| buf[(at(0, c).x + 1, g.header_y + line)].clone();
+            let number = |r: usize| buf[(g.gutter_x.0 + 1, at(r, 0).y)].clone();
+            let cell = |r: usize, c: usize| buf[(at(r, c).x + 1, at(r, c).y)].clone();
+            assert_eq!(cell(1, 1).bg, th.selection.bg.unwrap_or(Color::Reset), "{name}: the cursor's cell");
+            assert_eq!(number(1).fg, th.accent, "{name}: the cursor's number");
+            match th.grid_cursor_row.bg {
+                Some(tint) => {
+                    for (what, c) in [("a cell", cell(1, 0)), ("a separator", sep(1, 1)), ("the number", number(1))] {
+                        assert_eq!(c.bg, tint, "{name}: {what} of the cursor's row");
+                    }
+                    assert_eq!(cell(0, 0).bg, th.bg, "{name}: another row");
+                    assert_eq!(cell(3, 1).bg, th.surface_alt, "{name}: another row");
+                }
+                None => assert_eq!(cell(1, 0).bg, th.bg, "{name}: the terminal's own background"),
+            }
+            for line in [0, 1] {
+                let (cursor, other) = (head(1, line), head(0, line));
+                match th.grid_cursor_header.bg {
+                    Some(tint) => assert_eq!(cursor.bg, tint, "{name}: the cursor's header"),
+                    None => assert!(cursor.modifier.contains(Modifier::UNDERLINED), "{name}: the cursor's header"),
+                }
+                assert_eq!(other.bg, th.surface, "{name}: another header");
+                assert!(!other.modifier.contains(Modifier::UNDERLINED), "{name}: another header");
+            }
+
+            let mut h = with_edge_results(Lang::En);
+            h.app.theme = std::sync::Arc::new(th.clone());
+            h.key(KeyCode::Tab);
+            h.keys("jvjl");
+            let t = h.draw(w, hh);
+            insta::assert_snapshot!(format!("grid_block_{name}_{w}x{hh}"), t.backend());
+            let g = h.app.tab().grid.clone();
+            let buf = t.backend().buffer();
+            let at = |r: usize, c: usize| g.cell_rect(r, c, 8).expect("on screen");
+            let sep = |r: usize, c: usize| {
+                let a = at(r, c);
+                buf[(a.x - 1, a.y)].clone()
+            };
+            let number = |r: usize| buf[(g.gutter_x.0 + 1, at(r, 0).y)].clone();
+            let cell = |r: usize, c: usize| buf[(at(r, c).x + 1, at(r, c).y)].clone();
+            let head_sep = |c: usize| buf[(at(0, c).x - 1, g.header_y)].clone();
+            let head = |c: usize| buf[(at(0, c).x + 1, g.header_y)].clone();
+            // Rows 1 and 2, columns 0 and 1; the cursor on (2, 1).
+            match th.range.bg {
+                Some(range) => {
+                    assert_eq!(cell(1, 0).bg, range, "{name}: in the block");
+                    for r in [1, 2] {
+                        assert_eq!(sep(r, 1).bg, range, "{name}: the separator inside the block, row {r}");
+                        assert_eq!(number(r).bg, range, "{name}: a selected row's number {r}");
+                        // Past the block (on screen in the larger size), and after it.
+                        if let Some(a) = g.cell_rect(r, 2, 8) {
+                            assert_eq!(buf[(a.x + 1, a.y)].bg, th.grid_cursor_row.bg.unwrap(), "{name}: row {r}");
+                            assert_ne!(buf[(a.x - 1, a.y)].bg, range, "{name}: the separator after the block");
+                        }
+                    }
+                    assert_ne!(number(3).bg, range, "{name}: a row not selected");
+                    assert_eq!((head(0).bg, head(1).bg), (range, range), "{name}: the selected headers");
+                    assert_eq!(head_sep(1).bg, range, "{name}: between the selected headers");
+                    if g.cell_rect(0, 2, 8).is_some() {
+                        assert_ne!(head(2).bg, range, "{name}: a header not selected");
+                    }
+                }
+                None => {
+                    // The terminal's range: its cyan text, the separators inside the block too.
+                    for r in [1, 2] {
+                        assert_eq!(sep(r, 1).fg, th.range.fg.unwrap(), "{name}: the separator inside the block");
+                    }
+                    if let Some(a) = g.cell_rect(1, 2, 8) {
+                        assert_ne!(
+                            buf[(a.x - 1, a.y)].fg,
+                            th.range.fg.unwrap(),
+                            "{name}: the separator after the block"
+                        );
+                    }
+                    assert_eq!(head_sep(1).fg, th.range.fg.unwrap(), "{name}: between the selected headers");
+                    assert_eq!(head(1).fg, th.range.fg.unwrap(), "{name}: a selected header");
+                }
+            }
+        }
+    }
+}
+
 /// The grid's search: the prompt under the grid while the pattern is typed (the cursor on the
 /// first match), then the search that is on after `n` (its pattern and the cursor's match
 /// among them), in a small terminal and a large one, with the dark theme and the terminal's

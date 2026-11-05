@@ -347,6 +347,8 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         selection: _,
         range: _,
         cursor_line: _,
+        grid_cursor_row: _,
+        grid_cursor_header: _,
         hover: _,
         current_stmt: _,
         current_stmt_bar: _,
@@ -404,7 +406,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 66);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 68);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -413,17 +415,21 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         *style_token(&mut th, name).unwrap() = Style::new().bg(Color::Indexed(100 + i as u8));
     }
     assert_eq!((th.bg, th.mode_fg), (Color::Indexed(0), Color::Indexed(23)));
-    assert_eq!(th.yank_flash, Style::new().bg(Color::Indexed(104)));
-    assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(122)));
+    assert_eq!(
+        (th.grid_cursor_row, th.grid_cursor_header),
+        (Style::new().bg(Color::Indexed(103)), Style::new().bg(Color::Indexed(104)))
+    );
+    assert_eq!(th.yank_flash, Style::new().bg(Color::Indexed(106)));
+    assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(124)));
     assert_eq!(
         (th.size_warm, th.size_hot),
-        (Style::new().bg(Color::Indexed(123)), Style::new().bg(Color::Indexed(124)))
+        (Style::new().bg(Color::Indexed(125)), Style::new().bg(Color::Indexed(126)))
     );
     assert_eq!(
         (th.size_mild, th.size_heated),
-        (Style::new().bg(Color::Indexed(125)), Style::new().bg(Color::Indexed(126)))
+        (Style::new().bg(Color::Indexed(127)), Style::new().bg(Color::Indexed(128)))
     );
-    assert_eq!(th.tab_active, Style::new().bg(Color::Indexed(127)));
+    assert_eq!(th.tab_active, Style::new().bg(Color::Indexed(129)));
     assert_eq!(th.chart(), [24, 25, 26, 27, 28, 29].map(Color::Indexed));
     assert_eq!(th.edit_inserted_row, Color::Indexed(3));
     assert!(color_token(&mut th, "selection").is_none() && style_token(&mut th, "bg").is_none());
@@ -1231,4 +1237,96 @@ fn new_rows_have_a_background_of_their_own() {
             assert!(d >= 5.0, "{name}: a new row looks like {what}: {d:.1}");
         }
     }
+}
+
+/// The result grid's cursor row is a subtle tint of its own: apart (ΔE 4 or more) from the
+/// background and (3.5 or more) from the alternate rows it replaces, nearer to the background than
+/// the cursor's cell (the selection, focused or not, 5 ΔE or more from it), apart from a
+/// selected range (whose cells and numbers it carries) and the hover (4 or more), and far from
+/// the copied cells' flash; body text (4.5:1), muted text and the accent (3:1, or nine tenths
+/// of how they read on the alternate rows where that is less) read on it, and NULL and the
+/// edit marks read about as well as on the alternate rows (three quarters of it, at most 3:1
+/// asked). The terminal theme keeps the terminal's background.
+#[test]
+fn the_grids_cursor_row_is_a_subtle_tint_of_its_own() {
+    assert_eq!(TERMINAL.grid_cursor_row, Style::new());
+    for (name, th) in rgb_themes() {
+        let row = bg(th.grid_cursor_row);
+        assert_eq!(th.grid_cursor_row, Style::new().bg(row), "{name}: a background only");
+        for (what, c, min) in [
+            ("the background", th.bg, 4.0),
+            ("the alternate rows", th.surface_alt, 3.5),
+            ("the cursor", bg(th.selection), 5.0),
+            ("the unfocused cursor", bg(th.selection_unfocused()), 4.0),
+            ("a selected range", bg(th.range), 4.0),
+            ("the hover", bg(th.hover), 4.0),
+            ("the flash", bg(th.yank_flash), 10.0),
+        ] {
+            let d = delta_e(row, c);
+            assert!(d >= min, "{name}: the cursor row looks like {what}: {d:.1}");
+        }
+        let (k, sel) = (contrast(row, th.bg), contrast(bg(th.selection), th.bg));
+        assert!(k < sel, "{name}: the cursor row ({k:.3}) stands out more than the cursor ({sel:.3})");
+        let near = |c: Color, cap: f64, part: f64| cap.min(contrast(c, th.surface_alt) * part);
+        for (what, c, min) in [
+            ("body text", th.fg, 4.5),
+            ("muted text", th.fg_muted, near(th.fg_muted, 3.0, 0.9)),
+            ("the accent", th.accent, near(th.accent, 3.0, 0.9)),
+            ("NULL", th.null_fg, near(th.null_fg, 3.0, 0.75)),
+            ("a changed value", fg(th.edit_changed), near(fg(th.edit_changed), 3.0, 0.75)),
+            ("an applied value", fg(th.edit_applied), near(fg(th.edit_applied), 3.0, 0.75)),
+            ("an invalid value", fg(th.edit_invalid), near(fg(th.edit_invalid), 3.0, 0.75)),
+        ] {
+            let k = contrast(c, row);
+            assert!(k >= min, "{name}: {what} on the cursor row: {k:.2} (< {min:.2})");
+        }
+    }
+}
+
+/// The header of the grid's cursor column is a tint of the header's surface: apart (5 ΔE or
+/// more) from it and (3.5 or more) from the headers of a selected range; the column's name
+/// (4.5:1), its type (muted, 3:1 or nine tenths of how it reads on the surface) and the key
+/// marks (3:1 or nine tenths of how they read on the surface) read on it. The terminal theme
+/// underlines the header instead.
+#[test]
+fn the_grids_cursor_column_header_is_a_tint_of_its_own() {
+    assert_eq!(TERMINAL.grid_cursor_header, Style::new().add_modifier(Modifier::UNDERLINED));
+    assert_ne!(TERMINAL.grid_cursor_header, TERMINAL.range);
+    for (name, th) in rgb_themes() {
+        let h = bg(th.grid_cursor_header);
+        assert_eq!(th.grid_cursor_header, Style::new().bg(h), "{name}: a background only");
+        for (what, c, min) in [("the header", th.surface, 5.0), ("a selected header", bg(th.range), 3.5)] {
+            let d = delta_e(h, c);
+            assert!(d >= min, "{name}: the cursor's header looks like {what}: {d:.1}");
+        }
+        let near = |c: Color| 3.0f64.min(contrast(c, th.surface) * 0.9);
+        assert!(contrast(th.fg, h) >= 4.5, "{name}: the name: {:.2}", contrast(th.fg, h));
+        for (what, c) in [("the type", th.fg_muted), ("PK", th.key_pk), ("FK", th.key_fk), ("UQ", th.key_uq)] {
+            let k = contrast(c, h);
+            assert!(k >= near(c), "{name}: {what} on the cursor's header: {k:.2}");
+        }
+    }
+}
+
+/// A theme file that leaves the grid's cursor tints out keeps those of the theme it extends
+/// while its background, surface and selection are that theme's; with its own (RGB), each tint
+/// is the selection blended into that background (the row, 25%) or surface (the header, 35%). A
+/// file that sets one keeps what it set; terminal colors keep the extended theme's.
+#[test]
+fn a_theme_file_without_the_grids_cursor_tints_gets_them_of_its_own_colors() {
+    let d = ThemesDir::new("cursor-tints");
+    let dir = Some(d.0.as_path());
+    d.file("same", "extends = \"nord\"\n[colors]\nwarning = \"#ffcc00\"\n");
+    let same = resolve("same", Background::Dark, dir).unwrap();
+    assert_eq!((same.grid_cursor_row, same.grid_cursor_header), (NORD.grid_cursor_row, NORD.grid_cursor_header));
+    d.file("own", "extends = \"dark\"\n[colors]\nbg = \"#000000\"\nsurface = \"#202020\"\n[styles]\nselection = { bg = \"#6464c8\" }\n");
+    let own = resolve("own", Background::Dark, dir).unwrap();
+    assert_eq!(own.grid_cursor_row, Style::new().bg(Color::Rgb(25, 25, 50)), "25% of the selection");
+    assert_eq!(own.grid_cursor_header, Style::new().bg(Color::Rgb(55, 55, 90)), "35% into the surface");
+    d.file("set", "extends = \"dark\"\n[colors]\nbg = \"#000000\"\n[styles]\ngrid_cursor_row = { bg = \"blue\" }\n");
+    let set = resolve("set", Background::Dark, dir).unwrap();
+    assert_eq!(set.grid_cursor_row, Style::new().bg(Color::Blue));
+    assert_eq!(set.grid_cursor_header, DARK.grid_cursor_header, "its surface and selection are dark's");
+    d.file("ansi", "extends = \"terminal\"\n[colors]\nbg = \"black\"\n");
+    assert_eq!(resolve("ansi", Background::Dark, dir).unwrap().grid_cursor_row, TERMINAL.grid_cursor_row);
 }

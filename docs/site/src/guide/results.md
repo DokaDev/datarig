@@ -33,8 +33,13 @@ the count matches the pages you saw.
   characters is cut with `…`. The selected cell stays where it is until a key or a click moves
   it; then the view moves just enough to show that cell whole.
 - `Enter` shows the cell's value whole in the cell viewer.
+- The cursor's row is tinted (its number in the accent), its cell more strongly, and so is its
+  column's header. On the `terminal` theme the row keeps your terminal's background: the row's
+  number and the underlined header show where the cursor is.
 - `v` selects a range of cells, `V` whole rows, `Ctrl+A` every cell of the page; the mouse
-  selects too.
+  selects too. The selection is one tinted block, the separators between its columns included;
+  its rows carry the row tint and their numbers, and its columns' headers, are tinted too. The
+  theme tokens `grid_cursor_row` and `grid_cursor_header` set the tints.
 - `z` (or `Space z`) zooms the results pane to the whole workspace and back; `+` and `-` make it
   taller or shorter. `Esc` or `q` goes back to the editor.
 

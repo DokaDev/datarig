@@ -78,6 +78,8 @@ Each writes a new file and never replaces one: a name that is taken, that is not
 | `selection` | The selected row or item, and the grid's cursor cell. |
 | `range` | Cells and headers of a selected range in the result grid (the cursor's cell keeps selection). |
 | `cursor_line` | The row under the cursor of an unfocused list or plan, the editor's line, and (its background) the chart's cursor while focused. |
+| `grid_cursor_row` | The result grid's cursor row (its bg): every cell, the separators and the row's number, and every row of a selected range of cells. Keep it subtle: apart from bg and surface_alt (the alternate rows), and from selection (the cursor's cell), range and hover, with body and muted text reading on it. A file that leaves it out but sets bg, both bg and selection RGB, gets the selection blended into that bg. |
+| `grid_cursor_header` | The header of the result grid's cursor column (both lines; patched over the header). Keep it apart from surface (the header) and range (the headers of selected columns), with body and muted text and the key marks reading on it. A file that leaves it out but sets surface, both surface and selection RGB, gets the selection blended into that surface. |
 | `hover` | What is under the mouse pointer: a list row, a grid cell, a tab, a button. |
 | `yank_flash` | Cells copied from the result grid, for a moment after the copy was sent to the clipboard (set fg and bg: it covers the cursor's cell too). With RGB colours it fades back into each cell's own colours; with terminal colours it goes off at once. |
 | `current_stmt` | A faint tint behind the statement a run would take. |

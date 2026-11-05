@@ -806,19 +806,32 @@ pub fn render(
 
     // A selected range (`v`, `V`, the gutter, a header), from its anchor to the cursor.
     let range = st.selection(total, rs.columns.len());
+    let range_cols = range.as_ref().map(|(_, cr)| cr.clone());
+    let selected_col = |c: usize| range_cols.as_ref().is_some_and(|cr| cr.contains(&c));
+    // Between two selected columns the separator is the range's too: the block reads as one.
+    let inner_sep = |c: usize| c > 0 && selected_col(c) && selected_col(c - 1);
     for &(cx, ci, w) in &layout {
         st.drawn_cells += 1;
         let col = &rs.columns[ci];
-        // Whole selected columns: their headers too.
-        let whole = st.shape == Shape::Cols && range.as_ref().is_some_and(|(_, cr)| cr.contains(&ci));
-        let (header_style, type_style) =
-            if whole { (header_style.patch(th.range), type_style.patch(th.range)) } else { (header_style, type_style) };
-        if whole {
+        // The headers of the selected columns, else the cursor's column's header: tinted.
+        let tint = if selected_col(ci) {
+            Some(th.range)
+        } else if ci == st.col {
+            Some(th.grid_cursor_header)
+        } else {
+            None
+        };
+        let (header_style, type_style) = match tint {
+            Some(t) => (header_style.patch(t), type_style.patch(t)),
+            None => (header_style, type_style),
+        };
+        if let Some(t) = tint {
             let (a, b) = ((cx + 1).max(i32::from(from)), (cx + 3 + w as i32).min(i32::from(right)));
-            buf.set_style(Rect::new(a as u16, y0, (b - a).max(0) as u16, 2), th.range);
+            buf.set_style(Rect::new(a as u16, y0, (b - a).max(0) as u16, 2), t);
         }
-        put(buf, cx, y0, "│", sep_style(th.surface));
-        put(buf, cx, y0 + 1, "│", sep_style(th.surface));
+        let sep = if inner_sep(ci) { sep_style(th.surface).patch(th.range) } else { sep_style(th.surface) };
+        put(buf, cx, y0, "│", sep);
+        put(buf, cx, y0 + 1, "│", sep);
         // The key marks in their colors, then the name.
         let mut hx = cx + 2;
         let mut left = w;
@@ -847,16 +860,22 @@ pub fn render(
         let added = r.checked_sub(total);
         let applied_new = added.and_then(|i| applied?.new.get(i));
         let new = added.and_then(|i| i.checked_sub(rs.edit.applied_new())).and_then(|i| rs.edit.batch.drafts().get(i));
-        // A new row is tinted as a whole: its cells, the separators and its number.
+        // A row of the selected range; its row tint and number only for a range of rows or cells
+        // (whole columns take in every row).
+        let in_block_rows = range.as_ref().is_some_and(|(rr, _)| rr.contains(&r));
+        let in_rows = in_block_rows && st.shape != Shape::Cols;
+        // A new row is tinted as a whole: its cells, the separators and its number; the cursor's
+        // row and the rows of a selected range get the cursor row's tint the same way (a new row
+        // keeps its own: its number says where the cursor is).
+        let stripe = if r % 2 == 1 { th.surface_alt } else { th.bg };
         let zebra = match new {
             Some(_) => th.edit_inserted_row,
-            None if r % 2 == 1 => th.surface_alt,
-            None => th.bg,
+            None if r == st.row || in_rows => th.grid_cursor_row.bg.unwrap_or(stripe),
+            None => stripe,
         };
         buf.set_style(Rect::new(area.x, y, area.width, 1), Style::new().bg(zebra));
-        // Whole selected rows: their numbers too.
-        let whole = st.shape == Shape::Rows && range.as_ref().is_some_and(|(rr, _)| rr.contains(&r));
-        let num_bg = if whole { th.range } else { Style::new().bg(zebra) };
+        // Selected rows (whole, or of a range of cells): their numbers too.
+        let num_bg = if in_rows { th.range } else { Style::new().bg(zebra) };
         let num_style = num_bg.fg(if r == st.row { th.accent } else { th.fg_muted });
         // Deleted by an Apply: it stays, crossed out.
         let deleted = added.is_none()
@@ -900,7 +919,8 @@ pub fn render(
             } else {
                 Style::new().bg(zebra)
             };
-            put(buf, cx, y, "│", sep_style(zebra));
+            let in_block = in_block_rows && inner_sep(ci);
+            put(buf, cx, y, "│", if in_block { sep_style(zebra).patch(th.range) } else { sep_style(zebra) });
             // A pending value is shown instead of the value as read; a new row's own values. So is
             // a value an Apply wrote, when nothing is pending there.
             let pending = match new {

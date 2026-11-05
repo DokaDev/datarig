@@ -13,7 +13,11 @@
 //! column does not take (`edit_invalid`) is the error color in bold and underlined (darker on the
 //! light themes, lighter where a dark theme's red does not read on its selection). A new row's
 //! background (`edit_inserted_row`) is the new row's color blended into the background (none in
-//! `terminal`). Every theme passes the checks of `theme/tests.rs`.
+//! `terminal`). The result grid's cursor row (`grid_cursor_row`) is a subtle tint of the
+//! background and its cursor column's header (`grid_cursor_header`) a tint of the header's
+//! surface, each chosen to stand apart from the alternate rows, the selection, a range and the
+//! hover (no tint in `terminal`: the row's number in the accent and the underlined header say
+//! it). Every theme passes the checks of `theme/tests.rs`.
 
 use super::{Dim, Theme, rgb};
 use ratatui::style::{Color, Modifier, Style};
@@ -44,6 +48,10 @@ pub const TERMINAL: Theme = Theme {
     selection: Style::new().add_modifier(Modifier::REVERSED),
     range: Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD),
     cursor_line: Style::new().add_modifier(Modifier::UNDERLINED),
+    // No tint of the terminal's own background: the row's number in the accent says it; the
+    // header's name underlined.
+    grid_cursor_row: Style::new(),
+    grid_cursor_header: Style::new().add_modifier(Modifier::UNDERLINED),
     hover: Style::new().fg(Color::Reset).bg(Color::DarkGray),
     yank_flash: Style::new().fg(Color::Black).bg(Color::Yellow),
     tab_active: Style::new().fg(Color::Black).bg(Color::Cyan),
@@ -118,6 +126,8 @@ pub const LIGHT: Theme = Theme {
     selection: Style::new().bg(rgb(0xD5E3F0)),
     range: Style::new().bg(rgb(0xDDEDEA)),
     cursor_line: Style::new().bg(rgb(0xEBEEF3)),
+    grid_cursor_row: Style::new().bg(rgb(0xE9F0F6)),
+    grid_cursor_header: Style::new().bg(rgb(0xE0E2E5)),
     hover: Style::new().bg(rgb(0xE6E2DE)),
     yank_flash: Style::new().fg(rgb(0x1F2328)).bg(rgb(0xE0CAB0)),
     // 27% of the accent blended into the background.
@@ -193,6 +203,8 @@ pub const HIGH_CONTRAST: Theme = Theme {
     selection: Style::new().bg(rgb(0x0033CC)),
     range: Style::new().bg(rgb(0x004D40)),
     cursor_line: Style::new().bg(rgb(0x262626)),
+    grid_cursor_row: Style::new().bg(rgb(0x091416)),
+    grid_cursor_header: Style::new().bg(rgb(0x21262B)),
     hover: Style::new().bg(rgb(0x303131)),
     yank_flash: Style::new().fg(rgb(0xFFFFFF)).bg(rgb(0x533B07)),
     // 22% of the accent blended into the background.
@@ -269,6 +281,8 @@ pub const CATPPUCCIN_MOCHA: Theme = Theme {
     selection: Style::new().bg(rgb(0x45475A)),
     range: Style::new().bg(rgb(0x2B3A52)),
     cursor_line: Style::new().bg(rgb(0x2A2B3C)),
+    grid_cursor_row: Style::new().bg(rgb(0x22283A)),
+    grid_cursor_header: Style::new().bg(rgb(0x222639)),
     hover: Style::new().bg(rgb(0x282338)),
     yank_flash: Style::new().fg(rgb(0xCDD6F4)).bg(rgb(0x644D4A)),
     // 32% of the accent blended into the background.
@@ -348,6 +362,8 @@ pub const CATPPUCCIN_LATTE: Theme = Theme {
     selection: Style::new().bg(rgb(0xCCD0DA)),
     range: Style::new().bg(rgb(0xD4DCEE)),
     cursor_line: Style::new().bg(rgb(0xE3E6ED)),
+    grid_cursor_row: Style::new().bg(rgb(0xE4EAF5)),
+    grid_cursor_header: Style::new().bg(rgb(0xD5D8E0)),
     hover: Style::new().bg(rgb(0xE3EBE8)),
     yank_flash: Style::new().fg(rgb(0x4C4F69)).bg(rgb(0xE8C2AE)),
     // 23% of the accent blended into the background.
@@ -429,6 +445,8 @@ pub const TOKYO_NIGHT_NIGHT: Theme = Theme {
     selection: Style::new().bg(rgb(0x394B70)),
     range: Style::new().bg(rgb(0x283457)),
     cursor_line: Style::new().bg(rgb(0x292E42)),
+    grid_cursor_row: Style::new().bg(rgb(0x1D2031)),
+    grid_cursor_header: Style::new().bg(rgb(0x262E45)),
     hover: Style::new().bg(rgb(0x282A37)),
     yank_flash: Style::new().fg(rgb(0xC0CAF5)).bg(rgb(0x714C3D)),
     // 22% of the cyan blended into the background (the accent's blue is the selection's).
@@ -509,6 +527,8 @@ pub const TOKYO_NIGHT_DAY: Theme = Theme {
     selection: Style::new().bg(rgb(0xB7C1E3)),
     range: Style::new().bg(rgb(0xC4C8DA)),
     cursor_line: Style::new().bg(rgb(0xD0D5E3)),
+    grid_cursor_row: Style::new().bg(rgb(0xD2D6E5)),
+    grid_cursor_header: Style::new().bg(rgb(0xDAE1EC)),
     hover: Style::new().bg(rgb(0xD6DFDD)),
     yank_flash: Style::new().fg(rgb(0x2E4B91)).bg(rgb(0xD7C7B8)),
     // 24% of the cyan blended into the background (the accent's blue is the selection's).
@@ -588,6 +608,8 @@ pub const GRUVBOX_DARK: Theme = Theme {
     selection: Style::new().bg(rgb(0x504945)),
     range: Style::new().bg(rgb(0x45403D)),
     cursor_line: Style::new().bg(rgb(0x3C3836)),
+    grid_cursor_row: Style::new().bg(rgb(0x343231)),
+    grid_cursor_header: Style::new().bg(rgb(0x3B3E3B)),
     hover: Style::new().bg(rgb(0x45453B)),
     yank_flash: Style::new().fg(rgb(0xEBDBB2)).bg(rgb(0x684223)),
     // 19% of the yellow blended into the background (the accent's aqua comes too near the hover
@@ -667,6 +689,8 @@ pub const GRUVBOX_LIGHT: Theme = Theme {
     selection: Style::new().bg(rgb(0xD5C4A1)),
     range: Style::new().bg(rgb(0xE4D6AE)),
     cursor_line: Style::new().bg(rgb(0xEBDBB2)),
+    grid_cursor_row: Style::new().bg(rgb(0xF1E5BD)),
+    grid_cursor_header: Style::new().bg(rgb(0xDFDAB6)),
     hover: Style::new().bg(rgb(0xE3E0BB)),
     yank_flash: Style::new().fg(rgb(0x3C3836)).bg(rgb(0xE4BA8C)),
     // 25% of the accent blended into the background.
@@ -747,6 +771,8 @@ pub const NORD: Theme = Theme {
     selection: Style::new().bg(rgb(0x434C5E)),
     range: Style::new().bg(rgb(0x3B4A5A)),
     cursor_line: Style::new().bg(rgb(0x3B4252)),
+    grid_cursor_row: Style::new().bg(rgb(0x37424E)),
+    grid_cursor_header: Style::new().bg(rgb(0x49505F)),
     hover: Style::new().bg(rgb(0x424952)),
     yank_flash: Style::new().fg(rgb(0xD8DEE9)).bg(rgb(0x604D4E)),
     // 32% of the accent blended into the background.
@@ -827,6 +853,8 @@ pub const DRACULA: Theme = Theme {
     selection: Style::new().bg(rgb(0x44475A)),
     range: Style::new().bg(rgb(0x3B3F55)),
     cursor_line: Style::new().bg(rgb(0x343746)),
+    grid_cursor_row: Style::new().bg(rgb(0x2F3243)),
+    grid_cursor_header: Style::new().bg(rgb(0x414452)),
     hover: Style::new().bg(rgb(0x444650)),
     yank_flash: Style::new().fg(rgb(0xF8F8F2)).bg(rgb(0x685446)),
     // 26% of the accent blended into the background.
