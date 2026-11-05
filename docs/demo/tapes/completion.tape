@@ -28,7 +28,9 @@ Type "WHERE c"
 Sleep 300ms
 Type@0ms "."
 Wait+Screen@120ms /newsletter\s+column\s+boolean/
-Sleep 900ms
+Sleep 400ms
+Screenshot completion.png
+Sleep 500ms
 Type "em"
 Wait+Screen /email\s+column\s+text/
 Sleep 700ms
