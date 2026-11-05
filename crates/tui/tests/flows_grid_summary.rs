@@ -108,6 +108,16 @@ fn the_values_shown_are_summed_as_a_copy_takes_them() {
         ),
         "{line}"
     );
+    // A change made while the range stays: summed again at the next input.
+    let jobs = h.app.grid_summary_jobs();
+    if let Results::Rows(rs) = &mut h.app.tab_mut().results {
+        let row = vec![s("1"), s("10.50"), s("a")];
+        rs.edit.batch.set(&[(0, 1)], &Value::Text("0.50".into()), |_| row.clone());
+    }
+    h.keys("zz");
+    assert_eq!(h.app.grid_summary_jobs(), jobs + 1);
+    let line = summary(&mut h);
+    assert!(line.contains("sum 3.75 · avg 1.25 · min 0.50 · max 2.25"), "{line}");
 }
 
 #[test]

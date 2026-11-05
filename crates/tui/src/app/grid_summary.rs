@@ -34,14 +34,15 @@ const CHUNK: usize = 1024;
 pub type Over = BTreeMap<(usize, usize), Option<Option<String>>>;
 
 /// What a summary is of: the tab, its result, the rows read and the columns selected, and the
-/// values over them.
+/// state of the values over them (the pending changes' revision, whether an Apply's values
+/// show), so an input that changes none of it costs no more than this.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Key {
     tab: TabId,
     result: u64,
     rows: Range<usize>,
     cols: Range<usize>,
-    over: Over,
+    edits: (u64, bool),
     /// The selection has new rows too (left out).
     new_rows: bool,
     /// Whole columns of a result the server has more rows of.
@@ -349,6 +350,28 @@ fn num_text(v: &str) -> String {
     }
 }
 
+/// The values the grid shows over the cells of `rows` × `cols` of `rs`: pending ones and those an
+/// Apply wrote (or read again later).
+fn selected_over(rs: &ResultSet, rows: &Range<usize>, cols: &Range<usize>) -> Over {
+    let mut over = Over::new();
+    let mut put = |r: usize, c: usize| {
+        if rows.contains(&r)
+            && cols.contains(&c)
+            && let Some(o) = rs.over(r, c)
+        {
+            over.insert((r, c), o.cell().map(|v| v.map(str::to_string)));
+        }
+    };
+    for (r, e) in rs.edit.batch.rows() {
+        e.set.keys().for_each(|&c| put(r, c));
+    }
+    if let Some(a) = rs.edit.applied.as_deref() {
+        a.set.iter().for_each(|(&r, m)| m.keys().for_each(|&c| put(r, c)));
+        a.rerun.iter().for_each(|&(r, c)| put(r, c));
+    }
+    over
+}
+
 /// Whether a column of kind `k` holds numbers the summary adds up.
 fn numeric(k: ValueKind) -> bool {
     matches!(k, ValueKind::Integer | ValueKind::Decimal | ValueKind::Float)
@@ -403,31 +426,15 @@ impl App {
         if rows.is_empty() || cols.is_empty() {
             return None;
         }
-        let mut over = Over::new();
-        let mut put = |r: usize, c: usize| {
-            if rows.contains(&r) && cols.contains(&c) {
-                let v = rs.over(r, c).map(|o| o.cell().map(|v| v.map(str::to_string)));
-                if let Some(v) = v {
-                    over.insert((r, c), v);
-                }
-            }
-        };
-        for (r, e) in rs.edit.batch.rows() {
-            e.set.keys().for_each(|&c| put(r, c));
-        }
-        if let Some(a) = rs.edit.applied.as_deref() {
-            a.set.iter().for_each(|(&r, m)| m.keys().for_each(|&c| put(r, c)));
-            a.rerun.iter().for_each(|&(r, c)| put(r, c));
-        }
         let more = rs.more || t.exec.paging.closed() || t.exec.paging == Paging::Stopped;
         Some(Key {
             tab: t.id,
             result: rs.id,
             new_rows: sel_rows.end > len,
             fetched_only: t.grid.shape == crate::widgets::grid::Shape::Cols && more,
+            edits: (rs.edit.batch.revision(), rs.edit.applied.is_some()),
             rows,
             cols,
-            over,
         })
     }
 
@@ -446,6 +453,7 @@ impl App {
         let Some(key) = key else { return };
         let Results::Rows(rs) = &self.tab().results else { return };
         let numbers = key.cols.clone().all(|c| numeric(rs.columns[c].meta.kind));
+        let over = selected_over(rs, &key.rows, &key.cols);
         let snap = match rs.rows.snapshot(key.rows.clone()) {
             Ok(s) => s,
             Err(f) => {
@@ -460,7 +468,7 @@ impl App {
         self.grid_summary.state = Some(State::Working { job, stop: stop.clone() });
         let out = self.grid_job_out();
         let reply = Reply { out, job, sent: false };
-        let (first, cols, over): (usize, Vec<usize>, Over) = (key.rows.start, key.cols.collect(), key.over);
+        let (first, cols): (usize, Vec<usize>) = (key.rows.start, key.cols.collect());
         std::thread::spawn(move || {
             let r = summarize(&snap, first, &cols, numbers, &over, &stop);
             reply.send(r);
