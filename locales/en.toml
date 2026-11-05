@@ -2401,6 +2401,7 @@
 "edit.nothing_to_redo" = "Nothing to redo"
 "edit.nothing_to_revert" = "No pending change here"
 "edit.default" = "default"
+"edit.value_needed" = "! value needed"
 "edit.badge.pending" = { one = "{count} pending", other = "{count} pending" }
 "edit.badge.editable" = "editable · {table}"
 "edit.badge.editable_plain" = "editable"

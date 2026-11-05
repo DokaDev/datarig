@@ -107,6 +107,14 @@ fn ready(lang: Lang) -> Harness {
     ready_with(lang, users_structure())
 }
 
+/// The users' structure without `name`, which the result does not show and a new row would
+/// leave without a value: every column the table needs is in the result.
+fn all_shown() -> TableStructure {
+    let mut t = users_structure();
+    t.columns.retain(|c| c.name != "name");
+    t
+}
+
 fn editor_text(h: &Harness) -> String {
     h.app.tab().cell_edit.as_ref().expect("the cell editor is open").input.text().to_string()
 }
@@ -143,8 +151,9 @@ fn o_adds_a_new_row_after_the_rows_read_with_every_value_its_default() {
     assert_eq!(drafts(&h), [vec![Value::Default; 3]]);
     assert_eq!(cursor(&h), (3, 0), "on the new row's first column that takes a value");
     assert_eq!(counts(&h), Counts { updates: 0, inserts: 1, deletes: 0 });
+    // `!`, not `+`: its email (NOT NULL, no default) needs a value.
     let screen = h.screen(120, 40);
-    assert!(screen.contains("  +│") && !screen.contains(" 4 │"), "{screen}");
+    assert!(screen.contains("  !│") && !screen.contains(" 4 │"), "{screen}");
     // From a row read: after the other new rows.
     h.keys("ggo");
     assert_eq!(cursor(&h), (4, 0));
@@ -461,7 +470,7 @@ fn rows_read_later_come_before_the_new_rows() {
     assert_eq!(h.app.tab().grid.anchor, None, "the selection goes");
     let screen = h.screen(120, 40);
     let at = |t: &str| screen.find(t).unwrap_or_else(|| panic!("{t}:\n{screen}"));
-    assert!(at(" 5 │") < at("  +│"), "{screen}");
+    assert!(at(" 5 │") < at("  !│"), "{screen}");
     h.keys("D");
     assert_eq!(counts(&h), Counts::default(), "only the new row goes, no row that came is marked");
 }
@@ -562,7 +571,7 @@ fn screens(name: &str, setup: impl Fn(Lang) -> Harness) {
 #[test]
 fn new_rows_show_after_the_rows_read() {
     screens("edit_rows_new", |lang| {
-        let mut h = ready(lang);
+        let mut h = ready_with(lang, all_shown());
         h.keys("ol");
         type_cell(&mut h, "n@x");
         h.keys("O");
@@ -585,7 +594,7 @@ fn a_row_to_be_deleted_shows_crossed_out() {
 #[test]
 fn changed_deleted_and_new_rows_show_together() {
     screens("edit_rows_mixed", |lang| {
-        let mut h = ready(lang);
+        let mut h = ready_with(lang, all_shown());
         type_cell(&mut h, "a@y");
         h.keys("jD");
         h.keys("o");
@@ -629,6 +638,134 @@ fn new_and_deleted_rows_take_their_tokens() {
     }
 }
 
+/// A new row leaves `email` (NOT NULL, no default) to a default it lacks: Apply is refused for
+/// it, so the grid says so where it is, in a dark and a light theme and at both sizes. The cell
+/// reads that a value is needed in `edit_invalid` (bold, underlined, not the dim `default`) and
+/// the gutter has `!` for `+`; its column is wide enough for the whole marker, which keeps its
+/// color under the cursor. A typed value makes it a plain new row again. (The table's `name`
+/// is left out, so that no column the result does not show stops the row.)
+#[test]
+fn a_new_row_without_a_needed_value_is_marked_in_the_grid() {
+    use datarig_tui::theme;
+    use ratatui::style::Modifier;
+    for th in [theme::DARK, theme::LIGHT] {
+        let mut h = ready_with(Lang::En, all_shown());
+        h.app.theme = std::sync::Arc::new(th.clone());
+        h.keys("o");
+        h.app.transient = None;
+        // The grid's mark and the Changes tab's problem are one finding.
+        let needed = "email is NOT NULL and has no default";
+        assert_eq!(h.app.shown_invalid().expect("resolved").no_default.len(), 1);
+        assert!(h.app.shown_changes().expect("a model").problems.iter().any(|p| p.text.contains(needed)));
+        for (w, hh) in [(120, 40), (80, 24)] {
+            let t = h.draw(w, hh);
+            let buf = t.backend().buffer();
+            let g = &h.app.tab().grid;
+            let email = g.cell_rect(3, 1, 3).expect("on screen");
+            let line = row_text(buf, email.y);
+            assert!(line.contains(" !\u{2502} defa\u{2026} \u{2502} ! value needed \u{2502}"), "{w}x{hh}: {line:?}");
+            let at = buf[(email.x + 1, email.y)].clone();
+            assert_eq!(at.symbol(), "!");
+            assert_eq!(at.fg, th.edit_invalid.fg.unwrap(), "{w}x{hh}: the marker's color");
+            assert!(at.modifier.contains(Modifier::BOLD | Modifier::UNDERLINED), "{at:?}");
+            assert!(!at.modifier.contains(Modifier::DIM), "not the dim default: {at:?}");
+            // The gutter's `!`, in the error color, just before the first column's bar.
+            let bar = (0..email.x).rev().find(|&x| buf[(x, email.y)].symbol() == "\u{2502}").expect("a bar");
+            let x = (0..bar).rev().find(|&x| buf[(x, email.y)].symbol() == "!").expect("the gutter's mark");
+            assert_eq!(buf[(x, email.y)].fg, th.error, "{w}x{hh}: the gutter's `!`");
+            // The id, with a default of its own, keeps its dim `default`.
+            let id = g.cell_rect(3, 0, 3).expect("on screen");
+            assert!(buf[(id.x + 2, id.y)].modifier.contains(Modifier::DIM));
+        }
+        // Under the cursor, still in the warning color.
+        h.keys("l");
+        let t = h.draw(120, 40);
+        let email = h.app.tab().grid.cell_rect(3, 1, 3).expect("on screen");
+        let at = t.backend().buffer()[(email.x + 1, email.y)].clone();
+        assert_eq!(at.fg, th.edit_invalid.fg.unwrap(), "the selected marker: {at:?}");
+        assert_ne!(at.bg, th.surface_alt, "the cell is selected");
+        type_cell(&mut h, "n@x");
+        let t = h.draw(120, 40);
+        let y = h.app.tab().grid.cell_rect(3, 1, 3).expect("on screen").y;
+        let line = row_text(t.backend().buffer(), y);
+        assert!(line.contains(" +\u{2502} defa\u{2026} \u{2502} n@x"), "{line:?}");
+        assert!(!line.contains("value"), "{line:?}");
+        assert!(h.app.shown_invalid().expect("resolved").no_default.is_empty());
+        assert!(h.app.shown_changes().expect("a model").problems.iter().all(|p| !p.text.contains(needed)));
+    }
+}
+
+/// In the terminal theme, whose selected range sets its own text color, a cell that needs a value
+/// in the range keeps the warning color.
+#[test]
+fn a_needed_value_keeps_its_color_in_a_selected_range() {
+    use datarig_tui::theme;
+    let mut h = ready_with(Lang::En, all_shown());
+    h.app.theme = std::sync::Arc::new(theme::TERMINAL.clone());
+    h.keys("o");
+    h.keys("lvh");
+    h.app.transient = None;
+    let t = h.draw(120, 40);
+    let email = h.app.tab().grid.cell_rect(3, 1, 3).expect("on screen");
+    let at = t.backend().buffer()[(email.x + 1, email.y)].clone();
+    assert_eq!(at.symbol(), "!");
+    assert_eq!(at.fg, theme::TERMINAL.edit_invalid.fg.unwrap(), "in the range: {at:?}");
+    assert_ne!(Some(at.fg), theme::TERMINAL.range.fg, "not the range's color");
+}
+
+/// The marker and the gutter's `!` of a new row that needs a value.
+#[test]
+fn a_new_row_without_a_needed_value_shows_its_marker() {
+    screens("edit_rows_value_needed", |lang| {
+        let mut h = ready_with(lang, all_shown());
+        h.keys("o");
+        h.app.transient = None;
+        h
+    });
+}
+
+/// A new row of a table whose `name` (NOT NULL, no default) the result does not show: no cell
+/// to mark, but its gutter is `!` while an Apply is refused for it. The badge counts a cell
+/// that needs a value; the cell editor and the inspector say why it does.
+#[test]
+fn a_new_row_an_apply_refuses_is_marked_and_says_why() {
+    let mut h = ready(Lang::En);
+    h.keys("ol");
+    h.app.transient = None;
+    let line = |h: &mut Harness| {
+        let t = h.draw(120, 40);
+        let y = h.app.tab().grid.cell_rect(3, 1, 3).expect("on screen").y;
+        row_text(t.backend().buffer(), y)
+    };
+    // The badge, short at 120x40: one pending, two problems (the email, the row's `name`).
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("1 \u{b7} 2!"), "{screen}");
+    assert!(screen.contains("Row 4: email is NOT NULL"), "the inspector says why:\n{screen}");
+    // The cell editor: not invalid, it needs a value.
+    h.keys("e");
+    let e = h.app.tab().cell_edit.as_ref().expect("the editor");
+    assert_eq!((e.error.as_deref(), e.invalid), (Some("email has no default"), false));
+    assert!(h.status(120, 40).contains("Can't edit: email has no default"), "{}", h.status(120, 40));
+    assert!(!h.status(120, 40).contains("Row 4"), "{}", h.status(120, 40));
+    h.key(KeyCode::Esc);
+    type_cell(&mut h, "n@x");
+    h.app.transient = None;
+    // Every shown cell has a value, and still: `name` is not in the result.
+    let l = line(&mut h);
+    assert!(l.contains(" !\u{2502} defa\u{2026} \u{2502} n@x"), "{l:?}");
+    // The row is still counted: an Apply is refused for it.
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("1 \u{b7} 1!"), "{screen}");
+    let m = h.app.shown_changes().expect("a model");
+    assert!(m.problems.iter().any(|p| p.text.contains("name is NOT NULL")), "{:?}", m.problems);
+    // A table without `name`: a plain new row.
+    let mut h = ready_with(Lang::En, all_shown());
+    h.keys("ol");
+    type_cell(&mut h, "n@x");
+    let l = line(&mut h);
+    assert!(l.contains(" +\u{2502} defa\u{2026} \u{2502} n@x"), "{l:?}");
+}
+
 /// The Korean strings of the row keys fit at 80x24.
 #[test]
 fn the_row_refusals_read_in_korean() {
@@ -649,7 +786,7 @@ fn a_result_with_no_rows_takes_new_rows() {
     assert_eq!(drafts(&h).len(), 1);
     assert_eq!(cursor(&h), (0, 0));
     let screen = h.screen(120, 40);
-    assert!(screen.contains("  +│ defa…"), "{screen}");
+    assert!(screen.contains("  !│ defa…"), "{screen}");
     h.keys("D");
     assert!(edits(&h).batch.is_empty());
     assert!(h.screen(120, 40).contains("No rows"));

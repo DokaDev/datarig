@@ -132,12 +132,17 @@ struct PastePlan {
 type Refusal = (String, Option<String>);
 
 /// The cells of a result's changes whose value their column does not take, for the changes at
-/// `revision`: why, in words, by cell; and the same cells as the planner takes them.
+/// `revision`: why, in words, by cell; and the same cells as the planner takes them. With them,
+/// what else of new rows the planner refuses: the cells left to a default their column lacks
+/// ([`edit::no_default`]), and the new rows (by id) of a table with such a column the result
+/// does not show ([`edit::not_shown`]). The grid marks all of them.
 #[derive(Debug, Default)]
 pub struct Invalids {
     pub revision: u64,
     pub cells: BTreeMap<(RowAt, usize), String>,
     pub set: BTreeSet<(Origin, usize)>,
+    pub no_default: BTreeSet<(RowAt, usize)>,
+    pub not_shown: BTreeSet<u64>,
 }
 
 /// What the invalid cells were found for: the changes, the words, the NULL token, and what says
@@ -977,6 +982,8 @@ impl App {
                 RowAt::New(id) => (Origin::New(id), c),
             })
             .collect();
+        out.no_default = edit::no_default(target, batch).into_iter().map(|(id, c)| (RowAt::New(id), c)).collect();
+        out.not_shown = edit::not_shown(target, batch).into_iter().map(|(id, _)| id).collect();
         out
     }
 
@@ -985,14 +992,38 @@ impl App {
         self.shown_invalid()?.cells.get(&(at, col)).cloned()
     }
 
-    /// How many cells of `rs`'s changes are invalid, when it is the active tab's shown result.
+    /// Whether the cell at row `at`, column `col` of the active tab's shown result is a new
+    /// row's left to a default its column lacks.
+    pub(super) fn value_needed(&self, at: RowAt, col: usize) -> bool {
+        self.shown_invalid().is_some_and(|inv| inv.no_default.contains(&(at, col)))
+    }
+
+    /// Why an Apply is refused for the value at row `at`, column `col` of the active tab's shown
+    /// result: invalid, or (the Changes tab's words) a new row's that needs a value.
+    pub(crate) fn problem_reason(&self, at: RowAt, col: usize) -> Option<String> {
+        if let Some(why) = self.invalid_reason(at, col) {
+            return Some(why);
+        }
+        let (RowAt::New(id), true) = (at, self.value_needed(at, col)) else { return None };
+        let rs = rows_of(self.tab())?;
+        let row = self.origin_row(rs, Origin::New(id));
+        let column = self.preview_column(rs, col);
+        Some(self.i18n.msg(&Msg::EditPreviewNoDefault { row, column }).to_string())
+    }
+
+    /// How many problems of `rs`'s changes the grid marks, when it is the active tab's shown
+    /// result: cells invalid or that need a value, and new rows of a table with a column the
+    /// result does not show that needs one.
     pub(super) fn invalid_count(&self, rs: &ResultSet) -> usize {
         if self.tabs.is_empty() {
             return 0;
         }
         let t = self.tab();
         match rows_of(t) {
-            Some(shown) if shown.id == rs.id => self.invalid_cells(t, rs).cells.len(),
+            Some(shown) if shown.id == rs.id => {
+                let inv = self.invalid_cells(t, rs);
+                inv.cells.len() + inv.no_default.len() + inv.not_shown.len()
+            }
             _ => 0,
         }
     }
