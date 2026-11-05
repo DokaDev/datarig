@@ -1,0 +1,68 @@
+name: Demo
+
+# The README recordings (docs/demo): builds datarig, starts the demo databases, renders every
+# tape with VHS and uploads the GIFs and stills as the `demo` artifact. A tape that no longer
+# matches datarig's screens fails the run (its Wait times out), so the recordings never show an
+# old screen. It runs
+#   - when a pull request changes the recordings or this pipeline, and for a release pull
+#     request (it changes What's new), so a broken tape shows up before the tag;
+#   - by hand (Actions → Demo → Run workflow) to preview the recordings of any branch: the
+#     artifact holds them, nothing is published;
+#   - from release.yml for a stable release: its `pages` job puts the artifact under demo/ of
+#     the docs site (https://dokadev.github.io/datarig/demo/hero.gif and the others).
+on:
+  pull_request:
+    paths:
+      - docs/demo/**
+      - docs/site/src/whats-new.md
+      - .github/workflows/demo.yml
+      - .github/scripts/demo-tools.sh
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  render:
+    name: render the recordings
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@v2
+      - name: C compiler and libclang for pg_query
+        run: bash .github/scripts/pg-query-build-deps.sh
+      - run: cargo build --release --locked -p datarig-tui
+      - name: VHS, ttyd, ffmpeg and the font
+        run: bash .github/scripts/demo-tools.sh
+      - name: Demo databases
+        run: docker compose -f docs/demo/compose.yml up -d --wait --wait-timeout 300
+      - name: Render
+        env:
+          DATARIG_BIN: target/release/datarig
+        run: bash docs/demo/render.sh demo-out
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: demo
+          path: demo-out
+          if-no-files-found: error
+          retention-days: 30
+      - name: Database logs
+        if: failure()
+        run: docker compose -f docs/demo/compose.yml logs --no-color | tail -n 200

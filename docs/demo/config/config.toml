@@ -1,0 +1,78 @@
+# The configuration of the README recordings (docs/demo/render.sh copies it to a scratch
+# XDG_CONFIG_HOME). Every profile points at the demo databases of docs/demo/compose.yml; the
+# passwords come from DATARIG_DEMO_PASSWORD, set by render.sh.
+version = 2
+icons = "on"
+theme = "tokyo-night"
+# Copies never reach a system clipboard: results copy by OSC 52 (which the recording terminal
+# ignores) and the editor's yank stays inside datarig.
+clipboard = "osc52"
+
+[editor]
+clipboard = "off"
+
+[ui]
+tips = "off"
+
+[policy.prod]
+read_only = true
+confirm = "writes"
+commit = "manual"
+color = "red"
+badge = "PROD"
+
+[policy.staging]
+confirm = "writes"
+color = "orange"
+badge = "STG"
+
+[[connections]]
+id = "8f0c6d1e-2b4a-4c1e-9a53-0d1f6a7b2c01"
+name = "acme-prod"
+driver = "postgres"
+host = "127.0.0.1"
+port = 55499
+user = "demo"
+database = "acme"
+policy = "prod"
+icon = "shield"
+password_source = "env"
+password_env = "DATARIG_DEMO_PASSWORD"
+
+[[connections]]
+id = "8f0c6d1e-2b4a-4c1e-9a53-0d1f6a7b2c02"
+name = "acme-staging"
+driver = "postgres"
+host = "127.0.0.1"
+port = 55499
+user = "demo"
+database = "acme"
+policy = "staging"
+icon = "postgres"
+password_source = "env"
+password_env = "DATARIG_DEMO_PASSWORD"
+
+[[connections]]
+id = "8f0c6d1e-2b4a-4c1e-9a53-0d1f6a7b2c03"
+name = "billing-prod"
+driver = "mysql"
+host = "127.0.0.1"
+port = 53399
+user = "demo"
+database = "billing"
+policy = "prod"
+icon = "mysql"
+password_source = "env"
+password_env = "DATARIG_DEMO_PASSWORD"
+
+[[connections]]
+id = "8f0c6d1e-2b4a-4c1e-9a53-0d1f6a7b2c04"
+name = "local-dev"
+driver = "postgres"
+host = "127.0.0.1"
+port = 55499
+user = "demo"
+database = "acme"
+icon = "laptop"
+password_source = "env"
+password_env = "DATARIG_DEMO_PASSWORD"
