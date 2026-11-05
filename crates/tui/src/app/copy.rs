@@ -46,6 +46,9 @@ pub(super) struct YankNotices {
 /// Copies of more rows than this ask first.
 pub const LARGE_COPY: usize = 10_000;
 
+/// The most bytes of values `y` and `Y` keep for `g p` (more are not kept, and said).
+pub const GRID_COPY_MAX_BYTES: usize = 32 << 20;
+
 /// Rows read and written at a time.
 const COPY_CHUNK: usize = 4_096;
 
@@ -392,6 +395,11 @@ impl App {
 
     fn copy_request(&mut self, req: CopyRequest, confirmed: bool) {
         let format = req.format;
+        // `y` and `Y` replace the cells `g p` pastes, with nothing when they keep none (refused,
+        // asked about, not kept): `g p` never pastes an older copy in their place.
+        if format == CopyFormat::Tsv {
+            self.grid_copy = None;
+        }
         let Some(b) = self.block(req.what) else {
             let why = if self.on_new_rows() { Label::CopyNewRows } else { Label::CopyNothing };
             return self.flash(Notice::new(why, Level::Warning));
@@ -411,13 +419,7 @@ impl App {
             let Results::Rows(rs) = &self.tab().results else { return };
             match over_block(rs, &b, format == CopyFormat::SqlInsert) {
                 Ok(p) => p,
-                Err(why) => {
-                    // Not kept either: `g p` never pastes an older copy in its place.
-                    if format == CopyFormat::Tsv {
-                        self.grid_copy = None;
-                    }
-                    return self.flash(Notice::new(why, Level::Warning));
-                }
+                Err(why) => return self.flash(Notice::new(why, Level::Warning)),
             }
         };
         // `y` and `Y` keep the cells for `g p`, before the clipboard is tried; why not, said
@@ -430,10 +432,7 @@ impl App {
             };
             match kept {
                 Ok(c) => self.grid_copy = Some(Arc::new(c)),
-                Err(why) => {
-                    self.grid_copy = None;
-                    not_kept = why;
-                }
+                Err(why) => not_kept = why,
             }
         }
         // Generated columns left out of an SQL INSERT copy.
@@ -663,7 +662,12 @@ impl App {
                 // Said at once, and in the status bar instead of an older copy's success.
                 let failed = Notice::new(msg, Level::Error);
                 self.show_status(failed.clone());
-                return self.flash(failed);
+                self.flash(failed);
+                // The cells are kept whatever the clipboard did: when they are not, why.
+                if let Some(why) = not_kept {
+                    self.flash(Notice::new(why, Level::Info));
+                }
+                return;
             }
         };
         let method = self.method_text(method);
@@ -700,10 +704,12 @@ impl App {
     }
 
     /// The cells of block `b` of `rs` as `g p` pastes them: each value as the grid shows it (a
-    /// pending one over the value read; NULL as NULL). Not kept, and why (`None`: the rows could
-    /// not be read, which the copy says): more rows than a paste takes, or a value read that is
-    /// not shown as stored ([`export::sql_cells`]: a MySQL `FLOAT`, bytes not in their form, text
-    /// or a time read in a session that shows them otherwise), whose text would store another one.
+    /// pending one over the value read; NULL as NULL), and the fixed offset each MySQL
+    /// `TIMESTAMP` column was read in. Not kept, and why (`None`: the rows could not be read,
+    /// which the copy says): more rows than a paste takes, more than [`GRID_COPY_MAX_BYTES`] of
+    /// values, a row not read whole, or a value read that is not shown as stored
+    /// ([`export::sql_cells`]: a MySQL `FLOAT`, bytes not in their form, text or a time read in a
+    /// session that shows them otherwise), whose text would store another one.
     fn grid_copy_of(&self, rs: &ResultSet, b: &Block) -> Result<edit::GridCopy, Option<Msg>> {
         let key = || self.key_for(Action::Edit(edit::EditAction::PasteRegister), Ctx::Grid);
         if b.rows.len() > MAX_PASTE_ROWS {
@@ -722,21 +728,44 @@ impl App {
                 export::sql_cells(d, &[col], &rs.read_in, zone)
             })
             .collect();
+        // A MySQL `TIMESTAMP` is shown in the session's time zone: the offset it was read in
+        // goes with it (one not fixed refused it above, through `sql_cells`).
+        let offsets = b
+            .cols
+            .iter()
+            .map(|&c| match (&rs.read_in, rs.columns[c].meta.kind) {
+                (datarig_core::driver::ReadIn::Values(v), datarig_core::driver::ValueKind::TimestampTz)
+                    if matches!(d, Dialect::MySql(_)) =>
+                {
+                    export::fixed_offset(&v.time_zone, zone)
+                }
+                _ => None,
+            })
+            .collect();
         let overlaid = !rs.edit.batch.is_empty() || rs.edit.applied.is_some();
         let mut rows: Vec<Vec<Value>> = Vec::with_capacity(b.rows.len());
         let mut refused: Option<export::Refused> = None;
+        let (mut short, mut bytes) = (None, 0usize);
         let mut at = b.rows.start;
         rs.rows
             .for_each_chunk(b.rows.clone(), COPY_CHUNK, |chunk| {
                 for (i, r) in chunk.iter().enumerate() {
-                    let row =
-                        b.cols.iter().enumerate().map(|(j, &c)| match overlaid.then(|| rs.over(at + i, c)).flatten() {
-                            // A value with none to show (a DEFAULT, one only a run shows) refused the
-                            // copy before.
+                    // Past the most kept, nothing more is collected.
+                    if bytes > GRID_COPY_MAX_BYTES {
+                        return;
+                    }
+                    let row = b.cols.iter().enumerate().map(|(j, &c)| {
+                        let v = match overlaid.then(|| rs.over(at + i, c)).flatten() {
+                            // A value with none to show (a DEFAULT, one only a run shows) refused
+                            // the copy before.
                             Some(o) => o.cell().flatten().map_or(Value::Null, |v| Value::Text(v.to_string())),
-                            None => match r.get(c).and_then(|v| v.as_deref()) {
-                                None => Value::Null,
-                                Some(v) => {
+                            None => match r.get(c) {
+                                None => {
+                                    short.get_or_insert(at + i);
+                                    Value::Null
+                                }
+                                Some(None) => Value::Null,
+                                Some(Some(v)) => {
                                     if refused.is_none() {
                                         refused = cells[j]
                                             .as_ref()
@@ -747,18 +776,30 @@ impl App {
                                     Value::Text(v.to_string())
                                 }
                             },
-                        });
+                        };
+                        if let Value::Text(t) = &v {
+                            bytes += t.len();
+                        }
+                        v
+                    });
                     rows.push(row.collect());
                 }
                 at += chunk.len();
             })
             .map_err(|_| None)?;
+        if bytes > GRID_COPY_MAX_BYTES {
+            let max = format!("{} MiB", GRID_COPY_MAX_BYTES >> 20);
+            return Err(Some(Msg::CopyRegisterTooLarge { key: key(), max }));
+        }
+        if let Some(row) = short {
+            return Err(Some(Msg::CopyRegisterNotRead { key: key(), row: (row + 1).to_string() }));
+        }
         if let Some(r) = refused {
             let reason = self.not_whole_reason(&r.why);
             return Err(Some(Msg::CopyRegisterNotWhole { key: key(), column: r.column, reason }));
         }
         let columns = b.cols.iter().map(|&c| rs.columns[c].meta.clone()).collect();
-        Ok(edit::GridCopy { columns, rows })
+        Ok(edit::GridCopy { columns, offsets, rows })
     }
 
     /// Whether the rest of the active tab's rows can be fetched: its portal is open, the

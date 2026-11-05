@@ -1139,6 +1139,8 @@
 "copy.generated_skipped" = "Left out the generated columns {columns}: the database computes them again"
 "copy.register_too_many" = "Not kept for {key}: more than {max} rows, the most a paste takes"
 "copy.register_not_whole" = "Not kept for {key}: column “{column}” {reason}"
+"copy.register_too_large" = "Not kept for {key}: more than {max} of values"
+"copy.register_not_read" = "Not kept for {key}: row {row} was not read whole"
 "copy.too_long_for_osc52" = "Not copied: {size} of base64 is more than OSC 52 may carry ({limit}, osc52_max_bytes), and the terminal would drop it. Copy fewer rows, set clipboard = system, or export to a file (a later step)"
 "copy.failed" = "Could not copy: {error}"
 "copy.system_unavailable" = "the system clipboard is not available (clipboard = osc52 copies through the terminal)"
@@ -2604,6 +2606,8 @@
 "edit.paste.done_short" = "Pasted · {details}"
 "edit.paste.register_done" = "Pasted the copied cells · {details}"
 "edit.paste.register_empty" = "Nothing copied to paste: {copy} copies a cell or a range, {row} a row, then {paste} pastes it at the cursor"
+"edit.paste.register_zone" = "column “{column}” was copied in time zone {from}; this result was read in {to}"
+"edit.paste.zone_unknown" = "a time zone not known"
 "edit.paste.rows" = { one = "{count} row", other = "{count} rows" }
 "edit.paste.columns" = { one = "{count} column", other = "{count} columns" }
 "edit.paste.cells" = { one = "{count} cell changed", other = "{count} cells changed" }

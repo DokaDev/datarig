@@ -54,10 +54,13 @@ pub struct PasteIn {
 }
 
 /// The cells `y` or `Y` last copied in a grid, which `g p` pastes: a row of values each, as
-/// the grid showed them (a pending value, NULL as NULL), and their columns as read.
+/// the grid showed them (a pending value, NULL as NULL), their columns as read, and for each
+/// column the fixed offset it was read in when its values are shown in the session's time zone
+/// (a MySQL `TIMESTAMP`): pasted only into a result read in the same one.
 #[derive(Debug)]
 pub struct GridCopy {
     pub columns: Vec<datarig_core::driver::ColumnMeta>,
+    pub offsets: Vec<Option<String>>,
     pub rows: Vec<Vec<Value>>,
 }
 
@@ -482,7 +485,7 @@ impl App {
         let Some(p) = self.paste_in.take_if(|p| p.tab == tab && p.result == result) else { return };
         let PasteIn { text, format, again, copy, .. } = p;
         if let Some(copy) = copy {
-            return self.paste_rows(target, &copy.rows, None, None, None);
+            return self.paste_rows(target, &copy.rows, None, Some(&copy), None, None);
         }
         let opts = PasteOpts { null: self.prefs.paste_null.token().to_string() };
         let read = match format {
@@ -513,17 +516,19 @@ impl App {
             }
         };
         last.format = Some(pasted.format);
-        self.paste_rows(target, &pasted.rows, Some(pasted.format), Some(last), again);
+        self.paste_rows(target, &pasted.rows, Some(pasted.format), None, Some(last), again);
     }
 
     /// Paste `rows` (read as `format`; `None`: cells copied in a grid) on the active tab's shown
     /// result, resolved to `target`: laid over the grid and checked; done, asked about when it
-    /// changes many rows, or refused, said. `last`: the paste as `space d V` reads it again.
+    /// changes many rows, or refused, said. `copy`: the cells copied in a grid they are;
+    /// `last`: the paste as `space d V` reads it again.
     fn paste_rows(
         &mut self,
         target: &EditTarget,
         rows: &[Vec<Value>],
         format: Option<Format>,
+        copy: Option<&GridCopy>,
         last: Option<LastPaste>,
         again: Option<LastPaste>,
     ) {
@@ -537,6 +542,10 @@ impl App {
                 return self.paste_refused(reason);
             }
         };
+        if let Some(reason) = copy.and_then(|c| self.copy_zone_refused(c, &plan)) {
+            self.paste_not_done(last, again);
+            return self.paste_refused((reason, None));
+        }
         let rows = if plan.rows > ASK_ROWS { self.paste_changed_rows(&plan) } else { 0 };
         if rows > ASK_ROWS {
             // A question already open stays: this paste is not done.
@@ -736,6 +745,41 @@ impl App {
         shorter.dedup();
         shorter.retain(|m| *m != msg);
         self.flash_shorter(Notice::new(msg, level), shorter);
+    }
+
+    /// Why cells copied in a grid are not pasted as `plan` lays them: a value shown in the time
+    /// zone it was read in (a MySQL `TIMESTAMP`) lands in a column whose values the active tab's
+    /// shown result shows in another zone, or in one not known, where the same text is another
+    /// instant.
+    fn copy_zone_refused(&self, copy: &GridCopy, plan: &PastePlan) -> Option<String> {
+        let t = self.tab();
+        let rs = rows_of(t)?;
+        if !matches!(self.tab_dialect(t.id), Dialect::MySql(_)) {
+            return None;
+        }
+        let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
+        let width = copy.offsets.len();
+        (plan.top.1..plan.top.1 + plan.size.1).find_map(|c| {
+            // One value copied fills every selected cell.
+            let j = if width == 1 { 0 } else { c - plan.top.1 };
+            let from = copy.offsets.get(j)?.as_ref()?;
+            let valued = copy.rows.iter().any(|r| matches!(r.get(j), Some(Value::Text(_))));
+            if !valued || rs.columns.get(c)?.meta.kind != ValueKind::TimestampTz {
+                return None;
+            }
+            let to = match &rs.read_in {
+                datarig_core::driver::ReadIn::Values(v) => {
+                    export::fixed_offset(&v.time_zone, zone).ok_or_else(|| v.time_zone.clone())
+                }
+                _ => Err(self.i18n.label(Label::EditPasteZoneUnknown).to_string()),
+            };
+            let to = match to {
+                Ok(o) if o == *from => return None,
+                Ok(o) | Err(o) => o,
+            };
+            let column = copy.columns.get(j).map(|m| m.name.clone()).unwrap_or_default();
+            Some(self.i18n.msg(&Msg::EditPasteRegisterZone { column, from: from.clone(), to }).to_string())
+        })
     }
 
     /// A paste refused for `reason` (and its shorter form), said.

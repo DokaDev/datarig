@@ -1312,3 +1312,70 @@ fn a_new_row_offers_its_edits_and_nothing_that_reads_a_row() {
     h.menu_pick(DELETE_ROW);
     assert!(edits(&h).batch.drafts().is_empty());
 }
+
+#[test]
+fn a_mysql_value_not_shown_as_stored_is_not_kept_for_g_p() {
+    for (zone, charset, nickname, column, keys) in [
+        ("+00:00", "utf8mb4", ("float", ValueKind::Float, "1.5"), "nickname", "ll"),
+        ("+00:00", "latin1", ("varchar", ValueKind::Text, "one"), "email", "l"),
+    ] {
+        let mut h = mysql_users_with(zone, charset, nickname);
+        h.keys(keys);
+        h.keys("y");
+        let text = said_text(&mut h);
+        let kept = format!("Not kept for g p: column \u{201C}{column}\u{201D} ");
+        assert!(text.starts_with(&kept), "{text}");
+        h.keys("gp");
+        assert!(said_text(&mut h).starts_with("Nothing copied to paste"));
+    }
+}
+
+#[test]
+fn a_mysql_timestamp_copied_is_pasted_only_into_a_result_read_in_the_same_zone() {
+    use datarig_core::driver::{ColumnOrigin, SessionValues};
+    let mut h = mysql_users("+09:00", "utf8mb4");
+    h.keys("lly");
+    assert!(!said_text(&mut h).starts_with("Not kept"));
+    // The same rows read again in the session's zone `zone`.
+    let again = |h: &mut Harness, zone: &str| {
+        h.db(DbEvent::SessionValues(SessionValues { time_zone: zone.into(), charset: "utf8mb4".into() }));
+        let col = |name: &str, ty: &str, kind: ValueKind| {
+            let origin = ColumnOrigin::Named { schema: "shop".into(), table: "users".into(), column: name.into() };
+            ColumnMeta::new(name.into(), ty.into(), kind, Some(origin))
+        };
+        let columns = vec![
+            col("id", "bigint", ValueKind::Integer),
+            col("email", "varchar", ValueKind::Text),
+            col("nickname", "timestamp", ValueKind::TimestampTz),
+        ];
+        let rows = vec![vec![s("1"), s("a@x"), s("2024-01-01 00:00:00")]];
+        answer(h, "SELECT id, email, nickname FROM shop.users", columns, rows);
+        h.sent();
+        h.app.transient = None;
+    };
+    // In UTC the same text is another instant: refused.
+    again(&mut h, "+00:00");
+    h.keys("llgp");
+    structure(&mut h, Ok(mysql_users_structure()));
+    assert_eq!(
+        said_text(&mut h),
+        "Not pasted: column \u{201C}nickname\u{201D} was copied in time zone +09:00; this result was read in +00:00"
+    );
+    assert!(edits(&h).batch.is_empty());
+    // A zone not known: refused too.
+    again(&mut h, "Europe/Berlin");
+    h.keys("llgp");
+    structure(&mut h, Ok(mysql_users_structure()));
+    let text = said_text(&mut h);
+    assert!(text.ends_with("this result was read in Europe/Berlin"), "{text}");
+    // In the same zone it is pasted as it was shown.
+    again(&mut h, "+09:00");
+    h.keys("llgp");
+    structure(&mut h, Ok(mysql_users_structure()));
+    assert_eq!(edits(&h).batch.value(0, 2), Some(&Value::Text("2024-10-27 02:30:00".into())));
+}
+
+/// What the app said last, in words.
+fn said_text(h: &mut Harness) -> String {
+    said(h).map(|m| h.app.i18n.msg(&m).to_string()).unwrap_or_default()
+}

@@ -352,16 +352,28 @@ Pasted the copied cells · 2 rows × 2 columns · 2 cells changed · 1 new row �
 Each value is checked against the column it lands in, as a typed one: a text pasted into a
 number column is kept and marked invalid, and the changes are not applied until it is fixed.
 
-What is not kept says why, and the copy to the clipboard is done anyway:
+What is not kept says why, and the copy to the clipboard is done (or fails) anyway:
 
 - more than 5,000 rows, the most a paste takes ("Not kept for g p: more than 5,000 rows, the
   most a paste takes");
+- more than 32 MiB of values ("Not kept for g p: more than 32 MiB of values");
+- a row not read whole;
 - a MySQL value the grid does not show as stored: a `FLOAT` (the server sends it rounded),
   bytes or bits not in their form, text read in a character set other than `utf8mb4`, a
-  `TIMESTAMP` read in a time zone with daylight saving.
+  `TIMESTAMP` read in a time zone without a fixed offset (one with daylight saving, or
+  `SYSTEM` when the server's own zone is not known), and text or a `TIMESTAMP` of a result
+  whose session's character set and time zone are not known, or changed while its rows were
+  read.
 
-A copy the grid refuses (a pending DEFAULT, a value only a run shows) keeps nothing either; with
-nothing kept, `g p` says which keys copy.
+A copy the grid refuses (a pending DEFAULT, a value only a run shows, a new row) or asks about
+keeps nothing either, so `g p` never pastes an older copy; with nothing kept, it says which keys
+copy.
+
+A MySQL `TIMESTAMP` is shown in the session's time zone, so the same text is another instant in
+another zone. Its cells keep the fixed offset they were read in, and `g p` pastes them into a
+`TIMESTAMP` column only of a result read in the same offset; else it says so and pastes nothing
+("Not pasted: column “created_at” was copied in time zone +09:00; this result was read in
++00:00"). Set the session's `time_zone` to the one of the copy and run the query again.
 
 ## Undo, revert, discard
 

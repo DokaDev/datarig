@@ -1312,4 +1312,77 @@ mod grid_copy {
         h.keys("gp");
         assert!(said(&mut h).starts_with("Nothing copied to paste"));
     }
+
+    #[test]
+    fn the_text_of_the_null_token_and_an_empty_text_paste_back_as_text() {
+        let rows = vec![vec![s("1"), s("\\N"), s("")], vec![s("2"), s("b@x"), s("bo")]];
+        let mut h = ready_with(Harness::connected(Lang::En), rows);
+        h.keys("vly");
+        h.keys("jhgp");
+        assert_eq!(pending(&h, 1, 1), Some(t("\\N")), "not NULL: the text as shown");
+        assert_eq!(pending(&h, 1, 2), Some(t("")), "an empty text, not NULL");
+    }
+
+    #[test]
+    fn a_copy_the_grid_refuses_or_asks_about_keeps_nothing() {
+        let mut st = named();
+        st.columns[3].default = Some("'n'::text".into());
+        let mut h = ready_with(Harness::connected(Lang::En), users_rows());
+        // The table with a default for the nickname.
+        if let Results::Rows(rs) = &mut h.app.tab_mut().results {
+            rs.edit.target = Default::default();
+        }
+        h.keys("y");
+        h.keys("l");
+        h.keys(" dD");
+        structure(&mut h, st);
+        assert_eq!(pending(&h, 0, 2), Some(Value::Default));
+        h.app.transient = None;
+        // A pending DEFAULT has no value: the copy is refused, and the older one is gone.
+        h.keys("y");
+        assert_eq!(said(&mut h), "Not copied: nickname has a pending DEFAULT, which has no value yet");
+        h.keys("jgp");
+        assert!(said(&mut h).starts_with("Nothing copied to paste"));
+        // A copy on a new row is refused too.
+        h.keys("hy");
+        h.keys("o");
+        let ctx = h.app.key_context();
+        if ctx != Ctx::Grid {
+            h.key(KeyCode::Esc);
+        }
+        h.app.transient = None;
+        h.keys("Gy");
+        let got = h.app.transient.take().map(|(n, _)| n.render(&h.app.i18n).to_string());
+        let at = (cursor(&h), drafts(&h).len(), ctx);
+        assert_eq!(got.as_deref(), Some("A new row is not copied: it is not a row of the result yet"), "{at:?}");
+        h.keys("kgp");
+        assert!(said(&mut h).starts_with("Nothing copied to paste"));
+    }
+
+    #[test]
+    fn a_row_not_read_whole_is_not_kept_and_a_failed_clipboard_still_says_so() {
+        let rows = vec![vec![s("1"), s("a@x"), s("ann")], vec![s("2"), s("b@x")]];
+        let mut h = ready_with(Harness::connected(Lang::En), rows);
+        h.app.prefs.clipboard = ClipboardSetting::System;
+        let _c = FakeClipboard::attach(&mut h, true, &[]);
+        h.keys("jY");
+        assert_eq!(said(&mut h), "Not kept for g p: row 2 was not read whole");
+        let status = h.app.status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default();
+        assert!(status.starts_with("Could not copy"), "{status}");
+        h.keys("kgp");
+        assert!(said(&mut h).starts_with("Nothing copied to paste"));
+    }
+
+    #[test]
+    fn more_bytes_than_kept_are_not_kept_and_say_so() {
+        // Two values of just over 16 MiB: more than the 32 MiB kept.
+        let big = "x".repeat((16 << 20) + 1);
+        let rows = vec![vec![s("1"), s(&big), None], vec![s("2"), s(&big), None]];
+        let mut h = ready_with(Harness::connected(Lang::En), rows);
+        h.app.prefs.clipboard = ClipboardSetting::Osc52;
+        h.keys("vjy");
+        assert_eq!(said(&mut h), "Not kept for g p: more than 32 MiB of values");
+        h.keys("gp");
+        assert!(said(&mut h).starts_with("Nothing copied to paste"));
+    }
 }
