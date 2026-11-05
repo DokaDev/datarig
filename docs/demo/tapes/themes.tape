@@ -12,8 +12,10 @@ Type "l"
 Wait+Screen /products/
 Type "jjjjj"
 Enter
-Wait+Screen /editable · store\.products/
+Wait+Screen /acme\.store\.products/
+Wait+Screen /Showing \d+ rows/
 Tab
+Wait+Screen /editable · store\.products/
 Show
 
 Sleep 1.5s

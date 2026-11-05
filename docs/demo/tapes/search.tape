@@ -12,8 +12,10 @@ Type "l"
 Wait+Screen /orders/
 Type "jjjj"
 Enter
-Wait+Screen /editable · store\.orders/
+Wait+Screen /acme\.store\.orders/
+Wait+Screen /Showing \d+ rows/
 Tab
+Wait+Screen /editable · store\.orders/
 Sleep 300ms
 # The cell inspector off, for the columns.
 Type "i"

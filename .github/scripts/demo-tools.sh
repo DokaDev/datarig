@@ -3,7 +3,8 @@
 # ffmpeg, which VHS drives, and JetBrainsMono Nerd Font, the font every recording uses (the
 # explorer's icons are Nerd Font glyphs). VHS, ttyd and the font are release downloads pinned to
 # a version and to the SHA-256 of the file (from the GitHub release's asset digest, ttyd's from
-# its SHA256SUMS); a download that does not match fails here. ffmpeg comes from apt. CI tools
+# its SHA256SUMS); a download that does not match fails here. ffmpeg and a CJK font come from
+# apt. CI tools
 # only, never dependencies of datarig. VHS and ttyd go to $RUNNER_TEMP/bin, which goes on the
 # PATH of the steps after this one; the font to ~/.local/share/fonts.
 # To bump one: change its version and its digest together.
@@ -49,10 +50,11 @@ tar -xJf "$work/JetBrainsMono.tar.xz" -C "$fonts" --wildcards 'JetBrainsMonoNerd
 fc-cache -f "$fonts" >/dev/null
 fc-list | grep -q 'JetBrainsMono Nerd Font' || { echo "JetBrainsMono Nerd Font is not installed" >&2; exit 1; }
 
-if ! command -v ffmpeg >/dev/null; then
-  sudo apt-get update -qq
-  sudo apt-get install -y -qq --no-install-recommends ffmpeg >/dev/null
-fi
+# ffmpeg, and a CJK font for the few full-width signs datarig draws (U+FF0B, the plus of the
+# explorer's first line), which the browser takes from any installed font that has them.
+sudo apt-get update -qq
+sudo apt-get install -y -qq --no-install-recommends ffmpeg fonts-noto-cjk >/dev/null
+fc-list ':charset=ff0b' family | grep -q . || { echo "no installed font has U+FF0B" >&2; exit 1; }
 
 if [ -n "${GITHUB_PATH:-}" ]; then
   echo "$bin" >> "$GITHUB_PATH"
