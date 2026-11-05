@@ -750,8 +750,10 @@ impl App {
             (Target::Ready(r), Some(Ok(s))) if s.table == r.table => Some(r),
             _ => None,
         };
+        // A new row is refused for the table, not for the cell: no column takes a value in one.
+        let short = if a == EditAction::AddRow { Label::MenuOffNoColumn } else { Label::MenuOffHere };
         let here = |r: Result<(), Option<Notice>>| {
-            r.map_err(|n| n.map_or(N::Hidden, |n| N::Here(Box::new(Off::new(Label::MenuOffHere, n)))))
+            r.map_err(|n| n.map_or(N::Hidden, |n| N::Here(Box::new(Off::new(short, n)))))
         };
         match target {
             // Every check the key makes before it changes anything.

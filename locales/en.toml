@@ -878,6 +878,7 @@
 "menu.off.applying" = "applying"
 "menu.off.run_again" = "run it again first"
 "menu.off.here" = "not here"
+"menu.off.no_column" = "no column to fill"
 "menu.off.paging_closed" = "paging closed"
 "menu.off.not_held" = "not held open"
 "menu.off.table_tab" = "table tab"

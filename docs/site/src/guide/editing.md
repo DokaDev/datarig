@@ -103,11 +103,12 @@ changes anything. An edit that would refuse is shown dimmed, with why in a few w
 key would be; the keys and the wheel step over it, and a click on it says the reason in full
 (as its key does) and keeps the menu open. A result that can't be edited (a join, a read-only
 environment, a connection that is not open, a connection type that can't edit data) shows that
-once, on "Edit the cell" (`read-only`, `not connected`, `not editable`), and offers no other
-edit but undoing or dropping the changes already pending. On a result that can be edited, an
-edit that does not act on this cell or selection is dimmed `not here`: setting NULL on a NOT
-NULL column, setting the default of a column that has none, editing cells of several columns
-at once. Undo, the Changes tab and dropping the changes are listed only while changes are
+once, on "Edit the cell" (for example `read-only`, `not connected`, `not editable`), and offers
+no other edit but undo, the Changes tab and dropping the changes already pending (none of them
+while those are being applied). On a result that can be edited, an edit that does not act on
+this cell or selection is dimmed `not here`: setting NULL on a NOT NULL column, setting the
+default of a column that has none, editing cells of several columns at once; adding a row to a
+table none of whose columns shown takes a value is dimmed `no column to fill`. Undo, the Changes tab and dropping the changes are listed only while changes are
 pending. Until the first edit key has read the table's details, what its columns take is not
 known yet: the menu then offers NULL and DEFAULT on any column, and the key says why when one
 refuses it.

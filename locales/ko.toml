@@ -874,6 +874,7 @@
 "menu.off.applying" = "적용 중"
 "menu.off.run_again" = "먼저 다시 실행"
 "menu.off.here" = "여기서는 불가"
+"menu.off.no_column" = "값을 넣을 열 없음"
 "menu.off.paging_closed" = "페이징 닫힘"
 "menu.off.not_held" = "서버에 유지 안 됨"
 "menu.off.table_tab" = "테이블 탭"
