@@ -23,6 +23,7 @@ mod batch;
 mod input;
 pub mod paste;
 mod plan;
+mod shown;
 mod sql;
 mod target;
 
@@ -32,6 +33,7 @@ pub use plan::{
     Choice, Expect, Facts, Origin, Plan, PlanError, Step, Where, count_statements, no_default, not_shown, plan,
     plan_problems,
 };
+pub use shown::{DefaultShown, default_shown, needs_value};
 pub use sql::{ColumnInfo, EditSql, Exactness, Inexact, MySql, Offer, Postgres, Scope, Value, format};
 pub use target::{
     ColumnReason, Duplicates, EditSource, EditTarget, Identity, ReadOnly, SourceColumn, TableColumn, TableRef, Write,

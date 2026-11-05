@@ -253,6 +253,27 @@ fn deletes_and_new_rows_come_after_the_checks_in_the_risk_tone_for_deletes() {
     );
 }
 
+/// A new row's cells left to their default show what the server puts there (the id
+/// `<generated>`, the nickname's literal), but the Apply still leaves them out: the server
+/// applies its own defaults.
+#[test]
+fn the_defaults_a_new_row_shows_are_not_sent() {
+    let mut st = named();
+    st.columns[3].default = Some("'anon'::text".into());
+    let sql = "SELECT id, email, nickname FROM shop.users";
+    let mut h = resolved(connected(Lang::En), sql, users_columns(), users_rows(), st);
+    h.keys("ol");
+    type_cell(&mut h, "n@x");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("<generated>") && screen.contains("\u{2502} anon "), "{screen}");
+    h.command("apply");
+    let v = h.app.edit_preview_view().unwrap();
+    assert_eq!(
+        v.lines.last(),
+        Some(&step(r#"INSERT INTO "shop"."users" ("email") VALUES ('n@x') RETURNING *"#, 1, false))
+    );
+}
+
 #[test]
 fn nothing_pending_and_a_read_only_environment_are_refused_before_the_dialog() {
     let mut h = ready(Lang::En);
@@ -1016,6 +1037,17 @@ fn applied_changes_show_over_the_rows_and_the_changes_are_cleared() {
     // Running the query again shows the table as it is.
     answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows());
     assert!(edits(&h).applied.is_none());
+}
+
+/// Rows an Apply added are numbered after the rows read, as new rows are: the gutter's numbers
+/// run on.
+#[test]
+fn rows_an_apply_added_keep_the_row_numbers_running() {
+    let (mut h, id, steps) = three_applying(ready(Lang::En));
+    h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
+    let s = screen(&mut h, 120, 40);
+    let line = s.lines().find(|l| l.contains("n@x")).unwrap_or_default().to_string();
+    assert!(line.contains("\u{2502} 4 \u{2502}"), "the added row: {line:?}\n{s}");
 }
 
 /// A MySQL insert returns no row: the number its `AUTO_INCREMENT` column took fills that column;

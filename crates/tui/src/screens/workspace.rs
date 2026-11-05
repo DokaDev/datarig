@@ -1243,7 +1243,24 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         _ => Vec::new(),
     };
     let invalid = app.shown_invalid();
-    let look = crate::widgets::grid::Look { marks: &marks, icons: app.icons_on(), invalid: invalid.as_deref() };
+    // What new rows' cells left to their default show, by column (while there are new rows of
+    // a resolved table).
+    let defaults: Vec<Option<datarig_core::edit::DefaultShown>> = match &app.tab().results {
+        Results::Rows(rs) if !rs.edit.batch.drafts().is_empty() => match &rs.edit.target {
+            crate::app::edit::Target::Ready(t) => {
+                let d = app.tab_dialect(app.tab().id);
+                t.columns.iter().map(|c| c.as_ref().map(|c| datarig_core::edit::default_shown(&c.column, d))).collect()
+            }
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    };
+    let look = crate::widgets::grid::Look {
+        marks: &marks,
+        icons: app.icons_on(),
+        invalid: invalid.as_deref(),
+        defaults: &defaults,
+    };
     // The portal belongs to the last statement of the rows' run: only its rows page.
     let answer = app.tab().exec.shown.is_some() && app.tab().exec.shown == app.tab().answer_index();
     // `n` is the search's while one is on, and typed while its prompt is open: the next page's

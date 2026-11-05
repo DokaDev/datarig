@@ -401,6 +401,166 @@ fn unescape_pg(e: char, chars: &mut std::iter::Peekable<std::str::Chars>, out: &
     }
 }
 
+/// A constant a server printed as a column's default ([`Dialect::constant`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Constant {
+    /// `NULL`.
+    Null,
+    /// A string's value (unquoted), a number, `true` or `false`, as written.
+    Value(String),
+}
+
+impl Dialect {
+    /// `sql` without the parentheses around the whole of it (`((1))` is `1`; `(a) + (b)` keeps
+    /// them), trimmed.
+    pub fn unparenthesized(self, sql: &str) -> &str {
+        let mut s = sql.trim();
+        loop {
+            let toks: Vec<lexer::Token> = lexer::lex_in(s, self).into_iter().filter(|t| !t.is_trivia()).collect();
+            let (Some(first), Some(last)) = (toks.first(), toks.last()) else { return s };
+            if toks.len() < 2 || first.kind != lexer::Tok::LParen || last.kind != lexer::Tok::RParen {
+                return s;
+            }
+            // The first parenthesis must close at the very end.
+            let mut depth = 0usize;
+            for (i, t) in toks.iter().enumerate() {
+                match t.kind {
+                    lexer::Tok::LParen => depth += 1,
+                    lexer::Tok::RParen => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 && i + 1 < toks.len() {
+                            return s;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            s = s[first.end..last.start].trim();
+        }
+    }
+
+    /// The constant a column default is, read as SQL of this dialect: a string literal (in
+    /// MySQL also after its character set's introducer, `_utf8mb4'x'`), a number (with its
+    /// sign), `true`, `false` or `NULL`, in parentheses or not; in PostgreSQL also with casts
+    /// after it (`'x'::character varying`, `'{}'::jsonb`, `NULL::text`), the constant in
+    /// parentheses too (`(0)::numeric`). `None` for anything else, such as a call (`now()`,
+    /// `CURRENT_TIMESTAMP`) or an operator, and for a PostgreSQL string cast to a type other
+    /// than text that is one of the special date and time inputs (`'now'::date`,
+    /// `('now'::text)::date`): those are read when a row is inserted, not when the default was
+    /// set.
+    pub fn constant(self, sql: &str) -> Option<Constant> {
+        use lexer::Tok;
+        let sql = self.unparenthesized(sql);
+        let toks: Vec<lexer::Token> = lexer::lex_in(sql, self).into_iter().filter(|t| !t.is_trivia()).collect();
+        let text = |t: &lexer::Token| t.text(sql);
+        let word =
+            |t: &lexer::Token, w: &str| matches!(t.kind, Tok::Keyword | Tok::Ident) && text(t).eq_ignore_ascii_case(w);
+        // MySQL: a string's character set introducer (`_utf8mb4'x'`) goes.
+        let introducer = |i: &lexer::Token, s: &lexer::Token| {
+            matches!(self, Self::MySql(_)) && i.kind == Tok::Ident && text(i).starts_with('_') && i.end == s.start
+        };
+        let (value, rest) = match toks.as_slice() {
+            // A constant in parentheses with a cast after them (PostgreSQL prints `0::numeric`
+            // as `(0)::numeric`).
+            [open, ..] if open.kind == Tok::LParen => {
+                let mut depth = 0usize;
+                let close = toks.iter().position(|t| {
+                    match t.kind {
+                        Tok::LParen => depth += 1,
+                        Tok::RParen => depth = depth.saturating_sub(1),
+                        _ => {}
+                    }
+                    t.kind == Tok::RParen && depth == 0
+                })?;
+                (self.constant(&sql[open.end..toks[close].start])?, &toks[close + 1..])
+            }
+            [i, s, rest @ ..] if s.kind == Tok::Str && introducer(i, s) => {
+                (Constant::Value(self.unquote_literal(text(s))?), rest)
+            }
+            [s, rest @ ..] if s.kind == Tok::Str => {
+                let t = text(s);
+                // An introducer the lexer took into the string's token.
+                let t = match self {
+                    Self::MySql(_) if t.starts_with('_') => &t[t.find(self.string_quotes())?..],
+                    _ => t,
+                };
+                (Constant::Value(self.unquote_literal(t)?), rest)
+            }
+            [sign, n, rest @ ..]
+                if sign.kind == Tok::Op && matches!(text(sign), "-" | "+") && n.kind == Tok::Number =>
+            {
+                let sign = if text(sign) == "-" { "-" } else { "" };
+                (Constant::Value(format!("{sign}{}", text(n))), rest)
+            }
+            [n, rest @ ..] if n.kind == Tok::Number => (Constant::Value(text(n).to_string()), rest),
+            [b, rest @ ..] if word(b, "true") || word(b, "false") => {
+                (Constant::Value(text(b).to_ascii_lowercase()), rest)
+            }
+            [n, rest @ ..] if word(n, "null") => (Constant::Null, rest),
+            _ => return None,
+        };
+        let cast = |rest: &[lexer::Token]| {
+            let starts = rest.len() >= 2 && rest[..2].iter().all(|t| t.kind == Tok::Op && text(t) == ":");
+            starts
+                && rest.iter().all(|t| match t.kind {
+                    Tok::Op => matches!(text(t), ":" | "[" | "]"),
+                    Tok::Ident | Tok::Keyword | Tok::QuotedIdent | Tok::Number => true,
+                    Tok::LParen | Tok::RParen | Tok::Comma | Tok::Dot => true,
+                    _ => false,
+                })
+        };
+        let whole = match self {
+            Self::Postgres => rest.is_empty() || cast(rest),
+            Self::MySql(_) => rest.is_empty(),
+        };
+        // `'now'::date` is the time of the insert: no constant (fail-safe: any type but text).
+        let special = |v: &str| {
+            let v = v.trim().to_ascii_lowercase();
+            ["now", "today", "tomorrow", "yesterday", "epoch", "infinity", "-infinity", "allballs"]
+                .contains(&v.as_str())
+        };
+        let text_types = ["text", "character", "varying", "varchar", "char", "bpchar", "name"];
+        let to_other = rest.iter().any(|t| {
+            matches!(t.kind, Tok::Ident | Tok::Keyword | Tok::QuotedIdent)
+                && !text_types.contains(&t.text(sql).to_ascii_lowercase().as_str())
+        });
+        if self == Self::Postgres && to_other && matches!(&value, Constant::Value(v) if special(v)) {
+            return None;
+        }
+        whole.then_some(value)
+    }
+
+    /// Whether a column default the server printed draws the next number of a sequence
+    /// (PostgreSQL: `nextval(…)`, a `serial` column's). MySQL's `AUTO_INCREMENT` is no default.
+    pub fn draws_number(self, default: &str) -> bool {
+        match self {
+            Self::Postgres => {
+                let toks: Vec<lexer::Token> =
+                    lexer::lex_in(default, self).into_iter().filter(|t| !t.is_trivia()).collect();
+                matches!(toks.as_slice(), [f, p, ..] if f.text(default).eq_ignore_ascii_case("nextval") && p.kind == lexer::Tok::LParen)
+            }
+            Self::MySql(_) => false,
+        }
+    }
+
+    /// Of a column default as the app reads it from the structure, what a new row takes: in
+    /// MySQL without what an `UPDATE` sets (`CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`).
+    pub fn insert_default(self, default: &str) -> &str {
+        match self {
+            Self::Postgres => default,
+            Self::MySql(_) => {
+                // `ON UPDATE` as words, not inside a string.
+                let toks: Vec<lexer::Token> =
+                    lexer::lex_in(default, self).into_iter().filter(|t| !t.is_trivia()).collect();
+                let at = toks.windows(2).find(|w| {
+                    w[0].text(default).eq_ignore_ascii_case("on") && w[1].text(default).eq_ignore_ascii_case("update")
+                });
+                at.map_or(default, |w| default[..w[0].start].trim_end())
+            }
+        }
+    }
+}
+
 /// The language of an editor's text: SQL of some dialect (other kinds of consoles may join
 /// it later).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

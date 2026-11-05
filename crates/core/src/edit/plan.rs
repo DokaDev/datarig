@@ -14,7 +14,6 @@
 use super::batch::{Counts, Draft, EditBatch, RowEdit};
 use super::sql::{EditSql, Exactness, Scope, Value};
 use super::target::{ColumnReason, Duplicates, EditTarget, Identity, TableColumn, TableRef, Write};
-use crate::driver::structure::ColumnFill;
 use crate::sql::dialect::Language;
 use crate::sql::lexer::{Tok, Token, lex_in};
 use crate::sql::risk::{Class, Classifier};
@@ -200,12 +199,7 @@ pub fn count_statements(
 /// The cells of new rows left to their column's default (new row, result column) where the
 /// column has none: `NOT NULL`, no default expression, not numbered nor computed by the table.
 pub fn no_default(t: &EditTarget, b: &EditBatch) -> Vec<(u64, usize)> {
-    let none = |c: usize| {
-        t.columns
-            .get(c)
-            .and_then(Option::as_ref)
-            .is_some_and(|c| c.column.not_null && c.column.default.is_none() && c.column.fill == ColumnFill::Default)
-    };
+    let none = |c: usize| t.columns.get(c).and_then(Option::as_ref).is_some_and(|c| super::needs_value(&c.column));
     b.drafts()
         .iter()
         .flat_map(|d| d.cells.iter().enumerate().map(move |(c, v)| (d.id, c, v)))
