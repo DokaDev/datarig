@@ -1091,6 +1091,26 @@ fn menu_edits(h: &Harness) -> Vec<String> {
     h.menu_labels().into_iter().filter(|l| EDITS.contains(&l.as_str())).collect()
 }
 
+/// The edits the open menu shows dimmed, with the few words that say why.
+fn menu_dimmed_edits(h: &Harness) -> Vec<(String, String)> {
+    h.app
+        .menu_dimmed_rows()
+        .into_iter()
+        .map(|(l, why)| (l.to_string(), why))
+        .filter(|(l, _)| EDITS.contains(&l.as_str()))
+        .collect()
+}
+
+/// What picking the open menu's dimmed item `label` says, in full.
+fn dimmed_notice(h: &Harness, label: &str) -> String {
+    let n = h.app.menu_dimmed_notice(label).unwrap_or_else(|| panic!("{label} is not dimmed"));
+    h.app.i18n.msg(&n.msg).to_string()
+}
+
+fn dimmed(items: &[(&str, &str)]) -> Vec<(String, String)> {
+    items.iter().map(|(l, w)| (l.to_string(), w.to_string())).collect()
+}
+
 /// Right click on the grid's cell at `row`, `col` (of the 3 rows), drawn at 120x40.
 fn right_click_cell(h: &mut Harness, row: usize, col: usize) {
     use ratatui::crossterm::event::{MouseButton, MouseEventKind};
@@ -1153,6 +1173,10 @@ fn set_null_and_the_preview_from_the_menu() {
     for item in [EDIT_CELL, UNDO, PREVIEW, DISCARD] {
         assert!(offered.iter().any(|l| l == item), "{item}: {offered:?}");
     }
+    // Shown dimmed, with why: email is NOT NULL and has no default.
+    assert_eq!(menu_dimmed_edits(&h), dimmed(&[(SET_NULL, "not here"), (SET_DEFAULT, "not here")]));
+    assert_eq!(dimmed_notice(&h, SET_NULL), "Can't edit: email is NOT NULL");
+    assert_eq!(dimmed_notice(&h, SET_DEFAULT), "Can't edit: email has no default");
     insta::assert_snapshot!("edit_menu_pending_en_120x40", h.draw(120, 40).backend());
     h.menu_pick(PREVIEW);
     assert_eq!(h.app.key_context(), Ctx::Changes, "the Changes tab, as Space d p shows it");
@@ -1178,6 +1202,9 @@ fn a_result_that_cannot_be_edited_offers_no_edits() {
     h.keys("  ");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
     assert_eq!(menu_edits(&h), Vec::<String>::new());
+    // Why, once: on the first edit, dimmed.
+    assert_eq!(menu_dimmed_edits(&h), dimmed(&[(EDIT_CELL, "not editable")]));
+    assert!(dimmed_notice(&h, EDIT_CELL).starts_with("Read-only: "), "{}", dimmed_notice(&h, EDIT_CELL));
     assert!(h.menu_labels().iter().any(|l| l == "Copy the cell (a selected range as TSV)"), "the rest stays");
     insta::assert_snapshot!("edit_menu_read_only_en_120x40", h.draw(120, 40).backend());
     // A read-only environment.
@@ -1192,16 +1219,48 @@ fn a_result_that_cannot_be_edited_offers_no_edits() {
     answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), users_rows());
     right_click_cell(&mut h, 0, 1);
     assert_eq!(menu_edits(&h), Vec::<String>::new(), "read-only environment");
+    assert_eq!(menu_dimmed_edits(&h), dimmed(&[(EDIT_CELL, "read-only")]));
+    assert_eq!(dimmed_notice(&h, EDIT_CELL), "Read-only: the connection's environment is read-only");
+    // The keys and the wheel step over it, the pointer does not select it; a click (or a filter
+    // that finds only it, then Enter) does nothing but say why, the menu left open.
+    let line = h.app.menu_lines().iter().position(|(_, l, _)| *l == EDIT_CELL).expect("shown");
+    for _ in 0..h.app.menu_lines().len() {
+        h.key(KeyCode::Down);
+        assert_ne!(h.app.overlays.menu().unwrap().selected, line, "never selected");
+    }
+    h.draw(120, 40);
+    let m = h.app.overlays.menu().unwrap();
+    let (x, y, before) = (m.list.x + 3, m.list.y + (line - m.scroll) as u16, m.selected);
+    {
+        use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+        h.mouse(MouseEventKind::Moved, x, y);
+        assert_eq!(h.app.overlays.menu().unwrap().selected, before, "hover leaves it");
+        h.mouse(MouseEventKind::ScrollDown, x, y);
+        assert_ne!(h.app.overlays.menu().unwrap().selected, line, "the wheel steps over it");
+        h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    }
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu), "still open");
+    assert_eq!(said_text(&mut h), "Read-only: the connection's environment is read-only");
+    assert!(edits(&h).batch.is_empty(), "nothing edited");
+    h.type_text("edit the cell");
+    assert_eq!(h.app.overlays.menu().unwrap().selected_item(), None, "only a dimmed item matches");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu), "Enter runs nothing");
+    assert!(edits(&h).batch.is_empty());
     // A server that takes no edits.
     let mut h = users(Lang::En);
     h.db(DbEvent::Edit(None));
     right_click_cell(&mut h, 0, 1);
     assert_eq!(menu_edits(&h), Vec::<String>::new(), "no edits on this server");
+    assert_eq!(menu_dimmed_edits(&h), dimmed(&[(EDIT_CELL, "not editable")]));
+    assert_eq!(dimmed_notice(&h, EDIT_CELL), "Read-only: this connection type can't edit data");
     // The connection lost.
     let mut h = users(Lang::En);
     h.db(DbEvent::Lost { error: DbError::Closed });
     right_click_cell(&mut h, 0, 1);
     assert_eq!(menu_edits(&h), Vec::<String>::new(), "not connected");
+    assert_eq!(menu_dimmed_edits(&h), dimmed(&[(EDIT_CELL, "not connected")]));
+    assert_eq!(dimmed_notice(&h, EDIT_CELL), "Read-only: the tab's connection is not open");
 }
 
 #[test]
@@ -1215,6 +1274,9 @@ fn a_selection_offers_only_the_edits_it_takes() {
     assert_eq!(menu_lines(&h)[0], "# Selection");
     let offered = menu_edits(&h);
     assert_eq!(offered, vec![ADD_ROW, CLONE_ROW, DELETE_ROW], "several columns: {offered:?}");
+    let not_here = [(EDIT_CELL, "not here"), (SET_NULL, "not here"), (SET_DEFAULT, "not here")];
+    assert_eq!(menu_dimmed_edits(&h), dimmed(&not_here), "said why");
+    assert_eq!(dimmed_notice(&h, EDIT_CELL), "Select cells of one column to edit them together", "as the key says");
     h.key(KeyCode::Esc);
     h.keys("e");
     assert_eq!(said(&mut h), Some(Label::EditSeveralColumns.into()), "as the key says");

@@ -870,6 +870,20 @@
 "menu.no_match" = "No action matches"
 "menu.filter_hint" = "type to filter"
 "menu.stale" = "Not run: what the menu was opened on has changed. Open the menu again"
+# A menu item shown dimmed: why it cannot run now, in a few words.
+"menu.off.read_only" = "read-only"
+"menu.off.not_connected" = "not connected"
+"menu.off.environment" = "unknown environment"
+"menu.off.not_editable" = "not editable"
+"menu.off.applying" = "applying"
+"menu.off.run_again" = "run it again first"
+"menu.off.here" = "not here"
+"menu.off.paging_closed" = "paging closed"
+"menu.off.not_held" = "not held open"
+"menu.off.table_tab" = "table tab"
+"menu.off.ddl_tab" = "DDL tab"
+"menu.off.plan_hidden" = "show the plan first"
+"menu.off.plan_already" = "already a plan"
 
 # saved queries, autosave, tab restore, second instance
 "explorer.scripts" = "Saved queries"

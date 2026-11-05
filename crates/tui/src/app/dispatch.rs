@@ -4,6 +4,39 @@
 use super::*;
 
 impl App {
+    /// Why `a` cannot run now (its availability says no), when that can be said: what its key
+    /// says, and for a menu the few words shown next to it, dimmed.
+    pub(super) fn unavailable_why(&self, a: Action) -> Option<menu::Off> {
+        use menu::Off;
+        let tab = !self.profiles.is_empty() && !self.tabs.is_empty();
+        // A table tab has neither a text to save nor a connection to switch.
+        let table = tab && self.tab().is_table();
+        // A DDL tab is read-only and stays where it was opened.
+        let ddl = tab && self.tab().is_ddl();
+        let info = |l: Label| Notice::new(l, Level::Info);
+        Some(match a {
+            Action::ScriptSave | Action::ScriptSaveAs if table => {
+                Off::new(Label::MenuOffTableTab, info(Label::TableTabNoSave))
+            }
+            Action::SetTabConnection | Action::SetTabContext if table => {
+                Off::new(Label::MenuOffTableTab, info(Label::TableTabNoRebind))
+            }
+            Action::ScriptSave | Action::ScriptSaveAs | Action::FormatSql | Action::ToggleComment if ddl => {
+                Off::new(Label::MenuOffReadOnly, self.ddl_read_only_notice())
+            }
+            Action::SetTabConnection | Action::SetTabContext if ddl => {
+                Off::new(Label::MenuOffDdlTab, info(Label::DdlNoRebind))
+            }
+            // Another result than a text plan is shown, or none.
+            Action::ExplainAsPlan
+                if !self.tabs.is_empty() && self.tab().is_query() && self.tab_explains(self.tab().id) =>
+            {
+                self.explain_as_plan_off()
+            }
+            _ => return None,
+        })
+    }
+
     /// Run a named action. Every key binding and every command-line entry ends up here.
     pub fn dispatch(&mut self, a: Action) {
         // While the launch-time move waits (the busy notice), nothing runs (there may be no
@@ -12,35 +45,17 @@ impl App {
             return self.request_quit();
         }
         if !(action::spec(a).when)(self) {
-            // A table tab has neither a text to save nor a connection to switch: said, not
-            // silently ignored.
-            let table = !self.profiles.is_empty() && !self.tabs.is_empty() && self.tab().is_table();
-            // A DDL tab is read-only and stays where it was opened: said too.
-            let ddl = !self.profiles.is_empty() && !self.tabs.is_empty() && self.tab().is_ddl();
             match a {
-                Action::ScriptSave | Action::ScriptSaveAs if table => {
-                    self.flash(Notice::new(Label::TableTabNoSave, Level::Info));
-                }
-                Action::SetTabConnection | Action::SetTabContext if table => {
-                    self.flash(Notice::new(Label::TableTabNoRebind, Level::Info))
-                }
-                Action::ScriptSave | Action::ScriptSaveAs | Action::FormatSql | Action::ToggleComment if ddl => {
-                    self.say_read_only();
-                }
-                Action::SetTabConnection | Action::SetTabContext if ddl => {
-                    self.flash(Notice::new(Label::DdlNoRebind, Level::Info))
-                }
                 // No transaction, something runs, or it failed: said why.
                 Action::TxCommit | Action::TxRollback if !self.tabs.is_empty() => self.end_tx(a == Action::TxCommit),
                 Action::TxSummary if !self.tabs.is_empty() => self.tx_summary(),
                 Action::SessionView => self.session_view_without_profile(),
-                // Another result: said, as a key that does nothing would leave the user guessing.
-                Action::ExplainAsPlan
-                    if !self.tabs.is_empty() && self.tab().is_query() && self.tab_explains(self.tab().id) =>
-                {
-                    self.explain_as_plan_unavailable()
+                // Said, as a key that does nothing would leave the user guessing.
+                _ => {
+                    if let Some(off) = self.unavailable_why(a) {
+                        self.flash(off.notice);
+                    }
                 }
-                _ => {}
             }
             return;
         }

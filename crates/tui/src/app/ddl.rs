@@ -344,8 +344,14 @@ impl App {
     /// A command that would change the DDL tab's text did nothing: said, with the key that
     /// opens the text in a console instead.
     pub(super) fn say_read_only(&mut self) {
+        let n = self.ddl_read_only_notice();
+        self.flash(n);
+    }
+
+    /// The DDL tab is read-only: what says so, with the key that opens it in a console.
+    pub(super) fn ddl_read_only_notice(&self) -> Notice {
         let key = self.key_for(Action::DdlToConsole, Ctx::Ddl);
-        self.flash(Notice::new(Msg::DdlReadOnly { key }, Level::Info));
+        Notice::new(Msg::DdlReadOnly { key }, Level::Info)
     }
 
     /// "Copy the DDL": the whole text of the DDL tab to the clipboard.
