@@ -43,7 +43,7 @@ mod tab;
 
 pub use applied::{Applied, ApplyFailed, Applying};
 pub use ask::{ANSWER_GUARD, ApplyAsk, ApplyWait, AskAction, StatusAsk};
-pub use changes::{ChangesModel, Checks, ListLine, Mark, ModelCache, Pointer, Problem};
+pub use changes::{ChangesModel, Checks, ListEntry, ListLine, Mark, ModelCache, Pointer, Problem, pointer_text};
 pub use lines::Lines;
 pub use paste::{
     ASK_ROWS, CLIPBOARD_TIMEOUT, ClipAnswer, ClipReads, CsvAsk, InvalidCache, Invalids, LastPaste, PasteAsk, PasteIn,

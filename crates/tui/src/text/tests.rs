@@ -167,3 +167,14 @@ fn slice_cols_blanks_a_wide_character_cut_by_an_edge() {
         }
     }
 }
+
+#[test]
+fn control_characters_are_spelled_out_and_a_backslash_doubled_only_before_an_escape() {
+    assert_eq!(escape_controls("plain \u{1F418} text"), "plain \u{1F418} text");
+    assert_eq!(escape_controls("a\r\nb\tc\u{7}d"), r"a\r\nb\tc\x07d");
+    assert_eq!(escape_controls("\u{0}\u{1b}\u{7f}\u{85}\u{9f}\u{2028}"), r"\x00\x1b\x7f\u{85}\u{9f}\u{2028}");
+    // A backslash stays one unless what follows would read as an escape.
+    assert_eq!(escape_controls(r"a\b\db"), r"a\b\db");
+    assert_eq!(escape_controls(r"a\nb \t \x41 \u \\ end\"), r"a\\nb \\t \\x41 \\u \\\ end\");
+    assert_eq!(escape_controls("\\\n"), r"\\\n");
+}

@@ -649,7 +649,7 @@ impl App {
         let (named, count) = match bad.iter().min() {
             Some(&&(at, c)) => {
                 let rs = rows_of(t);
-                let row = rs.and_then(|rs| shown_row(rs, at)).map_or_else(|| "?".into(), |r| (r + 1).to_string());
+                let row = rs.map_or_else(|| "?".into(), |rs| self.row_name(rs, at));
                 let column = rs.and_then(|rs| rs.columns.get(c)).map(|c| c.meta.name.clone()).unwrap_or_default();
                 let n = bad.len() as u64;
                 let named = i18n.msg(&Msg::EditPasteInvalid { count: n, row, column }).to_string();
@@ -1006,9 +1006,9 @@ impl App {
         }
         let (RowAt::New(id), true) = (at, self.value_needed(at, col)) else { return None };
         let rs = rows_of(self.tab())?;
-        let row = self.origin_row(rs, Origin::New(id));
         let column = self.preview_column(rs, col);
-        Some(self.i18n.msg(&Msg::EditPreviewNoDefault { row, column }).to_string())
+        let bare = self.i18n.msg(&Msg::EditPreviewNoDefault { column }).to_string();
+        Some(self.at_row(rs, RowAt::New(id), &crate::text::escape_controls(&bare)))
     }
 
     /// How many problems of `rs`'s changes the grid marks, when it is the active tab's shown

@@ -3,7 +3,7 @@
 //! and the Changes tab of the results pane, with its list of the changed cells.
 
 use crate::app::App;
-use crate::app::edit::{ChangesModel, Mark, Pointer, PreviewLine};
+use crate::app::edit::{ChangesModel, ListEntry, Mark, Pointer, PreviewLine};
 use crate::text::wrap_words;
 use crate::theme;
 use crate::widgets::put;
@@ -220,34 +220,52 @@ fn cut_spans(spans: Vec<(String, Style)>, w: usize) -> Vec<(String, Style)> {
 
 /// How a line of the list names its row: by its key, its row in the grid, or as a new row.
 fn pointer_text(app: &App, p: &Pointer) -> String {
-    match p {
-        Pointer::Key(k) => k.clone(),
-        Pointer::Row(n) => app.i18n.msg(&Msg::ChangesRow { n: n.to_string() }).to_string(),
-        Pointer::New(n) => app.i18n.msg(&Msg::ChangesNew { n: n.to_string() }).to_string(),
-    }
+    crate::app::edit::pointer_text(&app.i18n, p)
 }
 
-/// The rows of the Changes tab's list in `w` columns, each with the line of the list it shows:
-/// every problem (`!`, its words wrapped), then one row per changed cell (`~`), deleted row
-/// (`-`) and new row (`+`), its row named on its first line, cut to the width.
+/// The rows of the Changes tab's list in `w` columns, each with the line of the list it shows
+/// ([`ChangesModel::entries`]): a problem about no row (`!`, its words wrapped), one row per
+/// changed cell (`~`), deleted row (`-`) and new row (`+`), its row named on its first line, cut
+/// to the width; a row's problems under its lines (`!`, indented, without the row's name).
 fn list_rows(app: &App, m: &ChangesModel, w: usize) -> Vec<(usize, Vec<(String, Style)>)> {
     use crate::text::{fit, width, wrap_words};
     let th = theme::cur();
     let base = |fg| Style::new().fg(fg).bg(th.bg);
     let token = |s: Style| s.bg(th.bg).remove_modifier(Modifier::CROSSED_OUT);
     let mut rows = Vec::new();
-    for (k, p) in m.problems.iter().enumerate() {
-        for (j, r) in wrap_words(&p.text, w.saturating_sub(2).max(8)).into_iter().enumerate() {
-            let lead = if j == 0 { "! " } else { "  " };
-            rows.push((k, vec![(lead.to_string(), base(th.error).add_modifier(Modifier::BOLD)), (r, base(th.error))]));
-        }
-    }
     let pointers: Vec<Option<String>> = m.list.iter().map(|l| l.row.as_ref().map(|p| pointer_text(app, p))).collect();
-    let pw = pointers.iter().flatten().map(|p| width(p)).max().unwrap_or(0);
+    let heads = m.entries.iter().filter_map(|e| match e {
+        ListEntry::Row(_, p) => Some(width(&pointer_text(app, p))),
+        _ => None,
+    });
+    let pw = pointers.iter().flatten().map(|p| width(p)).chain(heads).max().unwrap_or(0);
     let cw = m.list.iter().filter(|l| l.col.is_some()).map(|l| width(&l.column)).max().unwrap_or(0).min(24);
     let by_values = app.i18n.label(Label::ChangesByValues).to_string();
     let delete = app.i18n.label(Label::ChangesDelete).to_string();
-    for (k, (l, pointer)) in m.list.iter().zip(&pointers).enumerate() {
+    for (k, e) in m.entries.iter().enumerate() {
+        let i = match e {
+            ListEntry::Problem(i) => {
+                let p = &m.problems[*i];
+                let (lead, more, text) = if p.at.is_some() { ("  ! ", "    ", &p.bare) } else { ("! ", "  ", &p.text) };
+                for (j, r) in wrap_words(text, w.saturating_sub(lead.len()).max(8)).into_iter().enumerate() {
+                    let lead = if j == 0 { lead } else { more };
+                    rows.push((
+                        k,
+                        vec![(lead.to_string(), base(th.error).add_modifier(Modifier::BOLD)), (r, base(th.error))],
+                    ));
+                }
+                continue;
+            }
+            ListEntry::Row(_, p) => {
+                rows.push((
+                    k,
+                    cut_spans(vec![("  ".to_string(), base(th.fg)), (pointer_text(app, p), base(th.fg))], w),
+                ));
+                continue;
+            }
+            ListEntry::Line(i) => *i,
+        };
+        let (l, pointer) = (&m.list[i], &pointers[i]);
         let (mark, tone) = match l.mark {
             Mark::Changed => ("~", token(th.edit_changed)),
             Mark::Inserted => ("+", token(th.edit_inserted)),
@@ -268,7 +286,7 @@ fn list_rows(app: &App, m: &ChangesModel, w: usize) -> Vec<(usize, Vec<(String, 
         if matches!(l.row, Some(Pointer::Row(_))) {
             spans.push((format!("  {by_values}"), base(th.fg_dim).add_modifier(Modifier::ITALIC)));
         }
-        rows.push((m.problems.len() + k, cut_spans(spans, w)));
+        rows.push((k, cut_spans(spans, w)));
     }
     rows
 }
@@ -381,7 +399,7 @@ pub(crate) fn draw_changes(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
     } else {
         let rows = list_rows(app, &m, iw);
-        let last = (m.problems.len() + m.list.len()).saturating_sub(1);
+        let last = m.entries.len().saturating_sub(1);
         c.line = c.line.min(last);
         // The selected line on screen, whole when it fits.
         let first = rows.iter().position(|(k, _)| *k == c.line).unwrap_or(0);

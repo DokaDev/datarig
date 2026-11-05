@@ -45,6 +45,33 @@ pub fn sanitize_cell(s: &str) -> String {
     out
 }
 
+/// `s` on one line with its control characters spelled out, as the Changes tab shows values and
+/// names: `\n`, `\r`, `\t`, `\x07` for another C0 one and DEL, `\u{85}` for a C1 one (and for
+/// U+2028 and U+2029). A backslash is doubled only where what follows it would read as one of
+/// these (`n`, `r`, `t`, `x`, `u`, a backslash, or a character spelled out), so `a\b` stays
+/// as it is while every escape still reads back to one character.
+pub fn escape_controls(s: &str) -> String {
+    let spelled = |c: char| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}');
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\\' => {
+                let reads_as_escape =
+                    chars.peek().is_some_and(|&n| spelled(n) || matches!(n, 'n' | 'r' | 't' | 'x' | 'u' | '\\'));
+                out.push_str(if reads_as_escape { "\\\\" } else { "\\" });
+            }
+            c if spelled(c) && (c as u32) < 0x80 => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c if spelled(c) => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 /// Truncate `s` so that it occupies exactly `w` columns, ending with `…`.
 /// Never splits a grapheme cluster. If a wide grapheme leaves one column free,
 /// that column is padded with a space. Caller guarantees `width(s) > w`.

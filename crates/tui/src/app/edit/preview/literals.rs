@@ -32,9 +32,15 @@ pub(in crate::app::edit) fn text_pair(column: &str, text: &str, max: usize) -> S
 
 /// `'text'` as the preview says a text value ([`text_pair`]).
 pub(in crate::app::edit) fn quoted(text: &str, max: usize) -> String {
-    use crate::text::{clip, sanitize_cell, width};
+    quoted_with(text, max, crate::text::sanitize_cell)
+}
+
+/// `'text'` cut at `max` columns with `…`, its start made one line by `line` (only its start is
+/// looked at, however long it is).
+pub(in crate::app::edit) fn quoted_with(text: &str, max: usize, line: fn(&str) -> String) -> String {
+    use crate::text::{clip, width};
     let head: String = text.chars().take(max * 4).collect();
-    let mut shown = clip(&sanitize_cell(&head), max);
+    let mut shown = clip(&line(&head), max);
     if head.len() < text.len() && width(&shown) <= max && !shown.ends_with('\u{2026}') {
         shown = clip(&format!("{shown}\u{2026}"), max);
     }

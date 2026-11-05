@@ -8,7 +8,7 @@
 //! of the changes. Until then the statements say they are being counted; the list needs no
 //! count.
 
-use super::changes::{ChangesModel, Planned};
+use super::changes::{ChangesModel, ListEntry, Planned};
 use super::*;
 use crate::app::action::Action;
 use datarig_core::config::ChangesView;
@@ -65,12 +65,12 @@ enum Went {
     NotLoaded,
 }
 
-/// The row and the column line `k` of the list is about: the problems first, then the changed
-/// cells.
+/// The row and the column line `k` of the list is about ([`ChangesModel::entries`]).
 fn entry_at(m: &ChangesModel, k: usize) -> Option<(RowAt, Option<usize>)> {
-    match m.problems.get(k) {
-        Some(p) => p.at,
-        None => m.list.get(k - m.problems.len()).map(|l| (l.at, l.col)),
+    match m.entries.get(k)? {
+        ListEntry::Problem(i) => m.problems.get(*i)?.at,
+        ListEntry::Line(i) => m.list.get(*i).map(|l| (l.at, l.col)),
+        ListEntry::Row(at, _) => Some((*at, None)),
     }
 }
 
@@ -133,7 +133,7 @@ impl App {
         }
         let sql = self.changes_sql();
         let Some(m) = self.shown_changes() else { return };
-        let last = (m.problems.len() + m.list.len()).saturating_sub(1);
+        let last = m.entries.len().saturating_sub(1);
         let Some(c) = self.changes_cursor_mut() else { return };
         let half = (c.page / 2).max(1);
         // The statements scroll (their end is kept on screen as they are drawn); the list moves
@@ -236,7 +236,7 @@ impl App {
             None => self.i18n.label(Label::ResultsTabRows).to_string(),
         };
         let table = match rows_of(t).map(|rs| &rs.edit.target) {
-            Some(Target::Ready(x)) => format!("{}.{}", x.table.schema, x.table.name),
+            Some(Target::Ready(x)) => crate::text::escape_controls(&format!("{}.{}", x.table.schema, x.table.name)),
             _ => String::new(),
         };
         let title = self.i18n.msg(&Msg::ChangesTitle { result, table }).to_string();

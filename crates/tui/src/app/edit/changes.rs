@@ -102,7 +102,10 @@ pub(super) enum Planned {
 /// A reason the changes cannot be applied yet, with the row (and the column) it is about.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Problem {
+    /// In words, the row named as the list names it (`new 1 · email is NOT NULL …`).
     pub text: String,
+    /// In words without the row's name, as it is listed under its row.
+    pub bare: String,
     pub at: Option<(RowAt, Option<usize>)>,
     /// A row that matches several identical rows: the Apply asks which.
     pub choice: bool,
@@ -125,6 +128,17 @@ pub enum Pointer {
     Row(usize),
     /// A new row: which one, counted from 1 in the order the grid shows them.
     New(usize),
+}
+
+/// A line of the Changes tab's list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ListEntry {
+    /// Problem `k` of the model.
+    Problem(usize),
+    /// Line `k` of the model's changed cells.
+    Line(usize),
+    /// The name of a row with problems and no changed cell listed.
+    Row(RowAt, Pointer),
 }
 
 /// One changed cell (a whole row for a delete and a new row).
@@ -154,6 +168,8 @@ pub struct ChangesModel {
     pub problems: Vec<Problem>,
     /// The changed cells: deletes, updates and inserts, as the plan orders them.
     pub list: Vec<ListLine>,
+    /// The lines of the list, in order ([`entries`]).
+    pub entries: Vec<ListEntry>,
     /// The statements as the preview shows them, or why there are none yet.
     pub sql: Vec<PreviewLine>,
     /// The statements' dialect (their colors).
@@ -220,7 +236,7 @@ fn not_whole(d: Dialect, rs: &ResultSet, zone: Option<&str>) -> BTreeSet<(usize,
 /// `v` as a line of the changes says it: a text quoted and cut as the preview's values are.
 fn literal(v: &Value) -> String {
     match v {
-        Value::Text(t) => literals::quoted(t, VALUE_W),
+        Value::Text(t) => literals::quoted_with(t, VALUE_W, crate::text::escape_controls),
         Value::Null => "NULL".into(),
         Value::Default => "DEFAULT".into(),
     }
@@ -229,23 +245,86 @@ fn literal(v: &Value) -> String {
 /// The longest a key pointer is, in columns.
 const POINTER_W: usize = 24;
 
-/// The lines of `batch`'s changes to the rows of `target` (`names`: the result's column names):
-/// deletes, then updates, then new rows; one line per changed cell, the row named on its first.
-pub(super) fn list_lines(target: &EditTarget, batch: &EditBatch, names: &[String]) -> Vec<ListLine> {
-    let name = |c: usize| crate::text::sanitize_cell(names.get(c).map_or("", String::as_str));
-    let pointer = |row: usize, e: &RowEdit| match &target.identity {
+/// Column `c` of `names` as the list names it: its control characters spelled out.
+fn column_name(names: &[String], c: usize) -> String {
+    crate::text::escape_controls(names.get(c).map_or("", String::as_str))
+}
+
+/// How the list names read row `row` of `target` (`orig`: its values as read; `names`: the
+/// result's column names): by its key's values, or its row in the grid.
+fn read_pointer(target: &EditTarget, names: &[String], row: usize, orig: &[Cell]) -> Pointer {
+    match &target.identity {
         Identity::Key { columns, .. } => {
             let parts: Vec<String> = columns
                 .iter()
                 .map(|&c| {
-                    let v = e.orig.get(c).cloned().flatten();
-                    format!("{}={}", name(c), v.as_deref().map_or("NULL".into(), crate::text::sanitize_cell))
+                    let v = orig.get(c).cloned().flatten();
+                    let v = v.as_deref().map_or("NULL".into(), crate::text::escape_controls);
+                    format!("{}={v}", column_name(names, c))
                 })
                 .collect();
             Pointer::Key(crate::text::clip(&parts.join(","), POINTER_W))
         }
         Identity::Values { .. } => Pointer::Row(row + 1),
+    }
+}
+
+/// How the list names row `at` of `batch`'s changes to `target` (`names`: the result's column
+/// names); a row read with no change is named by its row in the grid.
+pub(super) fn row_pointer(target: &EditTarget, batch: &EditBatch, names: &[String], at: RowAt) -> Pointer {
+    match at {
+        RowAt::Read(r) => batch.row(r).map_or(Pointer::Row(r + 1), |e| read_pointer(target, names, r, &e.orig)),
+        RowAt::New(id) => Pointer::New(batch.drafts().iter().position(|d| d.id == id).map_or(0, |i| i + 1)),
+    }
+}
+
+/// Pointer `p` in words (`id=5`, `row 31`, `new 1`).
+pub fn pointer_text(i18n: &datarig_core::i18n::I18n, p: &Pointer) -> String {
+    match p {
+        Pointer::Key(k) => k.clone(),
+        Pointer::Row(n) => i18n.msg(&Msg::ChangesRow { n: n.to_string() }).to_string(),
+        Pointer::New(n) => i18n.msg(&Msg::ChangesNew { n: n.to_string() }).to_string(),
+    }
+}
+
+/// The lines of the list of `list` and `problems`: the problems about no row first, then each
+/// row's lines with its problems under them; a row with problems and no line of its own is
+/// named (`pointer`) on a line before them.
+pub(super) fn entries(problems: &[Problem], list: &[ListLine], pointer: impl Fn(RowAt) -> Pointer) -> Vec<ListEntry> {
+    let of = |at: RowAt| {
+        (problems.iter().enumerate())
+            .filter(move |(_, p)| p.at.map(|a| a.0) == Some(at))
+            .map(|(k, _)| ListEntry::Problem(k))
     };
+    let mut out: Vec<ListEntry> =
+        problems.iter().enumerate().filter(|(_, p)| p.at.is_none()).map(|(k, _)| ListEntry::Problem(k)).collect();
+    let mut listed = BTreeSet::new();
+    let mut i = 0;
+    while i < list.len() {
+        let at = list[i].at;
+        let end = i + list[i..].iter().take_while(|l| l.at == at).count();
+        out.extend((i..end).map(ListEntry::Line));
+        out.extend(of(at));
+        listed.insert(at);
+        i = end;
+    }
+    for p in problems {
+        if let Some((at, _)) = p.at
+            && listed.insert(at)
+        {
+            out.push(ListEntry::Row(at, pointer(at)));
+            out.extend(of(at));
+        }
+    }
+    out
+}
+
+/// The lines of `batch`'s changes to the rows of `target` (`names`: the result's column names):
+/// deletes, then updates, then new rows; one line per changed cell, the row named on its first.
+/// A new row is one line: the values set, then how many columns are left to their default.
+pub(super) fn list_lines(target: &EditTarget, batch: &EditBatch, names: &[String]) -> Vec<ListLine> {
+    let name = |c: usize| column_name(names, c);
+    let pointer = |row: usize, e: &RowEdit| read_pointer(target, names, row, &e.orig);
     let mut out = Vec::new();
     for (row, e) in batch.rows().filter(|(_, e)| e.delete) {
         let (at, row) = (RowAt::Read(row), Some(pointer(row, e)));
@@ -266,11 +345,17 @@ pub(super) fn list_lines(target: &EditTarget, batch: &EditBatch, names: &[String
         }
     }
     for (i, d) in batch.drafts().iter().enumerate() {
-        // A computed column takes no value.
-        let cells: Vec<String> = (d.cells.iter().enumerate())
-            .filter(|(c, v)| target.columns.get(*c).is_some_and(Option::is_some) || **v != Value::Default)
+        let mut cells: Vec<String> = (d.cells.iter().enumerate())
+            .filter(|(_, v)| **v != Value::Default)
             .map(|(c, v)| format!("{}={}", name(c), literal(v)))
             .collect();
+        // A computed column takes no value: it is not left to a default.
+        let left = (d.cells.iter().enumerate())
+            .filter(|(c, v)| **v == Value::Default && target.columns.get(*c).is_some_and(Option::is_some))
+            .count();
+        if left > 0 {
+            cells.push(format!("DEFAULT \u{D7}{left}"));
+        }
         out.push(ListLine {
             mark: Mark::Inserted,
             at: RowAt::New(d.id),
@@ -367,10 +452,12 @@ impl App {
         let names: Vec<String> = rs.columns.iter().map(|c| c.meta.name.clone()).collect();
         if let Some(a) = applied {
             let list = list_lines(target, batch, &names);
+            let entries = entries(&[], &list, |at| row_pointer(target, batch, &names, at));
             let sql = self.step_lines(&a.sent, dialect);
             let planned = Planned::Sent(a.sent.clone());
             let why_not = Some(i18n.label(Label::EditWhyApplied).to_string());
-            return ChangesModel { title, summary, problems: Vec::new(), list, sql, dialect, planned, why_not };
+            let problems = Vec::new();
+            return ChangesModel { title, summary, problems, list, entries, sql, dialect, planned, why_not };
         }
         let not_whole = not_whole(self.tab_dialect(t.id), rs, zone);
         let whole = |r: usize, c: usize| !not_whole.contains(&(r, c));
@@ -387,12 +474,14 @@ impl App {
             invalid_for: invalid.revision,
         };
         let planned = planned(target, batch, &*f, checks, &facts);
-        let text = |e: &PlanError| self.plan_error_text(rs, &checks.matches, &invalid, e);
+        let words = |e: &PlanError| self.plan_error_text(rs, &checks.matches, &invalid, e);
+        let text = |e: &PlanError| words(e).0;
         // Every row's problem; rows still to be counted are none.
         let mut problems = Vec::new();
         if let Some(error) = &checks.failed {
             let text = i18n.msg(&Msg::EditPreviewCountFailed { error: error.clone() }).to_string();
-            problems.push(Problem { text, at: None, choice: false });
+            let text = crate::text::escape_controls(&text);
+            problems.push(Problem { bare: text.clone(), text, at: None, choice: false });
         }
         let all = edit::plan_problems(target, batch, &*f, &facts);
         let refused = match &planned {
@@ -401,9 +490,11 @@ impl App {
         };
         for e in all.iter().filter(|e| !matches!(e, PlanError::NotCounted { .. })).chain(refused) {
             let choice = matches!(e, PlanError::Choose { .. });
-            problems.push(Problem { text: text(e), at: problem_at(e), choice });
+            let (text, bare) = words(e);
+            problems.push(Problem { text, bare, at: problem_at(e), choice });
         }
         let list = list_lines(target, batch, &names);
+        let entries = entries(&problems, &list, |at| row_pointer(target, batch, &names, at));
         let mut sql = Vec::new();
         let why_not = match &planned {
             Planned::Counting => Some(i18n.label(Label::EditPreviewCounting).to_string()),
@@ -430,7 +521,7 @@ impl App {
             Planned::Ready(plan) => sql = self.step_lines(&plan.steps, dialect),
             Planned::Sent(steps) => sql = self.step_lines(steps, dialect),
         }
-        ChangesModel { title, summary, problems, list, sql, dialect, planned, why_not }
+        ChangesModel { title, summary, problems, list, entries, sql, dialect, planned, why_not }
     }
 
     /// Statements `steps` (in dialect `dialect`) as the preview shows them: the row checks, then
@@ -469,13 +560,23 @@ impl App {
         sql
     }
 
-    /// The row the grid shows for `origin` of `rs`, counted from 1, as text.
-    pub(super) fn origin_row(&self, rs: &ResultSet, origin: Origin) -> String {
-        let shown = match origin {
-            Origin::Row(r) => Some(r),
-            Origin::New(id) => shown_row(rs, RowAt::New(id)),
+    /// Row `at` of `rs` named as the Changes tab's list names it (`id=5`, `row 31`, `new 1`).
+    pub(super) fn row_name(&self, rs: &ResultSet, at: RowAt) -> String {
+        let p = match &rs.edit.target {
+            Target::Ready(target) => {
+                let names: Vec<String> = rs.columns.iter().map(|c| c.meta.name.clone()).collect();
+                row_pointer(target, &rs.edit.batch, &names, at)
+            }
+            _ => Pointer::Row(shown_row(rs, at).map_or(0, |r| r + 1)),
         };
-        shown.map_or_else(|| "?".to_string(), |r| (r + 1).to_string())
+        pointer_text(&self.i18n, &p)
+    }
+
+    /// Problem `problem` (in words, its control characters spelled out) of row `at` of `rs`,
+    /// the row named as the list names it.
+    pub(super) fn at_row(&self, rs: &ResultSet, at: RowAt, problem: &str) -> String {
+        let row = self.row_name(rs, at);
+        self.i18n.msg(&Msg::EditPreviewAtRow { row, problem: problem.to_string() }).to_string()
     }
 
     /// The name of result column `c` of `rs`.
@@ -483,53 +584,47 @@ impl App {
         rs.columns.get(c).map(|c| c.meta.name.clone()).unwrap_or_default()
     }
 
-    /// Why the plan of `rs`'s changes was refused (`matches`: the rows counted), in words.
+    /// Why the plan of `rs`'s changes was refused (`matches`: the rows counted), in words: with
+    /// the row named as the list names it, and without it (the same when it is about no row).
+    /// Control characters are spelled out.
     fn plan_error_text(
         &self,
         rs: &ResultSet,
         matches: &BTreeMap<usize, u64>,
         invalid: &super::Invalids,
         e: &PlanError,
-    ) -> String {
-        let row = |r: usize| self.origin_row(rs, Origin::Row(r));
+    ) -> (String, String) {
+        let column = |c: usize| self.preview_column(rs, c);
         let msg = match e {
-            PlanError::Invalid { origin, column } => {
+            PlanError::Invalid { origin, column: c } => {
                 let at = match *origin {
                     Origin::Row(r) => RowAt::Read(r),
                     Origin::New(id) => RowAt::New(id),
                 };
-                let reason = invalid.cells.get(&(at, *column)).cloned();
-                let (row, column) = (self.origin_row(rs, *origin), self.preview_column(rs, *column));
-                match reason {
-                    Some(reason) => Msg::EditPreviewInvalidWhy { row, column, reason },
-                    None => Msg::EditPreviewInvalid { row, column },
+                match invalid.cells.get(&(at, *c)).cloned() {
+                    Some(reason) => Msg::EditPreviewInvalidWhy { column: column(*c), reason },
+                    None => Msg::EditPreviewInvalid { column: column(*c) },
                 }
             }
-            PlanError::Column { origin, column, why } => {
-                let reason = self.i18n.msg(&column_reason(*why, self.preview_column(rs, *column))).to_string();
-                Msg::EditPreviewColumn { row: self.origin_row(rs, *origin), reason }
-            }
-            PlanError::NotWhole { row: r, column } => {
-                Msg::EditPreviewNotWhole { row: row(*r), column: self.preview_column(rs, *column) }
-            }
-            PlanError::NotCounted { row: r } => Msg::EditPreviewNotCounted { row: row(*r) },
-            PlanError::Gone { row: r } => Msg::EditPreviewGone { row: row(*r) },
-            PlanError::Ambiguous { row: r, matches } => Msg::EditPreviewAmbiguous { row: row(*r), count: *matches },
-            PlanError::Choose { row: r, matches } => Msg::EditPreviewChoose { row: row(*r), count: *matches },
+            PlanError::Column { column: c, why, .. } => column_reason(*why, column(*c)),
+            PlanError::NotWhole { column: c, .. } => Msg::EditPreviewNotWhole { column: column(*c) },
+            PlanError::NotCounted { .. } => Label::EditPreviewNotCounted.into(),
+            PlanError::Gone { .. } => Label::EditPreviewGone.into(),
+            PlanError::Ambiguous { matches, .. } => Msg::EditPreviewAmbiguous { count: *matches },
+            PlanError::Choose { matches, .. } => Msg::EditPreviewChoose { count: *matches },
             PlanError::NoOneOfK { row: r } => {
                 let count = matches.get(r).copied().unwrap_or(0);
-                Msg::EditPreviewNoOneOfK { row: row(*r), count }
+                Msg::EditPreviewNoOneOfK { count }
             }
-            PlanError::NoDefault { origin, column } => Msg::EditPreviewNoDefault {
-                row: self.origin_row(rs, *origin),
-                column: self.preview_column(rs, *column),
-            },
-            PlanError::NotShown { origin, column } => {
-                Msg::EditPreviewNotShown { row: self.origin_row(rs, *origin), column: column.clone() }
-            }
+            PlanError::NoDefault { column: c, .. } => Msg::EditPreviewNoDefault { column: column(*c) },
+            PlanError::NotShown { column, .. } => Msg::EditPreviewNotShown { column: column.clone() },
             PlanError::Internal(_) => Label::EditPreviewInternal.into(),
         };
-        self.i18n.msg(&msg).to_string()
+        let bare = crate::text::escape_controls(&self.i18n.msg(&msg).to_string());
+        match problem_at(e) {
+            Some((at, _)) => (self.at_row(rs, at, &bare), bare),
+            None => (bare.clone(), bare),
+        }
     }
 
     /// Read-back values as the preview says them, by where they are in their statement (`set

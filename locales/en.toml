@@ -2453,16 +2453,16 @@
 "edit.preview.part_values" = "values"
 "edit.preview.counting" = "Counting matching rows…"
 "edit.preview.count_failed" = "Couldn't count the matching rows: {error}"
-"edit.preview.no_default" = "Row {row}: {column} is NOT NULL and has no default; give it a value"
-"edit.preview.gone" = "Row {row} matches no row of the table now: it was changed or deleted. Re-run the query."
-"edit.preview.ambiguous" = { one = "Row {row} matches {count} row; add the key to the SELECT to edit it", other = "Row {row} matches {count} rows; add the key to the SELECT to edit it" }
-"edit.preview.not_whole" = "Row {row}: {column} is not shown whole, so the row can't be found again"
-"edit.preview.invalid" = "Row {row}: {column} holds a value its column does not take; fix it or revert it"
-"edit.preview.not_counted" = "Row {row} was not counted"
-"edit.preview.no_one_of_k" = { one = "Row {row} matches {count} identical row, and this database can't change just one", other = "Row {row} matches {count} identical rows, and this database can't change just one" }
-"edit.preview.column" = "Row {row}: {reason}"
+"edit.preview.no_default" = "{column} is NOT NULL and has no default; give it a value"
+"edit.preview.gone" = "matches no row of the table now: it was changed or deleted. Re-run the query."
+"edit.preview.ambiguous" = { one = "matches {count} row; add the key to the SELECT to edit it", other = "matches {count} rows; add the key to the SELECT to edit it" }
+"edit.preview.not_whole" = "{column} is not shown whole, so the row can't be found again"
+"edit.preview.invalid" = "{column} holds a value its column does not take; fix it or revert it"
+"edit.preview.not_counted" = "was not counted"
+"edit.preview.no_one_of_k" = { one = "matches {count} identical row, and this database can't change just one", other = "matches {count} identical rows, and this database can't change just one" }
 "edit.preview.internal" = "A statement was not written as it must be; nothing can be applied"
-"edit.preview.choose" = { one = "Row {row} matches {count} identical row", other = "Row {row} matches {count} identical rows" }
+"edit.preview.choose" = { one = "matches {count} identical row", other = "matches {count} identical rows" }
+"edit.preview.at_row" = "{row} · {problem}"
 "edit.preview.choose_keys" = { one = "[1] just one   [a] all {count}", other = "[1] just one   [a] all {count}" }
 "edit.preview.tx_commit" = "Runs in one transaction; commits at the end."
 "edit.preview.tx_inside" = "Runs inside the open transaction; nothing is committed."
@@ -2479,7 +2479,7 @@
 "edit.discard.text" = { one = "Drop the {count} pending change of this result?", other = "Drop the {count} pending changes of this result?" }
 "edit.discard.keys" = "y drop · n/Enter keep"
 "edit.discarded" = { one = "Dropped {count} pending change", other = "Dropped {count} pending changes" }
-"edit.preview.not_shown" = "Row {row}: {column} is NOT NULL, has no default and is not in the result; add it to the SELECT"
+"edit.preview.not_shown" = "{column} is NOT NULL, has no default and is not in the result; add it to the SELECT"
 "edit.applying" = "Applying the changes…"
 "edit.badge.applying" = "applying…"
 "edit.badge.applied" = "applied · re-run to refresh"
@@ -2603,7 +2603,7 @@
 "edit.paste.columns" = { one = "{count} column", other = "{count} columns" }
 "edit.paste.cells" = { one = "{count} cell changed", other = "{count} cells changed" }
 "edit.paste.new_rows" = { one = "{count} new row", other = "{count} new rows" }
-"edit.paste.invalid" = { one = "{count} invalid (row {row} · {column})", other = "{count} invalid (first: row {row} · {column})" }
+"edit.paste.invalid" = { one = "{count} invalid ({row} · {column})", other = "{count} invalid (first: {row} · {column})" }
 "edit.paste.invalid_count" = { one = "{count} invalid", other = "{count} invalid" }
 "edit.paste.undo" = "{key} undo"
 "edit.paste.corner" = "pasted {size} at the selection's corner"
@@ -2630,6 +2630,6 @@
 "edit.paste.empty_value" = "empty value — paste {null} for NULL"
 "edit.paste.empty_value_plain" = "empty value"
 "edit.paste.value_reason" = "{reason}: {value}"
-"edit.preview.invalid_why" = "Row {row} · {column}: {reason}"
+"edit.preview.invalid_why" = "{column}: {reason}"
 "edit.badge.pending_invalid" = { one = "{pending} pending · {count} invalid", other = "{pending} pending · {count} invalid" }
 "edit.badge.pending_invalid_short" = { one = "{pending} · {count}!", other = "{pending} · {count}!" }

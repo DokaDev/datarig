@@ -710,9 +710,10 @@ fn problems_block_the_apply_and_the_changes_tab_shows_the_first() {
     assert!(asked(&h).is_none() && h.app.overlays.top().is_none(), "nothing asked");
     assert_eq!(said(&mut h), Some(Msg::EditAskProblems { count: 1 }));
     assert_eq!(h.app.key_context(), Ctx::Changes);
-    assert_eq!(edits(&h).cursor.line, 0, "the first problem selected");
+    // The update, the new row, then its problem.
+    assert_eq!(edits(&h).cursor.line, 2, "the first problem selected");
     let s = screen(&mut h, 120, 40);
-    assert!(s.contains("! Row 4: name is NOT NULL, has no default and is not in the result"), "{s}");
+    assert!(s.contains("  ! name is NOT NULL, has no default and is not in the result"), "{s}");
     assert!(applies(&mut h).is_none());
 }
 

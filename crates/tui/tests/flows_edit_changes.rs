@@ -45,17 +45,16 @@ fn structure(h: &mut Harness, st: TableStructure) {
 
 /// `h` connected, the users' rows in the grid, resolved with `st` (`e` on the first row's
 /// second column, then the editor closed); nothing sent yet.
-fn resolved(mut h: Harness, st: TableStructure) -> Harness {
+fn resolved(h: Harness, st: TableStructure) -> Harness {
+    resolved_rows(h, st, users_rows())
+}
+
+/// [`resolved`] with `rows` in the grid.
+fn resolved_rows(mut h: Harness, st: TableStructure, rows: Vec<Vec<Option<String>>>) -> Harness {
     h.db(DbEvent::Keys(Ok(shop_keys())));
     h.app.run(vec![SQL.to_string()]);
     let id = h.app.tab().exec.query_id;
-    h.db(DbEvent::Page {
-        id,
-        columns: Some(users_columns()),
-        rows: users_rows(),
-        more: false,
-        elapsed: Duration::ZERO,
-    });
+    h.db(DbEvent::Page { id, columns: Some(users_columns()), rows, more: false, elapsed: Duration::ZERO });
     h.app.focus = Focus::Results;
     h.keys("le");
     structure(&mut h, st);
@@ -252,7 +251,8 @@ fn the_list_has_a_line_for_each_changed_cell_and_names_its_row() {
     has(" - id=2   delete");
     has(" ~ id=1   email     'a@x' → 'z@x'");
     has(" ~ id=3   nickname  'cy' → NULL");
-    has(" + new 1  id=DEFAULT · email='n@x' · nickname=DEFAULT");
+    // A new row: the values set, the columns left to their default counted.
+    has(" + new 1  email='n@x' · DEFAULT ×2");
     // The keys under it: the tab's own alone where the whole do not fit.
     has("Runs in one transaction; commits at the end.");
     has("s c Enter");
@@ -294,12 +294,90 @@ fn enter_shows_the_line_s_row_and_column_in_the_grid() {
     h.command("changes");
     let lines = pane(&mut h, 120, 40);
     assert!(lines[0].ends_with("1 insert · 2 problems"), "{lines:#?}");
-    assert_eq!(lines[1], " ! Row 4: email is NOT NULL and has no default; give it a value", "{lines:#?}");
-    assert!(lines[2].starts_with(" ! Row 4: name is NOT NULL, has no default"), "{lines:#?}");
+    assert_eq!(lines[1], " + new 1  DEFAULT ×3", "{lines:#?}");
+    assert_eq!(lines[2], "   ! email is NOT NULL and has no default; give it a value", "{lines:#?}");
+    assert!(lines[3].starts_with("   ! name is NOT NULL, has no default"), "{lines:#?}");
     h.keys("gg0");
     h.command("changes");
+    h.keys("j");
     h.key(KeyCode::Enter);
-    assert_eq!((view(&h), h.app.tab().grid.row), (ResultView::Rows, 3));
+    assert_eq!((view(&h), h.app.tab().grid.row, h.app.tab().grid.col), (ResultView::Rows, 3, 1));
+}
+
+/// A problem is listed under its row's line, without the row's name, which the line above
+/// says; elsewhere (the statements, the Apply) it names the row as the list does. Every line
+/// is selected and shown in the grid as it is listed.
+#[test]
+fn a_problem_is_listed_under_its_row_and_named_as_the_list_names_it() {
+    let mut h = resolved(Harness::connected(Lang::En), users_structure());
+    type_cell(&mut h, "z@x");
+    h.keys("o");
+    h.command("changes");
+    let lines = pane(&mut h, 120, 40);
+    assert!(lines[0].ends_with("1 update · 1 insert · 2 problems"), "{lines:#?}");
+    assert_eq!(
+        lines[1..5],
+        [
+            " ~ id=1   email  'a@x' → 'z@x'",
+            " + new 1  DEFAULT ×3",
+            "   ! email is NOT NULL and has no default; give it a value",
+            "   ! name is NOT NULL, has no default and is not in the result; add it to the SELECT",
+        ],
+        "{lines:#?}"
+    );
+    // Narrow: a problem wraps under itself.
+    let narrow = pane(&mut h, 80, 24);
+    let at = narrow.iter().position(|l| l.starts_with("   ! name is NOT NULL")).expect("listed");
+    assert!(!narrow[at].ends_with("SELECT"), "{narrow:#?}");
+    assert!(narrow[at + 1].starts_with("     ") && narrow[at + 1].ends_with("the SELECT"), "{narrow:#?}");
+    // Each line is the line under the cursor: the update, the new row, its two problems.
+    let goto = |h: &mut Harness, down: &str| {
+        h.command("changes");
+        h.keys("gg");
+        h.keys(down);
+        h.key(KeyCode::Enter);
+        (view(h), h.app.tab().grid.row, h.app.tab().grid.col)
+    };
+    assert_eq!(goto(&mut h, ""), (ResultView::Rows, 0, 1));
+    h.keys("l");
+    assert_eq!(goto(&mut h, "j"), (ResultView::Rows, 3, 2), "a whole row keeps the column");
+    assert_eq!(goto(&mut h, "jj"), (ResultView::Rows, 3, 1), "the email problem: its cell");
+    assert_eq!(goto(&mut h, "jjj"), (ResultView::Rows, 3, 1), "the row's problem: its row");
+    h.command("changes");
+    h.keys("G");
+    assert_eq!(edits(&h).cursor.line, 3, "four lines");
+    // The statements name the row as the list does.
+    h.keys("s");
+    let text = pane(&mut h, 160, 40).join("\n");
+    assert!(text.contains("new 1 · email is NOT NULL and has no default; give it a value"), "{text}");
+    assert!(!text.contains("Row 4"), "{text}");
+    h.keys("s");
+    // An Apply: the first problem selected, the reason named the same way.
+    h.keys("H");
+    h.keys(" da");
+    assert_eq!(said(&mut h), Some(Msg::EditAskProblems { count: 2 }));
+    assert_eq!((view(&h), edits(&h).cursor.line), (ResultView::Changes, 2), "the first problem");
+}
+
+/// Control characters of values are shown escaped in the list (a backslash doubled where it
+/// would read as an escape); the statements copied carry them as they are.
+#[test]
+fn control_characters_are_shown_escaped_and_copied_as_they_are() {
+    let mut rows = users_rows();
+    rows[2][2] = s("c\u{7}y\r\n\tz \\n \\q");
+    let mut h = resolved_rows(Harness::connected(Lang::En), named(), rows);
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.keys("jjl");
+    h.keys(" dn");
+    h.command("changes");
+    let lines = pane(&mut h, 120, 40);
+    assert_eq!(lines[1], r" ~ id=3  nickname  'c\x07y\r\n\tz \\n \q' → NULL", "{lines:#?}");
+    h.keys("c");
+    let copied = clip.last().expect("copied");
+    // The control characters as they are, in a literal that escapes its backslashes.
+    let value = "E'c\u{7}y\r\n\tz \\\\n \\\\q'";
+    assert_eq!(copied.matches(value).count(), 2, "the check and the update find it: {copied:?}");
+    assert!(!copied.contains("\\x07") && !copied.contains('\u{21B5}'), "{copied:?}");
 }
 
 #[test]
@@ -504,6 +582,14 @@ fn the_changes_tab_on_screen() {
         let mut h = four_changes(ready(lang));
         h.command("changes");
         h.keys("s");
+        h
+    });
+    screens("changes_problems", |lang| {
+        let mut h = resolved(Harness::connected(lang), users_structure());
+        type_cell(&mut h, "z@x");
+        h.keys("o");
+        h.command("changes");
+        h.keys("jj");
         h
     });
     screens("changes_by_values", |lang| {
