@@ -86,6 +86,13 @@ pub struct Theme {
     pub range: Style,
     /// The line or row under the cursor where the pane is not focused, and the editor's line.
     pub cursor_line: Style,
+    /// The result grid's cursor row (its bg): every cell, the separators and the row's number,
+    /// and every row of a selected range of cells; subtle, apart from the background and the
+    /// alternate rows, below the cursor's cell ([`Self::selection`]) and a range.
+    pub grid_cursor_row: Style,
+    /// The header of the result grid's cursor column (both lines): a tint of the header's
+    /// surface, apart from it and from the headers of a selected range ([`Self::range`]).
+    pub grid_cursor_header: Style,
     /// What is under the pointer (a list row, a grid cell, an inspector entry, a tab, a button):
     /// a subtle background of its own, apart from the background, both surfaces, the cursor line,
     /// the selection (focused or not) and a selected range; never an underline.
@@ -222,6 +229,10 @@ pub const DARK: Theme = Theme {
     selection: Style::new().bg(rgb(0x2A3B4D)),
     range: Style::new().bg(rgb(0x1E3438)),
     cursor_line: Style::new().bg(rgb(0x1F2530)),
+    // 6% of the accent blended into the background; the header: 38% of the selection into the
+    // header's surface.
+    grid_cursor_row: Style::new().bg(rgb(0x171F23)),
+    grid_cursor_header: Style::new().bg(rgb(0x202934)),
     hover: Style::new().bg(rgb(0x2D3035)),
     yank_flash: Style::new().fg(rgb(0xD8DEE9)).bg(rgb(0x514233)),
     // 34% of the accent blended into the background.
@@ -418,6 +429,18 @@ pub fn from_spec(spec: &ThemeSpec, mut base: Theme) -> Theme {
     // accent: a fill of those, not the one made for the theme it extends.
     let derive = !spec.styles.iter().any(|(n, _)| n == "tab_active")
         && spec.colors.iter().any(|(n, _)| n == "bg" || n == "accent");
+    // The same for the grid's cursor tints: made of the file's own background (header surface)
+    // and selection, not the ones of the theme it extends.
+    let sets = |names: &[&str]| {
+        spec.colors
+            .iter()
+            .map(|(n, _)| n)
+            .chain(spec.styles.iter().map(|(n, _)| n))
+            .any(|n| names.contains(&n.as_str()))
+    };
+    let leaves = |token: &str| !spec.styles.iter().any(|(n, _)| n == token);
+    let derive_row = leaves("grid_cursor_row") && sets(&["bg", "selection"]);
+    let derive_header = leaves("grid_cursor_header") && sets(&["surface", "selection"]);
     for (name, c) in &spec.colors {
         if let Some(slot) = color_token(&mut base, name) {
             *slot = color(*c);
@@ -430,6 +453,12 @@ pub fn from_spec(spec: &ThemeSpec, mut base: Theme) -> Theme {
     }
     if derive {
         base.tab_active = base.tab_active_derived();
+    }
+    if derive_row && let Some(c) = base.grid_cursor_derived(base.bg, 25) {
+        base.grid_cursor_row = Style::new().bg(c);
+    }
+    if derive_header && let Some(c) = base.grid_cursor_derived(base.surface, 35) {
+        base.grid_cursor_header = Style::new().bg(c);
     }
     base
 }
@@ -567,6 +596,8 @@ tokens! {
         selection => "The selected row or item, and the grid's cursor cell.",
         range => "Cells and headers of a selected range in the result grid (the cursor's cell keeps selection).",
         cursor_line => "The row under the cursor of an unfocused list or plan, the editor's line, and (its background) the chart's cursor while focused.",
+        grid_cursor_row => "The result grid's cursor row (its bg): every cell, the separators and the row's number, and every row of a selected range of cells. Keep it subtle: apart from bg and surface_alt (the alternate rows), and from selection (the cursor's cell), range and hover, with body and muted text reading on it. A file that leaves it out but sets bg, both bg and selection RGB, gets the selection blended into that bg.",
+        grid_cursor_header => "The header of the result grid's cursor column (both lines; patched over the header). Keep it apart from surface (the header) and range (the headers of selected columns), with body and muted text and the key marks reading on it. A file that leaves it out but sets surface, both surface and selection RGB, gets the selection blended into that surface.",
         hover => "What is under the mouse pointer: a list row, a grid cell, a tab, a button.",
         yank_flash => "Cells copied from the result grid, for a moment after the copy was sent to the clipboard (set fg and bg: it covers the cursor's cell too). With RGB colours it fades back into each cell's own colours; with terminal colours it goes off at once.",
         current_stmt => "A faint tint behind the statement a run would take.",
@@ -644,6 +675,15 @@ impl Theme {
         match (self.accent, self.bg) {
             (Color::Rgb(..), Color::Rgb(..)) => Style::new().bg(blend(self.accent, self.bg, 30)),
             _ => self.tab_active,
+        }
+    }
+
+    /// A grid cursor tint made of this theme's colors: `keep` percent of the selection's
+    /// background blended into `back`, where both are RGB.
+    pub fn grid_cursor_derived(&self, back: Color, keep: u16) -> Option<Color> {
+        match (self.selection.bg, back) {
+            (Some(sel @ Color::Rgb(..)), Color::Rgb(..)) => Some(blend(sel, back, keep)),
+            _ => None,
         }
     }
 
