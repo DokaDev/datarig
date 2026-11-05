@@ -3,6 +3,44 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.38.1 — 2026-11-05
+
+Copy and paste inside the grid: `y` keeps the copied cells as they are, and `p` pastes them as new rows (again and again); previous page moved from `p` to `[`.
+
+### Added
+
+- The cells last copied with `y` or `Y` in the result grid paste back exactly as the grid
+  showed them (NULL stays NULL), in any result in any tab, without reading any clipboard:
+  `p` adds them as new rows (each press another copy), `g p` pastes them over the cells at
+  the cursor. Each is one step `u` undoes.
+- A range pasted into the grid skips a first line that names the columns it lands in (a copy
+  with its header line), and says so; `Space d V` reads it again keeping that line.
+
+### Changed
+
+- Previous page moved from `p` to `[` in the result grid (and `]` is next page, as `n` still
+  is); `p` now pastes the grid's copy as new rows.
+- The Changes tab lists each problem under its row's line, without the row's name the line
+  above gives, and names a row the same way wherever a problem is about it (the statements,
+  the Apply's messages and failures, a paste's message, the cell editor and the inspector):
+  `new 1`, `id=5` or `row 31`, not the row's number in the grid. A new row lists only the
+  values set, then how many columns are left to their default (`DEFAULT ×2`). Control
+  characters in values, column names and the table's name show as `\n`, `\r`, `\t` or
+  `\x07`, and characters that turn the text's direction as `\u{202e}`, never raw; the
+  statements copied are unchanged.
+- The result grid marks every new row an Apply is refused for: a cell left to a default its
+  column lacks (`NOT NULL`, no default) reads `! value needed` in the invalid-value color
+  instead of the dim `default`, its column widened to fit, and the row's gutter shows `!`
+  instead of `+`, as for a value its column does not take; so does a new row of a table with
+  such a column the result does not show. The badge counts these cells, and the cell editor
+  and the inspector say why. Invalid values keep their color under the cursor.
+- A new row in the result grid is tinted as a whole (theme token `edit_inserted_row`) and
+  numbered after the rows read, with `+` (or `!`) after its number; rows an Apply added are
+  numbered too. Its cells left to their default show what the server will put there instead of
+  a dim `default`: the default's value (`ACTIVE`, `0`), `<generated>` for a number the table
+  draws or a generated column, `<default: now()>` for another default, `NULL` where the column
+  takes it. The Apply still leaves them to the server.
+
 ## 0.38.0 — 2026-11-04
 
 Pending changes get their own Changes tab, Apply asks on the status line, and a range copied elsewhere can be pasted into the result grid.
