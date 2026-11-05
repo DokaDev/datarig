@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # The tools that record the README demos (docs/demo/render.sh) on x86_64 Linux: VHS, ttyd and
 # ffmpeg, which VHS drives, and JetBrainsMono Nerd Font, the font every recording uses (the
-# explorer's icons are Nerd Font glyphs). VHS, ttyd and the font are release downloads pinned to
-# a version and to the SHA-256 of the file (from the GitHub release's asset digest, ttyd's from
-# its SHA256SUMS); a download that does not match fails here. ffmpeg and a CJK font come from
-# apt. CI tools
-# only, never dependencies of datarig. VHS and ttyd go to $RUNNER_TEMP/bin, which goes on the
-# PATH of the steps after this one; the font to ~/.local/share/fonts.
+# explorer's icons are Nerd Font glyphs), with a CJK font as its fallback. VHS, ttyd and the
+# Nerd Font are release downloads pinned to a version and to the SHA-256 of the file (from the
+# GitHub release's asset digest, ttyd's from its SHA256SUMS); the CJK font is pinned to a commit
+# of its repository and its SHA-256. A download that does not match fails here. ffmpeg comes
+# from apt when the runner lacks it. CI tools only, never dependencies of datarig. VHS and ttyd
+# go to $RUNNER_TEMP/bin, which goes on the PATH of the steps after this one; the fonts to
+# ~/.local/share/fonts.
 # To bump one: change its version and its digest together.
 set -euo pipefail
 
@@ -16,6 +17,8 @@ ttyd_version=1.7.7
 ttyd_sha256=8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55
 nerd_fonts_version=v3.5.1
 font_sha256=04d5e8f903693f9dd13e16f867e994834e681eb3c72c0d337a770dcda09010cf
+noto_cjk_commit=f8d157532fbfaeda587e826d4cd5b21a49186f7c
+cjk_sha256=ec04cc376b34887cedbdf84074e2e226ed2761eeabdcb9173fc1dd7bfd153ef7
 
 if [ "$(uname -sm)" != "Linux x86_64" ]; then
   echo "demo-tools.sh downloads the x86_64 Linux builds; this is $(uname -sm)" >&2
@@ -47,14 +50,20 @@ fetch "https://github.com/ryanoasis/nerd-fonts/releases/download/$nerd_fonts_ver
 fonts=$HOME/.local/share/fonts/JetBrainsMonoNerdFont
 mkdir -p "$fonts"
 tar -xJf "$work/JetBrainsMono.tar.xz" -C "$fonts" --wildcards 'JetBrainsMonoNerdFont-*.ttf'
-fc-cache -f "$fonts" >/dev/null
-fc-list | grep -q 'JetBrainsMono Nerd Font' || { echo "JetBrainsMono Nerd Font is not installed" >&2; exit 1; }
 
-# ffmpeg, and a CJK font for the few full-width signs datarig draws (U+FF0B, the plus of the
-# explorer's first line), which the browser takes from any installed font that has them.
-sudo apt-get update -qq
-sudo apt-get install -y -qq --no-install-recommends ffmpeg fonts-noto-cjk >/dev/null
-fc-list ':charset=ff0b' family | grep -q . || { echo "no installed font has U+FF0B" >&2; exit 1; }
+# A CJK font for the few full-width signs datarig draws (U+FF0B, the plus of the explorer's
+# first line), which the browser takes from any installed font that has them.
+fetch "https://raw.githubusercontent.com/notofonts/noto-cjk/$noto_cjk_commit/Sans/Mono/NotoSansMonoCJKsc-Regular.otf" \
+  "$cjk_sha256"
+install -m 0644 "$work/NotoSansMonoCJKsc-Regular.otf" "$fonts/"
+fc-cache -f "$fonts" >/dev/null
+fc-list : family | grep -F 'JetBrainsMono Nerd Font' >/dev/null || { echo "JetBrainsMono Nerd Font is not installed" >&2; exit 1; }
+fc-list ':charset=ff0b' family | grep . >/dev/null || { echo "no installed font has U+FF0B" >&2; exit 1; }
+
+if ! command -v ffmpeg >/dev/null; then
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq --no-install-recommends ffmpeg >/dev/null
+fi
 
 if [ -n "${GITHUB_PATH:-}" ]; then
   echo "$bin" >> "$GITHUB_PATH"
