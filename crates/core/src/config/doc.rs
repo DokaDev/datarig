@@ -247,6 +247,7 @@ pub const KEYS: &[KeyDoc] = &[
         "",
     ),
     key("ui", "changes_view", "\"list\"", "`\"list\"`, `\"sql\"`", ""),
+    key("ui", "background", "\"theme\"", "`\"theme\"`, `\"terminal\"`", ""),
     // [edit]
     key("edit", "paste_null", "\"\\\\N\"", "`\"\\\\N\"`, `\"NULL\"`, `\"none\"`", ""),
     // [secrets]

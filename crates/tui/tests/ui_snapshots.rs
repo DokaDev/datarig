@@ -1873,6 +1873,32 @@ fn grid_cursor_cue_and_block_dark_light_terminal_sizes() {
     }
 }
 
+/// `ui.background = "terminal"` on the dark theme: the grid's rows (both stripes) on the
+/// terminal's background, the header on its surface, the cursor's row tint and cell, and a
+/// range, kept.
+#[test]
+fn grid_on_the_terminals_background_keeps_its_tints() {
+    use ratatui::style::Color;
+    let th = &theme::DARK;
+    let mut h = with_edge_results(Lang::En);
+    h.app.theme = std::sync::Arc::new(th.clone());
+    h.app.prefs.background = datarig_core::config::UiBackground::Terminal;
+    h.key(KeyCode::Tab);
+    h.keys("jjjvjl");
+    let t = h.draw(120, 40);
+    let g = h.app.tab().grid.clone();
+    let buf = t.backend().buffer();
+    let at = |r: usize, c: usize| {
+        let a = g.cell_rect(r, c, 8).expect("on screen");
+        buf[(a.x + 1, a.y)].clone()
+    };
+    assert_eq!((at(0, 0).bg, at(1, 0).bg), (Color::Reset, Color::Reset), "both stripes");
+    assert_eq!(buf[(g.hit_cols[2].0 + 2, g.header_y)].bg, th.surface, "a header not selected");
+    assert_eq!(at(3, 2).bg, th.grid_cursor_row.bg.unwrap(), "a selected row past the block");
+    assert_eq!(at(3, 0).bg, th.range.bg.unwrap(), "the range");
+    assert_eq!(at(4, 1).bg, th.selection.bg.unwrap(), "the cursor");
+}
+
 /// The grid's search: the prompt under the grid while the pattern is typed (the cursor on the
 /// first match), then the search that is on after `n` (its pattern and the cursor's match
 /// among them), in a small terminal and a large one, with the dark theme and the terminal's

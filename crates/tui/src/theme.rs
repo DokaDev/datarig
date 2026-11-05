@@ -817,6 +817,13 @@ impl Theme {
     /// Dim what is drawn in `area` so a dialog drawn on top of it stands out while the screen
     /// below stays readable. Symbols are kept.
     pub fn dim_area(&self, buf: &mut Buffer, area: Rect) {
+        self.dim_area_over(buf, area, false);
+    }
+
+    /// [`Self::dim_area`]; with `see_through`, a cell left on the terminal's own background
+    /// ([`Self::unpaint`]) keeps it (only its text is dimmed), so the terminal still shows
+    /// through behind a dialog.
+    pub fn dim_area_over(&self, buf: &mut Buffer, area: Rect, see_through: bool) {
         let area = area.intersection(buf.area);
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
@@ -824,9 +831,31 @@ impl Theme {
                 match self.dim {
                     Dim::Blend { .. } => {
                         cell.fg = self.dim_fg(cell.fg);
-                        cell.bg = self.dim_bg(cell.bg);
+                        if !(see_through && cell.bg == Color::Reset) {
+                            cell.bg = self.dim_bg(cell.bg);
+                        }
                     }
                     Dim::Modifier => cell.modifier.insert(Modifier::DIM),
+                }
+            }
+        }
+    }
+
+    /// Leave the terminal's own background where `area` shows the theme's default backgrounds:
+    /// the panes' background and the alternate rows (RGB only; a theme of terminal colors has
+    /// none of its own). Every other background stays: surfaces (bars, headers), selections,
+    /// tints and marks.
+    pub fn unpaint(&self, buf: &mut Buffer, area: Rect) {
+        let own: Vec<Color> = [self.bg, self.surface_alt].into_iter().filter(|c| matches!(c, Color::Rgb(..))).collect();
+        if own.is_empty() {
+            return;
+        }
+        let area = area.intersection(buf.area);
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                let cell = &mut buf[(x, y)];
+                if own.contains(&cell.bg) {
+                    cell.bg = Color::Reset;
                 }
             }
         }

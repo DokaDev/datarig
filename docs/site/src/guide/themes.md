@@ -23,6 +23,20 @@ The terminal's background is asked once at startup (OSC 11). A terminal that doe
 counts as dark, and the settings screen says which it found. This only matters for the
 families that follow the background (`catppuccin`, `tokyo-night`, `gruvbox`).
 
+## The terminal's background
+
+`ui.background = "terminal"` (`:set ui.background=terminal`, or the settings screen's
+Background row) leaves your terminal's own background where the theme would paint the panes and
+the result grid's alternate rows, so a translucent or image background shows through. Text,
+selections, the grid's cursor tints and the marks of edits keep the theme's colors; the status
+bar, the grid's headers, dialogs, menus and popups keep the theme's surface, and the screen
+behind a dialog stays see-through (only its text is dimmed). The default, `"theme"`, paints
+everything.
+
+Switching to it while the theme has a background of its own (every built-in theme but
+`terminal`) says so in one line: the theme's text colors were made for its background, so on a
+terminal background far from it some of them may be hard to read.
+
 ## Your own theme
 
 A theme file sets some tokens and takes the rest from `extends` (a built-in theme; `terminal`

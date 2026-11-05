@@ -41,16 +41,29 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         let x = area.x + (area.width.saturating_sub(width(&msg) as u16)) / 2;
         let y = area.y + area.height / 2;
         f.buffer_mut().set_stringn(x, y, &msg, area.width as usize, Style::new().fg(th.warning).bg(th.bg));
+        if see_through(app) {
+            th.unpaint(f.buffer_mut(), area);
+        }
         return;
     }
     let cursor = draw_screen(f, app);
     draw_overlays(f, app, cursor);
 }
 
+/// `ui.background = "terminal"`: the workspace leaves the terminal's own background showing
+/// where the theme would paint its default ones; dialogs, menus and popups keep their surface.
+fn see_through(app: &App) -> bool {
+    app.prefs.background == datarig_core::config::UiBackground::Terminal
+}
+
 /// The workspace below the overlays; returns where the hardware cursor belongs.
 pub fn draw_screen(f: &mut Frame, app: &mut App) -> Option<(u16, u16)> {
     let _theme = theme::scope(app.theme.clone());
     let cursor = draw_workspace(f, app);
+    if see_through(app) {
+        let area = f.area();
+        theme::cur().unpaint(f.buffer_mut(), area);
+    }
     if !app.cell_lines_open() {
         return cursor;
     }
@@ -58,7 +71,7 @@ pub fn draw_screen(f: &mut Frame, app: &mut App) -> Option<(u16, u16)> {
     // stays as it is: it says why a text was not taken).
     let area = f.area();
     let content = Rect::new(area.x, area.y, area.width, area.height - 1);
-    theme::cur().dim_area(f.buffer_mut(), content);
+    theme::cur().dim_area_over(f.buffer_mut(), content, see_through(app));
     draw_cell_editor(app, content, f.buffer_mut())
 }
 
@@ -74,7 +87,7 @@ pub fn draw_overlays(f: &mut Frame, app: &mut App, screen_cursor: Option<(u16, u
     let kinds: Vec<OverlayKind> = app.overlays.iter().map(Overlay::kind).collect();
     for (i, &kind) in kinds.iter().enumerate() {
         if i + 1 == kinds.len() {
-            th.dim_area(f.buffer_mut(), area);
+            th.dim_area_over(f.buffer_mut(), area, see_through(app));
         }
         hw_cursor = match kind {
             OverlayKind::CellViewer => {

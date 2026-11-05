@@ -32,7 +32,8 @@
 //! reads as `3`). `[ui] yank_flash` says whether the cells a copy took from the results grid
 //! flash briefly, `[ui] tips` whether empty places show a tip about a key (always, until the
 //! key was used, or never; and the welcome panel its first steps), `[ui] changes_view` which
-//! view the Changes tab of a result opens in (its list of changed cells, or its SQL).
+//! view the Changes tab of a result opens in (its list of changed cells, or its SQL), `[ui]
+//! background` whether the theme paints its background or leaves the terminal's showing.
 //! `[edit] paste_null` is the text a range pasted into a result reads as NULL (unquoted).
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
 //! the top, or the bottom line), `detail_view` (the result inspector as a panel or a status bar
@@ -361,6 +362,8 @@ struct UiSection {
     tips: Option<toml::Value>,
     #[serde(default)]
     changes_view: Option<String>,
+    #[serde(default)]
+    background: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -653,6 +656,27 @@ impl Choice for YankFlash {
     }
 }
 
+/// `[ui] background`: whether the theme paints its background, or the panes leave the
+/// terminal's own background showing (a translucent terminal shows through).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UiBackground {
+    /// The theme's background is painted.
+    #[default]
+    Theme,
+    /// The theme's background is left unpainted; dialogs and popups keep the theme's surface.
+    Terminal,
+}
+
+impl Choice for UiBackground {
+    const ALL: &'static [Self] = &[UiBackground::Theme, UiBackground::Terminal];
+    fn as_str(self) -> &'static str {
+        match self {
+            UiBackground::Theme => "theme",
+            UiBackground::Terminal => "terminal",
+        }
+    }
+}
+
 /// `[ui] changes_view`: the view the Changes tab of a result opens in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ChangesView {
@@ -836,6 +860,8 @@ pub struct Prefs {
     pub tips: Tips,
     /// `[ui] changes_view`.
     pub changes_view: ChangesView,
+    /// `[ui] background`.
+    pub background: UiBackground,
     /// `[edit] paste_null`.
     pub paste_null: PasteNull,
     /// `idle_disconnect`: how long a profile's connection may sit unused before its sessions
@@ -866,6 +892,7 @@ impl Default for Prefs {
             yank_flash: YankFlash::default(),
             tips: Tips::default(),
             changes_view: ChangesView::default(),
+            background: UiBackground::default(),
             paste_null: PasteNull::default(),
             idle_disconnect: None,
             lock_wait: None,
@@ -1138,7 +1165,8 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             )
         })
         .unwrap_or_default();
-    let (ui_flash, ui_tips, ui_changes) = f.ui.map(|u| (u.yank_flash, u.tips, u.changes_view)).unwrap_or_default();
+    let (ui_flash, ui_tips, ui_changes, ui_background) =
+        f.ui.map(|u| (u.yank_flash, u.tips, u.changes_view, u.background)).unwrap_or_default();
     let paste_null = f.edit.and_then(|e| e.paste_null);
     let (default_source, keychain_access) =
         f.secrets.map(|s| (s.default_source, s.macos_keychain_access)).unwrap_or_default();
@@ -1190,6 +1218,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             "always, until_used, off",
         )?,
         changes_view: choice("ui.changes_view", ui_changes, "list, sql")?,
+        background: choice("ui.background", ui_background, "theme, terminal")?,
         paste_null: choice("edit.paste_null", paste_null, "\\N, NULL, none")?,
         idle_disconnect: match &f.idle_disconnect {
             None => None,
@@ -1660,6 +1689,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "ui", "tips", tips)?;
     let changes = (prefs.changes_view.as_str().into(), prefs.changes_view == ChangesView::default());
     orphans += &nested_setting(&mut doc, "ui", "changes_view", changes)?;
+    let background = (prefs.background.as_str().into(), prefs.background == UiBackground::default());
+    orphans += &nested_setting(&mut doc, "ui", "background", background)?;
     let null = (prefs.paste_null.as_str().into(), prefs.paste_null == PasteNull::default());
     orphans += &nested_setting(&mut doc, "edit", "paste_null", null)?;
     let source = (default_source.as_str().into(), default_source == DefaultSource::Auto);
