@@ -192,6 +192,12 @@ Where the status bar is too narrow for all of it, the counts of cells and new ro
 then the invalid cell's name: the format, the size, how many values are invalid and the undo key
 stay (`Pasted as TSV · 3 rows × 4 columns · 1 invalid · u undo`); at its narrowest the format goes too (`Pasted · 3×4 · 1 invalid · u undo`).
 
+A first line whose fields are exactly the names of the columns the paste lands in, in order
+from the cursor's column (a copy with its header line, from the app or a spreadsheet), is a
+header, not values: it is skipped, and the status line says so first
+(`Pasted as TSV · Header row skipped · Space d V keeps it · …`). `Space d V` reads the text again
+keeping that line, in the paste's place. A single line is never skipped.
+
 ### Formats
 
 The text is read as:
@@ -328,6 +334,81 @@ The grid's own TSV and CSV copies (`Space r y`) paste back as the same cells, wi
 exceptions: a text cell that is exactly the NULL token (`\N` by default) pastes back as NULL; NULL is copied as an empty
 field, so it pastes back as an empty value; and in a copy of one column, a last cell that is
 NULL (in a TSV copy, an empty text too) is lost, since the copy does not end its last line.
+To move cells within the app without these exceptions, use `y` and `g p`
+([below](#copy-and-paste-inside-the-grid)).
+
+## Copy and paste inside the grid
+
+`y` (a cell, or the selected range) and `Y` (the row, or the selected rows) copy to the
+clipboard as before, and the app also keeps the cells themselves: each value exactly as the
+grid shows it, a pending change included, NULL as NULL, and never a header line. They stay,
+for this result or any other, in any tab, until you copy again or quit. No clipboard is read or
+written for them, so this works over SSH and in tmux, whatever `clipboard` and
+`[editor] clipboard` are set to. Two keys paste them:
+
+- `p` (`Space d Y`) adds them as **new rows** after the last row, wherever the cursor is.
+  Each `p` adds another copy, one step `u` undoes each.
+  - Copied from this result's table, each value goes to its own column, never by position: a
+    column not copied is left to its default (one that needs a value is marked), a column the
+    table computes or numbers itself (`GENERATED`, `GENERATED ALWAYS AS IDENTITY`) is left to
+    the server ("… · 1 generated column left to the server"), and the paste is refused when a
+    copied column is not in this result, is copied twice, or is computed or of another table
+    (a join): it names the column.
+  - Copied from another table, or from a result of computed columns only, the values go by
+    position from the first column, each checked like a typed value, and a copy wider than the
+    result is refused.
+  - `Y` then `p` duplicates rows with their key values as they are: a serial or `BY DEFAULT`
+    identity key then repeats, so set it to its default (`Space d D`) before Apply.
+  - A copy from another connection or database goes by position.
+- `g p` (`Space d y`) pastes them **over the cells** at the cursor, the way a
+  [pasted range](#pasting-a-range) does: from the cursor (one cell copied fills every selected
+  cell), and rows past the last one are new rows.
+
+Both are refused the way a paste is (a read-only result, more rows on the server, a table with
+a required column the result does not show, …), are one step `u` undoes, and ask first when
+more than 1,000 rows change. Nothing is read as text, so there is no question about commas, and
+`Space d V` has nothing to read again.
+
+```
+Pasted the copied cells as new rows · 2 rows × 2 columns · 2 new rows · u undo
+Pasted the copied cells · 2 rows × 2 columns · 2 cells changed · 1 new row · u undo
+```
+
+Each value is checked against the column it lands in, as a typed one: a text pasted into a
+number column is kept and marked invalid, and the changes are not applied until it is fixed.
+
+What is not kept says why, and the copy to the clipboard is done (or fails) anyway:
+
+- more than 5,000 rows, the most a paste takes ("Not kept for p: more than 5,000 rows, the
+  most a paste takes");
+- more than 32 MiB of values ("Not kept for p: more than 32 MiB of values");
+- a row not read whole;
+- a MySQL value the grid does not show as stored: a `FLOAT` (the server sends it rounded),
+  bytes or bits not in their form, text read in a character set other than `utf8mb4`, a
+  `TIMESTAMP` read in a time zone without a fixed offset (one with daylight saving, or
+  `SYSTEM` when the server's own zone is not known), and text or a `TIMESTAMP` of a result
+  whose session's character set and time zone are not known, or changed while its rows were
+  read.
+
+A copy the grid refuses (a pending DEFAULT, a value only a run shows, a new row) or asks about
+keeps nothing either, so `g p` never pastes an older copy; with nothing kept, it says which keys
+copy.
+
+A MySQL `TIMESTAMP` is shown in the session's time zone, without an offset, so the same text is
+another instant in another zone. Its cells keep the fixed offset they were read in (`SYSTEM` is
+the server's own zone), and `g p` pastes them into a time column with a zone only when the
+instant stays the same; else it says why and pastes nothing:
+
+- a MySQL `TIMESTAMP` of a result read in another offset ("Not pasted: column “created_at” was
+  copied in time zone +09:00; this result was read in +00:00"), in a zone without a fixed
+  offset, in `SYSTEM` when the server's own zone is not known, in a session whose zone is not
+  known, or one whose zone changed while its rows were read: set the session's `time_zone` to
+  the copy's and run the query again;
+- a PostgreSQL `timestamptz`, which reads such text in its session's zone.
+
+A `TIMESTAMP` value pending in a result read in a zone without a fixed offset, in a zone not
+known, or in a session whose zone changed while its rows were read is not kept either. Into a column without a zone (`DATETIME`, `timestamp`, text) the text pastes as
+it was shown.
 
 ## Undo, revert, discard
 

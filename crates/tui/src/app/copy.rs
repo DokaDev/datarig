@@ -10,6 +10,9 @@
 //! deletes that name no register when `[editor] clipboard` is on, and `"+` / `"*` always; `"+p`
 //! reads it ([`App::editor_clipboard_text`]), only then.
 //!
+//! `y` and `Y` also keep the cells themselves ([`edit::GridCopy`]), which `g p` pastes: whatever
+//! the clipboard does with the text, for the session.
+//!
 //! Only rows already fetched are copied; when the server has more, the notice says so. More
 //! than [`LARGE_COPY`] rows ask first. The rows are written a chunk at a time
 //! ([`export::Writer`]), read from the result's spill file when they are not in memory, so a
@@ -24,10 +27,13 @@ use datarig_core::driver::keys::{
     Generated, InsertPlan, NotInsertable, NotUpdatable, insert_into, insert_source, update_source,
 };
 use datarig_core::edit::Value;
+use datarig_core::edit::paste::MAX_ROWS as MAX_PASTE_ROWS;
 use datarig_core::export::{self, Kind, Target};
 use datarig_core::fault::{ErrorLog, Fault};
+use datarig_core::i18n::fmt_count;
 use datarig_core::sql::dialect::Dialect;
 use std::ops::Range;
+use std::sync::Arc;
 
 /// The reasons a register write did not reach the clipboard that were said already: each is
 /// said once a session (else every `x` would say it again).
@@ -39,6 +45,9 @@ pub(super) struct YankNotices {
 
 /// Copies of more rows than this ask first.
 pub const LARGE_COPY: usize = 10_000;
+
+/// The most bytes of values `y` and `Y` keep for `g p` (more are not kept, and said).
+pub const GRID_COPY_MAX_BYTES: usize = 32 << 20;
 
 /// Rows read and written at a time.
 const COPY_CHUNK: usize = 4_096;
@@ -386,6 +395,11 @@ impl App {
 
     fn copy_request(&mut self, req: CopyRequest, confirmed: bool) {
         let format = req.format;
+        // `y` and `Y` replace the cells `g p` pastes, with nothing when they keep none (refused,
+        // asked about, not kept): `g p` never pastes an older copy in their place.
+        if format == CopyFormat::Tsv {
+            self.grid_copy = None;
+        }
         let Some(b) = self.block(req.what) else {
             let why = if self.on_new_rows() { Label::CopyNewRows } else { Label::CopyNothing };
             return self.flash(Notice::new(why, Level::Warning));
@@ -408,6 +422,19 @@ impl App {
                 Err(why) => return self.flash(Notice::new(why, Level::Warning)),
             }
         };
+        // `y` and `Y` keep the cells for `g p`, before the clipboard is tried; why not, said
+        // after the copy.
+        let mut not_kept = None;
+        if format == CopyFormat::Tsv {
+            let kept = {
+                let Results::Rows(rs) = &self.tab().results else { return };
+                self.grid_copy_of(rs, &b)
+            };
+            match kept {
+                Ok(c) => self.grid_copy = Some(Arc::new(c)),
+                Err(why) => not_kept = why,
+            }
+        }
         // Generated columns left out of an SQL INSERT copy.
         let mut skipped = String::new();
         // `:copy insert` of rows that are not a projection of that table: said after the copy.
@@ -635,7 +662,12 @@ impl App {
                 // Said at once, and in the status bar instead of an older copy's success.
                 let failed = Notice::new(msg, Level::Error);
                 self.show_status(failed.clone());
-                return self.flash(failed);
+                self.flash(failed);
+                // The cells are kept whatever the clipboard did: when they are not, why.
+                if let Some(why) = not_kept {
+                    self.flash(Notice::new(why, Level::Info));
+                }
+                return;
             }
         };
         let method = self.method_text(method);
@@ -666,6 +698,122 @@ impl App {
             self.show_status(warning.clone());
             self.flash(warning);
         }
+        if let Some(why) = not_kept {
+            self.flash(Notice::new(why, Level::Info));
+        }
+    }
+
+    /// The cells of block `b` of `rs` as `g p` pastes them: each value as the grid shows it (a
+    /// pending one over the value read; NULL as NULL), and the fixed offset each MySQL
+    /// `TIMESTAMP` column was read in. Not kept, and why (`None`: the rows could not be read,
+    /// which the copy says): more rows than a paste takes, more than [`GRID_COPY_MAX_BYTES`] of
+    /// values, a row not read whole, or a value read that is not shown as stored
+    /// ([`export::sql_cells`]: a MySQL `FLOAT`, bytes not in their form, text or a time read in a
+    /// session that shows them otherwise), whose text would store another one.
+    fn grid_copy_of(&self, rs: &ResultSet, b: &Block) -> Result<edit::GridCopy, Option<Msg>> {
+        let key = || self.key_for(Action::Edit(edit::EditAction::PasteRows), Ctx::Grid);
+        if b.rows.len() > MAX_PASTE_ROWS {
+            return Err(Some(Msg::CopyRegisterTooMany { key: key(), max: fmt_count(MAX_PASTE_ROWS as u64) }));
+        }
+        let t = self.tab();
+        let d = self.tab_dialect(t.id);
+        let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
+        let cells: Vec<Result<export::SqlCells, export::Refused>> = b
+            .cols
+            .iter()
+            .map(|&c| {
+                let m = &rs.columns[c].meta;
+                let col =
+                    export::SqlColumn { name: &m.name, type_name: &m.type_name, kind: m.kind, auto_increment: false };
+                export::sql_cells(d, &[col], &rs.read_in, zone)
+            })
+            .collect();
+        // A MySQL `TIMESTAMP` is shown in the session's time zone: the offset it was read in
+        // goes with it (one not fixed refused it above, through `sql_cells`).
+        let offsets: Vec<Option<String>> = b
+            .cols
+            .iter()
+            .map(|&c| match (&rs.read_in, rs.columns[c].meta.kind) {
+                (datarig_core::driver::ReadIn::Values(v), datarig_core::driver::ValueKind::TimestampTz)
+                    if matches!(d, Dialect::MySql(_)) =>
+                {
+                    export::fixed_offset(&v.time_zone, zone)
+                }
+                _ => None,
+            })
+            .collect();
+        let overlaid = !rs.edit.batch.is_empty() || rs.edit.applied.is_some();
+        let mut rows: Vec<Vec<Value>> = Vec::with_capacity(b.rows.len());
+        let mut refused: Option<export::Refused> = None;
+        let (mut short, mut bytes) = (None, 0usize);
+        let mut at = b.rows.start;
+        rs.rows
+            .for_each_chunk(b.rows.clone(), COPY_CHUNK, |chunk| {
+                for (i, r) in chunk.iter().enumerate() {
+                    // Past the most kept, nothing more is collected.
+                    if bytes > GRID_COPY_MAX_BYTES {
+                        return;
+                    }
+                    let row = b.cols.iter().enumerate().map(|(j, &c)| {
+                        let v = match overlaid.then(|| rs.over(at + i, c)).flatten() {
+                            // A value with none to show (a DEFAULT, one only a run shows) refused
+                            // the copy before.
+                            Some(o) => o.cell().flatten().map_or(Value::Null, |v| Value::Text(v.to_string())),
+                            None => match r.get(c) {
+                                None => {
+                                    short.get_or_insert(at + i);
+                                    Value::Null
+                                }
+                                Some(None) => Value::Null,
+                                Some(Some(v)) => {
+                                    if refused.is_none() {
+                                        refused = cells[j]
+                                            .as_ref()
+                                            .map_err(Clone::clone)
+                                            .and_then(|x| x.cell(0, v).map(drop))
+                                            .err();
+                                    }
+                                    Value::Text(v.to_string())
+                                }
+                            },
+                        };
+                        if let Value::Text(t) = &v {
+                            bytes += t.len();
+                        }
+                        v
+                    });
+                    rows.push(row.collect());
+                }
+                at += chunk.len();
+            })
+            .map_err(|_| None)?;
+        if bytes > GRID_COPY_MAX_BYTES {
+            let max = format!("{} MiB", GRID_COPY_MAX_BYTES >> 20);
+            return Err(Some(Msg::CopyRegisterTooLarge { key: key(), max }));
+        }
+        if let Some(row) = short {
+            return Err(Some(Msg::CopyRegisterNotRead { key: key(), row: (row + 1).to_string() }));
+        }
+        // A pending value of a MySQL `TIMESTAMP` read in a zone without a fixed offset (or one not
+        // known) is no instant either: its text is read in the zone it lands in.
+        let zoned = |j: usize| {
+            matches!(d, Dialect::MySql(_))
+                && rs.columns[b.cols[j]].meta.kind == datarig_core::driver::ValueKind::TimestampTz
+        };
+        let refused = refused.or_else(|| {
+            (0..b.cols.len())
+                .filter(|&j| zoned(j) && offsets_none(&offsets, j))
+                .filter(|&j| rows.iter().any(|r| matches!(r.get(j), Some(Value::Text(_)))))
+                .find_map(|j| cells[j].as_ref().err().cloned())
+        });
+        if let Some(r) = refused {
+            let reason = self.not_whole_reason(&r.why);
+            return Err(Some(Msg::CopyRegisterNotWhole { key: key(), column: r.column, reason }));
+        }
+        let columns = b.cols.iter().map(|&c| rs.columns[c].meta.clone()).collect();
+        // Without a profile the cells are no table's rows: never matched by column.
+        let source = t.profile.map(|p| (p, self.other_database(t).map(str::to_string)));
+        Ok(edit::GridCopy { source, columns, offsets, rows })
     }
 
     /// Whether the rest of the active tab's rows can be fetched: its portal is open, the
@@ -1053,4 +1201,9 @@ fn written_as<'a>(
                 .collect()
         })
         .collect()
+}
+
+/// Column `j` has no offset kept.
+fn offsets_none(offsets: &[Option<String>], j: usize) -> bool {
+    offsets.get(j).is_none_or(Option::is_none)
 }

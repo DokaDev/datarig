@@ -143,9 +143,9 @@ fn an_idle_portal_closes_and_the_next_page_runs_a_select_again() {
     assert!(!h.app.needs_tick());
 
     // Pages already fetched come back without a command.
-    h.keys("p");
+    h.keys("[");
     assert_eq!(first_shown(&h).as_deref(), Some("0"));
-    h.keys("p");
+    h.keys("[");
     assert!(h.status(160, 45).contains("First page"));
     h.keys("n");
     assert_eq!(first_shown(&h).as_deref(), Some("500"));

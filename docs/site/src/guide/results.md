@@ -12,7 +12,7 @@ tabs; `Space r [` and `Space r ]` do it from anywhere.
 
 ## Pages
 
-The grid shows one page at a time (`page_size`, 500 rows by default): `n` and `p` move to the
+The grid shows one page at a time (`page_size`, 500 rows by default): `n` (or `]`) and `[` move to the
 next and previous page. By default nothing stays open on the server between pages: the first
 page ends its transaction, and the next page runs the statement again when it is safe to repeat
 (said each time); otherwise you see the first page and why. An environment can keep the cursor
@@ -42,8 +42,8 @@ the count matches the pages you saw.
 
 `/` searches forward and `?` backward: a prompt under the grid, the cursor on the first matching
 cell as you type, `Enter` to search. Then `n` and `N` go from match to match, across pages and
-around the ends with a warning, and `Esc` ends the search (`n` is the next page again). `:noh`
-ends it too.
+around the ends with a warning, and `Esc` ends the search (`n` is the next page again; `]` is
+the next page all along). `:noh` ends it too.
 
 The search covers every row already fetched (the spilled ones too), each cell's full value as
 the server sent it, not the cut the grid shows. NULL never matches, and nothing is fetched or

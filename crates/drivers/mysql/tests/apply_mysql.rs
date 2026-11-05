@@ -613,6 +613,45 @@ async fn a_pasted_block_overwrites_two_rows_and_adds_one() {
     );
 }
 
+/// Cells as the grid's `y` keeps them (the text as read, NULL as NULL: no text read again) pasted
+/// below themselves: a tab, a line break, the NULL token as text and an empty text come back as
+/// they were, NULL as NULL.
+#[tokio::test(flavor = "multi_thread")]
+async fn cells_copied_in_the_grid_paste_back_exactly() {
+    let Some(url) = url("cells_copied_in_the_grid_paste_back_exactly") else {
+        return;
+    };
+    let t = Table::make(
+        &url,
+        "gridcopy",
+        &[
+            "CREATE TABLE {t} (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(20), w VARCHAR(20))",
+            "INSERT INTO {t} (v, w) VALUES ('a\\tb\\nc', NULL), ('\\\\N', ''), ('x', 'y')",
+        ],
+    )
+    .await;
+    let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    let select = format!("SELECT id, v, w FROM {} ORDER BY id", t.q());
+    let read = c.rows(&select).await;
+    let e = Editing::new(&url, &mut c, &t, &select).await;
+    // Rows 1–2, `v` and `w`, onto row 3 and a new row.
+    let copy: Vec<Vec<Value>> =
+        read[..2].iter().map(|r| r[1..].iter().map(|v| v.clone().map_or(Value::Null, Value::Text)).collect()).collect();
+    let mut ops = edit::PasteOps { width: 3, ..Default::default() };
+    ops.set.extend(copy[0].iter().enumerate().map(|(k, v)| ((2, k + 1), v.clone())));
+    ops.add.push(vec![Value::Default, copy[1][0].clone(), copy[1][1].clone()]);
+    let mut b = EditBatch::new();
+    let done = b.paste(ops, e.orig()).expect("pasted");
+    assert_eq!((done.changed, done.added.len()), (2, 1));
+    let plan = e.plan(&mut c, &b, &[]).await;
+    c.apply(plan.steps, ApplyTx::Commit).await.expect("applied");
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let rows = other.rows(&select).await;
+    assert_eq!(cells(&rows)[0], [Some("1"), Some("a\tb\nc"), None]);
+    assert_eq!(cells(&rows)[2], [Some("3"), Some("a\tb\nc"), None]);
+    assert_eq!(cells(&rows)[3], [Some("4"), Some("\\N"), Some("")]);
+}
+
 /// How long the Apply of 2,000 statements, sent one by one, may take: a slow runner needs
 /// far more than the other tests' wait.
 const PASTE_1K_SECS: u64 = 180;

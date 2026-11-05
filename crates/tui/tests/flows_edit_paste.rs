@@ -1037,3 +1037,823 @@ fn a_y_right_after_a_question_was_cancelled_by_another_key_is_ignored_for_a_seco
         answer_keys_are_ignored_for_a_second(&mut h, cancelled);
     }
 }
+
+/// The owner's case: a range copied with its header line (`copy_header`), pasted with the
+/// terminal's paste below the last row. The header named the result's columns and became a new
+/// row of invalid values; it is skipped, and said, and `space d V` keeps it.
+#[test]
+fn a_header_line_naming_the_columns_is_skipped_and_space_d_capital_v_keeps_it() {
+    let mut h = ready(Lang::En);
+    h.keys("jj");
+    let before = revision(&h);
+    paste(&mut h, "email\tnickname\nx@x\tbo\ny@y\t\\N\n");
+    assert_eq!(pending(&h, 2, 1), Some(t("x@x")));
+    assert_eq!(pending(&h, 2, 2), Some(t("bo")));
+    assert_eq!(drafts(&h), vec![vec![Value::Default, t("y@y"), Value::Null]], "no row of the header");
+    assert_eq!(revision(&h), before + 1);
+    assert_eq!(
+        said(&mut h),
+        "Pasted as TSV \u{b7} Header row skipped \u{b7} Space d V keeps it \u{b7} 2 rows \u{d7} 2 columns \u{b7} 2 cells \
+         changed \u{b7} 1 new row \u{b7} u undo"
+    );
+    assert!(h.app.shown_invalid().unwrap().cells.is_empty());
+    // `space d V` reads it again keeping the header line, in the paste's place.
+    h.keys(" dV");
+    assert_eq!(pending(&h, 2, 1), Some(t("email")));
+    assert_eq!(drafts(&h), vec![vec![Value::Default, t("x@x"), t("bo")], vec![Value::Default, t("y@y"), Value::Null]]);
+    let text = said(&mut h);
+    assert!(text.starts_with("Pasted as TSV \u{b7} 3 rows"), "{text}");
+    // Then on to the next format, as before.
+    h.keys(" dV");
+    assert!(said(&mut h).starts_with("Pasted as CSV"));
+}
+
+#[test]
+fn a_first_line_that_is_not_the_columns_names_is_pasted() {
+    let mut h = ready(Lang::En);
+    // Other names, or the names from another column on: values.
+    paste(&mut h, "mail\tnickname\nx@x\tbo\n");
+    assert_eq!(pending(&h, 0, 1), Some(t("mail")));
+    h.keys("u");
+    h.keys("h");
+    paste(&mut h, "email\tnickname\n1\tx@x\n");
+    assert_eq!(pending(&h, 0, 1), Some(t("nickname")), "not the names of the columns from the cursor");
+    h.keys("u");
+    // A single line is never a header.
+    h.keys("l");
+    paste(&mut h, "email\tnickname\n");
+    assert_eq!(pending(&h, 0, 1), Some(t("email")));
+}
+
+/// Cells copied in the grid (`y`, `Y`) are kept as they are shown, NULL as NULL, and `g p`
+/// pastes them at the cursor through the paste's own way: cells set, rows past the end new
+/// rows, values a column does not take kept and marked, one step `u` undoes, refused whole when
+/// they do not fit, a question first for more than a thousand rows. The copy is kept whatever
+/// the clipboard does with it, across results and tabs.
+mod grid_copy {
+    use super::*;
+
+    fn s(v: &str) -> Option<String> {
+        Some(v.to_string())
+    }
+
+    fn t(v: &str) -> Value {
+        Value::Text(v.to_string())
+    }
+
+    fn users_columns() -> Vec<ColumnMeta> {
+        vec![
+            meta_from("id", "int8", true, USERS, 1),
+            meta_from("email", "text", false, USERS, 2),
+            meta_from("nickname", "text", false, USERS, 4),
+        ]
+    }
+
+    fn users_rows() -> Vec<Vec<Option<String>>> {
+        vec![vec![s("1"), s("a@x"), s("ann")], vec![s("2"), s("b@x"), None], vec![s("3"), s("c@x"), s("cy")]]
+    }
+
+    const SQL: &str = "SELECT id, email, nickname FROM shop.users";
+
+    fn structure(h: &mut Harness, st: TableStructure) {
+        let name = h.app.profiles[0].name.clone();
+        h.meta_db(&name, DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(Box::new(st)) });
+    }
+
+    /// Run the users' query in the active tab and let `rows` come, the grid focused.
+    fn answer_rows(h: &mut Harness, rows: Vec<Vec<Option<String>>>) {
+        h.db(DbEvent::Keys(Ok(shop_keys())));
+        h.app.run(vec![SQL.to_string()]);
+        let id = h.app.tab().exec.query_id;
+        h.db(DbEvent::Page { id, columns: Some(users_columns()), rows, more: false, elapsed: Duration::ZERO });
+        h.app.focus = Focus::Results;
+    }
+
+    /// `shop.users` whose `name` (NOT NULL, not in the results here) has a default: new rows can be
+    /// added.
+    fn named() -> TableStructure {
+        let mut st = users_structure();
+        st.columns[2].default = Some("''::text".into());
+        st
+    }
+
+    /// The active tab's result resolved (`e` on the first row's email, then the editor closed: the
+    /// cursor stays there); nothing said.
+    fn resolve(h: &mut Harness) {
+        h.keys("le");
+        structure(h, named());
+        assert_eq!(h.app.key_context(), Ctx::CellEdit);
+        h.key(KeyCode::Esc);
+        h.app.transient = None;
+        h.sent();
+    }
+
+    fn ready_with(mut h: Harness, rows: Vec<Vec<Option<String>>>) -> Harness {
+        answer_rows(&mut h, rows);
+        resolve(&mut h);
+        h
+    }
+
+    fn ready() -> Harness {
+        ready_with(Harness::connected(Lang::En), users_rows())
+    }
+
+    fn edits(h: &Harness) -> &EditState {
+        match &h.app.tab().results {
+            Results::Rows(rs) => &rs.edit,
+            _ => panic!("no row result"),
+        }
+    }
+
+    fn revision(h: &Harness) -> u64 {
+        edits(h).batch.revision()
+    }
+
+    fn said(h: &mut Harness) -> String {
+        let n = h.app.transient.take().map(|(n, _)| n).expect("something said");
+        n.render(&h.app.i18n).to_string()
+    }
+
+    fn pending(h: &Harness, r: usize, c: usize) -> Option<Value> {
+        edits(h).batch.value(r, c).cloned()
+    }
+
+    fn drafts(h: &Harness) -> Vec<Vec<Value>> {
+        edits(h).batch.drafts().iter().map(|d| d.cells.clone()).collect()
+    }
+
+    fn cursor(h: &Harness) -> (usize, usize) {
+        (h.app.tab().grid.row, h.app.tab().grid.col)
+    }
+
+    #[test]
+    fn g_p_pastes_the_cells_y_copied_exactly_with_null_and_new_rows_as_one_step() {
+        let mut h = ready();
+        // Rows 1–2, email and nickname: row 2's nickname is NULL.
+        h.keys("vjly");
+        assert_eq!(cursor(&h), (1, 2));
+        h.keys("jh");
+        let before = revision(&h);
+        h.keys("gp");
+        assert_eq!(pending(&h, 2, 1), Some(t("a@x")));
+        assert_eq!(pending(&h, 2, 2), Some(t("ann")));
+        assert_eq!(drafts(&h), vec![vec![Value::Default, t("b@x"), Value::Null]], "NULL stays NULL, not empty text");
+        assert_eq!(revision(&h), before + 1, "one step");
+        assert_eq!(said(&mut h), "Pasted the copied cells · 2 rows × 2 columns · 2 cells changed · 1 new row · u undo");
+        assert!(h.app.shown_invalid().unwrap().cells.is_empty());
+        h.keys("u");
+        assert!(edits(&h).batch.is_empty(), "u undoes all of it");
+    }
+
+    #[test]
+    fn the_copy_is_of_the_values_the_grid_shows_pending_ones_and_null_included() {
+        let mut h = ready();
+        // A pending text and a pending NULL.
+        h.keys("e");
+        for _ in 0.."a@x".len() {
+            h.key(KeyCode::Backspace);
+        }
+        h.type_text("z@x");
+        h.key(KeyCode::Enter);
+        assert_eq!(pending(&h, 0, 1), Some(t("z@x")));
+        h.keys("y");
+        h.keys("jgp");
+        assert_eq!(pending(&h, 1, 1), Some(t("z@x")));
+        h.keys("kl dn");
+        assert_eq!(pending(&h, 0, 2), Some(Value::Null));
+        h.keys("yjjgp");
+        assert_eq!(pending(&h, 2, 2), Some(Value::Null), "the pending NULL, not the value read");
+    }
+
+    #[test]
+    fn y_capital_keeps_the_whole_row() {
+        let mut h = ready();
+        h.keys("Yjjh");
+        h.keys("gp");
+        assert_eq!(pending(&h, 2, 0), Some(t("1")));
+        assert_eq!(pending(&h, 2, 1), Some(t("a@x")));
+        assert_eq!(pending(&h, 2, 2), Some(t("ann")));
+    }
+
+    #[test]
+    fn the_copy_is_kept_when_the_clipboard_cannot_take_it() {
+        let mut h = ready();
+        h.app.prefs.clipboard = ClipboardSetting::System;
+        let _c = FakeClipboard::attach(&mut h, true, &[]);
+        h.keys("y");
+        assert!(said(&mut h).starts_with("Could not copy"), "the clipboard refused it");
+        h.keys("jgp");
+        assert_eq!(pending(&h, 1, 1), Some(t("a@x")));
+    }
+
+    #[test]
+    fn the_copy_is_kept_with_the_editor_clipboard_off_and_osc52() {
+        let mut h = ready();
+        h.app.prefs.clipboard = ClipboardSetting::Osc52;
+        h.app.prefs.editor_clipboard = datarig_core::config::EditorClipboard::Off;
+        let c = FakeClipboard::attach(&mut h, false, &[]);
+        h.keys("y");
+        h.keys("jgp");
+        assert_eq!(pending(&h, 1, 1), Some(t("a@x")));
+        assert_eq!(c.read_count(), 0, "g p reads no clipboard");
+        assert!(c.last().is_none(), "nothing went to the system clipboard");
+    }
+
+    #[test]
+    fn g_p_with_nothing_copied_says_how_to_copy() {
+        let mut h = ready();
+        h.keys("gp");
+        assert_eq!(said(&mut h), "Nothing copied to paste: y copies a cell or a range, Y a row, then g p pastes it");
+        assert!(edits(&h).batch.is_empty());
+        assert_eq!(cursor(&h), (0, 1), "nothing moved");
+    }
+
+    #[test]
+    fn the_copy_survives_other_results_and_tabs_and_is_checked_against_the_column_it_lands_in() {
+        let mut h = ready();
+        // The email of row 1.
+        h.keys("y");
+        // A new console tab with its own result of the users.
+        h.ctrl('t');
+        assert_eq!(h.app.tabs.len(), 2);
+        answer_rows(&mut h, users_rows());
+        resolve(&mut h);
+        // Over the id, an int8: kept and marked, as a pasted value.
+        h.keys("h");
+        h.keys("gp");
+        assert_eq!(pending(&h, 0, 0), Some(t("a@x")));
+        let inv = h.app.shown_invalid().unwrap();
+        let why = inv.cells.get(&(RowAt::Read(0), 0)).cloned().unwrap_or_default();
+        assert_eq!(why, "not a whole number: 'a@x'");
+        // The first tab's result again, run anew.
+        h.key_mod(KeyCode::PageDown, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        assert_eq!(h.app.tabs.active_index(), 0);
+        answer_rows(&mut h, users_rows());
+        resolve(&mut h);
+        h.keys("jgp");
+        assert_eq!(pending(&h, 1, 1), Some(t("a@x")));
+    }
+
+    #[test]
+    fn g_p_on_a_read_only_result_is_refused() {
+        let mut cfg = Config {
+            connections: vec![ConnectionConfig { policy: Some("prod".into()), ..ConnectionConfig::test_db() }],
+            ..Config::default()
+        };
+        cfg.policies.insert("prod", Policy { read_only: true, ..Policy::default() });
+        let mut h = Harness::connected_with(&cfg, Lang::En);
+        answer_rows(&mut h, users_rows());
+        h.keys("y");
+        h.keys("jgp");
+        assert_eq!(said(&mut h), "Read-only: the connection's environment is read-only");
+        assert!(edits(&h).batch.is_empty());
+    }
+
+    #[test]
+    fn g_p_is_refused_whole_when_it_does_not_fit() {
+        let mut h = ready();
+        // Two columns from the nickname, the last one.
+        h.keys("vly");
+        h.keys("l");
+        let before = revision(&h);
+        h.keys("gp");
+        assert_eq!(
+            said(&mut h),
+            "Not pasted: the paste is 2 columns wide; 1 columns from the cursor to the last column"
+        );
+        assert_eq!(revision(&h), before);
+    }
+
+    fn many(n: usize) -> Vec<Vec<Option<String>>> {
+        (0..n).map(|i| vec![s(&i.to_string()), s(&format!("{i}@x")), s(&format!("n{i}"))]).collect()
+    }
+
+    #[test]
+    fn a_copy_of_more_than_a_thousand_rows_asks_before_it_is_pasted() {
+        let mut h = ready_with(Harness::connected(Lang::En), many(1_001));
+        // Every email, onto the nicknames.
+        h.app.tab_mut().grid.anchor = Some((1_000, 1));
+        h.keys("y");
+        h.keys("l");
+        let before = revision(&h);
+        h.keys("gp");
+        let forms = h.app.status_ask_line().map(|(f, _)| f).expect("asked");
+        assert_eq!(forms[0], "Paste 1,001 rows? y paste · any other key cancels");
+        assert_eq!(revision(&h), before, "nothing before y");
+        h.keys("y");
+        assert_eq!(revision(&h), before + 1);
+        assert_eq!(pending(&h, 1_000, 2), Some(t("1000@x")));
+    }
+
+    #[test]
+    fn a_copy_of_more_rows_than_a_paste_takes_is_not_kept_and_says_so() {
+        let mut h = ready_with(Harness::connected(Lang::En), many(5_001));
+        h.app.tab_mut().grid.anchor = Some((5_000, 1));
+        h.keys("y");
+        assert_eq!(said(&mut h), "Not kept for p: more than 5,000 rows, the most a paste takes");
+        let status = h.app.status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default();
+        assert!(status.starts_with("Copied 5,001 rows"), "the copy itself is done: {status}");
+        h.keys("gp");
+        assert!(said(&mut h).starts_with("Nothing copied to paste"));
+    }
+
+    #[test]
+    fn the_text_of_the_null_token_and_an_empty_text_paste_back_as_text() {
+        let rows = vec![vec![s("1"), s("\\N"), s("")], vec![s("2"), s("b@x"), s("bo")]];
+        let mut h = ready_with(Harness::connected(Lang::En), rows);
+        h.keys("vly");
+        h.keys("jhgp");
+        assert_eq!(pending(&h, 1, 1), Some(t("\\N")), "not NULL: the text as shown");
+        assert_eq!(pending(&h, 1, 2), Some(t("")), "an empty text, not NULL");
+    }
+
+    #[test]
+    fn a_copy_the_grid_refuses_or_asks_about_keeps_nothing() {
+        let mut st = named();
+        st.columns[3].default = Some("'n'::text".into());
+        let mut h = ready_with(Harness::connected(Lang::En), users_rows());
+        // The table with a default for the nickname.
+        if let Results::Rows(rs) = &mut h.app.tab_mut().results {
+            rs.edit.target = Default::default();
+        }
+        h.keys("y");
+        h.keys("l");
+        h.keys(" dD");
+        structure(&mut h, st);
+        assert_eq!(pending(&h, 0, 2), Some(Value::Default));
+        h.app.transient = None;
+        // A pending DEFAULT has no value: the copy is refused, and the older one is gone.
+        h.keys("y");
+        assert_eq!(said(&mut h), "Not copied: nickname has a pending DEFAULT, which has no value yet");
+        h.keys("jgp");
+        assert!(said(&mut h).starts_with("Nothing copied to paste"));
+        // A copy on a new row is refused too.
+        h.keys("hy");
+        h.keys("o");
+        let ctx = h.app.key_context();
+        if ctx != Ctx::Grid {
+            h.key(KeyCode::Esc);
+        }
+        h.app.transient = None;
+        h.keys("Gy");
+        let got = h.app.transient.take().map(|(n, _)| n.render(&h.app.i18n).to_string());
+        let at = (cursor(&h), drafts(&h).len(), ctx);
+        assert_eq!(got.as_deref(), Some("A new row is not copied: it is not a row of the result yet"), "{at:?}");
+        h.keys("kgp");
+        assert!(said(&mut h).starts_with("Nothing copied to paste"));
+    }
+
+    #[test]
+    fn a_row_not_read_whole_is_not_kept_and_a_failed_clipboard_still_says_so() {
+        let rows = vec![vec![s("1"), s("a@x"), s("ann")], vec![s("2"), s("b@x")]];
+        let mut h = ready_with(Harness::connected(Lang::En), rows);
+        h.app.prefs.clipboard = ClipboardSetting::System;
+        let _c = FakeClipboard::attach(&mut h, true, &[]);
+        h.keys("jY");
+        assert_eq!(said(&mut h), "Not kept for p: row 2 was not read whole");
+        let status = h.app.status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default();
+        assert!(status.starts_with("Could not copy"), "{status}");
+        h.keys("kgp");
+        assert!(said(&mut h).starts_with("Nothing copied to paste"));
+    }
+
+    #[test]
+    fn more_bytes_than_kept_are_not_kept_and_say_so() {
+        // Two values of just over 16 MiB: more than the 32 MiB kept.
+        let big = "x".repeat((16 << 20) + 1);
+        let rows = vec![vec![s("1"), s(&big), None], vec![s("2"), s(&big), None]];
+        let mut h = ready_with(Harness::connected(Lang::En), rows);
+        h.app.prefs.clipboard = ClipboardSetting::Osc52;
+        h.keys("vjy");
+        assert_eq!(said(&mut h), "Not kept for p: more than 32 MiB of values");
+        h.keys("gp");
+        assert!(said(&mut h).starts_with("Nothing copied to paste"));
+    }
+
+    #[test]
+    fn a_large_copy_declined_keeps_nothing() {
+        let mut h = ready_with(Harness::connected(Lang::En), many(10_001));
+        h.keys("y");
+        h.app.tab_mut().grid.anchor = Some((10_000, 1));
+        h.keys("y");
+        assert_eq!(h.overlay_kind(), Some(datarig_tui::app::overlay::OverlayKind::Confirm));
+        h.key(KeyCode::Esc);
+        assert_eq!(h.overlay_kind(), None);
+        h.app.transient = None;
+        h.keys("jgp");
+        assert!(said(&mut h).starts_with("Nothing copied to paste"), "the cell copied before is gone");
+    }
+
+    #[test]
+    fn a_timestamptz_copied_on_postgresql_pastes_into_a_timestamptz() {
+        use datarig_core::driver::ValueKind;
+        let mut h = Harness::connected(Lang::En);
+        h.db(DbEvent::Keys(Ok(shop_keys())));
+        h.app.run(vec![SQL.to_string()]);
+        let id = h.app.tab().exec.query_id;
+        let mut columns = users_columns();
+        let origin = columns[2].origin.clone();
+        columns[2] = ColumnMeta::new("nickname".into(), "timestamptz".into(), ValueKind::TimestampTz, origin);
+        let rows = vec![
+            vec![s("1"), s("a@x"), s("2024-01-01 09:00:00+09")],
+            vec![s("2"), s("b@x"), s("2024-06-01 00:00:00+00")],
+        ];
+        h.db(DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::ZERO });
+        h.app.focus = Focus::Results;
+        let mut st = named();
+        st.columns[3].type_name = "timestamp with time zone".into();
+        h.keys("le");
+        structure(&mut h, st);
+        h.key(KeyCode::Esc);
+        h.app.transient = None;
+        // Its text has its offset: the same instant in any session.
+        h.keys("ly");
+        h.keys("jgp");
+        assert_eq!(pending(&h, 1, 2), Some(t("2024-01-01 09:00:00+09")));
+        assert!(said(&mut h).starts_with("Pasted the copied cells"));
+        assert!(h.app.shown_invalid().unwrap().cells.is_empty());
+    }
+
+    #[test]
+    fn p_appends_the_copied_cells_as_new_rows_one_step_a_press() {
+        let mut h = ready();
+        h.keys("vly");
+        let before = revision(&h);
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![Value::Default, t("a@x"), t("ann")]]);
+        assert_eq!(revision(&h), before + 1, "one step");
+        assert_eq!(said(&mut h), "Pasted the copied cells as new rows · 1 row × 2 columns · 1 new row · u undo");
+        h.keys("pp");
+        assert_eq!(drafts(&h).len(), 3, "each p adds another copy");
+        assert_eq!(revision(&h), before + 3);
+        assert_eq!(cursor(&h), (5, 1), "on the last copy's first cell");
+        h.keys("u");
+        assert_eq!(drafts(&h).len(), 2, "u takes one press back");
+    }
+
+    #[test]
+    fn p_sets_only_the_columns_copied_wherever_the_cursor_is() {
+        let mut h = ready();
+        // Row 2's nickname, NULL.
+        h.keys("jly");
+        h.keys("hh");
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![Value::Default, Value::Default, Value::Null]]);
+        // The email is NOT NULL without a default: marked as needing a value.
+        let inv = h.app.shown_invalid().unwrap();
+        assert!(inv.no_default.iter().any(|&(at, c)| matches!(at, RowAt::New(_)) && c == 1), "{inv:?}");
+    }
+
+    #[test]
+    fn the_copy_holds_values_only_never_a_header() {
+        let mut h = ready();
+        h.app.prefs.clipboard = ClipboardSetting::System;
+        let c = FakeClipboard::attach(&mut h, false, &[]);
+        h.keys("vjly");
+        assert!(c.last().unwrap_or_default().starts_with("email\tnickname\n"), "the clipboard's copy has its header");
+        h.keys("p");
+        assert_eq!(
+            drafts(&h),
+            vec![vec![Value::Default, t("a@x"), t("ann")], vec![Value::Default, t("b@x"), Value::Null]]
+        );
+        // Every cell of the page, and whole rows: values only too.
+        h.keys("u");
+        h.ctrl('a');
+        h.keys("yp");
+        assert_eq!(drafts(&h).len(), 3);
+        assert_eq!(drafts(&h)[0], vec![t("1"), t("a@x"), t("ann")]);
+        h.keys("u");
+        h.keys("ggVjY");
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![t("1"), t("a@x"), t("ann")], vec![t("2"), t("b@x"), Value::Null]]);
+    }
+
+    /// `shop.orders` as the driver reports it: an identity-free serial key, a user and a status.
+    fn orders_structure() -> TableStructure {
+        use datarig_core::driver::structure::*;
+        let col = |name: &str, ty: &str, not_null: bool, default: Option<&str>| StructureColumn {
+            name: name.into(),
+            type_name: ty.into(),
+            not_null,
+            default: default.map(str::to_string),
+            fill: ColumnFill::Default,
+            enum_labels: Vec::new(),
+            collation: None,
+        };
+        let mut t = TableStructure::new(RelationKind::Table);
+        t.columns = vec![
+            col("id", "bigint", true, Some("nextval('shop.orders_id_seq'::regclass)")),
+            col("user_id", "bigint", false, None),
+            col("status", "text", false, None),
+            col("total_amount", "numeric", false, None),
+        ];
+        t.primary_key =
+            Some(KeyConstraint { name: "orders_pkey".into(), columns: vec!["id".into()], definition: String::new() });
+        t
+    }
+
+    /// A new tab with the orders' ids and statuses, resolved; the grid focused, nothing said.
+    fn orders_tab(h: &mut Harness) {
+        h.ctrl('t');
+        h.app.run(vec!["SELECT id, status FROM shop.orders".to_string()]);
+        let id = h.app.tab().exec.query_id;
+        let columns = vec![meta_from("id", "int8", true, ORDERS, 1), meta_from("status", "text", false, ORDERS, 3)];
+        h.db(DbEvent::Page {
+            id,
+            columns: Some(columns),
+            rows: vec![vec![s("7"), s("paid")]],
+            more: false,
+            elapsed: Duration::ZERO,
+        });
+        h.app.focus = Focus::Results;
+        h.keys("le");
+        let name = h.app.profiles[0].name.clone();
+        let result = Ok(Box::new(orders_structure()));
+        h.meta_db(&name, DbEvent::Structure { schema: "shop".into(), table: "orders".into(), result });
+        h.key(KeyCode::Esc);
+        h.app.transient = None;
+        h.sent();
+    }
+
+    #[test]
+    fn p_into_another_table_maps_by_position_checks_types_and_refuses_a_wider_copy() {
+        let mut h = ready();
+        // The whole users row: wider than the orders' two columns.
+        h.keys("Y");
+        orders_tab(&mut h);
+        let before = revision(&h);
+        h.keys("p");
+        assert_eq!(said(&mut h), "Not pasted: the copy is 3 columns wide; this result has 2");
+        assert_eq!(revision(&h), before);
+        // Email and nickname: the id and the status, by position.
+        h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        h.keys("vly");
+        h.key_mod(KeyCode::PageDown, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        h.app.focus = Focus::Results;
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![t("a@x"), t("ann")]]);
+        let inv = h.app.shown_invalid().unwrap();
+        let bad: Vec<usize> = inv.cells.keys().map(|&(_, c)| c).collect();
+        assert_eq!(bad, [0], "the email is no id: {inv:?}");
+    }
+
+    #[test]
+    fn p_is_refused_on_a_read_only_result_and_asks_for_more_than_a_thousand_rows() {
+        let mut cfg = Config {
+            connections: vec![ConnectionConfig { policy: Some("prod".into()), ..ConnectionConfig::test_db() }],
+            ..Config::default()
+        };
+        cfg.policies.insert("prod", Policy { read_only: true, ..Policy::default() });
+        let mut h = Harness::connected_with(&cfg, Lang::En);
+        answer_rows(&mut h, users_rows());
+        h.keys("yp");
+        assert_eq!(said(&mut h), "Read-only: the connection's environment is read-only");
+        assert!(edits(&h).batch.is_empty());
+        // More than a thousand new rows ask first.
+        let mut h = ready_with(Harness::connected(Lang::En), many(1_001));
+        h.app.tab_mut().grid.anchor = Some((1_000, 1));
+        h.keys("y");
+        let before = revision(&h);
+        h.keys("p");
+        let forms = h.app.status_ask_line().map(|(f, _)| f).expect("asked");
+        assert_eq!(forms[0], "Paste 1,001 rows (1,001 new)? y paste · any other key cancels");
+        assert_eq!(revision(&h), before);
+        h.keys("y");
+        assert_eq!(drafts(&h).len(), 1_001);
+    }
+
+    #[test]
+    fn p_shows_the_page_with_the_new_rows() {
+        let mut h = ready();
+        h.keys("y");
+        // Pages of two rows, the first one shown: the new rows are on the last page.
+        let g = &mut h.app.tab_mut().grid;
+        (g.page_size, g.page, g.top) = (2, 0, 0);
+        h.keys("p");
+        let g = &h.app.tab().grid;
+        assert_eq!((g.row, g.col), (3, 1));
+        assert_eq!(g.page, 1, "the page of the new row is shown");
+    }
+
+    /// Run `sql` in the active tab and let `columns` and `rows` come, the grid focused, nothing
+    /// said.
+    fn shows(h: &mut Harness, sql: &str, columns: Vec<ColumnMeta>, rows: Vec<Vec<Option<String>>>) {
+        h.app.run(vec![sql.to_string()]);
+        let id = h.app.tab().exec.query_id;
+        h.db(DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::ZERO });
+        h.app.focus = Focus::Results;
+        h.app.transient = None;
+    }
+
+    /// A new tab showing `columns` of the users (one row of `row`), resolved with `st`.
+    fn users_tab(h: &mut Harness, columns: Vec<ColumnMeta>, row: Vec<Option<String>>, st: TableStructure) {
+        h.ctrl('t');
+        shows(h, SQL, columns, vec![row]);
+        h.keys("e");
+        structure(h, st);
+        h.key(KeyCode::Esc);
+        h.app.transient = None;
+        h.sent();
+    }
+
+    fn computed(name: &str) -> ColumnMeta {
+        ColumnMeta::new(name.into(), "text".into(), datarig_core::driver::ValueKind::Text, None)
+    }
+
+    #[test]
+    fn p_from_the_same_table_maps_by_column_only_and_names_a_column_not_shown() {
+        let mut h = ready();
+        // Email and nickname, into a result of the nickname and the email: by column.
+        h.keys("vly");
+        let cols = vec![meta_from("nickname", "text", false, USERS, 4), meta_from("email", "text", false, USERS, 2)];
+        users_tab(&mut h, cols, vec![s("cy"), s("c@x")], named());
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![t("ann"), t("a@x")]]);
+        // The id and the email, into a result without the id: refused, never by position.
+        h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        h.app.focus = Focus::Results;
+        h.keys("hhvly");
+        h.key_mod(KeyCode::PageDown, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        h.app.focus = Focus::Results;
+        let before = revision(&h);
+        h.keys("p");
+        assert_eq!(said(&mut h), "Not pasted: id is copied from this table but not in this result");
+        assert_eq!(revision(&h), before);
+    }
+
+    #[test]
+    fn p_of_rows_whose_table_generates_a_column_leaves_it_to_the_server() {
+        let mut st = named();
+        st.columns[3].fill = ColumnFill::Stored("lower(email)".into());
+        let mut h = resolved(Harness::connected(Lang::En), st, false);
+        h.keys("Y");
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![t("1"), t("a@x"), Value::Default]]);
+        let text = said(&mut h);
+        assert!(text.contains("1 new row \u{b7} 1 generated column left to the server"), "{text}");
+    }
+
+    #[test]
+    fn p_of_a_copy_with_a_computed_twice_copied_or_other_tables_column_into_its_table_is_refused() {
+        for (columns, reason) in [
+            (
+                vec![meta_from("id", "int8", true, USERS, 1), computed("email")],
+                "email is computed or of another table, not a column of this table",
+            ),
+            (
+                vec![meta_from("id", "int8", true, USERS, 1), meta_from("id", "int8", true, USERS, 1)],
+                "id is copied twice",
+            ),
+            (
+                vec![meta_from("id", "int8", true, USERS, 1), meta_from("status", "text", false, ORDERS, 3)],
+                "status is computed or of another table, not a column of this table",
+            ),
+        ] {
+            let mut h = ready();
+            h.ctrl('t');
+            shows(&mut h, "SELECT 1", columns, vec![vec![s("1"), s("x")]]);
+            h.keys("Y");
+            h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+            h.app.focus = Focus::Results;
+            let before = revision(&h);
+            h.keys("p");
+            assert_eq!(said(&mut h), format!("Not pasted: {reason}"));
+            assert_eq!(revision(&h), before);
+        }
+        // Computed only (no table): by position.
+        let mut h = ready();
+        h.ctrl('t');
+        shows(&mut h, "SELECT 1", vec![computed("a"), computed("b")], vec![vec![s("9"), s("z@x")]]);
+        h.keys("Y");
+        h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        h.app.focus = Focus::Results;
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![t("9"), t("z@x"), Value::Default]]);
+    }
+
+    #[test]
+    fn p_into_a_join_is_refused_as_read_only() {
+        // A join of users and orders: its rows are no one table's, so it takes no edit.
+        let mut h = Harness::connected(Lang::En);
+        h.db(DbEvent::Keys(Ok(shop_keys())));
+        let join = "SELECT u.id, u.email, o.id, o.status FROM shop.users u JOIN shop.orders o ON o.user_id = u.id";
+        let columns = vec![
+            meta_from("id", "int8", true, USERS, 1),
+            meta_from("email", "text", false, USERS, 2),
+            meta_from("id", "int8", true, ORDERS, 1),
+            meta_from("status", "text", false, ORDERS, 3),
+        ];
+        shows(&mut h, join, columns, vec![vec![s("1"), s("a@x"), s("7"), s("paid")]]);
+        // The orders' rows, copied in another tab.
+        h.ctrl('t');
+        let orders = vec![meta_from("id", "int8", true, ORDERS, 1), meta_from("status", "text", false, ORDERS, 3)];
+        shows(&mut h, "SELECT id, status FROM shop.orders", orders, vec![vec![s("8"), s("new")]]);
+        h.keys("Y");
+        h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        h.app.focus = Focus::Results;
+        h.app.transient = None;
+        h.keys("p");
+        let text = said(&mut h);
+        assert!(text.contains("it reads more than one table"), "{text}");
+        assert!(edits(&h).batch.is_empty());
+    }
+
+    #[test]
+    fn p_of_a_copy_from_another_database_goes_by_position() {
+        let mut h = ready();
+        // The nickname and the email of the users of another database.
+        h.ctrl('t');
+        h.app.tab_mut().context.database = Some("lab".into());
+        let cols = vec![meta_from("nickname", "text", false, USERS, 4), meta_from("email", "text", false, USERS, 2)];
+        shows(&mut h, SQL, cols, vec![vec![s("zed"), s("z@x")]]);
+        h.keys("Y");
+        h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        h.app.focus = Focus::Results;
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![t("zed"), t("z@x"), Value::Default]], "never by its numbers there");
+    }
+
+    #[test]
+    fn p_leaves_identity_always_columns_and_a_copy_of_only_generated_ones_to_the_server() {
+        let mut st = named();
+        st.columns[0].fill = ColumnFill::IdentityAlways;
+        let mut h = resolved(Harness::connected(Lang::En), st.clone(), false);
+        h.keys("Y");
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![Value::Default, t("a@x"), t("ann")]]);
+        assert!(said(&mut h).contains("1 generated column left to the server"));
+        // Every copied column generated (the id alone): a new row of defaults, said so.
+        let mut h = resolved(Harness::connected(Lang::En), st, false);
+        h.keys("hy");
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![Value::Default, Value::Default, Value::Default]]);
+        assert!(said(&mut h).contains("1 generated column left to the server"));
+    }
+
+    #[test]
+    fn p_with_more_rows_on_the_server_is_refused_as_the_next_page_would() {
+        for (paging, reason, short) in [
+            (
+                Paging::Open { since: std::time::Instant::now(), in_block: false },
+                "the result has more rows on the server, and new rows go after the last one: fetch them (n) first",
+                "more rows on the server; n fetches them",
+            ),
+            (
+                Paging::Released,
+                "the result has more rows on the server, not read here; new rows go after the last one",
+                "more rows on the server",
+            ),
+        ] {
+            let mut h = super::resolved(Harness::connected(Lang::En), named(), true);
+            h.app.tab_mut().exec.paging = paging;
+            h.keys("y");
+            h.app.transient = None;
+            let before = revision(&h);
+            h.keys("p");
+            assert_eq!(said(&mut h), format!("Not pasted: {reason}"));
+            assert_eq!(revision(&h), before);
+            h.keys("p");
+            let status = h.status(80, 24);
+            assert!(status.contains(short), "{status}");
+        }
+    }
+}
+
+#[test]
+fn a_header_line_is_skipped_after_the_csv_question_too() {
+    let mut h = ready(Lang::En);
+    paste(&mut h, "email,nickname\nx@x,bo\n");
+    assert_eq!(h.app.key_context(), Ctx::StatusAsk);
+    h.keys("c");
+    assert_eq!(pending(&h, 0, 1), Some(t("x@x")));
+    assert_eq!(pending(&h, 0, 2), Some(t("bo")));
+    assert!(said(&mut h).starts_with("Pasted as CSV \u{b7} Header row skipped \u{b7} Space d V keeps it"));
+}
+
+/// The owner's literal case: a copy with its header line of `simple_application_id` and
+/// `content`, pasted with the terminal's paste: no row of the header.
+#[test]
+fn the_header_of_a_copy_of_simple_application_id_and_content_is_skipped() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.app.run(vec!["SELECT simple_application_id, content FROM shop.users".to_string()]);
+    let id = h.app.tab().exec.query_id;
+    let columns =
+        vec![meta_from("simple_application_id", "int8", true, USERS, 1), meta_from("content", "text", false, USERS, 2)];
+    h.db(DbEvent::Page {
+        id,
+        columns: Some(columns),
+        rows: vec![vec![s("1"), s("a@x")]],
+        more: false,
+        elapsed: Duration::ZERO,
+    });
+    h.app.focus = Focus::Results;
+    h.keys("e");
+    structure(&mut h, named());
+    h.key(KeyCode::Esc);
+    h.app.transient = None;
+    paste(&mut h, "simple_application_id\tcontent\n2\tb@x\n3\tc@x\n");
+    assert_eq!(pending(&h, 0, 0), Some(t("2")));
+    assert_eq!(drafts(&h), vec![vec![t("3"), t("c@x")]]);
+    assert!(h.app.shown_invalid().unwrap().cells.is_empty(), "no invalid row of the header");
+}
