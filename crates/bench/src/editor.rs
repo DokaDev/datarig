@@ -117,8 +117,9 @@ fn values_keys(app: &mut App, term: &mut Terminal<TestBackend>, n: usize, ender:
     for c in format!("{ender} SELECT * FROM shop.orders o WHERE o.status = '").chars() {
         apps::char(app, c);
     }
-    // Past any completion delay the settings offer (the popup's deadline passed).
-    let later = std::time::Duration::from_secs(1);
+    // Just past the popup's deadline (twice the delay), and well before the timers of a second
+    // or more (the workspace's autosave), which are not what is timed here.
+    let later = std::time::Duration::from_millis(app.prefs.completion_delay.millis().max(1) * 2);
     let keys = keystrokes(app, term, n, |a, i| {
         match i % 8 {
             k @ 0..4 => apps::char(a, ['p', 'a', 'i', 'd'][k]),

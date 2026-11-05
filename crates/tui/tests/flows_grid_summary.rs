@@ -164,3 +164,40 @@ fn the_rows_are_read_on_a_worker_and_a_changed_selection_drops_the_answer() {
     h.keys("zz");
     assert_eq!(h.app.grid_summary_jobs(), jobs);
 }
+
+/// A selection whose rows cannot be read from the spill file: the status line says why, not a
+/// summary in its place.
+#[test]
+fn rows_that_cannot_be_read_are_said_not_summed() {
+    use datarig_core::paths::Paths;
+    let state = std::env::temp_dir().join(format!("datarig-flows-grid-summary-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&state);
+    std::fs::create_dir_all(&state).unwrap();
+    let mut cfg = test_db_config();
+    cfg.result_window_rows = 1_000;
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.app.set_paths(Paths { data: None, state: Some(state.clone()) });
+    h.db(DbEvent::Connected);
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    let mut columns = Some(vec![meta("n", "int8", true, false)]);
+    for p in 0..10 {
+        let rows = (p * 500..p * 500 + 500).map(|i| vec![Some(i.to_string())]).collect();
+        let page = DbEvent::Page { id, columns: columns.take(), rows, more: false, elapsed: Duration::from_millis(1) };
+        h.tab_db(0, page);
+    }
+    let Results::Rows(rs) = &h.app.tab().results else { panic!("rows") };
+    assert!(rs.rows.spilled() > 0);
+    let path = rs.rows.spill_path().expect("spilled").to_path_buf();
+    std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(0).unwrap();
+    h.key(KeyCode::Tab);
+    h.keys("vG");
+    h.app.pump_grid_search(Duration::from_secs(10));
+    // Past the "End of the page" notice `G` flashed.
+    h.app.transient = None;
+    let line = h.status(W, H);
+    assert!(line.contains("Could not read the result's rows"), "{line}");
+    assert!(!line.contains(" × "), "no summary over it: {line}");
+    assert_eq!(h.app.selection_summary(), None);
+    let _ = std::fs::remove_dir_all(&state);
+}

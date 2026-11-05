@@ -394,3 +394,21 @@ fn a_file_with_windows_line_breaks_or_a_bom_keeps_them() {
     let new = d.text("bom");
     assert!(new.starts_with(bom) && new.matches("[colors]").count() == 1, "{new}");
 }
+
+#[test]
+fn quoted_table_names_get_the_lines_in_their_own_table() {
+    let d = Dir::new("update-quoted");
+    copy_theme(&d.0, "dark", "quoted", Background::Unknown).unwrap();
+    let old = without(&d.text("quoted"), &["fg_dim", "grid_cursor_row"])
+        .replace("\n[colors]\n", "\n[\"colors\"]\n")
+        .replace("\n[styles]\n", "\n['styles']  # quoted\n");
+    let path = put(&d, "quoted", &old);
+    assert_eq!(update_theme(&d.0, "quoted", Background::Unknown), Ok(Updated::Added { path, count: 2 }));
+    let new = d.text("quoted");
+    only_added(&old, &new, &[]);
+    assert!(!new.contains("\n[colors]") && !new.contains("\n[styles]"), "no second table: {new}");
+    let colors_at = new.find("[\"colors\"]").unwrap();
+    let styles_at = new.find("['styles']").unwrap();
+    let fg_dim = new.find("# fg_dim = ").unwrap();
+    assert!(colors_at < fg_dim && fg_dim < styles_at && new.find("# grid_cursor_row = ").unwrap() > styles_at);
+}

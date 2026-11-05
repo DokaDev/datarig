@@ -548,3 +548,17 @@ fn a_theme_file_that_does_not_list_every_token_is_said_once_and_theme_update_add
     h.command("set theme=mine");
     assert_eq!(flashed(&h).0, "Theme: mine", "once");
 }
+
+/// Two config folders with a theme file of the same name, missing the same tokens: each file is
+/// said once (the notice is about the file, not its name).
+#[test]
+fn a_theme_of_the_same_name_in_another_config_folder_is_said_too() {
+    let a = Scratch::new("unlisted-a", "theme = \"mine\"\n", &[("mine", "extends = \"dark\"\n")]);
+    let b = Scratch::new("unlisted-b", "theme = \"mine\"\n", &[("mine", "extends = \"dark\"\n")]);
+    let state = a.dir.join("state");
+    let said = |h: &Harness| notices(h).iter().any(|(t, _)| t.contains("does not list"));
+    assert!(said(&launched_with_state(&a.config(), &state)), "the first folder's file");
+    assert!(said(&launched_with_state(&b.config(), &state)), "the other folder's file, same name");
+    assert!(!said(&launched_with_state(&a.config(), &state)), "each once");
+    assert!(!said(&launched_with_state(&b.config(), &state)));
+}

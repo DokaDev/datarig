@@ -162,11 +162,14 @@ impl App {
         if self.theme_problem.is_some() {
             return None;
         }
-        let missing = theme::unlisted_of(&self.themes_dir()?, &self.theme_name)?;
+        let dir = self.themes_dir()?;
+        let missing = theme::unlisted_of(&dir, &self.theme_name)?;
         if missing.is_empty() {
             return None;
         }
-        let mut parts = vec!["theme.unlisted", self.theme_name.as_str()];
+        // The file, not only its name: themes of another config folder are other files.
+        let file = datarig_core::theme::path(&dir, &self.theme_name).display().to_string();
+        let mut parts = vec!["theme.unlisted", file.as_str()];
         parts.extend(missing.iter().copied());
         let id = shown::id(&parts);
         let record = self.paths.state.as_ref().map(|s| s.join(shown::FILE));

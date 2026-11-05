@@ -179,7 +179,10 @@ fn insert_blocks(text: &str, colors: &str, styles: &str, nl: &str) -> String {
         let inner = t.strip_prefix('[').filter(|r| !r.starts_with('['))?;
         let (name, rest) = inner.split_once(']')?;
         let rest = rest.trim_start();
-        (rest.is_empty() || rest.starts_with('#')).then(|| name.trim().to_string())
+        // A quoted name (`["colors"]`, `['styles']`) is that name.
+        let name = name.trim();
+        let name = ['"', '\''].iter().find_map(|q| name.strip_prefix(*q)?.strip_suffix(*q)).unwrap_or(name);
+        (rest.is_empty() || rest.starts_with('#')).then(|| name.to_string())
     };
     let end_of = |name: &str| -> Option<usize> {
         let start = lines.iter().position(|l| table(l).as_deref() == Some(name))?;
