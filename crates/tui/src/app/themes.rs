@@ -11,10 +11,16 @@
 //! `:theme copy <from> <name>`, `:theme new <name>` and `c` on the settings screen's theme row
 //! write a new theme file ([`crate::theme::copy_theme`], [`crate::theme::new_theme`]), then use
 //! it like `:set theme=<name>` and say where the file is.
+//!
+//! A theme file that does not list every token (one written before some existed) is said once,
+//! at launch or when it is chosen, with how many and that `:theme update` adds them
+//! ([`crate::theme::update_theme`]); said again only when the tokens it does not list change.
+//! What was said is kept in `<state>/shown.toml` as an opaque id.
 
 use super::chooser::{NameInput, NamePurpose};
 use super::*;
-use crate::theme::{self, AuthorError, Background, Theme};
+use crate::theme::{self, AuthorError, Background, Theme, Updated};
+use datarig_core::shown;
 use datarig_core::theme::{Problem, ThemeError};
 
 /// The theme row of the settings screen: the names found when the screen opened, and the theme
@@ -143,7 +149,52 @@ impl App {
         let msg =
             Msg::SettingChanged { name: self.i18n.label(Label::SettingTheme).to_string(), value: name.to_string() };
         let saved = self.switch_theme(name)?;
-        self.flash(saved.unwrap_or(Notice::new(msg, Level::Info)));
+        let said = saved.or_else(|| self.theme_unlisted_notice()).unwrap_or(Notice::new(msg, Level::Info));
+        self.flash(said);
+        Ok(())
+    }
+
+    /// The theme drawn is a file that does not list every token: what says how many and that
+    /// `:theme update` adds them, once (again only when the tokens it does not list change).
+    /// It is kept as shown where this instance may write; a record that cannot be read or
+    /// written does not keep it from being said.
+    pub(super) fn theme_unlisted_notice(&mut self) -> Option<Notice> {
+        if self.theme_problem.is_some() {
+            return None;
+        }
+        let missing = theme::unlisted_of(&self.themes_dir()?, &self.theme_name)?;
+        if missing.is_empty() {
+            return None;
+        }
+        let mut parts = vec!["theme.unlisted", self.theme_name.as_str()];
+        parts.extend(missing.iter().copied());
+        let id = shown::id(&parts);
+        let record = self.paths.state.as_ref().map(|s| s.join(shown::FILE));
+        if record.as_deref().is_some_and(|f| shown::load(f).is_ok_and(|ids| ids.contains(&id))) {
+            return None;
+        }
+        if let Some(path) = self.state_dir().map(|s| s.join(shown::FILE))
+            && let Err(e) = shown::add(&path, &id)
+        {
+            datarig_core::fault::ErrorLog::new(self.paths.errors_log())
+                .record("shown.save_failed", &datarig_core::fault::Fault::io_at(&e, &path));
+        }
+        let msg = Msg::ThemeUnlisted { name: self.theme_name.clone(), count: missing.len() as u64 };
+        Some(Notice::new(msg, Level::Info))
+    }
+
+    /// `:theme update [<name>]`: add to theme file `name` (none: the current theme) the tokens it
+    /// does not list, commented out with the value each takes now, and say how many and where.
+    pub fn update_theme(&mut self, name: Option<&str>) -> Result<(), AuthorError> {
+        let dir = self.themes_dir().ok_or(AuthorError::NoDir)?;
+        let name = name.map_or_else(|| self.theme_name.clone(), str::to_string);
+        let msg = match theme::update_theme(&dir, &name, self.background)? {
+            Updated::Added { path, count } => {
+                Msg::ThemeUpdated { name, path: path.display().to_string(), count: count as u64 }
+            }
+            Updated::Complete { path } => Msg::ThemeUpdateComplete { path: path.display().to_string() },
+        };
+        self.flash(Notice::new(msg, Level::Success));
         Ok(())
     }
 
@@ -209,6 +260,8 @@ impl App {
             AuthorError::BadName(_) => Msg::Label(Label::ThemeAuthorNameInvalid),
             AuthorError::BuiltinName(_) => Msg::Label(Label::ThemeAuthorNameBuiltin),
             AuthorError::NoDir => Msg::Label(Label::ThemeAuthorNoDir),
+            AuthorError::NotAFile(name) => Msg::ThemeUpdateBuiltin { name: name.clone() },
+            AuthorError::Unchanged(path) => Msg::ThemeUpdateUnchanged { path: shown(path) },
             AuthorError::Source(e) => theme_error_msg(&self.i18n, e),
             AuthorError::Unwritable { token } => Msg::ThemeAuthorUnwritable { token: token.to_string() },
             AuthorError::Exists(path) => Msg::ThemeAuthorExists { path: shown(path) },

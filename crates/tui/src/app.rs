@@ -1383,6 +1383,10 @@ impl App {
         }
         self.probe_keychain();
         self.open_workspace();
+        // After the workspace: a second instance does not keep it as shown.
+        if let Some(n) = self.theme_unlisted_notice() {
+            self.notices.push(n);
+        }
         if let (true, Some(tx), Some(input)) = (background, self.tx.clone(), migration) {
             self.migrating = true;
             self.overlays.push(Overlay::Busy(Busy { title: Label::MigrateTitle, text: Label::MigrateRunning }));

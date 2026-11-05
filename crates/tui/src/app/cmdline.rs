@@ -773,6 +773,7 @@ impl App {
                 match command::parse_theme(arg) {
                     Some(ThemeCommand::Copy { from, name }) => self.copy_theme(from, name),
                     Some(ThemeCommand::New { name }) => self.new_theme(name),
+                    Some(ThemeCommand::Update { name }) => self.update_theme(name),
                     None => return err(Msg::Label(Label::CommandsErrorThemeUsage)),
                 }
                 .map_err(|e| Notice::new(self.author_error_msg(&e), Level::Error))?;

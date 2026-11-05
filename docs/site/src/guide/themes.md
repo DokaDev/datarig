@@ -71,3 +71,19 @@ To start a theme file, let datarig write it:
 None of them replaces a file: a taken name, a built-in theme's name, a Windows device name
 (`con`, `nul`, `com1`, …) or a name that is not letters, digits, `-` and `_` is refused. The new
 theme is then used and saved, and its path is shown.
+
+### Tokens added since your file was written
+
+When a version of datarig adds tokens, a theme file written before does not list them: they
+take their value from the theme it extends (the grid's cursor tints are made from the file's
+own colors). The first time such a file is used, at launch or when you choose it, the status
+line says how many tokens it does not list. It says so once, and again only when the tokens it
+does not list change (a later version adds more, say).
+
+`:theme update` (the current theme) or `:theme update <name>` adds them to the file, each under
+its description and commented out with the value it takes now, at the end of its section
+(the colors or the styles table, added when the file has none). Nothing the file sets changes: no
+line of it is touched, and nothing is written unless the file reads exactly as before. A
+built-in theme, a file with an error, one that cannot be written, or one written with
+`colors.<token> = …` keys instead of a colors table is refused and left as it is. A file
+that lists every token already says so.

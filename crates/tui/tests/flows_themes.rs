@@ -278,7 +278,7 @@ fn theme_copy_writes_every_token_uses_the_copy_and_never_overwrites() {
     h.ctrl('k');
     h.type_text("theme ");
     let rows: Vec<String> = h.app.command_rows().iter().map(|r| r.name.to_string()).collect();
-    assert_eq!(rows, ["copy", "new"]);
+    assert_eq!(rows, ["copy", "new", "update"]);
     h.key(KeyCode::Enter);
     assert_eq!(h.cmdline().unwrap().input.text(), "theme copy ");
     let rows: Vec<String> = h.app.command_rows().iter().map(|r| r.name.to_string()).collect();
@@ -313,7 +313,7 @@ fn theme_copy_writes_every_token_uses_the_copy_and_never_overwrites() {
         ("theme copy dark Dark", "That is the name of a built-in theme"),
         ("theme copy dark my.theme", "A theme name is ASCII letters, digits, - and _"),
         ("theme copy solarized x", "No theme named “solarized”"),
-        ("theme edit x", "Usage: :theme copy <from> <name>, or :theme new <name>"),
+        ("theme edit x", "Usage: :theme copy <from> <name>, :theme new <name>, or :theme update [<name>]"),
     ] {
         h.command(cmd);
         assert!(cmd_error(&h).starts_with(said), "{cmd}: {}", cmd_error(&h));
@@ -468,4 +468,83 @@ fn the_terminals_background_shows_through_and_dialogs_keep_their_surface() {
     assert!(!s.text().contains("background"), "theme is the default: the key goes");
     let back = painted(&mut h);
     assert!(back.contains(&th.bg) && resets(&back) == resets(&before), "painted again");
+}
+
+/// The startup flow with the state directory `state` (where what was shown once is kept).
+fn launched_with_state(cfg: &Config, state: &std::path::Path) -> Harness {
+    let (mut app, clock) = new_app_with_clock(cfg, Lang::En);
+    let store = Arc::new(MemoryStore::new());
+    app.set_secret_store(store.clone() as Arc<dyn datarig_core::secret::SecretStore>);
+    app.set_paths(datarig_core::paths::Paths { data: None, state: Some(state.to_path_buf()) });
+    app.launch(Startup::Normal);
+    let driver = FakeDriver::default();
+    let mut h = Harness { app, cancelled: driver.any_cancel.clone(), driver, store, clock };
+    if h.form_open() {
+        h.key(KeyCode::Esc);
+    }
+    h
+}
+
+/// `text` without the lines of `tokens` (a key and the description above it).
+fn without_tokens(text: &str, tokens: &[&str]) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let key = |l: &str| tokens.iter().any(|t| l.starts_with(&format!("{t} = ")));
+    let kept: Vec<&str> = (0..lines.len())
+        .filter(|&i| !key(lines[i]) && !lines.get(i + 1).is_some_and(|n| key(n)))
+        .map(|i| lines[i])
+        .collect();
+    kept.join("\n") + "\n"
+}
+
+#[test]
+fn a_theme_file_that_does_not_list_every_token_is_said_once_and_theme_update_adds_them() {
+    let s = Scratch::new("unlisted", "theme = \"mine\"\n", &[]);
+    let themes = s.dir.join("themes");
+    let _ = std::fs::remove_file(s.theme_file("mine"));
+    theme::copy_theme(&themes, "dark", "mine", Background::Unknown).unwrap();
+    let full = std::fs::read_to_string(s.theme_file("mine")).unwrap();
+    // A copy from before the grid's cursor tints.
+    let old = without_tokens(&full, &["grid_cursor_row", "grid_cursor_header"]);
+    std::fs::write(s.theme_file("mine"), &old).unwrap();
+    let state = s.dir.join("state");
+    let said = "Theme mine does not list 2 tokens of this version: :theme update adds them to the file, \
+                commented out";
+    let h = launched_with_state(&s.config(), &state);
+    assert!(notices(&h).contains(&(said.to_string(), Level::Info)), "{:?}", notices(&h));
+    let drawn = (*h.app.theme).clone();
+    drop(h);
+    // Said once: the next launch does not.
+    let mut h = launched_with_state(&s.config(), &state);
+    assert!(!notices(&h).iter().any(|(t, _)| t.contains("does not list")), "{:?}", notices(&h));
+    let kept = std::fs::read_to_string(state.join(datarig_core::shown::FILE)).unwrap();
+    assert!(!kept.contains("mine"), "an opaque id, no name: {kept}");
+    // `:theme update`: the current theme's file.
+    h.command("theme update");
+    assert!(h.overlay_kind().is_none());
+    let (text, level) = flashed(&h);
+    assert_eq!(level, Level::Success);
+    let path = s.theme_file("mine").display().to_string();
+    assert_eq!(text, format!("Added 2 tokens to {path}, commented out with their values now; mine draws as before"));
+    let new = std::fs::read_to_string(s.theme_file("mine")).unwrap();
+    assert!(new.starts_with(&old[..old.find("\n[styles]").unwrap()]), "the lines before stay");
+    assert!(new.contains("\n# grid_cursor_row = ") && new.contains("\n# grid_cursor_header = "), "{new}");
+    assert_eq!(h.app.resolve_theme("mine").unwrap(), drawn, "drawn as before");
+    h.command("theme update mine");
+    assert_eq!(flashed(&h).0, format!("{path} lists every token already: nothing was added"));
+    h.command("theme update dark");
+    assert_eq!(cmd_error(&h), "dark is a built-in theme, not a file: nothing to update");
+    h.key(KeyCode::Esc);
+    // Another token not listed (a later version, say): said again, when the theme is chosen.
+    std::fs::write(s.theme_file("mine"), without_tokens(&new, &["fg_dim"])).unwrap();
+    h.command("set theme=dark");
+    h.command("set theme=mine");
+    let (text, level) = flashed(&h);
+    assert_eq!(level, Level::Info);
+    assert_eq!(
+        text,
+        "Theme mine does not list 1 token of this version: :theme update adds it to the file, commented out"
+    );
+    h.command("set theme=dark");
+    h.command("set theme=mine");
+    assert_eq!(flashed(&h).0, "Theme: mine", "once");
 }

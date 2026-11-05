@@ -245,3 +245,152 @@ fn the_example_of_the_doc_is_a_valid_theme_file() {
         assert!(doc.contains(&format!("| `{token}` | {about} |")), "{token}");
     }
 }
+
+/// Theme file `name` of `d` with `text`.
+fn put(d: &Dir, name: &str, text: &str) -> PathBuf {
+    std::fs::create_dir_all(&d.0).unwrap();
+    let path = datarig_core::theme::path(&d.0, name);
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+/// `text` without the lines of `tokens` (a key line and the description above it), as a file
+/// written before those tokens existed.
+fn without(text: &str, tokens: &[&str]) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        let key = |l: &str| tokens.iter().any(|t| l.starts_with(&format!("{t} = ")));
+        if key(l) || lines.get(i + 1).is_some_and(|n| key(n)) {
+            continue;
+        }
+        out.push(*l);
+    }
+    out.join("\n") + "\n"
+}
+
+/// Every line of `old` is in `new`, unchanged and in order; every other line of `new` is a
+/// comment, blank, or one of `headers`.
+fn only_added(old: &str, new: &str, headers: &[&str]) {
+    let mut added = Vec::new();
+    let mut old_lines = old.lines().peekable();
+    for l in new.lines() {
+        if old_lines.peek() == Some(&l) {
+            old_lines.next();
+        } else {
+            added.push(l);
+        }
+    }
+    assert_eq!(old_lines.next(), None, "a line of the file changed or went:\n{new}");
+    for l in added {
+        assert!(l.is_empty() || l.starts_with("# ") || headers.contains(&l), "added {l:?}");
+    }
+}
+
+#[test]
+fn an_old_copy_gets_what_it_does_not_list_commented_out_at_the_end_of_each_section() {
+    let d = Dir::new("update-old");
+    copy_theme(&d.0, "dark", "mine", Background::Unknown).unwrap();
+    let old = without(&d.text("mine"), &["fg_dim", "grid_cursor_row", "grid_cursor_header"]);
+    let path = put(&d, "mine", &old);
+    let before = resolve("mine", Background::Unknown, Some(&d.0)).unwrap();
+    let spec = datarig_core::theme::parse(&old, TOKENS).unwrap();
+    assert_eq!(unlisted(&old, &spec), (vec!["fg_dim"], vec!["grid_cursor_row", "grid_cursor_header"]));
+    assert_eq!(update_theme(&d.0, "mine", Background::Unknown), Ok(Updated::Added { path: path.clone(), count: 3 }));
+    let new = d.text("mine");
+    only_added(&old, &new, &[]);
+    // Each where it is set when uncommented: the color in [colors], the styles in [styles].
+    let colors_at = new.find("[colors]").unwrap();
+    let styles_at = new.find("[styles]").unwrap();
+    let fg_dim = new.find("# fg_dim = ").unwrap();
+    assert!(colors_at < fg_dim && fg_dim < styles_at, "{new}");
+    assert!(new.find("# grid_cursor_row = ").unwrap() > styles_at, "{new}");
+    // With the value it takes now, and the description above.
+    assert!(new.contains(&format!("# fg_dim = {}\n", color_text(DARK.fg_dim).unwrap())), "{new}");
+    // Nothing drawn changes; everything is listed now; a second update adds nothing.
+    assert_eq!(resolve("mine", Background::Unknown, Some(&d.0)).unwrap(), before);
+    let spec = datarig_core::theme::parse(&new, TOKENS).unwrap();
+    assert_eq!(unlisted(&new, &spec), (Vec::new(), Vec::new()));
+    assert_eq!(update_theme(&d.0, "mine", Background::Unknown), Ok(Updated::Complete { path }));
+    assert_eq!(d.text("mine"), new);
+    // Uncommented, a line added is a valid key of its section.
+    let set = new.replacen("# fg_dim = ", "fg_dim = ", 1).replacen("# grid_cursor_row = ", "grid_cursor_row = ", 1);
+    let spec = datarig_core::theme::parse(&set, TOKENS).unwrap();
+    assert!(spec.colors.iter().any(|c| c.0 == "fg_dim") && spec.styles.iter().any(|s| s.0 == "grid_cursor_row"));
+}
+
+#[test]
+fn a_short_file_gets_the_sections_it_lacks_and_a_new_file_lists_everything() {
+    let d = Dir::new("update-short");
+    let old = "# mine\nextends = \"light\"";
+    put(&d, "short", old);
+    let Ok(Updated::Added { count, .. }) = update_theme(&d.0, "short", Background::Unknown) else { panic!() };
+    assert_eq!(count, COLOR_TOKENS.len() + STYLE_TOKENS.len());
+    let new = d.text("short");
+    only_added(old, &new, &["[colors]", "[styles]"]);
+    assert!(new.find("[colors]").unwrap() < new.find("[styles]").unwrap(), "{new}");
+    let spec = datarig_core::theme::parse(&new, TOKENS).unwrap();
+    assert!(spec.colors.is_empty() && spec.styles.is_empty());
+    // The doc's example: only what it does not set.
+    put(&d, "example", DOC_EXAMPLE);
+    let Ok(Updated::Added { count, .. }) = update_theme(&d.0, "example", Background::Unknown) else { panic!() };
+    assert_eq!(count, COLOR_TOKENS.len() + STYLE_TOKENS.len() - 4);
+    only_added(DOC_EXAMPLE, &d.text("example"), &[]);
+    // `:theme new` lists every token commented out already.
+    let path = new_theme(&d.0, "fresh", "dark", Background::Unknown).unwrap();
+    assert_eq!(unlisted_of(&d.0, "fresh"), Some(Vec::new()));
+    assert_eq!(update_theme(&d.0, "fresh", Background::Unknown), Ok(Updated::Complete { path }));
+}
+
+#[test]
+fn an_update_that_cannot_be_done_safely_leaves_the_file_as_it_is() {
+    let d = Dir::new("update-refused");
+    assert_eq!(update_theme(&d.0, "Dark", Background::Unknown), Err(AuthorError::NotAFile("Dark".into())));
+    assert!(matches!(
+        update_theme(&d.0, "none", Background::Unknown),
+        Err(AuthorError::Source(ThemeError::Unknown { .. }))
+    ));
+    assert_eq!(update_theme(&d.0, "../x", Background::Unknown), Err(AuthorError::BadName("../x".into())));
+    // A file with an error: said, never touched.
+    let broken = "extends = \"dark\"\n[colors]\nbg = \"nope\"\n";
+    put(&d, "broken", broken);
+    assert!(matches!(
+        update_theme(&d.0, "broken", Background::Unknown),
+        Err(AuthorError::Source(ThemeError::File { line: Some(3), .. }))
+    ));
+    assert_eq!(d.text("broken"), broken);
+    assert_eq!(unlisted_of(&d.0, "broken"), None);
+    // Colors as dotted keys: a [colors] table added would not read; refused.
+    let dotted = "extends = \"dark\"\ncolors.bg = \"#000000\"\n";
+    let path = put(&d, "dotted", dotted);
+    assert_eq!(update_theme(&d.0, "dotted", Background::Unknown), Err(AuthorError::Unchanged(path)));
+    assert_eq!(d.text("dotted"), dotted);
+    // A file that may not be written is not replaced.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let path = put(&d, "locked", "extends = \"dark\"\n");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        assert!(matches!(update_theme(&d.0, "locked", Background::Unknown), Err(AuthorError::Write { .. })));
+        assert_eq!(d.text("locked"), "extends = \"dark\"\n");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+}
+
+#[test]
+fn a_file_with_windows_line_breaks_or_a_bom_keeps_them() {
+    let d = Dir::new("update-crlf");
+    copy_theme(&d.0, "dark", "win", Background::Unknown).unwrap();
+    let old = without(&d.text("win"), &["fg_dim", "grid_cursor_row"]).replace('\n', "\r\n");
+    put(&d, "win", &old);
+    assert!(matches!(update_theme(&d.0, "win", Background::Unknown), Ok(Updated::Added { count: 2, .. })));
+    let new = d.text("win");
+    assert!(!new.replace("\r\n", "").contains('\n'), "only CRLF line breaks");
+    only_added(&old.replace("\r\n", "\n"), &new.replace("\r\n", "\n"), &[]);
+    // A BOM before the first table: its header is still found.
+    let bom = "\u{feff}[colors]\naccent = \"#89b4fa\"\n";
+    put(&d, "bom", bom);
+    assert!(matches!(update_theme(&d.0, "bom", Background::Unknown), Ok(Updated::Added { .. })));
+    let new = d.text("bom");
+    assert!(new.starts_with(bom) && new.matches("[colors]").count() == 1, "{new}");
+}

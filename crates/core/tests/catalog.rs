@@ -354,6 +354,8 @@ const SAME_IN_KO: &[&str] = &[
     "theme.file_error_no_line",
     // The word typed after `:explain`, as SQL spells it.
     "commands.arg.analyze",
+    // The words typed after `:theme`.
+    "commands.arg.theme",
 ];
 
 #[test]

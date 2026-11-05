@@ -3,14 +3,20 @@
 //! be filled in. Each key has the description of its token above it ([`COLOR_ABOUT`],
 //! [`STYLE_ABOUT`]), the same text `docs/themes.md` is generated from ([`doc`]).
 //!
-//! A file is created, never replaced ([`datarig_core::fsutil::create_new`]): a name that is
-//! taken is an error, whatever the file holds.
+//! Those create a file, never replace one ([`datarig_core::fsutil::create_new`]): a name that
+//! is taken is an error, whatever the file holds.
+//!
+//! `:theme update` adds to a theme file the tokens it does not list (neither set nor commented
+//! out, as a file written before they existed), commented out with the value each takes now,
+//! at the end of their section, in the file's own line breaks. No line of the file changes: the
+//! new file must read exactly as the old one did, else nothing is written.
 
 use super::{
-    ANSI, Background, COLOR_ABOUT, FAMILIES, NAMES, STYLE_ABOUT, Theme, ThemeError, builtin, color_of, modifier,
-    resolve_with_base, style_of,
+    ANSI, Background, COLOR_ABOUT, FAMILIES, NAMES, STYLE_ABOUT, TOKENS, Theme, ThemeError, builtin, color_of,
+    modifier, resolve_with_base, spec_theme, style_of,
 };
 use datarig_core::fault::Fault;
+use datarig_core::theme::ThemeSpec;
 use datarig_core::theme::{ANSI_NAMES, ModifierSpec};
 use ratatui::style::{Color, Modifier, Style};
 use std::path::{Path, PathBuf};
@@ -33,6 +39,175 @@ pub enum AuthorError {
     Write { path: PathBuf, fault: Fault },
     /// There is no themes folder: no config file is used.
     NoDir,
+    /// A built-in theme: there is no file to update.
+    NotAFile(String),
+    /// The file changed while it was updated, or the result would not read as it did: it is
+    /// left as it is.
+    Unchanged(PathBuf),
+}
+
+/// What `:theme update` did to a theme file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Updated {
+    /// `count` tokens were added, commented out.
+    Added { path: PathBuf, count: usize },
+    /// The file lists every token already.
+    Complete { path: PathBuf },
+}
+
+/// The color and style tokens the theme file `text` (read as `spec`) does not list: neither set
+/// nor in a commented-out `# <token> = …` line.
+pub fn unlisted(text: &str, spec: &ThemeSpec) -> (Vec<&'static str>, Vec<&'static str>) {
+    let commented: Vec<&str> = text
+        .lines()
+        .filter_map(|l| {
+            let rest = l.trim_start_matches('\u{feff}').trim_start().strip_prefix('#')?.trim_start();
+            let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(rest.len());
+            rest[end..].trim_start().starts_with('=').then(|| &rest[..end])
+        })
+        .collect();
+    let set: Vec<&str> =
+        spec.colors.iter().map(|c| c.0.as_str()).chain(spec.styles.iter().map(|s| s.0.as_str())).collect();
+    let listed = |t: &&str| set.contains(t) || commented.contains(t);
+    let colors = COLOR_ABOUT.iter().map(|(t, _)| *t).filter(|t| !listed(t));
+    let styles = STYLE_ABOUT.iter().map(|(t, _)| *t).filter(|t| !listed(t));
+    (colors.collect(), styles.collect())
+}
+
+/// The tokens theme file `name` in `dir` does not list ([`unlisted`]); `None` for a built-in
+/// theme, or a file that cannot be read or has an error.
+pub fn unlisted_of(dir: &Path, name: &str) -> Option<Vec<&'static str>> {
+    if NAMES.contains(&name) || !datarig_core::theme::valid_name(name) {
+        return None;
+    }
+    let text = std::fs::read_to_string(datarig_core::theme::path(dir, name)).ok()?;
+    let spec = datarig_core::theme::parse(&text, TOKENS).ok()?;
+    let (mut colors, styles) = unlisted(&text, &spec);
+    colors.extend(styles);
+    Some(colors)
+}
+
+/// `:theme update <name>`: add to `<dir>/<name>.toml` every token it does not list, commented out
+/// with the value it takes now (for `background`), each under its description at the end of its
+/// section (`[colors]`, `[styles]`; a missing one is added at the end). Refused, the file left as
+/// it is, when it cannot be read, has an error, cannot be written, changes meanwhile, or would
+/// not read exactly as it did.
+pub fn update_theme(dir: &Path, name: &str, background: Background) -> Result<Updated, AuthorError> {
+    if NAMES.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+        return Err(AuthorError::NotAFile(name.to_string()));
+    }
+    if !datarig_core::theme::valid_name(name) {
+        return Err(AuthorError::BadName(name.to_string()));
+    }
+    let path = datarig_core::theme::path(dir, name);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(AuthorError::Source(ThemeError::Unknown {
+                name: name.to_string(),
+                dir: Some(dir.to_path_buf()),
+            }));
+        }
+        Err(e) => return Err(AuthorError::Source(ThemeError::Read { fault: Fault::io_at(&e, &path), path })),
+    };
+    let spec = datarig_core::theme::parse(&text, TOKENS)
+        .map_err(|(line, problem)| AuthorError::Source(ThemeError::File { path: path.clone(), line, problem }))?;
+    let (th, _) = spec_theme(&spec, &path, background).map_err(AuthorError::Source)?;
+    let (colors, styles) = unlisted(&text, &spec);
+    if colors.is_empty() && styles.is_empty() {
+        return Ok(Updated::Complete { path });
+    }
+    let mut blocks = [String::new(), String::new()];
+    for (block, (tokens, about, is_color)) in
+        blocks.iter_mut().zip([(&colors, COLOR_ABOUT, true), (&styles, STYLE_ABOUT, false)])
+    {
+        if tokens.is_empty() {
+            continue;
+        }
+        block.push_str(
+            "\n# Added by :theme update: tokens this file did not list, with the value each takes now,\n\
+             # commented out. Remove the \"# \" in front of a key to set it.\n",
+        );
+        for &token in tokens {
+            let value = match is_color {
+                true => color_of(&th, token).and_then(color_text),
+                false => style_of(&th, token).and_then(style_text),
+            };
+            let value = value.ok_or(AuthorError::Unwritable { token })?;
+            let about = about.iter().find(|(t, _)| *t == token).map_or("", |(_, a)| a);
+            block.push_str(&format!("\n# {about}\n# {token} = {value}\n"));
+        }
+    }
+    // In the file's own line breaks.
+    let nl = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let new = insert_blocks(&text, &blocks[0].replace('\n', nl), &blocks[1].replace('\n', nl), nl);
+    // It reads as the file did, and lists every token now.
+    let same = datarig_core::theme::parse(&new, TOKENS).is_ok_and(|n| {
+        n.colors == spec.colors
+            && n.styles == spec.styles
+            && n.extends.as_ref().map(|e| &e.0) == spec.extends.as_ref().map(|e| &e.0)
+            && unlisted(&new, &n) == (Vec::new(), Vec::new())
+    });
+    if !same {
+        return Err(AuthorError::Unchanged(path));
+    }
+    // Writable as it is (a read-only file is not replaced), and as it was read.
+    let write_err =
+        |e: std::io::Error, path: &Path| AuthorError::Write { fault: Fault::io_at(&e, path), path: path.into() };
+    std::fs::OpenOptions::new().append(true).open(&path).map_err(|e| write_err(e, &path))?;
+    if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
+        return Err(AuthorError::Unchanged(path));
+    }
+    datarig_core::fsutil::atomic_write(&path, new.as_bytes()).map_err(|e| write_err(e, &path))?;
+    Ok(Updated::Added { path, count: colors.len() + styles.len() })
+}
+
+/// `text` with `colors` at the end of its `[colors]` table and `styles` at the end of its
+/// `[styles]` (before the blank lines in front of the next table); a table it does not have is
+/// added at the end with the lines. The lines of `text` stay as they are, in order (a last
+/// line gets its line break, `nl`).
+fn insert_blocks(text: &str, colors: &str, styles: &str, nl: &str) -> String {
+    let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_string).collect();
+    if let Some(last) = lines.last_mut()
+        && !last.ends_with('\n')
+    {
+        last.push_str(nl);
+    }
+    // The table a line opens: `[name]` with nothing but a comment after it.
+    let table = |l: &str| {
+        let t = l.trim_start_matches('\u{feff}').trim();
+        let inner = t.strip_prefix('[').filter(|r| !r.starts_with('['))?;
+        let (name, rest) = inner.split_once(']')?;
+        let rest = rest.trim_start();
+        (rest.is_empty() || rest.starts_with('#')).then(|| name.trim().to_string())
+    };
+    let end_of = |name: &str| -> Option<usize> {
+        let start = lines.iter().position(|l| table(l).as_deref() == Some(name))?;
+        let mut end = (start + 1..lines.len()).find(|&i| table(&lines[i]).is_some()).unwrap_or(lines.len());
+        while end > start + 1 && lines[end - 1].trim().is_empty() {
+            end -= 1;
+        }
+        Some(end)
+    };
+    let mut at: Vec<(usize, usize, String)> = Vec::new();
+    let mut tail = String::new();
+    for (order, (name, block)) in [("colors", colors), ("styles", styles)].into_iter().enumerate() {
+        if block.is_empty() {
+            continue;
+        }
+        match end_of(name) {
+            Some(end) => at.push((end, order, block.to_string())),
+            None => tail.push_str(&format!("{nl}[{name}]{nl}{block}")),
+        }
+    }
+    // From the last place up, so the places before stay where they are.
+    at.sort_by(|a, b| (b.0, b.1).cmp(&(a.0, a.1)));
+    for (end, _, block) in at {
+        lines.insert(end, block);
+    }
+    let mut out = lines.concat();
+    out.push_str(&tail);
+    out
 }
 
 /// A name `:theme copy` and `:theme new` may write: a [`datarig_core::theme::valid_name`]
@@ -233,7 +408,13 @@ pub fn doc() -> String {
          Each writes a new file and never replaces one: a name that is taken, that is not a valid file name, \
          that is a built-in theme's or a Windows device name such as `nul` (ignoring case) is refused. The themes folder is created when it is \
          missing. Then datarig draws with the new theme, saves `theme = \"<name>\"` to the config file and \
-         shows the file's path.\n\n",
+         shows the file's path.\n\n\
+         `:theme update [<name>]` adds to the theme file `<name>` (the current theme without one) the tokens \
+         it does not list, such as tokens added after it was written: each under its description at the end \
+         of its section, commented out with the value it takes now. No line of the file changes, and the file \
+         is replaced only when it reads exactly as before; the theme drawn and the config file stay as they \
+         are. A theme file that does not list every token is said once in the status line when it is used, \
+         and again only when the tokens it does not list change.\n\n",
     );
     let table = |s: &mut String, title: &str, kind: &str, rows: &[(&str, &str)]| {
         s.push_str(&format!("## {title}\n\n| Token | {kind} |\n|---|---|\n"));

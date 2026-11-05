@@ -36,6 +36,8 @@ syn_comment = { fg = "bright-black", modifiers = ["italic"] }
 
 Each writes a new file and never replaces one: a name that is taken, that is not a valid file name, that is a built-in theme's or a Windows device name such as `nul` (ignoring case) is refused. The themes folder is created when it is missing. Then datarig draws with the new theme, saves `theme = "<name>"` to the config file and shows the file's path.
 
+`:theme update [<name>]` adds to the theme file `<name>` (the current theme without one) the tokens it does not list, such as tokens added after it was written: each under its description at the end of its section, commented out with the value it takes now. No line of the file changes, and the file is replaced only when it reads exactly as before; the theme drawn and the config file stay as they are. A theme file that does not list every token is said once in the status line when it is used, and again only when the tokens it does not list change.
+
 ## Colors (`[colors]`)
 
 | Token | What it colors |
