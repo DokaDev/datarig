@@ -850,7 +850,8 @@ impl Theme {
     /// Leave the terminal's own background where `area` shows the theme's default backgrounds:
     /// the panes' background and the alternate rows (RGB only; a theme of terminal colors has
     /// none of its own). Every other background stays: surfaces (bars, headers), selections,
-    /// tints and marks.
+    /// tints and marks. A reverse-video cell (a plan's bars) shows its background as its text:
+    /// it stays as drawn.
     pub fn unpaint(&self, buf: &mut Buffer, area: Rect) {
         let own: Vec<Color> = [self.bg, self.surface_alt].into_iter().filter(|c| matches!(c, Color::Rgb(..))).collect();
         if own.is_empty() {
@@ -860,7 +861,7 @@ impl Theme {
         for y in area.top()..area.bottom() {
             for x in area.left()..area.right() {
                 let cell = &mut buf[(x, y)];
-                if own.contains(&cell.bg) {
+                if own.contains(&cell.bg) && !cell.modifier.contains(Modifier::REVERSED) {
                     cell.bg = Color::Reset;
                 }
             }

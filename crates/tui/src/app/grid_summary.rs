@@ -516,7 +516,8 @@ impl App {
         )];
         match state {
             State::Working { .. } => parts.push((1, label(Label::GridSummaryWorking))),
-            State::Failed => {}
+            // The rows could not be read: the status line says so, not the summary in its place.
+            State::Failed => return Vec::new(),
             State::Done(s) => {
                 match &s.figures {
                     Some(Figures::Numbers { sum, avg, min, max }) => {

@@ -1357,4 +1357,9 @@ fn unpainting_leaves_only_the_default_backgrounds_and_dimming_keeps_them() {
     t[(0, 0)].set_bg(Color::Blue);
     TERMINAL.unpaint(&mut t, Rect::new(0, 0, 1, 1));
     assert_eq!(t[(0, 0)].bg, Color::Blue, "terminal colors are left alone");
+    // Reverse video (a plan's bars): the background is the text's color, so it stays.
+    let mut r = Buffer::empty(Rect::new(0, 0, 1, 1));
+    r[(0, 0)].set_bg(th.bg).set_fg(rgb(0xE06C75)).set_style(Style::new().add_modifier(Modifier::REVERSED));
+    th.unpaint(&mut r, Rect::new(0, 0, 1, 1));
+    assert_eq!(r[(0, 0)].bg, th.bg, "a reverse-video cell keeps its text color");
 }
