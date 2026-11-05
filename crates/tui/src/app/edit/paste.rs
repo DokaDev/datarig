@@ -64,6 +64,9 @@ pub struct PasteIn {
 /// (a MySQL `TIMESTAMP`): pasted only into a result read in the same one.
 #[derive(Debug)]
 pub struct GridCopy {
+    /// The profile and the database (`None`: the profile's own) the cells were read from;
+    /// `None` without a profile.
+    pub source: Option<(ProfileId, Option<String>)>,
     pub columns: Vec<datarig_core::driver::ColumnMeta>,
     pub offsets: Vec<Option<String>>,
     pub rows: Vec<Vec<Value>>,
@@ -1072,10 +1075,14 @@ impl App {
     }
 
     /// `p`: cells copied in a grid as new rows after the last row of the active tab's shown
-    /// result (resolved to `target`). Each copied column goes to the column of the same table
-    /// column (or, without one, of the same name) when every one of them is there, once: the
-    /// copy of rows of this table, the other columns left to their defaults. Else by position
-    /// from the first column, refused when the copy is wider. Refused as a paste of new rows is.
+    /// result (resolved to `target`). Copied on the same connection and database from the
+    /// target table, each value goes to the result column of its own table column, never by
+    /// position: the other columns are left to their defaults, those the table computes or
+    /// numbers itself to the server, and a copied column not shown, copied twice, computed or
+    /// of another table is refused by name. A copy with a column of this result outside the
+    /// target table (a join's other table) is refused too. Else (another table or database,
+    /// computed columns only) by position from the first column, refused when the copy is
+    /// wider. Refused as a paste of new rows is.
     fn copy_rows_plan(&self, target: &EditTarget, copy: &GridCopy) -> Result<PastePlan, Refusal> {
         let t = self.tab();
         let Some(rs) = rows_of(t) else { return Err((String::new(), None)) };
@@ -1095,8 +1102,11 @@ impl App {
             .enumerate()
             .find_map(|(c, col)| target.columns.get(c)?.as_ref().and(col.meta.origin.as_ref()))
             .map(table_of);
+        // Origins name columns of one connection's database only.
+        let here = t.profile.map(|p| (p, self.other_database(t).map(str::to_string)));
+        let same_db = copy.source.is_some() && copy.source == here;
         let from_here =
-            |m: &datarig_core::driver::ColumnMeta| m.origin.as_ref().map(table_of) == this && this.is_some();
+            |m: &datarig_core::driver::ColumnMeta| same_db && this.is_some() && m.origin.as_ref().map(table_of) == this;
         let named = |m: &datarig_core::driver::ColumnMeta| m.name.clone();
         let refuse = |m: Msg, short: Msg| Err((text(m), Some(text(short))));
         // Copied from this table: each value to its own column, never by position.
@@ -1133,6 +1143,21 @@ impl App {
                 }
             }
             map
+        } else if let Some(m) =
+            copy.columns.iter().find(|m| {
+                // A column of this result the target is not (a join's other table).
+                same_db
+                    && m.origin.is_some()
+                    && rs.columns.iter().enumerate().any(|(c, col)| {
+                        col.meta.origin == m.origin && target.columns.get(c).is_none_or(Option::is_none)
+                    })
+            })
+        {
+            let column = named(m);
+            return refuse(
+                Msg::EditPasteRowsComputed { column: column.clone() },
+                Msg::EditPasteRowsComputedShort { column },
+            );
         } else if w > ncols {
             let (width, room) = (w.to_string(), ncols.to_string());
             let short = Msg::EditPasteRowsTooWideShort { width: width.clone(), room: room.clone() };

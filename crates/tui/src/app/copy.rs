@@ -811,7 +811,9 @@ impl App {
             return Err(Some(Msg::CopyRegisterNotWhole { key: key(), column: r.column, reason }));
         }
         let columns = b.cols.iter().map(|&c| rs.columns[c].meta.clone()).collect();
-        Ok(edit::GridCopy { columns, offsets, rows })
+        // Without a profile the cells are no table's rows: never matched by column.
+        let source = t.profile.map(|p| (p, self.other_database(t).map(str::to_string)));
+        Ok(edit::GridCopy { source, columns, offsets, rows })
     }
 
     /// Whether the rest of the active tab's rows can be fetched: its portal is open, the

@@ -1732,6 +1732,65 @@ mod grid_copy {
     }
 
     #[test]
+    fn p_of_a_copy_of_the_other_side_of_a_join_pastes_nothing() {
+        // A join of users and orders: its rows are no one table's, nothing is pasted there.
+        let mut h = Harness::connected(Lang::En);
+        h.db(DbEvent::Keys(Ok(shop_keys())));
+        let join = "SELECT u.id, u.email, o.id, o.status FROM shop.users u JOIN shop.orders o ON o.user_id = u.id";
+        let columns = vec![
+            meta_from("id", "int8", true, USERS, 1),
+            meta_from("email", "text", false, USERS, 2),
+            meta_from("id", "int8", true, ORDERS, 1),
+            meta_from("status", "text", false, ORDERS, 3),
+        ];
+        shows(&mut h, join, columns, vec![vec![s("1"), s("a@x"), s("7"), s("paid")]]);
+        // The orders' rows, copied in another tab.
+        h.ctrl('t');
+        let orders = vec![meta_from("id", "int8", true, ORDERS, 1), meta_from("status", "text", false, ORDERS, 3)];
+        shows(&mut h, "SELECT id, status FROM shop.orders", orders, vec![vec![s("8"), s("new")]]);
+        h.keys("Y");
+        h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        h.app.focus = Focus::Results;
+        h.app.transient = None;
+        h.keys("p");
+        let text = said(&mut h);
+        assert!(!text.starts_with("Pasted"), "{text}");
+        assert!(edits(&h).batch.is_empty());
+    }
+
+    #[test]
+    fn p_of_a_copy_from_another_database_goes_by_position() {
+        let mut h = ready();
+        // The nickname and the email of the users of another database.
+        h.ctrl('t');
+        h.app.tab_mut().context.database = Some("lab".into());
+        let cols = vec![meta_from("nickname", "text", false, USERS, 4), meta_from("email", "text", false, USERS, 2)];
+        shows(&mut h, SQL, cols, vec![vec![s("zed"), s("z@x")]]);
+        h.keys("Y");
+        h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        h.app.focus = Focus::Results;
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![t("zed"), t("z@x"), Value::Default]], "never by its numbers there");
+    }
+
+    #[test]
+    fn p_leaves_identity_always_columns_and_a_copy_of_only_generated_ones_to_the_server() {
+        let mut st = named();
+        st.columns[0].fill = ColumnFill::IdentityAlways;
+        let mut h = resolved(Harness::connected(Lang::En), st.clone(), false);
+        h.keys("Y");
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![Value::Default, t("a@x"), t("ann")]]);
+        assert!(said(&mut h).contains("1 generated column left to the server"));
+        // Every copied column generated (the id alone): a new row of defaults, said so.
+        let mut h = resolved(Harness::connected(Lang::En), st, false);
+        h.keys("hy");
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![Value::Default, Value::Default, Value::Default]]);
+        assert!(said(&mut h).contains("1 generated column left to the server"));
+    }
+
+    #[test]
     fn p_with_more_rows_on_the_server_is_refused_as_the_next_page_would() {
         for (paging, reason, short) in [
             (

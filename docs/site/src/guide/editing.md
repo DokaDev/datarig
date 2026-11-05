@@ -357,8 +357,9 @@ written for them, so this works over SSH and in tmux, whatever `clipboard` and
   - Copied from another table, or from a result of computed columns only, the values go by
     position from the first column, each checked like a typed value, and a copy wider than the
     result is refused.
-  - `Y` then `p` duplicates rows with their key values as they are: a serial or identity key
-    then repeats, so set it to its default (`Space d D`) before Apply.
+  - `Y` then `p` duplicates rows with their key values as they are: a serial or `BY DEFAULT`
+    identity key then repeats, so set it to its default (`Space d D`) before Apply.
+  - A copy from another connection or database goes by position.
 - `g p` (`Space d y`) pastes them **over the cells** at the cursor, the way a
   [pasted range](#pasting-a-range) does: from the cursor (one cell copied fills every selected
   cell), and rows past the last one are new rows.
