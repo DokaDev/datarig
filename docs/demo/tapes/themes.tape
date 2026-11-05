@@ -1,4 +1,5 @@
-# The same screen in a few of the built-in themes.
+# The same screen in a few of the built-in themes (the commands that switch them are not
+# shown: a GIF of whole-screen color changes is large enough already).
 Require datarig
 Source settings.tape
 
@@ -18,24 +19,28 @@ Tab
 Wait+Screen /Enter view cell/
 Show
 
-Sleep 1.5s
+Sleep 2s
+Hide
 Type ":set theme=catppuccin-mocha"
 Enter
 Wait+Screen /Theme: catppuccin-mocha/
-Sleep 1.8s
+Show
+Sleep 2s
+Hide
 Type ":set theme=gruvbox-light"
 Enter
 Wait+Screen /Theme: gruvbox-light/
-Sleep 1.8s
+Show
+Sleep 2s
+Hide
 Type ":set theme=nord"
 Enter
 Wait+Screen /Theme: nord/
-Sleep 1.8s
+Show
+Sleep 2s
+Hide
 Type ":set theme=dracula"
 Enter
 Wait+Screen /Theme: dracula/
-Sleep 1.8s
-Type ":set theme=tokyo-night"
-Enter
-Wait+Screen /Theme: tokyo-night/
-Sleep 1.5s
+Show
+Sleep 2s
