@@ -1732,8 +1732,8 @@ mod grid_copy {
     }
 
     #[test]
-    fn p_of_a_copy_of_the_other_side_of_a_join_pastes_nothing() {
-        // A join of users and orders: its rows are no one table's, nothing is pasted there.
+    fn p_into_a_join_is_refused_as_read_only() {
+        // A join of users and orders: its rows are no one table's, so it takes no edit.
         let mut h = Harness::connected(Lang::En);
         h.db(DbEvent::Keys(Ok(shop_keys())));
         let join = "SELECT u.id, u.email, o.id, o.status FROM shop.users u JOIN shop.orders o ON o.user_id = u.id";
@@ -1754,7 +1754,7 @@ mod grid_copy {
         h.app.transient = None;
         h.keys("p");
         let text = said(&mut h);
-        assert!(!text.starts_with("Pasted"), "{text}");
+        assert!(text.contains("it reads more than one table"), "{text}");
         assert!(edits(&h).batch.is_empty());
     }
 

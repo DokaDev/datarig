@@ -1079,8 +1079,8 @@ impl App {
     /// target table, each value goes to the result column of its own table column, never by
     /// position: the other columns are left to their defaults, those the table computes or
     /// numbers itself to the server, and a copied column not shown, copied twice, computed or
-    /// of another table is refused by name. A copy with a column of this result outside the
-    /// target table (a join's other table) is refused too. Else (another table or database,
+    /// of another table is refused by name. A copy of a column this result shows from another
+    /// table than the target's is refused too. Else (another table or database,
     /// computed columns only) by position from the first column, refused when the copy is
     /// wider. Refused as a paste of new rows is.
     fn copy_rows_plan(&self, target: &EditTarget, copy: &GridCopy) -> Result<PastePlan, Refusal> {
@@ -1145,7 +1145,7 @@ impl App {
             map
         } else if let Some(m) =
             copy.columns.iter().find(|m| {
-                // A column of this result the target is not (a join's other table).
+                // Fail-safe: unreachable while a result of several tables is read-only.
                 same_db
                     && m.origin.is_some()
                     && rs.columns.iter().enumerate().any(|(c, col)| {
