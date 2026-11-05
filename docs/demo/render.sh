@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Renders the README recordings: every docs/demo/tapes/*.tape (or the ones named) with VHS,
-# into <out-dir> as <name>.gif plus the stills the tapes take (<name>.png).
+# into <out-dir> as <name>.gif plus the stills the tapes take (<name>.png), and social.png
+# (the repository's social preview) from social.tape.
 #   docs/demo/render.sh <out-dir> [tape-name...]
 # Needs vhs, ttyd, ffmpeg and JetBrainsMono Nerd Font (.github/scripts/demo-tools.sh installs
 # them on CI), the demo databases of docs/demo/compose.yml with the certificates of
@@ -71,6 +72,22 @@ WRAPPER
   fi
   echo "::endgroup::"
 done
+
+# The social preview: the still of social.tape under a band with the name and the tagline,
+# 1280x640 (GitHub's size). Its GIF is of no use.
+if [ -f "$out/social-raw.png" ]; then
+  font=$(fc-match -f '%{file}' 'JetBrainsMono Nerd Font:style=Bold')
+  printf '%s' "A full-featured database client that lives in your terminal — light, fast, and safe by default." \
+    > "$scratch/tagline.txt"
+  ffmpeg -loglevel error -y -i "$out/social-raw.png" -vf "\
+scale=1280:536:force_original_aspect_ratio=decrease,\
+pad=1280:536:(ow-iw)/2:(oh-ih)/2:color=0x1a1b26,\
+pad=1280:640:0:104:color=0x1a1b26,\
+drawtext=fontfile=$font:text=datarig:x=40:y=22:fontsize=44:fontcolor=0xc0caf5,\
+drawtext=fontfile=$font:textfile=$scratch/tagline.txt:x=40:y=74:fontsize=19:fontcolor=0x9aa5ce" \
+    "$out/social.png"
+  rm -f "$out/social-raw.png" "$out/social.gif"
+fi
 
 ls -l "$out"
 if [ ${#failed[@]} -gt 0 ]; then
