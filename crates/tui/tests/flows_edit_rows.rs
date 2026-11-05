@@ -903,6 +903,45 @@ fn a_default_that_reads_like_a_marker_is_quoted_and_a_long_expression_is_cut() {
     }
 }
 
+/// At 80x24 a new row's default cut by the grid's right edge with none of its text on screen (a
+/// number right-aligned under the edge) shows the dim `›` there, as a value does; a row read
+/// whose text shows gets none.
+#[test]
+fn a_new_rows_default_under_the_right_edge_is_marked() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    let columns = vec![
+        meta_from("id", "int8", true, USERS, 1),
+        meta_from("email", "text", false, USERS, 2),
+        meta_from("nickname", "int8", true, USERS, 4),
+    ];
+    let rows = vec![vec![s("1"), s("a@x"), s("1234567890123")]];
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", columns, rows, false);
+    let mut t = all_shown();
+    t.columns[0].default = Some("'1'::bigint".into());
+    t.columns[1].default = Some("'e'::text".into());
+    t.columns[2].default = Some("7".into());
+    h.keys("le");
+    structure(&mut h, Ok(t));
+    h.key(KeyCode::Esc);
+    h.keys("o");
+    h.app.transient = None;
+    let t = h.draw(80, 24);
+    let buf = t.backend().buffer();
+    let g = &h.app.tab().grid;
+    let right = g.gutter_x.1 + g.view_w;
+    let tx = g.gutter_x.1 as usize + g.col_x[2] - g.x_off + 2;
+    assert!(
+        tx < right as usize && tx + g.col_x[3] - g.col_x[2] - 3 > right as usize,
+        "the column is cut: text at {tx}, edge {right}, {:?}, {:?}",
+        g.col_x,
+        row_text(buf, g.data_y + 1)
+    );
+    let y = g.data_y + 1;
+    assert_eq!(buf[(right - 1, y)].symbol(), "\u{203a}", "{:?}", row_text(buf, y));
+    assert_ne!(buf[(right - 1, g.data_y)].symbol(), "\u{203a}", "{:?}", row_text(buf, g.data_y));
+}
+
 /// The defaults shown and the numbered gutter at both sizes.
 #[test]
 fn a_new_rows_defaults_and_number_show() {

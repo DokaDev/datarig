@@ -439,11 +439,15 @@ impl Dialect {
         }
     }
 
-    /// The constant a column default the server printed (in its own dialect,
-    /// [`Dialect::printed`]) is: a string literal, a number (with its sign), `true`, `false` or
-    /// `NULL`, in parentheses or not; in PostgreSQL also with casts after it (`'x'::character
-    /// varying`, `'{}'::jsonb`, `NULL::text`). `None` for anything else, such as a call
-    /// (`now()`, `CURRENT_TIMESTAMP`) or an operator.
+    /// The constant a column default is, read as SQL of this dialect: a string literal (in
+    /// MySQL also after its character set's introducer, `_utf8mb4'x'`), a number (with its
+    /// sign), `true`, `false` or `NULL`, in parentheses or not; in PostgreSQL also with casts
+    /// after it (`'x'::character varying`, `'{}'::jsonb`, `NULL::text`), the constant in
+    /// parentheses too (`(0)::numeric`). `None` for anything else, such as a call (`now()`,
+    /// `CURRENT_TIMESTAMP`) or an operator, and for a PostgreSQL string cast to a type other
+    /// than text that is one of the special date and time inputs (`'now'::date`,
+    /// `('now'::text)::date`): those are read when a row is inserted, not when the default was
+    /// set.
     pub fn constant(self, sql: &str) -> Option<Constant> {
         use lexer::Tok;
         let sql = self.unparenthesized(sql);
@@ -509,6 +513,20 @@ impl Dialect {
             Self::Postgres => rest.is_empty() || cast(rest),
             Self::MySql(_) => rest.is_empty(),
         };
+        // `'now'::date` is the time of the insert: no constant (fail-safe: any type but text).
+        let special = |v: &str| {
+            let v = v.trim().to_ascii_lowercase();
+            ["now", "today", "tomorrow", "yesterday", "epoch", "infinity", "-infinity", "allballs"]
+                .contains(&v.as_str())
+        };
+        let text_types = ["text", "character", "varying", "varchar", "char", "bpchar", "name"];
+        let to_other = rest.iter().any(|t| {
+            matches!(t.kind, Tok::Ident | Tok::Keyword | Tok::QuotedIdent)
+                && !text_types.contains(&t.text(sql).to_ascii_lowercase().as_str())
+        });
+        if self == Self::Postgres && to_other && matches!(&value, Constant::Value(v) if special(v)) {
+            return None;
+        }
         whole.then_some(value)
     }
 

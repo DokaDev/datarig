@@ -47,6 +47,12 @@ fn postgres_defaults_show_their_value_or_expression() {
     assert_eq!(shown(PG, true, Some("(-1)::numeric")), value("-1"));
     assert_eq!(shown(PG, true, Some("('x'::text)::character varying")), value("x"));
     assert_eq!(shown(PG, true, Some("(0) + 1")), expr("(0) + 1"));
+    // The special date and time inputs are read at the insert: no constant.
+    assert_eq!(shown(PG, true, Some("('now'::text)::date")), expr("('now'::text)::date"));
+    assert_eq!(shown(PG, true, Some("'now'::timestamp with time zone")), expr("'now'::timestamp with time zone"));
+    assert_eq!(shown(PG, true, Some("'infinity'::date")), expr("'infinity'::date"));
+    assert_eq!(shown(PG, true, Some("'now'::text")), value("now"));
+    assert_eq!(shown(PG, true, Some("'today'::character varying")), value("today"));
     assert_eq!(shown(PG, true, Some("true")), value("true"));
     assert_eq!(shown(PG, false, Some("NULL::character varying")), Null);
     assert_eq!(shown(PG, true, Some("now()")), expr("now()"));
@@ -79,12 +85,18 @@ fn mysql_defaults_show_their_value_or_expression() {
     // An expression default of a string, after the driver's unescaping: the character set's
     // introducer goes.
     assert_eq!(shown(MY, true, Some("(_utf8mb4'')")), value(""));
-    assert_eq!(shown(MY, true, Some("(_utf8mb4'it''s')")), value("it's"));
+    assert_eq!(shown(MY, true, Some("(_utf8mb4'it\\'s')")), value("it's"));
     // The driver quotes a literal in the session's mode: read back in the same mode.
     let nbe = Dialect::MySql(MySqlMode { no_backslash_escapes: true, ..MySqlMode::default() });
     assert_eq!(shown(nbe, true, Some(&nbe.quote_literal("a\\b"))), value("a\\b"));
     assert_eq!(shown(MY, true, Some(&MY.quote_literal("a\\b"))), value("a\\b"));
+    // An expression default is the server's text in its default mode, whatever the session's.
+    assert_eq!(shown(nbe, true, Some("('a\\\\b')")), value("a\\b"));
+    assert_eq!(shown(nbe, true, Some("(_utf8mb4'it\\'s')")), value("it's"));
+    // `"x"` is a string unless the session reads it as a name (ANSI_QUOTES).
     let ansi = Dialect::MySql(MySqlMode { ansi_quotes: true, ..MySqlMode::default() });
+    assert_eq!(shown(MY, true, Some("\"x\"")), value("x"));
+    assert_eq!(shown(ansi, true, Some("\"x\"")), expr("\"x\""));
     assert_eq!(shown(ansi, true, Some(&ansi.quote_literal("x"))), value("x"));
     // Nothing draws a number in MySQL but AUTO_INCREMENT.
     assert_eq!(shown(MY, true, Some("(nextval(s))")), expr("nextval(s)"));

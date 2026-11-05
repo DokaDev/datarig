@@ -30,7 +30,8 @@ pub fn needs_value(c: &StructureColumn) -> bool {
 }
 
 /// What a new row's cell of column `c` left to its default shows, its default read as SQL of
-/// dialect `d`: the session's, in which the driver writes a literal default.
+/// dialect `d`: the session's, in which the driver writes a literal default (an expression
+/// default as its server prints it).
 pub fn default_shown(c: &StructureColumn, d: Dialect) -> DefaultShown {
     if c.fill != ColumnFill::Default {
         return DefaultShown::Generated;
@@ -39,8 +40,13 @@ pub fn default_shown(c: &StructureColumn, d: Dialect) -> DefaultShown {
         return DefaultShown::Needed;
     }
     let Some(sql) = c.default.as_deref() else { return DefaultShown::Null };
-    // Read in the session's mode, as the driver wrote a literal default.
     let sql = d.insert_default(sql);
+    // MySQL: an expression default (the driver puts it in parentheses) is the server's own
+    // text, in its default mode; a literal one the driver wrote in the session's mode.
+    let d = match d {
+        Dialect::MySql(_) if sql.trim_start().starts_with('(') => d.printed(),
+        _ => d,
+    };
     if d.draws_number(sql) {
         return DefaultShown::Generated;
     }
