@@ -46,11 +46,14 @@ pub fn add(path: &Path, id: &str) -> std::io::Result<()> {
     if doc.get("ids").is_some_and(|i| i.as_array().is_none()) {
         return Err(invalid());
     }
-    let mut all = ids(&doc);
-    if !all.insert(id.to_string()) {
+    if ids(&doc).contains(id) {
         return Ok(());
     }
-    doc["ids"] = toml_edit::value(all.iter().map(String::as_str).collect::<toml_edit::Array>());
+    // Added to the list as it is, so an entry this version does not read stays.
+    match doc.get_mut("ids").and_then(toml_edit::Item::as_array_mut) {
+        Some(a) => a.push(id),
+        None => doc["ids"] = toml_edit::value(std::iter::once(id).collect::<toml_edit::Array>()),
+    }
     crate::fsutil::atomic_write(path, doc.to_string().as_bytes())
 }
 
@@ -96,10 +99,10 @@ mod tests {
         add(&p, "a").unwrap();
         add(&p, "a").unwrap();
         assert_eq!(load(&p).unwrap().into_iter().collect::<Vec<_>>(), ["a", "b"]);
-        std::fs::write(&p, "later = 1\nids = [\"a\"]\n").unwrap();
+        std::fs::write(&p, "later = 1\nids = [\"a\", { id = \"x\", at = 2 }]\n").unwrap();
         add(&p, "c").unwrap();
         let text = std::fs::read_to_string(&p).unwrap();
-        assert!(text.contains("later = 1"), "{text}");
+        assert!(text.contains("later = 1") && text.contains("{ id = \"x\", at = 2 }"), "kept: {text}");
         assert_eq!(load(&p).unwrap().into_iter().collect::<Vec<_>>(), ["a", "c"]);
         let _ = std::fs::remove_dir_all(&d);
     }

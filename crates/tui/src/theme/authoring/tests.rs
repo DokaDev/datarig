@@ -376,3 +376,21 @@ fn an_update_that_cannot_be_done_safely_leaves_the_file_as_it_is() {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
     }
 }
+
+#[test]
+fn a_file_with_windows_line_breaks_or_a_bom_keeps_them() {
+    let d = Dir::new("update-crlf");
+    copy_theme(&d.0, "dark", "win", Background::Unknown).unwrap();
+    let old = without(&d.text("win"), &["fg_dim", "grid_cursor_row"]).replace('\n', "\r\n");
+    put(&d, "win", &old);
+    assert!(matches!(update_theme(&d.0, "win", Background::Unknown), Ok(Updated::Added { count: 2, .. })));
+    let new = d.text("win");
+    assert!(!new.replace("\r\n", "").contains('\n'), "only CRLF line breaks");
+    only_added(&old.replace("\r\n", "\n"), &new.replace("\r\n", "\n"), &[]);
+    // A BOM before the first table: its header is still found.
+    let bom = "\u{feff}[colors]\naccent = \"#89b4fa\"\n";
+    put(&d, "bom", bom);
+    assert!(matches!(update_theme(&d.0, "bom", Background::Unknown), Ok(Updated::Added { .. })));
+    let new = d.text("bom");
+    assert!(new.starts_with(bom) && new.matches("[colors]").count() == 1, "{new}");
+}

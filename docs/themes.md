@@ -33,9 +33,10 @@ syn_comment = { fg = "bright-black", modifiers = ["italic"] }
 - `:theme copy <from> <name>` writes `themes/<name>.toml` with every token of the theme `<from>` (a built-in theme or a theme file; a family such as `catppuccin` as the variant drawn now) set to its value, each under a comment saying what it colors. `extends` names the built-in theme `<from>` starts from, for the dimming behind dialogs; every token is in the file, so it stands on its own.
 - `:theme new <name>` writes `themes/<name>.toml` extending the current theme when it is built in, else `dark`, with every token commented out and showing the value it takes from there: remove the `# ` in front of a key to set it.
 - On the settings screen, `c` on the theme row copies the theme shown there (the one being previewed, else the current one) and asks for the new name.
-- `:theme update [<name>]` adds to the theme file `<name>` (the current theme without one) the tokens it does not list, as tokens added in a later version: each under its description at the end of its section, commented out with the value it takes now. No line of the file changes, and nothing is written unless the file reads exactly as before. A theme file that does not list every token is said once in the status line when it is used, and again only when more tokens are added.
 
 Each writes a new file and never replaces one: a name that is taken, that is not a valid file name, that is a built-in theme's or a Windows device name such as `nul` (ignoring case) is refused. The themes folder is created when it is missing. Then datarig draws with the new theme, saves `theme = "<name>"` to the config file and shows the file's path.
+
+`:theme update [<name>]` adds to the theme file `<name>` (the current theme without one) the tokens it does not list, such as tokens added after it was written: each under its description at the end of its section, commented out with the value it takes now. No line of the file changes, and the file is replaced only when it reads exactly as before; the theme drawn and the config file stay as they are. A theme file that does not list every token is said once in the status line when it is used, and again only when the tokens it does not list change.
 
 ## Colors (`[colors]`)
 
