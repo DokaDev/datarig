@@ -777,7 +777,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:format` |  | Format the statement under the cursor or the selection (only its layout) |
 | `:ddl [schema.name]` |  | Show the DDL of the explorer's object, the table tab's table, or a name (:ddl [schema.name]) |
 | `:explain [analyze]` |  | The plan of the statement under the cursor (:explain analyze runs and measures it; a write is rolled back) |
-| `:theme copy <from> <name> / new <name>` |  | Write a theme file: a full copy of a theme, or a new one to fill in |
+| `:theme copy <from> <name> / new <name> / update [<name>]` |  | Write a theme file: a full copy of a theme, a new one to fill in, or the tokens a file does not list |
 | `:export [format] [all / fetched / selection] [delim= quote= header= null=] [path]` |  | Export the result to a file: alone, the export dialog; else every row by default, the format from the file's extension (:export [format] [all\|fetched\|selection] [delim=… quote=… header=… null=…] [path]) |
 | `:commit` |  | Commit the open transaction |
 | `:rollback` | `:rb` | Roll back the open transaction |

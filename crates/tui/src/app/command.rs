@@ -74,7 +74,8 @@ pub enum Command {
     /// `:explain [analyze]`: the plan of the statement under the cursor (with `analyze`, run
     /// and measured).
     Explain,
-    /// `:theme copy <from> <name>`, `:theme new <name>`: write a theme file and use it.
+    /// `:theme copy <from> <name>`, `:theme new <name>`: write a theme file and use it;
+    /// `:theme update [<name>]`: add the tokens a theme file does not list.
     Theme,
     /// `:export [format] [all|fetched|selection] [path]`: export the result to a file.
     Export,
@@ -114,7 +115,8 @@ pub enum ArgKind {
     Object,
     /// `analyze`; may be left out.
     Analyze,
-    /// `copy <from> <name>` or `new <name>` ([`THEME_ACTIONS`]); `<from>` is a theme name.
+    /// `copy <from> <name>`, `new <name>` or `update [<name>]` ([`THEME_ACTIONS`]); `<from>` is a
+    /// theme name.
     Theme,
     /// Where a tab goes (`:tabmove`): see [`tabmove_target`]; may be left out.
     TabPosition,
@@ -937,7 +939,8 @@ pub enum ArgCompletion {
 }
 
 /// The words of `:theme`, each with its label.
-pub const THEME_ACTIONS: [(&str, Label); 2] = [("copy", Label::CommandThemeCopy), ("new", Label::CommandThemeNew)];
+pub const THEME_ACTIONS: [(&str, Label); 3] =
+    [("copy", Label::CommandThemeCopy), ("new", Label::CommandThemeNew), ("update", Label::CommandThemeUpdate)];
 
 /// What `:theme` asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -946,15 +949,20 @@ pub enum ThemeCommand<'a> {
     Copy { from: &'a str, name: &'a str },
     /// `new <name>`.
     New { name: &'a str },
+    /// `update [<name>]` (none: the current theme).
+    Update { name: Option<&'a str> },
 }
 
-/// Read the argument of `:theme`; `None`: it is not `copy <from> <name>` or `new <name>`.
+/// Read the argument of `:theme`; `None`: it is not `copy <from> <name>`, `new <name>` or
+/// `update [<name>]`.
 pub fn parse_theme(arg: &str) -> Option<ThemeCommand<'_>> {
     let words: Vec<&str> = arg.split_whitespace().collect();
     // The word in any case, as the completion takes it.
     match (words.first().map(|w| w.to_ascii_lowercase()).as_deref(), &words[..]) {
         (Some("copy"), [_, from, name]) => Some(ThemeCommand::Copy { from, name }),
         (Some("new"), [_, name]) => Some(ThemeCommand::New { name }),
+        (Some("update"), [_]) => Some(ThemeCommand::Update { name: None }),
+        (Some("update"), [_, name]) => Some(ThemeCommand::Update { name: Some(name) }),
         _ => None,
     }
 }
@@ -1109,6 +1117,8 @@ pub fn complete_arg(kind: ArgKind, arg: &str, names: &[&str]) -> Vec<ArgCompleti
                     .collect()
             }
             Some(_) => Vec::new(),
+            // `update` whole runs as it is (the current theme): nothing to complete.
+            None if arg.eq_ignore_ascii_case("update") => Vec::new(),
             None => (0..THEME_ACTIONS.len())
                 .filter(|&i| THEME_ACTIONS[i].0.starts_with(&arg.to_lowercase()))
                 .map(ArgCompletion::ThemeAction)

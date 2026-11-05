@@ -1528,14 +1528,20 @@
 "theme.author.taken" = "A theme file of this name exists already: pick another name"
 "theme.author.written_but" = "Wrote {path}, but {error}"
 "theme.author.exists" = "{path} exists already: nothing was written"
+"theme.unlisted" = { one = "Theme {name} does not list {count} token of this version: :theme update adds it to the file, commented out", other = "Theme {name} does not list {count} tokens of this version: :theme update adds them to the file, commented out" }
+"theme.updated" = { one = "Added {count} token to {path}, commented out with its value now; {name} draws as before", other = "Added {count} tokens to {path}, commented out with their values now; {name} draws as before" }
+"theme.update.complete" = "{path} lists every token already: nothing was added"
+"theme.update.builtin" = "{name} is a built-in theme, not a file: nothing to update"
+"theme.update.unchanged" = "{path} was left as it is: it changed while it was updated, or the lines added would change how it reads"
 "theme.author.write_failed" = "Cannot write {path}: {reason}"
 "theme.author.unwritable" = "Nothing was written: the token {token} has a value a theme file cannot hold"
 "theme.author.no_dir" = "No config file, so there is no themes folder to write to"
-"command.theme" = "Write a theme file: a full copy of a theme, or a new one to fill in"
+"command.theme" = "Write a theme file: a full copy of a theme, a new one to fill in, or the tokens a file does not list"
 "command.theme.copy" = "A new theme file with every token of <from>, then use it"
 "command.theme.new" = "A new theme file extending the current theme, every token commented out, then use it"
-"commands.arg.theme" = "copy|new <name>"
-"commands.error.theme_usage" = "Usage: :theme copy <from> <name>, or :theme new <name>"
+"command.theme.update" = "Add to a theme file (the current theme) the tokens it does not list, commented out"
+"commands.arg.theme" = "copy|new|update …"
+"commands.error.theme_usage" = "Usage: :theme copy <from> <name>, :theme new <name>, or :theme update [<name>]"
 
 # The external editor (Ctrl+G) and suspending (Ctrl+Z)
 "external.unchanged" = "No change from the editor"

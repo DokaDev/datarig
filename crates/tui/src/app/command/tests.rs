@@ -203,17 +203,22 @@ fn completes_theme_names_given_by_the_app() {
 }
 
 #[test]
-fn theme_reads_copy_and_new_and_completes_them() {
+fn theme_reads_copy_new_and_update_and_completes_them() {
     assert_eq!(parse_theme("copy dark mine"), Some(ThemeCommand::Copy { from: "dark", name: "mine" }));
     assert_eq!(parse_theme("  new   mine "), Some(ThemeCommand::New { name: "mine" }));
     assert_eq!(parse_theme("Copy dark mine"), Some(ThemeCommand::Copy { from: "dark", name: "mine" }), "any case");
     assert_eq!(parse_theme("NEW mine"), Some(ThemeCommand::New { name: "mine" }));
-    for bad in ["", "copy", "copy dark", "copy dark a b", "new", "new a b", "edit mine", "copydark mine"] {
+    assert_eq!(parse_theme("update"), Some(ThemeCommand::Update { name: None }), "the current theme");
+    assert_eq!(parse_theme(" Update mine "), Some(ThemeCommand::Update { name: Some("mine") }));
+    for bad in ["", "copy", "copy dark", "copy dark a b", "new", "new a b", "edit mine", "copydark mine", "update a b"]
+    {
         assert_eq!(parse_theme(bad), None, "{bad}");
     }
     let themes = ["terminal", "dark", "gruvbox", "mine"];
     let got = |arg: &str| complete_arg(ArgKind::Theme, arg, &themes);
-    assert_eq!(got(""), [ArgCompletion::ThemeAction(0), ArgCompletion::ThemeAction(1)]);
+    assert_eq!(got(""), [0, 1, 2].map(ArgCompletion::ThemeAction));
+    assert_eq!(got("u"), [ArgCompletion::ThemeAction(2)]);
+    assert!(got("update").is_empty(), "whole, it runs as it is");
     assert_eq!(got("c"), [ArgCompletion::ThemeAction(0)]);
     assert_eq!(got("copy "), [0, 1, 2, 3].map(ArgCompletion::ThemeFrom), "every theme to copy from");
     assert_eq!(got("copy gr"), [ArgCompletion::ThemeFrom(2)]);

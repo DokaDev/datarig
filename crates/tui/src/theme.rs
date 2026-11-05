@@ -412,15 +412,21 @@ pub fn resolve_with_base(
     }
     let Some(dir) = dir else { return Err(ThemeError::Unknown { name: name.to_string(), dir: None }) };
     let spec = datarig_core::theme::load(dir, name, TOKENS)?;
+    spec_theme(&spec, &datarig_core::theme::path(dir, name), background)
+}
+
+/// The theme of the file `path` read as `spec`, and the built-in variant it starts from (its
+/// `extends`, `terminal` without one).
+fn spec_theme(spec: &ThemeSpec, path: &Path, background: Background) -> Result<(Theme, &'static str), ThemeError> {
     let (base_name, base) = match &spec.extends {
         None => ("terminal", &TERMINAL),
         Some((base, line)) => builtin_variant(base, background).ok_or_else(|| ThemeError::File {
-            path: datarig_core::theme::path(dir, name),
+            path: path.to_path_buf(),
             line: Some(*line),
             problem: Problem::UnknownBase(base.clone()),
         })?,
     };
-    Ok((from_spec(&spec, base.clone()), base_name))
+    Ok((from_spec(spec, base.clone()), base_name))
 }
 
 /// `base` with the tokens of a theme file.
