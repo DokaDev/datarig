@@ -3,6 +3,47 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.38.2 — 2026-11-05
+
+The grid shows where its cursor is and sums up a selected range on the status line; menus show what cannot run now, dimmed with why.
+
+### Added
+
+- While a range, rows or columns of the result grid are selected, the status line sums them
+  up: their size, then for numbers the sum, average, least and greatest value (integers and
+  decimals exactly), else how many distinct values, and how many are NULL. It takes the values
+  the grid shows (pending changes too) and reads the rows in the background, so a big selection
+  never holds up the keys.
+- `:theme update [<name>]` adds to a theme file the tokens it does not list (such as tokens added
+  after it was written), each under its description at the end of its section, commented out
+  with the value it takes now. No line of the file changes, and nothing is written unless the
+  file reads exactly as before.
+- A theme file that does not list every token is said once in the status line when it is used,
+  with how many and that `:theme update` adds them; again only when the tokens it does not list
+  change.
+- New setting `ui.background = "theme" | "terminal"` (settings screen, `:set
+  ui.background=terminal`): with `terminal` the panes and the result grid's alternate rows leave
+  the terminal's own background showing, so a translucent terminal shows through; text,
+  selections and edit marks keep the theme's colors, and dialogs, menus and popups keep its
+  surface. Turning it on with a theme that has a background of its own says so in one line.
+
+### Changed
+
+- The editor's completion popup opens by itself 60 ms after the last key (it waited 120 ms and
+  then up to a tenth of a second more for the next timer tick), exactly at that moment. New
+  setting `[editor] completion_delay_ms` (`60`, `0` for at once, `30`, `100`, `150`, `250`;
+  settings screen and `:set`).
+- The result grid shows where the cursor is: its row is tinted, its cell more strongly, and its
+  column's header too. A selected range is drawn as one block (the separators between its
+  columns included), with its rows' numbers and its columns' headers tinted. New theme tokens
+  `grid_cursor_row` and `grid_cursor_header`; a theme file that sets its own background,
+  surface or selection without them gets tints made of its own colors (when those are RGB).
+- The action menu shows an action that would act there but can't now dimmed, with why in a few
+  words where its key would be (a read-only environment, a result that can't be edited, an edit
+  that doesn't fit the cell, a table tab's Save, paging that closed), instead of leaving it out.
+  The keys and the wheel step over it; a click on it says the reason in full and keeps the menu
+  open.
+
 ## 0.38.1 — 2026-11-05
 
 Copy and paste inside the grid: `y` keeps the copied cells as they are, and `p` pastes them as new rows (again and again); previous page moved from `p` to `[`.
