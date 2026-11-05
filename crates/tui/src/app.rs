@@ -593,6 +593,8 @@ pub struct App {
     pub(crate) paste_in: Option<edit::PasteIn>,
     /// The last paste into a grid: `space d V` reads it again while it is the newest change.
     pub(crate) last_paste: Option<edit::LastPaste>,
+    /// The cells `y` or `Y` last copied in a grid, which `g p` pastes (kept for the session).
+    pub(crate) grid_copy: Option<std::sync::Arc<edit::GridCopy>>,
     /// The reads of the system clipboard `space d v` makes.
     pub(crate) clip_reads: edit::ClipReads,
     pub lang_setting: LangSetting,
@@ -1010,6 +1012,7 @@ impl App {
             ask_gone: None,
             paste_in: None,
             last_paste: None,
+            grid_copy: None,
             clip_reads: Default::default(),
             lang_setting: LangSetting::parse(&cfg.language),
             default_source: cfg.default_source,

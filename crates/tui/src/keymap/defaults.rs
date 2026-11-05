@@ -373,6 +373,8 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Grid, "o", "edit.add_row"),
     (Grid, "O", "edit.clone_row"),
     (Grid, "D", "edit.delete_row"),
+    // vim's put; `p` alone is the previous page
+    (Grid, "g p", "edit.paste_register"),
     (Nav, "space d e", "edit.cell"),
     (Nav, "space d n", "edit.set_null"),
     (Nav, "space d D", "edit.set_default"),
@@ -387,6 +389,7 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Nav, "space d x", "edit.discard"),
     (Nav, "space d v", "edit.paste"),
     (Nav, "space d V", "edit.paste_as"),
+    (Nav, "space d y", "edit.paste_register"),
     (Nav, "space r y t", "results.copy.selection.tsv"),
     (Nav, "space r y T", "results.copy.selection.tsv_header"),
     (Nav, "space r y l", "results.copy.selection.list"),

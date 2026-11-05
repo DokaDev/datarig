@@ -249,6 +249,25 @@ fn innermost_context_wins_and_sequences_complete() {
 }
 
 #[test]
+fn g_p_pastes_the_grids_copy_and_p_stays_the_previous_page() {
+    let km = Keymap::default();
+    assert_eq!(feed_all(&km, Ctx::Grid, "g p"), [Resolved::Pending, act("edit.paste_register")]);
+    assert_eq!(last(&km, Ctx::Grid, "space d y"), act("edit.paste_register"));
+    assert_eq!(last(&km, Ctx::Grid, "p"), act("results.page.prev"));
+    assert_eq!(last(&km, Ctx::Grid, "P"), act("results.view_as_plan"));
+    assert_eq!(last(&km, Ctx::Grid, "g g"), act("grid.top"));
+    assert_eq!(last(&km, Ctx::Grid, "g t"), act("tab.next"));
+    assert_eq!(last(&km, Ctx::Grid, "g T"), act("tab.prev"));
+    assert_eq!(last(&km, Ctx::Grid, "space d p"), act("edit.preview"));
+    assert_eq!(last(&km, Ctx::Grid, "space d v"), act("edit.paste"));
+    // Elsewhere `g p` is nothing of the grid's.
+    assert_ne!(last(&km, Ctx::Explorer, "g p"), act("edit.paste_register"));
+    // A user's `g` alone in the grid is a prefix of `g p` (and `g g`): said, as for any.
+    let (_, issues) = user(&[("grid", "g", "grid.top")]);
+    assert!(!issues.is_empty(), "a prefix conflict is reported");
+}
+
+#[test]
 fn editor_keys_win_inside_the_editor_except_protected_keys() {
     let km = Keymap::default();
     // vim Normal: `?` is backward search (reserved), help is Space ? or F1.
@@ -480,7 +499,7 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     let tx: Vec<String> = shown(Ctx::Explorer, "space x").into_iter().map(|(k, _)| k).collect();
     assert_eq!(tx, ["c", "r", "s"]);
     let data: Vec<String> = shown(Ctx::Grid, "space d").into_iter().map(|(k, _)| k).collect();
-    assert_eq!(data, ["D", "O", "U", "V", "a", "d", "e", "n", "o", "p", "r", "u", "v", "x"]);
+    assert_eq!(data, ["D", "O", "U", "V", "a", "d", "e", "n", "o", "p", "r", "u", "v", "x", "y"]);
     assert_eq!(km.group_label(Ctx::Grid, &k("space d")), Some(Label::GroupData));
     // `Space Space`: the action menu, listed with the groups.
     assert!(root.contains(&("Space".into(), Child::Action(action::by_id("menu.open").unwrap().action))));

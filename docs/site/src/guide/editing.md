@@ -328,6 +328,40 @@ The grid's own TSV and CSV copies (`Space r y`) paste back as the same cells, wi
 exceptions: a text cell that is exactly the NULL token (`\N` by default) pastes back as NULL; NULL is copied as an empty
 field, so it pastes back as an empty value; and in a copy of one column, a last cell that is
 NULL (in a TSV copy, an empty text too) is lost, since the copy does not end its last line.
+To move cells within the app without these exceptions, use `y` and `g p`
+([below](#copy-and-paste-inside-the-grid)).
+
+## Copy and paste inside the grid
+
+`y` (a cell, or the selected range) and `Y` (the row, or the selected rows) copy to the
+clipboard as before, and the app also keeps the cells themselves: each value exactly as the
+grid shows it, a pending change included, and NULL as NULL. `g p` (`Space d y`) pastes them at
+the cursor, in this result or any other, in any tab, until you copy again or quit. No clipboard
+is read or written for it, so it works over SSH and in tmux, whatever `clipboard` and
+`[editor] clipboard` are set to.
+
+The cells land the way a [pasted range](#pasting-a-range) does: from the cursor (one cell
+copied fills every selected cell), rows past the last one are new rows, the same refusals,
+one step `u` undoes, and a question first when more than 1,000 rows change. Nothing is read
+as text, so there is no question about commas, and `Space d V` has nothing to read again.
+
+```
+Pasted the copied cells · 2 rows × 2 columns · 2 cells changed · 1 new row · u undo
+```
+
+Each value is checked against the column it lands in, as a typed one: a text pasted into a
+number column is kept and marked invalid, and the changes are not applied until it is fixed.
+
+What is not kept says why, and the copy to the clipboard is done anyway:
+
+- more than 5,000 rows, the most a paste takes ("Not kept for g p: more than 5,000 rows, the
+  most a paste takes");
+- a MySQL value the grid does not show as stored: a `FLOAT` (the server sends it rounded),
+  bytes or bits not in their form, text read in a character set other than `utf8mb4`, a
+  `TIMESTAMP` read in a time zone with daylight saving.
+
+A copy the grid refuses (a pending DEFAULT, a value only a run shows) keeps nothing either; with
+nothing kept, `g p` says which keys copy.
 
 ## Undo, revert, discard
 

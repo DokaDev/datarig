@@ -821,6 +821,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Edit(D::Discard), "edit.discard", Label::ActionEditDiscard, edit_focused),
     act(Action::Edit(D::Paste), "edit.paste", Label::ActionEditPaste, edit_focused),
     act(Action::Edit(D::PasteAs), "edit.paste_as", Label::ActionEditPasteAs, edit_focused),
+    act(Action::Edit(D::PasteRegister), "edit.paste_register", Label::ActionEditPasteRegister, edit_focused),
     mv(Action::Changes(K::Down), "changes.down", Label::ActionChangesDown, changes_focused),
     mv(Action::Changes(K::Up), "changes.up", Label::ActionChangesUp, changes_focused),
     mv(Action::Changes(K::HalfDown), "changes.half_down", Label::ActionChangesHalfDown, changes_focused),

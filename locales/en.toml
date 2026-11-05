@@ -1137,6 +1137,8 @@
 "copy.into.failed" = "Not copied: {reason}"
 "copy.into.as_is" = "The rows are copied as-is; they may not exist in {table}"
 "copy.generated_skipped" = "Left out the generated columns {columns}: the database computes them again"
+"copy.register_too_many" = "Not kept for {key}: more than {max} rows, the most a paste takes"
+"copy.register_not_whole" = "Not kept for {key}: column “{column}” {reason}"
 "copy.too_long_for_osc52" = "Not copied: {size} of base64 is more than OSC 52 may carry ({limit}, osc52_max_bytes), and the terminal would drop it. Copy fewer rows, set clipboard = system, or export to a file (a later step)"
 "copy.failed" = "Could not copy: {error}"
 "copy.system_unavailable" = "the system clipboard is not available (clipboard = osc52 copies through the terminal)"
@@ -2570,6 +2572,7 @@
 "tips.changes_view" = "{setting} shows the SQL of the changes first"
 "action.edit.paste" = "Paste the system clipboard into the grid"
 "action.edit.paste_as" = "Paste again, read as the next format"
+"action.edit.paste_register" = "Paste the cells last copied in the grid"
 "setting.paste_null" = "Paste NULL token"
 "setting.paste_null.about" = "The text an unquoted field of a range pasted into a result reads as NULL. An empty field is an empty value, never NULL."
 "setting.paste_null.backslash_n" = "\\N, as both servers' dumps write NULL"
@@ -2599,6 +2602,8 @@
 "edit.paste.reread_hint_short" = "{key} reads as {format}"
 "edit.paste.done" = "Pasted as {format} · {details}"
 "edit.paste.done_short" = "Pasted · {details}"
+"edit.paste.register_done" = "Pasted the copied cells · {details}"
+"edit.paste.register_empty" = "Nothing copied to paste: {copy} copies a cell or a range, {row} a row, then {paste} pastes it at the cursor"
 "edit.paste.rows" = { one = "{count} row", other = "{count} rows" }
 "edit.paste.columns" = { one = "{count} column", other = "{count} columns" }
 "edit.paste.cells" = { one = "{count} cell changed", other = "{count} cells changed" }

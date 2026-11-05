@@ -10,6 +10,9 @@
 //! deletes that name no register when `[editor] clipboard` is on, and `"+` / `"*` always; `"+p`
 //! reads it ([`App::editor_clipboard_text`]), only then.
 //!
+//! `y` and `Y` also keep the cells themselves ([`edit::GridCopy`]), which `g p` pastes: whatever
+//! the clipboard does with the text, for the session.
+//!
 //! Only rows already fetched are copied; when the server has more, the notice says so. More
 //! than [`LARGE_COPY`] rows ask first. The rows are written a chunk at a time
 //! ([`export::Writer`]), read from the result's spill file when they are not in memory, so a
@@ -24,10 +27,13 @@ use datarig_core::driver::keys::{
     Generated, InsertPlan, NotInsertable, NotUpdatable, insert_into, insert_source, update_source,
 };
 use datarig_core::edit::Value;
+use datarig_core::edit::paste::MAX_ROWS as MAX_PASTE_ROWS;
 use datarig_core::export::{self, Kind, Target};
 use datarig_core::fault::{ErrorLog, Fault};
+use datarig_core::i18n::fmt_count;
 use datarig_core::sql::dialect::Dialect;
 use std::ops::Range;
+use std::sync::Arc;
 
 /// The reasons a register write did not reach the clipboard that were said already: each is
 /// said once a session (else every `x` would say it again).
@@ -405,9 +411,31 @@ impl App {
             let Results::Rows(rs) = &self.tab().results else { return };
             match over_block(rs, &b, format == CopyFormat::SqlInsert) {
                 Ok(p) => p,
-                Err(why) => return self.flash(Notice::new(why, Level::Warning)),
+                Err(why) => {
+                    // Not kept either: `g p` never pastes an older copy in its place.
+                    if format == CopyFormat::Tsv {
+                        self.grid_copy = None;
+                    }
+                    return self.flash(Notice::new(why, Level::Warning));
+                }
             }
         };
+        // `y` and `Y` keep the cells for `g p`, before the clipboard is tried; why not, said
+        // after the copy.
+        let mut not_kept = None;
+        if format == CopyFormat::Tsv {
+            let kept = {
+                let Results::Rows(rs) = &self.tab().results else { return };
+                self.grid_copy_of(rs, &b)
+            };
+            match kept {
+                Ok(c) => self.grid_copy = Some(Arc::new(c)),
+                Err(why) => {
+                    self.grid_copy = None;
+                    not_kept = why;
+                }
+            }
+        }
         // Generated columns left out of an SQL INSERT copy.
         let mut skipped = String::new();
         // `:copy insert` of rows that are not a projection of that table: said after the copy.
@@ -666,6 +694,71 @@ impl App {
             self.show_status(warning.clone());
             self.flash(warning);
         }
+        if let Some(why) = not_kept {
+            self.flash(Notice::new(why, Level::Info));
+        }
+    }
+
+    /// The cells of block `b` of `rs` as `g p` pastes them: each value as the grid shows it (a
+    /// pending one over the value read; NULL as NULL). Not kept, and why (`None`: the rows could
+    /// not be read, which the copy says): more rows than a paste takes, or a value read that is
+    /// not shown as stored ([`export::sql_cells`]: a MySQL `FLOAT`, bytes not in their form, text
+    /// or a time read in a session that shows them otherwise), whose text would store another one.
+    fn grid_copy_of(&self, rs: &ResultSet, b: &Block) -> Result<edit::GridCopy, Option<Msg>> {
+        let key = || self.key_for(Action::Edit(edit::EditAction::PasteRegister), Ctx::Grid);
+        if b.rows.len() > MAX_PASTE_ROWS {
+            return Err(Some(Msg::CopyRegisterTooMany { key: key(), max: fmt_count(MAX_PASTE_ROWS as u64) }));
+        }
+        let t = self.tab();
+        let d = self.tab_dialect(t.id);
+        let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
+        let cells: Vec<Result<export::SqlCells, export::Refused>> = b
+            .cols
+            .iter()
+            .map(|&c| {
+                let m = &rs.columns[c].meta;
+                let col =
+                    export::SqlColumn { name: &m.name, type_name: &m.type_name, kind: m.kind, auto_increment: false };
+                export::sql_cells(d, &[col], &rs.read_in, zone)
+            })
+            .collect();
+        let overlaid = !rs.edit.batch.is_empty() || rs.edit.applied.is_some();
+        let mut rows: Vec<Vec<Value>> = Vec::with_capacity(b.rows.len());
+        let mut refused: Option<export::Refused> = None;
+        let mut at = b.rows.start;
+        rs.rows
+            .for_each_chunk(b.rows.clone(), COPY_CHUNK, |chunk| {
+                for (i, r) in chunk.iter().enumerate() {
+                    let row =
+                        b.cols.iter().enumerate().map(|(j, &c)| match overlaid.then(|| rs.over(at + i, c)).flatten() {
+                            // A value with none to show (a DEFAULT, one only a run shows) refused the
+                            // copy before.
+                            Some(o) => o.cell().flatten().map_or(Value::Null, |v| Value::Text(v.to_string())),
+                            None => match r.get(c).and_then(|v| v.as_deref()) {
+                                None => Value::Null,
+                                Some(v) => {
+                                    if refused.is_none() {
+                                        refused = cells[j]
+                                            .as_ref()
+                                            .map_err(Clone::clone)
+                                            .and_then(|x| x.cell(0, v).map(drop))
+                                            .err();
+                                    }
+                                    Value::Text(v.to_string())
+                                }
+                            },
+                        });
+                    rows.push(row.collect());
+                }
+                at += chunk.len();
+            })
+            .map_err(|_| None)?;
+        if let Some(r) = refused {
+            let reason = self.not_whole_reason(&r.why);
+            return Err(Some(Msg::CopyRegisterNotWhole { key: key(), column: r.column, reason }));
+        }
+        let columns = b.cols.iter().map(|&c| rs.columns[c].meta.clone()).collect();
+        Ok(edit::GridCopy { columns, rows })
     }
 
     /// Whether the rest of the active tab's rows can be fetched: its portal is open, the

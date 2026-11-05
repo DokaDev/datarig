@@ -62,6 +62,7 @@ const EDIT_MENU: &[EditAction] = &[
     EditAction::AddRow,
     EditAction::CloneRow,
     EditAction::DeleteRow,
+    EditAction::PasteRegister,
     EditAction::Undo,
     EditAction::Preview,
     EditAction::Apply,
