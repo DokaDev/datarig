@@ -249,11 +249,21 @@ fn innermost_context_wins_and_sequences_complete() {
 }
 
 #[test]
-fn g_p_pastes_the_grids_copy_and_p_stays_the_previous_page() {
+fn g_p_pastes_the_grids_copy_and_brackets_page() {
     let km = Keymap::default();
     assert_eq!(feed_all(&km, Ctx::Grid, "g p"), [Resolved::Pending, act("edit.paste_register")]);
     assert_eq!(last(&km, Ctx::Grid, "space d y"), act("edit.paste_register"));
-    assert_eq!(last(&km, Ctx::Grid, "p"), act("results.page.prev"));
+    // `[` and `]` page; `n` is the next page too, `Space r p` the previous one.
+    assert_eq!(last(&km, Ctx::Grid, "["), act("results.page.prev"));
+    assert_eq!(last(&km, Ctx::Grid, "]"), act("results.page.next"));
+    assert_eq!(last(&km, Ctx::Grid, "n"), act("results.page.next"));
+    assert_eq!(last(&km, Ctx::Grid, "space r p"), act("results.page.prev"));
+    assert_ne!(last(&km, Ctx::Grid, "p"), act("results.page.prev"), "p is no page key");
+    // While a search is on, `n` is its next match and `]` still the next page.
+    assert_eq!(last(&km, Ctx::GridMatches, "n"), act("grid.search_next"));
+    assert_eq!(last(&km, Ctx::GridMatches, "]"), act("results.page.next"));
+    // The editor keeps its own brackets.
+    assert_eq!(last(&km, Ctx::VimNormal, "["), Resolved::Forward(k("[")));
     assert_eq!(last(&km, Ctx::Grid, "P"), act("results.view_as_plan"));
     assert_eq!(last(&km, Ctx::Grid, "g g"), act("grid.top"));
     assert_eq!(last(&km, Ctx::Grid, "g t"), act("tab.next"));
@@ -306,10 +316,13 @@ fn editor_keys_win_inside_the_editor_except_protected_keys() {
 #[test]
 fn brackets_are_no_tab_keys() {
     let km = Keymap::default();
-    for ctx in [Ctx::Explorer, Ctx::Grid, Ctx::Inspector, Ctx::Welcome] {
+    for ctx in [Ctx::Explorer, Ctx::Inspector, Ctx::Welcome] {
         assert_eq!(last(&km, ctx, "]"), Resolved::Forward(k("]")), "{ctx:?}");
         assert_eq!(last(&km, ctx, "["), Resolved::Forward(k("[")), "{ctx:?}");
     }
+    // In the grid they page, never switch tabs.
+    assert_eq!(last(&km, Ctx::Grid, "]"), act("results.page.next"));
+    assert_eq!(last(&km, Ctx::Grid, "["), act("results.page.prev"));
     assert_eq!(last(&km, Ctx::Explorer, "space r ]"), act("results.tab.next"));
     let tab_keys: Vec<String> =
         km.keys_for(spec(Action::NextTab).action, Ctx::Explorer).iter().map(|k| keys::notation(k)).collect();

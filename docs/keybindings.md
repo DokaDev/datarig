@@ -279,7 +279,8 @@ The result grid. The wheel scrolls the rows; a sideways wheel (a trackpad) or Sh
 | `+` | `results.panel.grow` | Results pane → taller | ✓ |
 | `-` | `results.panel.shrink` | Results pane → shorter | ✓ |
 | `n` | `results.page.next` | Results → next page | ✓ |
-| `p` | `results.page.prev` | Results → previous page | ✓ |
+| `]` | `results.page.next` | Results → next page | ✓ |
+| `[` | `results.page.prev` | Results → previous page | ✓ |
 | `#` | `results.count` | Results → count every row (runs a count query) |  |
 | `P` | `results.view_as_plan` | View as plan: the text EXPLAIN again as a plan |  |
 | `c` | `results.chart` | Results → show as a chart / as rows |  |

@@ -36,8 +36,8 @@ config file; the password goes to the password store you chose, never into the f
    tab on that connection opens.
 2. Press `i` to type (the editor has vim keys; `Esc` goes back to Normal mode).
 3. `Ctrl+E` runs the statement under the cursor. `Ctrl+C` cancels a running statement.
-4. The result opens below the editor. `n` and `p` in the grid move to the next and previous
-   page; `Tab` and `F6` move the focus between the panes.
+4. The result opens below the editor. `n` (or `]`) and `[` in the grid move to the next and
+   previous page; `Tab` and `F6` move the focus between the panes.
 
 A statement that may do harm (a `DROP`, an `UPDATE` without a real `WHERE`, …) asks first,
 with Cancel focused. See [Environments and safety](guide/environments.md).

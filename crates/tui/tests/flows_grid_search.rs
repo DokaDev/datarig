@@ -214,8 +214,7 @@ fn esc_ends_the_search_and_n_is_the_next_page_again() {
     let r = h.app.layout.results;
     let line = screen.lines().nth((r.y + r.height - 2) as usize).unwrap_or_default();
     assert!(
-        line.contains("/^42$")
-            && line.contains("1/1 in 500 rows read \u{b7} more rows on the server (Space r n: next page)"),
+        line.contains("/^42$") && line.contains("1/1 in 500 rows read \u{b7} more rows on the server (]: next page)"),
         "{line:?}"
     );
     let line = strip(&mut h);
@@ -495,7 +494,7 @@ fn the_page_end_hint_names_the_next_page_key_of_the_search() {
     h.key(KeyCode::Enter);
     h.keys("G");
     let status = h.status(120, 40);
-    assert!(status.contains("End of the page: Space r n shows the next one"), "{status}");
+    assert!(status.contains("End of the page: ] shows the next one"), "{status}");
 }
 
 #[test]
@@ -738,7 +737,7 @@ fn the_prompt_names_the_next_page_key_of_the_search() {
     h.keys("/");
     h.type_text("^42$");
     let line = strip_at(&mut h, 200, 40);
-    assert!(line.contains("/^42$") && line.contains("Space r n runs the SELECT again"), "{line:?}");
+    assert!(line.contains("/^42$") && line.contains("] runs the SELECT again"), "{line:?}");
 }
 
 #[test]
@@ -756,7 +755,7 @@ fn a_background_tabs_idle_close_names_the_next_page_key_of_its_search() {
     h.app.focus = Focus::Results;
     assert_eq!((h.app.tabs.active_index(), h.app.key_context()), (0, Ctx::GridMatches));
     let status = h.status(200, 40);
-    assert!(status.contains("Space r n runs the SELECT again"), "{status}");
+    assert!(status.contains("] runs the SELECT again"), "{status}");
 }
 
 #[test]
@@ -897,7 +896,7 @@ fn the_idle_close_names_the_search_key_while_the_prompt_is_open() {
     assert_eq!(h.app.key_context(), Ctx::GridSearch);
     h.advance(Duration::from_secs(31));
     let status = h.status(200, 40);
-    assert!(status.contains("Space r n runs the SELECT again"), "{status}");
+    assert!(status.contains("] runs the SELECT again"), "{status}");
 }
 
 #[test]

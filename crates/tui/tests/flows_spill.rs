@@ -153,7 +153,7 @@ fn rows_past_the_window_spill_and_read_back_everywhere() {
     h.keys("G");
     assert!(h.screen(160, 45).contains("r04999"));
     for _ in 0..9 {
-        h.keys("p");
+        h.keys("[");
         h.key(KeyCode::PageUp);
         assert!(!h.screen(160, 45).contains("(not read)"));
     }
