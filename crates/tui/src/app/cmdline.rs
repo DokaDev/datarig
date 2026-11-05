@@ -94,6 +94,7 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::YankFlash(_)
         | Setting::Tips(_)
         | Setting::ChangesView(_)
+        | Setting::Background(_)
         | Setting::PasteNull(_)
         | Setting::IdleDisconnect(_)
         | Setting::LockWait(_) => None,
@@ -890,6 +891,7 @@ impl App {
                 self.changes_view = None;
                 self.set_prefs(s, |x| x.changes_view = v)
             }
+            Setting::Background(b) => self.set_ui_background(s, b),
             Setting::PasteNull(n) => self.set_prefs(s, |x| x.paste_null = n),
             Setting::IdleDisconnect(d) => self.set_prefs(s, |x| x.idle_disconnect = d),
             Setting::LockWait(d) => self.set_prefs(s, |x| x.lock_wait = d),
@@ -921,6 +923,20 @@ impl App {
         if let Some(m) = saved.or(msg.map(|m| Notice::new(m, Level::Info))) {
             self.flash(m);
         }
+    }
+
+    /// `ui.background`: save it; switching to the terminal's background on a theme that has
+    /// one of its own says, in one line, that it is not painted now (text made for it may read
+    /// worse on the terminal's), in place of the usual message.
+    fn set_ui_background(&mut self, s: Setting, b: datarig_core::config::UiBackground) {
+        let own = matches!(self.theme.bg, ratatui::style::Color::Rgb(..));
+        if b != datarig_core::config::UiBackground::Terminal || !own {
+            return self.set_prefs(s, |x| x.background = b);
+        }
+        self.prefs.background = b;
+        let note = Notice::new(Msg::SettingBackgroundNote { theme: self.theme_name.clone() }, Level::Info);
+        let m = self.persist().unwrap_or(note);
+        self.flash(m);
     }
 
     /// A note about what is being typed, shown above the input line: the `icons` setting's

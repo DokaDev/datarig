@@ -17,7 +17,7 @@ use datarig_core::config::{
     AutoPairs, ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
     IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat, SoftTabBackspace, Tips, YankFlash,
 };
-use datarig_core::config::{ChangesView, PasteNull};
+use datarig_core::config::{ChangesView, PasteNull, UiBackground};
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
 use std::time::Duration;
@@ -484,6 +484,7 @@ pub enum Setting {
     YankFlash(YankFlash),
     Tips(Tips),
     ChangesView(ChangesView),
+    Background(UiBackground),
     PasteNull(PasteNull),
     /// `idle_disconnect` (`None`: off).
     IdleDisconnect(Option<Duration>),
@@ -786,6 +787,16 @@ pub const SETTINGS: &[SettingSpec] = &[
             ("always", Setting::Tips(Tips::Always), Label::SettingTipsAlways),
             ("until_used", Setting::Tips(Tips::UntilUsed), Label::SettingTipsUntilUsed),
             ("off", Setting::Tips(Tips::Off), Label::SettingTipsOff),
+        ]),
+    },
+    SettingSpec {
+        key: "ui.background",
+        label: Label::SettingBackground,
+        about: Label::SettingBackgroundAbout,
+        group: SettingGroup::Display,
+        values: Values::Fixed(&[
+            ("theme", Setting::Background(UiBackground::Theme), Label::SettingBackgroundTheme),
+            ("terminal", Setting::Background(UiBackground::Terminal), Label::SettingBackgroundTerminal),
         ]),
     },
     // `:set` also takes any other duration these two take (`7m`); the screen shows it as is.

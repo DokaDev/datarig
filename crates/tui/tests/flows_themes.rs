@@ -420,3 +420,52 @@ fn the_suggested_name_skips_names_taken_in_any_case() {
     h.keys("jjc");
     assert_eq!(h.app.overlays.name_input().map(|n| n.input.text().to_string()).as_deref(), Some("dark-copy-2"));
 }
+
+/// `ui.background = "terminal"`: the panes and the alternate rows leave the terminal's own
+/// background (reset) where the theme paints its own; the status bar, the selection and the
+/// cursor tints stay the theme's, a dialog keeps its surface and the screen behind it stays
+/// see-through (only its text dimmed). Switching to it on a theme with a background of its own
+/// says so in one line; on the terminal theme it is the usual message. Saved; back to `theme`
+/// the key goes and everything is painted again.
+#[test]
+fn the_terminals_background_shows_through_and_dialogs_keep_their_surface() {
+    let s = Scratch::new("background", "language = \"en\"\ntheme = \"dark\"\n", &[]);
+    let mut h = Harness::with_config(&s.config(), Lang::En);
+    h.key(KeyCode::Esc);
+    let th = theme::DARK;
+    let painted = |h: &mut Harness| {
+        let t = h.draw(120, 40);
+        t.backend().buffer().content().iter().map(|c| c.bg).collect::<Vec<_>>()
+    };
+    let before = painted(&mut h);
+    let resets = |v: &[Color]| v.iter().filter(|c| **c == Color::Reset).count();
+    assert!(before.contains(&th.bg), "the theme paints its background");
+    h.command("set ui.background=terminal");
+    assert_eq!(h.app.prefs.background, config::UiBackground::Terminal);
+    let (msg, level) = flashed(&h);
+    assert_eq!(level, Level::Info);
+    assert!(msg.contains("dark has its own background, not painted now"), "{msg}");
+    assert!(s.text().contains("[ui]\nbackground = \"terminal\"\n"), "{}", s.text());
+    let after = painted(&mut h);
+    assert!(!after.contains(&th.bg) && !after.contains(&th.surface_alt), "no default background is painted");
+    assert!(resets(&after) > resets(&before) + 1000, "{} {}", resets(&after), resets(&before));
+    assert!(after.contains(&th.surface), "the status bar keeps its surface");
+    // A dialog: its own box on its surface, the screen behind it see-through.
+    h.keys(" ,");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Settings));
+    let t = h.draw(120, 40);
+    let buf = t.backend().buffer();
+    assert_eq!(buf[(60, 20)].bg, th.surface, "the dialog keeps its surface");
+    assert_eq!(buf[(0, 20)].bg, Color::Reset, "behind it the terminal still shows");
+    h.key(KeyCode::Esc);
+    // On the terminal theme there is no background of its own: the usual message.
+    h.command("set theme=terminal");
+    h.command("set ui.background=theme");
+    h.command("set ui.background=terminal");
+    assert!(flashed(&h).0.contains("Background"), "{}", flashed(&h).0);
+    h.command("set ui.background=theme");
+    h.command("set theme=dark");
+    assert!(!s.text().contains("background"), "theme is the default: the key goes");
+    let back = painted(&mut h);
+    assert!(back.contains(&th.bg) && resets(&back) == resets(&before), "painted again");
+}

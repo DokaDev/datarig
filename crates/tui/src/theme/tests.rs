@@ -1330,3 +1330,31 @@ fn a_theme_file_without_the_grids_cursor_tints_gets_them_of_its_own_colors() {
     d.file("ansi", "extends = \"terminal\"\n[colors]\nbg = \"black\"\n");
     assert_eq!(resolve("ansi", Background::Dark, dir).unwrap().grid_cursor_row, TERMINAL.grid_cursor_row);
 }
+
+/// `unpaint` leaves the terminal's background where the theme's background or alternate rows
+/// are, and nothing else; a theme of terminal colors has none to leave. `dim_area_over` keeps
+/// such a cell see-through (its text dimmed), while `dim_area` still blends it.
+#[test]
+fn unpainting_leaves_only_the_default_backgrounds_and_dimming_keeps_them() {
+    let th = DARK;
+    let mut buf = Buffer::empty(Rect::new(0, 0, 5, 1));
+    for (x, c) in [th.bg, th.surface_alt, th.surface, bg(th.selection), bg(th.grid_cursor_row)].into_iter().enumerate()
+    {
+        buf[(x as u16, 0)].set_bg(c).set_fg(th.fg);
+    }
+    let area = buf.area;
+    th.unpaint(&mut buf, area);
+    let bgs: Vec<Color> = (0..5).map(|x| buf[(x, 0)].bg).collect();
+    assert_eq!(bgs, [Color::Reset, Color::Reset, th.surface, bg(th.selection), bg(th.grid_cursor_row)]);
+    let mut seen = buf.clone();
+    th.dim_area_over(&mut seen, area, true);
+    assert_eq!(seen[(0, 0)].bg, Color::Reset, "see-through behind a dialog");
+    assert_ne!(seen[(0, 0)].fg, th.fg, "its text dimmed");
+    assert_ne!(seen[(2, 0)].bg, th.surface, "a surface dimmed");
+    th.dim_area(&mut buf, area);
+    assert_ne!(buf[(0, 0)].bg, Color::Reset, "without it a default color is dimmed as the background");
+    let mut t = Buffer::empty(Rect::new(0, 0, 1, 1));
+    t[(0, 0)].set_bg(Color::Blue);
+    TERMINAL.unpaint(&mut t, Rect::new(0, 0, 1, 1));
+    assert_eq!(t[(0, 0)].bg, Color::Blue, "terminal colors are left alone");
+}

@@ -655,6 +655,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             yank_flash: YankFlash::On,
             tips: Tips::Always,
             changes_view: ChangesView::List,
+            background: UiBackground::Theme,
             paste_null: PasteNull::BackslashN,
             idle_disconnect: None,
             lock_wait: None,
@@ -859,6 +860,32 @@ fn the_changes_tab_opens_in_its_list_unless_the_sql_is_chosen() {
     assert_eq!(load(Some(path.clone())).0.prefs, prefs);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("changes_view"), "list is the default: the key goes");
+}
+
+#[test]
+fn the_theme_paints_its_background_unless_the_terminals_is_chosen() {
+    assert_eq!(parse("").unwrap().prefs.background, UiBackground::Theme);
+    assert_eq!(parse("[ui]\nbackground = \"terminal\"\n").unwrap().prefs.background, UiBackground::Terminal);
+    assert_eq!(parse("[ui]\nbackground = \"theme\"\n").unwrap().prefs.background, UiBackground::Theme);
+    assert_eq!(
+        parse("[ui]\nbackground = \"none\"\n").unwrap_err(),
+        ConfigError::Value {
+            key: "ui.background".into(),
+            value: "none".into(),
+            profile: None,
+            allowed: Some("theme, terminal")
+        }
+    );
+    let path = temp_file("ui_background");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "").unwrap();
+    let prefs = Prefs { background: UiBackground::Terminal, ..Prefs::default() };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[ui]\nbackground = \"terminal\"\n"), "{text}");
+    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("background"), "theme is the default: the key goes");
 }
 
 #[test]
