@@ -2401,3 +2401,44 @@ fn a_long_value_is_shown_shortened_and_laid_out_once_per_width() {
     assert_eq!(copied.matches(&hex).count(), 4, "every literal whole");
     assert!(!copied.contains("more characters"));
 }
+
+/// A table whose name has a control character: the Apply's question and the dialog's title
+/// spell it out.
+#[test]
+fn a_table_name_s_control_character_is_spelled_out_in_the_apply() {
+    use datarig_core::driver::keys::{KeyCatalog, KeyKind};
+    let table = "t\nx";
+    let names = ["id", "email", "name", "nickname", "profile"];
+    let keys = || {
+        let mut k = KeyCatalog::default();
+        k.add_table(USERS, "shop", table, names.iter().enumerate().map(|(i, n)| (i as i16 + 1, n.to_string())));
+        k.mark(USERS, &[1], KeyKind::Primary);
+        k
+    };
+    let resolve = |mut h: Harness| {
+        h.db(DbEvent::Keys(Ok(keys())));
+        answer(&mut h, "SELECT id, email, nickname FROM shop.\"t\nx\"", users_columns(), users_rows());
+        h.keys("le");
+        let name = h.app.profiles[0].name.clone();
+        let st = Box::new(named());
+        h.meta_db(&name, DbEvent::Structure { schema: "shop".into(), table: table.into(), result: Ok(st) });
+        h.key(KeyCode::Esc);
+        h.app.transient = None;
+        h
+    };
+    // The grid's badge names the table so too.
+    let mut h = resolve(Harness::connected(Lang::En));
+    let screen = h.screen(160, 45);
+    assert!(screen.contains(r"shop.t\nx"), "{screen}");
+    // The question, where nothing confirms writes.
+    type_cell(&mut h, "z@x");
+    h.keys(" da");
+    let question = h.app.status_ask_line().and_then(|(forms, _)| forms.first().cloned()).expect("asked");
+    assert!(question.contains(r"shop.t\nx") && !question.contains('\n'), "{question}");
+    // The dialog, where every write is confirmed.
+    let mut h = resolve(connected(Lang::En));
+    type_cell(&mut h, "z@x");
+    h.keys(" da");
+    let v = h.app.edit_preview_view().expect("the dialog");
+    assert_eq!(v.title.to_string(), r"Apply changes — shop.t\nx");
+}
