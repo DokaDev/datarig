@@ -79,10 +79,10 @@ the `Space d` group under [nav](../reference/keybindings.md#nav), the
 [Apply dialog](../reference/keybindings.md#overlayedit_preview).
 
 While changes are pending the strip shows `3 pending` and a Changes tab, and the hint line
-offers `Space d a` apply and `u` undo. A pending change is a row: a row read with changed cells (two cells of one
-row are one change), a new row or a row to be deleted. The row number's gutter marks them `~`,
-`+` and `-`, or `!` when a cell of the row stops an Apply. Changed cells take their own color, new rows another, rows to be deleted are
-crossed out, and a cell left to its default shows a dim `default`, or `! value needed` where
+offers `Space d a` apply and `u` undo. A pending change is a row: a row read with changed cells
+(two cells of one row are one change), a new row or a row to be deleted. The row number's
+gutter marks them `~`, `+` and `-`, or `!` when an Apply is refused for the row. Changed cells
+take their own color, new rows another, rows to be deleted are crossed out, and a cell left to its default shows a dim `default`, or `! value needed` where
 the column has none (see [New rows](#new-rows)). The theme tokens are `edit_changed`,
 `edit_inserted`, `edit_deleted`, and `edit_pending` for the count (see
 [Theme files](../reference/theme-files.md)).
@@ -164,10 +164,12 @@ The Changes tab lists, and an Apply refuses, a new row that leaves a `NOT NULL` 
 ("Row 4: name is NOT NULL and has no default; give it a value"), and one of a table with such a
 column that the result does not show ("…is not in the result; add it to the SELECT").
 
-The grid shows the first kind where it is: such a cell reads `! value needed` in the theme token
-`edit_invalid` instead of the dim `default` (cut short in a narrow column, as any value), and the
-row's gutter shows `!` instead of `+`. Typing a value there clears both. A column the result does
-not show has no cell to mark; the Changes tab names it.
+The grid shows both where they are. A cell that needs a value reads `! value needed` in the
+theme token `edit_invalid` instead of the dim `default` (its column widens to fit it, up to the
+grid's widest column), and the row's gutter shows `!` instead of `+`; the badge counts such
+cells with the invalid ones, and the cell editor and the inspector say why the cell needs a
+value. A column the result does not show has no cell to mark: the row's gutter shows `!`, and
+the Changes tab names the column. Typing the values clears the marks.
 
 ## Pasting a range
 
@@ -292,8 +294,8 @@ against `NOT NULL`. Nothing is converted: a value its column does not take is ke
 it, and marked:
 
 - the row's gutter shows `!` (over `~` and `+`), the cell is in the theme token `edit_invalid`,
-  its value still shown; the gutter's `!` also marks a new row with a cell that needs a value
-  (see [New rows](#new-rows))
+  its value still shown, also under the cursor; the gutter's `!` also marks a new row an Apply
+  is refused for (see [New rows](#new-rows))
 - the badge counts them: `5 pending · 1 invalid`
 - the Changes tab lists them first, with the reason: "Row 14 · price: not a number: 'abc'"
 - the changes are not applied while any value is invalid (Apply shows the Changes tab instead)

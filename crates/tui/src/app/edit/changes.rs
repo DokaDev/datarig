@@ -470,7 +470,7 @@ impl App {
     }
 
     /// The row the grid shows for `origin` of `rs`, counted from 1, as text.
-    fn origin_row(&self, rs: &ResultSet, origin: Origin) -> String {
+    pub(super) fn origin_row(&self, rs: &ResultSet, origin: Origin) -> String {
         let shown = match origin {
             Origin::Row(r) => Some(r),
             Origin::New(id) => shown_row(rs, RowAt::New(id)),
@@ -479,7 +479,7 @@ impl App {
     }
 
     /// The name of result column `c` of `rs`.
-    fn preview_column(&self, rs: &ResultSet, c: usize) -> String {
+    pub(super) fn preview_column(&self, rs: &ResultSet, c: usize) -> String {
         rs.columns.get(c).map(|c| c.meta.name.clone()).unwrap_or_default()
     }
 

@@ -11,7 +11,7 @@ use crate::app::hover::PointerOn;
 use crate::app::{App, DetailTab, Keys, Results};
 use crate::icons;
 use crate::keymap::Ctx;
-use crate::text::{clip, sanitize_cell, width, wrap};
+use crate::text::{clip, sanitize_cell, width, wrap, wrap_words};
 use crate::theme;
 use crate::widgets::grid::{ResultSet, Shown, viewer_text};
 use crate::widgets::{panel, put};
@@ -99,6 +99,17 @@ pub(crate) fn draw_inspector(app: &mut App, area: Rect, buf: &mut Buffer) {
             false => Label::DetailNewRow,
         };
         put(buf, body.x + 1, body.y, &app.i18n.label(label), w - 1, dim());
+        // Why an Apply is refused for the cursor's cell of a new row, wrapped below.
+        let draft = (t.grid.row - rs.rows.len()).checked_sub(rs.edit.applied_new());
+        let at = draft.and_then(|i| rs.edit.batch.drafts().get(i)).map(|d| crate::app::edit::RowAt::New(d.id));
+        if let Some(why) = at.and_then(|at| app.invalid_reason(at, t.grid.col)) {
+            let th = theme::cur();
+            let style = Style::new().fg(th.edit_invalid.fg.unwrap_or(th.error));
+            let room = (body.height as usize).saturating_sub(2);
+            for (i, line) in wrap_words(&why, w - 1).into_iter().take(room).enumerate() {
+                put(buf, body.x + 1, body.y + 2 + i as u16, &line, w - 1, style);
+            }
+        }
         app.layout.detail_list = Rect::default();
         return;
     }

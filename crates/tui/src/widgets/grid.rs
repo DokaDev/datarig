@@ -650,6 +650,9 @@ pub fn render(
     let gutter = win.end.max(1).to_string().len().max(2) + 1;
     let avail = (area.width as usize).saturating_sub(gutter);
     // A column is as wide as its values, or its header with the key marks before the name.
+    // A column with a new row's cell that needs a value is wide enough for its marker.
+    let needs: std::collections::BTreeSet<usize> =
+        look.invalid.map(|m| m.no_default.iter().map(|&(_, c)| c).collect()).unwrap_or_default();
     let marks: Vec<String> = (0..rs.columns.len())
         .map(|i| look.marks.get(i).map(|m| crate::icons::key_marks_text(*m, look.icons)).unwrap_or_default())
         .collect();
@@ -657,7 +660,11 @@ pub fn render(
         .columns
         .iter()
         .zip(&marks)
-        .map(|(c, m)| c.width.max(width(m) + width(&c.meta.name)).min(MAX_COL_WIDTH))
+        .enumerate()
+        .map(|(i, (c, m))| {
+            let needed = if needs.contains(&i) { width(&needed_label) } else { 0 };
+            c.width.max(width(m) + width(&c.meta.name)).max(needed).min(MAX_COL_WIDTH)
+        })
         .collect();
     // The row of all columns, scrolled by character: the selected column whole in view unless
     // the wheel moved the view, never past the last column's end (also when the widths or the
@@ -823,9 +830,12 @@ pub fn render(
         let bad = |c: usize| found.is_some_and(|(a, m)| m.cells.contains_key(&(a, c)));
         // A cell of a new row left to a default its column lacks.
         let needed = |c: usize| found.is_some_and(|(a, m)| m.no_default.contains(&(a, c)));
+        // Or a new row of a table with a column the result does not show that needs a value.
         let row_bad = found.is_some_and(|(a, m)| {
             let row = (a, 0)..=(a, usize::MAX);
-            m.cells.range(row.clone()).next().is_some() || m.no_default.range(row).next().is_some()
+            m.cells.range(row.clone()).next().is_some()
+                || m.no_default.range(row).next().is_some()
+                || matches!(a, RowAt::New(id) if m.not_shown.contains(&id))
         });
         let mark = row_mark(row_bad, new.is_some(), deleted, rs.edit.batch.row(r).is_some());
         if let Some(mark) = mark {
@@ -905,6 +915,12 @@ pub fn render(
                 (None, None) => style,
             }
             .patch(bg);
+            // On the cursor or in a range too: the selection's text color would hide the problem.
+            let problem = needed || bad(ci);
+            let style = match th.edit_invalid.fg {
+                Some(fg) if problem => style.fg(fg),
+                _ => style,
+            };
             put(buf, cx + 1, y, &" ".repeat(w + 2), bg);
             let text = fit(&text, w, align);
             put(buf, cx + 2, y, &text, style);
