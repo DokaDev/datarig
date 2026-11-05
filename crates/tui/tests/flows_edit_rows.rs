@@ -153,7 +153,7 @@ fn o_adds_a_new_row_after_the_rows_read_with_every_value_its_default() {
     assert_eq!(counts(&h), Counts { updates: 0, inserts: 1, deletes: 0 });
     // `!`, not `+`: its email (NOT NULL, no default) needs a value.
     let screen = h.screen(120, 40);
-    assert!(screen.contains("  !│") && !screen.contains(" 4 │"), "{screen}");
+    assert!(screen.contains("│ 4!│") && !screen.contains(" 4 │"), "{screen}");
     // From a row read: after the other new rows.
     h.keys("ggo");
     assert_eq!(cursor(&h), (4, 0));
@@ -470,7 +470,7 @@ fn rows_read_later_come_before_the_new_rows() {
     assert_eq!(h.app.tab().grid.anchor, None, "the selection goes");
     let screen = h.screen(120, 40);
     let at = |t: &str| screen.find(t).unwrap_or_else(|| panic!("{t}:\n{screen}"));
-    assert!(at(" 5 │") < at("  !│"), "{screen}");
+    assert!(at(" 5 │") < at(" 6!│"), "{screen}");
     h.keys("D");
     assert_eq!(counts(&h), Counts::default(), "only the new row goes, no row that came is marked");
 }
@@ -624,11 +624,11 @@ fn new_and_deleted_rows_take_their_tokens() {
         let g = &h.app.tab().grid;
         let new = g.cell_rect(3, 1, 3).expect("on screen");
         let at = buf[(new.x + 1, new.y)].clone();
-        assert_eq!((at.fg, at.bg), (th.edit_inserted.fg.unwrap(), th.surface_alt), "a new row's value");
+        assert_eq!((at.fg, at.bg), (th.edit_inserted.fg.unwrap(), th.edit_inserted_row), "a new row's value");
         assert!(at.modifier.contains(Modifier::BOLD));
         let default = g.cell_rect(3, 2, 3).expect("on screen");
         let at = buf[(default.x + 1, default.y)].clone();
-        assert!(at.fg == th.fg_muted && at.modifier.contains(Modifier::DIM), "a default: {at:?}");
+        assert!(at.fg == th.fg_muted && at.modifier.contains(Modifier::ITALIC), "a default: {at:?}");
         let gone = g.cell_rect(1, 1, 3).expect("on screen");
         let at = buf[(gone.x + 1, gone.y)].clone();
         assert_eq!(at.fg, th.edit_deleted.fg.unwrap(), "a row to be deleted");
@@ -663,7 +663,8 @@ fn a_new_row_without_a_needed_value_is_marked_in_the_grid() {
             let g = &h.app.tab().grid;
             let email = g.cell_rect(3, 1, 3).expect("on screen");
             let line = row_text(buf, email.y);
-            assert!(line.contains(" !\u{2502} defa\u{2026} \u{2502} ! value needed \u{2502}"), "{w}x{hh}: {line:?}");
+            // At 80x24 the pane's edge cuts the column.
+            assert!(line.contains(" 4!\u{2502} <generated> \u{2502} ! value"), "{w}x{hh}: {line:?}");
             let at = buf[(email.x + 1, email.y)].clone();
             assert_eq!(at.symbol(), "!");
             assert_eq!(at.fg, th.edit_invalid.fg.unwrap(), "{w}x{hh}: the marker's color");
@@ -673,9 +674,9 @@ fn a_new_row_without_a_needed_value_is_marked_in_the_grid() {
             let bar = (0..email.x).rev().find(|&x| buf[(x, email.y)].symbol() == "\u{2502}").expect("a bar");
             let x = (0..bar).rev().find(|&x| buf[(x, email.y)].symbol() == "!").expect("the gutter's mark");
             assert_eq!(buf[(x, email.y)].fg, th.error, "{w}x{hh}: the gutter's `!`");
-            // The id, with a default of its own, keeps its dim `default`.
+            // The id, numbered by the table, shows `<generated>`, muted.
             let id = g.cell_rect(3, 0, 3).expect("on screen");
-            assert!(buf[(id.x + 2, id.y)].modifier.contains(Modifier::DIM));
+            assert_eq!(buf[(id.x + 1, id.y)].fg, th.fg_muted);
         }
         // Under the cursor, still in the warning color.
         h.keys("l");
@@ -688,7 +689,7 @@ fn a_new_row_without_a_needed_value_is_marked_in_the_grid() {
         let t = h.draw(120, 40);
         let y = h.app.tab().grid.cell_rect(3, 1, 3).expect("on screen").y;
         let line = row_text(t.backend().buffer(), y);
-        assert!(line.contains(" +\u{2502} defa\u{2026} \u{2502} n@x"), "{line:?}");
+        assert!(line.contains(" 4+\u{2502} <generated> \u{2502} n@x"), "{line:?}");
         assert!(!line.contains("value"), "{line:?}");
         assert!(h.app.shown_invalid().expect("resolved").no_default.is_empty());
         assert!(h.app.shown_changes().expect("a model").problems.iter().all(|p| !p.text.contains(needed)));
@@ -752,7 +753,7 @@ fn a_new_row_an_apply_refuses_is_marked_and_says_why() {
     h.app.transient = None;
     // Every shown cell has a value, and still: `name` is not in the result.
     let l = line(&mut h);
-    assert!(l.contains(" !\u{2502} defa\u{2026} \u{2502} n@x"), "{l:?}");
+    assert!(l.contains(" 4!\u{2502} <generated> \u{2502} n@x"), "{l:?}");
     // The row is still counted: an Apply is refused for it.
     let screen = h.screen(120, 40);
     assert!(screen.contains("1 \u{b7} 1!"), "{screen}");
@@ -763,7 +764,134 @@ fn a_new_row_an_apply_refuses_is_marked_and_says_why() {
     h.keys("ol");
     type_cell(&mut h, "n@x");
     let l = line(&mut h);
-    assert!(l.contains(" +\u{2502} defa\u{2026} \u{2502} n@x"), "{l:?}");
+    assert!(l.contains(" 4+\u{2502} <generated> \u{2502} n@x"), "{l:?}");
+}
+
+/// The users' structure (every required column in the result) whose email defaults to a
+/// literal and nickname to an expression; the id is a serial's.
+fn with_defaults() -> TableStructure {
+    let mut t = all_shown();
+    t.columns[1].default = Some("'ACTIVE'::character varying".into());
+    t.columns[2].default = Some("upper('x'::text)".into());
+    t
+}
+
+/// The text of grid row `r` as drawn at `w`x`hh`.
+fn grid_row(h: &mut Harness, r: usize, w: u16, hh: u16) -> String {
+    let t = h.draw(w, hh);
+    let y = h.app.tab().grid.data_y + (r - h.app.tab().grid.top) as u16;
+    row_text(t.backend().buffer(), y)
+}
+
+/// A new row's cells left to their default show what the server will put there: a number the
+/// table draws `<generated>`, a literal its value (unquoted, without its cast), an expression
+/// `<default: …>`, a column that takes NULL without a default `NULL`; each column wide enough
+/// for it.
+#[test]
+fn a_new_rows_defaults_show_what_the_server_puts_there() {
+    let mut h = ready_with(Lang::En, with_defaults());
+    h.keys("o");
+    h.app.transient = None;
+    for (w, hh) in [(120, 40), (80, 24)] {
+        let line = grid_row(&mut h, 3, w, hh);
+        assert!(line.contains("\u{2502} <generated> \u{2502} ACTIVE"), "{w}x{hh}: {line:?}");
+        // At 80x24 the pane's edge cuts it off.
+        assert!(w == 80 || line.contains("<default: upper("), "{w}x{hh}: {line:?}");
+        // The column is wide enough for all of it.
+        let x = &h.app.tab().grid.col_x;
+        assert_eq!(x[3] - x[2] - 3, "<default: upper('x'::text)>".len(), "{w}x{hh}");
+    }
+    let mut h = ready_with(Lang::En, all_shown());
+    h.keys("o");
+    let line = grid_row(&mut h, 3, 120, 40);
+    assert!(line.contains("\u{2502} <generated> \u{2502} ! value needed \u{2502} NULL "), "{line:?}");
+    // Korean: the catalog's words.
+    let mut h = ready_with(Lang::Ko, with_defaults());
+    h.keys("o");
+    let line = grid_row(&mut h, 3, 120, 40);
+    let generated = Label::EditDefaultGenerated.text(Lang::Ko);
+    assert!(line.contains(generated), "{line:?}");
+}
+
+/// A new row continues the row numbers, its `+` (or `!`) after the number; the gutter widens
+/// with them.
+#[test]
+fn new_rows_continue_the_row_numbers() {
+    let mut h = ready_with(Lang::En, with_defaults());
+    h.keys("oO");
+    h.app.transient = None;
+    assert!(grid_row(&mut h, 3, 120, 40).starts_with("\u{2502}"), "a row of the grid pane");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("\u{2502} 4+\u{2502}") && screen.contains("\u{2502} 5+\u{2502}"), "{screen}");
+    // With a value needed: `!` after the number.
+    let mut h = ready_with(Lang::En, all_shown());
+    h.keys("o");
+    assert!(h.screen(120, 40).contains("\u{2502} 4!\u{2502}"), "{}", h.screen(120, 40));
+    // Ten rows and more: the gutter takes the width of the last number.
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    let rows: Vec<Vec<Option<String>>> = (1..=9).map(|i| vec![s(&i.to_string()), s(&format!("{i}@x")), None]).collect();
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", users_columns(), rows, false);
+    h.keys("le");
+    structure(&mut h, Ok(with_defaults()));
+    h.key(KeyCode::Esc);
+    h.keys("oo");
+    h.app.transient = None;
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("\u{2502} 9 \u{2502}"), "{screen}");
+    assert!(screen.contains("\u{2502}10+\u{2502}") && screen.contains("\u{2502}11+\u{2502}"), "{screen}");
+}
+
+/// In every built-in theme a new row is one tinted row: every cell, the separators and the
+/// number on `edit_inserted_row`; its defaults muted (not dim) and its typed values in
+/// `edit_inserted`; the cursor keeps its own background.
+#[test]
+fn a_new_row_is_tinted_as_a_whole() {
+    use ratatui::style::Modifier;
+    for (name, th) in datarig_tui::theme::BUILTINS.iter().copied() {
+        let mut h = ready_with(Lang::En, with_defaults());
+        h.app.theme = std::sync::Arc::new(th.clone());
+        h.keys("ol");
+        type_cell(&mut h, "n@x");
+        h.keys("gg");
+        let t = h.draw(120, 40);
+        let buf = t.backend().buffer();
+        let g = &h.app.tab().grid;
+        let first = g.cell_rect(3, 0, 3).expect("on screen");
+        let last = g.cell_rect(3, 2, 3).expect("on screen");
+        let grid = h.app.layout.results;
+        for x in grid.x + 1..last.x + last.width {
+            assert_eq!(buf[(x, first.y)].bg, th.edit_inserted_row, "{name}: column {x} of the new row");
+        }
+        let id = buf[(first.x + 1, first.y)].clone();
+        assert_eq!(id.fg, th.fg_muted, "{name}: a default is muted: {id:?}");
+        assert!(id.modifier.contains(Modifier::ITALIC) && !id.modifier.contains(Modifier::DIM), "{name}: {id:?}");
+        let email = g.cell_rect(3, 1, 3).expect("on screen");
+        assert_eq!(buf[(email.x + 1, email.y)].fg, th.edit_inserted.fg.unwrap(), "{name}: a typed value");
+        // A row read keeps its own background; the cursor its own.
+        let read = g.cell_rect(1, 1, 3).expect("on screen");
+        assert_eq!(buf[(read.x + 1, read.y)].bg, th.surface_alt, "{name}");
+        h.keys("G");
+        let t = h.draw(120, 40);
+        let buf = t.backend().buffer();
+        let cur = h.app.tab().grid.cell_rect(3, 1, 3).expect("on screen");
+        let at = buf[(cur.x + 1, cur.y)].clone();
+        match th.selection.bg {
+            Some(sel) => assert_eq!(at.bg, sel, "{name}: the cursor"),
+            None => assert!(at.modifier.contains(Modifier::REVERSED), "{name}: the cursor: {at:?}"),
+        }
+    }
+}
+
+/// The defaults shown and the numbered gutter at both sizes.
+#[test]
+fn a_new_rows_defaults_and_number_show() {
+    screens("edit_rows_defaults", |lang| {
+        let mut h = ready_with(lang, with_defaults());
+        h.keys("o");
+        h.app.transient = None;
+        h
+    });
 }
 
 /// The Korean strings of the row keys fit at 80x24.
@@ -786,7 +914,7 @@ fn a_result_with_no_rows_takes_new_rows() {
     assert_eq!(drafts(&h).len(), 1);
     assert_eq!(cursor(&h), (0, 0));
     let screen = h.screen(120, 40);
-    assert!(screen.contains("  !│ defa…"), "{screen}");
+    assert!(screen.contains("│ 1!│ <generated>"), "{screen}");
     h.keys("D");
     assert!(edits(&h).batch.is_empty());
     assert!(h.screen(120, 40).contains("No rows"));

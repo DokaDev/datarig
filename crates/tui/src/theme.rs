@@ -158,6 +158,10 @@ pub struct Theme {
     /// The cells of a new row of the result grid, not applied yet: their text, readable as
     /// [`Theme::edit_changed`] is, set apart from it and from body text also without color.
     pub edit_inserted: Style,
+    /// The background of a new row of the result grid, not applied yet: every cell, the
+    /// separators and the row's number, so the row reads as one; its values, defaults, the
+    /// mark of a cell that needs a value and the gutter's marks read on it.
+    pub edit_inserted_row: Color,
     /// A row of the result grid to be deleted, not applied yet: its text, set apart without
     /// color (crossed out).
     pub edit_deleted: Style,
@@ -262,6 +266,7 @@ pub const DARK: Theme = Theme {
     edit_pending: Style::new().fg(rgb(0xE6C35C)).add_modifier(Modifier::BOLD),
     // The success color in bold: a row to add; the muted text crossed out: a row to delete.
     edit_inserted: Style::new().fg(rgb(0x8FC77A)).add_modifier(Modifier::BOLD),
+    edit_inserted_row: rgb(0x28322A),
     edit_deleted: Style::new().fg(rgb(0x8A93A6)).add_modifier(Modifier::CROSSED_OUT),
     // The read-only mark's blue in italics: a change made, lighter than one pending.
     edit_applied: Style::new().fg(rgb(0x61AFEF)).add_modifier(Modifier::ITALIC),
@@ -531,6 +536,7 @@ tokens! {
         bg => "The background of the panes: explorer, editor, results.",
         surface => "The background of dialogs, popups, menus, the command line and the status bar.",
         surface_alt => "A second surface: every other row of the result grid, form fields and buttons.",
+        edit_inserted_row => "The background of a new row of the result grid, not applied yet: every cell, the separators and the row's number. Its values, its defaults (muted), the mark of a cell that needs a value and the gutter's marks must read on it; the cursor and a selection stand apart from it.",
         border => "Borders and rules between panes and around dialogs.",
         accent => "The main accent: the focused pane's border, dialog borders, labels and names to notice.",
         accent_warm => "The warm accent: values on the settings screen, an open transaction, keys in menus.",

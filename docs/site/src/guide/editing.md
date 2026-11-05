@@ -82,10 +82,11 @@ While changes are pending the strip shows `3 pending` and a Changes tab, and the
 offers `Space d a` apply and `u` undo. A pending change is a row: a row read with changed cells
 (two cells of one row are one change), a new row or a row to be deleted. The row number's
 gutter marks them `~`, `+` and `-`, or `!` when an Apply is refused for the row. Changed cells
-take their own color, new rows another, rows to be deleted are crossed out, and a cell left to
-its default shows a dim `default`, or `! value needed` where the column has none (see
-[New rows](#new-rows)). The theme tokens are `edit_changed`, `edit_inserted`, `edit_deleted`,
-and `edit_pending` for the count (see [Theme files](../reference/theme-files.md)).
+take their own color, new rows another on a background of their own, rows to be deleted are
+crossed out, and a new row's cell left to its default shows what the server will put there, or
+`! value needed` where the column has none (see [New rows](#new-rows)). The theme tokens are
+`edit_changed`, `edit_inserted`, `edit_inserted_row`, `edit_deleted`, and `edit_pending` for the
+count (see [Theme files](../reference/theme-files.md)).
 
 ### With the mouse
 
@@ -157,8 +158,24 @@ naming the column.
 
 **New rows appear at the end of the result**, after the rows read, in the order they were added
 (on a new row, `o` and `O` put the next one right after it). The cursor goes to the new row.
-`D` on a new row removes it. A new row has no number in the gutter; the messages name it as the
-Changes tab does, by its place among the new rows (`new 1`).
+`D` on a new row removes it. A new row is tinted as a whole (theme token `edit_inserted_row`:
+its cells, the separators and its number), and the gutter numbers it after the rows read
+(`4+`, `5+` after three rows); the messages name it as the Changes tab does, by its place among
+the new rows (`new 1`).
+
+A cell left to its column's default shows, muted, what the server will put there:
+
+| Column | Shown |
+|---|---|
+| a constant default (`'ACTIVE'::character varying`, `0`, `'{}'::jsonb`) | its value: `ACTIVE`, `0`, `{}` |
+| an identity, `AUTO_INCREMENT`, a sequence (`serial`), a generated column | `<generated>` |
+| another default (`now()`, `CURRENT_TIMESTAMP`) | `<default: now()>`, a long one cut short |
+| no default, takes NULL | `NULL` |
+| no default, `NOT NULL` | `! value needed` (below) |
+
+This is only shown: the Apply leaves the cell out of the `INSERT`, so the server applies its own
+default, and the cell editor opens empty. The column widens to fit what it shows, up to the
+grid's widest column. Copies of new rows are refused, so nothing shown here is ever copied.
 
 The Changes tab lists, and an Apply refuses, a new row that leaves a `NOT NULL` column without
 a default to its default ("new 1 · name is NOT NULL and has no default; give it a value"), and
@@ -166,8 +183,8 @@ one of a table with such a column that the result does not show ("…is not in t
 it to the SELECT").
 
 The grid shows both where they are. A cell that needs a value reads `! value needed` in the
-theme token `edit_invalid` instead of the dim `default` (its column widens to fit it, up to the
-grid's widest column), and the row's gutter shows `!` instead of `+`. The cell editor opens
+theme token `edit_invalid` (its column widens to fit it, up to the grid's widest column), and
+the row's gutter shows `!` after its number instead of `+`. The cell editor opens
 saying "Can't edit: name has no default", and the inspector gives the Changes tab's reason. A
 column the result does not show has no cell to mark: the row's gutter shows `!`, and the Changes
 tab names the column. The badge counts both with the invalid values. Typing the values clears

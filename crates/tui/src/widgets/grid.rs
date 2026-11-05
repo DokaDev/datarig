@@ -13,9 +13,9 @@
 use crate::text::{Align, fit, sanitize_cell, slice_cols, width};
 use crate::theme;
 use datarig_core::driver::{Cell, ColumnMeta, KeyMarks};
-use datarig_core::edit::Value;
+use datarig_core::edit::{DefaultShown, Value};
 use datarig_core::fault::Fault;
-use datarig_core::i18n::{I18n, Label};
+use datarig_core::i18n::{I18n, Label, Msg};
 use datarig_core::results::{Row, RowStore};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -587,7 +587,13 @@ pub struct Look<'a> {
     pub marks: &'a [KeyMarks],
     pub icons: bool,
     pub invalid: Option<&'a crate::app::edit::Invalids>,
+    /// By result column, what a new row's cell left to its default shows (none: the column's
+    /// default is not known, `default`).
+    pub defaults: &'a [Option<DefaultShown>],
 }
+
+/// How wide a default's expression is shown in a new row's cell, at most (`<default: now()>`).
+const EXPR_W: usize = 20;
 
 /// The mark of a row in the gutter's free column: `!` a cell an Apply is refused for (a value
 /// its column does not take, or a default it lacks), else `+` a new row, `-` a row to be
@@ -646,6 +652,32 @@ pub fn render(
     let default_label = i18n.label(Label::EditDefault);
     let needed_label = i18n.label(Label::EditValueNeeded);
     let rerun_label = i18n.label(Label::EditRerunToSee);
+    // What each column's cells of new rows left to their default show, and whether it is a
+    // value (aligned as one); none for a cell that needs a value (`! value needed`).
+    let generated_label = i18n.label(Label::EditDefaultGenerated);
+    let draft_defaults: Vec<Option<(String, bool)>> = (0..rs.columns.len())
+        .map(|c| match look.defaults.get(c)?.as_ref()? {
+            DefaultShown::Needed => None,
+            DefaultShown::Generated => Some((generated_label.to_string(), false)),
+            DefaultShown::Null => Some((null_label.to_string(), false)),
+            DefaultShown::Value(v) => Some((sanitize_cell(v), true)),
+            DefaultShown::Expression(e) => {
+                let e = sanitize_cell(e);
+                let expr = if width(&e) > EXPR_W { fit(&e, EXPR_W, Align::Left) } else { e };
+                // In angle brackets, as `<generated>`: no value of the column.
+                Some((format!("<{}>", i18n.msg(&Msg::EditDefaultExpr { expr })), false))
+            }
+        })
+        .collect();
+    // The columns where a new row is left to its default, wide enough for what it shows.
+    let mut defaulted = std::collections::BTreeSet::new();
+    for d in rs.edit.batch.drafts() {
+        for c in 0..rs.columns.len() {
+            if d.cells.get(c).is_none_or(|v| *v == Value::Default) {
+                defaulted.insert(c);
+            }
+        }
+    }
 
     let gutter = win.end.max(1).to_string().len().max(2) + 1;
     let avail = (area.width as usize).saturating_sub(gutter);
@@ -663,7 +695,11 @@ pub fn render(
         .enumerate()
         .map(|(i, (c, m))| {
             let needed = if needs.contains(&i) { width(&needed_label) } else { 0 };
-            c.width.max(width(m) + width(&c.meta.name)).max(needed).min(MAX_COL_WIDTH)
+            let shown = match draft_defaults.get(i) {
+                Some(Some((t, _))) if defaulted.contains(&i) => width(t),
+                _ => 0,
+            };
+            c.width.max(width(m) + width(&c.meta.name)).max(needed).max(shown).min(MAX_COL_WIDTH)
         })
         .collect();
     // The row of all columns, scrolled by character: the selected column whole in view unless
@@ -802,22 +838,29 @@ pub fn render(
             break;
         }
         let y = st.data_y + vy as u16;
-        let zebra = if r % 2 == 1 { th.surface_alt } else { th.bg };
+        // A new row is after the rows read and those an Apply added.
+        let applied = rs.edit.applied.as_deref();
+        let added = r.checked_sub(total);
+        let applied_new = added.and_then(|i| applied?.new.get(i));
+        let new = added.and_then(|i| i.checked_sub(rs.edit.applied_new())).and_then(|i| rs.edit.batch.drafts().get(i));
+        // A new row is tinted as a whole: its cells, the separators and its number.
+        let zebra = match new {
+            Some(_) => th.edit_inserted_row,
+            None if r % 2 == 1 => th.surface_alt,
+            None => th.bg,
+        };
         buf.set_style(Rect::new(area.x, y, area.width, 1), Style::new().bg(zebra));
         // Whole selected rows: their numbers too.
         let whole = st.shape == Shape::Rows && range.as_ref().is_some_and(|(rr, _)| rr.contains(&r));
         let num_bg = if whole { th.range } else { Style::new().bg(zebra) };
         let num_style = num_bg.fg(if r == st.row { th.accent } else { th.fg_muted });
-        // A new row (after the rows read, and those an Apply added) has no number of the result.
-        let applied = rs.edit.applied.as_deref();
-        let added = r.checked_sub(total);
-        let applied_new = added.and_then(|i| applied?.new.get(i));
-        let new = added.and_then(|i| i.checked_sub(rs.edit.applied_new())).and_then(|i| rs.edit.batch.drafts().get(i));
         // Deleted by an Apply: it stays, crossed out.
         let deleted = added.is_none()
             && (rs.edit.batch.deleted(r)
                 || (applied.is_some_and(|a| a.deleted.contains(&r)) && rs.edit.batch.row(r).is_none()));
-        let number = if added.is_some() { String::new() } else { (r + 1).to_string() };
+        // A new row continues the numbers (the messages call it so); a row an Apply added has
+        // none of the result.
+        let number = if added.is_some() && new.is_none() { String::new() } else { (r + 1).to_string() };
         buf.set_stringn(area.x, y, fit(&number, gutter - 1, Align::Right), gutter - 1, num_style);
         // What is pending in the row, in the gutter's free column ([`row_mark`]).
         use crate::app::edit::RowAt;
@@ -875,10 +918,16 @@ pub fn render(
                 _ => (false, false),
             };
             let needed = needed(ci);
+            // A new row's cell left to its default: what the server will put there.
+            let drafted = match (new, pending) {
+                (Some(_), Some(Value::Default)) if !needed => draft_defaults.get(ci).and_then(Option::as_ref),
+                _ => None,
+            };
             let (text, is_null, default) = match (pending.or(done), rs.cell(r, ci)) {
                 _ if rerun => (rerun_label.to_string(), true, true),
                 // Not the dim `default`: an Apply is refused until it has a value.
                 _ if needed => (needed_label.to_string(), true, false),
+                _ if drafted.is_some() => drafted.map(|(t, value)| (t.clone(), !value, true)).unwrap_or_default(),
                 (Some(Value::Text(v)), _) => (sanitize_cell(v), false, false),
                 (Some(Value::Null), _) => (null_label.to_string(), true, false),
                 (Some(Value::Default), _) => (default_label.to_string(), true, true),
@@ -895,6 +944,9 @@ pub fn render(
             let align = if col.meta.numeric && !is_null { Align::Right } else { Align::Left };
             let style = if needed {
                 Style::new().fg(th.fg)
+            } else if drafted.is_some() {
+                // Muted, not dim: it must read on the new row's background.
+                Style::new().fg(th.fg_muted).add_modifier(Modifier::ITALIC)
             } else if default {
                 Style::new().fg(th.fg_muted).add_modifier(Modifier::DIM)
             } else if is_null {

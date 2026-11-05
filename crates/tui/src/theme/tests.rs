@@ -380,6 +380,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         edit_changed: _,
         edit_pending: _,
         edit_inserted: _,
+        edit_inserted_row: _,
         edit_deleted: _,
         edit_applied: _,
         edit_invalid: _,
@@ -403,7 +404,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 65);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 66);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -411,7 +412,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
     for (i, name) in STYLE_TOKENS.iter().enumerate() {
         *style_token(&mut th, name).unwrap() = Style::new().bg(Color::Indexed(100 + i as u8));
     }
-    assert_eq!((th.bg, th.mode_fg), (Color::Indexed(0), Color::Indexed(22)));
+    assert_eq!((th.bg, th.mode_fg), (Color::Indexed(0), Color::Indexed(23)));
     assert_eq!(th.yank_flash, Style::new().bg(Color::Indexed(104)));
     assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(122)));
     assert_eq!(
@@ -423,7 +424,8 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         (Style::new().bg(Color::Indexed(125)), Style::new().bg(Color::Indexed(126)))
     );
     assert_eq!(th.tab_active, Style::new().bg(Color::Indexed(127)));
-    assert_eq!(th.chart(), [23, 24, 25, 26, 27, 28].map(Color::Indexed));
+    assert_eq!(th.chart(), [24, 25, 26, 27, 28, 29].map(Color::Indexed));
+    assert_eq!(th.edit_inserted_row, Color::Indexed(3));
     assert!(color_token(&mut th, "selection").is_none() && style_token(&mut th, "bg").is_none());
 }
 
@@ -1189,4 +1191,42 @@ fn the_active_tab_stands_apart_from_every_other_background_in_every_theme() {
         }
     }
     assert_eq!(Theme::readable_on(Color::Red, bg(DARK.tab_active), 3.0), Color::Red, "a terminal color stays");
+}
+
+/// A new row's background in every built-in theme that draws with RGB: its values (body text,
+/// `edit_inserted`), its defaults (muted text), the mark of a cell that needs a value
+/// (`edit_invalid`) and the gutter's `!` (the error color) read on it (3:1 or more); it stands
+/// apart (ΔE) from the background and the alternate rows, so the row reads as new, and from
+/// the cursor (focused or not) and a selected range, which replace it on their cells; and it
+/// does not vanish into them in 256 colors. The terminal theme keeps the terminal's
+/// background (its marks say what the row is).
+#[test]
+fn new_rows_have_a_background_of_their_own() {
+    assert_eq!(TERMINAL.edit_inserted_row, Color::Reset);
+    for (name, th) in rgb_themes() {
+        let row = th.edit_inserted_row;
+        for (what, c) in [
+            ("body text", th.fg),
+            ("a default", th.fg_muted),
+            ("a new value", fg(th.edit_inserted)),
+            ("a value needed", fg(th.edit_invalid)),
+            ("the gutter's !", th.error),
+        ] {
+            let k = contrast(c, row);
+            assert!(k >= 3.0, "{name}: {what} on a new row: {k:.2}");
+        }
+        for (what, c) in [("the background", th.bg), ("the alternate rows", th.surface_alt)] {
+            let d = delta_e(row, c);
+            assert!(d >= 6.5, "{name}: a new row looks like {what}: {d:.1}");
+            assert_ne!(xterm256(row), xterm256(c), "{name}: a new row is {what} in 256 colors");
+        }
+        for (what, c) in [
+            ("the cursor", bg(th.selection)),
+            ("the unfocused cursor", bg(th.selection_unfocused())),
+            ("a selected range", bg(th.range)),
+        ] {
+            let d = delta_e(row, c);
+            assert!(d >= 5.0, "{name}: a new row looks like {what}: {d:.1}");
+        }
+    }
 }

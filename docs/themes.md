@@ -43,6 +43,7 @@ Each writes a new file and never replaces one: a name that is taken, that is not
 | `bg` | The background of the panes: explorer, editor, results. |
 | `surface` | The background of dialogs, popups, menus, the command line and the status bar. |
 | `surface_alt` | A second surface: every other row of the result grid, form fields and buttons. |
+| `edit_inserted_row` | The background of a new row of the result grid, not applied yet: every cell, the separators and the row's number. Its values, its defaults (muted), the mark of a cell that needs a value and the gutter's marks must read on it; the cursor and a selection stand apart from it. |
 | `border` | Borders and rules between panes and around dialogs. |
 | `accent` | The main accent: the focused pane's border, dialog borders, labels and names to notice. |
 | `accent_warm` | The warm accent: values on the settings screen, an open transaction, keys in menus. |

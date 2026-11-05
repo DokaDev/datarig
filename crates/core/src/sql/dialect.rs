@@ -401,6 +401,111 @@ fn unescape_pg(e: char, chars: &mut std::iter::Peekable<std::str::Chars>, out: &
     }
 }
 
+/// A constant a server printed as a column's default ([`Dialect::constant`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Constant {
+    /// `NULL`.
+    Null,
+    /// A string's value (unquoted), a number, `true` or `false`, as written.
+    Value(String),
+}
+
+impl Dialect {
+    /// `sql` without the parentheses around the whole of it (`((1))` is `1`; `(a) + (b)` keeps
+    /// them), trimmed.
+    pub fn unparenthesized(self, sql: &str) -> &str {
+        let mut s = sql.trim();
+        loop {
+            let toks: Vec<lexer::Token> = lexer::lex_in(s, self).into_iter().filter(|t| !t.is_trivia()).collect();
+            let (Some(first), Some(last)) = (toks.first(), toks.last()) else { return s };
+            if toks.len() < 2 || first.kind != lexer::Tok::LParen || last.kind != lexer::Tok::RParen {
+                return s;
+            }
+            // The first parenthesis must close at the very end.
+            let mut depth = 0usize;
+            for (i, t) in toks.iter().enumerate() {
+                match t.kind {
+                    lexer::Tok::LParen => depth += 1,
+                    lexer::Tok::RParen => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 && i + 1 < toks.len() {
+                            return s;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            s = s[first.end..last.start].trim();
+        }
+    }
+
+    /// The constant a column default the server printed (in its own dialect,
+    /// [`Dialect::printed`]) is: a string literal, a number (with its sign), `true`, `false` or
+    /// `NULL`, in parentheses or not; in PostgreSQL also with casts after it (`'x'::character
+    /// varying`, `'{}'::jsonb`, `NULL::text`). `None` for anything else, such as a call
+    /// (`now()`, `CURRENT_TIMESTAMP`) or an operator.
+    pub fn constant(self, sql: &str) -> Option<Constant> {
+        use lexer::Tok;
+        let sql = self.unparenthesized(sql);
+        let toks: Vec<lexer::Token> = lexer::lex_in(sql, self).into_iter().filter(|t| !t.is_trivia()).collect();
+        let text = |t: &lexer::Token| t.text(sql);
+        let word =
+            |t: &lexer::Token, w: &str| matches!(t.kind, Tok::Keyword | Tok::Ident) && text(t).eq_ignore_ascii_case(w);
+        let (value, rest) = match toks.as_slice() {
+            [s, rest @ ..] if s.kind == Tok::Str => (Constant::Value(self.unquote_literal(text(s))?), rest),
+            [sign, n, rest @ ..]
+                if sign.kind == Tok::Op && matches!(text(sign), "-" | "+") && n.kind == Tok::Number =>
+            {
+                let sign = if text(sign) == "-" { "-" } else { "" };
+                (Constant::Value(format!("{sign}{}", text(n))), rest)
+            }
+            [n, rest @ ..] if n.kind == Tok::Number => (Constant::Value(text(n).to_string()), rest),
+            [b, rest @ ..] if word(b, "true") || word(b, "false") => {
+                (Constant::Value(text(b).to_ascii_lowercase()), rest)
+            }
+            [n, rest @ ..] if word(n, "null") => (Constant::Null, rest),
+            _ => return None,
+        };
+        let cast = |rest: &[lexer::Token]| {
+            let starts = rest.len() >= 2 && rest[..2].iter().all(|t| t.kind == Tok::Op && text(t) == ":");
+            starts
+                && rest.iter().all(|t| match t.kind {
+                    Tok::Op => matches!(text(t), ":" | "[" | "]"),
+                    Tok::Ident | Tok::Keyword | Tok::QuotedIdent | Tok::Number => true,
+                    Tok::LParen | Tok::RParen | Tok::Comma | Tok::Dot => true,
+                    _ => false,
+                })
+        };
+        let whole = match self {
+            Self::Postgres => rest.is_empty() || cast(rest),
+            Self::MySql(_) => rest.is_empty(),
+        };
+        whole.then_some(value)
+    }
+
+    /// Whether a column default the server printed draws the next number of a sequence
+    /// (PostgreSQL: `nextval(…)`, a `serial` column's). MySQL's `AUTO_INCREMENT` is no default.
+    pub fn draws_number(self, default: &str) -> bool {
+        match self {
+            Self::Postgres => {
+                let toks: Vec<lexer::Token> =
+                    lexer::lex_in(default, self).into_iter().filter(|t| !t.is_trivia()).collect();
+                matches!(toks.as_slice(), [f, p, ..] if f.text(default).eq_ignore_ascii_case("nextval") && p.kind == lexer::Tok::LParen)
+            }
+            Self::MySql(_) => false,
+        }
+    }
+
+    /// Of a column default as the app reads it from the structure, what a new row takes: in
+    /// MySQL without what an `UPDATE` sets (`CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`).
+    pub fn insert_default(self, default: &str) -> &str {
+        match self {
+            Self::Postgres => default,
+            Self::MySql(_) => default.find(" ON UPDATE ").map_or(default, |i| &default[..i]),
+        }
+    }
+}
+
 /// The language of an editor's text: SQL of some dialect (other kinds of consoles may join
 /// it later).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
