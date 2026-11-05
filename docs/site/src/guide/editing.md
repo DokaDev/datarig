@@ -369,11 +369,21 @@ A copy the grid refuses (a pending DEFAULT, a value only a run shows, a new row)
 keeps nothing either, so `g p` never pastes an older copy; with nothing kept, it says which keys
 copy.
 
-A MySQL `TIMESTAMP` is shown in the session's time zone, so the same text is another instant in
-another zone. Its cells keep the fixed offset they were read in, and `g p` pastes them into a
-`TIMESTAMP` column only of a result read in the same offset; else it says so and pastes nothing
-("Not pasted: column “created_at” was copied in time zone +09:00; this result was read in
-+00:00"). Set the session's `time_zone` to the one of the copy and run the query again.
+A MySQL `TIMESTAMP` is shown in the session's time zone, without an offset, so the same text is
+another instant in another zone. Its cells keep the fixed offset they were read in (`SYSTEM` is
+the server's own zone), and `g p` pastes them into a time column with a zone only when the
+instant stays the same; else it says why and pastes nothing:
+
+- a MySQL `TIMESTAMP` of a result read in another offset ("Not pasted: column “created_at” was
+  copied in time zone +09:00; this result was read in +00:00"), in a zone without a fixed
+  offset, in `SYSTEM` when the server's own zone is not known, in a session whose zone is not
+  known, or one whose zone changed while its rows were read: set the session's `time_zone` to
+  the copy's and run the query again;
+- a PostgreSQL `timestamptz`, which reads such text in its session's zone.
+
+A `TIMESTAMP` value pending in a result read in a zone without a fixed offset (or not known) is
+not kept either. Into a column without a zone (`DATETIME`, `timestamp`, text) the text pastes as
+it was shown.
 
 ## Undo, revert, discard
 

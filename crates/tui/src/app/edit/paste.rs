@@ -748,15 +748,14 @@ impl App {
     }
 
     /// Why cells copied in a grid are not pasted as `plan` lays them: a value shown in the time
-    /// zone it was read in (a MySQL `TIMESTAMP`) lands in a column whose values the active tab's
-    /// shown result shows in another zone, or in one not known, where the same text is another
-    /// instant.
+    /// zone it was read in, without an offset (a MySQL `TIMESTAMP`), lands in a column of a time
+    /// with a zone: of MySQL, whose values the active tab's shown result shows in another zone
+    /// or one not known, where the same text is another instant; of another server, which reads
+    /// the text in its session's zone.
     fn copy_zone_refused(&self, copy: &GridCopy, plan: &PastePlan) -> Option<String> {
         let t = self.tab();
         let rs = rows_of(t)?;
-        if !matches!(self.tab_dialect(t.id), Dialect::MySql(_)) {
-            return None;
-        }
+        let mysql = matches!(self.tab_dialect(t.id), Dialect::MySql(_));
         let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
         let width = copy.offsets.len();
         (plan.top.1..plan.top.1 + plan.size.1).find_map(|c| {
@@ -767,17 +766,25 @@ impl App {
             if !valued || rs.columns.get(c)?.meta.kind != ValueKind::TimestampTz {
                 return None;
             }
+            let column = copy.columns.get(j).map(|m| m.name.clone()).unwrap_or_default();
+            if !mysql {
+                let msg = Msg::EditPasteRegisterZoneOther { column, from: from.clone() };
+                return Some(self.i18n.msg(&msg).to_string());
+            }
+            let label = |l: Label| self.i18n.label(l).to_string();
             let to = match &rs.read_in {
-                datarig_core::driver::ReadIn::Values(v) => {
-                    export::fixed_offset(&v.time_zone, zone).ok_or_else(|| v.time_zone.clone())
-                }
-                _ => Err(self.i18n.label(Label::EditPasteZoneUnknown).to_string()),
+                datarig_core::driver::ReadIn::Values(v) => match export::fixed_offset(&v.time_zone, zone) {
+                    Some(o) => Ok(o),
+                    None if v.time_zone.eq_ignore_ascii_case("SYSTEM") => Err(label(Label::EditPasteZoneServer)),
+                    None => Err(v.time_zone.clone()),
+                },
+                datarig_core::driver::ReadIn::Changed => Err(label(Label::EditPasteZoneChanged)),
+                datarig_core::driver::ReadIn::Unknown => Err(label(Label::EditPasteZoneUnknown)),
             };
             let to = match to {
                 Ok(o) if o == *from => return None,
                 Ok(o) | Err(o) => o,
             };
-            let column = copy.columns.get(j).map(|m| m.name.clone()).unwrap_or_default();
             Some(self.i18n.msg(&Msg::EditPasteRegisterZone { column, from: from.clone(), to }).to_string())
         })
     }

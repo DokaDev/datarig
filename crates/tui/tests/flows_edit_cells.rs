@@ -1379,3 +1379,112 @@ fn a_mysql_timestamp_copied_is_pasted_only_into_a_result_read_in_the_same_zone()
 fn said_text(h: &mut Harness) -> String {
     said(h).map(|m| h.app.i18n.msg(&m).to_string()).unwrap_or_default()
 }
+
+/// The MySQL users' rows read again in the session's zone `zone` (the nickname of type `ty`,
+/// kind `kind`), a value in the nickname; nothing said.
+fn mysql_again(h: &mut Harness, zone: &str, ty: &str, kind: ValueKind) {
+    use datarig_core::driver::{ColumnOrigin, SessionValues};
+    h.db(DbEvent::SessionValues(SessionValues { time_zone: zone.into(), charset: "utf8mb4".into() }));
+    let col = |name: &str, ty: &str, kind: ValueKind| {
+        let origin = ColumnOrigin::Named { schema: "shop".into(), table: "users".into(), column: name.into() };
+        ColumnMeta::new(name.into(), ty.into(), kind, Some(origin))
+    };
+    let columns = vec![
+        col("id", "bigint", ValueKind::Integer),
+        col("email", "varchar", ValueKind::Text),
+        col("nickname", ty, kind),
+    ];
+    let rows = vec![vec![s("1"), s("a@x"), s("2024-01-01 00:00:00")]];
+    answer(h, "SELECT id, email, nickname FROM shop.users", columns, rows);
+    h.sent();
+    h.app.transient = None;
+}
+
+#[test]
+fn a_mysql_timestamp_copied_is_not_pasted_into_a_time_with_a_zone_of_another_server() {
+    use datarig_core::sql::dialect::{Dialect, Language};
+    let mut h = mysql_users("+09:00", "utf8mb4");
+    h.keys("lly");
+    // The server is a PostgreSQL one now (a new tab reads its driver again), its nickname a
+    // `timestamptz`.
+    h.driver.mysql.store(false, std::sync::atomic::Ordering::SeqCst);
+    h.ctrl('t');
+    mysql_again(&mut h, "+00:00", "timestamptz", ValueKind::TimestampTz);
+    assert_eq!(h.app.tab_language(h.app.tab().id), Language::Sql(Dialect::Postgres));
+    h.keys("llgp");
+    let mut st = users_structure();
+    st.columns[3].type_name = "timestamp with time zone".into();
+    structure(&mut h, Ok(st));
+    assert_eq!(
+        said_text(&mut h),
+        "Not pasted: column \u{201C}nickname\u{201D} was copied as times in time zone +09:00, without an offset; this \
+         column reads them in its session's zone"
+    );
+    assert!(edits(&h).batch.is_empty());
+}
+
+#[test]
+fn a_mysql_timestamp_copied_in_system_compares_by_the_servers_zone_and_says_how_the_target_was_read() {
+    // `SYSTEM` is the server's zone, UTC here: +00:00.
+    let mut h = mysql_users("+09:00", "utf8mb4");
+    h.keys("lly");
+    mysql_again(&mut h, "SYSTEM", "timestamp", ValueKind::TimestampTz);
+    h.keys("llgp");
+    structure(&mut h, Ok(mysql_users_structure()));
+    assert_eq!(
+        said_text(&mut h),
+        "Not pasted: column \u{201C}nickname\u{201D} was copied in time zone +09:00; this result was read in +00:00"
+    );
+    // Copied in `SYSTEM`, pasted into +00:00: the same offset.
+    h.keys("y");
+    mysql_again(&mut h, "+00:00", "timestamp", ValueKind::TimestampTz);
+    h.keys("llgp");
+    structure(&mut h, Ok(mysql_users_structure()));
+    assert_eq!(edits(&h).batch.value(0, 2), None, "the same value: nothing to change");
+    assert!(said_text(&mut h).starts_with("Pasted the copied cells"));
+    // Into a result read while the session's zone changed: said so.
+    h.keys("y");
+    h.app.run(vec!["SELECT id, email, nickname FROM shop.users".to_string()]);
+    h.db(DbEvent::SessionValues(datarig_core::driver::SessionValues {
+        time_zone: "+03:00".into(),
+        charset: "utf8mb4".into(),
+    }));
+    let id = h.app.tab().exec.query_id;
+    let columns = edits_columns(&h);
+    h.db(DbEvent::Page {
+        id,
+        columns: Some(columns),
+        rows: vec![vec![s("1"), s("a@x"), s("2024-01-01 00:00:00")]],
+        more: false,
+        elapsed: Duration::ZERO,
+    });
+    h.app.focus = Focus::Results;
+    h.app.transient = None;
+    h.keys("llgp");
+    structure(&mut h, Ok(mysql_users_structure()));
+    let text = said_text(&mut h);
+    assert!(
+        text.ends_with("this result was read in a session whose time zone changed while its rows were read"),
+        "{text}"
+    );
+}
+
+/// The columns of the active tab's result.
+fn edits_columns(h: &Harness) -> Vec<ColumnMeta> {
+    match &h.app.tab().results {
+        Results::Rows(rs) => rs.columns.iter().map(|c| c.meta.clone()).collect(),
+        _ => panic!("no row result"),
+    }
+}
+
+#[test]
+fn a_pending_mysql_timestamp_of_a_zone_without_a_fixed_offset_is_not_kept() {
+    let mut h = mysql_users("Europe/Berlin", "utf8mb4");
+    if let Results::Rows(rs) = &mut h.app.tab_mut().results {
+        let row = vec![s("1"), s("a@x"), s("2024-10-27 02:30:00")];
+        rs.edit.batch.set(&[(0, 2)], &Value::Text("2024-01-01 00:00:00".into()), |_| row.clone());
+    }
+    h.keys("lly");
+    let text = said_text(&mut h);
+    assert!(text.starts_with("Not kept for g p: column \u{201C}nickname\u{201D} "), "{text}");
+}

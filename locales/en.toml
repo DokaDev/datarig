@@ -2608,6 +2608,9 @@
 "edit.paste.register_empty" = "Nothing copied to paste: {copy} copies a cell or a range, {row} a row, then {paste} pastes it at the cursor"
 "edit.paste.register_zone" = "column “{column}” was copied in time zone {from}; this result was read in {to}"
 "edit.paste.zone_unknown" = "a time zone not known"
+"edit.paste.zone_changed" = "a session whose time zone changed while its rows were read"
+"edit.paste.zone_server" = "the server's time zone, which is not known"
+"edit.paste.register_zone_other" = "column “{column}” was copied as times in time zone {from}, without an offset; this column reads them in its session's zone"
 "edit.paste.rows" = { one = "{count} row", other = "{count} rows" }
 "edit.paste.columns" = { one = "{count} column", other = "{count} columns" }
 "edit.paste.cells" = { one = "{count} cell changed", other = "{count} cells changed" }

@@ -1385,4 +1385,18 @@ mod grid_copy {
         h.keys("gp");
         assert!(said(&mut h).starts_with("Nothing copied to paste"));
     }
+
+    #[test]
+    fn a_large_copy_declined_keeps_nothing() {
+        let mut h = ready_with(Harness::connected(Lang::En), many(10_001));
+        h.keys("y");
+        h.app.tab_mut().grid.anchor = Some((10_000, 1));
+        h.keys("y");
+        assert_eq!(h.overlay_kind(), Some(datarig_tui::app::overlay::OverlayKind::Confirm));
+        h.key(KeyCode::Esc);
+        assert_eq!(h.overlay_kind(), None);
+        h.app.transient = None;
+        h.keys("jgp");
+        assert!(said(&mut h).starts_with("Nothing copied to paste"), "the cell copied before is gone");
+    }
 }

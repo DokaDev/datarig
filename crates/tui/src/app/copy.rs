@@ -730,7 +730,7 @@ impl App {
             .collect();
         // A MySQL `TIMESTAMP` is shown in the session's time zone: the offset it was read in
         // goes with it (one not fixed refused it above, through `sql_cells`).
-        let offsets = b
+        let offsets: Vec<Option<String>> = b
             .cols
             .iter()
             .map(|&c| match (&rs.read_in, rs.columns[c].meta.kind) {
@@ -794,6 +794,18 @@ impl App {
         if let Some(row) = short {
             return Err(Some(Msg::CopyRegisterNotRead { key: key(), row: (row + 1).to_string() }));
         }
+        // A pending value of a MySQL `TIMESTAMP` read in a zone without a fixed offset (or one not
+        // known) is no instant either: its text is read in the zone it lands in.
+        let zoned = |j: usize| {
+            matches!(d, Dialect::MySql(_))
+                && rs.columns[b.cols[j]].meta.kind == datarig_core::driver::ValueKind::TimestampTz
+        };
+        let refused = refused.or_else(|| {
+            (0..b.cols.len())
+                .filter(|&j| zoned(j) && offsets_none(&offsets, j))
+                .filter(|&j| rows.iter().any(|r| matches!(r.get(j), Some(Value::Text(_)))))
+                .find_map(|j| cells[j].as_ref().err().cloned())
+        });
         if let Some(r) = refused {
             let reason = self.not_whole_reason(&r.why);
             return Err(Some(Msg::CopyRegisterNotWhole { key: key(), column: r.column, reason }));
@@ -1187,4 +1199,9 @@ fn written_as<'a>(
                 .collect()
         })
         .collect()
+}
+
+/// Column `j` has no offset kept.
+fn offsets_none(offsets: &[Option<String>], j: usize) -> bool {
+    offsets.get(j).is_none_or(Option::is_none)
 }
