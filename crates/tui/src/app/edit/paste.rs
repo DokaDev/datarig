@@ -26,6 +26,7 @@
 use super::*;
 use crate::app::action::Action;
 use crate::clipboard::{self, Plan as ClipPlan};
+use datarig_core::driver::ColumnOrigin;
 use datarig_core::edit::paste::{self, Format, PasteError, PasteOpts};
 use datarig_core::edit::{Origin, PasteOps, PasteRefused};
 use datarig_core::fault::{ErrorLog, Fault};
@@ -153,6 +154,8 @@ struct PastePlan {
     map: Vec<(usize, usize)>,
     as_rows: bool,
     header: bool,
+    /// Copied columns the table computes or numbers itself, left to it (`p`).
+    generated: usize,
 }
 
 /// Why a paste is refused, in words, and in fewer words for a narrow status bar.
@@ -733,7 +736,7 @@ impl App {
     /// Do paste `plan` (read at `last`): one step of the changes; the cursor on its first cell,
     /// the selection dropped; what it did said.
     fn paste_do(&mut self, plan: PastePlan, last: Option<LastPaste>, again: Option<LastPaste>) {
-        let PastePlan { ops, first, read, top, size, format, corner, map, as_rows, header, .. } = plan;
+        let PastePlan { ops, first, read, top, size, format, corner, map, as_rows, header, generated, .. } = plan;
         let pasted: Vec<(RowAt, usize)> = (ops.set.iter().map(|((r, c), _)| (RowAt::Read(*r), *c)))
             .chain(ops.set_new.iter().map(|((id, c), _)| (RowAt::New(*id), *c)))
             .collect();
@@ -788,6 +791,9 @@ impl App {
         }
         if !done.added.is_empty() {
             more.push(i18n.msg(&Msg::EditPasteNewRows { count: done.added.len() as u64 }).to_string());
+        }
+        if generated > 0 {
+            more.push(i18n.msg(&Msg::EditPasteRowsGenerated { count: generated as u64 }).to_string());
         }
         let (named, count) = match bad.iter().min() {
             Some(&&(at, c)) => {
@@ -1052,6 +1058,7 @@ impl App {
             map,
             as_rows: false,
             header: false,
+            generated: 0,
             ops,
             first: read_range.start,
             read,
@@ -1077,38 +1084,73 @@ impl App {
         let (total, ncols) = (rs.rows.len(), rs.columns.len());
         let shown = total + rs.edit.new_shown();
         let (h, w) = (copy.rows.len(), copy.columns.len());
-        let same = |m: &datarig_core::driver::ColumnMeta| -> Option<usize> {
-            let mut found = rs.columns.iter().enumerate().filter(|(_, c)| match (&m.origin, &c.meta.origin) {
-                (Some(a), Some(b)) => a == b,
-                (None, _) => c.meta.name == m.name,
-                (Some(_), None) => false,
-            });
-            match (found.next(), found.next()) {
-                (Some((i, _)), None) => Some(i),
-                _ => None,
-            }
+        // The table of a column, as its origin names it.
+        let table_of = |o: &ColumnOrigin| match o {
+            ColumnOrigin::Pg { table, .. } => (Some(*table), None),
+            ColumnOrigin::Named { schema, table, .. } => (None, Some((schema.clone(), table.clone()))),
         };
-        let by_column: Option<Vec<usize>> = copy.columns.iter().map(same).collect();
-        let by_column = by_column.filter(|m| {
-            let distinct: BTreeSet<&usize> = m.iter().collect();
-            distinct.len() == m.len() && copy.columns.iter().any(|c| c.origin.is_some())
-        });
-        let map = match by_column {
-            Some(m) => m,
-            None if w > ncols => {
-                return Err((text(Msg::EditPasteRowsTooWide { width: w.to_string(), room: ncols.to_string() }), None));
+        let this = rs
+            .columns
+            .iter()
+            .enumerate()
+            .find_map(|(c, col)| target.columns.get(c)?.as_ref().and(col.meta.origin.as_ref()))
+            .map(table_of);
+        let from_here =
+            |m: &datarig_core::driver::ColumnMeta| m.origin.as_ref().map(table_of) == this && this.is_some();
+        let named = |m: &datarig_core::driver::ColumnMeta| m.name.clone();
+        let refuse = |m: Msg, short: Msg| Err((text(m), Some(text(short))));
+        // Copied from this table: each value to its own column, never by position.
+        let mut generated = 0;
+        let map: Vec<Option<usize>> = if copy.columns.iter().any(from_here) {
+            let mut map = Vec::with_capacity(w);
+            for (j, m) in copy.columns.iter().enumerate() {
+                let column = named(m);
+                if !from_here(m) {
+                    return refuse(
+                        Msg::EditPasteRowsComputed { column: column.clone() },
+                        Msg::EditPasteRowsComputedShort { column },
+                    );
+                }
+                if copy.columns[..j].iter().any(|o| o.origin == m.origin) {
+                    return refuse(
+                        Msg::EditPasteRowsTwice { column: column.clone() },
+                        Msg::EditPasteRowsTwiceShort { column },
+                    );
+                }
+                let Some(c) = rs.columns.iter().position(|c| c.meta.origin == m.origin) else {
+                    return refuse(
+                        Msg::EditPasteRowsNotShown { column: column.clone() },
+                        Msg::EditPasteRowsNotShownShort { column },
+                    );
+                };
+                // A column the table computes or numbers itself: left to it.
+                let fill = target.columns.get(c).and_then(Option::as_ref).map(|tc| &tc.column.fill);
+                if matches!(fill, Some(ColumnFill::Stored(_) | ColumnFill::Virtual(_) | ColumnFill::IdentityAlways)) {
+                    generated += 1;
+                    map.push(None);
+                } else {
+                    map.push(Some(c));
+                }
             }
-            None => (0..w).collect(),
+            map
+        } else if w > ncols {
+            let (width, room) = (w.to_string(), ncols.to_string());
+            let short = Msg::EditPasteRowsTooWideShort { width: width.clone(), room: room.clone() };
+            return refuse(Msg::EditPasteRowsTooWide { width, room }, short);
+        } else {
+            // From another table or result: by position.
+            (0..w).map(Some).collect()
         };
         // The new rows go after the last row: past the rows read while the server has more.
         if rs.more {
             if matches!(t.exec.paging, Paging::Open { .. }) {
                 let key = self.next_page_key(self.grid_ctx());
-                return Err((text(Msg::EditPasteRowsMore { key }), None));
+                return refuse(Msg::EditPasteRowsMore { key: key.clone() }, Msg::EditPasteRowsMoreShort { key });
             }
-            return Err((i18n.label(Label::EditPasteRowsMorePaged).to_string(), None));
+            let short = i18n.label(Label::EditPasteRowsMorePagedShort).to_string();
+            return Err((i18n.label(Label::EditPasteRowsMorePaged).to_string(), Some(short)));
         }
-        for &c in &map {
+        for &c in map.iter().flatten() {
             if let Err(r) = target.allows(c, Write::Insert) {
                 return Err((text(column_reason(r, rs.columns[c].meta.name.clone())), None));
             }
@@ -1128,13 +1170,16 @@ impl App {
             .iter()
             .map(|r| {
                 let mut cells = vec![Value::Default; ncols];
-                for (j, &c) in map.iter().enumerate() {
-                    cells[c] = r.get(j).cloned().unwrap_or(Value::Default);
+                for (j, c) in map.iter().enumerate() {
+                    if let Some(c) = *c {
+                        cells[c] = r.get(j).cloned().unwrap_or(Value::Default);
+                    }
                 }
                 cells
             })
             .collect();
-        let first_col = map.iter().copied().min().unwrap_or(0);
+        let pairs: Vec<(usize, usize)> = map.iter().enumerate().filter_map(|(j, c)| c.map(|c| (j, c))).collect();
+        let first_col = pairs.iter().map(|&(_, c)| c).min().unwrap_or(0);
         Ok(PastePlan {
             ops: PasteOps { width: ncols, add, ..PasteOps::default() },
             first: 0,
@@ -1145,9 +1190,10 @@ impl App {
             corner: false,
             rows: h,
             new: h,
-            map: map.into_iter().enumerate().collect(),
+            map: pairs,
             as_rows: true,
             header: false,
+            generated,
         })
     }
 

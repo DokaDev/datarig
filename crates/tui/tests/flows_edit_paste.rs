@@ -1634,4 +1634,167 @@ mod grid_copy {
         assert_eq!((g.row, g.col), (3, 1));
         assert_eq!(g.page, 1, "the page of the new row is shown");
     }
+
+    /// Run `sql` in the active tab and let `columns` and `rows` come, the grid focused, nothing
+    /// said.
+    fn shows(h: &mut Harness, sql: &str, columns: Vec<ColumnMeta>, rows: Vec<Vec<Option<String>>>) {
+        h.app.run(vec![sql.to_string()]);
+        let id = h.app.tab().exec.query_id;
+        h.db(DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::ZERO });
+        h.app.focus = Focus::Results;
+        h.app.transient = None;
+    }
+
+    /// A new tab showing `columns` of the users (one row of `row`), resolved with `st`.
+    fn users_tab(h: &mut Harness, columns: Vec<ColumnMeta>, row: Vec<Option<String>>, st: TableStructure) {
+        h.ctrl('t');
+        shows(h, SQL, columns, vec![row]);
+        h.keys("e");
+        structure(h, st);
+        h.key(KeyCode::Esc);
+        h.app.transient = None;
+        h.sent();
+    }
+
+    fn computed(name: &str) -> ColumnMeta {
+        ColumnMeta::new(name.into(), "text".into(), datarig_core::driver::ValueKind::Text, None)
+    }
+
+    #[test]
+    fn p_from_the_same_table_maps_by_column_only_and_names_a_column_not_shown() {
+        let mut h = ready();
+        // Email and nickname, into a result of the nickname and the email: by column.
+        h.keys("vly");
+        let cols = vec![meta_from("nickname", "text", false, USERS, 4), meta_from("email", "text", false, USERS, 2)];
+        users_tab(&mut h, cols, vec![s("cy"), s("c@x")], named());
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![t("ann"), t("a@x")]]);
+        // The id and the email, into a result without the id: refused, never by position.
+        h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        h.app.focus = Focus::Results;
+        h.keys("hhvly");
+        h.key_mod(KeyCode::PageDown, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        h.app.focus = Focus::Results;
+        let before = revision(&h);
+        h.keys("p");
+        assert_eq!(said(&mut h), "Not pasted: id is copied from this table but not in this result");
+        assert_eq!(revision(&h), before);
+    }
+
+    #[test]
+    fn p_of_rows_whose_table_generates_a_column_leaves_it_to_the_server() {
+        let mut st = named();
+        st.columns[3].fill = ColumnFill::Stored("lower(email)".into());
+        let mut h = resolved(Harness::connected(Lang::En), st, false);
+        h.keys("Y");
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![t("1"), t("a@x"), Value::Default]]);
+        let text = said(&mut h);
+        assert!(text.contains("1 new row \u{b7} 1 generated column left to the server"), "{text}");
+    }
+
+    #[test]
+    fn p_of_a_copy_with_a_computed_twice_copied_or_other_tables_column_into_its_table_is_refused() {
+        for (columns, reason) in [
+            (
+                vec![meta_from("id", "int8", true, USERS, 1), computed("email")],
+                "email is computed or of another table, not a column of this table",
+            ),
+            (
+                vec![meta_from("id", "int8", true, USERS, 1), meta_from("id", "int8", true, USERS, 1)],
+                "id is copied twice",
+            ),
+            (
+                vec![meta_from("id", "int8", true, USERS, 1), meta_from("status", "text", false, ORDERS, 3)],
+                "status is computed or of another table, not a column of this table",
+            ),
+        ] {
+            let mut h = ready();
+            h.ctrl('t');
+            shows(&mut h, "SELECT 1", columns, vec![vec![s("1"), s("x")]]);
+            h.keys("Y");
+            h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+            h.app.focus = Focus::Results;
+            let before = revision(&h);
+            h.keys("p");
+            assert_eq!(said(&mut h), format!("Not pasted: {reason}"));
+            assert_eq!(revision(&h), before);
+        }
+        // Computed only (no table): by position.
+        let mut h = ready();
+        h.ctrl('t');
+        shows(&mut h, "SELECT 1", vec![computed("a"), computed("b")], vec![vec![s("9"), s("z@x")]]);
+        h.keys("Y");
+        h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+        h.app.focus = Focus::Results;
+        h.keys("p");
+        assert_eq!(drafts(&h), vec![vec![t("9"), t("z@x"), Value::Default]]);
+    }
+
+    #[test]
+    fn p_with_more_rows_on_the_server_is_refused_as_the_next_page_would() {
+        for (paging, reason, short) in [
+            (
+                Paging::Open { since: std::time::Instant::now(), in_block: false },
+                "the result has more rows on the server, and new rows go after the last one: fetch them (n) first",
+                "more rows on the server; n fetches them",
+            ),
+            (
+                Paging::Released,
+                "the result has more rows on the server, not read here; new rows go after the last one",
+                "more rows on the server",
+            ),
+        ] {
+            let mut h = super::resolved(Harness::connected(Lang::En), named(), true);
+            h.app.tab_mut().exec.paging = paging;
+            h.keys("y");
+            h.app.transient = None;
+            let before = revision(&h);
+            h.keys("p");
+            assert_eq!(said(&mut h), format!("Not pasted: {reason}"));
+            assert_eq!(revision(&h), before);
+            h.keys("p");
+            let status = h.status(80, 24);
+            assert!(status.contains(short), "{status}");
+        }
+    }
+}
+
+#[test]
+fn a_header_line_is_skipped_after_the_csv_question_too() {
+    let mut h = ready(Lang::En);
+    paste(&mut h, "email,nickname\nx@x,bo\n");
+    assert_eq!(h.app.key_context(), Ctx::StatusAsk);
+    h.keys("c");
+    assert_eq!(pending(&h, 0, 1), Some(t("x@x")));
+    assert_eq!(pending(&h, 0, 2), Some(t("bo")));
+    assert!(said(&mut h).starts_with("Pasted as CSV \u{b7} Header row skipped \u{b7} Space d V keeps it"));
+}
+
+/// The owner's literal case: a copy with its header line of `simple_application_id` and
+/// `content`, pasted with the terminal's paste: no row of the header.
+#[test]
+fn the_header_of_a_copy_of_simple_application_id_and_content_is_skipped() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.app.run(vec!["SELECT simple_application_id, content FROM shop.users".to_string()]);
+    let id = h.app.tab().exec.query_id;
+    let columns =
+        vec![meta_from("simple_application_id", "int8", true, USERS, 1), meta_from("content", "text", false, USERS, 2)];
+    h.db(DbEvent::Page {
+        id,
+        columns: Some(columns),
+        rows: vec![vec![s("1"), s("a@x")]],
+        more: false,
+        elapsed: Duration::ZERO,
+    });
+    h.app.focus = Focus::Results;
+    h.keys("e");
+    structure(&mut h, named());
+    h.key(KeyCode::Esc);
+    h.app.transient = None;
+    paste(&mut h, "simple_application_id\tcontent\n2\tb@x\n3\tc@x\n");
+    assert_eq!(pending(&h, 0, 0), Some(t("2")));
+    assert_eq!(drafts(&h), vec![vec![t("3"), t("c@x")]]);
+    assert!(h.app.shown_invalid().unwrap().cells.is_empty(), "no invalid row of the header");
 }

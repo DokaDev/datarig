@@ -347,10 +347,18 @@ written for them, so this works over SSH and in tmux, whatever `clipboard` and
 `[editor] clipboard` are set to. Two keys paste them:
 
 - `p` (`Space d Y`) adds them as **new rows** after the last row, wherever the cursor is.
-  Each `p` adds another copy, one step `u` undoes each. Copied from this result's table, each
-  value goes to its own column (a column not copied is left to its default, and one that needs
-  a value is marked); copied from another table or result, the values go by position from the
-  first column, and a copy wider than the result is refused.
+  Each `p` adds another copy, one step `u` undoes each.
+  - Copied from this result's table, each value goes to its own column, never by position: a
+    column not copied is left to its default (one that needs a value is marked), a column the
+    table computes or numbers itself (`GENERATED`, `GENERATED ALWAYS AS IDENTITY`) is left to
+    the server ("… · 1 generated column left to the server"), and the paste is refused when a
+    copied column is not in this result, is copied twice, or is computed or of another table
+    (a join): it names the column.
+  - Copied from another table, or from a result of computed columns only, the values go by
+    position from the first column, each checked like a typed value, and a copy wider than the
+    result is refused.
+  - `Y` then `p` duplicates rows with their key values as they are: a serial or identity key
+    then repeats, so set it to its default (`Space d D`) before Apply.
 - `g p` (`Space d y`) pastes them **over the cells** at the cursor, the way a
   [pasted range](#pasting-a-range) does: from the cursor (one cell copied fills every selected
   cell), and rows past the last one are new rows.
