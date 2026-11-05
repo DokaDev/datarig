@@ -15,10 +15,10 @@
 │ │   Auto-pairs                ‹ off           ›  Off, every key types its… │ │
 │ │   Backspace to tab stop     ‹ on            ›  On, spaces back to the t… │ │
 │ │   Run hints                 ‹ on            ›  On, the outcome after ea… │ │
-│ │ Results                                                                  │t│
+│ │   Completion delay (ms)     ‹ 60            ›  Opens once no key came f… │t│
+│ │ Results                                                                  │ │
 │ │   Cell detail               ‹ panel         ›  A panel on the right of … │ │
 │ │   Flash copied cells        ‹ on            ›  On, copied cells flash b… │ │
-│ │   Changes tab view          ‹ list          ›  List, one line per chang… │ │
 │ ╰────────────────────────────────────── j/k move · h/l change · Esc close ─╯ │
 ╰──────────────────────╯╰──────────────────────────────────────────────────────╯
  NORMAL  local-pg │ Connected to local-pg                                    EN

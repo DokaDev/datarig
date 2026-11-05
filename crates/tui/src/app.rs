@@ -132,8 +132,6 @@ const TRANSIENT: Duration = Duration::from_secs(3);
 pub const FINE_TICK: Duration = Duration::from_millis(100);
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const WHEEL_STEP: isize = 3;
-/// Auto-completion waits this long after the last keystroke before popping up.
-pub const COMPLETION_DEBOUNCE: Duration = Duration::from_millis(120);
 /// Identifier characters typed before the popup opens by itself (`.` opens it at once).
 pub const COMPLETION_MIN_PREFIX: usize = 2;
 pub const TEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -1798,9 +1796,10 @@ impl App {
             || self.leader_at.is_some()
             || self.quitting.is_some()
             || self.conn_test.as_ref().is_some_and(|t| t.state == TestState::Running);
-        // A copy's flash wants its next frame (or, when it cannot fade, its end) and tabs
-        // sliding after a drag theirs, also between fine ticks.
-        let flash = [self.copy_flash_due(now), self.tab_slide.due(now)].into_iter().flatten().min();
+        // A copy's flash wants its next frame (or, when it cannot fade, its end), tabs sliding
+        // after a drag theirs and the completion popup its deadline, also between fine ticks.
+        let flash =
+            [self.copy_flash_due(now), self.tab_slide.due(now), self.tab().completion_due].into_iter().flatten().min();
         if fine {
             let tick = flash.map_or(now + FINE_TICK, |f| f.min(now + FINE_TICK));
             return Some(tick.max(now + Duration::from_millis(1)));

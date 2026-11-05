@@ -272,7 +272,7 @@ fn set_command_changes_and_saves_settings() {
     let error = h.cmdline().and_then(|c| c.error.as_ref()).map(|e| e.render(&h.app.i18n).to_string());
     let keys = "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|\
                 editor.cursor_shape|editor.clipboard|theme|editor.format_keyword_case|editor.format_indent|editor.auto_pairs|editor.soft_tab_backspace|editor.run_hints|\
-                secrets.macos_keychain_access|explorer.size_heat|ui.yank_flash|ui.changes_view|edit.paste_null|ui.tips|ui.background|idle_disconnect|lock_wait";
+                secrets.macos_keychain_access|explorer.size_heat|ui.yank_flash|ui.changes_view|edit.paste_null|ui.tips|ui.background|idle_disconnect|lock_wait|editor.completion_delay_ms";
     let unknown = ko_msg(&datarig_core::i18n::Msg::CommandsErrorSetKey { key: "colour".into(), keys: keys.into() });
     assert_eq!(error.as_deref(), Some(unknown.as_str()));
     // The error wraps in the popup instead of being cut.
@@ -430,6 +430,35 @@ fn completion_trigger_rules() {
     h.keys("u");
     let items = &h.popup().unwrap().items;
     assert!(items.len() < n && items[0].label == "users", "{items:?}");
+}
+
+/// The popup opens at its deadline, `[editor] completion_delay_ms` (60 ms) after the last key:
+/// the event loop is woken for that very instant, not at the next timer tick after it. Nothing
+/// before it; with a delay of 0 it opens with the key.
+#[test]
+fn the_completion_popup_opens_at_its_deadline() {
+    use std::time::Duration;
+    let mut h = Harness::connected(Lang::En);
+    h.keys("Go");
+    h.keys("SELECT * FROM sh");
+    let typed = h.clock.now();
+    let due = h.app.tab().completion_due.expect("scheduled");
+    assert_eq!(due, typed + Duration::from_millis(60), "the default delay, from the key");
+    // The loop's next wakeup is the deadline itself (it waits for nothing else then).
+    assert_eq!(h.app.next_tick(typed), Some(due));
+    h.advance(Duration::from_millis(59));
+    assert!(h.popup().is_none(), "debounced: nothing before the timer");
+    let wake = h.app.next_tick(h.clock.now()).expect("still waiting");
+    assert_eq!(wake, due, "woken at the deadline, not a tick later");
+    h.advance(Duration::from_millis(1));
+    assert!(h.popup().is_some(), "open at the deadline");
+    h.key(KeyCode::Esc);
+    // No delay: the key that calls for it opens it.
+    h.command("set editor.completion_delay_ms=0");
+    assert_eq!(h.app.tab().editor.mode, Mode::Insert);
+    h.keys(" JOIN shop.");
+    assert!(h.popup().is_some(), "opened with the key, no timer");
+    assert_eq!(h.app.tab().completion_due, None);
 }
 
 /// An accepted name is SQL: a mixed-case name goes in quoted, also after an opening `"` the

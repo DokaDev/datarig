@@ -117,7 +117,8 @@ fn values_keys(app: &mut App, term: &mut Terminal<TestBackend>, n: usize, ender:
     for c in format!("{ender} SELECT * FROM shop.orders o WHERE o.status = '").chars() {
         apps::char(app, c);
     }
-    let later = datarig_tui::app::COMPLETION_DEBOUNCE * 2;
+    // Past any completion delay the settings offer (the popup's deadline passed).
+    let later = std::time::Duration::from_secs(1);
     let keys = keystrokes(app, term, n, |a, i| {
         match i % 8 {
             k @ 0..4 => apps::char(a, ['p', 'a', 'i', 'd'][k]),
