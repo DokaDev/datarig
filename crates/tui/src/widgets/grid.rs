@@ -580,12 +580,25 @@ fn cell_text(cell: &Cell, null_label: &str) -> (String, bool) {
 }
 
 /// How the grid draws: the column headers' key marks (by column, empty: none), whether they
-/// are Nerd Font glyphs, and the changed cells whose value their column does not take.
+/// are Nerd Font glyphs, and the cells an Apply is refused for: changed cells whose value their
+/// column does not take, and cells of new rows left to a default their column lacks.
 #[derive(Clone, Copy, Default)]
 pub struct Look<'a> {
     pub marks: &'a [KeyMarks],
     pub icons: bool,
-    pub invalid: Option<&'a std::collections::BTreeMap<(crate::app::edit::RowAt, usize), String>>,
+    pub invalid: Option<&'a crate::app::edit::Invalids>,
+}
+
+/// The mark of a row in the gutter's free column: `!` a cell an Apply is refused for (a value
+/// its column does not take, or a default it lacks), else `+` a new row, `-` a row to be
+/// deleted, `~` cells changed.
+fn row_mark(problem: bool, new: bool, deleted: bool, changed: bool) -> Option<&'static str> {
+    match (new, deleted) {
+        _ if problem => Some("!"),
+        (true, _) => Some("+"),
+        (false, true) => Some("-"),
+        (false, false) => changed.then_some("~"),
+    }
 }
 
 pub fn render(
@@ -631,6 +644,7 @@ pub fn render(
     }
     let not_read = i18n.label(Label::ResultsNotRead);
     let default_label = i18n.label(Label::EditDefault);
+    let needed_label = i18n.label(Label::EditValueNeeded);
     let rerun_label = i18n.label(Label::EditRerunToSee);
 
     let gutter = win.end.max(1).to_string().len().max(2) + 1;
@@ -798,23 +812,22 @@ pub fn render(
                 || (applied.is_some_and(|a| a.deleted.contains(&r)) && rs.edit.batch.row(r).is_none()));
         let number = if added.is_some() { String::new() } else { (r + 1).to_string() };
         buf.set_stringn(area.x, y, fit(&number, gutter - 1, Align::Right), gutter - 1, num_style);
-        // What is pending in the row, in the gutter's free column: `!` a value its column does
-        // not take, `+` a new row, `-` a row to be deleted, `~` cells changed.
+        // What is pending in the row, in the gutter's free column ([`row_mark`]).
         use crate::app::edit::RowAt;
         let at = match (added, new) {
             (None, _) => Some(RowAt::Read(r)),
             (Some(_), Some(d)) => Some(RowAt::New(d.id)),
             (Some(_), None) => None,
         };
-        let bad = |c: usize| at.is_some_and(|a| look.invalid.is_some_and(|m| m.contains_key(&(a, c))));
-        let row_bad =
-            at.is_some_and(|a| look.invalid.is_some_and(|m| m.range((a, 0)..=(a, usize::MAX)).next().is_some()));
-        let mark = match (new, deleted) {
-            _ if row_bad => Some("!"),
-            (Some(_), _) => Some("+"),
-            (None, true) => Some("-"),
-            (None, false) => rs.edit.batch.row(r).map(|_| "~"),
-        };
+        let found = at.zip(look.invalid);
+        let bad = |c: usize| found.is_some_and(|(a, m)| m.cells.contains_key(&(a, c)));
+        // A cell of a new row left to a default its column lacks.
+        let needed = |c: usize| found.is_some_and(|(a, m)| m.no_default.contains(&(a, c)));
+        let row_bad = found.is_some_and(|(a, m)| {
+            let row = (a, 0)..=(a, usize::MAX);
+            m.cells.range(row.clone()).next().is_some() || m.no_default.range(row).next().is_some()
+        });
+        let mark = row_mark(row_bad, new.is_some(), deleted, rs.edit.batch.row(r).is_some());
         if let Some(mark) = mark {
             let style = if row_bad { num_bg.fg(th.error) } else { num_style };
             buf.set_stringn(area.x + gutter as u16 - 1, y, mark, 1, style);
@@ -851,8 +864,11 @@ pub fn render(
                 (Some(a), None) if pending.is_none() => (a.written.contains(&(r, ci)), a.rerun.contains(&(r, ci))),
                 _ => (false, false),
             };
+            let needed = needed(ci);
             let (text, is_null, default) = match (pending.or(done), rs.cell(r, ci)) {
                 _ if rerun => (rerun_label.to_string(), true, true),
+                // Not the dim `default`: an Apply is refused until it has a value.
+                _ if needed => (needed_label.to_string(), true, false),
                 (Some(Value::Text(v)), _) => (sanitize_cell(v), false, false),
                 (Some(Value::Null), _) => (null_label.to_string(), true, false),
                 (Some(Value::Default), _) => (default_label.to_string(), true, true),
@@ -867,7 +883,9 @@ pub fn render(
                 }
             };
             let align = if col.meta.numeric && !is_null { Align::Right } else { Align::Left };
-            let style = if default {
+            let style = if needed {
+                Style::new().fg(th.fg)
+            } else if default {
                 Style::new().fg(th.fg_muted).add_modifier(Modifier::DIM)
             } else if is_null {
                 Style::new().fg(th.null_fg).add_modifier(Modifier::ITALIC)
@@ -875,7 +893,7 @@ pub fn render(
                 Style::new().fg(th.fg)
             };
             let style = match (new, pending) {
-                _ if bad(ci) => style.patch(th.edit_invalid),
+                _ if needed || bad(ci) => style.patch(th.edit_invalid),
                 // A default keeps its dim look in a new row.
                 (Some(_), _) if default => style,
                 (Some(_), _) => style.patch(th.edit_inserted),

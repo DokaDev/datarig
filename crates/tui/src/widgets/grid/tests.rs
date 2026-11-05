@@ -97,3 +97,15 @@ fn a_drag_past_an_edge_steps_four_characters_and_never_snaps_back() {
     drag(&mut g);
     assert_eq!(g.x_off, g.x_max());
 }
+
+/// A row with a cell an Apply is refused for is `!` whatever else it is; else its kind.
+#[test]
+fn a_row_an_apply_is_refused_for_is_marked_first() {
+    for (new, deleted, changed) in [(true, false, false), (false, false, true), (false, true, true)] {
+        assert_eq!(row_mark(true, new, deleted, changed), Some("!"), "{new} {deleted} {changed}");
+    }
+    assert_eq!(row_mark(false, true, false, false), Some("+"));
+    assert_eq!(row_mark(false, false, true, true), Some("-"));
+    assert_eq!(row_mark(false, false, false, true), Some("~"));
+    assert_eq!(row_mark(false, false, false, false), None);
+}

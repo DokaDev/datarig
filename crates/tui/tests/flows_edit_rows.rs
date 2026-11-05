@@ -143,8 +143,9 @@ fn o_adds_a_new_row_after_the_rows_read_with_every_value_its_default() {
     assert_eq!(drafts(&h), [vec![Value::Default; 3]]);
     assert_eq!(cursor(&h), (3, 0), "on the new row's first column that takes a value");
     assert_eq!(counts(&h), Counts { updates: 0, inserts: 1, deletes: 0 });
+    // `!`, not `+`: its email (NOT NULL, no default) needs a value.
     let screen = h.screen(120, 40);
-    assert!(screen.contains("  +│") && !screen.contains(" 4 │"), "{screen}");
+    assert!(screen.contains("  !│") && !screen.contains(" 4 │"), "{screen}");
     // From a row read: after the other new rows.
     h.keys("ggo");
     assert_eq!(cursor(&h), (4, 0));
@@ -461,7 +462,7 @@ fn rows_read_later_come_before_the_new_rows() {
     assert_eq!(h.app.tab().grid.anchor, None, "the selection goes");
     let screen = h.screen(120, 40);
     let at = |t: &str| screen.find(t).unwrap_or_else(|| panic!("{t}:\n{screen}"));
-    assert!(at(" 5 │") < at("  +│"), "{screen}");
+    assert!(at(" 5 │") < at("  !│"), "{screen}");
     h.keys("D");
     assert_eq!(counts(&h), Counts::default(), "only the new row goes, no row that came is marked");
 }
@@ -629,6 +630,66 @@ fn new_and_deleted_rows_take_their_tokens() {
     }
 }
 
+/// A new row leaves `email` (NOT NULL, no default) to a default it lacks: Apply is refused for
+/// it, so the grid says so where it is, in a dark and a light theme and at both sizes. The cell
+/// reads that a value is needed in `edit_invalid` (bold, underlined, not the dim `default`) and
+/// the gutter has `!` for `+`. A typed value makes it a plain new row again.
+#[test]
+fn a_new_row_without_a_needed_value_is_marked_in_the_grid() {
+    use datarig_tui::theme;
+    use ratatui::style::Modifier;
+    for th in [theme::DARK, theme::LIGHT] {
+        let mut h = ready(Lang::En);
+        h.app.theme = std::sync::Arc::new(th.clone());
+        h.keys("o");
+        h.app.transient = None;
+        // The grid's mark and the Changes tab's problem are one finding.
+        let needed = "email is NOT NULL and has no default";
+        assert_eq!(h.app.shown_invalid().expect("resolved").no_default.len(), 1);
+        assert!(h.app.shown_changes().expect("a model").problems.iter().any(|p| p.text.contains(needed)));
+        for (w, hh) in [(120, 40), (80, 24)] {
+            let t = h.draw(w, hh);
+            let buf = t.backend().buffer();
+            let g = &h.app.tab().grid;
+            let email = g.cell_rect(3, 1, 3).expect("on screen");
+            let line = row_text(buf, email.y);
+            assert!(line.contains(" !\u{2502} defa\u{2026} \u{2502} ! value\u{2026} \u{2502}"), "{w}x{hh}: {line:?}");
+            let at = buf[(email.x + 1, email.y)].clone();
+            assert_eq!(at.symbol(), "!");
+            assert_eq!(at.fg, th.edit_invalid.fg.unwrap(), "{w}x{hh}: the marker's color");
+            assert!(at.modifier.contains(Modifier::BOLD | Modifier::UNDERLINED), "{at:?}");
+            assert!(!at.modifier.contains(Modifier::DIM), "not the dim default: {at:?}");
+            // The gutter's `!`, in the error color, just before the first column's bar.
+            let bar = (0..email.x).rev().find(|&x| buf[(x, email.y)].symbol() == "\u{2502}").expect("a bar");
+            let x = (0..bar).rev().find(|&x| buf[(x, email.y)].symbol() == "!").expect("the gutter's mark");
+            assert_eq!(buf[(x, email.y)].fg, th.error, "{w}x{hh}: the gutter's `!`");
+            // The id, with a default of its own, keeps its dim `default`.
+            let id = g.cell_rect(3, 0, 3).expect("on screen");
+            assert!(buf[(id.x + 2, id.y)].modifier.contains(Modifier::DIM));
+        }
+        h.keys("l");
+        type_cell(&mut h, "n@x");
+        let t = h.draw(120, 40);
+        let y = h.app.tab().grid.cell_rect(3, 1, 3).expect("on screen").y;
+        let line = row_text(t.backend().buffer(), y);
+        assert!(line.contains(" +\u{2502} defa\u{2026} \u{2502} n@x"), "{line:?}");
+        assert!(!line.contains("value"), "{line:?}");
+        assert!(h.app.shown_invalid().expect("resolved").no_default.is_empty());
+        assert!(h.app.shown_changes().expect("a model").problems.iter().all(|p| !p.text.contains(needed)));
+    }
+}
+
+/// The marker and the gutter's `!` of a new row that needs a value.
+#[test]
+fn a_new_row_without_a_needed_value_shows_its_marker() {
+    screens("edit_rows_value_needed", |lang| {
+        let mut h = ready(lang);
+        h.keys("o");
+        h.app.transient = None;
+        h
+    });
+}
+
 /// The Korean strings of the row keys fit at 80x24.
 #[test]
 fn the_row_refusals_read_in_korean() {
@@ -649,7 +710,7 @@ fn a_result_with_no_rows_takes_new_rows() {
     assert_eq!(drafts(&h).len(), 1);
     assert_eq!(cursor(&h), (0, 0));
     let screen = h.screen(120, 40);
-    assert!(screen.contains("  +│ defa…"), "{screen}");
+    assert!(screen.contains("  !│ defa…"), "{screen}");
     h.keys("D");
     assert!(edits(&h).batch.is_empty());
     assert!(h.screen(120, 40).contains("No rows"));

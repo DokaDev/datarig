@@ -132,12 +132,15 @@ struct PastePlan {
 type Refusal = (String, Option<String>);
 
 /// The cells of a result's changes whose value their column does not take, for the changes at
-/// `revision`: why, in words, by cell; and the same cells as the planner takes them.
+/// `revision`: why, in words, by cell; and the same cells as the planner takes them. With them,
+/// the cells of new rows left to a default their column lacks, as the planner finds them
+/// ([`edit::no_default`]): an Apply is refused for either, so the grid marks both.
 #[derive(Debug, Default)]
 pub struct Invalids {
     pub revision: u64,
     pub cells: BTreeMap<(RowAt, usize), String>,
     pub set: BTreeSet<(Origin, usize)>,
+    pub no_default: BTreeSet<(RowAt, usize)>,
 }
 
 /// What the invalid cells were found for: the changes, the words, the NULL token, and what says
@@ -977,6 +980,7 @@ impl App {
                 RowAt::New(id) => (Origin::New(id), c),
             })
             .collect();
+        out.no_default = edit::no_default(target, batch).into_iter().map(|(id, c)| (RowAt::New(id), c)).collect();
         out
     }
 

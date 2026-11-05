@@ -166,8 +166,8 @@ pub struct Theme {
     /// pending changes and body text also without color (italic).
     pub edit_applied: Style,
     /// A value of the result grid a paste put in a cell that its column does not take, not
-    /// applied yet: its text, in the error color, set apart from the other changes also without
-    /// color (underlined).
+    /// applied yet, and the mark of a new row's cell that needs a value: its text, in the error
+    /// color, set apart from the other changes also without color (underlined).
     pub edit_invalid: Style,
     /// The bracket matching the one at the editor's cursor (not drawn yet).
     pub match_paren: Style,
@@ -593,7 +593,7 @@ tokens! {
         edit_inserted => "The cells of a new row of the result grid, not applied yet (their text: the cell keeps its background, so it must read on the alternate rows, the selection and a selected range).",
         edit_deleted => "A row of the result grid to be deleted, not applied yet (its text; crossed out, so it shows without color).",
         edit_applied => "A value of the result grid an Apply wrote, until the query runs again (its text: the cell keeps its background; italic, so it shows without color).",
-        edit_invalid => "A value a paste put in a cell of the result grid that its column does not take, not applied yet (its text: the cell keeps its background; underlined, so it shows without color).",
+        edit_invalid => "A value a paste put in a cell of the result grid that its column does not take, not applied yet, and a new row's cell that needs a value its column has no default for (its text: the cell keeps its background; underlined, so it shows without color).",
 }
 
 /// The token names of a theme file.

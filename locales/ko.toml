@@ -2395,6 +2395,7 @@
 "edit.nothing_to_redo" = "다시 할 변경이 없습니다"
 "edit.nothing_to_revert" = "여기에는 대기 중인 변경이 없습니다"
 "edit.default" = "기본값"
+"edit.value_needed" = "! 값 필요"
 "edit.badge.pending" = "{count}건 대기"
 "edit.badge.editable" = "편집 가능 · {table}"
 "edit.badge.editable_plain" = "편집 가능"
