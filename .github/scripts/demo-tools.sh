@@ -62,15 +62,25 @@ fc-cache -f "$fonts" >/dev/null
 fc-list : family | grep -F 'JetBrainsMono Nerd Font' >/dev/null || { echo "JetBrainsMono Nerd Font is not installed" >&2; exit 1; }
 fc-list ':charset=ff0b' family | grep . >/dev/null || { echo "no installed font has U+FF0B" >&2; exit 1; }
 
-# A static ffmpeg (7.0.2, with libfreetype for the social preview's text): installing it with
-# apt took from under a minute to half an hour on the hosted runners.
+# A static ffmpeg (7.0.2): installing it with apt took from under a minute to half an hour on the hosted runners.
 fetch "https://github.com/eugeneware/ffmpeg-static/releases/download/$ffmpeg_release/ffmpeg-linux-x64.gz" \
   "$ffmpeg_sha256"
 gunzip -c "$work/ffmpeg-linux-x64.gz" > "$bin/ffmpeg"
 chmod 0755 "$bin/ffmpeg"
 
+# Pillow for the social preview (docs/demo/social.py), pinned by the hashes of its wheels, in
+# a virtual environment whose python3 goes on the PATH.
+python3 -m venv "$RUNNER_TEMP/py"
+cat > "$work/requirements.txt" <<'REQUIREMENTS'
+pillow==11.3.0 \
+    --hash=sha256:67172f2944ebba3d4a7b54f2e95c786a3a50c21b88456329314caaa28cda70f6 \
+    --hash=sha256:676b2815362456b5b3216b4fd5bd89d362100dc6f4945154ff172e206a22c024
+REQUIREMENTS
+"$RUNNER_TEMP/py/bin/pip" install -q --only-binary=:all: --require-hashes -r "$work/requirements.txt"
+
 if [ -n "${GITHUB_PATH:-}" ]; then
   echo "$bin" >> "$GITHUB_PATH"
+  echo "$RUNNER_TEMP/py/bin" >> "$GITHUB_PATH"
 fi
 "$bin/vhs" --version
 "$bin/ttyd" --version

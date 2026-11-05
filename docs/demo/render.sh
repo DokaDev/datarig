@@ -3,7 +3,7 @@
 # into <out-dir> as <name>.gif plus the stills the tapes take (<name>.png), and social.png
 # (the repository's social preview) from social.tape.
 #   docs/demo/render.sh <out-dir> [tape-name...]
-# Needs vhs, ttyd, ffmpeg and JetBrainsMono Nerd Font (.github/scripts/demo-tools.sh installs
+# Needs vhs, ttyd, ffmpeg, Python 3 with Pillow (for social.png) and JetBrainsMono Nerd Font (.github/scripts/demo-tools.sh installs
 # them on CI), the demo databases of docs/demo/compose.yml with the certificates of
 # make-certs.sh (DATARIG_DEMO_CERTS, default docs/demo/.certs), and datarig on the PATH (or
 # DATARIG_BIN, the binary to record). In each tape datarig runs with docs/demo/config in a
@@ -24,7 +24,7 @@ shift
 real=${DATARIG_BIN:-$(command -v datarig || true)}
 [ -n "$real" ] && [ -x "$real" ] || { echo "datarig is not on the PATH (or set DATARIG_BIN)" >&2; exit 1; }
 real=$(cd "$(dirname "$real")" && pwd)/$(basename "$real")
-for tool in vhs ttyd ffmpeg; do
+for tool in vhs ttyd ffmpeg python3; do
   command -v "$tool" >/dev/null || { echo "$tool is not on the PATH" >&2; exit 1; }
 done
 "$real" --version
@@ -73,19 +73,12 @@ WRAPPER
   echo "::endgroup::"
 done
 
-# The social preview: the still of social.tape under a band with the name and the tagline,
-# 1280x640 (GitHub's size). Its GIF is of no use.
+# The social preview (social.py): the still of social.tape under a band with the name and the
+# tagline. Its GIF is of no use.
 if [ -f "$out/social-raw.png" ]; then
-  font=$(fc-match -f '%{file}' 'JetBrainsMono Nerd Font:style=Bold')
-  printf '%s' "A full-featured database client that lives in your terminal — light, fast, and safe by default." \
-    > "$scratch/tagline.txt"
-  ffmpeg -loglevel error -y -i "$out/social-raw.png" -vf "\
-scale=1280:536:force_original_aspect_ratio=decrease,\
-pad=1280:536:(ow-iw)/2:(oh-ih)/2:color=0x1a1b26,\
-pad=1280:640:0:104:color=0x1a1b26,\
-drawtext=fontfile=$font:text=datarig:x=40:y=22:fontsize=44:fontcolor=0xc0caf5,\
-drawtext=fontfile=$font:textfile=$scratch/tagline.txt:x=40:y=74:fontsize=19:fontcolor=0x9aa5ce" \
-    "$out/social.png"
+  bold=$(fc-match -f '%{file}' 'JetBrainsMono Nerd Font:style=Bold')
+  regular=$(fc-match -f '%{file}' 'JetBrainsMono Nerd Font:style=Regular')
+  python3 "$demo/social.py" "$out/social-raw.png" "$out/social.png" "$bold" "$regular"
   rm -f "$out/social-raw.png" "$out/social.gif"
 fi
 

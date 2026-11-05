@@ -156,7 +156,8 @@ recordings of a branch (they are in the run's `demo` artifact). On a pull reques
 workflow then puts the run's stills in one comment (updated in place on each run). The
 render also makes `social.png`, the repository's social preview (uploaded by hand in the
 repository's settings). To record locally, with
-`vhs`, `ttyd`, `ffmpeg` and JetBrainsMono Nerd Font installed:
+`vhs`, `ttyd`, `ffmpeg`, JetBrainsMono Nerd Font and Python 3 with Pillow (for `social.png`)
+installed:
 
 ```sh
 sh docs/demo/make-certs.sh     # the demo databases' TLS certificates, in docs/demo/.certs
