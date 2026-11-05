@@ -832,6 +832,18 @@ impl App {
         if self.tab().exec.paging == Paging::Released { Label::CopyFetchNoHold } else { Label::CopyFetchUnavailable }
     }
 
+    /// Why "every row" cannot be copied now while the server has more (nothing runs): paging
+    /// closed, or nothing was held; `None` when it can, or there is no more to fetch.
+    pub(super) fn fetch_off(&self) -> Option<super::menu::Off> {
+        let t = self.tab();
+        let more = matches!(&t.results, Results::Rows(rs) if rs.more);
+        if !more || t.exec.running.is_some() || self.can_fetch_rest() {
+            return None;
+        }
+        let short = if t.exec.paging == Paging::Released { Label::MenuOffNotHeld } else { Label::MenuOffPagingClosed };
+        Some(super::menu::Off::new(short, Notice::new(self.fetch_unavailable(), Level::Warning)))
+    }
+
     /// "Fetch every row, then copy as `format`": ask first, with the rows fetched so far.
     pub(super) fn ask_fetch_then_copy(&mut self, format: CopyFormat) {
         if !self.can_fetch_rest() {

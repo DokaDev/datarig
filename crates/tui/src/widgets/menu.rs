@@ -1,6 +1,7 @@
 //! The action menu: a box at the pointer or next to the selection with the filter on its first
-//! row, then headings and one item per row with its keys on the right; an open submenu (the
-//! grid's copy formats) is a second box next to its row.
+//! row, then headings and one item per row with its keys on the right (a dimmed item: why it
+//! cannot run, in their place); an open submenu (the grid's copy formats) is a second box next
+//! to its row.
 
 use crate::app::App;
 use crate::text::{Align, fit, width};
@@ -20,6 +21,7 @@ const PROMPT: &str = "› ";
 pub(crate) fn draw_context_menu(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
     let th = theme::cur();
     let lines = app.menu_lines();
+    let dimmed = app.menu_dimmed();
     let (label_w, heading_w, key_w) = app.menu_widths();
     let hint = app.i18n.label(Label::MenuFilterHint);
     let m = app.overlays.menu_mut()?;
@@ -91,9 +93,15 @@ pub(crate) fn draw_context_menu(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             );
             continue;
         }
-        put(buf, list.x + 2, ry, label, iw.saturating_sub(key_w + 4), Style::new().fg(th.fg).patch(bg));
+        let off = dimmed.get(i).copied().unwrap_or(false);
+        let label_fg = if off { th.fg_dim } else { th.fg };
+        put(buf, list.x + 2, ry, label, iw.saturating_sub(key_w + 4), Style::new().fg(label_fg).patch(bg));
         let kx = list.x + list.width - 1 - width(keys) as u16;
-        let style = Style::new().fg(th.accent_warm).patch(bg).add_modifier(Modifier::BOLD);
+        let style = match off {
+            // Why it cannot run, where its keys would be.
+            true => Style::new().fg(th.fg_dim).patch(bg).add_modifier(Modifier::ITALIC),
+            false => Style::new().fg(th.accent_warm).patch(bg).add_modifier(Modifier::BOLD),
+        };
         put(buf, kx, ry, keys, key_w, style);
     }
     m.list = Rect::new(list.x, list.y, list.width, list.height.min((lines.len() - m.scroll) as u16));

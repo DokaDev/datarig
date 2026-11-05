@@ -81,8 +81,10 @@ top border resizes them.
 **The action menu.** A right click on an explorer node, the result grid, a tab or the editor
 opens it at the pointer; `Space Space`, `Shift+F10` or the `Menu` key open it next to the
 selection, and `Space t m` under the active tab. It lists what you can do with the selected
-thing, then with the pane, each with its key. Type to filter it; when nothing in it matches,
-every action is searched.
+thing, then with the pane, each with its key. What would act there but can't now is shown
+dimmed with why in a few words (a read-only connection, a table tab's Save, paging that
+closed); the keys step over it, and a click on it says the reason in full. Type to filter it;
+when nothing in it matches, every action is searched.
 
 **The mouse.** Besides the menu, the mouse works in the dialogs (the profile and tunnel forms,
 the settings, confirmations, the password prompt, pick lists, quick connect, the command line).

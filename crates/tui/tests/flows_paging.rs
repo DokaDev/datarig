@@ -925,11 +925,19 @@ fn a_result_not_held_pages_by_running_its_select_again() {
         title.contains("Results · rows 501–1,000") && title.contains("(page 2 / ? · # count · next page re-runs)"),
         "{title}"
     );
-    // Nothing is offered that would need the portal: the rest cannot be fetched for a copy.
+    // Nothing that would need the portal runs: the rest cannot be fetched for a copy, shown
+    // dimmed with why; picking it says so in full.
     let (x, y) = (h.app.tab().grid.hit_cols[0].0 + 2, h.app.tab().grid.data_y);
     h.mouse(MouseEventKind::Down(MouseButton::Right), x, y);
     let screen = h.screen(160, 45);
-    assert!(screen.contains("(the server has more)") && !screen.contains("Fetch every row"), "{screen}");
+    assert!(screen.contains("(the server has more)"), "{screen}");
+    let fetch = "Fetch every row, then copy ▸";
+    assert!(!h.menu_labels().iter().any(|l| l == fetch), "{:?}", h.menu_labels());
+    let dimmed: Vec<(String, String)> =
+        h.app.menu_dimmed_rows().into_iter().map(|(l, why)| (l.to_string(), why)).filter(|(l, _)| l == fetch).collect();
+    assert_eq!(dimmed, [(fetch.to_string(), "not held open".to_string())]);
+    let n = h.app.menu_dimmed_notice(fetch).expect("dimmed");
+    assert_eq!(n.msg, datarig_core::i18n::Label::CopyFetchNoHold.into());
     h.key(KeyCode::Esc);
     h.advance(3600 * SEC);
     assert!(close_requests(&h.sent()).is_empty());

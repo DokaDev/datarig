@@ -189,6 +189,18 @@ fn a_result_whose_columns_take_no_value_in_a_new_row_adds_none() {
     assert!(edits(&h).batch.is_empty());
     h.keys("O");
     assert_eq!(said(&mut h), refused("no column of the result takes a value in a new row"));
+    // The menu shows them dimmed, with why: the table's, not the cell's.
+    h.draw(120, 40);
+    h.keys("  ");
+    let dimmed: Vec<(String, String)> =
+        h.app.menu_dimmed_rows().into_iter().map(|(l, why)| (l.to_string(), why)).collect();
+    let add = dimmed
+        .iter()
+        .find(|(l, _)| l == "Add a new row, shown after the rows read")
+        .unwrap_or_else(|| panic!("{dimmed:?}"));
+    assert_eq!(add.1, "no column to fill");
+    let n = h.app.menu_dimmed_notice(&add.0).expect("dimmed");
+    assert_eq!(n.msg, refused("no column of the result takes a value in a new row").unwrap());
 }
 
 #[test]

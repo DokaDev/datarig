@@ -18,6 +18,7 @@
 //! new rows removed. A range pasted into the grid sets many cells and adds rows at once
 //! ([`paste`]).
 
+use super::menu::Off;
 use super::picker::Picker;
 use super::*;
 use crate::widgets::grid::Shape;
@@ -32,6 +33,16 @@ use datarig_core::edit::{
 use datarig_core::export;
 use ratatui::style::{Color, Style};
 use std::ops::Range;
+
+/// Why the action menu does not offer an edit as one that can run.
+pub(super) enum NotOffered {
+    /// It has nothing to do there: left out.
+    Hidden,
+    /// The whole result takes no edit now, for this reason.
+    Result(Box<Off>),
+    /// It does not act on this cell or selection, for this reason.
+    Here(Box<Off>),
+}
 
 mod applied;
 mod ask;
@@ -622,7 +633,7 @@ impl App {
         match self.edit_check() {
             Ok(ok) => Some(ok),
             Err(why) => {
-                self.say_not(why);
+                self.say_not(why.map(|o| o.notice));
                 None
             }
         }
@@ -635,40 +646,41 @@ impl App {
         }
     }
 
-    /// [`App::edit_gate`] without saying anything: else what says why not (nothing without a
-    /// row result).
-    fn edit_check(&self) -> Result<(ProfileId, EditFormat, Bound), Option<Notice>> {
+    /// [`App::edit_gate`] without saying anything: else what says why not, and its few words
+    /// for a menu (nothing without a row result).
+    fn edit_check(&self) -> Result<(ProfileId, EditFormat, Bound), Option<Box<Off>>> {
         let t = self.tab();
         let rs = rows_of(t).ok_or(None)?;
+        let off = |short: Label, n: Notice| Err(Some(Box::new(Off::new(short, n))));
         let Some(pid) = t.profile.filter(|p| self.conns.is_connected(*p)) else {
-            return Err(Some(self.read_only_notice(Label::EditWhyNotConnected)));
+            return off(Label::MenuOffNotConnected, self.read_only_notice(Label::EditWhyNotConnected));
         };
         if let Err(e) = self.policy_of(pid) {
             let name = self.profile(pid).map(|p| p.name.clone()).unwrap_or_default();
             let n = self.unknown_environment_notice(&name, &e);
-            return Err(Some(Notice::new(n.msg, Level::Info)));
+            return off(Label::MenuOffEnvironment, Notice::new(n.msg, Level::Info));
         }
         // The environment is read-only, or was when the tab's session opened (that session is
         // read-only on the server).
         if self.read_only(pid) || (t.exec.session.is_some() && t.exec.read_only) {
-            return Err(Some(self.read_only_notice(Label::EditWhyReadOnly)));
+            return off(Label::MenuOffReadOnly, self.read_only_notice(Label::EditWhyReadOnly));
         }
         let Some(format) = self.tab_edit_format(t.id) else {
-            return Err(Some(self.why_notice(&Why::Rows(ReadOnly::NoFormat))));
+            return off(Label::MenuOffNotEditable, self.why_notice(&Why::Rows(ReadOnly::NoFormat)));
         };
         // Nothing changes the changes being applied (a cell editor or a list of values opened
         // before the Apply was sent).
         if rs.edit.applying.is_some() {
-            return Err(Some(self.refused_notice(Label::EditWhyApplying.into())));
+            return off(Label::MenuOffApplying, self.refused_notice(Label::EditWhyApplying.into()));
         }
         // What an Apply changed shows over the rows as read: they are read again first.
         if rs.edit.applied.is_some() {
-            return Err(Some(self.refused_notice(Label::EditWhyApplied.into())));
+            return off(Label::MenuOffRunAgain, self.refused_notice(Label::EditWhyApplied.into()));
         }
         // Read under another connection or database, the rows may not be the table's now.
         let bound = self.edit_bound(t).filter(|b| rs.edit.bound.as_ref() == Some(b));
         let Some(bound) = bound else {
-            return Err(Some(Notice::new(Label::EditConnectionChanged, Level::Info)));
+            return off(Label::MenuOffRunAgain, Notice::new(Label::EditConnectionChanged, Level::Info));
         };
         Ok((pid, format, bound))
     }
@@ -684,56 +696,74 @@ impl App {
 
     /// Whether edit action `a` would act on the active tab's shown result, its cursor and its
     /// selection now, by the checks its key makes before it changes anything (the action menu
-    /// offers only those). Before the key first read the table's details, what its columns
-    /// take is not known: only the result, the cursor and the selection are checked then.
-    pub(super) fn edit_offered(&self, a: EditAction) -> bool {
+    /// offers those, and shows the others it has a reason for dimmed). Before the key first read
+    /// the table's details, what its columns take is not known: only the result, the cursor and
+    /// the selection are checked then.
+    pub(super) fn edit_offer(&self, a: EditAction) -> Result<(), NotOffered> {
+        use NotOffered as N;
         if self.tabs.is_empty() {
-            return false;
+            return Err(N::Hidden);
         }
         let t = self.tab();
-        let Some(rs) = rows_of(t) else { return false };
-        if rs.edit.applying.is_some() {
-            return false;
-        }
+        let Some(rs) = rows_of(t) else { return Err(N::Hidden) };
+        let gate = || self.edit_check().map(drop).map_err(|o| o.map_or(N::Hidden, N::Result));
+        let has = |b: bool| if b { Ok(()) } else { Err(N::Hidden) };
         let batch = &rs.edit.batch;
+        let writes = !matches!(
+            a,
+            EditAction::Undo | EditAction::Redo | EditAction::Revert | EditAction::Discard | EditAction::Preview
+        );
+        // While changes are applied nothing changes them: the writes say so.
+        if rs.edit.applying.is_some() {
+            return Err(if writes { gate().err().unwrap_or(N::Hidden) } else { N::Hidden });
+        }
         match a {
-            EditAction::Undo => return batch.can_undo(),
-            EditAction::Redo => return batch.can_redo(),
-            EditAction::Revert | EditAction::Discard | EditAction::Preview => return !batch.is_empty(),
-            EditAction::Paste | EditAction::Pasted => return self.edit_check().is_ok(),
-            EditAction::PasteAs => return self.edit_check().is_ok() && self.last_paste.is_some(),
+            EditAction::Undo => return has(batch.can_undo()),
+            EditAction::Redo => return has(batch.can_redo()),
+            EditAction::Revert | EditAction::Discard | EditAction::Preview => return has(!batch.is_empty()),
+            EditAction::Paste | EditAction::Pasted => return gate(),
+            EditAction::PasteAs => return has(self.last_paste.is_some()).and_then(|()| gate()),
             EditAction::PasteRegister | EditAction::PasteRows => {
-                return self.edit_check().is_ok() && self.grid_copy.is_some();
+                return has(self.grid_copy.is_some()).and_then(|()| gate());
             }
             EditAction::Apply => {
-                return self.edit_check().is_ok()
-                    && !batch.is_empty()
-                    && matches!(rs.edit.target, Target::Ready(_))
-                    && !self.tab_busy(t.id);
+                has(!batch.is_empty())?;
+                gate()?;
+                return has(matches!(rs.edit.target, Target::Ready(_)) && !self.tab_busy(t.id));
             }
             _ => {}
         }
-        if self.edit_check().is_err() {
-            return false;
-        }
+        gate()?;
         // As the key resolves it: a statement or columns that are not one table's, a table
         // known to be read-only, or changes pending on a table no longer known.
+        let not_editable = |why: &Why| N::Result(Box::new(Off::new(Label::MenuOffNotEditable, self.why_notice(why))));
         let target = match (&rs.edit.target, self.edit_source(t, rs)) {
-            (_, Some(Err(_))) | (Target::ReadOnly { retry: false, .. }, _) => return false,
-            (Target::Unresolved | Target::ReadOnly { .. }, None) => return false,
+            (_, Some(Err(r))) => return Err(not_editable(&Why::Rows(r))),
+            (Target::ReadOnly { why, retry: false }, _) | (Target::ReadOnly { why, .. }, None) => {
+                return Err(not_editable(why));
+            }
+            (Target::Unresolved, None) => {
+                let n = self.read_only_notice(Label::EditWhyNotResolved);
+                return Err(N::Result(Box::new(Off::new(Label::MenuOffRunAgain, n))));
+            }
             (Target::Ready(r), None) => Some(r),
             (Target::Ready(r), Some(Ok(s))) if s.table == r.table => Some(r),
             _ => None,
         };
+        // A new row is refused for the table, not for the cell: no column takes a value in one.
+        let short = if a == EditAction::AddRow { Label::MenuOffNoColumn } else { Label::MenuOffHere };
+        let here = |r: Result<(), Option<Notice>>| {
+            r.map_err(|n| n.map_or(N::Hidden, |n| N::Here(Box::new(Off::new(short, n)))))
+        };
         match target {
             // Every check the key makes before it changes anything.
-            Some(target) => self.edit_acts(a, target),
+            Some(target) => here(self.edit_acts(a, target)),
             // The table's details are read by the key first: what its columns take is not
             // known yet, only what the cursor and the selection allow.
             None => match a {
-                EditAction::Cell | EditAction::SetNull | EditAction::SetDefault => self.cells_rows().is_ok(),
-                EditAction::DeleteRow => self.delete_rows().is_ok(),
-                _ => true,
+                EditAction::Cell | EditAction::SetNull | EditAction::SetDefault => here(self.cells_rows().map(drop)),
+                EditAction::DeleteRow => here(self.delete_rows().map(drop)),
+                _ => Ok(()),
             },
         }
     }
@@ -917,16 +947,17 @@ impl App {
     }
 
     /// Whether edit key `a` would act on a result resolved to `target`, by the checks it makes
-    /// before it changes anything ([`App::edit_ready`]).
-    fn edit_acts(&self, a: EditAction, target: &EditTarget) -> bool {
+    /// before it changes anything ([`App::edit_ready`]); else what says why not.
+    fn edit_acts(&self, a: EditAction, target: &EditTarget) -> Result<(), Option<Notice>> {
         match a {
-            EditAction::Cell | EditAction::SetNull | EditAction::SetDefault => self.cells_plan(a, target).is_ok(),
+            EditAction::Cell | EditAction::SetNull | EditAction::SetDefault => self.cells_plan(a, target).map(drop),
             EditAction::AddRow => {
-                rows_of(self.tab()).is_some_and(|rs| self.insert_column(target, rs.columns.len()).is_ok())
+                let n = rows_of(self.tab()).ok_or(None)?.columns.len();
+                self.insert_column(target, n).map(drop)
             }
-            EditAction::CloneRow => self.clone_plan(target).is_ok(),
-            EditAction::DeleteRow => self.delete_plan(target).is_ok(),
-            _ => true,
+            EditAction::CloneRow => self.clone_plan(target).map(drop),
+            EditAction::DeleteRow => self.delete_plan(target).map(drop),
+            _ => Ok(()),
         }
     }
 

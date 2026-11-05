@@ -523,8 +523,11 @@ impl App {
     }
 
     /// `results.view_as_plan` is not available: why, in the words that help (the text plan is
-    /// in another result tab or the pane is hidden, the rows are a plan already).
-    pub(super) fn explain_as_plan_unavailable(&mut self) {
+    /// in another result tab or the pane is hidden, the rows are a plan already), and for a menu
+    /// the few words shown next to it (none when the result shown is no plan at all: a menu
+    /// leaves it out then).
+    pub(super) fn explain_as_plan_off(&self) -> super::menu::Off {
+        use super::menu::Off;
         use super::tabs::ResultView;
         let t = self.tab();
         let log = t.rows_log();
@@ -534,21 +537,20 @@ impl App {
             .result_tabs()
             .into_iter()
             .any(|i| !is_plan(i) && log.statements.get(i).is_some_and(|s| explains_statement(&s.sql, dialect, format)));
-        let notice = if text_plan && !self.results_shown() {
+        if text_plan && !self.results_shown() {
             let key = self.key_or_commands(Action::Panel(super::action::PanelAction::Toggle));
-            Notice::new(Msg::PlanAsPlanShowFirst { key }, Level::Info)
+            Off::new(Label::MenuOffPlanHidden, Notice::new(Msg::PlanAsPlanShowFirst { key }, Level::Info))
         } else if text_plan {
             let key = match (self.key_here(Action::ResultTab(false)), self.key_here(Action::ResultTab(true))) {
                 (Some(prev), Some(next)) => format!("{prev}/{next}"),
                 _ => self.key_or_commands(Action::ResultTab(true)),
             };
-            Notice::new(Msg::PlanAsPlanShowFirst { key }, Level::Info)
+            Off::new(Label::MenuOffPlanHidden, Notice::new(Msg::PlanAsPlanShowFirst { key }, Level::Info))
         } else if t.exec.view == ResultView::Rows && t.exec.shown.is_some_and(is_plan) {
-            Notice::new(Label::PlanAsPlanAlreadyJson, Level::Info)
+            Off::new(Label::MenuOffPlanAlready, Notice::new(Label::PlanAsPlanAlreadyJson, Level::Info))
         } else {
-            Notice::new(Label::PlanAsPlanNotExplain, Level::Info)
-        };
-        self.flash(notice);
+            Off::said(Notice::new(Label::PlanAsPlanNotExplain, Level::Info))
+        }
     }
 
     /// `results.view_as_plan`: the statement of the shown text plan asked again in the tab's plan

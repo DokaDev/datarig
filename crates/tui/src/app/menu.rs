@@ -5,9 +5,16 @@
 //! It lists the actions for the thing it was opened on first (an explorer node, the grid's cell
 //! or selection, a tab, the editor's statement or selection), then the pane's own, each with the
 //! key that runs it in that pane. The explorer's come from its key bindings (the list the
-//! keyboard help shows), so an action added to the explorer shows up here too; what cannot run
-//! on the node is left out. The grid's copies open a second level, the formats; its edits are
-//! listed only while their keys would act on the cell (a read-only result offers none).
+//! keyboard help shows), so an action added to the explorer shows up here too; what has nothing
+//! to do on the node is left out. The grid's copies open a second level, the formats; its edits
+//! are listed while their keys would act on the cell.
+//!
+//! An action that would do something there but cannot now, for a reason that can be said (a
+//! read-only connection, a table tab that has no text to save, paging that closed), is shown
+//! dimmed with that reason in a few words where its keys would be. The keys and the wheel step
+//! over it and the pointer does not select it; picking it (a click, its key) says the reason in
+//! full and keeps the menu open. When a whole result cannot be edited, the reason is shown once,
+//! on its first edit.
 //!
 //! Typing filters the items: names that start with the text first, then names with a word that
 //! starts with it, then names that have its letters in order. When no item matches, every action
@@ -18,7 +25,7 @@
 
 use super::action::{ChartAction, PanelAction, PlanAction, PlanView};
 use super::copy::{CopyFormat, CopyScope};
-use super::edit::EditAction;
+use super::edit::{EditAction, NotOffered};
 use super::tabs::ResultView;
 use super::*;
 use crate::keymap::{Target, keys};
@@ -173,6 +180,9 @@ const WELCOME_MENU: &[Action] = &[Action::NewProfile, Action::OpenSettings, Acti
 /// Actions that open a menu: not offered by the search of a menu.
 const OPENS_MENU: &[Action] = &[Action::OpenMenu, Action::TabMenu, Action::Explorer(ExplorerAction::ContextMenu)];
 
+/// A menu's items: the target's, the pane's, and those of them shown dimmed with why.
+type Items = (Vec<MenuItem>, Vec<MenuItem>, Vec<(MenuItem, Off)>);
+
 /// What a copy of the grid's menu takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuScope {
@@ -231,6 +241,26 @@ pub enum Heading {
     AllActions,
 }
 
+/// Why an item cannot run now: what its key or a click on it says, and the few words a menu shows
+/// next to it (`None`: a menu leaves it out, it has nothing to do there; its key still says why).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Off {
+    pub short: Option<Label>,
+    pub notice: Notice,
+}
+
+impl Off {
+    /// Shown dimmed in a menu with `short`; picking it says `notice`.
+    pub fn new(short: Label, notice: Notice) -> Self {
+        Self { short: Some(short), notice }
+    }
+
+    /// Left out of a menu; its key says `notice`.
+    pub fn said(notice: Notice) -> Self {
+        Self { short: None, notice }
+    }
+}
+
 /// A line of the menu as shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuLine {
@@ -256,6 +286,8 @@ pub struct ContextMenu {
     /// The items for the target and the pane's, as opened (the filter picks from these).
     pub own: Vec<MenuItem>,
     pub pane: Vec<MenuItem>,
+    /// The items of `own` and `pane` that cannot run now, shown dimmed, and why.
+    pub off: Vec<(MenuItem, Off)>,
     /// The explorer's own wording of an action for the row, as it was when the menu opened
     /// (where the console opens, what is deleted).
     names: Vec<(Action, Localized)>,
@@ -282,21 +314,29 @@ pub struct ContextMenu {
 }
 
 impl ContextMenu {
-    /// The actions of its items as opened (not the scopes), the target's first.
+    /// The actions of its items as opened that can run (not the scopes), the target's first.
     pub fn actions(&self) -> Vec<Action> {
         self.own
             .iter()
             .chain(&self.pane)
+            .filter(|i| self.off_of(**i).is_none())
             .filter_map(|i| if let MenuItem::Action(a) = i { Some(*a) } else { None })
             .collect()
     }
 
-    /// The selected item, if the selected line is one.
+    /// Why `item` cannot run now, when it is shown dimmed.
+    pub fn off_of(&self, item: MenuItem) -> Option<&Off> {
+        self.off.iter().find(|(i, _)| *i == item).map(|(_, o)| o)
+    }
+
+    /// Whether line `i` is an item that can run (not a heading, not a dimmed item).
+    fn live(&self, i: usize) -> bool {
+        self.item_at(i).is_some_and(|it| self.off_of(it).is_none())
+    }
+
+    /// The selected item, if the selected line is one that can run.
     pub fn selected_item(&self) -> Option<MenuItem> {
-        match self.lines.get(self.selected) {
-            Some(MenuLine::Item(i)) => Some(*i),
-            _ => None,
-        }
+        self.item_at(self.selected).filter(|it| self.off_of(*it).is_none())
     }
 
     /// The item on line `i`, if it is one.
@@ -307,7 +347,8 @@ impl ContextMenu {
         }
     }
 
-    /// Select the next (`d = 1`) or previous item, around the ends; headings are skipped.
+    /// Select the next (`d = 1`) or previous item, around the ends; headings and dimmed items
+    /// are skipped.
     fn step(&mut self, d: isize) {
         let n = self.lines.len() as isize;
         if n == 0 {
@@ -316,7 +357,7 @@ impl ContextMenu {
         let mut i = self.selected as isize;
         for _ in 0..n {
             i = (i + d).rem_euclid(n);
-            if matches!(self.lines[i as usize], MenuLine::Item(_)) {
+            if self.live(i as usize) {
                 self.selected = i as usize;
                 return;
             }
@@ -621,8 +662,9 @@ impl App {
             self.focus = back;
             return;
         };
-        let (own, pane) = (self.available(PLAN_MENU), self.available(PLAN_PANE_MENU));
-        self.push_menu_from(back, Ctx::Plan, target, own, pane, at);
+        let mut off = Vec::new();
+        let (own, pane) = (self.available(PLAN_MENU, &mut off), self.available(PLAN_PANE_MENU, &mut off));
+        self.push_menu_from(back, Ctx::Plan, target, (own, pane, off), at);
         if !self.overlays.is_open(OverlayKind::ContextMenu) {
             self.focus = back;
         }
@@ -661,8 +703,9 @@ impl App {
             self.focus = back;
             return;
         };
-        let (own, pane) = (self.available(CHART_MENU), self.available(CHART_PANE_MENU));
-        self.push_menu_from(back, Ctx::Chart, target, own, pane, at);
+        let mut off = Vec::new();
+        let (own, pane) = (self.available(CHART_MENU, &mut off), self.available(CHART_PANE_MENU, &mut off));
+        self.push_menu_from(back, Ctx::Chart, target, (own, pane, off), at);
         if !self.overlays.is_open(OverlayKind::ContextMenu) {
             self.focus = back;
         }
@@ -703,22 +746,15 @@ impl App {
         Some(MenuTarget::Tab { tab: self.tab().id, binding: self.tab().binding })
     }
 
-    /// Open a menu of `own` and `pane` items for `target` at `at` (nothing when both are empty).
-    fn push_menu(&mut self, ctx: Ctx, target: MenuTarget, own: Vec<MenuItem>, pane: Vec<MenuItem>, at: (u16, u16)) {
-        self.push_menu_from(self.focus, ctx, target, own, pane, at);
+    /// Open a menu of `own` and `pane` items for `target` at `at` (nothing when both are empty),
+    /// `off` of them dimmed with their reasons.
+    fn push_menu(&mut self, ctx: Ctx, target: MenuTarget, items: Items, at: (u16, u16)) {
+        self.push_menu_from(self.focus, ctx, target, items, at);
     }
 
     /// [`App::push_menu`], giving the focus back to `back` when it closes without running
     /// anything.
-    fn push_menu_from(
-        &mut self,
-        back: Focus,
-        ctx: Ctx,
-        target: MenuTarget,
-        own: Vec<MenuItem>,
-        pane: Vec<MenuItem>,
-        at: (u16, u16),
-    ) {
+    fn push_menu_from(&mut self, back: Focus, ctx: Ctx, target: MenuTarget, (own, pane, off): Items, at: (u16, u16)) {
         if own.is_empty() && pane.is_empty() {
             return;
         }
@@ -750,6 +786,7 @@ impl App {
             target,
             own,
             pane,
+            off,
             names,
             title,
             back,
@@ -765,9 +802,20 @@ impl App {
         self.menu_refilter();
     }
 
-    /// The actions of `list` that can run now, as items.
-    fn available(&self, list: &[Action]) -> Vec<MenuItem> {
-        list.iter().copied().filter(|a| (action::spec(*a).when)(self)).map(MenuItem::Action).collect()
+    /// The actions of `list` that can run now, as items, and those that cannot for a reason a
+    /// menu shows (added to `off` with it).
+    fn available(&self, list: &[Action], off: &mut Vec<(MenuItem, Off)>) -> Vec<MenuItem> {
+        let mut items = Vec::new();
+        for &a in list {
+            let item = MenuItem::Action(a);
+            if (action::spec(a).when)(self) {
+                items.push(item);
+            } else if let Some(o) = self.unavailable_why(a).filter(|o| o.short.is_some()) {
+                items.push(item);
+                off.push((item, o));
+            }
+        }
+        items
     }
 
     /// Right click on the explorer at (x, y): select the row there (blank space: the
@@ -790,7 +838,7 @@ impl App {
         let (own, pane) = self.explorer_sections(&row);
         let key = crate::widgets::explorer::row_key(self, &row);
         let items = |v: Vec<Action>| v.into_iter().map(MenuItem::Action).collect();
-        self.push_menu(Ctx::Explorer, MenuTarget::Explorer(row, key), items(own), items(pane), at);
+        self.push_menu(Ctx::Explorer, MenuTarget::Explorer(row, key), (items(own), items(pane), Vec::new()), at);
     }
 
     /// `explorer.context_menu`, or the action menu in the explorer: the menu next to the
@@ -840,24 +888,48 @@ impl App {
         };
         // A new row is no row of the result: nothing reads it but its edits.
         let read = cell.is_some_and(|(row, _)| row < self.shown_rows_read());
-        let mut own = if read { self.available(GRID_MENU) } else { Vec::new() };
+        let mut off = Vec::new();
+        let mut own = if read { self.available(GRID_MENU, &mut off) } else { Vec::new() };
         let mut pane = Vec::new();
         if read {
             own.push(MenuItem::Scope(MenuScope::Copy(CopyScope::Selection)));
         }
         if cell.is_some() {
-            let edits: Vec<Action> =
-                EDIT_MENU.iter().filter(|e| self.edit_offered(**e)).map(|e| Action::Edit(*e)).collect();
-            own.extend(self.available(&edits));
+            // Why the whole result takes no edit is said once, on the first edit; why one does
+            // not act on this cell or selection, on that edit.
+            let mut said = false;
+            for &e in EDIT_MENU {
+                let item = MenuItem::Action(Action::Edit(e));
+                if !(action::spec(Action::Edit(e)).when)(self) {
+                    continue;
+                }
+                match self.edit_offer(e) {
+                    Ok(()) => own.push(item),
+                    Err(NotOffered::Here(o)) => {
+                        own.push(item);
+                        off.push((item, *o));
+                    }
+                    Err(NotOffered::Result(o)) if !said => {
+                        said = true;
+                        own.push(item);
+                        off.push((item, *o));
+                    }
+                    Err(_) => {}
+                }
+            }
         }
         if read {
             pane.push(MenuItem::Scope(MenuScope::Copy(CopyScope::Fetched)));
+            let item = MenuItem::Scope(MenuScope::FetchFirst);
             if self.can_fetch_rest() {
-                pane.push(MenuItem::Scope(MenuScope::FetchFirst));
+                pane.push(item);
+            } else if let Some(o) = self.fetch_off() {
+                pane.push(item);
+                off.push((item, o));
             }
         }
-        pane.extend(self.available(RESULTS_MENU));
-        self.push_menu_from(back, Ctx::Grid, target, own, pane, at);
+        pane.extend(self.available(RESULTS_MENU, &mut off));
+        self.push_menu_from(back, Ctx::Grid, target, (own, pane, off), at);
         if !self.overlays.is_open(OverlayKind::ContextMenu) {
             self.focus = back;
         }
@@ -912,12 +984,13 @@ impl App {
             Mode::Visual => Ctx::VimVisual,
             Mode::Insert => Ctx::VimInsert,
         };
+        let mut off = Vec::new();
         let (own, mut pane) = match ddl {
-            true => (self.available(DDL_MENU), self.available(DDL_PANE_MENU)),
-            false => (self.available(EDITOR_MENU), self.available(QUERY_MENU)),
+            true => (self.available(DDL_MENU, &mut off), self.available(DDL_PANE_MENU, &mut off)),
+            false => (self.available(EDITOR_MENU, &mut off), self.available(QUERY_MENU, &mut off)),
         };
-        pane.extend(self.available(LAYOUT_MENU));
-        self.push_menu(ctx, target, own, pane, at);
+        pane.extend(self.available(LAYOUT_MENU, &mut off));
+        self.push_menu(ctx, target, (own, pane, off), at);
     }
 
     /// Right click on the tab bar at (x, y): on a tab, that tab becomes active (as a click)
@@ -939,13 +1012,14 @@ impl App {
     /// The active tab's menu: its actions, then the tab bar's.
     fn open_tab_menu(&mut self, at: (u16, u16)) {
         let Some(target) = self.tab_target() else { return };
-        let mut own = self.available(TAB_MENU);
+        let mut off = Vec::new();
+        let mut own = self.available(TAB_MENU, &mut off);
         // Disconnecting a tab's profile that is not connected does nothing.
-        let off = self.tab().profile.is_none_or(|id| self.conns.state(id) == NodeState::Disconnected);
-        own.retain(|i| !(off && *i == MenuItem::Action(Action::DisconnectCurrent)));
-        let mut pane = self.available(TABS_MENU);
-        pane.extend(self.available(EXPLORER_LAYOUT_MENU));
-        self.push_menu(Ctx::Nav, target, own, pane, at);
+        let gone = self.tab().profile.is_none_or(|id| self.conns.state(id) == NodeState::Disconnected);
+        own.retain(|i| !(gone && *i == MenuItem::Action(Action::DisconnectCurrent)));
+        let mut pane = self.available(TABS_MENU, &mut off);
+        pane.extend(self.available(EXPLORER_LAYOUT_MENU, &mut off));
+        self.push_menu(Ctx::Nav, target, (own, pane, off), at);
     }
 
     /// `tab.menu`: the active tab's menu under it in the tab bar.
@@ -959,8 +1033,9 @@ impl App {
 
     /// The welcome panel's menu (no profile yet).
     pub(super) fn open_welcome_menu(&mut self, at: (u16, u16)) {
-        let pane = self.available(WELCOME_MENU);
-        self.push_menu(Ctx::Welcome, MenuTarget::Welcome, Vec::new(), pane, at);
+        let mut off = Vec::new();
+        let pane = self.available(WELCOME_MENU, &mut off);
+        self.push_menu(Ctx::Welcome, MenuTarget::Welcome, (Vec::new(), pane, off), at);
     }
 
     /// `menu.open` (`Space Space`, `Shift+F10`, the Menu key): the focused pane's menu next to
@@ -1001,11 +1076,13 @@ impl App {
     }
 
     /// Recompute the lines after the filter changed: the items that match it, best first in
-    /// each section, the best one selected; none: every action that matches, as `:` finds them.
+    /// each section, the best one that can run selected; none: every action that matches, as
+    /// `:` finds them.
     pub(super) fn menu_refilter(&mut self) {
         let Some(m) = self.overlays.menu() else { return };
         let query = m.filter.text().trim().to_string();
         let (ctx, names) = (m.ctx, m.names.clone());
+        let off: Vec<MenuItem> = m.off.iter().map(|(i, _)| *i).collect();
         let sections = [(Heading::Target, m.own.clone()), (Heading::Pane, m.pane.clone())];
         let mut lines: Vec<MenuLine> = Vec::new();
         let mut best: Option<(u8, usize)> = None;
@@ -1025,7 +1102,7 @@ impl App {
             ranked.sort_by_key(|&(r, i, _)| (r, i));
             lines.push(MenuLine::Heading(heading));
             for (r, _, item) in ranked {
-                if best.is_none_or(|(b, _)| r < b) {
+                if !off.contains(&item) && best.is_none_or(|(b, _)| r < b) {
                     best = Some((r, lines.len()));
                 }
                 lines.push(MenuLine::Item(item));
@@ -1182,7 +1259,7 @@ impl App {
                     if let (Some(Target::Action(a)), _) = self.keymap.resolve_seq(ctx, &[k])
                         && item(a)
                     {
-                        self.menu_run(MenuItem::Action(a));
+                        self.menu_pick(MenuItem::Action(a));
                     }
                 }
             },
@@ -1203,9 +1280,18 @@ impl App {
         m.list.contains(at).then(|| m.scroll + usize::from(at.y - m.list.y)).filter(|i| *i < m.lines.len())
     }
 
+    /// `item` picked by a click or its key: run it, or (dimmed) say why it cannot run, the menu
+    /// left open.
+    fn menu_pick(&mut self, item: MenuItem) {
+        match self.overlays.menu().and_then(|m| m.off_of(item)).map(|o| o.notice.clone()) {
+            Some(why) => self.flash(why),
+            None => self.menu_run(item),
+        }
+    }
+
     /// Mouse while the menu is open: a click on an item runs it (on a scope: opens its
-    /// formats), elsewhere in the box (a heading, the filter, the border) does nothing, outside
-    /// it closes it; the wheel moves the selection.
+    /// formats; on a dimmed item: says why it cannot run), elsewhere in the box (a heading, the
+    /// filter, the border) does nothing, outside it closes it; the wheel moves the selection.
     pub(super) fn menu_mouse(&mut self, ev: MouseEvent) {
         let Some(m) = self.overlays.menu_mut() else { return };
         let at = ratatui::layout::Position::new(ev.column, ev.row);
@@ -1232,7 +1318,7 @@ impl App {
                     let item = Self::menu_line_at(m, at).and_then(|i| m.item_at(i));
                     if let Some(item) = item {
                         m.sub = None;
-                        self.menu_run(item);
+                        self.menu_pick(item);
                     }
                 } else if !m.area.contains(at) {
                     self.menu_dismiss();
@@ -1245,7 +1331,7 @@ impl App {
     /// The pointer moved over the open menu (no button): the item under it is selected, as the
     /// keys would, and the keys go on from there. Over another item of the menu than the one
     /// whose formats are open, the formats close. `false` when nothing changed (off the items,
-    /// on a heading or on the selected one): no frame is drawn for it.
+    /// on a heading, a dimmed item or the selected one): no frame is drawn for it.
     pub(super) fn menu_hover(&mut self, ev: MouseEvent) -> bool {
         let Some(m) = self.overlays.menu_mut() else { return false };
         let at = ratatui::layout::Position::new(ev.column, ev.row);
@@ -1260,7 +1346,7 @@ impl App {
             return true;
         }
         let Some(i) = Self::menu_line_at(m, at) else { return false };
-        if m.item_at(i).is_none() || i == m.selected {
+        if !m.live(i) || i == m.selected {
             return false;
         }
         m.selected = i;
@@ -1344,7 +1430,16 @@ impl App {
         }
     }
 
-    /// The open menu's lines as drawn: (heading?, label, keys).
+    /// An item of menu `m` as drawn: its label, and its keys or (dimmed) why it cannot run.
+    fn menu_entry(&self, m: &ContextMenu, item: MenuItem) -> (Localized, String) {
+        let (label, keys) = self.menu_row(m.ctx, &m.names, item);
+        match m.off_of(item).and_then(|o| o.short) {
+            Some(why) => (label, self.i18n.label(why).to_string()),
+            None => (label, keys),
+        }
+    }
+
+    /// The open menu's lines as drawn: (heading?, label, keys or why a dimmed item cannot run).
     pub fn menu_lines(&self) -> Vec<(bool, Localized, String)> {
         let Some(m) = self.overlays.menu() else { return Vec::new() };
         m.lines
@@ -1352,7 +1447,7 @@ impl App {
             .map(|l| match l {
                 MenuLine::Heading(h) => (true, self.menu_heading(m, *h), String::new()),
                 MenuLine::Item(i) => {
-                    let (label, keys) = self.menu_row(m.ctx, &m.names, *i);
+                    let (label, keys) = self.menu_entry(m, *i);
                     (false, label, keys)
                 }
                 MenuLine::NoMatch => (true, self.i18n.label(Label::MenuNoMatch), String::new()),
@@ -1360,12 +1455,17 @@ impl App {
             .collect()
     }
 
+    /// Which of the open menu's lines are dimmed items (they cannot run now).
+    pub fn menu_dimmed(&self) -> Vec<bool> {
+        let Some(m) = self.overlays.menu() else { return Vec::new() };
+        m.lines.iter().map(|l| matches!(l, MenuLine::Item(i) if m.off_of(*i).is_some())).collect()
+    }
+
     /// The widths of the open menu's item labels (as opened, unfiltered), its headings and its
     /// keys, so the box keeps its width while the filter narrows it.
     pub fn menu_widths(&self) -> (usize, usize, usize) {
         let Some(m) = self.overlays.menu() else { return (0, 0, 0) };
-        let rows: Vec<(Localized, String)> =
-            m.own.iter().chain(&m.pane).map(|i| self.menu_row(m.ctx, &m.names, *i)).collect();
+        let rows: Vec<(Localized, String)> = m.own.iter().chain(&m.pane).map(|i| self.menu_entry(m, *i)).collect();
         let label = rows.iter().map(|(l, _)| crate::text::width(l)).max().unwrap_or(0);
         let keys = rows.iter().map(|(_, k)| crate::text::width(k)).max().unwrap_or(0);
         let headings = [Heading::Target, Heading::Pane]
@@ -1376,9 +1476,28 @@ impl App {
         (label, headings, keys)
     }
 
-    /// The labels and keys of the items shown (the headings left out).
+    /// The labels and keys of the items shown that can run (the headings and the dimmed items
+    /// left out).
     pub fn menu_rows(&self) -> Vec<(Localized, String)> {
-        self.menu_lines().into_iter().filter(|(h, _, _)| !h).map(|(_, l, k)| (l, k)).collect()
+        let dimmed = self.menu_dimmed();
+        self.menu_lines()
+            .into_iter()
+            .zip(dimmed)
+            .filter(|((h, _, _), d)| !h && !d)
+            .map(|((_, l, k), _)| (l, k))
+            .collect()
+    }
+
+    /// The labels of the dimmed items shown, with the few words that say why they cannot run.
+    pub fn menu_dimmed_rows(&self) -> Vec<(Localized, String)> {
+        let dimmed = self.menu_dimmed();
+        self.menu_lines().into_iter().zip(dimmed).filter(|(_, d)| *d).map(|((_, l, k), _)| (l, k)).collect()
+    }
+
+    /// Why the open menu's dimmed item labelled `label` cannot run, in full (what picking it says).
+    pub fn menu_dimmed_notice(&self, label: &str) -> Option<Notice> {
+        let m = self.overlays.menu()?;
+        m.off.iter().find(|(i, _)| self.menu_row(m.ctx, &m.names, *i).0 == label).map(|(_, o)| o.notice.clone())
     }
 
     /// The open submenu's rows, like [`App::menu_rows`].

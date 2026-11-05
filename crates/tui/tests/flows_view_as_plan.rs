@@ -169,6 +169,11 @@ fn the_hint_and_the_action_are_only_for_a_text_plan() {
     h.keys("P");
     assert!(runs(&mut h).is_empty());
     said(&mut h, Label::PlanAsPlanNotExplain);
+    // Nothing to do there: the menu leaves it out (not dimmed).
+    h.keys("  ");
+    let shown = h.app.menu_rows().into_iter().chain(h.app.menu_dimmed_rows()).map(|(l, _)| l.to_string());
+    assert!(!shown.clone().any(|l| l.starts_with("View as plan")), "{:?}", shown.collect::<Vec<_>>());
+    h.key(KeyCode::Esc);
     // A JSON plan is a plan already.
     let mut h = Harness::connected(Lang::En);
     ran(&mut h, "EXPLAIN (FORMAT JSON) SELECT * FROM t;", |id| plan_page(id, &fixture(17, "join.plan.json")));
@@ -176,6 +181,14 @@ fn the_hint_and_the_action_are_only_for_a_text_plan() {
     h.key(KeyCode::Char('H'));
     assert_eq!(h.app.tab().exec.view, ResultView::Rows, "its rows");
     assert!(!h.screen(W, H).contains("view as plan"));
+    // Its menu shows "view as plan" dimmed, with why.
+    h.keys("  ");
+    let dimmed: Vec<(String, String)> =
+        h.app.menu_dimmed_rows().into_iter().map(|(l, why)| (l.to_string(), why)).collect();
+    let as_plan = "View as plan: the text EXPLAIN again as a plan";
+    assert!(dimmed.contains(&(as_plan.to_string(), "already a plan".to_string())), "{dimmed:?}");
+    assert_eq!(h.app.menu_dimmed_notice(as_plan).expect("dimmed").msg, Label::PlanAsPlanAlreadyJson.into());
+    h.key(KeyCode::Esc);
     // An EXPLAIN that asked for JSON but whose rows are not a plan: nothing to view differently.
     let mut h = text_plan("EXPLAIN (FORMAT 'json') SELECT 1;");
     assert!(!h.screen(W, H).contains("view as plan"));
