@@ -695,6 +695,24 @@ fn a_new_row_without_a_needed_value_is_marked_in_the_grid() {
     }
 }
 
+/// In the terminal theme, whose selected range sets its own text color, a cell that needs a value
+/// in the range keeps the warning color.
+#[test]
+fn a_needed_value_keeps_its_color_in_a_selected_range() {
+    use datarig_tui::theme;
+    let mut h = ready_with(Lang::En, all_shown());
+    h.app.theme = std::sync::Arc::new(theme::TERMINAL.clone());
+    h.keys("o");
+    h.keys("lvh");
+    h.app.transient = None;
+    let t = h.draw(120, 40);
+    let email = h.app.tab().grid.cell_rect(3, 1, 3).expect("on screen");
+    let at = t.backend().buffer()[(email.x + 1, email.y)].clone();
+    assert_eq!(at.symbol(), "!");
+    assert_eq!(at.fg, theme::TERMINAL.edit_invalid.fg.unwrap(), "in the range: {at:?}");
+    assert_ne!(Some(at.fg), theme::TERMINAL.range.fg, "not the range's color");
+}
+
 /// The marker and the gutter's `!` of a new row that needs a value.
 #[test]
 fn a_new_row_without_a_needed_value_shows_its_marker() {
@@ -719,20 +737,25 @@ fn a_new_row_an_apply_refuses_is_marked_and_says_why() {
         let y = h.app.tab().grid.cell_rect(3, 1, 3).expect("on screen").y;
         row_text(t.backend().buffer(), y)
     };
-    // The badge, short at 120x40: one pending, one problem.
+    // The badge, short at 120x40: one pending, two problems (the email, the row's `name`).
     let screen = h.screen(120, 40);
-    assert!(screen.contains("1 \u{b7} 1!"), "{screen}");
-    let why = "Row 4: email is NOT NULL and has no default; give it a value";
+    assert!(screen.contains("1 \u{b7} 2!"), "{screen}");
     assert!(screen.contains("Row 4: email is NOT NULL"), "the inspector says why:\n{screen}");
+    // The cell editor: not invalid, it needs a value.
     h.keys("e");
-    assert_eq!(h.app.tab().cell_edit.as_ref().and_then(|e| e.error.as_deref()), Some(why));
+    let e = h.app.tab().cell_edit.as_ref().expect("the editor");
+    assert_eq!((e.error.as_deref(), e.invalid), (Some("email has no default"), false));
+    assert!(h.status(120, 40).contains("Can't edit: email has no default"), "{}", h.status(120, 40));
+    assert!(!h.status(120, 40).contains("Row 4"), "{}", h.status(120, 40));
     h.key(KeyCode::Esc);
     type_cell(&mut h, "n@x");
     h.app.transient = None;
     // Every shown cell has a value, and still: `name` is not in the result.
     let l = line(&mut h);
     assert!(l.contains(" !\u{2502} defa\u{2026} \u{2502} n@x"), "{l:?}");
-    assert!(!h.screen(120, 40).contains("1 \u{b7} 1!"), "no cell counted");
+    // The row is still counted: an Apply is refused for it.
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("1 \u{b7} 1!"), "{screen}");
     let m = h.app.shown_changes().expect("a model");
     assert!(m.problems.iter().any(|p| p.text.contains("name is NOT NULL")), "{:?}", m.problems);
     // A table without `name`: a plain new row.

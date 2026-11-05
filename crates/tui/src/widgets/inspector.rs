@@ -102,7 +102,7 @@ pub(crate) fn draw_inspector(app: &mut App, area: Rect, buf: &mut Buffer) {
         // Why an Apply is refused for the cursor's cell of a new row, wrapped below.
         let draft = (t.grid.row - rs.rows.len()).checked_sub(rs.edit.applied_new());
         let at = draft.and_then(|i| rs.edit.batch.drafts().get(i)).map(|d| crate::app::edit::RowAt::New(d.id));
-        if let Some(why) = at.and_then(|at| app.invalid_reason(at, t.grid.col)) {
+        if let Some(why) = at.and_then(|at| app.problem_reason(at, t.grid.col)) {
             let th = theme::cur();
             let style = Style::new().fg(th.edit_invalid.fg.unwrap_or(th.error));
             let room = (body.height as usize).saturating_sub(2);

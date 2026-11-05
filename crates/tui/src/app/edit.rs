@@ -851,6 +851,12 @@ impl App {
                         let input = TextInput::new(&text);
                         let error = self.invalid_reason(at, col);
                         let invalid = error.is_some();
+                        // A cell that needs a value is not invalid: it says why it needs one.
+                        let error = error.or_else(|| {
+                            let column = c.column.name.clone();
+                            self.value_needed(at, col)
+                                .then(|| self.i18n.msg(&Msg::EditWhyNoDefault { column }).to_string())
+                        });
                         self.open_cell_edit(
                             CellEdit { result, at: (at, col), cells, input, lines: None, error, invalid },
                             &text,

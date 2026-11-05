@@ -82,10 +82,10 @@ While changes are pending the strip shows `3 pending` and a Changes tab, and the
 offers `Space d a` apply and `u` undo. A pending change is a row: a row read with changed cells
 (two cells of one row are one change), a new row or a row to be deleted. The row number's
 gutter marks them `~`, `+` and `-`, or `!` when an Apply is refused for the row. Changed cells
-take their own color, new rows another, rows to be deleted are crossed out, and a cell left to its default shows a dim `default`, or `! value needed` where
-the column has none (see [New rows](#new-rows)). The theme tokens are `edit_changed`,
-`edit_inserted`, `edit_deleted`, and `edit_pending` for the count (see
-[Theme files](../reference/theme-files.md)).
+take their own color, new rows another, rows to be deleted are crossed out, and a cell left to
+its default shows a dim `default`, or `! value needed` where the column has none (see
+[New rows](#new-rows)). The theme tokens are `edit_changed`, `edit_inserted`, `edit_deleted`,
+and `edit_pending` for the count (see [Theme files](../reference/theme-files.md)).
 
 ### With the mouse
 
@@ -160,16 +160,18 @@ naming the column.
 `D` on a new row removes it. A new row has no number in the gutter; the messages number it after
 the rows read ("Row 4" after three rows).
 
-The Changes tab lists, and an Apply refuses, a new row that leaves a `NOT NULL` column without a default to its default
-("Row 4: name is NOT NULL and has no default; give it a value"), and one of a table with such a
-column that the result does not show ("…is not in the result; add it to the SELECT").
+The Changes tab lists, and an Apply refuses, a new row that leaves a `NOT NULL` column without
+a default to its default ("Row 4: name is NOT NULL and has no default; give it a value"), and
+one of a table with such a column that the result does not show ("…is not in the result; add
+it to the SELECT").
 
 The grid shows both where they are. A cell that needs a value reads `! value needed` in the
 theme token `edit_invalid` instead of the dim `default` (its column widens to fit it, up to the
-grid's widest column), and the row's gutter shows `!` instead of `+`; the badge counts such
-cells with the invalid ones, and the cell editor and the inspector say why the cell needs a
-value. A column the result does not show has no cell to mark: the row's gutter shows `!`, and
-the Changes tab names the column. Typing the values clears the marks.
+grid's widest column), and the row's gutter shows `!` instead of `+`. The cell editor opens
+saying "Can't edit: name has no default", and the inspector gives the Changes tab's reason. A
+column the result does not show has no cell to mark: the row's gutter shows `!`, and the Changes
+tab names the column. The badge counts both with the invalid values. Typing the values clears
+the marks.
 
 ## Pasting a range
 
