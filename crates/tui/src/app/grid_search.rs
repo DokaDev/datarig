@@ -252,14 +252,18 @@ pub struct Answer {
 
 /// Where answers go: the event loop, or (headless) the app's own channel.
 #[derive(Clone)]
-enum Out {
+pub(super) enum Out {
     App(UnboundedSender<AppEvent>),
     Local(mpsc::Sender<AppEvent>),
 }
 
 impl Out {
     fn send(&self, a: Answer) {
-        let ev = AppEvent::GridSearch(a);
+        self.event(AppEvent::GridSearch(a));
+    }
+
+    /// Send `ev` (another job's answer: the selection's summary).
+    pub(super) fn event(&self, ev: AppEvent) {
         match self {
             Out::App(tx) => {
                 let _ = tx.send(ev);
@@ -763,6 +767,15 @@ impl App {
         self.start_grid_job(Purpose::Search, re, p.forward, cell(p.origin.row, p.origin.col, ncols));
     }
 
+    /// Where a job of the selection's summary answers; headless, one more answer is waited for.
+    pub(super) fn grid_job_out(&mut self) -> Out {
+        let out = self.grid_out();
+        if matches!(out, Out::Local(_)) {
+            self.grid_jobs.pending.fetch_add(1, Ordering::SeqCst);
+        }
+        out
+    }
+
     fn grid_out(&mut self) -> Out {
         match &self.tx {
             Some(tx) => Out::App(tx.clone()),
@@ -862,7 +875,8 @@ impl App {
     }
 
     /// Headless (without the event loop's channel): hand the answers of the grid's search jobs
-    /// to the app, waiting up to `wait` while one is still out. How many came.
+    /// and its selection's summary to the app, waiting up to `wait` while one is still out. How
+    /// many came.
     pub fn pump_grid_search(&mut self, wait: Duration) -> usize {
         self.pump_grid_answers(wait, usize::MAX)
     }
@@ -885,7 +899,7 @@ impl App {
             let Some((_, rx)) = &self.grid_jobs.local else { break };
             let left = deadline.saturating_duration_since(Instant::now());
             let Ok(ev) = rx.recv_timeout(left) else { break };
-            if matches!(&ev, AppEvent::GridSearch(Answer { news: News::Done(_), .. })) {
+            if matches!(&ev, AppEvent::GridSearch(Answer { news: News::Done(_), .. }) | AppEvent::GridSummary(_)) {
                 self.grid_jobs.pending.fetch_sub(1, Ordering::SeqCst);
             }
             n += 1;

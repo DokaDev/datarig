@@ -86,7 +86,6 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let lang = lang_segment(app);
     let hints = app.hints();
     let status = app.status_line();
-    let shorter = app.status_shorter();
     // `detail_view = statusbar`: the selected cell in the message's place while the grid has
     // the focus (a fresh notice still comes first).
     let preview = (app.detail.visible
@@ -103,7 +102,20 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
             .flatten()
             .map(datarig_core::i18n::Localized::verbatim)
     });
-    let status = match preview {
+    // The summary of the grid's selected range, while the grid has the focus: a fresh notice
+    // still comes first, but for the one that says a selection started (the hints have its keys).
+    let selecting = |m: &Msg| matches!(m, Msg::CopySelecting { .. });
+    let fresh = app.transient.as_ref().is_some_and(|(n, _)| !selecting(&n.msg));
+    let summary = (!fresh && !app.grid_prompt_open())
+        .then(|| app.selection_summary())
+        .flatten()
+        .map(datarig_core::i18n::Localized::verbatim);
+    // A summary's shorter forms, else the notice's.
+    let shorter = match &summary {
+        Some(_) => app.selection_summary_forms().into_iter().skip(1).collect(),
+        None => app.status_shorter(),
+    };
+    let status = match summary.or(preview) {
         Some(p) => Some((p, Level::Info, false)),
         None => status,
     };

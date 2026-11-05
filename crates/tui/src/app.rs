@@ -44,6 +44,7 @@ pub mod folder_pick;
 pub mod folder_read;
 mod format;
 pub mod grid_search;
+pub mod grid_summary;
 pub mod guide;
 pub mod hover;
 pub mod idle;
@@ -400,6 +401,8 @@ pub enum AppEvent {
     Folder(folder_read::FolderAnswer),
     /// A search job of a result grid answered.
     GridSearch(grid_search::Answer),
+    /// A summary job of a result grid's selection answered.
+    GridSummary(grid_summary::SummaryAnswer),
     /// A read of the system clipboard answered.
     Clipboard(edit::ClipAnswer),
 }
@@ -637,6 +640,7 @@ pub struct App {
     folder_reads: folder_read::FolderReads,
     /// The search jobs of the result grids, on workers.
     grid_jobs: grid_search::GridJobs,
+    grid_summary: grid_summary::GridSummary,
     /// Why the config file could not be used (the settings screen says so; nothing is saved).
     config_problem: Option<Notice>,
     /// The default rules and the environments (`[policy.<name>]`); a profile's environment
@@ -1033,6 +1037,7 @@ impl App {
             exports: export::Exports::default(),
             folder_reads: Default::default(),
             grid_jobs: Default::default(),
+            grid_summary: Default::default(),
             config_problem: status.clone(),
             policies: cfg.policies.clone(),
             clock: Arc::new(Instant::now),

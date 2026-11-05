@@ -217,7 +217,8 @@ fn v_selects_a_range_that_y_copies_as_tsv_with_a_header() {
     h.keys("jl");
     h.keys("v");
     assert_eq!(h.app.tab().grid.anchor, Some((1, 1)));
-    assert!(h.status(160, 45).contains("Selecting"), "{}", h.status(160, 45));
+    // The status line sums up the range (in place of the "Selecting…" notice).
+    assert!(h.status(160, 45).contains(" 1 row × 1 column · "), "{}", h.status(160, 45));
     h.keys("jjl");
     h.keys("y");
     assert_eq!(
@@ -813,7 +814,7 @@ fn capital_v_selects_whole_rows_that_y_copies() {
     let clip = FakeClipboard::attach(&mut h, false, &[]);
     h.keys("jll");
     h.keys("Vj");
-    assert!(h.status(160, 45).contains("Selecting"));
+    assert!(h.status(160, 45).contains(" 2 rows × 5 columns · "), "{}", h.status(160, 45));
     h.keys("y");
     let text = clip.last().unwrap();
     assert_eq!(ids(&text), ["2", "3"]);
@@ -902,22 +903,28 @@ fn a_whole_column_copy_says_when_rows_were_not_fetched() {
     assert_eq!(message(&mut h), "Copied 2 rows as TSV (system clipboard)");
 }
 
-/// `V` (or `v`) again drops the selection and its "Selecting…" notice; so does
+/// `V` (or `v`) again drops the selection, its "Selecting…" notice and its summary; so does
 /// `Esc`.
 #[test]
 fn dropping_a_selection_drops_its_notice() {
     let mut h = grid(Lang::En);
+    let selecting = |h: &Harness| {
+        h.app.transient.as_ref().is_some_and(|(n, _)| matches!(n.msg, datarig_core::i18n::Msg::CopySelecting { .. }))
+    };
     for keys in ["VV", "vv"] {
         h.keys(&keys[..1]);
-        assert!(h.status(160, 45).contains("Selecting"), "{keys}");
+        assert!(selecting(&h), "{keys}");
+        assert!(h.status(160, 45).contains(" × "), "{keys}: the summary in its place");
         h.keys(&keys[1..]);
         assert_eq!(h.app.tab().grid.anchor, None);
-        assert!(!h.status(160, 45).contains("Selecting"), "{keys}: {}", h.status(160, 45));
+        assert!(!selecting(&h), "{keys}");
+        assert!(!h.status(160, 45).contains(" × "), "{keys}: {}", h.status(160, 45));
     }
     h.keys("V");
     h.key(KeyCode::Esc);
     assert_eq!((h.app.tab().grid.anchor, h.app.focus), (None, Focus::Results));
-    assert!(!h.status(160, 45).contains("Selecting"), "{}", h.status(160, 45));
+    assert!(!selecting(&h));
+    assert!(!h.status(160, 45).contains(" × "), "{}", h.status(160, 45));
 }
 
 /// Whether cell (row, col) of the active grid is drawn on the copy flash's background (160×45,
@@ -1301,7 +1308,7 @@ fn ctrl_a_selects_the_page_that_y_copies() {
     h.ctrl('a');
     let g = &h.app.tab().grid;
     assert_eq!((g.anchor, g.row, g.col, g.shape), (Some((7, 4)), 0, 0, datarig_tui::widgets::grid::Shape::Cells));
-    assert!(h.status(160, 45).contains("Selecting"), "{}", h.status(160, 45));
+    assert!(h.status(160, 45).contains(" 8 rows × 5 columns · "), "{}", h.status(160, 45));
     h.keys("y");
     assert_eq!(clip.last(), Some(every));
     assert_eq!(message(&mut h), "Copied 8 rows as TSV (system clipboard)");

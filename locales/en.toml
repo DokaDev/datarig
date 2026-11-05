@@ -869,6 +869,19 @@
 "menu.heading.all_actions" = "All actions"
 "menu.no_match" = "No action matches"
 "menu.filter_hint" = "type to filter"
+"grid.summary.rows" = { one = "{count} row", other = "{count} rows" }
+"grid.summary.cols" = { one = "{count} column", other = "{count} columns" }
+"grid.summary.sum" = "sum {value}"
+"grid.summary.avg" = "avg {value}"
+"grid.summary.min" = "min {value}"
+"grid.summary.max" = "max {value}"
+"grid.summary.distinct" = { one = "{count} distinct value", other = "{count} distinct values" }
+"grid.summary.distinct_more" = { one = "{count}+ distinct values", other = "{count}+ distinct values" }
+"grid.summary.nulls" = { one = "NULL {count}", other = "NULL {count}" }
+"grid.summary.unknown" = { one = "{count} with no value yet", other = "{count} with no value yet" }
+"grid.summary.working" = "summing…"
+"grid.summary.new_rows" = "new rows left out"
+"grid.summary.fetched" = "fetched rows only"
 "menu.stale" = "Not run: what the menu was opened on has changed. Open the menu again"
 # A menu item shown dimmed: why it cannot run now, in a few words.
 "menu.off.read_only" = "read-only"

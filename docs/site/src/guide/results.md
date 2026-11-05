@@ -40,6 +40,15 @@ the count matches the pages you saw.
   selects too. The selection is one tinted block, the separators between its columns included;
   its rows carry the row tint and their numbers, and its columns' headers, are tinted too. The
   theme tokens `grid_cursor_row` and `grid_cursor_header` set the tints.
+- While a selection is there and the grid has the focus, the status line sums it up: its size,
+  then for numbers (every selected column an integer, decimal or floating-point one) the sum,
+  average, least and greatest value, else how many distinct values; and how many are NULL, as in
+  `5 rows × 1 column · sum 1,013.00 · avg 253.25 · min 0.25 · max 1,000 · NULL 1`. Integers and
+  decimals add up exactly. The values are those the grid shows, a pending change over the value
+  read, as a copy takes them; a cell with no value yet (a pending DEFAULT) is counted apart, new
+  rows are left out, and whole columns say "fetched rows only" when the server has more. The
+  rows are read in the background (a big selection says "summing…" at first), so keys never
+  wait for it. Distinct values are counted up to 100,000.
 - `z` (or `Space z`) zooms the results pane to the whole workspace and back; `+` and `-` make it
   taller or shorter. `Esc` or `q` goes back to the editor.
 

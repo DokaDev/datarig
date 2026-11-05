@@ -41,4 +41,4 @@ expression: t.backend()
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯"
-" NORMAL  local-pg │ Selecting: move to extend · y copies · Esc cancels      │ Enter view cell · n next page · y copy EN "
+" NORMAL  local-pg │ 2 rows × 2 columns · 4 distinct values · NULL 0         │ Enter view cell · n next page · y copy EN "

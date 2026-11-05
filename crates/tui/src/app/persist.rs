@@ -572,6 +572,12 @@ impl App {
     /// results have the focus; a tab only made active while the explorer keeps the
     /// focus connects nothing.
     pub(super) fn after_input(&mut self) {
+        self.after_input_here();
+        // The summary of the selection, as the input left it.
+        self.sync_grid_summary();
+    }
+
+    fn after_input_here(&mut self) {
         // A search of a grid that no longer shows its result goes.
         self.sweep_grid_search();
         // The input moved the focus itself (not one of the corrections below).

@@ -1,0 +1,156 @@
+//! The status line's summary of the grid's selected range through the real `App` event path:
+//! numbers (sum, average, least, greatest, NULL), other values (distinct, NULL), the pending
+//! values a copy takes, whole columns of a result the server has more of, and the rows read on
+//! a worker (an answer for a selection that changed is dropped).
+
+mod common;
+
+use common::*;
+use datarig_core::driver::DbEvent;
+use datarig_core::edit::Value;
+use datarig_core::i18n::Lang;
+use datarig_tui::app::{Focus, Results};
+use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
+use std::time::Duration;
+
+const W: u16 = 160;
+const H: u16 = 45;
+
+fn s(v: &str) -> Option<String> {
+    Some(v.to_string())
+}
+
+/// Five rows of an id, an amount (numeric, one NULL) and a name (text, one NULL); the grid
+/// focused, `more` rows on the server or not.
+fn amounts(lang: Lang, more: bool) -> Harness {
+    let mut h = Harness::connected(lang);
+    h.app.run(vec!["SELECT id, amount, name FROM t".to_string()]);
+    let id = h.app.tab().exec.query_id;
+    let columns = vec![
+        meta("id", "int8", true, false),
+        meta("amount", "numeric", true, false),
+        meta("name", "text", false, false),
+    ];
+    let rows = vec![
+        vec![s("1"), s("10.50"), s("a")],
+        vec![s("2"), s("2.25"), s("b")],
+        vec![s("3"), None, s("a")],
+        vec![s("4"), s("1000"), None],
+        vec![s("5"), s("0.25"), s("c")],
+    ];
+    h.db(DbEvent::Page { id, columns: Some(columns), rows, more, elapsed: Duration::ZERO });
+    h.app.focus = Focus::Results;
+    h
+}
+
+/// The status line once the summary's job answered.
+fn summary(h: &mut Harness) -> String {
+    h.app.pump_grid_search(Duration::from_secs(10));
+    h.status(W, H)
+}
+
+#[test]
+fn numbers_are_summed_and_other_values_counted() {
+    let mut h = amounts(Lang::En, false);
+    // No range: no summary.
+    h.keys("l");
+    assert_eq!(h.app.selection_summary(), None);
+    // The amounts of every row: the cursor on the amount column, then down.
+    h.keys("vjjjj");
+    let line = summary(&mut h);
+    assert!(line.contains("5 rows × 1 column · sum 1,013.00 · avg 253.25 · min 0.25 · max 1,000 · NULL 1"), "{line}");
+    // Narrow: the parts that matter least go first (least and greatest, then NULL).
+    let forms = h.app.selection_summary_forms();
+    assert_eq!(
+        forms[1..],
+        [
+            "5 rows × 1 column · sum 1,013.00 · avg 253.25 · NULL 1",
+            "5 rows × 1 column · sum 1,013.00 · avg 253.25",
+            "5 rows × 1 column · sum 1,013.00",
+        ]
+    );
+    let narrow = h.status(80, 24);
+    assert!(narrow.contains("5 rows × 1 column · sum 1,013.00") && !narrow.contains("…"), "{narrow}");
+    // With the ids: still numbers.
+    h.keys("h");
+    let line = summary(&mut h);
+    assert!(line.contains("5 rows × 2 columns · sum 1,028.00 · avg 114.222222 · min 0.25 · max 1,000"), "{line}");
+    // The amounts and the names (from the anchor's column): distinct values.
+    h.keys("ll");
+    let line = summary(&mut h);
+    assert!(line.contains("5 rows × 2 columns · 7 distinct values · NULL 2"), "{line}");
+    // Esc drops the range, and the summary with it.
+    h.key(KeyCode::Esc);
+    assert_eq!(h.app.selection_summary(), None);
+    assert!(!h.status(W, H).contains("distinct"));
+    // Not while the grid has no focus.
+    h.keys("vj");
+    assert!(h.app.selection_summary().is_some());
+    h.app.focus = Focus::Editor;
+    h.key(KeyCode::Esc);
+    assert_eq!(h.app.selection_summary(), None);
+}
+
+#[test]
+fn the_values_shown_are_summed_as_a_copy_takes_them() {
+    let mut h = amounts(Lang::En, false);
+    if let Results::Rows(rs) = &mut h.app.tab_mut().results {
+        let row = vec![s("4"), s("1000"), None];
+        rs.edit.batch.set(&[(3, 1)], &Value::Text("1".into()), |_| row.clone());
+        let row = vec![s("5"), s("0.25"), s("c")];
+        rs.edit.batch.set(&[(4, 1)], &Value::Default, |_| row.clone());
+    }
+    h.keys("lvjjjj");
+    let line = summary(&mut h);
+    assert!(
+        line.contains(
+            "5 rows × 1 column · sum 13.75 · avg 4.583333 · min 1 · max 10.50 · NULL 1 · 1 with no value yet"
+        ),
+        "{line}"
+    );
+}
+
+#[test]
+fn whole_columns_say_when_the_server_has_more_and_korean_reads_from_the_catalog() {
+    let mut h = amounts(Lang::En, true);
+    h.draw(W, H);
+    let g = h.app.tab().grid.clone();
+    let (x, y) = (g.hit_cols[1].0 + 1, g.header_y);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+    let line = summary(&mut h);
+    assert!(line.contains("5 rows × 1 column · sum 1,013.00") && line.contains("fetched rows only"), "{line}");
+    let mut h = amounts(Lang::Ko, false);
+    h.keys("lvj");
+    let line = summary(&mut h);
+    let want = "2\u{D589} \u{D7} 1\u{C5F4} \u{B7} \u{D569}\u{ACC4} 12.75 \u{B7} \u{D3C9}\u{ADE0} 6.375";
+    assert!(line.contains(want), "{line}");
+}
+
+/// A key straight to the app: the answers of the jobs it starts stay out until pumped.
+fn press(h: &mut Harness, c: char) {
+    use ratatui::crossterm::event::{Event, KeyEvent, KeyModifiers};
+    h.app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)));
+}
+
+#[test]
+fn the_rows_are_read_on_a_worker_and_a_changed_selection_drops_the_answer() {
+    let mut h = amounts(Lang::En, false);
+    h.keys("l");
+    let started = h.app.grid_summary_jobs();
+    press(&mut h, 'v');
+    press(&mut h, 'j');
+    // Before an answer: the size, and that it is being summed (the input never waits).
+    let line = h.status(W, H);
+    assert!(line.contains("2 rows × 1 column · summing…"), "{line}");
+    assert_eq!(h.app.grid_summary_jobs(), started + 2, "one job per selection, the one before stopped");
+    // The selection grows before the answers: theirs are dropped, the last one's kept.
+    press(&mut h, 'j');
+    let line = summary(&mut h);
+    assert!(line.contains("3 rows × 1 column · sum 12.75"), "{line}");
+    // Input that leaves the selection as it is starts no job.
+    let jobs = h.app.grid_summary_jobs();
+    h.draw(W, H);
+    h.keys("zz");
+    assert_eq!(h.app.grid_summary_jobs(), jobs);
+}
