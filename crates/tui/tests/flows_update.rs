@@ -388,6 +388,9 @@ fn every_launcher_of_the_real_binary_turns_the_check_off() {
         let text = std::fs::read_to_string(root.join(file)).unwrap();
         assert!(text.contains("DATARIG_NO_UPDATE_CHECK"), "{file} starts datarig without DATARIG_NO_UPDATE_CHECK");
     }
+    // The benchmark's app in its own process: a release build, started with an event channel.
+    let apps = std::fs::read_to_string(root.join("crates/bench/src/apps.rs")).unwrap();
+    assert_eq!(apps.matches(".start(tx").count(), apps.matches("updates.paused = true").count(), "apps.rs");
 }
 
 #[test]
@@ -432,4 +435,26 @@ fn skipping_is_said_only_once_it_is_kept() {
     h.key(KeyCode::Char('s'));
     let t = h.status(200, 24);
     assert!(t.contains("Not skipped: update.toml could not be") && !t.contains("Not told about"), "{t}");
+}
+
+#[test]
+fn a_paused_run_neither_asks_nor_tells() {
+    let s = State::new("paused");
+    std::fs::write(s.file(), "latest = \"99.0.0\"\n").unwrap();
+    let fetch = FakeFetch::new(newer());
+    let (mut app, _clock) = new_app_with_clock(&s.config(), Lang::En);
+    app.set_secret_store(Arc::new(MemoryStore::new()) as Arc<dyn SecretStore>);
+    app.set_env_lookup(Arc::new(|_: &str| None));
+    app.set_paths(Paths { data: None, state: Some(s.0.clone()) });
+    app.updates.fetch = Some(fetch.clone() as Arc<dyn Fetch>);
+    app.updates.paused = true;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    {
+        let _rt = RT.enter();
+        app.start(tx, Startup::Normal);
+    }
+    app.first_frame_drawn();
+    quiet(&mut rx);
+    assert_eq!(fetch.calls(), 0);
+    assert!(app.overlays.update_notice().is_none());
 }

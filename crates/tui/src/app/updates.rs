@@ -31,6 +31,8 @@ use std::sync::Arc;
 /// What the app knows of the update check this run.
 #[derive(Default)]
 pub struct Updates {
+    /// No check and no notice this run (what measures the app in-process sets it).
+    pub paused: bool,
     /// The request; tests give a fake. `None`: the real one, made when a check is due (never in
     /// a debug build).
     pub fetch: Option<Arc<dyn Fetch>>,
@@ -98,7 +100,7 @@ impl App {
     /// Launch (after What's new): the notice from what is known, and whether to check.
     pub(super) fn updates_at_launch(&mut self) {
         // With a config that has errors, the setting is not known: no check, no notice.
-        if self.config_broken {
+        if self.config_broken || self.updates.paused {
             return;
         }
         let set = |v: Option<String>| v.is_some_and(|v| !v.is_empty());
