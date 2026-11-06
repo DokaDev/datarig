@@ -1,0 +1,22 @@
+{
+  "url": "https://api.github.com/repos/DokaDev/datarig/releases/436179889",
+  "html_url": "https://github.com/DokaDev/datarig/releases/tag/v0.38.3",
+  "id": 436179889,
+  "tag_name": "v0.38.3",
+  "target_commitish": "main",
+  "name": "v0.38.3",
+  "draft": false,
+  "immutable": false,
+  "prerelease": false,
+  "created_at": "2026-11-06T06:20:09Z",
+  "updated_at": "2026-11-06T06:36:11Z",
+  "published_at": "2026-11-06T06:36:11Z",
+  "assets": [
+    {
+      "name": "datarig-v0.38.3-aarch64-apple-darwin.tar.gz",
+      "size": 8871239,
+      "content_type": "application/x-gtar"
+    }
+  ],
+  "body": "Screen text uses British spelling, and titles use a colon in place of a dash; the docs site shows new recordings of the editor, charts and plans.\n\n### Changed\n\n- Screen text uses British spelling (colour, materialised view; the connection form's row reads\n  \"Colour\") and no longer uses the em dash: titles read \"Changes: Result 1 · shop.users\",\n  \"Apply changes: shop.users\" and \"Edit connection: name\". Config keys, theme tokens and commands are unchanged (`color`, `[colors]`,\n  `:explain analyze`).\n\nThe archives are for macOS and Linux (arm64 and x86_64) and Windows (x86_64); SHA256SUMS lists their checksums. The Windows build is untested: CI builds it and runs its tests, but nobody has used datarig on Windows yet.\n\n\n## What's Changed\n* docs: open the README with a recording, why datarig, and its features by @DokaDev in https://github.com/DokaDev/datarig/pull/236\n* ci: completion and social preview recordings, demo stills on pull requests, faster render by @DokaDev in https://github.com/DokaDev/datarig/pull/239\n* docs: use British spelling and no em dash in public text by @DokaDev in https://github.com/DokaDev/datarig/pull/240\n* ci: read GitHub's host keys for the Homebrew tap with the job's token by @DokaDev in https://github.com/DokaDev/datarig/pull/241\n* docs: chart and plan view recordings, and a check of the demo files by @DokaDev in https://github.com/DokaDev/datarig/pull/242\n* chore(release): 0.38.3 by @DokaDev in https://github.com/DokaDev/datarig/pull/243\n\n\n**Full Changelog**: https://github.com/DokaDev/datarig/compare/v0.38.2...v0.38.3"
+}

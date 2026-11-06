@@ -91,6 +91,12 @@ impl Paths {
         self.state.as_ref().map(|s| s.join(crate::usage::FILE))
     }
 
+    /// `<state>/update.toml`: the update check's last answer and the newest version that ran here
+    /// ([`crate::update`]).
+    pub fn update_file(&self) -> Option<PathBuf> {
+        self.state.as_ref().map(|s| s.join(crate::update::FILE))
+    }
+
     /// `<state>/errors.log`: the raw detail of failures the UI reported in words
     /// ([`crate::fault::ErrorLog`]).
     pub fn errors_log(&self) -> Option<PathBuf> {

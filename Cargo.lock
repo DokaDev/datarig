@@ -993,6 +993,7 @@ name = "datarig-core"
 version = "0.38.3"
 dependencies = [
  "bytes",
+ "chrono",
  "futures",
  "keyring",
  "parquet",
