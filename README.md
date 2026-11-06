@@ -41,6 +41,11 @@ Archives for macOS, Linux and Windows are on
 tab lists every pending change and the exact statements, and Apply runs them in one
 transaction (the recording above). [Editing data](https://dokadev.github.io/datarig/guide/editing.html)
 
+**Write SQL with completion.** Schemas, tables and the columns of an alias show up as you
+type; Tab or Enter takes one. [Editor](https://dokadev.github.io/datarig/guide/editor.html)
+
+![Completing a table and the columns of an alias in the editor](https://dokadev.github.io/datarig/demo/completion.gif)
+
 **Read a query plan.** EXPLAIN and EXPLAIN ANALYZE as a tree with each node's share of the
 time, a summary of what to look at first, and more views (icicle, flame graph, timeline, ...).
 [Plans](https://dokadev.github.io/datarig/guide/plans.html)
