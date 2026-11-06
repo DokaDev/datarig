@@ -551,6 +551,8 @@ async fn a_restored_tab_connects_only_when_it_runs() {
         let mut app = App::new(&cfg, None, Lang::En);
         app.set_secret_store(store.clone() as Arc<dyn SecretStore>);
         app.set_paths(paths.clone());
+        // What's new would open over the screen at launch.
+        app.whats_new_paused = true;
         app.set_instance_tag(&tag);
         let (tx, rx) = unbounded_channel();
         app.start(tx, Startup::Normal);
@@ -634,6 +636,8 @@ async fn a_restored_table_tab_pages_outside_any_user_transaction() {
     let mut app = App::new(&cfg, None, Lang::En);
     app.set_secret_store(store.clone() as Arc<dyn SecretStore>);
     app.set_paths(paths);
+    // What's new would open over the screen at launch.
+    app.whats_new_paused = true;
     app.set_instance_tag(&tag);
     let (tx, mut rx) = unbounded_channel();
     app.start(tx, Startup::Normal);
@@ -1096,6 +1100,8 @@ async fn a_result_paged_past_the_window_spills_and_copies_every_row() {
     let mut app = App::new(&cfg, None, Lang::En);
     app.set_secret_store(store as Arc<dyn SecretStore>);
     app.set_paths(datarig_core::paths::Paths { data: None, state: Some(state.clone()) });
+    // What's new would open over the screen at launch.
+    app.whats_new_paused = true;
     let clip = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let c = clip.clone();
     app.set_clipboard(Arc::new(move || {
