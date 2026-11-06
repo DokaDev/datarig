@@ -234,7 +234,10 @@ fn nobody_listening_is_unreachable() {
     let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let t = tls(&["localhost"]);
     let url = format!("https://127.0.0.1:{port}/");
-    let https = Https::with(&url, &Proxy::Direct, Https::roots(std::slice::from_ref(&t.ca)), fast()).unwrap();
+    // The connect limit of a real check: Windows retries a refused connection for about two
+    // seconds before it says so.
+    let roots = Https::roots(std::slice::from_ref(&t.ca));
+    let https = Https::with(&url, &Proxy::Direct, roots, Timeouts::default()).unwrap();
     assert_eq!(https.fetch(None), Answer::Failed(Outcome::Unreachable));
 }
 
