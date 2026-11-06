@@ -256,8 +256,11 @@ impl App {
                 self.flash(Notice::new(Msg::UpdateSkipped { version: version.to_string() }, Level::Info));
             }
             NoticeAnswer::TurnOff => {
-                self.apply_setting(super::command::Setting::UpdateCheck(UpdateCheck::Off));
-                self.flash(Notice::new(Label::UpdateChecksOff, Level::Info));
+                self.prefs.update_check = UpdateCheck::Off;
+                // What saving said (it could not be saved, say) is shown in place of the
+                // confirmation: off only for this run must not read as off for good.
+                let saved = self.persist();
+                self.flash(saved.unwrap_or_else(|| Notice::new(Label::UpdateChecksOff, Level::Info)));
             }
         }
     }
@@ -275,9 +278,9 @@ impl App {
 
     /// What is known of the update check, in words.
     pub fn update_status(&self, cache: &Cache, running: &Version) -> Msg {
-        let sw = self.updates.switches.unwrap_or_else(|| {
-            Switches::new(self.prefs.update_check == UpdateCheck::On, false, false, !self.read_only)
-        });
+        let mut sw = self.updates.switches.unwrap_or_else(|| Switches::new(true, false, false, !self.read_only));
+        // The setting as it is now (`:set` or the settings screen may have changed it).
+        sw.config_on = self.prefs.update_check == UpdateCheck::On;
         let off = match update::decide(self.utc_now(), cache, &sw) {
             Decision::Off(o) => Some(o),
             _ => None,

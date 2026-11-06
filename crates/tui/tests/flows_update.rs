@@ -230,6 +230,8 @@ fn a_debug_build_never_makes_the_real_request() {
     let (mut app, _clock) = new_app_with_clock(&s.config(), Lang::En);
     app.set_secret_store(Arc::new(MemoryStore::new()) as Arc<dyn SecretStore>);
     app.set_paths(Paths { data: None, state: Some(s.0.clone()) });
+    // Not the process's environment: CI services set `CI`.
+    app.set_env_lookup(Arc::new(|_: &str| None));
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let _rt = RT.enter();
     app.start(tx, Startup::Normal);
@@ -361,6 +363,7 @@ fn the_notice_names_the_command_of_each_install() {
     std::fs::write(s.file(), "latest = \"99.0.0\"\n").unwrap();
     let (mut app, _clock) = new_app_with_clock(&s.config(), Lang::Ko);
     app.set_paths(Paths { data: None, state: Some(s.0.clone()) });
+    app.set_env_lookup(Arc::new(|_: &str| None));
     app.updates.fetch = Some(FakeFetch::new(newer()) as Arc<dyn Fetch>);
     app.launch(Startup::Normal);
     let text = buffer_text(&{
@@ -382,4 +385,36 @@ fn every_launcher_of_the_real_binary_turns_the_check_off() {
         let text = std::fs::read_to_string(root.join(file)).unwrap();
         assert!(text.contains("DATARIG_NO_UPDATE_CHECK"), "{file} starts datarig without DATARIG_NO_UPDATE_CHECK");
     }
+}
+
+#[test]
+fn update_follows_the_setting_as_it_is_now() {
+    let s = State::new("follow");
+    let mut cfg = s.config();
+    cfg.prefs.update_check = UpdateCheck::Off;
+    let (mut h, _rx) = launch(&cfg, Some(&s), &[], FakeFetch::new(newer()));
+    h.command("update");
+    assert!(h.status(160, 24).contains("Update checks are off (updates.check)"));
+    h.command("set updates.check=on");
+    h.command("update");
+    let t = h.status(160, 24);
+    assert!(!t.contains("are off") && t.contains("Not checked yet"), "{t}");
+    h.command("set updates.check=off");
+    h.command("update");
+    assert!(h.status(160, 24).contains("Update checks are off (updates.check)"));
+}
+
+#[test]
+fn turning_the_checks_off_says_when_the_config_could_not_be_saved() {
+    let s = State::new("unsaved");
+    // The config file's folder is a file: it cannot be written.
+    std::fs::write(s.0.join("blocker"), "").unwrap();
+    let mut cfg = s.config();
+    cfg.path = Some(s.0.join("blocker").join("config.toml"));
+    std::fs::write(s.file(), "latest = \"99.0.0\"\n").unwrap();
+    let (mut h, _rx) = launch(&cfg, Some(&s), &[], FakeFetch::new(newer()));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::UpdateNotice));
+    h.key(KeyCode::Char('o'));
+    let t = h.status(200, 24);
+    assert!(!t.contains("Update checks are off."), "the failure is not hidden: {t}");
 }

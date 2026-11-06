@@ -77,6 +77,8 @@ fn child() {
     let (mut app, _clock) = new_app_with_clock(&cfg, Lang::En);
     app.set_secret_store(Arc::new(MemoryStore::new()) as Arc<dyn SecretStore>);
     app.set_paths(Paths { data: None, state: Some(state.clone()) });
+    // Not the process's environment: CI services set `CI`.
+    app.set_env_lookup(Arc::new(|_: &str| None));
     let stuck = Arc::new(Stuck(AtomicBool::new(false)));
     app.updates.fetch = Some(stuck.clone() as Arc<dyn Fetch>);
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
