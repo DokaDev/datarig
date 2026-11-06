@@ -3,6 +3,17 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.38.3 (2026-11-06)
+
+Screen text uses British spelling, and titles use a colon in place of a dash; the docs site shows new recordings of the editor, charts and plans.
+
+### Changed
+
+- Screen text uses British spelling (colour, materialised view; the connection form's row reads
+  "Colour") and no longer uses the em dash: titles read "Changes: Result 1 · shop.users",
+  "Apply changes: shop.users" and "Edit connection: name". Config keys, theme tokens and commands are unchanged (`color`, `[colors]`,
+  `:explain analyze`).
+
 ## 0.38.2 (2026-11-05)
 
 The grid shows where its cursor is and sums up a selected range on the status line; menus show what cannot run now, dimmed with why.
