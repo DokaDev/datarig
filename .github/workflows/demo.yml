@@ -8,7 +8,8 @@ name: Demo
 #     request (it changes What's new), so a broken tape shows up before the tag;
 #   - by hand (Actions → Demo → Run workflow) to preview the recordings of any branch: the
 #     artifact holds them, nothing is published;
-#   - from release.yml for a stable release: its `pages` job puts the artifact under demo/ of
+#   - from release.yml for a stable release, with that release's own Linux build (no second
+#     build): its `pages` job puts the artifact under demo/ of
 #     the docs site (https://dokadev.github.io/datarig/demo/hero.gif and the others).
 on:
   pull_request:
@@ -19,6 +20,13 @@ on:
       - .github/scripts/demo-tools.sh
   workflow_dispatch:
   workflow_call:
+    inputs:
+      dist:
+        description: >-
+          Record the release's own x86_64 Linux build (the dist-x86_64-unknown-linux-gnu
+          artifact of the calling run) instead of building datarig here.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -46,11 +54,25 @@ jobs:
           persist-credentials: false
       # Saved even when a tape fails, so fixing one does not rebuild datarig.
       - uses: Swatinem/rust-cache@v2
+        if: ${{ !inputs.dist }}
         with:
           cache-on-failure: true
       - name: C compiler and libclang for pg_query
+        if: ${{ !inputs.dist }}
         run: bash .github/scripts/pg-query-build-deps.sh
-      - run: cargo build --release --locked -p datarig-tui
+      - if: ${{ !inputs.dist }}
+        run: cargo build --release --locked -p datarig-tui
+      - uses: actions/download-artifact@v8
+        if: ${{ inputs.dist }}
+        with:
+          name: dist-x86_64-unknown-linux-gnu
+          path: dist
+      - name: The release's binary
+        if: ${{ inputs.dist }}
+        run: |
+          mkdir -p target/release
+          tar -xzf dist/datarig-*-x86_64-unknown-linux-gnu.tar.gz -C dist
+          cp dist/datarig-*-x86_64-unknown-linux-gnu/datarig target/release/datarig
       - name: VHS, ttyd, ffmpeg and the font
         run: bash .github/scripts/demo-tools.sh
       - name: Demo databases

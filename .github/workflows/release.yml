@@ -282,13 +282,16 @@ jobs:
           bash .github/scripts/release-tap.sh "$TAG" datarig.rb
 
   # The README recordings of a stable release (demo.yml), recorded with the tag's own datarig
-  # for the `pages` job. A tape that no longer matches the screens fails here, and the site is
-  # then not deployed: fix the tape, then re-run (the release and the tap are not affected).
+  # (the x86_64 Linux archive of the `build` job) for the `pages` job. A tape that no longer
+  # matches the screens fails here, and the site is then not deployed: fix the tape, then
+  # re-run (the release and the tap are not affected).
   demo:
     name: demo recordings
     needs: [plan, release]
     if: needs.plan.outputs.publish == 'true' && needs.plan.outputs.prerelease == 'false'
     uses: ./.github/workflows/demo.yml
+    with:
+      dist: true
 
   # The docs site of a stable release, from its tag: built and checked like the `docs` job of
   # ci.yml, then deployed to GitHub Pages (https://dokadev.github.io/datarig/) with the

@@ -1,5 +1,9 @@
-# The same screen in a few of the built-in themes (the commands that switch them are not
-# shown: a GIF of whole-screen color changes is large enough already).
+# The built-in themes, chosen in the settings screen (Space ,): the Theme row steps through them
+# with l and previews each one live, so every theme shows with its name and the app restyled
+# around the dialog. Five of the most distinct are shown; the others are stepped over off camera
+# (the three that follow the terminal's background look like one of their own variants, and
+# every frame of a whole-screen colour change adds to the GIF). Every name is still checked.
+# Esc leaves without keeping any of them (off camera too).
 Require datarig
 Source settings.tape
 
@@ -19,28 +23,56 @@ Tab
 Wait+Screen /Enter view cell/
 Show
 
-Sleep 2s
+Sleep 1s
+Space
+Type ","
+Wait+Screen /Settings/
+Wait+Screen /Theme\s+‹ tokyo-night\s+›/
+Sleep 800ms
+# The cursor starts on the first row; the Theme row is the third.
+Type "jj"
+Sleep 900ms
+Type "l"
+Wait+Screen /Theme\s+‹ tokyo-night-day\s+›/
+Sleep 1.5s
 Hide
-Type ":set theme=catppuccin-mocha"
-Enter
-Wait+Screen /Theme: catppuccin-mocha/
+Type "l"
+Wait+Screen /Theme\s+‹ tokyo-night-night\s+›/
+Type "l"
+Wait+Screen /Theme\s+‹ gruvbox\s+›/
+Type "l"
+Wait+Screen /Theme\s+‹ gruvbox-light\s+›/
+Type "l"
+Wait+Screen /Theme\s+‹ gruvbox-dark\s+›/
 Show
-Sleep 2s
+Sleep 1.5s
 Hide
-Type ":set theme=gruvbox-light"
-Enter
-Wait+Screen /Theme: gruvbox-light/
+Type "l"
+Wait+Screen /Theme\s+‹ nord\s+›/
+Type "l"
+Wait+Screen /Theme\s+‹ dracula\s+›/
 Show
-Sleep 2s
+Sleep 1.5s
 Hide
-Type ":set theme=nord"
-Enter
-Wait+Screen /Theme: nord/
+Type "l"
+Wait+Screen /Theme\s+‹ terminal\s+›/
+Type "l"
+Wait+Screen /Theme\s+‹ dark\s+›/
+Type "l"
+Wait+Screen /Theme\s+‹ light\s+›/
+Type "l"
+Wait+Screen /Theme\s+‹ high-contrast\s+›/
 Show
-Sleep 2s
+Sleep 1.5s
 Hide
-Type ":set theme=dracula"
-Enter
-Wait+Screen /Theme: dracula/
+Type "l"
+Wait+Screen /Theme\s+‹ catppuccin\s+›/
+Type "l"
+Wait+Screen /Theme\s+‹ catppuccin-latte\s+›/
 Show
-Sleep 2s
+Sleep 1.5s
+Hide
+Type "l"
+Wait+Screen /Theme\s+‹ catppuccin-mocha\s+›/
+Escape
+Wait+Screen /Enter view cell/

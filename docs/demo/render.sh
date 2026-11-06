@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Renders the README recordings: every docs/demo/tapes/*.tape (or the ones named) with VHS,
-# into <out-dir> as <name>.gif plus the stills the tapes take (<name>.png).
+# into <out-dir> as <name>.gif plus the stills the tapes take (<name>.png), and social.png
+# (the repository's social preview) from social.tape.
 #   docs/demo/render.sh <out-dir> [tape-name...]
-# Needs vhs, ttyd, ffmpeg and JetBrainsMono Nerd Font (.github/scripts/demo-tools.sh installs
+# Needs vhs, ttyd, ffmpeg, Python 3 with Pillow (for social.png) and JetBrainsMono Nerd Font (.github/scripts/demo-tools.sh installs
 # them on CI), the demo databases of docs/demo/compose.yml with the certificates of
 # make-certs.sh (DATARIG_DEMO_CERTS, default docs/demo/.certs), and datarig on the PATH (or
 # DATARIG_BIN, the binary to record). In each tape datarig runs with docs/demo/config in a
@@ -23,7 +24,7 @@ shift
 real=${DATARIG_BIN:-$(command -v datarig || true)}
 [ -n "$real" ] && [ -x "$real" ] || { echo "datarig is not on the PATH (or set DATARIG_BIN)" >&2; exit 1; }
 real=$(cd "$(dirname "$real")" && pwd)/$(basename "$real")
-for tool in vhs ttyd ffmpeg; do
+for tool in vhs ttyd ffmpeg python3; do
   command -v "$tool" >/dev/null || { echo "$tool is not on the PATH" >&2; exit 1; }
 done
 "$real" --version
@@ -71,6 +72,15 @@ WRAPPER
   fi
   echo "::endgroup::"
 done
+
+# The social preview (social.py): the still of social.tape under a band with the name and the
+# tagline. Its GIF is of no use.
+if [ -f "$out/social-raw.png" ]; then
+  bold=$(fc-match -f '%{file}' 'JetBrainsMono Nerd Font:style=Bold')
+  regular=$(fc-match -f '%{file}' 'JetBrainsMono Nerd Font:style=Regular')
+  python3 "$demo/social.py" "$out/social-raw.png" "$out/social.png" "$bold" "$regular"
+  rm -f "$out/social-raw.png" "$out/social.gif"
+fi
 
 ls -l "$out"
 if [ ${#failed[@]} -gt 0 ]; then

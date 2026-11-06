@@ -4,9 +4,9 @@
 # explorer's icons are Nerd Font glyphs), with a CJK font as its fallback. VHS, ttyd and the
 # Nerd Font are release downloads pinned to a version and to the SHA-256 of the file (from the
 # GitHub release's asset digest, ttyd's from its SHA256SUMS); the CJK font is pinned to a commit
-# of its repository and its SHA-256. A download that does not match fails here. ffmpeg comes
-# from apt when the runner lacks it. CI tools only, never dependencies of datarig. VHS and ttyd
-# go to $RUNNER_TEMP/bin, which goes on the PATH of the steps after this one; the fonts to
+# of its repository and its SHA-256; ffmpeg is a static build, pinned the same way. A download
+# that does not match fails here. CI tools only, never dependencies of datarig. VHS, ttyd and
+# ffmpeg go to $RUNNER_TEMP/bin, which goes on the PATH of the steps after this one; the fonts to
 # ~/.local/share/fonts.
 # To bump one: change its version and its digest together.
 set -euo pipefail
@@ -19,6 +19,8 @@ nerd_fonts_version=v3.5.1
 font_sha256=04d5e8f903693f9dd13e16f867e994834e681eb3c72c0d337a770dcda09010cf
 noto_cjk_commit=f8d157532fbfaeda587e826d4cd5b21a49186f7c
 cjk_sha256=ec04cc376b34887cedbdf84074e2e226ed2761eeabdcb9173fc1dd7bfd153ef7
+ffmpeg_release=b6.1.1
+ffmpeg_sha256=bfe8a8fc511530457b528c48d77b5737527b504a3797a9bc4866aeca69c2dffa
 
 if [ "$(uname -sm)" != "Linux x86_64" ]; then
   echo "demo-tools.sh downloads the x86_64 Linux builds; this is $(uname -sm)" >&2
@@ -60,14 +62,26 @@ fc-cache -f "$fonts" >/dev/null
 fc-list : family | grep -F 'JetBrainsMono Nerd Font' >/dev/null || { echo "JetBrainsMono Nerd Font is not installed" >&2; exit 1; }
 fc-list ':charset=ff0b' family | grep . >/dev/null || { echo "no installed font has U+FF0B" >&2; exit 1; }
 
-if ! command -v ffmpeg >/dev/null; then
-  sudo apt-get update -qq
-  sudo apt-get install -y -qq --no-install-recommends ffmpeg >/dev/null
-fi
+# A static ffmpeg (7.0.2): installing it with apt took from under a minute to half an hour on the hosted runners.
+fetch "https://github.com/eugeneware/ffmpeg-static/releases/download/$ffmpeg_release/ffmpeg-linux-x64.gz" \
+  "$ffmpeg_sha256"
+gunzip -c "$work/ffmpeg-linux-x64.gz" > "$bin/ffmpeg"
+chmod 0755 "$bin/ffmpeg"
+
+# Pillow for the social preview (docs/demo/social.py), pinned by the hashes of its wheels, in
+# a virtual environment whose python3 goes on the PATH.
+python3 -m venv "$RUNNER_TEMP/py"
+cat > "$work/requirements.txt" <<'REQUIREMENTS'
+pillow==11.3.0 \
+    --hash=sha256:67172f2944ebba3d4a7b54f2e95c786a3a50c21b88456329314caaa28cda70f6 \
+    --hash=sha256:676b2815362456b5b3216b4fd5bd89d362100dc6f4945154ff172e206a22c024
+REQUIREMENTS
+"$RUNNER_TEMP/py/bin/pip" install -q --only-binary=:all: --require-hashes -r "$work/requirements.txt"
 
 if [ -n "${GITHUB_PATH:-}" ]; then
   echo "$bin" >> "$GITHUB_PATH"
+  echo "$RUNNER_TEMP/py/bin" >> "$GITHUB_PATH"
 fi
 "$bin/vhs" --version
 "$bin/ttyd" --version
-ffmpeg -version | head -n 1
+"$bin/ffmpeg" -version | sed -n 1p

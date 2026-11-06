@@ -1,0 +1,57 @@
+name: Demo preview
+
+# After the Demo workflow ran for a pull request (one that changes the recordings, or a release
+# pull request), its stills go into one comment on that pull request, updated in place on each
+# run, so they can be looked at before merging. Nothing is rendered here: the stills come from
+# that run's `demo` artifact. A comment cannot show an artifact's files, so they are pushed to
+# the `demo-preview` branch (one commit with no history, replaced each time) and shown from
+# there. A workflow of its own (workflow_run): it needs write access, which the Demo workflow
+# must not ask for since release.yml calls it with read access only. Pull requests from forks
+# get no comment.
+on:
+  workflow_run:
+    workflows: [Demo]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+concurrency:
+  group: demo-preview
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  comment:
+    name: stills on the pull request
+    if: >-
+      github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+      && github.event.workflow_run.conclusion != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: demo
+          path: demo-out
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: bash .github/scripts/demo-preview.sh demo-out
