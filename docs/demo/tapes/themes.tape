@@ -1,9 +1,9 @@
 # The built-in themes, chosen in the settings screen (Space ,): the Theme row steps through them
 # with l and previews each one live, so every theme shows with its name and the app restyled
-# around the dialog. Six of the most distinct are shown; the others are stepped over off camera
+# around the dialog. Five of the most distinct are shown; the others are stepped over off camera
 # (the three that follow the terminal's background look like one of their own variants, and
 # every frame of a whole-screen colour change adds to the GIF). Every name is still checked.
-# Esc leaves without keeping any of them.
+# Esc leaves without keeping any of them (off camera too).
 Require datarig
 Source settings.tape
 
@@ -34,7 +34,7 @@ Type "jj"
 Sleep 900ms
 Type "l"
 Wait+Screen /Theme\s+‹ tokyo-night-day\s+›/
-Sleep 1.4s
+Sleep 1.5s
 Hide
 Type "l"
 Wait+Screen /Theme\s+‹ tokyo-night-night\s+›/
@@ -45,13 +45,14 @@ Wait+Screen /Theme\s+‹ gruvbox-light\s+›/
 Type "l"
 Wait+Screen /Theme\s+‹ gruvbox-dark\s+›/
 Show
-Sleep 1.4s
+Sleep 1.5s
+Hide
 Type "l"
 Wait+Screen /Theme\s+‹ nord\s+›/
-Sleep 1.4s
 Type "l"
 Wait+Screen /Theme\s+‹ dracula\s+›/
-Sleep 1.4s
+Show
+Sleep 1.5s
 Hide
 Type "l"
 Wait+Screen /Theme\s+‹ terminal\s+›/
@@ -62,18 +63,16 @@ Wait+Screen /Theme\s+‹ light\s+›/
 Type "l"
 Wait+Screen /Theme\s+‹ high-contrast\s+›/
 Show
-Sleep 1.4s
+Sleep 1.5s
 Hide
 Type "l"
 Wait+Screen /Theme\s+‹ catppuccin\s+›/
 Type "l"
 Wait+Screen /Theme\s+‹ catppuccin-latte\s+›/
 Show
-Sleep 1.4s
+Sleep 1.5s
 Hide
 Type "l"
 Wait+Screen /Theme\s+‹ catppuccin-mocha\s+›/
-Show
 Escape
 Wait+Screen /Enter view cell/
-Sleep 1s
