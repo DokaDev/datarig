@@ -78,7 +78,9 @@ pub async fn connected(url: &str, state: &std::path::Path) -> Result<(App, Unbou
     app.set_instance_tag(&format!("bench{}", std::process::id()));
     app.set_paths(datarig_core::paths::Paths { data: None, state: Some(state.to_path_buf()) });
     // What's new would open over the console at launch: the keys below are for the explorer.
+    // No update check either: a benchmark never sends a request.
     app.whats_new_paused = true;
+    app.updates.paused = true;
     let (tx, mut rx) = unbounded_channel();
     app.start(tx, Startup::Normal);
     let id = app.profiles[0].id;

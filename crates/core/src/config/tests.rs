@@ -658,6 +658,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             changes_view: ChangesView::List,
             background: UiBackground::Theme,
             paste_null: PasteNull::BackslashN,
+            update_check: UpdateCheck::On,
             whats_new: WhatsNewSetting::On,
             idle_disconnect: None,
             lock_wait: None,
@@ -983,6 +984,26 @@ fn tips_show_always_by_default_until_used_or_never() {
     assert_eq!(load(Some(path.clone())).0.prefs.tips, Tips::Always);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("tips"));
+}
+
+#[test]
+fn the_update_check_is_on_unless_the_updates_table_turns_it_off() {
+    assert_eq!(parse("").unwrap().prefs.update_check, UpdateCheck::On);
+    assert_eq!(parse("[updates]\ncheck = \"off\"\n").unwrap().prefs.update_check, UpdateCheck::Off);
+    assert_eq!(
+        parse("[updates]\ncheck = \"no\"\n").unwrap_err(),
+        ConfigError::Value { key: "updates.check".into(), value: "no".into(), profile: None, allowed: Some("on, off") }
+    );
+    let path = temp_file("update_check");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "[updates]\nwhats_new = \"off\"\n").unwrap();
+    let prefs = Prefs { update_check: UpdateCheck::Off, whats_new: WhatsNewSetting::Off, ..Prefs::default() };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[updates]\nwhats_new = \"off\"\ncheck = \"off\"\n"), "{text}");
+    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("check"), "on is the default: the key goes");
 }
 
 #[test]

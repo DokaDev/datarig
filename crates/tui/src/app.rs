@@ -79,6 +79,7 @@ pub mod tips;
 pub mod tunnel;
 pub mod tx;
 mod update;
+pub mod updates;
 pub mod whats_new;
 pub mod yank_flash;
 
@@ -404,6 +405,8 @@ pub enum AppEvent {
     GridSummary(grid_summary::SummaryAnswer),
     /// A read of the system clipboard answered.
     Clipboard(edit::ClipAnswer),
+    /// The update check answered.
+    UpdateChecked(datarig_core::update::Answer),
 }
 
 /// Which session a driver event comes from.
@@ -837,6 +840,8 @@ pub struct App {
     /// What's new does not show by itself at launch, nor is anything written for it (the tests
     /// of other screens set it; `:whatsnew` still works).
     pub whats_new_paused: bool,
+    /// The update check of this run ([`updates`]).
+    pub updates: updates::Updates,
 }
 
 fn test_msg(i18n: &I18n, t: &ConnTest) -> Notice {
@@ -1130,6 +1135,7 @@ impl App {
             last_top: None,
             tips: tips::TipState::default(),
             whats_new_paused: false,
+            updates: updates::Updates::default(),
             pending_context: None,
             pending_end: None,
             pending_use: None,
@@ -1415,6 +1421,7 @@ impl App {
         // launch after the file is fixed).
         // Over the workspace, under the icons question (asked first).
         self.whats_new_at_launch();
+        self.updates_at_launch();
         if self.ask_icons && self.icons == IconsSetting::Auto && !self.config_broken {
             self.overlays.push(Overlay::IconsAsk(overlay::IconsAsk::default()));
         }
@@ -1425,6 +1432,7 @@ impl App {
     pub fn first_frame_drawn(&mut self) {
         self.drawn = true;
         self.resume_startup();
+        self.updates_after_first_frame();
     }
 
     fn resume_startup(&mut self) {
@@ -1675,6 +1683,7 @@ impl App {
             Some(Overlay::EditPreview(_)) => Ctx::EditPreview,
             Some(Overlay::SessionView(_)) => Ctx::SessionView,
             Some(Overlay::WhatsNew(_)) => Ctx::WhatsNew,
+            Some(Overlay::UpdateNotice(_)) => Ctx::UpdateNotice,
             Some(Overlay::IconsAsk(_)) => Ctx::IconsAsk,
             Some(Overlay::Help(h)) if h.filtering => Ctx::HelpFilter,
             Some(Overlay::Help(_)) => Ctx::Help,

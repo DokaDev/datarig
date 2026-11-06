@@ -216,8 +216,10 @@ first_frame_ms_p95_max = 250.0
 # the CI's Linux x86_64 (20.81 -> 21.96 -> 22.73 MiB): 23 MiB. Session presets (the start-up
 # setting checks for both databases, the explorer section and the forms) add about 0.3 MiB
 # (22.74 -> 23.05 MiB): 24 MiB. Editing a result's rows (cell and box editors, new and deleted
-# rows, the preview and Apply) brings it to 24.01 MiB on the CI's Linux x86_64: 25 MiB.
-binary_mib_max = 25.0
+# rows, the preview and Apply) brings it to 24.01 MiB on the CI's Linux x86_64: 25 MiB. The
+# update check (ureq with rustls and the platform's verifier, its notice and status) adds 0.45
+# MiB on the CI's Linux x86_64 (24.74 -> 25.19 MiB): 26 MiB.
+binary_mib_max = 26.0
 
 [plan]
 # A plan of 666 nodes (40 joins deep with a subplan each, parallel workers, a CTE, an Append

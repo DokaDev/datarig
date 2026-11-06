@@ -74,10 +74,11 @@ Editing a result's rows.
 
 ## `[updates]`
 
-What's new after an update.
+The update check and What's new.
 
 | Key | Default | Values | Description |
 |---|---|---|---|
+| `check` | `"on"` | `"on"`, `"off"` | Once a day, ask GitHub whether a newer release of datarig exists: one HTTPS request to api.github.com, with nothing about you or your databases. :update says what the last check found. Also `:set updates.check`. |
 | `whats_new` | `"on"` | `"on"`, `"off"` | Whether the release notes of the new version show once by themselves on the first start after an update. :whatsnew shows them any time. They come with the program: nothing is fetched. Also `:set updates.whats_new`. |
 
 ## `[secrets]`

@@ -263,7 +263,10 @@ impl App {
             }
             KeyCode::Char('[') => v.scroll = v.heads.iter().rev().find(|h| **h < v.scroll).copied().unwrap_or(0),
             _ if repeat => {}
-            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.overlays.close(OverlayKind::WhatsNew),
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                self.overlays.close(OverlayKind::WhatsNew);
+                self.whats_new_closed();
+            }
             _ => {}
         }
     }

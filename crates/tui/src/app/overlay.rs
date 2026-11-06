@@ -1,7 +1,7 @@
 //! Dialogs shown on top of the workspace, kept in one stack. The last entry has the keyboard
 //! and is drawn last. Entries are kept in a fixed rank order (cell viewer < profile form < settings <
 //! export dialog <
-//! keyboard help < what's new < which-key < quick connect < tab list < context menu < saved-queries tree < name input <
+//! keyboard help < what's new < update notice < which-key < quick connect < tab list < context menu < saved-queries tree < name input <
 //! chooser < picker <
 //! confirmation < run confirmation < transaction summary < session view < icons question < busy notice < password prompt < command line), so a dialog that opens later but ranks lower —
 //! e.g. a password prompt raised by a connection event while the command line is open — goes
@@ -378,6 +378,8 @@ pub enum Overlay {
     Help(Help),
     /// The release notes this build carries (`:whatsnew`, or once after an update).
     WhatsNew(super::whats_new::WhatsNewView),
+    /// A newer release is out (at launch, or `:update`).
+    UpdateNotice(super::updates::UpdateNotice),
     /// Keys that may follow an unfinished leader sequence.
     WhichKey(WhichKey),
     /// Fuzzy profile switcher (`Ctrl+O`).
@@ -422,6 +424,7 @@ pub enum OverlayKind {
     Export,
     Help,
     WhatsNew,
+    UpdateNotice,
     WhichKey,
     QuickConnect,
     TabList,
@@ -450,6 +453,7 @@ impl Overlay {
             Overlay::Export(_) => OverlayKind::Export,
             Overlay::Help(_) => OverlayKind::Help,
             Overlay::WhatsNew(_) => OverlayKind::WhatsNew,
+            Overlay::UpdateNotice(_) => OverlayKind::UpdateNotice,
             Overlay::WhichKey(_) => OverlayKind::WhichKey,
             Overlay::QuickConnect(_) => OverlayKind::QuickConnect,
             Overlay::TabList(_) => OverlayKind::TabList,
@@ -728,6 +732,14 @@ impl Overlays {
 
     pub fn whats_new_mut(&mut self) -> Option<&mut super::whats_new::WhatsNewView> {
         self.0.iter_mut().find_map(|o| if let Overlay::WhatsNew(w) = o { Some(w) } else { None })
+    }
+
+    pub fn update_notice(&self) -> Option<&super::updates::UpdateNotice> {
+        self.0.iter().find_map(|o| if let Overlay::UpdateNotice(n) = o { Some(n) } else { None })
+    }
+
+    pub fn update_notice_mut(&mut self) -> Option<&mut super::updates::UpdateNotice> {
+        self.0.iter_mut().find_map(|o| if let Overlay::UpdateNotice(n) = o { Some(n) } else { None })
     }
 
     pub fn session_view(&self) -> Option<&SessionView> {

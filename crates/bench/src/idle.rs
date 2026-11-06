@@ -135,7 +135,7 @@ impl Home {
     fn command(&self, bin: &Path, profile: Option<&str>) -> String {
         let q = |p: &Path| format!("'{}'", p.display());
         format!(
-            "exec env DATARIG_SECRET_STORE=memory DATARIG_DATA_DIR={} DATARIG_STATE_DIR={} DATARIG_BENCH_STATS={} {PW_ENV}='{}' {} --config {} {}",
+            "exec env DATARIG_SECRET_STORE=memory DATARIG_NO_UPDATE_CHECK=1 DATARIG_DATA_DIR={} DATARIG_STATE_DIR={} DATARIG_BENCH_STATS={} {PW_ENV}='{}' {} --config {} {}",
             q(&self.dir.join("data")),
             q(&self.dir.join("state")),
             q(&self.stats),

@@ -59,6 +59,7 @@ impl App {
             OverlayKind::EditPreview => self.edit_preview_mouse(m),
             OverlayKind::SessionView => self.session_view_mouse(m),
             OverlayKind::WhatsNew => self.whats_new_mouse(m),
+            OverlayKind::UpdateNotice => self.update_notice_mouse(m),
             OverlayKind::IconsAsk => self.icons_ask_mouse(m),
             OverlayKind::Password => self.prompt_mouse(m),
             OverlayKind::NameInput => self.name_mouse(m),
@@ -106,6 +107,7 @@ impl App {
             Some(OverlayKind::EditPreview) => self.overlays.edit_preview_mut().is_some_and(|p| p.buttons.hover(x, y)),
             Some(OverlayKind::SessionView) => self.overlays.session_view_mut().is_some_and(|s| s.buttons.hover(x, y)),
             Some(OverlayKind::WhatsNew) => self.overlays.whats_new_mut().is_some_and(|w| w.buttons.hover(x, y)),
+            Some(OverlayKind::UpdateNotice) => self.overlays.update_notice_mut().is_some_and(|n| n.buttons.hover(x, y)),
             Some(OverlayKind::IconsAsk) => self.overlays.icons_ask_mut().is_some_and(|q| q.buttons.hover(x, y)),
             Some(OverlayKind::Password) => self.overlays.prompt_mut().is_some_and(|p| p.buttons.hover(x, y)),
             Some(OverlayKind::NameInput) => self.overlays.name_input_mut().is_some_and(|n| n.buttons.hover(x, y)),
@@ -298,6 +300,15 @@ impl App {
         let Some(w) = self.overlays.whats_new_mut() else { return };
         if w.buttons.press(m.kind, m.column, m.row, now).is_some() {
             self.whats_new_key(press(KeyCode::Esc), false);
+        }
+    }
+
+    /// A button of the update notice does what its key does.
+    fn update_notice_mouse(&mut self, m: MouseEvent) {
+        let now = self.now();
+        let Some(n) = self.overlays.update_notice_mut() else { return };
+        if let Some(i) = n.buttons.press(m.kind, m.column, m.row, now) {
+            self.update_notice_answer(super::updates::NoticeAnswer::ALL[i]);
         }
     }
 

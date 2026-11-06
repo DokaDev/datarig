@@ -257,7 +257,7 @@ impl App {
     }
 
     /// How long ago, in words (`millis` milliseconds).
-    fn age_text(&self, millis: u128) -> String {
+    pub(super) fn age_text(&self, millis: u128) -> String {
         let minutes = (millis / 60_000) as u64;
         let msg = match minutes {
             0 => Msg::Label(Label::RecoverAgeNow),

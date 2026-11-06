@@ -17,7 +17,7 @@ use datarig_core::config::{
     AutoPairs, ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
     IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat, SoftTabBackspace, Tips, YankFlash,
 };
-use datarig_core::config::{ChangesView, CompletionDelay, PasteNull, UiBackground, WhatsNewSetting};
+use datarig_core::config::{ChangesView, CompletionDelay, PasteNull, UiBackground, UpdateCheck, WhatsNewSetting};
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
 use std::time::Duration;
@@ -89,6 +89,8 @@ pub enum Command {
     Session,
     /// `:whatsnew`: the release notes of every version this build carries.
     WhatsNew,
+    /// `:update`: what the update check knows.
+    Update,
     /// `:changes`, `:apply`: the preview of the shown result's pending changes (`y` applies).
     Changes,
     Apply,
@@ -422,6 +424,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         label: Label::ActionWhatsNew,
         action: Some(Action::WhatsNew),
     },
+    CommandSpec {
+        command: Command::Update,
+        name: "update",
+        aliases: &[],
+        arg: None,
+        label: Label::ActionUpdate,
+        action: Some(Action::UpdateStatus),
+    },
 ];
 
 impl CommandSpec {
@@ -500,6 +510,7 @@ pub enum Setting {
     PasteNull(PasteNull),
     CompletionDelay(CompletionDelay),
     WhatsNew(WhatsNewSetting),
+    UpdateCheck(UpdateCheck),
     /// `idle_disconnect` (`None`: off).
     IdleDisconnect(Option<Duration>),
     /// `lock_wait` (`None`: off).
@@ -854,6 +865,16 @@ pub const SETTINGS: &[SettingSpec] = &[
             ("100", Setting::CompletionDelay(CompletionDelay::Ms100), Label::SettingCompletionDelayMs),
             ("150", Setting::CompletionDelay(CompletionDelay::Ms150), Label::SettingCompletionDelayMs),
             ("250", Setting::CompletionDelay(CompletionDelay::Ms250), Label::SettingCompletionDelayMs),
+        ]),
+    },
+    SettingSpec {
+        key: "updates.check",
+        label: Label::SettingUpdateCheck,
+        about: Label::SettingUpdateCheckAbout,
+        group: SettingGroup::Updates,
+        values: Values::Fixed(&[
+            ("on", Setting::UpdateCheck(UpdateCheck::On), Label::SettingUpdateCheckOn),
+            ("off", Setting::UpdateCheck(UpdateCheck::Off), Label::SettingUpdateCheckOff),
         ]),
     },
     SettingSpec {

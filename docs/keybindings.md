@@ -657,6 +657,12 @@ The release notes this build carries (`:whatsnew`; once by itself after an updat
 
 Reserved (what's new): `Esc` `q` `Enter` `j` `k` `Down` `Up` `Ctrl+D` `Ctrl+U` `PageDown` `PageUp` `Space` `g` `G` `Home` `End` `]` `[`
 
+## `overlay.update_notice`
+
+A newer release is out (at launch, from the last check; or `:update`): the version, the command that updates this install, and how to turn the checks off. Close has the focus: `Enter` presses the focused button, `Esc` or `q` closes (told again after a week), `s` skips this version, `o` turns the checks off (`[updates] check = "off"`); `Tab`, the arrows and `h`/`l` move the focus; a click on a button does what its key does. Inside `root`.
+
+Reserved (the update notice (Close has the focus)): `Esc` `q` `Enter` `s` `o` `Tab` `Shift+Tab` `Left` `Right` `h` `l`
+
 ## `overlay.icons_ask`
 
 Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus; a click on Yes or No answers. Inside `root`.
@@ -740,6 +746,7 @@ Actions without a default key (the command line finds them by name).
 | `secrets.default.prompt` | New profiles' password → prompt on every connect |
 | `help.all` | Keyboard help: expand all |
 | `app.whats_new` | What's new: the release notes of this version and the ones before |
+| `app.update` | Update: what the update check knows, and how to update |
 | `explorer.context_menu` | Explorer: actions of this node (menu) |
 | `ddl.copy` | DDL tab: copy the whole DDL |
 
@@ -794,6 +801,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:apply` |  | Apply the pending changes (asked first) |
 | `:discard` |  | Drop every pending change of the result |
 | `:whatsnew` |  | What's new: the release notes of this version and the ones before |
+| `:update` |  | Update: what the update check knows, and how to update |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):
 
@@ -824,6 +832,7 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `idle_disconnect` | `off` `5m` `10m` `30m` `1h` | Close idle connections |
 | `lock_wait` | `off` `5s` `10s` `30s` `1m` | Lock wait limit |
 | `editor.completion_delay_ms` | `60` `0` `30` `100` `150` `250` | Completion delay (ms) |
+| `updates.check` | `on` `off` | Check for updates |
 | `updates.whats_new` | `on` `off` | What's new |
 
 <!-- ANCHOR_END: commands -->

@@ -725,6 +725,11 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
         "what's new",
     ),
     (
+        UpdateNotice,
+        &["esc", "q", "enter", "s", "o", "tab", "shift+tab", "left", "right", "h", "l"],
+        "the update notice (Close has the focus)",
+    ),
+    (
         IconsAsk,
         &["y", "n", "enter", "esc", "tab", "shift+tab", "left", "right", "h", "l"],
         "the icons question (No has the focus)",
