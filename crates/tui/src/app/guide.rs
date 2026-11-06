@@ -217,7 +217,7 @@ impl App {
         // The keys typed so far, then the group's localized label.
         let keys = keys::label(&w.prefix);
         let title = match self.keymap.group_label(w.origin, &w.prefix) {
-            Some(l) => Localized::verbatim(format!("{keys} — {}", l.text(self.i18n.lang))),
+            Some(l) => Localized::verbatim(format!("{keys}: {}", l.text(self.i18n.lang))),
             None => Localized::verbatim(keys),
         };
         Some((title, items))

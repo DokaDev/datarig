@@ -4,7 +4,7 @@ expression: backend
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
 "│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
-"│▾╭ Edit connection — local-pg ──────────────────────────────────────────────╮ │"
+"│▾╭ Edit connection: local-pg ───────────────────────────────────────────────╮ │"
 "│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
 "│▾│                                                                          │ │"
 "│ │ Driver            PostgreSQL ▾   ←/→ change · Enter list                 │ │"

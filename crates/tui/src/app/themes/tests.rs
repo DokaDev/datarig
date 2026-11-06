@@ -14,7 +14,10 @@ fn theme_errors_say_the_file_the_line_and_the_problem() {
     let path = PathBuf::from("themes").join("mine.toml");
     let e = ThemeError::File { path: path.clone(), line: Some(4), problem: Problem::BadColor("orange".into()) };
     let text = i18n.msg(&theme_error_msg(&i18n, &e)).to_string();
-    assert!(text.starts_with(&format!("{}:4: ", path.display())) && text.contains("“orange” is not a color"), "{text}");
+    assert!(
+        text.starts_with(&format!("{}:4: ", path.display())) && text.contains("“orange” is not a colour"),
+        "{text}"
+    );
     let e = ThemeError::File { path: path.clone(), line: None, problem: Problem::Toml("expected `=`".into()) };
     assert_eq!(i18n.msg(&theme_error_msg(&i18n, &e)).to_string(), format!("{}: expected `=`", path.display()));
     let e = ThemeError::Unknown { name: "mine".into(), dir: Some(PathBuf::from("themes")) };

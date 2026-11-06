@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_presets.rs
-assertion_line: 1224
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -13,7 +12,7 @@ expression: backend
 "│    ○ office  ec2-user@bast…││  Ctrl+T     New console tab                                                            │"
 "│    ○ lab  ec2-user@lab-bas…││  Space t u  Reopen a closed tab                                                        │"
 "│▾ Environments 0            ││  n          New connection                                                             │"
-"│  ▸ ○ Def╭ Edit connection — local-pg ──────────────────────────────────────────────────────────────────────╮         │"
+"│  ▸ ○ Def╭ Edit connection: local-pg ───────────────────────────────────────────────────────────────────────╮         │"
 "│    ＋ Ad│  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │         │" Hidden by multi-width symbols: [(6, " ")]
 "│▾ Startup│                                                                                                  │         │"
 "│    n her│ SSH tunnel        office ▾   Enter list · shared: one SSH connection for every profile on it; e… │         │"

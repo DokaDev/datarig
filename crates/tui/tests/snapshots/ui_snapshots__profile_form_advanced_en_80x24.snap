@@ -1,10 +1,9 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
-assertion_line: 873
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
-"│ ╭ Edit connection — 分析-replica ──────────────────────────────────────────╮─╮" Hidden by multi-width symbols: [(23, " "), (25, " ")]
+"│ ╭ Edit connection: 分析-replica ───────────────────────────────────────────╮─╮" Hidden by multi-width symbols: [(22, " "), (24, " ")]
 "│▾│  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
 "│ │                                                                          │e│"
 "│ │ SSL mode          require ▾   ←/→ change · Enter list                    │ │"
@@ -16,7 +15,7 @@ expression: backend
 "│ │ Startup SQL       Environment's (none) ▾   Enter list                    │ │"
 "│ │ Own startup SQL     1 SET name = value                                 × │ │"
 "│ │                     + Add statement  after the Startup SQL · Enter adds  │ │"
-"│ │ Color             ‹ ● orange ›  ←/→ change · Enter list                  │t│"
+"│ │ Colour            ‹ ● orange ›  ←/→ change · Enter list                  │t│"
 "│ │ Icon              ‹ the driver's icon ›  ←/→ change · Enter list         │ │"
 "│ │ Folder            ‹ (top level) ›  ←/→ change · Enter list               │ │"
 "│ │                                                                          │ │"

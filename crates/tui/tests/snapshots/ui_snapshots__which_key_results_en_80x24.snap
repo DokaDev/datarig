@@ -12,7 +12,7 @@ expression: backend
 "│      ▸ shop          ││  5 FROM shop.orders o                                │"
 "│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
 "│                      ││  7 WHERE o.status = 'paid';                          │"
-"╭ Space r — Results ───────────────────────────────────────────────────────────╮"
+"╭ Space r: Results ────────────────────────────────────────────────────────────╮"
 "│ #  Results → count every row (runs a count query)                            │"
 "│ +  Results pane → taller                                                     │"
 "│ -  Results pane → shorter                                                    │"

@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
-assertion_line: 825
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
@@ -12,7 +11,7 @@ expression: backend
 "│      ▸ public              ││  4 SELECT u.name, o.status, o.total_amount                                             │"
 "│      ▸ shop                ││  5 FROM shop.orders o                                                                  │"
 "│  ▸ ○   分析-replica        ││  6 JOIN shop.users u ON u.id = o.user_id                                               │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
-"│  ▸ ○    ╭ Edit connection — local-pg ──────────────────────────────────────────────────────────────────────╮         │"
+"│  ▸ ○    ╭ Edit connection: local-pg ───────────────────────────────────────────────────────────────────────╮         │"
 "│         │  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │         │"
 "│         │                                                                                                  │         │"
 "│         │ SSL mode          disable ▾   ←/→ change · Enter list                                            │         │"
@@ -24,7 +23,7 @@ expression: backend
 "│         │ Startup SQL       En│ disable      not encrypted                           │                     │         │"
 "│         │ Own startup SQL     │ prefer       encrypted if the server offers it       │                   × │         │"
 "│         │                     │ require      encrypted, certificate not checked (wi… │                     │         │"
-"│         │ Color             ‹ │ verify-ca    encrypted, signed by the CA file (need… │                     │         │"
+"│         │ Colour            ‹ │ verify-ca    encrypted, signed by the CA file (need… │                     │         │"
 "│         │ Icon              ‹ │ verify-full  CA-signed, and the host name matches    │                     │         │"
 "│         │ Folder            ‹ ╰──────────────── Enter pick · ↑↓ select · Esc cancel ─╯                     │         │"
 "│         │                                                                                                  │         │"

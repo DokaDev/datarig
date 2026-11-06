@@ -322,11 +322,11 @@ impl Ctx {
                 "The tab list (`Space t t`, `:tabs`, `:ls`, `:buffers`): the open tabs, the most recently active first, then the tabs closed in this run. Typing filters by name, connection, database, schema, kind or number; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` goes to the tab (brings a closed one back), `Ctrl+D` closes the selected tab (asking as `Ctrl+W` does), `Esc` closes the list (`Backspace` on an empty filter does not). A click picks an entry, the wheel selects, the pointer only highlights."
             }
             Ctx::Chooser => {
-                "A list to pick from: a profile's color, icon or folder, a chart's columns (the values' list stays open: `Enter` adds or removes one); a click picks a row, the wheel selects, the pointer only highlights."
+                "A list to pick from: a profile's colour, icon or folder, a chart's columns (the values' list stays open: `Enter` adds or removes one); a click picks a row, the wheel selects, the pointer only highlights."
             }
             Ctx::ChooserFilter => "The `/` filter of a list to pick from.",
             Ctx::Picker => {
-                "A list to pick from with a typed filter: a field of the profile form (`Enter` on it) — its driver, SSL mode, password storage, bastion login and its secret's storage, SSH tunnel or environment — each value with what it means; the tunnel's and the environment's end with the entry that makes a new one (\"New SSH tunnel…\", \"New environment…\"), and a value that cannot be picked (a driver the app has none for, the keychain while it does not work) is struck through. Typing filters it as the action menu is filtered; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` picks, `Esc` closes it and changes nothing. A click picks a row, the wheel selects, the pointer only highlights."
+                "A list to pick from with a typed filter: a field of the profile form (`Enter` on it: its driver, SSL mode, password storage, bastion login and its secret's storage, SSH tunnel or environment), each value with what it means; the tunnel's and the environment's end with the entry that makes a new one (\"New SSH tunnel…\", \"New environment…\"), and a value that cannot be picked (a driver the app has none for, the keychain while it does not work) is struck through. Typing filters it as the action menu is filtered; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` picks, `Esc` closes it and changes nothing. A click picks a row, the wheel selects, the pointer only highlights."
             }
             Ctx::NameInput => "A name to type: a new or renamed folder; OK and Cancel take a click.",
             Ctx::ScriptTree => {

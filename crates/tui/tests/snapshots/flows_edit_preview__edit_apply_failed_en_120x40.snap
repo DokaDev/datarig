@@ -12,7 +12,7 @@ expression: backend
 "│      ▸ shop                ││  5 FROM shop.orders o                                                                  │"
 "│▾ Environments 1            ││  6 JOIN shop.users u ON u.id = o.user_id                                               │"
 "│    ○ Default rules (no env…││  7 WHERE o.status = 'paid';                                                            │"
-"│ ╭ Apply changes — shop.users ──────────────────────────────────────────────────────────────────────────────────────╮ │"
+"│ ╭ Apply changes: shop.users ───────────────────────────────────────────────────────────────────────────────────────╮ │"
 "│ │ 1 update · 1 insert · 1 delete                                                                                   │ │"
 "│ │                                                                                                                  │ │"
 "│ │ id=1 · was changed or deleted since it was read. Nothing was applied. Re-run the query to see the current        │ │"

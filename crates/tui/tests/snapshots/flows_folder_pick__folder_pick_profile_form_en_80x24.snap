@@ -1,10 +1,9 @@
 ---
 source: crates/tui/tests/flows_folder_pick.rs
-assertion_line: 355
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
-"│ ╭ Edit connection — v6 ────────────────────────────────────────────────────╮ │"
+"│ ╭ Edit connection: v6 ─────────────────────────────────────────────────────╮ │"
 "│▾│  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
 "│ │                                                                          │ │"
 "│ │ SSL mode          disable ▾   ←/→ change · Enter list                    │ │"

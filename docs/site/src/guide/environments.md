@@ -36,22 +36,22 @@
 An environment is a named set of rules that profiles share: read-only or not, which
 statements ask first, whether you commit by hand ([Manual commit](manual-commit.md)), how
 results page, the spill limit, idle and lock limits, a [Startup SQL](startup-sql.md) per
-database, and an optional color and badge (such as `PROD`). The badge shows on the profile's
+database, and an optional colour and badge (such as `PROD`). The badge shows on the profile's
 tabs, in the explorer and in the status bar, and the profile's name takes the environment's
-color in the explorer, the tab list, quick connect and the tab bar.
+colour in the explorer, the tab list, quick connect and the tab bar.
 
 Pick one in a profile's form (Advanced section, `Enter` on Environment). The list has "None
-(default rules)", every environment with its color, badge and rules, and "New environment…".
+(default rules)", every environment with its colour, badge and rules, and "New environment…".
 
 ### The Environments section
 
 The explorer's **Environments** section starts with **Default rules (no environment)**: the
 rules of every profile without an environment. `e` edits them and `Enter` lists those
-profiles; they cannot be renamed, copied or deleted, and have no color or badge.
+profiles; they cannot be renamed, copied or deleted, and have no colour or badge.
 
-Below it each environment shows its color, its badge and its rules in a few words: read-only in
-blue, "asks before every write" and "manual commit" in the warning color, "holds locks while
-paging" in the error color. `n` makes one, `e` edits, `c` copies, `R` renames, `d` deletes,
+Below it each environment shows its colour, its badge and its rules in a few words: read-only in
+blue, "asks before every write" and "manual commit" in the warning colour, "holds locks while
+paging" in the error colour. `n` makes one, `e` edits, `c` copies, `R` renames, `d` deletes,
 and `Enter` or `l` lists the profiles that use it. A rename takes those profiles along;
 deleting one that profiles use asks first and names them. The command line also finds the
 action `env.new`.
@@ -59,7 +59,7 @@ action `env.new`.
 While there is no environment, the section offers **Add presets: dev, test, staging, prod**,
 and the profile form's list offers the same four:
 
-| Preset | Rules | Color | Badge |
+| Preset | Rules | Colour | Badge |
 |---|---|---|---|
 | `dev` | the defaults | green | |
 | `test` | the defaults | blue | |
@@ -68,7 +68,7 @@ and the profile form's list offers the same four:
 
 Nothing is written on its own: presets are added only when you ask, and once written they are
 ordinary environments. **No behaviour depends on an environment's name**; a preset only gives
-the first values of its rules, color and badge.
+the first values of its rules, colour and badge.
 
 ### In the config file
 
@@ -124,7 +124,7 @@ The idle-transaction keys are explained on [Manual commit](manual-commit.md#sett
   dangerous statements ask, automatic commit, no held pages.
 
 **A profile naming an environment that does not exist is an error of that profile**, not a
-fallback to the default rules. Its explorer line shows the environment mark in the error color,
+fallback to the default rules. Its explorer line shows the environment mark in the error colour,
 connecting is refused with a notice that names the missing environment, and a connected profile
 whose environment was deleted or renamed away runs nothing until another one is picked.
 
@@ -140,7 +140,7 @@ same: the result's cursor lives in your transaction and ends with it.
 | Held on the server while you read | Nothing: no transaction, no lock, no snapshot | The transaction, its snapshot, and an `ACCESS SHARE` lock on every table the statement read |
 | Next page (`n`) | Runs the statement again and skips the rows you have, only for a plain `SELECT` that is safe to repeat (said each time; the rows may differ if the data changed) | Read from the open cursor |
 | A statement not safe to repeat (a write, a volatile function, a view, …) | You see the first page, and why; page it yourself with `LIMIT`/`OFFSET`, or use `"hold"` | Read from the open cursor |
-| Held until | — | The result is read to its end, another statement runs in the tab, or `paging_idle_timeout` passes without a page |
+| Held until | Nothing is held | The result is read to its end, another statement runs in the tab, or `paging_idle_timeout` passes without a page |
 
 Why nothing is held by default: an `ACCESS SHARE` lock held by an idle result makes a deploy's
 `ALTER TABLE` wait, and every query after the `ALTER TABLE` waits behind it. A held

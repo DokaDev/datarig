@@ -39,7 +39,7 @@ expression: backend
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
-"╭ Space — Leader ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮"
+"╭ Space: Leader ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮"
 "│ ,      Settings           <      Narrow explorer    b      Toggle explorer    e      +Editor            t      +Tabs                                         │"
 "│ /      Commands           >      Widen explorer     c      +Connection        r      +Results           x      +Transaction                                  │"
 "│ 1…9    Go to tab N        Space  Action menu        d      +Data              s      +Saved queries     z      Toggle pane zoom                              │"

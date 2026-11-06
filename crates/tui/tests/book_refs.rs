@@ -19,6 +19,8 @@ use std::path::{Path, PathBuf};
 const ALLOWED: &[(&str, &str)] = &[
     ("[workspace.package]", "a table of Cargo.toml, not of the config file"),
     ("[name]:port", "a host pattern of OpenSSH's known_hosts file, not a config table"),
+    ("[colors]", "a table of a theme file, not of the config file"),
+    ("[styles]", "a table of a theme file, not of the config file"),
 ];
 
 fn root() -> PathBuf {

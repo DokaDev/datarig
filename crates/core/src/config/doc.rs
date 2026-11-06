@@ -328,15 +328,15 @@ pub const KEYS: &[KeyDoc] = &[
         "folder",
         "the top level",
         "a folder path (`\"work/prod\"`)",
-        "The explorer folder the profile is in. Folders only organize profiles.",
+        "The explorer folder the profile is in. Folders only organise profiles.",
     ),
     unset(
         "connections",
         "color",
-        "a color picked from the name",
+        "a colour picked from the name",
         "`\"red\"`, `\"orange\"`, `\"yellow\"`, `\"green\"`, `\"teal\"`, `\"cyan\"`, `\"blue\"`, \
          `\"indigo\"`, `\"purple\"`, `\"pink\"`, `\"brown\"`, `\"gray\"`, or `\"#rrggbb\"`",
-        "The profile's color in the explorer and on its tabs.",
+        "The profile's colour in the explorer and on its tabs.",
     ),
     unset(
         "connections",

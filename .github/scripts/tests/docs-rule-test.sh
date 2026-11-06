@@ -40,7 +40,7 @@ put docs/site/src/old.md $'# Old\n\nGone soon.\n'
 put docs/site/src/reference/configuration.md $'# Configuration\n\n<!-- Generated from crates/core/src/config/doc.rs. Do not edit;\n     DATARIG_BLESS=1 ... -->\n\nText.\n'
 put docs/site/src/reference/keybindings.md $'# Keybindings\n\n{{#include ../../../keybindings.md:contexts}}\n'
 put docs/site/src/screens/main.txt $'screen\n'
-put docs/site/src/whats-new.md $'# What\'s new\n\nIntro.\n\n## 0.36.0 — 2026-10-01\n\n- Tips.\n'
+put docs/site/src/whats-new.md $'# What\'s new\n\nIntro.\n\n## 0.36.0 (2026-10-01)\n\n- Tips.\n'
 put changes/README.md $'# Changelog fragments\n'
 put changes/fixed/kept.md $'- An entry of the next release.\n'
 # Pages over 500 KB: nothing may stop reading early (SIGPIPE under pipefail).
@@ -135,7 +135,7 @@ expect fail "paths.rs is user-visible" "" "crates/core/src/paths.rs"
 
 case_start whats-new-only
 put locales/en.toml $'a = "B"\n'
-put docs/site/src/whats-new.md $'# What\'s new\n\nIntro.\n\n- Hand-added.\n\n## 0.36.0 — 2026-10-01\n\n- Tips.\n'
+put docs/site/src/whats-new.md $'# What\'s new\n\nIntro.\n\n- Hand-added.\n\n## 0.36.0 (2026-10-01)\n\n- Tips.\n'
 put changes/changed/label.md "$frag"
 expect fail "What's new is no page that describes a change" "" "no doc change: <why no page changes>"
 
@@ -266,13 +266,13 @@ expect pass "a release candidate needs no section and keeps the fragments" "" "R
 case_start release-big
 perl -pi -e 's/^version = "0.36.0"/version = "0.37.0"/' "$repo/Cargo.toml"
 g rm -q changes/fixed/kept.md
-{ printf '# What\x27s new\n\n## 0.37.0 — 2026-10-30\n\n- X.\n\n'; for i in $(seq 1 12000); do printf '## 0.0.%d — 2020-01-01\n\n- Old.\n\n' "$i"; done; } > "$repo/docs/site/src/whats-new.md"
+{ printf '# What\x27s new\n\n## 0.37.0 (2026-10-30)\n\n- X.\n\n'; for i in $(seq 1 12000); do printf '## 0.0.%d (2020-01-01)\n\n- Old.\n\n' "$i"; done; } > "$repo/docs/site/src/whats-new.md"
 expect pass "a release with What's new over 500 KB" "" "Release: 0.36.0 -> 0.37.0"
 
 case_start release-left
 perl -pi -e 's/^version = "0.36.0"/version = "0.37.0"/' "$repo/Cargo.toml"
 put changes/added/left.md "$frag"
-put docs/site/src/whats-new.md $'# What\'s new\n\nIntro.\n\n## 0.37.0 — 2026-10-30\n\n- X.\n\n## 0.36.0 — 2026-10-01\n\n- Tips.\n'
+put docs/site/src/whats-new.md $'# What\'s new\n\nIntro.\n\n## 0.37.0 (2026-10-30)\n\n- X.\n\n## 0.36.0 (2026-10-01)\n\n- Tips.\n'
 expect fail "a release with fragments left fails" "" "changes/ still has fragments"
 
 case_start release-no-section

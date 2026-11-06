@@ -74,7 +74,7 @@ Per environment, in its form (Commit, Idle warning, Idle rollback) or in `[polic
 
 - **`tx_idle_warning`**: once an open transaction has sat idle that long, datarig warns once
   (again only after it ran something and sat idle again), its `◆` turns red in the tab bar and
-  the explorer, and the status bar adds `idle 5:00 · holding locks` in the error color. It never
+  the explorer, and the status bar adds `idle 5:00 · holding locks` in the error colour. It never
   ends anything.
 - **`tx_idle_rollback`**: a transaction opened for manual commit that sat idle that long is
   rolled back, and the connection stays. datarig sends `ROLLBACK` on the tab's session, which
@@ -116,7 +116,7 @@ transactions itself fails inside the transaction; when it was the first write, d
 back and asks whether to run it once outside one.
 
 **How a commit ends**: committed, with the count, rows and time in Messages; or refused by the
-server (a deferred constraint, a serialization failure), which then rolls back, with its error.
+server (a deferred constraint, a serialisation failure), which then rolls back, with its error.
 A PostgreSQL transaction that had failed is reported as rolled back, never as committed. When
 the connection ends while a commit is on its way, whether it happened is not known, and
 datarig says so: check the data.

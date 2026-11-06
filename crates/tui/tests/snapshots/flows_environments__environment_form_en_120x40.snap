@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_environments.rs
-assertion_line: 545
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -10,11 +9,11 @@ expression: backend
 "│  ▸ ○   v6                  ││                                                                                        │"
 "│  ▸ ○   分析-replica        ││  Enter      Connect and open a console                                                 │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
 "│▾ Tunnels 0                 ││  Ctrl+O     Quick connect                                                              │"
-"│    n her╭ Environment — prod ──────────────────────────────────────────────────────────────────────────────╮         │"
-"│▾ Environ│  Environment                                profiles that pick it get its rules, color and badge │         │"
+"│    n her╭ Environment: prod ───────────────────────────────────────────────────────────────────────────────╮         │"
+"│▾ Environ│  Environment                               profiles that pick it get its rules, colour and badge │         │"
 "│  ▸ ○ Def│                                                                                                  │         │"
 "│    ● dev│ Name                 prod                                                                        │         │"
-"│    ● tes│ Color                ‹ ● red ›  ←/→ change · Enter list                                          │         │"
+"│    ● tes│ Colour               ‹ ● red ›  ←/→ change · Enter list                                          │         │"
 "│    ● sta│ Badge                PROD                                shown on its tabs, e.g. PROD            │         │"
 "│  ▾ ● pro│ Read-only            ‹ on ›  ←/→ change · only reads run; the server refuses writes too          │         │"
 "│      ○  │ Confirm               dangerous statements only (default) ‹before every write›  ←/→ change       │         │"

@@ -1,10 +1,9 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
-assertion_line: 825
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
-"│ ╭ Edit connection — local-pg ──────────────────────────────────────────────╮─╮"
+"│ ╭ Edit connection: local-pg ───────────────────────────────────────────────╮─╮"
 "│▾│  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
 "│ │                                                                          │e│"
 "│ │ SSL mode          disable ▾   ←/→ change · Enter list                    │ │"
@@ -16,7 +15,7 @@ expression: backend
 "│ │ Startup │ disable      not encrypted                           │         │ │"
 "│ │ Own star│ prefer       encrypted if the server offers it       │       × │ │"
 "│ │         │ require      encrypted, certificate not checked (wi… │er adds  │ │"
-"│ │ Color   │ verify-ca    encrypted, signed by the CA file (need… │ list    │t│"
+"│ │ Colour  │ verify-ca    encrypted, signed by the CA file (need… │ list    │t│"
 "│ │ Icon    │ verify-full  CA-signed, and the host name matches    │         │ │"
 "│ │ Folder  ╰──────────────── Enter pick · ↑↓ select · Esc cancel ─╯         │ │"
 "│ │                                                                          │ │"

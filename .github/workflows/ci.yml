@@ -65,7 +65,7 @@ jobs:
   # other jobs: the release gate wants each one to succeed. The generated pages and screens are
   # compared with their sources by the `test` jobs (tests/*_doc.rs, tests/book_*.rs). Also the
   # tests of the docs rule of pull requests (docs-rule.yml), of scripts/changes.sh and of
-  # .github/scripts/code-changed.sh.
+  # .github/scripts/code-changed.sh, and the public text style (scripts/text-style.py).
   docs:
     name: docs site
     runs-on: ubuntu-latest
@@ -75,6 +75,12 @@ jobs:
         run: bash .github/scripts/docs-tools.sh
       - name: Build and check
         run: bash .github/scripts/docs-build.sh
+      # No em dash and British spelling in the text users read (CONTRIBUTING.md, "Public text
+      # style").
+      - name: Public text style
+        run: |
+          python3 scripts/text-style.py
+          bash .github/scripts/tests/text-style-test.sh
       - name: Tests of docs-rule.sh, changes.sh and code-changed.sh
         run: |
           bash .github/scripts/tests/docs-rule-test.sh

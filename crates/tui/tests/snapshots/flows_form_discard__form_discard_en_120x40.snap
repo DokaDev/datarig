@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_form_discard.rs
-assertion_line: 109
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -13,7 +12,7 @@ expression: "h.draw(w, ht).backend()"
 "│    n here makes an SSH tun…││  Ctrl+T     New console tab                                                            │"
 "│▾ Environments 0            ││  Space t u  Reopen a closed tab                                                        │"
 "│  ▸ ○ Default rules (no env…││  n          New connection                                                             │"
-"│    ＋ Ad╭ Edit connection — local-pg ──────────────────────────────────────────────────────────────────────╮         │" Hidden by multi-width symbols: [(6, " ")]
+"│    ＋ Ad╭ Edit connection: local-pg ───────────────────────────────────────────────────────────────────────╮         │" Hidden by multi-width symbols: [(6, " ")]
 "│▾ Startup│  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │         │"
 "│    n her│                                                                                                  │         │"
 "│         │ Driver            PostgreSQL ▾   ←/→ change · Enter list                                         │         │"

@@ -13,7 +13,7 @@ expression: backend
 "│▾ Environments 1            ││  6 JOIN shop.users u ON u.id = o.user_id                                               │"
 "│    ○ Default rules (no env…││  7 WHERE o.status = 'paid';                                                            │"
 "│  ▸ ○ stg  asks before ever…││  8                                                                                     │"
-"│ ╭ Apply changes — shop.users ──────────────────────────────────────────────────────────────────────────────────────╮ │"
+"│ ╭ Apply changes: shop.users ───────────────────────────────────────────────────────────────────────────────────────╮ │"
 "│ │ 1 update · 1 insert · 1 delete                                                                                   │ │"
 "│ │                                                                                                                  │ │"
 "│ │ Applying the changes…                                                                                            │ │"

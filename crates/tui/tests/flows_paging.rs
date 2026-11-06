@@ -129,7 +129,7 @@ fn an_idle_portal_closes_and_the_next_page_runs_a_select_again() {
     assert!(h.sent().is_empty(), "asked once");
     let screen = h.screen(160, 45);
     assert!(
-        screen.contains("Showing 1,000 rows · paging closed — n runs the SELECT again for the next page"),
+        screen.contains("Showing 1,000 rows · paging closed: n runs the SELECT again for the next page"),
         "{screen}"
     );
     assert!(results_title(&mut h, 160, 45).contains("(page 2 / ? · # count · paging closed) › ╮"));
@@ -492,7 +492,7 @@ fn a_run_without_rows_closes_the_portal_but_keeps_the_rows() {
     h.keys("L"); // back from Messages to the kept rows
     assert_eq!(first_shown(&h).as_deref(), Some("0"));
     let screen = h.screen(160, 45);
-    assert!(screen.contains("paging closed — n runs the SELECT again"), "{screen}");
+    assert!(screen.contains("paging closed: n runs the SELECT again"), "{screen}");
     h.sent();
     h.keys("n");
     let r = resumes(&h.sent());
@@ -531,7 +531,7 @@ fn a_stopped_fetch_keeps_the_result_incomplete() {
             "{cancelled}: {title}"
         );
         let screen = h.screen(160, 45);
-        assert!(screen.contains("Showing 500 rows · paging closed — n runs the SELECT again"), "{screen}");
+        assert!(screen.contains("Showing 500 rows · paging closed: n runs the SELECT again"), "{screen}");
         // `#` counts: the result is not complete.
         h.app.transient = None;
         h.keys("#");
@@ -618,7 +618,7 @@ fn a_refusal_of_the_server_side_of_the_allowlist_is_said() {
     let status = h.status(220, 45);
     assert!(status.contains("not run again for you (it reads zz_v, which is not a table"), "{status}");
     let screen = h.screen(160, 45);
-    assert!(screen.contains("paging closed after idle — re-run to load more"), "{screen}");
+    assert!(screen.contains("paging closed after idle: re-run to load more"), "{screen}");
 }
 
 /// At 80 columns a closed portal's title keeps the page number (the arrows go first, then the
@@ -835,7 +835,7 @@ fn the_run_again_hint_goes_with_the_session() {
     h.advance(31 * SEC);
     assert_eq!(h.app.tab().exec.paging, Paging::ClosedIdle);
     h.tab_db(0, DbEvent::TxOpen(false));
-    assert!(h.screen(160, 45).contains("paging closed — n runs the SELECT again"));
+    assert!(h.screen(160, 45).contains("paging closed: n runs the SELECT again"));
     h.command("use .shop");
     let screen = h.screen(160, 45);
     assert!(h.status(160, 45).contains("Showing 500 rows · paging closed"), "{screen}");
@@ -886,7 +886,7 @@ fn a_result_not_held_pages_by_running_its_select_again() {
     let screen = h.screen(160, 45);
     assert!(
         screen.contains(
-            "Showing 500 rows · nothing is held open on the server — n runs the SELECT again for the next page"
+            "Showing 500 rows · nothing is held open on the server: n runs the SELECT again for the next page"
         ),
         "{screen}"
     );

@@ -16,7 +16,7 @@ expression: backend
 "│                      ││  9 SELECT * FROM analytics.events;                   │"
 "│                      ││ 10                                                   │"
 "│                      ││ 11 SELECT * FROM analytics.events ORDER BY created_at│"
-"╭ Space — Leader ──────────────────────────────────────────────────────────────╮"
+"╭ Space: Leader ───────────────────────────────────────────────────────────────╮"
 "│ ,      Settings           Space  Action menu        r      +Results          │"
 "│ /      Commands           b      Toggle explorer    s      +Saved queries    │"
 "│ 1…9    Go to tab N        c      +Connection        t      +Tabs             │"

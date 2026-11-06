@@ -40,7 +40,7 @@ In the release pull request, after setting the version:
 scripts/changes.sh release 0.37.0
 ```
 
-writes the fragments as a `## 0.37.0 — <date>` section at the top of What's new (grouped
+writes the fragments as a `## 0.37.0 (<date>)` section at the top of What's new (grouped
 Added, Changed, Fixed, Removed, Security) and deletes them; commit both. A release without
 fragments, such as an urgent patch, gives the one line its section says:
 

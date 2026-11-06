@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 1105
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
@@ -11,7 +10,7 @@ expression: "h.draw(w, ht).backend()"
 "│      ▸ public              ││  3                                                                                     │"
 "│      Loading…              ││  4 SELECT u.name, o.status, o.total_amount                                             │"
 "│▾ Environments 1            ││  5 FROM shop.orders o                                                                  │"
-"│    ╭ Session settings — local-pg ───────────────────────────────────────────────────────────────────────────────╮    │"
+"│    ╭ Session settings: local-pg ────────────────────────────────────────────────────────────────────────────────╮    │"
 "│  ▸ │ local-pg · PostgreSQL · environment prod                                                                   │    │"
 "│▾ St│                                                                                                            │    │"
 "│  ▸ │ Lock wait        5s     environment prod                                                                   │    │"
@@ -27,7 +26,7 @@ expression: "h.draw(w, ht).backend()"
 "│    │   SET work_mem = '256MB'                                                                                   │    │"
 "│    │     behind a pooler: per transaction as SET LOCAL work_mem = '256MB'                                       │    │"
 "│    │   SET ROLE reporting                                                                                       │    │"
-"│    │     behind a pooler: not sent — it changes who the session is                                              │    │"
+"│    │     behind a pooler: not sent (it changes who the session is)                                              │    │"
 "│    │                                                                                                            │    │"
 "│    │ Applied in this order: a later setting of the same name wins                                               │    │"
 "│    │                                                                                                            │    │"

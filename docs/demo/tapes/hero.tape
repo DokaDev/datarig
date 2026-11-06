@@ -52,7 +52,7 @@ Sleep 600ms
 # The pending change, then the statements that will run.
 Space
 Type "dp"
-Wait+Screen /Changes — Result 1 · store\.customers/
+Wait+Screen /Changes: Result 1 · store\.customers/
 Sleep 1.5s
 Type "s"
 Wait+Screen /UPDATE "store"\."customers" SET "city" = 'Harborview'/
@@ -61,7 +61,7 @@ Sleep 2.5s
 # Apply: the staging environment asks first, with the SQL in front of you.
 Space
 Type "da"
-Wait+Screen /Apply changes — store\.customers/
+Wait+Screen /Apply changes: store\.customers/
 Sleep 2.5s
 Type "y"
 Wait+Screen /Applied 1 change/

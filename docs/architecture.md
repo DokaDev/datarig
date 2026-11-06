@@ -398,9 +398,9 @@ Held by CI budgets (`docs/perf.md`).
   `t:` or `f:` and an `oid`; a typed name in the tab's schema first), `search_path = ''` so every
   printed name is qualified, and the statement of that kind (`meta::ddl::RELATION`, which
   includes `structure_parts!`, `TRIGGER`, `FUNCTION`). Each statement checks `pg_locks` for an
-  `AccessExclusiveLock`, held or waited for, on the relations its deparsing locks — the object,
+  `AccessExclusiveLock`, held or waited for, on the relations its deparsing locks (the object,
   an index's or trigger's table, the relations a view's rule, a policy or an SQL-standard
-  function body depend on (`pg_depend`), as probed on PostgreSQL 13 to 18 — and answers
+  function body depend on (`pg_depend`), as probed on PostgreSQL 13 to 18) and answers
   `locked` with nothing deparsed when there is one (`DbError::Locked`); `aclexplode`,
   `pg_get_userbyid`, comments, sequences and a string-bodied function lock nothing. In the TUI
   a DDL tab (`TabKind::Ddl`, `tabs::DdlTab`) holds its object, its state (`DdlState`: not
@@ -913,7 +913,7 @@ Every piece of UI chrome text (titles, labels, hints, status and error messages,
   - **Plurals**: an entry with `{count}` is a table with two forms, `"key" = { one = "…", other = "…" }`; the generated `render` picks `one` when `count` is 1. The `one` form may leave the number out (`"its open tab"`). A language without plural forms (Korean) gives a plain string for the same key. Never write `tab(s)`.
   - A key typo is an unknown variant and a missing or mistyped argument is a struct-literal error, so both fail to compile. The rules live in `build/catalog.rs`, a pure module that `tests/catalog.rs` exercises with fixtures; the `i18n` module docs have `compile_fail` examples.
 - **Rendering**: `I18n::label(Label)` and `I18n::msg(&Msg)` return `Localized`. Widgets that draw chrome take `&Localized`, not `&str`: `panel`, `modal`, the status line, hints, which-key and help entries, command-line entries. Status messages are stored as `Notice { msg: Msg, level }`, so a language switch re-renders them.
-- **Escape hatch**: `Localized::verbatim(..)` wraps text that is not translated: user and database data, SQL, key names (`Ctrl+E`), or chrome composed from those and already localized parts (the which-key title `Space c — Connection`). Never pass English UI wording to it; add a key instead. `git grep -n 'Localized::verbatim'` lists every use for review. Data paths (grid cells, tree items, the editor) keep their own `String`/`&str` types, and the low-level `put` drawing helper takes `&str` for both.
+- **Escape hatch**: `Localized::verbatim(..)` wraps text that is not translated: user and database data, SQL, key names (`Ctrl+E`), or chrome composed from those and already localized parts (the which-key title `Space c: Connection`). Never pass English UI wording to it; add a key instead. `git grep -n 'Localized::verbatim'` lists every use for review. Data paths (grid cells, tree items, the editor) keep their own `String`/`&str` types, and the low-level `put` drawing helper takes `&str` for both.
 
 ### Adding a UI string
 

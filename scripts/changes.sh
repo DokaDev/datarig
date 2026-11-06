@@ -4,7 +4,7 @@
 # release's notes.
 #
 #   scripts/changes.sh release X.Y.Z [--note TEXT] [--allow-empty]
-#       In the release pull request: writes the fragments as a new `## X.Y.Z — YYYY-MM-DD`
+#       In the release pull request: writes the fragments as a new `## X.Y.Z (YYYY-MM-DD)`
 #       section at the top of What's new (Added, Changed, Fixed, Removed, Security, in that
 #       order, the bullets as written) and deletes them. --note puts a one-line paragraph at the
 #       top of the section. Without fragments it refuses, unless a --note is given (the urgent
@@ -118,10 +118,10 @@ cmd_check() {
 }
 
 # The line number of the heading of a version in $page, `## <version>` alone or followed by
-# ` — <date>` (not `## 0.36.0 and earlier`), empty when there is none.
+# ` (<date>)` (not `## 0.36.0 and earlier`), empty when there is none.
 heading_line() {
   awk -v h="## $1" '{ l = $0; sub(/[ \t\r]+$/, "", l) }
-    l == h || index(l, h " — ") == 1 { print NR; exit }' "$page"
+    l == h || index(l, h " (") == 1 { print NR; exit }' "$page"
 }
 
 cmd_release() {
@@ -180,7 +180,7 @@ cmd_release() {
   section=$(mktemp)
   trap 'rm -f "$section" "$section.page"' EXIT
   {
-    printf '## %s — %s\n' "$version" "$(date -u +%Y-%m-%d)"
+    printf '## %s (%s)\n' "$version" "$(date -u +%Y-%m-%d)"
     if [[ -n $note ]]; then
       printf '\n%s\n' "$note"
     fi

@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 997
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -10,11 +9,11 @@ expression: "h.draw(w, ht).backend()"
 "│  ▸ ○   v6                  ││                                                                                        │"
 "│  ▸ ○   分析-replica        ││  Enter      Connect and open a console                                                 │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
 "│▾ Tunnels 0                 ││  Ctrl+O     Quick connect                                                              │"
-"│    n her╭ Environment — prod ──────────────────────────────────────────────────────────────────────────────╮         │"
-"│▾ Environ│  Environment                                profiles that pick it get its rules, color and badge │         │"
+"│    n her╭ Environment: prod ───────────────────────────────────────────────────────────────────────────────╮         │"
+"│▾ Environ│  Environment                               profiles that pick it get its rules, colour and badge │         │"
 "│  ▸ ○ Def│                                                                                                  │         │"
 "│  ▸ ○ pro│ Name                 prod                                                                        │         │"
-"│▾ Startup│ Color                ‹ ○ none ›  ←/→ change · Enter list                                         │         │"
+"│▾ Startup│ Colour               ‹ ○ none ›  ←/→ change · Enter list                                         │         │"
 "│    ◇ bro│ Badge                                                    shown on its tabs, e.g. PROD            │         │"
 "│      sta│ Read-only            ‹ off ›  ←/→ change · only reads run; the server refuses writes too         │         │"
 "│    ◇ fk_│ Confirm              ‹dangerous statements only (default)› before every write   ←/→ change       │         │"

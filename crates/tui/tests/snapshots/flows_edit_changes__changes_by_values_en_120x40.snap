@@ -20,7 +20,7 @@ expression: backend
 "│                            │╰────────────────────────────────────────────────────────────────────────────────────────╯"
 "│                            │╭ Results · 3 rows ──────────────────────────────────────────────────────────────────────╮"
 "│                            ││ Result 1  [Changes 1]  Chart  Messages                                             H/L │"
-"│                            ││ Changes — Result 1 · shop.users                                               1 update │"
+"│                            ││ Changes: Result 1 · shop.users                                                1 update │"
 "│                            ││ Counting matching rows…                                                                │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"

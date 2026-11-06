@@ -26,7 +26,7 @@ open and may write, and its rows can be found again. A pressed key that cannot d
 - **The table.** Its columns are not known yet (the keys are still being read, or could not be
   read), or it is not known at all (created outside the app: the explorer's refresh reads it
   again); no column of the result is a column of the table; the rows are not of a plain table
-  (a view, a materialized view or a foreign table); the table changed since the query ran; its
+  (a view, a materialised view or a foreign table); the table changed since the query ran; its
   details could not be read.
 - **Finding the rows.** No column of the result compares exactly, so its rows can't be found
   again (see [How a row is found](#how-a-row-is-found)).
@@ -82,7 +82,7 @@ While changes are pending the strip shows `3 pending` and a Changes tab, and the
 offers `Space d a` apply and `u` undo. A pending change is a row: a row read with changed cells
 (two cells of one row are one change), a new row or a row to be deleted. The row number's
 gutter marks them `~`, `+` and `-`, or `!` when an Apply is refused for the row. Changed cells
-take their own color, new rows another on a background of their own, rows to be deleted are
+take their own colour, new rows another on a background of their own, rows to be deleted are
 crossed out, and a new row's cell left to its default shows what the server will put there, or
 `! value needed` where the column has none (see [New rows](#new-rows)). The theme tokens are
 `edit_changed`, `edit_inserted`, `edit_inserted_row`, `edit_deleted`, and `edit_pending` for the
@@ -319,8 +319,8 @@ The setting `edit.paste_null` (`:set edit.paste_null=NULL`, or the settings scre
 word `NULL` the token instead, or `none` for no token. A quoted `"\N"` is always the text.
 
 **An empty field is an empty value, never NULL.** For a text column that is the empty string; a
-column of another type does not take it, so it is marked invalid with "empty value — paste \N
-for NULL". A paste never gives `DEFAULT`: the text `DEFAULT` is the text.
+column of another type does not take it, so it is marked invalid with "empty value (paste \N
+for NULL)". A paste never gives `DEFAULT`: the text `DEFAULT` is the text.
 
 ### Invalid values
 
@@ -465,7 +465,7 @@ problems there are. Then one line per change, deletes first, then updates (a lin
 cell), then new rows, each row's problems under it:
 
 ```text
- Changes — Result 1 · shop.users              2 updates · 2 inserts · 1 delete · 1 problem
+ Changes: Result 1 · shop.users               2 updates · 2 inserts · 1 delete · 1 problem
  - id=2   delete
  ~ id=1   email     'a@x' → 'z@x'
  ~ id=3   nickname  'cy' → NULL
@@ -475,7 +475,7 @@ cell), then new rows, each row's problems under it:
 ```
 
 - The marks are the gutter's: `~` a changed cell, `+` a new row, `-` a row to be deleted, in
-  their colors (`edit_changed`, `edit_inserted`, `edit_deleted`); they read without colors too.
+  their colours (`edit_changed`, `edit_inserted`, `edit_deleted`); they read without colours too.
 - A row found by its key is named by the key's values (`id=2`, `a=1,b=2`); a row found by its
   values by its row in the grid, `row 31  (located by its values)`; a new row by its place
   among the new rows, `new 1`. A row is named the same way wherever a problem is about it: in
@@ -510,7 +510,7 @@ Apply stands to a transaction (as the Apply dialog's footer does), and its keys 
 `s` switches between the list and the statements that apply the changes, for the rest of the
 run. `ui.changes_view = "sql"` (`:set ui.changes_view=sql`, or the settings screen) opens the tab
 in the statements; `"list"` is the default. The statements are shown as the Apply dialog shows
-them: in the order they run, in the editor's syntax colors, each with the count it must give
+them: in the order they run, in the editor's syntax colours, each with the count it must give
 (`expect 1`) at the end of its first line, a statement longer than the pane wrapped under its
 first line.
 
@@ -540,7 +540,7 @@ whole.
   UPDATE NOWAIT` that finds and locks it. A row another session holds fails at once instead of
   waiting.
 - **Writes**: the deletes, then the updates, then the inserts. A `DELETE` and a statement that
-  expects more than one row are marked `!`, their count in the warning color.
+  expects more than one row are marked `!`, their count in the warning colour.
 
 `c` copies every statement exactly as it is sent, each followed by `;` and a line break (through
 the `clipboard` setting), in both views. While the statements are not final it copies nothing
@@ -560,11 +560,11 @@ whatever the Changes tab counted before; the count sees the tab's open transacti
 Apply does. The status bar says `Checking 3 rows…` until the answers come. Meanwhile any key
 (`Esc` too), a click, the wheel or a paste stops waiting ("Apply cancelled") and does nothing
 else, so none of them is taken by the question that follows; a dialog that opens or a run in the
-tab cancels it too. Changes that move before the answers come drop the Apply: "Changes changed —
+tab cancels it too. Changes that move before the answers come drop the Apply: "Changes changed:
 press Space d a again".
 
 When the changes can't be applied yet, nothing is asked: the Changes tab takes the focus with
-the first problem selected, and the status bar says "Can't apply: 2 problems — see Changes".
+the first problem selected, and the status bar says "Can't apply: 2 problems (see Changes)".
 The problems are those of the list above, for instance:
 
 - "row 3 · matches no row of the table now: it was changed or deleted. Re-run the query."
@@ -593,13 +593,13 @@ changes changed").
 When a question on the status line (this one, a paste of many rows, CSV or one column) or the
 wait for the counts ends without its answer, cancelled by a key or dropped because something
 moved, the keys that answer questions (`y`, `n`, `c`, `1`, on a Korean layout too) do nothing in
-the results for about a second, and say so: "Question withdrawn — the changes moved · y
-ignored", or "Apply cancelled · y ignored". A `y` pressed just as the question went never copies
+the results for about a second, and say so: "Apply cancelled: the changes changed ·
+y ignored", or "Apply cancelled · y ignored". A `y` pressed just as the question went never copies
 a cell over the clipboard. Other keys work as usual.
 
 ### The Apply dialog
 
-A dialog, "Apply changes — shop.users", takes the place of the question when the statements
+A dialog, "Apply changes: shop.users", takes the place of the question when the statements
 must be seen before `y`:
 
 - a row matches several identical rows: "row 3 · matches 2 identical rows", with "[1] just one
@@ -651,7 +651,7 @@ statement in a message is its first line, cut short when long:
 - "id=5 · is locked by another session. Nothing was applied."
 - "new 1 · <the server's error>. Nothing was applied. Statement: <the statement>"
 - "Apply cancelled; nothing was applied."
-- "Apply result unknown — the connection was lost before the server confirmed. Re-run the query
+- "Apply result unknown: the connection was lost before the server confirmed. Re-run the query
   to check." The changes may be in the table already: the next Apply opens the dialog, whose
   first `y` warns, and only a second `y` applies them again.
 
@@ -710,13 +710,13 @@ An export to a file and the chart do not take the values the grid shows over the
 
 - An export of the rows held (the selection, the fetched rows, or every row of a result fetched
   to its end) is refused while the result has pending or applied changes ("Not exported: this
-  result has pending changes; apply or discard them, or run the query again — see Changes"; with
+  result has pending changes; apply or discard them, or run the query again (see Changes)"; with
   changes applied, "Not exported: this result has pending or applied changes; apply or discard
   them, or run the query again"), in every format.
 - An export of every row of a result the server has more of reads the rows again from the
   server, so it holds what an Apply wrote. With changes pending it goes on, and says "The pending
   changes are not in the file: every row is read again from the server".
 - The chart draws nothing while the result has pending or applied changes: it says "Not drawn:
-  this result has pending changes. Apply or discard them, or run the query again — see Changes",
+  this result has pending changes. Apply or discard them, or run the query again (see Changes)",
   or, once they are applied, "Not drawn: this result has pending or applied changes. Run the
   query again to chart the edited values."

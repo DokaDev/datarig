@@ -13,7 +13,7 @@ expression: backend
 "│  ▸ ○    │  icons=off   Nerd Font icons → off                       │         │"
 "│  ▸ ○    │  icons=auto  Nerd Font icons → ask again (with a previe… │         │"
 "│         │  Needs a Nerd Font as the terminal font. Preview:     │         │"
-"│         │   — if these look like □ or ?, turn icons off or        │         │"
+"│         │  . If these look like □ or ?, turn icons off or         │         │"
 "│         │  install a font from nerdfonts.com. auto: not decided    │         │"
 "│         ╰─────────────────── Tab/↑↓ select · Enter run · Esc close ╯reated_at│"
 "│                      ││ 12                                                   │"

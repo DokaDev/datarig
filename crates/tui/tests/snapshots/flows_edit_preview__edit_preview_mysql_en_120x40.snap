@@ -11,7 +11,7 @@ expression: backend
 "│    ○ Default rules (no env…││  4 SELECT u.name, o.status, o.total_amount                                             │"
 "│  ▸ ○ stg  asks before ever…││  5 FROM shop.orders o                                                                  │"
 "│                            ││  6 JOIN shop.users u ON u.id = o.user_id                                               │"
-"│ ╭ Apply changes — shop.people ─────────────────────────────────────────────────────────────────────────────────────╮ │"
+"│ ╭ Apply changes: shop.people ──────────────────────────────────────────────────────────────────────────────────────╮ │"
 "│ │ 1 update                                                                                                         │ │"
 "│ │                                                                                                                  │ │"
 "│ │ Row checks (lock)                                                                                                │ │"

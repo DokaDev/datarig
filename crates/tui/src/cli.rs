@@ -5,7 +5,7 @@ use std::path::PathBuf;
 const USAGE: &str = "usage: datarig [--config <path>] [<profile>]";
 
 pub(crate) const HELP: &str =
-    "datarig — a full-featured database client that lives in your terminal (PostgreSQL and MySQL)
+    "datarig: a full-featured database client that lives in your terminal (PostgreSQL and MySQL)
 
 usage: datarig [--config <path>] [<profile>]
 

@@ -14,7 +14,7 @@ expression: backend
 "│                      │╰──────────────────────────────────────────────────────╯"
 "│                      │╭ Results · 3 rows ────────────────────────────────────╮"
 "│                      ││ Result 1  [Changes 4]  Chart  Messages           H/L │"
-"│                      ││ Changes — Result 1…  2 updates · 1 insert · 1 delete │"
+"│                      ││ Changes: Result 1 …  2 updates · 1 insert · 1 delete │"
 "│                      ││ Row checks (lock, no waiting)                        │"
 "│                      ││   SELECT 1 FROM "shop"."users" WHERE "id"   expect 1 │"
 "│                      ││     = '1' AND "email" = 'a@x' FOR UPDATE NOWAIT      │"

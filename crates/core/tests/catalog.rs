@@ -275,7 +275,7 @@ fn generated_code_picks_the_plural_form_by_count() {
 fn templates_split_into_text_and_placeholders() {
     let text = |s: &str| Piece::Text(s.to_string());
     let ph = |s: &str| Piece::Placeholder(s.to_string());
-    assert_eq!(catalog::pieces("Keys — {context}"), vec![text("Keys — "), ph("context")]);
+    assert_eq!(catalog::pieces("Keys: {context}"), vec![text("Keys: "), ph("context")]);
     assert_eq!(catalog::pieces("{a}{b}"), vec![ph("a"), ph("b")]);
     // Braces that do not wrap a lowercase identifier are text.
     assert_eq!(catalog::pieces("{} {Name} {a-b} {"), vec![text("{} {Name} {a-b} {")]);

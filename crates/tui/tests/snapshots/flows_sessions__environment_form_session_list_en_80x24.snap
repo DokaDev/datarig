@@ -1,13 +1,12 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 997
 expression: "h.draw(w, ht).backend()"
 ---
-"╭ ╭ Environment — prod ──────────────────────────────────────────────────────╮─╮"
-"│ │  Environment        profiles that pick it get its rules, color and badge │ │"
+"╭ ╭ Environment: prod ───────────────────────────────────────────────────────╮─╮"
+"│ │  Environment       profiles that pick it get its rules, colour and badge │ │"
 "│▾│                                                                          │ │"
 "│ │ Name                 prod                                                │ │"
-"│ │ Color                ‹ ○ none ›  ←/→ change · Enter list                 │ │"
+"│ │ Colour               ‹ ○ none ›  ←/→ change · Enter list                 │ │"
 "│ │ Badge                                       shown on its tabs, e.g. PROD │ │"
 "│▾│ Read-only            ‹ off ›  ←/→ change · only reads run; the server r… │ │"
 "│ │ ╭ Startup SQL (MySQL) ─────────────────────────────────────────────────╮ │ │"

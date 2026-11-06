@@ -135,7 +135,7 @@ fn set_theme_with_an_unknown_name_or_a_broken_file_changes_nothing_and_says_why(
     h.key(KeyCode::Esc);
     h.command("set theme=broken");
     let text = h.cmdline().and_then(|c| c.error.clone()).unwrap().render(&h.app.i18n).to_string();
-    assert!(text.contains("broken.toml:2: “#12345” is not a color"), "{text}");
+    assert!(text.contains("broken.toml:2: “#12345” is not a colour"), "{text}");
     assert_eq!(*h.app.theme, theme::DARK, "nothing changed");
     assert_eq!(s.text(), "theme = \"dark\"\n", "nothing saved");
 }

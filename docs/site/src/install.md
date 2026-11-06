@@ -29,7 +29,7 @@ untested). `SHA256SUMS` lists their checksums, for example:
 shasum -a 256 -c SHA256SUMS --ignore-missing
 ```
 
-Each archive also contains the licenses and the third-party notices.
+Each archive also contains the licences and the third-party notices.
 
 ## From source
 
