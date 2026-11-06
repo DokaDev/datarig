@@ -364,8 +364,10 @@ pub fn new_app(cfg: &Config, lang: Lang) -> App {
 
 pub fn new_app_with_clock(cfg: &Config, lang: Lang) -> (App, FakeClock) {
     let mut app = App::new(cfg, None, lang);
-    // No tips, so screens pin what they are about; the tests of tips show them.
+    // No tips, so screens pin what they are about; the tests of tips show them. Nor What's new
+    // at launch (its own tests show it).
     app.tips.paused = true;
+    app.whats_new_paused = true;
     if cfg.theme == datarig_core::theme::DEFAULT {
         app.theme = Arc::new(datarig_tui::theme::DARK);
     }

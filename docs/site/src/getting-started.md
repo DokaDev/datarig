@@ -117,6 +117,19 @@ default), `"until_used"` (a tip about a key you have pressed once is not shown a
 key gets one status line naming its key, once. Nothing is sent anywhere; see
 [where datarig keeps its files](faq.md#where-does-datarig-keep-its-files).
 
+### What's new
+
+On the first start after an update, datarig shows what changed: the notes of every version
+since the one you ran before, newest first (if you used a version from before 0.39.0, the notes
+of the version you run now). A first start of a new install shows nothing. `:whatsnew` shows the
+notes of every version any time. The notes come with the program, so this works offline and
+nothing is fetched; they are the same as the [What's new](whats-new.md) page.
+
+In the dialog, `j`/`k` scroll, `Ctrl+D`/`Ctrl+U` half a page, `PageDown`/`PageUp` a page,
+`g`/`G` go to the top or the end, `]`/`[` to the next or previous version, and `Esc` closes.
+`[updates] whats_new = "off"` (also on the settings screen, under Updates, or
+`:set updates.whats_new=off`) stops it from showing by itself; `:whatsnew` still works.
+
 ## Quit
 
 `:q` closes the tab (on the last tab, it quits). `:qa` or `Ctrl+Q` quits. When a tab holds an

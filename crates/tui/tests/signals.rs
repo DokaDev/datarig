@@ -67,6 +67,10 @@ impl Run {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.toml"), config).unwrap();
+        // This version already ran here: What's new does not open over the screen the test drives.
+        std::fs::create_dir_all(dir.join("state")).unwrap();
+        let seen = format!("seen = \"{}\"\n", env!("CARGO_PKG_VERSION"));
+        std::fs::write(dir.join("state").join(datarig_core::update::FILE), seen).unwrap();
         for (path, text) in files {
             let path = dir.join(path);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();

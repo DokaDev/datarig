@@ -84,7 +84,10 @@ fn text_inside_code_is_kept_as_it_is() {
         ])
     );
     let ok = parse("## 1.0.0 (2026-01-01)\n\nsnake_case, a < b, 5 * 3 is not, `x`.\n");
-    assert!(matches!(ok, Err(Unsupported { what: "`*` emphasis", .. })), "{ok:?}");
+    // A future note with "5 * 3" fails at its line, saying how to write it.
+    let e = ok.unwrap_err();
+    assert_eq!(e.line, 3);
+    assert!(e.what.contains("write it in code (`5 * 3`)"), "{}", e.what);
     assert!(parse("## 1.0.0 (2026-01-01)\n\nsnake_case and a < b & c.\n").is_ok());
 }
 
@@ -109,8 +112,8 @@ fn anything_outside_the_subset_names_its_line() {
         ("<details>open</details>\n", "HTML"),
         ("A <b>bold</b> word.\n", "HTML"),
         ("An ![image](x.png).\n", "an image"),
-        ("Some *emphasis*.\n", "`*` emphasis"),
-        ("Some _emphasis_.\n", "`_` emphasis"),
+        ("Some *emphasis*.\n", "a `*` outside code (emphasis on the site): write it in code (`5 * 3`) or as ×"),
+        ("Some _emphasis_.\n", "a `_` at a word's edge outside code (emphasis on the site): write it in code"),
         ("An \\* escape.\n", "a backslash escape"),
         ("An &amp; entity.\n", "an HTML entity"),
         ("A `code span.\n", "a backtick without its closing one"),

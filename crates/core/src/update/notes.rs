@@ -266,8 +266,10 @@ fn inline(s: &str) -> Result<Vec<Span>, &'static str> {
                 spans.push(Span::Bold(inner.to_string()));
                 rest = &rest[end + 4..];
             }
-            '*' => return Err("`*` emphasis"),
-            '_' if emphasis_underscore(s, rest) => return Err("`_` emphasis"),
+            '*' => return Err("a `*` outside code (emphasis on the site): write it in code (`5 * 3`) or as ×"),
+            '_' if emphasis_underscore(s, rest) => {
+                return Err("a `_` at a word's edge outside code (emphasis on the site): write it in code");
+            }
             '!' if rest.starts_with("![") => return Err("an image"),
             '[' => {
                 let close =

@@ -100,6 +100,8 @@ pub enum Action {
     Help,
     /// Keyboard help with every section open.
     HelpAll,
+    /// What's new: the release notes this build carries (`:whatsnew`).
+    WhatsNew,
     /// Result grid -> editor.
     PaneBack,
     /// The focused pane takes the whole workspace, or back (tmux's zoom).
@@ -730,6 +732,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::FormSessionView, "form.session_view", Label::ActionFormSessionView, profile_form),
     act(Action::Help, "help.context", Label::ActionHelpContext, help_available),
     act(Action::HelpAll, "help.all", Label::ActionHelpAll, help_available),
+    act(Action::WhatsNew, "app.whats_new", Label::ActionWhatsNew, anywhere),
     act(Action::DismissOnboarding, "tips.dismiss_onboarding", Label::ActionTipsDismissOnboarding, onboarding_open),
     act(Action::PaneBack, "pane.back", Label::ActionPaneBack, results_focused),
     act(Action::Zoom, "pane.zoom", Label::ActionPaneZoom, zoomable),

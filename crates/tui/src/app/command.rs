@@ -17,7 +17,7 @@ use datarig_core::config::{
     AutoPairs, ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
     IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat, SoftTabBackspace, Tips, YankFlash,
 };
-use datarig_core::config::{ChangesView, CompletionDelay, PasteNull, UiBackground};
+use datarig_core::config::{ChangesView, CompletionDelay, PasteNull, UiBackground, WhatsNewSetting};
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
 use std::time::Duration;
@@ -87,6 +87,8 @@ pub enum Command {
     /// `:session`: what the explorer's (else the active tab's) profile's query sessions start
     /// with, and where each item comes from.
     Session,
+    /// `:whatsnew`: the release notes of every version this build carries.
+    WhatsNew,
     /// `:changes`, `:apply`: the preview of the shown result's pending changes (`y` applies).
     Changes,
     Apply,
@@ -412,6 +414,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         label: Label::ActionEditDiscard,
         action: Some(Action::Edit(super::edit::EditAction::Discard)),
     },
+    CommandSpec {
+        command: Command::WhatsNew,
+        name: "whatsnew",
+        aliases: &[],
+        arg: None,
+        label: Label::ActionWhatsNew,
+        action: Some(Action::WhatsNew),
+    },
 ];
 
 impl CommandSpec {
@@ -489,6 +499,7 @@ pub enum Setting {
     Background(UiBackground),
     PasteNull(PasteNull),
     CompletionDelay(CompletionDelay),
+    WhatsNew(WhatsNewSetting),
     /// `idle_disconnect` (`None`: off).
     IdleDisconnect(Option<Duration>),
     /// `lock_wait` (`None`: off).
@@ -509,6 +520,7 @@ pub enum SettingGroup {
     Clipboard,
     Connections,
     Language,
+    Updates,
     Secrets,
 }
 
@@ -522,6 +534,7 @@ impl SettingGroup {
             SettingGroup::Connections => Label::SettingsGroupConnections,
             SettingGroup::Language => Label::SettingsGroupLanguage,
             SettingGroup::Secrets => Label::SettingsGroupSecrets,
+            SettingGroup::Updates => Label::SettingsGroupUpdates,
         }
     }
 }
@@ -841,6 +854,16 @@ pub const SETTINGS: &[SettingSpec] = &[
             ("100", Setting::CompletionDelay(CompletionDelay::Ms100), Label::SettingCompletionDelayMs),
             ("150", Setting::CompletionDelay(CompletionDelay::Ms150), Label::SettingCompletionDelayMs),
             ("250", Setting::CompletionDelay(CompletionDelay::Ms250), Label::SettingCompletionDelayMs),
+        ]),
+    },
+    SettingSpec {
+        key: "updates.whats_new",
+        label: Label::SettingWhatsNew,
+        about: Label::SettingWhatsNewAbout,
+        group: SettingGroup::Updates,
+        values: Values::Fixed(&[
+            ("on", Setting::WhatsNew(WhatsNewSetting::On), Label::SettingWhatsNewOn),
+            ("off", Setting::WhatsNew(WhatsNewSetting::Off), Label::SettingWhatsNewOff),
         ]),
     },
 ];

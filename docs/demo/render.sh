@@ -46,6 +46,9 @@ for name in "$@"; do
   [ -f "$demo/tapes/$name.tape" ] || { echo "no tape $name" >&2; exit 2; }
   run=$scratch/$name
   mkdir -p "$run/work" "$run/bin" "$run/config/datarig" "$run/state" "$run/data" "$run/tmp"
+  # This version already ran here: What's new does not open over the recording.
+  mkdir -p "$run/state/datarig"
+  echo "seen = \"$("$real" --version | sed 's/^datarig //')\"" > "$run/state/datarig/update.toml"
   sed "s|\"DEMO_CA\"|\"$ca\"|" "$demo/config/config.toml" > "$run/config/datarig/config.toml"
   cp "$demo/tapes/$name.tape" "$demo/tapes/settings.tape" "$run/work/"
   # The tape's `datarig`: the scratch directories are datarig's alone (VHS's browser keeps the

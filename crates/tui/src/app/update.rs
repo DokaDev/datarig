@@ -391,6 +391,7 @@ impl App {
             Ctx::TxSummary => keys.iter().for_each(|k| self.tx_summary_key(k.to_event(), repeat)),
             Ctx::EditPreview => keys.iter().for_each(|k| self.edit_preview_key(k.to_event(), repeat)),
             Ctx::SessionView => keys.iter().for_each(|k| self.session_view_key(k.to_event(), repeat)),
+            Ctx::WhatsNew => keys.iter().for_each(|k| self.whats_new_key(k.to_event(), repeat)),
             Ctx::IconsAsk => keys.iter().for_each(|k| self.icons_ask_key(k.to_event(), repeat)),
             Ctx::ProfileForm => keys.iter().for_each(|k| self.form_key(k.to_event(), repeat)),
             Ctx::Settings => keys.iter().for_each(|k| self.settings_key(k.to_event(), repeat)),

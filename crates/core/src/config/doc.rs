@@ -81,6 +81,7 @@ pub const TABLES: &[TableDoc] = &[
     TableDoc { name: "explorer", header: "[explorer]", about: "The explorer.", alias_of: None },
     TableDoc { name: "ui", header: "[ui]", about: "Things the whole screen shows.", alias_of: None },
     TableDoc { name: "edit", header: "[edit]", about: "Editing a result's rows.", alias_of: None },
+    TableDoc { name: "updates", header: "[updates]", about: "What's new after an update.", alias_of: None },
     TableDoc { name: "secrets", header: "[secrets]", about: "Passwords and the OS keychain.", alias_of: None },
     TableDoc { name: "commands", header: "[commands]", about: "The `:` command line.", alias_of: None },
     TableDoc {
@@ -251,6 +252,8 @@ pub const KEYS: &[KeyDoc] = &[
     key("ui", "background", "\"theme\"", "`\"theme\"`, `\"terminal\"`", ""),
     // [edit]
     key("edit", "paste_null", "\"\\\\N\"", "`\"\\\\N\"`, `\"NULL\"`, `\"none\"`", ""),
+    // [updates]
+    key("updates", "whats_new", "\"on\"", "`\"on\"`, `\"off\"`", ""),
     // [secrets]
     key(
         "secrets",
