@@ -21,7 +21,17 @@ ssh_dir=$(mktemp -d)
 trap 'rm -rf "$ssh_dir"' EXIT
 printf '%s\n' "$TAP_DEPLOY_KEY" > "$ssh_dir/key"
 chmod 600 "$ssh_dir/key"
-curl -fsSL https://api.github.com/meta | jq -r '.ssh_keys[] | "github.com " + .' > "$ssh_dir/known_hosts"
+# With the job's token ($GITHUB_TOKEN) when there is one: unauthenticated calls share one rate
+# limit per runner address and fail with 403 when other jobs used it up. The header goes to curl
+# on its standard input, not on its command line.
+meta() {
+  if [[ -n ${GITHUB_TOKEN:-} ]]; then
+    printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K - https://api.github.com/meta
+  else
+    curl -fsSL https://api.github.com/meta
+  fi
+}
+meta | jq -r '.ssh_keys[] | "github.com " + .' > "$ssh_dir/known_hosts"
 export GIT_SSH_COMMAND="ssh -i $ssh_dir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_dir/known_hosts -o StrictHostKeyChecking=yes"
 
 git clone --depth 1 "git@github.com:$TAP_REPO.git" "$ssh_dir/tap"
