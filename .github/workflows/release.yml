@@ -274,6 +274,8 @@ jobs:
         env:
           TAG: ${{ needs.plan.outputs.tag }}
           TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          # For GitHub's host keys from its API (release-tap.sh): read-only, like the job.
+          GITHUB_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           DRY_RUN: ${{ needs.plan.outputs.publish == 'true' && '0' || '1' }}
         run: |
