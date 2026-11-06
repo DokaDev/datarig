@@ -23,6 +23,7 @@
 - [Explorer](guide/explorer.md)
 - [MySQL](guide/mysql.md)
 - [Themes](guide/themes.md)
+- [Updates](guide/updates.md)
 
 # Reference
 

@@ -128,7 +128,9 @@ nothing is fetched; they are the same as the [What's new](whats-new.md) page.
 In the dialog, `j`/`k` scroll, `Ctrl+D`/`Ctrl+U` half a page, `PageDown`/`PageUp` a page,
 `g`/`G` go to the top or the end, `]`/`[` to the next or previous version, and `Esc` closes.
 `[updates] whats_new = "off"` (also on the settings screen, under Updates, or
-`:set updates.whats_new=off`) stops it from showing by itself; `:whatsnew` still works.
+`:set updates.whats_new=off`) stops it from showing by itself; `:whatsnew` still works. When a
+newer release is out, the start after datarig learnt it shows a notice; see
+[Updates](guide/updates.md).
 
 ## Quit
 

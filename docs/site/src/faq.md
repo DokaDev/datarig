@@ -113,6 +113,15 @@ preset, or directly instead. Pick an existing one in the profile's form.
 Only one instance keeps the workspace (tabs, console buffers) at a time. A second instance
 started while the first runs restores no tabs and writes none of the workspace files.
 
+## Does datarig contact the internet?
+
+Only to check for a newer release: once a day at most, one HTTPS request to `api.github.com`
+with nothing about you, your connections or your databases, through your `HTTPS_PROXY` when one
+is set. Turn it off with `:set updates.check=off` or `DATARIG_NO_UPDATE_CHECK=1`; see
+[Updates](guide/updates.md) for exactly what is sent. What's new comes with the program and needs
+no network. Everything else datarig connects to is what you configure: your databases, and the
+SSH hosts of your tunnels.
+
 ## Where does datarig keep its files?
 
 | What | Where |
@@ -134,8 +143,10 @@ again (with connections or a saved workspace there, the first steps stay done). 
 steps count as done.
 
 `update.toml` keeps the newest version of datarig that ran on this machine, so
-[What's new](getting-started.md#whats-new) shows once after an update. A second datarig open at
-the same time reads it but never writes it.
+[What's new](getting-started.md#whats-new) shows once after an update, and what the
+[update check](guide/updates.md) learnt: when it last asked and how that ended, the latest
+release, a version you skipped and when you last closed the notice. A second datarig open at the
+same time reads it but never writes it.
 
 ## The config file has an `[editor] mode` key
 
