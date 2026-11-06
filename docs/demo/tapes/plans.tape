@@ -1,4 +1,5 @@
-# A query's plan as a tree, with times, then its summary.
+# A query's plan as a tree, with times, then its summary, and three of its other views with the
+# results pane zoomed: an icicle, a flame graph and a treemap.
 Require datarig
 Source settings.tape
 
@@ -41,4 +42,21 @@ Tab
 Sleep 300ms
 Type "2"
 Wait+Screen /Slowest node/
+Sleep 3s
+
+# The same plan in other views (each digit picks one), on the whole screen.
+Type "z"
+Wait+Screen /ZOOM/
+Sleep 500ms
+Type "3"
+Wait+Screen /Plan · Icicle/
+Wait+Screen /HashAggregate \d+%/
+Sleep 2.5s
+Type "4"
+Wait+Screen /Plan · Flame/
+Wait+Screen /\[Flame\]/
+Sleep 2.5s
+Type "7"
+Wait+Screen /Plan · Treemap/
+Wait+Screen /\d+% · [0-9.]+ ms/
 Sleep 3s

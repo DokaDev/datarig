@@ -155,7 +155,14 @@ text it expects on the screen, so a change that moves a screen fails the `Demo` 
 recordings of a branch (they are in the run's `demo` artefact). On a pull request, the `Demo preview`
 workflow then puts the run's stills in one comment (updated in place on each run). The
 render also makes `social.png`, the repository's social preview (uploaded by hand in the
-repository's settings). To record locally, with
+repository's settings).
+
+The site is published only from a stable release tag, so a new tape's recording is online from
+the next stable release on; until then a link to it in the README shows nothing. The `docs site`
+job of CI checks that every `https://dokadev.github.io/datarig/demo/` file the README and the
+site show is made by a tape (`.github/scripts/demo-refs.sh`): `<name>.gif` by
+`docs/demo/tapes/<name>.tape`, `<name>.png` by a tape's `Screenshot <name>.png`. To record
+locally, with
 `vhs`, `ttyd`, `ffmpeg`, JetBrainsMono Nerd Font and Python 3 with Pillow (for `social.png`)
 installed:
 
