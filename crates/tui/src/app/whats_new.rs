@@ -7,8 +7,9 @@
 //! becomes `seen`. A first start shows nothing (nothing is new to a new user), and someone who
 //! used a version from before What's new sees the running version's notes. `[updates]
 //! whats_new = "off"` shows nothing by itself; `seen` still moves on. A second instance, a file
-//! that cannot be read, a config with errors or the first steps of the welcome panel: nothing
-//! shown and nothing written, the next launch decides.
+//! that cannot be read or a config with errors: nothing shown and nothing written, the next launch
+//! decides. While the first steps of the welcome panel show, notes wait for a later launch; a first
+//! start is kept all the same.
 
 use super::App;
 use super::overlay::{Buttons, Overlay, OverlayKind};
@@ -201,7 +202,7 @@ impl App {
     pub(super) fn whats_new_at_launch(&mut self) {
         // The setting is not known with a config that has errors, nor whether this machine ran
         // datarig before with a usage file that cannot be read: the next launch decides.
-        if self.whats_new_paused || self.config_broken || self.tips.unreadable || self.onboarding_shown() {
+        if self.whats_new_paused || self.config_broken || self.tips.unreadable {
             return;
         }
         let cache = Cache::load(&self.paths);
@@ -209,6 +210,12 @@ impl App {
         let existing = self.tips.existed || self.tips.usage.onboarding_done;
         let on = self.prefs.whats_new == WhatsNewSetting::On;
         let plan = update::whats_new(&cache, &running, existing, on, !self.read_only);
+        // The welcome panel's first steps come first: notes to show wait for a later launch
+        // (nothing written). A first start is still kept, else the next launch would take this
+        // install for one from before What's new.
+        if plan.show.is_some() && self.onboarding_shown() {
+            return;
+        }
         if let (Some(seen), Cache::Known(path, state)) = (plan.seen, &cache) {
             let mut state = (**state).clone();
             state.seen = Some(seen);

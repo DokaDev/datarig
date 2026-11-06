@@ -297,3 +297,33 @@ fn the_first_steps_come_first_and_a_paused_launch_writes_nothing() {
     assert!(app.overlays.whats_new().is_none());
     assert!(!s.update().exists());
 }
+
+/// Launched with tips on (the first steps can show), at `state`.
+fn launch_with_tips(cfg: &Config, state: &State) -> Harness {
+    let (mut app, clock) = new_app_with_clock(cfg, Lang::En);
+    app.whats_new_paused = false;
+    app.tips.paused = false;
+    let store = Arc::new(MemoryStore::new());
+    app.set_secret_store(store.clone() as Arc<dyn SecretStore>);
+    app.set_paths(Paths { data: None, state: Some(state.0.clone()) });
+    let mut h = Harness { app, cancelled: Default::default(), driver: FakeDriver::default(), store, clock };
+    h.app.launch(Startup::Normal);
+    h
+}
+
+#[test]
+fn a_new_install_that_starts_on_the_first_steps_is_not_taken_for_an_update_later() {
+    // A first start with tips on: the welcome panel's first steps show, and the running version
+    // is kept all the same, so this install is never taken for one from before What's new.
+    let s = State::new("fresh-steps");
+    let mut h = launch_with_tips(&no_profiles(), &s);
+    assert!(h.app.onboarding_shown());
+    assert_eq!(shown(&h), None);
+    assert_eq!(s.seen(), Some(running()));
+    // The first steps are put away; the next start of the same version shows nothing.
+    h.app.dispatch(datarig_tui::app::action::Action::DismissOnboarding);
+    drop(h);
+    let h = launch_with_tips(&no_profiles(), &s);
+    assert!(!h.app.onboarding_shown());
+    assert_eq!(shown(&h), None);
+}
