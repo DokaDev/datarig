@@ -2,47 +2,79 @@
 
 [![CI](https://github.com/DokaDev/datarig/actions/workflows/ci.yml/badge.svg)](https://github.com/DokaDev/datarig/actions/workflows/ci.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/DokaDev/datarig)
+[![Release](https://img.shields.io/github/v/release/DokaDev/datarig)](https://github.com/DokaDev/datarig/releases/latest)
+[![Homebrew](https://img.shields.io/badge/brew-dokadev%2Ftap%2Fdatarig-orange)](https://github.com/DokaDev/homebrew-tap)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+[![Docs](https://img.shields.io/badge/docs-dokadev.github.io%2Fdatarig-informational)](https://dokadev.github.io/datarig/)
 
 A full-featured database client that lives in your terminal — light, fast, and safe by default.
 
-datarig is written in Rust with [Ratatui](https://ratatui.rs). It keeps several connections
-open side by side, each with its own tabs, a schema explorer, a SQL editor with vim keys and a
-results grid that pages through large results explicitly instead of loading them whole. A
-result of one table can be [edited in the grid](https://dokadev.github.io/datarig/guide/editing.html):
-changes stay pending until a preview of their statements applies them. It is careful by default: dangerous statements ask first, and read-only profiles are checked before
-anything is sent and, on PostgreSQL, also enforced by the server.
+![Editing a table in datarig: a cell is changed, the Changes tab shows the exact SQL, and Apply asks first](https://dokadev.github.io/datarig/demo/hero.gif)
 
-**Documentation: <https://dokadev.github.io/datarig/>**
+```sh
+brew install dokadev/tap/datarig
+# or from source, with Rust 1.93 and libclang:
+git clone https://github.com/DokaDev/datarig && cd datarig && cargo install --locked --path crates/tui
+```
+
+Archives for macOS, Linux and Windows are on
+[GitHub Releases](https://github.com/DokaDev/datarig/releases); details in
+[Install](https://dokadev.github.io/datarig/install.html). **Documentation: <https://dokadev.github.io/datarig/>**
+
+## Why datarig
+
+- **Safe by default.** Changes made in the grid stay pending until you have read the exact
+  statements they run. Dangerous statements ask first. A read-only profile refuses writes before
+  anything is sent, and on PostgreSQL the server enforces it too.
+- **Full-featured.** PostgreSQL and MySQL, several connections side by side with their own tabs,
+  a schema explorer, a SQL editor with vim keys and completion, a results grid with search,
+  editing, export and charts, query plans in several views, SSH tunnels, TLS and poolers.
+- **Light and fast.** One native binary. Results are paged explicitly instead of loaded whole,
+  and paging leaves no transaction, lock or snapshot open on the server. CI holds memory,
+  latency and startup time to [budgets](https://github.com/DokaDev/datarig/blob/main/docs/perf.md).
+- **Keyboard first.** Vim keys throughout; press `Space` and wait to see what can follow. The
+  mouse works too.
+
+## Features
+
+**Edit data and see the SQL first.** Change cells, add rows, mark rows to delete; the Changes
+tab lists every pending change and the exact statements, and Apply runs them in one
+transaction (the recording above). [Editing data](https://dokadev.github.io/datarig/guide/editing.html)
+
+**Read a query plan.** EXPLAIN and EXPLAIN ANALYZE as a tree with each node's share of the
+time, a summary of what to look at first, and more views (icicle, flame graph, timeline, ...).
+[Plans](https://dokadev.github.io/datarig/guide/plans.html)
+
+![A plan as a tree, then its summary](https://dokadev.github.io/datarig/demo/plans.gif)
+
+**Search a result and move across wide tables.** Search every fetched row, jump from match to
+match, and move across columns while the row numbers stay in place.
+[Results](https://dokadev.github.io/datarig/guide/results.html)
+
+![Searching a wide result and moving across its columns](https://dokadev.github.io/datarig/demo/search.gif)
+
+**Know where you are.** Profiles carry icons, and their environment's color and mark (PROD,
+STG or your own) follow them onto their tabs and the status line; a read-only environment
+refuses a write before it is sent. [Environments and safety](https://dokadev.github.io/datarig/guide/environments.html)
+
+![Profiles with icons and environment marks, and a write refused on a read-only profile](https://dokadev.github.io/datarig/demo/environments.gif)
+
+**Themes.** Built-in themes, light and dark, or your own in a file.
+[Themes](https://dokadev.github.io/datarig/guide/themes.html)
+
+![The same screen in four built-in themes](https://dokadev.github.io/datarig/demo/themes.gif)
 
 ## Status
 
 **Early, pre-1.0.** Releases have binaries for macOS, Linux and Windows and a Homebrew formula.
 **PostgreSQL** is implemented (a table's structure, its DDL and the key marks need
 PostgreSQL 12 or newer), and **MySQL** in part (see
-[MySQL](https://dokadev.github.io/datarig/guide/mysql.html) for what it supports). The configuration format, key bindings and behaviour may still change between releases.
+[MySQL](https://dokadev.github.io/datarig/guide/mysql.html) for what it supports). The
+configuration format, key bindings and behaviour may still change between releases.
 
 Platforms: developed and tested on macOS; CI runs the full test suite on Linux. On Windows CI
 builds datarig, lints it and runs the tests that need no database, but running datarig there is
 untested.
-
-## Install
-
-```sh
-brew install dokadev/tap/datarig
-```
-
-Or download an archive for macOS, Linux or Windows from
-[GitHub Releases](https://github.com/DokaDev/datarig/releases) (`SHA256SUMS` lists their
-checksums), or build from source with Rust 1.93 and libclang:
-
-```sh
-git clone https://github.com/DokaDev/datarig
-cd datarig
-cargo install --locked --path crates/tui
-```
-
-Details: [Install](https://dokadev.github.io/datarig/install.html). A terminal of at least
-80×24 is required; a Nerd Font is optional.
 
 ## Quick start
 
@@ -55,7 +87,6 @@ Paste a URL such as `postgres://me@127.0.0.1:5432/app` into the new-connection f
 `Ctrl+O` picks a connection, `Ctrl+E` runs the statement under the cursor, `Ctrl+C` cancels,
 `:q` closes a tab and `:qa` quits. Press `Space` and wait to see what follows, or `F1` for the
 keyboard help. Next: [Getting started](https://dokadev.github.io/datarig/getting-started.html).
-
 
 ## Development
 
