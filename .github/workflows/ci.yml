@@ -65,7 +65,8 @@ jobs:
   # other jobs: the release gate wants each one to succeed. The generated pages and screens are
   # compared with their sources by the `test` jobs (tests/*_doc.rs, tests/book_*.rs). Also the
   # tests of the docs rule of pull requests (docs-rule.yml), of scripts/changes.sh and of
-  # .github/scripts/code-changed.sh, and the public text style (scripts/text-style.py).
+  # .github/scripts/code-changed.sh, the public text style (scripts/text-style.py), and that
+  # every demo recording the pages show is made by a tape (.github/scripts/demo-refs.sh).
   docs:
     name: docs site
     runs-on: ubuntu-latest
@@ -81,6 +82,9 @@ jobs:
         run: |
           python3 scripts/text-style.py
           bash .github/scripts/tests/text-style-test.sh
+      # Every recording the README and the site show is one a tape makes.
+      - name: Demo recordings named in the pages
+        run: bash .github/scripts/demo-refs.sh
       - name: Tests of docs-rule.sh, changes.sh and code-changed.sh
         run: |
           bash .github/scripts/tests/docs-rule-test.sh

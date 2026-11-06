@@ -44,16 +44,23 @@ type; Tab or Enter takes one. [Editor](https://dokadev.github.io/datarig/guide/e
 ![Completing a table and the columns of an alias in the editor](https://dokadev.github.io/datarig/demo/completion.gif)
 
 **Read a query plan.** EXPLAIN and EXPLAIN ANALYZE as a tree with each node's share of the
-time, a summary of what to look at first, and more views (icicle, flame graph, timeline, ...).
+time, a summary of what to look at first, and more views of the same plan: an icicle, a flame
+graph, a treemap, a timeline, the row flow and more.
 [Plans](https://dokadev.github.io/datarig/guide/plans.html)
 
-![A plan as a tree, then its summary](https://dokadev.github.io/datarig/demo/plans.gif)
+![A plan as a tree, its summary, then as an icicle, a flame graph and a treemap](https://dokadev.github.io/datarig/demo/plans.gif)
 
 **Search a result and move across wide tables.** Search every fetched row, jump from match to
 match, and move across columns while the row numbers stay in place.
 [Results](https://dokadev.github.io/datarig/guide/results.html)
 
 ![Searching a wide result and moving across its columns](https://dokadev.github.io/datarig/demo/search.gif)
+
+**Chart a result.** The fetched rows as bars, horizontal bars or lines: a text column splits
+the values into series, and a cursor shows the exact values of each point. Nothing runs again.
+[Charts](https://dokadev.github.io/datarig/guide/charts.html)
+
+![Revenue per month and product category as lines with a cursor on one month, then as bars](https://dokadev.github.io/datarig/demo/charts.gif)
 
 **Know where you are.** Profiles carry icons, and their environment's colour and mark (PROD,
 STG or your own) follow them onto their tabs and the status line; a read-only environment
