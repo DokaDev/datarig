@@ -68,4 +68,7 @@ config file is copied to `config.toml.v1.bak` before it is upgraded. A release c
 (`vX.Y.0-rc.N`), when there is one, is a GitHub pre-release only. The Homebrew tap installs
 stable releases.
 
-See [What's new](whats-new.md) for the changes in each release.
+See [What's new](whats-new.md) for the changes in each release. When a newer release is out,
+datarig says so at its next start, with how to update your install (the Homebrew command, the
+commands for a build from the source, or the download page); see [Updates](guide/updates.md),
+which also says how to turn the check off.
