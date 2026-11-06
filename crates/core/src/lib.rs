@@ -13,6 +13,8 @@
 //!   lock.
 //! * [`usage`] — how often actions ran by key, menu and command line (`usage.toml`), for tips.
 //! * [`shown`] — the notices shown once (`shown.toml`), as opaque ids.
+//! * [`update`]: the update check's facts (`update.toml`) and decisions, and the release notes
+//!   of What's new.
 //! * [`results`] — the rows of a result: a window in memory, the rest in a spill file.
 //! * [`chart`] — a result's rows as the numbers of a chart (columns, axes, sums).
 //! * [`export`] — result rows as TSV, CSV, JSON, a Markdown table or SQL INSERT statements.
@@ -45,5 +47,6 @@ pub mod sql;
 pub mod theme;
 pub mod tls;
 pub mod transport;
+pub mod update;
 pub mod usage;
 pub mod workspace;

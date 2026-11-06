@@ -15,6 +15,8 @@ publish.workspace = true
 # No UI crates (ratatui/crossterm) and no concrete drivers here.
 [dependencies]
 bytes.workspace = true
+# The update check's times (`update.toml`). Already in the tree through the drivers and the UI.
+chrono.workspace = true
 futures.workspace = true
 keyring.workspace = true
 parquet.workspace = true
