@@ -13,6 +13,25 @@ Wait+Screen /Connected to acme-staging/
 Wait+Screen /store/
 Type "jjj"
 Type "l"
+Wait+Screen /products/
+Type "jjjjj"
+Enter
+Wait+Screen /acme\.store\.products/
+Wait+Screen /SKU-0001/
+Tab
+Wait+Screen /Enter view cell/
+Show
+
+Sleep 1s
+Space
+Type ","
+Wait+Screen /Settings/
+Wait+Screen /Theme\s+‹ tokyo-night\s+›/
+Sleep 800ms
+# The cursor starts on the first row; the Theme row is the third.
+Type "jj"
+Sleep 900ms
+Type "l"
 Wait+Screen /Theme\s+‹ tokyo-night-day\s+›/
 Sleep 1.1s
 Type "l"
