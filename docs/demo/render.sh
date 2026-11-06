@@ -55,7 +55,7 @@ for name in "$@"; do
   # usual ones, where it finds the font).
   cat > "$run/bin/datarig" <<WRAPPER
 #!/bin/sh
-export DATARIG_SECRET_STORE=memory DATARIG_DEMO_PASSWORD=demo
+export DATARIG_SECRET_STORE=memory DATARIG_DEMO_PASSWORD=demo DATARIG_NO_UPDATE_CHECK=1
 export XDG_CONFIG_HOME='$run/config' XDG_STATE_HOME='$run/state' XDG_DATA_HOME='$run/data' TMPDIR='$run/tmp'
 unset DATARIG_STATE_DIR DATARIG_DATA_DIR TMUX
 exec '$real' "\$@"

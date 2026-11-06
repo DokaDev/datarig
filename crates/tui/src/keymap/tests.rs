@@ -143,6 +143,8 @@ fn default_table_is_conflict_free() {
         "ddl.copy",
         // `:whatsnew`; once by itself after an update.
         "app.whats_new",
+        // `:update`; the notice comes by itself at launch.
+        "app.update",
     ];
     for s in action::REGISTRY {
         let bound = km.bindings().iter().any(|b| b.target == Target::Action(s.action));

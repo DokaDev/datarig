@@ -28,6 +28,12 @@ environment:
 
 | Variable | What it does |
 |---|---|
+| `DATARIG_NO_UPDATE_CHECK` | Any value (but an empty one): no update check in this process, whatever `[updates] check` says. Nothing is sent to GitHub. |
+| `CI` | Set (not empty): no update check, as on a CI service. |
+| `HTTPS_PROXY` | The HTTP proxy of the update check (`http://[user:password@]host:port`, or without `http://`); `https_proxy` when it is not set. Any other kind of proxy: no check, never a direct connection. |
+| `ALL_PROXY` | As `HTTPS_PROXY`, when neither it nor `https_proxy` is set; `all_proxy` when it is not set. |
+| `NO_PROXY` | Host names (with their subdomains) the update check reaches without the proxy, separated by commas; `*` for every host. `no_proxy` when it is not set. |
+| `CARGO_HOME` | Cargo's home (else `.cargo` in the home directory): a datarig in its `bin` was built from the source, and the update notice names the commands for that. |
 | `DATARIG_SECRET_STORE` | `memory` keeps passwords in memory only: the OS keychain and the secrets file are never touched. `keychain`, or unset (or empty): the profiles' own password stores. Any other value is an error and datarig does not start. |
 | `XDG_CONFIG_HOME` | The config file is `$XDG_CONFIG_HOME/datarig/config.toml` when it is set (and `--config` is not given). |
 | `HOME` | The home directory: the config file is `~/.config/datarig/config.toml` without `XDG_CONFIG_HOME`, the data and state directories default to places under it, and `~` in an SSH key file is it. |

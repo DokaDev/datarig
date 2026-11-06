@@ -102,6 +102,8 @@ pub enum Action {
     HelpAll,
     /// What's new: the release notes this build carries (`:whatsnew`).
     WhatsNew,
+    /// What the update check knows (`:update`): the notice, or a line.
+    UpdateStatus,
     /// Result grid -> editor.
     PaneBack,
     /// The focused pane takes the whole workspace, or back (tmux's zoom).
@@ -733,6 +735,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Help, "help.context", Label::ActionHelpContext, help_available),
     act(Action::HelpAll, "help.all", Label::ActionHelpAll, help_available),
     act(Action::WhatsNew, "app.whats_new", Label::ActionWhatsNew, anywhere),
+    act(Action::UpdateStatus, "app.update", Label::ActionUpdate, anywhere),
     act(Action::DismissOnboarding, "tips.dismiss_onboarding", Label::ActionTipsDismissOnboarding, onboarding_open),
     act(Action::PaneBack, "pane.back", Label::ActionPaneBack, results_focused),
     act(Action::Zoom, "pane.zoom", Label::ActionPaneZoom, zoomable),

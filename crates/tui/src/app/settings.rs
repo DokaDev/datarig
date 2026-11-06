@@ -93,6 +93,7 @@ impl App {
             Setting::Background(b) => *b == self.prefs.background,
             Setting::PasteNull(n) => *n == self.prefs.paste_null,
             Setting::WhatsNew(w) => *w == self.prefs.whats_new,
+            Setting::UpdateCheck(c) => *c == self.prefs.update_check,
             Setting::IdleDisconnect(d) => *d == self.prefs.idle_disconnect,
             Setting::LockWait(d) => *d == self.prefs.lock_wait,
         };

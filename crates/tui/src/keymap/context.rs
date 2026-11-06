@@ -75,6 +75,7 @@ pub enum Ctx {
     EditPreview,
     SessionView,
     WhatsNew,
+    UpdateNotice,
     IconsAsk,
     Busy,
     CellViewer,
@@ -87,7 +88,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 48] = [
+    pub const ALL: [Ctx; 49] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -127,6 +128,7 @@ impl Ctx {
         Ctx::EditPreview,
         Ctx::SessionView,
         Ctx::WhatsNew,
+        Ctx::UpdateNotice,
         Ctx::IconsAsk,
         Ctx::Busy,
         Ctx::CellViewer,
@@ -180,6 +182,7 @@ impl Ctx {
             Ctx::EditPreview => "overlay.edit_preview",
             Ctx::SessionView => "overlay.session_view",
             Ctx::WhatsNew => "overlay.whats_new",
+            Ctx::UpdateNotice => "overlay.update_notice",
             Ctx::IconsAsk => "overlay.icons_ask",
             Ctx::Busy => "overlay.busy",
             Ctx::CellViewer => "overlay.cell_viewer",
@@ -369,6 +372,9 @@ impl Ctx {
             Ctx::WhatsNew => {
                 "The release notes this build carries (`:whatsnew`; once by itself after an update, unless `[updates] whats_new = \"off\"`), newest version first: `j`/`k` scroll a row, `Ctrl+D`/`Ctrl+U` half a page, `PageDown`/`Space`/`PageUp` a page, `g`/`G` to the top or the end, `]`/`[` to the next or previous version, `Esc`, `q` or `Enter` closes; the wheel scrolls and a click on Close closes."
             }
+            Ctx::UpdateNotice => {
+                "A newer release is out (at launch, from the last check; or `:update`): the version, the command that updates this install, and how to turn the checks off. Close has the focus: `Enter` presses the focused button, `Esc` or `q` closes (told again after a week), `s` skips this version, `o` turns the checks off (`[updates] check = \"off\"`); `Tab`, the arrows and `h`/`l` move the focus; a click on a button does what its key does."
+            }
             Ctx::IconsAsk => {
                 "Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus; a click on Yes or No answers."
             }
@@ -433,6 +439,7 @@ impl Ctx {
             Ctx::EditPreview => Label::KeyctxOverlayEditPreview,
             Ctx::SessionView => Label::KeyctxOverlaySessionView,
             Ctx::WhatsNew => Label::KeyctxOverlayWhatsNew,
+            Ctx::UpdateNotice => Label::KeyctxOverlayUpdateNotice,
             Ctx::IconsAsk => Label::KeyctxOverlayIconsAsk,
             Ctx::Busy => Label::KeyctxOverlayBusy,
             Ctx::CellViewer => Label::KeyctxOverlayCellViewer,

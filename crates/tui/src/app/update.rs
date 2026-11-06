@@ -188,6 +188,7 @@ impl App {
             AppEvent::GridSearch(a) => self.on_grid_search_answer(a),
             AppEvent::GridSummary(a) => self.on_grid_summary(a),
             AppEvent::Clipboard(a) => self.on_clipboard_answer(a),
+            AppEvent::UpdateChecked(a) => self.update_answered(a),
         }
         // What an open quick connect list waits for may have arrived.
         if self.overlays.quick().is_some() {
@@ -392,6 +393,7 @@ impl App {
             Ctx::EditPreview => keys.iter().for_each(|k| self.edit_preview_key(k.to_event(), repeat)),
             Ctx::SessionView => keys.iter().for_each(|k| self.session_view_key(k.to_event(), repeat)),
             Ctx::WhatsNew => keys.iter().for_each(|k| self.whats_new_key(k.to_event(), repeat)),
+            Ctx::UpdateNotice => keys.iter().for_each(|k| self.update_notice_key(k.to_event(), repeat)),
             Ctx::IconsAsk => keys.iter().for_each(|k| self.icons_ask_key(k.to_event(), repeat)),
             Ctx::ProfileForm => keys.iter().for_each(|k| self.form_key(k.to_event(), repeat)),
             Ctx::Settings => keys.iter().for_each(|k| self.settings_key(k.to_event(), repeat)),

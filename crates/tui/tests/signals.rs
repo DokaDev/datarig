@@ -145,6 +145,7 @@ fn start(dir: &Path, out: &Path, own_session: bool, env: &[(&str, String)]) -> O
         cmd.args(["-q", "-F"]).arg(out).arg(bin).arg("--config").arg(&config);
     }
     cmd.env("DATARIG_SECRET_STORE", "memory")
+        .env("DATARIG_NO_UPDATE_CHECK", "1")
         .env("XDG_CONFIG_HOME", dir.join("config"))
         .env("XDG_DATA_HOME", dir.join("data"))
         .env("XDG_STATE_HOME", dir.join("state"))

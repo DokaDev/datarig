@@ -1084,6 +1084,7 @@ dependencies = [
  "datarig-driver-mysql",
  "datarig-driver-postgres",
  "datarig-ssh",
+ "datarig-update",
  "futures",
  "insta",
  "log",
