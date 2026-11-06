@@ -105,6 +105,7 @@ keyboard help. Next: [Getting started](https://dokadev.github.io/datarig/getting
 | `crates/core` | UI-free core: driver interface, SQL tooling and the safety classifier, profiles, secrets, config, i18n |
 | `crates/drivers/postgres`, `crates/drivers/mysql` | the database drivers |
 | `crates/ssh`, `crates/tls` | SSH tunnels, TLS (rustls) |
+| `crates/update` | the update check's HTTPS request to GitHub |
 | `crates/tui` | the terminal UI and the `datarig` binary |
 | `crates/bench` | benchmarks and the CI performance budgets |
 | `locales/` | the UI text catalogs (`en.toml`, `ko.toml`) |
