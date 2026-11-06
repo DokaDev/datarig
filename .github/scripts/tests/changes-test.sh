@@ -20,7 +20,7 @@ setup() {
 
 The changes of each release, newest first.
 
-## 0.36.0 — 2026-10-01
+## 0.36.0 (2026-10-01)
 
 - Contextual tips.
 EOF
@@ -73,7 +73,7 @@ expect_out "release writes the groups in order, below the intro" "# What's new
 
 The changes of each release, newest first.
 
-## 0.37.0 — $today
+## 0.37.0 ($today)
 
 ### Added
 
@@ -89,7 +89,7 @@ The changes of each release, newest first.
 
 - TLS 1.0 is refused.
 
-## 0.36.0 — 2026-10-01
+## 0.36.0 (2026-10-01)
 
 - Contextual tips." cat "$case_dir/docs/site/src/whats-new.md"
 if [[ -z $(find "$case_dir/changes" -type f ! -name README.md) && ! -d $case_dir/changes/added ]]; then
@@ -137,7 +137,7 @@ expect_out "a note above the groups" "The config changes.
 ### Changed
 
 - The config format of [ui] changed: rename \`x\` to \`y\`." run notes 0.37.0
-printf '\n## 0.36.5-rc.1 — 2026-09-01\n\n- Candidate.\n' >> "$case_dir/docs/site/src/whats-new.md"
+printf '\n## 0.36.5-rc.1 (2026-09-01)\n\n- Candidate.\n' >> "$case_dir/docs/site/src/whats-new.md"
 expect_fail "an rc heading is not the 0.36.5 section" 'no "## 0.36.5" section' run notes 0.36.5
 expect_out "notes of a hand-written rc section" "- Candidate." run notes 0.36.5-rc.1
 
@@ -184,7 +184,7 @@ expect_out "release appends to a page without sections" "# What's new
 
 Nothing released yet.
 
-## 0.1.0 — $today
+## 0.1.0 ($today)
 
 ### Added
 
@@ -212,7 +212,7 @@ expect_out "a heading of the version alone" "- Old." run notes 0.35.0
 setup large
 # Over 1 MB of older sections after the one asked for: nothing may stop reading early.
 {
-  for i in $(seq 1 20000); do printf '## 0.0.%d — 2020-01-01\n\n- Old entry %d with some text to make it longer.\n\n' "$i" "$i"; done
+  for i in $(seq 1 20000); do printf '## 0.0.%d (2020-01-01)\n\n- Old entry %d with some text to make it longer.\n\n' "$i" "$i"; done
 } >> "$case_dir/docs/site/src/whats-new.md"
 fragment fixed/big.md $'- A fix.\n'
 run release 0.37.0 2>/dev/null
@@ -223,7 +223,7 @@ expect_out "notes of a section deep in a page over 1 MB" "- Old entry 19999 with
 expect_fail "check of an unmatched glob" 'no fragments match' run check 'changes/*/*.md'
 
 setup empty-section
-printf '\n## 0.36.1 — 2026-10-02\n\n' >> "$case_dir/docs/site/src/whats-new.md"
+printf '\n## 0.36.1 (2026-10-02)\n\n' >> "$case_dir/docs/site/src/whats-new.md"
 expect_fail "notes refuses an empty section" 'is empty' run notes 0.36.1
 
 if [[ $failures -gt 0 ]]; then

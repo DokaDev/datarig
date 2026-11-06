@@ -180,7 +180,7 @@ fn the_spill_limit_stops_fetching_and_says_so() {
     assert!(status.contains("temporary file reached its limit of 64 KB"), "{status}");
     let screen = h.screen(160, 45);
     assert!(
-        screen.contains(" · fetching stopped) ›") && screen.contains("fetching stopped — narrow the query"),
+        screen.contains(" · fetching stopped) ›") && screen.contains("fetching stopped: narrow the query"),
         "{screen}"
     );
     // Paging keys at the end fetch nothing and say why.

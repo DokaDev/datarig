@@ -1,4 +1,4 @@
-# datarig — English message catalog (the source of truth for keys)
+# datarig: English message catalog (the source of truth for keys)
 # Placeholders use {name}. crates/core/build.rs checks and embeds this file.
 # Text that is not English (the Korean input-source mark) is written with \u escapes.
 
@@ -74,7 +74,7 @@
 "query.queued_failed" = "Not run: this statement waited for {name}, which did not connect"
 
 "status.tx_open" = "TX open"
-"status.tx_aborted" = "TX aborted — ROLLBACK required"
+"status.tx_aborted" = "TX aborted: ROLLBACK required"
 "status.mode.normal" = "NORMAL"
 "status.mode.insert" = "INSERT"
 "status.mode.visual" = "VISUAL"
@@ -87,13 +87,13 @@
 "results.running" = "Running… the result shows here when it comes."
 "results.null" = "NULL"
 "results.not_read" = "(not read)"
-"results.paging_stopped" = { one = "Showing {count} row · fetching stopped — narrow the query to see more", other = "Showing {count} rows · fetching stopped — narrow the query to see more" }
+"results.paging_stopped" = { one = "Showing {count} row · fetching stopped: narrow the query to see more", other = "Showing {count} rows · fetching stopped: narrow the query to see more" }
 "results.spill_capped" = { one = "Stopped at {count} row: the result's temporary file reached its limit of {limit}", other = "Stopped at {count} rows: the result's temporary file reached its limit of {limit}" }
 "results.spill_failed" = "Stopped fetching: the result's temporary file could not be written ({error})"
 "results.read_failed" = "Could not read the result's rows from its temporary file ({error})"
-"results.paging_closed" = { one = "Showing {count} row · paging closed after idle — re-run to load more", other = "Showing {count} rows · paging closed after idle — re-run to load more" }
+"results.paging_closed" = { one = "Showing {count} row · paging closed after idle: re-run to load more", other = "Showing {count} rows · paging closed after idle: re-run to load more" }
 
-"cell.viewer.title" = "Cell value — {column}"
+"cell.viewer.title" = "Cell value: {column}"
 "cell.viewer.close" = "Esc to close"
 
 "complete.kind.schema" = "schema"
@@ -139,7 +139,7 @@
 "command.set" = "Change a setting"
 "setting.language" = "UI language"
 "setting.icons" = "Nerd Font icons"
-"setting.icons.help" = "Needs a Nerd Font as the terminal font. Preview: {preview} — if these look like □ or ?, turn icons off or install a font from nerdfonts.com. auto: not decided yet (asks again)."
+"setting.icons.help" = "Needs a Nerd Font as the terminal font. Preview: {preview}. If these look like □ or ?, turn icons off or install a font from nerdfonts.com. auto: not decided yet (asks again)."
 
 "action.query.execute_current" = "Run statement under cursor"
 "action.query.cancel" = "Cancel running query"
@@ -296,7 +296,7 @@
 "profiles.saved" = "Saved {name}"
 
 "form.title.new" = "New connection"
-"form.title.edit" = "Edit connection — {name}"
+"form.title.edit" = "Edit connection: {name}"
 "form.field.name" = "Name"
 "form.field.host" = "Host"
 "form.field.port" = "Port"
@@ -366,9 +366,9 @@
 "prompt.password.keys_session" = "Enter connect · Esc cancel (not saved)"
 
 "prompt.password.save" = "Save to OS keychain (Space)"
-"prompt.password.save_unavailable" = "Keychain unavailable — kept for this session only"
+"prompt.password.save_unavailable" = "Keychain unavailable: kept for this session only"
 "prompt.password.missing" = "No saved password for this profile"
-"prompt.password.no_keychain" = "Keychain unavailable — enter the password"
+"prompt.password.no_keychain" = "Keychain unavailable: enter the password"
 "secret.saved" = "Saved the password for {name} to the OS keychain"
 
 "conn.timeout" = "Connection failed: no answer within {elapsed}"
@@ -564,7 +564,7 @@
 "hint.stop_typing" = "stop typing"
 "help.vim.type" = "Start typing (Insert mode)"
 "help.vim.stop_typing" = "Stop typing, back to the vim keys (Normal mode)"
-"help.title" = "Keys — {context}"
+"help.title" = "Keys: {context}"
 "help.keys" = "↑↓ move · Enter run/open · l/h open/close · Esc close"
 "help.filter.placeholder" = "/ search all keys · Esc close"
 "help.filter.none" = "No keys match “{query}”"
@@ -647,7 +647,7 @@
 "prompt.password.keys_file" = "Enter connect · Tab save option · Esc cancel"
 "prompt.password.keys_test" = "Enter test · Esc cancel"
 "prompt.password.every_time" = "This profile asks for its password on every connect"
-"prompt.password.not_saved" = "Asked on every connect — never saved"
+"prompt.password.not_saved" = "Asked on every connect, never saved"
 "conn.reading_keychain" = "Reading the password of {name} from the keychain… ({key} cancels)"
 "prompt.password.keychain_no_answer" = "The keychain did not answer. Enter the password (kept for this session)"
 "prompt.password.keychain_no_answer_remote" = "The keychain did not answer. SSH session: run `security unlock-keychain` first, or type the password"
@@ -739,7 +739,7 @@
 "tab_list.kind.table" = "table"
 "tab_list.kind.ddl" = "DDL"
 "welcome.title" = "Welcome"
-"welcome.tagline" = "Dive into any database — right from your terminal."
+"welcome.tagline" = "Dive into any database, right from your terminal."
 "welcome.empty" = "No connection profiles yet."
 "welcome.new" = "New connection"
 "welcome.help" = "Keyboard help"
@@ -813,7 +813,7 @@
 "form.key_retrieval.hint" = "lets a direct login ask the server for its key"
 "form.unencrypted.short" = "not encrypted: use TLS or SSH"
 "form.unencrypted" = "This connection is not encrypted (SSL mode off): the password exchange and all data can be read on the network. Turn TLS on (Advanced) or connect through an SSH tunnel."
-"form.field.color" = "Color"
+"form.field.color" = "Colour"
 "form.field.icon" = "Icon"
 "form.field.folder" = "Folder"
 "form.driver.unsupported" = "not yet supported"
@@ -917,7 +917,7 @@
 "validate.script_into_itself" = "a folder cannot move into itself"
 "validate.script_unreadable" = "a folder on this path can't be read, so datarig can't tell whether the name is taken; nothing was written"
 "scripts.no_data_dir" = "Saved queries need a data directory (set DATARIG_DATA_DIR)"
-"scripts.none" = "No saved queries yet — {key} in a console saves one"
+"scripts.none" = "No saved queries yet: {key} in a console saves one"
 "scripts.saved" = "Saved {name}"
 "scripts.save_failed" = "Not saved: {error}"
 "scripts.write_quit_failed" = "Not saved: {error}; the tab stays open"
@@ -1082,7 +1082,7 @@
 "setting.copy_header.off" = "Never"
 "setting.changed" = "{name}: {value}"
 "setting.language.about" = "The language of the whole UI; English unless set. Auto follows LC_ALL, LC_MESSAGES or LANG. Data and database messages are never translated."
-"setting.icons.about" = "Nerd Font glyphs for connections, key columns and marks. Needs a Nerd Font as the terminal font. Auto: not decided yet — text marks until you answer the question with a preview (choosing auto asks again)."
+"setting.icons.about" = "Nerd Font glyphs for connections, key columns and marks. Needs a Nerd Font as the terminal font. Auto: not decided yet, so text marks until you answer the question with a preview (choosing auto asks again)."
 "setting.icons.preview" = "Preview: {preview}"
 "setting.icons.preview_hint" = "If these show as □ or ?, your terminal font lacks Nerd Font glyphs: turn icons off, or install one from nerdfonts.com."
 "setting.default_source.about" = "Where a new profile keeps its password. Auto uses the OS keychain when it works, else asks on every connect."
@@ -1243,8 +1243,8 @@
 "setting.completion_delay.about" = "How long the completion popup waits after the last key typed in Insert mode before it opens by itself (once a name has 2 characters, after a dot or an opening quote). Nothing opens before it; the completion key (editor.complete) opens the popup at once whatever the delay."
 "setting.completion_delay.ms" = "Opens once no key came for this many milliseconds"
 "setting.completion_delay.now" = "No wait: opens with the key that calls for it"
-"setting.size_heat" = "Explorer: size colors"
-"setting.size_heat.about" = "Whether, and in how many levels, the explorer colors the estimates of the largest tables of each schema: the largest tenth by size (one at least). 3 levels: amber from 1 MiB, red from 1 GiB. 5 levels: yellow from 1 MiB, amber from 100 MiB, orange from 1 GiB, red from 10 GiB. Only the estimates already read are used; nothing more is asked of the server."
+"setting.size_heat" = "Explorer: size colours"
+"setting.size_heat.about" = "Whether, and in how many levels, the explorer colours the estimates of the largest tables of each schema: the largest tenth by size (one at least). 3 levels: amber from 1 MiB, red from 1 GiB. 5 levels: yellow from 1 MiB, amber from 100 MiB, orange from 1 GiB, red from 10 GiB. Only the estimates already read are used; nothing more is asked of the server."
 "setting.size_heat.three" = "3 levels: amber from 1 MiB, red from 1 GiB"
 "setting.size_heat.five" = "5 levels: yellow, amber from 100 MiB, orange from 1 GiB, red from 10 GiB"
 "setting.size_heat.off" = "Off, every estimate is dim"
@@ -1371,7 +1371,7 @@
 "connbar.tls_ca" = "CA only"
 "connbar.tls_unverified" = "not verified"
 "connbar.plain" = "unencrypted"
-"table.not_loaded" = "Not loaded yet — {run} loads it"
+"table.not_loaded" = "Not loaded yet: {run} loads it"
 "action.results.tab.next" = "Result tabs → next"
 "action.results.tab.prev" = "Result tabs → previous"
 "results.tab.result" = "Result {n}"
@@ -1403,11 +1403,11 @@
 "results.page.resumed" = "Paging had closed: ran the SELECT again to fetch rows {from}–{to}; they may differ if the data changed"
 "results.page.resumed_unordered" = "Paging had closed: ran the SELECT again to fetch rows {from}–{to}; without ORDER BY they may come in another order, and they may differ if the data changed"
 "results.page.columns_changed" = "Not added: the statement's columns changed since it first ran; run it again"
-"results.paging_closed_rerun" = { one = "Showing {count} row · paging closed — {key} runs the SELECT again for the next page", other = "Showing {count} rows · paging closed — {key} runs the SELECT again for the next page" }
-"results.paging_replaced" = { one = "Showing {count} row · paging closed: another statement ran — run it again to load more", other = "Showing {count} rows · paging closed: another statement ran — run it again to load more" }
-"results.paging_interrupted" = { one = "Showing {count} row · fetching the next page stopped (failed or cancelled) — run it again to load more", other = "Showing {count} rows · fetching the next page stopped (failed or cancelled) — run it again to load more" }
-"results.paging_no_hold" = { one = "Showing {count} row · nothing is held open on the server — {key} runs the SELECT again for the next page", other = "Showing {count} rows · nothing is held open on the server — {key} runs the SELECT again for the next page" }
-"results.paging_first_page_only" = { one = "Showing the first {count} row only · this statement is not run again for you — see Messages for how to see more", other = "Showing the first {count} rows only · this statement is not run again for you — see Messages for how to see more" }
+"results.paging_closed_rerun" = { one = "Showing {count} row · paging closed: {key} runs the SELECT again for the next page", other = "Showing {count} rows · paging closed: {key} runs the SELECT again for the next page" }
+"results.paging_replaced" = { one = "Showing {count} row · paging closed after another statement ran: run it again to load more", other = "Showing {count} rows · paging closed after another statement ran: run it again to load more" }
+"results.paging_interrupted" = { one = "Showing {count} row · fetching the next page stopped (failed or cancelled): run it again to load more", other = "Showing {count} rows · fetching the next page stopped (failed or cancelled): run it again to load more" }
+"results.paging_no_hold" = { one = "Showing {count} row · nothing is held open on the server: {key} runs the SELECT again for the next page", other = "Showing {count} rows · nothing is held open on the server: {key} runs the SELECT again for the next page" }
+"results.paging_first_page_only" = { one = "Showing the first {count} row only · this statement is not run again for you: see Messages for how to see more", other = "Showing the first {count} rows only · this statement is not run again for you: see Messages for how to see more" }
 "results.first_page_only" = { one = "First {count} row only: the statement stopped after its first page (a function it calls ran for those rows only), nothing is held open on the server, and it is not run again for you ({why}). To see more, page it yourself with LIMIT/OFFSET, or set paging = \"hold\" in the profile's environment", other = "First {count} rows only: the statement stopped after its first page (a function it calls ran for those rows only), nothing is held open on the server, and it is not run again for you ({why}). To see more, page it yourself with LIMIT/OFFSET, or set paging = \"hold\" in the profile's environment" }
 "results.first_page_only_write" = { one = "First {count} row only: the statement's changes are committed in full, and the rows it returned after its first page were not kept. Running it again would change rows again: query the table to see them", other = "First {count} rows only: the statement's changes are committed in full, and the rows it returned after its first page were not kept. Running it again would change rows again: query the table to see them" }
 "results.page.refused_no_hold" = "Only the first page was read: the statement stopped there and is not run again for you ({why}). Page it yourself with LIMIT/OFFSET, or set paging = \"hold\" in the profile's environment"
@@ -1501,14 +1501,14 @@
 
 # Themes: the `theme` setting, theme files (`themes/<name>.toml`) and their errors.
 "setting.theme" = "Theme"
-"setting.theme.about" = "The colors of the whole UI. terminal uses your terminal's own colors. catppuccin, tokyo-night and gruvbox follow the terminal's background (light or dark); a variant name such as gruvbox-light pins one. Your own themes: themes/<name>.toml next to the config file."
+"setting.theme.about" = "The colours of the whole UI. terminal uses your terminal's own colours. catppuccin, tokyo-night and gruvbox follow the terminal's background (light or dark); a variant name such as gruvbox-light pins one. Your own themes: themes/<name>.toml next to the config file."
 "setting.theme.preview" = "Previewing {name}: Enter keeps it, Esc goes back to {current}"
 "setting.theme.background.light" = "Terminal background: light (detected)"
 "setting.theme.background.dark" = "Terminal background: dark (detected)"
 "setting.theme.background.unknown" = "Terminal background: not detected (catppuccin, tokyo-night and gruvbox use their dark variant)"
 "setting.theme.user" = "Your theme file"
 "setting.theme.not_used" = "Not used: drawing with the terminal theme"
-"theme.name.terminal" = "Your terminal's own colors (the default)"
+"theme.name.terminal" = "Your terminal's own colours (the default)"
 "theme.name.dark" = "Dark, truecolor"
 "theme.name.light" = "Light, truecolor"
 "theme.name.high_contrast" = "White on black with strong marks"
@@ -1531,8 +1531,8 @@
 "theme.file_error_no_line" = "{path}: {problem}"
 "theme.problem.unknown_token" = "unknown token “{name}”"
 "theme.problem.not_a_color" = "“{name}” is a style: set it under [styles]"
-"theme.problem.not_a_style" = "“{name}” is a color: set it under [colors]"
-"theme.problem.bad_color" = "“{value}” is not a color (#rrggbb, an ANSI name such as red or bright-black, or default)"
+"theme.problem.not_a_style" = "“{name}” is a colour: set it under [colors]"
+"theme.problem.bad_color" = "“{value}” is not a colour (#rrggbb, an ANSI name such as red or bright-black, or default)"
 "theme.problem.bad_modifier" = "“{value}” is not a modifier (bold, dim, italic, underlined, reversed, crossed-out)"
 "theme.problem.unknown_base" = "extends = “{name}”: not a built-in theme"
 "theme.not_used" = "Theme not used: {error}. Drawing with the terminal theme."
@@ -1626,7 +1626,7 @@
 "tunnel.save_as_fields_missing" = "Fill in the SSH tunnel first"
 "validate.tunnel_taken" = "a tunnel has this name (names ignore case)"
 "tunnel_form.title_new" = "New SSH tunnel"
-"tunnel_form.title_edit" = "SSH tunnel — {name}"
+"tunnel_form.title_edit" = "SSH tunnel: {name}"
 "tunnel_form.keys" = "Tab/↑↓ move · Ctrl+T test · Ctrl+S save · Esc cancel"
 "tunnel_form.section" = "SSH tunnel"
 "tunnel_form.hint" = "profiles that pick it share one SSH connection"
@@ -1660,7 +1660,7 @@
 "hint.to_console" = "to console"
 "tab.ddl" = "DDL {name}"
 "pane.editor.ddl" = "DDL · {name}"
-"ddl.no_object" = "Show DDL works on a table, view, materialized view, index or trigger"
+"ddl.no_object" = "Show DDL works on a table, view, materialised view, index or trigger"
 "ddl.no_function" = "The function's DDL: put the cursor on a trigger"
 "ddl.trigger_no_function" = "MySQL triggers have no function: their body is in the trigger itself"
 "ddl.unsupported" = "This connection's driver cannot show DDL"
@@ -1674,7 +1674,7 @@
 "ddl.command_usage" = ":ddl needs a name here (:ddl schema.name), or the explorer's cursor on an object"
 "ddl.read_only" = "The DDL tab is read-only: {key} opens it in a new console"
 "ddl.copied" = { one = "Copied the DDL ({count} line, {method})", other = "Copied the DDL ({count} lines, {method})" }
-"ddl.state.not_loaded" = "Not read yet — {key} reads the DDL from the catalog"
+"ddl.state.not_loaded" = "Not read yet: {key} reads the DDL from the catalog"
 "ddl.state.connecting" = "Connecting…"
 "ddl.state.loading" = "Reading the DDL from the catalog…"
 "ddl.state.locked" = "Another session holds or is waiting for a lock on this object or a table it reads (an ALTER TABLE or another schema change): nothing was read, so that no session waits. {key} tries again"
@@ -1933,7 +1933,7 @@
 "env.rule.standard" = "standard rules"
 "env.preset_with_source_change" = "Save the change of the password storage first, then pick the preset environment"
 "chooser.color_none" = "none"
-"action.env.new" = "New environment (rules, color and badge that profiles share)"
+"action.env.new" = "New environment (rules, colour and badge that profiles share)"
 "menu.new_environment" = "New environment"
 "menu.edit_environment" = "Edit environment"
 "menu.duplicate_environment" = "Duplicate environment"
@@ -1943,10 +1943,10 @@
 "explorer.environments" = "Environments"
 "explorer.environment_presets" = "Add presets: dev, test, staging, prod"
 "env_form.title_new" = "New environment"
-"env_form.title_edit" = "Environment — {name}"
+"env_form.title_edit" = "Environment: {name}"
 "env_form.keys" = "Tab/↑↓ move · Ctrl+S save · Esc cancel"
 "env_form.section" = "Environment"
-"env_form.hint" = "profiles that pick it get its rules, color and badge"
+"env_form.hint" = "profiles that pick it get its rules, colour and badge"
 "form.env.read_only_hint" = "only reads run; the server refuses writes too"
 "form.env.confirm_destructive" = "dangerous statements only (default)"
 "form.env.confirm_writes" = "before every write"
@@ -2241,23 +2241,23 @@
 "session.source.global" = "app setting"
 "session.source.default_rules" = "default rules"
 "session.source.environment" = "environment {environment}"
-"session_view.title" = "Session settings — {name}"
-"session_view.title_unsaved" = "Session settings — {name} (the form's unsaved values)"
-"session_view.title_new" = "Session settings — new profile (the form's unsaved values)"
+"session_view.title" = "Session settings: {name}"
+"session_view.title_unsaved" = "Session settings: {name} (the form's unsaved values)"
+"session_view.title_new" = "Session settings: new profile (the form's unsaved values)"
 "session_view.keys" = "j/k scroll · Esc close"
 "session_view.read_only" = "Read-only environment: only settings a read-only session may change are allowed"
 "session_view.server_setting" = "the server's setting"
 "session_view.never" = "never"
 "session_view.no_limit" = "no limit"
 "session_view.not_known" = "not known"
-"session_view.overrides" = "{source} — overrides {overridden}: {value}"
-"session_view.overrides_direct" = "{source} on a direct connection — overrides {overridden}: {value}; behind a pooler: {pooled}"
-"session_view.idle_not_known" = "{source} sets the server's limit to a value datarig does not read — datarig still closes the session after {value} ({overridden})"
+"session_view.overrides" = "{source} overrides {overridden}: {value}"
+"session_view.overrides_direct" = "{source} on a direct connection overrides {overridden}: {value}; behind a pooler: {pooled}"
+"session_view.idle_not_known" = "{source} sets the server's limit to a value datarig does not read, but datarig still closes the session after {value} ({overridden})"
 "session_view.from" = "From {source}:"
 "session_view.skipped" = "Not used: {source} (the profile says startup = \"none\")"
 "session_view.no_statements" = "No startup statements"
 "session_view.pooled_local" = "behind a pooler: per transaction as {sql}"
-"session_view.pooled_refused" = "behind a pooler: not sent — {reason}"
+"session_view.pooled_refused" = "behind a pooler: not sent ({reason})"
 "session_view.not_local.form" = "only a plain SET name = value has a form for one transaction"
 "session_view.not_local.identity" = "it changes who the session is"
 "session_view.not_local.default" = "a transaction takes its default when it begins, so set after BEGIN it would change nothing"
@@ -2278,12 +2278,12 @@
 "set.local" = "SET LOCAL ends with its transaction: write SET"
 "set.writes" = "it may change data or run code"
 "set.danger" = "it is dangerous"
-"set.reason.interactive" = "{setting} has no effect on an open session — set wait_timeout (not in a read-only environment), or the environment's idle_disconnect"
-"set.reason.tx_idle_rollback" = "{setting}: datarig warns about an idle manual-commit transaction, rolls it back itself and keeps the session; it sets this per transaction, 30 s later, only as a backstop — set the environment's tx_idle_rollback"
-"set.reason.read_only" = "{setting}: read-only is the environment's guarantee — set the environment's read_only"
-"set.reason.commit" = "{setting}: datarig keeps it on and opens manual-commit transactions itself — set the environment's commit (manual or auto)"
-"set.reason.completion" = "{setting} would make a COMMIT open the next transaction or end the session — set the environment's commit (manual or auto)"
-"set.reason.schema" = "{setting}: the tab's schema sets it — change it with :use"
+"set.reason.interactive" = "{setting} has no effect on an open session. Set wait_timeout (not in a read-only environment), or the environment's idle_disconnect"
+"set.reason.tx_idle_rollback" = "{setting}: datarig warns about an idle manual-commit transaction, rolls it back itself and keeps the session; it sets this per transaction, 30 s later, only as a backstop. Set the environment's tx_idle_rollback"
+"set.reason.read_only" = "{setting}: read-only is the environment's guarantee. Set the environment's read_only"
+"set.reason.commit" = "{setting}: datarig keeps it on and opens manual-commit transactions itself. Set the environment's commit (manual or auto)"
+"set.reason.completion" = "{setting} would make a COMMIT open the next transaction or end the session. Set the environment's commit (manual or auto)"
+"set.reason.schema" = "{setting}: the tab's schema sets it. Change it with :use"
 "set.reason.encoding" = "{setting}: datarig sends and reads text as UTF-8"
 "set.reason.text_format" = "{setting}: datarig reads values in the server's default text format"
 "set.reason.literals" = "{setting}: datarig writes string literals assuming it is on"
@@ -2303,7 +2303,7 @@
 "menu.delete_session" = "Delete Startup SQL"
 "action.session.new" = "New Startup SQL (settings a profile's sessions start with)"
 "session_form.title_new" = "New Startup SQL"
-"session_form.title_edit" = "Startup SQL — {name}"
+"session_form.title_edit" = "Startup SQL: {name}"
 "session_form.keys" = "Tab/↑↓ move · Ctrl+T test · Ctrl+S save · Esc cancel"
 "session_form.section" = "Startup SQL"
 "session_form.hint" = "profiles that pick it start their sessions with it"
@@ -2374,7 +2374,7 @@
 "tips.run_elsewhere" = "Each console runs on its own session: {key} opens another one meanwhile"
 "tips.menu" = "{key} opens the actions of what is selected"
 "tips.zoom" = "{key} zooms the pane to the whole window"
-"tips.theme" = "{command} previews and picks a color theme"
+"tips.theme" = "{command} previews and picks a colour theme"
 "tips.tips_off" = "Tips like this one turn off with {setting}"
 "onboarding.title" = "First steps"
 "onboarding.connect" = "Add a connection"
@@ -2482,7 +2482,7 @@
 "hint.apply" = "apply"
 "keyctx.overlay.edit_preview" = "Pending changes"
 "edit.nothing_pending" = "No pending changes"
-"edit.preview.title" = "Apply changes — {table}"
+"edit.preview.title" = "Apply changes: {table}"
 "edit.preview.updates" = { one = "{count} update", other = "{count} updates" }
 "edit.preview.inserts" = { one = "{count} insert", other = "{count} inserts" }
 "edit.preview.deletes" = { one = "{count} delete", other = "{count} deletes" }
@@ -2544,7 +2544,7 @@
 "edit.failed.db" = "{row} · {error}. Nothing was applied. Statement: {sql}"
 "edit.failed.plain" = "{error}. Nothing was applied."
 "edit.failed.cancelled" = "Apply cancelled; nothing was applied."
-"edit.failed.unknown" = "Apply result unknown — the connection was lost before the server confirmed. Re-run the query to check."
+"edit.failed.unknown" = "Apply result unknown: the connection was lost before the server confirmed. Re-run the query to check."
 "edit.preview.again" = "The last Apply's result is unknown: its changes may be in the table already. y applies them again; Enter or Esc keeps them as they are."
 "edit.leave.run" = { one = "Running a statement here replaces this tab's results: its {count} pending change is dropped.", other = "Running a statement here replaces this tab's results: their {count} pending changes are dropped." }
 "edit.leave.close" = { one = "Closing the tab drops the {count} pending change of its results.", other = "Closing the tab drops the {count} pending changes of its results." }
@@ -2569,7 +2569,7 @@
 "hint.changes_view" = "SQL/list"
 "hint.changes_sql" = "SQL"
 "hint.changes_list" = "list"
-"changes.title" = "Changes — {result} · {table}"
+"changes.title" = "Changes: {result} · {table}"
 "changes.problems" = { one = "{count} problem", other = "{count} problems" }
 "changes.row" = "row {n}"
 "changes.new" = "new {n}"
@@ -2584,12 +2584,12 @@
 "setting.changes_view.list" = "List, one line per changed cell"
 "setting.changes_view.sql" = "SQL, the statements that apply them"
 "setting.background" = "Background"
-"setting.background.about" = "Whether the theme paints the panes' background, or leaves your terminal's own showing (a translucent or image background shows through). Text, selection and edit colors stay the theme's; dialogs, menus and popups keep the theme's surface."
+"setting.background.about" = "Whether the theme paints the panes' background, or leaves your terminal's own showing (a translucent or image background shows through). Text, selection and edit colours stay the theme's; dialogs, menus and popups keep the theme's surface."
 "setting.background.theme" = "The theme's"
 "setting.background.terminal" = "The terminal's own"
 "setting.background.note" = "{theme} has its own background, not painted now: some text may be harder to read on yours"
-"export.edited_pending" = "Not exported: this result has pending changes; apply or discard them, or run the query again — see Changes"
-"chart.edited_pending" = "Not drawn: this result has pending changes. Apply or discard them, or run the query again — see Changes"
+"export.edited_pending" = "Not exported: this result has pending changes; apply or discard them, or run the query again (see Changes)"
+"chart.edited_pending" = "Not drawn: this result has pending changes. Apply or discard them, or run the query again (see Changes)"
 
 # Asking for an Apply
 "edit.ask.apply" = { one = "Apply {count} change to {table} ({summary})?", other = "Apply {count} changes to {table} ({summary})?" }
@@ -2605,8 +2605,8 @@
 "edit.ask.moved" = "Apply cancelled: the changes changed"
 "edit.ask.ignored" = "{said} · {key} ignored"
 "edit.ask.checking" = { one = "Checking {count} row…", other = "Checking {count} rows…" }
-"edit.ask.changed" = "Changes changed — press {keys} again"
-"edit.ask.problems" = { one = "Can't apply: {count} problem — see Changes", other = "Can't apply: {count} problems — see Changes" }
+"edit.ask.changed" = "Changes changed: press {keys} again"
+"edit.ask.problems" = { one = "Can't apply: {count} problem (see Changes)", other = "Can't apply: {count} problems (see Changes)" }
 "keyctx.status_ask" = "Status bar question"
 "changes.applying" = { one = "Applying {count} change…", other = "Applying {count} changes…" }
 "changes.applied" = "Applied · re-run to refresh"
@@ -2700,7 +2700,7 @@
 "edit.paste.read_slow" = "The clipboard did not answer within 2 seconds; nothing pasted"
 "edit.paste.read_moved" = "The clipboard's text came after the grid moved; nothing pasted"
 "edit.paste.reading" = "Reading the clipboard…"
-"edit.paste.empty_value" = "empty value — paste {null} for NULL"
+"edit.paste.empty_value" = "empty value (paste {null} for NULL)"
 "edit.paste.empty_value_plain" = "empty value"
 "edit.paste.value_reason" = "{reason}: {value}"
 "edit.preview.invalid_why" = "{column}: {reason}"

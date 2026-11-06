@@ -121,8 +121,8 @@ for inclusion in datarig by you, as defined in the Apache-2.0 license, shall be 
 above, without any additional terms or conditions.
 
 Third-party code: `vendor/tokio-postgres`, `vendor/mysql_async` and `vendor/ssh-key` keep their
-own MIT/Apache-2.0 licenses, and the C code built in through `pg_query` (libpg_query,
+own MIT/Apache-2.0 licences, and the C code built in through `pg_query` (libpg_query,
 PostgreSQL, protobuf-c, xxHash) has its notices in `vendor/licenses/pg_query/`.
 `scripts/third-party-notices.sh` (cargo-about) writes `THIRD-PARTY-NOTICES.html` with the
-licenses of every crate in the binary; CI builds it as an artifact. `cargo deny check` keeps the
-dependencies to permissive licenses.
+licences of every crate in the binary; CI builds it as an artefact. `cargo deny check` keeps the
+dependencies to permissive licences.

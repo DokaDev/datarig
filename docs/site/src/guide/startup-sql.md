@@ -28,7 +28,7 @@ the app renames the old names in place once what they say changes.
 ## Manage presets
 
 The explorer's **Startup SQL** section lists the presets with their database and how many
-statements and profiles each has (the statements in the warning color when one changes a setting
+statements and profiles each has (the statements in the warning colour when one changes a setting
 a read-only environment refuses, such as MySQL's `foreign_key_checks = 0`), and under each
 preset the first statement that is not allowed and why. `n` makes one, `e` edits, `c` copies,
 `d` deletes, `t` tests, and `Enter` or `l` lists the profiles that use it (their own or through

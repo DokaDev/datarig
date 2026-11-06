@@ -146,7 +146,7 @@ fn a_profile_whose_plan_has_an_error_does_not_connect() {
         ),
         (
             Box::new(|p| p.session_sql = vec!["SET idle_in_transaction_session_timeout = '1s'".into()]),
-            "local-pg does not connect: statement 1 of its own startup SQL is not allowed (idle_in_transaction_session_timeout: datarig warns about an idle manual-commit transaction, rolls it back itself and keeps the session; it sets this per transaction, 30 s later, only as a backstop — set the environment's tx_idle_rollback): SET idle_in_transaction_session_timeout = '1s'",
+            "local-pg does not connect: statement 1 of its own startup SQL is not allowed (idle_in_transaction_session_timeout: datarig warns about an idle manual-commit transaction, rolls it back itself and keeps the session; it sets this per transaction, 30 s later, only as a backstop. Set the environment's tx_idle_rollback): SET idle_in_transaction_session_timeout = '1s'",
         ),
     ];
     for (change, want) in cases {
@@ -1096,7 +1096,7 @@ fn the_session_view_lists_what_a_profiles_sessions_start_with_and_from_where() {
         "  SET work_mem = '256MB'",
         "    behind a pooler: per transaction as SET LOCAL work_mem = '256MB'",
         "  SET ROLE reporting",
-        "    behind a pooler: not sent — it changes who the session is",
+        "    behind a pooler: not sent (it changes who the session is)",
         "Applied in this order: a later setting of the same name wins",
     ] {
         assert!(screen.contains(line), "{line}\n{screen}");
@@ -1285,7 +1285,7 @@ fn the_profile_forms_key_shows_its_unsaved_values() {
     h.ctrl('e');
     assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView));
     let screen = h.screen(120, 40);
-    assert!(screen.contains("Session settings — local-pg (the form's unsaved values)"), "{screen}");
+    assert!(screen.contains("Session settings: local-pg (the form's unsaved values)"), "{screen}");
     assert!(screen.contains("From its own startup SQL:") && screen.contains("  SET jit = off"), "{screen}");
     insta::assert_snapshot!("session_view_form_en_80x24", h.draw(80, 24).backend());
     h.key(KeyCode::Esc);
@@ -1446,7 +1446,7 @@ fn the_session_view_shows_a_lock_wait_a_preset_overrides() {
     let mut h = connected_on(&lock_config("postgres", &["SET lock_timeout = '3s'"], &[]));
     h.command("session");
     let screen = h.screen(120, 40);
-    for line in ["Lock wait        3s", "its Startup SQL “fast” — overrides environment prod: 5s"] {
+    for line in ["Lock wait        3s", "its Startup SQL “fast” overrides environment prod: 5s"] {
         assert!(screen.contains(line), "{line}\n{screen}");
     }
     for (w, ht) in [(80, 24), (120, 40)] {
@@ -1455,7 +1455,7 @@ fn the_session_view_shows_a_lock_wait_a_preset_overrides() {
     // Within 80 columns the source wraps under itself.
     let screen = h.screen(80, 24);
     assert!(
-        screen.contains("“fast” — overrides environment") && screen.contains("                         prod: 5s"),
+        screen.contains("“fast” overrides environment") && screen.contains("                         prod: 5s"),
         "{screen}"
     );
     let mut h = connected_on(&lock_config("postgres", &["SET lock_timeout TO DEFAULT"], &[]));
@@ -1484,13 +1484,13 @@ fn the_session_view_shows_an_idle_limit_a_preset_overrides() {
         rows.join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
     };
     let screen = view("postgres", "SET idle_session_timeout = '10min'");
-    let line = "its Startup SQL “fast” on a direct connection — overrides environment prod: 5m; behind a pooler: 5m";
+    let line = "its Startup SQL “fast” on a direct connection overrides environment prod: 5m; behind a pooler: 5m";
     assert!(screen.contains(&format!("Idle disconnect 10m {line}")), "{screen}");
     let screen = view("mysql", "SET SESSION wait_timeout = 600");
-    let line = "its Startup SQL “fast” — overrides environment prod: 5m";
+    let line = "its Startup SQL “fast” overrides environment prod: 5m";
     assert!(screen.contains(&format!("Idle disconnect 10m {line}")), "{screen}");
     let screen = view("postgres", "SET idle_session_timeout TO DEFAULT");
-    let line = "datarig does not read — datarig still closes the session after 5m (environment prod)";
+    let line = "datarig does not read, but datarig still closes the session after 5m (environment prod)";
     assert!(screen.contains("Idle disconnect not known"), "{screen}");
     assert!(screen.contains(line), "{screen}");
 }
@@ -1499,12 +1499,12 @@ fn the_session_view_shows_an_idle_limit_a_preset_overrides() {
 #[test]
 fn a_refused_setting_says_why_and_where_to_set_it() {
     let cases = [
-        ("mysql", "SET SESSION interactive_timeout = 10", "no effect on an open session — set wait_timeout"),
-        ("postgres", "SET idle_in_transaction_session_timeout = 0", "set the environment's tx_idle_rollback"),
-        ("mysql", "SET autocommit = 0", "set the environment's commit"),
-        ("mysql", "SET SESSION completion_type = 1", "set the environment's commit"),
-        ("postgres", "SET default_transaction_read_only = off", "set the environment's read_only"),
-        ("mysql", "SET SESSION TRANSACTION READ WRITE", "set the environment's read_only"),
+        ("mysql", "SET SESSION interactive_timeout = 10", "no effect on an open session. Set wait_timeout"),
+        ("postgres", "SET idle_in_transaction_session_timeout = 0", "Set the environment's tx_idle_rollback"),
+        ("mysql", "SET autocommit = 0", "Set the environment's commit"),
+        ("mysql", "SET SESSION completion_type = 1", "Set the environment's commit"),
+        ("postgres", "SET default_transaction_read_only = off", "Set the environment's read_only"),
+        ("mysql", "SET SESSION TRANSACTION READ WRITE", "Set the environment's read_only"),
         ("postgres", "SET search_path = x", ":use"),
         ("postgres", "SET client_encoding = 'LATIN1'", "UTF-8"),
         ("mysql", "SET NAMES latin1", "UTF-8"),

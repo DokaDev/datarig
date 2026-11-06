@@ -732,7 +732,7 @@ fn the_prompt_names_the_next_page_key_of_the_search() {
     let mut h = held(500);
     // The portal closes for being idle: the next page runs the SELECT again, by its key.
     h.advance(Duration::from_secs(31));
-    assert!(strip_at(&mut h, 200, 40).contains("paging closed \u{2014} n runs the SELECT again"));
+    assert!(strip_at(&mut h, 200, 40).contains("paging closed: n runs the SELECT again"));
     // While the prompt is open `n` is typed, and after `Enter` it is the search's.
     h.keys("/");
     h.type_text("^42$");

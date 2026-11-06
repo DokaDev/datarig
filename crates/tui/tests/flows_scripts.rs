@@ -1693,7 +1693,7 @@ fn the_save_key_named_in_messages_follows_the_key_map() {
     connect(&mut h, "local-pg");
     h.keys(" so");
     let status = h.status(160, 45);
-    assert!(status.contains("No saved queries yet — F2 in a console saves one"), "{status}");
+    assert!(status.contains("No saved queries yet: F2 in a console saves one"), "{status}");
     let screen = h.screen(160, 45);
     let above = screen.lines().filter(|l| !l.contains("No saved queries")).collect::<Vec<_>>().join("\n");
     assert!(above.contains("F2 in a console saves one"), "the explorer's empty Saved queries: {screen}");

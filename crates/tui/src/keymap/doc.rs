@@ -290,6 +290,6 @@ fn section(s: &mut String, km: &Keymap, ctx: Ctx) {
     for n in notes {
         let list: Vec<String> =
             own.iter().filter(|b| b.target == Target::Reserved(n)).map(|b| code(&keys::label(&b.keys))).collect();
-        s.push_str(&format!("\nReserved — {n}: {}\n", list.join(" ")));
+        s.push_str(&format!("\nReserved ({n}): {}\n", list.join(" ")));
     }
 }

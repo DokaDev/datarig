@@ -14,7 +14,7 @@ expression: backend
 "│  ▸ ○   分析-replica                  ││  7 WHERE o.status = 'paid';                                                                                          │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
 "│                                      ││  8                                                                                                                   │"
 "│                                      ││  9 SELECT * FROM analytics.events;                                                                                   │"
-"│                             ╭ Edit connection — 分析-replica ──────────────────────────────────────────────────────────────────╮                             │" Hidden by multi-width symbols: [(51, " "), (53, " ")]
+"│                             ╭ Edit connection: 分析-replica ───────────────────────────────────────────────────────────────────╮                             │" Hidden by multi-width symbols: [(50, " "), (52, " ")]
 "│                             │  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │                             │"
 "│                             │                                                                                                  │                             │"
 "│                             │ Driver            PostgreSQL ▾   ←/→ change · Enter list                                         │                             │"

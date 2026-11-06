@@ -444,7 +444,7 @@ fn the_layout_survives_a_restart() {
     assert_eq!(h.app.focus, Focus::Results);
     assert!(h.driver.sessions.lock().unwrap().is_empty(), "nothing opened");
     let screen = h.screen(160, 45);
-    assert!(screen.contains("Not loaded yet — Ctrl+E loads it"), "{screen}");
+    assert!(screen.contains("Not loaded yet: Ctrl+E loads it"), "{screen}");
     h.ctrl('e');
     assert_eq!(h.app.conns.state(h.app.profiles[0].id), datarig_tui::app::NodeState::Connecting);
 }

@@ -61,10 +61,10 @@ body_reason() {
 }
 
 # has_heading <file> <version>: the file has the version's heading, `## <version>` alone or
-# followed by ` — <date>` (the same test as scripts/changes.sh).
+# followed by ` (<date>)` (the same test as scripts/changes.sh).
 has_heading() {
   [[ -n $(awk -v h="## $2" '{ l = $0; sub(/[ \t\r]+$/, "", l) }
-    l == h || index(l, h " — ") == 1 { print NR; exit }' "$1") ]]
+    l == h || index(l, h " (") == 1 { print NR; exit }' "$1") ]]
 }
 
 # Users see what these files define (tests.rs and tests/ excepted).

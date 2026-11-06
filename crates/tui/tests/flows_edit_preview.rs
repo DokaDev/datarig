@@ -206,7 +206,7 @@ fn a_keyed_change_shows_its_check_and_its_write_and_cancel_is_the_default() {
     assert_eq!(h.app.key_context(), Ctx::EditPreview);
     assert!(counts(&mut h).is_empty(), "a row found by its key is not counted");
     let v = h.app.edit_preview_view().unwrap();
-    assert_eq!(v.title.to_string(), "Apply changes — shop.users");
+    assert_eq!(v.title.to_string(), "Apply changes: shop.users");
     assert_eq!(v.summary, "1 update");
     assert_eq!(v.footer, "Runs in one transaction; commits at the end.");
     assert!(v.apply);
@@ -1151,7 +1151,7 @@ fn an_apply_whose_result_is_unknown_is_applied_again_only_when_asked() {
     let why = ApplyError::Db(DbError::CommitUnknown);
     h.db(DbEvent::Applied { id, result: Err(ApplyFailure { step: None, why }) });
     let unknown =
-        "Apply result unknown — the connection was lost before the server confirmed. Re-run the query to check.";
+        "Apply result unknown: the connection was lost before the server confirmed. Re-run the query to check.";
     assert_eq!(said(&mut h).map(|m| h.app.i18n.msg(&m).to_string()).as_deref(), Some(unknown));
     let v = h.app.edit_preview_view().unwrap();
     assert_eq!(v.lines[0], PreviewLine::Problem(unknown.into()));
@@ -2025,7 +2025,7 @@ fn an_export_of_the_rows_held_is_refused_while_they_are_edited() {
     applied_h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
     applied_h.app.transient = None;
     let pending_refused = "Not exported: this result has pending changes; apply or discard them, or run the query \
-                           again — see Changes";
+                           again (see Changes)";
     for (n, h) in [&mut h, &mut applied_h].into_iter().enumerate() {
         let refused = if n == 0 { pending_refused } else { refused };
         for (i, (format, scope)) in
@@ -2086,8 +2086,8 @@ fn an_export_of_every_row_says_the_pending_changes_are_left_out() {
 #[test]
 fn the_chart_draws_nothing_while_the_rows_are_edited() {
     let why = "Not drawn: this result has pending or applied changes. Run the query again to chart the edited values.";
-    let pending = "Not drawn: this result has pending changes. Apply or discard them, or run the query again — see \
-                   Changes";
+    let pending = "Not drawn: this result has pending changes. Apply or discard them, or run the query again (see \
+                   Changes)";
     let mut h = ready(Lang::En);
     type_cell(&mut h, "z@x");
     h.keys("c");
@@ -2472,5 +2472,5 @@ fn a_table_name_s_control_character_is_spelled_out_in_the_apply() {
     type_cell(&mut h, "z@x");
     h.keys(" da");
     let v = h.app.edit_preview_view().expect("the dialog");
-    assert_eq!(v.title.to_string(), r"Apply changes — shop.t\nx");
+    assert_eq!(v.title.to_string(), r"Apply changes: shop.t\nx");
 }

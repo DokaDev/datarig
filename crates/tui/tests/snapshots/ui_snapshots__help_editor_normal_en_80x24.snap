@@ -3,7 +3,7 @@ source: crates/tui/tests/ui_snapshots.rs
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
-"│ ╭ Keys — Editor (vim Normal) ──────────────────────────────────────────────╮─╮"
+"│ ╭ Keys: Editor (vim Normal) ───────────────────────────────────────────────╮─╮"
 "│▾│ / search all keys · Esc close                                            │ │"
 "│ │──────────────────────────────────────────────────────────────────────────│e│"
 "│ │   Go to tab 8                             Space 8                        │ │"

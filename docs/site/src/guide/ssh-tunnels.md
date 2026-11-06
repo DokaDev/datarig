@@ -70,7 +70,7 @@ auth = "agent"
   `t` tests it, and `Enter` lists the profiles connected through it now. The command line also
   finds the action `tunnel.new`.
 - Each preset shows whether its SSH connection is closed, opening, open (with how many
-  profiles are on it) or lost (and why) by the color of its icon (`○`, `●` and `✕` with icons
+  profiles are on it) or lost (and why) by the colour of its icon (`○`, `●` and `✕` with icons
   off).
 - Profiles that use the same preset at the same time share **one SSH connection**: one login,
   one host key question and one secret prompt for every profile waiting. It closes when the

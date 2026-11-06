@@ -1,9 +1,8 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 638
 expression: "h.draw(80, 24).backend()"
 ---
-"╭ ╭ Startup SQL — reporting ─────────────────────────────────────────────────╮─╮"
+"╭ ╭ Startup SQL: reporting ──────────────────────────────────────────────────╮─╮"
 "│ │  Startup SQL          profiles that pick it start their sessions with it │ │"
 "│▾│                                                                          │ │"
 "│ │ Name        reporting                                                    │ │"

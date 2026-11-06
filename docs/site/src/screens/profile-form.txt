@@ -10,7 +10,7 @@
 │  ▸ ○   分析-replica                  ││  7 WHERE o.status = 'paid';                                                                                          │
 │                                      ││  8                                                                                                                   │
 │                                      ││  9 SELECT * FROM analytics.events;                                                                                   │
-│                             ╭ Edit connection — 分析-replica ──────────────────────────────────────────────────────────────────╮                             │
+│                             ╭ Edit connection: 分析-replica ───────────────────────────────────────────────────────────────────╮                             │
 │                             │  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │                             │
 │                             │                                                                                                  │                             │
 │                             │ Driver            PostgreSQL ▾   ←/→ change · Enter list                                         │                             │

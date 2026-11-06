@@ -10,7 +10,7 @@ keeps one, `Esc` goes back).
 
 | `theme` | What it does |
 |---|---|
-| `terminal` | The default: your terminal's own colors and background (its 16 ANSI colors by role) |
+| `terminal` | The default: your terminal's own colours and background (its 16 ANSI colours by role) |
 | `dark`, `light`, `high-contrast` | datarig's own truecolor themes |
 | `catppuccin`, `tokyo-night`, `gruvbox` | The light or the dark variant, following the terminal's background |
 | `catppuccin-latte`, `catppuccin-mocha`, `tokyo-night-day`, `tokyo-night-night`, `gruvbox-light`, `gruvbox-dark` | That variant, whatever the background |
@@ -28,19 +28,19 @@ families that follow the background (`catppuccin`, `tokyo-night`, `gruvbox`).
 `ui.background = "terminal"` (`:set ui.background=terminal`, or the settings screen's
 Background row) leaves your terminal's own background where the theme would paint the panes and
 the result grid's alternate rows, so a translucent or image background shows through. Text,
-selections, the grid's cursor tints and the marks of edits keep the theme's colors; the status
+selections, the grid's cursor tints and the marks of edits keep the theme's colours; the status
 bar, the grid's headers, dialogs, menus and popups keep the theme's surface, and the screen
 behind a dialog stays see-through (only its text is dimmed). The default, `"theme"`, paints
 everything.
 
 Switching to it while the theme has a background of its own (every built-in theme but
-`terminal`) says so in one line: the theme's text colors were made for its background, so on a
+`terminal`) says so in one line: the theme's text colours were made for its background, so on a
 terminal background far from it some of them may be hard to read.
 
 ## Your own theme
 
 A theme file sets some tokens and takes the rest from `extends` (a built-in theme; `terminal`
-without it). Colors are `#rrggbb`, an ANSI name (`red`, `bright-black`, …) or `default`:
+without it). Colours are `#rrggbb`, an ANSI name (`red`, `bright-black`, …) or `default`:
 
 ```toml
 # themes/mine.toml next to config.toml, used with theme = "mine"
@@ -54,15 +54,15 @@ warning = "yellow"
 selection = { bg = "#45475a", modifiers = ["bold"] }
 ```
 
-Every token, with what it colors, is listed on the
+Every token, with what it colours, is listed on the
 [theme file format](../reference/theme-files.md) page. A mistake in the file (an unknown token,
-a bad color), an unknown name, or a file named like a built-in theme is reported with the file
+a bad colour), an unknown name, or a file named like a built-in theme is reported with the file
 and line, and the app draws with `terminal` until it is fixed.
 
 To start a theme file, let datarig write it:
 
 - `:theme copy <from> <name>` writes `themes/<name>.toml` with every token of `<from>` (a
-  built-in theme or a theme file) set to its value, each under a comment saying what it colors.
+  built-in theme or a theme file) set to its value, each under a comment saying what it colours.
 - `:theme new <name>` writes one that extends the current theme (when it is built in, else
   `dark`) with every token commented out, showing the value it inherits.
 - On the settings screen, `c` on the theme row copies the theme shown there and asks for a
@@ -76,16 +76,16 @@ theme is then used and saved, and its path is shown.
 
 When a version of datarig adds tokens, a theme file written before does not list them: they
 take their value from the theme it extends (except the grid's cursor tints, made from the
-file's own colors when it sets its own `bg` or `selection`, for the header `surface` or
-`selection`, and those are RGB colors). The first time such a file is used, at launch or when you choose it, the status
+file's own colours when it sets its own `bg` or `selection`, for the header `surface` or
+`selection`, and those are RGB colours). The first time such a file is used, at launch or when you choose it, the status
 line says how many tokens it does not list. It says so once, and again only when the tokens it
 does not list change (the note is kept in the state folder; where that cannot be read or
 written, it is said each time).
 
 `:theme update` (the current theme) or `:theme update <name>` adds them to the file, each under
 its description and commented out with the value it takes now, at the end of its section
-(the colors or the styles table, added when the file has none). Nothing the file sets changes: no
+(the `[colors]` or the `[styles]` table, added when the file has none). Nothing the file sets changes: no
 line of it is touched, and nothing is written unless the file reads exactly as before. A
 built-in theme, a file with an error, one that cannot be written, or one written with
-`colors.<token> = …` keys instead of a colors table is refused and left as it is. A file
+`colors.<token> = …` keys instead of a `[colors]` table is refused and left as it is. A file
 that lists every token already says so.

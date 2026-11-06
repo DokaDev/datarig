@@ -152,7 +152,7 @@ the release workflow publishes them with the docs site under `demo/`. Every tape
 text it expects on the screen, so a change that moves a screen fails the `Demo` workflow
 (`.github/workflows/demo.yml`) until the tape is updated. It runs on pull requests that change
 `docs/demo` and on the release pull request; run it by hand from the Actions tab to preview the
-recordings of a branch (they are in the run's `demo` artifact). On a pull request, the `Demo preview`
+recordings of a branch (they are in the run's `demo` artefact). On a pull request, the `Demo preview`
 workflow then puts the run's stills in one comment (updated in place on each run). The
 render also makes `social.png`, the repository's social preview (uploaded by hand in the
 repository's settings). To record locally, with
@@ -193,6 +193,25 @@ A fragment is a file `changes/<kind>/<slug>.md`, `<kind>` one of `added`, `chang
 new and the release notes tell users. `scripts/changes.sh check changes/*/*.md` checks them
 locally. A fragment merged after the release pull request goes into the next release.
 
+### Public text style
+
+Text that users read (the README, this file, the docs site, changelog fragments, the catalogs
+in `locales/`, the screens, `--help`, the Cargo descriptions) uses British spelling and no em
+dash. In place of an em dash write a colon, a comma, parentheses or a new sentence; a title
+that names its subject takes a colon ("Apply changes: shop.users"). An en dash in a range
+(1–5) and `--` in a command line are fine. British spelling: colour, behaviour, centre,
+favourite, cancelled, labelled, organise, analyse, materialised. Names stay exactly as they
+are, in code font where a page shows them: config keys, theme tokens and tables (`color`,
+`[colors]`), commands and their arguments (`:explain analyze`), SQL (`ANALYZE`), actions, file
+names. A settings label may say "Colour" for the `color` key.
+
+`python3 scripts/text-style.py` checks it (the `docs site` job of CI runs it): no em dash in
+those files or in the string literals of `crates/` (comments are not checked), and no US
+spelling in the prose of the pages, the fragments and the English catalog, leaving out code
+blocks, `inline code`, `{placeholders}`, URLs and words in capitals. A name that must keep a
+US spelling outside code goes in its `ALLOW_PHRASES` or `ALLOW_KEYS`, with the reason.
+`--counts` lists the findings per file.
+
 ## Releases
 
 Maintainers release by pushing a tag; `.github/workflows/release.yml` does the rest.
@@ -228,4 +247,4 @@ everything except publishing and deploying.
 ## License
 
 By contributing, you agree that your contributions are dual-licensed under the MIT and
-Apache-2.0 licenses, as the rest of the project.
+Apache-2.0 licences, as the rest of the project.

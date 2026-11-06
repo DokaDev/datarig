@@ -233,7 +233,7 @@ The `/` filter of the explorer: profiles (name, host, database), folders, tunnel
 | `Down` | `explorer.down` | Explorer: next item | ✓ |
 | `Up` | `explorer.up` | Explorer: previous item | ✓ |
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `grid`
 
@@ -305,17 +305,17 @@ The result grid while a search is on (after `/` or `?`): `n` goes to the next ma
 
 The search prompt of `/` and `?` on the line under the grid: the cursor goes to the first matching cell while the pattern is typed, `Enter` searches (an empty pattern: the last one), `Esc` goes back to where the cursor was, `Ctrl+W` deletes the word before the cursor. The full values are searched as fetched (not the shown cut), cell by cell, row by row. Inside `workspace`.
 
-Reserved — grid search: `Esc` `Enter` `Ctrl+W`
+Reserved (grid search): `Esc` `Enter` `Ctrl+W`
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `grid.edit` [text]
 
 The cell editor (`e` in the grid) over the cell: one line, the cell's pending value or its value as read. `Enter` keeps the text (an empty text is the empty string, never NULL), `Esc` cancels, `Ctrl+N` sets NULL, `Ctrl+D` the column's default. With cells of one column selected, each takes the value, as one change (`u` undoes it). `Ctrl+L` takes the text typed so far to the editor of several lines. A value of several lines, and a JSON column's, opens that editor instead; an enum or boolean column lists its values. Inside `workspace`.
 
-Reserved — cell editor: `Esc` `Enter` `Ctrl+N` `Ctrl+D` `Ctrl+L`
+Reserved (cell editor): `Esc` `Enter` `Ctrl+N` `Ctrl+D` `Ctrl+L`
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `inspector`
 
@@ -465,13 +465,13 @@ The welcome panel shown while there is no connection profile. Inside `nav`.
 
 Query editor, vim Normal mode (`i` starts typing). Inside `nav`.
 
-Reserved — vim: `h` `j` `k` `l` `w` `W` `b` `B` `e` `E` `g e` `g E` `0` `^` `$` `g g` `G` `f` `F` `t` `T` `;` `,` `%` `{` `}` `(` `)` `[` `]` `H` `M` `L` `Left` `Right` `Up` `Down` `Home` `End` `d` `c` `y` `>` `<` `=` `g ~` `g u` `g U` `1` `2` `3` `4` `5` `6` `7` `8` `9` `.` `"` `x` `X` `D` `C` `Y` `s` `S` `r` `R` `p` `P` `u` `Ctrl+R` `J` `g J` `~` `i` `a` `I` `A` `o` `O` `v` `V` `Ctrl+V` `Esc` `/` `?` `n` `N` `*` `#` `g *` `g #` `m` `'` `` ` `` `g c` `&` `g &` `Ctrl+D` `Ctrl+U` `Ctrl+F` `Ctrl+B` `z z` `z t` `z b` `z Enter` `q`
+Reserved (vim): `h` `j` `k` `l` `w` `W` `b` `B` `e` `E` `g e` `g E` `0` `^` `$` `g g` `G` `f` `F` `t` `T` `;` `,` `%` `{` `}` `(` `)` `[` `]` `H` `M` `L` `Left` `Right` `Up` `Down` `Home` `End` `d` `c` `y` `>` `<` `=` `g ~` `g u` `g U` `1` `2` `3` `4` `5` `6` `7` `8` `9` `.` `"` `x` `X` `D` `C` `Y` `s` `S` `r` `R` `p` `P` `u` `Ctrl+R` `J` `g J` `~` `i` `a` `I` `A` `o` `O` `v` `V` `Ctrl+V` `Esc` `/` `?` `n` `N` `*` `#` `g *` `g #` `m` `'` `` ` `` `g c` `&` `g &` `Ctrl+D` `Ctrl+U` `Ctrl+F` `Ctrl+B` `z z` `z t` `z b` `z Enter` `q`
 
 ## `editor.vim.visual` [editor]
 
 Query editor, vim Visual mode (`v` by character, `V` by line, `Ctrl+V` by block). Inside `nav`.
 
-Reserved — vim: `h` `j` `k` `l` `w` `W` `b` `B` `e` `E` `g e` `g E` `0` `^` `$` `g g` `G` `f` `F` `t` `T` `;` `,` `%` `{` `}` `(` `)` `[` `]` `H` `M` `L` `Left` `Right` `Up` `Down` `Home` `End` `d` `c` `y` `>` `<` `=` `g ~` `g u` `g U` `1` `2` `3` `4` `5` `6` `7` `8` `9` `.` `"` `x` `X` `D` `C` `Y` `s` `S` `r` `R` `p` `P` `u` `Ctrl+R` `J` `g J` `~` `i` `a` `I` `A` `o` `O` `v` `V` `Ctrl+V` `Esc` `/` `?` `n` `N` `*` `#` `g *` `g #` `m` `'` `` ` `` `g c` `&` `g &` `Ctrl+D` `Ctrl+U` `Ctrl+F` `Ctrl+B` `z z` `z t` `z b` `z Enter` `q`
+Reserved (vim): `h` `j` `k` `l` `w` `W` `b` `B` `e` `E` `g e` `g E` `0` `^` `$` `g g` `G` `f` `F` `t` `T` `;` `,` `%` `{` `}` `(` `)` `[` `]` `H` `M` `L` `Left` `Right` `Up` `Down` `Home` `End` `d` `c` `y` `>` `<` `=` `g ~` `g u` `g U` `1` `2` `3` `4` `5` `6` `7` `8` `9` `.` `"` `x` `X` `D` `C` `Y` `s` `S` `r` `R` `p` `P` `u` `Ctrl+R` `J` `g J` `~` `i` `a` `I` `A` `o` `O` `v` `V` `Ctrl+V` `Esc` `/` `?` `n` `N` `*` `#` `g *` `g #` `m` `'` `` ` `` `g c` `&` `g &` `Ctrl+D` `Ctrl+U` `Ctrl+F` `Ctrl+B` `z z` `z t` `z b` `z Enter` `q`
 
 ## `editor.vim.insert` [editor] [text]
 
@@ -482,15 +482,15 @@ Query editor, vim Insert mode: typing (`Esc` goes back to Normal). Inside `works
 | `Ctrl+N` | `editor.complete` | Show completions |  |
 | `F4` | `editor.complete` | Show completions |  |
 
-Reserved — vim Insert: `Esc` `Enter` `Tab` `Backspace` `Delete` `Left` `Right` `Up` `Down` `Home` `End` `Ctrl+W` `Ctrl+U` `Ctrl+R` `Ctrl+P`
+Reserved (vim Insert): `Esc` `Enter` `Tab` `Backspace` `Delete` `Left` `Right` `Up` `Down` `Home` `End` `Ctrl+W` `Ctrl+U` `Ctrl+R` `Ctrl+P`
 
 ## `editor.vim.search` [editor] [text]
 
 The search prompt of `/` and `?` on the editor's last line: `Enter` searches, `Esc` goes back to where the cursor was. Inside `workspace`.
 
-Reserved — vim search: `Esc` `Enter` `Ctrl+W`
+Reserved (vim search): `Esc` `Enter` `Ctrl+W`
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `editor.ddl` [editor]
 
@@ -505,27 +505,27 @@ A DDL tab in vim Normal mode: its text is read-only (moving, selecting, searchin
 
 The `:` command line: commands with arguments, and a search over every action; a click runs an entry, the wheel moves the selection. Inside `root`.
 
-Reserved — command line: `Esc` `Enter` `Up` `Down` `Ctrl+P` `Ctrl+N` `Tab` `Shift+Tab`
+Reserved (command line): `Esc` `Enter` `Up` `Down` `Ctrl+P` `Ctrl+N` `Tab` `Shift+Tab`
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `overlay.quick_connect` [text]
 
 Quick connect: a fuzzy list of the connection profiles; a click picks a row (on `▸` it lists the databases), the wheel selects, the pointer only highlights. Inside `root`.
 
-Reserved — quick connect: `Esc` `Enter` `Up` `Down` `Ctrl+P` `Ctrl+N`
+Reserved (quick connect): `Esc` `Enter` `Up` `Down` `Ctrl+P` `Ctrl+N`
 
-Reserved — quick connect: databases and schemas: `Right` `Left`
+Reserved (quick connect: databases and schemas): `Right` `Left`
 
-Reserved — text input: `Backspace` `Delete` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `overlay.tab_list` [text]
 
 The tab list (`Space t t`, `:tabs`, `:ls`, `:buffers`): the open tabs, the most recently active first, then the tabs closed in this run. Typing filters by name, connection, database, schema, kind or number; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` goes to the tab (brings a closed one back), `Ctrl+D` closes the selected tab (asking as `Ctrl+W` does), `Esc` closes the list (`Backspace` on an empty filter does not). A click picks an entry, the wheel selects, the pointer only highlights. Inside `root`.
 
-Reserved — tab list: `Down` `Up` `Ctrl+N` `Ctrl+P` `Tab` `Shift+Tab` `Enter` `Esc` `Ctrl+D`
+Reserved (tab list): `Down` `Up` `Ctrl+N` `Ctrl+P` `Tab` `Shift+Tab` `Enter` `Esc` `Ctrl+D`
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `overlay.profile_form` [text]
 
@@ -537,17 +537,17 @@ Connection profile form (also the SSH tunnel, environment, default rules and Sta
 | `Ctrl+B` | `form.save_as_tunnel` | Profile form: save this profile's SSH tunnel as a tunnel preset |  |
 | `Ctrl+E` | `form.session_view` | Profile form: what its sessions would start with (its values, saved or not) |  |
 
-Reserved — profile form: `Tab` `Shift+Tab` `Down` `Up` `Enter` `Esc` `Ctrl+S` `Ctrl+T` `Ctrl+N` `Ctrl+P`
+Reserved (profile form): `Tab` `Shift+Tab` `Down` `Up` `Enter` `Esc` `Ctrl+S` `Ctrl+T` `Ctrl+N` `Ctrl+P`
 
-Reserved — profile form: Startup SQL list: `Ctrl+D`
+Reserved (profile form: Startup SQL list): `Ctrl+D`
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `overlay.settings`
 
 The settings screen: one list by category, each setting with its description; a click selects a row and its `‹`/`›` change the value, the wheel selects, the pointer only highlights. Inside `root`.
 
-Reserved — settings screen; c on the theme row: copy the theme to a new theme file: `j` `k` `Down` `Up` `h` `l` `Left` `Right` `Enter` `Space` `Esc` `q` `c`
+Reserved (settings screen; c on the theme row: copy the theme to a new theme file): `j` `k` `Down` `Up` `h` `l` `Left` `Right` `Enter` `Space` `Esc` `q` `c`
 
 ## `overlay.export` [text]
 
@@ -557,105 +557,105 @@ The export dialog (`results.export`, `:export` alone): the rows (every row, the 
 |---|---|---|---|
 | `Ctrl+O` | `export.pick_path` | Export dialog: pick where the file goes |  |
 
-Reserved — export dialog: `Tab` `Shift+Tab` `Down` `Up` `Enter` `Esc`
+Reserved (export dialog): `Tab` `Shift+Tab` `Down` `Up` `Enter` `Esc`
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `overlay.chooser`
 
-A list to pick from: a profile's color, icon or folder, a chart's columns (the values' list stays open: `Enter` adds or removes one); a click picks a row, the wheel selects, the pointer only highlights. Inside `root`.
+A list to pick from: a profile's colour, icon or folder, a chart's columns (the values' list stays open: `Enter` adds or removes one); a click picks a row, the wheel selects, the pointer only highlights. Inside `root`.
 
-Reserved — chooser: `j` `k` `Down` `Up` `Enter` `/` `Esc` `q`
+Reserved (chooser): `j` `k` `Down` `Up` `Enter` `/` `Esc` `q`
 
 ## `overlay.chooser.filter` [text]
 
 The `/` filter of a list to pick from. Inside `root`.
 
-Reserved — chooser filter: `Esc` `Enter` `Down` `Up`
+Reserved (chooser filter): `Esc` `Enter` `Down` `Up`
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `overlay.picker` [text]
 
-A list to pick from with a typed filter: a field of the profile form (`Enter` on it) — its driver, SSL mode, password storage, bastion login and its secret's storage, SSH tunnel or environment — each value with what it means; the tunnel's and the environment's end with the entry that makes a new one ("New SSH tunnel…", "New environment…"), and a value that cannot be picked (a driver the app has none for, the keychain while it does not work) is struck through. Typing filters it as the action menu is filtered; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` picks, `Esc` closes it and changes nothing. A click picks a row, the wheel selects, the pointer only highlights. Inside `root`.
+A list to pick from with a typed filter: a field of the profile form (`Enter` on it: its driver, SSL mode, password storage, bastion login and its secret's storage, SSH tunnel or environment), each value with what it means; the tunnel's and the environment's end with the entry that makes a new one ("New SSH tunnel…", "New environment…"), and a value that cannot be picked (a driver the app has none for, the keychain while it does not work) is struck through. Typing filters it as the action menu is filtered; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` picks, `Esc` closes it and changes nothing. A click picks a row, the wheel selects, the pointer only highlights. Inside `root`.
 
-Reserved — list picker: `Down` `Up` `Ctrl+N` `Ctrl+P` `Tab` `Shift+Tab` `Enter` `Esc`
+Reserved (list picker): `Down` `Up` `Ctrl+N` `Ctrl+P` `Tab` `Shift+Tab` `Enter` `Esc`
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `overlay.name_input` [text]
 
 A name to type: a new or renamed folder; OK and Cancel take a click. Inside `root`.
 
-Reserved — name input: `Enter` `Esc`
+Reserved (name input): `Enter` `Esc`
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `overlay.script_tree`
 
 The folder tree of the saved queries (save as, open), of the file system (the SSH key file, where an export goes) or of folders only (the folder chooser): the tree has the keyboard. `j`/`k` and the arrows move; `l`/`Right` opens the selected folder (one of the file system is read first); `h`/`Left` closes an open folder, else selects the folder the row is in. In a file system tree, `h`/`Left` on `../` or on the folder shown (and `l`/`Right` on `../`) goes up to the parent of the folder shown. `Enter`: save as saves into the selected folder, the folder chooser picks it; the other trees open or close a folder, go up on `../`, and pick a file (the saved query to open, the key file, the file the export replaces). In the export tree the top row (`Enter`) and `Ctrl+S` (any folder) save there, and `.` shows hidden names; `n` makes a folder (save as, folder chooser, export). `Tab` (and `/` in the folder chooser and the export tree) gives the keyboard to the name or filter field; `Esc` closes (`q` too in the folder chooser and the export tree). The mouse: a click selects a row, one on a folder's arrow opens or closes it; a second click on the selected row does what `Enter` does there, except in save as, where it only opens or closes a folder, and in the key file tree, where a path typed in the field is taken only by `Enter`; the wheel scrolls. Inside `root`.
 
-Reserved — tree: `j` `k` `h` `l` `Up` `Down` `Left` `Right` `Enter` `n` `/` `q` `Tab` `Shift+Tab` `Esc` `.` `Ctrl+S`
+Reserved (tree): `j` `k` `h` `l` `Up` `Down` `Left` `Right` `Enter` `n` `/` `q` `Tab` `Shift+Tab` `Esc` `.` `Ctrl+S`
 
 ## `overlay.script_tree.name` [text]
 
 The folder tree of the saved queries: its name field (save as) or filter (open); of the folder chooser: its filter; of the file system: its filter, where a text with `/` or a leading `~` is a path `Enter` goes to. While the field is empty, `Left`/`Right` on a folder or file act as in the tree: they close or open the folder, `Left` selects the folder the row is in. Inside `root`.
 
-Reserved — tree: name or filter: `Up` `Down` `Enter` `Tab` `Shift+Tab` `Esc` `Ctrl+S`
+Reserved (tree: name or filter): `Up` `Down` `Enter` `Tab` `Shift+Tab` `Esc` `Ctrl+S`
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `overlay.context_menu` [text]
 
 The action menu: a right click (an explorer node, the grid, a tab, the editor) opens it at the pointer; `Space Space`, `Shift+F10` or the Menu key next to the selection, `Space t m` under the active tab. The selection's actions come first, then the pane's, each with its key in that pane. Typing filters it (when nothing in it matches, every action is searched); the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` runs, `Esc` closes (`Backspace` on an empty filter does not); a shown key that is not a character (`Ctrl+…`, `F…`) runs its item; the pointer selects the item under it. Inside `root`.
 
-Reserved — action menu: `Down` `Up` `Ctrl+N` `Ctrl+P` `Tab` `Shift+Tab` `Enter` `Esc`
+Reserved (action menu): `Down` `Up` `Ctrl+N` `Ctrl+P` `Tab` `Shift+Tab` `Enter` `Esc`
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `overlay.password` [text]
 
 Password prompt; a click on the field, the checkbox, OK or Cancel. Inside `root`.
 
-Reserved — password prompt: `Esc` `Enter` `Tab` `Shift+Tab`
+Reserved (password prompt): `Esc` `Enter` `Tab` `Shift+Tab`
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `overlay.confirm`
 
 Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace, discard); for a copy it says yes. A button acts on its release (pressed and released on it, not right after the question appeared) and does what its key does; the pointer only lights its background (Enter stays on the safe one). Inside `root`.
 
-Reserved — confirmation (Enter keeps what would be lost): `y` `n` `Enter` `Esc`
+Reserved (confirmation (Enter keeps what would be lost)): `y` `n` `Enter` `Esc`
 
 ## `overlay.run_confirm`
 
 Before statements that may do harm run: each is listed; Cancel has the focus, `y` or Enter on Run runs them, as a click on Run does (the pointer does not move the focus). Inside `root`.
 
-Reserved — run confirmation (Cancel has the focus): `y` `n` `Enter` `Esc` `Tab` `Shift+Tab` `Left` `Right` `h` `l`
+Reserved (run confirmation (Cancel has the focus)): `y` `n` `Enter` `Esc` `Tab` `Shift+Tab` `Left` `Right` `h` `l`
 
 ## `overlay.tx_summary`
 
 What the open transaction did (its statements that may have written, rows, time; how long it has been open and idle): `c` commits, `r` rolls back, `Esc` closes; a click on a button does what its key does. Inside `root`.
 
-Reserved — transaction summary: `c` `r` `Esc` `q` `Enter` `j` `k` `Down` `Up`
+Reserved (transaction summary): `c` `r` `Esc` `q` `Enter` `j` `k` `Down` `Up`
 
 ## `overlay.edit_preview`
 
 The statements an Apply is about to send, when they must be seen first (a choice among identical rows, an Apply whose result is not known, an environment that confirms writes); Cancel has the focus: `y` applies, `c` copies the statements, `1`/`a` answer which of several identical rows a change is for, `j`/`k` scroll, `Esc` or `Enter` closes; a click on a button does what its key does. While the changes are applied the dialog says so, and the query's cancel key cancels; it closes once they are applied, else it says why nothing was. After an Apply whose result is not known, the first `y` warns and the second applies again. Inside `root`.
 
-Reserved — pending changes preview: `y` `c` `1` `a` `Esc` `q` `Enter` `j` `k` `Down` `Up`
+Reserved (pending changes preview): `y` `c` `1` `a` `Esc` `q` `Enter` `j` `k` `Down` `Up`
 
 ## `overlay.session_view`
 
 What a profile's query sessions start with (`:session` or `:startup`; in the profile form `Ctrl+E`, for its unsaved values), in the order they are applied, each with where it comes from: the app's limits, the Startup SQL's statements, the profile's own; behind a pooler in transaction mode, how each PostgreSQL statement goes there. `j`/`k` scroll, `Esc` closes; a click on Close closes too. Inside `root`.
 
-Reserved — session settings: `Esc` `q` `Enter` `j` `k` `Down` `Up`
+Reserved (session settings): `Esc` `q` `Enter` `j` `k` `Down` `Up`
 
 ## `overlay.icons_ask`
 
 Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus; a click on Yes or No answers. Inside `root`.
 
-Reserved — the icons question (No has the focus): `y` `n` `Enter` `Esc` `Tab` `Shift+Tab` `Left` `Right` `h` `l`
+Reserved (the icons question (No has the focus)): `y` `n` `Enter` `Esc` `Tab` `Shift+Tab` `Left` `Right` `h` `l`
 
 ## `overlay.busy`
 
@@ -669,45 +669,45 @@ A notice that waits for background work (the launch-time move of passwords to th
 
 Cell value viewer. Inside `workspace`.
 
-Reserved — cell viewer: `j` `k` `Down` `Up` `PageDown` `PageUp` `Space` `g g` `G` `Esc` `q`
+Reserved (cell viewer): `j` `k` `Down` `Up` `PageDown` `PageUp` `Space` `g g` `G` `Esc` `q`
 
 ## `overlay.cell_editor` [text]
 
 The editor of a cell's value of several lines (a value with line breaks, a JSON column's, or `Ctrl+L` in the cell editor), in a box over the screen: the query editor's vim modes, its `/` search, `:s` and registers (a yank goes to the system clipboard as `[editor] clipboard` says). In Normal mode `Enter` or `:w` (`:wq`, `:x`) keeps the text, as `Enter` in the cell editor does (line breaks as typed); `Esc` or `:q` (`:q!`) cancels. With cells of one column selected, each takes the value, as one change. A click outside the box or the wheel closes it, changing nothing. Inside `root`.
 
-Reserved — cell editor of several lines: `Esc` `Enter` `Tab` `Backspace` `Delete` `Left` `Right` `Up` `Down` `Home` `End` `Ctrl+W` `Ctrl+U` `Ctrl+R` `Ctrl+P` `Ctrl+V` `Ctrl+D` `Ctrl+F` `Ctrl+B`
+Reserved (cell editor of several lines): `Esc` `Enter` `Tab` `Backspace` `Delete` `Left` `Right` `Up` `Down` `Home` `End` `Ctrl+W` `Ctrl+U` `Ctrl+R` `Ctrl+P` `Ctrl+V` `Ctrl+D` `Ctrl+F` `Ctrl+B`
 
 ## `overlay.completion` [text]
 
 Completion popup in the editor (keys it does not use go to the editor). Inside `root`.
 
-Reserved — completion popup: `Up` `Down` `Ctrl+P` `Ctrl+N` `Tab` `Enter` `Esc`
+Reserved (completion popup): `Up` `Down` `Ctrl+P` `Ctrl+N` `Tab` `Enter` `Esc`
 
 ## `overlay.which_key`
 
 Which-key popup of an unfinished leader sequence (other keys continue the sequence). Inside `root`.
 
-Reserved — which-key popup: `Esc` `Backspace`
+Reserved (which-key popup): `Esc` `Backspace`
 
 ## `overlay.help`
 
 Keyboard help: one list of every context; the sections of the context it was opened from come first, open; the pointer selects the row under it. Inside `root`.
 
-Reserved — keyboard help: `j` `k` `Down` `Up` `PageDown` `PageUp` `Enter` `l` `Right` `h` `Left` `/` `Esc` `q`
+Reserved (keyboard help): `j` `k` `Down` `Up` `PageDown` `PageUp` `Enter` `l` `Right` `h` `Left` `/` `Esc` `q`
 
 ## `overlay.help.filter` [text]
 
 The `/` filter of the keyboard help. Inside `root`.
 
-Reserved — keyboard help filter: `Esc` `Enter` `Down` `Up`
+Reserved (keyboard help filter): `Esc` `Enter` `Down` `Up`
 
-Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `status.ask`
 
 The status bar's one-line question before an Apply of a result's changes: `y` applies them; any other key, a click or a paste cancels, and does nothing else. Inside `root`.
 
-Reserved — the status bar's question: y does it (c or 1: text with commas read as CSV or one column), any other key cancels: `y` `c` `1`
+Reserved (the status bar's question: y does it (c or 1: text with commas read as CSV or one column), any other key cancels): `y` `c` `1`
 
 ## Command line only
 
@@ -716,7 +716,7 @@ Actions without a default key (the command line finds them by name).
 | Action | Description |
 |---|---|
 | `tunnel.new` | New SSH tunnel (shared by profiles) |
-| `env.new` | New environment (rules, color and badge that profiles share) |
+| `env.new` | New environment (rules, colour and badge that profiles share) |
 | `session.new` | New Startup SQL (settings a profile's sessions start with) |
 | `session.show` | What a profile's sessions start with, and where each setting comes from |
 | `ui.language.en` | Change language → English |
@@ -807,7 +807,7 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `editor.soft_tab_backspace` | `on` `off` | Backspace to tab stop |
 | `editor.run_hints` | `on` `off` | Run hints |
 | `secrets.macos_keychain_access` | `direct` `security_tool` | macOS keychain access |
-| `explorer.size_heat` | `3` `5` `off` | Explorer: size colors |
+| `explorer.size_heat` | `3` `5` `off` | Explorer: size colours |
 | `ui.yank_flash` | `on` `off` | Flash copied cells |
 | `ui.changes_view` | `list` `sql` | Changes tab view |
 | `edit.paste_null` | `\N` `NULL` `none` | Paste NULL token |

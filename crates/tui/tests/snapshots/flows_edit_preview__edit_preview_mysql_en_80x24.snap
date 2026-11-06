@@ -2,7 +2,7 @@
 source: crates/tui/tests/flows_edit_preview.rs
 expression: backend
 ---
-"╭ ╭ Apply changes — shop.people ─────────────────────────────────────────────╮  "
+"╭ ╭ Apply changes: shop.people ──────────────────────────────────────────────╮  "
 "│ │ 1 update                                                                 │─╮"
 "│▾│                                                                          │ │"
 "│ │ Row checks (lock)                                                        │e│"

@@ -530,7 +530,7 @@ fn an_aborted_transaction_can_only_be_rolled_back() {
     h.tab_db(0, DbEvent::Block(true));
     h.tab_db(0, DbEvent::TxOpen(true));
     h.tab_db(0, DbEvent::TxAborted(true));
-    assert!(h.status(160, 45).contains("TX aborted — ROLLBACK required"), "unchanged");
+    assert!(h.status(160, 45).contains("TX aborted: ROLLBACK required"), "unchanged");
     h.keys(" xc");
     assert!(ends(&mut h).is_empty());
     let refused = Msg::TxOnlyRollback { key: "Space x r".into() };

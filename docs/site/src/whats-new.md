@@ -3,7 +3,7 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
-## 0.38.2 — 2026-11-05
+## 0.38.2 (2026-11-05)
 
 The grid shows where its cursor is and sums up a selected range on the status line; menus show what cannot run now, dimmed with why.
 
@@ -24,7 +24,7 @@ The grid shows where its cursor is and sums up a selected range on the status li
 - New setting `ui.background = "theme" | "terminal"` (settings screen, `:set
   ui.background=terminal`): with `terminal` the panes and the result grid's alternate rows leave
   the terminal's own background showing, so a translucent terminal shows through; text,
-  selections and edit marks keep the theme's colors, and dialogs, menus and popups keep its
+  selections and edit marks keep the theme's colours, and dialogs, menus and popups keep its
   surface. Turning it on with a theme that has a background of its own says so in one line.
 
 ### Changed
@@ -37,14 +37,14 @@ The grid shows where its cursor is and sums up a selected range on the status li
   column's header too. A selected range is drawn as one block (the separators between its
   columns included), with its rows' numbers and its columns' headers tinted. New theme tokens
   `grid_cursor_row` and `grid_cursor_header`; a theme file that sets its own background,
-  surface or selection without them gets tints made of its own colors (when those are RGB).
+  surface or selection without them gets tints made of its own colours (when those are RGB).
 - The action menu shows an action that would act there but can't now dimmed, with why in a few
   words where its key would be (a read-only environment, a result that can't be edited, an edit
   that doesn't fit the cell, a table tab's Save, paging that closed), instead of leaving it out.
   The keys and the wheel step over it; a click on it says the reason in full and keeps the menu
   open.
 
-## 0.38.1 — 2026-11-05
+## 0.38.1 (2026-11-05)
 
 Copy and paste inside the grid: `y` keeps the copied cells as they are, and `p` pastes them as new rows (again and again); previous page moved from `p` to `[`.
 
@@ -70,11 +70,11 @@ Copy and paste inside the grid: `y` keeps the copied cells as they are, and `p` 
   `\x07`, and characters that turn the text's direction as `\u{202e}`, never raw; the
   statements copied are unchanged.
 - The result grid marks every new row an Apply is refused for: a cell left to a default its
-  column lacks (`NOT NULL`, no default) reads `! value needed` in the invalid-value color
+  column lacks (`NOT NULL`, no default) reads `! value needed` in the invalid-value colour
   instead of the dim `default`, its column widened to fit, and the row's gutter shows `!`
   instead of `+`, as for a value its column does not take; so does a new row of a table with
   such a column the result does not show. The badge counts these cells, and the cell editor
-  and the inspector say why. Invalid values keep their color under the cursor.
+  and the inspector say why. Invalid values keep their colour under the cursor.
 - A new row in the result grid is tinted as a whole (theme token `edit_inserted_row`) and
   numbered after the rows read, with `+` (or `!`) after its number; rows an Apply added are
   numbered too. Its cells left to their default show what the server will put there instead of
@@ -82,7 +82,7 @@ Copy and paste inside the grid: `y` keeps the copied cells as they are, and `p` 
   draws or a generated column, `<default: now()>` for another default, `NULL` where the column
   takes it. The Apply still leaves them to the server.
 
-## 0.38.0 — 2026-11-04
+## 0.38.0 (2026-11-04)
 
 Pending changes get their own Changes tab, Apply asks on the status line, and a range copied elsewhere can be pasted into the result grid.
 
@@ -116,7 +116,7 @@ Pending changes get their own Changes tab, Apply asks on the status line, and a 
   `confirm = "writes"`. After an Apply the Changes tab shows what was applied and the statements
   sent until the query runs again, or why nothing was, the failing statement marked.
 
-## 0.37.1 — 2026-11-04
+## 0.37.1 (2026-11-04)
 
 This patch adds the edits of a cell to the grid's right-click menu and makes the preview of
 pending changes readable.
@@ -142,7 +142,7 @@ pending changes readable.
   each side, and keys too long for the dialog are cut with `…`.
 - `:set ui.tips=on` is taken as `always`, as the config file already reads `tips = "on"`.
 
-## 0.37.0 — 2026-11-03
+## 0.37.0 (2026-11-03)
 
 This release adds editing a result's data in the grid: change cells, add, copy and delete rows,
 then apply the changes after a preview of their exact statements.
@@ -171,7 +171,7 @@ then apply the changes after a preview of their exact statements.
   it connects no longer count as a change. An export of that result as SQL to a file is no
   longer refused for it either.
 
-## 0.36.2 — 2026-10-31
+## 0.36.2 (2026-10-31)
 
 ### Changed
 
@@ -184,7 +184,7 @@ then apply the changes after a preview of their exact statements.
   transaction a minute before, and `:session` shows the limit with what it overrides. Behind a
   pooler PostgreSQL's is not sent and the environment's limit stays.
 
-## 0.36.1 — 2026-10-30
+## 0.36.1 (2026-10-30)
 
 The documentation now lives at <https://dokadev.github.io/datarig/>, and `datarig --help` names
 MySQL next to PostgreSQL.

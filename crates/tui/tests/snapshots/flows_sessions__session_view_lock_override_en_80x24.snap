@@ -1,15 +1,14 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 1453
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432 · prod           │"
-"│ ╭ Session settings — local-pg ─────────────────────────────────────────────╮e│"
+"│ ╭ Session settings: local-pg ──────────────────────────────────────────────╮e│"
 "│ │ local-pg · PostgreSQL · environment prod                                 │ │"
 "│ │                                                                          │ │"
-"│ │ Lock wait        3s     its Startup SQL “fast” — overrides environment   │ │"
+"│ │ Lock wait        3s     its Startup SQL “fast” overrides environment     │ │"
 "│▾│                         prod: 5s                                         │ │"
 "│ │ Idle disconnect  never  app setting                                      │ │"
 "│ │ Idle rollback    30m    environment prod                                 │ │"

@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
-assertion_line: 873
 expression: backend
 ---
 "╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          "
@@ -15,7 +14,7 @@ expression: backend
 "│  ▸ ○   分析-replica                  ││  7 WHERE o.status = 'paid';                                                                                          │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
 "│  ▸ ○   分析-replica                  ││  8                                                                                                                   │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
 "│                                      ││  9 SELECT * FROM analytics.events;                                                                                   │"
-"│                             ╭ Edit connection — 分析-replica ──────────────────────────────────────────────────────────────────╮                             │" Hidden by multi-width symbols: [(51, " "), (53, " ")]
+"│                             ╭ Edit connection: 分析-replica ───────────────────────────────────────────────────────────────────╮                             │" Hidden by multi-width symbols: [(50, " "), (52, " ")]
 "│                             │  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │                             │"
 "│                             │                                                                                                  │                             │"
 "│                             │ SSL mode          require ▾   ←/→ change · Enter list                                            │                             │"
@@ -27,7 +26,7 @@ expression: backend
 "│                             │ Startup SQL       Environment's (none) ▾   Enter list                                            │                             │"
 "│                             │ Own startup SQL     1 SET name = value                                                         × │                             │"
 "│                             │                     + Add statement  after the Startup SQL · Enter adds                          │                             │"
-"│                             │ Color             ‹ ● orange ›  ←/→ change · Enter list                                          │                             │"
+"│                             │ Colour            ‹ ● orange ›  ←/→ change · Enter list                                          │                             │"
 "│                             │ Icon              ‹ the driver's icon ›  ←/→ change · Enter list                                 │                             │"
 "│                             │ Folder            ‹ (top level) ›  ←/→ change · Enter list                                       │                             │"
 "│                             │                                                                                                  │                             │"

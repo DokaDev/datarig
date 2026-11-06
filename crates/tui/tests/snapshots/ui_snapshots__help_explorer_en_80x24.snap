@@ -3,7 +3,7 @@ source: crates/tui/tests/ui_snapshots.rs
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
-"│ ╭ Keys — Explorer ─────────────────────────────────────────────────────────╮─╮"
+"│ ╭ Keys: Explorer ──────────────────────────────────────────────────────────╮─╮"
 "│▾│ / search all keys · Esc close                                            │ │"
 "│ │──────────────────────────────────────────────────────────────────────────│e│"
 "│ │ ▾ Explorer                                                               │ │"

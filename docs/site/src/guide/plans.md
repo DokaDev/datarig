@@ -47,7 +47,7 @@ options; with `EXPLAIN FORMAT=TREE` (never with `ANALYZE`) on MySQL. It never ha
 ## Reading the plan
 
 The Plan tab shows the plan as a tree with each node's estimated and actual rows (and loops),
-its self and total time, a bar of its share of the whole colored by heat, and its buffers.
+its self and total time, a bar of its share of the whole coloured by heat, and its buffers.
 
 - Nodes that take a fifth of the time or more are marked hot.
 - An estimate ten times off or more is marked with how far and which way. Fewer rows than

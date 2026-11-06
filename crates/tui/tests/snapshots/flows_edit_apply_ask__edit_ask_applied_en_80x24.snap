@@ -14,7 +14,7 @@ expression: backend
 "│                      │╰──────────────────────────────────────────────────────╯"
 "│                      │╭ Results · 3 rows ────────────────────────────────────╮"
 "│                      ││ Result 1  [Applied]  Chart  Messages             H/L │"
-"│                      ││ Changes — Result 1 · shop.users  1 update · 1 delete │"
+"│                      ││ Changes: Result 1 · shop.users   1 update · 1 delete │"
 "│                      ││ Applied · re-run to refresh                          │"
 "│                      ││ - id=2  delete                                       │"
 "│                      ││ ~ id=1  email  'a@x' → 'z@x'                         │"

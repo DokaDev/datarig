@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_environments.rs
-assertion_line: 557
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -12,7 +11,7 @@ expression: backend
 "│▾ Tunnels 0                 ││  Ctrl+O     Quick connect                                                              │"
 "│    n here makes an SSH tun…││  Ctrl+T     New console tab                                                            │"
 "│▾ Environments 4            ││  Space t u  Reopen a closed tab                                                        │"
-"│  ▸ ○ Def╭ Edit connection — local-pg ──────────────────────────────────────────────────────────────────────╮         │"
+"│  ▸ ○ Def╭ Edit connection: local-pg ───────────────────────────────────────────────────────────────────────╮         │"
 "│    ● dev│  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │         │"
 "│    ● tes│                                                                                                  │         │"
 "│    ● sta│ SSL mode          disable ▾   ←/→ change · Enter list                                            │         │"
@@ -24,7 +23,7 @@ expression: backend
 "│         │ Startup SQL       Environment's (none) ▾   Enter list                                            │         │"
 "│         │ Own startup SQL     1 SET name = value                                                         × │         │"
 "│         │                     + Add statement  after the Startup SQL · Enter adds                          │         │"
-"│         │ Color             ‹ ● auto (from the name) ›  ←/→ change · Enter list                            │         │"
+"│         │ Colour            ‹ ● auto (from the name) ›  ←/→ change · Enter list                            │         │"
 "│         │ Icon              ‹ the driver's icon ›  ←/→ change · Enter list                                 │         │"
 "│         │ Folder            ‹ (top level) ›  ←/→ change · Enter list                                       │         │"
 "│         │                                                                                                  │         │"

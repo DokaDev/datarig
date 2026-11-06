@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
-assertion_line: 887
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
@@ -16,7 +15,7 @@ expression: backend
 "│ │ Startup │  leaf                                               │         │ │"
 "│ │ Own star│  fire                                               │       × │ │"
 "│ │         │  bolt                                               │er adds  │ │"
-"│ │ Color   │  shield                                             │ list    │t│"
+"│ │ Colour  │  shield                                             │ list    │t│"
 "│ │ Icon    │  lock                                               │st       │ │"
 "│ │ Folder  │  flask                                              │         │ │"
 "│ │         │  bug                                                │         │ │"

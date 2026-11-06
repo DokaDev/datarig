@@ -3,7 +3,7 @@ source: crates/tui/tests/flows_edit_preview.rs
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
-"│ ╭ Apply changes — shop.users ──────────────────────────────────────────────╮─╮"
+"│ ╭ Apply changes: shop.users ───────────────────────────────────────────────╮─╮"
 "│▾│ 1 update · 1 insert · 1 delete                                           │ │"
 "│ │                                                                          │e│"
 "│ │ Row checks (lock, no waiting)                                            │ │"

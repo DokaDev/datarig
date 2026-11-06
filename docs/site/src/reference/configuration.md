@@ -15,8 +15,8 @@ Keys before the first table header.
 |---|---|---|---|
 | `version` | 1, the original format | `1`, `2` | The file's format version. datarig writes `2` (every profile has an `id`) and upgrades a version 1 file once at launch; older versions of datarig cannot read version 2. |
 | `language` | `"en"` | `"en"`, `"ko"`, `"auto"` | The language of the whole UI; English unless set. Auto follows LC_ALL, LC_MESSAGES or LANG. Data and database messages are never translated. Also `:set language`. |
-| `icons` | `"auto"` | `"auto"`, `"on"`, `"off"` | Nerd Font glyphs for connections, key columns and marks. Needs a Nerd Font as the terminal font. Auto: not decided yet — text marks until you answer the question with a preview (choosing auto asks again). Also `:set icons`. |
-| `theme` | `"terminal"` | a built-in theme's name, or the name of a theme file | The colors of the whole UI. terminal uses your terminal's own colors. catppuccin, tokyo-night and gruvbox follow the terminal's background (light or dark); a variant name such as gruvbox-light pins one. Your own themes: themes/&lt;name>.toml next to the config file. Also `:set theme`. |
+| `icons` | `"auto"` | `"auto"`, `"on"`, `"off"` | Nerd Font glyphs for connections, key columns and marks. Needs a Nerd Font as the terminal font. Auto: not decided yet, so text marks until you answer the question with a preview (choosing auto asks again). Also `:set icons`. |
+| `theme` | `"terminal"` | a built-in theme's name, or the name of a theme file | The colours of the whole UI. terminal uses your terminal's own colours. catppuccin, tokyo-night and gruvbox follow the terminal's background (light or dark); a variant name such as gruvbox-light pins one. Your own themes: themes/&lt;name>.toml next to the config file. Also `:set theme`. |
 | `page_size` | `500` | 1 to 2147483647 | Rows a result fetches from the server at a time (one page of the grid). |
 | `result_window_rows` | `10000` | 1000 to 10000000 | Rows of a result kept in memory; the rest go to a temporary file on disk. |
 | `spill_limit` | `"1GB"` | bytes as a number, or `"512MB"`, `"2GB"` (KB, MB and GB are powers of 1024); `0` or `"off"` for no limit | The most a result's temporary file may take; fetching stops when it is reached. An environment may set its own. |
@@ -51,7 +51,7 @@ The explorer.
 
 | Key | Default | Values | Description |
 |---|---|---|---|
-| `size_heat` | `3` | `3`, `5`, `"off"` (`"on"`, its old value, reads as `3`) | Whether, and in how many levels, the explorer colors the estimates of the largest tables of each schema: the largest tenth by size (one at least). 3 levels: amber from 1 MiB, red from 1 GiB. 5 levels: yellow from 1 MiB, amber from 100 MiB, orange from 1 GiB, red from 10 GiB. Only the estimates already read are used; nothing more is asked of the server. Also `:set explorer.size_heat`. |
+| `size_heat` | `3` | `3`, `5`, `"off"` (`"on"`, its old value, reads as `3`) | Whether, and in how many levels, the explorer colours the estimates of the largest tables of each schema: the largest tenth by size (one at least). 3 levels: amber from 1 MiB, red from 1 GiB. 5 levels: yellow from 1 MiB, amber from 100 MiB, orange from 1 GiB, red from 10 GiB. Only the estimates already read are used; nothing more is asked of the server. Also `:set explorer.size_heat`. |
 
 ## `[ui]`
 
@@ -62,7 +62,7 @@ Things the whole screen shows.
 | `yank_flash` | `"on"` | `"on"`, `"off"` | Whether the cells a copy took from the results grid flash briefly once the copy was sent to the clipboard. A copy that fails or is refused does not flash. Also `:set ui.yank_flash`. |
 | `tips` | `"always"` | `"always"`, `"until_used"`, `"off"` (`"on"`, its old value, reads as `"always"`; `true` and `false` read as `"always"` and `"off"`) | Whether empty places show a tip about a key (an empty editor or result, the workspace without tabs, spare room in the status bar), the welcome panel its first steps, and an action run from a menu a few times names its key once. Always: the tips of a place take turns and keep coming back; a tip about a key you already used shows less often. Until used: a tip goes away once you used its key. Tips follow the key bindings, remapped keys included. Also `:set ui.tips`. |
 | `changes_view` | `"list"` | `"list"`, `"sql"` | What the Changes tab of a result shows first: one line per changed cell, or the statements that apply the changes. In the Changes tab, s switches between them for this run. Also `:set ui.changes_view`. |
-| `background` | `"theme"` | `"theme"`, `"terminal"` | Whether the theme paints the panes' background, or leaves your terminal's own showing (a translucent or image background shows through). Text, selection and edit colors stay the theme's; dialogs, menus and popups keep the theme's surface. Also `:set ui.background`. |
+| `background` | `"theme"` | `"theme"`, `"terminal"` | Whether the theme paints the panes' background, or leaves your terminal's own showing (a translucent or image background shows through). Text, selection and edit colours stay the theme's; dialogs, menus and popups keep the theme's surface. Also `:set ui.background`. |
 
 ## `[edit]`
 
@@ -108,8 +108,8 @@ One table per connection profile, in the explorer's order. Passwords are never w
 | `sslcert` | none | a file path | The client certificate file, used with `sslkey`. |
 | `sslkey` | none | a file path | The client certificate's private key file. |
 | `dsn` | none | a connection string | A connection string kept as written because it cannot be turned into fields (not a URL, or parameters other than `sslmode`, `sslrootcert`, `sslcert` and `sslkey`). A URL of the profile's driver with only those becomes fields when the file is read. |
-| `folder` | the top level | a folder path (`"work/prod"`) | The explorer folder the profile is in. Folders only organize profiles. |
-| `color` | a color picked from the name | `"red"`, `"orange"`, `"yellow"`, `"green"`, `"teal"`, `"cyan"`, `"blue"`, `"indigo"`, `"purple"`, `"pink"`, `"brown"`, `"gray"`, or `"#rrggbb"` | The profile's color in the explorer and on its tabs. |
+| `folder` | the top level | a folder path (`"work/prod"`) | The explorer folder the profile is in. Folders only organise profiles. |
+| `color` | a colour picked from the name | `"red"`, `"orange"`, `"yellow"`, `"green"`, `"teal"`, `"cyan"`, `"blue"`, `"indigo"`, `"purple"`, `"pink"`, `"brown"`, `"gray"`, or `"#rrggbb"` | The profile's colour in the explorer and on its tabs. |
 | `icon` | the driver's icon | the name of one of datarig's icons | The Nerd Font icon next to the profile (an unknown name shows the driver's icon). |
 | `policy` | the default rules | the name of a `[policy.<env>]` table | The profile's environment. A name no environment has is an error of the profile: it does not connect. |
 | `password_source` | `"keychain"` | `"keychain"`, `"file"` (the secrets file), `"command"`, `"env"`, `"prompt"` | Where the profile's password comes from. |

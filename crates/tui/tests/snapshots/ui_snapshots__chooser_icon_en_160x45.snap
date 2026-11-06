@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
-assertion_line: 887
 expression: backend
 ---
 "╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          "
@@ -15,7 +14,7 @@ expression: backend
 "│  ▸ ○  分析-replica                  ││  7 WHERE o│                                                      │                                                   │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
 "│                                      ││  8        │  the driver's icon                                  │                                                   │"
 "│                                      ││  9 SELECT │  database                                           │                                                   │"
-"│                             ╭ Edit connection — lo│  server                                             │─────────────────────╮                             │"
+"│                             ╭ Edit connection: loc│  server                                             │─────────────────────╮                             │"
 "│                             │  Basic   SSH   Advan│  cloud                                              │trl+N/Ctrl+P section │                             │"
 "│                             │                     │  cube                                               │                     │                             │"
 "│                             │ SSL mode          di│  cubes                                              │                     │                             │"
@@ -27,7 +26,7 @@ expression: backend
 "│                             │ Startup SQL       En│  flask                                              │                     │                             │"
 "│                             │ Own startup SQL     │  bug                                                │                   × │                             │"
 "│                             │                     │  rocket                                             │                     │                             │"
-"│                             │ Color             ‹ │  home                                               │                     │                             │"
+"│                             │ Colour            ‹ │  home                                               │                     │                             │"
 "│                             │ Icon              ‹ │  laptop                                             │                     │                             │"
 "│                             │ Folder            ‹ │  building                                           │                     │                             │"
 "│                             │                     │  briefcase                                          │                     │                             │"

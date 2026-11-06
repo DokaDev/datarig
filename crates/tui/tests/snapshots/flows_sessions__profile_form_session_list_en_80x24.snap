@@ -1,10 +1,9 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 879
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
-"│ ╭ Edit connection — local-pg ──────────────────────────────────────────────╮ │"
+"│ ╭ Edit connection: local-pg ───────────────────────────────────────────────╮ │"
 "│▾│  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
 "│ │                                                                          │ │"
 "│ │ SSL mode          disable ▾   ←/→ change · Enter list                    │ │"

@@ -9,9 +9,9 @@ Built-in themes: `terminal`, `dark`, `light`, `high-contrast`, `catppuccin`, `ca
 
 ## The file
 
-`extends` names the built-in theme the file starts from (`terminal` without it). `[colors]` sets color tokens and `[styles]` style tokens; a token the file does not set keeps the value of the theme it extends, and a style it sets replaces that one whole. The dimming of the screen behind a dialog is not a token: it is the extended theme's. An unknown token, color or modifier is an error with its line, and the app then draws with `terminal` and says why.
+`extends` names the built-in theme the file starts from (`terminal` without it). `[colors]` sets colour tokens and `[styles]` style tokens; a token the file does not set keeps the value of the theme it extends, and a style it sets replaces that one whole. The dimming of the screen behind a dialog is not a token: it is the extended theme's. An unknown token, colour or modifier is an error with its line, and the app then draws with `terminal` and says why.
 
-- A color is `#rrggbb`, an ANSI name (`black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, `bright-black`, `bright-red`, `bright-green`, `bright-yellow`, `bright-blue`, `bright-magenta`, `bright-cyan`, `bright-white`) or `default` (the terminal's own).
+- A colour is `#rrggbb`, an ANSI name (`black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, `bright-black`, `bright-red`, `bright-green`, `bright-yellow`, `bright-blue`, `bright-magenta`, `bright-cyan`, `bright-white`) or `default` (the terminal's own).
 - A style is `{ fg = <color>, bg = <color>, modifiers = [...] }`, each part optional; what it leaves out is not set.
 - Modifiers: `bold`, `dim`, `italic`, `underlined`, `reversed`, `crossed-out`.
 
@@ -30,7 +30,7 @@ syn_comment = { fg = "bright-black", modifiers = ["italic"] }
 
 ## Writing a theme file
 
-- `:theme copy <from> <name>` writes `themes/<name>.toml` with every token of the theme `<from>` (a built-in theme or a theme file; a family such as `catppuccin` as the variant drawn now) set to its value, each under a comment saying what it colors. `extends` names the built-in theme `<from>` starts from, for the dimming behind dialogs; every token is in the file, so it stands on its own.
+- `:theme copy <from> <name>` writes `themes/<name>.toml` with every token of the theme `<from>` (a built-in theme or a theme file; a family such as `catppuccin` as the variant drawn now) set to its value, each under a comment saying what it colours. `extends` names the built-in theme `<from>` starts from, for the dimming behind dialogs; every token is in the file, so it stands on its own.
 - `:theme new <name>` writes `themes/<name>.toml` extending the current theme when it is built in, else `dark`, with every token commented out and showing the value it takes from there: remove the `# ` in front of a key to set it.
 - On the settings screen, `c` on the theme row copies the theme shown there (the one being previewed, else the current one) and asks for the new name.
 
@@ -38,9 +38,9 @@ Each writes a new file and never replaces one: a name that is taken, that is not
 
 `:theme update [<name>]` adds to the theme file `<name>` (the current theme without one) the tokens it does not list, such as tokens added after it was written: each under its description at the end of its section, commented out with the value it takes now. No line of the file changes, and the file is replaced only when it reads exactly as before; the theme drawn and the config file stay as they are. A theme file that does not list every token is said once in the status line when it is used, and again only when the tokens it does not list change.
 
-## Colors (`[colors]`)
+## Colours (`[colors]`)
 
-| Token | What it colors |
+| Token | What it colours |
 |---|---|
 | `bg` | The background of the panes: explorer, editor, results. |
 | `surface` | The background of dialogs, popups, menus, the command line and the status bar. |
@@ -65,7 +65,7 @@ Each writes a new file and never replaces one: a name that is taken, that is not
 | `mode_insert` | The background of the mode badge in Insert mode. |
 | `mode_visual` | The background of the mode badge in Visual mode. |
 | `mode_command` | The background of the mode badge while the command line is open. |
-| `mode_fg` | The text of the mode badge (bold, on the mode's color). |
+| `mode_fg` | The text of the mode badge (bold, on the mode's colour). |
 | `chart_1` | The first series of a chart. |
 | `chart_2` | The second series of a chart. |
 | `chart_3` | The third series of a chart. |
@@ -106,12 +106,12 @@ Each writes a new file and never replaces one: a name that is taken, that is not
 | `size_hot` | Explorer size estimates of 1 GiB or more (with five levels: 10 GiB or more). |
 | `size_mild` | With five size levels, explorer size estimates of 1 MiB or more. |
 | `size_heated` | With five size levels, explorer size estimates of 1 GiB or more. |
-| `tab_active` | The active tab's fill (its bg; the alternate surface without one). An fg replaces every text color on it but the environment's badge (a connected tab's number becomes a chip of its profile's color); without one the tab's colors stay, made to read on it. A file that leaves it out but sets bg or accent, both RGB, gets that accent blended into that bg; else the fill of the theme it extends stays. |
+| `tab_active` | The active tab's fill (its bg; the alternate surface without one). An fg replaces every text colour on it but the environment's badge (a connected tab's number becomes a chip of its profile's colour); without one the tab's colours stay, made to read on it. A file that leaves it out but sets bg or accent, both RGB, gets that accent blended into that bg; else the fill of the theme it extends stays. |
 | `grid_match` | A cell of the result grid that the grid's search matches (the whole cell is tinted: its value may be cut). Keep it apart from the selection, a selected range, the alternate rows, the hover and the copy flash. |
 | `grid_match_current` | The grid's cursor cell while it is a match of the grid's search. |
 | `edit_changed` | A cell of the result grid changed and not applied yet (its text: the cell keeps its background, so it must read on the alternate rows, the selection and a selected range). |
 | `edit_pending` | How many changes of a result are pending, on the result tab strip and the hint line. |
 | `edit_inserted` | The cells of a new row of the result grid, not applied yet (their text: the cell keeps its background, so it must read on the alternate rows, the selection and a selected range). |
-| `edit_deleted` | A row of the result grid to be deleted, not applied yet (its text; crossed out, so it shows without color). |
-| `edit_applied` | A value of the result grid an Apply wrote, until the query runs again (its text: the cell keeps its background; italic, so it shows without color). |
-| `edit_invalid` | A value a paste put in a cell of the result grid that its column does not take, not applied yet, and a new row's cell that needs a value its column has no default for (its text: the cell keeps its background; underlined, so it shows without color). |
+| `edit_deleted` | A row of the result grid to be deleted, not applied yet (its text; crossed out, so it shows without colour). |
+| `edit_applied` | A value of the result grid an Apply wrote, until the query runs again (its text: the cell keeps its background; italic, so it shows without colour). |
+| `edit_invalid` | A value a paste put in a cell of the result grid that its column does not take, not applied yet, and a new row's cell that needs a value its column has no default for (its text: the cell keeps its background; underlined, so it shows without colour). |

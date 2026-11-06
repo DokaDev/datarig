@@ -39,7 +39,7 @@ expression: backend
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
-"╭ Space r — Results ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮"
+"╭ Space r: Results ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮"
 "│ #  Results → count every row (runs a count query)   ]  Result tabs → next                               i  Result detail → show / hide                       │"
 "│ +  Results pane → taller                            a  +Copy all fetched rows                           n  Results → next page                               │"
 "│ -  Results pane → shorter                           c  Results → show as a chart / as rows              p  Results → previous page                           │"

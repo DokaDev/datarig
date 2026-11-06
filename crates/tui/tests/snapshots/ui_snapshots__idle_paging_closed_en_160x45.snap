@@ -44,6 +44,6 @@ expression: backend
 "│                                      ││ 18 │   17                                                            ││                                              │"
 "│                                      ││ 19 │   18                                                            ││                                              │"
 "│                                      ││ 20 │   19                                                            ││                                              │"
-"│                                      ││ Showing 500 rows · paging closed — n runs the SELECT again for the n…││                                              │"
+"│                                      ││ Showing 500 rows · paging closed: n runs the SELECT again for the ne…││                                              │"
 "╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯"
-" NORMAL  local-pg │ Showing 500 rows · paging closed — n runs the SELECT again for the next page          │ i type · Ctrl+E run · Tab next pane · : commands EN "
+" NORMAL  local-pg │ Showing 500 rows · paging closed: n runs the SELECT again for the next page           │ i type · Ctrl+E run · Tab next pane · : commands EN "

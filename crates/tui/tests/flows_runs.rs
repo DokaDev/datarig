@@ -182,7 +182,7 @@ fn the_rows_of_a_statement_before_the_last_are_kept_as_its_own_result() {
 #[test]
 fn an_aborted_transaction_says_rollback_is_required() {
     for (lang, open, aborted) in [
-        (Lang::En, "TX open", "TX aborted — ROLLBACK required"),
+        (Lang::En, "TX open", "TX aborted: ROLLBACK required"),
         (Lang::Ko, ko(datarig_core::i18n::Label::StatusTxOpen), ko(datarig_core::i18n::Label::StatusTxAborted)),
     ] {
         let mut h = Harness::connected(lang);

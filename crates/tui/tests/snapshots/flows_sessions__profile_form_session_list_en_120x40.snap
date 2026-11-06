@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 879
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -12,7 +11,7 @@ expression: "h.draw(w, ht).backend()"
 "│▾ Tunnels 0                 ││  Ctrl+O     Quick connect                                                              │"
 "│    n here makes an SSH tun…││  Ctrl+T     New console tab                                                            │"
 "│▾ Environments 1            ││  Space t u  Reopen a closed tab                                                        │"
-"│  ▸ ○ Def╭ Edit connection — local-pg ──────────────────────────────────────────────────────────────────────╮         │"
+"│  ▸ ○ Def╭ Edit connection: local-pg ───────────────────────────────────────────────────────────────────────╮         │"
 "│  ▸ ○ pro│  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │         │"
 "│▾ Startup│                                                                                                  │         │"
 "│    ◇ bro│ SSL mode          disable ▾   ←/→ change · Enter list                                            │         │"
@@ -24,7 +23,7 @@ expression: "h.draw(w, ht).backend()"
 "│         │ Startup SQL │ Environment's (reporting)  the Startup SQL its environment maps for… │             │         │"
 "│         │ Own startup │ None                       no Startup SQL, even if the environment … │           × │         │"
 "│         │             │ broken                     2 statements                              │             │         │"
-"│         │ Color       │ reporting                  2 statements                              │             │         │"
+"│         │ Colour      │ reporting                  2 statements                              │             │         │"
 "│         │ Icon        │ New Startup SQL…                                                     │             │         │"
 "│         │ Folder      ╰──────────────────────────────── Enter pick · ↑↓ select · Esc cancel ─╯             │         │"
 "│         │                                                                                                  │         │"

@@ -305,7 +305,7 @@ fn indexes_triggers_and_trigger_functions() {
     }
     h.keys("D");
     assert!(asked(&h.sent()).is_empty());
-    assert!(h.status(120, 30).contains("Show DDL works on a table, view, materialized view, index or trigger"));
+    assert!(h.status(120, 30).contains("Show DDL works on a table, view, materialised view, index or trigger"));
 }
 
 /// The node's menu offers "Show DDL" on a table (and the function's on a trigger) and runs it.
@@ -395,7 +395,7 @@ fn a_restored_ddl_tab_is_not_read_until_asked() {
     assert!(h.app.tab().is_ddl());
     assert_eq!(state(&h), DdlState::NotLoaded);
     assert!(asked(&h.sent()).is_empty(), "nothing asked by itself");
-    assert!(h.screen(120, 30).contains("Not read yet — r reads the DDL from the catalog"));
+    assert!(h.screen(120, 30).contains("Not read yet: r reads the DDL from the catalog"));
     h.app.focus = Focus::Editor;
     h.keys("r");
     assert_eq!(asked(&h.sent()).len(), 1);
@@ -473,7 +473,7 @@ fn a_ddl_tab_survives_a_restart_without_reading() {
     assert_eq!(state(&h), DdlState::NotLoaded);
     assert_eq!(h.app.tab().editor.text(), "");
     h.app.focus = Focus::Editor;
-    assert!(h.screen(120, 30).contains("Not read yet — r reads the DDL from the catalog"));
+    assert!(h.screen(120, 30).contains("Not read yet: r reads the DDL from the catalog"));
     assert!(h.roles().is_empty(), "no session opened by itself");
     h.keys("r");
     assert_eq!(state(&h), DdlState::Connecting);

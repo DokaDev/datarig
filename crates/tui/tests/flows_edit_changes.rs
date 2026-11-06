@@ -243,7 +243,7 @@ fn the_list_has_a_line_for_each_changed_cell_and_names_its_row() {
     let mut h = four_changes(ready(Lang::En));
     h.command("changes");
     let body = pane(&mut h, 120, 40);
-    assert!(body[0].starts_with(" Changes — Result 1 · shop.users"), "{body:#?}");
+    assert!(body[0].starts_with(" Changes: Result 1 · shop.users"), "{body:#?}");
     assert!(body[0].ends_with("2 updates · 1 insert · 1 delete"), "{body:#?}");
     let rows = |mark: &str| body.iter().filter(|l| l.starts_with(mark)).count();
     assert_eq!((rows(" - "), rows(" ~ "), rows(" + ")), (1, 2, 1), "{body:#?}");
@@ -571,7 +571,7 @@ fn another_result_with_pending_changes_is_named() {
     h.keys("jD");
     h.command("changes");
     let lines = pane(&mut h, 120, 40);
-    assert!(lines[0].contains("Changes — Result 1 · shop.users"), "{lines:#?}");
+    assert!(lines[0].contains("Changes: Result 1 · shop.users"), "{lines:#?}");
     assert_eq!(lines[1].trim(), "Result 2 also has 1 pending", "no key that would not go there: {lines:#?}");
 }
 

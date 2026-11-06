@@ -1,10 +1,9 @@
 ---
 source: crates/tui/tests/flows_environments.rs
-assertion_line: 557
 expression: backend
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
-"│ ╭ Edit connection — local-pg ──────────────────────────────────────────────╮ │"
+"│ ╭ Edit connection: local-pg ───────────────────────────────────────────────╮ │"
 "│▾│  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
 "│ │                                                                          │ │"
 "│ │ SSL mode          disable ▾   ←/→ change · Enter list                    │ │"
@@ -16,7 +15,7 @@ expression: backend
 "│ │ Startup SQL       Environment's (none) ▾   Enter list                    │ │"
 "│ │ Own startup SQL     1 SET name = value                                 × │ │"
 "│ │                     + Add statement  after the Startup SQL · Enter adds  │ │"
-"│ │ Color             ‹ ● auto (from the name) ›  ←/→ change · Enter list    │ │"
+"│ │ Colour            ‹ ● auto (from the name) ›  ←/→ change · Enter list    │ │"
 "│ │ Icon              ‹ the driver's icon ›  ←/→ change · Enter list         │ │"
 "│▾│ Folder            ‹ (top level) ›  ←/→ change · Enter list               │ │"
 "│ │                                                                          │ │"

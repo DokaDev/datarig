@@ -27,9 +27,9 @@ icons off, text marks are used instead (`SSH`, `RO`, `○`, `●`, `✕`).
 datarig needs a terminal of at least 80×24. A smaller window shows only that note until it is
 resized.
 
-## Colors look wrong, or the light/dark variant is wrong
+## Colours look wrong, or the light/dark variant is wrong
 
-- The default theme, `terminal`, uses your terminal's own 16 colors and background. Pick a
+- The default theme, `terminal`, uses your terminal's own 16 colours and background. Pick a
   truecolor theme with `:set theme=dark` (or any name on [Themes](guide/themes.md)).
 - `catppuccin`, `tokyo-night` and `gruvbox` follow the terminal's background, which datarig asks
   once at startup (OSC 11). A terminal that does not answer counts as dark; the settings screen

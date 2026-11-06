@@ -1,6 +1,6 @@
 # Introduction
 
-A full-featured database client that lives in your terminal — light, fast, and safe by default.
+A full-featured database client that lives in your terminal: light, fast, and safe by default.
 
 ![Editing a table in datarig: a cell is changed, the Changes tab shows the exact SQL, and Apply asks first](https://dokadev.github.io/datarig/demo/hero.gif)
 

@@ -286,7 +286,7 @@ fn format_lines() -> [String; 3] {
     let code = |names: &mut dyn Iterator<Item = &str>| names.map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", ");
     [
         format!(
-            "A color is `#rrggbb`, an ANSI name ({}) or `default` (the terminal's own).",
+            "A colour is `#rrggbb`, an ANSI name ({}) or `default` (the terminal's own).",
             code(&mut ANSI_NAMES.iter().copied())
         ),
         "A style is `{ fg = <color>, bg = <color>, modifiers = [...] }`, each part optional; what it leaves out is \
@@ -386,10 +386,10 @@ pub fn doc() -> String {
     s.push_str(&NAMES.iter().map(|n| format!("`{n}`")).collect::<Vec<_>>().join(", "));
     s.push_str(".\n\n## The file\n\n");
     s.push_str(
-        "`extends` names the built-in theme the file starts from (`terminal` without it). `[colors]` sets color \
+        "`extends` names the built-in theme the file starts from (`terminal` without it). `[colors]` sets colour \
          tokens and `[styles]` style tokens; a token the file does not set keeps the value of the theme it \
          extends, and a style it sets replaces that one whole. The dimming of the screen behind a dialog is \
-         not a token: it is the extended theme's. An unknown token, color or modifier is an error with its \
+         not a token: it is the extended theme's. An unknown token, colour or modifier is an error with its \
          line, and the app then draws with `terminal` and says why.\n\n",
     );
     for l in format_lines() {
@@ -401,7 +401,7 @@ pub fn doc() -> String {
     s.push_str(
         "- `:theme copy <from> <name>` writes `themes/<name>.toml` with every token of the theme `<from>` (a \
          built-in theme or a theme file; a family such as `catppuccin` as the variant drawn now) set to its \
-         value, each under a comment saying what it colors. `extends` names the built-in theme `<from>` \
+         value, each under a comment saying what it colours. `extends` names the built-in theme `<from>` \
          starts from, for the dimming behind dialogs; every token is in the file, so it stands on its own.\n\
          - `:theme new <name>` writes `themes/<name>.toml` extending the current theme when it is built in, \
          else `dark`, with every token commented out and showing the value it takes from there: remove the \
@@ -426,7 +426,7 @@ pub fn doc() -> String {
         }
         s.push('\n');
     };
-    table(&mut s, "Colors (`[colors]`)", "What it colors", COLOR_ABOUT);
+    table(&mut s, "Colours (`[colors]`)", "What it colours", COLOR_ABOUT);
     table(&mut s, "Styles (`[styles]`)", "What it styles", STYLE_ABOUT);
     s.pop();
     s

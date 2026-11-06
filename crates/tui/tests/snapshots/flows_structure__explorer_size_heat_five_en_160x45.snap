@@ -46,4 +46,4 @@ expression: backend
 "│          ▸ t28                           ~10 rows · 64 KB││                                                                                                  │"
 "│          ▸ t29                           ~10 rows · 64 KB││                                                                                                  │"
 "╰──────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
-" NORMAL  local-pg │ Explorer: size colors: 5 levels: yellow, amber from 100 MiB, orange from 1 GiB, red from 10 GiB             │ Enter open · Tab next pane EN "
+" NORMAL  local-pg │ Explorer: size colours: 5 levels: yellow, amber from 100 MiB, orange from 1 GiB, red from 10 GiB            │ Enter open · Tab next pane EN "

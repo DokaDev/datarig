@@ -307,7 +307,7 @@ fn a_prompt_profile_asks_on_every_connect() {
     assert_eq!((p.save_to, p.save), (None, false), "no checkbox");
     let screen = h.screen(80, 24);
     assert!(!screen.contains("[x]") && !screen.contains("[ ]"), "{screen}");
-    assert!(screen.contains("Asked on every connect — never saved"), "{screen}");
+    assert!(screen.contains("Asked on every connect, never saved"), "{screen}");
     h.type_text("typed");
     h.key(KeyCode::Tab); // no checkbox to focus
     assert!(!h.prompt().unwrap().save_focus);

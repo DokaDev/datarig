@@ -4,7 +4,7 @@
 │ │   Nerd Font icons           ‹ on            ›  Nerd Font icons → on      │e│
 │ │   Command line position     ‹ popup         ›  A popup near the top of … │ │
 │ │   Theme                     ‹ terminal      ›  Your terminal's own colo… │ │
-│ │   Explorer: size colors     ‹ 3             ›  3 levels: amber from 1 M… │ │
+│ │   Explorer: size colours    ‹ 3             ›  3 levels: amber from 1 M… │ │
 │ │   Tips                      ‹ always        ›  Always, in empty places   │ │
 │ │   Background                ‹ theme         ›  The theme's               │ │
 │ │ Editor                                                                   │ │

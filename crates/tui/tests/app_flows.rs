@@ -1303,7 +1303,7 @@ fn keychain_unavailable_at_launch_keeps_file_and_prompts() {
     h.db(DbEvent::ConnectFailed { error: "password missing".into(), auth: true });
     let screen = h.screen(80, 24);
     let no_keychain = ko(datarig_core::i18n::Label::PromptPasswordNoKeychain);
-    let head = no_keychain.split(" — ").next().unwrap();
+    let head = no_keychain.split(": ").next().unwrap();
     assert!(screen.contains(head) && !screen.contains("[x]"), "{screen}");
     assert!(screen.contains(ko(datarig_core::i18n::Label::PromptPasswordKeysSession)), "{screen}");
     cleanup(&path);

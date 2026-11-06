@@ -3,7 +3,7 @@
 A **connection profile** says how to reach one database server: driver, host, port, user,
 database, how to get the password, and optionally TLS, an SSH tunnel and an environment. The
 explorer's **Connections** section lists every profile, in nested folders, each with its own
-color and icon.
+colour and icon.
 
 ```text
 {{#include ../screens/profile-form.txt}}
@@ -35,7 +35,7 @@ color and icon.
 
 Several connections can be open at once. Each has its own metadata session, schema tree and
 completion catalog, and each tab belongs to one connection. A tab's number shows its
-connection's color while connected, is muted while not, and turns into a spinner while a
+connection's colour while connected, is muted while not, and turns into a spinner while a
 statement runs. `◆` after a tab's name marks an open transaction of yours, `!` an aborted
 transaction or a lost connection.
 

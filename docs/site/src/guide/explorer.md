@@ -6,7 +6,7 @@ restarts): **Connections**, **Tunnels** ([SSH tunnels](ssh-tunnels.md)), **Envir
 and **Saved queries**. Each section's head shows its name and how many it has.
 
 Under a connected profile it lists the server's databases, their schemas, tables and views
-(materialized views with an icon of their own). `j`/`k` move, `l`/`h` open and close, `Enter`
+(materialised views with an icon of their own). `j`/`k` move, `l`/`h` open and close, `Enter`
 opens or toggles, `r` reloads. The full key list is in the
 [keybindings reference](../reference/keybindings.md).
 
@@ -23,7 +23,7 @@ opens or toggles, `r` reloads. The full key list is in the
 
 ## Row and size estimates
 
-Each table and materialized view shows the server's estimates of its rows and its size on disk,
+Each table and materialised view shows the server's estimates of its rows and its size on disk,
 dim and on the right (`orders   ~50k rows · 19 MB`). They are read with the schema's list in the
 same round trip, from the statistics that `VACUUM` and `ANALYZE` keep, without opening the table
 and without a lock on it. A table that has grown to more than twice the rows its last `ANALYZE`
@@ -51,7 +51,7 @@ opens (`r` reads it again; the table itself is never read). The groups:
 
 Each key, index and check opens to the columns it covers, in its order (a foreign key's columns
 with the column each references, as `user_id → users.id`). Views show their columns and
-triggers, materialized views their columns and indexes.
+triggers, materialised views their columns and indexes.
 
 The groups start closed, one line each (`Columns (27)`); what you open stays open for the
 session. Because the explorer is narrow, the status bar shows the whole line under the cursor.
@@ -73,7 +73,7 @@ opened; `Esc` gives the tree back as it was.
 
 ## Show DDL
 
-`D` on a table, view, materialized view, index or trigger (or its menu, or `:ddl [schema.name]`)
+`D` on a table, view, materialised view, index or trigger (or its menu, or `:ddl [schema.name]`)
 opens its `CREATE` statements in a read-only tab; `F` on a trigger shows its function's.
 
 - On PostgreSQL the DDL is rebuilt from the catalog in one round trip, and its first line says

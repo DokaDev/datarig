@@ -591,7 +591,7 @@ tokens! {
         mode_insert => "The background of the mode badge in Insert mode.",
         mode_visual => "The background of the mode badge in Visual mode.",
         mode_command => "The background of the mode badge while the command line is open.",
-        mode_fg => "The text of the mode badge (bold, on the mode's color).",
+        mode_fg => "The text of the mode badge (bold, on the mode's colour).",
         chart_1 => "The first series of a chart.",
         chart_2 => "The second series of a chart.",
         chart_3 => "The third series of a chart.",
@@ -628,15 +628,15 @@ tokens! {
         size_hot => "Explorer size estimates of 1 GiB or more (with five levels: 10 GiB or more).",
         size_mild => "With five size levels, explorer size estimates of 1 MiB or more.",
         size_heated => "With five size levels, explorer size estimates of 1 GiB or more.",
-        tab_active => "The active tab's fill (its bg; the alternate surface without one). An fg replaces every text color on it but the environment's badge (a connected tab's number becomes a chip of its profile's color); without one the tab's colors stay, made to read on it. A file that leaves it out but sets bg or accent, both RGB, gets that accent blended into that bg; else the fill of the theme it extends stays.",
+        tab_active => "The active tab's fill (its bg; the alternate surface without one). An fg replaces every text colour on it but the environment's badge (a connected tab's number becomes a chip of its profile's colour); without one the tab's colours stay, made to read on it. A file that leaves it out but sets bg or accent, both RGB, gets that accent blended into that bg; else the fill of the theme it extends stays.",
         grid_match => "A cell of the result grid that the grid's search matches (the whole cell is tinted: its value may be cut). Keep it apart from the selection, a selected range, the alternate rows, the hover and the copy flash.",
         grid_match_current => "The grid's cursor cell while it is a match of the grid's search.",
         edit_changed => "A cell of the result grid changed and not applied yet (its text: the cell keeps its background, so it must read on the alternate rows, the selection and a selected range).",
         edit_pending => "How many changes of a result are pending, on the result tab strip and the hint line.",
         edit_inserted => "The cells of a new row of the result grid, not applied yet (their text: the cell keeps its background, so it must read on the alternate rows, the selection and a selected range).",
-        edit_deleted => "A row of the result grid to be deleted, not applied yet (its text; crossed out, so it shows without color).",
-        edit_applied => "A value of the result grid an Apply wrote, until the query runs again (its text: the cell keeps its background; italic, so it shows without color).",
-        edit_invalid => "A value a paste put in a cell of the result grid that its column does not take, not applied yet, and a new row's cell that needs a value its column has no default for (its text: the cell keeps its background; underlined, so it shows without color).",
+        edit_deleted => "A row of the result grid to be deleted, not applied yet (its text; crossed out, so it shows without colour).",
+        edit_applied => "A value of the result grid an Apply wrote, until the query runs again (its text: the cell keeps its background; italic, so it shows without colour).",
+        edit_invalid => "A value a paste put in a cell of the result grid that its column does not take, not applied yet, and a new row's cell that needs a value its column has no default for (its text: the cell keeps its background; underlined, so it shows without colour).",
 }
 
 /// The token names of a theme file.
