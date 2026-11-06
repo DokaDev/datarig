@@ -2760,3 +2760,5 @@
 "update_notice.opt_out" = "datarig checks GitHub for a new release once a day. To turn this off: o, or :set updates.check=off (Settings, Updates)."
 "update_notice.skip" = "Skip this version"
 "update_notice.turn_off" = "Turn off checks"
+"update.not_skipped_second" = "Not skipped: another datarig keeps update.toml; skip it there"
+"update.not_skipped" = "Not skipped: update.toml could not be written ({path})"

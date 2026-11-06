@@ -2753,3 +2753,5 @@
 "update_notice.opt_out" = "datarig는 하루 한 번 GitHub에서 새 릴리스를 확인합니다. 끄려면 o를 누르거나 :set updates.check=off(설정, 업데이트)."
 "update_notice.skip" = "이 버전 건너뛰기"
 "update_notice.turn_off" = "확인 끄기"
+"update.not_skipped_second" = "건너뛰지 못함: 다른 datarig가 update.toml을 관리합니다. 그 창에서 건너뛰세요"
+"update.not_skipped" = "건너뛰지 못함: update.toml을 쓸 수 없습니다({path})"

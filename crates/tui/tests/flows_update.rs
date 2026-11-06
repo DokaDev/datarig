@@ -217,6 +217,9 @@ fn each_switch_that_turns_it_off_makes_no_request() {
     assert!(h.app.read_only);
     assert_eq!(h.overlay_kind(), Some(OverlayKind::UpdateNotice));
     h.key(KeyCode::Char('s'));
+    // Not kept here, and said so (the other instance keeps the file).
+    let t = h.status(200, 24);
+    assert!(t.contains("Not skipped: another datarig") && !t.contains("Not told about"), "{t}");
     h.app.first_frame_drawn();
     quiet(&mut rx);
     assert_eq!(fetch.calls(), 0);
@@ -417,4 +420,16 @@ fn turning_the_checks_off_says_when_the_config_could_not_be_saved() {
     h.key(KeyCode::Char('o'));
     let t = h.status(200, 24);
     assert!(!t.contains("Update checks are off."), "the failure is not hidden: {t}");
+}
+
+#[test]
+fn skipping_is_said_only_once_it_is_kept() {
+    let s = State::new("skip-unwritable");
+    let mut h = with_notice(&s, "99.0.0");
+    // update.toml cannot be written now: a folder in its place.
+    std::fs::remove_file(s.file()).unwrap();
+    std::fs::create_dir_all(s.file()).unwrap();
+    h.key(KeyCode::Char('s'));
+    let t = h.status(200, 24);
+    assert!(t.contains("Not skipped: update.toml could not be") && !t.contains("Not told about"), "{t}");
 }

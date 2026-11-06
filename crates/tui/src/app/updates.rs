@@ -252,8 +252,16 @@ impl App {
                 self.change_update_state(|s| s.remind(version, now));
             }
             NoticeAnswer::Skip => {
-                self.change_update_state(|s| s.skip(version));
-                self.flash(Notice::new(Msg::UpdateSkipped { version: version.to_string() }, Level::Info));
+                // Said only once kept; else why it was not (it would come back at the next launch).
+                let msg = match self.change_update_state(|s| s.skip(version)) {
+                    Some(_) => Notice::new(Msg::UpdateSkipped { version: version.to_string() }, Level::Info),
+                    None if self.read_only => Notice::new(Label::UpdateNotSkippedSecond, Level::Warning),
+                    None => {
+                        let path = self.paths.update_file().map(|p| p.display().to_string()).unwrap_or_default();
+                        Notice::new(Msg::UpdateNotSkipped { path }, Level::Warning)
+                    }
+                };
+                self.flash(msg);
             }
             NoticeAnswer::TurnOff => {
                 self.prefs.update_check = UpdateCheck::Off;
