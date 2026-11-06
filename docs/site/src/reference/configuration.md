@@ -72,6 +72,14 @@ Editing a result's rows.
 |---|---|---|---|
 | `paste_null` | `"\\N"` | `"\\N"`, `"NULL"`, `"none"` | The text an unquoted field of a range pasted into a result reads as NULL. An empty field is an empty value, never NULL. Also `:set edit.paste_null`. |
 
+## `[updates]`
+
+What's new after an update.
+
+| Key | Default | Values | Description |
+|---|---|---|---|
+| `whats_new` | `"on"` | `"on"`, `"off"` | Whether the release notes of the new version show once by themselves on the first start after an update. :whatsnew shows them any time. They come with the program: nothing is fetched. Also `:set updates.whats_new`. |
+
 ## `[secrets]`
 
 Passwords and the OS keychain.

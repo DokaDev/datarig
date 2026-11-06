@@ -717,6 +717,14 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (EditPreview, &["y", "c", "1", "a", "esc", "q", "enter", "j", "k", "down", "up"], "pending changes preview"),
     (SessionView, &["esc", "q", "enter", "j", "k", "down", "up"], "session settings"),
     (
+        WhatsNew,
+        &[
+            "esc", "q", "enter", "j", "k", "down", "up", "ctrl+d", "ctrl+u", "pagedown", "pageup", "space", "g", "G",
+            "home", "end", "]", "[",
+        ],
+        "what's new",
+    ),
+    (
         IconsAsk,
         &["y", "n", "enter", "esc", "tab", "shift+tab", "left", "right", "h", "l"],
         "the icons question (No has the focus)",

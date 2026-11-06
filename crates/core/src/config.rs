@@ -35,6 +35,7 @@
 //! key was used, or never; and the welcome panel its first steps), `[ui] changes_view` which
 //! view the Changes tab of a result opens in (its list of changed cells, or its SQL), `[ui]
 //! background` whether the theme paints its background or leaves the terminal's showing.
+//! `[updates] whats_new` says whether What's new shows once after an update.
 //! `[edit] paste_null` is the text a range pasted into a result reads as NULL (unquoted).
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
 //! the top, or the bottom line), `detail_view` (the result inspector as a panel or a status bar
@@ -129,6 +130,8 @@ struct FileConfig {
     ui: Option<UiSection>,
     #[serde(default)]
     edit: Option<EditSection>,
+    #[serde(default)]
+    updates: Option<UpdatesSection>,
     #[serde(default)]
     secrets: Option<SecretsSection>,
     #[serde(default)]
@@ -367,6 +370,13 @@ struct UiSection {
     changes_view: Option<String>,
     #[serde(default)]
     background: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdatesSection {
+    #[serde(default)]
+    whats_new: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -706,6 +716,25 @@ impl Choice for YankFlash {
     }
 }
 
+/// `[updates] whats_new`: whether What's new shows once by itself after an update (on by
+/// default). `:whatsnew` shows it either way.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WhatsNewSetting {
+    #[default]
+    On,
+    Off,
+}
+
+impl Choice for WhatsNewSetting {
+    const ALL: &'static [Self] = &[WhatsNewSetting::On, WhatsNewSetting::Off];
+    fn as_str(self) -> &'static str {
+        match self {
+            WhatsNewSetting::On => "on",
+            WhatsNewSetting::Off => "off",
+        }
+    }
+}
+
 /// `[ui] background`: whether the theme paints its background, or the panes leave the
 /// terminal's own background showing (a translucent terminal shows through).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -916,6 +945,8 @@ pub struct Prefs {
     pub background: UiBackground,
     /// `[edit] paste_null`.
     pub paste_null: PasteNull,
+    /// `[updates] whats_new`.
+    pub whats_new: WhatsNewSetting,
     /// `idle_disconnect`: how long a profile's connection may sit unused before its sessions
     /// close (`None`: never); an environment may say otherwise.
     pub idle_disconnect: Option<std::time::Duration>,
@@ -947,6 +978,7 @@ impl Default for Prefs {
             changes_view: ChangesView::default(),
             background: UiBackground::default(),
             paste_null: PasteNull::default(),
+            whats_new: WhatsNewSetting::default(),
             idle_disconnect: None,
             lock_wait: None,
         }
@@ -1222,6 +1254,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
     let (ui_flash, ui_tips, ui_changes, ui_background) =
         f.ui.map(|u| (u.yank_flash, u.tips, u.changes_view, u.background)).unwrap_or_default();
     let paste_null = f.edit.and_then(|e| e.paste_null);
+    let whats_new = f.updates.and_then(|u| u.whats_new);
     let (default_source, keychain_access) =
         f.secrets.map(|s| (s.default_source, s.macos_keychain_access)).unwrap_or_default();
     let default_source = match default_source {
@@ -1279,6 +1312,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         changes_view: choice("ui.changes_view", ui_changes, "list, sql")?,
         background: choice("ui.background", ui_background, "theme, terminal")?,
         paste_null: choice("edit.paste_null", paste_null, "\\N, NULL, none")?,
+        whats_new: choice("updates.whats_new", whats_new, "on, off")?,
         idle_disconnect: match &f.idle_disconnect {
             None => None,
             Some(v) => policy::parse_idle_disconnect(v)
@@ -1757,6 +1791,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "ui", "background", background)?;
     let null = (prefs.paste_null.as_str().into(), prefs.paste_null == PasteNull::default());
     orphans += &nested_setting(&mut doc, "edit", "paste_null", null)?;
+    let whats_new = (prefs.whats_new.as_str().into(), prefs.whats_new == WhatsNewSetting::default());
+    orphans += &nested_setting(&mut doc, "updates", "whats_new", whats_new)?;
     let source = (default_source.as_str().into(), default_source == DefaultSource::Auto);
     orphans += &nested_setting(&mut doc, "secrets", "default_source", source)?;
     let access = (prefs.keychain_access.as_str().into(), prefs.keychain_access == KeychainAccess::default());

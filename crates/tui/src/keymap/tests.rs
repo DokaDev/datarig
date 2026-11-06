@@ -141,6 +141,8 @@ fn default_table_is_conflict_free() {
         "session.show",
         // The DDL tab's menu; `y` yanks a part of the text (to the clipboard by default).
         "ddl.copy",
+        // `:whatsnew`; once by itself after an update.
+        "app.whats_new",
     ];
     for s in action::REGISTRY {
         let bound = km.bindings().iter().any(|b| b.target == Target::Action(s.action));

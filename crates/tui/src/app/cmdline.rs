@@ -97,6 +97,7 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::ChangesView(_)
         | Setting::Background(_)
         | Setting::PasteNull(_)
+        | Setting::WhatsNew(_)
         | Setting::IdleDisconnect(_)
         | Setting::LockWait(_) => None,
     }
@@ -896,6 +897,7 @@ impl App {
             }
             Setting::Background(b) => self.set_ui_background(s, b),
             Setting::PasteNull(n) => self.set_prefs(s, |x| x.paste_null = n),
+            Setting::WhatsNew(w) => self.set_prefs(s, |x| x.whats_new = w),
             Setting::IdleDisconnect(d) => self.set_prefs(s, |x| x.idle_disconnect = d),
             Setting::LockWait(d) => self.set_prefs(s, |x| x.lock_wait = d),
         }

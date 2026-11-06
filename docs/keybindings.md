@@ -651,6 +651,12 @@ What a profile's query sessions start with (`:session` or `:startup`; in the pro
 
 Reserved (session settings): `Esc` `q` `Enter` `j` `k` `Down` `Up`
 
+## `overlay.whats_new`
+
+The release notes this build carries (`:whatsnew`; once by itself after an update, unless `[updates] whats_new = "off"`), newest version first: `j`/`k` scroll a row, `Ctrl+D`/`Ctrl+U` half a page, `PageDown`/`Space`/`PageUp` a page, `g`/`G` to the top or the end, `]`/`[` to the next or previous version, `Esc`, `q` or `Enter` closes; the wheel scrolls and a click on Close closes. Inside `root`.
+
+Reserved (what's new): `Esc` `q` `Enter` `j` `k` `Down` `Up` `Ctrl+D` `Ctrl+U` `PageDown` `PageUp` `Space` `g` `G` `Home` `End` `]` `[`
+
 ## `overlay.icons_ask`
 
 Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus; a click on Yes or No answers. Inside `root`.
@@ -733,6 +739,7 @@ Actions without a default key (the command line finds them by name).
 | `secrets.default.env` | New profiles' password → environment variable |
 | `secrets.default.prompt` | New profiles' password → prompt on every connect |
 | `help.all` | Keyboard help: expand all |
+| `app.whats_new` | What's new: the release notes of this version and the ones before |
 | `explorer.context_menu` | Explorer: actions of this node (menu) |
 | `ddl.copy` | DDL tab: copy the whole DDL |
 
@@ -786,6 +793,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:changes` |  | Show changes |
 | `:apply` |  | Apply the pending changes (asked first) |
 | `:discard` |  | Drop every pending change of the result |
+| `:whatsnew` |  | What's new: the release notes of this version and the ones before |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):
 
@@ -816,5 +824,6 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `idle_disconnect` | `off` `5m` `10m` `30m` `1h` | Close idle connections |
 | `lock_wait` | `off` `5s` `10s` `30s` `1m` | Lock wait limit |
 | `editor.completion_delay_ms` | `60` `0` `30` `100` `150` `250` | Completion delay (ms) |
+| `updates.whats_new` | `on` `off` | What's new |
 
 <!-- ANCHOR_END: commands -->

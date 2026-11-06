@@ -120,7 +120,7 @@ started while the first runs restores no tabs and writes none of the workspace f
 | Config file | `--config <path>`, else `$XDG_CONFIG_HOME/datarig/config.toml`, else `~/.config/datarig/config.toml` (on every OS) |
 | Secrets file, theme files | Next to the config file: `secrets.toml`, `themes/<name>.toml` |
 | Data (saved queries, datarig's own `known_hosts`) | `~/.local/share/datarig` on Linux, `~/Library/Application Support/datarig` on macOS, `%APPDATA%\datarig` on Windows |
-| State (tabs, console buffers, `usage.toml`, `keychain.toml`) | `~/.local/state/datarig` on Linux, `~/Library/Application Support/datarig/state` on macOS, `%LOCALAPPDATA%\datarig` on Windows |
+| State (tabs, console buffers, `usage.toml`, `update.toml`, `keychain.toml`) | `~/.local/state/datarig` on Linux, `~/Library/Application Support/datarig/state` on macOS, `%LOCALAPPDATA%\datarig` on Windows |
 
 `$XDG_DATA_HOME` and `$XDG_STATE_HOME`, when set, take precedence on every OS (as
 `<dir>/datarig`), and `DATARIG_DATA_DIR` / `DATARIG_STATE_DIR` override both. Windows paths are
@@ -132,6 +132,10 @@ holds no times, statements or names of yours, is never sent anywhere, and is not
 `[ui] tips = "off"`. With `[ui] tips = "until_used"`, delete it while datarig is not running to see every tip
 again (with connections or a saved workspace there, the first steps stay done). If you used datarig before tips existed, the first
 steps count as done.
+
+`update.toml` keeps the newest version of datarig that ran on this machine, so
+[What's new](getting-started.md#whats-new) shows once after an update. A second datarig open at
+the same time reads it but never writes it.
 
 ## The config file has an `[editor] mode` key
 

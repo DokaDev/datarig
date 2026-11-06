@@ -30,6 +30,7 @@ pub(crate) mod settings;
 pub mod statement_list;
 pub(crate) mod statusbar;
 pub(crate) mod tab_list;
+pub(crate) mod whats_new;
 
 use crate::text::{clip, width};
 use crate::theme;

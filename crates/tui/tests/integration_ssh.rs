@@ -117,6 +117,8 @@ async fn a_profile_connects_through_the_bastion() {
     app.set_secret_store(store as Arc<dyn SecretStore>);
     let state = scratch("state");
     app.set_paths(Paths { data: Some(data.to_path_buf()), state: Some(state.to_path_buf()) });
+    // What's new would open over the screen at launch.
+    app.whats_new_paused = true;
     let h = home.to_path_buf();
     app.set_env_lookup(Arc::new(move |k: &str| (k == "HOME").then(|| h.display().to_string())));
     app.set_tunnels(Arc::new(SshTunnels));
@@ -193,6 +195,8 @@ async fn a_mysql_profile_connects_through_the_bastion() {
     app.set_secret_store(store as Arc<dyn SecretStore>);
     let state = scratch("my-state");
     app.set_paths(Paths { data: Some(data.to_path_buf()), state: Some(state.to_path_buf()) });
+    // What's new would open over the screen at launch.
+    app.whats_new_paused = true;
     let h = home.to_path_buf();
     app.set_env_lookup(Arc::new(move |k: &str| (k == "HOME").then(|| h.display().to_string())));
     app.set_tunnels(Arc::new(SshTunnels));
@@ -289,6 +293,8 @@ async fn the_next_statement_after_a_lost_tunnel_connects_again() {
     app.set_secret_store(store as Arc<dyn SecretStore>);
     let state = scratch("lost-state");
     app.set_paths(Paths { data: Some(data.to_path_buf()), state: Some(state.to_path_buf()) });
+    // What's new would open over the screen at launch.
+    app.whats_new_paused = true;
     let h = home.to_path_buf();
     app.set_env_lookup(Arc::new(move |k: &str| (k == "HOME").then(|| h.display().to_string())));
     app.set_tunnels(Arc::new(SshTunnels));
@@ -390,6 +396,8 @@ async fn two_profiles_on_one_preset_share_one_ssh_connection() {
     app.set_secret_store(store as Arc<dyn SecretStore>);
     let state = scratch("shared-state");
     app.set_paths(Paths { data: Some(data.to_path_buf()), state: Some(state.to_path_buf()) });
+    // What's new would open over the screen at launch.
+    app.whats_new_paused = true;
     let h = home.to_path_buf();
     app.set_env_lookup(Arc::new(move |k: &str| (k == "HOME").then(|| h.display().to_string())));
     app.set_tunnels(Arc::new(SshTunnels));

@@ -79,6 +79,7 @@ pub mod tips;
 pub mod tunnel;
 pub mod tx;
 mod update;
+pub mod whats_new;
 pub mod yank_flash;
 
 pub use conn::{
@@ -833,6 +834,9 @@ pub struct App {
     last_top: Option<OverlayKind>,
     /// The tips: usage counts, the page they turn with, each place's pick ([`tips`]).
     pub tips: tips::TipState,
+    /// What's new does not show by itself at launch, nor is anything written for it (the tests
+    /// of other screens set it; `:whatsnew` still works).
+    pub whats_new_paused: bool,
 }
 
 fn test_msg(i18n: &I18n, t: &ConnTest) -> Notice {
@@ -1125,6 +1129,7 @@ impl App {
             detail_picked: None,
             last_top: None,
             tips: tips::TipState::default(),
+            whats_new_paused: false,
             pending_context: None,
             pending_end: None,
             pending_use: None,
@@ -1408,6 +1413,8 @@ impl App {
         }
         // Not with a config that has errors: the answer could not be saved (asked on the first
         // launch after the file is fixed).
+        // Over the workspace, under the icons question (asked first).
+        self.whats_new_at_launch();
         if self.ask_icons && self.icons == IconsSetting::Auto && !self.config_broken {
             self.overlays.push(Overlay::IconsAsk(overlay::IconsAsk::default()));
         }
@@ -1667,6 +1674,7 @@ impl App {
             Some(Overlay::TxSummary(_)) => Ctx::TxSummary,
             Some(Overlay::EditPreview(_)) => Ctx::EditPreview,
             Some(Overlay::SessionView(_)) => Ctx::SessionView,
+            Some(Overlay::WhatsNew(_)) => Ctx::WhatsNew,
             Some(Overlay::IconsAsk(_)) => Ctx::IconsAsk,
             Some(Overlay::Help(h)) if h.filtering => Ctx::HelpFilter,
             Some(Overlay::Help(_)) => Ctx::Help,

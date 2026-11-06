@@ -1,7 +1,7 @@
 //! Dialogs shown on top of the workspace, kept in one stack. The last entry has the keyboard
 //! and is drawn last. Entries are kept in a fixed rank order (cell viewer < profile form < settings <
 //! export dialog <
-//! keyboard help < which-key < quick connect < tab list < context menu < saved-queries tree < name input <
+//! keyboard help < what's new < which-key < quick connect < tab list < context menu < saved-queries tree < name input <
 //! chooser < picker <
 //! confirmation < run confirmation < transaction summary < session view < icons question < busy notice < password prompt < command line), so a dialog that opens later but ranks lower —
 //! e.g. a password prompt raised by a connection event while the command line is open — goes
@@ -376,6 +376,8 @@ pub enum Overlay {
     Export(Box<super::export_form::ExportForm>),
     /// Keyboard help (`Space ?`, `F1`).
     Help(Help),
+    /// The release notes this build carries (`:whatsnew`, or once after an update).
+    WhatsNew(super::whats_new::WhatsNewView),
     /// Keys that may follow an unfinished leader sequence.
     WhichKey(WhichKey),
     /// Fuzzy profile switcher (`Ctrl+O`).
@@ -419,6 +421,7 @@ pub enum OverlayKind {
     Settings,
     Export,
     Help,
+    WhatsNew,
     WhichKey,
     QuickConnect,
     TabList,
@@ -446,6 +449,7 @@ impl Overlay {
             Overlay::Settings(_) => OverlayKind::Settings,
             Overlay::Export(_) => OverlayKind::Export,
             Overlay::Help(_) => OverlayKind::Help,
+            Overlay::WhatsNew(_) => OverlayKind::WhatsNew,
             Overlay::WhichKey(_) => OverlayKind::WhichKey,
             Overlay::QuickConnect(_) => OverlayKind::QuickConnect,
             Overlay::TabList(_) => OverlayKind::TabList,
@@ -716,6 +720,14 @@ impl Overlays {
 
     pub fn tx_summary_mut(&mut self) -> Option<&mut TxSummary> {
         self.0.iter_mut().find_map(|o| if let Overlay::TxSummary(s) = o { Some(s) } else { None })
+    }
+
+    pub fn whats_new(&self) -> Option<&super::whats_new::WhatsNewView> {
+        self.0.iter().find_map(|o| if let Overlay::WhatsNew(w) = o { Some(w) } else { None })
+    }
+
+    pub fn whats_new_mut(&mut self) -> Option<&mut super::whats_new::WhatsNewView> {
+        self.0.iter_mut().find_map(|o| if let Overlay::WhatsNew(w) = o { Some(w) } else { None })
     }
 
     pub fn session_view(&self) -> Option<&SessionView> {

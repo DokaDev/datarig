@@ -72,6 +72,9 @@ impl Home {
         for d in [&data, &state] {
             std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
         }
+        // This version already ran here: What's new does not open over what is measured.
+        let seen = format!("seen = \"{}\"\n", env!("CARGO_PKG_VERSION"));
+        std::fs::write(state.join(datarig_core::update::FILE), seen).map_err(|e| e.to_string())?;
         let id = ProfileId::new();
         // The portal of a result with more rows is held, so its title counts down to the idle
         // close (`paging = "hold"`). The idle disconnect is armed (far past the measurement):

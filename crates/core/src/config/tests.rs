@@ -658,6 +658,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             changes_view: ChangesView::List,
             background: UiBackground::Theme,
             paste_null: PasteNull::BackslashN,
+            whats_new: WhatsNewSetting::On,
             idle_disconnect: None,
             lock_wait: None,
         }
@@ -982,6 +983,33 @@ fn tips_show_always_by_default_until_used_or_never() {
     assert_eq!(load(Some(path.clone())).0.prefs.tips, Tips::Always);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("tips"));
+}
+
+#[test]
+fn whats_new_is_on_unless_the_updates_table_turns_it_off() {
+    assert_eq!(parse("").unwrap().prefs.whats_new, WhatsNewSetting::On);
+    assert_eq!(parse("[updates]\nwhats_new = \"off\"\n").unwrap().prefs.whats_new, WhatsNewSetting::Off);
+    assert_eq!(
+        parse("[updates]\nwhats_new = \"never\"\n").unwrap_err(),
+        ConfigError::Value {
+            key: "updates.whats_new".into(),
+            value: "never".into(),
+            profile: None,
+            allowed: Some("on, off")
+        }
+    );
+    assert!(parse("[updates]\nwhatsnew = \"off\"\n").is_err(), "unknown key");
+    let path = temp_file("whats_new");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "# mine\n").unwrap();
+    let prefs = Prefs { whats_new: WhatsNewSetting::Off, ..Prefs::default() };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[updates]\nwhats_new = \"off\"\n"), "{text}");
+    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    // On is the default: the key goes.
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("whats_new"));
 }
 
 #[test]

@@ -108,6 +108,10 @@ pub fn draw_overlays(f: &mut Frame, app: &mut App, screen_cursor: Option<(u16, u
             OverlayKind::Chooser => draw_chooser(app, content, f.buffer_mut()),
             OverlayKind::Picker => draw_picker(app, content, f.buffer_mut()),
             OverlayKind::Help => draw_help(app, content, f.buffer_mut()),
+            OverlayKind::WhatsNew => {
+                crate::widgets::whats_new::draw_whats_new(app, content, f.buffer_mut());
+                None
+            }
             OverlayKind::WhichKey => {
                 draw_which_key(app, content, f.buffer_mut());
                 None

@@ -74,6 +74,7 @@ pub enum Ctx {
     TxSummary,
     EditPreview,
     SessionView,
+    WhatsNew,
     IconsAsk,
     Busy,
     CellViewer,
@@ -86,7 +87,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 47] = [
+    pub const ALL: [Ctx; 48] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -125,6 +126,7 @@ impl Ctx {
         Ctx::TxSummary,
         Ctx::EditPreview,
         Ctx::SessionView,
+        Ctx::WhatsNew,
         Ctx::IconsAsk,
         Ctx::Busy,
         Ctx::CellViewer,
@@ -177,6 +179,7 @@ impl Ctx {
             Ctx::TxSummary => "overlay.tx_summary",
             Ctx::EditPreview => "overlay.edit_preview",
             Ctx::SessionView => "overlay.session_view",
+            Ctx::WhatsNew => "overlay.whats_new",
             Ctx::IconsAsk => "overlay.icons_ask",
             Ctx::Busy => "overlay.busy",
             Ctx::CellViewer => "overlay.cell_viewer",
@@ -363,6 +366,9 @@ impl Ctx {
             Ctx::SessionView => {
                 "What a profile's query sessions start with (`:session` or `:startup`; in the profile form `Ctrl+E`, for its unsaved values), in the order they are applied, each with where it comes from: the app's limits, the Startup SQL's statements, the profile's own; behind a pooler in transaction mode, how each PostgreSQL statement goes there. `j`/`k` scroll, `Esc` closes; a click on Close closes too."
             }
+            Ctx::WhatsNew => {
+                "The release notes this build carries (`:whatsnew`; once by itself after an update, unless `[updates] whats_new = \"off\"`), newest version first: `j`/`k` scroll a row, `Ctrl+D`/`Ctrl+U` half a page, `PageDown`/`Space`/`PageUp` a page, `g`/`G` to the top or the end, `]`/`[` to the next or previous version, `Esc`, `q` or `Enter` closes; the wheel scrolls and a click on Close closes."
+            }
             Ctx::IconsAsk => {
                 "Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus; a click on Yes or No answers."
             }
@@ -426,6 +432,7 @@ impl Ctx {
             Ctx::TxSummary => Label::KeyctxOverlayTxSummary,
             Ctx::EditPreview => Label::KeyctxOverlayEditPreview,
             Ctx::SessionView => Label::KeyctxOverlaySessionView,
+            Ctx::WhatsNew => Label::KeyctxOverlayWhatsNew,
             Ctx::IconsAsk => Label::KeyctxOverlayIconsAsk,
             Ctx::Busy => Label::KeyctxOverlayBusy,
             Ctx::CellViewer => Label::KeyctxOverlayCellViewer,

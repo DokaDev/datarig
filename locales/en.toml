@@ -2706,3 +2706,19 @@
 "edit.preview.invalid_why" = "{column}: {reason}"
 "edit.badge.pending_invalid" = { one = "{pending} pending · {count} invalid", other = "{pending} pending · {count} invalid" }
 "edit.badge.pending_invalid_short" = { one = "{pending} · {count}!", other = "{pending} · {count}!" }
+
+# What's new
+"action.whats_new" = "What's new: the release notes of this version and the ones before"
+"keyctx.overlay.whats_new" = "What's new"
+"whats_new.title" = "What's new"
+"whats_new.title_version" = "What's new in datarig {version}"
+"whats_new.keys" = "j/k scroll · ]/[ version · Esc close"
+"whats_new.more" = "Older versions: {url}"
+"whats_new.opt_out" = "Shown once after each update (updates.whats_new)."
+"whats_new.position" = "lines {from}–{to} of {total}"
+"settings.group.updates" = "Updates"
+"setting.whats_new" = "What's new"
+"setting.whats_new.about" = "Whether the release notes of the new version show once by themselves on the first start after an update. :whatsnew shows them any time. They come with the program: nothing is fetched."
+"setting.whats_new.on" = "On, once after each update"
+"setting.whats_new.off" = "Off, only with :whatsnew"
+"tips.whats_new" = "{command} shows what changed in this version"

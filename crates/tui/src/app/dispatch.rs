@@ -185,6 +185,7 @@ impl App {
             Action::Help => self.open_help(false),
             Action::DismissOnboarding => self.dismiss_onboarding(),
             Action::HelpAll => self.open_help(true),
+            Action::WhatsNew => self.open_whats_new(),
             // A selected range goes first, then the grid.
             // The inspector goes back to its grid; the grid drops a selected range first, then
             // goes back to the editor.

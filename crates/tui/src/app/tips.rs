@@ -100,6 +100,7 @@ const TIPS: &[Tip] = &[
     }),
     tip("settings", Place::NoTab, Subject::Action(Action::OpenSettings, Ctx::Nav), |key| Msg::TipsSettings { key }),
     tip("ddl_command", Place::NoTab, Subject::Command("ddl"), |command| Msg::TipsDdlCommand { command }),
+    tip("whats_new", Place::NoTab, Subject::Command("whatsnew"), |command| Msg::TipsWhatsNew { command }),
     tip("run", Place::EmptyEditor, Subject::Action(Action::RunStatement, Ctx::Workspace), |key| Msg::TipsRun { key }),
     tip("complete", Place::EmptyEditor, Subject::Action(Action::ShowCompletions, Ctx::VimInsert), |key| {
         Msg::TipsComplete { key }
@@ -166,7 +167,9 @@ fn command_id(name: &str) -> String {
 pub struct TipState {
     pub usage: Usage,
     /// The usage file could not be read: nothing is written to it this session.
-    unreadable: bool,
+    pub(super) unreadable: bool,
+    /// The usage file was there at launch: this machine used datarig before.
+    pub(super) existed: bool,
     /// Counted since the last write.
     dirty: bool,
     /// Counted since the last write, but only counts past what changes the tips: written at
@@ -333,6 +336,7 @@ impl App {
                 return;
             }
         };
+        self.tips.existed = existed;
         match usage::load(&path) {
             Ok(u) => self.tips.usage = u,
             Err(usage::Unreadable) => {
