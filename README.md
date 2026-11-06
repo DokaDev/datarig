@@ -60,7 +60,7 @@ match, and move across columns while the row numbers stay in place.
 the values into series, and a cursor shows the exact values of each point. Nothing runs again.
 [Charts](https://dokadev.github.io/datarig/guide/charts.html)
 
-![Revenue per month and channel as lines with a cursor on one month, then as bars](https://dokadev.github.io/datarig/demo/charts.gif)
+![Revenue per month and product category as lines with a cursor on one month, then as bars](https://dokadev.github.io/datarig/demo/charts.gif)
 
 **Know where you are.** Profiles carry icons, and their environment's colour and mark (PROD,
 STG or your own) follow them onto their tabs and the status line; a read-only environment

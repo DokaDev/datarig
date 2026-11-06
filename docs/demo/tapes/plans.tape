@@ -14,17 +14,17 @@ Show
 Sleep 800ms
 Type "i"
 # Each line ends before Enter with no completion open (a trailing space closes it).
-Type "SELECT p.category, count(*) AS items, sum(i.quantity * i.unit_price) AS revenue "
+Type@40ms "SELECT p.category, count(*) AS items, sum(i.quantity * i.unit_price) AS revenue "
 Enter
-Type "FROM store.order_items i "
+Type@40ms "FROM store.order_items i "
 Enter
-Type "JOIN store.products p ON p.id = i.product_id "
+Type@40ms "JOIN store.products p ON p.id = i.product_id "
 Enter
-Type "JOIN store.orders o ON o.id = i.order_id "
+Type@40ms "JOIN store.orders o ON o.id = i.order_id "
 Enter
-Type "WHERE o.placed_at >= '2026-06-01' "
+Type@40ms "WHERE o.placed_at >= '2026-06-01' "
 Enter
-Type "GROUP BY p.category ORDER BY revenue DESC "
+Type@40ms "GROUP BY p.category ORDER BY revenue DESC "
 Escape
 Sleep 200ms
 Escape
