@@ -19,7 +19,7 @@ Type@40ms "SELECT date_trunc('month', o.placed_at)::date AS month, p.category, s
 Enter
 Type@40ms "FROM store.order_items i JOIN store.orders o ON o.id = i.order_id "
 Enter
-Type@40ms "JOIN store.products p ON p.id = i.product_id GROUP BY 1, 2 ORDER BY 1 "
+Type@40ms "JOIN store.products p ON p.id = i.product_id GROUP BY 1, 2 ORDER BY 1, 2 "
 Escape
 Sleep 200ms
 Escape
