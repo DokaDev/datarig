@@ -12,7 +12,7 @@ WIDTH, HEIGHT, BAND = 1280, 640, 104
 BACKGROUND = (0x1A, 0x1B, 0x26)
 TITLE = (0xC0, 0xCA, 0xF5)
 TEXT = (0x9A, 0xA5, 0xCE)
-TAGLINE = "A full-featured database client that lives in your terminal — light, fast, and safe by default."
+TAGLINE = "A full-featured database client that lives in your terminal: light, fast, and safe by default."
 
 
 def main(still_path: str, out_path: str, bold: str, regular: str) -> None:

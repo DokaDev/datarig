@@ -1,13 +1,10 @@
 # datarig
 
-[![CI](https://github.com/DokaDev/datarig/actions/workflows/ci.yml/badge.svg)](https://github.com/DokaDev/datarig/actions/workflows/ci.yml)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/DokaDev/datarig)
-[![Release](https://img.shields.io/github/v/release/DokaDev/datarig)](https://github.com/DokaDev/datarig/releases/latest)
-[![Homebrew](https://img.shields.io/badge/brew-dokadev%2Ftap%2Fdatarig-orange)](https://github.com/DokaDev/homebrew-tap)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
-[![Docs](https://img.shields.io/badge/docs-dokadev.github.io%2Fdatarig-informational)](https://dokadev.github.io/datarig/)
+[![CI](https://github.com/DokaDev/datarig/actions/workflows/ci.yml/badge.svg)](https://github.com/DokaDev/datarig/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/DokaDev/datarig)](https://github.com/DokaDev/datarig/releases/latest) [![Homebrew](https://img.shields.io/badge/brew-dokadev%2Ftap%2Fdatarig-orange)](https://github.com/DokaDev/homebrew-tap)
 
-A full-featured database client that lives in your terminal — light, fast, and safe by default.
+[![Docs](https://img.shields.io/badge/docs-dokadev.github.io%2Fdatarig-informational)](https://dokadev.github.io/datarig/) [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license) [![Ask DeepWiki](https://img.shields.io/badge/Ask-DeepWiki-20B2AA)](https://deepwiki.com/DokaDev/datarig)
+
+A full-featured database client that lives in your terminal: light, fast, and safe by default.
 
 ![Editing a table in datarig: a cell is changed, the Changes tab shows the exact SQL, and Apply asks first](https://dokadev.github.io/datarig/demo/hero.gif)
 
@@ -58,16 +55,17 @@ match, and move across columns while the row numbers stay in place.
 
 ![Searching a wide result and moving across its columns](https://dokadev.github.io/datarig/demo/search.gif)
 
-**Know where you are.** Profiles carry icons, and their environment's color and mark (PROD,
+**Know where you are.** Profiles carry icons, and their environment's colour and mark (PROD,
 STG or your own) follow them onto their tabs and the status line; a read-only environment
 refuses a write before it is sent. [Environments and safety](https://dokadev.github.io/datarig/guide/environments.html)
 
 ![Profiles with icons and environment marks, and a write refused on a read-only profile](https://dokadev.github.io/datarig/demo/environments.gif)
 
-**Themes.** Built-in themes, light and dark, or your own in a file.
+**Themes.** Built-in themes, light and dark, previewed live in the settings screen, or your
+own in a file.
 [Themes](https://dokadev.github.io/datarig/guide/themes.html)
 
-![The same screen in four built-in themes](https://dokadev.github.io/datarig/demo/themes.gif)
+![Stepping through the built-in themes in the settings screen](https://dokadev.github.io/datarig/demo/themes.gif)
 
 ## Status
 
