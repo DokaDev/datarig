@@ -7,6 +7,7 @@ members = [
     "crates/ssh",
     "crates/tls",
     "crates/tui",
+    "crates/update",
     "crates/bench",
 ]
 # A patched dependency, not ours to lint or test (see [patch.crates-io]).
@@ -36,6 +37,7 @@ datarig-driver-postgres = { path = "crates/drivers/postgres" }
 datarig-ssh = { path = "crates/ssh" }
 datarig-tls = { path = "crates/tls" }
 datarig-tui = { path = "crates/tui" }
+datarig-update = { path = "crates/update" }
 
 arboard = { version = "3.6", default-features = false }
 # The Parquet export's byte strings: one buffer per column of a row group, sliced (parquet's own).
@@ -91,6 +93,10 @@ rustls-platform-verifier = "0.7.1"
 webpki = { package = "rustls-webpki", version = "0.103", default-features = false, features = ["std"] }
 # rustls for tokio (the same features).
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
+# The update check's one HTTPS GET (crates/update): rustls with the `ring` provider datarig
+# already uses and the platform's verifier (no bundled root list), no compression, no cookies,
+# no JSON (serde_json reads the answer).
+ureq = { version = "3.5", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
 # SSH tunnels: pure Rust with the `ring` backend
 # (no cmake/nasm), RSA keys, and no compression (never negotiated).
 russh = { version = "0.63.3", default-features = false, features = ["ring", "rsa"] }
