@@ -153,11 +153,21 @@ fn the_rows_are_read_on_a_worker_and_a_changed_selection_drops_the_answer() {
     // Before an answer: the size, and that it is being summed (the input never waits).
     let line = h.status(W, H);
     assert!(line.contains("2 rows × 1 column · summing…"), "{line}");
-    assert_eq!(h.app.grid_summary_jobs(), started + 2, "one job per selection, the one before stopped");
-    // The selection grows before the answers: theirs are dropped, the last one's kept.
+    // The selection grew at its end: the job counting its first row goes on, the next row is
+    // added after it.
+    assert_eq!(h.app.grid_summary_jobs(), started + 1, "the job goes on");
     press(&mut h, 'j');
     let line = summary(&mut h);
     assert!(line.contains("3 rows × 1 column · sum 12.75"), "{line}");
+    assert_eq!(h.app.grid_summary_rows_read(), 3, "each row read once");
+    // A selection that is not the one before grown (one row up): counted again, the answer of
+    // the job before dropped.
+    let jobs = h.app.grid_summary_jobs();
+    press(&mut h, 'k');
+    press(&mut h, 'k');
+    assert_eq!(h.app.grid_summary_jobs(), jobs + 2, "one job per selection, the one before stopped");
+    let line = summary(&mut h);
+    assert!(line.contains("1 row × 1 column · sum 10.50"), "{line}");
     // Input that leaves the selection as it is starts no job.
     let jobs = h.app.grid_summary_jobs();
     h.draw(W, H);
@@ -200,4 +210,54 @@ fn rows_that_cannot_be_read_are_said_not_summed() {
     assert!(!line.contains(" × "), "no summary over it: {line}");
     assert_eq!(h.app.selection_summary(), None);
     let _ = std::fs::remove_dir_all(&state);
+}
+
+/// Whole columns while every row is fetched, page after page: each page's rows are added to
+/// what was counted (never read again), the summary so far stays on the status line meanwhile,
+/// and the sum is exact.
+#[test]
+fn whole_columns_add_each_streamed_page_to_the_count_so_far() {
+    let mut h = Harness::connected(Lang::En);
+    let _clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.app.run(vec!["SELECT amount FROM t".to_string()]);
+    let id = h.app.tab().exec.query_id;
+    let page = |range: std::ops::Range<i64>| -> Vec<Vec<Option<String>>> {
+        range.map(|i| vec![if i % 100 == 7 { None } else { Some(format!("{i}.25")) }]).collect()
+    };
+    let columns = Some(vec![meta("amount", "numeric", true, false)]);
+    h.db(DbEvent::Page { id, columns, rows: page(0..500), more: true, elapsed: Duration::ZERO });
+    h.app.focus = Focus::Results;
+    h.draw(W, H);
+    let g = h.app.tab().grid.clone();
+    let (x, y) = (g.hit_cols[0].0 + 1, g.header_y);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+    let line = summary(&mut h);
+    // 0..500 without the five NULLs (7, 107, …): 124,750 − 1,035 + 495 × 0.25.
+    assert!(line.contains("500 rows × 1 column · sum 123,838.75"), "{line}");
+    assert!(line.contains("NULL 5") && line.contains("fetched rows only"), "{line}");
+    let (jobs, read) = (h.app.grid_summary_jobs(), h.app.grid_summary_rows_read());
+    // Every row fetched, then copied: the column stays selected while the pages come.
+    h.keys("  ");
+    h.type_text("fetch every");
+    h.key(KeyCode::Enter);
+    h.keys("c");
+    h.keys("y");
+    h.db(DbEvent::Page { id, columns: None, rows: page(500..1000), more: true, elapsed: Duration::ZERO });
+    // Before the new rows' job answers: the sum so far, said to be summing.
+    let line = h.status(W, H);
+    assert!(line.contains("1,000 rows × 1 column · sum 123,838.75") && line.contains("summing…"), "{line}");
+    // Every form that shows the sum so far says it is still summing.
+    let forms = h.app.selection_summary_forms();
+    assert!(forms.iter().all(|f| !f.contains("sum ") || f.contains("summing…")), "{forms:?}");
+    let line = summary(&mut h);
+    // 0..1000 without the ten NULLs: 499,500 − 4,570 + 990 × 0.25.
+    assert!(line.contains("1,000 rows × 1 column · sum 495,177.50"), "{line}");
+    assert!(line.contains("NULL 10") && line.contains("fetched rows only"), "{line}");
+    h.db(DbEvent::Page { id, columns: None, rows: page(1000..1500), more: true, elapsed: Duration::ZERO });
+    let line = summary(&mut h);
+    // 0..1500 without the fifteen NULLs: 1,124,250 − 10,605 + 1,485 × 0.25.
+    assert!(line.contains("1,500 rows × 1 column · sum 1,114,016.25 · avg"), "{line}");
+    assert_eq!(h.app.grid_summary_rows_read() - read, 1000, "only the new rows were read");
+    assert_eq!(h.app.grid_summary_jobs() - jobs, 2, "a job per page");
 }

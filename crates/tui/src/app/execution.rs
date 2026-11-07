@@ -468,6 +468,8 @@ impl App {
     pub fn on_db_event(&mut self, ev: DbEvent) {
         self.on_db_event_here(ev);
         self.tips_follow();
+        // Rows that came in (a page while every row is fetched) grow a whole-column selection.
+        self.sync_grid_summary();
         self.sweep_cell_edit();
         self.sweep_as_plan();
         self.sweep_exports();
