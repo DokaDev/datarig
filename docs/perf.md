@@ -68,5 +68,24 @@ DATARIG_TEST_MYSQL_URL=mysql://datarig:datarig@127.0.0.1:53306/datarig \
 | The explorer's `/` filter over 10,000 relations (`[explorer]`) | Matching folds the filter once and compares names without allocating; about 1.5 ms per key with its frame (p95 under 3 ms) on a developer machine against a 25 ms budget |
 | First frame p95 and binary size | The first frame has a wide margin (about 15 ms measured against 250 ms). The binary is held by the release profile (LTO, one codegen unit, symbols stripped): 9.5 MiB on macOS arm64 and 11.3 MiB on Linux arm64 at first (the CI's Linux x86_64 build reached 15.9 MiB by 0.6.0 and about 16.1 MiB with the plan views of 0.7.0, so the budget was 17 MiB; the MySQL driver of 0.12.0 adds about 0.5 MiB, so it was 19 MiB; TLS adds about 1.3 MiB, so it was 21 MiB; export to Excel and Parquet add about 1.9 MiB, so it is 23 MiB); without it, 20.7 MiB on the CI's Linux x86_64 |
 
+A time (a check in ms, or rows per second) depends on the runner as well as on datarig, and a
+hosted runner is now and then many times slower for a while: once the median first frame of
+the starts took about 220 ms instead of 4 ms, and the same job run again on the same commit
+measured 3.4 ms. So a time over its budget is measured once more: when every scenario
+has run, those with a time over budget run again, and a time fails the run only if it is over
+its budget both times. A real regression is: the completion of enumerated values that once
+took 22 to 35 ms per key (instead of about 1.5 ms) was over budget in every run until it was
+fixed. Counts (round trips, memory, bytes walked, cells, lines, wakeups) and the binary size
+get no second chance: one over budget fails the run, even if its scenario ran again for a time
+and the count held then; and a count over budget in a scenario that ran again fails too. A time
+that passed only when measured again is named in the output ("over budget once, within it when
+measured again").
+
+Before the scenarios, and again before the second measurement, `budget` times a probe on the
+runner: work that none of datarig's code takes part in (multiplications on one core, and 4 MiB
+written and synced to the disk). The `perf` job's "Measurements" step prints `perf.jsonl`,
+where each line has its `attempt` (1 or 2) and the probe of each attempt sits next to the
+measurements, so a slow time can be read against the runner's speed at that moment.
+
 To change a budget, measure first (`datarig-bench <scenario>` a few times on a quiet
 machine), then keep the headroom the file's comments describe.
