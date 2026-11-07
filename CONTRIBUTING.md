@@ -82,6 +82,9 @@ DATARIG_SECRET_STORE=memory \
   ./target/release/datarig-bench budget
 ```
 
+A time over its budget (ms, rows per second) is measured once more and fails only if it is over
+budget again; counts, memory and the binary size fail at once (docs/perf.md, "Budgets").
+
 - Unit tests live next to the code in `<module>/tests.rs`; integration tests in each crate's
   `tests/`.
 - Screens are pinned with [insta](https://insta.rs) snapshots in English. After an intended

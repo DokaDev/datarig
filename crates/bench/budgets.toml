@@ -2,7 +2,12 @@
 #
 # Round trips are exact counts through the latency proxy, so they do not depend on the machine.
 # Memory and wakeups are counts too. Times have a wide margin over what a developer machine
-# measures, because CI runners are slower and shared.
+# measures, because CI runners are slower and shared. A time over its budget (a check in ms, or
+# rows per second) is measured once more, its scenario run again, and fails only if it is over
+# its budget again: a hosted runner is now and then many times slower for a while, a regression
+# is slow both times. Counts and the binary size fail at once. Before the scenarios, and again
+# before measuring a time once more, a probe (work that none of datarig's code takes part in)
+# times the runner; perf.jsonl keeps it with the measurements.
 
 [rtt]
 # One-way latency of the proxy. Long enough that the pieces of one flight always reach the
@@ -204,7 +209,8 @@ cpu_pct_max = 1.0
 countdown_frames_per_s_max = 2.0
 
 [startup]
-runs = 10
+# 20 starts, so the p95 is not simply the slowest start (with 10 it was).
+runs = 20
 first_frame_ms_p95_max = 250.0
 # The Linux x86_64 binary of CI was 15.9 MiB before the plan views (0.7.0) added about 0.2 MiB:
 # 17 MiB, with the release profile unchanged (opt-level "s" would shrink it a fifth but slow

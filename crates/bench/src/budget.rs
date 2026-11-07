@@ -1,37 +1,91 @@
 //! `datarig-bench budget`: run the scenarios and hold them to `budgets.toml`. Every check
 //! prints its measurement and its budget; any check over budget fails the run.
+//!
+//! A time (a check in ms, or rows per second) depends on the runner as well as on datarig: a
+//! hosted runner is now and then many times slower for a while. A time over its budget is
+//! measured once more (its scenario run again), and fails the run only if it is over budget
+//! again. A real regression is over budget both times; a slow moment of the runner is rarely
+//! still there for the second measurement. Counts (round trips, memory, bytes walked, cells,
+//! wakeups) and the binary size do not depend on the runner and fail at once.
 
 use serde_json::Value;
 use std::path::Path;
 use toml::Table;
 
-/// The checks made so far: what was checked, and whether it passed.
+/// One check: what was checked, its scenario, whether it is a time, and whether it passed.
+struct Check {
+    what: String,
+    scenario: String,
+    timing: bool,
+    ok: bool,
+}
+
+/// The checks made so far.
 #[derive(Default)]
 pub struct Checks {
-    results: Vec<(String, bool)>,
+    scenario: String,
+    results: Vec<Check>,
 }
 
 impl Checks {
+    /// The scenario whose checks follow.
+    pub fn scenario(&mut self, name: &str) {
+        self.scenario = name.to_string();
+    }
+
+    fn push(&mut self, what: &str, timing: bool, ok: bool) {
+        self.results.push(Check { what: what.to_string(), scenario: self.scenario.clone(), timing, ok });
+    }
+
+    /// `measured` must be at most `max`; in ms (`unit` " ms") it is a time.
     fn check(&mut self, what: &str, measured: f64, max: f64, unit: &str) {
         let ok = measured <= max;
         println!("  {} {what}: {measured:.3}{unit} (budget {max}{unit})", if ok { "PASS" } else { "FAIL" });
-        self.results.push((what.to_string(), ok));
+        self.push(what, unit == " ms", ok);
     }
 
-    /// `measured` must be at least `min`.
+    /// `measured` must be at least `min`: rows per second, a time.
     fn check_min(&mut self, what: &str, measured: f64, min: f64, unit: &str) {
         let ok = measured >= min;
         println!("  {} {what}: {measured:.3}{unit} (budget at least {min}{unit})", if ok { "PASS" } else { "FAIL" });
-        self.results.push((what.to_string(), ok));
+        self.push(what, true, ok);
     }
 
     fn missing(&mut self, what: &str) {
         println!("  FAIL {what}: not measured");
-        self.results.push((what.to_string(), false));
+        self.push(what, false, false);
     }
 
-    pub fn failed(&self) -> Vec<&str> {
-        self.results.iter().filter(|(_, ok)| !ok).map(|(w, _)| w.as_str()).collect()
+    /// The scenarios with a time over budget, in the order they ran: the ones to run again.
+    pub fn timing_failed(&self) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        for c in self.results.iter().filter(|c| c.timing && !c.ok) {
+            if !names.contains(&c.scenario) {
+                names.push(c.scenario.clone());
+            }
+        }
+        names
+    }
+
+    /// What failed: every count over budget or not measured, here or in `again` (the checks of
+    /// the scenarios run once more), and every time over budget here that `again` did not
+    /// find within budget too.
+    pub fn failed(&self, again: &Checks) -> Vec<String> {
+        let mut failed = Vec::new();
+        for c in self.results.iter().filter(|c| !c.ok) {
+            let passed_again = c.timing && again.results.iter().any(|a| a.what == c.what && a.ok);
+            if passed_again {
+                println!("  over budget once, within it when measured again: {}", c.what);
+            } else {
+                failed.push(c.what.clone());
+            }
+        }
+        for a in again.results.iter().filter(|a| !a.ok && !a.timing) {
+            if !failed.contains(&a.what) {
+                failed.push(a.what.clone());
+            }
+        }
+        failed
     }
 }
 
@@ -361,3 +415,6 @@ pub fn startup(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> 
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

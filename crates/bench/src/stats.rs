@@ -117,5 +117,43 @@ pub fn load_avg() -> String {
     }
 }
 
+/// A fixed piece of work timed on this machine, which none of datarig's code takes part in:
+/// a run of multiplications on one core, 5 times, and 4 MiB written to a file in `scratch` and
+/// synced to the disk, 3 times. `datarig-bench budget` records it with every run and before it
+/// measures a timing again, so a time over its budget can be read against the runner's speed
+/// at that moment (a hosted runner is sometimes many times slower for a while).
+pub fn probe(scratch: &std::path::Path) -> Value {
+    use std::io::Write;
+    use std::time::Instant;
+    let mut cpu = Vec::new();
+    for _ in 0..5 {
+        let t = Instant::now();
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for i in 0..20_000_000u64 {
+            h = (h ^ i).wrapping_mul(0x0100_0000_01b3);
+        }
+        std::hint::black_box(h);
+        cpu.push(ms(t.elapsed()));
+    }
+    let path = scratch.join("probe");
+    let bytes = vec![0x5a_u8; 4 << 20];
+    let disk: std::io::Result<Vec<f64>> = (0..3)
+        .map(|_| {
+            let t = Instant::now();
+            let mut f = std::fs::File::create(&path)?;
+            f.write_all(&bytes)?;
+            f.sync_all()?;
+            Ok(ms(t.elapsed()))
+        })
+        .collect();
+    let _ = std::fs::remove_file(&path);
+    // A write that failed is no time at all, never a fast one.
+    let disk = match disk {
+        Ok(d) => Summary::of(&d).json(),
+        Err(e) => json!({ "error": format!("{}: {e}", path.display()) }),
+    };
+    json!({ "cpu_ms": Summary::of(&cpu).json(), "fsync_4mib_ms": disk })
+}
+
 #[cfg(test)]
 mod tests;

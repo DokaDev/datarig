@@ -175,65 +175,118 @@ const EXPLORER_PER_SCHEMA: usize = 500;
 const PLAN_JOINS: usize = 40;
 const PLAN_PARTITIONS: usize = 500;
 
-/// Every scenario, held to the budgets.
+/// The scenarios `budget` runs, in this order.
+const BUDGET_SCENARIOS: [&str; 17] = [
+    "rtt",
+    "rtt_ssh",
+    "rtt_mysql",
+    "editor",
+    "editor_block",
+    "editor_mysql",
+    "grid",
+    "plan",
+    "chart",
+    "explorer",
+    "paging",
+    "export_stream",
+    "export_keyset",
+    "export_xlsx",
+    "export_parquet",
+    "idle",
+    "startup",
+];
+
+/// Scenario `name` with the settings of the budgets `b`.
+async fn budget_scenario(name: &str, o: &Opts, b: &toml::Table) -> Result<Value, String> {
+    let int = |section: &str, key: &str| budget::num(b, section, key).map(|n| n as usize);
+    let ms = |section: &str| int(section, "one_way_ms").map(|n| Duration::from_millis(n as u64));
+    match name {
+        "rtt" => rtt::run(&pg_url()?, ms("rtt")?, int("rtt", "runs")?).await,
+        "rtt_ssh" => ssh::run(&pg_url()?, &o.scratch, ms("rtt_ssh")?, int("rtt_ssh", "runs")?).await,
+        "rtt_mysql" => rtt_mysql::run(&mysql_url()?, ms("rtt_mysql")?, int("rtt_mysql", "runs")?).await,
+        "editor" => editor::run(&o.scratch, 5 * 1024 * 1024, 100),
+        "editor_block" => editor::block_in_own_process(&o.scratch, 5 * 1024 * 1024),
+        "editor_mysql" => editor::run_mysql_in_own_process(&o.scratch, 5 * 1024 * 1024, 100),
+        "grid" => grid::run(2_000, 24, 200),
+        "plan" => plan::run(PLAN_JOINS, PLAN_PARTITIONS, 200),
+        "chart" => chart::run_in_own_process(&o.scratch, CHART_ROWS, 200),
+        "explorer" => explorer::run(EXPLORER_SCHEMAS, EXPLORER_PER_SCHEMA, 200),
+        "paging" => {
+            paging::run(&pg_url()?, &o.scratch, "SELECT * FROM analytics.events", int("paging", "max_pages")?, 250)
+                .await
+        }
+        "export_stream" => export::run(&pg_url()?, &o.scratch, false, "csv").await,
+        "export_keyset" => export::run(&pg_url()?, &o.scratch, true, "csv").await,
+        "export_xlsx" => export::run(&pg_url()?, &o.scratch, false, "xlsx").await,
+        "export_parquet" => export::run(&pg_url()?, &o.scratch, false, "parquet").await,
+        "idle" => idle::idle(&o.scratch, &o.bin, &pg_url()?, int("idle", "secs")? as u64),
+        "startup" => idle::startup(&o.scratch, &o.bin, int("startup", "runs")?),
+        _ => Err(format!("unknown scenario {name}")),
+    }
+}
+
+/// Hold the result of scenario `name` to the budgets `b`.
+fn budget_check(name: &str, c: &mut budget::Checks, b: &toml::Table, r: &Value) -> Result<(), String> {
+    c.scenario(name);
+    match name {
+        "rtt" => budget::rtt(c, b, r),
+        "rtt_ssh" | "rtt_mysql" => budget::rtt_section(c, b, name, r),
+        "editor" => budget::editor(c, b, r),
+        "editor_block" => budget::editor_block(c, b, r),
+        "editor_mysql" => budget::editor_mysql(c, b, r),
+        "grid" => budget::grid(c, b, r),
+        "plan" => budget::plan(c, b, r),
+        "chart" => budget::chart(c, b, r),
+        "explorer" => budget::explorer(c, b, r),
+        "paging" => budget::paging(c, b, r),
+        "export_stream" | "export_keyset" | "export_xlsx" | "export_parquet" => budget::export(c, b, name, r),
+        "idle" => budget::idle(c, b, r),
+        "startup" => budget::startup(c, b, r),
+        _ => Err(format!("unknown scenario {name}")),
+    }
+}
+
+/// The runner probe (`stats::probe`), printed and recorded before measuring `attempt`.
+fn budget_probe(o: &Opts, attempt: u32) {
+    let p = stats::probe(&o.scratch);
+    println!("[probe] runner: {p} (load average {})", stats::load_avg());
+    record(
+        o,
+        &json!({ "scenario": "probe", "budget": true, "attempt": attempt, "load": stats::load_avg(), "result": p }),
+    );
+}
+
+/// Every scenario, held to the budgets; a scenario with a time over budget runs once more (see
+/// `budget.rs`). What failed.
 async fn budget(o: &Opts) -> Result<Vec<String>, String> {
     let b = budget::load(&o.budgets)?;
-    let url = pg_url()?;
-    let mut c = budget::Checks::default();
-    let int = |section: &str, key: &str| budget::num(&b, section, key).map(|n| n as usize);
-    let run = |name: &str, result: Value| {
-        println!("[{name}] load average {}", stats::load_avg());
-        record(o, &json!({ "scenario": name, "budget": true, "load": stats::load_avg(), "result": result }));
-        result
-    };
-    let r =
-        rtt::run(&url, std::time::Duration::from_millis(int("rtt", "one_way_ms")? as u64), int("rtt", "runs")?).await?;
-    budget::rtt(&mut c, &b, &run("rtt", r))?;
-    let r = ssh::run(
-        &url,
-        &o.scratch,
-        std::time::Duration::from_millis(int("rtt_ssh", "one_way_ms")? as u64),
-        int("rtt_ssh", "runs")?,
-    )
-    .await?;
-    budget::rtt_section(&mut c, &b, "rtt_ssh", &run("rtt_ssh", r))?;
-    let r = rtt_mysql::run(
-        &mysql_url()?,
-        std::time::Duration::from_millis(int("rtt_mysql", "one_way_ms")? as u64),
-        int("rtt_mysql", "runs")?,
-    )
-    .await?;
-    budget::rtt_section(&mut c, &b, "rtt_mysql", &run("rtt_mysql", r))?;
-    let r = editor::run(&o.scratch, 5 * 1024 * 1024, 100)?;
-    budget::editor(&mut c, &b, &run("editor", r))?;
-    let r = editor::block_in_own_process(&o.scratch, 5 * 1024 * 1024)?;
-    budget::editor_block(&mut c, &b, &run("editor_block", r))?;
-    let r = editor::run_mysql_in_own_process(&o.scratch, 5 * 1024 * 1024, 100)?;
-    budget::editor_mysql(&mut c, &b, &run("editor_mysql", r))?;
-    let r = grid::run(2_000, 24, 200)?;
-    budget::grid(&mut c, &b, &run("grid", r))?;
-    let r = plan::run(PLAN_JOINS, PLAN_PARTITIONS, 200)?;
-    budget::plan(&mut c, &b, &run("plan", r))?;
-    let r = chart::run_in_own_process(&o.scratch, CHART_ROWS, 200)?;
-    budget::chart(&mut c, &b, &run("chart", r))?;
-    let r = explorer::run(EXPLORER_SCHEMAS, EXPLORER_PER_SCHEMA, 200)?;
-    budget::explorer(&mut c, &b, &run("explorer", r))?;
-    let r = paging::run(&url, &o.scratch, "SELECT * FROM analytics.events", int("paging", "max_pages")?, 250).await?;
-    budget::paging(&mut c, &b, &run("paging", r))?;
-    for (name, keyset, ext) in [
-        ("export_stream", false, "csv"),
-        ("export_keyset", true, "csv"),
-        ("export_xlsx", false, "xlsx"),
-        ("export_parquet", false, "parquet"),
-    ] {
-        let r = export::run(&url, &o.scratch, keyset, ext).await?;
-        budget::export(&mut c, &b, name, &run(name, r))?;
+    budget_probe(o, 1);
+    let mut first = budget::Checks::default();
+    for name in BUDGET_SCENARIOS {
+        let r = budget_scenario(name, o, &b).await?;
+        budget_check(name, &mut first, &b, &budget_record(o, name, 1, r))?;
     }
-    let r = idle::idle(&o.scratch, &o.bin, &url, int("idle", "secs")? as u64)?;
-    budget::idle(&mut c, &b, &run("idle", r))?;
-    let r = idle::startup(&o.scratch, &o.bin, int("startup", "runs")?)?;
-    budget::startup(&mut c, &b, &run("startup", r))?;
-    Ok(c.failed().into_iter().map(String::from).collect())
+    let mut again = budget::Checks::default();
+    let rerun = first.timing_failed();
+    if !rerun.is_empty() {
+        println!("a time over budget in {}: measuring once more", rerun.join(", "));
+        budget_probe(o, 2);
+        for name in &rerun {
+            let r = budget_scenario(name, o, &b).await?;
+            budget_check(name, &mut again, &b, &budget_record(o, name, 2, r))?;
+        }
+    }
+    Ok(first.failed(&again))
+}
+
+/// Print the load average and record the result of scenario `name`, measured for `attempt`.
+fn budget_record(o: &Opts, name: &str, attempt: u32, result: Value) -> Value {
+    println!("[{name}] load average {}", stats::load_avg());
+    record(
+        o,
+        &json!({ "scenario": name, "budget": true, "attempt": attempt, "load": stats::load_avg(), "result": result }),
+    );
+    result
 }
 
 #[tokio::main(flavor = "multi_thread")]
