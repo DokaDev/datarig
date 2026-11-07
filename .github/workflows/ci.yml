@@ -158,6 +158,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    # Every host port a container publishes here (the services, the SSH bastion and the TLS
+    # servers) lies below the runner's ephemeral ports (32768-60999): a port inside that range
+    # can be held by an outgoing connection, such as one of those pulling the next image, and
+    # the container then fails to start ("address already in use"). The first step checks it
+    # (.github/scripts/host-ports.sh). The dev compose file's ports are a developer's own.
     services:
       postgres:
         image: postgres:17
@@ -166,7 +171,7 @@ jobs:
           POSTGRES_PASSWORD: datarig
           POSTGRES_DB: datarig
         ports:
-          - 55432:5432
+          - 15432:5432
         options: >-
           --health-cmd "pg_isready -U datarig -d datarig"
           --health-interval 5s
@@ -186,7 +191,7 @@ jobs:
           MIN_POOL_SIZE: "3"
           IGNORE_STARTUP_PARAMETERS: extra_float_digits,options
         ports:
-          - 56432:5432
+          - 16432:5432
       # MySQL 8.4 as in dev/docker-compose.yml (service `mysql`; utf8mb4 and utf8mb4_0900_ai_ci are
       # 8.4's defaults), loaded with dev/init-mysql/*.sql below.
       mysql:
@@ -197,34 +202,36 @@ jobs:
           MYSQL_DATABASE: datarig
           MYSQL_ROOT_PASSWORD: datarig-root
         ports:
-          - 53306:3306
+          - 13306:3306
         options: >-
           --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pdatarig-root --silent"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 30
     env:
-      DATARIG_TEST_PG_URL: postgres://datarig:datarig@127.0.0.1:55432/datarig
+      DATARIG_TEST_PG_URL: postgres://datarig:datarig@127.0.0.1:15432/datarig
       # A missing service fails its tests here instead of skipping them.
       DATARIG_REQUIRE_PG: "1"
-      DATARIG_TEST_POOLER_URL: postgres://datarig:datarig@127.0.0.1:56432/datarig
+      DATARIG_TEST_POOLER_URL: postgres://datarig:datarig@127.0.0.1:16432/datarig
       DATARIG_REQUIRE_POOLER: "1"
       # The MySQL driver's suite (crates/drivers/mysql/tests/integration_mysql.rs); the admin URL
       # looks at its sessions from the side (performance_schema) and makes test accounts.
-      DATARIG_TEST_MYSQL_URL: mysql://datarig:datarig@127.0.0.1:53306/shop
-      DATARIG_TEST_MYSQL_ADMIN_URL: mysql://root:datarig-root@127.0.0.1:53306/
+      DATARIG_TEST_MYSQL_URL: mysql://datarig:datarig@127.0.0.1:13306/shop
+      DATARIG_TEST_MYSQL_ADMIN_URL: mysql://root:datarig-root@127.0.0.1:13306/
       DATARIG_REQUIRE_MYSQL: "1"
       # The SSH bastion started below (crates/ssh/tests/bastion.rs, crates/tui/tests/integration_ssh.rs).
-      DATARIG_TEST_SSH_BASTION: 127.0.0.1:52222
+      DATARIG_TEST_SSH_BASTION: 127.0.0.1:12222
       DATARIG_REQUIRE_SSH: "1"
       # The scratch TLS servers started below (crates/drivers/*/tests/tls_*.rs, and through the
       # bastion in crates/ssh/tests/bastion.rs); DATARIG_TEST_TLS_CERTS is set by that step.
-      DATARIG_TEST_PG_TLS_URL: postgres://datarig:datarig@localhost:55433/datarig
-      DATARIG_TEST_MYSQL_TLS_URL: mysql://datarig:datarig@localhost:53307/datarig
-      DATARIG_TEST_MYSQL_TLS_ADMIN_URL: mysql://root:datarig-root@localhost:53307/
+      DATARIG_TEST_PG_TLS_URL: postgres://datarig:datarig@localhost:15433/datarig
+      DATARIG_TEST_MYSQL_TLS_URL: mysql://datarig:datarig@localhost:13307/datarig
+      DATARIG_TEST_MYSQL_TLS_ADMIN_URL: mysql://root:datarig-root@localhost:13307/
       DATARIG_REQUIRE_TLS: "1"
     steps:
       - uses: actions/checkout@v7
+      - name: Host ports below the ephemeral range
+        run: bash .github/scripts/host-ports.sh 15432 16432 13306 12222 15433 13307
       - uses: Swatinem/rust-cache@v2
       - name: C compiler and libclang for pg_query
         run: bash .github/scripts/pg-query-build-deps.sh
@@ -246,6 +253,8 @@ jobs:
       - name: TLS servers
         env:
           NETWORK: ${{ job.services.postgres.network }}
+          PG_TLS_PORT: "15433"
+          MYSQL_TLS_PORT: "13307"
         run: |
           sh dev/tls/make-certs.sh "$RUNNER_TEMP/tls"
           sh dev/tls/up.sh "$RUNNER_TEMP/tls" "$NETWORK"
@@ -279,7 +288,7 @@ jobs:
         env:
           PGPASSWORD: datarig
         run: |
-          left=$(psql -h 127.0.0.1 -p 55432 -U datarig -d datarig -Atc \
+          left=$(psql -h 127.0.0.1 -p 15432 -U datarig -d datarig -Atc \
             "SELECT string_agg(tablename, ', ') FROM pg_tables WHERE schemaname = 'public'")
           if [ -n "$left" ]; then
             echo "tables left in public: $left"
@@ -316,6 +325,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    # Host ports below the runner's ephemeral ports, as in `integration`.
     services:
       postgres:
         image: postgres:17
@@ -324,7 +334,7 @@ jobs:
           POSTGRES_PASSWORD: datarig
           POSTGRES_DB: datarig
         ports:
-          - 55432:5432
+          - 15432:5432
         options: >-
           --health-cmd "pg_isready -U datarig -d datarig"
           --health-interval 5s
@@ -340,19 +350,21 @@ jobs:
           MYSQL_DATABASE: datarig
           MYSQL_ROOT_PASSWORD: datarig-root
         ports:
-          - 53306:3306
+          - 13306:3306
         options: >-
           --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pdatarig-root --silent"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 30
     env:
-      DATARIG_TEST_PG_URL: postgres://datarig:datarig@127.0.0.1:55432/datarig
-      DATARIG_TEST_MYSQL_URL: mysql://datarig:datarig@127.0.0.1:53306/datarig
+      DATARIG_TEST_PG_URL: postgres://datarig:datarig@127.0.0.1:15432/datarig
+      DATARIG_TEST_MYSQL_URL: mysql://datarig:datarig@127.0.0.1:13306/datarig
       DATARIG_SECRET_STORE: memory
-      DATARIG_TEST_SSH_BASTION: 127.0.0.1:52222
+      DATARIG_TEST_SSH_BASTION: 127.0.0.1:12222
     steps:
       - uses: actions/checkout@v7
+      - name: Host ports below the ephemeral range
+        run: bash .github/scripts/host-ports.sh 15432 13306 12222
       - uses: Swatinem/rust-cache@v2
       - name: C compiler and libclang for pg_query
         run: bash .github/scripts/pg-query-build-deps.sh
