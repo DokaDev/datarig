@@ -1,0 +1,10 @@
+[
+ [
+  ["1794060016832236", "26", null, null, null, "", null, null, "checkpointer", null, "Activity", "CheckpointerMain", "1793877439292160", null, null, null, "", "f", "f", "f", null],
+  ["1794060016832236", "27", null, null, null, "", null, null, "background writer", null, "Activity", "BgwriterMain", "1793877439292213", null, null, null, "", "f", "f", "f", null],
+  ["1794060016832236", "29", null, null, null, "", null, null, "walwriter", null, "Activity", "WalWriterMain", "1793877439427593", null, null, null, "", "f", "f", "f", null],
+  ["1794060016832236", "30", null, null, null, "", null, null, "autovacuum launcher", null, "Activity", "AutovacuumMain", "1793877439427743", null, null, null, "", "f", "f", "f", null],
+  ["1794060016832236", "31", null, "datarig", null, "", null, null, "logical replication launcher", null, "Activity", "LogicalLauncherMain", "1793877439428050", null, null, null, "", "f", "f", "f", null],
+  ["1794060016832236", "479475", null, "datarig", "datarig", "psql", "127.0.0.1", "46234", "client backend", "active", null, null, "1794060016827154", "1794060016832236", "1794060016832236", "1794060016832237", "WITH a AS (SELECT s.pid, s.leader_pid AS leader_pid, s.usename::text AS usename, s.datname::text AS datname, s.application_name, host(s.client_addr) AS client_addr, s.client_port, s.backend_type, s.state, s.wait_event_type, s.wait_event, (extract(epoch FRO", "t", "t", "t", null]
+ ]
+]

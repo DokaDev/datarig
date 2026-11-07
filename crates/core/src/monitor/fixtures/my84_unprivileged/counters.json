@@ -1,0 +1,26 @@
+[
+ [
+  ["1794068770970230"]
+ ],
+ [
+  ["Aborted_connects", "2"],
+  ["Bytes_received", "15966801"],
+  ["Bytes_sent", "6935132"],
+  ["Com_commit", "0"],
+  ["Com_rollback", "2"],
+  ["Created_tmp_disk_tables", "2"],
+  ["Innodb_buffer_pool_read_requests", "39954478"],
+  ["Innodb_buffer_pool_reads", "403582"],
+  ["Innodb_row_lock_waits", "4"],
+  ["Innodb_rows_deleted", "0"],
+  ["Innodb_rows_inserted", "10"],
+  ["Innodb_rows_read", "39950512"],
+  ["Innodb_rows_updated", "6"],
+  ["Performance_schema_thread_instances_lost", "0"],
+  ["Questions", "64243"],
+  ["Slow_queries", "3"],
+  ["Threads_connected", "7"],
+  ["Threads_running", "5"],
+  ["Uptime", "191332"]
+ ]
+]
