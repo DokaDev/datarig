@@ -62,14 +62,11 @@ fn distance((r, g, b): (u8, u8, u8), (r2, g2, b2): (u8, u8, u8)) -> i32 {
     d(r, r2).pow(2) + d(g, g2).pow(2) + d(b, b2).pow(2)
 }
 
-/// The palette index a terminal of 256 colors draws `rgb` as: the nearest cube color or gray
-/// (as xterm-like terminals and tmux pick it).
+/// The palette index a terminal of 256 colors draws `rgb` as: the nearest of the cube colors
+/// and the grays (16 to 255; the first 16 are the terminal's own and not used for it). The
+/// lowest index wins a tie.
 pub fn nearest(rgb: (u8, u8, u8)) -> u8 {
-    let level = |v: u8| CUBE.iter().enumerate().min_by_key(|(_, l)| (i32::from(**l) - i32::from(v)).abs()).unwrap().0;
-    let cube = 16 + 36 * level(rgb.0) as u8 + 6 * level(rgb.1) as u8 + level(rgb.2) as u8;
-    let avg = ((u16::from(rgb.0) + u16::from(rgb.1) + u16::from(rgb.2)) / 3) as u8;
-    let gray = if avg < 8 { 232 } else { 232 + ((avg - 8) / 10).min(23) };
-    if distance(rgb, rgb_of(gray)) < distance(rgb, rgb_of(cube)) { gray } else { cube }
+    (16..=255u8).min_by_key(|i| distance(rgb, rgb_of(*i))).unwrap_or(16)
 }
 
 /// The palette index `c` is drawn as, for an RGB color.
@@ -148,6 +145,10 @@ mod tests {
         assert_eq!(nearest((255, 0, 0)), 196);
         assert_eq!(nearest((0x26, 0x26, 0x26)), 235);
         assert_eq!(nearest((0x80, 0x80, 0x80)), 244);
+        // Not a palette color: the nearest gray, not the one below it (the dark theme's
+        // alternate rows and its cursor row's tint).
+        assert_eq!(nearest((0x20, 0x24, 0x2C)), 235);
+        assert_eq!(nearest((0x17, 0x1F, 0x23)), 234);
         for i in 16..=255u8 {
             assert_eq!(index_of(Color::Indexed(i)), Some(i));
             let back = nearest(rgb_of(i));
@@ -190,15 +191,15 @@ mod tests {
     }
 
     /// The tints that would vanish move away from the background in their own direction: the
-    /// dark theme's cursor row (drawn as the alternate rows' gray) gets a lighter gray, the
-    /// light theme's a darker one.
+    /// high-contrast theme's cursor row (drawn as the alternate rows' gray) gets a lighter
+    /// color, the light theme's a darker one.
     #[test]
     fn a_tint_that_would_vanish_moves_its_own_way() {
         let light = |i: u8| {
             let (r, g, b) = rgb_of(i);
             u32::from(r) + u32::from(g) + u32::from(b)
         };
-        for (th, lighter) in [(crate::theme::DARK, true), (crate::theme::LIGHT, false)] {
+        for (th, lighter) in [(crate::theme::HIGH_CONTRAST, true), (crate::theme::LIGHT, false)] {
             let Some(Color::Rgb(r, g, b)) = th.grid_cursor_row.bg else { panic!("rgb") };
             let Color::Rgb(br, bgg, bb) = th.bg else { panic!("rgb") };
             let (Color::Rgb(ar, ag, ab), bg) = (th.surface_alt, nearest((br, bgg, bb))) else { panic!("rgb") };

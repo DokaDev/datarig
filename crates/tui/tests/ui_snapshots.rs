@@ -1899,16 +1899,17 @@ fn grid_on_the_terminals_background_keeps_its_tints() {
     assert_eq!(at(4, 1).bg, th.selection.bg.unwrap(), "the cursor");
 }
 
-/// On a terminal of 256 colors (`TERM=xterm-256color`, no `COLORTERM`) the dark theme's cursor
+/// On a terminal of 256 colors (`TERM=xterm-256color`, no `COLORTERM`) the light theme's cursor
 /// row tint, which the palette would draw as the alternate rows' gray, gets a palette color of
-/// its own, so the cursor's row still shows; on 24-bit colors the theme's own tint is drawn.
+/// its own, darker than the background, so the cursor's row still shows; on 24-bit colors the
+/// theme's own tint is drawn.
 #[test]
 fn the_grids_cursor_row_shows_on_256_colors() {
     use datarig_tui::theme::ColorDepth;
     use ratatui::style::Color;
     assert_eq!(ColorDepth::of(None, Some("xterm-256color")), ColorDepth::Indexed256);
     let mut h = with_edge_results(Lang::En);
-    h.app.theme_name = "dark".into();
+    h.app.theme_name = "light".into();
     h.app.set_color_depth(ColorDepth::Indexed256);
     h.key(KeyCode::Tab);
     h.keys("jl");
@@ -1918,12 +1919,13 @@ fn the_grids_cursor_row_shows_on_256_colors() {
         let a = g.cell_rect(r, c, 8).expect("on screen");
         buf[(a.x + 1, a.y)].bg
     };
-    let row = at(t.backend().buffer(), 1, 0);
-    let Color::Indexed(i) = row else { panic!("a palette color: {row:?}") };
-    let th = theme::DARK;
+    let th = theme::LIGHT;
     let others = [at(t.backend().buffer(), 0, 0), at(t.backend().buffer(), 3, 0)];
     assert_eq!(others, [th.bg, th.surface_alt], "the other rows keep the theme's colors");
-    assert!((234..=255).contains(&i), "a gray lighter than the background's: {i}");
+    let row = at(t.backend().buffer(), 1, 0);
+    let Color::Indexed(i) = row else { panic!("a palette color: {row:?}") };
+    // The background is drawn as 231 (white), the alternate rows as 255 (the lightest gray).
+    assert!(!(i == 231 || i == 255) && (232..255).contains(&i), "a gray darker than both: {i}");
     h.app.set_color_depth(ColorDepth::TrueColor);
     let t = h.draw(120, 40);
     assert_eq!(at(t.backend().buffer(), 1, 0), th.grid_cursor_row.bg.unwrap(), "24-bit: the theme's tint");
