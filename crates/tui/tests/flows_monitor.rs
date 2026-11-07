@@ -827,6 +827,23 @@ fn the_whole_text_is_not_shown_once_the_session_runs_another_statement() {
 }
 
 #[test]
+fn one_read_of_a_whole_statement_at_a_time() {
+    let (mut h, request) = long_details();
+    h.advance(Duration::from_secs(2));
+    let t = ticks(&mut h);
+    // Another statement of the session listed while the first read has not answered: not asked
+    // for yet, so reads never pile up ahead of the ticks.
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(long_snapshot(2.0, at(1.0), false)) });
+    assert_eq!(text_asks(&mut h), []);
+    // The first read answers: the statement selected now is asked for, once.
+    text_answer(&mut h, request, Ok(FullText::Moved));
+    let asks = text_asks(&mut h);
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    assert_eq!(asks[0].1.query_started, Some(at(1.0)));
+    assert!(!h.screen(120, 40).contains(WHOLE));
+}
+
+#[test]
 fn screens_of_the_whole_statement_80x24_and_120x40() {
     let (mut h, request) = long_details();
     text_answer(&mut h, request, Ok(whole(Proof::Likely)));

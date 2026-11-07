@@ -832,6 +832,12 @@ impl App {
             return;
         }
         let Some(ask) = m.selected_ask() else { return };
+        // One read at a time: the connection answers its commands in order, so reads of
+        // statements the user has moved past would queue ahead of the next tick. The statement
+        // selected when the read in flight answers is asked for then.
+        if m.text.as_ref().is_some_and(|t| t.answer.is_none()) {
+            return;
+        }
         // Asked again for the same statement only when it had run too briefly to be told apart
         // when last asked, and has run long enough now (once: the new ask is old enough).
         if let Some(t) = m.text.as_ref().filter(|t| t.ask.same_statement(&ask, m.whole_seconds())) {
