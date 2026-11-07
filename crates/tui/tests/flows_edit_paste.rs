@@ -1233,6 +1233,36 @@ mod grid_copy {
     }
 
     #[test]
+    fn a_pending_default_copied_as_sql_insert_is_not_kept_for_g_p() {
+        let mut h = Harness::connected(Lang::En);
+        answer_rows(&mut h, users_rows());
+        h.keys("le");
+        // `nickname` has a default here.
+        let mut st = named();
+        st.columns[3].default = Some("'none'::text".into());
+        structure(&mut h, st);
+        h.key(KeyCode::Esc);
+        h.app.transient = None;
+        let clip = FakeClipboard::attach(&mut h, false, &[]);
+        h.command("set copy_format=insert");
+        // The first row's nickname set to its DEFAULT, then its email and nickname copied.
+        h.keys("l dD");
+        assert_eq!(pending(&h, 0, 2), Some(Value::Default));
+        h.keys("hvly");
+        let text = clip.last().unwrap_or_default();
+        assert!(text.contains("DEFAULT"), "the SQL says DEFAULT: {text}");
+        // A paste writes no DEFAULT: the cells are not kept (never as NULL), and that is said.
+        assert_eq!(
+            said(&mut h),
+            "Not kept for p: column “nickname” is left to its DEFAULT, which a paste does not write"
+        );
+        let before = revision(&h);
+        h.keys("jhgp");
+        assert_eq!(revision(&h), before, "nothing pasted");
+        assert_eq!(pending(&h, 1, 2), None);
+    }
+
+    #[test]
     fn the_copy_is_of_the_values_the_grid_shows_pending_ones_and_null_included() {
         let mut h = ready();
         // A pending text and a pending NULL.

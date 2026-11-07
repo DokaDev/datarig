@@ -869,6 +869,7 @@ impl App {
         let mut rows: Vec<Vec<Value>> = Vec::with_capacity(b.rows.len());
         let mut refused: Option<export::Refused> = None;
         let (mut short, mut bytes) = (None, 0usize);
+        let mut default: Option<usize> = None;
         let mut at = b.rows.start;
         rs.rows
             .for_each_chunk(b.rows.clone(), COPY_CHUNK, |chunk| {
@@ -879,8 +880,14 @@ impl App {
                     }
                     let row = b.cols.iter().enumerate().map(|(j, &c)| {
                         let v = match overlaid.then(|| rs.over(at + i, c)).flatten() {
-                            // A value with none to show (a DEFAULT, one only a run shows) refused
-                            // the copy before.
+                            // A pending DEFAULT (an SQL INSERT copy takes it): a paste writes none,
+                            // so the cells are not kept.
+                            Some(Over::Pending(Value::Default)) => {
+                                default.get_or_insert(c);
+                                Value::Null
+                            }
+                            // Another value with none to show (one only a run shows) refused the
+                            // copy before.
                             Some(o) => o.cell().flatten().map_or(Value::Null, |v| Value::Text(v.to_string())),
                             None => match r.get(c) {
                                 None => {
@@ -913,6 +920,9 @@ impl App {
         if bytes > GRID_COPY_MAX_BYTES {
             let max = format!("{} MiB", GRID_COPY_MAX_BYTES >> 20);
             return Err(Some(Msg::CopyRegisterTooLarge { key: key(), max }));
+        }
+        if let Some(c) = default {
+            return Err(Some(Msg::CopyRegisterDefault { key: key(), column: rs.columns[c].meta.name.clone() }));
         }
         if let Some(row) = short {
             return Err(Some(Msg::CopyRegisterNotRead { key: key(), row: (row + 1).to_string() }));

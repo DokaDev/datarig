@@ -1175,6 +1175,7 @@
 "copy.register_not_whole" = "{key}용으로 보관하지 않음: 열 “{column}”은(는) {reason}"
 "copy.register_too_large" = "{key}용으로 보관하지 않음: 값이 {max}보다 많습니다"
 "copy.register_not_read" = "{key}용으로 보관하지 않음: {row}행을 다 읽지 못했습니다"
+"copy.register_default" = "{key}용으로 보관하지 않음: 열 “{column}”은(는) DEFAULT로 둔 값이라 붙여 넣기로 쓸 수 없습니다"
 "copy.too_long_for_osc52" = "복사하지 않았습니다: base64로 {size}라 OSC 52 한도({limit}, osc52_max_bytes)를 넘고, 터미널이 버립니다. 행을 줄여 복사하거나 clipboard = system으로 바꾸거나, 파일로 내보내세요(이후 단계)"
 "copy.failed" = "복사하지 못했습니다: {error}"
 "copy.system_unavailable" = "시스템 클립보드를 쓸 수 없습니다 (clipboard = osc52는 터미널을 통해 복사)"

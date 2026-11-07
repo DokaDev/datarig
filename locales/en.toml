@@ -1179,6 +1179,7 @@
 "copy.register_not_whole" = "Not kept for {key}: column “{column}” {reason}"
 "copy.register_too_large" = "Not kept for {key}: more than {max} of values"
 "copy.register_not_read" = "Not kept for {key}: row {row} was not read whole"
+"copy.register_default" = "Not kept for {key}: column “{column}” is left to its DEFAULT, which a paste does not write"
 "copy.too_long_for_osc52" = "Not copied: {size} of base64 is more than OSC 52 may carry ({limit}, osc52_max_bytes), and the terminal would drop it. Copy fewer rows, set clipboard = system, or export to a file (a later step)"
 "copy.failed" = "Could not copy: {error}"
 "copy.system_unavailable" = "the system clipboard is not available (clipboard = osc52 copies through the terminal)"
