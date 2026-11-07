@@ -52,7 +52,10 @@ the count matches the pages you saw.
   read, as a copy takes them; a cell with no value yet (a pending DEFAULT) is counted apart, new
   rows are left out, and whole columns say "fetched rows only" when the server has more. The
   rows are read in the background (a big selection says "summing…" at first), so keys never
-  wait for it. Distinct values are counted up to 100,000.
+  wait for it. A selection that grows at its end (whole columns while every row is fetched, or
+  a range extended downwards) keeps its figures: only the new rows are read and added, and the
+  figures so far stay on the line, marked "summing…", until they are. Distinct values are
+  counted up to 100,000.
 - `z` (or `Space z`) zooms the results pane to the whole workspace and back; `+` and `-` make it
   taller or shorter. `Esc` or `q` goes back to the editor.
 
