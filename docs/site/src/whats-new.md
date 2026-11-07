@@ -3,6 +3,40 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.39.1 (2026-11-07)
+
+Small fixes: explorer arrows open with a click, no opaque bands on a see-through terminal background, cursor tints that stay visible on 256 colours, and a copy format of your choice.
+
+### Added
+
+- `copy_format` sets the format `y` and `Y` copy in: TSV (the default), CSV, JSON, indented
+  JSON, Markdown, HTML, XML or SQL `INSERT`. Choose it in the settings, with
+  `:set copy_format=csv`, or with `Space r y d` (also in the grid's menu); the copy formats mark
+  the current one, and the status bar names the format of each copy. SQL `INSERT` is used only
+  for rows certainly of one table, else the copy is TSV and says why. `g p` still pastes the
+  copied values exactly, whatever the clipboard got.
+- `:theme update ` lists your theme files to pick from (never a built-in theme), the
+  current theme's first.
+
+### Changed
+
+- The selection summary on the status line keeps its figures while a whole-column selection
+  grows as every row is fetched (or a range is extended downwards): only the new rows are read
+  and added, and the figures so far stay on the line, marked "summing…", instead of starting
+  over with each page.
+
+### Fixed
+
+- On terminals of 256 colours (`TERM` such as `xterm-256color` without `COLORTERM=truecolor`)
+  the result grid's cursor row, the cursor's line and the other cursor and selection tints no
+  longer vanish into the background: each gets a palette colour of its own.
+- A click on an explorer row's arrow opens or closes the row, for every kind of row:
+  on a table it shows the table's structure. The arrow under the pointer is highlighted.
+- With `ui.background = "terminal"` the editor no longer paints its current line and statement
+  as opaque bands: the statement a run would take is an accent bar beside its lines with accent
+  line numbers, and the cursor's line number is bold. The result grid's cursor row has no band
+  either; its cell keeps its fill and its row number is bold.
+
 ## 0.39.0 (2026-11-07)
 
 datarig can tell you when a newer release is out, and shows what's new after an update.
