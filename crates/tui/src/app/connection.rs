@@ -301,6 +301,7 @@ impl App {
     /// Close the query sessions of the tabs `which` selects. The tabs move to a new
     /// generation, so a late event of a closed session (e.g. `TxOpen(true)`) is dropped.
     pub(super) fn close_tab_sessions(&mut self, which: impl Fn(&Tab) -> bool) {
+        self.close_monitors(&which);
         let generation = self.tabs.next_generation();
         let mut ended = Vec::new();
         for t in self.tabs.iter_mut().filter(|t| which(t)) {
@@ -390,6 +391,7 @@ impl App {
         }
         self.quick_connected(id);
         self.ddl_connected(id);
+        self.monitor_connected(id);
         // The explorer's node is open: its databases level asks for the server's databases.
         if self.conns.get(id).is_some_and(|c| c.expanded) {
             self.ask_databases(id, false);
@@ -431,6 +433,7 @@ impl App {
     /// what waited for it is dropped.
     pub(super) fn attempt_failed(&mut self, id: ProfileId, why: Notice) {
         let text = self.i18n.msg(&why.msg).to_string();
+        self.monitor_profile_failed(id, &text);
         self.ddl_stop(id, None, super::tabs::DdlState::Failed(text), true);
         self.drop_pending(id);
         let c = self.conns.entry(id);

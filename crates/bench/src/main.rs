@@ -25,6 +25,7 @@ mod explorer;
 mod export;
 mod grid;
 mod idle;
+mod monitor;
 mod paging;
 mod plan;
 mod proxy;
@@ -88,6 +89,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "grid",
             "plan",
             "chart",
+            "monitor",
             "explorer",
             "startup",
             "idle",
@@ -104,7 +106,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     }
     if o.scenarios.is_empty() {
         return Err(
-            "name a scenario: rtt, rtt_ssh, rtt_mysql, paging, export_stream, export_keyset, export_xlsx, export_parquet, editor, editor_block, editor_mysql, grid, plan, chart, explorer, idle, startup, all or budget"
+            "name a scenario: rtt, rtt_ssh, rtt_mysql, paging, export_stream, export_keyset, export_xlsx, export_parquet, editor, editor_block, editor_mysql, grid, plan, chart, monitor, explorer, idle, startup, all or budget"
                 .into(),
         );
     }
@@ -141,6 +143,7 @@ async fn scenario(name: &str, o: &Opts) -> Result<Value, String> {
         "grid" => grid::run(2_000, 24, o.runs.unwrap_or(400)),
         "plan" => plan::run(PLAN_JOINS, PLAN_PARTITIONS, o.runs.unwrap_or(300)),
         "chart" => chart::run_in_own_process(&o.scratch, CHART_ROWS, o.runs.unwrap_or(300)),
+        "monitor" => monitor::run(MONITOR_SESSIONS, o.runs.unwrap_or(300)),
         "explorer" => explorer::run(EXPLORER_SCHEMAS, EXPLORER_PER_SCHEMA, o.runs.unwrap_or(300)),
         "idle" => idle::idle(&o.scratch, &o.bin, &pg_url()?, o.idle_secs),
         "startup" => idle::startup(&o.scratch, &o.bin, o.runs.unwrap_or(20)),
@@ -167,6 +170,9 @@ fn record(o: &Opts, record: &Value) {
 /// The rows of the `chart` scenario.
 const CHART_ROWS: usize = 100_000;
 
+/// The sessions of the `monitor` scenario.
+const MONITOR_SESSIONS: usize = 5_000;
+
 /// The tree of the `explorer` scenario: this many schemas, each with this many relations.
 const EXPLORER_SCHEMAS: usize = 20;
 const EXPLORER_PER_SCHEMA: usize = 500;
@@ -176,7 +182,7 @@ const PLAN_JOINS: usize = 40;
 const PLAN_PARTITIONS: usize = 500;
 
 /// The scenarios `budget` runs, in this order.
-const BUDGET_SCENARIOS: [&str; 17] = [
+const BUDGET_SCENARIOS: [&str; 18] = [
     "rtt",
     "rtt_ssh",
     "rtt_mysql",
@@ -186,6 +192,7 @@ const BUDGET_SCENARIOS: [&str; 17] = [
     "grid",
     "plan",
     "chart",
+    "monitor",
     "explorer",
     "paging",
     "export_stream",
@@ -210,6 +217,7 @@ async fn budget_scenario(name: &str, o: &Opts, b: &toml::Table) -> Result<Value,
         "grid" => grid::run(2_000, 24, 200),
         "plan" => plan::run(PLAN_JOINS, PLAN_PARTITIONS, 200),
         "chart" => chart::run_in_own_process(&o.scratch, CHART_ROWS, 200),
+        "monitor" => monitor::run(MONITOR_SESSIONS, 200),
         "explorer" => explorer::run(EXPLORER_SCHEMAS, EXPLORER_PER_SCHEMA, 200),
         "paging" => {
             paging::run(&pg_url()?, &o.scratch, "SELECT * FROM analytics.events", int("paging", "max_pages")?, 250)
@@ -237,6 +245,7 @@ fn budget_check(name: &str, c: &mut budget::Checks, b: &toml::Table, r: &Value) 
         "grid" => budget::grid(c, b, r),
         "plan" => budget::plan(c, b, r),
         "chart" => budget::chart(c, b, r),
+        "monitor" => budget::monitor(c, b, r),
         "explorer" => budget::explorer(c, b, r),
         "paging" => budget::paging(c, b, r),
         "export_stream" | "export_keyset" | "export_xlsx" | "export_parquet" => budget::export(c, b, name, r),

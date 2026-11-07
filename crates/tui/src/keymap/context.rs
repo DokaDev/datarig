@@ -49,6 +49,8 @@ pub enum Ctx {
     Plan,
     Chart,
     Changes,
+    Monitor,
+    MonitorFilter,
     Welcome,
     VimNormal,
     VimVisual,
@@ -88,7 +90,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 49] = [
+    pub const ALL: [Ctx; 51] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -102,6 +104,8 @@ impl Ctx {
         Ctx::Plan,
         Ctx::Chart,
         Ctx::Changes,
+        Ctx::Monitor,
+        Ctx::MonitorFilter,
         Ctx::Welcome,
         Ctx::VimNormal,
         Ctx::VimVisual,
@@ -156,6 +160,8 @@ impl Ctx {
             Ctx::Plan => "plan",
             Ctx::Chart => "chart",
             Ctx::Changes => "changes",
+            Ctx::Monitor => "monitor",
+            Ctx::MonitorFilter => "monitor.filter",
             Ctx::Welcome => "welcome",
             Ctx::VimNormal => "editor.vim.normal",
             Ctx::VimVisual => "editor.vim.visual",
@@ -208,6 +214,7 @@ impl Ctx {
             | Ctx::VimSearch
             | Ctx::ExplorerFilter
             | Ctx::GridSearch
+            | Ctx::MonitorFilter
             | Ctx::CellEdit
             | Ctx::CellViewer => Some(Ctx::Workspace),
             Ctx::GridMatches => Some(Ctx::Grid),
@@ -217,6 +224,7 @@ impl Ctx {
             | Ctx::Plan
             | Ctx::Chart
             | Ctx::Changes
+            | Ctx::Monitor
             | Ctx::Welcome
             | Ctx::VimNormal
             | Ctx::VimVisual => Some(Ctx::Nav),
@@ -239,6 +247,7 @@ impl Ctx {
                 | Ctx::VimSearch
                 | Ctx::ExplorerFilter
                 | Ctx::GridSearch
+                | Ctx::MonitorFilter
                 | Ctx::CellEdit
                 | Ctx::CellEditor
                 | Ctx::Commands
@@ -307,6 +316,12 @@ impl Ctx {
             }
             Ctx::Changes => {
                 "The Changes tab of the results pane (`:changes`, `Space d p`, or its tab in the strip while the shown result has pending changes): one line per changed cell, every reason they can't be applied first, or (`s`) the statements that apply them. `j`/`k` select a line (scroll the statements), `Ctrl+D`/`Ctrl+U` half a page, `g g`/`G` the first and the last, `Enter` shows the line's row and column in the grid, `s` switches between the list and the statements for this run, `c` copies the statements as they would be sent. The `Space d` keys work here as in the grid."
+            }
+            Ctx::Monitor => {
+                "The Monitor tab of a profile (`monitor.open`: `M` on a connection in the explorer, `:monitor`, the connection's menu): what its server says about its load and its sessions, read by a connection of the tab's own, only while the tab is shown. `1` the Overview (the server, its load as charts, the longest running sessions), `2` the Sessions, `v` the next view; `j`/`k` select a session, `s` sorts by the next column (`S` the other way; a click on a column's name sorts by it), `/` filters, `a` shows idle sessions too, `Enter` shows the session in full, `o` opens its statement in a new console (never run), `y` copies it; `p` pauses, `r` reads at once, `+`/`-` read more or less often."
+            }
+            Ctx::MonitorFilter => {
+                "The filter of the Monitor tab's sessions (`/`): the sessions whose user, database, application, client, state or statement contain the text, as it is typed; `Enter` keeps it, `Esc` too (`Esc` again in the list clears it)."
             }
             Ctx::Welcome => "The welcome panel shown while there is no connection profile.",
             Ctx::VimNormal => "Query editor, vim Normal mode (`i` starts typing).",
@@ -413,6 +428,8 @@ impl Ctx {
             Ctx::Plan => Label::KeyctxPlan,
             Ctx::Chart => Label::KeyctxChart,
             Ctx::Changes => Label::KeyctxChanges,
+            Ctx::Monitor => Label::KeyctxMonitor,
+            Ctx::MonitorFilter => Label::KeyctxMonitorFilter,
             Ctx::Welcome => Label::KeyctxWelcome,
             Ctx::VimNormal => Label::KeyctxEditorVimNormal,
             Ctx::VimVisual => Label::KeyctxEditorVimVisual,

@@ -97,6 +97,11 @@ pub(crate) fn document_name(app: &App, tab: &Tab) -> String {
     if let Some(path) = tab.script() {
         return datarig_core::scripts::display_name(path, false).to_string();
     }
+    // A Monitor tab by its profile.
+    if tab.is_monitor() {
+        let profile = tab.profile.and_then(|id| app.profile(id)).map(|p| p.name.clone()).unwrap_or_default();
+        return app.i18n.msg(&Msg::TabMonitor { name: profile }).to_string();
+    }
     let object = tab.doc.table.as_ref().map(|t| t.label()).or_else(|| tab.doc.ddl.as_ref().map(|d| d.label()));
     if let Some(name) = object {
         return match app.other_database(tab) {

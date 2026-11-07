@@ -52,6 +52,7 @@ pub mod key_picker;
 mod keychain;
 mod keychain_offer;
 pub mod menu;
+pub mod monitor;
 pub mod overlay;
 pub mod pages;
 pub mod paging;
@@ -420,6 +421,8 @@ pub enum EventTarget {
     Aux(u64),
     /// The throwaway query session of a session preset's test, by the test's serial.
     SessionTest(u64),
+    /// The monitor connection of a Monitor tab.
+    Monitor(TabId),
 }
 
 /// Where the app reads the time for its timers and countdowns (tests use a fake one).
@@ -1711,6 +1714,8 @@ impl App {
                 _ if self.profiles.is_empty() => Ctx::Welcome,
                 // No tab: the empty state has no keys of its own.
                 _ if self.tabs.is_empty() => Ctx::Explorer,
+                Focus::Results | Focus::Inspector if self.monitor_filtering() => Ctx::MonitorFilter,
+                Focus::Results | Focus::Inspector if self.monitor_shown() => Ctx::Monitor,
                 Focus::Results | Focus::Inspector if self.plan_shown() => Ctx::Plan,
                 Focus::Results | Focus::Inspector if self.chart_shown() => Ctx::Chart,
                 Focus::Results | Focus::Inspector if self.changes_shown() => Ctx::Changes,
@@ -1787,6 +1792,7 @@ impl App {
             || self.tx_idle_due().is_some()
             || self.idle_due(self.now()).is_some()
             || self.changes_count_due().is_some()
+            || self.monitor_due().is_some()
     }
 
     /// Aux session `a` is open and no tab works in its database: it closes
@@ -1861,6 +1867,10 @@ impl App {
         if let Some(due) = self.changes_count_due() {
             at(due);
         }
+        // The visible Monitor tab's next read (a hidden one wakes nothing).
+        if let Some(due) = self.monitor_due() {
+            at(due);
+        }
         // Never sooner than a fine tick, never in the past.
         next.map(|n| n.max(now + Duration::from_millis(1)))
     }
@@ -1869,6 +1879,8 @@ impl App {
     /// portals). Called on every tick with the current time.
     pub fn on_tick(&mut self, now: Instant) {
         self.which_key_tick(now);
+        // At the tick's own time: the clock is not read again here.
+        self.monitor_sync_at(now);
         self.changes_count_tick(now);
         self.tx_idle_tick(now);
         self.idle_tick(now);

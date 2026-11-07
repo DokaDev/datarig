@@ -662,6 +662,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             paste_null: PasteNull::BackslashN,
             update_check: UpdateCheck::On,
             whats_new: WhatsNewSetting::On,
+            monitor_interval: MonitorInterval::S2,
             idle_disconnect: None,
             lock_wait: None,
         }
@@ -866,6 +867,52 @@ fn the_changes_tab_opens_in_its_list_unless_the_sql_is_chosen() {
     assert_eq!(load(Some(path.clone())).0.prefs, prefs);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("changes_view"), "list is the default: the key goes");
+}
+
+#[test]
+fn the_monitor_reads_the_server_every_two_seconds_unless_told_otherwise() {
+    assert_eq!(parse("").unwrap().prefs.monitor_interval, MonitorInterval::S2);
+    for v in MonitorInterval::ALL {
+        let text = format!("[monitor]\ninterval = \"{}\"\n", v.as_str());
+        assert_eq!(parse(&text).unwrap().prefs.monitor_interval, v, "{text}");
+    }
+    assert_eq!(parse("[monitor]\ninterval = \"30S\"\n").unwrap().prefs.monitor_interval, MonitorInterval::S30);
+    assert_eq!(
+        parse("[monitor]\ninterval = \"3s\"\n").unwrap_err(),
+        ConfigError::Value {
+            key: "monitor.interval".into(),
+            value: "3s".into(),
+            profile: None,
+            allowed: Some("1s, 2s, 5s, 10s, 30s, 60s")
+        }
+    );
+    assert!(matches!(parse("[monitor]\ninterval = 5\n"), Err(ConfigError::Syntax(_))));
+    let path = temp_file("monitor_interval");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "").unwrap();
+    let prefs = Prefs { monitor_interval: MonitorInterval::S10, ..Prefs::default() };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[monitor]\ninterval = \"10s\"\n"), "{text}");
+    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("interval"), "2s is the default: the key goes");
+}
+
+#[test]
+fn a_monitor_interval_has_its_duration_and_steps_to_its_neighbours() {
+    let secs: Vec<u64> = MonitorInterval::ALL.iter().map(|v| v.duration().as_secs()).collect();
+    assert_eq!(secs, [1, 2, 5, 10, 30, 60]);
+    assert_eq!(MonitorInterval::default().duration(), std::time::Duration::from_secs(2));
+    assert_eq!(MonitorInterval::parse("60s"), Some(MonitorInterval::S60));
+    assert_eq!(MonitorInterval::parse("1m"), None);
+    assert_eq!(MonitorInterval::S2.step(true), MonitorInterval::S5);
+    assert_eq!(MonitorInterval::S2.step(false), MonitorInterval::S1);
+    assert_eq!(MonitorInterval::S1.step(false), MonitorInterval::S1);
+    assert_eq!(MonitorInterval::S60.step(true), MonitorInterval::S60);
+    for w in MonitorInterval::ALL.windows(2) {
+        assert_eq!((w[0].step(true), w[1].step(false)), (w[1], w[0]));
+    }
 }
 
 #[test]

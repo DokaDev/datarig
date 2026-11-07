@@ -4,6 +4,8 @@
 
 pub use super::chart::ChartAction;
 use super::copy::{CopyFormat, CopyScope};
+pub use super::monitor::MonitorAction;
+use super::monitor::MonitorView;
 use super::overlay::OverlayKind;
 pub use super::plan::{PlanAction, PlanView};
 use super::tips::onboarding_open;
@@ -195,6 +197,8 @@ pub enum Action {
     Plan(PlanAction),
     /// The Chart tab of the results pane.
     Chart(ChartAction),
+    /// The Monitor tab.
+    Monitor(MonitorAction),
     /// Export the shown result to a file: the export dialog.
     Export,
     /// Change the shown result's cells.
@@ -593,6 +597,17 @@ fn chart_focused(a: &App) -> bool {
     has_tab(a) && a.chart_shown() && matches!(a.focus, Focus::Results | Focus::Inspector)
 }
 
+/// There is a profile whose Monitor tab can open: the explorer's selection, else the active
+/// tab's.
+fn monitor_profile(a: &App) -> bool {
+    a.monitor_profile().is_some()
+}
+
+/// The Monitor tab is shown and has the focus.
+fn monitor_focused(a: &App) -> bool {
+    a.monitor_shown() && matches!(a.focus, Focus::Results | Focus::Inspector)
+}
+
 /// The pane is shown and nothing is zoomed: its height can change.
 fn pane_sized(a: &App) -> bool {
     pane_shown(a) && a.zoomed().is_none()
@@ -623,6 +638,7 @@ use super::grid_search::SearchAction as S;
 use ChartAction as C;
 use ExplorerAction as E;
 use GridAction as G;
+use MonitorAction as M;
 use PlanAction as P;
 
 /// Every action, in command-line order.
@@ -1043,6 +1059,38 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Chart(C::CopyData), "chart.copy_data", Label::ActionChartCopyData, has_chart),
     act(Action::Chart(C::CopyText), "chart.copy_text", Label::ActionChartCopyText, has_chart),
     act(Action::Chart(C::GotoRow), "chart.goto_row", Label::ActionChartGotoRow, chart_focused),
+    act(Action::Monitor(M::Open), "monitor.open", Label::ActionMonitorOpen, monitor_profile),
+    act(
+        Action::Monitor(M::View(MonitorView::Overview)),
+        "monitor.overview",
+        Label::ActionMonitorOverview,
+        monitor_focused,
+    ),
+    act(
+        Action::Monitor(M::View(MonitorView::Sessions)),
+        "monitor.sessions",
+        Label::ActionMonitorSessions,
+        monitor_focused,
+    ),
+    act(Action::Monitor(M::NextView), "monitor.view.next", Label::ActionMonitorViewNext, monitor_focused),
+    mv(Action::Monitor(M::Up), "monitor.up", Label::ActionMonitorUp, monitor_focused),
+    mv(Action::Monitor(M::Down), "monitor.down", Label::ActionMonitorDown, monitor_focused),
+    mv(Action::Monitor(M::PageUp), "monitor.page_up", Label::ActionMonitorPageUp, monitor_focused),
+    mv(Action::Monitor(M::PageDown), "monitor.page_down", Label::ActionMonitorPageDown, monitor_focused),
+    act(Action::Monitor(M::First), "monitor.first", Label::ActionMonitorFirst, monitor_focused),
+    act(Action::Monitor(M::Last), "monitor.last", Label::ActionMonitorLast, monitor_focused),
+    act(Action::Monitor(M::Pause), "monitor.pause", Label::ActionMonitorPause, monitor_focused),
+    act(Action::Monitor(M::ReadNow), "monitor.read", Label::ActionMonitorRead, monitor_focused),
+    act(Action::Monitor(M::Faster), "monitor.faster", Label::ActionMonitorFaster, monitor_focused),
+    act(Action::Monitor(M::Slower), "monitor.slower", Label::ActionMonitorSlower, monitor_focused),
+    act(Action::Monitor(M::ShowIdle), "monitor.idle", Label::ActionMonitorIdle, monitor_focused),
+    act(Action::Monitor(M::Sort), "monitor.sort", Label::ActionMonitorSort, monitor_focused),
+    act(Action::Monitor(M::SortReverse), "monitor.sort_reverse", Label::ActionMonitorSortReverse, monitor_focused),
+    act(Action::Monitor(M::Filter), "monitor.filter", Label::ActionMonitorFilter, monitor_focused),
+    act(Action::Monitor(M::Details), "monitor.details", Label::ActionMonitorDetails, monitor_focused),
+    act(Action::Monitor(M::OpenConsole), "monitor.open_console", Label::ActionMonitorOpenConsole, monitor_focused),
+    act(Action::Monitor(M::CopyQuery), "monitor.copy_query", Label::ActionMonitorCopyQuery, monitor_focused),
+    act(Action::Monitor(M::Back), "monitor.back", Label::ActionMonitorBack, monitor_focused),
 ];
 
 pub fn spec(a: Action) -> &'static ActionSpec {

@@ -337,6 +337,24 @@ pub fn chart(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// The Monitor tab of a busy server: the slowest key (or read) with its frame, the work of one
+/// frame (it must not grow with the sessions), and taking a read.
+pub fn monitor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
+    match f(result, &["frame_ms", "p95"]) {
+        Some(m) => c.check("monitor key or read + frame p95", m, num(b, "monitor", "frame_p95_ms_max")?, " ms"),
+        None => c.missing("monitor key or read + frame p95"),
+    }
+    match f(result, &["work_max"]) {
+        Some(w) if w > 0.0 => c.check("monitor work per frame", w, num(b, "monitor", "work_per_frame_max")?, ""),
+        _ => c.missing("monitor work per frame"),
+    }
+    match f(result, &["take_ms", "p95"]) {
+        Some(m) => c.check("monitor take a read p95", m, num(b, "monitor", "take_p95_ms_max")?, " ms"),
+        None => c.missing("monitor take a read p95"),
+    }
+    Ok(())
+}
+
 /// Visual block operators over the whole text: the slowest key with its frame, and the bytes
 /// one key walked, in passes over the text; `:%s` over the whole text likewise.
 pub fn editor_block(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {

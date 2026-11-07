@@ -285,8 +285,8 @@ pub(crate) fn mode_badge(app: &App) -> Option<(datarig_core::i18n::Localized, St
     let lines = app.cell_lines_open().then(|| app.tab().cell_edit.as_ref()?.lines.as_deref()).flatten();
     let command =
         app.overlays.is_open(crate::app::overlay::OverlayKind::Commands) || lines.is_some_and(|l| l.ex.is_some());
-    // No editor on screen: no tab, or a table tab.
-    if (app.tabs.is_empty() || app.tab().is_table()) && !command && lines.is_none() {
+    // No editor on screen: no tab, a table tab or a Monitor tab.
+    if (app.tabs.is_empty() || app.tab().is_table() || app.tab().is_monitor()) && !command && lines.is_none() {
         return None;
     }
     let (label, bg) = if command {

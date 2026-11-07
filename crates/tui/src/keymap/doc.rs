@@ -197,6 +197,7 @@ fn commands(s: &mut String) {
     for c in command::COMMANDS {
         let arg = match c.arg {
             Some(ArgKind::Profile) => " <profile>",
+            Some(ArgKind::OptionalProfile) => " [profile]",
             Some(ArgKind::Setting) => " <setting>=<value>",
             Some(ArgKind::Script) => " [name]",
             Some(ArgKind::NewScript) => " [name]",

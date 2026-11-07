@@ -171,6 +171,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r e` | `results.export` | Results → export to a file… |  |
 | `Space r ]` | `results.tab.next` | Result tabs → next |  |
 | `Space r [` | `results.tab.prev` | Result tabs → previous |  |
+| `Space m m` | `monitor.open` | Monitor → the connection's server monitor |  |
 
 Leader groups (the which-key popup lists what follows):
 
@@ -183,6 +184,7 @@ Leader groups (the which-key popup lists what follows):
 | `Space r` | Results |
 | `Space r y` | Copy selection |
 | `Space r a` | Copy all fetched rows |
+| `Space m` | Monitor |
 | `Space x` | Transaction |
 | `Space e` | Editor |
 | `Space d` | Data |
@@ -222,6 +224,7 @@ The explorer: folders, connection profiles, their databases and schema trees. In
 | `X` | `tips.dismiss_onboarding` | Hide the first steps of the welcome panel |  |
 | `Esc` | `explorer.back` | Explorer: back (cancel a test or connecting, clear the filter) |  |
 | `q` | `app.quit` | Quit |  |
+| `M` | `monitor.open` | Monitor → the connection's server monitor |  |
 
 ## `explorer.filter` [text]
 
@@ -450,6 +453,51 @@ The Changes tab of the results pane (`:changes`, `Space d p`, or its tab in the 
 | `H` | `results.tab.prev` | Result tabs → previous |  |
 | `Esc` | `pane.back` | Back to the editor |  |
 | `q` | `pane.back` | Back to the editor |  |
+
+## `monitor`
+
+The Monitor tab of a profile (`monitor.open`: `M` on a connection in the explorer, `:monitor`, the connection's menu): what its server says about its load and its sessions, read by a connection of the tab's own, only while the tab is shown. `1` the Overview (the server, its load as charts, the longest running sessions), `2` the Sessions, `v` the next view; `j`/`k` select a session, `s` sorts by the next column (`S` the other way; a click on a column's name sorts by it), `/` filters, `a` shows idle sessions too, `Enter` shows the session in full, `o` opens its statement in a new console (never run), `y` copies it; `p` pauses, `r` reads at once, `+`/`-` read more or less often. Inside `nav`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `1` | `monitor.overview` | Monitor: Overview |  |
+| `2` | `monitor.sessions` | Monitor: Sessions |  |
+| `v` | `monitor.view.next` | Monitor: next view |  |
+| `j` | `monitor.down` | Monitor: session below | ✓ |
+| `Down` | `monitor.down` | Monitor: session below | ✓ |
+| `k` | `monitor.up` | Monitor: session above | ✓ |
+| `Up` | `monitor.up` | Monitor: session above | ✓ |
+| `Ctrl+D` | `monitor.page_down` | Monitor: page down | ✓ |
+| `PageDown` | `monitor.page_down` | Monitor: page down | ✓ |
+| `Ctrl+U` | `monitor.page_up` | Monitor: page up | ✓ |
+| `PageUp` | `monitor.page_up` | Monitor: page up | ✓ |
+| `g g` | `monitor.first` | Monitor: first session |  |
+| `Home` | `monitor.first` | Monitor: first session |  |
+| `G` | `monitor.last` | Monitor: last session |  |
+| `End` | `monitor.last` | Monitor: last session |  |
+| `p` | `monitor.pause` | Monitor: pause / go on reading |  |
+| `r` | `monitor.read` | Monitor: read now |  |
+| `+` | `monitor.faster` | Monitor: read more often |  |
+| `-` | `monitor.slower` | Monitor: read less often |  |
+| `a` | `monitor.idle` | Monitor: show / hide idle sessions |  |
+| `s` | `monitor.sort` | Monitor: sort by the next column |  |
+| `S` | `monitor.sort_reverse` | Monitor: sort the other way |  |
+| `/` | `monitor.filter` | Monitor: filter the sessions |  |
+| `Enter` | `monitor.details` | Monitor: the session in full |  |
+| `o` | `monitor.open_console` | Monitor: the session's statement in a new console |  |
+| `y` | `monitor.copy_query` | Monitor: copy the session's statement |  |
+| `Esc` | `monitor.back` | Monitor: back (details, filter) |  |
+
+## `monitor.filter` [text]
+
+The filter of the Monitor tab's sessions (`/`): the sessions whose user, database, application, client, state or statement contain the text, as it is typed; `Enter` keeps it, `Esc` too (`Esc` again in the list clears it). Inside `workspace`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `Enter` | `monitor.back` | Monitor: back (details, filter) |  |
+| `Esc` | `monitor.back` | Monitor: back (details, filter) |  |
+
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `welcome`
 
@@ -791,6 +839,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:suspend` | `:sus` `:stop` | Suspend datarig (the shell's fg brings it back) |
 | `:format` |  | Format the statement under the cursor or the selection (only its layout) |
 | `:ddl [schema.name]` |  | Show the DDL of the explorer's object, the table tab's table, or a name (:ddl [schema.name]) |
+| `:monitor [profile]` |  | Open the server monitor of the explorer's or the active tab's connection, or of one by name (:monitor [connection]) |
 | `:explain [analyze]` |  | The plan of the statement under the cursor (:explain analyze runs and measures it; a write is rolled back) |
 | `:theme copy <from> <name> / new <name> / update [<name>]` |  | Write a theme file: a full copy of a theme, a new one to fill in, or the tokens a file does not list |
 | `:export [format] [all / fetched / selection] [delim= quote= header= null=] [path]` |  | Export the result to a file: alone, the export dialog; else every row by default, the format from the file's extension (:export [format] [all\|fetched\|selection] [delim=… quote=… header=… null=…] [path]) |
@@ -836,5 +885,6 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `updates.check` | `on` `off` | Check for updates |
 | `updates.whats_new` | `on` `off` | What's new |
 | `copy_format` | `tsv` `csv` `json` `json_pretty` `markdown` `html` `xml` `insert` | Format of y and Y copies |
+| `monitor.interval` | `1s` `2s` `5s` `10s` `30s` `60s` | Server monitor interval |
 
 <!-- ANCHOR_END: commands -->

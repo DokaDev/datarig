@@ -331,5 +331,6 @@ pub fn kind_label(kind: TabKind) -> Label {
         TabKind::Script => Label::TabListKindScript,
         TabKind::Table => Label::TabListKindTable,
         TabKind::Ddl => Label::TabListKindDdl,
+        TabKind::Monitor => Label::TabListKindMonitor,
     }
 }

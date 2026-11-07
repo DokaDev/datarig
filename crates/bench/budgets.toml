@@ -202,7 +202,8 @@ hscroll_cells_per_frame_max = 1720
 [idle]
 secs = 20
 rss_mib_max = 48
-# With nothing to do the loop sleeps: no wakeups at all is what it measures.
+# With nothing to do the loop sleeps: no wakeups at all is what it measures (a Monitor tab is
+# open but not shown: it reads nothing and wakes nothing).
 wakeups_per_s_max = 0.2
 cpu_pct_max = 1.0
 # A paging countdown on screen: one frame a second (a little more for the rows arriving).
@@ -250,6 +251,17 @@ work_per_node_max = 4.0
 p95_ms_max = 25.0
 work_per_frame_max = 8000.0
 build_work_per_row_max = 6.0
+
+[monitor]
+# The Monitor tab of a server with 5,000 sessions (none idle, so every one is listed), a new read
+# every tenth frame, at 160x45 while the selection moves, in the Sessions view and the Overview.
+# A frame draws only the rows on screen (the list was sorted and filtered when the read came):
+# the key or the read with its frame, and the work of one frame (session rows and chart tiles
+# drawn: about the screen's rows, whatever the sessions). Taking a read works out the rates and
+# sorts and filters its sessions once.
+frame_p95_ms_max = 25.0
+work_per_frame_max = 60.0
+take_p95_ms_max = 25.0
 
 [explorer]
 # One connected profile with 20 schemas of 500 relations each, all listed and open (10,000

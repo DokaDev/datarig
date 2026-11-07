@@ -90,6 +90,8 @@ pub struct FakeDriver {
     pub mysql: Arc<AtomicBool>,
     /// Without `Capabilities::manual_commit` (as a driver that cannot commit by hand).
     pub no_manual: Arc<AtomicBool>,
+    /// With `Capabilities::monitor` (a driver that opens monitor sessions).
+    pub monitor: Arc<AtomicBool>,
 }
 
 impl Driver for FakeDriver {
@@ -121,7 +123,7 @@ impl Driver for FakeDriver {
                 true => datarig_core::driver::EditFormat::MySql(Default::default()),
                 false => datarig_core::driver::EditFormat::Postgres,
             }),
-            monitor: false,
+            monitor: self.monitor.load(Ordering::SeqCst),
         }
     }
 
@@ -981,6 +983,22 @@ impl Harness {
     /// Session `i` was asked to cancel.
     pub fn session_cancelled(&self, i: usize) -> bool {
         self.driver.sessions.lock().unwrap()[i].cancelled.load(Ordering::SeqCst)
+    }
+
+    /// A driver event of the monitor connection of the active Monitor tab (its current
+    /// generation).
+    pub fn monitor_db(&mut self, ev: DbEvent) {
+        let id = self.app.tab().id;
+        let generation = self.app.monitor_of(id).expect("a Monitor tab").generation;
+        self.app.on_app_event(AppEvent::Db { target: EventTarget::Monitor(id), generation, ev });
+    }
+
+    /// A driver event of the monitor connection of the Monitor tab at `index` (its current
+    /// generation), whichever tab is active.
+    pub fn monitor_db_to(&mut self, index: usize, ev: DbEvent) {
+        let id = self.app.tabs.iter().nth(index).expect("tab").id;
+        let generation = self.app.monitor_of(id).expect("a Monitor tab").generation;
+        self.app.on_app_event(AppEvent::Db { target: EventTarget::Monitor(id), generation, ev });
     }
 
     /// A driver event of the query session of tab `index` (its current generation).

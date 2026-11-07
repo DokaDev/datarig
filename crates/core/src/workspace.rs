@@ -115,6 +115,8 @@ pub enum TabKind {
     Table,
     /// An object's DDL (no console file; not read again until asked).
     Ddl,
+    /// A profile's server monitor (no console file; it reads only while shown).
+    Monitor,
 }
 
 /// The share of a results pane whose file does not say it (percent of the height).
@@ -275,6 +277,7 @@ fn parse(text: &str) -> Result<(WorkspaceState, u64), Fault> {
             Some("script") => TabKind::Script,
             Some("table") => TabKind::Table,
             Some("ddl") => TabKind::Ddl,
+            Some("monitor") => TabKind::Monitor,
             // A later version's kind: kept, never dropped (a table without a kind is not a
             // tab of any version).
             Some(_) => {
@@ -526,6 +529,7 @@ fn build(s: &WorkspaceState) -> toml_edit::DocumentMut {
             TabKind::Script => "script",
             TabKind::Table => "table",
             TabKind::Ddl => "ddl",
+            TabKind::Monitor => "monitor",
         });
         if let Some(p) = &t.script {
             tt["script"] = toml_edit::value(p.as_str());

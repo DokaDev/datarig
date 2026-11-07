@@ -6,7 +6,7 @@
 mod common;
 
 use common::*;
-use datarig_core::config::{self, ClipboardSetting, CommandsPosition, DetailView, IconsSetting};
+use datarig_core::config::{self, ClipboardSetting, CommandsPosition, DetailView, IconsSetting, MonitorInterval};
 use datarig_core::i18n::Lang;
 use datarig_tui::app::action::LangSetting;
 use datarig_tui::app::overlay::OverlayKind;
@@ -30,7 +30,7 @@ fn row(h: &mut Harness, name: &str) -> String {
 
 /// Put the screen's cursor on the setting labelled `name` (moving with `j`).
 fn select(h: &mut Harness, name: &str) {
-    for _ in 0..20 {
+    for _ in 0..40 {
         let screen = h.screen(160, 45);
         if screen.lines().any(|l| l.contains(name) && l.contains("‹")) && selected_is(h, name) {
             return;
@@ -107,6 +107,29 @@ fn space_comma_and_the_command_open_it_and_changes_are_live_and_saved() {
     // (The editor's "yanks to the clipboard" row has the word too: the row with the value.)
     let screen = h.screen(160, 45);
     assert!(screen.lines().any(|l| l.contains(clipboard) && l.contains("‹ system")), "{screen}");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[test]
+fn the_monitor_interval_is_set_on_the_screen_and_with_set() {
+    let path = temp_config("monitor", "");
+    let (cfg, err) = config::load(Some(path.clone()));
+    assert!(err.is_none());
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.key(KeyCode::Esc);
+    h.command("settings");
+    select(&mut h, "Server monitor interval");
+    assert!(row(&mut h, "Server monitor interval").contains("‹ 2s"), "{}", row(&mut h, "Server monitor interval"));
+    h.keys("l");
+    assert_eq!(h.app.prefs.monitor_interval, MonitorInterval::S5);
+    assert!(row(&mut h, "Server monitor interval").contains("Every 5 seconds"));
+    assert!(std::fs::read_to_string(&path).unwrap().contains("[monitor]\ninterval = \"5s\""));
+    h.key(KeyCode::Esc);
+    h.command("set monitor.interval=60s");
+    assert_eq!(h.app.prefs.monitor_interval, MonitorInterval::S60);
+    h.command("set monitor.interval=2s");
+    assert_eq!(h.app.prefs.monitor_interval, MonitorInterval::S2);
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("interval"), "2s is the default: the key goes");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 

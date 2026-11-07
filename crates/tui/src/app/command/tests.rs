@@ -74,7 +74,14 @@ fn set_accepts_known_settings_and_values_only() {
     );
     assert_eq!(
         setting_keys(),
-        "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|editor.cursor_shape|editor.clipboard|theme|editor.format_keyword_case|editor.format_indent|editor.auto_pairs|editor.soft_tab_backspace|editor.run_hints|secrets.macos_keychain_access|explorer.size_heat|ui.yank_flash|ui.changes_view|edit.paste_null|ui.tips|ui.background|idle_disconnect|lock_wait|editor.completion_delay_ms|updates.check|updates.whats_new|copy_format"
+        "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|editor.cursor_shape|editor.clipboard|theme|editor.format_keyword_case|editor.format_indent|editor.auto_pairs|editor.soft_tab_backspace|editor.run_hints|secrets.macos_keychain_access|explorer.size_heat|ui.yank_flash|ui.changes_view|edit.paste_null|ui.tips|ui.background|idle_disconnect|lock_wait|editor.completion_delay_ms|updates.check|updates.whats_new|copy_format|monitor.interval"
+    );
+    use datarig_core::config::MonitorInterval;
+    assert_eq!(set("monitor.interval=10s"), Ok(Setting::MonitorInterval(MonitorInterval::S10)));
+    assert_eq!(set("monitor.interval=1S"), Ok(Setting::MonitorInterval(MonitorInterval::S1)));
+    assert_eq!(
+        set("monitor.interval=3s"),
+        Err(SetError::BadValue { key: "monitor.interval", value: "3s".into(), values: "1s|2s|5s|10s|30s|60s".into() })
     );
     // The duration settings: a preset, any other duration in range, off; not out of range.
     let secs = |n| Some(std::time::Duration::from_secs(n));
@@ -161,7 +168,7 @@ fn completes_setting_keys_then_values() {
     let got = |arg: &str| complete_arg(ArgKind::Setting, arg, &[]);
     assert_eq!(
         got(""),
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
             .map(ArgCompletion::SetKey)
     );
     assert_eq!(got("c"), [3, 5, 6, 27].map(ArgCompletion::SetKey));
