@@ -587,3 +587,18 @@ fn reads_that_keep_failing_slow_down_through_reconnects() {
     }
     assert!(monitor(&h).delay() > Duration::from_secs(2), "slowed down: {:?}", monitor(&h).delay());
 }
+
+#[test]
+fn reopening_a_closed_monitor_tab_goes_to_the_open_one() {
+    let (mut h, _) = monitor_open();
+    h.app.dispatch(datarig_tui::app::action::Action::CloseTab);
+    if h.overlay_kind().is_some() {
+        h.keys("y");
+    }
+    h.command("monitor");
+    let monitors = |h: &Harness| h.app.tabs.iter().filter(|t| t.kind == TabKind::Monitor).count();
+    assert_eq!(monitors(&h), 1);
+    h.keys(" tu");
+    assert_eq!(monitors(&h), 1, "one Monitor tab per profile");
+    assert_eq!(h.app.tab().kind, TabKind::Monitor);
+}

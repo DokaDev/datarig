@@ -1242,6 +1242,13 @@ impl TabManager {
 
     /// Bring closed tab `c` back where it was (a new id and no session).
     pub fn reopen_closed(&mut self, c: ClosedTab) -> TabId {
+        // One Monitor tab per profile: the open one, when there is one.
+        if c.monitor.is_some()
+            && let Some(i) = self.tabs.iter().position(|t| t.is_monitor() && t.profile == c.profile)
+        {
+            self.activate(i);
+            return self.tabs[i].id;
+        }
         let mut editor = Editor::new(&c.text);
         editor.row = c.cursor.0;
         editor.col = c.cursor.1;
