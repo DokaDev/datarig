@@ -350,6 +350,9 @@ impl MonitorTab {
     /// The charts show a gap before the next point: what came before is not joined to it.
     fn gap(&mut self) {
         self.prev = None;
+        // The own traffic still to take out belongs to the time before the gap: the read after
+        // it may count it already.
+        self.pending = Pending::default();
     }
 
     /// Take a read's answer: the rates since the read before, the charts, the list.
@@ -620,6 +623,11 @@ impl App {
     /// after input, events and ticks.
     pub(super) fn monitor_sync(&mut self) {
         let now = self.now();
+        self.monitor_sync_at(now);
+    }
+
+    /// [`App::monitor_sync`] at `now` (a timer tick's time).
+    pub(super) fn monitor_sync_at(&mut self, now: Instant) {
         let active = (!self.tabs.is_empty()).then(|| self.tab().id);
         let ids: Vec<TabId> = self.tabs.iter().filter(|t| t.is_monitor()).map(|t| t.id).collect();
         for id in ids {

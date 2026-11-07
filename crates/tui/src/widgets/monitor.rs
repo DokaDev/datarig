@@ -143,7 +143,9 @@ impl Cx<'_> {
                 parts.push(p.to_string());
             }
             parts.push(self.label(if s.read_only { Label::MonitorReadOnly } else { Label::MonitorReadWrite }));
-            if let Some(up) = s.started.and_then(|t| s.read_at.since(t)) {
+            // On the latest read's clock: the server facts are read only now and then.
+            let now = self.m.snapshot.as_ref().map_or(s.read_at, |r| r.sample.time);
+            if let Some(up) = s.started.and_then(|t| now.since(t)) {
                 parts.push(self.msg(Msg::MonitorUptime { time: age(up) }));
             }
             if let Some(n) = s.max_connections {

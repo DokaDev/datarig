@@ -1879,7 +1879,8 @@ impl App {
     /// portals). Called on every tick with the current time.
     pub fn on_tick(&mut self, now: Instant) {
         self.which_key_tick(now);
-        self.monitor_sync();
+        // At the tick's own time: the clock is not read again here.
+        self.monitor_sync_at(now);
         self.changes_count_tick(now);
         self.tx_idle_tick(now);
         self.idle_tick(now);

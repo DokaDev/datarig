@@ -492,3 +492,50 @@ fn what_the_server_is_is_asked_again_after_a_failed_first_read() {
     assert_eq!(t.len(), 1);
     assert!(t[0].2, "the server info is asked for again");
 }
+
+#[test]
+fn the_uptime_follows_the_latest_read() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, rows(), true)) });
+    assert!(h.screen(120, 40).contains("up 41d3h"));
+    h.advance(Duration::from_secs(2));
+    let t = ticks(&mut h);
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(snapshot(3600.0, 2000, rows(), false)) });
+    assert!(h.screen(120, 40).contains("up 41d4h"), "an hour later by the server's clock");
+}
+
+#[test]
+fn own_traffic_owed_before_a_gap_is_not_taken_from_the_load_after_it() {
+    let (mut h, first) = monitor_open();
+    let with_own = |s: Snapshot, own: u64| Snapshot {
+        sample: Sample { own: Own { statements: 0, transactions: own }, ..s.sample },
+        ..s
+    };
+    h.monitor_db(DbEvent::MonitorSnapshot {
+        request: first,
+        result: Ok(with_own(snapshot(0.0, 1000, rows(), true), 0)),
+    });
+    h.advance(Duration::from_secs(2));
+    let t = ticks(&mut h);
+    // The monitor's own transaction not published yet: owed.
+    h.monitor_db(DbEvent::MonitorSnapshot {
+        request: t[0].0,
+        result: Ok(with_own(snapshot(2.0, 1000, rows(), false), 1)),
+    });
+    h.keys("p");
+    h.keys("p");
+    let t = ticks(&mut h);
+    // Published during the gap.
+    h.monitor_db(DbEvent::MonitorSnapshot {
+        request: t[0].0,
+        result: Ok(with_own(snapshot(30.0, 1001, rows(), false), 2)),
+    });
+    h.advance(Duration::from_secs(2));
+    let t = ticks(&mut h);
+    h.monitor_db(DbEvent::MonitorSnapshot {
+        request: t[0].0,
+        result: Ok(with_own(snapshot(32.0, 1012, rows(), false), 3)),
+    });
+    let commits = monitor(&h).history_of(datarig_tui::app::monitor::Metric::Rate(CounterKind::Commits)).unwrap();
+    assert_eq!(commits.last(), Some(5.0), "10 of the 11 are the load, over 2 s");
+}
