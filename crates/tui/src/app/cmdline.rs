@@ -318,10 +318,15 @@ impl App {
                 ArgKind::Theme if !arg.is_empty() && input.ends_with(char::is_whitespace) => format!("{arg} "),
                 _ => arg.to_string(),
             };
-            return command::complete_arg(kind, &arg, &names)
-                .into_iter()
-                .map(|arg| CommandItem::Arg { command: c, arg })
-                .collect();
+            let mut items = command::complete_arg(kind, &arg, &names);
+            // `:theme update ` with no name yet: the current theme's file first, so that `Enter`
+            // updates it as `:theme update` alone does.
+            if kind == ArgKind::Theme && arg.trim().eq_ignore_ascii_case("update") {
+                let current =
+                    |a: &ArgCompletion| matches!(a, ArgCompletion::ThemeFile(i) if names[*i] == self.theme_name);
+                items.sort_by_key(|a| !current(a));
+            }
+            return items.into_iter().map(|arg| CommandItem::Arg { command: c, arg }).collect();
         }
         let text = input.trim();
         // A line number or `:s` goes to the editor (first, so `Enter` runs it; `:s` also lists
@@ -492,6 +497,10 @@ impl App {
                 let from = self.theme_names().get(i).cloned().unwrap_or_default();
                 self.set_command_input(&format!("{} copy {from} ", COMMANDS[command].name));
                 Ok(())
+            }
+            Some(CommandItem::Arg { command, arg: ArgCompletion::ThemeFile(i) }) => {
+                let name = self.theme_names().get(i).cloned().unwrap_or_default();
+                self.run_command(&COMMANDS[command], &format!("update {name}"))
             }
             Some(CommandItem::Arg { command, arg: ArgCompletion::Format(i) }) => {
                 self.run_command(&COMMANDS[command], super::copy::CopyFormat::MENU[i].name())
@@ -1046,7 +1055,7 @@ impl App {
                     let (word, label) = command::THEME_ACTIONS[i];
                     CommandRow { name: Localized::verbatim(word), label: self.i18n.label(label), keys: String::new() }
                 }
-                CommandItem::Arg { arg: ArgCompletion::ThemeFrom(i), .. } => {
+                CommandItem::Arg { arg: ArgCompletion::ThemeFrom(i) | ArgCompletion::ThemeFile(i), .. } => {
                     let name = self.theme_names().get(i).cloned().unwrap_or_default();
                     CommandRow { label: self.theme_label(&name), name: Localized::verbatim(name), keys: String::new() }
                 }
