@@ -80,12 +80,13 @@ fn index_of(c: Color) -> Option<u8> {
 
 /// `tint`'s fill drawn apart from every color of `under` on a terminal of 256 colors: as it is
 /// when its palette color differs from theirs, else the palette color nearest to it that is
-/// none of theirs, on the same side of the first one as the tint (lighter on a dark background,
-/// darker on a light one). `under` starts with the background the tint sits on, then the other
-/// colors it must stay apart from (those it sits on or next to, and the cues seen with it). A
-/// tint with no RGB fill, or on an unknown background, stays; an unknown other color is not
-/// taken into account.
-fn apart(tint: Style, under: &[Color]) -> Style {
+/// none of theirs and none of `used` (every other fill of the theme, so that the move puts it
+/// on no other cue), on the same side of the first one as the tint (lighter on a dark
+/// background, darker on a light one). `under` starts with the background the tint sits on,
+/// then the other colors it must stay apart from (those it sits on or next to, and the cues
+/// seen with it). A tint with no RGB fill, or on an unknown background, stays; an unknown other
+/// color is not taken into account.
+fn apart(tint: Style, under: &[Color], used: &[Color]) -> Style {
     let Some(Color::Rgb(r, g, b)) = tint.bg else { return tint };
     if under.first().and_then(|c| index_of(*c)).is_none() {
         return tint;
@@ -94,13 +95,20 @@ fn apart(tint: Style, under: &[Color]) -> Style {
     if !taken.contains(&nearest((r, g, b))) {
         return tint;
     }
+    let busy: Vec<u8> = used.iter().filter_map(|c| index_of(*c)).collect();
     let light = |(r, g, b): (u8, u8, u8)| i32::from(r) + i32::from(g) + i32::from(b);
     let base = light(rgb_of(taken[0]));
     let side = (light((r, g, b)) - base).signum();
-    let free = |i: &u8| !taken.contains(i);
     let near = |i: &u8| distance((r, g, b), rgb_of(*i));
-    let same_side = (16..=255u8).filter(free).filter(|i| side == 0 || (light(rgb_of(*i)) - base).signum() == side);
-    let pick = same_side.min_by_key(near).or_else(|| (16..=255u8).filter(free).min_by_key(near));
+    let on_side = |i: &u8| side == 0 || (light(rgb_of(*i)) - base).signum() == side;
+    let pick = |free: &dyn Fn(&u8) -> bool| {
+        (16..=255u8)
+            .filter(|i| free(i) && on_side(i))
+            .min_by_key(near)
+            .or_else(|| (16..=255u8).filter(|i| free(i)).min_by_key(near))
+    };
+    // Apart from every other fill when the palette has room, else from `under` alone.
+    let pick = pick(&|i| !taken.contains(i) && !busy.contains(i)).or_else(|| pick(&|i| !taken.contains(i)));
     match pick {
         Some(i) => tint.bg(Color::Indexed(i)),
         None => tint,
@@ -115,28 +123,42 @@ impl Theme {
         let mut th = self.clone();
         let (bg, alt, surface) = (self.bg, self.surface_alt, self.surface);
         let fill = |s: Style, or: Color| s.bg.unwrap_or(or);
+        // Every fill of the theme: a tint is never moved onto one of them.
+        let mut used: Vec<Color> = [bg, surface, alt, self.edit_inserted_row]
+            .into_iter()
+            .chain(super::STYLE_TOKENS.iter().filter_map(|n| super::style_of(self, n)?.bg))
+            .collect();
+        let mut adapt = |tint: Style, under: &[Color]| {
+            let out = apart(tint, under, &used);
+            if out != tint {
+                used.extend(out.bg);
+            }
+            out
+        };
         // In order: each one apart from the backgrounds it sits on and from the cues before it
         // that are seen with it (as adapted).
-        th.grid_cursor_row = apart(self.grid_cursor_row, &[bg, alt]);
+        th.grid_cursor_row = adapt(self.grid_cursor_row, &[bg, alt]);
         let row = fill(th.grid_cursor_row, bg);
-        th.grid_cursor_header = apart(self.grid_cursor_header, &[surface]);
+        th.grid_cursor_header = adapt(self.grid_cursor_header, &[surface]);
         let header = fill(th.grid_cursor_header, surface);
-        th.cursor_line = apart(self.cursor_line, &[bg]);
+        th.cursor_line = adapt(self.cursor_line, &[bg]);
         let line = fill(th.cursor_line, bg);
         // The statement's other lines next to the cursor's line.
-        th.current_stmt = apart(self.current_stmt, &[bg, line]);
+        th.current_stmt = adapt(self.current_stmt, &[bg, line]);
         let stmt = fill(th.current_stmt, bg);
-        th.running_stmt = apart(self.running_stmt, &[bg, line, stmt]);
+        th.running_stmt = adapt(self.running_stmt, &[bg, line, stmt]);
+        let running = fill(th.running_stmt, bg);
         // The cursor's cell on the cursor's row; a menu's or a dialog's selected row on the
-        // surface.
-        th.selection = apart(self.selection, &[bg, alt, row, surface]);
+        // surface; an editor selection over the statement that runs.
+        th.selection = adapt(self.selection, &[bg, alt, row, surface, running]);
         let cell = fill(th.selection, bg);
         // A range on the rows, around the cursor's cell, and on its columns' headers next to the
         // cursor column's.
-        th.range = apart(self.range, &[bg, alt, row, surface, header, cell]);
+        th.range = adapt(self.range, &[bg, alt, row, surface, header, cell]);
         let range = fill(th.range, bg);
-        // The pointer on any of them.
-        th.hover = apart(self.hover, &[bg, alt, surface, row, line, cell, range]);
+        // The pointer on any of them, the active tab included.
+        let tab = fill(self.tab_active, bg);
+        th.hover = adapt(self.hover, &[bg, alt, surface, row, line, cell, range, tab]);
         th
     }
 }
@@ -196,14 +218,28 @@ mod tests {
                     ("cursor_line", t.cursor_line.bg, vec![bg]),
                     ("current_stmt", t.current_stmt.bg, vec![bg, line]),
                     ("running_stmt", t.running_stmt.bg, vec![bg, line, stmt]),
-                    ("selection", t.selection.bg, vec![bg, alt, row, surface]),
+                    ("selection", t.selection.bg, vec![bg, alt, row, surface, f(t.running_stmt, t.bg)]),
                     ("range", t.range.bg, vec![bg, alt, row, surface, header, cell]),
-                    ("hover", t.hover.bg, vec![bg, alt, surface, row, line, cell, range]),
+                    ("hover", t.hover.bg, vec![bg, alt, surface, row, line, cell, range, f(t.tab_active, t.bg)]),
                 ];
                 for (token, tint, under) in pairs {
                     let (Some(tint), Some(_)) = (ix(tint), index_of(under[0])) else { continue };
                     for c in under {
                         assert_ne!(Some(tint), index_of(c), "{name}: {token} against {c:?}");
+                    }
+                }
+                // A tint that moved lands on no fill the theme has (as drawn on 256 colors).
+                let fills: Vec<u8> = super::super::STYLE_TOKENS
+                    .iter()
+                    .filter_map(|n| super::super::style_of(&th, n)?.bg)
+                    .chain([th.bg, th.surface, th.surface_alt, th.edit_inserted_row])
+                    .filter_map(index_of)
+                    .collect();
+                for n in super::super::STYLE_TOKENS {
+                    let (before, after) =
+                        (super::super::style_of(&th, n).unwrap(), super::super::style_of(&t, n).unwrap());
+                    if let (true, Some(Color::Indexed(i))) = (before != after, after.bg) {
+                        assert!(!fills.contains(&i), "{name}: {n} moved onto {i}, a fill of the theme");
                     }
                 }
                 if let (Some(Color::Rgb(r, g, b)), Some(Color::Rgb(..))) = (th.grid_cursor_row.bg, Some(th.bg))
