@@ -21,6 +21,7 @@
 mod connect;
 mod link;
 mod meta;
+mod monitor;
 mod query;
 mod route;
 mod tls;

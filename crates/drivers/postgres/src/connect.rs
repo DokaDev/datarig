@@ -6,6 +6,7 @@
 
 use crate::link::Link;
 use crate::meta::meta_loop;
+use crate::monitor::monitor_loop;
 use crate::query::query_loop;
 use crate::route::{Cancel, Route, route};
 use crate::tls::{PgTls, TlsError};
@@ -69,6 +70,7 @@ impl Driver for PgDriver {
             export: true,
             manual_commit: true,
             edit: Some(EditFormat::Postgres),
+            monitor: true,
         }
     }
 
@@ -82,6 +84,18 @@ impl Driver for PgDriver {
         let (tx, rx) = unbounded_channel();
         let canceller = Arc::new(PgCanceller(Mutex::new(None), Arc::new(AtomicBool::new(false))));
         let cfg = cfg.clone();
+        // A monitor session reads the whole server from the profile's own database and sends
+        // nothing before its probe: no context, limits or start-up statements.
+        let opts = match role {
+            SessionRole::Monitor => ConnectOptions {
+                context: Default::default(),
+                lock_wait: None,
+                server_idle: None,
+                session_sql: Vec::new(),
+                ..opts
+            },
+            SessionRole::Meta | SessionRole::Query => opts,
+        };
         let c2 = canceller.clone();
         tokio::spawn(async move {
             match pg_config(&cfg) {
@@ -90,7 +104,8 @@ impl Driver for PgDriver {
                 }
                 Ok((mut pgcfg, tls)) => {
                     pgcfg.application_name(&opts.application_name);
-                    if opts.read_only {
+                    // A monitor session only reads, whatever the profile allows.
+                    if opts.read_only || role == SessionRole::Monitor {
                         read_only(&mut pgcfg);
                     }
                     if let Some(db) = &opts.context.database {
@@ -489,7 +504,8 @@ async fn run_session(
     // query session does not depend on it (every transaction it opens is `READ ONLY`, see
     // `query`), and the metadata session runs only the app's own catalog reads: the session
     // opens, and the UI is told the server ignored the option.
-    let default_ignored = opts.read_only && !is_read_only(&client).await;
+    // A monitor session opens every read `READ ONLY` itself and asks nothing before its probe.
+    let default_ignored = opts.read_only && role != SessionRole::Monitor && !is_read_only(&client).await;
     // A session in a context of its own checks it and says where it works; one with the
     // profile's defaults costs nothing more (no round trip).
     let context = match opts.context.is_default() {
@@ -508,7 +524,7 @@ async fn run_session(
     let lock_wait = opts.lock_wait.filter(|_| role == SessionRole::Query);
     let session_sql: &[SessionStatement] = match role {
         SessionRole::Query => &opts.session_sql,
-        SessionRole::Meta => &[],
+        SessionRole::Meta | SessionRole::Monitor => &[],
     };
     let direct = match lock_wait.is_some() || opts.server_idle.is_some() || !session_sql.is_empty() {
         true => apply_limits(&client, lock_wait, opts.server_idle).await,
@@ -541,6 +557,7 @@ async fn run_session(
     }
     match role {
         SessionRole::Meta => meta_loop(client, Link::new(rx, ended, conn, None), events).await,
+        SessionRole::Monitor => monitor_loop(client, Link::new(rx, ended, conn, None), events).await,
         SessionRole::Query => {
             let cancel = Cancel::new(client.cancel_token(), route.clone(), tls.clone());
             let link = Link::new(rx, ended, conn, Some(cancel.unsent.clone()));

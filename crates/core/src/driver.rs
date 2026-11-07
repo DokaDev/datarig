@@ -79,6 +79,10 @@ pub struct Capabilities {
     /// `None` for none (every result is read-only). A session may say otherwise for its server
     /// once connected ([`DbEvent::Edit`]).
     pub edit: Option<EditFormat>,
+    /// Server monitoring: the driver opens [`SessionRole::Monitor`] sessions, which answer
+    /// [`DbCommand::MonitorTick`]; what the server offers comes after connecting
+    /// ([`DbEvent::Monitor`]).
+    pub monitor: bool,
 }
 
 /// How a server's namespaces nest (`Capabilities::hierarchy`).
@@ -150,6 +154,11 @@ pub enum SessionRole {
     Meta,
     /// User statements of one tab: `Execute`, `FetchMore`, cancel. One per tab.
     Query,
+    /// The server monitor of a profile: `MonitorTick` only, every read in a read-only
+    /// transaction of its own with short limits, so it never disturbs or waits on the other
+    /// sessions, and nothing the user typed is ever sent on it. It starts with a probe of what
+    /// the server offers ([`DbEvent::Monitor`]); no start-up statements, no session settings.
+    Monitor,
 }
 
 impl SessionRole {
@@ -158,6 +167,7 @@ impl SessionRole {
         match self {
             SessionRole::Meta => "meta",
             SessionRole::Query => "q",
+            SessionRole::Monitor => "mon",
         }
     }
 }

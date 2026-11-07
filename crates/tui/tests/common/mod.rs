@@ -121,6 +121,7 @@ impl Driver for FakeDriver {
                 true => datarig_core::driver::EditFormat::MySql(Default::default()),
                 false => datarig_core::driver::EditFormat::Postgres,
             }),
+            monitor: false,
         }
     }
 

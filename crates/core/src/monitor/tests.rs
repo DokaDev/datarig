@@ -643,3 +643,16 @@ fn sessions_performance_schema_could_not_track_are_said_to_be_missing() {
     let old = MySqlMonitor { version: 80021, ..m };
     assert!(decode::mysql::tick(&old, &want, &rows, Own::default()).unwrap().hidden.is_empty());
 }
+#[test]
+fn a_session_answers_a_monitor_tick_it_does_not_do() {
+    use crate::driver::{DbCommand, DbError, DbEvent};
+    let want = Want { sessions: None, server: false, limit: std::time::Duration::from_secs(1) };
+    match (DbCommand::MonitorTick { request: 7, want }).not_supported() {
+        DbEvent::MonitorSnapshot { request: 7, result: Err(DbError::NotSupported) } => {}
+        other => panic!("{other:?}"),
+    }
+    match (DbCommand::FetchMore { id: 3 }).not_supported() {
+        DbEvent::Failed { id: 3, error: DbError::NotSupported, cancelled: false } => {}
+        other => panic!("{other:?}"),
+    }
+}

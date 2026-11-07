@@ -71,6 +71,7 @@ impl Driver for MyDriver {
             export: true,
             manual_commit: true,
             edit: Some(EditFormat::MySql(MySqlEdit { nowait: true })),
+            monitor: false,
         }
     }
 
@@ -177,6 +178,12 @@ async fn run_session(
     canceller: Arc<MyCanceller>,
     connected: &AtomicBool,
 ) {
+    // No monitor session here (`Capabilities::monitor` is off): refused before anything is
+    // opened.
+    if role == SessionRole::Monitor {
+        let _ = events.send(DbEvent::ConnectFailed { error: DbError::NotSupported, auth: false });
+        return;
+    }
     let route = match target.route(opts.dialer.clone()) {
         Ok(route) => route,
         Err(error) => {
@@ -199,7 +206,7 @@ async fn run_session(
     // What a query session starts with (a metadata session never gets it).
     let session_sql: Vec<String> = match role {
         SessionRole::Query => opts.session_sql.iter().map(|s| s.sql.clone()).collect(),
-        SessionRole::Meta => Vec::new(),
+        SessionRole::Meta | SessionRole::Monitor => Vec::new(),
     };
     let open = session::open(&route, my_opts.clone(), settings, &session_sql);
     let opened = match tokio::time::timeout(CONNECT_GUARD, open).await {
@@ -240,6 +247,8 @@ async fn run_session(
     let link = Link::new(rx, wire);
     match role {
         SessionRole::Meta => crate::meta::meta_loop(conn, link, events, tracked).await,
+        // Refused before connecting (above).
+        SessionRole::Monitor => {}
         SessionRole::Query => {
             let killer = canceller.killer.lock().ok().and_then(|g| g.clone());
             let Some(killer) = killer else { return };

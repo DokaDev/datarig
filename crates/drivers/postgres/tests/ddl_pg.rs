@@ -62,6 +62,7 @@ impl Conn {
         let ready = match role {
             SessionRole::Meta => |e: &DbEvent| matches!(e, DbEvent::Keys(_)),
             SessionRole::Query => |e: &DbEvent| matches!(e, DbEvent::Connected),
+            SessionRole::Monitor => |e: &DbEvent| matches!(e, DbEvent::Monitor(_)),
         };
         c.wait(ready, 30).await;
         c
