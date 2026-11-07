@@ -571,6 +571,14 @@ pub enum DbCommand {
         steps: Vec<crate::edit::Step>,
         tx: ApplyTx,
     },
+    /// One tick of a monitor session ([`super::SessionRole::Monitor`]): read what `want` asks
+    /// for in one read-only transaction (PostgreSQL) or one statement after another (MySQL),
+    /// each statement under `want.limit`. Answered with [`DbEvent::MonitorSnapshot`] of the
+    /// same `request`; other sessions answer it with [`DbError::NotSupported`].
+    MonitorTick {
+        request: u64,
+        want: crate::monitor::Want,
+    },
 }
 
 /// How [`DbCommand::ApplyEdits`] stands to a transaction when no block is open.
@@ -662,6 +670,37 @@ pub struct ExportRead {
 }
 
 impl DbCommand {
+    /// The answer of a session that does not do this command: [`DbError::NotSupported`] in the
+    /// event its kind is answered with, so the caller's wait for it ends.
+    pub fn not_supported(&self) -> DbEvent {
+        let error = DbError::NotSupported;
+        match self {
+            DbCommand::LoadSchemas => DbEvent::Schemas(Err(error)),
+            DbCommand::LoadObjects { schema } => DbEvent::Objects { schema: schema.clone(), result: Err(error) },
+            DbCommand::LoadCatalog => DbEvent::Catalog(Err(error)),
+            DbCommand::LoadKeys => DbEvent::Keys(Err(error)),
+            DbCommand::LoadDatabases => DbEvent::Databases(Err(error)),
+            DbCommand::LoadStructure { schema, table } => {
+                DbEvent::Structure { schema: schema.clone(), table: table.clone(), result: Err(error) }
+            }
+            DbCommand::LoadDdl { id, .. } => DbEvent::Ddl { id: *id, result: Err(error) },
+            DbCommand::Execute { id, .. }
+            | DbCommand::Resume { id, .. }
+            | DbCommand::FetchMore { id }
+            | DbCommand::ClosePortal { id }
+            | DbCommand::EndTx { id, .. } => DbEvent::Failed { id: *id, error, cancelled: false },
+            DbCommand::Count { id, .. } => DbEvent::Counted { id: *id, result: Err(error), snapshot: false },
+            DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id: *id, result: Err(error) },
+            DbCommand::Export { id, .. } => DbEvent::Exported { id: *id, result: Err(error), cancelled: false },
+            DbCommand::ApplyEdits { id, .. } => {
+                DbEvent::Applied { id: *id, result: Err(ApplyFailure { step: None, why: ApplyError::Db(error) }) }
+            }
+            DbCommand::MonitorTick { request, .. } => {
+                DbEvent::MonitorSnapshot { request: *request, result: Err(error) }
+            }
+        }
+    }
+
     pub fn is_meta(&self) -> bool {
         matches!(
             self,
@@ -1104,5 +1143,14 @@ pub enum DbEvent {
     Applied {
         id: u64,
         result: Result<Vec<AppliedStep>, ApplyFailure>,
+    },
+    /// What the monitor session's server offers the monitor, learnt from its probe right after
+    /// `Connected` (version, the account's privileges, the provider): the format its ticks read
+    /// with, or why there is none (a server too old, a probe that failed). Sent once.
+    Monitor(Result<crate::monitor::MonitorFormat, DbError>),
+    /// The answer to [`DbCommand::MonitorTick`] `request`.
+    MonitorSnapshot {
+        request: u64,
+        result: Result<crate::monitor::Snapshot, DbError>,
     },
 }

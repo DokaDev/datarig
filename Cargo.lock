@@ -1035,6 +1035,7 @@ dependencies = [
  "datarig-tls",
  "fallible-iterator",
  "futures",
+ "insta",
  "postgres-protocol",
  "serde",
  "serde_json",

@@ -121,6 +121,7 @@ macro_rules! stats_bytes {
 #[macro_use]
 pub(crate) mod structure;
 pub(crate) mod ddl;
+pub(crate) mod monitor;
 
 const HIDDEN_SCHEMAS: &str = "n.nspname NOT IN ('pg_catalog', 'information_schema') \
      AND n.nspname NOT LIKE 'pg\\_toast%' AND n.nspname NOT LIKE 'pg\\_temp%'";
@@ -212,6 +213,8 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
                     let why = ApplyError::Db(DbError::NotSupported);
                     DbEvent::Applied { id, result: Err(ApplyFailure { step: None, why }) }
                 }
+                // The monitor has a session of its own.
+                cmd @ DbCommand::MonitorTick { .. } => cmd.not_supported(),
             }
         };
         let Ok(ev) = link.guard(None, request).await else { return };

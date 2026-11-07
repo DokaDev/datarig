@@ -251,7 +251,7 @@ impl App {
         // be made opens nothing (the caller checked it and said why).
         let session_sql = match role {
             SessionRole::Query => self.session_plan_of(cfg).ok()?.statements(),
-            SessionRole::Meta => Vec::new(),
+            SessionRole::Meta | SessionRole::Monitor => Vec::new(),
         };
         self.open_session_as(cfg, role, target, generation, context, session_sql)
     }

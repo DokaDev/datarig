@@ -836,6 +836,11 @@ pub(crate) async fn query_loop(
                 });
                 continue;
             }
+            // The monitor has a session of its own.
+            Next::Command(cmd @ DbCommand::MonitorTick { .. }) => {
+                let _ = events.send(cmd.not_supported());
+                continue;
+            }
             Next::Command(_) => continue,
             Next::Closed => Stop::Closed,
             Next::Lost(reason) => Stop::Lost(reason),

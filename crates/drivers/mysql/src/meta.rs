@@ -125,6 +125,8 @@ pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedS
                     let why = ApplyError::Db(DbError::NotSupported);
                     DbEvent::Applied { id, result: Err(ApplyFailure { step: None, why }) }
                 }
+                // The monitor has a session of its own.
+                cmd @ DbCommand::MonitorTick { .. } => cmd.not_supported(),
             }
         };
         let Ok(ev) = link.guard(None, request).await else { return };

@@ -53,6 +53,11 @@ impl Link {
         Self { rx, queued: VecDeque::new(), ended: Some(ended), conn, unsent }
     }
 
+    /// Close the connection at once (a read that cannot be trusted to end).
+    pub(crate) fn close(&self) {
+        self.conn.abort();
+    }
+
     /// Put `cmd` first in line (it ended an open portal and is processed next).
     pub(crate) fn requeue(&mut self, cmd: DbCommand) {
         self.queued.push_front(cmd);
