@@ -3,6 +3,24 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.39.0 (2026-11-07)
+
+datarig can tell you when a newer release is out, and shows what's new after an update.
+
+### Added
+
+- Once a day datarig asks GitHub whether a newer release exists (one HTTPS request to
+  api.github.com, with nothing about you or your databases; through `HTTPS_PROXY` when one is
+  set). A newer one is told about at the next start, with the command that updates your
+  install; `Esc` closes it (it comes back after a week), `s` skips that version, `o` turns the
+  checks off. `:update` says what the last check found. Turn it off with `[updates] check =
+  "off"` (settings screen, Updates), `:set updates.check=off` or `DATARIG_NO_UPDATE_CHECK=1`;
+  there is no check on CI (`CI` set).
+- What's new: on the first start after an update, a dialog shows the notes of every version
+  since the one that ran before (from the program itself, so it works offline). `:whatsnew`
+  shows it any time; `[updates] whats_new = "off"` (settings screen, Updates) stops it from
+  showing by itself.
+
 ## 0.38.3 (2026-11-06)
 
 Screen text uses British spelling, and titles use a colon in place of a dash; the docs site shows new recordings of the editor, charts and plans.
