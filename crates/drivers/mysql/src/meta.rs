@@ -30,6 +30,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 mod ddl;
 mod keys;
+pub(crate) mod monitor;
 mod structure;
 
 /// The databases of the server's own, never listed.

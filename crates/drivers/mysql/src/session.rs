@@ -229,6 +229,10 @@ pub(crate) const META_LOCK_WAIT: u32 = 2;
 /// How long a `SELECT` of the metadata session may run, in milliseconds.
 pub(crate) const META_TIMEOUT_MS: u64 = 10_000;
 
+/// How long a `SELECT` of the monitor session may run until a tick sets its own limit, in
+/// milliseconds.
+pub(crate) const MONITOR_TIMEOUT_MS: u64 = 5_000;
+
 /// The session's settings, as one `SET` (one round trip): the client character set `utf8mb4`
 /// (the server's default collation for it), the session state the server reports in its OK
 /// packets (the sql mode, read-only and `sql_select_limit`, the current database), the sql
@@ -242,6 +246,11 @@ pub(crate) const META_TIMEOUT_MS: u64 = 10_000;
 /// * the metadata session: a lookup waits at most [`META_LOCK_WAIT`] seconds for a metadata
 ///   lock, a `SELECT` runs at most [`META_TIMEOUT_MS`], and the session is read-only (it only
 ///   reads the catalog);
+/// * the monitor session: a metadata lock is waited for at most a second, a `SELECT` runs at
+///   most [`MONITOR_TIMEOUT_MS`] until a tick sets its own limit, no `sql_select_limit` cuts a
+///   list (whatever the server's default), times are in the server's system time zone (the
+///   one `INNODB_TRX.trx_started` is written in, whatever the session's), and the session is
+///   read-only;
 /// * a read-only profile's sessions: read-only.
 pub(crate) fn init_sql(server: &Server, s: &Settings) -> String {
     let ro = server.read_only_var();
@@ -278,7 +287,13 @@ pub(crate) fn init_sql(server: &Server, s: &Settings) -> String {
         // `SHOW CREATE …` quotes every name, whatever the server's default.
         parts.push("SESSION sql_quote_show_create = 1".to_string());
     }
-    if s.read_only || s.role == SessionRole::Meta {
+    if s.role == SessionRole::Monitor {
+        parts.push("SESSION lock_wait_timeout = 1".to_string());
+        parts.push(server.timeout(MONITOR_TIMEOUT_MS));
+        parts.push("SESSION sql_select_limit = 18446744073709551615".to_string());
+        parts.push("SESSION time_zone = 'SYSTEM'".to_string());
+    }
+    if s.read_only || matches!(s.role, SessionRole::Meta | SessionRole::Monitor) {
         parts.push(format!("SESSION {ro} = ON"));
     }
     format!("SET {}", parts.join(", "))
@@ -426,7 +441,7 @@ pub(crate) async fn open(
         }
         tracked.update(&conn);
     }
-    let read_only = settings.read_only || settings.role == SessionRole::Meta;
+    let read_only = settings.read_only || matches!(settings.role, SessionRole::Meta | SessionRole::Monitor);
     // A server (or a proxy in front of it) that did not report them is asked.
     if tracked.sql_mode.is_none() || tracked.values().is_none() || (read_only && tracked.read_only.is_none()) {
         let ro = server.read_only_var();

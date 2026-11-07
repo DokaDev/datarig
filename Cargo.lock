@@ -1020,6 +1020,7 @@ dependencies = [
  "datarig-core",
  "datarig-tls",
  "futures",
+ "insta",
  "mysql_async",
  "serde",
  "serde_json",
