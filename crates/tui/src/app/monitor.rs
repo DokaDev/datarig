@@ -234,6 +234,8 @@ pub struct MonitorTab {
     /// This tab's interval (the setting's until `+`/`-`).
     pub interval: MonitorInterval,
     pub paused: bool,
+    /// `r` while paused: one read is due, the tab stays paused after it.
+    pub read_once: bool,
     /// The read in flight: its number and when it was sent.
     pub request: Option<(u64, Instant)>,
     seq: u64,
@@ -271,6 +273,7 @@ impl MonitorTab {
             view: MonitorView::Overview,
             interval,
             paused: false,
+            read_once: false,
             request: None,
             seq: 0,
             due: None,
@@ -542,6 +545,12 @@ impl App {
         !self.tabs.is_empty() && !self.profiles.is_empty() && self.tab().is_monitor()
     }
 
+    /// Nothing covers the active tab: a Monitor tab there is on screen and reads (a modal
+    /// dialog over it stops the reads, as a hidden tab's).
+    fn monitor_visible(&self) -> bool {
+        !self.profiles.is_empty() && !self.overlays.modal()
+    }
+
     /// The Monitor tab's filter has the keyboard.
     pub fn monitor_filtering(&self) -> bool {
         self.monitor_shown() && self.monitor_of(self.tab().id).is_some_and(|m| m.list.filtering)
@@ -608,7 +617,7 @@ impl App {
         let active = (!self.tabs.is_empty()).then(|| self.tab().id);
         let ids: Vec<TabId> = self.tabs.iter().filter(|t| t.is_monitor()).map(|t| t.id).collect();
         for id in ids {
-            let visible = Some(id) == active && !self.profiles.is_empty() && !self.overlays.modal();
+            let visible = Some(id) == active && self.monitor_visible();
             let Some(m) = self.monitor_mut(id) else { continue };
             if !visible {
                 if m.shown {
@@ -622,6 +631,9 @@ impl App {
             if !m.shown {
                 m.shown = true;
                 m.due = Some(now);
+                // An answer that came while hidden is no base for the next rate: the time
+                // nobody looked is a gap.
+                m.gap();
                 if m.state == MonState::Closed {
                     m.state = MonState::Idle;
                 }
@@ -677,7 +689,7 @@ impl App {
         }
         let ready = m.format().is_some();
         let due = m.due.is_some_and(|d| d <= now);
-        if ready && due && !m.paused && m.request.is_none() {
+        if ready && due && (!m.paused || m.read_once) && m.request.is_none() {
             self.monitor_read(id, now);
         }
     }
@@ -722,6 +734,7 @@ impl App {
         session.send(DbCommand::MonitorTick { request, want });
         m.request = Some((request, now));
         m.due = None;
+        m.read_once = false;
     }
 
     /// An event of tab `id`'s monitor connection (its generation checked).
@@ -816,7 +829,7 @@ impl App {
     /// When the visible Monitor tab next wants the event loop: its next read, or the time its
     /// read in flight is given up on. `None`: nothing waits (paused, hidden, no connection).
     pub fn monitor_due(&self) -> Option<Instant> {
-        if !self.monitor_shown() {
+        if !self.monitor_shown() || !self.monitor_visible() {
             return None;
         }
         let m = self.monitor_of(self.tab().id)?;
@@ -824,7 +837,7 @@ impl App {
             return Some(sent + m.limit() + ANSWER_GRACE);
         }
         match m.state {
-            MonState::Ready(_) if !m.paused => m.due,
+            MonState::Ready(_) if !m.paused || m.read_once => m.due,
             MonState::Lost(_) => m.due,
             _ => None,
         }
@@ -869,6 +882,7 @@ impl App {
                 m.paused = !m.paused;
                 // The time paused is a gap in the charts.
                 m.gap();
+                m.read_once = false;
                 if !m.paused {
                     m.due = Some(now);
                 }
@@ -885,15 +899,11 @@ impl App {
                     _ => {}
                 }
                 m.due = Some(now);
-                // A paused tab reads once and stays paused (the read joins no line).
+                // A paused tab reads once (once its connection is ready, when it opens again
+                // first) and stays paused; the read joins no line.
                 if m.paused {
                     m.gap();
-                    m.paused = false;
-                    self.monitor_sync();
-                    if let Some(m) = self.monitor_mut(id) {
-                        m.paused = true;
-                    }
-                    return;
+                    m.read_once = true;
                 }
             }
             MonitorAction::Faster | MonitorAction::Slower => {

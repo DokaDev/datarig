@@ -396,3 +396,53 @@ fn a_disconnected_profile_stays_disconnected_until_r() {
     h.keys("r");
     assert!(h.connecting().is_some() || h.app.conns.is_connected(h.app.tab().profile.unwrap()));
 }
+
+#[test]
+fn a_dialog_over_the_tab_plans_no_wakeup_for_it() {
+    let (mut h, first) = monitor_open();
+    // A dialog opens while the read is out; its answer plans the next read.
+    h.keys(":");
+    assert!(h.overlay_kind().is_some());
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, rows(), true)) });
+    assert_eq!(h.app.monitor_due(), None, "covered: no deadline, no wake-ups");
+    h.advance(Duration::from_secs(5));
+    assert!(ticks(&mut h).is_empty());
+    h.key(KeyCode::Esc);
+    assert_eq!(ticks(&mut h).len(), 1, "uncovered: it reads at once");
+}
+
+#[test]
+fn an_answer_that_came_while_hidden_is_no_base_for_the_next_rate() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, rows(), true)) });
+    h.advance(Duration::from_secs(2));
+    let t = ticks(&mut h);
+    // Hidden while the read is out; its answer comes then.
+    h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+    h.monitor_db_to(1, DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(snapshot(2.0, 1100, rows(), false)) });
+    h.advance(Duration::from_secs(60));
+    h.key_mod(KeyCode::PageDown, ratatui::crossterm::event::KeyModifiers::CONTROL);
+    let t = ticks(&mut h);
+    assert_eq!(t.len(), 1);
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(snapshot(64.0, 9000, rows(), false)) });
+    let commits = monitor(&h).history_of(datarig_tui::app::monitor::Metric::Rate(CounterKind::Commits)).unwrap();
+    assert_eq!(commits.last(), None, "no rate across the hidden minute");
+}
+
+#[test]
+fn r_while_paused_reads_once_even_when_the_connection_opens_again_first() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, rows(), true)) });
+    h.keys("p");
+    h.monitor_db(DbEvent::Lost { error: DbError::Connection(datarig_core::fault::Fault::other("reset")) });
+    h.keys("r");
+    assert!(ticks(&mut h).is_empty(), "nothing to read on yet");
+    h.monitor_db(DbEvent::Connected);
+    h.monitor_db(DbEvent::Monitor(Ok(pg_format())));
+    let t = ticks(&mut h);
+    assert_eq!(t.len(), 1, "the read r asked for");
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(snapshot(10.0, 1100, rows(), true)) });
+    assert!(monitor(&h).paused);
+    h.advance(Duration::from_secs(10));
+    assert!(ticks(&mut h).is_empty(), "still paused");
+}

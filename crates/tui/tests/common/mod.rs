@@ -993,6 +993,14 @@ impl Harness {
         self.app.on_app_event(AppEvent::Db { target: EventTarget::Monitor(id), generation, ev });
     }
 
+    /// A driver event of the monitor connection of the Monitor tab at `index` (its current
+    /// generation), whichever tab is active.
+    pub fn monitor_db_to(&mut self, index: usize, ev: DbEvent) {
+        let id = self.app.tabs.iter().nth(index).expect("tab").id;
+        let generation = self.app.monitor_of(id).expect("a Monitor tab").generation;
+        self.app.on_app_event(AppEvent::Db { target: EventTarget::Monitor(id), generation, ev });
+    }
+
     /// A driver event of the query session of tab `index` (its current generation).
     pub fn tab_db(&mut self, index: usize, ev: DbEvent) {
         let t = self.app.tabs.iter().nth(index).expect("tab");
