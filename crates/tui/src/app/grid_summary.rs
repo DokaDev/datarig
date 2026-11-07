@@ -11,7 +11,9 @@
 //!
 //! The rows are read on a worker, never on the UI thread: a job is bound to its tab, its result,
 //! the selection and the values over it; a job whose selection changed is told to stop and its
-//! answer is dropped. Integers and decimals are summed exactly (`i128` with a scale); past that
+//! answer is dropped. A selection that only grows at its end as more rows come in (whole
+//! columns while a result streams) keeps what was counted: a job reads the new rows only and
+//! adds them to it, the summary so far shown meanwhile. Integers and decimals are summed exactly (`i128` with a scale); past that
 //! range, or with a floating-point value such as `NaN` or `1e300`, as `f64`.
 
 use super::*;
@@ -79,8 +81,16 @@ enum State {
     Working {
         job: u64,
         stop: Arc<AtomicBool>,
+        /// What the job's count will be of (the selection may have grown since).
+        covers: Key,
+        /// The summary of the rows counted before, shown meanwhile (a job adding rows).
+        shown: Option<Summary>,
     },
-    Done(Summary),
+    Done {
+        summary: Summary,
+        /// The count, kept to add rows to.
+        tally: Box<Tally>,
+    },
     /// The rows could not be read (said once).
     Failed,
 }
@@ -93,13 +103,29 @@ pub struct GridSummary {
     next: u64,
     /// Jobs started since the app started (tests count them).
     pub jobs: u64,
+    /// Rows the jobs started since the app started read (tests count them).
+    pub rows_read: u64,
+}
+
+impl Key {
+    /// Whether `next` is this selection with rows added at its end (and nothing else changed
+    /// but whether the server has more): what was counted holds, only the new rows are read.
+    fn grows_to(&self, next: &Key) -> bool {
+        self.tab == next.tab
+            && self.result == next.result
+            && self.cols == next.cols
+            && self.edits == next.edits
+            && self.new_rows == next.new_rows
+            && self.rows.start == next.rows.start
+            && self.rows.end <= next.rows.end
+    }
 }
 
 /// A job's answer.
 #[derive(Debug)]
 pub struct SummaryAnswer {
     pub job: u64,
-    pub result: Result<Option<Summary>, Fault>,
+    pub result: Result<Option<Tally>, Fault>,
 }
 
 /// A job's way back: an answer is sent even when the job fails inside.
@@ -110,7 +136,7 @@ struct Reply {
 }
 
 impl Reply {
-    fn send(mut self, result: Result<Option<Summary>, Fault>) {
+    fn send(mut self, result: Result<Option<Tally>, Fault>) {
         self.sent = true;
         self.out.event(AppEvent::GridSummary(SummaryAnswer { job: self.job, result }));
     }
@@ -228,7 +254,7 @@ fn sign_group(int: &str) -> String {
 }
 
 /// A number of the selection: exact when it is a plain decimal.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Num {
     dec: Option<Dec>,
     f: f64,
@@ -250,8 +276,9 @@ impl Num {
     }
 }
 
-/// What a job counts as it reads.
-struct Tally {
+/// What a job counts as it reads (kept to add more rows to).
+#[derive(Debug)]
+pub struct Tally {
     numeric: bool,
     count: u64,
     exact: Option<Dec>,
@@ -316,9 +343,9 @@ impl Tally {
         }
     }
 
-    fn finish(self) -> Summary {
+    fn finish(&self) -> Summary {
         let figures = if self.numeric {
-            let (min, max) = (self.min.map(|m| m.1), self.max.map(|m| m.1));
+            let (min, max) = (self.min.as_ref().map(|m| m.1.clone()), self.max.as_ref().map(|m| m.1.clone()));
             match (min, max) {
                 (Some(min), Some(max)) => {
                     let (sum, avg) = match self.exact {
@@ -372,22 +399,28 @@ fn selected_over(rs: &ResultSet, rows: &Range<usize>, cols: &Range<usize>) -> Ov
     over
 }
 
+/// Tell the job of `state`, if one runs, to stop.
+fn stop(state: Option<State>) {
+    if let Some(State::Working { stop, .. }) = state {
+        stop.store(true, Ordering::Relaxed);
+    }
+}
+
 /// Whether a column of kind `k` holds numbers the summary adds up.
 fn numeric(k: ValueKind) -> bool {
     matches!(k, ValueKind::Integer | ValueKind::Decimal | ValueKind::Float)
 }
 
-/// Sum rows `rows` (numbered from the snapshot's first row, `first` of the result) of columns
-/// `cols` of `snap`, with `over` over them. `Ok(None)` when `stop` was set.
-pub fn summarize(
+/// Add the rows of `snap` (numbered from `first` of the result) of columns `cols`, with `over`
+/// over them, to `tally`. `Ok(None)` when `stop` was set.
+fn summarize(
     snap: &RowsSnapshot,
     first: usize,
     cols: &[usize],
-    numbers: bool,
+    mut tally: Tally,
     over: &Over,
     stop: &AtomicBool,
-) -> Result<Option<Summary>, Fault> {
-    let mut tally = Tally::new(numbers);
+) -> Result<Option<Tally>, Fault> {
     let mut stopped = false;
     snap.for_each_chunk_in(0..snap.len(), CHUNK, |at, chunk| {
         if stop.load(Ordering::Relaxed) {
@@ -405,7 +438,7 @@ pub fn summarize(
         }
         true
     })?;
-    Ok((!stopped).then(|| tally.finish()))
+    Ok((!stopped).then_some(tally))
 }
 
 impl App {
@@ -439,22 +472,51 @@ impl App {
     }
 
     /// After an input or an event: a summary for the selection as it is now, a job started
-    /// when it changed (the one before told to stop).
+    /// when it changed (the one before told to stop). A selection that only grew at its end
+    /// keeps its count: a job adds the new rows, or the one running goes on and the rest is
+    /// added after it.
     pub(super) fn sync_grid_summary(&mut self) {
         let key = self.summary_key();
         if key == self.grid_summary.key {
             return;
         }
-        if let Some(State::Working { stop, .. }) = &self.grid_summary.state {
-            stop.store(true, Ordering::Relaxed);
+        let before = std::mem::replace(&mut self.grid_summary.key, key.clone());
+        let state = self.grid_summary.state.take();
+        let Some(key) = key else {
+            return stop(state);
+        };
+        match state {
+            // Done with the rows before: the new ones are added.
+            Some(State::Done { summary, tally }) if before.as_ref().is_some_and(|b| b.grows_to(&key)) => {
+                let from = before.map_or(key.rows.start, |b| b.rows.end);
+                self.start_summary(key, from, *tally, Some(summary));
+            }
+            // Still counting a selection this one grew from: the rest is added when it answers.
+            Some(w @ State::Working { .. }) if matches!(&w, State::Working { covers, .. } if covers.grows_to(&key)) => {
+                self.grid_summary.state = Some(w);
+            }
+            state => {
+                stop(state);
+                let Results::Rows(rs) = &self.tab().results else { return };
+                let numbers = key.cols.clone().all(|c| numeric(rs.columns[c].meta.kind));
+                let from = key.rows.start;
+                self.start_summary(key, from, Tally::new(numbers), None);
+            }
         }
-        self.grid_summary.state = None;
-        self.grid_summary.key = key.clone();
-        let Some(key) = key else { return };
+    }
+
+    /// Start a job adding rows `from..` of `key` to `tally`, `shown` meanwhile.
+    fn start_summary(&mut self, key: Key, from: usize, tally: Tally, shown: Option<Summary>) {
+        // No new row (only whether the server has more changed): the count is the summary.
+        if from >= key.rows.end {
+            let summary = shown.unwrap_or_else(|| tally.finish());
+            self.grid_summary.state = Some(State::Done { summary, tally: Box::new(tally) });
+            return;
+        }
         let Results::Rows(rs) = &self.tab().results else { return };
-        let numbers = key.cols.clone().all(|c| numeric(rs.columns[c].meta.kind));
-        let over = selected_over(rs, &key.rows, &key.cols);
-        let snap = match rs.rows.snapshot(key.rows.clone()) {
+        let rows = from..key.rows.end;
+        let over = selected_over(rs, &rows, &key.cols);
+        let snap = match rs.rows.snapshot(rows.clone()) {
             Ok(s) => s,
             Err(f) => {
                 self.grid_summary.state = Some(State::Failed);
@@ -463,26 +525,29 @@ impl App {
         };
         self.grid_summary.next += 1;
         self.grid_summary.jobs += 1;
+        self.grid_summary.rows_read += rows.len() as u64;
         let job = self.grid_summary.next;
         let stop = Arc::new(AtomicBool::new(false));
-        self.grid_summary.state = Some(State::Working { job, stop: stop.clone() });
+        let cols: Vec<usize> = key.cols.clone().collect();
+        self.grid_summary.state = Some(State::Working { job, stop: stop.clone(), covers: key, shown });
         let out = self.grid_job_out();
         let reply = Reply { out, job, sent: false };
-        let (first, cols): (usize, Vec<usize>) = (key.rows.start, key.cols.collect());
         std::thread::spawn(move || {
-            let r = summarize(&snap, first, &cols, numbers, &over, &stop);
+            let r = summarize(&snap, rows.start, &cols, tally, &over, &stop);
             reply.send(r);
         });
     }
 
-    /// A job answered: kept while the selection is the one it was started for.
+    /// A job answered: kept while the selection is the one it was started for, or the rows the
+    /// selection gained since are added to it.
     pub(super) fn on_grid_summary(&mut self, a: SummaryAnswer) {
         let current = matches!(&self.grid_summary.state, Some(State::Working { job, .. }) if *job == a.job);
         if !current {
             return;
         }
-        self.grid_summary.state = match a.result {
-            Ok(Some(s)) => Some(State::Done(s)),
+        let Some(State::Working { covers, .. }) = self.grid_summary.state.take() else { return };
+        let tally = match a.result {
+            Ok(Some(t)) => t,
             // Told to stop: another job took its place already.
             Ok(None) => return,
             Err(f) => {
@@ -490,6 +555,16 @@ impl App {
                 return self.results_read_failed(&f);
             }
         };
+        let summary = tally.finish();
+        match self.grid_summary.key.clone() {
+            Some(key) if key == covers => {
+                self.grid_summary.state = Some(State::Done { summary, tally: Box::new(tally) });
+            }
+            // Rows came in while it counted: they are added.
+            Some(key) if covers.grows_to(&key) => self.start_summary(key, covers.rows.end, tally, Some(summary)),
+            // Another selection started its own job when it was made.
+            _ => {}
+        }
     }
 
     /// The summary of the selection for the status line, while there is one.
@@ -515,10 +590,10 @@ impl App {
             ),
         )];
         match state {
-            State::Working { .. } => parts.push((1, label(Label::GridSummaryWorking))),
+            State::Working { shown: None, .. } => parts.push((1, label(Label::GridSummaryWorking))),
             // The rows could not be read: the status line says so, not the summary in its place.
             State::Failed => return Vec::new(),
-            State::Done(s) => {
+            State::Working { shown: Some(s), .. } | State::Done { summary: s, .. } => {
                 match &s.figures {
                     Some(Figures::Numbers { sum, avg, min, max }) => {
                         parts.push((1, msg(Msg::GridSummarySum { value: sum.clone() })));
@@ -537,6 +612,10 @@ impl App {
                 parts.push((4, msg(Msg::GridSummaryNulls { count: s.nulls })));
                 if s.unknown > 0 {
                     parts.push((4, msg(Msg::GridSummaryUnknown { count: s.unknown })));
+                }
+                // The rows that came since are being added.
+                if matches!(state, State::Working { .. }) {
+                    parts.push((2, label(Label::GridSummaryWorking)));
                 }
             }
         }
@@ -560,6 +639,11 @@ impl App {
     /// Summary jobs started since the app started.
     pub fn grid_summary_jobs(&self) -> u64 {
         self.grid_summary.jobs
+    }
+
+    /// Rows the summary jobs started since the app started read.
+    pub fn grid_summary_rows_read(&self) -> u64 {
+        self.grid_summary.rows_read
     }
 }
 
@@ -644,13 +728,31 @@ mod tests {
         over.insert((10, 0), Some(Some("1000".to_string())));
         over.insert((11, 0), Some(None));
         over.insert((12, 0), None);
-        let s = summarize(&snap, 10, &[0], true, &over, &AtomicBool::new(false)).unwrap().unwrap();
+        let go = AtomicBool::new(false);
+        let s = summarize(&snap, 10, &[0], Tally::new(true), &over, &go).unwrap().unwrap().finish();
         // 13..19 as read (112), 1000 pending over 10; 11 NULL; 12 not known yet.
         assert_eq!(numbers(&s).0, "1,112");
         assert_eq!((s.nulls, s.unknown), (1, 1));
         let all = store.snapshot(0..3000).unwrap();
-        let s = summarize(&all, 0, &[1], false, &Over::new(), &AtomicBool::new(false)).unwrap().unwrap();
+        let s = summarize(&all, 0, &[1], Tally::new(false), &Over::new(), &go).unwrap().unwrap().finish();
         assert_eq!(s.figures, Some(Figures::Distinct { count: 7, capped: false }));
-        assert_eq!(summarize(&all, 0, &[0], true, &Over::new(), &AtomicBool::new(true)).unwrap(), None);
+        let stopped = summarize(&all, 0, &[0], Tally::new(true), &Over::new(), &AtomicBool::new(true)).unwrap();
+        assert!(stopped.is_none());
+    }
+
+    #[test]
+    fn rows_added_to_a_count_come_to_what_counting_them_all_at_once_does() {
+        let rows: Vec<Vec<Option<String>>> =
+            (0..3000).map(|i| vec![if i % 11 == 0 { None } else { Some(format!("{i}.{:02}", i % 100)) }]).collect();
+        let store = datarig_core::results::RowStore::in_memory(rows);
+        let go = AtomicBool::new(false);
+        let all = store.snapshot(0..3000).unwrap();
+        let once = summarize(&all, 0, &[0], Tally::new(true), &Over::new(), &go).unwrap().unwrap().finish();
+        let mut tally = Tally::new(true);
+        for part in [0..500, 500..1700, 1700..3000] {
+            let snap = store.snapshot(part.clone()).unwrap();
+            tally = summarize(&snap, part.start, &[0], tally, &Over::new(), &go).unwrap().unwrap();
+        }
+        assert_eq!(tally.finish(), once, "exact sums, NULLs, least and greatest alike");
     }
 }
