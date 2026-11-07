@@ -399,10 +399,17 @@ fn selected_over(rs: &ResultSet, rows: &Range<usize>, cols: &Range<usize>) -> Ov
     over
 }
 
-/// Tell the job of `state`, if one runs, to stop.
+/// Distinct values past which a count dropped is freed on a thread of its own, not the UI's.
+const FREE_APART: usize = 4_096;
+
+/// Tell the job of `state`, if one runs, to stop; a large count kept is freed off the UI thread.
 fn stop(state: Option<State>) {
-    if let Some(State::Working { stop, .. }) = state {
-        stop.store(true, Ordering::Relaxed);
+    match state {
+        Some(State::Working { stop, .. }) => stop.store(true, Ordering::Relaxed),
+        Some(State::Done { tally, .. }) if tally.distinct.len() > FREE_APART => {
+            std::thread::spawn(move || drop(tally));
+        }
+        _ => {}
     }
 }
 
@@ -613,9 +620,10 @@ impl App {
                 if s.unknown > 0 {
                     parts.push((4, msg(Msg::GridSummaryUnknown { count: s.unknown })));
                 }
-                // The rows that came since are being added.
+                // The rows that came since are being added: said in every form that shows the
+                // sum so far, which is not yet the selection's.
                 if matches!(state, State::Working { .. }) {
-                    parts.push((2, label(Label::GridSummaryWorking)));
+                    parts.push((1, label(Label::GridSummaryWorking)));
                 }
             }
         }

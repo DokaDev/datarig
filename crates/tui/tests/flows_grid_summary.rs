@@ -247,6 +247,9 @@ fn whole_columns_add_each_streamed_page_to_the_count_so_far() {
     // Before the new rows' job answers: the sum so far, said to be summing.
     let line = h.status(W, H);
     assert!(line.contains("1,000 rows × 1 column · sum 123,838.75") && line.contains("summing…"), "{line}");
+    // Every form that shows the sum so far says it is still summing.
+    let forms = h.app.selection_summary_forms();
+    assert!(forms.iter().all(|f| !f.contains("sum ") || f.contains("summing…")), "{forms:?}");
     let line = summary(&mut h);
     // 0..1000 without the ten NULLs: 499,500 − 4,570 + 990 × 0.25.
     assert!(line.contains("1,000 rows × 1 column · sum 495,177.50"), "{line}");
