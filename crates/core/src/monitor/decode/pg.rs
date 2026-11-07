@@ -1,0 +1,272 @@
+//! PostgreSQL rows read into the model (the statements are the driver's: its `meta::monitor`).
+
+use super::{DecodeError, Row, Rows, malformed, one};
+use crate::monitor::format::{self, PG_MARKERS, PG_MIN_VERSION, PgMonitor, Probe};
+use crate::monitor::model::SessionsWanted;
+use crate::monitor::model::{
+    Blocker, Counter, CounterKind, Epoch, Extra, ExtraKey, Gauge, GaugeKind, Hidden, Need, Own, Part, QueryText,
+    Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState, Tx, Visibility, Wait,
+    WaitClass,
+};
+use crate::monitor::model::{Snapshot, Want};
+
+/// What `pg_stat_activity.query` holds for a session the account may not see.
+/// The columns of the probe's row: version, the account's privileges, the provider markers found (comma separated), in order.
+pub const PROBE: &[&str] = &["version", "superuser", "read_all_stats", "signal_backend", "markers"];
+
+/// The columns of the server's row (times as microseconds since the Unix epoch; `shared_buffers` in bytes), in order.
+pub const SERVER_INFO: &[&str] =
+    &["now", "version", "started", "in_recovery", "max_connections", "shared_buffers", "track_io_timing"];
+
+/// The columns of the counters' row: sums over every database, then session counts (the monitor's own session not active), in order.
+pub const COUNTERS: &[&str] = &[
+    "now",
+    "commits",
+    "rollbacks",
+    "blks_read",
+    "blks_hit",
+    "tup_returned",
+    "tup_written",
+    "deadlocks",
+    "temp_bytes",
+    "databases",
+    "stats_reset",
+    "sessions",
+    "active",
+    "idle_in_tx",
+    "idle",
+    "waiting",
+    "hidden",
+];
+
+/// The columns of a session's row (`query` its first `QUERY_CHARS` characters, `maybe_cut` within three bytes of `track_activity_query_size`, `blocked_by` `pg_blocking_pids` as text for the longest `MAX_WAITERS` lock waiters, else NULL), in order.
+pub const SESSIONS: &[&str] = &[
+    "now",
+    "pid",
+    "leader_pid",
+    "usename",
+    "datname",
+    "application_name",
+    "client_addr",
+    "client_port",
+    "backend_type",
+    "state",
+    "wait_event_type",
+    "wait_event",
+    "backend_start",
+    "xact_start",
+    "query_start",
+    "state_change",
+    "query",
+    "shortened",
+    "maybe_cut",
+    "monitor",
+    "blocked_by",
+];
+
+pub const HIDDEN_QUERY: &str = "<insufficient privilege>";
+
+/// The probe's row.
+pub fn probe(rows: &Rows) -> Result<PgMonitor, DecodeError> {
+    let row = one(rows, "probe", PROBE)?;
+    let version = row.required("version")?;
+    let version = version.parse::<u32>().map_err(|_| malformed("probe", format!("server_version_num {version:?}")))?;
+    if version < PG_MIN_VERSION {
+        return Err(DecodeError::Unsupported(format!("PostgreSQL {}.{}", version / 10000, version % 10000 / 100)));
+    }
+    let names = row.required("markers")?.split(',').filter(|n| !n.is_empty()).map(str::to_owned).collect();
+    Ok(PgMonitor {
+        version,
+        superuser: row.required_bool("superuser")?,
+        read_all_stats: row.required_bool("read_all_stats")?,
+        signal_backend: row.required_bool("signal_backend")?,
+        flavour: format::flavour(PG_MARKERS, &Probe { names, basedir: None }),
+    })
+}
+
+/// The server's row.
+pub fn server_info(rows: &Rows) -> Result<ServerInfo, DecodeError> {
+    let row = one(rows, "server info", SERVER_INFO)?;
+    Ok(ServerInfo {
+        read_at: row.required_time("now")?,
+        version: row.required("version")?.to_owned(),
+        started: row.time("started")?,
+        read_only: row.required_bool("in_recovery")?,
+        max_connections: row.uint("max_connections")?,
+        cache_bytes: row.uint("shared_buffers")?,
+        extra: row
+            .string("track_io_timing")
+            .map(|value| Extra { key: ExtraKey::TrackIoTiming, value })
+            .into_iter()
+            .collect(),
+    })
+}
+
+/// The counters' row: the sample (with the monitor's own traffic as the driver counted it when
+/// it read them) and the session counts.
+pub fn counters(rows: &Rows, own: Own) -> Result<(Sample, Vec<Gauge>), DecodeError> {
+    let row = one(rows, "counters", COUNTERS)?;
+    let counter = |kind, i| Ok::<_, DecodeError>(Counter { kind, value: row.required_uint(i)? });
+    let hit = row.required_uint("blks_hit")?;
+    let read = row.required_uint("blks_read")?;
+    let counters = vec![
+        counter(CounterKind::Commits, "commits")?,
+        counter(CounterKind::Rollbacks, "rollbacks")?,
+        Counter { kind: CounterKind::PageReads, value: read },
+        Counter { kind: CounterKind::PageRequests, value: hit.saturating_add(read) },
+        counter(CounterKind::RowsRead, "tup_returned")?,
+        counter(CounterKind::RowsWritten, "tup_written")?,
+        counter(CounterKind::Deadlocks, "deadlocks")?,
+        counter(CounterKind::TempBytes, "temp_bytes")?,
+    ];
+    // NULL `stats_reset` everywhere: never reset.
+    let epoch = Epoch::Mark(row.int("stats_reset")?.unwrap_or(0), row.required_int("databases")?);
+    let gauge = |kind, i| Ok::<_, DecodeError>(Gauge { kind, value: row.required_uint(i)? });
+    let gauges = vec![
+        gauge(GaugeKind::Sessions, "sessions")?,
+        gauge(GaugeKind::Active, "active")?,
+        gauge(GaugeKind::IdleInTx, "idle_in_tx")?,
+        gauge(GaugeKind::Idle, "idle")?,
+        gauge(GaugeKind::WaitingForLock, "waiting")?,
+        gauge(GaugeKind::Hidden, "hidden")?,
+    ];
+    Ok((Sample { time: row.required_time("now")?, epoch, counters, own }, gauges))
+}
+
+/// The session list's rows, and what the account cannot see of it.
+pub fn sessions(rows: &Rows, wanted: SessionsWanted) -> Result<(SessionList, Vec<Hidden>), DecodeError> {
+    let mut time = None;
+    let mut list = Vec::with_capacity(rows.len());
+    for cells in rows {
+        let row = Row::new(cells, "sessions", SESSIONS)?;
+        let now = row.required_time("now")?;
+        if time.is_some_and(|t| t != now) {
+            return Err(malformed("sessions", "rows of different snapshots"));
+        }
+        time = Some(now);
+        list.push(session(&row)?);
+    }
+    let hidden = if list.iter().any(|s| s.visible == Visibility::Hidden) {
+        vec![Hidden { part: Part::OtherSessionDetails, need: Need::Grant("pg_read_all_stats") }]
+    } else {
+        Vec::new()
+    };
+    // No row at all cannot be: the reading session is always one of them.
+    let time = time.ok_or_else(|| malformed("sessions", "no rows"))?;
+    Ok((SessionList { time, rows: list, idle_left_out: !wanted.idle }, hidden))
+}
+
+fn session(row: &Row) -> Result<SessionRow, DecodeError> {
+    let pid = row.required_int("pid")?;
+    let state = row.text("state");
+    let query = row.text("query");
+    let hidden = state.is_none() && query == Some(HIDDEN_QUERY);
+    let kind = match row.text("backend_type") {
+        Some("client backend") => SessionKind::Client,
+        Some("walsender") => SessionKind::Replication,
+        Some("parallel worker") => SessionKind::ParallelWorker { leader: row.int("leader_pid")? },
+        Some(other) => SessionKind::Background(other.to_owned()),
+        // Hidden with the rest from an account without `pg_read_all_stats`.
+        None => SessionKind::Unknown,
+    };
+    let state = match (hidden, state) {
+        (true, _) => SessionState::Unknown,
+        (false, Some("active")) => SessionState::Active,
+        (false, Some("idle")) => SessionState::Idle,
+        (false, Some("idle in transaction")) => SessionState::IdleInTx,
+        (false, Some("idle in transaction (aborted)")) => SessionState::IdleInTxAborted,
+        (false, Some(other)) => SessionState::Other(other.to_owned()),
+        (false, None) => SessionState::Background,
+    };
+    let wait = row.text("wait_event_type").map(|class| Wait {
+        class: match class {
+            "Lock" => WaitClass::Lock,
+            "LWLock" => WaitClass::LightweightLock,
+            "IO" => WaitClass::Io,
+            "Client" => WaitClass::Client,
+            "IPC" => WaitClass::Ipc,
+            "Timeout" => WaitClass::Timeout,
+            "Activity" => WaitClass::Activity,
+            other => WaitClass::Other(other.to_owned()),
+        },
+        name: row.string("wait_event").unwrap_or_default(),
+    });
+    // `track_activities` off for that session: its state is `disabled` and its transaction is
+    // not told.
+    let untracked = state == SessionState::Other("disabled".into());
+    let tx = match (hidden || untracked, row.time("xact_start")?) {
+        (true, _) => Tx::Unknown,
+        (false, None) => Tx::None,
+        (false, Some(t)) => Tx::Since(t),
+    };
+    // A local socket has port -1 and no address.
+    let client = match row.int("client_port")? {
+        Some(-1) => None,
+        _ => row.string("client_addr"),
+    };
+    let query = match (hidden, query) {
+        (false, Some(text)) if !text.is_empty() => Some(QueryText {
+            text: text.to_owned(),
+            shortened: row.bool("shortened")?.unwrap_or(false),
+            maybe_cut_by_server: row.bool("maybe_cut")?.unwrap_or(false),
+        }),
+        _ => None,
+    };
+    Ok(SessionRow {
+        key: SessionKey { id: pid, started: row.time("backend_start")? },
+        kind,
+        user: row.string("usename"),
+        database: row.string("datname"),
+        application: row.string("application_name").filter(|a| !a.is_empty()),
+        client,
+        state,
+        wait,
+        tx,
+        query_started: row.time("query_start")?,
+        state_since: row.time("state_change")?,
+        query,
+        blocked_by: row.text("blocked_by").map(blockers).transpose()?,
+        monitor: row.required_bool("monitor")?,
+        visible: if hidden { Visibility::Hidden } else { Visibility::Full },
+        extra: Vec::new(),
+    })
+}
+
+/// `pg_blocking_pids` as text (`{4211,3907}`); pid 0 is a prepared transaction.
+fn blockers(text: &str) -> Result<Vec<Blocker>, DecodeError> {
+    let inner = text
+        .strip_prefix('{')
+        .and_then(|t| t.strip_suffix('}'))
+        .ok_or_else(|| malformed("sessions", format!("blocked_by {text:?}")))?;
+    inner
+        .split(',')
+        .filter(|p| !p.is_empty())
+        .map(|p| match p.parse::<i64>() {
+            Ok(0) => Ok(Blocker::PreparedTransaction),
+            Ok(pid) => Ok(Blocker::Session(pid)),
+            Err(_) => Err(malformed("sessions", format!("blocked_by {text:?}"))),
+        })
+        .collect()
+}
+
+/// The rows of a tick's statements (the counters, then the sessions and the server when
+/// wanted), with the
+/// monitor's own traffic as it stood when the counters were read.
+pub fn tick(want: &Want, rows: &[Rows], own: Own) -> Result<Snapshot, DecodeError> {
+    let expected = 1 + usize::from(want.sessions.is_some()) + usize::from(want.server);
+    if rows.len() != expected {
+        return Err(malformed("tick", format!("{} statements, expected {expected}", rows.len())));
+    }
+    let (sample, gauges) = counters(&rows[0], own)?;
+    let mut next = 1;
+    let (sessions, hidden) = match want.sessions {
+        Some(wanted) => {
+            next += 1;
+            let (list, hidden) = sessions(&rows[1], wanted)?;
+            (Some(list), hidden)
+        }
+        None => (None, Vec::new()),
+    };
+    let server = if want.server { Some(server_info(&rows[next])?) } else { None };
+    Ok(Snapshot { sample, gauges, sessions, server, hidden })
+}

@@ -1,0 +1,12 @@
+[
+ [
+  ["1794068772079185", "5", "event_scheduler", "localhost", null, "Daemon", "191332", "Waiting on empty queue", null, null, "0", null, null, null, null, "1", "0", "0", "1"],
+  ["1794068772079185", "63113", "datarig", "localhost", "datarig", "Sleep", "7", "", null, null, "0", "1794068765000000", "RUNNING", "1", "1", "1", "1", "0", "1"],
+  ["1794068772079185", "63114", "datarig", "localhost", "datarig", "Query", "6", "updating", "UPDATE zz_mon_t SET v=v+1 WHERE id=1", "0", "0", "1794068766000000", "LOCK WAIT", "1", "0", "1", "1", "0", "1"],
+  ["1794068772079185", "63116", "datarig", "localhost", "datarig", "Sleep", "5", "", null, null, "0", null, null, null, null, "1", "1", "0", "1"],
+  ["1794068772079185", "63117", "datarig", "localhost", "datarig", "Sleep", "5", "", null, null, "0", null, null, null, null, "1", "1", "0", "1"],
+  ["1794068772079185", "63118", "datarig", "localhost", "datarig", "Query", "5", "Waiting for table metadata lock", "ALTER TABLE zz_mon_t ADD COLUMN x INT", "0", "0", null, null, null, null, "1", "1", "0", "1"],
+  ["1794068772079185", "63119", "datarig", "localhost", "datarig", "Query", "5", "User sleep", "SELECT SLEEP(25), 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "1", "0", null, null, null, null, "1", "0", "0", "1"],
+  ["1794068772079185", "63139", "root", "localhost", null, "Query", "0", "executing", "SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, CAST(UNIX_TIMESTAMP(t.trx_started)", "1", "1", null, null, null, null, "1", "1", "0", "1"]
+ ]
+]

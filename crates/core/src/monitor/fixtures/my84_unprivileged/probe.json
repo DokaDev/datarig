@@ -1,0 +1,11 @@
+[
+ [
+  ["8.4.11", "1", "datarig@%"]
+ ],
+ [
+  ["basedir", "/usr/"]
+ ],
+ [],
+ {"error": "ERROR 1227 (42000) at line 1: Access denied; you need (at least one of) the PROCESS privilege(s) for this operation", "code": 1227},
+ {"error": "ERROR 1142 (42000) at line 1: SELECT command denied to user 'datarig'@'localhost' for table 'setup_instruments'", "code": 1142}
+]
