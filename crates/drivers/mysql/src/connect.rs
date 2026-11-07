@@ -71,7 +71,7 @@ impl Driver for MyDriver {
             export: true,
             manual_commit: true,
             edit: Some(EditFormat::MySql(MySqlEdit { nowait: true })),
-            monitor: false,
+            monitor: true,
         }
     }
 
@@ -178,12 +178,18 @@ async fn run_session(
     canceller: Arc<MyCanceller>,
     connected: &AtomicBool,
 ) {
-    // No monitor session here (`Capabilities::monitor` is off): refused before anything is
-    // opened.
-    if role == SessionRole::Monitor {
-        let _ = events.send(DbEvent::ConnectFailed { error: DbError::NotSupported, auth: false });
-        return;
-    }
+    // A monitor session reads the whole server from the profile's own database and sends
+    // nothing but its own reads: no context, limits or start-up statements.
+    let opts = match role {
+        SessionRole::Monitor => ConnectOptions {
+            context: Default::default(),
+            lock_wait: None,
+            server_idle: None,
+            session_sql: Vec::new(),
+            ..opts
+        },
+        SessionRole::Meta | SessionRole::Query => opts,
+    };
     let route = match target.route(opts.dialer.clone()) {
         Ok(route) => route,
         Err(error) => {
@@ -247,8 +253,7 @@ async fn run_session(
     let link = Link::new(rx, wire);
     match role {
         SessionRole::Meta => crate::meta::meta_loop(conn, link, events, tracked).await,
-        // Refused before connecting (above).
-        SessionRole::Monitor => {}
+        SessionRole::Monitor => crate::monitor::monitor_loop(conn, link, events).await,
         SessionRole::Query => {
             let killer = canceller.killer.lock().ok().and_then(|g| g.clone());
             let Some(killer) = killer else { return };

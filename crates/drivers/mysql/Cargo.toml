@@ -23,6 +23,8 @@ tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "net", "
 
 [dev-dependencies]
 datarig-core = { workspace = true, features = ["test-util"] }
+# The monitor's statements per version (`meta::monitor`).
+insta.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util", "test-util"] }
 
 [lints]

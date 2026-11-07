@@ -1,7 +1,8 @@
 //! MySQL driver on mysql_async (the copy in `vendor/`, see its README).
 //!
-//! * One connection per session, by role (`SessionRole`): a *query* session per tab and one
-//!   *meta* session per profile, as the PostgreSQL driver has them.
+//! * One connection per session, by role (`SessionRole`): a *query* session per tab, one
+//!   *meta* session per profile and a *monitor* session per monitored profile, as the
+//!   PostgreSQL driver has them.
 //! * Every connection goes over a stream the driver opens itself (`route`): a TCP connection
 //!   to the server, or a channel of the profile's SSH tunnel; mysql_async speaks its protocol
 //!   over it (`Conn::connect_with_stream`, the vendored copy's addition). No local listener is
@@ -24,6 +25,7 @@
 mod connect;
 mod link;
 mod meta;
+mod monitor;
 mod query;
 mod route;
 mod server_key;

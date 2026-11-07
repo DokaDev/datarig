@@ -1745,3 +1745,24 @@ async fn manual_commit_survives_the_servers_odd_answers() {
     assert_eq!(tx[1..], ["begun 0", "block true", "tx true"], "{evs:?}");
     kills.abort();
 }
+
+#[test]
+fn the_monitor_session_only_reads_waits_a_second_and_reads_whole_lists_in_system_time() {
+    let monitor = Settings {
+        role: SessionRole::Monitor,
+        read_only: false,
+        select_limit: None,
+        lock_wait: None,
+        wait_timeout: None,
+    };
+    let sql = init_sql(&MYSQL_84, &monitor);
+    assert!(
+        sql.ends_with(
+            ", SESSION lock_wait_timeout = 1, SESSION max_execution_time = 5000, \
+             SESSION sql_select_limit = 18446744073709551615, SESSION time_zone = 'SYSTEM', \
+             SESSION transaction_read_only = ON"
+        ),
+        "{sql}"
+    );
+    assert!(!sql.contains("innodb_lock_wait_timeout"), "{sql}");
+}
