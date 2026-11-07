@@ -123,10 +123,14 @@ impl Theme {
         let mut th = self.clone();
         let (bg, alt, surface) = (self.bg, self.surface_alt, self.surface);
         let fill = |s: Style, or: Color| s.bg.unwrap_or(or);
-        // Every fill of the theme: a tint is never moved onto one of them.
+        // Every fill of the theme, those made from its colors included (the unfocused cursor
+        // cell, the active tab's): a tint is never moved onto one of them.
+        let unfocused = self.selection_unfocused().bg;
         let mut used: Vec<Color> = [bg, surface, alt, self.edit_inserted_row]
             .into_iter()
             .chain(super::STYLE_TOKENS.iter().filter_map(|n| super::style_of(self, n)?.bg))
+            .chain(unfocused)
+            .chain(self.tab_active_derived().bg)
             .collect();
         let mut adapt = |tint: Style, under: &[Color]| {
             let out = apart(tint, under, &used);
@@ -137,7 +141,8 @@ impl Theme {
         };
         // In order: each one apart from the backgrounds it sits on and from the cues before it
         // that are seen with it (as adapted).
-        th.grid_cursor_row = adapt(self.grid_cursor_row, &[bg, alt]);
+        // The unfocused cursor cell sits on the cursor row too.
+        th.grid_cursor_row = adapt(self.grid_cursor_row, &[bg, alt, unfocused.unwrap_or(bg)]);
         let row = fill(th.grid_cursor_row, bg);
         th.grid_cursor_header = adapt(self.grid_cursor_header, &[surface]);
         let header = fill(th.grid_cursor_header, surface);
@@ -213,7 +218,7 @@ mod tests {
                 let (bg, alt, surface) = (t.bg, t.surface_alt, t.surface);
                 // Each cue and the colors it is seen on or with.
                 let pairs = [
-                    ("grid_cursor_row", t.grid_cursor_row.bg, vec![bg, alt]),
+                    ("grid_cursor_row", t.grid_cursor_row.bg, vec![bg, alt, f(t.selection_unfocused(), t.bg)]),
                     ("grid_cursor_header", t.grid_cursor_header.bg, vec![surface]),
                     ("cursor_line", t.cursor_line.bg, vec![bg]),
                     ("current_stmt", t.current_stmt.bg, vec![bg, line]),
@@ -233,6 +238,8 @@ mod tests {
                     .iter()
                     .filter_map(|n| super::super::style_of(&th, n)?.bg)
                     .chain([th.bg, th.surface, th.surface_alt, th.edit_inserted_row])
+                    .chain(th.selection_unfocused().bg)
+                    .chain(th.tab_active_derived().bg)
                     .filter_map(index_of)
                     .collect();
                 for n in super::super::STYLE_TOKENS {
