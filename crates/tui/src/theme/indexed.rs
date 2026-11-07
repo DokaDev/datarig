@@ -115,10 +115,12 @@ impl Theme {
         th.current_stmt = apart(self.current_stmt, &[bg]);
         th.running_stmt = apart(self.running_stmt, &[bg]);
         th.hover = apart(self.hover, &[bg, alt]);
-        // The cursor's cell and a range sit on the cursor row's tint too.
+        // The cursor's cell and a range sit on the cursor row's tint too; a range also tints the
+        // headers of its columns, next to the header's surface and the cursor column's header.
         let row = th.grid_cursor_row.bg.unwrap_or(bg);
+        let header = th.grid_cursor_header.bg.unwrap_or(surface);
         th.selection = apart(self.selection, &[bg, alt, row]);
-        th.range = apart(self.range, &[bg, alt, row]);
+        th.range = apart(self.range, &[bg, alt, row, surface, header]);
         th
     }
 }
@@ -171,7 +173,17 @@ mod tests {
                     ("cursor_line", t.cursor_line.bg, vec![t.bg]),
                     ("current_stmt", t.current_stmt.bg, vec![t.bg]),
                     ("selection", t.selection.bg, vec![t.bg, t.surface_alt, t.grid_cursor_row.bg.unwrap_or(t.bg)]),
-                    ("range", t.range.bg, vec![t.bg, t.surface_alt, t.grid_cursor_row.bg.unwrap_or(t.bg)]),
+                    (
+                        "range",
+                        t.range.bg,
+                        vec![
+                            t.bg,
+                            t.surface_alt,
+                            t.grid_cursor_row.bg.unwrap_or(t.bg),
+                            t.surface,
+                            t.grid_cursor_header.bg.unwrap_or(t.surface),
+                        ],
+                    ),
                 ];
                 for (token, tint, under) in pairs {
                     let (Some(tint), true) = (ix(tint), under.iter().all(|c| index_of(*c).is_some())) else {
