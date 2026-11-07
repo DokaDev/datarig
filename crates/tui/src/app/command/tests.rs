@@ -226,6 +226,11 @@ fn theme_reads_copy_new_and_update_and_completes_them() {
     assert_eq!(got("C"), [ArgCompletion::ThemeAction(0)]);
     assert!(got("copy dark ").is_empty(), "a new name: nothing to pick");
     assert!(got("new ").is_empty() && got("new mi").is_empty());
+    // `update `: the theme files only (a built-in theme is no file to update).
+    assert_eq!(got("update "), [ArgCompletion::ThemeFile(3)]);
+    assert_eq!(got("Update mi"), [ArgCompletion::ThemeFile(3)], "the word in any case");
+    assert!(got("update da").is_empty(), "dark is built in");
+    assert!(got("update mine ").is_empty(), "one name only");
     assert_eq!(by_name("theme").map(|c| c.command), Some(Command::Theme));
 }
 

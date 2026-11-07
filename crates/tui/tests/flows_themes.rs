@@ -549,6 +549,38 @@ fn a_theme_file_that_does_not_list_every_token_is_said_once_and_theme_update_add
     assert_eq!(flashed(&h).0, "Theme: mine", "once");
 }
 
+/// `:theme update ` lists the theme files, never a built-in theme, the current theme's first
+/// (so `Enter` updates it, as `:theme update` alone does); typing narrows them and `Enter` runs
+/// the update of the one picked.
+#[test]
+fn theme_update_completes_the_theme_files() {
+    let s = Scratch::new(
+        "update-complete",
+        "theme = \"other\"\n",
+        &[("mine", "extends = \"dark\"\n"), ("other", "extends = \"dark\"\n")],
+    );
+    let mut h = Harness::with_config(&s.config(), Lang::En);
+    h.key(KeyCode::Esc);
+    let rows = |h: &Harness| h.app.command_rows().iter().map(|r| r.name.to_string()).collect::<Vec<_>>();
+    h.ctrl('k');
+    h.type_text("theme update ");
+    assert_eq!(rows(&h), ["other", "mine"], "the files, the current theme's first");
+    h.key(KeyCode::Enter);
+    assert!(h.overlay_kind().is_none());
+    let (text, level) = flashed(&h);
+    assert_eq!(level, Level::Success);
+    assert!(text.contains(&s.theme_file("other").display().to_string()), "{text}");
+    h.ctrl('k');
+    h.type_text("theme update mi");
+    assert_eq!(rows(&h), ["mine"]);
+    h.key(KeyCode::Enter);
+    let (text, _) = flashed(&h);
+    assert!(text.contains(&s.theme_file("mine").display().to_string()), "{text}");
+    h.ctrl('k');
+    h.type_text("theme update da");
+    assert!(rows(&h).is_empty(), "dark is built in: {:?}", rows(&h));
+}
+
 /// Two config folders with a theme file of the same name, missing the same tokens: each file is
 /// said once (the notice is about the file, not its name).
 #[test]

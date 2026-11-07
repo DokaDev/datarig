@@ -108,4 +108,5 @@ its description and commented out with the value it takes now, at the end of its
 line of it is touched, and nothing is written unless the file reads exactly as before. A
 built-in theme, a file with an error, one that cannot be written, or one written with
 `colors.<token> = …` keys instead of a `[colors]` table is refused and left as it is. A file
-that lists every token already says so.
+that lists every token already says so. In the command line, `:theme update ` lists your theme
+files (never a built-in theme), the current theme's first, and typing narrows them.

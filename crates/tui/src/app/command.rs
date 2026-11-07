@@ -1009,10 +1009,13 @@ pub enum ArgCompletion {
     /// A format of [`super::copy::CopyFormat::MENU`] and a scope of
     /// [`super::copy::CopyScope::ALL`].
     Scope(usize, usize),
-    /// A word of [`THEME_ACTIONS`] (`copy`, `new`).
+    /// A word of [`THEME_ACTIONS`] (`copy`, `new`, `update`).
     ThemeAction(usize),
     /// The theme `:theme copy` copies: an index into the theme names given to [`complete_arg`].
     ThemeFrom(usize),
+    /// The theme file `:theme update` adds the missing tokens to (never a built-in theme): an
+    /// index into the theme names given to [`complete_arg`].
+    ThemeFile(usize),
 }
 
 /// The words of `:theme`, each with its label.
@@ -1191,6 +1194,17 @@ pub fn complete_arg(kind: ArgKind, arg: &str, names: &[&str]) -> Vec<ArgCompleti
                     .into_iter()
                     .filter(|&i| names[i].starts_with(from))
                     .map(ArgCompletion::ThemeFrom)
+                    .collect()
+            }
+            // `update ` and the start of a theme file's name: the theme files.
+            Some((word, name))
+                if word.eq_ignore_ascii_case("update") && !name.trim_start().contains(char::is_whitespace) =>
+            {
+                let name = name.trim_start();
+                rank(name, names.iter().copied().enumerate())
+                    .into_iter()
+                    .filter(|&i| names[i].starts_with(name) && !crate::theme::NAMES.contains(&names[i]))
+                    .map(ArgCompletion::ThemeFile)
                     .collect()
             }
             Some(_) => Vec::new(),
