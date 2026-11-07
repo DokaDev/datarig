@@ -1138,9 +1138,31 @@ impl App {
         self.conns.connecting().max_by_key(|(_, c)| c.started).map(|(id, _)| id)
     }
 
-    /// Mouse on the explorer: a click selects, a double click activates, the wheel scrolls.
-    pub(super) fn explorer_mouse(&mut self, m: MouseEvent) {
+    /// The explorer row drawn at (x, y) (its index in `rows`) and whether (x, y) is on its
+    /// arrow: the two cells of `▸ ` on a row that draws one.
+    pub(super) fn explorer_hit(&self, rows: &[Row], x: u16, y: u16) -> Option<(usize, bool)> {
         let area = self.explorer.area;
+        if !area.contains(ratatui::layout::Position::new(x, y)) {
+            return None;
+        }
+        // The first row is pinned; the others scroll below it.
+        let i = if y == area.y { 0 } else { 1 + self.explorer.scroll + usize::from(y - area.y - 1) };
+        let row = rows.get(i)?;
+        let at = usize::from(x - area.x);
+        let indent = row.depth * 2;
+        Some((i, self.explorer_arrow(row).is_some() && (indent..indent + 2).contains(&at)))
+    }
+
+    /// The arrow under the pointer at (x, y): the screen cell its `▸` is drawn on.
+    pub(super) fn explorer_arrow_at(&self, x: u16, y: u16) -> Option<(u16, u16)> {
+        let rows = self.explorer_rows();
+        let (i, on) = self.explorer_hit(&rows, x, y)?;
+        on.then(|| (self.explorer.area.x + (rows[i].depth * 2) as u16, y))
+    }
+
+    /// Mouse on the explorer: a click selects (on a row's arrow it also expands or collapses
+    /// the row, as `l`/`h` would), a double click activates, the wheel scrolls.
+    pub(super) fn explorer_mouse(&mut self, m: MouseEvent) {
         match m.kind {
             // The wheel scrolls the list, not the cursor; the renderer clamps it.
             MouseEventKind::ScrollDown => {
@@ -1153,13 +1175,14 @@ impl App {
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 let (x, y) = (m.column, m.row);
-                if !area.contains(ratatui::layout::Position::new(x, y)) {
-                    return;
-                }
                 let rows = self.explorer_rows();
-                // The first row is pinned; the others scroll below it.
-                let i = if y == area.y { 0 } else { 1 + self.explorer.scroll + usize::from(y - area.y - 1) };
-                if i >= rows.len() {
+                let Some((i, on_arrow)) = self.explorer_hit(&rows, x, y) else { return };
+                if on_arrow {
+                    // A click on the arrow toggles the row; a second one toggles it back (it
+                    // is no double click: it does not open the row).
+                    self.explorer.select(&rows, i);
+                    self.last_click = None;
+                    self.explorer_set_open(&rows[i], None);
                     return;
                 }
                 let double = self.explorer.index(&rows) == i

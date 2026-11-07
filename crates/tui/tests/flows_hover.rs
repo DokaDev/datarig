@@ -131,19 +131,33 @@ fn the_pointer_selects_in_the_keyboard_help() {
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Help), "moving runs nothing");
 }
 
+/// The cells the explorer draws its rows' arrows on (as last drawn, unscrolled): the first of
+/// the two cells of each `▸ `.
+fn explorer_arrows(h: &Harness) -> Vec<(u16, u16)> {
+    let area = h.app.explorer.area;
+    let rows = h.app.explorer_rows();
+    let shown = rows.iter().take(usize::from(area.height)).enumerate();
+    shown
+        .filter(|(_, r)| h.app.explorer_arrow(r).is_some())
+        .map(|(i, r)| (area.x + 2 * r.depth as u16, area.y + i as u16))
+        .collect()
+}
+
 /// A burst of moves over the panes, the status line and a menu's surroundings draws no frame
-/// and changes nothing on screen (the tab bar and the result tab strip, whose targets light up
-/// under the pointer, aside).
+/// and changes nothing on screen (the tab bar, the result tab strip and the explorer rows'
+/// arrows, whose targets light up under the pointer, aside).
 #[test]
 fn moves_off_the_menus_draw_no_frame() {
     let mut h = with_edge_results(Lang::En);
     let before = h.screen(160, 45);
     let (bar, strip) = (h.app.layout.tab_bar, h.app.layout.strip);
+    let arrows = explorer_arrows(&h);
     let mut frames = 0;
     for i in 0..2_000u16 {
         let (x, y) = (i % 160, (i / 160) % 45);
         let at = ratatui::layout::Position::new(x, y);
-        if bar.contains(at) || strip.contains(at) {
+        if bar.contains(at) || strip.contains(at) || arrows.iter().any(|&(ax, ay)| ay == y && (ax..ax + 2).contains(&x))
+        {
             continue;
         }
         if hover(&mut h, x, y) {

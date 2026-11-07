@@ -89,6 +89,16 @@ opens its `CREATE` statements in a read-only tab; `F` on a trigger shows its fun
 
 Not supported: DDL of objects the explorer does not list (functions on their own, sequences, types).
 
+## Mouse
+
+- A click on a row selects it. A click on its arrow (`▸`/`▾`) also opens or closes it, as `l`
+  and `h` do: on a table that shows its [structure](#a-tables-structure) without opening a tab.
+  The arrow under the pointer is highlighted.
+- A double click on a row does what `Enter` does: a table opens in a tab, any other row opens
+  or closes.
+- The wheel scrolls the list without moving the selection.
+- A right click opens the row's menu.
+
 ## Layout
 
 `Space b` hides or shows the explorer, and `Space <` / `Space >` (or a drag of its right border)
