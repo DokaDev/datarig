@@ -446,3 +446,49 @@ fn r_while_paused_reads_once_even_when_the_connection_opens_again_first() {
     h.advance(Duration::from_secs(10));
     assert!(ticks(&mut h).is_empty(), "still paused");
 }
+
+#[test]
+fn a_probe_answer_queued_before_a_disconnect_is_dropped() {
+    let mut h = Harness::connected(Lang::En);
+    h.driver.monitor.store(true, Ordering::SeqCst);
+    h.command("monitor");
+    h.monitor_db(DbEvent::Connected);
+    let id = h.app.tab().id;
+    let old = monitor(&h).generation;
+    h.keys(" cx");
+    if h.overlay_kind().is_some() {
+        h.keys("y");
+    }
+    assert_eq!(monitor(&h).state, MonState::Closed);
+    // The old connection's probe answer, sent before it closed.
+    h.app.on_app_event(datarig_tui::app::AppEvent::Db {
+        target: datarig_tui::app::EventTarget::Monitor(id),
+        generation: old,
+        ev: DbEvent::Monitor(Ok(pg_format())),
+    });
+    assert_eq!(monitor(&h).state, MonState::Closed, "a closed connection's answer changes nothing");
+    h.advance(Duration::from_secs(5));
+    assert!(h.connecting().is_none(), "the profile stays disconnected");
+}
+
+#[test]
+fn a_zoomed_explorer_hides_the_monitor_tab() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, rows(), true)) });
+    h.app.tab_mut().pane.zoom = Some(Focus::Tree);
+    h.app.focus = Focus::Tree;
+    h.advance(Duration::from_secs(1));
+    assert_eq!(h.app.monitor_due(), None);
+    h.advance(Duration::from_secs(10));
+    assert!(ticks(&mut h).is_empty(), "covered by the explorer: nothing read");
+}
+
+#[test]
+fn what_the_server_is_is_asked_again_after_a_failed_first_read() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Err(DbError::Server("timeout".into())) });
+    h.advance(Duration::from_secs(2));
+    let t = ticks(&mut h);
+    assert_eq!(t.len(), 1);
+    assert!(t[0].2, "the server info is asked for again");
+}

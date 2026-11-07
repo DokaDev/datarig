@@ -256,6 +256,8 @@ pub struct MonitorTab {
     pending: Pending,
     /// The server info is read with the next tick.
     want_server: bool,
+    /// The read in flight asks for the server info (asked again when it fails).
+    asked_server: bool,
     pub history: Vec<(Metric, History)>,
     /// The Overview's longest running sessions (a statement running, or a transaction open),
     /// longest first: indexes into the latest read's rows, worked out when it came.
@@ -285,6 +287,7 @@ impl MonitorTab {
             prev: None,
             pending: Pending::default(),
             want_server: true,
+            asked_server: false,
             history: Vec::new(),
             top: Vec::new(),
             list: SessionsView::default(),
@@ -335,6 +338,9 @@ impl MonitorTab {
         if let Some(s) = self.session.take() {
             s.close();
         }
+        // What the closed connection still sends (a probe's answer already queued) is dropped:
+        // no current connection has generation 0.
+        self.generation = 0;
         self.request = None;
         self.prev = None;
         self.pending = Pending::default();
@@ -548,7 +554,7 @@ impl App {
     /// Nothing covers the active tab: a Monitor tab there is on screen and reads (a modal
     /// dialog over it stops the reads, as a hidden tab's).
     fn monitor_visible(&self) -> bool {
-        !self.profiles.is_empty() && !self.overlays.modal()
+        !self.profiles.is_empty() && !self.overlays.modal() && self.zoomed() != Some(Focus::Tree)
     }
 
     /// The Monitor tab's filter has the keyboard.
@@ -731,6 +737,7 @@ impl App {
             server: std::mem::take(&mut m.want_server),
             limit: m.limit(),
         };
+        m.asked_server = want.server;
         session.send(DbCommand::MonitorTick { request, want });
         m.request = Some((request, now));
         m.due = None;
@@ -775,6 +782,8 @@ impl App {
                     Err(_) => {
                         m.failures += 1;
                         m.error = error_text;
+                        // What the server is was not read: asked again with the next read.
+                        m.want_server |= m.asked_server;
                         // The next rates are not worked out across the failed read's time.
                         m.gap();
                     }
