@@ -29,6 +29,7 @@
 use crate::app::action::Action;
 use crate::app::environments::rules_parts;
 use crate::app::explorer::{Row, RowKind};
+use crate::app::hover::PointerOn;
 use crate::app::{App, Keys, NodeState};
 use crate::icons::{self, KeyMark, TreeIcon, TypeCategory};
 use crate::keymap::Ctx;
@@ -872,8 +873,9 @@ fn row_bg(th: &Theme, selected: bool, focused: bool) -> Style {
     }
 }
 
-/// Draw one row on the one-line `line`.
-fn draw_row(app: &App, row: &Row, line: Rect, bg: Style, buf: &mut Buffer) {
+/// Draw one row on the one-line `line`; `hover`: the pointer is on the cell (x, y), lighting
+/// the row's arrow drawn there. Returns whether it did.
+fn draw_row(app: &App, row: &Row, line: Rect, bg: Style, hover: Option<(u16, u16)>, buf: &mut Buffer) -> bool {
     let th = theme::cur();
     let (x, y, w) = (line.x, line.y, line.width as usize);
     buf.set_stringn(x, y, fit("", w, Align::Left), w, bg);
@@ -884,8 +886,11 @@ fn draw_row(app: &App, row: &Row, line: Rect, bg: Style, buf: &mut Buffer) {
         None => "  ",
     };
     let mut cx = indent;
+    let lit = arrow != "  " && cx < w && hover == Some((x + cx as u16, y));
     if cx < w {
-        put(buf, x + cx as u16, y, arrow, w - cx, Style::new().fg(th.fg_muted).patch(bg));
+        let style =
+            if lit { Style::new().fg(th.accent).add_modifier(Modifier::BOLD) } else { Style::new().fg(th.fg_muted) };
+        put(buf, x + cx as u16, y, arrow, w - cx, style.patch(bg));
     }
     cx += 2;
     let parts = row_parts(app, row);
@@ -920,6 +925,7 @@ fn draw_row(app: &App, row: &Row, line: Rect, bg: Style, buf: &mut Buffer) {
         let style = row_heat(app, row).filter(|_| i == 0).unwrap_or(Style::new().fg(th.fg_dim));
         put(buf, x + at as u16, y, &text, width(&text), style.patch(bg));
     }
+    lit
 }
 
 /// The explorer inside `area`; returns the hardware cursor while the filter is typed.
@@ -949,9 +955,14 @@ pub(crate) fn draw_explorer(app: &mut App, area: Rect, buf: &mut Buffer, focused
         return cursor;
     }
     // The first row is pinned; the others scroll below it.
+    let hover = match app.pointer_hover() {
+        Some(PointerOn::Arrow(x, y)) => Some((x, y)),
+        _ => None,
+    };
+    let mut lit = false;
     let first = rows.first().cloned();
     if let Some(r) = &first {
-        draw_row(app, r, Rect::new(area.x, y, area.width, 1), row_bg(&th, sel == 0, focused), buf);
+        lit |= draw_row(app, r, Rect::new(area.x, y, area.width, 1), row_bg(&th, sel == 0, focused), hover, buf);
     }
     let list = Rect::new(area.x, y, area.width, bottom - y);
     app.explorer.area = list;
@@ -970,7 +981,12 @@ pub(crate) fn draw_explorer(app: &mut App, area: Rect, buf: &mut Buffer, focused
     let scroll = app.explorer.scroll;
     for (i, r) in rows.iter().enumerate().skip(1 + scroll).take(h) {
         let ry = y + (i - 1 - scroll) as u16;
-        draw_row(app, r, Rect::new(area.x, ry, area.width, 1), row_bg(&th, i == sel, focused), buf);
+        lit |= draw_row(app, r, Rect::new(area.x, ry, area.width, 1), row_bg(&th, i == sel, focused), hover, buf);
+    }
+    // An arrow lit by the last move that this frame draws elsewhere (or not at all: the list
+    // scrolled, a row closed) is no longer under the pointer.
+    if hover.is_some() && !lit {
+        app.pointer_on = None;
     }
     // Empty states: no profile at all (under the Connections head), or none matching the
     // filter.

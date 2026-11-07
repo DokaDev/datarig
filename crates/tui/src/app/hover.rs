@@ -1,5 +1,5 @@
-//! The pointer over the workspace's small clickable targets (no dialog open): the document tab
-//! bar's tabs, their `×` and scroll marks, the result tab strip, the paging arrows, the Plan
+//! The pointer over the workspace's small clickable targets (no dialog open): the explorer
+//! rows' arrows, the document tab bar's tabs, their `×` and scroll marks, the result tab strip, the paging arrows, the Plan
 //! tab's view names, the entries of the inspector's Row tab and the grid's cells. The one
 //! under the pointer is drawn highlighted (an inspector entry and the grid's cell of its column
 //! in the selected row light each other; a hover never moves the selection or the focus); it
@@ -13,6 +13,8 @@ use ratatui::layout::Position;
 /// A small clickable target of the workspace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PointerOn {
+    /// The arrow of an explorer row: the screen cell its `▸` is drawn on.
+    Arrow(u16, u16),
     /// A tab of the document tab bar, its `×` or a scroll mark.
     Tab(TabHit),
     /// A result tab of the strip: its statement (`None`: the Messages or Plan view).
@@ -55,6 +57,8 @@ impl App {
         self.detail_press.disarm();
         let on = if l.too_small {
             None
+        } else if l.tree.contains(at) {
+            self.explorer_arrow_at(m.column, m.row).map(|(x, y)| PointerOn::Arrow(x, y))
         } else if !self.tabs.is_empty() && l.detail_list.contains(at) {
             self.detail_entry_at(m.column, m.row).filter(|c| *c != self.tab().grid.col).map(PointerOn::Detail)
         } else if l.tab_bar.contains(at) {
