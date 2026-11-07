@@ -27,9 +27,10 @@ pub mod rate;
 
 pub use format::{Flavour, MonitorFormat, MySqlMonitor, PgMonitor, Probe, Readable};
 pub use model::{
-    Blocker, Counter, CounterKind, Epoch, Extra, ExtraKey, Gauge, GaugeKind, Hidden, MAX_WAITERS, Need, Own, Part,
-    QUERY_CHARS, QueryText, Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState,
-    SessionsWanted, Snapshot, Timestamp, Tx, Visibility, Wait, WaitClass, Want,
+    Blocker, Counter, CounterKind, Epoch, Extra, ExtraKey, FullText, Gauge, GaugeKind, Hidden, MAX_WAITERS, Need, Own,
+    Part, Proof, QUERY_CHARS, QueryText, Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow,
+    SessionState, SessionsWanted, Snapshot, TEXT_MIN_AGE_US, TEXT_SAME_START_US, TextAsk, Timestamp, Tx, Visibility,
+    Wait, WaitClass, Want,
 };
 
 #[cfg(test)]

@@ -1,0 +1,29 @@
+---
+source: crates/tui/tests/flows_monitor.rs
+assertion_line: 834
+expression: "h.screen(80, 24)"
+---
+╭ Explorer ────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                   
+│  ＋ New connection   │╭ Monitor: local-pg ───────────────────────────────────╮
+│▾ Connections 1       ││ PostgreSQL 17.11 · read-write · up 41d3h · max 200 … │
+│  ▾ ●   local-pg      ││ 1 Overview  2 Sessions                      every 2s │
+│    ▾ datarig default ││ 4 of 4 sessions · 37 idle not listed                 │
+│      ▸ analytics     ││─ Session ────────────────────────────────────────────│
+│      ▸ public        ││ session            4211                              │
+│      ▸ shop          ││ kind               client                            │
+│                      ││ user               alice                             │
+│                      ││ database           shop                              │
+│                      ││ application        app                               │
+│                      ││ client             10.0.0.7:51022                    │
+│                      ││ state              active                            │
+│                      ││ wait               Lock:transactionid                │
+│                      ││ transaction        open for 3m11s                    │
+│                      ││ statement started  3m10s ago                         │
+│                      ││ in this state      for 3m10s                         │
+│                      ││                                                      │
+│                      ││ Read again by its session and its start (to the      │
+│                      ││ second): a new run of the same statement cannot be   │
+│                      ││ told apart                                           │
+│                      ││ UPDATE orders SET status = 'paid' WHERE id = 7 AND n │
+╰──────────────────────╯╰──────────────────────────────────────────────────────╯
+ local-pg │            │ v view · Enter detail · / filter · a idle · p pause EN

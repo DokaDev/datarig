@@ -19,7 +19,7 @@ use crate::session::{my_error, quit};
 use datarig_core::driver::{Cell, DbCommand, DbError, DbEvent};
 use datarig_core::monitor::decode::{self, Answer, Rows};
 use datarig_core::monitor::format::MYSQL_OLDEST;
-use datarig_core::monitor::{MonitorFormat, MySqlMonitor, Own, Snapshot, Want};
+use datarig_core::monitor::{FullText, MonitorFormat, MySqlMonitor, Own, Snapshot, TextAsk, Want};
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Row, Value};
 use std::time::Duration;
@@ -27,6 +27,9 @@ use tokio::sync::mpsc::UnboundedSender;
 
 /// How long the probe may take.
 const PROBE_LIMIT: Duration = Duration::from_secs(10);
+
+/// How long the read of a statement's whole text may run when no tick has set a limit yet.
+const TEXT_LIMIT: Duration = Duration::from_secs(5);
 
 /// How much longer than its statements' limit a tick may take before the connection is given up
 /// on (`max_execution_time` does not stop a `SHOW`; past this, the server or the network does not
@@ -77,8 +80,10 @@ pub(crate) async fn monitor_loop(conn: Conn, mut link: Link, events: UnboundedSe
                 return;
             }
         };
-        let (request, want, my) = match (&cmd, &format) {
-            (DbCommand::MonitorTick { request, want }, Some(my)) => (*request, *want, my),
+        let (my, request) = match (&cmd, &format) {
+            (DbCommand::MonitorTick { request, .. } | DbCommand::MonitorQueryText { request, .. }, Some(my)) => {
+                (my, *request)
+            }
             // Without a format there is nothing to read with; anything else is another
             // session's work.
             _ => {
@@ -88,19 +93,40 @@ pub(crate) async fn monitor_loop(conn: Conn, mut link: Link, events: UnboundedSe
                 continue;
             }
         };
-        let deadline = want.limit + GRACE;
-        let result = match link.guard(None, tokio::time::timeout(deadline, m.tick(my, &want))).await {
-            Ok(Ok(result)) => result,
+        let (deadline, answer) = match &cmd {
+            DbCommand::MonitorTick { want, .. } => {
+                let deadline = want.limit + GRACE;
+                let read = tokio::time::timeout(deadline, m.tick(my, want));
+                let answer =
+                    link.guard(None, read).await.map(|r| r.map(|result| DbEvent::MonitorSnapshot { request, result }));
+                (deadline, answer)
+            }
+            DbCommand::MonitorQueryText { ask, .. } => {
+                let deadline = m.limit.unwrap_or(TEXT_LIMIT) + GRACE;
+                let read = tokio::time::timeout(deadline, m.query_text(ask));
+                let answer =
+                    link.guard(None, read).await.map(|r| r.map(|result| DbEvent::MonitorQueryText { request, result }));
+                (deadline, answer)
+            }
+            _ => continue,
+        };
+        let event = match answer {
+            Ok(Ok(event)) => event,
             Ok(Err(_)) => {
                 link.cut();
                 let error = DbError::NoAnswer(deadline);
-                let _ = events.send(DbEvent::MonitorSnapshot { request, result: Err(error.clone()) });
+                let _ = events.send(match &cmd {
+                    DbCommand::MonitorQueryText { .. } => {
+                        DbEvent::MonitorQueryText { request, result: Err(error.clone()) }
+                    }
+                    _ => DbEvent::MonitorSnapshot { request, result: Err(error.clone()) },
+                });
                 let _ = events.send(DbEvent::Lost { error });
                 return;
             }
             Err(_) => return,
         };
-        if events.send(DbEvent::MonitorSnapshot { request, result }).is_err() {
+        if events.send(event).is_err() {
             return;
         }
         if m.conn.is_disconnected() {
@@ -146,6 +172,17 @@ impl Monitor {
             }
         }
         decode::mysql::tick(my, want, &rows, own).map_err(|e| e.into_db(MYSQL_OLDEST))
+    }
+
+    /// The whole text of the statement `ask` names, in a statement of its own (under the
+    /// session's statement limit, set first when no tick has set one).
+    async fn query_text(&mut self, ask: &TextAsk) -> Result<FullText, DbError> {
+        if self.limit.is_none() {
+            self.rows(&sql::limit(TEXT_LIMIT)).await.map_err(|e| my_error(&e))?;
+            self.limit = Some(TEXT_LIMIT);
+        }
+        let rows = self.rows(&sql::query_text(ask.session.id)).await.map_err(|e| my_error(&e))?;
+        decode::mysql::query_text(ask, &rows).map_err(|e| e.into_db(MYSQL_OLDEST))
     }
 }
 

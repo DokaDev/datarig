@@ -4,13 +4,12 @@ use super::{DecodeError, Row, Rows, malformed, one};
 use crate::monitor::format::{self, PG_MARKERS, PG_MIN_VERSION, PgMonitor, Probe};
 use crate::monitor::model::SessionsWanted;
 use crate::monitor::model::{
-    Blocker, Counter, CounterKind, Epoch, Extra, ExtraKey, Gauge, GaugeKind, Hidden, Need, Own, Part, QueryText,
-    Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState, Tx, Visibility, Wait,
-    WaitClass,
+    Blocker, Counter, CounterKind, Epoch, Extra, ExtraKey, FullText, Gauge, GaugeKind, Hidden, Need, Own, Part, Proof,
+    QueryText, Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState, Tx, Visibility,
+    Wait, WaitClass,
 };
-use crate::monitor::model::{Snapshot, Want};
+use crate::monitor::model::{Snapshot, TextAsk, Want};
 
-/// What `pg_stat_activity.query` holds for a session the account may not see.
 /// The columns of the probe's row: version, the account's privileges, the provider markers found (comma separated), in order.
 pub const PROBE: &[&str] = &["version", "superuser", "read_all_stats", "signal_backend", "markers"];
 
@@ -64,6 +63,10 @@ pub const SESSIONS: &[&str] = &[
     "blocked_by",
 ];
 
+/// The columns of a session's row read for its statement's whole text (times as microseconds since the Unix epoch; `state` to tell a session whose activity is not tracked; `maybe_cut` within three bytes of `track_activity_query_size`), in order.
+pub const QUERY_TEXT: &[&str] = &["pid", "backend_start", "state", "query_start", "query", "maybe_cut"];
+
+/// What `pg_stat_activity.query` holds for a session the account may not see.
 pub const HIDDEN_QUERY: &str = "<insufficient privilege>";
 
 /// The probe's row.
@@ -269,4 +272,49 @@ pub fn tick(want: &Want, rows: &[Rows], own: Own) -> Result<Snapshot, DecodeErro
     };
     let server = if want.server { Some(server_info(&rows[next])?) } else { None };
     Ok(Snapshot { sample, gauges, sessions, server, hidden })
+}
+
+/// The row read for the whole text of the statement `ask` names (none: no session has its pid
+/// now). The text is that statement's only when the session started when the list said (a pid
+/// is reused) and so did the statement, to the microsecond; then it must also begin as the list
+/// showed it.
+pub fn query_text(ask: &TextAsk, rows: &Rows) -> Result<FullText, DecodeError> {
+    let row = match rows.as_slice() {
+        [] => return Ok(FullText::Gone),
+        [row] => Row::new(row, "query text", QUERY_TEXT)?,
+        _ => return Err(malformed("query text", format!("{} rows, expected at most 1", rows.len()))),
+    };
+    if row.required_int("pid")? != ask.session.id {
+        return Err(malformed("query text", "another session's row"));
+    }
+    let query = row.text("query");
+    let started = row.time("backend_start")?;
+    // Without `pg_read_all_stats`, another account's session shows neither its start nor its
+    // statement.
+    if started.is_none() && query == Some(HIDDEN_QUERY) {
+        return Ok(FullText::Unknown(Some(Need::Grant("pg_read_all_stats"))));
+    }
+    match (ask.session.started, started) {
+        (Some(asked), Some(now)) if asked != now => return Ok(FullText::Gone),
+        (Some(_), Some(_)) => {}
+        _ => return Ok(FullText::Unknown(None)),
+    }
+    // `track_activities` off for the session now: its statement and start are not told.
+    let untracked = row.text("state") == Some("disabled");
+    let (Some(asked), Some(now), false) = (ask.query_started, row.time("query_start")?, untracked) else {
+        return Ok(FullText::Unknown(None));
+    };
+    // An idle session still shows its last statement: the one the list showed, while it
+    // started then.
+    match (Some(now), query) {
+        (Some(now), Some(text)) if now == asked && text.starts_with(&ask.start) => Ok(FullText::Text {
+            text: QueryText {
+                text: text.to_owned(),
+                shortened: false,
+                maybe_cut_by_server: row.bool("maybe_cut")?.unwrap_or(false),
+            },
+            proof: Proof::Same,
+        }),
+        _ => Ok(FullText::Moved),
+    }
 }

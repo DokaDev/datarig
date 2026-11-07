@@ -214,7 +214,7 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
                     DbEvent::Applied { id, result: Err(ApplyFailure { step: None, why }) }
                 }
                 // The monitor has a session of its own.
-                cmd @ DbCommand::MonitorTick { .. } => cmd.not_supported(),
+                cmd @ (DbCommand::MonitorTick { .. } | DbCommand::MonitorQueryText { .. }) => cmd.not_supported(),
             }
         };
         let Ok(ev) = link.guard(None, request).await else { return };

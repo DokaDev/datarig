@@ -23,7 +23,7 @@ use crate::meta::monitor as sql;
 use datarig_core::driver::{Cell, DbCommand, DbError, DbEvent};
 use datarig_core::monitor::decode::{self, Rows};
 use datarig_core::monitor::format::PG_OLDEST;
-use datarig_core::monitor::{MonitorFormat, Own, PgMonitor, Snapshot, Want};
+use datarig_core::monitor::{FullText, MonitorFormat, Own, PgMonitor, Snapshot, TextAsk, Want};
 use futures::future::join_all;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
@@ -31,6 +31,9 @@ use tokio_postgres::{Client, SimpleQueryMessage};
 
 /// How long the probe's statement may run.
 const PROBE_LIMIT: Duration = Duration::from_secs(5);
+
+/// How long the read of a statement's whole text may run.
+const TEXT_LIMIT: Duration = Duration::from_secs(5);
 
 /// How much longer than its statements' limit a read may take before the connection is given
 /// up on (the server stops each statement at the limit; past this, it or the network does not
@@ -71,8 +74,10 @@ pub(crate) async fn monitor_loop(client: Client, mut link: Link, events: Unbound
                 return;
             }
         };
-        let (request, want) = match (&cmd, &format) {
-            (DbCommand::MonitorTick { request, want }, Some(_)) => (*request, *want),
+        let (pg, request) = match (&cmd, &format) {
+            (DbCommand::MonitorTick { request, .. } | DbCommand::MonitorQueryText { request, .. }, Some(pg)) => {
+                (pg, *request)
+            }
             // Without a format there is nothing to read with; anything else is another
             // session's work.
             _ => {
@@ -82,24 +87,45 @@ pub(crate) async fn monitor_loop(client: Client, mut link: Link, events: Unbound
                 continue;
             }
         };
-        let Some(pg) = &format else { continue };
-        let Ok(result) = link.guard(None, tick(&client, pg, &want, &mut own)).await else {
+        let answer = match &cmd {
+            DbCommand::MonitorTick { want, .. } => link
+                .guard(None, tick(&client, pg, want, &mut own))
+                .await
+                .map(|r| r.map(|snapshot| DbEvent::MonitorSnapshot { request, result: Ok(snapshot) })),
+            DbCommand::MonitorQueryText { ask, .. } => link
+                .guard(None, query_text(&client, ask, &mut own))
+                .await
+                .map(|r| r.map(|text| DbEvent::MonitorQueryText { request, result: Ok(text) })),
+            _ => continue,
+        };
+        let Ok(answer) = answer else {
             link.close();
             return;
         };
-        let result = match result {
-            Ok(snapshot) => Ok(snapshot),
-            Err(Failure::Failed(error)) => Err(error),
+        let event = match answer {
+            Ok(event) => event,
+            Err(Failure::Failed(error)) => failed(&cmd, error),
             Err(Failure::Lost(error)) => {
                 link.close();
-                let _ = events.send(DbEvent::MonitorSnapshot { request, result: Err(error.clone()) });
+                let _ = events.send(failed(&cmd, error.clone()));
                 let _ = events.send(DbEvent::Lost { error });
                 return;
             }
         };
-        if events.send(DbEvent::MonitorSnapshot { request, result }).is_err() {
+        if events.send(event).is_err() {
             return;
         }
+    }
+}
+
+/// The answer to `cmd` (a tick or a text read) that it failed with `error`.
+fn failed(cmd: &DbCommand, error: DbError) -> DbEvent {
+    match cmd {
+        DbCommand::MonitorQueryText { request, .. } => {
+            DbEvent::MonitorQueryText { request: *request, result: Err(error) }
+        }
+        DbCommand::MonitorTick { request, .. } => DbEvent::MonitorSnapshot { request: *request, result: Err(error) },
+        other => other.not_supported(),
     }
 }
 
@@ -114,6 +140,12 @@ enum Failure {
 async fn probe(client: &Client, own: &mut Own) -> Result<PgMonitor, Failure> {
     let rows = read(client, &[sql::probe()], PROBE_LIMIT, own).await?;
     decode::pg::probe(&rows[0]).map_err(|e| Failure::Failed(e.into_db(PG_OLDEST)))
+}
+
+/// The whole text of the statement `ask` names, in a read of its own (counted like a tick's).
+async fn query_text(client: &Client, ask: &TextAsk, own: &mut Own) -> Result<FullText, Failure> {
+    let rows = read(client, &[sql::query_text(ask.session.id)], TEXT_LIMIT, own).await?;
+    decode::pg::query_text(ask, &rows[0]).map_err(|e| Failure::Failed(e.into_db(PG_OLDEST)))
 }
 
 async fn tick(client: &Client, pg: &PgMonitor, want: &Want, own: &mut Own) -> Result<Snapshot, Failure> {

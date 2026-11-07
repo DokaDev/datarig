@@ -130,6 +130,24 @@ pub(crate) fn sessions(my: &MySqlMonitor, wanted: SessionsWanted) -> Vec<String>
     )]
 }
 
+/// The session `id`'s statement in whole, to tell whether it is still the one the list showed:
+/// none or one row. Columns: `now`, `ID`, `COMMAND`, `TIME`, `INFO`, `maybe_cut`.
+///
+/// Always from `information_schema.PROCESSLIST`: `performance_schema.processlist` keeps only the
+/// first kilobyte of a statement. This one keeps its first [`INFO_BYTES`] bytes (`maybe_cut`:
+/// within three bytes of that, so perhaps cut). It takes the server's thread list mutex while it
+/// reads, which a single read on demand may.
+pub(crate) fn query_text(id: i64) -> String {
+    format!(
+        "SELECT {NOW} AS now, p.ID, p.COMMAND, p.TIME, p.INFO, OCTET_LENGTH(p.INFO) >= {} AS maybe_cut \
+         FROM information_schema.PROCESSLIST p WHERE p.ID = {id}",
+        INFO_BYTES - 3
+    )
+}
+
+/// How much of a statement `information_schema.PROCESSLIST` keeps, in bytes.
+const INFO_BYTES: usize = 65535;
+
 /// The statements of a tick, in this order: the counters ([`counters`], the clock first), then
 /// the session list and what the server is when `want` asks for them. Each runs on its own in
 /// autocommit; the counters come first, so the monitor's own statements counted when they were

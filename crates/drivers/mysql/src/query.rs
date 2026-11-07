@@ -468,7 +468,7 @@ pub(crate) async fn query_loop(
                 Ok(())
             }
             // The monitor has a session of its own.
-            Next::Command(cmd @ DbCommand::MonitorTick { .. }) => {
+            Next::Command(cmd @ (DbCommand::MonitorTick { .. } | DbCommand::MonitorQueryText { .. })) => {
                 let _ = events.send(cmd.not_supported());
                 Ok(())
             }

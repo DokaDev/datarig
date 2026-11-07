@@ -15,8 +15,8 @@ use crate::theme;
 use crate::widgets::{panel, put, sparkline};
 use datarig_core::i18n::{I18n, Label, Msg};
 use datarig_core::monitor::{
-    CounterKind, ExtraKey, GaugeKind, Hidden, MonitorFormat, Need, Part, SessionKind, SessionRow, SessionState,
-    Timestamp, Tx, Visibility, WaitClass,
+    CounterKind, ExtraKey, FullText, GaugeKind, Hidden, MonitorFormat, Need, Part, Proof, SessionKind, SessionRow,
+    SessionState, Timestamp, Tx, Visibility, WaitClass,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -231,11 +231,15 @@ impl Cx<'_> {
         v
     }
 
-    fn hidden(&self, h: &Hidden) -> String {
-        let need = match &h.need {
+    fn need(&self, need: &Need) -> String {
+        match need {
             Need::Grant(g) => self.msg(Msg::MonitorNeedGrant { grant: (*g).to_string() }),
             Need::Setting(s) => self.msg(Msg::MonitorNeedSetting { setting: (*s).to_string() }),
-        };
+        }
+    }
+
+    fn hidden(&self, h: &Hidden) -> String {
+        let need = self.need(&h.need);
         let part = match h.part {
             Part::OtherSessionDetails => Label::MonitorHiddenDetails,
             Part::OtherSessions => Label::MonitorHiddenSessions,
@@ -652,8 +656,9 @@ impl Cx<'_> {
         state_text(self.i18n, r)
     }
 
-    /// The selected session in full: who, where, since when, and its whole statement as the
-    /// list holds it.
+    /// The selected session in full: who, where, since when, and its statement: its whole text
+    /// once read for this very row, else as the list holds it (with why only its start is
+    /// shown).
     fn details(&self, r: &SessionRow, time: Timestamp, at: Rect, buf: &mut Buffer) {
         let th = theme::cur();
         if at.height == 0 {
@@ -715,13 +720,45 @@ impl Cx<'_> {
             let text = format!("{k:<key_w$}{v}", key_w = key_w);
             out.push((text, Style::new().fg(th.fg)));
         }
-        if let Some(q) = &r.query {
+        let read = self.m.text_read();
+        let whole = match read.and_then(|t| t.answer.as_ref()) {
+            Some(Ok(FullText::Text { text, proof })) => Some((text, *proof)),
+            _ => None,
+        };
+        if let Some(q) = whole.map(|(text, _)| text).or(r.query.as_ref()) {
+            let dim = Style::new().fg(th.fg_dim);
             out.push((String::new(), Style::new()));
             if q.shortened {
                 out.push((
                     self.msg(Msg::MonitorQueryShortened { n: datarig_core::monitor::QUERY_CHARS.to_string() }),
-                    Style::new().fg(th.fg_dim),
+                    dim,
                 ));
+            }
+            // Why the text shown is what it is, wrapped (a narrow screen keeps all of it).
+            let note = match (whole, read.map(|t| &t.answer)) {
+                (Some((_, Proof::Likely)), _) => Some((self.label(Label::MonitorTextLikely), dim)),
+                (Some((_, Proof::Same)), _) | (None, None) => None,
+                (None, Some(None)) => Some((self.label(Label::MonitorTextReading), dim)),
+                (None, Some(Some(Ok(FullText::NotYet)))) => Some((self.label(Label::MonitorTextNotYet), dim)),
+                (None, Some(Some(answer))) => {
+                    let why = match answer {
+                        Ok(FullText::Gone) => self.label(Label::MonitorTextGone),
+                        Ok(FullText::Moved) => self.label(Label::MonitorTextMoved),
+                        Ok(FullText::Unknown(Some(need))) => {
+                            format!("{} ({})", self.label(Label::MonitorTextUnknown), self.need(need))
+                        }
+                        Ok(FullText::Unknown(None) | FullText::Text { .. } | FullText::NotYet) => {
+                            self.label(Label::MonitorTextUnknown)
+                        }
+                        Err(e) => self.msg(Msg::MonitorTextFailed { error: e.clone() }),
+                    };
+                    Some((why, Style::new().fg(th.warning)))
+                }
+            };
+            if let Some((text, style)) = note {
+                for l in crate::text::wrap_words(&text, inner.width.saturating_sub(2) as usize) {
+                    out.push((l, style));
+                }
             }
             if q.maybe_cut_by_server {
                 out.push((self.label(Label::MonitorQueryCutByServer), Style::new().fg(th.warning)));

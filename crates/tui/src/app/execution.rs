@@ -839,7 +839,7 @@ impl App {
             // A query session's own (copying its values as SQL needs it).
             DbEvent::SessionValues(_) | DbEvent::ValuesNotKnown { .. } => {}
             // A monitor session's own.
-            DbEvent::Monitor(_) | DbEvent::MonitorSnapshot { .. } => {}
+            DbEvent::Monitor(_) | DbEvent::MonitorSnapshot { .. } | DbEvent::MonitorQueryText { .. } => {}
             // Statement events never come from the metadata session.
             DbEvent::Info { .. }
             | DbEvent::Released { .. }
@@ -1142,7 +1142,7 @@ impl App {
             | DbEvent::CancelRefused { .. }
             | DbEvent::ValuesNotKnown { .. } => None,
             // A monitor session's own.
-            DbEvent::Monitor(_) | DbEvent::MonitorSnapshot { .. } => None,
+            DbEvent::Monitor(_) | DbEvent::MonitorSnapshot { .. } | DbEvent::MonitorQueryText { .. } => None,
             // Statement `index` of the run opened a transaction for manual commit: the block that
             // follows is that one. Said in the run's Messages.
             DbEvent::ManualBegun { id: q, index } => {
