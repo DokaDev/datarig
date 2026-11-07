@@ -2577,7 +2577,7 @@
 "setting.changes_view.list" = "목록, 바뀐 셀마다 한 줄"
 "setting.changes_view.sql" = "SQL, 변경을 적용할 문"
 "setting.background" = "배경"
-"setting.background.about" = "테마가 창의 배경을 칠할지, 터미널 자체의 배경을 그대로 보여 줄지 정합니다(반투명하거나 이미지인 배경이 비쳐 보입니다). 글자, 선택, 편집 표시의 색은 테마의 것을 그대로 쓰고, 대화 상자, 메뉴, 팝업은 테마의 면 색을 유지합니다."
+"setting.background.about" = "테마가 창의 배경을 칠할지, 터미널 자체의 배경을 그대로 보여 줄지 정합니다(반투명하거나 이미지인 배경이 비쳐 보입니다). 글자, 선택, 편집 표시의 색은 테마의 것을 그대로 쓰고, 편집기의 현재 줄과 문장, 그리드의 커서 행은 띠 대신 줄 번호 쪽에 표시하며, 대화 상자, 메뉴, 팝업은 테마의 면 색을 유지합니다."
 "setting.background.theme" = "테마의 배경"
 "setting.background.terminal" = "터미널 자체의 배경"
 "setting.background.note" = "{theme}에는 자체 배경이 있지만 지금은 칠하지 않습니다: 터미널 배경에 따라 일부 글자가 잘 안 보일 수 있습니다"

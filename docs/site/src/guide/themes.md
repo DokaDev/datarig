@@ -28,10 +28,19 @@ families that follow the background (`catppuccin`, `tokyo-night`, `gruvbox`).
 `ui.background = "terminal"` (`:set ui.background=terminal`, or the settings screen's
 Background row) leaves your terminal's own background where the theme would paint the panes and
 the result grid's alternate rows, so a translucent or image background shows through. Text,
-selections, the grid's cursor tints and the marks of edits keep the theme's colours; the status
-bar, the grid's headers, dialogs, menus and popups keep the theme's surface, and the screen
-behind a dialog stays see-through (only its text is dimmed). The default, `"theme"`, paints
-everything.
+selections, the grid's cursor cell and column header and the marks of edits keep the theme's
+colours; the status bar, the grid's headers, dialogs, menus and popups keep the theme's surface,
+and the screen behind a dialog stays see-through (only its text is dimmed). The default,
+`"theme"`, paints everything.
+
+Wide highlight bands, which would show as opaque blocks, are left out and their cue moves to
+the gutter:
+
+- In the editor, the statement a run would take is an accent bar `▎` beside its lines, and
+  their line numbers are in the accent; the cursor's line number is bold. A selection keeps its
+  fill.
+- In the result grid, the cursor's row has no band: the cursor's cell keeps its fill and its row
+  number is in the accent and bold. A selected range keeps its fill.
 
 Switching to it while the theme has a background of its own (every built-in theme but
 `terminal`) says so in one line: the theme's text colours were made for its background, so on a

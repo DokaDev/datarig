@@ -868,15 +868,19 @@ pub fn render(
         // row and the rows of a selected range get the cursor row's tint the same way (a new row
         // keeps its own: its number says where the cursor is).
         let stripe = if r % 2 == 1 { th.surface_alt } else { th.bg };
+        // On the terminal's own background the cursor's row gets no band (it would show as an
+        // opaque block): its cell and its number say where it is.
         let zebra = match new {
             Some(_) => th.edit_inserted_row,
-            None if r == st.row || in_rows => th.grid_cursor_row.bg.unwrap_or(stripe),
+            None if (r == st.row || in_rows) && !theme::see_through() => th.grid_cursor_row.bg.unwrap_or(stripe),
             None => stripe,
         };
         buf.set_style(Rect::new(area.x, y, area.width, 1), Style::new().bg(zebra));
         // Selected rows (whole, or of a range of cells): their numbers too.
         let num_bg = if in_rows { th.range } else { Style::new().bg(zebra) };
         let num_style = num_bg.fg(if r == st.row { th.accent } else { th.fg_muted });
+        let num_style =
+            if r == st.row && theme::see_through() { num_style.add_modifier(Modifier::BOLD) } else { num_style };
         // Deleted by an Apply: it stays, crossed out.
         let deleted = added.is_none()
             && (rs.edit.batch.deleted(r)
