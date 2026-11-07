@@ -41,6 +41,24 @@ fi
 
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
+
+# record <name> <run dir>: VHS records the tape, its output also in <run dir>/vhs.log.
+record() {
+  (
+    cd "$2/work"
+    export PATH="$2/bin:$PATH" LANG=C.UTF-8 TZ=UTC
+    vhs "$1.tape" -o "$out/$1.gif" 2>&1 | tee "$2/vhs.log"
+  )
+}
+
+# Whether the recording failed because VHS's headless browser did not start: VHS gives it 30 s
+# to open its debugging port (on a port VHS picked and let go of just before) and on the hosted
+# runners it sometimes does not. Nothing of the tape ran then, so such a recording is tried once
+# more; a tape whose Wait does not match the screen is never tried again.
+browser_did_not_start() {
+  grep -q -E 'could not (start|connect to) browser|browser debugging endpoint|browser exited unexpectedly' "$1/vhs.log" &&
+    echo "VHS's browser did not start; trying the tape once more"
+}
 failed=()
 for name in "$@"; do
   [ -f "$demo/tapes/$name.tape" ] || { echo "no tape $name" >&2; exit 2; }
@@ -62,11 +80,7 @@ exec '$real' "\$@"
 WRAPPER
   chmod +x "$run/bin/datarig"
   echo "::group::$name"
-  if (
-    cd "$run/work"
-    export PATH="$run/bin:$PATH" LANG=C.UTF-8 TZ=UTC
-    vhs "$name.tape" -o "$out/$name.gif"
-  ); then
+  if record "$name" "$run" || { browser_did_not_start "$run" && record "$name" "$run"; }; then
     for png in "$run/work"/*.png; do
       [ -e "$png" ] && mv "$png" "$out/"
     done
