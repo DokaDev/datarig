@@ -632,7 +632,8 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
         (CommandsPosition::Popup, DetailView::Panel, ClipboardSetting::Auto, CopyHeader::Auto)
     );
     let cfg = parse(
-        "detail_view = \"statusbar\"\nclipboard = \"OSC52\"\ncopy_header = \"off\"\n[commands]\nposition = \"bottom\"\n",
+        "detail_view = \"statusbar\"\nclipboard = \"OSC52\"\ncopy_header = \"off\"\ncopy_format = \"JSON_pretty\"\n\
+         [commands]\nposition = \"bottom\"\n",
     )
     .unwrap();
     assert_eq!(
@@ -642,6 +643,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             detail_view: DetailView::Statusbar,
             clipboard: ClipboardSetting::Osc52,
             copy_header: CopyHeader::Off,
+            copy_format: CopyFormatSetting::JsonPretty,
             osc52_max_bytes: OSC52_MAX_BYTES,
             cursor_shape: CursorShape::On,
             editor_clipboard: EditorClipboard::On,
@@ -676,6 +678,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
         ("clipboard = \"pbcopy\"\n", "clipboard", "pbcopy", "auto, system, osc52"),
         ("detail_view = \"side\"\n", "detail_view", "side", "panel, statusbar"),
         ("copy_header = \"yes\"\n", "copy_header", "yes", "auto, on, off"),
+        ("copy_format = \"sql\"\n", "copy_format", "sql", "tsv, csv, json, json_pretty, markdown, html, xml, insert"),
         ("[commands]\nposition = \"top\"\n", "commands.position", "top", "popup, bottom"),
     ] {
         assert_eq!(

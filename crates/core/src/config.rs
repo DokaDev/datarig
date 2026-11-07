@@ -40,9 +40,9 @@
 //! `[edit] paste_null` is the text a range pasted into a result reads as NULL (unquoted).
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
 //! the top, or the bottom line), `detail_view` (the result inspector as a panel or a status bar
-//! preview), `clipboard` (how copies reach the clipboard) and `copy_header`
-//! (whether a copied block starts with the column names), `osc52_max_bytes` (the longest copy
-//! sent through OSC 52).
+//! preview), `clipboard` (how copies reach the clipboard), `copy_header`
+//! (whether a copied block starts with the column names), `copy_format` (the format `y` and `Y`
+//! copy in) and `osc52_max_bytes` (the longest copy sent through OSC 52).
 //! `result_window_rows` (rows of a result kept in memory, default 10,000;
 //! the rest go to a temporary file) and `spill_limit` (the most that file may take, default
 //! 1 GB; also a policy item).
@@ -143,6 +143,8 @@ struct FileConfig {
     clipboard: Option<String>,
     #[serde(default)]
     copy_header: Option<String>,
+    #[serde(default)]
+    copy_format: Option<String>,
     #[serde(default)]
     osc52_max_bytes: Option<i64>,
     #[serde(default)]
@@ -512,6 +514,48 @@ impl CopyHeader {
             CopyHeader::Auto => rows > 1,
             CopyHeader::On => true,
             CopyHeader::Off => false,
+        }
+    }
+}
+
+/// `copy_format`: the format `y` and `Y` copy a block of cells in (one cell without a selection
+/// is always its value). The names are those of `:copy`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CopyFormatSetting {
+    /// Tab-separated values; the header row follows `copy_header`.
+    #[default]
+    Tsv,
+    Csv,
+    Json,
+    JsonPretty,
+    Markdown,
+    Html,
+    Xml,
+    /// SQL `INSERT` statements, when the rows are certainly of one table (else TSV, and said).
+    Insert,
+}
+
+impl Choice for CopyFormatSetting {
+    const ALL: &'static [Self] = &[
+        CopyFormatSetting::Tsv,
+        CopyFormatSetting::Csv,
+        CopyFormatSetting::Json,
+        CopyFormatSetting::JsonPretty,
+        CopyFormatSetting::Markdown,
+        CopyFormatSetting::Html,
+        CopyFormatSetting::Xml,
+        CopyFormatSetting::Insert,
+    ];
+    fn as_str(self) -> &'static str {
+        match self {
+            CopyFormatSetting::Tsv => "tsv",
+            CopyFormatSetting::Csv => "csv",
+            CopyFormatSetting::Json => "json",
+            CopyFormatSetting::JsonPretty => "json_pretty",
+            CopyFormatSetting::Markdown => "markdown",
+            CopyFormatSetting::Html => "html",
+            CopyFormatSetting::Xml => "xml",
+            CopyFormatSetting::Insert => "insert",
         }
     }
 }
@@ -934,6 +978,7 @@ pub struct Prefs {
     pub detail_view: DetailView,
     pub clipboard: ClipboardSetting,
     pub copy_header: CopyHeader,
+    pub copy_format: CopyFormatSetting,
     /// `osc52_max_bytes`: the longest OSC 52 payload (base64 bytes) a copy sends; a longer copy
     /// is not sent through the terminal (it would be dropped without a word).
     pub osc52_max_bytes: usize,
@@ -986,6 +1031,7 @@ impl Default for Prefs {
             detail_view: DetailView::default(),
             clipboard: ClipboardSetting::default(),
             copy_header: CopyHeader::default(),
+            copy_format: CopyFormatSetting::default(),
             osc52_max_bytes: OSC52_MAX_BYTES,
             cursor_shape: CursorShape::default(),
             editor_clipboard: EditorClipboard::default(),
@@ -1293,6 +1339,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         detail_view: choice("detail_view", f.detail_view, "panel, statusbar")?,
         clipboard: choice("clipboard", f.clipboard, "auto, system, osc52")?,
         copy_header: choice("copy_header", f.copy_header, "auto, on, off")?,
+        copy_format: choice("copy_format", f.copy_format, "tsv, csv, json, json_pretty, markdown, html, xml, insert")?,
         osc52_max_bytes: match f.osc52_max_bytes {
             None => OSC52_MAX_BYTES,
             Some(n) if n > 0 => usize::try_from(n).map_err(|_| bad("osc52_max_bytes", n))?,
@@ -1779,6 +1826,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
         &setting(root, "clipboard", prefs.clipboard.as_str().into(), prefs.clipboard == ClipboardSetting::default())?;
     orphans +=
         &setting(root, "copy_header", prefs.copy_header.as_str().into(), prefs.copy_header == CopyHeader::default())?;
+    let format = prefs.copy_format;
+    orphans += &setting(root, "copy_format", format.as_str().into(), format == CopyFormatSetting::default())?;
     let osc = i64::try_from(prefs.osc52_max_bytes).unwrap_or(i64::MAX);
     orphans += &setting(root, "osc52_max_bytes", osc.into(), prefs.osc52_max_bytes == OSC52_MAX_BYTES)?;
     let idle = prefs.idle_disconnect;

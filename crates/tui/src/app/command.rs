@@ -14,8 +14,9 @@
 
 use super::action::{Action, LangSetting};
 use datarig_core::config::{
-    AutoPairs, ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
-    IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat, SoftTabBackspace, Tips, YankFlash,
+    AutoPairs, ClipboardSetting, CommandsPosition, CopyFormatSetting, CopyHeader, CursorShape, DetailView,
+    EditorClipboard, FormatIndent, IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat, SoftTabBackspace,
+    Tips, YankFlash,
 };
 use datarig_core::config::{ChangesView, CompletionDelay, PasteNull, UiBackground, UpdateCheck, WhatsNewSetting};
 use datarig_core::i18n::Label;
@@ -494,6 +495,7 @@ pub enum Setting {
     DetailView(DetailView),
     Clipboard(ClipboardSetting),
     CopyHeader(CopyHeader),
+    CopyFormat(CopyFormatSetting),
     CursorShape(CursorShape),
     EditorClipboard(EditorClipboard),
     FormatCase(KeywordCase),
@@ -885,6 +887,22 @@ pub const SETTINGS: &[SettingSpec] = &[
         values: Values::Fixed(&[
             ("on", Setting::WhatsNew(WhatsNewSetting::On), Label::SettingWhatsNewOn),
             ("off", Setting::WhatsNew(WhatsNewSetting::Off), Label::SettingWhatsNewOff),
+        ]),
+    },
+    SettingSpec {
+        key: "copy_format",
+        label: Label::SettingCopyFormat,
+        about: Label::SettingCopyFormatAbout,
+        group: SettingGroup::Clipboard,
+        values: Values::Fixed(&[
+            ("tsv", Setting::CopyFormat(CopyFormatSetting::Tsv), Label::SettingCopyFormatTsv),
+            ("csv", Setting::CopyFormat(CopyFormatSetting::Csv), Label::SettingCopyFormatCsv),
+            ("json", Setting::CopyFormat(CopyFormatSetting::Json), Label::SettingCopyFormatJson),
+            ("json_pretty", Setting::CopyFormat(CopyFormatSetting::JsonPretty), Label::SettingCopyFormatJsonPretty),
+            ("markdown", Setting::CopyFormat(CopyFormatSetting::Markdown), Label::SettingCopyFormatMarkdown),
+            ("html", Setting::CopyFormat(CopyFormatSetting::Html), Label::SettingCopyFormatHtml),
+            ("xml", Setting::CopyFormat(CopyFormatSetting::Xml), Label::SettingCopyFormatXml),
+            ("insert", Setting::CopyFormat(CopyFormatSetting::Insert), Label::SettingCopyFormatInsert),
         ]),
     },
 ];

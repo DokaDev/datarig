@@ -180,13 +180,12 @@ impl App {
                     let spec = action::spec(a);
                     // The help of this screen sits apart in the leader's own popup.
                     let footer = a == Action::Help && w.prefix.len() == 1;
-                    let item = WhichKeyItem {
-                        key: k.label(),
-                        label: self.i18n.label(if footer { Label::WhichkeyHelp } else { spec.label }),
-                        group: false,
-                        enabled: (spec.when)(self),
-                        footer,
-                    };
+                    let mut label = self.i18n.label(if footer { Label::WhichkeyHelp } else { spec.label });
+                    // The format `y` and `Y` copy in is marked.
+                    if matches!(a, Action::Copy(_, f) if f == self.copy_default_item()) {
+                        label = self.copy_default_marked(label);
+                    }
+                    let item = WhichKeyItem { key: k.label(), label, group: false, enabled: (spec.when)(self), footer };
                     (matches!(a, Action::GotoTab(_)), item)
                 }
                 Child::Group(label) => {

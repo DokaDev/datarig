@@ -306,8 +306,9 @@ impl App {
                     self.overlays.push(Overlay::CellViewer(Viewer { column, text, scroll: 0, view_h: 1 }));
                 }
             }
-            GridAction::CopyCell => return self.copy(copy::CopyWhat::Cell, copy::CopyFormat::Tsv, false),
-            GridAction::CopyRow => return self.copy(copy::CopyWhat::Row, copy::CopyFormat::Tsv, false),
+            GridAction::CopyCell => return self.copy_keys(copy::CopyWhat::Cell),
+            GridAction::CopyRow => return self.copy_keys(copy::CopyWhat::Row),
+            GridAction::CopyDefault => return self.open_copy_default(),
             GridAction::Select => return self.toggle_selection(false),
             GridAction::SelectRows => return self.toggle_selection(true),
             GridAction::SelectAll => return self.select_all(),

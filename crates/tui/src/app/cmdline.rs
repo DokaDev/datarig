@@ -82,6 +82,7 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::DetailView(_)
         | Setting::Clipboard(_)
         | Setting::CopyHeader(_)
+        | Setting::CopyFormat(_)
         | Setting::CursorShape(_)
         | Setting::EditorClipboard(_)
         | Setting::FormatCase(_)
@@ -879,6 +880,7 @@ impl App {
             Setting::DetailView(v) => self.set_prefs(s, |x| x.detail_view = v),
             Setting::Clipboard(c) => self.set_prefs(s, |x| x.clipboard = c),
             Setting::CopyHeader(c) => self.set_prefs(s, |x| x.copy_header = c),
+            Setting::CopyFormat(f) => self.set_prefs(s, |x| x.copy_format = f),
             Setting::CursorShape(c) => self.set_prefs(s, |x| x.cursor_shape = c),
             Setting::EditorClipboard(c) => self.set_prefs(s, |x| x.editor_clipboard = c),
             Setting::FormatCase(c) => self.set_prefs(s, |x| x.format_case = c),

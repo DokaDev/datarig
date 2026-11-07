@@ -114,14 +114,14 @@ fn the_grids_menu_opens_at_the_cell_and_by_right_click_with_the_same_items() {
     h.mouse(MouseEventKind::Down(MouseButton::Right), x, y);
     assert_eq!(lines(&h), by_key, "the right click on that cell");
     // Typing finds an item; Enter runs it on that cell.
-    h.menu_pick("Copy the cell (a selected range as TSV)");
+    h.menu_pick("Copy the cell (a selected range)");
     assert!(!menu_open(&h));
     let cell = clip.last().expect("copied");
     // A range selected with `v`: the menu is the selection's.
     h.keys("vj");
     h.keys("  ");
     assert_eq!(lines(&h)[0], "# Selection");
-    h.menu_pick("Copy the cell (a selected range as TSV)");
+    h.menu_pick("Copy the cell (a selected range)");
     assert_ne!(clip.last().as_deref(), Some(cell.as_str()), "the range, not the cell");
     // From the inspector: the grid's menu.
     h.app.focus = Focus::Inspector;
@@ -314,7 +314,7 @@ fn a_menu_whose_cell_was_replaced_runs_nothing() {
     let (cols, rows) = edge_rows();
     h.db(DbEvent::Page { id, columns: Some(cols), rows, more: false, elapsed: Duration::from_millis(3) });
     assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (0, 0), "the new result starts at its first cell");
-    h.menu_pick("Copy the cell (a selected range as TSV)");
+    h.menu_pick("Copy the cell (a selected range)");
     assert!(!menu_open(&h));
     assert!(clip.last().is_none(), "nothing copied");
     assert!(h.status(160, 45).contains("Not run: what the menu was opened on has changed"), "{}", h.status(160, 45));

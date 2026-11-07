@@ -211,6 +211,13 @@ pub const KEYS: &[KeyDoc] = &[
     key("", "copy_header", "\"auto\"", "`\"auto\"`, `\"on\"`, `\"off\"`", ""),
     key(
         "",
+        "copy_format",
+        "\"tsv\"",
+        "`\"tsv\"`, `\"csv\"`, `\"json\"`, `\"json_pretty\"`, `\"markdown\"`, `\"html\"`, `\"xml\"`, `\"insert\"`",
+        "",
+    ),
+    key(
+        "",
         "osc52_max_bytes",
         "100000",
         "a positive number of bytes",

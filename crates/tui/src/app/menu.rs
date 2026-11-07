@@ -189,6 +189,8 @@ pub enum MenuScope {
     Copy(CopyScope),
     /// Every row: the rest is fetched first (asked first), then every row is copied.
     FetchFirst,
+    /// The format `y` and `Y` copy in (`copy_format`): a format is chosen, nothing copied.
+    Default,
 }
 
 /// An item of a menu.
@@ -927,6 +929,7 @@ impl App {
                 pane.push(item);
                 off.push((item, o));
             }
+            pane.push(MenuItem::Scope(MenuScope::Default));
         }
         pane.extend(self.available(RESULTS_MENU, &mut off));
         self.push_menu_from(back, Ctx::Grid, target, (own, pane, off), at);
@@ -1135,8 +1138,25 @@ impl App {
         let Some(m) = self.overlays.menu_mut() else { return };
         let Some(MenuItem::Scope(scope)) = m.item_at(i) else { return };
         m.selected = i;
-        let items = CopyFormat::MENU.iter().map(|f| MenuItem::Copy(scope, *f)).collect();
-        m.sub = Some(SubMenu { scope, items, selected: 0, list: Rect::default() });
+        let (formats, selected) = match scope {
+            // The choices of `copy_format`, the one it names selected.
+            MenuScope::Default => {
+                let now = CopyFormat::of_setting(self.prefs.copy_format);
+                (&CopyFormat::DEFAULTS[..], CopyFormat::DEFAULTS.iter().position(|f| *f == now).unwrap_or(0))
+            }
+            _ => (&CopyFormat::MENU[..], 0),
+        };
+        let items = formats.iter().map(|f| MenuItem::Copy(scope, *f)).collect();
+        m.sub = Some(SubMenu { scope, items, selected, list: Rect::default() });
+    }
+
+    /// `Space r y d`: the results' menu with its choice of the format `y` and `Y` copy in open.
+    pub(super) fn open_copy_default(&mut self) {
+        self.open_results_menu_here();
+        let item = MenuLine::Item(MenuItem::Scope(MenuScope::Default));
+        if let Some(i) = self.overlays.menu().and_then(|m| m.lines.iter().position(|x| *x == item)) {
+            self.open_sub(i);
+        }
     }
 
     /// Close the menu without running anything: the focus goes back where it was.
@@ -1155,7 +1175,9 @@ impl App {
     /// Run `item` of the menu (it closes first), or open a scope's formats. Nothing runs when
     /// what the menu was opened on has changed since: that is said, and the menu closes.
     fn menu_run(&mut self, item: MenuItem) {
-        if !matches!(item, MenuItem::Scope(_)) && !self.menu_current() {
+        // Choosing the format of `y` and `Y` copies nothing: it holds whatever the grid shows.
+        let any_target = matches!(item, MenuItem::Scope(_) | MenuItem::Copy(MenuScope::Default, _));
+        if !any_target && !self.menu_current() {
             self.menu_dismiss();
             return self.flash(Notice::new(Label::MenuStale, Level::Warning));
         }
@@ -1177,6 +1199,12 @@ impl App {
             MenuItem::Copy(MenuScope::FetchFirst, f) => {
                 self.overlays.close(OverlayKind::ContextMenu);
                 self.ask_fetch_then_copy(f);
+            }
+            MenuItem::Copy(MenuScope::Default, f) => {
+                self.menu_dismiss();
+                if let Some(s) = f.setting() {
+                    self.apply_setting(super::command::Setting::CopyFormat(s));
+                }
             }
         }
     }
@@ -1373,12 +1401,23 @@ impl App {
                         _ => self.i18n.label(Label::CopyScopeFetched),
                     },
                     MenuScope::FetchFirst => self.i18n.label(Label::CopyScopeFetchFirst),
+                    MenuScope::Default => self.i18n.label(Label::CopyScopeDefault),
                 };
                 // The mark of an item that opens more items.
                 (Localized::verbatim(format!("{label} ▸")), String::new())
             }
             // In the submenu a format's own key runs it (in both scopes): that key is shown.
-            MenuItem::Copy(_, f) => (self.i18n.label(f.menu_label()), f.key().to_string()),
+            // The choices of `copy_format` are named as the setting names them.
+            MenuItem::Copy(MenuScope::Default, f) => {
+                let label = self.i18n.label(f.default_label());
+                let now = f == CopyFormat::of_setting(self.prefs.copy_format);
+                (if now { self.copy_default_marked(label) } else { label }, f.key().to_string())
+            }
+            MenuItem::Copy(_, f) => {
+                let label = self.i18n.label(f.menu_label());
+                let default = f == self.copy_default_item();
+                (if default { self.copy_default_marked(label) } else { label }, f.key().to_string())
+            }
         }
     }
 

@@ -243,6 +243,95 @@ fn v_selects_a_range_that_y_copies_as_tsv_with_a_header() {
 }
 
 #[test]
+fn copy_format_is_the_format_of_y_and_capital_y() {
+    let mut h = grid(Lang::En);
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.command("set copy_format=csv");
+    assert_eq!(h.app.prefs.copy_format, datarig_core::config::CopyFormatSetting::Csv);
+    // One cell without a selection is its value, whatever the format.
+    h.keys("jl");
+    h.keys("y");
+    assert_eq!(clip.last().as_deref(), Some("林美玲"));
+    assert_eq!(message(&mut h), "Copied the cell (system clipboard)");
+    // A range and a row are CSV, with its header.
+    h.keys("vjy");
+    assert_eq!(clip.last().as_deref(), Some("name\n林美玲\n張志明"));
+    assert_eq!(message(&mut h), "Copied 2 rows as CSV (system clipboard)");
+    h.keys("Y");
+    assert!(clip.last().unwrap().starts_with("id,name,nickname,address,profile\n3,張志明,"), "{:?}", clip.last());
+    assert_eq!(message(&mut h), "Copied 1 row as CSV (system clipboard)");
+    h.command("set copy_format=markdown");
+    h.keys("Y");
+    assert!(clip.last().unwrap().starts_with("| id | name |"), "{:?}", clip.last());
+    assert_eq!(message(&mut h), "Copied 1 row as a Markdown table (system clipboard)");
+    // SQL INSERT of rows not certainly of one table: TSV, and why.
+    h.command("set copy_format=insert");
+    h.keys("Y");
+    assert!(clip.last().unwrap().starts_with("3\t張志明\t"), "{:?}", clip.last());
+    let said = message(&mut h);
+    assert!(said.starts_with("Copied 1 row as TSV (system clipboard), not as SQL INSERT: "), "{said}");
+}
+
+#[test]
+fn copy_format_insert_writes_insert_statements_for_one_tables_rows() {
+    use datarig_core::driver::DbEvent;
+    let mut h = Harness::connected(Lang::En);
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.app.run(vec!["SELECT user_id, status FROM shop.orders WHERE id < 3".into()]);
+    let columns =
+        Some(vec![meta_from("user_id", "int8", true, ORDERS, 2), meta_from("status", "text", false, ORDERS, 3)]);
+    let rows = vec![vec![Some("7".into()), Some("paid".into())], vec![None, Some("it's".into())]];
+    h.db(DbEvent::Page { id: 1, columns, rows, more: false, elapsed: std::time::Duration::ZERO });
+    h.key(KeyCode::Tab);
+    h.command("set copy_format=insert");
+    h.keys("jY");
+    assert_eq!(
+        clip.last().as_deref(),
+        Some("INSERT INTO \"shop\".\"orders\" (\"user_id\", \"status\") VALUES (NULL, 'it''s');")
+    );
+    assert_eq!(message(&mut h), "Copied 1 row as SQL INSERT (system clipboard)");
+}
+
+#[test]
+fn space_r_y_d_picks_the_format_of_y_and_the_formats_mark_it() {
+    let mut h = grid(Lang::En);
+    let marked = |h: &mut Harness| -> Vec<String> {
+        let (_, items) = h.app.which_key_items().expect("which-key open");
+        items.iter().map(|i| i.label.to_string()).filter(|l| l.ends_with("· default")).collect()
+    };
+    // TSV is the default: the TSV without headers of `Space r y` is marked.
+    h.keys(" ry");
+    h.settle();
+    assert_eq!(marked(&mut h), vec!["Copy selection: Without headers (TSV) · default"]);
+    // `d` there: the menu's formats of `y` and `Y`, the one they use now selected.
+    h.keys("d");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
+    let screen = h.screen(160, 45);
+    assert!(screen.contains("TSV (column names as copy_header says) · default"), "{screen}");
+    assert!(screen.contains("SQL INSERT (rows of one table, else TSV)"), "{screen}");
+    let sub = h.app.overlays.menu().and_then(|m| m.sub.as_ref()).expect("the formats are open");
+    assert_eq!(sub.selected, 0);
+    // A format's letter picks it: nothing is copied, the setting changes and is said.
+    h.keys("c");
+    assert!(h.overlay_kind().is_none());
+    assert_eq!(h.app.prefs.copy_format, datarig_core::config::CopyFormatSetting::Csv);
+    assert_eq!(h.app.focus, Focus::Results);
+    h.keys(" ry");
+    h.settle();
+    assert_eq!(marked(&mut h), vec!["Copy selection: CSV · default"]);
+    h.key(KeyCode::Esc);
+    // The grid's menu offers the same choice, and marks the format among the copies.
+    h.keys(" ry");
+    h.keys("d");
+    let sub = h.app.overlays.menu().and_then(|m| m.sub.as_ref()).expect("the formats are open");
+    assert_eq!(sub.selected, 1, "CSV, the format now");
+    h.key(KeyCode::Esc);
+    h.key(KeyCode::Esc);
+    assert!(h.overlay_kind().is_none());
+}
+
+#[test]
 fn copy_as_every_format_through_keys_commands_and_the_menu() {
     let mut h = grid(Lang::En);
     let clip = FakeClipboard::attach(&mut h, false, &[]);
@@ -336,7 +425,7 @@ fn copy_as_every_format_through_keys_commands_and_the_menu() {
         assert!(screen.contains(want), "{want}:\n{screen}");
     }
     // Each format with the key that runs it here (they were not shown).
-    for (label, key) in [("Without headers (TSV)", 't'), ("JSON (pretty)", 'J'), ("SQL UPDATE", 'u')] {
+    for (label, key) in [("Without headers (TSV) · default", 't'), ("JSON (pretty)", 'J'), ("SQL UPDATE", 'u')] {
         let line = screen.lines().find(|l| l.contains(label)).unwrap();
         let rest = line[line.find(label).unwrap() + label.len()..].trim_start();
         assert!(rest.starts_with(&format!("{key} │")), "{label}: {line}");
@@ -351,7 +440,7 @@ fn copy_as_every_format_through_keys_commands_and_the_menu() {
     assert_eq!(clip.last().unwrap().lines().count(), 1, "a comma list of every fetched row");
     // The key shown next to an item of the first level runs it.
     click(&mut h, x, y, MouseButton::Right);
-    h.menu_pick("Copy the cell (a selected range as TSV)");
+    h.menu_pick("Copy the cell (a selected range)");
     assert_eq!(clip.last().as_deref(), Some("張志明"), "typing finds the item, Enter runs it");
     assert!(h.overlay_kind().is_none());
 }
@@ -1243,7 +1332,7 @@ fn copies_through_keys_commands_and_the_menu_flash() {
     h.draw(160, 45);
     let (x, y) = (h.app.tabs.active().grid.hit_cols[1].0 + 2, h.app.tabs.active().grid.data_y + 2);
     click(&mut h, x, y, MouseButton::Right);
-    h.menu_pick("Copy the cell (a selected range as TSV)");
+    h.menu_pick("Copy the cell (a selected range)");
     assert_eq!(clip.last().as_deref(), Some("張志明"));
     assert_eq!(flashed_cells(&mut h), [(2, 1)]);
 }

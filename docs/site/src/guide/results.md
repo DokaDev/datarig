@@ -92,7 +92,8 @@ pretty-printed.
 
 ## Copy
 
-`y` copies the cell (a selected range as TSV) and `Y` the row (the selected rows) as TSV. The
+`y` copies the cell (a selected range) and `Y` the row (the selected rows), as TSV unless
+`copy_format` says otherwise. The
 `Space r y` group copies the selection, and `Space r a` every fetched row, as:
 
 TSV with or without headers, CSV, JSON, indented JSON, Markdown, HTML, XML, an SQL `IN` list,
@@ -101,9 +102,38 @@ does the same from the command line (for example `:copy csv all`).
 
 - Copies go to the system clipboard, or through OSC 52 over SSH (`clipboard`: `auto`,
   `system` or `osc52`; `osc52_max_bytes` is the longest copy sent through OSC 52).
-- `copy_header` says whether a copied block starts with the column names.
+- The status bar names the format: `Copied 5 rows as CSV (OSC 52)`.
 - The copied cells flash briefly and fade back (with the terminal's own colours the flash goes
   off at once); `[ui] yank_flash = "off"` turns that off.
+
+### The format of y and Y
+
+`copy_format` is the format `y` and `Y` copy in: `tsv` (the default), `csv`, `json`,
+`json_pretty`, `markdown`, `html`, `xml` or `insert`, the same names as `:copy`. Set it in the
+settings screen, with `:set copy_format=csv`, or from the grid: `Space r y d` (or the menu's
+"Default format for y and Y") lists the formats with the current one marked, and picking one
+makes it the default. The `Space r y` group and the menu's copy formats mark the one `y` and `Y`
+use.
+
+- One cell without a selection is always copied as its value, whatever the format.
+- `insert` writes SQL `INSERT` statements only when the rows are certainly of one table (the
+  same rule as Copy as SQL INSERT). Otherwise `y` and `Y` copy TSV and the status bar says why.
+- `g p` and `p` paste the cells `y` and `Y` copied, value for value, whatever format the
+  clipboard got.
+
+### Column names in copies
+
+`copy_header` says whether a copy starts with a row of column names:
+
+- `auto` (the default): when more than one row is copied. `y` on one cell, `Y` on one row and a
+  selection inside one row copy no header; a selection of two or more rows, or whole columns,
+  starts with one.
+- `on`: always, even for one cell.
+- `off`: never.
+
+It applies to TSV copies from `y` and `Y`. A CSV copy always starts with the column names
+unless `copy_header = "off"`. Copy as TSV without or with headers ignores the setting, and JSON,
+Markdown, HTML, XML and the SQL formats are written the same way whatever it says.
 
 To write a result to a file instead, see [Export](export.md). To draw it, see
 [Charts](charts.md).
