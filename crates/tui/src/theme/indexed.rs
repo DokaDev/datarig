@@ -81,11 +81,16 @@ fn index_of(c: Color) -> Option<u8> {
 /// `tint`'s fill drawn apart from every color of `under` on a terminal of 256 colors: as it is
 /// when its palette color differs from theirs, else the palette color nearest to it that is
 /// none of theirs, on the same side of the first one as the tint (lighter on a dark background,
-/// darker on a light one). A tint with no RGB fill, or on an unknown background, stays.
+/// darker on a light one). `under` starts with the background the tint sits on, then the other
+/// colors it must stay apart from (those it sits on or next to, and the cues seen with it). A
+/// tint with no RGB fill, or on an unknown background, stays; an unknown other color is not
+/// taken into account.
 fn apart(tint: Style, under: &[Color]) -> Style {
     let Some(Color::Rgb(r, g, b)) = tint.bg else { return tint };
-    let taken: Option<Vec<u8>> = under.iter().map(|c| index_of(*c)).collect();
-    let Some(taken) = taken else { return tint };
+    if under.first().and_then(|c| index_of(*c)).is_none() {
+        return tint;
+    }
+    let taken: Vec<u8> = under.iter().filter_map(|c| index_of(*c)).collect();
     if !taken.contains(&nearest((r, g, b))) {
         return tint;
     }
@@ -109,18 +114,29 @@ impl Theme {
     pub fn for_256(&self) -> Theme {
         let mut th = self.clone();
         let (bg, alt, surface) = (self.bg, self.surface_alt, self.surface);
+        let fill = |s: Style, or: Color| s.bg.unwrap_or(or);
+        // In order: each one apart from the backgrounds it sits on and from the cues before it
+        // that are seen with it (as adapted).
         th.grid_cursor_row = apart(self.grid_cursor_row, &[bg, alt]);
+        let row = fill(th.grid_cursor_row, bg);
         th.grid_cursor_header = apart(self.grid_cursor_header, &[surface]);
+        let header = fill(th.grid_cursor_header, surface);
         th.cursor_line = apart(self.cursor_line, &[bg]);
-        th.current_stmt = apart(self.current_stmt, &[bg]);
-        th.running_stmt = apart(self.running_stmt, &[bg]);
-        th.hover = apart(self.hover, &[bg, alt]);
-        // The cursor's cell and a range sit on the cursor row's tint too; a range also tints the
-        // headers of its columns, next to the header's surface and the cursor column's header.
-        let row = th.grid_cursor_row.bg.unwrap_or(bg);
-        let header = th.grid_cursor_header.bg.unwrap_or(surface);
-        th.selection = apart(self.selection, &[bg, alt, row]);
-        th.range = apart(self.range, &[bg, alt, row, surface, header]);
+        let line = fill(th.cursor_line, bg);
+        // The statement's other lines next to the cursor's line.
+        th.current_stmt = apart(self.current_stmt, &[bg, line]);
+        let stmt = fill(th.current_stmt, bg);
+        th.running_stmt = apart(self.running_stmt, &[bg, line, stmt]);
+        // The cursor's cell on the cursor's row; a menu's or a dialog's selected row on the
+        // surface.
+        th.selection = apart(self.selection, &[bg, alt, row, surface]);
+        let cell = fill(th.selection, bg);
+        // A range on the rows, around the cursor's cell, and on its columns' headers next to the
+        // cursor column's.
+        th.range = apart(self.range, &[bg, alt, row, surface, header, cell]);
+        let range = fill(th.range, bg);
+        // The pointer on any of them.
+        th.hover = apart(self.hover, &[bg, alt, surface, row, line, cell, range]);
         th
     }
 }
@@ -159,7 +175,8 @@ mod tests {
     }
 
     /// On every built-in theme, the cursor and selection tints a 256-color terminal draws stay
-    /// apart from the backgrounds they sit on; tints already apart are not changed.
+    /// apart from the backgrounds they sit on and from the cues seen with them; tints already
+    /// apart are not changed.
     #[test]
     fn every_builtin_keeps_its_cursor_cues_on_256_colors() {
         for name in crate::theme::NAMES {
@@ -167,30 +184,26 @@ mod tests {
                 let th = crate::theme::resolve(name, bgd, None).unwrap();
                 let t = th.for_256();
                 let ix = |c: Option<Color>| c.and_then(index_of);
+                let f = |s: Style, or: Color| s.bg.unwrap_or(or);
+                let (row, header, line) =
+                    (f(t.grid_cursor_row, t.bg), f(t.grid_cursor_header, t.surface), f(t.cursor_line, t.bg));
+                let (stmt, cell, range) = (f(t.current_stmt, t.bg), f(t.selection, t.bg), f(t.range, t.bg));
+                let (bg, alt, surface) = (t.bg, t.surface_alt, t.surface);
+                // Each cue and the colors it is seen on or with.
                 let pairs = [
-                    ("grid_cursor_row", t.grid_cursor_row.bg, vec![t.bg, t.surface_alt]),
-                    ("grid_cursor_header", t.grid_cursor_header.bg, vec![t.surface]),
-                    ("cursor_line", t.cursor_line.bg, vec![t.bg]),
-                    ("current_stmt", t.current_stmt.bg, vec![t.bg]),
-                    ("selection", t.selection.bg, vec![t.bg, t.surface_alt, t.grid_cursor_row.bg.unwrap_or(t.bg)]),
-                    (
-                        "range",
-                        t.range.bg,
-                        vec![
-                            t.bg,
-                            t.surface_alt,
-                            t.grid_cursor_row.bg.unwrap_or(t.bg),
-                            t.surface,
-                            t.grid_cursor_header.bg.unwrap_or(t.surface),
-                        ],
-                    ),
+                    ("grid_cursor_row", t.grid_cursor_row.bg, vec![bg, alt]),
+                    ("grid_cursor_header", t.grid_cursor_header.bg, vec![surface]),
+                    ("cursor_line", t.cursor_line.bg, vec![bg]),
+                    ("current_stmt", t.current_stmt.bg, vec![bg, line]),
+                    ("running_stmt", t.running_stmt.bg, vec![bg, line, stmt]),
+                    ("selection", t.selection.bg, vec![bg, alt, row, surface]),
+                    ("range", t.range.bg, vec![bg, alt, row, surface, header, cell]),
+                    ("hover", t.hover.bg, vec![bg, alt, surface, row, line, cell, range]),
                 ];
                 for (token, tint, under) in pairs {
-                    let (Some(tint), true) = (ix(tint), under.iter().all(|c| index_of(*c).is_some())) else {
-                        continue;
-                    };
+                    let (Some(tint), Some(_)) = (ix(tint), index_of(under[0])) else { continue };
                     for c in under {
-                        assert_ne!(Some(tint), index_of(c), "{name}: {token} on {c:?}");
+                        assert_ne!(Some(tint), index_of(c), "{name}: {token} against {c:?}");
                     }
                 }
                 if let (Some(Color::Rgb(r, g, b)), Some(Color::Rgb(..))) = (th.grid_cursor_row.bg, Some(th.bg))
