@@ -59,7 +59,10 @@ fn see_through(app: &App) -> bool {
 /// The workspace below the overlays; returns where the hardware cursor belongs.
 pub fn draw_screen(f: &mut Frame, app: &mut App) -> Option<(u16, u16)> {
     let _theme = theme::scope(app.theme.clone());
-    let cursor = draw_workspace(f, app);
+    let cursor = {
+        let _bands = theme::see_through_scope(see_through(app));
+        draw_workspace(f, app)
+    };
     if see_through(app) {
         let area = f.area();
         theme::cur().unpaint(f.buffer_mut(), area);

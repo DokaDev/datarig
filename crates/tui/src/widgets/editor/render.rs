@@ -1,7 +1,7 @@
 //! Drawing: line numbers, the bar of what a run takes, syntax colors of the lines on screen
 //! (lexed from the cached line states), the matches of a search on them, the selection (a
 //! block: the characters with a column in it), the cursor line, the statement that runs now
-//! (its tint, and a spinner in the gutter), the hints of finished runs after their
+//! (its tint, and a spinner in the gutter; no tints on the terminal's own background), the hints of finished runs after their
 //! statements' last lines, and the search prompt on the last line while it is open.
 
 use super::buffer::gw;
@@ -11,7 +11,7 @@ use crate::theme;
 use datarig_core::sql::lexer::Tok;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Columns between a line's text and its hint.
@@ -24,10 +24,13 @@ impl Editor {
     /// Screen position of the cursor inside `area` if it were rendered now. `stmt` is the byte
     /// range of the statement a run would take: its lines get a faint tint and a bar in the
     /// gutter. With a Visual selection the bar marks the selection's lines instead (a run takes
-    /// the selection), and `stmt` is not used. While the search prompt is open it takes the
+    /// the selection), and `stmt` is not used. On the terminal's own background
+    /// ([`theme::see_through`]) no line gets a tint: the bar is in the accent, and so are the
+    /// numbers of its lines; the cursor's line number is bold. While the search prompt is open it takes the
     /// last line, and the cursor is in it.
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, stmt: Option<(usize, usize)>) -> (u16, u16) {
         let th = theme::cur();
+        let see_through = theme::see_through();
         if self.prompt.is_some() && area.height == 1 {
             // No room for the text: the prompt takes the only line.
             return self.render_prompt(area, buf, area.y);
@@ -99,7 +102,12 @@ impl Editor {
                 .map(|b| (b.start, if b.max { usize::MAX } else { b.end }));
             let in_stmt = stmt.is_some_and(|(a, b)| line_start < b && a <= line_end);
             let in_running = running.filter(|(s, _)| line_start < s.end && s.start <= line_end);
-            let bg = if r == self.row && self.mode != Mode::Visual {
+            let in_run = run.is_some_and(|(a, b)| line_start < b && a <= line_end);
+            let bg = if see_through {
+                // No band on the terminal's own background: the gutter carries the cues (the
+                // running statement keeps what its style has besides a fill, a bold text).
+                if in_running.is_some() { th.running_stmt.bg(th.bg) } else { Style::new().bg(th.bg) }
+            } else if r == self.row && self.mode != Mode::Visual {
                 th.cursor_line
             } else if in_running.is_some() {
                 th.running_stmt
@@ -109,17 +117,31 @@ impl Editor {
                 Style::new().bg(th.bg)
             };
             buf.set_style(Rect::new(area.x, y, area.width, 1), Style::new().fg(th.fg).patch(bg));
-            let num_fg = if r == self.row { th.fg } else { th.fg_muted };
+            let num_style = if see_through {
+                // The numbers of what a run takes in the accent; the cursor's line's bold.
+                let fg = if in_run {
+                    th.accent
+                } else if r == self.row {
+                    th.fg
+                } else {
+                    th.fg_muted
+                };
+                let style = Style::new().fg(fg);
+                if r == self.row { style.add_modifier(Modifier::BOLD) } else { style }
+            } else {
+                Style::new().fg(if r == self.row { th.fg } else { th.fg_muted })
+            };
             let num = format!("{:>numw$} ", r + 1);
-            buf.set_stringn(area.x, y, &num, self.gutter, Style::new().fg(num_fg).patch(bg));
+            buf.set_stringn(area.x, y, &num, self.gutter, num_style.patch(bg));
             if let Some((s, frame)) = in_running {
                 // The spinner on its first line on screen, the bar on the others.
                 let style = Style::new().fg(th.running_stmt_bar).patch(bg);
                 let mark = if line_start <= s.start || vy == 0 { frame } else { "▎" };
                 buf.set_stringn(area.x + numw as u16, y, mark, 1, style);
-            } else if run.is_some_and(|(a, b)| line_start < b && a <= line_end) {
+            } else if in_run {
                 // The bar sits in the blank between the line number and the text.
-                let style = Style::new().fg(th.current_stmt_bar).patch(bg);
+                let bar = if see_through { th.accent } else { th.current_stmt_bar };
+                let style = Style::new().fg(bar).patch(bg);
                 buf.set_stringn(area.x + numw as u16, y, "▎", 1, style);
             }
 

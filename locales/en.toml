@@ -2584,7 +2584,7 @@
 "setting.changes_view.list" = "List, one line per changed cell"
 "setting.changes_view.sql" = "SQL, the statements that apply them"
 "setting.background" = "Background"
-"setting.background.about" = "Whether the theme paints the panes' background, or leaves your terminal's own showing (a translucent or image background shows through). Text, selection and edit colours stay the theme's; dialogs, menus and popups keep the theme's surface."
+"setting.background.about" = "Whether the theme paints the panes' background, or leaves your terminal's own showing (a translucent or image background shows through). Text, selection and edit colours stay the theme's; the editor's current line and statement and the grid's cursor row show in the gutter instead of as a band; dialogs, menus and popups keep the theme's surface."
 "setting.background.theme" = "The theme's"
 "setting.background.terminal" = "The terminal's own"
 "setting.background.note" = "{theme} has its own background, not painted now: some text may be harder to read on yours"

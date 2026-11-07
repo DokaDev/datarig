@@ -1874,8 +1874,8 @@ fn grid_cursor_cue_and_block_dark_light_terminal_sizes() {
 }
 
 /// `ui.background = "terminal"` on the dark theme: the grid's rows (both stripes) on the
-/// terminal's background, the header on its surface, the cursor's row tint and cell, and a
-/// range, kept.
+/// terminal's background, the header on its surface, the cursor's cell and a range kept; the
+/// rows of the range get no band past it.
 #[test]
 fn grid_on_the_terminals_background_keeps_its_tints() {
     use ratatui::style::Color;
@@ -1894,7 +1894,7 @@ fn grid_on_the_terminals_background_keeps_its_tints() {
     };
     assert_eq!((at(0, 0).bg, at(1, 0).bg), (Color::Reset, Color::Reset), "both stripes");
     assert_eq!(buf[(g.hit_cols[2].0 + 2, g.header_y)].bg, th.surface, "a header not selected");
-    assert_eq!(at(3, 2).bg, th.grid_cursor_row.bg.unwrap(), "a selected row past the block");
+    assert_eq!(at(3, 2).bg, Color::Reset, "a selected row past the block: no band");
     assert_eq!(at(3, 0).bg, th.range.bg.unwrap(), "the range");
     assert_eq!(at(4, 1).bg, th.selection.bg.unwrap(), "the cursor");
 }
@@ -2135,4 +2135,83 @@ fn current_statement_is_marked_in_the_gutter() {
     assert!(marked(buf, 7) && marked(buf, 8) && !marked(buf, 6) && !marked(buf, 9));
     assert_eq!(buf[(x_bar + 5, y0 + 6)].bg, theme::DARK.bg, "no tint on the statement before");
     insta::assert_snapshot!("current_statement_selection", t.backend());
+}
+
+/// On the terminal's own background (`ui.background = "terminal"`) the editor paints no band:
+/// the statement a run would take is an accent bar in the gutter with accent line numbers, the
+/// cursor's line number is bold, and every line leaves the terminal's background showing. A
+/// Visual selection keeps its fill.
+#[test]
+fn on_the_terminals_background_the_statement_is_marked_in_the_gutter_only() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.detail.visible = false;
+    h.app.prefs.background = datarig_core::config::UiBackground::Terminal;
+    h.app.tab_mut().editor.row = 4;
+    let t = h.draw(100, 30);
+    let buf = t.backend().buffer();
+    let th = theme::DARK;
+    let e = h.app.layout.editor;
+    let (x_bar, y0) = (e.x + 1 + 3, h.app.layout.editor_text.y);
+    for line in 0..9u16 {
+        let y = y0 + line;
+        let stmt = (3..=6).contains(&line);
+        let text = row_text(buf, y);
+        assert_eq!(buf[(x_bar, y)].symbol() == "▎", stmt, "line {}: {text}", line + 1);
+        let number = &buf[(x_bar - 1, y)];
+        assert_eq!(number.fg, if stmt { th.accent } else { th.fg_muted }, "line {}: {text}", line + 1);
+        assert_eq!(number.modifier.contains(ratatui::style::Modifier::BOLD), line == 4, "line {}", line + 1);
+        if stmt {
+            assert_eq!(buf[(x_bar, y)].fg, th.accent, "line {}", line + 1);
+        }
+        for x in e.x + 1..e.x + e.width - 1 {
+            assert_eq!(buf[(x, y)].bg, ratatui::style::Color::Reset, "line {} column {x}: {text}", line + 1);
+        }
+    }
+    // A Visual selection keeps its fill; its lines are the ones marked.
+    h.keys("vj");
+    let t = h.draw(100, 30);
+    let buf = t.backend().buffer();
+    assert_eq!(buf[(x_bar + 1, y0 + 4)].bg, th.selection.bg.unwrap(), "the selection keeps its fill");
+    assert!(buf[(x_bar, y0 + 5)].symbol() == "▎" && buf[(x_bar, y0 + 3)].symbol() != "▎");
+    // Back on the theme's background: the bands are painted again.
+    h.key(KeyCode::Esc);
+    h.app.prefs.background = datarig_core::config::UiBackground::Theme;
+    h.app.tab_mut().editor.row = 4;
+    let t = h.draw(100, 30);
+    let buf = t.backend().buffer();
+    assert_eq!(buf[(x_bar + 5, y0 + 3)].bg, th.current_stmt.bg.unwrap());
+    assert_eq!(buf[(x_bar + 5, y0 + 4)].bg, th.cursor_line.bg.unwrap());
+    assert_eq!(buf[(x_bar, y0 + 3)].fg, th.current_stmt_bar);
+}
+
+/// On the terminal's own background the grid's cursor row gets no band (nor do the rows of a
+/// selected range outside it): the cursor's cell keeps its fill and its row number is the
+/// accent, bold; a range keeps its fill.
+#[test]
+fn on_the_terminals_background_the_grids_cursor_row_has_no_band() {
+    let mut h = with_edge_results(Lang::En);
+    h.app.prefs.background = datarig_core::config::UiBackground::Terminal;
+    h.key(KeyCode::Tab);
+    h.keys("jl");
+    let t = h.draw(160, 45);
+    let th = theme::DARK;
+    let g = h.app.tab().grid.clone();
+    let buf = t.backend().buffer();
+    let at = |r: usize, c: usize| g.cell_rect(r, c, 8).expect("on screen");
+    let cell = |r: usize, c: usize| buf[(at(r, c).x + 1, at(r, c).y)].clone();
+    let number = buf[(g.gutter_x.0 + 1, at(1, 0).y)].clone();
+    assert_eq!(cell(1, 1).bg, th.selection.bg.unwrap(), "the cursor's cell");
+    assert_eq!(cell(1, 0).bg, ratatui::style::Color::Reset, "no band on the cursor's row");
+    assert_eq!(buf[(at(1, 1).x - 1, at(1, 1).y)].bg, ratatui::style::Color::Reset, "nor on its separators");
+    assert_eq!(number.fg, th.accent);
+    assert!(number.modifier.contains(ratatui::style::Modifier::BOLD), "the cursor's number is bold");
+    // A block: its cells keep the range's fill, the rest of its rows none.
+    h.keys("vj");
+    let t = h.draw(160, 45);
+    let buf = t.backend().buffer();
+    let cell = |r: usize, c: usize| buf[(at(r, c).x + 1, at(r, c).y)].clone();
+    assert_eq!(cell(1, 1).bg, th.range.bg.unwrap(), "in the block");
+    if let Some(a) = g.cell_rect(1, 2, 8) {
+        assert_eq!(buf[(a.x + 1, a.y)].bg, ratatui::style::Color::Reset, "past the block");
+    }
 }

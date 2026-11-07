@@ -669,6 +669,36 @@ impl Drop for Scope {
     }
 }
 
+thread_local! {
+    static SEE_THROUGH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether what is drawn now leaves the terminal's own background showing
+/// (`ui.background = "terminal"`, the workspace below the dialogs): the wide highlight bands
+/// (the editor's current line and statement, the grid's cursor row) are not painted, as they
+/// would show as opaque blocks; their cue goes to the gutter instead. The selection keeps its
+/// fill.
+pub fn see_through() -> bool {
+    SEE_THROUGH.with(|c| c.get())
+}
+
+/// Makes [`see_through`] `on` on this thread until the returned guard drops (the previous
+/// value comes back).
+pub fn see_through_scope(on: bool) -> SeeThroughScope {
+    SeeThroughScope(SEE_THROUGH.with(|c| c.replace(on)))
+}
+
+/// Restores the previous [`see_through`] when dropped; see [`see_through_scope`].
+#[must_use]
+pub struct SeeThroughScope(bool);
+
+impl Drop for SeeThroughScope {
+    fn drop(&mut self) {
+        let prev = self.0;
+        let _ = SEE_THROUGH.try_with(|c| c.set(prev));
+    }
+}
+
 impl Theme {
     /// The active tab's background: [`Self::tab_active`]'s, else the alternate surface.
     pub fn tab_active_bg(&self) -> Color {
