@@ -71,6 +71,17 @@ pub const ENV_VARS: &[(&str, &str)] = &[
          in an SSH key file is it.",
     ),
     ("USERPROFILE", "The home directory where `HOME` is not set (Windows)."),
+    (
+        "COLORTERM",
+        "`truecolor` or `24bit`: the terminal draws 24-bit colours, and the themes' tints are drawn \
+         as they are.",
+    ),
+    (
+        "TERM",
+        "A name with `256color` in it (such as `xterm-256color`), and `COLORTERM` not saying \
+         24-bit: a terminal of 256 colours, where the cursor and selection tints that the palette \
+         would draw as their background get a palette colour of their own.",
+    ),
     ("DATARIG_DATA_DIR", "The data directory (saved queries, datarig's own `known_hosts`), over every other rule."),
     (
         "DATARIG_STATE_DIR",

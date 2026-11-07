@@ -95,6 +95,7 @@ fn main() -> ExitCode {
         let _restore = term::guard();
         // The background decides the variant of a theme family; asked before the terminal is set
         // up and the event stream reads stdin.
+        app.set_color_depth(datarig_tui::theme::ColorDepth::from_env());
         app.set_background(term::background());
         let (mut terminal, enhanced) = term::setup_terminal()?;
         app.set_keyboard_enhanced(enhanced);

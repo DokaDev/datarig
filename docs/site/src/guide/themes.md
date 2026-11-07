@@ -46,6 +46,17 @@ Switching to it while the theme has a background of its own (every built-in them
 `terminal`) says so in one line: the theme's text colours were made for its background, so on a
 terminal background far from it some of them may be hard to read.
 
+## Terminals of 256 colours
+
+A terminal that draws 256 colours shows each of a theme's colours as the nearest one of its
+palette, so a faint tint can come out as the very background it sits on. When `COLORTERM` is
+not `truecolor` or `24bit` and `TERM` names 256 colours (such as `xterm-256color`), the tints
+that mark the grid's cursor row and column header, the cursor's line, the statement a run would
+take, the selection, a selected range and the item under the pointer each get a palette colour
+apart from their background, lighter on a dark theme and darker on a light one. Other colours
+are left to the terminal. A terminal that draws 24-bit colours but does not say so in
+`COLORTERM` can set `COLORTERM=truecolor` to keep the theme's own tints.
+
 ## Your own theme
 
 A theme file sets some tokens and takes the rest from `extends` (a built-in theme; `terminal`
