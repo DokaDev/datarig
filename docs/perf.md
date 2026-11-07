@@ -76,8 +76,10 @@ has run, those with a time over budget run again, and a time fails the run only 
 its budget both times. A real regression is: the completion of enumerated values that once
 took 22 to 35 ms per key (instead of about 1.5 ms) was over budget in every run until it was
 fixed. Counts (round trips, memory, bytes walked, cells, lines, wakeups) and the binary size
-fail at once, never measured again. A check that passed only when measured again is named in
-the output ("over budget once, within it when measured again").
+get no second chance: one over budget fails the run, even if its scenario ran again for a time
+and the count held then; and a count over budget in a scenario that ran again fails too. A time
+that passed only when measured again is named in the output ("over budget once, within it when
+measured again").
 
 Before the scenarios, and again before the second measurement, `budget` times a probe on the
 runner: work that none of datarig's code takes part in (multiplications on one core, and 4 MiB
