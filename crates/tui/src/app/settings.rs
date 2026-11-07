@@ -77,6 +77,7 @@ impl App {
             Setting::DetailView(v) => *v == self.prefs.detail_view,
             Setting::Clipboard(c) => *c == self.prefs.clipboard,
             Setting::CopyHeader(c) => *c == self.prefs.copy_header,
+            Setting::CopyFormat(f) => *f == self.prefs.copy_format,
             Setting::CursorShape(c) => *c == self.prefs.cursor_shape,
             Setting::EditorClipboard(c) => *c == self.prefs.editor_clipboard,
             Setting::FormatCase(c) => *c == self.prefs.format_case,

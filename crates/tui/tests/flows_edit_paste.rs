@@ -1206,6 +1206,33 @@ mod grid_copy {
     }
 
     #[test]
+    fn g_p_pastes_the_cells_whatever_format_copy_format_gives_the_clipboard() {
+        for (format, starts) in [
+            ("csv", "email,nickname\na@x,ann\n"),
+            ("json", "[\n  {\"email\": \"a@x\", \"nickname\": \"ann\"},\n"),
+            ("insert", "INSERT INTO \"shop\".\"users\" (\"email\", \"nickname\") VALUES ('a@x', 'ann');"),
+        ] {
+            let mut h = ready();
+            let clip = FakeClipboard::attach(&mut h, false, &[]);
+            h.command(&format!("set copy_format={format}"));
+            h.app.transient = None;
+            // Rows 1–2, email and nickname: row 2's nickname is NULL.
+            h.keys("vjly");
+            let text = clip.last().unwrap_or_default();
+            assert!(text.starts_with(starts), "{format}: {text}");
+            h.keys("jh");
+            h.keys("gp");
+            assert_eq!(pending(&h, 2, 1), Some(t("a@x")), "{format}");
+            assert_eq!(pending(&h, 2, 2), Some(t("ann")), "{format}");
+            assert_eq!(
+                drafts(&h),
+                vec![vec![Value::Default, t("b@x"), Value::Null]],
+                "{format}: the values, NULL as NULL, not the clipboard's text"
+            );
+        }
+    }
+
+    #[test]
     fn the_copy_is_of_the_values_the_grid_shows_pending_ones_and_null_included() {
         let mut h = ready();
         // A pending text and a pending NULL.

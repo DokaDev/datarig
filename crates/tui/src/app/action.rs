@@ -265,10 +265,12 @@ pub enum GridAction {
     FirstCol,
     LastCol,
     ViewCell,
-    /// `y`: the cell (a selected range as TSV).
+    /// `y`: the cell (a selected range in the format `copy_format` names).
     CopyCell,
-    /// `Y`: the row (the selected rows) as TSV.
+    /// `Y`: the row (the selected rows) in the format `copy_format` names.
     CopyRow,
+    /// `Space r y d`: the menu's choice of the format `y` and `Y` copy in.
+    CopyDefault,
     /// `v`: start or drop a rectangular selection.
     Select,
     /// `V`: start or drop a selection of whole rows.
@@ -838,6 +840,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Changes(K::Goto), "changes.goto", Label::ActionChangesGoto, changes_focused),
     act(Action::Changes(K::ToggleView), "changes.view", Label::ActionChangesView, changes_focused),
     act(Action::Changes(K::CopySql), "changes.copy_sql", Label::ActionChangesCopySql, changes_focused),
+    act(Action::Grid(G::CopyDefault), "results.copy.default", Label::ActionResultsCopyDefault, has_rows),
     act(
         Action::Copy(CopyScope::Selection, CopyFormat::TsvPlain),
         "results.copy.selection.tsv",

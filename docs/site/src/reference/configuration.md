@@ -26,7 +26,8 @@ Keys before the first table header.
 | `last_used` | none | a profile's `id` | Written by datarig: the profile connected to most recently, where the explorer's cursor starts. A version 1 file has the profile's name here. |
 | `detail_view` | `"panel"` | `"panel"`, `"statusbar"` | How the result inspector (i in the grid) shows the selected cell: a panel with Cell and Row tabs, or a one-line preview in the status bar. Also `:set detail_view`. |
 | `clipboard` | `"auto"` | `"auto"`, `"system"`, `"osc52"` | How copies reach the clipboard. OSC 52 goes through the terminal, so it also works over SSH; inside tmux it needs set -g set-clipboard on. Also `:set clipboard`. |
-| `copy_header` | `"auto"` | `"auto"`, `"on"`, `"off"` | Whether y, Y and Copy as TSV or CSV start with a row of column names. Also `:set copy_header`. |
+| `copy_header` | `"auto"` | `"auto"`, `"on"`, `"off"` | Whether TSV copies of y and Y and CSV copies start with a row of column names. Auto: when more than one row is copied (CSV: always, unless off). Also `:set copy_header`. |
+| `copy_format` | `"tsv"` | `"tsv"`, `"csv"`, `"json"`, `"json_pretty"`, `"markdown"`, `"html"`, `"xml"`, `"insert"` | The format y and Y copy a selection or a row in; one cell without a selection is copied as its value. SQL INSERT needs rows that are certainly of one table, else the copy is TSV and says why. g p pastes the copied cells whatever the format. Also `:set copy_format`. |
 | `osc52_max_bytes` | `100000` | a positive number of bytes | The longest copy sent through OSC 52 (bytes of base64). A longer one is not sent: terminals and tmux drop long OSC 52 sequences without a word. |
 
 ## `[editor]`

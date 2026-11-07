@@ -1205,7 +1205,7 @@ fn a_result_that_cannot_be_edited_offers_no_edits() {
     // Why, once: on the first edit, dimmed.
     assert_eq!(menu_dimmed_edits(&h), dimmed(&[(EDIT_CELL, "not editable")]));
     assert!(dimmed_notice(&h, EDIT_CELL).starts_with("Read-only: "), "{}", dimmed_notice(&h, EDIT_CELL));
-    assert!(h.menu_labels().iter().any(|l| l == "Copy the cell (a selected range as TSV)"), "the rest stays");
+    assert!(h.menu_labels().iter().any(|l| l == "Copy the cell (a selected range)"), "the rest stays");
     insta::assert_snapshot!("edit_menu_read_only_en_120x40", h.draw(120, 40).backend());
     // A read-only environment.
     let mut cfg = Config {
@@ -1346,7 +1346,7 @@ fn a_new_row_offers_its_edits_and_nothing_that_reads_a_row() {
     for item in [
         "Results: view cell value",
         "Result detail → show / hide",
-        "Copy the cell (a selected range as TSV)",
+        "Copy the cell (a selected range)",
         "Copy the row (the selected rows) as TSV",
         "Copy selection ▸",
         "Copy all fetched rows ▸",

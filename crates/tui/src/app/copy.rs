@@ -10,6 +10,10 @@
 //! deletes that name no register when `[editor] clipboard` is on, and `"+` / `"*` always; `"+p`
 //! reads it ([`App::editor_clipboard_text`]), only then.
 //!
+//! `y` and `Y` copy a block in the format `copy_format` names (TSV unless set; one cell without
+//! a selection is its value): the menu's and `Space r y`'s formats mark it, and `Space r y d`
+//! changes it ([`CopyFormat::of_setting`]).
+//!
 //! `y` and `Y` also keep the cells themselves ([`edit::GridCopy`]), which `g p` pastes: whatever
 //! the clipboard does with the text, for the session.
 //!
@@ -22,7 +26,7 @@ use super::*;
 use crate::clipboard::{self, Method, Plan};
 use crate::widgets::editor::Yank;
 use crate::widgets::grid::{Over, Shape};
-use datarig_core::config::{ClipboardSetting, CopyHeader, EditorClipboard};
+use datarig_core::config::{ClipboardSetting, CopyFormatSetting, CopyHeader, EditorClipboard};
 use datarig_core::driver::keys::{
     Generated, InsertPlan, NotInsertable, NotUpdatable, insert_into, insert_source, update_source,
 };
@@ -151,6 +155,73 @@ impl CopyFormat {
         }
     }
 
+    /// The format `y` and `Y` copy a block in under `copy_format` `s`.
+    pub fn of_setting(s: CopyFormatSetting) -> CopyFormat {
+        match s {
+            CopyFormatSetting::Tsv => CopyFormat::Tsv,
+            CopyFormatSetting::Csv => CopyFormat::Csv,
+            CopyFormatSetting::Json => CopyFormat::Json,
+            CopyFormatSetting::JsonPretty => CopyFormat::JsonPretty,
+            CopyFormatSetting::Markdown => CopyFormat::Markdown,
+            CopyFormatSetting::Html => CopyFormat::Html,
+            CopyFormatSetting::Xml => CopyFormat::Xml,
+            CopyFormatSetting::Insert => CopyFormat::SqlInsert,
+        }
+    }
+
+    /// The `copy_format` that makes `y` and `Y` copy in this format (of the menu), if one does.
+    /// TSV is `tsv` with or without headers: its header row follows `copy_header`.
+    pub fn setting(self) -> Option<CopyFormatSetting> {
+        Some(match self {
+            CopyFormat::Tsv | CopyFormat::TsvPlain | CopyFormat::TsvHeader => CopyFormatSetting::Tsv,
+            CopyFormat::Csv => CopyFormatSetting::Csv,
+            CopyFormat::Json => CopyFormatSetting::Json,
+            CopyFormat::JsonPretty => CopyFormatSetting::JsonPretty,
+            CopyFormat::Markdown => CopyFormatSetting::Markdown,
+            CopyFormat::Html => CopyFormatSetting::Html,
+            CopyFormat::Xml => CopyFormatSetting::Xml,
+            CopyFormat::SqlInsert => CopyFormatSetting::Insert,
+            CopyFormat::List | CopyFormat::SqlIn | CopyFormat::SqlUpdate => return None,
+        })
+    }
+
+    /// The menu's format that stands for `copy_format` `s` (marked as the default of `y` and
+    /// `Y`): TSV with headers when `copy_header = on`, else TSV without.
+    pub fn menu_default(s: CopyFormatSetting, header: CopyHeader) -> CopyFormat {
+        match CopyFormat::of_setting(s) {
+            CopyFormat::Tsv if header == CopyHeader::On => CopyFormat::TsvHeader,
+            CopyFormat::Tsv => CopyFormat::TsvPlain,
+            f => f,
+        }
+    }
+
+    /// The formats `y` and `Y` may copy in (the choices of `Space r y d`), as the menu shows
+    /// them.
+    pub const DEFAULTS: [CopyFormat; 8] = [
+        CopyFormat::Tsv,
+        CopyFormat::Csv,
+        CopyFormat::Json,
+        CopyFormat::JsonPretty,
+        CopyFormat::Markdown,
+        CopyFormat::Html,
+        CopyFormat::Xml,
+        CopyFormat::SqlInsert,
+    ];
+
+    /// Its name as a choice of `copy_format` (the setting's own words).
+    pub fn default_label(self) -> Label {
+        match self.setting().unwrap_or_default() {
+            CopyFormatSetting::Tsv => Label::SettingCopyFormatTsv,
+            CopyFormatSetting::Csv => Label::SettingCopyFormatCsv,
+            CopyFormatSetting::Json => Label::SettingCopyFormatJson,
+            CopyFormatSetting::JsonPretty => Label::SettingCopyFormatJsonPretty,
+            CopyFormatSetting::Markdown => Label::SettingCopyFormatMarkdown,
+            CopyFormatSetting::Html => Label::SettingCopyFormatHtml,
+            CopyFormatSetting::Xml => Label::SettingCopyFormatXml,
+            CopyFormatSetting::Insert => Label::SettingCopyFormatInsert,
+        }
+    }
+
     /// Its name in the menu.
     pub fn menu_label(self) -> Label {
         match self {
@@ -218,6 +289,9 @@ pub struct CopyRequest {
     pub format: CopyFormat,
     /// `:copy insert <table>`: the table the user named for the SQL INSERT statements.
     pub into: Option<String>,
+    /// `y` or `Y`: the cells are kept for `g p`, one cell without a selection is its value, and
+    /// SQL INSERT statements for rows not certainly of one table are TSV instead (and said).
+    pub keys: bool,
 }
 
 /// What a copy waiting for an answer or for rows belongs to: its tab, the tab's connection
@@ -378,7 +452,23 @@ impl App {
     /// Copy `what` of the active tab's result as `format`. A copy of more than
     /// [`LARGE_COPY`] rows asks first (unless `confirmed`).
     pub(super) fn copy(&mut self, what: CopyWhat, format: CopyFormat, confirmed: bool) {
-        self.copy_request(CopyRequest { what, format, into: None }, confirmed);
+        self.copy_request(CopyRequest { what, format, into: None, keys: false }, confirmed);
+    }
+
+    /// The menu's format `y` and `Y` copy in (marked in the menu and after `Space r y`).
+    pub(super) fn copy_default_item(&self) -> CopyFormat {
+        CopyFormat::menu_default(self.prefs.copy_format, self.prefs.copy_header)
+    }
+
+    /// `label` of a format, marked as the one `y` and `Y` copy in.
+    pub(super) fn copy_default_marked(&self, label: Localized) -> Localized {
+        self.i18n.msg(&Msg::CopyMenuDefault { label: label.to_string() })
+    }
+
+    /// `y` (`Cell`) and `Y` (`Row`): copy in the format `copy_format` names.
+    pub(super) fn copy_keys(&mut self, what: CopyWhat) {
+        let format = CopyFormat::of_setting(self.prefs.copy_format);
+        self.copy_request(CopyRequest { what, format, into: None, keys: true }, false);
     }
 
     /// Copy `scope` as `format` (the menu, `Space r`, `:copy <format> <scope>`).
@@ -389,15 +479,19 @@ impl App {
     /// `:copy insert <table>`: copy the result (or the selected range) as SQL INSERT statements
     /// for table `into`, which the user names.
     pub(super) fn copy_into(&mut self, into: &str) {
-        let r = CopyRequest { what: CopyWhat::All, format: CopyFormat::SqlInsert, into: Some(into.to_string()) };
+        let r = CopyRequest {
+            what: CopyWhat::All,
+            format: CopyFormat::SqlInsert,
+            into: Some(into.to_string()),
+            keys: false,
+        };
         self.copy_request(r, false);
     }
 
-    fn copy_request(&mut self, req: CopyRequest, confirmed: bool) {
-        let format = req.format;
+    fn copy_request(&mut self, mut req: CopyRequest, confirmed: bool) {
         // `y` and `Y` replace the cells `g p` pastes, with nothing when they keep none (refused,
         // asked about, not kept): `g p` never pastes an older copy in their place.
-        if format == CopyFormat::Tsv {
+        if req.keys {
             self.grid_copy = None;
         }
         let Some(b) = self.block(req.what) else {
@@ -413,6 +507,20 @@ impl App {
             }
             return;
         }
+        // `y` on one cell without a selection copies its value, whatever `copy_format` says.
+        if req.keys && b.cell {
+            req.format = CopyFormat::Tsv;
+        }
+        // `y`/`Y` as SQL INSERT: TSV when the rows are not certainly of one table, and why.
+        let mut fell_back = None;
+        if req.keys
+            && req.format == CopyFormat::SqlInsert
+            && let Err(why) = self.insert_source_of(&b)
+        {
+            fell_back = Some(self.why(&why));
+            req.format = CopyFormat::Tsv;
+        }
+        let format = req.format;
         // What the grid shows over the rows as read is copied: said when some is pending; a
         // value it shows that has none yet is not copied.
         let (pending, deleted) = {
@@ -425,7 +533,7 @@ impl App {
         // `y` and `Y` keep the cells for `g p`, before the clipboard is tried; why not, said
         // after the copy.
         let mut not_kept = None;
-        if format == CopyFormat::Tsv {
+        if req.keys {
             let kept = {
                 let Results::Rows(rs) = &self.tab().results else { return };
                 self.grid_copy_of(rs, &b)
@@ -684,10 +792,14 @@ impl App {
             (true, 0) => Msg::CopyWithPending { done: self.i18n.msg(&done).to_string() },
             (true, count) => Msg::CopyWithDeletes { done: self.i18n.msg(&done).to_string(), count },
         };
+        let (done, level) = match fell_back {
+            None => (done, Level::Success),
+            Some(reason) => (Msg::CopyFellBack { done: self.i18n.msg(&done).to_string(), reason }, Level::Warning),
+        };
         self.flash_copied(b.rows, wrote_cols.unwrap_or(b.cols));
         self.tab_mut().grid.anchor = None;
         // Said at once (over an older flash), and kept in the status bar.
-        let done = Notice::new(done, Level::Success);
+        let done = Notice::new(done, level);
         self.show_status(done.clone());
         self.flash(done);
         if !skipped.is_empty() {
@@ -701,6 +813,17 @@ impl App {
         if let Some(why) = not_kept {
             self.flash(Notice::new(why, Level::Info));
         }
+    }
+
+    /// Whether the rows of block `b` are certainly of one table, as SQL INSERT statements need
+    /// (the menu's rule): the reason when not.
+    fn insert_source_of(&self, b: &Block) -> Result<(), NotInsertable> {
+        let t = self.tab();
+        let Results::Rows(rs) = &t.results else { return Ok(()) };
+        let d = self.tab_dialect(t.id);
+        let origins: Vec<_> = b.cols.iter().map(|&c| rs.columns[c].meta.origin.clone()).collect();
+        let names: Vec<&str> = b.cols.iter().map(|&c| rs.columns[c].meta.name.as_str()).collect();
+        insert_source(d, self.tab_keys(t).catalog(), &origins, &names, t.shown_sql()).map(drop)
     }
 
     /// The cells of block `b` of `rs` as `g p` pastes them: each value as the grid shows it (a
@@ -872,7 +995,7 @@ impl App {
         if !self.can_fetch_rest() {
             return self.flash(Notice::new(self.fetch_unavailable(), Level::Warning));
         }
-        self.fetch_copy = Some((intent, CopyRequest { what: CopyWhat::Every, format, into: None }));
+        self.fetch_copy = Some((intent, CopyRequest { what: CopyWhat::Every, format, into: None, keys: false }));
         self.fetch_page(intent.tab);
     }
 

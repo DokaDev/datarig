@@ -404,6 +404,7 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Nav, "space r y n", "results.copy.selection.in"),
     (Nav, "space r y i", "results.copy.selection.insert"),
     (Nav, "space r y u", "results.copy.selection.update"),
+    (Nav, "space r y d", "results.copy.default"),
     (Nav, "space r a t", "results.copy.all.tsv"),
     (Nav, "space r a T", "results.copy.all.tsv_header"),
     (Nav, "space r a l", "results.copy.all.list"),

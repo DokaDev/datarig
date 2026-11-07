@@ -145,6 +145,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r y n` | `results.copy.selection.in` | Copy selection: SQL IN clause |  |
 | `Space r y i` | `results.copy.selection.insert` | Copy selection: SQL INSERT |  |
 | `Space r y u` | `results.copy.selection.update` | Copy selection: SQL UPDATE |  |
+| `Space r y d` | `results.copy.default` | Choose the format y and Y copy in |  |
 | `Space r a t` | `results.copy.all.tsv` | Copy all fetched rows: Without headers (TSV) |  |
 | `Space r a T` | `results.copy.all.tsv_header` | Copy all fetched rows: With headers (TSV) |  |
 | `Space r a l` | `results.copy.all.list` | Copy all fetched rows: Comma list |  |
@@ -260,8 +261,8 @@ The result grid. The wheel scrolls the rows; a sideways wheel (a trackpad) or Sh
 | `0` | `grid.first_col` | Results: first column |  |
 | `$` | `grid.last_col` | Results: last column |  |
 | `Enter` | `grid.view_cell` | Results: view cell value |  |
-| `y` | `grid.copy_cell` | Copy the cell (a selected range as TSV) |  |
-| `Y` | `grid.copy_row` | Copy the row (the selected rows) as TSV |  |
+| `y` | `grid.copy_cell` | Copy the cell (a selected range) |  |
+| `Y` | `grid.copy_row` | Copy the row (the selected rows) |  |
 | `v` | `grid.select` | Select a range of cells (again: cancel) |  |
 | `V` | `grid.select_rows` | Select whole rows (again: cancel) |  |
 | `Ctrl+A` | `grid.select_all` | Select every cell of the page |  |
@@ -834,5 +835,6 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `editor.completion_delay_ms` | `60` `0` `30` `100` `150` `250` | Completion delay (ms) |
 | `updates.check` | `on` `off` | Check for updates |
 | `updates.whats_new` | `on` `off` | What's new |
+| `copy_format` | `tsv` `csv` `json` `json_pretty` `markdown` `html` `xml` `insert` | Format of y and Y copies |
 
 <!-- ANCHOR_END: commands -->
