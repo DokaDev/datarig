@@ -252,6 +252,10 @@ impl App {
         } else if self.overlays.is_empty() && (self.focus == Focus::Tree || self.profiles.is_empty()) {
             // The explorer or the welcome panel: a connection URL makes a new profile.
             self.paste_dsn(text);
+        } else if self.overlays.is_empty() && self.monitor_filtering() {
+            self.monitor_filter_paste(text);
+        } else if self.overlays.is_empty() && self.monitor_shown() {
+            // The Monitor tab's views take no text but its filter's.
         } else if self.overlays.is_empty() && self.focus == Focus::Results && self.cell_edit_open() {
             self.cell_edit_paste(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Results && self.grid_prompt_open() {

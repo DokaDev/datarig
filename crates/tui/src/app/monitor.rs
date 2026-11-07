@@ -251,6 +251,9 @@ pub struct MonitorTab {
     pub error: Option<String>,
     /// The tab was the active one at the last look: a hidden tab reads nothing.
     pub shown: bool,
+    /// Another tab was the active one since this one was last shown (not only a dialog over
+    /// it).
+    left: bool,
     /// The read the next rates are worked out from (`None` after a gap).
     prev: Option<Sample>,
     pending: Pending,
@@ -284,6 +287,7 @@ impl MonitorTab {
             server: None,
             error: None,
             shown: false,
+            left: false,
             prev: None,
             pending: Pending::default(),
             want_server: true,
@@ -633,6 +637,10 @@ impl App {
         for id in ids {
             let visible = Some(id) == active && self.monitor_visible();
             let Some(m) = self.monitor_mut(id) else { continue };
+            // Another tab became the active one (not a dialog over this one).
+            if Some(id) != active {
+                m.left = true;
+            }
             if !visible {
                 if m.shown {
                     // Nothing is read while hidden; the time it was not looking is a gap.
@@ -648,9 +656,12 @@ impl App {
                 // An answer that came while hidden is no base for the next rate: the time
                 // nobody looked is a gap.
                 m.gap();
-                if m.state == MonState::Closed {
+                // Shown again after another tab, a closed connection opens as on a first show;
+                // after a dialog (a disconnect it confirmed) it stays closed until `r`.
+                if m.state == MonState::Closed && m.left {
                     m.state = MonState::Idle;
                 }
+                m.left = false;
             }
             self.monitor_step(id, now);
         }
@@ -991,6 +1002,16 @@ impl App {
         if changed == Some(crate::widgets::text_input::InputResult::Changed) {
             self.monitor_filter_changed();
         }
+    }
+
+    /// A paste into the Monitor tab's filter: its lines as one line.
+    pub(super) fn monitor_filter_paste(&mut self, text: &str) {
+        let id = self.tab().id;
+        let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if let Some(m) = self.monitor_mut(id) {
+            m.list.filter.insert_str(&line);
+        }
+        self.monitor_filter_changed();
     }
 
     /// The text the filter took: the list follows it.

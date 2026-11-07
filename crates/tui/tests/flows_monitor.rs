@@ -539,3 +539,33 @@ fn own_traffic_owed_before_a_gap_is_not_taken_from_the_load_after_it() {
     let commits = monitor(&h).history_of(datarig_tui::app::monitor::Metric::Rate(CounterKind::Commits)).unwrap();
     assert_eq!(commits.last(), Some(5.0), "10 of the 11 are the load, over 2 s");
 }
+
+#[test]
+fn a_disconnect_confirmed_in_a_dialog_stays_disconnected() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, rows(), true)) });
+    // A dialog over the tab (as a disconnect's confirmation), then the disconnect.
+    h.keys(":");
+    let profile = h.app.tab().profile.unwrap();
+    h.app.dispatch(datarig_tui::app::action::Action::DisconnectCurrent);
+    if h.overlay_kind() == Some(datarig_tui::app::overlay::OverlayKind::Confirm) {
+        h.keys("y");
+    }
+    h.key(KeyCode::Esc);
+    h.advance(Duration::from_secs(5));
+    assert!(!h.app.conns.is_connected(profile));
+    assert!(h.connecting().is_none(), "closing the dialog connects nothing");
+    assert_eq!(monitor(&h).state, MonState::Closed);
+}
+
+#[test]
+fn a_paste_goes_into_the_sessions_filter() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, rows(), true)) });
+    h.keys("/");
+    h.event(ratatui::crossterm::event::Event::Paste("alice\n".into()));
+    assert_eq!(monitor(&h).list.filter.text(), "alice");
+    let m = monitor(&h);
+    let list = &m.snapshot.as_ref().unwrap().sessions.as_ref().unwrap().rows;
+    assert_eq!(m.list.order.iter().map(|&i| list[i].key.id).collect::<Vec<_>>(), [4211]);
+}
