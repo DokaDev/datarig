@@ -537,6 +537,8 @@ pub struct App {
     theme_problem: Option<Notice>,
     /// The terminal's background (a theme family's variant follows it).
     pub background: crate::theme::Background,
+    /// How many colors the terminal draws (the cursor tints follow it).
+    pub color_depth: crate::theme::ColorDepth,
     pub page_size: usize,
     /// Rows of a result kept in memory, and the config's limit of a result's spill file (a
     /// policy may set its own).
@@ -991,6 +993,7 @@ impl App {
             theme_name: cfg.theme.clone(),
             theme_problem: None,
             background: crate::theme::Background::Unknown,
+            color_depth: crate::theme::ColorDepth::TrueColor,
             page_size: cfg.page_size,
             result_window_rows: cfg.result_window_rows,
             spill_limit: cfg.spill_limit,

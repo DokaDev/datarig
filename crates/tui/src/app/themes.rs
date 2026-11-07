@@ -112,6 +112,7 @@ impl App {
     /// The theme `name` as it would be drawn now (the background decides a family's variant).
     pub fn resolve_theme(&self, name: &str) -> Result<Theme, Notice> {
         theme::resolve(name, self.background, self.themes_dir().as_deref())
+            .map(|th| if self.color_depth == theme::ColorDepth::Indexed256 { th.for_256() } else { th })
             .map_err(|e| Notice::new(theme_error_msg(&self.i18n, &e), Level::Error))
     }
 
@@ -129,6 +130,14 @@ impl App {
                 self.theme_problem = Some(Notice::new(Msg::ThemeNotUsed { error }, Level::Error));
             }
         }
+    }
+
+    /// How many colors the terminal draws, as the binary found it at startup (tests set it): on
+    /// 256 colors the cursor and selection tints get palette colors apart from their
+    /// backgrounds ([`Theme::for_256`]).
+    pub fn set_color_depth(&mut self, depth: theme::ColorDepth) {
+        self.color_depth = depth;
+        self.load_theme();
     }
 
     /// The terminal's background, as the binary found it at startup (tests set it): a family's
