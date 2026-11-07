@@ -569,3 +569,21 @@ fn a_paste_goes_into_the_sessions_filter() {
     let list = &m.snapshot.as_ref().unwrap().sessions.as_ref().unwrap().rows;
     assert_eq!(m.list.order.iter().map(|&i| list[i].key.id).collect::<Vec<_>>(), [4211]);
 }
+
+#[test]
+fn reads_that_keep_failing_slow_down_through_reconnects() {
+    let (mut h, mut request) = monitor_open();
+    for round in 0..3 {
+        let timeout = DbError::NoAnswer(Duration::from_secs(5));
+        h.monitor_db(DbEvent::MonitorSnapshot { request, result: Err(timeout.clone()) });
+        h.monitor_db(DbEvent::Lost { error: timeout });
+        h.advance(Duration::from_secs(120));
+        h.monitor_db(DbEvent::Connected);
+        h.monitor_db(DbEvent::Monitor(Ok(pg_format())));
+        assert!(monitor(&h).failures >= 2 * (round + 1), "round {round}: {}", monitor(&h).failures);
+        let t = ticks(&mut h);
+        assert_eq!(t.len(), 1, "round {round}");
+        request = t[0].0;
+    }
+    assert!(monitor(&h).delay() > Duration::from_secs(2), "slowed down: {:?}", monitor(&h).delay());
+}

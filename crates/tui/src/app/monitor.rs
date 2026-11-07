@@ -781,7 +781,8 @@ impl App {
         match ev {
             DbEvent::Monitor(Ok(format)) => {
                 m.state = MonState::Ready(format);
-                m.failures = 0;
+                // Failed reads in a row count on until a read succeeds (a reconnect that
+                // probes well reads no better).
                 m.due = Some(now);
             }
             DbEvent::Monitor(Err(_)) => {
