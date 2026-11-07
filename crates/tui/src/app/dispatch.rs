@@ -71,6 +71,7 @@ impl App {
                 }
             }
             Action::CancelQuery => self.cancel(),
+            Action::Monitor(m) => self.monitor_action(m),
             Action::TxCommit => self.end_tx(true),
             Action::TxRollback => self.end_tx(false),
             Action::TxSummary => self.tx_summary(),

@@ -257,6 +257,15 @@ impl App {
             tab.context = datarig_core::driver::SessionContext { database: t.database.clone(), schema: None };
             return Some(tab);
         }
+        if t.kind == workspace::TabKind::Monitor {
+            // Nothing read: it connects and reads once it is shown.
+            let mut tab = Tab::new(TabId(0), TabKind::Monitor, profile, Editor::read_only(""));
+            tab.doc.monitor = Some(super::monitor::MonitorTab::new(self.prefs.monitor_interval));
+            tab.doc.written = true;
+            tab.doc.kept_profile = kept;
+            tab.pane = pane;
+            return Some(tab);
+        }
         let (text, stamp, script, written) = match (&t.kind, &t.script) {
             (workspace::TabKind::Script, Some(path)) => {
                 let read = self.scripts.as_ref().map(|s| s.read(path));
@@ -319,6 +328,7 @@ impl App {
                 id: t.doc.console_id.clone(),
                 kind: match (&t.doc.table, &t.doc.script) {
                     _ if t.doc.ddl.is_some() => workspace::TabKind::Ddl,
+                    _ if t.doc.monitor.is_some() => workspace::TabKind::Monitor,
                     (Some(_), _) => workspace::TabKind::Table,
                     (None, Some(_)) => workspace::TabKind::Script,
                     (None, None) => workspace::TabKind::Console,
@@ -575,6 +585,8 @@ impl App {
         self.after_input_here();
         // The summary of the selection, as the input left it.
         self.sync_grid_summary();
+        // A Monitor tab shown or hidden by the input reads or stops.
+        self.monitor_sync();
     }
 
     fn after_input_here(&mut self) {

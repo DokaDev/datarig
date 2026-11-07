@@ -508,10 +508,10 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     assert_eq!(
         keys,
         [
-            ",", "/", "1", "2", "3", "4", "5", "6", "7", "8", "9", "<", ">", "?", "Space", "b", "c", "d", "e", "r",
-            "s", "t", "x", "z"
+            ",", "/", "1", "2", "3", "4", "5", "6", "7", "8", "9", "<", ">", "?", "Space", "b", "c", "d", "e", "m",
+            "r", "s", "t", "x", "z"
         ],
-        "the monitor has no action yet"
+        "the monitor group has its action"
     );
     assert!(root.contains(&("x".into(), Child::Group(Some(Label::GroupTx)))));
     let tx: Vec<String> = shown(Ctx::Explorer, "space x").into_iter().map(|(k, _)| k).collect();
@@ -535,9 +535,9 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     assert_eq!(km.group_label(Ctx::Explorer, &k("space r y")), Some(Label::GroupCopySelection));
     let formats: String = shown(Ctx::Grid, "space r a").into_iter().map(|(k, _)| k).collect();
     assert_eq!(formats, "JTchijlmntux", "every format, sorted by key");
-    // No leader while typing; an empty group resolves to nothing.
+    // No leader while typing; a group with actions under it is a prefix.
     assert!(shown(Ctx::VimInsert, "space").is_empty());
-    assert_eq!(last(&km, Ctx::Explorer, "space m"), Resolved::Unbound(k("space m")));
+    assert_eq!(km.resolve_seq(Ctx::Explorer, &k("space m")), (None, true));
     assert_eq!(km.resolve_seq(Ctx::Explorer, &k("space c")), (None, true));
     // A user action on a group's keys clashes with the group.
     let (km2, issues) = user(&[("nav", "space c", "explorer.top")]);

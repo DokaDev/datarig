@@ -498,6 +498,8 @@ impl App {
             Action::OpenConsole => profile.is_some() && !in_database,
             Action::EditProfile | Action::DuplicateProfile | Action::TestConnection => profile.is_some(),
             Action::Disconnect => profile.is_some_and(|id| self.conns.state(id) != NodeState::Disconnected),
+            // A connection whose driver monitors its server.
+            Action::Monitor(super::monitor::MonitorAction::Open) => profile.is_some_and(|id| self.monitor_on(id)),
             // Profile and folder actions of the explorer have nothing to do on the scripts.
             Action::NewProfile | Action::Explorer(ExplorerAction::NewFolder) => {
                 !script && !matches!(row, R::ScriptsHeader | R::ScriptsEmpty)

@@ -37,6 +37,7 @@
 //! background` whether the theme paints its background or leaves the terminal's showing.
 //! `[updates] check` says whether datarig asks GitHub once a day for a newer release, and
 //! `[updates] whats_new` whether What's new shows once after an update.
+//! `[monitor] interval` is how often the server monitor reads the server while its tab is shown.
 //! `[edit] paste_null` is the text a range pasted into a result reads as NULL (unquoted).
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
 //! the top, or the bottom line), `detail_view` (the result inspector as a panel or a status bar
@@ -133,6 +134,8 @@ struct FileConfig {
     edit: Option<EditSection>,
     #[serde(default)]
     updates: Option<UpdatesSection>,
+    #[serde(default)]
+    monitor: Option<MonitorSection>,
     #[serde(default)]
     secrets: Option<SecretsSection>,
     #[serde(default)]
@@ -382,6 +385,13 @@ struct UpdatesSection {
     check: Option<String>,
     #[serde(default)]
     whats_new: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MonitorSection {
+    #[serde(default)]
+    interval: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -842,6 +852,80 @@ impl Choice for ChangesView {
     }
 }
 
+/// `[monitor] interval`: how often the server monitor reads the server while its tab is shown
+/// (every 2 seconds by default).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MonitorInterval {
+    S1,
+    #[default]
+    S2,
+    S5,
+    S10,
+    S30,
+    S60,
+}
+
+impl MonitorInterval {
+    /// Every value, shortest first.
+    pub const ALL: [MonitorInterval; 6] = [
+        MonitorInterval::S1,
+        MonitorInterval::S2,
+        MonitorInterval::S5,
+        MonitorInterval::S10,
+        MonitorInterval::S30,
+        MonitorInterval::S60,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MonitorInterval::S1 => "1s",
+            MonitorInterval::S2 => "2s",
+            MonitorInterval::S5 => "5s",
+            MonitorInterval::S10 => "10s",
+            MonitorInterval::S30 => "30s",
+            MonitorInterval::S60 => "60s",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|v| v.as_str().eq_ignore_ascii_case(s))
+    }
+
+    pub fn duration(self) -> std::time::Duration {
+        std::time::Duration::from_secs(match self {
+            MonitorInterval::S1 => 1,
+            MonitorInterval::S2 => 2,
+            MonitorInterval::S5 => 5,
+            MonitorInterval::S10 => 10,
+            MonitorInterval::S30 => 30,
+            MonitorInterval::S60 => 60,
+        })
+    }
+
+    /// The next longer value (`longer`) or the next shorter one; the longest and the shortest
+    /// stay where they are.
+    pub fn step(self, longer: bool) -> Self {
+        let at = Self::ALL.iter().position(|v| *v == self).unwrap_or(1);
+        let to = if longer { (at + 1).min(Self::ALL.len() - 1) } else { at.saturating_sub(1) };
+        Self::ALL[to]
+    }
+}
+
+impl Choice for MonitorInterval {
+    // The default first, as the trait has it.
+    const ALL: &'static [Self] = &[
+        MonitorInterval::S2,
+        MonitorInterval::S1,
+        MonitorInterval::S5,
+        MonitorInterval::S10,
+        MonitorInterval::S30,
+        MonitorInterval::S60,
+    ];
+    fn as_str(self) -> &'static str {
+        MonitorInterval::as_str(self)
+    }
+}
+
 /// `[edit] paste_null`: the text an unquoted field of a range pasted into a result reads as
 /// NULL. The default is `\N`, the form both servers' own dumps write NULL in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1016,6 +1100,8 @@ pub struct Prefs {
     pub update_check: UpdateCheck,
     /// `[updates] whats_new`.
     pub whats_new: WhatsNewSetting,
+    /// `[monitor] interval`.
+    pub monitor_interval: MonitorInterval,
     /// `idle_disconnect`: how long a profile's connection may sit unused before its sessions
     /// close (`None`: never); an environment may say otherwise.
     pub idle_disconnect: Option<std::time::Duration>,
@@ -1050,6 +1136,7 @@ impl Default for Prefs {
             paste_null: PasteNull::default(),
             update_check: UpdateCheck::default(),
             whats_new: WhatsNewSetting::default(),
+            monitor_interval: MonitorInterval::default(),
             idle_disconnect: None,
             lock_wait: None,
         }
@@ -1326,6 +1413,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         f.ui.map(|u| (u.yank_flash, u.tips, u.changes_view, u.background)).unwrap_or_default();
     let paste_null = f.edit.and_then(|e| e.paste_null);
     let (update_check, whats_new) = f.updates.map(|u| (u.check, u.whats_new)).unwrap_or_default();
+    let monitor_interval = f.monitor.and_then(|m| m.interval);
     let (default_source, keychain_access) =
         f.secrets.map(|s| (s.default_source, s.macos_keychain_access)).unwrap_or_default();
     let default_source = match default_source {
@@ -1386,6 +1474,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         paste_null: choice("edit.paste_null", paste_null, "\\N, NULL, none")?,
         update_check: choice("updates.check", update_check, "on, off")?,
         whats_new: choice("updates.whats_new", whats_new, "on, off")?,
+        monitor_interval: choice("monitor.interval", monitor_interval, "1s, 2s, 5s, 10s, 30s, 60s")?,
         idle_disconnect: match &f.idle_disconnect {
             None => None,
             Some(v) => policy::parse_idle_disconnect(v)
@@ -1870,6 +1959,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "updates", "check", check)?;
     let whats_new = (prefs.whats_new.as_str().into(), prefs.whats_new == WhatsNewSetting::default());
     orphans += &nested_setting(&mut doc, "updates", "whats_new", whats_new)?;
+    let interval = (prefs.monitor_interval.as_str().into(), prefs.monitor_interval == MonitorInterval::default());
+    orphans += &nested_setting(&mut doc, "monitor", "interval", interval)?;
     let source = (default_source.as_str().into(), default_source == DefaultSource::Auto);
     orphans += &nested_setting(&mut doc, "secrets", "default_source", source)?;
     let access = (prefs.keychain_access.as_str().into(), prefs.keychain_access == KeychainAccess::default());

@@ -270,10 +270,14 @@ impl App {
         if was_active {
             self.leave_tab();
         }
-        if let Some(mut closed) = self.tabs.close(id)
-            && let Some(s) = closed.exec.session.take()
-        {
-            s.close();
+        if let Some(mut closed) = self.tabs.close(id) {
+            if let Some(s) = closed.exec.session.take() {
+                s.close();
+            }
+            // A Monitor tab's connection goes with it.
+            if let Some(m) = closed.doc.monitor.as_mut() {
+                m.drop_connection();
+            }
         }
         // A file another open tab shows stays where it is (never made, but never trusted).
         if let (Some((c, text)), Some(state)) = (console, self.state_dir())

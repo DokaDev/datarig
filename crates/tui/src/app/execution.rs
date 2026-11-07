@@ -521,7 +521,8 @@ impl App {
                         self.touch_profile(p);
                     }
                 }
-                EventTarget::SessionTest(_) => {}
+                // Its own: only while it is shown.
+                EventTarget::SessionTest(_) | EventTarget::Monitor(_) => {}
             }
         }
         match target {
@@ -532,6 +533,10 @@ impl App {
             }
             EventTarget::Aux(id) => self.aux_event(id, ev),
             EventTarget::SessionTest(seq) => self.session_test_event(seq, ev),
+            EventTarget::Monitor(id) => {
+                self.monitor_event(id, ev);
+                self.monitor_sync();
+            }
         }
         // A run that started or ended may show or hide a pane (a results zoom waiting for them).
         if !self.tabs.is_empty() && !self.profiles.is_empty() {
@@ -558,6 +563,7 @@ impl App {
             EventTarget::SessionTest(seq) => {
                 seq == generation && self.session_test.as_ref().is_some_and(|t| t.seq == seq)
             }
+            EventTarget::Monitor(id) => self.monitor_of(id).is_some_and(|m| m.generation == generation),
         }
     }
 
@@ -2057,7 +2063,7 @@ fn rows_msg(count: usize, more: bool, elapsed: Duration) -> Notice {
 impl App {
     /// The text of the failure an event carries (empty for other events): see
     /// [`App::db_error_text`].
-    fn event_error_text(&self, ev: &DbEvent) -> String {
+    pub(super) fn event_error_text(&self, ev: &DbEvent) -> String {
         match ev {
             DbEvent::ConnectFailed { error, .. } | DbEvent::Failed { error, .. } | DbEvent::Lost { error } => {
                 self.db_error_text(error)

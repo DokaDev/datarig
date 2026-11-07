@@ -100,6 +100,7 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::PasteNull(_)
         | Setting::WhatsNew(_)
         | Setting::UpdateCheck(_)
+        | Setting::MonitorInterval(_)
         | Setting::IdleDisconnect(_)
         | Setting::LockWait(_) => None,
     }
@@ -616,6 +617,10 @@ impl App {
                 self.ddl_command(arg.trim())?;
                 self.overlays.close(OverlayKind::Commands);
             }
+            (command::Command::Monitor, _) => {
+                self.overlays.close(OverlayKind::Commands);
+                self.monitor_command(arg.trim())?;
+            }
             (command::Command::Explain, _) => {
                 let analyze = match arg.trim() {
                     "" => false,
@@ -911,6 +916,7 @@ impl App {
             Setting::PasteNull(n) => self.set_prefs(s, |x| x.paste_null = n),
             Setting::WhatsNew(w) => self.set_prefs(s, |x| x.whats_new = w),
             Setting::UpdateCheck(c) => self.set_prefs(s, |x| x.update_check = c),
+            Setting::MonitorInterval(i) => self.set_prefs(s, |x| x.monitor_interval = i),
             Setting::IdleDisconnect(d) => self.set_prefs(s, |x| x.idle_disconnect = d),
             Setting::LockWait(d) => self.set_prefs(s, |x| x.lock_wait = d),
         }
@@ -994,6 +1000,7 @@ impl App {
                     if let Some(kind) = spec.arg {
                         let (arg, optional) = match kind {
                             ArgKind::Profile => (Label::CommandsArgProfile, false),
+                            ArgKind::OptionalProfile => (Label::CommandsArgProfile, true),
                             ArgKind::Setting => (Label::CommandsArgSetting, false),
                             ArgKind::Script => (Label::CommandsArgScript, true),
                             ArgKind::NewScript => (Label::CommandsArgScript, true),

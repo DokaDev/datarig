@@ -376,6 +376,7 @@ impl App {
             Ctx::Password => keys.iter().for_each(|k| self.prompt_key(k.to_event(), repeat)),
             Ctx::ExplorerFilter => keys.iter().for_each(|k| self.explorer_filter_key(k.to_event())),
             Ctx::GridSearch => keys.iter().for_each(|k| self.grid_prompt_key(k.to_event())),
+            Ctx::MonitorFilter => keys.iter().for_each(|k| self.monitor_filter_key(k.to_event())),
             Ctx::CellEdit => keys.iter().for_each(|k| self.cell_edit_key(k.to_event())),
             Ctx::CellEditor => keys.iter().for_each(|k| self.cell_lines_key(k.to_event())),
             Ctx::QuickConnect => keys.iter().for_each(|k| self.quick_key(k.to_event(), repeat)),
@@ -845,6 +846,8 @@ impl App {
                     let t = self.tab_mut();
                     t.popup = None;
                     t.editor.scroll(d);
+                } else if inside(l.results) && self.monitor_shown() {
+                    self.monitor_wheel(d > 0);
                 } else if inside(l.results) && self.tab().exec.view == tabs::ResultView::Messages {
                     let s = &mut self.tab_mut().exec.messages_scroll;
                     *s = (*s as isize + d).max(0) as usize;
@@ -873,6 +876,10 @@ impl App {
                 if inside(l.tree) && !self.overlays.is_open(OverlayKind::CellViewer) =>
             {
                 self.open_context_menu(x, y);
+            }
+            MouseEventKind::Down(MouseButton::Right) if inside(l.results) && self.monitor_shown() => {
+                self.focus = Focus::Results;
+                self.open_action_menu();
             }
             MouseEventKind::Down(MouseButton::Right)
                 if inside(l.results) && !self.overlays.is_open(OverlayKind::CellViewer) =>
@@ -1045,6 +1052,13 @@ impl App {
                 Some((Some(i), _)) => self.tab_mut().show_result(i),
                 Some((None, view)) => self.tab_mut().exec.view = view,
                 None => {}
+            }
+        } else if inside(l.results) && self.monitor_shown() {
+            self.focus = Focus::Results;
+            // A second click on a session shows it in full.
+            if self.monitor_click(x, y) && double {
+                self.last_click = None;
+                self.monitor_action(super::monitor::MonitorAction::Details);
             }
         } else if inside(l.results) && self.plan_shown() {
             self.focus = Focus::Results;

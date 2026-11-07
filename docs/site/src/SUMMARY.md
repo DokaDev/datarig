@@ -20,6 +20,7 @@
   - [Charts](guide/charts.md)
   - [Editing data](guide/editing.md)
 - [Plans](guide/plans.md)
+- [Server monitor](guide/monitoring.md)
 - [Explorer](guide/explorer.md)
 - [MySQL](guide/mysql.md)
 - [Themes](guide/themes.md)

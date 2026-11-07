@@ -56,13 +56,16 @@ impl App {
             return false;
         }
         let t = self.tab();
-        t.is_table() || (!t.pane.hidden && (t.ran || !matches!(t.results, Results::Empty) || !self.notices.is_empty()))
+        // A Monitor tab's views take the results pane's place.
+        t.is_table()
+            || t.is_monitor()
+            || (!t.pane.hidden && (t.ran || !matches!(t.results, Results::Empty) || !self.notices.is_empty()))
     }
 
     /// The active tab has an editor: a query or DDL tab (a zoom of another pane may keep it
     /// off screen: see [`App::zoomed`]).
     pub fn editor_shown(&self) -> bool {
-        !(self.tabs.is_empty() || self.tab().is_table())
+        !(self.tabs.is_empty() || self.tab().is_table() || self.tab().is_monitor())
     }
 
     /// The pane zoomed to the whole workspace now: the active tab's zoom while that pane is

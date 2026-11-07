@@ -35,8 +35,8 @@ pub(crate) fn work(n: u64) {
     WORK.with(|w| w.set(w.get() + n));
 }
 
-/// Bars growing up, by eighths of a cell.
-const UP: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+/// Bars growing up, by eighths of a cell (the Monitor tab's sparklines draw with them too).
+use super::sparkline::UP;
 /// Bars growing right, by eighths of a cell.
 const RIGHT: [&str; 9] = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉", "█"];
 

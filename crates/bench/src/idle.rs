@@ -2,8 +2,9 @@
 //! runs `datarig` with a private config, data and state directory, passwords in memory
 //! (`DATARIG_SECRET_STORE=memory`) and the frame counters of `DATARIG_BENCH_STATS`.
 //!
-//! * idle: one connection and three tabs, then nothing for a while: resident memory, CPU
-//!   and event loop wakeups and frames per second;
+//! * idle: one connection and three tabs (and a Monitor tab of the connection, not shown),
+//!   then nothing for a while: resident memory, CPU and event loop wakeups and frames per
+//!   second;
 //! * startup: the time from starting the process to its first frame.
 
 use crate::stats::{Summary, cpu_secs, rss_kb};
@@ -123,6 +124,25 @@ impl Home {
                         .map_err(|e| e.to_string())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+            // A Monitor tab of the profile, not the active one: hidden, it reads nothing and
+            // wakes nothing.
+            let mut tabs = tabs;
+            if !tabs.is_empty() {
+                tabs.push(TabState {
+                    id: workspace::new_id(),
+                    kind: workspace::TabKind::Monitor,
+                    script: None,
+                    profile: Some(id),
+                    cursor: (0, 0),
+                    top: 0,
+                    console: 0,
+                    table: None,
+                    ddl: None,
+                    results: None,
+                    database: None,
+                    schema: None,
+                });
+            }
             let ws = WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs, unknown_tabs: Vec::new() };
             workspace::save(&state, &ws).map_err(|e| e.to_string())?;
         }

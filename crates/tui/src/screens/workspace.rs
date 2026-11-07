@@ -98,6 +98,13 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
     }
     app.tab_hits = hits;
 
+    // A Monitor tab: its views in the editor's and results' place.
+    if app.tab().is_monitor() && !matches!(zoom, Some(Focus::Tree)) {
+        app.layout.results = body;
+        crate::widgets::monitor::draw_monitor(app, body, f.buffer_mut());
+        draw_status(app, rows[1], f.buffer_mut());
+        return (app.focus == Focus::Tree).then_some(filter_cursor).flatten();
+    }
     // A table tab: its results at full height. A query tab: the editor, and below it the
     // results pane once it ran, sized or hidden per tab. A zoomed pane: that pane alone.
     let (editor_area, results_area) = match zoom {

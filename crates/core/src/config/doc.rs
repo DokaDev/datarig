@@ -82,6 +82,7 @@ pub const TABLES: &[TableDoc] = &[
     TableDoc { name: "ui", header: "[ui]", about: "Things the whole screen shows.", alias_of: None },
     TableDoc { name: "edit", header: "[edit]", about: "Editing a result's rows.", alias_of: None },
     TableDoc { name: "updates", header: "[updates]", about: "The update check and What's new.", alias_of: None },
+    TableDoc { name: "monitor", header: "[monitor]", about: "The server monitor.", alias_of: None },
     TableDoc { name: "secrets", header: "[secrets]", about: "Passwords and the OS keychain.", alias_of: None },
     TableDoc { name: "commands", header: "[commands]", about: "The `:` command line.", alias_of: None },
     TableDoc {
@@ -262,6 +263,8 @@ pub const KEYS: &[KeyDoc] = &[
     // [updates]
     key("updates", "check", "\"on\"", "`\"on\"`, `\"off\"`", ""),
     key("updates", "whats_new", "\"on\"", "`\"on\"`, `\"off\"`", ""),
+    // [monitor]
+    key("monitor", "interval", "\"2s\"", "`\"1s\"`, `\"2s\"`, `\"5s\"`, `\"10s\"`, `\"30s\"`, `\"60s\"`", ""),
     // [secrets]
     key(
         "secrets",

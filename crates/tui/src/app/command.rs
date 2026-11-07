@@ -18,7 +18,9 @@ use datarig_core::config::{
     EditorClipboard, FormatIndent, IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat, SoftTabBackspace,
     Tips, YankFlash,
 };
-use datarig_core::config::{ChangesView, CompletionDelay, PasteNull, UiBackground, UpdateCheck, WhatsNewSetting};
+use datarig_core::config::{
+    ChangesView, CompletionDelay, MonitorInterval, PasteNull, UiBackground, UpdateCheck, WhatsNewSetting,
+};
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
 use std::time::Duration;
@@ -72,6 +74,9 @@ pub enum Command {
     /// `:ddl [name]`: the DDL of what the name names on the active tab's connection; alone, of
     /// the explorer's object or the table tab's table.
     Ddl,
+    /// `:monitor [profile]`: the server monitor of a connection (the explorer's, the active
+    /// tab's, or the one named).
+    Monitor,
     /// `:explain [analyze]`: the plan of the statement under the cursor (with `analyze`, run
     /// and measured).
     Explain,
@@ -104,6 +109,8 @@ pub enum Command {
 pub enum ArgKind {
     /// A connection profile name.
     Profile,
+    /// A connection profile name; may be left out.
+    OptionalProfile,
     /// `key=value` of [`SETTINGS`].
     Setting,
     /// An existing saved query (`:e`).
@@ -135,6 +142,7 @@ impl ArgKind {
         matches!(
             self,
             ArgKind::NewScript
+                | ArgKind::OptionalProfile
                 | ArgKind::Context
                 | ArgKind::Script
                 | ArgKind::Object
@@ -338,6 +346,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         action: None,
     },
     CommandSpec {
+        command: Command::Monitor,
+        name: "monitor",
+        aliases: &[],
+        arg: Some(ArgKind::OptionalProfile),
+        label: Label::CommandMonitor,
+        action: None,
+    },
+    CommandSpec {
         command: Command::Explain,
         name: "explain",
         aliases: &[],
@@ -513,6 +529,7 @@ pub enum Setting {
     CompletionDelay(CompletionDelay),
     WhatsNew(WhatsNewSetting),
     UpdateCheck(UpdateCheck),
+    MonitorInterval(MonitorInterval),
     /// `idle_disconnect` (`None`: off).
     IdleDisconnect(Option<Duration>),
     /// `lock_wait` (`None`: off).
@@ -905,6 +922,20 @@ pub const SETTINGS: &[SettingSpec] = &[
             ("insert", Setting::CopyFormat(CopyFormatSetting::Insert), Label::SettingCopyFormatInsert),
         ]),
     },
+    SettingSpec {
+        key: "monitor.interval",
+        label: Label::SettingMonitorInterval,
+        about: Label::SettingMonitorIntervalAbout,
+        group: SettingGroup::Connections,
+        values: Values::Fixed(&[
+            ("1s", Setting::MonitorInterval(MonitorInterval::S1), Label::SettingMonitorIntervalS1),
+            ("2s", Setting::MonitorInterval(MonitorInterval::S2), Label::SettingMonitorIntervalS2),
+            ("5s", Setting::MonitorInterval(MonitorInterval::S5), Label::SettingMonitorIntervalS5),
+            ("10s", Setting::MonitorInterval(MonitorInterval::S10), Label::SettingMonitorIntervalS10),
+            ("30s", Setting::MonitorInterval(MonitorInterval::S30), Label::SettingMonitorIntervalS30),
+            ("60s", Setting::MonitorInterval(MonitorInterval::S60), Label::SettingMonitorIntervalS60),
+        ]),
+    },
 ];
 
 /// A duration setting's value typed for `:set` that is not one of its presets (`7m`, `300s`):
@@ -1149,7 +1180,7 @@ fn rank<'a>(typed: &str, candidates: impl Iterator<Item = (usize, &'a str)>) -> 
 /// contexts ([`ArgKind::Context`]) or the theme names ([`ArgKind::Setting`], [`ArgKind::Theme`]).
 pub fn complete_arg(kind: ArgKind, arg: &str, names: &[&str]) -> Vec<ArgCompletion> {
     match kind {
-        ArgKind::Profile => {
+        ArgKind::Profile | ArgKind::OptionalProfile => {
             rank(arg, names.iter().copied().enumerate()).into_iter().map(ArgCompletion::Profile).collect()
         }
         ArgKind::Script => {

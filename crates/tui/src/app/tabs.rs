@@ -33,6 +33,9 @@ pub enum TabKind {
     /// An object's DDL, read from the catalog: a read-only editor takes the whole tab, and
     /// there are no results.
     Ddl,
+    /// The server monitor of a profile (one per profile): its views take the whole tab; no
+    /// editor, no results.
+    Monitor,
 }
 
 /// What a DDL tab shows.
@@ -536,6 +539,8 @@ pub struct Doc {
     pub table: Option<TableRef>,
     /// The object a DDL tab shows.
     pub ddl: Option<DdlTab>,
+    /// A Monitor tab's connection, reads and views.
+    pub monitor: Option<super::monitor::MonitorTab>,
 }
 
 impl Doc {
@@ -557,6 +562,7 @@ impl Doc {
             console_no: 0,
             table: None,
             ddl: None,
+            monitor: None,
         }
     }
 }
@@ -636,6 +642,11 @@ impl Tab {
     /// A DDL tab (a read-only editor takes the whole tab, no results).
     pub fn is_ddl(&self) -> bool {
         self.kind == TabKind::Ddl
+    }
+
+    /// A Monitor tab (its views take the whole tab: no editor, no results).
+    pub fn is_monitor(&self) -> bool {
+        self.kind == TabKind::Monitor
     }
 
     /// A query tab: a console or a saved query, whose text is the user's (it is saved, it
@@ -1012,6 +1023,8 @@ pub struct ClosedTab {
     pub table: Option<TableRef>,
     /// A DDL tab's object.
     pub ddl: Option<datarig_core::driver::ddl::DdlObject>,
+    /// A Monitor tab's interval.
+    pub monitor: Option<datarig_core::config::MonitorInterval>,
     pub pane: PaneLayout,
     pub context: SessionContext,
     /// A console's number as its tab showed it (0: not a console): held while it is on the
@@ -1156,6 +1169,7 @@ impl TabManager {
             trashed: None,
             table: tab.doc.table.clone(),
             ddl: tab.doc.ddl.as_ref().map(|d| d.object.clone()),
+            monitor: tab.doc.monitor.as_ref().map(|m| m.interval),
             pane: tab.pane,
             context: tab.context.clone(),
             console_no: tab.doc.console_no,
@@ -1249,7 +1263,12 @@ impl TabManager {
                 t.replace_editor(Editor::read_only(""));
                 t.doc.ddl = Some(DdlTab::new(object));
             }
-            if t.is_table() || t.is_ddl() {
+            // It reads once it is shown.
+            if let Some(interval) = c.monitor {
+                t.replace_editor(Editor::read_only(""));
+                t.doc.monitor = Some(super::monitor::MonitorTab::new(interval));
+            }
+            if t.is_table() || t.is_ddl() || t.is_monitor() {
                 // Not a text anybody wrote (a table's query, an object's DDL): nothing to save.
                 t.doc.saved = t.editor.text();
                 t.doc.written = true;
