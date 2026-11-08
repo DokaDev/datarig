@@ -10,7 +10,7 @@ use crate::stats::{Summary, ms};
 use datarig_core::driver::DbEvent;
 use datarig_core::monitor::{
     Counter, CounterKind, Epoch, Gauge, GaugeKind, Own, QueryText, Sample, ServerInfo, SessionKey, SessionKind,
-    SessionList, SessionRow, SessionState, Snapshot, Timestamp, Tx, Visibility, Wait, WaitClass,
+    SessionList, SessionRow, SessionState, Snapshot, StatementStamp, Timestamp, Tx, Visibility, Wait, WaitClass,
 };
 use datarig_tui::app::monitor::{MonState, MonitorTab};
 use datarig_tui::app::{AppEvent, EventTarget, Focus, TabKind};
@@ -58,6 +58,8 @@ fn read(n: u64, sessions: usize) -> Snapshot {
                 monitor: false,
                 visible: Visibility::Full,
                 extra: Vec::new(),
+                thread: None,
+                statement: Some(StatementStamp::Pg { query_start: Some(Timestamp(now.0 - age)) }),
             }
         })
         .collect();

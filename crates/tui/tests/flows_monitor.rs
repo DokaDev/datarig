@@ -9,11 +9,11 @@ mod common;
 use common::*;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, SessionRole};
 use datarig_core::i18n::Lang;
-use datarig_core::monitor::format::{Flavour, PgMonitor};
+use datarig_core::monitor::format::{Flavour, PgMonitor, Route};
 use datarig_core::monitor::{
     Counter, CounterKind, Epoch, FullText, Gauge, GaugeKind, Hidden, MonitorFormat, Need, Own, Part, Proof, QueryText,
-    Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState, Snapshot, TextAsk, Timestamp,
-    Tx, Visibility, Wait, WaitClass,
+    Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState, Snapshot, StatementStamp,
+    TextAsk, Timestamp, Tx, Visibility, Wait, WaitClass,
 };
 use datarig_tui::app::monitor::{MonState, MonitorView};
 use datarig_tui::app::{Focus, TabKind};
@@ -33,6 +33,7 @@ fn pg_format() -> MonitorFormat {
         read_all_stats: true,
         signal_backend: true,
         flavour: Flavour::Standard,
+        route: Route::Direct,
     })
 }
 
@@ -54,6 +55,8 @@ fn session(id: i64, user: &str, state: SessionState, query_secs: f64, query: &st
         monitor: false,
         visible: Visibility::Full,
         extra: Vec::new(),
+        thread: None,
+        statement: Some(StatementStamp::Pg { query_start: Some(at(-query_secs)) }),
     }
 }
 
@@ -860,6 +863,7 @@ fn mysql_format() -> MonitorFormat {
         process: Readable::Yes,
         innodb_trx: Readable::Yes,
         metadata_locks: Readable::Yes,
+        statements: Readable::Yes,
         flavour: Flavour::Standard,
     })
 }

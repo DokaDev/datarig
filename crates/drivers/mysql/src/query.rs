@@ -98,8 +98,8 @@ use crate::link::{Closed, Link, Next};
 use crate::session::{Gate, Killer, Server, Tracked, my_error};
 use crate::values::{column_meta, display};
 use datarig_core::driver::{
-    CancelFailure, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, PagingMode, ServerEnd, SessionValues,
-    StatementInfo, TxOutcome, TxRule, TxStep,
+    CancelFailure, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, OwnSession, PagingMode, ServerEnd,
+    SessionValues, StatementInfo, TxOutcome, TxRule, TxStep,
 };
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
@@ -110,8 +110,8 @@ use futures::future::BoxFuture;
 use mysql_async::consts::StatusFlags;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Column, Conn, QueryResult, Row, TextProtocol};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -143,8 +143,39 @@ pub(crate) struct Settings {
 }
 
 /// What a statement run needs besides the connection.
+/// What is known of the connection's own server session ([`DbCommand::ServerSession`]): a
+/// proxy may send a handshake id of its own, so the id is taken for the server's only once the
+/// server named the same one (`CONNECTION_ID()`).
+fn own_answer(env: &Env<'_>) -> OwnSession {
+    match (env.own.get(), i64::try_from(env.killer.id())) {
+        (Some(true), Ok(id)) => OwnSession::Direct { id },
+        (Some(false), _) => OwnSession::NotDirect,
+        _ => OwnSession::NotKnown,
+    }
+}
+
+/// Answer [`DbCommand::ServerSession`] `request` between runs: what is known, else one read of
+/// `CONNECTION_ID()` now (a read of no table, no transaction is opened), only when no
+/// transaction is open; asked again later otherwise.
+async fn own_session(conn: &mut Conn, link: &mut Link, env: &Env<'_>, s: &State, request: u64) -> Result<(), Stop> {
+    if env.own.get().is_none() && !s.tx.open && !link.tainted() {
+        match link.guard(None, conn.query_first::<u64, _>("SELECT CONNECTION_ID()")).await? {
+            Ok(Some(id)) => {
+                let _ = env.own.set(id == env.killer.id());
+            }
+            Err(e) if e.is_fatal() => return Err(Stop::Lost(my_error(&e))),
+            Ok(None) | Err(_) => {}
+        }
+    }
+    let _ = env.events.send(DbEvent::ServerSession { request, own: own_answer(env) });
+    Ok(())
+}
+
 struct Env<'a> {
     events: &'a UnboundedSender<DbEvent>,
+    /// Whether the handshake's connection id is the server's own, once asked
+    /// ([`DbCommand::ServerSession`]).
+    own: &'a OnceLock<bool>,
     killer: &'a Killer,
     /// The UI asked to cancel (cleared when a run starts): a run of several statements stops
     /// before its next one.
@@ -377,8 +408,10 @@ pub(crate) async fn query_loop(
     select_limit: Option<u64>,
 ) {
     let failed = AtomicBool::new(false);
+    let own = OnceLock::new();
     let env = Env {
         events: &events,
+        own: &own,
         killer: &killer,
         asked: &asked,
         busy: &busy,
@@ -467,8 +500,16 @@ pub(crate) async fn query_loop(
                 });
                 Ok(())
             }
+            Next::Command(DbCommand::ServerSession { request }) => {
+                own_session(&mut conn, &mut link, &env, &s, request).await
+            }
             // The monitor has a session of its own.
-            Next::Command(cmd @ (DbCommand::MonitorTick { .. } | DbCommand::MonitorQueryText { .. })) => {
+            Next::Command(
+                cmd @ (DbCommand::MonitorTick { .. }
+                | DbCommand::MonitorQueryText { .. }
+                | DbCommand::MonitorAction { .. }
+                | DbCommand::MonitorFollowUp { .. }),
+            ) => {
                 let _ = events.send(cmd.not_supported());
                 Ok(())
             }
@@ -1408,6 +1449,10 @@ async fn hold_on(
             // The app closes it (its spill limit, idle): it ends like a finished one.
             Next::Command(DbCommand::ClosePortal { id: cid }) if cid == id => break,
             Next::Command(c @ (DbCommand::Count { .. } | DbCommand::CheckRepeat { .. })) => held.waiting.push(c),
+            // Answered from what is known (nothing is sent while the result is read): it goes on.
+            Next::Command(DbCommand::ServerSession { request }) => {
+                let _ = env.events.send(DbEvent::ServerSession { request, own: own_answer(env) });
+            }
             Next::Command(DbCommand::FetchMore { .. } | DbCommand::ClosePortal { .. }) => {}
             Next::Command(other) => {
                 held.waiting.insert(0, other);

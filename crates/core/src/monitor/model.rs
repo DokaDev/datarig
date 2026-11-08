@@ -1,6 +1,8 @@
 //! The monitor's model: one shape for every database, with what an engine does not have or the
 //! account may not see said as such.
 
+use super::action::StatementStamp;
+
 /// A moment on the server's clock, in microseconds since the Unix epoch. Every age and rate is
 /// worked out on this clock, read in the same statement as what it measures, so the app's own
 /// clock (and its skew) never enters.
@@ -253,9 +255,10 @@ pub struct Gauge {
     pub value: u64,
 }
 
-/// A server session as the monitor tells it apart: an id and, where the server reuses ids,
-/// when the session started (PostgreSQL pid and `backend_start`; MySQL connection ids are not
-/// reused while the server runs).
+/// A server session as the monitor tells it apart: an id and, where the server says, when the
+/// session started (PostgreSQL pid and `backend_start`). MySQL gives a connection id only: ids
+/// are handed out in order but wrap, so a later session may take the id of one that ended (the
+/// `performance_schema` thread, [`SessionRow::thread`], tells them apart where it is read).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SessionKey {
     pub id: i64,
@@ -463,6 +466,11 @@ pub struct SessionRow {
     pub monitor: bool,
     pub visible: Visibility,
     pub extra: Vec<Extra>,
+    /// MySQL `performance_schema.threads.THREAD_ID`, `None` where it is not read.
+    pub thread: Option<u64>,
+    /// The identity of the statement it runs (PostgreSQL: or last ran), which an action on it
+    /// carries; `None` when the account cannot see it, or (MySQL) no statement runs.
+    pub statement: Option<StatementStamp>,
 }
 
 impl SessionRow {

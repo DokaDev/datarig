@@ -510,6 +510,7 @@ mod terminal {
         let s = Session::open(&url).await;
         let env = Env {
             events: &s.events,
+            own: &crate::query::NO_OWN,
             token: &s.token,
             cancel: &s.cancel,
             failed: &s.failed,
@@ -544,6 +545,7 @@ mod terminal {
         let lock = ["SET LOCAL lock_timeout = 5000".to_string()];
         let env = |path_per_tx| Env {
             events: &s.events,
+            own: &crate::query::NO_OWN,
             token: &s.token,
             cancel: &s.cancel,
             failed: &s.failed,
@@ -691,6 +693,7 @@ mod terminal {
             self.id += 1;
             let env = Env {
                 events: &self.events,
+                own: &crate::query::NO_OWN,
                 token: &self.token,
                 cancel: &self.cancel,
                 failed: &self.failed,
@@ -721,6 +724,7 @@ mod terminal {
             self.id += 1;
             let env = Env {
                 events: &self.events,
+                own: &crate::query::NO_OWN,
                 token: &self.token,
                 cancel: &self.cancel,
                 failed: &self.failed,
@@ -749,6 +753,7 @@ mod terminal {
             self.id += 1;
             let env = Env {
                 events: &self.events,
+                own: &crate::query::NO_OWN,
                 token: &self.token,
                 cancel: &self.cancel,
                 failed: &self.failed,
@@ -1202,6 +1207,7 @@ mod terminal {
                 self.id += 1;
                 let env = Env {
                     events: &self.events,
+                    own: &crate::query::NO_OWN,
                     token: &self.token,
                     cancel: &self.cancel,
                     failed: &self.failed,

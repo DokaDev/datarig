@@ -1,6 +1,7 @@
 //! MySQL rows read into the model (the statements are the driver's: its `meta::monitor`).
 
 use super::{Answer, DecodeError, Row, Rows, malformed, name_values, one};
+use crate::monitor::action::StatementStamp;
 use crate::monitor::format::{self, MYSQL_MARKERS, MYSQL_MIN_VERSION, MySqlMonitor, Probe, Readable};
 use crate::monitor::model::{
     Counter, CounterKind, Epoch, Extra, ExtraKey, FullText, Gauge, GaugeKind, Hidden, Need, Own, Part, Proof,
@@ -38,6 +39,9 @@ pub const PROBE: &[&str] = &["version", "performance_schema", "user"];
 /// The columns of the probe's last row: whether the metadata lock instrument is on, and a count that only names the lock tables, in order.
 pub const PROBE_LOCKS: &[&str] = &["ENABLED", "probe"];
 
+/// The columns of the probe's statement of the statement events: whether their consumers are all on, and a count that only names the event and thread tables, in order.
+pub const PROBE_STATEMENTS: &[&str] = &["ENABLED", "probe"];
+
 /// The columns of `SHOW GLOBAL STATUS` and `SHOW GLOBAL VARIABLES`, in order.
 pub const NAME_VALUE: &[&str] = &["Variable_name", "Value"];
 
@@ -59,7 +63,7 @@ pub const SERVER_INFO: &[&str] = &[
 /// The columns of the clock's row (microseconds since the Unix epoch), in order.
 pub const CLOCK: &[&str] = &["now"];
 
-/// The columns of a session's row (`INFO` its first `QUERY_CHARS` characters; the `trx_` columns NULL and `trx_read` 0 without `INNODB_TRX`, `in_tx` and `explicit_locks` NULL and `locks_read` 0 without the metadata lock table), in order.
+/// The columns of a session's row (`INFO` its first `QUERY_CHARS` characters; the `trx_` columns NULL and `trx_read` 0 without `INNODB_TRX`, `in_tx` and `explicit_locks` NULL and `locks_read` 0 without the metadata lock table; `THREAD_ID` and `EVENT_ID` NULL without the statement events, `EVENT_ID` the running top-level statement's on an instrumented thread, else NULL; `info_md5` the server's MD5 of the whole `INFO`), in order.
 pub const SESSIONS: &[&str] = &[
     "now",
     "ID",
@@ -80,6 +84,9 @@ pub const SESSIONS: &[&str] = &[
     "in_tx",
     "explicit_locks",
     "locks_read",
+    "THREAD_ID",
+    "EVENT_ID",
+    "info_md5",
 ];
 
 /// The columns of a session's row read for its statement's whole text (`now` in microseconds since the Unix epoch, `TIME` in seconds, `maybe_cut` the server may have kept only the start of `INFO`), in order.
@@ -110,10 +117,10 @@ fn version_number(version: &str) -> Option<u32> {
 
 /// The probe's answers, in their order: the version line ([`PROBE`]), the provider variables
 /// (name and value), the account's `PROCESS` grant, one row of `INNODB_TRX`, the metadata lock
-/// instrument ([`PROBE_LOCKS`]).
+/// instrument ([`PROBE_LOCKS`]), the statement event consumers ([`PROBE_STATEMENTS`]).
 pub fn probe(answers: &[Answer]) -> Result<MySqlMonitor, DecodeError> {
-    let [first, variables, grants, trx, locks] = answers else {
-        return Err(malformed("probe", format!("{} answers, expected 5", answers.len())));
+    let [first, variables, grants, trx, locks, statements] = answers else {
+        return Err(malformed("probe", format!("{} answers, expected 6", answers.len())));
     };
     let rows = match first {
         Answer::Rows(rows) => rows,
@@ -152,15 +159,23 @@ pub fn probe(answers: &[Answer]) -> Result<MySqlMonitor, DecodeError> {
         process,
         innodb_trx: readable(trx),
         // Readable, and the instrument on: else the table is empty, which is not "no locks".
-        metadata_locks: match locks {
-            Answer::Rows(rows) if rows.first().and_then(|r| r.first()).is_some_and(|c| c.as_deref() == Some("YES")) => {
-                Readable::Yes
-            }
-            Answer::Rows(_) => Readable::Unknown,
-            refused => readable(refused),
-        },
+        metadata_locks: enabled(locks),
+        // Readable, and the consumers on: else no statement is current.
+        statements: enabled(statements),
         flavour: format::flavour(MYSQL_MARKERS, &found),
     })
+}
+
+/// A probe of a table whose rows depend on a switch: readable, and the switch (the answer's
+/// first cell) `YES`.
+fn enabled(answer: &Answer) -> Readable {
+    match answer {
+        Answer::Rows(rows) if rows.first().and_then(|r| r.first()).is_some_and(|c| c.as_deref() == Some("YES")) => {
+            Readable::Yes
+        }
+        Answer::Rows(_) => Readable::Unknown,
+        refused => readable(refused),
+    }
 }
 
 /// The server's rows: the facts and its `Uptime`.
@@ -315,7 +330,8 @@ fn session(row: &Row, now: Timestamp, known: bool) -> Result<SessionRow, DecodeE
         (None, _, true) => Tx::None,
         (None, _, false) => Tx::Unknown,
     };
-    let since = row.int("TIME")?.map(|secs| Timestamp(now.0 - secs.max(0) * 1_000_000));
+    let time = row.int("TIME")?;
+    let since = time.map(|secs| Timestamp(now.0 - secs.max(0) * 1_000_000));
     let session_state = match command {
         _ if matches!(kind, SessionKind::Background(_)) => SessionState::Background,
         "Sleep" if matches!(tx, Tx::Since(_) | Tx::Open) => SessionState::IdleInTx,
@@ -340,6 +356,19 @@ fn session(row: &Row, now: Timestamp, known: bool) -> Result<SessionRow, DecodeE
     if row.bool("explicit_locks")? == Some(true) {
         extra.push(Extra { key: ExtraKey::ExplicitLocks, value: "yes".into() });
     }
+    let thread = row.uint("THREAD_ID")?;
+    let info_md5 = row.string("info_md5");
+    // The running statement event where there is one; else, for a session running a statement
+    // (or holding its text), its command, text and time.
+    let statement = match (thread, row.uint("EVENT_ID")?) {
+        (Some(thread_id), Some(event_id)) => Some(StatementStamp::MySqlEvent { thread_id, event_id }),
+        _ if session_state == SessionState::Active || info_md5.is_some() => time.map(|t| StatementStamp::MySqlWeak {
+            command: command.to_owned(),
+            info_md5: info_md5.clone(),
+            time: t.max(0).unsigned_abs(),
+        }),
+        _ => None,
+    };
     Ok(SessionRow {
         key: SessionKey { id, started: None },
         kind,
@@ -363,6 +392,8 @@ fn session(row: &Row, now: Timestamp, known: bool) -> Result<SessionRow, DecodeE
         monitor: row.required_bool("monitor")?,
         visible: Visibility::Full,
         extra,
+        thread,
+        statement,
     })
 }
 

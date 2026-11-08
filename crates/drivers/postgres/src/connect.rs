@@ -346,9 +346,14 @@ fn sets_lock_wait(sql: &str) -> bool {
 /// (`idle_session_timeout`, from version 14 on) for the session, in one round trip, only on a
 /// direct connection: the server process the session talks to is the one whose id came in the
 /// startup's `BackendKeyData` (a pooler sends an id of its own, and its server connections are
-/// shared). Whether the connection is direct; a failed check reads as not (the limit then goes
-/// in each transaction, which holds either way, and the idle limit is not set).
-async fn apply_limits(client: &Client, lock_wait: Option<Duration>, server_idle: Option<Duration>) -> bool {
+/// shared). Whether the connection is direct, `None` when the check failed (the caller takes
+/// that as not: the limit then goes in each transaction, which holds either way, and the idle
+/// limit is not set).
+pub(crate) async fn apply_limits(
+    client: &Client,
+    lock_wait: Option<Duration>,
+    server_idle: Option<Duration>,
+) -> Option<bool> {
     let pid = client.backend_key_pid();
     let set = |name: &str, d: Option<Duration>, also: &str| match d {
         Some(d) => format!("CASE WHEN d.direct{also} THEN pg_catalog.set_config('{name}', '{}', false) END", millis(d)),
@@ -364,8 +369,8 @@ async fn apply_limits(client: &Client, lock_wait: Option<Duration>, server_idle:
         ),
     );
     match client.simple_query(&ask).await {
-        Ok(msgs) => msgs.iter().any(|m| matches!(m, SimpleQueryMessage::Row(r) if r.get(0) == Some("t"))),
-        Err(_) => false,
+        Ok(msgs) => Some(msgs.iter().any(|m| matches!(m, SimpleQueryMessage::Row(r) if r.get(0) == Some("t")))),
+        Err(_) => None,
     }
 }
 
@@ -526,10 +531,15 @@ async fn run_session(
         SessionRole::Query => &opts.session_sql,
         SessionRole::Meta | SessionRole::Monitor => &[],
     };
-    let direct = match lock_wait.is_some() || opts.server_idle.is_some() || !session_sql.is_empty() {
+    // A session with nothing to set sends nothing more; a query session keeps what the check
+    // found for [`DbCommand::ServerSession`] (which checks on demand when nothing ran here).
+    let checked = lock_wait.is_some() || opts.server_idle.is_some() || !session_sql.is_empty();
+    let verified = match checked {
         true => apply_limits(&client, lock_wait, opts.server_idle).await,
-        false => true,
+        false => None,
     };
+    // Unchecked, nothing is set for the session that could stay on a pooled server connection.
+    let direct = if checked { verified.unwrap_or(false) } else { true };
     let per_tx = match start_up(&client, session_sql, direct).await {
         Ok(per_tx) => per_tx,
         Err(error) => {
@@ -557,7 +567,7 @@ async fn run_session(
     }
     match role {
         SessionRole::Meta => meta_loop(client, Link::new(rx, ended, conn, None), events).await,
-        SessionRole::Monitor => monitor_loop(client, Link::new(rx, ended, conn, None), events).await,
+        SessionRole::Monitor => monitor_loop(client, Link::new(rx, ended, conn, None), events, opts.read_only).await,
         SessionRole::Query => {
             let cancel = Cancel::new(client.cancel_token(), route.clone(), tls.clone());
             let link = Link::new(rx, ended, conn, Some(cancel.unsent.clone()));
@@ -583,6 +593,7 @@ async fn run_session(
                 lock_per_tx: lock.is_some(),
                 each_tx: path.into_iter().chain(lock).chain(start).collect(),
                 statement_cache: opts.statement_cache,
+                direct: verified,
             };
             query_loop(client, link, cancel, canceller.1.clone(), events, settings).await
         }

@@ -4,13 +4,18 @@
 //!
 //! The monitor only reads. The tests make what it should see with sessions of their own: a
 //! table `zz_it_mon_<pid>` (dropped when the test ends), a transaction holding a row of it, an
-//! update waiting for that row and an `ALTER TABLE` waiting for the table.
+//! update waiting for that row and an `ALTER TABLE` waiting for the table. The actions are
+//! sent only to sessions the tests open themselves.
 
 use datarig_core::driver::TxRule;
-use datarig_core::driver::{ConnectOptions, DbCommand, DbError, DbEvent, Driver, PagingMode, Session, SessionRole};
+use datarig_core::driver::{
+    ConnectOptions, DbCommand, DbError, DbEvent, Driver, OwnSession, PagingMode, Session, SessionRole,
+};
+use datarig_core::monitor::action::{self, ActionOutcome, Denied, NotSent, Stale, Via};
 use datarig_core::monitor::{
-    FullText, Hidden, MonitorFormat, MySqlMonitor, Need, Part, Proof, QUERY_CHARS, Readable, SessionKey, SessionRow,
-    SessionState, SessionsWanted, Snapshot, TEXT_MIN_AGE_US, TextAsk, Timestamp, Tx, Wait, WaitClass, Want,
+    ActionKind, ActionTarget, Confirmation, FollowUp, FullText, Hidden, MonitorFormat, MySqlMonitor, Need, Part, Proof,
+    QUERY_CHARS, Readable, SessionKey, SessionRow, SessionState, SessionsWanted, Snapshot, StatementStamp,
+    TEXT_MIN_AGE_US, TextAsk, Timestamp, Tx, Wait, WaitClass, Want,
 };
 use datarig_core::profile::ConnectionConfig;
 use datarig_driver_mysql::MyDriver;
@@ -69,8 +74,12 @@ struct Conn {
 
 impl Conn {
     async fn open(url: &str, role: SessionRole, tag: &str) -> Conn {
+        Conn::open_with(url, role, ConnectOptions::new(500, role, tag)).await
+    }
+
+    async fn open_with(url: &str, role: SessionRole, opts: ConnectOptions) -> Conn {
         let (tx, rx) = unbounded_channel();
-        let session = MyDriver.connect(&profile(url), role, ConnectOptions::new(500, role, tag), tx);
+        let session = MyDriver.connect(&profile(url), role, opts, tx);
         let mut c = Conn { session, rx, next: 0 };
         c.wait(|e| matches!(e, DbEvent::Connected), 15).await;
         c
@@ -84,6 +93,58 @@ impl Conn {
         }
     }
 
+    /// A monitor session of a profile that is read-only.
+    async fn read_only_monitor(url: &str, tag: &str) -> (Conn, MySqlMonitor) {
+        let opts = ConnectOptions::new(500, SessionRole::Monitor, tag).read_only(true);
+        let mut c = Conn::open_with(url, SessionRole::Monitor, opts).await;
+        match c.wait(|e| matches!(e, DbEvent::Monitor(_)), 20).await {
+            DbEvent::Monitor(Ok(MonitorFormat::MySql(my))) => (c, my),
+            other => panic!("probe: {other:?}"),
+        }
+    }
+
+    async fn act(&mut self, kind: ActionKind, target: &ActionTarget) -> ActionOutcome {
+        self.next += 1;
+        let request = self.next;
+        self.session.send(DbCommand::MonitorAction { request, kind, target: target.clone() });
+        match self.wait(|e| matches!(e, DbEvent::MonitorActionDone { request: r, .. } if *r == request), 30).await {
+            DbEvent::MonitorActionDone { outcome, .. } => outcome,
+            _ => unreachable!(),
+        }
+    }
+
+    async fn follow(&mut self, target: &ActionTarget) -> FollowUp {
+        self.next += 1;
+        let request = self.next;
+        self.session.send(DbCommand::MonitorFollowUp { request, target: target.clone() });
+        match self.wait(|e| matches!(e, DbEvent::MonitorFollowUp { request: r, .. } if *r == request), 30).await {
+            DbEvent::MonitorFollowUp { result, .. } => result.expect("follow-up"),
+            _ => unreachable!(),
+        }
+    }
+
+    /// The row of session `id` once `ready` holds for it (at most ten seconds).
+    async fn row_when(&mut self, id: i64, ready: impl Fn(&SessionRow) -> bool) -> SessionRow {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let s = self.tick(TICK).await.expect("tick");
+            let r = row(&s, id).clone();
+            if ready(&r) {
+                return r;
+            }
+            assert!(Instant::now() < deadline, "session {id} never got ready: {r:?}");
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    /// The row of session `id` once it runs `SLEEP`.
+    async fn sleeping(&mut self, id: i64) -> SessionRow {
+        self.row_when(id, |r| {
+            r.state == SessionState::Active && r.query.as_ref().is_some_and(|q| q.text.contains("SLEEP"))
+        })
+        .await
+    }
+
     async fn wait(&mut self, pred: impl Fn(&DbEvent) -> bool, secs: u64) -> DbEvent {
         let deadline = Instant::now() + Duration::from_secs(secs);
         loop {
@@ -95,6 +156,17 @@ impl Conn {
                 Ok(None) => panic!("event channel closed"),
                 Err(_) => panic!("timed out after {secs}s waiting for an event"),
             }
+        }
+    }
+
+    /// Which server session is the connection's own ([`DbCommand::ServerSession`]).
+    async fn own_session(&mut self) -> OwnSession {
+        self.next += 1;
+        let request = self.next;
+        self.session.send(DbCommand::ServerSession { request });
+        match self.wait(|e| matches!(e, DbEvent::ServerSession { request: r, .. } if *r == request), 30).await {
+            DbEvent::ServerSession { own, .. } => own,
+            _ => unreachable!(),
         }
     }
 
@@ -418,4 +490,214 @@ async fn only_the_monitor_session_reads_ticks() {
     let mut meta = Conn::open(&url, SessionRole::Meta, &format!("monm{pid}")).await;
     assert_eq!(meta.tick(TICK).await, Err(DbError::NotSupported));
     assert_eq!(meta.ask(ask).await, Err(DbError::NotSupported));
+}
+
+/// What an action on `row` carries, as the app makes it.
+fn target_of(my: &MySqlMonitor, row: &SessionRow) -> ActionTarget {
+    action::target(&MonitorFormat::MySql(my.clone()), row).expect("a MySQL session is always told apart")
+}
+
+/// A table of one row: a `SLEEP` read from it is stopped by `KILL QUERY` with an error (alone it
+/// would return 1 and no error).
+async fn sleep_table(url: &str, table: &str) {
+    let mut c = side(url).await;
+    c.query_drop(format!("CREATE TABLE {table} (id INT PRIMARY KEY) ENGINE=InnoDB")).await.expect("table");
+    c.query_drop(format!("INSERT INTO {table} VALUES (1)")).await.expect("row");
+}
+
+/// `KILL QUERY` goes only to the statement event the row showed: a later event sends nothing;
+/// the right one stops the test's own `SLEEP`, and the statement history proves it
+/// interrupted. The monitor's own connection is never killed.
+#[tokio::test(flavor = "multi_thread")]
+async fn kill_query_stops_only_the_statement_the_row_showed() {
+    let test = "kill_query_stops_only_the_statement_the_row_showed";
+    let Some((url, admin_url)) = urls(test) else { return };
+    let pid = std::process::id();
+    let table = format!("zz_it_mon_k_{pid}");
+    let _drop = Cleanup { url: url.clone(), sql: format!("DROP TABLE IF EXISTS {table}") };
+    sleep_table(&url, &table).await;
+    let tag = format!("monk{pid}");
+    let mut sleeper = Conn::open(&url, SessionRole::Query, &format!("{tag}s")).await;
+    let sleeping = sleeper.send(&format!("SELECT SLEEP(60) FROM {table}"));
+    let mut admin = side(&admin_url).await;
+    let id = id_of(&mut admin, &format!("datarig-q-{tag}s")).await;
+    let (mut monitor, my) = Conn::monitor(&admin_url, &tag).await;
+    assert_eq!(my.statements, Readable::Yes, "{my:?}");
+    let r = monitor.sleeping(id).await;
+    let target = target_of(&my, &r);
+    let Some(StatementStamp::MySqlEvent { thread_id, event_id }) = target.stamp else { panic!("{target:?}") };
+
+    let later = ActionTarget {
+        stamp: Some(StatementStamp::MySqlEvent { thread_id, event_id: event_id + 1 }),
+        ..target.clone()
+    };
+    assert_eq!(
+        monitor.act(ActionKind::Cancel, &later).await,
+        ActionOutcome::NotSent(NotSent::Stale(Stale::StatementChanged))
+    );
+    let other_thread = ActionTarget { thread: Some(thread_id + 100_000), ..target.clone() };
+    assert_eq!(
+        monitor.act(ActionKind::Terminate, &other_thread).await,
+        ActionOutcome::NotSent(NotSent::Stale(Stale::SessionReplaced))
+    );
+    let still = monitor.follow(&target).await;
+    assert_eq!(action::confirm(ActionKind::Cancel, &target, &still), Confirmation::StillRunning);
+
+    assert_eq!(monitor.act(ActionKind::Cancel, &target).await, ActionOutcome::Acknowledged { via: Via::Standard });
+    // The query session reads the server's 1317 as a cancel.
+    let error = sleeper.answer(sleeping).await.expect_err("the statement was stopped");
+    assert_eq!(error, "Cancelled");
+    let after = monitor.follow(&target).await;
+    assert_eq!(after.interrupted, Some(true), "{after:?}");
+    assert_eq!(action::confirm(ActionKind::Cancel, &target, &after), Confirmation::Interrupted);
+    sleeper.run("SELECT 1").await;
+
+    let own = monitor.row_when(id_of(&mut admin, &format!("datarig-mon-{tag}")).await, |r| r.monitor).await;
+    let own = target_of(&my, &own);
+    for kind in [ActionKind::Cancel, ActionKind::Terminate] {
+        assert_eq!(monitor.act(kind, &own).await, ActionOutcome::NotSent(NotSent::OwnConnection), "{kind:?}");
+    }
+    monitor.tick(TICK).await.expect("the monitor goes on");
+}
+
+/// `KILL` of a test connection is confirmed only when a later read no longer finds it.
+#[tokio::test(flavor = "multi_thread")]
+async fn kill_is_confirmed_when_the_session_is_gone() {
+    let Some((url, admin_url)) = urls("kill_is_confirmed_when_the_session_is_gone") else { return };
+    let tag = format!("monkt{}", std::process::id());
+    let mut victim = Conn::open(&url, SessionRole::Query, &format!("{tag}v")).await;
+    victim.run("SELECT 1").await;
+    let mut admin = side(&admin_url).await;
+    let id = id_of(&mut admin, &format!("datarig-q-{tag}v")).await;
+    let (mut monitor, my) = Conn::monitor(&admin_url, &tag).await;
+    let r = monitor.row_when(id, |r| r.state == SessionState::Idle).await;
+    let target = target_of(&my, &r);
+    assert_eq!(monitor.act(ActionKind::Terminate, &target).await, ActionOutcome::Acknowledged { via: Via::Standard });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let follow = monitor.follow(&target).await;
+        match action::confirm(ActionKind::Terminate, &target, &follow) {
+            Confirmation::Gone => break,
+            other => assert!(Instant::now() < deadline, "still there: {other:?} {follow:?}"),
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert_eq!(
+        monitor.act(ActionKind::Terminate, &target).await,
+        ActionOutcome::NotSent(NotSent::Stale(Stale::SessionGone)),
+        "never sent twice to a session that is gone"
+    );
+}
+
+/// On a read-only profile neither action is sent, nor the read before it: the session goes on
+/// sleeping.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_profile_sends_no_action() {
+    let Some((url, admin_url)) = urls("a_read_only_profile_sends_no_action") else { return };
+    let pid = std::process::id();
+    let table = format!("zz_it_mon_r_{pid}");
+    let _drop = Cleanup { url: url.clone(), sql: format!("DROP TABLE IF EXISTS {table}") };
+    sleep_table(&url, &table).await;
+    let tag = format!("monr{pid}");
+    let mut sleeper = Conn::open(&url, SessionRole::Query, &format!("{tag}s")).await;
+    let sleeping = sleeper.send(&format!("SELECT SLEEP(60) FROM {table}"));
+    let mut admin = side(&admin_url).await;
+    let id = id_of(&mut admin, &format!("datarig-q-{tag}s")).await;
+    let (mut monitor, my) = Conn::read_only_monitor(&admin_url, &tag).await;
+    let target = target_of(&my, &monitor.sleeping(id).await);
+    for kind in [ActionKind::Cancel, ActionKind::Terminate] {
+        assert_eq!(monitor.act(kind, &target).await, ActionOutcome::NotSent(NotSent::ReadOnly), "{kind:?}");
+    }
+    let monitor_id = id_of(&mut admin, &format!("datarig-mon-{tag}")).await;
+    let sent: Vec<String> = admin
+        .exec(
+            "SELECT h.SQL_TEXT FROM performance_schema.events_statements_history h \
+             JOIN performance_schema.threads t ON t.THREAD_ID = h.THREAD_ID WHERE t.PROCESSLIST_ID = ?",
+            (monitor_id,),
+        )
+        .await
+        .expect("the history reads");
+    assert!(sent.iter().all(|s| !s.starts_with("KILL") && !s.contains("WHERE p.ID IN (")), "{sent:?}");
+    let still = monitor.follow(&target).await;
+    assert_eq!(action::confirm(ActionKind::Cancel, &target, &still), Confirmation::StillRunning);
+    admin.query_drop(format!("KILL QUERY {id}")).await.expect("kill");
+    assert!(sleeper.answer(sleeping).await.is_err());
+}
+
+/// An account without `CONNECTION_ADMIN` is refused another account's session and told the
+/// privilege (a self-managed server has no procedure to fall back on); one with it is refused
+/// a session holding `SYSTEM_USER`; an account may stop its own sessions without either.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refusal_names_what_would_allow_it() {
+    let Some((url, admin_url)) = urls("a_refusal_names_what_would_allow_it") else { return };
+    let pid = std::process::id();
+    let (plain, admin_user) = (format!("zz_mon_act_{pid}"), format!("zz_mon_a_{pid}"));
+    let password = format!("zz-{pid}");
+    let table = format!("zz_it_mon_g_{pid}");
+    let _drop_table = Cleanup { url: url.clone(), sql: format!("DROP TABLE IF EXISTS {table}") };
+    let _drop_users =
+        Cleanup { url: admin_url.clone(), sql: format!("DROP USER IF EXISTS '{plain}'@'%', '{admin_user}'@'%'") };
+    let mut admin = side(&admin_url).await;
+    for user in [&plain, &admin_user] {
+        admin.query_drop(format!("CREATE USER '{user}'@'%' IDENTIFIED BY '{password}'")).await.expect("user");
+        admin.query_drop(format!("GRANT PROCESS ON *.* TO '{user}'@'%'")).await.expect("grant");
+        admin.query_drop(format!("GRANT SELECT ON performance_schema.* TO '{user}'@'%'")).await.expect("grant");
+    }
+    admin.query_drop(format!("GRANT CONNECTION_ADMIN ON *.* TO '{admin_user}'@'%'")).await.expect("grant");
+    sleep_table(&url, &table).await;
+
+    let tag = format!("mong{pid}");
+    let mut sleeper = Conn::open(&url, SessionRole::Query, &format!("{tag}s")).await;
+    let sleeping = sleeper.send(&format!("SELECT SLEEP(60) FROM {table}"));
+    let id = id_of(&mut admin, &format!("datarig-q-{tag}s")).await;
+    let (mut monitor, my) = Conn::monitor(&as_user(&url, &plain, &password), &format!("{tag}p")).await;
+    let target = target_of(&my, &monitor.sleeping(id).await);
+    for kind in [ActionKind::Cancel, ActionKind::Terminate] {
+        assert_eq!(
+            monitor.act(kind, &target).await,
+            ActionOutcome::NotSent(NotSent::Refused(Denied::GrantOrSystemUser(&["CONNECTION_ADMIN"]))),
+            "{kind:?}"
+        );
+    }
+    admin.query_drop(format!("KILL QUERY {id}")).await.expect("kill");
+    assert!(sleeper.answer(sleeping).await.is_err());
+
+    // The administrator's own session holds SYSTEM_USER: an account with CONNECTION_ADMIN but
+    // without it is refused as one without the grant (the server answers 1095 for both).
+    let mut root_sleeper = side(&admin_url).await;
+    let root_id: i64 = root_sleeper.query_first("SELECT CONNECTION_ID()").await.expect("id").expect("a row");
+    let root_sleep = tokio::spawn(async move {
+        let _ = root_sleeper.query_drop("SELECT SLEEP(60)").await;
+    });
+    let (mut privileged, my_admin) = Conn::monitor(&as_user(&url, &admin_user, &password), &format!("{tag}a")).await;
+    let root_target = target_of(&my_admin, &privileged.sleeping(root_id).await);
+    assert_eq!(
+        privileged.act(ActionKind::Cancel, &root_target).await,
+        ActionOutcome::NotSent(NotSent::Refused(Denied::GrantOrSystemUser(&["CONNECTION_ADMIN"])))
+    );
+    admin.query_drop(format!("KILL QUERY {root_id}")).await.expect("kill");
+    root_sleep.await.expect("the sleep ends");
+
+    // The account's own session: no privilege needed.
+    let mut own = Conn::open(&as_user(&url, &plain, &password), SessionRole::Query, &format!("{tag}o")).await;
+    let own_sleep = own.send("SELECT SLEEP(60)");
+    let own_id = id_of(&mut admin, &format!("datarig-q-{tag}o")).await;
+    let own_target = target_of(&my, &monitor.sleeping(own_id).await);
+    assert_eq!(
+        monitor.act(ActionKind::Terminate, &own_target).await,
+        ActionOutcome::Acknowledged { via: Via::Standard }
+    );
+    assert!(own.answer(own_sleep).await.is_err());
+    drop((monitor, privileged, own));
+}
+
+/// A query session says which server session is its own.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_query_session_names_its_server_session() {
+    let Some((url, admin_url)) = urls("a_query_session_names_its_server_session") else { return };
+    let tag = format!("mons{}", std::process::id());
+    let mut query = Conn::open(&url, SessionRole::Query, &tag).await;
+    let mut admin = side(&admin_url).await;
+    let id = id_of(&mut admin, &format!("datarig-q-{tag}")).await;
+    assert_eq!(query.own_session().await, OwnSession::Direct { id });
 }

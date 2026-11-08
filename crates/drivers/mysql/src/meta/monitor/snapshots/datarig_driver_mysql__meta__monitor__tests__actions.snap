@@ -1,0 +1,15 @@
+---
+source: crates/drivers/mysql/src/meta/monitor/tests.rs
+expression: "text.join(\"\\n\")"
+---
+-- cancel
+KILL QUERY 63114
+
+-- terminate
+KILL 63114
+
+-- procedure
+CALL mysql.rds_kill_query(63114)
+
+-- statement errno
+SELECT MYSQL_ERRNO FROM performance_schema.events_statements_history WHERE THREAD_ID = 63154 AND EVENT_ID = 1207

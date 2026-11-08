@@ -16,16 +16,22 @@
 //!   read, with what the account cannot see said as such (unknown is never shown as absent).
 //! * [`rate`]: counters as rates per second on the server's clock, with resets and the monitor's
 //!   own traffic taken out, and the bounded history the charts draw.
+//! * [`action`]: cancelling another session's statement or ending it: what may be offered,
+//!   what the command carries, what each provider needs, and what a later read confirms.
 //!
 //! Each format reports the metrics it really has ([`CounterKind`], [`GaugeKind`]); nothing is
 //! renamed to look like another engine's (PostgreSQL commits are not MySQL statements).
 
+pub mod action;
 pub mod decode;
 pub mod format;
 mod model;
 pub mod rate;
 
-pub use format::{Flavour, MonitorFormat, MySqlMonitor, PgMonitor, Probe, Readable};
+pub use action::{
+    ActionKind, ActionOutcome, ActionTarget, Ask, Confirmation, Decision, FollowUp, Refusal, StatementStamp, Warning,
+};
+pub use format::{Flavour, MonitorFormat, MySqlMonitor, PgMonitor, Probe, Readable, Route};
 pub use model::{
     Blocker, Counter, CounterKind, Epoch, Extra, ExtraKey, FullText, Gauge, GaugeKind, Hidden, MAX_WAITERS, Need, Own,
     Part, Proof, QUERY_CHARS, QueryText, Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow,

@@ -253,7 +253,7 @@ async fn run_session(
     let link = Link::new(rx, wire);
     match role {
         SessionRole::Meta => crate::meta::meta_loop(conn, link, events, tracked).await,
-        SessionRole::Monitor => crate::monitor::monitor_loop(conn, link, events).await,
+        SessionRole::Monitor => crate::monitor::monitor_loop(conn, link, events, opts.read_only).await,
         SessionRole::Query => {
             let killer = canceller.killer.lock().ok().and_then(|g| g.clone());
             let Some(killer) = killer else { return };

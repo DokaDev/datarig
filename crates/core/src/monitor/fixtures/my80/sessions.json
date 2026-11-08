@@ -1,6 +1,6 @@
 [
  [
-  ["1794068773249696", "5", "event_scheduler", "localhost", null, "Daemon", "815", "Waiting on empty queue", null, null, "0", null, null, null, null, "1", "0", "0", "1"],
-  ["1794068773249696", "18", "root", "localhost", null, "Query", "0", "executing", "SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, CAST(UNIX_TIMESTAMP(t.trx_started)", "1", "1", null, null, null, null, "1", "1", "0", "1"]
+  ["1794068773249696", "5", "event_scheduler", "localhost", null, "Daemon", "815", "Waiting on empty queue", null, null, "0", null, null, null, null, "1", "0", "0", "1", "45", null, null],
+  ["1794068773249696", "18", "root", "localhost", null, "Query", "0", "executing", "SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, CAST(UNIX_TIMESTAMP(t.trx_started)", "1", "1", null, null, null, null, "1", "1", "0", "1", "58", "412", "8020b1839aff1b42693c8cb625cb86f7"]
  ]
 ]
