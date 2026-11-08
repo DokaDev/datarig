@@ -1636,4 +1636,11 @@ fn the_server_in_full_opens_with_i_over_any_view_and_closes_with_i_or_esc() {
     h.key(KeyCode::Esc);
     assert_eq!(monitor(&h).server_info, None);
     assert_eq!(monitor(&h).view, MonitorView::Sessions, "Esc closed the pane only");
+    // Over the Locks view the pane takes the scrolling keys first.
+    h.keys("3");
+    h.keys("i");
+    h.screen(80, 24);
+    h.keys("G");
+    h.screen(80, 24);
+    assert!(monitor(&h).server_info.is_some_and(|t| t > 0), "the pane scrolled, not the tree");
 }

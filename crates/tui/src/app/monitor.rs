@@ -1236,6 +1236,26 @@ impl App {
                 let i = MonitorView::ALL.iter().position(|v| *v == m.view).unwrap_or(0);
                 m.show_view(MonitorView::ALL[(i + 1) % MonitorView::ALL.len()], now);
             }
+            // The server pane scrolls by line, by page, to its ends (the draw keeps it within its
+            // lines).
+            MonitorAction::Up
+            | MonitorAction::Down
+            | MonitorAction::PageUp
+            | MonitorAction::PageDown
+            | MonitorAction::First
+            | MonitorAction::Last
+                if m.server_info.is_some() =>
+            {
+                let page = usize::from(m.hits.info_lines.max(1));
+                m.server_info = m.server_info.map(|t| match a {
+                    MonitorAction::Up => t.saturating_sub(1),
+                    MonitorAction::Down => t + 1,
+                    MonitorAction::PageUp => t.saturating_sub(page),
+                    MonitorAction::PageDown => t + page,
+                    MonitorAction::First => 0,
+                    _ => usize::MAX / 2,
+                });
+            }
             MonitorAction::Up if m.view == MonitorView::Locks => m.move_line(-1),
             MonitorAction::Down if m.view == MonitorView::Locks => m.move_line(1),
             MonitorAction::PageUp if m.view == MonitorView::Locks => m.move_line(-page),
@@ -1277,26 +1297,6 @@ impl App {
                 }
             }
             MonitorAction::ServerInfo => m.server_info = if m.server_info.is_some() { None } else { Some(0) },
-            // The server pane scrolls by line, by page, to its ends (the draw keeps it within its
-            // lines).
-            MonitorAction::Up
-            | MonitorAction::Down
-            | MonitorAction::PageUp
-            | MonitorAction::PageDown
-            | MonitorAction::First
-            | MonitorAction::Last
-                if m.server_info.is_some() =>
-            {
-                let page = usize::from(m.hits.info_lines.max(1));
-                m.server_info = m.server_info.map(|t| match a {
-                    MonitorAction::Up => t.saturating_sub(1),
-                    MonitorAction::Down => t + 1,
-                    MonitorAction::PageUp => t.saturating_sub(page),
-                    MonitorAction::PageDown => t + page,
-                    MonitorAction::First => 0,
-                    _ => usize::MAX / 2,
-                });
-            }
             MonitorAction::Up if m.view == MonitorView::Replication => {
                 m.replication_top = m.replication_top.saturating_sub(1);
             }
