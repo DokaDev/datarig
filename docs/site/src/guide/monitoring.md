@@ -112,4 +112,4 @@ nothing:
 | MySQL | enough `performance_schema` thread slots (`performance_schema_max_thread_instances`) | that the list may miss sessions |
 | MySQL | `SELECT` on `performance_schema` | the Locks view without who blocks a row lock wait, and without metadata lock waits |
 | MySQL | the metadata lock instrument (`wait/lock/metadata/sql/mdl`) | the Locks view without metadata lock waits |
-| MySQL | version 8.0.38 or later | the Locks view without who blocks a row lock wait (before 8.0.38 reading it can stall a busy server, so it is not read) |
+| MySQL | 8.0.38 or later in 8.0, or 8.4 or later | the Locks view without who blocks a row lock wait (on older versions reading it can stall a busy server, so it is not read) |

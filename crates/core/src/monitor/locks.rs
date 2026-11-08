@@ -328,6 +328,9 @@ pub struct Waits {
     /// just after, or a MySQL metadata lock request waits behind another request rather than a
     /// granted lock).
     pub alone: Vec<i64>,
+    /// The lock read left some out ([`LockList::more`]): a waiter's only holder of an
+    /// incompatible lock may not be its only one.
+    pub partial: bool,
 }
 
 /// The edges a tick's reads tell: the blockers the session list names (PostgreSQL), and the
@@ -375,7 +378,18 @@ pub fn edges(sessions: Option<&SessionList>, locks: Option<&LockList>, complete:
             }
         }
     }
-    let Some(locks) = locks.filter(|l| l.blocks) else { return Waits { edges: out, alone } };
+    let Some(locks) = locks.filter(|l| l.blocks) else {
+        // A blocker that waits itself but was past the waiters asked about (PostgreSQL asks
+        // the longest ones only): waiting all the same, for a holder not asked.
+        for r in sessions.into_iter().flat_map(|l| l.rows.iter()) {
+            let id = r.key.id;
+            let blocks = out.iter().any(|e| e.holder == Holder::Session(id));
+            if blocks && r.waits_for_lock() && !named.contains(&id) && !alone.contains(&id) {
+                alone.push(id);
+            }
+        }
+        return Waits { edges: out, alone, partial: false };
+    };
     for w in &locks.waits {
         if named.contains(&w.waiter.id) {
             continue;
@@ -411,7 +425,7 @@ pub fn edges(sessions: Option<&SessionList>, locks: Option<&LockList>, complete:
             alone.push(id);
         }
     }
-    Waits { edges: out, alone }
+    Waits { edges: out, alone, partial: locks.more > 0 }
 }
 
 fn push(out: &mut Vec<Edge>, waiter: i64, holder: Holder, blame: Blame) {
@@ -439,6 +453,8 @@ pub struct Tree {
     pub lines: Vec<Line>,
     /// Sessions waiting for a lock (the tree's lines below a root).
     pub waiting: usize,
+    /// From a lock read that left some out ([`Waits::partial`]).
+    pub partial: bool,
 }
 
 /// A line of the tree.
@@ -464,6 +480,7 @@ impl Tree {
     /// The tree of `waits`: its edges, then the sessions waiting alone, after the roots.
     pub fn build(waits: &Waits) -> Tree {
         let mut tree = Tree::build_edges(&waits.edges);
+        tree.partial = waits.partial;
         let mut alone = waits.alone.clone();
         alone.sort_unstable();
         for id in alone {
@@ -632,7 +649,7 @@ impl Tree {
         let mut steps = 0;
         while let Some((p, blame)) = self.lines.get(i)?.parent {
             let only = self.lines[i].also.is_empty();
-            sure &= blame == Blame::Proven || (blame == Blame::Incompatible && only);
+            sure &= blame == Blame::Proven || (blame == Blame::Incompatible && only && !self.partial);
             i = p;
             steps += 1;
             if steps > self.lines.len() {

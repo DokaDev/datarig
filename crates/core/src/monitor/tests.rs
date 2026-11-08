@@ -986,7 +986,7 @@ fn the_tree_puts_root_blockers_first_and_each_session_once() {
 #[test]
 fn a_cycle_of_waits_is_shown_once_from_its_smallest_session() {
     let e = |w: i64, h: i64| lk::Edge { waiter: w, holder: Holder::Session(h), blame: Blame::Proven };
-    let tree = Tree::build(&Waits { edges: vec![e(30, 10), e(10, 20), e(20, 10)], alone: vec![40] });
+    let tree = Tree::build(&Waits { edges: vec![e(30, 10), e(10, 20), e(20, 10)], alone: vec![40], partial: false });
     let lines: Vec<(Holder, usize, bool)> = tree.lines.iter().map(|l| (l.node.clone(), l.depth, l.cycle)).collect();
     assert_eq!(
         lines,
@@ -1352,7 +1352,7 @@ fn a_row_wait_the_list_cannot_see_keeps_its_blocker() {
 fn a_blocker_that_waits_itself_for_a_holder_not_found_is_marked_waiting() {
     let e = |w: i64, h: i64| lk::Edge { waiter: w, holder: Holder::Session(h), blame: Blame::Proven };
     // B (20) waits for A (10); A waits too (GET_LOCK), its holder not read.
-    let tree = Tree::build(&Waits { edges: vec![e(20, 10)], alone: vec![10] });
+    let tree = Tree::build(&Waits { edges: vec![e(20, 10)], alone: vec![10], partial: false });
     assert_eq!(tree.lines.len(), 2);
     assert!(tree.lines[0].alone && tree.lines[0].node == Holder::Session(10));
     assert_eq!(tree.waiting, 2);
@@ -1364,7 +1364,12 @@ fn row_lock_waits_before_8_0_38_are_said_not_read() {
     let my = MySqlMonitor { version: 80037, ..mysql_root() };
     let (locks, hidden) = decode::mysql::locks(&[Answer::Rows(Vec::new())], &my, Timestamp(1)).unwrap();
     assert!(locks.waits.is_empty());
-    assert_eq!(hidden, [Hidden { part: Part::RowLockWaits, need: Need::Version("MySQL 8.0.38") }]);
+    let need = Need::Version("MySQL 8.0.38 or later in 8.0, or 8.4 or later");
+    assert_eq!(hidden, [Hidden { part: Part::RowLockWaits, need }]);
+    // The fix is in 8.0.38 and 8.4.0; 8.1 to 8.3 do not have it.
+    let reads = |version: u32| MySqlMonitor { version, ..mysql_root() }.lock_waits();
+    let versions = [80037, 80038, 80045, 80100, 80200, 80300, 80400, 80411, 90100];
+    assert_eq!(versions.map(reads), [false, true, true, false, false, false, true, true, true]);
     // The answers follow the statements sent: one fewer.
     assert!(decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).is_err());
 }
@@ -1376,4 +1381,34 @@ fn a_blocking_transaction_not_found_is_not_said_to_have_no_session() {
     let (locks, _) =
         decode::mysql::locks(&[Answer::Rows(rows), Answer::Rows(Vec::new())], &mysql_root(), Timestamp(1)).unwrap();
     assert_eq!(locks.waits[0].holders[0].holder, Holder::Transaction { id: "4242".into(), sessionless: false });
+}
+
+#[test]
+fn a_postgres_blocker_past_the_waiters_asked_is_marked_waiting() {
+    let (mut list, _) = pg14_locks();
+    // 14091 (the ALTER) blocks 14315; say it was past the waiters asked about.
+    list.rows.iter_mut().find(|r| r.key.id == 14091).unwrap().blocked_by = None;
+    let waits = lk::edges(Some(&list), None, true);
+    assert!(waits.alone.contains(&14091), "{waits:?}");
+    let tree = Tree::build(&waits);
+    let at = tree.lines.iter().position(|l| l.node == Holder::Session(14091)).unwrap();
+    assert!(tree.lines[at].alone);
+    let reader = tree.lines.iter().position(|l| l.node == Holder::Session(14315)).unwrap();
+    assert_eq!(tree.root_of(reader).map(|(_, sure)| sure), Some(false));
+    // A waiter past those asked that blocks nobody is left to the note, not the tree.
+    list.rows.iter_mut().find(|r| r.key.id == 14819).unwrap().blocked_by = None;
+    assert!(!lk::edges(Some(&list), None, true).alone.contains(&14819));
+}
+
+#[test]
+fn a_metadata_lock_read_cut_short_names_no_root_from_a_single_holder() {
+    let my = mysql_root();
+    let (mut locks, _) = decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).unwrap();
+    for w in &mut locks.waits {
+        w.holders.retain(|h| h.holder != Holder::Session(6));
+    }
+    locks.more = 1;
+    let tree = Tree::build(&lk::edges(None, Some(&locks), false));
+    let at = tree.lines.iter().position(|l| l.node == Holder::Session(9)).unwrap();
+    assert_eq!(tree.root_of(at).map(|(_, sure)| sure), Some(false), "another holder may have been left out");
 }

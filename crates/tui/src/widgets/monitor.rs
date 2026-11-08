@@ -677,7 +677,11 @@ impl Cx<'_> {
                         let who: Vec<String> = l.also.iter().map(|(h, _)| self.holder_name(h)).collect();
                         parts.push(self.msg(Msg::MonitorLockAlso { who: who.join(", ") }));
                     }
-                    if l.alone {
+                    if l.alone && r.is_some_and(|r| r.blocked_by.is_none()) && !self.mysql {
+                        // PostgreSQL: past the longest waits asked who blocks them.
+                        let max = MAX_WAITERS.to_string();
+                        parts.push(self.msg(Msg::MonitorLockNotAsked { max }));
+                    } else if l.alone {
                         parts.push(self.label(Label::MonitorLockAlone));
                     }
                 } else if let Some(r) = r {
