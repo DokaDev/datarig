@@ -1,8 +1,8 @@
 # datarig
 
-[![CI](https://github.com/DokaDev/datarig/actions/workflows/ci.yml/badge.svg)](https://github.com/DokaDev/datarig/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/DokaDev/datarig)](https://github.com/DokaDev/datarig/releases/latest) [![Homebrew](https://img.shields.io/badge/brew-dokadev%2Ftap%2Fdatarig-orange)](https://github.com/DokaDev/homebrew-tap)
+[![CI](https://github.com/DokaDev/datarig/actions/workflows/ci.yml/badge.svg)](https://github.com/DokaDev/datarig/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/DokaDev/datarig)](https://github.com/DokaDev/datarig/releases/latest) [![Downloads](https://img.shields.io/github/downloads/DokaDev/datarig/total)](https://github.com/DokaDev/datarig/releases) [![Homebrew](https://img.shields.io/badge/brew-dokadev%2Ftap%2Fdatarig-orange)](https://github.com/DokaDev/homebrew-tap)
 
-[![Docs](https://img.shields.io/badge/docs-dokadev.github.io%2Fdatarig-informational)](https://dokadev.github.io/datarig/) [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license) [![Ask DeepWiki](https://img.shields.io/badge/Ask-DeepWiki-20B2AA)](https://deepwiki.com/DokaDev/datarig)
+[![Docs](https://img.shields.io/badge/docs-dokadev.github.io%2Fdatarig-informational)](https://dokadev.github.io/datarig/) [![Built With Ratatui](https://img.shields.io/badge/Built_With_Ratatui-000?logo=ratatui&logoColor=fff)](https://ratatui.rs/) [![Rust 1.93+](https://img.shields.io/badge/rust-1.93%2B-orange?logo=rust)](https://www.rust-lang.org/) [![Databases: PostgreSQL · MySQL](https://img.shields.io/badge/databases-PostgreSQL%20%C2%B7%20MySQL-336791)](https://dokadev.github.io/datarig/) [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license) [![Ask DeepWiki](https://img.shields.io/badge/Ask-DeepWiki-20B2AA)](https://deepwiki.com/DokaDev/datarig)
 
 A full-featured database client that lives in your terminal: light, fast, and safe by default.
 
