@@ -3,6 +3,31 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.40.0 (2026-11-08)
+
+A Monitor tab per connection shows sessions, locks and replication, and can cancel or end a session safely.
+
+### Added
+
+- The Monitor tab (`M` on a connection, `:monitor`) shows a PostgreSQL or MySQL server's load
+  as charts and its sessions as a list you can sort and filter, read by a connection of its own
+  only while the tab is shown. What the account may not see is said, with the privilege that
+  would show it.
+- The Monitor tab's session details read a long statement in whole, and show it only while it
+  is still that session's statement (on MySQL, once it has run for a few seconds); open in
+  console and copy take the whole text too.
+- The Monitor tab's Locks view (`3`) shows who waits for whom as a tree, root blockers first:
+  what each session waits for and how long, what its blocker holds, prepared transactions
+  that hold locks, and on MySQL the holders of metadata locks a request cannot be granted
+  beside. `b` goes to the root blocker of the selected wait.
+- The Monitor tab has a Replication view (`4`): whether the server takes changes from another and
+  how far behind it is (said only as far as the server can tell), the servers that take
+  changes from it, PostgreSQL replication slots with the log they keep and logical
+  subscriptions, and MySQL group replication members. `i` shows what the server is in full,
+  with the settings that decide what the monitor can read.
+- The Monitor tab cancels a session's statement (`c`) or ends a session (`X`), asked first, never
+  on a read-only environment; what was sent is checked by later reads and listed with `L`.
+
 ## 0.39.1 (2026-11-07)
 
 Small fixes: explorer arrows open with a click, no opaque bands on a see-through terminal background, cursor tints that stay visible on 256 colours, and a copy format of your choice.
