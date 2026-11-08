@@ -68,7 +68,7 @@ pub const SESSIONS: &[&str] = &[
 /// The columns of a session's row read for its statement's whole text (times as microseconds since the Unix epoch; `state` to tell a session whose activity is not tracked; `maybe_cut` within three bytes of `track_activity_query_size`), in order.
 pub const QUERY_TEXT: &[&str] = &["pid", "backend_start", "state", "query_start", "query", "maybe_cut"];
 
-/// The columns of a lock's row (`role` `wait` or `hold`; `key` the same text for the same object; `pid` NULL for a prepared transaction's lock, then `gid`, `owner`, `prepared` and `prepared_database` its own; `database` the object's when another than the monitor's; times as microseconds since the Unix epoch; `waits` the requests not granted in all), in order.
+/// The columns of a lock's row (`role` `wait` or `hold`; `key` the same text for the same object; `pid` NULL for a prepared transaction's lock, then `gid`, `owner`, `prepared` and `prepared_database` its own; `database` the object's when another than the monitor's; times as microseconds since the Unix epoch, `query_start` the waiter's statement's; `waits` the requests not granted in all), in order.
 pub const LOCKS: &[&str] = &[
     "role",
     "key",
@@ -84,6 +84,7 @@ pub const LOCKS: &[&str] = &[
     "relation",
     "detail",
     "since",
+    "query_start",
     "waits",
 ];
 
@@ -304,6 +305,7 @@ pub fn locks(rows: &Rows, time: Timestamp) -> Result<LockList, DecodeError> {
                     },
                     mode,
                     since: row.time("since")?,
+                    query_started: row.time("query_start")?,
                     holders: Vec::new(),
                 },
             )),

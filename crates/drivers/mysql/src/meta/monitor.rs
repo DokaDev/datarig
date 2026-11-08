@@ -222,21 +222,16 @@ pub(crate) fn query_text(id: i64) -> String {
 const INFO_BYTES: usize = 65535;
 
 /// The row lock waits (InnoDB), one row per waiting request and what blocks it, as the engine
-/// names them (`performance_schema.data_lock_waits`, needs `SELECT` on it, `data_locks` and
-/// `threads`), at most [`LOCK_ROWS`]. Each request and blocking lock is looked up by its id, so
-/// the engine is asked for those locks only, not for every lock it holds. Columns: `waiter`
-/// (the waiting session's id), `blocker` (the blocking session's, NULL when no session has the
-/// transaction), `blocking_trx` (the blocking transaction's engine id), then the request's
-/// `OBJECT_SCHEMA`, `OBJECT_NAME`, `INDEX_NAME`, `LOCK_TYPE`, `LOCK_MODE`, `LOCK_DATA`, and the
-/// blocking lock's `blocking_mode` and `blocking_status` (NULL when it has gone since).
+/// names them (`performance_schema.data_lock_waits`, needs `SELECT` on it and on `threads`), at
+/// most [`LOCK_ROWS`]. The engine finds these by going through its waiting transactions only;
+/// `data_locks` (the request's table and mode) is not read: the engine has no way to find a lock
+/// there but going through every lock it holds, which a large transaction makes millions.
+/// Columns: `waiter` (the waiting session's id), `blocker` (the blocking session's, NULL when no
+/// session has the transaction), `blocking_trx` (the blocking transaction's engine id).
 pub(crate) fn row_lock_waits() -> String {
     format!(
         "SELECT rt.PROCESSLIST_ID AS waiter, bt.PROCESSLIST_ID AS blocker, \
-         w.BLOCKING_ENGINE_TRANSACTION_ID AS blocking_trx, r.OBJECT_SCHEMA, r.OBJECT_NAME, r.INDEX_NAME, \
-         r.LOCK_TYPE, r.LOCK_MODE, r.LOCK_DATA, b.LOCK_MODE AS blocking_mode, b.LOCK_STATUS AS blocking_status \
-         FROM performance_schema.data_lock_waits w \
-         JOIN performance_schema.data_locks r ON r.ENGINE = w.ENGINE AND r.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID \
-         LEFT JOIN performance_schema.data_locks b ON b.ENGINE = w.ENGINE AND b.ENGINE_LOCK_ID = w.BLOCKING_ENGINE_LOCK_ID \
+         w.BLOCKING_ENGINE_TRANSACTION_ID AS blocking_trx FROM performance_schema.data_lock_waits w \
          LEFT JOIN performance_schema.threads rt ON rt.THREAD_ID = w.REQUESTING_THREAD_ID \
          LEFT JOIN performance_schema.threads bt ON bt.THREAD_ID = w.BLOCKING_THREAD_ID \
          ORDER BY waiter, blocker LIMIT {LOCK_ROWS}"

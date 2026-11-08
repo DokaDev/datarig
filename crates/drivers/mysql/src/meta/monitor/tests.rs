@@ -191,10 +191,10 @@ fn the_lock_reads_follow_what_the_account_may_read() {
     for unreadable in [Readable::Refused, Readable::Unknown] {
         assert_eq!(locks(&MySqlMonitor { metadata_locks: unreadable, ..m.clone() }), [row_lock_waits()]);
     }
-    // Requests and blocking locks are looked up by their ids, not by reading every lock.
+    // Never every lock the engine holds: `data_locks` is not read.
     let rows = row_lock_waits();
-    assert!(rows.contains("r.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID"), "{rows}");
-    assert!(rows.contains("b.ENGINE_LOCK_ID = w.BLOCKING_ENGINE_LOCK_ID"), "{rows}");
+    assert!(rows.contains("FROM performance_schema.data_lock_waits w"), "{rows}");
+    assert!(!rows.contains("data_locks "), "{rows}");
     // Other threads' locks on the object only; pending first, bounded.
     let mdl = metadata_lock_waits();
     assert!(mdl.contains("p.thread <> g.thread") && mdl.contains("ORDER BY LOCK_STATUS DESC"), "{mdl}");

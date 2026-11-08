@@ -156,9 +156,9 @@ fn session_rows(pg: &PgMonitor, filter: &str, all: bool) -> String {
 
 /// The lock waits and the locks held on what they wait for, from `pg_locks`, read once (the
 /// lock manager gives all its locks at each read, under all its partition locks, whatever the
-/// statement keeps of them): nothing at all while no session waits for a lock, when the account
-/// sees every session's wait (with `pg_read_all_stats`; without, other roles' waits are hidden
-/// from it, so the lock table is read whenever asked). Rows: `role`
+/// statement keeps of them): nothing at all while no session the account may see waits for a
+/// lock (without `pg_read_all_stats`, other roles' waits are hidden from it, and so from the
+/// tree, which is drawn from the session list's blockers). Rows: `role`
 /// `wait` (a session's request not granted, the [`LOCK_WAITS`] longest first where the server
 /// tells since when) or `hold` (a granted lock on the same object), at most [`LOCK_ROWS`],
 /// waits first. Columns: `role`, `key` (the object, the same text for the same object),
@@ -167,21 +167,17 @@ fn session_rows(pg: &PgMonitor, filter: &str, all: bool) -> String {
 /// keep the session's virtual transaction id that prepared it), `locktype`, `mode`, `database`
 /// (the object's, when another than the monitor's), `relation` (by name, in the monitor's
 /// database or a shared catalog), `detail` (a transaction id, a tuple's `(page,tuple)`, a page,
-/// an advisory lock's or object's ids), `since` (when the wait started, 14 on), `waits` (the
-/// requests not granted in all).
+/// an advisory lock's or object's ids), `since` (when the wait started, 14 on), `query_start`
+/// (the waiter's statement's start), `waits` (the requests not granted in all).
 pub(crate) fn locks(pg: &PgMonitor) -> String {
     let waitstart = if pg.waitstart() { "l.waitstart" } else { "NULL::timestamptz" };
-    let gate = match pg.read_all_stats {
-        true => " WHERE EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock')",
-        false => "",
-    };
     format!(
         "WITH l AS MATERIALIZED (SELECT l.locktype, l.database, l.relation, l.page, l.tuple, l.virtualxid, \
          l.transactionid, l.classid, l.objid, l.objsubid, l.virtualtransaction, l.pid, l.mode, l.granted, \
          {waitstart} AS waitstart, \
          (l.locktype, l.database, l.relation, l.page, l.tuple, l.virtualxid, l.transactionid, l.classid, \
          l.objid, l.objsubid)::text AS key \
-         FROM pg_locks l{gate}), \
+         FROM pg_locks l WHERE EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock')), \
          w AS (SELECT * FROM l WHERE NOT l.granted AND l.pid IS NOT NULL \
          ORDER BY l.waitstart NULLS LAST, l.pid LIMIT {LOCK_WAITS}), \
          r AS (SELECT 'wait' AS role, w.* FROM w UNION ALL \
@@ -200,13 +196,14 @@ pub(crate) fn locks(pg: &PgMonitor) -> String {
          WHEN 'tuple' THEN '(' || r.page || ',' || r.tuple || ')' WHEN 'page' THEN r.page::text \
          WHEN 'advisory' THEN r.classid || ',' || r.objid || ',' || r.objsubid \
          WHEN 'object' THEN r.classid || ',' || r.objid || ',' || r.objsubid END AS detail, \
-         {since} AS since, (SELECT count(*) FROM l WHERE NOT l.granted) AS waits \
+         {since} AS since, {query_start} AS query_start, (SELECT count(*) FROM l WHERE NOT l.granted) AS waits \
          FROM r LEFT JOIN pg_stat_activity a ON a.pid = r.pid \
          LEFT JOIN p ON r.pid IS NULL AND p.virtualtransaction = r.virtualtransaction \
          ORDER BY r.role DESC, r.key, r.pid NULLS FIRST LIMIT {LOCK_ROWS}",
         backend_start = us("a.backend_start"),
         prepared = us("p.prepared"),
         since = us("r.waitstart"),
+        query_start = us("a.query_start"),
     )
 }
 

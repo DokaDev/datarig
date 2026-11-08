@@ -8,7 +8,7 @@
 //! shown as "holders of incompatible locks", which is not proof that they block it: a waiter may
 //! also wait behind a request of higher priority, which is not modelled.
 
-use super::model::{Blocker, SessionKey, SessionList, Timestamp};
+use super::model::{Blocker, SessionKey, SessionList, SessionRow, Timestamp};
 use std::collections::{HashMap, HashSet};
 
 /// The most lock waits a read holds (the longest first where the server tells since when).
@@ -47,7 +47,25 @@ pub struct LockWait {
     pub mode: String,
     /// When the wait started, where the server tells (PostgreSQL 14 on).
     pub since: Option<Timestamp>,
+    /// When the waiter's statement started, where the read tells (PostgreSQL): a later
+    /// statement of the same session waits for something else.
+    pub query_started: Option<Timestamp>,
     pub holders: Vec<LockHolder>,
+}
+
+impl LockWait {
+    /// Whether this wait (of a lock read, perhaps older than the session list) is still the
+    /// wait of session row `r`: the same session, the same statement where the read tells it,
+    /// and, where the row names what it waits for (PostgreSQL `wait_event`), the same kind of
+    /// lock. The mode and object are empty where the read does not tell them.
+    pub fn is_of(&self, r: &SessionRow) -> bool {
+        let statement = self.query_started.is_none() || self.query_started == r.query_started;
+        let kind = match (&r.wait, self.query_started.is_some()) {
+            (Some(w), true) => w.name == self.object.kind,
+            _ => true,
+        };
+        self.waiter == r.key && statement && kind
+    }
 }
 
 /// What a lock is on, in the server's words.
@@ -112,6 +130,27 @@ pub enum Blame {
     /// It holds a lock on the object; whether it blocks is the session list's to say
     /// (PostgreSQL).
     Holds,
+}
+
+/// Whether a PostgreSQL lock request of mode `requested` waits for a lock of mode `held` on the
+/// same object (the table of conflicting lock modes; every kind of lock uses these modes);
+/// `None` for a mode the table does not know.
+pub fn pg_conflicts(requested: &str, held: &str) -> Option<bool> {
+    const MODES: [&str; 8] = [
+        "AccessShareLock",
+        "RowShareLock",
+        "RowExclusiveLock",
+        "ShareUpdateExclusiveLock",
+        "ShareLock",
+        "ShareRowExclusiveLock",
+        "ExclusiveLock",
+        "AccessExclusiveLock",
+    ];
+    // For each mode, the modes it conflicts with, as bits in the order above.
+    const CONFLICTS: [u8; 8] = [0x80, 0xC0, 0xF0, 0xF8, 0xEC, 0xFC, 0xFE, 0xFF];
+    let r = MODES.iter().position(|m| *m == requested)?;
+    let h = MODES.iter().position(|m| *m == held)?;
+    Some(CONFLICTS[r] & (1 << h) != 0)
 }
 
 /// Whether a MySQL metadata lock request of type `requested` waits for a granted lock of type
@@ -296,11 +335,15 @@ pub fn edges(sessions: Option<&SessionList>, locks: Option<&LockList>, complete:
                 match b {
                     Blocker::Session(id) => push(&mut out, r.key.id, Holder::Session(*id), Blame::Proven),
                     Blocker::PreparedTransaction => {
+                        // Told apart by the lock read when it has this very wait: of the
+                        // prepared transactions holding a lock on its object, those whose lock
+                        // conflicts with the one asked for (a granted conflicting lock blocks).
                         let mut found = false;
-                        let waits = locks.into_iter().flat_map(|l| l.waits.iter()).filter(|w| w.waiter == r.key);
+                        let waits = locks.into_iter().flat_map(|l| l.waits.iter()).filter(|w| w.is_of(r));
                         for w in waits {
                             for h in &w.holders {
-                                if let Holder::Prepared(Some(_)) = h.holder {
+                                let conflicts = h.modes.iter().any(|m| pg_conflicts(&w.mode, m) != Some(false));
+                                if matches!(h.holder, Holder::Prepared(Some(_))) && conflicts {
                                     found = true;
                                     push(&mut out, r.key.id, h.holder.clone(), Blame::Proven);
                                 }

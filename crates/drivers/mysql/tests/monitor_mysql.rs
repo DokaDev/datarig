@@ -362,7 +362,6 @@ async fn sessions_show_row_and_metadata_lock_waits() {
     assert!(locked.hidden.is_empty(), "{:?}", locked.hidden);
     let row_wait = lock_list.waits_of(w).next().unwrap_or_else(|| panic!("{lock_list:?}"));
     assert_eq!(row_wait.object.kind, "RECORD");
-    assert!(row_wait.object.name.as_deref().is_some_and(|n| n.ends_with(&table)), "{row_wait:?}");
     assert!(row_wait.holders.iter().any(|x| x.holder == Holder::Session(h) && x.blame == Blame::Proven));
     let mdl = lock_list.waits_of(a).find(|x| x.object.kind == "TABLE").unwrap_or_else(|| panic!("{lock_list:?}"));
     assert_eq!(mdl.mode, "EXCLUSIVE");

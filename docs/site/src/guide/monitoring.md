@@ -77,12 +77,15 @@ The tree comes from what the server says:
   only; when more sessions wait, the view says how many are left out. What each waits for and
   what its blockers hold come from `pg_locks`, read only while the Locks view is shown and at
   most every 5 seconds (or every interval when it is longer), and not at all while no session
-  waits: each read asks the server's lock manager for all its locks. The view says when that
-  was last read.
+  the account sees waits: each read asks the server's lock manager for all its locks. The view
+  says when that was last read.
 - A prepared transaction (`PREPARE TRANSACTION`) holds its locks with no session: it is a root
   of its own, with its id, owner, database and age. Only `COMMIT PREPARED` or `ROLLBACK
   PREPARED` with its id ends it; the monitor does not offer them.
-- MySQL names the blockers of row lock waits (`performance_schema.data_lock_waits`). For
+- MySQL names the blockers of row lock waits (`performance_schema.data_lock_waits`); what such
+  a wait is on is not read (`data_locks` would make the server go through every lock it holds,
+  millions in a large transaction), so the line says it waits for a row lock and the statement
+  shows on which table. For
   metadata locks (an `ALTER TABLE` waiting for a long transaction, `FLUSH TABLES WITH READ
   LOCK`) it does not: the tree shows the sessions holding a lock on the same object that the
   request cannot be granted beside, as the server's lock manager decides it, and says that

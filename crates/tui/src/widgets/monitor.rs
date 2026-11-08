@@ -731,9 +731,9 @@ impl Cx<'_> {
     /// What session `id` waits for, and for how long: from the lock read when it has the wait
     /// (of this very session: a reused id is another's), else from the session list.
     fn waits_text(&self, id: i64, r: Option<&SessionRow>, time: Timestamp) -> String {
-        let wait = self.m.locks.as_ref().and_then(|l| l.waits_of(id).find(|w| r.is_none_or(|r| w.waiter == r.key)));
+        let wait = self.m.locks.as_ref().and_then(|l| l.waits_of(id).find(|w| r.is_none_or(|r| w.is_of(r))));
         match wait {
-            Some(w) => {
+            Some(w) if !w.mode.is_empty() => {
                 let object = object_text(&w.object);
                 let mode = w.mode.clone();
                 match w.since.or(r.and_then(|r| r.state_since)).and_then(|t| time.since(t)) {
@@ -741,7 +741,7 @@ impl Cx<'_> {
                     None => self.msg(Msg::MonitorLockWaitsUntimed { mode, object }),
                 }
             }
-            None => {
+            _ => {
                 let name = r.and_then(|r| r.wait.as_ref()).map(|w| w.name.clone()).unwrap_or_else(|| "?".into());
                 self.msg(Msg::MonitorLockWaitsPlain { name })
             }
@@ -752,7 +752,7 @@ impl Cx<'_> {
     fn holds(&self, node: &Holder) -> Option<String> {
         let &(w, h) = self.m.held.get(node)?;
         let wait = self.m.locks.as_ref()?.waits.get(w)?;
-        let h = wait.holders.get(h)?;
+        let h = wait.holders.get(h).filter(|h| !h.modes.is_empty())?;
         Some(self.msg(Msg::MonitorLockHolds { modes: h.modes.join(", "), object: object_text(&wait.object) }))
     }
 

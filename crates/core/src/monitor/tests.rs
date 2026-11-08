@@ -887,10 +887,10 @@ fn metadata_locks_conflict_as_the_servers_lock_manager_says() {
     assert_eq!(lk::mdl_conflicts("TABLE", "EXCLUSIVE", "SOMETHING_NEW"), None);
 }
 
-/// The lock chain recorded on PostgreSQL 14 (`pg14_locks`): 96168 holds a row of `zz_mon_t` in
-/// an open transaction; 96457 updates the same row; 96571 alters the table (behind both); 96743
+/// The lock chain recorded on PostgreSQL 14 (`pg14_locks`): 13617 holds a row of `zz_mon_t` in
+/// an open transaction; 13896 updates the same row; 14091 alters the table (behind both); 14315
 /// reads it (behind the ALTER); prepared transaction `zz_mon_gid` holds `zz_mon_p`, into which
-/// 97035 inserts; idle 97152 holds advisory lock 7, which 97312 asks for.
+/// 14485 inserts; idle 14652 holds advisory lock 7, which 14819 asks for.
 fn pg14_locks() -> (SessionList, LockList) {
     let (sample, _) = decode::pg::counters(&single(fixture!("pg14_locks/counters")), Own::default()).unwrap();
     let (list, _) = decode::pg::sessions(&single(fixture!("pg14_locks/sessions_without_idle")), NO_IDLE).unwrap();
@@ -903,7 +903,7 @@ fn postgres_lock_waits_read_with_what_is_held_on_them() {
     let (_, locks) = pg14_locks();
     assert!(!locks.blocks, "the session list names PostgreSQL's blockers");
     assert_eq!((locks.waits.len(), locks.more), (5, 0));
-    let alter = locks.waits_of(96571).next().unwrap();
+    let alter = locks.waits_of(14091).next().unwrap();
     assert_eq!(alter.mode, "AccessExclusiveLock");
     assert_eq!((alter.object.kind.as_str(), alter.object.name.as_deref()), ("relation", Some("zz_mon_t")));
     assert!(alter.since.is_some(), "waitstart from 14 on");
@@ -911,18 +911,18 @@ fn postgres_lock_waits_read_with_what_is_held_on_them() {
     assert_eq!(
         held,
         [
-            (Holder::Session(96168), vec!["RowExclusiveLock".to_string()]),
-            (Holder::Session(96457), vec!["RowExclusiveLock".to_string()]),
+            (Holder::Session(13617), vec!["RowExclusiveLock".to_string()]),
+            (Holder::Session(13896), vec!["RowExclusiveLock".to_string()]),
         ]
     );
     assert!(alter.holders.iter().all(|h| h.blame == Blame::Holds && !h.waiting));
-    let row = locks.waits_of(96457).next().unwrap();
+    let row = locks.waits_of(13896).next().unwrap();
     assert_eq!(
         (row.object.kind.as_str(), row.object.detail.as_deref(), row.mode.as_str()),
         ("transactionid", Some("736"), "ShareLock")
     );
     // The prepared transaction is named by its transaction id lock.
-    let insert = locks.waits_of(97035).next().unwrap();
+    let insert = locks.waits_of(14485).next().unwrap();
     match &insert.holders[..] {
         [h] => match &h.holder {
             Holder::Prepared(Some(p)) => {
@@ -959,14 +959,14 @@ fn the_tree_puts_root_blockers_first_and_each_session_once() {
         })
         .collect();
     let want: Vec<(String, usize)> = [
-        ("96168", 0),
-        ("96571", 1),
-        ("96743", 2),
-        ("96457", 1),
-        ("97152", 0),
-        ("97312", 1),
+        ("13617", 0),
+        ("14091", 1),
+        ("14315", 2),
+        ("13896", 1),
+        ("14652", 0),
+        ("14819", 1),
         ("zz_mon_gid", 0),
-        ("97035", 1),
+        ("14485", 1),
     ]
     .iter()
     .map(|(n, d)| (n.to_string(), *d))
@@ -975,7 +975,7 @@ fn the_tree_puts_root_blockers_first_and_each_session_once() {
     assert_eq!(tree.waiting, 5);
     assert_eq!(tree.lines[0].behind, 3);
     // The ALTER also waits for the UPDATE before it.
-    assert_eq!(tree.lines[1].also, [(Holder::Session(96457), Blame::Proven)]);
+    assert_eq!(tree.lines[1].also, [(Holder::Session(13896), Blame::Proven)]);
     // From the reader behind the ALTER, the way up to the root is the server's word.
     assert_eq!(tree.root_of(2), Some((0, true)));
     // Without the lock read the prepared transaction is still a root, not told apart.
@@ -1019,34 +1019,7 @@ fn cells(values: &[Option<&str>]) -> Vec<Option<String>> {
 fn mysql_lock_answers() -> Vec<Answer> {
     let s = Some;
     let n = None;
-    let rows = vec![
-        cells(&[
-            s("7"),
-            s("5"),
-            s("1001"),
-            s("shop"),
-            s("orders"),
-            s("PRIMARY"),
-            s("RECORD"),
-            s("X,REC_NOT_GAP"),
-            s("42"),
-            s("X,REC_NOT_GAP"),
-            s("GRANTED"),
-        ]),
-        cells(&[
-            s("8"),
-            n,
-            s("4242"),
-            s("shop"),
-            s("items"),
-            s("PRIMARY"),
-            s("RECORD"),
-            s("X"),
-            s("7"),
-            s("X"),
-            s("GRANTED"),
-        ]),
-    ];
+    let rows = vec![cells(&[s("7"), s("5"), s("1001")]), cells(&[s("8"), n, s("4242")])];
     let mdl = vec![
         cells(&[s("9"), s("109"), s("TABLE"), s("shop"), s("orders"), s("EXCLUSIVE"), s("TRANSACTION"), s("PENDING")]),
         cells(&[
@@ -1109,10 +1082,8 @@ fn mysql_row_lock_waits_name_their_blockers_and_metadata_locks_their_incompatibl
     let (locks, hidden) = decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).unwrap();
     assert!(hidden.is_empty() && locks.blocks);
     let row = locks.waits_of(7).next().unwrap();
-    assert_eq!(
-        (row.object.kind.as_str(), row.object.name.as_deref(), row.object.detail.as_deref()),
-        ("RECORD", Some("shop.orders"), Some("PRIMARY 42"))
-    );
+    // What it is on is not read (the engine would go through every lock it holds).
+    assert_eq!((row.object.kind.as_str(), row.object.name.as_deref(), row.mode.as_str()), ("RECORD", None, ""));
     assert_eq!((row.holders[0].holder.clone(), row.holders[0].blame), (Holder::Session(5), Blame::Proven));
     let xa = locks.waits_of(8).next().unwrap();
     assert_eq!(xa.holders[0].holder, Holder::Transaction("4242".into()));
@@ -1214,4 +1185,84 @@ fn the_lock_tables_are_read_only_when_a_session_may_wait() {
     assert!(decode::mysql::may_wait(&mdl_wait, &my).unwrap());
     // Without PROCESS other accounts' waits are not seen: read.
     assert!(decode::mysql::may_wait(&quiet, &MySqlMonitor { process: Readable::Unknown, ..my }).unwrap());
+}
+
+#[test]
+fn postgres_lock_modes_conflict_as_the_servers_table_says() {
+    assert_eq!(lk::pg_conflicts("ShareLock", "ExclusiveLock"), Some(true));
+    assert_eq!(lk::pg_conflicts("ShareLock", "AccessShareLock"), Some(false));
+    assert_eq!(lk::pg_conflicts("ShareLock", "RowExclusiveLock"), Some(true));
+    assert_eq!(lk::pg_conflicts("ShareLock", "ShareLock"), Some(false));
+    assert_eq!(lk::pg_conflicts("AccessShareLock", "AccessExclusiveLock"), Some(true));
+    assert_eq!(lk::pg_conflicts("RowExclusiveLock", "RowExclusiveLock"), Some(false));
+    assert_eq!(lk::pg_conflicts("ShareUpdateExclusiveLock", "ShareUpdateExclusiveLock"), Some(true));
+    assert_eq!(lk::pg_conflicts("SIReadLock", "AccessShareLock"), None);
+}
+
+/// A session waiting for a prepared transaction, with the lock read's wait of `prepared`
+/// holders (gid, mode) on its object for the statement that started at `statement`.
+fn prepared_wait(prepared: &[(&str, &str)], statement: Timestamp) -> (SessionList, LockList) {
+    let (list, mut locks) = pg14_locks();
+    let w = locks.waits.iter_mut().find(|w| w.waiter.id == 14485).unwrap();
+    w.query_started = Some(statement);
+    w.mode = "ShareLock".into();
+    w.holders = prepared
+        .iter()
+        .map(|(gid, mode)| lk::LockHolder {
+            holder: Holder::Prepared(Some(lk::Prepared {
+                gid: (*gid).into(),
+                owner: None,
+                database: None,
+                since: None,
+            })),
+            modes: vec![(*mode).into()],
+            waiting: false,
+            blame: Blame::Holds,
+        })
+        .collect();
+    (list, locks)
+}
+
+fn prepared_blockers(list: &SessionList, locks: &LockList) -> Vec<Holder> {
+    lk::edges(Some(list), Some(locks), true).edges.into_iter().filter(|e| e.waiter == 14485).map(|e| e.holder).collect()
+}
+
+#[test]
+fn only_a_prepared_transaction_whose_lock_conflicts_is_named_as_the_blocker() {
+    let (list, _) = pg14_locks();
+    let started = list.rows.iter().find(|r| r.key.id == 14485).unwrap().query_started.unwrap();
+    let (list, locks) = prepared_wait(&[("reads", "AccessShareLock"), ("writes", "RowExclusiveLock")], started);
+    let named: Vec<String> = prepared_blockers(&list, &locks)
+        .into_iter()
+        .map(|h| match h {
+            Holder::Prepared(Some(p)) => p.gid,
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(named, ["writes"], "a share lock waits for the row exclusive lock only");
+}
+
+#[test]
+fn a_lock_read_of_an_earlier_statement_does_not_name_the_prepared_blocker() {
+    let (list, _) = pg14_locks();
+    let started = list.rows.iter().find(|r| r.key.id == 14485).unwrap().query_started.unwrap();
+    // The lock read saw the session's previous statement wait for another prepared transaction.
+    let (list, locks) = prepared_wait(&[("gone", "RowExclusiveLock")], Timestamp(started.0 - 5_000_000));
+    assert_eq!(prepared_blockers(&list, &locks), [Holder::Prepared(None)]);
+}
+
+#[test]
+fn a_session_waiting_for_a_user_level_lock_waits_for_a_lock() {
+    let my = mysql_root();
+    let mut rows = rows_of_sessions().remove(0);
+    for r in rows.iter_mut() {
+        r[7] = None;
+        r[12] = None;
+    }
+    assert!(!decode::mysql::may_wait(&rows, &my).unwrap());
+    // `GET_LOCK()` waiting: the server's state for it is `User lock`.
+    rows[0][7] = Some("User lock".into());
+    assert!(decode::mysql::may_wait(&rows, &my).unwrap());
+    let (list, _) = decode::mysql::sessions(&[rows], &my, IDLE).unwrap();
+    assert_eq!(list.rows[0].wait, Some(Wait { class: WaitClass::Lock, name: "user lock".into() }));
 }

@@ -136,6 +136,7 @@ fn lock_table(n: u64, sessions: usize) -> LockList {
                 },
                 mode: "EXCLUSIVE".into(),
                 since: Some(Timestamp(time(n).0 - (i as i64 + 1) * 1_000_000)),
+                query_started: None,
                 holders,
             }
         })

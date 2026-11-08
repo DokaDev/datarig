@@ -1001,6 +1001,7 @@ fn lock_list(secs: f64) -> LockList {
         object: object.clone(),
         mode: mode.into(),
         since: Some(at(secs - since)),
+        query_started: None,
         holders,
     };
     let xid = LockObject { kind: "transactionid".into(), detail: Some("736".into()), ..Default::default() };

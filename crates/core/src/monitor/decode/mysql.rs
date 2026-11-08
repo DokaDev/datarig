@@ -93,20 +93,8 @@ pub const SESSIONS: &[&str] = &[
 /// The columns of a session's row read for its statement's whole text (`now` in microseconds since the Unix epoch, `TIME` in seconds, `maybe_cut` the server may have kept only the start of `INFO`), in order.
 pub const QUERY_TEXT: &[&str] = &["now", "ID", "COMMAND", "TIME", "INFO", "maybe_cut"];
 
-/// The columns of a row lock wait's row (`waiter` and `blocker` session ids, `blocker` NULL when no session has the blocking transaction; the request's object, type, mode and record; the blocking lock's mode and status, NULL when it has gone), in order.
-pub const ROW_LOCK_WAITS: &[&str] = &[
-    "waiter",
-    "blocker",
-    "blocking_trx",
-    "OBJECT_SCHEMA",
-    "OBJECT_NAME",
-    "INDEX_NAME",
-    "LOCK_TYPE",
-    "LOCK_MODE",
-    "LOCK_DATA",
-    "blocking_mode",
-    "blocking_status",
-];
+/// The columns of a row lock wait's row (`waiter` and `blocker` session ids, `blocker` NULL when no session has the blocking transaction, `blocking_trx` its engine transaction id), in order.
+pub const ROW_LOCK_WAITS: &[&str] = &["waiter", "blocker", "blocking_trx"];
 
 /// The columns of a metadata lock's row (`id` the owner's session id, NULL for a thread without one; `thread` its thread id), in order.
 pub const METADATA_LOCKS: &[&str] =
@@ -425,6 +413,10 @@ fn session(row: &Row, now: Timestamp, known: bool) -> Result<SessionRow, DecodeE
 /// A `STATE` that waits for a lock another session holds (`Waiting for table metadata lock`,
 /// `Waiting for global read lock`, ...), named by what it waits for.
 fn lock_wait(state: &str) -> Option<Wait> {
+    // `GET_LOCK()` waiting for a user-level lock says so in its own words.
+    if state == "User lock" {
+        return Some(Wait { class: WaitClass::Lock, name: "user lock".into() });
+    }
     let what = state.strip_prefix("Waiting for ")?;
     what.ends_with(" lock").then(|| Wait { class: WaitClass::Lock, name: what.to_owned() })
 }
@@ -468,27 +460,15 @@ pub fn locks(answers: &[Answer], my: &MySqlMonitor, time: Timestamp) -> Result<(
                 let row = Row::new(cells, "row lock waits", ROW_LOCK_WAITS)?;
                 // A request of a thread with no session (a background thread): not a session's.
                 let Some(waiter) = row.int("waiter")? else { continue };
-                let object = LockObject {
-                    kind: row.required("LOCK_TYPE")?.to_owned(),
-                    name: qualified(row.text("OBJECT_SCHEMA"), row.text("OBJECT_NAME")),
-                    detail: match (row.text("INDEX_NAME"), row.text("LOCK_DATA")) {
-                        (Some(i), Some(d)) => Some(format!("{i} {d}")),
-                        (Some(x), None) | (None, Some(x)) => Some(x.to_owned()),
-                        (None, None) => None,
-                    },
-                    database: None,
-                };
-                let mode = row.required("LOCK_MODE")?.to_owned();
+                // What the request is on is not read: the engine finds a lock by its id only by
+                // going through all its locks. The wait is a row lock's.
+                let object = LockObject { kind: "RECORD".into(), ..Default::default() };
+                let mode = String::new();
                 let holder = match row.int("blocker")? {
                     Some(id) => Holder::Session(id),
                     None => Holder::Transaction(row.required("blocking_trx")?.to_owned()),
                 };
-                let held = LockHolder {
-                    holder,
-                    modes: row.string("blocking_mode").into_iter().collect(),
-                    waiting: row.text("blocking_status") == Some("WAITING"),
-                    blame: Blame::Proven,
-                };
+                let held = LockHolder { holder, modes: Vec::new(), waiting: false, blame: Blame::Proven };
                 let at = waits.iter().position(|w| w.waiter.id == waiter && w.object == object && w.mode == mode);
                 let w = match at {
                     Some(i) => &mut waits[i],
@@ -498,6 +478,7 @@ pub fn locks(answers: &[Answer], my: &MySqlMonitor, time: Timestamp) -> Result<(
                             object,
                             mode,
                             since: None,
+                            query_started: None,
                             holders: Vec::new(),
                         });
                         waits.last_mut().expect("just pushed")
@@ -603,6 +584,7 @@ fn metadata_waits(rows: &Rows) -> Result<Vec<LockWait>, DecodeError> {
             },
             mode: p.lock.to_owned(),
             since: None,
+            query_started: None,
             holders,
         });
     }

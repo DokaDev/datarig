@@ -29,7 +29,6 @@ fn every(version: u32) -> Vec<(&'static str, String, &'static [&'static str])> {
         ("query text", query_text(4211), QUERY_TEXT),
         ("session", session(&p, 1), SESSIONS),
         ("locks", locks(&p), LOCKS),
-        ("locks without pg_read_all_stats", locks(&PgMonitor { read_all_stats: false, ..p.clone() }), LOCKS),
     ]
 }
 
@@ -163,9 +162,9 @@ fn the_lock_table_is_read_once_and_only_while_a_session_waits() {
     assert!(sql.contains("AS MATERIALIZED"), "{sql}");
     assert!(sql.contains("WHERE EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock')"), "{sql}");
     assert!(sql.contains(&format!("LIMIT {LOCK_WAITS}")) && sql.contains(&format!("LIMIT {LOCK_ROWS}")));
-    // Without `pg_read_all_stats` other roles' waits are hidden from the account: no gate.
+    // Without `pg_read_all_stats` too: the tree shows only the waits the account sees.
     let blind = locks(&PgMonitor { read_all_stats: false, ..p });
-    assert!(!blind.contains("EXISTS (SELECT 1 FROM pg_stat_activity"), "{blind}");
+    assert!(blind.contains("EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock')"), "{blind}");
     assert!(locks(&pg(130000)).contains("NULL::timestamptz AS waitstart"));
     assert!(locks(&pg(140000)).contains("l.waitstart AS waitstart"));
     // The blockers of the session list are asked once per waiter, and an idle blocker is listed.
