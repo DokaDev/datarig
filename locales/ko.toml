@@ -2915,6 +2915,7 @@
 "monitor.view.locks" = "잠금"
 "monitor.view.locks_count" = "잠금 ({n})"
 "monitor.locks_none" = "잠금을 기다리는 세션이 없습니다"
+"monitor.locks_none_seen" = "이 계정이 볼 수 있는 세션 중 잠금을 기다리는 세션이 없습니다"
 "monitor.locks_waiting" = "{n}개가 잠금을 기다림"
 "monitor.locks_read_ago" = "보유 잠금은 {time} 전에 읽음"
 "monitor.locks_not_read" = "보유 잠금은 {every}마다 읽습니다"

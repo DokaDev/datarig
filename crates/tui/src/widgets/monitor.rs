@@ -620,7 +620,17 @@ impl Cx<'_> {
         let bottom = area.y + area.height;
         let mut y = area.y;
         let tree = &m.tree;
+        // Sessions the account may not see (or not see wait) may wait all the same.
+        let unseen = m.snapshot.as_ref().is_some_and(|s| {
+            s.hidden.iter().any(|h| {
+                matches!(
+                    h.part,
+                    Part::OtherSessionDetails | Part::OtherSessions | Part::UntrackedSessions | Part::TransactionState
+                )
+            })
+        });
         let mut head = match tree.waiting {
+            0 if unseen => self.label(Label::MonitorLocksNoneSeen),
             0 => self.label(Label::MonitorLocksNone),
             n => self.msg(Msg::MonitorLocksWaiting { n: n.to_string() }),
         };
