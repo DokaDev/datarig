@@ -1,11 +1,11 @@
 [
  [
-  ["1794068771114519", "63113", "datarig", "localhost", "datarig", "Sleep", "6", "", null, null, "0", null, null, null, null, "0", null, null, "0"],
-  ["1794068771114519", "63114", "datarig", "localhost", "datarig", "Query", "5", "updating", "UPDATE zz_mon_t SET v=v+1 WHERE id=1", "0", "0", null, null, null, null, "0", null, null, "0"],
-  ["1794068771114519", "63116", "datarig", "localhost", "datarig", "Sleep", "4", "", null, null, "0", null, null, null, null, "0", null, null, "0"],
-  ["1794068771114519", "63117", "datarig", "localhost", "datarig", "Sleep", "4", "", null, null, "0", null, null, null, null, "0", null, null, "0"],
-  ["1794068771114519", "63118", "datarig", "localhost", "datarig", "Query", "4", "Waiting for table metadata lock", "ALTER TABLE zz_mon_t ADD COLUMN x INT", "0", "0", null, null, null, null, "0", null, null, "0"],
-  ["1794068771114519", "63119", "datarig", "localhost", "datarig", "Query", "4", "User sleep", "SELECT SLEEP(25), 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "1", "0", null, null, null, null, "0", null, null, "0"],
-  ["1794068771114519", "63130", "datarig", "localhost", "datarig", "Query", "0", "executing", "SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, NULL AS trx_started, NULL AS trx_s", "1", "1", null, null, null, null, "0", null, null, "0"]
+  ["1794068771114519", "63113", "datarig", "localhost", "datarig", "Sleep", "6", "", null, null, "0", null, null, null, null, "0", null, null, "0", null, null, null],
+  ["1794068771114519", "63114", "datarig", "localhost", "datarig", "Query", "5", "updating", "UPDATE zz_mon_t SET v=v+1 WHERE id=1", "0", "0", null, null, null, null, "0", null, null, "0", null, null, "f80da8dd5a1dd6b8be912865d398cb08"],
+  ["1794068771114519", "63116", "datarig", "localhost", "datarig", "Sleep", "4", "", null, null, "0", null, null, null, null, "0", null, null, "0", null, null, null],
+  ["1794068771114519", "63117", "datarig", "localhost", "datarig", "Sleep", "4", "", null, null, "0", null, null, null, null, "0", null, null, "0", null, null, null],
+  ["1794068771114519", "63118", "datarig", "localhost", "datarig", "Query", "4", "Waiting for table metadata lock", "ALTER TABLE zz_mon_t ADD COLUMN x INT", "0", "0", null, null, null, null, "0", null, null, "0", null, null, "b7b2a88be5a2ced1d67a6f7293da518d"],
+  ["1794068771114519", "63119", "datarig", "localhost", "datarig", "Query", "4", "User sleep", "SELECT SLEEP(25), 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "1", "0", null, null, null, null, "0", null, null, "0", null, null, "e84391849a00935c242eb4857cffa981"],
+  ["1794068771114519", "63130", "datarig", "localhost", "datarig", "Query", "0", "executing", "SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, NULL AS trx_started, NULL AS trx_s", "1", "1", null, null, null, null, "0", null, null, "0", null, null, "fb1562650e12f400aba4a26f9fa97218"]
  ]
 ]

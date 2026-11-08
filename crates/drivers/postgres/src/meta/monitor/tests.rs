@@ -1,10 +1,17 @@
 use super::*;
-use datarig_core::monitor::Flavour;
 use datarig_core::monitor::decode::pg::{COUNTERS, PROBE, QUERY_TEXT, SERVER_INFO, SESSIONS};
+use datarig_core::monitor::{Flavour, Route};
 use std::time::Duration;
 
 fn pg(version: u32) -> PgMonitor {
-    PgMonitor { version, superuser: true, read_all_stats: true, signal_backend: true, flavour: Flavour::Standard }
+    PgMonitor {
+        version,
+        superuser: true,
+        read_all_stats: true,
+        signal_backend: true,
+        flavour: Flavour::Standard,
+        route: Route::Unknown,
+    }
 }
 
 const IDLE: SessionsWanted = SessionsWanted { idle: true };
@@ -20,6 +27,7 @@ fn every(version: u32) -> Vec<(&'static str, String, &'static [&'static str])> {
         ("sessions", sessions(&p, IDLE), SESSIONS),
         ("sessions without idle", sessions(&p, NO_IDLE), SESSIONS),
         ("query text", query_text(4211), QUERY_TEXT),
+        ("session", session(&p, 1), SESSIONS),
     ]
 }
 
@@ -79,4 +87,66 @@ async fn every_statement_gives_its_decoders_columns() {
             assert_eq!(columns, shape, "{version} {name}");
         }
     }
+}
+
+fn target(stamp: Option<StatementStamp>) -> ActionTarget {
+    ActionTarget {
+        key: datarig_core::monitor::SessionKey { id: 4242, started: Some(Timestamp(1_794_068_700_000_001)) },
+        user: Some("zz_app".into()),
+        thread: None,
+        stamp,
+    }
+}
+
+const RUNNING: Option<StatementStamp> =
+    Some(StatementStamp::Pg { query_start: Some(Timestamp(1_794_068_760_000_002)) });
+
+/// The action statements, and the follow-up read of one session.
+#[test]
+fn action_statements() {
+    let direct = PgMonitor { route: Route::Direct, ..pg(170011) };
+    let pooled = PgMonitor { route: Route::Pooled, ..pg(170011) };
+    let never = Some(StatementStamp::Pg { query_start: None });
+    let text = [
+        ("cancel", action(&direct, ActionKind::Cancel, &target(RUNNING))),
+        ("cancel, never ran a statement", action(&direct, ActionKind::Cancel, &target(never))),
+        ("cancel, no stamp", action(&direct, ActionKind::Cancel, &target(None))),
+        ("terminate, direct", action(&direct, ActionKind::Terminate, &target(RUNNING))),
+        ("terminate, pooled", action(&pooled, ActionKind::Terminate, &target(RUNNING))),
+        ("terminate, route unknown", action(&pg(170011), ActionKind::Terminate, &target(RUNNING))),
+        ("backend pid", backend_pid()),
+        ("follow-up", session(&direct, 4242)),
+    ]
+    .map(|(name, sql)| format!("-- {name}\n{sql}\n"));
+    insta::assert_snapshot!("actions", text.join("\n"));
+}
+
+#[test]
+fn an_action_compares_times_as_the_tick_reads_them_and_never_signals_itself() {
+    let direct = PgMonitor { route: Route::Direct, ..pg(170011) };
+    let cancel = action(&direct, ActionKind::Cancel, &target(RUNNING));
+    // The same expression as the session list, so the integers compare exactly.
+    assert!(sessions(&direct, IDLE).contains(&us("s.backend_start")));
+    assert!(cancel.contains(&format!("{} = 1794068700000001", us("a.backend_start"))), "{cancel}");
+    assert!(cancel.contains(&format!("{} IS NOT DISTINCT FROM 1794068760000002", us("a.query_start"))), "{cancel}");
+    assert!(cancel.contains("WHERE a.pid = 4242"), "{cancel}");
+    assert!(
+        cancel.contains(
+            "CASE WHEN NOT g.own AND g.session AND g.tracked AND g.statement THEN pg_cancel_backend(g.pid) END"
+        )
+    );
+    assert!(cancel.contains("COALESCE(a.state <> 'disabled', false) AS tracked"), "{cancel}");
+    // No start then: nothing tells a later client apart.
+    let never = action(&direct, ActionKind::Terminate, &target(None));
+    assert!(never.contains("false AS tracked"), "{never}");
+    // An end goes by the last statement too (the session may be a pooler's server connection,
+    // serving another client after it), not by its running where the monitor connects directly.
+    let end = action(&direct, ActionKind::Terminate, &target(RUNNING));
+    assert!(end.contains(
+        "CASE WHEN NOT g.own AND g.session AND g.tracked AND g.statement THEN pg_terminate_backend(g.pid) END"
+    ));
+    assert!(end.contains(&format!("{} IS NOT DISTINCT FROM 1794068760000002, false)", us("a.query_start"))), "{end}");
+    let pooled = action(&PgMonitor { route: Route::Pooled, ..direct }, ActionKind::Terminate, &target(RUNNING));
+    assert!(pooled.contains("AND g.tracked AND g.statement THEN pg_terminate_backend(g.pid)"), "{pooled}");
+    assert!(session(&direct, 4242).contains("WHERE a.pid = 4242 OR a.monitor ORDER BY a.pid"));
 }

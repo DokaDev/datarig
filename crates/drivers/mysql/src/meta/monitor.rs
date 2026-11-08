@@ -5,6 +5,7 @@
 //! read the account may be refused: a refusal for lack of a privilege is an answer (`Readable`),
 //! not a failure. None touches a user's table.
 
+use datarig_core::monitor::ActionKind;
 use datarig_core::monitor::decode::mysql::STATUS;
 use datarig_core::monitor::format::{MYSQL_MARKERS, Marker, MySqlMonitor, Readable};
 use datarig_core::monitor::{QUERY_CHARS, SessionsWanted, Want};
@@ -22,7 +23,11 @@ const NOW: &str = "CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED)";
 ///    really reads it);
 /// 5. whether the metadata lock instrument is on (`ENABLED`), from a statement that also names
 ///    `performance_schema.metadata_locks` and `threads`, so it is refused without `SELECT` on
-///    them (a `performance_schema` table checks the privilege when it is opened).
+///    them (a `performance_schema` table checks the privilege when it is opened);
+/// 6. whether the statement event consumers are all on (`ENABLED`: `events_statements_current`
+///    and the two above it, `NO` when one is off), from a statement that also names
+///    `performance_schema.events_statements_current` and `threads`, refused without `SELECT`
+///    on them.
 pub(crate) fn probe() -> Vec<String> {
     let mut variables: Vec<String> = MYSQL_MARKERS
         .iter()
@@ -43,6 +48,11 @@ pub(crate) fn probe() -> Vec<String> {
         "SELECT i.ENABLED, (SELECT COUNT(*) FROM performance_schema.metadata_locks m \
          JOIN performance_schema.threads t ON t.THREAD_ID = m.OWNER_THREAD_ID WHERE 1 = 0) AS probe \
          FROM performance_schema.setup_instruments i WHERE i.NAME = 'wait/lock/metadata/sql/mdl'"
+            .into(),
+        "SELECT MIN(c.ENABLED) AS ENABLED, (SELECT COUNT(*) FROM performance_schema.events_statements_current e \
+         JOIN performance_schema.threads t ON t.THREAD_ID = e.THREAD_ID WHERE 1 = 0) AS probe \
+         FROM performance_schema.setup_consumers c \
+         WHERE c.NAME IN ('global_instrumentation', 'thread_instrumentation', 'events_statements_current')"
             .into(),
     ]
 }
@@ -78,7 +88,11 @@ pub(crate) fn counters() -> Vec<String> {
 /// `trx_rows_modified`, then `trx_read` (1 when it was joined); from
 /// `performance_schema.metadata_locks` when readable (else NULL): `in_tx` (it holds a lock until
 /// its transaction ends), `explicit_locks` (it holds one past its statements outside a
-/// transaction: `LOCK TABLES`, `GET_LOCK`), then `locks_read`.
+/// transaction: `LOCK TABLES`, `GET_LOCK`), then `locks_read`; from `performance_schema.threads`
+/// and `events_statements_current` when readable with their consumers on (else NULL):
+/// `THREAD_ID`, and `EVENT_ID` of the running top-level statement (no `END_EVENT_ID`, nesting
+/// level 0) of an instrumented thread (else NULL, as a finished event stays in the table);
+/// last `info_md5`, the server's MD5 of the whole `INFO`.
 ///
 /// From 8.0.22 with the performance schema on, the list comes from
 /// `performance_schema.processlist`, which does not take the server's global thread list mutex;
@@ -88,9 +102,37 @@ pub(crate) fn counters() -> Vec<String> {
 /// `INNODB_TRX.trx_started` is the server's system time (whatever the session's time zone), so
 /// the monitor session works in the system time zone and both convert to the epoch alike.
 pub(crate) fn sessions(my: &MySqlMonitor, wanted: SessionsWanted) -> Vec<String> {
-    let source = if my.ps_processlist() { "performance_schema.processlist" } else { "information_schema.PROCESSLIST" };
     let trx = my.innodb_trx == Readable::Yes;
     let locks = my.metadata_locks == Readable::Yes;
+    // An idle session is left out only when it is known to hold no transaction and no lock.
+    let idle = if wanted.idle || !trx || !locks {
+        String::new()
+    } else {
+        " WHERE p.COMMAND <> 'Sleep' OR t.trx_id IS NOT NULL OR l.id IS NOT NULL OR p.ID = CONNECTION_ID()".into()
+    };
+    vec![session_rows(my, trx, locks, &idle)]
+}
+
+/// The rows of [`sessions`] for the one session of `id`, and the reading session's own (so
+/// there is always a row, which the decoder needs; the caller picks the one of `id`): what a
+/// read after an action shows of it.
+pub(crate) fn session(my: &MySqlMonitor, id: u64) -> String {
+    let only = format!(" WHERE p.ID IN ({id}, CONNECTION_ID())");
+    session_rows(my, my.innodb_trx == Readable::Yes, my.metadata_locks == Readable::Yes, &only)
+}
+
+/// The read right before an action on the session of `id`: the columns of [`sessions`] for it
+/// and the reading session's own, its statement told apart as the tick tells it (the running
+/// top-level statement event where the events are read, else the command, the MD5 of the whole
+/// text and its time, from the same list as the tick's), without the transaction and lock
+/// columns (NULL), which the check does not need and which would cost it a read of every
+/// session's locks.
+pub(crate) fn guard(my: &MySqlMonitor, id: u64) -> String {
+    session_rows(my, false, false, &format!(" WHERE p.ID IN ({id}, CONNECTION_ID())"))
+}
+
+fn session_rows(my: &MySqlMonitor, trx: bool, locks: bool, filter: &str) -> String {
+    let source = if my.ps_processlist() { "performance_schema.processlist" } else { "information_schema.PROCESSLIST" };
     let mut columns = Vec::new();
     let mut joins = String::new();
     if trx {
@@ -116,18 +158,48 @@ pub(crate) fn sessions(my: &MySqlMonitor, wanted: SessionsWanted) -> Vec<String>
     } else {
         columns.push("NULL AS in_tx, NULL AS explicit_locks, 0 AS locks_read");
     }
-    // An idle session is left out only when it is known to hold no transaction and no lock.
-    let idle = if wanted.idle || !trx || !locks {
-        ""
+    if my.performance_schema && my.statements == Readable::Yes {
+        columns.push("pt.THREAD_ID, IF(pt.INSTRUMENTED = 'YES', e.EVENT_ID, NULL) AS EVENT_ID");
+        joins.push_str(
+            " LEFT JOIN performance_schema.threads pt ON pt.PROCESSLIST_ID = p.ID \
+             LEFT JOIN performance_schema.events_statements_current e ON e.THREAD_ID = pt.THREAD_ID \
+             AND e.NESTING_EVENT_LEVEL = 0 AND e.END_EVENT_ID IS NULL",
+        );
     } else {
-        " WHERE p.COMMAND <> 'Sleep' OR t.trx_id IS NOT NULL OR l.id IS NOT NULL OR p.ID = CONNECTION_ID()"
-    };
-    vec![format!(
+        columns.push("NULL AS THREAD_ID, NULL AS EVENT_ID");
+    }
+    columns.push("MD5(p.INFO) AS info_md5");
+    format!(
         "SELECT {NOW} AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, \
          LEFT(p.INFO, {QUERY_CHARS}) AS INFO, CHAR_LENGTH(p.INFO) > {QUERY_CHARS} AS shortened, \
-         p.ID = CONNECTION_ID() AS monitor, {} FROM {source} p{joins}{idle} ORDER BY p.ID",
+         p.ID = CONNECTION_ID() AS monitor, {} FROM {source} p{joins}{filter} ORDER BY p.ID",
         columns.join(", ")
-    )]
+    )
+}
+
+/// The statement that does `kind` to the session of `id` (an integer: nothing typed by a user
+/// goes in it).
+pub(crate) fn kill(kind: ActionKind, id: u64) -> String {
+    match kind {
+        ActionKind::Cancel => format!("KILL QUERY {id}"),
+        ActionKind::Terminate => format!("KILL {id}"),
+    }
+}
+
+/// The call of a provider's procedure (`procedure`, one of the core's route table) on the
+/// session of `id`.
+pub(crate) fn call(procedure: &str, id: u64) -> String {
+    format!("CALL {procedure}({id})")
+}
+
+/// Whether the statement event `event_id` of thread `thread_id` ended with an error, and which:
+/// at most one row, column `MYSQL_ERRNO` (0: none). The history keeps a thread's last few
+/// statements only, so no row says nothing.
+pub(crate) fn statement_errno(thread_id: u64, event_id: u64) -> String {
+    format!(
+        "SELECT MYSQL_ERRNO FROM performance_schema.events_statements_history \
+         WHERE THREAD_ID = {thread_id} AND EVENT_ID = {event_id}"
+    )
 }
 
 /// The session `id`'s statement in whole, to tell whether it is still the one the list showed:

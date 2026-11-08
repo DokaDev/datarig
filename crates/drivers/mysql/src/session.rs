@@ -729,6 +729,11 @@ pub(crate) struct Killer {
 }
 
 impl Killer {
+    /// The server's id of the session (its connection id).
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+
     pub(crate) fn new(route: Route, opts: Opts, id: u64) -> Self {
         Self {
             route,

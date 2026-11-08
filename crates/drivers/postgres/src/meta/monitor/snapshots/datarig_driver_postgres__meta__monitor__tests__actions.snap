@@ -1,0 +1,27 @@
+---
+source: crates/drivers/postgres/src/meta/monitor/tests.rs
+expression: "text.join(\"\\n\")"
+---
+-- cancel
+SELECT g.own, g.session, g.tracked, g.statement, CASE WHEN NOT g.own AND g.session AND g.tracked AND g.statement THEN pg_cancel_backend(g.pid) END AS sent FROM (SELECT a.pid, a.pid = pg_backend_pid() AS own, COALESCE((extract(epoch FROM a.backend_start) * 1000000)::int8 = 1794068700000001, false) AS session, COALESCE(a.state <> 'disabled', false) AS tracked, COALESCE((extract(epoch FROM a.query_start) * 1000000)::int8 IS NOT DISTINCT FROM 1794068760000002 AND a.state NOT IN ('idle', 'idle in transaction', 'idle in transaction (aborted)'), false) AS statement FROM pg_stat_activity a WHERE a.pid = 4242) g
+
+-- cancel, never ran a statement
+SELECT g.own, g.session, g.tracked, g.statement, CASE WHEN NOT g.own AND g.session AND g.tracked AND g.statement THEN pg_cancel_backend(g.pid) END AS sent FROM (SELECT a.pid, a.pid = pg_backend_pid() AS own, COALESCE((extract(epoch FROM a.backend_start) * 1000000)::int8 = 1794068700000001, false) AS session, false AS tracked, COALESCE((extract(epoch FROM a.query_start) * 1000000)::int8 IS NOT DISTINCT FROM NULL::int8 AND a.state NOT IN ('idle', 'idle in transaction', 'idle in transaction (aborted)'), false) AS statement FROM pg_stat_activity a WHERE a.pid = 4242) g
+
+-- cancel, no stamp
+SELECT g.own, g.session, g.tracked, g.statement, CASE WHEN NOT g.own AND g.session AND g.tracked AND g.statement THEN pg_cancel_backend(g.pid) END AS sent FROM (SELECT a.pid, a.pid = pg_backend_pid() AS own, COALESCE((extract(epoch FROM a.backend_start) * 1000000)::int8 = 1794068700000001, false) AS session, false AS tracked, false AS statement FROM pg_stat_activity a WHERE a.pid = 4242) g
+
+-- terminate, direct
+SELECT g.own, g.session, g.tracked, g.statement, CASE WHEN NOT g.own AND g.session AND g.tracked AND g.statement THEN pg_terminate_backend(g.pid) END AS sent FROM (SELECT a.pid, a.pid = pg_backend_pid() AS own, COALESCE((extract(epoch FROM a.backend_start) * 1000000)::int8 = 1794068700000001, false) AS session, COALESCE(a.state <> 'disabled', false) AS tracked, COALESCE((extract(epoch FROM a.query_start) * 1000000)::int8 IS NOT DISTINCT FROM 1794068760000002, false) AS statement FROM pg_stat_activity a WHERE a.pid = 4242) g
+
+-- terminate, pooled
+SELECT g.own, g.session, g.tracked, g.statement, CASE WHEN NOT g.own AND g.session AND g.tracked AND g.statement THEN pg_terminate_backend(g.pid) END AS sent FROM (SELECT a.pid, a.pid = pg_backend_pid() AS own, COALESCE((extract(epoch FROM a.backend_start) * 1000000)::int8 = 1794068700000001, false) AS session, COALESCE(a.state <> 'disabled', false) AS tracked, COALESCE((extract(epoch FROM a.query_start) * 1000000)::int8 IS NOT DISTINCT FROM 1794068760000002 AND a.state NOT IN ('idle', 'idle in transaction', 'idle in transaction (aborted)'), false) AS statement FROM pg_stat_activity a WHERE a.pid = 4242) g
+
+-- terminate, route unknown
+SELECT g.own, g.session, g.tracked, g.statement, CASE WHEN NOT g.own AND g.session AND g.tracked AND g.statement THEN pg_terminate_backend(g.pid) END AS sent FROM (SELECT a.pid, a.pid = pg_backend_pid() AS own, COALESCE((extract(epoch FROM a.backend_start) * 1000000)::int8 = 1794068700000001, false) AS session, COALESCE(a.state <> 'disabled', false) AS tracked, COALESCE((extract(epoch FROM a.query_start) * 1000000)::int8 IS NOT DISTINCT FROM 1794068760000002 AND a.state NOT IN ('idle', 'idle in transaction', 'idle in transaction (aborted)'), false) AS statement FROM pg_stat_activity a WHERE a.pid = 4242) g
+
+-- backend pid
+SELECT pg_backend_pid() AS pid
+
+-- follow-up
+WITH a AS (SELECT s.pid, s.leader_pid AS leader_pid, s.usename::text AS usename, s.datname::text AS datname, s.application_name, host(s.client_addr) AS client_addr, s.client_port, s.backend_type, s.state, s.wait_event_type, s.wait_event, (extract(epoch FROM s.backend_start) * 1000000)::int8 AS backend_start, (extract(epoch FROM s.xact_start) * 1000000)::int8 AS xact_start, (extract(epoch FROM s.query_start) * 1000000)::int8 AS query_start, (extract(epoch FROM s.state_change) * 1000000)::int8 AS state_change, left(s.query, 256) AS query, char_length(s.query) > 256 AS shortened, octet_length(s.query) >= t.size - 4 AS maybe_cut, s.pid = pg_backend_pid() AS monitor FROM pg_stat_activity s, (SELECT setting::int AS size FROM pg_settings WHERE name = 'track_activity_query_size') t), w AS (SELECT pid FROM a WHERE wait_event_type = 'Lock' ORDER BY state_change NULLS LAST, pid LIMIT 50) SELECT (extract(epoch FROM now()) * 1000000)::int8 AS now, a.*, CASE WHEN a.pid IN (SELECT pid FROM w) THEN pg_blocking_pids(a.pid)::text END AS blocked_by FROM a WHERE a.pid = 4242 OR a.monitor ORDER BY a.pid

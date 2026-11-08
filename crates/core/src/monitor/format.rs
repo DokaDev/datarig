@@ -45,6 +45,20 @@ pub struct PgMonitor {
     /// roles' sessions (never a superuser's).
     pub signal_backend: bool,
     pub flavour: Flavour,
+    /// How the monitor connection reaches the server, as the driver verified it.
+    pub route: Route,
+}
+
+/// How a monitor connection reaches its server.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Route {
+    /// Straight to the server: its server session is the connection's own.
+    Direct,
+    /// Through a pooler: a server session may serve one client now and another next.
+    Pooled,
+    /// Not verified either way.
+    #[default]
+    Unknown,
 }
 
 impl PgMonitor {
@@ -82,6 +96,10 @@ pub struct MySqlMonitor {
     /// transaction or not. Without it a session idle with no InnoDB transaction may still hold
     /// one (a transaction that read only MyISAM tables, `LOCK TABLES`): not known.
     pub metadata_locks: Readable,
+    /// `performance_schema.events_statements_current` with `threads` (needs `SELECT` on them),
+    /// its consumer on with those above it: which statement each instrumented thread runs, by
+    /// event id. Without it a statement is told apart by its text and times only.
+    pub statements: Readable,
     pub flavour: Flavour,
 }
 

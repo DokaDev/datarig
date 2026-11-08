@@ -587,6 +587,45 @@ pub enum DbCommand {
         request: u64,
         ask: crate::monitor::TextAsk,
     },
+    /// An action of a monitor session on another session of its server: `kind` on `target`,
+    /// sent only if the target still is what the row the user acted on showed. Answered with
+    /// [`DbEvent::MonitorActionDone`] of the same `request`; other sessions answer it with
+    /// [`DbError::NotSupported`] and send nothing.
+    MonitorAction {
+        request: u64,
+        kind: crate::monitor::ActionKind,
+        target: crate::monitor::ActionTarget,
+    },
+    /// A monitor session's read of the one session `target` names, after an action on it.
+    /// Answered with [`DbEvent::MonitorFollowUp`] of the same `request`; other sessions answer
+    /// it with [`DbError::NotSupported`].
+    MonitorFollowUp {
+        request: u64,
+        target: crate::monitor::ActionTarget,
+    },
+    /// Which server session is this connection's own, asked when the app needs it (the monitor
+    /// marks the rows of its own tabs). Answered with [`DbEvent::ServerSession`] of the same
+    /// `request`. Nothing is asked of the server at connect for it: a query session answers
+    /// from what its connect already learnt, else checks once (one short read, never inside an
+    /// open transaction block) and keeps the answer for the connection. Other sessions answer
+    /// [`OwnSession::NotKnown`].
+    ServerSession {
+        request: u64,
+    },
+}
+
+/// The answer to [`DbCommand::ServerSession`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnSession {
+    /// The connection reaches the server directly (verified, not assumed): `id` (PostgreSQL
+    /// backend pid, MySQL connection id) is this connection's session and no other client's.
+    /// It holds for this connection only: a reconnect is a new session.
+    Direct { id: i64 },
+    /// The connection goes through a pooler: the server session it talks to is not its own.
+    NotDirect,
+    /// Not known now (the check failed, or a transaction block is open); asking again later may
+    /// tell.
+    NotKnown,
 }
 
 /// How [`DbCommand::ApplyEdits`] stands to a transaction when no block is open.
@@ -708,6 +747,15 @@ impl DbCommand {
             }
             DbCommand::MonitorQueryText { request, .. } => {
                 DbEvent::MonitorQueryText { request: *request, result: Err(error) }
+            }
+            DbCommand::MonitorAction { request, .. } => {
+                DbEvent::MonitorActionDone { request: *request, outcome: crate::monitor::ActionOutcome::Failed(error) }
+            }
+            DbCommand::MonitorFollowUp { request, .. } => {
+                DbEvent::MonitorFollowUp { request: *request, result: Err(error) }
+            }
+            DbCommand::ServerSession { request } => {
+                DbEvent::ServerSession { request: *request, own: OwnSession::NotKnown }
             }
         }
     }
@@ -1168,5 +1216,21 @@ pub enum DbEvent {
     MonitorQueryText {
         request: u64,
         result: Result<crate::monitor::FullText, DbError>,
+    },
+    /// The answer to [`DbCommand::MonitorAction`] `request`: what was sent and what the server
+    /// said.
+    MonitorActionDone {
+        request: u64,
+        outcome: crate::monitor::ActionOutcome,
+    },
+    /// The answer to [`DbCommand::MonitorFollowUp`] `request`.
+    MonitorFollowUp {
+        request: u64,
+        result: Result<crate::monitor::FollowUp, DbError>,
+    },
+    /// The answer to [`DbCommand::ServerSession`] `request`.
+    ServerSession {
+        request: u64,
+        own: OwnSession,
     },
 }

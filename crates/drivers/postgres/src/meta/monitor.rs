@@ -12,9 +12,10 @@
 //! Values come back as text in forms that do not depend on the session's settings: times as
 //! microseconds since the Unix epoch on the server's clock, numbers as plain integers.
 
+use datarig_core::monitor::action::{ActionKind, ActionTarget, StatementStamp};
 use datarig_core::monitor::decode::pg::HIDDEN_QUERY;
-use datarig_core::monitor::format::{Marker, PG_MARKERS, PgMonitor};
-use datarig_core::monitor::{MAX_WAITERS, QUERY_CHARS, SessionsWanted, Want};
+use datarig_core::monitor::format::{Marker, PG_MARKERS, PgMonitor, Route};
+use datarig_core::monitor::{MAX_WAITERS, QUERY_CHARS, SessionsWanted, Timestamp, Want};
 
 /// A time as microseconds since the Unix epoch. `extract` gives an exact numeric from 14 on and
 /// a double before, which still rounds to the exact microsecond for any date of this era.
@@ -102,8 +103,18 @@ pub(crate) fn counters() -> String {
 /// itself), `blocked_by` (`pg_blocking_pids`, only for the [`MAX_WAITERS`] longest lock
 /// waiters, else NULL).
 pub(crate) fn sessions(pg: &PgMonitor, wanted: SessionsWanted) -> String {
-    let leader = if pg.leader_pid() { "s.leader_pid" } else { "NULL::int" };
     let idle = if wanted.idle { "" } else { "WHERE a.state IS DISTINCT FROM 'idle' OR a.monitor " };
+    session_rows(pg, idle)
+}
+
+/// The rows of [`sessions`] for the one session of `pid`, and the reading session's own (so
+/// there is always a row, which the decoder needs; the caller picks the one of `pid`).
+pub(crate) fn session(pg: &PgMonitor, pid: i64) -> String {
+    session_rows(pg, &format!("WHERE a.pid = {pid} OR a.monitor "))
+}
+
+fn session_rows(pg: &PgMonitor, filter: &str) -> String {
+    let leader = if pg.leader_pid() { "s.leader_pid" } else { "NULL::int" };
     format!(
         "WITH a AS (SELECT s.pid, {leader} AS leader_pid, s.usename::text AS usename, s.datname::text AS datname, \
          s.application_name, host(s.client_addr) AS client_addr, s.client_port, s.backend_type, s.state, \
@@ -116,7 +127,7 @@ pub(crate) fn sessions(pg: &PgMonitor, wanted: SessionsWanted) -> String {
          w AS (SELECT pid FROM a WHERE wait_event_type = 'Lock' ORDER BY state_change NULLS LAST, pid LIMIT {MAX_WAITERS}) \
          SELECT {now} AS now, a.*, \
          CASE WHEN a.pid IN (SELECT pid FROM w) THEN pg_blocking_pids(a.pid)::text END AS blocked_by \
-         FROM a {idle}ORDER BY a.pid",
+         FROM a {filter}ORDER BY a.pid",
         backend_start = us("s.backend_start"),
         xact_start = us("s.xact_start"),
         query_start = us("s.query_start"),
@@ -148,6 +159,67 @@ pub(crate) fn tick(pg: &PgMonitor, want: &Want) -> Vec<String> {
         statements.push(server_info());
     }
     statements
+}
+
+/// The statement of an action of `kind` on `target`, run in a transaction of its own
+/// ([`begin`]): it reads the target's pid and sends the signal in the same statement, only when
+/// the session is still the one the row showed (its `backend_start`, to the microsecond as the
+/// tick read it), its last statement is still the one the row showed (its `query_start`: the
+/// session may be a pooler's server connection, which serves another client once its
+/// statement ends, whatever way the monitor itself connects) and it is not the reading
+/// session; a cancel also when that statement still runs, and so does an end where the
+/// monitor goes through a pooler or its route is not known. At most one row (none: no session
+/// of that pid). Never without a statement start then and now: where the server does not track
+/// the session's activity (`track_activities` off) its `query_start` is NULL whatever it runs,
+/// so a NULL proves nothing. Columns: `own` (the reading session), `session` (the same
+/// session), `tracked` (a start then, its activity tracked now), `statement` (the same statement, and running where that is needed), `sent` (what
+/// the signal function answered, NULL when it was not called). Every value in it is an integer
+/// the tick read; nothing typed by a user.
+pub(crate) fn action(pg: &PgMonitor, kind: ActionKind, target: &ActionTarget) -> String {
+    let started = match target.key.started {
+        Some(Timestamp(t)) => t.to_string(),
+        None => "NULL::int8".into(),
+    };
+    let running = kind == ActionKind::Cancel || pg.route != Route::Direct;
+    let tracked = match &target.stamp {
+        Some(StatementStamp::Pg { query_start: Some(_) }) => "COALESCE(a.state <> 'disabled', false)",
+        _ => "false",
+    };
+    let statement = match &target.stamp {
+        Some(StatementStamp::Pg { query_start }) => {
+            let at = query_start.map_or_else(|| "NULL::int8".into(), |Timestamp(t)| t.to_string());
+            let still = match running {
+                true => " AND a.state NOT IN ('idle', 'idle in transaction', 'idle in transaction (aborted)')",
+                false => "",
+            };
+            format!(
+                "COALESCE({query_start} IS NOT DISTINCT FROM {at}{still}, false)",
+                query_start = us("a.query_start")
+            )
+        }
+        _ => "false".into(),
+    };
+    let function = match kind {
+        ActionKind::Cancel => "pg_cancel_backend",
+        ActionKind::Terminate => "pg_terminate_backend",
+    };
+    format!(
+        "SELECT g.own, g.session, g.tracked, g.statement, \
+         CASE WHEN NOT g.own AND g.session AND g.tracked AND g.statement THEN {function}(g.pid) END AS sent \
+         FROM (SELECT a.pid, a.pid = pg_backend_pid() AS own, \
+         COALESCE({backend_start} = {started}, false) AS session, \
+         {tracked} AS tracked, {statement} AS statement \
+         FROM pg_stat_activity a WHERE a.pid = {pid}) g",
+        backend_start = us("a.backend_start"),
+        pid = target.key.id,
+    )
+}
+
+/// The reading session's own server process id, which the driver compares with the one the
+/// server sent at start-up to tell whether the connection reaches the server directly. One
+/// row, column `pid`.
+pub(crate) fn backend_pid() -> String {
+    "SELECT pg_backend_pid() AS pid".into()
 }
 
 /// The statement that opens a tick's transaction. Read-only, and `READ COMMITTED NOT DEFERRABLE`

@@ -102,14 +102,14 @@ use crate::link::{Closed, Link, Next};
 use crate::route::Cancel;
 use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display, value_kind};
 use datarig_core::driver::{
-    CancelFailure, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode, TxOutcome, TxRule,
-    TxStep,
+    CancelFailure, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, OwnSession, PagingMode,
+    TxOutcome, TxRule, TxStep,
 };
 use datarig_core::sql::lexer::{Tok, Token, lex, lex_backslash_strings};
 use datarig_core::sql::risk::{self, Class};
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_postgres::error::SqlState;
@@ -400,12 +400,57 @@ pub(crate) struct Settings {
     pub(crate) lock_per_tx: bool,
     /// Keep prepared statements between transactions (the profile's statement cache).
     pub(crate) statement_cache: bool,
+    /// Whether the connection is direct, when the connect checked it (`None`: nothing was
+    /// checked, or the check failed): [`DbCommand::ServerSession`] asks the server only then.
+    pub(crate) direct: Option<bool>,
+}
+
+/// Which server session is the connection's own ([`DbCommand::ServerSession`]): the backend pid
+/// of the startup, and whether the connection is direct once that is known (it stays so for
+/// the connection's life).
+pub(crate) struct Own {
+    pid: i32,
+    direct: OnceLock<bool>,
+}
+
+impl Own {
+    pub(crate) const fn new(pid: i32) -> Self {
+        Own { pid, direct: OnceLock::new() }
+    }
+
+    fn answer(&self) -> OwnSession {
+        match self.direct.get() {
+            Some(true) => OwnSession::Direct { id: i64::from(self.pid) },
+            Some(false) => OwnSession::NotDirect,
+            None => OwnSession::NotKnown,
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) static NO_OWN: Own = Own::new(0);
+
+/// Answer [`DbCommand::ServerSession`] `request` between runs: what is known, else one check
+/// now, outside a transaction block only (in a block a failed check would abort the user's
+/// transaction; it is asked again later).
+async fn own_session(client: &Client, link: &mut Link, env: &Env<'_>, tx: &Tx, request: u64) -> Result<(), Closed> {
+    if env.own.direct.get().is_none()
+        && !tx.block
+        && !tx.unsure
+        && let Some(direct) = link.guard(None, crate::connect::apply_limits(client, None, None)).await?
+    {
+        let _ = env.own.direct.set(direct);
+    }
+    let _ = env.events.send(DbEvent::ServerSession { request, own: env.own.answer() });
+    Ok(())
 }
 
 /// What a statement run needs besides the connection.
 #[derive(Clone, Copy)]
 struct Env<'a> {
     events: &'a UnboundedSender<DbEvent>,
+    /// The connection's own server session ([`DbCommand::ServerSession`]).
+    own: &'a Own,
     token: &'a Cancel,
     /// The UI asked to cancel (set by the session's canceller, cleared when a run starts): a
     /// run of several statements stops before its next one.
@@ -729,8 +774,13 @@ pub(crate) async fn query_loop(
     settings: Settings,
 ) {
     let failed = AtomicBool::new(false);
+    let own = Own::new(client.backend_key_pid());
+    if let Some(direct) = settings.direct {
+        let _ = own.direct.set(direct);
+    }
     let env = Env {
         events: &events,
+        own: &own,
         token: &token,
         cancel: &cancel,
         failed: &failed,
@@ -836,8 +886,19 @@ pub(crate) async fn query_loop(
                 });
                 continue;
             }
+            Next::Command(DbCommand::ServerSession { request }) => {
+                match own_session(&client, &mut link, &env, &tx, request).await {
+                    Ok(()) => continue,
+                    Err(closed) => Stop::from(closed),
+                }
+            }
             // The monitor has a session of its own.
-            Next::Command(cmd @ (DbCommand::MonitorTick { .. } | DbCommand::MonitorQueryText { .. })) => {
+            Next::Command(
+                cmd @ (DbCommand::MonitorTick { .. }
+                | DbCommand::MonitorQueryText { .. }
+                | DbCommand::MonitorAction { .. }
+                | DbCommand::MonitorFollowUp { .. }),
+            ) => {
                 let _ = events.send(cmd.not_supported());
                 continue;
             }
@@ -2294,6 +2355,11 @@ async fn portal<'a>(
                     }
                 };
                 let _ = env.events.send(DbEvent::RepeatChecked { id: cid, result });
+            }
+            // Answered from what is known (nothing is sent in the portal's transaction): the
+            // result goes on paging.
+            Next::Command(DbCommand::ServerSession { request }) => {
+                let _ = env.events.send(DbEvent::ServerSession { request, own: env.own.answer() });
             }
             Next::Command(DbCommand::FetchMore { .. } | DbCommand::ClosePortal { .. }) => {}
             Next::Command(other) => {

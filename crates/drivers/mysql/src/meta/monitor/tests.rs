@@ -1,6 +1,8 @@
 use super::*;
 use datarig_core::monitor::Flavour;
-use datarig_core::monitor::decode::mysql::{CLOCK, NAME_VALUE, PROBE, PROBE_LOCKS, QUERY_TEXT, SERVER_INFO, SESSIONS};
+use datarig_core::monitor::decode::mysql::{
+    CLOCK, NAME_VALUE, PROBE, PROBE_LOCKS, PROBE_STATEMENTS, QUERY_TEXT, SERVER_INFO, SESSIONS,
+};
 use std::time::Duration;
 
 fn my(version: u32, performance_schema: bool, readable: Readable) -> MySqlMonitor {
@@ -11,6 +13,7 @@ fn my(version: u32, performance_schema: bool, readable: Readable) -> MySqlMonito
         process: Readable::Unknown,
         innodb_trx: readable,
         metadata_locks: readable,
+        statements: readable,
         flavour: Flavour::Standard,
     }
 }
@@ -21,7 +24,8 @@ const NO_IDLE: SessionsWanted = SessionsWanted { idle: false };
 /// Every statement of a version, each with the shape its decoder reads.
 fn every(m: &MySqlMonitor) -> Vec<(&'static str, String, &'static [&'static str])> {
     let probe = probe();
-    let shapes: [&'static [&'static str]; 5] = [PROBE, NAME_VALUE, &["PRIVILEGE_TYPE"], &["trx_id"], PROBE_LOCKS];
+    let shapes: [&'static [&'static str]; 6] =
+        [PROBE, NAME_VALUE, &["PRIVILEGE_TYPE"], &["trx_id"], PROBE_LOCKS, PROBE_STATEMENTS];
     let mut out: Vec<_> = probe.into_iter().zip(shapes).map(|(sql, shape)| ("probe", sql, shape)).collect();
     let info = server_info();
     out.push(("server info", info[0].clone(), SERVER_INFO));
@@ -32,6 +36,8 @@ fn every(m: &MySqlMonitor) -> Vec<(&'static str, String, &'static [&'static str]
     out.push(("sessions", sessions(m, IDLE).remove(0), SESSIONS));
     out.push(("sessions without idle", sessions(m, NO_IDLE).remove(0), SESSIONS));
     out.push(("query text", query_text(4211), QUERY_TEXT));
+    out.push(("session before an action", guard(m, 63114), SESSIONS));
+    out.push(("session after an action", session(m, 63114), SESSIONS));
     out
 }
 
@@ -82,6 +88,21 @@ fn idle_sessions_are_left_out_only_when_their_transactions_are_known() {
 }
 
 #[test]
+fn a_running_statement_is_named_by_its_event_only_when_the_events_are_read() {
+    let with = sessions(&my(80411, true, Readable::Yes), IDLE).remove(0);
+    assert!(with.contains("IF(pt.INSTRUMENTED = 'YES', e.EVENT_ID, NULL) AS EVENT_ID"));
+    assert!(with.contains("e.NESTING_EVENT_LEVEL = 0 AND e.END_EVENT_ID IS NULL"));
+    let unknown = MySqlMonitor { statements: Readable::Unknown, ..my(80411, true, Readable::Yes) };
+    let off = my(80411, false, Readable::Yes);
+    for m in [unknown, off] {
+        let without = sessions(&m, IDLE).remove(0);
+        assert!(without.contains("NULL AS THREAD_ID, NULL AS EVENT_ID") && !without.contains("events_statements"));
+    }
+    assert!(with.contains("MD5(p.INFO) AS info_md5"), "the whole text, not the list's start of it");
+    assert!(probe()[5].contains("'events_statements_current'"));
+}
+
+#[test]
 fn a_tick_reads_what_is_wanted_in_order() {
     let m = my(80411, true, Readable::Yes);
     let limit = Duration::from_secs(2);
@@ -122,4 +143,40 @@ async fn every_statement_gives_its_decoders_columns() {
         }
     }
     let _ = conn.disconnect().await;
+}
+
+/// The statements that act, and the read of a statement's end.
+#[test]
+fn action_statements() {
+    let text = [
+        ("cancel", kill(ActionKind::Cancel, 63114)),
+        ("terminate", kill(ActionKind::Terminate, 63114)),
+        ("procedure", call("mysql.rds_kill_query", 63114)),
+        ("statement errno", statement_errno(63154, 1207)),
+    ]
+    .map(|(name, sql)| format!("-- {name}\n{sql}\n"));
+    insta::assert_snapshot!("actions", text.join("\n"));
+}
+
+#[test]
+fn the_read_before_an_action_tells_the_statement_as_the_tick_does() {
+    let m = my(80411, true, Readable::Yes);
+    let before = guard(&m, 63114);
+    let tick = sessions(&m, IDLE).remove(0);
+    for part in [
+        "IF(pt.INSTRUMENTED = 'YES', e.EVENT_ID, NULL) AS EVENT_ID",
+        "e.NESTING_EVENT_LEVEL = 0 AND e.END_EVENT_ID IS NULL",
+        "MD5(p.INFO) AS info_md5",
+        "p.COMMAND, p.TIME",
+        "FROM performance_schema.processlist p",
+    ] {
+        assert!(before.contains(part) && tick.contains(part), "{part}");
+    }
+    assert!(before.contains("WHERE p.ID IN (63114, CONNECTION_ID())"), "{before}");
+    assert!(!before.contains("INNODB_TRX") && !before.contains("metadata_locks"), "{before}");
+    let old = guard(&my(80017, true, Readable::Yes), 1);
+    assert!(old.contains("FROM information_schema.PROCESSLIST p"), "{old}");
+    let weak = guard(&my(80411, false, Readable::Yes), 1);
+    assert!(weak.contains("NULL AS THREAD_ID, NULL AS EVENT_ID") && weak.contains("MD5(p.INFO)"), "{weak}");
+    assert!(session(&m, 63114).contains("INNODB_TRX"), "the follow-up reads the tick's columns");
 }

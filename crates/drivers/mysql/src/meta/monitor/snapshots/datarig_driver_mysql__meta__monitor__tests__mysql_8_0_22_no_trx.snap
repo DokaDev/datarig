@@ -17,6 +17,9 @@ SELECT trx_id FROM information_schema.INNODB_TRX LIMIT 1
 -- probe
 SELECT i.ENABLED, (SELECT COUNT(*) FROM performance_schema.metadata_locks m JOIN performance_schema.threads t ON t.THREAD_ID = m.OWNER_THREAD_ID WHERE 1 = 0) AS probe FROM performance_schema.setup_instruments i WHERE i.NAME = 'wait/lock/metadata/sql/mdl'
 
+-- probe
+SELECT MIN(c.ENABLED) AS ENABLED, (SELECT COUNT(*) FROM performance_schema.events_statements_current e JOIN performance_schema.threads t ON t.THREAD_ID = e.THREAD_ID WHERE 1 = 0) AS probe FROM performance_schema.setup_consumers c WHERE c.NAME IN ('global_instrumentation', 'thread_instrumentation', 'events_statements_current')
+
 -- server info
 SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, VERSION() AS version, @@version_comment AS version_comment, @@read_only AS read_only, @@super_read_only AS super_read_only, @@server_id AS server_id, @@gtid_mode AS gtid_mode, @@log_bin AS log_bin, @@max_connections AS max_connections, @@innodb_buffer_pool_size AS innodb_buffer_pool_size, @@performance_schema AS performance_schema
 
@@ -30,10 +33,16 @@ SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now
 SHOW GLOBAL STATUS WHERE Variable_name IN ('Uptime', 'Questions', 'Com_commit', 'Com_rollback', 'Threads_connected', 'Threads_running', 'Innodb_buffer_pool_read_requests', 'Innodb_buffer_pool_reads', 'Innodb_rows_read', 'Innodb_rows_inserted', 'Innodb_rows_updated', 'Innodb_rows_deleted', 'Bytes_received', 'Bytes_sent', 'Innodb_row_lock_waits', 'Slow_queries', 'Created_tmp_disk_tables', 'Aborted_connects', 'Performance_schema_thread_instances_lost')
 
 -- sessions
-SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, NULL AS trx_started, NULL AS trx_state, NULL AS trx_rows_locked, NULL AS trx_rows_modified, 0 AS trx_read, NULL AS in_tx, NULL AS explicit_locks, 0 AS locks_read FROM performance_schema.processlist p ORDER BY p.ID
+SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, NULL AS trx_started, NULL AS trx_state, NULL AS trx_rows_locked, NULL AS trx_rows_modified, 0 AS trx_read, NULL AS in_tx, NULL AS explicit_locks, 0 AS locks_read, NULL AS THREAD_ID, NULL AS EVENT_ID, MD5(p.INFO) AS info_md5 FROM performance_schema.processlist p ORDER BY p.ID
 
 -- sessions without idle
-SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, NULL AS trx_started, NULL AS trx_state, NULL AS trx_rows_locked, NULL AS trx_rows_modified, 0 AS trx_read, NULL AS in_tx, NULL AS explicit_locks, 0 AS locks_read FROM performance_schema.processlist p ORDER BY p.ID
+SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, NULL AS trx_started, NULL AS trx_state, NULL AS trx_rows_locked, NULL AS trx_rows_modified, 0 AS trx_read, NULL AS in_tx, NULL AS explicit_locks, 0 AS locks_read, NULL AS THREAD_ID, NULL AS EVENT_ID, MD5(p.INFO) AS info_md5 FROM performance_schema.processlist p ORDER BY p.ID
 
 -- query text
 SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.COMMAND, p.TIME, p.INFO, OCTET_LENGTH(p.INFO) >= 65532 AS maybe_cut FROM information_schema.PROCESSLIST p WHERE p.ID = 4211
+
+-- session before an action
+SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, NULL AS trx_started, NULL AS trx_state, NULL AS trx_rows_locked, NULL AS trx_rows_modified, 0 AS trx_read, NULL AS in_tx, NULL AS explicit_locks, 0 AS locks_read, NULL AS THREAD_ID, NULL AS EVENT_ID, MD5(p.INFO) AS info_md5 FROM performance_schema.processlist p WHERE p.ID IN (63114, CONNECTION_ID()) ORDER BY p.ID
+
+-- session after an action
+SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, NULL AS trx_started, NULL AS trx_state, NULL AS trx_rows_locked, NULL AS trx_rows_modified, 0 AS trx_read, NULL AS in_tx, NULL AS explicit_locks, 0 AS locks_read, NULL AS THREAD_ID, NULL AS EVENT_ID, MD5(p.INFO) AS info_md5 FROM performance_schema.processlist p WHERE p.ID IN (63114, CONNECTION_ID()) ORDER BY p.ID

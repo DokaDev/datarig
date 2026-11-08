@@ -1,7 +1,8 @@
 //! PostgreSQL rows read into the model (the statements are the driver's: its `meta::monitor`).
 
 use super::{DecodeError, Row, Rows, malformed, one};
-use crate::monitor::format::{self, PG_MARKERS, PG_MIN_VERSION, PgMonitor, Probe};
+use crate::monitor::action::StatementStamp;
+use crate::monitor::format::{self, PG_MARKERS, PG_MIN_VERSION, PgMonitor, Probe, Route};
 use crate::monitor::model::SessionsWanted;
 use crate::monitor::model::{
     Blocker, Counter, CounterKind, Epoch, Extra, ExtraKey, FullText, Gauge, GaugeKind, Hidden, Need, Own, Part, Proof,
@@ -84,6 +85,8 @@ pub fn probe(rows: &Rows) -> Result<PgMonitor, DecodeError> {
         read_all_stats: row.required_bool("read_all_stats")?,
         signal_backend: row.required_bool("signal_backend")?,
         flavour: format::flavour(PG_MARKERS, &Probe { names, basedir: None }),
+        // The driver says how it reached the server, once it has verified it.
+        route: Route::Unknown,
     })
 }
 
@@ -215,6 +218,7 @@ fn session(row: &Row) -> Result<SessionRow, DecodeError> {
         }),
         _ => None,
     };
+    let query_started = row.time("query_start")?;
     Ok(SessionRow {
         key: SessionKey { id: pid, started: row.time("backend_start")? },
         kind,
@@ -225,13 +229,15 @@ fn session(row: &Row) -> Result<SessionRow, DecodeError> {
         state,
         wait,
         tx,
-        query_started: row.time("query_start")?,
+        query_started,
         state_since: row.time("state_change")?,
         query,
         blocked_by: row.text("blocked_by").map(blockers).transpose()?,
         monitor: row.required_bool("monitor")?,
         visible: if hidden { Visibility::Hidden } else { Visibility::Full },
         extra: Vec::new(),
+        thread: None,
+        statement: (!hidden).then_some(StatementStamp::Pg { query_start: query_started }),
     })
 }
 
