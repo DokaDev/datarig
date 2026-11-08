@@ -152,12 +152,18 @@ impl Conn {
     async fn sleeping(&mut self, application: &str) -> SessionRow {
         // In the sleep itself: with the extended protocol the server sets `query_start` again at
         // Execute, after the statement showed as active from its Parse.
-        self.row_when(application, |r| {
+        let in_sleep = |r: &SessionRow| {
             r.state == SessionState::Active
                 && r.query.as_ref().is_some_and(|q| q.text.contains("pg_sleep"))
                 && r.wait.as_ref().is_some_and(|w| w.name == "PgSleep")
-        })
-        .await
+        };
+        // One read is not enough: within a transaction the server answers a session's state,
+        // statement and `query_start` from a copy taken at its first read of them, but its wait
+        // event as it is at that moment. A tick that copied the session at the Parse can show
+        // the Parse's start beside the wait of the sleep. The next tick copies the session after
+        // that wait was seen, so in the sleep, with the start a cancel is checked against.
+        self.row_when(application, in_sleep).await;
+        self.row_when(application, in_sleep).await
     }
 
     async fn wait(&mut self, pred: impl Fn(&DbEvent) -> bool, secs: u64) -> DbEvent {
