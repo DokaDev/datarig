@@ -1470,3 +1470,30 @@ fn metadata_locks_the_server_did_not_track_make_the_holders_unsure() {
     let need = Need::Setting("performance_schema_max_metadata_locks");
     assert!(s.hidden.contains(&Hidden { part: Part::UntrackedMetadataLocks, need }));
 }
+
+#[test]
+fn a_metadata_lock_holder_with_no_transaction_open_is_not_said_to_block() {
+    let my = mysql_root();
+    let (locks, _) = decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).unwrap();
+    let mut list = decode::mysql::sessions(&rows_of_sessions(), &my, IDLE).unwrap().0;
+    let base = list.rows[0].clone();
+    let alter = SessionRow {
+        key: SessionKey { id: 9, started: None },
+        wait: Some(Wait { class: WaitClass::Lock, name: "table metadata lock".into() }),
+        query_started: None,
+        ..base.clone()
+    };
+    // 5 runs nothing in a transaction (its prepared XA transaction holds the lock).
+    let free = SessionRow { key: SessionKey { id: 5, started: None }, wait: None, tx: Tx::None, ..base };
+    list.rows = vec![alter, free];
+    let blame = |list: &SessionList| {
+        lk::edges(Some(list), Some(&locks), false)
+            .edges
+            .into_iter()
+            .find(|e| e.waiter == 9 && e.holder == Holder::Session(5))
+            .map(|e| e.blame)
+    };
+    assert_eq!(blame(&list), Some(Blame::CannotTell));
+    list.rows[1].tx = Tx::Open;
+    assert_eq!(blame(&list), Some(Blame::Incompatible));
+}

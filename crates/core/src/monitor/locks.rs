@@ -422,9 +422,21 @@ pub fn edges(sessions: Option<&SessionList>, locks: Option<&LockList>, complete:
             }
         }
         for h in &w.holders {
-            if h.holder != Holder::Session(w.waiter.id) {
-                out.push(w.waiter.id, h.holder.clone(), h.blame);
+            if h.holder == Holder::Session(w.waiter.id) {
+                continue;
             }
+            // A metadata lock lasts until its transaction ends: a holder known to have none open
+            // holds it for another (a prepared XA transaction keeps the thread that took it), so
+            // whether that session blocks is not known.
+            let none_open = match &h.holder {
+                Holder::Session(id) => by_id.get(id).is_some_and(|r| r.tx == Tx::None),
+                _ => false,
+            };
+            let blame = match h.blame {
+                Blame::Incompatible if none_open => Blame::CannotTell,
+                b => b,
+            };
+            out.push(w.waiter.id, h.holder.clone(), blame);
         }
     }
     for w in &locks.waits {

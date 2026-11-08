@@ -654,8 +654,13 @@ pub fn tick(
             hidden.extend(more);
             // Metadata locks the performance schema had no room for: some holders are missing
             // (not knowing the counter is the same as not knowing they are all there).
-            let lost = status_value(&name_values(&rows[1], "status")?, "Performance_schema_metadata_lock_lost")?;
-            if my.metadata_locks == Readable::Yes && lost.is_none_or(|n| n > 0) {
+            let status = name_values(&rows[1], "status")?;
+            let lost = status_value(&status, "Performance_schema_metadata_lock_lost")?;
+            // A thread the performance schema could not track has none of its metadata locks
+            // tracked either.
+            let threads = status_value(&status, "Performance_schema_thread_instances_lost")?;
+            let untracked = lost.is_none_or(|n| n > 0) || threads.is_none_or(|n| n > 0);
+            if my.metadata_locks == Readable::Yes && untracked {
                 list.more += 1;
                 hidden.push(Hidden {
                     part: Part::UntrackedMetadataLocks,
