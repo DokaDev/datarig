@@ -883,6 +883,7 @@ impl App {
             }
             MouseEventKind::Down(MouseButton::Right) if inside(l.results) && self.monitor_shown() => {
                 self.focus = Focus::Results;
+                self.monitor_select_at(x, y);
                 self.open_action_menu();
             }
             MouseEventKind::Down(MouseButton::Right)

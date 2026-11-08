@@ -1100,6 +1100,9 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Monitor(M::Root), "monitor.root", Label::ActionMonitorRoot, monitor_focused),
     act(Action::Monitor(M::ServerInfo), "monitor.server", Label::ActionMonitorServer, monitor_focused),
     act(Action::Monitor(M::Back), "monitor.back", Label::ActionMonitorBack, monitor_focused),
+    act(Action::Monitor(M::Cancel), "monitor.cancel", Label::ActionMonitorCancel, monitor_focused),
+    act(Action::Monitor(M::Terminate), "monitor.terminate", Label::ActionMonitorTerminate, monitor_focused),
+    act(Action::Monitor(M::Actions), "monitor.actions", Label::ActionMonitorActions, monitor_focused),
 ];
 
 pub fn spec(a: Action) -> &'static ActionSpec {

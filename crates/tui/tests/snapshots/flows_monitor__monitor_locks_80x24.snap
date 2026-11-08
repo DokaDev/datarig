@@ -25,4 +25,4 @@ expression: "h.screen(80, 24)"
 │                      ││  ExclusiveLock on transactionid 736 · SELECT * FROM  │
 │                      ││  orders WHERE id = 7 FOR UPDATE                      │
 ╰──────────────────────╯╰──────────────────────────────────────────────────────╯
- local-pg │            │ v view · Enter detail · / filter · a idle · p pause EN
+ local-pg │   │ v view · Enter detail · c cancel · X end · / filter · a idle EN

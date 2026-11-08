@@ -1,0 +1,44 @@
+---
+source: crates/tui/tests/flows_monitor.rs
+expression: "h.screen(120, 40)"
+---
+╭ Explorer ──────────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                                                     
+│  ＋ New connection         │╭ Monitor: local-pg ─────────────────────────────────────────────────────────────────────╮
+│▾ Connections 1             ││ PostgreSQL 17.11 · read-write · up 41d3h · max 200 connections                         │
+│  ▾ ●   local-pg            ││ 1 Overview  2 Sessions  3 Locks  4 Replication                                every 2s │
+│    ▾ datarig default       ││ 4 of 4 sessions · 37 idle not listed                                                   │
+│      ▸ analytics           ││ pid     user       database   state        wait           query age ▼ statement        │
+│      ▸ public              ││ 3907    bob        shop       idle in tra…                12m00s      SELECT * FROM o… │
+│      ▸ shop                ││ 4211    alice      shop       active       Lock:transact… 3m10s       UPDATE orders S… │
+│                            ││ 4302    web        shop       active                      400ms       SELECT count(*)… │
+│                            ││ 4400    datarig    shop       this monitor                0ms         SELECT … FROM p… │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            │╭ End the session? ────────────────────────────────────────╮                             │
+│                            ││                                                          │                             │
+│                            ││ Session 4211: alice on shop                              │                             │
+│                            ││ Client: 10.0.0.7:51022                                   │                             │
+│                            ││ State: active                                            │                             │
+│                            ││ Transaction open for 3m11s                               │                             │
+│                            ││ Statement: UPDATE orders SET status = 'paid' WHERE id =  │                             │
+│                            ││ 7                                                        │                             │
+│                            ││ Its open transaction is rolled back.                     │                             │
+│                            ││                                                          │                             │
+│                            ││                [ Keep ]     End session                  │                             │
+│                            │╰─────────────────── y end the session · Enter/n/Esc keep ─╯                             │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯
+ local-pg │                                                                                                          EN

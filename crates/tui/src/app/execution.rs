@@ -220,6 +220,9 @@ impl App {
             t.pane.hidden = false;
         }
         let paging = self.tabs.get(id).map(|t| self.paging_mode(t)).unwrap_or_default();
+        // Asked first, so its answer comes before the statement runs (a session answers in
+        // order, and one that runs answers nothing else until it ends).
+        self.monitor_ask_own_at_run(id);
         self.send_tab(id, DbCommand::Execute { id: qid, statements, paging, tx });
     }
 
@@ -912,6 +915,22 @@ impl App {
     /// An event of tab `id`'s query session.
     fn tab_event(&mut self, id: TabId, ev: DbEvent) {
         let profile = self.tabs.get(id).and_then(|t| t.profile);
+        // Which server session this one is: kept only as the answer to the ask in flight.
+        if let DbEvent::ServerSession { request, own } = ev {
+            let now = self.now();
+            if let Some(t) = self.tabs.get_mut(id)
+                && t.exec.own == super::tabs::OwnAsk::Asked(request)
+            {
+                t.exec.own = super::tabs::OwnAsk::Known(own, now);
+            }
+            return;
+        }
+        // A session that failed or was lost is no server session of the tab's any more.
+        if matches!(ev, DbEvent::Lost { .. } | DbEvent::ConnectFailed { .. })
+            && let Some(t) = self.tabs.get_mut(id)
+        {
+            t.exec.own = super::tabs::OwnAsk::NotAsked;
+        }
         // A run whose cancel the server refused, that ended by itself after all: said in its
         // Messages (it ran to its end, whatever the user asked).
         if let Some(t) = self.tabs.get_mut(id)

@@ -175,6 +175,9 @@ pub enum ConfirmAction {
     ExportStart,
     /// Replace the file an export would write. Keeping it is the default.
     ExportReplace,
+    /// Send `kind` on the session Monitor tab `tab` asked about (it keeps what was asked).
+    /// Keeping the session as it is is the default.
+    MonitorAction { tab: super::TabId, kind: datarig_core::monitor::ActionKind },
 }
 
 /// A yes/no question: `y` yes, `n`/`Esc` no; `Enter` no when the answer would lose something
@@ -256,6 +259,14 @@ impl Confirm {
             ConfirmAction::KeychainSecurityTool => (Label::DialogButtonCancel, Label::DialogButtonTurnOn),
             ConfirmAction::ExportStart => (Label::DialogButtonCancel, Label::DialogButtonExport),
             ConfirmAction::ExportReplace => (Label::DialogButtonKeep, Label::DialogButtonReplace),
+            ConfirmAction::MonitorAction { kind, .. } => match kind {
+                datarig_core::monitor::ActionKind::Cancel => {
+                    (Label::DialogButtonKeep, Label::DialogButtonCancelStatement)
+                }
+                datarig_core::monitor::ActionKind::Terminate => {
+                    (Label::DialogButtonKeep, Label::DialogButtonEndSession)
+                }
+            },
             ConfirmAction::DiscardForm | ConfirmAction::DiscardFormQuit => {
                 (Label::DialogButtonKeepEditing, Label::DialogButtonDiscard)
             }

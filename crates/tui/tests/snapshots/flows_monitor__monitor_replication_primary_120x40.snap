@@ -41,4 +41,4 @@ expression: "h.screen(120, 40)"
 │                            ││                                                                                        │
 │                            ││                                                                                        │
 ╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯
- local-pg │           │ v view · Enter detail · / filter · a idle · p pause · : commands · Space ? help · Space more EN
+ local-pg │     │ v view · Enter detail · c cancel · X end · / filter · a idle · p pause · : commands · Space ? help EN

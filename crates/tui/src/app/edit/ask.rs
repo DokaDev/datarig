@@ -59,6 +59,8 @@ pub enum AskAction {
     Paste(Box<super::PasteAsk>),
     /// Read text with commas as CSV (`c`) or one column (`1`).
     Csv(Box<super::CsvAsk>),
+    /// Act on a session from the Monitor tab, as it was asked about.
+    Monitor(Box<crate::app::monitor::MonitorAsk>),
 }
 
 /// The changes an Apply was asked for: the tab, its result, what the rows were read under, the
@@ -324,6 +326,7 @@ impl App {
                 self.csv_ask_dropped(*a);
                 Label::EditPasteCancelled
             }
+            Some(AskAction::Monitor(_)) => Label::MonitorActNothingSent,
             None => return,
         };
         self.ask_ended(said);
@@ -335,6 +338,7 @@ impl App {
         let a = match ask.action {
             AskAction::ApplyEdits(a) => a,
             AskAction::Paste(p) => return self.paste_ask_yes(*p),
+            AskAction::Monitor(a) => return self.monitor_ask_yes(*a),
             // Answered by `c` or `1` only.
             AskAction::Csv(_) => return,
         };
@@ -381,6 +385,13 @@ impl App {
                 self.csv_ask_dropped(*a);
             }
             self.ask_ended(Label::EditPasteMoved);
+        }
+        if let Some(StatusAsk { action: AskAction::Monitor(a), .. }) = &self.ask
+            && !self.monitor_ask_current(a)
+        {
+            let said = self.monitor_ask_moved(a);
+            self.ask = None;
+            self.ask_ended(said);
         }
         let Some(w) = &self.apply_wait else { return };
         if !self.wait_current(w) {

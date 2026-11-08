@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_monitor.rs
+expression: "h.screen(80, 24)"
+---
+╭ Explorer ────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                   
+│  ＋ New connection   │╭ Monitor: local-pg ───────────────────────────────────╮
+│▾ Connections 1       ││ PostgreSQL 17.11 · read-write · up 41d3h · max 200 … │
+│  ▾ ●   local-pg      ││ 1  2 Sessions  3  4                         every 2s │
+│    ▾ datarig default ││ 4 of 4 sessions · 37 idle not listed                 │
+│      ▸ analytics     ││ pid    user     state       query ag… statement      │
+│      ▸ public        ││ 3907   bob      idle in tr… 12m00s    SELECT * FROM… │
+│      ▸ shop          ││ 4211   alice    active      3m10s     UPDATE orders… │
+│                      ││ 4302   web      active      400ms     SELECT count(… │
+│                      ││ 4400   datarig  this monit… 0ms       SELECT … FROM… │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││─ Actions ────────────────────────────────────────────│
+│                      ││ 1s ago  end 4211  alice@shop  · Session 4211 has en… │
+╰──────────────────────╯╰──────────────────────────────────────────────────────╯
+ local-pg │ Session 4211 has ended        │ v view · Enter detail · c cancel EN

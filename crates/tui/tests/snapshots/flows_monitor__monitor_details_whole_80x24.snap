@@ -25,4 +25,4 @@ expression: "h.screen(80, 24)"
 │                      ││ told apart                                           │
 │                      ││ UPDATE orders SET status = 'paid' WHERE id = 7 AND n │
 ╰──────────────────────╯╰──────────────────────────────────────────────────────╯
- local-pg │            │ v view · Enter detail · / filter · a idle · p pause EN
+ local-pg │   │ v view · Enter detail · c cancel · X end · / filter · a idle EN

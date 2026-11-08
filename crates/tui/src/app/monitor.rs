@@ -17,6 +17,13 @@
 //! Every read is bound to the tab, its connection's generation and the read's number: an answer
 //! of an older connection or read is dropped. What the account cannot see is said, with what
 //! would show it, never shown as nothing.
+//!
+//! `c` cancels the selected session's statement and `X` ends the session, asked first and
+//! followed up by reads of their own (`act`).
+
+mod act;
+
+pub use act::{ActionEntry, Asked, MonitorAsk, RowInfo};
 
 use super::*;
 use crate::widgets::monitor::state_text;
@@ -129,6 +136,12 @@ pub enum MonitorAction {
     ServerInfo,
     /// Close the details, end the filter.
     Back,
+    /// Cancel the selected session's statement (asked first).
+    Cancel,
+    /// End the selected session (asked first).
+    Terminate,
+    /// Show the action list under the sessions, or hide it.
+    Actions,
 }
 
 /// What a column of the session list sorts by.
@@ -310,6 +323,9 @@ pub struct MonitorTab {
     pub failures: u32,
     /// The latest read.
     pub snapshot: Option<Snapshot>,
+    /// The generation of the connection the latest read came on: its rows name sessions of
+    /// that connection's server only, so no action is taken on them from a later connection.
+    pub read_on: u64,
     /// What the server is, as last read.
     pub server: Option<ServerInfo>,
     /// The last read failed: why (the last good read stays shown).
@@ -362,6 +378,12 @@ pub struct MonitorTab {
     pub replication_top: usize,
     /// What the server is is shown in full over the view, from this line.
     pub server_info: Option<usize>,
+    /// The actions sent from this tab, oldest first (kept for the tab's life, never written).
+    pub actions: Vec<ActionEntry>,
+    /// The action list is shown under the sessions (`L`).
+    pub actions_shown: bool,
+    /// The action the open dialog asks about.
+    asked: Option<act::Asked>,
 }
 
 impl MonitorTab {
@@ -380,6 +402,7 @@ impl MonitorTab {
             due: None,
             failures: 0,
             snapshot: None,
+            read_on: 0,
             server: None,
             error: None,
             shown: false,
@@ -406,6 +429,9 @@ impl MonitorTab {
             replication_sent: None,
             replication_top: 0,
             server_info: None,
+            actions: Vec::new(),
+            actions_shown: false,
+            asked: None,
         }
     }
 
@@ -572,6 +598,7 @@ impl MonitorTab {
         self.locks_asked = None;
         self.replication_request = None;
         self.replication_sent = None;
+        self.actions_disconnected();
     }
 
     /// The charts show a gap before the next point: what came before is not joined to it.
@@ -637,6 +664,7 @@ impl MonitorTab {
             self.locks_hidden = snapshot.hidden.iter().filter(lock_part).cloned().collect();
         }
         self.snapshot = Some(snapshot);
+        self.read_on = self.generation;
         self.error = None;
         self.refresh_order(i18n);
         self.refresh_tree();
@@ -903,6 +931,8 @@ impl App {
         let active = (!self.tabs.is_empty()).then(|| self.tab().id);
         let ids: Vec<TabId> = self.tabs.iter().filter(|t| t.is_monitor()).map(|t| t.id).collect();
         for id in ids {
+            // The reads that follow an action up go out whether the tab is shown or not.
+            self.monitor_follow_ups(id, now);
             let visible = Some(id) == active && self.monitor_visible();
             let Some(m) = self.monitor_mut(id) else { continue };
             // Another tab became the active one (not a dialog over this one).
@@ -981,8 +1011,10 @@ impl App {
             return self.monitor_open(id, profile);
         }
         let ready = m.format().is_some();
+        let interval = m.interval.duration();
         if ready {
             self.monitor_read_text(id);
+            self.monitor_ask_own(profile, interval, now);
         }
         let Some(m) = self.monitor_of(id) else { return };
         let due = m.due.is_some_and(|d| d <= now);
@@ -1093,6 +1125,13 @@ impl App {
         if visible && let Some(p) = self.tabs.get(id).and_then(|t| t.profile) {
             self.touch_profile(p);
         }
+        let ev = match ev {
+            DbEvent::MonitorActionDone { request, outcome } => {
+                return self.monitor_action_done(id, request, outcome, now);
+            }
+            DbEvent::MonitorFollowUp { request, result } => return self.monitor_followed(id, request, result),
+            ev => ev,
+        };
         let error_text = match &ev {
             DbEvent::Monitor(Err(e))
             | DbEvent::MonitorSnapshot { result: Err(e), .. }
@@ -1196,9 +1235,15 @@ impl App {
         }
     }
 
-    /// When the visible Monitor tab next wants the event loop: its next read, or the time its
-    /// read in flight is given up on. `None`: nothing waits (paused, hidden, no connection).
+    /// When a Monitor tab next wants the event loop: the visible one's next read, or the time
+    /// its read in flight is given up on; any one's next read that follows an action up.
+    /// `None`: nothing waits (paused, hidden, no connection, no action followed up).
     pub fn monitor_due(&self) -> Option<Instant> {
+        [self.monitor_read_due(), self.monitor_follow_due()].into_iter().flatten().min()
+    }
+
+    /// When the visible Monitor tab next reads, or gives up on its read in flight.
+    fn monitor_read_due(&self) -> Option<Instant> {
         if !self.monitor_shown() || !self.monitor_visible() {
             return None;
         }
@@ -1396,6 +1441,9 @@ impl App {
                     m.refresh_order(i18n);
                 }
             }
+            MonitorAction::Cancel => return self.monitor_act(datarig_core::monitor::ActionKind::Cancel),
+            MonitorAction::Terminate => return self.monitor_act(datarig_core::monitor::ActionKind::Terminate),
+            MonitorAction::Actions => m.actions_shown = !m.actions_shown,
             MonitorAction::OpenConsole => return self.monitor_to_console(),
             MonitorAction::CopyQuery => return self.monitor_copy_query(),
         }
@@ -1488,6 +1536,25 @@ impl App {
         };
         self.show_status(done.clone());
         self.flash(done);
+    }
+
+    /// A right click in the Monitor tab at (`x`, `y`): on a row of the session list, that row is
+    /// selected (the menu that opens is about it); elsewhere the selection stays.
+    pub(super) fn monitor_select_at(&mut self, x: u16, y: u16) {
+        if !self.monitor_shown() {
+            return;
+        }
+        let id = self.tab().id;
+        let Some(m) = self.monitor_mut(id) else { return };
+        let r = m.hits.rows;
+        if m.hits.rows_view == Some(MonitorView::Sessions)
+            && x >= r.x
+            && x < r.x + r.width
+            && y >= r.y
+            && y < r.y + r.height
+        {
+            m.select(m.list.top + (y - r.y) as usize);
+        }
     }
 
     /// A click in the Monitor tab at (`x`, `y`): a view, a column to sort by, a row.

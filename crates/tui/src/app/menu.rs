@@ -23,9 +23,10 @@
 //! What the menu was opened on is kept: when it has changed by the time an item is picked (the
 //! tree was reloaded, the result was replaced, the tab went), nothing runs.
 
-use super::action::{ChartAction, PanelAction, PlanAction, PlanView};
+use super::action::{ChartAction, MonitorAction, PanelAction, PlanAction, PlanView};
 use super::copy::{CopyFormat, CopyScope};
 use super::edit::{EditAction, NotOffered};
+use super::monitor::MonitorView;
 use super::tabs::ResultView;
 use super::*;
 use crate::keymap::{Target, keys};
@@ -129,6 +130,26 @@ const CHART_PANE_MENU: &[Action] = &[
     Action::Panel(PanelAction::Maximize),
 ];
 
+/// The Monitor tab's actions for the selected session, then its pane's.
+const MONITOR_MENU: &[Action] = &[
+    Action::Monitor(MonitorAction::Details),
+    Action::Monitor(MonitorAction::Cancel),
+    Action::Monitor(MonitorAction::Terminate),
+    Action::Monitor(MonitorAction::OpenConsole),
+    Action::Monitor(MonitorAction::CopyQuery),
+];
+const MONITOR_PANE_MENU: &[Action] = &[
+    Action::Monitor(MonitorAction::View(MonitorView::Overview)),
+    Action::Monitor(MonitorAction::View(MonitorView::Sessions)),
+    Action::Monitor(MonitorAction::View(MonitorView::Locks)),
+    Action::Monitor(MonitorAction::View(MonitorView::Replication)),
+    Action::Monitor(MonitorAction::ServerInfo),
+    Action::Monitor(MonitorAction::Actions),
+    Action::Monitor(MonitorAction::Pause),
+    Action::Monitor(MonitorAction::ReadNow),
+    Action::Monitor(MonitorAction::ShowIdle),
+];
+
 /// A DDL tab's actions for its text, and its pane's.
 const DDL_MENU: &[Action] = &[Action::ReloadDdl, Action::DdlToConsole, Action::CopyDdl];
 const DDL_PANE_MENU: &[Action] = &[Action::ExternalEdit];
@@ -228,6 +249,9 @@ pub enum MenuTarget {
     Editor { tab: TabId, binding: u64, version: u64, cursor: (usize, usize), mode: Mode },
     /// The active tab.
     Tab { tab: TabId, binding: u64 },
+    /// The active Monitor tab: its selected session (in the Sessions view) and the connection
+    /// the list it is on was read on.
+    Monitor { tab: TabId, key: Option<datarig_core::monitor::SessionKey>, read_on: u64 },
     /// The welcome panel (no profile yet).
     Welcome,
 }
@@ -617,6 +641,7 @@ impl App {
             MenuTarget::Chart { .. } => self.chart_target(),
             MenuTarget::Editor { .. } => self.editor_target(),
             MenuTarget::Tab { .. } => self.tab_target(),
+            MenuTarget::Monitor { .. } => self.monitor_target(),
             MenuTarget::Welcome => self.profiles.is_empty().then_some(MenuTarget::Welcome),
         }
     }
@@ -750,6 +775,19 @@ impl App {
         Some(MenuTarget::Tab { tab: self.tab().id, binding: self.tab().binding })
     }
 
+    fn monitor_target(&self) -> Option<MenuTarget> {
+        if !self.monitor_shown() {
+            return None;
+        }
+        let tab = self.tab().id;
+        let m = self.monitor_of(tab)?;
+        let key = match m.view == MonitorView::Sessions && m.server_info.is_none() {
+            true => m.selected_row().map(|r| r.key),
+            false => None,
+        };
+        Some(MenuTarget::Monitor { tab, key, read_on: m.read_on })
+    }
+
     /// Open a menu of `own` and `pane` items for `target` at `at` (nothing when both are empty),
     /// `off` of them dimmed with their reasons.
     fn push_menu(&mut self, ctx: Ctx, target: MenuTarget, items: Items, at: (u16, u16)) {
@@ -771,7 +809,7 @@ impl App {
         }
         let title = match &target {
             MenuTarget::Explorer(row, _) => crate::widgets::explorer::row_name(self, row),
-            MenuTarget::Tab { tab, .. } => {
+            MenuTarget::Tab { tab, .. } | MenuTarget::Monitor { tab, .. } => {
                 self.tabs.get(*tab).map(|t| crate::widgets::tabbar::document_name(self, t)).unwrap_or_default()
             }
             _ => String::new(),
@@ -1036,6 +1074,36 @@ impl App {
         self.open_tab_menu((x, bar.y));
     }
 
+    /// The Monitor tab's menu next to its selected session: the session's actions (a cancel or
+    /// an end the session refuses dimmed, with why), then the tab's.
+    fn open_monitor_menu(&mut self) {
+        use datarig_core::monitor::ActionKind;
+        let Some(target) = self.monitor_target() else { return };
+        let Some(m) = self.monitor_of(self.tab().id) else { return };
+        let selected = m.view == MonitorView::Sessions && m.server_info.is_none() && m.selected_row().is_some();
+        let rows = m.hits.rows;
+        let line = m.list.cursor.saturating_sub(m.list.top) as u16;
+        let r = self.layout.results;
+        let at = match rows.height > 0 && line < rows.height {
+            true => (rows.x + 2, rows.y + line),
+            false => (r.x + 2, r.y + 1),
+        };
+        let mut off = Vec::new();
+        let own = if selected { self.available(MONITOR_MENU, &mut off) } else { Vec::new() };
+        for (a, kind) in
+            [(MonitorAction::Cancel, ActionKind::Cancel), (MonitorAction::Terminate, ActionKind::Terminate)]
+        {
+            let item = MenuItem::Action(Action::Monitor(a));
+            if own.contains(&item)
+                && let Some(o) = self.monitor_action_off(kind)
+            {
+                off.push((item, o));
+            }
+        }
+        let pane = self.available(MONITOR_PANE_MENU, &mut off);
+        self.push_menu(Ctx::Monitor, target, (own, pane, off), at);
+    }
+
     /// The welcome panel's menu (no profile yet).
     pub(super) fn open_welcome_menu(&mut self, at: (u16, u16)) {
         let mut off = Vec::new();
@@ -1054,6 +1122,7 @@ impl App {
             Focus::Tree => self.open_context_menu_here(),
             // No tab: only the explorer is there.
             _ if self.tabs.is_empty() => self.open_context_menu_here(),
+            Focus::Results | Focus::Inspector if self.monitor_shown() => self.open_monitor_menu(),
             Focus::Results | Focus::Inspector if self.plan_shown() => self.open_plan_menu_here(),
             Focus::Results | Focus::Inspector if self.chart_shown() => self.open_chart_menu_here(),
             Focus::Results | Focus::Inspector => self.open_results_menu_here(),
@@ -1427,7 +1496,7 @@ impl App {
     fn menu_heading(&self, m: &ContextMenu, h: Heading) -> Localized {
         match (h, &m.target) {
             (Heading::AllActions, _) => self.i18n.label(Label::MenuHeadingAllActions),
-            (Heading::Target, MenuTarget::Explorer(..) | MenuTarget::Tab { .. }) => {
+            (Heading::Target, MenuTarget::Explorer(..) | MenuTarget::Tab { .. } | MenuTarget::Monitor { .. }) => {
                 Localized::verbatim(m.title.clone())
             }
             (Heading::Target, MenuTarget::Grid { range: Some(_), .. }) => self.i18n.label(Label::MenuHeadingSelection),
@@ -1467,6 +1536,7 @@ impl App {
             (Heading::Pane, MenuTarget::Grid { .. }) => self.i18n.label(Label::PaneResultsTitle),
             (Heading::Pane, MenuTarget::Editor { .. }) => self.i18n.label(Label::PaneEditorTitle),
             (Heading::Pane, MenuTarget::Tab { .. }) => self.i18n.label(Label::GroupTab),
+            (Heading::Pane, MenuTarget::Monitor { .. }) => self.i18n.label(Label::GroupMonitor),
             (Heading::Pane, MenuTarget::Welcome) => self.i18n.label(Label::AppTitle),
         }
     }
