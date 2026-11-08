@@ -443,7 +443,8 @@ impl MonitorTab {
             sessions.map(|l| l.rows.iter().enumerate().map(|(i, r)| (r.key.id, i)).collect()).unwrap_or_default();
         self.held.clear();
         for (w, wait) in self.locks.iter().flat_map(|l| l.waits.iter()).enumerate() {
-            for (h, holder) in wait.holders.iter().enumerate().filter(|(_, h)| !h.waiting) {
+            // The first lock it holds whose mode the read tells.
+            for (h, holder) in wait.holders.iter().enumerate().filter(|(_, h)| !h.waiting && !h.modes.is_empty()) {
                 self.held.entry(holder.holder.clone()).or_insert((w, h));
             }
         }

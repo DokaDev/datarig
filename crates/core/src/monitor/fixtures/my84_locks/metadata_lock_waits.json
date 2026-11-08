@@ -1,0 +1,11 @@
+[
+ [
+  ["8606", "8644", "TABLE", "datarig", "zz_mon_t", "EXCLUSIVE", "TRANSACTION", "PENDING"],
+  ["8607", "8645", "TABLE", "datarig", "zz_mon_t", "SHARED_READ", "TRANSACTION", "PENDING"],
+  ["8610", "8648", "USER LEVEL LOCK", null, "zz_mon_k", "EXCLUSIVE", "EXPLICIT", "PENDING"],
+  ["8604", "8642", "TABLE", "datarig", "zz_mon_t", "SHARED_WRITE", "TRANSACTION", "GRANTED"],
+  ["8605", "8643", "TABLE", "datarig", "zz_mon_t", "SHARED_WRITE", "TRANSACTION", "GRANTED"],
+  ["8606", "8644", "TABLE", "datarig", "zz_mon_t", "SHARED_UPGRADABLE", "TRANSACTION", "GRANTED"],
+  ["8608", "8646", "USER LEVEL LOCK", null, "zz_mon_k", "EXCLUSIVE", "EXPLICIT", "GRANTED"]
+ ]
+]
