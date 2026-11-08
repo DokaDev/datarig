@@ -1192,6 +1192,27 @@ fn the_locks_view_says_when_nothing_waits_and_what_the_reads_left_out() {
     assert!(screen.contains("4211 alice · waits for a lock (transactionid) · "), "{screen}");
 }
 
+/// Waits the account may not see are not said to be none: without `pg_read_all_stats` (or,
+/// on MySQL, `PROCESS`) other accounts' sessions may wait unseen.
+#[test]
+fn the_locks_view_does_not_say_no_session_waits_when_some_cannot_be_seen() {
+    let (mut h, first) = monitor_open();
+    let quiet = || {
+        let mut rows = rows();
+        rows.iter_mut().for_each(|r| r.wait = None);
+        rows
+    };
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, quiet(), true)) });
+    h.keys("3");
+    let t = lock_asks(&mut h);
+    let mut s = snapshot(2.0, 1000, quiet(), false);
+    s.hidden.push(Hidden { part: Part::OtherSessionDetails, need: Need::Grant("pg_read_all_stats") });
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(s) });
+    let screen = h.screen(160, 40);
+    assert!(!screen.contains("No session waits for a lock"), "{screen}");
+    assert!(screen.contains("None of the sessions this account may see waits for a lock"), "{screen}");
+}
+
 #[test]
 fn locks_screens_80x24_and_120x40() {
     let (mut h, first) = monitor_open();

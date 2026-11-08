@@ -2922,6 +2922,7 @@
 "monitor.view.locks" = "Locks"
 "monitor.view.locks_count" = "Locks ({n})"
 "monitor.locks_none" = "No session waits for a lock"
+"monitor.locks_none_seen" = "None of the sessions this account may see waits for a lock"
 "monitor.locks_waiting" = "{n} waiting for a lock"
 "monitor.locks_read_ago" = "what is held read {time} ago"
 "monitor.locks_not_read" = "what is held is read every {every}"
