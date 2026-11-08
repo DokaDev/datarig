@@ -1072,6 +1072,7 @@ pub const REGISTRY: &[ActionSpec] = &[
         Label::ActionMonitorSessions,
         monitor_focused,
     ),
+    act(Action::Monitor(M::View(MonitorView::Locks)), "monitor.locks", Label::ActionMonitorLocks, monitor_focused),
     act(Action::Monitor(M::NextView), "monitor.view.next", Label::ActionMonitorViewNext, monitor_focused),
     mv(Action::Monitor(M::Up), "monitor.up", Label::ActionMonitorUp, monitor_focused),
     mv(Action::Monitor(M::Down), "monitor.down", Label::ActionMonitorDown, monitor_focused),
@@ -1090,6 +1091,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Monitor(M::Details), "monitor.details", Label::ActionMonitorDetails, monitor_focused),
     act(Action::Monitor(M::OpenConsole), "monitor.open_console", Label::ActionMonitorOpenConsole, monitor_focused),
     act(Action::Monitor(M::CopyQuery), "monitor.copy_query", Label::ActionMonitorCopyQuery, monitor_focused),
+    act(Action::Monitor(M::Root), "monitor.root", Label::ActionMonitorRoot, monitor_focused),
     act(Action::Monitor(M::Back), "monitor.back", Label::ActionMonitorBack, monitor_focused),
 ];
 

@@ -66,10 +66,22 @@ impl PgMonitor {
     pub fn leader_pid(&self) -> bool {
         self.version >= 130000
     }
+
+    /// `pg_locks.waitstart` (14 on): when a lock wait started.
+    pub fn waitstart(&self) -> bool {
+        self.version >= 140000
+    }
 }
 
 /// The oldest MySQL the monitor reads (8.0.17), as `major * 10000 + minor * 100 + patch`.
 pub const MYSQL_MIN_VERSION: u32 = 80017;
+
+/// The first MySQL 8.0 whose `data_lock_waits` may be read ([`MySqlMonitor::lock_waits`]; then
+/// 8.4 on).
+pub const LOCK_WAITS_VERSION: u32 = 80038;
+
+/// The versions whose `data_lock_waits` may be read, as users read them.
+pub const LOCK_WAITS_FROM: &str = "MySQL 8.0.38 or later in 8.0, or 8.4 or later";
 
 /// [`MYSQL_MIN_VERSION`] as users read it.
 pub const MYSQL_OLDEST: &str = "MySQL 8.0.17";
@@ -108,6 +120,14 @@ impl MySqlMonitor {
     /// session list without the server's global thread list mutex.
     pub fn ps_processlist(&self) -> bool {
         self.version >= 80022 && self.performance_schema
+    }
+
+    /// `performance_schema.data_lock_waits` may be read: before the fix its read goes through
+    /// every transaction under the engine's global lock and transaction mutexes, which with many
+    /// transactions stalls the whole server for seconds (MySQL bug 109539, fixed in 8.4.0 and
+    /// in 8.0.38; the 8.1 to 8.3 releases do not have the fix).
+    pub fn lock_waits(&self) -> bool {
+        (LOCK_WAITS_VERSION..80100).contains(&self.version) || self.version >= 80400
     }
 }
 

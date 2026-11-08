@@ -193,6 +193,8 @@ impl Monitor {
         }
         let mut rows = Vec::new();
         let mut own = Own::default();
+        let mut locks = None;
+        let sessions_at = want.sessions.map(|_| 2);
         for (i, statement) in sql::tick(my, want).iter().enumerate() {
             rows.push(self.rows(statement).await.map_err(|e| my_error(&e))?);
             // The counters are the second statement: the server counted every statement sent
@@ -200,8 +202,38 @@ impl Monitor {
             if i == 1 {
                 own.statements = self.sent;
             }
+            // The lock reads right after the session list (they are told apart by it).
+            let last = i + 1 == 2 + usize::from(want.sessions.is_some());
+            if want.locks && last {
+                locks = Some(self.locks(my, sessions_at.map(|at| &rows[at])).await?);
+            }
         }
-        decode::mysql::tick(my, want, &rows, own).map_err(|e| e.into_db(MYSQL_OLDEST))
+        decode::mysql::tick(my, want, &rows, locks.as_deref(), own).map_err(|e| e.into_db(MYSQL_OLDEST))
+    }
+
+    /// The lock reads of a tick, after its session list (`sessions`, `None`: not read): sent
+    /// only when a session may wait for a lock; else each answers as no wait. A refusal for
+    /// lack of a privilege is an answer (what the account may read), never a failure.
+    async fn locks(&mut self, my: &MySqlMonitor, sessions: Option<&Rows>) -> Result<Vec<Answer>, DbError> {
+        let statements = sql::locks(my);
+        let may = match sessions {
+            Some(rows) => decode::mysql::may_wait(rows, my).map_err(|e| e.into_db(MYSQL_OLDEST))?,
+            None => true,
+        };
+        if !may {
+            return Ok(statements.iter().map(|_| Answer::Rows(Vec::new())).collect());
+        }
+        let mut answers = Vec::with_capacity(statements.len());
+        for statement in &statements {
+            answers.push(match self.rows(statement).await {
+                Ok(rows) => Answer::Rows(rows),
+                Err(e) if server_code(&e).is_some_and(decode::mysql::refused) => {
+                    Answer::Error { code: server_code(&e), message: my_error(&e).raw().into_owned() }
+                }
+                Err(e) => return Err(my_error(&e)),
+            });
+        }
+        Ok(answers)
     }
 
     /// The whole text of the statement `ask` names, in a statement of its own (under the

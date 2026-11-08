@@ -510,6 +510,13 @@ pub enum Part {
     /// Sessions the server could not track (MySQL `performance_schema` ran out of thread
     /// slots): the list may miss some.
     UntrackedSessions,
+    /// Who blocks a row lock wait (MySQL `performance_schema.data_lock_waits`).
+    RowLockWaits,
+    /// Metadata lock waits and their holders (MySQL `performance_schema.metadata_locks`).
+    MetadataLockWaits,
+    /// Metadata locks the server could not track (MySQL `performance_schema` ran out of room
+    /// for them): a wait's holders may be missing.
+    UntrackedMetadataLocks,
 }
 
 /// What would show a [`Hidden`] part.
@@ -520,6 +527,8 @@ pub enum Need {
     Grant(&'static str),
     /// A server setting raised, by its name (`performance_schema_max_thread_instances`).
     Setting(&'static str),
+    /// A later version of the server, the first that has it (`MySQL 8.0.38`).
+    Version(&'static str),
 }
 
 /// What a monitor tick reads ([`crate::driver::DbCommand::MonitorTick`]): the counters always,
@@ -528,6 +537,10 @@ pub enum Need {
 pub struct Want {
     /// The session list, and which of them.
     pub sessions: Option<SessionsWanted>,
+    /// The lock waits and who holds what they wait for ([`crate::monitor::LockList`]). Reading
+    /// them asks the server's lock manager for all its locks, so the Locks view asks at most
+    /// every few seconds; nothing is asked of it while no session waits for a lock.
+    pub locks: bool,
     /// What the server is ([`ServerInfo`]).
     pub server: bool,
     /// The longest each statement may run on the server; the driver gives the whole tick a
@@ -542,6 +555,8 @@ pub struct Snapshot {
     pub gauges: Vec<Gauge>,
     /// `None`: not asked for.
     pub sessions: Option<SessionList>,
+    /// `None`: not asked for.
+    pub locks: Option<super::locks::LockList>,
     /// `None`: not asked for.
     pub server: Option<ServerInfo>,
     /// What the account could not see of what was read.

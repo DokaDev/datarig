@@ -1,0 +1,14 @@
+[
+ [
+  ["wait", "(advisory,16384,,,,,,0,7,1)", "14819", "1794105647033087", null, null, null, null, "advisory", "ExclusiveLock", null, null, "0,7,1", "1794105647043004", "1794105647042735", "5"],
+  ["wait", "(relation,16384,16385,,,,,,,)", "14091", "1794105644183500", null, null, null, null, "relation", "AccessExclusiveLock", null, "zz_mon_t", null, "1794105644200264", "1794105644199999", "5"],
+  ["wait", "(relation,16384,16385,,,,,,,)", "14315", "1794105644891392", null, null, null, null, "relation", "AccessShareLock", null, "zz_mon_t", null, "1794105644899480", "1794105644899392", "5"],
+  ["wait", "(relation,16384,16390,,,,,,,)", "14485", "1794105645615011", null, null, null, null, "relation", "RowExclusiveLock", null, "zz_mon_p", null, "1794105645625360", "1794105645625190", "5"],
+  ["wait", "(transactionid,,,,,,736,,,)", "13896", "1794105643478323", null, null, null, null, "transactionid", "ShareLock", null, null, "736", "1794105643495276", "1794105643494559", "5"],
+  ["hold", "(advisory,16384,,,,,,0,7,1)", "14652", "1794105646324733", null, null, null, null, "advisory", "ExclusiveLock", null, null, "0,7,1", null, "1794105646334565", "5"],
+  ["hold", "(relation,16384,16385,,,,,,,)", "13617", "1794105642765725", null, null, null, null, "relation", "RowExclusiveLock", null, "zz_mon_t", null, null, "1794105642793223", "5"],
+  ["hold", "(relation,16384,16385,,,,,,,)", "13896", "1794105643478323", null, null, null, null, "relation", "RowExclusiveLock", null, "zz_mon_t", null, null, "1794105643494559", "5"],
+  ["hold", "(relation,16384,16390,,,,,,,)", null, null, "zz_mon_gid", "datarig", "1794105642727694", "datarig", "relation", "ShareLock", null, "zz_mon_p", null, null, null, "5"],
+  ["hold", "(transactionid,,,,,,736,,,)", "13617", "1794105642765725", null, null, null, null, "transactionid", "ExclusiveLock", null, null, "736", null, "1794105642793223", "5"]
+ ]
+]

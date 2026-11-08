@@ -8,13 +8,15 @@
 //! touches a user's table; the only locks taken are the brief `ACCESS SHARE` locks any read of a
 //! system catalog takes (the views read `pg_database` and `pg_authid`), which conflict only with
 //! an `ACCESS EXCLUSIVE` lock on that catalog, and [`begin`] bounds that wait. None asks the
-//! lock manager unless a session waits for a lock (then for at most `MAX_WAITERS` of them).
+//! lock manager unless a session waits for a lock (then for at most `MAX_WAITERS` of them, and
+//! for the lock table once only when the Locks view asks: [`locks`]).
 //! Values come back as text in forms that do not depend on the session's settings: times as
 //! microseconds since the Unix epoch on the server's clock, numbers as plain integers.
 
 use datarig_core::monitor::action::{ActionKind, ActionTarget, StatementStamp};
 use datarig_core::monitor::decode::pg::HIDDEN_QUERY;
 use datarig_core::monitor::format::{Marker, PG_MARKERS, PgMonitor, Route};
+use datarig_core::monitor::locks::{LOCK_ROWS, LOCK_WAITS};
 use datarig_core::monitor::{MAX_WAITERS, QUERY_CHARS, SessionsWanted, Timestamp, Want};
 
 /// A time as microseconds since the Unix epoch. `extract` gives an exact numeric from 14 on and
@@ -101,20 +103,39 @@ pub(crate) fn counters() -> String {
 /// (the text may have been cut by the server at `track_activity_query_size`, which cuts on a
 /// character boundary, so up to three bytes short of its limit), `monitor` (the reading session
 /// itself), `blocked_by` (`pg_blocking_pids`, only for the [`MAX_WAITERS`] longest lock
-/// waiters, else NULL).
+/// waiters, else NULL). Without idle sessions, an idle session that blocks one of those waiters
+/// (a session-level advisory lock) is listed all the same.
 pub(crate) fn sessions(pg: &PgMonitor, wanted: SessionsWanted) -> String {
-    let idle = if wanted.idle { "" } else { "WHERE a.state IS DISTINCT FROM 'idle' OR a.monitor " };
-    session_rows(pg, idle)
+    let idle = if wanted.idle {
+        ""
+    } else {
+        "WHERE a.state IS DISTINCT FROM 'idle' OR a.monitor OR a.pid IN (SELECT unnest(b.blockers) FROM b) "
+    };
+    session_rows(pg, idle, true)
 }
 
 /// The rows of [`sessions`] for the one session of `pid`, and the reading session's own (so
 /// there is always a row, which the decoder needs; the caller picks the one of `pid`).
 pub(crate) fn session(pg: &PgMonitor, pid: i64) -> String {
-    session_rows(pg, &format!("WHERE a.pid = {pid} OR a.monitor "))
+    session_rows(pg, &format!("WHERE a.pid = {pid} OR a.monitor "), false)
 }
 
-fn session_rows(pg: &PgMonitor, filter: &str) -> String {
+/// `all`: the blockers of every waiter asked for are joined in (the list, whose filter may name
+/// them); else only those of the rows `filter` keeps are asked.
+fn session_rows(pg: &PgMonitor, filter: &str, all: bool) -> String {
     let leader = if pg.leader_pid() { "s.leader_pid" } else { "NULL::int" };
+    let blocked = match all {
+        true => format!(
+            ", b AS (SELECT pid, pg_blocking_pids(pid) AS blockers FROM w) \
+             SELECT {now} AS now, a.*, b.blockers::text AS blocked_by FROM a LEFT JOIN b ON b.pid = a.pid ",
+            now = us("now()")
+        ),
+        false => format!(
+            " SELECT {now} AS now, a.*, \
+             CASE WHEN a.pid IN (SELECT pid FROM w) THEN pg_blocking_pids(a.pid)::text END AS blocked_by FROM a ",
+            now = us("now()")
+        ),
+    };
     format!(
         "WITH a AS (SELECT s.pid, {leader} AS leader_pid, s.usename::text AS usename, s.datname::text AS datname, \
          s.application_name, host(s.client_addr) AS client_addr, s.client_port, s.backend_type, s.state, \
@@ -124,15 +145,65 @@ fn session_rows(pg: &PgMonitor, filter: &str) -> String {
          octet_length(s.query) >= t.size - 4 AS maybe_cut, s.pid = pg_backend_pid() AS monitor \
          FROM pg_stat_activity s, \
          (SELECT setting::int AS size FROM pg_settings WHERE name = 'track_activity_query_size') t), \
-         w AS (SELECT pid FROM a WHERE wait_event_type = 'Lock' ORDER BY state_change NULLS LAST, pid LIMIT {MAX_WAITERS}) \
-         SELECT {now} AS now, a.*, \
-         CASE WHEN a.pid IN (SELECT pid FROM w) THEN pg_blocking_pids(a.pid)::text END AS blocked_by \
-         FROM a {filter}ORDER BY a.pid",
+         w AS (SELECT pid FROM a WHERE wait_event_type = 'Lock' ORDER BY state_change NULLS LAST, pid LIMIT {MAX_WAITERS})\
+         {blocked}{filter}ORDER BY a.pid",
         backend_start = us("s.backend_start"),
         xact_start = us("s.xact_start"),
         query_start = us("s.query_start"),
         state_change = us("s.state_change"),
-        now = us("now()"),
+    )
+}
+
+/// The lock waits and the locks held on what they wait for, from `pg_locks`, read once (the
+/// lock manager gives all its locks at each read, under all its partition locks, whatever the
+/// statement keeps of them): nothing at all while no session the account may see waits for a
+/// lock (without `pg_read_all_stats`, other roles' waits are hidden from it, and so from the
+/// tree, which is drawn from the session list's blockers). Rows: `role`
+/// `wait` (a session's request not granted, the [`LOCK_WAITS`] longest first where the server
+/// tells since when) or `hold` (a granted lock on the same object), at most [`LOCK_ROWS`],
+/// waits first. Columns: `role`, `key` (the object, the same text for the same object),
+/// `pid` (NULL: a prepared transaction's), `backend_start`, `gid`, `owner`, `prepared`,
+/// `prepared_database` (a prepared transaction's, told by its transaction id lock: its locks
+/// keep the session's virtual transaction id that prepared it), `locktype`, `mode`, `database`
+/// (the object's, when another than the monitor's), `relation` (by name, in the monitor's
+/// database or a shared catalog), `detail` (a transaction id, a tuple's `(page,tuple)`, a page,
+/// an advisory lock's or object's ids), `since` (when the wait started, 14 on), `query_start`
+/// (the waiter's statement's start), `waits` (the requests not granted in all).
+pub(crate) fn locks(pg: &PgMonitor) -> String {
+    let waitstart = if pg.waitstart() { "l.waitstart" } else { "NULL::timestamptz" };
+    format!(
+        "WITH l AS MATERIALIZED (SELECT l.locktype, l.database, l.relation, l.page, l.tuple, l.virtualxid, \
+         l.transactionid, l.classid, l.objid, l.objsubid, l.virtualtransaction, l.pid, l.mode, l.granted, \
+         {waitstart} AS waitstart, \
+         (l.locktype, l.database, l.relation, l.page, l.tuple, l.virtualxid, l.transactionid, l.classid, \
+         l.objid, l.objsubid)::text AS key \
+         FROM pg_locks l WHERE EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock')), \
+         w AS (SELECT * FROM l WHERE NOT l.granted AND l.pid IS NOT NULL \
+         ORDER BY l.waitstart NULLS LAST, l.pid LIMIT {LOCK_WAITS}), \
+         r AS (SELECT 'wait' AS role, w.* FROM w UNION ALL \
+         SELECT 'hold', l.* FROM l WHERE l.granted AND l.key IN (SELECT key FROM w)), \
+         p AS (SELECT x.gid, x.owner::text AS owner, x.database::text AS database, x.prepared, t.virtualtransaction \
+         FROM pg_prepared_xacts x JOIN l t ON t.locktype = 'transactionid' AND t.transactionid = x.transaction \
+         AND t.pid IS NULL), \
+         d AS (SELECT oid FROM pg_database WHERE datname = current_database()) \
+         SELECT r.role, r.key, r.pid, {backend_start} AS backend_start, p.gid, p.owner, {prepared} AS prepared, \
+         p.database AS prepared_database, r.locktype, r.mode, \
+         CASE WHEN r.database NOT IN (0, (SELECT oid FROM d)) \
+         THEN (SELECT datname::text FROM pg_database WHERE oid = r.database) END AS database, \
+         CASE WHEN r.relation IS NOT NULL AND r.database IN (0, (SELECT oid FROM d)) \
+         THEN r.relation::regclass::text END AS relation, \
+         CASE r.locktype WHEN 'transactionid' THEN r.transactionid::text WHEN 'virtualxid' THEN r.virtualxid \
+         WHEN 'tuple' THEN '(' || r.page || ',' || r.tuple || ')' WHEN 'page' THEN r.page::text \
+         WHEN 'advisory' THEN r.classid || ',' || r.objid || ',' || r.objsubid \
+         WHEN 'object' THEN r.classid || ',' || r.objid || ',' || r.objsubid END AS detail, \
+         {since} AS since, {query_start} AS query_start, (SELECT count(*) FROM l WHERE NOT l.granted) AS waits \
+         FROM r LEFT JOIN pg_stat_activity a ON a.pid = r.pid \
+         LEFT JOIN p ON r.pid IS NULL AND p.virtualtransaction = r.virtualtransaction \
+         ORDER BY r.role DESC, r.key, r.pid NULLS FIRST LIMIT {LOCK_ROWS}",
+        backend_start = us("a.backend_start"),
+        prepared = us("p.prepared"),
+        since = us("r.waitstart"),
+        query_start = us("a.query_start"),
     )
 }
 
@@ -150,11 +221,15 @@ pub(crate) fn query_text(pid: i64) -> String {
     )
 }
 
-/// The statements of a tick, in this order: the counters, then the session list and what the
-/// server is when `want` asks for them. The driver runs them in one read-only transaction.
+/// The statements of a tick, in this order: the counters, then the session list, the locks and
+/// what the server is when `want` asks for them. The driver runs them in one read-only
+/// transaction.
 pub(crate) fn tick(pg: &PgMonitor, want: &Want) -> Vec<String> {
     let mut statements = vec![counters()];
     statements.extend(want.sessions.map(|wanted| sessions(pg, wanted)));
+    if want.locks {
+        statements.push(locks(pg));
+    }
     if want.server {
         statements.push(server_info());
     }

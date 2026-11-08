@@ -1,12 +1,11 @@
 ---
 source: crates/tui/tests/flows_monitor.rs
-assertion_line: 354
 expression: "h.screen(120, 40)"
 ---
 ╭ Explorer ──────────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                                                     
 │  ＋ New connection         │╭ Monitor: local-pg ─────────────────────────────────────────────────────────────────────╮
 │▾ Connections 1             ││ PostgreSQL 17.11 · read-write · up 41d3h · max 200 connections                         │
-│  ▾ ●   local-pg            ││ 1 Overview  2 Sessions                                                        every 2s │
+│  ▾ ●   local-pg            ││ 1 Overview  2 Sessions  3 Locks                                               every 2s │
 │    ▾ datarig default       ││┌ commits/s ─────────── 412 ┐┌ sessions ───────── 41/200 ┐┌ cache hit ────────── 99.0% ┐│
 │      ▸ analytics           │││                          █││active 3 · idle in transac…││                           █││
 │      ▸ public              ││└───────────────────────────┘└───────────────────────────┘└────────────────────────────┘│

@@ -14,9 +14,10 @@ use crate::text::{clip, width, wrap};
 use crate::theme;
 use crate::widgets::{panel, put, sparkline};
 use datarig_core::i18n::{I18n, Label, Msg};
+use datarig_core::monitor::locks::{Blame, Holder, LockObject};
 use datarig_core::monitor::{
-    CounterKind, ExtraKey, FullText, GaugeKind, Hidden, MonitorFormat, Need, Part, Proof, SessionKind, SessionRow,
-    SessionState, Timestamp, Tx, Visibility, WaitClass,
+    CounterKind, ExtraKey, FullText, GaugeKind, Hidden, MAX_WAITERS, MonitorFormat, Need, Part, Proof, SessionKind,
+    SessionRow, SessionState, Timestamp, Tx, Visibility, WaitClass,
 };
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -97,6 +98,7 @@ pub(crate) fn draw_monitor(app: &mut App, area: Rect, buf: &mut Buffer) {
         None => match m.view {
             MonitorView::Overview => cx.overview(body, buf, &mut hits),
             MonitorView::Sessions => cx.sessions(body, buf, &mut hits),
+            MonitorView::Locks => cx.locks(body, buf, &mut hits),
         },
     }
     let page = hits.rows.height as usize;
@@ -109,6 +111,9 @@ pub(crate) fn draw_monitor(app: &mut App, area: Rect, buf: &mut Buffer) {
             } else if c >= m.list.top + page {
                 m.list.top = c + 1 - page;
             }
+        }
+        if hits.rows_view == Some(MonitorView::Locks) && page > 0 {
+            m.lock_view.top = on_screen(m.lock_view.cursor, m.lock_view.top, page);
         }
         m.hits = hits;
     }
@@ -169,7 +174,11 @@ impl Cx<'_> {
         let mut x = at.x + 1;
         let end = at.x + at.width.saturating_sub(1);
         for (i, v) in MonitorView::ALL.iter().enumerate() {
-            let text = format!("{} {}", i + 1, self.label(v.label()));
+            let name = match (*v, self.m.tree.waiting) {
+                (MonitorView::Locks, n) if n > 0 => self.msg(Msg::MonitorViewLocksCount { n: n.to_string() }),
+                _ => self.label(v.label()),
+            };
+            let text = format!("{} {name}", i + 1);
             let w = width(&text) as u16;
             if x + w > end {
                 break;
@@ -224,6 +233,10 @@ impl Cx<'_> {
             for h in &s.hidden {
                 v.push((self.hidden(h), th.warning));
             }
+            // What the latest read of the locks could not see, until the next one.
+            for h in self.m.locks_hidden.iter().filter(|h| !s.hidden.contains(h)) {
+                v.push((self.hidden(h), th.warning));
+            }
         }
         if let Some(e) = &self.m.error {
             v.push((self.msg(Msg::MonitorReadFailed { error: e.clone() }), th.error));
@@ -235,6 +248,7 @@ impl Cx<'_> {
         match need {
             Need::Grant(g) => self.msg(Msg::MonitorNeedGrant { grant: (*g).to_string() }),
             Need::Setting(s) => self.msg(Msg::MonitorNeedSetting { setting: (*s).to_string() }),
+            Need::Version(v) => self.msg(Msg::MonitorNeedVersion { version: (*v).to_string() }),
         }
     }
 
@@ -245,6 +259,9 @@ impl Cx<'_> {
             Part::OtherSessions => Label::MonitorHiddenSessions,
             Part::TransactionState => Label::MonitorHiddenTx,
             Part::UntrackedSessions => Label::MonitorHiddenUntracked,
+            Part::RowLockWaits => Label::MonitorHiddenRowLockWaits,
+            Part::MetadataLockWaits => Label::MonitorHiddenMetadataLockWaits,
+            Part::UntrackedMetadataLocks => Label::MonitorHiddenUntrackedMetadataLocks,
         };
         format!("{} ({need})", self.label(part))
     }
@@ -534,6 +551,222 @@ impl Cx<'_> {
         if let (Some(r), Some(at)) = (details, details_at) {
             self.details(r, list.time, at, buf);
         }
+    }
+
+    /// The Locks view: how many wait, what is said of the reads, then the blocking tree (root
+    /// blockers first, each session or transaction once, under the one it waits for).
+    fn locks(&self, area: Rect, buf: &mut Buffer, hits: &mut MonitorHits) {
+        let th = theme::cur();
+        let m = self.m;
+        let Some(list) = m.snapshot.as_ref().and_then(|s| s.sessions.as_ref()) else { return };
+        if area.height < 2 {
+            return;
+        }
+        let w = area.width.saturating_sub(2) as usize;
+        let bottom = area.y + area.height;
+        let mut y = area.y;
+        let tree = &m.tree;
+        let mut head = match tree.waiting {
+            0 => self.label(Label::MonitorLocksNone),
+            n => self.msg(Msg::MonitorLocksWaiting { n: n.to_string() }),
+        };
+        head.push_str(" · ");
+        head.push_str(&match &m.locks {
+            Some(l) => self.msg(Msg::MonitorLocksReadAgo { time: age(list.time.since(l.time).unwrap_or(0)) }),
+            None => {
+                let every = crate::app::monitor::LOCKS_EVERY.max(m.interval.duration());
+                self.msg(Msg::MonitorLocksNotRead { every: format!("{}s", every.as_secs()) })
+            }
+        });
+        put(buf, area.x + 1, y, &head, w, Style::new().fg(th.fg_muted));
+        y += 1;
+        // What the reads left out, and how far a holder is known to block.
+        let mut notes: Vec<(String, Color)> = Vec::new();
+        let waiting = m.snapshot.as_ref().and_then(|s| s.gauges.iter().find(|g| g.kind == GaugeKind::WaitingForLock));
+        let asked = list.rows.iter().filter(|r| r.blocked_by.is_some()).count() as u64;
+        if let Some(n) =
+            waiting.map(|g| g.value.saturating_sub(asked)).filter(|n| *n > 0 && asked as usize >= MAX_WAITERS)
+        {
+            let max = MAX_WAITERS.to_string();
+            notes.push((self.msg(Msg::MonitorLocksNotAsked { n: n.to_string(), max }), th.warning));
+        }
+        if m.locks.as_ref().is_some_and(|l| l.more > 0) || tree.partial {
+            notes.push((self.label(Label::MonitorLocksMore), th.warning));
+        }
+        let unsure = |b: Blame| matches!(b, Blame::Incompatible | Blame::CannotTell);
+        if tree.lines.iter().any(|l| l.parent.is_some_and(|(_, b)| unsure(b)) || l.also.iter().any(|(_, b)| unsure(*b)))
+        {
+            notes.push((self.label(Label::MonitorLocksIncompatibleNote), th.fg_dim));
+        }
+        for (text, color) in notes {
+            for l in crate::text::wrap_words(&text, w).iter().take(2) {
+                if y + 1 >= bottom {
+                    break;
+                }
+                put(buf, area.x + 1, y, l, w, Style::new().fg(color));
+                y += 1;
+            }
+        }
+        let mut page = bottom.saturating_sub(y) as usize;
+        if page == 0 {
+            return;
+        }
+        // The selected line in full below the tree when it does not fit on its line.
+        if let Some(i) = Some(m.lock_view.cursor).filter(|i| *i < tree.lines.len() && page >= 8) {
+            let (text, color) = self.lock_line(i, list.time);
+            let room = w.saturating_sub(2);
+            if width(&text) > w {
+                let lines = crate::text::wrap_words(&text, room);
+                let n = lines.len().min(3);
+                page -= n + 1;
+                let at = Rect { x: area.x, y: y + page as u16, width: area.width, height: n as u16 + 1 };
+                Block::default().borders(Borders::TOP).border_style(Style::new().fg(th.border)).render(at, buf);
+                for (k, l) in lines.iter().take(n).enumerate() {
+                    put(buf, area.x + 2, at.y + 1 + k as u16, l, room, Style::new().fg(color));
+                }
+            }
+        }
+        let top = on_screen(m.lock_view.cursor, m.lock_view.top, page);
+        for (n, i) in (top..tree.lines.len()).take(page).enumerate() {
+            work(1);
+            let at = Rect { x: area.x + 1, y: y + n as u16, width: area.width.saturating_sub(2), height: 1 };
+            let (text, color) = self.lock_line(i, list.time);
+            let mut style = Style::new().fg(color);
+            if i == m.lock_view.cursor {
+                let sel = if self.focused { th.selection } else { th.selection_unfocused() };
+                buf.set_style(at, sel);
+                style = sel;
+            }
+            put(buf, at.x, at.y, &text, at.width as usize, style);
+        }
+        hits.rows = Rect { x: area.x, y, width: area.width, height: page as u16 };
+        hits.rows_view = Some(MonitorView::Locks);
+    }
+
+    /// Line `i` of the blocking tree, and its colour: a root others wait behind in the error
+    /// colour, a waiter in the warning one.
+    fn lock_line(&self, i: usize, time: Timestamp) -> (String, Color) {
+        let th = theme::cur();
+        let m = self.m;
+        let l = &m.tree.lines[i];
+        let marks = m.tree_marks.get(i).map(String::as_str).unwrap_or("");
+        let lead = if l.parent.is_none() { "▸ " } else { "  " };
+        let mut parts: Vec<String> = Vec::new();
+        let waits = l.parent.is_some() || l.alone || l.cycle;
+        let mut color = if waits {
+            th.warning
+        } else if l.behind > 0 {
+            th.error
+        } else {
+            th.fg
+        };
+        let head = match &l.node {
+            Holder::Session(id) => {
+                let r = m.session(*id);
+                if r.is_some_and(|r| r.visible == Visibility::Hidden) {
+                    color = th.fg_dim;
+                }
+                let user = r.and_then(|r| r.user.clone()).unwrap_or_default();
+                if waits {
+                    parts.push(self.waits_text(*id, r, time));
+                    match l.parent.map(|(_, b)| b) {
+                        Some(Blame::Incompatible) => parts.push(self.label(Label::MonitorLockIncompatible)),
+                        Some(Blame::CannotTell) => parts.push(self.label(Label::MonitorLockCannotTell)),
+                        _ => {}
+                    }
+                    if !l.also.is_empty() {
+                        let who: Vec<String> = l.also.iter().map(|(h, _)| self.holder_name(h)).collect();
+                        parts.push(self.msg(Msg::MonitorLockAlso { who: who.join(", ") }));
+                    }
+                    if l.alone && r.is_some_and(|r| r.blocked_by.is_none()) && !self.mysql {
+                        // PostgreSQL: past the longest waits asked who blocks them.
+                        let max = MAX_WAITERS.to_string();
+                        parts.push(self.msg(Msg::MonitorLockNotAsked { max }));
+                    } else if l.alone {
+                        parts.push(self.label(Label::MonitorLockAlone));
+                    }
+                } else if let Some(r) = r {
+                    let mut state = state_text(self.i18n, r);
+                    if let Some(a) = tx_age(r, time) {
+                        state.push(' ');
+                        state.push_str(&age(a));
+                    }
+                    parts.push(state);
+                }
+                if let Some(holds) = self.holds(&l.node) {
+                    parts.push(holds);
+                }
+                if l.cycle {
+                    parts.push(self.label(Label::MonitorLockCycle));
+                    color = th.error;
+                }
+                if let Some(q) = r.and_then(|r| r.query.as_ref()) {
+                    parts.push(one_line(&q.text));
+                }
+                format!("{id} {user}")
+            }
+            Holder::Prepared(Some(p)) => {
+                let time = p.since.and_then(|t| time.since(t)).map(age).unwrap_or_else(|| "?".into());
+                parts.push(self.msg(Msg::MonitorLockPreparedDetail {
+                    owner: p.owner.clone().unwrap_or_default(),
+                    database: p.database.clone().unwrap_or_default(),
+                    time,
+                }));
+                if let Some(holds) = self.holds(&l.node) {
+                    parts.push(holds);
+                }
+                self.msg(Msg::MonitorLockPrepared { gid: p.gid.clone() })
+            }
+            Holder::Prepared(None) => self.label(Label::MonitorLockPreparedUnknown),
+            Holder::Transaction { id, sessionless: true } => self.msg(Msg::MonitorLockTransaction { id: id.clone() }),
+            Holder::Transaction { id, sessionless: false } => {
+                self.msg(Msg::MonitorLockTransactionUnknown { id: id.clone() })
+            }
+        };
+        let mut text = format!("{lead}{marks}{head}");
+        for p in parts {
+            text.push_str(" · ");
+            text.push_str(&p);
+        }
+        (text, color)
+    }
+
+    /// A holder as a waiter's line names it.
+    fn holder_name(&self, h: &Holder) -> String {
+        match h {
+            Holder::Session(id) => id.to_string(),
+            Holder::Prepared(Some(p)) => self.msg(Msg::MonitorLockPrepared { gid: p.gid.clone() }),
+            Holder::Prepared(None) => self.label(Label::MonitorPreparedTx),
+            Holder::Transaction { id, .. } => id.clone(),
+        }
+    }
+
+    /// What session `id` waits for, and for how long: from the lock read when it has the wait
+    /// (of this very session: a reused id is another's), else from the session list.
+    fn waits_text(&self, id: i64, r: Option<&SessionRow>, time: Timestamp) -> String {
+        let wait = self.m.locks.as_ref().and_then(|l| l.waits_of(id).find(|w| r.is_none_or(|r| w.is_of(r))));
+        match wait {
+            Some(w) if !w.mode.is_empty() => {
+                let object = object_text(&w.object);
+                let mode = w.mode.clone();
+                match w.since.or(r.and_then(|r| r.state_since)).and_then(|t| time.since(t)) {
+                    Some(a) => self.msg(Msg::MonitorLockWaits { time: age(a), mode, object }),
+                    None => self.msg(Msg::MonitorLockWaitsUntimed { mode, object }),
+                }
+            }
+            _ => {
+                let name = r.and_then(|r| r.wait.as_ref()).map(|w| w.name.clone()).unwrap_or_else(|| "?".into());
+                self.msg(Msg::MonitorLockWaitsPlain { name })
+            }
+        }
+    }
+
+    /// What `node` holds that a session waits for, from the lock read.
+    fn holds(&self, node: &Holder) -> Option<String> {
+        let &(w, h) = self.m.held.get(node)?;
+        let wait = self.m.locks.as_ref()?.waits.get(w)?;
+        let h = wait.holders.get(h).filter(|h| !h.modes.is_empty())?;
+        Some(self.msg(Msg::MonitorLockHolds { modes: h.modes.join(", "), object: object_text(&wait.object) }))
     }
 
     /// The columns that fit in `w`, with their widths; the statement takes what is left.
@@ -845,6 +1078,30 @@ fn wait_class(c: &WaitClass) -> &str {
         WaitClass::Activity => "Activity",
         WaitClass::Other(s) => s,
     }
+}
+
+/// The first line of a page of `page` lines that keeps line `cursor` on screen, from `top`.
+fn on_screen(cursor: usize, top: usize, page: usize) -> usize {
+    if cursor < top {
+        cursor
+    } else if cursor >= top + page {
+        cursor + 1 - page
+    } else {
+        top
+    }
+}
+
+/// What a lock is on, in the server's words: `relation zz_mon_t`, `transactionid 736`,
+/// `RECORD shop.orders PRIMARY 42` (the database when another than the monitor's).
+fn object_text(o: &LockObject) -> String {
+    let mut parts: Vec<&str> = vec![o.kind.as_str()];
+    parts.extend(o.name.as_deref());
+    parts.extend(o.detail.as_deref());
+    let mut text = parts.join(" ");
+    if let Some(db) = &o.database {
+        text.push_str(&format!(" ({db})"));
+    }
+    text
 }
 
 /// A statement on one line: its whitespace runs as one space.

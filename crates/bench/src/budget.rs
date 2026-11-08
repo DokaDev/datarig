@@ -352,6 +352,23 @@ pub fn monitor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> 
         Some(m) => c.check("monitor take a read p95", m, num(b, "monitor", "take_p95_ms_max")?, " ms"),
         None => c.missing("monitor take a read p95"),
     }
+    // The Locks view with the largest lock read: its frame, and the read taken with its tree.
+    match f(result, &["views", "locks", "frame_ms", "p95"]) {
+        Some(m) => {
+            c.check("monitor locks key or read + frame p95", m, num(b, "monitor", "locks_frame_p95_ms_max")?, " ms")
+        }
+        None => c.missing("monitor locks key or read + frame p95"),
+    }
+    match f(result, &["views", "locks", "work", "max"]) {
+        Some(w) if w > 0.0 => c.check("monitor locks work per frame", w, num(b, "monitor", "work_per_frame_max")?, ""),
+        _ => c.missing("monitor locks work per frame"),
+    }
+    match f(result, &["locks_take_ms", "p95"]) {
+        Some(m) => {
+            c.check("monitor take a read with lock waits p95", m, num(b, "monitor", "locks_take_p95_ms_max")?, " ms")
+        }
+        None => c.missing("monitor take a read with lock waits p95"),
+    }
     Ok(())
 }
 

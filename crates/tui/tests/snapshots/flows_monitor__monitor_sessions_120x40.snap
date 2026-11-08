@@ -1,12 +1,11 @@
 ---
 source: crates/tui/tests/flows_monitor.rs
-assertion_line: 357
 expression: "h.screen(120, 40)"
 ---
 ╭ Explorer ──────────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                                                     
 │  ＋ New connection         │╭ Monitor: local-pg ─────────────────────────────────────────────────────────────────────╮
 │▾ Connections 1             ││ PostgreSQL 17.11 · read-write · up 41d3h · max 200 connections                         │
-│  ▾ ●   local-pg            ││ 1 Overview  2 Sessions                                                        every 2s │
+│  ▾ ●   local-pg            ││ 1 Overview  2 Sessions  3 Locks                                               every 2s │
 │    ▾ datarig default       ││ 4 of 4 sessions · 37 idle not listed                                                   │
 │      ▸ analytics           ││ pid     user       database   state        wait           query age ▼ statement        │
 │      ▸ public              ││ 3907    bob        shop       idle in tra…                12m00s      SELECT * FROM o… │

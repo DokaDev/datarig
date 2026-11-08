@@ -3,13 +3,14 @@
 use super::{DecodeError, Row, Rows, malformed, one};
 use crate::monitor::action::StatementStamp;
 use crate::monitor::format::{self, PG_MARKERS, PG_MIN_VERSION, PgMonitor, Probe, Route};
+use crate::monitor::locks::{Blame, Holder, LockHolder, LockList, LockObject, LockWait, Prepared};
 use crate::monitor::model::SessionsWanted;
 use crate::monitor::model::{
     Blocker, Counter, CounterKind, Epoch, Extra, ExtraKey, FullText, Gauge, GaugeKind, Hidden, Need, Own, Part, Proof,
     QueryText, Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState, Tx, Visibility,
     Wait, WaitClass,
 };
-use crate::monitor::model::{Snapshot, TextAsk, Want};
+use crate::monitor::model::{Snapshot, TextAsk, Timestamp, Want};
 
 /// The columns of the probe's row: version, the account's privileges, the provider markers found (comma separated), in order.
 pub const PROBE: &[&str] = &["version", "superuser", "read_all_stats", "signal_backend", "markers"];
@@ -66,6 +67,26 @@ pub const SESSIONS: &[&str] = &[
 
 /// The columns of a session's row read for its statement's whole text (times as microseconds since the Unix epoch; `state` to tell a session whose activity is not tracked; `maybe_cut` within three bytes of `track_activity_query_size`), in order.
 pub const QUERY_TEXT: &[&str] = &["pid", "backend_start", "state", "query_start", "query", "maybe_cut"];
+
+/// The columns of a lock's row (`role` `wait` or `hold`; `key` the same text for the same object; `pid` NULL for a prepared transaction's lock, then `gid`, `owner`, `prepared` and `prepared_database` its own; `database` the object's when another than the monitor's; times as microseconds since the Unix epoch, `query_start` the waiter's statement's; `waits` the requests not granted in all), in order.
+pub const LOCKS: &[&str] = &[
+    "role",
+    "key",
+    "pid",
+    "backend_start",
+    "gid",
+    "owner",
+    "prepared",
+    "prepared_database",
+    "locktype",
+    "mode",
+    "database",
+    "relation",
+    "detail",
+    "since",
+    "query_start",
+    "waits",
+];
 
 /// What `pg_stat_activity.query` holds for a session the account may not see.
 pub const HIDDEN_QUERY: &str = "<insufficient privilege>";
@@ -258,11 +279,82 @@ fn blockers(text: &str) -> Result<Vec<Blocker>, DecodeError> {
         .collect()
 }
 
-/// The rows of a tick's statements (the counters, then the sessions and the server when
-/// wanted), with the
-/// monitor's own traffic as it stood when the counters were read.
+/// The lock read's rows, read at `time` (the transaction's: the counters' clock): each wait,
+/// with the locks other sessions and prepared transactions hold on what it waits for. Who of
+/// them blocks it is the session list's to say (`pg_blocking_pids`): these only tell what they
+/// hold ([`Blame::Holds`]).
+pub fn locks(rows: &Rows, time: Timestamp) -> Result<LockList, DecodeError> {
+    let mut waits: Vec<(&str, LockWait)> = Vec::new();
+    let mut holds: Vec<(&str, Holder, String)> = Vec::new();
+    let mut total = 0u64;
+    for cells in rows {
+        let row = Row::new(cells, "locks", LOCKS)?;
+        total = row.required_uint("waits")?;
+        let key = row.required("key")?;
+        let mode = row.required("mode")?.to_owned();
+        match row.required("role")? {
+            "wait" => waits.push((
+                key,
+                LockWait {
+                    waiter: SessionKey { id: row.required_int("pid")?, started: row.time("backend_start")? },
+                    object: LockObject {
+                        kind: row.required("locktype")?.to_owned(),
+                        name: row.string("relation"),
+                        detail: row.string("detail"),
+                        database: row.string("database"),
+                    },
+                    mode,
+                    since: row.time("since")?,
+                    query_started: row.time("query_start")?,
+                    whole_seconds: false,
+                    holders: Vec::new(),
+                },
+            )),
+            "hold" => {
+                let holder = match row.int("pid")? {
+                    Some(pid) => Holder::Session(pid),
+                    None => Holder::Prepared(row.string("gid").map(|gid| Prepared {
+                        gid,
+                        owner: row.string("owner"),
+                        database: row.string("prepared_database"),
+                        since: None,
+                    })),
+                };
+                let holder = match (holder, row.time("prepared")?) {
+                    (Holder::Prepared(Some(p)), since) => Holder::Prepared(Some(Prepared { since, ..p })),
+                    (h, _) => h,
+                };
+                holds.push((key, holder, mode));
+            }
+            other => return Err(malformed("locks", format!("role {other:?}"))),
+        }
+    }
+    let read = waits.len() as u64;
+    let waits = waits
+        .into_iter()
+        .map(|(key, mut w)| {
+            for (_, holder, mode) in holds.iter().filter(|(k, h, _)| *k == key && *h != Holder::Session(w.waiter.id)) {
+                match w.holders.iter_mut().find(|h| h.holder == *holder) {
+                    Some(h) if !h.modes.contains(mode) => h.modes.push(mode.clone()),
+                    Some(_) => {}
+                    None => w.holders.push(LockHolder {
+                        holder: holder.clone(),
+                        modes: vec![mode.clone()],
+                        waiting: false,
+                        blame: Blame::Holds,
+                    }),
+                }
+            }
+            w
+        })
+        .collect();
+    Ok(LockList { time, waits, more: total.saturating_sub(read), blocks: false })
+}
+
+/// The rows of a tick's statements (the counters, then the sessions, the locks and the server
+/// when wanted), with the monitor's own traffic as it stood when the counters were read.
 pub fn tick(want: &Want, rows: &[Rows], own: Own) -> Result<Snapshot, DecodeError> {
-    let expected = 1 + usize::from(want.sessions.is_some()) + usize::from(want.server);
+    let expected = 1 + usize::from(want.sessions.is_some()) + usize::from(want.locks) + usize::from(want.server);
     if rows.len() != expected {
         return Err(malformed("tick", format!("{} statements, expected {expected}", rows.len())));
     }
@@ -276,8 +368,15 @@ pub fn tick(want: &Want, rows: &[Rows], own: Own) -> Result<Snapshot, DecodeErro
         }
         None => (None, Vec::new()),
     };
+    let locks = match want.locks {
+        true => {
+            next += 1;
+            Some(locks(&rows[next - 1], sample.time)?)
+        }
+        false => None,
+    };
     let server = if want.server { Some(server_info(&rows[next])?) } else { None };
-    Ok(Snapshot { sample, gauges, sessions, server, hidden })
+    Ok(Snapshot { sample, gauges, sessions, locks, server, hidden })
 }
 
 /// The row read for the whole text of the statement `ask` names (none: no session has its pid

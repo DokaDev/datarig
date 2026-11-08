@@ -1,0 +1,17 @@
+[
+ [
+  ["1794105649131933", "13410", null, null, null, "", null, null, "checkpointer", null, "Activity", "CheckpointerMain", "1794105642082140", null, null, null, "", "f", "f", "f", null],
+  ["1794105649131933", "13411", null, null, null, "", null, null, "background writer", null, "Activity", "BgWriterMain", "1794105642083743", null, null, null, "", "f", "f", "f", null],
+  ["1794105649131933", "13412", null, null, null, "", null, null, "walwriter", null, "Activity", "WalWriterMain", "1794105642085073", null, null, null, "", "f", "f", "f", null],
+  ["1794105649131933", "13413", null, null, null, "", null, null, "autovacuum launcher", null, "Activity", "AutoVacuumMain", "1794105642086520", null, null, null, "", "f", "f", "f", null],
+  ["1794105649131933", "13417", null, "datarig", null, "", null, null, "logical replication launcher", null, "Activity", "LogicalLauncherMain", "1794105642088975", null, null, null, "", "f", "f", "f", null],
+  ["1794105649131933", "13617", null, "datarig", "datarig", "zz_a", "127.0.0.1", "60715", "client backend", "idle in transaction", "Client", "ClientRead", "1794105642765725", "1794105642792981", "1794105642793223", "1794105642795088", "UPDATE zz_mon_t SET v = 1 WHERE id = 1;", "f", "f", "f", null],
+  ["1794105649131933", "13896", null, "datarig", "datarig", "zz_b", "127.0.0.1", "60716", "client backend", "active", "Lock", "transactionid", "1794105643478323", "1794105643494559", "1794105643494559", "1794105643494563", "UPDATE zz_mon_t SET v = 2 WHERE id = 1;", "f", "f", "f", "{13617}"],
+  ["1794105649131933", "14091", null, "datarig", "datarig", "zz_c", "127.0.0.1", "60719", "client backend", "active", "Lock", "relation", "1794105644183500", "1794105644199999", "1794105644199999", "1794105644200006", "ALTER TABLE zz_mon_t ADD COLUMN x int;", "f", "f", "f", "{13896,13617}"],
+  ["1794105649131933", "14315", null, "datarig", "datarig", "zz_d", "127.0.0.1", "60720", "client backend", "active", "Lock", "relation", "1794105644891392", "1794105644899392", "1794105644899392", "1794105644899395", "SELECT count(*) FROM zz_mon_t;", "f", "f", "f", "{14091}"],
+  ["1794105649131933", "14485", null, "datarig", "datarig", "zz_e", "127.0.0.1", "60721", "client backend", "active", "Lock", "relation", "1794105645615011", "1794105645625190", "1794105645625190", "1794105645625198", "INSERT INTO zz_mon_p VALUES (1);", "f", "f", "f", "{0}"],
+  ["1794105649131933", "14652", null, "datarig", "datarig", "zz_f", "127.0.0.1", "60723", "client backend", "idle", "Client", "ClientRead", "1794105646324733", null, "1794105646334565", "1794105646334973", "SELECT pg_advisory_lock(7);", "f", "f", "f", null],
+  ["1794105649131933", "14819", null, "datarig", "datarig", "zz_g", "127.0.0.1", "60724", "client backend", "active", "Lock", "advisory", "1794105647033087", "1794105647042735", "1794105647042735", "1794105647042739", "SELECT pg_advisory_lock(7);", "f", "f", "f", "{14652}"],
+  ["1794105649131933", "15464", null, "datarig", "datarig", "psql", "127.0.0.1", "60734", "client backend", "active", null, null, "1794105649119841", "1794105649131933", "1794105649132133", "1794105649132134", "SELECT (extract(epoch FROM now()) * 1000000)::int8 AS now, d.*, s.* FROM (SELECT sum(xact_commit)::int8 AS commits, sum(xact_rollback)::int8 AS rollbacks, sum(blks_read)::int8 AS blks_read, sum(blks_hit)::int8 AS blks_hit, sum(tup_returned)::int8 AS tup_re", "t", "t", "t", null]
+ ]
+]

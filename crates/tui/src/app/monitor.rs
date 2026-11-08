@@ -19,9 +19,10 @@ use crate::widgets::monitor::state_text;
 use datarig_core::config::MonitorInterval;
 use datarig_core::i18n::I18n;
 use datarig_core::monitor::SessionsWanted;
+use datarig_core::monitor::locks::{self, Holder, LockList, Tree};
 use datarig_core::monitor::rate::{self, History, Pending, Rate};
 use datarig_core::monitor::{
-    CounterKind, FullText, GaugeKind, MonitorFormat, Sample, ServerInfo, SessionKey, SessionRow, SessionState,
+    CounterKind, FullText, GaugeKind, MonitorFormat, Part, Sample, ServerInfo, SessionKey, SessionRow, SessionState,
     Snapshot, TEXT_MIN_AGE_US, TextAsk, Timestamp, Tx, Want,
 };
 use std::time::Duration;
@@ -41,6 +42,10 @@ const BACKOFF_AFTER: u32 = 3;
 /// The longest delay between two reads after failures.
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
 
+/// The least time between two reads of the locks: each asks the server's lock manager for all
+/// its locks (the interval when it is longer).
+pub const LOCKS_EVERY: Duration = Duration::from_secs(5);
+
 /// How long past its limit a read may stay unanswered before the tab gives up on its
 /// connection (the driver itself answers well before: this only guards against an answer that
 /// never comes).
@@ -54,15 +59,18 @@ pub enum MonitorView {
     Overview,
     /// Every session, sorted and filtered.
     Sessions,
+    /// Who waits for whom: the blocking tree, root blockers first.
+    Locks,
 }
 
 impl MonitorView {
-    pub const ALL: [MonitorView; 2] = [MonitorView::Overview, MonitorView::Sessions];
+    pub const ALL: [MonitorView; 3] = [MonitorView::Overview, MonitorView::Sessions, MonitorView::Locks];
 
     pub fn label(self) -> Label {
         match self {
             MonitorView::Overview => Label::MonitorViewOverview,
             MonitorView::Sessions => Label::MonitorViewSessions,
+            MonitorView::Locks => Label::MonitorViewLocks,
         }
     }
 }
@@ -101,6 +109,8 @@ pub enum MonitorAction {
     OpenConsole,
     /// The selected session's statement to the clipboard.
     CopyQuery,
+    /// The root blocker of the selected wait (Locks).
+    Root,
     /// Close the details, end the filter.
     Back,
 }
@@ -210,6 +220,17 @@ pub struct SessionsView {
     pub details_top: usize,
 }
 
+/// The blocking tree's selection.
+#[derive(Clone, Debug, Default)]
+pub struct LocksView {
+    /// The selected line of the tree.
+    pub cursor: usize,
+    /// The selected session or transaction, kept across reads.
+    pub selected: Option<Holder>,
+    /// The first line on screen.
+    pub top: usize,
+}
+
 /// Where the parts of the Monitor tab that take a click were drawn last.
 #[derive(Clone, Debug, Default)]
 pub struct MonitorHits {
@@ -292,6 +313,24 @@ pub struct MonitorTab {
     /// longest first: indexes into the latest read's rows, worked out when it came.
     pub top: Vec<usize>,
     pub list: SessionsView,
+    /// The latest read of the locks (read less often than the sessions: at most every
+    /// [`LOCKS_EVERY`], and only while the Locks view is shown).
+    pub locks: Option<LockList>,
+    /// When the locks were last asked for.
+    locks_asked: Option<Instant>,
+    /// What the account could not see of the latest read of the locks (kept with it: the reads
+    /// between do not read them).
+    pub locks_hidden: Vec<datarig_core::monitor::Hidden>,
+    /// The blocking tree of the latest reads, worked out when one came, with each line's
+    /// branch marks (`├ `, `│ `) in front.
+    pub tree: Tree,
+    pub tree_marks: Vec<String>,
+    /// The latest read's sessions by id, and for each holder in the lock read the first wait
+    /// it holds a lock of (the wait's place and the holder's in it): the tree's lines are drawn
+    /// from these, however many sessions and locks there are.
+    by_id: std::collections::HashMap<i64, usize>,
+    pub held: std::collections::HashMap<Holder, (usize, usize)>,
+    pub lock_view: LocksView,
     pub hits: MonitorHits,
 }
 
@@ -322,6 +361,14 @@ impl MonitorTab {
             history: Vec::new(),
             top: Vec::new(),
             list: SessionsView::default(),
+            locks: None,
+            locks_asked: None,
+            locks_hidden: Vec::new(),
+            tree: Tree::default(),
+            tree_marks: Vec::new(),
+            by_id: Default::default(),
+            held: Default::default(),
+            lock_view: LocksView::default(),
             hits: MonitorHits::default(),
         }
     }
@@ -356,6 +403,79 @@ impl MonitorTab {
     pub fn selected_row(&self) -> Option<&SessionRow> {
         let rows = &self.snapshot.as_ref()?.sessions.as_ref()?.rows;
         rows.get(*self.list.order.get(self.list.cursor)?)
+    }
+
+    /// The session the view acts on: the selected line's in the Locks view, else the list's.
+    pub fn acted_row(&self) -> Option<&SessionRow> {
+        match self.view {
+            MonitorView::Locks => match self.tree.lines.get(self.lock_view.cursor)?.node {
+                Holder::Session(id) => self.session(id),
+                _ => None,
+            },
+            _ => self.selected_row(),
+        }
+    }
+
+    /// Session `id` of the latest read.
+    pub fn session(&self, id: i64) -> Option<&SessionRow> {
+        self.snapshot.as_ref()?.sessions.as_ref()?.rows.get(*self.by_id.get(&id)?)
+    }
+
+    /// The Locks view is shown: a read asks for the locks once [`LOCKS_EVERY`] (or the interval)
+    /// has passed since they were last asked for.
+    fn locks_due(&self, now: Instant) -> bool {
+        let every = LOCKS_EVERY.max(self.interval.duration());
+        self.view == MonitorView::Locks && self.locks_asked.is_none_or(|t| now >= t + every)
+    }
+
+    /// Work out the blocking tree again from the latest reads, keeping the selected line's
+    /// session or transaction selected while it is still in the tree.
+    fn refresh_tree(&mut self) {
+        let sessions = self.snapshot.as_ref().and_then(|s| s.sessions.as_ref());
+        // Every session listed: a waiter the list does not have has ended.
+        let complete = self
+            .snapshot
+            .as_ref()
+            .is_some_and(|s| !s.hidden.iter().any(|h| matches!(h.part, Part::OtherSessions | Part::UntrackedSessions)));
+        self.tree = Tree::build(&locks::edges(sessions, self.locks.as_ref(), complete));
+        self.tree_marks = marks(&self.tree);
+        self.by_id =
+            sessions.map(|l| l.rows.iter().enumerate().map(|(i, r)| (r.key.id, i)).collect()).unwrap_or_default();
+        self.held.clear();
+        for (w, wait) in self.locks.iter().flat_map(|l| l.waits.iter()).enumerate() {
+            for (h, holder) in wait.holders.iter().enumerate().filter(|(_, h)| !h.waiting) {
+                self.held.entry(holder.holder.clone()).or_insert((w, h));
+            }
+        }
+        let v = &mut self.lock_view;
+        let at = v.selected.as_ref().and_then(|s| self.tree.lines.iter().position(|l| &l.node == s));
+        v.cursor = at.unwrap_or(v.cursor.min(self.tree.lines.len().saturating_sub(1)));
+        v.selected = self.tree.lines.get(v.cursor).map(|l| l.node.clone());
+    }
+
+    /// Show view `v`. The Locks view shown reads at once when its locks are due (and nothing is
+    /// in flight), not an interval later.
+    fn show_view(&mut self, v: MonitorView, now: Instant) {
+        self.view = v;
+        self.list.details = false;
+        if self.locks_due(now) && self.request.is_none() && self.format().is_some() && !self.paused {
+            self.due = Some(now);
+        }
+    }
+
+    /// Select line `at` of the tree (clamped).
+    pub fn select_line(&mut self, at: usize) {
+        if let Some(l) = self.tree.lines.get(at) {
+            self.lock_view.cursor = at;
+            self.lock_view.selected = Some(l.node.clone());
+        }
+    }
+
+    fn move_line(&mut self, delta: isize) {
+        let n = self.tree.lines.len();
+        if n > 0 {
+            self.select_line((self.lock_view.cursor as isize + delta).clamp(0, n as isize - 1) as usize);
+        }
     }
 
     /// The read of the selected row's whole statement, while that row still shows the statement
@@ -405,6 +525,7 @@ impl MonitorTab {
         self.prev = None;
         self.pending = Pending::default();
         self.want_server = true;
+        self.locks_asked = None;
     }
 
     /// The charts show a gap before the next point: what came before is not joined to it.
@@ -459,9 +580,18 @@ impl MonitorTab {
         if let Some(info) = &snapshot.server {
             self.server = Some(info.clone());
         }
+        let mut snapshot = snapshot;
+        if let Some(l) = snapshot.locks.take() {
+            self.locks = Some(l);
+            let lock_part = |h: &&datarig_core::monitor::Hidden| {
+                matches!(h.part, Part::RowLockWaits | Part::MetadataLockWaits | Part::UntrackedMetadataLocks)
+            };
+            self.locks_hidden = snapshot.hidden.iter().filter(lock_part).cloned().collect();
+        }
         self.snapshot = Some(snapshot);
         self.error = None;
         self.refresh_order(i18n);
+        self.refresh_tree();
     }
 
     /// Sort and filter the latest read's sessions again, keeping the selected session selected
@@ -514,6 +644,40 @@ impl MonitorTab {
             self.list.details_top = 0;
         }
     }
+}
+
+/// The branch marks in front of each line of `tree`: `├ ` or `└ ` before a waiter, after `│ `
+/// or blanks for the branches of the lines above it.
+fn marks(tree: &Tree) -> Vec<String> {
+    let n = tree.lines.len();
+    // Whether each line is the last of its parent's.
+    let mut last = vec![true; n];
+    let mut seen: std::collections::HashMap<Option<usize>, usize> = std::collections::HashMap::new();
+    for (i, l) in tree.lines.iter().enumerate() {
+        let parent = l.parent.map(|(p, _)| p);
+        if let Some(prev) = seen.insert(parent, i) {
+            last[prev] = false;
+        }
+    }
+    let mut out = Vec::with_capacity(n);
+    for (i, l) in tree.lines.iter().enumerate() {
+        let mut chain = Vec::new();
+        let mut at = l.parent.map(|(p, _)| p);
+        while let Some(p) = at {
+            chain.push(p);
+            at = tree.lines[p].parent.map(|(q, _)| q);
+        }
+        let mut s = String::new();
+        // The branches of the ancestors below a root, outermost first.
+        for &a in chain.iter().rev().skip(1) {
+            s.push_str(if last[a] { "  " } else { "│ " });
+        }
+        if l.parent.is_some() {
+            s.push_str(if last[i] { "└ " } else { "├ " });
+        }
+        out.push(s);
+    }
+    out
 }
 
 /// The longest running client sessions of `rows` (a statement running: for how long; a
@@ -811,8 +975,13 @@ impl App {
         let Some(session) = m.session.as_ref() else { return };
         m.seq += 1;
         let request = m.seq;
+        let locks = m.locks_due(now);
+        if locks {
+            m.locks_asked = Some(now);
+        }
         let want = Want {
             sessions: Some(SessionsWanted { idle: m.list.show_idle }),
+            locks,
             server: std::mem::take(&mut m.want_server),
             limit: m.limit(),
         };
@@ -988,14 +1157,50 @@ impl App {
         let Some((m, i18n)) = self.monitor_words(id) else { return };
         match a {
             MonitorAction::Open => {}
-            MonitorAction::View(v) => {
-                m.view = v;
-                m.list.details = false;
-            }
+            MonitorAction::View(v) => m.show_view(v, now),
             MonitorAction::NextView => {
                 let i = MonitorView::ALL.iter().position(|v| *v == m.view).unwrap_or(0);
-                m.view = MonitorView::ALL[(i + 1) % MonitorView::ALL.len()];
-                m.list.details = false;
+                m.show_view(MonitorView::ALL[(i + 1) % MonitorView::ALL.len()], now);
+            }
+            MonitorAction::Up if m.view == MonitorView::Locks => m.move_line(-1),
+            MonitorAction::Down if m.view == MonitorView::Locks => m.move_line(1),
+            MonitorAction::PageUp if m.view == MonitorView::Locks => m.move_line(-page),
+            MonitorAction::PageDown if m.view == MonitorView::Locks => m.move_line(page),
+            MonitorAction::First if m.view == MonitorView::Locks => m.move_line(isize::MIN / 2),
+            MonitorAction::Last if m.view == MonitorView::Locks => m.move_line(isize::MAX / 2),
+            MonitorAction::Details if m.view == MonitorView::Locks => {
+                // The selected line's session in full, in the Sessions view.
+                if let Some(key) = m.acted_row().map(|r| r.key) {
+                    m.view = MonitorView::Sessions;
+                    m.list.selected = Some(key);
+                    m.list.filter = TextInput::default();
+                    m.refresh_order(i18n);
+                    m.list.details = m.selected_row().is_some_and(|r| r.key == key);
+                    m.list.details_top = 0;
+                }
+            }
+            MonitorAction::Root => {
+                if m.view != MonitorView::Locks {
+                    return;
+                }
+                let line = m.tree.lines.get(m.lock_view.cursor);
+                let (alone, cycle) = line.map_or((false, false), |l| (l.alone, l.cycle));
+                match m.tree.root_of(m.lock_view.cursor) {
+                    // It waits itself, for a holder not found, or in a cycle: never "waits for
+                    // nobody".
+                    Some((root, _)) if root == m.lock_view.cursor && alone => {
+                        say = Some(Notice::new(Label::MonitorLockAlone, Level::Info));
+                    }
+                    Some((root, _)) if root == m.lock_view.cursor && cycle => {
+                        say = Some(Notice::new(Label::MonitorLockCycle, Level::Info));
+                    }
+                    Some((root, true)) if root != m.lock_view.cursor => m.select_line(root),
+                    Some((root, false)) if root != m.lock_view.cursor => {
+                        say = Some(Notice::new(Label::MonitorRootUnsure, Level::Info));
+                    }
+                    Some(_) => say = Some(Notice::new(Label::MonitorAtRoot, Level::Info)),
+                    None => {}
+                }
             }
             MonitorAction::Up if m.list.details => m.list.details_top = m.list.details_top.saturating_sub(1),
             MonitorAction::Down if m.list.details => m.list.details_top += 1,
@@ -1132,8 +1337,10 @@ impl App {
     /// `None` when there is none.
     fn monitor_query(&self) -> Option<(String, Option<String>, bool)> {
         let m = self.monitor_of(self.tab().id)?;
-        let r = m.selected_row()?;
-        let q = m.full_text().or(r.query.as_ref()).filter(|q| !q.text.trim().is_empty())?;
+        let r = m.acted_row()?;
+        // The whole text read for the list's selection is that row's only.
+        let whole = m.full_text().filter(|_| m.selected_row().map(|s| s.key) == Some(r.key));
+        let q = whole.or(r.query.as_ref()).filter(|q| !q.text.trim().is_empty())?;
         let part = q.shortened || q.maybe_cut_by_server;
         Some((q.text.clone(), r.database.clone(), part))
     }
@@ -1180,11 +1387,11 @@ impl App {
             return false;
         }
         let id = self.tab().id;
+        let now = self.now();
         let Some((m, i18n)) = self.monitor_words(id) else { return false };
         let inside = |r: &Rect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
         if let Some(v) = m.hits.views.iter().find(|(r, _)| inside(r)).map(|(_, v)| *v) {
-            m.view = v;
-            m.list.details = false;
+            m.show_view(v, now);
             return true;
         }
         if let Some(k) = m.hits.headers.iter().find(|(r, _)| inside(r)).map(|(_, k)| *k) {
@@ -1201,6 +1408,7 @@ impl App {
             let n = (y - m.hits.rows.y) as usize;
             match m.hits.rows_view {
                 Some(MonitorView::Sessions) => m.select(m.list.top + n),
+                Some(MonitorView::Locks) => m.select_line(m.lock_view.top + n),
                 Some(MonitorView::Overview) => {
                     // A row of the longest running: that session in the list.
                     if let Some(&i) = m.hits.top_rows.get(n) {

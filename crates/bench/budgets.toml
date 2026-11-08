@@ -262,6 +262,11 @@ build_work_per_row_max = 6.0
 frame_p95_ms_max = 25.0
 work_per_frame_max = 60.0
 take_p95_ms_max = 25.0
+# The Locks view with the largest lock read (200 waits in chains, 2,000 lock rows): the key or
+# the read with its frame (the work per frame is held to the budget above), and taking a read
+# with its lock waits, which builds the blocking tree once.
+locks_frame_p95_ms_max = 25.0
+locks_take_p95_ms_max = 25.0
 
 [explorer]
 # One connected profile with 20 schemas of 500 relations each, all listed and open (10,000
