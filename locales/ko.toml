@@ -2824,6 +2824,7 @@
 "monitor.read_failed" = "마지막 읽기가 실패했습니다: {error}. 보이는 내용은 그 전 읽기의 것입니다"
 "monitor.need_grant" = "{grant} 필요"
 "monitor.need_setting" = "서버 설정 {setting}에 달려 있음"
+"monitor.need_version" = "{version} 이상 필요"
 "monitor.hidden_details" = "다른 계정의 세션은 상태, 문장, 시간 없이 보입니다"
 "monitor.hidden_sessions" = "이 계정의 세션만 보입니다"
 "monitor.hidden_tx" = "유휴 세션이 트랜잭션을 열어 두었는지 알 수 없습니다"

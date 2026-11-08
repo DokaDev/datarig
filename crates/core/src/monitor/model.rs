@@ -524,6 +524,8 @@ pub enum Need {
     Grant(&'static str),
     /// A server setting raised, by its name (`performance_schema_max_thread_instances`).
     Setting(&'static str),
+    /// A later version of the server, the first that has it (`MySQL 8.0.38`).
+    Version(&'static str),
 }
 
 /// What a monitor tick reads ([`crate::driver::DbCommand::MonitorTick`]): the counters always,

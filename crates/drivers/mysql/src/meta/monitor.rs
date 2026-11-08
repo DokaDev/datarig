@@ -228,23 +228,26 @@ const INFO_BYTES: usize = 65535;
 /// there but going through every lock it holds, which a large transaction makes millions.
 /// Columns: `waiter` (the waiting session's id), `blocker` (the session that has the blocking
 /// transaction now, NULL when none or not known), `blocking_trx` (the blocking transaction's
-/// engine id).
+/// engine id), `blocking_session_read` (1: the transaction was found and has no session; 0:
+/// not found or not readable, so its session is not known).
 ///
 /// A lock keeps the thread that took it, which is not the transaction's session once an XA
 /// transaction is prepared and detached (that session goes on with other work): the session
 /// is the transaction's own, from `INNODB_TRX` (needs `PROCESS`); without it, only the
 /// transaction is named.
 pub(crate) fn row_lock_waits(my: &MySqlMonitor) -> String {
-    let (blocker, join) = match my.innodb_trx == Readable::Yes {
+    let (blocker, sessionless, join) = match my.innodb_trx == Readable::Yes {
         true => (
             "NULLIF(bx.trx_mysql_thread_id, 0)",
+            "bx.trx_id IS NOT NULL AND bx.trx_mysql_thread_id = 0",
             " LEFT JOIN information_schema.INNODB_TRX bx ON bx.trx_id = w.BLOCKING_ENGINE_TRANSACTION_ID",
         ),
-        false => ("CAST(NULL AS UNSIGNED)", ""),
+        false => ("CAST(NULL AS UNSIGNED)", "0", ""),
     };
     format!(
         "SELECT rt.PROCESSLIST_ID AS waiter, {blocker} AS blocker, \
-         w.BLOCKING_ENGINE_TRANSACTION_ID AS blocking_trx FROM performance_schema.data_lock_waits w \
+         w.BLOCKING_ENGINE_TRANSACTION_ID AS blocking_trx, {sessionless} AS blocking_session_read \
+         FROM performance_schema.data_lock_waits w \
          LEFT JOIN performance_schema.threads rt ON rt.THREAD_ID = w.REQUESTING_THREAD_ID{join} \
          ORDER BY waiter, blocker LIMIT {LOCK_ROWS}"
     )
@@ -274,8 +277,14 @@ pub(crate) fn metadata_lock_waits() -> String {
 /// lock waits when the account may read them with the instrument on (else what would show them
 /// is said instead). The driver sends them only when a session may be waiting for a lock
 /// (`decode::mysql::may_wait`).
+///
+/// Before MySQL 8.0.38 the row lock waits are not read (`MySqlMonitor::lock_waits`): the
+/// statement list starts with the metadata lock waits then.
 pub(crate) fn locks(my: &MySqlMonitor) -> Vec<String> {
-    let mut statements = vec![row_lock_waits(my)];
+    let mut statements = Vec::new();
+    if my.lock_waits() {
+        statements.push(row_lock_waits(my));
+    }
     if my.metadata_locks == Readable::Yes {
         statements.push(metadata_lock_waits());
     }

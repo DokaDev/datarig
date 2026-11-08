@@ -1019,7 +1019,7 @@ fn cells(values: &[Option<&str>]) -> Vec<Option<String>> {
 fn mysql_lock_answers() -> Vec<Answer> {
     let s = Some;
     let n = None;
-    let rows = vec![cells(&[s("7"), s("5"), s("1001")]), cells(&[s("8"), n, s("4242")])];
+    let rows = vec![cells(&[s("7"), s("5"), s("1001"), s("0")]), cells(&[s("8"), n, s("4242"), s("1")])];
     let mdl = vec![
         cells(&[s("9"), s("109"), s("TABLE"), s("shop"), s("orders"), s("EXCLUSIVE"), s("TRANSACTION"), s("PENDING")]),
         cells(&[
@@ -1086,7 +1086,7 @@ fn mysql_row_lock_waits_name_their_blockers_and_metadata_locks_their_incompatibl
     assert_eq!((row.object.kind.as_str(), row.object.name.as_deref(), row.mode.as_str()), ("RECORD", None, ""));
     assert_eq!((row.holders[0].holder.clone(), row.holders[0].blame), (Holder::Session(5), Blame::Proven));
     let xa = locks.waits_of(8).next().unwrap();
-    assert_eq!(xa.holders[0].holder, Holder::Transaction("4242".into()));
+    assert_eq!(xa.holders[0].holder, Holder::Transaction { id: "4242".into(), sessionless: true });
     let alter = locks.waits_of(9).next().unwrap();
     assert_eq!((alter.object.kind.as_str(), alter.mode.as_str()), ("TABLE", "EXCLUSIVE"));
     let holders: Vec<(Holder, Blame)> = alter.holders.iter().map(|h| (h.holder.clone(), h.blame)).collect();
@@ -1357,4 +1357,23 @@ fn a_blocker_that_waits_itself_for_a_holder_not_found_is_marked_waiting() {
     assert!(tree.lines[0].alone && tree.lines[0].node == Holder::Session(10));
     assert_eq!(tree.waiting, 2);
     assert_eq!(tree.root_of(1), Some((0, false)), "A is not the root of the waits");
+}
+
+#[test]
+fn row_lock_waits_before_8_0_38_are_said_not_read() {
+    let my = MySqlMonitor { version: 80037, ..mysql_root() };
+    let (locks, hidden) = decode::mysql::locks(&[Answer::Rows(Vec::new())], &my, Timestamp(1)).unwrap();
+    assert!(locks.waits.is_empty());
+    assert_eq!(hidden, [Hidden { part: Part::RowLockWaits, need: Need::Version("MySQL 8.0.38") }]);
+    // The answers follow the statements sent: one fewer.
+    assert!(decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).is_err());
+}
+
+#[test]
+fn a_blocking_transaction_not_found_is_not_said_to_have_no_session() {
+    let s = Some;
+    let rows = vec![cells(&[s("7"), None, s("4242"), s("0")])];
+    let (locks, _) =
+        decode::mysql::locks(&[Answer::Rows(rows), Answer::Rows(Vec::new())], &mysql_root(), Timestamp(1)).unwrap();
+    assert_eq!(locks.waits[0].holders[0].holder, Holder::Transaction { id: "4242".into(), sessionless: false });
 }

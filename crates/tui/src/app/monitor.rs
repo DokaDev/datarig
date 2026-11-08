@@ -1182,7 +1182,17 @@ impl App {
                 if m.view != MonitorView::Locks {
                     return;
                 }
+                let line = m.tree.lines.get(m.lock_view.cursor);
+                let (alone, cycle) = line.map_or((false, false), |l| (l.alone, l.cycle));
                 match m.tree.root_of(m.lock_view.cursor) {
+                    // It waits itself, for a holder not found, or in a cycle: never "waits for
+                    // nobody".
+                    Some((root, _)) if root == m.lock_view.cursor && alone => {
+                        say = Some(Notice::new(Label::MonitorLockAlone, Level::Info));
+                    }
+                    Some((root, _)) if root == m.lock_view.cursor && cycle => {
+                        say = Some(Notice::new(Label::MonitorLockCycle, Level::Info));
+                    }
                     Some((root, true)) if root != m.lock_view.cursor => m.select_line(root),
                     Some((root, false)) if root != m.lock_view.cursor => {
                         say = Some(Notice::new(Label::MonitorRootUnsure, Level::Info));

@@ -104,9 +104,13 @@ pub enum Holder {
     /// A prepared transaction (PostgreSQL), which belongs to no session; `None` when the read
     /// could not tell which.
     Prepared(Option<Prepared>),
-    /// A transaction no session has (MySQL: an XA transaction prepared by a session that has
-    /// gone), by the engine's transaction id.
-    Transaction(String),
+    /// A transaction by the engine's id (MySQL), with no session known to have it:
+    /// `sessionless` when the server says none has it (an XA transaction prepared and detached
+    /// from its session), else its session is not known (not readable, or not found).
+    Transaction {
+        id: String,
+        sessionless: bool,
+    },
 }
 
 /// A prepared transaction: it holds its locks until someone runs `COMMIT PREPARED` or
@@ -586,7 +590,7 @@ impl Tree {
             Holder::Session(id) => (0, *id, String::new()),
             Holder::Prepared(Some(p)) => (1, 0, p.gid.clone()),
             Holder::Prepared(None) => (1, 0, String::new()),
-            Holder::Transaction(t) => (2, 0, t.clone()),
+            Holder::Transaction { id, .. } => (2, 0, id.clone()),
         };
         for cs in children.values_mut() {
             cs.sort_by(|a, b| memo[b].cmp(&memo[a]).then_with(|| key(a).cmp(&key(b))));

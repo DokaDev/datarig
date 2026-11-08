@@ -206,3 +206,11 @@ fn the_lock_reads_follow_what_the_account_may_read() {
     assert!(mdl.contains("p.thread <> g.thread") && mdl.contains("ORDER BY LOCK_STATUS DESC"), "{mdl}");
     assert!(rows.ends_with(&format!("LIMIT {LOCK_ROWS}")) && mdl.ends_with(&format!("LIMIT {LOCK_ROWS}")));
 }
+
+#[test]
+fn the_row_lock_waits_are_not_read_where_their_read_stalls_the_server() {
+    let old = my(80037, true, Readable::Yes);
+    assert_eq!(locks(&old), [metadata_lock_waits()], "8.0.37: the metadata lock waits only");
+    let fixed = my(80038, true, Readable::Yes);
+    assert_eq!(locks(&fixed), [row_lock_waits(&fixed), metadata_lock_waits()]);
+}

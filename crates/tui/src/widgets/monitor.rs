@@ -248,6 +248,7 @@ impl Cx<'_> {
         match need {
             Need::Grant(g) => self.msg(Msg::MonitorNeedGrant { grant: (*g).to_string() }),
             Need::Setting(s) => self.msg(Msg::MonitorNeedSetting { setting: (*s).to_string() }),
+            Need::Version(v) => self.msg(Msg::MonitorNeedVersion { version: (*v).to_string() }),
         }
     }
 
@@ -712,13 +713,9 @@ impl Cx<'_> {
                 self.msg(Msg::MonitorLockPrepared { gid: p.gid.clone() })
             }
             Holder::Prepared(None) => self.label(Label::MonitorLockPreparedUnknown),
-            Holder::Transaction(t) => {
-                // Its session is told by INNODB_TRX only: without it, not known.
-                let told = matches!(m.format(), Some(MonitorFormat::MySql(my)) if my.innodb_trx == datarig_core::monitor::Readable::Yes);
-                match told {
-                    true => self.msg(Msg::MonitorLockTransaction { id: t.clone() }),
-                    false => self.msg(Msg::MonitorLockTransactionUnknown { id: t.clone() }),
-                }
+            Holder::Transaction { id, sessionless: true } => self.msg(Msg::MonitorLockTransaction { id: id.clone() }),
+            Holder::Transaction { id, sessionless: false } => {
+                self.msg(Msg::MonitorLockTransactionUnknown { id: id.clone() })
             }
         };
         let mut text = format!("{lead}{marks}{head}");
@@ -735,7 +732,7 @@ impl Cx<'_> {
             Holder::Session(id) => id.to_string(),
             Holder::Prepared(Some(p)) => self.msg(Msg::MonitorLockPrepared { gid: p.gid.clone() }),
             Holder::Prepared(None) => self.label(Label::MonitorPreparedTx),
-            Holder::Transaction(t) => t.clone(),
+            Holder::Transaction { id, .. } => id.clone(),
         }
     }
 

@@ -93,8 +93,8 @@ pub const SESSIONS: &[&str] = &[
 /// The columns of a session's row read for its statement's whole text (`now` in microseconds since the Unix epoch, `TIME` in seconds, `maybe_cut` the server may have kept only the start of `INFO`), in order.
 pub const QUERY_TEXT: &[&str] = &["now", "ID", "COMMAND", "TIME", "INFO", "maybe_cut"];
 
-/// The columns of a row lock wait's row (`waiter` and `blocker` session ids, `blocker` NULL when no session has the blocking transaction, `blocking_trx` its engine transaction id), in order.
-pub const ROW_LOCK_WAITS: &[&str] = &["waiter", "blocker", "blocking_trx"];
+/// The columns of a row lock wait's row (`waiter` and `blocker` session ids, `blocker` NULL when no session is known to have the blocking transaction, `blocking_trx` its engine transaction id, `blocking_session_read` 1 when the transaction was found and has no session), in order.
+pub const ROW_LOCK_WAITS: &[&str] = &["waiter", "blocker", "blocking_trx", "blocking_session_read"];
 
 /// The columns of a metadata lock's row (`id` the owner's session id, NULL for a thread without one; `thread` its thread id), in order.
 pub const METADATA_LOCKS: &[&str] =
@@ -446,13 +446,20 @@ pub fn locks(answers: &[Answer], my: &MySqlMonitor, time: Timestamp) -> Result<(
     let mut waits: Vec<LockWait> = Vec::new();
     let mut hidden = Vec::new();
     let mut more = 0u64;
-    let (rows, metadata) = match answers {
-        [rows] => (rows, None),
-        [rows, metadata] => (rows, Some(metadata)),
-        _ => return Err(malformed("locks", format!("{} answers, expected 1 or 2", answers.len()))),
-    };
+    // In the order the driver sends them: the row lock waits from 8.0.38, the metadata lock
+    // waits when readable.
+    let expected = usize::from(my.lock_waits()) + usize::from(my.metadata_locks == Readable::Yes);
+    if answers.len() != expected {
+        return Err(malformed("locks", format!("{} answers, expected {expected}", answers.len())));
+    }
+    let mut next = answers.iter();
+    let rows = if my.lock_waits() { next.next() } else { None };
+    let metadata = next.next();
     match rows {
-        Answer::Rows(rows) => {
+        // Not read on this version: its read stalls a busy server.
+        None => hidden
+            .push(Hidden { part: Part::RowLockWaits, need: Need::Version(crate::monitor::format::LOCK_WAITS_FROM) }),
+        Some(Answer::Rows(rows)) => {
             if rows.len() >= lk::LOCK_ROWS {
                 more += 1;
             }
@@ -466,7 +473,10 @@ pub fn locks(answers: &[Answer], my: &MySqlMonitor, time: Timestamp) -> Result<(
                 let mode = String::new();
                 let holder = match row.int("blocker")? {
                     Some(id) => Holder::Session(id),
-                    None => Holder::Transaction(row.required("blocking_trx")?.to_owned()),
+                    None => Holder::Transaction {
+                        id: row.required("blocking_trx")?.to_owned(),
+                        sessionless: row.bool("blocking_session_read")? == Some(true),
+                    },
                 };
                 let held = LockHolder { holder, modes: Vec::new(), waiting: false, blame: Blame::Proven };
                 let at = waits.iter().position(|w| w.waiter.id == waiter && w.object == object && w.mode == mode);
@@ -490,10 +500,10 @@ pub fn locks(answers: &[Answer], my: &MySqlMonitor, time: Timestamp) -> Result<(
                 }
             }
         }
-        refused @ Answer::Error { .. } if readable(refused) == Readable::Refused => {
+        Some(refused @ Answer::Error { .. }) if readable(refused) == Readable::Refused => {
             hidden.push(Hidden { part: Part::RowLockWaits, need: Need::Grant("SELECT on performance_schema") });
         }
-        Answer::Error { message, .. } => return Err(malformed("row lock waits", message.clone())),
+        Some(Answer::Error { message, .. }) => return Err(malformed("row lock waits", message.clone())),
     }
     match metadata {
         Some(Answer::Rows(rows)) => {
