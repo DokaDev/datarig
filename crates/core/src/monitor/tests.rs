@@ -1220,6 +1220,7 @@ fn prepared_wait(prepared: &[(&str, &str)], statement: Timestamp) -> (SessionLis
             modes: vec![(*mode).into()],
             waiting: false,
             blame: Blame::Holds,
+            explicit: false,
         })
         .collect();
     (list, locks)
@@ -1496,4 +1497,62 @@ fn a_metadata_lock_holder_with_no_transaction_open_is_not_said_to_block() {
     assert_eq!(blame(&list), Some(Blame::CannotTell));
     list.rows[1].tx = Tx::Open;
     assert_eq!(blame(&list), Some(Blame::Incompatible));
+}
+
+/// The lock waits recorded on MySQL 8.4 (`my84_locks`, as root): 8604 updated a row in an open
+/// transaction; 8605 updates the same row; 8606 alters the table; 8607 reads it behind the
+/// ALTER; 8608 holds `GET_LOCK('zz_mon_k')`, which 8610 asks for.
+#[test]
+fn mysql_lock_waits_recorded_on_a_server_make_the_tree() {
+    let my = mysql_root();
+    let answers =
+        [fixture!("my84_locks/row_lock_waits").remove(0), fixture!("my84_locks/metadata_lock_waits").remove(0)];
+    let (locks, hidden) = decode::mysql::locks(&answers, &my, Timestamp(1)).unwrap();
+    assert!(hidden.is_empty());
+    let (list, _) = decode::mysql::sessions(&rows(fixture!("my84_locks/sessions_without_idle")), &my, NO_IDLE).unwrap();
+    let blockers = |id: i64| -> Vec<(Holder, Blame)> {
+        locks.waits_of(id).flat_map(|w| w.holders.iter().map(|h| (h.holder.clone(), h.blame))).collect()
+    };
+    assert_eq!(blockers(8605), [(Holder::Session(8604), Blame::Proven)]);
+    assert_eq!(
+        blockers(8606),
+        [(Holder::Session(8604), Blame::Incompatible), (Holder::Session(8605), Blame::Incompatible)]
+    );
+    assert!(blockers(8607).is_empty(), "behind the ALTER's request, beside every granted lock");
+    assert_eq!(blockers(8610), [(Holder::Session(8608), Blame::Incompatible)]);
+    let tree = Tree::build(&lk::edges(Some(&list), Some(&locks), true));
+    let depth = |id: i64| tree.lines.iter().find(|l| l.node == Holder::Session(id)).map(|l| (l.depth, l.alone));
+    assert_eq!(depth(8604), Some((0, false)));
+    assert_eq!(depth(8605).map(|d| d.0), Some(1));
+    assert_eq!(depth(8606).map(|d| d.0), Some(1));
+    assert_eq!(depth(8607), Some((0, true)));
+    assert_eq!(depth(8608), Some((0, false)));
+    assert_eq!(depth(8610).map(|d| d.0), Some(1));
+    // GET_LOCK's wait is a lock wait in the list.
+    assert!(list.rows.iter().find(|r| r.key.id == 8610).unwrap().waits_for_lock());
+}
+
+#[test]
+fn a_user_level_lock_held_outside_a_transaction_still_blocks() {
+    let my = mysql_root();
+    let answers =
+        [fixture!("my84_locks/row_lock_waits").remove(0), fixture!("my84_locks/metadata_lock_waits").remove(0)];
+    let (locks, _) = decode::mysql::locks(&answers, &my, Timestamp(1)).unwrap();
+    let (mut list, _) =
+        decode::mysql::sessions(&rows(fixture!("my84_locks/sessions_without_idle")), &my, NO_IDLE).unwrap();
+    // 8608 holds GET_LOCK (EXPLICIT), idle, no transaction: that lock is its own. 8604 has no
+    // transaction open either: its table lock is a transaction's it does not run (an XA one).
+    for id in [8604, 8608] {
+        let r = list.rows.iter_mut().find(|r| r.key.id == id);
+        if let Some(r) = r {
+            r.tx = Tx::None;
+            // A session-wide mark of some explicit lock does not vouch for its other locks.
+            r.extra.push(Extra { key: ExtraKey::ExplicitLocks, value: "yes".into() });
+        }
+    }
+    let edges = lk::edges(Some(&list), Some(&locks), true).edges;
+    let blame =
+        |w: i64, h: i64| edges.iter().find(|e| e.waiter == w && e.holder == Holder::Session(h)).map(|e| e.blame);
+    assert_eq!(blame(8610, 8608), Some(Blame::Incompatible));
+    assert_eq!(blame(8606, 8604), Some(Blame::CannotTell));
 }

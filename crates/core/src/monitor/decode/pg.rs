@@ -342,6 +342,7 @@ pub fn locks(rows: &Rows, time: Timestamp) -> Result<LockList, DecodeError> {
                         modes: vec![mode.clone()],
                         waiting: false,
                         blame: Blame::Holds,
+                        explicit: false,
                     }),
                 }
             }

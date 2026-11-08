@@ -1,0 +1,12 @@
+[
+ [
+  ["1794130134121905", "5", "event_scheduler", "localhost", null, "Daemon", "26127", "Waiting on empty queue", null, null, "0", null, null, null, null, "1", "0", "0", "1", "41", null, null],
+  ["1794130134121905", "8604", "root", "172.23.0.1:58150", "datarig", "Sleep", "21", "", null, null, "0", "1794130113000000", "RUNNING", "1", "1", "1", "1", "0", "1", "8642", null, null],
+  ["1794130134121905", "8605", "root", "172.23.0.1:58160", "datarig", "Query", "20", "updating", "UPDATE zz_mon_t SET v = 2 WHERE id = 1", "0", "0", "1794130114000000", "LOCK WAIT", "1", "0", "1", "1", "0", "1", "8643", "5", "4adc23a556a5e030ce4341472cdaeae9"],
+  ["1794130134121905", "8606", "root", "172.23.0.1:58172", "datarig", "Query", "19", "Waiting for table metadata lock", "ALTER TABLE zz_mon_t ADD COLUMN x INT", "0", "0", null, null, null, null, "1", "1", "0", "1", "8644", "5", "b7b2a88be5a2ced1d67a6f7293da518d"],
+  ["1794130134121905", "8607", "root", "172.23.0.1:58176", "datarig", "Query", "19", "Waiting for table metadata lock", "SELECT count(*) FROM zz_mon_t", "0", "0", null, null, null, null, "1", "0", "0", "1", "8645", "5", "a74fd41397533453a37e2871f947ef28"],
+  ["1794130134121905", "8608", "root", "172.23.0.1:58188", "datarig", "Sleep", "18", "", null, null, "0", null, null, null, null, "1", "0", "1", "1", "8646", null, null],
+  ["1794130134121905", "8610", "root", "172.23.0.1:58190", "datarig", "Query", "17", "User lock", "SELECT GET_LOCK('zz_mon_k', 900)", "0", "0", null, null, null, null, "1", "0", "0", "1", "8648", "4", "c0ec2d7221f68dc192f8773cf617860e"],
+  ["1794130134121905", "8619", "root", "172.23.0.1:62486", null, "Query", "0", "executing", "SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, CAST(UNIX_TIMESTAMP(t.trx_started)", "1", "1", null, null, null, null, "1", "1", "0", "1", "8657", "3", "73c6de20313e36487095d9fa357a504c"]
+ ]
+]

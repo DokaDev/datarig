@@ -136,6 +136,9 @@ pub struct LockHolder {
     /// It asks for the lock too, ahead of the waiter, and does not hold it yet.
     pub waiting: bool,
     pub blame: Blame,
+    /// It holds the lock past its transactions (MySQL `LOCK_DURATION = EXPLICIT`: `GET_LOCK`,
+    /// `LOCK TABLES`): the session's own, whatever transaction it has open.
+    pub explicit: bool,
 }
 
 /// How a holder stands to a waiter.
@@ -428,8 +431,9 @@ pub fn edges(sessions: Option<&SessionList>, locks: Option<&LockList>, complete:
             // A metadata lock lasts until its transaction ends: a holder known to have none open
             // holds it for another (a prepared XA transaction keeps the thread that took it), so
             // whether that session blocks is not known.
+            // (A lock held past transactions, `GET_LOCK` or `LOCK TABLES`, is the session's own.)
             let none_open = match &h.holder {
-                Holder::Session(id) => by_id.get(id).is_some_and(|r| r.tx == Tx::None),
+                Holder::Session(id) => !h.explicit && by_id.get(id).is_some_and(|r| r.tx == Tx::None),
                 _ => false,
             };
             let blame = match h.blame {

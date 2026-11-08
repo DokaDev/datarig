@@ -125,6 +125,7 @@ fn lock_table(n: u64, sessions: usize) -> LockList {
                     modes: vec!["SHARED_WRITE".into()],
                     waiting: false,
                     blame: if k == 0 { Blame::Proven } else { Blame::Incompatible },
+                    explicit: false,
                 })
                 .collect();
             LockWait {
