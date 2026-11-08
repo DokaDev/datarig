@@ -43,6 +43,26 @@ services:
       timeout: 3s
       retries: 90
 
+  # The load of a recording that watches the server (load/<tape>.sh, e.g. load/monitor.sh), only
+  # while that tape records: render.sh starts it with DATARIG_DEMO_LOAD=<tape> and removes it
+  # right after (`up` without the profile never starts it). Its only network is this project's
+  # own, so it reaches the demo databases and nothing else; removing it ends its sessions.
+  demo-load:
+    image: postgres:17
+    container_name: datarig-demo-load
+    profiles: [load]
+    init: true
+    stop_grace_period: 2s
+    environment:
+      PGHOST: demo-postgres
+      PGUSER: demo
+      PGPASSWORD: demo
+      PGDATABASE: acme
+      PGSSLMODE: require
+    volumes:
+      - ./load:/load:ro
+    entrypoint: ["sh", "/load/${DATARIG_DEMO_LOAD:-monitor}.sh"]
+
   demo-mysql:
     image: mysql:8.4
     container_name: datarig-demo-mysql
