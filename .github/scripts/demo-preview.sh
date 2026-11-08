@@ -8,7 +8,7 @@
 set -euo pipefail
 dir=$1
 marker='<!-- demo-preview -->'
-stills=(hero plans search environments completion social)
+stills=(hero plans search environments completion monitor social)
 
 pr=$(gh api "repos/$REPO/pulls?state=open&head=${REPO%%/*}:$HEAD_BRANCH" --jq '.[0].number // empty')
 if [ -z "$pr" ]; then

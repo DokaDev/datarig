@@ -9,7 +9,9 @@
 # DATARIG_BIN, the binary to record). In each tape datarig runs with docs/demo/config in a
 # scratch configuration, state and data directory of its own and an in-memory secret store, so
 # nothing outside that directory is read or written. A tape whose Wait does not match the screen fails
-# the run: the recordings never show a screen datarig no longer has.
+# the run: the recordings never show a screen datarig no longer has. A tape with a load
+# (docs/demo/load/<name>.sh, which the demo-load service of compose.yml runs against the demo
+# databases) also needs docker: the load runs only while that tape records.
 set -euo pipefail
 
 if [ $# -lt 1 ]; then
@@ -40,15 +42,58 @@ if [ $# -eq 0 ]; then
 fi
 
 scratch=$(mktemp -d)
-trap 'rm -rf "$scratch"' EXIT
+trap 'load_stop || true; rm -rf "$scratch"' EXIT
 
-# record <name> <run dir>: VHS records the tape, its output also in <run dir>/vhs.log.
+# The load of a tape (load/<name>.sh): the demo-load service, started with no other service of
+# the demo project touched, and taken as running only once it says so.
+load() {
+  docker compose -f "$demo/compose.yml" --profile load "$@"
+}
+loaded=
+load_start() {
+  [ -f "$demo/load/$1.sh" ] || return 0
+  command -v docker >/dev/null || { echo "the $1 tape has a load, and docker is not on the PATH" >&2; return 1; }
+  loaded=$1
+  DATARIG_DEMO_LOAD=$1 load up -d --no-deps --force-recreate demo-load || return 1
+  for _ in $(seq 120); do
+    docker logs datarig-demo-load 2>&1 | grep -qx 'demo load running' && return 0
+    sleep 0.5
+  done
+  echo "the load of $1 did not start:" >&2
+  docker logs datarig-demo-load >&2 || true
+  return 1
+}
+# Removes the load and waits until the demo PostgreSQL has no session of its client left, so
+# the next tape records an idle server.
+load_stop() {
+  [ -n "$loaded" ] || return 0
+  local addr left
+  addr=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' datarig-demo-load) || addr=
+  load rm -s -f demo-load || return 1
+  loaded=
+  [ -n "$addr" ] || return 0
+  for _ in $(seq 30); do
+    left=$(docker exec -e PGPASSWORD=demo datarig-demo-pg psql -h 127.0.0.1 -U demo -d acme -XtAc \
+      "SELECT count(*) FROM pg_stat_activity WHERE client_addr = '$addr'") || return 1
+    [ "$left" = 0 ] && return 0
+    sleep 0.5
+  done
+  echo "$left sessions of the load are still open" >&2
+  return 1
+}
+
+# record <name> <run dir>: VHS records the tape (with its load, if it has one), its output also
+# in <run dir>/vhs.log.
 record() {
+  local status=0
+  load_start "$1" || { load_stop || true; return 1; }
   (
     cd "$2/work"
     export PATH="$2/bin:$PATH" LANG=C.UTF-8 TZ=UTC
     vhs "$1.tape" -o "$out/$1.gif" 2>&1 | tee "$2/vhs.log"
-  )
+  ) || status=$?
+  load_stop || status=1
+  return $status
 }
 
 # Whether the recording failed because VHS's headless browser did not start: VHS gives it 30 s
