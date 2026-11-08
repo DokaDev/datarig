@@ -2945,6 +2945,7 @@
 "monitor.at_root" = "The selected line waits for nobody"
 "monitor.hidden_row_lock_waits" = "Who blocks a row lock wait is not shown"
 "monitor.hidden_metadata_lock_waits" = "Metadata lock waits are not shown"
+"monitor.hidden_untracked_metadata_locks" = "The server could not track every metadata lock: a wait's holders may be missing"
 "hint.monitor_root" = "root blocker"
 "command.monitor" = "Open the server monitor of the explorer's or the active tab's connection, or of one by name (:monitor [connection])"
 

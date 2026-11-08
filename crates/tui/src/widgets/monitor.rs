@@ -261,6 +261,7 @@ impl Cx<'_> {
             Part::UntrackedSessions => Label::MonitorHiddenUntracked,
             Part::RowLockWaits => Label::MonitorHiddenRowLockWaits,
             Part::MetadataLockWaits => Label::MonitorHiddenMetadataLockWaits,
+            Part::UntrackedMetadataLocks => Label::MonitorHiddenUntrackedMetadataLocks,
         };
         format!("{} ({need})", self.label(part))
     }
@@ -589,7 +590,7 @@ impl Cx<'_> {
             let max = MAX_WAITERS.to_string();
             notes.push((self.msg(Msg::MonitorLocksNotAsked { n: n.to_string(), max }), th.warning));
         }
-        if m.locks.as_ref().is_some_and(|l| l.more > 0) {
+        if m.locks.as_ref().is_some_and(|l| l.more > 0) || tree.partial {
             notes.push((self.label(Label::MonitorLocksMore), th.warning));
         }
         let unsure = |b: Blame| matches!(b, Blame::Incompatible | Blame::CannotTell);

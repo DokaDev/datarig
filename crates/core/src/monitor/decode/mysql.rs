@@ -32,6 +32,7 @@ pub const STATUS: &[&str] = &[
     "Created_tmp_disk_tables",
     "Aborted_connects",
     "Performance_schema_thread_instances_lost",
+    "Performance_schema_metadata_lock_lost",
 ];
 
 /// The columns of the probe's first row: the version line, `@@performance_schema`, `CURRENT_USER()`, in order.
@@ -510,7 +511,9 @@ pub fn locks(answers: &[Answer], my: &MySqlMonitor, time: Timestamp) -> Result<(
             if rows.len() >= lk::LOCK_ROWS {
                 more += 1;
             }
-            waits.extend(metadata_waits(rows)?);
+            let mut cut = false;
+            waits.extend(metadata_waits(rows, &mut cut)?);
+            more += u64::from(cut);
         }
         Some(Answer::Error { message, .. }) => return Err(malformed("metadata locks", message.clone())),
         None => hidden.push(Hidden {
@@ -535,7 +538,7 @@ fn qualified(schema: Option<&str>, name: Option<&str>) -> Option<String> {
 
 /// The metadata lock waits of [`METADATA_LOCKS`] rows: each pending request with the granted
 /// locks of other threads on the same object that it cannot be granted beside.
-fn metadata_waits(rows: &Rows) -> Result<Vec<LockWait>, DecodeError> {
+fn metadata_waits(rows: &Rows, cut: &mut bool) -> Result<Vec<LockWait>, DecodeError> {
     struct Mdl<'a> {
         id: Option<i64>,
         thread: i64,
@@ -558,23 +561,30 @@ fn metadata_waits(rows: &Rows) -> Result<Vec<LockWait>, DecodeError> {
             pending: row.required("LOCK_STATUS")? == "PENDING",
         });
     }
+    // The granted locks of each object, so pairing does not go through every lock per request.
+    type Object<'a> = (&'a str, Option<&'a str>, Option<&'a str>);
+    let mut by_object: std::collections::HashMap<Object, Vec<usize>> = Default::default();
+    for (i, g) in all.iter().enumerate().filter(|(_, g)| !g.pending) {
+        by_object.entry((g.kind, g.schema, g.name)).or_default().push(i);
+    }
     let mut waits: Vec<LockWait> = Vec::new();
     for p in all.iter().filter(|m| m.pending) {
         // A thread with no session (a background thread): not a session's wait.
         let Some(id) = p.id else { continue };
         let mut holders: Vec<LockHolder> = Vec::new();
-        for g in all.iter().filter(|g| {
-            !g.pending && g.thread != p.thread && g.kind == p.kind && g.schema == p.schema && g.name == p.name
-        }) {
+        let mut at: std::collections::HashMap<i64, usize> = Default::default();
+        let granted = by_object.get(&(p.kind, p.schema, p.name)).map(Vec::as_slice).unwrap_or_default();
+        for g in granted.iter().map(|&i| &all[i]).filter(|g| g.thread != p.thread) {
             let blame = match lk::mdl_conflicts(p.kind, p.lock, g.lock) {
                 Some(true) => Blame::Incompatible,
                 Some(false) => continue,
                 None => Blame::CannotTell,
             };
             // A holding thread with no session: not one the tree can show.
-            let Some(holder) = g.id.map(Holder::Session) else { continue };
-            match holders.iter_mut().find(|h| h.holder == holder) {
-                Some(h) => {
+            let Some(sid) = g.id else { continue };
+            match at.get(&sid) {
+                Some(&i) => {
+                    let h = &mut holders[i];
                     if !h.modes.iter().any(|m| m == g.lock) {
                         h.modes.push(g.lock.to_owned());
                     }
@@ -582,7 +592,13 @@ fn metadata_waits(rows: &Rows) -> Result<Vec<LockWait>, DecodeError> {
                         h.blame = blame;
                     }
                 }
-                None => holders.push(LockHolder { holder, modes: vec![g.lock.to_owned()], waiting: false, blame }),
+                // Past the most holders a wait keeps: said as a read cut short.
+                None if holders.len() >= lk::HOLDERS_MAX => *cut = true,
+                None => {
+                    at.insert(sid, holders.len());
+                    let holder = Holder::Session(sid);
+                    holders.push(LockHolder { holder, modes: vec![g.lock.to_owned()], waiting: false, blame });
+                }
             }
         }
         waits.push(LockWait {
@@ -636,6 +652,16 @@ pub fn tick(
         Some(answers) => {
             let (mut list, more) = locks(answers, my, sample.time)?;
             hidden.extend(more);
+            // Metadata locks the performance schema had no room for: some holders are missing
+            // (not knowing the counter is the same as not knowing they are all there).
+            let lost = status_value(&name_values(&rows[1], "status")?, "Performance_schema_metadata_lock_lost")?;
+            if my.metadata_locks == Readable::Yes && lost.is_none_or(|n| n > 0) {
+                list.more += 1;
+                hidden.push(Hidden {
+                    part: Part::UntrackedMetadataLocks,
+                    need: Need::Setting("performance_schema_max_metadata_locks"),
+                });
+            }
             // Each wait is of the statement its session runs in this read.
             if let Some(rows) = sessions.as_ref().map(|l| &l.rows) {
                 for w in &mut list.waits {

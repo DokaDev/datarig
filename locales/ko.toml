@@ -2938,6 +2938,7 @@
 "monitor.at_root" = "고른 줄은 아무것도 기다리지 않습니다"
 "monitor.hidden_row_lock_waits" = "행 잠금 대기를 누가 막는지 보이지 않습니다"
 "monitor.hidden_metadata_lock_waits" = "메타데이터 잠금 대기가 보이지 않습니다"
+"monitor.hidden_untracked_metadata_locks" = "서버가 모든 메타데이터 잠금을 추적하지 못했습니다: 대기의 보유자가 빠졌을 수 있습니다"
 "hint.monitor_root" = "근원 차단자"
 "command.monitor" = "탐색기나 현재 탭의 연결, 또는 이름으로 고른 연결의 서버 모니터 열기 (:monitor [연결])"
 

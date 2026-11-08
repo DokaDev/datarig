@@ -514,6 +514,9 @@ pub enum Part {
     RowLockWaits,
     /// Metadata lock waits and their holders (MySQL `performance_schema.metadata_locks`).
     MetadataLockWaits,
+    /// Metadata locks the server could not track (MySQL `performance_schema` ran out of room
+    /// for them): a wait's holders may be missing.
+    UntrackedMetadataLocks,
 }
 
 /// What would show a [`Hidden`] part.

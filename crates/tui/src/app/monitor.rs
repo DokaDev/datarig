@@ -583,8 +583,9 @@ impl MonitorTab {
         let mut snapshot = snapshot;
         if let Some(l) = snapshot.locks.take() {
             self.locks = Some(l);
-            let lock_part =
-                |h: &&datarig_core::monitor::Hidden| matches!(h.part, Part::RowLockWaits | Part::MetadataLockWaits);
+            let lock_part = |h: &&datarig_core::monitor::Hidden| {
+                matches!(h.part, Part::RowLockWaits | Part::MetadataLockWaits | Part::UntrackedMetadataLocks)
+            };
             self.locks_hidden = snapshot.hidden.iter().filter(lock_part).cloned().collect();
         }
         self.snapshot = Some(snapshot);

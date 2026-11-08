@@ -30,7 +30,7 @@ SHOW GLOBAL STATUS WHERE Variable_name = 'Uptime'
 SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now
 
 -- status
-SHOW GLOBAL STATUS WHERE Variable_name IN ('Uptime', 'Questions', 'Com_commit', 'Com_rollback', 'Threads_connected', 'Threads_running', 'Innodb_buffer_pool_read_requests', 'Innodb_buffer_pool_reads', 'Innodb_rows_read', 'Innodb_rows_inserted', 'Innodb_rows_updated', 'Innodb_rows_deleted', 'Bytes_received', 'Bytes_sent', 'Innodb_row_lock_waits', 'Slow_queries', 'Created_tmp_disk_tables', 'Aborted_connects', 'Performance_schema_thread_instances_lost')
+SHOW GLOBAL STATUS WHERE Variable_name IN ('Uptime', 'Questions', 'Com_commit', 'Com_rollback', 'Threads_connected', 'Threads_running', 'Innodb_buffer_pool_read_requests', 'Innodb_buffer_pool_reads', 'Innodb_rows_read', 'Innodb_rows_inserted', 'Innodb_rows_updated', 'Innodb_rows_deleted', 'Bytes_received', 'Bytes_sent', 'Innodb_row_lock_waits', 'Slow_queries', 'Created_tmp_disk_tables', 'Aborted_connects', 'Performance_schema_thread_instances_lost', 'Performance_schema_metadata_lock_lost')
 
 -- sessions
 SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, NULL AS trx_started, NULL AS trx_state, NULL AS trx_rows_locked, NULL AS trx_rows_modified, 0 AS trx_read, NULL AS in_tx, NULL AS explicit_locks, 0 AS locks_read, NULL AS THREAD_ID, NULL AS EVENT_ID, MD5(p.INFO) AS info_md5 FROM performance_schema.processlist p ORDER BY p.ID

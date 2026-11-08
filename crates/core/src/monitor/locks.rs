@@ -8,11 +8,15 @@
 //! shown as "holders of incompatible locks", which is not proof that they block it: a waiter may
 //! also wait behind a request of higher priority, which is not modelled.
 
-use super::model::{Blocker, SessionKey, SessionList, SessionRow, TEXT_SAME_START_US, Timestamp, Tx};
+use super::model::{Blocker, SessionKey, SessionKind, SessionList, SessionRow, TEXT_SAME_START_US, Timestamp, Tx};
 use std::collections::{HashMap, HashSet};
 
 /// The most lock waits a read holds (the longest first where the server tells since when).
 pub const LOCK_WAITS: usize = 200;
+
+/// The most holders a metadata lock wait keeps (a table many sessions read, which an `ALTER`
+/// waits for).
+pub const HOLDERS_MAX: usize = 50;
 
 /// The most rows a read of the locks gives: waits and the locks held on what they wait for.
 pub const LOCK_ROWS: usize = 2000;
@@ -328,8 +332,9 @@ pub struct Waits {
     /// just after, or a MySQL metadata lock request waits behind another request rather than a
     /// granted lock).
     pub alone: Vec<i64>,
-    /// The lock read left some out ([`LockList::more`]): a waiter's only holder of an
-    /// incompatible lock may not be its only one.
+    /// The reads may have left some waits or holders out (a lock read cut short, edges past
+    /// [`EDGES_MAX`], parallel workers whose leader is not told, metadata locks the server did
+    /// not track): no root is sure.
     pub partial: bool,
 }
 
@@ -341,19 +346,34 @@ pub struct Waits {
 /// session the list shows not waiting for a lock is over and left out, and so is one of a
 /// session it does not list when it lists every session (`complete`).
 pub fn edges(sessions: Option<&SessionList>, locks: Option<&LockList>, complete: bool) -> Waits {
-    let mut out = Vec::new();
+    let mut out = Out::default();
     let mut alone = Vec::new();
+    let mut alone_set: HashSet<i64> = HashSet::new();
+    let by_id: HashMap<i64, &SessionRow> =
+        sessions.into_iter().flat_map(|l| l.rows.iter()).map(|r| (r.key.id, r)).collect();
     let mut named: HashSet<i64> = HashSet::new();
+    // A parallel worker's wait is its leader's (blockers are named by their leader): the group is
+    // one node. A worker whose leader is not told (before PostgreSQL 13) leaves the tree unsure.
+    let mut unsure_group = false;
     if let Some(list) = sessions {
         for r in &list.rows {
             let Some(blockers) = &r.blocked_by else { continue };
-            named.insert(r.key.id);
-            if blockers.is_empty() {
-                alone.push(r.key.id);
+            let waiter = match r.kind {
+                SessionKind::ParallelWorker { leader: Some(l) } => l,
+                SessionKind::ParallelWorker { leader: None } => {
+                    unsure_group = true;
+                    r.key.id
+                }
+                _ => r.key.id,
+            };
+            named.insert(waiter);
+            if blockers.is_empty() && alone_set.insert(waiter) {
+                alone.push(waiter);
             }
             for b in blockers {
                 match b {
-                    Blocker::Session(id) => push(&mut out, r.key.id, Holder::Session(*id), Blame::Proven),
+                    Blocker::Session(id) if *id == waiter => {}
+                    Blocker::Session(id) => out.push(waiter, Holder::Session(*id), Blame::Proven),
                     Blocker::PreparedTransaction => {
                         // Told apart by the lock read when it has this very wait: of the
                         // prepared transactions holding a lock on its object, those whose lock
@@ -366,12 +386,12 @@ pub fn edges(sessions: Option<&SessionList>, locks: Option<&LockList>, complete:
                                 let conflicts = h.modes.iter().any(|m| pg_conflicts(&w.mode, m) == Some(true));
                                 if matches!(h.holder, Holder::Prepared(Some(_))) && conflicts {
                                     found = true;
-                                    push(&mut out, r.key.id, h.holder.clone(), Blame::Proven);
+                                    out.push(waiter, h.holder.clone(), Blame::Proven);
                                 }
                             }
                         }
                         if !found {
-                            push(&mut out, r.key.id, Holder::Prepared(None), Blame::Proven);
+                            out.push(waiter, Holder::Prepared(None), Blame::Proven);
                         }
                     }
                 }
@@ -383,19 +403,19 @@ pub fn edges(sessions: Option<&SessionList>, locks: Option<&LockList>, complete:
         // the longest ones only): waiting all the same, for a holder not asked.
         for r in sessions.into_iter().flat_map(|l| l.rows.iter()) {
             let id = r.key.id;
-            let blocks = out.iter().any(|e| e.holder == Holder::Session(id));
-            if blocks && r.waits_for_lock() && !named.contains(&id) && !alone.contains(&id) {
+            let blocks = out.holders.contains(&Holder::Session(id));
+            if blocks && r.waits_for_lock() && !named.contains(&id) && alone_set.insert(id) {
                 alone.push(id);
             }
         }
-        return Waits { edges: out, alone, partial: false };
+        return Waits { partial: out.cut || unsure_group, edges: out.edges, alone };
     };
     for w in &locks.waits {
         if named.contains(&w.waiter.id) {
             continue;
         }
-        if let Some(list) = sessions {
-            match list.rows.iter().find(|r| r.key.id == w.waiter.id) {
+        if sessions.is_some() {
+            match by_id.get(&w.waiter.id) {
                 Some(r) if !w.is_of(r) => continue,
                 None if complete => continue,
                 _ => {}
@@ -403,17 +423,14 @@ pub fn edges(sessions: Option<&SessionList>, locks: Option<&LockList>, complete:
         }
         for h in &w.holders {
             if h.holder != Holder::Session(w.waiter.id) {
-                push(&mut out, w.waiter.id, h.holder.clone(), h.blame);
+                out.push(w.waiter.id, h.holder.clone(), h.blame);
             }
         }
     }
     for w in &locks.waits {
         let id = w.waiter.id;
-        let shown = sessions.is_none_or(|list| match list.rows.iter().find(|r| r.key.id == id) {
-            Some(r) => w.is_of(r),
-            None => !complete,
-        });
-        if shown && !named.contains(&id) && !out.iter().any(|e| e.waiter == id) && !alone.contains(&id) {
+        let shown = sessions.is_none() || by_id.get(&id).map_or(!complete, |r| w.is_of(r));
+        if shown && !named.contains(&id) && !out.waiters.contains(&id) && alone_set.insert(id) {
             alone.push(id);
         }
     }
@@ -421,19 +438,42 @@ pub fn edges(sessions: Option<&SessionList>, locks: Option<&LockList>, complete:
     // or the wait began after they were read): waiting all the same.
     for r in sessions.into_iter().flat_map(|l| l.rows.iter()) {
         let id = r.key.id;
-        if r.waits_for_lock() && !named.contains(&id) && !out.iter().any(|e| e.waiter == id) && !alone.contains(&id) {
+        if r.waits_for_lock() && !named.contains(&id) && !out.waiters.contains(&id) && alone_set.insert(id) {
             alone.push(id);
         }
     }
-    Waits { edges: out, alone, partial: locks.more > 0 }
+    Waits { partial: locks.more > 0 || out.cut || unsure_group, edges: out.edges, alone }
 }
 
-fn push(out: &mut Vec<Edge>, waiter: i64, holder: Holder, blame: Blame) {
-    match out.iter_mut().find(|e| e.waiter == waiter && e.holder == holder) {
-        // The surer of two reasons a holder blocks.
-        Some(e) if rank(blame) < rank(e.blame) => e.blame = blame,
-        Some(_) => {}
-        None => out.push(Edge { waiter, holder, blame }),
+/// The most edges a tree is built from: many metadata lock requests on one object, each paired
+/// with every holder, would otherwise make millions (the rest are left out, and said).
+pub const EDGES_MAX: usize = 10_000;
+
+/// Edges gathered once each, looked up by (waiter, holder).
+#[derive(Default)]
+struct Out {
+    edges: Vec<Edge>,
+    at: HashMap<(i64, Holder), usize>,
+    waiters: HashSet<i64>,
+    holders: HashSet<Holder>,
+    /// Edges left out past [`EDGES_MAX`].
+    cut: bool,
+}
+
+impl Out {
+    fn push(&mut self, waiter: i64, holder: Holder, blame: Blame) {
+        match self.at.get(&(waiter, holder.clone())) {
+            // The surer of two reasons a holder blocks.
+            Some(&i) if rank(blame) < rank(self.edges[i].blame) => self.edges[i].blame = blame,
+            Some(_) => {}
+            None if self.edges.len() >= EDGES_MAX => self.cut = true,
+            None => {
+                self.at.insert((waiter, holder.clone()), self.edges.len());
+                self.waiters.insert(waiter);
+                self.holders.insert(holder.clone());
+                self.edges.push(Edge { waiter, holder, blame });
+            }
+        }
     }
 }
 
@@ -649,7 +689,7 @@ impl Tree {
         let mut steps = 0;
         while let Some((p, blame)) = self.lines.get(i)?.parent {
             let only = self.lines[i].also.is_empty();
-            sure &= blame == Blame::Proven || (blame == Blame::Incompatible && only && !self.partial);
+            sure &= !self.partial && (blame == Blame::Proven || (blame == Blame::Incompatible && only));
             i = p;
             steps += 1;
             if steps > self.lines.len() {

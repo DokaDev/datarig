@@ -1412,3 +1412,61 @@ fn a_metadata_lock_read_cut_short_names_no_root_from_a_single_holder() {
     let at = tree.lines.iter().position(|l| l.node == Holder::Session(9)).unwrap();
     assert_eq!(tree.root_of(at).map(|(_, sure)| sure), Some(false), "another holder may have been left out");
 }
+
+#[test]
+fn many_metadata_lock_requests_on_one_object_stay_bounded() {
+    // 1,000 pending EXCLUSIVE requests and 1,000 granted SHARED_READ locks on one table.
+    let row = |i: usize, lock: &str, status: &str| -> Vec<Option<String>> {
+        [&i.to_string(), &(10_000 + i).to_string(), "TABLE", "shop", "orders", lock, "TRANSACTION", status]
+            .iter()
+            .map(|v| Some(v.to_string()))
+            .collect()
+    };
+    let mut rows: Rows = (0..1000).map(|i| row(i, "EXCLUSIVE", "PENDING")).collect();
+    rows.extend((1000..2000).map(|i| row(i, "SHARED_READ", "GRANTED")));
+    let answers = [Answer::Rows(Vec::new()), Answer::Rows(rows)];
+    let started = std::time::Instant::now();
+    let (locks, _) = decode::mysql::locks(&answers, &mysql_root(), Timestamp(1)).unwrap();
+    let waits = lk::edges(None, Some(&locks), false);
+    let tree = Tree::build(&waits);
+    assert_eq!(waits.edges.len(), lk::EDGES_MAX);
+    assert!(waits.partial && tree.partial, "the edges left out are said");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+}
+
+#[test]
+fn a_parallel_workers_wait_is_its_leaders() {
+    let (mut list, _) = pg14_locks();
+    // A worker of 14652 (idle advisory holder) waits for 13617: the group waits.
+    let mut worker = list.rows.iter().find(|r| r.key.id == 14819).unwrap().clone();
+    worker.key.id = 99;
+    worker.kind = SessionKind::ParallelWorker { leader: Some(14652) };
+    worker.blocked_by = Some(vec![Blocker::Session(13617)]);
+    list.rows.push(worker);
+    let waits = lk::edges(Some(&list), None, true);
+    assert!(waits.edges.iter().any(|e| e.waiter == 14652 && e.holder == Holder::Session(13617)), "{waits:?}");
+    assert!(!waits.edges.iter().any(|e| e.waiter == 99));
+    let tree = Tree::build(&waits);
+    let waiter = tree.lines.iter().position(|l| l.node == Holder::Session(14819)).unwrap();
+    assert_eq!(tree.root_of(waiter).map(|(r, _)| tree.lines[r].node.clone()), Some(Holder::Session(13617)));
+    // Before 13 the leader is not told: no root is sure.
+    list.rows.last_mut().unwrap().kind = SessionKind::ParallelWorker { leader: None };
+    let tree = Tree::build(&lk::edges(Some(&list), None, true));
+    assert!(tree.partial);
+}
+
+#[test]
+fn metadata_locks_the_server_did_not_track_make_the_holders_unsure() {
+    let my = mysql_root();
+    let want = Want { sessions: Some(IDLE), locks: true, server: false, limit: std::time::Duration::from_secs(1) };
+    let mut rows = rows(fixture!("my84_root/counters"));
+    rows.extend(rows_of_sessions());
+    rows[1].push(vec![Some("Performance_schema_metadata_lock_lost".into()), Some("0".into())]);
+    let s = decode::mysql::tick(&my, &want, &rows, Some(&mysql_lock_answers()), Own::default()).unwrap();
+    assert_eq!(s.locks.as_ref().unwrap().more, 0);
+    rows[1].last_mut().unwrap()[1] = Some("3".into());
+    let s = decode::mysql::tick(&my, &want, &rows, Some(&mysql_lock_answers()), Own::default()).unwrap();
+    assert_eq!(s.locks.as_ref().unwrap().more, 1);
+    let need = Need::Setting("performance_schema_max_metadata_locks");
+    assert!(s.hidden.contains(&Hidden { part: Part::UntrackedMetadataLocks, need }));
+}
