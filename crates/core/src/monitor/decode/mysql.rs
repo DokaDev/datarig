@@ -1,5 +1,7 @@
 //! MySQL rows read into the model (the statements are the driver's: its `meta::monitor`).
 
+pub mod replication;
+
 use super::{Answer, DecodeError, Row, Rows, malformed, name_values, one};
 use crate::monitor::action::StatementStamp;
 use crate::monitor::format::{self, MYSQL_MARKERS, MYSQL_MIN_VERSION, MySqlMonitor, Probe, Readable};

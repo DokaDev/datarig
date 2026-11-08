@@ -214,3 +214,106 @@ fn the_row_lock_waits_are_not_read_where_their_read_stalls_the_server() {
     let fixed = my(80038, true, Readable::Yes);
     assert_eq!(locks(&fixed), [row_lock_waits(&fixed), metadata_lock_waits()]);
 }
+
+#[test]
+fn replication_statements_per_version() {
+    for (name, version, ps) in [
+        ("mysql_8_0_17", 80017, true),
+        ("mysql_8_0_22", 80022, true),
+        ("mysql_8_4", 80411, true),
+        ("mysql_8_4_no_performance_schema", 80411, false),
+    ] {
+        let text: Vec<String> = replication::read(&my(version, ps, Readable::Yes))
+            .iter()
+            .map(|s| {
+                format!(
+                    "-- {:?}{}\n{}\n",
+                    s.read,
+                    s.columns.map_or(String::new(), |c| format!(" ({})", c.join(", "))),
+                    s.sql
+                )
+            })
+            .collect();
+        insta::assert_snapshot!(format!("replication_{name}"), text.join("\n"));
+    }
+}
+
+#[test]
+fn replication_statements_are_chosen_by_version_and_the_performance_schema() {
+    use datarig_core::monitor::decode::mysql::replication::{REPLICA_STATUS, Read, SLAVE_STATUS};
+    let reads = |m: &MySqlMonitor| replication::read(m).into_iter().map(|s| s.read).collect::<Vec<_>>();
+    let all = [Read::Clock, Read::Channels, Read::ChannelTimes, Read::ThreadsLost, Read::Replicas, Read::GroupMembers];
+    assert_eq!(reads(&my(80411, true, Readable::Yes)), all);
+    // The replication tables are filled with the performance schema off too: only the thread
+    // loss (of the performance schema's session list) is not read then.
+    assert_eq!(
+        reads(&my(80411, false, Readable::Yes)),
+        [Read::Clock, Read::Channels, Read::ChannelTimes, Read::Replicas, Read::GroupMembers]
+    );
+    // Before 8.0.22 the list comes from information_schema: no thread to lose there.
+    assert!(!reads(&my(80021, true, Readable::Yes)).contains(&Read::ThreadsLost));
+    let find = |m: &MySqlMonitor, r: Read| replication::read(m).into_iter().find(|s| s.read == r).expect("a read");
+    let old = my(80021, true, Readable::Yes);
+    let channels = find(&old, Read::Channels);
+    assert_eq!((channels.sql.as_str(), channels.columns), ("SHOW SLAVE STATUS", Some(SLAVE_STATUS)));
+    let replicas = find(&old, Read::Replicas);
+    assert!(
+        replicas.sql.contains("FROM information_schema.PROCESSLIST p") && replicas.columns.is_none(),
+        "{replicas:?}"
+    );
+    let new = my(80022, true, Readable::Yes);
+    let channels = find(&new, Read::Channels);
+    assert_eq!((channels.sql.as_str(), channels.columns), ("SHOW REPLICA STATUS", Some(REPLICA_STATUS)));
+    assert!(find(&new, Read::Replicas).sql.contains("FROM performance_schema.processlist p"));
+    // Never `SHOW REPLICAS`, which gives the replicas' passwords where `show_replica_auth_info`
+    // is on.
+    for m in [my(80021, true, Readable::Yes), my(80411, true, Readable::Yes)] {
+        assert!(replication::read(&m).iter().all(|s| !s.sql.contains("REPLICAS") && !s.sql.contains("SLAVE HOSTS")));
+    }
+}
+
+/// Each replication statement for the server's own version gives the columns its decoder
+/// reads, on the real server (`DATARIG_TEST_MYSQL_ADMIN_URL`, an account that may read them):
+/// exactly, or (the `SHOW` statements, which give more) each of them by name.
+#[tokio::test]
+async fn every_replication_statement_gives_its_decoders_columns() {
+    use datarig_core::monitor::decode::mysql::replication::{CHANNEL_TIMES, GROUP_MEMBERS, REPLICAS, Read};
+    let url = match std::env::var("DATARIG_TEST_MYSQL_ADMIN_URL") {
+        Ok(u) if !u.is_empty() => u,
+        _ => {
+            let required = std::env::var("DATARIG_REQUIRE_MYSQL").is_ok_and(|v| v == "1");
+            assert!(!required, "DATARIG_TEST_MYSQL_ADMIN_URL must be set");
+            eprintln!(
+                "SKIPPED every_replication_statement_gives_its_decoders_columns: set DATARIG_TEST_MYSQL_ADMIN_URL"
+            );
+            return;
+        }
+    };
+    use mysql_async::prelude::Queryable;
+    let opts =
+        mysql_async::OptsBuilder::from_opts(mysql_async::Opts::from_url(&url).expect("a URL")).prefer_socket(false);
+    let mut conn = mysql_async::Conn::new(opts).await.expect("connect");
+    let line: String = conn.query_first("SELECT VERSION()").await.expect("version").expect("a row");
+    let mut parts = line.split(['.', '-']).map(|p| p.parse::<u32>().unwrap_or(0));
+    let version = parts.next().unwrap_or(0) * 10000 + parts.next().unwrap_or(0) * 100 + parts.next().unwrap_or(0);
+    for statement in replication::read(&my(version, true, Readable::Yes)) {
+        let result =
+            conn.query_iter(statement.sql.as_str()).await.unwrap_or_else(|e| panic!("{:?}: {e}", statement.read));
+        let columns: Vec<String> = result.columns_ref().iter().map(|c| c.name_str().into_owned()).collect();
+        drop(result.drop_result().await);
+        match (statement.read, statement.columns) {
+            (_, Some(wanted)) => {
+                for name in wanted {
+                    assert!(columns.iter().any(|c| c == name), "{:?}: no {name} in {columns:?}", statement.read);
+                }
+            }
+            (Read::Clock, None) => assert_eq!(columns, datarig_core::monitor::decode::mysql::replication::STATE),
+            (Read::ChannelTimes, None) => assert_eq!(columns, CHANNEL_TIMES),
+            (Read::GroupMembers, None) => assert_eq!(columns, GROUP_MEMBERS),
+            (Read::Replicas, None) => assert_eq!(columns, REPLICAS),
+            (Read::ThreadsLost, None) => assert_eq!(columns, NAME_VALUE),
+            (read, None) => panic!("{read:?} has no shape"),
+        }
+    }
+    let _ = conn.disconnect().await;
+}

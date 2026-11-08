@@ -463,6 +463,7 @@ The Monitor tab of a profile (`monitor.open`: `M` on a connection in the explore
 | `1` | `monitor.overview` | Monitor: Overview |  |
 | `2` | `monitor.sessions` | Monitor: Sessions |  |
 | `3` | `monitor.locks` | Monitor: Locks |  |
+| `4` | `monitor.replication` | Monitor: Replication |  |
 | `v` | `monitor.view.next` | Monitor: next view |  |
 | `j` | `monitor.down` | Monitor: session below | ✓ |
 | `Down` | `monitor.down` | Monitor: session below | ✓ |
@@ -488,6 +489,7 @@ The Monitor tab of a profile (`monitor.open`: `M` on a connection in the explore
 | `o` | `monitor.open_console` | Monitor: the session's statement in a new console |  |
 | `y` | `monitor.copy_query` | Monitor: copy the session's statement |  |
 | `b` | `monitor.root` | Monitor: the root blocker of the selected wait |  |
+| `i` | `monitor.server` | Monitor: the server in full |  |
 | `Esc` | `monitor.back` | Monitor: back (details, filter) |  |
 
 ## `monitor.filter` [text]

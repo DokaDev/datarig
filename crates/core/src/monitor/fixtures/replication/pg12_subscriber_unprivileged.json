@@ -1,0 +1,7 @@
+[
+ [["1794116658143364", "f", "63356440", null, null, null, null]],
+ [["80", "walreceiver", null, null, null, null, null, null, null, null, null, null, null, null]],
+ [],
+ [["standby1", "physical", null, null, "f", "t", "80", "63356440", null, null], ["zz_idle_slot", "physical", null, null, "f", "f", null, "33554472", null, null], ["zz_logical", "logical", "test_decoding", "postgres", "f", "f", null, "50331744", null, null]],
+ [["zz_sub", "333", "89515696", "1794116636402453"]]
+]

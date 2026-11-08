@@ -30,7 +30,7 @@ use datarig_core::monitor::action::{
 use datarig_core::monitor::decode::{self, Answer, Rows};
 use datarig_core::monitor::format::MYSQL_OLDEST;
 use datarig_core::monitor::{
-    FullText, MonitorFormat, MySqlMonitor, Own, SessionsWanted, Snapshot, StatementStamp, TextAsk, Want,
+    FullText, MonitorFormat, MySqlMonitor, Own, Replication, SessionsWanted, Snapshot, StatementStamp, TextAsk, Want,
 };
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Row, Value};
@@ -124,6 +124,17 @@ pub(crate) async fn monitor_loop(conn: Conn, mut link: Link, events: UnboundedSe
                     Ok(Err(_)) => {
                         let error = DbError::NoAnswer(deadline);
                         (DbEvent::MonitorQueryText { request, result: Err(error.clone()) }, Some(error))
+                    }
+                    Err(_) => return,
+                }
+            }
+            DbCommand::MonitorReplication { request, limit } => {
+                let deadline = limit + GRACE;
+                match link.guard(None, tokio::time::timeout(deadline, m.replication(my, limit))).await {
+                    Ok(Ok(result)) => (DbEvent::MonitorReplication { request, result }, None),
+                    Ok(Err(_)) => {
+                        let error = DbError::NoAnswer(deadline);
+                        (DbEvent::MonitorReplication { request, result: Err(error.clone()) }, Some(error))
                     }
                     Err(_) => return,
                 }
@@ -234,6 +245,57 @@ impl Monitor {
             });
         }
         Ok(answers)
+    }
+
+    /// What the server says about its replication: each statement answered or refused on its
+    /// own (a refusal for lack of a privilege is said as such); any other failure fails the read.
+    async fn replication(&mut self, my: &MySqlMonitor, limit: Duration) -> Result<Replication, DbError> {
+        if self.limit != Some(limit) {
+            self.rows(&sql::limit(limit)).await.map_err(|e| my_error(&e))?;
+            self.limit = Some(limit);
+        }
+        let mut answers = Vec::new();
+        for statement in sql::replication::read(my) {
+            let answer = match self.named_rows(&statement.sql, statement.columns).await {
+                Ok(rows) => Answer::Rows(rows),
+                Err(e @ mysql_async::Error::Server(_)) => {
+                    Answer::Error { code: server_code(&e), message: my_error(&e).raw().into_owned() }
+                }
+                Err(e) => return Err(my_error(&e)),
+            };
+            answers.push((statement.read, answer));
+        }
+        decode::mysql::replication::read(my, &answers).map_err(|e| e.into_db(MYSQL_OLDEST))
+    }
+
+    /// The rows of `sql` as text cells; with `columns`, only those, by name, in that order (a
+    /// column missing is the statement's own mistake: an error, never a NULL).
+    async fn named_rows(&mut self, sql: &str, columns: Option<&[&str]>) -> Result<Rows, mysql_async::Error> {
+        let Some(columns) = columns else {
+            return self.rows(sql).await;
+        };
+        self.sent += 1;
+        let result = self.conn.query_iter(sql).await?;
+        let names: Vec<String> = result.columns_ref().iter().map(|c| c.name_str().into_owned()).collect();
+        let mut at = Vec::with_capacity(columns.len());
+        for name in columns {
+            match names.iter().position(|n| n == name) {
+                Some(i) => at.push(i),
+                None => {
+                    // Read the rest of the answer so the connection stays usable.
+                    result.drop_result().await?;
+                    return Err(mysql_async::Error::Other(format!("no column {name} in the answer").into()));
+                }
+            }
+        }
+        let rows: Vec<Row> = result.collect_and_drop().await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let values = row.unwrap();
+                at.iter().map(|&i| text(values[i].clone())).collect()
+            })
+            .collect())
     }
 
     /// The whole text of the statement `ask` names, in a statement of its own (under the

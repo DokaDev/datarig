@@ -1,5 +1,3 @@
 [
- [
-  ["1794060016530156", "PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit", "1793877439290675", "f", "100", "134217728", "off"]
- ]
+ [["1794108968642005", "PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2) on aarch64-unknown-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit", "1794104005592131", "f", "100", "134217728", "off", "on", "on", "1kB", "replica"]]
 ]

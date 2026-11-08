@@ -587,6 +587,15 @@ pub enum DbCommand {
         request: u64,
         ask: crate::monitor::TextAsk,
     },
+    /// What a monitor session's server says about its replication (whether it takes changes
+    /// from another server, the servers that take changes from it, PostgreSQL's slots), read in
+    /// one read of its own, each statement under `limit`. Answered with
+    /// [`DbEvent::MonitorReplication`] of the same `request`; other sessions answer it with
+    /// [`DbError::NotSupported`].
+    MonitorReplication {
+        request: u64,
+        limit: std::time::Duration,
+    },
     /// An action of a monitor session on another session of its server: `kind` on `target`,
     /// sent only if the target still is what the row the user acted on showed. Answered with
     /// [`DbEvent::MonitorActionDone`] of the same `request`; other sessions answer it with
@@ -747,6 +756,9 @@ impl DbCommand {
             }
             DbCommand::MonitorQueryText { request, .. } => {
                 DbEvent::MonitorQueryText { request: *request, result: Err(error) }
+            }
+            DbCommand::MonitorReplication { request, .. } => {
+                DbEvent::MonitorReplication { request: *request, result: Err(error) }
             }
             DbCommand::MonitorAction { request, .. } => {
                 DbEvent::MonitorActionDone { request: *request, outcome: crate::monitor::ActionOutcome::Failed(error) }
@@ -1216,6 +1228,11 @@ pub enum DbEvent {
     MonitorQueryText {
         request: u64,
         result: Result<crate::monitor::FullText, DbError>,
+    },
+    /// The answer to [`DbCommand::MonitorReplication`] `request`.
+    MonitorReplication {
+        request: u64,
+        result: Result<crate::monitor::Replication, DbError>,
     },
     /// The answer to [`DbCommand::MonitorAction`] `request`: what was sent and what the server
     /// said.

@@ -1202,3 +1202,445 @@ fn locks_screens_80x24_and_120x40() {
     insta::assert_snapshot!("monitor_locks_120x40", h.screen(120, 40));
     insta::assert_snapshot!("monitor_locks_80x24", h.screen(80, 24));
 }
+
+// The Replication view and the server's facts in full.
+
+use datarig_core::monitor::replication::{ChannelError, Member, Replica, Running, Side, Slot, Upstream};
+use datarig_core::monitor::{Lsn, Replication};
+
+/// The reads that went out since the last look: the ticks' and the replication reads' request
+/// ids.
+fn reads(h: &mut Harness) -> (Vec<u64>, Vec<u64>) {
+    let mut ticks = Vec::new();
+    let mut replication = Vec::new();
+    for c in h.sent() {
+        match c {
+            DbCommand::MonitorTick { request, .. } => ticks.push(request),
+            DbCommand::MonitorReplication { request, limit } => {
+                assert!(limit <= Duration::from_secs(5), "{limit:?}");
+                replication.push(request);
+            }
+            _ => {}
+        }
+    }
+    (ticks, replication)
+}
+
+fn upstream(source: &str) -> Upstream {
+    Upstream {
+        channel: None,
+        source: Some(source.into()),
+        slot: None,
+        receiver: Running::Yes,
+        receiver_state: None,
+        applier: Running::Yes,
+        applier_state: None,
+        received: None,
+        applied: None,
+        received_set: None,
+        executed_set: None,
+        gtids_only: false,
+        gtids_left: None,
+        source_read: None,
+        source_applied: None,
+        applier_behind: None,
+        delay: None,
+        last_message: None,
+        last_received: None,
+        last_applied: None,
+        errors: Vec::new(),
+        visible: Visibility::Full,
+    }
+}
+
+fn replica(name: &str) -> Replica {
+    Replica {
+        id: Some(87),
+        name: Some(name.into()),
+        client: Some("10.0.0.21".into()),
+        state: Some("streaming".into()),
+        sync: Some("async".into()),
+        sent: Some(Lsn(0x3C8_4EC8)),
+        written: Some(Lsn(0x3C8_4EC8)),
+        flushed: Some(Lsn(0x3C8_4EC8)),
+        replayed: Some(Lsn(0x3C8_4EC8)),
+        write_lag: Some(1_096),
+        flush_lag: Some(1_770),
+        replay_lag: Some(1_834),
+        reply: Some(at(-1.0)),
+        user: None,
+        visible: Visibility::Full,
+    }
+}
+
+fn slot(name: &str, active: bool, kept: u64) -> Slot {
+    Slot {
+        name: name.into(),
+        kind: "physical".into(),
+        plugin: None,
+        database: None,
+        temporary: false,
+        active,
+        active_pid: active.then_some(87),
+        restart: Some(Lsn(0x3C8_4EC8 - kept)),
+        kept: Some(kept),
+        wal_status: Some("reserved".into()),
+        safe_wal_size: None,
+    }
+}
+
+/// A PostgreSQL primary as the dev pair showed it: one standby streaming, its slot, a slot whose
+/// consumer is away (keeping log) and a logical one.
+fn pg_primary() -> Replication {
+    let mut behind = replica("reporting");
+    behind.client = Some("10.0.0.22".into());
+    behind.replayed = Some(Lsn(0x3C8_4EC8 - 3 * 1024 * 1024));
+    behind.write_lag = None;
+    behind.flush_lag = None;
+    behind.replay_lag = Some(4_200_000);
+    let mut logical = slot("zz_logical", false, 12_582_912);
+    logical.kind = "logical".into();
+    logical.plugin = Some("pgoutput".into());
+    logical.database = Some("shop".into());
+    Replication {
+        time: at(0.0),
+        in_recovery: Some(false),
+        position: Some(Lsn(0x3C8_4EC8)),
+        upstream: Some(Vec::new()),
+        replicas: Some(vec![replica("walreceiver"), behind]),
+        slots: Some(vec![slot("standby1", true, 0), slot("zz_idle_slot", false, 13_107_200), logical]),
+        subscriptions: Some(Vec::new()),
+        members: Vec::new(),
+        hidden: Vec::new(),
+    }
+}
+
+/// A PostgreSQL standby whose replay is paused while its primary writes.
+fn pg_standby() -> Replication {
+    let mut u = upstream("pg-primary:5432");
+    u.slot = Some("standby1".into());
+    u.applier = Running::Paused;
+    u.received = Some(Lsn(0x3C8_4EC8));
+    u.applied = Some(Lsn(0x3A0_0000));
+    u.last_message = Some(at(-1.0));
+    u.last_applied = Some(at(-190.0));
+    Replication {
+        time: at(0.0),
+        in_recovery: Some(true),
+        position: Some(Lsn(0x3C8_4EC8)),
+        upstream: Some(vec![u]),
+        replicas: Some(Vec::new()),
+        slots: Some(Vec::new()),
+        subscriptions: Some(Vec::new()),
+        members: Vec::new(),
+        hidden: Vec::new(),
+    }
+}
+
+/// A MySQL replica whose applier stopped on a duplicate key while its receiver runs.
+fn mysql_replica() -> Replication {
+    let mut c = upstream("my-source:3306");
+    c.receiver_state = Some("Waiting for source to send event".into());
+    c.applier = Running::No;
+    c.gtids_only = true;
+    c.gtids_left = Some(2);
+    c.source_read = Some(datarig_core::monitor::replication::LogPos { file: "bin.000003".into(), pos: 3256 });
+    c.source_applied = Some(datarig_core::monitor::replication::LogPos { file: "bin.000003".into(), pos: 2730 });
+    c.received_set = Some("ced11181-db1f-11f1-9e15-967323c11f94:1-12".into());
+    c.executed_set =
+        Some("ccf08818-db1f-11f1-bcb9-6aa192f2d4c5:1-5,\nced11181-db1f-11f1-9e15-967323c11f94:1-10".into());
+    c.last_message = Some(at(-12.0));
+    c.last_received = Some(at(-40.0));
+    c.last_applied = Some(at(-41.0));
+    c.errors = vec![ChannelError {
+        side: Side::Applier,
+        code: 1062,
+        message: "Coordinator stopped because there were error(s) in the worker(s).".into(),
+        at: Some("261108 03:10:42".into()),
+    }];
+    Replication {
+        time: at(0.0),
+        in_recovery: None,
+        position: None,
+        upstream: Some(vec![c]),
+        replicas: None,
+        slots: None,
+        subscriptions: None,
+        members: vec![Member {
+            address: "my-replica:3306".into(),
+            state: "ONLINE".into(),
+            role: Some("SECONDARY".into()),
+            this: true,
+        }],
+        hidden: vec![Hidden { part: Part::Replicas, need: Need::Grant("PROCESS") }],
+    }
+}
+
+/// The Monitor tab on the Replication view, its first reads answered.
+fn on_replication(format: MonitorFormat, read: Replication) -> Harness {
+    let mysql = matches!(format, MonitorFormat::MySql(_));
+    let mut h = Harness::connected(Lang::En);
+    h.driver.monitor.store(true, Ordering::SeqCst);
+    h.command("monitor");
+    h.monitor_db(DbEvent::Connected);
+    h.monitor_db(DbEvent::Monitor(Ok(format)));
+    let (t, _) = reads(&mut h);
+    let mut first = snapshot(0.0, 1000, rows(), true);
+    if mysql {
+        first.server.as_mut().unwrap().version = "8.4.11 MySQL Community Server - GPL".into();
+    }
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0], result: Ok(first) });
+    h.keys("4");
+    let (t, r) = reads(&mut h);
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0], result: Ok(snapshot(0.5, 1100, rows(), false)) });
+    h.monitor_db(DbEvent::MonitorReplication { request: r[0], result: Ok(read) });
+    h
+}
+
+#[test]
+fn the_replication_view_reads_when_shown_then_every_ten_seconds_and_only_while_shown() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, rows(), true)) });
+    assert!(reads(&mut h).1.is_empty(), "nothing of replication while another view is shown");
+    // Shown: read at once, with a tick.
+    h.keys("4");
+    assert_eq!(monitor(&h).view, MonitorView::Replication);
+    let (t, r) = reads(&mut h);
+    assert_eq!((t.len(), r.len()), (1, 1));
+    h.monitor_db(DbEvent::MonitorReplication { request: r[0], result: Ok(pg_primary()) });
+    let mut answer = t[0];
+    // The ticks go on every 2 s; replication only every 10 s.
+    let mut replication_reads = 0;
+    for n in 1..=10 {
+        h.monitor_db(DbEvent::MonitorSnapshot {
+            request: answer,
+            result: Ok(snapshot(n as f64 * 2.0, 1000, rows(), false)),
+        });
+        h.advance(Duration::from_millis(2001));
+        let (t, r) = reads(&mut h);
+        assert_eq!(t.len(), 1);
+        answer = t[0];
+        for request in r {
+            replication_reads += 1;
+            h.monitor_db(DbEvent::MonitorReplication { request, result: Ok(pg_primary()) });
+        }
+    }
+    assert_eq!(replication_reads, 2, "20 s shown: two more reads");
+    h.monitor_db(DbEvent::MonitorSnapshot { request: answer, result: Ok(snapshot(30.0, 1000, rows(), false)) });
+    // Another view: none.
+    h.keys("1");
+    for _ in 0..10 {
+        h.advance(Duration::from_millis(2001));
+        let (t, r) = reads(&mut h);
+        assert!(r.is_empty());
+        if let Some(request) = t.first() {
+            h.monitor_db(DbEvent::MonitorSnapshot {
+                request: *request,
+                result: Ok(snapshot(40.0, 1000, rows(), false)),
+            });
+        }
+    }
+    // Back on it: at once (it was not shown), and `r` reads it again at once.
+    h.keys("4");
+    h.advance(Duration::from_millis(2001));
+    let (t, r) = reads(&mut h);
+    assert_eq!(r.len(), 1, "{t:?}");
+    h.monitor_db(DbEvent::MonitorReplication { request: r[0], result: Ok(pg_primary()) });
+    for request in t {
+        h.monitor_db(DbEvent::MonitorSnapshot { request, result: Ok(snapshot(60.0, 1000, rows(), false)) });
+    }
+    h.keys("r");
+    assert_eq!(reads(&mut h).1.len(), 1);
+}
+
+#[test]
+fn a_failed_replication_read_keeps_the_last_one_and_says_why_and_late_answers_are_dropped() {
+    let mut h = on_replication(pg_format(), pg_primary());
+    assert!(monitor(&h).replication.is_some());
+    h.keys("r");
+    let (t, r) = reads(&mut h);
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0], result: Ok(snapshot(3.0, 1000, rows(), true)) });
+    // An answer to a read that is not the one out is dropped.
+    h.monitor_db(DbEvent::MonitorReplication { request: r[0] + 9, result: Ok(pg_standby()) });
+    assert_eq!(monitor(&h).replication.as_ref().unwrap().in_recovery, Some(false));
+    h.monitor_db(DbEvent::MonitorReplication {
+        request: r[0],
+        result: Err(DbError::Server("function aurora_replica_status() does not exist".into())),
+    });
+    assert_eq!(monitor(&h).replication.as_ref().unwrap().in_recovery, Some(false), "the last good read stays");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("Could not read replication: function aurora_replica_status() does not exist"), "{screen}");
+    assert!(screen.contains("Role: primary"), "{screen}");
+    // The other views read on: replication's failure is its own.
+    assert!(monitor(&h).error.is_none());
+}
+
+#[test]
+fn replication_screens_80x24_and_120x40() {
+    let mut h = on_replication(pg_format(), pg_primary());
+    insta::assert_snapshot!("monitor_replication_primary_120x40", h.screen(120, 40));
+    insta::assert_snapshot!("monitor_replication_primary_80x24", h.screen(80, 24));
+    let mut h = on_replication(pg_format(), pg_standby());
+    insta::assert_snapshot!("monitor_replication_standby_120x40", h.screen(120, 40));
+    insta::assert_snapshot!("monitor_replication_standby_80x24", h.screen(80, 24));
+    let mut h = on_replication(mysql_format(), mysql_replica());
+    insta::assert_snapshot!("monitor_replication_mysql_120x40", h.screen(120, 40));
+    insta::assert_snapshot!("monitor_replication_mysql_80x24", h.screen(80, 24));
+}
+
+#[test]
+fn replication_scrolls_and_says_what_it_cannot_tell() {
+    let mut hidden = pg_primary();
+    hidden.replicas.as_mut().unwrap()[0] = Replica {
+        state: None,
+        sync: None,
+        replayed: None,
+        name: None,
+        client: None,
+        visible: Visibility::Hidden,
+        ..replica("")
+    };
+    hidden.hidden = vec![Hidden { part: Part::ReplicationDetails, need: Need::Grant("pg_read_all_stats") }];
+    let mut h = on_replication(pg_format(), hidden);
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("Replication streams are listed without their state and positions"), "{screen}");
+    assert!(screen.contains("pid 87") && screen.contains("state and positions hidden"), "{screen}");
+    assert!(!screen.contains("pid 87 · replayed all"), "hidden is not caught up: {screen}");
+    // Scrolled to its end at 80x24 the last slot is on screen, and no further.
+    h.screen(80, 24);
+    h.keys("G");
+    let screen = h.screen(80, 24);
+    assert!(screen.contains("zz_logical"), "{screen}");
+    let top = monitor(&h).replication_top;
+    h.keys("j");
+    h.screen(80, 24);
+    assert_eq!(monitor(&h).replication_top, top, "kept within the lines");
+    h.keys("gg");
+    h.screen(80, 24);
+    assert_eq!(monitor(&h).replication_top, 0);
+}
+
+#[test]
+fn behind_by_an_amount_not_known_still_says_behind() {
+    let mut read = mysql_replica();
+    let c = &mut read.upstream.as_mut().unwrap()[0];
+    c.gtids_only = false;
+    c.gtids_left = None;
+    c.errors.clear();
+    c.source_read = Some(datarig_core::monitor::replication::LogPos { file: "bin.000004".into(), pos: 120 });
+    let mut h = on_replication(mysql_format(), read);
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("has not applied all it received (how much is not known)"), "{screen}");
+}
+
+#[test]
+fn on_aurora_no_binlog_replication_is_not_not_replicating() {
+    let mut read = pg_primary();
+    read.replicas = Some(Vec::new());
+    read.slots = Some(Vec::new());
+    let aurora = MonitorFormat::Postgres(PgMonitor {
+        flavour: Flavour::AmazonAurora,
+        ..match pg_format() {
+            MonitorFormat::Postgres(p) => p,
+            _ => unreachable!(),
+        }
+    });
+    let mut h = on_replication(aurora, read);
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("Role: cannot tell"), "{screen}");
+    assert!(screen.contains("Amazon Aurora: the cluster's own replicas share its storage"), "{screen}");
+}
+
+#[test]
+fn a_logical_subscriber_is_not_shown_as_not_replicating() {
+    let mut read = pg_primary();
+    read.replicas = Some(Vec::new());
+    read.slots = Some(Vec::new());
+    read.subscriptions = Some(vec![
+        datarig_core::monitor::replication::Subscription {
+            name: "orders_sub".into(),
+            running: true,
+            received: Some(Lsn(0x3C8_4EC8)),
+            last_message: Some(at(-2.0)),
+        },
+        datarig_core::monitor::replication::Subscription {
+            name: "audit_sub".into(),
+            running: false,
+            received: None,
+            last_message: None,
+        },
+    ]);
+    let mut h = on_replication(pg_format(), read);
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("Role: logical subscriber"), "{screen}");
+    assert!(
+        screen.contains("orders_sub · running · received 0/3C84EC8 · last heard from the source 2s ago"),
+        "{screen}"
+    );
+    assert!(screen.contains("audit_sub · stopped"), "{screen}");
+}
+
+#[test]
+fn the_server_in_full_opens_with_i_over_any_view_and_closes_with_i_or_esc() {
+    let (mut h, first) = monitor_open();
+    let mut s = snapshot(0.0, 1000, rows(), true);
+    s.server.as_mut().unwrap().extra = vec![
+        datarig_core::monitor::Extra { key: datarig_core::monitor::ExtraKey::TrackActivities, value: "on".into() },
+        datarig_core::monitor::Extra { key: datarig_core::monitor::ExtraKey::TrackCounts, value: "off".into() },
+        datarig_core::monitor::Extra { key: datarig_core::monitor::ExtraKey::QuerySize, value: "1kB".into() },
+        datarig_core::monitor::Extra { key: datarig_core::monitor::ExtraKey::WalLevel, value: "replica".into() },
+    ];
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(s) });
+    h.keys("i");
+    assert_eq!(monitor(&h).server_info, Some(0));
+    insta::assert_snapshot!("monitor_server_120x40", h.screen(120, 40));
+    insta::assert_snapshot!("monitor_server_80x24", h.screen(80, 24));
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("41 of 41") || screen.contains("of 200"), "{screen}");
+    assert!(
+        screen.contains("track_counts") && screen.contains("off (for this connection; where it is off"),
+        "{screen}"
+    );
+    // A pane longer than its room (many settings at 80x24): G to its end, k up, gg to its top.
+    h.keys("r");
+    let (t, _) = reads(&mut h);
+    let mut long = snapshot(2.0, 1000, rows(), true);
+    let setting =
+        datarig_core::monitor::Extra { key: datarig_core::monitor::ExtraKey::TrackActivities, value: "on".into() };
+    long.server.as_mut().unwrap().extra = vec![setting; 14];
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0], result: Ok(long) });
+    h.screen(80, 24);
+    h.keys("G");
+    h.screen(80, 24);
+    let end = monitor(&h).server_info.unwrap();
+    assert!(end > 0, "scrolled: {}", h.screen(80, 24));
+    assert!(h.screen(80, 24).contains("i or Esc closes"));
+    h.keys("k");
+    h.screen(80, 24);
+    assert_eq!(monitor(&h).server_info, Some(end - 1));
+    // A page is the pane's own height, not the list's behind it.
+    h.keys("gg");
+    h.screen(80, 24);
+    h.key(KeyCode::PageDown);
+    h.screen(80, 24);
+    let page = monitor(&h).server_info.unwrap();
+    assert!(page > 3 && page <= end, "{page} of {end}");
+    h.keys("gg");
+    h.screen(80, 24);
+    assert_eq!(monitor(&h).server_info, Some(0));
+    h.keys("i");
+    assert_eq!(monitor(&h).server_info, None);
+    h.keys("2");
+    h.keys("i");
+    assert!(monitor(&h).server_info.is_some());
+    h.key(KeyCode::Esc);
+    assert_eq!(monitor(&h).server_info, None);
+    assert_eq!(monitor(&h).view, MonitorView::Sessions, "Esc closed the pane only");
+    // Over the Locks view the pane takes the scrolling keys first.
+    h.keys("3");
+    h.keys("i");
+    h.screen(80, 24);
+    h.keys("G");
+    h.screen(80, 24);
+    assert!(monitor(&h).server_info.is_some_and(|t| t > 0), "the pane scrolled, not the tree");
+}

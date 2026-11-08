@@ -1,0 +1,18 @@
+---
+source: crates/drivers/postgres/src/meta/monitor/tests.rs
+expression: "text.join(\"\\n\")"
+---
+-- replication state
+SELECT (extract(epoch FROM now()) * 1000000)::int8 AS now, pg_is_in_recovery() AS in_recovery, pg_wal_lsn_diff(CASE WHEN pg_is_in_recovery() THEN GREATEST(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn()) ELSE pg_current_wal_lsn() END, '0/0')::int8 AS position, pg_wal_lsn_diff(pg_last_wal_receive_lsn(), '0/0')::int8 AS received, pg_wal_lsn_diff(pg_last_wal_replay_lsn(), '0/0')::int8 AS replayed, (extract(epoch FROM pg_last_xact_replay_timestamp()) * 1000000)::int8 AS replayed_at, CASE WHEN pg_is_in_recovery() THEN pg_is_wal_replay_paused() END AS replay_paused
+
+-- WAL senders
+SELECT r.pid, r.application_name, host(r.client_addr) AS client_addr, r.client_port, r.state, r.sync_state, pg_wal_lsn_diff(r.sent_lsn, '0/0')::int8 AS sent, pg_wal_lsn_diff(r.write_lsn, '0/0')::int8 AS written, pg_wal_lsn_diff(r.flush_lsn, '0/0')::int8 AS flushed, pg_wal_lsn_diff(r.replay_lsn, '0/0')::int8 AS replayed, (extract(epoch FROM r.write_lag) * 1000000)::int8 AS write_lag, (extract(epoch FROM r.flush_lag) * 1000000)::int8 AS flush_lag, (extract(epoch FROM r.replay_lag) * 1000000)::int8 AS replay_lag, (extract(epoch FROM r.reply_time) * 1000000)::int8 AS reply_time FROM pg_stat_replication r ORDER BY r.application_name, r.pid
+
+-- WAL receiver
+SELECT w.pid, w.status, (extract(epoch FROM w.last_msg_receipt_time) * 1000000)::int8 AS last_message, w.slot_name, w.sender_host, w.sender_port FROM pg_stat_wal_receiver w WHERE w.pid IS NOT NULL
+
+-- replication slots
+SELECT s.slot_name::text AS slot_name, s.slot_type, s.plugin::text AS plugin, s.database::text AS database, s.temporary, s.active, s.active_pid, pg_wal_lsn_diff(s.restart_lsn, '0/0')::int8 AS restart, NULL AS wal_status, NULL::int8 AS safe_wal_size FROM pg_replication_slots s ORDER BY s.slot_name
+
+-- subscriptions
+SELECT s.subname::text AS subname, s.pid, pg_wal_lsn_diff(s.received_lsn, '0/0')::int8 AS received, (extract(epoch FROM s.last_msg_receipt_time) * 1000000)::int8 AS last_message FROM pg_stat_subscription s WHERE s.relid IS NULL ORDER BY s.subname

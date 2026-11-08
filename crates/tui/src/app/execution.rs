@@ -842,6 +842,7 @@ impl App {
             DbEvent::Monitor(_)
             | DbEvent::MonitorSnapshot { .. }
             | DbEvent::MonitorQueryText { .. }
+            | DbEvent::MonitorReplication { .. }
             | DbEvent::MonitorActionDone { .. }
             | DbEvent::MonitorFollowUp { .. }
             | DbEvent::ServerSession { .. } => {}
@@ -1150,6 +1151,7 @@ impl App {
             DbEvent::Monitor(_)
             | DbEvent::MonitorSnapshot { .. }
             | DbEvent::MonitorQueryText { .. }
+            | DbEvent::MonitorReplication { .. }
             | DbEvent::MonitorActionDone { .. }
             | DbEvent::MonitorFollowUp { .. }
             | DbEvent::ServerSession { .. } => None,

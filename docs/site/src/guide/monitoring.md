@@ -98,6 +98,64 @@ The tree comes from what the server says:
   only when a session may be waiting for a lock.
 - A wait in a cycle (a deadlock the server has not broken yet) is shown once, from its
   smallest session, and marked.
+## Replication
+
+`4` shows what the server says about its replication. It is read when the view is shown, with
+`r`, and then at most every 10 seconds (the interval when it is longer) while the view stays
+shown, on a read of its own: when it fails, the view says why and keeps the last good one, and
+the other views read on. `j`/`k` scroll.
+
+- **Role**: a replica (a PostgreSQL standby in recovery, a MySQL server with replication
+  channels or a secondary of its replication group), a PostgreSQL logical subscriber, a primary (servers take changes from it
+  and it takes none, or its group's primary), or not replicating. When the account may not
+  read what would tell, the view says it cannot tell, never "not replicating".
+- **What it takes changes from**: on a PostgreSQL standby, where its WAL receiver streams from
+  and through which slot, whether replay runs or is paused, the log positions received and
+  replayed, and when the source was last heard from. Without a WAL receiver the standby replays
+  only what it has, or reads from an archive, and the view says so. On a MySQL replica, each
+  channel's source, whether its receiver (I/O thread) and applier (SQL thread) run and what
+  they are doing, the last heartbeat, the last transaction fetched and applied, the GTID sets
+  received and executed, a delay set on purpose, and the last error of each side.
+- **The servers that take changes from it**: a PostgreSQL primary lists its WAL senders: the
+  standby's name and address, its state and sync state, how much it has not replayed yet, the
+  write, flush and replay lags while they are measured, and its last reply. A MySQL source
+  lists the replicas connected to it (their address, account and what the sending thread
+  does); their lag is read on each replica.
+- **Slots** (PostgreSQL): each replication slot, whether its consumer is connected, how much log
+  it keeps, and its `wal_status` (from 13). A slot whose consumer is away keeps log that
+  grows, and is marked.
+- **Subscriptions** (PostgreSQL logical replication): each subscription of the server, whether
+  its apply worker runs, the position it received and when the publisher was last heard from.
+- **Group replication** (MySQL): the members of the group, their state and role.
+
+How far behind is said only as far as the server can tell:
+
+- PostgreSQL: a standby that has replayed all it received says so; else how many bytes it has
+  received and not replayed yet. The age of the last replayed transaction is shown apart, on
+  the primary's clock, because it grows on a primary with nothing to write too: it is never
+  given as the lag.
+- MySQL: `Seconds_Behind_Source` only measures the applier against what the receiver fetched,
+  so 0 can hide a receiver that is behind or stalled. The view shows the receiver's state and
+  its last heartbeat next to it (a source sends one only while it has nothing else to send),
+  and says when the receiver does not run. A channel has applied all it received only where the
+  receiver's and the applier's places in the source's binary log are the same (shown as
+  "source log read to ... applied to ..."): `Seconds_Behind_Source` is 0 also while events of
+  the same second wait. Where every transaction carries a GTID (`gtid_mode` `ON`) it counts the
+  transactions received and not applied yet from the GTID sets, which never prove that nothing
+  is left (a channel may take transactions without GTIDs); a NULL is never shown as 0.
+
+On Amazon Aurora the cluster's own replicas share its storage and are not listed by these
+views; the view says so.
+
+## The server in full
+
+`i` shows what the server is, over any view: its whole version line, its provider (read from
+the server, never guessed from its host name), whether it takes writes, when it started, its
+connections now and its limit, the size of its page cache, and the settings that decide what
+the monitor can read (PostgreSQL `track_activities`, `track_counts`,
+`track_activity_query_size`, `track_io_timing` and `wal_level`; MySQL `performance_schema`,
+`server_id`, `gtid_mode`, `log_bin` and `super_read_only`). A setting that leaves the monitor
+less to read is marked with what it hides (`track_activities` and `track_counts` are read as the monitor's own connection has them: another session's may differ). `i` or `Esc` closes it.
 
 ## What the account sees
 
@@ -113,3 +171,7 @@ nothing:
 | MySQL | `SELECT` on `performance_schema` | the Locks view without who blocks a row lock wait, and without metadata lock waits |
 | MySQL | the metadata lock instrument (`wait/lock/metadata/sql/mdl`) | the Locks view without metadata lock waits |
 | MySQL | 8.0.38 or later in 8.0, or 8.4 or later | the Locks view without who blocks a row lock wait (on older versions reading it can stall a busy server, so it is not read) |
+| PostgreSQL | `pg_read_all_stats` | WAL senders and the WAL receiver without their state and positions (a standby's received and replayed positions still show) |
+| MySQL | `REPLICATION CLIENT` | that whether the server takes changes from another is not known |
+| MySQL | `PROCESS` | that the servers taking changes from it are not known (only the account's own sessions are listed) |
+| MySQL | `SELECT` on `performance_schema` | that each channel's last heartbeat and last transaction, and a group's members, are not known |

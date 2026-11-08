@@ -32,7 +32,9 @@ use datarig_core::monitor::action::{
 };
 use datarig_core::monitor::decode::{self, Rows};
 use datarig_core::monitor::format::PG_OLDEST;
-use datarig_core::monitor::{FullText, MonitorFormat, Own, PgMonitor, Route, SessionsWanted, Snapshot, TextAsk, Want};
+use datarig_core::monitor::{
+    FullText, MonitorFormat, Own, PgMonitor, Replication, Route, SessionsWanted, Snapshot, TextAsk, Want,
+};
 use futures::future::join_all;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
@@ -121,6 +123,19 @@ pub(crate) async fn monitor_loop(client: Client, mut link: Link, events: Unbound
                     }
                 }
             }
+            DbCommand::MonitorReplication { request, limit } => {
+                let Ok(result) = link.guard(None, replication(&client, pg, limit, &mut own)).await else {
+                    link.close();
+                    return;
+                };
+                match result {
+                    Ok(read) => (DbEvent::MonitorReplication { request, result: Ok(read) }, None),
+                    Err(Failure::Failed(error)) => (DbEvent::MonitorReplication { request, result: Err(error) }, None),
+                    Err(Failure::Lost(error)) => {
+                        (DbEvent::MonitorReplication { request, result: Err(error.clone()) }, Some(error))
+                    }
+                }
+            }
             DbCommand::MonitorAction { request, kind, target } => {
                 let acted = act(&client, pg, read_only, kind, &target);
                 let Ok(acted) = link.guard(None, acted).await else {
@@ -202,6 +217,12 @@ async fn tick(client: &Client, pg: &PgMonitor, want: &Want, own: &mut Own) -> Re
     let before = *own;
     let rows = read(client, &sql::tick(pg, want), want.limit, own).await?;
     decode::pg::tick(want, &rows, before).map_err(|e| Failure::Failed(e.into_db(PG_OLDEST)))
+}
+
+/// What the server says about its replication, in a read-only transaction of its own.
+async fn replication(client: &Client, pg: &PgMonitor, limit: Duration, own: &mut Own) -> Result<Replication, Failure> {
+    let rows = read(client, &sql::replication::read(pg), limit, own).await?;
+    decode::pg::replication::read(&rows).map_err(|e| Failure::Failed(e.into_db(PG_OLDEST)))
 }
 
 /// The session `target` names as a read now shows it, with the tick's columns.

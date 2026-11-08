@@ -1,0 +1,18 @@
+---
+source: crates/drivers/mysql/src/meta/monitor/tests.rs
+expression: "text.join(\"\\n\")"
+---
+-- Clock
+SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, @@gtid_mode AS gtid_mode
+
+-- Channels (Channel_Name, Master_Host, Master_Port, Slave_IO_Running, Slave_IO_State, Slave_SQL_Running, Slave_SQL_Running_State, Seconds_Behind_Master, SQL_Delay, Last_IO_Errno, Last_IO_Error, Last_IO_Error_Timestamp, Last_SQL_Errno, Last_SQL_Error, Last_SQL_Error_Timestamp, Retrieved_Gtid_Set, Executed_Gtid_Set, Master_Log_File, Read_Master_Log_Pos, Relay_Master_Log_File, Exec_Master_Log_Pos)
+SHOW SLAVE STATUS
+
+-- ChannelTimes
+SELECT c.CHANNEL_NAME, CAST(UNIX_TIMESTAMP(c.LAST_HEARTBEAT_TIMESTAMP) * 1000000 AS SIGNED) AS last_heartbeat, CAST(UNIX_TIMESTAMP(c.LAST_QUEUED_TRANSACTION_END_QUEUE_TIMESTAMP) * 1000000 AS SIGNED) AS last_queued, (SELECT CAST(UNIX_TIMESTAMP(MAX(w.LAST_APPLIED_TRANSACTION_END_APPLY_TIMESTAMP)) * 1000000 AS SIGNED) FROM performance_schema.replication_applier_status_by_worker w WHERE w.CHANNEL_NAME = c.CHANNEL_NAME) AS last_applied FROM performance_schema.replication_connection_status c ORDER BY c.CHANNEL_NAME
+
+-- Replicas
+SELECT p.ID, p.USER, p.HOST, p.STATE FROM information_schema.PROCESSLIST p WHERE p.COMMAND IN ('Binlog Dump', 'Binlog Dump GTID') ORDER BY p.ID
+
+-- GroupMembers
+SELECT CONCAT(m.MEMBER_HOST, ':', m.MEMBER_PORT) AS address, m.MEMBER_STATE, m.MEMBER_ROLE, m.MEMBER_ID = @@server_uuid AS this FROM performance_schema.replication_group_members m WHERE m.MEMBER_ID <> '' ORDER BY m.MEMBER_HOST, m.MEMBER_PORT

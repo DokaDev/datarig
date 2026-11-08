@@ -24,6 +24,8 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Widget};
 
+mod replication;
+
 thread_local! {
     /// What the frames drew since the last [`take_work`]: rows of sessions, chart tiles and
     /// lines of details (the bench's measure that a frame's work does not grow with the
@@ -58,6 +60,7 @@ pub(crate) fn draw_monitor(app: &mut App, area: Rect, buf: &mut Buffer) {
     block.render(area, buf);
     let mut hits = MonitorHits::default();
     let read_key = app.key_for(Action::Monitor(MonitorAction::ReadNow), Ctx::Monitor);
+    let info_key = app.key_for(Action::Monitor(MonitorAction::ServerInfo), Ctx::Monitor);
     let Some(m) = app.monitor_of(id) else { return };
     let mysql = matches!(m.format(), Some(MonitorFormat::MySql(_)));
     let cx = Cx { i18n: &app.i18n, m, focused, mysql, read_key };
@@ -86,6 +89,7 @@ pub(crate) fn draw_monitor(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
     }
     let body = Rect { x: inner.x, y, width: inner.width, height: bottom.saturating_sub(y) };
+    let mut replication_top = None;
     match cx.waiting() {
         Some(text) => {
             let style = Style::new().fg(th.fg_dim);
@@ -99,7 +103,13 @@ pub(crate) fn draw_monitor(app: &mut App, area: Rect, buf: &mut Buffer) {
             MonitorView::Overview => cx.overview(body, buf, &mut hits),
             MonitorView::Sessions => cx.sessions(body, buf, &mut hits),
             MonitorView::Locks => cx.locks(body, buf, &mut hits),
+            MonitorView::Replication => replication_top = Some(cx.replication(body, buf, &mut hits)),
         },
+    }
+    // What the server is, in full, over the view.
+    let info = m.server_info.map(|top| cx.server_info(top, &info_key, body, buf));
+    if let Some((_, lines)) = info {
+        hits.info_lines = lines;
     }
     let page = hits.rows.height as usize;
     if let Some(m) = app.monitor_mut_for_draw(id) {
@@ -116,6 +126,12 @@ pub(crate) fn draw_monitor(app: &mut App, area: Rect, buf: &mut Buffer) {
             m.lock_view.top = on_screen(m.lock_view.cursor, m.lock_view.top, page);
         }
         m.hits = hits;
+        if let Some(top) = replication_top {
+            m.replication_top = top;
+        }
+        if let Some((top, _)) = info {
+            m.server_info = Some(top);
+        }
     }
 }
 
@@ -168,17 +184,27 @@ impl Cx<'_> {
         );
     }
 
-    /// `1 Overview  2 Sessions`, then how the tab reads on the right.
+    /// `1 Overview  2 Sessions`, then how the tab reads on the right. Where the names and how
+    /// it reads do not all fit, the views not shown are named by their number only.
     fn view_strip(&self, at: Rect, buf: &mut Buffer, hits: &mut MonitorHits) {
         let th = theme::cur();
         let mut x = at.x + 1;
         let end = at.x + at.width.saturating_sub(1);
-        for (i, v) in MonitorView::ALL.iter().enumerate() {
+        let (state, color) = self.reading();
+        let full = |i: usize, v: &MonitorView| {
             let name = match (*v, self.m.tree.waiting) {
                 (MonitorView::Locks, n) if n > 0 => self.msg(Msg::MonitorViewLocksCount { n: n.to_string() }),
                 _ => self.label(v.label()),
             };
-            let text = format!("{} {name}", i + 1);
+            format!("{} {name}", i + 1)
+        };
+        let names: usize = MonitorView::ALL.iter().enumerate().map(|(i, v)| width(&full(i, v)) + 2).sum();
+        let short = names + width(&state) + 1 > at.width.saturating_sub(2) as usize;
+        for (i, v) in MonitorView::ALL.iter().enumerate() {
+            let text = match short && *v != self.m.view {
+                true => (i + 1).to_string(),
+                false => full(i, v),
+            };
             let w = width(&text) as u16;
             if x + w > end {
                 break;
@@ -191,7 +217,6 @@ impl Cx<'_> {
             hits.views.push((Rect { x, y: at.y, width: w, height: 1 }, *v));
             x += w + 2;
         }
-        let (state, color) = self.reading();
         let w = width(&state) as u16;
         if x + w < end {
             put(buf, end - w, at.y, &state, w as usize, Style::new().fg(color));
@@ -262,6 +287,11 @@ impl Cx<'_> {
             Part::RowLockWaits => Label::MonitorHiddenRowLockWaits,
             Part::MetadataLockWaits => Label::MonitorHiddenMetadataLockWaits,
             Part::UntrackedMetadataLocks => Label::MonitorHiddenUntrackedMetadataLocks,
+            Part::ReplicationDetails => Label::MonitorHiddenReplicationDetails,
+            Part::ReplicationSources => Label::MonitorHiddenReplicationSources,
+            Part::Replicas => Label::MonitorHiddenReplicas,
+            Part::ReplicationTimes => Label::MonitorHiddenReplicationTimes,
+            Part::GroupMembers => Label::MonitorHiddenGroupMembers,
         };
         format!("{} ({need})", self.label(part))
     }

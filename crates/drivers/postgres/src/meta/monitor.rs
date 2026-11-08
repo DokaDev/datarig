@@ -58,13 +58,17 @@ pub(crate) fn probe() -> String {
 }
 
 /// What the server is, one row. Columns: `now`, `version`, `started`, `in_recovery`,
-/// `max_connections`, `shared_buffers` (bytes), `track_io_timing`.
+/// `max_connections`, `shared_buffers` (bytes), `track_io_timing`, `track_activities`,
+/// `track_counts`, `track_activity_query_size`, `wal_level`.
 pub(crate) fn server_info() -> String {
     format!(
         "SELECT {now} AS now, version() AS version, {started} AS started, pg_is_in_recovery() AS in_recovery, \
          current_setting('max_connections')::int8 AS max_connections, \
          pg_size_bytes(current_setting('shared_buffers')) AS shared_buffers, \
-         current_setting('track_io_timing') AS track_io_timing",
+         current_setting('track_io_timing') AS track_io_timing, \
+         current_setting('track_activities') AS track_activities, current_setting('track_counts') AS track_counts, \
+         current_setting('track_activity_query_size') AS track_activity_query_size, \
+         current_setting('wal_level') AS wal_level",
         now = us("now()"),
         started = us("pg_postmaster_start_time()"),
     )
@@ -314,6 +318,8 @@ pub(crate) fn begin(limit: std::time::Duration) -> String {
         limit.as_millis().max(1)
     )
 }
+
+pub(crate) mod replication;
 
 #[cfg(test)]
 mod tests;

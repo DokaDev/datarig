@@ -313,5 +313,7 @@ pub(crate) fn limit(limit: std::time::Duration) -> String {
     format!("SET SESSION max_execution_time = {}", limit.as_millis().clamp(1, u128::from(u32::MAX)))
 }
 
+pub(crate) mod replication;
+
 #[cfg(test)]
 mod tests;
