@@ -1,0 +1,13 @@
+[
+ [
+  ["18814", "18812", "488495", "0"],
+  ["18818", null, "488497", "1"]
+ ],
+ [
+  ["18822", "18868", "TABLE", "datarig", "zz_mon_o", "EXCLUSIVE", "TRANSACTION", "PENDING"],
+  ["18823", "18869", "TABLE", "datarig", "zz_mon_o", "SHARED_READ", "TRANSACTION", "PENDING"],
+  ["18819", "18865", "TABLE", "datarig", "zz_mon_o", "SHARED_READ", "TRANSACTION", "GRANTED"],
+  ["18821", "18867", "TABLE", "datarig", "zz_mon_o", "SHARED_READ", "TRANSACTION", "GRANTED"],
+  ["18822", "18868", "TABLE", "datarig", "zz_mon_o", "SHARED_UPGRADABLE", "TRANSACTION", "GRANTED"]
+ ]
+]

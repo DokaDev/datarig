@@ -1,26 +1,27 @@
 [
  [
-  ["1794068771770688"]
+  ["1794161059473776"]
  ],
  [
-  ["Aborted_connects", "2"],
-  ["Bytes_received", "15970706"],
-  ["Bytes_sent", "6941506"],
+  ["Aborted_connects", "0"],
+  ["Bytes_received", "5388504"],
+  ["Bytes_sent", "3094552"],
   ["Com_commit", "0"],
   ["Com_rollback", "2"],
-  ["Created_tmp_disk_tables", "2"],
-  ["Innodb_buffer_pool_read_requests", "39954556"],
-  ["Innodb_buffer_pool_reads", "403585"],
-  ["Innodb_row_lock_waits", "4"],
+  ["Created_tmp_disk_tables", "118"],
+  ["Innodb_buffer_pool_read_requests", "18986816"],
+  ["Innodb_buffer_pool_reads", "200096"],
+  ["Innodb_row_lock_waits", "7"],
   ["Innodb_rows_deleted", "0"],
-  ["Innodb_rows_inserted", "10"],
-  ["Innodb_rows_read", "39950512"],
-  ["Innodb_rows_updated", "6"],
+  ["Innodb_rows_inserted", "266"],
+  ["Innodb_rows_read", "18924222"],
+  ["Innodb_rows_updated", "12"],
+  ["Performance_schema_metadata_lock_lost", "0"],
   ["Performance_schema_thread_instances_lost", "0"],
-  ["Questions", "64275"],
-  ["Slow_queries", "3"],
+  ["Questions", "21210"],
+  ["Slow_queries", "9"],
   ["Threads_connected", "7"],
   ["Threads_running", "5"],
-  ["Uptime", "191332"]
+  ["Uptime", "57053"]
  ]
 ]

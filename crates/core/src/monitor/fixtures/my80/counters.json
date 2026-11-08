@@ -1,26 +1,27 @@
 [
  [
-  ["1794068773088341"]
+  ["1794160690511368"]
  ],
  [
   ["Aborted_connects", "0"],
-  ["Bytes_received", "4286"],
-  ["Bytes_sent", "3437"],
+  ["Bytes_received", "5202"],
+  ["Bytes_sent", "4265"],
   ["Com_commit", "0"],
   ["Com_rollback", "0"],
   ["Created_tmp_disk_tables", "0"],
-  ["Innodb_buffer_pool_read_requests", "16101"],
+  ["Innodb_buffer_pool_read_requests", "16399"],
   ["Innodb_buffer_pool_reads", "1016"],
   ["Innodb_row_lock_waits", "0"],
   ["Innodb_rows_deleted", "0"],
   ["Innodb_rows_inserted", "0"],
   ["Innodb_rows_read", "0"],
   ["Innodb_rows_updated", "0"],
+  ["Performance_schema_metadata_lock_lost", "0"],
   ["Performance_schema_thread_instances_lost", "0"],
-  ["Questions", "29"],
+  ["Questions", "26"],
   ["Slow_queries", "0"],
   ["Threads_connected", "1"],
   ["Threads_running", "2"],
-  ["Uptime", "815"]
+  ["Uptime", "1074"]
  ]
 ]
