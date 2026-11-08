@@ -21,8 +21,8 @@ use datarig_core::i18n::I18n;
 use datarig_core::monitor::SessionsWanted;
 use datarig_core::monitor::rate::{self, History, Pending, Rate};
 use datarig_core::monitor::{
-    CounterKind, GaugeKind, MonitorFormat, Sample, ServerInfo, SessionKey, SessionRow, SessionState, Snapshot,
-    Timestamp, Tx, Want,
+    CounterKind, FullText, GaugeKind, MonitorFormat, Sample, ServerInfo, SessionKey, SessionRow, SessionState,
+    Snapshot, TEXT_MIN_AGE_US, TextAsk, Timestamp, Tx, Want,
 };
 use std::time::Duration;
 
@@ -224,6 +224,29 @@ pub struct MonitorHits {
     pub top_rows: Vec<usize>,
 }
 
+/// The read of the whole text of a statement the list holds only the start of (the details of
+/// its session were opened): what was asked, its number, and the answer once it came.
+#[derive(Clone, Debug)]
+pub struct TextRead {
+    pub ask: TextAsk,
+    request: u64,
+    /// `None`: not answered yet. `Err`: why the read failed.
+    pub answer: Option<Result<FullText, String>>,
+}
+
+/// What to ask for the whole text of row `r`'s statement, the row read by a list of server time
+/// `seen`: `None` when the list holds all of it.
+fn text_ask(r: &SessionRow, seen: Timestamp) -> Option<TextAsk> {
+    let q = r.query.as_ref().filter(|q| q.shortened)?;
+    Some(TextAsk { session: r.key, query_started: r.query_started, start: q.text.clone(), seen })
+}
+
+/// The statement `ask` names had run long enough when its list was read to be told apart from
+/// a later run of the same text (MySQL).
+fn old_enough(ask: &TextAsk) -> bool {
+    ask.query_started.is_some_and(|t| ask.seen.0 - t.0 >= TEXT_MIN_AGE_US)
+}
+
 /// A Monitor tab: its connection, its reads, and what it shows.
 pub struct MonitorTab {
     pub session: Option<Session>,
@@ -238,7 +261,10 @@ pub struct MonitorTab {
     pub read_once: bool,
     /// The read in flight: its number and when it was sent.
     pub request: Option<(u64, Instant)>,
+    /// The number of the last read sent (ticks and statement texts count on the same one).
     seq: u64,
+    /// The last read of a statement's whole text (asked once per statement, paused or not).
+    pub text: Option<TextRead>,
     /// When the next read is due (`None`: none planned).
     pub due: Option<Instant>,
     /// Failed reads in a row.
@@ -281,6 +307,7 @@ impl MonitorTab {
             read_once: false,
             request: None,
             seq: 0,
+            text: None,
             due: None,
             failures: 0,
             snapshot: None,
@@ -331,6 +358,34 @@ impl MonitorTab {
         rows.get(*self.list.order.get(self.list.cursor)?)
     }
 
+    /// The read of the selected row's whole statement, while that row still shows the statement
+    /// it was asked for (the same session, start and text): another statement's text is never
+    /// shown as this one's.
+    pub fn text_read(&self) -> Option<&TextRead> {
+        let read = self.text.as_ref()?;
+        let ask = self.selected_ask()?;
+        read.ask.same_statement(&ask, self.whole_seconds()).then_some(read)
+    }
+
+    /// What to ask for the whole text of the selected row's statement.
+    fn selected_ask(&self) -> Option<TextAsk> {
+        text_ask(self.selected_row()?, self.sessions_time()?)
+    }
+
+    /// The server tells a statement's start in whole seconds (MySQL): starts worked out from it
+    /// move a little from one read to the next.
+    fn whole_seconds(&self) -> bool {
+        matches!(self.format(), Some(MonitorFormat::MySql(_)))
+    }
+
+    /// The selected row's whole statement, when it was read for this very row.
+    pub fn full_text(&self) -> Option<&datarig_core::monitor::QueryText> {
+        match self.text_read()?.answer.as_ref()? {
+            Ok(FullText::Text { text, .. }) => Some(text),
+            _ => None,
+        }
+    }
+
     /// The server's clock at the latest read of the sessions.
     pub fn sessions_time(&self) -> Option<Timestamp> {
         Some(self.snapshot.as_ref()?.sessions.as_ref()?.time)
@@ -346,6 +401,7 @@ impl MonitorTab {
         // no current connection has generation 0.
         self.generation = 0;
         self.request = None;
+        self.text = None;
         self.prev = None;
         self.pending = Pending::default();
         self.want_server = true;
@@ -713,6 +769,10 @@ impl App {
             return self.monitor_open(id, profile);
         }
         let ready = m.format().is_some();
+        if ready {
+            self.monitor_read_text(id);
+        }
+        let Some(m) = self.monitor_of(id) else { return };
         let due = m.due.is_some_and(|d| d <= now);
         if ready && due && (!m.paused || m.read_once) && m.request.is_none() {
             self.monitor_read(id, now);
@@ -763,6 +823,37 @@ impl App {
         m.read_once = false;
     }
 
+    /// The details of tab `id`'s selected session are shown and the list holds only the start
+    /// of its statement: its whole text is read once (paused or not, as the user asked for it).
+    /// A read for another statement is left: its answer is dropped by its number.
+    fn monitor_read_text(&mut self, id: TabId) {
+        let Some(m) = self.monitor_mut(id) else { return };
+        if !m.list.details || m.view != MonitorView::Sessions || m.session.is_none() {
+            return;
+        }
+        let Some(ask) = m.selected_ask() else { return };
+        // One read at a time: the connection answers its commands in order, so reads of
+        // statements the user has moved past would queue ahead of the next tick. The statement
+        // selected when the read in flight answers is asked for then.
+        if m.text.as_ref().is_some_and(|t| t.answer.is_none()) {
+            return;
+        }
+        // Asked again for the same statement only when it had run too briefly to be told apart
+        // when last asked, and has run long enough now (once: the new ask is old enough).
+        if let Some(t) = m.text.as_ref().filter(|t| t.ask.same_statement(&ask, m.whole_seconds())) {
+            let not_yet = matches!(t.answer, Some(Ok(FullText::NotYet)));
+            if !(not_yet && !old_enough(&t.ask) && old_enough(&ask)) {
+                return;
+            }
+        }
+        m.seq += 1;
+        let request = m.seq;
+        if let Some(session) = m.session.as_ref() {
+            session.send(DbCommand::MonitorQueryText { request, ask: ask.clone() });
+        }
+        m.text = Some(TextRead { ask, request, answer: None });
+    }
+
     /// An event of tab `id`'s monitor connection (its generation checked).
     pub(super) fn monitor_event(&mut self, id: TabId, ev: DbEvent) {
         let now = self.now();
@@ -774,7 +865,9 @@ impl App {
             self.touch_profile(p);
         }
         let error_text = match &ev {
-            DbEvent::Monitor(Err(e)) | DbEvent::MonitorSnapshot { result: Err(e), .. } => Some(self.db_error_text(e)),
+            DbEvent::Monitor(Err(e))
+            | DbEvent::MonitorSnapshot { result: Err(e), .. }
+            | DbEvent::MonitorQueryText { result: Err(e), .. } => Some(self.db_error_text(e)),
             _ => None,
         };
         let Some((m, i18n)) = self.monitor_words(id) else { return };
@@ -809,6 +902,11 @@ impl App {
                     }
                 }
                 m.due = Some(now + m.delay());
+            }
+            DbEvent::MonitorQueryText { request, result } => {
+                if let Some(t) = m.text.as_mut().filter(|t| t.request == request && t.answer.is_none()) {
+                    t.answer = Some(result.map_err(|_| error_text.unwrap_or_default()));
+                }
             }
             DbEvent::ConnectFailed { .. } | DbEvent::Lost { .. } => {
                 m.drop_connection();
@@ -1029,23 +1127,25 @@ impl App {
         }
     }
 
-    /// The selected session's statement, as the list holds it: `None` when there is none.
-    fn monitor_query(&self) -> Option<(String, Option<String>)> {
-        let r = self.monitor_of(self.tab().id)?.selected_row()?;
-        let q = r.query.as_ref().filter(|q| !q.text.trim().is_empty())?;
-        Some((q.text.clone(), r.database.clone()))
+    /// The selected session's statement (its whole text when it was read for this row, else
+    /// as the list holds it), its database, and whether it may be only part of the statement:
+    /// `None` when there is none.
+    fn monitor_query(&self) -> Option<(String, Option<String>, bool)> {
+        let m = self.monitor_of(self.tab().id)?;
+        let r = m.selected_row()?;
+        let q = m.full_text().or(r.query.as_ref()).filter(|q| !q.text.trim().is_empty())?;
+        let part = q.shortened || q.maybe_cut_by_server;
+        Some((q.text.clone(), r.database.clone(), part))
     }
 
     /// `o`: the selected session's statement in a new console of the profile, in that
     /// session's database, never run; the console's first note says what is not known of the
     /// other session (its search path and settings).
     fn monitor_to_console(&mut self) {
-        let Some((text, database)) = self.monitor_query() else {
+        let Some((text, database, shortened)) = self.monitor_query() else {
             return self.flash(Notice::new(Label::MonitorNoQuery, Level::Info));
         };
         let Some(id) = self.tab().profile else { return };
-        let shortened = self.monitor_of(self.tab().id).and_then(|m| m.selected_row()).and_then(|r| r.query.as_ref());
-        let shortened = shortened.is_some_and(|q| q.shortened || q.maybe_cut_by_server);
         use datarig_core::sql::dialect::{Dialect, Language};
         let mysql = matches!(self.profile_language(Some(id)), Language::Sql(Dialect::MySql(_)));
         let context = match mysql {
@@ -1063,7 +1163,7 @@ impl App {
 
     /// `y`: the selected session's statement to the clipboard (the copy settings apply).
     fn monitor_copy_query(&mut self) {
-        let Some((text, _)) = self.monitor_query() else {
+        let Some((text, _, _)) = self.monitor_query() else {
             return self.flash(Notice::new(Label::MonitorNoQuery, Level::Info));
         };
         let done = match self.deliver(&text) {

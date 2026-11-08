@@ -125,6 +125,20 @@ pub(crate) fn sessions(pg: &PgMonitor, wanted: SessionsWanted) -> String {
     )
 }
 
+/// The session `pid`'s statement in whole (as the server keeps it), to tell whether it is still
+/// the one a list showed: none or one row. Columns: `pid`, `backend_start`, `state`,
+/// `query_start`, `query`, `maybe_cut` (as in [`sessions`]).
+pub(crate) fn query_text(pid: i64) -> String {
+    format!(
+        "SELECT s.pid, {backend_start} AS backend_start, s.state, {query_start} AS query_start, s.query, \
+         octet_length(s.query) >= t.size - 4 AS maybe_cut FROM pg_stat_activity s, \
+         (SELECT setting::int AS size FROM pg_settings WHERE name = 'track_activity_query_size') t \
+         WHERE s.pid = {pid}",
+        backend_start = us("s.backend_start"),
+        query_start = us("s.query_start"),
+    )
+}
+
 /// The statements of a tick, in this order: the counters, then the session list and what the
 /// server is when `want` asks for them. The driver runs them in one read-only transaction.
 pub(crate) fn tick(pg: &PgMonitor, want: &Want) -> Vec<String> {

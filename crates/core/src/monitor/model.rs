@@ -353,6 +353,72 @@ pub struct QueryText {
     pub maybe_cut_by_server: bool,
 }
 
+/// The statement a row of the list showed, to read its whole text
+/// ([`crate::driver::DbCommand::MonitorQueryText`]): the session, when that statement started,
+/// and its text as the list holds it. The text read is shown only when it is still that
+/// statement's ([`FullText`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextAsk {
+    pub session: SessionKey,
+    /// When the statement started, as the list read it (`None`: the list did not tell).
+    pub query_started: Option<Timestamp>,
+    /// The text as the list holds it: its first [`QUERY_CHARS`] characters.
+    pub start: String,
+    /// The server's clock when the list was read ([`SessionList::time`]).
+    pub seen: Timestamp,
+}
+
+/// How long a MySQL statement must have run when the list read it for its whole text to be
+/// told apart from a later one's: MySQL tells a start in whole seconds only.
+pub const TEXT_MIN_AGE_US: i64 = 5_000_000;
+
+/// How far two starts worked out from MySQL's whole seconds may lie apart and still be one
+/// statement's.
+pub const TEXT_SAME_START_US: i64 = 2_000_000;
+
+impl TextAsk {
+    /// Whether `later` (built from a later read of the list) names the statement this one does:
+    /// the same session, beginning and start (`whole_seconds`: a start worked out from whole
+    /// seconds, MySQL, within [`TEXT_SAME_START_US`]).
+    pub fn same_statement(&self, later: &TextAsk, whole_seconds: bool) -> bool {
+        let start = match (self.query_started, later.query_started) {
+            (Some(a), Some(b)) if whole_seconds => (a.0 - b.0).abs() < TEXT_SAME_START_US,
+            (a, b) => a == b,
+        };
+        self.session == later.session && self.start == later.start && start
+    }
+}
+
+/// The whole text of the statement a [`TextAsk`] names, or why it is not shown. Another
+/// statement's text is never given as this one's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FullText {
+    /// The statement's whole text (as the server keeps it: it may still be cut by the server).
+    Text { text: QueryText, proof: Proof },
+    /// The session has ended (its id is free, or another session has it now).
+    Gone,
+    /// The session runs another statement now, or none.
+    Moved,
+    /// What tells the statement apart cannot be read: the text is not shown. `Some`: what
+    /// would show it.
+    Unknown(Option<Need>),
+    /// The statement had run too briefly when the list read it to be told apart from a later
+    /// run of the same text (MySQL, under [`TEXT_MIN_AGE_US`]): asked again once a later list
+    /// shows it older.
+    NotYet,
+}
+
+/// How sure [`FullText::Text`] is to be the statement the list showed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Proof {
+    /// The same session and the same start of the statement, to the microsecond (PostgreSQL).
+    Same,
+    /// The same session, a start within the same second and the same beginning (MySQL, which
+    /// tells the start in whole seconds): a new run of the same text started in that second
+    /// cannot be told apart.
+    Likely,
+}
+
 /// What a waiting session waits for, as the server tells it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Blocker {

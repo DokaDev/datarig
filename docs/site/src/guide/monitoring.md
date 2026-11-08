@@ -46,12 +46,19 @@ over a minute, are marked; the monitor's own connection is dim.
 
 `Enter` shows the selected session in full: its client, application, kind, what it waits for,
 when its transaction and statement started, and its statement. The list holds the first 256
-characters of a statement; where the server itself may have cut it (PostgreSQL keeps only
-`track_activity_query_size` bytes), that is said.
+characters of a statement; the details read the rest of a longer one, once, by a read of its
+own. The whole text is shown only while the session still runs that statement: PostgreSQL tells
+it by the session's and the statement's start, to the microsecond; MySQL tells a statement's
+start in whole seconds, so there a new run of the same statement started in the same second
+cannot be told apart, and the details say so. When the session has ended, runs another
+statement, or the account cannot tell, the details say which and show only the start. Where the
+server itself may have cut a statement (PostgreSQL keeps only `track_activity_query_size`
+bytes), that is said.
 
 `o` opens the statement in a new console of the connection, in that session's database, without
 running it (the other session's search path and settings are not known, and the console says
-so). `y` copies it.
+so). `y` copies it. Both take the whole text once the details have read it, else the start and
+a note that it is only the start.
 
 ## What the account sees
 

@@ -656,3 +656,168 @@ fn a_session_answers_a_monitor_tick_it_does_not_do() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn a_session_answers_a_text_read_it_does_not_do() {
+    use crate::driver::{DbCommand, DbError, DbEvent};
+    let ask = TextAsk {
+        session: SessionKey { id: 1, started: None },
+        query_started: None,
+        start: String::new(),
+        seen: Timestamp(0),
+    };
+    match (DbCommand::MonitorQueryText { request: 9, ask }).not_supported() {
+        DbEvent::MonitorQueryText { request: 9, result: Err(DbError::NotSupported) } => {}
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A row read for a PostgreSQL statement's whole text.
+fn pg_text(pid: &str, backend_start: Option<&str>, query_start: Option<&str>, query: &str, cut: &str) -> Rows {
+    pg_text_in("idle", pid, backend_start, query_start, query, cut)
+}
+
+fn pg_text_in(
+    state: &str,
+    pid: &str,
+    backend_start: Option<&str>,
+    query_start: Option<&str>,
+    query: &str,
+    cut: &str,
+) -> Rows {
+    vec![vec![
+        Some(pid.into()),
+        backend_start.map(Into::into),
+        Some(state.into()),
+        query_start.map(Into::into),
+        Some(query.into()),
+        Some(cut.into()),
+    ]]
+}
+
+fn pg_ask() -> TextAsk {
+    TextAsk {
+        session: SessionKey { id: 4211, started: Some(Timestamp(1_000)) },
+        query_started: Some(Timestamp(5_000_123)),
+        start: "SELECT a".into(),
+        seen: Timestamp(6_000_000),
+    }
+}
+
+#[test]
+fn a_pg_text_is_given_only_for_the_same_session_and_statement() {
+    let ask = pg_ask();
+    let read = |rows: &Rows| decode::pg::query_text(&ask, rows).unwrap();
+    let same = pg_text("4211", Some("1000"), Some("5000123"), "SELECT a, b FROM t", "f");
+    assert_eq!(
+        read(&same),
+        FullText::Text {
+            text: QueryText { text: "SELECT a, b FROM t".into(), shortened: false, maybe_cut_by_server: false },
+            proof: Proof::Same,
+        }
+    );
+    let cut = pg_text("4211", Some("1000"), Some("5000123"), "SELECT a, b", "t");
+    assert!(matches!(read(&cut), FullText::Text { text: QueryText { maybe_cut_by_server: true, .. }, .. }));
+    // No session with that pid now; another session with the pid (started later).
+    assert_eq!(read(&Vec::new()), FullText::Gone);
+    assert_eq!(read(&pg_text("4211", Some("2000"), Some("5000123"), "SELECT a", "f")), FullText::Gone);
+    // An idle session's last statement is still the one listed while it started then.
+    let active = pg_text_in("active", "4211", Some("1000"), Some("5000123"), "SELECT a, b FROM t", "f");
+    assert!(matches!(read(&active), FullText::Text { proof: Proof::Same, .. }));
+    // Another statement now: a microsecond later, even with the same text.
+    assert_eq!(read(&pg_text("4211", Some("1000"), Some("5000124"), "SELECT a, b FROM t", "f")), FullText::Moved);
+    // Its activity not tracked now (`track_activities` off): neither start nor text is told.
+    let untracked = pg_text_in("disabled", "4211", Some("1000"), None, "", "f");
+    assert_eq!(read(&untracked), FullText::Unknown(None));
+    let untracked = pg_text_in("disabled", "4211", Some("1000"), Some("5000123"), "SELECT a, b", "f");
+    assert_eq!(read(&untracked), FullText::Unknown(None));
+    // The same start but another beginning cannot be that statement.
+    assert_eq!(read(&pg_text("4211", Some("1000"), Some("5000123"), "UPDATE t", "f")), FullText::Moved);
+    // The account may not read it now.
+    let hidden = pg_text_in("", "4211", None, None, decode::pg::HIDDEN_QUERY, "f");
+    let hidden = vec![vec![hidden[0][0].clone(), None, None, None, hidden[0][4].clone(), hidden[0][5].clone()]];
+    assert_eq!(read(&hidden), FullText::Unknown(Some(Need::Grant("pg_read_all_stats"))));
+}
+
+#[test]
+fn a_pg_text_is_not_given_when_the_list_did_not_tell_the_statement_apart() {
+    let row = pg_text("4211", Some("1000"), Some("5000123"), "SELECT a", "f");
+    let no_start = TextAsk { query_started: None, ..pg_ask() };
+    assert_eq!(decode::pg::query_text(&no_start, &row).unwrap(), FullText::Unknown(None));
+    let no_session_start = TextAsk { session: SessionKey { id: 4211, started: None }, ..pg_ask() };
+    assert_eq!(decode::pg::query_text(&no_session_start, &row).unwrap(), FullText::Unknown(None));
+    // A row of another pid, or two rows, is not what the statement gives.
+    assert!(decode::pg::query_text(&pg_ask(), &pg_text("7", Some("1000"), Some("5000123"), "SELECT a", "f")).is_err());
+    let two = [row.clone(), row].concat();
+    assert!(decode::pg::query_text(&pg_ask(), &two).is_err());
+}
+
+/// A row read for a MySQL statement's whole text: the clock at `now` seconds.
+fn my_text(now: i64, command: &str, time: &str, info: Option<&str>) -> Rows {
+    vec![vec![
+        Some((now * 1_000_000).to_string()),
+        Some("31".into()),
+        Some(command.into()),
+        Some(time.into()),
+        info.map(Into::into),
+        Some("0".into()),
+    ]]
+}
+
+/// The list read the session at 100.4 s with TIME 10: started 90.4 s by its reckoning.
+fn my_ask() -> TextAsk {
+    TextAsk {
+        session: SessionKey { id: 31, started: None },
+        query_started: Some(Timestamp(90_400_000)),
+        start: "SELECT SLEEP".into(),
+        seen: Timestamp(100_400_000),
+    }
+}
+
+#[test]
+fn a_mysql_text_is_given_while_the_session_runs_a_statement_started_then() {
+    let ask = my_ask();
+    let read = |rows: &Rows| decode::mysql::query_text(&ask, rows).unwrap();
+    let text = |t: &str| FullText::Text {
+        text: QueryText { text: t.into(), shortened: false, maybe_cut_by_server: false },
+        proof: Proof::Likely,
+    };
+    // Starts of 91.0, 90.0 and 92.0 s: whole seconds either way of the same start.
+    assert_eq!(read(&my_text(103, "Query", "12", Some("SELECT SLEEP(60), 'x'"))), text("SELECT SLEEP(60), 'x'"));
+    assert_eq!(read(&my_text(103, "Execute", "13", Some("SELECT SLEEP(60)"))), text("SELECT SLEEP(60)"));
+    assert_eq!(read(&my_text(103, "Query", "11", Some("SELECT SLEEP(60)"))), text("SELECT SLEEP(60)"));
+    let mut cut = my_text(103, "Query", "12", Some("SELECT SLEEP(60)"));
+    cut[0][5] = Some("1".into());
+    assert!(matches!(read(&cut), FullText::Text { text: QueryText { maybe_cut_by_server: true, .. }, .. }));
+    // A run started 3.6 s later; the session idle; another text; gone.
+    assert_eq!(read(&my_text(103, "Query", "9", Some("SELECT SLEEP(60)"))), FullText::Moved);
+    assert_eq!(read(&my_text(103, "Sleep", "13", None)), FullText::Moved);
+    assert_eq!(read(&my_text(103, "Query", "13", Some("SELECT 1"))), FullText::Moved);
+    assert_eq!(read(&Vec::new()), FullText::Gone);
+    // 2.6 s apart: the start cannot say which.
+    assert_eq!(read(&my_text(103, "Query", "10", Some("SELECT SLEEP(60)"))), FullText::Unknown(None));
+}
+
+#[test]
+fn a_mysql_text_of_a_statement_listed_young_or_without_a_start_is_not_given() {
+    let row = my_text(103, "Query", "13", Some("SELECT SLEEP(60)"));
+    // Listed when it had run 4.9 s: a later run of the same text may start within the second.
+    let young = TextAsk { seen: Timestamp(95_300_000), ..my_ask() };
+    assert_eq!(decode::mysql::query_text(&young, &row).unwrap(), FullText::NotYet);
+    let no_start = TextAsk { query_started: None, ..my_ask() };
+    assert_eq!(decode::mysql::query_text(&no_start, &row).unwrap(), FullText::Unknown(None));
+}
+
+#[test]
+fn an_ask_names_the_same_statement_to_the_precision_its_server_tells() {
+    let a = pg_ask();
+    let later = |us: i64| TextAsk { query_started: Some(Timestamp(us)), seen: Timestamp(9_000_000), ..pg_ask() };
+    assert!(a.same_statement(&later(5_000_123), false));
+    assert!(!a.same_statement(&later(5_000_124), false));
+    assert!(a.same_statement(&later(6_900_000), true));
+    assert!(!a.same_statement(&later(7_000_123), true));
+    let other = TextAsk { start: "SELECT b".into(), ..pg_ask() };
+    assert!(!a.same_statement(&other, false));
+    let session = TextAsk { session: SessionKey { id: 7, started: a.session.started }, ..pg_ask() };
+    assert!(!a.same_statement(&session, true));
+}

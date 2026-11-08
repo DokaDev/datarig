@@ -1,5 +1,5 @@
 ---
-source: crates/drivers/mysql/src/meta/monitor.rs
+source: crates/drivers/mysql/src/meta/monitor/tests.rs
 expression: "text.join(\"\\n\")"
 ---
 -- probe
@@ -34,3 +34,6 @@ SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.
 
 -- sessions without idle
 SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, CAST(UNIX_TIMESTAMP(t.trx_started) * 1000000 AS SIGNED) AS trx_started, t.trx_state, t.trx_rows_locked, t.trx_rows_modified, 1 AS trx_read, COALESCE(l.in_tx, 0) AS in_tx, COALESCE(l.explicit_locks, 0) AS explicit_locks, 1 AS locks_read FROM information_schema.PROCESSLIST p LEFT JOIN information_schema.INNODB_TRX t ON t.trx_mysql_thread_id = p.ID LEFT JOIN (SELECT th.PROCESSLIST_ID AS id, MAX(m.LOCK_DURATION = 'TRANSACTION') AS in_tx, MAX(m.LOCK_DURATION = 'EXPLICIT') AS explicit_locks FROM performance_schema.metadata_locks m JOIN performance_schema.threads th ON th.THREAD_ID = m.OWNER_THREAD_ID WHERE m.LOCK_STATUS = 'GRANTED' AND m.LOCK_DURATION <> 'STATEMENT' GROUP BY th.PROCESSLIST_ID) l ON l.id = p.ID WHERE p.COMMAND <> 'Sleep' OR t.trx_id IS NOT NULL OR l.id IS NOT NULL OR p.ID = CONNECTION_ID() ORDER BY p.ID
+
+-- query text
+SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.COMMAND, p.TIME, p.INFO, OCTET_LENGTH(p.INFO) >= 65532 AS maybe_cut FROM information_schema.PROCESSLIST p WHERE p.ID = 4211

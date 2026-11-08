@@ -3,11 +3,11 @@
 use super::{Answer, DecodeError, Row, Rows, malformed, name_values, one};
 use crate::monitor::format::{self, MYSQL_MARKERS, MYSQL_MIN_VERSION, MySqlMonitor, Probe, Readable};
 use crate::monitor::model::{
-    Counter, CounterKind, Epoch, Extra, ExtraKey, Gauge, GaugeKind, Hidden, Need, Own, Part, QueryText, Sample,
-    ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState, Timestamp, Tx, Visibility, Wait,
-    WaitClass,
+    Counter, CounterKind, Epoch, Extra, ExtraKey, FullText, Gauge, GaugeKind, Hidden, Need, Own, Part, Proof,
+    QueryText, Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState, Timestamp, Tx,
+    Visibility, Wait, WaitClass,
 };
-use crate::monitor::model::{SessionsWanted, Snapshot, Want};
+use crate::monitor::model::{SessionsWanted, Snapshot, TEXT_MIN_AGE_US, TEXT_SAME_START_US, TextAsk, Want};
 
 /// The status variables a tick reads (`SHOW GLOBAL STATUS`), by name: what [`counters`] knows.
 pub const STATUS: &[&str] = &[
@@ -81,6 +81,9 @@ pub const SESSIONS: &[&str] = &[
     "explicit_locks",
     "locks_read",
 ];
+
+/// The columns of a session's row read for its statement's whole text (`now` in microseconds since the Unix epoch, `TIME` in seconds, `maybe_cut` the server may have kept only the start of `INFO`), in order.
+pub const QUERY_TEXT: &[&str] = &["now", "ID", "COMMAND", "TIME", "INFO", "maybe_cut"];
 
 /// The server's error codes that refuse a read for lack of a privilege: 1044 (database), 1142
 /// (table), 1143 (column), 1227 (a privilege such as `PROCESS`).
@@ -400,4 +403,40 @@ pub fn tick(my: &MySqlMonitor, want: &Want, rows: &[Rows], own: Own) -> Result<S
         });
     }
     Ok(Snapshot { sample, gauges, sessions, server, hidden })
+}
+
+/// The row read for the whole text of the statement `ask` names (none: the session has ended).
+/// The server tells how long a statement has run in whole seconds only, so a start worked out
+/// from it lies within a second either side of the true one. The text is taken as that
+/// statement's only when the list saw it running for at least [`TEXT_MIN_AGE_US`] (a later
+/// statement then starts well after the one listed), the session runs one now whose start lies
+/// within [`TEXT_SAME_START_US`] of the listed one's, and it begins as the list showed it. Even
+/// so a statement inside a stored program may share its program's start, so this is likely,
+/// not proven ([`Proof::Likely`]).
+pub fn query_text(ask: &TextAsk, rows: &Rows) -> Result<FullText, DecodeError> {
+    let row = match rows.as_slice() {
+        [] => return Ok(FullText::Gone),
+        [row] => Row::new(row, "query text", QUERY_TEXT)?,
+        _ => return Err(malformed("query text", format!("{} rows, expected at most 1", rows.len()))),
+    };
+    if row.required_int("ID")? != ask.session.id {
+        return Err(malformed("query text", "another session's row"));
+    }
+    let Some(asked) = ask.query_started else { return Ok(FullText::Unknown(None)) };
+    if ask.seen.0 - asked.0 < TEXT_MIN_AGE_US {
+        return Ok(FullText::NotYet);
+    }
+    let now = row.required_time("now")?;
+    let running = matches!(row.required("COMMAND")?, "Query" | "Execute");
+    let apart = row.int("TIME")?.map(|secs| (now.0 - secs.max(0) * 1_000_000 - asked.0).abs());
+    let text = row.string("INFO").filter(|t| t.starts_with(&ask.start));
+    match (running, apart, text) {
+        (true, Some(apart), Some(text)) if apart < TEXT_SAME_START_US => Ok(FullText::Text {
+            text: QueryText { text, shortened: false, maybe_cut_by_server: row.bool("maybe_cut")?.unwrap_or(false) },
+            proof: Proof::Likely,
+        }),
+        // Between the two bounds a start cannot say which.
+        (true, Some(apart), Some(_)) if apart < TEXT_SAME_START_US + 1_000_000 => Ok(FullText::Unknown(None)),
+        _ => Ok(FullText::Moved),
+    }
 }

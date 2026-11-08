@@ -1,5 +1,5 @@
 ---
-source: crates/drivers/mysql/src/meta/monitor.rs
+source: crates/drivers/mysql/src/meta/monitor/tests.rs
 expression: "text.join(\"\\n\")"
 ---
 -- probe
@@ -34,3 +34,6 @@ SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.
 
 -- sessions without idle
 SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, CHAR_LENGTH(p.INFO) > 256 AS shortened, p.ID = CONNECTION_ID() AS monitor, NULL AS trx_started, NULL AS trx_state, NULL AS trx_rows_locked, NULL AS trx_rows_modified, 0 AS trx_read, NULL AS in_tx, NULL AS explicit_locks, 0 AS locks_read FROM performance_schema.processlist p ORDER BY p.ID
+
+-- query text
+SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.COMMAND, p.TIME, p.INFO, OCTET_LENGTH(p.INFO) >= 65532 AS maybe_cut FROM information_schema.PROCESSLIST p WHERE p.ID = 4211

@@ -1,6 +1,6 @@
 use super::*;
 use datarig_core::monitor::Flavour;
-use datarig_core::monitor::decode::pg::{COUNTERS, PROBE, SERVER_INFO, SESSIONS};
+use datarig_core::monitor::decode::pg::{COUNTERS, PROBE, QUERY_TEXT, SERVER_INFO, SESSIONS};
 use std::time::Duration;
 
 fn pg(version: u32) -> PgMonitor {
@@ -19,6 +19,7 @@ fn every(version: u32) -> Vec<(&'static str, String, &'static [&'static str])> {
         ("counters", counters(), COUNTERS),
         ("sessions", sessions(&p, IDLE), SESSIONS),
         ("sessions without idle", sessions(&p, NO_IDLE), SESSIONS),
+        ("query text", query_text(4211), QUERY_TEXT),
     ]
 }
 

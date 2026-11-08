@@ -1,6 +1,6 @@
 use super::*;
 use datarig_core::monitor::Flavour;
-use datarig_core::monitor::decode::mysql::{CLOCK, NAME_VALUE, PROBE, PROBE_LOCKS, SERVER_INFO, SESSIONS};
+use datarig_core::monitor::decode::mysql::{CLOCK, NAME_VALUE, PROBE, PROBE_LOCKS, QUERY_TEXT, SERVER_INFO, SESSIONS};
 use std::time::Duration;
 
 fn my(version: u32, performance_schema: bool, readable: Readable) -> MySqlMonitor {
@@ -31,6 +31,7 @@ fn every(m: &MySqlMonitor) -> Vec<(&'static str, String, &'static [&'static str]
     out.push(("status", c[1].clone(), NAME_VALUE));
     out.push(("sessions", sessions(m, IDLE).remove(0), SESSIONS));
     out.push(("sessions without idle", sessions(m, NO_IDLE).remove(0), SESSIONS));
+    out.push(("query text", query_text(4211), QUERY_TEXT));
     out
 }
 

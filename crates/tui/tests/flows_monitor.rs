@@ -11,9 +11,9 @@ use datarig_core::driver::{DbCommand, DbError, DbEvent, SessionRole};
 use datarig_core::i18n::Lang;
 use datarig_core::monitor::format::{Flavour, PgMonitor};
 use datarig_core::monitor::{
-    Counter, CounterKind, Epoch, Gauge, GaugeKind, Hidden, MonitorFormat, Need, Own, Part, QueryText, Sample,
-    ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState, Snapshot, Timestamp, Tx, Visibility,
-    Wait, WaitClass,
+    Counter, CounterKind, Epoch, FullText, Gauge, GaugeKind, Hidden, MonitorFormat, Need, Own, Part, Proof, QueryText,
+    Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState, Snapshot, TextAsk, Timestamp,
+    Tx, Visibility, Wait, WaitClass,
 };
 use datarig_tui::app::monitor::{MonState, MonitorView};
 use datarig_tui::app::{Focus, TabKind};
@@ -601,4 +601,345 @@ fn reopening_a_closed_monitor_tab_goes_to_the_open_one() {
     h.keys(" tu");
     assert_eq!(monitors(&h), 1, "one Monitor tab per profile");
     assert_eq!(h.app.tab().kind, TabKind::Monitor);
+}
+
+/// The start of session 4211's statement, as the list holds it.
+const START: &str = "UPDATE orders SET status = 'paid' WHERE id = 7";
+
+/// Session 4211's whole statement.
+const WHOLE: &str = "UPDATE orders SET status = 'paid' WHERE id = 7 AND note = 'the rest of the statement'";
+
+/// A read at `secs` of the usual sessions, the list holding only the start of session 4211's
+/// statement, which started at `started` (server time).
+fn long_snapshot(secs: f64, started: Timestamp, server: bool) -> Snapshot {
+    let mut s = snapshot(secs, 1000 + secs as u64, rows(), server);
+    let r = s.sessions.as_mut().unwrap().rows.iter_mut().find(|r| r.key.id == 4211).unwrap();
+    r.query = Some(QueryText { text: START.into(), shortened: true, maybe_cut_by_server: false });
+    r.query_started = Some(started);
+    s
+}
+
+/// The reads of a whole statement that went out since the last look.
+fn text_asks(h: &mut Harness) -> Vec<(u64, TextAsk)> {
+    h.sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::MonitorQueryText { request, ask } => Some((request, ask)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The Sessions view with session 4211 (its statement shortened) selected, details closed.
+fn long_selected() -> Harness {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(long_snapshot(0.0, at(-190.0), true)) });
+    h.keys("2j");
+    assert_eq!(monitor(&h).selected_row().unwrap().key.id, 4211);
+    h
+}
+
+/// [`long_selected`] with the details open: the read of the whole statement sent.
+fn long_details() -> (Harness, u64) {
+    let mut h = long_selected();
+    h.key(KeyCode::Enter);
+    let asks = text_asks(&mut h);
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    (h, asks[0].0)
+}
+
+fn text_answer(h: &mut Harness, request: u64, result: Result<FullText, DbError>) {
+    h.monitor_db(DbEvent::MonitorQueryText { request, result });
+}
+
+fn whole(proof: Proof) -> FullText {
+    FullText::Text { text: QueryText { text: WHOLE.into(), shortened: false, maybe_cut_by_server: false }, proof }
+}
+
+fn transient(h: &Harness) -> Option<datarig_core::i18n::Msg> {
+    h.app.transient.as_ref().map(|(n, _)| n.msg.clone())
+}
+
+#[test]
+fn opening_the_details_of_a_shortened_statement_reads_its_whole_text_once() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(long_snapshot(0.0, at(-190.0), true)) });
+    // The first row's statement is whole in the list: nothing to read.
+    h.keys("2");
+    assert_eq!(monitor(&h).selected_row().unwrap().key.id, 3907);
+    h.key(KeyCode::Enter);
+    assert!(monitor(&h).list.details);
+    assert!(text_asks(&mut h).is_empty(), "the list holds all of it");
+    // The selection moves to the shortened one with the details open: read once.
+    h.keys("j");
+    assert!(text_asks(&mut h).is_empty(), "j scrolls the details");
+    h.key(KeyCode::Esc);
+    h.keys("j");
+    h.key(KeyCode::Enter);
+    let asks = text_asks(&mut h);
+    let key = SessionKey { id: 4211, started: Some(at(-3600.0)) };
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    let ask = TextAsk { session: key, query_started: Some(at(-190.0)), start: START.into(), seen: at(0.0) };
+    assert_eq!(asks[0].1, ask);
+    // Not again: not while it is out, not on the next reads, not when the details open again.
+    assert!(ticks(&mut h).is_empty());
+    h.advance(Duration::from_secs(2));
+    let t = ticks(&mut h);
+    assert_eq!(t.len(), 1);
+    assert!(text_asks(&mut h).is_empty());
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(long_snapshot(2.0, at(-190.0), false)) });
+    h.key(KeyCode::Esc);
+    h.key(KeyCode::Enter);
+    text_answer(&mut h, asks[0].0, Ok(whole(Proof::Same)));
+    h.advance(Duration::from_secs(2));
+    h.key(KeyCode::Esc);
+    h.key(KeyCode::Enter);
+    assert!(text_asks(&mut h).is_empty(), "asked once for this statement");
+    // The tick and the text are numbered apart.
+    assert_ne!(asks[0].0, t[0].0);
+}
+
+#[test]
+fn a_paused_tab_reads_the_whole_statement_the_user_asked_for() {
+    let mut h = long_selected();
+    h.keys("p");
+    h.advance(Duration::from_secs(10));
+    assert!(ticks(&mut h).is_empty());
+    h.key(KeyCode::Enter);
+    let asks = text_asks(&mut h);
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    assert!(ticks(&mut h).is_empty(), "no tick: still paused");
+}
+
+#[test]
+fn the_whole_statement_is_shown_copied_and_opened() {
+    let (mut h, request) = long_details();
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("Reading the whole statement…"), "{screen}");
+    assert!(screen.contains(START) && !screen.contains(WHOLE), "{screen}");
+    text_answer(&mut h, request, Ok(whole(Proof::Same)));
+    let screen = h.screen(120, 40);
+    assert!(screen.contains(WHOLE), "{screen}");
+    assert!(!screen.contains("Reading the whole statement"), "{screen}");
+    assert!(!screen.contains("The list holds the first"), "{screen}");
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.keys("y");
+    assert_eq!(clip.last().as_deref(), Some(WHOLE));
+    h.keys("o");
+    assert_eq!(h.app.tab().kind, TabKind::Console);
+    assert_eq!(h.app.tab().editor.text(), WHOLE);
+    assert_eq!(transient(&h), Some(datarig_core::i18n::Msg::MonitorOpened { database: "shop".into() }));
+}
+
+#[test]
+fn a_statement_read_by_its_start_to_the_second_says_so() {
+    let (mut h, request) = long_details();
+    text_answer(&mut h, request, Ok(whole(Proof::Likely)));
+    let screen = h.screen(160, 40);
+    assert!(screen.contains(WHOLE), "{screen}");
+    assert!(screen.contains("Read again by its session and its start (to the second)"), "{screen}");
+}
+
+#[test]
+fn a_statement_not_read_whole_keeps_its_start_and_says_why() {
+    let cases = [
+        (Ok(FullText::Gone), "The session has ended: only the start of its statement is shown"),
+        (Ok(FullText::Moved), "The session runs another statement now: only the start of the one listed is shown"),
+        (
+            Ok(FullText::Unknown(Some(Need::Grant("pg_read_all_stats")))),
+            "Cannot tell it is the same statement: only its start is shown (needs pg_read_all_stats)",
+        ),
+        (Ok(FullText::Unknown(None)), "Cannot tell it is the same statement: only its start is shown"),
+        (Ok(FullText::NotYet), "The statement had run under 5 seconds when listed: its whole text is read once"),
+        (Err(DbError::Server("permission denied".into())), "Could not read the whole statement: "),
+    ];
+    for (result, note) in cases {
+        let (mut h, request) = long_details();
+        text_answer(&mut h, request, result);
+        let screen = h.screen(160, 40);
+        assert!(screen.contains(note), "{note}: {screen}");
+        assert!(screen.contains(START) && !screen.contains(WHOLE), "{note}: {screen}");
+        assert!(screen.contains("The list holds the first 256 characters of the statement"), "{note}: {screen}");
+        assert!(!screen.contains("Reading the whole statement"), "{note}: {screen}");
+        let clip = FakeClipboard::attach(&mut h, false, &[]);
+        h.keys("y");
+        assert_eq!(clip.last().as_deref(), Some(START), "{note}");
+        h.keys("o");
+        assert_eq!(h.app.tab().editor.text(), START, "{note}");
+        assert_eq!(
+            transient(&h),
+            Some(datarig_core::i18n::Msg::MonitorOpenedCut { database: "shop".into() }),
+            "{note}"
+        );
+    }
+}
+
+#[test]
+fn an_answer_of_another_read_or_an_older_connection_is_dropped() {
+    let (mut h, request) = long_details();
+    // Not the read out.
+    text_answer(&mut h, request + 5, Ok(whole(Proof::Same)));
+    assert!(!h.screen(120, 40).contains(WHOLE));
+    // A tick's number is no text's.
+    h.monitor_db(DbEvent::MonitorSnapshot { request, result: Ok(long_snapshot(1.0, at(-190.0), false)) });
+    assert!(monitor(&h).text.as_ref().unwrap().answer.is_none());
+    // The connection is lost: the read is forgotten, asked again on the new connection.
+    let old = monitor(&h).generation;
+    h.monitor_db(DbEvent::Lost { error: DbError::Connection(datarig_core::fault::Fault::other("reset")) });
+    assert!(monitor(&h).text.is_none());
+    h.advance(Duration::from_secs(3));
+    h.monitor_db(DbEvent::Connected);
+    h.monitor_db(DbEvent::Monitor(Ok(pg_format())));
+    let asks = text_asks(&mut h);
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    let id = h.app.tab().id;
+    for (generation, request) in [(old, asks[0].0), (monitor(&h).generation, request)] {
+        h.app.on_app_event(datarig_tui::app::AppEvent::Db {
+            target: datarig_tui::app::EventTarget::Monitor(id),
+            generation,
+            ev: DbEvent::MonitorQueryText { request, result: Ok(whole(Proof::Same)) },
+        });
+        assert!(!h.screen(120, 40).contains(WHOLE), "generation {generation}, request {request}");
+    }
+    text_answer(&mut h, asks[0].0, Ok(whole(Proof::Same)));
+    assert!(h.screen(120, 40).contains(WHOLE));
+}
+
+#[test]
+fn the_whole_text_is_not_shown_once_the_session_runs_another_statement() {
+    let (mut h, request) = long_details();
+    text_answer(&mut h, request, Ok(whole(Proof::Same)));
+    assert!(h.screen(120, 40).contains(WHOLE));
+    h.advance(Duration::from_secs(2));
+    let t = ticks(&mut h);
+    // The same session, a statement with the same start that started later.
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(long_snapshot(2.0, at(1.0), false)) });
+    let screen = h.screen(120, 40);
+    assert!(!screen.contains(WHOLE), "{screen}");
+    assert!(screen.contains(START), "{screen}");
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.keys("y");
+    assert_eq!(clip.last().as_deref(), Some(START));
+    // That statement's own text is read.
+    let asks = text_asks(&mut h);
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    assert_eq!(asks[0].1.query_started, Some(at(1.0)));
+}
+
+#[test]
+fn one_read_of_a_whole_statement_at_a_time() {
+    let (mut h, request) = long_details();
+    h.advance(Duration::from_secs(2));
+    let t = ticks(&mut h);
+    // Another statement of the session listed while the first read has not answered: not asked
+    // for yet, so reads never pile up ahead of the ticks.
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(long_snapshot(2.0, at(1.0), false)) });
+    assert_eq!(text_asks(&mut h), []);
+    // The first read answers: the statement selected now is asked for, once.
+    text_answer(&mut h, request, Ok(FullText::Moved));
+    let asks = text_asks(&mut h);
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    assert_eq!(asks[0].1.query_started, Some(at(1.0)));
+    assert!(!h.screen(120, 40).contains(WHOLE));
+}
+
+#[test]
+fn screens_of_the_whole_statement_80x24_and_120x40() {
+    let (mut h, request) = long_details();
+    text_answer(&mut h, request, Ok(whole(Proof::Likely)));
+    insta::assert_snapshot!("monitor_details_whole_120x40", h.screen(120, 40));
+    insta::assert_snapshot!("monitor_details_whole_80x24", h.screen(80, 24));
+}
+
+fn mysql_format() -> MonitorFormat {
+    use datarig_core::monitor::format::{MySqlMonitor, Readable};
+    MonitorFormat::MySql(MySqlMonitor {
+        version: 80411,
+        performance_schema: true,
+        user: "root".into(),
+        process: Readable::Yes,
+        innodb_trx: Readable::Yes,
+        metadata_locks: Readable::Yes,
+        flavour: Flavour::Standard,
+    })
+}
+
+/// A MySQL monitor (whole-second starts) with session 4211 selected and its details open, the
+/// list read at `secs` with the statement started at `started`: the read of its whole text sent.
+fn mysql_details(secs: f64, started: Timestamp) -> (Harness, u64) {
+    let mut h = Harness::connected(Lang::En);
+    h.driver.monitor.store(true, Ordering::SeqCst);
+    h.command("monitor");
+    h.monitor_db(DbEvent::Connected);
+    h.monitor_db(DbEvent::Monitor(Ok(mysql_format())));
+    let t = ticks(&mut h);
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(long_snapshot(secs, started, true)) });
+    h.keys("2j");
+    h.key(KeyCode::Enter);
+    let asks = text_asks(&mut h);
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    (h, asks[0].0)
+}
+
+/// The next tick, its list read at `secs` with session 4211's statement started at `started`.
+fn next_tick(h: &mut Harness, secs: f64, started: Timestamp) {
+    h.advance(Duration::from_secs(2));
+    let t = ticks(h);
+    assert_eq!(t.len(), 1);
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(long_snapshot(secs, started, false)) });
+}
+
+#[test]
+fn a_mysql_start_that_moves_within_a_second_keeps_the_whole_text_and_reads_it_once() {
+    let (mut h, request) = mysql_details(0.0, at(-190.0));
+    text_answer(&mut h, request, Ok(whole(Proof::Likely)));
+    assert!(h.screen(160, 40).contains(WHOLE));
+    // The start worked out from whole seconds moves a little from one read to the next.
+    for (n, started) in [at(-189.2), at(-190.7), at(-189.9)].into_iter().enumerate() {
+        next_tick(&mut h, 2.0 * (n + 1) as f64, started);
+        assert!(text_asks(&mut h).is_empty(), "read {n}: not asked again");
+        assert!(h.screen(160, 40).contains(WHOLE), "read {n}: still shown");
+    }
+    // Two seconds or more apart: another statement.
+    next_tick(&mut h, 8.0, at(-187.0));
+    assert!(!h.screen(160, 40).contains(WHOLE));
+    assert_eq!(text_asks(&mut h).len(), 1);
+}
+
+#[test]
+fn a_statement_too_young_to_tell_apart_is_read_again_once_it_has_run_longer() {
+    // Listed after 2 s.
+    let (mut h, request) = mysql_details(0.0, at(-2.0));
+    text_answer(&mut h, request, Ok(FullText::NotYet));
+    let screen = h.screen(160, 40);
+    assert!(screen.contains("The statement had run under 5 seconds when listed"), "{screen}");
+    assert!(screen.contains(START) && !screen.contains(WHOLE), "{screen}");
+    // Listed after 4 s: still too young, not asked again.
+    next_tick(&mut h, 2.0, at(-2.0));
+    assert!(text_asks(&mut h).is_empty());
+    // Listed after 6 s: asked again, once.
+    next_tick(&mut h, 4.0, at(-2.0));
+    let asks = text_asks(&mut h);
+    assert_eq!(asks.len(), 1, "{asks:?}");
+    assert_eq!(asks[0].1.seen, at(4.0));
+    next_tick(&mut h, 6.0, at(-2.0));
+    assert!(text_asks(&mut h).is_empty(), "once");
+    text_answer(&mut h, asks[0].0, Ok(whole(Proof::Likely)));
+    assert!(h.screen(160, 40).contains(WHOLE));
+}
+
+#[test]
+fn a_statement_the_server_may_have_cut_says_so_and_opens_with_the_cut_note() {
+    let (mut h, request) = mysql_details(0.0, at(-190.0));
+    let cut = FullText::Text {
+        text: QueryText { text: WHOLE.into(), shortened: false, maybe_cut_by_server: true },
+        proof: Proof::Likely,
+    };
+    text_answer(&mut h, request, Ok(cut));
+    let screen = h.screen(160, 40);
+    assert!(screen.contains(WHOLE), "{screen}");
+    assert!(screen.contains("The server may have cut this statement where it keeps it"), "{screen}");
+    h.keys("o");
+    assert_eq!(h.app.tab().editor.text(), WHOLE);
+    assert_eq!(transient(&h), Some(datarig_core::i18n::Msg::MonitorOpenedCut { database: "shop".into() }));
 }

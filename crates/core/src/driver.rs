@@ -80,7 +80,7 @@ pub struct Capabilities {
     /// once connected ([`DbEvent::Edit`]).
     pub edit: Option<EditFormat>,
     /// Server monitoring: the driver opens [`SessionRole::Monitor`] sessions, which answer
-    /// [`DbCommand::MonitorTick`]; what the server offers comes after connecting
+    /// [`DbCommand::MonitorTick`] and [`DbCommand::MonitorQueryText`]; what the server offers comes after connecting
     /// ([`DbEvent::Monitor`]).
     pub monitor: bool,
 }
@@ -154,7 +154,7 @@ pub enum SessionRole {
     Meta,
     /// User statements of one tab: `Execute`, `FetchMore`, cancel. One per tab.
     Query,
-    /// The server monitor of a profile: `MonitorTick` only, every read in a read-only
+    /// The server monitor of a profile: `MonitorTick` and `MonitorQueryText` only, every read in a read-only
     /// transaction of its own with short limits, so it never disturbs or waits on the other
     /// sessions, and nothing the user typed is ever sent on it. It starts with a probe of what
     /// the server offers ([`DbEvent::Monitor`]); no start-up statements, no session settings.

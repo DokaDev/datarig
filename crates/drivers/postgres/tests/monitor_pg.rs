@@ -12,8 +12,8 @@ mod pg_clean;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbError, DbEvent, Driver, Session, SessionRole};
 use datarig_core::driver::{PagingMode, TxRule};
 use datarig_core::monitor::{
-    Blocker, GaugeKind, Hidden, MonitorFormat, Need, Part, PgMonitor, SessionRow, SessionState, SessionsWanted,
-    Snapshot, Tx, Visibility, Want,
+    Blocker, FullText, GaugeKind, Hidden, MonitorFormat, Need, Part, PgMonitor, Proof, QUERY_CHARS, SessionKey,
+    SessionRow, SessionState, SessionsWanted, Snapshot, TextAsk, Timestamp, Tx, Visibility, Want,
 };
 use datarig_core::profile::ConnectionConfig;
 use datarig_driver_postgres::PgDriver;
@@ -109,6 +109,22 @@ impl Conn {
         self.session.send(DbCommand::MonitorTick { request, want });
         match self.wait(|e| matches!(e, DbEvent::MonitorSnapshot { request: r, .. } if *r == request), 30).await {
             DbEvent::MonitorSnapshot { result, .. } => result,
+            _ => unreachable!(),
+        }
+    }
+
+    /// The whole text of the statement `row` shows.
+    async fn text(&mut self, row: &SessionRow, seen: Timestamp) -> Result<FullText, DbError> {
+        let start = row.query.as_ref().map(|q| q.text.clone()).unwrap_or_default();
+        self.ask(TextAsk { session: row.key, query_started: row.query_started, start, seen }).await
+    }
+
+    async fn ask(&mut self, ask: TextAsk) -> Result<FullText, DbError> {
+        self.next += 1;
+        let request = self.next;
+        self.session.send(DbCommand::MonitorQueryText { request, ask });
+        match self.wait(|e| matches!(e, DbEvent::MonitorQueryText { request: r, .. } if *r == request), 30).await {
+            DbEvent::MonitorQueryText { result, .. } => result,
             _ => unreachable!(),
         }
     }
@@ -226,6 +242,59 @@ async fn sessions_show_who_waits_for_whom() {
     waiter.answer(waiting).await.expect("the waiter goes on once the holder is gone");
 }
 
+/// A statement longer than the list holds is read whole, by its session and its start: only
+/// while that session runs that statement; afterwards the read says it runs another one, and
+/// once the session has ended, that it is gone. Each read is one of the monitor's own
+/// transactions.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_statements_whole_text_is_read_only_while_it_runs() {
+    let Some(url) = pg_url("a_statements_whole_text_is_read_only_while_it_runs") else { return };
+    let pid = std::process::id();
+    let tag = format!("mont{pid}");
+    let mut runner = Conn::open(&url, SessionRole::Query, &format!("{tag}r")).await;
+    let pad = "x".repeat(QUERY_CHARS);
+    let sql = format!("SELECT pg_sleep(2), '{pad}' AS pad /* the end {pid} */");
+    let running = runner.send(&sql);
+    let (mut monitor, _) = Conn::monitor(&url, &tag).await;
+    let app = format!("datarig-q-{tag}r");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (row, seen) = loop {
+        let s = monitor.tick(TICK).await.expect("tick");
+        let row = session_of(&s, &app).clone();
+        if row.query.as_ref().is_some_and(|q| q.text.starts_with("SELECT pg_sleep(2)")) || Instant::now() > deadline {
+            break (row, s.sessions.as_ref().expect("sessions were asked for").time);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let shown = row.query.clone().expect("the statement is listed");
+    assert!(shown.shortened && shown.text.chars().count() == QUERY_CHARS, "{shown:?}");
+    let before = monitor.tick(Want { sessions: None, server: false, ..TICK }).await.expect("tick").sample.own;
+    match monitor.text(&row, seen).await.expect("read") {
+        FullText::Text { text, proof } => {
+            assert_eq!(
+                (text.text.as_str(), text.shortened, text.maybe_cut_by_server, proof),
+                (sql.as_str(), false, false, Proof::Same)
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    let after = monitor.tick(Want { sessions: None, server: false, ..TICK }).await.expect("tick").sample.own;
+    assert_eq!(after.transactions, before.transactions + 2, "the text read and the tick, nothing else");
+
+    runner.answer(running).await.expect("the statement ends");
+    runner.run("SELECT 1").await;
+    assert_eq!(monitor.text(&row, seen).await, Ok(FullText::Moved), "another statement now");
+    drop(runner);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match monitor.text(&row, seen).await.expect("read") {
+            FullText::Gone => break,
+            other => assert!(Instant::now() < deadline, "still {other:?}"),
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// A tick never waits for a lock: a table held in `ACCESS EXCLUSIVE` mode by another session
 /// does not slow it down. A statement over its limit fails the tick alone; the next one reads.
 #[tokio::test(flavor = "multi_thread")]
@@ -332,6 +401,14 @@ async fn other_sessions_answer_a_tick_not_supported() {
     let mut query = Conn::open(&url, SessionRole::Query, &format!("monq{pid}")).await;
     assert_eq!(query.tick(TICK).await, Err(DbError::NotSupported));
     assert_eq!(query.one("SELECT 1").await, "1", "and goes on");
+    let ask = TextAsk {
+        session: SessionKey { id: 1, started: None },
+        query_started: None,
+        start: String::new(),
+        seen: Timestamp(0),
+    };
+    assert_eq!(query.ask(ask.clone()).await, Err(DbError::NotSupported));
     let mut meta = Conn::open(&url, SessionRole::Meta, &format!("monm{pid}")).await;
     assert_eq!(meta.tick(TICK).await, Err(DbError::NotSupported));
+    assert_eq!(meta.ask(ask).await, Err(DbError::NotSupported));
 }

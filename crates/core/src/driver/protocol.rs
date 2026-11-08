@@ -579,6 +579,14 @@ pub enum DbCommand {
         request: u64,
         want: crate::monitor::Want,
     },
+    /// The whole text of the statement `ask` names, read by a monitor session in one read of
+    /// its own (the list holds only its start): given only while that session still runs that
+    /// statement. Answered with [`DbEvent::MonitorQueryText`] of the same `request`; other
+    /// sessions answer it with [`DbError::NotSupported`].
+    MonitorQueryText {
+        request: u64,
+        ask: crate::monitor::TextAsk,
+    },
 }
 
 /// How [`DbCommand::ApplyEdits`] stands to a transaction when no block is open.
@@ -697,6 +705,9 @@ impl DbCommand {
             }
             DbCommand::MonitorTick { request, .. } => {
                 DbEvent::MonitorSnapshot { request: *request, result: Err(error) }
+            }
+            DbCommand::MonitorQueryText { request, .. } => {
+                DbEvent::MonitorQueryText { request: *request, result: Err(error) }
             }
         }
     }
@@ -1152,5 +1163,10 @@ pub enum DbEvent {
     MonitorSnapshot {
         request: u64,
         result: Result<crate::monitor::Snapshot, DbError>,
+    },
+    /// The answer to [`DbCommand::MonitorQueryText`] `request`.
+    MonitorQueryText {
+        request: u64,
+        result: Result<crate::monitor::FullText, DbError>,
     },
 }

@@ -9,8 +9,8 @@
 use datarig_core::driver::TxRule;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbError, DbEvent, Driver, PagingMode, Session, SessionRole};
 use datarig_core::monitor::{
-    Hidden, MonitorFormat, MySqlMonitor, Need, Part, Readable, SessionRow, SessionState, SessionsWanted, Snapshot, Tx,
-    Wait, WaitClass, Want,
+    FullText, Hidden, MonitorFormat, MySqlMonitor, Need, Part, Proof, QUERY_CHARS, Readable, SessionKey, SessionRow,
+    SessionState, SessionsWanted, Snapshot, TEXT_MIN_AGE_US, TextAsk, Timestamp, Tx, Wait, WaitClass, Want,
 };
 use datarig_core::profile::ConnectionConfig;
 use datarig_driver_mysql::MyDriver;
@@ -104,6 +104,22 @@ impl Conn {
         self.session.send(DbCommand::MonitorTick { request, want });
         match self.wait(|e| matches!(e, DbEvent::MonitorSnapshot { request: r, .. } if *r == request), 30).await {
             DbEvent::MonitorSnapshot { result, .. } => result,
+            _ => unreachable!(),
+        }
+    }
+
+    /// The whole text of the statement `row` shows.
+    async fn text(&mut self, row: &SessionRow, seen: Timestamp) -> Result<FullText, DbError> {
+        let start = row.query.as_ref().map(|q| q.text.clone()).unwrap_or_default();
+        self.ask(TextAsk { session: row.key, query_started: row.query_started, start, seen }).await
+    }
+
+    async fn ask(&mut self, ask: TextAsk) -> Result<FullText, DbError> {
+        self.next += 1;
+        let request = self.next;
+        self.session.send(DbCommand::MonitorQueryText { request, ask });
+        match self.wait(|e| matches!(e, DbEvent::MonitorQueryText { request: r, .. } if *r == request), 30).await {
+            DbEvent::MonitorQueryText { result, .. } => result,
             _ => unreachable!(),
         }
     }
@@ -321,6 +337,64 @@ async fn what_an_account_cannot_see_names_the_privilege() {
     assert!(monitor.tick(TICK).await.expect("tick").hidden.is_empty());
 }
 
+/// A statement longer than the list holds is read whole while its session runs it (likely the
+/// same: the server tells its start in seconds); afterwards the read says the session runs
+/// another statement or none, and once the session has ended, that it is gone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_statements_whole_text_is_read_only_while_it_runs() {
+    let Some((url, _)) = urls("a_statements_whole_text_is_read_only_while_it_runs") else { return };
+    let pid = std::process::id();
+    let tag = format!("mont{pid}");
+    let mut runner = Conn::open(&url, SessionRole::Query, &format!("{tag}r")).await;
+    let marker = format!("t{pid}");
+    let pad = "x".repeat(QUERY_CHARS);
+    let sql = format!("SELECT '{marker}' AS m, SLEEP(9) AS s, '{pad}' AS pad, 'the end' AS e");
+    let running = runner.send(&sql);
+    let (mut monitor, _) = Conn::monitor(&url, &tag).await;
+    // Listed young, it cannot be told apart from a later run yet; listed after five seconds, it
+    // can.
+    let mut young = false;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let (row, seen) = loop {
+        let s = monitor.tick(TICK).await.expect("tick");
+        let list = s.sessions.as_ref().expect("sessions were asked for");
+        let found = list.rows.iter().find(|r| r.query.as_ref().is_some_and(|q| q.text.contains(&marker))).cloned();
+        if let Some(row) = found {
+            let age = row.query_started.map(|q| list.time.0 - q.0).unwrap_or(0);
+            if age >= TEXT_MIN_AGE_US + 1_000_000 {
+                break (row, list.time);
+            }
+            if age < TEXT_MIN_AGE_US - 1_000_000 && !young {
+                assert_eq!(monitor.text(&row, list.time).await, Ok(FullText::NotYet));
+                young = true;
+            }
+        }
+        assert!(Instant::now() < deadline, "the statement is not listed long enough: {:?}", list.rows);
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    };
+    assert!(young, "seen young first");
+    let shown = row.query.clone().expect("the statement is listed");
+    assert!(shown.shortened && shown.text.chars().count() == QUERY_CHARS, "{shown:?}");
+    match monitor.text(&row, seen).await.expect("read") {
+        FullText::Text { text, proof } => {
+            assert_eq!((text.text.as_str(), text.shortened, proof), (sql.as_str(), false, Proof::Likely));
+        }
+        other => panic!("{other:?}"),
+    }
+
+    runner.answer(running).await.expect("the statement ends");
+    assert_eq!(monitor.text(&row, seen).await, Ok(FullText::Moved), "no statement now");
+    drop(runner);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match monitor.text(&row, seen).await.expect("read") {
+            FullText::Gone => break,
+            other => assert!(Instant::now() < deadline, "still {other:?}"),
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// The monitor session runs nothing but its own reads, and the other sessions answer a tick
 /// sent to them, so nothing waits for it.
 #[tokio::test(flavor = "multi_thread")]
@@ -334,6 +408,14 @@ async fn only_the_monitor_session_reads_ticks() {
     let mut query = Conn::open(&url, SessionRole::Query, &format!("monq{pid}")).await;
     assert_eq!(query.tick(TICK).await, Err(DbError::NotSupported));
     query.run("SELECT 1").await;
+    let ask = TextAsk {
+        session: SessionKey { id: 1, started: None },
+        query_started: None,
+        start: String::new(),
+        seen: Timestamp(0),
+    };
+    assert_eq!(query.ask(ask.clone()).await, Err(DbError::NotSupported));
     let mut meta = Conn::open(&url, SessionRole::Meta, &format!("monm{pid}")).await;
     assert_eq!(meta.tick(TICK).await, Err(DbError::NotSupported));
+    assert_eq!(meta.ask(ask).await, Err(DbError::NotSupported));
 }
