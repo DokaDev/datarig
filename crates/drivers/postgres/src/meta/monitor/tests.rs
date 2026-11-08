@@ -198,8 +198,13 @@ async fn the_lock_read_asks_nothing_of_the_lock_manager_while_no_session_waits()
             .simple_query("SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock')::text")
             .await
             .expect("waits"),
-    let plan =
-        text(client.simple_query(&format!("EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF) {}", locks(&pg(170011)))).await.expect("explain"));
+    );
+    let plan = text(
+        client
+            .simple_query(&format!("EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF) {}", locks(&pg(170011))))
+            .await
+            .expect("explain"),
+    );
     client.batch_execute("COMMIT").await.expect("commit");
     if waits != ["false"] {
         eprintln!("a session waits for a lock now: nothing to check");

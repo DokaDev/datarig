@@ -60,6 +60,39 @@ running it (the other session's search path and settings are not known, and the 
 so). `y` copies it. Both take the whole text once the details have read it, else the start and
 a note that it is only the start.
 
+## Locks
+
+`3` shows who waits for whom as a tree: each session or transaction on one line, under the one
+it waits for, the roots (those that wait for nobody) first, the one with the most sessions
+behind it at the top. A waiter's line says what it waits for (the lock mode and what it is
+on: a table, a row, a transaction) and since when; a root's says what it holds and how long
+its transaction has been open. A session waiting for more than one says which others it also
+waits for. `j`/`k` or a click select a line, the selected line is shown in full below the tree
+when it is longer than the screen, `b` goes to the root blocker of the selected wait, `Enter`
+shows the session in full, and `o` and `y` take its statement as in the Sessions view.
+
+The tree comes from what the server says:
+
+- PostgreSQL names each waiter's blockers (`pg_blocking_pids`), asked for the 50 longest waits
+  only; when more sessions wait, the view says how many are left out. What each waits for and
+  what its blockers hold come from `pg_locks`, read only while the Locks view is shown and at
+  most every 5 seconds (or every interval when it is longer), and not at all while no session
+  waits: each read asks the server's lock manager for all its locks. The view says when that
+  was last read.
+- A prepared transaction (`PREPARE TRANSACTION`) holds its locks with no session: it is a root
+  of its own, with its id, owner, database and age. Only `COMMIT PREPARED` or `ROLLBACK
+  PREPARED` with its id ends it; the monitor does not offer them.
+- MySQL names the blockers of row lock waits (`performance_schema.data_lock_waits`). For
+  metadata locks (an `ALTER TABLE` waiting for a long transaction, `FLUSH TABLES WITH READ
+  LOCK`) it does not: the tree shows the sessions holding a lock on the same object that the
+  request cannot be granted beside, as the server's lock manager decides it, and says that
+  they may block it. With more than one such holder, `b` does not pick one. A request waiting
+  behind another request rather than a granted lock is shown waiting, its holder not found.
+  Both lock tables are read only while the Locks view is shown, at most every 5 seconds, and
+  only when a session may be waiting for a lock.
+- A wait in a cycle (a deadlock the server has not broken yet) is shown once, from its
+  smallest session, and marked.
+
 ## What the account sees
 
 What the account may not see is said in the tab, with what would show it, never shown as
@@ -67,7 +100,9 @@ nothing:
 
 | Server | Without | The tab shows |
 |---|---|---|
-| PostgreSQL | `pg_read_all_stats` (or superuser) | other roles' sessions without their state, statement and times |
+| PostgreSQL | `pg_read_all_stats` (or superuser) | other roles' sessions without their state, statement and times, and their lock waits out of the Locks view |
 | MySQL | `PROCESS` | only the account's own sessions |
 | MySQL | `PROCESS`, `SELECT` on `performance_schema`, or the metadata lock instrument (`wait/lock/metadata/sql/mdl`) | an idle session as `idle ?`: whether it holds a transaction open is not known |
 | MySQL | enough `performance_schema` thread slots (`performance_schema_max_thread_instances`) | that the list may miss sessions |
+| MySQL | `SELECT` on `performance_schema` | the Locks view without who blocks a row lock wait, and without metadata lock waits |
+| MySQL | the metadata lock instrument (`wait/lock/metadata/sql/mdl`) | the Locks view without metadata lock waits |

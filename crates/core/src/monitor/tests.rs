@@ -917,13 +917,19 @@ fn postgres_lock_waits_read_with_what_is_held_on_them() {
     );
     assert!(alter.holders.iter().all(|h| h.blame == Blame::Holds && !h.waiting));
     let row = locks.waits_of(96457).next().unwrap();
-    assert_eq!((row.object.kind.as_str(), row.object.detail.as_deref(), row.mode.as_str()), ("transactionid", Some("736"), "ShareLock"));
+    assert_eq!(
+        (row.object.kind.as_str(), row.object.detail.as_deref(), row.mode.as_str()),
+        ("transactionid", Some("736"), "ShareLock")
+    );
     // The prepared transaction is named by its transaction id lock.
     let insert = locks.waits_of(97035).next().unwrap();
     match &insert.holders[..] {
         [h] => match &h.holder {
             Holder::Prepared(Some(p)) => {
-                assert_eq!((p.gid.as_str(), p.owner.as_deref(), p.database.as_deref()), ("zz_mon_gid", Some("datarig"), Some("datarig")));
+                assert_eq!(
+                    (p.gid.as_str(), p.owner.as_deref(), p.database.as_deref()),
+                    ("zz_mon_gid", Some("datarig"), Some("datarig"))
+                );
                 assert!(p.since.is_some());
             }
             other => panic!("{other:?}"),
@@ -1014,16 +1020,85 @@ fn mysql_lock_answers() -> Vec<Answer> {
     let s = Some;
     let n = None;
     let rows = vec![
-        cells(&[s("7"), s("5"), s("1001"), s("shop"), s("orders"), s("PRIMARY"), s("RECORD"), s("X,REC_NOT_GAP"), s("42"), s("X,REC_NOT_GAP"), s("GRANTED")]),
-        cells(&[s("8"), n, s("4242"), s("shop"), s("items"), s("PRIMARY"), s("RECORD"), s("X"), s("7"), s("X"), s("GRANTED")]),
+        cells(&[
+            s("7"),
+            s("5"),
+            s("1001"),
+            s("shop"),
+            s("orders"),
+            s("PRIMARY"),
+            s("RECORD"),
+            s("X,REC_NOT_GAP"),
+            s("42"),
+            s("X,REC_NOT_GAP"),
+            s("GRANTED"),
+        ]),
+        cells(&[
+            s("8"),
+            n,
+            s("4242"),
+            s("shop"),
+            s("items"),
+            s("PRIMARY"),
+            s("RECORD"),
+            s("X"),
+            s("7"),
+            s("X"),
+            s("GRANTED"),
+        ]),
     ];
     let mdl = vec![
         cells(&[s("9"), s("109"), s("TABLE"), s("shop"), s("orders"), s("EXCLUSIVE"), s("TRANSACTION"), s("PENDING")]),
-        cells(&[s("10"), s("110"), s("TABLE"), s("shop"), s("orders"), s("SHARED_READ"), s("TRANSACTION"), s("PENDING")]),
-        cells(&[s("5"), s("105"), s("TABLE"), s("shop"), s("orders"), s("SHARED_READ"), s("TRANSACTION"), s("GRANTED")]),
-        cells(&[s("6"), s("106"), s("TABLE"), s("shop"), s("orders"), s("SHARED_READ"), s("TRANSACTION"), s("GRANTED")]),
-        cells(&[s("9"), s("109"), s("TABLE"), s("shop"), s("orders"), s("SHARED_UPGRADABLE"), s("TRANSACTION"), s("GRANTED")]),
-        cells(&[s("11"), s("111"), s("TABLE"), s("shop"), s("items"), s("SHARED_WRITE"), s("TRANSACTION"), s("GRANTED")]),
+        cells(&[
+            s("10"),
+            s("110"),
+            s("TABLE"),
+            s("shop"),
+            s("orders"),
+            s("SHARED_READ"),
+            s("TRANSACTION"),
+            s("PENDING"),
+        ]),
+        cells(&[
+            s("5"),
+            s("105"),
+            s("TABLE"),
+            s("shop"),
+            s("orders"),
+            s("SHARED_READ"),
+            s("TRANSACTION"),
+            s("GRANTED"),
+        ]),
+        cells(&[
+            s("6"),
+            s("106"),
+            s("TABLE"),
+            s("shop"),
+            s("orders"),
+            s("SHARED_READ"),
+            s("TRANSACTION"),
+            s("GRANTED"),
+        ]),
+        cells(&[
+            s("9"),
+            s("109"),
+            s("TABLE"),
+            s("shop"),
+            s("orders"),
+            s("SHARED_UPGRADABLE"),
+            s("TRANSACTION"),
+            s("GRANTED"),
+        ]),
+        cells(&[
+            s("11"),
+            s("111"),
+            s("TABLE"),
+            s("shop"),
+            s("items"),
+            s("SHARED_WRITE"),
+            s("TRANSACTION"),
+            s("GRANTED"),
+        ]),
     ];
     vec![Answer::Rows(rows), Answer::Rows(mdl)]
 }
@@ -1034,7 +1109,10 @@ fn mysql_row_lock_waits_name_their_blockers_and_metadata_locks_their_incompatibl
     let (locks, hidden) = decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).unwrap();
     assert!(hidden.is_empty() && locks.blocks);
     let row = locks.waits_of(7).next().unwrap();
-    assert_eq!((row.object.kind.as_str(), row.object.name.as_deref(), row.object.detail.as_deref()), ("RECORD", Some("shop.orders"), Some("PRIMARY 42")));
+    assert_eq!(
+        (row.object.kind.as_str(), row.object.name.as_deref(), row.object.detail.as_deref()),
+        ("RECORD", Some("shop.orders"), Some("PRIMARY 42"))
+    );
     assert_eq!((row.holders[0].holder.clone(), row.holders[0].blame), (Holder::Session(5), Blame::Proven));
     let xa = locks.waits_of(8).next().unwrap();
     assert_eq!(xa.holders[0].holder, Holder::Transaction("4242".into()));
@@ -1067,7 +1145,12 @@ fn mysql_row_lock_waits_name_their_blockers_and_metadata_locks_their_incompatibl
 fn mysql_lock_reads_refused_or_off_say_what_would_show_them() {
     let my = mysql_root();
     let refused = Answer::Error { code: Some(1142), message: "SELECT command denied".into() };
-    let (locks, hidden) = decode::mysql::locks(&[refused], &MySqlMonitor { metadata_locks: Readable::Refused, ..my.clone() }, Timestamp(1)).unwrap();
+    let (locks, hidden) = decode::mysql::locks(
+        &[refused],
+        &MySqlMonitor { metadata_locks: Readable::Refused, ..my.clone() },
+        Timestamp(1),
+    )
+    .unwrap();
     assert!(locks.waits.is_empty());
     assert_eq!(
         hidden,
@@ -1076,7 +1159,12 @@ fn mysql_lock_reads_refused_or_off_say_what_would_show_them() {
             Hidden { part: Part::MetadataLockWaits, need: Need::Grant("SELECT on performance_schema") },
         ]
     );
-    let (_, hidden) = decode::mysql::locks(&[Answer::Rows(Vec::new())], &MySqlMonitor { metadata_locks: Readable::Unknown, ..my.clone() }, Timestamp(1)).unwrap();
+    let (_, hidden) = decode::mysql::locks(
+        &[Answer::Rows(Vec::new())],
+        &MySqlMonitor { metadata_locks: Readable::Unknown, ..my.clone() },
+        Timestamp(1),
+    )
+    .unwrap();
     assert_eq!(hidden, [Hidden { part: Part::MetadataLockWaits, need: Need::Setting("wait/lock/metadata/sql/mdl") }]);
     // Another failure is not an empty list.
     let failed = Answer::Error { code: Some(3024), message: "maximum statement execution time exceeded".into() };

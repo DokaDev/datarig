@@ -366,10 +366,12 @@ async fn sessions_show_row_and_metadata_lock_waits() {
     assert!(row_wait.holders.iter().any(|x| x.holder == Holder::Session(h) && x.blame == Blame::Proven));
     let mdl = lock_list.waits_of(a).find(|x| x.object.kind == "TABLE").unwrap_or_else(|| panic!("{lock_list:?}"));
     assert_eq!(mdl.mode, "EXCLUSIVE");
-    let holders: Vec<&Holder> = mdl.holders.iter().filter(|x| x.blame == Blame::Incompatible).map(|x| &x.holder).collect();
+    let holders: Vec<&Holder> =
+        mdl.holders.iter().filter(|x| x.blame == Blame::Incompatible).map(|x| &x.holder).collect();
     assert!(holders.contains(&&Holder::Session(h)) && holders.contains(&&Holder::Session(w)), "{mdl:?}");
     let tree = Tree::build(&locks::edges(locked.sessions.as_ref(), Some(lock_list), true));
-    let line = |id: i64| tree.lines.iter().find(|l| l.node == Holder::Session(id)).unwrap_or_else(|| panic!("{tree:?}"));
+    let line =
+        |id: i64| tree.lines.iter().find(|l| l.node == Holder::Session(id)).unwrap_or_else(|| panic!("{tree:?}"));
     assert_eq!(line(h).depth, 0);
     assert!(line(w).depth >= 1 && line(a).depth >= 1, "{tree:?}");
 

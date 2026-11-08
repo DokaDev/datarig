@@ -3,13 +3,13 @@
 use super::{DecodeError, Row, Rows, malformed, one};
 use crate::monitor::action::StatementStamp;
 use crate::monitor::format::{self, PG_MARKERS, PG_MIN_VERSION, PgMonitor, Probe, Route};
+use crate::monitor::locks::{Blame, Holder, LockHolder, LockList, LockObject, LockWait, Prepared};
 use crate::monitor::model::SessionsWanted;
 use crate::monitor::model::{
     Blocker, Counter, CounterKind, Epoch, Extra, ExtraKey, FullText, Gauge, GaugeKind, Hidden, Need, Own, Part, Proof,
     QueryText, Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState, Tx, Visibility,
     Wait, WaitClass,
 };
-use crate::monitor::locks::{Blame, Holder, LockHolder, LockList, LockObject, LockWait, Prepared};
 use crate::monitor::model::{Snapshot, TextAsk, Timestamp, Want};
 
 /// The columns of the probe's row: version, the account's privileges, the provider markers found (comma separated), in order.
@@ -351,8 +351,7 @@ pub fn locks(rows: &Rows, time: Timestamp) -> Result<LockList, DecodeError> {
 /// The rows of a tick's statements (the counters, then the sessions, the locks and the server
 /// when wanted), with the monitor's own traffic as it stood when the counters were read.
 pub fn tick(want: &Want, rows: &[Rows], own: Own) -> Result<Snapshot, DecodeError> {
-    let expected =
-        1 + usize::from(want.sessions.is_some()) + usize::from(want.locks) + usize::from(want.server);
+    let expected = 1 + usize::from(want.sessions.is_some()) + usize::from(want.locks) + usize::from(want.server);
     if rows.len() != expected {
         return Err(malformed("tick", format!("{} statements, expected {expected}", rows.len())));
     }

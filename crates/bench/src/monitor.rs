@@ -1,6 +1,7 @@
 //! The Monitor tab of a busy server: 5,000 sessions (none idle: every one is listed), a new read
 //! every tenth frame, at 160x45 while the selection moves, in the Sessions view and the
-//! Overview. Measured: the key (or the read's arrival) with its frame, the work of one frame
+//! Overview, then in the Locks view with a large lock table (the most waits a read holds, in
+//! chains, each with the most holders a read gives). Measured: the key (or the read's arrival) with its frame, the work of one frame
 //! (`widgets::monitor`'s count: session rows and chart tiles drawn), and taking a read (the
 //! rates, the sort and the filter of its sessions). No server: the reads are made here and fed
 //! to the tab as its connection would.
@@ -8,6 +9,7 @@
 use crate::apps;
 use crate::stats::{Summary, ms};
 use datarig_core::driver::DbEvent;
+use datarig_core::monitor::locks::{Blame, Holder, LOCK_ROWS, LOCK_WAITS, LockHolder, LockList, LockObject, LockWait};
 use datarig_core::monitor::{
     Counter, CounterKind, Epoch, Gauge, GaugeKind, Own, QueryText, Sample, ServerInfo, SessionKey, SessionKind,
     SessionList, SessionRow, SessionState, Snapshot, StatementStamp, Timestamp, Tx, Visibility, Wait, WaitClass,
@@ -103,6 +105,44 @@ fn read(n: u64, sessions: usize) -> Snapshot {
     }
 }
 
+/// The lock read of read `n` over `sessions` sessions, the largest one read gives: the most
+/// waits, in chains of four (each waiting for the one before, the first for a root that waits
+/// for nobody), each with as many holders as the rows allow (a table many sessions write to).
+fn lock_table(n: u64, sessions: usize) -> LockList {
+    let per = (LOCK_ROWS / LOCK_WAITS).max(1);
+    let waits = (0..LOCK_WAITS)
+        .map(|i| {
+            let id = 10_000 + (i * 7 % sessions) as i64;
+            let chain = i % 4;
+            let blocker = if chain == 0 { 10_000 + ((i + 1) * 13 % sessions) as i64 } else { id - 7 };
+            let holders = (0..per)
+                .map(|k| LockHolder {
+                    holder: Holder::Session(if k == 0 {
+                        blocker
+                    } else {
+                        10_000 + ((i * 31 + k * 17) % sessions) as i64
+                    }),
+                    modes: vec!["SHARED_WRITE".into()],
+                    waiting: false,
+                    blame: if k == 0 { Blame::Proven } else { Blame::Incompatible },
+                })
+                .collect();
+            LockWait {
+                waiter: SessionKey { id, started: Some(Timestamp(time(n).0 - 86_400_000_000)) },
+                object: LockObject {
+                    kind: "TABLE".into(),
+                    name: Some(format!("shop.t{}", i % 40)),
+                    ..Default::default()
+                },
+                mode: "EXCLUSIVE".into(),
+                since: Some(Timestamp(time(n).0 - (i as i64 + 1) * 1_000_000)),
+                holders,
+            }
+        })
+        .collect();
+    LockList { time: time(n), waits, more: 0, blocks: true }
+}
+
 pub fn run(sessions: usize, n: usize) -> Result<Value, String> {
     let mut app = apps::offline("", None);
     let pid = app.profiles[0].id;
@@ -117,8 +157,9 @@ pub fn run(sessions: usize, n: usize) -> Result<Value, String> {
     let mut reads = 0u64;
     let mut take = Vec::new();
     // Feed read `reads` as the answer to the read in flight; the time it took.
-    let feed = |app: &mut datarig_tui::app::App, reads: &mut u64| -> f64 {
-        let snapshot = read(*reads, sessions);
+    let feed = |app: &mut datarig_tui::app::App, reads: &mut u64, locks: bool| -> f64 {
+        let mut snapshot = read(*reads, sessions);
+        snapshot.locks = locks.then(|| lock_table(*reads, sessions));
         let generation = {
             let m = app.tabs.get_mut(tab).and_then(|t| t.doc.monitor.as_mut()).expect("the Monitor tab");
             m.state = MonState::Opening;
@@ -132,11 +173,13 @@ pub fn run(sessions: usize, n: usize) -> Result<Value, String> {
         ms(t.elapsed())
     };
     let mut term = apps::terminal();
-    take.push(feed(&mut app, &mut reads));
+    take.push(feed(&mut app, &mut reads, false));
     apps::draw(&mut term, &mut app);
     let mut views = serde_json::Map::new();
     let (mut all, mut worst) = (Vec::new(), 0u64);
-    for (key, view) in [('2', "sessions"), ('1', "overview")] {
+    let mut locks_take = Vec::new();
+    for (key, view) in [('2', "sessions"), ('1', "overview"), ('3', "locks")] {
+        let locks = view == "locks";
         apps::char(&mut app, key);
         apps::draw(&mut term, &mut app);
         datarig_tui::widgets::monitor::take_work();
@@ -144,8 +187,9 @@ pub fn run(sessions: usize, n: usize) -> Result<Value, String> {
         let mut work = Vec::new();
         for i in 0..n {
             let t = Instant::now();
-            if i % 10 == 9 {
-                take.push(feed(&mut app, &mut reads));
+            if i % 10 == 9 || (locks && i == 0) {
+                let t = feed(&mut app, &mut reads, locks);
+                if locks { locks_take.push(t) } else { take.push(t) }
             } else {
                 let code = match i % 10 {
                     0..=4 => KeyCode::Char('j'),
@@ -172,14 +216,20 @@ pub fn run(sessions: usize, n: usize) -> Result<Value, String> {
     if app.monitor_of(tab).and_then(|m| m.snapshot.as_ref()).is_none() {
         return Err("no read was taken".into());
     }
+    if app.monitor_of(tab).is_none_or(|m| m.tree.lines.is_empty()) {
+        return Err("no blocking tree was built".into());
+    }
     let f = Summary::of(&all);
     let t = Summary::of(&take);
+    let lt = Summary::of(&locks_take);
     println!("  take a read  {}", t.line(" ms"));
+    println!("  take a read with {LOCK_WAITS} lock waits  {}", lt.line(" ms"));
     Ok(json!({
         "sessions": sessions,
         "frame_ms": f.json(),
         "work_max": worst,
         "take_ms": t.json(),
+        "locks_take_ms": lt.json(),
         "views": views,
     }))
 }

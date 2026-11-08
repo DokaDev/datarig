@@ -456,12 +456,13 @@ The Changes tab of the results pane (`:changes`, `Space d p`, or its tab in the 
 
 ## `monitor`
 
-The Monitor tab of a profile (`monitor.open`: `M` on a connection in the explorer, `:monitor`, the connection's menu): what its server says about its load and its sessions, read by a connection of the tab's own, only while the tab is shown. `1` the Overview (the server, its load as charts, the longest running sessions), `2` the Sessions, `v` the next view; `j`/`k` select a session, `s` sorts by the next column (`S` the other way; a click on a column's name sorts by it), `/` filters, `a` shows idle sessions too, `Enter` shows the session in full, `o` opens its statement in a new console (never run), `y` copies it; `p` pauses, `r` reads at once, `+`/`-` read more or less often. Inside `nav`.
+The Monitor tab of a profile (`monitor.open`: `M` on a connection in the explorer, `:monitor`, the connection's menu): what its server says about its load and its sessions, read by a connection of the tab's own, only while the tab is shown. `1` the Overview (the server, its load as charts, the longest running sessions), `2` the Sessions, `3` the Locks (who waits for whom, root blockers first; `b` goes to the root blocker of the selected wait), `v` the next view; `j`/`k` select a session, `s` sorts by the next column (`S` the other way; a click on a column's name sorts by it), `/` filters, `a` shows idle sessions too, `Enter` shows the session in full, `o` opens its statement in a new console (never run), `y` copies it; `p` pauses, `r` reads at once, `+`/`-` read more or less often. Inside `nav`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|
 | `1` | `monitor.overview` | Monitor: Overview |  |
 | `2` | `monitor.sessions` | Monitor: Sessions |  |
+| `3` | `monitor.locks` | Monitor: Locks |  |
 | `v` | `monitor.view.next` | Monitor: next view |  |
 | `j` | `monitor.down` | Monitor: session below | ✓ |
 | `Down` | `monitor.down` | Monitor: session below | ✓ |
@@ -486,6 +487,7 @@ The Monitor tab of a profile (`monitor.open`: `M` on a connection in the explore
 | `Enter` | `monitor.details` | Monitor: the session in full |  |
 | `o` | `monitor.open_console` | Monitor: the session's statement in a new console |  |
 | `y` | `monitor.copy_query` | Monitor: copy the session's statement |  |
+| `b` | `monitor.root` | Monitor: the root blocker of the selected wait |  |
 | `Esc` | `monitor.back` | Monitor: back (details, filter) |  |
 
 ## `monitor.filter` [text]

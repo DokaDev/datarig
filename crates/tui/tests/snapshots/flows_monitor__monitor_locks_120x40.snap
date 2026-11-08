@@ -1,0 +1,44 @@
+---
+source: crates/tui/tests/flows_monitor.rs
+expression: "h.screen(120, 40)"
+---
+╭ Explorer ──────────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                                                     
+│  ＋ New connection         │╭ Monitor: local-pg ─────────────────────────────────────────────────────────────────────╮
+│▾ Connections 1             ││ PostgreSQL 17.11 · read-write · up 41d3h · max 200 connections                         │
+│  ▾ ●   local-pg            ││ 1 Overview  2 Sessions  3 Locks (4)                                           every 2s │
+│    ▾ datarig default       ││ 4 waiting for a lock · what is held read 0ms ago                                       │
+│      ▸ analytics           ││ ▸ 3907 bob · idle in transaction 12m01s · holds ExclusiveLock on transactionid 736 · … │
+│      ▸ public              ││   ├ 4302 batch · waits 2m02s for AccessExclusiveLock on relation orders · also waits … │
+│      ▸ shop                ││   │ └ 4310 web · waits 1m58s for AccessShareLock on relation orders · SELECT * FROM o… │
+│                            ││   └ 4211 alice · waits 3m10s for ShareLock on transactionid 736 · holds RowExclusiveL… │
+│                            ││ ▸ prepared transaction batch-17 · owner billing, database shop, prepared 15m00s ago: … │
+│                            ││   └ 4500 billing · waits 30s for RowExclusiveLock on relation invoices · INSERT INTO … │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││────────────────────────────────────────────────────────────────────────────────────────│
+│                            ││  ▸ 3907 bob · idle in transaction 12m01s · holds ExclusiveLock on transactionid 736 ·  │
+│                            ││  SELECT * FROM orders WHERE id = 7 FOR UPDATE                                          │
+╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯
+ local-pg │           │ v view · Enter detail · / filter · a idle · p pause · : commands · Space ? help · Space more EN

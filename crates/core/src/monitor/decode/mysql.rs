@@ -3,12 +3,12 @@
 use super::{Answer, DecodeError, Row, Rows, malformed, name_values, one};
 use crate::monitor::action::StatementStamp;
 use crate::monitor::format::{self, MYSQL_MARKERS, MYSQL_MIN_VERSION, MySqlMonitor, Probe, Readable};
+use crate::monitor::locks::{self as lk, Blame, Holder, LockHolder, LockList, LockObject, LockWait};
 use crate::monitor::model::{
     Counter, CounterKind, Epoch, Extra, ExtraKey, FullText, Gauge, GaugeKind, Hidden, Need, Own, Part, Proof,
     QueryText, Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState, Timestamp, Tx,
     Visibility, Wait, WaitClass,
 };
-use crate::monitor::locks::{self as lk, Blame, Holder, LockHolder, LockList, LockObject, LockWait};
 use crate::monitor::model::{SessionsWanted, Snapshot, TEXT_MIN_AGE_US, TEXT_SAME_START_US, TextAsk, Want};
 
 /// The status variables a tick reads (`SHOW GLOBAL STATUS`), by name: what [`counters`] knows.

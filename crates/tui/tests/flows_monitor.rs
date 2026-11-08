@@ -948,3 +948,238 @@ fn a_statement_the_server_may_have_cut_says_so_and_opens_with_the_cut_note() {
     assert_eq!(h.app.tab().editor.text(), WHOLE);
     assert_eq!(transient(&h), Some(datarig_core::i18n::Msg::MonitorOpenedCut { database: "shop".into() }));
 }
+
+// Locks.
+
+use datarig_core::monitor::Blocker;
+use datarig_core::monitor::locks::{Blame, Holder, LockHolder, LockList, LockObject, LockWait, Prepared};
+
+/// Whether each monitor read that went out since the last look asked for the locks.
+fn lock_asks(h: &mut Harness) -> Vec<(u64, bool)> {
+    h.sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::MonitorTick { request, want } => Some((request, want.locks)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A chain: bob (3907) holds a row of `orders` in an open transaction; alice's update (4211)
+/// waits for it; the ALTER (4302) waits for both; a read (4310) waits behind the ALTER; 4500
+/// waits for a prepared transaction.
+fn lock_rows() -> Vec<SessionRow> {
+    let mut rows = rows();
+    rows.retain(|r| r.key.id != 4302);
+    let wait = |r: &mut SessionRow, name: &str, by: Vec<Blocker>| {
+        r.wait = Some(Wait { class: WaitClass::Lock, name: name.into() });
+        r.blocked_by = Some(by);
+    };
+    let alice = rows.iter_mut().find(|r| r.key.id == 4211).unwrap();
+    wait(alice, "transactionid", vec![Blocker::Session(3907)]);
+    let mut alter = session(4302, "batch", SessionState::Active, 122.0, "ALTER TABLE orders ADD COLUMN note text");
+    wait(&mut alter, "relation", vec![Blocker::Session(4211), Blocker::Session(3907)]);
+    let mut read = session(4310, "web", SessionState::Active, 118.0, "SELECT * FROM orders WHERE id = 9");
+    wait(&mut read, "relation", vec![Blocker::Session(4302)]);
+    let mut invoice = session(4500, "billing", SessionState::Active, 30.0, "INSERT INTO invoices VALUES (1)");
+    wait(&mut invoice, "relation", vec![Blocker::PreparedTransaction]);
+    rows.extend([alter, read, invoice]);
+    rows
+}
+
+fn lock_list(secs: f64) -> LockList {
+    let key = |id: i64| SessionKey { id, started: Some(at(-3600.0)) };
+    let holds = |id: i64, mode: &str| LockHolder {
+        holder: Holder::Session(id),
+        modes: vec![mode.into()],
+        waiting: false,
+        blame: Blame::Holds,
+    };
+    let orders = LockObject { kind: "relation".into(), name: Some("orders".into()), ..Default::default() };
+    let wait = |id: i64, object: &LockObject, mode: &str, since: f64, holders: Vec<LockHolder>| LockWait {
+        waiter: key(id),
+        object: object.clone(),
+        mode: mode.into(),
+        since: Some(at(secs - since)),
+        holders,
+    };
+    let xid = LockObject { kind: "transactionid".into(), detail: Some("736".into()), ..Default::default() };
+    let invoices = LockObject { kind: "relation".into(), name: Some("invoices".into()), ..Default::default() };
+    let prepared = LockHolder {
+        holder: Holder::Prepared(Some(Prepared {
+            gid: "batch-17".into(),
+            owner: Some("billing".into()),
+            database: Some("shop".into()),
+            since: Some(at(secs - 900.0)),
+        })),
+        modes: vec!["ShareLock".into()],
+        waiting: false,
+        blame: Blame::Holds,
+    };
+    LockList {
+        time: at(secs),
+        waits: vec![
+            wait(4211, &xid, "ShareLock", 190.0, vec![holds(3907, "ExclusiveLock")]),
+            wait(
+                4302,
+                &orders,
+                "AccessExclusiveLock",
+                122.0,
+                vec![holds(3907, "RowExclusiveLock"), holds(4211, "RowExclusiveLock")],
+            ),
+            wait(
+                4310,
+                &orders,
+                "AccessShareLock",
+                118.0,
+                vec![holds(3907, "RowExclusiveLock"), holds(4211, "RowExclusiveLock")],
+            ),
+            wait(4500, &invoices, "RowExclusiveLock", 30.0, vec![prepared]),
+        ],
+        more: 0,
+        blocks: false,
+    }
+}
+
+fn lock_snapshot(secs: f64, locks: bool, server: bool) -> Snapshot {
+    let mut s = snapshot(secs, 1000, lock_rows(), server);
+    s.locks = locks.then(|| lock_list(secs));
+    s
+}
+
+/// The Locks view shown: a read at once that asks for the locks, then not again before five
+/// seconds have passed (the interval is two); the other views never ask.
+#[test]
+fn the_locks_view_reads_the_lock_table_at_most_every_five_seconds() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, lock_rows(), true)) });
+    h.advance(Duration::from_secs(2));
+    let t = lock_asks(&mut h);
+    assert_eq!(t.iter().map(|t| t.1).collect::<Vec<_>>(), [false], "the Overview asks for no locks");
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(snapshot(2.0, 1000, lock_rows(), false)) });
+    h.keys("3");
+    assert_eq!(monitor(&h).view, MonitorView::Locks);
+    let t = lock_asks(&mut h);
+    assert_eq!(t.iter().map(|t| t.1).collect::<Vec<_>>(), [true], "shown, it reads at once with the locks");
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(lock_snapshot(2.0, true, false)) });
+    let mut asked = Vec::new();
+    for n in 1..=3 {
+        h.advance(Duration::from_secs(2));
+        let t = lock_asks(&mut h);
+        assert_eq!(t.len(), 1);
+        asked.push(t[0].1);
+        h.monitor_db(DbEvent::MonitorSnapshot {
+            request: t[0].0,
+            result: Ok(lock_snapshot(2.0 + 2.0 * n as f64, t[0].1, false)),
+        });
+    }
+    assert_eq!(asked, [false, false, true], "2 s and 4 s after: not yet; 6 s after: again");
+    // The lock read stays between reads of it.
+    assert!(monitor(&h).locks.is_some());
+    h.keys("2");
+    h.advance(Duration::from_secs(10));
+    let t = lock_asks(&mut h);
+    assert!(t.iter().all(|t| !t.1), "the Sessions view asks for no locks: {t:?}");
+}
+
+/// The tree: root blockers first, each session once under the one it waits for, what each
+/// waits for and holds; `b` goes to the root blocker; `Enter` shows a session in full.
+#[test]
+fn the_locks_view_shows_the_blocking_tree_and_goes_to_the_root_blocker() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, lock_rows(), true)) });
+    h.keys("3");
+    let t = lock_asks(&mut h);
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(lock_snapshot(2.0, true, false)) });
+    let nodes: Vec<Holder> = monitor(&h).tree.lines.iter().map(|l| l.node.clone()).collect();
+    // The ALTER waits for bob too: it is under him, nearest the root, with more behind it.
+    assert_eq!(
+        nodes[..4],
+        [Holder::Session(3907), Holder::Session(4302), Holder::Session(4310), Holder::Session(4211)]
+    );
+    assert!(matches!(&nodes[4], Holder::Prepared(Some(p)) if p.gid == "batch-17"), "{nodes:?}");
+    assert_eq!(nodes[5], Holder::Session(4500));
+    let screen = h.screen(160, 40);
+    assert!(screen.contains("3 Locks (4)"), "{screen}");
+    assert!(screen.contains("4 waiting for a lock"), "{screen}");
+    assert!(screen.contains("▸ 3907 bob · idle in transaction 12m"), "{screen}");
+    assert!(screen.contains("holds ExclusiveLock on transactionid 736"), "{screen}");
+    assert!(screen.contains("└ 4211 alice · waits 3m10s for ShareLock on transactionid 736"), "{screen}");
+    assert!(
+        screen.contains("├ 4302 batch · waits 2m02s for AccessExclusiveLock on relation orders · also waits for 4211"),
+        "{screen}"
+    );
+    assert!(screen.contains("│ └ 4310 web · waits 1m58s for AccessShareLock on relation orders"), "{screen}");
+    assert!(
+        screen.contains("▸ prepared transaction batch-17 · owner billing, database shop, prepared 15m00s ago"),
+        "{screen}"
+    );
+    // From the read behind the ALTER, `b` goes to the root.
+    h.keys("jj");
+    assert_eq!(monitor(&h).lock_view.selected, Some(Holder::Session(4310)));
+    h.keys("b");
+    assert_eq!(monitor(&h).lock_view.cursor, 0);
+    // The selection stays on its session across reads.
+    h.keys("jjj");
+    h.advance(Duration::from_secs(2));
+    let t = lock_asks(&mut h);
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(lock_snapshot(4.0, false, false)) });
+    assert_eq!(monitor(&h).lock_view.selected, Some(Holder::Session(4211)));
+    h.key(KeyCode::Enter);
+    assert_eq!(monitor(&h).view, MonitorView::Sessions);
+    assert!(monitor(&h).list.details);
+    assert_eq!(monitor(&h).selected_row().map(|r| r.key.id), Some(4211));
+}
+
+/// A click selects a line; the wheel moves; `y` and `o` take the selected line's statement.
+#[test]
+fn the_locks_view_takes_clicks_and_its_lines_statement() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, lock_rows(), true)) });
+    h.keys("3");
+    let t = lock_asks(&mut h);
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(lock_snapshot(2.0, true, false)) });
+    let screen = h.screen(120, 40);
+    let line = screen.lines().position(|l| l.contains("4211 alice")).expect("alice's line");
+    let text = screen.lines().nth(line).unwrap();
+    let x = text[..text.find("4211 alice").unwrap()].chars().count() as u16;
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, line as u16);
+    assert_eq!(monitor(&h).lock_view.selected, Some(Holder::Session(4211)));
+    h.mouse(MouseEventKind::ScrollUp, x, line as u16);
+    assert_eq!(monitor(&h).lock_view.selected, Some(Holder::Session(3907)), "up to the first line");
+    h.keys("j");
+    h.keys("o");
+    assert_eq!(h.app.tab().kind, TabKind::Console);
+    assert_eq!(h.app.tab().editor.text(), "ALTER TABLE orders ADD COLUMN note text");
+    assert!(!h.sent().iter().any(|c| matches!(c, DbCommand::Execute { .. })), "the statement is never run");
+}
+
+#[test]
+fn the_locks_view_says_when_nothing_waits_and_what_the_reads_left_out() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, rows(), true)) });
+    h.keys("3");
+    let t = lock_asks(&mut h);
+    let mut s = snapshot(2.0, 1000, rows(), false);
+    s.locks = Some(LockList { time: at(2.0), waits: Vec::new(), more: 0, blocks: true });
+    s.hidden.push(Hidden { part: Part::RowLockWaits, need: Need::Grant("SELECT on performance_schema") });
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(s) });
+    let screen = h.screen(160, 40);
+    assert!(screen.contains("No session waits for a lock"), "{screen}");
+    assert!(
+        screen.contains("Who blocks a row lock wait is not shown (needs SELECT on performance_schema)"),
+        "{screen}"
+    );
+}
+
+#[test]
+fn locks_screens_80x24_and_120x40() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, lock_rows(), true)) });
+    h.keys("3");
+    let t = lock_asks(&mut h);
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(lock_snapshot(2.0, true, false)) });
+    insta::assert_snapshot!("monitor_locks_120x40", h.screen(120, 40));
+    insta::assert_snapshot!("monitor_locks_80x24", h.screen(80, 24));
+}

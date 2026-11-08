@@ -403,7 +403,15 @@ impl Tree {
                 continue;
             }
             tree.waiting += 1;
-            tree.lines.push(Line { node, depth: 0, parent: None, also: Vec::new(), cycle: false, behind: 0, alone: true });
+            tree.lines.push(Line {
+                node,
+                depth: 0,
+                parent: None,
+                also: Vec::new(),
+                cycle: false,
+                behind: 0,
+                alone: true,
+            });
         }
         tree
     }
