@@ -13,6 +13,7 @@ mod pg_clean;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbError, DbEvent, Driver, OwnSession, Session, SessionRole};
 use datarig_core::driver::{PagingMode, TxRule};
 use datarig_core::monitor::action::{self, ActionOutcome, Denied, NotSent, Stale, Via};
+use datarig_core::monitor::locks::{self, Holder, Tree};
 use datarig_core::monitor::{
     ActionKind, ActionTarget, Blocker, Confirmation, FollowUp, FullText, GaugeKind, Hidden, MonitorFormat, Need, Part,
     PgMonitor, Proof, QUERY_CHARS, Route, SessionKey, SessionRow, SessionState, SessionsWanted, Snapshot,
@@ -65,7 +66,8 @@ fn as_user(url: &str, user: &str, password: &str) -> String {
     format!("{scheme}://{user}:{password}@{host}")
 }
 
-const TICK: Want = Want { sessions: Some(SessionsWanted { idle: true }), server: true, limit: Duration::from_secs(5) };
+const TICK: Want =
+    Want { sessions: Some(SessionsWanted { idle: true }), locks: false, server: true, limit: Duration::from_secs(5) };
 
 struct Conn {
     session: Session,
@@ -320,6 +322,67 @@ async fn sessions_show_who_waits_for_whom() {
 
     holder.run("ROLLBACK").await;
     waiter.answer(waiting).await.expect("the waiter goes on once the holder is gone");
+}
+
+/// The Locks view's read: each wait with what it asks for and the locks held on it, the tree
+/// from the session list's blockers (an idle session holding an advisory lock is listed and is
+/// a root even without idle sessions), and nothing once no session waits.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_lock_read_shows_each_wait_and_what_is_held_on_it() {
+    let Some(url) = pg_url("the_lock_read_shows_each_wait_and_what_is_held_on_it") else { return };
+    let pid = std::process::id();
+    let table = format!("it_mon_locks_{pid}");
+    let _guard = pg_clean::TableGuard::new(&url, &[&table]);
+    let tag = format!("mol{pid}");
+    let key = i64::from(pid) * 1000 + 7;
+    let mut holder = Conn::open(&url, SessionRole::Query, &format!("{tag}h")).await;
+    holder.run(&format!("CREATE TABLE {table} (id int PRIMARY KEY, v int)")).await;
+    holder.run(&format!("INSERT INTO {table} VALUES (1, 0)")).await;
+    holder.run("BEGIN").await;
+    holder.run(&format!("UPDATE {table} SET v = v + 1 WHERE id = 1")).await;
+    let mut advisory = Conn::open(&url, SessionRole::Query, &format!("{tag}a")).await;
+    advisory.run(&format!("SELECT pg_advisory_lock({key})")).await;
+    let mut row_waiter = Conn::open(&url, SessionRole::Query, &format!("{tag}w")).await;
+    let row_wait = row_waiter.send(&format!("UPDATE {table} SET v = v + 10 WHERE id = 1"));
+    let mut key_waiter = Conn::open(&url, SessionRole::Query, &format!("{tag}k")).await;
+    let key_wait = key_waiter.send(&format!("SELECT pg_advisory_lock({key})"));
+
+    let (mut monitor, _) = Conn::monitor(&url, &tag).await;
+    let want = Want { sessions: Some(SessionsWanted { idle: false }), locks: true, server: false, ..TICK };
+    let app = |who: &str| format!("datarig-q-{tag}{who}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let snapshot = loop {
+        let s = monitor.tick(want).await.expect("tick");
+        let both = ["w", "k"].iter().all(|w| session_of(&s, &app(w)).waits_for_lock());
+        if both || Instant::now() > deadline {
+            break s;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let id = |who: &str| session_of(&snapshot, &app(who)).key.id;
+    let (h, a, w, k) = (id("h"), id("a"), id("w"), id("k"));
+    // The idle holder of the advisory lock is listed although idle sessions are not.
+    assert_eq!(session_of(&snapshot, &app("a")).state, SessionState::Idle);
+    let lock_list = snapshot.locks.as_ref().expect("the locks were asked for");
+    let row = lock_list.waits_of(w).next().expect("the row wait");
+    assert_eq!((row.object.kind.as_str(), row.mode.as_str()), ("transactionid", "ShareLock"));
+    assert!(row.holders.iter().any(|x| x.holder == Holder::Session(h) && x.modes == ["ExclusiveLock"]), "{row:?}");
+    let adv = lock_list.waits_of(k).next().expect("the advisory wait");
+    assert_eq!(adv.object.kind, "advisory");
+    assert!(adv.holders.iter().any(|x| x.holder == Holder::Session(a)), "{adv:?}");
+    assert_eq!(adv.waiter, session_of(&snapshot, &app("k")).key, "the waiter's session told apart by its start");
+    let tree = Tree::build(&locks::edges(snapshot.sessions.as_ref(), Some(lock_list), true));
+    let depth = |id: i64| tree.lines.iter().find(|l| l.node == Holder::Session(id)).map(|l| l.depth);
+    assert_eq!((depth(h), depth(w), depth(a), depth(k)), (Some(0), Some(1), Some(0), Some(1)), "{tree:?}");
+
+    holder.run("ROLLBACK").await;
+    advisory.run(&format!("SELECT pg_advisory_unlock({key})")).await;
+    row_waiter.answer(row_wait).await.expect("the row waiter goes on");
+    key_waiter.answer(key_wait).await.expect("the key waiter goes on");
+    key_waiter.run(&format!("SELECT pg_advisory_unlock({key})")).await;
+    let after = monitor.tick(want).await.expect("tick");
+    let ours = |l: &locks::LockList| l.waits.iter().any(|x| [w, k].contains(&x.waiter.id));
+    assert!(!ours(after.locks.as_ref().expect("asked")), "no wait of ours is left");
 }
 
 /// A statement longer than the list holds is read whole, by its session and its start: only

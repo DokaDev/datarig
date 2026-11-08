@@ -88,6 +88,7 @@ fn read(n: u64, sessions: usize) -> Snapshot {
             Gauge { kind: GaugeKind::WaitingForLock, value: sessions as u64 / 10 },
             Gauge { kind: GaugeKind::Hidden, value: 0 },
         ],
+        locks: None,
         sessions: Some(SessionList { time: now, rows, idle_left_out: true }),
         server: (n == 0).then(|| ServerInfo {
             version: "PostgreSQL 17.11".into(),

@@ -567,8 +567,8 @@ fn super_without_process_does_not_show_other_sessions() {
 #[test]
 fn a_postgres_tick_reads_what_is_wanted_in_order() {
     let limit = std::time::Duration::from_secs(2);
-    let counters_only = Want { sessions: None, server: false, limit };
-    let all = Want { sessions: Some(NO_IDLE), server: true, limit };
+    let counters_only = Want { sessions: None, locks: false, server: false, limit };
+    let all = Want { sessions: Some(NO_IDLE), locks: false, server: true, limit };
     let own = Own { statements: 0, transactions: 3 };
     let rows = vec![
         single(fixture!("pg17_locks/counters")),
@@ -619,19 +619,19 @@ fn a_session_without_activity_tracking_has_an_unknown_transaction() {
 fn a_mysql_tick_reads_what_is_wanted_in_order() {
     let m = decode::mysql::probe(&fixture!("my84_root/probe")).unwrap();
     let limit = std::time::Duration::from_secs(2);
-    let counters_only = Want { sessions: None, server: false, limit };
-    let all = Want { sessions: Some(IDLE), server: true, limit };
+    let counters_only = Want { sessions: None, locks: false, server: false, limit };
+    let all = Want { sessions: Some(IDLE), locks: false, server: true, limit };
     let own = Own { statements: 12, transactions: 0 };
     let mut rows = rows(fixture!("my84_root/counters"));
     rows.extend(rows_of_sessions());
     rows.extend(rows_of_server());
-    let s = decode::mysql::tick(&m, &all, &rows, own).unwrap();
+    let s = decode::mysql::tick(&m, &all, &rows, None, own).unwrap();
     assert_eq!(s.sample.own, own);
     assert_eq!(s.sessions.as_ref().map(|l| l.rows.len()), Some(8));
     assert!(s.server.is_some() && s.hidden.is_empty());
-    let s = decode::mysql::tick(&m, &counters_only, &rows[..2], own).unwrap();
+    let s = decode::mysql::tick(&m, &counters_only, &rows[..2], None, own).unwrap();
     assert_eq!((s.sessions, s.server), (None, None));
-    assert!(matches!(decode::mysql::tick(&m, &all, &rows[..3], own), Err(DecodeError::Malformed { .. })));
+    assert!(matches!(decode::mysql::tick(&m, &all, &rows[..3], None, own), Err(DecodeError::Malformed { .. })));
 }
 
 fn rows_of_sessions() -> Vec<Rows> {
@@ -645,7 +645,7 @@ fn rows_of_server() -> Vec<Rows> {
 #[test]
 fn sessions_performance_schema_could_not_track_are_said_to_be_missing() {
     let m = decode::mysql::probe(&fixture!("my84_root/probe")).unwrap();
-    let want = Want { sessions: Some(IDLE), server: false, limit: std::time::Duration::from_secs(1) };
+    let want = Want { sessions: Some(IDLE), locks: false, server: false, limit: std::time::Duration::from_secs(1) };
     let mut rows = rows(fixture!("my84_root/counters"));
     rows.extend(rows_of_sessions());
     let lost = |rows: &mut Vec<Rows>, n: &str| {
@@ -653,19 +653,19 @@ fn sessions_performance_schema_could_not_track_are_said_to_be_missing() {
             r[1] = Some(n.into());
         }
     };
-    assert!(decode::mysql::tick(&m, &want, &rows, Own::default()).unwrap().hidden.is_empty());
+    assert!(decode::mysql::tick(&m, &want, &rows, None, Own::default()).unwrap().hidden.is_empty());
     lost(&mut rows, "3");
     let untracked =
         Hidden { part: Part::UntrackedSessions, need: Need::Setting("performance_schema_max_thread_instances") };
-    assert_eq!(decode::mysql::tick(&m, &want, &rows, Own::default()).unwrap().hidden, [untracked]);
+    assert_eq!(decode::mysql::tick(&m, &want, &rows, None, Own::default()).unwrap().hidden, [untracked]);
     // The list from information_schema does not depend on it.
     let old = MySqlMonitor { version: 80021, ..m };
-    assert!(decode::mysql::tick(&old, &want, &rows, Own::default()).unwrap().hidden.is_empty());
+    assert!(decode::mysql::tick(&old, &want, &rows, None, Own::default()).unwrap().hidden.is_empty());
 }
 #[test]
 fn a_session_answers_a_monitor_tick_it_does_not_do() {
     use crate::driver::{DbCommand, DbError, DbEvent};
-    let want = Want { sessions: None, server: false, limit: std::time::Duration::from_secs(1) };
+    let want = Want { sessions: None, locks: false, server: false, limit: std::time::Duration::from_secs(1) };
     match (DbCommand::MonitorTick { request: 7, want }).not_supported() {
         DbEvent::MonitorSnapshot { request: 7, result: Err(DbError::NotSupported) } => {}
         other => panic!("{other:?}"),
@@ -841,3 +841,289 @@ fn an_ask_names_the_same_statement_to_the_precision_its_server_tells() {
     assert!(!a.same_statement(&session, true));
 }
 mod action;
+
+// Locks.
+
+use super::locks::{self as lk, Blame, Holder, LockList, Tree, Waits};
+use std::collections::HashSet;
+
+/// The server's matrix of granted requests for object metadata locks, row by row (`+` granted
+/// beside, `-` waits), as `sql/mdl.cc` writes it.
+const MDL_OBJECT: &[(&str, &str)] = &[
+    ("SHARED", "+ + + + + + + + + -"),
+    ("SHARED_HIGH_PRIO", "+ + + + + + + + + -"),
+    ("SHARED_READ", "+ + + + + + + + - -"),
+    ("SHARED_WRITE", "+ + + + + + - - - -"),
+    ("SHARED_WRITE_LOW_PRIO", "+ + + + + + - - - -"),
+    ("SHARED_UPGRADABLE", "+ + + + + - + - - -"),
+    ("SHARED_READ_ONLY", "+ + + - - + + + - -"),
+    ("SHARED_NO_WRITE", "+ + + - - - + - - -"),
+    ("SHARED_NO_READ_WRITE", "+ + - - - - - - - -"),
+    ("EXCLUSIVE", "- - - - - - - - - -"),
+];
+
+#[test]
+fn metadata_locks_conflict_as_the_servers_lock_manager_says() {
+    let granted: Vec<&str> = MDL_OBJECT.iter().map(|(t, _)| *t).collect();
+    for (requested, row) in MDL_OBJECT {
+        for (g, cell) in granted.iter().zip(row.split(' ')) {
+            assert_eq!(lk::mdl_conflicts("TABLE", requested, g), Some(cell == "-"), "{requested} after {g}");
+        }
+    }
+    // Scoped locks: intention exclusive beside itself, shared beside itself, exclusive alone.
+    let scoped = ["INTENTION_EXCLUSIVE", "SHARED", "EXCLUSIVE"];
+    let waits = [[false, true, true], [true, false, true], [true, true, true]];
+    for (r, row) in scoped.iter().zip(waits) {
+        for (g, w) in scoped.iter().zip(row) {
+            for kind in ["GLOBAL", "SCHEMA", "BACKUP LOCK", "BACKUP_LOCK", "COMMIT"] {
+                assert_eq!(lk::mdl_conflicts(kind, r, g), Some(w), "{kind} {r} after {g}");
+            }
+        }
+    }
+    // What the table does not know is not guessed.
+    assert_eq!(lk::mdl_conflicts("TABLE", "INTENTION_EXCLUSIVE", "SHARED"), None);
+    assert_eq!(lk::mdl_conflicts("GLOBAL", "SHARED_READ", "SHARED"), None);
+    assert_eq!(lk::mdl_conflicts("SOMETHING NEW", "EXCLUSIVE", "SHARED"), None);
+    assert_eq!(lk::mdl_conflicts("TABLE", "EXCLUSIVE", "SOMETHING_NEW"), None);
+}
+
+/// The lock chain recorded on PostgreSQL 14 (`pg14_locks`): 96168 holds a row of `zz_mon_t` in
+/// an open transaction; 96457 updates the same row; 96571 alters the table (behind both); 96743
+/// reads it (behind the ALTER); prepared transaction `zz_mon_gid` holds `zz_mon_p`, into which
+/// 97035 inserts; idle 97152 holds advisory lock 7, which 97312 asks for.
+fn pg14_locks() -> (SessionList, LockList) {
+    let (sample, _) = decode::pg::counters(&single(fixture!("pg14_locks/counters")), Own::default()).unwrap();
+    let (list, _) = decode::pg::sessions(&single(fixture!("pg14_locks/sessions_without_idle")), NO_IDLE).unwrap();
+    let locks = decode::pg::locks(&single(fixture!("pg14_locks/locks")), sample.time).unwrap();
+    (list, locks)
+}
+
+#[test]
+fn postgres_lock_waits_read_with_what_is_held_on_them() {
+    let (_, locks) = pg14_locks();
+    assert!(!locks.blocks, "the session list names PostgreSQL's blockers");
+    assert_eq!((locks.waits.len(), locks.more), (5, 0));
+    let alter = locks.waits_of(96571).next().unwrap();
+    assert_eq!(alter.mode, "AccessExclusiveLock");
+    assert_eq!((alter.object.kind.as_str(), alter.object.name.as_deref()), ("relation", Some("zz_mon_t")));
+    assert!(alter.since.is_some(), "waitstart from 14 on");
+    let held: Vec<(Holder, Vec<String>)> = alter.holders.iter().map(|h| (h.holder.clone(), h.modes.clone())).collect();
+    assert_eq!(
+        held,
+        [
+            (Holder::Session(96168), vec!["RowExclusiveLock".to_string()]),
+            (Holder::Session(96457), vec!["RowExclusiveLock".to_string()]),
+        ]
+    );
+    assert!(alter.holders.iter().all(|h| h.blame == Blame::Holds && !h.waiting));
+    let row = locks.waits_of(96457).next().unwrap();
+    assert_eq!((row.object.kind.as_str(), row.object.detail.as_deref(), row.mode.as_str()), ("transactionid", Some("736"), "ShareLock"));
+    // The prepared transaction is named by its transaction id lock.
+    let insert = locks.waits_of(97035).next().unwrap();
+    match &insert.holders[..] {
+        [h] => match &h.holder {
+            Holder::Prepared(Some(p)) => {
+                assert_eq!((p.gid.as_str(), p.owner.as_deref(), p.database.as_deref()), ("zz_mon_gid", Some("datarig"), Some("datarig")));
+                assert!(p.since.is_some());
+            }
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+    // A waiter's own lock on the object (none here) is never one it waits for.
+    assert!(locks.waits.iter().all(|w| w.holders.iter().all(|h| h.holder != Holder::Session(w.waiter.id))));
+}
+
+#[test]
+fn the_tree_puts_root_blockers_first_and_each_session_once() {
+    let (list, locks) = pg14_locks();
+    let waits = lk::edges(Some(&list), Some(&locks), true);
+    assert!(waits.alone.is_empty());
+    let tree = Tree::build(&waits);
+    let lines: Vec<(String, usize)> = tree
+        .lines
+        .iter()
+        .map(|l| {
+            let name = match &l.node {
+                Holder::Session(id) => id.to_string(),
+                Holder::Prepared(Some(p)) => p.gid.clone(),
+                other => format!("{other:?}"),
+            };
+            (name, l.depth)
+        })
+        .collect();
+    let want: Vec<(String, usize)> = [
+        ("96168", 0),
+        ("96571", 1),
+        ("96743", 2),
+        ("96457", 1),
+        ("97152", 0),
+        ("97312", 1),
+        ("zz_mon_gid", 0),
+        ("97035", 1),
+    ]
+    .iter()
+    .map(|(n, d)| (n.to_string(), *d))
+    .collect();
+    assert_eq!(lines, want);
+    assert_eq!(tree.waiting, 5);
+    assert_eq!(tree.lines[0].behind, 3);
+    // The ALTER also waits for the UPDATE before it.
+    assert_eq!(tree.lines[1].also, [(Holder::Session(96457), Blame::Proven)]);
+    // From the reader behind the ALTER, the way up to the root is the server's word.
+    assert_eq!(tree.root_of(2), Some((0, true)));
+    // Without the lock read the prepared transaction is still a root, not told apart.
+    let bare = Tree::build(&lk::edges(Some(&list), None, true));
+    assert!(bare.lines.iter().any(|l| l.node == Holder::Prepared(None) && l.depth == 0));
+}
+
+#[test]
+fn a_cycle_of_waits_is_shown_once_from_its_smallest_session() {
+    let e = |w: i64, h: i64| lk::Edge { waiter: w, holder: Holder::Session(h), blame: Blame::Proven };
+    let tree = Tree::build(&Waits { edges: vec![e(30, 10), e(10, 20), e(20, 10)], alone: vec![40] });
+    let lines: Vec<(Holder, usize, bool)> = tree.lines.iter().map(|l| (l.node.clone(), l.depth, l.cycle)).collect();
+    assert_eq!(
+        lines,
+        [
+            (Holder::Session(10), 0, true),
+            (Holder::Session(20), 1, false),
+            (Holder::Session(30), 1, false),
+            (Holder::Session(40), 0, false),
+        ]
+    );
+    assert!(tree.lines[3].alone);
+    assert_eq!(tree.waiting, 4);
+    // The root of a cycle waits for a session under it.
+    assert_eq!(tree.lines[0].also, [(Holder::Session(20), Blame::Proven)]);
+}
+
+fn mysql_root() -> MySqlMonitor {
+    decode::mysql::probe(&fixture!("my84_root/probe")).unwrap()
+}
+
+fn cells(values: &[Option<&str>]) -> Vec<Option<String>> {
+    values.iter().map(|v| v.map(str::to_owned)).collect()
+}
+
+/// Rows shaped as MySQL 8.4 gives them: 7 waits for a row 5 holds; 8 waits for a row the XA
+/// transaction 4242 (no session) holds; a metadata lock request of 9 (`EXCLUSIVE` for `ALTER`)
+/// on `shop.orders`, where 5 and 6 hold `SHARED_READ`, 9 itself `SHARED_UPGRADABLE`, and 11 a
+/// lock on another table; 10 asks for `SHARED_READ` behind the `ALTER`, beside every granted
+/// lock (it waits for the pending request, which is not modelled).
+fn mysql_lock_answers() -> Vec<Answer> {
+    let s = Some;
+    let n = None;
+    let rows = vec![
+        cells(&[s("7"), s("5"), s("1001"), s("shop"), s("orders"), s("PRIMARY"), s("RECORD"), s("X,REC_NOT_GAP"), s("42"), s("X,REC_NOT_GAP"), s("GRANTED")]),
+        cells(&[s("8"), n, s("4242"), s("shop"), s("items"), s("PRIMARY"), s("RECORD"), s("X"), s("7"), s("X"), s("GRANTED")]),
+    ];
+    let mdl = vec![
+        cells(&[s("9"), s("109"), s("TABLE"), s("shop"), s("orders"), s("EXCLUSIVE"), s("TRANSACTION"), s("PENDING")]),
+        cells(&[s("10"), s("110"), s("TABLE"), s("shop"), s("orders"), s("SHARED_READ"), s("TRANSACTION"), s("PENDING")]),
+        cells(&[s("5"), s("105"), s("TABLE"), s("shop"), s("orders"), s("SHARED_READ"), s("TRANSACTION"), s("GRANTED")]),
+        cells(&[s("6"), s("106"), s("TABLE"), s("shop"), s("orders"), s("SHARED_READ"), s("TRANSACTION"), s("GRANTED")]),
+        cells(&[s("9"), s("109"), s("TABLE"), s("shop"), s("orders"), s("SHARED_UPGRADABLE"), s("TRANSACTION"), s("GRANTED")]),
+        cells(&[s("11"), s("111"), s("TABLE"), s("shop"), s("items"), s("SHARED_WRITE"), s("TRANSACTION"), s("GRANTED")]),
+    ];
+    vec![Answer::Rows(rows), Answer::Rows(mdl)]
+}
+
+#[test]
+fn mysql_row_lock_waits_name_their_blockers_and_metadata_locks_their_incompatible_holders() {
+    let my = mysql_root();
+    let (locks, hidden) = decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).unwrap();
+    assert!(hidden.is_empty() && locks.blocks);
+    let row = locks.waits_of(7).next().unwrap();
+    assert_eq!((row.object.kind.as_str(), row.object.name.as_deref(), row.object.detail.as_deref()), ("RECORD", Some("shop.orders"), Some("PRIMARY 42")));
+    assert_eq!((row.holders[0].holder.clone(), row.holders[0].blame), (Holder::Session(5), Blame::Proven));
+    let xa = locks.waits_of(8).next().unwrap();
+    assert_eq!(xa.holders[0].holder, Holder::Transaction("4242".into()));
+    let alter = locks.waits_of(9).next().unwrap();
+    assert_eq!((alter.object.kind.as_str(), alter.mode.as_str()), ("TABLE", "EXCLUSIVE"));
+    let holders: Vec<(Holder, Blame)> = alter.holders.iter().map(|h| (h.holder.clone(), h.blame)).collect();
+    // Its own lock and the other table's are left out.
+    assert_eq!(holders, [(Holder::Session(5), Blame::Incompatible), (Holder::Session(6), Blame::Incompatible)]);
+    // Beside every granted lock: it waits behind a request, which is not modelled.
+    assert!(locks.waits_of(10).next().unwrap().holders.is_empty());
+    let waits = lk::edges(None, Some(&locks), false);
+    assert_eq!(waits.alone, [10]);
+    let tree = Tree::build(&waits);
+    let at = tree.lines.iter().position(|l| l.node == Holder::Session(9)).unwrap();
+    // Two holders may block the ALTER: no root is named for it.
+    assert_eq!(tree.root_of(at).map(|(_, sure)| sure), Some(false));
+    let one = |locks: &LockList| {
+        let mut l = locks.clone();
+        for w in &mut l.waits {
+            w.holders.retain(|h| h.holder != Holder::Session(6));
+        }
+        l
+    };
+    let tree = Tree::build(&lk::edges(None, Some(&one(&locks)), false));
+    let at = tree.lines.iter().position(|l| l.node == Holder::Session(9)).unwrap();
+    assert_eq!(tree.root_of(at).map(|(_, sure)| sure), Some(true), "the only holder of an incompatible lock");
+}
+
+#[test]
+fn mysql_lock_reads_refused_or_off_say_what_would_show_them() {
+    let my = mysql_root();
+    let refused = Answer::Error { code: Some(1142), message: "SELECT command denied".into() };
+    let (locks, hidden) = decode::mysql::locks(&[refused], &MySqlMonitor { metadata_locks: Readable::Refused, ..my.clone() }, Timestamp(1)).unwrap();
+    assert!(locks.waits.is_empty());
+    assert_eq!(
+        hidden,
+        [
+            Hidden { part: Part::RowLockWaits, need: Need::Grant("SELECT on performance_schema") },
+            Hidden { part: Part::MetadataLockWaits, need: Need::Grant("SELECT on performance_schema") },
+        ]
+    );
+    let (_, hidden) = decode::mysql::locks(&[Answer::Rows(Vec::new())], &MySqlMonitor { metadata_locks: Readable::Unknown, ..my.clone() }, Timestamp(1)).unwrap();
+    assert_eq!(hidden, [Hidden { part: Part::MetadataLockWaits, need: Need::Setting("wait/lock/metadata/sql/mdl") }]);
+    // Another failure is not an empty list.
+    let failed = Answer::Error { code: Some(3024), message: "maximum statement execution time exceeded".into() };
+    assert!(decode::mysql::locks(&[failed, Answer::Rows(Vec::new())], &my, Timestamp(1)).is_err());
+}
+
+#[test]
+fn a_waits_lock_read_older_than_the_list_drops_waits_that_are_over() {
+    let my = mysql_root();
+    let (locks, _) = decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).unwrap();
+    let mut list = decode::mysql::sessions(&rows_of_sessions(), &my, IDLE).unwrap().0;
+    let waiting = |id: i64, waits: bool| SessionRow {
+        key: SessionKey { id, started: None },
+        wait: waits.then(|| Wait { class: WaitClass::Lock, name: "row lock".into() }),
+        ..list.rows[0].clone()
+    };
+    list.rows = vec![waiting(7, false), waiting(8, true), waiting(9, true)];
+    let waits = lk::edges(Some(&list), Some(&locks), true);
+    let waiters: HashSet<i64> = waits.edges.iter().map(|e| e.waiter).collect();
+    // 7 no longer waits; 10 is not listed though every session is: both are over.
+    assert_eq!(waiters, HashSet::from([8, 9]));
+    assert!(waits.alone.is_empty());
+    // A list of only some sessions keeps a wait of one it does not show.
+    let waits = lk::edges(Some(&list), Some(&locks), false);
+    assert_eq!(waits.alone, [10]);
+}
+
+#[test]
+fn the_lock_tables_are_read_only_when_a_session_may_wait() {
+    let my = mysql_root();
+    let sessions = rows_of_sessions().remove(0);
+    let quiet: Rows = sessions
+        .iter()
+        .map(|r| {
+            let mut r = r.clone();
+            r[7] = None;
+            r[12] = None;
+            r
+        })
+        .collect();
+    assert!(!decode::mysql::may_wait(&quiet, &my).unwrap());
+    let mut row_wait = quiet.clone();
+    row_wait[0][12] = Some("LOCK WAIT".into());
+    assert!(decode::mysql::may_wait(&row_wait, &my).unwrap());
+    let mut mdl_wait = quiet.clone();
+    mdl_wait[0][7] = Some("Waiting for table metadata lock".into());
+    assert!(decode::mysql::may_wait(&mdl_wait, &my).unwrap());
+    // Without PROCESS other accounts' waits are not seen: read.
+    assert!(decode::mysql::may_wait(&quiet, &MySqlMonitor { process: Readable::Unknown, ..my }).unwrap());
+}

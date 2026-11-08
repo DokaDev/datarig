@@ -8,6 +8,7 @@
 use datarig_core::monitor::ActionKind;
 use datarig_core::monitor::decode::mysql::STATUS;
 use datarig_core::monitor::format::{MYSQL_MARKERS, Marker, MySqlMonitor, Readable};
+use datarig_core::monitor::locks::LOCK_ROWS;
 use datarig_core::monitor::{QUERY_CHARS, SessionsWanted, Want};
 
 /// The server's clock as microseconds since the Unix epoch.
@@ -220,10 +221,65 @@ pub(crate) fn query_text(id: i64) -> String {
 /// How much of a statement `information_schema.PROCESSLIST` keeps, in bytes.
 const INFO_BYTES: usize = 65535;
 
+/// The row lock waits (InnoDB), one row per waiting request and what blocks it, as the engine
+/// names them (`performance_schema.data_lock_waits`, needs `SELECT` on it, `data_locks` and
+/// `threads`), at most [`LOCK_ROWS`]. Each request and blocking lock is looked up by its id, so
+/// the engine is asked for those locks only, not for every lock it holds. Columns: `waiter`
+/// (the waiting session's id), `blocker` (the blocking session's, NULL when no session has the
+/// transaction), `blocking_trx` (the blocking transaction's engine id), then the request's
+/// `OBJECT_SCHEMA`, `OBJECT_NAME`, `INDEX_NAME`, `LOCK_TYPE`, `LOCK_MODE`, `LOCK_DATA`, and the
+/// blocking lock's `blocking_mode` and `blocking_status` (NULL when it has gone since).
+pub(crate) fn row_lock_waits() -> String {
+    format!(
+        "SELECT rt.PROCESSLIST_ID AS waiter, bt.PROCESSLIST_ID AS blocker, \
+         w.BLOCKING_ENGINE_TRANSACTION_ID AS blocking_trx, r.OBJECT_SCHEMA, r.OBJECT_NAME, r.INDEX_NAME, \
+         r.LOCK_TYPE, r.LOCK_MODE, r.LOCK_DATA, b.LOCK_MODE AS blocking_mode, b.LOCK_STATUS AS blocking_status \
+         FROM performance_schema.data_lock_waits w \
+         JOIN performance_schema.data_locks r ON r.ENGINE = w.ENGINE AND r.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID \
+         LEFT JOIN performance_schema.data_locks b ON b.ENGINE = w.ENGINE AND b.ENGINE_LOCK_ID = w.BLOCKING_ENGINE_LOCK_ID \
+         LEFT JOIN performance_schema.threads rt ON rt.THREAD_ID = w.REQUESTING_THREAD_ID \
+         LEFT JOIN performance_schema.threads bt ON bt.THREAD_ID = w.BLOCKING_THREAD_ID \
+         ORDER BY waiter, blocker LIMIT {LOCK_ROWS}"
+    )
+}
+
+/// The metadata lock requests waiting (`PENDING`), and the granted locks of other threads on
+/// the same objects (`performance_schema.metadata_locks` with `threads`), pending first, at most
+/// [`LOCK_ROWS`]. Which granted lock a request waits for is not told: the core pairs them by
+/// the server's compatibility of lock types. Columns: `id` (the owner's session id, NULL for a
+/// thread with none), `thread` (its thread id), `OBJECT_TYPE`, `OBJECT_SCHEMA`, `OBJECT_NAME`,
+/// `LOCK_TYPE`, `LOCK_DURATION`, `LOCK_STATUS`.
+pub(crate) fn metadata_lock_waits() -> String {
+    format!(
+        "WITH m AS (SELECT t.PROCESSLIST_ID AS id, m.OWNER_THREAD_ID AS thread, m.OBJECT_TYPE, m.OBJECT_SCHEMA, \
+         m.OBJECT_NAME, m.LOCK_TYPE, m.LOCK_DURATION, m.LOCK_STATUS FROM performance_schema.metadata_locks m \
+         LEFT JOIN performance_schema.threads t ON t.THREAD_ID = m.OWNER_THREAD_ID \
+         WHERE m.LOCK_STATUS IN ('PENDING', 'GRANTED')) \
+         SELECT * FROM m WHERE m.LOCK_STATUS = 'PENDING' UNION ALL \
+         SELECT g.* FROM m g WHERE g.LOCK_STATUS = 'GRANTED' AND EXISTS (SELECT 1 FROM m p \
+         WHERE p.LOCK_STATUS = 'PENDING' AND p.OBJECT_TYPE = g.OBJECT_TYPE AND p.OBJECT_SCHEMA <=> g.OBJECT_SCHEMA \
+         AND p.OBJECT_NAME <=> g.OBJECT_NAME AND p.thread <> g.thread) \
+         ORDER BY LOCK_STATUS DESC, OBJECT_TYPE, OBJECT_SCHEMA, OBJECT_NAME, thread LIMIT {LOCK_ROWS}"
+    )
+}
+
+/// The lock reads of a tick when the Locks view asks: the row lock waits, then the metadata
+/// lock waits when the account may read them with the instrument on (else what would show them
+/// is said instead). The driver sends them only when a session may be waiting for a lock
+/// (`decode::mysql::may_wait`).
+pub(crate) fn locks(my: &MySqlMonitor) -> Vec<String> {
+    let mut statements = vec![row_lock_waits()];
+    if my.metadata_locks == Readable::Yes {
+        statements.push(metadata_lock_waits());
+    }
+    statements
+}
+
 /// The statements of a tick, in this order: the counters ([`counters`], the clock first), then
 /// the session list and what the server is when `want` asks for them. Each runs on its own in
 /// autocommit; the counters come first, so the monitor's own statements counted when they were
-/// read are exactly those sent until then.
+/// read are exactly those sent until then. The lock reads ([`locks`]) come after the session
+/// list, sent by the driver only when one may wait.
 pub(crate) fn tick(my: &MySqlMonitor, want: &Want) -> Vec<String> {
     let mut statements = counters();
     if let Some(wanted) = want.sessions {

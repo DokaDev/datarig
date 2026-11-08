@@ -1,7 +1,8 @@
 use super::*;
 use datarig_core::monitor::Flavour;
 use datarig_core::monitor::decode::mysql::{
-    CLOCK, NAME_VALUE, PROBE, PROBE_LOCKS, PROBE_STATEMENTS, QUERY_TEXT, SERVER_INFO, SESSIONS,
+    CLOCK, METADATA_LOCKS, NAME_VALUE, PROBE, PROBE_LOCKS, PROBE_STATEMENTS, QUERY_TEXT, ROW_LOCK_WAITS, SERVER_INFO,
+    SESSIONS,
 };
 use std::time::Duration;
 
@@ -38,6 +39,8 @@ fn every(m: &MySqlMonitor) -> Vec<(&'static str, String, &'static [&'static str]
     out.push(("query text", query_text(4211), QUERY_TEXT));
     out.push(("session before an action", guard(m, 63114), SESSIONS));
     out.push(("session after an action", session(m, 63114), SESSIONS));
+    out.push(("row lock waits", row_lock_waits(), ROW_LOCK_WAITS));
+    out.push(("metadata lock waits", metadata_lock_waits(), METADATA_LOCKS));
     out
 }
 
@@ -106,8 +109,8 @@ fn a_running_statement_is_named_by_its_event_only_when_the_events_are_read() {
 fn a_tick_reads_what_is_wanted_in_order() {
     let m = my(80411, true, Readable::Yes);
     let limit = Duration::from_secs(2);
-    assert_eq!(tick(&m, &Want { sessions: None, server: false, limit }), counters());
-    let statements = tick(&m, &Want { sessions: Some(IDLE), server: true, limit });
+    assert_eq!(tick(&m, &Want { sessions: None, locks: false, server: false, limit }), counters());
+    let statements = tick(&m, &Want { sessions: Some(IDLE), locks: false, server: true, limit });
     assert_eq!(statements.len(), 5);
     assert_eq!(statements[..2], counters()[..]);
     assert_eq!(statements[2..3], sessions(&m, IDLE)[..]);
@@ -179,4 +182,16 @@ fn the_read_before_an_action_tells_the_statement_as_the_tick_does() {
     let weak = guard(&my(80411, false, Readable::Yes), 1);
     assert!(weak.contains("NULL AS THREAD_ID, NULL AS EVENT_ID") && weak.contains("MD5(p.INFO)"), "{weak}");
     assert!(session(&m, 63114).contains("INNODB_TRX"), "the follow-up reads the tick's columns");
+fn the_lock_reads_follow_what_the_account_may_read() {
+    assert_eq!(locks(&m), [row_lock_waits(), metadata_lock_waits()]);
+    for unreadable in [Readable::Refused, Readable::Unknown] {
+        assert_eq!(locks(&MySqlMonitor { metadata_locks: unreadable, ..m.clone() }), [row_lock_waits()]);
+    // Requests and blocking locks are looked up by their ids, not by reading every lock.
+    let rows = row_lock_waits();
+    assert!(rows.contains("r.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID"), "{rows}");
+    assert!(rows.contains("b.ENGINE_LOCK_ID = w.BLOCKING_ENGINE_LOCK_ID"), "{rows}");
+    // Other threads' locks on the object only; pending first, bounded.
+    let mdl = metadata_lock_waits();
+    assert!(mdl.contains("p.thread <> g.thread") && mdl.contains("ORDER BY LOCK_STATUS DESC"), "{mdl}");
+    assert!(rows.ends_with(&format!("LIMIT {LOCK_ROWS}")) && mdl.ends_with(&format!("LIMIT {LOCK_ROWS}")));
 }

@@ -99,6 +99,7 @@ fn snapshot(secs: f64, commits: u64, rows: Vec<SessionRow>, server: bool) -> Sna
             Gauge { kind: GaugeKind::WaitingForLock, value: 1 },
             Gauge { kind: GaugeKind::Hidden, value: 0 },
         ],
+        locks: None,
         sessions: Some(SessionList { time, rows, idle_left_out: true }),
         server: server.then(|| ServerInfo {
             version: "PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2) on aarch64-unknown-linux-gnu".into(),

@@ -8,6 +8,7 @@ use crate::monitor::model::{
     QueryText, Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState, Timestamp, Tx,
     Visibility, Wait, WaitClass,
 };
+use crate::monitor::locks::{self as lk, Blame, Holder, LockHolder, LockList, LockObject, LockWait};
 use crate::monitor::model::{SessionsWanted, Snapshot, TEXT_MIN_AGE_US, TEXT_SAME_START_US, TextAsk, Want};
 
 /// The status variables a tick reads (`SHOW GLOBAL STATUS`), by name: what [`counters`] knows.
@@ -92,9 +93,33 @@ pub const SESSIONS: &[&str] = &[
 /// The columns of a session's row read for its statement's whole text (`now` in microseconds since the Unix epoch, `TIME` in seconds, `maybe_cut` the server may have kept only the start of `INFO`), in order.
 pub const QUERY_TEXT: &[&str] = &["now", "ID", "COMMAND", "TIME", "INFO", "maybe_cut"];
 
+/// The columns of a row lock wait's row (`waiter` and `blocker` session ids, `blocker` NULL when no session has the blocking transaction; the request's object, type, mode and record; the blocking lock's mode and status, NULL when it has gone), in order.
+pub const ROW_LOCK_WAITS: &[&str] = &[
+    "waiter",
+    "blocker",
+    "blocking_trx",
+    "OBJECT_SCHEMA",
+    "OBJECT_NAME",
+    "INDEX_NAME",
+    "LOCK_TYPE",
+    "LOCK_MODE",
+    "LOCK_DATA",
+    "blocking_mode",
+    "blocking_status",
+];
+
+/// The columns of a metadata lock's row (`id` the owner's session id, NULL for a thread without one; `thread` its thread id), in order.
+pub const METADATA_LOCKS: &[&str] =
+    &["id", "thread", "OBJECT_TYPE", "OBJECT_SCHEMA", "OBJECT_NAME", "LOCK_TYPE", "LOCK_DURATION", "LOCK_STATUS"];
+
 /// The server's error codes that refuse a read for lack of a privilege: 1044 (database), 1142
 /// (table), 1143 (column), 1227 (a privilege such as `PROCESS`).
 const REFUSED: &[u32] = &[1044, 1142, 1143, 1227];
+
+/// The server refused a read with error `code` for lack of a privilege.
+pub fn refused(code: u32) -> bool {
+    REFUSED.contains(&code)
+}
 
 fn readable(answer: &Answer) -> Readable {
     match answer {
@@ -404,13 +429,202 @@ fn lock_wait(state: &str) -> Option<Wait> {
     what.ends_with(" lock").then(|| Wait { class: WaitClass::Lock, name: what.to_owned() })
 }
 
+/// Whether a session may be waiting for a lock, from the session list's rows: one waits for a
+/// row lock (`INNODB_TRX`) or says it waits for a lock (`STATE`), or the list cannot tell (it
+/// lacks `INNODB_TRX`, or other accounts' sessions). Only then are the lock tables read.
+pub fn may_wait(rows: &Rows, my: &MySqlMonitor) -> Result<bool, DecodeError> {
+    if my.process != Readable::Yes {
+        return Ok(true);
+    }
+    for cells in rows {
+        let row = Row::new(cells, "sessions", SESSIONS)?;
+        let waits = row.text("trx_state") == Some("LOCK WAIT") || row.text("STATE").and_then(lock_wait).is_some();
+        if waits || !row.required_bool("trx_read")? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The lock reads' answers ([`ROW_LOCK_WAITS`], then [`METADATA_LOCKS`] when the account may
+/// read them), read at `time`; what the account could not read is said. Row lock waits name
+/// their blockers; a metadata lock request is paired with the granted locks of other sessions on
+/// the same object that it cannot be granted beside ([`lk::mdl_conflicts`]), which may block it.
+pub fn locks(answers: &[Answer], my: &MySqlMonitor, time: Timestamp) -> Result<(LockList, Vec<Hidden>), DecodeError> {
+    let mut waits: Vec<LockWait> = Vec::new();
+    let mut hidden = Vec::new();
+    let mut more = 0u64;
+    let (rows, metadata) = match answers {
+        [rows] => (rows, None),
+        [rows, metadata] => (rows, Some(metadata)),
+        _ => return Err(malformed("locks", format!("{} answers, expected 1 or 2", answers.len()))),
+    };
+    match rows {
+        Answer::Rows(rows) => {
+            if rows.len() >= lk::LOCK_ROWS {
+                more += 1;
+            }
+            for cells in rows {
+                let row = Row::new(cells, "row lock waits", ROW_LOCK_WAITS)?;
+                // A request of a thread with no session (a background thread): not a session's.
+                let Some(waiter) = row.int("waiter")? else { continue };
+                let object = LockObject {
+                    kind: row.required("LOCK_TYPE")?.to_owned(),
+                    name: qualified(row.text("OBJECT_SCHEMA"), row.text("OBJECT_NAME")),
+                    detail: match (row.text("INDEX_NAME"), row.text("LOCK_DATA")) {
+                        (Some(i), Some(d)) => Some(format!("{i} {d}")),
+                        (Some(x), None) | (None, Some(x)) => Some(x.to_owned()),
+                        (None, None) => None,
+                    },
+                    database: None,
+                };
+                let mode = row.required("LOCK_MODE")?.to_owned();
+                let holder = match row.int("blocker")? {
+                    Some(id) => Holder::Session(id),
+                    None => Holder::Transaction(row.required("blocking_trx")?.to_owned()),
+                };
+                let held = LockHolder {
+                    holder,
+                    modes: row.string("blocking_mode").into_iter().collect(),
+                    waiting: row.text("blocking_status") == Some("WAITING"),
+                    blame: Blame::Proven,
+                };
+                let at = waits.iter().position(|w| w.waiter.id == waiter && w.object == object && w.mode == mode);
+                let w = match at {
+                    Some(i) => &mut waits[i],
+                    None => {
+                        waits.push(LockWait {
+                            waiter: SessionKey { id: waiter, started: None },
+                            object,
+                            mode,
+                            since: None,
+                            holders: Vec::new(),
+                        });
+                        waits.last_mut().expect("just pushed")
+                    }
+                };
+                if !w.holders.iter().any(|h| h.holder == held.holder) {
+                    w.holders.push(held);
+                }
+            }
+        }
+        refused @ Answer::Error { .. } if readable(refused) == Readable::Refused => {
+            hidden.push(Hidden { part: Part::RowLockWaits, need: Need::Grant("SELECT on performance_schema") });
+        }
+        Answer::Error { message, .. } => return Err(malformed("row lock waits", message.clone())),
+    }
+    match metadata {
+        Some(Answer::Rows(rows)) => {
+            if rows.len() >= lk::LOCK_ROWS {
+                more += 1;
+            }
+            waits.extend(metadata_waits(rows)?);
+        }
+        Some(Answer::Error { message, .. }) => return Err(malformed("metadata locks", message.clone())),
+        None => hidden.push(Hidden {
+            part: Part::MetadataLockWaits,
+            need: match my.metadata_locks {
+                Readable::Refused => Need::Grant("SELECT on performance_schema"),
+                _ => Need::Setting("wait/lock/metadata/sql/mdl"),
+            },
+        }),
+    }
+    Ok((LockList { time, waits, more, blocks: true }, hidden))
+}
+
+/// `schema.name`, or the one of them there is.
+fn qualified(schema: Option<&str>, name: Option<&str>) -> Option<String> {
+    match (schema.filter(|s| !s.is_empty()), name.filter(|n| !n.is_empty())) {
+        (Some(s), Some(n)) => Some(format!("{s}.{n}")),
+        (Some(x), None) | (None, Some(x)) => Some(x.to_owned()),
+        (None, None) => None,
+    }
+}
+
+/// The metadata lock waits of [`METADATA_LOCKS`] rows: each pending request with the granted
+/// locks of other threads on the same object that it cannot be granted beside.
+fn metadata_waits(rows: &Rows) -> Result<Vec<LockWait>, DecodeError> {
+    struct Mdl<'a> {
+        id: Option<i64>,
+        thread: i64,
+        kind: &'a str,
+        schema: Option<&'a str>,
+        name: Option<&'a str>,
+        lock: &'a str,
+        pending: bool,
+    }
+    let mut all = Vec::with_capacity(rows.len());
+    for cells in rows {
+        let row = Row::new(cells, "metadata locks", METADATA_LOCKS)?;
+        all.push(Mdl {
+            id: row.int("id")?,
+            thread: row.required_int("thread")?,
+            kind: row.required("OBJECT_TYPE")?,
+            schema: row.text("OBJECT_SCHEMA"),
+            name: row.text("OBJECT_NAME"),
+            lock: row.required("LOCK_TYPE")?,
+            pending: row.required("LOCK_STATUS")? == "PENDING",
+        });
+    }
+    let mut waits: Vec<LockWait> = Vec::new();
+    for p in all.iter().filter(|m| m.pending) {
+        // A thread with no session (a background thread): not a session's wait.
+        let Some(id) = p.id else { continue };
+        let mut holders: Vec<LockHolder> = Vec::new();
+        for g in all.iter().filter(|g| {
+            !g.pending && g.thread != p.thread && g.kind == p.kind && g.schema == p.schema && g.name == p.name
+        }) {
+            let blame = match lk::mdl_conflicts(p.kind, p.lock, g.lock) {
+                Some(true) => Blame::Incompatible,
+                Some(false) => continue,
+                None => Blame::CannotTell,
+            };
+            // A holding thread with no session: not one the tree can show.
+            let Some(holder) = g.id.map(Holder::Session) else { continue };
+            match holders.iter_mut().find(|h| h.holder == holder) {
+                Some(h) => {
+                    if !h.modes.iter().any(|m| m == g.lock) {
+                        h.modes.push(g.lock.to_owned());
+                    }
+                    if blame == Blame::Incompatible {
+                        h.blame = blame;
+                    }
+                }
+                None => holders.push(LockHolder { holder, modes: vec![g.lock.to_owned()], waiting: false, blame }),
+            }
+        }
+        waits.push(LockWait {
+            waiter: SessionKey { id, started: None },
+            object: LockObject {
+                kind: p.kind.to_owned(),
+                name: qualified(p.schema, p.name),
+                detail: None,
+                database: None,
+            },
+            mode: p.lock.to_owned(),
+            since: None,
+            holders,
+        });
+    }
+    Ok(waits)
+}
+
 /// The rows of a tick's statements (the clock, the status, then the sessions and the server
-/// when wanted), with the
-/// monitor's own statements as they stood when the counters were read.
-pub fn tick(my: &MySqlMonitor, want: &Want, rows: &[Rows], own: Own) -> Result<Snapshot, DecodeError> {
+/// when wanted), and the lock reads' answers when the Locks view asked (`None`: not asked),
+/// with the monitor's own statements as they stood when the counters were read.
+pub fn tick(
+    my: &MySqlMonitor,
+    want: &Want,
+    rows: &[Rows],
+    locks_read: Option<&[Answer]>,
+    own: Own,
+) -> Result<Snapshot, DecodeError> {
     let expected = 2 + usize::from(want.sessions.is_some()) + 2 * usize::from(want.server);
     if rows.len() != expected {
         return Err(malformed("tick", format!("{} statements, expected {expected}", rows.len())));
+    }
+    if locks_read.is_some() != want.locks {
+        return Err(malformed("tick", "lock reads not as asked"));
     }
     let (sample, gauges) = counters(&rows[..2], own)?;
     let mut next = 2;
@@ -424,6 +638,14 @@ pub fn tick(my: &MySqlMonitor, want: &Want, rows: &[Rows], own: Own) -> Result<S
     };
     let server = if want.server { Some(server_info(&rows[next..next + 2])?) } else { None };
     let mut hidden = hidden;
+    let locks = match locks_read {
+        Some(answers) => {
+            let (list, more) = locks(answers, my, sample.time)?;
+            hidden.extend(more);
+            Some(list)
+        }
+        None => None,
+    };
     // `performance_schema` ran out of thread slots since the server started: its session list
     // may miss some.
     let lost = status_value(&name_values(&rows[1], "status")?, "Performance_schema_thread_instances_lost")?;
@@ -433,7 +655,7 @@ pub fn tick(my: &MySqlMonitor, want: &Want, rows: &[Rows], own: Own) -> Result<S
             need: Need::Setting("performance_schema_max_thread_instances"),
         });
     }
-    Ok(Snapshot { sample, gauges, sessions, server, hidden })
+    Ok(Snapshot { sample, gauges, sessions, locks, server, hidden })
 }
 
 /// The row read for the whole text of the statement `ask` names (none: the session has ended).

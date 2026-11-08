@@ -4,14 +4,15 @@
 //!
 //! The monitor only reads. The tests make what it should see with sessions of their own: a
 //! table `zz_it_mon_<pid>` (dropped when the test ends), a transaction holding a row of it, an
-//! update waiting for that row and an `ALTER TABLE` waiting for the table. The actions are
-//! sent only to sessions the tests open themselves.
+//! update waiting for that row and an `ALTER TABLE` waiting for the table, read as sessions and
+//! as lock waits. The actions are sent only to sessions the tests open themselves.
 
 use datarig_core::driver::TxRule;
 use datarig_core::driver::{
     ConnectOptions, DbCommand, DbError, DbEvent, Driver, OwnSession, PagingMode, Session, SessionRole,
 };
 use datarig_core::monitor::action::{self, ActionOutcome, Denied, NotSent, Stale, Via};
+use datarig_core::monitor::locks::{self, Blame, Holder, Tree};
 use datarig_core::monitor::{
     ActionKind, ActionTarget, Confirmation, FollowUp, FullText, Hidden, MonitorFormat, MySqlMonitor, Need, Part, Proof,
     QUERY_CHARS, Readable, SessionKey, SessionRow, SessionState, SessionsWanted, Snapshot, StatementStamp,
@@ -64,7 +65,8 @@ fn as_user(url: &str, user: &str, password: &str) -> String {
     datarig_core::profile::dsn::format(&d)
 }
 
-const TICK: Want = Want { sessions: Some(SessionsWanted { idle: true }), server: true, limit: Duration::from_secs(5) };
+const TICK: Want =
+    Want { sessions: Some(SessionsWanted { idle: true }), locks: false, server: true, limit: Duration::from_secs(5) };
 
 struct Conn {
     session: Session,
@@ -350,6 +352,27 @@ async fn sessions_show_row_and_metadata_lock_waits() {
         "sessions and server info of the tick, the whole next tick, then two"
     );
 
+    // The Locks view's read: the row lock wait names its blocker; the ALTER's metadata lock
+    // request is paired with the incompatible locks the two transactions on the table hold.
+    let locked = monitor
+        .tick(Want { sessions: Some(SessionsWanted { idle: false }), locks: true, server: false, ..TICK })
+        .await
+        .expect("tick");
+    let lock_list = locked.locks.as_ref().expect("the locks were asked for");
+    assert!(locked.hidden.is_empty(), "{:?}", locked.hidden);
+    let row_wait = lock_list.waits_of(w).next().unwrap_or_else(|| panic!("{lock_list:?}"));
+    assert_eq!(row_wait.object.kind, "RECORD");
+    assert!(row_wait.object.name.as_deref().is_some_and(|n| n.ends_with(&table)), "{row_wait:?}");
+    assert!(row_wait.holders.iter().any(|x| x.holder == Holder::Session(h) && x.blame == Blame::Proven));
+    let mdl = lock_list.waits_of(a).find(|x| x.object.kind == "TABLE").unwrap_or_else(|| panic!("{lock_list:?}"));
+    assert_eq!(mdl.mode, "EXCLUSIVE");
+    let holders: Vec<&Holder> = mdl.holders.iter().filter(|x| x.blame == Blame::Incompatible).map(|x| &x.holder).collect();
+    assert!(holders.contains(&&Holder::Session(h)) && holders.contains(&&Holder::Session(w)), "{mdl:?}");
+    let tree = Tree::build(&locks::edges(locked.sessions.as_ref(), Some(lock_list), true));
+    let line = |id: i64| tree.lines.iter().find(|l| l.node == Holder::Session(id)).unwrap_or_else(|| panic!("{tree:?}"));
+    assert_eq!(line(h).depth, 0);
+    assert!(line(w).depth >= 1 && line(a).depth >= 1, "{tree:?}");
+
     holder.run("ROLLBACK").await;
     reader.run("ROLLBACK").await;
     waiter.answer(waiting).await.expect("the waiter goes on once the holder is gone");
@@ -387,6 +410,12 @@ async fn what_an_account_cannot_see_names_the_privilege() {
     let list = s.sessions.as_ref().unwrap();
     assert!(list.rows.iter().all(|r| r.user.as_deref() == Some(user.as_str())), "{:?}", list.rows);
     assert!(list.rows.iter().all(|r| r.tx == Tx::Unknown));
+    // The lock tables are refused: said, never an empty list of waits.
+    let s = monitor.tick(Want { locks: true, server: false, ..TICK }).await.expect("tick");
+    for part in [Part::RowLockWaits, Part::MetadataLockWaits] {
+        let need = Need::Grant("SELECT on performance_schema");
+        assert!(s.hidden.contains(&Hidden { part, need }), "{:?}", s.hidden);
+    }
     drop(monitor);
 
     admin.query_drop(format!("GRANT PROCESS ON *.* TO '{user}'@'%'")).await.expect("grant");

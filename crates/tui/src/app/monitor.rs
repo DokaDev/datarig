@@ -813,6 +813,7 @@ impl App {
         let request = m.seq;
         let want = Want {
             sessions: Some(SessionsWanted { idle: m.list.show_idle }),
+            locks: false,
             server: std::mem::take(&mut m.want_server),
             limit: m.limit(),
         };

@@ -66,6 +66,11 @@ impl PgMonitor {
     pub fn leader_pid(&self) -> bool {
         self.version >= 130000
     }
+
+    /// `pg_locks.waitstart` (14 on): when a lock wait started.
+    pub fn waitstart(&self) -> bool {
+        self.version >= 140000
+    }
 }
 
 /// The oldest MySQL the monitor reads (8.0.17), as `major * 10000 + minor * 100 + patch`.

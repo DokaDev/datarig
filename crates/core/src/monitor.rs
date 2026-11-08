@@ -14,6 +14,7 @@
 //!   service), which is read from the server and never guessed from its host name.
 //! * The model ([`ServerInfo`], [`Sample`], [`Gauge`], [`SessionRow`], [`Hidden`]): what a tick
 //!   read, with what the account cannot see said as such (unknown is never shown as absent).
+//! * [`locks`]: who waits for whom, and the blocking tree.
 //! * [`rate`]: counters as rates per second on the server's clock, with resets and the monitor's
 //!   own traffic taken out, and the bounded history the charts draw.
 //! * [`action`]: cancelling another session's statement or ending it: what may be offered,
@@ -25,6 +26,7 @@
 pub mod action;
 pub mod decode;
 pub mod format;
+pub mod locks;
 mod model;
 pub mod rate;
 
@@ -32,6 +34,7 @@ pub use action::{
     ActionKind, ActionOutcome, ActionTarget, Ask, Confirmation, Decision, FollowUp, Refusal, StatementStamp, Warning,
 };
 pub use format::{Flavour, MonitorFormat, MySqlMonitor, PgMonitor, Probe, Readable, Route};
+pub use locks::{Blame, Edge, Holder, LockHolder, LockList, LockObject, LockWait, Prepared, Tree, Waits};
 pub use model::{
     Blocker, Counter, CounterKind, Epoch, Extra, ExtraKey, FullText, Gauge, GaugeKind, Hidden, MAX_WAITERS, Need, Own,
     Part, Proof, QUERY_CHARS, QueryText, Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow,
