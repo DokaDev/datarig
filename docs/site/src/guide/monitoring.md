@@ -47,6 +47,45 @@ written, pages read from storage, and more), and the longest running sessions: t
 statement, and those idle with a transaction open (the ten longest). A click on one shows it in
 the Sessions view.
 
+Under the metrics, two charts with a line per kind, coloured as the legend below each says;
+the legend gives the latest figure of each line. On a narrow or short screen they become two
+lines of figures in the list of metrics.
+
+**Statements by type (MySQL).** Statements per second by type, from the server's statement
+counters:
+
+| Line | Counts |
+|---|---|
+| select | `SELECT` |
+| insert | `INSERT`, `INSERT ... SELECT`, `REPLACE`, `REPLACE ... SELECT` |
+| update | `UPDATE`, including multi-table ones |
+| delete | `DELETE`, including multi-table ones |
+
+Prepared statements count by their type, and so do statements run inside stored programs and
+statements the server refused. `LOAD DATA`, `CALL` itself and other statements are in none of
+the lines. The monitor's own `SELECT`s are taken out. After the monitor ends a session through
+a stored procedure (on a managed service), the next point of the select line is a gap: the
+procedure's own statements cannot be counted.
+
+**Rows by operation (PostgreSQL).** PostgreSQL does not count statements by type, so its chart
+counts rows instead, and says so: rows read (rows scanned and index entries returned, for any
+statement, including the scans of an `UPDATE` or a `DELETE`), inserted, updated and deleted per
+second. One `UPDATE` of ten thousand rows is ten thousand; rows of rolled-back transactions,
+of triggers and of cascades count too, and the lines are not parts of one total. A session
+publishes its counts after its transaction ends (at most about once a second), so a long one
+shows when it is done. The read line includes a few rows per read of the monitor's own (about
+one per database). With `track_counts` off the chart says it is not available, rather than
+drawing zero.
+
+**Sessions by state.** The sessions of each state at each read, counted by the server (not from
+the list, which leaves idle sessions out). On PostgreSQL: running, waiting for a lock, idle in
+a transaction, idle, background processes, and unknown (sessions the account cannot see, or
+with activity tracking off; shown only when there are some, never counted as idle). On MySQL,
+by the session's command: query (`Query`, `Execute`), sleep, daemon, connect (`Connect`,
+`Connect Out`), binlog dump (replicas reading from this server) and other. Without the
+`PROCESS` privilege MySQL lists only the account's own sessions, and the chart's title says
+"this account only". The monitor's own session is left out.
+
 ## Sessions
 
 Every session the account may see, the longest running statement first. `s` sorts by the next

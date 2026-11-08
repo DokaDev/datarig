@@ -18,7 +18,9 @@
 //!
 //! The server counts every statement a client sends in `Questions` as it starts it, so the
 //! statements this connection sent are counted here one by one ([`Own::statements`]) and taken
-//! out of the rates exactly.
+//! out of the rates exactly. Its `SELECT`s (refused ones too) are counted the same way for
+//! `Com_select` ([`Own::selects`]); a `CALL` runs statements of its own that cannot be counted
+//! here ([`Own::uncounted`]).
 
 use crate::link::{Link, Next};
 use crate::meta::monitor as sql;
@@ -58,6 +60,10 @@ struct Monitor {
     /// Statements sent since the session opened (the set-up statements before are counted by
     /// the server too, but before any sample, so no rate spans them).
     sent: u64,
+    /// `SELECT` statements sent since the session opened (`WITH` ones too).
+    selects: u64,
+    /// `CALL` statements sent since the session opened.
+    calls: u64,
     /// The `max_execution_time` set on the session, once a tick set one.
     limit: Option<Duration>,
 }
@@ -65,7 +71,7 @@ struct Monitor {
 /// `read_only`: the profile's own (the monitor session is read-only whatever the profile says,
 /// so this is the only place that tells an action may not be sent).
 pub(crate) async fn monitor_loop(conn: Conn, mut link: Link, events: UnboundedSender<DbEvent>, read_only: bool) {
-    let mut m = Monitor { conn, sent: 0, limit: None };
+    let mut m = Monitor { conn, sent: 0, selects: 0, calls: 0, limit: None };
     let probed = match link.guard(None, tokio::time::timeout(PROBE_LIMIT, m.probe())).await {
         Ok(Ok(probed)) => probed,
         Ok(Err(_)) => {
@@ -178,9 +184,20 @@ pub(crate) async fn monitor_loop(conn: Conn, mut link: Link, events: UnboundedSe
 }
 
 impl Monitor {
+    /// Count `sql` as sent, before it goes out (the server counts it even when it refuses it).
+    fn count(&mut self, sql: &str) {
+        self.sent += 1;
+        let first = sql.trim_start().split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("");
+        if first.eq_ignore_ascii_case("SELECT") || first.eq_ignore_ascii_case("WITH") {
+            self.selects += 1;
+        } else if first.eq_ignore_ascii_case("CALL") {
+            self.calls += 1;
+        }
+    }
+
     /// The rows of `sql`, as text cells.
     async fn rows(&mut self, sql: &str) -> Result<Rows, mysql_async::Error> {
-        self.sent += 1;
+        self.count(sql);
         let rows: Vec<Row> = self.conn.query(sql).await?;
         Ok(rows.into_iter().map(|row| row.unwrap().into_iter().map(text).collect()).collect())
     }
@@ -211,7 +228,7 @@ impl Monitor {
             // The counters are the second statement: the server counted every statement sent
             // until then, that one with them.
             if i == 1 {
-                own.statements = self.sent;
+                own = Own { statements: self.sent, transactions: 0, selects: self.selects, uncounted: self.calls };
             }
             // The lock reads right after the session list (they are told apart by it).
             let last = i + 1 == 2 + usize::from(want.sessions.is_some());
@@ -274,7 +291,7 @@ impl Monitor {
         let Some(columns) = columns else {
             return self.rows(sql).await;
         };
-        self.sent += 1;
+        self.count(sql);
         let result = self.conn.query_iter(sql).await?;
         let names: Vec<String> = result.columns_ref().iter().map(|c| c.name_str().into_owned()).collect();
         let mut at = Vec::with_capacity(columns.len());

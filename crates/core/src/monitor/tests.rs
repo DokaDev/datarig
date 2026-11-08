@@ -153,27 +153,71 @@ fn postgres_server_info() {
 
 #[test]
 fn postgres_counters_and_session_counts() {
-    let own = Own { statements: 0, transactions: 9 };
+    let own = Own { statements: 0, transactions: 9, ..Own::default() };
     let (sample, gauges) = decode::pg::counters(&single(fixture!("pg17_locks/counters")), own).unwrap();
-    assert_eq!(sample.get(CounterKind::Commits), Some(6870));
-    assert_eq!(sample.get(CounterKind::PageReads), Some(1_778_632));
-    assert_eq!(sample.get(CounterKind::PageRequests), Some(1_778_632 + 727_627));
-    assert_eq!(sample.get(CounterKind::RowsWritten), Some(23));
+    assert_eq!(sample.get(CounterKind::Commits), Some(12_503));
+    assert_eq!(sample.get(CounterKind::PageReads), Some(944_168));
+    assert_eq!(sample.get(CounterKind::PageRequests), Some(944_168 + 5_958_356));
+    assert_eq!(sample.get(CounterKind::RowsWritten), Some(13_216_629));
     assert_eq!(sample.get(CounterKind::Statements), None, "PostgreSQL counts no statements");
     assert_eq!(sample.epoch, Epoch::Mark(0, 5), "never reset, five databases");
     assert_eq!(sample.own, own);
     let gauge = |k| gauges.iter().find(|g| g.kind == k).map(|g| g.value);
-    // Four waiting or sleeping statements and the lock holder idle in its transaction; the
-    // monitor's own session is not counted as active.
-    assert_eq!(gauge(GaugeKind::Sessions), Some(7));
-    assert_eq!(gauge(GaugeKind::Active), Some(5));
+    // Three updates waiting for a row and a sleep, the row's holder idle in its transaction;
+    // the monitor's own session is not counted as active.
+    assert_eq!(gauge(GaugeKind::Sessions), Some(6));
+    assert_eq!(gauge(GaugeKind::Active), Some(4));
     assert_eq!(gauge(GaugeKind::IdleInTx), Some(1));
     assert_eq!(gauge(GaugeKind::WaitingForLock), Some(3));
     assert_eq!(gauge(GaugeKind::Hidden), Some(0));
     let (_, gauges) = decode::pg::counters(&single(fixture!("pg17_unprivileged/counters")), own).unwrap();
     let gauge = |k| gauges.iter().find(|g| g.kind == k).map(|g| g.value);
-    assert_eq!((gauge(GaugeKind::Sessions), gauge(GaugeKind::Hidden)), (Some(1), Some(11)));
+    assert_eq!((gauge(GaugeKind::Sessions), gauge(GaugeKind::Hidden)), (Some(1), Some(5)));
     decode::pg::counters(&single(fixture!("pg14/counters")), own).unwrap();
+}
+
+#[test]
+fn postgres_rows_by_operation_and_sessions_by_state() {
+    let (sample, gauges) = decode::pg::counters(&single(fixture!("pg17_locks/counters")), Own::default()).unwrap();
+    assert_eq!(sample.get(CounterKind::RowsRead), Some(84_100_402));
+    let ops = [CounterKind::RowsInserted, CounterKind::RowsUpdated, CounterKind::RowsDeleted].map(|k| sample.get(k));
+    assert_eq!(ops, [Some(12_122_053), Some(1_090_156), Some(4_420)]);
+    assert_eq!(sample.get(CounterKind::RowsWritten), Some(13_216_629), "the three together, as before");
+    let classes = |gauges: &[Gauge]| {
+        [
+            GaugeKind::StateRunning,
+            GaugeKind::StateWaiting,
+            GaugeKind::StateIdleInTx,
+            GaugeKind::StateIdle,
+            GaugeKind::StateBackground,
+            GaugeKind::StateUnknown,
+        ]
+        .map(|k| gauges.iter().find(|g| g.kind == k).map_or(0, |g| g.value))
+    };
+    // The client backends but the monitor's own (five) and five server processes, each once.
+    let c = classes(&gauges);
+    assert_eq!(c, [1, 3, 1, 0, 5, 0]);
+    assert_eq!(c.iter().sum::<u64>(), 5 + 5);
+    let gauge = |k| gauges.iter().find(|g| g.kind == k).map(|g| g.value);
+    assert_eq!(gauge(GaugeKind::Sessions), Some(5 + 1), "the monitor's own is a client backend too");
+    // Rows the account may not see are unknown, never idle.
+    let (_, gauges) = decode::pg::counters(&single(fixture!("pg17_unprivileged/counters")), Own::default()).unwrap();
+    let gauge = |k| gauges.iter().find(|g| g.kind == k).map(|g| g.value);
+    assert_eq!(classes(&gauges), [0, 0, 0, 0, 0, 5]);
+    assert_eq!(gauge(GaugeKind::StateUnknown), gauge(GaugeKind::Hidden));
+}
+
+#[test]
+fn postgres_rows_by_operation_are_not_available_with_track_counts_off() {
+    let mut rows = single(fixture!("pg17/counters"));
+    let at = decode::pg::COUNTERS.iter().position(|c| *c == "track_counts").unwrap();
+    rows[0][at] = Some("f".into());
+    let (sample, _) = decode::pg::counters(&rows, Own::default()).unwrap();
+    for k in [CounterKind::RowsInserted, CounterKind::RowsUpdated, CounterKind::RowsDeleted] {
+        assert_eq!(sample.get(k), None, "{k:?}: not counted is not 0/s");
+    }
+    rows[0][at] = None;
+    assert!(matches!(decode::pg::counters(&rows, Own::default()), Err(DecodeError::Malformed { .. })));
 }
 
 #[test]
@@ -270,7 +314,8 @@ fn malformed_rows_are_errors_never_defaults() {
     assert!(decode::pg::sessions(&rows, IDLE).is_err());
     let mut status = rows_of_my_counters();
     status[1].retain(|r| r[0].as_deref() != Some("Uptime"));
-    assert!(matches!(decode::mysql::counters(&status, Own::default()), Err(DecodeError::Malformed { .. })));
+    let my = mysql_root();
+    assert!(matches!(decode::mysql::counters(&status, &my, Own::default()), Err(DecodeError::Malformed { .. })));
 }
 
 fn rows_of_my_counters() -> Vec<Rows> {
@@ -347,19 +392,141 @@ fn mysql_server_info() {
 
 #[test]
 fn mysql_counters() {
-    let own = Own { statements: 40, transactions: 0 };
-    let (sample, gauges) = decode::mysql::counters(&rows_of_my_counters(), own).unwrap();
-    assert_eq!(sample.epoch, Epoch::Uptime(57_053));
-    assert_eq!(sample.get(CounterKind::Statements), Some(21_210));
-    assert_eq!(sample.get(CounterKind::ExplicitRollbacks), Some(2));
+    let own = Own { statements: 40, transactions: 0, ..Own::default() };
+    let my = mysql_root();
+    let (sample, gauges, hidden) = decode::mysql::counters(&rows_of_my_counters(), &my, own).unwrap();
+    assert!(hidden.is_empty(), "PROCESS granted");
+    assert_eq!(sample.epoch, Epoch::Uptime(77_308));
+    assert_eq!(sample.get(CounterKind::Statements), Some(29_204));
+    assert_eq!(sample.get(CounterKind::ExplicitRollbacks), Some(4));
     assert_eq!(sample.get(CounterKind::Commits), None, "MySQL counts no transactions");
-    assert_eq!(sample.get(CounterKind::RowsWritten), Some(278));
-    assert_eq!(sample.get(CounterKind::RowLockWaits), Some(7));
+    assert_eq!(sample.get(CounterKind::RowsWritten), Some(403 + 22 + 2));
+    assert_eq!(sample.get(CounterKind::RowLockWaits), Some(11));
     let gauge = |k| gauges.iter().find(|g| g.kind == k).map(|g| g.value);
-    assert_eq!((gauge(GaugeKind::Sessions), gauge(GaugeKind::Active)), (Some(7), Some(4)));
+    assert_eq!((gauge(GaugeKind::Sessions), gauge(GaugeKind::Active)), (Some(4), Some(3)));
     assert_eq!(gauge(GaugeKind::IdleInTx), None, "MySQL has no such counter");
-    decode::mysql::counters(&rows(fixture!("my80/counters")), own).unwrap();
-    decode::mysql::counters(&rows(fixture!("my84_unprivileged/counters")), own).unwrap();
+    let my80 = decode::mysql::probe(&fixture!("my80/probe")).unwrap();
+    decode::mysql::counters(&rows(fixture!("my80/counters")), &my80, own).unwrap();
+    let unprivileged = decode::mysql::probe(&fixture!("my84_unprivileged/probe")).unwrap();
+    let (_, _, hidden) =
+        decode::mysql::counters(&rows(fixture!("my84_unprivileged/counters")), &unprivileged, own).unwrap();
+    assert_eq!(hidden, [Hidden { part: Part::OtherSessions, need: Need::Grant("PROCESS") }], "its own threads only");
+}
+
+#[test]
+fn mysql_statements_by_type_are_sums_of_their_counters() {
+    let (sample, gauges, _) = decode::mysql::counters(&rows_of_my_counters(), &mysql_root(), Own::default()).unwrap();
+    assert_eq!(sample.get(CounterKind::Selects), Some(2_207));
+    // `Com_insert + Com_insert_select + Com_replace + Com_replace_select`.
+    assert_eq!(sample.get(CounterKind::Inserts), Some(21 + 2 + 2));
+    assert_eq!(sample.get(CounterKind::Updates), Some(24 + 1));
+    assert_eq!(sample.get(CounterKind::Deletes), Some(1 + 1));
+    let gauge = |k| gauges.iter().find(|g| g.kind == k).map(|g| g.value);
+    let commands = [
+        GaugeKind::CommandQuery,
+        GaugeKind::CommandSleep,
+        GaugeKind::CommandDaemon,
+        GaugeKind::CommandConnect,
+        GaugeKind::CommandBinlogDump,
+        GaugeKind::CommandOther,
+    ]
+    .map(gauge);
+    // A row update waiting and a sleep; the row's holder idle; the event scheduler.
+    assert_eq!(commands, [Some(2), Some(1), Some(1), Some(0), Some(0), Some(0)]);
+}
+
+#[test]
+fn a_missing_counter_is_no_series_never_zero() {
+    let mut status = rows_of_my_counters();
+    status[1].retain(|r| r[0].as_deref() != Some("Com_update_multi") && r[0].as_deref() != Some("Com_select"));
+    let (sample, _, _) = decode::mysql::counters(&status, &mysql_root(), Own::default()).unwrap();
+    assert_eq!(sample.get(CounterKind::Updates), None, "a part missing is not the whole");
+    assert_eq!(sample.get(CounterKind::Selects), None);
+    assert_eq!(sample.get(CounterKind::Inserts), Some(25));
+    // A read of the clock without the thread counts is malformed, never zero threads.
+    let mut clock = rows_of_my_counters();
+    clock[0][0].pop();
+    assert!(matches!(
+        decode::mysql::counters(&clock, &mysql_root(), Own::default()),
+        Err(DecodeError::Malformed { .. })
+    ));
+}
+
+#[test]
+fn the_monitors_own_selects_are_taken_out_and_carried() {
+    let own = |selects| Own { selects, ..Own::default() };
+    let s = CounterKind::Selects;
+    let at =
+        |t, selects, mine| sample(t, Epoch::Uptime(t as u64), &[(s, selects), (CounterKind::Inserts, 50)], own(mine));
+    // Eight in two seconds, three of them ours (the clock, the session list, a refused probe
+    // the server counted all the same).
+    let mut pending = Pending::default();
+    assert_eq!(rate::rate(&at(10, 100, 5), &at(12, 108, 8), s, &mut pending), Some(Rate::PerSecond(2.5)));
+    // An idle server: only ours, so nothing.
+    assert_eq!(rate::rate(&at(12, 108, 8), &at(14, 110, 10), s, &mut pending), Some(Rate::PerSecond(0.0)));
+    assert_eq!(pending.selects, 0);
+    // Ours counted before the server showed them: carried to the next interval, never below 0.
+    assert_eq!(rate::rate(&at(14, 110, 10), &at(16, 111, 13), s, &mut pending), Some(Rate::PerSecond(0.0)));
+    assert_eq!(pending, Pending { selects: 2, ..Pending::default() });
+    assert_eq!(rate::rate(&at(16, 111, 13), &at(18, 117, 15), s, &mut pending), Some(Rate::PerSecond(1.0)));
+    assert_eq!(pending.selects, 0);
+    // The other types count no traffic of ours.
+    assert_eq!(
+        rate::rate(&at(10, 100, 5), &at(12, 108, 8), CounterKind::Inserts, &mut pending),
+        Some(Rate::PerSecond(0.0))
+    );
+}
+
+#[test]
+fn a_call_leaves_the_select_rate_unknown_and_nothing_else() {
+    let at = |t: i64, selects, own: Own| {
+        sample(t, Epoch::Uptime(t as u64), &[(CounterKind::Selects, selects), (CounterKind::Statements, selects)], own)
+    };
+    let before = at(10, 100, Own { statements: 4, selects: 3, ..Own::default() });
+    let after = at(12, 120, Own { statements: 6, selects: 4, uncounted: 1, ..Own::default() });
+    let mut pending = Pending { selects: 5, ..Pending::default() };
+    assert_eq!(rate::rate(&before, &after, CounterKind::Selects, &mut pending), Some(Rate::Gap(Gap::OwnUnknown)));
+    assert_eq!(pending.selects, 0, "the carry starts again after a gap");
+    assert_eq!(rate::rate(&before, &after, CounterKind::Statements, &mut pending), Some(Rate::PerSecond(9.0)));
+    // The next interval without a call has a rate again.
+    let next = at(14, 124, Own { statements: 8, selects: 6, uncounted: 1, ..Own::default() });
+    assert_eq!(rate::rate(&after, &next, CounterKind::Selects, &mut pending), Some(Rate::PerSecond(1.0)));
+}
+
+#[test]
+fn every_series_breaks_at_a_reset_a_flush_and_a_reconnect() {
+    let at = |t: i64, uptime, v, selects| {
+        let counters: Vec<_> = [
+            CounterKind::Selects,
+            CounterKind::Inserts,
+            CounterKind::Updates,
+            CounterKind::Deletes,
+            CounterKind::RowsInserted,
+            CounterKind::RowsUpdated,
+            CounterKind::RowsDeleted,
+        ]
+        .map(|k| (k, v))
+        .to_vec();
+        sample(t, Epoch::Uptime(uptime), &counters, Own { selects, ..Own::default() })
+    };
+    for k in [CounterKind::Selects, CounterKind::Inserts, CounterKind::Updates, CounterKind::Deletes] {
+        let p = &mut Pending::default();
+        // The first sample alone has no rate: only a pair has one.
+        assert_eq!(rate::rate(&at(0, 100, 50, 1), &at(2, 1, 60, 2), k, p), Some(Rate::Gap(Gap::Reset)), "{k:?}");
+        assert_eq!(rate::rate(&at(0, 100, 50, 1), &at(2, 102, 3, 2), k, p), Some(Rate::Gap(Gap::Backwards)), "{k:?}");
+    }
+    let p = &mut Pending::default();
+    let reconnected = rate::rate(&at(0, 100, 50, 9), &at(2, 102, 60, 1), CounterKind::Selects, p);
+    assert_eq!(reconnected, Some(Rate::Gap(Gap::Reconnected)));
+    let mark = |t: i64, reset, v| {
+        let counters = [CounterKind::RowsInserted, CounterKind::RowsUpdated, CounterKind::RowsDeleted].map(|k| (k, v));
+        sample(t, Epoch::Mark(reset, 5), &counters, Own::default())
+    };
+    for k in [CounterKind::RowsInserted, CounterKind::RowsUpdated, CounterKind::RowsDeleted] {
+        let p = &mut Pending::default();
+        assert_eq!(rate::rate(&mark(0, 0, 10), &mark(2, 0, 30), k, p), Some(Rate::PerSecond(10.0)), "{k:?}");
+        assert_eq!(rate::rate(&mark(2, 0, 30), &mark(4, 7, 2), k, p), Some(Rate::Gap(Gap::Reset)), "{k:?}");
+    }
 }
 
 #[test]
@@ -442,7 +609,7 @@ fn sample(time: i64, epoch: Epoch, counters: &[(CounterKind, u64)], own: Own) ->
 
 #[test]
 fn rates_take_out_the_monitors_own_traffic() {
-    let own = |statements, transactions| Own { statements, transactions };
+    let own = |statements, transactions| Own { statements, transactions, ..Own::default() };
     let a = sample(100, Epoch::Uptime(50), &[(CounterKind::Statements, 1000), (CounterKind::RowsRead, 10)], own(7, 0));
     let b = sample(102, Epoch::Uptime(52), &[(CounterKind::Statements, 1010), (CounterKind::RowsRead, 30)], own(10, 0));
     // Ten statements in two seconds, three of them ours.
@@ -453,7 +620,7 @@ fn rates_take_out_the_monitors_own_traffic() {
     let c = sample(104, Epoch::Uptime(54), &[(CounterKind::Statements, 1012)], own(20, 0));
     let mut pending = Pending::default();
     assert_eq!(rate::rate(&b, &c, CounterKind::Statements, &mut pending), Some(Rate::PerSecond(0.0)));
-    assert_eq!(pending, Pending { statements: 8, transactions: 0 });
+    assert_eq!(pending, Pending { statements: 8, transactions: 0, selects: 0 });
     let pa = sample(10, Epoch::Mark(0, 5), &[(CounterKind::Commits, 100)], own(0, 4));
     let pb = sample(11, Epoch::Mark(0, 5), &[(CounterKind::Commits, 106)], own(0, 5));
     assert_eq!(rate::rate(&pa, &pb, CounterKind::Commits, &mut Pending::default()), Some(Rate::PerSecond(5.0)));
@@ -491,8 +658,8 @@ fn rates_never_span_a_reset() {
     assert_eq!(rate::rate(&mark(0, 0, 5, 5), &up(1, 9, 9), k, &mut Pending::default()), Some(Rate::Gap(Gap::Reset)));
     // A new monitor connection counts its own from nothing again.
     let s = CounterKind::Statements;
-    let a = sample(0, Epoch::Uptime(9), &[(s, 50)], Own { statements: 30, transactions: 0 });
-    let b = sample(2, Epoch::Uptime(11), &[(s, 60)], Own { statements: 2, transactions: 0 });
+    let a = sample(0, Epoch::Uptime(9), &[(s, 50)], Own { statements: 30, transactions: 0, ..Own::default() });
+    let b = sample(2, Epoch::Uptime(11), &[(s, 60)], Own { statements: 2, transactions: 0, ..Own::default() });
     assert_eq!(rate::rate(&a, &b, s, &mut Pending::default()), Some(Rate::Gap(Gap::Reconnected)));
 }
 
@@ -534,7 +701,12 @@ fn own_transactions_published_late_are_still_taken_out() {
     // PostgreSQL publishes the monitor's commits when it flushes its statistics: two ticks of
     // ours show only in the third sample. Both are ours, so no load at all.
     let at = |t, commits, own| {
-        sample(t, Epoch::Mark(0, 1), &[(CounterKind::Commits, commits)], Own { statements: 0, transactions: own })
+        sample(
+            t,
+            Epoch::Mark(0, 1),
+            &[(CounterKind::Commits, commits)],
+            Own { statements: 0, transactions: own, ..Own::default() },
+        )
     };
     let (a, b, c) = (at(0, 100, 10), at(2, 100, 11), at(4, 102, 12));
     let mut pending = Pending::default();
@@ -549,7 +721,12 @@ fn own_transactions_published_late_are_still_taken_out() {
     assert_eq!(pending.transactions, 0);
     // Across a gap nothing is carried.
     pending.transactions = 5;
-    let reset = sample(8, Epoch::Mark(9, 1), &[(CounterKind::Commits, 1)], Own { statements: 0, transactions: 14 });
+    let reset = sample(
+        8,
+        Epoch::Mark(9, 1),
+        &[(CounterKind::Commits, 1)],
+        Own { statements: 0, transactions: 14, ..Own::default() },
+    );
     assert_eq!(rate::rate(&d, &reset, CounterKind::Commits, &mut pending), Some(Rate::Gap(Gap::Reset)));
     assert_eq!(pending.transactions, 0);
     // A counter the monitor does not count leaves the carry alone.
@@ -579,7 +756,7 @@ fn a_postgres_tick_reads_what_is_wanted_in_order() {
     let limit = std::time::Duration::from_secs(2);
     let counters_only = Want { sessions: None, locks: false, server: false, limit };
     let all = Want { sessions: Some(NO_IDLE), locks: false, server: true, limit };
-    let own = Own { statements: 0, transactions: 3 };
+    let own = Own { statements: 0, transactions: 3, ..Own::default() };
     let rows = vec![
         single(fixture!("pg17_locks/counters")),
         single(fixture!("pg17_unprivileged/sessions")),
@@ -631,7 +808,7 @@ fn a_mysql_tick_reads_what_is_wanted_in_order() {
     let limit = std::time::Duration::from_secs(2);
     let counters_only = Want { sessions: None, locks: false, server: false, limit };
     let all = Want { sessions: Some(IDLE), locks: false, server: true, limit };
-    let own = Own { statements: 12, transactions: 0 };
+    let own = Own { statements: 12, transactions: 0, ..Own::default() };
     let mut rows = rows(fixture!("my84_root/counters"));
     rows.extend(rows_of_sessions());
     rows.extend(rows_of_server());

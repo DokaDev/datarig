@@ -92,6 +92,40 @@ async fn every_statement_gives_its_decoders_columns() {
     }
 }
 
+/// Every row of `pg_stat_activity` but the monitor's own falls in exactly one state class, read
+/// in the same statement (one snapshot of the activity), and a session with `track_activities`
+/// off (state `disabled`) is unknown. Against `DATARIG_TEST_PG_URL`.
+#[tokio::test]
+async fn state_classes_are_disjoint_and_cover_every_row() {
+    let url = match std::env::var("DATARIG_TEST_PG_URL") {
+        Ok(u) if !u.is_empty() => u,
+        _ => {
+            assert!(!std::env::var("DATARIG_REQUIRE_PG").is_ok_and(|v| v == "1"), "DATARIG_TEST_PG_URL must be set");
+            eprintln!("SKIPPED state_classes_are_disjoint_and_cover_every_row: set DATARIG_TEST_PG_URL");
+            return;
+        }
+    };
+    let (client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.expect("connect");
+    tokio::spawn(conn);
+    let (quiet, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.expect("connect");
+    tokio::spawn(conn);
+    // Setting it needs a superuser: without one, the classes are still checked.
+    let disabled = quiet.batch_execute("SET track_activities = off").await.is_ok();
+    let sql = format!(
+        "SELECT c.class_running + c.class_waiting + c.class_idle_in_tx + c.class_idle + c.class_background \
+         + c.class_unknown AS classed, (SELECT count(*) FROM pg_stat_activity) - 1 AS rows, c.class_unknown, \
+         c.track_counts FROM ({}) c",
+        counters()
+    );
+    let row = client.query_one(&sql, &[]).await.expect("counters read");
+    let (classed, rows, unknown): (i64, i64, i64) = (row.get(0), row.get(1), row.get(2));
+    assert_eq!(classed, rows, "each row in one class, the monitor's own in none");
+    assert!(row.get::<_, bool>(3), "track_counts is on on the dev server");
+    if disabled {
+        assert!(unknown >= 1, "a session with track_activities off has no state to tell");
+    }
+}
+
 fn target(stamp: Option<StatementStamp>) -> ActionTarget {
     ActionTarget {
         key: datarig_core::monitor::SessionKey { id: 4242, started: Some(Timestamp(1_794_068_700_000_001)) },

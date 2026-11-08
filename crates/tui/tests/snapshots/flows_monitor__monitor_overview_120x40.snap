@@ -15,20 +15,20 @@ expression: "h.screen(120, 40)"
 │                            ││┌ rollbacks/s ───────── 0.0 ┐                                                           │
 │                            │││                          ▁│                                                           │
 │                            ││└───────────────────────────┘                                                           │
+│                            ││┌ rows/s by operation ────────────── 9.1 k ┐┌ sessions by state ─────────────────── 45 ┐│
+│                            │││8.2 k                                    ⠈││37                                       ⠉││
+│                            │││                                          ││                                          ││
+│                            │││                                          ││                                          ││
+│                            │││                                          ││                                          ││
+│                            │││0                                        ⢠││0                                        ⠭││
+│                            │││■ read 8.2 k  ■ inserted 412              ││■ running 1  ■ waiting 1  ■ idle in tx 1  ││
+│                            │││■ updated 206  ■ deleted 206              ││■ idle 37  ■ background 5                 ││
+│                            ││└──────────────────────────────────────────┘└──────────────────────────────────────────┘│
 │                            ││ Longest running                                                                        │
 │                            ││ pid     user       database   state        wait           query age   statement        │
 │                            ││ 3907    bob        shop       idle in tra…                12m00s      SELECT * FROM o… │
 │                            ││ 4211    alice      shop       active       Lock:transact… 3m10s       UPDATE orders S… │
 │                            ││ 4302    web        shop       active                      400ms       SELECT count(*)… │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
 │                            ││                                                                                        │
 │                            ││                                                                                        │
 │                            ││                                                                                        │

@@ -13,11 +13,13 @@ use datarig_core::driver::{
 };
 use datarig_core::monitor::action::{self, ActionOutcome, Denied, NotSent, Stale, Via};
 use datarig_core::monitor::locks::{self, Blame, Holder, Tree};
+use datarig_core::monitor::rate::{self, Pending, Rate};
 use datarig_core::monitor::{
     ActionKind, ActionTarget, Confirmation, FollowUp, FullText, Hidden, MonitorFormat, MySqlMonitor, Need, Part, Proof,
     QUERY_CHARS, Readable, SessionKey, SessionRow, SessionState, SessionsWanted, Snapshot, StatementStamp,
     TEXT_MIN_AGE_US, TextAsk, Timestamp, Tx, Wait, WaitClass, Want,
 };
+use datarig_core::monitor::{CounterKind, GaugeKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_driver_mysql::MyDriver;
 use mysql_async::prelude::Queryable;
@@ -520,6 +522,59 @@ async fn only_the_monitor_session_reads_ticks() {
     let mut meta = Conn::open(&url, SessionRole::Meta, &format!("monm{pid}")).await;
     assert_eq!(meta.tick(TICK).await, Err(DbError::NotSupported));
     assert_eq!(meta.ask(ask).await, Err(DbError::NotSupported));
+}
+
+/// Statements by type count every client's but the monitor's own `SELECT`s, so an idle server
+/// reads none; the threads are counted by command from the session list's process list.
+#[tokio::test(flavor = "multi_thread")]
+async fn statements_by_type_leave_out_our_own_selects() {
+    let test = "statements_by_type_leave_out_our_own_selects";
+    let Some((url, admin_url)) = urls(test) else { return };
+    let pid = std::process::id();
+    let table = format!("zz_it_mon_t_{pid}");
+    let _drop = Cleanup { url: url.clone(), sql: format!("DROP TABLE IF EXISTS {table}, {table}_b") };
+    let (mut monitor, _) = Conn::monitor(&admin_url, &format!("mont{pid}")).await;
+    // Our own reads only between two ticks: none (tried again while another client is busy).
+    let mut quiet = None;
+    for _ in 0..10 {
+        let a = monitor.tick(TICK).await.expect("tick");
+        let b = monitor.tick(TICK).await.expect("tick");
+        assert!(b.sample.own.selects > a.sample.own.selects, "each tick sends SELECTs");
+        let r = rate::rate(&a.sample, &b.sample, CounterKind::Selects, &mut Pending::default());
+        if r == Some(Rate::PerSecond(0.0)) {
+            quiet = r;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    assert_eq!(quiet, Some(Rate::PerSecond(0.0)), "an idle server reads 0 SELECT/s");
+    let mut client = side(&url).await;
+    let before = monitor.tick(TICK).await.expect("tick");
+    for sql in [
+        format!("CREATE TABLE {table} (id INT PRIMARY KEY, v INT)"),
+        format!("CREATE TABLE {table}_b (id INT PRIMARY KEY)"),
+        format!("INSERT INTO {table} VALUES (1, 0), (2, 0)"),
+        format!("INSERT INTO {table}_b SELECT id FROM {table}"),
+        format!("REPLACE INTO {table} VALUES (3, 0)"),
+        format!("UPDATE {table} SET v = 1 WHERE id = 1"),
+        format!("UPDATE {table} t JOIN {table}_b b ON b.id = t.id SET t.v = 2"),
+        format!("DELETE FROM {table} WHERE id = 3"),
+        format!("DELETE t FROM {table} t JOIN {table}_b b ON b.id = t.id WHERE t.id = 2"),
+        format!("SELECT COUNT(*) FROM {table}"),
+    ] {
+        client.query_drop(&sql).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    let after = monitor.tick(TICK).await.expect("tick");
+    let moved = |k| after.sample.get(k).unwrap() - before.sample.get(k).unwrap();
+    // At least ours (another client may add to them).
+    assert!(moved(CounterKind::Inserts) >= 3, "INSERT, INSERT ... SELECT, REPLACE: {}", moved(CounterKind::Inserts));
+    assert!(moved(CounterKind::Updates) >= 2, "single and multiple table: {}", moved(CounterKind::Updates));
+    assert!(moved(CounterKind::Deletes) >= 2, "single and multiple table: {}", moved(CounterKind::Deletes));
+    let own = after.sample.own.selects - before.sample.own.selects;
+    assert!(moved(CounterKind::Selects) > own, "the other client's SELECT counts");
+    let gauge = |k| after.gauges.iter().find(|g| g.kind == k).map(|g| g.value).unwrap_or_else(|| panic!("{k:?}"));
+    assert!(gauge(GaugeKind::CommandSleep) >= 1, "the other client's connection sleeps");
+    assert!(!after.hidden.iter().any(|h| h.part == Part::OtherSessions), "root sees every thread");
 }
 
 /// What an action on `row` carries, as the app makes it.

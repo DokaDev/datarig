@@ -35,6 +35,15 @@ pub const STATUS: &[&str] = &[
     "Aborted_connects",
     "Performance_schema_thread_instances_lost",
     "Performance_schema_metadata_lock_lost",
+    "Com_select",
+    "Com_insert",
+    "Com_insert_select",
+    "Com_replace",
+    "Com_replace_select",
+    "Com_update",
+    "Com_update_multi",
+    "Com_delete",
+    "Com_delete_multi",
 ];
 
 /// The columns of the probe's first row: the version line, `@@performance_schema`, `CURRENT_USER()`, in order.
@@ -64,8 +73,9 @@ pub const SERVER_INFO: &[&str] = &[
     "performance_schema",
 ];
 
-/// The columns of the clock's row (microseconds since the Unix epoch), in order.
-pub const CLOCK: &[&str] = &["now"];
+/// The columns of the clock's row (`now` in microseconds since the Unix epoch; then the threads of the session list's process list by command group, `cmd_query` without the monitor's own thread; `others` the threads of another account than the monitor's), in order.
+pub const CLOCK: &[&str] =
+    &["now", "cmd_query", "cmd_sleep", "cmd_daemon", "cmd_connect", "cmd_binlog_dump", "cmd_other", "others"];
 
 /// The columns of a session's row (`INFO` its first `QUERY_CHARS` characters; the `trx_` columns NULL and `trx_read` 0 without `INNODB_TRX`, `in_tx` and `explicit_locks` NULL and `locks_read` 0 without the metadata lock table; `THREAD_ID` and `EVENT_ID` NULL without the statement events, `EVENT_ID` the running top-level statement's on an instrumented thread, else NULL; `info_md5` the server's MD5 of the whole `INFO`), in order.
 pub const SESSIONS: &[&str] = &[
@@ -239,15 +249,29 @@ fn status_value(values: &[(&str, Option<&str>)], name: &str) -> Result<Option<u6
     }
 }
 
-/// The counters' rows (the clock, the status variables): the sample (with the monitor's own
-/// statements as the driver counted them when the status was read) and the session counts.
-pub fn counters(rows: &[Rows], own: Own) -> Result<(Sample, Vec<Gauge>), DecodeError> {
+/// The counters' rows (the clock with the threads by command, the status variables): the
+/// sample (with the monitor's own statements as the driver counted them when the status was
+/// read), the session counts, and what the account cannot see of the threads (without `PROCESS`
+/// the process list holds the account's own threads only).
+pub fn counters(rows: &[Rows], my: &MySqlMonitor, own: Own) -> Result<(Sample, Vec<Gauge>, Vec<Hidden>), DecodeError> {
     let [clock, status] = rows else {
         return Err(malformed("counters", format!("{} statements, expected 2", rows.len())));
     };
-    let time = one(clock, "clock", CLOCK)?.required_time("now")?;
+    let clock = one(clock, "clock", CLOCK)?;
+    let time = clock.required_time("now")?;
     let values = name_values(status, "status")?;
-    let get = |name| status_value(&values, name);
+    let get = |name: &str| status_value(&values, name);
+    // A sum of counters, `None` when the server lacks one of them (never a part taken as all).
+    let sum = |names: &[&str]| -> Result<Option<u64>, DecodeError> {
+        let mut total = Some(0u64);
+        for name in names {
+            total = match (total, get(name)?) {
+                (Some(t), Some(v)) => Some(t.saturating_add(v)),
+                _ => None,
+            };
+        }
+        Ok(total)
+    };
     let uptime = get("Uptime")?.ok_or_else(|| malformed("status", "no Uptime"))?;
     let mut counters = Vec::new();
     let mut push = |kind, value: Option<u64>| {
@@ -259,8 +283,7 @@ pub fn counters(rows: &[Rows], own: Own) -> Result<(Sample, Vec<Gauge>), DecodeE
     push(CounterKind::ExplicitCommits, get("Com_commit")?);
     push(CounterKind::ExplicitRollbacks, get("Com_rollback")?);
     push(CounterKind::RowsRead, get("Innodb_rows_read")?);
-    let written = [get("Innodb_rows_inserted")?, get("Innodb_rows_updated")?, get("Innodb_rows_deleted")?];
-    push(CounterKind::RowsWritten, written.iter().try_fold(0u64, |sum, v| v.map(|v| sum.saturating_add(v))));
+    push(CounterKind::RowsWritten, sum(&["Innodb_rows_inserted", "Innodb_rows_updated", "Innodb_rows_deleted"])?);
     push(CounterKind::PageRequests, get("Innodb_buffer_pool_read_requests")?);
     push(CounterKind::PageReads, get("Innodb_buffer_pool_reads")?);
     push(CounterKind::BytesIn, get("Bytes_received")?);
@@ -269,6 +292,10 @@ pub fn counters(rows: &[Rows], own: Own) -> Result<(Sample, Vec<Gauge>), DecodeE
     push(CounterKind::SlowQueries, get("Slow_queries")?);
     push(CounterKind::TempDiskTables, get("Created_tmp_disk_tables")?);
     push(CounterKind::AbortedConnects, get("Aborted_connects")?);
+    push(CounterKind::Selects, get("Com_select")?);
+    push(CounterKind::Inserts, sum(&["Com_insert", "Com_insert_select", "Com_replace", "Com_replace_select"])?);
+    push(CounterKind::Updates, sum(&["Com_update", "Com_update_multi"])?);
+    push(CounterKind::Deletes, sum(&["Com_delete", "Com_delete_multi"])?);
     let mut gauges = Vec::new();
     if let Some(value) = get("Threads_connected")? {
         gauges.push(Gauge { kind: GaugeKind::Sessions, value });
@@ -277,7 +304,23 @@ pub fn counters(rows: &[Rows], own: Own) -> Result<(Sample, Vec<Gauge>), DecodeE
     if let Some(value) = get("Threads_running")? {
         gauges.push(Gauge { kind: GaugeKind::Active, value: value.saturating_sub(1) });
     }
-    Ok((Sample { time, epoch: Epoch::Uptime(uptime), counters, own }, gauges))
+    for (kind, column) in [
+        (GaugeKind::CommandQuery, "cmd_query"),
+        (GaugeKind::CommandSleep, "cmd_sleep"),
+        (GaugeKind::CommandDaemon, "cmd_daemon"),
+        (GaugeKind::CommandConnect, "cmd_connect"),
+        (GaugeKind::CommandBinlogDump, "cmd_binlog_dump"),
+        (GaugeKind::CommandOther, "cmd_other"),
+    ] {
+        gauges.push(Gauge { kind, value: clock.required_uint(column)? });
+    }
+    // Only a direct grant of `PROCESS` is seen: without one, no thread of another account in
+    // the list means it holds the account's own only, as far as can be told.
+    let mut hidden = Vec::new();
+    if my.process != Readable::Yes && clock.required_uint("others")? == 0 {
+        hidden.push(Hidden { part: Part::OtherSessions, need: Need::Grant("PROCESS") });
+    }
+    Ok((Sample { time, epoch: Epoch::Uptime(uptime), counters, own }, gauges, hidden))
 }
 
 /// The session list's rows, and what the account cannot see of it.
@@ -648,7 +691,7 @@ pub fn tick(
     if locks_read.is_some() != want.locks {
         return Err(malformed("tick", "lock reads not as asked"));
     }
-    let (sample, gauges) = counters(&rows[..2], own)?;
+    let (sample, gauges, own_only) = counters(&rows[..2], my, own)?;
     let mut next = 2;
     let (sessions, hidden) = match want.sessions {
         Some(wanted) => {
@@ -660,6 +703,11 @@ pub fn tick(
     };
     let server = if want.server { Some(server_info(&rows[next..next + 2])?) } else { None };
     let mut hidden = hidden;
+    for h in own_only {
+        if !hidden.contains(&h) {
+            hidden.push(h);
+        }
+    }
     let locks = match locks_read {
         Some(answers) => {
             let (mut list, more) = locks(answers, my, sample.time)?;

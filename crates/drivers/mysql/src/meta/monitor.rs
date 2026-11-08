@@ -73,13 +73,42 @@ pub(crate) fn server_info() -> Vec<String> {
     ]
 }
 
-/// The counters of a tick: 1. the clock, one row (`now`); 2. the status variables
-/// (`STATUS`: `Variable_name`, `Value` rows). `performance_schema.global_status` does not
-/// hold the `Com_` counters, so they come from `SHOW GLOBAL STATUS`, which no statement can
-/// join with the clock.
-pub(crate) fn counters() -> Vec<String> {
+/// The counters of a tick: 1. the clock and the threads by protocol command, one row (`now`,
+/// `cmd_query`, `cmd_sleep`, `cmd_daemon`, `cmd_connect`, `cmd_binlog_dump`, `cmd_other`,
+/// `others`); 2. the status variables (`STATUS`: `Variable_name`, `Value` rows).
+/// `performance_schema.global_status` does not hold the `Com_` counters, so they come from
+/// `SHOW GLOBAL STATUS`, which no statement can join with the clock.
+///
+/// The threads are counted from the session list's own process list ([`sessions`]), so they
+/// see what it sees (every thread with `PROCESS`, else the account's own). Each falls in one
+/// group only: `Query` and `Execute` (the monitor's own thread left out), `Sleep`, `Daemon`,
+/// `Connect` and `Connect Out`, `Binlog Dump` and `Binlog Dump GTID`, any other command.
+/// `others` counts the threads of another account than the monitor's.
+pub(crate) fn counters(my: &MySqlMonitor) -> Vec<String> {
     let names: Vec<String> = STATUS.iter().map(|n| format!("'{n}'")).collect();
-    vec![format!("SELECT {NOW} AS now"), format!("SHOW GLOBAL STATUS WHERE Variable_name IN ({})", names.join(", "))]
+    let source = process_list(my);
+    vec![
+        format!(
+            "SELECT {NOW} AS now, \
+             COUNT(CASE WHEN p.COMMAND IN ('Query', 'Execute') AND p.ID <> CONNECTION_ID() THEN 1 END) AS cmd_query, \
+             COUNT(CASE WHEN p.COMMAND = 'Sleep' THEN 1 END) AS cmd_sleep, \
+             COUNT(CASE WHEN p.COMMAND = 'Daemon' THEN 1 END) AS cmd_daemon, \
+             COUNT(CASE WHEN p.COMMAND IN ('Connect', 'Connect Out') THEN 1 END) AS cmd_connect, \
+             COUNT(CASE WHEN p.COMMAND IN ('Binlog Dump', 'Binlog Dump GTID') THEN 1 END) AS cmd_binlog_dump, \
+             COUNT(CASE WHEN p.COMMAND NOT IN ('Query', 'Execute', 'Sleep', 'Daemon', 'Connect', 'Connect Out', \
+             'Binlog Dump', 'Binlog Dump GTID') THEN 1 END) AS cmd_other, \
+             COUNT(CASE WHEN p.USER <> SUBSTRING_INDEX(CURRENT_USER(), '@', 1) THEN 1 END) AS others \
+             FROM {source} p"
+        ),
+        format!("SHOW GLOBAL STATUS WHERE Variable_name IN ({})", names.join(", ")),
+    ]
+}
+
+/// The process list the session list and the thread counts read: from 8.0.22 with the
+/// performance schema on, `performance_schema.processlist`, which does not take the server's
+/// global thread list mutex; before, or with it off, `information_schema.PROCESSLIST`.
+fn process_list(my: &MySqlMonitor) -> &'static str {
+    if my.ps_processlist() { "performance_schema.processlist" } else { "information_schema.PROCESSLIST" }
 }
 
 /// The session list, one statement, one row per session (ordered by id). Columns: `now`,
@@ -133,7 +162,7 @@ pub(crate) fn guard(my: &MySqlMonitor, id: u64) -> String {
 }
 
 fn session_rows(my: &MySqlMonitor, trx: bool, locks: bool, filter: &str) -> String {
-    let source = if my.ps_processlist() { "performance_schema.processlist" } else { "information_schema.PROCESSLIST" };
+    let source = process_list(my);
     let mut columns = Vec::new();
     let mut joins = String::new();
     if trx {
@@ -297,7 +326,7 @@ pub(crate) fn locks(my: &MySqlMonitor) -> Vec<String> {
 /// read are exactly those sent until then. The lock reads ([`locks`]) come after the session
 /// list, sent by the driver only when one may wait.
 pub(crate) fn tick(my: &MySqlMonitor, want: &Want) -> Vec<String> {
-    let mut statements = counters();
+    let mut statements = counters(my);
     if let Some(wanted) = want.sessions {
         statements.extend(sessions(my, wanted));
     }

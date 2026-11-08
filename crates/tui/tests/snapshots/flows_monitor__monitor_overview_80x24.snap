@@ -7,19 +7,19 @@ expression: "h.screen(80, 24)"
 │▾ Connections 1       ││ PostgreSQL 17.11 · read-write · up 41d3h · max 200 … │
 │  ▾ ●   local-pg      ││ 1 Overview  2  3  4                         every 2s │
 │    ▾ datarig default ││ commits/s       412                                █ │
-│      ▸ analytics     ││ sessions        41/200                            ██ │
-│      ▸ public        ││ cache hit       99.0%                              █ │
-│      ▸ shop          ││ rows read/s     8.2 k                              █ │
+│      ▸ analytics     ││ rows/s by oper… 9.1 k   ■ read 8.2 k  ■ inserted 412 │
+│      ▸ public        ││                         ■ updated 206  ■ deleted 206 │
+│      ▸ shop          ││ sessions        41/200                            ██ │
+│                      ││ sessions by st… 45      ■ running 1  ■ waiting 1     │
+│                      ││                         ■ idle in tx 1  ■ idle 37  … │
+│                      ││ cache hit       99.0%                              █ │
+│                      ││ rows read/s     8.2 k                              █ │
 │                      ││ rows written/s  824                                █ │
 │                      ││ Longest running                                      │
 │                      ││ pid    user     state       query age statement      │
 │                      ││ 3907   bob      idle in tr… 12m00s    SELECT * FROM… │
 │                      ││ 4211   alice    active      3m10s     UPDATE orders… │
 │                      ││ 4302   web      active      400ms     SELECT count(… │
-│                      ││                                                      │
-│                      ││                                                      │
-│                      ││                                                      │
-│                      ││                                                      │
 │                      ││                                                      │
 │                      ││                                                      │
 │                      ││                                                      │

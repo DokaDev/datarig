@@ -88,6 +88,9 @@ fn snapshot(secs: f64, commits: u64, rows: Vec<SessionRow>, server: bool) -> Sna
                 Counter { kind: CounterKind::RowsWritten, value: commits * 2 },
                 Counter { kind: CounterKind::PageRequests, value: commits * 100 },
                 Counter { kind: CounterKind::PageReads, value: commits },
+                Counter { kind: CounterKind::RowsInserted, value: commits },
+                Counter { kind: CounterKind::RowsUpdated, value: commits / 2 },
+                Counter { kind: CounterKind::RowsDeleted, value: commits / 2 },
             ],
             own: Own::default(),
         },
@@ -98,6 +101,14 @@ fn snapshot(secs: f64, commits: u64, rows: Vec<SessionRow>, server: bool) -> Sna
             Gauge { kind: GaugeKind::Idle, value: 37 },
             Gauge { kind: GaugeKind::WaitingForLock, value: 1 },
             Gauge { kind: GaugeKind::Hidden, value: 0 },
+            // By state, each once: the quick select runs, the update waits, the monitor's own
+            // is left out.
+            Gauge { kind: GaugeKind::StateRunning, value: 1 },
+            Gauge { kind: GaugeKind::StateWaiting, value: 1 },
+            Gauge { kind: GaugeKind::StateIdleInTx, value: 1 },
+            Gauge { kind: GaugeKind::StateIdle, value: 37 },
+            Gauge { kind: GaugeKind::StateBackground, value: 5 },
+            Gauge { kind: GaugeKind::StateUnknown, value: 0 },
         ],
         locks: None,
         sessions: Some(SessionList { time, rows, idle_left_out: true }),
@@ -370,6 +381,187 @@ fn screens_80x24_and_120x40() {
     insta::assert_snapshot!("monitor_details_80x24", h.screen(80, 24));
 }
 
+/// A MySQL read at `secs` with `n` so far (statements, `SELECT`s and the rest grow with it) and
+/// the usual sessions as MySQL lists them.
+fn mysql_snapshot(secs: f64, n: u64, server: bool) -> Snapshot {
+    let mut s = snapshot(secs, n, mysql_rows("SELECT count(*) FROM order_items"), false);
+    s.sample.epoch = Epoch::Uptime(57_000 + secs as u64);
+    s.sample.counters = [
+        (CounterKind::Statements, n * 2),
+        (CounterKind::ExplicitCommits, n / 10),
+        (CounterKind::ExplicitRollbacks, 2),
+        (CounterKind::RowsRead, n * 20),
+        (CounterKind::RowsWritten, n / 2),
+        (CounterKind::PageRequests, n * 100),
+        (CounterKind::PageReads, n),
+        (CounterKind::BytesIn, n * 300),
+        (CounterKind::BytesOut, n * 900),
+        (CounterKind::RowLockWaits, 7),
+        (CounterKind::SlowQueries, 1),
+        (CounterKind::TempDiskTables, 118),
+        (CounterKind::AbortedConnects, 0),
+        (CounterKind::Selects, n * 2 - n / 4),
+        (CounterKind::Inserts, n / 8),
+        (CounterKind::Updates, n / 16),
+        (CounterKind::Deletes, n / 64),
+    ]
+    .map(|(kind, value)| Counter { kind, value })
+    .to_vec();
+    s.gauges = [
+        (GaugeKind::Sessions, 47),
+        (GaugeKind::Active, 2),
+        (GaugeKind::CommandQuery, 2),
+        (GaugeKind::CommandSleep, 43),
+        (GaugeKind::CommandDaemon, 1),
+        (GaugeKind::CommandConnect, 0),
+        (GaugeKind::CommandBinlogDump, 1),
+        (GaugeKind::CommandOther, 0),
+    ]
+    .map(|(kind, value)| Gauge { kind, value })
+    .to_vec();
+    s.server = server.then(|| ServerInfo {
+        version: "8.4.11 MySQL Community Server - GPL".into(),
+        started: Some(Timestamp(s.sample.time.0 - 57_000 * 1_000_000)),
+        read_at: s.sample.time,
+        read_only: false,
+        max_connections: Some(151),
+        cache_bytes: Some(134_217_728),
+        extra: Vec::new(),
+    });
+    s
+}
+
+/// A Monitor tab on a MySQL server, its first read answered with `first`.
+fn mysql_open(first: Snapshot) -> Harness {
+    let mut h = Harness::connected(Lang::En);
+    h.driver.monitor.store(true, Ordering::SeqCst);
+    h.command("monitor");
+    h.monitor_db(DbEvent::Connected);
+    h.monitor_db(DbEvent::Monitor(Ok(mysql_format())));
+    let t = ticks(&mut h);
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(first) });
+    h
+}
+
+/// The next read, answered with `s`.
+fn answer_next(h: &mut Harness, s: Snapshot) {
+    h.advance(Duration::from_secs(2));
+    let t = ticks(h);
+    assert_eq!(t.len(), 1, "{t:?}");
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(s) });
+}
+
+#[test]
+fn mysql_overview_screens_80x24_and_120x40() {
+    use datarig_tui::app::monitor::Metric;
+    let mut h = mysql_open(mysql_snapshot(0.0, 1000, true));
+    // One read alone has no rate: the series start with a gap, never 0.
+    let selects = Metric::Rate(CounterKind::Selects);
+    assert_eq!(monitor(&h).history_of(selects).unwrap().last(), None);
+    let sleeping = Metric::Gauge(GaugeKind::CommandSleep);
+    assert_eq!(monitor(&h).history_of(sleeping).unwrap().last(), Some(43.0), "a count needs no pair");
+    // A load that grows and falls back, so the lines move.
+    let mut n = 1000;
+    for (i, step) in [400, 900, 1600, 1200, 700, 1824 - 1000].into_iter().enumerate() {
+        n += step;
+        answer_next(&mut h, mysql_snapshot(2.0 * (i + 1) as f64, n, false));
+    }
+    assert_eq!(monitor(&h).history_of(selects).unwrap().last(), Some(721.0));
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("statements/s by type") && screen.contains("sessions by state"), "{screen}");
+    assert!(screen.contains("active 2"), "the Sessions tile keeps its text: {screen}");
+    insta::assert_snapshot!("monitor_overview_mysql_120x40", screen);
+    insta::assert_snapshot!("monitor_overview_mysql_80x24", h.screen(80, 24));
+}
+
+#[test]
+fn the_charts_wrap_their_legend_and_give_way_when_short() {
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, rows(), true)) });
+    answer_next(&mut h, snapshot(2.0, 1824, rows(), false));
+    // Too narrow for two side by side: one under the other, a legend on two rows.
+    let stacked = h.screen(88, 40);
+    let line_of = |screen: &str, text: &str| screen.lines().position(|l| l.contains(text));
+    let (running, background) = (line_of(&stacked, "■ running 1"), line_of(&stacked, "■ background 5"));
+    assert!(running.is_some() && background > running, "the legend wraps, no series cut: {stacked}");
+    insta::assert_snapshot!("monitor_overview_stacked_88x40", stacked);
+    // Narrower and shorter: both legends wrap, so the second chart is a line of its own.
+    let short = h.screen(80, 30);
+    let (first, second) = (line_of(&short, "┌ rows/s by operation"), line_of(&short, "sessions by state  45"));
+    assert!(first.is_some() && second > first, "{short}");
+    insta::assert_snapshot!("monitor_overview_short_80x30", short);
+    // Wide but short: a list of lines, each chart a line of its own.
+    let lines = h.screen(120, 26);
+    let row = |text: &str| lines.lines().find(|l| l.contains(text)).unwrap_or_else(|| panic!("{text}: {lines}"));
+    let column = |line: &str, text: &str| line.find(text).map(|b| line[..b].chars().count());
+    let (commits, rows) = (row("commits/s"), row("rows/s by operation"));
+    assert!(rows.contains("■ read 8.2 k  ■ inserted 412"), "{lines}");
+    // One column of values for metrics and charts alike.
+    assert_eq!(column(commits, "412"), column(rows, "9.1 k"), "{lines}");
+    insta::assert_snapshot!("monitor_overview_lines_120x26", lines);
+}
+
+#[test]
+fn a_chart_says_why_it_is_not_there_and_whose_threads_it_counts() {
+    // `track_counts` off: no rows by operation, said so, not 0/s.
+    let (mut h, first) = monitor_open();
+    let off = |mut s: Snapshot| {
+        s.sample.counters.retain(|c| {
+            !matches!(c.kind, CounterKind::RowsInserted | CounterKind::RowsUpdated | CounterKind::RowsDeleted)
+        });
+        if let Some(info) = &mut s.server {
+            info.extra.push(datarig_core::monitor::Extra {
+                key: datarig_core::monitor::ExtraKey::TrackCounts,
+                value: "off".into(),
+            });
+        }
+        s
+    };
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(off(snapshot(0.0, 1000, rows(), true))) });
+    answer_next(&mut h, off(snapshot(2.0, 1824, rows(), false)));
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("not available: track_counts = off"), "{screen}");
+    // Without PROCESS the threads are the account's own.
+    let mut own = mysql_snapshot(0.0, 1000, true);
+    own.hidden.push(Hidden { part: Part::OtherSessions, need: Need::Grant("PROCESS") });
+    let mut h = mysql_open(own);
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("sessions by state: this account only"), "{screen}");
+}
+
+#[test]
+fn without_colours_a_chart_draws_its_total_and_the_legend_tells_the_series() {
+    use ratatui::style::Color;
+    let mut h = mysql_open(mysql_snapshot(0.0, 1000, true));
+    answer_next(&mut h, mysql_snapshot(2.0, 1824, false));
+    let mut plain = (*h.app.theme).clone();
+    for c in [
+        &mut plain.chart_1,
+        &mut plain.chart_2,
+        &mut plain.chart_3,
+        &mut plain.chart_4,
+        &mut plain.chart_5,
+        &mut plain.chart_6,
+    ] {
+        *c = Color::Reset;
+    }
+    let fg = plain.fg;
+    h.app.theme = std::sync::Arc::new(plain);
+    let term = h.draw(120, 40);
+    let buf = term.backend().buffer();
+    let dots: Vec<Color> = buf
+        .content()
+        .iter()
+        .filter(|c| c.symbol().chars().next().is_some_and(|ch| ('\u{2801}'..='\u{28FF}').contains(&ch)))
+        .map(|c| c.fg)
+        .collect();
+    assert!(!dots.is_empty() && dots.iter().all(|c| *c == fg), "one line, the total: {dots:?}");
+    let screen = h.screen(120, 40);
+    for name in ["■ select 721", "■ insert 52", "■ query 2", "■ sleep 43"] {
+        assert!(screen.contains(name), "{name}: {screen}");
+    }
+}
+
 #[test]
 fn a_monitor_tab_is_kept_with_the_workspace_and_reads_again_once_shown() {
     let (h, _) = monitor_open();
@@ -512,7 +704,7 @@ fn the_uptime_follows_the_latest_read() {
 fn own_traffic_owed_before_a_gap_is_not_taken_from_the_load_after_it() {
     let (mut h, first) = monitor_open();
     let with_own = |s: Snapshot, own: u64| Snapshot {
-        sample: Sample { own: Own { statements: 0, transactions: own }, ..s.sample },
+        sample: Sample { own: Own { transactions: own, ..Own::default() }, ..s.sample },
         ..s
     };
     h.monitor_db(DbEvent::MonitorSnapshot {

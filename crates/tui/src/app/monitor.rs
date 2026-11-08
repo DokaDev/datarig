@@ -179,6 +179,8 @@ pub enum Metric {
     CacheHit,
     /// Client sessions connected.
     Sessions,
+    /// A gauge as it stands (a series of the sessions by state).
+    Gauge(GaugeKind),
 }
 
 /// The metrics in the order the Overview shows them; a format shows those it has.
@@ -201,6 +203,30 @@ pub const METRICS: [Metric; 18] = [
     Metric::Rate(CounterKind::TempDiskTables),
     Metric::Rate(CounterKind::SlowQueries),
     Metric::Rate(CounterKind::AbortedConnects),
+];
+
+/// The series the Overview's charts draw besides [`METRICS`] (whose rows read the rows chart
+/// shares); a format keeps the histories of those it has.
+pub const SERIES: [Metric; 19] = [
+    Metric::Rate(CounterKind::Selects),
+    Metric::Rate(CounterKind::Inserts),
+    Metric::Rate(CounterKind::Updates),
+    Metric::Rate(CounterKind::Deletes),
+    Metric::Rate(CounterKind::RowsInserted),
+    Metric::Rate(CounterKind::RowsUpdated),
+    Metric::Rate(CounterKind::RowsDeleted),
+    Metric::Gauge(GaugeKind::StateRunning),
+    Metric::Gauge(GaugeKind::StateWaiting),
+    Metric::Gauge(GaugeKind::StateIdleInTx),
+    Metric::Gauge(GaugeKind::StateIdle),
+    Metric::Gauge(GaugeKind::StateBackground),
+    Metric::Gauge(GaugeKind::StateUnknown),
+    Metric::Gauge(GaugeKind::CommandQuery),
+    Metric::Gauge(GaugeKind::CommandSleep),
+    Metric::Gauge(GaugeKind::CommandDaemon),
+    Metric::Gauge(GaugeKind::CommandConnect),
+    Metric::Gauge(GaugeKind::CommandBinlogDump),
+    Metric::Gauge(GaugeKind::CommandOther),
 ];
 
 /// Where the monitor connection is.
@@ -644,13 +670,14 @@ impl MonitorTab {
     fn take(&mut self, snapshot: Snapshot, i18n: &I18n) {
         let now = &snapshot.sample;
         if self.history.is_empty() {
-            for m in METRICS {
+            for m in METRICS.into_iter().chain(SERIES) {
                 let has = match m {
                     Metric::Rate(k) => now.get(k).is_some(),
                     Metric::CacheHit => {
                         now.get(CounterKind::PageRequests).is_some() && now.get(CounterKind::PageReads).is_some()
                     }
                     Metric::Sessions => snapshot.gauges.iter().any(|g| g.kind == GaugeKind::Sessions),
+                    Metric::Gauge(k) => snapshot.gauges.iter().any(|g| g.kind == k),
                 };
                 if has {
                     self.history.push((m, History::new(HISTORY)));
@@ -665,6 +692,7 @@ impl MonitorTab {
         for (m, h) in &mut self.history {
             let value = match (*m, &prev) {
                 (Metric::Sessions, _) => gauge(GaugeKind::Sessions),
+                (Metric::Gauge(k), _) => gauge(k),
                 (_, None) => None,
                 (Metric::Rate(k), Some(before)) => match rate::rate(before, now, k, &mut self.pending) {
                     Some(Rate::PerSecond(v)) => Some(v),

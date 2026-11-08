@@ -31,7 +31,7 @@ fn every(m: &MySqlMonitor) -> Vec<(&'static str, String, &'static [&'static str]
     let info = server_info();
     out.push(("server info", info[0].clone(), SERVER_INFO));
     out.push(("server info uptime", info[1].clone(), NAME_VALUE));
-    let c = counters();
+    let c = counters(m);
     out.push(("clock", c[0].clone(), CLOCK));
     out.push(("status", c[1].clone(), NAME_VALUE));
     out.push(("sessions", sessions(m, IDLE).remove(0), SESSIONS));
@@ -109,10 +109,10 @@ fn a_running_statement_is_named_by_its_event_only_when_the_events_are_read() {
 fn a_tick_reads_what_is_wanted_in_order() {
     let m = my(80411, true, Readable::Yes);
     let limit = Duration::from_secs(2);
-    assert_eq!(tick(&m, &Want { sessions: None, locks: false, server: false, limit }), counters());
+    assert_eq!(tick(&m, &Want { sessions: None, locks: false, server: false, limit }), counters(&m));
     let statements = tick(&m, &Want { sessions: Some(IDLE), locks: false, server: true, limit });
     assert_eq!(statements.len(), 5);
-    assert_eq!(statements[..2], counters()[..]);
+    assert_eq!(statements[..2], counters(&m)[..]);
     assert_eq!(statements[2..3], sessions(&m, IDLE)[..]);
     assert_eq!(statements[3..], server_info()[..]);
     assert_eq!(super::limit(limit), "SET SESSION max_execution_time = 2000");

@@ -23,12 +23,12 @@ expression: "h.screen(120, 40)"
 │                            │││                                                                                      ││
 │                            │││ i or Esc closes                                                                      ││
 │                            ││└──────────────────────────────────────────────────────────────────────────────────────┘│
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
+│                            ││└──────────────────────────────────────────┘└──────────────────────────────────────────┘│
+│                            ││ Longest running                                                                        │
+│                            ││ pid     user       database   state        wait           query age   statement        │
+│                            ││ 3907    bob        shop       idle in tra…                12m00s      SELECT * FROM o… │
+│                            ││ 4211    alice      shop       active       Lock:transact… 3m10s       UPDATE orders S… │
+│                            ││ 4302    web        shop       active                      400ms       SELECT count(*)… │
 │                            ││                                                                                        │
 │                            ││                                                                                        │
 │                            ││                                                                                        │
