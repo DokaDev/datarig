@@ -182,10 +182,15 @@ fn the_read_before_an_action_tells_the_statement_as_the_tick_does() {
     let weak = guard(&my(80411, false, Readable::Yes), 1);
     assert!(weak.contains("NULL AS THREAD_ID, NULL AS EVENT_ID") && weak.contains("MD5(p.INFO)"), "{weak}");
     assert!(session(&m, 63114).contains("INNODB_TRX"), "the follow-up reads the tick's columns");
+}
+
+#[test]
 fn the_lock_reads_follow_what_the_account_may_read() {
+    let m = my(80411, true, Readable::Yes);
     assert_eq!(locks(&m), [row_lock_waits(), metadata_lock_waits()]);
     for unreadable in [Readable::Refused, Readable::Unknown] {
         assert_eq!(locks(&MySqlMonitor { metadata_locks: unreadable, ..m.clone() }), [row_lock_waits()]);
+    }
     // Requests and blocking locks are looked up by their ids, not by reading every lock.
     let rows = row_lock_waits();
     assert!(rows.contains("r.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID"), "{rows}");

@@ -1,6 +1,6 @@
 use super::*;
-use datarig_core::monitor::{Flavour, Route};
 use datarig_core::monitor::decode::pg::{COUNTERS, LOCKS, PROBE, QUERY_TEXT, SERVER_INFO, SESSIONS};
+use datarig_core::monitor::{Flavour, Route};
 use std::time::Duration;
 
 fn pg(version: u32) -> PgMonitor {
@@ -153,6 +153,9 @@ fn an_action_compares_times_as_the_tick_reads_them_and_never_signals_itself() {
     let pooled = action(&PgMonitor { route: Route::Pooled, ..direct }, ActionKind::Terminate, &target(RUNNING));
     assert!(pooled.contains("AND g.tracked AND g.statement THEN pg_terminate_backend(g.pid)"), "{pooled}");
     assert!(session(&direct, 4242).contains("WHERE a.pid = 4242 OR a.monitor ORDER BY a.pid"));
+}
+
+#[test]
 fn the_lock_table_is_read_once_and_only_while_a_session_waits() {
     let p = pg(170011);
     let sql = locks(&p);
@@ -169,6 +172,8 @@ fn the_lock_table_is_read_once_and_only_while_a_session_waits() {
     let list = sessions(&p, NO_IDLE);
     assert_eq!(list.matches("pg_blocking_pids").count(), 1, "{list}");
     assert!(list.contains("a.pid IN (SELECT unnest(b.blockers) FROM b)"), "{list}");
+}
+
 /// While no session waits for a lock, the lock read leaves the lock manager alone: the server's
 /// plan never runs `pg_lock_status`. Against `DATARIG_TEST_PG_URL`; when another test's session
 /// happens to wait at that moment (seen in the same snapshot), there is nothing to check.
@@ -209,6 +214,14 @@ async fn the_lock_read_asks_nothing_of_the_lock_manager_while_no_session_waits()
     if waits != ["false"] {
         eprintln!("a session waits for a lock now: nothing to check");
         return;
+    }
     let scan = plan.iter().find(|l| l.contains("pg_lock_status")).unwrap_or_else(|| panic!("{plan:#?}"));
     assert!(scan.contains("never executed"), "{plan:#?}");
+}
+
+#[test]
+fn the_read_of_one_session_asks_only_its_own_blockers() {
+    let one = session(&pg(170011), 4211);
+    assert!(one.contains("CASE WHEN a.pid IN (SELECT pid FROM w) THEN pg_blocking_pids(a.pid)"), "{one}");
+    assert!(!one.contains("b AS (SELECT pid, pg_blocking_pids(pid)"), "{one}");
 }

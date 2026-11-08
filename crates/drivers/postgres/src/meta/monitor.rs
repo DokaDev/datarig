@@ -111,17 +111,31 @@ pub(crate) fn sessions(pg: &PgMonitor, wanted: SessionsWanted) -> String {
     } else {
         "WHERE a.state IS DISTINCT FROM 'idle' OR a.monitor OR a.pid IN (SELECT unnest(b.blockers) FROM b) "
     };
-    session_rows(pg, idle)
+    session_rows(pg, idle, true)
 }
 
 /// The rows of [`sessions`] for the one session of `pid`, and the reading session's own (so
 /// there is always a row, which the decoder needs; the caller picks the one of `pid`).
 pub(crate) fn session(pg: &PgMonitor, pid: i64) -> String {
-    session_rows(pg, &format!("WHERE a.pid = {pid} OR a.monitor "))
+    session_rows(pg, &format!("WHERE a.pid = {pid} OR a.monitor "), false)
 }
 
-fn session_rows(pg: &PgMonitor, filter: &str) -> String {
+/// `all`: the blockers of every waiter asked for are joined in (the list, whose filter may name
+/// them); else only those of the rows `filter` keeps are asked.
+fn session_rows(pg: &PgMonitor, filter: &str, all: bool) -> String {
     let leader = if pg.leader_pid() { "s.leader_pid" } else { "NULL::int" };
+    let blocked = match all {
+        true => format!(
+            ", b AS (SELECT pid, pg_blocking_pids(pid) AS blockers FROM w) \
+             SELECT {now} AS now, a.*, b.blockers::text AS blocked_by FROM a LEFT JOIN b ON b.pid = a.pid ",
+            now = us("now()")
+        ),
+        false => format!(
+            " SELECT {now} AS now, a.*, \
+             CASE WHEN a.pid IN (SELECT pid FROM w) THEN pg_blocking_pids(a.pid)::text END AS blocked_by FROM a ",
+            now = us("now()")
+        ),
+    };
     format!(
         "WITH a AS (SELECT s.pid, {leader} AS leader_pid, s.usename::text AS usename, s.datname::text AS datname, \
          s.application_name, host(s.client_addr) AS client_addr, s.client_port, s.backend_type, s.state, \
@@ -131,15 +145,12 @@ fn session_rows(pg: &PgMonitor, filter: &str) -> String {
          octet_length(s.query) >= t.size - 4 AS maybe_cut, s.pid = pg_backend_pid() AS monitor \
          FROM pg_stat_activity s, \
          (SELECT setting::int AS size FROM pg_settings WHERE name = 'track_activity_query_size') t), \
-         w AS (SELECT pid FROM a WHERE wait_event_type = 'Lock' ORDER BY state_change NULLS LAST, pid LIMIT {MAX_WAITERS}), \
-         b AS (SELECT pid, pg_blocking_pids(pid) AS blockers FROM w) \
-         SELECT {now} AS now, a.*, b.blockers::text AS blocked_by \
-         FROM a LEFT JOIN b ON b.pid = a.pid {filter}ORDER BY a.pid",
+         w AS (SELECT pid FROM a WHERE wait_event_type = 'Lock' ORDER BY state_change NULLS LAST, pid LIMIT {MAX_WAITERS})\
+         {blocked}{filter}ORDER BY a.pid",
         backend_start = us("s.backend_start"),
         xact_start = us("s.xact_start"),
         query_start = us("s.query_start"),
         state_change = us("s.state_change"),
-        now = us("now()"),
     )
 }
 
