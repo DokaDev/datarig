@@ -479,7 +479,8 @@ pub fn locks(answers: &[Answer], my: &MySqlMonitor, time: Timestamp) -> Result<(
                         sessionless: row.bool("blocking_session_read")? == Some(true),
                     },
                 };
-                let held = LockHolder { holder, modes: Vec::new(), waiting: false, blame: Blame::Proven };
+                let held =
+                    LockHolder { holder, modes: Vec::new(), waiting: false, blame: Blame::Proven, explicit: false };
                 let at = waits.iter().position(|w| w.waiter.id == waiter && w.object == object && w.mode == mode);
                 let w = match at {
                     Some(i) => &mut waits[i],
@@ -547,6 +548,7 @@ fn metadata_waits(rows: &Rows, cut: &mut bool) -> Result<Vec<LockWait>, DecodeEr
         name: Option<&'a str>,
         lock: &'a str,
         pending: bool,
+        explicit: bool,
     }
     let mut all = Vec::with_capacity(rows.len());
     for cells in rows {
@@ -559,6 +561,7 @@ fn metadata_waits(rows: &Rows, cut: &mut bool) -> Result<Vec<LockWait>, DecodeEr
             name: row.text("OBJECT_NAME"),
             lock: row.required("LOCK_TYPE")?,
             pending: row.required("LOCK_STATUS")? == "PENDING",
+            explicit: row.required("LOCK_DURATION")? == "EXPLICIT",
         });
     }
     // The granted locks of each object, so pairing does not go through every lock per request.
@@ -591,13 +594,20 @@ fn metadata_waits(rows: &Rows, cut: &mut bool) -> Result<Vec<LockWait>, DecodeEr
                     if blame == Blame::Incompatible {
                         h.blame = blame;
                     }
+                    h.explicit |= g.explicit;
                 }
                 // Past the most holders a wait keeps: said as a read cut short.
                 None if holders.len() >= lk::HOLDERS_MAX => *cut = true,
                 None => {
                     at.insert(sid, holders.len());
                     let holder = Holder::Session(sid);
-                    holders.push(LockHolder { holder, modes: vec![g.lock.to_owned()], waiting: false, blame });
+                    holders.push(LockHolder {
+                        holder,
+                        modes: vec![g.lock.to_owned()],
+                        waiting: false,
+                        blame,
+                        explicit: g.explicit,
+                    });
                 }
             }
         }

@@ -994,6 +994,7 @@ fn lock_list(secs: f64) -> LockList {
         modes: vec![mode.into()],
         waiting: false,
         blame: Blame::Holds,
+        explicit: false,
     };
     let orders = LockObject { kind: "relation".into(), name: Some("orders".into()), ..Default::default() };
     let wait = |id: i64, object: &LockObject, mode: &str, since: f64, holders: Vec<LockHolder>| LockWait {
@@ -1017,6 +1018,7 @@ fn lock_list(secs: f64) -> LockList {
         modes: vec!["ShareLock".into()],
         waiting: false,
         blame: Blame::Holds,
+        explicit: false,
     };
     LockList {
         time: at(secs),

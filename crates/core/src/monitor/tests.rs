@@ -1220,6 +1220,7 @@ fn prepared_wait(prepared: &[(&str, &str)], statement: Timestamp) -> (SessionLis
             modes: vec![(*mode).into()],
             waiting: false,
             blame: Blame::Holds,
+            explicit: false,
         })
         .collect();
     (list, locks)
@@ -1539,14 +1540,19 @@ fn a_user_level_lock_held_outside_a_transaction_still_blocks() {
     let (locks, _) = decode::mysql::locks(&answers, &my, Timestamp(1)).unwrap();
     let (mut list, _) =
         decode::mysql::sessions(&rows(fixture!("my84_locks/sessions_without_idle")), &my, NO_IDLE).unwrap();
-    // 8608 holds GET_LOCK, idle, no transaction: the lock is its own (EXPLICIT).
-    let holder = list.rows.iter_mut().find(|r| r.key.id == 8608);
-    if let Some(r) = holder {
-        r.tx = Tx::None;
-        if !r.extra.iter().any(|e| e.key == ExtraKey::ExplicitLocks) {
+    // 8608 holds GET_LOCK (EXPLICIT), idle, no transaction: that lock is its own. 8604 has no
+    // transaction open either: its table lock is a transaction's it does not run (an XA one).
+    for id in [8604, 8608] {
+        let r = list.rows.iter_mut().find(|r| r.key.id == id);
+        if let Some(r) = r {
+            r.tx = Tx::None;
+            // A session-wide mark of some explicit lock does not vouch for its other locks.
             r.extra.push(Extra { key: ExtraKey::ExplicitLocks, value: "yes".into() });
         }
     }
-    let edge = lk::edges(Some(&list), Some(&locks), true).edges.into_iter().find(|e| e.waiter == 8610).unwrap();
-    assert_eq!((edge.holder, edge.blame), (Holder::Session(8608), Blame::Incompatible));
+    let edges = lk::edges(Some(&list), Some(&locks), true).edges;
+    let blame =
+        |w: i64, h: i64| edges.iter().find(|e| e.waiter == w && e.holder == Holder::Session(h)).map(|e| e.blame);
+    assert_eq!(blame(8610, 8608), Some(Blame::Incompatible));
+    assert_eq!(blame(8606, 8604), Some(Blame::CannotTell));
 }
