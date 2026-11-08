@@ -3128,7 +3128,7 @@
 
 # Server monitor
 "setting.monitor_interval" = "Server monitor interval"
-"setting.monitor_interval.about" = "How often the server monitor reads the server while its tab is shown."
+"setting.monitor_interval.about" = "How often a new Monitor tab reads the server while it is shown (+ and - change it for one tab)."
 "setting.monitor_interval.s1" = "Every second"
 "setting.monitor_interval.s2" = "Every 2 seconds"
 "setting.monitor_interval.s5" = "Every 5 seconds"

@@ -3121,7 +3121,7 @@
 
 # Server monitor
 "setting.monitor_interval" = "서버 모니터 간격"
-"setting.monitor_interval.about" = "서버 모니터 탭이 보이는 동안 서버를 얼마나 자주 읽을지 정합니다."
+"setting.monitor_interval.about" = "새 모니터 탭이 보이는 동안 서버를 얼마나 자주 읽을지 정합니다 (+ 와 - 는 그 탭 하나만 바꿉니다)."
 "setting.monitor_interval.s1" = "1초마다"
 "setting.monitor_interval.s2" = "2초마다"
 "setting.monitor_interval.s5" = "5초마다"

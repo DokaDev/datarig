@@ -88,7 +88,7 @@ The server monitor.
 
 | Key | Default | Values | Description |
 |---|---|---|---|
-| `interval` | `"2s"` | `"1s"`, `"2s"`, `"5s"`, `"10s"`, `"30s"`, `"60s"` | How often the server monitor reads the server while its tab is shown. Also `:set monitor.interval`. |
+| `interval` | `"2s"` | `"1s"`, `"2s"`, `"5s"`, `"10s"`, `"30s"`, `"60s"` | How often a new Monitor tab reads the server while it is shown (+ and - change it for one tab). Also `:set monitor.interval`. |
 
 ## `[secrets]`
 

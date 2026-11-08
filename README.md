@@ -62,6 +62,12 @@ the values into series, and a cursor shows the exact values of each point. Nothi
 
 ![Revenue per month and product category as lines with a cursor on one month, then as bars](https://dokadev.github.io/datarig/demo/charts.gif)
 
+**Watch a server.** The Monitor tab shows a PostgreSQL or MySQL server's load as charts, its
+sessions, who waits for whom and its replication, read by a connection of its own only while
+the tab is shown. Cancelling a statement or ending a session asks first, and is sent only if
+the session still runs what you saw.
+[Server monitor](https://dokadev.github.io/datarig/guide/monitoring.html)
+
 **Know where you are.** Profiles carry icons, and their environment's colour and mark (PROD,
 STG or your own) follow them onto their tabs and the status line; a read-only environment
 refuses a write before it is sent. [Environments and safety](https://dokadev.github.io/datarig/guide/environments.html)
