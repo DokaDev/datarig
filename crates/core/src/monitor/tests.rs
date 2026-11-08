@@ -1152,7 +1152,9 @@ fn a_waits_lock_read_older_than_the_list_drops_waits_that_are_over() {
         wait: waits.then(|| Wait { class: WaitClass::Lock, name: "row lock".into() }),
         ..list.rows[0].clone()
     };
-    list.rows = vec![waiting(7, false), waiting(8, true), waiting(9, true)];
+    let mut alter = waiting(9, true);
+    alter.wait = Some(Wait { class: WaitClass::Lock, name: "table metadata lock".into() });
+    list.rows = vec![waiting(7, false), waiting(8, true), alter];
     let waits = lk::edges(Some(&list), Some(&locks), true);
     let waiters: HashSet<i64> = waits.edges.iter().map(|e| e.waiter).collect();
     // 7 no longer waits; 10 is not listed though every session is: both are over.
@@ -1265,4 +1267,83 @@ fn a_session_waiting_for_a_user_level_lock_waits_for_a_lock() {
     assert!(decode::mysql::may_wait(&rows, &my).unwrap());
     let (list, _) = decode::mysql::sessions(&[rows], &my, IDLE).unwrap();
     assert_eq!(list.rows[0].wait, Some(Wait { class: WaitClass::Lock, name: "user lock".into() }));
+}
+
+#[test]
+fn a_prepared_transaction_holding_only_a_lock_of_a_mode_not_known_is_not_named() {
+    let (list, _) = pg14_locks();
+    let started = list.rows.iter().find(|r| r.key.id == 14485).unwrap().query_started.unwrap();
+    let (list, locks) = prepared_wait(&[("serializable", "SIReadLock"), ("writes", "RowExclusiveLock")], started);
+    let named: Vec<String> = prepared_blockers(&list, &locks)
+        .into_iter()
+        .map(|h| match h {
+            Holder::Prepared(Some(p)) => p.gid,
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(named, ["writes"]);
+}
+
+#[test]
+fn a_mysql_wait_of_a_later_statement_is_not_told_by_an_older_lock_read() {
+    let my = mysql_root();
+    let (mut locks, _) = decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).unwrap();
+    let row = locks.waits.iter_mut().find(|w| w.waiter.id == 7).unwrap();
+    row.query_started = Some(Timestamp(100_000_000));
+    let mut list = decode::mysql::sessions(&rows_of_sessions(), &my, IDLE).unwrap().0;
+    let base = list.rows[0].clone();
+    let session = |wait: &str, started: i64| SessionRow {
+        key: SessionKey { id: 7, started: None },
+        wait: Some(Wait { class: WaitClass::Lock, name: wait.into() }),
+        query_started: Some(Timestamp(started)),
+        ..base.clone()
+    };
+    let blockers = |list: &SessionList| -> Vec<Holder> {
+        lk::edges(Some(list), Some(&locks), false)
+            .edges
+            .into_iter()
+            .filter(|e| e.waiter == 7)
+            .map(|e| e.holder)
+            .collect()
+    };
+    // The same statement (its start a second off, as MySQL tells it), the same row lock wait.
+    list.rows = vec![session("row lock", 101_000_000)];
+    assert_eq!(blockers(&list), [Holder::Session(5)]);
+    // A new statement waiting for a metadata lock now: the row lock's blocker is not its.
+    list.rows = vec![session("table metadata lock", 130_000_000)];
+    assert!(blockers(&list).is_empty());
+    assert!(lk::edges(Some(&list), Some(&locks), false).alone.contains(&7), "it waits all the same");
+}
+
+#[test]
+fn a_session_waiting_when_the_lock_tables_were_refused_is_still_shown_waiting() {
+    let my = mysql_root();
+    let refused = Answer::Error { code: Some(1142), message: "denied".into() };
+    let (locks, _) = decode::mysql::locks(&[refused, Answer::Rows(Vec::new())], &my, Timestamp(1)).unwrap();
+    let mut list = decode::mysql::sessions(&rows_of_sessions(), &my, IDLE).unwrap().0;
+    list.rows.truncate(1);
+    list.rows[0].wait = Some(Wait { class: WaitClass::Lock, name: "row lock".into() });
+    let id = list.rows[0].key.id;
+    let tree = Tree::build(&lk::edges(Some(&list), Some(&locks), true));
+    assert_eq!(tree.waiting, 1);
+    assert!(tree.lines.iter().any(|l| l.node == Holder::Session(id) && l.alone));
+}
+
+#[test]
+fn a_row_wait_the_list_cannot_see_keeps_its_blocker() {
+    // With SELECT on performance_schema but not PROCESS: no INNODB_TRX, so the list does not
+    // show the row lock wait (and cannot tell it is over).
+    let my = MySqlMonitor { process: Readable::Unknown, innodb_trx: Readable::Refused, ..mysql_root() };
+    let (locks, _) = decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).unwrap();
+    let mut list = decode::mysql::sessions(&rows_of_sessions(), &my, IDLE).unwrap().0;
+    list.rows.truncate(1);
+    list.rows[0].key.id = 7;
+    list.rows[0].wait = None;
+    list.rows[0].tx = Tx::Unknown;
+    let waits = lk::edges(Some(&list), Some(&locks), false);
+    assert!(waits.edges.iter().any(|e| e.waiter == 7 && e.holder == Holder::Session(5)), "{waits:?}");
+    // Known to hold no transaction: the wait is over.
+    list.rows[0].tx = Tx::None;
+    let waits = lk::edges(Some(&list), Some(&locks), false);
+    assert!(!waits.edges.iter().any(|e| e.waiter == 7), "{waits:?}");
 }

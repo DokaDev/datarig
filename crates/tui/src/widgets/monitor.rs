@@ -233,6 +233,10 @@ impl Cx<'_> {
             for h in &s.hidden {
                 v.push((self.hidden(h), th.warning));
             }
+            // What the latest read of the locks could not see, until the next one.
+            for h in self.m.locks_hidden.iter().filter(|h| !s.hidden.contains(h)) {
+                v.push((self.hidden(h), th.warning));
+            }
         }
         if let Some(e) = &self.m.error {
             v.push((self.msg(Msg::MonitorReadFailed { error: e.clone() }), th.error));

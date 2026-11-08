@@ -479,6 +479,7 @@ pub fn locks(answers: &[Answer], my: &MySqlMonitor, time: Timestamp) -> Result<(
                             mode,
                             since: None,
                             query_started: None,
+                            whole_seconds: true,
                             holders: Vec::new(),
                         });
                         waits.last_mut().expect("just pushed")
@@ -585,6 +586,7 @@ fn metadata_waits(rows: &Rows) -> Result<Vec<LockWait>, DecodeError> {
             mode: p.lock.to_owned(),
             since: None,
             query_started: None,
+            whole_seconds: true,
             holders,
         });
     }
@@ -622,8 +624,14 @@ pub fn tick(
     let mut hidden = hidden;
     let locks = match locks_read {
         Some(answers) => {
-            let (list, more) = locks(answers, my, sample.time)?;
+            let (mut list, more) = locks(answers, my, sample.time)?;
             hidden.extend(more);
+            // Each wait is of the statement its session runs in this read.
+            if let Some(rows) = sessions.as_ref().map(|l| &l.rows) {
+                for w in &mut list.waits {
+                    w.query_started = rows.iter().find(|r| r.key.id == w.waiter.id).and_then(|r| r.query_started);
+                }
+            }
             Some(list)
         }
         None => None,

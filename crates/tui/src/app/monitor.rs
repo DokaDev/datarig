@@ -318,6 +318,9 @@ pub struct MonitorTab {
     pub locks: Option<LockList>,
     /// When the locks were last asked for.
     locks_asked: Option<Instant>,
+    /// What the account could not see of the latest read of the locks (kept with it: the reads
+    /// between do not read them).
+    pub locks_hidden: Vec<datarig_core::monitor::Hidden>,
     /// The blocking tree of the latest reads, worked out when one came, with each line's
     /// branch marks (`├ `, `│ `) in front.
     pub tree: Tree,
@@ -360,6 +363,7 @@ impl MonitorTab {
             list: SessionsView::default(),
             locks: None,
             locks_asked: None,
+            locks_hidden: Vec::new(),
             tree: Tree::default(),
             tree_marks: Vec::new(),
             by_id: Default::default(),
@@ -579,6 +583,9 @@ impl MonitorTab {
         let mut snapshot = snapshot;
         if let Some(l) = snapshot.locks.take() {
             self.locks = Some(l);
+            let lock_part =
+                |h: &&datarig_core::monitor::Hidden| matches!(h.part, Part::RowLockWaits | Part::MetadataLockWaits);
+            self.locks_hidden = snapshot.hidden.iter().filter(lock_part).cloned().collect();
         }
         self.snapshot = Some(snapshot);
         self.error = None;

@@ -306,6 +306,7 @@ pub fn locks(rows: &Rows, time: Timestamp) -> Result<LockList, DecodeError> {
                     mode,
                     since: row.time("since")?,
                     query_started: row.time("query_start")?,
+                    whole_seconds: false,
                     holders: Vec::new(),
                 },
             )),

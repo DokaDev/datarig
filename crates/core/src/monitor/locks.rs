@@ -8,7 +8,7 @@
 //! shown as "holders of incompatible locks", which is not proof that they block it: a waiter may
 //! also wait behind a request of higher priority, which is not modelled.
 
-use super::model::{Blocker, SessionKey, SessionList, SessionRow, Timestamp};
+use super::model::{Blocker, SessionKey, SessionList, SessionRow, TEXT_SAME_START_US, Timestamp, Tx};
 use std::collections::{HashMap, HashSet};
 
 /// The most lock waits a read holds (the longest first where the server tells since when).
@@ -47,9 +47,13 @@ pub struct LockWait {
     pub mode: String,
     /// When the wait started, where the server tells (PostgreSQL 14 on).
     pub since: Option<Timestamp>,
-    /// When the waiter's statement started, where the read tells (PostgreSQL): a later
-    /// statement of the same session waits for something else.
+    /// When the waiter's statement started, where the read tells (PostgreSQL; MySQL from the
+    /// session list read with it): a later statement of the same session waits for something
+    /// else.
     pub query_started: Option<Timestamp>,
+    /// `query_started` is worked out from whole seconds (MySQL), so it may move a little from
+    /// one read to the next.
+    pub whole_seconds: bool,
     pub holders: Vec<LockHolder>,
 }
 
@@ -59,10 +63,19 @@ impl LockWait {
     /// and, where the row names what it waits for (PostgreSQL `wait_event`), the same kind of
     /// lock. The mode and object are empty where the read does not tell them.
     pub fn is_of(&self, r: &SessionRow) -> bool {
-        let statement = self.query_started.is_none() || self.query_started == r.query_started;
-        let kind = match (&r.wait, self.query_started.is_some()) {
-            (Some(w), true) => w.name == self.object.kind,
-            _ => true,
+        let statement = match (self.query_started, r.query_started) {
+            (None, _) => true,
+            (Some(a), Some(b)) if self.whole_seconds => (a.0 - b.0).abs() < TEXT_SAME_START_US,
+            (a, b) => a == b,
+        };
+        // MySQL: a row lock wait (`RECORD`) is the session's `row lock`, a metadata lock wait
+        // anything else; PostgreSQL: `wait_event` names the lock type.
+        let kind = match &r.wait {
+            Some(w) if self.whole_seconds => (self.object.kind == "RECORD") == (w.name == "row lock"),
+            Some(w) => self.query_started.is_none() || w.name == self.object.kind,
+            // MySQL without `INNODB_TRX`: a row lock wait does not show in the list, which cannot
+            // tell it is over.
+            None => self.whole_seconds && r.tx == Tx::Unknown,
         };
         self.waiter == r.key && statement && kind
     }
@@ -342,7 +355,8 @@ pub fn edges(sessions: Option<&SessionList>, locks: Option<&LockList>, complete:
                         let waits = locks.into_iter().flat_map(|l| l.waits.iter()).filter(|w| w.is_of(r));
                         for w in waits {
                             for h in &w.holders {
-                                let conflicts = h.modes.iter().any(|m| pg_conflicts(&w.mode, m) != Some(false));
+                                // A mode the table does not know (`SIReadLock`) blocks nothing it can tell.
+                                let conflicts = h.modes.iter().any(|m| pg_conflicts(&w.mode, m) == Some(true));
                                 if matches!(h.holder, Holder::Prepared(Some(_))) && conflicts {
                                     found = true;
                                     push(&mut out, r.key.id, h.holder.clone(), Blame::Proven);
@@ -364,7 +378,7 @@ pub fn edges(sessions: Option<&SessionList>, locks: Option<&LockList>, complete:
         }
         if let Some(list) = sessions {
             match list.rows.iter().find(|r| r.key.id == w.waiter.id) {
-                Some(r) if !r.waits_for_lock() => continue,
+                Some(r) if !w.is_of(r) => continue,
                 None if complete => continue,
                 _ => {}
             }
@@ -378,10 +392,18 @@ pub fn edges(sessions: Option<&SessionList>, locks: Option<&LockList>, complete:
     for w in &locks.waits {
         let id = w.waiter.id;
         let shown = sessions.is_none_or(|list| match list.rows.iter().find(|r| r.key.id == id) {
-            Some(r) => r.waits_for_lock(),
+            Some(r) => w.is_of(r),
             None => !complete,
         });
         if shown && !named.contains(&id) && !out.iter().any(|e| e.waiter == id) && !alone.contains(&id) {
+            alone.push(id);
+        }
+    }
+    // A session the list shows waiting whose blocker no read named (the lock tables refused,
+    // or the wait began after they were read): waiting all the same.
+    for r in sessions.into_iter().flat_map(|l| l.rows.iter()) {
+        let id = r.key.id;
+        if r.waits_for_lock() && !named.contains(&id) && !out.iter().any(|e| e.waiter == id) && !alone.contains(&id) {
             alone.push(id);
         }
     }

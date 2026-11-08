@@ -137,6 +137,7 @@ fn lock_table(n: u64, sessions: usize) -> LockList {
                 mode: "EXCLUSIVE".into(),
                 since: Some(Timestamp(time(n).0 - (i as i64 + 1) * 1_000_000)),
                 query_started: None,
+                whole_seconds: true,
                 holders,
             }
         })
@@ -161,6 +162,14 @@ pub fn run(sessions: usize, n: usize) -> Result<Value, String> {
     let feed = |app: &mut datarig_tui::app::App, reads: &mut u64, locks: bool| -> f64 {
         let mut snapshot = read(*reads, sessions);
         snapshot.locks = locks.then(|| lock_table(*reads, sessions));
+        // The waiters wait for a metadata lock in the session list too.
+        if let (Some(l), Some(list)) = (&snapshot.locks, snapshot.sessions.as_mut()) {
+            for w in &l.waits {
+                if let Some(r) = list.rows.iter_mut().find(|r| r.key.id == w.waiter.id) {
+                    r.wait = Some(Wait { class: WaitClass::Lock, name: "table metadata lock".into() });
+                }
+            }
+        }
         let generation = {
             let m = app.tabs.get_mut(tab).and_then(|t| t.doc.monitor.as_mut()).expect("the Monitor tab");
             m.state = MonState::Opening;

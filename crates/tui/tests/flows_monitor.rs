@@ -1002,6 +1002,7 @@ fn lock_list(secs: f64) -> LockList {
         mode: mode.into(),
         since: Some(at(secs - since)),
         query_started: None,
+        whole_seconds: false,
         holders,
     };
     let xid = LockObject { kind: "transactionid".into(), detail: Some("736".into()), ..Default::default() };
@@ -1159,19 +1160,34 @@ fn the_locks_view_takes_clicks_and_its_lines_statement() {
 #[test]
 fn the_locks_view_says_when_nothing_waits_and_what_the_reads_left_out() {
     let (mut h, first) = monitor_open();
-    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, rows(), true)) });
+    let quiet = || {
+        let mut rows = rows();
+        rows.iter_mut().for_each(|r| r.wait = None);
+        rows
+    };
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(snapshot(0.0, 1000, quiet(), true)) });
     h.keys("3");
     let t = lock_asks(&mut h);
-    let mut s = snapshot(2.0, 1000, rows(), false);
+    let mut s = snapshot(2.0, 1000, quiet(), false);
     s.locks = Some(LockList { time: at(2.0), waits: Vec::new(), more: 0, blocks: true });
     s.hidden.push(Hidden { part: Part::RowLockWaits, need: Need::Grant("SELECT on performance_schema") });
     h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(s) });
+    let note = "Who blocks a row lock wait is not shown (needs SELECT on performance_schema)";
     let screen = h.screen(160, 40);
     assert!(screen.contains("No session waits for a lock"), "{screen}");
-    assert!(
-        screen.contains("Who blocks a row lock wait is not shown (needs SELECT on performance_schema)"),
-        "{screen}"
-    );
+    assert!(screen.contains(note), "{screen}");
+    // The next read does not read the locks: what the last read of them could not see stays said.
+    h.advance(Duration::from_secs(2));
+    let t = lock_asks(&mut h);
+    assert!(!t[0].1);
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(snapshot(4.0, 1000, quiet(), false)) });
+    assert!(h.screen(160, 40).contains(note));
+    // A session waiting whose blocker could not be read is shown waiting.
+    h.advance(Duration::from_secs(2));
+    let t = lock_asks(&mut h);
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(snapshot(6.0, 1000, rows(), false)) });
+    let screen = h.screen(160, 40);
+    assert!(screen.contains("4211 alice · waits for a lock (transactionid) · who holds it was not found"), "{screen}");
 }
 
 #[test]
