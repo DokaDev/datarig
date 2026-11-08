@@ -217,6 +217,7 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
                 // server session it is.
                 cmd @ (DbCommand::MonitorTick { .. }
                 | DbCommand::MonitorQueryText { .. }
+                | DbCommand::MonitorReplication { .. }
                 | DbCommand::MonitorAction { .. }
                 | DbCommand::MonitorFollowUp { .. }
                 | DbCommand::ServerSession { .. }) => cmd.not_supported(),

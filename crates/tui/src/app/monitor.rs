@@ -10,6 +10,10 @@
 //! pauses (the last read stays for reading), `r` reads at once. Three failed reads in a row
 //! double the delay, up to a minute; one good read goes back to the setting.
 //!
+//! The Replication view reads what the server says about its replication on a read of its own
+//! (so a failure there never costs the other views their read): when the view is shown, with
+//! `r`, and then with every read at most every [`REPLICATION_EVERY`] while it stays shown.
+//!
 //! Every read is bound to the tab, its connection's generation and the read's number: an answer
 //! of an older connection or read is dropped. What the account cannot see is said, with what
 //! would show it, never shown as nothing.
@@ -22,8 +26,8 @@ use datarig_core::monitor::SessionsWanted;
 use datarig_core::monitor::locks::{self, Holder, LockList, Tree};
 use datarig_core::monitor::rate::{self, History, Pending, Rate};
 use datarig_core::monitor::{
-    CounterKind, FullText, GaugeKind, MonitorFormat, Part, Sample, ServerInfo, SessionKey, SessionRow, SessionState,
-    Snapshot, TEXT_MIN_AGE_US, TextAsk, Timestamp, Tx, Want,
+    CounterKind, FullText, GaugeKind, MonitorFormat, Part, Replication, Sample, ServerInfo, SessionKey, SessionRow,
+    SessionState, Snapshot, TEXT_MIN_AGE_US, TextAsk, Timestamp, Tx, Want,
 };
 use std::time::Duration;
 
@@ -51,6 +55,11 @@ pub const LOCKS_EVERY: Duration = Duration::from_secs(5);
 /// never comes).
 const ANSWER_GRACE: Duration = Duration::from_secs(10);
 
+/// The least time between two replication reads while the Replication view stays shown (the
+/// interval when it is longer): replication changes slowly, and a MySQL read of it takes a few
+/// statements.
+pub const REPLICATION_EVERY: Duration = Duration::from_secs(10);
+
 /// The views of a Monitor tab.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum MonitorView {
@@ -61,16 +70,21 @@ pub enum MonitorView {
     Sessions,
     /// Who waits for whom: the blocking tree, root blockers first.
     Locks,
+    /// Whether the server takes changes from another, which servers take changes from it, and
+    /// the slots that keep log for them.
+    Replication,
 }
 
 impl MonitorView {
-    pub const ALL: [MonitorView; 3] = [MonitorView::Overview, MonitorView::Sessions, MonitorView::Locks];
+    pub const ALL: [MonitorView; 4] =
+        [MonitorView::Overview, MonitorView::Sessions, MonitorView::Locks, MonitorView::Replication];
 
     pub fn label(self) -> Label {
         match self {
             MonitorView::Overview => Label::MonitorViewOverview,
             MonitorView::Sessions => Label::MonitorViewSessions,
             MonitorView::Locks => Label::MonitorViewLocks,
+            MonitorView::Replication => Label::MonitorViewReplication,
         }
     }
 }
@@ -111,6 +125,8 @@ pub enum MonitorAction {
     CopyQuery,
     /// The root blocker of the selected wait (Locks).
     Root,
+    /// What the server is, in full (over the view), or the view again.
+    ServerInfo,
     /// Close the details, end the filter.
     Back,
 }
@@ -243,6 +259,8 @@ pub struct MonitorHits {
     pub rows_view: Option<MonitorView>,
     /// The rows of the Overview's top sessions, as indexes into the snapshot's rows.
     pub top_rows: Vec<usize>,
+    /// The lines of the server pane on screen (its page).
+    pub info_lines: u16,
 }
 
 /// The read of the whole text of a statement the list holds only the start of (the details of
@@ -332,6 +350,18 @@ pub struct MonitorTab {
     pub held: std::collections::HashMap<Holder, (usize, usize)>,
     pub lock_view: LocksView,
     pub hits: MonitorHits,
+    /// The latest replication read.
+    pub replication: Option<Replication>,
+    /// The last replication read failed: why (the last good one stays shown).
+    pub replication_error: Option<String>,
+    /// The replication read in flight: its number.
+    replication_request: Option<u64>,
+    /// When the last replication read was sent (`None`: one is due with the next read).
+    replication_sent: Option<Instant>,
+    /// The first line of the Replication view on screen.
+    pub replication_top: usize,
+    /// What the server is is shown in full over the view, from this line.
+    pub server_info: Option<usize>,
 }
 
 impl MonitorTab {
@@ -370,6 +400,12 @@ impl MonitorTab {
             held: Default::default(),
             lock_view: LocksView::default(),
             hits: MonitorHits::default(),
+            replication: None,
+            replication_error: None,
+            replication_request: None,
+            replication_sent: None,
+            replication_top: 0,
+            server_info: None,
         }
     }
 
@@ -454,12 +490,19 @@ impl MonitorTab {
         v.selected = self.tree.lines.get(v.cursor).map(|l| l.node.clone());
     }
 
-    /// Show view `v`. The Locks view shown reads at once when its locks are due (and nothing is
-    /// in flight), not an interval later.
+    /// Show view `v`. The Locks view shown reads at once when its locks are due, and the
+    /// Replication view when it was not shown (and nothing is in flight), not an interval later.
     fn show_view(&mut self, v: MonitorView, now: Instant) {
+        // The Replication view reads at once when it was not shown.
+        let replication = v == MonitorView::Replication && self.view != v;
+        if replication {
+            self.replication_sent = None;
+            self.replication_top = 0;
+        }
         self.view = v;
         self.list.details = false;
-        if self.locks_due(now) && self.request.is_none() && self.format().is_some() && !self.paused {
+        self.server_info = None;
+        if (replication || self.locks_due(now)) && self.request.is_none() && self.format().is_some() && !self.paused {
             self.due = Some(now);
         }
     }
@@ -527,10 +570,14 @@ impl MonitorTab {
         self.pending = Pending::default();
         self.want_server = true;
         self.locks_asked = None;
+        self.replication_request = None;
+        self.replication_sent = None;
     }
 
     /// The charts show a gap before the next point: what came before is not joined to it.
     fn gap(&mut self) {
+        // What replication looks like after the time nobody looked is read again at once.
+        self.replication_sent = None;
         self.prev = None;
         // The own traffic still to take out belongs to the time before the gap: the read after
         // it may count it already.
@@ -987,10 +1034,22 @@ impl App {
             limit: m.limit(),
         };
         m.asked_server = want.server;
+        let limit = want.limit;
         session.send(DbCommand::MonitorTick { request, want });
         m.request = Some((request, now));
         m.due = None;
         m.read_once = false;
+        // Replication with the read, while its view is shown: at once, then every so often.
+        let every = REPLICATION_EVERY.max(m.interval.duration());
+        if m.view == MonitorView::Replication
+            && m.replication_request.is_none()
+            && m.replication_sent.is_none_or(|sent| now >= sent + every)
+        {
+            m.seq += 1;
+            session.send(DbCommand::MonitorReplication { request: m.seq, limit });
+            m.replication_request = Some(m.seq);
+            m.replication_sent = Some(now);
+        }
     }
 
     /// The details of tab `id`'s selected session are shown and the list holds only the start
@@ -1037,7 +1096,8 @@ impl App {
         let error_text = match &ev {
             DbEvent::Monitor(Err(e))
             | DbEvent::MonitorSnapshot { result: Err(e), .. }
-            | DbEvent::MonitorQueryText { result: Err(e), .. } => Some(self.db_error_text(e)),
+            | DbEvent::MonitorQueryText { result: Err(e), .. }
+            | DbEvent::MonitorReplication { result: Err(e), .. } => Some(self.db_error_text(e)),
             _ => None,
         };
         let Some((m, i18n)) = self.monitor_words(id) else { return };
@@ -1076,6 +1136,19 @@ impl App {
             DbEvent::MonitorQueryText { request, result } => {
                 if let Some(t) = m.text.as_mut().filter(|t| t.request == request && t.answer.is_none()) {
                     t.answer = Some(result.map_err(|_| error_text.unwrap_or_default()));
+                }
+            }
+            DbEvent::MonitorReplication { request, result } => {
+                if m.replication_request != Some(request) {
+                    return;
+                }
+                m.replication_request = None;
+                match result {
+                    Ok(read) => {
+                        m.replication = Some(read);
+                        m.replication_error = None;
+                    }
+                    Err(_) => m.replication_error = error_text,
                 }
             }
             DbEvent::ConnectFailed { .. } | DbEvent::Lost { .. } => {
@@ -1203,6 +1276,37 @@ impl App {
                     None => {}
                 }
             }
+            MonitorAction::ServerInfo => m.server_info = if m.server_info.is_some() { None } else { Some(0) },
+            // The server pane scrolls by line, by page, to its ends (the draw keeps it within its
+            // lines).
+            MonitorAction::Up
+            | MonitorAction::Down
+            | MonitorAction::PageUp
+            | MonitorAction::PageDown
+            | MonitorAction::First
+            | MonitorAction::Last
+                if m.server_info.is_some() =>
+            {
+                let page = usize::from(m.hits.info_lines.max(1));
+                m.server_info = m.server_info.map(|t| match a {
+                    MonitorAction::Up => t.saturating_sub(1),
+                    MonitorAction::Down => t + 1,
+                    MonitorAction::PageUp => t.saturating_sub(page),
+                    MonitorAction::PageDown => t + page,
+                    MonitorAction::First => 0,
+                    _ => usize::MAX / 2,
+                });
+            }
+            MonitorAction::Up if m.view == MonitorView::Replication => {
+                m.replication_top = m.replication_top.saturating_sub(1);
+            }
+            MonitorAction::Down if m.view == MonitorView::Replication => m.replication_top += 1,
+            MonitorAction::PageUp if m.view == MonitorView::Replication => {
+                m.replication_top = m.replication_top.saturating_sub(page as usize);
+            }
+            MonitorAction::PageDown if m.view == MonitorView::Replication => m.replication_top += page as usize,
+            MonitorAction::First if m.view == MonitorView::Replication => m.replication_top = 0,
+            MonitorAction::Last if m.view == MonitorView::Replication => m.replication_top = usize::MAX / 2,
             MonitorAction::Up if m.list.details => m.list.details_top = m.list.details_top.saturating_sub(1),
             MonitorAction::Down if m.list.details => m.list.details_top += 1,
             MonitorAction::Up => m.move_cursor(-1),
@@ -1222,6 +1326,7 @@ impl App {
             }
             MonitorAction::ReadNow => {
                 m.want_server = true;
+                m.replication_sent = None;
                 match &m.state {
                     // Tried again from the start.
                     MonState::ProfileFailed(_) | MonState::Unavailable(_) | MonState::Lost(_) | MonState::Closed => {
@@ -1268,6 +1373,7 @@ impl App {
                 m.refresh_order(i18n);
             }
             MonitorAction::Filter => {
+                m.server_info = None;
                 m.view = MonitorView::Sessions;
                 m.list.details = false;
                 m.list.filtering = true;
@@ -1279,7 +1385,9 @@ impl App {
                 }
             }
             MonitorAction::Back => {
-                if m.list.filtering {
+                if m.server_info.is_some() {
+                    m.server_info = None;
+                } else if m.list.filtering {
                     m.list.filtering = false;
                 } else if m.list.details {
                     m.list.details = false;
@@ -1393,6 +1501,7 @@ impl App {
         let inside = |r: &Rect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
         if let Some(v) = m.hits.views.iter().find(|(r, _)| inside(r)).map(|(_, v)| *v) {
             m.show_view(v, now);
+            self.monitor_sync();
             return true;
         }
         if let Some(k) = m.hits.headers.iter().find(|(r, _)| inside(r)).map(|(_, k)| *k) {
@@ -1420,7 +1529,8 @@ impl App {
                         m.refresh_order(i18n);
                     }
                 }
-                None => {}
+                // The Replication view's lines take no click.
+                Some(MonitorView::Replication) | None => {}
             }
             return true;
         }

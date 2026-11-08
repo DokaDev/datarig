@@ -5,7 +5,7 @@ expression: "h.screen(80, 24)"
 ╭ Explorer ────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                   
 │  ＋ New connection   │╭ Monitor: local-pg ───────────────────────────────────╮
 │▾ Connections 1       ││ PostgreSQL 17.11 · read-write · up 41d3h · max 200 … │
-│  ▾ ●   local-pg      ││ 1 Overview  2 Sessions  3 Locks             every 2s │
+│  ▾ ●   local-pg      ││ 1  2 Sessions  3  4                         every 2s │
 │    ▾ datarig default ││ 4 of 4 sessions · 37 idle not listed                 │
 │      ▸ analytics     ││ pid    user     state       query ag… statement      │
 │      ▸ public        ││ 3907   bob      idle in tr… 12m00s    SELECT * FROM… │

@@ -1,0 +1,8 @@
+[
+ [["1794120643357892", "ON"]],
+ [["", "my84s", "3306", "Yes", "Waiting for source to send event", "Yes", "Replica has read all relay log; waiting for more updates", "0", "0", "0", "", "", "0", "", "", "ced11181-db1f-11f1-9e15-967323c11f94:24-28", "ccf08818-db1f-11f1-bcb9-6aa192f2d4c5:1-11,\nced11181-db1f-11f1-9e15-967323c11f94:1-28", "bin.000003", "6213", "bin.000003", "6213"]],
+ [["", "1794120627718443", "1794117627520622", "1794117631189802"]],
+ [["Performance_schema_thread_instances_lost", "0"]],
+ [],
+ []
+]

@@ -71,6 +71,14 @@ pub enum ExtraKey {
     SuperReadOnly,
     /// MySQL `@@performance_schema`.
     PerformanceSchema,
+    /// PostgreSQL `track_activities`: off, sessions show no state or statement.
+    TrackActivities,
+    /// PostgreSQL `track_counts`: off, the statistics counters stand still.
+    TrackCounts,
+    /// PostgreSQL `track_activity_query_size`: how much of a statement the server keeps.
+    QuerySize,
+    /// PostgreSQL `wal_level`.
+    WalLevel,
 }
 
 impl ExtraKey {
@@ -88,6 +96,10 @@ impl ExtraKey {
             ExtraKey::LogBin => "log_bin",
             ExtraKey::SuperReadOnly => "super_read_only",
             ExtraKey::PerformanceSchema => "performance_schema",
+            ExtraKey::TrackActivities => "track_activities",
+            ExtraKey::TrackCounts => "track_counts",
+            ExtraKey::QuerySize => "track_activity_query_size",
+            ExtraKey::WalLevel => "wal_level",
         }
     }
 }
@@ -517,6 +529,18 @@ pub enum Part {
     /// Metadata locks the server could not track (MySQL `performance_schema` ran out of room
     /// for them): a wait's holders may be missing.
     UntrackedMetadataLocks,
+    /// The state and log positions of replication streams (PostgreSQL WAL senders and the WAL
+    /// receiver: they are listed).
+    ReplicationDetails,
+    /// Whether this server takes changes from another, and from where (MySQL channels).
+    ReplicationSources,
+    /// The servers that take changes from this one (MySQL registered replicas).
+    Replicas,
+    /// When each channel last heard from its source and applied a transaction (MySQL
+    /// `performance_schema` replication tables).
+    ReplicationTimes,
+    /// The members of a replication group (MySQL group replication).
+    GroupMembers,
 }
 
 /// What would show a [`Hidden`] part.

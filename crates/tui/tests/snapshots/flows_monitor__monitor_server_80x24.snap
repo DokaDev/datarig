@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_monitor.rs
+expression: "h.screen(80, 24)"
+---
+╭ Explorer ────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                   
+│  ＋ New connection   │╭ Monitor: local-pg ───────────────────────────────────╮
+│▾ Connections 1       ││ PostgreSQL 17.11 · read-write · up 41d3h · max 200 … │
+│  ▾ ●   local-pg      ││ 1 Overview  2  3  4                         every 2s │
+│    ▾ datarig default ││┌ Server ────────────────────────────────────────────┐│
+│      ▸ analytics     │││ version           PostgreSQL 17.11 (Debian         ││
+│      ▸ public        │││                   17.11-1.pgdg13+2) on             ││
+│      ▸ shop          │││                   aarch64-unknown-linux-gnu        ││
+│                      │││ provider          none recognised (self-managed,   ││
+│                      │││                   or a provider not listed)        ││
+│                      │││ role              read-write                       ││
+│                      │││ started           41d3h ago                        ││
+│                      │││ connections       41 of 200                        ││
+│                      │││ page cache        128 MB                           ││
+│                      │││ track_activities  on                               ││
+│                      │││ track_counts      off (for this connection; where  ││
+│                      │││                   it is off, the counters stand    ││
+│                      │││                   still)                           ││
+│                      │││ track_activity_query_size                          ││
+│                      │││                   1kB                              ││
+│                      │││ wal_level         replica                          ││
+│                      ││└────────────────────────────────────────────────────┘│
+╰──────────────────────╯╰──────────────────────────────────────────────────────╯
+ local-pg │            │ v view · Enter detail · / filter · a idle · p pause EN

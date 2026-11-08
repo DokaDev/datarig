@@ -1,0 +1,8 @@
+[
+ [["1794120644107361", "ON"]],
+ [],
+ [],
+ [["Performance_schema_thread_instances_lost", "0"]],
+ [["56", "repl", "172.25.0.4:36298", "Source has sent all binlog to replica; waiting for more updates"]],
+ []
+]

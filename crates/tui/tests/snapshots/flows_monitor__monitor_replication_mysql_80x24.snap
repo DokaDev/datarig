@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_monitor.rs
+expression: "h.screen(80, 24)"
+---
+╭ Explorer ────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                   
+│  ＋ New connection   │╭ Monitor: local-pg ───────────────────────────────────╮
+│▾ Connections 1       ││ 8.4.11 (MySQL Community Server) · read-write · up 4… │
+│  ▾ ●   local-pg      ││ 1  2  3  4 Replication                      every 2s │
+│    ▾ datarig default ││ The servers that take changes from this one are not  │
+│      ▸ analytics     ││ known (needs PROCESS)                                │
+│      ▸ public        ││ Role: replica                                        │
+│      ▸ shop          ││                                                      │
+│                      ││ Default channel from my-source:3306                  │
+│                      ││   receiver: running                                  │
+│                      ││     Waiting for source to send event                 │
+│                      ││     last heartbeat 12s ago (sent only while the      │
+│                      ││     source has nothing else to send)                 │
+│                      ││     last transaction fetched 40s ago                 │
+│                      ││   applier: stopped                                   │
+│                      ││     last transaction applied 41s ago                 │
+│                      ││   526 B fetched, not applied yet · 2 transactions    │
+│                      ││   received, not applied yet                          │
+│                      ││   source log read to bin.000003:3256                 │
+│                      ││     applied to bin.000003:2730                       │
+│                      ││   applier error 1062 at 261108 03:10:42: Coordinator │
+│                      ││   stopped because there were error(s) in the         │
+╰──────────────────────╯╰──────────────────────────────────────────────────────╯
+ local-pg │            │ v view · Enter detail · / filter · a idle · p pause EN

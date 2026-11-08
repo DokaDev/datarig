@@ -1,0 +1,44 @@
+---
+source: crates/tui/tests/flows_monitor.rs
+expression: "h.screen(120, 40)"
+---
+╭ Explorer ──────────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                                                     
+│  ＋ New connection         │╭ Monitor: local-pg ─────────────────────────────────────────────────────────────────────╮
+│▾ Connections 1             ││ 8.4.11 (MySQL Community Server) · read-write · up 41d3h · max 200 connections          │
+│  ▾ ●   local-pg            ││ 1 Overview  2 Sessions  3 Locks  4 Replication                                every 2s │
+│    ▾ datarig default       ││ The servers that take changes from this one are not known (needs PROCESS)              │
+│      ▸ analytics           ││ Role: replica                                                                          │
+│      ▸ public              ││                                                                                        │
+│      ▸ shop                ││ Default channel from my-source:3306                                                    │
+│                            ││   receiver: running · Waiting for source to send event                                 │
+│                            ││     last heartbeat 12s ago (sent only while the source has nothing else to send)       │
+│                            ││     last transaction fetched 40s ago                                                   │
+│                            ││   applier: stopped · last transaction applied 41s ago                                  │
+│                            ││   526 B fetched, not applied yet · 2 transactions received, not applied yet            │
+│                            ││   source log read to bin.000003:3256 · applied to bin.000003:2730                      │
+│                            ││   applier error 1062 at 261108 03:10:42: Coordinator stopped because there were        │
+│                            ││   error(s) in the worker(s).                                                           │
+│                            ││   GTIDs received ced11181-db1f-11f1-9e15-967323c11f94:1-12                             │
+│                            ││   GTIDs executed ccf08818-db1f-11f1-bcb9-6aa192f2d4c5:1-5,                             │
+│                            ││   ced11181-db1f-11f1-9e15-967323c11f94:1-10                                            │
+│                            ││                                                                                        │
+│                            ││ Group members (1)                                                                      │
+│                            ││   my-replica:3306 · ONLINE · SECONDARY · this server                                   │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯
+ local-pg │           │ v view · Enter detail · / filter · a idle · p pause · : commands · Space ? help · Space more EN

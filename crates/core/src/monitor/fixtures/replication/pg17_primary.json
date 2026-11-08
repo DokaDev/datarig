@@ -1,0 +1,7 @@
+[
+ [["1794116659377186", "f", "89515696", null, null, null, null]],
+ [["33", "walreceiver", "172.25.0.3", "57962", "streaming", "async", "89515696", "89515696", "89515696", "89515696", null, null, null, "1794116656408951"], ["104", "zz_sub", "172.25.0.7", "48260", "streaming", "async", "89515696", "89515696", "89515696", "89515696", null, null, null, "1794116656447519"]],
+ [],
+ [["standby1", "physical", null, null, "f", "t", "33", "89515696", "reserved", null], ["zz_idle_slot", "physical", null, null, "f", "f", null, "33554472", "reserved", null], ["zz_logical", "logical", "test_decoding", "postgres", "f", "f", null, "50331744", "reserved", null], ["zz_sub", "logical", "pgoutput", "postgres", "f", "t", "104", "89515640", "reserved", null]],
+ []
+]

@@ -1,0 +1,8 @@
+[
+ [["1794120663853411", "ON"]],
+ [["", "my84s", "3306", "Yes", "Waiting for source to send event", "No", "", null, "0", "0", "", "", "1062", "Coordinator stopped because there were error(s) in the worker(s). The most recent failure being: Worker 1 failed executing transaction 'ced11181-db1f-11f1-9e15-967323c11f94:33' at source log bin.000003, end_log_pos 7512. See error log and/or performance_schema.replication_applier_status_by_worker table for more details about this failure or others, if any.", "261108 06:51:00", "ced11181-db1f-11f1-9e15-967323c11f94:29-33", "ccf08818-db1f-11f1-bcb9-6aa192f2d4c5:1-12,\nced11181-db1f-11f1-9e15-967323c11f94:1-32", "bin.000003", "7543", "bin.000003", "7277"]],
+ [["", "1794120658163343", "1794120660400505", "1794120653291857"]],
+ [["Performance_schema_thread_instances_lost", "0"]],
+ [],
+ []
+]

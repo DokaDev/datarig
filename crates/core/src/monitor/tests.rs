@@ -137,7 +137,17 @@ fn postgres_server_info() {
     assert!(!info.read_only);
     assert_eq!((info.max_connections, info.cache_bytes), (Some(100), Some(134_217_728)));
     assert!(info.started.unwrap() < info.read_at);
-    assert_eq!(info.extra, [Extra { key: ExtraKey::TrackIoTiming, value: "off".into() }]);
+    let extra: Vec<(&str, &str)> = info.extra.iter().map(|e| (e.key.name(), e.value.as_str())).collect();
+    assert_eq!(
+        extra,
+        [
+            ("track_activities", "on"),
+            ("track_counts", "on"),
+            ("track_activity_query_size", "1kB"),
+            ("track_io_timing", "off"),
+            ("wal_level", "replica"),
+        ]
+    );
     decode::pg::server_info(&single(fixture!("pg14/server_info"))).unwrap();
 }
 
@@ -1556,3 +1566,4 @@ fn a_user_level_lock_held_outside_a_transaction_still_blocks() {
     assert_eq!(blame(8610, 8608), Some(Blame::Incompatible));
     assert_eq!(blame(8606, 8604), Some(Blame::CannotTell));
 }
+mod replication;

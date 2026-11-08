@@ -1,5 +1,7 @@
 //! PostgreSQL rows read into the model (the statements are the driver's: its `meta::monitor`).
 
+pub mod replication;
+
 use super::{DecodeError, Row, Rows, malformed, one};
 use crate::monitor::action::StatementStamp;
 use crate::monitor::format::{self, PG_MARKERS, PG_MIN_VERSION, PgMonitor, Probe, Route};
@@ -15,9 +17,20 @@ use crate::monitor::model::{Snapshot, TextAsk, Timestamp, Want};
 /// The columns of the probe's row: version, the account's privileges, the provider markers found (comma separated), in order.
 pub const PROBE: &[&str] = &["version", "superuser", "read_all_stats", "signal_backend", "markers"];
 
-/// The columns of the server's row (times as microseconds since the Unix epoch; `shared_buffers` in bytes), in order.
-pub const SERVER_INFO: &[&str] =
-    &["now", "version", "started", "in_recovery", "max_connections", "shared_buffers", "track_io_timing"];
+/// The columns of the server's row (times as microseconds since the Unix epoch; `shared_buffers` in bytes; then the settings that decide what the monitor can read, as the server shows them), in order.
+pub const SERVER_INFO: &[&str] = &[
+    "now",
+    "version",
+    "started",
+    "in_recovery",
+    "max_connections",
+    "shared_buffers",
+    "track_io_timing",
+    "track_activities",
+    "track_counts",
+    "track_activity_query_size",
+    "wal_level",
+];
 
 /// The columns of the counters' row: sums over every database, then session counts (the monitor's own session not active), in order.
 pub const COUNTERS: &[&str] = &[
@@ -121,11 +134,16 @@ pub fn server_info(rows: &Rows) -> Result<ServerInfo, DecodeError> {
         read_only: row.required_bool("in_recovery")?,
         max_connections: row.uint("max_connections")?,
         cache_bytes: row.uint("shared_buffers")?,
-        extra: row
-            .string("track_io_timing")
-            .map(|value| Extra { key: ExtraKey::TrackIoTiming, value })
-            .into_iter()
-            .collect(),
+        extra: [
+            (ExtraKey::TrackActivities, "track_activities"),
+            (ExtraKey::TrackCounts, "track_counts"),
+            (ExtraKey::QuerySize, "track_activity_query_size"),
+            (ExtraKey::TrackIoTiming, "track_io_timing"),
+            (ExtraKey::WalLevel, "wal_level"),
+        ]
+        .into_iter()
+        .filter_map(|(key, column)| row.string(column).map(|value| Extra { key, value }))
+        .collect(),
     })
 }
 

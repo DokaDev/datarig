@@ -896,6 +896,7 @@ pub(crate) async fn query_loop(
             Next::Command(
                 cmd @ (DbCommand::MonitorTick { .. }
                 | DbCommand::MonitorQueryText { .. }
+                | DbCommand::MonitorReplication { .. }
                 | DbCommand::MonitorAction { .. }
                 | DbCommand::MonitorFollowUp { .. }),
             ) => {

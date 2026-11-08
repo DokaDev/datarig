@@ -224,3 +224,64 @@ fn the_read_of_one_session_asks_only_its_own_blockers() {
     assert!(one.contains("CASE WHEN a.pid IN (SELECT pid FROM w) THEN pg_blocking_pids(a.pid)"), "{one}");
     assert!(!one.contains("b AS (SELECT pid, pg_blocking_pids(pid)"), "{one}");
 }
+
+/// The replication read's statements of a version, each with the shape its decoder reads.
+fn replication_reads(version: u32) -> Vec<(&'static str, String, &'static [&'static str])> {
+    use datarig_core::monitor::decode::pg::replication::{RECEIVER, SENDERS, SLOTS, STATE, SUBSCRIPTIONS};
+    let p = pg(version);
+    let read = replication::read(&p);
+    let names = ["replication state", "WAL senders", "WAL receiver", "replication slots", "subscriptions"];
+    let shapes: [&'static [&'static str]; 5] = [STATE, SENDERS, RECEIVER, SLOTS, SUBSCRIPTIONS];
+    assert_eq!(read.len(), 5);
+    names.into_iter().zip(read).zip(shapes).map(|((name, sql), shape)| (name, sql, shape)).collect()
+}
+
+#[test]
+fn replication_statements_per_version() {
+    for version in [120000, 130000, 170011] {
+        let text: Vec<String> =
+            replication_reads(version).iter().map(|(name, sql, _)| format!("-- {name}\n{sql}\n")).collect();
+        insta::assert_snapshot!(format!("replication_pg_{version}"), text.join("\n"));
+    }
+}
+
+#[test]
+fn a_replication_read_never_asks_a_standby_for_the_primarys_position_nor_reads_a_connection_string() {
+    for (name, sql, _) in replication_reads(170011) {
+        assert!(!sql.contains("conninfo") && !sql.contains("pg_subscription "), "{name}: {sql}");
+        if let Some(at) = sql.find("pg_current_wal_lsn()") {
+            // Only in the CASE branch taken outside recovery.
+            assert!(sql[..at].ends_with("pg_last_wal_replay_lsn()) ELSE "), "{name}: {sql}");
+            assert!(sql.contains("GREATEST(pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn())"), "{name}: {sql}");
+        }
+    }
+    // Slot positions from 13 on only: 12 has no `wal_status` column.
+    assert!(replication::slots(&pg(120000)).contains("NULL AS wal_status"));
+    assert!(replication::slots(&pg(130000)).contains("s.wal_status, s.safe_wal_size"));
+    // Parallel apply workers (16 on) are not subscriptions of their own.
+    assert!(!replication::subscriptions(&pg(150000)).contains("leader_pid"));
+    assert!(replication::subscriptions(&pg(170011)).contains("AND s.leader_pid IS NULL"));
+}
+
+/// Each replication statement of every version gives exactly the columns its decoder reads, in
+/// order (prepared, never run), against `DATARIG_TEST_PG_URL`.
+#[tokio::test]
+async fn every_replication_statement_gives_its_decoders_columns() {
+    let url = match std::env::var("DATARIG_TEST_PG_URL") {
+        Ok(u) if !u.is_empty() => u,
+        _ => {
+            assert!(!std::env::var("DATARIG_REQUIRE_PG").is_ok_and(|v| v == "1"), "DATARIG_TEST_PG_URL must be set");
+            eprintln!("SKIPPED every_replication_statement_gives_its_decoders_columns: set DATARIG_TEST_PG_URL");
+            return;
+        }
+    };
+    let (client, conn) = tokio_postgres::connect(&url, tokio_postgres::NoTls).await.expect("connect");
+    tokio::spawn(conn);
+    for version in [120000, 130000, 170011] {
+        for (name, sql, shape) in replication_reads(version) {
+            let statement = client.prepare(&sql).await.unwrap_or_else(|e| panic!("{version} {name}: {e}"));
+            let columns: Vec<&str> = statement.columns().iter().map(|c| c.name()).collect();
+            assert_eq!(columns, shape, "{version} {name}");
+        }
+    }
+}

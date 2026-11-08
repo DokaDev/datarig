@@ -29,6 +29,7 @@ pub mod format;
 pub mod locks;
 mod model;
 pub mod rate;
+pub mod replication;
 
 pub use action::{
     ActionKind, ActionOutcome, ActionTarget, Ask, Confirmation, Decision, FollowUp, Refusal, StatementStamp, Warning,
@@ -41,6 +42,7 @@ pub use model::{
     SessionState, SessionsWanted, Snapshot, TEXT_MIN_AGE_US, TEXT_SAME_START_US, TextAsk, Timestamp, Tx, Visibility,
     Wait, WaitClass, Want,
 };
+pub use replication::{Lag, Lsn, Replication, Role};
 
 #[cfg(test)]
 mod tests;

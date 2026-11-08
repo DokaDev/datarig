@@ -1,0 +1,8 @@
+[
+ [["1794120645026902", "ON"]],
+ {"code": 1227, "error": "Access denied; you need (at least one of) the SUPER, REPLICATION CLIENT privilege(s) for this operation"},
+ {"code": 1142, "error": "SELECT command denied to user 'zz_mon'@'localhost' for table 'replication_connection_status'"},
+ [["Performance_schema_thread_instances_lost", "0"]],
+ [],
+ {"code": 1142, "error": "SELECT command denied to user 'zz_mon'@'localhost' for table 'replication_group_members'"}
+]

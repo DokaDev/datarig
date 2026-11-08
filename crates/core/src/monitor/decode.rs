@@ -37,6 +37,9 @@ pub enum DecodeError {
     Unsupported(String),
     /// The probe's first statement failed, so nothing is known of the server.
     ProbeFailed(String),
+    /// A read failed for another reason than a privilege refused: what it would show is not
+    /// known.
+    Failed(String),
 }
 
 impl fmt::Display for DecodeError {
@@ -45,6 +48,7 @@ impl fmt::Display for DecodeError {
             DecodeError::Malformed { what, detail } => write!(f, "unexpected monitor rows ({what}): {detail}"),
             DecodeError::Unsupported(version) => write!(f, "server not supported by the monitor: {version}"),
             DecodeError::ProbeFailed(message) => write!(f, "monitor probe failed: {message}"),
+            DecodeError::Failed(message) => write!(f, "monitor read failed: {message}"),
         }
     }
 }
@@ -57,7 +61,7 @@ impl DecodeError {
     pub fn into_db(self, oldest: &str) -> DbError {
         match self {
             DecodeError::Unsupported(server) => DbError::VersionUnsupported { server, needed: oldest.to_owned() },
-            DecodeError::ProbeFailed(message) => DbError::Server(message),
+            DecodeError::ProbeFailed(message) | DecodeError::Failed(message) => DbError::Server(message),
             e @ DecodeError::Malformed { .. } => DbError::Connection(Fault::other(e.to_string())),
         }
     }
