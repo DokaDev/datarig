@@ -1,8 +1,9 @@
 # Server monitor
 
 The Monitor tab shows what a connection's server says about its load and its sessions:
-PostgreSQL 12 or later and MySQL 8.0.17 or later, self-managed or a managed service. It only
-reads: nothing it sends changes anything on the server.
+PostgreSQL 12 or later and MySQL 8.0.17 or later, self-managed or a managed service. It reads,
+and acts on the server only when you ask it to: `c` cancels a session's statement and `X` ends
+a session (see [Cancelling and ending sessions](#cancelling-and-ending-sessions)).
 
 Open it with `M` on a connection in the explorer, its menu's "Monitor" item, `Space m m`, or
 `:monitor` (the explorer's connection or the active tab's; `:monitor <name>` for another one).
@@ -156,6 +157,62 @@ the monitor can read (PostgreSQL `track_activities`, `track_counts`,
 `track_activity_query_size`, `track_io_timing` and `wal_level`; MySQL `performance_schema`,
 `server_id`, `gtid_mode`, `log_bin` and `super_read_only`). A setting that leaves the monitor
 less to read is marked with what it hides (`track_activities` and `track_counts` are read as the monitor's own connection has them: another session's may differ). `i` or `Esc` closes it.
+
+## Cancelling and ending sessions
+
+In the Sessions view, `c` cancels the selected session's statement (the session stays) and `X`
+ends the session (its open transaction is rolled back). The action menu (`Space Space`, a right
+click) lists both, dimmed with the reason when they cannot be sent.
+
+- A cancel on PostgreSQL asks one line on the status line: only `y` sends it, any other key
+  sends nothing. Ending a session, and a MySQL cancel of anything but a plain read, opens a
+  dialog that names the session, its client, state, transaction and statement, and what the
+  action can leave behind. `Enter` keeps the session as it is; only `y` sends.
+- Both are refused on a read-only environment, and never sent to the monitor's own connection.
+- When the session is one of your own tabs, the question names the tab; the cancel is the same
+  guarded cancel, and the tab shows its statement cancelled by the server. The name is a hint
+  from the session id the tab's connection reported, checked against the row's user, database
+  and application name; where the server does not list the application, as MySQL, the tab is
+  not named. Ending your own
+  tab's session closes that tab's session, and the dialog says so.
+- Nothing is sent to a session other than the one you acted on. The action carries the session
+  and its statement as the row showed them, and is sent only if they are still there:
+  PostgreSQL checks the session's start and the statement's start; MySQL checks the statement's
+  event in `performance_schema`, or, without it, the statement's text and times (a weak check:
+  the same text may be a new run of it, and the dialog says so). An action asked for before the
+  monitor reconnected is dropped.
+
+Sent is not done. The answer says what the server said: refused (with the privilege it needs),
+nothing sent (the session ended, another session took its id, it runs another statement),
+sent, or sent with its answer lost. A sent action is then confirmed by reads of the session 1, 3
+and 10 seconds after the answer, whether the tab is shown or not. A session ended is confirmed
+when a read no longer finds it. A statement is called cancelled only when the server says so
+(MySQL error 1317 for that statement); otherwise the read says the statement ended after the
+cancel was sent, since it may have finished on its own.
+
+On managed services:
+
+| Server | Used when `KILL` is refused | To act on other accounts' sessions |
+|---|---|---|
+| PostgreSQL | none | `pg_signal_backend` |
+| Amazon RDS and Aurora PostgreSQL | none | `rds_superuser` or `pg_signal_backend` |
+| Google Cloud SQL for PostgreSQL | none | `cloudsqlsuperuser` or `pg_signal_backend` |
+| Google AlloyDB | none | `alloydbsuperuser` or `pg_signal_backend` |
+| Azure Database for PostgreSQL | none | `azure_pg_admin` or `pg_signal_backend` |
+| MySQL | none | `CONNECTION_ADMIN` |
+| Amazon RDS and Aurora MySQL | `mysql.rds_kill_query`, `mysql.rds_kill` | `CONNECTION_ADMIN` |
+| Azure Database for MySQL | `mysql.az_kill_query`, `mysql.az_kill` | `CONNECTION_ADMIN` |
+
+A session of the provider's own service accounts is refused, and said so. On PostgreSQL a
+session of your own role can be signalled without these, and a superuser's session only by a
+superuser.
+
+Behind a pooler, a server session can serve any client: ending one is refused unless it runs a
+statement, and the dialog warns that it may serve another client by the time it ends.
+
+`L` shows the action list under the sessions: when each action was sent, what it was, the
+session and its statement, the server's answer and what the reads after it showed. It is kept
+for the tab's life and never written to disk.
 
 ## What the account sees
 

@@ -1644,3 +1644,772 @@ fn the_server_in_full_opens_with_i_over_any_view_and_closes_with_i_or_esc() {
     h.screen(80, 24);
     assert!(monitor(&h).server_info.is_some_and(|t| t > 0), "the pane scrolled, not the tree");
 }
+
+// ── cancelling and ending sessions ───────────────────────────────────────────────────────
+
+use datarig_core::driver::OwnSession;
+use datarig_core::i18n::Label;
+use datarig_core::monitor::action::{Denied, NotSent, Stale, Via};
+use datarig_core::monitor::{ActionKind, ActionOutcome, ActionTarget, FollowUp};
+use datarig_tui::app::overlay::OverlayKind;
+
+/// The Monitor tab of `h` (connected, with a driver that monitors) opened with `format`, its
+/// first read answered with `rows`, in the Sessions view.
+fn sessions_on(h: Harness, format: MonitorFormat, rows: Vec<SessionRow>) -> Harness {
+    sessions_asked(h, format, rows).0
+}
+
+/// [`sessions_on`], and the server-session asks sent to the first query session meanwhile.
+fn sessions_asked(mut h: Harness, format: MonitorFormat, rows: Vec<SessionRow>) -> (Harness, Vec<u64>) {
+    h.driver.monitor.store(true, Ordering::SeqCst);
+    h.command("monitor");
+    h.monitor_db(DbEvent::Connected);
+    h.monitor_db(DbEvent::Monitor(Ok(format)));
+    let asks = h.roles().iter().position(|r| *r == SessionRole::Query).map_or(Vec::new(), |q| own_asks(&mut h, q));
+    let t = ticks(&mut h);
+    assert_eq!(t.len(), 1);
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(snapshot(0.0, 1000, rows, true)) });
+    h.keys("2");
+    (h, asks)
+}
+
+/// Session `id` selected in the Sessions view.
+fn select(h: &mut Harness, id: i64) {
+    h.key(KeyCode::Home);
+    for _ in 0..8 {
+        if monitor(h).selected_row().is_some_and(|r| r.key.id == id) {
+            return;
+        }
+        h.keys("j");
+    }
+    panic!("session {id} is not listed");
+}
+
+/// The usual PostgreSQL sessions in the Sessions view, session `id` selected.
+fn pg_selected(id: i64) -> Harness {
+    let mut h = sessions_on(Harness::connected(Lang::En), pg_format(), rows());
+    select(&mut h, id);
+    h
+}
+
+/// The actions sent since the last look.
+fn actions_sent(h: &mut Harness) -> Vec<(u64, ActionKind, ActionTarget)> {
+    h.sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::MonitorAction { request, kind, target } => Some((request, kind, target)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The reads that follow actions up, sent since the last look.
+fn follow_ups(h: &mut Harness) -> Vec<(u64, ActionTarget)> {
+    h.sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::MonitorFollowUp { request, target } => Some((request, target)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// What the status bar last flashed, in words.
+fn said(h: &Harness) -> String {
+    h.app.transient.as_ref().map(|(n, _)| h.app.i18n.msg(&n.msg).to_string()).unwrap_or_default()
+}
+
+/// The status bar's question, longest form first.
+fn asked(h: &Harness) -> Option<String> {
+    h.app.status_ask_line().map(|(forms, _)| forms[0].clone())
+}
+
+#[test]
+fn c_asks_on_the_status_line_and_only_y_sends_the_cancel_of_that_row() {
+    let mut h = pg_selected(4211);
+    h.keys("c");
+    let q = asked(&h).expect("asked");
+    assert!(q.starts_with("Cancel the statement of session 4211 (alice, shop, "), "{q}");
+    assert!(q.ends_with("? y/n"), "{q}");
+    assert!(actions_sent(&mut h).is_empty(), "nothing before the answer");
+    h.keys("y");
+    let sent = actions_sent(&mut h);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let row = monitor(&h).selected_row().unwrap().clone();
+    assert_eq!(sent[0].1, ActionKind::Cancel);
+    assert_eq!(sent[0].2.key, row.key, "the row's session and its start");
+    assert_eq!(sent[0].2.stamp, row.statement, "the row's statement");
+    assert!(asked(&h).is_none());
+    // Sent is not done: nothing is said to be cancelled before the answer.
+    assert!(!said(&h).contains("cancelled"), "{}", said(&h));
+    // Any other key sends nothing.
+    h.keys("c");
+    assert!(asked(&h).is_some());
+    h.keys("n");
+    assert!(asked(&h).is_none());
+    assert_eq!(said(&h), "Nothing sent");
+    assert!(actions_sent(&mut h).is_empty());
+    h.keys("c");
+    h.key(KeyCode::Enter);
+    assert!(actions_sent(&mut h).is_empty(), "Enter is no answer");
+}
+
+#[test]
+fn x_opens_a_dialog_where_enter_keeps_the_session_and_y_ends_it() {
+    let mut h = pg_selected(4211);
+    h.keys("X");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    let screen = h.screen(120, 40);
+    for text in ["End the session?", "Session 4211: alice on shop", "Its open transaction is rolled back.", "Keep"] {
+        assert!(screen.contains(text), "{text}: {screen}");
+    }
+    h.key(KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), None, "Enter closes it");
+    assert!(actions_sent(&mut h).is_empty(), "and keeps the session");
+    h.keys("X");
+    h.key(KeyCode::Esc);
+    assert!(actions_sent(&mut h).is_empty());
+    h.keys("X");
+    h.keys("y");
+    assert_eq!(h.overlay_kind(), None);
+    let sent = actions_sent(&mut h);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].1, ActionKind::Terminate);
+    assert_eq!(sent[0].2.key.id, 4211);
+}
+
+#[test]
+fn a_read_only_environment_refuses_both_and_sends_nothing() {
+    let mut cfg = test_db_config();
+    cfg.connections[0].policy = Some("prod".into());
+    cfg.policies.insert("prod", datarig_core::policy::Policy { read_only: true, ..Default::default() });
+    let mut h = sessions_on(Harness::connected_with(&cfg, Lang::En), pg_format(), rows());
+    select(&mut h, 4211);
+    for key in ["c", "X"] {
+        h.keys(key);
+        assert_eq!(said(&h), "Read-only environment: the monitor only looks", "{key}");
+        assert!(asked(&h).is_none(), "{key}");
+        assert_eq!(h.overlay_kind(), None, "{key}");
+    }
+    assert!(actions_sent(&mut h).is_empty());
+}
+
+#[test]
+fn the_monitors_own_connection_and_a_session_running_nothing_are_refused() {
+    let mut h = pg_selected(4400);
+    h.keys("c");
+    assert_eq!(said(&h), "This is the monitor's own connection");
+    h.keys("X");
+    assert_eq!(said(&h), "This is the monitor's own connection");
+    select(&mut h, 3907);
+    h.keys("c");
+    assert_eq!(said(&h), "Session 3907 runs no statement");
+    assert!(asked(&h).is_none());
+    assert_eq!(h.overlay_kind(), None);
+    assert!(actions_sent(&mut h).is_empty());
+    // The Overview acts on nothing.
+    h.keys("1");
+    h.keys("c");
+    assert_eq!(said(&h), "Select a session in the Sessions view");
+    assert!(actions_sent(&mut h).is_empty());
+}
+
+/// The usual sessions as MySQL lists them (statement events), session 4302's statement `q`.
+fn mysql_rows(q: &str) -> Vec<SessionRow> {
+    let mut rows = rows();
+    for r in &mut rows {
+        r.thread = Some(r.key.id as u64 + 100);
+        r.statement = Some(StatementStamp::MySqlEvent { thread_id: r.key.id as u64 + 100, event_id: 9 });
+        r.key.started = None;
+        if r.key.id == 4302 {
+            r.query = Some(QueryText { text: q.into(), shortened: false, maybe_cut_by_server: false });
+        }
+    }
+    rows
+}
+
+#[test]
+fn a_mysql_cancel_asks_a_line_for_a_plain_read_and_a_dialog_with_the_warning_otherwise() {
+    let mysql = |q: &str| {
+        let mut h = sessions_on(Harness::connected(Lang::En), mysql_format(), mysql_rows(q));
+        select(&mut h, 4302);
+        h.keys("c");
+        h
+    };
+    let mut h = mysql("SELECT count(*) FROM order_items");
+    assert!(asked(&h).is_some_and(|q| q.starts_with("Cancel the statement of session 4302")), "{:?}", asked(&h));
+    assert_eq!(h.overlay_kind(), None);
+    h.keys("y");
+    assert_eq!(actions_sent(&mut h).len(), 1);
+    let cases = [
+        ("UPDATE orders SET status = 'paid' WHERE id = 7", Label::MonitorActWarnHalfDone, "Not a plain read"),
+        ("ALTER TABLE orders ADD COLUMN note text", Label::MonitorActWarnMaintenance, "Stopping table maintenance"),
+    ];
+    for (q, warning, text) in cases {
+        let mut h = mysql(q);
+        assert!(asked(&h).is_none(), "{q}");
+        assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "{q}");
+        let details = &h.app.overlays.confirm().unwrap().details;
+        assert!(details.contains(&warning.into()), "{q}: {details:?}");
+        let screen = h.screen(120, 40);
+        assert!(screen.contains("Cancel the statement?") && screen.contains(text), "{q}: {screen}");
+        h.key(KeyCode::Enter);
+        assert!(actions_sent(&mut h).is_empty(), "{q}");
+    }
+}
+
+#[test]
+fn a_sent_cancel_is_followed_up_at_1_3_and_10_seconds_even_paused_and_hidden() {
+    let mut h = pg_selected(4211);
+    let row = monitor(&h).selected_row().unwrap().clone();
+    h.keys("c");
+    h.keys("y");
+    let request = actions_sent(&mut h)[0].0;
+    let monitor_tab = h.app.tab().id;
+    h.keys("p");
+    h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+    assert_ne!(h.app.tab().id, monitor_tab, "hidden");
+    let mut words = Vec::new();
+    h.monitor_db_to(
+        1,
+        DbEvent::MonitorActionDone { request, outcome: ActionOutcome::Acknowledged { via: Via::Standard } },
+    );
+    assert_eq!(said(&h), "Cancel sent to session 4211");
+    words.push(said(&h));
+    assert!(h.app.monitor_due().is_some(), "a hidden tab still wakes for its follow-ups");
+    let still = FollowUp { row: Some(row.clone()), interrupted: None };
+    // 1 s, 3 s and 10 s after the answer, each answered as it goes.
+    let answered = |h: &mut Harness, result: FollowUp, at: Duration| {
+        h.advance(at - Duration::from_millis(100));
+        assert!(follow_ups(h).is_empty(), "not before {at:?}");
+        h.advance(Duration::from_millis(100));
+        let f = follow_ups(h);
+        assert_eq!(f.len(), 1, "{at:?}: {f:?}");
+        assert_eq!(f[0].1.key, row.key);
+        h.monitor_db_to(1, DbEvent::MonitorFollowUp { request: f[0].0, result: Ok(result) });
+        said(h)
+    };
+    words.push(answered(&mut h, still.clone(), Duration::from_secs(1)));
+    assert_eq!(words.last().unwrap(), "Session 4211 still runs that statement");
+    words.push(answered(&mut h, still, Duration::from_secs(2)));
+    words.push(answered(&mut h, FollowUp { row: None, interrupted: None }, Duration::from_secs(7)));
+    assert_eq!(words.last().unwrap(), "Session 4211 has ended");
+    for _ in 0..20 {
+        h.advance(Duration::from_secs(2));
+    }
+    assert!(follow_ups(&mut h).is_empty(), "three reads, then none");
+    assert_eq!(h.app.monitor_due(), None, "nothing to wake for");
+    assert!(words.iter().all(|w| !w.contains("cancelled")), "never cancelled without the server saying so: {words:?}");
+    assert!(ticks(&mut h).is_empty(), "hidden and paused: no read of the list");
+}
+
+#[test]
+fn the_server_saying_the_statement_was_interrupted_is_the_only_cancelled() {
+    let mut h = pg_selected(4211);
+    h.keys("c");
+    h.keys("y");
+    let request = actions_sent(&mut h)[0].0;
+    h.monitor_db(DbEvent::MonitorActionDone { request, outcome: ActionOutcome::OutcomeUnknown });
+    assert_eq!(said(&h), "Sent to session 4211; its answer was lost: the next reads tell");
+    h.advance(Duration::from_secs(1));
+    let f = follow_ups(&mut h);
+    assert_eq!(f.len(), 1);
+    h.monitor_db(DbEvent::MonitorFollowUp {
+        request: f[0].0,
+        result: Ok(FollowUp { row: None, interrupted: Some(true) }),
+    });
+    assert_eq!(said(&h), "The server says the statement of session 4211 was cancelled");
+    h.advance(Duration::from_secs(20));
+    assert!(follow_ups(&mut h).is_empty(), "settled: no more reads");
+}
+
+#[test]
+fn refusals_and_failures_are_said_and_not_followed_up() {
+    let cases = [
+        (ActionOutcome::NotSent(NotSent::Stale(Stale::SessionGone)), "Nothing sent: session 4211 has ended"),
+        (
+            ActionOutcome::NotSent(NotSent::Stale(Stale::StatementChanged)),
+            "Nothing sent: session 4211 runs another statement now",
+        ),
+        (
+            ActionOutcome::NotSent(NotSent::Refused(Denied::Grant(&["pg_signal_backend"]))),
+            "Refused by the server: needs one of pg_signal_backend (or the session's own role)",
+        ),
+        (ActionOutcome::Failed(DbError::Server("boom".into())), "Not sent: "),
+    ];
+    for (outcome, text) in cases {
+        let mut h = pg_selected(4211);
+        h.keys("c");
+        h.keys("y");
+        let request = actions_sent(&mut h)[0].0;
+        h.monitor_db(DbEvent::MonitorActionDone { request, outcome });
+        assert!(said(&h).starts_with(text), "{text}: {}", said(&h));
+        h.advance(Duration::from_secs(12));
+        assert!(follow_ups(&mut h).is_empty(), "{text}");
+    }
+}
+
+#[test]
+fn answers_of_another_request_or_connection_are_dropped_and_a_reconnect_drops_what_was_asked() {
+    let mut h = pg_selected(4211);
+    h.keys("c");
+    h.keys("y");
+    let request = actions_sent(&mut h)[0].0;
+    // Not the action sent.
+    h.monitor_db(DbEvent::MonitorActionDone {
+        request: request + 50,
+        outcome: ActionOutcome::Acknowledged { via: Via::Standard },
+    });
+    assert!(monitor(&h).actions[0].answer.is_none());
+    assert_ne!(said(&h), "Cancel sent to session 4211");
+    // The connection is lost before the answer: an answer of the old connection is dropped.
+    let old = monitor(&h).generation;
+    h.monitor_db(DbEvent::Lost { error: DbError::Connection(datarig_core::fault::Fault::other("reset")) });
+    let id = h.app.tab().id;
+    h.app.on_app_event(datarig_tui::app::AppEvent::Db {
+        target: datarig_tui::app::EventTarget::Monitor(id),
+        generation: old,
+        ev: DbEvent::MonitorActionDone { request, outcome: ActionOutcome::Acknowledged { via: Via::Standard } },
+    });
+    assert_ne!(said(&h), "Cancel sent to session 4211");
+    let e = &monitor(&h).actions[0];
+    assert_eq!(e.answer.as_ref().map(|n| n.msg.clone()), Some(Label::MonitorActLost.into()), "its answer is not known");
+    // A dialog open while the monitor reconnects sends nothing on `y`.
+    let mut h = pg_selected(4211);
+    h.keys("X");
+    h.monitor_db(DbEvent::Lost { error: DbError::Connection(datarig_core::fault::Fault::other("reset")) });
+    h.keys("y");
+    assert_eq!(said(&h), "The monitor reconnected: nothing sent");
+    assert!(actions_sent(&mut h).is_empty());
+    // So does a question of the status line: it is dropped.
+    let mut h = pg_selected(4211);
+    h.keys("c");
+    h.monitor_db(DbEvent::Lost { error: DbError::Connection(datarig_core::fault::Fault::other("reset")) });
+    assert!(asked(&h).is_none());
+    assert_eq!(said(&h), "The monitor reconnected: nothing sent");
+    h.keys("y");
+    assert!(actions_sent(&mut h).is_empty());
+}
+
+/// The index of the first session of `role`.
+fn session_of(h: &Harness, role: SessionRole) -> usize {
+    h.roles().iter().position(|r| *r == role).expect("a session")
+}
+
+/// The server-session asks sent to session `i` since the last look.
+fn own_asks(h: &mut Harness, i: usize) -> Vec<u64> {
+    h.sent_to(i)
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::ServerSession { request } => Some(request),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_tab_that_could_not_tell_its_session_is_asked_again_once_idle() {
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('e');
+    h.tab_db(0, DbEvent::Connected);
+    let q = session_of(&h, SessionRole::Query);
+    h.sent();
+    let (mut h, asks) = sessions_asked(h, pg_format(), rows());
+    assert_eq!(asks.len(), 1);
+    h.tab_db(0, DbEvent::ServerSession { request: asks[0], own: OwnSession::NotKnown });
+    // Not while it runs.
+    for _ in 0..3 {
+        h.advance(Duration::from_secs(2));
+        if let Some(t) = ticks(&mut h).first() {
+            h.monitor_db(DbEvent::MonitorSnapshot { request: t.0, result: Ok(snapshot(2.0, 1001, rows(), false)) });
+        }
+    }
+    assert!(own_asks(&mut h, q).is_empty(), "not while it runs");
+    // NotKnown marks no row: the cancel is the monitor's.
+    select(&mut h, 4211);
+    h.keys("c");
+    assert!(asked(&h).is_some_and(|a| a.starts_with("Cancel the statement")), "{:?}", asked(&h));
+    h.keys("n");
+    let id = h.app.tabs.iter().next().unwrap().exec.query_id;
+    h.tab_db(
+        0,
+        DbEvent::Done {
+            id,
+            outcome: datarig_core::driver::Outcome::Command("SELECT".into()),
+            elapsed: Default::default(),
+        },
+    );
+    h.advance(Duration::from_secs(2));
+    assert_eq!(own_asks(&mut h, q).len(), 1, "asked again once idle");
+}
+
+#[test]
+fn the_menu_lists_cancel_and_end_dimmed_with_why() {
+    let mut h = pg_selected(3907);
+    h.keys("  ");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
+    let dimmed = h.app.menu_dimmed_rows();
+    assert!(
+        dimmed.iter().any(|(l, why)| l.as_str() == "Monitor: cancel the session's statement" && why == "no statement"),
+        "{dimmed:?}"
+    );
+    let live = h.app.menu_rows();
+    assert!(live.iter().any(|(l, _)| l.as_str() == "Monitor: end the session"), "{live:?}");
+    assert!(live.iter().any(|(l, _)| l.as_str() == "Monitor: show / hide the action list"), "{live:?}");
+}
+
+#[test]
+fn the_menu_lists_every_view_and_the_server_pane_too() {
+    let mut h = pg_selected(4211);
+    h.keys("  ");
+    let live = h.app.menu_rows();
+    for item in [
+        "Monitor: Overview",
+        "Monitor: Sessions",
+        "Monitor: Locks",
+        "Monitor: Replication",
+        "Monitor: the server in full",
+        "Monitor: cancel the session's statement",
+        "Monitor: end the session",
+        "Monitor: show / hide the action list",
+    ] {
+        assert!(live.iter().any(|(l, _)| l.as_str() == item), "{item}: {live:?}");
+    }
+}
+
+#[test]
+fn the_server_pane_over_the_sessions_hides_the_row_from_cancel_and_end() {
+    let mut h = pg_selected(4211);
+    h.keys("i");
+    assert!(monitor(&h).server_info.is_some());
+    h.keys("c");
+    assert_eq!(said(&h), "Select a session in the Sessions view");
+    h.keys("X");
+    assert_eq!(said(&h), "Select a session in the Sessions view");
+    assert!(asked(&h).is_none());
+    assert_eq!(h.overlay_kind(), None);
+    assert!(actions_sent(&mut h).is_empty());
+    // The menu over the pane offers no action on the hidden row.
+    h.keys("  ");
+    let live = h.app.menu_rows();
+    assert!(!live.iter().any(|(l, _)| l.as_str() == "Monitor: cancel the session's statement"), "{live:?}");
+    assert!(!live.iter().any(|(l, _)| l.as_str() == "Monitor: end the session"), "{live:?}");
+    h.key(KeyCode::Esc);
+    // Closed, the row is there to act on again.
+    h.key(KeyCode::Esc);
+    assert_eq!(monitor(&h).server_info, None);
+    h.keys("c");
+    assert!(asked(&h).is_some_and(|a| a.starts_with("Cancel the statement of session 4211")));
+}
+
+#[test]
+fn screens_of_the_end_dialog_and_the_action_list() {
+    let mut h = pg_selected(4211);
+    h.keys("X");
+    insta::assert_snapshot!("monitor_terminate_modal_120x40", h.screen(120, 40));
+    insta::assert_snapshot!("monitor_terminate_modal_80x24", h.screen(80, 24));
+    h.keys("y");
+    let request = actions_sent(&mut h)[0].0;
+    h.monitor_db(DbEvent::MonitorActionDone { request, outcome: ActionOutcome::Acknowledged { via: Via::Standard } });
+    h.keys("L");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("end sent"), "the row says it: {screen}");
+    h.advance(Duration::from_secs(1));
+    let f = follow_ups(&mut h);
+    h.monitor_db(DbEvent::MonitorFollowUp { request: f[0].0, result: Ok(FollowUp { row: None, interrupted: None }) });
+    insta::assert_snapshot!("monitor_actions_120x40", h.screen(120, 40));
+    insta::assert_snapshot!("monitor_actions_80x24", h.screen(80, 24));
+}
+
+#[test]
+fn rows_read_before_a_reconnect_take_no_action_until_read_again() {
+    let mut h = pg_selected(4211);
+    h.keys("p");
+    h.monitor_db(DbEvent::Lost { error: DbError::Connection(datarig_core::fault::Fault::other("reset")) });
+    // Connected again and probed while paused: the list shown is the old connection's.
+    h.keys("r");
+    h.monitor_db(DbEvent::Connected);
+    h.monitor_db(DbEvent::Monitor(Ok(pg_format())));
+    assert!(matches!(monitor(&h).state, MonState::Ready(_)));
+    assert_eq!(monitor(&h).selected_row().map(|r| r.key.id), Some(4211), "the old list is still shown");
+    let stale = "The list is from before the monitor reconnected: read it again first (r)";
+    h.keys("c");
+    assert!(asked(&h).is_none(), "{:?}", asked(&h));
+    assert_eq!(said(&h), stale);
+    h.keys("X");
+    assert_eq!(h.overlay_kind(), None);
+    assert_eq!(said(&h), stale);
+    assert!(actions_sent(&mut h).is_empty());
+    // The menu says so too.
+    h.keys("  ");
+    let dimmed = h.app.menu_dimmed_rows();
+    assert!(dimmed.iter().any(|(l, _)| l.as_str() == "Monitor: end the session"), "{dimmed:?}");
+    h.key(KeyCode::Esc);
+    // Read again on the new connection: offered again.
+    answer_read(&mut h, snapshot(10.0, 1100, rows(), true));
+    select(&mut h, 4211);
+    h.keys("c");
+    assert!(asked(&h).is_some_and(|a| a.starts_with("Cancel the statement of session 4211")), "{:?}", asked(&h));
+}
+
+/// The active Monitor tab's read in flight (the next one, when none is) answered with `s`.
+fn answer_read(h: &mut Harness, s: Snapshot) {
+    if monitor(h).request.is_none() {
+        h.advance(Duration::from_secs(2));
+    }
+    let (request, _) = monitor(h).request.expect("a read in flight");
+    h.monitor_db(DbEvent::MonitorSnapshot { request, result: Ok(s) });
+}
+
+/// The commands sent to session `i` since the last look, as ServerSession / Execute / other.
+fn kinds_sent_to(h: &mut Harness, i: usize) -> Vec<&'static str> {
+    h.sent_to(i)
+        .into_iter()
+        .map(|c| match c {
+            DbCommand::ServerSession { .. } => "ServerSession",
+            DbCommand::Execute { .. } => "Execute",
+            _ => "other",
+        })
+        .collect()
+}
+
+/// The Monitor tab open on the usual sessions, then the first tab runs `text` (its statements
+/// selected) on a session it opens for it: asked which server session it is right before the
+/// run, the answer (server session 4211) comes before the run starts, as the driver answers in
+/// order. Back in the Monitor tab with 4211 selected; the query session's index and the run id.
+fn own_tab_running(text: &str) -> (Harness, usize, u64) {
+    own_tab_running_on(text, pg_format(), rows)
+}
+
+/// [`own_tab_running`] with a monitor of `format` listing `rows()` (session 4211 listing `text`).
+fn own_tab_running_on(text: &str, format: MonitorFormat, rows: fn() -> Vec<SessionRow>) -> (Harness, usize, u64) {
+    let mut h = Harness::connected(Lang::En);
+    h.app.set_instance_tag("t");
+    let mut h = sessions_on(h, format, rows());
+    h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+    assert_eq!(h.app.tab().kind, TabKind::Console);
+    h.app.focus = Focus::Editor;
+    h.app.tab_mut().editor = datarig_tui::widgets::editor::Editor::new(text);
+    h.keys("ggvG$");
+    h.ctrl('e');
+    let q = session_of(&h, SessionRole::Query);
+    let mut asks = Vec::new();
+    let mut kinds = Vec::new();
+    for c in h.sent_to(q) {
+        match c {
+            DbCommand::ServerSession { request } => {
+                asks.push(request);
+                kinds.push("ServerSession");
+            }
+            DbCommand::Execute { .. } => kinds.push("Execute"),
+            _ => {}
+        }
+    }
+    assert_eq!(kinds, ["ServerSession", "Execute"], "asked right before the run");
+    h.tab_db(0, DbEvent::Connected);
+    h.tab_db(0, DbEvent::ServerSession { request: asks[0], own: OwnSession::Direct { id: 4211 } });
+    let id = h.app.tabs.iter().next().unwrap().exec.query_id;
+    h.tab_db(0, DbEvent::Started { id, index: 0 });
+    h.advance(Duration::from_millis(10));
+    // Shown again: read at once, after the statement started.
+    h.key_mod(KeyCode::PageDown, ratatui::crossterm::event::KeyModifiers::CONTROL);
+    assert_eq!(h.app.tab().kind, TabKind::Monitor);
+    answer_read(&mut h, snapshot(2.0, 1001, running(rows(), text), false));
+    select(&mut h, 4211);
+    h.sent();
+    (h, q, id)
+}
+
+/// The session details on `screen` have the field naming the tab ("tab  console 1").
+fn tab_field(screen: &str) -> bool {
+    screen.lines().any(|l| {
+        l.split('│').any(|cell| {
+            let mut words = cell.split_whitespace();
+            words.next() == Some("tab") && words.collect::<Vec<_>>() == ["console", "1"]
+        })
+    })
+}
+
+/// The application name the app's query sessions connect with (instance tag `t`).
+const QUERY_APP: &str = "datarig-q-t";
+
+/// `rows` with session 4211 as the tab's own session shows: listing `text` as its statement,
+/// as the profile's user in its database, with the query sessions' application name.
+fn running(mut rows: Vec<SessionRow>, text: &str) -> Vec<SessionRow> {
+    for r in rows.iter_mut().filter(|r| r.key.id == 4211) {
+        r.query = Some(QueryText { text: text.into(), shortened: false, maybe_cut_by_server: false });
+        r.user = Some("datarig".into());
+        r.database = Some("datarig".into());
+        r.application = Some(QUERY_APP.into());
+    }
+    rows
+}
+
+#[test]
+fn a_run_asks_its_server_session_first_only_while_a_monitor_tab_of_the_profile_is_open() {
+    // A Monitor tab open (hidden): the run's session is asked first, then runs.
+    let (mut h, q, id) = own_tab_running("SELECT 1");
+    h.tab_db(
+        0,
+        DbEvent::Done {
+            id,
+            outcome: datarig_core::driver::Outcome::Command("SELECT".into()),
+            elapsed: Default::default(),
+        },
+    );
+    h.sent();
+    // Known: the next run asks nothing.
+    h.key_mod(KeyCode::PageUp, ratatui::crossterm::event::KeyModifiers::CONTROL);
+    h.app.focus = Focus::Editor;
+    h.ctrl('e');
+    assert_eq!(kinds_sent_to(&mut h, q), ["Execute"]);
+    // No Monitor tab: nothing extra at a run.
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('e');
+    let q = session_of(&h, SessionRole::Query);
+    assert_eq!(kinds_sent_to(&mut h, q), ["Execute"], "no ServerSession without a Monitor tab");
+}
+
+#[test]
+fn a_right_click_on_a_session_acts_on_that_session() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let mut h = pg_selected(3907);
+    h.screen(120, 40);
+    let line = |h: &Harness, id: i64| {
+        let m = monitor(h);
+        let list = &m.snapshot.as_ref().unwrap().sessions.as_ref().unwrap().rows;
+        let at = m.list.order.iter().position(|&i| list[i].key.id == id).unwrap();
+        m.hits.rows.y + (at - m.list.top) as u16
+    };
+    let (x, y) = (monitor(&h).hits.rows.x + 3, line(&h, 4302));
+    h.mouse(MouseEventKind::Down(MouseButton::Right), x, y);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
+    assert_eq!(monitor(&h).selected_row().map(|r| r.key.id), Some(4302), "the row under the pointer");
+    h.type_text("end the");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    assert!(h.screen(120, 40).contains("Session 4302: web on shop"));
+    h.keys("y");
+    let sent = actions_sent(&mut h);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].2.key.id, 4302);
+    // Elsewhere: the selection stays.
+    h.screen(120, 40);
+    let below = monitor(&h).hits.rows.y + monitor(&h).hits.rows.height - 1;
+    h.mouse(MouseEventKind::Down(MouseButton::Right), x, below);
+    assert_eq!(monitor(&h).selected_row().map(|r| r.key.id), Some(4302));
+}
+
+#[test]
+fn a_menu_item_picked_after_the_selection_moved_runs_nothing() {
+    let mut h = pg_selected(4211);
+    // A read goes out, then the menu opens on 4211.
+    h.advance(Duration::from_secs(2));
+    let (request, _) = monitor(&h).request.expect("a read in flight");
+    h.keys("  ");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
+    // Its answer: 4211 has gone, the selection moves.
+    let without: Vec<SessionRow> = rows().into_iter().filter(|r| r.key.id != 4211).collect();
+    h.monitor_db(DbEvent::MonitorSnapshot { request, result: Ok(snapshot(2.0, 1001, without, false)) });
+    assert_ne!(monitor(&h).selected_row().map(|r| r.key.id), Some(4211));
+    h.type_text("end the");
+    h.key(KeyCode::Enter);
+    assert_ne!(h.overlay_kind(), Some(OverlayKind::Confirm), "no dialog for another session");
+    assert_eq!(said(&h), "Not run: what the menu was opened on has changed. Open the menu again");
+    assert!(actions_sent(&mut h).is_empty());
+}
+
+#[test]
+fn your_own_tabs_session_is_named_and_cancelled_by_the_guarded_cancel() {
+    let (mut h, q, _) = own_tab_running("SELECT pg_sleep(60)");
+    h.key(KeyCode::Enter);
+    assert!(tab_field(&h.screen(120, 40)), "the details name the tab");
+    h.key(KeyCode::Esc);
+    h.keys("c");
+    let a = asked(&h).expect("asked");
+    assert_eq!(a, "Session 4211 is your tab 'console 1'. Cancel its statement? y/n");
+    h.keys("y");
+    let row = monitor(&h).selected_row().unwrap().clone();
+    let sent = actions_sent(&mut h);
+    assert_eq!(sent.len(), 1, "the monitor's guarded cancel: {sent:?}");
+    assert_eq!(sent[0].1, ActionKind::Cancel);
+    assert_eq!(sent[0].2.key, row.key);
+    assert_eq!(sent[0].2.stamp, row.statement, "it names the statement");
+    let t = h.app.tabs.iter().next().unwrap();
+    assert!(t.exec.running.unwrap().cancelling.is_none(), "the tab's own cancel is never used");
+    assert!(!h.session_cancelled(q));
+    // Lost: no row is the tab's any more; the question is the usual one.
+    h.tab_db(0, DbEvent::Lost { error: DbError::Connection(datarig_core::fault::Fault::other("reset")) });
+    h.keys("c");
+    assert!(asked(&h).is_some_and(|a| a.starts_with("Cancel the statement of session 4211")), "{:?}", asked(&h));
+    h.keys("n");
+}
+
+#[test]
+fn your_own_tabs_session_is_refused_as_any_other_when_it_runs_nothing() {
+    let (mut h, q, _) = own_tab_running("SELECT pg_sleep(60)");
+    let mut idle = running(rows(), "SELECT pg_sleep(60)");
+    idle[0].state = SessionState::Idle;
+    answer_read(&mut h, snapshot(4.0, 1002, idle, false));
+    select(&mut h, 4211);
+    h.keys("c");
+    assert!(asked(&h).is_none(), "{:?}", asked(&h));
+    assert_eq!(said(&h), "Session 4211 runs no statement");
+    assert!(actions_sent(&mut h).is_empty());
+    assert!(!h.session_cancelled(q));
+}
+
+#[test]
+fn a_mysql_dialog_never_names_your_own_tab_as_the_list_shows_no_application() {
+    let (mut h, q, _) =
+        own_tab_running_on("UPDATE orders SET status = 'paid' WHERE id = 7", mysql_format(), || mysql_rows("SELECT 1"));
+    // As MySQL lists it: no application, so nothing tells this session is the tab's.
+    let mut listed = running(mysql_rows("SELECT 1"), "UPDATE orders SET status = 'paid' WHERE id = 7");
+    listed[0].application = None;
+    answer_read(&mut h, snapshot(4.0, 1002, listed, false));
+    select(&mut h, 4211);
+    h.keys("c");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    let details = &h.app.overlays.confirm().unwrap().details;
+    assert!(details.contains(&Label::MonitorActWarnHalfDone.into()), "{details:?}");
+    assert!(
+        !details.contains(&datarig_core::i18n::Msg::MonitorActOwnTabCancel { tab: "console 1".into() }),
+        "no own-tab line: {details:?}"
+    );
+    h.keys("y");
+    let sent = actions_sent(&mut h);
+    assert_eq!(sent.len(), 1, "the guarded cancel: {sent:?}");
+    assert_eq!(sent[0].1, ActionKind::Cancel);
+    assert_eq!(sent[0].2.key.id, 4211);
+    assert!(!h.session_cancelled(q));
+}
+
+#[test]
+fn a_session_with_the_tabs_id_but_not_its_user_database_or_application_is_not_named_the_tab() {
+    // The id the tab's connection reported, but the row is not consistent with that session
+    // (another server behind the same endpoint, say): the plain question, no tab named.
+    /// What a case changes in the row.
+    type Change = fn(&mut SessionRow);
+    let cases: [(&str, Change); 4] = [
+        ("user", |r| r.user = Some("alice".into())),
+        ("database", |r| r.database = Some("shop".into())),
+        ("application", |r| r.application = Some("psql".into())),
+        ("no application", |r| r.application = None),
+    ];
+    for (what, change) in cases {
+        let (mut h, q, _) = own_tab_running("SELECT pg_sleep(60)");
+        let mut other = running(rows(), "SELECT pg_sleep(60)");
+        change(&mut other[0]);
+        answer_read(&mut h, snapshot(4.0, 1002, other, false));
+        select(&mut h, 4211);
+        h.key(KeyCode::Enter);
+        let screen = h.screen(120, 40);
+        assert!(!tab_field(&screen), "{what}: the details name no tab: {screen}");
+        h.key(KeyCode::Esc);
+        h.keys("c");
+        let a = asked(&h).expect("asked");
+        assert!(a.starts_with("Cancel the statement of session 4211"), "{what}: {a}");
+        h.keys("n");
+        assert!(!h.session_cancelled(q));
+    }
+}

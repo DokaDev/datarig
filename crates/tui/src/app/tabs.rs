@@ -323,6 +323,21 @@ pub struct TabSession {
     /// opened for it: the statement, to offer running it outside a transaction once that
     /// transaction is rolled back.
     pub outside_offer: Option<String>,
+    /// Which server session `session` is, as far as it said (a Monitor tab of the profile marks
+    /// that session's row as this tab's): asked once per session, never kept past it.
+    pub own: OwnAsk,
+}
+
+/// What a query session said of the server session it is ([`TabSession::own`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OwnAsk {
+    /// Not asked on this session.
+    #[default]
+    NotAsked,
+    /// Asked (`DbCommand::ServerSession`), with this request; not answered yet.
+    Asked(u64),
+    /// Its answer, and when it came (an answer that tells nothing is asked again later).
+    Known(datarig_core::driver::OwnSession, std::time::Instant),
 }
 
 /// See [`TabSession::reading`].
@@ -395,6 +410,7 @@ impl TabSession {
             autocommit_off: false,
             sent_manual: false,
             outside_offer: None,
+            own: OwnAsk::NotAsked,
         }
     }
 

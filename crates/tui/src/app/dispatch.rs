@@ -508,6 +508,9 @@ impl App {
                 if matches!(action, ConfirmAction::ExportStart | ConfirmAction::ExportReplace) {
                     self.export_answered(false, action == ConfirmAction::ExportReplace);
                 }
+                if let ConfirmAction::MonitorAction { tab, .. } = action {
+                    self.monitor_declined(tab);
+                }
             }
             _ => {}
         }
@@ -561,6 +564,7 @@ impl App {
             ConfirmAction::DiscardFormQuit => self.discard_forms_and_quit(),
             ConfirmAction::DiscardEdits { tab, result } => self.edit_discard(tab, result),
             ConfirmAction::LeaveEdits(leave) => self.leave_confirmed(leave),
+            ConfirmAction::MonitorAction { tab, .. } => self.monitor_confirmed(tab),
             ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
         }
     }

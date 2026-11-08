@@ -1,5 +1,6 @@
 //! The Monitor tab: the server's strip, the views' strip, what the account cannot see, then the
-//! Overview (charts and the longest running sessions) or the Sessions (the list, its details).
+//! Overview (charts and the longest running sessions) or the Sessions (the list, its details,
+//! the list of actions sent from the tab).
 //!
 //! A frame draws from the tab's latest read: the list was sorted and filtered when it came
 //! (or when the sort or the filter changed), so a frame only looks at the rows on screen,
@@ -48,6 +49,9 @@ const TILE_MIN: u16 = 26;
 /// A session in a transaction for longer than this (idle in it) is marked.
 const LONG_TX_US: i64 = 60_000_000;
 
+/// The most actions the action list shows (the newest).
+const ACTIONS_SHOWN: usize = 6;
+
 /// The Monitor tab in `area` (the editor's and results' place).
 pub(crate) fn draw_monitor(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
@@ -63,7 +67,15 @@ pub(crate) fn draw_monitor(app: &mut App, area: Rect, buf: &mut Buffer) {
     let info_key = app.key_for(Action::Monitor(MonitorAction::ServerInfo), Ctx::Monitor);
     let Some(m) = app.monitor_of(id) else { return };
     let mysql = matches!(m.format(), Some(MonitorFormat::MySql(_)));
-    let cx = Cx { i18n: &app.i18n, m, focused, mysql, read_key };
+    // The query tab whose own session the selected row is.
+    let own = app.tab().profile.zip(m.selected_row()).and_then(|(p, r)| app.own_tab(p, r));
+    let own = own.and_then(|t| app.tabs.get(t)).map(|t| crate::widgets::tabbar::document_name(app, t));
+    let now = app.now();
+    let actions = match m.actions_shown {
+        true => m.actions.iter().rev().take(ACTIONS_SHOWN).map(|e| app.action_line(e, now)).collect(),
+        false => Vec::new(),
+    };
+    let cx = Cx { i18n: &app.i18n, m, focused, mysql, read_key, own, actions };
     if inner.height == 0 || inner.width < 10 {
         return;
     }
@@ -143,6 +155,10 @@ struct Cx<'a> {
     mysql: bool,
     /// The key that reads again (what a state that waits for it names).
     read_key: String,
+    /// The name of the query tab whose own session the selected row is.
+    own: Option<String>,
+    /// The action list's lines, newest first (empty while it is hidden).
+    actions: Vec<String>,
 }
 
 impl Cx<'_> {
@@ -539,6 +555,14 @@ impl Cx<'_> {
         }
         put(buf, area.x + 1, area.y, &count, area.width as usize - 2, Style::new().fg(th.fg_muted));
         let mut y = area.y + 1;
+        // The action list, at the bottom when there is room for a few rows above it.
+        if m.actions_shown {
+            let h = self.actions.len().clamp(1, ACTIONS_SHOWN) as u16 + 1;
+            if bottom.saturating_sub(y) >= h + 3 {
+                bottom -= h;
+                self.action_list(Rect { x: area.x, y: bottom, width: area.width, height: h }, buf);
+            }
+        }
         // The details: below the list when there is room, else in its place.
         let details = m.list.details.then(|| m.selected_row()).flatten();
         let (list_h, details_at) = match details {
@@ -799,6 +823,24 @@ impl Cx<'_> {
         Some(self.msg(Msg::MonitorLockHolds { modes: h.modes.join(", "), object: object_text(&wait.object) }))
     }
 
+    /// The actions sent from the tab, newest first: when, what, on which session, the answer
+    /// and what the reads after it showed.
+    fn action_list(&self, at: Rect, buf: &mut Buffer) {
+        let th = theme::cur();
+        let block = Block::default().borders(Borders::TOP).border_style(Style::new().fg(th.border));
+        let inner = block.inner(at);
+        block.render(at, buf);
+        let title = format!(" {} ", self.label(Label::MonitorActions));
+        put(buf, at.x + 1, at.y, &title, at.width as usize - 2, Style::new().fg(th.fg_muted));
+        let w = inner.width.saturating_sub(2) as usize;
+        if self.actions.is_empty() {
+            put(buf, inner.x + 1, inner.y, &self.label(Label::MonitorActionsNone), w, Style::new().fg(th.fg_dim));
+        }
+        for (i, line) in self.actions.iter().take(inner.height as usize).enumerate() {
+            put(buf, inner.x + 1, inner.y + i as u16, line, w, Style::new().fg(th.fg));
+        }
+    }
+
     /// The columns that fit in `w`, with their widths; the statement takes what is left.
     fn columns(&self, w: u16) -> Vec<(Col, u16)> {
         // Narrow: the id, user, state and age a little cut; wide: the state's words whole
@@ -891,9 +933,12 @@ impl Cx<'_> {
             buf.set_style(at, sel);
             style = sel;
         }
+        // An action sent to it that still waits shows in its state, marked.
+        let acting = self.m.action_on(&r.key).is_some();
         let mut x = at.x;
         for &(c, w) in cols {
             let text = self.cell(c, r, time);
+            let style = if acting && c == Col::State && !selected { style.fg(th.warning) } else { style };
             put(buf, x, at.y, &text, w as usize, style);
             x += w + 1;
         }
@@ -906,7 +951,11 @@ impl Cx<'_> {
             Col::User => text(&r.user),
             Col::Database => text(&r.database),
             Col::State if r.monitor => self.label(Label::MonitorOwnConnection),
-            Col::State => self.state(r),
+            Col::State => match self.m.action_on(&r.key).map(|e| e.kind) {
+                Some(datarig_core::monitor::ActionKind::Cancel) => self.label(Label::MonitorActStateCancelSent),
+                Some(datarig_core::monitor::ActionKind::Terminate) => self.label(Label::MonitorActStateEndSent),
+                None => self.state(r),
+            },
             Col::Wait => r.wait.as_ref().map(|w| format!("{}:{}", wait_class(&w.class), w.name)).unwrap_or_default(),
             Col::TxAge => tx_age(r, time).map(age).unwrap_or_default(),
             Col::QueryAge => query_age(r, time).map(age).unwrap_or_default(),
@@ -945,6 +994,7 @@ impl Cx<'_> {
             }
         };
         field(Label::MonitorFieldSession, Some(r.key.id.to_string()));
+        field(Label::MonitorFieldTab, self.own.clone());
         field(Label::MonitorFieldKind, Some(self.kind(&r.kind)));
         field(Label::MonitorColUser, r.user.clone());
         field(Label::MonitorColDatabase, r.database.clone());

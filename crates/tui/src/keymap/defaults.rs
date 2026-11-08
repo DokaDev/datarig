@@ -195,6 +195,8 @@ pub const HINTS: &[(Ctx, &[(&str, Label)])] = &[
         &[
             ("monitor.view.next", Label::HintMonitorView),
             ("monitor.details", Label::HintDetail),
+            ("monitor.cancel", Label::HintMonitorCancel),
+            ("monitor.terminate", Label::HintMonitorEnd),
             ("monitor.filter", Label::HintMonitorFilter),
             ("monitor.idle", Label::HintMonitorIdle),
             ("monitor.pause", Label::HintMonitorPause),
@@ -578,6 +580,9 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Monitor, "b", "monitor.root"),
     (Monitor, "i", "monitor.server"),
     (Monitor, "esc", "monitor.back"),
+    (Monitor, "c", "monitor.cancel"),
+    (Monitor, "X", "monitor.terminate"),
+    (Monitor, "L", "monitor.actions"),
     (MonitorFilter, "enter", "monitor.back"),
     (MonitorFilter, "esc", "monitor.back"),
     // the Changes tab of the results pane

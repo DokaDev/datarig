@@ -220,6 +220,8 @@ impl App {
         t.exec.context = None;
         t.exec.path_per_transaction = false;
         t.exec.session_pooled = false;
+        // A new session is another server session: asked again which.
+        t.exec.own = super::tabs::OwnAsk::NotAsked;
         // The new session says its own language once it connects.
         t.exec.language = None;
         let context = t.context.clone();
