@@ -148,8 +148,12 @@ impl Conn {
 
     /// The row of the session `application` once it runs `pg_sleep`.
     async fn sleeping(&mut self, application: &str) -> SessionRow {
+        // In the sleep itself: with the extended protocol the server sets `query_start` again at
+        // Execute, after the statement showed as active from its Parse.
         self.row_when(application, |r| {
-            r.state == SessionState::Active && r.query.as_ref().is_some_and(|q| q.text.contains("pg_sleep"))
+            r.state == SessionState::Active
+                && r.query.as_ref().is_some_and(|q| q.text.contains("pg_sleep"))
+                && r.wait.as_ref().is_some_and(|w| w.name == "PgSleep")
         })
         .await
     }
