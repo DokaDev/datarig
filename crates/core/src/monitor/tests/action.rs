@@ -49,7 +49,7 @@ fn a_read_only_profile_refuses_both_actions() {
     for kind in BOTH {
         let row = by_application(&list, "zz_mon_b");
         assert_eq!(decide(&pg, row, true, kind), Decision::Refuse(Refusal::ReadOnly), "{kind:?}");
-        assert_eq!(decide(&my, by_id(&my_list, 63114), true, kind), Decision::Refuse(Refusal::ReadOnly));
+        assert_eq!(decide(&my, by_id(&my_list, 18986), true, kind), Decision::Refuse(Refusal::ReadOnly));
     }
 }
 
@@ -137,8 +137,8 @@ fn my_row(list: &SessionList, id: i64, text: &str, shortened: bool) -> SessionRo
 #[test]
 fn mysql_cancel_asks_a_line_only_for_a_plain_read() {
     let (my, list) = my_root();
-    // 63114 runs a statement event (a strong stamp).
-    let read = my_row(&list, 63114, "SELECT id, v FROM zz_mon_t WHERE id = 1", false);
+    // 18986 runs a statement event (a strong stamp).
+    let read = my_row(&list, 18986, "SELECT id, v FROM zz_mon_t WHERE id = 1", false);
     assert_eq!(decide(&my, &read, false, ActionKind::Cancel), LINE);
     let half = offer(&[Warning::MySqlMayLeaveHalfDone]);
     for text in [
@@ -150,43 +150,43 @@ fn mysql_cancel_asks_a_line_only_for_a_plain_read() {
         "/*! SELECT 1 */",
         "CALL shop.nightly()",
     ] {
-        let row = my_row(&list, 63114, text, false);
+        let row = my_row(&list, 18986, text, false);
         assert_eq!(decide(&my, &row, false, ActionKind::Cancel), half, "{text}");
     }
     // A read the list holds only the start of cannot be judged.
-    let cut = by_id(&list, 63119);
+    let cut = by_id(&list, 18993);
     assert!(cut.query.as_ref().unwrap().shortened);
     assert_eq!(decide(&my, cut, false, ActionKind::Cancel), half);
     for text in
         ["ALTER TABLE t ADD COLUMN x INT", "optimize table t", " (CHECK TABLE t)", "LOAD DATA INFILE 'f' INTO TABLE t"]
     {
-        let row = my_row(&list, 63114, text, true);
+        let row = my_row(&list, 18986, text, true);
         assert_eq!(decide(&my, &row, false, ActionKind::Cancel), offer(&[Warning::MySqlMaintenance]), "{text}");
     }
-    let no_text = SessionRow { query: None, ..by_id(&list, 63114).clone() };
+    let no_text = SessionRow { query: None, ..by_id(&list, 18986).clone() };
     assert_eq!(decide(&my, &no_text, false, ActionKind::Cancel), half, "unknown is not a read");
-    assert_eq!(decide(&my, by_id(&list, 63113), false, ActionKind::Cancel), Decision::Refuse(Refusal::NoStatement));
+    assert_eq!(decide(&my, by_id(&list, 18985), false, ActionKind::Cancel), Decision::Refuse(Refusal::NoStatement));
 }
 
 #[test]
 fn a_weak_mysql_stamp_is_said_so() {
     let (my, list) = my_root();
     // The ALTER's thread is not instrumented: its statement has no event.
-    let alter = by_id(&list, 63118);
+    let alter = by_id(&list, 18990);
     assert!(alter.statement.as_ref().is_some_and(StatementStamp::weak));
     assert_eq!(
         decide(&my, alter, false, ActionKind::Cancel),
         offer(&[Warning::WeakIdentity, Warning::MySqlMaintenance])
     );
     let (my, list) = my_unprivileged();
-    let read = my_row(&list, 63114, "SELECT 1", false);
+    let read = my_row(&list, 18986, "SELECT 1", false);
     assert_eq!(decide(&my, &read, false, ActionKind::Cancel), offer(&[Warning::WeakIdentity]));
 }
 
 #[test]
 fn ending_a_mysql_session_says_non_transactional_changes_stay() {
     let (my, list) = my_root();
-    for id in [63113, 63114, 63118] {
+    for id in [18985, 18986, 18990] {
         assert_eq!(
             decide(&my, by_id(&list, id), false, ActionKind::Terminate),
             offer(&[Warning::MySqlTerminateKeepsNonTx]),
@@ -209,30 +209,30 @@ fn targets_carry_the_rows_session_and_statement() {
     );
 
     let (my, list) = my_root();
-    let update = target(&my, by_id(&list, 63114)).unwrap();
-    assert_eq!(update.key, SessionKey { id: 63114, started: None });
-    assert_eq!(update.thread, Some(63154));
-    assert_eq!(update.stamp, Some(StatementStamp::MySqlEvent { thread_id: 63154, event_id: 1207 }));
-    let alter = target(&my, by_id(&list, 63118)).unwrap();
+    let update = target(&my, by_id(&list, 18986)).unwrap();
+    assert_eq!(update.key, SessionKey { id: 18986, started: None });
+    assert_eq!(update.thread, Some(19035));
+    assert_eq!(update.stamp, Some(StatementStamp::MySqlEvent { thread_id: 19035, event_id: 4 }));
+    let alter = target(&my, by_id(&list, 18990)).unwrap();
     assert_eq!(
         alter.stamp,
         Some(StatementStamp::MySqlWeak {
             command: "Query".into(),
             info_md5: Some("b7b2a88be5a2ced1d67a6f7293da518d".into()),
-            time: 4
+            time: 5
         })
     );
     // Idle: no statement runs, so there is none to name.
-    assert_eq!(target(&my, by_id(&list, 63113)).unwrap().stamp, None);
+    assert_eq!(target(&my, by_id(&list, 18985)).unwrap().stamp, None);
     assert_eq!(by_id(&list, 5).statement, None);
 
     let (my, list) = my_unprivileged();
-    let weak = target(&my, by_id(&list, 63114)).unwrap();
+    let weak = target(&my, by_id(&list, 18986)).unwrap();
     assert_eq!(weak.thread, None);
-    assert!(matches!(weak.stamp, Some(StatementStamp::MySqlWeak { ref command, time: 5, .. }) if command == "Query"));
+    assert!(matches!(weak.stamp, Some(StatementStamp::MySqlWeak { ref command, time: 9, .. }) if command == "Query"));
     let m = decode::mysql::probe(&fixture!("my80/probe")).unwrap();
     let (list, _) = decode::mysql::sessions(&rows(fixture!("my80/sessions")), &m, IDLE).unwrap();
-    assert_eq!(by_id(&list, 18).statement, Some(StatementStamp::MySqlEvent { thread_id: 58, event_id: 412 }));
+    assert_eq!(by_id(&list, 14).statement, Some(StatementStamp::MySqlEvent { thread_id: 54, event_id: 2 }));
 }
 
 fn my_format(flavour: Flavour, version: u32) -> MonitorFormat {
@@ -355,7 +355,7 @@ fn a_cancel_is_never_called_successful_unless_the_server_says() {
     assert_eq!(cancel(&follow(Some(active.clone()), Some(false))), Confirmation::StillRunning);
 
     let (my, list) = my_root();
-    let update = by_id(&list, 63114).clone();
+    let update = by_id(&list, 18986).clone();
     let t = target(&my, &update).unwrap();
     let cancel = |f: &FollowUp| confirm(ActionKind::Cancel, &t, f);
     assert_eq!(cancel(&follow(Some(update.clone()), Some(true))), Confirmation::Interrupted);
@@ -370,7 +370,7 @@ fn a_cancel_is_never_called_successful_unless_the_server_says() {
 #[test]
 fn a_weak_stamp_never_confirms_still_running() {
     let (my, list) = my_unprivileged();
-    let update = by_id(&list, 63114).clone();
+    let update = by_id(&list, 18986).clone();
     let t = target(&my, &update).unwrap();
     let cancel = |row: SessionRow| confirm(ActionKind::Cancel, &t, &FollowUp { row: Some(row), interrupted: None });
     assert_eq!(cancel(update.clone()), Confirmation::Unknown);
@@ -416,7 +416,7 @@ fn an_end_is_confirmed_only_when_the_session_is_gone() {
 #[test]
 fn a_session_answers_monitor_actions_it_does_not_do() {
     let (my, list) = my_root();
-    let target = target(&my, by_id(&list, 63114)).unwrap();
+    let target = target(&my, by_id(&list, 18986)).unwrap();
     match (DbCommand::MonitorAction { request: 4, kind: ActionKind::Cancel, target: target.clone() }).not_supported() {
         DbEvent::MonitorActionDone { request: 4, outcome: ActionOutcome::Failed(DbError::NotSupported) } => {}
         other => panic!("{other:?}"),
@@ -430,7 +430,7 @@ fn a_session_answers_monitor_actions_it_does_not_do() {
 #[test]
 fn a_recheck_sends_only_to_the_same_session_and_statement() {
     let (my, list) = my_root();
-    let update = by_id(&list, 63114).clone();
+    let update = by_id(&list, 18986).clone();
     let t = target(&my, &update).unwrap();
     let stale = |s| Some(NotSent::Stale(s));
     for kind in BOTH {
@@ -442,7 +442,7 @@ fn a_recheck_sends_only_to_the_same_session_and_statement() {
         assert_eq!(recheck(kind, &t, Some(&own)), Some(NotSent::OwnConnection));
     }
     let next = SessionRow {
-        statement: Some(StatementStamp::MySqlEvent { thread_id: 63154, event_id: 1300 }),
+        statement: Some(StatementStamp::MySqlEvent { thread_id: 19035, event_id: 1300 }),
         ..update.clone()
     };
     assert_eq!(recheck(ActionKind::Cancel, &t, Some(&next)), stale(Stale::StatementChanged));
@@ -452,7 +452,7 @@ fn a_recheck_sends_only_to_the_same_session_and_statement() {
 
     // A weak stamp that matches is sent on; another text or a new run is not.
     let (my, list) = my_unprivileged();
-    let weak = by_id(&list, 63114).clone();
+    let weak = by_id(&list, 18986).clone();
     let t = target(&my, &weak).unwrap();
     assert!(t.stamp.as_ref().is_some_and(StatementStamp::weak));
     assert_eq!(recheck(ActionKind::Cancel, &t, Some(&weak)), None);
@@ -505,7 +505,7 @@ fn identity_hidden_or_read_another_way_proves_nothing() {
 
     // MySQL: a statement event then, the weak form now (the consumer switched off).
     let (my, list) = my_root();
-    let update = by_id(&list, 63114).clone();
+    let update = by_id(&list, 18986).clone();
     let t = target(&my, &update).unwrap();
     let weak_now = SessionRow {
         statement: Some(StatementStamp::MySqlWeak { command: "Query".into(), info_md5: None, time: 60 }),
@@ -523,7 +523,7 @@ fn identity_hidden_or_read_another_way_proves_nothing() {
     // MySQL: the weak form then, a statement event now (the consumer switched on): another
     // statement may run, so nothing is sent.
     let (my, list) = my_unprivileged();
-    let weak = by_id(&list, 63114).clone();
+    let weak = by_id(&list, 18986).clone();
     let t = target(&my, &weak).unwrap();
     let event_now =
         SessionRow { statement: Some(StatementStamp::MySqlEvent { thread_id: 1, event_id: 2 }), ..weak.clone() };

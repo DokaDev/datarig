@@ -336,7 +336,7 @@ fn mysql_versions_the_monitor_does_not_read() {
 fn mysql_server_info() {
     let info = decode::mysql::server_info(&rows(fixture!("my84_unprivileged/server_info"))).unwrap();
     assert_eq!(info.version, "8.4.11 MySQL Community Server - GPL");
-    assert_eq!(info.started, Some(Timestamp(info.read_at.0 - 191_331 * 1_000_000)));
+    assert_eq!(info.started, Some(Timestamp(info.read_at.0 - 57_054 * 1_000_000)));
     assert!(!info.read_only);
     assert_eq!((info.max_connections, info.cache_bytes), (Some(151), Some(134_217_728)));
     let gtid = info.extra.iter().find(|e| e.key == ExtraKey::GtidMode).unwrap();
@@ -349,12 +349,12 @@ fn mysql_server_info() {
 fn mysql_counters() {
     let own = Own { statements: 40, transactions: 0 };
     let (sample, gauges) = decode::mysql::counters(&rows_of_my_counters(), own).unwrap();
-    assert_eq!(sample.epoch, Epoch::Uptime(191_332));
-    assert_eq!(sample.get(CounterKind::Statements), Some(64_275));
+    assert_eq!(sample.epoch, Epoch::Uptime(57_053));
+    assert_eq!(sample.get(CounterKind::Statements), Some(21_210));
     assert_eq!(sample.get(CounterKind::ExplicitRollbacks), Some(2));
     assert_eq!(sample.get(CounterKind::Commits), None, "MySQL counts no transactions");
-    assert_eq!(sample.get(CounterKind::RowsWritten), Some(16));
-    assert_eq!(sample.get(CounterKind::RowLockWaits), Some(4));
+    assert_eq!(sample.get(CounterKind::RowsWritten), Some(278));
+    assert_eq!(sample.get(CounterKind::RowLockWaits), Some(7));
     let gauge = |k| gauges.iter().find(|g| g.kind == k).map(|g| g.value);
     assert_eq!((gauge(GaugeKind::Sessions), gauge(GaugeKind::Active)), (Some(7), Some(4)));
     assert_eq!(gauge(GaugeKind::IdleInTx), None, "MySQL has no such counter");
@@ -368,27 +368,27 @@ fn mysql_sessions_with_transactions() {
     let (list, hidden) = decode::mysql::sessions(&rows(fixture!("my84_root/sessions")), &m, IDLE).unwrap();
     assert!(hidden.is_empty());
     assert!(!list.idle_left_out);
-    let holder = by_id(&list, 63113);
+    let holder = by_id(&list, 18985);
     assert_eq!(holder.state, SessionState::IdleInTx);
-    assert_eq!(holder.tx, Tx::Since(Timestamp(1_794_068_765_000_000)));
+    assert_eq!(holder.tx, Tx::Since(Timestamp(1_794_161_049_000_000)));
     assert_eq!(holder.query, None);
     assert_eq!(extra(holder, ExtraKey::RowsLocked), Some("1"));
-    let update = by_id(&list, 63114);
+    let update = by_id(&list, 18986);
     assert_eq!(
         (update.state.clone(), update.wait.clone()),
         (SessionState::Active, Some(Wait { class: WaitClass::Lock, name: "row lock".into() }))
     );
-    assert_eq!(update.query_started, Some(Timestamp(list.time.0 - 5_000_000)));
+    assert_eq!(update.query_started, Some(Timestamp(list.time.0 - 9_000_000)));
     assert_eq!(extra(update, ExtraKey::State), Some("updating"));
     // A transaction that read only a MyISAM table, and LOCK TABLES: no InnoDB transaction, but
     // locks held until the transaction ends.
-    for id in [63116, 63117] {
+    for id in [18988, 18989] {
         let idle = by_id(&list, id);
         assert_eq!((&idle.state, idle.tx), (&SessionState::IdleInTx, Tx::Open), "{id}");
     }
-    let alter = by_id(&list, 63118);
+    let alter = by_id(&list, 18990);
     assert_eq!(alter.wait, Some(Wait { class: WaitClass::Lock, name: "table metadata lock".into() }));
-    let sleep = by_id(&list, 63119);
+    let sleep = by_id(&list, 18993);
     assert!(sleep.query.as_ref().unwrap().shortened && sleep.wait.is_none());
     assert_eq!(sleep.tx, Tx::None, "no transaction and no lock past its statement");
     let daemon = by_id(&list, 5);
@@ -400,7 +400,7 @@ fn mysql_sessions_with_transactions() {
     assert_eq!(list.rows.iter().filter(|r| r.monitor).count(), 1);
     let (list, _) = decode::mysql::sessions(&rows(fixture!("my84_root/sessions_without_idle")), &m, NO_IDLE).unwrap();
     assert!(list.idle_left_out);
-    assert!(list.rows.iter().any(|r| r.key.id == 63116), "an idle transaction holding locks is kept");
+    assert!(list.rows.iter().any(|r| r.key.id == 18988), "an idle transaction holding locks is kept");
     let m = decode::mysql::probe(&fixture!("my80/probe")).unwrap();
     decode::mysql::sessions(&rows(fixture!("my80/sessions")), &m, IDLE).unwrap();
 }
@@ -418,12 +418,12 @@ fn mysql_sessions_without_process_say_what_is_missing() {
     );
     // Idle sessions cannot be left out when their transactions are unknown.
     assert!(!list.idle_left_out);
-    let sleeping = by_id(&list, 63113);
+    let sleeping = by_id(&list, 18985);
     assert_eq!((&sleeping.state, sleeping.tx), (&SessionState::Idle, Tx::Unknown));
     assert_eq!(extra(sleeping, ExtraKey::State), None, "an empty STATE is none");
-    assert_eq!(by_id(&list, 63114).wait, None, "a row lock wait is not known without INNODB_TRX");
-    assert!(by_id(&list, 63118).waits_for_lock());
-    assert_eq!(by_id(&list, 63116).tx, Tx::Unknown, "neither its InnoDB transaction nor its locks are known");
+    assert_eq!(by_id(&list, 18986).wait, None, "a row lock wait is not known without INNODB_TRX");
+    assert!(by_id(&list, 18990).waits_for_lock());
+    assert_eq!(by_id(&list, 18988).tx, Tx::Unknown, "neither its InnoDB transaction nor its locks are known");
     // The same account with PROCESS through a role lists others: no note then.
     let mut m = m;
     m.user = "someone_else".into();
@@ -1021,69 +1021,37 @@ fn cells(values: &[Option<&str>]) -> Vec<Option<String>> {
     values.iter().map(|v| v.map(str::to_owned)).collect()
 }
 
-/// Rows shaped as MySQL 8.4 gives them: 7 waits for a row 5 holds; 8 waits for a row the XA
-/// transaction 4242 (no session) holds; a metadata lock request of 9 (`EXCLUSIVE` for `ALTER`)
-/// on `shop.orders`, where 5 and 6 hold `SHARED_READ`, 9 itself `SHARED_UPGRADABLE`, and 11 a
-/// lock on another table; 10 asks for `SHARED_READ` behind the `ALTER`, beside every granted
-/// lock (it waits for the pending request, which is not modelled).
+// The sessions of `my84_locks/xa_and_metadata` (MySQL 8.4.11, recorded live).
+/// Waits for a row the session `ROW_HOLDER` holds in its open transaction.
+const ROW_WAITER: i64 = 18814;
+const ROW_HOLDER: i64 = 18812;
+/// Waits for a row a prepared XA transaction holds; its session is gone.
+const XA_WAITER: i64 = 18818;
+const XA_TRX: &str = "488497";
+/// `ALTER TABLE` waiting for `EXCLUSIVE` (it holds `SHARED_UPGRADABLE`) where both `READERS`
+/// hold `SHARED_READ` in open transactions; `BEHIND` asks for `SHARED_READ` behind it.
+const ALTER: i64 = 18822;
+const READERS: [i64; 2] = [18819, 18821];
+const BEHIND: i64 = 18823;
+
+/// The lock reads of MySQL 8.4 as a live server answered them (`my84_locks/xa_and_metadata`),
+/// with one granted lock on another table added by hand: the statement reads only the objects
+/// someone waits for, so a server never sends it, but the decoder must leave it out too.
 fn mysql_lock_answers() -> Vec<Answer> {
+    let mut answers = fixture!("my84_locks/xa_and_metadata");
+    let Answer::Rows(mdl) = &mut answers[1] else { panic!("the metadata lock read is refused") };
     let s = Some;
-    let n = None;
-    let rows = vec![cells(&[s("7"), s("5"), s("1001"), s("0")]), cells(&[s("8"), n, s("4242"), s("1")])];
-    let mdl = vec![
-        cells(&[s("9"), s("109"), s("TABLE"), s("shop"), s("orders"), s("EXCLUSIVE"), s("TRANSACTION"), s("PENDING")]),
-        cells(&[
-            s("10"),
-            s("110"),
-            s("TABLE"),
-            s("shop"),
-            s("orders"),
-            s("SHARED_READ"),
-            s("TRANSACTION"),
-            s("PENDING"),
-        ]),
-        cells(&[
-            s("5"),
-            s("105"),
-            s("TABLE"),
-            s("shop"),
-            s("orders"),
-            s("SHARED_READ"),
-            s("TRANSACTION"),
-            s("GRANTED"),
-        ]),
-        cells(&[
-            s("6"),
-            s("106"),
-            s("TABLE"),
-            s("shop"),
-            s("orders"),
-            s("SHARED_READ"),
-            s("TRANSACTION"),
-            s("GRANTED"),
-        ]),
-        cells(&[
-            s("9"),
-            s("109"),
-            s("TABLE"),
-            s("shop"),
-            s("orders"),
-            s("SHARED_UPGRADABLE"),
-            s("TRANSACTION"),
-            s("GRANTED"),
-        ]),
-        cells(&[
-            s("11"),
-            s("111"),
-            s("TABLE"),
-            s("shop"),
-            s("items"),
-            s("SHARED_WRITE"),
-            s("TRANSACTION"),
-            s("GRANTED"),
-        ]),
-    ];
-    vec![Answer::Rows(rows), Answer::Rows(mdl)]
+    mdl.push(cells(&[
+        s("18825"),
+        s("18871"),
+        s("TABLE"),
+        s("datarig"),
+        s("zz_mon_i"),
+        s("SHARED_WRITE"),
+        s("TRANSACTION"),
+        s("GRANTED"),
+    ]));
+    answers
 }
 
 #[test]
@@ -1091,47 +1059,44 @@ fn mysql_row_lock_waits_name_their_blockers_and_metadata_locks_their_incompatibl
     let my = mysql_root();
     let (locks, hidden) = decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).unwrap();
     assert!(hidden.is_empty() && locks.blocks);
-    let row = locks.waits_of(7).next().unwrap();
+    let row = locks.waits_of(ROW_WAITER).next().unwrap();
     // What it is on is not read (the engine would go through every lock it holds).
     assert_eq!((row.object.kind.as_str(), row.object.name.as_deref(), row.mode.as_str()), ("RECORD", None, ""));
-    assert_eq!((row.holders[0].holder.clone(), row.holders[0].blame), (Holder::Session(5), Blame::Proven));
-    let xa = locks.waits_of(8).next().unwrap();
-    assert_eq!(xa.holders[0].holder, Holder::Transaction { id: "4242".into(), sessionless: true });
-    let alter = locks.waits_of(9).next().unwrap();
+    assert_eq!((row.holders[0].holder.clone(), row.holders[0].blame), (Holder::Session(ROW_HOLDER), Blame::Proven));
+    let xa = locks.waits_of(XA_WAITER).next().unwrap();
+    assert_eq!(xa.holders[0].holder, Holder::Transaction { id: XA_TRX.into(), sessionless: true });
+    let alter = locks.waits_of(ALTER).next().unwrap();
     assert_eq!((alter.object.kind.as_str(), alter.mode.as_str()), ("TABLE", "EXCLUSIVE"));
     let holders: Vec<(Holder, Blame)> = alter.holders.iter().map(|h| (h.holder.clone(), h.blame)).collect();
     // Its own lock and the other table's are left out.
-    assert_eq!(holders, [(Holder::Session(5), Blame::Incompatible), (Holder::Session(6), Blame::Incompatible)]);
+    assert_eq!(holders, READERS.map(|id| (Holder::Session(id), Blame::Incompatible)));
     // Beside every granted lock: it waits behind a request, which is not modelled.
-    assert!(locks.waits_of(10).next().unwrap().holders.is_empty());
+    assert!(locks.waits_of(BEHIND).next().unwrap().holders.is_empty());
     let waits = lk::edges(None, Some(&locks), false);
-    assert_eq!(waits.alone, [10]);
+    assert_eq!(waits.alone, [BEHIND]);
     let tree = Tree::build(&waits);
-    let at = tree.lines.iter().position(|l| l.node == Holder::Session(9)).unwrap();
+    let at = tree.lines.iter().position(|l| l.node == Holder::Session(ALTER)).unwrap();
     // Two holders may block the ALTER: no root is named for it.
     assert_eq!(tree.root_of(at).map(|(_, sure)| sure), Some(false));
     let one = |locks: &LockList| {
         let mut l = locks.clone();
         for w in &mut l.waits {
-            w.holders.retain(|h| h.holder != Holder::Session(6));
+            w.holders.retain(|h| h.holder != Holder::Session(READERS[1]));
         }
         l
     };
     let tree = Tree::build(&lk::edges(None, Some(&one(&locks)), false));
-    let at = tree.lines.iter().position(|l| l.node == Holder::Session(9)).unwrap();
+    let at = tree.lines.iter().position(|l| l.node == Holder::Session(ALTER)).unwrap();
     assert_eq!(tree.root_of(at).map(|(_, sure)| sure), Some(true), "the only holder of an incompatible lock");
 }
 
 #[test]
 fn mysql_lock_reads_refused_or_off_say_what_would_show_them() {
     let my = mysql_root();
-    let refused = Answer::Error { code: Some(1142), message: "SELECT command denied".into() };
-    let (locks, hidden) = decode::mysql::locks(
-        &[refused],
-        &MySqlMonitor { metadata_locks: Readable::Refused, ..my.clone() },
-        Timestamp(1),
-    )
-    .unwrap();
+    // The account without grants on performance_schema, as MySQL 8.4 refused it.
+    let unprivileged = decode::mysql::probe(&fixture!("my84_unprivileged/probe")).unwrap();
+    let (locks, hidden) =
+        decode::mysql::locks(&fixture!("my84_unprivileged/locks"), &unprivileged, Timestamp(1)).unwrap();
     assert!(locks.waits.is_empty());
     assert_eq!(
         hidden,
@@ -1162,17 +1127,18 @@ fn a_waits_lock_read_older_than_the_list_drops_waits_that_are_over() {
         wait: waits.then(|| Wait { class: WaitClass::Lock, name: "row lock".into() }),
         ..list.rows[0].clone()
     };
-    let mut alter = waiting(9, true);
+    let mut alter = waiting(ALTER, true);
     alter.wait = Some(Wait { class: WaitClass::Lock, name: "table metadata lock".into() });
-    list.rows = vec![waiting(7, false), waiting(8, true), alter];
+    list.rows = vec![waiting(ROW_WAITER, false), waiting(XA_WAITER, true), alter];
     let waits = lk::edges(Some(&list), Some(&locks), true);
     let waiters: HashSet<i64> = waits.edges.iter().map(|e| e.waiter).collect();
-    // 7 no longer waits; 10 is not listed though every session is: both are over.
-    assert_eq!(waiters, HashSet::from([8, 9]));
+    // The row waiter no longer waits; the one behind the ALTER is not listed though every
+    // session is: both are over.
+    assert_eq!(waiters, HashSet::from([XA_WAITER, ALTER]));
     assert!(waits.alone.is_empty());
     // A list of only some sessions keeps a wait of one it does not show.
     let waits = lk::edges(Some(&list), Some(&locks), false);
-    assert_eq!(waits.alone, [10]);
+    assert_eq!(waits.alone, [BEHIND]);
 }
 
 #[test]
@@ -1299,12 +1265,12 @@ fn a_prepared_transaction_holding_only_a_lock_of_a_mode_not_known_is_not_named()
 fn a_mysql_wait_of_a_later_statement_is_not_told_by_an_older_lock_read() {
     let my = mysql_root();
     let (mut locks, _) = decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).unwrap();
-    let row = locks.waits.iter_mut().find(|w| w.waiter.id == 7).unwrap();
+    let row = locks.waits.iter_mut().find(|w| w.waiter.id == ROW_WAITER).unwrap();
     row.query_started = Some(Timestamp(100_000_000));
     let mut list = decode::mysql::sessions(&rows_of_sessions(), &my, IDLE).unwrap().0;
     let base = list.rows[0].clone();
     let session = |wait: &str, started: i64| SessionRow {
-        key: SessionKey { id: 7, started: None },
+        key: SessionKey { id: ROW_WAITER, started: None },
         wait: Some(Wait { class: WaitClass::Lock, name: wait.into() }),
         query_started: Some(Timestamp(started)),
         ..base.clone()
@@ -1313,17 +1279,17 @@ fn a_mysql_wait_of_a_later_statement_is_not_told_by_an_older_lock_read() {
         lk::edges(Some(list), Some(&locks), false)
             .edges
             .into_iter()
-            .filter(|e| e.waiter == 7)
+            .filter(|e| e.waiter == ROW_WAITER)
             .map(|e| e.holder)
             .collect()
     };
     // The same statement (its start a second off, as MySQL tells it), the same row lock wait.
     list.rows = vec![session("row lock", 101_000_000)];
-    assert_eq!(blockers(&list), [Holder::Session(5)]);
+    assert_eq!(blockers(&list), [Holder::Session(ROW_HOLDER)]);
     // A new statement waiting for a metadata lock now: the row lock's blocker is not its.
     list.rows = vec![session("table metadata lock", 130_000_000)];
     assert!(blockers(&list).is_empty());
-    assert!(lk::edges(Some(&list), Some(&locks), false).alone.contains(&7), "it waits all the same");
+    assert!(lk::edges(Some(&list), Some(&locks), false).alone.contains(&ROW_WAITER), "it waits all the same");
 }
 
 #[test]
@@ -1348,15 +1314,15 @@ fn a_row_wait_the_list_cannot_see_keeps_its_blocker() {
     let (locks, _) = decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).unwrap();
     let mut list = decode::mysql::sessions(&rows_of_sessions(), &my, IDLE).unwrap().0;
     list.rows.truncate(1);
-    list.rows[0].key.id = 7;
+    list.rows[0].key.id = ROW_WAITER;
     list.rows[0].wait = None;
     list.rows[0].tx = Tx::Unknown;
     let waits = lk::edges(Some(&list), Some(&locks), false);
-    assert!(waits.edges.iter().any(|e| e.waiter == 7 && e.holder == Holder::Session(5)), "{waits:?}");
+    assert!(waits.edges.iter().any(|e| e.waiter == ROW_WAITER && e.holder == Holder::Session(ROW_HOLDER)), "{waits:?}");
     // Known to hold no transaction: the wait is over.
     list.rows[0].tx = Tx::None;
     let waits = lk::edges(Some(&list), Some(&locks), false);
-    assert!(!waits.edges.iter().any(|e| e.waiter == 7), "{waits:?}");
+    assert!(!waits.edges.iter().any(|e| e.waiter == ROW_WAITER), "{waits:?}");
 }
 
 #[test]
@@ -1416,11 +1382,11 @@ fn a_metadata_lock_read_cut_short_names_no_root_from_a_single_holder() {
     let my = mysql_root();
     let (mut locks, _) = decode::mysql::locks(&mysql_lock_answers(), &my, Timestamp(1)).unwrap();
     for w in &mut locks.waits {
-        w.holders.retain(|h| h.holder != Holder::Session(6));
+        w.holders.retain(|h| h.holder != Holder::Session(READERS[1]));
     }
     locks.more = 1;
     let tree = Tree::build(&lk::edges(None, Some(&locks), false));
-    let at = tree.lines.iter().position(|l| l.node == Holder::Session(9)).unwrap();
+    let at = tree.lines.iter().position(|l| l.node == Holder::Session(ALTER)).unwrap();
     assert_eq!(tree.root_of(at).map(|(_, sure)| sure), Some(false), "another holder may have been left out");
 }
 
@@ -1472,10 +1438,12 @@ fn metadata_locks_the_server_did_not_track_make_the_holders_unsure() {
     let want = Want { sessions: Some(IDLE), locks: true, server: false, limit: std::time::Duration::from_secs(1) };
     let mut rows = rows(fixture!("my84_root/counters"));
     rows.extend(rows_of_sessions());
-    rows[1].push(vec![Some("Performance_schema_metadata_lock_lost".into()), Some("0".into())]);
+    // The server counts the metadata locks it could not track (none on the recorded server).
+    let lost = rows[1].iter().position(|r| r[0].as_deref() == Some("Performance_schema_metadata_lock_lost")).unwrap();
+    assert_eq!(rows[1][lost][1].as_deref(), Some("0"));
     let s = decode::mysql::tick(&my, &want, &rows, Some(&mysql_lock_answers()), Own::default()).unwrap();
     assert_eq!(s.locks.as_ref().unwrap().more, 0);
-    rows[1].last_mut().unwrap()[1] = Some("3".into());
+    rows[1][lost][1] = Some("3".into());
     let s = decode::mysql::tick(&my, &want, &rows, Some(&mysql_lock_answers()), Own::default()).unwrap();
     assert_eq!(s.locks.as_ref().unwrap().more, 1);
     let need = Need::Setting("performance_schema_max_metadata_locks");
@@ -1489,19 +1457,19 @@ fn a_metadata_lock_holder_with_no_transaction_open_is_not_said_to_block() {
     let mut list = decode::mysql::sessions(&rows_of_sessions(), &my, IDLE).unwrap().0;
     let base = list.rows[0].clone();
     let alter = SessionRow {
-        key: SessionKey { id: 9, started: None },
+        key: SessionKey { id: ALTER, started: None },
         wait: Some(Wait { class: WaitClass::Lock, name: "table metadata lock".into() }),
         query_started: None,
         ..base.clone()
     };
-    // 5 runs nothing in a transaction (its prepared XA transaction holds the lock).
-    let free = SessionRow { key: SessionKey { id: 5, started: None }, wait: None, tx: Tx::None, ..base };
+    // A reader runs nothing in a transaction (say its prepared XA transaction holds the lock).
+    let free = SessionRow { key: SessionKey { id: READERS[0], started: None }, wait: None, tx: Tx::None, ..base };
     list.rows = vec![alter, free];
     let blame = |list: &SessionList| {
         lk::edges(Some(list), Some(&locks), false)
             .edges
             .into_iter()
-            .find(|e| e.waiter == 9 && e.holder == Holder::Session(5))
+            .find(|e| e.waiter == ALTER && e.holder == Holder::Session(READERS[0]))
             .map(|e| e.blame)
     };
     assert_eq!(blame(&list), Some(Blame::CannotTell));
