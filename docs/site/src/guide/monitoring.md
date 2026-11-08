@@ -85,7 +85,10 @@ The tree comes from what the server says:
 - MySQL names the blockers of row lock waits (`performance_schema.data_lock_waits`); what such
   a wait is on is not read (`data_locks` would make the server go through every lock it holds,
   millions in a large transaction), so the line says it waits for a row lock and the statement
-  shows on which table. For
+  shows on which table. The blocking transaction's session is the one that has it now (from
+  `INNODB_TRX`, which needs `PROCESS`): a prepared XA transaction whose session went on to
+  other work is shown as a transaction with no session, and without `PROCESS` only the
+  transaction is named. For
   metadata locks (an `ALTER TABLE` waiting for a long transaction, `FLUSH TABLES WITH READ
   LOCK`) it does not: the tree shows the sessions holding a lock on the same object that the
   request cannot be granted beside, as the server's lock manager decides it, and says that

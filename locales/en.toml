@@ -2936,6 +2936,7 @@
 "monitor.lock_prepared_detail" = "owner {owner}, database {database}, prepared {time} ago: it holds its locks until COMMIT PREPARED or ROLLBACK PREPARED, which the monitor does not offer"
 "monitor.lock_prepared_unknown" = "a prepared transaction: which one is told once what is held is read"
 "monitor.lock_transaction" = "transaction {id}: no session has it (an XA transaction whose session has gone)"
+"monitor.lock_transaction_unknown" = "transaction {id}: its session is not known (needs PROCESS)"
 "monitor.lock_cycle" = "in a cycle of waits: a deadlock the server has not broken yet"
 "monitor.lock_alone" = "who holds it was not found"
 "monitor.root_unsure" = "Cannot tell which session blocks it: more than one holds an incompatible lock"

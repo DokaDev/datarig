@@ -712,7 +712,14 @@ impl Cx<'_> {
                 self.msg(Msg::MonitorLockPrepared { gid: p.gid.clone() })
             }
             Holder::Prepared(None) => self.label(Label::MonitorLockPreparedUnknown),
-            Holder::Transaction(t) => self.msg(Msg::MonitorLockTransaction { id: t.clone() }),
+            Holder::Transaction(t) => {
+                // Its session is told by INNODB_TRX only: without it, not known.
+                let told = matches!(m.format(), Some(MonitorFormat::MySql(my)) if my.innodb_trx == datarig_core::monitor::Readable::Yes);
+                match told {
+                    true => self.msg(Msg::MonitorLockTransaction { id: t.clone() }),
+                    false => self.msg(Msg::MonitorLockTransactionUnknown { id: t.clone() }),
+                }
+            }
         };
         let mut text = format!("{lead}{marks}{head}");
         for p in parts {

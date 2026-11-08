@@ -464,7 +464,12 @@ impl Tree {
         alone.sort_unstable();
         for id in alone {
             let node = Holder::Session(id);
-            if tree.lines.iter().any(|l| l.node == node) {
+            // Already a line (a root others wait for): it waits too, for a holder not found.
+            if let Some(l) = tree.lines.iter_mut().find(|l| l.node == node) {
+                if !l.alone && l.parent.is_none() && !l.cycle {
+                    tree.waiting += 1;
+                }
+                l.alone = true;
                 continue;
             }
             tree.waiting += 1;
@@ -630,6 +635,7 @@ impl Tree {
                 return None;
             }
         }
-        Some((i, sure))
+        // A root that waits itself, for a holder not found, is not the root of the waits.
+        Some((i, sure && !self.lines[i].alone))
     }
 }

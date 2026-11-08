@@ -1347,3 +1347,14 @@ fn a_row_wait_the_list_cannot_see_keeps_its_blocker() {
     let waits = lk::edges(Some(&list), Some(&locks), false);
     assert!(!waits.edges.iter().any(|e| e.waiter == 7), "{waits:?}");
 }
+
+#[test]
+fn a_blocker_that_waits_itself_for_a_holder_not_found_is_marked_waiting() {
+    let e = |w: i64, h: i64| lk::Edge { waiter: w, holder: Holder::Session(h), blame: Blame::Proven };
+    // B (20) waits for A (10); A waits too (GET_LOCK), its holder not read.
+    let tree = Tree::build(&Waits { edges: vec![e(20, 10)], alone: vec![10] });
+    assert_eq!(tree.lines.len(), 2);
+    assert!(tree.lines[0].alone && tree.lines[0].node == Holder::Session(10));
+    assert_eq!(tree.waiting, 2);
+    assert_eq!(tree.root_of(1), Some((0, false)), "A is not the root of the waits");
+}

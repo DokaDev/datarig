@@ -39,7 +39,7 @@ fn every(m: &MySqlMonitor) -> Vec<(&'static str, String, &'static [&'static str]
     out.push(("query text", query_text(4211), QUERY_TEXT));
     out.push(("session before an action", guard(m, 63114), SESSIONS));
     out.push(("session after an action", session(m, 63114), SESSIONS));
-    out.push(("row lock waits", row_lock_waits(), ROW_LOCK_WAITS));
+    out.push(("row lock waits", row_lock_waits(m), ROW_LOCK_WAITS));
     out.push(("metadata lock waits", metadata_lock_waits(), METADATA_LOCKS));
     out
 }
@@ -187,12 +187,18 @@ fn the_read_before_an_action_tells_the_statement_as_the_tick_does() {
 #[test]
 fn the_lock_reads_follow_what_the_account_may_read() {
     let m = my(80411, true, Readable::Yes);
-    assert_eq!(locks(&m), [row_lock_waits(), metadata_lock_waits()]);
+    assert_eq!(locks(&m), [row_lock_waits(&m), metadata_lock_waits()]);
     for unreadable in [Readable::Refused, Readable::Unknown] {
-        assert_eq!(locks(&MySqlMonitor { metadata_locks: unreadable, ..m.clone() }), [row_lock_waits()]);
+        assert_eq!(locks(&MySqlMonitor { metadata_locks: unreadable, ..m.clone() }), [row_lock_waits(&m)]);
     }
     // Never every lock the engine holds: `data_locks` is not read.
-    let rows = row_lock_waits();
+    let rows = row_lock_waits(&m);
+    // The blocking transaction's session now (a detached XA transaction has none), not the
+    // thread that took the lock.
+    assert!(rows.contains("NULLIF(bx.trx_mysql_thread_id, 0) AS blocker"), "{rows}");
+    assert!(!rows.contains("BLOCKING_THREAD_ID"), "{rows}");
+    let blind = row_lock_waits(&MySqlMonitor { innodb_trx: Readable::Refused, ..m.clone() });
+    assert!(blind.contains("CAST(NULL AS UNSIGNED) AS blocker") && !blind.contains("INNODB_TRX"), "{blind}");
     assert!(rows.contains("FROM performance_schema.data_lock_waits w"), "{rows}");
     assert!(!rows.contains("data_locks "), "{rows}");
     // Other threads' locks on the object only; pending first, bounded.
