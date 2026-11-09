@@ -229,6 +229,10 @@ impl Reader<'_> {
             // A plain PostgreSQL string with a backslash reads as written or as an escape
             // depending on the session's standard_conforming_strings, which is not known here.
             Tok::Str if self.d == Dialect::Postgres && text.starts_with('\'') && text.contains('\\') => None,
+            // A string is read only when its escapes are `\\` and `\'`: other escapes (octal,
+            // hexadecimal and Unicode bytes, control characters, MySQL `\0` `\Z`) are not
+            // decoded here exactly as the server decodes them.
+            Tok::Str if !self.escapes_read_exactly(text) => None,
             Tok::Str => {
                 let s = self.d.unquote_literal(text)?;
                 // PostgreSQL bytes: `'\x…'::bytea`.
@@ -240,6 +244,15 @@ impl Reader<'_> {
                 Some((Value::Text(s), at + 1))
             }
             _ => None,
+        }
+    }
+
+    /// Whether the backslash escapes of string token `text` are only `\\` and `\'` (MySQL
+    /// under NO_BACKSLASH_ESCAPES has none).
+    fn escapes_read_exactly(&self, text: &str) -> bool {
+        match self.d {
+            Dialect::MySql(m) if m.no_backslash_escapes => true,
+            _ => plain_escapes(text),
         }
     }
 
@@ -404,6 +417,17 @@ fn values(c: &Cond) -> Box<dyn Iterator<Item = &Value> + '_> {
         Cond::Between { lo, hi, .. } => Box::new([lo, hi].into_iter()),
         _ => Box::new(std::iter::empty()),
     }
+}
+
+/// Whether every backslash escape of a PostgreSQL string token is `\\` or `\'`.
+fn plain_escapes(text: &str) -> bool {
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' && !matches!(chars.next(), Some('\\' | '\'')) {
+            return false;
+        }
+    }
+    true
 }
 
 fn rebang(p: &str) -> String {

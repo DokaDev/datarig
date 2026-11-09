@@ -363,6 +363,14 @@ fn recognise_keeps_what_it_does_not_model() {
         assert_eq!(pg(s), Some(Cond::Raw(s.into())), "{s}");
     }
     assert_eq!(pg(r"name = E'a\\b'"), Some(cmp("name", CmpOp::Eq, text(r"a\b"))));
+    // Other escapes stand for bytes or characters this reader does not decode as the server does.
+    for s in [r"name = E'\303\251'", r"name = E'\xC3\xA9'", r"name = E'a\tb'", r"name = E'\u00e9'"] {
+        assert_eq!(pg(s), Some(Cond::Raw(s.into())), "{s}");
+    }
+    for s in [r"name = 'a\0b'", r"name = 'a\Zb'", r"name = 'a\nb'"] {
+        assert_eq!(recognise(s, &tm), Some(Cond::Raw(s.into())), "{s}");
+    }
+    assert_eq!(recognise(r"name = 'it\'s'", &tm), Some(cmp("name", CmpOp::Eq, text("it's"))));
     // Under NO_BACKSLASH_ESCAPES a LIKE without ESCAPE has no escape character at all.
     let nbe = Target {
         dialect: Dialect::MySql(MySqlMode { no_backslash_escapes: true, ..MySqlMode::default() }),
