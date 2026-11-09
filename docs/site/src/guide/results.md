@@ -76,6 +76,29 @@ cells are tinted.
 {{#include ../screens/grid-search.txt}}
 ```
 
+## Filter and sort a table tab
+
+A table tab (opened from the explorer) has a line above its grid with a WHERE condition and an
+ORDER BY, both run on the server. `f` (or `Space r f`) edits the condition and `Space r o` the
+order; `Enter` applies them, `Tab` moves between the two fields, `Ctrl+Space` completes column
+names and `Esc` puts back what was applied. `Space r x` clears both and runs the table again,
+and `Space r v` opens the statement in a new console. From the command line, `:where`,
+`:orderby` and `:filter clear` do the same.
+
+The condition is sent exactly as you typed it, inside parentheses. The order is read as column
+names, each with `ASC` or `DESC` (and `NULLS FIRST` or `NULLS LAST` on PostgreSQL), and shown
+in its normal form once applied.
+
+Before anything is sent, datarig refuses a condition that could do more than filter this
+table's rows: a comment, a `;`, a row lock (`FOR UPDATE`, `FOR SHARE`), another clause or
+another table. The refused part is underlined when it can be pointed to, and the status line
+says why. A condition that calls functions datarig cannot check for side effects asks first; on
+a read-only connection it is refused.
+
+When the server rejects the condition, the line marks it failed, underlined where the server
+says the error is. The rows of the earlier query stay, dimmed, and the line under the grid says
+they are not the filter's answer; a cancelled run or a lost connection leaves them the same way.
+
 ## The inspector
 
 `i` shows or hides the inspector next to the grid; `I` switches between its Row and Cell tabs.
