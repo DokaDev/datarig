@@ -2,9 +2,10 @@ use super::*;
 use crate::app::command::COMMANDS;
 use crate::keymap::{Bound, Keymap, Target, parse_keys};
 use datarig_i18n::Lang;
+use std::sync::LazyLock;
 
-const EN: &str = include_str!("../../../../i18n/locales/en.toml");
-const KO: &str = include_str!("../../../../i18n/locales/ko.toml");
+static EN: LazyLock<String> = LazyLock::new(|| datarig_i18n::files::catalog("en"));
+static KO: LazyLock<String> = LazyLock::new(|| datarig_i18n::files::catalog("ko"));
 
 /// The `"key" = "text"` entries of a catalog whose key starts with one of `prefixes`.
 fn entries<'a>(catalog: &'a str, prefixes: &[&str]) -> Vec<(&'a str, &'a str)> {
@@ -55,12 +56,12 @@ fn every_tip_names_a_known_subject_and_has_its_own_text() {
         keys.push(key);
     }
     // Every `tips.*` entry belongs to exactly one tip.
-    for (k, _) in entries(EN, &["tips."]) {
+    for (k, _) in entries(&EN, &["tips."]) {
         assert_eq!(keys.iter().filter(|x| **x == k).count(), 1, "{k}: used by one tip");
     }
     // The placeholder is the subject's kind.
     for t in catalog() {
-        let (_, text) = entries(EN, &["tips."]).into_iter().find(|(k, _)| *k == format!("tips.{}", t.id)).unwrap();
+        let (_, text) = entries(&EN, &["tips."]).into_iter().find(|(k, _)| *k == format!("tips.{}", t.id)).unwrap();
         let want = match t.subject {
             Subject::Action(..) => "{key}",
             Subject::Command(_) => "{command}",
@@ -192,7 +193,7 @@ fn literal_key(text: &str) -> Option<String> {
 #[test]
 fn no_tip_names_a_key_itself() {
     let prefixes = ["tips.", "onboarding.", "nudge.", "tip_mark", "setting.tips", "action.tips."];
-    for (name, catalog) in [("en", EN), ("ko", KO)] {
+    for (name, catalog) in [("en", EN.as_str()), ("ko", KO.as_str())] {
         let texts = entries(catalog, &prefixes);
         assert!(texts.len() > catalog_len() + STEPS.len() + 4, "{name}: tips, steps, nudges and the setting");
         for (k, v) in texts {

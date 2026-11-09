@@ -1,0 +1,43 @@
+# datarig: English messages, editor. The English catalog is the source of truth for keys;
+# placeholders use {name}; text that is not English is written with \u escapes. See
+# docs/architecture.md, "UI strings (i18n)".
+
+"complete.kind.schema" = "schema"
+"complete.kind.table" = "table"
+"complete.kind.view" = "view"
+"complete.kind.column" = "column"
+"complete.kind.keyword" = "keyword"
+"complete.kind.value" = "value"
+"editor.hint.rows" = { one = "{count} row · {elapsed} · {time}", other = "{count} rows · {elapsed} · {time}" }
+"editor.hint.more_rows" = { one = "{count}+ rows · {elapsed} · {time}", other = "{count}+ rows · {elapsed} · {time}" }
+"editor.hint.affected" = { one = "{count} row affected · {elapsed} · {time}", other = "{count} rows affected · {elapsed} · {time}" }
+"editor.hint.command" = "{tag} · {elapsed} · {time}"
+"editor.hint.plan" = "plan · {elapsed} · {time}"
+"editor.hint.rolled_back" = "rolled back · {elapsed} · {time}"
+"editor.hint.cancelled" = "cancelled"
+"editor.register.empty" = "Nothing in register {name}"
+"editor.register.read_only" = "Register {name} takes no yank or delete"
+"editor.search.wrapped_bottom" = "Search hit the bottom, continuing at the top"
+"editor.search.wrapped_top" = "Search hit the top, continuing at the bottom"
+"editor.search.not_found" = "Pattern not found: {pattern}"
+"editor.search.invalid" = "Not a valid search pattern (Rust regular expression syntax): {error}"
+"editor.search.no_previous" = "No previous search pattern"
+"editor.search.no_word" = "No word under the cursor to search for"
+"editor.mark.not_set" = "Mark not set: {mark}"
+"editor.mark.unknown" = "Not a mark the editor keeps: {mark} (it keeps a-z, ' ` < > and .)"
+"editor.ex.unsupported" = "Not an editor command: :{command} (the editor takes a line number, :s, :& and :format)"
+"editor.format.done" = "Formatted (u undoes it)"
+"editor.format.unchanged" = "Already formatted: nothing to change"
+"editor.format.nothing" = "No statement here to format"
+"editor.format.refused" = "Not formatted: it would change more than the layout (line {line}). The text is unchanged"
+"editor.ex.invalid_range" = "Invalid range: a line past the end of the text"
+"editor.ex.backwards" = "Backwards range: the first line comes after the last"
+"editor.ex.confirm" = "The c flag (confirm each match) is not supported"
+"editor.ex.trailing" = "Not a flag of :s: {text} (g, i, I, e, & are)"
+"editor.ex.substituted" = { one = "{count} substitution on {lines} lines", other = "{count} substitutions on {lines} lines" }
+"editor.ex.substituted_one_line" = { one = "{count} substitution on one line", other = "{count} substitutions on one line" }
+"editor.clipboard.too_long" = "Kept in the editor's register, not sent to the clipboard: {size} of base64 is more than OSC 52 may carry ({limit}, osc52_max_bytes). Not said again until you restart."
+"editor.clipboard.failed" = "Kept in the editor's register, not sent to the clipboard: {error}. Not said again until you restart."
+"editor.clipboard.no_read" = "The clipboard cannot be read through the terminal (OSC 52 only writes to it): paste with the terminal's own paste key instead (Cmd+V on macOS, Ctrl+Shift+V in most Linux terminals)"
+"editor.clipboard.read_failed" = "Could not read the clipboard ({error}); the terminal's own paste key (Cmd+V, Ctrl+Shift+V) still works"
+"editor.read_only" = "This text is read-only"

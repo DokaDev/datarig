@@ -12,8 +12,8 @@ keywords.workspace = true
 categories.workspace = true
 publish.workspace = true
 
-# No dependencies at run time: the catalogs (`locales/`, part of this package) are checked and
-# turned into code by build.rs.
+# No dependencies at run time: the catalogs (`locales/<code>/<area>.toml`, part of this package)
+# are checked and turned into code by build.rs.
 [dependencies]
 
 [build-dependencies]
@@ -21,6 +21,10 @@ toml.workspace = true
 
 [dev-dependencies]
 toml.workspace = true
+
+[features]
+# `files`: the catalog files as text, for the tests of the crates that show them.
+test-util = []
 
 [lints]
 workspace = true

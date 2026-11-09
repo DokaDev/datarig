@@ -1,0 +1,200 @@
+# datarig: English messages, results. The English catalog is the source of truth for keys;
+# placeholders use {name}; text that is not English is written with \u escapes. See
+# docs/architecture.md, "UI strings (i18n)".
+
+"results.title.page" = "page {page} / {pages}"
+"results.title.page_count" = "page {page} / ? · {key} count"
+"results.title.page_short" = "{page}/{pages}"
+"results.title.paging" = "paging"
+"results.title.in_tx" = "in tx"
+"results.title.paging_closed" = "paging closed"
+"results.title.paging_stopped" = "fetching stopped"
+"results.title.paging_no_hold" = "next page re-runs"
+"results.title.first_page_only" = "first page only"
+"results.title.counting" = "counting…"
+"results.title.counted" = { one = "{count} row", other = "{count} rows" }
+"results.title.counted_now" = { one = "{count} row now", other = "{count} rows now" }
+
+"query.running" = "Running… {elapsed}"
+"query.fetching" = "Fetching more rows…"
+"query.done_rows" = { one = "{count} row · {elapsed}", other = "{count} rows · {elapsed}" }
+"query.more_rows" = { one = "{count}+ rows (more pages) · {elapsed}", other = "{count}+ rows (more pages) · {elapsed}" }
+"query.done_affected" = { one = "{count} row affected · {elapsed}", other = "{count} rows affected · {elapsed}" }
+"query.done_command" = "{tag} · {elapsed}"
+"query.cancelling" = "Cancelling…"
+"query.cancelling_server" = "Cancelling… the server is still stopping the statement (a large change takes a while to roll back)"
+"query.ran_after_refused_cancel" = "The statement ran to its end after the server refused the cancel"
+"query.cancel_refused_runs_on" = "The server refused the cancel: the statement runs as another account and will run to its end. Closing the tab won't stop it. Ask a DBA or the routine's owner to KILL it."
+"query.cancelled" = "Query cancelled"
+"query.cancelled_rebound" = "Query cancelled by the connection change"
+"query.cancelled_session_closed" = "Cancelled: the tab's connection was closed while it ran"
+"query.cancel_unanswered" = "Query cancelled: the connection did not answer, so it was closed (the next run reconnects)"
+"query.error" = "Error: {error}"
+"query.no_statement" = "No statement under cursor"
+"query.busy" = "A query is already running ({key} to cancel)"
+"query.queued_dropped" = "Not run: this statement waited for {name}, but the tab's connection changed before it connected"
+"query.queued_failed" = "Not run: this statement waited for {name}, which did not connect"
+
+"results.empty" = "Run a query with {run}"
+"results.running" = "Running… the result shows here when it comes."
+"results.null" = "NULL"
+"results.not_read" = "(not read)"
+"results.paging_stopped" = { one = "Showing {count} row · fetching stopped: narrow the query to see more", other = "Showing {count} rows · fetching stopped: narrow the query to see more" }
+"results.spill_capped" = { one = "Stopped at {count} row: the result's temporary file reached its limit of {limit}", other = "Stopped at {count} rows: the result's temporary file reached its limit of {limit}" }
+"results.spill_failed" = "Stopped fetching: the result's temporary file could not be written ({error})"
+"results.read_failed" = "Could not read the result's rows from its temporary file ({error})"
+"results.paging_closed" = { one = "Showing {count} row · paging closed after idle: re-run to load more", other = "Showing {count} rows · paging closed after idle: re-run to load more" }
+"tab.close.title" = "Close this tab?"
+"tab.close.running" = "A query is still running in this tab. Closing it cancels the query; its results are lost."
+"tab.close.tx" = "A transaction is open in this tab. Closing it rolls the transaction back; its uncommitted changes are lost."
+"tab.close.running_tx" = "A query is running and a transaction is open in this tab. Closing it cancels the query and rolls the transaction back; uncommitted changes are lost."
+"tab.close.queued" = "A statement in this tab is waiting for its connection. Closing the tab drops it; it will not run."
+"tab.close.keys" = "y close · n/Enter keep"
+"tab.closed_tx" = "Tab closed; its open transaction was rolled back"
+"tab.closed_query" = "Tab closed; its running query was cancelled"
+"tab.closed_queued" = "Tab closed; the statement waiting for its connection was dropped"
+"tab.reopen_none" = "No closed tab to reopen"
+"tab.read_only" = "RO"
+"query.lost" = "This tab's connection was lost: {error}"
+"query.reconnected" = "Reconnected"
+"query.reconnected_tx" = "Reconnected; the transaction that was open is gone"
+"query.idle_closed" = "This tab's session closed after {time} unused; the next run connects again"
+"query.idle_closed_tx" = "This tab's session closed after {time} unused, and the server rolled back its open transaction; the next run connects again"
+"query.tx_idle_closed" = "This tab's session closed after {time} idle in a transaction, and the server rolled the transaction back; the next run connects again"
+"query.tx_idle_rollback_unanswered" = "The rollback after {time} idle in a transaction got no answer within {wait}, so this tab's session was closed instead; the server rolls the transaction back once it sees the session end; the next run connects again"
+"query.tx_idle_rollback_failed" = "The rollback after {time} idle in a transaction failed ({error}), so this tab's session was closed instead; the server rolls the transaction back once it sees the session end; the next run connects again"
+"query.idle_closed_by_server" = "The server closed this tab's session because it sat idle; the next run connects again: {error}"
+"query.idle_closed_by_server_tx" = "The server closed this tab's session because it sat idle and rolled back its open transaction; the next run connects again: {error}"
+"query.info.insert_id" = "last insert id: {id}"
+"query.info.warnings" = { one = "{count} warning: SHOW WARNINGS shows it", other = "{count} warnings: SHOW WARNINGS shows them" }
+"query.info.server" = "the server says: {text}"
+"query.info.not_undone" = "EXPLAIN ANALYZE ran this on {tables}: changes there were not rolled back"
+"query.info.more_results" = { one = "{count} more result set was read and not shown", other = "{count} more result sets were read and not shown" }
+"query.info.step" = "statement {step}: {info}"
+"query.implicit_commit" = "statement {step} commits the open transaction before it runs (MySQL commits before DDL, LOCK TABLES, another BEGIN, …)"
+"tab.rebind.title" = "Change this tab's connection?"
+"tab.context.title" = "Change this tab's database or schema?"
+"tab.rebind.running" = "A query is still running in this tab. Switching cancels it; its results are lost."
+"tab.rebind.tx" = "A transaction is open in this tab. Switching rolls it back; its uncommitted changes are lost."
+"tab.rebind.running_tx" = "A query is running and a transaction is open in this tab. Switching cancels the query and rolls the transaction back; uncommitted changes are lost."
+"tab.rebind.queued" = "A statement in this tab is waiting for its connection. Switching drops it; it will not run on the new one."
+"tab.rebind.keys" = "y switch · n / Enter keep"
+"tab.unbound" = "no connection"
+"tab_list.title" = "Tabs"
+"tab_list.keys" = "Enter go · Ctrl+D close tab · ↑↓ select · Esc close"
+"tab_list.placeholder" = "type part of a name, connection, database, schema, kind or number"
+"tab_list.closed" = "Recently closed"
+"tab_list.none" = "No matching tabs"
+"tab_list.kind.console" = "console"
+"tab_list.kind.script" = "saved query"
+"tab_list.kind.table" = "table"
+"tab_list.kind.ddl" = "DDL"
+"grid.summary.rows" = { one = "{count} row", other = "{count} rows" }
+"grid.summary.cols" = { one = "{count} column", other = "{count} columns" }
+"grid.summary.sum" = "sum {value}"
+"grid.summary.avg" = "avg {value}"
+"grid.summary.min" = "min {value}"
+"grid.summary.max" = "max {value}"
+"grid.summary.distinct" = { one = "{count} distinct value", other = "{count} distinct values" }
+"grid.summary.distinct_more" = { one = "{count}+ distinct values", other = "{count}+ distinct values" }
+"grid.summary.nulls" = { one = "NULL {count}", other = "NULL {count}" }
+"grid.summary.unknown" = { one = "{count} with no value yet", other = "{count} with no value yet" }
+"grid.summary.working" = "summing…"
+"grid.summary.new_rows" = "new rows left out"
+"grid.summary.fetched" = "fetched rows only"
+"tab.close.script_conflict" = "This saved query changed on disk and the tab's edits are not saved. Closing the tab loses them."
+"tab.close.unsaved" = "This saved query's edits could not be written to its file. Closing the tab loses them."
+"tab.close.console_unsaved" = "This console's edits could not be saved. Closing the tab loses them."
+"tab.recovered" = "recovered"
+"tab.trash_failed" = "The closed console could not be moved to the trash ({error}); it comes back as a recovered tab at the next launch"
+"tab.trash_unreadable" = "The trash of closed consoles could not be read ({error})"
+"tab.trash_files_skipped" = { one = "{count} closed console in the trash could not be read ({error}); it was skipped and stays there", other = "{count} closed consoles in the trash could not be read ({error}); they were skipped and stay there" }
+"tab.untrash_unreadable" = "This closed console could not be read ({error}); it stays in the trash"
+"tab.untrash_failed" = "The closed console could not be brought back ({error}); it stays in the trash"
+
+# The result inspector
+"detail.tab.cell" = "Cell"
+"detail.tab.row" = "Row"
+"detail.chars" = { one = "{count} character", other = "{count} characters" }
+"detail.bytes" = { one = "{count} byte", other = "{count} bytes" }
+"detail.more" = "… {key} shows the whole value"
+"detail.keys_unknown" = "The key columns could not be read"
+"detail.no_rows" = "No rows"
+"detail.new_row" = "A new row, not applied yet"
+"detail.applied_row" = "A row the Apply added"
+"detail.preview" = "{column}: {value}"
+"grid.search.more" = { one = "in {count} row read · more rows on the server ({key}: next page)", other = "in {count} rows read · more rows on the server ({key}: next page)" }
+"grid.search.more_short" = "more on server"
+"grid.search.no_room" = "No room for the search line under the grid: make the results taller ({key} zooms them)"
+"query.running_step" = "Running statement {step} of {total}… {elapsed}"
+"query.step_failed" = "Statement {step} of {total} failed ({sql}): {error}"
+"query.step_cancelled" = "Cancelled at statement {step} of {total} ({sql}); the rest did not run"
+"query.cancelled_before" = "Cancelled; statements {from}–{to} of {total} did not run"
+"query.cancelled_before_last" = "Cancelled; statement {step} of {total} ({sql}) did not run"
+"tab.console" = "console {n}"
+"results.tab.result" = "Result {n}"
+"results.tab.rows" = "Result"
+"results.tab.messages" = "Messages"
+"results.tab.earlier" = "earlier run"
+"results.page.last" = "Last page: the result has no more rows"
+"results.page.first" = "First page"
+"results.page.hint" = "End of the page: {key} shows the next one"
+"results.page.stale" = "This result's session is gone (reconnected, or another connection): run the statement again to see more"
+"results.page.refused" = "Paging closed and this statement is not run again for you ({why}): run it again to see more"
+"results.page.resumed" = "Paging had closed: ran the SELECT again to fetch rows {from}–{to}; they may differ if the data changed"
+"results.page.resumed_unordered" = "Paging had closed: ran the SELECT again to fetch rows {from}–{to}; without ORDER BY they may come in another order, and they may differ if the data changed"
+"results.page.columns_changed" = "Not added: the statement's columns changed since it first ran; run it again"
+"results.paging_closed_rerun" = { one = "Showing {count} row · paging closed: {key} runs the SELECT again for the next page", other = "Showing {count} rows · paging closed: {key} runs the SELECT again for the next page" }
+"results.paging_replaced" = { one = "Showing {count} row · paging closed after another statement ran: run it again to load more", other = "Showing {count} rows · paging closed after another statement ran: run it again to load more" }
+"results.paging_interrupted" = { one = "Showing {count} row · fetching the next page stopped (failed or cancelled): run it again to load more", other = "Showing {count} rows · fetching the next page stopped (failed or cancelled): run it again to load more" }
+"results.paging_no_hold" = { one = "Showing {count} row · nothing is held open on the server: {key} runs the SELECT again for the next page", other = "Showing {count} rows · nothing is held open on the server: {key} runs the SELECT again for the next page" }
+"results.paging_first_page_only" = { one = "Showing the first {count} row only · this statement is not run again for you: see Messages for how to see more", other = "Showing the first {count} rows only · this statement is not run again for you: see Messages for how to see more" }
+"results.first_page_only" = { one = "First {count} row only: the statement stopped after its first page (a function it calls ran for those rows only), nothing is held open on the server, and it is not run again for you ({why}). To see more, page it yourself with LIMIT/OFFSET, or set paging = \"hold\" in the profile's environment", other = "First {count} rows only: the statement stopped after its first page (a function it calls ran for those rows only), nothing is held open on the server, and it is not run again for you ({why}). To see more, page it yourself with LIMIT/OFFSET, or set paging = \"hold\" in the profile's environment" }
+"results.first_page_only_write" = { one = "First {count} row only: the statement's changes are committed in full, and the rows it returned after its first page were not kept. Running it again would change rows again: query the table to see them", other = "First {count} rows only: the statement's changes are committed in full, and the rows it returned after its first page were not kept. Running it again would change rows again: query the table to see them" }
+"results.page.refused_no_hold" = "Only the first page was read: the statement stopped there and is not run again for you ({why}). Page it yourself with LIMIT/OFFSET, or set paging = \"hold\" in the profile's environment"
+"results.page.rerun" = "Ran the SELECT again for rows {from}–{to} (nothing is held open between pages); they may differ if the data changed"
+"results.page.rerun_unordered" = "Ran the SELECT again for rows {from}–{to} (nothing is held open between pages); without ORDER BY the server may return its rows in another order, so rows may repeat or be missing, and they may differ if the data changed"
+"results.page.applied" = "Changes were applied to these rows: re-run the query to see the rest"
+"repeat.not_one" = "it is not one statement"
+"repeat.not_select" = "it is not a plain SELECT"
+"repeat.writes" = "it may write, lock rows or act on the server"
+"repeat.user_function" = "it calls a function that is not a built-in"
+"repeat.volatile" = "it calls {name}, whose result changes from call to call"
+"repeat.unreadable" = "it cannot be read"
+"repeat.variable" = "it uses the variable {name}, whose value may change"
+"repeat.user_operator" = "it uses the operator {name}, which is not a built-in"
+"repeat.user_type" = "it names the type {name}, which is not a built-in"
+"repeat.not_a_table" = "it reads {name}, which is not a table (a view, a foreign table, …) or is not found"
+"repeat.row_security" = "{name} has row-level security"
+"repeat.shadowed" = "a function or operator of the database's own is also named {name}"
+"repeat.user_column_type" = "a column it reads has type {name}, which functions, operators or casts of the database's own take"
+"results.count.sent" = "Counting rows, sent for you: {sql}"
+"results.count.done" = { one = "Counted: {count} row", other = "Counted: {count} rows" }
+"results.count.done_now" = { one = "Counted now: {count} row (may differ from the pages)", other = "Counted now: {count} rows (may differ from the pages)" }
+"results.count.failed" = "Could not count the rows: {error}"
+"results.count.cancelled" = "Count cancelled"
+"results.count.refused" = "Rows are not counted for you: {why}"
+"results.count.complete" = { one = "Every row is fetched already: {count} row", other = "Every row is fetched already: {count} rows" }
+"results.tx.open" = "uncommitted (in tx)"
+"results.tx.ended" = "from ended tx"
+"results.tx.rolled_back" = "from rolled-back tx"
+"results.tab.messages_short" = "Msgs"
+"table_tab.no_save" = "A table tab has no text to save: its query is SELECT * of the table (open a console to write one)"
+"table_tab.no_rebind" = "A table tab stays on the connection it was opened from (open the table from another connection instead)"
+"results.count.rebound" = "Count stopped: the tab switched to another connection"
+"results.fetch.rebound" = "Fetching the next page stopped: the tab switched to another connection"
+"results.count.session_closed" = "Count stopped: the tab's connection was closed"
+"results.fetch.session_closed" = "Fetching the next page stopped: the tab's connection was closed"
+"tab.ddl" = "DDL {name}"
+"results.tab.plan" = "Plan"
+"results.tab.chart" = "Chart"
+
+# The Changes tab of a result
+"results.tab.changes" = { one = "Changes {count}", other = "Changes {count}" }
+"results.tab.changes_short" = { one = "Chg{count}", other = "Chg{count}" }
+"results.tab.applied" = "Applied"
+"results.tab.applied_short" = "Appl"
+"results.tab.changes_plain" = "Changes"
+"results.tab.changes_plain_short" = "Chg"
+"tab.monitor" = "Monitor: {name}"
+"tab_list.kind.monitor" = "monitor"

@@ -486,7 +486,7 @@ fn shown(screen: &str, text: &str) -> bool {
         || (text.contains(' ') && text.split_whitespace().all(|w| screen.contains(w)))
 }
 
-/// A Korean UI text, from the Korean catalog (`locales/ko.toml`): the tests hold no Korean
+/// A Korean UI text, from the Korean catalog (`crates/i18n/locales/ko/`): the tests hold no Korean
 /// text of their own.
 pub fn ko(l: datarig_i18n::Label) -> &'static str {
     l.text(Lang::Ko)

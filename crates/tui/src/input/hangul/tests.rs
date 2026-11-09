@@ -1,5 +1,5 @@
 // Hangul jamo and syllables are written as `\u{…}` escapes (the repository keeps Korean text
-// in locales/ko.toml only); the comments name the QWERTY keys of the 2-Set layout instead.
+// in the Korean catalog only); the comments name the QWERTY keys of the 2-Set layout instead.
 
 use super::*;
 

@@ -12,7 +12,8 @@ Fails (exit 1) with file:line: message for each finding, run from the repository
    a range (1–5) and `--` in a command line are fine.
 2. British spelling in the prose of the README, CONTRIBUTING, SECURITY, the pull request
    template, docs/site/src, the generated docs/keybindings.md and docs/themes.md, changes/ and
-   the values of crates/i18n/locales/en.toml: colour, behaviour, centre, favourite, cancelled, organise,
+   the values of the English catalog (crates/i18n/locales/en/*.toml): colour, behaviour, centre,
+   favourite, cancelled, organise,
    analyse... Code is exempt: fenced code blocks, `inline code`, {placeholders}, URLs, words
    joined to `_`, `.`, `-`, `/` or `::`, and words in capitals (the SQL keyword ANALYZE).
    A name typed as it is outside code goes in ALLOW_PHRASES or ALLOW_KEYS, with the reason.
@@ -275,9 +276,10 @@ def main():
         for n, line in markdown_lines(path):
             for _col, word, uk in prose_findings(line):
                 add("spelling", path, n, f"US spelling '{word}': write '{uk}'")
-    for n, line in (toml_values("crates/i18n/locales/en.toml") if git_files("crates/i18n/locales/en.toml") else []):
-        for _col, word, uk in prose_findings(line):
-            add("spelling", "crates/i18n/locales/en.toml", n, f"US spelling '{word}': write '{uk}'")
+    for path in git_files("crates/i18n/locales/en/*.toml"):
+        for n, line in toml_values(path):
+            for _col, word, uk in prose_findings(line):
+                add("spelling", path, n, f"US spelling '{word}': write '{uk}'")
 
     if counts:
         per = {}

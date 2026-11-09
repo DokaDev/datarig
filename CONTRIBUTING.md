@@ -105,8 +105,9 @@ budget again; counts, memory and the binary size fail at once (docs/perf.md, "Bu
   The docs site (`docs/site`, [mdBook](https://rust-lang.github.io/mdBook/)) is built with
   `mdbook build docs/site`; `tests/book_refs.rs` checks that its hand-written pages, the README
   and this file name only commands, actions, keys and config keys that exist.
-- UI text goes through the catalogs in `crates/i18n/locales/` (`en.toml` is the source of truth; every
-  locale must have the same keys). See "UI strings (i18n)" in
+- UI text goes through the catalogs in `crates/i18n/locales/`, one file per area in each language
+  (`en/` is the source of truth; every locale must have the same keys, each in the file of the
+  same name). See "UI strings (i18n)" in
   [docs/architecture.md](docs/architecture.md).
 
 ## Commits and pull requests

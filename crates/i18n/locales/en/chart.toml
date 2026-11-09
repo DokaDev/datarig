@@ -1,0 +1,50 @@
+# datarig: English messages, chart. The English catalog is the source of truth for keys;
+# placeholders use {name}; text that is not English is written with \u escapes. See
+# docs/architecture.md, "UI strings (i18n)".
+
+"chart.kind.bar" = "Bars"
+"chart.kind.hbar" = "Horizontal bars"
+"chart.kind.line" = "Line"
+"chart.field.x" = "X"
+"chart.field.y" = "Y"
+"chart.field.by" = "by"
+"chart.scale.linear" = "linear scale"
+"chart.scale.log" = "log scale"
+"chart.none" = "none"
+"chart.row_number" = "row number"
+"chart.others" = "others"
+"chart.others_series" = { one = "others ({count} series)", other = "others ({count} series)" }
+"chart.rows" = { one = "{count} fetched row", other = "{count} fetched rows" }
+"chart.rows_more" = { one = "first {count} fetched row · more on the server", other = "first {count} fetched rows · more on the server" }
+"chart.unsuitable.no_rows" = "Nothing to chart: the result has no rows."
+"chart.unsuitable.no_result" = "Nothing to chart: there is no row result to draw."
+"chart.unsuitable.no_number" = "Nothing to chart: no column holds numbers. A chart needs a numeric column for its values."
+"chart.unsuitable.no_series" = "No values chosen: pick at least one numeric column."
+"chart.unsuitable.no_values" = "Nothing to chart: every value to draw is NULL or not a number."
+"chart.unsuitable.one_point" = "Only one point to draw: nothing to compare it with."
+"chart.keys_hint" = "{x} X column · {y} values · {by} series by a column · {kind} kind"
+"chart.unreadable" = "The rows could not be read from the result's spill file; the error log has the details."
+"chart.edited" = "Not drawn: this result has pending or applied changes. Run the query again to chart the edited values."
+"chart.too_small" = "Too small to draw a chart."
+"chart.note.nulls" = { one = "{count} NULL skipped", other = "{count} NULLs skipped" }
+"chart.note.not_numbers" = { one = "{count} value not a number skipped", other = "{count} values not numbers skipped" }
+"chart.note.summed" = "rows with the same X summed"
+"chart.note.others" = { one = "others = {count} smaller category", other = "others = {count} smaller categories" }
+"chart.note.others_series" = { one = "others = {count} smaller series", other = "others = {count} smaller series" }
+"chart.note.log" = { one = "{count} value of zero or less not on the log scale", other = "{count} values of zero or less not on the log scale" }
+"chart.readout.row" = "row {row}"
+"chart.readout.rows" = { one = "{count} row (row {row})", other = "{count} rows summed (first: row {row})" }
+"chart.readout.others" = { one = "{count} category summed", other = "{count} categories summed" }
+"chart.copied" = { one = "Copied the chart's numbers as TSV ({count} line, {method})", other = "Copied the chart's numbers as TSV ({count} lines, {method})" }
+"chart.copied_text" = { one = "Copied the chart as text ({count} line, {method})", other = "Copied the chart as text ({count} lines, {method})" }
+"chart.nothing_to_copy" = "Nothing to copy: the chart has no numbers."
+"chart.others_no_row" = "The others bar sums several categories: it has no row of its own."
+"chart.pick.x" = "Chart: X axis"
+"chart.pick.y" = "Chart: values (Enter adds or removes, Esc done)"
+"chart.pick.y_one" = "Chart: the value split into series"
+"chart.pick.by" = "Chart: split the values into series by"
+"chart.pick.stale" = "Not applied: the result changed since the list opened."
+"chart.too_many_series" = { one = "At most {count} value column", other = "At most {count} value columns" }
+"chart.rows_short" = { one = "{count} row", other = "{count} rows" }
+"chart.rows_more_short" = { one = "{count}+ row", other = "{count}+ rows" }
+"chart.edited_pending" = "Not drawn: this result has pending changes. Apply or discard them, or run the query again (see Changes)"

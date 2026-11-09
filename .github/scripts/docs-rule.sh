@@ -71,7 +71,7 @@ has_heading() {
 user_visible() {
   case $1 in
     */tests.rs | */tests/*) return 1 ;;
-    crates/i18n/locales/en.toml) ;;
+    crates/i18n/locales/en/*) ;;
     crates/tui/src/keymap.rs | crates/tui/src/keymap/*) ;;
     crates/tui/src/app/action.rs | crates/tui/src/app/action/*) ;;
     crates/tui/src/app/command.rs | crates/tui/src/app/command/*) ;;

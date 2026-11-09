@@ -553,7 +553,7 @@ const SIZES: [(u16, u16); 2] = [(80, 24), (160, 45)];
 
 /// Split a list of `en …` / `ko …` lines: the English ones are returned, to be pinned; each
 /// Korean line must be a translation of the English line at the same place. The Korean text
-/// itself is the catalog's (`locales/ko.toml`) and is not kept in the snapshots.
+/// itself is the catalog's (`crates/i18n/locales/ko/`) and is not kept in the snapshots.
 fn english_pinned(out: &str) -> String {
     let (en, ko): (Vec<&str>, Vec<&str>) = out.lines().partition(|l| l.starts_with("en "));
     assert_eq!(en.len(), ko.len(), "{out}");

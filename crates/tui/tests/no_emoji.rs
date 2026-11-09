@@ -183,16 +183,20 @@ fn the_ui_text_has_no_emoji() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
     sources(&root.join("src"), &mut files);
-    for lang in ["en", "ko"] {
-        files.push(root.join(format!("../i18n/locales/{lang}.toml")));
-    }
     assert!(files.len() > 40, "{files:?}");
+    // The sources, then every catalog file (`crates/i18n/locales/<code>/<area>.toml`).
+    let mut texts: Vec<(String, String)> = files
+        .iter()
+        .map(|f| (f.display().to_string(), std::fs::read_to_string(f).expect("read a UI source")))
+        .collect();
+    for (code, area, text) in datarig_i18n::files::FILES {
+        texts.push((format!("locales/{code}/{area}.toml"), text.to_string()));
+    }
     let mut found = Vec::new();
-    for f in &files {
-        let text = std::fs::read_to_string(f).expect("read a UI source");
+    for (f, text) in &texts {
         for (i, line) in text.lines().enumerate() {
             if let Some(c) = line.chars().find(|c| is_emoji(*c)) {
-                found.push(format!("{}:{}: U+{:04X} in {}", f.display(), i + 1, u32::from(c), line.trim()));
+                found.push(format!("{f}:{}: U+{:04X} in {}", i + 1, u32::from(c), line.trim()));
             }
         }
     }
