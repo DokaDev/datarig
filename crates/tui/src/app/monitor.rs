@@ -669,20 +669,28 @@ impl MonitorTab {
     /// Take a read's answer: the rates since the read before, the charts, the list.
     fn take(&mut self, snapshot: Snapshot, i18n: &I18n) {
         let now = &snapshot.sample;
-        if self.history.is_empty() {
-            for m in METRICS.into_iter().chain(SERIES) {
-                let has = match m {
-                    Metric::Rate(k) => now.get(k).is_some(),
-                    Metric::CacheHit => {
-                        now.get(CounterKind::PageRequests).is_some() && now.get(CounterKind::PageReads).is_some()
-                    }
-                    Metric::Sessions => snapshot.gauges.iter().any(|g| g.kind == GaugeKind::Sessions),
-                    Metric::Gauge(k) => snapshot.gauges.iter().any(|g| g.kind == k),
-                };
-                if has {
-                    self.history.push((m, History::new(HISTORY)));
+        // A metric gets its history once the server has it, at the first read or later (a
+        // setting turned on): it starts at that read, never filled in before it, and the
+        // histories keep the order of METRICS then SERIES. One the server stops giving keeps its
+        // history, its points from then on gaps.
+        let order: Vec<Metric> = METRICS.into_iter().chain(SERIES).collect();
+        let mut added = false;
+        for m in &order {
+            let has = match *m {
+                Metric::Rate(k) => now.get(k).is_some(),
+                Metric::CacheHit => {
+                    now.get(CounterKind::PageRequests).is_some() && now.get(CounterKind::PageReads).is_some()
                 }
+                Metric::Sessions => snapshot.gauges.iter().any(|g| g.kind == GaugeKind::Sessions),
+                Metric::Gauge(k) => snapshot.gauges.iter().any(|g| g.kind == k),
+            };
+            if has && self.history_of(*m).is_none() {
+                self.history.push((*m, History::new(HISTORY)));
+                added = true;
             }
+        }
+        if added {
+            self.history.sort_by_key(|(m, _)| order.iter().position(|o| o == m));
         }
         let prev = self.prev.take();
         // After a gap (hidden, paused, reconnected) the first point stands alone: a gap is put

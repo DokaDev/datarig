@@ -508,6 +508,46 @@ fn the_charts_wrap_their_legend_and_give_way_when_short() {
 }
 
 #[test]
+fn a_series_the_server_starts_or_stops_giving_starts_or_breaks_there() {
+    use datarig_tui::app::monitor::Metric;
+    let inserted = Metric::Rate(CounterKind::RowsInserted);
+    let off = |mut s: Snapshot| {
+        s.sample.counters.retain(|c| {
+            !matches!(c.kind, CounterKind::RowsInserted | CounterKind::RowsUpdated | CounterKind::RowsDeleted)
+        });
+        s
+    };
+    // `track_counts` off when the tab opens: the chart is not there.
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(off(snapshot(0.0, 1000, rows(), true))) });
+    answer_next(&mut h, off(snapshot(2.0, 1824, rows(), false)));
+    assert!(monitor(&h).history_of(inserted).is_none());
+    assert!(h.screen(120, 40).contains("rows/s by operation"));
+    assert!(h.screen(120, 40).contains("not available"));
+    // Turned on: the series starts at that read, with no rate yet (one sample) and nothing
+    // filled in before it; the next read has its rate.
+    answer_next(&mut h, snapshot(4.0, 2648, rows(), false));
+    let points: Vec<_> = monitor(&h).history_of(inserted).unwrap().points().map(|(_, v)| v).collect();
+    assert_eq!(points, [None], "it starts here");
+    answer_next(&mut h, snapshot(6.0, 3472, rows(), false));
+    assert_eq!(monitor(&h).history_of(inserted).unwrap().last(), Some(412.0));
+    let metrics: Vec<Metric> = monitor(&h).history.iter().map(|(m, _)| *m).collect();
+    let order: Vec<Metric> = datarig_tui::app::monitor::METRICS
+        .into_iter()
+        .chain(datarig_tui::app::monitor::SERIES)
+        .filter(|m| metrics.contains(m))
+        .collect();
+    assert_eq!(metrics, order, "the histories keep their order");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("■ inserted 412") && !screen.contains("not available"), "{screen}");
+    // Turned off again: a gap from then on, never its last value or zero.
+    answer_next(&mut h, off(snapshot(8.0, 4296, rows(), false)));
+    assert_eq!(monitor(&h).history_of(inserted).unwrap().last(), None);
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("■ inserted –") && screen.contains("■ deleted –"), "{screen}");
+}
+
+#[test]
 fn a_chart_says_why_it_is_not_there_and_whose_threads_it_counts() {
     // `track_counts` off: no rows by operation, said so, not 0/s.
     let (mut h, first) = monitor_open();
