@@ -11,26 +11,26 @@
 
 use std::path::PathBuf;
 
-/// `(screen, snapshot)`: `screens/<screen>.txt` from `tests/snapshots/<snapshot>.snap`. The
+/// `(screen, snapshot)`: `screens/<screen>.txt` from `tests/it/snapshots/<snapshot>.snap`. The
 /// snapshots without Nerd Font icons, so the site needs no special font.
 const SCREENS: &[(&str, &str)] = &[
-    ("welcome-first-steps", "flows_tips__welcome_first_steps_en_80x24"),
-    ("main-layout", "ui_snapshots__main_layout_160x45_en"),
-    ("editor", "ui_snapshots__current_statement_is_marked_in_the_gutter"),
-    ("grid-keys", "ui_snapshots__grid_key_marks_text_en_160x45"),
-    ("inspector", "ui_snapshots__inspector_row_en_160x45"),
-    ("grid-search", "ui_snapshots__grid_search_matches_terminal_120x40"),
-    ("plan-tree-postgres", "flows_plan__plan_tree_analyze_en_160x45"),
-    ("plan-summary-postgres", "flows_plan__plan_summary_en_160x45"),
-    ("plan-tree-mysql", "flows_plan_mysql__plan_mysql_tree_en_120x40"),
-    ("explorer-structure", "flows_structure__explorer_structure_text_en_120x40"),
-    ("export-dialog", "flows_export_dialog__export_dialog_console_en_160x45"),
-    ("chart-bars", "flows_chart__chart_bars_en_120x34"),
-    ("profile-form", "ui_snapshots__profile_form_en_160x45"),
-    ("settings", "ui_snapshots__settings_theme_en_80x24"),
-    ("run-confirm", "flows_safety__run_confirm_en_160x45"),
-    ("tx-uncommitted", "flows_tx__tx_uncommitted_en_160x45"),
-    ("session-view", "flows_sessions__session_view_en_120x40"),
+    ("welcome-first-steps", "it__flows_tips__welcome_first_steps_en_80x24"),
+    ("main-layout", "it__ui_snapshots__main_layout_160x45_en"),
+    ("editor", "it__ui_snapshots__current_statement_is_marked_in_the_gutter"),
+    ("grid-keys", "it__ui_snapshots__grid_key_marks_text_en_160x45"),
+    ("inspector", "it__ui_snapshots__inspector_row_en_160x45"),
+    ("grid-search", "it__ui_snapshots__grid_search_matches_terminal_120x40"),
+    ("plan-tree-postgres", "it__flows_plan__plan_tree_analyze_en_160x45"),
+    ("plan-summary-postgres", "it__flows_plan__plan_summary_en_160x45"),
+    ("plan-tree-mysql", "it__flows_plan_mysql__plan_mysql_tree_en_120x40"),
+    ("explorer-structure", "it__flows_structure__explorer_structure_text_en_120x40"),
+    ("export-dialog", "it__flows_export_dialog__export_dialog_console_en_160x45"),
+    ("chart-bars", "it__flows_chart__chart_bars_en_120x34"),
+    ("profile-form", "it__ui_snapshots__profile_form_en_160x45"),
+    ("settings", "it__ui_snapshots__settings_theme_en_80x24"),
+    ("run-confirm", "it__flows_safety__run_confirm_en_160x45"),
+    ("tx-uncommitted", "it__flows_tx__tx_uncommitted_en_160x45"),
+    ("session-view", "it__flows_sessions__session_view_en_120x40"),
 ];
 
 /// What ratatui's `TestBackend` writes after a row that has wide characters: the cells they
@@ -89,7 +89,7 @@ fn book_screens_are_up_to_date() {
     let dir = root().join("docs/site/src/screens");
     let mut stale = Vec::new();
     for (name, snapshot) in SCREENS {
-        let snap_path = root().join("crates/tui/tests/snapshots").join(format!("{snapshot}.snap"));
+        let snap_path = root().join("crates/tui/tests/it/snapshots").join(format!("{snapshot}.snap"));
         let snap = std::fs::read_to_string(&snap_path)
             .unwrap_or_else(|e| panic!("screen {name}: snapshot {}: {e}", snap_path.display()));
         let want = screen(&snap.replace("\r\n", "\n"));

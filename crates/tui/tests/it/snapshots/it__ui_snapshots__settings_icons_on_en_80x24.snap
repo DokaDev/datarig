@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│ ╭ Settings ────────────────────────────────────────────────────────────────╮─╮"
+"│▾│ Display                                                                  │ │"
+"│ │   Nerd Font icons           ‹ on            ›  Nerd Font icons → on      │e│"
+"│ │   Command line position     ‹ popup         ›  A popup near the top of … │ │"
+"│ │   Theme                     ‹ terminal      ›  Your terminal's own colo… │ │"
+"│ │   Explorer: size colours    ‹ 3             ›  3 levels: amber from 1 M… │ │"
+"│ │   Tips                      ‹ always        ›  Always, in empty places   │ │"
+"│ │   Background                ‹ theme         ›  The theme's               │ │"
+"│ │ Editor                                                                   │ │"
+"│ │   Cursor shape              ‹ on            ›  By mode (block or bar)    │ │"
+"│ │   Yanks to the clipboard    ‹ on            ›  Yes, as Vim with clipboa… │ │"
+"│ │   Formatter: keywords       ‹ preserve      ›  As written                │ │"
+"│ │   Formatter: indent         ‹ 4             ›  4 spaces                  │t│"
+"│ │   Auto-pairs                ‹ off           ›  Off, every key types its… │ │"
+"│ │   Backspace to tab stop     ‹ on            ›  On, spaces back to the t… │ │"
+"│ │   Run hints                 ‹ on            ›  On, the outcome after ea… │ │"
+"│ │   Completion delay (ms)     ‹ 60            ›  Opens once no key came f… │t│"
+"│ │ Results                                                                  │ │"
+"│ │   Cell detail               ‹ panel         ›  A panel on the right of … │ │"
+"│ │   Flash copied cells        ‹ on            ›  On, copied cells flash b… │ │"
+"│ ╰────────────────────────────────────── j/k move · h/l change · Esc close ─╯ │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │ Connected to local-pg                                    EN "

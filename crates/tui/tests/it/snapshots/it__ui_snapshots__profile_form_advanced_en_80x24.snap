@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│ ╭ Edit connection: 分析-replica ───────────────────────────────────────────╮─╮" Hidden by multi-width symbols: [(22, " "), (24, " ")]
+"│▾│  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
+"│ │                                                                          │e│"
+"│ │ SSL mode          require ▾   ←/→ change · Enter list                    │ │"
+"│ │ CA file           /etc/ssl/db-ca.pem        PEM; checks the server's ce… │ │"
+"│ │ Client cert                                 PEM, sent when the server a… │ │"
+"│ │ Client key                                  PEM, without a passphrase    │ │"
+"│ │ Statement cache   ‹ off ›  ←/→ change · off behind PgBouncer in transac… │ │"
+"│ │ Environment       None (default rules) ▾   Enter list · standard rules   │ │"
+"│ │ Startup SQL       Environment's (none) ▾   Enter list                    │ │"
+"│ │ Own startup SQL     1 SET name = value                                 × │ │"
+"│ │                     + Add statement  after the Startup SQL · Enter adds  │ │"
+"│ │ Colour            ‹ ● orange ›  ←/→ change · Enter list                  │t│"
+"│ │ Icon              ‹ the driver's icon ›  ←/→ change · Enter list         │ │"
+"│ │ Folder            ‹ (top level) ›  ←/→ change · Enter list               │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │t│"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc canc… ─╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │ Connected to local-pg                                    EN "

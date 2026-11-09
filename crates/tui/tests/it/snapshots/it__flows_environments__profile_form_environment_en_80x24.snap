@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_environments.rs
+expression: backend
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│ ╭ Edit connection: local-pg ───────────────────────────────────────────────╮ │"
+"│▾│  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
+"│ │                                                                          │ │"
+"│ │ SSL mode          disable ▾   ←/→ change · Enter list                    │ │"
+"│ │ CA file                                     PEM; checks the server's ce… │ │"
+"│▾│ Client cert                                 PEM, sent when the server a… │ │"
+"│ │ Client key                                  PEM, without a passphrase    │ │"
+"│▾│ Statement cache   ‹ on ›  ←/→ change · off behind PgBouncer in transact… │ │"
+"│ │ Environment       ● prod  PROD  ▾   Enter list · read-only · asks befor… │ │"
+"│ │ Startup SQL       Environment's (none) ▾   Enter list                    │ │"
+"│ │ Own startup SQL     1 SET name = value                                 × │ │"
+"│ │                     + Add statement  after the Startup SQL · Enter adds  │ │"
+"│ │ Colour            ‹ ● auto (from the name) ›  ←/→ change · Enter list    │ │"
+"│ │ Icon              ‹ the driver's icon ›  ←/→ change · Enter list         │ │"
+"│▾│ Folder            ‹ (top level) ›  ←/→ change · Enter list               │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc canc… ─╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" Added the environments dev, test, staging, prod                             EN "

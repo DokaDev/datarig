@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_edit_preview.rs
+expression: backend
+---
+"╭ ╭ Apply changes: shop.people ──────────────────────────────────────────────╮  "
+"│ │ 1 update                                                                 │─╮"
+"│▾│                                                                          │ │"
+"│ │ Row checks (lock)                                                        │e│"
+"│ │   SELECT 1 FROM `shop`.`people` WHERE `id` <=> 1 AND `name` =   expect 1 │ │"
+"│▾│     _utf8mb4 X'706C61696E206E616D65' AND CONVERT(`name` USING utf8mb4)   │ │"
+"│ │     COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'706C61696E206E616D65' AND    │ │"
+"│ │     `note` = _utf8mb4 X'6F6C64' AND CONVERT(`note` USING utf8mb4)        │ │"
+"│ │     COLLATE utf8mb4_0900_bin <=> _utf8mb4 X'6F6C64' FOR UPDATE           │ │"
+"│ │     ↳ where name = 'plain name', note = 'old'                            │─╯"
+"│ │ Writes                                                                   │─╮"
+"│ │   UPDATE `shop`.`people` SET `note` = _utf8mb4 X'615C62' WHERE  expect 1 │ │"
+"│ │     `id` <=> 1 AND `name` = _utf8mb4 X'706C61696E206E616D65' AND         │ │"
+"│ │     CONVERT(`name` USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4  │ │"
+"│ │     X'706C61696E206E616D65' AND `note` = _utf8mb4 X'6F6C64' AND          │ │"
+"│ │     CONVERT(`note` USING utf8mb4) COLLATE utf8mb4_0900_bin <=> _utf8mb4  │ │"
+"│ │     X'6F6C64'                                                            │ │"
+"│ │     ↳ set note = 'a\b' · where name = 'plain name', note = 'old'         │ │"
+"│ │                                                                          │ │"
+"│ │ Runs in one transaction; commits at the end.                             │ │"
+"│ │                                                                          │ │"
+"│ │                  [ Cancel ]     Copy SQL       Apply                     │ │"
+"╰─╰─────────────────── y apply · c copy SQL · j/k scroll · Enter/Esc cancel ─╯─╯"
+" NORMAL  local-pg · stg │ 1 row · 0ms                                        EN "

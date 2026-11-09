@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_whats_new.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾╭ What's new ──────────────────────────────────────────────────────────────╮ │"
+"│ │ 0.38.2  2026-11-05                                                       │e│"
+"│ │                                                                          │ │"
+"│ │ Added                                                                    │ │"
+"│ │                                                                          │ │"
+"│ │ - One.                                                                   │ │"
+"│ │ - Two.                                                                   │ │"
+"│ │ - Three.                                                                 │ │"
+"│ │ - Four.                                                                  │ │"
+"│ │ - Five.                                                                  │ │"
+"│ │ - Six.                                                                   │ │"
+"│ │ - Seven.                                                                 │t│"
+"│ │ - Eight.                                                                 │ │"
+"│ │                                                        lines 24–35 of 35 │ │"
+"│ │ Older versions: https://dokadev.github.io/datarig/whats-new.html         │ │"
+"│ │ Shown once after each update (updates.whats_new).                        │t│"
+"│ │                                                                          │ │"
+"│ │                                [ Close ]                                 │ │"
+"│ ╰─────────────────────────────────── j/k scroll · ]/[ version · Esc close ─╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │                                                          EN "
