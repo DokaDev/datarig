@@ -23,6 +23,7 @@ path = "src/main.rs"
 arboard.workspace = true
 chrono.workspace = true
 datarig-core.workspace = true
+datarig-export-formats.workspace = true
 datarig-i18n.workspace = true
 datarig-update.workspace = true
 datarig-driver-mysql.workspace = true
@@ -45,6 +46,7 @@ rustix.workspace = true
 
 [dev-dependencies]
 datarig-core = { workspace = true, features = ["test-util"] }
+datarig-export-formats = { workspace = true, features = ["test-util"] }
 datarig-i18n = { workspace = true, features = ["test-util"] }
 insta.workspace = true
 # The MySQL integration tests look at the server from a connection of their own.

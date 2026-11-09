@@ -27,9 +27,9 @@
 //!   copy writes them, `\x0102`), and dates, times and timestamps (Excel's dates have no time
 //!   zone and a range of their own, so they stay the text the database wrote).
 
-use super::stream::RowSink;
-use super::{Column, Kind, Row};
-use crate::panics;
+use datarig_core::export::stream::RowSink;
+use datarig_core::export::{Column, Kind, Row};
+use datarig_core::panics;
 use rust_xlsxwriter::{Format, Workbook, Worksheet, XlsxError};
 use std::fmt;
 use std::io::{self, Write};

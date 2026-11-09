@@ -1,0 +1,31 @@
+[package]
+name = "datarig-export-formats"
+description = "The Excel and Parquet writers of datarig's export"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+[dependencies]
+bytes.workspace = true
+datarig-core.workspace = true
+parquet.workspace = true
+rust_xlsxwriter.workspace = true
+# Only for `test-util` (`xlsx::read`).
+zip = { workspace = true, optional = true }
+
+[dev-dependencies]
+zip.workspace = true
+
+[features]
+# `xlsx::read` and `parquet::read`, the files read back, for the tests of the crates that export.
+test-util = ["dep:zip"]
+
+[lints]
+workspace = true

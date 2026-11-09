@@ -4,16 +4,16 @@
 //! for a cell (the export fails naming its column, the rows before it kept) and a result wider
 //! than a sheet (refused before anything is written), and a cancel while the workbook is made
 //! (dropped: nothing kept). The sheets past 1,048,576 rows are the core writer's tests
-//! (`export::xlsx`); their message, and those of a workbook that could not be made, are said
+//! (`datarig_export_formats::xlsx`); their message, and those of a workbook that could not be made, are said
 //! from the writer's terminal event handed in.
 
 mod common;
 
 use common::*;
 use datarig_core::driver::{ColumnMeta, DbCommand, DbError, DbEvent, ExportBatch, ExportGuard, ExportSink};
-use datarig_core::export::xlsx::TooLong;
-use datarig_core::export::xlsx::read::{self, Cell as Data};
 use datarig_core::fault::Fault;
+use datarig_export_formats::xlsx::TooLong;
+use datarig_export_formats::xlsx::read::{self, Cell as Data};
 use datarig_i18n::Lang;
 use datarig_tui::app::AppEvent;
 use datarig_tui::app::export::{ExportEvent, ExportNews, Failure, Outcome};

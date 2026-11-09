@@ -42,12 +42,12 @@ use datarig_core::driver::keys::{Generated, InsertPlan, insert_source, update_so
 use datarig_core::driver::structure::TableStructure;
 use datarig_core::driver::{Cell, ColumnMeta, DbError, ExportBatch, ExportGuard, ExportRead, ReadIn, ValueKind};
 use datarig_core::export::keyset::{self, Keyset};
-use datarig_core::export::parquet::{self, ParquetColumn, ParquetWriter};
 use datarig_core::export::stream::{BadDelimited, Delimited, Quote, RowSink, TextWriter};
-use datarig_core::export::xlsx::{self, XlsxWriter};
 use datarig_core::export::{self as core_export, Kind, Refused, SqlCells};
 use datarig_core::fault::Fault;
 use datarig_core::results::RowsSnapshot;
+use datarig_export_formats::parquet::{self, ParquetColumn, ParquetWriter};
+use datarig_export_formats::xlsx::{self, XlsxWriter};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::BufWriter;
@@ -82,9 +82,9 @@ pub enum ExportFormat {
     Xml,
     SqlInsert,
     SqlUpdate,
-    /// An Excel workbook (`export::xlsx`).
+    /// An Excel workbook (`datarig_export_formats::xlsx`).
     Xlsx,
-    /// A Parquet file (`export::parquet`).
+    /// A Parquet file (`datarig_export_formats::parquet`).
     Parquet,
 }
 
