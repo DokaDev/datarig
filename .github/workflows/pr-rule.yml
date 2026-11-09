@@ -33,8 +33,11 @@ jobs:
           body = os.environ.get("BODY") or ""
           # What the template and examples show does not count. One pass, so that whichever of
           # a code block, inline code or an HTML comment starts first hides the others inside it.
+          # A code block ends at a line of the same fence character, at least as long.
           body = re.sub(
-              r"^ {0,3}(`{3,}|~{3,}).*?(?:^ {0,3}\1|\Z)|(`+)[^`].*?\2|<!--.*?(?:-->|\Z)",
+              r"^ {0,3}(?P<f>(?P<c>[`~])(?P=c){2,}).*?(?:^ {0,3}(?P=f)(?P=c)*[ \t]*$|\Z)"
+              r"|(?P<t>`+)[^`].*?(?P=t)"
+              r"|<!--.*?(?:-->|\Z)",
               "",
               body,
               flags=re.S | re.M,
