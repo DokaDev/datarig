@@ -19,6 +19,8 @@
 //! `_ci` column reads as the server's case, and `NOT` of a NULL-safe equality as a NULL-safe
 //! inequality.
 
+use std::cell::Cell;
+
 use super::check::lexical;
 use super::{CaseMode, CmpOp, ColName, ColumnKind, Cond, Target, Value};
 use crate::export::{negative_zero, sql_number};
@@ -32,14 +34,18 @@ pub fn recognise(text: &str, target: &Target) -> Option<Cond> {
     lexical(text, d).ok()?;
     let toks: Vec<Token> = lex_in(text, d).into_iter().filter(|t| !t.is_trivia()).collect();
     let cols = target.names();
-    Reader { src: text, d, cols: &cols, target }.or(&toks)
+    Reader { src: text, d, cols: &cols, target, depth: Cell::new(0) }.or(&toks)
 }
+
+/// How many `OR` levels and `NOT`s deep a text is read at most.
+const MAX_DEPTH: usize = 64;
 
 struct Reader<'a> {
     src: &'a str,
     d: Dialect,
     cols: &'a [ColName],
     target: &'a Target,
+    depth: Cell<usize>,
 }
 
 impl Reader<'_> {
@@ -52,6 +58,27 @@ impl Reader<'_> {
     }
 
     fn or(&self, toks: &[Token]) -> Option<Cond> {
+        self.nested(|| self.or_level(toks))
+    }
+
+    fn not(&self, toks: &[Token]) -> Option<Cond> {
+        self.nested(|| self.not_level(toks))
+    }
+
+    /// `read` one level deeper; `None` beyond [`MAX_DEPTH`] levels, so a deeply nested text
+    /// is not read rather than overflowing the stack.
+    fn nested(&self, read: impl FnOnce() -> Option<Cond>) -> Option<Cond> {
+        let depth = self.depth.get();
+        if depth >= MAX_DEPTH {
+            return None;
+        }
+        self.depth.set(depth + 1);
+        let cond = read();
+        self.depth.set(depth);
+        cond
+    }
+
+    fn or_level(&self, toks: &[Token]) -> Option<Cond> {
         let parts = self.split(toks, "OR");
         if parts.len() == 1 {
             return self.and(toks);
@@ -121,7 +148,7 @@ impl Reader<'_> {
                 .any(|(_, t)| self.word(Some(t), "XOR") || (t.kind == Tok::Op && matches!(self.text(t), "&" | "|")))
     }
 
-    fn not(&self, toks: &[Token]) -> Option<Cond> {
+    fn not_level(&self, toks: &[Token]) -> Option<Cond> {
         if !self.word(toks.first(), "NOT") {
             return self.primary(toks);
         }

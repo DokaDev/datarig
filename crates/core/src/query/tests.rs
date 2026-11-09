@@ -388,6 +388,19 @@ fn recognise_keeps_what_it_does_not_model() {
 #[test]
 fn recognise_fails_on_what_it_cannot_read() {
     let t = target(Dialect::Postgres);
+    // Deep nesting is not read rather than overflowing the stack.
+    let deep_not = format!("{}TRUE", "NOT ".repeat(50_000));
+    let deep_parens = format!("{}id = 1{}", "(".repeat(50_000), ")".repeat(50_000));
+    for s in [&deep_not, &deep_parens] {
+        assert_eq!(recognise(s, &t), None);
+    }
+    assert!(recognise(&format!("{}id = 1{}", "(".repeat(20), ")".repeat(20)), &t).is_some());
+    // The filter check does not overflow either: PostgreSQL refuses such a text as too complex,
+    // MySQL's token checks read it flat (the server answers for its own parser's limits).
+    for s in [&deep_not, &deep_parens] {
+        assert!(check(Dialect::Postgres, s, false).is_err());
+        let _ = check(MY, s, false);
+    }
     for s in ["", "  ", "id = 1 AND", "OR id = 1", "(id = 1", "id = 1)", "id = 'x", "id = 1 -- c", "id = 1; x", "()"] {
         assert_eq!(recognise(s, &t), None, "{s}");
     }
