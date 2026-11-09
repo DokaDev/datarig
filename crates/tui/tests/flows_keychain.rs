@@ -151,6 +151,11 @@ fn prompt_open(h: &Harness) -> bool {
     h.app.overlays.prompt().is_some()
 }
 
+// The UI not waiting for a keychain that never answers is told by what has not happened yet,
+// not by the clock: a wait on the UI thread could only end at the keychain's limit, and the
+// call would have ended by then (its answer handled), however slow the machine. Here an answer
+// is handled only when a test feeds the app its events (`pump`, `settle`).
+
 /// The keychain account of the sample config's first profile (`local-pg`).
 fn first_account(cfg: &Config) -> String {
     cfg.connections[0].id.account()
@@ -167,7 +172,6 @@ async fn a_keychain_that_does_not_answer_falls_back_to_the_prompt() {
     let _release = Release(store.clone());
     store.inner.set(&first_account(&cfg), "stored-pw").unwrap();
     let (mut h, mut rx) = started(&cfg, store.clone(), LIMIT, SSH);
-    let t = Instant::now();
     h.key(KeyCode::Enter);
     let status = h.status(160, 45);
     assert!(status.contains("Reading the password of local-pg from the keychain"), "{status}");
@@ -178,7 +182,9 @@ async fn a_keychain_that_does_not_answer_falls_back_to_the_prompt() {
     h.ctrl('k');
     assert!(h.cmdline().is_some());
     h.key(KeyCode::Esc);
-    assert!(t.elapsed() < LIMIT, "the UI waited {:?}", t.elapsed());
+    assert!(!prompt_open(&h), "the UI did not wait for the keychain");
+    let status = h.status(160, 45);
+    assert!(status.contains("Reading the password of local-pg from the keychain"), "{status}");
     pump(&mut h, &mut rx, prompt_open).await;
     assert!(sent_passwords(&h).is_empty(), "no empty password was sent: unknown is not absent");
     let screen = h.screen(100, 30);
@@ -313,14 +319,16 @@ fn a_locked_keychain_over_ssh_says_how_to_unlock_it() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_form_opens_at_once_and_is_filled_when_the_keychain_answers() {
     let cfg = sample_config(None);
-    let store = Held::slow(Duration::from_millis(200));
+    let store = Held::never();
+    let _release = Release(store.clone());
     store.inner.set(&first_account(&cfg), "stored-pw").unwrap();
-    let (mut h, mut rx) = started(&cfg, store, Duration::from_secs(5), &[]);
-    let t = Instant::now();
+    let (mut h, mut rx) = started(&cfg, store.clone(), Duration::from_secs(5), &[]);
     h.command("conn.edit");
-    assert!(t.elapsed() < Duration::from_millis(150), "the form waited {:?}", t.elapsed());
     assert!(h.form_open());
+    assert!(h.form().reading.is_some(), "the form did not wait for the keychain");
     assert_eq!((h.form().password.text(), h.form().password_unread), ("", true));
+    // The keychain answers late.
+    store.release();
     pump(&mut h, &mut rx, |h| h.form().reading.is_none()).await;
     assert_eq!((h.form().password.text(), h.form().password_unread), ("stored-pw", false));
 }
@@ -371,9 +379,9 @@ async fn saving_the_form_never_waits_for_the_keychain() {
         h.key(KeyCode::Tab);
     }
     h.type_text("new-pw");
-    let t = Instant::now();
     h.ctrl('s');
-    assert!(t.elapsed() < Duration::from_millis(150) && !h.form_open(), "saved at once");
+    assert!(!h.form_open(), "saved at once");
+    assert!(!flashed(&h).contains("did not answer"), "the save did not wait for the keychain write");
     pump(&mut h, &mut rx, |h| flashed(h).contains("did not answer in time")).await;
     assert_eq!(h.app.secrets.session(&first_account(&cfg)), Some("new-pw"), "kept for this session");
     assert_eq!(store.inner.get(&first_account(&cfg)).unwrap().as_deref(), Some("stored-pw"));
@@ -407,9 +415,8 @@ async fn testing_a_keychain_profile_never_waits_for_the_keychain() {
     let store = Held::never();
     let _release = Release(store.clone());
     let (mut h, mut rx) = started(&cfg, store, LIMIT, &[]);
-    let t = Instant::now();
     h.command("conn.test");
-    assert!(t.elapsed() < LIMIT, "the UI waited {:?}", t.elapsed());
+    assert!(!prompt_open(&h), "the UI did not wait for the keychain");
     assert_eq!(h.app.conn_test.as_ref().map(|t| t.state.clone()), Some(TestState::Running));
     pump(&mut h, &mut rx, prompt_open).await;
     assert!(matches!(h.prompt().map(|p| &p.purpose), Some(PromptPurpose::Test(_))));
@@ -437,10 +444,8 @@ async fn a_source_change_waits_for_the_keychain_off_the_ui_thread() {
     h.command("conn.edit");
     to_source(&mut h, SourceKind::File);
     h.ctrl('s');
-    let t = Instant::now();
     h.key(KeyCode::Char('y'));
-    assert!(t.elapsed() < LIMIT, "the UI waited {:?}", t.elapsed());
-    assert!(h.form().saving);
+    assert!(h.form().saving, "the UI did not wait for the keychain");
     assert!(h.screen(120, 40).contains("Saving… waiting for the keychain"));
     h.key(KeyCode::Left);
     assert_eq!(h.form().source, SourceKind::File, "the form's keys wait");
