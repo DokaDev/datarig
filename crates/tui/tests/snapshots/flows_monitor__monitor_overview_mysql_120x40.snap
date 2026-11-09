@@ -4,7 +4,7 @@ expression: screen
 ---
 ╭ Explorer ──────────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                                                     
 │  ＋ New connection         │╭ Monitor: local-pg ─────────────────────────────────────────────────────────────────────╮
-│▾ Connections 1             ││ 8.4.11 (MySQL Community Server) · read-write · up 15h50m · max 151 connections         │
+│▾ Connections 1             ││ 8.4.11 (MySQL Community Server) · server takes writes · up 15h50m · max 151 connectio… │
 │  ▾ ●   local-pg            ││ 1 Overview  2 Sessions  3 Locks  4 Replication                                every 2s │
 │    ▾ datarig default       ││┌ statements/s ──────── 824 ┐┌ sessions ───────── 47/151 ┐┌ cache hit ────────── 99.0% ┐│
 │      ▸ analytics           │││                     ▃▅█▆▄▅││active 2                   ││                      ██████││

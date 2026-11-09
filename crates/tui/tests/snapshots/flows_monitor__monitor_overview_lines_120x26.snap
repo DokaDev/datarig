@@ -4,7 +4,7 @@ expression: lines
 ---
 ╭ Explorer ──────────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                                                     
 │  ＋ New connection         │╭ Monitor: local-pg ─────────────────────────────────────────────────────────────────────╮
-│▾ Connections 1             ││ PostgreSQL 17.11 · read-write · up 41d3h · max 200 connections                         │
+│▾ Connections 1             ││ PostgreSQL 17.11 · primary · up 41d3h · max 200 connections                            │
 │  ▾ ●   local-pg            ││ 1 Overview  2 Sessions  3 Locks  4 Replication                                every 2s │
 │    ▾ datarig default       ││ commits/s            412                                                             █ │
 │      ▸ analytics           ││ rows/s by operation          ■ read 8.2 k  ■ inserted 412  ■ updated 206               │

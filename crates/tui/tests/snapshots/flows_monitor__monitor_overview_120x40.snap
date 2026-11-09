@@ -4,7 +4,7 @@ expression: screen
 ---
 ╭ Explorer ──────────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                                                     
 │  ＋ New connection         │╭ Monitor: local-pg ─────────────────────────────────────────────────────────────────────╮
-│▾ Connections 1             ││ PostgreSQL 17.11 · read-write · up 41d3h · max 200 connections                         │
+│▾ Connections 1             ││ PostgreSQL 17.11 · primary · up 41d3h · max 200 connections                            │
 │  ▾ ●   local-pg            ││ 1 Overview  2 Sessions  3 Locks  4 Replication                                every 2s │
 │    ▾ datarig default       ││┌ commits/s ─────────── 412 ┐┌ sessions ───────── 41/200 ┐┌ cache hit ────────── 99.0% ┐│
 │      ▸ analytics           │││                          █││active 3 · idle in transac…││                           █││

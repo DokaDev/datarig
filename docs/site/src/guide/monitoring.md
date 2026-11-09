@@ -40,12 +40,24 @@ up.
 
 ## Overview
 
-The server's version, provider (when the server says it is a managed service), whether it
-takes writes, its uptime and its connection limit; then a chart of each metric the server has
-(PostgreSQL's commits, MySQL's statements, sessions, the page cache's hit share, rows read and
-written, pages read from storage, and more), and the longest running sessions: those running a
-statement, and those idle with a transaction open (the ten longest). A click on one shows it in
-the Sessions view.
+The server's version, provider (when the server says it is a managed service), its role (on
+PostgreSQL `primary` or `standby`; on MySQL `server takes writes` or `server read-only`, from
+`read_only` and `super_read_only`: the server's own setting, not the profile's), its uptime
+and its connection limit; then a chart of each metric the server has (PostgreSQL's commits,
+MySQL's statements, sessions, the page cache's hit share, rows read and written, pages read
+from storage, and more), and the longest running sessions: those running a statement, and
+those idle with a transaction open (the ten longest). A click on one shows it in the Sessions
+view.
+
+What the account cannot see is never shown as quiet. The sessions count and its `active` part
+are the server's own counters on MySQL (`Threads_connected`, `Threads_running`), so they cover
+every session; the longest running come from the session list, which on MySQL without
+`PROCESS` holds only the account's own sessions, so the list is headed "Longest running (this
+account)" and, when empty, says that no session of this account is running. On PostgreSQL
+without `pg_read_all_stats` other roles' sessions show no state: the sessions count is the
+least there are (`≥41/200`), the Sessions tile says how many are hidden, the list is headed
+"Longest running (visible sessions)" and, when empty, says how many are hidden and what would
+show them.
 
 Under the metrics, two charts with a line per kind, coloured as the legend below each says;
 the legend gives the latest figure of each line. On a narrow or short screen they become two
@@ -235,7 +247,7 @@ views; the view says so, and gives the role as cannot tell rather than not repli
 ## The server in full
 
 `i` shows what the server is, over any view: its whole version line, its provider (read from
-the server, never guessed from its host name), whether it takes writes, when it started, its
+the server, never guessed from its host name), its role (as in the Overview), when it started, its
 connections now and its limit, the size of its page cache, and the settings that decide what
 the monitor can read (PostgreSQL `track_activities`, `track_counts`,
 `track_activity_query_size`, `track_io_timing` and `wal_level`; MySQL `performance_schema`,

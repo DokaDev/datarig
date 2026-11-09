@@ -414,7 +414,7 @@ impl Cx<'_> {
             None => self.label(Label::MonitorServerNoProvider),
         };
         fields.push((self.label(Label::MonitorServerProvider), provider, text));
-        let role = self.label(if s.read_only { Label::MonitorReadOnly } else { Label::MonitorReadWrite });
+        let role = self.role(s.read_only);
         fields.push((self.label(Label::MonitorServerRole), role, text));
         let now = self.m.snapshot.as_ref().map_or(s.read_at, |r| r.sample.time);
         if let Some(up) = s.started.and_then(|t| now.since(t)) {

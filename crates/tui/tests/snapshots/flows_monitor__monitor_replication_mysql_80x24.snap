@@ -4,7 +4,7 @@ expression: "h.screen(80, 24)"
 ---
 ╭ Explorer ────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                   
 │  ＋ New connection   │╭ Monitor: local-pg ───────────────────────────────────╮
-│▾ Connections 1       ││ 8.4.11 (MySQL Community Server) · read-write · up 4… │
+│▾ Connections 1       ││ 8.4.11 (MySQL Community Server) · server takes writ… │
 │  ▾ ●   local-pg      ││ 1  2  3  4 Replication                      every 2s │
 │    ▾ datarig default ││ The servers that take changes from this one are not  │
 │      ▸ analytics     ││ known (needs PROCESS)                                │

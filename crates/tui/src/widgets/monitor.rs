@@ -12,7 +12,7 @@ use crate::app::monitor::{METRICS, Metric, MonState, MonitorHits, MonitorTab, Mo
 use crate::app::monitor::{query_age, tx_age};
 use crate::app::{App, Focus};
 use crate::keymap::Ctx;
-use crate::text::{clip, width, wrap};
+use crate::text::{clip, width, wrap, wrap_words};
 use crate::theme;
 use crate::widgets::{panel, put, sparkline};
 use datarig_core::i18n::{I18n, Label, Msg};
@@ -404,6 +404,30 @@ impl Cx<'_> {
         self.i18n.msg(&m).to_string()
     }
 
+    /// The server's role, said of the server (never to be read as the profile's own mode):
+    /// PostgreSQL in recovery or not, MySQL `read_only` (or `super_read_only`) on or not.
+    fn role(&self, read_only: bool) -> String {
+        self.label(match (self.mysql, read_only) {
+            (true, true) => Label::MonitorRoleServerReadOnly,
+            (true, false) => Label::MonitorRoleTakesWrites,
+            (false, true) => Label::MonitorRoleStandby,
+            (false, false) => Label::MonitorRolePrimary,
+        })
+    }
+
+    /// The session list holds the account's own sessions only (MySQL without `PROCESS`): what
+    /// is worked out from it says so.
+    fn own_only(&self) -> bool {
+        self.m.snapshot.as_ref().is_some_and(|s| s.hidden.iter().any(|h| h.part == Part::OtherSessions))
+    }
+
+    /// The rows of the server's activity the account may not see (PostgreSQL without
+    /// `pg_read_all_stats`): their state is not known, so they are never counted as idle.
+    fn hidden_rows(&self) -> u64 {
+        let s = self.m.snapshot.as_ref();
+        s.and_then(|s| s.gauges.iter().find(|g| g.kind == GaugeKind::Hidden)).map_or(0, |g| g.value)
+    }
+
     /// The server's version, role, uptime and connection limit, and its provider.
     fn server_strip(&self, at: Rect, buf: &mut Buffer) {
         let th = theme::cur();
@@ -413,7 +437,7 @@ impl Cx<'_> {
             if let Some(p) = self.m.format().and_then(|f| f.flavour().product()) {
                 parts.push(p.to_string());
             }
-            parts.push(self.label(if s.read_only { Label::MonitorReadOnly } else { Label::MonitorReadWrite }));
+            parts.push(self.role(s.read_only));
             // On the latest read's clock: the server facts are read only now and then.
             let now = self.m.snapshot.as_ref().map_or(s.read_at, |r| r.sample.time);
             if let Some(up) = s.started.and_then(|t| now.since(t)) {
@@ -628,9 +652,11 @@ impl Cx<'_> {
         match (k, last) {
             (Metric::Sessions, Some(v)) => {
                 let max = self.m.server.as_ref().and_then(|s| s.max_connections);
+                // Hidden rows may be client sessions too: the count is the least there are.
+                let least = if self.hidden_rows() > 0 { "≥" } else { "" };
                 match max {
-                    Some(max) => format!("{}/{max}", v as u64),
-                    None => format!("{}", v as u64),
+                    Some(max) => format!("{least}{}/{max}", v as u64),
+                    None => format!("{least}{}", v as u64),
                 }
             }
             (Metric::CacheHit, Some(v)) => format!("{v:.1}%"),
@@ -772,12 +798,19 @@ impl Cx<'_> {
         if y + 2 > bottom {
             return;
         }
-        // The longest running.
+        // The longest running, from the session list: when it holds only some of the server's
+        // sessions, the heading and its empty text say whose.
+        let (own, hidden) = (self.own_only(), self.hidden_rows());
+        let heading = match (own, hidden) {
+            (true, _) => Label::MonitorLongestOwn,
+            (false, 1..) => Label::MonitorLongestVisible,
+            (false, 0) => Label::MonitorLongest,
+        };
         put(
             buf,
             area.x + 1,
             y,
-            &self.label(Label::MonitorLongest),
+            &self.label(heading),
             area.width as usize - 2,
             Style::new().fg(th.fg_muted).add_modifier(Modifier::BOLD),
         );
@@ -786,14 +819,16 @@ impl Cx<'_> {
         let room = (bottom - y).saturating_sub(1) as usize;
         let top: Vec<usize> = self.m.top.iter().copied().take(room).collect();
         if top.is_empty() {
-            put(
-                buf,
-                area.x + 1,
-                y,
-                &self.label(Label::MonitorNoneRunning),
-                area.width as usize - 2,
-                Style::new().fg(th.fg_dim),
-            );
+            let text = match (own, hidden) {
+                (true, _) => self.label(Label::MonitorNoneRunningOwn),
+                (false, 1..) => self.msg(Msg::MonitorNoneRunningVisible { n: hidden.to_string() }),
+                (false, 0) => self.label(Label::MonitorNoneRunning),
+            };
+            // Wrapped, not cut: what would show the rest is part of it.
+            let w = area.width as usize - 2;
+            for (n, line) in wrap_words(&text, w).iter().take(usize::from(bottom - y)).enumerate() {
+                put(buf, area.x + 1, y + n as u16, line, w, Style::new().fg(th.fg_dim));
+            }
             return;
         }
         let cols = self.columns(area.width.saturating_sub(2));
@@ -853,7 +888,7 @@ impl Cx<'_> {
 
     fn chart(&self, def: &ChartDef) -> ChartData {
         let mut title = self.label(def.title);
-        let own_only = self.m.snapshot.as_ref().is_some_and(|s| s.hidden.iter().any(|h| h.part == Part::OtherSessions));
+        let own_only = self.own_only();
         if def.own_account && own_only {
             title = format!("{title}: {}", self.label(Label::MonitorChartOwnAccount));
         }

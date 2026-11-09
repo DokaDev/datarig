@@ -548,6 +548,72 @@ fn a_series_the_server_starts_or_stops_giving_starts_or_breaks_there() {
 }
 
 #[test]
+fn what_the_account_cannot_see_is_never_shown_as_quiet() {
+    // MySQL without PROCESS: the list holds the account's own sessions, and says so.
+    let own_only = |mut s: Snapshot| {
+        s.hidden.push(Hidden { part: Part::OtherSessions, need: Need::Grant("PROCESS") });
+        s
+    };
+    let mut h = mysql_open(own_only(mysql_snapshot(0.0, 1000, true)));
+    answer_next(&mut h, own_only(mysql_snapshot(2.0, 1824, false)));
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("Longest running (this account)"), "{screen}");
+    // The sessions and their active part are the server's own counters: not limited.
+    assert!(screen.contains("47/151") && screen.contains("active 2"), "{screen}");
+    assert!(screen.contains("server takes writes"), "the server's role, said of the server: {screen}");
+    insta::assert_snapshot!("monitor_overview_mysql_own_120x40", screen);
+    let mut quiet = own_only(mysql_snapshot(4.0, 2648, false));
+    quiet.sessions.as_mut().unwrap().rows.retain(|r| r.monitor);
+    answer_next(&mut h, quiet);
+    let screen = h.screen(120, 40);
+    assert!(
+        screen.contains("No session of this account is running a statement or holding a transaction open"),
+        "{screen}"
+    );
+    assert!(!screen.contains("No session is running"), "never a claim about the whole server: {screen}");
+    // PostgreSQL without pg_read_all_stats: hidden rows are unknown, not idle.
+    let hidden = |mut s: Snapshot| {
+        for g in &mut s.gauges {
+            if g.kind == GaugeKind::Hidden {
+                g.value = 11;
+            }
+        }
+        s.sessions.as_mut().unwrap().rows.retain(|r| r.monitor);
+        s
+    };
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(hidden(snapshot(0.0, 1000, rows(), true))) });
+    answer_next(&mut h, hidden(snapshot(2.0, 1824, rows(), false)));
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("Longest running (visible sessions)"), "{screen}");
+    // Wrapped where narrow, never cut: what would show the rest is part of it.
+    assert!(screen.contains("No visible session is running a statement or holding a transaction open;"), "{screen}");
+    assert!(screen.contains("11 hidden") && screen.contains("(needs pg_read_all_stats)"), "{screen}");
+    assert!(screen.contains("≥41/200"), "the least there are: {screen}");
+    assert!(screen.contains("· primary ·"), "{screen}");
+}
+
+#[test]
+fn the_servers_role_is_said_of_the_server() {
+    let standby = |mut s: Snapshot| {
+        if let Some(info) = &mut s.server {
+            info.read_only = true;
+        }
+        s
+    };
+    let (mut h, first) = monitor_open();
+    h.monitor_db(DbEvent::MonitorSnapshot { request: first, result: Ok(standby(snapshot(0.0, 1000, rows(), true))) });
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("· standby ·") && !screen.contains("read-only"), "{screen}");
+    let h2 = &mut mysql_open(standby(mysql_snapshot(0.0, 1000, true)));
+    let screen = h2.screen(120, 40);
+    assert!(screen.contains("· server read-only ·"), "{screen}");
+    // The server in full says it the same way.
+    h2.keys("i");
+    assert!(h2.screen(120, 40).contains("server read-only"));
+}
+
+#[test]
 fn a_chart_says_why_it_is_not_there_and_whose_threads_it_counts() {
     // `track_counts` off: no rows by operation, said so, not 0/s.
     let (mut h, first) = monitor_open();
