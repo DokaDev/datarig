@@ -160,6 +160,12 @@ impl Reader<'_> {
         {
             return Some(Cond::NotDistinct { col, value, negated: true });
         }
+        // MySQL under HIGH_NOT_PRECEDENCE reads `NOT a BETWEEN …` as `(NOT a) BETWEEN …`; the
+        // session's mode is not known here, so only a `NOT` over one parenthesised group is read.
+        if matches!(self.d, Dialect::MySql(_)) && self.group(rest).is_none() {
+            let (first, last) = (toks.first()?, toks.last()?);
+            return Some(Cond::Raw(self.src[first.start..last.end].to_string()));
+        }
         Some(Cond::Not(Box::new(self.not(rest)?)))
     }
 

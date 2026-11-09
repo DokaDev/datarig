@@ -378,6 +378,11 @@ fn recognise_keeps_what_it_does_not_model() {
     };
     let like = r"name LIKE 'a\_%'";
     assert_eq!(recognise(like, &nbe), Some(Cond::Raw(like.into())));
+    // A MySQL NOT without parentheses depends on HIGH_NOT_PRECEDENCE; with them it is read.
+    for s in ["NOT id BETWEEN -5 AND 5", "NOT id = 1"] {
+        assert_eq!(recognise(s, &tm), Some(Cond::Raw(s.into())), "{s}");
+    }
+    assert_eq!(recognise("NOT (id = 1)", &tm), Some(Cond::Not(Box::new(cmp("id", CmpOp::Eq, num("1"))))));
     // `&&` is AND: cutting at OR around it keeps the meaning.
     assert_eq!(
         recognise("id = 1 && id = 2 OR id = 3", &tm),
