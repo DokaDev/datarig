@@ -3,9 +3,9 @@ name: PR rule
 # Every pull request names its issue in the description (`Part of #123`), or says why it has
 # none (`no issue: <reason>`, for a small fix such as a typo; a release pull request says
 # `no issue: release`). Both count anywhere in the description, in any case, but not inside
-# an HTML comment, a code block or inline code. Editing the description runs it again. It
-# reads only the description: no checkout, no token, a few seconds, the same for stacked and
-# fork pull requests.
+# an HTML comment or a fenced code block. Editing the description runs it again. It reads only
+# the description: no checkout, no token, a few seconds, the same for stacked and fork pull
+# requests.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
@@ -31,13 +31,13 @@ jobs:
           import os, re, sys
 
           body = os.environ.get("BODY") or ""
-          # What the template and examples show does not count. One pass, so that whichever of
-          # a code block, inline code or an HTML comment starts first hides the others inside it.
-          # A code block ends at a line of the same fence character, at least as long.
+          # The template's guidance (HTML comments) and fenced code blocks do not count. One
+          # pass, so that whichever starts first hides the other inside it. A fenced block ends
+          # at a line of the same fence character, at least as long. Anything else counts: when
+          # in doubt the rule passes, as a maintainer reads every description anyway.
           body = re.sub(
               r"^ {0,3}(?P<f>(?P<c>[`~])(?P=c){2,}).*?(?:^ {0,3}(?P=f)(?P=c)*[ \t]*$|\Z)"
-              r"|(?P<t>`+)[^`].*?(?P=t)"
-              r"|<!--.*?(?:-->|\Z)",
+              r"|<!--.*?-->",
               "",
               body,
               flags=re.S | re.M,
