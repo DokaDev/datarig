@@ -556,6 +556,14 @@ fn statements(sql: &str, mode: MySqlMode) -> Result<(Vec<Vec<W<'_>>>, bool), Unr
     Ok((out, hint))
 }
 
+/// The functions MySQL text `sql` calls when read in sql mode `mode` (every statement of it):
+/// each name in upper case without quotes, and whether it is written with its database (a
+/// stored function). `None` when the text is not read in that mode (see [`Unread`]).
+pub(crate) fn called(sql: &str, mode: MySqlMode) -> Option<Vec<(String, bool)>> {
+    let (stmts, _) = statements(sql, mode).ok()?;
+    Some(stmts.iter().flat_map(|ws| calls(ws)).map(|c| (c.name, c.qualified)).collect())
+}
+
 /// The worse of two risks ([`Risk::merge`]), keeping the danger a read-only policy refuses by
 /// itself when only one of them has such a danger (the merge keeps the first one).
 fn worse(a: Risk, b: Risk) -> Risk {

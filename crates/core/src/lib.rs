@@ -19,6 +19,8 @@
 //! * [`chart`] — a result's rows as the numbers of a chart (columns, axes, sums).
 //! * [`export`] — result rows as TSV, CSV, JSON, a Markdown table or SQL INSERT statements.
 //! * [`edit`] — editing a result's rows: the table they are, which columns change, how a row is found.
+//! * [`query`]: a table's rows as a query (filter, order, cap) compiled to SQL, the filter text
+//!   checked before it runs.
 //! * [`monitor`]: server monitoring, one model for every database: a tick's rows read into it
 //!   (the statements are each driver's), rates on the server's clock.
 //! * [`transport`] — how a driver reaches a server through a tunnel (a [`transport::Dialer`]).
@@ -41,6 +43,7 @@ pub mod panics;
 pub mod paths;
 pub mod policy;
 pub mod profile;
+pub mod query;
 pub mod results;
 pub mod scripts;
 pub mod secret;
