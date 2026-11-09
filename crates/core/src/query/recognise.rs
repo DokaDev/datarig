@@ -21,6 +21,7 @@
 
 use super::check::lexical;
 use super::{CaseMode, CmpOp, ColName, ColumnKind, Cond, Target, Value};
+use crate::export::{negative_zero, sql_number};
 use crate::sql::dialect::Dialect;
 use crate::sql::lexer::{Tok, Token, lex_in};
 
@@ -241,10 +242,14 @@ impl Reader<'_> {
         unhex(body)
     }
 
-    /// One comparison of a known column with literals, the whole of `toks`.
     /// One comparison, when the model's condition keeps its meaning (see the module docs).
     fn predicate(&self, toks: &[Token]) -> Option<Cond> {
         let c = self.comparison(toks)?;
+        // A number spelling the renderer would not write back as a bare number (MySQL `0x1F`,
+        // `-0`) would come back as a string: such a comparison stays as typed.
+        if values(&c).any(|v| matches!(v, Value::Number(n) if !sql_number(n) || negative_zero(n))) {
+            return None;
+        }
         let number = |v: &Value| matches!(v, Value::Number(_));
         let numeric = |col: &str| self.target.column(col).is_some_and(|f| f.kind == ColumnKind::Number);
         let keeps = match &c {
@@ -366,6 +371,13 @@ impl Reader<'_> {
     /// text, as a pattern escaped with `!`.
     fn pattern(&self, toks: &[Token], raw: String, escape: usize) -> Option<String> {
         if escape == toks.len() {
+            // Without an ESCAPE clause the backslash escapes, except on MySQL under
+            // NO_BACKSLASH_ESCAPES, where nothing does: no model form for that.
+            if let Dialect::MySql(m) = self.d
+                && m.no_backslash_escapes
+            {
+                return None;
+            }
             return Some(rebang(&raw));
         }
         let e = toks.get(escape + 1).filter(|t| t.kind == Tok::Str)?;
@@ -375,6 +387,16 @@ impl Reader<'_> {
 }
 
 /// A pattern escaped with a backslash (the default escape) written with `!` instead.
+/// The literal values of a single comparison.
+fn values(c: &Cond) -> Box<dyn Iterator<Item = &Value> + '_> {
+    match c {
+        Cond::Cmp { value, .. } | Cond::NotDistinct { value, .. } => Box::new(std::iter::once(value)),
+        Cond::In { values, .. } => Box::new(values.iter()),
+        Cond::Between { lo, hi, .. } => Box::new([lo, hi].into_iter()),
+        _ => Box::new(std::iter::empty()),
+    }
+}
+
 fn rebang(p: &str) -> String {
     let mut out = String::with_capacity(p.len());
     let mut chars = p.chars();

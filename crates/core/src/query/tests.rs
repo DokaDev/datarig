@@ -348,6 +348,17 @@ fn recognise_keeps_what_it_does_not_model() {
         assert_eq!(recognise(s, &tm), Some(Cond::Raw(s.into())), "{s}");
     }
     assert_eq!(pg("price = 1.5"), Some(cmp("price", CmpOp::Eq, num("1.5"))));
+    // A number the renderer would write as a string (hexadecimal, minus zero) stays as typed.
+    for s in ["id = 0x1F", "id IN (1, 0x1F)", "id = -0"] {
+        assert_eq!(recognise(s, &tm), Some(Cond::Raw(s.into())), "{s}");
+    }
+    // Under NO_BACKSLASH_ESCAPES a LIKE without ESCAPE has no escape character at all.
+    let nbe = Target {
+        dialect: Dialect::MySql(MySqlMode { no_backslash_escapes: true, ..MySqlMode::default() }),
+        ..target(MY)
+    };
+    let like = r"name LIKE 'a\_%'";
+    assert_eq!(recognise(like, &nbe), Some(Cond::Raw(like.into())));
     // `&&` is AND: cutting at OR around it keeps the meaning.
     assert_eq!(
         recognise("id = 1 && id = 2 OR id = 3", &tm),
