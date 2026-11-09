@@ -3,9 +3,9 @@ name: PR rule
 # Every pull request names its issue in the description (`Part of #123`), or says why it has
 # none (`no issue: <reason>`, for a small fix such as a typo; a release pull request says
 # `no issue: release`). Both count anywhere in the description, in any case, but not inside
-# an HTML comment or a code block. Editing the description runs it again. It reads only the
-# description: no checkout, no token, a few seconds, the same for stacked and fork pull
-# requests.
+# an HTML comment, a code block or inline code. Editing the description runs it again. It
+# reads only the description: no checkout, no token, a few seconds, the same for stacked and
+# fork pull requests.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
@@ -34,6 +34,7 @@ jobs:
           # What the template and examples show does not count.
           body = re.sub(r"<!--.*?(-->|\Z)", "", body, flags=re.S)
           body = re.sub(r"^ {0,3}(`{3,}|~{3,}).*?(^ {0,3}\1|\Z)", "", body, flags=re.S | re.M)
+          body = re.sub(r"(`+)[^`].*?\1", "", body, flags=re.S)
 
           issue = re.search(
               r"(?<![\w&/])(?:[\w.-]+/[\w.-]+)?#\d+\b"

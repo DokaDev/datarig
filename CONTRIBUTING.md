@@ -143,9 +143,9 @@ budget again; counts, memory and the binary size fail at once (docs/perf.md, "Bu
   description with `Part of #123`, not with a closing keyword such as `Closes` or `Fixes`. The
   `PR rule` check (`.github/workflows/pr-rule.yml`) fails until the description names an issue
   (`#123`, `owner/repo#123` or the issue's link) or has the line `no issue: <reason>`; a
-  release pull request has `no issue: release`. Like the docs rule, the line counts anywhere
-  in the description, in any case, but not inside an HTML comment or a code block, and editing
-  the description runs the check again.
+  release pull request has `no issue: release`. Both count anywhere in the description, in
+  any case, but not inside an HTML comment, a code block or inline code, and editing the
+  description runs the check again.
 - Keep a pull request to one change, with tests for what it fixes or adds.
 - The code, comments and documentation are in English.
 
