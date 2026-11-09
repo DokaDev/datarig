@@ -403,3 +403,50 @@ fn a_profile_without_a_tls_mode_shows_and_keeps_the_one_it_connects_with() {
     let f = ProfileForm::from_profile(&legacy, String::new(), Some(0));
     assert_eq!((f.tls_mode(), f.to_profile().sslmode.as_str()), (TlsMode::Prefer, ""));
 }
+
+#[test]
+fn a_sqlite_profile_shows_a_file_and_no_server_fields() {
+    let mut f = ProfileForm::new_profile();
+    f.set_driver(2); // SQLite
+    assert!(f.is_sqlite());
+    let basic = f.fields();
+    assert!(basic.contains(&Field::Path), "{basic:?}");
+    for server in [Field::Host, Field::Port, Field::User, Field::Password, Field::Database, Field::Dsn] {
+        assert!(!basic.contains(&server), "{server:?} is shown for a file");
+    }
+    assert!(!f.fields().is_empty());
+    f.section = Section::Ssh;
+    assert!(f.fields().iter().all(|field| field.is_button()), "the SSH section is empty for a file");
+}
+
+#[test]
+fn a_sqlite_path_must_be_an_absolute_file_and_is_required_when_saving() {
+    let path_errors = |f: &ProfileForm| -> Vec<(Field, FieldError)> {
+        f.errors(|_| false).into_iter().filter(|(field, _)| *field == Field::Path).collect()
+    };
+    let mut f = ProfileForm::new_profile();
+    f.set_driver(2);
+    assert!(path_errors(&f).is_empty(), "nothing is asked before the first Save");
+    f.attempted = true;
+    assert_eq!(path_errors(&f), vec![(Field::Path, FieldError::Required)]);
+    focus(&mut f, Field::Path);
+    typ(&mut f, "data/relative.db");
+    assert_eq!(path_errors(&f), vec![(Field::Path, FieldError::SqlitePath)]);
+    clear(&mut f);
+    typ(&mut f, "/srv/data/shop.db");
+    assert!(path_errors(&f).is_empty());
+}
+
+#[test]
+fn a_sqlite_profile_saves_its_file_and_reads_it_back() {
+    let mut f = ProfileForm::new_profile();
+    f.set_driver(2);
+    f.name.set("shop");
+    focus(&mut f, Field::Path);
+    typ(&mut f, "/srv/data/shop.db");
+    let saved = f.to_profile();
+    assert_eq!((saved.driver.as_str(), saved.path.as_deref()), ("sqlite", Some("/srv/data/shop.db")));
+    let reopened = ProfileForm::from_profile(&saved, "datarig".into(), Some(0));
+    assert_eq!(reopened.path.text(), "/srv/data/shop.db");
+    assert!(reopened.is_sqlite());
+}

@@ -27,6 +27,7 @@ datarig-export-formats.workspace = true
 datarig-i18n.workspace = true
 datarig-update.workspace = true
 datarig-driver-mysql.workspace = true
+datarig-driver-sqlite.workspace = true
 datarig-driver-postgres.workspace = true
 datarig-ssh.workspace = true
 crossterm.workspace = true
@@ -45,6 +46,7 @@ unicode-width.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
 datarig-core = { workspace = true, features = ["test-util"] }
 datarig-export-formats = { workspace = true, features = ["test-util"] }
 datarig-i18n = { workspace = true, features = ["test-util"] }

@@ -45,14 +45,18 @@ pub const CURATED: [(&str, &str, &str); 24] = [
     ("warning", "nf-fa-warning", "\u{f071}"),
 ];
 
-/// `(driver, Nerd Fonts glyph name, glyph)`. `nf-md-elasticsearch` does not exist
-/// in Nerd Fonts v3; its devicon is used instead.
-pub const DRIVERS: [(&str, &str, &str); 4] = [
-    ("postgres", "nf-dev-postgresql", "\u{e76e}"),
-    ("mysql", "nf-dev-mysql", "\u{e704}"),
-    ("redis", "nf-dev-redis", "\u{e76d}"),
-    ("elasticsearch", "nf-dev-elasticsearch", "\u{e7ca}"),
-];
+/// The glyph of a driver the app knows, by its name (`profile::drivers::KNOWN`): the Nerd Fonts
+/// devicons. `nf-md-elasticsearch` does not exist in Nerd Fonts v3; its devicon is used instead.
+pub fn driver_glyph(name: &str) -> Option<&'static str> {
+    match name {
+        "postgres" => Some("\u{e76e}"),      // nf-dev-postgresql
+        "mysql" => Some("\u{e704}"),         // nf-dev-mysql
+        "sqlite" => Some("\u{e7c4}"),        // nf-dev-sqlite
+        "redis" => Some("\u{e76d}"),         // nf-dev-redis
+        "elasticsearch" => Some("\u{e7ca}"), // nf-dev-elasticsearch
+        _ => None,
+    }
+}
 
 /// Icon of a driver the table does not know.
 pub const UNKNOWN_DRIVER: &str = "\u{f1c0}";
@@ -327,12 +331,7 @@ pub fn by_name(name: &str) -> Option<&'static str> {
 
 /// The glyph of a driver's default icon (`postgresql`/`pg` count as `postgres`).
 pub fn for_driver(driver: &str) -> &'static str {
-    let d = match driver {
-        "postgresql" | "pg" => "postgres",
-        "mariadb" => "mysql",
-        d => d,
-    };
-    DRIVERS.iter().find(|x| x.0 == d).map_or(UNKNOWN_DRIVER, |x| x.2)
+    datarig_core::profile::drivers::canonical(driver).and_then(driver_glyph).unwrap_or(UNKNOWN_DRIVER)
 }
 
 /// The glyph of a profile: its own icon, else its driver's.

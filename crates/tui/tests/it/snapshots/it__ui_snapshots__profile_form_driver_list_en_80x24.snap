@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/it/ui_snapshots.rs
+assertion_line: 818
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
@@ -14,10 +15,10 @@ expression: backend
 "│ │ User    │                                                      │         │ │"
 "│ │ Password│ PostgreSQL                                           │         │ │"
 "│ │ Password│ MySQL                                                │ain      │ │"
-"│ │ Database│ Redis          not yet supported                     │         │ │"
-"│ │         │ Elasticsearch  not yet supported                     │         │t│"
-"│ │ DSN     ╰──────────────── Enter pick · ↑↓ select · Esc cancel ─╯mode=dis │ │"
-"│ │                                                                          │ │"
+"│ │ Database│ SQLite         not yet supported                     │         │ │"
+"│ │         │ Redis          not yet supported                     │         │t│"
+"│ │ DSN     │ Elasticsearch  not yet supported                     │mode=dis │ │"
+"│ │         ╰──────────────── Enter pick · ↑↓ select · Esc cancel ─╯         │ │"
 "│ │                                                                          │ │"
 "│ │                    Test    Save    Cancel                                │t│"
 "│ │                                                                          │ │"

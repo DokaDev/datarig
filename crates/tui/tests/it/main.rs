@@ -70,6 +70,7 @@ mod flows_scripts;
 mod flows_sessions;
 mod flows_settings;
 mod flows_spill;
+mod flows_sqlite;
 mod flows_statement_cache;
 mod flows_strip_keys;
 mod flows_structure;

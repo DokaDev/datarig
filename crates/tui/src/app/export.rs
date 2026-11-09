@@ -851,7 +851,8 @@ impl App {
         let t = self.tabs.get(id)?;
         let d = self.tab_dialect(id);
         let text_ok = match d {
-            Dialect::Postgres => true,
+            // SQLite stores text as UTF-8 (its own encoding is the file's, read as UTF-8).
+            Dialect::Postgres | Dialect::Sqlite => true,
             Dialect::MySql(_) => t.exec.values.as_ref().is_some_and(|v| v.charset.eq_ignore_ascii_case("utf8mb4")),
         };
         let Results::Rows(rs) = &t.results else { return None };

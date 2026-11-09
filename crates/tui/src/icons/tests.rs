@@ -3,18 +3,11 @@ use crate::text::width;
 
 #[test]
 fn every_glyph_is_one_private_use_char_one_column_wide() {
-    let glyphs = CURATED.iter().map(|c| c.2).chain(DRIVERS.iter().map(|d| d.2)).chain([
-        UNKNOWN_DRIVER,
-        SCRIPT,
-        FOLDER,
-        TABLE,
-        DDL,
-        WARNING,
-        ENVIRONMENT,
-        KEY_PK,
-        KEY_FK,
-        KEY_UQ,
-    ]);
+    let glyphs = CURATED
+        .iter()
+        .map(|c| c.2)
+        .chain(datarig_core::profile::drivers::KNOWN.iter().filter_map(|k| driver_glyph(k.name)))
+        .chain([UNKNOWN_DRIVER, SCRIPT, FOLDER, TABLE, DDL, WARNING, ENVIRONMENT, KEY_PK, KEY_FK, KEY_UQ]);
     for g in glyphs {
         let mut chars = g.chars();
         let c = chars.next().unwrap();
