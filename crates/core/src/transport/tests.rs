@@ -20,6 +20,14 @@ fn raw_text_is_the_far_ends_message_or_the_faults_detail() {
     assert_eq!(DialError::NotOpen.raw(), "");
 }
 
+/// A loopback port nothing listens on. It is not one a listener on port 0 was given: once freed,
+/// such a port can go to another socket asking for any port, or be a dial's own end (which
+/// then connects to itself). This one is below the range systems hand out for either (32768
+/// and up on Linux, 49152 and up on macOS and Windows), so it stays closed.
+fn closed_port() -> u16 {
+    (20_000..30_000).find(|&p| std::net::TcpListener::bind(("127.0.0.1", p)).is_ok()).expect("a free port")
+}
+
 #[tokio::test]
 async fn the_tcp_dialer_connects_and_counts() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -38,8 +46,7 @@ async fn the_tcp_dialer_connects_and_counts() {
     assert_eq!(&back, b"ping");
     server.await.unwrap();
     assert_eq!(d.dials.load(Ordering::SeqCst), 1);
-    // Nothing listens there any more.
-    match d.dial("127.0.0.1", port).await {
+    match d.dial("127.0.0.1", closed_port()).await {
         Err(DialError::Failed(f)) => {
             assert_eq!(f.kind, crate::fault::FaultKind::Io(std::io::ErrorKind::ConnectionRefused))
         }

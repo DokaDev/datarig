@@ -1603,13 +1603,18 @@ fn many_metadata_lock_requests_on_one_object_stay_bounded() {
     let mut rows: Rows = (0..1000).map(|i| row(i, "EXCLUSIVE", "PENDING")).collect();
     rows.extend((1000..2000).map(|i| row(i, "SHARED_READ", "GRANTED")));
     let answers = [Answer::Rows(Vec::new()), Answer::Rows(rows)];
-    let started = std::time::Instant::now();
+    // Bounded is counted, not timed: a million request and holder pairs would make a million
+    // holders and edges; what is kept stays at the limits, and what is left out is said.
     let (locks, _) = decode::mysql::locks(&answers, &mysql_root(), Timestamp(1)).unwrap();
+    assert_eq!(locks.waits.len(), 1000, "one wait per request");
+    assert!(locks.waits.iter().all(|w| w.holders.len() == lk::HOLDERS_MAX), "each keeps the most holders");
+    assert!(locks.more > 0, "the holders left out are said");
     let waits = lk::edges(None, Some(&locks), false);
     let tree = Tree::build(&waits);
     assert_eq!(waits.edges.len(), lk::EDGES_MAX);
     assert!(waits.partial && tree.partial, "the edges left out are said");
-    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+    assert_eq!(tree.lines.len(), 1000 + lk::HOLDERS_MAX, "each session once");
+    assert_eq!(tree.waiting, 1000);
 }
 
 #[test]
