@@ -122,6 +122,7 @@ macro_rules! stats_bytes {
 pub(crate) mod structure;
 pub(crate) mod ddl;
 pub(crate) mod monitor;
+pub(crate) mod order_keys;
 
 const HIDDEN_SCHEMAS: &str = "n.nspname NOT IN ('pg_catalog', 'information_schema') \
      AND n.nspname NOT LIKE 'pg\\_toast%' AND n.nspname NOT LIKE 'pg\\_temp%'";
@@ -193,6 +194,14 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
                         Err(e) => Err(e),
                     };
                     DbEvent::Structure { schema, table, result }
+                }
+                DbCommand::LoadTableKeys { id, schema, table } => {
+                    // It reads `indnkeyatts` (11); the key reads ask for 12.
+                    let result = match version.clone().and_then(keys_supported) {
+                        Ok(()) => order_keys::load_order_keys(&client, &schema, &table).await,
+                        Err(e) => Err(e),
+                    };
+                    DbEvent::TableKeys { id, result }
                 }
                 DbCommand::LoadDdl { id, object } => {
                     // It reads the structure's parts (12).

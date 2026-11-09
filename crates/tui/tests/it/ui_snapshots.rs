@@ -76,12 +76,12 @@ fn tree_lazy_load_and_open_table() {
     h.key(KeyCode::Enter);
     let sent = h.sent();
     assert!(
-        // The table's structure asked for with it, on the metadata session (the keys that make
-        // an order total).
+        // The keys that make an order total asked for with it, on the metadata session (the
+        // key-only read, never the full structure).
         sent.len() == 2
             && sent.iter().any(|c| matches!(c, DbCommand::Execute { statements, .. }
                 if statements == &[r#"SELECT * FROM "shop"."users""#]))
-            && sent.iter().any(|c| matches!(c, DbCommand::LoadStructure { schema, table }
+            && sent.iter().any(|c| matches!(c, DbCommand::LoadTableKeys { schema, table, .. }
                 if schema == "shop" && table == "users")),
         "{sent:?}"
     );

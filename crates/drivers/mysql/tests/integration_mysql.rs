@@ -425,6 +425,85 @@ async fn lookups_never_queue_behind_a_metadata_lock_nor_hold_one_up() {
     assert!(t1.elapsed() < Duration::from_secs(10), "{:?}", t1.elapsed());
 }
 
+/// The keys of a table for a total order come from the data dictionary without opening the
+/// table: while another session holds `LOCK TABLES … WRITE` on it, and while an `ALTER TABLE`
+/// waits for a held result of it, the read answers with the keys (never `Locked`), waits for
+/// neither, holds up neither (no lock of the metadata session's is waited for, not even a
+/// momentary one) and keeps no metadata lock.
+#[tokio::test(flavor = "multi_thread")]
+async fn order_keys_are_read_without_a_metadata_lock() {
+    use datarig_core::driver::keys::OrderKeys;
+    let Some((url, admin)) = urls("order_keys_are_read_without_a_metadata_lock") else { return };
+    let t = numbers(&admin, "okeys", 200_000).await;
+    let mut wide = side(&admin).await;
+    wide.query_drop(format!(
+        "ALTER TABLE {} MODIFY v VARCHAR(40) NOT NULL, ADD UNIQUE KEY uv (v), ADD COLUMN nick INT NULL UNIQUE",
+        t.q()
+    ))
+    .await
+    .unwrap();
+    wide.disconnect().await.unwrap();
+    let mut m = Conn::start(&url, SessionRole::Meta, false, "okeys");
+    m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let mut side_admin = side(&admin).await;
+    let meta = only_session(&mut side_admin, SessionRole::Meta, "okeys").await;
+    let want = OrderKeys { primary_key: vec!["id".into()], unique_not_null: vec![vec!["v".into()]], inherited: false };
+    let mut n = 0;
+    let mut ask = |m: &mut Conn| {
+        n += 1;
+        m.session.send(DbCommand::LoadTableKeys { id: n, schema: "shop".into(), table: t.name.clone() });
+        n
+    };
+    let keys_of = |ev: DbEvent| match ev {
+        DbEvent::TableKeys { result, .. } => result,
+        ev => panic!("{ev:?}"),
+    };
+    let id = ask(&mut m);
+    let ev = m.wait(|e| matches!(e, DbEvent::TableKeys { id: i, .. } if *i == id), 10).await;
+    assert_eq!(keys_of(ev), Ok(want.clone()));
+    // 1. Another session holds `LOCK TABLES … WRITE`, and writes while the read runs.
+    let mut lock = side(&admin).await;
+    lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
+    let locker = u64::from(lock.id());
+    let t0 = Instant::now();
+    let (ev, seen) = watched(&admin, meta, &[locker], &t.name, async {
+        let id = ask(&mut m);
+        lock.query_drop(format!("INSERT INTO {} (id, v) VALUES (999999, 'w')", t.q())).await.unwrap();
+        m.wait(|e| matches!(e, DbEvent::TableKeys { id: i, .. } if *i == id), 10).await
+    })
+    .await;
+    assert_eq!(keys_of(ev), Ok(want.clone()), "read past the held lock");
+    assert!(t0.elapsed() < Duration::from_secs(2), "at once: {:?}", t0.elapsed());
+    assert!(seen.queued.is_empty(), "the read waited for the locking session: {:?}", seen.queued);
+    assert!(seen.held_up.is_empty(), "the locking session waited for the read: {:?}", seen.held_up);
+    assert_eq!(metadata_locks_of(&mut side_admin, meta).await, 0, "no lock kept");
+    lock.query_drop("UNLOCK TABLES").await.unwrap();
+    // 2. A held result, and an `ALTER TABLE` waiting for it.
+    let mut q = Conn::open(&url, SessionRole::Query, false, "okeys").await;
+    let evs = q.run_as(1, &[&format!("SELECT * FROM {}", t.q())], PagingMode::Hold).await;
+    assert!(page_of(&evs).2);
+    let (alter_id, alter) = waiting_alter(&admin, &t.q()).await;
+    let t0 = Instant::now();
+    let (ev, seen) = watched(&admin, meta, &[alter_id], &t.name, async {
+        let id = ask(&mut m);
+        m.wait(|e| matches!(e, DbEvent::TableKeys { id: i, .. } if *i == id), 10).await
+    })
+    .await;
+    assert_eq!(keys_of(ev), Ok(want), "not queued behind the waiting ALTER");
+    assert!(t0.elapsed() < Duration::from_secs(2), "at once: {:?}", t0.elapsed());
+    assert!(seen.queued.is_empty(), "the read waited: {:?}", seen.queued);
+    assert!(seen.held_up.is_empty(), "the ALTER waited for a lock of the read: {:?}", seen.held_up);
+    assert_eq!(metadata_locks_of(&mut side_admin, meta).await, 0, "no lock kept");
+    assert!(alter_waits(&mut side_admin, alter_id).await, "the ALTER still waits for the held result");
+    q.session.send(DbCommand::ClosePortal { id: 1 });
+    q.ok(2, "SELECT 1").await;
+    assert!(alter.await.unwrap().is_ok());
+    // No such table: not found, never "no key".
+    m.session.send(DbCommand::LoadTableKeys { id: 99, schema: "shop".into(), table: "zz_it_no_such_table".into() });
+    let ev = m.wait(|e| matches!(e, DbEvent::TableKeys { id: 99, .. }), 10).await;
+    assert_eq!(keys_of(ev), Err(DbError::NotFound));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn sessions_are_set_up_on_the_server_by_role_and_policy() {
     let Some((url, admin)) = urls("sessions_are_set_up_on_the_server_by_role_and_policy") else { return };

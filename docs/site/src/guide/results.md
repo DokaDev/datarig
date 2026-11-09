@@ -91,8 +91,8 @@ The condition is sent exactly as you typed it, inside parentheses. The order is 
 names, each with `ASC` or `DESC` (and `NULLS FIRST` or `NULLS LAST` on PostgreSQL), and shown
 in its normal form once applied. When the table has a primary key, its columns are added after
 yours (shown dimmed as `+ id`) so that pages read again follow one order; until datarig knows
-the order is unique (the table's structure is read when the tab opens), the line says
-"order not unique".
+the order is unique (the table's keys are read from the catalog when the tab opens, without
+locking the table), the line says "order not unique".
 
 Before anything is sent, datarig refuses a condition that could do more than filter this
 table's rows: a comment, a `;`, a row lock (`FOR UPDATE`, `FOR SHARE`), another clause or

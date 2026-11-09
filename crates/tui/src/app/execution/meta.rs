@@ -53,6 +53,9 @@ impl App {
         if let DbEvent::Ddl { id: request, result } = ev {
             return self.ddl_answered(profile, Some(&database), request, result);
         }
+        if let DbEvent::TableKeys { id: request, result } = ev {
+            return self.order_keys_answered(profile, Some(&database), request, result);
+        }
         if matches!(ev, DbEvent::ConnectFailed { .. } | DbEvent::Lost { .. }) {
             self.ddl_stop(profile, Some(Some(&database)), crate::app::tabs::DdlState::Failed(text.clone()), true);
         }
@@ -311,6 +314,7 @@ impl App {
             | DbEvent::Autocommit(_)
             | DbEvent::Applied { .. } => {}
             DbEvent::Ddl { id: request, result } => self.ddl_answered(id, None, request, result),
+            DbEvent::TableKeys { id: request, result } => self.order_keys_answered(id, None, request, result),
         }
     }
 

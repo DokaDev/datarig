@@ -31,6 +31,7 @@ use tokio::sync::mpsc::UnboundedSender;
 mod ddl;
 mod keys;
 pub(crate) mod monitor;
+mod order_keys;
 mod structure;
 
 /// The databases of the server's own, never listed.
@@ -125,6 +126,10 @@ pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedS
                 DbCommand::LoadStructure { schema, table } => {
                     let result = structure::load_structure(&mut conn, server, mode, &schema, &table).await;
                     DbEvent::Structure { schema, table, result: result.map(Box::new) }
+                }
+                DbCommand::LoadTableKeys { id, schema, table } => {
+                    let result = order_keys::load_order_keys(&mut conn, mode, &schema, &table).await;
+                    DbEvent::TableKeys { id, result }
                 }
                 DbCommand::LoadDdl { id, object } => {
                     let s = ddl::Session {

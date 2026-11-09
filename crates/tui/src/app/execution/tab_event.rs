@@ -507,6 +507,7 @@ impl App {
             | DbEvent::Keys(_)
             | DbEvent::Structure { .. }
             | DbEvent::Ddl { .. }
+            | DbEvent::TableKeys { .. }
             | DbEvent::Databases(_) => None,
             // Where the session works, as the server says: a chosen schema it does not list
             // does not exist there or cannot be used (said, never taken as fine).

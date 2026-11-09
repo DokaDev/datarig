@@ -654,6 +654,8 @@ pub struct App {
     query_seq: u64,
     /// Last DDL request id handed out (a DDL tab waits for the answer of its own).
     ddl_seq: u64,
+    /// The last request of a table's keys for its order (`DbCommand::LoadTableKeys`).
+    order_keys_seq: u64,
     /// Saved queries (`None` without a data directory).
     pub scripts: Option<datarig_core::scripts::ScriptStore>,
     /// The saved queries as last scanned (the explorer's "Saved queries" section).
@@ -871,6 +873,7 @@ impl App {
             test_seq: 0,
             query_seq: 0,
             ddl_seq: 0,
+            order_keys_seq: 0,
             pointer: Default::default(),
             scripts: None,
             script_list: Vec::new(),

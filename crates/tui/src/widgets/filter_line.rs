@@ -155,6 +155,9 @@ pub fn collapsed(keys: &[OrderKey]) -> String {
 /// The fewest columns the keys are cut to, to keep what is said of their order next to them.
 const KEYS_MIN: usize = 4;
 
+/// The same for the shrunk keys (`↑v…`): the arrow and a letter of the column, then `…`.
+const KEYS_SHRUNK_MIN: usize = 3;
+
 const WHERE: &str = "WHERE";
 const ORDER_BY: &str = "ORDER BY";
 
@@ -304,9 +307,16 @@ pub(crate) fn draw(
     let ox = x0 + (field_x + where_w + 2) as u16;
     drawn.order = Rect::new(ox, y, order_w as u16, 1);
     if !whole {
-        let keys_w = width(&shrunk).min(order_w);
-        put(buf, ox, y, &shrunk, keys_w, base);
-        if let Some(t) = tie_short.filter(|t| keys_w + 1 + width(t) <= order_w) {
+        // What is said of the order has its room first; the keys are cut (`…`) to what is left.
+        let said = tie_short.filter(|t| width(t) + 1 + KEYS_SHRUNK_MIN <= order_w);
+        let keys_room = order_w - said.map_or(0, |t| width(t) + 1);
+        let keys = match width(&shrunk) <= keys_room {
+            true => shrunk.clone(),
+            false => format!("{}\u{2026}", crate::text::clip(&shrunk, keys_room.saturating_sub(1))),
+        };
+        let keys_w = width(&keys);
+        put(buf, ox, y, &keys, keys_w, base);
+        if let Some(t) = said {
             put(buf, ox + keys_w as u16 + 1, y, t, order_w - keys_w - 1, dim);
         }
         return drawn;

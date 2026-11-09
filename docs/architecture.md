@@ -391,6 +391,16 @@ Held by CI budgets (`docs/perf.md`).
   or with `r`), another database's through its aux session, and `TreeAction::Reveal` moves the
   cursor to a foreign key's table (asking for its schema's objects first when needed). Without
   the capability an open table shows its columns from the completion catalog, as before.
+- **Keys for a total order.** The same drivers answer `DbCommand::LoadTableKeys { id, schema,
+  table }` with `DbEvent::TableKeys` (`driver::keys::OrderKeys`: the primary key's columns, the
+  unique keys whose columns are all `NOT NULL`, whether other tables' rows are read with it).
+  A table tab asks for them on its own when it opens, so the read must never disturb another
+  session: PostgreSQL reads `pg_class`, `pg_namespace`, `pg_index` and `pg_attribute` by name,
+  with no function that opens the relation (`meta/order_keys.rs`); MySQL reads
+  `information_schema` `TABLES`, `STATISTICS` and `COLUMNS` without the columns that open a
+  table. The tab keeps the answer bound to its binding (`table_query::OrderKeysState`; a late
+  answer of another request is dropped, a failure is "not known"), and the explorer's structure,
+  when read, is used first. Both are proven live against a held and a queued table lock.
 - **Show DDL.** A driver with `Capabilities::ddl` answers `DbCommand::LoadDdl { id, object }`
   (`driver::ddl::DdlObject`: a relation, an index, a trigger, a trigger's function, or a name the
   user typed with the tab's schema) with `DbEvent::Ddl { id, result }` on the metadata session

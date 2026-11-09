@@ -914,6 +914,125 @@ async fn table_structure_never_waits_for_a_lock() {
     assert!(structure(ask(Some("t")).await).0.is_ok());
 }
 
+/// The keys of a table for a total order are read from the catalog only: while another
+/// session holds the table in `ACCESS EXCLUSIVE` mode (an open transaction's `LOCK TABLE`), or
+/// waits for that lock behind a reader, the read answers at once with the keys, and the
+/// metadata session holds or asks for no lock on any relation of the schema meanwhile. Only
+/// whole-column, immediate, full unique keys count, the others only with all columns `NOT
+/// NULL`; a table that others inherit from says so; no such table is not found.
+#[tokio::test(flavor = "multi_thread")]
+async fn order_keys_are_read_without_a_lock() {
+    use datarig_core::driver::keys::OrderKeys;
+    let Some(url) = pg_url("order_keys_are_read_without_a_lock") else { return };
+    let schema = format!("zz_okeys_{}", std::process::id());
+    let _guard = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!(
+            "CREATE TABLE {s}.keys_probe (a int, b int, email text NOT NULL UNIQUE, nick text UNIQUE,              note text NOT NULL, later int NOT NULL, PRIMARY KEY (b, a))"
+        ),
+        format!("CREATE UNIQUE INDEX probe_lower ON {s}.keys_probe (lower(note))"),
+        format!("CREATE UNIQUE INDEX probe_part ON {s}.keys_probe (note) WHERE a > 0"),
+        format!("CREATE UNIQUE INDEX probe_incl ON {s}.keys_probe (later) INCLUDE (nick)"),
+        format!("ALTER TABLE {s}.keys_probe ADD CONSTRAINT probe_deferred UNIQUE (note) DEFERRABLE"),
+        format!("CREATE TABLE {s}.parent (id int PRIMARY KEY)"),
+        format!("CREATE TABLE {s}.child () INHERITS ({s}.parent)"),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let tag = format!("okeys{}", std::process::id());
+    let cfg = ConnectionConfig { name: "it".into(), dsn: Some(url.clone()), ..ConnectionConfig::test_db() };
+    let (tx, rx) = unbounded_channel();
+    let o = ConnectOptions::new(PAGE, SessionRole::Meta, &tag).dialer(dialer());
+    let mut meta = Conn { session: PgDriver.connect(&cfg, SessionRole::Meta, o, tx), rx };
+    meta.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let mut observer = Conn::open(&url, SessionRole::Query).await;
+    let mut n = 100;
+    // The keys of `table`, how long they took, and the relation locks the metadata session held
+    // or asked for on the schema's relations while they were read (looked at 300 ms in, or when
+    // they came).
+    let mut ask = async |table: &str| {
+        n += 1;
+        let t0 = Instant::now();
+        meta.session.send(DbCommand::LoadTableKeys { id: n, schema: schema.clone(), table: table.to_string() });
+        let ev = tokio::time::timeout(Duration::from_millis(300), meta.rx.recv()).await;
+        let sql = format!(
+            "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
+             WHERE a.application_name = 'datarig-meta-{tag}' AND l.locktype = 'relation' \
+             AND l.relation IN (SELECT c.oid FROM pg_catalog.pg_class c WHERE c.relnamespace = '{s}'::regnamespace)"
+        );
+        let DbEvent::Page { rows, .. } = observer.run(n, &sql).await else { panic!("pg_locks") };
+        let locks = rows[0][0].clone().unwrap_or_default();
+        let ev = match ev {
+            Ok(Some(ev)) => ev,
+            _ => tokio::time::timeout(Duration::from_secs(10), meta.rx.recv())
+                .await
+                .unwrap_or_else(|_| panic!("{table}: no answer within 10 s ({locks} locks asked for)"))
+                .expect("the metadata session ended"),
+        };
+        let DbEvent::TableKeys { id, result } = ev else { panic!("{ev:?}") };
+        assert_eq!(id, n);
+        (result, t0.elapsed(), locks)
+    };
+    let probe = OrderKeys {
+        primary_key: vec!["b".into(), "a".into()],
+        unique_not_null: vec![vec!["email".into()], vec!["later".into()]],
+        inherited: false,
+    };
+    let (keys, _, _) = ask("keys_probe").await;
+    assert_eq!(keys, Ok(probe.clone()));
+    let (keys, _, _) = ask("parent").await;
+    assert_eq!(keys, Ok(OrderKeys { primary_key: vec!["id".into()], inherited: true, ..OrderKeys::default() }));
+    let (keys, _, _) = ask("nosuch").await;
+    assert_eq!(keys, Err(DbError::NotFound));
+
+    // Held: an open transaction's `LOCK TABLE … ACCESS EXCLUSIVE`.
+    let mut holder = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(holder.run(1, "BEGIN").await, DbEvent::Done { .. }));
+    let lock = format!("LOCK TABLE {s}.keys_probe IN ACCESS EXCLUSIVE MODE");
+    assert!(matches!(holder.run(2, &lock).await, DbEvent::Done { .. }));
+    let (keys, took, locks) = ask("keys_probe").await;
+    assert_eq!(keys, Ok(probe.clone()), "read past the held lock");
+    assert!(took < Duration::from_secs(1), "at once: {took:?}");
+    assert_eq!(locks, "0", "no lock held or asked for on the locked table");
+    assert!(matches!(holder.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+
+    // Waited for: a reader holds the table, a `LOCK TABLE` waits behind it.
+    let mut reader = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(reader.run(1, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(reader.run(2, &format!("SELECT count(*) FROM {s}.keys_probe")).await, DbEvent::Page { .. }));
+    let mut migration = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(migration.run(1, "BEGIN").await, DbEvent::Done { .. }));
+    migration.session.send(DbCommand::Execute {
+        id: 2,
+        statements: vec![format!("LOCK TABLE {s}.keys_probe")],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    let waiting = format!(
+        "SELECT count(*) FROM pg_locks WHERE relation = '{s}.keys_probe'::regclass \
+         AND mode = 'AccessExclusiveLock' AND NOT granted"
+    );
+    let mut watch = Conn::open(&url, SessionRole::Query).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    for id in 1.. {
+        let DbEvent::Page { rows, .. } = watch.run(id, &waiting).await else { panic!("pg_locks") };
+        if rows[0][0].as_deref() == Some("1") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the LOCK TABLE never queued");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let (keys, took, locks) = ask("keys_probe").await;
+    assert_eq!(keys, Ok(probe), "not queued behind the waiting lock");
+    assert!(took < Duration::from_secs(1), "at once: {took:?}");
+    assert_eq!(locks, "0", "no lock asked for behind the waiting one");
+    assert!(matches!(reader.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+    assert!(matches!(migration.result(2).await, DbEvent::Done { .. }), "the lock was granted");
+    assert!(matches!(migration.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
 /// The size of a table that was never vacuumed or analyzed is unknown, as its rows are: its
 /// heap's `relpages` is still 0 however many rows it has, while its indexes and its TOAST
 /// table's index have pages from their creation on (a text column, a primary key, a partitioned

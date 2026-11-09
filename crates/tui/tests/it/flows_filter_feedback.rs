@@ -10,6 +10,7 @@ use crate::common;
 
 use common::*;
 use datarig_core::config::Config;
+use datarig_core::driver::keys::OrderKeys;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, ServerMessage};
 use datarig_core::policy::Policy;
 use datarig_core::profile::ConnectionConfig;
@@ -523,30 +524,43 @@ fn a_late_structure_does_not_make_the_held_order_unique() {
     assert!(said.contains("order not unique"), "{said}");
 }
 
-/// Opening a table asks for its structure (one metadata read): an order applied once it came
-/// is made total on its first run, `+ id` on the line.
+/// The keys-only reads sent since the last look, as (request, schema.table).
+fn keys_asks(sent: &[DbCommand]) -> Vec<(u64, String)> {
+    sent.iter()
+        .filter_map(|c| match c {
+            DbCommand::LoadTableKeys { id, schema, table } => Some((*id, format!("{schema}.{table}"))),
+            _ => None,
+        })
+        .collect()
+}
+
+fn order_keys(pk: &[&str]) -> OrderKeys {
+    OrderKeys { primary_key: pk.iter().map(|c| c.to_string()).collect(), ..OrderKeys::default() }
+}
+
+/// Opening a table reads its keys with the key-only catalog read (never the full structure,
+/// whose functions open the table): an order applied once they came is made total on its
+/// first run, `+ id` on the line. Applying an order asks nothing more.
 #[test]
-fn opening_a_table_asks_its_structure_so_the_first_order_is_total() {
+fn opening_a_table_reads_its_keys_so_the_first_order_is_total() {
     let mut h = Harness::connected(Lang::En);
     open(&mut h, "users");
     let sent = h.sent();
-    let asked = sent
-        .iter()
-        .filter(|c| matches!(c, DbCommand::LoadStructure { schema, table } if schema == "shop" && table == "users"))
-        .count();
-    assert_eq!(asked, 1, "{sent:?}");
+    assert!(!sent.iter().any(|c| matches!(c, DbCommand::LoadStructure { .. })), "no structure read: {sent:?}");
+    let asks = keys_asks(&sent);
+    assert_eq!(asks.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(), ["shop.users"], "{sent:?}");
     answer(&mut h);
-    h.meta_db(
-        "local-pg",
-        DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(Box::new(users_structure())) },
-    );
+    h.meta_db("local-pg", DbEvent::TableKeys { id: asks[0].0, result: Ok(order_keys(&["id"])) });
     h.key(KeyCode::Tab);
     h.keys("i");
     h.keys(" ro");
     h.type_text("name");
     h.key(KeyCode::Enter);
     let sent = h.sent();
-    assert!(!sent.iter().any(|c| matches!(c, DbCommand::LoadStructure { .. })), "read already: {sent:?}");
+    assert!(
+        !sent.iter().any(|c| matches!(c, DbCommand::LoadStructure { .. } | DbCommand::LoadTableKeys { .. })),
+        "read already: {sent:?}"
+    );
     let run: Vec<&Vec<String>> = sent
         .iter()
         .filter_map(|c| if let DbCommand::Execute { statements, .. } = c { Some(statements) } else { None })
@@ -555,6 +569,71 @@ fn opening_a_table_asks_its_structure_so_the_first_order_is_total() {
     answer(&mut h);
     let screen = h.screen(120, 30);
     assert!(screen.contains("ORDER BY name ASC + id"), "{screen}");
+}
+
+/// An answer of another request (a late one) is dropped; a failed read leaves the keys not
+/// known (the order is not unique, never "no key") and the next run asks again.
+#[test]
+fn a_stale_or_failed_keys_answer_leaves_the_order_not_unique() {
+    let mut h = Harness::connected(Lang::En);
+    open(&mut h, "users");
+    let asks = keys_asks(&h.sent());
+    answer(&mut h);
+    h.meta_db("local-pg", DbEvent::TableKeys { id: asks[0].0 + 100, result: Ok(order_keys(&["id"])) });
+    h.command("orderby name");
+    let sent = h.sent();
+    assert!(keys_asks(&sent).is_empty(), "still asked: {sent:?}");
+    let ran = sent.iter().any(
+        |c| matches!(c, DbCommand::Execute { statements, .. } if statements[0].ends_with(r#"ORDER BY "name" ASC"#)),
+    );
+    assert!(ran, "no tie-breaker from a stale answer: {sent:?}");
+    answer(&mut h);
+    let screen = h.screen(120, 30);
+    assert!(screen.contains("not unique"), "{screen}");
+    // Its own answer, a failure: not known.
+    h.meta_db("local-pg", DbEvent::TableKeys { id: asks[0].0, result: Err(DbError::Locked) });
+    h.ctrl('e');
+    let sent = h.sent();
+    assert_eq!(keys_asks(&sent).len(), 1, "asked again: {sent:?}");
+    let ran = sent.iter().any(
+        |c| matches!(c, DbCommand::Execute { statements, .. } if statements[0].ends_with(r#"ORDER BY "name" ASC"#)),
+    );
+    assert!(ran, "{sent:?}");
+    answer(&mut h);
+    let screen = h.screen(120, 30);
+    assert!(screen.contains("not unique"), "{screen}");
+}
+
+/// Answer the active tab's current run with a first page of one column, `col`.
+fn answer_with_column(h: &mut Harness, col: &str) {
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    let columns = Some(vec![meta(col, "text", false, false)]);
+    let rows = (0..3).map(|i| vec![Some(format!("v{i}"))]).collect();
+    h.tab_db(index, DbEvent::Page { id, columns, rows, more: false, elapsed: Duration::from_millis(2) });
+}
+
+/// A long column name at 80 columns: the keys shrink and are cut, what is said of the order
+/// keeps its room (English and Korean).
+#[test]
+fn a_long_order_column_keeps_the_not_unique_note() {
+    const COL: &str = "very_long_order_column_name_extra";
+    for (lang, said) in [(Lang::En, "not unique"), (Lang::Ko, "\u{c720}\u{c77c}\u{d558}\u{c9c0} \u{c54a}\u{c74c}")] {
+        let mut h = Harness::connected(lang);
+        open(&mut h, "users");
+        answer_with_column(&mut h, COL);
+        h.sent();
+        h.key(KeyCode::Tab);
+        h.keys("i");
+        h.keys(" ro");
+        h.type_text(COL);
+        h.key(KeyCode::Enter);
+        answer_with_column(&mut h, COL);
+        let screen = h.screen(80, 24);
+        let line = screen.lines().find(|l| l.contains("WHERE")).unwrap_or_else(|| panic!("{screen}"));
+        assert!(line.contains(said), "{lang:?}: {line}");
+        assert!(line.contains("\u{2191}very"), "{lang:?}: {line}");
+    }
 }
 
 /// An order run while the structure is not known is said not unique (unknown, not absent),

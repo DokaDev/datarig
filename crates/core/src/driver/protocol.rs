@@ -2,7 +2,7 @@
 //! session's channels, progress and results come back as [`DbEvent`]s.
 
 use super::ddl::{DdlObject, DdlSource, ObjectKind};
-use super::keys::KeyCatalog;
+use super::keys::{KeyCatalog, OrderKeys};
 use super::structure::{RelationStats, TableStructure};
 use crate::fault::Fault;
 use crate::sql::complete::Catalog;
@@ -521,6 +521,14 @@ pub enum DbCommand {
         schema: String,
         table: String,
     },
+    /// The keys of table `schema.table` that make an order total (`Capabilities::structure`):
+    /// answered with [`DbEvent::TableKeys`] of the same `id`. Read from the catalog by name
+    /// only, never opening the table nor waiting for a lock on it ([`OrderKeys`]).
+    LoadTableKeys {
+        id: u64,
+        schema: String,
+        table: String,
+    },
     /// The DDL of `object` (`Capabilities::ddl`): answered with [`DbEvent::Ddl`] of the same
     /// `id`. Read from the catalog only, never waiting for a lock: an object another session
     /// locks (or one of the relations reading its definition would lock) answers
@@ -816,6 +824,7 @@ impl DbCommand {
                 DbEvent::Structure { schema: schema.clone(), table: table.clone(), result: Err(error) }
             }
             DbCommand::LoadDdl { id, .. } => DbEvent::Ddl { id: *id, result: Err(error) },
+            DbCommand::LoadTableKeys { id, .. } => DbEvent::TableKeys { id: *id, result: Err(error) },
             DbCommand::Execute { id, .. }
             | DbCommand::Resume { id, .. }
             | DbCommand::FetchMore { id }
@@ -858,6 +867,7 @@ impl DbCommand {
                 | DbCommand::LoadDatabases
                 | DbCommand::LoadStructure { .. }
                 | DbCommand::LoadDdl { .. }
+                | DbCommand::LoadTableKeys { .. }
         )
     }
 }
@@ -1109,6 +1119,12 @@ pub enum DbEvent {
         schema: String,
         table: String,
         result: Result<Box<TableStructure>, DbError>,
+    },
+    /// The answer to `DbCommand::LoadTableKeys` `id`: the table's keys, or why they could not be
+    /// read (then they are not known: never taken for none).
+    TableKeys {
+        id: u64,
+        result: Result<OrderKeys, DbError>,
     },
     /// The answer to `DbCommand::LoadDdl` `id`: the object's DDL as the catalog has it, or why
     /// it could not be read.
