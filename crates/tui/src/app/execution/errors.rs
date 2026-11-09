@@ -58,8 +58,8 @@ impl App {
     /// anything else in words, with its raw detail in the error log.
     pub(in crate::app) fn db_error_text(&self, e: &DbError) -> String {
         let label = match e {
-            DbError::Server(s)
-            | DbError::NeedsNoTransaction(s)
+            DbError::Server(m) => return m.text.clone(),
+            DbError::NeedsNoTransaction(s)
             | DbError::IdleInTransactionTimeout(s)
             | DbError::IdleSessionTimeout(s)
             | DbError::LockBusy(s) => {

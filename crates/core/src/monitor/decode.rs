@@ -61,7 +61,7 @@ impl DecodeError {
     pub fn into_db(self, oldest: &str) -> DbError {
         match self {
             DecodeError::Unsupported(server) => DbError::VersionUnsupported { server, needed: oldest.to_owned() },
-            DecodeError::ProbeFailed(message) | DecodeError::Failed(message) => DbError::Server(message),
+            DecodeError::ProbeFailed(message) | DecodeError::Failed(message) => DbError::Server(message.into()),
             e @ DecodeError::Malformed { .. } => DbError::Connection(Fault::other(e.to_string())),
         }
     }

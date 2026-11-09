@@ -21,7 +21,7 @@ use datarig_core::driver::{
     CancelFailure, ConnectOptions, DbCommand, DbError, DbEvent, Driver, Outcome, PingError, Session, SessionRole,
     TxOutcome, TxStep,
 };
-use datarig_core::driver::{PagingMode, TxRule};
+use datarig_core::driver::{PagingMode, ServerMessage, TxRule};
 use datarig_core::fault::FaultKind;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::transport::{DialError, Dialer, DialerRef, TcpDialer};
@@ -1721,7 +1721,7 @@ impl Indicator {
     async fn fails(&mut self, sql: &str) -> String {
         match self.run(sql).await {
             // A statement's failure is the server's own message.
-            DbEvent::Failed { error: DbError::Server(s), .. } => s,
+            DbEvent::Failed { error: DbError::Server(s), .. } => s.text,
             ev => panic!("{sql:?} should fail: {ev:?}"),
         }
     }
@@ -1779,6 +1779,20 @@ async fn an_aborted_block_stays_open_until_it_ends() {
     s.done("COMMIT").await;
     assert!(!s.settled().await);
     assert_eq!(s.scalar("SELECT count(*) FROM t").await.as_deref(), Some("0"));
+}
+
+/// A server error keeps where it points in the statement, counted in characters: a syntax error
+/// at the end, and a name after multibyte text.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_error_keeps_its_position_in_the_statement() {
+    let Some(url) = pg_url("a_server_error_keeps_its_position_in_the_statement") else { return };
+    let mut s = Indicator::open(&url).await;
+    let DbEvent::Failed { error: DbError::Server(e), .. } = s.run("SELECT 1 +").await else { panic!("a syntax error") };
+    assert!(e.position.is_some(), "{e:?}");
+    let sql = "SELECT 'é€' FROM zz_no_such_table";
+    let DbEvent::Failed { error: DbError::Server(e), .. } = s.run(sql).await else { panic!("no such table") };
+    let at = e.position.and_then(|p| ServerMessage::byte_offset(sql, p)).expect("a position in the statement");
+    assert!(sql[at..].starts_with("zz_no_such_table"), "{e:?}");
 }
 
 /// `COMMIT AND CHAIN` commits and opens the next block at once.

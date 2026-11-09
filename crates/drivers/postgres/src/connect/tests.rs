@@ -92,3 +92,13 @@ fn a_profile_on_unix_sockets_is_never_encrypted() {
     let unknown = ConnectionConfig { host: "/tmp".into(), sslmode: "verify".into(), ..base.clone() };
     assert!(pg_config(&unknown).is_err());
 }
+
+#[test]
+fn a_server_message_keeps_a_position_in_the_statement_sent_and_the_hint() {
+    let text = || "ERROR: syntax error at end of input".to_owned();
+    let at = server_message(text(), Some(&ErrorPosition::Original(11)), Some("Add a value."));
+    assert_eq!((at.text.as_str(), at.position, at.hint.as_deref()), (text().as_str(), Some(11), Some("Add a value.")));
+    let inner = ErrorPosition::Internal { position: 3, query: "SELECT x".into() };
+    assert_eq!(server_message(text(), Some(&inner), None), ServerMessage::from(text()));
+    assert_eq!(server_message(text(), None, None), ServerMessage::from(text()));
+}

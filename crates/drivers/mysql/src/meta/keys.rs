@@ -79,7 +79,7 @@ struct Table {
 /// position, a `lower_case_table_names` it cannot read) fails the read: the keys are then not
 /// known, never taken for none.
 pub(crate) fn catalog(rows: Vec<RawRow>) -> Result<KeyCatalog, DbError> {
-    let bad = |what: &str| DbError::Server(format!("key metadata: {what}"));
+    let bad = |what: &str| DbError::Server(format!("key metadata: {what}").into());
     let mut rule = None;
     let mut zone = None;
     let mut tables: BTreeMap<(String, String), Table> = BTreeMap::new();

@@ -233,7 +233,7 @@ struct RawTrigger {
 
 /// The document the statement built, as the model (see [`model`]).
 fn parse(json: &str, mariadb: bool, mode: MySqlMode, schema: &str, table: &str) -> Result<TableStructure, DbError> {
-    let raw: Raw = serde_json::from_str(json).map_err(|e| DbError::Server(format!("table structure: {e}")))?;
+    let raw: Raw = serde_json::from_str(json).map_err(|e| DbError::Server(format!("table structure: {e}").into()))?;
     model(raw, mariadb, mode, schema, table)
 }
 
@@ -311,7 +311,9 @@ pub(crate) fn model(
             },
             (None, Some(e)) => format!("({})", sql(e)),
             (None, None) => {
-                return Err(DbError::Server(format!("table structure: index {} has a key part of nothing", p.name)));
+                return Err(DbError::Server(
+                    format!("table structure: index {} has a key part of nothing", p.name).into(),
+                ));
             }
         };
         x.columns.push(text);
@@ -421,13 +423,15 @@ pub(crate) fn model(
         let timing = match t.timing.as_str() {
             "BEFORE" => TriggerTiming::Before,
             "AFTER" => TriggerTiming::After,
-            other => return Err(DbError::Server(format!("table structure: trigger {} fires {other}", t.name))),
+            other => return Err(DbError::Server(format!("table structure: trigger {} fires {other}", t.name).into())),
         };
         let event = match t.event.as_str() {
             "INSERT" => TriggerEvent::Insert,
             "UPDATE" => TriggerEvent::Update,
             "DELETE" => TriggerEvent::Delete,
-            other => return Err(DbError::Server(format!("table structure: trigger {} fires on {other}", t.name))),
+            other => {
+                return Err(DbError::Server(format!("table structure: trigger {} fires on {other}", t.name).into()));
+            }
         };
         let for_each_row = t.orientation == "ROW";
         // For display only: the body's literals have lost their escapes (see the module's
@@ -560,7 +564,9 @@ fn fk_action(name: &str, rule: &str) -> Result<FkAction, DbError> {
         "CASCADE" => FkAction::Cascade,
         "SET NULL" => FkAction::SetNull,
         "SET DEFAULT" => FkAction::SetDefault,
-        other => return Err(DbError::Server(format!("table structure: foreign key {name} has the rule {other}"))),
+        other => {
+            return Err(DbError::Server(format!("table structure: foreign key {name} has the rule {other}").into()));
+        }
     })
 }
 

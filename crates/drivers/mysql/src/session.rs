@@ -582,7 +582,7 @@ pub(crate) fn server_error(code: u16, state: &str, message: &str) -> DbError {
         LOCK_WAIT_TIMEOUT => DbError::LockTimeout(text),
         LOCK_NOWAIT => DbError::LockBusy(text),
         CLIENT_INTERACTION_TIMEOUT => DbError::IdleSessionTimeout(text),
-        _ => DbError::Server(text),
+        _ => DbError::Server(text.into()),
     }
 }
 
