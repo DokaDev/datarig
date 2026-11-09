@@ -788,3 +788,46 @@ fn keychain_access_label(a: KeychainAccess) -> Label {
         KeychainAccess::SecurityTool => Label::SettingKeychainAccessSecurityTool,
     }
 }
+
+/// Password asked at connect time: a `prompt` profile (every time), or no/wrong stored
+/// password (keychain unavailable, nothing saved yet).
+/// What the prompt's field is called: a label, or text a server gave (a keyboard-interactive
+/// question, shown as it is).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PromptField {
+    Label(Label),
+    Text(String),
+}
+
+impl From<Label> for PromptField {
+    fn from(l: Label) -> Self {
+        PromptField::Label(l)
+    }
+}
+
+pub struct PasswordPrompt {
+    pub id: ProfileId,
+    /// The profile's name (the title).
+    pub profile: String,
+    pub input: TextInput,
+    pub error: Notice,
+    /// The "save" checkbox (saved only after the connection succeeds).
+    pub save: bool,
+    /// The checkbox has the focus (`Tab` toggles focus, `Space` toggles the box).
+    pub save_focus: bool,
+    /// Where the checkbox saves to (the profile's store); `None` hides the checkbox.
+    pub save_to: Option<SourceKind>,
+    /// Shown instead of the checkbox when there is none.
+    pub note: Label,
+    /// What `Enter` does with the password.
+    pub purpose: PromptPurpose,
+    /// The title when it is not the profile's database password (an SSH tunnel's secret).
+    pub title: Option<Msg>,
+    /// The field's name.
+    pub field: PromptField,
+    /// Show what is typed (a keyboard-interactive question that says so).
+    pub echo: bool,
+    /// Where the checkbox was drawn, and the buttons (kept by the renderer, for the mouse).
+    pub checkbox: ratatui::layout::Rect,
+    pub buttons: overlay::Buttons,
+}

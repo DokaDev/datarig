@@ -1110,3 +1110,35 @@ pub(super) fn ex_error(e: ExError) -> Msg {
         ExError::Pattern(SearchNotice::Wrapped { .. }) => Msg::Label(Label::EditorSearchWrappedBottom),
     }
 }
+
+/// One entry of the command line's list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandItem {
+    /// An action of [`REGISTRY`] (by index).
+    Action(usize),
+    /// A command of [`command::COMMANDS`] (by index).
+    Command(usize),
+    /// A completion of the argument of the command `command` (index into `COMMANDS`).
+    Arg { command: usize, arg: command::ArgCompletion },
+    /// The text typed, as an editor command (a line number, `:s`).
+    Ex,
+}
+
+/// The `:` command line: an input line and the matching commands, arguments and actions (a
+/// popup near the top by default, the last line with `commands.position = bottom`).
+pub struct CommandLine {
+    pub input: TextInput,
+    /// Best match first.
+    pub items: Vec<CommandItem>,
+    pub selected: usize,
+    /// Why the last `Enter` did nothing (unknown command, bad argument); typing clears it.
+    pub error: Option<Notice>,
+    /// `Tab`/`↑`/`↓` picked an entry since the input last changed. Until then `Enter` on a
+    /// `:use` argument runs what was typed, never the top completion.
+    pub picked: bool,
+    /// Where the entries were drawn and the first one shown (mouse), kept by the renderer, and
+    /// the entry a press armed (it runs on the release).
+    pub list: ratatui::layout::Rect,
+    pub offset: usize,
+    pub press: overlay::Press<usize>,
+}
