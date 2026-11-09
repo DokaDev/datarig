@@ -11,11 +11,14 @@ any code is written. As more maintainers join, this process will be made lighter
    and why.
 2. **Wait for the discussion and an assignment.** Some areas are being reworked, and the issue
    is where you'll find out whether your change overlaps with work in progress.
-3. **Then open the pull request**, linked to its issue (`Closes #123` or `Part of #123`).
+3. **Then open the pull request** and name its issue in the description with `Part of #123`.
+   Please don't use closing keywords such as `Closes` or `Fixes`: the maintainers decide when
+   an issue is done.
 
 Pull requests that arrive without an agreed issue may wait a long time or be closed, even when
 the code is good: with a single maintainer, unplanned changes are hard to review and to fit
-into the plan. Small fixes such as typos or broken links can skip the issue.
+into the plan. Small fixes such as typos or broken links can skip the issue: say so in the
+description with the line `no issue: <reason>`.
 
 Planned and in-progress work is tracked in
 [the issues](https://github.com/DokaDev/datarig/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap),
@@ -136,7 +139,15 @@ budget again; counts, memory and the binary size fail at once (docs/perf.md, "Bu
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
   `feat: …`, `fix: …`, `docs: …`, `test: …`, `refactor: …`, `perf: …`, `build: …`, `ci: …`,
   `chore: …`, with an optional scope (`fix(driver-postgres): …`).
-- Open the issue first (see "Before you open a pull request") and link the pull request to it.
+- Open the issue first (see "Before you open a pull request") and name it in the pull request
+  description with `Part of #123`, not with a closing keyword such as `Closes` or `Fixes`. The
+  `PR rule` check (`.github/workflows/pr-rule.yml`) fails until the description names an issue
+  (`#123`, `owner/repo#123` or the issue's link) or has the line `no issue: <reason>`; a
+  release pull request has `no issue: release`. Both count anywhere in the description, in
+  any case, but not inside an HTML comment or a fenced code block, and editing the
+  description runs the check again. Closing keywords in the description or commit messages
+  make the check fail: `Closes`, `Fixes` or `Resolves` (in any form) followed by an issue,
+  such as `Fixes #123`. This applies to everyone, maintainers included.
 - Keep a pull request to one change, with tests for what it fixes or adds.
 - The code, comments and documentation are in English.
 

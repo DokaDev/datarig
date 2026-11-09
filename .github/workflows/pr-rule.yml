@@ -1,0 +1,126 @@
+name: PR rule
+
+# Every pull request names its issue in the description (`Part of #123`), or says why it has
+# none (`no issue: <reason>`, for a small fix such as a typo; a release pull request says
+# `no issue: release`). Both count anywhere in the description, in any case, but not inside
+# an HTML comment or a fenced code block. A closing keyword with an issue (`Fixes #123`) in
+# the description or in a commit message fails it: the maintainers decide when an issue is
+# done. Editing the description runs it again. It reads the description and the commit
+# messages through the API when it runs (so a re-run judges the current text), with no
+# checkout: a few seconds, the same for stacked and fork pull requests. A workflow of its own,
+# not a job of ci.yml.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+concurrency:
+  group: pr-rule-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-rule:
+    name: issue reference
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      # The description and the commit messages are fetched by the script, never pasted into it.
+      - name: Check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          API: ${{ github.api_url }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+        shell: python3 {0}
+        run: |
+          import json, os, re, sys, urllib.request
+
+          def get(path):
+              req = urllib.request.Request(
+                  f"{os.environ['API']}/repos/{os.environ['REPO']}/pulls/{os.environ['NUMBER']}{path}",
+                  headers={
+                      "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.load(r)
+
+          # A description edited on the web has CRLF line endings.
+          body = (get("").get("body") or "").replace("\r\n", "\n").replace("\r", "\n")
+          messages = []
+          page = 1
+          while True:
+              commits = get(f"/commits?per_page=100&page={page}")
+              messages += [(c["sha"][:7], c["commit"]["message"]) for c in commits]
+              if len(commits) < 100:
+                  break
+              page += 1
+
+          # The template's guidance (HTML comments) and fenced code blocks do not count. One
+          # pass, so that whichever starts first hides the other inside it. A fenced block ends
+          # at a line of the same fence character, at least as long. Anything else counts: when
+          # in doubt the rule passes, as a maintainer reads every description anyway.
+          body = re.sub(
+              r"^ {0,3}(?P<f>(?P<c>[`~])(?P=c){2,}).*?(?:^ {0,3}(?P=f)(?P=c)*[ \t]*$|\Z)"
+              r"|<!--.*?-->",
+              "",
+              body,
+              flags=re.S | re.M,
+          )
+
+          ref = (
+              r"(?:(?<![\w&/])(?:[\w.-]+/[\w.-]+)?#\d+\b"
+              r"|https://github\.com/[\w.-]+/[\w.-]+/issues/\d+\b)"
+          )
+          closing = re.compile(
+              r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b(?::[ \t]*|[ \t]+)" + ref, re.I
+          )
+
+          found = []
+          # An example in inline code (`Fixes #123`) closes nothing.
+          m = closing.search(re.sub(r"`[^`\n]*`", "", body))
+          if m:
+              found.append(f"the description: {m.group(0)}")
+          for sha, message in messages:
+              m = closing.search(message)
+              if m:
+                  found.append(f"commit {sha}: {m.group(0)}")
+          if found:
+              print("::error title=PR rule::A closing keyword names an issue.")
+              print("Closing keywords are not used here:")
+              for f in found:
+                  print(f"  {f}")
+              print("""
+          Name the issue with a line such as
+
+            Part of #123
+
+          The maintainers link the issue in the Development section when the work is done.
+          Edit the description, or reword the commit messages and push again.""")
+              sys.exit(1)
+
+          issue = re.search(ref, body)
+          reason = re.search(r"^\s*no issue:[ \t]*\S", body, flags=re.I | re.M)
+          if issue or reason:
+              print("The description names its issue" if issue else "The description says why there is no issue")
+              sys.exit(0)
+
+          print("::error title=PR rule::The description names no issue.")
+          print("""
+          Every pull request names the issue it belongs to. Add a line to the description:
+
+            Part of #123
+
+          Please don't use closing keywords such as Closes or Fixes: the maintainers decide when
+          an issue is done and link it in the Development section.
+
+          For a small fix such as a typo, give the reason instead, on its own line:
+
+            no issue: <reason>
+
+          Editing the description runs this check again by itself.""")
+          sys.exit(1)
