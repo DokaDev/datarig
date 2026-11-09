@@ -517,7 +517,7 @@ pub(crate) fn draw_tab_bar(app: &mut App, area: Rect, buf: &mut Buffer) -> Vec<(
         // is dragged the place it is shown at (the bar scrolls as it goes past an end).
         let room = total.saturating_sub(2);
         match drag {
-            Some((_, slot, ..)) => drag_window(&shown, slot.min(n - 1), app_ref.tab_geom.first, room),
+            Some((_, slot, ..)) => drag_window(&shown, slot.min(n - 1), app_ref.pointer.tab_geom.first, room),
             None => window(&shown, active, room),
         }
     };
@@ -546,12 +546,12 @@ pub(crate) fn draw_tab_bar(app: &mut App, area: Rect, buf: &mut Buffer) -> Vec<(
         })
         .collect();
     let now = app.now();
-    let xs = app.tab_slide.place(&places, now);
+    let xs = app.pointer.tab_slide.place(&places, now);
     let mut drawn = vec![None; n];
     for (k, x) in xs.iter().enumerate() {
         drawn[order[first + k]] = Some(*x);
     }
-    app.tab_geom = BarGeom {
+    app.pointer.tab_geom = BarGeom {
         drawn,
         order: order.clone(),
         widths: widths.iter().map(|w| u16::try_from(*w).unwrap_or(u16::MAX)).collect(),
@@ -562,9 +562,9 @@ pub(crate) fn draw_tab_bar(app: &mut App, area: Rect, buf: &mut Buffer) -> Vec<(
         at,
     };
     // Tabs in place first, sliding ones over them, the dragged (or just dropped) one on top.
-    let top = held.map(|h| h.0).or(keyed).or_else(|| app.tab_slide.top.and_then(|t| app.tabs.position(t)));
+    let top = held.map(|h| h.0).or(keyed).or_else(|| app.pointer.tab_slide.top.and_then(|t| app.tabs.position(t)));
     let mut draw: Vec<usize> = (0..places.len()).collect();
-    draw.sort_by_key(|&k| (Some(order[first + k]) == top, app.tab_slide.moving(places[k].0)));
+    draw.sort_by_key(|&k| (Some(order[first + k]) == top, app.pointer.tab_slide.moving(places[k].0)));
     let mut line: Vec<Option<Cell>> = vec![None; usize::from(stop.saturating_sub(left))];
     for k in draw {
         let i = order[first + k];

@@ -38,7 +38,7 @@ impl App {
     /// frame showed it covered.
     pub fn note_top(&mut self) {
         let top = self.overlays.top().map(|o| o.kind());
-        if std::mem::replace(&mut self.last_top, top) != top {
+        if std::mem::replace(&mut self.pointer.last_top, top) != top {
             self.overlays.rearm_top();
         }
     }
@@ -54,7 +54,7 @@ impl App {
         let (x, l) = (m.column, self.layout);
         let at = Position::new(m.column, m.row);
         // A move has no button held: a press it armed lost its release.
-        self.detail_press.disarm();
+        self.pointer.detail_press.disarm();
         let on = if l.too_small {
             None
         } else if l.tree.contains(at) {
@@ -62,9 +62,9 @@ impl App {
         } else if !self.tabs.is_empty() && l.detail_list.contains(at) {
             self.detail_entry_at(m.column, m.row).filter(|c| *c != self.tab().grid.col).map(PointerOn::Detail)
         } else if l.tab_bar.contains(at) {
-            self.tab_hits.iter().find(|(a, b, _)| x >= *a && x < *b).map(|h| PointerOn::Tab(h.2))
+            self.pointer.tab_hits.iter().find(|(a, b, _)| x >= *a && x < *b).map(|h| PointerOn::Tab(h.2))
         } else if l.strip.contains(at) {
-            self.strip_hits.iter().find(|(a, b, ..)| x >= *a && x < *b).map(|h| PointerOn::Strip(h.2, h.3))
+            self.pointer.strip_hits.iter().find(|(a, b, ..)| x >= *a && x < *b).map(|h| PointerOn::Strip(h.2, h.3))
         } else if !self.tabs.is_empty() && l.page_prev.contains(at) {
             Some(PointerOn::PagePrev)
         } else if !self.tabs.is_empty() && l.page_next.contains(at) {
@@ -80,7 +80,7 @@ impl App {
         } else {
             None
         };
-        self.pointer_tab = (!self.tabs.is_empty()).then(|| self.tab().id);
+        self.pointer.pointer_tab = (!self.tabs.is_empty()).then(|| self.tab().id);
         std::mem::replace(&mut self.pointer_on, on) != on
     }
 
@@ -88,7 +88,9 @@ impl App {
     /// changed under the pointer): no longer under it.
     pub(crate) fn drop_hover_of_other_tab(&mut self) {
         let here = (!self.tabs.is_empty()).then(|| self.tab().id);
-        if matches!(self.pointer_on, Some(PointerOn::Cell(..) | PointerOn::Detail(_))) && self.pointer_tab != here {
+        if matches!(self.pointer_on, Some(PointerOn::Cell(..) | PointerOn::Detail(_)))
+            && self.pointer.pointer_tab != here
+        {
             self.pointer_on = None;
         }
     }

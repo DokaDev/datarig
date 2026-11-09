@@ -207,7 +207,7 @@ impl App {
             return;
         }
         let tab = self.tab().id;
-        self.tab_drag = Some(TabDrag {
+        self.pointer.tab_drag = Some(TabDrag {
             tab,
             press_x: x,
             lifted: false,
@@ -224,7 +224,7 @@ impl App {
     /// The tab being dragged, while it is lifted (and no dialog is on top, and the tabs are
     /// the ones it was lifted among).
     pub(crate) fn tab_drag_live(&self) -> Option<&TabDrag> {
-        let d = self.tab_drag.as_ref().filter(|d| d.lifted && !self.modal_open())?;
+        let d = self.pointer.tab_drag.as_ref().filter(|d| d.lifted && !self.modal_open())?;
         self.tabs.iter().map(|t| t.id).eq(d.order.iter().copied()).then_some(d)
     }
 
@@ -239,16 +239,16 @@ impl App {
     /// The left button moved to (x, y) while held: the pressed tab follows once it is lifted.
     /// `false`: no tab was pressed (the move is another drag's).
     pub(super) fn tab_drag_to(&mut self, x: u16, y: u16) -> bool {
-        if self.tab_drag.as_ref().is_some_and(|d| d.keys) {
+        if self.pointer.tab_drag.as_ref().is_some_and(|d| d.keys) {
             return false;
         }
-        let Some(mut d) = self.tab_drag.take() else { return false };
+        let Some(mut d) = self.pointer.tab_drag.take() else { return false };
         if self.tabs.position(d.tab).is_none() || (d.lifted && self.tab_drag_live_of(&d).is_none()) {
             self.end_lifted(&d);
             return true;
         }
         if !d.lifted && x.abs_diff(d.press_x) < LIFT_COLUMNS {
-            self.tab_drag = Some(d);
+            self.pointer.tab_drag = Some(d);
             return true;
         }
         if !d.lifted {
@@ -260,12 +260,12 @@ impl App {
             d.lifted = true;
             // Held where the press was, on the tab as it was drawn (sliding, or scrolled by the
             // press: within the tab).
-            let at = self.tab_geom.drawn.get(from).copied().flatten();
-            let width = i32::from(self.tab_geom.widths.get(from).copied().unwrap_or(1).max(1));
+            let at = self.pointer.tab_geom.drawn.get(from).copied().flatten();
+            let width = i32::from(self.pointer.tab_geom.widths.get(from).copied().unwrap_or(1).max(1));
             d.grab = at.map_or(0, |a| (i32::from(d.press_x) - a).clamp(0, width - 1) as u16);
         }
         self.tab_drag_follow(&mut d, x, y, true);
-        self.tab_drag = Some(d);
+        self.pointer.tab_drag = Some(d);
         true
     }
 
@@ -283,7 +283,7 @@ impl App {
         let from = d.from();
         let slot = if far { from } else { self.tab_drag_slot(d, x, scroll).unwrap_or(d.slot) };
         if slot != d.slot || far != d.far {
-            self.tab_slide.armed = true;
+            self.pointer.tab_slide.armed = true;
         }
         d.slot = slot;
         d.far = far;
@@ -293,7 +293,7 @@ impl App {
     /// Where the lifted tab `d` goes with the pointer at column `x`, by what the tab bar drew
     /// last (`None`: it drew another set of tabs).
     fn tab_drag_slot(&self, d: &TabDrag, x: u16, scroll: bool) -> Option<usize> {
-        let g = &self.tab_geom;
+        let g = &self.pointer.tab_geom;
         let n = d.order.len();
         let from = d.from();
         if g.widths.len() != n || g.order != shown_order(n, from, d.slot) || n == 0 {
@@ -320,10 +320,10 @@ impl App {
     /// The left button was released at (x, y): a lifted tab lands where it is shown (nowhere:
     /// it stays). `false`: no tab was pressed.
     pub(super) fn tab_drag_release(&mut self, x: u16, y: u16) -> bool {
-        if self.tab_drag.as_ref().is_some_and(|d| d.keys) {
+        if self.pointer.tab_drag.as_ref().is_some_and(|d| d.keys) {
             return false;
         }
-        let Some(mut d) = self.tab_drag.take() else { return false };
+        let Some(mut d) = self.pointer.tab_drag.take() else { return false };
         if !d.lifted {
             return true;
         }
@@ -355,7 +355,7 @@ impl App {
     /// The drag ends where it is (a dialog, another button, a lost release): every tab goes back
     /// to its place. `true`: a tab was lifted.
     pub(super) fn end_tab_drag(&mut self) -> bool {
-        let Some(d) = self.tab_drag.take() else { return false };
+        let Some(d) = self.pointer.tab_drag.take() else { return false };
         self.end_lifted(&d);
         d.lifted
     }
@@ -365,8 +365,8 @@ impl App {
     fn end_lifted(&mut self, d: &TabDrag) {
         // On a screen too small for the bar nothing is drawn that could slide.
         if d.lifted && !self.layout.too_small {
-            self.tab_slide.armed = true;
-            self.tab_slide.top = Some(d.tab);
+            self.pointer.tab_slide.armed = true;
+            self.pointer.tab_slide.top = Some(d.tab);
         }
     }
 
@@ -380,7 +380,7 @@ impl App {
         let (tab, slot) = (self.tab().id, self.tabs.active_index());
         let order = self.tabs.iter().map(|t| t.id).collect();
         let d = TabDrag { tab, press_x: 0, lifted: true, order, grab: 0, x: 0, y: 0, slot, far: false, keys: true };
-        self.tab_drag = Some(d);
+        self.pointer.tab_drag = Some(d);
     }
 
     /// Whether a tab is being moved by keys (shown: the status bar says how).
@@ -392,7 +392,7 @@ impl App {
     /// an end), `Enter` keeps the order, `Esc` puts it back. Any other key ends the move as
     /// `Esc` does and is not taken (`false`), so it does what it always does.
     pub(super) fn tab_grab_key(&mut self, k: &KeyEvent) -> bool {
-        if !self.tab_drag.as_ref().is_some_and(|d| d.keys) {
+        if !self.pointer.tab_drag.as_ref().is_some_and(|d| d.keys) {
             return false;
         }
         // The tabs changed under it (an answer from a session opened or closed one): it is
@@ -403,23 +403,23 @@ impl App {
         }
         let n = self.tabs.len();
         let arm = !self.layout.too_small;
-        let Some(d) = self.tab_drag.as_mut().filter(|d| d.keys) else { return false };
+        let Some(d) = self.pointer.tab_drag.as_mut().filter(|d| d.keys) else { return false };
         let plain = k.modifiers.difference(KeyModifiers::SHIFT).is_empty();
         match k.code {
             KeyCode::Char('h') | KeyCode::Left if plain => {
                 if d.slot > 0 {
                     d.slot -= 1;
-                    self.tab_slide.armed = arm;
+                    self.pointer.tab_slide.armed = arm;
                 }
             }
             KeyCode::Char('l') | KeyCode::Right if plain => {
                 if d.slot + 1 < n {
                     d.slot += 1;
-                    self.tab_slide.armed = arm;
+                    self.pointer.tab_slide.armed = arm;
                 }
             }
             KeyCode::Enter if plain => {
-                let d = self.tab_drag.take().expect("a tab moved by keys");
+                let d = self.pointer.tab_drag.take().expect("a tab moved by keys");
                 self.end_lifted(&d);
                 if self.tab_drag_live_of(&d).is_some() {
                     self.move_tab_to(d.from(), d.slot);
@@ -452,8 +452,8 @@ impl App {
         if self.tabs.move_tab(from, to) {
             // The tabs slide to their new places, the moved one over the others.
             if !self.layout.too_small {
-                self.tab_slide.armed = true;
-                self.tab_slide.top = self.tab_slide.top.or(tab);
+                self.pointer.tab_slide.armed = true;
+                self.pointer.tab_slide.top = self.pointer.tab_slide.top.or(tab);
             }
             self.save_workspace();
         }
