@@ -1,0 +1,34 @@
+---
+source: crates/tui/tests/it/flows_filter_feedback.rs
+expression: backend
+---
+"╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users * ×                                                          "
+"│  ＋ New connection         │╭ Results · 3 rows ──────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1             ││ local-pg / datarig.shop.users  127.0.0.1:55432                                         │"
+"│  ▾ ●   local-pg            ││ [Result 1]  Chart  Messages  · earlier run                                         H/L │"
+"│    ▾ datarig default       ││✗WHERE name = '日本' AND idd = 1                                           ORDER BY   ⟳ │" Hidden by multi-width symbols: [(47, " "), (49, " ")]
+"│      ▸ analytics           ││   │ id   │ name                                                                        │"
+"│      ▸ public              ││   │ int8 │ text                                                                        │"
+"│      ▾ shop                ││ 1 │    0 │ n0                                                                          │"
+"│        ▾ Tables            ││ 2 │    1 │ n1                                                                          │"
+"│          ▸ orders          ││ 3 │    2 │ n2                                                                          │"
+"│          ▸ users           ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││                                                                                        │"
+"│                            ││ filter failed: showing previous rows                                                   │"
+"╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯"
+" local-pg │ Error: ERROR: column "idd" does not exist            │ Enter view cell · n next page · y copy · v select EN "

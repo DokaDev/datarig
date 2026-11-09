@@ -623,6 +623,8 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Ddl, "r", "ddl.reload"),
     (Ddl, "o", "ddl.open_console"),
     (VimInsert, "f4", "editor.complete"),
+    // the filter line of a table tab
+    (FilterLine, "ctrl+space", "editor.complete"),
 ];
 
 /// Every vim command key, including those the editor does not implement yet.

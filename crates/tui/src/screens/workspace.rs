@@ -165,8 +165,21 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
 
     draw_status(app, rows[1], f.buffer_mut());
 
-    if editor_area.is_some() && app.tab().popup.is_some() && app.focus == Focus::Editor && !app.modal_open() {
+    let owner = app.tab().popup.as_ref().map(|p| p.owner);
+    if editor_area.is_some()
+        && owner == Some(crate::app::PopupOwner::Editor)
+        && app.focus == Focus::Editor
+        && !app.modal_open()
+    {
         draw_popup(app, cursor, area, f.buffer_mut());
+    }
+    // A field of the filter line: under it, or above it near the bottom.
+    if let (Some(crate::app::PopupOwner::Filter(field)), Some(at)) = (owner, app.layout.filter_cursor)
+        && app.filter_line_focused()
+        && app.filter_line_field() == Some(field)
+        && !app.modal_open()
+    {
+        draw_popup(app, at, area, f.buffer_mut());
     }
     // Real terminal cursor at the focused text input so IME preedit appears in place.
     if app.focus == Focus::Tree {
@@ -1337,6 +1350,14 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         _ => None,
     };
+    // A table tab whose query the server refused holds the rows of an earlier one: dimmed, and
+    // said in place of a note about the paging (never shown as the refused query's answer).
+    let failed = matches!(app.tab().results, Results::Rows(_))
+        && app.tab().doc.table_query.as_ref().is_some_and(|q| q.failure().is_some());
+    let paging_note = match failed {
+        true => Some((app.i18n.label(Label::TableFilterFailedRows), app.i18n.label(Label::TableFilterFailedShort))),
+        false => paging_note,
+    };
     // The grid's search: its prompt or the search that is on, on the line under the grid; a
     // note about the paging goes on that line too, first among what is not searched.
     let mut strip = app.grid_search_strip().filter(|_| area.height > 3);
@@ -1414,6 +1435,11 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             msg_line(buf, &app.i18n.msg(&msg), th.error)
         }
         Results::Cancelled => msg_line(buf, &app.i18n.label(Label::QueryCancelled), th.warning),
+    }
+    if failed {
+        let below = strip.is_some() || (area.height > 3 && paging_note.is_some());
+        let grid = Rect { height: area.height - u16::from(below), ..area };
+        buf.set_style(grid, Style::new().fg(th.fg_dim).add_modifier(Modifier::DIM));
     }
     if let Some(strip) = &strip {
         draw_search_strip(app, strip, Rect { y: area.y + area.height - 1, height: 1, ..area }, buf);

@@ -87,6 +87,9 @@ impl App {
                 if self.focus == Focus::Editor && self.tab().editor.mode == Mode::Insert {
                     self.tab_mut().completion_due = None;
                     self.update_completion(true);
+                } else if self.filter_line_focused() {
+                    self.tab_mut().completion_due = None;
+                    self.filter_complete(true, None);
                 }
             }
             Action::ExternalEdit => self.request_external_edit(),

@@ -183,6 +183,8 @@ impl App {
             self.tab_mut().completion_due = None;
             if self.focus == Focus::Editor && self.tab().editor.mode == Mode::Insert && !self.modal_open() {
                 self.update_completion(false);
+            } else if self.filter_line_focused() && !self.modal_open() {
+                self.filter_complete(false, None);
             }
         }
     }

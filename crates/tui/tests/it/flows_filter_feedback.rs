@@ -1,0 +1,436 @@
+//! What the filter line of a table tab says back: completion in its fields (the condition
+//! through the editor's engine on the statement it goes into, the order from the table's
+//! columns; `:where` and `:orderby` the same), our refusals underlined where they are, a
+//! server's error marked where it points in the condition (PostgreSQL's character position,
+//! MySQL's quoted text when it is found once), and a failed query kept in the line with the
+//! earlier rows dimmed under it. Paging again past a closed portal says when the order is not
+//! unique.
+
+use crate::common;
+
+use common::*;
+use datarig_core::driver::{DbCommand, DbError, DbEvent, ServerMessage};
+use datarig_core::sql::complete::Kind;
+use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+use datarig_i18n::Lang;
+use datarig_tui::app::table_query::Field;
+use datarig_tui::app::{PopupOwner, Results};
+use datarig_tui::keymap::Ctx;
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+use ratatui::style::Modifier;
+use std::time::Duration;
+
+const ALL: &str = r#"SELECT * FROM "shop"."users""#;
+
+/// Open `table` of `shop` from the explorer (a table tab, which runs its query).
+fn open(h: &mut Harness, table: &str) {
+    h.key(KeyCode::BackTab);
+    h.goto("shop");
+    h.key(KeyCode::Char('l'));
+    let tables = vec!["orders".to_string(), "users".to_string()];
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok((tables, Vec::new()).into()) });
+    h.goto(table);
+    h.key(KeyCode::Enter);
+    assert!(h.app.tab().is_table());
+}
+
+/// The statements of the runs sent since the last look.
+fn runs(h: &mut Harness) -> Vec<Vec<String>> {
+    h.sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::Execute { statements, .. } => Some(statements),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Answer the active tab's current run with a first page of `n0`, `n1`, `n2` (or `more`).
+fn answer_with(h: &mut Harness, more: bool) {
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    let columns = Some(vec![meta("id", "int8", true, false), meta("name", "text", false, false)]);
+    let rows = (0..3).map(|i| vec![Some(i.to_string()), Some(format!("n{i}"))]).collect();
+    h.tab_db(index, DbEvent::Page { id, columns, rows, more, elapsed: Duration::from_millis(2) });
+}
+
+fn answer(h: &mut Harness) {
+    answer_with(h, false);
+}
+
+/// The server refused the active tab's current run with `error`.
+fn fail(h: &mut Harness, error: DbError) {
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Failed { id, error, cancelled: false });
+}
+
+/// A server message at 1-based character `position` of the statement.
+fn at(text: &str, position: Option<u32>) -> DbError {
+    DbError::Server(ServerMessage { text: text.into(), position, hint: None })
+}
+
+/// `shop.users` open and answered, the grid focused, nothing sent since.
+fn users() -> Harness {
+    let mut h = Harness::connected(Lang::En);
+    open(&mut h, "users");
+    answer(&mut h);
+    h.sent();
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    // The inspector hidden: its room is the line's.
+    h.keys("i");
+    h
+}
+
+fn field_text(h: &Harness, f: Field) -> String {
+    h.app.tab().doc.table_query.as_ref().expect("a table query").line.field(f).text().to_string()
+}
+
+fn labels(h: &Harness) -> Vec<String> {
+    h.popup().map(|p| p.items.iter().map(|i| i.label.clone()).collect()).unwrap_or_default()
+}
+
+fn ctrl_space(h: &mut Harness) {
+    h.key_mod(KeyCode::Char(' '), KeyModifiers::CONTROL);
+}
+
+fn structure_asks(h: &mut Harness) -> usize {
+    h.sent().into_iter().filter(|c| matches!(c, DbCommand::LoadStructure { .. })).count()
+}
+
+/// The cells of the screen line holding `text` that are underlined, as `(column, symbol)`.
+fn underlined(h: &mut Harness, w: u16, hh: u16, text: &str) -> Vec<(u16, String)> {
+    let term = h.draw(w, hh);
+    let buf = term.backend().buffer();
+    let screen = h.screen(w, hh);
+    let y = screen.lines().position(|l| l.contains(text)).unwrap_or_else(|| panic!("{text:?} not on:\n{screen}"));
+    (0..w)
+        .filter(|&x| buf[(x, y as u16)].modifier.contains(Modifier::UNDERLINED))
+        .map(|x| (x, buf[(x, y as u16)].symbol().to_string()))
+        .collect()
+}
+
+/// The screen column where `text` starts on its line.
+fn column_of(h: &mut Harness, w: u16, hh: u16, text: &str) -> u16 {
+    let screen = h.screen(w, hh);
+    let line = screen.lines().find(|l| l.contains(text)).unwrap_or_else(|| panic!("{text:?} not on:\n{screen}"));
+    let i = line.find(text).unwrap();
+    ratatui::text::Line::raw(&line[..i]).width() as u16
+}
+
+fn pin(h: &mut Harness, name: &str) {
+    assert_screen!(format!("filter_feedback_{name}_en_80x24"), Lang::En, h.draw(80, 24));
+    assert_screen!(format!("filter_feedback_{name}_en_120x30"), Lang::En, h.draw(120, 30));
+}
+
+#[test]
+fn the_condition_completes_the_tables_columns() {
+    let mut h = users();
+    h.keys("f");
+    // Asked for with nothing typed: the table's columns.
+    ctrl_space(&mut h);
+    let p = h.popup().expect("a popup");
+    assert_eq!(p.owner, PopupOwner::Filter(Field::Where));
+    assert_eq!(labels(&h)[..5], ["id", "email", "name", "nickname", "profile"]);
+    h.key(KeyCode::Esc);
+    assert!(h.popup().is_none());
+    assert_eq!(h.app.key_context(), Ctx::FilterLine, "Esc closes the popup, the field keeps the keys");
+    // Typed: after the completion delay, as in the editor.
+    h.type_text("id > 1 AND na");
+    assert!(h.popup().is_none(), "not at once");
+    h.settle();
+    assert_eq!(labels(&h)[0], "name");
+    assert_eq!(h.popup().unwrap().items[0].kind, Kind::Column);
+    // Enter takes the label (it does not apply), the cursor after it.
+    h.key(KeyCode::Enter);
+    assert_eq!(field_text(&h, Field::Where), "id > 1 AND name");
+    assert!(runs(&mut h).is_empty());
+    assert_eq!(h.app.key_context(), Ctx::FilterLine);
+    // Keywords of the engine too.
+    h.type_text(" IS NO");
+    ctrl_space(&mut h);
+    assert!(labels(&h).iter().any(|l| l == "NOT"), "{:?}", labels(&h));
+    h.key(KeyCode::Tab);
+    assert_eq!(field_text(&h, Field::Where), "id > 1 AND name IS NOT");
+    // Moving the cursor closes it; applying runs the text.
+    ctrl_space(&mut h);
+    h.key(KeyCode::Left);
+    assert!(h.popup().is_none());
+    h.key(KeyCode::End);
+    h.type_text(" NULL");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 1 AND name IS NOT NULL)")]]);
+}
+
+#[test]
+fn the_order_completes_columns_then_directions() {
+    let mut h = users();
+    h.keys(" ro");
+    h.type_text("na");
+    ctrl_space(&mut h);
+    assert_eq!(labels(&h), ["name"]);
+    assert_eq!(h.popup().unwrap().owner, PopupOwner::Filter(Field::Order));
+    h.key(KeyCode::Tab);
+    h.type_text(" ");
+    ctrl_space(&mut h);
+    assert_eq!(labels(&h), ["ASC", "DESC", "NULLS FIRST", "NULLS LAST"]);
+    h.type_text("d");
+    assert_eq!(labels(&h), ["DESC"], "an open popup follows the typing");
+    h.key(KeyCode::Tab);
+    h.type_text(", ");
+    ctrl_space(&mut h);
+    assert_eq!(labels(&h)[0], "id", "after a comma: the columns again");
+    h.key(KeyCode::Esc);
+    assert_eq!(field_text(&h, Field::Order), "name DESC, ");
+    // `Tab` without a popup moves to the condition: the popup belongs to its field only.
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.tab().doc.table_query.as_ref().and_then(|q| q.line.focus), Some(Field::Where));
+}
+
+#[test]
+fn a_late_values_answer_for_a_literal_the_cursor_left_is_dropped() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Catalog(Ok(values_catalog())));
+    open(&mut h, "orders");
+    answer(&mut h);
+    h.sent();
+    h.key(KeyCode::Tab);
+    let structure = |values: &str| {
+        let mut st = orders_structure();
+        st.checks[0].expression = format!("status = ANY (ARRAY[{values}])");
+        DbEvent::Structure { schema: "shop".into(), table: "orders".into(), result: Ok(Box::new(st)) }
+    };
+    // In a literal compared with an enumerated column: its values, and its checks asked for.
+    h.keys("f");
+    h.type_text("status = 're");
+    ctrl_space(&mut h);
+    assert!(h.popup().is_none(), "no value of the type starts with it");
+    assert_eq!(structure_asks(&mut h), 1);
+    // The cursor leaves the literal before the answer: it shows nothing.
+    h.key(KeyCode::Home);
+    h.db(structure("'refunded'::text"));
+    assert!(h.popup().is_none(), "a late answer for a literal the cursor left");
+    // Still in it when the answer comes: the check's value shows.
+    h.key(KeyCode::End);
+    h.type_text("x");
+    h.key(KeyCode::Backspace);
+    h.key(KeyCode::Backspace);
+    // A catalog read again forgets the checks: asked again.
+    h.db(DbEvent::Catalog(Ok(values_catalog())));
+    ctrl_space(&mut h);
+    assert_eq!(structure_asks(&mut h), 1);
+    h.db(structure("'refunded'::text, 'returned'::text"));
+    assert_eq!(labels(&h), ["refunded", "returned"]);
+    h.key(KeyCode::Tab);
+    assert_eq!(field_text(&h, Field::Where), "status = 'refunded'");
+}
+
+#[test]
+fn where_and_orderby_complete_their_argument() {
+    let mut h = users();
+    h.ctrl('k');
+    h.type_text("where id > 1 and na");
+    let c = h.cmdline().expect("the command line");
+    assert_eq!(c.sql.as_ref().map(|s| s.items[0].label.clone()).as_deref(), Some("name"));
+    // Picked with Tab, taken with Enter: written into the argument, the line stays.
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.cmdline().map(|c| c.input.text().to_string()).as_deref(), Some("where id > 1 and name"));
+    h.type_text(" <> 'x'");
+    // Typed, not picked: Enter runs the text as it is.
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 1 and name <> 'x')")]]);
+    answer(&mut h);
+    h.ctrl('k');
+    h.type_text("orderby name d");
+    let c = h.cmdline().expect("the command line");
+    assert_eq!(
+        c.sql.as_ref().map(|s| s.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>()),
+        Some(vec!["DESC".to_string()])
+    );
+    h.key(KeyCode::Esc);
+}
+
+#[test]
+fn a_refused_part_is_underlined_in_the_field() {
+    let mut h = users();
+    h.keys("f");
+    h.type_text("id = 1; DROP TABLE x");
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty());
+    let r = h.app.tab().doc.table_query.as_ref().and_then(|q| q.refusal.clone()).expect("a refusal");
+    assert_eq!((r.field, r.at.clone()), (Field::Where, Some(6..7)));
+    assert_eq!(h.app.key_context(), Ctx::FilterLine, "the field keeps the keys");
+    assert!(h.status(120, 30).contains("a ; would end the statement"), "{}", h.status(120, 30));
+    let x = column_of(&mut h, 120, 30, "; DROP");
+    assert_eq!(underlined(&mut h, 120, 30, "; DROP"), [(x, ";".to_string())]);
+    pin(&mut h, "refused");
+    // A comment: the comment, after a wide character (bytes are not columns).
+    h.ctrl('l');
+    h.type_text("name = '日本' -- x");
+    h.key(KeyCode::Enter);
+    let r = h.app.tab().doc.table_query.as_ref().and_then(|q| q.refusal.clone()).expect("a refusal");
+    assert_eq!(r.at, Some(16..20), "the bytes of `-- x`");
+    let x = column_of(&mut h, 120, 30, "-- x");
+    let marks: Vec<u16> = underlined(&mut h, 120, 30, "-- x").into_iter().map(|(c, _)| c).collect();
+    assert_eq!(marks, (x..x + 4).collect::<Vec<_>>());
+    // Edited since: the mark is about another text, so it goes.
+    h.key(KeyCode::Backspace);
+    assert!(underlined(&mut h, 120, 30, "-- ").is_empty());
+}
+
+#[test]
+fn a_postgres_error_position_marks_the_condition_by_characters() {
+    let mut h = users();
+    h.keys("f");
+    let filter = "name = '日本' AND idd = 1";
+    h.type_text(filter);
+    h.key(KeyCode::Enter);
+    let sql = format!("{ALL} WHERE ({filter})");
+    assert_eq!(runs(&mut h), vec![vec![sql.clone()]]);
+    // PostgreSQL counts characters (1-based) of the statement as sent.
+    let position = sql[..sql.find("idd").unwrap()].chars().count() as u32 + 1;
+    fail(&mut h, at("ERROR: column \"idd\" does not exist", Some(position)));
+    let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+    let start = filter.find("idd").unwrap();
+    assert_eq!(tq.failure().and_then(|f| f.at.clone()), Some(start..start + 3));
+    // The caret under `idd`, in screen columns (the wide characters before it count twice).
+    let x = column_of(&mut h, 120, 30, "idd = 1");
+    assert_eq!(underlined(&mut h, 120, 30, "idd = 1"), [(x, "i".into()), (x + 1, "d".into()), (x + 2, "d".into())]);
+    assert!(h.status(120, 30).contains("column \"idd\" does not exist"), "{}", h.status(120, 30));
+    pin(&mut h, "pg_caret");
+    // A position outside the condition (the table's name): the message only.
+    h.keys("f");
+    h.key(KeyCode::Enter);
+    runs(&mut h);
+    fail(&mut h, at("ERROR: permission denied for table users", Some(15)));
+    let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+    assert_eq!(tq.failure().map(|f| f.at.clone()), Some(None));
+    assert!(underlined(&mut h, 120, 30, "idd = 1").is_empty());
+}
+
+#[test]
+fn a_mysql_snippet_marks_the_condition_only_when_found_once() {
+    // A MySQL profile, `shop.users` open on it.
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut p = datarig_core::profile::ConnectionConfig::test_db();
+    (p.name, p.driver) = ("local-my".into(), "mysql".into());
+    let cfg = datarig_core::config::Config { connections: vec![p], ..Default::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+    h.db(DbEvent::Catalog(Ok(catalog())));
+    open(&mut h, "users");
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MySql(MySqlMode::default()))));
+    answer(&mut h);
+    h.sent();
+    h.key(KeyCode::Tab);
+    let my = "SELECT * FROM `shop`.`users`";
+    let near = |s: &str| {
+        DbError::Server(
+            format!("ERROR 1064 (42000): You have an error in your SQL syntax; check the manual that corresponds to your MySQL server version for the right syntax to use near '{s}' at line 1").into(),
+        )
+    };
+    h.keys("f");
+    h.type_text("id = 1 AND name = 'x'");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{my} WHERE (id = 1 AND name = 'x')")]], "{}", h.status(120, 30));
+    // Once in the statement, from inside the condition: marked up to the condition's end.
+    fail(&mut h, near("name = 'x')"));
+    let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+    assert_eq!(tq.failure().and_then(|f| f.at.clone()), Some(11..21));
+    // Twice: not located, the message only.
+    h.keys("f");
+    h.ctrl('l');
+    h.type_text("id = 1 OR id = 1");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h).len(), 1);
+    fail(&mut h, near("id = 1"));
+    let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+    assert_eq!(tq.failure().map(|f| f.at.clone()), Some(None));
+    // After the condition (the statement's closing parenthesis): the message only.
+    h.keys("f");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h).len(), 1);
+    fail(&mut h, near(")"));
+    let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+    assert_eq!(tq.failure().map(|f| f.at.clone()), Some(None));
+    assert!(h.status(120, 30).contains("ERROR 1064"), "{}", h.status(120, 30));
+}
+
+#[test]
+fn a_failed_filter_keeps_the_earlier_rows_dimmed() {
+    let mut h = users();
+    h.keys("f");
+    h.type_text("idd > 1");
+    h.key(KeyCode::Enter);
+    runs(&mut h);
+    fail(&mut h, at("ERROR: column \"idd\" does not exist", Some(43)));
+    let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+    assert!(tq.failure().is_some());
+    assert_eq!(tq.shown.as_ref().and_then(|q| q.filter.as_ref()), None, "the rows held are still the unfiltered ones");
+    assert!(matches!(h.app.tab().results, Results::Rows(_)), "the rows stay");
+    assert_eq!(field_text(&h, Field::Where), "idd > 1", "the failed condition stays in the line");
+    let screen = h.screen(120, 30);
+    assert!(screen.contains("filter failed: showing previous rows"), "{screen}");
+    assert!(screen.contains("\u{2717}WHERE idd > 1"), "{screen}");
+    // The rows are dimmed.
+    let term = h.draw(120, 30);
+    let y = screen.lines().position(|l| l.contains("n1")).unwrap() as u16;
+    let x = column_of(&mut h, 120, 30, "n1");
+    assert!(term.backend().buffer()[(x, y)].modifier.contains(Modifier::DIM));
+    pin(&mut h, "failed");
+    // Fixed: the new rows, nothing dimmed or said.
+    h.keys("f");
+    h.ctrl('l');
+    h.type_text("id > 1");
+    h.key(KeyCode::Enter);
+    answer(&mut h);
+    let screen = h.screen(120, 30);
+    assert!(!screen.contains("filter failed"), "{screen}");
+    assert!(h.app.tab().doc.table_query.as_ref().unwrap().failure().is_none());
+}
+
+#[test]
+fn completion_in_the_condition_screen() {
+    let mut h = users();
+    h.keys("f");
+    h.type_text("id > 1 AND n");
+    ctrl_space(&mut h);
+    assert_eq!(labels(&h)[..2], ["name", "nickname"]);
+    pin(&mut h, "completion");
+}
+
+#[test]
+fn paging_again_says_when_the_order_is_not_unique() {
+    let page_again = |h: &mut Harness| {
+        let id = h.app.tab().exec.query_id;
+        let index = h.app.tabs.active_index();
+        h.tab_db(index, DbEvent::Released { id });
+        let columns = Some(vec![meta("id", "int8", true, false), meta("name", "text", false, false)]);
+        let rows = (0..h.app.page_size).map(|i| vec![Some(i.to_string()), Some(format!("n{i}"))]).collect();
+        h.tab_db(index, DbEvent::Page { id, columns, rows, more: true, elapsed: Duration::from_millis(2) });
+        h.app.focus = datarig_tui::app::Focus::Results;
+        h.sent();
+        h.keys("n");
+        assert!(h.sent().iter().any(|c| matches!(c, DbCommand::Resume { .. })));
+        h.app.tab().status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default()
+    };
+    // The structure not read yet: unknown, so not unique.
+    let mut h = users();
+    h.command("orderby name");
+    let said = page_again(&mut h);
+    assert!(said.contains("order not unique"), "{said}");
+    // The primary key read: appended, the order is total.
+    let mut h = users();
+    h.meta_db(
+        "local-pg",
+        DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(Box::new(users_structure())) },
+    );
+    h.command("orderby name");
+    let said = page_again(&mut h);
+    assert!(!said.contains("not unique") && said.starts_with("Ran the SELECT again"), "{said}");
+}

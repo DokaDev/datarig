@@ -2,7 +2,7 @@
 //! cell's value of several lines.
 
 use crate::app::edit::RowAt;
-use crate::app::{App, Results};
+use crate::app::{App, PopupOwner, Results};
 use crate::text::{Align, clip, fit, sanitize_cell, width, wrap};
 use crate::theme;
 use datarig_core::sql::complete::Kind;
@@ -28,7 +28,7 @@ pub(crate) fn clear_overlay(rect: Rect, buf: &mut Buffer) {
 }
 
 /// The completion popup's word for what a candidate is.
-fn kind_label(kind: Kind) -> Label {
+pub(crate) fn kind_label(kind: Kind) -> Label {
     match kind {
         Kind::Column => Label::CompleteKindColumn,
         Kind::Schema => Label::CompleteKindSchema,
@@ -53,12 +53,21 @@ pub(crate) fn draw_popup(app: &App, cursor: (u16, u16), screen: Rect, buf: &mut 
     inner_w = inner_w.min(screen.width as usize - 2);
     let w = inner_w as u16 + 2;
     let h = p.items.len() as u16 + 2;
-    let prefix_w =
-        width(&app.tab().editor.text()[p.replace_start.min(app.tab().editor.offset())..app.tab().editor.offset()])
-            as u16;
+    // The text typed before the cursor that the label replaces: the popup starts under it.
+    let prefix_w = match p.owner {
+        PopupOwner::Editor => {
+            let (text, at) = (app.tab().editor.text(), app.tab().editor.offset());
+            width(text.get(p.replace_start.min(at)..at).unwrap_or(""))
+        }
+        PopupOwner::Filter(f) => app.tab().doc.table_query.as_ref().map_or(0, |q| {
+            let input = q.line.field(f);
+            let at = input.cursor_byte();
+            width(input.text().get(p.replace_start.min(at)..at).unwrap_or(""))
+        }),
+    } as u16;
     // Inside the editor's box when it fits there, else inside the screen.
     let editor = app.layout.editor;
-    let right = match editor.width > w + 1 {
+    let right = match p.owner == PopupOwner::Editor && editor.width > w + 1 {
         true => editor.x + editor.width - 1 - w,
         false => screen.width.saturating_sub(w),
     };

@@ -231,11 +231,19 @@ impl App {
         let columns = rs.columns.iter().map(|c| (c.meta.name.clone(), c.meta.type_name.clone())).collect();
         let size = self.page_size as u64;
         let (from, to) = (datarig_i18n::fmt_count(skip + 1), datarig_i18n::fmt_count(skip + size));
-        let note = match (t.exec.prepared.ordered(&sql), released) {
-            (true, false) => Notice::new(Msg::ResultsPageResumed { from, to }, Level::Info),
-            (false, false) => Notice::new(Msg::ResultsPageResumedUnordered { from, to }, Level::Warning),
-            (true, true) => Notice::new(Msg::ResultsPageRerun { from, to }, Level::Info),
-            (false, true) => Notice::new(Msg::ResultsPageRerunUnordered { from, to }, Level::Warning),
+        // A table tab's order is total only when its keys end in a key the structure says is
+        // unique (not known yet: not unique).
+        let unique = match self.table_query(id).and_then(|q| q.shown.as_ref()) {
+            Some(q) => self.table_target(id).is_some_and(|target| datarig_core::query::compile(q, &target).total),
+            None => true,
+        };
+        let note = match (t.exec.prepared.ordered(&sql), unique, released) {
+            (true, true, false) => Notice::new(Msg::ResultsPageResumed { from, to }, Level::Info),
+            (true, false, false) => Notice::new(Msg::ResultsPageResumedNotUnique { from, to }, Level::Warning),
+            (false, _, false) => Notice::new(Msg::ResultsPageResumedUnordered { from, to }, Level::Warning),
+            (true, true, true) => Notice::new(Msg::ResultsPageRerun { from, to }, Level::Info),
+            (true, false, true) => Notice::new(Msg::ResultsPageRerunNotUnique { from, to }, Level::Warning),
+            (false, _, true) => Notice::new(Msg::ResultsPageRerunUnordered { from, to }, Level::Warning),
         };
         self.query_seq += 1;
         let qid = self.query_seq;

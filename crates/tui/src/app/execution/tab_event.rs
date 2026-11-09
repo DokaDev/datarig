@@ -146,6 +146,23 @@ impl App {
         }
         // The run ends (its result, its outcome or its failure), or a transaction ends.
         let current = self.tabs.get(id).map_or(0, |t| t.exec.query_id);
+        // The statement of a table tab's query failed (not a page fetched after its first): the
+        // line marks the query failed, and where the server says the error is in its filter.
+        if let DbEvent::Failed { id: q, error, cancelled: false, .. } = &ev
+            && *q == current
+        {
+            let d = self.tab_dialect(id);
+            if let Some(t) = self.tabs.get_mut(id)
+                && !t.exec.running.is_some_and(|r| r.fetch)
+                && let Some(tq) = t.doc.table_query.as_mut()
+            {
+                let e = match error {
+                    DbError::Server(m) => crate::app::table_query::ServerError::Message(m),
+                    _ => crate::app::table_query::ServerError::Other,
+                };
+                tq.run_failed(*q, &e, d);
+            }
+        }
         let run_ended = matches!(&ev, DbEvent::Page { id: q, columns: Some(_), .. } | DbEvent::Done { id: q, .. }
             | DbEvent::Failed { id: q, .. } if *q == current);
         let tx_ended = matches!(ev, DbEvent::TxOpen(false));

@@ -71,6 +71,23 @@ impl TextInput {
         self.text.graphemes(true).take(g).map(str::len).sum()
     }
 
+    /// Where the cursor is, in bytes of the text.
+    pub fn cursor_byte(&self) -> usize {
+        self.byte_at(self.cursor)
+    }
+
+    /// Replace the bytes `range` of the text (on grapheme boundaries) with `s`, the cursor after
+    /// it: a completion accepted. A range past the text or inside a grapheme changes nothing.
+    pub fn replace(&mut self, range: Range<usize>, s: &str) {
+        let starts: Vec<usize> = self.text.grapheme_indices(true).map(|(i, _)| i).chain([self.text.len()]).collect();
+        if range.start > range.end || !starts.contains(&range.start) || !starts.contains(&range.end) {
+            return;
+        }
+        let s = s.replace(['\n', '\r'], " ");
+        self.text.replace_range(range.clone(), &s);
+        self.cursor = self.text[..range.start + s.len()].graphemes(true).count();
+    }
+
     pub fn insert_str(&mut self, s: &str) {
         let s = s.replace("\r\n", " ").replace(['\n', '\r'], " ");
         if s.is_empty() {

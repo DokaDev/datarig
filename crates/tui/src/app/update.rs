@@ -295,10 +295,15 @@ impl App {
         {
             return;
         }
-        // The completion popup takes its keys before the editor.
-        if self.tab().popup.is_some()
+        // The completion popup takes its keys before the text it completes.
+        let owner = match ctx {
+            Ctx::VimInsert => Some(PopupOwner::Editor),
+            Ctx::FilterLine => self.filter_line_field().map(PopupOwner::Filter),
+            _ => None,
+        };
+        if owner.is_some()
+            && self.tab().popup.as_ref().map(|p| p.owner) == owner
             && self.overlays.is_empty()
-            && ctx == Ctx::VimInsert
             && self.keymap.binds(Ctx::Completion, &chord)
         {
             self.key_state.clear();
@@ -514,14 +519,24 @@ impl App {
             KeyCode::Char('n') if ctrl => p.selected = (p.selected + 1) % n,
             KeyCode::Tab | KeyCode::Enter => {
                 let text = p.items[p.selected].text().to_string();
-                let start = p.replace_start;
-                let end = t.editor.offset() + p.trail;
-                if start <= end {
-                    t.editor.replace_range(start, end, &text);
-                }
+                let (start, trail, owner) = (p.replace_start, p.trail, p.owner);
                 t.popup = None;
                 t.values_wait = None;
-                self.edited();
+                match owner {
+                    PopupOwner::Editor => {
+                        let end = t.editor.offset() + trail;
+                        if start <= end {
+                            t.editor.replace_range(start, end, &text);
+                        }
+                        self.edited();
+                    }
+                    PopupOwner::Filter(f) => {
+                        if let Some(input) = t.doc.table_query.as_mut().map(|q| q.line.field_mut(f)) {
+                            let end = (input.cursor_byte() + trail).min(input.text().len());
+                            input.replace(start..end, &text);
+                        }
+                    }
+                }
             }
             KeyCode::Esc => {
                 t.popup = None;
@@ -540,7 +555,33 @@ impl App {
     /// `literal`: the structure came late, and the popup changes only if the cursor is still in
     /// the literal whose value starts there.
     pub(super) fn complete_here(&mut self, force: bool, literal: Option<usize>) {
-        // The tab's database's catalog, the checks' values known there, and its search path.
+        // The text around the cursor holds its whole `;`-delimited segment, which is all the
+        // completer reads.
+        let (base, text, state, off) = self.tab_mut().editor.completion_context();
+        let out = self.complete_text(&text, off, state, force);
+        let popup = out.completion.map(|c| Popup {
+            items: c.items,
+            selected: 0,
+            replace_start: base + c.replace_start,
+            trail: c.trail,
+            owner: PopupOwner::Editor,
+        });
+        self.completed(popup, literal);
+        if let Some(w) = out.wants_checks {
+            self.ask_checks(w.schema, w.table, base + w.literal, PopupOwner::Editor);
+        }
+    }
+
+    /// The completion engine over `text` (the cursor at byte `off`, the lexer in `state` at its
+    /// start) with what the active tab knows: its database's catalog, the checks' values known
+    /// there, and its search path.
+    pub(super) fn complete_text(
+        &mut self,
+        text: &str,
+        off: usize,
+        state: datarig_core::sql::lexer::LexState,
+        force: bool,
+    ) -> datarig_core::sql::complete::Outcome {
         let (path, other) = (self.tab_path(self.tab()), self.other_database(self.tab()).map(str::to_string));
         let profile = self.tab().profile;
         if let (Some(p), Some(db)) = (profile, other.as_deref()) {
@@ -553,17 +594,13 @@ impl App {
             TableChecks::Asked | TableChecks::Failed(_) => None,
         };
         let dialect = self.tab_dialect(self.tab().id);
+        complete_with(text, off, catalog, force, &path, dialect, state, &lookup)
+    }
+
+    /// The active tab's popup is `popup` now. `literal`: the checks' values came late, and the
+    /// popup shows only if it offers values for the literal whose value starts there.
+    pub(super) fn completed(&mut self, popup: Option<Popup>, literal: Option<usize>) {
         let t = self.tabs.active_mut();
-        // The text around the cursor holds its whole `;`-delimited segment, which is all the
-        // completer reads.
-        let (base, text, state, off) = t.editor.completion_context();
-        let out = complete_with(&text, off, catalog, force, &path, dialect, state, &lookup);
-        let popup = out.completion.map(|c| Popup {
-            items: c.items,
-            selected: 0,
-            replace_start: base + c.replace_start,
-            trail: c.trail,
-        });
         match literal {
             None => t.popup = popup,
             Some(at) => {
@@ -572,9 +609,6 @@ impl App {
                 }
             }
         }
-        if let (Some(p), Some(w)) = (profile, out.wants_checks) {
-            self.ask_checks(p, other, w.schema, w.table, base + w.literal);
-        }
     }
 
     /// Completion wants the checks of `schema.table` in `profile`'s `database` (`None`: its own)
@@ -582,14 +616,9 @@ impl App {
     /// is asked for, once until it comes (when the driver reads structures; after a failed read,
     /// not before [`CHECKS_RETRY`]), and the tab waits for it ([`ValuesWait`]). It is read again
     /// after the catalog was: a structure the explorer holds may be older.
-    fn ask_checks(
-        &mut self,
-        profile: ProfileId,
-        database: Option<String>,
-        schema: String,
-        table: String,
-        literal: usize,
-    ) {
+    pub(super) fn ask_checks(&mut self, schema: String, table: String, literal: usize, owner: PopupOwner) {
+        let Some(profile) = self.tab().profile else { return };
+        let database = self.other_database(self.tab()).map(str::to_string);
         if !self.structure_on(profile) {
             return;
         }
@@ -612,6 +641,7 @@ impl App {
             schema: schema.clone(),
             table: table.clone(),
             literal,
+            owner,
         });
         if asked {
             return;

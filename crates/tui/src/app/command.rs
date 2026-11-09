@@ -1085,6 +1085,9 @@ pub enum ArgCompletion {
     /// The theme file `:theme update` adds the missing tokens to (never a built-in theme): an
     /// index into the theme names given to [`complete_arg`].
     ThemeFile(usize),
+    /// A completion of the SQL of `:where` or `:orderby`: an index into the command line's
+    /// [`super::CommandLine::sql`] (not made by [`complete_arg`]).
+    Sql(usize),
 }
 
 /// The words of `:theme`, each with its label.
@@ -1228,7 +1231,8 @@ pub fn complete_arg(kind: ArgKind, arg: &str, names: &[&str]) -> Vec<ArgCompleti
             rank(arg, names.iter().copied().enumerate()).into_iter().map(ArgCompletion::Context).collect()
         }
         // A new name, or any object's: nothing to pick from (`analyze` is the only word; a
-        // tab's place is a number).
+        // tab's place is a number). A condition and an order are completed as SQL, by the app
+        // (they need the table's catalog).
         ArgKind::NewScript
         | ArgKind::Object
         | ArgKind::Analyze

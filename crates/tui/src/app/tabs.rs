@@ -462,6 +462,8 @@ pub struct ValuesWait {
     pub schema: String,
     pub table: String,
     pub literal: usize,
+    /// The text the literal is in (offsets are in it).
+    pub owner: crate::app::PopupOwner,
 }
 
 /// How the user's transaction ended, as far as the app can tell.

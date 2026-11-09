@@ -132,6 +132,7 @@ impl App {
                 list: Default::default(),
                 offset: 0,
                 press: Default::default(),
+                sql: None,
             }));
             self.refresh_commands();
         }
@@ -304,6 +305,10 @@ impl App {
             && let Some(kind) = spec.arg
         {
             let c = COMMANDS.iter().position(|s| s.command == spec.command).unwrap_or(0);
+            if matches!(kind, ArgKind::Where | ArgKind::OrderBy) {
+                let n = self.overlays.command_line().and_then(|l| l.sql.as_ref()).map_or(0, |s| s.items.len());
+                return (0..n).map(|i| CommandItem::Arg { command: c, arg: ArgCompletion::Sql(i) }).collect();
+            }
             let scripts = self.script_names();
             let contexts = if kind == ArgKind::Context { self.context_names() } else { Vec::new() };
             let themes =
@@ -372,13 +377,39 @@ impl App {
     /// Recompute the list after the input changed (the selection goes back to the top).
     pub(super) fn refresh_commands(&mut self) {
         let Some(c) = self.overlays.command_line() else { return };
-        let items = self.command_items(c.input.text());
+        let (input, cursor) = (c.input.text().to_string(), c.input.cursor_byte());
+        let sql = self.command_sql(&input, cursor);
+        if let Some(c) = self.overlays.command_line_mut() {
+            c.sql = sql;
+        }
+        let items = self.command_items(&input);
         if let Some(c) = self.overlays.command_line_mut() {
             c.items = items;
             c.selected = 0;
             c.error = None;
             c.picked = false;
         }
+    }
+
+    /// The completion of the argument of `:where` (a condition) or `:orderby` (keys) at byte
+    /// `cursor` of `input`, as the filter line's fields complete them, offsets in `input`. Only
+    /// on a table tab, with the cursor in the argument.
+    fn command_sql(&mut self, input: &str, cursor: usize) -> Option<datarig_core::sql::complete::Completion> {
+        let Parsed::Command { spec, arg, arg_started: true } = command::parse(input) else { return None };
+        let field = match spec.arg {
+            Some(ArgKind::Where) => table_query::Field::Where,
+            Some(ArgKind::OrderBy) => table_query::Field::Order,
+            _ => return None,
+        };
+        let id = self.table_command_tab(spec.name).ok()?;
+        // The argument is a part of the input: where it starts there.
+        let start = (arg.as_ptr() as usize).checked_sub(input.as_ptr() as usize).filter(|s| *s <= input.len())?;
+        let at = cursor.checked_sub(start).filter(|at| *at <= arg.len())?;
+        let mut c = self.filter_completion(id, field, arg, at, false).completion?;
+        c.replace_start += start;
+        // What the label replaces after the cursor stays inside the argument.
+        c.trail = c.trail.min(arg.len() - at);
+        Some(c)
     }
 
     /// Replace the input (a completion that needs more typing) and refresh the list.
@@ -389,13 +420,16 @@ impl App {
         self.refresh_commands();
     }
 
-    /// A `:use` argument is typed and no completion was picked yet: `Enter` runs the text as
-    /// it is and no entry is shown selected. The command, and the argument.
+    /// A `:use`, `:where` or `:orderby` argument is typed and no completion was picked yet:
+    /// `Enter` runs the text as it is and no entry is shown selected. The command, and the
+    /// argument.
     pub fn typed_context(&self) -> Option<(&'static CommandSpec, String)> {
         let c = self.overlays.command_line()?;
         match command::parse(c.input.text()) {
             Parsed::Command { spec, arg, arg_started: true }
-                if spec.arg == Some(ArgKind::Context) && !arg.trim().is_empty() && !c.picked =>
+                if matches!(spec.arg, Some(ArgKind::Context | ArgKind::Where | ArgKind::OrderBy))
+                    && !arg.trim().is_empty()
+                    && !c.picked =>
             {
                 Some((spec, arg.to_string()))
             }
@@ -510,6 +544,19 @@ impl App {
                 let arg =
                     format!("{} {}", super::copy::CopyFormat::MENU[f].name(), super::copy::CopyScope::ALL[sc].name());
                 self.run_command(&COMMANDS[command], &arg)
+            }
+            // Written into the argument; the line stays for the rest of it.
+            Some(CommandItem::Arg { arg: ArgCompletion::Sql(i), .. }) => {
+                if let Some(c) = self.overlays.command_line_mut()
+                    && let Some(sql) = c.sql.as_ref()
+                    && let Some(item) = sql.items.get(i)
+                {
+                    let end = (c.input.cursor_byte() + sql.trail).min(c.input.text().len());
+                    let (start, text) = (sql.replace_start, item.text().to_string());
+                    c.input.replace(start..end, &text);
+                }
+                self.refresh_commands();
+                Ok(())
             }
             None => match command::parse(&input) {
                 Parsed::Empty => {
@@ -1103,6 +1150,16 @@ impl App {
                         keys: String::new(),
                     }
                 }
+                CommandItem::Arg { arg: ArgCompletion::Sql(i), .. } => {
+                    let item = c.sql.as_ref().and_then(|s| s.items.get(i));
+                    CommandRow {
+                        name: Localized::verbatim(item.map(|c| c.label.clone()).unwrap_or_default()),
+                        label: item
+                            .map(|c| self.i18n.label(crate::widgets::popup::kind_label(c.kind)))
+                            .unwrap_or_else(|| Localized::verbatim("")),
+                        keys: String::new(),
+                    }
+                }
                 CommandItem::Arg { arg: ArgCompletion::SetValue(k, v), .. } => {
                     let (value, setting, label) = SETTINGS[k].values.fixed()[v];
                     CommandRow {
@@ -1165,4 +1222,7 @@ pub struct CommandLine {
     pub list: ratatui::layout::Rect,
     pub offset: usize,
     pub press: overlay::Press<usize>,
+    /// The completion of the SQL argument of `:where` or `:orderby` at the cursor, its offsets
+    /// in the input ([`command::ArgCompletion::Sql`] indexes its items).
+    pub sql: Option<datarig_core::sql::complete::Completion>,
 }

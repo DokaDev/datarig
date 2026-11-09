@@ -252,9 +252,19 @@ pub struct Running {
 pub struct Popup {
     pub items: Vec<Candidate>,
     pub selected: usize,
+    /// Byte offset in its owner's text where the accepted label starts.
     pub replace_start: usize,
     /// Bytes after the cursor the accepted label replaces too (a closing `"`).
     pub trail: usize,
+    /// The text the popup completes.
+    pub owner: PopupOwner,
+}
+
+/// The text a completion popup completes: the tab's editor, or a field of its filter line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PopupOwner {
+    Editor,
+    Filter(table_query::Field),
 }
 
 pub struct Viewer {

@@ -106,6 +106,11 @@ pub struct Applied {
     /// it may not be.
     pub tie: Option<String>,
     pub dialect: Dialect,
+    /// The server refused it: the rows shown are of an earlier query.
+    pub failed: bool,
+    /// What a field holds that is wrong (bytes of its text): our refusal's part, or where the
+    /// server said its error is. Underlined in the error color.
+    pub mark: Option<(Field, Range<usize>)>,
 }
 
 /// Where the parts of the line were drawn, for the mouse and the terminal cursor.
@@ -117,17 +122,18 @@ pub struct Drawn {
     pub cursor: Option<(u16, u16)>,
 }
 
-/// The highlight of `text` as the editor's: each token's byte range and style.
-fn highlight(text: &str, d: Dialect) -> Vec<(Range<usize>, Style)> {
+/// The highlight of `text` as the editor's: each token's byte range and style, after the part
+/// `mark` (bytes) underlined in the error color, which wins over them.
+fn highlight(text: &str, d: Dialect, mark: Option<&Range<usize>>) -> Vec<(Range<usize>, Style)> {
     let th = theme::cur();
     let toks = lex_in(text, d);
-    toks.iter()
-        .enumerate()
-        .filter(|(_, t)| t.kind != Tok::Whitespace)
-        .map(|(i, t)| {
+    let error = Style::new().fg(th.error).add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
+    mark.map(|m| (m.clone(), error))
+        .into_iter()
+        .chain(toks.iter().enumerate().filter(|(_, t)| t.kind != Tok::Whitespace).map(|(i, t)| {
             let is_fn = t.kind == Tok::Ident && toks.get(i + 1).is_some_and(|n| n.kind == Tok::LParen);
             (t.start..t.end, th.syntax(t.kind, is_fn))
-        })
+        }))
         .collect()
 }
 
@@ -208,10 +214,20 @@ pub(crate) fn draw(
         drawn.where_ = Rect::new(x0, y, end as u16, 1);
         return drawn;
     }
+    let failed = Style::new().fg(th.error).bg(th.bg).add_modifier(Modifier::BOLD);
     if where_edited || order_edited {
         put(buf, x0, y, "\u{25cf}", 1, Style::new().fg(th.warning).bg(th.bg));
+    } else if applied.failed {
+        // The server refused the condition (or the order) as it stands.
+        put(buf, x0, y, "\u{2717}", 1, failed);
     }
-    put(buf, x0 + 1, y, WHERE, 5, if where_edited { tint } else { label });
+    let where_label = match (where_edited, applied.failed) {
+        (true, _) => tint,
+        (false, true) => failed,
+        (false, false) => label,
+    };
+    put(buf, x0 + 1, y, WHERE, 5, where_label);
+    let mark = |f: Field| applied.mark.as_ref().filter(|(mf, _)| *mf == f).map(|(_, r)| r);
     let field_x = 7usize;
     let room = end.saturating_sub(field_x);
     // The order's part: whole (`ORDER BY` and the keys, then what makes them total), or shrunk.
@@ -249,7 +265,7 @@ pub(crate) fn draw(
     let d = applied.dialect;
     if where_w > 0 {
         let input = &mut state.where_;
-        let spans = highlight(input.text(), d);
+        let spans = highlight(input.text(), d, mark(Field::Where));
         let cx = input.render_spans(where_rect, buf, base, focused == Some(Field::Where), &spans);
         if focused == Some(Field::Where) {
             drawn.cursor = Some((cx, y));
@@ -264,7 +280,7 @@ pub(crate) fn draw(
         let fx = x0 + 1 + label_w as u16;
         let field = Rect::new(fx, y, (x0 + area.width).saturating_sub(fx + 1), 1);
         let input = &mut state.order;
-        let spans = highlight(input.text(), d);
+        let spans = highlight(input.text(), d, mark(Field::Order));
         drawn.cursor = Some((input.render_spans(field, buf, base, true, &spans), y));
         drawn.order = Rect::new(x0, y, area.width, 1);
         return drawn;
@@ -283,7 +299,7 @@ pub(crate) fn draw(
     let field_w = order_w - label_w - if with_tie { tie_w } else { 0 };
     let field = Rect::new(fx, y, field_w as u16, 1);
     let input = &mut state.order;
-    let spans = highlight(input.text(), d);
+    let spans = highlight(input.text(), d, mark(Field::Order));
     let cx = input.render_spans(field, buf, base, focused == Some(Field::Order), &spans);
     if focused == Some(Field::Order) {
         drawn.cursor = Some((cx, y));

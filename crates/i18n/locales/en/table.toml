@@ -42,3 +42,5 @@
 "table.filter.hint" = "WHERE  {key} filter"
 "table.filter.only_table_tabs" = "Only a table tab has a filter line: a query's rows are filtered in its text"
 "table.filter.paste_cut" = "Pasted text cut: a field holds at most 16 KiB"
+"table.filter.failed_rows" = "filter failed: showing previous rows"
+"table.filter.failed_short" = "filter failed"

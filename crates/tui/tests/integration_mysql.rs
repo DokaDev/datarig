@@ -510,3 +510,67 @@ async fn the_explain_actions_show_mysqls_tree_as_a_plan() {
         assert!(sent.starts_with(want), "{keys}: {sent}");
     }
 }
+
+/// A table tab's filter MySQL refuses as a syntax error: the text it quotes (`near '…'`) is
+/// found once in the statement, inside the filter, and marks it from there; the tab keeps no
+/// rows of it. Reads an existing table, makes no object.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_syntax_error_in_a_table_filter_marks_the_text_mysql_quotes() {
+    use datarig_core::query::{Filter, TableName};
+    use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::table_query::TableQuery;
+    let test = "a_syntax_error_in_a_table_filter_marks_the_text_mysql_quotes";
+    let Some(url) = env_url("DATARIG_TEST_MYSQL_URL", test, "mysql://datarig:datarig@127.0.0.1:53306/shop") else {
+        return;
+    };
+    let pw = datarig_core::profile::dsn::parse(&url).unwrap().password.unwrap_or_default();
+    let dir = std::env::temp_dir().join(format!("datarig-it-mynear-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let paths = datarig_core::paths::Paths { data: Some(dir.join("data")), state: Some(dir.join("state")) };
+    let p = profile(&url);
+    let tab = TabState {
+        id: workspace::new_id(),
+        kind: workspace::TabKind::Table,
+        script: None,
+        profile: Some(p.id),
+        cursor: (0, 0),
+        top: 0,
+        console: 0,
+        table: Some(("shop".into(), "users".into())),
+        ddl: None,
+        results: None,
+        database: None,
+        schema: None,
+    };
+    let ws =
+        WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };
+    workspace::save(&dir.join("state"), &ws).unwrap();
+    let store = Arc::new(MemoryStore::new());
+    store.set(&p.id.account(), &pw).unwrap();
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut app = App::new(&cfg, None, Lang::En);
+    app.set_secret_store(store as Arc<dyn SecretStore>);
+    app.set_paths(paths);
+    app.whats_new_paused = true;
+    app.set_instance_tag(&format!("mynear{}", std::process::id()));
+    let (tx, mut rx) = unbounded_channel();
+    app.start(tx, Startup::Normal);
+    assert!(app.tab().is_table());
+    // `RANK` is a reserved word of MySQL 8: the server stops reading at the `=` after it.
+    let filter = "name = '\u{65e5}\u{672c}' AND rank = 1";
+    let mut tq = TableQuery::new(TableName { database: None, schema: "shop".into(), name: "users".into() });
+    tq.draft.filter = Some(Filter { text: filter.into(), recognised: None });
+    app.tab_mut().doc.table_query = Some(Box::new(tq));
+    app.dispatch(Action::RunStatement);
+    let failed = |a: &App| a.tab().doc.table_query.as_ref().is_some_and(|q| q.failure().is_some());
+    pump(&mut app, &mut rx, 20, failed).await;
+    let status = app.tab().status.as_ref().map(|n| n.render(&app.i18n).to_string()).unwrap_or_default();
+    assert!(status.contains("ERROR 1064"), "{status}");
+    let tq = app.tab().doc.table_query.as_ref().unwrap();
+    let start = filter.find("= 1").unwrap();
+    assert_eq!(tq.failure().and_then(|f| f.at.clone()), Some(start..filter.len()), "{status}");
+    assert_eq!(tq.shown, None, "no rows of it are held");
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -32,12 +32,29 @@ pub enum Field {
 }
 
 /// Why the app did not run what the user wrote: the part, where in its text (bytes) when
-/// known, and what the status line said.
+/// known, and what the status line said; `text`: what was refused (`at` is in it).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Refusal {
     pub field: Field,
     pub at: Option<Range<usize>>,
     pub notice: Notice,
+    pub text: String,
+}
+
+/// A query's statement as sent: its text, and where the filter's text is in it (bytes).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Statement {
+    pub query: Query,
+    pub sql: String,
+    pub filter_span: Option<Range<usize>>,
+}
+
+/// The server refused the statement of the query a run sent: the rows shown are those of an
+/// earlier query. `at`: where in the filter's text the server said the error is (bytes), when
+/// it pointed into it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Failure {
+    pub at: Option<Range<usize>>,
 }
 
 /// The query state of a table tab.
@@ -55,7 +72,12 @@ pub struct TableQuery {
     pub refusal: Option<Refusal>,
     /// The query and its statement on their way to a session (past the checks, through the
     /// run's own asks and queues): bound to the run that sends exactly that statement.
-    pending: Option<(Query, String)>,
+    pending: Option<Statement>,
+    /// The statement of the run in flight when it is the query's ([`TableQuery::requested`]),
+    /// by its query id: where a server's error points is read in it.
+    statement: Option<(u64, Statement)>,
+    /// The run of the query that failed on the server, by its query id: what the line marks.
+    failed: Option<(u64, Failure)>,
     /// The query waiting for the user's word on the functions it calls.
     asked: Option<Query>,
     /// The filter texts whose functions the user let run in this tab.
@@ -73,6 +95,8 @@ impl TableQuery {
             shown: None,
             refusal: None,
             pending: None,
+            statement: None,
+            failed: None,
             asked: None,
             confirmed: HashSet::new(),
             line: Default::default(),
@@ -88,15 +112,62 @@ impl TableQuery {
     /// Run `qid` sends `statements`: it is the pending query's run when it sends exactly its
     /// statement, else the run of something else.
     pub(super) fn sent(&mut self, qid: u64, statements: &[String]) {
-        self.requested = match self.pending.take() {
-            Some((q, sql)) if statements.len() == 1 && statements[0] == sql => Some((qid, q)),
+        self.statement = match self.pending.take() {
+            Some(s) if statements.len() == 1 && statements[0] == s.sql => Some((qid, s)),
             _ => None,
         };
+        self.requested = self.statement.as_ref().map(|(id, s)| (*id, s.query.clone()));
     }
 
     /// The first page of run `qid` landed: the rows are of its query, when it was one.
     pub(super) fn first_page(&mut self, qid: u64) {
         self.shown = self.requested.as_ref().filter(|(id, _)| *id == qid).map(|(_, q)| q.clone());
+        self.failed = None;
+    }
+
+    /// The server refused the statement of run `qid` (`error`, in dialect `d`): when it is the
+    /// query's, the query is marked failed, with where in its filter's text the error is when
+    /// the server pointed there. PostgreSQL counts characters of the statement as sent; MySQL
+    /// quotes the text from the error on (`near '…'`), which marks the filter only when it is
+    /// found once in the statement and starts in the filter.
+    pub(super) fn run_failed(&mut self, qid: u64, error: &ServerError<'_>, d: Dialect) {
+        let Some((_, s)) = self.statement.as_ref().filter(|(id, _)| *id == qid) else { return };
+        let at = s.filter_span.as_ref().and_then(|span| {
+            let (start, end) = match (error, d) {
+                (ServerError::Message(m), Dialect::Postgres) => {
+                    let at = datarig_core::driver::ServerMessage::byte_offset(&s.sql, m.position?)?;
+                    (at, None)
+                }
+                (ServerError::Message(m), Dialect::MySql(_)) => {
+                    let near = mysql_near(&m.text)?;
+                    let mut found = s.sql.match_indices(near);
+                    let (at, _) = found.next()?;
+                    if found.next().is_some() {
+                        // Unknown, not located: found more than once.
+                        return None;
+                    }
+                    (at, Some(at + near.len()))
+                }
+                (ServerError::Other, _) => return None,
+            };
+            if !span.contains(&start) {
+                return None;
+            }
+            let text = &s.sql[span.clone()];
+            let from = start - span.start;
+            let to = match end {
+                Some(end) => end.min(span.end) - span.start,
+                None => token_end(text, from, d),
+            };
+            Some(from..to)
+        });
+        self.failed = Some((qid, Failure { at }));
+    }
+
+    /// The failure of the query the tab holds as applied, while it is the run sent last.
+    pub fn failure(&self) -> Option<&Failure> {
+        let (qid, f) = self.failed.as_ref()?;
+        self.requested.as_ref().is_some_and(|(id, _)| id == qid).then_some(f)
     }
 
     /// The text of the shown filter, when it has one.
@@ -176,6 +247,33 @@ pub(super) fn refusal_why(i18n: &I18n, r: &BarRefusal) -> String {
             let what = label(super::safety::blocked_label(*why));
             i18n.msg(&Msg::TableFilterWhyReadOnly { what }).to_string()
         }
+    }
+}
+
+/// What the server said of a failed statement, as the line reads it.
+pub(super) enum ServerError<'a> {
+    /// Its own message, which may say where the error is.
+    Message(&'a datarig_core::driver::ServerMessage),
+    /// Anything else (a lost session, a lock wait): no place in the text.
+    Other,
+}
+
+/// The text MySQL quotes from where it stopped reading (`… near 'x = = 1)' at line 1`), when
+/// it quotes any.
+pub(super) fn mysql_near(message: &str) -> Option<&str> {
+    let from = message.find(" near '")? + " near '".len();
+    let rest = &message[from..];
+    let to = rest.rfind("' at line ")?;
+    Some(&rest[..to]).filter(|s| !s.is_empty())
+}
+
+/// Where the token that starts at byte `from` of `text` ends (one character for a blank or the
+/// end of the text): what a server's position marks.
+fn token_end(text: &str, from: usize, d: Dialect) -> usize {
+    let next = || text[from..].chars().next().map_or(from, |c| from + c.len_utf8());
+    match datarig_core::sql::lexer::lex_in(text, d).into_iter().find(|t| t.start <= from && from < t.end) {
+        Some(t) if t.kind != datarig_core::sql::lexer::Tok::Whitespace => t.end,
+        _ => next(),
     }
 }
 
@@ -325,7 +423,8 @@ impl App {
                     let why = refusal_why(&self.i18n, &r);
                     let notice = Notice::new(Msg::TableFilterRefused { why }, Level::Warning);
                     if let Some(tq) = self.table_query_mut(id) {
-                        tq.refusal = Some(Refusal { field: Field::Where, at: refusal_at(&r), notice: notice.clone() });
+                        let at = refusal_at(&r);
+                        tq.refusal = Some(Refusal { field: Field::Where, at, notice: notice.clone(), text });
                     }
                     return self.tab_status(id, notice);
                 }
@@ -346,14 +445,15 @@ impl App {
                 Ok(_) => {}
             }
         }
-        let sql = query::compile(&q, &target).sql;
+        let compiled = query::compile(&q, &target);
+        let sql = compiled.sql.clone();
         // The keys that make an order total come with the table's structure.
         if !q.order.is_empty() && target.primary_key.is_empty() {
             self.table_structure_ask(id);
         }
         if let Some(tq) = self.table_query_mut(id) {
             tq.refusal = None;
-            tq.pending = Some((q, sql.clone()));
+            tq.pending = Some(Statement { query: q, sql: sql.clone(), filter_span: compiled.filter_span });
         }
         self.run_in(id, vec![sql]);
         self.filter_line_follow_tab(id);
@@ -481,7 +581,8 @@ impl App {
                 let why = order_why(&self.i18n, &e);
                 let notice = Notice::new(Msg::TableOrderRefused { why }, Level::Warning);
                 if let Some(tq) = self.table_query_mut(id) {
-                    tq.refusal = Some(Refusal { field: Field::Order, at: Some(e.range), notice: notice.clone() });
+                    let (at, text) = (Some(e.range), text.to_string());
+                    tq.refusal = Some(Refusal { field: Field::Order, at, notice: notice.clone(), text });
                 }
                 self.tab_status(id, notice);
             }
