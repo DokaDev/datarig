@@ -645,8 +645,10 @@ fn metadata_waits(rows: &Rows, cut: &mut bool) -> Result<Vec<LockWait>, DecodeEr
         let mut holders: Vec<LockHolder> = Vec::new();
         let mut at: std::collections::HashMap<i64, usize> = Default::default();
         let granted = by_object.get(&(p.kind, p.schema, p.name)).map(Vec::as_slice).unwrap_or_default();
+        // The request's kind and type are read once, not once per granted lock.
+        let request = lk::MdlRequest::new(p.kind, p.lock);
         for g in granted.iter().map(|&i| &all[i]).filter(|g| g.thread != p.thread) {
-            let blame = match lk::mdl_conflicts(p.kind, p.lock, g.lock) {
+            let blame = match request.waits_for(g.lock) {
                 Some(true) => Blame::Incompatible,
                 Some(false) => continue,
                 None => Blame::CannotTell,
