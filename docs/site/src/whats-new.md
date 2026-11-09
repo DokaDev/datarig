@@ -3,6 +3,10 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.40.2 (2026-11-09)
+
+Install now lists the packages for building datarig from source on Debian, Ubuntu, Fedora and Arch Linux, and the Monitor tab's Locks view reads many MySQL metadata lock waits faster. Otherwise datarig works as before: its code is reorganised for easier development.
+
 ## 0.40.1 (2026-11-09)
 
 The server monitor's Overview charts statements by type, rows by operation and sessions by state, says when it sees only some sessions, and shows its statements in syntax colours.
