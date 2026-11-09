@@ -1,4 +1,11 @@
-Related issue: Closes #  <!-- or: Part of # -->
+Related issue: Part of #
+
+<!--
+Name the issue with "Part of #123", not with Closes or Fixes: the maintainers decide when an
+issue is done. A small fix without an issue (a typo, a broken link) says why instead, on its
+own line outside this comment: no issue: <reason>
+A release pull request says: no issue: release
+-->
 
 ## What and why
 

@@ -1,0 +1,62 @@
+name: PR rule
+
+# Every pull request names its issue in the description (`Part of #123`), or says why it has
+# none (`no issue: <reason>`, for a small fix such as a typo; a release pull request says
+# `no issue: release`). Both count anywhere in the description, in any case, but not inside
+# an HTML comment or a code block. Editing the description runs it again. It reads only the
+# description: no checkout, no token, a few seconds, the same for stacked and fork pull
+# requests.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: pr-rule-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-rule:
+    name: issue reference
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      # The description comes in through the environment, never pasted into the script.
+      - name: Check
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        shell: python3 {0}
+        run: |
+          import os, re, sys
+
+          body = os.environ.get("BODY") or ""
+          # What the template and examples show does not count.
+          body = re.sub(r"<!--.*?(-->|\Z)", "", body, flags=re.S)
+          body = re.sub(r"^ {0,3}(`{3,}|~{3,}).*?(^ {0,3}\1|\Z)", "", body, flags=re.S | re.M)
+
+          issue = re.search(
+              r"(?<![\w&/])(?:[\w.-]+/[\w.-]+)?#\d+\b"
+              r"|https://github\.com/[\w.-]+/[\w.-]+/issues/\d+\b",
+              body,
+          )
+          reason = re.search(r"^\s*no issue:[ \t]*\S", body, flags=re.I | re.M)
+          if issue or reason:
+              print("The description names its issue" if issue else "The description says why there is no issue")
+              sys.exit(0)
+
+          print("::error title=PR rule::The description names no issue.")
+          print("""
+          Every pull request names the issue it belongs to. Add a line to the description:
+
+            Part of #123
+
+          Please don't use closing keywords such as Closes or Fixes: the maintainers decide when
+          an issue is done and link it in the Development section.
+
+          For a small fix such as a typo, give the reason instead, on its own line:
+
+            no issue: <reason>
+
+          Editing the description runs this check again by itself.""")
+          sys.exit(1)
