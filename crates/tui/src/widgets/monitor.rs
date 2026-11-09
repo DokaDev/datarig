@@ -68,7 +68,9 @@ pub(crate) fn draw_monitor(app: &mut App, area: Rect, buf: &mut Buffer) {
     let info_key = app.key_for(Action::Monitor(MonitorAction::ServerInfo), Ctx::Monitor);
     let format_key = app.key_for(Action::Monitor(MonitorAction::Format), Ctx::Monitor);
     // The details' statement as shown, worked out here once per text (a frame only draws it).
-    let dialect = app.profile_language(app.tab().profile).dialect();
+    // As the profile's sessions said they read SQL (a MySQL sql_mode), not only the driver's
+    // default.
+    let dialect = app.tab_language(id).dialect();
     let indent = app.prefs.format_indent.spaces();
     if let Some(m) = app.monitor_mut_for_draw(id) {
         m.prepare_statement(dialect, indent);

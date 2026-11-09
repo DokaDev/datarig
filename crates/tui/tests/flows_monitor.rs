@@ -2676,3 +2676,48 @@ fn the_monitors_own_session_is_named_in_its_details_on_mysql() {
     assert_eq!(said(&h), "This is the monitor's own connection");
     assert!(actions_sent(&mut h).is_empty());
 }
+
+/// MySQL with a session that said it reads `ANSI_QUOTES`: session 4302's statement `text`, its
+/// details open.
+fn mysql_ansi_details(text: &str) -> Harness {
+    use datarig_core::config::Config;
+    use datarig_core::profile::ConnectionConfig;
+    use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, Ordering::SeqCst);
+    let cfg = Config {
+        connections: vec![ConnectionConfig { driver: "mysql".into(), ..ConnectionConfig::test_db() }],
+        ..Config::default()
+    };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    let ansi = MySqlMode { ansi_quotes: true, ..MySqlMode::default() };
+    h.db(DbEvent::Language(Language::Sql(Dialect::MySql(ansi))));
+    let mut h = sessions_on(h, mysql_format(), mysql_rows(text));
+    select(&mut h, 4302);
+    h.key(KeyCode::Enter);
+    h
+}
+
+#[test]
+fn the_statement_is_read_in_the_sql_mode_the_sessions_said() {
+    // Under ANSI_QUOTES "total" is a name, not a string.
+    let mut h = mysql_ansi_details("SELECT \"total\" FROM t WHERE a = 'x'");
+    let t = h.draw(120, 60);
+    let buf = t.backend().buffer();
+    let th = datarig_tui::theme::cur();
+    let area = *buf.area();
+    let rows: Vec<String> =
+        (0..area.height).map(|y| (0..area.width).map(|x| buf[(x, y)].symbol().to_string()).collect()).collect();
+    let cell = |word: &str| {
+        let (y, x) = rows
+            .iter()
+            .enumerate()
+            .skip(14)
+            .find_map(|(y, r)| r.find(word).map(|b| (y, r[..b].chars().count())))
+            .unwrap_or_else(|| panic!("{word:?} in the details\n{}", rows.join("\n")));
+        buf[(x as u16, y as u16)].clone()
+    };
+    assert_eq!(cell("\"total\"").fg, th.syn_quoted_ident.fg.unwrap(), "a quoted name");
+    assert_eq!(cell("'x'").fg, th.syn_string.fg.unwrap(), "a string");
+}
