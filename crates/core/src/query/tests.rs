@@ -289,15 +289,15 @@ fn recognise_reads_back_what_render_writes() {
         let t = Target { utf8mb4, ..target(d) };
         for c in representative() {
             let text = render(&c, &t).unwrap();
-            assert_eq!(recognise(&text, d, &t.names()), Some(c.clone()), "{d:?} {text}");
+            assert_eq!(recognise(&text, &t), Some(c.clone()), "{d:?} {text}");
         }
     }
 }
 
 #[test]
 fn recognise_keeps_what_it_does_not_model() {
-    let cols = target(Dialect::Postgres).names();
-    let pg = |s: &str| recognise(s, Dialect::Postgres, &cols);
+    let (tp, tm) = (target(Dialect::Postgres), target(MY));
+    let pg = |s: &str| recognise(s, &tp);
     assert_eq!(
         pg("lower(name) = 'x' AND id > 3"),
         Some(Cond::All(vec![Cond::Raw("lower(name) = 'x'".into()), cmp("id", CmpOp::Gt, num("3"))]))
@@ -315,8 +315,8 @@ fn recognise_keeps_what_it_does_not_model() {
     assert_eq!(pg("NOT EXISTS (SELECT 1)"), Some(Cond::Not(Box::new(Cond::Raw("EXISTS (SELECT 1)".into())))));
     assert_eq!(pg("id = NULL"), Some(Cond::Raw("id = NULL".into())));
     // MySQL names compare without case.
-    assert_eq!(recognise("ID = 1", MY, &cols), Some(cmp("id", CmpOp::Eq, num("1"))));
-    assert_eq!(recognise("id <=> 1", Dialect::Postgres, &cols), Some(Cond::Raw("id <=> 1".into())));
+    assert_eq!(recognise("ID = 1", &tm), Some(cmp("id", CmpOp::Eq, num("1"))));
+    assert_eq!(recognise("id <=> 1", &tp), Some(Cond::Raw("id <=> 1".into())));
     // AND and OR inside a CASE belong to it, not to the filter.
     let case = "CASE WHEN id = 1 OR id = 2 THEN TRUE ELSE FALSE END";
     assert_eq!(pg(case), Some(Cond::Raw(case.into())));
@@ -330,28 +330,36 @@ fn recognise_keeps_what_it_does_not_model() {
     // MySQL XOR binds between AND and OR, and `||` may be OR or concatenation: such a level
     // stays whole.
     for s in ["id = 1 XOR id = 2 AND price > 10", "id = 1 || id = 2 AND id = 3"] {
-        assert_eq!(recognise(s, MY, &cols), Some(Cond::Raw(s.into())), "{s}");
+        assert_eq!(recognise(s, &tm), Some(Cond::Raw(s.into())), "{s}");
     }
     // NOT binds tighter than `&&` and `||`: such a level stays whole too.
     for s in ["NOT id = 1 && price > 10", "NOT id = 1 || price > 10"] {
-        assert_eq!(recognise(s, MY, &cols), Some(Cond::Raw(s.into())), "{s}");
+        assert_eq!(recognise(s, &tm), Some(Cond::Raw(s.into())), "{s}");
     }
     // A NULL in a typed IN list follows SQL's three-valued logic, not the model's list.
     for s in ["id IN (1, NULL)", "id NOT IN (1, NULL)"] {
         assert_eq!(pg(s), Some(Cond::Raw(s.into())), "{s}");
     }
+    // A bare number against a column that is not a number compares as a number on MySQL; the
+    // model would write it back as a string. A NULL bound of a BETWEEN has no model form.
+    for s in
+        ["name = 1", "name IN (1, 2)", "name BETWEEN 1 AND 2", "id BETWEEN NULL AND 5", "id NOT BETWEEN 1 AND NULL"]
+    {
+        assert_eq!(recognise(s, &tm), Some(Cond::Raw(s.into())), "{s}");
+    }
+    assert_eq!(pg("price = 1.5"), Some(cmp("price", CmpOp::Eq, num("1.5"))));
     // `&&` is AND: cutting at OR around it keeps the meaning.
     assert_eq!(
-        recognise("id = 1 && id = 2 OR id = 3", MY, &cols),
+        recognise("id = 1 && id = 2 OR id = 3", &tm),
         Some(Cond::Any(vec![Cond::Raw("id = 1 && id = 2".into()), cmp("id", CmpOp::Eq, num("3"))]))
     );
 }
 
 #[test]
 fn recognise_fails_on_what_it_cannot_read() {
-    let cols = target(Dialect::Postgres).names();
+    let t = target(Dialect::Postgres);
     for s in ["", "  ", "id = 1 AND", "OR id = 1", "(id = 1", "id = 1)", "id = 'x", "id = 1 -- c", "id = 1; x", "()"] {
-        assert_eq!(recognise(s, Dialect::Postgres, &cols), None, "{s}");
+        assert_eq!(recognise(s, &t), None, "{s}");
     }
 }
 

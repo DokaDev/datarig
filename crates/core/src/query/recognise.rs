@@ -8,6 +8,11 @@
 //! ([`Cond::Raw`]). A part that is empty, or text the filter bar refuses (an unclosed
 //! parenthesis or string, a comment, a `;`), reads as nothing at all: `None`.
 //!
+//! A comparison whose meaning the model's condition would not keep stays as written too: a bare
+//! number against a column that is not known to be a number (MySQL compares it as a number, the
+//! model's value would be written back as a string), a NULL in an `IN` list or as a `BETWEEN`
+//! bound (SQL's three-valued logic).
+//!
 //! What [`render`](super::render) writes reads back as the same condition, with these
 //! exceptions: a number written as a string (for a column that is not a number) reads as text;
 //! a NULL in an `IN` list reads as its own test of NULL; on MySQL a case-insensitive pattern of a
@@ -15,22 +20,25 @@
 //! inequality.
 
 use super::check::lexical;
-use super::{CaseMode, CmpOp, ColName, Cond, Value};
+use super::{CaseMode, CmpOp, ColName, ColumnKind, Cond, Target, Value};
 use crate::sql::dialect::Dialect;
 use crate::sql::lexer::{Tok, Token, lex_in};
 
-/// What `text` (filter text of dialect `d` on a table with columns `cols`) says, as far as the
-/// app models it; `None` when it cannot be read (see the module docs).
-pub fn recognise(text: &str, d: Dialect, cols: &[ColName]) -> Option<Cond> {
+/// What `text` (filter text on the table `target` describes) says, as far as the app models it;
+/// `None` when it cannot be read (see the module docs).
+pub fn recognise(text: &str, target: &Target) -> Option<Cond> {
+    let d = target.dialect;
     lexical(text, d).ok()?;
     let toks: Vec<Token> = lex_in(text, d).into_iter().filter(|t| !t.is_trivia()).collect();
-    Reader { src: text, d, cols }.or(&toks)
+    let cols = target.names();
+    Reader { src: text, d, cols: &cols, target }.or(&toks)
 }
 
 struct Reader<'a> {
     src: &'a str,
     d: Dialect,
     cols: &'a [ColName],
+    target: &'a Target,
 }
 
 impl Reader<'_> {
@@ -234,7 +242,25 @@ impl Reader<'_> {
     }
 
     /// One comparison of a known column with literals, the whole of `toks`.
+    /// One comparison, when the model's condition keeps its meaning (see the module docs).
     fn predicate(&self, toks: &[Token]) -> Option<Cond> {
+        let c = self.comparison(toks)?;
+        let number = |v: &Value| matches!(v, Value::Number(_));
+        let numeric = |col: &str| self.target.column(col).is_some_and(|f| f.kind == ColumnKind::Number);
+        let keeps = match &c {
+            Cond::Cmp { col, value, .. } | Cond::NotDistinct { col, value, .. } => !number(value) || numeric(col),
+            Cond::In { col, values, .. } => !values.iter().any(number) || numeric(col),
+            Cond::Between { col, lo, hi, .. } => {
+                !matches!(lo, Value::Null)
+                    && !matches!(hi, Value::Null)
+                    && (!(number(lo) || number(hi)) || numeric(col))
+            }
+            _ => true,
+        };
+        keeps.then_some(c)
+    }
+
+    fn comparison(&self, toks: &[Token]) -> Option<Cond> {
         // `LOWER(col) [NOT] LIKE LOWER('…') [ESCAPE '…']`: a case-insensitive pattern.
         if self.word(toks.first(), "LOWER")
             && toks.get(1).is_some_and(|t| t.kind == Tok::LParen)
