@@ -81,10 +81,21 @@ which and show only the start. Where the server itself may have cut a statement 
 keeps only `track_activity_query_size` bytes, MySQL's process list the first 64 KiB), that is
 said.
 
+The statement is shown in the editor's syntax colours (the connection's dialect) and laid out
+for reading by the editor's SQL formatter: only the blanks between its words change, and a line
+above it says so. `f` shows it as the server sent it, and `f` again laid out. It is shown as sent,
+with a line saying why, when only its start is known (the list's 256 characters, or a statement
+the server may have cut: a layout would hide where it stops), when a layout would change more
+than its blanks, and when it is over 64 KiB.
+
+The monitor's own connection is listed as `this monitor` and its details name it: its
+statement is the monitor reading the server, and it cannot be cancelled or ended.
+
 `o` opens the statement in a new console of the connection, in that session's database, without
 running it (the other session's search path and settings are not known, and the status line
-says so). `y` copies it. Both take the whole text once the details have read it, else the start;
-`o` then says that only the start was read, `y` does not.
+says so). `y` copies it. Both take the server's text (never the layout), the whole of it once
+the details have read it, else the start; `o` then says that only the start was read, `y` does
+not.
 
 ## Locks
 

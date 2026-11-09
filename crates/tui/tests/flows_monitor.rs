@@ -613,6 +613,9 @@ const START: &str = "UPDATE orders SET status = 'paid' WHERE id = 7";
 /// Session 4211's whole statement.
 const WHOLE: &str = "UPDATE orders SET status = 'paid' WHERE id = 7 AND note = 'the rest of the statement'";
 
+/// What only the whole statement has, on a line of its own however it is laid out.
+const REST: &str = "note = 'the rest of the statement'";
+
 /// A read at `secs` of the usual sessions, the list holding only the start of session 4211's
 /// statement, which started at `started` (server time).
 fn long_snapshot(secs: f64, started: Timestamp, server: bool) -> Snapshot {
@@ -720,10 +723,10 @@ fn the_whole_statement_is_shown_copied_and_opened() {
     let (mut h, request) = long_details();
     let screen = h.screen(120, 40);
     assert!(screen.contains("Reading the whole statement…"), "{screen}");
-    assert!(screen.contains(START) && !screen.contains(WHOLE), "{screen}");
+    assert!(screen.contains(START) && !screen.contains(REST), "{screen}");
     text_answer(&mut h, request, Ok(whole(Proof::Same)));
     let screen = h.screen(120, 40);
-    assert!(screen.contains(WHOLE), "{screen}");
+    assert!(screen.contains(REST), "{screen}");
     assert!(!screen.contains("Reading the whole statement"), "{screen}");
     assert!(!screen.contains("The list holds the first"), "{screen}");
     let clip = FakeClipboard::attach(&mut h, false, &[]);
@@ -740,7 +743,7 @@ fn a_statement_read_by_its_start_to_the_second_says_so() {
     let (mut h, request) = long_details();
     text_answer(&mut h, request, Ok(whole(Proof::Likely)));
     let screen = h.screen(160, 40);
-    assert!(screen.contains(WHOLE), "{screen}");
+    assert!(screen.contains(REST), "{screen}");
     assert!(screen.contains("Read again by its session and its start (to the second)"), "{screen}");
 }
 
@@ -762,7 +765,7 @@ fn a_statement_not_read_whole_keeps_its_start_and_says_why() {
         text_answer(&mut h, request, result);
         let screen = h.screen(160, 40);
         assert!(screen.contains(note), "{note}: {screen}");
-        assert!(screen.contains(START) && !screen.contains(WHOLE), "{note}: {screen}");
+        assert!(screen.contains(START) && !screen.contains(REST), "{note}: {screen}");
         assert!(screen.contains("The list holds the first 256 characters of the statement"), "{note}: {screen}");
         assert!(!screen.contains("Reading the whole statement"), "{note}: {screen}");
         let clip = FakeClipboard::attach(&mut h, false, &[]);
@@ -783,7 +786,7 @@ fn an_answer_of_another_read_or_an_older_connection_is_dropped() {
     let (mut h, request) = long_details();
     // Not the read out.
     text_answer(&mut h, request + 5, Ok(whole(Proof::Same)));
-    assert!(!h.screen(120, 40).contains(WHOLE));
+    assert!(!h.screen(120, 40).contains(REST));
     // A tick's number is no text's.
     h.monitor_db(DbEvent::MonitorSnapshot { request, result: Ok(long_snapshot(1.0, at(-190.0), false)) });
     assert!(monitor(&h).text.as_ref().unwrap().answer.is_none());
@@ -803,23 +806,23 @@ fn an_answer_of_another_read_or_an_older_connection_is_dropped() {
             generation,
             ev: DbEvent::MonitorQueryText { request, result: Ok(whole(Proof::Same)) },
         });
-        assert!(!h.screen(120, 40).contains(WHOLE), "generation {generation}, request {request}");
+        assert!(!h.screen(120, 40).contains(REST), "generation {generation}, request {request}");
     }
     text_answer(&mut h, asks[0].0, Ok(whole(Proof::Same)));
-    assert!(h.screen(120, 40).contains(WHOLE));
+    assert!(h.screen(120, 40).contains(REST));
 }
 
 #[test]
 fn the_whole_text_is_not_shown_once_the_session_runs_another_statement() {
     let (mut h, request) = long_details();
     text_answer(&mut h, request, Ok(whole(Proof::Same)));
-    assert!(h.screen(120, 40).contains(WHOLE));
+    assert!(h.screen(120, 40).contains(REST));
     h.advance(Duration::from_secs(2));
     let t = ticks(&mut h);
     // The same session, a statement with the same start that started later.
     h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(long_snapshot(2.0, at(1.0), false)) });
     let screen = h.screen(120, 40);
-    assert!(!screen.contains(WHOLE), "{screen}");
+    assert!(!screen.contains(REST), "{screen}");
     assert!(screen.contains(START), "{screen}");
     let clip = FakeClipboard::attach(&mut h, false, &[]);
     h.keys("y");
@@ -844,7 +847,7 @@ fn one_read_of_a_whole_statement_at_a_time() {
     let asks = text_asks(&mut h);
     assert_eq!(asks.len(), 1, "{asks:?}");
     assert_eq!(asks[0].1.query_started, Some(at(1.0)));
-    assert!(!h.screen(120, 40).contains(WHOLE));
+    assert!(!h.screen(120, 40).contains(REST));
 }
 
 #[test]
@@ -898,16 +901,16 @@ fn next_tick(h: &mut Harness, secs: f64, started: Timestamp) {
 fn a_mysql_start_that_moves_within_a_second_keeps_the_whole_text_and_reads_it_once() {
     let (mut h, request) = mysql_details(0.0, at(-190.0));
     text_answer(&mut h, request, Ok(whole(Proof::Likely)));
-    assert!(h.screen(160, 40).contains(WHOLE));
+    assert!(h.screen(160, 40).contains(REST));
     // The start worked out from whole seconds moves a little from one read to the next.
     for (n, started) in [at(-189.2), at(-190.7), at(-189.9)].into_iter().enumerate() {
         next_tick(&mut h, 2.0 * (n + 1) as f64, started);
         assert!(text_asks(&mut h).is_empty(), "read {n}: not asked again");
-        assert!(h.screen(160, 40).contains(WHOLE), "read {n}: still shown");
+        assert!(h.screen(160, 40).contains(REST), "read {n}: still shown");
     }
     // Two seconds or more apart: another statement.
     next_tick(&mut h, 8.0, at(-187.0));
-    assert!(!h.screen(160, 40).contains(WHOLE));
+    assert!(!h.screen(160, 40).contains(REST));
     assert_eq!(text_asks(&mut h).len(), 1);
 }
 
@@ -918,7 +921,7 @@ fn a_statement_too_young_to_tell_apart_is_read_again_once_it_has_run_longer() {
     text_answer(&mut h, request, Ok(FullText::NotYet));
     let screen = h.screen(160, 40);
     assert!(screen.contains("The statement had run under 5 seconds when listed"), "{screen}");
-    assert!(screen.contains(START) && !screen.contains(WHOLE), "{screen}");
+    assert!(screen.contains(START) && !screen.contains(REST), "{screen}");
     // Listed after 4 s: still too young, not asked again.
     next_tick(&mut h, 2.0, at(-2.0));
     assert!(text_asks(&mut h).is_empty());
@@ -930,7 +933,7 @@ fn a_statement_too_young_to_tell_apart_is_read_again_once_it_has_run_longer() {
     next_tick(&mut h, 6.0, at(-2.0));
     assert!(text_asks(&mut h).is_empty(), "once");
     text_answer(&mut h, asks[0].0, Ok(whole(Proof::Likely)));
-    assert!(h.screen(160, 40).contains(WHOLE));
+    assert!(h.screen(160, 40).contains(REST));
 }
 
 #[test]
@@ -942,7 +945,7 @@ fn a_statement_the_server_may_have_cut_says_so_and_opens_with_the_cut_note() {
     };
     text_answer(&mut h, request, Ok(cut));
     let screen = h.screen(160, 40);
-    assert!(screen.contains(WHOLE), "{screen}");
+    assert!(screen.contains(REST), "{screen}");
     assert!(screen.contains("The server may have cut this statement where it keeps it"), "{screen}");
     h.keys("o");
     assert_eq!(h.app.tab().editor.text(), WHOLE);
@@ -2433,4 +2436,288 @@ fn a_session_with_the_tabs_id_but_not_its_user_database_or_application_is_not_na
         h.keys("n");
         assert!(!h.session_cancelled(q));
     }
+}
+
+/// A statement whole in the list and long enough to wrap: a report over the orders.
+const REPORT: &str = "SELECT o.id, o.status, sum(i.qty * i.price) AS total FROM orders o JOIN order_items i \
+                      ON i.order_id = o.id WHERE o.status = 'paid' GROUP BY o.id, o.status ORDER BY total DESC \
+                      LIMIT 20";
+
+/// The usual PostgreSQL sessions, session 4302 running `text` (as `shortened` and
+/// `maybe_cut_by_server` say), its details open.
+fn statement_details(text: &str, shortened: bool, maybe_cut_by_server: bool) -> Harness {
+    let mut rows = rows();
+    let r = rows.iter_mut().find(|r| r.key.id == 4302).unwrap();
+    r.query = Some(QueryText { text: text.into(), shortened, maybe_cut_by_server });
+    let mut h = sessions_on(Harness::connected(Lang::En), pg_format(), rows);
+    select(&mut h, 4302);
+    h.key(KeyCode::Enter);
+    assert!(monitor(&h).list.details);
+    h
+}
+
+/// The lines of the details' statement on screen: from the line after the layout's note to the
+/// bottom border, without the frame and blanks around them.
+fn statement_on(screen: &str, note: &str) -> Vec<String> {
+    let lines: Vec<&str> = screen.lines().collect();
+    let at = lines.iter().position(|l| l.contains(note)).unwrap_or_else(|| panic!("{note:?} in\n{screen}"));
+    lines[at + 1..]
+        .iter()
+        .take_while(|l| !l.contains('╰'))
+        .map(|l| l.rsplit("││").next().unwrap_or(l).trim_end_matches('│').trim_end().to_string())
+        .filter(|l| !l.trim().is_empty())
+        .collect()
+}
+
+#[test]
+fn the_details_lay_a_statement_out_for_reading_and_f_shows_it_as_sent_80x24_and_120x40() {
+    let mut h = statement_details(REPORT, false, false);
+    // All of it on a taller screen.
+    let screen = h.screen(120, 60);
+    let shown = statement_on(&screen, "Laid out for reading (f: as sent)");
+    assert_eq!(shown.first().map(|l| l.trim()), Some("SELECT"), "{screen}");
+    for clause in ["FROM", "JOIN", "WHERE", "GROUP BY", "ORDER BY", "LIMIT"] {
+        assert!(shown.iter().any(|l| l.trim().starts_with(clause)), "{clause} on a line of its own:\n{screen}");
+    }
+    // Only the blanks changed.
+    let words = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(words(&shown.join(" ")), words(REPORT));
+    insta::assert_snapshot!("monitor_statement_laid_out_120x40", h.screen(120, 40));
+    insta::assert_snapshot!("monitor_statement_laid_out_80x24", h.screen(80, 24));
+    h.keys("f");
+    assert_eq!(said(&h), "Statements as the server sent them");
+    let screen = h.screen(120, 40);
+    let shown = statement_on(&screen, "As the server sent it (f: laid out)");
+    assert!(
+        shown[0].trim().starts_with("SELECT o.id, o.status, sum(i.qty * i.price) AS total FROM orders o"),
+        "{screen}"
+    );
+    assert_eq!(shown.join("").replace(' ', ""), REPORT.replace(' ', ""), "the server's text, wrapped:\n{screen}");
+    insta::assert_snapshot!("monitor_statement_as_sent_120x40", screen);
+    insta::assert_snapshot!("monitor_statement_as_sent_80x24", h.screen(80, 24));
+    // The choice stays for another session's details, and `f` again lays it out.
+    h.key(KeyCode::Esc);
+    select(&mut h, 4211);
+    h.key(KeyCode::Enter);
+    assert!(h.screen(120, 40).contains("As the server sent it (f: laid out)"));
+    h.keys("f");
+    assert_eq!(said(&h), "Statements laid out for reading (copying takes the server's text)");
+    assert!(h.screen(120, 40).contains("Laid out for reading (f: as sent)"));
+}
+
+#[test]
+fn the_statement_is_drawn_in_the_editors_syntax_colours() {
+    let mut h = statement_details(REPORT, false, false);
+    for f in ["", "f"] {
+        h.keys(f);
+        let t = h.draw(120, 60);
+        let buf = t.backend().buffer();
+        let th = datarig_tui::theme::cur();
+        let area = *buf.area();
+        let rows: Vec<String> =
+            (0..area.height).map(|y| (0..area.width).map(|x| buf[(x, y)].symbol().to_string()).collect()).collect();
+        // A word's first cell in the details (the lower half: the list is above).
+        let cell = |word: &str| {
+            let (y, x) = rows
+                .iter()
+                .enumerate()
+                .skip(20)
+                .find_map(|(y, r)| r.find(word).map(|b| (y, r[..b].chars().count())))
+                .unwrap_or_else(|| panic!("{word:?} in the details\n{}", rows.join("\n")));
+            buf[(x as u16, y as u16)].clone()
+        };
+        let kw = cell("JOIN");
+        assert_eq!(kw.fg, th.syn_keyword.fg.unwrap(), "{f:?}: a keyword");
+        assert!(kw.modifier.contains(ratatui::style::Modifier::BOLD), "{f:?}");
+        assert_eq!(cell("'paid'").fg, th.syn_string.fg.unwrap(), "{f:?}: a string");
+        assert_eq!(cell("sum(").fg, th.syn_function.fg.unwrap(), "{f:?}: a call");
+        assert_eq!(cell("20").fg, th.syn_number.fg.unwrap(), "{f:?}: a number");
+    }
+}
+
+#[test]
+fn a_statement_known_only_in_part_is_shown_as_sent_with_its_cut_note() {
+    // The list's start, while the whole text is read.
+    let (mut h, request) = long_details();
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("The list holds the first 256 characters of the statement"), "{screen}");
+    let shown = statement_on(&screen, "Not laid out: only the start of the statement is known");
+    assert_eq!(shown.len(), 1, "{screen}");
+    assert!(shown[0].trim().ends_with(START), "{screen}");
+    // The whole text read: laid out.
+    text_answer(&mut h, request, Ok(whole(Proof::Same)));
+    let screen = h.screen(120, 40);
+    let shown = statement_on(&screen, "Laid out for reading");
+    assert!(shown.len() > 1, "{screen}");
+    // Cut by the server: as sent, under its note.
+    let mut h = statement_details(REPORT, false, true);
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("The server may have cut this statement where it keeps it"), "{screen}");
+    let shown = statement_on(&screen, "Not laid out: only the start of the statement is known");
+    assert!(shown[0].trim().starts_with("SELECT o.id, o.status, sum("), "{screen}");
+    insta::assert_snapshot!("monitor_statement_cut_120x40", screen);
+    insta::assert_snapshot!("monitor_statement_cut_80x24", h.screen(80, 24));
+}
+
+#[test]
+fn a_statement_the_formatter_would_change_is_shown_as_sent() {
+    // A Unicode escape string: a layout would change more than its blanks.
+    let text = "SELECT U&'d\\0061t' FROM t WHERE a = 1";
+    let mut h = statement_details(text, false, false);
+    let screen = h.screen(120, 40);
+    let shown = statement_on(&screen, "Not laid out: a layout would change more than its blanks");
+    assert_eq!(shown.iter().map(|l| l.trim()).collect::<Vec<_>>(), [text], "{screen}");
+    insta::assert_snapshot!("monitor_statement_refused_80x24", h.screen(80, 24));
+    // Over 64 KiB: as sent, not laid out at all.
+    let long = format!("SELECT {} FROM t", vec!["a"; 40_000].join(", "));
+    let mut h = statement_details(&long, false, false);
+    assert!(h.screen(120, 40).contains("Not laid out: longer than 64 KiB"));
+    assert_eq!(monitor(&h).statement.as_ref().map(|s| s.text.as_str()), Some(long.as_str()));
+}
+
+#[test]
+fn copying_and_opening_take_the_servers_text_not_the_layout() {
+    let mut h = statement_details(REPORT, false, false);
+    assert!(h.screen(120, 40).contains("Laid out for reading"));
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.keys("y");
+    assert_eq!(clip.last().as_deref(), Some(REPORT));
+    h.keys("o");
+    assert_eq!(h.app.tab().kind, TabKind::Console);
+    assert_eq!(h.app.tab().editor.text(), REPORT);
+}
+
+#[test]
+fn a_statement_is_laid_out_once_not_on_every_frame() {
+    let mut h = statement_details(REPORT, false, false);
+    h.screen(120, 40);
+    let first = monitor(&h).statement.as_ref().map(|s| s.text.as_ptr());
+    for _ in 0..3 {
+        h.screen(120, 40);
+        h.keys("j");
+    }
+    assert_eq!(monitor(&h).statement.as_ref().map(|s| s.text.as_ptr()), first, "worked out once");
+    // A new read with the same statement keeps it too.
+    h.advance(Duration::from_secs(2));
+    let t = ticks(&mut h);
+    let mut rows = rows();
+    rows.iter_mut().find(|r| r.key.id == 4302).unwrap().query =
+        Some(QueryText { text: REPORT.into(), shortened: false, maybe_cut_by_server: false });
+    h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(snapshot(2.0, 1100, rows, false)) });
+    h.screen(120, 40);
+    assert_eq!(monitor(&h).statement.as_ref().map(|s| s.text.as_ptr()), first, "the same text");
+}
+
+#[test]
+fn the_monitors_own_session_is_named_in_its_details_on_postgresql() {
+    let mut h = pg_selected(4400);
+    let list = h.screen(120, 40);
+    assert!(list.lines().any(|l| l.contains("4400") && l.contains("this monitor")), "{list}");
+    h.key(KeyCode::Enter);
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("session            4400 (this monitor)"), "{screen}");
+    assert!(
+        screen.contains("The monitor's own connection: its statement is the monitor reading the server"),
+        "{screen}"
+    );
+    insta::assert_snapshot!("monitor_own_session_pg_120x40", screen);
+    insta::assert_snapshot!("monitor_own_session_pg_80x24", h.screen(80, 24));
+    h.keys("c");
+    assert_eq!(said(&h), "This is the monitor's own connection");
+    assert!(actions_sent(&mut h).is_empty());
+}
+
+/// The monitor's own read on MySQL, as the process list shows it to an account without PROCESS.
+const MYSQL_OWN: &str = "SELECT CAST(UNIX_TIMESTAMP(NOW(6)) * 1000000 AS SIGNED) AS now, p.ID, p.USER, p.HOST, \
+                         p.DB, p.COMMAND, p.TIME, p.STATE, LEFT(p.INFO, 256) AS INFO, p.ID = CONNECTION_ID() AS \
+                         monitor FROM information_schema.PROCESSLIST p ORDER BY p.ID";
+
+#[test]
+fn the_monitors_own_session_is_named_in_its_details_on_mysql() {
+    use datarig_core::config::Config;
+    use datarig_core::monitor::format::{MySqlMonitor, Readable};
+    use datarig_core::profile::ConnectionConfig;
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, Ordering::SeqCst);
+    let cfg = Config {
+        connections: vec![ConnectionConfig { driver: "mysql".into(), ..ConnectionConfig::test_db() }],
+        ..Config::default()
+    };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    // Without PROCESS: only the account's own sessions, the monitor's among them.
+    let format = MonitorFormat::MySql(MySqlMonitor {
+        version: 80411,
+        performance_schema: true,
+        user: "datarig".into(),
+        process: Readable::Refused,
+        innodb_trx: Readable::Refused,
+        metadata_locks: Readable::Yes,
+        statements: Readable::Yes,
+        flavour: Flavour::Standard,
+    });
+    let mut rows = mysql_rows("SELECT 1");
+    rows.iter_mut().find(|r| r.monitor).unwrap().query =
+        Some(QueryText { text: MYSQL_OWN.into(), shortened: false, maybe_cut_by_server: false });
+    let mut h = sessions_on(h, format, rows);
+    select(&mut h, 4400);
+    let list = h.screen(120, 40);
+    assert!(list.lines().any(|l| l.contains("4400") && l.contains("this monitor")), "{list}");
+    h.key(KeyCode::Enter);
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("4400 (this monitor)"), "{screen}");
+    assert!(screen.contains("The monitor's own connection"), "{screen}");
+    // Laid out in MySQL's dialect (all of it on a taller screen).
+    let shown = statement_on(&h.screen(120, 60), "Laid out for reading");
+    assert!(shown.iter().any(|l| l.trim().starts_with("FROM")), "{screen}");
+    insta::assert_snapshot!("monitor_own_session_mysql_120x40", screen);
+    insta::assert_snapshot!("monitor_own_session_mysql_80x24", h.screen(80, 24));
+    h.keys("X");
+    assert_eq!(said(&h), "This is the monitor's own connection");
+    assert!(actions_sent(&mut h).is_empty());
+}
+
+/// MySQL with a session that said it reads `ANSI_QUOTES`: session 4302's statement `text`, its
+/// details open.
+fn mysql_ansi_details(text: &str) -> Harness {
+    use datarig_core::config::Config;
+    use datarig_core::profile::ConnectionConfig;
+    use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, Ordering::SeqCst);
+    let cfg = Config {
+        connections: vec![ConnectionConfig { driver: "mysql".into(), ..ConnectionConfig::test_db() }],
+        ..Config::default()
+    };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    let ansi = MySqlMode { ansi_quotes: true, ..MySqlMode::default() };
+    h.db(DbEvent::Language(Language::Sql(Dialect::MySql(ansi))));
+    let mut h = sessions_on(h, mysql_format(), mysql_rows(text));
+    select(&mut h, 4302);
+    h.key(KeyCode::Enter);
+    h
+}
+
+#[test]
+fn the_statement_is_read_in_the_sql_mode_the_sessions_said() {
+    // Under ANSI_QUOTES "total" is a name, not a string.
+    let mut h = mysql_ansi_details("SELECT \"total\" FROM t WHERE a = 'x'");
+    let t = h.draw(120, 60);
+    let buf = t.backend().buffer();
+    let th = datarig_tui::theme::cur();
+    let area = *buf.area();
+    let rows: Vec<String> =
+        (0..area.height).map(|y| (0..area.width).map(|x| buf[(x, y)].symbol().to_string()).collect()).collect();
+    let cell = |word: &str| {
+        let (y, x) = rows
+            .iter()
+            .enumerate()
+            .skip(14)
+            .find_map(|(y, r)| r.find(word).map(|b| (y, r[..b].chars().count())))
+            .unwrap_or_else(|| panic!("{word:?} in the details\n{}", rows.join("\n")));
+        buf[(x as u16, y as u16)].clone()
+    };
+    assert_eq!(cell("\"total\"").fg, th.syn_quoted_ident.fg.unwrap(), "a quoted name");
+    assert_eq!(cell("'x'").fg, th.syn_string.fg.unwrap(), "a string");
 }

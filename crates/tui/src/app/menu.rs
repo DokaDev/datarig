@@ -137,6 +137,7 @@ const MONITOR_MENU: &[Action] = &[
     Action::Monitor(MonitorAction::Terminate),
     Action::Monitor(MonitorAction::OpenConsole),
     Action::Monitor(MonitorAction::CopyQuery),
+    Action::Monitor(MonitorAction::Format),
 ];
 const MONITOR_PANE_MENU: &[Action] = &[
     Action::Monitor(MonitorAction::View(MonitorView::Overview)),

@@ -13,16 +13,6 @@ expression: "h.screen(120, 40)"
 │                            ││ 4302    web        shop       active                      400ms       SELECT count(*)… │
 │                            ││ 4400    datarig    shop       this monitor                0ms         SELECT … FROM p… │
 │                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
 │                            ││─ Session ──────────────────────────────────────────────────────────────────────────────│
 │                            ││ session            4211                                                                │
 │                            ││ kind               client                                                              │
@@ -36,7 +26,17 @@ expression: "h.screen(120, 40)"
 │                            ││ statement started  3m10s ago                                                           │
 │                            ││ in this state      for 3m10s                                                           │
 │                            ││                                                                                        │
-│                            ││ UPDATE orders SET status = 'paid' WHERE id = 7                                         │
+│                            ││ Laid out for reading (f: as sent)                                                      │
+│                            ││ UPDATE                                                                                 │
+│                            ││     orders                                                                             │
+│                            ││ SET                                                                                    │
+│                            ││     status = 'paid'                                                                    │
+│                            ││ WHERE                                                                                  │
+│                            ││     id = 7                                                                             │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
 │                            ││                                                                                        │
 │                            ││                                                                                        │
 │                            ││                                                                                        │

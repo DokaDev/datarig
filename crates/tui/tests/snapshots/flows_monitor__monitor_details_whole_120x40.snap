@@ -13,16 +13,6 @@ expression: "h.screen(120, 40)"
 │                            ││ 4302    web        shop       active                      400ms       SELECT count(*)… │
 │                            ││ 4400    datarig    shop       this monitor                0ms         SELECT … FROM p… │
 │                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
 │                            ││─ Session ──────────────────────────────────────────────────────────────────────────────│
 │                            ││ session            4211                                                                │
 │                            ││ kind               client                                                              │
@@ -38,7 +28,17 @@ expression: "h.screen(120, 40)"
 │                            ││                                                                                        │
 │                            ││ Read again by its session and its start (to the second): a new run of the same         │
 │                            ││ statement cannot be told apart                                                         │
-│                            ││ UPDATE orders SET status = 'paid' WHERE id = 7 AND note = 'the rest of the statement'  │
+│                            ││ Laid out for reading (f: as sent)                                                      │
+│                            ││ UPDATE                                                                                 │
+│                            ││     orders                                                                             │
+│                            ││ SET                                                                                    │
+│                            ││     status = 'paid'                                                                    │
+│                            ││ WHERE                                                                                  │
+│                            ││     id = 7                                                                             │
+│                            ││     AND note = 'the rest of the statement'                                             │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
 │                            ││                                                                                        │
 ╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯
  local-pg │     │ v view · Enter detail · c cancel · X end · / filter · a idle · p pause · : commands · Space ? help EN

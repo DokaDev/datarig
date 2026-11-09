@@ -20,9 +20,9 @@ expression: "h.screen(80, 24)"
 │                      ││ statement started  3m10s ago                         │
 │                      ││ in this state      for 3m10s                         │
 │                      ││                                                      │
-│                      ││ UPDATE orders SET status = 'paid' WHERE id = 7       │
-│                      ││                                                      │
-│                      ││                                                      │
-│                      ││                                                      │
+│                      ││ Laid out for reading (f: as sent)                    │
+│                      ││ UPDATE                                               │
+│                      ││     orders                                           │
+│                      ││ SET                                                  │
 ╰──────────────────────╯╰──────────────────────────────────────────────────────╯
  local-pg │   │ v view · Enter detail · c cancel · X end · / filter · a idle EN
