@@ -1041,7 +1041,7 @@ impl App {
     /// and its menu opens.
     pub(super) fn tab_bar_menu(&mut self, x: u16, y: u16) {
         use crate::widgets::tabbar::TabHit;
-        let Some(hit) = self.tab_hits.iter().find(|(a, b, _)| x >= *a && x < *b).map(|h| h.2) else { return };
+        let Some(hit) = self.pointer.tab_hits.iter().find(|(a, b, _)| x >= *a && x < *b).map(|h| h.2) else { return };
         let index = match hit {
             TabHit::Tab(i) | TabHit::Close(i) => i,
             TabHit::More(_) => return,
@@ -1071,7 +1071,7 @@ impl App {
         use crate::widgets::tabbar::TabHit;
         let bar = self.layout.tab_bar;
         let active = self.tabs.active_index();
-        let x = self.tab_hits.iter().find(|h| h.2 == TabHit::Tab(active)).map_or(bar.x, |h| h.0);
+        let x = self.pointer.tab_hits.iter().find(|h| h.2 == TabHit::Tab(active)).map_or(bar.x, |h| h.0);
         self.open_tab_menu((x, bar.y));
     }
 

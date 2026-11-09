@@ -12,7 +12,7 @@ impl App {
             || self.leader_at.is_some()
             || self.quitting.is_some()
             || self.copy_flash.is_some()
-            || self.tab_slide.due(self.now()).is_some()
+            || self.pointer.tab_slide.due(self.now()).is_some()
             || self.tabs.iter().any(|t| {
                 matches!(t.exec.paging, Paging::Open { in_block: false, .. }) && self.paging_timeout(t).is_some()
             })
@@ -56,8 +56,10 @@ impl App {
             || self.conn_test.as_ref().is_some_and(|t| t.state == TestState::Running);
         // A copy's flash wants its next frame (or, when it cannot fade, its end), tabs sliding
         // after a drag theirs and the completion popup its deadline, also between fine ticks.
-        let flash =
-            [self.copy_flash_due(now), self.tab_slide.due(now), self.tab().completion_due].into_iter().flatten().min();
+        let flash = [self.copy_flash_due(now), self.pointer.tab_slide.due(now), self.tab().completion_due]
+            .into_iter()
+            .flatten()
+            .min();
         if fine {
             let tick = flash.map_or(now + FINE_TICK, |f| f.min(now + FINE_TICK));
             return Some(tick.max(now + Duration::from_millis(1)));
@@ -161,7 +163,7 @@ impl App {
             self.hangul_hint = None;
         }
         self.copy_flash_tick(now);
-        self.tab_slide.tick(now);
+        self.pointer.tab_slide.tick(now);
         // An attempt opening its tunnel is not timed here (each step of the tunnel has a limit
         // of its own, which stops while the user answers a question).
         let late: Vec<ProfileId> = self

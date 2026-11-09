@@ -64,6 +64,7 @@ mod password;
 mod persist;
 pub mod picker;
 pub mod plan;
+mod pointer;
 pub mod presets;
 pub mod profiles;
 pub mod quick;
@@ -631,13 +632,6 @@ pub struct App {
     query_seq: u64,
     /// Last DDL request id handed out (a DDL tab waits for the answer of its own).
     ddl_seq: u64,
-    last_click: Option<(Instant, u16, u16)>,
-    /// Clicks in a row at the same place (1, 2 for a double click, 3 for a triple click).
-    clicks: u8,
-    /// A left-button drag in progress.
-    drag: Option<Drag>,
-    /// Where the pointer was at the last move of a grid drag (the wheel extends from there).
-    drag_at: Option<(u16, u16)>,
     /// Saved queries (`None` without a data directory).
     pub scripts: Option<datarig_core::scripts::ScriptStore>,
     /// The saved queries as last scanned (the explorer's "Saved queries" section).
@@ -663,9 +657,6 @@ pub struct App {
     /// Tabs of `workspace.toml` of a kind this version does not know: written back as they
     /// were read.
     unknown_tabs: Vec<String>,
-    /// Where each result tab of the strip was drawn last: its columns and the statement it
-    /// shows (`None`: Messages).
-    pub(crate) strip_hits: Vec<(u16, u16, Option<usize>, tabs::ResultView)>,
     /// The folder of the saved queries saved into last this run (the tree dialog's default).
     pub(crate) last_save_folder: Option<String>,
     /// The database and schema `:use` named for a tab, while the switch waits for its confirm.
@@ -674,27 +665,8 @@ pub struct App {
     pending_end: Option<tx::PendingEnd>,
     /// A `:use` whose name a list read earlier does not have, while the server is asked again.
     pending_use: Option<cmdline::PendingUse>,
-    /// A press on a tab of the tab bar, and the drag of that tab that may follow.
-    pub(crate) tab_drag: Option<tab_drag::TabDrag>,
-    /// Where each tab and scroll mark of the document tab bar was drawn last.
-    pub(crate) tab_hits: Vec<(u16, u16, crate::widgets::tabbar::TabHit)>,
-    /// How the document tab bar laid its tabs out last (a dragged tab follows the pointer by it).
-    pub(crate) tab_geom: crate::widgets::tabbar::BarGeom,
-    /// Tabs sliding to their places after a drag moved them.
-    pub(crate) tab_slide: tab_drag::TabSlide,
     /// The small clickable target under the pointer (drawn highlighted).
     pub pointer_on: Option<hover::PointerOn>,
-    /// The tab the pointer was over its grid or inspector in (a grid cell or an inspector entry
-    /// lit is of that tab's result only).
-    pub(crate) pointer_tab: Option<TabId>,
-    /// The column of the inspector's Row tab a press armed, with the result it is of (it is
-    /// picked on the release, over the same column of the same result).
-    pub(crate) detail_press: overlay::Press<(u64, usize)>,
-    /// The column the last release over the inspector's Row tab picked (a second click on it
-    /// shows its value whole); none once a press there armed nothing.
-    detail_picked: Option<(u64, usize)>,
-    /// The kind of the top dialog the last frame saw (`App::note_top`).
-    last_top: Option<OverlayKind>,
     /// The tips: usage counts, the page they turn with, each place's pick ([`tips`]).
     pub tips: tips::TipState,
     /// What's new does not show by itself at launch, nor is anything written for it (the tests
@@ -702,6 +674,8 @@ pub struct App {
     pub whats_new_paused: bool,
     /// The update check of this run ([`updates`]).
     pub updates: updates::Updates,
+    /// Pointer state: clicks, drags, and where tabs and result tabs were drawn last (hit tests).
+    pub(crate) pointer: pointer::PointerState,
 }
 
 /// Startup notice for a `[keymap.*]` entry that was skipped (or replaced a default).
@@ -875,10 +849,7 @@ impl App {
             test_seq: 0,
             query_seq: 0,
             ddl_seq: 0,
-            last_click: None,
-            clicks: 0,
-            drag: None,
-            drag_at: None,
+            pointer: Default::default(),
             scripts: None,
             script_list: Vec::new(),
             scripts_expanded: true,
@@ -889,16 +860,7 @@ impl App {
             workspace_due: None,
             last_focus: Focus::Tree,
             unknown_tabs: Vec::new(),
-            strip_hits: Vec::new(),
-            tab_drag: None,
-            tab_hits: Vec::new(),
-            tab_geom: Default::default(),
-            tab_slide: Default::default(),
             pointer_on: None,
-            pointer_tab: None,
-            detail_press: overlay::Press::default(),
-            detail_picked: None,
-            last_top: None,
             tips: tips::TipState::default(),
             whats_new_paused: false,
             updates: updates::Updates::default(),
@@ -1216,18 +1178,18 @@ impl App {
     /// Where each tab of the document tab bar was drawn last, and what it leads to (tests
     /// click them).
     pub fn tab_hits(&self) -> Vec<(u16, u16, crate::widgets::tabbar::TabHit)> {
-        self.tab_hits.clone()
+        self.pointer.tab_hits.clone()
     }
 
     /// The column tab `index` was drawn from last (a sliding or dragged tab where it was at
     /// that frame; tests follow it).
     pub fn tab_x(&self, index: usize) -> Option<i32> {
-        self.tab_geom.drawn.get(index).copied().flatten()
+        self.pointer.tab_geom.drawn.get(index).copied().flatten()
     }
 
     /// Where each result tab of the strip was drawn last, and what it shows (tests click them).
     pub fn strip_hits(&self) -> Vec<(u16, u16, Option<usize>, tabs::ResultView)> {
-        self.strip_hits.clone()
+        self.pointer.strip_hits.clone()
     }
 
     /// The result inspector is drawn as a panel next to the grid (shown, `detail_view =

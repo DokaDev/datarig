@@ -35,7 +35,7 @@ impl App {
             // A move has no button held: a tab dragged lost its release (let go outside the
             // window), so it stays where it was.
             // (A tab moved by keys stays: only a press ends that.)
-            let dropped = !self.tab_drag.as_ref().is_some_and(|d| d.keys) && self.end_tab_drag();
+            let dropped = !self.pointer.tab_drag.as_ref().is_some_and(|d| d.keys) && self.end_tab_drag();
             let hovered = if self.modal_open() {
                 // Under a dialog the workspace draws no highlight (`App::pointer_hover`); it is
                 // dropped so none comes back where the pointer no longer is.
@@ -53,9 +53,9 @@ impl App {
         if let Event::Mouse(m) = ev
             && m.kind == MouseEventKind::Down(MouseButton::Left)
         {
-            self.drag = None;
-            self.drag_at = None;
-            self.detail_press.disarm();
+            self.pointer.drag = None;
+            self.pointer.drag_at = None;
+            self.pointer.detail_press.disarm();
         }
         // A press of any button ends a tab's drag (it stays where it was).
         if let Event::Mouse(m) = ev
@@ -118,7 +118,7 @@ impl App {
             Event::Mouse(m) => self.handle_mouse(m),
             Event::Paste(text) => {
                 // A paste ends a tab moved by keys as any other key does.
-                if self.tab_drag.as_ref().is_some_and(|d| d.keys) {
+                if self.pointer.tab_drag.as_ref().is_some_and(|d| d.keys) {
                     self.end_tab_drag();
                 }
                 self.paste(&text)
@@ -129,12 +129,13 @@ impl App {
         // So do other tabs or another order (a key opened, closed or moved one).
         // A tab moved by keys ends as well when another tab became the active one.
         let other_tab = self
+            .pointer
             .tab_drag
             .as_ref()
             .is_some_and(|d| d.keys && self.tabs.position(d.tab) != Some(self.tabs.active_index()));
         if self.modal_open()
             || other_tab
-            || (self.tab_drag.as_ref().is_some_and(|d| d.lifted) && self.tab_drag_live().is_none())
+            || (self.pointer.tab_drag.as_ref().is_some_and(|d| d.lifted) && self.tab_drag_live().is_none())
         {
             self.end_tab_drag();
         }
@@ -799,8 +800,8 @@ impl App {
             // A release there still ends a drag (nothing moves).
             if m.kind == MouseEventKind::Up(MouseButton::Left) {
                 self.end_tab_drag();
-                self.drag = None;
-                self.drag_at = None;
+                self.pointer.drag = None;
+                self.pointer.drag_at = None;
             }
             return;
         }
@@ -871,7 +872,7 @@ impl App {
                     self.scroll_grid(d, 0);
                     // A drag goes on: the selection follows the rows that came under the
                     // pointer.
-                    if let (Some(Drag::Grid { .. }), Some((dx, dy))) = (self.drag, self.drag_at) {
+                    if let (Some(Drag::Grid { .. }), Some((dx, dy))) = (self.pointer.drag, self.pointer.drag_at) {
                         self.drag_to(dx, dy, false);
                     }
                 }
@@ -916,7 +917,7 @@ impl App {
             MouseEventKind::Down(MouseButton::Left)
                 if inside(l.explorer_edge) && !self.overlays.is_open(OverlayKind::CellViewer) =>
             {
-                self.drag = Some(Drag::ExplorerEdge);
+                self.pointer.drag = Some(Drag::ExplorerEdge);
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.overlays.is_open(OverlayKind::CellViewer) {
@@ -931,8 +932,8 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.tab_drag_release(x, y);
-                self.drag = None;
-                self.drag_at = None;
+                self.pointer.drag = None;
+                self.pointer.drag_at = None;
                 self.detail_release(x, y);
             }
             _ => {}
@@ -946,19 +947,19 @@ impl App {
     fn detail_release(&mut self, x: u16, y: u16) {
         let hit = if self.tabs.is_empty() { None } else { self.detail_hit(x, y) };
         let now = self.now();
-        let Some(picked) = self.detail_press.press(MouseEventKind::Up(MouseButton::Left), hit, now) else {
+        let Some(picked) = self.pointer.detail_press.press(MouseEventKind::Up(MouseButton::Left), hit, now) else {
             // Nothing picked (released elsewhere): the next click there is a first one.
-            self.detail_picked = None;
+            self.pointer.detail_picked = None;
             return;
         };
         let g = &mut self.tabs.active_mut().grid;
         g.col = picked.1;
         g.anchor = None;
         g.detached = false;
-        let again = self.clicks == 2 && self.detail_picked == Some(picked);
-        self.detail_picked = Some(picked);
+        let again = self.pointer.clicks == 2 && self.pointer.detail_picked == Some(picked);
+        self.pointer.detail_picked = Some(picked);
         if again {
-            self.last_click = None;
+            self.pointer.last_click = None;
             self.grid_action(GridAction::ViewCell);
         }
     }
@@ -985,7 +986,7 @@ impl App {
     /// A left press on a tab's body may start a drag of it (`app::tab_drag`).
     fn tab_bar_click(&mut self, x: u16, close: bool) {
         use crate::widgets::tabbar::TabHit;
-        let Some(hit) = self.tab_hits.iter().find(|(a, b, _)| x >= *a && x < *b).map(|h| h.2) else { return };
+        let Some(hit) = self.pointer.tab_hits.iter().find(|(a, b, _)| x >= *a && x < *b).map(|h| h.2) else { return };
         let (index, close) = match hit {
             TabHit::Tab(i) => (i, close),
             TabHit::More(i) if !close => (i, false),
@@ -1021,10 +1022,10 @@ impl App {
         }
         // A second click on the same cell soon after the first: the cell viewer (a word
         // in the editor; a third click there: the line).
-        let again = self.last_click.is_some_and(|(t, lx, ly)| t.elapsed() < DOUBLE_CLICK && (lx, ly) == (x, y));
-        self.clicks = if again { (self.clicks + 1).min(3) } else { 1 };
-        let double = self.clicks == 2;
-        self.last_click = Some((Instant::now(), x, y));
+        let again = self.pointer.last_click.is_some_and(|(t, lx, ly)| t.elapsed() < DOUBLE_CLICK && (lx, ly) == (x, y));
+        self.pointer.clicks = if again { (self.pointer.clicks + 1).min(3) } else { 1 };
+        let double = self.pointer.clicks == 2;
+        self.pointer.last_click = Some((Instant::now(), x, y));
         if self.profiles.is_empty() {
             if inside(l.editor) {
                 self.focus = Focus::Editor;
@@ -1034,7 +1035,7 @@ impl App {
         } else if inside(l.editor) {
             self.focus = Focus::Editor;
             let i = l.editor_text;
-            let clicks = self.clicks;
+            let clicks = self.pointer.clicks;
             let t = self.tab_mut();
             t.popup = None;
             if inside(i) {
@@ -1045,14 +1046,14 @@ impl App {
                     _ => {
                         t.editor.click(cx, cy);
                         let anchor = (t.editor.row, t.editor.col);
-                        self.drag = Some(Drag::Editor { anchor });
+                        self.pointer.drag = Some(Drag::Editor { anchor });
                     }
                 }
             }
         } else if inside(l.strip) {
             // A result tab of the strip.
             self.focus = Focus::Results;
-            let hit = self.strip_hits.iter().find(|(a, b, ..)| x >= *a && x < *b).map(|h| (h.2, h.3));
+            let hit = self.pointer.strip_hits.iter().find(|(a, b, ..)| x >= *a && x < *b).map(|h| (h.2, h.3));
             match hit {
                 Some((Some(i), _)) => self.tab_mut().show_result(i),
                 Some((None, view)) => self.tab_mut().exec.view = view,
@@ -1062,13 +1063,13 @@ impl App {
             self.focus = Focus::Results;
             // A second click on a session shows it in full.
             if self.monitor_click(x, y) && double {
-                self.last_click = None;
+                self.pointer.last_click = None;
                 self.monitor_action(super::monitor::MonitorAction::Details);
             }
         } else if inside(l.results) && self.plan_shown() {
             self.focus = Focus::Results;
             if double {
-                self.last_click = None;
+                self.pointer.last_click = None;
             }
             self.plan_click(x, y, double);
         } else if inside(l.results) && self.changes_shown() {
@@ -1078,7 +1079,7 @@ impl App {
             self.focus = Focus::Results;
             // A second click on the same point shows its row.
             if self.chart_click(x, y, true) && double {
-                self.last_click = None;
+                self.pointer.last_click = None;
                 self.chart_action(super::chart::ChartAction::GotoRow);
             }
         } else if inside(l.results) {
@@ -1098,7 +1099,7 @@ impl App {
             if let Some((shape, to)) = whole {
                 t.grid.select_whole(shape, to, extend);
                 let anchor = t.grid.anchor.unwrap_or(to);
-                self.drag = Some(Drag::Grid { anchor, shape });
+                self.pointer.drag = Some(Drag::Grid { anchor, shape });
                 return;
             }
             let hit = match &t.results {
@@ -1106,21 +1107,21 @@ impl App {
                 _ => false,
             };
             if hit && double {
-                self.last_click = None;
+                self.pointer.last_click = None;
                 self.grid_action(GridAction::ViewCell);
             } else if hit {
                 // A click drops the selected range; a drag from here starts one.
                 t.grid.anchor = None;
-                self.drag = Some(Drag::Grid { anchor: (t.grid.row, t.grid.col), shape: Shape::Cells });
+                self.pointer.drag = Some(Drag::Grid { anchor: (t.grid.row, t.grid.col), shape: Shape::Cells });
             }
         } else if inside(l.detail) {
             // The inspector takes the focus; its title's tab names switch tabs; a column of its
             // Row tab is armed (picked on the release over it).
             self.focus = Focus::Inspector;
             let (hit, now) = (self.detail_hit(x, y), self.now());
-            self.detail_press.press(m.kind, hit, now);
-            if self.detail_press.armed.is_none() {
-                self.detail_picked = None;
+            self.pointer.detail_press.press(m.kind, hit, now);
+            if self.pointer.detail_press.armed.is_none() {
+                self.pointer.detail_picked = None;
             }
             if y == l.detail.y {
                 let rel = x.saturating_sub(l.detail.x);
@@ -1133,7 +1134,7 @@ impl App {
             }
         }
         if on_divider {
-            self.drag = Some(Drag::Divider);
+            self.pointer.drag = Some(Drag::Divider);
         }
     }
 
@@ -1142,7 +1143,7 @@ impl App {
     /// `moved`: the pointer moved (a drag event, not the wheel): only then does a pointer past
     /// the grid's left or right edge move its view sideways.
     fn drag_to(&mut self, x: u16, y: u16, moved: bool) {
-        match self.drag {
+        match self.pointer.drag {
             Some(Drag::Editor { anchor }) if self.focus == Focus::Editor && !self.tabs.is_empty() => {
                 let i = self.layout.editor_text;
                 let rel_y = (i32::from(y) - i32::from(i.y)).clamp(-1, i32::from(i.height));
@@ -1155,7 +1156,7 @@ impl App {
             // The border follows the pointer: the explorer ends on its column.
             Some(Drag::ExplorerEdge) => self.resize_explorer((x + 1).saturating_sub(self.layout.workspace.x)),
             Some(Drag::Grid { anchor, shape }) if self.focus == Focus::Results && !self.tabs.is_empty() => {
-                self.drag_at = Some((x, y));
+                self.pointer.drag_at = Some((x, y));
                 let t = self.tabs.active_mut();
                 let Results::Rows(rs) = &t.results else { return };
                 let (total, cols) = (rs.rows.len(), rs.columns.len());

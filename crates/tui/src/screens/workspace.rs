@@ -92,11 +92,11 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
     let mut hits = draw_tab_bar(app, bar_and_panes[0], f.buffer_mut());
     // The bar laid out otherwise (a tab closed, added, scrolled, the screen resized): what was
     // under the pointer is not there any more.
-    if hits != app.tab_hits && matches!(app.pointer_on, Some(PointerOn::Tab(_))) {
+    if hits != app.pointer.tab_hits && matches!(app.pointer_on, Some(PointerOn::Tab(_))) {
         app.pointer_on = None;
         hits = draw_tab_bar(app, bar_and_panes[0], f.buffer_mut());
     }
-    app.tab_hits = hits;
+    app.pointer.tab_hits = hits;
 
     // A Monitor tab: its views in the editor's and results' place.
     if app.tab().is_monitor() && !matches!(zoom, Some(Focus::Tree)) {
@@ -158,7 +158,7 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
     // stays lit.
     let entries = app.layout.detail_list.height > 0 && !app.modal_open();
     let now = app.now();
-    app.detail_press.drawn(entries, now);
+    app.pointer.detail_press.drawn(entries, now);
     if !entries && matches!(app.pointer_on, Some(PointerOn::Detail(_))) {
         app.pointer_on = None;
     }
@@ -328,12 +328,12 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
     // The result tabs of the last run, the Chart, a Plan and the Messages on the first line.
     let strip = app.strip_shown() && rinner.height > 2;
-    let old_strip = std::mem::take(&mut app.strip_hits);
+    let old_strip = std::mem::take(&mut app.pointer.strip_hits);
     let content = if strip {
         let line = Rect { height: 1, ..rinner };
         app.layout.strip = line;
         draw_strip(app, line, buf);
-        if app.strip_hits != old_strip && matches!(app.pointer_on, Some(PointerOn::Strip(..))) {
+        if app.pointer.strip_hits != old_strip && matches!(app.pointer_on, Some(PointerOn::Strip(..))) {
             app.pointer_on = None;
             draw_strip(app, line, buf);
         }
@@ -536,7 +536,7 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
         let at = end + 1;
         put(buf, at, area.y, &text, (area.x + area.width).saturating_sub(at) as usize, style);
     }
-    app.strip_hits = hits;
+    app.pointer.strip_hits = hits;
 }
 
 /// The keys of the previous and next result tab in the results pane (`H/L`), when the pane has

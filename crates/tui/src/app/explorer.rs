@@ -1181,16 +1181,16 @@ impl App {
                     // A click on the arrow toggles the row; a second one toggles it back (it
                     // is no double click: it does not open the row).
                     self.explorer.select(&rows, i);
-                    self.last_click = None;
+                    self.pointer.last_click = None;
                     self.explorer_set_open(&rows[i], None);
                     return;
                 }
                 let double = self.explorer.index(&rows) == i
-                    && self.last_click.is_some_and(|(t, _, ly)| t.elapsed() < DOUBLE_CLICK && ly == y);
+                    && self.pointer.last_click.is_some_and(|(t, _, ly)| t.elapsed() < DOUBLE_CLICK && ly == y);
                 self.explorer.select(&rows, i);
-                self.last_click = Some((Instant::now(), x, y));
+                self.pointer.last_click = Some((Instant::now(), x, y));
                 if double {
-                    self.last_click = None;
+                    self.pointer.last_click = None;
                     self.explorer_activate(&rows[i]);
                 }
             }
