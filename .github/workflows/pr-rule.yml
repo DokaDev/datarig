@@ -81,7 +81,8 @@ jobs:
           )
 
           found = []
-          m = closing.search(body)
+          # An example in inline code (`Fixes #123`) closes nothing.
+          m = closing.search(re.sub(r"`[^`\n]*`", "", body))
           if m:
               found.append(f"the description: {m.group(0)}")
           for sha, message in messages:
