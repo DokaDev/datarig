@@ -12,7 +12,7 @@ use crate::route::{Cancel, Route, route};
 use crate::tls::{PgTls, TlsError};
 use datarig_core::driver::{
     Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, EditFormat, ExplainFormat, Hierarchy,
-    PingError, PingInfo, Session, SessionRole, SessionStatement,
+    PingError, PingInfo, ServerMessage, Session, SessionRole, SessionStatement,
 };
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
@@ -28,7 +28,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 use tokio_postgres::config::{Host, SslNegotiation};
-use tokio_postgres::error::SqlState;
+use tokio_postgres::error::{ErrorPosition, SqlState};
 use tokio_postgres::{Client, Config, SimpleQueryMessage};
 
 pub struct PgDriver;
@@ -629,7 +629,7 @@ pub(crate) fn db_error(e: &tokio_postgres::Error) -> DbError {
         if db.code() == &SqlState::LOCK_NOT_AVAILABLE {
             return DbError::LockBusy(s);
         }
-        return DbError::Server(s);
+        return DbError::Server(server_message(s, db.position(), db.hint()));
     }
     if e.is_closed() {
         return DbError::Closed;
@@ -648,6 +648,16 @@ pub(crate) fn db_error(e: &tokio_postgres::Error) -> DbError {
         src = inner.source();
     }
     DbError::Connection(Fault::new(kind, chain(e)))
+}
+
+/// The server's `text` with where it points and its hint. A position in a query of the server's
+/// own (a function body's) is not one in the statement sent, so it is left out.
+fn server_message(text: String, position: Option<&ErrorPosition>, hint: Option<&str>) -> ServerMessage {
+    let position = match position {
+        Some(ErrorPosition::Original(at)) => Some(*at),
+        Some(ErrorPosition::Internal { .. }) | None => None,
+    };
+    ServerMessage { text, position, hint: hint.map(str::to_owned) }
 }
 
 /// The TLS problem behind an error: the handshake's (or getting ready for it), a server that

@@ -33,12 +33,81 @@ impl From<(Vec<String>, Vec<String>)> for SchemaObjects {
     }
 }
 
+/// A server's error message: the text shown as it is, and what the server told besides it.
+/// It reads as its text (`Deref` to `str`, `Display`), and its `Debug` is the text's alone
+/// when nothing else is known.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct ServerMessage {
+    /// The text as the UI shows it (severity, text, detail).
+    pub text: String,
+    /// Where in the statement as sent the error is: a 1-based count of characters (not bytes),
+    /// as PostgreSQL reports it. `None` when the server did not say, or pointed into a query of
+    /// its own (a function body's).
+    pub position: Option<u32>,
+    /// The server's suggestion of what to do about it.
+    pub hint: Option<String>,
+}
+
+impl ServerMessage {
+    /// The byte offset in `statement` of the character at the 1-based `position`, for slicing
+    /// it: `None` when the position is 0 or past its last character.
+    pub fn byte_offset(statement: &str, position: u32) -> Option<usize> {
+        let nth = usize::try_from(position).ok()?.checked_sub(1)?;
+        statement.char_indices().nth(nth).map(|(at, _)| at)
+    }
+}
+
+impl std::ops::Deref for ServerMessage {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
+impl std::fmt::Display for ServerMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl std::fmt::Debug for ServerMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.position.is_none() && self.hint.is_none() {
+            return self.text.fmt(f);
+        }
+        f.debug_struct("ServerMessage")
+            .field("text", &self.text)
+            .field("position", &self.position)
+            .field("hint", &self.hint)
+            .finish()
+    }
+}
+
+impl From<String> for ServerMessage {
+    fn from(text: String) -> Self {
+        Self { text, position: None, hint: None }
+    }
+}
+
+impl From<&str> for ServerMessage {
+    fn from(text: &str) -> Self {
+        text.to_owned().into()
+    }
+}
+
+impl From<ServerMessage> for String {
+    fn from(m: ServerMessage) -> Self {
+        m.text
+    }
+}
+
 /// Why a database operation failed. Only the server's own message is text to show as it is
 /// (it is data); everything else is a kind the UI words.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DbError {
-    /// The server's message (severity, text, detail).
-    Server(String),
+    /// The server's message (severity, text, detail), and where in the statement it points.
+    Server(ServerMessage),
     /// The server closed the connection.
     Closed,
     /// The server did not answer within this time.
@@ -245,8 +314,8 @@ impl DbError {
     /// log only.
     pub fn raw(&self) -> Cow<'_, str> {
         match self {
-            DbError::Server(s)
-            | DbError::NeedsNoTransaction(s)
+            DbError::Server(m) => Cow::Borrowed(&m.text),
+            DbError::NeedsNoTransaction(s)
             | DbError::IdleInTransactionTimeout(s)
             | DbError::LockTimeout(s)
             | DbError::LockBusy(s)
@@ -308,14 +377,14 @@ impl DbError {
 #[cfg(any(test, feature = "test-util"))]
 impl From<&str> for DbError {
     fn from(s: &str) -> Self {
-        DbError::Server(s.to_string())
+        DbError::Server(s.into())
     }
 }
 
 #[cfg(any(test, feature = "test-util"))]
 impl From<String> for DbError {
     fn from(s: String) -> Self {
-        DbError::Server(s)
+        DbError::Server(s.into())
     }
 }
 
@@ -1251,3 +1320,6 @@ pub enum DbEvent {
         own: OwnSession,
     },
 }
+
+#[cfg(test)]
+mod tests;

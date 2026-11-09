@@ -664,7 +664,7 @@ fn failure(e: &tokio_postgres::Error, path_tx: bool) -> (DbError, bool) {
     let blocked =
         code == Some(&SqlState::ACTIVE_SQL_TRANSACTION) || code == Some(&SqlState::INVALID_TRANSACTION_TERMINATION);
     match db_error(e) {
-        DbError::Server(msg) if path_tx && blocked => (DbError::NeedsNoTransaction(msg), false),
+        DbError::Server(msg) if path_tx && blocked => (DbError::NeedsNoTransaction(msg.into()), false),
         error => (error, is_cancel(e)),
     }
 }

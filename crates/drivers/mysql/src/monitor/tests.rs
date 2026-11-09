@@ -73,7 +73,7 @@ fn ok() -> Result<Rows, Fail> {
 }
 
 fn server(code: u16) -> Result<Rows, Fail> {
-    Err(Fail::Server { code, error: DbError::Server(format!("ERROR {code}")) })
+    Err(Fail::Server { code, error: DbError::Server(format!("ERROR {code}").into()) })
 }
 
 /// Stands in for the connection: answers each statement with the next of `answers` (none

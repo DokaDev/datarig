@@ -685,7 +685,7 @@ fn policy_command(code: &str) -> Option<String> {
 
 /// The document a statement built, as the model.
 fn parse(json: &str) -> Result<DdlSource, DbError> {
-    let raw: Raw = serde_json::from_str(json).map_err(|e| DbError::Server(format!("DDL: {e}")))?;
+    let raw: Raw = serde_json::from_str(json).map_err(|e| DbError::Server(format!("DDL: {e}").into()))?;
     if raw.locked {
         return Err(DbError::Locked);
     }

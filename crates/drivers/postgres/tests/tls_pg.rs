@@ -123,7 +123,7 @@ async fn every_mode_against_a_trusted_an_untrusted_and_a_misnamed_certificate() 
         // No CA file: the system's trusted certificates, which do not include the test CA.
         (at("verify-full", None), untrusted()),
         // TLS off: the server takes TLS logins only.
-        (at("disable", None), Err(DbError::Server(String::new()))),
+        (at("disable", None), Err(DbError::Server(String::new().into()))),
     ];
     for (cfg, want) in cases {
         let got = connect(&cfg, None).await;

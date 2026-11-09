@@ -252,7 +252,7 @@ struct RawTrigger {
 /// The document the statement built, as the model. A kind of relation the explorer does not
 /// list (an index, a sequence) is not supported.
 fn parse(json: &str) -> Result<TableStructure, DbError> {
-    let raw: Raw = serde_json::from_str(json).map_err(|e| DbError::Server(format!("table structure: {e}")))?;
+    let raw: Raw = serde_json::from_str(json).map_err(|e| DbError::Server(format!("table structure: {e}").into()))?;
     model(raw)
 }
 

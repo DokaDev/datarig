@@ -61,7 +61,7 @@ fn answered(acted: Result<Rows, Fail>) -> Option<Pipelined> {
 }
 
 fn server(sqlstate: &str) -> Fail {
-    Fail::Server { sqlstate: sqlstate.into(), error: DbError::Server(format!("ERROR: {sqlstate}")) }
+    Fail::Server { sqlstate: sqlstate.into(), error: DbError::Server(format!("ERROR: {sqlstate}").into()) }
 }
 
 async fn acting(pg: &PgMonitor, kind: ActionKind, answer: Option<Pipelined>) -> Acted {
