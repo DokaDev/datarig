@@ -7,7 +7,7 @@ expression: lines
 │▾ Connections 1             ││ PostgreSQL 17.11 · read-write · up 41d3h · max 200 connections                         │
 │  ▾ ●   local-pg            ││ 1 Overview  2 Sessions  3 Locks  4 Replication                                every 2s │
 │    ▾ datarig default       ││ commits/s            412                                                             █ │
-│      ▸ analytics           ││ rows/s by operation  9.1 k   ■ read 8.2 k  ■ inserted 412  ■ updated 206               │
+│      ▸ analytics           ││ rows/s by operation          ■ read 8.2 k  ■ inserted 412  ■ updated 206               │
 │      ▸ public              ││                              ■ deleted 206                                             │
 │      ▸ shop                ││ sessions             41/200                                                         ██ │
 │                            ││ sessions by state    45      ■ running 1  ■ waiting 1  ■ idle in tx 1  ■ idle 37       │

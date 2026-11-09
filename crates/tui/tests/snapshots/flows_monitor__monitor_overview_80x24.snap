@@ -7,7 +7,7 @@ expression: "h.screen(80, 24)"
 │▾ Connections 1       ││ PostgreSQL 17.11 · read-write · up 41d3h · max 200 … │
 │  ▾ ●   local-pg      ││ 1 Overview  2  3  4                         every 2s │
 │    ▾ datarig default ││ commits/s       412                                █ │
-│      ▸ analytics     ││ rows/s by oper… 9.1 k   ■ read 8.2 k  ■ inserted 412 │
+│      ▸ analytics     ││ rows/s by oper…         ■ read 8.2 k  ■ inserted 412 │
 │      ▸ public        ││                         ■ updated 206  ■ deleted 206 │
 │      ▸ shop          ││ sessions        41/200                            ██ │
 │                      ││ sessions by st… 45      ■ running 1  ■ waiting 1     │

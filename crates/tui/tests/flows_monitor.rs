@@ -370,7 +370,12 @@ fn screens_80x24_and_120x40() {
     h.advance(Duration::from_secs(2));
     let t = ticks(&mut h);
     h.monitor_db(DbEvent::MonitorSnapshot { request: t[0].0, result: Ok(snapshot(2.0, 1824, rows(), false)) });
-    insta::assert_snapshot!("monitor_overview_120x40", h.screen(120, 40));
+    let screen = h.screen(120, 40);
+    // The rows by operation are not parts of one total: none on the border.
+    let head = screen.lines().find(|l| l.contains("┌ rows/s by operation")).unwrap();
+    let border = &head[head.find("┌ rows/s by operation").unwrap()..];
+    assert!(!border[..border.find('┐').unwrap()].chars().any(|c| c.is_ascii_digit()), "{screen}");
+    insta::assert_snapshot!("monitor_overview_120x40", screen);
     insta::assert_snapshot!("monitor_overview_80x24", h.screen(80, 24));
     h.keys("2");
     insta::assert_snapshot!("monitor_sessions_120x40", h.screen(120, 40));
@@ -494,10 +499,11 @@ fn the_charts_wrap_their_legend_and_give_way_when_short() {
     let lines = h.screen(120, 26);
     let row = |text: &str| lines.lines().find(|l| l.contains(text)).unwrap_or_else(|| panic!("{text}: {lines}"));
     let column = |line: &str, text: &str| line.find(text).map(|b| line[..b].chars().count());
-    let (commits, rows) = (row("commits/s"), row("rows/s by operation"));
+    let (commits, rows, states) = (row("commits/s"), row("rows/s by operation"), row("sessions by state"));
     assert!(rows.contains("■ read 8.2 k  ■ inserted 412"), "{lines}");
-    // One column of values for metrics and charts alike.
-    assert_eq!(column(commits, "412"), column(rows, "9.1 k"), "{lines}");
+    // One column of values for metrics and charts alike; the rows by operation have no total.
+    assert_eq!(column(commits, "412"), column(states, "45"), "{lines}");
+    assert_eq!(column(rows, "■ read"), column(states, "■ running"), "{lines}");
     insta::assert_snapshot!("monitor_overview_lines_120x26", lines);
 }
 
@@ -529,11 +535,8 @@ fn a_chart_says_why_it_is_not_there_and_whose_threads_it_counts() {
     assert!(screen.contains("sessions by state: this account only"), "{screen}");
 }
 
-#[test]
-fn without_colours_a_chart_draws_its_total_and_the_legend_tells_the_series() {
-    use ratatui::style::Color;
-    let mut h = mysql_open(mysql_snapshot(0.0, 1000, true));
-    answer_next(&mut h, mysql_snapshot(2.0, 1824, false));
+/// The theme with no chart colours; returns its text colour.
+fn without_colours(h: &mut Harness) -> ratatui::style::Color {
     let mut plain = (*h.app.theme).clone();
     for c in [
         &mut plain.chart_1,
@@ -543,10 +546,97 @@ fn without_colours_a_chart_draws_its_total_and_the_legend_tells_the_series() {
         &mut plain.chart_5,
         &mut plain.chart_6,
     ] {
-        *c = Color::Reset;
+        *c = ratatui::style::Color::Reset;
     }
     let fg = plain.fg;
     h.app.theme = std::sync::Arc::new(plain);
+    fg
+}
+
+/// The braille bits of the cells of the box whose title starts with `title`, row by row inside
+/// its border.
+fn chart_cells(buf: &ratatui::buffer::Buffer, title: &str) -> Vec<Vec<(u8, ratatui::style::Color)>> {
+    let area = buf.area;
+    let text = |y: u16| (0..area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<Vec<_>>();
+    let head = format!("┌ {title}");
+    for y in 0..area.height {
+        let row = text(y);
+        let line: String = row.concat();
+        let Some(at) = line.find(&head) else { continue };
+        let left = line[..at].chars().count() as u16;
+        let right = (left + 1..area.width).find(|&x| buf[(x, y)].symbol() == "┐").expect("a box");
+        return (y + 1..area.height)
+            .take_while(|&r| buf[(left, r)].symbol() == "│")
+            .map(|r| {
+                (left + 1..right)
+                    .map(|x| {
+                        let c = &buf[(x, r)];
+                        let ch = c.symbol().chars().next().unwrap_or(' ') as u32;
+                        let bits = if (0x2800..=0x28FF).contains(&ch) { (ch - 0x2800) as u8 } else { 0 };
+                        (bits, c.fg)
+                    })
+                    .collect()
+            })
+            .collect();
+    }
+    panic!("no chart {title}");
+}
+
+#[test]
+fn a_total_is_unknown_while_one_of_its_series_has_no_value() {
+    let mut h = mysql_open(mysql_snapshot(0.0, 1000, true));
+    answer_next(&mut h, mysql_snapshot(2.0, 1824, false));
+    // A CALL in between: our own SELECTs cannot be counted, so that point of the select line is
+    // a gap, and so is the total: never insert + update + delete alone.
+    let mut called = mysql_snapshot(4.0, 2648, false);
+    called.sample.own.uncounted = 1;
+    answer_next(&mut h, called);
+    let screen = h.screen(120, 40);
+    let head = screen.lines().find(|l| l.contains("┌ statements/s by type")).unwrap();
+    let chart = &head[head.find("┌ statements/s by type").unwrap()..];
+    assert!(chart[..chart.find('┐').unwrap()].ends_with(" – "), "{screen}");
+    assert!(screen.contains("■ select –") && screen.contains("■ insert 52"), "{screen}");
+    // Without colours the total line breaks there: nothing in the newest dot column.
+    without_colours(&mut h);
+    let term = h.draw(120, 40);
+    let cells = chart_cells(term.backend().buffer(), "statements/s by type");
+    const RIGHT_DOTS: u8 = 0x08 | 0x10 | 0x20 | 0x80;
+    for row in cells.iter().take(5) {
+        assert_eq!(row[row.len() - 1].0 & RIGHT_DOTS, 0, "{screen}");
+    }
+    assert!(cells.iter().take(5).any(|r| r.iter().any(|c| c.0 != 0)), "the points before are drawn");
+}
+
+#[test]
+fn a_series_the_legend_cannot_name_is_not_drawn() {
+    // Figures so wide that the threads' legend has no room left for its last entry.
+    let wide = |mut s: Snapshot| {
+        for g in &mut s.gauges {
+            if matches!(g.kind, GaugeKind::CommandConnect | GaugeKind::CommandBinlogDump) {
+                g.value = 123_456;
+            }
+        }
+        s
+    };
+    let mut h = mysql_open(wide(mysql_snapshot(0.0, 1000, true)));
+    answer_next(&mut h, wide(mysql_snapshot(2.0, 1824, false)));
+    let screen = h.screen(120, 40);
+    assert!(!screen.contains("■ other"), "{screen}");
+    assert!(screen.lines().any(|l| l.contains("■ binlog dump 123456  …")), "{screen}");
+    let palette = h.app.theme.chart();
+    let term = h.draw(120, 40);
+    let cells = chart_cells(term.backend().buffer(), "sessions by state");
+    let colours: Vec<_> = cells.iter().flatten().filter(|c| c.0 != 0).map(|c| c.1).collect();
+    assert!(!colours.contains(&palette[5]), "the other threads' line has no legend entry: {screen}");
+    assert!(colours.contains(&palette[4]), "the binlog dump line is named: {screen}");
+}
+
+#[test]
+fn without_colours_a_chart_draws_its_total_and_the_legend_tells_the_series() {
+    use ratatui::style::Color;
+    let mut h = mysql_open(mysql_snapshot(0.0, 1000, true));
+    answer_next(&mut h, mysql_snapshot(2.0, 1824, false));
+    let fg = without_colours(&mut h);
     let term = h.draw(120, 40);
     let buf = term.backend().buffer();
     let dots: Vec<Color> = buf

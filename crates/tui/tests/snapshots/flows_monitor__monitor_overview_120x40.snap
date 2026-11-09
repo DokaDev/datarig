@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_monitor.rs
-expression: "h.screen(120, 40)"
+expression: screen
 ---
 ╭ Explorer ──────────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                                                     
 │  ＋ New connection         │╭ Monitor: local-pg ─────────────────────────────────────────────────────────────────────╮
@@ -15,7 +15,7 @@ expression: "h.screen(120, 40)"
 │                            ││┌ rollbacks/s ───────── 0.0 ┐                                                           │
 │                            │││                          ▁│                                                           │
 │                            ││└───────────────────────────┘                                                           │
-│                            ││┌ rows/s by operation ────────────── 9.1 k ┐┌ sessions by state ─────────────────── 45 ┐│
+│                            ││┌ rows/s by operation ─────────────────────┐┌ sessions by state ─────────────────── 45 ┐│
 │                            │││8.2 k                                    ⠈││37                                       ⠉││
 │                            │││                                          ││                                          ││
 │                            │││                                          ││                                          ││

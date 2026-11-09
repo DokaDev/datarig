@@ -74,6 +74,9 @@ struct ChartDef {
     /// Counted from the process list, which holds the account's own threads only without
     /// `PROCESS`: the title says so then.
     own_account: bool,
+    /// Its series are parts of one total, shown on its border (the rows by operation are not:
+    /// the rows read count the scans of updates and deletes too).
+    total: bool,
 }
 
 const STATEMENTS_BY_TYPE: ChartDef = ChartDef {
@@ -88,6 +91,7 @@ const STATEMENTS_BY_TYPE: ChartDef = ChartDef {
     rates: true,
     only_above_zero: None,
     own_account: false,
+    total: true,
 };
 
 const ROWS_BY_OPERATION: ChartDef = ChartDef {
@@ -102,6 +106,7 @@ const ROWS_BY_OPERATION: ChartDef = ChartDef {
     rates: true,
     only_above_zero: None,
     own_account: false,
+    total: false,
 };
 
 const SESSION_STATES: ChartDef = ChartDef {
@@ -118,6 +123,7 @@ const SESSION_STATES: ChartDef = ChartDef {
     rates: false,
     only_above_zero: Some(Metric::Gauge(GaugeKind::StateUnknown)),
     own_account: false,
+    total: true,
 };
 
 const THREAD_COMMANDS: ChartDef = ChartDef {
@@ -134,13 +140,15 @@ const THREAD_COMMANDS: ChartDef = ChartDef {
     rates: false,
     only_above_zero: None,
     own_account: true,
+    total: true,
 };
 
 /// A chart as a frame draws it.
 struct ChartData {
     title: String,
-    /// The sum of its own series' latest values (what is drawn), `–` when none has one.
-    total: String,
+    /// The sum of its own series' latest values, `–` when one of them has none; `None`: the
+    /// chart has no total.
+    total: Option<String>,
     series: Vec<Drawn>,
     rates: bool,
     /// Why the chart is not there, said in its place.
@@ -682,7 +690,8 @@ impl Cx<'_> {
             // so wide that a chart's legend gets under [`COMPACT_LEGEND_MIN`] (longer names
             // are cut).
             let values: Vec<String> = shown.iter().map(|k| self.metric_value(*k)).collect();
-            let value_w = values.iter().chain(charts.iter().map(|c| &c.total)).map(|v| width(v)).max().unwrap_or(0);
+            let totals = charts.iter().filter_map(|c| c.total.as_ref());
+            let value_w = values.iter().chain(totals).map(|v| width(v)).max().unwrap_or(0);
             let value_w = (value_w + 2).clamp(6, 11);
             let longest = shown
                 .iter()
@@ -753,7 +762,8 @@ impl Cx<'_> {
                     self.chart_box(&charts[0], Rect { y, ..full(h0) }, buf);
                     let rows = charts_h - h0;
                     let at = Rect { x: area.x + 1, y: y + h0, width: area.width.saturating_sub(2), height: rows };
-                    let columns = (width(&charts[1].title) + 2, width(&charts[1].total) + 2);
+                    let total_w = charts[1].total.as_ref().map_or(0, |t| width(t) + 2);
+                    let columns = (width(&charts[1].title) + 2, total_w);
                     self.chart_lines(&charts[1], at, columns, buf);
                 }
             }
@@ -877,9 +887,12 @@ impl Cx<'_> {
         if !there {
             series.clear();
         }
-        let lasts: Vec<f64> = series.iter().filter_map(|s| s.last).collect();
-        let mut data = ChartData { title, total: String::new(), series, rates: def.rates, missing };
-        data.total = data.value((!lasts.is_empty()).then(|| lasts.iter().sum()));
+        // A series without a value makes the total unknown, never the sum of the others.
+        let sum = series.iter().map(|s| s.last).sum::<Option<f64>>();
+        let mut data = ChartData { title, total: None, series, rates: def.rates, missing };
+        if def.total {
+            data.total = Some(data.value(sum));
+        }
         data
     }
 
@@ -920,7 +933,7 @@ impl Cx<'_> {
         let block = Block::default().borders(Borders::ALL).border_style(Style::new().fg(th.border));
         let inner = block.inner(at);
         block.render(at, buf);
-        let value = format!(" {} ", c.total);
+        let value = c.total.as_ref().map_or(String::new(), |t| format!(" {t} "));
         let room = at.width.saturating_sub(2) as usize;
         let vw = width(&value).min(room);
         // The title's space after it gives way before the title does.
@@ -941,20 +954,26 @@ impl Cx<'_> {
         let legend = legend_rows(&c.legend(), &[inner.width as usize; LEGEND_ROWS]);
         let plot_h = inner.height.saturating_sub(legend.len() as u16).min(PLOT_ROWS);
         let colours = coloured(&th);
-        // Without colours the lines cannot be told apart: the total alone.
         let total: Vec<Option<f64>>;
         let lines: Vec<(&[Option<f64>], Color)> = if colours {
+            // Only the series the legend names: no line that nothing explains.
+            let named: Vec<usize> = legend.iter().flatten().map(|(i, _)| *i).collect();
             let palette = th.chart();
-            c.series.iter().map(|s| (s.values.as_slice(), palette[s.colour % palette.len()])).collect()
-        } else {
+            c.series
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| named.contains(i))
+                .map(|(_, s)| (s.values.as_slice(), palette[s.colour % palette.len()]))
+                .collect()
+        } else if c.total.is_some() {
+            // Without colours the lines cannot be told apart: the total alone, broken where a
+            // series has no value.
             let n = c.series.iter().map(|s| s.values.len()).max().unwrap_or(0);
-            total = (0..n)
-                .map(|i| {
-                    let at: Vec<f64> = c.series.iter().filter_map(|s| s.values.get(i).copied().flatten()).collect();
-                    (!at.is_empty()).then(|| at.iter().sum())
-                })
-                .collect();
+            total = (0..n).map(|i| c.series.iter().map(|s| s.values.get(i).copied().flatten()).sum()).collect();
             vec![(total.as_slice(), th.fg)]
+        } else {
+            // No total to draw: the legend carries the figures.
+            Vec::new()
         };
         let plain: Vec<&[Option<f64>]> = lines.iter().map(|(v, _)| *v).collect();
         let top_label = |w: u16| c.value(Some(lines::top(&plain, w)));
@@ -991,7 +1010,9 @@ impl Cx<'_> {
             return 1;
         }
         let bold = Style::new().fg(th.fg).add_modifier(Modifier::BOLD);
-        put(buf, vx, at.y, &c.total, value_w.saturating_sub(1).min(usize::from(end - vx)), bold);
+        if let Some(total) = &c.total {
+            put(buf, vx, at.y, total, value_w.saturating_sub(1).min(usize::from(end - vx)), bold);
+        }
         let lx = vx + value_w as u16;
         if lx >= end {
             return 1;

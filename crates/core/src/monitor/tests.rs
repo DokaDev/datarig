@@ -414,6 +414,30 @@ fn mysql_counters() {
 }
 
 #[test]
+fn another_accounts_thread_is_told_by_one_rule() {
+    use decode::mysql::{account_user, other_account};
+    assert_eq!(account_user("datarig@%"), "datarig");
+    assert_eq!(account_user("ops@corp@10.0.0.%"), "ops@corp", "a name may hold @, a host not");
+    assert_eq!(account_user("@localhost"), "", "an anonymous account");
+    assert!(!other_account(Some("datarig"), "datarig"));
+    assert!(other_account(Some("Datarig"), "datarig"), "names compare exactly");
+    assert!(other_account(None, "datarig"), "a server thread without a user is another's");
+    assert!(other_account(None, ""), "also for an anonymous account");
+    assert!(!other_account(Some(""), ""));
+    assert!(other_account(Some("ops"), "ops@corp"));
+    // The session list says "this account only" by it too: a thread without a user is seen.
+    let my = MySqlMonitor { process: Readable::Unknown, ..mysql_root() };
+    let mut rows = rows_of_sessions();
+    for r in &mut rows[0] {
+        r[2] = Some("root".into());
+    }
+    let own = Hidden { part: Part::OtherSessions, need: Need::Grant("PROCESS") };
+    assert!(decode::mysql::sessions(&rows, &my, IDLE).unwrap().1.contains(&own));
+    rows[0][0][2] = None;
+    assert!(!decode::mysql::sessions(&rows, &my, IDLE).unwrap().1.contains(&own));
+}
+
+#[test]
 fn mysql_statements_by_type_are_sums_of_their_counters() {
     let (sample, gauges, _) = decode::mysql::counters(&rows_of_my_counters(), &mysql_root(), Own::default()).unwrap();
     assert_eq!(sample.get(CounterKind::Selects), Some(2_207));

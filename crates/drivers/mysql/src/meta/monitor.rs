@@ -6,7 +6,7 @@
 //! not a failure. None touches a user's table.
 
 use datarig_core::monitor::ActionKind;
-use datarig_core::monitor::decode::mysql::STATUS;
+use datarig_core::monitor::decode::mysql::{STATUS, other_account_sql};
 use datarig_core::monitor::format::{MYSQL_MARKERS, Marker, MySqlMonitor, Readable};
 use datarig_core::monitor::locks::LOCK_ROWS;
 use datarig_core::monitor::{QUERY_CHARS, SessionsWanted, Want};
@@ -83,22 +83,26 @@ pub(crate) fn server_info() -> Vec<String> {
 /// see what it sees (every thread with `PROCESS`, else the account's own). Each falls in one
 /// group only: `Query` and `Execute` (the monitor's own thread left out), `Sleep`, `Daemon`,
 /// `Connect` and `Connect Out`, `Binlog Dump` and `Binlog Dump GTID`, any other command.
-/// `others` counts the threads of another account than the monitor's.
+/// `others` counts the threads of another account than the monitor's, by the core's own rule
+/// (`decode::mysql::other_account`, here as `other_account_sql`).
 pub(crate) fn counters(my: &MySqlMonitor) -> Vec<String> {
     let names: Vec<String> = STATUS.iter().map(|n| format!("'{n}'")).collect();
     let source = process_list(my);
     vec![
         format!(
             "SELECT {NOW} AS now, \
-             COUNT(CASE WHEN p.COMMAND IN ('Query', 'Execute') AND p.ID <> CONNECTION_ID() THEN 1 END) AS cmd_query, \
-             COUNT(CASE WHEN p.COMMAND = 'Sleep' THEN 1 END) AS cmd_sleep, \
-             COUNT(CASE WHEN p.COMMAND = 'Daemon' THEN 1 END) AS cmd_daemon, \
-             COUNT(CASE WHEN p.COMMAND IN ('Connect', 'Connect Out') THEN 1 END) AS cmd_connect, \
-             COUNT(CASE WHEN p.COMMAND IN ('Binlog Dump', 'Binlog Dump GTID') THEN 1 END) AS cmd_binlog_dump, \
-             COUNT(CASE WHEN p.COMMAND NOT IN ('Query', 'Execute', 'Sleep', 'Daemon', 'Connect', 'Connect Out', \
+             COUNT(CASE WHEN {c} IN ('Query', 'Execute') AND p.ID <> CONNECTION_ID() THEN 1 END) AS cmd_query, \
+             COUNT(CASE WHEN {c} = 'Sleep' THEN 1 END) AS cmd_sleep, \
+             COUNT(CASE WHEN {c} = 'Daemon' THEN 1 END) AS cmd_daemon, \
+             COUNT(CASE WHEN {c} IN ('Connect', 'Connect Out') THEN 1 END) AS cmd_connect, \
+             COUNT(CASE WHEN {c} IN ('Binlog Dump', 'Binlog Dump GTID') THEN 1 END) AS cmd_binlog_dump, \
+             COUNT(CASE WHEN {c} NOT IN ('Query', 'Execute', 'Sleep', 'Daemon', 'Connect', 'Connect Out', \
              'Binlog Dump', 'Binlog Dump GTID') THEN 1 END) AS cmd_other, \
-             COUNT(CASE WHEN p.USER <> SUBSTRING_INDEX(CURRENT_USER(), '@', 1) THEN 1 END) AS others \
-             FROM {source} p"
+             COUNT(CASE WHEN {others} THEN 1 END) AS others \
+             FROM {source} p",
+            // A thread without a command is "other", never in no group.
+            c = "COALESCE(p.COMMAND, '')",
+            others = other_account_sql("p.USER", "CURRENT_USER()"),
         ),
         format!("SHOW GLOBAL STATUS WHERE Variable_name IN ({})", names.join(", ")),
     ]

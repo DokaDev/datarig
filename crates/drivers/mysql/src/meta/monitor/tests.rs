@@ -317,3 +317,37 @@ async fn every_replication_statement_gives_its_decoders_columns() {
     }
     let _ = conn.disconnect().await;
 }
+
+/// The SQL form of the rule that tells another account's thread gives what the core's gives,
+/// on the real server, for names with `@`, an anonymous account, a thread without a user and a
+/// name differing only in case.
+#[tokio::test]
+async fn another_accounts_thread_is_told_alike_in_sql_and_in_the_core() {
+    use datarig_core::monitor::decode::mysql::{account_user, other_account};
+    let url = match std::env::var("DATARIG_TEST_MYSQL_ADMIN_URL") {
+        Ok(u) if !u.is_empty() => u,
+        _ => {
+            let required = std::env::var("DATARIG_REQUIRE_MYSQL").is_ok_and(|v| v == "1");
+            assert!(!required, "DATARIG_TEST_MYSQL_ADMIN_URL must be set");
+            eprintln!(
+                "SKIPPED another_accounts_thread_is_told_alike_in_sql_and_in_the_core: set DATARIG_TEST_MYSQL_ADMIN_URL"
+            );
+            return;
+        }
+    };
+    use mysql_async::prelude::Queryable;
+    let opts =
+        mysql_async::OptsBuilder::from_opts(mysql_async::Opts::from_url(&url).expect("a URL")).prefer_socket(false);
+    let mut conn = mysql_async::Conn::new(opts).await.expect("connect");
+    let accounts = ["datarig@%", "ops@corp@10.0.0.%", "@localhost", "root@localhost"];
+    let users = [None, Some(""), Some("datarig"), Some("Datarig"), Some("ops"), Some("ops@corp"), Some("root")];
+    for account in accounts {
+        for user in users {
+            let quote = |v: &str| format!("'{}'", v.replace('\'', "''"));
+            let column = user.map_or("NULL".to_string(), quote);
+            let sql = format!("SELECT {} AS other", other_account_sql(&column, &quote(account)));
+            let other: Option<i64> = conn.query_first(&sql).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+            assert_eq!(other, Some(i64::from(other_account(user, account_user(account)))), "{user:?} of {account}");
+        }
+    }
+}

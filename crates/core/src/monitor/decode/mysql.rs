@@ -130,6 +130,29 @@ fn readable(answer: &Answer) -> Readable {
     }
 }
 
+/// The account's user name from `CURRENT_USER()` (`name@host`): what comes before its last
+/// `@` (a name may hold `@`, a host does not), empty for an anonymous account.
+pub fn account_user(current_user: &str) -> &str {
+    current_user.rsplit_once('@').map_or(current_user, |(user, _)| user)
+}
+
+/// Whether a process list row of `user` is another account's than the one whose user name is
+/// `account` ([`account_user`]): names compare exactly, and a row without a user (a server
+/// thread) is another's. [`other_account_sql`] is the same rule in SQL, for the statements.
+pub fn other_account(user: Option<&str>, account: &str) -> bool {
+    user != Some(account)
+}
+
+/// [`other_account`] in SQL: whether the column `user` names another account than the user
+/// name of `current_user` (an expression giving `name@host`, such as `CURRENT_USER()`), its
+/// name taken before the last `@` and compared byte for byte.
+pub fn other_account_sql(user: &str, current_user: &str) -> String {
+    format!(
+        "({user} IS NULL OR CAST({user} AS BINARY) <> CAST(LEFT({current_user}, CHAR_LENGTH({current_user}) \
+         - CHAR_LENGTH(SUBSTRING_INDEX({current_user}, '@', -1)) - 1) AS BINARY))"
+    )
+}
+
 /// `8.4.11`, `8.0.35-0ubuntu0.22.04.1`, `8.0.28-log` as `major * 10000 + minor * 100 + patch`.
 fn version_number(version: &str) -> Option<u32> {
     let mut parts = version.split('.');
@@ -159,7 +182,7 @@ pub fn probe(answers: &[Answer]) -> Result<MySqlMonitor, DecodeError> {
         _ => return Err(DecodeError::Unsupported(format!("MySQL {line}"))),
     };
     let current = row.required("user")?;
-    let user = current.rsplit_once('@').map_or(current, |(user, _)| user).to_owned();
+    let user = account_user(current).to_owned();
     // Unreadable variables leave the flavour standard: no marker was seen.
     let mut found = Probe::default();
     if let Answer::Rows(rows) = variables {
@@ -348,7 +371,7 @@ pub fn sessions(
     }
     let time = time.ok_or_else(|| malformed("sessions", "no rows"))?;
     let mut hidden = Vec::new();
-    if my.process != Readable::Yes && list.iter().all(|s| s.user.as_deref() == Some(my.user.as_str())) {
+    if my.process != Readable::Yes && !list.iter().any(|s| other_account(s.user.as_deref(), &my.user)) {
         hidden.push(Hidden { part: Part::OtherSessions, need: Need::Grant("PROCESS") });
     }
     // What would tell whether an idle session holds a transaction or a lock.
