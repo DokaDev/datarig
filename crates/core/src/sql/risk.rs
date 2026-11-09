@@ -891,7 +891,7 @@ thread_local! {
 
 /// The parse tree of every statement of `sql`, as JSON (`{"node": {"<Kind>": {…}}}`), or `None`
 /// when PostgreSQL's parser rejects the text.
-fn parse(sql: &str) -> Option<Vec<Value>> {
+pub(crate) fn parse(sql: &str) -> Option<Vec<Value>> {
     let tree = pg_query::parse(sql).ok()?;
     tree.protobuf.stmts.iter().map(|s| s.stmt.as_ref().and_then(|n| serde_json::to_value(n.as_ref()).ok())).collect()
 }
@@ -1029,7 +1029,7 @@ fn non_conforming(sql: &str) -> Option<String> {
 
 /// The kind and body of a parse-tree `Node` (`{"node": {"<Kind>": body}}`) or of the tagged
 /// object inside one (`{"<Kind>": body}`).
-fn node(n: &Value) -> Option<(&str, &Value)> {
+pub(crate) fn node(n: &Value) -> Option<(&str, &Value)> {
     let inner = n.get("node").unwrap_or(n);
     let obj = inner.as_object()?;
     let (kind, body) = obj.iter().next()?;
@@ -1037,7 +1037,7 @@ fn node(n: &Value) -> Option<(&str, &Value)> {
 }
 
 /// A string field, or the value of a `String` node.
-fn text(v: &Value) -> Option<&str> {
+pub(crate) fn text(v: &Value) -> Option<&str> {
     v.as_str().or_else(|| match node(v) {
         Some(("String", s)) => s["sval"].as_str(),
         _ => None,
@@ -1144,7 +1144,7 @@ fn below(b: &Value) -> Risk {
 }
 
 /// Calls `f` on every JSON object below `v` (not on `v` itself).
-fn walk(v: &Value, f: &mut impl FnMut(&serde_json::Map<String, Value>)) {
+pub(crate) fn walk(v: &Value, f: &mut impl FnMut(&serde_json::Map<String, Value>)) {
     let children: Box<dyn Iterator<Item = &Value>> = match v {
         Value::Object(o) => Box::new(o.values()),
         Value::Array(a) => Box::new(a.iter()),

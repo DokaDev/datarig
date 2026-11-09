@@ -408,7 +408,7 @@ pub fn quote_literal(s: &str) -> String {
 }
 
 /// Whether `s` is a plain SQL number literal (`12`, `-3.5`, `1e-3`).
-fn sql_number(s: &str) -> bool {
+pub(crate) fn sql_number(s: &str) -> bool {
     let t = s.strip_prefix('-').unwrap_or(s);
     let (mantissa, exp) = match t.split_once(['e', 'E']) {
         Some((m, e)) => (m, Some(e.strip_prefix(['+', '-']).unwrap_or(e))),
@@ -423,7 +423,7 @@ fn sql_number(s: &str) -> bool {
 }
 
 /// Whether the number `s` is a negative zero (`-0`, `-0.0e5`).
-fn negative_zero(s: &str) -> bool {
+pub(crate) fn negative_zero(s: &str) -> bool {
     s.strip_prefix('-')
         .is_some_and(|m| m.split(['e', 'E']).next().is_some_and(|m| m.bytes().all(|b| matches!(b, b'0' | b'.'))))
 }
