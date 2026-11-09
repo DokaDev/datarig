@@ -30,7 +30,8 @@ jobs:
         run: |
           import os, re, sys
 
-          body = os.environ.get("BODY") or ""
+          # A description edited on the web has CRLF line endings.
+          body = (os.environ.get("BODY") or "").replace("\r\n", "\n").replace("\r", "\n")
           # The template's guidance (HTML comments) and fenced code blocks do not count. One
           # pass, so that whichever starts first hides the other inside it. A fenced block ends
           # at a line of the same fence character, at least as long. Anything else counts: when
