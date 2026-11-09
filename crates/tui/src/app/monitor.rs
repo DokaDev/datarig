@@ -22,6 +22,7 @@
 //! followed up by reads of their own (`act`).
 
 mod act;
+pub mod statement;
 
 pub use act::{ActionEntry, Asked, MonitorAsk, RowInfo};
 
@@ -130,6 +131,8 @@ pub enum MonitorAction {
     OpenConsole,
     /// The selected session's statement to the clipboard.
     CopyQuery,
+    /// The details' statement laid out for reading, or as the server sent it.
+    Format,
     /// The root blocker of the selected wait (Locks).
     Root,
     /// What the server is, in full (over the view), or the view again.
@@ -384,6 +387,10 @@ pub struct MonitorTab {
     pub actions_shown: bool,
     /// The action the open dialog asks about.
     asked: Option<act::Asked>,
+    /// The details show statements as the server sent them (`f`), not laid out.
+    pub as_sent: bool,
+    /// The details' statement as shown, worked out once per text ([`MonitorTab::prepare_statement`]).
+    pub statement: Option<statement::Shown>,
 }
 
 impl MonitorTab {
@@ -432,6 +439,8 @@ impl MonitorTab {
             actions: Vec::new(),
             actions_shown: false,
             asked: None,
+            as_sent: false,
+            statement: None,
         }
     }
 
@@ -566,6 +575,26 @@ impl MonitorTab {
     /// move a little from one read to the next.
     fn whole_seconds(&self) -> bool {
         matches!(self.format(), Some(MonitorFormat::MySql(_)))
+    }
+
+    /// The statement the details show: the selected row's whole text when it was read for
+    /// this very row, else as the list holds it.
+    pub fn detail_query(&self) -> Option<&datarig_core::monitor::QueryText> {
+        let r = self.selected_row()?;
+        self.full_text().or(r.query.as_ref())
+    }
+
+    /// Work out the details' statement as shown (in `dialect`, laid out with `indent` spaces),
+    /// unless it was for the same text: a frame then only draws it.
+    pub fn prepare_statement(&mut self, dialect: datarig_core::sql::dialect::Dialect, indent: u8) {
+        let want = !self.as_sent;
+        let prev = self.statement.take();
+        self.statement = self
+            .list
+            .details
+            .then(|| self.detail_query())
+            .flatten()
+            .map(|q| statement::shown(prev, q, want, dialect, indent));
     }
 
     /// The selected row's whole statement, when it was read for this very row.
@@ -1446,6 +1475,12 @@ impl App {
             MonitorAction::Actions => m.actions_shown = !m.actions_shown,
             MonitorAction::OpenConsole => return self.monitor_to_console(),
             MonitorAction::CopyQuery => return self.monitor_copy_query(),
+            MonitorAction::Format => {
+                m.as_sent = !m.as_sent;
+                m.list.details_top = 0;
+                let l = if m.as_sent { Label::MonitorShownAsSent } else { Label::MonitorShownFormatted };
+                say = Some(Notice::new(l, Level::Info));
+            }
         }
         if let Some(n) = say {
             self.flash(n);

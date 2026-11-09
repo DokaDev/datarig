@@ -7,6 +7,7 @@
 //! however many sessions the server has.
 
 use crate::app::action::{Action, MonitorAction};
+use crate::app::monitor::statement::{Layout, Shown};
 use crate::app::monitor::{METRICS, Metric, MonState, MonitorHits, MonitorTab, MonitorView, SortKey};
 use crate::app::monitor::{query_age, tx_age};
 use crate::app::{App, Focus};
@@ -65,6 +66,13 @@ pub(crate) fn draw_monitor(app: &mut App, area: Rect, buf: &mut Buffer) {
     let mut hits = MonitorHits::default();
     let read_key = app.key_for(Action::Monitor(MonitorAction::ReadNow), Ctx::Monitor);
     let info_key = app.key_for(Action::Monitor(MonitorAction::ServerInfo), Ctx::Monitor);
+    let format_key = app.key_for(Action::Monitor(MonitorAction::Format), Ctx::Monitor);
+    // The details' statement as shown, worked out here once per text (a frame only draws it).
+    let dialect = app.profile_language(app.tab().profile).dialect();
+    let indent = app.prefs.format_indent.spaces();
+    if let Some(m) = app.monitor_mut_for_draw(id) {
+        m.prepare_statement(dialect, indent);
+    }
     let Some(m) = app.monitor_of(id) else { return };
     let mysql = matches!(m.format(), Some(MonitorFormat::MySql(_)));
     // The query tab whose own session the selected row is.
@@ -75,7 +83,7 @@ pub(crate) fn draw_monitor(app: &mut App, area: Rect, buf: &mut Buffer) {
         true => m.actions.iter().rev().take(ACTIONS_SHOWN).map(|e| app.action_line(e, now)).collect(),
         false => Vec::new(),
     };
-    let cx = Cx { i18n: &app.i18n, m, focused, mysql, read_key, own, actions };
+    let cx = Cx { i18n: &app.i18n, m, focused, mysql, read_key, format_key, own, actions };
     if inner.height == 0 || inner.width < 10 {
         return;
     }
@@ -155,6 +163,8 @@ struct Cx<'a> {
     mysql: bool,
     /// The key that reads again (what a state that waits for it names).
     read_key: String,
+    /// The key that shows statements laid out or as sent (what the details' note names).
+    format_key: String,
     /// The name of the query tab whose own session the selected row is.
     own: Option<String>,
     /// The action list's lines, newest first (empty while it is hidden).
@@ -563,11 +573,12 @@ impl Cx<'_> {
                 self.action_list(Rect { x: area.x, y: bottom, width: area.width, height: h }, buf);
             }
         }
-        // The details: below the list when there is room, else in its place.
+        // The details: below the list when there is room (the list at most half, no more than
+        // its rows need: a laid-out statement takes lines), else in its place.
         let details = m.list.details.then(|| m.selected_row()).flatten();
         let (list_h, details_at) = match details {
             Some(_) if bottom - y >= 20 => {
-                let h = (bottom - y) / 2;
+                let h = ((bottom - y) / 2).min(shown.max(1) as u16 + 2);
                 (h, Some(Rect { x: area.x, y: y + h, width: area.width, height: bottom - y - h }))
             }
             Some(_) => (0, Some(Rect { x: area.x, y, width: area.width, height: bottom - y })),
@@ -1003,7 +1014,11 @@ impl Cx<'_> {
                 lines.push((self.label(l), v));
             }
         };
-        field(Label::MonitorFieldSession, Some(r.key.id.to_string()));
+        let id = match r.monitor {
+            true => format!("{} ({})", r.key.id, self.label(Label::MonitorOwnConnection)),
+            false => r.key.id.to_string(),
+        };
+        field(Label::MonitorFieldSession, Some(id));
         field(Label::MonitorFieldTab, self.own.clone());
         field(Label::MonitorFieldKind, Some(self.kind(&r.kind)));
         field(Label::MonitorColUser, r.user.clone());
@@ -1038,10 +1053,21 @@ impl Cx<'_> {
             lines.push((e.key.name().to_string(), e.value.clone()));
         }
         let key_w = lines.iter().map(|(k, _)| width(k)).max().unwrap_or(0) + 2;
-        let mut out: Vec<(String, Style)> = Vec::new();
+        let text_w = inner.width.saturating_sub(2) as usize;
+        // Each line of the details as its spans.
+        let mut out: Vec<Vec<(String, Style)>> = Vec::new();
+        let note = |out: &mut Vec<Vec<(String, Style)>>, text: &str, style: Style| {
+            for l in crate::text::wrap_words(text, text_w) {
+                out.push(vec![(l, style)]);
+            }
+        };
         for (k, v) in &lines {
             let text = format!("{k:<key_w$}{v}", key_w = key_w);
-            out.push((text, Style::new().fg(th.fg)));
+            out.push(vec![(text, Style::new().fg(th.fg))]);
+        }
+        if r.monitor {
+            out.push(Vec::new());
+            note(&mut out, &self.label(Label::MonitorOwnSession), Style::new().fg(th.fg_dim));
         }
         let read = self.m.text_read();
         let whole = match read.and_then(|t| t.answer.as_ref()) {
@@ -1050,15 +1076,13 @@ impl Cx<'_> {
         };
         if let Some(q) = whole.map(|(text, _)| text).or(r.query.as_ref()) {
             let dim = Style::new().fg(th.fg_dim);
-            out.push((String::new(), Style::new()));
+            out.push(Vec::new());
             if q.shortened {
-                out.push((
-                    self.msg(Msg::MonitorQueryShortened { n: datarig_core::monitor::QUERY_CHARS.to_string() }),
-                    dim,
-                ));
+                let text = self.msg(Msg::MonitorQueryShortened { n: datarig_core::monitor::QUERY_CHARS.to_string() });
+                note(&mut out, &text, dim);
             }
             // Why the text shown is what it is, wrapped (a narrow screen keeps all of it).
-            let note = match (whole, read.map(|t| &t.answer)) {
+            let why = match (whole, read.map(|t| &t.answer)) {
                 (Some((_, Proof::Likely)), _) => Some((self.label(Label::MonitorTextLikely), dim)),
                 (Some((_, Proof::Same)), _) | (None, None) => None,
                 (None, Some(None)) => Some((self.label(Label::MonitorTextReading), dim)),
@@ -1078,23 +1102,45 @@ impl Cx<'_> {
                     Some((why, Style::new().fg(th.warning)))
                 }
             };
-            if let Some((text, style)) = note {
-                for l in crate::text::wrap_words(&text, inner.width.saturating_sub(2) as usize) {
-                    out.push((l, style));
-                }
+            if let Some((text, style)) = why {
+                note(&mut out, &text, style);
             }
             if q.maybe_cut_by_server {
-                out.push((self.label(Label::MonitorQueryCutByServer), Style::new().fg(th.warning)));
+                note(&mut out, &self.label(Label::MonitorQueryCutByServer), Style::new().fg(th.warning));
             }
-            for l in q.text.lines() {
-                for w in wrap(l, inner.width.saturating_sub(2) as usize) {
-                    out.push((w, Style::new().fg(th.syn_identifier.fg.unwrap_or(th.fg))));
+            // The statement as shown (laid out for reading when it can be), in the editor's
+            // colours; else as the server sent it.
+            match self.m.statement.as_ref().filter(|s| s.source() == q.text) {
+                Some(shown) => {
+                    let key = self.format_key.clone();
+                    let layout = match shown.layout {
+                        Layout::Formatted => self.msg(Msg::MonitorLayoutFormatted { key }),
+                        Layout::AsSent => self.msg(Msg::MonitorLayoutAsSent { key }),
+                        Layout::Part => self.label(Label::MonitorLayoutPart),
+                        Layout::Refused => self.label(Label::MonitorLayoutRefused),
+                        Layout::TooLong => self.label(Label::MonitorLayoutTooLong),
+                    };
+                    note(&mut out, &layout, dim);
+                    out.extend(statement_lines(shown, text_w));
+                }
+                None => {
+                    for l in q.text.lines() {
+                        for w in wrap(l, text_w) {
+                            out.push(vec![(w, Style::new().fg(th.fg))]);
+                        }
+                    }
                 }
             }
         }
         let top = self.m.list.details_top.min(out.len().saturating_sub(1));
-        for (i, (text, style)) in out.iter().skip(top).take(inner.height as usize).enumerate() {
-            put(buf, inner.x + 1, inner.y + i as u16, text, inner.width.saturating_sub(2) as usize, *style);
+        for (i, spans) in out.iter().skip(top).take(inner.height as usize).enumerate() {
+            let mut x = inner.x + 1;
+            let mut room = text_w;
+            for (text, style) in spans {
+                let w = put(buf, x, inner.y + i as u16, text, room, *style);
+                x += w;
+                room = room.saturating_sub(w as usize);
+            }
         }
     }
 
@@ -1192,6 +1238,50 @@ fn object_text(o: &LockObject) -> String {
         text.push_str(&format!(" ({db})"));
     }
     text
+}
+
+/// The statement `shown` in rows of `w` columns (broken where a row is full, as the server's
+/// lines and the layout's), each token in its syntax colour.
+fn statement_lines(shown: &Shown, w: usize) -> Vec<Vec<(String, Style)>> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let th = theme::cur();
+    let w = w.max(2);
+    let plain = Style::new().fg(th.fg);
+    let text = shown.text.as_str();
+    let mut out = Vec::new();
+    let mut tok = 0;
+    let mut start = 0;
+    for raw in text.split('\n') {
+        let mut row: Vec<(String, Style)> = Vec::new();
+        let mut used = 0;
+        let line_end = start + raw.len();
+        for (at, g) in raw.grapheme_indices(true) {
+            let off = start + at;
+            if g == "\r" && off + 1 == line_end {
+                continue;
+            }
+            while tok < shown.tokens.len() && shown.tokens[tok].0.end <= off {
+                tok += 1;
+            }
+            let style = match shown.tokens.get(tok) {
+                Some((r, kind, call)) if r.start <= off => th.syntax(*kind, *call),
+                _ => plain,
+            };
+            let (g, gw) = if g == "\t" { ("    ", 4) } else { (g, width(g)) };
+            if used + gw > w && used > 0 {
+                out.push(std::mem::take(&mut row));
+                used = 0;
+            }
+            match row.last_mut() {
+                Some((t, s)) if *s == style => t.push_str(g),
+                _ => row.push((g.to_string(), style)),
+            }
+            used += gw;
+        }
+        out.push(row);
+        start = line_end + 1;
+    }
+    out
 }
 
 /// A statement on one line: its whitespace runs as one space.

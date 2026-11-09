@@ -577,6 +577,7 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Monitor, "enter", "monitor.details"),
     (Monitor, "o", "monitor.open_console"),
     (Monitor, "y", "monitor.copy_query"),
+    (Monitor, "f", "monitor.format"),
     (Monitor, "b", "monitor.root"),
     (Monitor, "i", "monitor.server"),
     (Monitor, "esc", "monitor.back"),

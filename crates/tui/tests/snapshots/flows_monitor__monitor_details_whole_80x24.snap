@@ -23,6 +23,6 @@ expression: "h.screen(80, 24)"
 │                      ││ Read again by its session and its start (to the      │
 │                      ││ second): a new run of the same statement cannot be   │
 │                      ││ told apart                                           │
-│                      ││ UPDATE orders SET status = 'paid' WHERE id = 7 AND n │
+│                      ││ Laid out for reading (f: as sent)                    │
 ╰──────────────────────╯╰──────────────────────────────────────────────────────╯
  local-pg │   │ v view · Enter detail · c cancel · X end · / filter · a idle EN
