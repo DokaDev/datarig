@@ -158,6 +158,7 @@ impl App {
     fn open_texts(&self, t: &Tab) -> Vec<String> {
         let number = self.tabs.position(t.id).map_or(String::new(), |i| (i + 1).to_string());
         let mut texts = vec![crate::widgets::tabbar::document_name(self, t)];
+        texts.extend(super::table_query::applied_filter(t).map(str::to_string));
         texts.extend(self.kind_texts(t.kind));
         texts.extend(self.place_texts(t.profile, &t.context));
         texts.push(number);

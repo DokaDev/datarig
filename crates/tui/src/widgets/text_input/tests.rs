@@ -110,3 +110,17 @@ fn a_click_puts_the_cursor_under_the_pointer_as_drawn() {
     assert!(d.click(9, 0));
     assert_eq!(d.cursor(), 9, "the `@` after the hidden password");
 }
+
+#[test]
+fn spans_style_the_graphemes_they_start_in() {
+    use ratatui::style::Color;
+    let mut t = TextInput::new("a 日b");
+    let mut buf = Buffer::empty(Rect::new(0, 0, 8, 1));
+    let red = Style::new().fg(Color::Red);
+    // Bytes 2..5 are the wide syllable, 5..6 the `b`.
+    t.render_spans(Rect::new(0, 0, 8, 1), &mut buf, Style::new().bg(Color::Blue), false, &[(2..5, red)]);
+    assert_eq!(buf[(2, 0)].symbol(), "日");
+    assert_eq!((buf[(2, 0)].fg, buf[(2, 0)].bg), (Color::Red, Color::Blue));
+    assert_eq!(buf[(0, 0)].fg, Color::Reset, "outside every span: the base style");
+    assert_eq!(buf[(4, 0)].fg, Color::Reset);
+}

@@ -60,6 +60,8 @@ pub struct TableQuery {
     asked: Option<Query>,
     /// The filter texts whose functions the user let run in this tab.
     confirmed: HashSet<String>,
+    /// The filter line's fields: what the user types, and which field has the focus.
+    pub line: crate::widgets::filter_line::LineState,
 }
 
 impl TableQuery {
@@ -73,7 +75,14 @@ impl TableQuery {
             pending: None,
             asked: None,
             confirmed: HashSet::new(),
+            line: Default::default(),
         }
+    }
+
+    /// What the tab holds as applied: the query of the run sent last when it was its query,
+    /// else the one of the rows it holds, else the draft (nothing run yet).
+    pub fn applied(&self) -> &Query {
+        self.requested.as_ref().map(|(_, q)| q).or(self.shown.as_ref()).unwrap_or(&self.draft)
     }
 
     /// Run `qid` sends `statements`: it is the pending query's run when it sends exactly its
@@ -94,6 +103,11 @@ impl TableQuery {
     pub fn shown_filter(&self) -> Option<&str> {
         filter_text(self.shown.as_ref()?)
     }
+}
+
+/// The condition table tab `t` holds as applied, when it has one.
+pub fn applied_filter(t: &Tab) -> Option<&str> {
+    filter_text(t.doc.table_query.as_ref()?.applied())
 }
 
 /// The filter text of `q`, unless it has none or only blanks (which filter nothing).
@@ -209,7 +223,7 @@ impl App {
 
     /// The query state of table tab `id`, made when the tab has none yet (every row of its
     /// table). Its table and database are the tab's own, whatever the state held.
-    fn table_query_mut(&mut self, id: TabId) -> Option<&mut TableQuery> {
+    pub(super) fn table_query_mut(&mut self, id: TabId) -> Option<&mut TableQuery> {
         let name = self.table_name(id)?;
         let t = self.tabs.get_mut(id)?;
         let tq = t.doc.table_query.get_or_insert_with(|| Box::new(TableQuery::new(name.clone())));
@@ -298,6 +312,7 @@ impl App {
             return self.flash_busy();
         }
         let (Some(name), Some(target)) = (self.table_name(id), self.table_target(id)) else { return };
+        self.filter_line_follow_tab(id);
         q.source = query::Source::Table(name.clone());
         if q.filter.as_ref().is_some_and(|f| f.text.trim().is_empty()) {
             q.filter = None;
@@ -332,11 +347,49 @@ impl App {
             }
         }
         let sql = query::compile(&q, &target).sql;
+        // The keys that make an order total come with the table's structure.
+        if !q.order.is_empty() && target.primary_key.is_empty() {
+            self.table_structure_ask(id);
+        }
         if let Some(tq) = self.table_query_mut(id) {
             tq.refusal = None;
             tq.pending = Some((q, sql.clone()));
         }
         self.run_in(id, vec![sql]);
+        self.filter_line_follow_tab(id);
+    }
+
+    /// Ask for the structure of table tab `id`'s table (on the metadata session of its profile
+    /// or database) unless it is read or being read: the keys of a total order are in it.
+    fn table_structure_ask(&mut self, id: TabId) {
+        let Some(t) = self.tabs.get(id) else { return };
+        let (Some(pid), Some(table)) = (t.profile, t.doc.table.clone()) else { return };
+        let database = t.context.database.clone();
+        if !self.structure_on(pid) {
+            return;
+        }
+        let tree = match database.as_deref() {
+            None => &mut self.conns.entry(pid).tree,
+            Some(db) => match self.conns.aux_mut(pid, db) {
+                Some(a) => &mut a.tree,
+                None => return,
+            },
+        };
+        let key = (table.schema.clone(), table.name.clone());
+        if tree.structures.get(&key).is_some_and(|v| !matches!(v.structure, crate::widgets::tree::Structure::Failed(_)))
+        {
+            return;
+        }
+        tree.structure_loading(&table.schema, &table.name);
+        let cmd = DbCommand::LoadStructure { schema: table.schema, table: table.name };
+        match database.as_deref() {
+            None => self.send_meta(pid, cmd),
+            Some(db) => {
+                if let Some(s) = self.conns.aux(pid, db).and_then(|a| a.session.as_ref()) {
+                    s.send(cmd);
+                }
+            }
+        }
     }
 
     /// Ask whether table tab `id`'s filter may call `calls` (the query waits in its state).

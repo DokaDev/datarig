@@ -259,6 +259,8 @@ impl App {
             // The Monitor tab's views take no text but its filter's.
         } else if self.overlays.is_empty() && self.focus == Focus::Results && self.cell_edit_open() {
             self.cell_edit_paste(text);
+        } else if self.overlays.is_empty() && self.filter_line_focused() {
+            self.filter_line_paste(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Results && self.grid_prompt_open() {
             self.grid_prompt_paste(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Results && !self.tabs.is_empty() {
@@ -381,6 +383,7 @@ impl App {
             Ctx::Password => keys.iter().for_each(|k| self.prompt_key(k.to_event(), repeat)),
             Ctx::ExplorerFilter => keys.iter().for_each(|k| self.explorer_filter_key(k.to_event())),
             Ctx::GridSearch => keys.iter().for_each(|k| self.grid_prompt_key(k.to_event())),
+            Ctx::FilterLine => keys.iter().for_each(|k| self.filter_line_key(k.to_event())),
             Ctx::MonitorFilter => keys.iter().for_each(|k| self.monitor_filter_key(k.to_event())),
             Ctx::CellEdit => keys.iter().for_each(|k| self.cell_edit_key(k.to_event())),
             Ctx::CellEditor => keys.iter().for_each(|k| self.cell_lines_key(k.to_event())),
@@ -1050,6 +1053,10 @@ impl App {
                     }
                 }
             }
+        } else if inside(l.filter_line) {
+            // A table tab's filter line: a field, or its refresh mark.
+            self.focus = Focus::Results;
+            self.filter_line_click(x, y);
         } else if inside(l.strip) {
             // A result tab of the strip.
             self.focus = Focus::Results;
@@ -1084,6 +1091,8 @@ impl App {
             }
         } else if inside(l.results) {
             self.focus = Focus::Results;
+            // The grid takes the keys from the filter line.
+            self.filter_line_blur();
             let t = self.tabs.active_mut();
             // The row-number gutter selects whole rows, a header whole columns;
             // Shift extends the selection there is; a drag from there extends it.

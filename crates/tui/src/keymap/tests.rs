@@ -93,6 +93,8 @@ fn contexts_form_the_planned_tree() {
     // grid (whose `n` and `Esc` it may hide).
     assert_eq!(Ctx::GridSearch.chain(), [Ctx::GridSearch, Ctx::Workspace, Ctx::Root]);
     assert!(Ctx::GridSearch.is_text_input() && !Ctx::GridSearch.is_editor());
+    assert_eq!(Ctx::FilterLine.chain(), [Ctx::FilterLine, Ctx::Workspace, Ctx::Root]);
+    assert!(Ctx::FilterLine.is_text_input() && Ctx::FilterLine.is_prompt() && !Ctx::FilterLine.is_editor());
     assert_eq!(Ctx::GridMatches.chain(), [Ctx::GridMatches, Ctx::Grid, Ctx::Nav, Ctx::Workspace, Ctx::Root]);
     assert!(Ctx::GridMatches.is_mode() && !Ctx::GridMatches.is_text_input() && !Ctx::Grid.is_mode());
     // The cell editor: text input over the grid, beside the editor.
@@ -215,6 +217,13 @@ fn conflict_check_catches_all_seven_kinds() {
     // The grid's search prompt keeps its `Ctrl+W` over the workspace's tab close.
     assert!(kinds(&with(vec![])).is_empty());
     assert_eq!(Keymap::default().resolve_seq(Ctx::GridSearch, &k("ctrl+w")).0, Some(Target::Reserved("grid search")));
+    // The filter line's editing keys are its own; the run key stays the app's (it applies there).
+    let km = Keymap::default();
+    for key in ["ctrl+w", "shift+tab", "tab", "ctrl+l", "esc", "enter"] {
+        assert_eq!(km.resolve_seq(Ctx::FilterLine, &k(key)).0, Some(Target::Reserved("filter line")), "{key}");
+    }
+    let run = action::by_id("query.execute_current").unwrap().action;
+    assert_eq!(km.resolve_seq(Ctx::FilterLine, &k("ctrl+e")).0, Some(Target::Action(run)));
     // The message names the context, the keys and both sides.
     let msg = check(&dup)[0].to_string();
     assert!(msg.contains("explorer") && msg.contains("x = explorer.refresh"), "{msg}");
@@ -531,7 +540,10 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     assert!(root.contains(&("/".into(), Child::Action(action::by_id("commands.open").unwrap().action))));
     assert_eq!(km.group_label(Ctx::Explorer, &k("space r")), Some(Label::GroupResult));
     let results: Vec<String> = shown(Ctx::VimNormal, "space r").into_iter().map(|(k, _)| k).collect();
-    assert_eq!(results, ["#", "+", "-", "I", "[", "]", "a", "c", "e", "h", "i", "n", "p", "y", "z"]);
+    assert_eq!(
+        results,
+        ["#", "+", "-", "I", "[", "]", "a", "c", "e", "f", "h", "i", "n", "o", "p", "v", "x", "y", "z"]
+    );
     assert_eq!(km.group_label(Ctx::Explorer, &k("space r y")), Some(Label::GroupCopySelection));
     let formats: String = shown(Ctx::Grid, "space r a").into_iter().map(|(k, _)| k).collect();
     assert_eq!(formats, "JTchijlmntux", "every format, sorted by key");

@@ -38,3 +38,7 @@
 "table.order.why.nulls_incomplete" = "NULLS needs FIRST or LAST after it"
 "table.order.why.unexpected" = "only ASC, DESC, NULLS FIRST, NULLS LAST or a comma may follow a column"
 "table.order.columns_unknown" = "Not run: the table's columns are not known yet (run the tab first)"
+"table.order.not_unique" = "order not unique"
+"table.filter.hint" = "WHERE  {key} filter"
+"table.filter.only_table_tabs" = "Only a table tab has a filter line: a query's rows are filtered in its text"
+"table.filter.paste_cut" = "Pasted text cut: a field holds at most 16 KiB"

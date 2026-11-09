@@ -125,6 +125,7 @@
 "detail.preview" = "{column}: {value}"
 "grid.search.more" = { one = "in {count} row read · more rows on the server ({key}: next page)", other = "in {count} rows read · more rows on the server ({key}: next page)" }
 "grid.search.more_short" = "more on server"
+"grid.search.held" = "searching held rows"
 "grid.search.no_room" = "No room for the search line under the grid: make the results taller ({key} zooms them)"
 "query.running_step" = "Running statement {step} of {total}… {elapsed}"
 "query.step_failed" = "Statement {step} of {total} failed ({sql}): {error}"

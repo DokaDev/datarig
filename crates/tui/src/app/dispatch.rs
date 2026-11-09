@@ -27,6 +27,8 @@ impl App {
             Action::SetTabConnection | Action::SetTabContext if ddl => {
                 Off::new(Label::MenuOffDdlTab, info(Label::DdlNoRebind))
             }
+            // A query's rows are filtered in its text, not by the filter line.
+            Action::Table(_) if !table => Off::new(Label::MenuOffOnlyTableTabs, info(Label::TableFilterOnlyTableTabs)),
             // Another result than a text plan is shown, or none.
             Action::ExplainAsPlan
                 if !self.tabs.is_empty() && self.tab().is_query() && self.tab_explains(self.tab().id) =>
@@ -62,8 +64,11 @@ impl App {
         match a {
             // A DDL tab has nothing to run: the run key reads its DDL again.
             Action::RunStatement if self.tab().is_ddl() => self.load_ddl(self.tab().id),
+            // In the filter line the run key applies its fields.
+            Action::RunStatement if self.filter_line_focused() => self.filter_line_apply(),
             // A table tab runs its query (its filter and order).
             Action::RunStatement if self.tab().is_table() => self.table_rerun(self.tab().id),
+            Action::Table(t) => self.table_action(t),
             Action::RunStatement => {
                 if !self.layout.too_small {
                     let t = self.tab_mut();

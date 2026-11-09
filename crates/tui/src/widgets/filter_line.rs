@@ -1,0 +1,300 @@
+//! The filter line of a table tab: one row above the grid with the `WHERE` condition on the
+//! left, the `ORDER BY` keys on the right (at most two fifths of the row) and the refresh mark
+//! at the right end.
+//!
+//! What the line shows is what the tab holds as applied, highlighted as the editor highlights
+//! SQL; a field edited but not applied puts `●` at the left and its keyword in the warning
+//! color. The keys are shown as the app writes them (normalised), the keys appended to make the
+//! order total dimmed after them (`+ id`), or `order not unique` while no key is known to be.
+//! Where the two do not fit, the order shrinks to its first column and the count of the others
+//! (`↓id+1`) and a long condition is cut with `…` (scrolled while it is edited). With nothing
+//! applied and nothing typed, the line says which key edits it.
+
+use crate::app::App;
+use crate::app::table_query::Field;
+use crate::icons;
+use crate::text::width;
+use crate::theme;
+use crate::widgets::put;
+use crate::widgets::text_input::TextInput;
+use datarig_core::query::{Dir, KeyOrigin, OrderKey};
+use datarig_core::sql::dialect::Dialect;
+use datarig_core::sql::lexer::{Tok, lex_in};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use std::ops::Range;
+
+/// The most a pasted text makes a field hold (bytes).
+pub const FIELD_CAP: usize = 16 * 1024;
+
+/// The fields of a table tab's filter line: their texts (what the user writes) and which one
+/// has the focus.
+#[derive(Clone, Debug, Default)]
+pub struct LineState {
+    pub where_: TextInput,
+    pub order: TextInput,
+    /// The field keys go to; `None` while the grid has them.
+    pub focus: Option<Field>,
+    /// The applied texts the fields were last set from: a field still holding its own is not
+    /// edited and follows what is applied (a command, a clear).
+    base: (String, String),
+}
+
+impl LineState {
+    pub fn field(&self, f: Field) -> &TextInput {
+        match f {
+            Field::Where => &self.where_,
+            Field::Order => &self.order,
+        }
+    }
+
+    pub fn field_mut(&mut self, f: Field) -> &mut TextInput {
+        match f {
+            Field::Where => &mut self.where_,
+            Field::Order => &mut self.order,
+        }
+    }
+
+    /// The fields follow the applied texts `applied` (condition, order) where they are not
+    /// edited (they hold the texts they were last set from) and have no focus. A field that
+    /// holds the applied text again counts as not edited from then on.
+    pub fn follow(&mut self, applied: (&str, &str)) {
+        let focus = self.focus;
+        for (f, base, now) in [(Field::Where, &mut self.base.0, applied.0), (Field::Order, &mut self.base.1, applied.1)]
+        {
+            let input = match f {
+                Field::Where => &mut self.where_,
+                Field::Order => &mut self.order,
+            };
+            if norm(input.text()) == now {
+                *base = now.to_string();
+            } else if focus != Some(f) && norm(input.text()) == base.as_str() {
+                input.set(now);
+                *base = now.to_string();
+            }
+        }
+    }
+
+    /// Both fields back to the applied texts (`Esc`).
+    pub fn restore(&mut self, applied: (&str, &str)) {
+        self.where_.set(applied.0);
+        self.order.set(applied.1);
+        self.base = (applied.0.to_string(), applied.1.to_string());
+    }
+
+    /// Whether field `f` holds another text than `applied`.
+    pub fn edited(&self, f: Field, applied: &str) -> bool {
+        norm(self.field(f).text()) != applied
+    }
+}
+
+/// A blank text is no text.
+fn norm(s: &str) -> &str {
+    if s.trim().is_empty() { "" } else { s }
+}
+
+/// What the line shows of the applied query.
+pub struct Applied {
+    /// The condition, empty for none.
+    pub filter: String,
+    /// The user's keys as the app writes them, empty for none.
+    pub order: String,
+    /// The user's keys.
+    pub keys: Vec<OrderKey>,
+    /// After the keys, dimmed: the columns appended to make the order total (`+ id`), or why
+    /// it may not be.
+    pub tie: Option<String>,
+    pub dialect: Dialect,
+}
+
+/// Where the parts of the line were drawn, for the mouse and the terminal cursor.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Drawn {
+    pub where_: Rect,
+    pub order: Rect,
+    pub refresh: Rect,
+    pub cursor: Option<(u16, u16)>,
+}
+
+/// The highlight of `text` as the editor's: each token's byte range and style.
+fn highlight(text: &str, d: Dialect) -> Vec<(Range<usize>, Style)> {
+    let th = theme::cur();
+    let toks = lex_in(text, d);
+    toks.iter()
+        .enumerate()
+        .filter(|(_, t)| t.kind != Tok::Whitespace)
+        .map(|(i, t)| {
+            let is_fn = t.kind == Tok::Ident && toks.get(i + 1).is_some_and(|n| n.kind == Tok::LParen);
+            (t.start..t.end, th.syntax(t.kind, is_fn))
+        })
+        .collect()
+}
+
+/// The order shrunk to its first key: its direction, its column and how many keys follow.
+pub fn collapsed(keys: &[OrderKey]) -> String {
+    let user: Vec<&OrderKey> = keys.iter().filter(|k| k.origin == KeyOrigin::User).collect();
+    let Some(first) = user.first() else { return String::new() };
+    let arrow = if first.dir == Dir::Desc { "\u{2193}" } else { "\u{2191}" };
+    match user.len() - 1 {
+        0 => format!("{arrow}{}", first.col),
+        n => format!("{arrow}{}+{n}", first.col),
+    }
+}
+
+const WHERE: &str = "WHERE";
+const ORDER_BY: &str = "ORDER BY";
+
+/// The rows the line takes in `width` columns: two while the order is edited where fewer than
+/// a dozen columns are left for its keys next to the condition, else one.
+pub fn rows(width: u16, focused: Option<Field>) -> u16 {
+    // The line's room for its fields (as `draw` reckons it), less a few columns of the
+    // condition and the `ORDER BY` keyword.
+    let room = usize::from(width).saturating_sub(11);
+    let keys = room.saturating_sub(2 + 6 + ORDER_BY.len() + 1);
+    if focused == Some(Field::Order) && keys < 12 { 2 } else { 1 }
+}
+
+/// Below this many rows of the results pane an empty line without the focus gives its row to
+/// the grid.
+pub const SHORT: u16 = 12;
+
+/// Whether the line is left out: nothing applied or typed (`blank`), no focus, a results pane
+/// of `pane_h` rows that is short.
+pub fn hidden(blank: bool, focused: bool, pane_h: u16) -> bool {
+    blank && !focused && pane_h < SHORT
+}
+
+/// The refresh mark: the glyph, or `⟳` with icons off.
+pub fn refresh_mark(on: bool) -> &'static str {
+    if on { icons::REFRESH } else { "\u{27f3}" }
+}
+
+/// Draw the line of the active table tab into the one-row `area`: `state` holds the fields,
+/// `applied` what the tab holds as applied, `focused` the field with the focus (the results
+/// pane focused), `hint` the line's text with nothing applied or typed.
+pub(crate) fn draw(
+    app: &App,
+    state: &mut LineState,
+    applied: &Applied,
+    focused: Option<Field>,
+    hint: &str,
+    area: Rect,
+    buf: &mut Buffer,
+) -> Drawn {
+    let th = theme::cur();
+    let base = Style::new().fg(th.fg).bg(th.bg);
+    buf.set_style(area, base);
+    let mut drawn = Drawn::default();
+    let w = area.width as usize;
+    if w < 12 {
+        return drawn;
+    }
+    let (x0, y) = (area.x, area.y);
+    let muted = Style::new().fg(th.fg_muted).bg(th.bg);
+    let dim = Style::new().fg(th.fg_dim).bg(th.bg);
+    let label = muted.add_modifier(Modifier::BOLD);
+    let tint = Style::new().fg(th.warning).bg(th.bg).add_modifier(Modifier::BOLD);
+    // The refresh mark, one blank after it.
+    let rx = x0 + area.width - 2;
+    put(buf, rx, y, refresh_mark(app.icons_on()), 1, muted);
+    drawn.refresh = Rect::new(rx, y, 1, 1);
+    let end = usize::from(rx - x0).saturating_sub(2);
+    let where_edited = state.edited(Field::Where, &applied.filter);
+    let order_edited = state.edited(Field::Order, &applied.order);
+    let empty = state.where_.text().is_empty() && state.order.text().is_empty();
+    if focused.is_none() && empty && applied.filter.is_empty() && applied.order.is_empty() {
+        put(buf, x0 + 1, y, hint, end.saturating_sub(1), dim);
+        drawn.where_ = Rect::new(x0, y, end as u16, 1);
+        return drawn;
+    }
+    if where_edited || order_edited {
+        put(buf, x0, y, "\u{25cf}", 1, Style::new().fg(th.warning).bg(th.bg));
+    }
+    put(buf, x0 + 1, y, WHERE, 5, if where_edited { tint } else { label });
+    let field_x = 7usize;
+    let room = end.saturating_sub(field_x);
+    // The order's part: whole (`ORDER BY` and the keys, then what makes them total), or shrunk.
+    let order_text = state.order.text().to_string();
+    let tie = applied.tie.as_deref().filter(|_| !order_edited && focused != Some(Field::Order));
+    let cap = w * 2 / 5;
+    let label_w = width(ORDER_BY) + 1;
+    let keys_w = width(&order_text);
+    let tie_w = tie.map_or(0, |t| width(t) + 1);
+    let where_need = width(state.where_.text()) + usize::from(focused == Some(Field::Where));
+    let fits = |order_w: usize| order_w <= cap && where_need + 2 + order_w <= room;
+    let shrunk = collapsed(&applied.keys);
+    // (width of the order's part, whether whole, whether with what makes it total)
+    // Too narrow to edit the order next to the condition: it has a second row of its own.
+    let below = focused == Some(Field::Order) && area.height >= 2 && rows(area.width, focused) == 2;
+    let (order_w, whole, with_tie) = if below {
+        (0, true, false)
+    } else if focused == Some(Field::Order) {
+        // Edited: as wide as its text (two fifths at least), the condition keeping a few columns.
+        ((label_w + width(&order_text) + 1).max(cap).min(room.saturating_sub(2 + 6)), true, false)
+    } else if fits(label_w + keys_w + tie_w) {
+        (label_w + keys_w + tie_w, true, tie.is_some())
+    } else if tie.is_some() && fits(label_w + keys_w) {
+        (label_w + keys_w, true, false)
+    } else if order_edited || shrunk.is_empty() {
+        // Nothing to shrink to: the label and what of the keys fits.
+        let w = (label_w + keys_w).min(cap).min(room.saturating_sub(4));
+        (if w > label_w { w } else { 0 }, true, false)
+    } else {
+        (width(&shrunk).min(room.saturating_sub(4)), false, false)
+    };
+    let where_w = if order_w > 0 { room.saturating_sub(order_w + 2) } else { room };
+    let where_rect = Rect::new(x0 + field_x as u16, y, where_w as u16, 1);
+    drawn.where_ = Rect::new(x0, y, (field_x + where_w) as u16, 1);
+    let d = applied.dialect;
+    if where_w > 0 {
+        let input = &mut state.where_;
+        let spans = highlight(input.text(), d);
+        let cx = input.render_spans(where_rect, buf, base, focused == Some(Field::Where), &spans);
+        if focused == Some(Field::Where) {
+            drawn.cursor = Some((cx, y));
+        } else if input.cut().1 {
+            put(buf, where_rect.x + where_rect.width - 1, y, "\u{2026}", 1, muted);
+        }
+    }
+    if below {
+        let y = y + 1;
+        buf.set_style(Rect::new(x0, y, area.width, 1), base);
+        put(buf, x0 + 1, y, ORDER_BY, label_w - 1, if order_edited { tint } else { label });
+        let fx = x0 + 1 + label_w as u16;
+        let field = Rect::new(fx, y, (x0 + area.width).saturating_sub(fx + 1), 1);
+        let input = &mut state.order;
+        let spans = highlight(input.text(), d);
+        drawn.cursor = Some((input.render_spans(field, buf, base, true, &spans), y));
+        drawn.order = Rect::new(x0, y, area.width, 1);
+        return drawn;
+    }
+    if order_w == 0 {
+        return drawn;
+    }
+    let ox = x0 + (field_x + where_w + 2) as u16;
+    drawn.order = Rect::new(ox, y, order_w as u16, 1);
+    if !whole {
+        put(buf, ox, y, &shrunk, order_w, base);
+        return drawn;
+    }
+    put(buf, ox, y, ORDER_BY, label_w - 1, if order_edited { tint } else { label });
+    let fx = ox + label_w as u16;
+    let field_w = order_w - label_w - if with_tie { tie_w } else { 0 };
+    let field = Rect::new(fx, y, field_w as u16, 1);
+    let input = &mut state.order;
+    let spans = highlight(input.text(), d);
+    let cx = input.render_spans(field, buf, base, focused == Some(Field::Order), &spans);
+    if focused == Some(Field::Order) {
+        drawn.cursor = Some((cx, y));
+    } else if input.cut().1 {
+        put(buf, fx + field.width - 1, y, "\u{2026}", 1, muted);
+    }
+    if let Some(t) = tie.filter(|_| with_tie) {
+        put(buf, fx + field_w as u16 + 1, y, t, tie_w - 1, dim);
+    }
+    drawn
+}
+
+#[cfg(test)]
+mod tests;

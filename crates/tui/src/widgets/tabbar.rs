@@ -244,6 +244,10 @@ fn label(app: &App, index: usize, place: usize, tab: &Tab, active: bool, doc_max
     if tab.is_table() && app.icons_on() {
         name = format!("{} {name}", icons::TABLE);
     }
+    // A table tab whose rows are filtered says so after its name (an order alone does not).
+    if crate::app::table_query::applied_filter(tab).is_some() {
+        name = format!("{name} {}", icons::filter(app.icons_on()));
+    }
     // A DDL tab says so, with its icon or in words.
     if tab.is_ddl() {
         name = match app.icons_on() {

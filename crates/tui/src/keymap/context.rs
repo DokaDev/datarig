@@ -22,6 +22,7 @@
 //! │  ├─ editor.vim.search     [editor][text]   (the `/` and `?` prompt)
 //! │  ├─ explorer.filter       [text]
 //! │  ├─ grid.search           [text]   (the grid's `/` and `?` prompt)
+//! │  ├─ grid.filter           [text]   (a table tab's filter line: WHERE, ORDER BY)
 //! │  ├─ grid.edit             [text]   (the cell editor over a cell of the grid)
 //! │  └─ overlay.cell_viewer
 //! ├─ overlay.cell_editor    [text]   (a cell's value of several lines, in vim modes)
@@ -44,6 +45,7 @@ pub enum Ctx {
     Grid,
     GridMatches,
     GridSearch,
+    FilterLine,
     CellEdit,
     Inspector,
     Plan,
@@ -90,7 +92,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 51] = [
+    pub const ALL: [Ctx; 52] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -99,6 +101,7 @@ impl Ctx {
         Ctx::Grid,
         Ctx::GridMatches,
         Ctx::GridSearch,
+        Ctx::FilterLine,
         Ctx::CellEdit,
         Ctx::Inspector,
         Ctx::Plan,
@@ -155,6 +158,7 @@ impl Ctx {
             Ctx::Grid => "grid",
             Ctx::GridMatches => "grid.matches",
             Ctx::GridSearch => "grid.search",
+            Ctx::FilterLine => "grid.filter",
             Ctx::CellEdit => "grid.edit",
             Ctx::Inspector => "inspector",
             Ctx::Plan => "plan",
@@ -214,6 +218,7 @@ impl Ctx {
             | Ctx::VimSearch
             | Ctx::ExplorerFilter
             | Ctx::GridSearch
+            | Ctx::FilterLine
             | Ctx::MonitorFilter
             | Ctx::CellEdit
             | Ctx::CellViewer => Some(Ctx::Workspace),
@@ -247,6 +252,7 @@ impl Ctx {
                 | Ctx::VimSearch
                 | Ctx::ExplorerFilter
                 | Ctx::GridSearch
+                | Ctx::FilterLine
                 | Ctx::MonitorFilter
                 | Ctx::CellEdit
                 | Ctx::CellEditor
@@ -277,10 +283,11 @@ impl Ctx {
         self == Ctx::GridMatches
     }
 
-    /// A search prompt outside the editor: its reserved editing keys (`Ctrl+W`) win over the
-    /// workspace's, as they do in the editor's own prompt.
+    /// A one-line field outside the editor (the grid's search prompt, a table tab's filter
+    /// line): its reserved editing keys (`Ctrl+W`, `Shift+Tab`) win over the workspace's, as
+    /// they do in the editor's own prompt.
     pub fn is_prompt(self) -> bool {
-        self == Ctx::GridSearch
+        matches!(self, Ctx::GridSearch | Ctx::FilterLine)
     }
 
     /// One line for `docs/keybindings.md`.
@@ -301,6 +308,9 @@ impl Ctx {
             }
             Ctx::GridSearch => {
                 "The search prompt of `/` and `?` on the line under the grid: the cursor goes to the first matching cell while the pattern is typed, `Enter` searches (an empty pattern: the last one), `Esc` goes back to where the cursor was, `Ctrl+W` deletes the word before the cursor. The full values are searched as fetched (not the shown cut), cell by cell, row by row."
+            }
+            Ctx::FilterLine => {
+                "The filter line of a table tab, above the grid (`f` or `Space r f`: the condition, `Space r o`: the order): `Enter` (or the run key) applies both fields and runs the table's query again, `Esc` puts back what is applied, `Tab` and `Shift+Tab` move between the fields, `Ctrl+L` empties the field (applied with `Enter`), `Ctrl+W` deletes the word before the cursor, `Ctrl+U` the text before it. The condition is sent as written (checked first: one condition on this table, no comment, no second statement, no lock, no function known to wait or change anything); the order is a list of columns, each with `ASC` or `DESC` (and on PostgreSQL `NULLS FIRST` or `NULLS LAST`), written back as the app sends it."
             }
             Ctx::CellEdit => {
                 "The cell editor (`e` in the grid) over the cell: one line, the cell's pending value or its value as read. `Enter` keeps the text (an empty text is the empty string, never NULL), `Esc` cancels, `Ctrl+N` sets NULL, `Ctrl+D` the column's default. With cells of one column selected, each takes the value, as one change (`u` undoes it). `Ctrl+L` takes the text typed so far to the editor of several lines. A value of several lines, and a JSON column's, opens that editor instead; an enum or boolean column lists its values."
@@ -423,6 +433,7 @@ impl Ctx {
             Ctx::Grid => Label::KeyctxGrid,
             Ctx::GridMatches => Label::KeyctxGridMatches,
             Ctx::GridSearch => Label::KeyctxGridSearch,
+            Ctx::FilterLine => Label::KeyctxGridFilter,
             Ctx::CellEdit => Label::KeyctxGridEdit,
             Ctx::Inspector => Label::KeyctxInspector,
             Ctx::Plan => Label::KeyctxPlan,

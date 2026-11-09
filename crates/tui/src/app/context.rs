@@ -63,6 +63,7 @@ impl App {
                 Focus::Results | Focus::Inspector if self.changes_shown() => Ctx::Changes,
                 Focus::Results if self.cell_lines_open() => Ctx::CellEditor,
                 Focus::Results if self.cell_edit_open() => Ctx::CellEdit,
+                Focus::Results if self.filter_line_focused() => Ctx::FilterLine,
                 Focus::Results if self.grid_prompt_open() => Ctx::GridSearch,
                 Focus::Results if self.grid_search_on() => Ctx::GridMatches,
                 Focus::Results => Ctx::Grid,

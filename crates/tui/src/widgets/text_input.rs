@@ -10,6 +10,7 @@ use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
+use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -191,6 +192,34 @@ impl TextInput {
         mask: bool,
         hide: Option<(usize, usize)>,
     ) -> u16 {
+        self.draw(area, buf, style, focused, mask, hide, &[])
+    }
+
+    /// Draw as [`TextInput::render`] does (nothing masked), each grapheme in `style` with the
+    /// style of the first span holding its first byte patched over it (`spans`: byte ranges of
+    /// the text, e.g. the tokens of a highlighter).
+    pub fn render_spans(
+        &mut self,
+        area: Rect,
+        buf: &mut Buffer,
+        style: Style,
+        focused: bool,
+        spans: &[(Range<usize>, Style)],
+    ) -> u16 {
+        self.draw(area, buf, style, focused, false, None, spans)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw(
+        &mut self,
+        area: Rect,
+        buf: &mut Buffer,
+        style: Style,
+        focused: bool,
+        mask: bool,
+        hide: Option<(usize, usize)>,
+        spans: &[(Range<usize>, Style)],
+    ) -> u16 {
         let w = area.width as usize;
         (self.drawn, self.drawn_mask, self.drawn_hide) = (area, mask, hide);
         if w == 0 {
@@ -211,10 +240,20 @@ impl TextInput {
             self.scroll = cursor_x + 1 - w;
         }
         let mut x = 0;
-        for (g, gw) in cells {
+        let mut b = 0;
+        let starts: Vec<usize> = self
+            .text
+            .graphemes(true)
+            .map(|g| {
+                b += g.len();
+                b - g.len()
+            })
+            .collect();
+        for ((g, gw), at) in cells.into_iter().zip(starts) {
             if x >= self.scroll + w {
                 break;
             }
+            let style = spans.iter().find(|(r, _)| r.contains(&at)).map_or(style, |(_, s)| style.patch(*s));
             if x >= self.scroll && x + gw <= self.scroll + w {
                 buf.set_stringn(area.x + (x - self.scroll) as u16, area.y, g, gw.max(1), style);
             } else if x + gw > self.scroll {

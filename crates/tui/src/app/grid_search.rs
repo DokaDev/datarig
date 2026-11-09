@@ -1046,12 +1046,26 @@ impl App {
             None => String::new(),
         };
         let mut notes = Vec::new();
+        // The rows of a filtered table tab are the server's answer to the filter: the search
+        // looks through those held here, it filters nothing on the server.
+        let held = t
+            .doc
+            .table_query
+            .as_ref()
+            .is_some_and(|q| q.shown_filter().is_some())
+            .then(|| self.i18n.label(Label::GridSearchHeld).to_string());
         if !count.is_empty() && (typed || pattern.is_some()) && rs.more {
             // The rows the matches are of (rows may have come since).
             let read = matches.filter(|m| m.result == rs.id && !counting).map_or(rs.rows.len(), |m| m.rows);
             let key = self.next_page_key(Ctx::GridMatches);
-            notes.push((self.i18n.msg(&Msg::GridSearchMore { count: read as u64, key }).to_string(), false));
+            let more = self.i18n.msg(&Msg::GridSearchMore { count: read as u64, key }).to_string();
+            if let Some(h) = &held {
+                notes.push((format!("{h} \u{b7} {more}"), false));
+            }
+            notes.push((more, false));
             notes.push((self.i18n.label(Label::GridSearchMoreShort).to_string(), false));
+        } else if let Some(h) = held {
+            notes.push((h, false));
         }
         let text = match (&pattern, &t.find.prompt) {
             (Some(p), _) => p.as_str(),

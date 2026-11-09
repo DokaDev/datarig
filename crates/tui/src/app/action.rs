@@ -201,6 +201,9 @@ pub enum Action {
     Monitor(MonitorAction),
     /// Export the shown result to a file: the export dialog.
     Export,
+    /// A table tab's filter line: edit the condition or the order, clear them, open the
+    /// statement.
+    Table(super::filter_line::TableAction),
     /// Change the shown result's cells.
     Edit(super::edit::EditAction),
     /// The Changes tab of the results pane.
@@ -525,6 +528,11 @@ fn has_rows(a: &App) -> bool {
         && matches!(&a.tab().results, super::Results::Rows(rs) if !rs.rows.is_empty())
 }
 
+/// The active tab is a table tab: its filter line filters and orders its rows.
+fn table_tab(a: &App) -> bool {
+    has_tab(a) && a.tab().is_table()
+}
+
 /// The active tab shows a row result (a grid to page through).
 fn rows_shown(a: &App) -> bool {
     has_tab(a)
@@ -634,6 +642,7 @@ const fn mv(action: Action, id: &'static str, label: Label, when: fn(&App) -> bo
 
 use super::edit::ChangesAction as K;
 use super::edit::EditAction as D;
+use super::filter_line::TableAction as T;
 use super::grid_search::SearchAction as S;
 use ChartAction as C;
 use ExplorerAction as E;
@@ -1015,6 +1024,10 @@ pub const REGISTRY: &[ActionSpec] = &[
     mv(Action::PageNext, "results.page.next", Label::ActionResultsPageNext, rows_shown),
     mv(Action::PagePrev, "results.page.prev", Label::ActionResultsPagePrev, rows_shown),
     act(Action::CountRows, "results.count", Label::ActionResultsCount, rows_shown),
+    act(Action::Table(T::EditFilter), "table.filter.edit", Label::ActionTableFilterEdit, table_tab),
+    act(Action::Table(T::EditOrder), "table.order.edit", Label::ActionTableOrderEdit, table_tab),
+    act(Action::Table(T::Clear), "table.filter.clear", Label::ActionTableFilterClear, table_tab),
+    act(Action::Table(T::OpenSql), "table.filter.open_sql", Label::ActionTableFilterOpenSql, table_tab),
     act(Action::ExplainAsPlan, "results.view_as_plan", Label::ActionResultsViewAsPlan, text_plan_shown),
     mv(Action::Plan(P::Down), "plan.down", Label::ActionPlanDown, plan_focused),
     mv(Action::Plan(P::Up), "plan.up", Label::ActionPlanUp, plan_focused),

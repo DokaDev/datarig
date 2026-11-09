@@ -169,6 +169,10 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r p` | `results.page.prev` | Results → previous page | ✓ |
 | `Space r #` | `results.count` | Results → count every row (runs a count query) |  |
 | `Space r e` | `results.export` | Results → export to a file… |  |
+| `Space r f` | `table.filter.edit` | Table → filter the rows on the server (WHERE) |  |
+| `Space r o` | `table.order.edit` | Table → sort the rows on the server (ORDER BY) |  |
+| `Space r x` | `table.filter.clear` | Table → clear the filter and the order, and run it again |  |
+| `Space r v` | `table.filter.open_sql` | Table → open its statement in a new console |  |
 | `Space r ]` | `results.tab.next` | Result tabs → next |  |
 | `Space r [` | `results.tab.prev` | Result tabs → previous |  |
 | `Space m m` | `monitor.open` | Monitor → the connection's server monitor |  |
@@ -290,6 +294,7 @@ The result grid. The wheel scrolls the rows; a sideways wheel (a trackpad) or Sh
 | `#` | `results.count` | Results → count every row (runs a count query) |  |
 | `P` | `results.view_as_plan` | View as plan: the text EXPLAIN again as a plan |  |
 | `c` | `results.chart` | Results → show as a chart / as rows |  |
+| `f` | `table.filter.edit` | Table → filter the rows on the server (WHERE) |  |
 | `L` | `results.tab.next` | Result tabs → next |  |
 | `H` | `results.tab.prev` | Result tabs → previous |  |
 | `Esc` | `pane.back` | Back to the editor |  |
@@ -310,6 +315,14 @@ The result grid while a search is on (after `/` or `?`): `n` goes to the next ma
 The search prompt of `/` and `?` on the line under the grid: the cursor goes to the first matching cell while the pattern is typed, `Enter` searches (an empty pattern: the last one), `Esc` goes back to where the cursor was, `Ctrl+W` deletes the word before the cursor. The full values are searched as fetched (not the shown cut), cell by cell, row by row. Inside `workspace`.
 
 Reserved (grid search): `Esc` `Enter` `Ctrl+W`
+
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
+## `grid.filter` [text]
+
+The filter line of a table tab, above the grid (`f` or `Space r f`: the condition, `Space r o`: the order): `Enter` (or the run key) applies both fields and runs the table's query again, `Esc` puts back what is applied, `Tab` and `Shift+Tab` move between the fields, `Ctrl+L` empties the field (applied with `Enter`), `Ctrl+W` deletes the word before the cursor, `Ctrl+U` the text before it. The condition is sent as written (checked first: one condition on this table, no comment, no second statement, no lock, no function known to wait or change anything); the order is a list of columns, each with `ASC` or `DESC` (and on PostgreSQL `NULLS FIRST` or `NULLS LAST`), written back as the app sends it. Inside `workspace`.
+
+Reserved (filter line): `Esc` `Enter` `Tab` `Shift+Tab` `Ctrl+W` `Ctrl+L`
 
 Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
