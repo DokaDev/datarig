@@ -42,3 +42,7 @@
 "table.filter.paste_cut" = "붙여 넣은 텍스트를 잘랐습니다: 필드에는 최대 16 KiB까지 들어갑니다"
 "table.filter.failed_rows" = "필터 실패: 이전 행을 보여 주는 중"
 "table.filter.failed_short" = "필터 실패"
+"table.filter.cancelled_rows" = "취소됨: 이전 행을 보여 주는 중"
+"table.filter.cancelled_short" = "취소됨"
+"table.filter.unapplied_rows" = "필터 적용 안 됨: 이전 행을 보여 주는 중"
+"table.filter.unapplied_short" = "필터 적용 안 됨"

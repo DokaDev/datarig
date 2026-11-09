@@ -44,3 +44,7 @@
 "table.filter.paste_cut" = "Pasted text cut: a field holds at most 16 KiB"
 "table.filter.failed_rows" = "filter failed: showing previous rows"
 "table.filter.failed_short" = "filter failed"
+"table.filter.cancelled_rows" = "cancelled: showing previous rows"
+"table.filter.cancelled_short" = "cancelled"
+"table.filter.unapplied_rows" = "filter not applied: showing previous rows"
+"table.filter.unapplied_short" = "filter not applied"

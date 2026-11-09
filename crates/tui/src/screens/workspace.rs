@@ -1350,13 +1350,24 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         _ => None,
     };
-    // A table tab whose query the server refused holds the rows of an earlier one: dimmed, and
-    // said in place of a note about the paging (never shown as the refused query's answer).
-    let failed = matches!(app.tab().results, Results::Rows(_))
-        && app.tab().doc.table_query.as_ref().is_some_and(|q| q.failure().is_some());
-    let paging_note = match failed {
-        true => Some((app.i18n.label(Label::TableFilterFailedRows), app.i18n.label(Label::TableFilterFailedShort))),
-        false => paging_note,
+    // A table tab whose query's run brought no rows (refused, cancelled, its session gone) holds
+    // the rows of an earlier one: dimmed, and said in place of a note about the paging (never
+    // shown as that query's answer).
+    let unapplied = match app.tab().results {
+        Results::Rows(_) => app.tab().doc.table_query.as_ref().and_then(|q| q.failure()).map(|f| f.how),
+        _ => None,
+    };
+    let paging_note = match unapplied {
+        Some(how) => {
+            use crate::app::table_query::Unapplied;
+            let (long, short) = match how {
+                Unapplied::Refused => (Label::TableFilterFailedRows, Label::TableFilterFailedShort),
+                Unapplied::Cancelled => (Label::TableFilterCancelledRows, Label::TableFilterCancelledShort),
+                Unapplied::Ended => (Label::TableFilterUnappliedRows, Label::TableFilterUnappliedShort),
+            };
+            Some((app.i18n.label(long), app.i18n.label(short)))
+        }
+        None => paging_note,
     };
     // The grid's search: its prompt or the search that is on, on the line under the grid; a
     // note about the paging goes on that line too, first among what is not searched.
@@ -1436,7 +1447,7 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         Results::Cancelled => msg_line(buf, &app.i18n.label(Label::QueryCancelled), th.warning),
     }
-    if failed {
+    if unapplied.is_some() {
         let below = strip.is_some() || (area.height > 3 && paging_note.is_some());
         let grid = Rect { height: area.height - u16::from(below), ..area };
         buf.set_style(grid, Style::new().fg(th.fg_dim).add_modifier(Modifier::DIM));

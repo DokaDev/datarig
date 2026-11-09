@@ -50,6 +50,36 @@ fn the_query_is_bound_to_the_run_that_sends_its_statement() {
 }
 
 #[test]
+fn a_run_that_ends_without_its_first_page_is_not_applied() {
+    let mut tq = TableQuery::new(match users().source {
+        query::Source::Table(t) => t,
+    });
+    let q = filtered("id > 1", None);
+    let sql = "SELECT * FROM \"shop\".\"users\" WHERE (id > 1)".to_string();
+    let send = |tq: &mut TableQuery, qid: u64| {
+        tq.pending = Some(Statement { query: q.clone(), sql: sql.clone(), filter_span: None });
+        tq.sent(qid, std::slice::from_ref(&sql));
+    };
+    send(&mut tq, 1);
+    tq.first_page(1);
+    // Its first page landed: a cancel after it (or its end) is not a failure of the query.
+    tq.run_over(1, Unapplied::Cancelled);
+    assert_eq!(tq.failure(), None);
+    send(&mut tq, 2);
+    // Another run's end says nothing about it.
+    tq.run_over(1, Unapplied::Ended);
+    assert_eq!(tq.failure(), None);
+    tq.run_over(2, Unapplied::Cancelled);
+    assert_eq!(tq.failure(), Some(&Failure { at: None, how: Unapplied::Cancelled }));
+    assert_eq!(tq.applied(), &q, "the line keeps the query, marked");
+    // The server's refusal, marked first, stays the reason.
+    send(&mut tq, 3);
+    tq.run_failed(3, &ServerError::Other, Dialect::Postgres);
+    tq.run_over(3, Unapplied::Ended);
+    assert_eq!(tq.failure(), Some(&Failure { at: None, how: Unapplied::Refused }));
+}
+
+#[test]
 fn every_refusal_has_its_own_words() {
     use datarig_core::sql::risk::{Class, ReadOnlyBlock};
     let i18n = I18n::new(datarig_i18n::Lang::En);
@@ -131,17 +161,21 @@ fn a_server_error_marks_the_filter_where_it_points() {
     // `SELECT * FROM "shop"."users" WHERE (` is 36 characters: the filter's first is the 37th.
     sent(&mut tq, Dialect::Postgres, "\u{e9}\u{e9} = 1 OR idd = 2", 1);
     tq.run_failed(1, &ServerError::Message(&pg(37 + 10)), Dialect::Postgres);
-    assert_eq!(tq.failure(), Some(&Failure { at: Some(12..15) }), "characters, not bytes: `idd`");
+    assert_eq!(
+        tq.failure(),
+        Some(&Failure { at: Some(12..15), how: Unapplied::Refused }),
+        "characters, not bytes: `idd`"
+    );
     // On a blank: that one character.
     tq.run_failed(1, &ServerError::Message(&pg(37 + 9)), Dialect::Postgres);
-    assert_eq!(tq.failure(), Some(&Failure { at: Some(11..12) }));
+    assert_eq!(tq.failure(), Some(&Failure { at: Some(11..12), how: Unapplied::Refused }));
     // Before the filter, after it, or no place: failed, nothing marked.
     for p in [3, 37 + 17] {
         tq.run_failed(1, &ServerError::Message(&pg(p)), Dialect::Postgres);
-        assert_eq!(tq.failure(), Some(&Failure { at: None }), "{p}");
+        assert_eq!(tq.failure(), Some(&Failure { at: None, how: Unapplied::Refused }), "{p}");
     }
     tq.run_failed(1, &ServerError::Other, Dialect::Postgres);
-    assert_eq!(tq.failure(), Some(&Failure { at: None }));
+    assert_eq!(tq.failure(), Some(&Failure { at: None, how: Unapplied::Refused }));
     // Another run's failure is not this query's; a page of the run clears it.
     let mut other = TableQuery::new(table.clone());
     sent(&mut other, Dialect::Postgres, "id = 1", 2);
@@ -156,11 +190,19 @@ fn a_server_error_marks_the_filter_where_it_points() {
     let mut tq = TableQuery::new(table);
     sent(&mut tq, my, "id = 1 AND rank = 1", 4);
     tq.run_failed(4, &ServerError::Message(&near("= 1")), my);
-    assert_eq!(tq.failure(), Some(&Failure { at: None }), "twice in the statement: not located");
+    assert_eq!(
+        tq.failure(),
+        Some(&Failure { at: None, how: Unapplied::Refused }),
+        "twice in the statement: not located"
+    );
     tq.run_failed(4, &ServerError::Message(&near("= 1)")), my);
-    assert_eq!(tq.failure(), Some(&Failure { at: Some(16..19) }), "the statement's `)` is not the filter's");
+    assert_eq!(
+        tq.failure(),
+        Some(&Failure { at: Some(16..19), how: Unapplied::Refused }),
+        "the statement's `)` is not the filter's"
+    );
     tq.run_failed(4, &ServerError::Message(&near("rank = 1)")), my);
-    assert_eq!(tq.failure(), Some(&Failure { at: Some(11..19) }));
+    assert_eq!(tq.failure(), Some(&Failure { at: Some(11..19), how: Unapplied::Refused }));
 }
 
 #[test]

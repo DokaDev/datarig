@@ -591,6 +591,10 @@ impl App {
                 t.exec.state = SessionState::Lost;
                 t.exec.lost_tx = t.exec.tx_at_risk();
                 t.exec.running = None;
+                // A table tab's query whose run had not brought its rows is not applied.
+                if let Some(tq) = t.doc.table_query.as_mut() {
+                    tq.run_over(t.exec.query_id, crate::app::table_query::Unapplied::Ended);
+                }
                 let had_tx = t.exec.user_tx();
                 // Lost while the app rolled its idle transaction back: said in the status bar
                 // too, as a failed rollback is.

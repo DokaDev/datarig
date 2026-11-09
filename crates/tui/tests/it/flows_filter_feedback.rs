@@ -394,6 +394,47 @@ fn a_failed_filter_keeps_the_earlier_rows_dimmed() {
     assert!(h.app.tab().doc.table_query.as_ref().unwrap().failure().is_none());
 }
 
+/// A table run that ends without its first page (cancelled, its session lost) leaves the
+/// earlier rows: the line keeps the query as not applied, the rows are dimmed and the line
+/// under the grid says why. The rows are never shown as that query's answer.
+#[test]
+fn a_run_that_brings_no_rows_leaves_its_query_not_applied() {
+    let cases: [(DbEvent, &str); 2] = [
+        (DbEvent::Failed { id: 0, error: DbError::Cancelled, cancelled: true }, "cancelled: showing previous rows"),
+        (DbEvent::Lost { error: DbError::Closed }, "filter not applied: showing previous rows"),
+    ];
+    for (ev, note) in cases {
+        let mut h = users();
+        h.keys("f");
+        h.type_text("id > 1");
+        h.key(KeyCode::Enter);
+        assert_eq!(runs(&mut h).len(), 1, "{note}");
+        let index = h.app.tabs.active_index();
+        let ev = match ev {
+            DbEvent::Failed { error, cancelled, .. } => {
+                DbEvent::Failed { id: h.app.tab().exec.query_id, error, cancelled }
+            }
+            ev => ev,
+        };
+        h.tab_db(index, ev);
+        let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+        assert!(tq.failure().is_some(), "{note}: the query is not applied");
+        assert_eq!(
+            tq.shown.as_ref().and_then(|q| q.filter.as_ref()),
+            None,
+            "{note}: the rows held are the unfiltered ones"
+        );
+        assert!(matches!(h.app.tab().results, Results::Rows(_)), "{note}: the rows stay");
+        let screen = h.screen(120, 30);
+        assert!(screen.contains(note), "{note}:\n{screen}");
+        assert!(screen.contains("\u{2717}WHERE id > 1"), "{note}:\n{screen}");
+        let term = h.draw(120, 30);
+        let y = screen.lines().position(|l| l.contains("n1")).unwrap() as u16;
+        let x = column_of(&mut h, 120, 30, "n1");
+        assert!(term.backend().buffer()[(x, y)].modifier.contains(Modifier::DIM), "{note}: the rows are dimmed");
+    }
+}
+
 #[test]
 fn completion_in_the_condition_screen() {
     let mut h = users();

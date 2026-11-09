@@ -747,6 +747,17 @@ impl Tab {
     /// rows and did not fail, else its Messages. A table tab shows its result or its error.
     pub fn run_ended(&mut self, failed: bool) {
         self.exec.replace_pending = false;
+        // A table tab's query whose run brought no rows is not applied: its rows are still
+        // those of the query before (never passed off as this one's answer).
+        if let Some(tq) = self.doc.table_query.as_mut() {
+            use super::table_query::Unapplied;
+            let how = match self.exec.run.statements.last().map(|s| &s.outcome) {
+                Some(super::runlog::StatementOutcome::Cancelled) => Unapplied::Cancelled,
+                Some(super::runlog::StatementOutcome::Failed(_)) => Unapplied::Refused,
+                _ => Unapplied::Ended,
+            };
+            tq.run_over(self.exec.query_id, how);
+        }
         if self.is_table() {
             // Its rows or its error; the Chart tab shown before the run draws the new rows.
             if failed || self.exec.view != ResultView::Chart {

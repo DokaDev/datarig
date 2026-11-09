@@ -49,12 +49,24 @@ pub(super) struct Statement {
     pub filter_span: Option<Range<usize>>,
 }
 
-/// The server refused the statement of the query a run sent: the rows shown are those of an
-/// earlier query. `at`: where in the filter's text the server said the error is (bytes), when
-/// it pointed into it.
+/// The run of the query a tab sent ended without its first page: the rows shown are those of
+/// an earlier query. `at`: where in the filter's text the server said the error is (bytes),
+/// when it pointed into it; `how`: why the run brought no rows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failure {
     pub at: Option<Range<usize>>,
+    pub how: Unapplied,
+}
+
+/// Why the run of a table tab's query brought no rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unapplied {
+    /// The server refused its statement.
+    Refused,
+    /// The user cancelled it.
+    Cancelled,
+    /// It ended otherwise: its session went, or it answered without rows.
+    Ended,
 }
 
 /// The query state of a table tab.
@@ -78,6 +90,8 @@ pub struct TableQuery {
     statement: Option<(u64, Statement)>,
     /// The run of the query that failed on the server, by its query id: what the line marks.
     failed: Option<(u64, Failure)>,
+    /// The run whose first page landed last, by its query id: it brought its query's rows.
+    landed: Option<u64>,
     /// The query waiting for the user's word on the functions it calls.
     asked: Option<Query>,
     /// The filter texts whose functions the user let run in this tab.
@@ -97,6 +111,7 @@ impl TableQuery {
             pending: None,
             statement: None,
             failed: None,
+            landed: None,
             asked: None,
             confirmed: HashSet::new(),
             line: Default::default(),
@@ -123,6 +138,18 @@ impl TableQuery {
     pub(super) fn first_page(&mut self, qid: u64) {
         self.shown = self.requested.as_ref().filter(|(id, _)| *id == qid).map(|(_, q)| q.clone());
         self.failed = None;
+        self.landed = Some(qid);
+    }
+
+    /// Run `qid` ended (`how`, when it brought no rows): when it was the query's and its first
+    /// page did not land, the query is marked not applied (a server's refusal marked already
+    /// stays as it is). The rows held stay those of `shown`.
+    pub(super) fn run_over(&mut self, qid: u64, how: Unapplied) {
+        let ours = self.requested.as_ref().is_some_and(|(id, _)| *id == qid);
+        let marked = self.failed.as_ref().is_some_and(|(id, _)| *id == qid);
+        if ours && !marked && self.landed != Some(qid) {
+            self.failed = Some((qid, Failure { at: None, how }));
+        }
     }
 
     /// The server refused the statement of run `qid` (`error`, in dialect `d`): when it is the
@@ -161,7 +188,7 @@ impl TableQuery {
             };
             Some(from..to)
         });
-        self.failed = Some((qid, Failure { at }));
+        self.failed = Some((qid, Failure { at, how: Unapplied::Refused }));
     }
 
     /// The failure of the query the tab holds as applied, while it is the run sent last.
