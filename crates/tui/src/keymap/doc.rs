@@ -208,6 +208,9 @@ fn commands(s: &mut String) {
             Some(ArgKind::Theme) => " copy <from> <name> / new <name> / update [<name>]",
             Some(ArgKind::TabPosition) => " [N / +N / -N / $]",
             Some(ArgKind::Export) => " [format] [all / fetched / selection] [delim= quote= header= null=] [path]",
+            Some(ArgKind::Where) => " [condition]",
+            Some(ArgKind::OrderBy) => " [column ASC / DESC, …]",
+            Some(ArgKind::FilterOp) => " clear",
             None => "",
         };
         let aliases: Vec<String> = c.aliases.iter().map(|a| format!("`:{a}`")).collect();

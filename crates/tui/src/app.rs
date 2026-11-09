@@ -80,6 +80,7 @@ mod status;
 pub mod tab_drag;
 pub mod tab_list;
 mod tab_ops;
+pub mod table_query;
 pub mod tabs;
 pub mod themes;
 mod tick;

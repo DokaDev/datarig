@@ -62,6 +62,8 @@ impl App {
         match a {
             // A DDL tab has nothing to run: the run key reads its DDL again.
             Action::RunStatement if self.tab().is_ddl() => self.load_ddl(self.tab().id),
+            // A table tab runs its query (its filter and order).
+            Action::RunStatement if self.tab().is_table() => self.table_rerun(self.tab().id),
             Action::RunStatement => {
                 if !self.layout.too_small {
                     let t = self.tab_mut();
@@ -511,6 +513,9 @@ impl App {
                 if let ConfirmAction::MonitorAction { tab, .. } = action {
                     self.monitor_declined(tab);
                 }
+                if let ConfirmAction::FilterCalls(tab) = action {
+                    self.filter_calls_declined(tab);
+                }
             }
             _ => {}
         }
@@ -565,6 +570,7 @@ impl App {
             ConfirmAction::DiscardEdits { tab, result } => self.edit_discard(tab, result),
             ConfirmAction::LeaveEdits(leave) => self.leave_confirmed(leave),
             ConfirmAction::MonitorAction { tab, .. } => self.monitor_confirmed(tab),
+            ConfirmAction::FilterCalls(tab) => self.filter_calls_confirmed(tab),
             ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
         }
     }

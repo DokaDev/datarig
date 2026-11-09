@@ -810,6 +810,10 @@ impl App {
                 t.grid = GridState::paged(page_size, page_rows);
                 t.exec.origin = origin;
                 t.exec.shown = t.exec.run.len().checked_sub(1);
+                // A table tab's rows are of the query its run sent, if it sent one.
+                if let Some(tq) = t.doc.table_query.as_mut() {
+                    tq.first_page(query);
+                }
                 // The Chart tab shown before stays: it draws these rows.
                 let charted = t.exec.view == crate::app::tabs::ResultView::Chart;
                 t.exec.view =

@@ -178,6 +178,9 @@ pub enum ConfirmAction {
     /// Send `kind` on the session Monitor tab `tab` asked about (it keeps what was asked).
     /// Keeping the session as it is is the default.
     MonitorAction { tab: super::TabId, kind: datarig_core::monitor::ActionKind },
+    /// Run the filter of table tab `tab` although it calls functions whose effects are not
+    /// known (the query waits in the tab's state). Cancel is the default.
+    FilterCalls(super::TabId),
 }
 
 /// A yes/no question: `y` yes, `n`/`Esc` no; `Enter` no when the answer would lose something
@@ -255,7 +258,9 @@ impl Confirm {
             ConfirmAction::Copy => (Label::DialogButtonCancel, Label::DialogButtonCopy),
             ConfirmAction::FetchThenCopy => (Label::DialogButtonCancel, Label::DialogButtonFetchCopy),
             ConfirmAction::TrustHostKey => (Label::DialogButtonCancel, Label::DialogButtonTrust),
-            ConfirmAction::ExplainAgain => (Label::DialogButtonCancel, Label::SafetyConfirmRun),
+            ConfirmAction::ExplainAgain | ConfirmAction::FilterCalls(_) => {
+                (Label::DialogButtonCancel, Label::SafetyConfirmRun)
+            }
             ConfirmAction::KeychainSecurityTool => (Label::DialogButtonCancel, Label::DialogButtonTurnOn),
             ConfirmAction::ExportStart => (Label::DialogButtonCancel, Label::DialogButtonExport),
             ConfirmAction::ExportReplace => (Label::DialogButtonKeep, Label::DialogButtonReplace),

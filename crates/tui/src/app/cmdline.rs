@@ -617,6 +617,27 @@ impl App {
                 self.ddl_command(arg.trim())?;
                 self.overlays.close(OverlayKind::Commands);
             }
+            (command::Command::Where, _) => {
+                // Said on the command line, which stays open, when the tab is not a table tab.
+                self.table_command_tab("where")?;
+                self.overlays.close(OverlayKind::Commands);
+                self.where_command(arg)?;
+            }
+            (command::Command::OrderBy, _) => {
+                // Said on the command line, which stays open, when the tab is not a table tab.
+                self.table_command_tab("orderby")?;
+                self.overlays.close(OverlayKind::Commands);
+                self.orderby_command(arg)?;
+            }
+            (command::Command::Filter, _) => {
+                // Said on the command line, which stays open, when the tab is not a table tab.
+                self.table_command_tab("filter")?;
+                if !arg.trim().eq_ignore_ascii_case("clear") {
+                    return err(Msg::Label(Label::CommandsErrorFilterUsage));
+                }
+                self.overlays.close(OverlayKind::Commands);
+                self.filter_command()?;
+            }
             (command::Command::Monitor, _) => {
                 self.overlays.close(OverlayKind::Commands);
                 self.monitor_command(arg.trim())?;
@@ -1011,6 +1032,9 @@ impl App {
                             ArgKind::Theme => (Label::CommandsArgTheme, false),
                             ArgKind::TabPosition => (Label::CommandsArgTabPosition, true),
                             ArgKind::Export => (Label::CommandsArgExport, true),
+                            ArgKind::Where => (Label::CommandsArgWhere, true),
+                            ArgKind::OrderBy => (Label::CommandsArgOrderby, true),
+                            ArgKind::FilterOp => (Label::CommandsArgFilter, false),
                         };
                         let arg = arg.text(self.i18n.lang);
                         name.push_str(&if optional { format!(" [{arg}]") } else { format!(" {arg}") });

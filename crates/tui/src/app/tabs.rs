@@ -553,6 +553,9 @@ pub struct Doc {
     pub console_no: u32,
     /// The table a table tab shows.
     pub table: Option<TableRef>,
+    /// A table tab's query: its filter and order, as written, sent and shown (made at its
+    /// first run).
+    pub table_query: Option<Box<super::table_query::TableQuery>>,
     /// The object a DDL tab shows.
     pub ddl: Option<DdlTab>,
     /// A Monitor tab's connection, reads and views.
@@ -577,6 +580,7 @@ impl Doc {
             kept_profile: None,
             console_no: 0,
             table: None,
+            table_query: None,
             ddl: None,
             monitor: None,
         }

@@ -860,6 +860,9 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:discard` |  | Drop every pending change of the result |
 | `:whatsnew` |  | What's new: the release notes of this version and the ones before |
 | `:update` |  | Update: what the update check knows, and how to update |
+| `:where [condition]` |  | Filter the table tab's rows on the server and run it again (:where &lt;condition>; alone: no filter) |
+| `:orderby [column ASC / DESC, …]` |  | Sort the table tab's rows on the server and run it again (:orderby &lt;column> [ASC\|DESC], …; alone: no order) |
+| `:filter clear` |  | Clear the table tab's filter and order and run it again (:filter clear) |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):
 

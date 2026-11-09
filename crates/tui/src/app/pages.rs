@@ -104,11 +104,13 @@ impl App {
 
     /// The server's estimate of the rows of the table that table tab `t` shows, as the explorer
     /// read it with the table's schema or structure (nothing is asked for it). Only while the
-    /// result shown is the tab's own query of its table, and only from the explorer of the
-    /// profile and database the tab works in. `None` when the server has none (never analyzed).
+    /// rows shown are of every row of the tab's table (in any order: no filter, no cap), and
+    /// only from the explorer of the profile and database the tab works in. `None` when the
+    /// server has none (never analyzed), and for filtered rows (how many match is not known).
     pub(crate) fn table_estimate(&self, t: &Tab) -> Option<u64> {
         let table = t.doc.table.as_ref().filter(|_| t.is_table())?;
-        if t.shown_sql().trim() != table.query(self.tab_dialect(t.id)) {
+        let shown = t.doc.table_query.as_ref()?.shown.as_ref()?;
+        if !super::table_query::same_rows(shown, &datarig_core::query::Query::table(self.table_name(t.id)?)) {
             return None;
         }
         let id = t.profile?;
@@ -195,6 +197,10 @@ impl App {
         let refused = |why| {
             if released { Msg::ResultsPageRefusedNoHold { why } } else { Msg::ResultsPageRefused { why } }
         };
+        // A table tab's filter is checked again as when it ran (never asked about here).
+        if let Err(why) = self.table_recheck(id) {
+            return self.tab_status(id, Notice::new(refused(why), Level::Warning));
+        }
         let lang = t.exec.prepared.language();
         if let Err(r) = t.exec.prepared.repeatable(&sql) {
             if released && commits_a_write(lang, &sql) {
@@ -275,7 +281,13 @@ impl App {
         if !(self.answer_here() || self.kept_answer_here()) {
             return self.flash(Notice::new(Label::ResultsPageStale, Level::Warning));
         }
-        let sql = match t.exec.prepared.count_query(t.shown_sql()) {
+        // A table tab's filter is checked again as when it ran (never asked about here), and
+        // a cap on its rows is counted within.
+        if let Err(why) = self.table_recheck(id) {
+            return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
+        }
+        let source = self.table_count_source(id).unwrap_or_else(|| t.shown_sql().to_string());
+        let sql = match t.exec.prepared.count_query(&source) {
             Ok(sql) => sql,
             Err(r) => {
                 let why = self.i18n.msg(&why(&r)).to_string();

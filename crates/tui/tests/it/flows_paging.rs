@@ -1217,19 +1217,34 @@ fn ctrl_a_selects_the_page_shown() {
     assert_eq!((lines.len(), lines[0], lines[1], lines[500]), (501, "id", "500", "999"), "a header, then the page");
 }
 
-/// The estimate is of the table's own query: rows of another statement run in the table tab
-/// (a WHERE) have no pages from it.
+/// The estimate is of every row of the table: filtered rows have no pages from it (how many
+/// match is not known), sorted ones keep them, and they come back with the filter cleared.
 #[test]
-fn a_table_tab_running_another_statement_has_no_estimate() {
+fn a_filtered_table_tab_has_no_estimate() {
     let mut h = Harness::connected(Lang::En);
     h.app.detail.visible = false;
     users_table(&mut h, Some(1_234_567));
     assert!(results_title(&mut h, 160, 45).contains("/ ~2,470"));
-    h.app.tab_mut().editor = Editor::new(r#"SELECT * FROM "shop"."users" WHERE id > 10"#);
-    h.ctrl('e');
+    h.command("where id > 10");
     table_page(&mut h);
     let title = results_title(&mut h, 160, 45);
     assert!(title.contains("(page 1 / ? · # count · next page re-runs) ›") && !title.contains('~'), "{title}");
+    h.command("filter clear");
+    table_page(&mut h);
+    assert!(results_title(&mut h, 160, 45).contains("/ ~2,470"));
+    h.command("orderby id DESC");
+    table_page(&mut h);
+    assert!(results_title(&mut h, 160, 45).contains("/ ~2,470"), "the order changes no count");
+    // The hidden editor's text is not what the run key runs on a table tab.
+    h.app.tab_mut().editor = Editor::new(r#"SELECT * FROM "shop"."users" WHERE id > 10"#);
+    h.sent();
+    h.ctrl('e');
+    let sent = h.sent();
+    assert!(
+        sent.iter().any(|c| matches!(c, DbCommand::Execute { statements, .. }
+            if statements == &[r#"SELECT * FROM "shop"."users" ORDER BY "id" DESC"#.to_string()])),
+        "{sent:?}"
+    );
 }
 
 /// A table of the same name in another schema lends its estimate to nothing: `shop.users` has

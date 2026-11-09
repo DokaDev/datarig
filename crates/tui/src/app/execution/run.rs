@@ -150,6 +150,10 @@ impl App {
             t.exec.resuming = None;
             t.exec.released = false;
             t.exec.query_id = qid;
+            // A table tab's query is bound to the run that sends its statement.
+            if let Some(tq) = t.doc.table_query.as_mut() {
+                tq.sent(qid, &statements);
+            }
             // Marked on the editor's text when that is where the user ran them from.
             t.editor.start_run(qid, &statements);
             // The row results stay until this run delivers its first rows:

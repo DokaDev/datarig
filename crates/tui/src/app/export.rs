@@ -834,13 +834,20 @@ impl App {
     }
 
     /// The table of table tab `id` when every row of its result may be read by the table's key:
-    /// its query is the table's own, outside the user's block, in the profile's own database,
-    /// with a metadata session to read the key on (without one, nothing would answer).
+    /// its query is the table's own (no filter, no order, no cap), outside the user's block, in
+    /// the profile's own database, with a metadata session to read the key on (without one,
+    /// nothing would answer). Filtered rows are read by running their statement again.
     pub(super) fn export_keyset_table(&self, id: TabId) -> Option<(ProfileId, TableRef)> {
         let t = self.tabs.get(id)?;
         let table = t.doc.table.clone()?;
         let pid = t.profile?;
-        let own = t.shown_sql().trim() == table.query(self.tab_dialect(id));
+        let plain = match t.doc.table_query.as_ref().and_then(|q| q.shown.as_ref()) {
+            Some(shown) => self
+                .table_name(id)
+                .is_some_and(|name| super::table_query::same_query(shown, &datarig_core::query::Query::table(name))),
+            None => true,
+        };
+        let own = plain && t.shown_sql().trim() == table.query(self.tab_dialect(id));
         let meta = self.structure_on(pid) && self.conns.get(pid).is_some_and(|c| c.meta.is_some());
         (own && !t.exec.in_block && t.context.database.is_none() && meta).then_some((pid, table))
     }
