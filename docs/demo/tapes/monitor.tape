@@ -33,7 +33,7 @@ Enter
 Wait+Screen /application\s+analytics/
 Sleep 1.2s
 Type@120ms "jjjjjjjjjjjjjjjj"
-Wait+Screen /LIMIT 20;/
+Wait+Screen /\bLIMIT\b/
 Sleep 2s
 Escape
 
