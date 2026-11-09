@@ -31,10 +31,14 @@ jobs:
           import os, re, sys
 
           body = os.environ.get("BODY") or ""
-          # What the template and examples show does not count.
-          body = re.sub(r"<!--.*?(-->|\Z)", "", body, flags=re.S)
-          body = re.sub(r"^ {0,3}(`{3,}|~{3,}).*?(^ {0,3}\1|\Z)", "", body, flags=re.S | re.M)
-          body = re.sub(r"(`+)[^`].*?\1", "", body, flags=re.S)
+          # What the template and examples show does not count. One pass, so that whichever of
+          # a code block, inline code or an HTML comment starts first hides the others inside it.
+          body = re.sub(
+              r"^ {0,3}(`{3,}|~{3,}).*?(?:^ {0,3}\1|\Z)|(`+)[^`].*?\2|<!--.*?(?:-->|\Z)",
+              "",
+              body,
+              flags=re.S | re.M,
+          )
 
           issue = re.search(
               r"(?<![\w&/])(?:[\w.-]+/[\w.-]+)?#\d+\b"
