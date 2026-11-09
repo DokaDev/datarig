@@ -128,14 +128,14 @@ fn a_refused_filter_or_order_sends_nothing_and_keeps_where() {
     let mut h = users(Lang::En);
     h.command("where id = 1; DROP TABLE shop.users");
     assert!(runs(&mut h).is_empty());
-    assert!(status(&h).contains("Not run: the filter is refused"), "{}", status(&h));
+    assert!(status(&h).contains("Filter refused: ; ends the statement"), "{}", status(&h));
     let refusal = h.app.tab().doc.table_query.as_ref().and_then(|q| q.refusal.clone()).expect("refusal");
     assert_eq!((refusal.field, refusal.at), (Field::Where, Some(6..7)));
     // A row lock in a subquery, a comment, a call that waits: refused too.
     for text in ["id IN (SELECT id FROM shop.users FOR UPDATE)", "id = 1 -- x", "pg_sleep(1) IS NULL"] {
         h.command(&format!("where {text}"));
         assert!(runs(&mut h).is_empty(), "{text}");
-        assert!(status(&h).starts_with("Not run: the filter is refused"), "{text}: {}", status(&h));
+        assert!(status(&h).starts_with("Filter refused: "), "{text}: {}", status(&h));
     }
     // An order that names no column of the table.
     h.command("orderby nope DESC");
@@ -299,10 +299,10 @@ fn paging_and_counting_check_the_shown_filter_again() {
     shown_mut(&mut h).filter = Some(Filter { text: "id > 0 -- x".into(), recognised: None });
     h.keys("n");
     assert!(h.sent().is_empty());
-    assert!(status(&h).contains("a comment is not allowed"), "{}", status(&h));
+    assert!(status(&h).contains("comments are not allowed"), "{}", status(&h));
     h.keys("#");
     assert!(h.sent().is_empty());
-    assert!(status(&h).starts_with("Rows are not counted for you: a comment"), "{}", status(&h));
+    assert!(status(&h).starts_with("Rows are not counted for you: comments"), "{}", status(&h));
     // Calls the user did not let run in this tab: refused, never asked mid-paging.
     shown_mut(&mut h).filter = Some(Filter { text: "my_fn(id) > 0".into(), recognised: None });
     h.keys("n");
@@ -567,4 +567,23 @@ fn esc_puts_back_the_query_the_next_run_sends() {
     assert!(h.app.overlays.is_open(OverlayKind::Confirm));
     h.keys("y");
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 1)")]]);
+}
+
+/// With many tabs their names are shortened: a filtered table tab keeps its mark, its name is
+/// cut before it.
+#[test]
+fn a_shortened_title_keeps_the_filter_mark() {
+    let mut h = users(Lang::En);
+    h.command("where id > 1");
+    answer(&mut h);
+    for _ in 0..5 {
+        h.command("tabnew");
+    }
+    h.keys(" 2");
+    assert!(h.app.tab().is_table());
+    let screen = h.screen(80, 24);
+    let bar = screen.lines().next().unwrap_or_default().to_string();
+    assert!(!bar.contains("shop.users"), "shortened: {bar}");
+    let tab = bar.split(" 2 ").nth(1).unwrap_or_default();
+    assert!(tab.split('\u{d7}').next().is_some_and(|t| t.trim_end().ends_with('*')), "{bar}");
 }

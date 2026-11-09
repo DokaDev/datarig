@@ -301,7 +301,13 @@ impl App {
             Ctx::FilterLine => self.filter_line_field().map(PopupOwner::Filter),
             _ => None,
         };
+        // In the filter line `Enter` applies the line, unless the user turned to the popup.
+        let untouched_enter = ctx == Ctx::FilterLine
+            && key.code == KeyCode::Enter
+            && key.modifiers.is_empty()
+            && self.tab().popup.as_ref().is_some_and(|p| !p.touched);
         if owner.is_some()
+            && !untouched_enter
             && self.tab().popup.as_ref().map(|p| p.owner) == owner
             && self.overlays.is_empty()
             && self.keymap.binds(Ctx::Completion, &chord)
@@ -513,10 +519,15 @@ impl App {
         let Some(p) = t.popup.as_mut() else { return };
         let n = p.items.len();
         match key.code {
-            KeyCode::Up => p.selected = (p.selected + n - 1) % n,
-            KeyCode::Char('p') if ctrl => p.selected = (p.selected + n - 1) % n,
-            KeyCode::Down => p.selected = (p.selected + 1) % n,
-            KeyCode::Char('n') if ctrl => p.selected = (p.selected + 1) % n,
+            KeyCode::Up | KeyCode::Down => {
+                p.touched = true;
+                p.selected = if key.code == KeyCode::Up { (p.selected + n - 1) % n } else { (p.selected + 1) % n };
+            }
+            KeyCode::Char('p' | 'n') if ctrl => {
+                p.touched = true;
+                p.selected =
+                    if key.code == KeyCode::Char('p') { (p.selected + n - 1) % n } else { (p.selected + 1) % n };
+            }
             KeyCode::Tab | KeyCode::Enter => {
                 let text = p.items[p.selected].text().to_string();
                 let (start, trail, owner) = (p.replace_start, p.trail, p.owner);
@@ -565,6 +576,7 @@ impl App {
             replace_start: base + c.replace_start,
             trail: c.trail,
             owner: PopupOwner::Editor,
+            touched: force,
         });
         self.completed(popup, literal);
         if let Some(w) = out.wants_checks {

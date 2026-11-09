@@ -153,10 +153,11 @@ fn ctrl_e_applies_and_the_order_is_written_back_as_sent() {
         .filter_map(|c| if let DbCommand::Execute { statements, .. } = c { Some(statements) } else { None })
         .collect();
     assert_eq!(run, vec![&vec![format!(r#"{ALL} ORDER BY "name" DESC, "id" ASC"#)]]);
-    // The keys that make an order total are in the table's structure: asked for once.
+    // The keys that make an order total are in the table's structure: asked for when the tab
+    // opened, not again while it is being read.
     let asked =
         |c: &DbCommand| matches!(c, DbCommand::LoadStructure { schema, table } if schema == "shop" && table == "users");
-    assert_eq!(sent.iter().filter(|c| asked(c)).count(), 1, "{sent:?}");
+    assert_eq!(sent.iter().filter(|c| asked(c)).count(), 0, "{sent:?}");
     assert_eq!(field_text(&h, Field::Order), "name DESC, id ASC");
     assert_eq!(focus(&h), None);
     answer(&mut h);

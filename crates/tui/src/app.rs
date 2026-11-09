@@ -258,6 +258,9 @@ pub struct Popup {
     pub trail: usize,
     /// The text the popup completes.
     pub owner: PopupOwner,
+    /// The user turned to it (asked for it with `Ctrl+Space`, or moved its selection): in the
+    /// filter line `Enter` then takes its entry, else it applies the line.
+    pub touched: bool,
 }
 
 /// The text a completion popup completes: the tab's editor, or a field of its filter line.

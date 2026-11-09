@@ -502,15 +502,16 @@ impl App {
         }
         let compiled = query::compile(&q, &target);
         let sql = compiled.sql.clone();
-        // The keys that make an order total come with the table's structure.
-        if !q.order.is_empty() && target.primary_key.is_empty() {
-            self.table_structure_ask(id);
-        }
         if let Some(tq) = self.table_query_mut(id) {
             tq.refusal = None;
             tq.pending = Some(Statement::of(q, compiled));
         }
         self.run_in(id, vec![sql]);
+        // The keys that make an order total come with the table's structure: asked for with
+        // the first run (the tab opening), so that an order applied later is known total.
+        if target.primary_key.is_empty() {
+            self.table_structure_ask(id);
+        }
         self.filter_line_follow_tab(id);
     }
 
@@ -625,6 +626,15 @@ impl App {
         let (Some(pid), Some(table)) = (t.profile, t.doc.table.clone()) else { return };
         let database = t.context.database.clone();
         if !self.structure_on(pid) {
+            return;
+        }
+        // Without its metadata session nothing is asked (nor marked as being read): the next
+        // run asks again.
+        let open = match database.as_deref() {
+            None => self.conns.get(pid).is_some_and(|c| c.meta.is_some()),
+            Some(db) => self.conns.aux(pid, db).is_some_and(|a| a.session.is_some()),
+        };
+        if !open {
             return;
         }
         let tree = match database.as_deref() {

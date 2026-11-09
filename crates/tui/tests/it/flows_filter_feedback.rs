@@ -9,7 +9,10 @@
 use crate::common;
 
 use common::*;
+use datarig_core::config::Config;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, ServerMessage};
+use datarig_core::policy::Policy;
+use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::complete::Kind;
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_i18n::Lang;
@@ -83,6 +86,22 @@ fn users() -> Harness {
     h
 }
 
+/// [`users`] on a read-only profile.
+fn users_read_only() -> Harness {
+    let mut cfg = Config {
+        connections: vec![ConnectionConfig { policy: Some("prod".into()), ..ConnectionConfig::test_db() }],
+        ..Config::default()
+    };
+    cfg.policies.insert("prod", Policy { read_only: true, ..Policy::default() });
+    let mut h = Harness::connected_with(&cfg, Lang::En);
+    open(&mut h, "users");
+    answer(&mut h);
+    h.sent();
+    h.key(KeyCode::Tab);
+    h.keys("i");
+    h
+}
+
 fn field_text(h: &Harness, f: Field) -> String {
     h.app.tab().doc.table_query.as_ref().expect("a table query").line.field(f).text().to_string()
 }
@@ -142,8 +161,8 @@ fn the_condition_completes_the_tables_columns() {
     h.settle();
     assert_eq!(labels(&h)[0], "name");
     assert_eq!(h.popup().unwrap().items[0].kind, Kind::Column);
-    // Enter takes the label (it does not apply), the cursor after it.
-    h.key(KeyCode::Enter);
+    // Tab takes the label (it does not apply), the cursor after it.
+    h.key(KeyCode::Tab);
     assert_eq!(field_text(&h, Field::Where), "id > 1 AND name");
     assert!(runs(&mut h).is_empty());
     assert_eq!(h.app.key_context(), Ctx::FilterLine);
@@ -262,7 +281,7 @@ fn a_refused_part_is_underlined_in_the_field() {
     let r = h.app.tab().doc.table_query.as_ref().and_then(|q| q.refusal.clone()).expect("a refusal");
     assert_eq!((r.field, r.at.clone()), (Field::Where, Some(6..7)));
     assert_eq!(h.app.key_context(), Ctx::FilterLine, "the field keeps the keys");
-    assert!(h.status(120, 30).contains("a ; would end the statement"), "{}", h.status(120, 30));
+    assert!(h.status(120, 30).contains("Filter refused: ; ends the statement"), "{}", h.status(120, 30));
     let x = column_of(&mut h, 120, 30, "; DROP");
     assert_eq!(underlined(&mut h, 120, 30, "; DROP"), [(x, ";".to_string())]);
     pin(&mut h, "refused");
@@ -502,4 +521,166 @@ fn a_late_structure_does_not_make_the_held_order_unique() {
     h.keys("n");
     let said = h.app.tab().status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default();
     assert!(said.contains("order not unique"), "{said}");
+}
+
+/// Opening a table asks for its structure (one metadata read): an order applied once it came
+/// is made total on its first run, `+ id` on the line.
+#[test]
+fn opening_a_table_asks_its_structure_so_the_first_order_is_total() {
+    let mut h = Harness::connected(Lang::En);
+    open(&mut h, "users");
+    let sent = h.sent();
+    let asked = sent
+        .iter()
+        .filter(|c| matches!(c, DbCommand::LoadStructure { schema, table } if schema == "shop" && table == "users"))
+        .count();
+    assert_eq!(asked, 1, "{sent:?}");
+    answer(&mut h);
+    h.meta_db(
+        "local-pg",
+        DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(Box::new(users_structure())) },
+    );
+    h.key(KeyCode::Tab);
+    h.keys("i");
+    h.keys(" ro");
+    h.type_text("name");
+    h.key(KeyCode::Enter);
+    let sent = h.sent();
+    assert!(!sent.iter().any(|c| matches!(c, DbCommand::LoadStructure { .. })), "read already: {sent:?}");
+    let run: Vec<&Vec<String>> = sent
+        .iter()
+        .filter_map(|c| if let DbCommand::Execute { statements, .. } = c { Some(statements) } else { None })
+        .collect();
+    assert_eq!(run, vec![&vec![format!(r#"{ALL} ORDER BY "name" ASC, "id" ASC"#)]]);
+    answer(&mut h);
+    let screen = h.screen(120, 30);
+    assert!(screen.contains("ORDER BY name ASC + id"), "{screen}");
+}
+
+/// An order run while the structure is not known is said not unique (unknown, not absent),
+/// however narrow the line: the keys are cut or shrunk first.
+#[test]
+fn an_order_not_known_total_says_so_at_any_width() {
+    let mut h = users();
+    h.keys(" ro");
+    h.type_text("name");
+    h.key(KeyCode::Enter);
+    answer(&mut h);
+    for (w, hh) in [(80, 24), (100, 30), (110, 30), (120, 30), (160, 40)] {
+        let screen = h.screen(w, hh);
+        let line = screen.lines().find(|l| l.contains("WHERE")).unwrap_or_else(|| panic!("{screen}"));
+        assert!(line.contains("not unique"), "{w}x{hh}: {line}");
+    }
+}
+
+/// In the filter line `Enter` applies what is typed while a popup opened by itself shows; it
+/// takes the popup's entry only once the user turned to it (moved its selection, or asked for
+/// it with `Ctrl+Space`). `Ctrl+E` applies in every case.
+#[test]
+fn enter_applies_unless_the_popup_was_turned_to() {
+    let mut h = users();
+    h.keys("f");
+    h.type_text("name");
+    h.settle();
+    assert!(h.popup().is_some(), "opened by itself");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name)")]]);
+    assert!(h.popup().is_none());
+    answer(&mut h);
+    // Moved through: Enter takes the entry selected.
+    h.keys("f");
+    h.ctrl('l');
+    h.type_text("na");
+    h.settle();
+    assert_eq!(labels(&h)[0], "name");
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Up);
+    h.key(KeyCode::Enter);
+    assert_eq!(field_text(&h, Field::Where), "name");
+    assert!(runs(&mut h).is_empty());
+    // Asked for: Enter takes it, also once more is typed.
+    h.ctrl('l');
+    h.type_text("n");
+    ctrl_space(&mut h);
+    h.type_text("a");
+    assert_eq!(labels(&h)[0], "name");
+    h.key(KeyCode::Enter);
+    assert_eq!(field_text(&h, Field::Where), "name");
+    assert!(runs(&mut h).is_empty());
+    // The run key applies, the popup open or not.
+    h.type_text(" IS NOT NULL AND i");
+    ctrl_space(&mut h);
+    assert!(h.popup().is_some());
+    h.ctrl('e');
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name IS NOT NULL AND i)")]]);
+    assert!(h.popup().is_none());
+    answer(&mut h);
+    // The order too.
+    h.keys(" ro");
+    h.type_text("name");
+    h.settle();
+    assert!(h.popup().is_some());
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!(r#"{ALL} WHERE (name IS NOT NULL AND i) ORDER BY "name" ASC"#)]]);
+}
+
+/// The condition offers the words of a condition, not those of a statement.
+#[test]
+fn the_condition_offers_only_condition_keywords() {
+    let mut h = users();
+    h.keys("f");
+    h.type_text("id > 1 a");
+    ctrl_space(&mut h);
+    let l = labels(&h);
+    assert!(l.iter().any(|l| l == "and"), "{l:?}");
+    assert!(!l.iter().any(|l| l == "alter" || l == "analyze"), "{l:?}");
+    h.ctrl('l');
+    h.type_text("id IS NOT NULL ES");
+    ctrl_space(&mut h);
+    assert!(labels(&h).iter().any(|l| l == "ESCAPE"), "{:?}", labels(&h));
+    h.ctrl('l');
+    h.type_text("name = 'al");
+    ctrl_space(&mut h);
+    assert!(!labels(&h).iter().any(|l| l.eq_ignore_ascii_case("alter")), "{:?}", labels(&h));
+    // `:where` completes its argument the same way.
+    h.key(KeyCode::Esc);
+    h.keys(":");
+    h.type_text("where id > 1 a");
+    let shown = h.screen(120, 30);
+    assert!(!shown.contains("ALTER") && !shown.contains("alter"), "{shown}");
+}
+
+/// A refusal is said whole under the grid while it stands, its essential part first in the
+/// status bar.
+#[test]
+fn a_refusal_is_said_whole_under_the_grid() {
+    let mut h = users_read_only();
+    h.keys("f");
+    h.type_text("lower2(name) = 'a' AND id > 1 AND name IS NOT NULL");
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty());
+    let screen = h.screen(80, 24);
+    let status = screen.lines().last().unwrap_or_default().to_string();
+    assert!(status.contains("Filter refused: lower2"), "{status}");
+    let note: String = screen
+        .lines()
+        .filter(|l| l.contains("side effects") || l.contains("Filter refused") || l.contains("connection)"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(note.contains("(read-only connection)"), "{screen}");
+    pin(&mut h, "refusal_note");
+}
+
+/// PostgreSQL names a row lock in a filter as MySQL does, and underlines it.
+#[test]
+fn a_postgres_row_lock_is_refused_as_one_and_underlined() {
+    let mut h = users();
+    h.keys("f");
+    h.type_text("id > 1 FOR UPDATE");
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty());
+    let said = h.app.tab().status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default();
+    assert!(said.contains("row locks"), "{said}");
+    let marked: String = underlined(&mut h, 120, 30, "FOR UPDATE").into_iter().map(|(_, s)| s).collect();
+    assert_eq!(marked, "FOR UPDATE");
 }

@@ -2,7 +2,9 @@
 //! condition, `Space r o` the order, `Space r x` clears both and runs the tab again, and
 //! `Space r v` opens the statement in a new console.
 //!
-//! In a field `Enter` (or the run key) applies what both fields hold: the order is read into
+//! In a field `Enter` (or the run key) applies what both fields hold (a completion popup takes
+//! `Enter` only once the user turned to it: moved its selection, or asked for it with
+//! `Ctrl+Space`; the run key always applies): the order is read into
 //! keys first (refused and said when it is not a list of the table's columns), then the query
 //! runs as any run of the tab does ([`App::table_run`]); a refusal leaves the focus on the
 //! field it is about, else the keys go back to the grid. `Esc` puts back what is applied and
@@ -11,8 +13,8 @@
 //!
 //! Completion in the condition is the editor's ([`App::complete_text`]) on the statement the
 //! condition goes into (`SELECT * FROM <table> WHERE <condition>`): the table's columns,
-//! operators and keywords, functions, the values of an enumerated type or of a check inside a
-//! literal; never values read from the table. In the order: the table's columns, then `ASC`,
+//! the keywords of a condition (not a statement's), functions, the values of an enumerated
+//! type or of a check inside a literal; never values read from the table. In the order: the table's columns, then `ASC`,
 //! `DESC` (and `NULLS FIRST`, `NULLS LAST` where the server has them). `Ctrl+Space` asks for it,
 //! typing opens it after `[editor] completion_delay_ms` as in the editor. `:where` and
 //! `:orderby` complete their argument the same way.
@@ -21,7 +23,7 @@ use super::*;
 use crate::widgets::filter_line::{Applied, FIELD_CAP};
 use crate::widgets::text_input::InputResult;
 use datarig_core::query::{self, Filter, KeyOrigin, Query, Target};
-use datarig_core::sql::complete::{Candidate, Completion, MAX_ITEMS};
+use datarig_core::sql::complete::{Candidate, Completion, Kind, MAX_ITEMS};
 use datarig_core::sql::lexer::{LexState, Tok, lex_in};
 
 /// What the table keys of the grid do.
@@ -58,6 +60,7 @@ impl App {
                 order: String::new(),
                 keys: Vec::new(),
                 tie: None,
+                tie_short: None,
                 dialect,
                 failed: false,
                 mark: None,
@@ -71,11 +74,15 @@ impl App {
             let ties: Vec<&str> =
                 run.order.iter().filter(|k| k.origin == KeyOrigin::TieBreak).map(|k| k.col.as_str()).collect();
             match (ties.is_empty(), run.total) {
-                (false, _) => format!("+ {}", ties.join(", ")),
-                (true, true) => String::new(),
-                (true, false) => self.i18n.label(Label::TableOrderNotUnique).to_string(),
+                (false, _) => (Some(format!("+ {}", ties.join(", "))), None),
+                (true, true) => (None, None),
+                (true, false) => (
+                    Some(self.i18n.label(Label::TableOrderNotUnique).to_string()),
+                    Some(self.i18n.label(Label::TableOrderNotUniqueShort).to_string()),
+                ),
             }
         });
+        let (tie, tie_short) = tie.unwrap_or_default();
         let filter = table_query::filter_text(&q).unwrap_or_default().to_string();
         let tq = self.table_query(id);
         // Our refusal of what a field holds, else where the server said the failed filter is
@@ -96,7 +103,8 @@ impl App {
             filter,
             order: query::order_text(&keys, dialect),
             keys,
-            tie: tie.filter(|t| !t.is_empty()),
+            tie,
+            tie_short,
             dialect,
         }
     }
@@ -337,10 +345,11 @@ impl App {
                 let head = format!("{} WHERE ", query::compile(&Query::table(name), &target).sql);
                 let full =
                     self.complete_text(&format!("{head}{text}"), head.len() + cursor, LexState::default(), force);
-                out.completion = full.completion.filter(|c| c.replace_start >= head.len()).map(|mut c| {
+                let completion = full.completion.filter(|c| c.replace_start >= head.len()).map(|mut c| {
                     c.replace_start -= head.len();
                     c
                 });
+                out.completion = condition_keywords(completion, text, cursor, target.dialect, force);
                 out.wants_checks = full.wants_checks.filter(|w| w.literal >= head.len()).map(|mut w| {
                     w.literal -= head.len();
                     w
@@ -360,12 +369,15 @@ impl App {
         let Some(input) = self.table_query(id).map(|q| q.line.field(f)) else { return };
         let (text, cursor) = (input.text().to_string(), input.cursor_byte());
         let out = self.filter_completion(id, f, &text, cursor, force);
+        // One asked for stays asked for while it follows the typing.
+        let touched = force || self.tab().popup.as_ref().is_some_and(|p| p.owner == PopupOwner::Filter(f) && p.touched);
         let popup = out.completion.map(|c| Popup {
             items: c.items,
             selected: 0,
             replace_start: c.replace_start,
             trail: c.trail,
             owner: PopupOwner::Filter(f),
+            touched,
         });
         self.completed(popup, literal);
         if let Some(w) = out.wants_checks {
@@ -431,6 +443,144 @@ impl App {
             before.char_indices().rev().take_while(|(_, c)| is_ident_char(*c)).last().map_or(before.len(), |(i, _)| i);
         before[start..].to_string()
     }
+}
+
+/// The keywords a condition is written with, sorted: its operators, `CASE`, literals, and the
+/// functions and casts the lexer reads as keywords. Statement words (`ALTER`, `SELECT`, …) are
+/// not offered in a condition.
+const PG_CONDITION_KEYWORDS: &[&str] = &[
+    "ALL",
+    "AND",
+    "ANY",
+    "ARRAY",
+    "AS",
+    "BETWEEN",
+    "CASE",
+    "CAST",
+    "COALESCE",
+    "COLLATE",
+    "CURRENT_DATE",
+    "CURRENT_TIMESTAMP",
+    "DISTINCT",
+    "ELSE",
+    "END",
+    "ESCAPE",
+    "EXISTS",
+    "EXTRACT",
+    "FALSE",
+    "FROM",
+    "ILIKE",
+    "IN",
+    "INTERVAL",
+    "IS",
+    "LIKE",
+    "NOT",
+    "NULL",
+    "NULLIF",
+    "OR",
+    "SIMILAR",
+    "SOME",
+    "SYMMETRIC",
+    "THEN",
+    "TO",
+    "TRUE",
+    "UNKNOWN",
+    "WHEN",
+];
+
+/// [`PG_CONDITION_KEYWORDS`] of MySQL.
+const MYSQL_CONDITION_KEYWORDS: &[&str] = &[
+    "ALL",
+    "AND",
+    "ANY",
+    "AS",
+    "BETWEEN",
+    "BINARY",
+    "CASE",
+    "CAST",
+    "COLLATE",
+    "CURRENT_DATE",
+    "CURRENT_TIME",
+    "CURRENT_TIMESTAMP",
+    "DIV",
+    "ELSE",
+    "END",
+    "ESCAPE",
+    "EXISTS",
+    "FALSE",
+    "FROM",
+    "IN",
+    "INTERVAL",
+    "IS",
+    "LIKE",
+    "MOD",
+    "NOT",
+    "NULL",
+    "OR",
+    "REGEXP",
+    "RLIKE",
+    "SOME",
+    "THEN",
+    "TRUE",
+    "UNKNOWN",
+    "WHEN",
+    "XOR",
+];
+
+/// The keywords of a condition of dialect `d`.
+pub(crate) fn condition_keywords_of(d: Dialect) -> &'static [&'static str] {
+    match d {
+        Dialect::Postgres => PG_CONDITION_KEYWORDS,
+        Dialect::MySql(_) => MYSQL_CONDITION_KEYWORDS,
+    }
+}
+
+/// `completion` of condition `text` (the cursor at byte `cursor`) with its keywords those of a
+/// condition ([`condition_keywords_of`]) instead of the statement's: offered after the other
+/// entries as the editor offers keywords (by the prefix typed, or all of them when `force`),
+/// never inside a string, a quoted name or a comment, nor where a table is named.
+fn condition_keywords(
+    completion: Option<Completion>,
+    text: &str,
+    cursor: usize,
+    d: Dialect,
+    force: bool,
+) -> Option<Completion> {
+    let mut items: Vec<Candidate> = Vec::new();
+    let mut at = None;
+    if let Some(c) = completion {
+        at = Some((c.replace_start, c.trail));
+        items = c.items.into_iter().filter(|i| i.kind != Kind::Keyword).collect();
+    }
+    let before = &text[..cursor.min(text.len())];
+    let start =
+        before.char_indices().rev().take_while(|(_, c)| is_ident_char(*c)).last().map_or(before.len(), |(i, _)| i);
+    let prefix = &before[start..];
+    // Inside a token that is not a word: no keyword is typed there.
+    let inside = lex_in(text, d).iter().any(|t| {
+        t.start < cursor
+            && cursor <= t.end
+            && matches!(t.kind, Tok::Str | Tok::Dollar | Tok::QuotedIdent | Tok::LineComment | Tok::BlockComment)
+    });
+    let relations = items.iter().any(|i| matches!(i.kind, Kind::Table | Kind::View | Kind::Schema));
+    let values = items.iter().any(|i| i.kind == Kind::Value);
+    let qualified = before[..start].ends_with('.');
+    if (!prefix.is_empty() || force) && !inside && !relations && !values && !qualified {
+        let lower = !prefix.is_empty() && prefix.chars().all(|c| !c.is_uppercase());
+        let typed = prefix.to_ascii_uppercase();
+        items.extend(condition_keywords_of(d).iter().filter(|k| k.starts_with(typed.as_str())).map(|k| Candidate {
+            label: if lower { k.to_lowercase() } else { k.to_string() },
+            kind: Kind::Keyword,
+            detail: None,
+            insert: None,
+        }));
+    }
+    items.truncate(MAX_ITEMS);
+    if items.is_empty() {
+        return None;
+    }
+    let (replace_start, trail) = at.unwrap_or((start, 0));
+    Some(Completion { items, replace_start, trail })
 }
 
 /// Completion of an `ORDER BY` text (the cursor at byte `cursor`) from `target`'s columns: a

@@ -488,6 +488,29 @@ fn the_shape_check_refuses_locks_and_clauses() {
     }
 }
 
+/// The refused part of `text` when it is refused as a row lock.
+fn lock_at(d: Dialect, text: &str) -> Option<Option<String>> {
+    match check(d, text, false) {
+        Err(BarRefusal::Shape { problem: ShapeProblem::Locking, at }) => Some(at.map(|r| text[r].to_string())),
+        _ => None,
+    }
+}
+
+#[test]
+fn a_postgres_row_lock_is_named_and_placed_as_mysql_does() {
+    let pg = Dialect::Postgres;
+    // Written after the condition (the statement does not parse): a row lock, not "not read".
+    assert_eq!(lock_at(pg, "rating > 3 FOR UPDATE"), Some(Some("FOR UPDATE".into())));
+    assert_eq!(lock_at(pg, "rating > 3 for no key update"), Some(Some("for no key update".into())));
+    assert_eq!(lock_at(pg, "rating > 3 FOR KEY SHARE"), Some(Some("FOR KEY SHARE".into())));
+    // In a subquery (it parses): placed too.
+    assert_eq!(lock_at(pg, "id IN (SELECT id FROM shop.users FOR SHARE SKIP LOCKED)"), Some(Some("FOR SHARE".into())));
+    // `FOR` of another construct is not a lock.
+    assert_eq!(check(pg, "substring(name FROM 1 FOR 2) = 'ab'", false), Ok(FilterVerdict::Clear));
+    // MySQL says the same of its own.
+    assert_eq!(lock_at(MY, "rating > 3 FOR UPDATE"), Some(Some("FOR".into())));
+}
+
 #[test]
 fn the_classifier_must_read_it_as_a_plain_read() {
     let pg = Dialect::Postgres;

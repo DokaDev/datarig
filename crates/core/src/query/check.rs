@@ -315,14 +315,33 @@ pub fn check_filter(
         Query { filter: Some(Filter { text: text.to_string(), recognised: None }), ..Query::table(table.clone()) };
     let sql = compile(&query, target).sql;
     let risk = classifier.clone().classify(&sql);
+    // PostgreSQL: a row lock written in the text is named as one, where it is, also when it
+    // leaves the statement unparsed (`x = 1 FOR UPDATE` inside the parentheses).
+    let pg_lock = || {
+        let at = readings.first().and_then(|r| pg_lock_at(&r.tokens, text));
+        BarRefusal::Shape { problem: ShapeProblem::Locking, at }
+    };
     if matches!(risk.danger, Some(Danger::Unparsed | Danger::TooComplex)) {
+        if target.dialect == Dialect::Postgres
+            && readings.first().is_some_and(|r| pg_lock_at(&r.tokens, text).is_some())
+        {
+            return Err(pg_lock());
+        }
         return Err(BarRefusal::NotRead { class: risk.class, danger: risk.danger });
     }
     let unread = || BarRefusal::NotRead { class: Class::Unknown, danger: Some(Danger::Unparsed) };
     let calls: Vec<Call> = match target.dialect {
         Dialect::Postgres => {
             let Source::Table(t) = &query.source;
-            pg_tree(&sql, t).ok_or_else(unread)?.map_err(|problem| BarRefusal::Shape { problem, at: None })?
+            match pg_tree(&sql, t) {
+                Some(Ok(calls)) => calls,
+                Some(Err(ShapeProblem::Locking)) => return Err(pg_lock()),
+                Some(Err(problem)) => return Err(BarRefusal::Shape { problem, at: None }),
+                None if readings.first().is_some_and(|r| pg_lock_at(&r.tokens, text).is_some()) => {
+                    return Err(pg_lock());
+                }
+                None => return Err(unread()),
+            }
         }
         Dialect::MySql(_) => {
             let mut calls = Vec::new();
@@ -529,6 +548,26 @@ fn mysql_shape(tokens: &[Token], text: &str) -> Result<(), (ShapeProblem, Range<
         return Err((problem, at));
     }
     Ok(())
+}
+
+/// PostgreSQL: where text `text` (its tokens `tokens`) writes a row lock, `FOR` through its
+/// last word (`FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, `FOR KEY SHARE`); `None` when
+/// it writes none.
+fn pg_lock_at(tokens: &[Token], text: &str) -> Option<Range<usize>> {
+    let ws: Vec<&Token> = tokens.iter().filter(|t| !t.is_trivia() && t.start < text.len()).collect();
+    let word = |i: usize, w: &str| ws.get(i).is_some_and(|t| t.is_word() && t.text(text).eq_ignore_ascii_case(w));
+    (0..ws.len()).filter(|&i| word(i, "FOR")).find_map(|i| {
+        let last = if word(i + 1, "UPDATE") || word(i + 1, "SHARE") {
+            i + 1
+        } else if word(i + 1, "NO") && word(i + 2, "KEY") && word(i + 3, "UPDATE") {
+            i + 3
+        } else if word(i + 1, "KEY") && word(i + 2, "SHARE") {
+            i + 2
+        } else {
+            return None;
+        };
+        Some(clamp(ws[i], text).start..clamp(ws[last], text).end)
+    })
 }
 
 /// The PostgreSQL shape check of statement `sql` on its parse tree, read on the classifier's

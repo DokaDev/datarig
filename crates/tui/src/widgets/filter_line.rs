@@ -105,6 +105,10 @@ pub struct Applied {
     /// After the keys, dimmed: the columns appended to make the order total (`+ id`), or why
     /// it may not be.
     pub tie: Option<String>,
+    /// When the order is not known total: [`Applied::tie`] in a few columns. It is never left
+    /// out while the keys show in any form (they are cut, or shrunk to `↑rating not unique`);
+    /// the columns appended (`+ id`) give way to the keys instead.
+    pub tie_short: Option<String>,
     pub dialect: Dialect,
     /// The server refused it: the rows shown are of an earlier query.
     pub failed: bool,
@@ -147,6 +151,9 @@ pub fn collapsed(keys: &[OrderKey]) -> String {
         n => format!("{arrow}{}+{n}", first.col),
     }
 }
+
+/// The fewest columns the keys are cut to, to keep what is said of their order next to them.
+const KEYS_MIN: usize = 4;
 
 const WHERE: &str = "WHERE";
 const ORDER_BY: &str = "ORDER BY";
@@ -233,6 +240,7 @@ pub(crate) fn draw(
     // The order's part: whole (`ORDER BY` and the keys, then what makes them total), or shrunk.
     let order_text = state.order.text().to_string();
     let tie = applied.tie.as_deref().filter(|_| !order_edited && focused != Some(Field::Order));
+    let tie_short = applied.tie_short.as_deref().filter(|_| tie.is_some());
     let cap = w * 2 / 5;
     let label_w = width(ORDER_BY) + 1;
     let keys_w = width(&order_text);
@@ -250,14 +258,19 @@ pub(crate) fn draw(
         ((label_w + width(&order_text) + 1).max(cap).min(room.saturating_sub(2 + 6)), true, false)
     } else if fits(label_w + keys_w + tie_w) {
         (label_w + keys_w + tie_w, true, tie.is_some())
-    } else if tie.is_some() && fits(label_w + keys_w) {
+    } else if tie.is_some() && tie_short.is_none() && fits(label_w + keys_w) {
         (label_w + keys_w, true, false)
+    } else if tie_short.is_some() && fits(label_w + KEYS_MIN + tie_w) {
+        // The keys cut rather than what is said of them: an order not known total says so.
+        let w = cap.min(room.saturating_sub(where_need + 2));
+        (w, true, true)
     } else if order_edited || shrunk.is_empty() {
         // Nothing to shrink to: the label and what of the keys fits.
         let w = (label_w + keys_w).min(cap).min(room.saturating_sub(4));
         (if w > label_w { w } else { 0 }, true, false)
     } else {
-        (width(&shrunk).min(room.saturating_sub(4)), false, false)
+        let short = tie_short.map_or(0, |t| width(t) + 1);
+        (width(&shrunk).saturating_add(short).min(room.saturating_sub(4)), false, false)
     };
     let where_w = if order_w > 0 { room.saturating_sub(order_w + 2) } else { room };
     let where_rect = Rect::new(x0 + field_x as u16, y, where_w as u16, 1);
@@ -291,7 +304,11 @@ pub(crate) fn draw(
     let ox = x0 + (field_x + where_w + 2) as u16;
     drawn.order = Rect::new(ox, y, order_w as u16, 1);
     if !whole {
-        put(buf, ox, y, &shrunk, order_w, base);
+        let keys_w = width(&shrunk).min(order_w);
+        put(buf, ox, y, &shrunk, keys_w, base);
+        if let Some(t) = tie_short.filter(|t| keys_w + 1 + width(t) <= order_w) {
+            put(buf, ox + keys_w as u16 + 1, y, t, order_w - keys_w - 1, dim);
+        }
         return drawn;
     }
     put(buf, ox, y, ORDER_BY, label_w - 1, if order_edited { tint } else { label });

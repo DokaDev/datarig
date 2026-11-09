@@ -1369,6 +1369,23 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         None => paging_note,
     };
+    // A refusal of what the user wrote in the filter line, while it stands: said whole there
+    // (the status bar may cut it), first among the notes; nothing was sent for it.
+    let refusal = match app.tab().results {
+        Results::Rows(_) => app.tab().doc.table_query.as_ref().and_then(|q| q.refusal.as_ref()),
+        _ => None,
+    };
+    let refused = refusal.is_some();
+    let paging_note = match refusal {
+        Some(r) => {
+            let short = match r.field {
+                crate::app::table_query::Field::Where => Label::TableFilterRefusedShort,
+                crate::app::table_query::Field::Order => Label::TableOrderRefusedShort,
+            };
+            Some((r.notice.render(&app.i18n), app.i18n.label(short)))
+        }
+        None => paging_note,
+    };
     // The grid's search: its prompt or the search that is on, on the line under the grid; a
     // note about the paging goes on that line too, first among what is not searched.
     let mut strip = app.grid_search_strip().filter(|_| area.height > 3);
@@ -1411,13 +1428,32 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             crate::widgets::grid::render(rs, &mut t.grid, grid, buf, &app.i18n, focused, look);
         }
         Results::Rows(rs) if area.height > 3 && paging_note.is_some() => {
-            let grid = Rect { height: area.height - 1, ..area };
-            crate::widgets::grid::render(rs, &mut t.grid, grid, buf, &app.i18n, focused, look);
             let text = paging_note.as_ref().map(|(long, _)| long.to_string()).unwrap_or_default();
-            let y = area.y + area.height - 1;
-            buf.set_style(Rect { y, height: 1, ..area }, Style::new().bg(th.surface));
             let w = area.width.saturating_sub(1) as usize;
-            buf.set_stringn(area.x + 1, y, clip(&text, w), w, Style::new().fg(th.warning).bg(th.surface));
+            // A refusal is wrapped (up to three lines, the grid keeping three); a note about the
+            // paging is one line.
+            let lines = match refused {
+                true => {
+                    let most = usize::from(area.height - 3).clamp(1, 3);
+                    let mut lines = wrap_words(&text, w);
+                    if lines.len() > most {
+                        lines.truncate(most);
+                        if let Some(last) = lines.last_mut() {
+                            *last = clip(&format!("{last}\u{2026}"), w);
+                        }
+                    }
+                    lines
+                }
+                false => vec![clip(&text, w)],
+            };
+            let n = lines.len().max(1) as u16;
+            let grid = Rect { height: area.height - n, ..area };
+            crate::widgets::grid::render(rs, &mut t.grid, grid, buf, &app.i18n, focused, look);
+            let y0 = area.y + area.height - n;
+            buf.set_style(Rect { y: y0, height: n, ..area }, Style::new().bg(th.surface));
+            for (i, line) in lines.iter().enumerate() {
+                buf.set_stringn(area.x + 1, y0 + i as u16, line, w, Style::new().fg(th.warning).bg(th.surface));
+            }
         }
         // A text plan: the line below its rows offers to view it as a plan.
         Results::Rows(rs) if area.height > 3 && text_plan.is_some() => {

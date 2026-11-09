@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_filter_feedback.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 RO ×  2 shop.users RO ×                    "
+"│  ＋ New connection   │╭ Results · 3 rows ────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig.shop.users  READ-ONLY             │"
+"│  ▾ ●   local-pg RO   ││ [Result 1]  Chart  Messages                      H/L │"
+"│    ▾ datarig default ││●WHERE ame) = 'a' AND id > 1 AND name IS NOT NULL   ⟳ │"
+"│      ▸ analytics     ││   │ id   │ name                                      │"
+"│      ▸ public        ││   │ int8 │ text                                      │"
+"│      ▾ shop          ││ 1 │    0 │ n0                                        │"
+"│        ▾ Tables      ││ 2 │    1 │ n1                                        │"
+"│          ▸ orders    ││ 3 │    2 │ n2                                        │"
+"│          ▸ users     ││                                                      │"
+"│▾ Environments 1      ││                                                      │"
+"│    ○ Default rules (…││                                                      │"
+"│  ▸ ○ prod  read-only…││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││ Filter refused: lower2: not known to be free of side │"
+"│                      ││ effects (read-only connection)                       │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" local-pg  READ-ONLY  │ Filter refused: lower2: not … (read-only connection) EN "

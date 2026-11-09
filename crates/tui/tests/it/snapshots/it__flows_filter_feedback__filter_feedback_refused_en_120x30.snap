@@ -29,6 +29,6 @@ expression: backend
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
-"│                            ││                                                                                        │"
+"│                            ││ Filter refused: ; ends the statement (a filter is one condition)                       │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯"
-" local-pg │ Not run: the filter is refused (a ; would end the statement: a filter is one condition)                  EN "
+" local-pg │ Filter refused: ; ends the statement (a filter is one condition)                                         EN "
