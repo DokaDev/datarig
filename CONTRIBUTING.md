@@ -145,7 +145,9 @@ budget again; counts, memory and the binary size fail at once (docs/perf.md, "Bu
   (`#123`, `owner/repo#123` or the issue's link) or has the line `no issue: <reason>`; a
   release pull request has `no issue: release`. Both count anywhere in the description, in
   any case, but not inside an HTML comment or a fenced code block, and editing the
-  description runs the check again.
+  description runs the check again. Closing keywords in the description or commit messages
+  make the check fail: `Closes`, `Fixes` or `Resolves` (in any form) followed by an issue,
+  such as `Fixes #123`. This applies to everyone, maintainers included.
 - Keep a pull request to one change, with tests for what it fixes or adds.
 - The code, comments and documentation are in English.
 
