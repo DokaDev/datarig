@@ -9,9 +9,9 @@
 
 use super::*;
 use datarig_core::fault::{ErrorLog, Fault, FaultKind, KeychainFault};
-use datarig_core::i18n::io_reason;
 use datarig_core::scripts::{SaveError, ScriptStore};
 use datarig_core::workspace::{self, Acquired, ExplorerState, TabState, WorkspaceState};
+use datarig_i18n::io_reason;
 
 /// Nobody wrote `text`: it is blank.
 pub(super) fn unwritten(text: &str) -> bool {

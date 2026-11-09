@@ -7,7 +7,7 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{ColumnMeta, DbCommand, DbEvent, Outcome, PagingMode};
-use datarig_core::i18n::{I18n, Label, Lang, Msg};
+use datarig_i18n::{I18n, Label, Lang, Msg};
 use datarig_tui::app::Focus;
 use datarig_tui::app::hover::PointerOn;
 use datarig_tui::app::tabs::ResultView;

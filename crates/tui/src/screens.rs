@@ -18,7 +18,7 @@ use crate::widgets::guide::{draw_help, draw_which_key};
 use crate::widgets::menu::draw_context_menu;
 use crate::widgets::popup::{draw_cell_editor, draw_viewer};
 use crate::widgets::quick::draw_quick_connect;
-use datarig_core::i18n::Msg;
+use datarig_i18n::Msg;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;

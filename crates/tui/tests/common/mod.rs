@@ -12,11 +12,11 @@ use datarig_core::driver::{
     Hierarchy, KeyCatalog, PingError, PingInfo, Session, SessionRole, ValueKind,
 };
 use datarig_core::driver::{PagingMode, TxRule};
-use datarig_core::i18n::Lang;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::secret::{MemoryStore, SecretStore};
 use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
 use datarig_core::sql::dialect::{Dialect, Language};
+use datarig_i18n::Lang;
 use datarig_tui::app::explorer::RowKind;
 use datarig_tui::app::folder_read::{FileSystem, Kind, RealFileSystem};
 use datarig_tui::app::overlay::{Overlay, OverlayKind};
@@ -389,14 +389,14 @@ pub fn new_app_with_clock(cfg: &Config, lang: Lang) -> (App, FakeClock) {
 /// Pin a screen rendered in `lang` (`$term`: a drawn terminal, or a reference to one). An
 /// English screen is an insta snapshot named `$name`. A screen in another language is checked
 /// against its catalog instead ([`check_localized`]): the repository keeps no UI text in another
-/// language outside `locales/`.
+/// language outside `crates/i18n/locales/`.
 #[macro_export]
 macro_rules! assert_screen {
     ($name:expr, $lang:expr, $term:expr) => {{
         let name: String = $name.to_string();
         let term = $term;
         let backend = term.backend();
-        if $lang == datarig_core::i18n::Lang::En {
+        if $lang == datarig_i18n::Lang::En {
             $crate::common::remember_english(&name, backend.buffer());
             insta::assert_snapshot!(name, backend);
         } else {
@@ -427,7 +427,7 @@ pub fn remember_english(name: &str, buf: &Buffer) {
 ///   shows in `lang`: whole, cut short with `…`, or wrapped over several lines;
 /// * something of the language is on it.
 pub fn check_localized(name: &str, lang: Lang, buf: &Buffer) {
-    use datarig_core::i18n::Label;
+    use datarig_i18n::Label;
     let screen = buffer_text(buf);
     let translated = |l: &Label| l.text(Lang::En) != l.text(lang);
     for l in Label::ALL.iter().filter(|l| translated(l)) {
@@ -488,13 +488,13 @@ fn shown(screen: &str, text: &str) -> bool {
 
 /// A Korean UI text, from the Korean catalog (`locales/ko.toml`): the tests hold no Korean
 /// text of their own.
-pub fn ko(l: datarig_core::i18n::Label) -> &'static str {
+pub fn ko(l: datarig_i18n::Label) -> &'static str {
     l.text(Lang::Ko)
 }
 
 /// A Korean message with its values filled in, from the Korean catalog.
-pub fn ko_msg(m: &datarig_core::i18n::Msg) -> String {
-    datarig_core::i18n::I18n::new(Lang::Ko).msg(m).to_string()
+pub fn ko_msg(m: &datarig_i18n::Msg) -> String {
+    datarig_i18n::I18n::new(Lang::Ko).msg(m).to_string()
 }
 
 /// The example statements the tests' first console holds (the harness's console on the test

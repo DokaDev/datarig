@@ -9,7 +9,7 @@
 
 use datarig_core::config::doc::{KEYS, KeyDoc, Kind, TABLES, TableDoc};
 use datarig_core::config::{self, Config, ConfigError};
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::App;
 use datarig_tui::app::command::{SETTINGS, SettingSpec, Values};
 use std::collections::BTreeSet;

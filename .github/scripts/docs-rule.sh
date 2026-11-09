@@ -6,7 +6,7 @@
 #      theme format and built-in themes) also changes a hand-written page of the docs site
 #      (docs/site/src; generated pages and screens/ do not count), or the body has a line
 #      `no doc change: <reason>`.
-#   2. A change under crates/ or locales/ adds a changelog fragment changes/<kind>/<slug>.md, or
+#   2. A change under crates/ adds a changelog fragment changes/<kind>/<slug>.md, or
 #      the body has a line `no changelog: <reason>`.
 #   3. Every fragment the pull request adds or changes is valid (scripts/changes.sh check).
 #   4. A release pull request (it changes `version` in [workspace.package] of Cargo.toml) leaves
@@ -71,7 +71,7 @@ has_heading() {
 user_visible() {
   case $1 in
     */tests.rs | */tests/*) return 1 ;;
-    locales/en.toml) ;;
+    crates/i18n/locales/en.toml) ;;
     crates/tui/src/keymap.rs | crates/tui/src/keymap/*) ;;
     crates/tui/src/app/action.rs | crates/tui/src/app/action/*) ;;
     crates/tui/src/app/command.rs | crates/tui/src/app/command/*) ;;
@@ -130,7 +130,7 @@ while IFS=$'\t' read -r status path; do
   [[ -n $path ]] || continue
   if user_visible "$path"; then visible+=("$path"); fi
   case $path in
-    crates/* | locales/*) crates+=("$path") ;;
+    crates/*) crates+=("$path") ;;
   esac
   rev=$HEAD
   [[ $status == D ]] && rev=$merge_base
@@ -191,7 +191,7 @@ if [[ ${#crates[@]} -gt 0 ]]; then
   elif [[ -n $no_changelog ]]; then
     notes+=("Changelog: no changelog: $no_changelog")
   elif [[ $bad_fragments -eq 0 ]]; then
-    fail "This pull request changes crates/ or locales/ but adds no changelog fragment.
+    fail "This pull request changes crates/ but adds no changelog fragment.
 Add a file changes/<kind>/<slug>.md, <kind> one of added, changed, fixed, removed,
 security, <slug> lowercase letters, digits and dashes, with one or more bullets in English:
     - The result grid copies a range as TSV with Space y t.
@@ -200,7 +200,7 @@ request description instead:
     no changelog: <why>"
   fi
 else
-  notes+=("Changelog: nothing under crates/ or locales/ changed")
+  notes+=("Changelog: nothing under crates/ changed")
 fi
 
 # 4. Release.

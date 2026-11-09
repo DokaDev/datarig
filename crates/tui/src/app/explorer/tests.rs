@@ -1,6 +1,6 @@
 use super::*;
 use datarig_core::config::Config;
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 
 fn profile(name: &str, folder: Option<&str>) -> ConnectionConfig {
     ConnectionConfig { name: name.into(), folder: folder.map(String::from), ..ConnectionConfig::default() }

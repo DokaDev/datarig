@@ -5,7 +5,8 @@ use crate::app::edit::RowAt;
 use crate::app::{App, Results};
 use crate::text::{Align, clip, fit, sanitize_cell, width, wrap};
 use crate::theme;
-use datarig_core::i18n::{Label, Localized, Msg};
+use datarig_core::sql::complete::Kind;
+use datarig_i18n::{Label, Localized, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -26,10 +27,22 @@ pub(crate) fn clear_overlay(rect: Rect, buf: &mut Buffer) {
     Clear.render(rect, buf);
 }
 
+/// The completion popup's word for what a candidate is.
+fn kind_label(kind: Kind) -> Label {
+    match kind {
+        Kind::Column => Label::CompleteKindColumn,
+        Kind::Schema => Label::CompleteKindSchema,
+        Kind::Table => Label::CompleteKindTable,
+        Kind::View => Label::CompleteKindView,
+        Kind::Keyword => Label::CompleteKindKeyword,
+        Kind::Value => Label::CompleteKindValue,
+    }
+}
+
 pub(crate) fn draw_popup(app: &App, cursor: (u16, u16), screen: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     let Some(p) = &app.tab().popup else { return };
-    let kinds: Vec<Localized> = p.items.iter().map(|c| app.i18n.label(c.kind.label())).collect();
+    let kinds: Vec<Localized> = p.items.iter().map(|c| app.i18n.label(kind_label(c.kind))).collect();
     // A value may hold a line break or another control character: shown as the grid shows it.
     let labels: Vec<String> = p.items.iter().map(|c| sanitize_cell(&c.label)).collect();
     let details: Vec<Option<String>> = p.items.iter().map(|c| c.detail.as_deref().map(sanitize_cell)).collect();
@@ -99,7 +112,7 @@ pub(crate) fn draw_viewer(app: &mut App, content: Rect, buf: &mut Buffer) {
     let rect = Rect::new(content.x + (content.width - w) / 2, content.y + (content.height - h) / 2, w, h);
     clear_overlay(rect, buf);
     let title = app.i18n.msg(&Msg::CellViewerTitle { column: v.column.clone() });
-    let close = app.i18n.label(datarig_core::i18n::Label::CellViewerClose);
+    let close = app.i18n.label(datarig_i18n::Label::CellViewerClose);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(th.accent).bg(th.surface))

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/core",
+    "crates/i18n",
     "crates/drivers/postgres",
     "crates/drivers/mysql",
     "crates/ssh",
@@ -30,10 +31,11 @@ publish = false
 
 [workspace.dependencies]
 # Internal crates (dependency direction: tui → core ← driver-postgres/driver-mysql, tui → ssh → core;
-# bench → all).
+# tui → i18n (the UI text; core has none); bench → all).
 datarig-core = { path = "crates/core" }
 datarig-driver-mysql = { path = "crates/drivers/mysql" }
 datarig-driver-postgres = { path = "crates/drivers/postgres" }
+datarig-i18n = { path = "crates/i18n" }
 datarig-ssh = { path = "crates/ssh" }
 datarig-tls = { path = "crates/tls" }
 datarig-tui = { path = "crates/tui" }

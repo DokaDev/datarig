@@ -8,11 +8,11 @@ mod common;
 use common::*;
 use datarig_core::config::Config;
 use datarig_core::driver::{DbEvent, SessionRole};
-use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::paths::Paths;
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_core::scripts::ScriptStore;
 use datarig_core::secret::{MemoryStore, SecretStore};
+use datarig_i18n::{Label, Lang, Msg};
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::script_tree::TreeRow;
 use datarig_tui::app::{AUTOSAVE, App, Focus, NodeState, Startup, TabKind};
@@ -1031,8 +1031,8 @@ fn a_name_too_long_for_the_file_system_says_so_in_words() {
     h.command("set language=ko");
     w(&mut h);
     let screen = h.screen(200, 30);
-    let error = ko(datarig_core::i18n::Label::IoNameTooLong).to_string();
-    assert!(screen.contains(&ko_msg(&datarig_core::i18n::Msg::ScriptsSaveFailed { error })), "{screen}");
+    let error = ko(datarig_i18n::Label::IoNameTooLong).to_string();
+    assert!(screen.contains(&ko_msg(&datarig_i18n::Msg::ScriptsSaveFailed { error })), "{screen}");
 }
 
 #[test]
@@ -1167,7 +1167,7 @@ fn wq_whose_save_fails_says_so_every_time_and_keeps_the_tab() {
 
 /// Every notice's text in `lang`.
 fn notice_texts(h: &Harness, lang: Lang) -> Vec<String> {
-    let i18n = datarig_core::i18n::I18n::new(lang);
+    let i18n = datarig_i18n::I18n::new(lang);
     h.app.notices.iter().map(|n| i18n.msg(&n.msg).to_string()).collect()
 }
 
@@ -1411,7 +1411,7 @@ fn an_unreadable_trashed_console_is_skipped_by_space_t_u_and_marked_in_recover()
     set_mode(&trash_dir.join(&newest), 0o600);
     assert_eq!(std::fs::read_to_string(trash_dir.join(&newest)).unwrap(), "select 'newest';");
     let msg = Msg::TabTrashFilesSkipped { count: 1, error: "e".into() };
-    let (en, ko) = (datarig_core::i18n::I18n::new(Lang::En), datarig_core::i18n::I18n::new(Lang::Ko));
+    let (en, ko) = (datarig_i18n::I18n::new(Lang::En), datarig_i18n::I18n::new(Lang::Ko));
     assert_ne!(ko.msg(&msg).to_string(), en.msg(&msg).to_string(), "translated");
 }
 

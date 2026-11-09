@@ -8,8 +8,8 @@ mod common;
 
 use common::*;
 use datarig_core::config::Config;
-use datarig_core::i18n::Lang;
 use datarig_core::secret::MemoryStore;
+use datarig_i18n::Lang;
 use datarig_tui::app::explorer::RowKind;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::{Focus, Startup, TestState};

@@ -15,12 +15,12 @@ use crate::keymap::Ctx;
 use crate::text::{clip, width, wrap, wrap_words};
 use crate::theme;
 use crate::widgets::{panel, put, sparkline};
-use datarig_core::i18n::{I18n, Label, Msg};
 use datarig_core::monitor::locks::{Blame, Holder, LockObject};
 use datarig_core::monitor::{
     CounterKind, ExtraKey, FullText, GaugeKind, Hidden, MAX_WAITERS, MonitorFormat, Need, Part, Proof, SessionKind,
     SessionRow, SessionState, Timestamp, Tx, Visibility, WaitClass,
 };
+use datarig_i18n::{I18n, Label, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};

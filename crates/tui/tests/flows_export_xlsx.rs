@@ -14,7 +14,7 @@ use datarig_core::driver::{ColumnMeta, DbCommand, DbError, DbEvent, ExportBatch,
 use datarig_core::export::xlsx::TooLong;
 use datarig_core::export::xlsx::read::{self, Cell as Data};
 use datarig_core::fault::Fault;
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::AppEvent;
 use datarig_tui::app::export::{ExportEvent, ExportNews, Failure, Outcome};
 use std::path::{Path, PathBuf};

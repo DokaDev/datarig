@@ -4,7 +4,7 @@ mod common;
 
 use common::*;
 use datarig_core::driver::DbCommand;
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::widgets::editor::{Editor, Mode};
 use ratatui::crossterm::event::{MouseButton, MouseEventKind};
 

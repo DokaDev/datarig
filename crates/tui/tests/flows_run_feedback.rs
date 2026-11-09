@@ -10,7 +10,7 @@ mod common;
 use common::*;
 use datarig_core::config::IconsSetting;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, Outcome};
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::theme::DARK;
 use datarig_tui::widgets::SPINNER;
 use datarig_tui::widgets::editor::Editor;
@@ -502,7 +502,7 @@ fn ended_by_closed_session(h: &Harness) {
     assert_eq!(outcomes, [datarig_tui::app::runlog::StatementOutcome::Cancelled]);
     assert!(matches!(t.results, datarig_tui::app::Results::Cancelled));
     assert_eq!(t.exec.view, datarig_tui::app::tabs::ResultView::Messages);
-    let reason = datarig_core::i18n::Msg::Label(datarig_core::i18n::Label::QueryCancelledSessionClosed);
+    let reason = datarig_i18n::Msg::Label(datarig_i18n::Label::QueryCancelledSessionClosed);
     assert_eq!(t.exec.run.notes.iter().filter(|n| n.msg == reason).count(), 1, "{:?}", t.exec.run.notes);
     assert!(!t.exec.tx_open && t.exec.paging == datarig_tui::app::Paging::None);
 }
@@ -639,7 +639,7 @@ fn reconnect_from_another_tab(h: &mut Harness) {
 /// its announcement was: in the tab's Messages and its status.
 #[test]
 fn a_count_or_fetch_whose_session_closed_says_it_stopped() {
-    use datarig_core::i18n::{Label, Msg};
+    use datarig_i18n::{Label, Msg};
     for (key, label) in [("#", Label::ResultsCountSessionClosed), ("n", Label::ResultsFetchSessionClosed)] {
         let mut h = harness("SELECT a FROM t;");
         let (id, _) = run(&mut h);

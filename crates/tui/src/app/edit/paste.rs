@@ -30,7 +30,7 @@ use datarig_core::driver::ColumnOrigin;
 use datarig_core::edit::paste::{self, Format, PasteError, PasteOpts};
 use datarig_core::edit::{Origin, PasteOps, PasteRefused};
 use datarig_core::fault::{ErrorLog, Fault};
-use datarig_core::i18n::{Lang, fmt_count};
+use datarig_i18n::{Lang, fmt_count};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, mpsc};

@@ -6,7 +6,7 @@
 use super::{Look, fmt_share, fmt_weight, heat, info_line, work};
 use crate::app::plan::PlanTab;
 use crate::widgets::put;
-use datarig_core::i18n::Msg;
+use datarig_i18n::Msg;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};

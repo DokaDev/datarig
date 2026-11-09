@@ -6,7 +6,7 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{ColumnMeta, DbCommand, DbEvent, PagingMode};
-use datarig_core::i18n::{Label, Lang, Msg};
+use datarig_i18n::{Label, Lang, Msg};
 use datarig_tui::app::Focus;
 use datarig_tui::app::chart::ChartTab;
 use datarig_tui::app::overlay::OverlayKind;

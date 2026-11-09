@@ -6,8 +6,8 @@ mod common;
 
 use common::*;
 use datarig_core::driver::DbEvent;
-use datarig_core::i18n::Lang;
 use datarig_core::secret::SourceKind;
+use datarig_i18n::Lang;
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
 use datarig_tui::app::profiles::{Field, FormHit, Section, SshChoice};
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};

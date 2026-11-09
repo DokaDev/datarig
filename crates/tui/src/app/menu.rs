@@ -1141,7 +1141,7 @@ impl App {
         match item {
             MenuItem::Action(a) => {
                 let s = action::spec(a);
-                out.push(s.label.text(datarig_core::i18n::Lang::En).to_string());
+                out.push(s.label.text(datarig_i18n::Lang::En).to_string());
                 out.push(s.id.to_string());
             }
             MenuItem::Scope(MenuScope::Copy(sc)) => out.push(sc.name().to_string()),

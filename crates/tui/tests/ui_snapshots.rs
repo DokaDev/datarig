@@ -6,7 +6,7 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{DbCommand, DbEvent};
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::CommandItem;
 use datarig_tui::{screens, theme};
 use ratatui::Terminal;
@@ -45,7 +45,7 @@ fn too_small_terminal() {
     assert!(h.screen(79, 24).contains("80×24 or larger required"));
     // The message comes from the catalog in the UI language.
     let mut h = Harness::connected(Lang::Ko);
-    let too_small = datarig_core::i18n::Msg::ScreenTooSmall { width: "80".into(), height: "24".into() };
+    let too_small = datarig_i18n::Msg::ScreenTooSmall { width: "80".into(), height: "24".into() };
     assert!(h.screen(79, 24).contains(&ko_msg(&too_small)));
 }
 
@@ -251,7 +251,7 @@ fn en_and_ko_ui_switch_via_commands() {
     assert!(h.cmdline().is_none());
     assert_screen!("after_commands_language_ko", Lang::Ko, h.draw(160, 45));
     let ko = h.status(160, 45);
-    assert!(ko.contains(common::ko(datarig_core::i18n::Label::LangSwitched)), "{ko}");
+    assert!(ko.contains(common::ko(datarig_i18n::Label::LangSwitched)), "{ko}");
     // English words still find the action while the UI is Korean.
     h.command("english");
     let back = h.draw(160, 45);
@@ -426,7 +426,7 @@ fn overlays_clear_only_their_box_and_dim_the_screen() {
             h
         }),
         ("keychain notice", || {
-            use datarig_core::i18n::Label;
+            use datarig_i18n::Label;
             use datarig_tui::app::overlay::{Busy, Overlay};
             let mut h = with_edge_results(Lang::En);
             h.app.overlays.push(Overlay::Busy(Busy { title: Label::MigrateTitle, text: Label::MigrateRunning }));
@@ -527,11 +527,11 @@ fn cancel_and_busy_through_key_path() {
     assert!(!h.app.quit && !h.cancelled.load(Ordering::SeqCst));
     h.ctrl('e');
     h.ctrl('e');
-    assert!(h.status(160, 45).contains(&ko_msg(&datarig_core::i18n::Msg::QueryBusy { key: "Ctrl+C".into() })));
+    assert!(h.status(160, 45).contains(&ko_msg(&datarig_i18n::Msg::QueryBusy { key: "Ctrl+C".into() })));
     h.ctrl('c');
     assert!(h.cancelled.load(Ordering::SeqCst), "CancelRequest sent through the session");
     h.db(DbEvent::Failed { id: 1, error: "canceling statement due to user request".into(), cancelled: true });
-    assert!(h.status(160, 45).contains(ko(datarig_core::i18n::Label::QueryCancelled)));
+    assert!(h.status(160, 45).contains(ko(datarig_i18n::Label::QueryCancelled)));
     assert_eq!(h.sent().len(), 1, "second Ctrl+E while running must not send");
 }
 
@@ -612,10 +612,7 @@ fn command_line_en_ko_sizes() {
             assert_screen!(format!("commands_bottom_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
             let t = h.draw(w, hh);
             let last = row_text(t.backend().buffer(), hh - 1);
-            let badge = format!(
-                " {}  : ",
-                datarig_core::i18n::I18n::new(lang).label(datarig_core::i18n::Label::StatusModeCommand)
-            );
+            let badge = format!(" {}  : ", datarig_i18n::I18n::new(lang).label(datarig_i18n::Label::StatusModeCommand));
             assert!(last.starts_with(&badge), "{last}");
             assert_eq!(t.backend().buffer()[(0, hh - 1)].bg, theme::DARK.mode_command);
         }
@@ -923,9 +920,8 @@ fn test_connection_success_and_error_states() {
         h.ctrl('t');
         let running = h.draw(80, 24);
         let screen: String = (0..24).map(|y| row_text(running.backend().buffer(), y)).collect::<Vec<_>>().join("\n");
-        let testing = datarig_core::i18n::I18n::new(lang)
-            .msg(&datarig_core::i18n::Msg::TestRunning { elapsed: Duration::ZERO })
-            .to_string();
+        let testing =
+            datarig_i18n::I18n::new(lang).msg(&datarig_i18n::Msg::TestRunning { elapsed: Duration::ZERO }).to_string();
         let testing = testing.split('…').next().unwrap();
         assert!(screen.contains(testing), "{testing:?} in {screen}");
         h.ping(Ok(PingInfo {
@@ -1462,7 +1458,7 @@ fn read_only_banner_en_ko_sizes() {
 #[test]
 fn recovery_trash_and_failure_messages_en_ko() {
     use datarig_core::fault::{Fault, FaultKind, KeychainFault};
-    use datarig_core::i18n::{I18n, Label, Msg};
+    use datarig_i18n::{I18n, Label, Msg};
     use std::io::ErrorKind;
     let faults = [
         Fault::new(FaultKind::Io(ErrorKind::PermissionDenied), "x"),

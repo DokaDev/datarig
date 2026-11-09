@@ -3,10 +3,10 @@
 mod common;
 use common::*;
 use datarig_core::config::{Config, WhatsNewSetting};
-use datarig_core::i18n::{Label, Lang};
 use datarig_core::paths::Paths;
 use datarig_core::secret::{MemoryStore, SecretStore};
 use datarig_core::update::{self, Version, notes};
+use datarig_i18n::{Label, Lang};
 use datarig_tui::app::Startup;
 use datarig_tui::app::overlay::{Overlay, OverlayKind};
 use datarig_tui::app::whats_new::WhatsNewView;

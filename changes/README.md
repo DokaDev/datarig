@@ -1,6 +1,6 @@
 # Changelog fragments
 
-Each pull request that changes `crates/` or `locales/` adds one file here saying what changed
+Each pull request that changes `crates/` (the UI text included) adds one file here saying what changed
 for users. At release time they become the version's section of
 [What's new](../docs/site/src/whats-new.md), which is also the top of the GitHub release notes.
 A pull request users will not notice says so in its description instead, on a line of its own:

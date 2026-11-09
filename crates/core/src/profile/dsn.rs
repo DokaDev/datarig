@@ -6,7 +6,6 @@
 //! fields). Userinfo, database and query values are percent-decoded on parse and encoded on
 //! format; IPv6 hosts are written in brackets. Multi-host URLs are rejected.
 
-use crate::i18n::{Label, Msg};
 use std::fmt;
 
 /// Which database a URL is for, by its scheme.
@@ -86,18 +85,6 @@ pub enum DsnError {
     Encoding,
     /// Unbalanced `[` / `]`, several hosts, or a bare IPv6 address.
     Host(String),
-}
-
-impl DsnError {
-    /// Catalog message describing the error.
-    pub fn message(&self) -> Msg {
-        match self {
-            DsnError::Scheme => Label::DsnErrScheme.into(),
-            DsnError::Port(p) => Msg::DsnErrPort { value: p.clone() },
-            DsnError::Encoding => Label::DsnErrEncoding.into(),
-            DsnError::Host(h) => Msg::DsnErrHost { value: h.clone() },
-        }
-    }
 }
 
 impl Dsn {

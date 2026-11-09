@@ -112,13 +112,13 @@ keyboard help. Next: [Getting started](https://dokadev.github.io/datarig/getting
 
 | Path | What |
 |---|---|
-| `crates/core` | UI-free core: driver interface, SQL tooling and the safety classifier, profiles, secrets, config, i18n |
+| `crates/core` | UI-free core: driver interface, SQL tooling and the safety classifier, profiles, secrets, config |
+| `crates/i18n` | the UI text: the catalogs (`locales/en.toml`, `locales/ko.toml`) and their typed messages |
 | `crates/drivers/postgres`, `crates/drivers/mysql` | the database drivers |
 | `crates/ssh`, `crates/tls` | SSH tunnels, TLS (rustls) |
 | `crates/update` | the update check's HTTPS request to GitHub |
 | `crates/tui` | the terminal UI and the `datarig` binary |
 | `crates/bench` | benchmarks and the CI performance budgets |
-| `locales/` | the UI text catalogs (`en.toml`, `ko.toml`) |
 | `dev/` | Docker Compose with PostgreSQL, MySQL, PgBouncer and an SSH bastion for the tests; see [dev/README.md](https://github.com/DokaDev/datarig/blob/main/dev/README.md) |
 | `vendor/` | patched tokio-postgres, mysql_async and ssh-key; see [vendor/README.md](https://github.com/DokaDev/datarig/blob/main/vendor/README.md) |
 | `docs/` | [architecture](https://github.com/DokaDev/datarig/blob/main/docs/architecture.md), [performance](https://github.com/DokaDev/datarig/blob/main/docs/perf.md), the generated [key bindings](https://github.com/DokaDev/datarig/blob/main/docs/keybindings.md) and [theme tokens](https://github.com/DokaDev/datarig/blob/main/docs/themes.md), and the documentation site (`docs/site`) |

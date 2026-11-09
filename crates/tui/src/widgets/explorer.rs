@@ -41,8 +41,8 @@ use datarig_core::driver::KeyMarks;
 use datarig_core::driver::structure::{
     ColumnFill, FkAction, ItemColumn, RelationStats, StructureColumn, StructureGroup, TableStructure, TriggerEvent,
 };
-use datarig_core::i18n::{Label, Msg};
 use datarig_core::sql::complete::Catalog;
+use datarig_i18n::{Label, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};

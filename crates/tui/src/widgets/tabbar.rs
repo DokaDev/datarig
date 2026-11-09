@@ -22,7 +22,7 @@ use crate::app::{App, NodeState, SessionState, Tab, TabId};
 use crate::icons;
 use crate::text::{clip, grapheme_width, width};
 use crate::theme;
-use datarig_core::i18n::{Label, Msg};
+use datarig_i18n::{Label, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};

@@ -7,12 +7,12 @@ Fails (exit 1) with file:line: message for each finding, run from the repository
 
 1. No em dash (U+2014) in the README, CONTRIBUTING, SECURITY, the pull request template, docs/
    (the site with its generated pages and screens, the demo tapes), changes/, every catalog in
-   locales/, the Cargo.toml files, the insta snapshots, and the string literals of crates/
+   crates/i18n/locales/, the Cargo.toml files, the insta snapshots, and the string literals of crates/
    (comments are not checked). Use a colon, a comma, parentheses or a new sentence; an en dash in
    a range (1–5) and `--` in a command line are fine.
 2. British spelling in the prose of the README, CONTRIBUTING, SECURITY, the pull request
    template, docs/site/src, the generated docs/keybindings.md and docs/themes.md, changes/ and
-   the values of locales/en.toml: colour, behaviour, centre, favourite, cancelled, organise,
+   the values of crates/i18n/locales/en.toml: colour, behaviour, centre, favourite, cancelled, organise,
    analyse... Code is exempt: fenced code blocks, `inline code`, {placeholders}, URLs, words
    joined to `_`, `.`, `-`, `/` or `::`, and words in capitals (the SQL keyword ANALYZE).
    A name typed as it is outside code goes in ALLOW_PHRASES or ALLOW_KEYS, with the reason.
@@ -250,7 +250,7 @@ def main():
         findings.append((rule, path, line, msg))
 
     text_files = git_files("README.md", "CONTRIBUTING.md", "SECURITY.md",
-                           ".github/pull_request_template.md", "docs", "changes", "locales",
+                           ".github/pull_request_template.md", "docs", "changes", "crates/i18n/locales",
                            "Cargo.toml", "crates/*/Cargo.toml", "crates/*.snap")
     for path in text_files:
         if path.endswith((".png", ".gif", ".jpg", ".svg", ".ico", ".woff", ".woff2")):
@@ -275,9 +275,9 @@ def main():
         for n, line in markdown_lines(path):
             for _col, word, uk in prose_findings(line):
                 add("spelling", path, n, f"US spelling '{word}': write '{uk}'")
-    for n, line in (toml_values("locales/en.toml") if git_files("locales/en.toml") else []):
+    for n, line in (toml_values("crates/i18n/locales/en.toml") if git_files("crates/i18n/locales/en.toml") else []):
         for _col, word, uk in prose_findings(line):
-            add("spelling", "locales/en.toml", n, f"US spelling '{word}': write '{uk}'")
+            add("spelling", "crates/i18n/locales/en.toml", n, f"US spelling '{word}': write '{uk}'")
 
     if counts:
         per = {}

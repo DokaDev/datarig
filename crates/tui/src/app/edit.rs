@@ -1743,7 +1743,7 @@ impl App {
         let pending = rs.edit.batch.counts().total();
         let invalid = self.invalid_count(rs) as u64;
         if pending > 0 && invalid > 0 {
-            let p = datarig_core::i18n::fmt_count(pending as u64);
+            let p = datarig_i18n::fmt_count(pending as u64);
             let long = Msg::EditBadgePendingInvalid { pending: p.clone(), count: invalid };
             let text = self.i18n.msg(&long).to_string();
             let short = self.i18n.msg(&Msg::EditBadgePendingInvalidShort { pending: p, count: invalid }).to_string();

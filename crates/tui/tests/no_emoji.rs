@@ -184,7 +184,7 @@ fn the_ui_text_has_no_emoji() {
     let mut files = Vec::new();
     sources(&root.join("src"), &mut files);
     for lang in ["en", "ko"] {
-        files.push(root.join(format!("../../locales/{lang}.toml")));
+        files.push(root.join(format!("../i18n/locales/{lang}.toml")));
     }
     assert!(files.len() > 40, "{files:?}");
     let mut found = Vec::new();

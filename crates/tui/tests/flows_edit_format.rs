@@ -5,7 +5,7 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{DbEvent, EditFormat, MySqlEdit};
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::{AppEvent, EventTarget};
 
 #[test]

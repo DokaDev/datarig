@@ -10,9 +10,9 @@ use common::*;
 use datarig_core::config::Config;
 use datarig_core::driver::{DbCommand, DbEvent, Outcome};
 use datarig_core::driver::{PagingMode, TxRule};
-use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::policy::{Confirm, Policy};
 use datarig_core::profile::ConnectionConfig;
+use datarig_i18n::{Label, Lang, Msg};
 use datarig_tui::app::Focus;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::plan::PlanView;
@@ -786,7 +786,7 @@ fn the_box_diagram_follows_the_selection_and_moves_sideways() {
 #[test]
 fn a_narrow_strip_shortens_its_labels_before_leaving_tabs_out() {
     for lang in [Lang::En, Lang::Ko] {
-        let i18n = datarig_core::i18n::I18n::new(lang);
+        let i18n = datarig_i18n::I18n::new(lang);
         let mut h = shown_in(lang, 17, "join.analyze.json");
         h.keys("H");
         assert_eq!(h.app.tab().exec.view, ResultView::Rows);

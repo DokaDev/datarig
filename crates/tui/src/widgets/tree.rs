@@ -13,7 +13,7 @@
 use crate::theme;
 use datarig_core::driver::SchemaObjects;
 use datarig_core::driver::structure::{RelationStats, StructureGroup, TableStructure};
-use datarig_core::i18n::{I18n, Label};
+use datarig_i18n::{I18n, Label};
 use ratatui::style::{Modifier, Style};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 

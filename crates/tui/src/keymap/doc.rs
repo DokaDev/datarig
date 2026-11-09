@@ -4,7 +4,7 @@
 use super::{Bound, Ctx, Keymap, PROTECTED, Target, keys, parse_keys};
 use crate::app::action;
 use crate::app::command::{self, ArgKind};
-use datarig_core::i18n::{Label, Lang};
+use datarig_i18n::{Label, Lang};
 
 /// The whole document (LF line endings).
 pub fn render() -> String {

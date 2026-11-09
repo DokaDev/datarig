@@ -11,7 +11,7 @@ use crate::widgets::dialog::{button_row, centered, modal};
 use crate::widgets::put;
 use crate::widgets::statusbar::level_color;
 use datarig_core::export::stream::Quote;
-use datarig_core::i18n::{Label, Localized, Msg};
+use datarig_i18n::{Label, Localized, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};

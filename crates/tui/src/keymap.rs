@@ -24,7 +24,7 @@ pub use keys::{KeyChord, KeyError, parse_keys};
 
 use crate::app::action::{self, Action};
 use datarig_core::config::KeymapConfig;
-use datarig_core::i18n::Label;
+use datarig_i18n::Label;
 
 /// What a bound key sequence does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

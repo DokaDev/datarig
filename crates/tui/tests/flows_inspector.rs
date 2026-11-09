@@ -7,7 +7,7 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{DbCommand, DbEvent};
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::hover::PointerOn;
 use datarig_tui::app::overlay::{ARM_DELAY, OverlayKind};
 use datarig_tui::app::{DetailTab, Focus};

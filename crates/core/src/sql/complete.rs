@@ -15,7 +15,6 @@
 use super::dialect::{Dialect, LiteralOpen};
 use super::lexer::{LexState, Tok, Token, is_space, lex_from};
 use super::values::CheckValues;
-use crate::i18n::Label;
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Default)]
@@ -58,20 +57,6 @@ pub enum Kind {
     Keyword,
     /// A value the column a string literal is compared with may hold.
     Value,
-}
-
-impl Kind {
-    /// Catalog label of the kind (completion popup).
-    pub fn label(self) -> Label {
-        match self {
-            Kind::Column => Label::CompleteKindColumn,
-            Kind::Schema => Label::CompleteKindSchema,
-            Kind::Table => Label::CompleteKindTable,
-            Kind::View => Label::CompleteKindView,
-            Kind::Keyword => Label::CompleteKindKeyword,
-            Kind::Value => Label::CompleteKindValue,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

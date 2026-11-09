@@ -4,11 +4,11 @@
 mod common;
 use common::*;
 use datarig_core::config::{Config, UpdateCheck};
-use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::paths::Paths;
 use datarig_core::secret::{MemoryStore, SecretStore};
 use datarig_core::update::install::Install;
 use datarig_core::update::{self, Answer, Outcome, Release, Version};
+use datarig_i18n::{Label, Lang, Msg};
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::{AppEvent, Startup};
 use datarig_update::Fetch;

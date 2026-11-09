@@ -8,13 +8,14 @@ the PostgreSQL driver, SSH tunnels and the UI strings.
 
 | Crate | Responsibility | Depends on |
 |---|---|---|
-| `datarig-core` | The UI-free core. The driver interface (`Driver`, `Capabilities`, `Session`, `DbCommand`/`DbEvent`, key metadata `driver::keys::KeyCatalog`), the copy and export formats of result rows (`export`: text, and the Excel and Parquet writers), server monitoring (`monitor`: one model for every database, the reading of a monitor tick's rows into it with the columns each decoder expects, rates on the server's clock, the provider markers), SQL tooling (lexer, statement splitter, completion engine, the safety classifier `sql::risk`), the connection profile model and DSNs, password stores (`SecretStore`: OS keychain, the secrets file `secrets.toml`, memory) and per-profile password sources (`keychain`, `file`, `command`, `env`, `prompt`), the trash, reading and saving the config file (`toml_edit`), the i18n catalogs, and the transport seam (`transport`) | External crates only (tokio `sync`, serde, toml, keyring, pg_query, ...) |
+| `datarig-core` | The UI-free core. The driver interface (`Driver`, `Capabilities`, `Session`, `DbCommand`/`DbEvent`, key metadata `driver::keys::KeyCatalog`), the copy and export formats of result rows (`export`: text, and the Excel and Parquet writers), server monitoring (`monitor`: one model for every database, the reading of a monitor tick's rows into it with the columns each decoder expects, rates on the server's clock, the provider markers), SQL tooling (lexer, statement splitter, completion engine, the safety classifier `sql::risk`), the connection profile model and DSNs, password stores (`SecretStore`: OS keychain, the secrets file `secrets.toml`, memory) and per-profile password sources (`keychain`, `file`, `command`, `env`, `prompt`), the trash, reading and saving the config file (`toml_edit`), and the transport seam (`transport`). No UI text: failures and choices are data the UI words | External crates only (tokio `sync`, serde, toml, keyring, pg_query, ...) |
+| `datarig-i18n` | The UI text: the locale catalogs (`locales/*.toml`, inside the package), checked by `build.rs`, and the typed message API generated from them (`Label`, `Msg`, `Localized`, `I18n`), with the number and duration formats and language detection | None at run time (`toml` to build) |
 | `datarig-driver-postgres` | The PostgreSQL implementation `PgDriver`: connecting (`connect`), one connection per session role: metadata (`meta`: introspection for the tree and completion, one per profile) and query (`query`: one per tab, portal paging, cancel), value decoding (`values`) | `datarig-core`, `datarig-tls` + tokio-postgres (vendored) |
 | `datarig-driver-mysql` | The MySQL implementation `MyDriver` on mysql_async (vendored): connecting directly or over a tunnel's channel (`connect`, `route`, `link`), the same session roles as the PostgreSQL driver: metadata (`meta`) and query (`query`), what the server says changed in the session (`session`), value decoding (`values`) | `datarig-core`, `datarig-tls` + mysql_async (vendored) |
 | `datarig-ssh` | SSH tunnels: one bastion's `direct-tcpip` channels as a `transport::Dialer` (`Tunnel`), host keys against `~/.ssh/known_hosts` (read only) and datarig's own `known_hosts`, key files (`keys`). The only crate that names russh | `datarig-core` + russh (its ssh-key vendored) |
 | `datarig-tls` | TLS for the drivers' connections: a profile's TLS settings (`core::tls`) become a `Connector` (the CA, client certificate and key files read, the verifier picked by the mode: none, the chain against the CA file, or the chain and the name against the CA file or the system's trusted certificates through rustls-platform-verifier), which does the handshake over a stream a driver opened and says what the connection got (`Encryption`) or why it failed (`TlsProblem`); PostgreSQL's SCRAM channel binding. The only crate of the drivers that names rustls | `datarig-core` + rustls (ring) |
 | `datarig-update` | The update check's one request: `GET` of GitHub's latest release of datarig over HTTPS (ureq, rustls with ring, the platform's verifier), through the HTTP proxy core chose from the environment, with a cap on the answer and a time limit; every failure becomes a `core::update::Outcome`. Behind a `Fetch` trait, so the app and its tests can use a fake. Decisions about when to ask live in `core::update` | `datarig-core` + ureq, rustls (ring) |
-| `datarig-tui` | The Ratatui UI and the `datarig` binary: app state, actions and the overlay stack (`app/`), the context keymap (`keymap/`), screens (`screens/`), widgets (`widgets/`), key input and the Hangul key mapping (`input/`), the clipboard (`clipboard.rs`: the system clipboard or OSC 52), the user's own editor (`external.rs`), the driver registry (`drivers.rs`) | `datarig-core`, `datarig-driver-postgres`, `datarig-driver-mysql`, `datarig-ssh`, ratatui/crossterm |
+| `datarig-tui` | The Ratatui UI and the `datarig` binary: app state, actions and the overlay stack (`app/`), the context keymap (`keymap/`), screens (`screens/`), widgets (`widgets/`), key input and the Hangul key mapping (`input/`), the clipboard (`clipboard.rs`: the system clipboard or OSC 52), the user's own editor (`external.rs`), the driver registry (`drivers.rs`) | `datarig-core`, `datarig-i18n`, `datarig-driver-postgres`, `datarig-driver-mysql`, `datarig-ssh`, ratatui/crossterm |
 | `datarig-bench` | Performance measurements and the CI budgets (binary `datarig-bench`): round trips counted through a latency proxy, paging, the editor and the grid in a headless `App`, and the real binary idle and at startup in `tmux -L perf`. Not product code (see `docs/perf.md`) | All of the above |
 
 ```
@@ -27,7 +28,7 @@ datarig-tui ──▶ datarig-driver-postgres ──▶ datarig-core
 
 ## Dependency rules
 
-1. **Dependencies point one way: `tui → core ← driver-*`** (and `tui → ssh → core`, `driver-* → tls → core`, `update → core`). Core depends on no driver crate and no UI crate (ratatui, crossterm). A driver crate depends on core and tls only and knows no other driver.
+1. **Dependencies point one way: `tui → core ← driver-*`** (and `tui → ssh → core`, `driver-* → tls → core`, `update → core`, `tui → i18n`). Core depends on no driver crate, no UI crate (ratatui, crossterm) and not on `datarig-i18n`. A driver crate depends on core and tls only and knows no other driver.
 2. **The UI does not know driver types.** `datarig-tui` talks to a driver only through `Box<dyn Driver>` and a `Session`'s command and event channels, and turns menus and panels on and off with `Capabilities`. The only place that names a concrete type (`PgDriver`, `MyDriver`) is the registry, `crates/tui/src/drivers.rs`.
 3. **Keep visibility narrow.** Only what is used outside a crate is `pub`; the rest is `pub(crate)` or private. A driver crate exports its driver type only.
 4. **Versions and lints live at the root.** Versions go to `[workspace.dependencies]` and lints to `[workspace.lints]`; each crate takes them with `x.workspace = true` and `[lints] workspace = true`, and turns on only the features it needs.
@@ -35,7 +36,7 @@ datarig-tui ──▶ datarig-driver-postgres ──▶ datarig-core
 Rule 1 is checked mechanically:
 
 ```sh
-cargo tree -p datarig-core | grep -Ei 'ratatui|crossterm|datarig-driver' && echo "rule broken" || echo OK
+cargo tree -p datarig-core | grep -Ei 'ratatui|crossterm|datarig-driver|datarig-i18n' && echo "rule broken" || echo OK
 ```
 
 ## Module rules
@@ -43,8 +44,8 @@ cargo tree -p datarig-core | grep -Ei 'ratatui|crossterm|datarig-driver' && echo
 - Modules use the `foo.rs` + `foo/` layout (no `mod.rs`).
 - Unit tests live next to the source in `foo/tests.rs`; `foo.rs` keeps only `#[cfg(test)] mod tests;`, and the tests reach private items with `use super::*`.
 - Integration tests live in the `tests/` directory of the crate they check. Real-database tests that use only the driver belong to the driver crate; tests that drive the `App` (app flows, snapshots, the explorer against a real database) belong to `datarig-tui`.
-- The locale catalogs (`locales/*.toml`) are read by core's `build.rs` at compile time (see "UI strings (i18n)" below). If the crate moves, fix the relative paths in `build.rs` and `tests/catalog.rs`.
-- Snapshot tests pin English screens only. A screen in another language is checked against its catalog (`assert_screen!` in `crates/tui/tests/common/mod.rs`), so the only non-English UI text in the repository is in `locales/`.
+- The locale catalogs (`crates/i18n/locales/*.toml`) are part of the `datarig-i18n` package and are read by its `build.rs` at compile time (see "UI strings (i18n)" below). Core does not depend on `datarig-i18n`: it reports failures and choices as data, and the TUI words them, so an edit of a catalog rebuilds only `datarig-i18n` and the crates that show text.
+- Snapshot tests pin English screens only. A screen in another language is checked against its catalog (`assert_screen!` in `crates/tui/tests/common/mod.rs`), so the only non-English UI text in the repository is in `crates/i18n/locales/`.
 
 ## Workspace state
 
@@ -910,11 +911,11 @@ and "The MySQL classifier" below).
 
 Every piece of UI chrome text (titles, labels, hints, status and error messages, action and key-context names) comes from the locale catalogs, and the compiler enforces it.
 
-- **Source of truth**: `locales/en.toml` defines the keys. `crates/core/build.rs` checks every catalog listed in its `LOCALES` table and generates `OUT_DIR/messages.rs`, which `datarig_core::i18n` includes:
+- **Source of truth**: `crates/i18n/locales/en.toml` defines the keys. `crates/i18n/build.rs` checks every catalog listed in its `LOCALES` table and generates `OUT_DIR/messages.rs`, which `datarig_i18n` includes:
   - `Label`: one `Copy` variant per key without placeholders (`pane.tree.title` → `Label::PaneTreeTitle`).
   - `Msg`: `Msg::Label(Label)` or one variant per key with placeholders, whose fields are the arguments (`query.done_rows` → `Msg::QueryDoneRows { count: u64, elapsed: Duration }`). The field type follows the placeholder name: `count` is a `u64` (thousands separators), `elapsed`/`latency` a `Duration` (`123ms` / `1.2s`), anything else a `String`.
   - **Plurals**: an entry with `{count}` is a table with two forms, `"key" = { one = "…", other = "…" }`; the generated `render` picks `one` when `count` is 1. The `one` form may leave the number out (`"its open tab"`). A language without plural forms (Korean) gives a plain string for the same key. Never write `tab(s)`.
-  - A key typo is an unknown variant and a missing or mistyped argument is a struct-literal error, so both fail to compile. The rules live in `build/catalog.rs`, a pure module that `tests/catalog.rs` exercises with fixtures; the `i18n` module docs have `compile_fail` examples.
+  - A key typo is an unknown variant and a missing or mistyped argument is a struct-literal error, so both fail to compile. The rules live in `build/catalog.rs`, a pure module that `tests/catalog.rs` exercises with fixtures; the `datarig-i18n` crate docs have `compile_fail` examples.
 - **Rendering**: `I18n::label(Label)` and `I18n::msg(&Msg)` return `Localized`. Widgets that draw chrome take `&Localized`, not `&str`: `panel`, `modal`, the status line, hints, which-key and help entries, command-line entries. Status messages are stored as `Notice { msg: Msg, level }`, so a language switch re-renders them.
 - **Escape hatch**: `Localized::verbatim(..)` wraps text that is not translated: user and database data, SQL, key names (`Ctrl+E`), or chrome composed from those and already localized parts (the which-key title `Space c: Connection`). Never pass English UI wording to it; add a key instead. `git grep -n 'Localized::verbatim'` lists every use for review. Data paths (grid cells, tree items, the editor) keep their own `String`/`&str` types, and the low-level `put` drawing helper takes `&str` for both.
 
@@ -930,9 +931,9 @@ The build fails, naming the file, the key and the problem, when a locale misses 
 
 ### Adding a locale
 
-1. Add `locales/<code>.toml` with the keys of `en.toml`.
-2. Add `("<code>", Policy::Required)` (or `Policy::Optional` for a partial translation) to `LOCALES` in `crates/core/build.rs`.
-3. Add the matching `Lang` variant (`ja` → `Lang::Ja`) in `crates/core/src/i18n.rs` and its detection in `detect_lang`; the generated `match lang` does not compile until the variant exists. Then add the language setting and actions in the TUI (`LangSetting`, `action.ui.language.*`).
+1. Add `crates/i18n/locales/<code>.toml` with the keys of `en.toml`.
+2. Add `("<code>", Policy::Required)` (or `Policy::Optional` for a partial translation) to `LOCALES` in `crates/i18n/build.rs`.
+3. Add the matching `Lang` variant (`ja` → `Lang::Ja`) in `crates/i18n/src/lib.rs` and its detection in `detect_lang`; the generated `match lang` does not compile until the variant exists. Then add the language setting and actions in the TUI (`LangSetting`, `action.ui.language.*`).
 
 
 ## Adding a driver crate (for example MySQL)

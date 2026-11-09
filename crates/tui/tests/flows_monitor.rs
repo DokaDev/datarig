@@ -8,13 +8,13 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, SessionRole};
-use datarig_core::i18n::Lang;
 use datarig_core::monitor::format::{Flavour, PgMonitor, Route};
 use datarig_core::monitor::{
     Counter, CounterKind, Epoch, FullText, Gauge, GaugeKind, Hidden, MonitorFormat, Need, Own, Part, Proof, QueryText,
     Sample, ServerInfo, SessionKey, SessionKind, SessionList, SessionRow, SessionState, Snapshot, StatementStamp,
     TextAsk, Timestamp, Tx, Visibility, Wait, WaitClass,
 };
+use datarig_i18n::Lang;
 use datarig_tui::app::monitor::{MonState, MonitorView};
 use datarig_tui::app::{Focus, TabKind};
 use ratatui::crossterm::event::KeyCode;
@@ -1051,7 +1051,7 @@ fn whole(proof: Proof) -> FullText {
     FullText::Text { text: QueryText { text: WHOLE.into(), shortened: false, maybe_cut_by_server: false }, proof }
 }
 
-fn transient(h: &Harness) -> Option<datarig_core::i18n::Msg> {
+fn transient(h: &Harness) -> Option<datarig_i18n::Msg> {
     h.app.transient.as_ref().map(|(n, _)| n.msg.clone())
 }
 
@@ -1123,7 +1123,7 @@ fn the_whole_statement_is_shown_copied_and_opened() {
     h.keys("o");
     assert_eq!(h.app.tab().kind, TabKind::Console);
     assert_eq!(h.app.tab().editor.text(), WHOLE);
-    assert_eq!(transient(&h), Some(datarig_core::i18n::Msg::MonitorOpened { database: "shop".into() }));
+    assert_eq!(transient(&h), Some(datarig_i18n::Msg::MonitorOpened { database: "shop".into() }));
 }
 
 #[test]
@@ -1161,11 +1161,7 @@ fn a_statement_not_read_whole_keeps_its_start_and_says_why() {
         assert_eq!(clip.last().as_deref(), Some(START), "{note}");
         h.keys("o");
         assert_eq!(h.app.tab().editor.text(), START, "{note}");
-        assert_eq!(
-            transient(&h),
-            Some(datarig_core::i18n::Msg::MonitorOpenedCut { database: "shop".into() }),
-            "{note}"
-        );
+        assert_eq!(transient(&h), Some(datarig_i18n::Msg::MonitorOpenedCut { database: "shop".into() }), "{note}");
     }
 }
 
@@ -1337,7 +1333,7 @@ fn a_statement_the_server_may_have_cut_says_so_and_opens_with_the_cut_note() {
     assert!(screen.contains("The server may have cut this statement where it keeps it"), "{screen}");
     h.keys("o");
     assert_eq!(h.app.tab().editor.text(), WHOLE);
-    assert_eq!(transient(&h), Some(datarig_core::i18n::Msg::MonitorOpenedCut { database: "shop".into() }));
+    assert_eq!(transient(&h), Some(datarig_i18n::Msg::MonitorOpenedCut { database: "shop".into() }));
 }
 
 // Locks.
@@ -2060,9 +2056,9 @@ fn the_server_in_full_opens_with_i_over_any_view_and_closes_with_i_or_esc() {
 // ── cancelling and ending sessions ───────────────────────────────────────────────────────
 
 use datarig_core::driver::OwnSession;
-use datarig_core::i18n::Label;
 use datarig_core::monitor::action::{Denied, NotSent, Stale, Via};
 use datarig_core::monitor::{ActionKind, ActionOutcome, ActionTarget, FollowUp};
+use datarig_i18n::Label;
 use datarig_tui::app::overlay::OverlayKind;
 
 /// The Monitor tab of `h` (connected, with a driver that monitors) opened with `format`, its
@@ -2785,7 +2781,7 @@ fn a_mysql_dialog_never_names_your_own_tab_as_the_list_shows_no_application() {
     let details = &h.app.overlays.confirm().unwrap().details;
     assert!(details.contains(&Label::MonitorActWarnHalfDone.into()), "{details:?}");
     assert!(
-        !details.contains(&datarig_core::i18n::Msg::MonitorActOwnTabCancel { tab: "console 1".into() }),
+        !details.contains(&datarig_i18n::Msg::MonitorActOwnTabCancel { tab: "console 1".into() }),
         "no own-tab line: {details:?}"
     );
     h.keys("y");

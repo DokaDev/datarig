@@ -9,10 +9,10 @@
 
 use datarig_core::config::Config;
 use datarig_core::driver::PagingMode;
-use datarig_core::i18n::{Lang, Msg};
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_core::secret::{MemoryStore, SecretStore};
 use datarig_core::sql::dialect::{Dialect, Language};
+use datarig_i18n::{Lang, Msg};
 use datarig_tui::app::{App, AppEvent, Focus, Paging, Results, Startup};
 use mysql_async::prelude::Queryable;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};

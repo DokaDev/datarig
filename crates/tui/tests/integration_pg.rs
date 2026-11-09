@@ -15,9 +15,9 @@ mod pg_clean;
 
 use datarig_core::config::Config;
 use datarig_core::driver::{PagingMode, TxRule};
-use datarig_core::i18n::Lang;
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_core::secret::{MemoryStore, SecretStore};
+use datarig_i18n::Lang;
 use datarig_tui::app::explorer::RowKind;
 use datarig_tui::app::{App, AppEvent, Focus, Startup};
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
@@ -1317,7 +1317,7 @@ async fn run_and_wait(app: &mut App, rx: &mut UnboundedReceiver<AppEvent>, sql: 
 /// stays.
 #[tokio::test(flavor = "multi_thread")]
 async fn explain_analyze_delete_asks_and_leaves_the_rows() {
-    use datarig_core::i18n::Label;
+    use datarig_i18n::Label;
     let Some(url) = pg_url("explain_analyze_delete_asks_and_leaves_the_rows") else { return };
     let tag = format!("safe{}", std::process::id());
     let table = format!("public.it_safe_{tag}");
@@ -1354,7 +1354,7 @@ async fn explain_analyze_delete_asks_and_leaves_the_rows() {
 /// and keeps nothing: neither the rows nor what the trigger wrote. A plain EXPLAIN only plans.
 #[tokio::test(flavor = "multi_thread")]
 async fn explain_analyze_of_an_insert_shows_its_plan_and_is_rolled_back() {
-    use datarig_core::i18n::Label;
+    use datarig_i18n::Label;
     use datarig_tui::app::action::Action;
     use datarig_tui::app::tabs::ResultView;
     let Some(url) = pg_url("explain_analyze_of_an_insert_shows_its_plan_and_is_rolled_back") else { return };
@@ -1519,7 +1519,7 @@ async fn a_read_only_policy_holds_in_the_app_and_on_the_server() {
     let (mut app, mut rx) = safety_app(&url, &tag, Some("it-ro")).await;
     app.run(vec![format!("DELETE FROM {table} WHERE x = 1")]);
     assert!(app.tab().exec.running.is_none() && app.tab().exec.session.is_none(), "nothing was sent");
-    assert!(matches!(app.status.as_ref().map(|n| &n.msg), Some(datarig_core::i18n::Msg::SafetyReadOnlyBlocked { .. })));
+    assert!(matches!(app.status.as_ref().map(|n| &n.msg), Some(datarig_i18n::Msg::SafetyReadOnlyBlocked { .. })));
     run_and_wait(&mut app, &mut rx, &format!("SELECT {func}()"), None).await;
     let error = match &app.tab().results {
         datarig_tui::app::Results::Error(e) => e.clone(),
@@ -1570,7 +1570,7 @@ async fn adversarial_probes_on_a_real_server() {
     run_and_wait(&mut app, &mut rx, "SELECT 1", None).await;
     app.run(vec!["SELECT set_config('default_transaction_read_only','off',false)".into()]);
     assert!(app.tab().exec.running.is_none(), "refused before it is sent");
-    assert!(matches!(app.status.as_ref().map(|n| &n.msg), Some(datarig_core::i18n::Msg::SafetyReadOnlyBlocked { .. })));
+    assert!(matches!(app.status.as_ref().map(|n| &n.msg), Some(datarig_i18n::Msg::SafetyReadOnlyBlocked { .. })));
     // What the app cannot see: a function turns the default off.
     run_and_wait(&mut app, &mut rx, &format!("SELECT {off}()"), None).await;
     run_and_wait(&mut app, &mut rx, "SHOW default_transaction_read_only", None).await;
@@ -2091,7 +2091,7 @@ async fn manual_commit_keeps_a_write_to_itself_until_it_is_committed() {
     app.dispatch(Action::TxCommit);
     pump(&mut app, &mut rx, 10, |a| !a.tab_busy(a.tab().id) && !a.tab().exec.user_tx()).await;
     assert!(
-        matches!(app.status.as_ref().map(|n| &n.msg), Some(datarig_core::i18n::Msg::TxCommitted { count: 1, .. })),
+        matches!(app.status.as_ref().map(|n| &n.msg), Some(datarig_i18n::Msg::TxCommitted { count: 1, .. })),
         "{:?}",
         app.status
     );
@@ -2130,8 +2130,8 @@ fn pooler_url(test: &str) -> Option<String> {
 /// connection, pooled ones included.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_idle_manual_transaction_is_rolled_back_and_its_session_stays() {
-    use datarig_core::i18n::Msg;
     use datarig_core::policy::{CommitRule, Policy};
+    use datarig_i18n::Msg;
     let test = "an_idle_manual_transaction_is_rolled_back_and_its_session_stays";
     let Some(url) = pg_url(test) else { return };
     let pw = datarig_core::profile::dsn::parse(&url).unwrap().password.unwrap_or_default();

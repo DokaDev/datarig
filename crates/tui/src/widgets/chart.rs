@@ -15,7 +15,7 @@ use crate::text::{Align, clip, fit, sanitize_cell, width};
 use crate::theme::{self, Theme};
 use crate::widgets::put;
 use datarig_core::chart::{Axis, Kind, Model, TimeKind, Unsuitable, scale};
-use datarig_core::i18n::{I18n, Label, Localized, Msg};
+use datarig_i18n::{I18n, Label, Localized, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};

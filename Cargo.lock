@@ -979,6 +979,7 @@ dependencies = [
  "datarig-core",
  "datarig-driver-mysql",
  "datarig-driver-postgres",
+ "datarig-i18n",
  "datarig-ssh",
  "datarig-tui",
  "futures",
@@ -1045,6 +1046,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "datarig-i18n"
+version = "0.40.1"
+dependencies = [
+ "toml",
+]
+
+[[package]]
 name = "datarig-ssh"
 version = "0.40.1"
 dependencies = [
@@ -1085,6 +1093,7 @@ dependencies = [
  "datarig-core",
  "datarig-driver-mysql",
  "datarig-driver-postgres",
+ "datarig-i18n",
  "datarig-ssh",
  "datarig-update",
  "futures",

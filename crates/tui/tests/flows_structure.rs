@@ -10,7 +10,7 @@ use common::*;
 use datarig_core::config::IconsSetting;
 use datarig_core::driver::structure::{RelationKind, TableStructure};
 use datarig_core::driver::{DbCommand, DbError, DbEvent, SchemaObjects, SessionRole};
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use ratatui::crossterm::event::KeyCode;
 use std::sync::atomic::Ordering;
 
@@ -382,7 +382,7 @@ fn a_structure_that_cannot_be_read_says_why() {
 /// on its own line, is whole there.
 #[test]
 fn a_long_line_keeps_its_end_in_the_status_bar() {
-    use datarig_core::i18n::Label;
+    use datarig_i18n::Label;
     for lang in [Lang::En, Lang::Ko] {
         let mut h = Harness::connected(lang);
         // An environment without a badge: its name follows the connection's.
@@ -431,7 +431,7 @@ fn a_long_line_keeps_its_end_in_the_status_bar() {
 /// name keeps its start.
 #[test]
 fn a_long_connection_name_leaves_the_message_whole() {
-    use datarig_core::i18n::Label;
+    use datarig_i18n::Label;
     for lang in [Lang::En, Lang::Ko] {
         let mut h = Harness::connected(lang);
         h.app.profiles[0].name = "analytics-replica-eu-01".into();
@@ -835,7 +835,7 @@ fn r_reads_the_estimates_again() {
 /// Korean words the rows (from its own catalog), not the English ones.
 #[test]
 fn estimates_are_worded_in_the_ui_language() {
-    use datarig_core::i18n::{I18n, Msg};
+    use datarig_i18n::{I18n, Msg};
     let mut h = shop_with_estimates(Lang::Ko);
     let [ko, en] =
         [Lang::Ko, Lang::En].map(|l| I18n::new(l).msg(&Msg::TreeStatsRows { rows: "5k".into() }).to_string());

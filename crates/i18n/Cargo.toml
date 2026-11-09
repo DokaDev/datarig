@@ -1,0 +1,26 @@
+[package]
+name = "datarig-i18n"
+description = "The UI text of datarig: the locale catalogs and their typed message API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish.workspace = true
+
+# No dependencies at run time: the catalogs (`locales/`, part of this package) are checked and
+# turned into code by build.rs.
+[dependencies]
+
+[build-dependencies]
+toml.workspace = true
+
+[dev-dependencies]
+toml.workspace = true
+
+[lints]
+workspace = true

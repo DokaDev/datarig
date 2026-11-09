@@ -7,7 +7,7 @@ mod common;
 use common::*;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, Outcome};
 use datarig_core::driver::{PagingMode, TxRule};
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::Results;
 use datarig_tui::app::runlog::StatementOutcome::*;
 use datarig_tui::app::tabs::ResultView;
@@ -183,7 +183,7 @@ fn the_rows_of_a_statement_before_the_last_are_kept_as_its_own_result() {
 fn an_aborted_transaction_says_rollback_is_required() {
     for (lang, open, aborted) in [
         (Lang::En, "TX open", "TX aborted: ROLLBACK required"),
-        (Lang::Ko, ko(datarig_core::i18n::Label::StatusTxOpen), ko(datarig_core::i18n::Label::StatusTxAborted)),
+        (Lang::Ko, ko(datarig_i18n::Label::StatusTxOpen), ko(datarig_i18n::Label::StatusTxAborted)),
     ] {
         let mut h = Harness::connected(lang);
         h.db(DbEvent::Block(true));
@@ -296,14 +296,14 @@ fn every_row_result_of_a_run_has_a_tab_and_messages_list_the_run() {
     // Korean at 80 columns, from the catalog: every line whole, both result tabs, the Chart and
     // Messages with the same short labels as in English, the shown one in brackets.
     let mut ko = run_two_results(Lang::Ko).0;
-    let i18n = datarig_core::i18n::I18n::new(Lang::Ko);
-    let chart = i18n.label(datarig_core::i18n::Label::ResultsTabChart).to_string();
-    let messages = i18n.label(datarig_core::i18n::Label::ResultsTabMessagesShort).to_string();
+    let i18n = datarig_i18n::I18n::new(Lang::Ko);
+    let chart = i18n.label(datarig_i18n::Label::ResultsTabChart).to_string();
+    let messages = i18n.label(datarig_i18n::Label::ResultsTabMessagesShort).to_string();
     let screen = ko.screen(80, 24);
     assert!(screen.lines().all(|l| datarig_tui::text::width(l) == 80), "{screen}");
     let strip = screen.lines().nth(ko.app.layout.strip.y as usize).unwrap().to_string();
     assert!(strip.contains(&format!("1  [3]  {chart}  {messages}")), "{strip}");
-    let title = i18n.msg(&datarig_core::i18n::Msg::PaneResultsRows { count: 7 }).to_string();
+    let title = i18n.msg(&datarig_i18n::Msg::PaneResultsRows { count: 7 }).to_string();
     assert!(screen.lines().nth(ko.app.layout.results.y as usize).unwrap().contains(&title), "{screen}");
     assert!(screen.contains("1 │  100") && screen.contains("7 │  106"), "{screen}");
 }
@@ -418,7 +418,7 @@ fn run_selects(lang: Lang, n: usize) -> Harness {
 /// the shown one; a click on a tab still shows it.
 #[test]
 fn a_narrow_strip_shortens_the_labels_and_keeps_the_shown_tab() {
-    use datarig_core::i18n::{I18n, Label};
+    use datarig_i18n::{I18n, Label};
     for lang in [Lang::En, Lang::Ko] {
         let i18n = I18n::new(lang);
         let chart = i18n.label(Label::ResultsTabChart).to_string();

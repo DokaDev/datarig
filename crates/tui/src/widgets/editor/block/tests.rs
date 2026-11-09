@@ -1,7 +1,7 @@
 use super::super::registers::tests::{RegCase, check};
 use super::super::tests::{at, ctrl, typ};
 use super::*;
-use datarig_core::i18n::Label;
+use datarig_i18n::Label;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 

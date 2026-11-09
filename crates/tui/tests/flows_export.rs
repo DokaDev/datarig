@@ -10,8 +10,8 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{ColumnMeta, DbCommand, DbError, DbEvent, ExportBatch, ExportGuard, ExportRead, ExportSink};
-use datarig_core::i18n::Lang;
 use datarig_core::policy::Policy;
+use datarig_i18n::Lang;
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
 use datarig_tui::app::tabs::TableRef;
 use datarig_tui::widgets::editor::Editor;
@@ -950,8 +950,8 @@ fn csv_options_are_refused_for_the_other_formats() {
 #[test]
 fn an_export_leaves_the_open_manual_transaction_as_it_was() {
     use datarig_core::driver::{Outcome, ServerEnd};
-    use datarig_core::i18n::Msg;
     use datarig_core::policy::CommitRule;
+    use datarig_i18n::Msg;
     let dir = scratch("manual-tx");
     let mut cfg = test_db_config();
     cfg.connections[0].policy = Some("stg".into());

@@ -25,7 +25,7 @@ pub fn name_taken(envs: &[Environment], id: EnvironmentId, original: Option<&str
 
 /// The rules of `p` in a few words: `read-only · asks before every write`, … (`standard rules`
 /// when it has none of them).
-pub fn rules_hint(i18n: &datarig_core::i18n::I18n, p: &Policy) -> String {
+pub fn rules_hint(i18n: &datarig_i18n::I18n, p: &Policy) -> String {
     rules_tones(i18n, p, false).into_iter().map(|(t, _)| t).collect()
 }
 
@@ -59,7 +59,7 @@ impl RuleTone {
 /// explorer's rows, the environment list, the profile form): read-only (after the lock with
 /// `icons` on), asking before every write, committing by hand (moot when read-only), holding
 /// locks while paging, the standard rules and the separators.
-pub fn rules_tones(i18n: &datarig_core::i18n::I18n, p: &Policy, icons: bool) -> Vec<(String, RuleTone)> {
+pub fn rules_tones(i18n: &datarig_i18n::I18n, p: &Policy, icons: bool) -> Vec<(String, RuleTone)> {
     let mut rules: Vec<(String, RuleTone)> = Vec::new();
     if p.read_only {
         let lock = if icons { format!("{} ", crate::icons::READ_ONLY) } else { String::new() };
@@ -89,7 +89,7 @@ pub fn rules_tones(i18n: &datarig_core::i18n::I18n, p: &Policy, icons: bool) -> 
 }
 
 /// [`rules_tones`] in the current theme's styles.
-pub fn rules_parts(i18n: &datarig_core::i18n::I18n, p: &Policy, icons: bool) -> Vec<(String, ratatui::style::Style)> {
+pub fn rules_parts(i18n: &datarig_i18n::I18n, p: &Policy, icons: bool) -> Vec<(String, ratatui::style::Style)> {
     rules_tones(i18n, p, icons).into_iter().map(|(t, tone)| (t, tone.style())).collect()
 }
 

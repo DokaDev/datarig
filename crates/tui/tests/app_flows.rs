@@ -8,9 +8,9 @@ mod common;
 use common::*;
 use datarig_core::config::{self, Config};
 use datarig_core::driver::{DbCommand, DbEvent, PingError, PingInfo};
-use datarig_core::i18n::Lang;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::secret::{MemoryStore, SecretStore};
+use datarig_i18n::Lang;
 use datarig_tui::app::action::LangSetting;
 use datarig_tui::app::{AppEvent, CommandItem, EventTarget, NodeState, Startup, TestState};
 use datarig_tui::widgets::editor::Mode;
@@ -260,7 +260,7 @@ fn set_command_changes_and_saves_settings() {
     let before = std::fs::read_to_string(&path).unwrap();
     h.command("set language=fr");
     let screen = h.screen(80, 24);
-    let invalid = datarig_core::i18n::Msg::CommandsErrorSetValue {
+    let invalid = datarig_i18n::Msg::CommandsErrorSetValue {
         key: "language".into(),
         value: "fr".into(),
         values: "en|ko|auto".into(),
@@ -273,14 +273,14 @@ fn set_command_changes_and_saves_settings() {
     let keys = "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|\
                 editor.cursor_shape|editor.clipboard|theme|editor.format_keyword_case|editor.format_indent|editor.auto_pairs|editor.soft_tab_backspace|editor.run_hints|\
                 secrets.macos_keychain_access|explorer.size_heat|ui.yank_flash|ui.changes_view|edit.paste_null|ui.tips|ui.background|idle_disconnect|lock_wait|editor.completion_delay_ms|updates.check|updates.whats_new|copy_format|monitor.interval";
-    let unknown = ko_msg(&datarig_core::i18n::Msg::CommandsErrorSetKey { key: "colour".into(), keys: keys.into() });
+    let unknown = ko_msg(&datarig_i18n::Msg::CommandsErrorSetKey { key: "colour".into(), keys: keys.into() });
     assert_eq!(error.as_deref(), Some(unknown.as_str()));
     // The error wraps in the popup instead of being cut.
     let head = unknown.split(" (").next().unwrap();
     assert!(h.screen(80, 24).contains(head), "{head:?}");
     h.key(KeyCode::Esc);
     h.command("set =ko");
-    assert!(h.screen(80, 24).contains(ko(datarig_core::i18n::Label::CommandsErrorSetUsage)));
+    assert!(h.screen(80, 24).contains(ko(datarig_i18n::Label::CommandsErrorSetUsage)));
     h.key(KeyCode::Esc);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
     assert_eq!(h.app.i18n.lang, Lang::Ko);
@@ -335,9 +335,7 @@ fn unknown_command_shows_an_error_and_keeps_the_list() {
     // Korean UI: the error is Korean.
     let mut h = Harness::connected(Lang::Ko);
     h.command("frobz");
-    assert!(
-        h.screen(80, 24).contains(&ko_msg(&datarig_core::i18n::Msg::CommandsErrorUnknown { name: "frobz".into() }))
-    );
+    assert!(h.screen(80, 24).contains(&ko_msg(&datarig_i18n::Msg::CommandsErrorUnknown { name: "frobz".into() })));
 }
 
 #[test]
@@ -861,7 +859,7 @@ fn add_edit_duplicate_delete_profiles_with_secret_store() {
     h.explore("local-pg");
     h.keys("d");
     let details = h.app.overlays.confirm().map(|c| c.details.clone()).unwrap_or_default();
-    assert!(details.contains(&datarig_core::i18n::Msg::ExplorerDeleteTabs { count: 1 }), "{details:?}");
+    assert!(details.contains(&datarig_i18n::Msg::ExplorerDeleteTabs { count: 1 }), "{details:?}");
     let screen = h.screen(160, 45);
     assert!(screen.contains("Its open tab will close."), "{screen}");
     h.keys("n");
@@ -942,7 +940,7 @@ fn launch(cfg: &Config, startup: Startup) -> Harness {
 /// two lines.
 #[test]
 fn a_config_error_on_the_welcome_panel_wraps_at_words() {
-    use datarig_core::i18n::Msg;
+    use datarig_i18n::Msg;
     use datarig_tui::app::{Level, Notice};
     let mut h = launch(&sample_config(None), Startup::Normal);
     let error = "connections.analytics: unknown field olden_name, expected one of tabsize, \
@@ -1283,12 +1281,12 @@ fn keychain_unavailable_at_launch_keeps_file_and_prompts() {
     assert!(text.contains("password = \"datarig\""), "{text}");
     // A new profile starts on `prompt` (`secrets.default_source = auto`), and the form says
     // why the keychain cannot be picked.
-    h.command(ko(datarig_core::i18n::Label::FormTitleNew));
+    h.command(ko(datarig_i18n::Label::FormTitleNew));
     assert_eq!(h.form().source, datarig_core::secret::SourceKind::Prompt);
     let screen = h.screen(160, 45);
-    assert!(screen.contains(ko(datarig_core::i18n::Label::FormPromptHint)), "{screen}");
-    let error = ko(datarig_core::i18n::Label::FaultKeychainNoStore).into();
-    let unavailable = ko_msg(&datarig_core::i18n::Msg::FormSourceKeychainUnavailable { error });
+    assert!(screen.contains(ko(datarig_i18n::Label::FormPromptHint)), "{screen}");
+    let error = ko(datarig_i18n::Label::FaultKeychainNoStore).into();
+    let unavailable = ko_msg(&datarig_i18n::Msg::FormSourceKeychainUnavailable { error });
     let head = unavailable.split(". ").next().unwrap();
     assert!(screen.contains(head), "{head:?} in {screen}");
     h.key(KeyCode::Esc);
@@ -1302,10 +1300,10 @@ fn keychain_unavailable_at_launch_keeps_file_and_prompts() {
     h.key(KeyCode::Enter);
     h.db(DbEvent::ConnectFailed { error: "password missing".into(), auth: true });
     let screen = h.screen(80, 24);
-    let no_keychain = ko(datarig_core::i18n::Label::PromptPasswordNoKeychain);
+    let no_keychain = ko(datarig_i18n::Label::PromptPasswordNoKeychain);
     let head = no_keychain.split(": ").next().unwrap();
     assert!(screen.contains(head) && !screen.contains("[x]"), "{screen}");
-    assert!(screen.contains(ko(datarig_core::i18n::Label::PromptPasswordKeysSession)), "{screen}");
+    assert!(screen.contains(ko(datarig_i18n::Label::PromptPasswordKeysSession)), "{screen}");
     cleanup(&path);
 }
 
@@ -1360,7 +1358,7 @@ async fn launch_moves_passwords_in_the_background_behind_a_notice() {
     assert_eq!(store.inner.get(&h.account("local-pg")).unwrap().as_deref(), Some("datarig"));
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(!text.contains("password") && text.contains("language = \"ko\" # mine"), "{text}");
-    assert!(h.status(80, 24).contains(&ko_msg(&datarig_core::i18n::Msg::SecretMigrated { count: 1 })));
+    assert!(h.status(80, 24).contains(&ko_msg(&datarig_i18n::Msg::SecretMigrated { count: 1 })));
     // Then the deferred connection starts, with the password from the keychain.
     assert_eq!(h.app.conns.attempt().map(|c| (c.name.as_str(), c.had_password)), Some(("local-pg", true)));
     cleanup(&path);
@@ -1507,7 +1505,7 @@ fn keychain_unavailable_warning_is_shown_once_per_machine() {
         app.set_secret_store(Arc::new(MemoryStore::unavailable("no secret service")) as Arc<dyn SecretStore>);
         app.set_paths(datarig_core::paths::Paths { data: None, state: Some(state.clone()) });
         app.launch(Startup::Normal);
-        let warned = app.notices.iter().any(|n| matches!(n.msg, datarig_core::i18n::Msg::SecretMigrateFailed { .. }));
+        let warned = app.notices.iter().any(|n| matches!(n.msg, datarig_i18n::Msg::SecretMigrateFailed { .. }));
         assert_eq!(warned, run == 0, "run {run}");
         assert!(std::fs::read_to_string(&path).unwrap().contains("password = \"pw\""), "kept in the file");
         cleanup(&path);
@@ -1663,8 +1661,8 @@ fn messages_name_the_remapped_keys() {
     h.db(DbEvent::Failed { id: 1, error: "canceling statement due to user request".into(), cancelled: true });
     // The busy notice names the cancel key (it quits there).
     h.app.overlays.push(datarig_tui::app::overlay::Overlay::Busy(datarig_tui::app::overlay::Busy {
-        title: datarig_core::i18n::Label::MigrateTitle,
-        text: datarig_core::i18n::Label::MigrateRunning,
+        title: datarig_i18n::Label::MigrateTitle,
+        text: datarig_i18n::Label::MigrateRunning,
     }));
     let screen = h.screen(160, 45);
     assert!(screen.contains("q/F8 quit"), "{screen}");
@@ -1681,17 +1679,11 @@ fn a_bad_key_in_the_key_map_is_reported_in_the_ui_language() {
     let mut h = Harness::launched(&cfg, Lang::Ko, Arc::new(MemoryStore::new()), Startup::Normal);
     let screen = h.screen(160, 45);
     let (context, part) = (|| "explorer".to_string(), |k: &str| k.to_string());
-    let unknown = datarig_core::i18n::Msg::KeymapBadKeyUnknown {
-        context: context(),
-        key: part("hyper+x"),
-        part: part("hyper+x"),
-    };
+    let unknown =
+        datarig_i18n::Msg::KeymapBadKeyUnknown { context: context(), key: part("hyper+x"), part: part("hyper+x") };
     assert!(screen.contains(&ko_msg(&unknown)), "{screen}");
-    let shifted = datarig_core::i18n::Msg::KeymapBadKeyShifted {
-        context: context(),
-        key: part("shift+1"),
-        part: part("shift+1"),
-    };
+    let shifted =
+        datarig_i18n::Msg::KeymapBadKeyShifted { context: context(), key: part("shift+1"), part: part("shift+1") };
     assert!(screen.contains(&ko_msg(&shifted)), "{screen}");
     assert!(!screen.contains("unknown key") && !screen.contains("as the character"), "no English inside: {screen}");
 }
@@ -1949,7 +1941,7 @@ fn quitting_with_an_open_transaction_asks_and_rolls_back() {
     h.db(DbEvent::TxOpen(true));
     h.ctrl('q');
     let screen = h.screen(80, 24);
-    let words: Vec<&str> = ko(datarig_core::i18n::Label::QuitTx).split_whitespace().collect();
+    let words: Vec<&str> = ko(datarig_i18n::Label::QuitTx).split_whitespace().collect();
     assert!(words.iter().take(2).all(|w| screen.contains(w)), "{screen}");
     h.key(KeyCode::Enter);
     assert!(!h.app.quit && h.app.tab().exec.tx_open, "Enter keeps the transaction");

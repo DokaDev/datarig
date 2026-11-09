@@ -7,7 +7,7 @@ mod common;
 use common::*;
 use datarig_core::driver::{ColumnMeta, DbCommand, DbEvent};
 use datarig_core::edit::Value;
-use datarig_core::i18n::{Label, Lang, Msg};
+use datarig_i18n::{Label, Lang, Msg};
 use datarig_tui::app::edit::{EditState, RowAt};
 use datarig_tui::app::{Focus, Results};
 use datarig_tui::keymap::Ctx;

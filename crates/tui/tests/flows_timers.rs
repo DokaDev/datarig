@@ -6,8 +6,8 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{DbEvent, SessionRole};
-use datarig_core::i18n::Lang;
 use datarig_core::paths::Paths;
+use datarig_i18n::Lang;
 use datarig_tui::app::{AUTOSAVE, AUTOSAVE_LARGE, AppEvent, CANCEL_GRACE, EventTarget, FINE_TICK, Paging, Results};
 use datarig_tui::widgets::editor::Editor;
 use ratatui::crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};

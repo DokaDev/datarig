@@ -8,9 +8,9 @@ mod common;
 
 use common::*;
 use datarig_core::config::Config;
-use datarig_core::i18n::{Label, Lang};
 use datarig_core::paths::Paths;
 use datarig_core::secret::{MemoryStore, SecretStore};
+use datarig_i18n::{Label, Lang};
 use datarig_tui::app::pane::{EXPLORER_MIN, explorer_max};
 use datarig_tui::app::{Focus, Startup};
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};

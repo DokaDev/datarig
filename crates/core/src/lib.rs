@@ -24,9 +24,9 @@
 //! * [`transport`] — how a driver reaches a server through a tunnel (a [`transport::Dialer`]).
 //! * [`theme`] — user theme files (`themes/<name>.toml`), read and checked.
 //! * [`fault`] — failures as data (a kind the UI words, a detail for the error log).
-//! * [`i18n`] — the embedded en/ko message catalogs.
 //!
-//! This crate must never depend on a UI crate (ratatui/crossterm) or on a concrete driver.
+//! This crate must never depend on a UI crate (ratatui/crossterm), on a concrete driver or on
+//! the UI text (`datarig-i18n`): it reports what happened as data and the UI words it.
 
 pub mod chart;
 pub mod config;
@@ -35,7 +35,6 @@ pub mod edit;
 pub mod export;
 pub mod fault;
 pub mod fsutil;
-pub mod i18n;
 pub mod migrate;
 pub mod monitor;
 pub mod panics;

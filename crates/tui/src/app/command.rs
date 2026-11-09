@@ -21,8 +21,8 @@ use datarig_core::config::{
 use datarig_core::config::{
     ChangesView, CompletionDelay, MonitorInterval, PasteNull, UiBackground, UpdateCheck, WhatsNewSetting,
 };
-use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
+use datarig_i18n::Label;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

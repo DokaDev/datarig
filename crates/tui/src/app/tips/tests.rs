@@ -1,10 +1,10 @@
 use super::*;
 use crate::app::command::COMMANDS;
 use crate::keymap::{Bound, Keymap, Target, parse_keys};
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 
-const EN: &str = include_str!("../../../../../locales/en.toml");
-const KO: &str = include_str!("../../../../../locales/ko.toml");
+const EN: &str = include_str!("../../../../i18n/locales/en.toml");
+const KO: &str = include_str!("../../../../i18n/locales/ko.toml");
 
 /// The `"key" = "text"` entries of a catalog whose key starts with one of `prefixes`.
 fn entries<'a>(catalog: &'a str, prefixes: &[&str]) -> Vec<(&'a str, &'a str)> {

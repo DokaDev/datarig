@@ -12,7 +12,7 @@ use super::preview::{PreviewLine, VALUE_W, literals};
 use super::*;
 use datarig_core::driver::ReadIn;
 use datarig_core::edit::{Choice, Facts, Origin, Plan, PlanError, RowEdit};
-use datarig_core::i18n::{Lang, Localized};
+use datarig_i18n::{Lang, Localized};
 use std::cell::{Cell as Count, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -289,7 +289,7 @@ pub(super) fn row_pointer(
 
 /// [`row_pointer`] in words, `?` for a row it does not find.
 pub(super) fn row_text(
-    i18n: &datarig_core::i18n::I18n,
+    i18n: &datarig_i18n::I18n,
     target: Option<&EditTarget>,
     batch: &EditBatch,
     names: &[String],
@@ -299,7 +299,7 @@ pub(super) fn row_text(
 }
 
 /// Pointer `p` in words (`id=5`, `row 31`, `new 1`).
-pub fn pointer_text(i18n: &datarig_core::i18n::I18n, p: &Pointer) -> String {
+pub fn pointer_text(i18n: &datarig_i18n::I18n, p: &Pointer) -> String {
     match p {
         Pointer::Key(k) => k.clone(),
         Pointer::Row(n) => i18n.msg(&Msg::ChangesRow { n: n.to_string() }).to_string(),

@@ -34,8 +34,8 @@ use datarig_core::edit::Value;
 use datarig_core::edit::paste::MAX_ROWS as MAX_PASTE_ROWS;
 use datarig_core::export::{self, Kind, Target};
 use datarig_core::fault::{ErrorLog, Fault};
-use datarig_core::i18n::fmt_count;
 use datarig_core::sql::dialect::Dialect;
+use datarig_i18n::fmt_count;
 use std::ops::Range;
 use std::sync::Arc;
 

@@ -9,9 +9,9 @@ mod common;
 use common::*;
 use datarig_core::config::Config;
 use datarig_core::driver::{DbCommand, DbEvent};
-use datarig_core::i18n::Lang;
 use datarig_core::paths::Paths;
 use datarig_core::secret::{MemoryStore, SecretStore};
+use datarig_i18n::Lang;
 use datarig_tui::app::tabs::PaneLayout;
 use datarig_tui::app::{Focus, Startup};
 use ratatui::crossterm::event::KeyCode;
@@ -173,22 +173,22 @@ fn a_small_terminal_keeps_both_panes_usable() {
     assert!(h.app.layout.results.height >= datarig_tui::app::pane::MIN_RESULTS_ROWS);
     // What the smallest pane shows, in the catalog's Korean: every line whole, the results
     // title, the result tabs, the column and the first rows.
-    let i18n = datarig_core::i18n::I18n::new(Lang::Ko);
+    let i18n = datarig_i18n::I18n::new(Lang::Ko);
     let screen = h.screen(80, 24);
     let lines: Vec<&str> = screen.lines().collect();
     assert!(lines.iter().all(|l| datarig_tui::text::width(l) == 80), "{screen}");
-    let title = i18n.msg(&datarig_core::i18n::Msg::PaneResultsRows { count: 30 }).to_string();
+    let title = i18n.msg(&datarig_i18n::Msg::PaneResultsRows { count: 30 }).to_string();
     let top = lines[h.app.layout.results.y as usize];
     assert!(top.contains(&title), "{top}");
     let grid =
         &lines[h.app.layout.results.y as usize + 1..(h.app.layout.results.y + h.app.layout.results.height) as usize];
     assert!(grid.iter().any(|l| l.contains("│ id ")), "{screen}");
-    let tabs = i18n.label(datarig_core::i18n::Label::ResultsTabChart).to_string();
+    let tabs = i18n.label(datarig_i18n::Label::ResultsTabChart).to_string();
     assert!(grid.iter().any(|l| l.contains(&tabs)), "{screen}");
     for row in ["1 │    0", "2 │    1"] {
         assert!(grid.iter().any(|l| l.contains(row)), "{row}: {screen}");
     }
-    let console = i18n.msg(&datarig_core::i18n::Msg::TabConsole { n: "1".into() }).to_string();
+    let console = i18n.msg(&datarig_i18n::Msg::TabConsole { n: "1".into() }).to_string();
     assert!(lines[0].contains(&format!("1 {console} ×")), "{}", lines[0]);
 }
 
@@ -366,9 +366,9 @@ fn tabs_are_named_by_their_document_with_the_connection_attached() {
     assert!(bar.contains("local-pg / datarig  127.0.0.1:55432 ") && !bar.contains(" · "), "{bar}");
     assert!(bar.contains("Space c s switch connection"), "{bar}");
     let mut ko = Harness::connected(Lang::Ko);
-    let i18n = datarig_core::i18n::I18n::new(Lang::Ko);
-    let console = i18n.msg(&datarig_core::i18n::Msg::TabConsole { n: "1".into() }).to_string();
-    let switch = i18n.msg(&datarig_core::i18n::Msg::ConnbarSwitch { key: "Space c s".into() }).to_string();
+    let i18n = datarig_i18n::I18n::new(Lang::Ko);
+    let console = i18n.msg(&datarig_i18n::Msg::TabConsole { n: "1".into() }).to_string();
+    let switch = i18n.msg(&datarig_i18n::Msg::ConnbarSwitch { key: "Space c s".into() }).to_string();
     let wide = ko.screen(160, 45);
     assert!(wide.lines().next().unwrap().contains(&format!("1 {console} ×")), "{wide}");
     assert!(wide.lines().nth(2).unwrap().contains(&switch), "{wide}");
@@ -502,7 +502,7 @@ fn a_table_tab_says_why_it_cannot_be_saved_or_switched() {
     assert!(dimmed.iter().all(|(_, why)| why == "table tab"), "{dimmed:?}");
     assert!(!h.menu_labels().iter().any(|l| l.starts_with("Save query")), "not runnable");
     let save = h.app.menu_dimmed_notice("Save query").expect("dimmed");
-    assert_eq!(save.msg, datarig_core::i18n::Label::TableTabNoSave.into());
+    assert_eq!(save.msg, datarig_i18n::Label::TableTabNoSave.into());
     assert!(h.sent().is_empty());
 }
 
@@ -517,8 +517,8 @@ fn a_table_tab_says_why_it_cannot_be_saved_or_switched() {
 fn tab_titles_are_number_document_state_and_close() {
     use datarig_core::config::IconsSetting;
     for lang in [Lang::En, Lang::Ko] {
-        let i18n = datarig_core::i18n::I18n::new(lang);
-        let console = |n: &str| i18n.msg(&datarig_core::i18n::Msg::TabConsole { n: n.into() }).to_string();
+        let i18n = datarig_i18n::I18n::new(lang);
+        let console = |n: &str| i18n.msg(&datarig_i18n::Msg::TabConsole { n: n.into() }).to_string();
         let mut h = Harness::connected(lang);
         h.ctrl('t');
         open_users(&mut h);

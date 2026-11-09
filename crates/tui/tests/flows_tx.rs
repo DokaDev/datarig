@@ -7,7 +7,7 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{DbError, DbEvent, Outcome};
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::Results;
 use datarig_tui::app::tabs::ResultView;
 use datarig_tui::widgets::editor::Editor;
@@ -91,7 +91,7 @@ fn rows_read_in_the_users_transaction_say_so_until_it_commits() {
 
 #[test]
 fn a_rollback_says_so() {
-    use datarig_core::i18n::{I18n, Label};
+    use datarig_i18n::{I18n, Label};
     assert_eq!(I18n::new(Lang::En).label(Label::ResultsTxOpen), "uncommitted (in tx)");
     for lang in [Lang::En, Lang::Ko] {
         let (open, rolled) =

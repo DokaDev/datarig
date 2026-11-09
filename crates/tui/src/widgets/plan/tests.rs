@@ -181,7 +181,7 @@ fn every_view_stays_inside_its_area_at_every_small_size() {
     use datarig_core::driver::ExplainFormat::{MySqlTree, PostgresJson};
     assert!(MySqlTree.read(tree).unwrap().nodes[0].cost_derived);
     let th = crate::theme::DARK;
-    let i18n = datarig_core::i18n::I18n::new(datarig_core::i18n::Lang::En);
+    let i18n = datarig_i18n::I18n::new(datarig_i18n::Lang::En);
     for (text, format) in [(json, PostgresJson), (tree, MySqlTree)] {
         for view in PlanView::ALL {
             for detail in [false, true] {
@@ -238,7 +238,7 @@ fn boxes_keep_their_edges_with_wide_characters() {
     let mut p = PlanTab::new(parse(json).unwrap(), 0, 0, json, datarig_core::driver::ExplainFormat::PostgresJson);
     p.view = PlanView::Boxes;
     let th = crate::theme::DARK;
-    let i18n = datarig_core::i18n::I18n::new(datarig_core::i18n::Lang::En);
+    let i18n = datarig_i18n::I18n::new(datarig_i18n::Lang::En);
     let cx = Look { i18n: &i18n, th: &th, icons: true, focused: false, hover: None };
     let area = Rect { x: 0, y: 0, width: 60, height: 12 };
     let mut buf = Buffer::empty(area);
@@ -259,7 +259,7 @@ fn a_card_of_one_line_keeps_its_numbers() {
     use ratatui::buffer::Buffer;
     use ratatui::style::Style;
     let th = crate::theme::DARK;
-    let i18n = datarig_core::i18n::I18n::new(datarig_core::i18n::Lang::En);
+    let i18n = datarig_i18n::I18n::new(datarig_i18n::Lang::En);
     let cx = Look { i18n: &i18n, th: &th, icons: true, focused: true, hover: None };
     let c = summary::Card {
         title: "Worst row estimate".into(),

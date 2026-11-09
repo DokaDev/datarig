@@ -7,7 +7,7 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{DbEvent, Outcome};
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::Focus;
 use datarig_tui::app::overlay::OverlayKind;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
@@ -568,7 +568,7 @@ fn closing_another_tab_keeps_the_status_line() {
     use datarig_tui::app::{Level, Notice};
     let mut h = four_tabs();
     open_list(&mut h);
-    h.app.status = Some(Notice::new(datarig_core::i18n::Label::TabReopenNone, Level::Info));
+    h.app.status = Some(Notice::new(datarig_i18n::Label::TabReopenNone, Level::Info));
     assert_eq!(selected(&h), "console 3");
     h.ctrl('d');
     assert_eq!(h.app.tabs.len(), 3);

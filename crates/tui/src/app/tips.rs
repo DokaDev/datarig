@@ -38,8 +38,8 @@ use super::*;
 use crate::keymap::keys;
 use crate::keymap::{KeyChord, Target};
 use datarig_core::config::{ChangesView, Tips};
-use datarig_core::i18n::Lang;
 use datarig_core::usage::{self, Usage, Via};
+use datarig_i18n::Lang;
 use std::cell::RefCell;
 
 /// Runs of an action from a menu or the command line, without its key ever used, before a status

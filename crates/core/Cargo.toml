@@ -1,6 +1,6 @@
 [package]
 name = "datarig-core"
-description = "UI-independent core of datarig: driver abstraction, SQL tooling, profiles, secrets, config, i18n"
+description = "UI-independent core of datarig: driver abstraction, SQL tooling, profiles, secrets, config"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -38,10 +38,6 @@ uuid.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
-
-# build.rs: checks the locale catalogs and generates the typed message API.
-[build-dependencies]
-toml.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "net", "io-util"] }

@@ -9,10 +9,10 @@ mod common;
 
 use common::*;
 use datarig_core::config::Config;
-use datarig_core::i18n::Lang;
 use datarig_core::paths::Paths;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::secret::{MemoryStore, SecretStore};
+use datarig_i18n::Lang;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::tab_drag::{SLIDE, SLIDE_FRAME};
 use datarig_tui::app::{Focus, Startup};
@@ -730,8 +730,8 @@ fn tabmove_moves_the_active_tab_as_vim_does() {
         "Usage: :tabmove [N|+N|-N|$] (N: after tab N, 0: first; +N / -N: N places right / left; alone or $: last)"
     );
     assert_eq!(
-        error.render(&datarig_core::i18n::I18n::new(Lang::Ko)).to_string(),
-        ko(datarig_core::i18n::Label::CommandsErrorTabmoveUsage)
+        error.render(&datarig_i18n::I18n::new(Lang::Ko)).to_string(),
+        ko(datarig_i18n::Label::CommandsErrorTabmoveUsage)
     );
     h.key(KeyCode::Esc);
     assert_eq!(texts(&h), ["b", "a", "c", "d"]);

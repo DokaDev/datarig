@@ -32,7 +32,7 @@
 //!                            confirm, run confirm, transaction summary, session view, completion)
 //! ```
 
-use datarig_core::i18n::Label;
+use datarig_i18n::Label;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Ctx {

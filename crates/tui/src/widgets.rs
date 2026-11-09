@@ -37,7 +37,7 @@ pub(crate) mod whats_new;
 
 use crate::text::{clip, width};
 use crate::theme;
-use datarig_core::i18n::Localized;
+use datarig_i18n::Localized;
 use ratatui::buffer::Buffer;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};

@@ -7,7 +7,7 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{DbCommand, DbEvent, Outcome, SessionRole};
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::{AppEvent, EventTarget, Focus, SessionState};
 use datarig_tui::widgets::tabbar::State;
@@ -153,7 +153,7 @@ fn closing_a_tab_mid_query_cancels_then_closes_it() {
     h.keys("gt");
     h.ctrl('w');
     let screen = h.screen(80, 24);
-    assert!(screen.contains(ko(datarig_core::i18n::Label::TabCloseTitle)), "{screen}");
+    assert!(screen.contains(ko(datarig_i18n::Label::TabCloseTitle)), "{screen}");
     // Enter keeps the tab (its × is one click away); only `y` closes it.
     h.key(KeyCode::Enter);
     assert_eq!(h.app.tabs.len(), 2);
@@ -166,7 +166,7 @@ fn closing_a_tab_mid_query_cancels_then_closes_it() {
     let stale = EventTarget::Tab(datarig_tui::app::TabId(1));
     h.app.on_app_event(AppEvent::Db { target: stale, generation: 1, ev: DbEvent::TxOpen(true) });
     assert!(!h.app.any_tx_open());
-    assert!(h.status(160, 45).contains(ko(datarig_core::i18n::Label::TabClosedQuery)));
+    assert!(h.status(160, 45).contains(ko(datarig_i18n::Label::TabClosedQuery)));
 }
 
 #[test]

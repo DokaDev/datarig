@@ -6,10 +6,10 @@ mod common;
 use common::*;
 use datarig_core::config::Config;
 use datarig_core::driver::{DbCommand, DbEvent, SessionRole};
-use datarig_core::i18n::{Lang, Msg};
 use datarig_core::policy::Policy;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::secret::{MemoryStore, PasswordSource};
+use datarig_i18n::{Lang, Msg};
 use datarig_tui::app::{AppEvent, Focus, Startup};
 use datarig_tui::widgets::editor::Editor;
 use std::sync::Arc;
@@ -209,8 +209,8 @@ fn read_only_markers_snapshots() {
 
 // ── asking before statements that may do harm ─────────────────────
 
-use datarig_core::i18n::Label;
 use datarig_core::policy::Confirm;
+use datarig_i18n::Label;
 use datarig_tui::app::overlay::OverlayKind;
 use ratatui::crossterm::event::KeyCode;
 

@@ -5,10 +5,10 @@
 mod common;
 use common::*;
 use datarig_core::config::Config;
-use datarig_core::i18n::Lang;
 use datarig_core::paths::Paths;
 use datarig_core::secret::{MemoryStore, SecretStore};
 use datarig_core::update::Answer;
+use datarig_i18n::Lang;
 use datarig_tui::app::Startup;
 use datarig_tui::app::action::Action;
 use datarig_update::Fetch;

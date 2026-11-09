@@ -8,7 +8,7 @@ mod common;
 use common::*;
 use datarig_core::config::DetailView;
 use datarig_core::driver::DbEvent;
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::{DetailTab, Focus};
 use ratatui::crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -998,7 +998,7 @@ fn a_whole_column_copy_says_when_rows_were_not_fetched() {
 fn dropping_a_selection_drops_its_notice() {
     let mut h = grid(Lang::En);
     let selecting = |h: &Harness| {
-        h.app.transient.as_ref().is_some_and(|(n, _)| matches!(n.msg, datarig_core::i18n::Msg::CopySelecting { .. }))
+        h.app.transient.as_ref().is_some_and(|(n, _)| matches!(n.msg, datarig_i18n::Msg::CopySelecting { .. }))
     };
     for keys in ["VV", "vv"] {
         h.keys(&keys[..1]);
