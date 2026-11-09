@@ -58,15 +58,19 @@ impl Reader<'_> {
         Some(Cond::All(parts.into_iter().map(|p| self.not(p)).collect::<Option<_>>()?))
     }
 
-    /// `toks` cut at each `word` outside parentheses (for `AND`, not the one of a `BETWEEN`).
+    /// `toks` cut at each `word` outside parentheses and `CASE … END` (for `AND`, not the one of
+    /// a `BETWEEN`).
     fn split<'t>(&self, toks: &'t [Token], word: &str) -> Vec<&'t [Token]> {
         let mut parts = Vec::new();
-        let (mut depth, mut start, mut between) = (0usize, 0, false);
+        let (mut depth, mut cases, mut start, mut between) = (0usize, 0usize, 0, false);
         for (i, t) in toks.iter().enumerate() {
             match t.kind {
                 Tok::LParen => depth += 1,
                 Tok::RParen => depth = depth.saturating_sub(1),
                 _ if depth > 0 => {}
+                _ if self.word(Some(t), "CASE") => cases += 1,
+                _ if self.word(Some(t), "END") => cases = cases.saturating_sub(1),
+                _ if cases > 0 => {}
                 _ if self.word(Some(t), "BETWEEN") => between = true,
                 _ if self.word(Some(t), word) => {
                     if word == "AND" && between {

@@ -317,6 +317,13 @@ fn recognise_keeps_what_it_does_not_model() {
     // MySQL names compare without case.
     assert_eq!(recognise("ID = 1", MY, &cols), Some(cmp("id", CmpOp::Eq, num("1"))));
     assert_eq!(recognise("id <=> 1", Dialect::Postgres, &cols), Some(Cond::Raw("id <=> 1".into())));
+    // AND and OR inside a CASE belong to it, not to the filter.
+    let case = "CASE WHEN id = 1 OR id = 2 THEN TRUE ELSE FALSE END";
+    assert_eq!(pg(case), Some(Cond::Raw(case.into())));
+    assert_eq!(
+        pg(&format!("{case} AND id > 3")),
+        Some(Cond::All(vec![Cond::Raw(case.into()), cmp("id", CmpOp::Gt, num("3"))]))
+    );
 }
 
 #[test]
