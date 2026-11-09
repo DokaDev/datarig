@@ -22,6 +22,8 @@ pub enum Dialect {
     Postgres,
     /// MySQL, read as a session in that sql mode reads it.
     MySql(MySqlMode),
+    /// SQLite: the statements of the library's own SQL (`sqlite_master`, `PRAGMA`, `ATTACH`).
+    Sqlite,
 }
 
 /// What of a MySQL session changes how its text is read and how strings are written: parts of
@@ -53,7 +55,7 @@ impl Dialect {
     /// it is written twice.
     pub fn ident_quote(self) -> char {
         match self {
-            Self::Postgres => '"',
+            Self::Postgres | Self::Sqlite => '"',
             Self::MySql(_) => '`',
         }
     }
@@ -63,7 +65,7 @@ impl Dialect {
     /// writes with, [`Dialect::ident_quote`]).
     pub fn ident_quotes(self) -> &'static [char] {
         match self {
-            Self::Postgres => &['"'],
+            Self::Postgres | Self::Sqlite => &['"'],
             Self::MySql(m) if m.ansi_quotes => &['`', '"'],
             Self::MySql(_) => &['`'],
         }
@@ -80,7 +82,7 @@ impl Dialect {
     /// (PostgreSQL: [`ident::needs_quotes`]; MySQL: [`ident::mysql::needs_quotes`]).
     pub fn needs_quotes(self, name: &str) -> bool {
         match self {
-            Self::Postgres => ident::needs_quotes(name),
+            Self::Postgres | Self::Sqlite => ident::needs_quotes(name),
             Self::MySql(_) => ident::mysql::needs_quotes(name),
         }
     }
@@ -95,7 +97,7 @@ impl Dialect {
     /// doubled inside: `Order "Items"` → `"Order ""Items"""` (MySQL: `` `Order "Items"` ``).
     pub fn force_quote_ident(self, name: &str) -> String {
         match self {
-            Self::Postgres => format!("\"{}\"", name.replace('"', "\"\"")),
+            Self::Postgres | Self::Sqlite => format!("\"{}\"", name.replace('"', "\"\"")),
             Self::MySql(_) => format!("`{}`", name.replace('`', "``")),
         }
     }
@@ -114,7 +116,7 @@ impl Dialect {
     /// `NO_BACKSLASH_ESCAPES`; never in PostgreSQL, see [`Dialect::quote_literal`]).
     fn backslash_strings(self) -> bool {
         match self {
-            Self::Postgres => false,
+            Self::Postgres | Self::Sqlite => false,
             Self::MySql(m) => !m.no_backslash_escapes,
         }
     }
@@ -123,7 +125,7 @@ impl Dialect {
     /// `"` unless `ANSI_QUOTES` makes it a name's quote).
     pub fn string_quotes(self) -> &'static [char] {
         match self {
-            Self::Postgres => &['\''],
+            Self::Postgres | Self::Sqlite => &['\''],
             Self::MySql(m) if m.ansi_quotes => &['\''],
             Self::MySql(_) => &['\'', '"'],
         }
@@ -200,7 +202,7 @@ impl Dialect {
                     break;
                 };
                 match self {
-                    Self::Postgres => unescape_pg(e, &mut chars, &mut out),
+                    Self::Postgres | Self::Sqlite => unescape_pg(e, &mut chars, &mut out),
                     Self::MySql(_) => match e {
                         '0' => out.push('\0'),
                         'b' => out.push('\x08'),
@@ -239,6 +241,7 @@ impl Dialect {
     pub fn printed(self) -> Self {
         match self {
             Self::Postgres => Self::Postgres,
+            Self::Sqlite => Self::Sqlite,
             Self::MySql(_) => Self::MySql(MySqlMode::default()),
         }
     }
@@ -250,7 +253,7 @@ impl Dialect {
     pub fn fold(self, name: &str) -> String {
         match self {
             Self::Postgres => name.to_ascii_lowercase(),
-            Self::MySql(_) => name.to_string(),
+            Self::MySql(_) | Self::Sqlite => name.to_string(),
         }
     }
 
@@ -284,7 +287,7 @@ impl Dialect {
     /// [`lexer::mysql::KEYWORDS`].
     pub fn keywords(self) -> &'static [&'static str] {
         match self {
-            Self::Postgres => lexer::KEYWORDS,
+            Self::Postgres | Self::Sqlite => lexer::KEYWORDS,
             Self::MySql(_) => lexer::mysql::KEYWORDS,
         }
     }
@@ -309,7 +312,7 @@ impl Dialect {
                 }
                 path
             }
-            Self::MySql(_) => schema.into_iter().map(str::to_string).collect(),
+            Self::MySql(_) | Self::Sqlite => schema.into_iter().map(str::to_string).collect(),
         }
     }
 
@@ -317,7 +320,7 @@ impl Dialect {
     /// the line, which MySQL needs).
     pub fn comment_marker(self) -> &'static str {
         match self {
-            Self::Postgres | Self::MySql(_) => "--",
+            Self::Postgres | Self::MySql(_) | Self::Sqlite => "--",
         }
     }
 
@@ -326,7 +329,7 @@ impl Dialect {
     /// blank, a control character or the end (`--1` is code: minus minus one).
     pub fn line_comment_at(self, text: &str) -> Option<&'static str> {
         match self {
-            Self::Postgres => text.starts_with("--").then_some("--"),
+            Self::Postgres | Self::Sqlite => text.starts_with("--").then_some("--"),
             Self::MySql(_) if text.starts_with('#') => Some("#"),
             Self::MySql(_) => text
                 .strip_prefix("--")
@@ -340,7 +343,7 @@ impl Dialect {
     pub fn sqlformat_dialect(self) -> sqlformat::Dialect {
         match self {
             Self::Postgres => sqlformat::Dialect::PostgreSql,
-            Self::MySql(_) => sqlformat::Dialect::Generic,
+            Self::MySql(_) | Self::Sqlite => sqlformat::Dialect::Generic,
         }
     }
 }
@@ -510,7 +513,7 @@ impl Dialect {
                 })
         };
         let whole = match self {
-            Self::Postgres => rest.is_empty() || cast(rest),
+            Self::Postgres | Self::Sqlite => rest.is_empty() || cast(rest),
             Self::MySql(_) => rest.is_empty(),
         };
         // `'now'::date` is the time of the insert: no constant (fail-safe: any type but text).
@@ -524,7 +527,10 @@ impl Dialect {
             matches!(t.kind, Tok::Ident | Tok::Keyword | Tok::QuotedIdent)
                 && !text_types.contains(&t.text(sql).to_ascii_lowercase().as_str())
         });
-        if self == Self::Postgres && to_other && matches!(&value, Constant::Value(v) if special(v)) {
+        if matches!(self, Self::Postgres | Self::Sqlite)
+            && to_other
+            && matches!(&value, Constant::Value(v) if special(v))
+        {
             return None;
         }
         whole.then_some(value)
@@ -534,7 +540,7 @@ impl Dialect {
     /// (PostgreSQL: `nextval(…)`, a `serial` column's). MySQL's `AUTO_INCREMENT` is no default.
     pub fn draws_number(self, default: &str) -> bool {
         match self {
-            Self::Postgres => {
+            Self::Postgres | Self::Sqlite => {
                 let toks: Vec<lexer::Token> =
                     lexer::lex_in(default, self).into_iter().filter(|t| !t.is_trivia()).collect();
                 matches!(toks.as_slice(), [f, p, ..] if f.text(default).eq_ignore_ascii_case("nextval") && p.kind == lexer::Tok::LParen)
@@ -547,7 +553,7 @@ impl Dialect {
     /// MySQL without what an `UPDATE` sets (`CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP`).
     pub fn insert_default(self, default: &str) -> &str {
         match self {
-            Self::Postgres => default,
+            Self::Postgres | Self::Sqlite => default,
             Self::MySql(_) => {
                 // `ON UPDATE` as words, not inside a string.
                 let toks: Vec<lexer::Token> =

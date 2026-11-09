@@ -1257,8 +1257,16 @@ impl Config {
             && self.exists
             && (self.version < CONFIG_VERSION
                 || self.ids_assigned
-                || self.connections.iter().any(has_movable_plaintext))
+                || self.connections.iter().any(has_movable_plaintext)
+                || self.connections.iter().any(has_sqlite_file_to_move))
     }
+}
+
+/// A SQLite profile whose file is still in `database`: a profile of the driver `sqlite` written by
+/// hand before the driver existed, which kept its file where the other drivers keep their database.
+/// The launch-time migration moves the file to `path`.
+pub fn has_sqlite_file_to_move(c: &ConnectionConfig) -> bool {
+    c.path.is_none() && !c.database.trim().is_empty() && crate::profile::drivers::canonical(&c.driver) == Some("sqlite")
 }
 
 /// A legacy plaintext password the launch-time migration moves (profiles whose source stores
@@ -2021,6 +2029,7 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
             } else {
                 set(&mut t, "statement_cache", false);
             }
+            set_opt(&mut t, "path", c.path.as_deref());
             set_opt(&mut t, "sslrootcert", c.sslrootcert.as_deref());
             set_opt(&mut t, "sslcert", c.sslcert.as_deref());
             set_opt(&mut t, "sslkey", c.sslkey.as_deref());

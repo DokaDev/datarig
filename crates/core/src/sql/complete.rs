@@ -217,7 +217,7 @@ fn find_rel<'a>(
         }
     };
     match d {
-        Dialect::Postgres => found(false, false),
+        Dialect::Postgres | Dialect::Sqlite => found(false, false),
         Dialect::MySql(_) => found(true, true)
             .or_else(|| found(false, true))
             .or_else(|| found(true, false))

@@ -122,6 +122,7 @@ One table per connection profile, in the explorer's order. Passwords are never w
 | `password` | none | text | A plaintext password from an older file. At launch it is moved to the profile's password store (the keychain or the secrets file) and removed from the file; datarig never writes it. |
 | `database` | `""` | text | The database to connect to. |
 | `sslmode` | PostgreSQL `"disable"`; MySQL `"PREFERRED"` (`"DISABLED"` with `server_public_key_file`) | PostgreSQL: `"disable"`, `"prefer"`, `"require"`, `"verify-ca"`, `"verify-full"`; MySQL: `"DISABLED"`, `"PREFERRED"`, `"REQUIRED"`, `"VERIFY_CA"`, `"VERIFY_IDENTITY"` | How the connection uses TLS, spelled as the database's own client spells it. |
+| `path` | none | an absolute file path | The database file of a SQLite profile. A SQLite profile needs no host, port, login or TLS; it opens this file read-only (a read-only policy) or read-write, and never creates it. |
 | `sslrootcert` | none | a file path | The CA file the server's certificate chain is checked against. |
 | `sslcert` | none | a file path | The client certificate file, used with `sslkey`. |
 | `sslkey` | none | a file path | The client certificate's private key file. |
@@ -206,7 +207,7 @@ A Startup SQL preset: settings a query session of one kind of database starts wi
 
 | Key | Default | Values | Description |
 |---|---|---|---|
-| `dbms` | none (required) | `"postgres"`, `"mysql"` | The kind of database the preset is for. |
+| `dbms` | none (required) | `"postgres"`, `"mysql"`, `"sqlite"` | The kind of database the preset is for. |
 | `sql` | `[]` | a list of statements | The statements a query session starts with, in order. Each must be one setting of the session (in a read-only environment one a read-only session may change); they are checked when a profile connects. |
 
 ## `[sessions.<name>]`

@@ -125,7 +125,7 @@ pub fn format_in(src: &str, opts: Options, indent: &str, d: Dialect) -> Result<(
     let mut masked = String::with_capacity(src.len());
     let mut from = 0;
     match d {
-        Dialect::Postgres => {
+        Dialect::Postgres | Dialect::Sqlite => {
             for t in input.iter().filter(|t| t.kind == Tok::Dollar) {
                 masked.push_str(&src[from..t.start]);
                 masked.push_str(DOLLAR_MASK);
@@ -168,7 +168,7 @@ pub fn format_in(src: &str, opts: Options, indent: &str, d: Dialect) -> Result<(
         let text = t.text(src);
         let recase = t.kind == Tok::Keyword
             && match d {
-                Dialect::Postgres => true,
+                Dialect::Postgres | Dialect::Sqlite => true,
                 // A keyword is a plain word: it needs quotes when it is reserved.
                 Dialect::MySql(_) => ident::mysql::needs_quotes(text),
             };
@@ -234,7 +234,7 @@ fn layout_only(d: Dialect, toks: &[Token], i: usize, src: &str, after: &str) -> 
                     && a.is_word()
                     && MYSQL_SPECIAL_FUNCTIONS.contains(&ta.to_ascii_uppercase().as_str())
             }
-            Dialect::Postgres => {
+            Dialect::Postgres | Dialect::Sqlite => {
                 unicode_escape(a, b)
                     || (i >= 2 && unicode_escape(&toks[i - 2], a))
                     || (a.kind == Tok::Op && (ta == ":" || ta == "\\"))

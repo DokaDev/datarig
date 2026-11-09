@@ -24,6 +24,10 @@
 //!    `version = 2` and without the moved passwords. Otherwise `version` stays, so the next
 //!    launch retries; the passwords that did move are dropped from the file already.
 //!
+//! A SQLite profile whose file is in `database` (written by hand before the SQLite driver
+//! existed) gets it in `path` as well, and `database` is left empty; the file is copied to
+//! `config.toml.sqlite.bak` first. Both are saved with the ids in step 3.
+//!
 //! Blocking (the OS may ask the user for permission), so the TUI runs it off its thread.
 
 use crate::config::{self, CONFIG_VERSION, Config, IconsSetting, Profiles, Settings};
@@ -72,6 +76,8 @@ pub enum Keychain {
 pub struct Report {
     /// The version 1 backup that was written this time.
     pub backup: Option<PathBuf>,
+    /// SQLite profiles whose file moved from `database` to `path` (saved with the ids).
+    pub sqlite_files: Vec<ProfileId>,
     /// Saving the ids failed: nothing else was done.
     pub save_failed: Option<Fault>,
     pub keychain: Keychain,
@@ -96,6 +102,7 @@ pub fn run(store: &dyn SecretStore, file: &dyn SecretStore, input: Input) -> Rep
     let old_version = config.version;
     let mut report = Report {
         backup: None,
+        sqlite_files: Vec::new(),
         save_failed: None,
         keychain: Keychain::Done,
         rekeyed: 0,
@@ -141,7 +148,23 @@ pub fn run(store: &dyn SecretStore, file: &dyn SecretStore, input: Input) -> Rep
             }
         }
     }
-    // 3. The ids first.
+    // 2b. A SQLite profile's file, kept in `database` by a hand-written profile of the driver
+    // before it existed, moves to `path` (the other drivers' database field stays as it is). The
+    // file is copied first, once: a copy that is there already is kept.
+    if config.connections.iter().any(config::has_sqlite_file_to_move) {
+        let bak = sqlite_backup_path(&path);
+        if let Err(e) = copy_once(&path, &bak) {
+            report.save_failed = Some(Fault::io_at(&e, &bak));
+            return report;
+        }
+    }
+    for c in &mut config.connections {
+        if config::has_sqlite_file_to_move(c) {
+            c.path = Some(std::mem::take(&mut c.database).trim().to_string());
+            report.sqlite_files.push(c.id);
+        }
+    }
+    // 3. The ids first (and the SQLite files moved above).
     if let Err(e) = save(&config, old_version) {
         report.save_failed = Some(e);
         return report;
@@ -240,6 +263,22 @@ fn store_error(e: StoreError) -> Fault {
 }
 
 /// `config.toml` -> `config.toml.v1.bak`.
+/// The copy of a config file before its SQLite file paths move (`config.toml.sqlite.bak`).
+pub fn sqlite_backup_path(path: &std::path::Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".sqlite.bak");
+    path.with_file_name(name)
+}
+
+/// Copies `from` to `to` unless `to` is there already (never overwritten, whatever it holds).
+fn copy_once(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(to) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => std::fs::copy(from, to).map(drop),
+        Err(e) => Err(e),
+    }
+}
+
 pub fn backup_path(path: &std::path::Path) -> PathBuf {
     let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
     name.push(".v1.bak");

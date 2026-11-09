@@ -453,7 +453,7 @@ pub fn is_explain(sql: &str) -> bool {
 /// of an executable comment before it is skipped.
 pub fn is_explain_in(sql: &str, d: Dialect) -> bool {
     let words: &[&str] = match d {
-        Dialect::Postgres => &["EXPLAIN"],
+        Dialect::Postgres | Dialect::Sqlite => &["EXPLAIN"],
         Dialect::MySql(_) => &["EXPLAIN", "DESCRIBE", "DESC"],
     };
     crate::sql::lexer::lex_in(sql, d)

@@ -78,7 +78,7 @@ pub fn json(sql: &str) -> Result<JsonExplain, NotJson> {
 pub fn json_in(sql: &str, d: Dialect) -> Result<JsonExplain, NotJson> {
     match d {
         Dialect::Postgres => json(sql),
-        Dialect::MySql(_) => Err(NotJson::Unreadable),
+        Dialect::MySql(_) | Dialect::Sqlite => Err(NotJson::Unreadable),
     }
 }
 
@@ -86,7 +86,7 @@ pub fn json_in(sql: &str, d: Dialect) -> Result<JsonExplain, NotJson> {
 pub fn json_text_in(sql: &str, d: Dialect) -> Result<JsonExplain, NotJson> {
     match d {
         Dialect::Postgres => json_text(sql),
-        Dialect::MySql(_) => Err(NotJson::Unreadable),
+        Dialect::MySql(_) | Dialect::Sqlite => Err(NotJson::Unreadable),
     }
 }
 

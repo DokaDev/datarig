@@ -22,11 +22,7 @@ impl Scheme {
     /// The scheme of a profile's `driver` name: MySQL for `mysql` and `mariadb`, PostgreSQL
     /// for every other name.
     pub fn of_driver(driver: &str) -> Self {
-        if driver.eq_ignore_ascii_case("mysql") || driver.eq_ignore_ascii_case("mariadb") {
-            Self::MySql
-        } else {
-            Self::Postgres
-        }
+        if super::drivers::canonical(driver) == Some("mysql") { Self::MySql } else { Self::Postgres }
     }
 
     /// The scheme and `://` a URL is written with.

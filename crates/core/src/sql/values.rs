@@ -43,7 +43,7 @@ pub fn check_values(d: Dialect, checks: &[CheckConstraint]) -> Vec<CheckValues> 
 /// folded; MySQL: whatever its case).
 fn same_name(d: Dialect, name: &str, written: &str) -> bool {
     match d {
-        Dialect::Postgres => name == written,
+        Dialect::Postgres | Dialect::Sqlite => name == written,
         Dialect::MySql(_) => name.eq_ignore_ascii_case(written),
     }
 }

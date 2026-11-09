@@ -5,6 +5,7 @@
 //! from, [`ConnectionConfig::source`]); `Debug` output is redacted.
 
 pub mod color;
+pub mod drivers;
 pub mod dsn;
 pub mod folder;
 pub mod name;
@@ -116,6 +117,9 @@ pub struct ConnectionConfig {
     pub password: String,
     #[serde(default)]
     pub database: String,
+    /// The database file of an SQLite profile (its only address: no host, port or login).
+    #[serde(default)]
+    pub path: Option<String>,
     /// The TLS mode as the driver spells it ([`TlsMode::name`]); empty: none set (see
     /// [`TlsMode::default_for`]). Read with [`Self::tls`].
     #[serde(default)]
@@ -214,6 +218,7 @@ impl fmt::Debug for ConnectionConfig {
             .field("user", &self.user)
             .field("password", &redact(&self.password))
             .field("database", &self.database)
+            .field("path", &self.path)
             .field("sslmode", &self.sslmode)
             .field("sslrootcert", &self.sslrootcert)
             .field("sslcert", &self.sslcert)
@@ -264,6 +269,7 @@ impl Default for ConnectionConfig {
             user: String::new(),
             password: String::new(),
             database: String::new(),
+            path: None,
             sslmode: String::new(),
             sslrootcert: None,
             sslcert: None,

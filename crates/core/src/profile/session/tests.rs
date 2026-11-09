@@ -19,7 +19,7 @@ fn presets() -> Vec<SessionPreset> {
 
 fn mapped() -> Policy {
     Policy {
-        session: SessionMap { postgres: Some("reporting".into()), mysql: Some("my_ro".into()) },
+        session: SessionMap { postgres: Some("reporting".into()), mysql: Some("my_ro".into()), sqlite: None },
         ..Policy::default()
     }
 }
@@ -128,7 +128,10 @@ fn an_unknown_preset_is_an_error_never_none() {
         plan(&c, &Policy::default(), Defaults::default(), &presets()),
         Err(SessionError::NotFound { preset: "gone".into(), by: PickedBy::Profile })
     );
-    let rules = Policy { session: SessionMap { postgres: Some("gone".into()), mysql: None }, ..Policy::default() };
+    let rules = Policy {
+        session: SessionMap { postgres: Some("gone".into()), mysql: None, sqlite: None },
+        ..Policy::default()
+    };
     assert_eq!(
         plan(&profile("postgres"), &rules, Defaults::default(), &presets()),
         Err(SessionError::NotFound { preset: "gone".into(), by: PickedBy::Environment(None) })
@@ -149,7 +152,10 @@ fn a_preset_of_the_other_database_is_an_error() {
         })
     );
     // An environment's mapping pointing at the other database's preset too.
-    let rules = Policy { session: SessionMap { postgres: Some("my_ro".into()), mysql: None }, ..Policy::default() };
+    let rules = Policy {
+        session: SessionMap { postgres: Some("my_ro".into()), mysql: None, sqlite: None },
+        ..Policy::default()
+    };
     assert!(matches!(
         plan(&profile("postgres"), &rules, Defaults::default(), &presets()),
         Err(SessionError::WrongDbms { dbms: Dbms::MySql, .. })
