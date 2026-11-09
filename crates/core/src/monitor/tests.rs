@@ -1605,7 +1605,10 @@ fn many_metadata_lock_requests_on_one_object_stay_bounded() {
     let answers = [Answer::Rows(Vec::new()), Answer::Rows(rows)];
     // Bounded is counted, not timed: a million request and holder pairs would make a million
     // holders and edges; what is kept stays at the limits, and what is left out is said.
-    let (locks, _) = decode::mysql::locks(&answers, &mysql_root(), Timestamp(1)).unwrap();
+    let my = mysql_root();
+    let read = lk::mdl_kinds_read();
+    let (locks, _) = decode::mysql::locks(&answers, &my, Timestamp(1)).unwrap();
+    assert_eq!(lk::mdl_kinds_read() - read, 1000, "each request's kind is read once, not once per holder");
     assert_eq!(locks.waits.len(), 1000, "one wait per request");
     assert!(locks.waits.iter().all(|w| w.holders.len() == lk::HOLDERS_MAX), "each keeps the most holders");
     assert!(locks.more > 0, "the holders left out are said");

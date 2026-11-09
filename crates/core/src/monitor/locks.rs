@@ -182,18 +182,62 @@ pub fn pg_conflicts(requested: &str, held: &str) -> Option<bool> {
 /// `OBJECT_TYPE` and `LOCK_TYPE`), as the server's lock manager decides it (`sql/mdl.cc`); `None`
 /// when a type or kind is not one the table knows. Two locks of one owner never conflict.
 pub fn mdl_conflicts(object: &str, requested: &str, granted: &str) -> Option<bool> {
-    // `BACKUP LOCK` and `BACKUP_LOCK` alike.
-    let kind = object.trim().replace('_', " ").to_ascii_uppercase();
-    let r = MdlType::of(requested)?;
-    let g = MdlType::of(granted)?;
-    if SCOPED.contains(&kind.as_str()) {
-        let (r, g) = (r.scoped()?, g.scoped()?);
-        Some(SCOPED_INCOMPATIBLE[r] & (1 << g) != 0)
-    } else if OBJECT.contains(&kind.as_str()) {
-        let (r, g) = (r.object()?, g.object()?);
-        Some(OBJECT_INCOMPATIBLE[r] & (1 << g) != 0)
-    } else {
-        None
+    MdlRequest::new(object, requested).waits_for(granted)
+}
+
+/// A metadata lock request with its object's kind and its type read once, to check against
+/// each lock granted on the object ([`MdlRequest::waits_for`]), as [`mdl_conflicts`] does.
+#[derive(Clone, Copy, Debug)]
+pub struct MdlRequest(Option<(MdlTable, usize)>);
+
+/// The compatibility table a metadata lock kind is checked with, as the server's lock manager.
+#[derive(Clone, Copy, Debug)]
+enum MdlTable {
+    Scoped,
+    Object,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many metadata lock kinds this thread read ([`MdlRequest::new`]).
+    static MDL_KINDS_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many metadata lock kinds this thread has read so far.
+#[cfg(test)]
+pub(crate) fn mdl_kinds_read() -> usize {
+    MDL_KINDS_READ.with(std::cell::Cell::get)
+}
+
+impl MdlRequest {
+    /// A request of type `requested` on an object of kind `object`.
+    pub fn new(object: &str, requested: &str) -> Self {
+        #[cfg(test)]
+        MDL_KINDS_READ.with(|n| n.set(n.get() + 1));
+        // `BACKUP LOCK` and `BACKUP_LOCK` alike.
+        let kind = object.trim().replace('_', " ").to_ascii_uppercase();
+        let read = || {
+            let r = MdlType::of(requested)?;
+            if SCOPED.contains(&kind.as_str()) {
+                Some((MdlTable::Scoped, r.scoped()?))
+            } else if OBJECT.contains(&kind.as_str()) {
+                Some((MdlTable::Object, r.object()?))
+            } else {
+                None
+            }
+        };
+        Self(read())
+    }
+
+    /// Whether it waits for a granted lock of type `granted` on the same object; `None` when a
+    /// type or the kind is not one the table knows.
+    pub fn waits_for(self, granted: &str) -> Option<bool> {
+        let (table, r) = self.0?;
+        let g = MdlType::of(granted)?;
+        Some(match table {
+            MdlTable::Scoped => SCOPED_INCOMPATIBLE[r] & (1 << g.scoped()?) != 0,
+            MdlTable::Object => OBJECT_INCOMPATIBLE[r] & (1 << g.object()?) != 0,
+        })
     }
 }
 
