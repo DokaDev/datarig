@@ -396,12 +396,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # The release binary (check-tools.sh), kept between runs: most runs download nothing. The
-      # arguments are the ones cargo-deny-action ran it with.
+      # The release binary (check-tools.sh), kept between runs under a key of its own (the
+      # actionlint job keeps the other archive): most runs download nothing. The arguments are
+      # the ones cargo-deny-action ran it with.
       - uses: actions/cache@v6
         with:
           path: ~/.cache/ci-downloads/check-tools
-          key: check-tools-${{ hashFiles('.github/scripts/check-tools.sh') }}
+          key: check-tools-cargo-deny-${{ hashFiles('.github/scripts/check-tools.sh') }}
       - name: cargo-deny
         run: bash .github/scripts/check-tools.sh cargo-deny
       - run: cargo deny --log-level warn --manifest-path ./Cargo.toml --all-features check
@@ -459,11 +460,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # The release binary (check-tools.sh), kept between runs: most runs download nothing.
+      # The release binary (check-tools.sh), kept between runs under a key of its own (the
+      # cargo deny job keeps the other archive): most runs download nothing.
       - uses: actions/cache@v6
         with:
           path: ~/.cache/ci-downloads/check-tools
-          key: check-tools-${{ hashFiles('.github/scripts/check-tools.sh') }}
+          key: check-tools-actionlint-${{ hashFiles('.github/scripts/check-tools.sh') }}
       - name: actionlint
         run: bash .github/scripts/check-tools.sh actionlint
       - run: actionlint -color
