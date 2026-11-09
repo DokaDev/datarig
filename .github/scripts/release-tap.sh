@@ -26,9 +26,9 @@ chmod 600 "$ssh_dir/key"
 # on its standard input, not on its command line.
 meta() {
   if [[ -n ${GITHUB_TOKEN:-} ]]; then
-    printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K - https://api.github.com/meta
+    printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL --retry 9 --retry-all-errors --retry-max-time 300 -K - https://api.github.com/meta
   else
-    curl -fsSL https://api.github.com/meta
+    curl -fsSL --retry 9 --retry-all-errors --retry-max-time 300 https://api.github.com/meta
   fi
 }
 meta | jq -r '.ssh_keys[] | "github.com " + .' > "$ssh_dir/known_hosts"

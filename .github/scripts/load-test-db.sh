@@ -3,8 +3,8 @@
 # DATARIG_TEST_PG_URL on 127.0.0.1), as the dev compose file's container does on its first start.
 set -euo pipefail
 if ! command -v psql >/dev/null; then
-  sudo apt-get update
-  sudo apt-get install -y --no-install-recommends postgresql-client
+  sudo apt-get -o Acquire::Retries=5 update
+  sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends postgresql-client
 fi
 export PGPASSWORD=datarig
 url=${DATARIG_TEST_PG_URL:?set DATARIG_TEST_PG_URL}
