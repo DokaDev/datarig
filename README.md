@@ -12,13 +12,18 @@ A full-featured database client that lives in your terminal: light, fast, and sa
 
 ```sh
 brew install dokadev/tap/datarig
-# or from source, with Rust 1.93 and libclang:
+```
+
+Or take the archive for macOS, Linux or Windows from
+[GitHub Releases](https://github.com/DokaDev/datarig/releases). On Linux, these two need no
+build tools; a build from source needs Rust 1.93, clang and libclang (the packages for each
+distribution are in [Install](https://dokadev.github.io/datarig/install.html#from-source)):
+
+```sh
 git clone https://github.com/DokaDev/datarig && cd datarig && cargo install --locked --path crates/tui
 ```
 
-Archives for macOS, Linux and Windows are on
-[GitHub Releases](https://github.com/DokaDev/datarig/releases); details in
-[Install](https://dokadev.github.io/datarig/install.html). **Documentation: <https://dokadev.github.io/datarig/>**
+**Documentation: <https://dokadev.github.io/datarig/>**
 
 ## Why datarig
 

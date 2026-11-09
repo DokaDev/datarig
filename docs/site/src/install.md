@@ -33,14 +33,24 @@ Each archive also contains the licences and the third-party notices.
 
 ## From source
 
-You need:
+On Linux, the Homebrew tap and the release archives above need no build tools. To build
+datarig yourself you need:
 
-- Rust **1.93** or newer. The repository's `rust-toolchain.toml` pins 1.93.0, and rustup
-  installs it automatically.
-- A C compiler and **libclang**, for the `pg_query` crate (it compiles PostgreSQL's parser and
-  generates bindings with bindgen). On macOS the Xcode Command Line Tools have both; on
-  Debian or Ubuntu, `apt install clang libclang-dev`. On Windows (untested outside CI), install
-  LLVM and set `LIBCLANG_PATH` if bindgen does not find it.
+- Rust **1.93** or newer, from [rustup](https://rustup.rs) (the Rust of a Linux distribution is
+  often older). The repository's `rust-toolchain.toml` pins 1.93.0, and rustup installs it
+  automatically.
+- A C compiler, **clang** and **libclang**, for the `pg_query` crate: it compiles PostgreSQL's
+  parser and generates its bindings with bindgen, which loads libclang and needs clang's own
+  headers. On macOS the Xcode Command Line Tools have all three. On Linux, with git:
+
+  ```sh
+  sudo apt install build-essential clang libclang-dev git     # Debian, Ubuntu
+  sudo dnf install gcc clang clang-devel git                  # Fedora
+  sudo pacman -S --needed base-devel clang git                # Arch Linux
+  ```
+
+  On Windows (untested outside CI), install LLVM and set `LIBCLANG_PATH` if bindgen does not
+  find it.
 
 ```sh
 git clone https://github.com/DokaDev/datarig
@@ -48,6 +58,21 @@ cd datarig
 cargo install --locked --path crates/tui   # installs the datarig binary
 # or: cargo build --release                # the binary is target/release/datarig
 ```
+
+CI checks these commands by building datarig with them in clean Debian, Ubuntu, Fedora and
+Arch Linux containers.
+
+### The build stops at pg_query
+
+```text
+fatal error: 'stdbool.h' file not found
+...
+Unable to generate bindings
+```
+
+bindgen found libclang but not the headers that come with clang: clang is not installed, or
+its version is not the one of libclang. Install clang and libclang together with the command
+for your distribution above, which installs the same version of both, then build again.
 
 ## Requirements
 

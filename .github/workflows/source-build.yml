@@ -1,0 +1,82 @@
+# A build from source on Linux, the way the docs tell users to do it (docs/site/src/install.md,
+# "From source"), in clean containers of the distributions the page names: the build
+# dependencies with the page's own command for the distribution
+# (.github/scripts/source-build-deps.sh), Rust from rustup with the minimal profile and the
+# version of `rust-version` in Cargo.toml, then the build. A change of a distribution or of the
+# dependencies that breaks those steps fails here, not on a user's machine.
+#
+# Not part of CI (ci.yml) and not one of the checks of the release gate: it runs on pushes to
+# main, on pull requests that touch the install page, the Cargo files, build scripts or this
+# workflow, and every week (a new distribution release can break it with no change here).
+name: Source build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - docs/site/src/install.md
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - '**/build.rs'
+      - crates/*/build/**
+      - crates/*/Cargo.toml
+      - vendor/**/Cargo.toml
+      - .github/scripts/source-build-deps.sh
+      - .github/workflows/source-build.yml
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: source build (${{ matrix.image }})
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:stable', 'ubuntu:latest', 'fedora:latest', 'archlinux:latest']
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    timeout-minutes: 45
+    steps:
+      # Without git in the image, checkout downloads the commit's files (no history needed).
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build dependencies, with the command of the install page
+        run: bash .github/scripts/source-build-deps.sh
+      - name: Rust from rustup, minimal, the version of rust-version
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf --retry 9 --retry-all-errors https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --default-toolchain none
+          msrv=$(sed -nE 's/^rust-version = "(.*)"$/\1/p' Cargo.toml)
+          [[ -n $msrv ]] || { echo "no rust-version in Cargo.toml" >&2; exit 1; }
+          "$HOME/.cargo/bin/rustup" toolchain install "$msrv" --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "RUSTUP_TOOLCHAIN=$msrv" >> "$GITHUB_ENV"
+      # The downloaded crates only, shared by the four images and saved from main: the build
+      # itself is not cached, so it starts clean like a user's.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: source-build
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --locked -p datarig-tui
+      - run: ./target/debug/datarig --version

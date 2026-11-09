@@ -10,7 +10,7 @@ auto-generated technical overview of it; the user guide is the
 ## Build
 
 You need the Rust toolchain of `rust-toolchain.toml` (rustup installs it on the first `cargo`
-command), a C compiler and libclang (for the `pg_query` crate; see
+command), a C compiler, clang and libclang (for the `pg_query` crate; see
 [Install](https://dokadev.github.io/datarig/install.html#from-source) on the docs site).
 
 ```sh
