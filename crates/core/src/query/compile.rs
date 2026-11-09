@@ -55,6 +55,8 @@ fn build(q: &Query, t: &Target, capped: bool) -> Compiled {
             (Some(n), Some(m), _) => sql.push_str(&format!(" LIMIT {n} OFFSET {m}")),
             (Some(n), None, _) => sql.push_str(&format!(" LIMIT {n}")),
             (None, Some(m), Dialect::Postgres) => sql.push_str(&format!(" OFFSET {m}")),
+            // SQLite has no `OFFSET` without a `LIMIT` either: `-1` is its "no limit".
+            (None, Some(m), Dialect::Sqlite) => sql.push_str(&format!(" LIMIT -1 OFFSET {m}")),
             // MySQL has no `OFFSET` without a `LIMIT`: the largest one stands for none.
             (None, Some(m), Dialect::MySql(_)) => sql.push_str(&format!(" LIMIT {} OFFSET {m}", u64::MAX)),
             (None, None, _) => {}
@@ -95,8 +97,8 @@ fn key_sql(d: Dialect, k: &OrderKey) -> String {
     };
     match (d, k.nulls) {
         (_, None) => format!("{col} {dir}"),
-        (Dialect::Postgres, Some(Nulls::First)) => format!("{col} {dir} NULLS FIRST"),
-        (Dialect::Postgres, Some(Nulls::Last)) => format!("{col} {dir} NULLS LAST"),
+        (Dialect::Postgres | Dialect::Sqlite, Some(Nulls::First)) => format!("{col} {dir} NULLS FIRST"),
+        (Dialect::Postgres | Dialect::Sqlite, Some(Nulls::Last)) => format!("{col} {dir} NULLS LAST"),
         (Dialect::MySql(_), Some(Nulls::First)) => format!("{col} IS NULL DESC, {col} {dir}"),
         (Dialect::MySql(_), Some(Nulls::Last)) => format!("{col} IS NULL ASC, {col} {dir}"),
     }

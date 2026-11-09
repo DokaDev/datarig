@@ -544,3 +544,42 @@ fn the_call_lists_are_sorted_disjoint_built_ins() {
         assert!(!MYSQL_REFUSED_CALLS.contains(f), "{f}");
     }
 }
+
+// SQLite: the same query model, written in SQLite's own forms.
+
+const LITE: Dialect = Dialect::Sqlite;
+
+#[test]
+fn sqlite_writes_its_own_limit_nulls_and_null_safe_forms() {
+    let lite = target(LITE);
+    // SQLite has no `OFFSET` without a `LIMIT`: `-1` is its "no limit".
+    let q = Query { offset: Some(10), ..query(None, vec![]) };
+    assert!(compile_capped(&q, &lite).sql.ends_with(r#""users" LIMIT -1 OFFSET 10"#));
+    // NULLS FIRST and NULLS LAST exist in SQLite 3.30 and later, as in PostgreSQL.
+    let key = |n| OrderKey { nulls: Some(n), ..OrderKey::user("name", Dir::Desc) };
+    let lite_no_tie = Target { tie_break: false, ..target(LITE) };
+    assert!(
+        compile(&query(None, vec![key(Nulls::First)]), &lite_no_tie)
+            .sql
+            .ends_with(r#"ORDER BY "name" DESC NULLS FIRST"#)
+    );
+    // `IS` and `IS NOT` are SQLite's null-safe comparisons.
+    let not_distinct = Cond::NotDistinct { col: "id".into(), value: num("1"), negated: false };
+    assert_eq!(render(&not_distinct, &lite).unwrap(), "id IS 1");
+    let distinct = Cond::NotDistinct { col: "id".into(), value: num("1"), negated: true };
+    assert_eq!(render(&distinct, &lite).unwrap(), "id IS NOT 1");
+    // Binary values are blob literals; text is quoted as it is, with no backslash escapes.
+    let blob = Cond::Cmp { col: "data".into(), op: CmpOp::Eq, value: Value::Bytes(vec![10, 11]) };
+    assert_eq!(render(&blob, &lite).unwrap(), "data = X'0A0B'");
+    let text_cond = Cond::Cmp { col: "name".into(), op: CmpOp::Eq, value: text(r"a\b'c") };
+    assert_eq!(render(&text_cond, &lite).unwrap(), r#"name = 'a\b''c'"#);
+}
+
+#[test]
+fn sqlite_refuses_what_it_cannot_check_or_write_faithfully() {
+    // A case-insensitive text match: SQLite's LIKE folds ASCII letters only.
+    let ci = Cond::Like { col: "name".into(), pattern: "a%".into(), negated: false, case: CaseMode::Insensitive };
+    assert!(matches!(render(&ci, &target(LITE)), Err(RenderError::CaseInsensitiveRefused(_))));
+    // A filter over SQLite text is not checked (the function calls cannot be read): refused.
+    assert!(check(LITE, "id > 1", true).is_err());
+}

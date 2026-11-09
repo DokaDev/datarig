@@ -343,6 +343,9 @@ pub fn check_filter(
             }
             calls
         }
+        // SQLite's text has no parser here that names its function calls: a filter over it is not
+        // checked, so it is refused (fail closed) rather than checked wrongly.
+        Dialect::Sqlite => return Err(unread()),
     };
     if risk.class != Class::Read || risk.danger.is_some() || risk.read_write {
         return Err(BarRefusal::NotRead { class: risk.class, danger: risk.danger });
@@ -409,7 +412,7 @@ fn readings(text: &str, d: Dialect) -> Result<Vec<Reading>, BarRefusal> {
         Dialect::Postgres if text.contains('\\') => {
             all.push(Reading { tokens: lex_backslash_strings(&ext), dialect: d });
         }
-        Dialect::Postgres => {}
+        Dialect::Postgres | Dialect::Sqlite => {}
         Dialect::MySql(mode) => {
             for m in other_modes(text, mode) {
                 all.push(Reading { tokens: lex_in(&ext, Dialect::MySql(m)), dialect: Dialect::MySql(m) });
