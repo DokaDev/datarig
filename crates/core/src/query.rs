@@ -5,7 +5,9 @@
 //! inside one pair of parentheses, never rewritten. What the app understands of it
 //! ([`recognise`]) is kept beside it ([`Filter::recognised`]) for marks and history; `None`
 //! there means "not understood", not "no filter". An app action that filters by a cell's value
-//! writes the text of a condition ([`render`]) for the user to see before it runs.
+//! writes the text of a condition ([`render`]) for the user to see before it runs. The order is
+//! keys, read from the text of an `ORDER BY` field ([`parse_order`]) and written back as such
+//! ([`order_text`]).
 //!
 //! Before any statement built from a filter runs, [`check_filter`] checks the text: one boolean
 //! expression and nothing else (no `;`, no comment, no parenthesis that leaves ours), a plain
@@ -17,6 +19,7 @@
 
 mod check;
 mod compile;
+mod order;
 mod recognise;
 mod render;
 
@@ -25,6 +28,7 @@ pub use check::{
     PG_REFUSED_CALLS, ShapeProblem, check_filter,
 };
 pub use compile::{Compiled, compile, compile_capped};
+pub use order::{OrderError, OrderProblem, order_text, parse_order};
 pub use recognise::recognise;
 pub use render::{RenderError, like_contains, like_starts_with, render};
 

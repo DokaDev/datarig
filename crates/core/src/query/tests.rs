@@ -544,3 +544,112 @@ fn the_call_lists_are_sorted_disjoint_built_ins() {
         assert!(!MYSQL_REFUSED_CALLS.contains(f), "{f}");
     }
 }
+
+// order
+
+fn order(d: Dialect, text: &str) -> Result<Vec<OrderKey>, OrderError> {
+    parse_order(text, &target(d))
+}
+
+fn order_err(d: Dialect, text: &str) -> (std::ops::Range<usize>, OrderProblem) {
+    let e = order(d, text).unwrap_err();
+    (e.range, e.kind)
+}
+
+#[test]
+fn order_reads_keys_directions_and_nulls() {
+    let pg = Dialect::Postgres;
+    assert_eq!(order(pg, ""), Ok(vec![]));
+    assert_eq!(order(pg, "   "), Ok(vec![]));
+    assert_eq!(order(pg, "id"), Ok(vec![OrderKey::user("id", Dir::Asc)]));
+    assert_eq!(
+        order(pg, " name desc , id ASC "),
+        Ok(vec![OrderKey::user("name", Dir::Desc), OrderKey::user("id", Dir::Asc)])
+    );
+    let nulls = |col: &str, dir, n| OrderKey { nulls: Some(n), ..OrderKey::user(col, dir) };
+    assert_eq!(
+        order(pg, "price DESC NULLS LAST, born nulls first"),
+        Ok(vec![nulls("price", Dir::Desc, Nulls::Last), nulls("born", Dir::Asc, Nulls::First)])
+    );
+    for key in order(pg, "id, name").unwrap() {
+        assert_eq!(key.origin, KeyOrigin::User);
+    }
+}
+
+#[test]
+fn order_names_match_exactly_then_folded() {
+    let pg = Dialect::Postgres;
+    // PostgreSQL folds a bare name to lower case; a quoted name is that name.
+    assert_eq!(order(pg, "ID"), Ok(vec![OrderKey::user("id", Dir::Asc)]));
+    assert_eq!(order(pg, "\"Mixed Case\" DESC"), Ok(vec![OrderKey::user("Mixed Case", Dir::Desc)]));
+    assert_eq!(order_err(pg, "\"ID\""), (0..4, OrderProblem::UnknownColumn("ID".into())));
+    assert_eq!(order_err(pg, "nope"), (0..4, OrderProblem::UnknownColumn("nope".into())));
+    // A bare name that is exactly a column's is that column, before folding.
+    let t = Target::new(pg, vec![ColumnFacts::new("Total", ColumnKind::Number)]);
+    assert_eq!(parse_order("Total", &t), Ok(vec![OrderKey::user("Total", Dir::Asc)]));
+    // MySQL: backticks, and names compared without regard to case.
+    assert_eq!(order(MY, "`Mixed Case`"), Ok(vec![OrderKey::user("Mixed Case", Dir::Asc)]));
+    assert_eq!(order(MY, "NAME desc"), Ok(vec![OrderKey::user("name", Dir::Desc)]));
+    assert_eq!(order(MY, "`mixed case`"), Ok(vec![OrderKey::user("Mixed Case", Dir::Asc)]));
+    assert_eq!(order_err(MY, "\"name\""), (0..6, OrderProblem::NotAColumn));
+    let ansi = Dialect::MySql(MySqlMode { ansi_quotes: true, ..MySqlMode::default() });
+    assert_eq!(order(ansi, "\"name\""), Ok(vec![OrderKey::user("name", Dir::Asc)]));
+    let twins =
+        Target::new(MY, vec![ColumnFacts::new("Code", ColumnKind::Text), ColumnFacts::new("CODE", ColumnKind::Text)]);
+    assert_eq!(parse_order("CODE", &twins), Ok(vec![OrderKey::user("CODE", Dir::Asc)]));
+    assert_eq!(parse_order("code", &twins).unwrap_err().kind, OrderProblem::AmbiguousColumn("code".into()));
+}
+
+#[test]
+fn order_refuses_what_is_not_a_list_of_columns() {
+    for d in [Dialect::Postgres, MY] {
+        assert_eq!(order_err(d, "id,,name"), (3..4, OrderProblem::MissingColumn));
+        assert_eq!(order_err(d, ", id"), (0..1, OrderProblem::MissingColumn));
+        assert_eq!(order_err(d, "id, "), (2..3, OrderProblem::MissingColumn));
+        assert_eq!(order_err(d, "1"), (0..1, OrderProblem::NotAColumn));
+        assert_eq!(order_err(d, "'id'"), (0..4, OrderProblem::NotAColumn));
+        assert_eq!(order_err(d, "lower(name)"), (5..6, OrderProblem::NotAColumn));
+        assert_eq!(order_err(d, "users.id"), (5..6, OrderProblem::NotAColumn));
+        assert_eq!(order_err(d, "id + 1"), (3..4, OrderProblem::Unexpected));
+        assert_eq!(order_err(d, "id ASC DESC"), (7..11, OrderProblem::Unexpected));
+        assert_eq!(order_err(d, "id; DROP TABLE users"), (2..3, OrderProblem::Unexpected));
+        assert_eq!(order_err(d, "id -- x"), (3..7, OrderProblem::Unexpected));
+        assert_eq!(order_err(d, "id /* x */"), (3..10, OrderProblem::Unexpected));
+        assert_eq!(order_err(d, "id, ID DESC").1, OrderProblem::Duplicate("id".into()));
+        assert_eq!(order_err(d, "id NULLS"), (3..8, OrderProblem::NullsIncomplete));
+        assert_eq!(order_err(d, "id NULLS MIDDLE"), (3..8, OrderProblem::NullsIncomplete));
+    }
+    assert_eq!(order_err(Dialect::Postgres, "\"id"), (0..3, OrderProblem::Unterminated));
+    assert_eq!(order_err(MY, "`id"), (0..3, OrderProblem::Unterminated));
+    assert_eq!(order_err(MY, "id # x"), (3..6, OrderProblem::Unexpected));
+    // MySQL has no NULLS FIRST / LAST.
+    assert_eq!(order_err(MY, "id DESC NULLS LAST"), (8..18, OrderProblem::NullsUnsupported));
+}
+
+#[test]
+fn order_with_no_columns_known_refuses_every_name() {
+    let t = Target::new(Dialect::Postgres, vec![]);
+    assert_eq!(parse_order("id", &t).unwrap_err().kind, OrderProblem::UnknownColumn("id".into()));
+    assert_eq!(parse_order("", &t), Ok(vec![]));
+}
+
+#[test]
+fn order_text_reads_back_as_the_same_keys() {
+    let pg = Dialect::Postgres;
+    let keys = vec![
+        OrderKey::user("Mixed Case", Dir::Desc),
+        OrderKey { nulls: Some(Nulls::Last), ..OrderKey::user("price", Dir::Asc) },
+        OrderKey { origin: KeyOrigin::TieBreak, ..OrderKey::user("id", Dir::Asc) },
+    ];
+    assert_eq!(order_text(&keys, pg), "\"Mixed Case\" DESC, price ASC NULLS LAST");
+    assert_eq!(order(pg, &order_text(&keys, pg)), Ok(keys[..2].to_vec()));
+    let my_keys = vec![OrderKey::user("Mixed Case", Dir::Asc), OrderKey::user("name", Dir::Desc)];
+    assert_eq!(order_text(&my_keys, MY), "`Mixed Case` ASC, name DESC");
+    assert_eq!(order(MY, &order_text(&my_keys, MY)), Ok(my_keys));
+    assert_eq!(order_text(&[], pg), "");
+    // A keyword column is quoted.
+    let t = Target::new(pg, vec![ColumnFacts::new("order", ColumnKind::Number)]);
+    let k = vec![OrderKey::user("order", Dir::Asc)];
+    assert_eq!(order_text(&k, pg), "\"order\" ASC");
+    assert_eq!(parse_order(&order_text(&k, pg), &t), Ok(k));
+}
