@@ -470,6 +470,8 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         _ if tunnel_form || env_form || session_form => {
             form.fields().into_iter().filter(|f| !f.is_button()).map(Some).collect()
         }
+        // A SQLite profile's Basic section is the file alone (`ProfileForm::fields`).
+        Section::Basic if form.is_sqlite() => form.fields().into_iter().filter(|f| !f.is_button()).map(Some).collect(),
         Section::Basic => vec![
             Some(Field::Driver),
             Some(Field::Name),
@@ -980,7 +982,8 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             put(buf, inner.x + 1, inner.y + 12 + i as u16, l, iw.saturating_sub(2), style);
         }
     }
-    if form.section == Section::Basic {
+    // A SQLite file has no password and no DSN: nothing of the keychain or the DSN is drawn.
+    if form.section == Section::Basic && !form.is_sqlite() {
         // Why the keychain cannot be picked.
         if !form.keychain_ok {
             let note = i18n.msg(&Msg::FormSourceKeychainUnavailable { error: keychain_error });

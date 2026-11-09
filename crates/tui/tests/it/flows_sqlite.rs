@@ -6,6 +6,7 @@ use common::*;
 use datarig_core::config::Config;
 use datarig_core::profile::ConnectionConfig;
 use datarig_i18n::Lang;
+use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::{AppEvent, Startup};
 use ratatui::crossterm::event::KeyCode;
 use std::path::{Path, PathBuf};
@@ -95,4 +96,26 @@ fn an_export_of_a_sqlite_result_is_renamed_from_its_partial_file() {
     let text = std::fs::read_to_string(&out).expect("the exported file");
     assert_eq!(text.lines().count(), 2001, "a header and 2000 rows");
     assert!(text.lines().nth(1).unwrap().starts_with('1'));
+}
+
+/// Switching a PostgreSQL profile's driver to SQLite redraws the form: the file is asked for and
+/// no server field (host, port, login, DSN) is on screen.
+#[test]
+fn switching_the_driver_to_sqlite_draws_the_file_and_no_server_field() {
+    let pg = ConnectionConfig { name: "pg".into(), driver: "postgres".into(), ..ConnectionConfig::default() };
+    let cfg = Config { connections: vec![pg], ..Config::default() };
+    let mut h = Harness::launched(&cfg, Lang::En, Arc::new(datarig_core::secret::MemoryStore::new()), Startup::Normal);
+    h.explore("pg");
+    h.keys("e");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm));
+    h.key(KeyCode::BackTab);
+    h.key(KeyCode::Enter);
+    h.type_text("sqlite");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.form().driver, 2, "SQLite is picked");
+    let screen = h.screen(80, 24);
+    assert!(screen.contains("File"), "the file is asked for:\n{screen}");
+    for server in ["Host", "Port", "DSN"] {
+        assert!(!screen.contains(server), "{server} is still drawn:\n{screen}");
+    }
 }
