@@ -1,6 +1,6 @@
 use super::read::{self, Field};
 use super::*;
-use crate::driver::ArrayElement;
+use datarig_core::driver::ArrayElement;
 
 fn col<'a>(name: &'a str, kind: ValueKind, type_name: &'a str) -> ParquetColumn<'a> {
     ParquetColumn { name, kind, type_name }
@@ -10,7 +10,7 @@ fn col<'a>(name: &'a str, kind: ValueKind, type_name: &'a str) -> ParquetColumn<
 /// its row groups.
 fn file<'a>(
     columns: &'a [ParquetColumn<'a>],
-    rows: &[super::super::Row],
+    rows: &[Row],
     setup: impl FnOnce(ParquetWriter<'a, Vec<u8>>) -> ParquetWriter<'a, Vec<u8>>,
 ) -> (read::File, u32) {
     let mut w = setup(ParquetWriter::new(columns, Vec::new()).unwrap());
@@ -97,7 +97,7 @@ fn values_read_back_with_their_types_and_nulls() {
         col("doc", K::Json, "jsonb"),
         col("id", K::Other, "uuid"),
     ];
-    let rows: Vec<super::super::Row> = vec![
+    let rows: Vec<Row> = vec![
         vec![
             Some("-2147483648"),
             Some("9223372036854775807"),
@@ -294,7 +294,7 @@ fn rows_go_in_row_groups_of_bounded_rows_and_bytes() {
     let columns = [col("n", ValueKind::Integer, "int8"), col("t", ValueKind::Text, "text")];
     let texts: Vec<String> = (0..10).map(|i| format!("row {i}")).collect();
     let n: Vec<String> = (0..10).map(|i| i.to_string()).collect();
-    let rows: Vec<super::super::Row> = (0..10).map(|i| vec![Some(n[i].as_str()), Some(texts[i].as_str())]).collect();
+    let rows: Vec<Row> = (0..10).map(|i| vec![Some(n[i].as_str()), Some(texts[i].as_str())]).collect();
     let (f, groups) = file(&columns, &rows, |w| w.row_groups(4, GROUP_BYTES));
     assert_eq!((groups, f.groups.clone()), (3, vec![4, 4, 2]));
     let back: Vec<Vec<Field>> = (0..10).map(|i| vec![Field::Long(i), s(&format!("row {i}"))]).collect();
@@ -403,7 +403,7 @@ fn a_row_of_another_width_than_the_columns_fails_and_keeps_nothing_of_it() {
 #[test]
 fn timestamps_bc_and_past_9999_go_through_the_writer() {
     let columns = [col("tz", ValueKind::TimestampTz, "timestamptz"), col("t", ValueKind::Timestamp, "timestamp")];
-    let rows: Vec<super::super::Row> = vec![
+    let rows: Vec<Row> = vec![
         vec![Some("0044-03-15 12:00:00+00:53:28 BC"), Some("10000-01-01 23:59:59.999999")],
         vec![Some("0001-01-01 00:00:00+00 BC"), Some("0001-12-31 00:00:00 BC")],
     ];
@@ -461,7 +461,7 @@ fn unsigned_64_bit_statistics_order_as_unsigned() {
     use parquet::file::statistics::Statistics;
     let columns = [col("u", ValueKind::Integer, "bigint unsigned")];
     let max = u64::MAX.to_string();
-    let rows: Vec<super::super::Row> = vec![vec![Some("1")], vec![Some(&max)], vec![Some("9223372036854775808")]];
+    let rows: Vec<Row> = vec![vec![Some("1")], vec![Some(&max)], vec![Some("9223372036854775808")]];
     let mut w = ParquetWriter::new(&columns, Vec::new()).unwrap();
     w.rows(&rows).unwrap();
     w.end().unwrap();

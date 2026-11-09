@@ -91,7 +91,7 @@ fn cells_have_their_types() {
         col("doc", Kind::Json),
         col("data", Kind::Bytes),
         col("at", Kind::Text),
-        col("tags", Kind::Array(super::super::Element::Number)),
+        col("tags", Kind::Array(datarig_core::export::Element::Number)),
     ];
     let rows: Vec<Row> = vec![
         vec![

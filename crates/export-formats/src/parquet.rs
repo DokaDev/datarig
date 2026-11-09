@@ -31,8 +31,9 @@
 //! A row group that fails to be written (a full disk) leaves a file that cannot be finished: every
 //! later call fails with that first error (its kind and its text), [`RowSink::end`] included.
 
-use super::stream::RowSink;
-use crate::driver::ValueKind;
+use datarig_core::driver::ValueKind;
+use datarig_core::export::Row;
+use datarig_core::export::stream::RowSink;
 use parquet::basic::{Compression, LogicalType, Repetition, TimeUnit, Type as PhysicalType};
 use parquet::basic::{IntType, TimeType, TimestampType};
 use parquet::data_type::{BoolType, ByteArray, ByteArrayType, DoubleType, FloatType, Int32Type, Int64Type};
@@ -647,7 +648,7 @@ impl<W: Write + Send> RowSink for ParquetWriter<'_, W> {
         Ok(())
     }
 
-    fn rows(&mut self, rows: &[super::Row]) -> io::Result<()> {
+    fn rows(&mut self, rows: &[Row]) -> io::Result<()> {
         if let Some(e) = self.failed() {
             return Err(e);
         }

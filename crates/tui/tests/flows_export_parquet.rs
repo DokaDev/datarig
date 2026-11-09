@@ -3,14 +3,14 @@
 //! types, NULL, a cancel (the row groups so far and a footer in `<file>.partial`, which reads) and
 //! a value its column's type cannot hold (the export fails naming its column and row, the rows
 //! before it kept). Row groups, dates and the other parsing are the core writer's tests
-//! (`export::parquet`).
+//! (`datarig_export_formats::parquet`).
 
 mod common;
 
 use common::*;
 use datarig_core::driver::{ColumnMeta, DbCommand, DbError, DbEvent, ExportBatch, ExportGuard, ExportSink, ValueKind};
-use datarig_core::export::parquet::read::{self, Field};
 use datarig_core::fault::Fault;
+use datarig_export_formats::parquet::read::{self, Field};
 use datarig_i18n::Lang;
 use datarig_tui::app::AppEvent;
 use datarig_tui::app::export::{ExportEvent, ExportNews, Failure, Outcome};

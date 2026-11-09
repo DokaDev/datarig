@@ -993,14 +993,11 @@ dependencies = [
 name = "datarig-core"
 version = "0.40.1"
 dependencies = [
- "bytes",
  "chrono",
  "futures",
  "keyring",
- "parquet",
  "pg_query",
  "prost",
- "rust_xlsxwriter",
  "rustix 1.1.5",
  "serde",
  "serde_json",
@@ -1011,7 +1008,6 @@ dependencies = [
  "toml_edit",
  "unicode-width",
  "uuid",
- "zip",
 ]
 
 [[package]]
@@ -1043,6 +1039,17 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-postgres",
+]
+
+[[package]]
+name = "datarig-export-formats"
+version = "0.40.1"
+dependencies = [
+ "bytes",
+ "datarig-core",
+ "parquet",
+ "rust_xlsxwriter",
+ "zip",
 ]
 
 [[package]]
@@ -1093,6 +1100,7 @@ dependencies = [
  "datarig-core",
  "datarig-driver-mysql",
  "datarig-driver-postgres",
+ "datarig-export-formats",
  "datarig-i18n",
  "datarig-ssh",
  "datarig-update",
