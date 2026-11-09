@@ -27,10 +27,12 @@ pub mod chooser;
 pub mod cmdline;
 pub mod command;
 mod conn;
+mod conn_test;
 mod connection;
 mod context;
 pub mod copy;
 mod ddl;
+mod detail;
 mod dialog_mouse;
 mod dispatch;
 pub mod edit;
@@ -88,12 +90,16 @@ pub mod updates;
 pub mod whats_new;
 pub mod yank_flash;
 
+pub use cmdline::{CommandItem, CommandLine};
 pub use conn::{
     AUX_IDLE, AuxMeta, CHECKS_RETRY, ChecksCache, Connecting, ConnectionManager, Keys, NodeState, ProfileConn, Queued,
     TableChecks,
 };
+pub use conn_test::{ConnTest, TestState, TunnelTest};
+use conn_test::{encryption_text, reached_failures, reached_targets, test_msg};
+pub use detail::{Detail, DetailTab};
 pub use paging::Paging;
-pub use password::{EnvLookup, PromptPurpose, Secret};
+pub use password::{EnvLookup, PasswordPrompt, PromptField, PromptPurpose, Secret};
 pub use persist::fault_reason;
 pub use tabs::{SessionState, Tab, TabId, TabKind, TabManager, ValuesWait};
 
@@ -255,125 +261,6 @@ pub struct Viewer {
     pub view_h: usize,
 }
 
-/// One entry of the command line's list.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CommandItem {
-    /// An action of [`REGISTRY`] (by index).
-    Action(usize),
-    /// A command of [`command::COMMANDS`] (by index).
-    Command(usize),
-    /// A completion of the argument of the command `command` (index into `COMMANDS`).
-    Arg { command: usize, arg: command::ArgCompletion },
-    /// The text typed, as an editor command (a line number, `:s`).
-    Ex,
-}
-
-/// The `:` command line: an input line and the matching commands, arguments and actions (a
-/// popup near the top by default, the last line with `commands.position = bottom`).
-pub struct CommandLine {
-    pub input: TextInput,
-    /// Best match first.
-    pub items: Vec<CommandItem>,
-    pub selected: usize,
-    /// Why the last `Enter` did nothing (unknown command, bad argument); typing clears it.
-    pub error: Option<Notice>,
-    /// `Tab`/`↑`/`↓` picked an entry since the input last changed. Until then `Enter` on a
-    /// `:use` argument runs what was typed, never the top completion.
-    pub picked: bool,
-    /// Where the entries were drawn and the first one shown (mouse), kept by the renderer, and
-    /// the entry a press armed (it runs on the release).
-    pub list: ratatui::layout::Rect,
-    pub offset: usize,
-    pub press: overlay::Press<usize>,
-}
-
-/// Password asked at connect time: a `prompt` profile (every time), or no/wrong stored
-/// password (keychain unavailable, nothing saved yet).
-/// What the prompt's field is called: a label, or text a server gave (a keyboard-interactive
-/// question, shown as it is).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PromptField {
-    Label(Label),
-    Text(String),
-}
-
-impl From<Label> for PromptField {
-    fn from(l: Label) -> Self {
-        PromptField::Label(l)
-    }
-}
-
-pub struct PasswordPrompt {
-    pub id: ProfileId,
-    /// The profile's name (the title).
-    pub profile: String,
-    pub input: TextInput,
-    pub error: Notice,
-    /// The "save" checkbox (saved only after the connection succeeds).
-    pub save: bool,
-    /// The checkbox has the focus (`Tab` toggles focus, `Space` toggles the box).
-    pub save_focus: bool,
-    /// Where the checkbox saves to (the profile's store); `None` hides the checkbox.
-    pub save_to: Option<SourceKind>,
-    /// Shown instead of the checkbox when there is none.
-    pub note: Label,
-    /// What `Enter` does with the password.
-    pub purpose: PromptPurpose,
-    /// The title when it is not the profile's database password (an SSH tunnel's secret).
-    pub title: Option<Msg>,
-    /// The field's name.
-    pub field: PromptField,
-    /// Show what is typed (a keyboard-interactive question that says so).
-    pub echo: bool,
-    /// Where the checkbox was drawn, and the buttons (kept by the renderer, for the mouse).
-    pub checkbox: ratatui::layout::Rect,
-    pub buttons: overlay::Buttons,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TestState {
-    Running,
-    Ok(PingInfo),
-    Failed(String),
-    Timeout(Duration),
-    Cancelled,
-    /// The password source failed before the server was asked.
-    Source(SourceError),
-    /// A tunnel preset's test: what it reached through the tunnel, each address with its time
-    /// or why not (in words).
-    Reached(Vec<(String, Result<Duration, String>)>),
-    /// A session preset's test: what its session said, at this level.
-    Applied(Msg, Level),
-}
-
-pub struct ConnTest {
-    pub seq: u64,
-    pub started: Instant,
-    pub state: TestState,
-    abort: Option<AbortHandle>,
-    /// Through the profile's SSH tunnel: how far that got.
-    pub tunnel: Option<TunnelTest>,
-    /// A tunnel preset's test: after the tunnel, channels to its profiles' database addresses
-    /// are tried instead of a database.
-    pub probe: bool,
-}
-
-/// The SSH tunnel of a test connection: each stage shows while it runs,
-/// and the tunnel's time is reported apart from the database's.
-pub struct TunnelTest {
-    pub host: String,
-    /// The tested profile's name and tunnel settings (the questions it asks name them).
-    pub name: String,
-    pub settings: datarig_core::profile::ssh::SshSettings,
-    pub stage: Option<datarig_ssh::tunnel::Stage>,
-    /// The tunnel opened after this long.
-    pub opened: Option<Duration>,
-    /// How it opened: the host key taken and the login that worked.
-    pub how: Option<datarig_ssh::tunnel::Opened>,
-    /// Why it did not open (the SSH stage's line).
-    pub failure: Option<String>,
-}
-
 /// Events delivered to the app from background tasks.
 #[derive(Debug)]
 pub enum AppEvent {
@@ -496,42 +383,6 @@ enum Drag {
     Divider,
     /// The explorer's right border.
     ExplorerEdge,
-}
-
-/// The tabs of the result inspector.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum DetailTab {
-    /// The selected cell's whole value, its type and length.
-    Cell,
-    /// Every column of the selected row, `name: value`: the tab the inspector starts on.
-    #[default]
-    Row,
-}
-
-impl DetailTab {
-    pub fn other(self) -> Self {
-        match self {
-            DetailTab::Cell => DetailTab::Row,
-            DetailTab::Row => DetailTab::Cell,
-        }
-    }
-}
-
-/// The result detail: shown or not (one key toggles it; `detail_view` decides
-/// whether it is a panel or a status bar preview) and the panel's tab. It follows the grid's
-/// selection.
-#[derive(Clone, Copy, Debug)]
-pub struct Detail {
-    pub visible: bool,
-    pub tab: DetailTab,
-    /// The Row tab's first column on screen: it scrolls only to keep the grid's column in view.
-    pub first: usize,
-}
-
-impl Default for Detail {
-    fn default() -> Self {
-        Self { visible: true, tab: DetailTab::Row, first: 0 }
-    }
 }
 
 pub struct App {
@@ -851,101 +702,6 @@ pub struct App {
     pub whats_new_paused: bool,
     /// The update check of this run ([`updates`]).
     pub updates: updates::Updates,
-}
-
-fn test_msg(i18n: &I18n, t: &ConnTest) -> Notice {
-    let (state, started) = (&t.state, t.started);
-    // Through a tunnel: the tunnel's stage while it opens, then its time next to the database's
-    // result, so it shows which one failed.
-    if let Some(tt) = &t.tunnel {
-        let host = tt.host.clone();
-        match (state, tt.opened) {
-            (TestState::Running, Some(ssh)) if t.probe => {
-                return Notice::new(Msg::TestSshProbing { host, elapsed: ssh }, Level::Info);
-            }
-            (TestState::Reached(v), Some(ssh)) if v.is_empty() => {
-                return Notice::new(Msg::TestTunnelOkNoTargets { host, elapsed: ssh }, Level::Success);
-            }
-            (TestState::Reached(v), Some(ssh)) => {
-                return match reached_failures(v) {
-                    None => Notice::new(
-                        Msg::TestTunnelOk { host, elapsed: ssh, targets: reached_targets(v) },
-                        Level::Success,
-                    ),
-                    Some(error) => Notice::new(Msg::TestTunnelProbeFailed { host, elapsed: ssh, error }, Level::Error),
-                };
-            }
-            (TestState::Running, None) => {
-                let stage = i18n.label(tunnel::stage_label(tt.stage.unwrap_or(datarig_ssh::tunnel::Stage::Connecting)));
-                return Notice::new(
-                    Msg::TestSshRunning { host, stage: stage.to_string(), elapsed: started.elapsed() },
-                    Level::Info,
-                );
-            }
-            (TestState::Running, Some(ssh)) => {
-                return Notice::new(Msg::TestSshDb { host, elapsed: ssh }, Level::Info);
-            }
-            (TestState::Ok(info), Some(ssh)) => {
-                // Plain through the tunnel: the tunnel encrypts it as far as the bastion.
-                let tls = match info.encryption {
-                    Encryption::Plain => i18n.label(Label::TlsPlainTunnel).to_string(),
-                    e => encryption_text(i18n, e),
-                };
-                let (version, latency) = (info.server_version.clone(), info.latency);
-                return Notice::new(Msg::TestOkSsh { host, elapsed: ssh, version, latency, tls }, Level::Success);
-            }
-            (TestState::Failed(e), Some(ssh)) => {
-                return Notice::new(Msg::TestFailedDb { host, elapsed: ssh, error: e.clone() }, Level::Error);
-            }
-            _ => {}
-        }
-    }
-    match state {
-        TestState::Running => Notice::new(Msg::TestRunning { elapsed: started.elapsed() }, Level::Info),
-        TestState::Ok(info) => {
-            let tls = encryption_text(i18n, info.encryption);
-            Notice::new(
-                Msg::TestOk { version: info.server_version.clone(), latency: info.latency, tls },
-                Level::Success,
-            )
-        }
-        TestState::Failed(e) => Notice::new(Msg::TestFailed { error: e.clone() }, Level::Error),
-        TestState::Timeout(d) => Notice::new(Msg::TestTimeout { elapsed: *d }, Level::Error),
-        TestState::Cancelled => Notice::new(Label::TestCancelled, Level::Warning),
-        TestState::Source(e) => Notice::new(password::source_error_msg(i18n, e), Level::Error),
-        TestState::Reached(v) => match reached_failures(v) {
-            None => Notice::new(Msg::TestReached { targets: reached_targets(v) }, Level::Success),
-            Some(error) => Notice::new(Msg::TestFailed { error }, Level::Error),
-        },
-        TestState::Applied(m, level) => Notice::new(m.clone(), *level),
-    }
-}
-
-/// How a connection's traffic goes, in words: `TLS 1.3`, `TLS 1.3, certificate not checked`,
-/// `not encrypted`.
-pub(crate) fn encryption_text(i18n: &I18n, e: Encryption) -> String {
-    match e {
-        Encryption::Plain => i18n.label(Label::TlsPlain).to_string(),
-        Encryption::Tls { version, verified } => {
-            let version = version.label().to_string();
-            match verified {
-                Verified::Full => i18n.msg(&Msg::TlsVerified { version }).to_string(),
-                Verified::Chain => i18n.msg(&Msg::TlsChain { version }).to_string(),
-                Verified::No => i18n.msg(&Msg::TlsUnverified { version }).to_string(),
-            }
-        }
-    }
-}
-
-/// The addresses a preset's test reached: `host:port, …`.
-fn reached_targets(v: &[(String, Result<Duration, String>)]) -> String {
-    v.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>().join(", ")
-}
-
-/// The addresses a preset's test did not reach, each with why (`None`: it reached them all).
-fn reached_failures(v: &[(String, Result<Duration, String>)]) -> Option<String> {
-    let failed: Vec<String> = v.iter().filter_map(|(t, r)| r.as_ref().err().map(|e| format!("{t}: {e}"))).collect();
-    (!failed.is_empty()).then(|| failed.join("; "))
 }
 
 /// Startup notice for a `[keymap.*]` entry that was skipped (or replaced a default).
