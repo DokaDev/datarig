@@ -1,7 +1,28 @@
 # Contributing to datarig
 
-Thanks for your interest. datarig is early and changes quickly, so for anything larger than a
-small fix, please open an issue first to agree on the approach.
+Thanks for your interest. datarig is early and changes quickly.
+
+## Before you open a pull request
+
+datarig is maintained by one person for now, so changes need to be planned together before
+any code is written. As more maintainers join, this process will be made lighter. Please:
+
+1. **Open an issue first** (or comment on an existing one) describing what you want to change
+   and why.
+2. **Wait for the discussion and an assignment.** Some areas are being reworked, and the issue
+   is where you'll find out whether your change overlaps with work in progress.
+3. **Then open the pull request**, linked to its issue (`Closes #123` or `Part of #123`).
+
+Pull requests that arrive without an agreed issue may wait a long time or be closed, even when
+the code is good: with a single maintainer, unplanned changes are hard to review and to fit
+into the plan. Small fixes such as typos or broken links can skip the issue.
+
+Planned and in-progress work is tracked in
+[the issues](https://github.com/DokaDev/datarig/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap),
+so it's worth a look before you start. Thank you for bearing with this while the project is
+small.
+
+## Finding your way around
 
 To get oriented in the code, [DeepWiki](https://deepwiki.com/DokaDev/datarig) offers an
 auto-generated technical overview of it; the user guide is the
@@ -115,6 +136,7 @@ budget again; counts, memory and the binary size fail at once (docs/perf.md, "Bu
 - Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/):
   `feat: …`, `fix: …`, `docs: …`, `test: …`, `refactor: …`, `perf: …`, `build: …`, `ci: …`,
   `chore: …`, with an optional scope (`fix(driver-postgres): …`).
+- Open the issue first (see "Before you open a pull request") and link the pull request to it.
 - Keep a pull request to one change, with tests for what it fixes or adds.
 - The code, comments and documentation are in English.
 

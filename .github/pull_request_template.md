@@ -1,3 +1,5 @@
+Related issue: Closes #  <!-- or: Part of # -->
+
 ## What and why
 
 
@@ -9,6 +11,7 @@ no doc change: <why no page of docs/site changes>
 no changelog: <why users will not notice>
 -->
 
+- [ ] This change was discussed and assigned in its issue (or is a small fix such as a typo)
 - [ ] A page of `docs/site/src` describes what users see change (or `no doc change: …`)
 - [ ] A fragment `changes/<kind>/<slug>.md` for a change to `crates/` (or
       `no changelog: …`)
