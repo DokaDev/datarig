@@ -475,3 +475,31 @@ fn paging_again_says_when_the_order_is_not_unique() {
     let said = page_again(&mut h);
     assert!(!said.contains("not unique") && said.starts_with("Ran the SELECT again"), "{said}");
 }
+
+/// A structure read after the rows came does not change what is said of them: the order
+/// they were read in was not unique, and the line and a page read again say so (the next
+/// run appends the key).
+#[test]
+fn a_late_structure_does_not_make_the_held_order_unique() {
+    let mut h = users();
+    h.command("orderby name");
+    let sent = runs(&mut h);
+    assert!(sent.iter().flatten().any(|s| s.ends_with("ORDER BY \"name\" ASC")), "{sent:?}");
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Released { id });
+    let columns = Some(vec![meta("id", "int8", true, false), meta("name", "text", false, false)]);
+    let rows = (0..h.app.page_size).map(|i| vec![Some(i.to_string()), Some(format!("n{i}"))]).collect();
+    h.tab_db(index, DbEvent::Page { id, columns, rows, more: true, elapsed: Duration::from_millis(2) });
+    h.meta_db(
+        "local-pg",
+        DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(Box::new(users_structure())) },
+    );
+    let screen = h.screen(120, 30);
+    assert!(screen.contains("order not unique") && !screen.contains("+ id"), "{screen}");
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.sent();
+    h.keys("n");
+    let said = h.app.tab().status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default();
+    assert!(said.contains("order not unique"), "{said}");
+}

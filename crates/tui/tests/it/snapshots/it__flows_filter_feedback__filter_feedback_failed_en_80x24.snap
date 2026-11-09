@@ -2,7 +2,7 @@
 source: crates/tui/tests/it/flows_filter_feedback.rs
 expression: backend
 ---
-"╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users * ×                        "
+"╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
 "│  ＋ New connection   │╭ Results · 3 rows ────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1       ││ local-pg / datarig.shop.users  127.0.0.1:55432       │"
 "│  ▾ ●   local-pg      ││ [Result 1]  Chart  Messages  · earlier run       H/L │"

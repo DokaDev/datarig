@@ -357,3 +357,86 @@ fn a_filtered_table_is_not_exported_by_its_key() {
     assert!(!key_asked(&sent), "{sent:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `space r v` opens the statement a run would send, checked as the run is: a draft refused
+/// on a read-only profile (its first run cancelled, so no rows are held) is not opened.
+#[test]
+fn the_statement_opened_in_a_console_is_checked_as_a_run() {
+    let mut h = read_only(Lang::En);
+    open_users(&mut h);
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Failed { id, error: datarig_core::driver::DbError::Cancelled, cancelled: true });
+    assert!(h.app.tab().doc.table_query.as_ref().unwrap().shown.is_none());
+    h.sent();
+    h.command("where my_fn(id) > 0");
+    assert!(runs(&mut h).is_empty(), "refused");
+    let tabs = h.app.tabs.len();
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys(" rv");
+    assert_eq!(h.app.tabs.len(), tabs, "no console opened");
+    assert!(h.app.tab().is_table());
+    assert!(status(&h).contains("read-only connection"), "{}", status(&h));
+    // A filter of known functions opens.
+    h.command("where id > 1");
+    h.keys(" rv");
+    assert_eq!(h.app.tabs.len(), tabs + 1);
+    assert!(h.app.tab().editor.text().contains("WHERE (id > 1)"), "{}", h.app.tab().editor.text());
+}
+
+/// The tab's title mark and the tab list describe the rows held: a filter whose run brought
+/// no rows (cancelled) stays in the filter line only.
+#[test]
+fn the_title_mark_is_the_held_rows_filter() {
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    answer(&mut h);
+    h.command("where id > 1");
+    let id = h.app.tab().exec.query_id;
+    assert_eq!(datarig_tui::app::table_query::applied_filter(h.app.tab()), None, "in flight: the rows held are all");
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Failed { id, error: datarig_core::driver::DbError::Cancelled, cancelled: true });
+    assert_eq!(datarig_tui::app::table_query::applied_filter(h.app.tab()), None);
+    h.command("where id > 2");
+    answer(&mut h);
+    assert_eq!(datarig_tui::app::table_query::applied_filter(h.app.tab()), Some("id > 2"));
+}
+
+/// The export's statement is checked again just before it is sent: an environment turned
+/// read-only while the export waited (its question open) refuses a filter calling a function
+/// it cannot check, and nothing is sent.
+#[test]
+fn a_filtered_export_is_checked_again_when_its_statement_goes() {
+    let dir = std::env::temp_dir().join(format!("datarig-table-filter-recheck-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    answer(&mut h);
+    h.command("where my_fn(id) > 0");
+    assert!(h.app.overlays.is_open(OverlayKind::Confirm));
+    h.key(KeyCode::Char('y'));
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Released { id });
+    let columns = Some(vec![meta("id", "int8", true, false)]);
+    let rows = (0..h.app.page_size).map(|i| vec![Some(i.to_string())]).collect();
+    h.tab_db(index, DbEvent::Page { id, columns, rows, more: true, elapsed: Duration::from_millis(2) });
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.sent();
+    let path = dir.join("f.csv");
+    h.command(&format!("export {}", path.display()));
+    // Read-only from now on (the session too, so only the filter's check refuses).
+    h.app.policies.insert("default", Policy { read_only: true, ..Policy::default() });
+    h.app.tab_mut().exec.read_only = true;
+    if h.app.overlays.is_open(OverlayKind::Confirm) {
+        h.key(KeyCode::Char('y'));
+    }
+    let start = std::time::Instant::now();
+    while h.app.exporting(h.app.tab().id) && start.elapsed() < Duration::from_secs(10) {
+        h.app.pump_exports(Duration::from_millis(50));
+    }
+    let sent = h.sent();
+    assert!(!sent.iter().any(|c| matches!(c, DbCommand::Export { .. })), "{sent:?}");
+    assert!(!h.app.exporting(h.app.tab().id));
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -233,9 +233,10 @@ impl App {
         let (from, to) = (datarig_i18n::fmt_count(skip + 1), datarig_i18n::fmt_count(skip + size));
         // A table tab's order is total only when its keys end in a key the structure says is
         // unique (not known yet: not unique).
-        let unique = match self.table_query(id).and_then(|q| q.shown.as_ref()) {
-            Some(q) => self.table_target(id).is_some_and(|target| datarig_core::query::compile(q, &target).total),
-            None => true,
+        // As the held rows' statement was sent: a structure read since does not make it total.
+        let unique = match self.table_query(id) {
+            Some(q) if q.shown.is_some() => q.shown_run().is_some_and(|s| s.total),
+            _ => true,
         };
         let note = match (t.exec.prepared.ordered(&sql), unique, released) {
             (true, true, false) => Notice::new(Msg::ResultsPageResumed { from, to }, Level::Info),

@@ -64,11 +64,13 @@ impl App {
             };
         };
         let keys: Vec<_> = q.order.iter().filter(|k| k.origin == KeyOrigin::User).cloned().collect();
-        let tie = (!keys.is_empty()).then(|| self.table_target(id)).flatten().map(|target| {
-            let c = query::compile(&q, &target);
+        // As the statement of what is applied was sent (nothing said before one is): a
+        // structure read since changes the next statement, not what this one read.
+        let run = self.table_query(id).and_then(|tq| tq.applied_run());
+        let tie = run.filter(|_| !keys.is_empty()).map(|run| {
             let ties: Vec<&str> =
-                c.order.iter().filter(|k| k.origin == KeyOrigin::TieBreak).map(|k| k.col.as_str()).collect();
-            match (ties.is_empty(), c.total) {
+                run.order.iter().filter(|k| k.origin == KeyOrigin::TieBreak).map(|k| k.col.as_str()).collect();
+            match (ties.is_empty(), run.total) {
                 (false, _) => format!("+ {}", ties.join(", ")),
                 (true, true) => String::new(),
                 (true, false) => self.i18n.label(Label::TableOrderNotUnique).to_string(),
@@ -135,10 +137,10 @@ impl App {
                 self.table_run(id, q);
             }
             TableAction::OpenSql => {
-                let Some(target) = self.table_target(id) else { return };
-                let Some(tq) = self.table_query_mut(id) else { return };
-                let q = tq.shown.clone().unwrap_or_else(|| tq.draft.clone());
-                let sql = query::compile(&q, &target).sql;
+                if self.table_query_mut(id).is_none() {
+                    return;
+                }
+                let Some(sql) = self.table_sql_to_open(id) else { return };
                 let t = self.tab();
                 let (profile, context) = (t.profile, t.context.clone());
                 self.console_with(&sql, profile, context);

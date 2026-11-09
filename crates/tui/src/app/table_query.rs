@@ -41,12 +41,24 @@ pub struct Refusal {
     pub text: String,
 }
 
-/// A query's statement as sent: its text, and where the filter's text is in it (bytes).
+/// A query's statement as sent: its text, where the filter's text is in it (bytes), the keys
+/// it orders by (the tie-breaker keys appended included) and whether that order is total. What
+/// the tab says of rows read with it comes from here, never from compiling the query again
+/// (a structure read later changes the next statement, not this one).
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Statement {
     pub query: Query,
     pub sql: String,
     pub filter_span: Option<Range<usize>>,
+    pub order: Vec<query::OrderKey>,
+    pub total: bool,
+}
+
+impl Statement {
+    /// Query `q` as `c` compiled it.
+    pub(super) fn of(q: Query, c: query::Compiled) -> Self {
+        Statement { query: q, sql: c.sql, filter_span: c.filter_span, order: c.order, total: c.total }
+    }
 }
 
 /// The run of the query a tab sent ended without its first page: the rows shown are those of
@@ -92,6 +104,8 @@ pub struct TableQuery {
     failed: Option<(u64, Failure)>,
     /// The run whose first page landed last, by its query id: it brought its query's rows.
     landed: Option<u64>,
+    /// The statement the rows held were read with (`shown`'s, as it was sent).
+    shown_run: Option<Statement>,
     /// The query waiting for the user's word on the functions it calls.
     asked: Option<Query>,
     /// The filter texts whose functions the user let run in this tab.
@@ -112,6 +126,7 @@ impl TableQuery {
             statement: None,
             failed: None,
             landed: None,
+            shown_run: None,
             asked: None,
             confirmed: HashSet::new(),
             line: Default::default(),
@@ -137,8 +152,23 @@ impl TableQuery {
     /// The first page of run `qid` landed: the rows are of its query, when it was one.
     pub(super) fn first_page(&mut self, qid: u64) {
         self.shown = self.requested.as_ref().filter(|(id, _)| *id == qid).map(|(_, q)| q.clone());
+        self.shown_run = self.statement.as_ref().filter(|(id, _)| *id == qid).map(|(_, s)| s.clone());
         self.failed = None;
         self.landed = Some(qid);
+    }
+
+    /// The statement the rows held were read with, when they are of the tab's query.
+    pub(super) fn shown_run(&self) -> Option<&Statement> {
+        self.shown_run.as_ref().filter(|_| self.shown.is_some())
+    }
+
+    /// The statement of what the tab holds as applied ([`TableQuery::applied`]): the run sent
+    /// last when it was the query's, else the one of the rows held; `None` before any ran.
+    pub(super) fn applied_run(&self) -> Option<&Statement> {
+        match &self.requested {
+            Some((qid, _)) => self.statement.as_ref().filter(|(id, _)| id == qid).map(|(_, s)| s),
+            None => self.shown_run(),
+        }
     }
 
     /// Run `qid` ended (`how`, when it brought no rows): when it was the query's and its first
@@ -167,10 +197,11 @@ impl TableQuery {
                 }
                 (ServerError::Message(m), Dialect::MySql(_)) => {
                     let near = mysql_near(&m.text)?;
-                    let mut found = s.sql.match_indices(near);
-                    let (at, _) = found.next()?;
-                    if found.next().is_some() {
-                        // Unknown, not located: found more than once.
+                    let at = s.sql.find(near)?;
+                    // Found again from the next character on (an overlapping match counts):
+                    // unknown, not located.
+                    let next = at + s.sql[at..].chars().next().map_or(1, char::len_utf8);
+                    if s.sql[next..].contains(near) {
                         return None;
                     }
                     (at, Some(at + near.len()))
@@ -203,9 +234,10 @@ impl TableQuery {
     }
 }
 
-/// The condition table tab `t` holds as applied, when it has one.
+/// The condition of the rows table tab `t` holds, when they are filtered (the tab's title and
+/// the tab list say it; a query that did not bring its rows stays in the filter line only).
 pub fn applied_filter(t: &Tab) -> Option<&str> {
-    filter_text(t.doc.table_query.as_ref()?.applied())
+    t.doc.table_query.as_ref()?.shown_filter()
 }
 
 /// The filter text of `q`, unless it has none or only blanks (which filter nothing).
@@ -446,15 +478,7 @@ impl App {
             let read_only = self.tabs.get(id).and_then(|t| t.profile).is_some_and(|p| self.read_only(p));
             let verdict = query::check_filter(&text, &name, &target, &self.classifier(id), read_only);
             match verdict {
-                Err(r) => {
-                    let why = refusal_why(&self.i18n, &r);
-                    let notice = Notice::new(Msg::TableFilterRefused { why }, Level::Warning);
-                    if let Some(tq) = self.table_query_mut(id) {
-                        let at = refusal_at(&r);
-                        tq.refusal = Some(Refusal { field: Field::Where, at, notice: notice.clone(), text });
-                    }
-                    return self.tab_status(id, notice);
-                }
+                Err(r) => return self.filter_refused(id, &r, text),
                 Ok(FilterVerdict::NeedsConfirm(asks))
                     if !self.table_query(id).is_some_and(|tq| tq.confirmed.contains(&text)) =>
                 {
@@ -480,10 +504,46 @@ impl App {
         }
         if let Some(tq) = self.table_query_mut(id) {
             tq.refusal = None;
-            tq.pending = Some(Statement { query: q, sql: sql.clone(), filter_span: compiled.filter_span });
+            tq.pending = Some(Statement::of(q, compiled));
         }
         self.run_in(id, vec![sql]);
         self.filter_line_follow_tab(id);
+    }
+
+    /// The filter `text` of table tab `id` is refused (`r`): said, and kept for the line.
+    fn filter_refused(&mut self, id: TabId, r: &BarRefusal, text: String) {
+        let why = refusal_why(&self.i18n, r);
+        let notice = Notice::new(Msg::TableFilterRefused { why }, Level::Warning);
+        if let Some(tq) = self.table_query_mut(id) {
+            let at = refusal_at(r);
+            tq.refusal = Some(Refusal { field: Field::Where, at, notice: notice.clone(), text });
+        }
+        self.tab_status(id, notice);
+    }
+
+    /// The statement `space r v` opens for table tab `id`, checked as a run would be: the one
+    /// the rows held were read with (their filter checked again), else the draft's (checked
+    /// as Enter checks it). `None` when refused (said, as Enter says it).
+    pub(super) fn table_sql_to_open(&mut self, id: TabId) -> Option<String> {
+        let tq = self.table_query(id)?;
+        if let Some(s) = tq.shown_run() {
+            let sql = s.sql.clone();
+            if let Err(why) = self.table_recheck(id) {
+                self.tab_status(id, Notice::new(Msg::TableFilterRefused { why }, Level::Warning));
+                return None;
+            }
+            return Some(sql);
+        }
+        let q = tq.draft.clone();
+        let (name, target) = (self.table_name(id)?, self.table_target(id)?);
+        if let Some(text) = filter_text(&q).map(str::to_string) {
+            let read_only = self.tabs.get(id).and_then(|t| t.profile).is_some_and(|p| self.read_only(p));
+            if let Err(r) = query::check_filter(&text, &name, &target, &self.classifier(id), read_only) {
+                self.filter_refused(id, &r, text);
+                return None;
+            }
+        }
+        Some(query::compile(&q, &target).sql)
     }
 
     /// Ask for the structure of table tab `id`'s table (on the metadata session of its profile

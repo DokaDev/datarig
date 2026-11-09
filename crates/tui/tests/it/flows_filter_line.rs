@@ -77,13 +77,15 @@ fn structure(h: &mut Harness) {
 /// `shop.users` filtered on `id > 1` and ordered by `name` descending (the structure read).
 fn applied(lang: Lang) -> Harness {
     let mut h = users(lang);
+    // The structure read first: the statement sent appends its key (a structure read after
+    // the rows came changes only the next statement).
+    structure(&mut h);
     h.keys("f");
     h.type_text("id > 1");
     h.key(KeyCode::Tab);
     h.type_text("NAME desc");
     h.key(KeyCode::Enter);
     answer(&mut h);
-    structure(&mut h);
     h.sent();
     h
 }

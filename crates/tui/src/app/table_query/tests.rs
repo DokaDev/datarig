@@ -32,7 +32,8 @@ fn the_query_is_bound_to_the_run_that_sends_its_statement() {
     });
     let q = filtered("id > 1", None);
     let sql = "SELECT * FROM \"shop\".\"users\" WHERE (id > 1)".to_string();
-    tq.pending = Some(Statement { query: q.clone(), sql: sql.clone(), filter_span: None });
+    tq.pending =
+        Some(Statement { query: q.clone(), sql: sql.clone(), filter_span: None, order: Vec::new(), total: false });
     tq.sent(7, std::slice::from_ref(&sql));
     assert_eq!(tq.requested, Some((7, q.clone())));
     // The first page of another run is not of it.
@@ -42,7 +43,7 @@ fn the_query_is_bound_to_the_run_that_sends_its_statement() {
     assert_eq!(tq.shown, Some(q.clone()));
     assert_eq!(tq.shown_filter(), Some("id > 1"));
     // A run of another statement: nothing is claimed about its rows.
-    tq.pending = Some(Statement { query: q, sql, filter_span: None });
+    tq.pending = Some(Statement { query: q, sql, filter_span: None, order: Vec::new(), total: false });
     tq.sent(8, &["SELECT 1".to_string()]);
     assert_eq!(tq.requested, None);
     tq.first_page(8);
@@ -57,7 +58,8 @@ fn a_run_that_ends_without_its_first_page_is_not_applied() {
     let q = filtered("id > 1", None);
     let sql = "SELECT * FROM \"shop\".\"users\" WHERE (id > 1)".to_string();
     let send = |tq: &mut TableQuery, qid: u64| {
-        tq.pending = Some(Statement { query: q.clone(), sql: sql.clone(), filter_span: None });
+        tq.pending =
+            Some(Statement { query: q.clone(), sql: sql.clone(), filter_span: None, order: Vec::new(), total: false });
         tq.sent(qid, std::slice::from_ref(&sql));
     };
     send(&mut tq, 1);
@@ -153,8 +155,9 @@ fn a_server_error_marks_the_filter_where_it_points() {
     let sent = |tq: &mut TableQuery, d: Dialect, filter: &str, qid: u64| {
         let q = filtered(filter, None);
         let c = query::compile(&q, &Target::new(d, Vec::new()));
-        tq.pending = Some(Statement { query: q, sql: c.sql.clone(), filter_span: c.filter_span });
-        tq.sent(qid, &[c.sql]);
+        let sql = c.sql.clone();
+        tq.pending = Some(Statement::of(q, c));
+        tq.sent(qid, &[sql]);
     };
     let pg = |position| ServerMessage { text: "ERROR".into(), position: Some(position), hint: None };
     let mut tq = TableQuery::new(table.clone());
@@ -230,4 +233,20 @@ fn the_order_completes_columns_and_directions() {
     assert_eq!(labels("id desc nulls ", pg, true).unwrap().0, ["FIRST", "LAST"]);
     assert_eq!(labels("id desc nulls last ", pg, true), None);
     assert_eq!(labels("`Ni", my, false).unwrap().0, ["`Nick Name`"]);
+}
+
+#[test]
+fn a_mysql_snippet_found_again_overlapping_is_not_located() {
+    use datarig_core::driver::ServerMessage;
+    let my = Dialect::MySql(Default::default());
+    let mut tq = TableQuery::new(TableName { database: None, schema: "shop".into(), name: "users".into() });
+    let q = filtered("name = 'aaa'", None);
+    let c = query::compile(&q, &Target::new(my, Vec::new()));
+    let sql = c.sql.clone();
+    assert_eq!(sql.matches("aa").count(), 1, "once without overlaps: {sql}");
+    tq.pending = Some(Statement::of(q, c));
+    tq.sent(1, &[sql]);
+    let near = ServerMessage { text: "ERROR 1064 (42000): x near 'aa' at line 1".into(), ..Default::default() };
+    tq.run_failed(1, &ServerError::Message(&near), my);
+    assert_eq!(tq.failure(), Some(&Failure { at: None, how: Unapplied::Refused }), "twice, overlapping: not located");
 }
