@@ -12,11 +12,11 @@ mod common;
 use common::*;
 use datarig_core::config::Config;
 use datarig_core::driver::{DbError, DbEvent, Outcome, SessionRole, SessionStatement};
-use datarig_core::i18n::Lang;
 use datarig_core::policy::Policy;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::session::{Dbms, SessionMap, SessionPreset, SessionRef};
 use datarig_core::secret::MemoryStore;
+use datarig_i18n::Lang;
 use datarig_tui::app::explorer::RowKind;
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
 use datarig_tui::app::profiles::Field;
@@ -1225,7 +1225,7 @@ fn the_session_view_is_in_korean() {
     h.command("session");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView));
     let screen = h.screen(120, 40);
-    assert!(screen.contains(ko(datarig_core::i18n::Label::SessionViewOrder)), "{screen}");
+    assert!(screen.contains(ko(datarig_i18n::Label::SessionViewOrder)), "{screen}");
     check_localized("session_view_ko_120x40", Lang::Ko, h.draw(120, 40).backend().buffer());
 }
 

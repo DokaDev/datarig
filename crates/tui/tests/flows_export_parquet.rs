@@ -11,7 +11,7 @@ use common::*;
 use datarig_core::driver::{ColumnMeta, DbCommand, DbError, DbEvent, ExportBatch, ExportGuard, ExportSink, ValueKind};
 use datarig_core::export::parquet::read::{self, Field};
 use datarig_core::fault::Fault;
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::AppEvent;
 use datarig_tui::app::export::{ExportEvent, ExportNews, Failure, Outcome};
 use std::path::{Path, PathBuf};

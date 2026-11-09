@@ -12,9 +12,9 @@ use datarig_core::driver::{
     AppliedStep, ApplyTx, ColumnMeta, DbCommand, DbError, DbEvent, EditFormat, MySqlEdit, ReadIn, ValueKind,
 };
 use datarig_core::edit::{Expect, Step, Value};
-use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::policy::{CommitRule, Policy};
 use datarig_core::profile::ConnectionConfig;
+use datarig_i18n::{Label, Lang, Msg};
 use datarig_tui::app::edit::{Applied, ChangesModel, EditState, ListEntry, PreviewLine, RowAt, Target};
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
 use datarig_tui::app::{Focus, Results};

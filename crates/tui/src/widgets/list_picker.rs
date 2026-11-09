@@ -19,7 +19,7 @@ use crate::theme;
 use crate::widgets::dialog::{centered, modal};
 use crate::widgets::put;
 use crate::widgets::text_input::{InputResult, TextInput};
-use datarig_core::i18n::Localized;
+use datarig_i18n::Localized;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};

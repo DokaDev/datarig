@@ -11,8 +11,8 @@ use super::{
 use crate::app::plan::PlanTab;
 use crate::text::{Align, fit, width};
 use crate::widgets::put;
-use datarig_core::i18n::Label;
 use datarig_core::sql::plan::{Measure, Plan};
+use datarig_i18n::Label;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};

@@ -8,10 +8,10 @@ mod common;
 use common::*;
 use datarig_core::config::{Config, Tips};
 use datarig_core::driver::DbEvent;
-use datarig_core::i18n::{Lang, Msg};
 use datarig_core::paths::Paths;
 use datarig_core::secret::{MemoryStore, SecretStore};
 use datarig_core::usage::Via;
+use datarig_i18n::{Lang, Msg};
 use datarig_tui::app::Startup;
 use datarig_tui::app::action::Action;
 use datarig_tui::app::tips::{Place, STEPS};
@@ -255,7 +255,7 @@ fn the_status_bar_has_a_tip_only_where_every_hint_fits_beside_it() {
     assert!(!h.status(80, 24).contains("Tip: "), "no room at 80 columns");
     // A message takes the place.
     h.app.status =
-        Some(datarig_tui::app::Notice::new(datarig_core::i18n::Label::LangSwitched, datarig_tui::app::Level::Info));
+        Some(datarig_tui::app::Notice::new(datarig_i18n::Label::LangSwitched, datarig_tui::app::Level::Info));
     assert!(!h.status(160, 45).contains("Tip: "));
 }
 

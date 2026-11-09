@@ -6,11 +6,11 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{DbEvent, SessionRole};
-use datarig_core::i18n::Lang;
 use datarig_core::profile::ProfileId;
 use datarig_core::profile::ssh::{SshAuth, SshSettings};
 use datarig_core::secret::MemoryStore;
 use datarig_core::transport::{BoxedStream, DialError, Dialer};
+use datarig_i18n::Lang;
 use datarig_ssh::known_hosts::Stored;
 use datarig_ssh::tunnel::{ErrorKind, HostKeyQuestion, Loss, Method, Opened, SshError, Stage};
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
@@ -594,7 +594,7 @@ fn the_explorer_marks_a_tunnelled_profile() {
 /// file's name kept.
 #[test]
 fn the_passphrase_prompt_keeps_its_words_with_a_long_key_path() {
-    use datarig_core::i18n::Label;
+    use datarig_i18n::Label;
     use datarig_tui::app::tunnel::short_path;
     use std::path::Path;
     let home = Path::new("/home/me");
@@ -606,7 +606,7 @@ fn the_passphrase_prompt_keeps_its_words_with_a_long_key_path() {
     assert_eq!(short_path(huge, None, 36), "…/an-even-longer-key-file-name-here.pem");
     for lang in [Lang::En, Lang::Ko] {
         let (mut h, id) = harness();
-        h.app.i18n = datarig_core::i18n::I18n::new(lang);
+        h.app.i18n = datarig_i18n::I18n::new(lang);
         let generation = connect(&mut h, id);
         let (tx, _rx) = oneshot::channel();
         let path = Path::new("/opt/company/infrastructure/secrets/bastion-prod.pem").to_path_buf();

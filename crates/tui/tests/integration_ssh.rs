@@ -10,11 +10,11 @@
 //! Home, data and state directories are scratch ones: the user's `~/.ssh` is never read.
 
 use datarig_core::config::Config;
-use datarig_core::i18n::Lang;
 use datarig_core::paths::Paths;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::ssh::{SshAuth, SshSettings};
 use datarig_core::secret::{MemoryStore, SecretStore};
+use datarig_i18n::Lang;
 use datarig_tui::app::overlay::ConfirmAction;
 use datarig_tui::app::tunnel::SshTunnels;
 use datarig_tui::app::{App, AppEvent, Startup};

@@ -224,7 +224,7 @@ impl App {
         let skip = rs.rows.len() as u64;
         let columns = rs.columns.iter().map(|c| (c.meta.name.clone(), c.meta.type_name.clone())).collect();
         let size = self.page_size as u64;
-        let (from, to) = (datarig_core::i18n::fmt_count(skip + 1), datarig_core::i18n::fmt_count(skip + size));
+        let (from, to) = (datarig_i18n::fmt_count(skip + 1), datarig_i18n::fmt_count(skip + size));
         let note = match (t.exec.prepared.ordered(&sql), released) {
             (true, false) => Notice::new(Msg::ResultsPageResumed { from, to }, Level::Info),
             (false, false) => Notice::new(Msg::ResultsPageResumedUnordered { from, to }, Level::Warning),

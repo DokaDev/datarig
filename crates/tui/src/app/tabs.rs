@@ -535,7 +535,7 @@ pub struct Doc {
     /// When the next autosave is due (at most [`crate::app::AUTOSAVE`] after an edit).
     pub save_due: Option<Instant>,
     /// Why the last save failed (the tab shows it is not saved; the next one tries again).
-    pub save_error: Option<datarig_core::i18n::Msg>,
+    pub save_error: Option<datarig_i18n::Msg>,
     /// The script changed or went away on disk: nothing is written until the user decides.
     pub conflict: bool,
     /// Restored or opened without connecting: the profile connects once the tab has the focus.
@@ -592,7 +592,7 @@ impl Tab {
     /// statements, as the run's own `PREPARE`s change them.
     pub fn warn_session_path(&mut self) {
         use super::Level;
-        use datarig_core::i18n::Msg;
+        use datarig_i18n::Msg;
         let schema = self.context.schema.clone().unwrap_or_default();
         let warning = Msg::ContextSessionPath { schema };
         if self.exec.run.notes.iter().any(|n| n.msg == warning) {
@@ -616,7 +616,7 @@ impl Tab {
     /// The run's warning about a session-level `search_path` ([`Tab::warn_session_path`]), if
     /// it has one: the status bar's message when the run ends.
     pub fn session_path_note(&self) -> Option<Notice> {
-        use datarig_core::i18n::Msg;
+        use datarig_i18n::Msg;
         self.exec.run.notes.iter().find(|n| matches!(n.msg, Msg::ContextSessionPath { .. })).cloned()
     }
 
@@ -790,7 +790,7 @@ impl Tab {
             Some(r) if r.export || r.apply => false,
             Some(r) if !r.fetch && !r.count => {
                 self.exec.run.answered(super::runlog::StatementOutcome::Cancelled, None);
-                let note = Notice::new(datarig_core::i18n::Label::QueryCancelledSessionClosed, super::Level::Warning);
+                let note = Notice::new(datarig_i18n::Label::QueryCancelledSessionClosed, super::Level::Warning);
                 self.exec.run.notes.push(note);
                 if !matches!(self.results, Results::Rows(_)) {
                     self.results = Results::Cancelled;
@@ -802,9 +802,9 @@ impl Tab {
             // announcement is not the last word.
             Some(r) => {
                 let label = if r.count {
-                    datarig_core::i18n::Label::ResultsCountSessionClosed
+                    datarig_i18n::Label::ResultsCountSessionClosed
                 } else {
-                    datarig_core::i18n::Label::ResultsFetchSessionClosed
+                    datarig_i18n::Label::ResultsFetchSessionClosed
                 };
                 let note = Notice::new(label, super::Level::Warning);
                 self.exec.run.notes.push(note.clone());
@@ -851,7 +851,7 @@ impl Tab {
         self.block_ended(TxEnd::RolledBack);
         // So it did the one an Apply left open whose opening was not reported yet (the Apply's
         // answer comes first).
-        self.applied_gone(datarig_core::i18n::Label::EditAppliedGone);
+        self.applied_gone(datarig_i18n::Label::EditAppliedGone);
         self.exec.ending = None;
         self.exec.autocommit_off = false;
         self.exec.outside_offer = None;
@@ -869,7 +869,7 @@ impl Tab {
             }
         }
         if unanswered {
-            let note = Notice::new(datarig_core::i18n::Label::EditFailedUnknown, super::Level::Error);
+            let note = Notice::new(datarig_i18n::Label::EditFailedUnknown, super::Level::Error);
             self.exec.run.notes.push(note.clone());
             self.edit_said = Some(note);
         }
@@ -898,7 +898,7 @@ impl Tab {
 
     /// What an Apply did in a transaction that has not ended yet goes from every result of the
     /// tab, said with `label` (the table may no longer hold it).
-    fn applied_gone(&mut self, label: datarig_core::i18n::Label) {
+    fn applied_gone(&mut self, label: datarig_i18n::Label) {
         let mut gone = false;
         for rs in self.row_results_mut() {
             gone |= rs.edit.drop_uncommitted(label);
@@ -909,7 +909,7 @@ impl Tab {
     }
 
     /// Applied changes went: said in the run's Messages and, after the event, the status bar.
-    fn edit_gone(&mut self, label: datarig_core::i18n::Label) {
+    fn edit_gone(&mut self, label: datarig_i18n::Label) {
         let note = Notice::new(label, super::Level::Warning);
         self.exec.run.notes.push(note.clone());
         self.edit_said = Some(note);
@@ -926,7 +926,7 @@ impl Tab {
             words.iter().skip(1).take_while(|w| matches!(w.as_str(), "WORK" | "TRANSACTION" | "TO")).any(|w| w == "TO")
         };
         if matches!(first, Some("SAVEPOINT" | "RELEASE")) || (first == Some("ROLLBACK") && to()) {
-            self.applied_gone(datarig_core::i18n::Label::EditAppliedSavepoint);
+            self.applied_gone(datarig_i18n::Label::EditAppliedSavepoint);
         }
     }
 

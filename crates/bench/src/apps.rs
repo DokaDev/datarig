@@ -2,9 +2,9 @@
 //! measurements use, key and mouse events, and a real PostgreSQL connection when one is needed.
 
 use datarig_core::config::Config;
-use datarig_core::i18n::Lang;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::secret::{MemoryStore, SecretStore};
+use datarig_i18n::Lang;
 use datarig_tui::app::{App, AppEvent, Focus, Startup, TabKind};
 use datarig_tui::screens;
 use datarig_tui::widgets::editor::Editor;

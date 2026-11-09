@@ -8,10 +8,10 @@
 mod pg_clean;
 
 use datarig_core::config::Config;
-use datarig_core::i18n::Lang;
 use datarig_core::policy::Policy;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::secret::{MemoryStore, SecretStore};
+use datarig_i18n::Lang;
 use datarig_tui::app::tabs::TableRef;
 use datarig_tui::app::{App, AppEvent, Startup};
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};

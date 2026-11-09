@@ -57,7 +57,7 @@ pub enum SaveError {
     Missing,
     /// The name is taken (create).
     Exists(String),
-    /// Writing failed: the kind of error (see [`crate::i18n::io_reason`]) and the OS's text.
+    /// Writing failed: the kind of error (the UI words it) and the OS's text.
     Io(io::ErrorKind, String),
 }
 

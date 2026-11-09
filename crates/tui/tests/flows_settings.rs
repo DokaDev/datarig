@@ -7,7 +7,7 @@ mod common;
 
 use common::*;
 use datarig_core::config::{self, ClipboardSetting, CommandsPosition, DetailView, IconsSetting, MonitorInterval};
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::action::LangSetting;
 use datarig_tui::app::overlay::OverlayKind;
 use ratatui::crossterm::event::KeyCode;
@@ -84,7 +84,7 @@ fn space_comma_and_the_command_open_it_and_changes_are_live_and_saved() {
     h.keys("l");
     assert_eq!(h.app.lang_setting, LangSetting::Ko);
     assert!(
-        h.screen(160, 45).contains(ko(datarig_core::i18n::Label::SettingClipboard)),
+        h.screen(160, 45).contains(ko(datarig_i18n::Label::SettingClipboard)),
         "the screen follows the language at once"
     );
     let text = std::fs::read_to_string(&path).unwrap();
@@ -103,7 +103,7 @@ fn space_comma_and_the_command_open_it_and_changes_are_live_and_saved() {
     h.command("set clipboard=system");
     h.command("settings");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Settings));
-    let clipboard = ko(datarig_core::i18n::Label::SettingClipboard);
+    let clipboard = ko(datarig_i18n::Label::SettingClipboard);
     // (The editor's "yanks to the clipboard" row has the word too: the row with the value.)
     let screen = h.screen(160, 45);
     assert!(screen.lines().any(|l| l.contains(clipboard) && l.contains("‹ system")), "{screen}");

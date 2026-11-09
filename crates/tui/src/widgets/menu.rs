@@ -8,7 +8,7 @@ use crate::text::{Align, fit, width};
 use crate::theme;
 use crate::widgets::popup::clear_overlay;
 use crate::widgets::put;
-use datarig_core::i18n::{Label, Localized};
+use datarig_i18n::{Label, Localized};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};

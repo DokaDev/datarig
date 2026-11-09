@@ -16,7 +16,6 @@
 
 use crate::widgets::statement_list::StatementList;
 use crate::widgets::text_input::{InputResult, TextInput};
-use datarig_core::i18n::{Label, Msg};
 use datarig_core::policy::{self, CommitRule, Confirm, Environment, EnvironmentId, PagingMode, Policy};
 use datarig_core::profile::color::{self, ProfileColor};
 use datarig_core::profile::dsn::{self, Dsn, DsnError, Scheme};
@@ -28,6 +27,7 @@ use datarig_core::secret::command;
 use datarig_core::secret::source::valid_env_name;
 use datarig_core::secret::{PasswordSource, SourceKind};
 use datarig_core::tls::{TlsFile, TlsMode};
+use datarig_i18n::{Label, Msg};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// The drivers the form lists, in order: `(driver name, display name)`. Only the ones the
@@ -534,7 +534,12 @@ pub enum DsnProblem {
 impl DsnProblem {
     pub fn message(&self) -> Msg {
         match self {
-            DsnProblem::Parse(e) => e.message(),
+            DsnProblem::Parse(e) => match e {
+                DsnError::Scheme => Label::DsnErrScheme.into(),
+                DsnError::Port(p) => Msg::DsnErrPort { value: p.clone() },
+                DsnError::Encoding => Label::DsnErrEncoding.into(),
+                DsnError::Host(h) => Msg::DsnErrHost { value: h.clone() },
+            },
             DsnProblem::Param(p) => Msg::DsnErrParam { name: p.clone() },
             DsnProblem::MySqlParam(p) => Msg::DsnErrParamMysql { name: p.clone() },
             DsnProblem::SslMode(v) => Msg::DsnErrSslmode { value: v.clone() },

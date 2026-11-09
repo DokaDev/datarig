@@ -62,8 +62,8 @@ mod vim;
 mod visual;
 
 use buffer::{Step, class, graphemes, next_version};
-use datarig_core::i18n::Label;
 use datarig_core::sql::dialect::Language;
+use datarig_i18n::Label;
 pub use ex::{ExDone, ExError, is_ex};
 use lexing::{LineState, REGION_LINES};
 pub use marks::MarkNotice;

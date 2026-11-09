@@ -16,7 +16,7 @@ use crate::theme;
 use crate::widgets::grid::{ResultSet, Shown, viewer_text};
 use crate::widgets::{panel, put};
 use datarig_core::driver::KeyMarks;
-use datarig_core::i18n::{I18n, Label, Localized, Msg};
+use datarig_i18n::{I18n, Label, Localized, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};

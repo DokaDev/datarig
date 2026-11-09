@@ -7,7 +7,7 @@ use crate::text::{Align, clip, fit, width};
 use crate::theme;
 use crate::widgets::dialog::{centered, modal};
 use crate::widgets::put;
-use datarig_core::i18n::{Label, Msg};
+use datarig_i18n::{Label, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};

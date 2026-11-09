@@ -15,9 +15,9 @@ use super::App;
 use super::overlay::{Buttons, Overlay, OverlayKind};
 use crate::text::{width, wrap};
 use datarig_core::config::WhatsNewSetting;
-use datarig_core::i18n::{Localized, Msg};
 use datarig_core::update::notes::{self, Block, Section, Span};
 use datarig_core::update::{self, Cache, Version};
+use datarig_i18n::{Localized, Msg};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// What's new of the docs site, as this build was made.
@@ -192,7 +192,7 @@ impl App {
         let sections = notes().sections;
         // A build newer than its notes (a release candidate): the newest it has.
         let start = sections.iter().find(|s| s.version <= running).map(|s| s.version);
-        let title = self.i18n.label(datarig_core::i18n::Label::WhatsNewTitle);
+        let title = self.i18n.label(datarig_i18n::Label::WhatsNewTitle);
         self.overlays.close(OverlayKind::WhatsNew);
         self.overlays.push(Overlay::WhatsNew(WhatsNewView::new(title, sections, start)));
     }

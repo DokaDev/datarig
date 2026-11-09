@@ -6,8 +6,8 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{DbEvent, SessionRole};
-use datarig_core::i18n::{I18n, Lang, Msg};
 use datarig_core::profile::ConnectionConfig;
+use datarig_i18n::{I18n, Lang, Msg};
 use datarig_tui::app::{AppEvent, EventTarget};
 
 /// The sessions the fake driver opened so far: (role, statement cache).

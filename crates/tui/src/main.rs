@@ -5,8 +5,8 @@ mod cli;
 mod term;
 
 use cli::{Cli, HELP, parse_args};
+use datarig_core::config;
 use datarig_core::secret::{DeletionLog, FileStore, STORE_ENV, StoreKind};
-use datarig_core::{config, i18n};
 use datarig_tui::app::effects::Effect;
 use datarig_tui::app::{App, Startup};
 use datarig_tui::external::{self, Edited, Handover};
@@ -51,7 +51,7 @@ fn main() -> ExitCode {
     };
     log::debug!("secret store: {}", store.as_str());
     let (cfg, cfg_err) = config::load(cli_path);
-    let lang = i18n::detect_lang(&cfg.language, |k| std::env::var(k).ok());
+    let lang = datarig_i18n::detect_lang(&cfg.language, |k| std::env::var(k).ok());
     let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(rt) => rt,
         Err(e) => {

@@ -8,11 +8,11 @@ mod common;
 
 use common::*;
 use datarig_core::config::{Config, IconsSetting};
-use datarig_core::i18n::{Label, Lang};
 use datarig_core::paths::Paths;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::folder::FolderPath;
 use datarig_core::secret::{MemoryStore, SecretStore};
+use datarig_i18n::{Label, Lang};
 use datarig_tui::app::folder_pick::FolderPick;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::profiles::Field;
@@ -504,12 +504,12 @@ fn an_unreadable_folder_is_not_picked() {
     assert!(h.app.overlays.script_tree().unwrap().unreadable(&folder("z")));
     h.key(KeyCode::Enter);
     let error = |h: &Harness| h.app.overlays.script_tree().and_then(|t| t.error.clone());
-    assert_eq!(error(&h), Some(datarig_core::i18n::Msg::Label(Label::ValidateScriptUnreadable)));
+    assert_eq!(error(&h), Some(datarig_i18n::Msg::Label(Label::ValidateScriptUnreadable)));
     h.draw(80, 24);
     let list = h.app.overlays.script_tree().unwrap().list;
     h.app.overlays.script_tree_mut().unwrap().error = None;
     h.mouse(MouseEventKind::Down(MouseButton::Left), list.x + 6, list.y + 2);
-    assert_eq!(error(&h), Some(datarig_core::i18n::Msg::Label(Label::ValidateScriptUnreadable)));
+    assert_eq!(error(&h), Some(datarig_i18n::Msg::Label(Label::ValidateScriptUnreadable)));
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
     std::fs::set_permissions(&z, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(dir.scripts().join("top.sql").is_file(), "nothing moved");

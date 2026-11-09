@@ -14,8 +14,8 @@ use crate::widgets::popup::draw_popup;
 use crate::widgets::statusbar::draw_status;
 use crate::widgets::tabbar::draw_tab_bar;
 use crate::widgets::{panel, panel_with_status, put};
-use datarig_core::i18n::fmt_count;
-use datarig_core::i18n::{Label, Msg};
+use datarig_i18n::fmt_count;
+use datarig_i18n::{Label, Msg};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout as RLayout, Rect};
@@ -638,7 +638,7 @@ fn draw_messages(app: &mut App, area: Rect, buf: &mut Buffer) {
             O::Cancelled => (app.i18n.label(Label::QueryCancelled).to_string(), th.warning),
             O::NotRun => (app.i18n.label(Label::MessagesNotRun).to_string(), th.fg_dim),
         };
-        let elapsed = s.elapsed.map(|d| format!(" · {}", datarig_core::i18n::fmt_elapsed(d))).unwrap_or_default();
+        let elapsed = s.elapsed.map(|d| format!(" · {}", datarig_i18n::fmt_elapsed(d))).unwrap_or_default();
         let sql = crate::app::runlog::excerpt(&s.sql, sql_w);
         lines.push(vec![
             (format!("{:>num_w$}  ", i + 1), Style::new().fg(th.fg_muted).bg(th.bg)),
@@ -824,7 +824,7 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
 /// in a pane `width` columns wide. Returns the title, and the texts of the right side from the
 /// longest to the shortest (the shortest is the state alone, without the marks) with their
 /// style.
-fn results_title(app: &App, width: u16) -> (datarig_core::i18n::Localized, Option<(Vec<String>, Style)>) {
+fn results_title(app: &App, width: u16) -> (datarig_i18n::Localized, Option<(Vec<String>, Style)>) {
     let th = theme::cur();
     let t = app.tab();
     if let (ResultView::Plan, Some(p)) = (t.exec.view, &t.exec.plan) {

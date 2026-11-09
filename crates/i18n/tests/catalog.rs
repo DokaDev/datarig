@@ -299,8 +299,8 @@ fn generated_code_types_the_arguments() {
 
 #[test]
 fn shipped_catalogs_pass() {
-    let en = locale("en", Policy::Source, include_str!("../../../locales/en.toml"));
-    let ko = locale("ko", Policy::Required, include_str!("../../../locales/ko.toml"));
+    let en = locale("en", Policy::Source, include_str!("../locales/en.toml"));
+    let ko = locale("ko", Policy::Required, include_str!("../locales/ko.toml"));
     assert_eq!(catalog::check(&[en, ko]), (vec![], vec![]));
 }
 
@@ -363,8 +363,8 @@ const SAME_IN_KO: &[&str] = &[
 
 #[test]
 fn shipped_korean_catalog_translates_every_entry() {
-    let en = locale("en", Policy::Source, include_str!("../../../locales/en.toml"));
-    let ko = locale("ko", Policy::Required, include_str!("../../../locales/ko.toml"));
+    let en = locale("en", Policy::Source, include_str!("../locales/en.toml"));
+    let ko = locale("ko", Policy::Required, include_str!("../locales/ko.toml"));
     let english = |key: &str| [en.entries.get(key), en.one.get(key)].into_iter().flatten().collect::<Vec<_>>();
     let mut untranslated = vec![];
     let mut same = vec![];

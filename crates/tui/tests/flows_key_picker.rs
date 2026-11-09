@@ -7,9 +7,9 @@ mod common;
 
 use common::*;
 use datarig_core::config::IconsSetting;
-use datarig_core::i18n::Lang;
 use datarig_core::profile::ssh::{SshAuth, SshSettings};
 use datarig_core::secret::MemoryStore;
+use datarig_i18n::Lang;
 use datarig_tui::app::Startup;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::profiles::Field;

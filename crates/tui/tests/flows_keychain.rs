@@ -11,8 +11,8 @@ use common::*;
 use datarig_core::config::{self, Config};
 use datarig_core::driver::DbEvent;
 use datarig_core::fault::{Fault, FaultKind, KeychainFault};
-use datarig_core::i18n::Lang;
 use datarig_core::secret::{DeletionLog, Logged, MemoryStore, SecretStore, SourceKind, Unavailable};
+use datarig_i18n::Lang;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::{AppEvent, NodeState, PromptPurpose, Startup, TabKind, TestState};
 use datarig_tui::widgets::editor::Editor;
@@ -272,7 +272,7 @@ fn a_locked_keychain_falls_back_to_the_prompt() {
 /// says plainly what to do, in both languages; elsewhere, or without SSH, it does not.
 #[test]
 fn a_locked_keychain_over_ssh_says_how_to_unlock_it() {
-    use datarig_core::i18n::{Label, Msg};
+    use datarig_i18n::{Label, Msg};
     let locked = Fault::new(FaultKind::Keychain(KeychainFault::Locked), "User interaction is not allowed.");
     for lang in [Lang::En, Lang::Ko] {
         for ssh in [true, false] {
@@ -283,7 +283,7 @@ fn a_locked_keychain_over_ssh_says_how_to_unlock_it() {
                 .set_env_lookup(Arc::new(move |k: &str| env.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())));
             h.key(KeyCode::Enter);
             let said = h.prompt().expect("the password is asked for").error.render(&h.app.i18n).to_string();
-            let i18n = datarig_core::i18n::I18n::new(lang);
+            let i18n = datarig_i18n::I18n::new(lang);
             let error = i18n.msg(&datarig_tui::app::fault_reason(&locked)).to_string();
             let remote = ssh && cfg!(target_os = "macos");
             let want = if remote {
@@ -301,7 +301,7 @@ fn a_locked_keychain_over_ssh_says_how_to_unlock_it() {
     let fix = "SSH session: run `security unlock-keychain` first, or type the password";
     assert!(en(Label::PromptPasswordKeychainNoAnswerRemote).ends_with(fix));
     let failed = Msg::PromptPasswordKeychainFailedRemote { error: "x".into() };
-    assert!(datarig_core::i18n::I18n::new(Lang::En).msg(&failed).ends_with(fix));
+    assert!(datarig_i18n::I18n::new(Lang::En).msg(&failed).ends_with(fix));
     for text in [ko(Label::PromptPasswordKeychainNoAnswerRemote).to_string(), ko_msg(&failed)] {
         assert!(text.contains("SSH") && text.contains("`security unlock-keychain`"), "{text}");
         assert!(!text.contains(fix) && !text.contains('?'), "{text}");

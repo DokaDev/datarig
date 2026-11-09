@@ -39,7 +39,7 @@ fn command_search_ranks_and_matches_english_in_korean_ui() {
     assert_eq!(search("", &en)[0], 0);
     assert!(search("zzzz", &en).is_empty());
     let ko = I18n::new(Lang::Ko);
-    assert_eq!(first(datarig_core::i18n::Label::ActionAppQuit.text(Lang::Ko), &ko), Action::Quit);
+    assert_eq!(first(datarig_i18n::Label::ActionAppQuit.text(Lang::Ko), &ko), Action::Quit);
     assert_eq!(first("quit", &ko), Action::Quit, "English words still work in the Korean UI");
     assert_eq!(first("conn.test", &ko), Action::TestConnection, "action ids match too");
 }

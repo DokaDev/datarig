@@ -9,7 +9,7 @@ use crate::theme;
 use crate::widgets::dialog::{centered, modal};
 use crate::widgets::explorer::{CONNECTED, DISCONNECTED, FAILED};
 use crate::widgets::{put, spinner_at};
-use datarig_core::i18n::Label;
+use datarig_i18n::Label;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};

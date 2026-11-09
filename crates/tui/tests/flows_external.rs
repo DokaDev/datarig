@@ -8,8 +8,8 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{DbCommand, DbEvent, Outcome};
-use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::paths::Paths;
+use datarig_i18n::{Label, Lang, Msg};
 use datarig_tui::app::Focus;
 use datarig_tui::app::effects::Effect;
 use datarig_tui::external::{EditFailure, Edited, Ended};

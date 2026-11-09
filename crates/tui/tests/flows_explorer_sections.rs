@@ -10,11 +10,11 @@ mod common;
 
 use common::*;
 use datarig_core::config::{Config, IconsSetting};
-use datarig_core::i18n::Lang;
 use datarig_core::policy::{Confirm, Environment, Policy};
 use datarig_core::profile::ssh::{SshAuth, SshSettings};
 use datarig_core::profile::tunnel::TunnelPreset;
 use datarig_core::secret::MemoryStore;
+use datarig_i18n::Lang;
 use datarig_tui::app::explorer::RowKind;
 use datarig_tui::app::{Focus, Startup};
 use datarig_tui::icons;

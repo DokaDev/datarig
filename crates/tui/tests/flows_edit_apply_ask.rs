@@ -14,9 +14,9 @@ use datarig_core::driver::{
     AppliedStep, ApplyError, ApplyFailure, ApplyTx, ColumnMeta, DbCommand, DbError, DbEvent, Outcome,
 };
 use datarig_core::edit::{Expect, Step};
-use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::policy::{CommitRule, Confirm, Policy};
 use datarig_core::profile::ConnectionConfig;
+use datarig_i18n::{Label, Lang, Msg};
 use datarig_tui::app::action::Action;
 use datarig_tui::app::edit::{ANSWER_GUARD, EditState, PreviewLine, Target};
 use datarig_tui::app::overlay::OverlayKind;

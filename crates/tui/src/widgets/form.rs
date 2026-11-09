@@ -28,9 +28,9 @@ use crate::widgets::dialog::{centered, modal};
 use crate::widgets::statement_list::{Note, StatementList};
 use crate::widgets::statusbar::level_color;
 use crate::widgets::{SPINNER, put};
-use datarig_core::i18n::{I18n, Label, Msg};
 use datarig_core::profile::ssh::SshAuth;
 use datarig_core::secret::SourceKind;
+use datarig_i18n::{I18n, Label, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -1052,8 +1052,8 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datarig_core::i18n::Lang;
     use datarig_core::profile::session::Dbms;
+    use datarig_i18n::Lang;
 
     /// A list given one or two lines (a long Advanced section on a short screen) still counts the
     /// lines it does not show, at the right end of its last line.

@@ -15,8 +15,8 @@ mod common;
 use common::*;
 use datarig_core::driver::PagingMode;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, Outcome};
-use datarig_core::i18n::Lang;
 use datarig_core::policy::Policy;
+use datarig_i18n::Lang;
 use datarig_tui::app::{Paging, Results};
 use datarig_tui::widgets::editor::Editor;
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
@@ -170,7 +170,7 @@ fn an_idle_portal_closes_and_the_next_page_runs_a_select_again() {
             .run
             .notes
             .iter()
-            .any(|n| matches!(n.msg, datarig_core::i18n::Msg::ResultsPageResumedUnordered { .. }))
+            .any(|n| matches!(n.msg, datarig_i18n::Msg::ResultsPageResumedUnordered { .. }))
     );
     let columns = Some(vec![meta("id", "int8", true, false)]);
     h.tab_db(0, DbEvent::Page { id: *rid, columns, rows: page(1000, 120), more: false, elapsed: SEC / 100 });
@@ -275,8 +275,8 @@ fn a_short_policy_timeout_and_korean_title() {
     first_page(&mut h, 500, true);
     h.sent();
     let title = results_title(&mut h, 160, 45);
-    let ko = datarig_core::i18n::I18n::new(Lang::Ko);
-    use datarig_core::i18n::Msg;
+    let ko = datarig_i18n::I18n::new(Lang::Ko);
+    use datarig_i18n::Msg;
     let rows = ko.msg(&Msg::PaneResultsRange { from: "1".into(), to: "500".into() }).to_string();
     let page = ko.msg(&Msg::ResultsTitlePageCount { page: "1".into(), key: "#".into() }).to_string();
     assert!(title.contains(&rows) && title.contains(&format!("({page} · 10s)")), "{title}");
@@ -638,8 +638,8 @@ fn a_narrow_closed_title_keeps_the_page_number() {
         assert_eq!(datarig_tui::text::width(&title), 80, "{title}");
         // Wide: the whole state.
         let wide = results_title(&mut h, 160, 45);
-        let i18n = datarig_core::i18n::I18n::new(lang);
-        let closed = i18n.label(datarig_core::i18n::Label::ResultsTitlePagingClosed).to_string();
+        let i18n = datarig_i18n::I18n::new(lang);
+        let closed = i18n.label(datarig_i18n::Label::ResultsTitlePagingClosed).to_string();
         assert!(wide.contains(&closed), "{lang:?}: {wide}");
     }
 }
@@ -740,9 +740,7 @@ fn a_count_says_when_it_may_differ_from_the_pages() {
     h.key(KeyCode::Tab);
     h.keys("#");
     h.tab_db(0, DbEvent::Counted { id, result: Ok(1100), snapshot: false });
-    let ko = datarig_core::i18n::I18n::new(Lang::Ko)
-        .msg(&datarig_core::i18n::Msg::ResultsCountDoneNow { count: 1100 })
-        .to_string();
+    let ko = datarig_i18n::I18n::new(Lang::Ko).msg(&datarig_i18n::Msg::ResultsCountDoneNow { count: 1100 }).to_string();
     assert!(h.status(200, 45).contains(&ko));
 }
 
@@ -906,13 +904,7 @@ fn a_result_not_held_pages_by_running_its_select_again() {
         "{status}"
     );
     assert!(
-        h.app
-            .tab()
-            .exec
-            .run
-            .notes
-            .iter()
-            .any(|n| matches!(n.msg, datarig_core::i18n::Msg::ResultsPageRerunUnordered { .. }))
+        h.app.tab().exec.run.notes.iter().any(|n| matches!(n.msg, datarig_i18n::Msg::ResultsPageRerunUnordered { .. }))
     );
     let columns = Some(vec![meta("id", "int8", true, false)]);
     h.tab_db(0, DbEvent::Released { id: *rid });
@@ -937,7 +929,7 @@ fn a_result_not_held_pages_by_running_its_select_again() {
         h.app.menu_dimmed_rows().into_iter().map(|(l, why)| (l.to_string(), why)).filter(|(l, _)| l == fetch).collect();
     assert_eq!(dimmed, [(fetch.to_string(), "not held open".to_string())]);
     let n = h.app.menu_dimmed_notice(fetch).expect("dimmed");
-    assert_eq!(n.msg, datarig_core::i18n::Label::CopyFetchNoHold.into());
+    assert_eq!(n.msg, datarig_i18n::Label::CopyFetchNoHold.into());
     h.key(KeyCode::Esc);
     h.advance(3600 * SEC);
     assert!(close_requests(&h.sent()).is_empty());
@@ -962,15 +954,7 @@ fn a_result_not_held_that_is_not_run_again_shows_its_first_page_only() {
             && status.contains("LIMIT/OFFSET, or set paging = \"hold\" in the profile's environment"),
         "{status}"
     );
-    assert!(
-        h.app
-            .tab()
-            .exec
-            .run
-            .notes
-            .iter()
-            .any(|n| matches!(n.msg, datarig_core::i18n::Msg::ResultsFirstPageOnly { .. }))
-    );
+    assert!(h.app.tab().exec.run.notes.iter().any(|n| matches!(n.msg, datarig_i18n::Msg::ResultsFirstPageOnly { .. })));
     assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · first page only)"));
     let screen = h.screen(200, 45);
     assert!(screen.contains("Showing the first 500 rows only · this statement is not run again for you"), "{screen}");
@@ -1208,9 +1192,8 @@ fn the_count_hint_follows_the_key_map() {
     h.db(DbEvent::Connected);
     h.app.detail.visible = false;
     first_page_released(&mut h, 500);
-    let ko = datarig_core::i18n::I18n::new(Lang::Ko);
-    let hint =
-        ko.msg(&datarig_core::i18n::Msg::ResultsTitlePageCount { page: "1".into(), key: "C".into() }).to_string();
+    let ko = datarig_i18n::I18n::new(Lang::Ko);
+    let hint = ko.msg(&datarig_i18n::Msg::ResultsTitlePageCount { page: "1".into(), key: "C".into() }).to_string();
     let title = results_title(&mut h, 160, 45);
     assert!(title.contains(&format!("({hint} · ")), "{title}");
 }

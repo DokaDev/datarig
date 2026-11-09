@@ -5,7 +5,7 @@ mod common;
 
 use common::*;
 use datarig_core::driver::DbCommand;
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::keymap::Ctx;
 use datarig_tui::widgets::editor::{Editor, Mode};
 use ratatui::crossterm::event::{Event, KeyCode};
@@ -348,7 +348,7 @@ fn plus_p_over_ssh_points_at_the_terminals_paste() {
         h.keys("\"+p");
         assert_eq!((h.app.tab().editor.text().as_str(), clip.read_count()), ("one", 0));
         let want = match lang {
-            Lang::Ko => ko(datarig_core::i18n::Label::EditorClipboardNoRead).to_string(),
+            Lang::Ko => ko(datarig_i18n::Label::EditorClipboardNoRead).to_string(),
             _ => "The clipboard cannot be read through the terminal (OSC 52 only writes to it): paste with the \
                   terminal's own paste key instead (Cmd+V on macOS, Ctrl+Shift+V in most Linux terminals)"
                 .to_string(),
@@ -477,19 +477,19 @@ fn search_notices_in_each_language() {
         h.keys("w/");
         h.type_text("(tw");
         h.key(KeyCode::Enter);
-        let i18n = datarig_core::i18n::I18n::new(lang);
-        let want = i18n.msg(&datarig_core::i18n::Msg::EditorSearchInvalid { error: "unclosed group".into() });
+        let i18n = datarig_i18n::I18n::new(lang);
+        let want = i18n.msg(&datarig_i18n::Msg::EditorSearchInvalid { error: "unclosed group".into() });
         assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
         assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (0, 4));
         h.keys("/");
         h.type_text("four");
         h.key(KeyCode::Enter);
-        let want = i18n.msg(&datarig_core::i18n::Msg::EditorSearchNotFound { pattern: "four".into() });
+        let want = i18n.msg(&datarig_i18n::Msg::EditorSearchNotFound { pattern: "four".into() });
         assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
         h.keys("/");
         h.type_text("one");
         h.key(KeyCode::Enter);
-        let want = i18n.label(datarig_core::i18n::Label::EditorSearchWrappedBottom);
+        let want = i18n.label(datarig_i18n::Label::EditorSearchWrappedBottom);
         assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
         assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (0, 0));
     }
@@ -596,16 +596,16 @@ fn mark_notices_in_each_language() {
         let mut h = Harness::connected(lang);
         h.app.tab_mut().editor = Editor::new("one\ntwo");
         h.keys("j'z");
-        let i18n = datarig_core::i18n::I18n::new(lang);
-        let want = i18n.msg(&datarig_core::i18n::Msg::EditorMarkNotSet { mark: "z".into() });
+        let i18n = datarig_i18n::I18n::new(lang);
+        let want = i18n.msg(&datarig_i18n::Msg::EditorMarkNotSet { mark: "z".into() });
         assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
         h.keys("d`b");
         assert_eq!(
             notice(&mut h).as_deref(),
-            Some(i18n.msg(&datarig_core::i18n::Msg::EditorMarkNotSet { mark: "b".into() }).as_ref())
+            Some(i18n.msg(&datarig_i18n::Msg::EditorMarkNotSet { mark: "b".into() }).as_ref())
         );
         h.keys("mA");
-        let want = i18n.msg(&datarig_core::i18n::Msg::EditorMarkUnknown { mark: "A".into() });
+        let want = i18n.msg(&datarig_i18n::Msg::EditorMarkUnknown { mark: "A".into() });
         assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
         h.keys("'A");
         assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
@@ -658,7 +658,7 @@ fn ex_notices_in_each_language() {
     for lang in [Lang::En, Lang::Ko] {
         let mut h = Harness::connected(lang);
         h.app.tab_mut().editor = Editor::new("a a a\nb");
-        let i18n = datarig_core::i18n::I18n::new(lang);
+        let i18n = datarig_i18n::I18n::new(lang);
         let run = |h: &mut Harness, cmd: &str| {
             h.keys(":");
             h.type_text(cmd);
@@ -666,21 +666,18 @@ fn ex_notices_in_each_language() {
             assert!(h.cmdline().is_none(), "{cmd}");
         };
         run(&mut h, "s/z/y/");
-        let want = i18n.msg(&datarig_core::i18n::Msg::EditorSearchNotFound { pattern: "z".into() });
+        let want = i18n.msg(&datarig_i18n::Msg::EditorSearchNotFound { pattern: "z".into() });
         assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
         run(&mut h, "s/a/b/c");
-        assert_eq!(notice(&mut h).as_deref(), Some(i18n.label(datarig_core::i18n::Label::EditorExConfirm).as_ref()));
+        assert_eq!(notice(&mut h).as_deref(), Some(i18n.label(datarig_i18n::Label::EditorExConfirm).as_ref()));
         run(&mut h, "2d");
-        let want = i18n.msg(&datarig_core::i18n::Msg::EditorExUnsupported { command: "d".into() });
+        let want = i18n.msg(&datarig_i18n::Msg::EditorExUnsupported { command: "d".into() });
         assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
         run(&mut h, "1,5s/a/b/");
-        assert_eq!(
-            notice(&mut h).as_deref(),
-            Some(i18n.label(datarig_core::i18n::Label::EditorExInvalidRange).as_ref())
-        );
+        assert_eq!(notice(&mut h).as_deref(), Some(i18n.label(datarig_i18n::Label::EditorExInvalidRange).as_ref()));
         assert_eq!(h.app.tab().editor.text(), "a a a\nb");
         run(&mut h, "s/a/b/g");
-        let want = i18n.msg(&datarig_core::i18n::Msg::EditorExSubstitutedOneLine { count: 3 });
+        let want = i18n.msg(&datarig_i18n::Msg::EditorExSubstitutedOneLine { count: 3 });
         assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
         assert_eq!(h.app.tab().editor.text(), "b b b\nb");
     }

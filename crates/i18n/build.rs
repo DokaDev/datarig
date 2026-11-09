@@ -15,7 +15,7 @@ use std::path::PathBuf;
 const LOCALES: &[(&str, Policy)] = &[("en", Policy::Source), ("ko", Policy::Required)];
 
 fn main() {
-    let dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("set by cargo")).join("../../locales");
+    let dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("set by cargo")).join("locales");
     println!("cargo::rerun-if-changed=build/catalog.rs");
     let mut locales = Vec::new();
     let mut errors = Vec::new();
@@ -43,7 +43,7 @@ fn main() {
         errors.extend(errs.iter().map(ToString::to_string));
     }
     if !errors.is_empty() {
-        // Each `cargo::error` fails the build and is printed as `error: datarig-core@…: <problem>`.
+        // Each `cargo::error` fails the build and is printed as `error: datarig-i18n@…: <problem>`.
         for e in &errors {
             println!("cargo::error={e}");
         }

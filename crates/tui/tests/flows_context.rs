@@ -7,7 +7,7 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{DbCommand, DbEvent, SessionContext, SessionRole};
-use datarig_core::i18n::{I18n, Lang, Msg};
+use datarig_i18n::{I18n, Lang, Msg};
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::quick::{QuickNote, QuickRow};
 use datarig_tui::app::{AppEvent, EventTarget, Focus};
@@ -391,7 +391,7 @@ fn a_run_ended_by_a_connection_change_says_so() {
         assert!(t.exec.running.is_none(), "{switch}");
         let outcomes: Vec<StatementOutcome> = t.exec.run.statements.iter().map(|s| s.outcome.clone()).collect();
         assert_eq!(outcomes, [StatementOutcome::Cancelled], "{switch}");
-        let want = datarig_core::i18n::Label::QueryCancelledRebound;
+        let want = datarig_i18n::Label::QueryCancelledRebound;
         assert!(t.exec.run.notes.iter().any(|n| n.msg == Msg::Label(want)), "{switch}: {:?}", t.exec.run.notes);
         assert_eq!(t.status.as_ref().map(|n| n.msg.clone()), Some(Msg::Label(want)), "{switch}");
         let screen = h.screen(120, 40);

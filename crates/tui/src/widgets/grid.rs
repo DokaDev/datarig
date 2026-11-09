@@ -15,8 +15,8 @@ use crate::theme;
 use datarig_core::driver::{Cell, ColumnMeta, KeyMarks};
 use datarig_core::edit::{DefaultShown, Value};
 use datarig_core::fault::Fault;
-use datarig_core::i18n::{I18n, Label, Msg};
 use datarig_core::results::{Row, RowStore};
+use datarig_i18n::{I18n, Label, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -100,7 +100,7 @@ impl ResultSet {
 
     /// The user's transaction `epoch` ended (`end`: how). Whether what an Apply did in it is
     /// gone, with the label that says why.
-    pub fn tx_ended(&mut self, epoch: u64, end: crate::app::tabs::TxEnd) -> Option<datarig_core::i18n::Label> {
+    pub fn tx_ended(&mut self, epoch: u64, end: crate::app::tabs::TxEnd) -> Option<datarig_i18n::Label> {
         if self.tx == Some(TxMark::InTx(epoch)) {
             let rolled_back = end == crate::app::tabs::TxEnd::RolledBack;
             self.tx = Some(if rolled_back { TxMark::RolledBack } else { TxMark::Ended });

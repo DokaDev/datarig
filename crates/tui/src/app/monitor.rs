@@ -29,7 +29,6 @@ pub use act::{ActionEntry, Asked, MonitorAsk, RowInfo};
 use super::*;
 use crate::widgets::monitor::state_text;
 use datarig_core::config::MonitorInterval;
-use datarig_core::i18n::I18n;
 use datarig_core::monitor::SessionsWanted;
 use datarig_core::monitor::locks::{self, Holder, LockList, Tree};
 use datarig_core::monitor::rate::{self, History, Pending, Rate};
@@ -37,6 +36,7 @@ use datarig_core::monitor::{
     CounterKind, FullText, GaugeKind, MonitorFormat, Part, Replication, Sample, ServerInfo, SessionKey, SessionRow,
     SessionState, Snapshot, TEXT_MIN_AGE_US, TextAsk, Timestamp, Tx, Want,
 };
+use datarig_i18n::I18n;
 use std::time::Duration;
 
 /// How many of the longest running sessions the Overview keeps.

@@ -8,7 +8,7 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{DbEvent, Outcome};
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::Focus;
 use datarig_tui::input::burst;
 use datarig_tui::widgets::editor::Editor;

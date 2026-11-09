@@ -6,7 +6,7 @@ mod common;
 
 use common::*;
 use datarig_core::driver::DbCommand;
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::hover::PointerOn;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::widgets::tabbar::TabHit;

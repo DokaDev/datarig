@@ -32,8 +32,8 @@ put crates/tui/src/app.rs $'// app\n'
 put crates/core/src/policy.rs $'// policy\n'
 put crates/core/src/theme.rs $'// theme files\n'
 put crates/core/src/paths.rs $'// paths\n'
-put locales/en.toml $'a = "A"\n'
-put locales/ko.toml $'a = "A"\n'
+put crates/i18n/locales/en.toml $'a = "A"\n'
+put crates/i18n/locales/ko.toml $'a = "A"\n'
 put docs/site/src/SUMMARY.md $'# Summary\n'
 put docs/site/src/guide.md $'# Guide\n\nHow to.\n'
 put docs/site/src/old.md $'# Old\n\nGone soon.\n'
@@ -97,13 +97,13 @@ put changes/added/grid-tsv.md "$frag"
 expect fail "a user-visible change without a page" "" "no doc change: <why no page changes>"
 
 case_start visible-generated
-put locales/en.toml $'a = "B"\n'
+put crates/i18n/locales/en.toml $'a = "B"\n'
 put docs/site/src/reference/configuration.md $'# Configuration\n\n<!-- Generated from crates/core/src/config/doc.rs. Do not edit;\n     DATARIG_BLESS=1 ... -->\n\nText 2.\n'
 put docs/site/src/reference/keybindings.md $'# Keybindings\n\n{{#include ../../../keybindings.md:commands}}\n'
 put docs/site/src/screens/main.txt $'screen 2\n'
 put docs/site/src/SUMMARY.md $'# Summary\n\n- x\n'
 put changes/changed/label.md "$frag"
-expect fail "generated pages, include stubs, screens and SUMMARY.md do not count" "" "locales/en.toml"
+expect fail "generated pages, include stubs, screens and SUMMARY.md do not count" "" "crates/i18n/locales/en.toml"
 
 case_start visible-new-page
 put crates/core/src/policy.rs $'// policy 2\n'
@@ -134,19 +134,19 @@ put changes/changed/paths.md "$frag"
 expect fail "paths.rs is user-visible" "" "crates/core/src/paths.rs"
 
 case_start whats-new-only
-put locales/en.toml $'a = "B"\n'
+put crates/i18n/locales/en.toml $'a = "B"\n'
 put docs/site/src/whats-new.md $'# What\'s new\n\nIntro.\n\n- Hand-added.\n\n## 0.36.0 (2026-10-01)\n\n- Tips.\n'
 put changes/changed/label.md "$frag"
 expect fail "What's new is no page that describes a change" "" "no doc change: <why no page changes>"
 
 case_start big-page
-put locales/en.toml $'a = "B"\n'
+put crates/i18n/locales/en.toml $'a = "B"\n'
 printf 'One more line.\n' >> "$repo/docs/site/src/big.md"
 put changes/changed/label.md "$frag"
 expect pass "a hand-written page over 500 KB counts" ""
 
 case_start big-generated
-put locales/en.toml $'a = "B"\n'
+put crates/i18n/locales/en.toml $'a = "B"\n'
 printf 'One more line.\n' >> "$repo/docs/site/src/reference/big-generated.md"
 put changes/changed/label.md "$frag"
 expect fail "a generated page over 500 KB does not count" "" "no doc change: <why no page changes>"
@@ -225,7 +225,7 @@ put crates/tui/src/keymap/tests.rs $'// tests 2\n'
 expect pass "a test change is not user-visible; no changelog with a reason" $'no changelog: tests only\n' "no user-visible change"
 
 case_start other-locale
-put locales/ko.toml $'a = "B"\n'
+put crates/i18n/locales/ko.toml $'a = "B"\n'
 put changes/fixed/ko.md "$frag"
 expect pass "another catalog needs a fragment, not a page" ""
 

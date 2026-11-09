@@ -9,8 +9,8 @@ use crate::theme;
 use crate::widgets::popup::clear_overlay;
 use crate::widgets::put;
 use crate::widgets::statusbar::level_color;
-use datarig_core::i18n::{Label, Localized, Msg};
 use datarig_core::secret::SourceKind;
+use datarig_i18n::{Label, Localized, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -420,7 +420,7 @@ pub(crate) fn draw_tx_summary(app: &mut App, area: Rect, buf: &mut Buffer) {
     let num_w = (first + tx.log.len()).to_string().len();
     for (k, e) in tx.log.iter().enumerate().skip(scroll).take(shown) {
         let rows = app.i18n.msg(&Msg::TxRows { count: e.rows }).to_string();
-        let time = e.elapsed.map(datarig_core::i18n::fmt_elapsed).unwrap_or_default();
+        let time = e.elapsed.map(datarig_i18n::fmt_elapsed).unwrap_or_default();
         let tail = format!("  {rows}  {time}");
         let num = format!("{:>num_w$}  ", first + k + 1);
         let room = iw.saturating_sub(crate::text::width(&num) + crate::text::width(&tail));

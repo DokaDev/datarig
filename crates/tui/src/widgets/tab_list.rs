@@ -15,7 +15,7 @@ use crate::theme;
 use crate::widgets::dialog::{centered, modal};
 use crate::widgets::put;
 use crate::widgets::tabbar;
-use datarig_core::i18n::Label;
+use datarig_i18n::Label;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};

@@ -1,5 +1,5 @@
 use super::*;
-use datarig_core::i18n::{I18n, Lang};
+use datarig_i18n::{I18n, Lang};
 
 /// The bottom row of a modal box `w` wide with the preview's keys, in `lang`.
 fn bottom(w: u16, lang: Lang) -> (Buffer, u16) {

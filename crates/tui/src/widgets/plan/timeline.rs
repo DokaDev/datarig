@@ -7,8 +7,8 @@ use super::{Look, fmt_ms, fmt_num, heat, indented_name, label_column, on_line, s
 use crate::app::plan::PlanTab;
 use crate::text::width;
 use crate::widgets::put;
-use datarig_core::i18n::{Label, Msg};
 use datarig_core::sql::plan::Measure;
+use datarig_i18n::{Label, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;

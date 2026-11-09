@@ -7,7 +7,7 @@
 //! hatch) can produce. See `docs/architecture.md`, "UI strings (i18n)".
 //!
 //! ```
-//! use datarig_core::i18n::{I18n, Label, Lang, Localized, Msg};
+//! use datarig_i18n::{I18n, Label, Lang, Localized, Msg};
 //! let i = I18n::new(Lang::En);
 //! assert_eq!(i.label(Label::QueryCancelled), "Query cancelled");
 //! assert_eq!(i.msg(&Msg::ConnFailed { error: "timeout".into() }), "Connection failed: timeout");
@@ -20,22 +20,22 @@
 //!
 //! ```compile_fail,E0599
 //! // A key that is not in en.toml.
-//! let _ = datarig_core::i18n::Label::QueryCanceled;
+//! let _ = datarig_i18n::Label::QueryCanceled;
 //! ```
 //!
 //! ```compile_fail,E0063
 //! // A message without its argument (`conn.failed` has `{error}`).
-//! let _ = datarig_core::i18n::Msg::ConnFailed {};
+//! let _ = datarig_i18n::Msg::ConnFailed {};
 //! ```
 //!
 //! ```compile_fail,E0308
 //! // An argument of the wrong type (`{count}` is a number).
-//! let _ = datarig_core::i18n::Msg::ProfilesDeletedTabs { name: "prod".into(), count: "3".to_string() };
+//! let _ = datarig_i18n::Msg::ProfilesDeletedTabs { name: "prod".into(), count: "3".to_string() };
 //! ```
 //!
 //! ```compile_fail,E0277
 //! // Chrome text from a raw string (only `Localized::verbatim` opts out).
-//! let _: datarig_core::i18n::Localized = "Quit".into();
+//! let _: datarig_i18n::Localized = "Quit".into();
 //! ```
 
 use std::borrow::Cow;

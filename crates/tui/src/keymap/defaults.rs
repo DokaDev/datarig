@@ -8,7 +8,7 @@
 
 use super::Ctx;
 use super::Ctx::*;
-use datarig_core::i18n::Label;
+use datarig_i18n::Label;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BindTarget {

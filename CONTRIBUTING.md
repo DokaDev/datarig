@@ -105,7 +105,7 @@ budget again; counts, memory and the binary size fail at once (docs/perf.md, "Bu
   The docs site (`docs/site`, [mdBook](https://rust-lang.github.io/mdBook/)) is built with
   `mdbook build docs/site`; `tests/book_refs.rs` checks that its hand-written pages, the README
   and this file name only commands, actions, keys and config keys that exist.
-- UI text goes through the catalogs in `locales/` (`en.toml` is the source of truth; every
+- UI text goes through the catalogs in `crates/i18n/locales/` (`en.toml` is the source of truth; every
   locale must have the same keys). See "UI strings (i18n)" in
   [docs/architecture.md](docs/architecture.md).
 
@@ -188,7 +188,7 @@ is edited):
   policy keys, connection profiles, the command line and environment variables, themes) also
   changes a hand-written page under `docs/site/src` (generated pages, screens and What's new do
   not count), or the description has the line `no doc change: <reason>`.
-- A change to `crates/` or `locales/` adds a changelog fragment, or the description has the line
+- A change to `crates/` adds a changelog fragment, or the description has the line
   `no changelog: <reason>`.
 - A release pull request leaves no fragments in `changes/`, and What's new has the version's
   section.
@@ -209,7 +209,7 @@ locally. A fragment merged after the release pull request goes into the next rel
 ### Public text style
 
 Text that users read (the README, this file, the docs site, changelog fragments, the catalogs
-in `locales/`, the screens, `--help`, the Cargo descriptions) uses British spelling and no em
+in `crates/i18n/locales/`, the screens, `--help`, the Cargo descriptions) uses British spelling and no em
 dash. In place of an em dash write a colon, a comma, parentheses or a new sentence; a title
 that names its subject takes a colon ("Apply changes: shop.users"). An en dash in a range
 (1–5) and `--` in a command line are fine. British spelling: colour, behaviour, centre,

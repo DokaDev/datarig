@@ -7,9 +7,9 @@ mod common;
 
 use common::*;
 use datarig_core::driver::{DbCommand, DbEvent};
-use datarig_core::i18n::Lang;
 use datarig_core::paths::Paths;
 use datarig_core::policy::SpillLimit;
+use datarig_i18n::Lang;
 use datarig_tui::app::{Focus, Paging, Results, Startup};
 use ratatui::crossterm::event::KeyCode;
 use std::path::{Path, PathBuf};

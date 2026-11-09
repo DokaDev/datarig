@@ -8,8 +8,8 @@ mod common;
 
 use common::*;
 use datarig_core::config::{self, Config, IconsSetting};
-use datarig_core::i18n::{I18n, Label, Lang};
 use datarig_core::secret::{MemoryStore, SecretStore};
+use datarig_i18n::{I18n, Label, Lang};
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::{App, Startup};
 use ratatui::crossterm::event::KeyCode;

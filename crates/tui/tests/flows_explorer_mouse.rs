@@ -7,7 +7,7 @@ mod common;
 use common::*;
 use datarig_core::config::IconsSetting;
 use datarig_core::driver::{DbCommand, DbEvent, SchemaObjects};
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 use ratatui::style::Modifier;
 

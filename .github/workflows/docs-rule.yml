@@ -1,7 +1,7 @@
 name: Docs rule
 
-# Every pull request: a change users can see updates the docs site, a change to crates/ or
-# locales/ adds a changelog fragment, and a release pull request moves the fragments to What's
+# Every pull request: a change users can see updates the docs site, a change to crates/ adds
+# a changelog fragment, and a release pull request moves the fragments to What's
 # new, unless the description says why not (`no doc change: <reason>`, `no changelog: <reason>`)
 # (.github/scripts/docs-rule.sh, which explains each failure). Editing the description runs it
 # again. A workflow of its own, not a job of ci.yml: the release gate checks the push runs of

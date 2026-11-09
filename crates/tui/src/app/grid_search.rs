@@ -1039,8 +1039,8 @@ impl App {
             Some(m) => {
                 let k = at
                     .and_then(|c| m.cells.binary_search(&c).ok())
-                    .map_or("-".to_string(), |i| datarig_core::i18n::fmt_count(i as u64 + 1));
-                let total = datarig_core::i18n::fmt_count(m.cells.len() as u64);
+                    .map_or("-".to_string(), |i| datarig_i18n::fmt_count(i as u64 + 1));
+                let total = datarig_i18n::fmt_count(m.cells.len() as u64);
                 format!("{k}/{total}{}", if m.capped { "+" } else { "" })
             }
             None => String::new(),

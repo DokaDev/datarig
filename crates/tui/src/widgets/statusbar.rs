@@ -4,7 +4,7 @@ use crate::app::{App, Level};
 use crate::text::{clip, clip_middle, width};
 use crate::theme;
 use crate::widgets::SPINNER;
-use datarig_core::i18n::{Label, Msg};
+use datarig_i18n::{Label, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -100,7 +100,7 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
         (app.focus == crate::app::Focus::Tree && app.transient.is_none())
             .then(|| crate::widgets::explorer::line_preview(app))
             .flatten()
-            .map(datarig_core::i18n::Localized::verbatim)
+            .map(datarig_i18n::Localized::verbatim)
     });
     // The summary of the grid's selected range, while the grid has the focus: a fresh notice
     // still comes first, but for the one that says a selection started (the hints have its keys).
@@ -109,7 +109,7 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let summary = (!fresh && !app.grid_prompt_open())
         .then(|| app.selection_summary())
         .flatten()
-        .map(datarig_core::i18n::Localized::verbatim);
+        .map(datarig_i18n::Localized::verbatim);
     // A summary's shorter forms, else the notice's.
     let shorter = match &summary {
         Some(_) => app.selection_summary_forms().into_iter().skip(1).collect(),
@@ -279,7 +279,7 @@ const NAME_MIN: usize = 8;
 /// INSERT and VISUAL (V-LINE by line) in their colors, COMMAND while the `:` command line is
 /// open. `None` without an editor (no tab, a table tab) and a command line. While a cell's value
 /// is edited in several lines, that editor's (COMMAND while its `:` line is open).
-pub(crate) fn mode_badge(app: &App) -> Option<(datarig_core::i18n::Localized, Style)> {
+pub(crate) fn mode_badge(app: &App) -> Option<(datarig_i18n::Localized, Style)> {
     let th = theme::cur();
     use crate::widgets::editor::Mode;
     let lines = app.cell_lines_open().then(|| app.tab().cell_edit.as_ref()?.lines.as_deref()).flatten();

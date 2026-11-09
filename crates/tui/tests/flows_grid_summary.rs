@@ -8,7 +8,7 @@ mod common;
 use common::*;
 use datarig_core::driver::DbEvent;
 use datarig_core::edit::Value;
-use datarig_core::i18n::Lang;
+use datarig_i18n::Lang;
 use datarig_tui::app::{Focus, Results};
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 use std::time::Duration;

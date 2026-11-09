@@ -103,7 +103,7 @@ fn points_place_by_their_value_or_their_index() {
 /// Draw `c` into a buffer exactly `w`×`h` (what a copy of the drawing does).
 fn draw_exact(c: &mut ChartTab, w: u16, h: u16) -> Buffer {
     let th = crate::theme::DARK;
-    let i18n = I18n::new(datarig_core::i18n::Lang::En);
+    let i18n = I18n::new(datarig_i18n::Lang::En);
     let cx = Look { i18n: &i18n, th: &th, focused: true, hover: None, keys: Default::default() };
     let area = Rect::new(0, 0, w, h);
     let mut buf = Buffer::empty(area);
@@ -225,7 +225,7 @@ fn a_long_label_stays_inside_the_plot() {
     c.spec = Spec { kind: Kind::Bar, x: Some(0), ys: vec![1, 2], by: None, log: false };
     c.rebuild_for_tests(&rs);
     let th = crate::theme::DARK;
-    let i18n = I18n::new(datarig_core::i18n::Lang::En);
+    let i18n = I18n::new(datarig_i18n::Lang::En);
     let cx = Look { i18n: &i18n, th: &th, focused: true, hover: None, keys: Default::default() };
     for w in 12..=30 {
         let area = Rect::new(30, 0, w, 14);

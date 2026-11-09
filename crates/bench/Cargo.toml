@@ -14,6 +14,7 @@ publish.workspace = true
 
 [dependencies]
 datarig-core.workspace = true
+datarig-i18n.workspace = true
 datarig-driver-mysql.workspace = true
 datarig-driver-postgres.workspace = true
 datarig-ssh.workspace = true
