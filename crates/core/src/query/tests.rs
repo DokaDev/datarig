@@ -332,6 +332,14 @@ fn recognise_keeps_what_it_does_not_model() {
     for s in ["id = 1 XOR id = 2 AND price > 10", "id = 1 || id = 2 AND id = 3"] {
         assert_eq!(recognise(s, MY, &cols), Some(Cond::Raw(s.into())), "{s}");
     }
+    // NOT binds tighter than `&&` and `||`: such a level stays whole too.
+    for s in ["NOT id = 1 && price > 10", "NOT id = 1 || price > 10"] {
+        assert_eq!(recognise(s, MY, &cols), Some(Cond::Raw(s.into())), "{s}");
+    }
+    // A NULL in a typed IN list follows SQL's three-valued logic, not the model's list.
+    for s in ["id IN (1, NULL)", "id NOT IN (1, NULL)"] {
+        assert_eq!(pg(s), Some(Cond::Raw(s.into())), "{s}");
+    }
     // `&&` is AND: cutting at OR around it keeps the meaning.
     assert_eq!(
         recognise("id = 1 && id = 2 OR id = 3", MY, &cols),

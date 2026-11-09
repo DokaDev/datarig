@@ -51,6 +51,10 @@ impl Reader<'_> {
     }
 
     fn and(&self, toks: &[Token]) -> Option<Cond> {
+        if self.holds_unmodelled(toks) {
+            let (first, last) = (toks.first()?, toks.last()?);
+            return Some(Cond::Raw(self.src[first.start..last.end].to_string()));
+        }
         let parts = self.split(toks, "AND");
         if parts.len() == 1 {
             return self.not(toks);
@@ -58,14 +62,11 @@ impl Reader<'_> {
         Some(Cond::All(parts.into_iter().map(|p| self.not(p)).collect::<Option<_>>()?))
     }
 
-    /// `toks` cut at each `word` outside parentheses, square brackets and `CASE … END` (for
-    /// `AND`, not the one of a `BETWEEN`). Not cut at all when a MySQL operator whose precedence
-    /// is not that of `AND` stands at the same level (`XOR`, `||`): any cut could change what
-    /// the text means.
-    fn split<'t>(&self, toks: &'t [Token], word: &str) -> Vec<&'t [Token]> {
-        let mut parts = Vec::new();
-        let (mut depth, mut cases, mut start, mut between) = (0usize, 0usize, 0, false);
-        for (i, t) in toks.iter().enumerate() {
+    /// The tokens of `toks` that stand at its own level: outside parentheses, square brackets
+    /// and `CASE … END`, with their index.
+    fn level<'t>(&self, toks: &'t [Token]) -> impl Iterator<Item = (usize, &'t Token)> {
+        let (mut depth, mut cases) = (0usize, 0usize);
+        toks.iter().enumerate().filter(move |(_, t)| {
             match t.kind {
                 Tok::LParen => depth += 1,
                 Tok::RParen => depth = depth.saturating_sub(1),
@@ -74,29 +75,41 @@ impl Reader<'_> {
                 _ if depth > 0 => {}
                 _ if self.word(Some(t), "CASE") => cases += 1,
                 _ if self.word(Some(t), "END") => cases = cases.saturating_sub(1),
-                _ if cases > 0 => {}
-                _ if self.unmodelled_boolean(t) => return vec![toks],
-                _ if self.word(Some(t), "BETWEEN") => between = true,
-                _ if self.word(Some(t), word) => {
-                    if word == "AND" && between {
-                        between = false;
-                    } else {
-                        parts.push(&toks[start..i]);
-                        start = i + 1;
-                    }
+                _ => return cases == 0,
+            }
+            false
+        })
+    }
+
+    /// `toks` cut at each `word` of its own level (for `AND`, not the one of a `BETWEEN`).
+    fn split<'t>(&self, toks: &'t [Token], word: &str) -> Vec<&'t [Token]> {
+        let mut parts = Vec::new();
+        let (mut start, mut between) = (0, false);
+        for (i, t) in self.level(toks) {
+            if self.word(Some(t), "BETWEEN") {
+                between = true;
+            } else if self.word(Some(t), word) {
+                if word == "AND" && between {
+                    between = false;
+                } else {
+                    parts.push(&toks[start..i]);
+                    start = i + 1;
                 }
-                _ => {}
             }
         }
         parts.push(&toks[start..]);
         parts
     }
 
-    /// A MySQL operator that keeps a level whole: `XOR` (between `AND` and `OR`) and `|`, which
-    /// starts `||` (`OR`, unless the session concatenates with it, which is not known here) and
-    /// is otherwise a bitwise `|` that is left alone too. `&&` is `AND` and may be cut around.
-    fn unmodelled_boolean(&self, t: &Token) -> bool {
-        matches!(self.d, Dialect::MySql(_)) && (self.word(Some(t), "XOR") || (t.kind == Tok::Op && self.text(t) == "|"))
+    /// Whether a MySQL operator this reader does not model stands at the level of `toks`:
+    /// `XOR`, `&` (`&&` is `AND`, `&` bitwise) or `|` (`||` is `OR` unless the session
+    /// concatenates with it, which is not known here; `|` bitwise). Their precedence differs
+    /// from that of `AND` and `NOT`, so such a level is kept whole.
+    fn holds_unmodelled(&self, toks: &[Token]) -> bool {
+        matches!(self.d, Dialect::MySql(_))
+            && self
+                .level(toks)
+                .any(|(_, t)| self.word(Some(t), "XOR") || (t.kind == Tok::Op && matches!(self.text(t), "&" | "|")))
     }
 
     fn not(&self, toks: &[Token]) -> Option<Cond> {
@@ -274,7 +287,10 @@ impl Reader<'_> {
                     Some(_) => return None,
                 }
             }
-            return (!values.is_empty()).then_some(Cond::In { col, values, negated });
+            // A NULL in a typed list makes `NOT IN` never true and `IN` never match NULL rows;
+            // the model's list treats NULL as `IS NULL`, so such a text stays as typed.
+            let has_null = values.contains(&Value::Null);
+            return (!values.is_empty() && !has_null).then_some(Cond::In { col, values, negated });
         }
         let like = self.word(toks.get(i), "LIKE");
         let ilike = self.d == Dialect::Postgres && self.word(toks.get(i), "ILIKE");
