@@ -1,9 +1,9 @@
 use super::*;
 
-/// The Korean catalog's text for `key`, read from `locales/ko.toml` when the test runs: the
-/// tests hold no Korean text of their own.
+/// The Korean catalog's text for `key`, read from `locales/ko/` when the test runs: the tests
+/// hold no Korean text of their own.
 fn ko_text(key: &str) -> String {
-    let table: toml::Table = include_str!("../locales/ko.toml").parse().expect("ko.toml");
+    let table: toml::Table = files::catalog("ko").parse().expect("the Korean catalog");
     table[key].as_str().expect("a string").to_string()
 }
 

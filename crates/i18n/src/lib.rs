@@ -1,6 +1,6 @@
 //! i18n: the typed message catalog.
 //!
-//! `build.rs` checks `locales/*.toml` and generates [`Label`] (entries without
+//! `build.rs` checks the catalogs in `locales/` and generates [`Label`] (entries without
 //! placeholders) and [`Msg`] (any entry, with typed arguments) from them, so an unknown key or
 //! a missing argument is a compile error and every locale is complete. UI chrome takes
 //! [`Localized`] text, which only the catalog (or the explicit [`Localized::verbatim`] escape
@@ -19,7 +19,7 @@
 //! shows (stable rustdoc does not check the error codes, so keep them minimal):
 //!
 //! ```compile_fail,E0599
-//! // A key that is not in en.toml.
+//! // A key that is not in the English catalog.
 //! let _ = datarig_i18n::Label::QueryCanceled;
 //! ```
 //!
@@ -43,7 +43,7 @@ use std::fmt;
 use std::ops::Deref;
 use std::time::Duration;
 
-/// A UI language. Each has a catalog `locales/<code>.toml` (listed in `build.rs`).
+/// A UI language. Each has a catalog `locales/<code>/` (listed in `build.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lang {
     En,
@@ -178,6 +178,17 @@ pub fn detect_lang(setting: &str, env: impl Fn(&str) -> Option<String>) -> Lang 
         }
     }
     Lang::En
+}
+
+/// The catalog files as text, for the tests that read them (feature `test-util`).
+#[cfg(any(test, feature = "test-util"))]
+pub mod files {
+    include!(concat!(env!("OUT_DIR"), "/files.rs"));
+
+    /// Every catalog file of the locale `code` (`en`, `ko`), one after the other.
+    pub fn catalog(code: &str) -> String {
+        FILES.iter().filter(|(c, _, _)| *c == code).map(|(_, _, text)| *text).collect::<Vec<_>>().join("\n")
+    }
 }
 
 #[cfg(test)]

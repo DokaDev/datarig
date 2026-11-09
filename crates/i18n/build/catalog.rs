@@ -4,11 +4,14 @@
 //! turns problems into build errors, and by `tests/catalog.rs`, which feeds it fixtures.
 //!
 //! Rules (see `docs/architecture.md`, "UI strings (i18n)"):
-//! - The source catalog (`en.toml`) defines the keys. A key is lowercase ASCII words joined by
+//! - The source catalog (English, `locales/en/`) defines the keys. A key is lowercase ASCII words joined by
 //!   `.` or `_`; it becomes a Rust variant name (`conn.failed` -> `ConnFailed`).
 //! - A placeholder is `{name}` with a lowercase identifier. Its Rust type follows from the
 //!   name: `count` is a `u64` (thousands separators), `elapsed` and `latency` are a
 //!   `Duration` (`123ms` / `1.2s`), anything else is a `String`. Other braces are literal text.
+//! - A locale is a directory of area files (`locales/<code>/<area>.toml`), merged into one
+//!   catalog. A key is defined once per locale, and a translation keeps each key in the file of
+//!   the same name as the source does, so the directories mirror each other.
 //! - Every other locale must have exactly the source keys with the same placeholder set per
 //!   key. A [`Policy::Optional`] locale may miss keys (English is used, with a warning); extra
 //!   keys and placeholder mismatches are always errors.
@@ -36,18 +39,75 @@ pub enum Policy {
     Optional,
 }
 
-/// One locale file.
+/// One locale: its area files merged.
 #[derive(Clone, Debug)]
 pub struct Locale {
-    /// Short code, also the stem of the file name (`ko` for `ko.toml`).
+    /// Short code, also the name of its directory (`ko` for `locales/ko/`).
     pub code: String,
-    /// Path shown in messages.
+    /// Path shown in messages: the directory of the area files, or the one file of a locale
+    /// without areas.
     pub file: String,
     pub policy: Policy,
     /// Key -> text; for a plural entry its `other` form.
     pub entries: BTreeMap<String, String>,
     /// Key -> the `one` form of each plural entry.
     pub one: BTreeMap<String, String>,
+    /// Key -> the area (file stem) it is defined in; empty for a locale without areas.
+    pub area: BTreeMap<String, String>,
+    /// Every area file of the locale, empty ones too.
+    pub areas: BTreeSet<String>,
+}
+
+impl Locale {
+    /// A locale read from one file, without areas.
+    pub fn single(code: &str, file: &str, policy: Policy, (entries, one): Parsed) -> Locale {
+        let (area, areas) = (BTreeMap::new(), BTreeSet::new());
+        Locale { code: code.to_string(), file: file.to_string(), policy, entries, one, area, areas }
+    }
+
+    /// The path of an area file of this locale (the locale's own path without an area).
+    pub fn file_of(&self, area: Option<&String>) -> String {
+        match area {
+            Some(a) => format!("{}/{a}.toml", self.file),
+            None => self.file.clone(),
+        }
+    }
+
+    /// The file that defines `key`.
+    fn file_of_key(&self, key: &str) -> String {
+        self.file_of(self.area.get(key))
+    }
+}
+
+/// Merge the area files of a locale (`files`: area, text), `dir` being their directory as
+/// shown in messages. A key defined in two files is an error naming both.
+pub fn merge(code: &str, dir: &str, policy: Policy, files: &[(String, String)]) -> Result<Locale, Vec<Problem>> {
+    let mut loc = Locale::single(code, dir, policy, (BTreeMap::new(), BTreeMap::new()));
+    let mut problems = Vec::new();
+    for (area, src) in files {
+        let file = loc.file_of(Some(area));
+        loc.areas.insert(area.clone());
+        let (entries, one) = match parse(&file, src) {
+            Ok(p) => p,
+            Err(ps) => {
+                problems.extend(ps);
+                continue;
+            }
+        };
+        for (key, text) in entries {
+            if let Some(first) = loc.area.get(&key) {
+                let other = loc.file_of(Some(first));
+                problems.push(Problem { file: file.clone(), key, kind: ProblemKind::Duplicate { other } });
+                continue;
+            }
+            if let Some(o) = one.get(&key) {
+                loc.one.insert(key.clone(), o.clone());
+            }
+            loc.area.insert(key.clone(), area.clone());
+            loc.entries.insert(key, text);
+        }
+    }
+    if problems.is_empty() { Ok(loc) } else { Err(problems) }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,6 +140,13 @@ pub enum ProblemKind {
     Extra,
     /// The placeholder sets differ.
     Placeholders { expected: Vec<String>, found: Vec<String> },
+    /// The key is defined again in another file of the same locale (`other`, the first one).
+    Duplicate { other: String },
+    /// A translation keeps the key in another file than the source does (`expected`: the
+    /// source's file name).
+    OtherFile { expected: String },
+    /// A translation has an area file the source does not (the key is empty).
+    FileNotInSource,
 }
 
 /// A problem with one key of one file.
@@ -158,6 +225,19 @@ impl fmt::Display for Problem {
                 "{}: key `{}`: not in the source catalog (remove it, or add it there first)",
                 self.file, self.key
             ),
+            ProblemKind::Duplicate { other } => {
+                write!(f, "{}: key `{}`: also defined in {other}; keep one of them", self.file, self.key)
+            }
+            ProblemKind::OtherFile { expected } => write!(
+                f,
+                "{}: key `{}`: the source catalog has it in {expected}; keep each key in the file of the same name in every locale",
+                self.file, self.key
+            ),
+            ProblemKind::FileNotInSource => write!(
+                f,
+                "{}: the source catalog has no file of this name; move its keys to the files the source has them in",
+                self.file
+            ),
             ProblemKind::Placeholders { expected, found } => write!(
                 f,
                 "{}: key `{}`: placeholders differ from the source catalog (expected {}, found {})",
@@ -209,7 +289,7 @@ pub fn parse(file: &str, src: &str) -> Result<Parsed, Vec<Problem>> {
 /// also require every `{count}` entry to be plural and reject pseudo plurals.
 fn check_plurals(loc: &Locale, source: bool) -> Vec<Problem> {
     let mut problems = Vec::new();
-    let problem = |key: &str, kind| Problem { file: loc.file.clone(), key: key.to_string(), kind };
+    let problem = |key: &str, kind| Problem { file: loc.file_of_key(key), key: key.to_string(), kind };
     for (key, text) in &loc.entries {
         let other = placeholders(text);
         match loc.one.get(key) {
@@ -335,7 +415,7 @@ pub fn variant_name(key: &str) -> String {
 pub fn check_source(src: &Locale) -> Vec<Problem> {
     let mut problems = Vec::new();
     let mut names: BTreeMap<String, &str> = BTreeMap::new();
-    let problem = |key: &str, kind| Problem { file: src.file.clone(), key: key.to_string(), kind };
+    let problem = |key: &str, kind| Problem { file: src.file_of_key(key), key: key.to_string(), kind };
     for (key, text) in &src.entries {
         if !valid_key(key) {
             problems.push(problem(key, ProblemKind::BadKey));
@@ -359,12 +439,23 @@ pub fn check_source(src: &Locale) -> Vec<Problem> {
 pub fn check_locale(src: &Locale, loc: &Locale) -> (Vec<Problem>, Vec<Problem>) {
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
-    let problem = |key: &str, kind| Problem { file: loc.file.clone(), key: key.to_string(), kind };
+    let problem = |key: &str, kind| Problem { file: loc.file_of_key(key), key: key.to_string(), kind };
+    // A missing key belongs in the file of the source's name.
+    let missing =
+        |key: &str| Problem { file: loc.file_of(src.area.get(key)), key: key.to_string(), kind: ProblemKind::Missing };
+    for area in loc.areas.iter().filter(|a| !src.areas.contains(*a)) {
+        errors.push(Problem { file: loc.file_of(Some(area)), key: String::new(), kind: ProblemKind::FileNotInSource });
+    }
     for (key, text) in &src.entries {
         match loc.entries.get(key) {
-            None if loc.policy == Policy::Optional => warnings.push(problem(key, ProblemKind::Missing)),
-            None => errors.push(problem(key, ProblemKind::Missing)),
+            None if loc.policy == Policy::Optional => warnings.push(missing(key)),
+            None => errors.push(missing(key)),
             Some(t) => {
+                if let (Some(want), Some(have)) = (src.area.get(key), loc.area.get(key))
+                    && want != have
+                {
+                    errors.push(problem(key, ProblemKind::OtherFile { expected: format!("{want}.toml") }));
+                }
                 let (expected, found) = (placeholders(text), placeholders(t));
                 if expected != found {
                     errors.push(problem(key, ProblemKind::Placeholders { expected, found }));

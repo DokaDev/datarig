@@ -44,7 +44,7 @@ cargo tree -p datarig-core | grep -Ei 'ratatui|crossterm|datarig-driver|datarig-
 - Modules use the `foo.rs` + `foo/` layout (no `mod.rs`).
 - Unit tests live next to the source in `foo/tests.rs`; `foo.rs` keeps only `#[cfg(test)] mod tests;`, and the tests reach private items with `use super::*`.
 - Integration tests live in the `tests/` directory of the crate they check. Real-database tests that use only the driver belong to the driver crate; tests that drive the `App` (app flows, snapshots, the explorer against a real database) belong to `datarig-tui`.
-- The locale catalogs (`crates/i18n/locales/*.toml`) are part of the `datarig-i18n` package and are read by its `build.rs` at compile time (see "UI strings (i18n)" below). Core does not depend on `datarig-i18n`: it reports failures and choices as data, and the TUI words them, so an edit of a catalog rebuilds only `datarig-i18n` and the crates that show text.
+- The locale catalogs (`crates/i18n/locales/<code>/<area>.toml`) are part of the `datarig-i18n` package and are read by its `build.rs` at compile time (see "UI strings (i18n)" below). Core does not depend on `datarig-i18n`: it reports failures and choices as data, and the TUI words them, so an edit of a catalog rebuilds only `datarig-i18n` and the crates that show text.
 - Snapshot tests pin English screens only. A screen in another language is checked against its catalog (`assert_screen!` in `crates/tui/tests/common/mod.rs`), so the only non-English UI text in the repository is in `crates/i18n/locales/`.
 
 ## Workspace state
@@ -911,7 +911,7 @@ and "The MySQL classifier" below).
 
 Every piece of UI chrome text (titles, labels, hints, status and error messages, action and key-context names) comes from the locale catalogs, and the compiler enforces it.
 
-- **Source of truth**: `crates/i18n/locales/en.toml` defines the keys. `crates/i18n/build.rs` checks every catalog listed in its `LOCALES` table and generates `OUT_DIR/messages.rs`, which `datarig_i18n` includes:
+- **Source of truth**: the English catalog defines the keys. Each locale is a directory of area files, `crates/i18n/locales/<code>/<area>.toml` (`monitor.toml`, `edit.toml`, `actions.toml`, ...), so pull requests of different features add their keys to different files. `crates/i18n/build.rs` merges the files of every locale listed in its `LOCALES` table, checks them and generates `OUT_DIR/messages.rs`, which `datarig_i18n` includes:
   - `Label`: one `Copy` variant per key without placeholders (`pane.tree.title` → `Label::PaneTreeTitle`).
   - `Msg`: `Msg::Label(Label)` or one variant per key with placeholders, whose fields are the arguments (`query.done_rows` → `Msg::QueryDoneRows { count: u64, elapsed: Duration }`). The field type follows the placeholder name: `count` is a `u64` (thousands separators), `elapsed`/`latency` a `Duration` (`123ms` / `1.2s`), anything else a `String`.
   - **Plurals**: an entry with `{count}` is a table with two forms, `"key" = { one = "…", other = "…" }`; the generated `render` picks `one` when `count` is 1. The `one` form may leave the number out (`"its open tab"`). A language without plural forms (Korean) gives a plain string for the same key. Never write `tab(s)`.
@@ -921,17 +921,17 @@ Every piece of UI chrome text (titles, labels, hints, status and error messages,
 
 ### Adding a UI string
 
-1. Add `"area.name" = "Text with {placeholder}"` to `en.toml`, and the translation with the same placeholders to `ko.toml`. Keys are lowercase words joined by `.` or `_`. A text with a number of things uses `{count}` and both English forms: `"area.name" = { one = "{count} row", other = "{count} rows" }`; `ko.toml` keeps one string.
+1. Add `"area.name" = "Text with {placeholder}"` to the English area file of the feature (`en/<area>.toml`; a new area is a new file), and the translation with the same placeholders to the file of the same name in `ko/`. Keys are lowercase words joined by `.` or `_`. A text with a number of things uses `{count}` and both English forms: `"area.name" = { one = "{count} row", other = "{count} rows" }`; the Korean file keeps one string.
 2. Use it: `i18n.label(Label::AreaName)` or `i18n.msg(&Msg::AreaName { placeholder: value })` (`Notice::new(msg, level)` for the status bar). `cargo build` fails until both catalogs have the key with the same placeholders.
 3. For a table of labels (action registry, `:` commands and settings, leader groups, hints), store the `Label`, not a string.
 
 ### How locales are enforced
 
-The build fails, naming the file, the key and the problem, when a locale misses a key of `en.toml`, has a key `en.toml` lacks, or has a different placeholder set for a key. It also rejects malformed keys, two keys with the same Rust name, and placeholders that are Rust keywords. Plural rules: in `en.toml` every entry with `{count}` must have `one` and `other` forms, a plural entry must have `{count}`, both forms must have the same placeholders (`{count}` may be left out of `one`), and `(s)` pseudo plurals are rejected; a translation may use one string or both forms for a plural entry, but no forms for an entry that is not plural in `en.toml`. Each locale in `build.rs` has a policy: `Policy::Required` (en and ko today) makes a missing key an error; `Policy::Optional` makes it a `cargo:warning` and the generated code uses the English text for it. Extra keys and placeholder mismatches are errors under every policy. Shipping a partial translation is therefore a one-line change in `LOCALES`.
+The build fails, naming the file, the key and the problem, when a locale misses a key of the English catalog, has a key English lacks, or has a different placeholder set for a key; when a key is defined in two files of one locale; when a translation keeps a key in another file than English does, or has a file English lacks (the directories mirror each other). It also rejects malformed keys, two keys with the same Rust name, and placeholders that are Rust keywords. Plural rules: in English every entry with `{count}` must have `one` and `other` forms, a plural entry must have `{count}`, both forms must have the same placeholders (`{count}` may be left out of `one`), and `(s)` pseudo plurals are rejected; a translation may use one string or both forms for a plural entry, but no forms for an entry that is not plural in English. Each locale in `build.rs` has a policy: `Policy::Required` (en and ko today) makes a missing key an error; `Policy::Optional` makes it a `cargo:warning` and the generated code uses the English text for it. Extra keys and placeholder mismatches are errors under every policy. Shipping a partial translation is therefore a one-line change in `LOCALES`.
 
 ### Adding a locale
 
-1. Add `crates/i18n/locales/<code>.toml` with the keys of `en.toml`.
+1. Add `crates/i18n/locales/<code>/` with a file for each file of `en/`, holding the same keys.
 2. Add `("<code>", Policy::Required)` (or `Policy::Optional` for a partial translation) to `LOCALES` in `crates/i18n/build.rs`.
 3. Add the matching `Lang` variant (`ja` → `Lang::Ja`) in `crates/i18n/src/lib.rs` and its detection in `detect_lang`; the generated `match lang` does not compile until the variant exists. Then add the language setting and actions in the TUI (`LangSetting`, `action.ui.language.*`).
 

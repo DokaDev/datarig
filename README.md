@@ -113,7 +113,7 @@ keyboard help. Next: [Getting started](https://dokadev.github.io/datarig/getting
 | Path | What |
 |---|---|
 | `crates/core` | UI-free core: driver interface, SQL tooling and the safety classifier, profiles, secrets, config |
-| `crates/i18n` | the UI text: the catalogs (`locales/en.toml`, `locales/ko.toml`) and their typed messages |
+| `crates/i18n` | the UI text: the catalogs (`locales/en/`, `locales/ko/`, one file per area) and their typed messages |
 | `crates/drivers/postgres`, `crates/drivers/mysql` | the database drivers |
 | `crates/ssh`, `crates/tls` | SSH tunnels, TLS (rustls) |
 | `crates/update` | the update check's HTTPS request to GitHub |

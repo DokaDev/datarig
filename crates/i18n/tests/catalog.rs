@@ -8,8 +8,35 @@ use catalog::{ArgType, Locale, Piece, Policy, Problem, ProblemKind};
 
 fn locale(code: &str, policy: Policy, src: &str) -> Locale {
     let file = format!("{code}.toml");
-    let (entries, one) = catalog::parse(&file, src).unwrap_or_else(|e| panic!("{e:?}"));
-    Locale { code: code.to_string(), file, policy, entries, one }
+    let parsed = catalog::parse(&file, src).unwrap_or_else(|e| panic!("{e:?}"));
+    Locale::single(code, &file, policy, parsed)
+}
+
+/// A locale of area files (`locales/<code>/<area>.toml`): (area, text).
+fn areas(code: &str, policy: Policy, files: &[(&str, &str)]) -> Result<Locale, Vec<Problem>> {
+    let files: Vec<(String, String)> = files.iter().map(|(a, t)| (a.to_string(), t.to_string())).collect();
+    catalog::merge(code, &format!("locales/{code}"), policy, &files)
+}
+
+/// The shipped catalog files of `code`: (area, text), by area.
+fn shipped_files(code: &str) -> Vec<(String, String)> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales").join(code);
+    let mut files: Vec<(String, String)> = std::fs::read_dir(&dir)
+        .expect("a locale directory")
+        .map(|e| e.expect("a directory entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+        .map(|p| {
+            let area = p.file_stem().and_then(|s| s.to_str()).expect("a file name").to_string();
+            (area, std::fs::read_to_string(&p).expect("a catalog file"))
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// The shipped catalog of `code`, its area files merged as the build merges them.
+fn shipped(code: &str, policy: Policy) -> Locale {
+    catalog::merge(code, &format!("locales/{code}"), policy, &shipped_files(code)).unwrap_or_else(|e| panic!("{e:?}"))
 }
 
 // The translated fixtures below are in any language other than English: the checks look at
@@ -298,14 +325,125 @@ fn generated_code_types_the_arguments() {
 }
 
 #[test]
+fn area_files_merge_into_one_catalog() {
+    let split =
+        areas("en", Policy::Source, &[("conn", r#""conn.failed" = "Connection failed: {error}""#), ("pane", EN_PANE)])
+            .unwrap();
+    assert_eq!(split.entries.len(), 3);
+    assert_eq!(split.one.len(), 1);
+    assert_eq!(split.area["query.done"], "pane");
+    let ko = areas("ko", Policy::Required, &[("conn", r#""conn.failed" = "接続失敗: {error}""#), ("pane", KO_PANE)])
+        .unwrap();
+    assert_eq!(catalog::check(&[split.clone(), ko]), (vec![], vec![]));
+    // The generated code does not depend on how the keys are spread over files.
+    assert_eq!(catalog::generate(&[split]), catalog::generate(&[en()]));
+}
+
+const EN_PANE: &str = r#"
+"pane.title" = "Explorer"
+"query.done" = { one = "{count} row · {elapsed}", other = "{count} rows · {elapsed}" }
+"#;
+
+const KO_PANE: &str = r#"
+"pane.title" = "探索機"
+"query.done" = "{count}行 · {elapsed}"
+"#;
+
+#[test]
+fn a_key_defined_in_two_files_fails() {
+    let errors =
+        areas("en", Policy::Source, &[("a", r#""pane.title" = "Explorer""#), ("b", r#""pane.title" = "Tree""#)])
+            .unwrap_err();
+    let other = "locales/en/a.toml".to_string();
+    assert_eq!(errors, vec![problem("locales/en/b.toml", "pane.title", ProblemKind::Duplicate { other })]);
+    assert_eq!(
+        errors[0].to_string(),
+        "locales/en/b.toml: key `pane.title`: also defined in locales/en/a.toml; keep one of them"
+    );
+}
+
+#[test]
+fn a_translation_keeps_each_key_in_the_file_of_the_same_name() {
+    let en =
+        areas("en", Policy::Source, &[("conn", r#""conn.failed" = "Connection failed: {error}""#), ("pane", EN_PANE)])
+            .unwrap();
+    let ko = areas(
+        "ko",
+        Policy::Required,
+        &[("conn", ""), ("pane", &format!("{KO_PANE}\"conn.failed\" = \"接続失敗: {{error}}\""))],
+    )
+    .unwrap();
+    let (errors, _) = catalog::check(&[en, ko]);
+    let expected = "conn.toml".to_string();
+    assert_eq!(errors, vec![problem("locales/ko/pane.toml", "conn.failed", ProblemKind::OtherFile { expected })]);
+    assert_eq!(
+        errors[0].to_string(),
+        "locales/ko/pane.toml: key `conn.failed`: the source catalog has it in conn.toml; keep each key in the file of the same name in every locale"
+    );
+}
+
+#[test]
+fn a_translation_file_the_source_lacks_fails() {
+    let en = areas("en", Policy::Source, &[("pane", EN_PANE)]).unwrap();
+    let ko = areas("ko", Policy::Required, &[("pane", KO_PANE), ("panes", "")]).unwrap();
+    let (errors, _) = catalog::check(&[en, ko]);
+    assert_eq!(errors, vec![problem("locales/ko/panes.toml", "", ProblemKind::FileNotInSource)]);
+    assert_eq!(
+        errors[0].to_string(),
+        "locales/ko/panes.toml: the source catalog has no file of this name; move its keys to the files the source has them in"
+    );
+}
+
+#[test]
+fn a_missing_key_names_the_file_it_belongs_in() {
+    let en =
+        areas("en", Policy::Source, &[("conn", r#""conn.failed" = "Connection failed: {error}""#), ("pane", EN_PANE)])
+            .unwrap();
+    let ko = areas("ko", Policy::Required, &[("conn", ""), ("pane", KO_PANE)]).unwrap();
+    let (errors, _) = catalog::check(&[en.clone(), ko]);
+    assert_eq!(errors, vec![problem("locales/ko/conn.toml", "conn.failed", ProblemKind::Missing)]);
+    // The same when the translation has no such file at all.
+    let ko = areas("ko", Policy::Required, &[("pane", KO_PANE)]).unwrap();
+    let (errors, _) = catalog::check(&[en, ko]);
+    assert_eq!(errors, vec![problem("locales/ko/conn.toml", "conn.failed", ProblemKind::Missing)]);
+}
+
+#[test]
 fn shipped_catalogs_pass() {
-    let en = locale("en", Policy::Source, include_str!("../locales/en.toml"));
-    let ko = locale("ko", Policy::Required, include_str!("../locales/ko.toml"));
+    let (en, ko) = (shipped("en", Policy::Source), shipped("ko", Policy::Required));
+    assert!(en.areas.len() > 10 && en.entries.len() > 3000, "{:?}", en.areas);
     assert_eq!(catalog::check(&[en, ko]), (vec![], vec![]));
 }
 
+/// Hangul in the ranges of its jamo, compatibility jamo and syllables.
+fn hangul(c: char) -> bool {
+    matches!(c as u32, 0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7AF)
+}
+
+/// Korean appears only in the values of the Korean catalog: never in the English files (a
+/// Korean mark in an English text is written with `\u` escapes), nor in a key or a comment.
+#[test]
+fn shipped_catalogs_have_hangul_only_in_korean_values() {
+    let mut wrong = vec![];
+    for code in ["en", "ko"] {
+        for (area, text) in shipped_files(code) {
+            for (n, line) in text.lines().enumerate() {
+                // In a Korean entry, what follows the first `=` is the value.
+                let outside =
+                    if code == "ko" && line.starts_with('"') { line.split('=').next().unwrap_or("") } else { line };
+                if outside.chars().any(hangul) {
+                    wrong.push(format!("locales/{code}/{area}.toml:{}: {line}", n + 1));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "Hangul outside the Korean values:\n{}", wrong.join("\n"));
+    // The scan finds what it looks for.
+    assert!("\u{D55C}".chars().any(hangul) && !"\\uD55C/A".chars().any(hangul));
+}
+
 /// Keys whose Korean text is rightly the same as the English one. Anything else with the
-/// English text in `ko.toml` is an entry nobody translated.
+/// English text in the Korean catalog is an entry nobody translated.
 const SAME_IN_KO: &[&str] = &[
     // The product name.
     "app.title",
@@ -363,8 +501,7 @@ const SAME_IN_KO: &[&str] = &[
 
 #[test]
 fn shipped_korean_catalog_translates_every_entry() {
-    let en = locale("en", Policy::Source, include_str!("../locales/en.toml"));
-    let ko = locale("ko", Policy::Required, include_str!("../locales/ko.toml"));
+    let (en, ko) = (shipped("en", Policy::Source), shipped("ko", Policy::Required));
     let english = |key: &str| [en.entries.get(key), en.one.get(key)].into_iter().flatten().collect::<Vec<_>>();
     let mut untranslated = vec![];
     let mut same = vec![];
@@ -378,7 +515,7 @@ fn shipped_korean_catalog_translates_every_entry() {
     }
     assert!(
         untranslated.is_empty(),
-        "ko.toml has the English text for {untranslated:?}; translate it, or add the key to SAME_IN_KO with the reason"
+        "the Korean catalog has the English text for {untranslated:?}; translate it, or add the key to SAME_IN_KO with the reason"
     );
     // A key that got a translation leaves the list, so the list stays a list of exceptions.
     let stale: Vec<_> = SAME_IN_KO.iter().filter(|k| !same.contains(k)).collect();
