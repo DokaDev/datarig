@@ -7,7 +7,9 @@
 # of its repository and its SHA-256; ffmpeg is a static build, pinned the same way. A download
 # that does not match fails here. CI tools only, never dependencies of datarig. VHS, ttyd and
 # ffmpeg go to $RUNNER_TEMP/bin, which goes on the PATH of the steps after this one; the fonts to
-# ~/.local/share/fonts.
+# ~/.local/share/fonts. The downloads are kept in ~/.cache/ci-downloads/demo-tools, which
+# demo.yml caches under a key made from this file (fetch.sh: checked again, downloaded only when
+# missing, with retries).
 # To bump one: change its version and its digest together.
 set -euo pipefail
 
@@ -28,44 +30,40 @@ if [ "$(uname -sm)" != "Linux x86_64" ]; then
 fi
 
 bin=${RUNNER_TEMP:?}/bin
+downloads=$HOME/.cache/ci-downloads/demo-tools
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$bin"
-
-# fetch <url> <sha256>: the file in $work, checked.
-fetch() {
-  local file=$work/${1##*/}
-  curl -sSfL --retry 3 --retry-all-errors --retry-delay 2 -o "$file" "$1"
-  echo "$2  $file" | sha256sum -c -
-}
+# shellcheck source-path=SCRIPTDIR source=fetch.sh
+. "$(dirname "$0")/fetch.sh"
 
 fetch "https://github.com/charmbracelet/vhs/releases/download/v$vhs_version/vhs_${vhs_version}_Linux_x86_64.tar.gz" \
-  "$vhs_sha256"
-tar -xzf "$work/vhs_${vhs_version}_Linux_x86_64.tar.gz" -C "$work"
+  "$vhs_sha256" "$downloads"
+tar -xzf "$downloads/vhs_${vhs_version}_Linux_x86_64.tar.gz" -C "$work"
 install -m 0755 "$work/vhs_${vhs_version}_Linux_x86_64/vhs" "$bin/vhs"
 
-fetch "https://github.com/tsl0922/ttyd/releases/download/$ttyd_version/ttyd.x86_64" "$ttyd_sha256"
-install -m 0755 "$work/ttyd.x86_64" "$bin/ttyd"
+fetch "https://github.com/tsl0922/ttyd/releases/download/$ttyd_version/ttyd.x86_64" "$ttyd_sha256" "$downloads"
+install -m 0755 "$downloads/ttyd.x86_64" "$bin/ttyd"
 
 fetch "https://github.com/ryanoasis/nerd-fonts/releases/download/$nerd_fonts_version/JetBrainsMono.tar.xz" \
-  "$font_sha256"
+  "$font_sha256" "$downloads"
 fonts=$HOME/.local/share/fonts/JetBrainsMonoNerdFont
 mkdir -p "$fonts"
-tar -xJf "$work/JetBrainsMono.tar.xz" -C "$fonts" --wildcards 'JetBrainsMonoNerdFont-*.ttf'
+tar -xJf "$downloads/JetBrainsMono.tar.xz" -C "$fonts" --wildcards 'JetBrainsMonoNerdFont-*.ttf'
 
 # A CJK font for the few full-width signs datarig draws (U+FF0B, the plus of the explorer's
 # first line), which the browser takes from any installed font that has them.
 fetch "https://raw.githubusercontent.com/notofonts/noto-cjk/$noto_cjk_commit/Sans/Mono/NotoSansMonoCJKsc-Regular.otf" \
-  "$cjk_sha256"
-install -m 0644 "$work/NotoSansMonoCJKsc-Regular.otf" "$fonts/"
+  "$cjk_sha256" "$downloads"
+install -m 0644 "$downloads/NotoSansMonoCJKsc-Regular.otf" "$fonts/"
 fc-cache -f "$fonts" >/dev/null
 fc-list : family | grep -F 'JetBrainsMono Nerd Font' >/dev/null || { echo "JetBrainsMono Nerd Font is not installed" >&2; exit 1; }
 fc-list ':charset=ff0b' family | grep . >/dev/null || { echo "no installed font has U+FF0B" >&2; exit 1; }
 
 # A static ffmpeg (7.0.2): installing it with apt took from under a minute to half an hour on the hosted runners.
 fetch "https://github.com/eugeneware/ffmpeg-static/releases/download/$ffmpeg_release/ffmpeg-linux-x64.gz" \
-  "$ffmpeg_sha256"
-gunzip -c "$work/ffmpeg-linux-x64.gz" > "$bin/ffmpeg"
+  "$ffmpeg_sha256" "$downloads"
+gunzip -c "$downloads/ffmpeg-linux-x64.gz" > "$bin/ffmpeg"
 chmod 0755 "$bin/ffmpeg"
 
 # Pillow for the social preview (docs/demo/social.py), pinned by the hashes of its wheels, in
@@ -76,7 +74,7 @@ pillow==11.3.0 \
     --hash=sha256:67172f2944ebba3d4a7b54f2e95c786a3a50c21b88456329314caaa28cda70f6 \
     --hash=sha256:676b2815362456b5b3216b4fd5bd89d362100dc6f4945154ff172e206a22c024
 REQUIREMENTS
-"$RUNNER_TEMP/py/bin/pip" install -q --only-binary=:all: --require-hashes -r "$work/requirements.txt"
+"$RUNNER_TEMP/py/bin/pip" install -q --retries 10 --only-binary=:all: --require-hashes -r "$work/requirements.txt"
 
 if [ -n "${GITHUB_PATH:-}" ]; then
   echo "$bin" >> "$GITHUB_PATH"

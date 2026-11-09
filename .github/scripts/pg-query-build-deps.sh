@@ -8,8 +8,8 @@ case "${RUNNER_OS:-$(uname -s)}" in
   Linux)
     libclang() { grep -m1 'libclang[-.0-9]*\.so' <<<"$(ldconfig -p)"; }
     if ! command -v cc >/dev/null || ! libclang >/dev/null; then
-      sudo apt-get update
-      sudo apt-get install -y --no-install-recommends clang libclang-dev
+      sudo apt-get -o Acquire::Retries=5 update
+      sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends clang libclang-dev
     fi
     if ! command -v cc >/dev/null; then
       echo "no C compiler (cc) found, even after installing clang" >&2

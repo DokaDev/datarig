@@ -4,7 +4,9 @@
 # Each is pinned to a version and to the SHA-256 of its archive (mdBook's from the GitHub
 # release's asset digest, lychee's from its .sha256 file); a download that does not match fails
 # here. They are CI tools only, never dependencies of datarig. Installed in $RUNNER_TEMP/bin,
-# which goes on the PATH of the steps after this one.
+# which goes on the PATH of the steps after this one. The archives are kept in
+# ~/.cache/ci-downloads/docs-tools, which the workflows cache under a key made from this file
+# (fetch.sh: checked again, downloaded only when missing, with retries).
 # To bump one: change its version and its digest together.
 set -euo pipefail
 
@@ -19,24 +21,20 @@ if [ "$(uname -sm)" != "Linux x86_64" ]; then
 fi
 
 bin=${RUNNER_TEMP:?}/bin
+downloads=$HOME/.cache/ci-downloads/docs-tools
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$bin"
-
-# fetch <url> <sha256>: the archive in $work, checked.
-fetch() {
-  local file=$work/${1##*/}
-  curl -sSfL --retry 3 --retry-all-errors --retry-delay 2 -o "$file" "$1"
-  echo "$2  $file" | sha256sum -c -
-}
+# shellcheck source-path=SCRIPTDIR source=fetch.sh
+. "$(dirname "$0")/fetch.sh"
 
 fetch "https://github.com/rust-lang/mdBook/releases/download/$mdbook_version/mdbook-$mdbook_version-x86_64-unknown-linux-gnu.tar.gz" \
-  "$mdbook_sha256"
-tar -xzf "$work/mdbook-$mdbook_version-x86_64-unknown-linux-gnu.tar.gz" -C "$bin" mdbook
+  "$mdbook_sha256" "$downloads"
+tar -xzf "$downloads/mdbook-$mdbook_version-x86_64-unknown-linux-gnu.tar.gz" -C "$bin" mdbook
 
 fetch "https://github.com/lycheeverse/lychee/releases/download/$lychee_version/lychee-x86_64-unknown-linux-gnu.tar.gz" \
-  "$lychee_sha256"
-tar -xzf "$work/lychee-x86_64-unknown-linux-gnu.tar.gz" -C "$work"
+  "$lychee_sha256" "$downloads"
+tar -xzf "$downloads/lychee-x86_64-unknown-linux-gnu.tar.gz" -C "$work"
 install -m 0755 "$work/lychee-x86_64-unknown-linux-gnu/lychee" "$bin/lychee"
 
 if [ -n "${GITHUB_PATH:-}" ]; then
