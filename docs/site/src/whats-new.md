@@ -3,6 +3,35 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.40.1 (2026-11-09)
+
+The server monitor's Overview charts statements by type, rows by operation and sessions by state, says when it sees only some sessions, and shows its statements in syntax colours.
+
+### Added
+
+- The server monitor's Overview charts statements per second by type on MySQL (select,
+  insert, update, delete), rows per second by operation on PostgreSQL (read, inserted,
+  updated, deleted), and the sessions of each state on both, with the monitor's own statements
+  taken out.
+- The Monitor tab's session details show the statement in the editor's syntax colours and laid
+  out for reading by the SQL formatter, for the eyes only: `f` shows it as the server sent it
+  (or laid out again), and `y` and `o` always take the server's text. A statement known only in
+  part (the list's first 256 characters, or cut by the server), one the formatter would change
+  more than its blanks, or one over 64 KiB is shown as sent, and the details say why.
+
+### Fixed
+
+- The server monitor no longer reads as idle when the account sees only some sessions: the
+  longest running sessions are headed "this account" (MySQL without `PROCESS`) or "visible
+  sessions" (PostgreSQL with other roles' sessions hidden), their empty text says the same, and
+  a PostgreSQL sessions count with hidden sessions shows as the least there are.
+- The server monitor names the server's role in words that cannot be taken for the profile's
+  read-only mode: `primary` or `standby` on PostgreSQL, `server takes writes` or `server
+  read-only` on MySQL.
+- The details of the monitor's own connection in the Monitor tab looked like any active session:
+  they now name it ("this monitor") and say that its statement is the monitor reading the
+  server and that it cannot be cancelled or ended.
+
 ## 0.40.0 (2026-11-08)
 
 A Monitor tab per connection shows sessions, locks and replication, and can cancel or end a session safely.
