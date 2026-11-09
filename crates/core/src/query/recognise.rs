@@ -172,6 +172,12 @@ impl Reader<'_> {
         let text = self.text(t);
         let name = match t.kind {
             Tok::QuotedIdent => self.d.unquote(text)?,
+            // A bare TRUE, FALSE, NULL or UNKNOWN is a constant, whatever the table's columns.
+            Tok::Ident | Tok::Keyword
+                if ["true", "false", "null", "unknown"].iter().any(|k| text.eq_ignore_ascii_case(k)) =>
+            {
+                return None;
+            }
             Tok::Ident | Tok::Keyword => self.d.fold(text),
             _ => return None,
         };
@@ -220,6 +226,9 @@ impl Reader<'_> {
             Tok::Str if matches!(self.d, Dialect::MySql(_)) && self.hex_string(t).is_some() => {
                 Some((Value::Bytes(self.hex_string(t)?), at + 1))
             }
+            // A plain PostgreSQL string with a backslash reads as written or as an escape
+            // depending on the session's standard_conforming_strings, which is not known here.
+            Tok::Str if self.d == Dialect::Postgres && text.starts_with('\'') && text.contains('\\') => None,
             Tok::Str => {
                 let s = self.d.unquote_literal(text)?;
                 // PostgreSQL bytes: `'\x…'::bytea`.

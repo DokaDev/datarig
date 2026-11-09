@@ -309,7 +309,7 @@ fn recognise_keeps_what_it_does_not_model() {
     assert_eq!(pg("id=-1"), Some(cmp("id", CmpOp::Eq, num("-1"))));
     assert_eq!(pg("id != 1"), Some(cmp("id", CmpOp::Ne, num("1"))));
     assert_eq!(
-        pg(r"name LIKE 'a\%b!%'"),
+        pg(r"name LIKE E'a\\%b!%'"),
         Some(Cond::Like { col: "name".into(), pattern: "a!%b!!%".into(), negated: false, case: CaseMode::Server })
     );
     assert_eq!(pg("NOT EXISTS (SELECT 1)"), Some(Cond::Not(Box::new(Cond::Raw("EXISTS (SELECT 1)".into())))));
@@ -352,6 +352,17 @@ fn recognise_keeps_what_it_does_not_model() {
     for s in ["id = 0x1F", "id IN (1, 0x1F)", "id = -0"] {
         assert_eq!(recognise(s, &tm), Some(Cond::Raw(s.into())), "{s}");
     }
+    // TRUE, FALSE and NULL are constants even when a column has such a name.
+    let mut tf = target(Dialect::Postgres);
+    tf.columns.push(ColumnFacts::new("true", ColumnKind::Other));
+    for s in ["TRUE = FALSE", "true IS NULL"] {
+        assert_eq!(recognise(s, &tf), Some(Cond::Raw(s.into())), "{s}");
+    }
+    // A plain PostgreSQL string with a backslash depends on standard_conforming_strings.
+    for s in [r"name = 'a\tb'", r"data = '\x01'::bytea"] {
+        assert_eq!(pg(s), Some(Cond::Raw(s.into())), "{s}");
+    }
+    assert_eq!(pg(r"name = E'a\\b'"), Some(cmp("name", CmpOp::Eq, text(r"a\b"))));
     // Under NO_BACKSLASH_ESCAPES a LIKE without ESCAPE has no escape character at all.
     let nbe = Target {
         dialect: Dialect::MySql(MySqlMode { no_backslash_escapes: true, ..MySqlMode::default() }),
