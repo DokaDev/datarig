@@ -16,6 +16,12 @@ pub(crate) const SCHEMA: &str = "main";
 const OBJECTS: &str = "SELECT name, type FROM sqlite_schema \
     WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name";
 
+/// The first answers of a metadata session, sent once it is connected: its schemas and its catalog.
+pub(crate) fn at_connect(conn: &Connection, ctx: &Ctx) {
+    ctx.send(DbEvent::Schemas(Ok(vec![SCHEMA.to_string()])));
+    ctx.send(DbEvent::Catalog(catalog(conn)));
+}
+
 pub(crate) fn answer(conn: &Connection, ctx: &Ctx, cmd: DbCommand) {
     let event = match cmd {
         DbCommand::LoadSchemas => DbEvent::Schemas(Ok(vec![SCHEMA.to_string()])),

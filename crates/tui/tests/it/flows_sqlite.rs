@@ -119,3 +119,35 @@ fn switching_the_driver_to_sqlite_draws_the_file_and_no_server_field() {
         assert!(!screen.contains(server), "{server} is still drawn:\n{screen}");
     }
 }
+
+/// A connected SQLite profile's tree loads by itself: its file's schema (`main`) is listed, and
+/// the explorer does not stay on "Loading".
+#[test]
+fn a_connected_sqlite_profile_lists_its_schema_without_a_request() {
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    let _inside = runtime.enter();
+    let dir = scratch("tree");
+    let file = database(&dir, 5);
+    let (mut h, mut rx) = Harness::started(
+        &sqlite_config(&file),
+        Lang::En,
+        Arc::new(datarig_core::secret::MemoryStore::new()),
+        Startup::Normal,
+    );
+    h.explore("shop");
+    h.key(KeyCode::Enter);
+    let start = Instant::now();
+    loop {
+        while let Ok(event) = rx.try_recv() {
+            h.app.on_app_event(event);
+        }
+        let screen = h.screen(100, 24);
+        if screen.contains("main") {
+            assert!(!screen.contains("Loading"), "{screen}");
+            assert!(screen.contains(&file.display().to_string()), "the header shows the file:\n{screen}");
+            break;
+        }
+        assert!(start.elapsed() < WAIT, "the tree did not load:\n{screen}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}

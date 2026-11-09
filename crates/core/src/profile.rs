@@ -402,6 +402,10 @@ impl ConnectionConfig {
     /// `(host:port, database, sslmode)` for lists of profiles. A DSN that is not a
     /// URL is shown whole as the address.
     pub fn endpoint(&self) -> (String, String, String) {
+        // A SQLite profile's address is its file: no host, port, database or TLS mode.
+        if self.path.is_some() && drivers::canonical(&self.driver) == Some("sqlite") {
+            return (self.path.clone().unwrap_or_default(), String::new(), String::new());
+        }
         let host_port = |h: &str, p: Option<u16>| {
             let h = if h.contains(':') { format!("[{h}]") } else { h.to_string() };
             p.map_or(h.clone(), |p| format!("{h}:{p}"))

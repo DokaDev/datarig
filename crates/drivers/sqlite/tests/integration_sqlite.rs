@@ -284,3 +284,22 @@ fn a_lock_wait_set_by_the_caller_bounds_the_wait() {
     assert!(message.contains("locked"), "{message}");
     assert!(waited < Duration::from_secs(4), "the caller's 150 ms wait was not honoured: {waited:?}");
 }
+
+#[test]
+fn a_metadata_session_sends_its_schemas_and_catalog_once_connected() {
+    let scratch = Scratch::new();
+    let file = scratch.file("startup.db");
+    create(&file, "CREATE TABLE books (id INTEGER, title TEXT);");
+    let (tx, mut rx) = unbounded_channel();
+    let opts = ConnectOptions::new(100, SessionRole::Meta, "test").read_only(true);
+    let _session = SqliteDriver.connect(&profile(&file.display().to_string()), SessionRole::Meta, opts, tx);
+    assert!(matches!(rx.blocking_recv(), Some(DbEvent::Connected)));
+    assert!(matches!(rx.blocking_recv(), Some(DbEvent::Schemas(Ok(s))) if s == vec!["main".to_string()]));
+    match rx.blocking_recv() {
+        Some(DbEvent::Catalog(Ok(catalog))) => {
+            let books = catalog.relations.iter().find(|r| r.name == "books").expect("books in the catalog");
+            assert_eq!(books.columns.len(), 2);
+        }
+        other => panic!("expected the catalog, got {other:?}"),
+    }
+}

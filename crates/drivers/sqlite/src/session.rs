@@ -102,6 +102,11 @@ pub(crate) fn run(
     }
     let _ = events.send(DbEvent::Connected);
     let ctx = Ctx { events, canceller };
+    // Like the other drivers' metadata sessions: the schema list and the completion catalog are
+    // sent as soon as the session is up, so the explorer's tree loads without a request.
+    if role == SessionRole::Meta {
+        meta::at_connect(&conn, &ctx);
+    }
     while let Some(cmd) = rx.blocking_recv() {
         serve(&conn, &ctx, role, cmd);
     }

@@ -55,9 +55,15 @@ pub fn connect(file: &Path, role: SessionRole, read_only: bool) -> (Session, Unb
     let opts = ConnectOptions::new(100, role, "test").read_only(read_only);
     let session = SqliteDriver.connect(&profile(&file.display().to_string()), role, opts, tx);
     match rx.blocking_recv() {
-        Some(DbEvent::Connected) => (session, rx),
+        Some(DbEvent::Connected) => {}
         other => panic!("expected Connected, got {other:?}"),
     }
+    // A metadata session sends its schema list and its catalog as soon as it is up.
+    if role == SessionRole::Meta {
+        assert!(matches!(rx.blocking_recv(), Some(DbEvent::Schemas(Ok(_)))), "the schema list first");
+        assert!(matches!(rx.blocking_recv(), Some(DbEvent::Catalog(Ok(_)))), "then the catalog");
+    }
+    (session, rx)
 }
 
 /// Runs one statement as a run and returns its events up to the run's answer.
