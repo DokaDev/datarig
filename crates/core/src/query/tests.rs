@@ -324,6 +324,19 @@ fn recognise_keeps_what_it_does_not_model() {
         pg(&format!("{case} AND id > 3")),
         Some(Cond::All(vec![Cond::Raw(case.into()), cmp("id", CmpOp::Gt, num("3"))]))
     );
+    // So do the ones inside square brackets.
+    let array = "ARRAY[TRUE OR FALSE] = ARRAY[TRUE]";
+    assert_eq!(pg(array), Some(Cond::Raw(array.into())));
+    // MySQL XOR binds between AND and OR, and `||` may be OR or concatenation: such a level
+    // stays whole.
+    for s in ["id = 1 XOR id = 2 AND price > 10", "id = 1 || id = 2 AND id = 3"] {
+        assert_eq!(recognise(s, MY, &cols), Some(Cond::Raw(s.into())), "{s}");
+    }
+    // `&&` is AND: cutting at OR around it keeps the meaning.
+    assert_eq!(
+        recognise("id = 1 && id = 2 OR id = 3", MY, &cols),
+        Some(Cond::Any(vec![Cond::Raw("id = 1 && id = 2".into()), cmp("id", CmpOp::Eq, num("3"))]))
+    );
 }
 
 #[test]

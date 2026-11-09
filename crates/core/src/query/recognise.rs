@@ -58,8 +58,10 @@ impl Reader<'_> {
         Some(Cond::All(parts.into_iter().map(|p| self.not(p)).collect::<Option<_>>()?))
     }
 
-    /// `toks` cut at each `word` outside parentheses and `CASE … END` (for `AND`, not the one of
-    /// a `BETWEEN`).
+    /// `toks` cut at each `word` outside parentheses, square brackets and `CASE … END` (for
+    /// `AND`, not the one of a `BETWEEN`). Not cut at all when a MySQL operator whose precedence
+    /// is not that of `AND` stands at the same level (`XOR`, `||`): any cut could change what
+    /// the text means.
     fn split<'t>(&self, toks: &'t [Token], word: &str) -> Vec<&'t [Token]> {
         let mut parts = Vec::new();
         let (mut depth, mut cases, mut start, mut between) = (0usize, 0usize, 0, false);
@@ -67,10 +69,13 @@ impl Reader<'_> {
             match t.kind {
                 Tok::LParen => depth += 1,
                 Tok::RParen => depth = depth.saturating_sub(1),
+                Tok::Op if self.text(t) == "[" => depth += 1,
+                Tok::Op if self.text(t) == "]" => depth = depth.saturating_sub(1),
                 _ if depth > 0 => {}
                 _ if self.word(Some(t), "CASE") => cases += 1,
                 _ if self.word(Some(t), "END") => cases = cases.saturating_sub(1),
                 _ if cases > 0 => {}
+                _ if self.unmodelled_boolean(t) => return vec![toks],
                 _ if self.word(Some(t), "BETWEEN") => between = true,
                 _ if self.word(Some(t), word) => {
                     if word == "AND" && between {
@@ -85,6 +90,13 @@ impl Reader<'_> {
         }
         parts.push(&toks[start..]);
         parts
+    }
+
+    /// A MySQL operator that keeps a level whole: `XOR` (between `AND` and `OR`) and `|`, which
+    /// starts `||` (`OR`, unless the session concatenates with it, which is not known here) and
+    /// is otherwise a bitwise `|` that is left alone too. `&&` is `AND` and may be cut around.
+    fn unmodelled_boolean(&self, t: &Token) -> bool {
+        matches!(self.d, Dialect::MySql(_)) && (self.word(Some(t), "XOR") || (t.kind == Tok::Op && self.text(t) == "|"))
     }
 
     fn not(&self, toks: &[Token]) -> Option<Cond> {
