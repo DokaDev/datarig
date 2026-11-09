@@ -101,6 +101,11 @@ impl App {
             return;
         }
         let Some(pid) = self.tabs.get(id).and_then(|t| t.profile) else { return };
+        // A table tab's filter checked again as the policy is now (it may have waited for the
+        // connection while the environment changed).
+        if !self.table_pending_holds(id, &statements) {
+            return self.unstage_run(id);
+        }
         if let Some(refused) = self.read_only_refusal(id, pid, &statements) {
             self.unstage_run(id);
             return self.tab_status(id, refused);

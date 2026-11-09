@@ -440,3 +440,131 @@ fn a_filtered_export_is_checked_again_when_its_statement_goes() {
     assert!(!h.app.exporting(h.app.tab().id));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `space r v` on a draft calling functions datarig cannot check asks as a run asks: Enter
+/// opens nothing, `y` opens it, and the text once let through opens without asking again.
+#[test]
+fn the_statement_opened_in_a_console_asks_about_unchecked_calls() {
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Failed { id, error: datarig_core::driver::DbError::Cancelled, cancelled: true });
+    h.command("where my_fn(id) > 0");
+    assert!(h.app.overlays.is_open(OverlayKind::Confirm));
+    h.key(KeyCode::Enter);
+    h.sent();
+    let (tabs, table) = (h.app.tabs.len(), h.app.tab().id);
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys(" rv");
+    assert_eq!(h.app.overlays.confirm().map(|c| c.action), Some(ConfirmAction::FilterCalls(table)));
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tabs.len(), tabs, "declined: nothing opened");
+    h.keys(" rv");
+    h.keys("y");
+    assert_eq!(h.app.tabs.len(), tabs + 1);
+    assert!(h.app.tab().editor.text().contains("WHERE (my_fn(id) > 0)"), "{}", h.app.tab().editor.text());
+    assert!(runs(&mut h).is_empty(), "opened, not run");
+    // Let through in that tab: opened at once.
+    let at = h.app.tabs.position(table).unwrap();
+    h.app.tabs.activate(at);
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys(" rv");
+    assert!(!h.app.overlays.is_open(OverlayKind::Confirm));
+    assert_eq!(h.app.tabs.len(), tabs + 2);
+}
+
+/// A table run that waited for its connection is checked again when it goes: the environment
+/// turned read-only meanwhile refuses its filter's unchecked function, and nothing is sent.
+#[test]
+fn a_run_that_waited_for_its_connection_checks_its_filter_again() {
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    answer(&mut h);
+    let tab = h.app.tab().id;
+    h.app.dispatch(datarig_tui::app::action::Action::DisconnectCurrent);
+    if h.app.overlays.is_open(OverlayKind::Confirm) {
+        h.keys("y");
+    }
+    h.sent();
+    h.command("where my_fn(id) > 0");
+    assert!(h.app.overlays.is_open(OverlayKind::Confirm));
+    h.keys("y");
+    assert!(h.app.is_queued(tab), "waits for the connection");
+    h.app.policies.insert("default", Policy { read_only: true, ..Policy::default() });
+    h.db(DbEvent::Connected);
+    assert!(runs(&mut h).is_empty(), "refused when it went");
+    assert!(status(&h).contains("read-only connection"), "{}", status(&h));
+}
+
+/// A refused export leaves a held portal open: checked before the portal is closed.
+#[test]
+fn a_refused_export_keeps_the_held_portal() {
+    use datarig_core::driver::PagingMode;
+    let dir = std::env::temp_dir().join(format!("datarig-table-filter-portal-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut h = Harness::connected(Lang::En);
+    h.app.policies.insert("default", Policy { paging: PagingMode::Hold, ..Policy::default() });
+    open_users(&mut h);
+    answer(&mut h);
+    h.command("where my_fn(id) > 0");
+    h.keys("y");
+    let id = h.app.tab().exec.query_id;
+    page_of(&mut h, id, true);
+    assert!(matches!(h.app.tab().exec.paging, datarig_tui::app::Paging::Open { .. }), "held");
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.sent();
+    h.command(&format!("export {}", dir.join("p.csv").display()));
+    h.app.policies.insert("default", Policy { read_only: true, paging: PagingMode::Hold, ..Policy::default() });
+    h.app.tab_mut().exec.read_only = true;
+    if h.app.overlays.is_open(OverlayKind::Confirm) {
+        h.key(KeyCode::Char('y'));
+    }
+    let start = std::time::Instant::now();
+    while h.app.exporting(h.app.tab().id) && start.elapsed() < Duration::from_secs(10) {
+        h.app.pump_exports(Duration::from_millis(50));
+    }
+    let sent = h.sent();
+    assert!(!sent.iter().any(|c| matches!(c, DbCommand::Export { .. } | DbCommand::ClosePortal { .. })), "{sent:?}");
+    assert!(matches!(h.app.tab().exec.paging, datarig_tui::app::Paging::Open { .. }), "the portal stays");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `Esc` in the line puts back the query the next run sends, not only the texts: after a
+/// refused apply, and after an apply whose pending-edits question was declined, the run key
+/// runs what is applied.
+#[test]
+fn esc_puts_back_the_query_the_next_run_sends() {
+    let mut h = users(Lang::En);
+    h.command("where id > 1");
+    answer(&mut h);
+    h.sent();
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys("f");
+    h.ctrl('l');
+    h.type_text("id = 1;");
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty(), "refused");
+    h.key(KeyCode::Esc);
+    h.ctrl('e');
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 1)")]]);
+    answer(&mut h);
+    // Pending edits: the question declined, Esc, then the run key (its question taken).
+    if let Results::Rows(rs) = &mut h.app.tab_mut().results {
+        assert!(rs.edit.batch.delete(&[0], |_| Vec::new()));
+    }
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys("f");
+    h.ctrl('l');
+    h.type_text("id > 5");
+    h.key(KeyCode::Enter);
+    assert!(h.app.overlays.is_open(OverlayKind::Confirm));
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty());
+    h.keys("f");
+    h.key(KeyCode::Esc);
+    h.ctrl('e');
+    assert!(h.app.overlays.is_open(OverlayKind::Confirm));
+    h.keys("y");
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 1)")]]);
+}

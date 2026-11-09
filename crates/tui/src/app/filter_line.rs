@@ -136,15 +136,7 @@ impl App {
                 let q = tq.draft.clone();
                 self.table_run(id, q);
             }
-            TableAction::OpenSql => {
-                if self.table_query_mut(id).is_none() {
-                    return;
-                }
-                let Some(sql) = self.table_sql_to_open(id) else { return };
-                let t = self.tab();
-                let (profile, context) = (t.profile, t.context.clone());
-                self.console_with(&sql, profile, context);
-            }
+            TableAction::OpenSql => self.table_open_sql(id),
         }
     }
 
@@ -240,12 +232,17 @@ impl App {
         }
     }
 
-    /// `Esc` in a field: both fields back to what is applied, the keys back to the grid.
+    /// `Esc` in a field: both fields back to what is applied, and the query the next run
+    /// sends with them (an apply that was refused, or did not run, set it), the keys back to
+    /// the grid.
     fn filter_line_cancel(&mut self) {
         let id = self.tab().id;
         self.filter_popup_close();
         let a = self.filter_line_applied(id);
         if let Some(tq) = self.table_query_mut(id) {
+            let applied = tq.applied().clone();
+            tq.draft.filter = applied.filter;
+            tq.draft.order = applied.order;
             tq.line.restore((&a.filter, &a.order));
             tq.line.focus = None;
             tq.refusal = None;

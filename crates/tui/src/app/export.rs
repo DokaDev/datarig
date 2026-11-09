@@ -1188,6 +1188,17 @@ impl App {
             Plan::Keyset(k) => (k.first(), ExportGuard::Keyset),
             Plan::Local => return,
         };
+        // Checked as the policy is now before anything changes: a refused export leaves a held
+        // portal open and is not said to start.
+        if let Some(why) = self.export_refused_now(id, &sql) {
+            if let Some(j) = self.exports.jobs.get_mut(&id) {
+                j.told = true;
+                if let Some(ctl) = &j.ctl {
+                    let _ = ctl.send(Ctl::Fail(Failure::Refused(why)));
+                }
+            }
+            return;
+        }
         let now = self.now();
         let Some(t) = self.tabs.get_mut(id) else { return };
         // A held portal is closed first (its rows stay): the statement runs again.

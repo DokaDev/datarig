@@ -108,6 +108,8 @@ pub struct TableQuery {
     shown_run: Option<Statement>,
     /// The query waiting for the user's word on the functions it calls.
     asked: Option<Query>,
+    /// The query waiting for that word is to be opened in a console (`space r v`), not run.
+    asked_open: bool,
     /// The filter texts whose functions the user let run in this tab.
     confirmed: HashSet<String>,
     /// The filter line's fields: what the user types, and which field has the focus.
@@ -128,6 +130,7 @@ impl TableQuery {
             landed: None,
             shown_run: None,
             asked: None,
+            asked_open: false,
             confirmed: HashSet::new(),
             line: Default::default(),
         }
@@ -490,6 +493,7 @@ impl App {
                         .collect();
                     if let Some(tq) = self.table_query_mut(id) {
                         tq.asked = Some(q);
+                        tq.asked_open = false;
                     }
                     return self.ask_filter_calls(id, calls);
                 }
@@ -523,7 +527,8 @@ impl App {
 
     /// The statement `space r v` opens for table tab `id`, checked as a run would be: the one
     /// the rows held were read with (their filter checked again), else the draft's (checked
-    /// as Enter checks it). `None` when refused (said, as Enter says it).
+    /// as Enter checks it, its unchecked functions asked about first). `None` when refused (said,
+    /// as Enter says it) or asked about.
     pub(super) fn table_sql_to_open(&mut self, id: TabId) -> Option<String> {
         let tq = self.table_query(id)?;
         if let Some(s) = tq.shown_run() {
@@ -538,12 +543,79 @@ impl App {
         let (name, target) = (self.table_name(id)?, self.table_target(id)?);
         if let Some(text) = filter_text(&q).map(str::to_string) {
             let read_only = self.tabs.get(id).and_then(|t| t.profile).is_some_and(|p| self.read_only(p));
-            if let Err(r) = query::check_filter(&text, &name, &target, &self.classifier(id), read_only) {
-                self.filter_refused(id, &r, text);
-                return None;
+            match query::check_filter(&text, &name, &target, &self.classifier(id), read_only) {
+                Err(r) => {
+                    self.filter_refused(id, &r, text);
+                    return None;
+                }
+                // Its functions asked about first, as a run asks: `y` opens it.
+                Ok(FilterVerdict::NeedsConfirm(asks))
+                    if !self.table_query(id).is_some_and(|tq| tq.confirmed.contains(&text)) =>
+                {
+                    let calls = asks
+                        .iter()
+                        .flat_map(|a| match a {
+                            query::Confirm::Calls(c) => c.clone(),
+                        })
+                        .collect();
+                    if let Some(tq) = self.table_query_mut(id) {
+                        tq.asked = Some(q);
+                        tq.asked_open = true;
+                    }
+                    self.ask_filter_calls(id, calls);
+                    return None;
+                }
+                Ok(_) => {}
             }
         }
         Some(query::compile(&q, &target).sql)
+    }
+
+    /// `space r v`: table tab `id`'s statement in a new console, checked first
+    /// ([`App::table_sql_to_open`]); not run.
+    pub(super) fn table_open_sql(&mut self, id: TabId) {
+        if self.table_query_mut(id).is_none() {
+            return;
+        }
+        let Some(sql) = self.table_sql_to_open(id) else { return };
+        let Some(t) = self.tabs.get(id) else { return };
+        let (profile, context) = (t.profile, t.context.clone());
+        self.console_with(&sql, profile, context);
+    }
+
+    /// The filter of the table query whose statement run `statements` sends, checked again
+    /// with the policy as it is now (a run that waited for its connection while the
+    /// environment turned read-only): `false` when refused (said, kept for the line, and the
+    /// statement is not bound to the run any more).
+    pub(super) fn table_pending_holds(&mut self, id: TabId, statements: &[String]) -> bool {
+        let Some(tq) = self.table_query(id) else { return true };
+        let Some(p) = tq.pending.as_ref().filter(|p| statements.len() == 1 && statements[0] == p.sql) else {
+            return true;
+        };
+        let Some(text) = filter_text(&p.query).map(str::to_string) else { return true };
+        let (Some(name), Some(target)) = (self.table_name(id), self.table_target(id)) else { return true };
+        let read_only = self.tabs.get(id).and_then(|t| t.profile).is_some_and(|pid| self.read_only(pid));
+        let refused = match query::check_filter(&text, &name, &target, &self.classifier(id), read_only) {
+            Err(r) => Some(Err(r)),
+            Ok(FilterVerdict::NeedsConfirm(_)) if !tq.confirmed.contains(&text) => Some(Ok(())),
+            Ok(_) => None,
+        };
+        match refused {
+            None => true,
+            Some(r) => {
+                if let Some(tq) = self.table_query_mut(id) {
+                    tq.pending = None;
+                }
+                match r {
+                    Err(r) => self.filter_refused(id, &r, text),
+                    Ok(()) => {
+                        let why = self.i18n.label(Label::TableFilterWhyUnconfirmed).to_string();
+                        self.tab_status(id, Notice::new(Msg::TableFilterRefused { why }, Level::Warning));
+                    }
+                }
+                false
+            }
+        }
     }
 
     /// Ask for the structure of table tab `id`'s table (on the metadata session of its profile
@@ -601,16 +673,23 @@ impl App {
     /// `y` to the functions of table tab `id`'s filter: its text is let through in the tab,
     /// and the query runs.
     pub(super) fn filter_calls_confirmed(&mut self, id: TabId) {
-        let Some(q) = self.table_query_mut(id).and_then(|tq| tq.asked.take()) else { return };
+        let Some(tq) = self.table_query_mut(id) else { return };
+        let Some(q) = tq.asked.take() else { return };
+        let open = std::mem::take(&mut tq.asked_open);
         if let (Some(text), Some(tq)) = (filter_text(&q).map(str::to_string), self.table_query_mut(id)) {
             tq.confirmed.insert(text);
         }
-        self.table_run(id, q);
+        match open {
+            true => self.table_open_sql(id),
+            false => self.table_run(id, q),
+        }
     }
 
-    /// Anything but `y` to the functions of table tab `id`'s filter: nothing runs.
+    /// Anything but `y` to the functions of table tab `id`'s filter: nothing runs (or opens).
     pub(super) fn filter_calls_declined(&mut self, id: TabId) {
-        if self.table_query_mut(id).and_then(|tq| tq.asked.take()).is_some() {
+        let Some(tq) = self.table_query_mut(id) else { return };
+        tq.asked_open = false;
+        if tq.asked.take().is_some() {
             self.tab_status(id, Notice::new(Label::TableFilterCallsCancelled, Level::Warning));
         }
     }
