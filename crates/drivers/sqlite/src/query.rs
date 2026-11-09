@@ -102,7 +102,7 @@ fn run(conn: &Connection, sql: &str) -> Result<Ran, Failure> {
 /// An engine error as the statement's failure: an interrupted statement is a cancel.
 fn failure(error: rusqlite::Error) -> Failure {
     let cancelled = matches!(&error, rusqlite::Error::SqliteFailure(e, _) if e.code == ErrorCode::OperationInterrupted);
-    let error = if cancelled { DbError::Cancelled } else { DbError::Server(error.to_string()) };
+    let error = if cancelled { DbError::Cancelled } else { DbError::Server(error.to_string().into()) };
     Failure { error, cancelled }
 }
 

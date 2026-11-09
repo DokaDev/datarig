@@ -96,7 +96,7 @@ pub fn until_answer(rx: &mut UnboundedReceiver<DbEvent>, id: u64) -> Vec<DbEvent
 /// The failure message of a run that failed.
 pub fn failure(events: &[DbEvent]) -> (String, bool) {
     match events.last() {
-        Some(DbEvent::Failed { error: DbError::Server(msg), cancelled, .. }) => (msg.clone(), *cancelled),
+        Some(DbEvent::Failed { error: DbError::Server(msg), cancelled, .. }) => (msg.to_string(), *cancelled),
         Some(DbEvent::Failed { error, cancelled, .. }) => (format!("{error:?}"), *cancelled),
         other => panic!("expected a failure, got {other:?}"),
     }

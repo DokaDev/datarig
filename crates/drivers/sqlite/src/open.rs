@@ -18,7 +18,7 @@ pub(crate) fn file_of(cfg: &ConnectionConfig) -> Result<PathBuf, DbError> {
     let path = cfg.path.as_deref().map(str::trim).filter(|p| !p.is_empty()).ok_or(DbError::NoDatabase)?;
     let file = PathBuf::from(path);
     if !file.is_absolute() {
-        return Err(DbError::Server(format!("the SQLite file must be an absolute path: {path}")));
+        return Err(DbError::Server(format!("the SQLite file must be an absolute path: {path}").into()));
     }
     Ok(file)
 }
@@ -49,5 +49,5 @@ fn refuse_attach(ctx: AuthContext<'_>) -> Authorization {
 
 /// An engine error as the driver's error.
 pub(crate) fn server(error: rusqlite::Error) -> DbError {
-    DbError::Server(error.to_string())
+    DbError::Server(error.to_string().into())
 }

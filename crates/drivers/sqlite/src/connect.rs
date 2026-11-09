@@ -59,7 +59,7 @@ impl Driver for SqliteDriver {
                     .name("datarig-sqlite".to_string())
                     .spawn(move || session::run(file, role, opts, events, rx, weak));
                 if let Err(e) = spawned {
-                    let error = DbError::Server(format!("cannot start the session's thread: {e}"));
+                    let error = DbError::Server(format!("cannot start the session's thread: {e}").into());
                     let _ = failing.send(DbEvent::ConnectFailed { error, auth: false });
                 }
             }
@@ -87,7 +87,7 @@ impl Driver for SqliteDriver {
             let probe = tokio::task::spawn_blocking(move || version_of(&file));
             match tokio::time::timeout(timeout, probe).await {
                 Err(_) => Err(PingError::Timeout(timeout)),
-                Ok(Err(join)) => Err(PingError::Failed(DbError::Server(join.to_string()))),
+                Ok(Err(join)) => Err(PingError::Failed(DbError::Server(join.to_string().into()))),
                 Ok(Ok(Err(error))) => Err(PingError::Failed(error)),
                 Ok(Ok(Ok(version))) => Ok(PingInfo {
                     server_version: format!("SQLite {version}"),
