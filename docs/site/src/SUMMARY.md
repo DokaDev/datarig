@@ -23,6 +23,7 @@
 - [Server monitor](guide/monitoring.md)
 - [Explorer](guide/explorer.md)
 - [MySQL](guide/mysql.md)
+- [SQLite](guide/sqlite.md)
 - [Themes](guide/themes.md)
 - [Updates](guide/updates.md)
 
