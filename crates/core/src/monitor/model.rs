@@ -147,6 +147,21 @@ pub enum CounterKind {
     SlowQueries,
     /// Connection attempts that failed. MySQL `Aborted_connects`.
     AbortedConnects,
+    /// `SELECT` statements, the monitor's own taken out ([`Own::selects`]). MySQL `Com_select`.
+    Selects,
+    /// Statements that insert rows. MySQL `Com_insert + Com_insert_select + Com_replace +
+    /// Com_replace_select`.
+    Inserts,
+    /// `UPDATE` statements, single and multiple table. MySQL `Com_update + Com_update_multi`.
+    Updates,
+    /// `DELETE` statements, single and multiple table. MySQL `Com_delete + Com_delete_multi`.
+    Deletes,
+    /// Rows inserted. PostgreSQL `tup_inserted`.
+    RowsInserted,
+    /// Rows updated. PostgreSQL `tup_updated`.
+    RowsUpdated,
+    /// Rows deleted. PostgreSQL `tup_deleted`.
+    RowsDeleted,
 }
 
 impl CounterKind {
@@ -174,6 +189,13 @@ impl CounterKind {
             (CounterKind::TempDiskTables, _) => "Created_tmp_disk_tables",
             (CounterKind::SlowQueries, _) => "Slow_queries",
             (CounterKind::AbortedConnects, _) => "Aborted_connects",
+            (CounterKind::Selects, _) => "Com_select",
+            (CounterKind::Inserts, _) => "Com_insert + Com_insert_select + Com_replace + Com_replace_select",
+            (CounterKind::Updates, _) => "Com_update + Com_update_multi",
+            (CounterKind::Deletes, _) => "Com_delete + Com_delete_multi",
+            (CounterKind::RowsInserted, _) => "tup_inserted",
+            (CounterKind::RowsUpdated, _) => "tup_updated",
+            (CounterKind::RowsDeleted, _) => "tup_deleted",
         }
     }
 }
@@ -220,6 +242,12 @@ pub struct Own {
     pub statements: u64,
     /// Transactions committed before the counters were read ([`CounterKind::Commits`]).
     pub transactions: u64,
+    /// `SELECT` statements the server counted in [`CounterKind::Selects`] when the counters were
+    /// read (refused ones too: the server counts a statement it refuses for lack of a privilege).
+    pub selects: u64,
+    /// Statements sent whose own `SELECT`s cannot be counted (a `CALL` of a procedure that reads):
+    /// an interval in which this moved has no rate of [`CounterKind::Selects`].
+    pub uncounted: u64,
 }
 
 /// The counters of one tick, on the server's clock.
@@ -258,6 +286,33 @@ pub enum GaugeKind {
     /// Sessions and server processes whose kind and state the account cannot see (PostgreSQL
     /// rows of other roles without `pg_read_all_stats`).
     Hidden,
+    /// Sessions by state, each counted in one only (PostgreSQL, the monitor's own session left
+    /// out): client backends running a statement, not waiting for a lock (`active`, `fastpath
+    /// function call`).
+    StateRunning,
+    /// Client backends waiting for a lock (`wait_event_type = 'Lock'`).
+    StateWaiting,
+    /// Client backends idle in a transaction, aborted or not.
+    StateIdleInTx,
+    /// Client backends idle.
+    StateIdle,
+    /// The server's own processes (every `backend_type` but `client backend`).
+    StateBackground,
+    /// Rows whose state the account cannot see, or that has none (`track_activities` off).
+    StateUnknown,
+    /// Threads by protocol command, each counted in one only (MySQL, from the same process list
+    /// as the session list): `Query` and `Execute`, the monitor's own thread left out.
+    CommandQuery,
+    /// `Sleep`.
+    CommandSleep,
+    /// `Daemon`.
+    CommandDaemon,
+    /// `Connect` and `Connect Out`.
+    CommandConnect,
+    /// `Binlog Dump` and `Binlog Dump GTID`.
+    CommandBinlogDump,
+    /// Any other command (`Killed`, `Prepare`, `Fetch` and the like).
+    CommandOther,
 }
 
 /// One gauge's value.

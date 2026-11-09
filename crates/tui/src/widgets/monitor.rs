@@ -12,7 +12,7 @@ use crate::app::monitor::{METRICS, Metric, MonState, MonitorHits, MonitorTab, Mo
 use crate::app::monitor::{query_age, tx_age};
 use crate::app::{App, Focus};
 use crate::keymap::Ctx;
-use crate::text::{clip, width, wrap};
+use crate::text::{clip, width, wrap, wrap_words};
 use crate::theme;
 use crate::widgets::{panel, put, sparkline};
 use datarig_core::i18n::{I18n, Label, Msg};
@@ -26,6 +26,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, Widget};
 
+mod lines;
 mod replication;
 
 thread_local! {
@@ -46,6 +47,227 @@ fn work(n: u64) {
 
 /// The narrowest a chart tile is.
 const TILE_MIN: u16 = 26;
+
+/// The narrowest a chart of several series is: two side by side need twice this.
+const CHART_MIN: u16 = 40;
+
+/// The least room a chart's legend keeps in the compact list (names longer than leave it are cut).
+const COMPACT_LEGEND_MIN: usize = 28;
+
+/// The rows of a chart's lines.
+const PLOT_ROWS: u16 = 5;
+
+/// The most rows a chart's legend takes (it wraps rather than cutting a series).
+const LEGEND_ROWS: usize = 2;
+
+/// A chart of the Overview: its title and its series, in the order of their colours.
+struct ChartDef {
+    title: Label,
+    series: &'static [Metric],
+    /// A series without which the chart is not there at all (the rows by operation: none
+    /// with `track_counts` off, and the rows read alone are not that chart).
+    needs: Option<Metric>,
+    /// Rates per second (else counts as they stand).
+    rates: bool,
+    /// A series drawn only while it is above zero somewhere in what is shown.
+    only_above_zero: Option<Metric>,
+    /// Counted from the process list, which holds the account's own threads only without
+    /// `PROCESS`: the title says so then.
+    own_account: bool,
+    /// Its series are parts of one total, shown on its border (the rows by operation are not:
+    /// the rows read count the scans of updates and deletes too).
+    total: bool,
+}
+
+const STATEMENTS_BY_TYPE: ChartDef = ChartDef {
+    title: Label::MonitorChartStatementsByType,
+    series: &[
+        Metric::Rate(CounterKind::Selects),
+        Metric::Rate(CounterKind::Inserts),
+        Metric::Rate(CounterKind::Updates),
+        Metric::Rate(CounterKind::Deletes),
+    ],
+    needs: None,
+    rates: true,
+    only_above_zero: None,
+    own_account: false,
+    total: true,
+};
+
+const ROWS_BY_OPERATION: ChartDef = ChartDef {
+    title: Label::MonitorChartRowsByOperation,
+    series: &[
+        Metric::Rate(CounterKind::RowsRead),
+        Metric::Rate(CounterKind::RowsInserted),
+        Metric::Rate(CounterKind::RowsUpdated),
+        Metric::Rate(CounterKind::RowsDeleted),
+    ],
+    needs: Some(Metric::Rate(CounterKind::RowsInserted)),
+    rates: true,
+    only_above_zero: None,
+    own_account: false,
+    total: false,
+};
+
+const SESSION_STATES: ChartDef = ChartDef {
+    title: Label::MonitorChartSessionsByState,
+    series: &[
+        Metric::Gauge(GaugeKind::StateRunning),
+        Metric::Gauge(GaugeKind::StateWaiting),
+        Metric::Gauge(GaugeKind::StateIdleInTx),
+        Metric::Gauge(GaugeKind::StateIdle),
+        Metric::Gauge(GaugeKind::StateBackground),
+        Metric::Gauge(GaugeKind::StateUnknown),
+    ],
+    needs: None,
+    rates: false,
+    only_above_zero: Some(Metric::Gauge(GaugeKind::StateUnknown)),
+    own_account: false,
+    total: true,
+};
+
+const THREAD_COMMANDS: ChartDef = ChartDef {
+    title: Label::MonitorChartSessionsByState,
+    series: &[
+        Metric::Gauge(GaugeKind::CommandQuery),
+        Metric::Gauge(GaugeKind::CommandSleep),
+        Metric::Gauge(GaugeKind::CommandDaemon),
+        Metric::Gauge(GaugeKind::CommandConnect),
+        Metric::Gauge(GaugeKind::CommandBinlogDump),
+        Metric::Gauge(GaugeKind::CommandOther),
+    ],
+    needs: None,
+    rates: false,
+    only_above_zero: None,
+    own_account: true,
+    total: true,
+};
+
+/// A chart as a frame draws it.
+struct ChartData {
+    title: String,
+    /// The sum of its own series' latest values, `–` when one of them has none; `None`: the
+    /// chart has no total.
+    total: Option<String>,
+    series: Vec<Drawn>,
+    rates: bool,
+    /// Why the chart is not there, said in its place.
+    missing: Option<String>,
+}
+
+/// A series of a chart: its name, its values (oldest first, `None` a gap) and its colour's
+/// place in the theme's chart colours.
+struct Drawn {
+    name: String,
+    values: Vec<Option<f64>>,
+    last: Option<f64>,
+    colour: usize,
+}
+
+impl ChartData {
+    /// The legend's entries: each series' name and latest value.
+    fn legend(&self) -> Vec<String> {
+        self.series.iter().map(|s| format!("{} {}", s.name, self.value(s.last))).collect()
+    }
+
+    fn value(&self, v: Option<f64>) -> String {
+        match v {
+            Some(v) if self.rates => rate(v),
+            Some(v) => format!("{}", v.max(0.0) as u64),
+            None => "–".into(),
+        }
+    }
+
+    /// The rows a box of `w` columns takes.
+    fn height(&self, w: u16) -> u16 {
+        match self.missing {
+            Some(_) => 3,
+            None => {
+                let widths = [usize::from(w.saturating_sub(2)); LEGEND_ROWS];
+                2 + PLOT_ROWS + legend_rows(&self.legend(), &widths).len().max(1) as u16
+            }
+        }
+    }
+}
+
+/// How the charts sit below the tiles.
+enum ChartLayout {
+    None,
+    /// Side by side, the first this wide.
+    Side(u16),
+    /// One under the other, the first this high.
+    Stacked(u16),
+    /// The first (this high), the second as its compact line (or two) under it.
+    FirstAndLine(u16),
+}
+
+/// Legend entries (each drawn as `■ ` and its text) in rows of the given widths, one row per
+/// width: per row its entries (their index and the text shown). An entry that fits no row is
+/// cut with … in the last, and those after it are left out (an index of `usize::MAX` is a lone
+/// …).
+fn legend_rows(items: &[String], widths: &[usize]) -> Vec<Vec<(usize, String)>> {
+    let mut rows: Vec<Vec<(usize, String)>> = Vec::new();
+    let (mut row, mut used) = (0usize, 0usize);
+    for (i, text) in items.iter().enumerate() {
+        let need = 2 + width(text);
+        loop {
+            let Some(&w) = widths.get(row) else { return rows };
+            if rows.len() <= row {
+                rows.push(Vec::new());
+            }
+            let gap = if rows[row].is_empty() { 0 } else { 2 };
+            if used + gap + need <= w {
+                rows[row].push((i, text.clone()));
+                used += gap + need;
+                break;
+            }
+            if row + 1 < widths.len() && !rows[row].is_empty() {
+                row += 1;
+                used = 0;
+                continue;
+            }
+            // The last row: what is left of it, cut.
+            let room = w.saturating_sub(used + gap + 2);
+            if room >= 2 {
+                rows[row].push((i, clip(text, room)));
+            } else if w > used + gap {
+                rows[row].push((usize::MAX, "…".into()));
+            }
+            return rows;
+        }
+    }
+    rows
+}
+
+/// One row of a chart's legend in `at`: each entry's colour, name and latest value.
+fn legend_row(c: &ChartData, row: &[(usize, String)], at: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
+    let palette = th.chart();
+    let colours = coloured(&th);
+    let (mut x, end) = (at.x, at.x + at.width);
+    for (n, (i, text)) in row.iter().enumerate() {
+        if n > 0 {
+            x += 2;
+        }
+        if x >= end {
+            return;
+        }
+        if let Some(s) = c.series.get(*i) {
+            let colour = if colours { palette[s.colour % palette.len()] } else { th.fg };
+            x += put(buf, x, at.y, "■", 1, Style::new().fg(colour)) + 1;
+        }
+        if x < end {
+            x += put(buf, x, at.y, text, usize::from(end - x), Style::new().fg(th.fg));
+        }
+    }
+}
+
+/// Whether the theme's chart colours tell series apart: none is the terminal's default and
+/// no two are the same. Else a chart draws only its total, and the legend tells the series.
+fn coloured(th: &theme::Theme) -> bool {
+    let c = th.chart();
+    !c.contains(&Color::Reset) && (1..c.len()).all(|i| !c[..i].contains(&c[i]))
+}
 
 /// A session in a transaction for longer than this (idle in it) is marked.
 const LONG_TX_US: i64 = 60_000_000;
@@ -182,6 +404,30 @@ impl Cx<'_> {
         self.i18n.msg(&m).to_string()
     }
 
+    /// The server's role, said of the server (never to be read as the profile's own mode):
+    /// PostgreSQL in recovery or not, MySQL `read_only` (or `super_read_only`) on or not.
+    fn role(&self, read_only: bool) -> String {
+        self.label(match (self.mysql, read_only) {
+            (true, true) => Label::MonitorRoleServerReadOnly,
+            (true, false) => Label::MonitorRoleTakesWrites,
+            (false, true) => Label::MonitorRoleStandby,
+            (false, false) => Label::MonitorRolePrimary,
+        })
+    }
+
+    /// The session list holds the account's own sessions only (MySQL without `PROCESS`): what
+    /// is worked out from it says so.
+    fn own_only(&self) -> bool {
+        self.m.snapshot.as_ref().is_some_and(|s| s.hidden.iter().any(|h| h.part == Part::OtherSessions))
+    }
+
+    /// The rows of the server's activity the account may not see (PostgreSQL without
+    /// `pg_read_all_stats`): their state is not known, so they are never counted as idle.
+    fn hidden_rows(&self) -> u64 {
+        let s = self.m.snapshot.as_ref();
+        s.and_then(|s| s.gauges.iter().find(|g| g.kind == GaugeKind::Hidden)).map_or(0, |g| g.value)
+    }
+
     /// The server's version, role, uptime and connection limit, and its provider.
     fn server_strip(&self, at: Rect, buf: &mut Buffer) {
         let th = theme::cur();
@@ -191,7 +437,7 @@ impl Cx<'_> {
             if let Some(p) = self.m.format().and_then(|f| f.flavour().product()) {
                 parts.push(p.to_string());
             }
-            parts.push(self.label(if s.read_only { Label::MonitorReadOnly } else { Label::MonitorReadWrite }));
+            parts.push(self.role(s.read_only));
             // On the latest read's clock: the server facts are read only now and then.
             let now = self.m.snapshot.as_ref().map_or(s.read_at, |r| r.sample.time);
             if let Some(up) = s.started.and_then(|t| now.since(t)) {
@@ -374,6 +620,28 @@ impl Cx<'_> {
                 CounterKind::TempDiskTables => Label::MonitorMetricTempDiskTables,
                 CounterKind::SlowQueries => Label::MonitorMetricSlowQueries,
                 CounterKind::AbortedConnects => Label::MonitorMetricAbortedConnects,
+                CounterKind::Selects => Label::MonitorSeriesSelect,
+                CounterKind::Inserts => Label::MonitorSeriesInsert,
+                CounterKind::Updates => Label::MonitorSeriesUpdate,
+                CounterKind::Deletes => Label::MonitorSeriesDelete,
+                CounterKind::RowsInserted => Label::MonitorSeriesInserted,
+                CounterKind::RowsUpdated => Label::MonitorSeriesUpdated,
+                CounterKind::RowsDeleted => Label::MonitorSeriesDeleted,
+            },
+            Metric::Gauge(g) => match g {
+                GaugeKind::StateRunning | GaugeKind::Active => Label::MonitorSeriesRunning,
+                GaugeKind::StateWaiting | GaugeKind::WaitingForLock => Label::MonitorSeriesWaiting,
+                GaugeKind::StateIdleInTx | GaugeKind::IdleInTx => Label::MonitorSeriesIdleInTx,
+                GaugeKind::StateIdle | GaugeKind::Idle => Label::MonitorSeriesIdle,
+                GaugeKind::StateBackground => Label::MonitorSeriesBackground,
+                GaugeKind::StateUnknown | GaugeKind::Hidden => Label::MonitorSeriesUnknown,
+                GaugeKind::Sessions => Label::MonitorMetricSessions,
+                GaugeKind::CommandQuery => Label::MonitorSeriesQuery,
+                GaugeKind::CommandSleep => Label::MonitorSeriesSleep,
+                GaugeKind::CommandDaemon => Label::MonitorSeriesDaemon,
+                GaugeKind::CommandConnect => Label::MonitorSeriesConnect,
+                GaugeKind::CommandBinlogDump => Label::MonitorSeriesBinlogDump,
+                GaugeKind::CommandOther => Label::MonitorSeriesOther,
             },
         })
     }
@@ -384,12 +652,15 @@ impl Cx<'_> {
         match (k, last) {
             (Metric::Sessions, Some(v)) => {
                 let max = self.m.server.as_ref().and_then(|s| s.max_connections);
+                // Hidden rows may be client sessions too: the count is the least there are.
+                let least = if self.hidden_rows() > 0 { "≥" } else { "" };
                 match max {
-                    Some(max) => format!("{}/{max}", v as u64),
-                    None => format!("{}", v as u64),
+                    Some(max) => format!("{least}{}/{max}", v as u64),
+                    None => format!("{least}{}", v as u64),
                 }
             }
             (Metric::CacheHit, Some(v)) => format!("{v:.1}%"),
+            (Metric::Gauge(_), Some(v)) => format!("{}", v as u64),
             (Metric::Rate(CounterKind::BytesIn | CounterKind::BytesOut | CounterKind::TempBytes), Some(v)) => {
                 format!("{}/s", crate::text::human_bytes(v.max(0.0) as u64))
             }
@@ -421,38 +692,73 @@ impl Cx<'_> {
         self.m.history_of(k).map(|h| h.points().map(|(_, v)| v).collect()).unwrap_or_default()
     }
 
-    /// The Overview: chart tiles (one line each when narrow or short), then the longest
-    /// running sessions.
+    /// The Overview: chart tiles (one line each when narrow or short), the charts of several
+    /// series below them (lines of their own in the list when narrow or short), then the
+    /// longest running sessions.
     fn overview(&self, area: Rect, buf: &mut Buffer, hits: &mut MonitorHits) {
         let th = theme::cur();
         let metrics = self.metrics();
         if area.height == 0 || metrics.is_empty() {
             return;
         }
+        let charts: Vec<ChartData> = self.charts();
         let compact = area.width < TILE_MIN * 2 || area.height < 24;
         let mut y = area.y;
         let bottom = area.y + area.height;
         if compact {
             // One line each: name, value, chart; five at most, the sessions get the rest.
             let n = metrics.len().min(5).min(area.height.saturating_sub(3) as usize);
-            let name_w = metrics.iter().take(n).map(|k| width(&self.metric_label(*k))).max().unwrap_or(0) + 2;
-            for k in metrics.iter().take(n) {
-                let x = area.x + 1;
-                let w = area.width.saturating_sub(2);
-                put(buf, x, y, &self.metric_label(*k), name_w, Style::new().fg(th.fg_muted));
-                let value = self.metric_value(*k);
+            let shown = &metrics[..n];
+            let x = area.x + 1;
+            let w = area.width.saturating_sub(2);
+            // One column of names and one of values for every line, metric or chart: the
+            // values as wide as the widest shown, the names as wide as the longest but never
+            // so wide that a chart's legend gets under [`COMPACT_LEGEND_MIN`] (longer names
+            // are cut).
+            let values: Vec<String> = shown.iter().map(|k| self.metric_value(*k)).collect();
+            let totals = charts.iter().filter_map(|c| c.total.as_ref());
+            let value_w = values.iter().chain(totals).map(|v| width(v)).max().unwrap_or(0);
+            let value_w = (value_w + 2).clamp(6, 11);
+            let longest = shown
+                .iter()
+                .map(|k| width(&self.metric_label(*k)))
+                .chain(charts.iter().map(|c| width(&c.title)))
+                .max()
+                .unwrap_or(0);
+            let cap = usize::from(w).saturating_sub(value_w + COMPACT_LEGEND_MIN).max(6);
+            let name_w = (longest + 2).min(cap);
+            // The charts' lines go after the first rate and after the sessions (else last); a
+            // legend wraps to a second line only while the longest running keep their room.
+            let first_rate = shown.iter().position(|k| matches!(k, Metric::Rate(_)));
+            let sessions = shown.iter().position(|k| *k == Metric::Sessions);
+            let at = [first_rate.unwrap_or(n.saturating_sub(1)), sessions.unwrap_or(n.saturating_sub(1))];
+            let mut spare = (area.height as usize).saturating_sub(n + charts.len() + 6);
+            for (i, k) in shown.iter().enumerate() {
+                put(buf, x, y, &self.metric_label(*k), name_w - 1, Style::new().fg(th.fg_muted));
                 let vx = x + name_w as u16;
-                put(buf, vx, y, &value, 10, Style::new().fg(th.fg).add_modifier(Modifier::BOLD));
-                let sx = vx + 11;
+                let bold = Style::new().fg(th.fg).add_modifier(Modifier::BOLD);
+                put(buf, vx, y, &values[i], value_w - 1, bold);
+                let sx = vx + value_w as u16;
                 if sx < x + w {
                     let r = Rect { x: sx, y, width: x + w - sx, height: 1 };
                     sparkline::draw(&self.values(*k), r, Style::new().fg(th.accent), buf);
                 }
                 y += 1;
+                for chart in charts.iter().zip(at).filter(|(_, a)| *a == i).map(|(c, _)| c) {
+                    if y + 3 > bottom {
+                        break;
+                    }
+                    let rows = 1 + usize::from(spare > 0);
+                    let line = Rect { x, y, width: w, height: rows as u16 };
+                    let used = self.chart_lines(chart, line, (name_w, value_w), buf);
+                    spare -= used - 1;
+                    y += used as u16;
+                }
             }
         } else {
             let cols = (area.width / TILE_MIN).clamp(1, 4) as usize;
-            let rows_room = ((area.height.saturating_sub(6)) / 3).max(1) as usize;
+            let (layout, charts_h) = self.chart_layout(&charts, area);
+            let rows_room = ((area.height.saturating_sub(6 + charts_h)) / 3).max(1) as usize;
             let rows = metrics.len().div_ceil(cols).min(rows_room);
             let tile_w = area.width / cols as u16;
             for (i, k) in metrics.iter().take(rows * cols).enumerate() {
@@ -463,16 +769,48 @@ impl Cx<'_> {
                 self.tile(*k, tile, buf);
             }
             y = area.y + rows as u16 * 3;
+            let full = |h: u16| Rect { x: area.x, y: 0, width: area.width, height: h };
+            match layout {
+                ChartLayout::None => {}
+                ChartLayout::Side(left) => {
+                    let right = area.width - left;
+                    self.chart_box(&charts[0], Rect { x: area.x, y, width: left, height: charts_h }, buf);
+                    let at = Rect { x: area.x + left, y, width: right, height: charts_h };
+                    self.chart_box(&charts[1], at, buf);
+                }
+                ChartLayout::Stacked(h0) => {
+                    self.chart_box(&charts[0], Rect { y, ..full(h0) }, buf);
+                    if let Some(second) = charts.get(1) {
+                        self.chart_box(second, Rect { y: y + h0, ..full(charts_h - h0) }, buf);
+                    }
+                }
+                ChartLayout::FirstAndLine(h0) => {
+                    self.chart_box(&charts[0], Rect { y, ..full(h0) }, buf);
+                    let rows = charts_h - h0;
+                    let at = Rect { x: area.x + 1, y: y + h0, width: area.width.saturating_sub(2), height: rows };
+                    let total_w = charts[1].total.as_ref().map_or(0, |t| width(t) + 2);
+                    let columns = (width(&charts[1].title) + 2, total_w);
+                    self.chart_lines(&charts[1], at, columns, buf);
+                }
+            }
+            y += charts_h;
         }
         if y + 2 > bottom {
             return;
         }
-        // The longest running.
+        // The longest running, from the session list: when it holds only some of the server's
+        // sessions, the heading and its empty text say whose.
+        let (own, hidden) = (self.own_only(), self.hidden_rows());
+        let heading = match (own, hidden) {
+            (true, _) => Label::MonitorLongestOwn,
+            (false, 1..) => Label::MonitorLongestVisible,
+            (false, 0) => Label::MonitorLongest,
+        };
         put(
             buf,
             area.x + 1,
             y,
-            &self.label(Label::MonitorLongest),
+            &self.label(heading),
             area.width as usize - 2,
             Style::new().fg(th.fg_muted).add_modifier(Modifier::BOLD),
         );
@@ -481,14 +819,16 @@ impl Cx<'_> {
         let room = (bottom - y).saturating_sub(1) as usize;
         let top: Vec<usize> = self.m.top.iter().copied().take(room).collect();
         if top.is_empty() {
-            put(
-                buf,
-                area.x + 1,
-                y,
-                &self.label(Label::MonitorNoneRunning),
-                area.width as usize - 2,
-                Style::new().fg(th.fg_dim),
-            );
+            let text = match (own, hidden) {
+                (true, _) => self.label(Label::MonitorNoneRunningOwn),
+                (false, 1..) => self.msg(Msg::MonitorNoneRunningVisible { n: hidden.to_string() }),
+                (false, 0) => self.label(Label::MonitorNoneRunning),
+            };
+            // Wrapped, not cut: what would show the rest is part of it.
+            let w = area.width as usize - 2;
+            for (n, line) in wrap_words(&text, w).iter().take(usize::from(bottom - y)).enumerate() {
+                put(buf, area.x + 1, y + n as u16, line, w, Style::new().fg(th.fg_dim));
+            }
             return;
         }
         let cols = self.columns(area.width.saturating_sub(2));
@@ -534,6 +874,193 @@ impl Cx<'_> {
             }
             _ => sparkline::draw(&self.values(k), inner, Style::new().fg(th.accent), buf),
         }
+    }
+
+    /// The charts of several series this format draws, in order.
+    fn charts(&self) -> Vec<ChartData> {
+        let defs: &[&ChartDef] = match self.m.format() {
+            Some(MonitorFormat::MySql(_)) => &[&STATEMENTS_BY_TYPE, &THREAD_COMMANDS],
+            Some(MonitorFormat::Postgres(_)) => &[&ROWS_BY_OPERATION, &SESSION_STATES],
+            None => &[],
+        };
+        defs.iter().map(|d| self.chart(d)).collect()
+    }
+
+    fn chart(&self, def: &ChartDef) -> ChartData {
+        let mut title = self.label(def.title);
+        let own_only = self.own_only();
+        if def.own_account && own_only {
+            title = format!("{title}: {}", self.label(Label::MonitorChartOwnAccount));
+        }
+        let mut series = Vec::new();
+        for (colour, m) in def.series.iter().enumerate() {
+            let Some(h) = self.m.history_of(*m) else { continue };
+            let values: Vec<Option<f64>> = h.points().map(|(_, v)| v).collect();
+            if def.only_above_zero == Some(*m) && !values.iter().flatten().any(|v| *v > 0.0) {
+                continue;
+            }
+            // The rows read are a tile of their own too, named in full there.
+            let name = match m {
+                Metric::Rate(CounterKind::RowsRead) => self.label(Label::MonitorSeriesRead),
+                _ => self.metric_label(*m),
+            };
+            series.push(Drawn { name, last: h.last(), values, colour });
+        }
+        let there = def.needs.is_none_or(|m| self.m.history_of(m).is_some()) && !series.is_empty();
+        let missing = (!there).then(|| {
+            let mut why = self.label(Label::MonitorChartNotAvailable);
+            let off = self
+                .m
+                .server
+                .as_ref()
+                .is_some_and(|s| s.extra.iter().any(|e| e.key == ExtraKey::TrackCounts && e.value == "off"));
+            if def.needs.is_some() && off {
+                why.push_str(": track_counts = off");
+            }
+            why
+        });
+        if !there {
+            series.clear();
+        }
+        // A series without a value makes the total unknown, never the sum of the others.
+        let sum = series.iter().map(|s| s.last).sum::<Option<f64>>();
+        let mut data = ChartData { title, total: None, series, rates: def.rates, missing };
+        if def.total {
+            data.total = Some(data.value(sum));
+        }
+        data
+    }
+
+    /// Where the charts go below one row of tiles: side by side when each gets [`CHART_MIN`]
+    /// columns, else one under the other, else the first with the second as its compact line,
+    /// all only when one row of tiles and the longest running's heading and three rows fit
+    /// too; and the rows they take.
+    fn chart_layout(&self, charts: &[ChartData], area: Rect) -> (ChartLayout, u16) {
+        let fits = |h: u16| 3 + h + 4 <= area.height;
+        let (layout, h) = match charts {
+            [] => (ChartLayout::None, 0),
+            [first, second, ..] if area.width >= CHART_MIN * 2 => {
+                let left = area.width / 2;
+                (ChartLayout::Side(left), first.height(left).max(second.height(area.width - left)))
+            }
+            [first] => {
+                let h0 = first.height(area.width);
+                (ChartLayout::Stacked(h0), h0)
+            }
+            [first, second, ..] => {
+                let (h0, h1) = (first.height(area.width), second.height(area.width));
+                // The second's line wraps its legend once when there is room.
+                match (fits(h0 + h1), fits(h0 + 2)) {
+                    (true, _) => (ChartLayout::Stacked(h0), h0 + h1),
+                    (false, true) => (ChartLayout::FirstAndLine(h0), h0 + 2),
+                    (false, false) => (ChartLayout::FirstAndLine(h0), h0 + 1),
+                }
+            }
+        };
+        if fits(h) { (layout, h) } else { (ChartLayout::None, 0) }
+    }
+
+    /// A chart of several series: its title and total on the border, the lines on one scale
+    /// from zero (its top on the left), the legend under them.
+    fn chart_box(&self, c: &ChartData, at: Rect, buf: &mut Buffer) {
+        work(1);
+        let th = theme::cur();
+        let block = Block::default().borders(Borders::ALL).border_style(Style::new().fg(th.border));
+        let inner = block.inner(at);
+        block.render(at, buf);
+        let value = c.total.as_ref().map_or(String::new(), |t| format!(" {t} "));
+        let room = at.width.saturating_sub(2) as usize;
+        let vw = width(&value).min(room);
+        // The title's space after it gives way before the title does.
+        let mut name = format!(" {} ", c.title);
+        if width(&name) > room.saturating_sub(vw + 1) {
+            name.pop();
+        }
+        put(buf, at.x + 1, at.y, &name, room.saturating_sub(vw + 1), Style::new().fg(th.fg_muted));
+        let bold = Style::new().fg(th.fg).add_modifier(Modifier::BOLD);
+        put(buf, at.x + at.width - 1 - vw as u16, at.y, &value, vw, bold);
+        if inner.width == 0 || inner.height == 0 {
+            return;
+        }
+        if let Some(why) = &c.missing {
+            put(buf, inner.x, inner.y, why, inner.width as usize, Style::new().fg(th.fg_dim));
+            return;
+        }
+        let legend = legend_rows(&c.legend(), &[inner.width as usize; LEGEND_ROWS]);
+        let plot_h = inner.height.saturating_sub(legend.len() as u16).min(PLOT_ROWS);
+        let colours = coloured(&th);
+        let total: Vec<Option<f64>>;
+        let lines: Vec<(&[Option<f64>], Color)> = if colours {
+            // Only the series the legend names: no line that nothing explains.
+            let named: Vec<usize> = legend.iter().flatten().map(|(i, _)| *i).collect();
+            let palette = th.chart();
+            c.series
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| named.contains(i))
+                .map(|(_, s)| (s.values.as_slice(), palette[s.colour % palette.len()]))
+                .collect()
+        } else if c.total.is_some() {
+            // Without colours the lines cannot be told apart: the total alone, broken where a
+            // series has no value.
+            let n = c.series.iter().map(|s| s.values.len()).max().unwrap_or(0);
+            total = (0..n).map(|i| c.series.iter().map(|s| s.values.get(i).copied().flatten()).sum()).collect();
+            vec![(total.as_slice(), th.fg)]
+        } else {
+            // No total to draw: the legend carries the figures.
+            Vec::new()
+        };
+        let plain: Vec<&[Option<f64>]> = lines.iter().map(|(v, _)| *v).collect();
+        let top_label = |w: u16| c.value(Some(lines::top(&plain, w)));
+        // The scale's top on the first row, its zero on the last.
+        let gutter = width(&top_label(inner.width)).max(1) as u16;
+        let plot =
+            Rect { x: inner.x + gutter + 1, y: inner.y, width: inner.width.saturating_sub(gutter + 1), height: plot_h };
+        let any = plain.iter().any(|v| v.iter().any(Option::is_some));
+        if plot.width > 0 && plot.height > 0 && any {
+            let top = lines::top(&plain, plot.width);
+            let muted = Style::new().fg(th.fg_dim);
+            put(buf, inner.x, plot.y, &c.value(Some(top)), gutter as usize, muted);
+            if plot.height > 1 {
+                put(buf, inner.x, plot.y + plot.height - 1, "0", gutter as usize, muted);
+            }
+            lines::draw(&lines, top, plot, buf);
+        }
+        for (r, row) in legend.iter().enumerate() {
+            legend_row(c, row, Rect { y: inner.y + plot_h + r as u16, height: 1, ..inner }, buf);
+        }
+    }
+
+    /// A chart as lines of the metric list, in its columns (`(names, values)` wide): its
+    /// title (cut with … when longer), its total, its legend where the others' charts start;
+    /// the legend goes on in a second line at that column when `at` has two rows and needs it.
+    /// Returns the rows used.
+    fn chart_lines(&self, c: &ChartData, at: Rect, (name_w, value_w): (usize, usize), buf: &mut Buffer) -> usize {
+        let th = theme::cur();
+        let end = at.x + at.width;
+        let name_w = name_w.min(at.width as usize);
+        put(buf, at.x, at.y, &c.title, name_w.saturating_sub(1), Style::new().fg(th.fg_muted));
+        let vx = at.x + name_w as u16;
+        if vx >= end {
+            return 1;
+        }
+        let bold = Style::new().fg(th.fg).add_modifier(Modifier::BOLD);
+        if let Some(total) = &c.total {
+            put(buf, vx, at.y, total, value_w.saturating_sub(1).min(usize::from(end - vx)), bold);
+        }
+        let lx = vx + value_w as u16;
+        if lx >= end {
+            return 1;
+        }
+        if let Some(why) = &c.missing {
+            put(buf, lx, at.y, why, usize::from(end - lx), Style::new().fg(th.fg_dim));
+            return 1;
+        }
+        let rows = legend_rows(&c.legend(), &vec![usize::from(end - lx); usize::from(at.height.max(1))]);
+        for (r, row) in rows.iter().enumerate() {
+            legend_row(c, row, Rect { x: lx, y: at.y + r as u16, width: end - lx, height: 1 }, buf);
+        }
+        rows.len().max(1)
     }
 
     /// The Sessions view: the header, the rows, the filter line, the details.

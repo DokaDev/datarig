@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_monitor.rs
+expression: "h.screen(80, 24)"
+---
+╭ Explorer ────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                   
+│  ＋ New connection   │╭ Monitor: local-pg ───────────────────────────────────╮
+│▾ Connections 1       ││ 8.4.11 (MySQL Community Server) · server takes writ… │
+│  ▾ ●   local-pg      ││ 1 Overview  2  3  4                         every 2s │
+│    ▾ datarig default ││ statements/s    824                           ▃▅█▆▄▅ │
+│      ▸ analytics     ││ statements/s b… 805     ■ select 721  ■ insert 52    │
+│      ▸ public        ││                         ■ update 26  ■ delete 6.5    │
+│      ▸ shop          ││ sessions        47/151                       ███████ │
+│                      ││ sessions by st… 47      ■ query 2  ■ sleep 43        │
+│                      ││                         ■ daemon 1  ■ connect 0  …   │
+│                      ││ cache hit       99.0%                         ██████ │
+│                      ││ rows read/s     8.2 k                         ▃▅█▆▄▅ │
+│                      ││ rows written/s  206                           ▃▅█▆▄▅ │
+│                      ││ Longest running                                      │
+│                      ││ id     user     state       query age statement      │
+│                      ││ 3907   bob      idle in tr… 12m00s    SELECT * FROM… │
+│                      ││ 4211   alice    active      3m10s     UPDATE orders… │
+│                      ││ 4302   web      active      400ms     SELECT count(… │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+╰──────────────────────╯╰──────────────────────────────────────────────────────╯
+ local-pg │   │ v view · Enter detail · c cancel · X end · / filter · a idle EN

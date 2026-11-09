@@ -1,0 +1,44 @@
+---
+source: crates/tui/tests/flows_monitor.rs
+expression: screen
+---
+╭ Explorer ──────────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                                                     
+│  ＋ New connection         │╭ Monitor: local-pg ─────────────────────────────────────────────────────────────────────╮
+│▾ Connections 1             ││ 8.4.11 (MySQL Community Server) · server takes writes · up 15h50m · max 151 connectio… │
+│  ▾ ●   local-pg            ││ 1 Overview  2 Sessions  3 Locks  4 Replication                                every 2s │
+│    ▾ datarig default       ││┌ statements/s ──────── 824 ┐┌ sessions ───────── 47/151 ┐┌ cache hit ────────── 99.0% ┐│
+│      ▸ analytics           │││                     ▃▅█▆▄▅││active 2                   ││                      ██████││
+│      ▸ public              ││└───────────────────────────┘└───────────────────────────┘└────────────────────────────┘│
+│      ▸ shop                ││┌ rows read/s ─────── 8.2 k ┐┌ rows written/s ────── 206 ┐┌ pages read/s ───────── 412 ┐│
+│                            │││                     ▃▅█▆▄▅││                     ▃▅█▆▄▅││                      ▃▅█▆▄▅││
+│                            ││└───────────────────────────┘└───────────────────────────┘└────────────────────────────┘│
+│                            ││┌ COMMIT statements/s ── 41 ┐┌ ROLLBACK statements…─ 0.0 ┐┌ bytes in ──────── 121 KB/s ┐│
+│                            │││                     ▃▅█▆▄▅││                     ▁▁▁▁▁▁││                      ▃▅█▆▄▅││
+│                            ││└───────────────────────────┘└───────────────────────────┘└────────────────────────────┘│
+│                            ││┌ bytes out ────── 362 KB/s ┐┌ row lock waits/s ──── 0.0 ┐┌ temporary tables on …─ 0.0 ┐│
+│                            │││                     ▃▅█▆▄▅││                     ▁▁▁▁▁▁││                      ▁▁▁▁▁▁││
+│                            ││└───────────────────────────┘└───────────────────────────┘└────────────────────────────┘│
+│                            ││┌ slow statements/s ─── 0.0 ┐┌ failed connections/…─ 0.0 ┐                              │
+│                            │││                     ▁▁▁▁▁▁││                     ▁▁▁▁▁▁│                              │
+│                            ││└───────────────────────────┘└───────────────────────────┘                              │
+│                            ││┌ statements/s by type ─────────────── 805 ┐┌ sessions by state ─────────────────── 47 ┐│
+│                            │││1.4 k                                   ⣷ ││43                                    ⠈⠉⠉⠉││
+│                            │││                                        ⡟⡄││                                          ││
+│                            │││                                       ⢸ ⡷││                                          ││
+│                            │││                                       ⠜  ││                                          ││
+│                            │││0                                      ⣠⣤⣤││0                                     ⢠⣤⣤⣤││
+│                            │││■ select 721  ■ insert 52  ■ update 26    ││■ query 2  ■ sleep 43  ■ daemon 1         ││
+│                            │││■ delete 6.5                              ││■ connect 0  ■ binlog dump 1  ■ other 0   ││
+│                            ││└──────────────────────────────────────────┘└──────────────────────────────────────────┘│
+│                            ││ Longest running                                                                        │
+│                            ││ id      user       database   state        wait           query age   statement        │
+│                            ││ 3907    bob        shop       idle in tra…                12m00s      SELECT * FROM o… │
+│                            ││ 4211    alice      shop       active       Lock:transact… 3m10s       UPDATE orders S… │
+│                            ││ 4302    web        shop       active                      400ms       SELECT count(*)… │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯
+ local-pg │     │ v view · Enter detail · c cancel · X end · / filter · a idle · p pause · : commands · Space ? help EN

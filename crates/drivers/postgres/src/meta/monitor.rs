@@ -75,16 +75,27 @@ pub(crate) fn server_info() -> String {
 }
 
 /// The counters and session counts of a tick, one row. Columns: `now`, `commits`, `rollbacks`,
-/// `blks_read`, `blks_hit`, `tup_returned`, `tup_written`, `deadlocks`, `temp_bytes`,
-/// `databases`, `stats_reset`, `sessions`, `active`, `idle_in_tx`, `idle`, `waiting`, `hidden`.
-/// The sums cover every database; the monitor's own session is not counted as active.
+/// `blks_read`, `blks_hit`, `tup_returned`, `tup_written`, `tup_inserted`, `tup_updated`,
+/// `tup_deleted`, `deadlocks`, `temp_bytes`, `databases`, `stats_reset`, `track_counts`,
+/// `sessions`, `active`, `idle_in_tx`, `idle`, `waiting`, `hidden`, then the rows by state:
+/// `class_running`, `class_waiting`, `class_idle_in_tx`, `class_idle`, `class_background`,
+/// `class_unknown`. The sums cover every database; the monitor's own session is not counted as
+/// active.
+///
+/// Each row of `pg_stat_activity` but the monitor's own falls in one state class only, the
+/// first that fits: not a client backend (background); no state, hidden or `disabled`
+/// (unknown); waiting for a lock; running; idle in a transaction; idle; anything else
+/// (unknown). A hidden row has no `backend_type` either, so it is never taken as background.
+/// One pass over `pg_stat_activity` gives every count.
 pub(crate) fn counters() -> String {
     format!(
-        "SELECT {now} AS now, d.*, s.* FROM \
+        "SELECT {now} AS now, d.*, current_setting('track_counts')::bool AS track_counts, s.* FROM \
          (SELECT sum(xact_commit)::int8 AS commits, sum(xact_rollback)::int8 AS rollbacks, \
          sum(blks_read)::int8 AS blks_read, sum(blks_hit)::int8 AS blks_hit, \
          sum(tup_returned)::int8 AS tup_returned, \
          sum(tup_inserted + tup_updated + tup_deleted)::int8 AS tup_written, \
+         sum(tup_inserted)::int8 AS tup_inserted, sum(tup_updated)::int8 AS tup_updated, \
+         sum(tup_deleted)::int8 AS tup_deleted, \
          sum(deadlocks)::int8 AS deadlocks, sum(temp_bytes)::int8 AS temp_bytes, \
          count(*) AS databases, max({reset}) AS stats_reset FROM pg_stat_database) d, \
          (SELECT count(*) FILTER (WHERE backend_type = 'client backend') AS sessions, \
@@ -92,8 +103,22 @@ pub(crate) fn counters() -> String {
          count(*) FILTER (WHERE state IN ('idle in transaction', 'idle in transaction (aborted)')) AS idle_in_tx, \
          count(*) FILTER (WHERE state = 'idle') AS idle, \
          count(*) FILTER (WHERE wait_event_type = 'Lock') AS waiting, \
-         count(*) FILTER (WHERE state IS NULL AND query = '{hidden}') AS hidden \
-         FROM pg_stat_activity) s",
+         count(*) FILTER (WHERE state IS NULL AND query = '{hidden}') AS hidden, \
+         count(*) FILTER (WHERE class = 'running') AS class_running, \
+         count(*) FILTER (WHERE class = 'waiting') AS class_waiting, \
+         count(*) FILTER (WHERE class = 'idle in tx') AS class_idle_in_tx, \
+         count(*) FILTER (WHERE class = 'idle') AS class_idle, \
+         count(*) FILTER (WHERE class = 'background') AS class_background, \
+         count(*) FILTER (WHERE class = 'unknown') AS class_unknown \
+         FROM (SELECT pid, backend_type, state, wait_event_type, query, CASE \
+         WHEN pid = pg_backend_pid() THEN NULL \
+         WHEN backend_type <> 'client backend' THEN 'background' \
+         WHEN state IS NULL OR state = 'disabled' THEN 'unknown' \
+         WHEN wait_event_type = 'Lock' THEN 'waiting' \
+         WHEN state IN ('active', 'fastpath function call') THEN 'running' \
+         WHEN state IN ('idle in transaction', 'idle in transaction (aborted)') THEN 'idle in tx' \
+         WHEN state = 'idle' THEN 'idle' \
+         ELSE 'unknown' END AS class FROM pg_stat_activity) a) s",
         now = us("now()"),
         reset = us("stats_reset"),
         hidden = HIDDEN_QUERY,

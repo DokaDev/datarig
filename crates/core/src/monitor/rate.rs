@@ -30,6 +30,9 @@ pub enum Gap {
     Reconnected,
     /// The server's clock did not move forward between them.
     NoTime,
+    /// The monitor sent statements in between whose own share of the counter it cannot count
+    /// (a `CALL` of a procedure that reads), so its own traffic cannot be taken out.
+    OwnUnknown,
 }
 
 /// The monitor's own traffic the counters did not show yet. PostgreSQL publishes a session's
@@ -42,6 +45,7 @@ pub enum Gap {
 pub struct Pending {
     pub statements: u64,
     pub transactions: u64,
+    pub selects: u64,
 }
 
 impl Pending {
@@ -49,6 +53,7 @@ impl Pending {
         match kind {
             CounterKind::Statements => Some(&mut self.statements),
             CounterKind::Commits => Some(&mut self.transactions),
+            CounterKind::Selects => Some(&mut self.selects),
             _ => None,
         }
     }
@@ -99,12 +104,15 @@ fn delta(
     let own = match kind {
         CounterKind::Statements => (before.own.statements, now.own.statements),
         CounterKind::Commits => (before.own.transactions, now.own.transactions),
+        CounterKind::Selects => (before.own.selects, now.own.selects),
         _ => (0, 0),
     };
     let d = if !now.epoch.continues(before.epoch) {
         Err(Gap::Reset)
     } else if own.1 < own.0 {
         Err(Gap::Reconnected)
+    } else if kind == CounterKind::Selects && now.own.uncounted != before.own.uncounted {
+        Err(Gap::OwnUnknown)
     } else {
         b.checked_sub(a).ok_or(Gap::Backwards)
     };

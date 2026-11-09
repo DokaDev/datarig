@@ -2,17 +2,19 @@
 //! every tenth frame, at 160x45 while the selection moves, in the Sessions view and the
 //! Overview, then in the Locks view with a large lock table (the most waits a read holds, in
 //! chains, each with the most holders a read gives). Measured: the key (or the read's arrival) with its frame, the work of one frame
-//! (`widgets::monitor`'s count: session rows and chart tiles drawn), and taking a read (the
+//! (`widgets::monitor`'s count: session rows, chart tiles and charts drawn), and taking a read (the
 //! rates, the sort and the filter of its sessions). No server: the reads are made here and fed
 //! to the tab as its connection would.
 
 use crate::apps;
 use crate::stats::{Summary, ms};
 use datarig_core::driver::DbEvent;
+use datarig_core::monitor::format::{Flavour, PgMonitor, Route};
 use datarig_core::monitor::locks::{Blame, Holder, LOCK_ROWS, LOCK_WAITS, LockHolder, LockList, LockObject, LockWait};
 use datarig_core::monitor::{
-    Counter, CounterKind, Epoch, Gauge, GaugeKind, Own, QueryText, Sample, ServerInfo, SessionKey, SessionKind,
-    SessionList, SessionRow, SessionState, Snapshot, StatementStamp, Timestamp, Tx, Visibility, Wait, WaitClass,
+    Counter, CounterKind, Epoch, Gauge, GaugeKind, MonitorFormat, Own, QueryText, Sample, ServerInfo, SessionKey,
+    SessionKind, SessionList, SessionRow, SessionState, Snapshot, StatementStamp, Timestamp, Tx, Visibility, Wait,
+    WaitClass,
 };
 use datarig_tui::app::monitor::{MonState, MonitorTab};
 use datarig_tui::app::{AppEvent, EventTarget, Focus, TabKind};
@@ -66,6 +68,14 @@ fn read(n: u64, sessions: usize) -> Snapshot {
         })
         .collect();
     let c = |kind, per_read: u64| Counter { kind, value: 1_000_000 + n * per_read };
+    // A counter whose rate moves from read to read (`base` plus 0 to 6 `step`s), so the charts'
+    // lines have slopes to draw.
+    let moving = |kind, base: u64, step: u64| {
+        let (weeks, rest) = (n / 7, n % 7);
+        Counter { kind, value: 1_000_000 + n * base + step * (21 * weeks + rest * rest.saturating_sub(1) / 2) }
+    };
+    let s = sessions as u64;
+    let gauge = |kind, value| Gauge { kind, value };
     Snapshot {
         sample: Sample {
             time: now,
@@ -79,6 +89,9 @@ fn read(n: u64, sessions: usize) -> Snapshot {
                 c(CounterKind::PageReads, 9_000 + (n % 5) * 1000),
                 c(CounterKind::Deadlocks, 0),
                 c(CounterKind::TempBytes, 1_000_000),
+                moving(CounterKind::RowsInserted, 12_000, 2_000),
+                moving(CounterKind::RowsUpdated, 15_000, 1_500),
+                moving(CounterKind::RowsDeleted, 3_000, 500),
             ],
             own: Own::default(),
         },
@@ -89,6 +102,13 @@ fn read(n: u64, sessions: usize) -> Snapshot {
             Gauge { kind: GaugeKind::Idle, value: 0 },
             Gauge { kind: GaugeKind::WaitingForLock, value: sessions as u64 / 10 },
             Gauge { kind: GaugeKind::Hidden, value: 0 },
+            // By state, each session once, the split moving from read to read.
+            gauge(GaugeKind::StateRunning, s * 7 / 10 - (n % 5) * 20),
+            gauge(GaugeKind::StateWaiting, s / 10 + (n % 5) * 20),
+            gauge(GaugeKind::StateIdleInTx, s / 10),
+            gauge(GaugeKind::StateIdle, s / 10),
+            gauge(GaugeKind::StateBackground, 6),
+            gauge(GaugeKind::StateUnknown, 0),
         ],
         locks: None,
         sessions: Some(SessionList { time: now, rows, idle_left_out: true }),
@@ -146,13 +166,25 @@ fn lock_table(n: u64, sessions: usize) -> LockList {
     LockList { time: time(n), waits, more: 0, blocks: true }
 }
 
+/// A PostgreSQL connection probed, so the Overview draws its charts for the format.
+fn ready() -> MonState {
+    MonState::Ready(MonitorFormat::Postgres(PgMonitor {
+        version: 170011,
+        superuser: true,
+        read_all_stats: true,
+        signal_backend: true,
+        flavour: Flavour::Standard,
+        route: Route::Direct,
+    }))
+}
+
 pub fn run(sessions: usize, n: usize) -> Result<Value, String> {
     let mut app = apps::offline("", None);
     let pid = app.profiles[0].id;
     let tab = app.tabs.open(TabKind::Monitor, Some(pid), Editor::read_only(""));
     let mut m = MonitorTab::new(Default::default());
     // As a probed connection would be, without a server: the reads below are fed to it.
-    m.state = MonState::Opening;
+    m.state = ready();
     if let Some(t) = app.tabs.get_mut(tab) {
         t.doc.monitor = Some(m);
     }
@@ -173,7 +205,7 @@ pub fn run(sessions: usize, n: usize) -> Result<Value, String> {
         }
         let generation = {
             let m = app.tabs.get_mut(tab).and_then(|t| t.doc.monitor.as_mut()).expect("the Monitor tab");
-            m.state = MonState::Opening;
+            m.state = ready();
             m.request = Some((*reads + 1, Instant::now()));
             m.generation
         };
@@ -209,6 +241,12 @@ pub fn run(sessions: usize, n: usize) -> Result<Value, String> {
                     _ => KeyCode::Home,
                 };
                 apps::key(&mut app, code, KeyModifiers::NONE);
+            }
+            // The offline profile never connects: the tab keeps the probed format it was fed
+            // (the app would otherwise go back to waiting for the profile), so the Overview
+            // draws the format's charts.
+            if let Some(m) = app.tabs.get_mut(tab).and_then(|t| t.doc.monitor.as_mut()) {
+                m.state = ready();
             }
             apps::draw(&mut term, &mut app);
             frame.push(ms(t.elapsed()));

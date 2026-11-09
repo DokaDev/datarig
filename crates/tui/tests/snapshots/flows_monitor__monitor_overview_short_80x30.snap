@@ -1,0 +1,34 @@
+---
+source: crates/tui/tests/flows_monitor.rs
+expression: short
+---
+╭ Explorer ────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                   
+│  ＋ New connection   │╭ Monitor: local-pg ───────────────────────────────────╮
+│▾ Connections 1       ││ PostgreSQL 17.11 · primary · up 41d3h · max 200 con… │
+│  ▾ ●   local-pg      ││ 1 Overview  2  3  4                         every 2s │
+│    ▾ datarig default ││┌ commits/s ───────── 412 ┐┌ sessions ─────── 41/200 ┐│
+│      ▸ analytics     │││                        █││active 3 · idle in trans…││
+│      ▸ public        ││└─────────────────────────┘└─────────────────────────┘│
+│      ▸ shop          ││┌ cache hit ─────── 99.0% ┐┌ rows read/s ───── 8.2 k ┐│
+│                      │││                        █││                        █││
+│                      ││└─────────────────────────┘└─────────────────────────┘│
+│                      ││┌ rows/s by operation ───────────────────────────────┐│
+│                      │││8.2 k                                              ⠈││
+│                      │││                                                    ││
+│                      │││                                                    ││
+│                      │││                                                    ││
+│                      │││0                                                  ⢠││
+│                      │││■ read 8.2 k  ■ inserted 412  ■ updated 206         ││
+│                      │││■ deleted 206                                       ││
+│                      ││└────────────────────────────────────────────────────┘│
+│                      ││ sessions by state  45  ■ running 1  ■ waiting 1      │
+│                      ││                        ■ idle in tx 1  ■ idle 37  …  │
+│                      ││ Longest running                                      │
+│                      ││ pid    user     state       query age statement      │
+│                      ││ 3907   bob      idle in tr… 12m00s    SELECT * FROM… │
+│                      ││ 4211   alice    active      3m10s     UPDATE orders… │
+│                      ││ 4302   web      active      400ms     SELECT count(… │
+│                      ││                                                      │
+│                      ││                                                      │
+╰──────────────────────╯╰──────────────────────────────────────────────────────╯
+ local-pg │   │ v view · Enter detail · c cancel · X end · / filter · a idle EN

@@ -1,0 +1,30 @@
+---
+source: crates/tui/tests/flows_monitor.rs
+expression: lines
+---
+╭ Explorer ──────────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                                                     
+│  ＋ New connection         │╭ Monitor: local-pg ─────────────────────────────────────────────────────────────────────╮
+│▾ Connections 1             ││ PostgreSQL 17.11 · primary · up 41d3h · max 200 connections                            │
+│  ▾ ●   local-pg            ││ 1 Overview  2 Sessions  3 Locks  4 Replication                                every 2s │
+│    ▾ datarig default       ││ commits/s            412                                                             █ │
+│      ▸ analytics           ││ rows/s by operation          ■ read 8.2 k  ■ inserted 412  ■ updated 206               │
+│      ▸ public              ││                              ■ deleted 206                                             │
+│      ▸ shop                ││ sessions             41/200                                                         ██ │
+│                            ││ sessions by state    45      ■ running 1  ■ waiting 1  ■ idle in tx 1  ■ idle 37       │
+│                            ││                              ■ background 5                                            │
+│                            ││ cache hit            99.0%                                                           █ │
+│                            ││ rows read/s          8.2 k                                                           █ │
+│                            ││ rows written/s       824                                                             █ │
+│                            ││ Longest running                                                                        │
+│                            ││ pid     user       database   state        wait           query age   statement        │
+│                            ││ 3907    bob        shop       idle in tra…                12m00s      SELECT * FROM o… │
+│                            ││ 4211    alice      shop       active       Lock:transact… 3m10s       UPDATE orders S… │
+│                            ││ 4302    web        shop       active                      400ms       SELECT count(*)… │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯
+ local-pg │     │ v view · Enter detail · c cancel · X end · / filter · a idle · p pause · : commands · Space ? help EN

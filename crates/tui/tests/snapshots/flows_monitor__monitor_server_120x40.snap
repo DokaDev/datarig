@@ -4,13 +4,13 @@ expression: "h.screen(120, 40)"
 ---
 ╭ Explorer ──────────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                                                     
 │  ＋ New connection         │╭ Monitor: local-pg ─────────────────────────────────────────────────────────────────────╮
-│▾ Connections 1             ││ PostgreSQL 17.11 · read-write · up 41d3h · max 200 connections                         │
+│▾ Connections 1             ││ PostgreSQL 17.11 · primary · up 41d3h · max 200 connections                            │
 │  ▾ ●   local-pg            ││ 1 Overview  2 Sessions  3 Locks  4 Replication                                every 2s │
 │    ▾ datarig default       ││┌ Server ──────────────────────────────────────────────────────────────────────────────┐│
 │      ▸ analytics           │││ version           PostgreSQL 17.11 (Debian 17.11-1.pgdg13+2) on                      ││
 │      ▸ public              │││                   aarch64-unknown-linux-gnu                                          ││
 │      ▸ shop                │││ provider          none recognised (self-managed, or a provider not listed)           ││
-│                            │││ role              read-write                                                         ││
+│                            │││ role              primary                                                            ││
 │                            │││ started           41d3h ago                                                          ││
 │                            │││ connections       41 of 200                                                          ││
 │                            │││ page cache        128 MB                                                             ││
@@ -23,12 +23,12 @@ expression: "h.screen(120, 40)"
 │                            │││                                                                                      ││
 │                            │││ i or Esc closes                                                                      ││
 │                            ││└──────────────────────────────────────────────────────────────────────────────────────┘│
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
-│                            ││                                                                                        │
+│                            ││└──────────────────────────────────────────┘└──────────────────────────────────────────┘│
+│                            ││ Longest running                                                                        │
+│                            ││ pid     user       database   state        wait           query age   statement        │
+│                            ││ 3907    bob        shop       idle in tra…                12m00s      SELECT * FROM o… │
+│                            ││ 4211    alice      shop       active       Lock:transact… 3m10s       UPDATE orders S… │
+│                            ││ 4302    web        shop       active                      400ms       SELECT count(*)… │
 │                            ││                                                                                        │
 │                            ││                                                                                        │
 │                            ││                                                                                        │

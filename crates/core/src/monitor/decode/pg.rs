@@ -32,7 +32,7 @@ pub const SERVER_INFO: &[&str] = &[
     "wal_level",
 ];
 
-/// The columns of the counters' row: sums over every database, then session counts (the monitor's own session not active), in order.
+/// The columns of the counters' row: sums over every database (`tup_written` the three after it together), `track_counts` (off: the counters stand still), then session counts (the monitor's own session not active), then the rows by state, each in one `class_` count only (the monitor's own left out), in order.
 pub const COUNTERS: &[&str] = &[
     "now",
     "commits",
@@ -41,16 +41,26 @@ pub const COUNTERS: &[&str] = &[
     "blks_hit",
     "tup_returned",
     "tup_written",
+    "tup_inserted",
+    "tup_updated",
+    "tup_deleted",
     "deadlocks",
     "temp_bytes",
     "databases",
     "stats_reset",
+    "track_counts",
     "sessions",
     "active",
     "idle_in_tx",
     "idle",
     "waiting",
     "hidden",
+    "class_running",
+    "class_waiting",
+    "class_idle_in_tx",
+    "class_idle",
+    "class_background",
+    "class_unknown",
 ];
 
 /// The columns of a session's row (`query` its first `QUERY_CHARS` characters, `maybe_cut` within three bytes of `track_activity_query_size`, `blocked_by` `pg_blocking_pids` as text for the longest `MAX_WAITERS` lock waiters, else NULL), in order.
@@ -154,7 +164,7 @@ pub fn counters(rows: &Rows, own: Own) -> Result<(Sample, Vec<Gauge>), DecodeErr
     let counter = |kind, i| Ok::<_, DecodeError>(Counter { kind, value: row.required_uint(i)? });
     let hit = row.required_uint("blks_hit")?;
     let read = row.required_uint("blks_read")?;
-    let counters = vec![
+    let mut counters = vec![
         counter(CounterKind::Commits, "commits")?,
         counter(CounterKind::Rollbacks, "rollbacks")?,
         Counter { kind: CounterKind::PageReads, value: read },
@@ -164,6 +174,12 @@ pub fn counters(rows: &Rows, own: Own) -> Result<(Sample, Vec<Gauge>), DecodeErr
         counter(CounterKind::Deadlocks, "deadlocks")?,
         counter(CounterKind::TempBytes, "temp_bytes")?,
     ];
+    // With `track_counts` off the row counts stand still: not "no rows", so not given at all.
+    if row.required_bool("track_counts")? {
+        counters.push(counter(CounterKind::RowsInserted, "tup_inserted")?);
+        counters.push(counter(CounterKind::RowsUpdated, "tup_updated")?);
+        counters.push(counter(CounterKind::RowsDeleted, "tup_deleted")?);
+    }
     // NULL `stats_reset` everywhere: never reset.
     let epoch = Epoch::Mark(row.int("stats_reset")?.unwrap_or(0), row.required_int("databases")?);
     let gauge = |kind, i| Ok::<_, DecodeError>(Gauge { kind, value: row.required_uint(i)? });
@@ -174,6 +190,12 @@ pub fn counters(rows: &Rows, own: Own) -> Result<(Sample, Vec<Gauge>), DecodeErr
         gauge(GaugeKind::Idle, "idle")?,
         gauge(GaugeKind::WaitingForLock, "waiting")?,
         gauge(GaugeKind::Hidden, "hidden")?,
+        gauge(GaugeKind::StateRunning, "class_running")?,
+        gauge(GaugeKind::StateWaiting, "class_waiting")?,
+        gauge(GaugeKind::StateIdleInTx, "class_idle_in_tx")?,
+        gauge(GaugeKind::StateIdle, "class_idle")?,
+        gauge(GaugeKind::StateBackground, "class_background")?,
+        gauge(GaugeKind::StateUnknown, "class_unknown")?,
     ];
     Ok((Sample { time: row.required_time("now")?, epoch, counters, own }, gauges))
 }

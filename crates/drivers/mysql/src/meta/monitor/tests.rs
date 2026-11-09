@@ -31,7 +31,7 @@ fn every(m: &MySqlMonitor) -> Vec<(&'static str, String, &'static [&'static str]
     let info = server_info();
     out.push(("server info", info[0].clone(), SERVER_INFO));
     out.push(("server info uptime", info[1].clone(), NAME_VALUE));
-    let c = counters();
+    let c = counters(m);
     out.push(("clock", c[0].clone(), CLOCK));
     out.push(("status", c[1].clone(), NAME_VALUE));
     out.push(("sessions", sessions(m, IDLE).remove(0), SESSIONS));
@@ -109,10 +109,10 @@ fn a_running_statement_is_named_by_its_event_only_when_the_events_are_read() {
 fn a_tick_reads_what_is_wanted_in_order() {
     let m = my(80411, true, Readable::Yes);
     let limit = Duration::from_secs(2);
-    assert_eq!(tick(&m, &Want { sessions: None, locks: false, server: false, limit }), counters());
+    assert_eq!(tick(&m, &Want { sessions: None, locks: false, server: false, limit }), counters(&m));
     let statements = tick(&m, &Want { sessions: Some(IDLE), locks: false, server: true, limit });
     assert_eq!(statements.len(), 5);
-    assert_eq!(statements[..2], counters()[..]);
+    assert_eq!(statements[..2], counters(&m)[..]);
     assert_eq!(statements[2..3], sessions(&m, IDLE)[..]);
     assert_eq!(statements[3..], server_info()[..]);
     assert_eq!(super::limit(limit), "SET SESSION max_execution_time = 2000");
@@ -316,4 +316,38 @@ async fn every_replication_statement_gives_its_decoders_columns() {
         }
     }
     let _ = conn.disconnect().await;
+}
+
+/// The SQL form of the rule that tells another account's thread gives what the core's gives,
+/// on the real server, for names with `@`, an anonymous account, a thread without a user and a
+/// name differing only in case.
+#[tokio::test]
+async fn another_accounts_thread_is_told_alike_in_sql_and_in_the_core() {
+    use datarig_core::monitor::decode::mysql::{account_user, other_account};
+    let url = match std::env::var("DATARIG_TEST_MYSQL_ADMIN_URL") {
+        Ok(u) if !u.is_empty() => u,
+        _ => {
+            let required = std::env::var("DATARIG_REQUIRE_MYSQL").is_ok_and(|v| v == "1");
+            assert!(!required, "DATARIG_TEST_MYSQL_ADMIN_URL must be set");
+            eprintln!(
+                "SKIPPED another_accounts_thread_is_told_alike_in_sql_and_in_the_core: set DATARIG_TEST_MYSQL_ADMIN_URL"
+            );
+            return;
+        }
+    };
+    use mysql_async::prelude::Queryable;
+    let opts =
+        mysql_async::OptsBuilder::from_opts(mysql_async::Opts::from_url(&url).expect("a URL")).prefer_socket(false);
+    let mut conn = mysql_async::Conn::new(opts).await.expect("connect");
+    let accounts = ["datarig@%", "ops@corp@10.0.0.%", "@localhost", "root@localhost"];
+    let users = [None, Some(""), Some("datarig"), Some("Datarig"), Some("ops"), Some("ops@corp"), Some("root")];
+    for account in accounts {
+        for user in users {
+            let quote = |v: &str| format!("'{}'", v.replace('\'', "''"));
+            let column = user.map_or("NULL".to_string(), quote);
+            let sql = format!("SELECT {} AS other", other_account_sql(&column, &quote(account)));
+            let other: Option<i64> = conn.query_first(&sql).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+            assert_eq!(other, Some(i64::from(other_account(user, account_user(account)))), "{user:?} of {account}");
+        }
+    }
 }
