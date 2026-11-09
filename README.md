@@ -129,7 +129,7 @@ keyboard help. Next: [Getting started](https://dokadev.github.io/datarig/getting
 | `vendor/` | patched tokio-postgres, mysql_async and ssh-key; see [vendor/README.md](https://github.com/DokaDev/datarig/blob/main/vendor/README.md) |
 | `docs/` | [architecture](https://github.com/DokaDev/datarig/blob/main/docs/architecture.md), [performance](https://github.com/DokaDev/datarig/blob/main/docs/perf.md), the generated [key bindings](https://github.com/DokaDev/datarig/blob/main/docs/keybindings.md) and [theme tokens](https://github.com/DokaDev/datarig/blob/main/docs/themes.md), and the documentation site (`docs/site`) |
 
-How to build, test and send a change:
+Please open an issue before a pull request. How to build, test and send a change:
 [CONTRIBUTING.md](https://github.com/DokaDev/datarig/blob/main/CONTRIBUTING.md); the test
 services: [dev/README.md](https://github.com/DokaDev/datarig/blob/main/dev/README.md).
 
