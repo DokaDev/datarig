@@ -1,0 +1,44 @@
+---
+source: crates/tui/tests/it/flows_monitor.rs
+expression: stacked
+---
+╭ Explorer ────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                           
+│  ＋ New connection   │╭ Monitor: local-pg ───────────────────────────────────────────╮
+│▾ Connections 1       ││ PostgreSQL 17.11 · primary · up 41d3h · max 200 connections  │
+│  ▾ ●   local-pg      ││ 1 Overview  2 Sessions  3 Locks  4 Replication      every 2s │
+│    ▾ datarig default ││┌ commits/s ───────────── 412 ┐┌ sessions ─────────── 41/200 ┐│
+│      ▸ analytics     │││                            █││active 3 · idle in transacti…││
+│      ▸ public        ││└─────────────────────────────┘└─────────────────────────────┘│
+│      ▸ shop          ││┌ cache hit ─────────── 99.0% ┐┌ rows read/s ───────── 8.2 k ┐│
+│                      │││                            █││                            █││
+│                      ││└─────────────────────────────┘└─────────────────────────────┘│
+│                      ││┌ rows written/s ──────── 824 ┐┌ pages read/s ────────── 412 ┐│
+│                      │││                            █││                            █││
+│                      ││└─────────────────────────────┘└─────────────────────────────┘│
+│                      ││┌ rows/s by operation ───────────────────────────────────────┐│
+│                      │││8.2 k                                                      ⠈││
+│                      │││                                                            ││
+│                      │││                                                            ││
+│                      │││                                                            ││
+│                      │││0                                                          ⢠││
+│                      │││■ read 8.2 k  ■ inserted 412  ■ updated 206  ■ deleted 206  ││
+│                      ││└────────────────────────────────────────────────────────────┘│
+│                      ││┌ sessions by state ───────────────────────────────────── 45 ┐│
+│                      │││37                                                         ⠉││
+│                      │││                                                            ││
+│                      │││                                                            ││
+│                      │││                                                            ││
+│                      │││0                                                          ⠭││
+│                      │││■ running 1  ■ waiting 1  ■ idle in tx 1  ■ idle 37         ││
+│                      │││■ background 5                                              ││
+│                      ││└────────────────────────────────────────────────────────────┘│
+│                      ││ Longest running                                              │
+│                      ││ pid    user     state       query age statement              │
+│                      ││ 3907   bob      idle in tr… 12m00s    SELECT * FROM orders … │
+│                      ││ 4211   alice    active      3m10s     UPDATE orders SET sta… │
+│                      ││ 4302   web      active      400ms     SELECT count(*) FROM … │
+│                      ││                                                              │
+│                      ││                                                              │
+│                      ││                                                              │
+╰──────────────────────╯╰──────────────────────────────────────────────────────────────╯
+ local-pg │           │ v view · Enter detail · c cancel · X end · / filter · a idle EN

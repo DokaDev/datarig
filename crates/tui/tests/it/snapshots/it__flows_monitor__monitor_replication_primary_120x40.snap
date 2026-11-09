@@ -1,0 +1,44 @@
+---
+source: crates/tui/tests/it/flows_monitor.rs
+expression: "h.screen(120, 40)"
+---
+╭ Explorer ──────────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                                                     
+│  ＋ New connection         │╭ Monitor: local-pg ─────────────────────────────────────────────────────────────────────╮
+│▾ Connections 1             ││ PostgreSQL 17.11 · primary · up 41d3h · max 200 connections                            │
+│  ▾ ●   local-pg            ││ 1 Overview  2 Sessions  3 Locks  4 Replication                                every 2s │
+│    ▾ datarig default       ││ Role: primary · log at 0/3C84EC8                                                       │
+│      ▸ analytics           ││                                                                                        │
+│      ▸ public              ││ Replicas (2)                                                                           │
+│      ▸ shop                ││   walreceiver · 10.0.0.21 · streaming · async                                          │
+│                            ││     replayed all that was written · lag write 1ms, flush 1ms, replay 1ms               │
+│                            ││       last reply 1s ago                                                                │
+│                            ││   reporting · 10.0.0.22 · streaming · async                                            │
+│                            ││     3 MB not replayed yet · lag replay 4s · last reply 1s ago                          │
+│                            ││                                                                                        │
+│                            ││ Slots (3)                                                                              │
+│                            ││   standby1 · physical · in use by 87 · keeps 0 B of log · wal_status reserved          │
+│                            ││   zz_idle_slot · physical · not in use · keeps 13 MB of log · wal_status reserved      │
+│                            ││   zz_logical · logical (pgoutput, shop) · not in use · keeps 12 MB of log              │
+│                            ││     wal_status reserved                                                                │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯
+ local-pg │     │ v view · Enter detail · c cancel · X end · / filter · a idle · p pause · : commands · Space ? help EN

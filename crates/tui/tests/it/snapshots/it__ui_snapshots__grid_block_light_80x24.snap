@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/ui_snapshots.rs
+expression: t.backend()
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▾ datarig default ││  2▎SELECT * FROM shop.users WHERE id <= 8;  ✓ 8 rows…│"
+"│      ▸ analytics     ││  3                                                   │"
+"│      ▸ public        ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│      ▸ shop          ││  5 FROM shop.orders o                                │"
+"│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Results · 8 rows ────────────╮╭ Cell [Row] · I ──────╮"
+"│                      ││ [Result 1]  Chart  Messages  ││ id: 3                │"
+"│                      ││   d   │ name                 ││ name: 張志明         │" Hidden by multi-width symbols: [(65, " "), (67, " "), (69, " ")]
+"│                      ││   nt8 │ text                 ││ nickname: 👨‍👩‍👧‍👦 family  │" Hidden by multi-width symbols: [(69, " ")]
+"│                      ││ 1   1 │ 陳大文               ││ address: NULL        │" Hidden by multi-width symbols: [(35, " "), (37, " "), (39, " ")]
+"│                      ││ 2   2 │ 林美玲               ││ profile: {"vip": tru…│" Hidden by multi-width symbols: [(35, " "), (37, " "), (39, " ")]
+"│                      ││ 3   3 │ 張志明               ││                      │" Hidden by multi-width symbols: [(35, " "), (37, " "), (39, " ")]
+"│                      ││ 4   4 │ Emoji テスト         ││                      │" Hidden by multi-width symbols: [(41, " "), (43, " "), (45, " ")]
+"│                      ││ 5   5 │ 山田太郎             ││                      │" Hidden by multi-width symbols: [(35, " "), (37, " "), (39, " "), (41, " ")]
+"│                      ││ 6   6 │ 王小明               ││                      │" Hidden by multi-width symbols: [(35, " "), (37, " "), (39, " ")]
+"│                      ││ 7   7 │ Plain ASCII User     ││                      │"
+"│                      ││ 8   8 │ 全角 ＡＢＣ 半角 ｱｲｳ ││                      │" Hidden by multi-width symbols: [(35, " "), (37, " "), (40, " "), (42, " "), (44, " "), (47, " "), (49, " ")]
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" NORMAL  local-pg │ 2 rows × 2 columns · 4 distinct values · NULL 0          EN "

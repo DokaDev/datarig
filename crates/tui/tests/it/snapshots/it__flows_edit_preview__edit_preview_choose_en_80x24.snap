@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_edit_preview.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432 · stg            │"
+"│  ▾ ●   local-pg      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▾ datarig default ││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
+"│      ▸ analytics     ││  3                                                   │"
+"│ ╭ Apply changes: shop.users ───────────────────────────────────────────────╮ │"
+"│ │ 1 update                                                                 │ │"
+"│▾│                                                                          │ │"
+"│ │ ! row 1 · matches 3 identical rows                                       │─╯"
+"│ │   [1] just one   [a] all 3                                               │─╮"
+"│ │                                                                          │ │"
+"│ │ Runs in one transaction; commits at the end.                             │ │"
+"│ │                                                                          │ │"
+"│ │                        [ Cancel ]     Copy SQL                           │ │"
+"│ ╰─────────────────── y apply · c copy SQL · j/k scroll · Enter/Esc cancel ─╯ │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" NORMAL  local-pg · stg │ 2 rows · 0ms                                       EN "

@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_monitor.rs
+expression: "h.screen(80, 24)"
+---
+╭ Explorer ────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                   
+│  ＋ New connection   │╭ Monitor: local-pg ───────────────────────────────────╮
+│▾ Connections 1       ││ PostgreSQL 17.11 · primary · up 41d3h · max 200 con… │
+│  ▾ ●   local-pg      ││ 1  2 Sessions  3  4                         every 2s │
+│    ▾ datarig default ││ 4 of 4 sessions · 37 idle not listed                 │
+│      ▸ analytics     ││─ Session ────────────────────────────────────────────│
+│      ▸ public        ││ session            4211                              │
+│      ▸ shop          ││ kind               client                            │
+│                      ││ user               alice                             │
+│                      ││ database           shop                              │
+│                      ││ application        app                               │
+│                      ││ client             10.0.0.7:51022                    │
+│                      ││ state              active                            │
+│                      ││ wait               Lock:transactionid                │
+│                      ││ transaction        open for 3m11s                    │
+│                      ││ statement started  3m10s ago                         │
+│                      ││ in this state      for 3m10s                         │
+│                      ││                                                      │
+│                      ││ Read again by its session and its start (to the      │
+│                      ││ second): a new run of the same statement cannot be   │
+│                      ││ told apart                                           │
+│                      ││ Laid out for reading (f: as sent)                    │
+╰──────────────────────╯╰──────────────────────────────────────────────────────╯
+ local-pg │   │ v view · Enter detail · c cancel · X end · / filter · a idle EN

@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│ ╭ Edit connection: local-pg ───────────────────────────────────────────────╮─╮"
+"│▾│  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
+"│ │                                                                          │e│"
+"│ │ SSL mode          disable ▾   ←/→ change · Enter list                    │ │"
+"│ │ CA file                                     PEM; checks the server's ce… │ │"
+"│ │ Client cert                                 PEM, sent when the server a… │ │"
+"│ │ Client k╭ SSL mode ────────────────────────────────────────────╮hrase    │ │"
+"│ │ Statemen│ › type to filter                                     │ransact… │ │"
+"│ │ Environm│                                                      │ rules   │ │"
+"│ │ Startup │ disable      not encrypted                           │         │ │"
+"│ │ Own star│ prefer       encrypted if the server offers it       │       × │ │"
+"│ │         │ require      encrypted, certificate not checked (wi… │er adds  │ │"
+"│ │ Colour  │ verify-ca    encrypted, signed by the CA file (need… │ list    │t│"
+"│ │ Icon    │ verify-full  CA-signed, and the host name matches    │         │ │"
+"│ │ Folder  ╰──────────────── Enter pick · ↑↓ select · Esc cancel ─╯         │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │t│"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc canc… ─╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │ Connected to local-pg                                    EN "

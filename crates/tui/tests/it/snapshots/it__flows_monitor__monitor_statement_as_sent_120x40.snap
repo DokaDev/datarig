@@ -1,0 +1,44 @@
+---
+source: crates/tui/tests/it/flows_monitor.rs
+expression: screen
+---
+╭ Explorer ──────────────────╮ 1 console 1 ×  2 Monitor: local-pg ×                                                     
+│  ＋ New connection         │╭ Monitor: local-pg ─────────────────────────────────────────────────────────────────────╮
+│▾ Connections 1             ││ PostgreSQL 17.11 · primary · up 41d3h · max 200 connections                            │
+│  ▾ ●   local-pg            ││ 1 Overview  2 Sessions  3 Locks  4 Replication                                every 2s │
+│    ▾ datarig default       ││ 4 of 4 sessions · 37 idle not listed                                                   │
+│      ▸ analytics           ││ pid     user       database   state        wait           query age ▼ statement        │
+│      ▸ public              ││ 3907    bob        shop       idle in tra…                12m00s      SELECT * FROM o… │
+│      ▸ shop                ││ 4211    alice      shop       active       Lock:transact… 3m10s       UPDATE orders S… │
+│                            ││ 4302    web        shop       active                      400ms       SELECT o.id, o.… │
+│                            ││ 4400    datarig    shop       this monitor                0ms         SELECT … FROM p… │
+│                            ││                                                                                        │
+│                            ││─ Session ──────────────────────────────────────────────────────────────────────────────│
+│                            ││ session            4302                                                                │
+│                            ││ kind               client                                                              │
+│                            ││ user               web                                                                 │
+│                            ││ database           shop                                                                │
+│                            ││ application        app                                                                 │
+│                            ││ client             10.0.0.7:51022                                                      │
+│                            ││ state              active                                                              │
+│                            ││ transaction        open for 1s                                                         │
+│                            ││ statement started  400ms ago                                                           │
+│                            ││ in this state      for 400ms                                                           │
+│                            ││                                                                                        │
+│                            ││ As the server sent it (f: laid out)                                                    │
+│                            ││ SELECT o.id, o.status, sum(i.qty * i.price) AS total FROM orders o JOIN order_items i  │
+│                            ││ ON i.order_id = o.id WHERE o.status = 'paid' GROUP BY o.id, o.status ORDER BY total DE │
+│                            ││ SC LIMIT 20                                                                            │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+│                            ││                                                                                        │
+╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯
+ local-pg │ Statements as the server sent them        │ v view · Enter detail · c cancel · X end · / filter · a idle EN

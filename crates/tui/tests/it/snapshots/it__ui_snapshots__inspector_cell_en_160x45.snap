@@ -1,0 +1,49 @@
+---
+source: crates/tui/tests/it/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          "
+"│  ＋ New connection                   │╭ Query · console 1 ───────────────────────────────────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1                       ││ local-pg / datarig  127.0.0.1:55432                                                      Space c s switch connection │"
+"│  ▾ ●   local-pg                      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor                                                         │" Hidden by multi-width symbols: [(57, " ")]
+"│    ▾ datarig default                 ││  2▎SELECT * FROM shop.users WHERE id <= 8;  ✓ 8 rows · 12ms · 14:03                                                  │"
+"│      ▸ analytics                     ││  3                                                                                                                   │"
+"│      ▸ public                        ││  4 SELECT u.name, o.status, o.total_amount                                                                           │"
+"│      ▸ shop                          ││  5 FROM shop.orders o                                                                                                │"
+"│                                      ││  6 JOIN shop.users u ON u.id = o.user_id                                                                             │"
+"│                                      ││  7 WHERE o.status = 'paid';                                                                                          │"
+"│                                      ││  8                                                                                                                   │"
+"│                                      ││  9 SELECT * FROM analytics.events;                                                                                   │"
+"│                                      ││ 10                                                                                                                   │"
+"│                                      ││ 11 SELECT * FROM analytics.events ORDER BY created_at DESC;                                                          │"
+"│                                      ││ 12                                                                                                                   │"
+"│                                      ││ 13 SELECT analytics.slow(30);                                                                                        │"
+"│                                      ││ 14                                                                                                                   │"
+"│                                      │╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
+"│                                      │╭ Results · 8 rows ────────────────────────────────────────────────────╮╭ [Cell] Row · I ──────────────────────────────╮"
+"│                                      ││ [Result 1]  Chart  Messages                                      H/L ││ profile                                      │"
+"│                                      ││                              │ profile                               ││ jsonb · 37 characters                        │"
+"│                                      ││                              │ jsonb                                 ││                                              │"
+"│                                      ││ 1 義路五段7號, 台北101大樓 … │ {"lang": "ko", "tags": ["dev", "db"]} ││ {                                            │" Hidden by multi-width symbols: [(45, " "), (47, " "), (49, " "), (51, " "), (54, " "), (58, " "), (60, " "), (65, " "), (67, " ")]
+"│                                      ││ 2 功二路 55號                │ {}                                    ││   "lang": "ko",                              │" Hidden by multi-width symbols: [(45, " "), (47, " "), (49, " "), (54, " ")]
+"│                                      ││ 3                            │ {"vip": true, "level": 7}             ││   "tags": [                                  │"
+"│                                      ││ 4 もろまち 242 🏝️            │ {"flags": ["🇰🇷", "🇺🇸"]}               ││     "dev",                                   │" Hidden by multi-width symbols: [(45, " "), (47, " "), (49, " "), (51, " "), (58, " "), (86, " "), (92, " ")]
+"│                                      ││ 5 玄坂1-2-3                  │ {"lang": "ja"}                        ││     "db"                                     │" Hidden by multi-width symbols: [(45, " "), (47, " ")]
+"│                                      ││ 6 关村大街1号                │ {"lang": "zh"}                        ││   ]                                          │" Hidden by multi-width symbols: [(45, " "), (47, " "), (49, " "), (51, " "), (54, " ")]
+"│                                      ││ 7 tre Pkwy, Mountain View, … │ {"lang": "en"}                        ││ }                                            │"
+"│                                      ││ 8 (tab inside)               │ {"multiline": true}                   ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯"
+" NORMAL  local-pg │ 8 rows · 12ms        │ Enter view cell · n next page · y copy · v select · i detail · I cell/row · Esc back · Tab next pane · : commands EN "

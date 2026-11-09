@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_edit_preview.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432 · stg            │"
+"│  ▾ ●   local-pg      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▾ datarig default ││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
+"│      ▸ analytics     ││  3                                                   │"
+"│      ▸ public        ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│      ▸ shop          ││  5 FROM shop.orders o                                │"
+"│▾ Environments 1      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
+"│    ○ Default rules (…│╰──────────────────────────────────────────────────────╯"
+"│  ▸ ○ stg  asks befor…│╭ Results · 3 rows ────────────────────────────────────╮"
+"│                      ││ Result 1  [Changes 1]  Chart  Messages           H/L │"
+"│                      ││ Changes: Result 1 · shop.users  1 insert · 1 problem │"
+"│                      ││ + new 1  DEFAULT ×3                                  │"
+"│                      ││   ! email is NOT NULL and has no default; give it a  │"
+"│                      ││     value                                            │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││ ──────────────────────────────────────────────────── │"
+"│                      ││ Runs in one transaction; commits at the end.         │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · stg │ Can't apply: 1 problem (see Changes)               EN "
