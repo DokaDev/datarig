@@ -78,6 +78,37 @@ fn explains_and_chains_are_read_from_the_text() {
     assert!(!chains("COMMIT", MODE));
 }
 
+/// What sets the next transaction's level alone is read as setting its own settings; the
+/// session's own level is what the server reports.
+#[test]
+fn a_level_for_the_next_transaction_only_is_read_from_the_text() {
+    for sql in [
+        "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        "set transaction read only, isolation level read committed",
+        "SET @@transaction_isolation = 'SERIALIZABLE'",
+        "SET @@`transaction_isolation` = 'SERIALIZABLE'",
+        "SET @@`tx_isolation`='SERIALIZABLE'",
+        "SET @@tx_isolation = 'SERIALIZABLE'",
+        "SET time_zone = '+00:00', @@transaction_isolation = 'READ-COMMITTED'",
+    ] {
+        assert_eq!(sets_next_transaction(sql, MODE), SetsNext::Yes, "{sql}");
+    }
+    for sql in [
+        "SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        "SET LOCAL TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        "SET GLOBAL TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        "SET SESSION transaction_isolation = 'SERIALIZABLE'",
+        "SET transaction_isolation = 'SERIALIZABLE'",
+        "SET @@SESSION.transaction_isolation = 'SERIALIZABLE'",
+        "SET @@session.`transaction_isolation` = 'SERIALIZABLE'",
+        "SET @@global.tx_isolation = 'SERIALIZABLE'",
+        "SELECT @@transaction_isolation",
+        "SELECT 'SET TRANSACTION ISOLATION LEVEL SERIALIZABLE'",
+    ] {
+        assert_eq!(sets_next_transaction(sql, MODE), SetsNext::No, "{sql}");
+    }
+}
+
 #[test]
 fn names_are_split_unquoted_and_lower_case() {
     assert_eq!(name_parts("shop.users"), ["shop", "users"]);

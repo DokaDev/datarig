@@ -245,6 +245,10 @@ async fn run_session(
     if let Some(values) = tracked.values().filter(|_| role == SessionRole::Query) {
         let _ = events.send(DbEvent::SessionValues(values));
     }
+    // The level its transactions run in (`None`: the server did not report it).
+    if role == SessionRole::Query {
+        let _ = events.send(DbEvent::Isolation(tracked.isolation()));
+    }
     // A session in a database of its own says where it works (it opened there: the server
     // refuses a database that does not exist or the user may not use).
     if let Some(db) = database.filter(|_| !opts.context.is_default()) {

@@ -10,9 +10,9 @@ pub mod structure;
 pub use keys::{KeyCatalog, KeyMarks};
 pub use protocol::{
     AppliedStep, ApplyError, ApplyFailure, ApplyTx, ArrayElement, CancelFailure, Cell, ColumnMeta, ColumnOrigin,
-    DbCommand, DbError, DbEvent, EXPORT_BATCH_BYTES, ExportBatch, ExportGuard, ExportRead, ExportSink, Outcome,
-    OwnSession, PagingMode, ReadIn, SchemaObjects, ServerEnd, ServerMessage, SessionValues, StatementInfo, TxOutcome,
-    TxRule, TxStep, ValueKind,
+    DbCommand, DbError, DbEvent, EXPORT_BATCH_BYTES, ExportBatch, ExportGuard, ExportRead, ExportSink, Isolation,
+    Outcome, OwnSession, PagingMode, ReadIn, SchemaObjects, ServerEnd, ServerMessage, SessionValues, StatementInfo,
+    TxOutcome, TxRule, TxStep, ValueKind,
 };
 
 use crate::profile::ConnectionConfig;

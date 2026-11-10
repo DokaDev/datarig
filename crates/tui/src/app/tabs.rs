@@ -317,6 +317,9 @@ pub struct TabSession {
     /// The session runs without autocommit (the user's `SET autocommit = 0`, MySQL:
     /// `DbEvent::Autocommit`).
     pub autocommit_off: bool,
+    /// The isolation level the session's next transaction runs in, as its driver reports it
+    /// (MySQL: `DbEvent::Isolation`); `None`: not known.
+    pub isolation: Option<datarig_core::driver::Isolation>,
     /// The last run went to the session with `TxRule::Manual`.
     pub sent_manual: bool,
     /// A procedure that commits by itself failed as the first statement of a transaction
@@ -408,6 +411,7 @@ impl TabSession {
             ending: None,
             last_end: None,
             autocommit_off: false,
+            isolation: None,
             sent_manual: false,
             outside_offer: None,
             own: OwnAsk::NotAsked,
@@ -871,6 +875,7 @@ impl Tab {
         self.applied_gone(datarig_i18n::Label::EditAppliedGone);
         self.exec.ending = None;
         self.exec.autocommit_off = false;
+        self.exec.isolation = None;
         self.exec.outside_offer = None;
     }
 

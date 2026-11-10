@@ -98,8 +98,8 @@ use crate::link::{Closed, Link, Next};
 use crate::session::{Gate, Killer, Server, Tracked, my_error};
 use crate::values::{column_meta, display};
 use datarig_core::driver::{
-    CancelFailure, CancelMark, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, OwnSession, PagingMode,
-    ServerEnd, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep,
+    CancelFailure, CancelMark, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Isolation, Outcome, OwnSession,
+    PagingMode, ServerEnd, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep,
 };
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
@@ -196,6 +196,8 @@ struct State {
     mode: MySqlMode,
     /// What the values are read in, as last reported to the app (`DbEvent::SessionValues`).
     values: Option<SessionValues>,
+    /// The isolation level as last reported to the app (`DbEvent::Isolation`).
+    isolation: Option<Isolation>,
     /// The statement running now may run code of the server's (a procedure, a stored function):
     /// what that code changes in the session (`SET time_zone`, `SET NAMES`, `SET sql_mode`) the
     /// server does not report, so the session asks once it ended ([`after`]).
@@ -425,12 +427,14 @@ pub(crate) async fn query_loop(
     };
     let mode = tracked.mode(&server);
     let values = tracked.values();
+    let isolation = tracked.isolation();
     // The limit the session set up with is its own, not the user's.
     let tracked = Tracked { select_limit: None, ..tracked };
     let mut s = State {
         tracked,
         mode,
         values,
+        isolation,
         routine: false,
         sets_next: SetsNext::No,
         limit: Limit { current: select_limit, user: None },
@@ -1252,6 +1256,8 @@ async fn after(
     if sets_next == SetsNext::Maybe || (ok && sets_next == SetsNext::Yes) {
         s.tracked.next_once = true;
     }
+    // The next transaction's level is not known while it has settings of its own.
+    report_isolation(env, s);
     let writable = status.is_some_and(|st| {
         st.contains(StatusFlags::SERVER_STATUS_IN_TRANS) && !st.contains(StatusFlags::SERVER_STATUS_IN_TRANS_READONLY)
     });
@@ -1710,6 +1716,15 @@ fn locking(sql: &str, mode: MySqlMode) -> bool {
         || w.windows(4).any(|p| p == ["LOCK", "IN", "SHARE", "MODE"])
 }
 
+/// Tell the app the level the session's next transaction runs in, when that changed.
+fn report_isolation(env: &Env<'_>, s: &mut State) {
+    let isolation = s.tracked.isolation();
+    if isolation != s.isolation {
+        s.isolation = isolation;
+        let _ = env.events.send(DbEvent::Isolation(isolation));
+    }
+}
+
 /// Whether `sql` ends the transaction and opens another at once: `COMMIT`/`ROLLBACK … AND CHAIN`
 /// (not `AND NO CHAIN`).
 fn chains(sql: &str, mode: MySqlMode) -> bool {
@@ -2150,5 +2165,6 @@ fn forget_after_code(env: &Env<'_>, s: &mut State) {
         if let Some(v) = s.values.clone() {
             let _ = env.events.send(DbEvent::SessionValues(v));
         }
+        report_isolation(env, s);
     }
 }

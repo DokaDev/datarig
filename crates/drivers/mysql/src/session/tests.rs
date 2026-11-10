@@ -82,11 +82,13 @@ fn one_set_sets_the_session_up_by_role() {
     assert_eq!(
         init_sql(&MYSQL_84, &q),
         "SET NAMES utf8mb4, SESSION session_track_system_variables = \
-         'sql_mode,transaction_read_only,sql_select_limit,time_zone,character_set_results,character_set_connection', \
+         'sql_mode,transaction_read_only,sql_select_limit,time_zone,character_set_results,character_set_connection,\
+         transaction_isolation', \
          SESSION session_track_schema = ON, SESSION sql_mode = @@SESSION.sql_mode, \
          SESSION time_zone = @@SESSION.time_zone, \
          SESSION character_set_results = @@SESSION.character_set_results, \
-         SESSION character_set_connection = @@SESSION.character_set_connection, SESSION autocommit = 1, \
+         SESSION character_set_connection = @@SESSION.character_set_connection, \
+         SESSION transaction_isolation = @@SESSION.transaction_isolation, SESSION autocommit = 1, \
          SESSION sql_select_limit = 501"
     );
     let ro = Settings { read_only: true, ..q };
@@ -104,6 +106,10 @@ fn one_set_sets_the_session_up_by_role() {
     let maria = Server { version: (10, 11, 6), mariadb: true };
     let sql = init_sql(&maria, &meta);
     assert!(sql.contains("'sql_mode,tx_read_only,sql_select_limit,time_zone,"), "{sql}");
+    assert!(sql.contains(",tx_isolation', ") && sql.contains("SESSION tx_isolation = @@SESSION.tx_isolation"), "{sql}");
+    let maria_11 = Server { version: (11, 4, 2), mariadb: true };
+    let newer = init_sql(&maria_11, &meta);
+    assert!(newer.contains("SESSION transaction_isolation = @@SESSION.transaction_isolation"), "{newer}");
     assert!(
         sql.ends_with(
             ", SESSION max_statement_time = 10, SESSION sql_quote_show_create = 1, SESSION tx_read_only = ON"
@@ -516,6 +522,54 @@ fn asked_values_replace_the_old_and_a_failed_question_forgets_them() {
     assert_eq!(t.values().map(|v| (v.time_zone, v.charset)), Some(("+09:00".into(), "latin1".into())));
     t.forget_values();
     assert_eq!(t.values().map(|v| (v.time_zone, v.charset)), Some(("unknown".into(), "unknown".into())));
+}
+
+/// The isolation level is known only as the server reported it, by either of its names, and
+/// not while the next transaction may run in another.
+#[test]
+fn the_isolation_level_is_known_only_as_reported() {
+    use datarig_core::driver::Isolation;
+    let mut t = Tracked::default();
+    assert_eq!(t.isolation(), None, "nothing reported: not known");
+    t.isolation = Some("REPEATABLE-READ".into());
+    assert_eq!(t.isolation(), Some(Isolation::RepeatableRead));
+    t.isolation = Some("serializable".into());
+    assert_eq!(t.isolation(), Some(Isolation::Serializable));
+    t.isolation = Some("READ-COMMITTED".into());
+    assert_eq!(t.isolation(), Some(Isolation::ReadCommitted));
+    t.isolation = Some("READ-UNCOMMITTED".into());
+    assert_eq!(t.isolation(), Some(Isolation::ReadUncommitted));
+    t.isolation = Some("SNAPSHOT".into());
+    assert_eq!(t.isolation(), None, "a level it does not know is not known");
+    t.isolation = Some("REPEATABLE-READ".into());
+    t.next_once = true;
+    assert_eq!(t.isolation(), None, "the next transaction may run in another level");
+}
+
+/// Both names of the variable are read: MySQL's (and MariaDB's from 11.1) and older MariaDB's.
+#[test]
+fn isolation_names_by_server() {
+    assert_eq!(MYSQL_84.isolation_var(), "transaction_isolation");
+    assert_eq!(Server { version: (10, 11, 6), mariadb: true }.isolation_var(), "tx_isolation");
+    assert_eq!(Server { version: (11, 1, 0), mariadb: true }.isolation_var(), "transaction_isolation");
+}
+
+/// Which levels a server's names stand for.
+#[test]
+fn isolation_levels_by_name() {
+    use datarig_core::driver::Isolation;
+    for (name, want) in [
+        ("REPEATABLE-READ", Some(Isolation::RepeatableRead)),
+        ("REPEATABLE READ", Some(Isolation::RepeatableRead)),
+        ("read-committed", Some(Isolation::ReadCommitted)),
+        ("READ-UNCOMMITTED", Some(Isolation::ReadUncommitted)),
+        ("SERIALIZABLE", Some(Isolation::Serializable)),
+        ("", None),
+        ("READ", None),
+        ("SERIALIZABLE READ", None),
+    ] {
+        assert_eq!(Isolation::from_name(name), want, "{name:?}");
+    }
 }
 
 /// A killer of connection 7 over `route` (nothing is sent before it is asked to).

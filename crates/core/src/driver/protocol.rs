@@ -1022,6 +1022,31 @@ impl SessionValues {
     }
 }
 
+/// The isolation level a session's transactions run in (MySQL's `transaction_isolation`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Isolation {
+    ReadUncommitted,
+    ReadCommitted,
+    RepeatableRead,
+    Serializable,
+}
+
+impl Isolation {
+    /// The level a server names (`REPEATABLE-READ`, `READ COMMITTED`, any case); `None` for a
+    /// name it is not.
+    pub fn from_name(name: &str) -> Option<Self> {
+        let words: Vec<String> =
+            name.split(['-', ' ', '_']).filter(|w| !w.is_empty()).map(str::to_ascii_uppercase).collect();
+        match words.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+            ["READ", "UNCOMMITTED"] => Some(Isolation::ReadUncommitted),
+            ["READ", "COMMITTED"] => Some(Isolation::ReadCommitted),
+            ["REPEATABLE", "READ"] => Some(Isolation::RepeatableRead),
+            ["SERIALIZABLE"] => Some(Isolation::Serializable),
+            _ => None,
+        }
+    }
+}
+
 /// What a result's values were read in: the session's values when its first page came, kept
 /// for its later pages.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1244,6 +1269,12 @@ pub enum DbEvent {
     /// then opens a transaction (`Block`, `TxOpen`) that stays open until it is committed or
     /// rolled back.
     Autocommit(bool),
+    /// The isolation level the query session's transactions run in, where the driver follows it
+    /// (MySQL): sent right after `Connected`, and again when it changes (a `SET SESSION
+    /// TRANSACTION ISOLATION LEVEL` the user ran). `None`: not known (the server did not report
+    /// it, or the next transaction may run in another level the session does not report: a
+    /// `SET TRANSACTION` without `SESSION`, or code of the server's that ran).
+    Isolation(Option<Isolation>),
     /// The connection ended after `Connected` without the UI closing the session (network,
     /// server restart, `pg_terminate_backend`). Sent once, after the `Failed` of a statement
     /// that was running. Never sent before `Connected` (that is `ConnectFailed`) nor after

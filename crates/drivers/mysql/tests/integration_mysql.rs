@@ -275,6 +275,52 @@ async fn a_query_session_says_how_its_text_is_read() {
     probe.disconnect().await.unwrap();
 }
 
+/// The isolation level a run's events report last, if any: `Some(None)` for "not known".
+fn isolation_of(evs: &[DbEvent]) -> Option<Option<datarig_core::driver::Isolation>> {
+    evs.iter().rev().find_map(|e| match e {
+        DbEvent::Isolation(i) => Some(*i),
+        _ => None,
+    })
+}
+
+/// A query session says the level its transactions run in when it connects and when the user
+/// sets the session's; a level set for the next transaction only is not known until a
+/// transaction starts or ends.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_query_session_reports_its_isolation_level() {
+    use datarig_core::driver::Isolation;
+    let test = "a_query_session_reports_its_isolation_level";
+    let Some(url) = my_url(test) else { return };
+    let mut c = Conn::start(&url, SessionRole::Query, false, test);
+    let DbEvent::Isolation(first) = c.wait(|e| matches!(e, DbEvent::Isolation(_)), 15).await else { unreachable!() };
+    let mut probe = side(&url).await;
+    let level: String = probe.query_first("SELECT @@SESSION.transaction_isolation").await.unwrap().unwrap();
+    probe.disconnect().await.unwrap();
+    assert_eq!(first, Isolation::from_name(&level), "at connect: {level}");
+    assert!(first.is_some(), "the dev server reports it");
+    let evs = c.run(1, &["SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE"]).await;
+    assert_eq!(isolation_of(&evs), Some(Some(Isolation::Serializable)), "{evs:?}");
+    let evs = c.run(2, &["SET autocommit = 0"]).await;
+    assert!(evs.iter().any(|e| matches!(e, DbEvent::Autocommit(false))), "{evs:?}");
+    assert_eq!(isolation_of(&evs), None, "autocommit leaves the level as it is: {evs:?}");
+    let evs = c.run(3, &["SET autocommit = 1"]).await;
+    assert!(evs.iter().any(|e| matches!(e, DbEvent::Autocommit(true))), "{evs:?}");
+    // The next transaction only: the session's level stays, the next one's is not known.
+    let evs = c.run(4, &["SET TRANSACTION ISOLATION LEVEL READ COMMITTED"]).await;
+    assert_eq!(isolation_of(&evs), Some(None), "{evs:?}");
+    c.ok(5, "START TRANSACTION").await;
+    let evs = c.run(6, &["COMMIT"]).await;
+    assert_eq!(isolation_of(&evs), Some(Some(Isolation::Serializable)), "that transaction ended: {evs:?}");
+    let evs = c.run(7, &["SET @@transaction_isolation = 'READ-COMMITTED'"]).await;
+    assert_eq!(isolation_of(&evs), Some(None), "{evs:?}");
+    // Setting the session's level clears the pending one on the server, but the session keeps
+    // it not known until a transaction starts or ends.
+    let evs = c.run(8, &["SET SESSION transaction_isolation = 'READ-COMMITTED'"]).await;
+    assert_eq!(isolation_of(&evs), None, "still not known: {evs:?}");
+    let evs = c.run(9, &["COMMIT"]).await;
+    assert_eq!(isolation_of(&evs), Some(Some(Isolation::ReadCommitted)), "the session's again: {evs:?}");
+}
+
 /// The metadata session says the mode a new session starts in, then lists the databases, reads
 /// the catalog and the key metadata as soon as it connects.
 #[tokio::test(flavor = "multi_thread")]

@@ -464,6 +464,10 @@ impl App {
                 t.exec.autocommit_off = !on;
                 None
             }
+            DbEvent::Isolation(level) => {
+                t.exec.isolation = level;
+                None
+            }
             // The server dropped the schema's startup option (a pooler): the driver sets the
             // path in each transaction instead. Said in the run's Messages.
             DbEvent::SessionPerTransaction { .. } => {

@@ -5,7 +5,9 @@
 
 use crate::route::{Route, io_fault};
 use crate::wire::{TlsFailed, Wire};
-use datarig_core::driver::{CancelFailure, DbError, EditFormat, ExplainFormat, MySqlEdit, SessionRole, SessionValues};
+use datarig_core::driver::{
+    CancelFailure, DbError, EditFormat, ExplainFormat, Isolation, MySqlEdit, SessionRole, SessionValues,
+};
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn::{self, Scheme};
@@ -190,6 +192,12 @@ impl Server {
         if self.mariadb && self.version < (11, 1, 0) { "tx_read_only" } else { "transaction_read_only" }
     }
 
+    /// The session variable of its transactions' isolation level (`tx_isolation` before
+    /// MariaDB 11.1).
+    pub(crate) fn isolation_var(&self) -> &'static str {
+        if self.mariadb && self.version < (11, 1, 0) { "tx_isolation" } else { "transaction_isolation" }
+    }
+
     /// The `SET` assignment that stops a `SELECT` after `ms` milliseconds.
     fn timeout(&self, ms: u64) -> String {
         if self.mariadb {
@@ -235,8 +243,9 @@ pub(crate) const MONITOR_TIMEOUT_MS: u64 = 5_000;
 
 /// The session's settings, as one `SET` (one round trip): the client character set `utf8mb4`
 /// (the server's default collation for it), the session state the server reports in its OK
-/// packets (the sql mode, read-only and `sql_select_limit`, the current database), the sql
-/// mode assigned to itself so the server reports it at once, and by role:
+/// packets (the sql mode, read-only and `sql_select_limit`, the current database, the
+/// isolation level), the sql mode and the isolation level assigned to themselves so the server
+/// reports them at once, and by role:
 ///
 /// * the query session: `sql_select_limit` (results stop after a page and one row more, so a
 ///   statement ends, and with it every metadata lock it took), and the profile's lock wait
@@ -254,11 +263,12 @@ pub(crate) const MONITOR_TIMEOUT_MS: u64 = 5_000;
 /// * a read-only profile's sessions: read-only.
 pub(crate) fn init_sql(server: &Server, s: &Settings) -> String {
     let ro = server.read_only_var();
+    let iso = server.isolation_var();
     let mut parts = vec![
         "NAMES utf8mb4".to_string(),
         format!(
             "SESSION session_track_system_variables = \
-             'sql_mode,{ro},sql_select_limit,time_zone,character_set_results,character_set_connection'"
+             'sql_mode,{ro},sql_select_limit,time_zone,character_set_results,character_set_connection,{iso}'"
         ),
         "SESSION session_track_schema = ON".to_string(),
         "SESSION sql_mode = @@SESSION.sql_mode".to_string(),
@@ -267,6 +277,9 @@ pub(crate) fn init_sql(server: &Server, s: &Settings) -> String {
         "SESSION time_zone = @@SESSION.time_zone".to_string(),
         "SESSION character_set_results = @@SESSION.character_set_results".to_string(),
         "SESSION character_set_connection = @@SESSION.character_set_connection".to_string(),
+        // The isolation level, reported back as it is: only a level the server reports is
+        // known, as only a server that reports it says when it changes.
+        format!("SESSION {iso} = @@SESSION.{iso}"),
         // Each statement outside a transaction commits on its own, whatever the server's default
         // (`init_connect`, a global `autocommit = 0`): the session follows the flag from here.
         "SESSION autocommit = 1".to_string(),
@@ -325,6 +338,8 @@ pub(crate) struct Tracked {
     /// use them up, so it is refused while this holds. Cleared only when a transaction starts
     /// or ends (a statement in autocommit may use them up too, which is not known).
     pub(crate) next_once: bool,
+    /// `transaction_isolation` (`tx_isolation`), the session's level.
+    pub(crate) isolation: Option<String>,
 }
 
 impl Tracked {
@@ -345,6 +360,9 @@ impl Tracked {
                             "time_zone" => self.time_zone = Some(value),
                             "character_set_results" => self.results_charset = Some(value),
                             "character_set_connection" => self.connection_charset = Some(value),
+                            "transaction_isolation" | "tx_isolation" => {
+                                self.isolation = Some(value);
+                            }
                             _ => {}
                         }
                     }
@@ -368,6 +386,16 @@ impl Tracked {
         let connection = named(self.connection_charset.as_deref()?);
         let charset = if results == "utf8mb4" && connection != "utf8mb4" { connection } else { results };
         Some(SessionValues { time_zone: self.time_zone.clone()?, charset })
+    }
+
+    /// The level the session's next transaction runs in: the session's as the server reported
+    /// it, `None` when it did not or the next one has settings of its own, or may have
+    /// ([`Tracked::next_once`]).
+    pub(crate) fn isolation(&self) -> Option<Isolation> {
+        if self.next_once {
+            return None;
+        }
+        Isolation::from_name(self.isolation.as_deref()?)
     }
 
     /// What [`ASK_VALUES`] answered.

@@ -312,6 +312,7 @@ impl App {
             | DbEvent::TxEnded { .. }
             | DbEvent::TxClosedBy { .. }
             | DbEvent::Autocommit(_)
+            | DbEvent::Isolation(_)
             | DbEvent::Applied { .. } => {}
             DbEvent::Ddl { id: request, result } => self.ddl_answered(id, None, request, result),
             DbEvent::TableKeys { id: request, result } => self.order_keys_answered(id, None, request, result),
