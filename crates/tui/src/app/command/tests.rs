@@ -74,7 +74,7 @@ fn set_accepts_known_settings_and_values_only() {
     );
     assert_eq!(
         setting_keys(),
-        "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|editor.cursor_shape|editor.clipboard|theme|editor.format_keyword_case|editor.format_indent|editor.auto_pairs|editor.soft_tab_backspace|editor.run_hints|secrets.macos_keychain_access|explorer.size_heat|ui.yank_flash|ui.changes_view|edit.paste_null|ui.tips|ui.background|idle_disconnect|lock_wait|editor.completion_delay_ms|updates.check|updates.whats_new|copy_format|monitor.interval"
+        "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|editor.cursor_shape|editor.clipboard|theme|editor.format_keyword_case|editor.format_indent|editor.auto_pairs|editor.soft_tab_backspace|editor.run_hints|secrets.macos_keychain_access|explorer.size_heat|ui.yank_flash|history.filters|ui.changes_view|edit.paste_null|ui.tips|ui.background|idle_disconnect|lock_wait|editor.completion_delay_ms|updates.check|updates.whats_new|copy_format|monitor.interval"
     );
     use datarig_core::config::MonitorInterval;
     assert_eq!(set("monitor.interval=10s"), Ok(Setting::MonitorInterval(MonitorInterval::S10)));
@@ -168,18 +168,18 @@ fn completes_setting_keys_then_values() {
     let got = |arg: &str| complete_arg(ArgKind::Setting, arg, &[]);
     assert_eq!(
         got(""),
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
             .map(ArgCompletion::SetKey)
     );
-    assert_eq!(got("c"), [3, 5, 6, 27].map(ArgCompletion::SetKey));
+    assert_eq!(got("c"), [3, 5, 6, 28].map(ArgCompletion::SetKey));
     assert_eq!(got("commands.position="), [ArgCompletion::SetValue(3, 0), ArgCompletion::SetValue(3, 1)]);
     assert_eq!(got("sec"), [ArgCompletion::SetKey(2), ArgCompletion::SetKey(15)]);
     assert_eq!(got("secrets.macos_keychain_access=s"), [ArgCompletion::SetValue(15, 1)], "the security tool");
     assert_eq!(got("secrets.default_source=p"), [ArgCompletion::SetValue(2, 5)]);
     assert_eq!(got("icons=o"), [ArgCompletion::SetValue(1, 0), ArgCompletion::SetValue(1, 1)]);
     assert_eq!(set("icons=OFF"), Ok(Setting::Icons(datarig_core::config::IconsSetting::Off)));
-    assert_eq!(got("l"), [ArgCompletion::SetKey(0), ArgCompletion::SetKey(23)], "language, lock_wait");
-    assert_eq!(got("ed"), [7, 8, 10, 11, 12, 13, 14, 19, 24].map(ArgCompletion::SetKey));
+    assert_eq!(got("l"), [ArgCompletion::SetKey(0), ArgCompletion::SetKey(24)], "language, lock_wait");
+    assert_eq!(got("ed"), [7, 8, 10, 11, 12, 13, 14, 20, 25].map(ArgCompletion::SetKey));
     assert_eq!(set("editor.format_indent=2"), Ok(Setting::FormatIndent(datarig_core::config::FormatIndent::Two)));
     assert_eq!(got("editor.cursor_shape="), [ArgCompletion::SetValue(7, 0), ArgCompletion::SetValue(7, 1)]);
     assert!(got("x").is_empty());

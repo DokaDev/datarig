@@ -1,0 +1,496 @@
+//! The filter history of table tabs ([`datarig_core::filter_history`]): the filters and orders
+//! each table ran, kept in `<state>/filter-history.toml` (mode 0600 on Unix, never in the
+//! workspace file) unless `[history] filters = "off"`.
+//!
+//! A query is kept once the server answered it with its first page: a run refused, cancelled,
+//! failed or answered after a newer one is not (sent is not succeeded). The file is read the
+//! first time something is kept or listed, not at launch. A file that is there but cannot be
+//! used turns the history off for the session: said once, never taken for an empty history and
+//! never written over (a clear is refused, naming the file). Without a state directory the
+//! history lives in memory only; a second instance (the state directory is the first one's)
+//! reads the file and keeps what it adds in memory.
+//!
+//! Writes go to one thread of their own, the latest text only: a second after the last change
+//! (a run again only moves its entry to the front), at once for a clear, and before the app
+//! quits (waited for at most [`QUIT_FLUSH`]). The texts never go to the error log, only what
+//! failed and the file's path.
+//!
+//! `Ctrl+R` in the filter line (`Space r H`) lists the table's entries, the most recent first,
+//! with both texts under the list; one picked fills the condition and the order (the limit
+//! stays), and nothing runs until `Enter`, which checks it as any text typed.
+
+use super::*;
+use crate::text::{sanitize_cell, width, wrap_words};
+use crate::widgets::list_picker::{Entry as Item, ListPicker, Outcome};
+use datarig_core::config::FilterHistory;
+use datarig_core::fault::{Fault, FaultKind};
+use datarig_core::filter_history::{self as fh, Entry, History, TableKey, Unreadable};
+use datarig_core::query::{KeyOrigin, Query};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
+
+/// A change is written this long after the last one.
+pub(super) const DEBOUNCE: Duration = Duration::from_secs(1);
+
+/// How long quitting waits for the last write.
+pub(super) const QUIT_FLUSH: Duration = Duration::from_secs(1);
+
+/// The lines of a picked entry's texts under the list.
+pub(crate) const PREVIEW_LINES: u16 = 6;
+
+/// The writer wrote the text of change `seq` (and every one before it), or failed to.
+#[derive(Debug)]
+pub struct Saved {
+    seq: u64,
+    path: PathBuf,
+    result: std::io::Result<()>,
+}
+
+/// Where the writer's answers go.
+#[derive(Clone)]
+enum Out {
+    App(tokio::sync::mpsc::UnboundedSender<AppEvent>),
+    Local(mpsc::Sender<AppEvent>),
+}
+
+impl Out {
+    fn send(&self, ev: AppEvent) {
+        match self {
+            Out::App(tx) => {
+                let _ = tx.send(ev);
+            }
+            Out::Local(tx) => {
+                let _ = tx.send(ev);
+            }
+        }
+    }
+}
+
+/// A job of the writer.
+enum Job {
+    Write {
+        path: PathBuf,
+        text: String,
+        seq: u64,
+        out: Out,
+    },
+    /// Answered once every write sent before it is done.
+    Flush(mpsc::Sender<()>),
+}
+
+/// The history as far as the app knows it.
+#[derive(Default)]
+enum Held {
+    /// The file was not read yet.
+    #[default]
+    NotLoaded,
+    Loaded(History),
+    /// The file is there but cannot be used (why): off for the session.
+    Off(Msg),
+}
+
+/// The filter history's state in the app.
+#[derive(Default)]
+pub struct FilterHistoryState {
+    held: Held,
+    /// Changed since the last write was sent.
+    dirty: bool,
+    /// When the next write is due.
+    due: Option<Instant>,
+    writer: Option<mpsc::Sender<Job>>,
+    /// The number of the last write sent.
+    seq: u64,
+    /// What to say once write `seq` (or a later one) is done (a clear).
+    announce: Option<(u64, Notice)>,
+    /// The table a clear asks about (`None`: every table).
+    clear_asked: Option<TableKey>,
+    /// Headless: the writer's answers, and how many are still to come.
+    local: Option<(mpsc::Sender<AppEvent>, mpsc::Receiver<AppEvent>)>,
+    pending: Arc<AtomicUsize>,
+}
+
+impl App {
+    /// The table of table tab `id` as the history names it: its profile, its database by name
+    /// (the profile's own too, so a tab in it with or without its name is the same table), its
+    /// schema and name. `None` without a profile.
+    pub(super) fn filter_history_key(&self, id: TabId) -> Option<TableKey> {
+        let t = self.tabs.get(id).filter(|t| t.is_table())?;
+        let table = t.doc.table.as_ref()?;
+        let profile = t.profile?;
+        let database = t.context.database.clone().unwrap_or_else(|| self.own_database(profile));
+        Some(TableKey { profile, database, schema: table.schema.clone(), table: table.name.clone() })
+    }
+
+    /// When the next write of the history is due.
+    pub(super) fn filter_history_due(&self) -> Option<Instant> {
+        self.filter_history.due
+    }
+
+    /// The history, read from the file the first time. A file that cannot be used turns it
+    /// off for the session, says so once and records what failed (never its text) in the error
+    /// log: `Err(why)` from then on.
+    fn filter_history_held(&mut self) -> Result<&mut History, Msg> {
+        if matches!(self.filter_history.held, Held::NotLoaded) {
+            let read = match self.paths.filter_history_file() {
+                None => Ok(History::default()),
+                Some(path) => fh::load(&path).map_err(|u| (u, path)),
+            };
+            self.filter_history.held = match read {
+                Ok(h) => Held::Loaded(h),
+                Err((u, path)) => {
+                    let why = self.filter_history_unreadable(u, &path);
+                    let error = self.i18n.msg(&why).to_string();
+                    self.flash(Notice::new(Msg::TableHistoryUnavailable { error }, Level::Warning));
+                    Held::Off(why)
+                }
+            };
+        }
+        match &mut self.filter_history.held {
+            Held::Loaded(h) => Ok(h),
+            Held::Off(why) => Err(why.clone()),
+            Held::NotLoaded => Err(Label::FaultOther.into()),
+        }
+    }
+
+    /// Why the file at `path` cannot be used, in words; the error log gets what failed and the
+    /// path.
+    fn filter_history_unreadable(&self, u: Unreadable, path: &std::path::Path) -> Msg {
+        let at = path.display().to_string();
+        let (fault, why) = match u {
+            Unreadable::Io(kind) => {
+                let f = Fault::new(FaultKind::Io(kind), at);
+                let why = fault_reason(&f);
+                (f, why)
+            }
+            Unreadable::Malformed { line } => {
+                let f = Fault::new(FaultKind::Toml { line }, at);
+                let why = fault_reason(&f);
+                (f, why)
+            }
+            Unreadable::TooLarge => {
+                (Fault::other(format!("{at}: larger than the read limit")), Label::TableHistoryTooLarge.into())
+            }
+            Unreadable::Newer(version) => (
+                Fault::other(format!("{at}: version {version}")),
+                Msg::TableHistoryNewer { version: version.to_string() },
+            ),
+        };
+        datarig_core::fault::ErrorLog::new(self.paths.errors_log()).record("filter_history.unreadable", &fault);
+        why
+    }
+
+    /// The server answered query `q` of table tab `id` with its rows: its filter and order go
+    /// to the front of the table's history (nothing with the history off, without a filter or
+    /// an order, or when the file cannot be used).
+    pub(super) fn filter_history_record(&mut self, id: TabId, q: &Query) {
+        if self.prefs.filter_history == FilterHistory::Off {
+            return;
+        }
+        let Some(key) = self.filter_history_key(id) else { return };
+        let filter = table_query::filter_text(q).unwrap_or_default().to_string();
+        let keys: Vec<_> = q.order.iter().filter(|k| k.origin == KeyOrigin::User).cloned().collect();
+        let order = datarig_core::query::order_text(&keys, self.tab_dialect(id));
+        if filter.trim().is_empty() && order.trim().is_empty() {
+            return;
+        }
+        let now = unix_secs(self.wall_now());
+        let Ok(h) = self.filter_history_held() else { return };
+        if h.record(key, &filter, &order, now) {
+            self.filter_history.dirty = true;
+            self.filter_history.due = Some(self.now() + DEBOUNCE);
+        }
+    }
+
+    /// The timer: the write that is due.
+    pub(super) fn filter_history_tick(&mut self, now: Instant) {
+        if self.filter_history.due.is_some_and(|d| now >= d) {
+            self.filter_history_send();
+        }
+    }
+
+    /// Send the history's text to the writer when it changed. Nothing is written without a
+    /// state directory this instance may write, nor when the file could not be used.
+    fn filter_history_send(&mut self) {
+        self.filter_history.due = None;
+        if !self.filter_history.dirty {
+            return;
+        }
+        self.filter_history.dirty = false;
+        let Held::Loaded(h) = &self.filter_history.held else { return };
+        let Some(path) = self.state_dir().map(|s| s.join(fh::FILE)) else { return };
+        let text = h.to_toml();
+        let out = self.filter_history_out();
+        self.filter_history.seq += 1;
+        let seq = self.filter_history.seq;
+        let writer = self.filter_history.writer.get_or_insert_with(spawn_writer);
+        if let Err(mpsc::SendError(Job::Write { out, path, .. })) = writer.send(Job::Write { path, text, seq, out }) {
+            // The writer is gone (it cannot start): said as a failed write.
+            self.filter_history.writer = None;
+            let error = std::io::Error::other("the writer thread is not running");
+            out.send(AppEvent::FilterHistory(Saved { seq, path, result: Err(error) }));
+        }
+    }
+
+    /// Where the writer answers; headless, one more answer is waited for.
+    fn filter_history_out(&mut self) -> Out {
+        match &self.tx {
+            Some(tx) => Out::App(tx.clone()),
+            None => {
+                self.filter_history.pending.fetch_add(1, Ordering::SeqCst);
+                Out::Local(self.filter_history.local.get_or_insert_with(mpsc::channel).0.clone())
+            }
+        }
+    }
+
+    /// The writer's answer: a failure is said and recorded (with the path, never the texts);
+    /// what a clear waits for is said once its write is done.
+    pub(super) fn on_filter_history_saved(&mut self, s: Saved) {
+        match s.result {
+            Ok(()) => {
+                if let Some((_, n)) = self.filter_history.announce.take_if(|(seq, _)| s.seq >= *seq) {
+                    self.flash(n);
+                }
+            }
+            Err(e) => {
+                if self.filter_history.announce.as_ref().is_some_and(|(seq, _)| s.seq >= *seq) {
+                    self.filter_history.announce = None;
+                }
+                let error = self.fault_text("filter_history.save_failed", &Fault::io_at(&e, &s.path));
+                self.flash(Notice::new(Msg::TableHistorySaveFailed { error }, Level::Error));
+            }
+        }
+    }
+
+    /// Headless (without the event loop's channel): hand the writer's answers to the app,
+    /// waiting up to `wait` for each one still to come. How many came.
+    pub fn pump_filter_history(&mut self, wait: Duration) -> usize {
+        let deadline = Instant::now() + wait;
+        let mut n = 0;
+        while self.filter_history.pending.load(Ordering::SeqCst) > 0 {
+            let Some((_, rx)) = &self.filter_history.local else { break };
+            let left = deadline.saturating_duration_since(Instant::now());
+            let Ok(ev) = rx.recv_timeout(left) else { break };
+            self.filter_history.pending.fetch_sub(1, Ordering::SeqCst);
+            n += 1;
+            self.on_app_event(ev);
+        }
+        n
+    }
+
+    /// Write what changed now and wait (at most [`QUIT_FLUSH`]) until the writer is done
+    /// (quitting; the tests). Headless, its answers are handed to the app.
+    pub fn flush_filter_history(&mut self) {
+        self.filter_history_send();
+        if let Some(w) = &self.filter_history.writer {
+            let (tx, rx) = mpsc::channel();
+            if w.send(Job::Flush(tx)).is_ok() {
+                let _ = rx.recv_timeout(QUIT_FLUSH);
+            }
+        }
+        self.pump_filter_history(Duration::ZERO);
+    }
+
+    /// `Ctrl+R` / `Space r H`: the list of the filters table tab `id`'s table ran before.
+    pub(super) fn open_filter_history(&mut self, id: TabId) {
+        if self.prefs.filter_history == FilterHistory::Off {
+            return self.flash(Notice::new(Label::TableHistoryOff, Level::Info));
+        }
+        let Some(key) = self.filter_history_key(id) else {
+            return self.flash(Notice::new(Label::TableHistoryEmpty, Level::Info));
+        };
+        let was_loaded = !matches!(self.filter_history.held, Held::NotLoaded);
+        let items = match self.filter_history_held() {
+            Ok(h) => h.entries(&key).to_vec(),
+            // Read just now: said already.
+            Err(_) if !was_loaded => return,
+            Err(why) => {
+                let error = self.i18n.msg(&why).to_string();
+                return self.flash(Notice::new(Msg::TableHistoryUnavailable { error }, Level::Warning));
+            }
+        };
+        if items.is_empty() {
+            return self.flash(Notice::new(Label::TableHistoryEmpty, Level::Info));
+        }
+        let now = unix_secs(self.wall_now());
+        let none = self.i18n.label(Label::TableHistoryNoCondition).to_string();
+        let entries = items
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                let label = if e.filter.is_empty() { none.clone() } else { sanitize_cell(&e.filter) };
+                let age = self.age_text(u128::from(now.saturating_sub(e.used).max(0).unsigned_abs()) * 1000);
+                let hint = if e.order.is_empty() {
+                    age
+                } else {
+                    self.i18n.msg(&Msg::TableHistoryHint { order: sanitize_cell(&e.order), age }).to_string()
+                };
+                Item::new(i, label, hint)
+            })
+            .collect();
+        let list = ListPicker::new(entries, None, Some(&0)).with_max_width(100);
+        self.filter_popup_close();
+        self.overlays.close(OverlayKind::WhichKey);
+        self.key_state.clear();
+        self.overlays.push(Overlay::Picker(super::picker::Picker::FilterHistory { tab: id, key, items, list }));
+    }
+
+    /// What the list of a table's filters did: a pick fills the filter line's condition and
+    /// order of that tab (the limit stays), the condition focused; nothing runs. Only while the
+    /// tab is the active one and its table the one listed.
+    pub(super) fn filter_history_picked(&mut self, out: Outcome<usize>) {
+        if out == Outcome::Pending {
+            return;
+        }
+        let picked = match (self.overlays.picker(), out) {
+            (Some(super::picker::Picker::FilterHistory { tab, key, items, .. }), Outcome::Picked(i)) => {
+                items.get(i).map(|e| (*tab, key.clone(), e.clone()))
+            }
+            _ => None,
+        };
+        self.overlays.close(OverlayKind::Picker);
+        let Some((tab, key, e)) = picked else { return };
+        if self.tabs.is_empty() || self.tab().id != tab || self.filter_history_key(tab).as_ref() != Some(&key) {
+            return;
+        }
+        let Some(tq) = self.table_query_mut(tab) else { return };
+        tq.line.where_.set(&e.filter);
+        tq.line.order.set(&e.order);
+        tq.refusal = None;
+        self.filter_line_focus(tab, table_query::Field::Where);
+    }
+
+    /// `:filter history clear` (`id`: the table of that tab) or `:filter history clear all`
+    /// (`None`): asked first, `Enter` cancels.
+    pub(super) fn ask_filter_history_clear(&mut self, id: Option<TabId>) {
+        let key = match id {
+            None => None,
+            Some(id) => match self.filter_history_key(id) {
+                Some(k) => Some(k),
+                None => return self.flash(Notice::new(Label::TableHistoryEmpty, Level::Info)),
+            },
+        };
+        let text = match &key {
+            Some(k) => Msg::TableHistoryClearText { table: format!("{}.{}", k.schema, k.table) },
+            None => Label::TableHistoryClearTextAll.into(),
+        };
+        let all = key.is_none();
+        self.filter_history.clear_asked = key;
+        self.overlays.close(OverlayKind::WhichKey);
+        self.key_state.clear();
+        self.overlays.push(Overlay::Confirm(super::overlay::Confirm {
+            title: Label::TableHistoryClearTitle,
+            text,
+            details: Vec::new(),
+            keys: Label::TableHistoryClearKeys,
+            action: ConfirmAction::FilterHistoryClear { all },
+            folder: None,
+            path: None,
+            tx: None,
+            buttons: Default::default(),
+        }));
+    }
+
+    /// `y` to a clear: the table's entries (`all`: every one) are forgotten and the file
+    /// written at once; said once the write is done. Works with the history off too. A file
+    /// that cannot be used is left as it is and the clear refused, naming it.
+    pub(super) fn filter_history_clear_confirmed(&mut self, all: bool) {
+        let key = self.filter_history.clear_asked.take();
+        if !all && key.is_none() {
+            return;
+        }
+        let h = match self.filter_history_held() {
+            Ok(h) => h,
+            Err(_) => {
+                let path = self.paths.filter_history_file().map(|p| p.display().to_string()).unwrap_or_default();
+                return self.flash(Notice::new(Msg::TableHistoryUnavailablePath { path }, Level::Error));
+            }
+        };
+        let count = match &key {
+            Some(k) if !all => h.clear_table(k),
+            _ => h.clear_all(),
+        } as u64;
+        let done = Notice::new(
+            if all { Msg::TableHistoryClearedAll { count } } else { Msg::TableHistoryCleared { count } },
+            Level::Success,
+        );
+        // Another instance holds the state directory: the file is its to write.
+        if self.read_only && self.paths.state.is_some() {
+            return self.flash(Notice::new(Label::TableHistoryClearedHere, Level::Warning));
+        }
+        if count == 0 || self.state_dir().is_none() {
+            return self.flash(done);
+        }
+        self.filter_history.dirty = true;
+        self.filter_history_send();
+        self.filter_history.announce = Some((self.filter_history.seq, done));
+    }
+}
+
+/// The lines under the list for entry `e`, `w` columns wide: `WHERE …` and `ORDER BY …`
+/// wrapped at words, at most [`PREVIEW_LINES`], the last one cut with `…` when there is more.
+pub(crate) fn preview(e: &Entry, w: usize) -> Vec<Line<'static>> {
+    let th = crate::theme::cur();
+    let (kw, text) = (Style::new().fg(th.accent).add_modifier(Modifier::BOLD), Style::new().fg(th.fg));
+    let max = usize::from(PREVIEW_LINES);
+    // (the keyword when the line starts with it, the line)
+    let mut lines: Vec<(Option<&'static str>, String)> = Vec::new();
+    for (word, part) in [("WHERE", &e.filter), ("ORDER BY", &e.order)] {
+        if part.is_empty() {
+            continue;
+        }
+        for (i, l) in wrap_words(&format!("{word} {}", sanitize_cell(part)), w).into_iter().enumerate() {
+            lines.push(((i == 0 && l.starts_with(word)).then_some(word), l));
+        }
+    }
+    if lines.len() > max {
+        lines.truncate(max);
+        let (_, last) = &mut lines[max - 1];
+        let more = format!("{last}…");
+        *last = if width(&more) > w { crate::text::fit(&more, w, crate::text::Align::Left) } else { more };
+    }
+    lines
+        .into_iter()
+        .map(|(word, l)| match word {
+            Some(word) => Line::from(vec![Span::styled(word, kw), Span::styled(l[word.len()..].to_string(), text)]),
+            None => Line::from(Span::styled(l, text)),
+        })
+        .collect()
+}
+
+/// `t` in Unix seconds (before 1970: 0).
+fn unix_secs(t: std::time::SystemTime) -> i64 {
+    t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+/// The writer thread: each write replaces the file with the latest text sent (writes waiting
+/// behind it are skipped for it), then the flushes waiting are answered.
+fn spawn_writer() -> mpsc::Sender<Job> {
+    let (tx, rx) = mpsc::channel::<Job>();
+    // Not started: the receiver went with it, and the first send says so.
+    let _ = std::thread::Builder::new().name("datarig-filter-history".into()).spawn(move || {
+        while let Ok(first) = rx.recv() {
+            let mut jobs = vec![first];
+            jobs.extend(rx.try_iter());
+            let mut flushes = Vec::new();
+            let mut latest = None;
+            for j in jobs {
+                match j {
+                    Job::Write { path, text, seq, out } => latest = Some((path, text, seq, out)),
+                    Job::Flush(done) => flushes.push(done),
+                }
+            }
+            if let Some((path, text, seq, out)) = latest {
+                let result = fh::write(&path, &text);
+                out.send(AppEvent::FilterHistory(Saved { seq, path, result }));
+            }
+            for f in flushes {
+                let _ = f.send(());
+            }
+        }
+    });
+    tx
+}

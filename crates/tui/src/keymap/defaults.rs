@@ -467,6 +467,7 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Nav, "space r S", "table.sort.add"),
     (Grid, "F", "table.filter.by_value"),
     (Nav, "space r F", "table.filter.by_value"),
+    (Nav, "space r H", "table.filter.history"),
     (Grid, "L", "results.tab.next"),
     (Grid, "H", "results.tab.prev"),
     (Nav, "space r ]", "results.tab.next"),
@@ -631,6 +632,7 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (VimInsert, "f4", "editor.complete"),
     // the filter line of a table tab
     (FilterLine, "ctrl+space", "editor.complete"),
+    (FilterLine, "ctrl+r", "table.filter.history"),
 ];
 
 /// Every vim command key, including those the editor does not implement yet.

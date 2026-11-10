@@ -185,6 +185,9 @@ pub enum ConfirmAction {
     /// SERIALIZABLE, or a level not known, without autocommit or in a transaction): the query
     /// waits in the tab's state. Cancel is the default.
     TableReadLocks(super::TabId),
+    /// Forget the filter history of a table (`all`: of every table); the table is the one
+    /// asked about, kept with the history. Cancel is the default.
+    FilterHistoryClear { all: bool },
 }
 
 /// A yes/no question: `y` yes, `n`/`Esc` no; `Enter` no when the answer would lose something
@@ -254,7 +257,8 @@ impl Confirm {
             | ConfirmAction::DeleteScriptFolder
             | ConfirmAction::DeleteTunnel(_)
             | ConfirmAction::DeleteEnvironment(_)
-            | ConfirmAction::DeleteSession(_) => (Label::DialogButtonCancel, Label::DialogButtonDelete),
+            | ConfirmAction::DeleteSession(_)
+            | ConfirmAction::FilterHistoryClear { .. } => (Label::DialogButtonCancel, Label::DialogButtonDelete),
             ConfirmAction::SetConnection(_) | ConfirmAction::SetContext(_) => {
                 (Label::DialogButtonKeep, Label::DialogButtonSwitch)
             }

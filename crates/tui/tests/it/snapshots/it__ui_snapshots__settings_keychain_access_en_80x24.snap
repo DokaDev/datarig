@@ -4,7 +4,7 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│ ╭ Settings ────────────────────────────────────────────────────────────────╮─╮"
-"│▾│   Flash copied cells        ‹ on            ›  On, copied cells flash b… │ │"
+"│▾│   Filter history            ‹ on            ›  On, each table keeps its… │ │"
 "│ │   Changes tab view          ‹ list          ›  List, one line per chang… │e│"
 "│ │   Paste NULL token          ‹ \N            ›  \N, as both servers' dum… │ │"
 "│ │ Clipboard                                                                │ │"

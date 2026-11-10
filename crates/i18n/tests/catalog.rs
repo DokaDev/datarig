@@ -508,6 +508,8 @@ const SAME_IN_KO: &[&str] = &[
     "table.filter.by_value.is_not_null",
     "table.filter.by_value.in",
     "table.filter.by_value.not_in",
+    // A filter history entry's order: SQL's keyword, the order's text and an age in words.
+    "table.history.hint",
 ];
 
 #[test]

@@ -98,6 +98,7 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::ChangesView(_)
         | Setting::Background(_)
         | Setting::PasteNull(_)
+        | Setting::FilterHistory(_)
         | Setting::WhatsNew(_)
         | Setting::UpdateCheck(_)
         | Setting::MonitorInterval(_)
@@ -688,13 +689,27 @@ impl App {
                 self.orderby_command(arg)?;
             }
             (command::Command::Filter, _) => {
-                // Said on the command line, which stays open, when the tab is not a table tab.
-                self.table_command_tab("filter")?;
-                if !arg.trim().eq_ignore_ascii_case("clear") {
-                    return err(Msg::Label(Label::CommandsErrorFilterUsage));
+                let words: Vec<String> = arg.split_whitespace().map(str::to_lowercase).collect();
+                let words: Vec<&str> = words.iter().map(String::as_str).collect();
+                // Every table's history: from any tab.
+                if words == ["history", "clear", "all"] {
+                    self.overlays.close(OverlayKind::Commands);
+                    self.ask_filter_history_clear(None);
+                    return Ok(());
                 }
-                self.overlays.close(OverlayKind::Commands);
-                self.filter_command()?;
+                // Said on the command line, which stays open, when the tab is not a table tab.
+                let id = self.table_command_tab("filter")?;
+                match words.as_slice() {
+                    ["clear"] => {
+                        self.overlays.close(OverlayKind::Commands);
+                        self.filter_command()?;
+                    }
+                    ["history", "clear"] => {
+                        self.overlays.close(OverlayKind::Commands);
+                        self.ask_filter_history_clear(Some(id));
+                    }
+                    _ => return err(Msg::Label(Label::CommandsErrorFilterUsage)),
+                }
             }
             (command::Command::Monitor, _) => {
                 self.overlays.close(OverlayKind::Commands);
@@ -993,6 +1008,7 @@ impl App {
             }
             Setting::Background(b) => self.set_ui_background(s, b),
             Setting::PasteNull(n) => self.set_prefs(s, |x| x.paste_null = n),
+            Setting::FilterHistory(h) => self.set_prefs(s, |x| x.filter_history = h),
             Setting::WhatsNew(w) => self.set_prefs(s, |x| x.whats_new = w),
             Setting::UpdateCheck(c) => self.set_prefs(s, |x| x.update_check = c),
             Setting::MonitorInterval(i) => self.set_prefs(s, |x| x.monitor_interval = i),

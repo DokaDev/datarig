@@ -50,6 +50,13 @@ pub enum Picker {
         cells: Vec<(super::edit::RowAt, usize)>,
         list: ListPicker<datarig_core::edit::Value>,
     },
+    /// The filters table tab `tab` ran before on table `key` (`items`), by index.
+    FilterHistory {
+        tab: TabId,
+        key: datarig_core::filter_history::TableKey,
+        items: Vec<datarig_core::filter_history::Entry>,
+        list: ListPicker<usize>,
+    },
 }
 
 /// `$body` with the list of whichever picker `$p` is, as `$list`.
@@ -63,6 +70,7 @@ macro_rules! with_list {
             Picker::SessionTest { $list, .. } => $body,
             Picker::Session { $list, .. } => $body,
             Picker::CellValue { $list, .. } => $body,
+            Picker::FilterHistory { $list, .. } => $body,
         }
     };
 }
@@ -102,6 +110,7 @@ impl Picker {
             Picker::SessionTest { .. } => Label::TestSessionPick,
             Picker::Session { field, .. } => field.label(),
             Picker::CellValue { .. } => Label::EditPickTitle,
+            Picker::FilterHistory { .. } => Label::TableHistoryTitle,
         }
     }
 
@@ -204,6 +213,10 @@ impl App {
                 let out = list.key(&key, repeat);
                 self.cell_value_picked(out);
             }
+            Some(Picker::FilterHistory { list, .. }) => {
+                let out = list.key(&key, repeat);
+                self.filter_history_picked(out);
+            }
             None => {}
         }
     }
@@ -246,6 +259,10 @@ impl App {
             Some(Picker::CellValue { list, .. }) => {
                 let out = list.mouse(&m, now);
                 self.cell_value_picked(out);
+            }
+            Some(Picker::FilterHistory { list, .. }) => {
+                let out = list.mouse(&m, now);
+                self.filter_history_picked(out);
             }
             None => {}
         }

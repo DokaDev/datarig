@@ -589,6 +589,7 @@ impl App {
             ConfirmAction::MonitorAction { tab, .. } => self.monitor_confirmed(tab),
             ConfirmAction::FilterCalls(tab) => self.filter_calls_confirmed(tab),
             ConfirmAction::TableReadLocks(tab) => self.table_locks_confirmed(tab),
+            ConfirmAction::FilterHistoryClear { all } => self.filter_history_clear_confirmed(all),
             ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
         }
     }
@@ -618,6 +619,8 @@ impl App {
         self.quitting = None;
         self.usage_at_quit();
         self.save_workspace();
+        // The filter history held back by its debounce, written before the process goes.
+        self.flush_filter_history();
         // Exports end their files (a partial file that reads) before the process goes.
         self.end_exports_for_quit();
         self.close_sessions();

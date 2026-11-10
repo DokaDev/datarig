@@ -1515,6 +1515,12 @@ impl App {
                 self.overlays.close(OverlayKind::Picker);
             }
         }
+        // The filter history of a table goes with its tab, and when the tab's table changed.
+        if let Some(Picker::FilterHistory { tab, key, .. }) = self.overlays.picker()
+            && (active != Some(*tab) || self.filter_history_key(*tab).as_ref() != Some(key))
+        {
+            self.overlays.close(OverlayKind::Picker);
+        }
         self.sweep_edit_preview();
         self.sweep_status_ask();
         self.sweep_changes();

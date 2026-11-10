@@ -6,7 +6,7 @@ expression: backend
 "│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1       ││ local-my / shop.users        ││ id: 0                │"
 "│  ▾ ●   local-my      ││ [Result 1]  Chart  Messages  ││                      │"
-"│    ▾ shop            ││ WHERE  f filter · s sort   ⟳ ││                      │"
+"│    ▾ shop            ││ WHERE  f filter · s sort…  ⟳ ││                      │"
 "│      ▾ Tables        ││   │ id ^v                    ││                      │"
 "│        ▸ users       ││   │ int8                     ││                      │"
 "│         ╭ Run a read that locks rows? ─────────────────────────────╮         │"

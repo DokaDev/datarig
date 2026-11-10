@@ -41,7 +41,7 @@ environment:
 | `COLORTERM` | `truecolor` or `24bit`: the terminal draws 24-bit colours, and the themes' tints are drawn as they are. |
 | `TERM` | A name with `256color` in it (such as `xterm-256color`), and `COLORTERM` not saying 24-bit: a terminal of 256 colours, where the cursor and selection tints that the palette would draw as their background get a palette colour of their own. |
 | `DATARIG_DATA_DIR` | The data directory (saved queries, datarig's own `known_hosts`), over every other rule. |
-| `DATARIG_STATE_DIR` | The state directory (restored tabs, console buffers, one-time notices, the log of deleted passwords, the keychain offer's answer, what the tips remember), over every other rule. |
+| `DATARIG_STATE_DIR` | The state directory (restored tabs, console buffers, one-time notices, the log of deleted passwords, the keychain offer's answer, what the tips remember, the filter history of table tabs), over every other rule. |
 | `XDG_DATA_HOME` | The data directory is `$XDG_DATA_HOME/datarig` when it is set, on every OS. Otherwise `~/.local/share/datarig` (Linux and other Unix), `~/Library/Application Support/datarig` (macOS) or `%APPDATA%\datarig` (Windows). |
 | `XDG_STATE_HOME` | The state directory is `$XDG_STATE_HOME/datarig` when it is set, on every OS. Otherwise `~/.local/state/datarig`, `~/Library/Application Support/datarig/state` or `%LOCALAPPDATA%\datarig`. |
 | `APPDATA` | Windows: the data directory's default is `%APPDATA%\datarig`. |

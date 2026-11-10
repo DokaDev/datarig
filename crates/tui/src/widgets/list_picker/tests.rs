@@ -313,3 +313,47 @@ fn buf_crossed(p: &mut ListPicker<u8>, x: u16, y: u16, now: Instant) -> bool {
     p.draw(area, &mut buf, (&title, &footer), ("type to filter", "Nothing matches"), true, now);
     buf[(x, y)].modifier.contains(Modifier::CROSSED_OUT)
 }
+
+/// The preview: a rule under the list, then the lines of the selected entry, as many as kept
+/// for them; it follows the selection, and is empty on the new entry.
+#[test]
+fn the_preview_shows_the_selected_entry_under_the_list() {
+    let mut p = picker();
+    let area = Rect::new(0, 0, 80, 24);
+    let (title, footer) = (Localized::verbatim("SSH tunnel"), Localized::verbatim("Enter pick"));
+    let of = |v: &u8, w: usize| -> Vec<Line<'static>> {
+        assert!(w > 10, "the width inside the box");
+        (0..4).map(|i| Line::from(format!("value {v} line {i}"))).collect()
+    };
+    let screen = |p: &mut ListPicker<u8>| {
+        let mut buf = Buffer::empty(area);
+        p.draw_with_preview(
+            area,
+            &mut buf,
+            (&title, &footer),
+            ("filter", "none"),
+            true,
+            Instant::now(),
+            Some((3, &of)),
+        );
+        (0..24)
+            .map(|y| (0..80).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string())
+            .collect::<Vec<_>>()
+    };
+    let lines = screen(&mut p);
+    let rule = lines.iter().position(|l| l.contains("│────")).expect("a rule");
+    let new = lines.iter().position(|l| l.contains("New SSH tunnel…")).unwrap();
+    assert!(rule > new, "under the list:\n{}", lines.join("\n"));
+    assert!(lines[rule + 1].contains("value 1 line 0"), "{}", lines.join("\n"));
+    assert!(lines[rule + 3].contains("value 1 line 2"));
+    assert!(!lines.iter().any(|l| l.contains("line 3")), "cut to the lines kept");
+    assert_eq!(p.selected_value(), Some(&1));
+    p.key(&k(KeyCode::Down), false);
+    assert!(screen(&mut p)[rule + 1].contains("value 2 line 0"), "it follows the selection");
+    for _ in 0..2 {
+        p.key(&k(KeyCode::Down), false);
+    }
+    assert_eq!(p.selected(), Some(Row::New));
+    assert_eq!(p.selected_value(), None);
+    assert!(!screen(&mut p).iter().any(|l| l.contains("value")), "nothing for the new entry");
+}

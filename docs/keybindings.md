@@ -176,6 +176,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r s` | `table.sort.cycle` | Table → sort by this column only (up, down, off) |  |
 | `Space r S` | `table.sort.add` | Table → sort by this column too (up, down, off) |  |
 | `Space r F` | `table.filter.by_value` | Table → filter by value |  |
+| `Space r H` | `table.filter.history` | Table → earlier filters of this table |  |
 | `Space r ]` | `results.tab.next` | Result tabs → next |  |
 | `Space r [` | `results.tab.prev` | Result tabs → previous |  |
 | `Space m m` | `monitor.open` | Monitor → the connection's server monitor |  |
@@ -326,11 +327,12 @@ Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U`
 
 ## `grid.filter` [text]
 
-The filter line of a table tab, above the grid (`f` or `Space r f`: the condition, `Space r o`: the order, then `Tab` to the limit): `Enter` (or the run key) applies the condition, the order and the limit and runs the table's query again, `Esc` puts back what is applied, `Tab` and `Shift+Tab` move between the fields, `Ctrl+L` empties the field (applied with `Enter`), `Ctrl+W` deletes the word before the cursor, `Ctrl+U` the text before it. The condition is sent as written (checked first: one condition on this table, no comment, no second statement, no lock, no function known to wait or change anything); the order is a list of columns, each with `ASC` or `DESC` (and on PostgreSQL `NULLS FIRST` or `NULLS LAST`), written back as the app sends it; the limit is a whole number of rows (blank: none). Completion opens as in the editor (`Ctrl+Space` asks for it; a list that opened by itself takes neither `Enter` nor `Tab` until you move in it): the table's columns, operators, functions and the values of an enumerated column inside a literal in the condition; the columns and the directions in the order. A refused part is underlined; where the server says a failed condition is wrong is underlined too, the line marked failed and the rows shown dimmed as an earlier query's. Inside `workspace`.
+The filter line of a table tab, above the grid (`f` or `Space r f`: the condition, `Space r o`: the order, then `Tab` to the limit): `Enter` (or the run key) applies the condition, the order and the limit and runs the table's query again, `Esc` puts back what is applied, `Tab` and `Shift+Tab` move between the fields, `Ctrl+L` empties the field (applied with `Enter`), `Ctrl+W` deletes the word before the cursor, `Ctrl+U` the text before it, `Ctrl+R` lists this table's earlier filters (picked: the condition and the order fill in, nothing runs until `Enter`). The condition is sent as written (checked first: one condition on this table, no comment, no second statement, no lock, no function known to wait or change anything); the order is a list of columns, each with `ASC` or `DESC` (and on PostgreSQL `NULLS FIRST` or `NULLS LAST`), written back as the app sends it; the limit is a whole number of rows (blank: none). Completion opens as in the editor (`Ctrl+Space` asks for it; a list that opened by itself takes neither `Enter` nor `Tab` until you move in it): the table's columns, operators, functions and the values of an enumerated column inside a literal in the condition; the columns and the directions in the order. A refused part is underlined; where the server says a failed condition is wrong is underlined too, the line marked failed and the rows shown dimmed as an earlier query's. Inside `workspace`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|
 | `Ctrl+Space` | `editor.complete` | Show completions |  |
+| `Ctrl+R` | `table.filter.history` | Table → earlier filters of this table |  |
 
 Reserved (filter line): `Esc` `Enter` `Tab` `Shift+Tab` `Ctrl+W` `Ctrl+L`
 
@@ -885,7 +887,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:update` |  | Update: what the update check knows, and how to update |
 | `:where [condition]` |  | Filter the table tab's rows on the server and run it again (:where &lt;condition>; alone: no filter) |
 | `:orderby [column ASC / DESC, …]` |  | Sort the table tab's rows on the server and run it again (:orderby &lt;column> [ASC\|DESC], …; alone: no order) |
-| `:filter clear` |  | Clear the table tab's filter and order and run it again (:filter clear) |
+| `:filter clear` |  | Clear the table tab's filter and order and run it again (:filter clear), or the filter history of its table or of every table (:filter history clear [all]) |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):
 
@@ -909,6 +911,7 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `secrets.macos_keychain_access` | `direct` `security_tool` | macOS keychain access |
 | `explorer.size_heat` | `3` `5` `off` | Explorer: size colours |
 | `ui.yank_flash` | `on` `off` | Flash copied cells |
+| `history.filters` | `on` `off` | Filter history |
 | `ui.changes_view` | `list` `sql` | Changes tab view |
 | `edit.paste_null` | `\N` `NULL` `none` | Paste NULL token |
 | `ui.tips` | `always` `until_used` `off` | Tips |

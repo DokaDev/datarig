@@ -368,7 +368,7 @@ fn the_commands_are_only_for_table_tabs() {
     h.command("filter nonsense");
     assert!(runs(&mut h).is_empty());
     let said = h.app.overlays.command_line().and_then(|c| c.error.as_ref()).map(|n| n.render(&h.app.i18n).to_string());
-    assert_eq!(said.as_deref(), Some("Usage: :filter clear"));
+    assert_eq!(said.as_deref(), Some("Usage: :filter clear | :filter history clear [all]"));
 }
 
 /// `shop.users` filtered on `id > 0`, a first page of rows and more not held (paging past them

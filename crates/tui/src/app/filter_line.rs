@@ -1,7 +1,9 @@
 //! The filter line of a table tab, its fields and keys: `f` (or `Space r f`) edits the
 //! condition, `Space r o` the order, `Space r x` clears the fields and runs the tab again, and
 //! `Space r v` opens the statement in a new console. `s` and `S` (`Space r s`, `Space r S`)
-//! sort by the grid's column ([`App::table_sort`]).
+//! sort by the grid's column ([`App::table_sort`]). `Ctrl+R` in the line (`Space r H` from the
+//! grid) lists the filters this table ran before ([`App::open_filter_history`]): one picked fills
+//! the condition and the order, and runs only with the next `Enter`, checked as any text typed.
 //!
 //! In a field `Enter` (or the run key) applies what the three fields hold (a completion popup takes
 //! `Enter` and `Tab` only once the user turned to it: moved its selection, or asked for it with
@@ -45,6 +47,8 @@ pub enum TableAction {
     SortAdd,
     /// The menu of filters by the value of the cursor's cell or the selection (`F`).
     FilterByValue,
+    /// The filters and orders this table ran before (`Ctrl+R` in the line, `Space r H`).
+    History,
 }
 
 impl App {
@@ -162,13 +166,14 @@ impl App {
             TableAction::SortCycle => self.table_sort(id, self.tab().grid.col, query::SortStep::Only),
             TableAction::SortAdd => self.table_sort(id, self.tab().grid.col, query::SortStep::Add),
             TableAction::FilterByValue => self.filter_by_value(),
+            TableAction::History => self.open_filter_history(id),
         }
     }
 
     /// Give field `f` of table tab `id`'s filter line the keys, the cursor at its end. The line
     /// is drawn over the rows (and the run's messages) only: from the chart, the plan or the
     /// changes, the rows come back first, so the field typed into is the one shown.
-    fn filter_line_focus(&mut self, id: TabId, f: table_query::Field) {
+    pub(super) fn filter_line_focus(&mut self, id: TabId, f: table_query::Field) {
         self.close_search_prompt();
         self.filter_popup_close();
         self.filter_line_follow();
@@ -240,7 +245,7 @@ impl App {
     }
 
     /// The popup of the filter line closes, and no completion is due.
-    fn filter_popup_close(&mut self) {
+    pub(super) fn filter_popup_close(&mut self) {
         let t = self.tab_mut();
         if t.popup.as_ref().is_some_and(|p| matches!(p.owner, PopupOwner::Filter(_))) {
             t.popup = None;

@@ -12,6 +12,9 @@
 //! list came on top), the pointer only highlights the row under it, the wheel moves the
 //! selection and a click outside the list does nothing. An entry that cannot be picked is
 //! listed (struck through) but neither `Enter` nor a click picks it.
+//!
+//! [`ListPicker::draw_with_preview`] keeps a few lines under the list, after a rule, for what
+//! the selected entry holds in full (a label cut to its column).
 
 use crate::app::overlay::Press;
 use crate::text::{Align, fit, width};
@@ -24,7 +27,11 @@ use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Line;
 use std::time::Instant;
+
+/// The lines a preview shows for an entry's value, at a width ([`ListPicker::draw_with_preview`]).
+pub type Preview<'a, T> = dyn Fn(&T, usize) -> Vec<Line<'static>> + 'a;
 
 /// An entry of the list.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,6 +145,14 @@ impl<T: Clone + PartialEq> ListPicker<T> {
     /// The selected row (`None`: nothing is listed).
     pub fn selected(&self) -> Option<Row> {
         self.rows.get(self.selected).copied()
+    }
+
+    /// The value of the selected entry (`None`: nothing, or the new entry, is selected).
+    pub fn selected_value(&self) -> Option<&T> {
+        match self.selected()? {
+            Row::Entry(i) => Some(&self.entries[i].value),
+            Row::New => None,
+        }
     }
 
     /// The row under the pointer.
@@ -281,18 +296,38 @@ impl<T: Clone + PartialEq> ListPicker<T> {
         &mut self,
         area: Rect,
         buf: &mut Buffer,
+        texts: (&Localized, &Localized),
+        notes: (&str, &str),
+        top: bool,
+        now: Instant,
+    ) -> (u16, u16) {
+        self.draw_with_preview(area, buf, texts, notes, top, now, None)
+    }
+
+    /// [`ListPicker::draw`], with `preview` (`Some((lines, of))`): `lines` rows kept under the
+    /// list after a rule, filled by `of` from the selected entry's value and the width there
+    /// (cut to `lines`; empty while no entry is selected).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_with_preview(
+        &mut self,
+        area: Rect,
+        buf: &mut Buffer,
         (title, footer): (&Localized, &Localized),
         (placeholder, none): (&str, &str),
         top: bool,
         now: Instant,
+        preview: Option<(u16, &Preview<'_, T>)>,
     ) -> (u16, u16) {
         let th = theme::cur();
         self.press.drawn(top, now);
         // No entry matches: a line says so above the new entry.
         let note = usize::from(!self.rows.iter().any(|r| matches!(r, Row::Entry(_))));
         let w = area.width.saturating_sub(8).min(self.max_width);
-        let rows = (self.rows.len() + note).clamp(1, (area.height as usize).saturating_sub(6).max(1));
-        let rect = centered(area, w, rows as u16 + 4);
+        // The preview's lines and its rule.
+        let extra = preview.as_ref().map_or(0, |(n, _)| n + 1);
+        let room = (area.height as usize).saturating_sub(6 + usize::from(extra)).max(1);
+        let rows = (self.rows.len() + note).clamp(1, room);
+        let rect = centered(area, w, rows as u16 + 4 + extra);
         let inner = modal(rect, title, footer, buf);
         let iw = inner.width as usize;
         let base = Style::new().bg(th.surface);
@@ -366,6 +401,16 @@ impl<T: Clone + PartialEq> ListPicker<T> {
                     let label = self.new_label.as_deref().unwrap_or_default();
                     put(buf, x, y, label, room(x), Style::new().fg(th.accent).patch(bg));
                 }
+            }
+        }
+        if let Some((n, of)) = preview {
+            let y = inner.y + 2 + rows as u16;
+            let rule = "─".repeat(iw);
+            put(buf, inner.x, y, &rule, iw, base.fg(th.border));
+            let lines = self.selected_value().map(|v| of(v, iw.saturating_sub(2))).unwrap_or_default();
+            for (i, line) in lines.iter().take(usize::from(n)).enumerate() {
+                let line = line.clone().patch_style(base);
+                buf.set_line(inner.x + 1, y + 1 + i as u16, &line, inner.width.saturating_sub(2));
             }
         }
         let input = Rect::new(inner.x + 3, inner.y, inner.width.saturating_sub(4), 1);

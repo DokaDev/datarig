@@ -86,7 +86,8 @@ pub const ENV_VARS: &[(&str, &str)] = &[
     (
         "DATARIG_STATE_DIR",
         "The state directory (restored tabs, console buffers, one-time notices, the log of deleted \
-         passwords, the keychain offer's answer, what the tips remember), over every other rule.",
+         passwords, the keychain offer's answer, what the tips remember, the filter history of \
+         table tabs), over every other rule.",
     ),
     (
         "XDG_DATA_HOME",
