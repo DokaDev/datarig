@@ -186,6 +186,8 @@ pub struct TableQuery {
     locks_asked: Option<(Query, LockState)>,
     /// The session state in which the user let reads that lock rows run in this tab.
     locks_confirmed: Option<LockState>,
+    /// The query to run once the table's keys are read (its order is made total with them).
+    keys_wait: Option<Query>,
     /// The filter line's fields: what the user types, and which field has the focus.
     pub line: crate::widgets::filter_line::LineState,
     /// The table's keys for a total order, as far as read.
@@ -210,6 +212,7 @@ impl TableQuery {
             confirmed: HashSet::new(),
             locks_asked: None,
             locks_confirmed: None,
+            keys_wait: None,
             line: Default::default(),
             order_keys: OrderKeysState::Unknown,
         }
@@ -631,7 +634,17 @@ impl App {
     /// said, kept for the line and nothing is sent); calls of functions whose effects are not
     /// known confirmed first (once per text in the tab); then its statement runs as any run
     /// does ([`App::run_in`]: pending edits asked about, read-only and classifier checks).
-    pub(crate) fn table_run(&mut self, id: TabId, mut q: Query) {
+    pub(crate) fn table_run(&mut self, id: TabId, q: Query) {
+        self.table_run_with(id, q, true);
+    }
+
+    /// [`App::table_run`]; `keys_first`: the tab's first query with an order runs once the
+    /// table's keys are read on the tab's metadata session as it is now (asked for, the
+    /// profile connected first); else it runs with what is known.
+    fn table_run_with(&mut self, id: TabId, mut q: Query, keys_first: bool) {
+        if let Some(tq) = self.table_query_mut(id) {
+            tq.keys_wait = None;
+        }
         if self.tab_busy(id) {
             return self.flash_busy();
         }
@@ -663,6 +676,16 @@ impl App {
                 }
                 Ok(_) => {}
             }
+        }
+        // A query put back in the tab (the workspace restored, a closed tab reopened) runs
+        // before the tab has read anything: its order waits for the keys a tab reads when it
+        // opens, so it is made total as one typed after them.
+        let first = self.table_query(id).is_some_and(|tq| tq.landed.is_none());
+        if keys_first && first && !q.order.is_empty() && self.keys_to_read(id) {
+            if let Some(tq) = self.table_query_mut(id) {
+                tq.keys_wait = Some(q);
+            }
+            return self.tab_status(id, Notice::new(Label::TableOrderKeysFirst, Level::Info));
         }
         let compiled = query::compile(&q, &target);
         let sql = compiled.sql.clone();
@@ -702,7 +725,8 @@ impl App {
     pub(super) fn table_sql_to_open(&mut self, id: TabId, to: OpenIn) -> Option<String> {
         let tq = self.table_query(id)?;
         if let Some(s) = tq.shown_run() {
-            let sql = s.sql.clone();
+            // With its cap written, so that running it reads the rows the tab shows.
+            let sql = self.table_capped_sql(id).unwrap_or_else(|| s.sql.clone());
             if let Err(why) = self.table_recheck(id) {
                 self.tab_status(id, Notice::new(Msg::TableFilterRefused { why }, Level::Warning));
                 return None;
@@ -738,7 +762,7 @@ impl App {
                 Ok(_) => {}
             }
         }
-        Some(query::compile(&q, &target).sql)
+        Some(query::compile_capped(&q, &target).sql)
     }
 
     /// `space r v`: table tab `id`'s statement in a new console, checked first
@@ -800,6 +824,71 @@ impl App {
         Some(KeysOn { profile, database, binding: t.binding, session })
     }
 
+    /// Whether table tab `id`'s keys are to be read before its order runs: not read on its
+    /// metadata session as it is now (nor failed there), and asked for now, or once its
+    /// profile is connected (connecting it first). `false` when they cannot be asked for.
+    fn keys_to_read(&mut self, id: TabId) -> bool {
+        let Some(t) = self.tabs.get(id) else { return false };
+        let Some(pid) = t.profile else { return false };
+        if !self.structure_on(pid) {
+            return false;
+        }
+        let on = self.keys_on(t);
+        let state = t.doc.table_query.as_ref().map(|q| &q.order_keys);
+        if matches!(state, Some(OrderKeysState::Known { on: o, .. } | OrderKeysState::Failed { on: o }) if Some(o) == on.as_ref())
+        {
+            return false;
+        }
+        if !self.conns.get(pid).is_some_and(|c| c.connected) {
+            // Read once the profile is connected ([`App::table_keys_connected`]).
+            if self.conns.get(pid).is_none_or(|c| c.connecting.is_none()) {
+                self.connect(pid);
+            }
+            return true;
+        }
+        self.order_keys_ask(id);
+        let t = self.tabs.get(id);
+        matches!(t.and_then(|t| t.doc.table_query.as_ref()).map(|q| &q.order_keys), Some(OrderKeysState::Asked { .. }))
+    }
+
+    /// Profile `pid` connected: its table tabs that wait for their keys ask for them now (or
+    /// run without them when they cannot be asked for).
+    pub(super) fn table_keys_connected(&mut self, pid: ProfileId) {
+        let waiting: Vec<TabId> = self
+            .tabs
+            .iter()
+            .filter(|t| t.profile == Some(pid) && t.doc.table_query.as_ref().is_some_and(|q| q.keys_wait.is_some()))
+            .map(|t| t.id)
+            .collect();
+        for id in waiting {
+            if self.keys_to_read(id) {
+                continue;
+            }
+            if let Some(q) = self.table_query_mut(id).and_then(|tq| tq.keys_wait.take()) {
+                self.table_run_with(id, q, false);
+            }
+        }
+    }
+
+    /// Profile `pid`'s metadata session (in `database`, `None`: its own) is gone or did not
+    /// open: its table tabs that wait for their keys stop waiting; with `run`, their query
+    /// runs with what is known (else it is left in the line, the failure said by the profile).
+    pub(super) fn table_keys_gone(&mut self, pid: ProfileId, database: Option<&str>, run: bool) {
+        let waiting: Vec<TabId> = self
+            .tabs
+            .iter()
+            .filter(|t| t.profile == Some(pid) && t.context.database.as_deref() == database)
+            .filter(|t| t.doc.table_query.as_ref().is_some_and(|q| q.keys_wait.is_some()))
+            .map(|t| t.id)
+            .collect();
+        for id in waiting {
+            let Some(q) = self.table_query_mut(id).and_then(|tq| tq.keys_wait.take()) else { continue };
+            if run {
+                self.table_run_with(id, q, false);
+            }
+        }
+    }
+
     /// Ask for the keys of table tab `id`'s table that make an order total, with the key-only
     /// catalog read (never the full structure, whose functions open the table): unless they
     /// are read or being read on the session as it is now. Nothing is asked without a metadata
@@ -854,6 +943,16 @@ impl App {
                 tq.order_keys = OrderKeysState::Unknown;
             }
         }
+        // A query waiting for them waits for keys asked for again.
+        let waiting: Vec<TabId> = self
+            .tabs
+            .iter()
+            .filter(|t| t.profile == Some(profile) && t.doc.table_query.as_ref().is_some_and(|q| q.keys_wait.is_some()))
+            .map(|t| t.id)
+            .collect();
+        for id in waiting {
+            self.order_keys_ask(id);
+        }
     }
 
     /// The answer to keys request `request`, from profile `profile`'s metadata session in
@@ -881,6 +980,10 @@ impl App {
                 Ok(keys) => OrderKeysState::Known { on, keys },
                 Err(_) => OrderKeysState::Failed { on },
             };
+        }
+        // The query that waited for them runs now.
+        if let Some(q) = self.table_query_mut(id).and_then(|tq| tq.keys_wait.take()) {
+            self.table_run_with(id, q, false);
         }
     }
 

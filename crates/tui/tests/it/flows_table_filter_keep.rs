@@ -113,6 +113,20 @@ fn answer(h: &mut Harness) {
     h.tab_db(index, DbEvent::Page { id, columns, rows, more: false, elapsed: Duration::from_millis(2) });
 }
 
+/// An ordered query put back in a tab waits for the table's keys before it runs: nothing is
+/// sent but the keys' read, then answered with the primary key `id`, the run that waited.
+fn keys_first(h: &mut Harness) -> Vec<Vec<String>> {
+    let sent = h.sent();
+    assert!(!sent.iter().any(|c| matches!(c, DbCommand::Execute { .. })), "waits for the keys: {sent:?}");
+    let request = sent.iter().find_map(|c| match c {
+        DbCommand::LoadTableKeys { id, .. } => Some(*id),
+        _ => None,
+    });
+    let keys = datarig_core::driver::keys::OrderKeys { primary_key: vec!["id".into()], ..Default::default() };
+    h.meta_db("local-pg", DbEvent::TableKeys { id: request.expect("the keys are asked for"), result: Ok(keys) });
+    runs(h)
+}
+
 fn status(h: &Harness) -> String {
     h.app.tab().status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default()
 }
@@ -170,10 +184,12 @@ fn a_restored_table_tab_keeps_its_query_and_runs_it_only_when_asked() {
     assert!(h.driver.sessions.lock().unwrap().is_empty(), "nothing opened");
     connect(&mut h);
     assert!(runs(&mut h).is_empty(), "nothing runs by itself");
-    // The run key: the statement is the compiled query.
+    // The run key: the statement is the compiled query, made total with the keys read first,
+    // as the order typed after they came was.
     h.key(KeyCode::Tab);
     h.ctrl('e');
-    assert_eq!(runs(&mut h), vec![vec![want.clone()]]);
+    let total = format!(r#"{want}, "id" ASC"#);
+    assert_eq!(keys_first(&mut h), vec![vec![total]]);
     answer(&mut h);
     let shown = h.app.tab().doc.table_query.as_ref().and_then(|q| q.shown.clone()).expect("shown");
     assert_eq!(filter_text(&shown), Some("id > 1"));
@@ -275,7 +291,10 @@ fn a_reopened_table_tab_keeps_its_query() {
     assert!(h.app.overlays.is_open(OverlayKind::Confirm), "asked again");
     assert!(runs(&mut h).is_empty());
     h.keys("y");
-    assert_eq!(runs(&mut h), vec![vec![want]]);
+    assert_eq!(keys_first(&mut h), vec![vec![want]]);
+    answer(&mut h);
+    let screen = h.screen(120, 30);
+    assert!(screen.contains("ORDER BY id DESC") && !screen.contains("not unique"), "{screen}");
 }
 
 /// A query the file holds that cannot be read is said, in words, and left out of the tab.
@@ -350,4 +369,32 @@ fn a_restored_limit_shows_in_its_field_and_caps_the_run() {
     quit(h);
     let (text, tab) = state.saved();
     assert_eq!(tab.limit, Some(50), "{text}");
+}
+
+/// A tab put back that has not run yet, its filter refused (edited by hand), its order kept:
+/// the condition fixed in the line applies, the order as it was (its columns are not known
+/// before the tab runs, and need not be: its keys stand), the profile connected and the keys
+/// read first. Never a dead end that only clearing the whole line gets out of.
+#[test]
+fn a_restored_tab_that_never_ran_applies_a_fixed_condition() {
+    let cfg = test_db_config();
+    let state = State::new("fixed");
+    state.write_table_tab(
+        &cfg,
+        "filter = \"id = 1; DROP TABLE shop.users\"\norder = [{ column = \"id\", dir = \"desc\" }]",
+    );
+    let mut h = launch(&cfg, &state, Lang::En);
+    assert!(h.app.tab().is_table());
+    h.key(KeyCode::Tab);
+    h.keys("f");
+    h.ctrl('l');
+    h.type_text("id > 1");
+    h.key(KeyCode::Enter);
+    assert!(!status(&h).contains("columns are not known"), "{}", status(&h));
+    assert_eq!(applied(&h), (Some("id > 1".into()), vec![OrderKey::user("id", Dir::Desc)]));
+    // It connects for the keys, then runs.
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+    let ran = keys_first(&mut h);
+    assert_eq!(ran, vec![vec![format!(r#"{ALL} WHERE (id > 1) ORDER BY "id" DESC"#)]]);
 }

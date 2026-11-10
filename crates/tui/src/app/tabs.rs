@@ -473,6 +473,9 @@ pub struct ValuesWait {
     pub literal: usize,
     /// The text the literal is in (offsets are in it).
     pub owner: crate::app::PopupOwner,
+    /// The user asked for the completion (`Ctrl+Space`): the list the values bring is asked
+    /// for too.
+    pub asked: bool,
 }
 
 /// How the user's transaction ended, as far as the app can tell.

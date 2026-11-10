@@ -295,8 +295,10 @@ pub(crate) fn draw(
     let (order_w, whole, with_tie) = if below {
         (0, true, false)
     } else if focused == Some(Field::Order) {
-        // Edited: as wide as its text (two fifths at least), the condition keeping a few columns.
-        ((label_w + width(&order_text) + 1).max(cap).min(room.saturating_sub(2 + 6)), true, false)
+        // Edited: as wide as its text, and up to two fifths where the condition does not need
+        // the columns; the condition keeping a few columns.
+        let spare = room.saturating_sub(where_need + 2);
+        ((label_w + width(&order_text) + 1).max(cap.min(spare)).min(room.saturating_sub(2 + 6)), true, false)
     } else if fits(label_w + keys_w + tie_w) {
         (label_w + keys_w + tie_w, true, tie.is_some())
     } else if tie.is_some() && tie_short.is_none() && fits(label_w + keys_w) {

@@ -162,7 +162,15 @@ fn the_condition_completes_the_tables_columns() {
     h.settle();
     assert_eq!(labels(&h)[0], "name");
     assert_eq!(h.popup().unwrap().items[0].kind, Kind::Column);
-    // Tab takes the label (it does not apply), the cursor after it.
+    // A list that opened by itself does not take Tab: it moves to the order, the list closed.
+    h.key(KeyCode::Tab);
+    assert_eq!(field_text(&h, Field::Where), "id > 1 AND na");
+    assert_eq!(h.app.tab().doc.table_query.as_ref().and_then(|q| q.line.focus), Some(Field::Order));
+    assert!(h.popup().is_none());
+    h.key(KeyCode::BackTab);
+    // Asked for, Tab takes the label (it does not apply), the cursor after it.
+    ctrl_space(&mut h);
+    assert_eq!(labels(&h)[0], "name");
     h.key(KeyCode::Tab);
     assert_eq!(field_text(&h, Field::Where), "id > 1 AND name");
     assert!(runs(&mut h).is_empty());

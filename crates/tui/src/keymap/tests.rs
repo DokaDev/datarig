@@ -666,3 +666,11 @@ fn a_sequence_cut_by_a_binding_of_its_first_key_is_not_named() {
     assert!(km.resolve_seq(Ctx::Grid, &k("y")).0.is_some());
     assert_eq!(name(Ctx::Grid).as_deref(), Some("Space ?"));
 }
+
+/// The filter line's description names all three fields it applies, the limit too.
+#[test]
+fn the_filter_lines_description_names_the_limit() {
+    let text = Ctx::FilterLine.describe();
+    assert!(text.contains("the condition, the order and the limit"), "{text}");
+    assert!(!text.contains("both fields"), "{text}");
+}

@@ -301,11 +301,15 @@ impl App {
             Ctx::FilterLine => self.filter_line_field().map(PopupOwner::Filter),
             _ => None,
         };
-        // In the filter line `Enter` applies the line, unless the user turned to the popup.
-        let untouched_enter = ctx == Ctx::FilterLine
-            && key.code == KeyCode::Enter
-            && key.modifiers.is_empty()
-            && self.tab().popup.as_ref().is_some_and(|p| !p.touched);
+        // In the filter line `Enter` applies the line and `Tab` (`Shift+Tab`) moves to the next
+        // field, unless the user turned to the popup (moved in it, or asked for it).
+        let line_key = match key.code {
+            KeyCode::Enter | KeyCode::Tab => key.modifiers.is_empty(),
+            KeyCode::BackTab => (key.modifiers - KeyModifiers::SHIFT).is_empty(),
+            _ => false,
+        };
+        let untouched_enter =
+            ctx == Ctx::FilterLine && line_key && self.tab().popup.as_ref().is_some_and(|p| !p.touched);
         if owner.is_some()
             && !untouched_enter
             && self.tab().popup.as_ref().map(|p| p.owner) == owner
@@ -654,6 +658,7 @@ impl App {
             table: table.clone(),
             literal,
             owner,
+            asked: false,
         });
         if asked {
             return;

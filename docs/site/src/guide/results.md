@@ -82,8 +82,8 @@ A table tab (opened from the explorer) has a line above its grid with a WHERE co
 ORDER BY, both run on the server. `f` (or `Space r f`) edits the condition and `Space r o` the
 order; `Enter` applies them, `Tab` moves between the fields, `Ctrl+Space` completes column
 names and `Esc` puts back what was applied. A completion list that opens by itself while you
-type does not take `Enter`: once you move through it (arrows, `Ctrl+N`, `Ctrl+P`) or ask for it
-with `Ctrl+Space`, `Enter` picks its entry. `Ctrl+E` always applies. `Space r x` clears them all and runs the table again,
+type does not take `Enter` or `Tab`: once you move through it (arrows, `Ctrl+N`, `Ctrl+P`) or ask
+for it with `Ctrl+Space`, `Enter` and `Tab` pick its entry. `Ctrl+E` always applies. `Space r x` clears them all and runs the table again,
 and `Space r v` opens the statement in a new console. From the command line, `:where`,
 `:orderby` and `:filter clear` do the same.
 

@@ -501,3 +501,57 @@ fn the_capped_statement_keeps_the_order_the_rows_were_read_in() {
     assert!(counts.len() == 1 && counts[0].contains(&format!("{ordered} LIMIT 700")), "{counts:?}");
     assert!(!counts[0].contains(r#""id" ASC"#), "{counts:?}");
 }
+
+/// Under a cap, what is said of the pages counts to the cap: a page read again says the rows
+/// it may bring up to the cap, and the next page at the cap says the limit ended the rows.
+#[test]
+fn the_page_notes_count_to_the_cap() {
+    let size = Harness::connected(Lang::En).app.page_size;
+    let mut h = limited(size as u64 + 150);
+    let (id, index) = (h.app.tab().exec.query_id, h.app.tabs.active_index());
+    h.tab_db(index, DbEvent::Released { id });
+    first_page(&mut h, size, true);
+    h.keys("n");
+    let to = datarig_i18n::fmt_count(size as u64 + 150);
+    let said = status(&h);
+    assert!(said.contains(&format!("–{to} (nothing is held open")), "{said}");
+    let id = h.app.tab().exec.query_id;
+    let columns = Some(vec![meta("id", "int8", true, false), meta("name", "text", false, false)]);
+    h.tab_db(
+        index,
+        DbEvent::Page { id, columns, rows: rows(size, 150), more: false, elapsed: Duration::from_millis(2) },
+    );
+    assert_eq!(held(&h), (size + 150, false));
+    h.keys("nn");
+    let said = h.status(200, 45);
+    assert!(said.contains(&format!("Last page: the limit of {to} rows is reached")), "{said}");
+}
+
+/// `Space r v` opens the statement the rows were read with, capped, so running it reads the
+/// rows the tab shows.
+#[test]
+fn the_statement_opened_in_a_console_has_the_cap() {
+    let mut h = limited(700);
+    first_page(&mut h, 3, false);
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys(" rv");
+    let text = h.app.tab().editor.text();
+    assert_eq!(text.trim(), format!("{ALL} LIMIT 700"), "{text}");
+}
+
+/// The order edited at 80 columns: the condition keeps the columns it needs while the order's
+/// field has room enough, never cut next to a blank gap.
+#[test]
+fn an_edited_order_leaves_the_condition_its_room() {
+    let mut h = users(Lang::En);
+    h.app.dispatch(datarig_tui::app::action::Action::ToggleExplorer);
+    h.app.dispatch(datarig_tui::app::action::Action::ToggleDetail);
+    let cond = "id > 1 and name <> 'zz_nothing_here_at_all'";
+    h.command(&format!("where {cond}"));
+    first_page(&mut h, 3, false);
+    h.command("orderby id desc");
+    first_page(&mut h, 3, false);
+    h.keys(" ro");
+    let screen = h.screen(80, 24);
+    assert!(screen.contains(cond), "{screen}");
+}

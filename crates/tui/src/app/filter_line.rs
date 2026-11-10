@@ -3,7 +3,7 @@
 //! `Space r v` opens the statement in a new console.
 //!
 //! In a field `Enter` (or the run key) applies what the three fields hold (a completion popup takes
-//! `Enter` only once the user turned to it: moved its selection, or asked for it with
+//! `Enter` and `Tab` only once the user turned to it: moved its selection, or asked for it with
 //! `Ctrl+Space`; the run key always applies): the order is read into
 //! keys first (refused and said when it is not a list of the table's columns), then the query
 //! runs as any run of the tab does ([`App::table_run`]); a refusal leaves the focus on the
@@ -194,6 +194,8 @@ impl App {
         match key.code {
             KeyCode::Enter => return self.filter_line_apply(),
             KeyCode::Esc => return self.filter_line_cancel(),
+            // A list that opened by itself goes with the field it was for.
+            KeyCode::Tab | KeyCode::BackTab => self.filter_popup_close(),
             _ => {}
         }
         let Some(tq) = self.table_query_mut(id) else { return };
@@ -292,8 +294,15 @@ impl App {
         let Some(tq) = self.table_query_mut(id) else { return };
         let (filter, order) = (tq.line.where_.text().to_string(), tq.line.order.text().to_string());
         let limit_text = tq.line.limit.text().to_string();
+        // The order applied, as the line shows it: its keys stand as they are when the field
+        // still holds them (a tab put back that has not run yet knows no columns to read
+        // them against).
+        let applied_order = tq.applied().order.clone();
+        let kept = query::order_text(&applied_order, d) == order.trim();
         let keys = if order.trim().is_empty() {
             Ok(Vec::new())
+        } else if kept && target.columns.is_empty() {
+            Ok(applied_order)
         } else if target.columns.is_empty() {
             // Unknown, not absent: no column is said not to exist.
             Err((None, Notice::new(Label::TableOrderColumnsUnknown, Level::Warning)))
@@ -424,6 +433,9 @@ impl App {
         self.completed(popup, literal);
         if let Some(w) = out.wants_checks {
             self.ask_checks(w.schema, w.table, w.literal, PopupOwner::Filter(f));
+            if let Some(w) = self.tab_mut().values_wait.as_mut() {
+                w.asked |= touched;
+            }
         }
     }
 

@@ -165,6 +165,11 @@ impl App {
             return self.flash_busy();
         }
         if !more {
+            // A table tab's rows that end at its cap: the limit ended them, not the table.
+            let cap = self.table_query(t.id).and_then(|q| q.shown.as_ref()).and_then(|q| q.limit);
+            if let Some(count) = cap.filter(|n| *n == len as u64) {
+                return self.flash(Notice::new(Msg::ResultsPageLimitReached { count }, Level::Info));
+            }
             return self.flash(Notice::new(Label::ResultsPageLast, Level::Info));
         }
         // An Apply changed the table under these rows (a deleted row moves the rows after it
@@ -269,7 +274,9 @@ impl App {
         }
         let columns = rs.columns.iter().map(|c| (c.meta.name.clone(), c.meta.type_name.clone())).collect();
         let size = self.page_size as u64;
-        let (from, to) = (datarig_i18n::fmt_count(skip + 1), datarig_i18n::fmt_count(skip + size));
+        // The last row this page may bring: the cap's, when it ends the page early.
+        let last = max_rows.map_or(skip + size, |left| skip + left.min(size));
+        let (from, to) = (datarig_i18n::fmt_count(skip + 1), datarig_i18n::fmt_count(last));
         // A table tab's order is total only when its keys end in a key the structure says is
         // unique (not known yet: not unique).
         // As the held rows' statement was sent: a structure read since does not make it total.
