@@ -320,6 +320,10 @@ pub struct TabSession {
     /// The isolation level the session's next transaction runs in, as its driver reports it
     /// (MySQL: `DbEvent::Isolation`); `None`: not known.
     pub isolation: Option<datarig_core::driver::Isolation>,
+    /// Goes up whenever what decides whether a read locks rows may have changed: the session,
+    /// its level, its autocommit, a transaction's start or end. Never goes back, so a state that
+    /// comes back to earlier values is never the earlier one.
+    pub safety_rev: u64,
     /// The last run went to the session with `TxRule::Manual`.
     pub sent_manual: bool,
     /// A procedure that commits by itself failed as the first statement of a transaction
@@ -412,6 +416,7 @@ impl TabSession {
             last_end: None,
             autocommit_off: false,
             isolation: None,
+            safety_rev: 0,
             sent_manual: false,
             outside_offer: None,
             own: OwnAsk::NotAsked,
@@ -876,6 +881,7 @@ impl Tab {
         self.exec.ending = None;
         self.exec.autocommit_off = false;
         self.exec.isolation = None;
+        self.exec.safety_rev += 1;
         self.exec.outside_offer = None;
     }
 

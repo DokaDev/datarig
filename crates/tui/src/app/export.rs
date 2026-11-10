@@ -1289,9 +1289,6 @@ impl App {
         if let Err(why) = self.table_recheck(id) {
             return Some(self.i18n.msg(&Msg::TableFilterRefused { why }).to_string());
         }
-        if let Err(why) = self.table_locks_recheck(id) {
-            return Some(why);
-        }
         let pid = self.tabs.get(id)?.profile?;
         let refused = self.read_only_refusal(id, pid, &[sql.to_string()])?;
         Some(refused.render(&self.i18n).to_string())

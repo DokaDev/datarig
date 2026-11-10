@@ -15,14 +15,15 @@
 //! count check the shown filter again the same way and never ask.
 //!
 //! On MySQL a plain read locks the rows it reads (InnoDB reads as `FOR SHARE`) when the
-//! session's level is SERIALIZABLE and autocommit is off or a transaction is open: in that
-//! state, or with the level not known, a run asks first ([`Locks`]); a yes holds for the tab
-//! while the session, its level and its autocommit stay as they were. A page read again, a
-//! count and an export are refused in that state unless the tab said yes to it.
+//! session's level is SERIALIZABLE and autocommit is off or a transaction is open (one the app
+//! opens for the read with manual commit too): in that state, or with the level not known, a
+//! run asks first ([`Locks`]); a yes holds for the tab while nothing that decides it changed
+//! ([`LockState`]: not even to come back to what it was). A page read again and a count are
+//! refused in that state unless the tab said yes to it.
 
 use super::*;
 use datarig_core::driver::structure::TableStructure;
-use datarig_core::driver::{ColumnMeta, Isolation, ValueKind};
+use datarig_core::driver::{ColumnMeta, Isolation, TxRule, TxStep, ValueKind};
 use datarig_core::query::{
     self, BarRefusal, ColumnFacts, ColumnKind, Filter, FilterVerdict, LexProblem, OrderError, OrderProblem, Query,
     ShapeProblem, TableName, Target,
@@ -57,19 +58,23 @@ pub struct Refusal {
     pub text: String,
 }
 
-/// Why reads of a table tab take row locks in its session: MySQL with autocommit off or a
-/// transaction open, at SERIALIZABLE (`known`) or a level not known.
+/// Why reads of a table tab take row locks in its session: MySQL with autocommit off, a
+/// transaction open, or one the app opens for the read (`manual`: manual commit), at
+/// SERIALIZABLE (`known`) or a level not known.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Locks {
     known: bool,
     autocommit_off: bool,
+    manual: bool,
 }
 
-/// The session state a yes to reads that lock rows was given in: the session, its level and
-/// its autocommit.
+/// The session state a yes to reads that lock rows was given in: the session, its level, its
+/// autocommit, and the revision of all that ([`TabSession::safety_rev`]), which a change of any
+/// of them (or a transaction's start or end) moves on for good.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct LockState {
+pub(in crate::app) struct LockState {
     generation: u64,
+    revision: u64,
     isolation: Option<Isolation>,
     autocommit_off: bool,
 }
@@ -659,14 +664,15 @@ impl App {
                 Ok(_) => {}
             }
         }
-        if let Some((locks, state)) = self.table_locks(id).filter(|(_, st)| !self.locks_confirmed(id, *st)) {
+        let compiled = query::compile(&q, &target);
+        let sql = compiled.sql.clone();
+        if let Some((locks, state)) = self.table_locks(id, Some(&sql)).filter(|(_, st)| !self.locks_confirmed(id, *st))
+        {
             if let Some(tq) = self.table_query_mut(id) {
                 tq.locks_asked = Some((q, state));
             }
             return self.ask_table_locks(id, locks);
         }
-        let compiled = query::compile(&q, &target);
-        let sql = compiled.sql.clone();
         if let Some(tq) = self.table_query_mut(id) {
             tq.refusal = None;
             tq.pending = Some(Statement::of(q, compiled));
@@ -926,21 +932,69 @@ impl App {
 
     /// Whether reads of table tab `id` lock rows in its session as it is now, as far as known
     /// (see [`Locks`]), and that state; `None` when they do not: not MySQL, autocommit on with
-    /// no transaction open, or a level below SERIALIZABLE.
-    pub(super) fn table_locks(&self, id: TabId) -> Option<(Locks, LockState)> {
-        let t = self.tabs.get(id)?;
-        if !matches!(t.exec.prepared.language().dialect(), Dialect::MySql(_)) {
-            return None;
-        }
-        let e = &t.exec;
-        if !(e.autocommit_off || e.tx_open || e.in_block) {
+    /// no transaction open (nor one the run of `sql` opens for manual commit), or a level below
+    /// SERIALIZABLE.
+    pub(super) fn table_locks(&self, id: TabId, sql: Option<&str>) -> Option<(Locks, LockState)> {
+        let state = self.lock_state(id)?;
+        let e = &self.tabs.get(id)?.exec;
+        let open = e.tx_open || e.in_block;
+        // The run opens a transaction for the read itself (manual commit): it reads in one.
+        let manual = !open
+            && sql.is_some_and(|sql| {
+                matches!(self.tx_rule(id, &[sql.to_string()], false),
+                    TxRule::Manual { steps, .. } if steps.first() == Some(&TxStep::Open))
+            });
+        if !(e.autocommit_off || open || manual) {
             return None;
         }
         if e.isolation.is_some_and(|i| i != Isolation::Serializable) {
             return None;
         }
-        let state = LockState { generation: e.generation, isolation: e.isolation, autocommit_off: e.autocommit_off };
-        Some((Locks { known: e.isolation.is_some(), autocommit_off: e.autocommit_off }, state))
+        Some((Locks { known: e.isolation.is_some(), autocommit_off: e.autocommit_off, manual }, state))
+    }
+
+    /// The state of table tab `id`'s session that decides whether its reads lock rows
+    /// ([`LockState`]); `None` when they never do (not MySQL).
+    pub(in crate::app) fn lock_state(&self, id: TabId) -> Option<LockState> {
+        let t = self.tabs.get(id)?;
+        if !matches!(t.exec.prepared.language().dialect(), Dialect::MySql(_)) {
+            return None;
+        }
+        let e = &t.exec;
+        Some(LockState {
+            generation: e.generation,
+            revision: e.safety_rev,
+            isolation: e.isolation,
+            autocommit_off: e.autocommit_off,
+        })
+    }
+
+    /// The yes of table tab `id` to reads that lock rows, when it covers the run in flight: the
+    /// tab's query run, sent in the state the yes was given in. A transaction that run opens
+    /// (autocommit off, manual commit) is the one the yes was for ([`App::table_safety_changed`]).
+    pub(in crate::app) fn table_locks_covering(&self, id: TabId) -> Option<LockState> {
+        let t = self.tabs.get(id)?;
+        let tq = t.doc.table_query.as_ref()?;
+        let running = t.exec.running.as_ref().filter(|r| !r.fetch)?.id;
+        let state = self.lock_state(id)?;
+        (tq.requested.as_ref().is_some_and(|(qid, _)| *qid == running) && tq.locks_confirmed == Some(state))
+            .then_some(state)
+    }
+
+    /// What decides whether table tab `id`'s reads lock rows may have changed (its session's
+    /// [`TabSession::safety_rev`] moves on): a yes given before holds no more, except for a
+    /// transaction the run it covered (`covering`, [`App::table_locks_covering`]) opened or
+    /// ended itself, with the session, its level and its autocommit as they were.
+    pub(in crate::app) fn table_safety_changed(&mut self, id: TabId, covering: Option<LockState>) {
+        let Some(t) = self.tabs.get_mut(id) else { return };
+        t.exec.safety_rev += 1;
+        let Some(now) = self.lock_state(id) else { return };
+        let same = covering.is_some_and(|c| {
+            (c.generation, c.isolation, c.autocommit_off) == (now.generation, now.isolation, now.autocommit_off)
+        });
+        if same && let Some(tq) = self.table_query_mut(id) {
+            tq.locks_confirmed = Some(now);
+        }
     }
 
     /// The user let reads that lock rows run in table tab `id` in session state `state`.
@@ -956,10 +1010,10 @@ impl App {
         self.key_state.clear();
         let state = self
             .i18n
-            .label(if locks.autocommit_off {
-                Label::TableLocksStateAutocommitOff
-            } else {
-                Label::TableLocksStateOpenTx
+            .label(match locks {
+                Locks { autocommit_off: true, .. } => Label::TableLocksStateAutocommitOff,
+                Locks { manual: true, .. } => Label::TableLocksStateManual,
+                _ => Label::TableLocksStateOpenTx,
             })
             .to_string();
         let (title, text) = match locks.known {
@@ -996,14 +1050,15 @@ impl App {
         }
     }
 
-    /// Table tab `id`'s statement may run again (a page past a closed portal, a count, an
-    /// export) as far as row locks go: `Err` with the reason in words when reads in its
-    /// session lock rows and the tab did not say yes to that in this state (never asked here).
+    /// Table tab `id`'s statement may run again (a page past a closed portal, a count) as far
+    /// as row locks go: `Err` with the reason in words when reads in its session lock rows and
+    /// the tab did not say yes to that in this state (never asked here). Neither runs in a
+    /// transaction of the app's own for manual commit.
     pub(super) fn table_locks_recheck(&self, id: TabId) -> Result<(), String> {
         if self.table_query(id).is_none() {
             return Ok(());
         }
-        match self.table_locks(id) {
+        match self.table_locks(id, None) {
             Some((_, state)) if !self.locks_confirmed(id, state) => {
                 Err(self.i18n.label(Label::TableLocksWhyUnconfirmed).to_string())
             }

@@ -22,5 +22,6 @@
   brought back; they return to the line without running and are checked again when the tab
   runs.
 - On MySQL, a table tab asks before it runs when its reads would lock rows (isolation level
-  SERIALIZABLE, or not known, with autocommit off or a transaction open); a page read again, a
-  count or an export in that state needs that answer first.
+  SERIALIZABLE, or not known, with autocommit off or a transaction open, including one opened
+  for the read with manual commit); a page read again or a count in that state needs that
+  answer first.

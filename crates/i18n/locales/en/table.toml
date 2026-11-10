@@ -35,6 +35,7 @@
 "table.locks.text_unknown" = "In this session reads may lock rows ({state}, isolation level not known): at SERIALIZABLE, other sessions cannot change the rows it reads until its transaction ends."
 "table.locks.state.autocommit_off" = "no autocommit"
 "table.locks.state.open_tx" = "transaction under way"
+"table.locks.state.manual" = "manual commit starts a transaction for it"
 "table.locks.cancelled" = "Not run: the read may lock rows and was not confirmed"
 "table.locks.why_unconfirmed" = "reads in this session may lock rows, not confirmed in this tab"
 "table.order.refused" = "Order refused: {why}"

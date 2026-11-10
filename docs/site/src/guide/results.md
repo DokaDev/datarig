@@ -118,13 +118,17 @@ you bring back (`Space t u`): they return to the line without running, and are c
 as above when the tab runs.
 
 On MySQL, a plain read locks the rows it reads when the session's isolation level is
-SERIALIZABLE and autocommit is off or a transaction is open: other sessions cannot change those
-rows until the transaction ends. In that state, and when the level is not known, a table tab
-asks before it runs (`Enter` cancels, `y` runs); the answer holds for the tab until the session,
-its level or its autocommit changes. A page read again, a count or an export of the tab is
-refused in that state until the tab has run with that answer. A level set with
-`SET TRANSACTION ISOLATION LEVEL` without `SESSION` applies to the next transaction only and the
-server does not report it, so datarig treats the level as not known until that transaction ends.
+SERIALIZABLE and autocommit is off or a transaction is open (with manual commit, the one datarig
+opens for the read counts too): other sessions cannot change those rows until the transaction
+ends. In that state, and when the level is not known, a table tab asks before it runs (`Enter`
+cancels, `y` runs); the answer holds for the tab until the session, its level, its autocommit or
+its transaction changes, even if it later changes back. A page read again or a count of the tab
+is refused in that state until the tab has run with that answer. While a transaction is open,
+the level that counts is the one it started with: a `SET SESSION TRANSACTION ISOLATION LEVEL`
+inside it applies to later transactions only. A level set with `SET TRANSACTION ISOLATION LEVEL`
+without `SESSION` applies to the next transaction only and the server does not report it, so
+datarig treats the level as not known until that transaction ends; after a `CALL`, an `EXECUTE`
+or an executable comment it stays not known until the session's level is set again.
 
 ## The inspector
 

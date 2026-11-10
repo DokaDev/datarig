@@ -69,7 +69,17 @@ impl App {
         match target {
             EventTarget::Meta(id) => self.meta_event(id, ev),
             EventTarget::Tab(id) => {
+                // What decides whether the tab's reads lock rows, before and after the event.
+                let safety = |t: &crate::app::Tab| {
+                    let e = &t.exec;
+                    (e.generation, e.isolation, e.autocommit_off, e.tx_open, e.in_block, e.tx_epoch)
+                };
+                let before = self.tabs.get(id).map(safety);
+                let covering = self.table_locks_covering(id);
                 self.tab_event(id, ev);
+                if self.tabs.get(id).map(safety) != before {
+                    self.table_safety_changed(id, covering);
+                }
                 self.settle_run_hints(id);
             }
             EventTarget::Aux(id) => self.aux_event(id, ev),
