@@ -206,6 +206,7 @@ fn clearing_a_table_or_everything() {
 }
 
 /// A valid file of one entry, as text.
+#[cfg(unix)]
 fn one_entry() -> String {
     let mut h = History::default();
     h.record(key("orders"), "id = 1", "", 1);
