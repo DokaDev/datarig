@@ -927,7 +927,9 @@ async fn statement<'a>(
     // of it is its end, read rather than stopped.
     let bounded = match step.cap {
         Some(cap) => {
-            limit_applies(sql, s.mode) && s.limit.current.is_some_and(|now| now <= cap.saturating_add(step.skip))
+            limit_applies(sql, s.mode)
+                && !own_limit(sql, s.mode)
+                && s.limit.current.is_some_and(|now| now <= cap.saturating_add(step.skip))
         }
         None => false,
     };
@@ -1782,6 +1784,20 @@ fn limit_applies(sql: &str, mode: MySqlMode) -> bool {
         None => true,
         Some(w) => matches!(w.as_str(), "SELECT" | "WITH" | "TABLE" | "VALUES") || lists(sql, mode),
     }
+}
+
+/// Whether `sql` has a `LIMIT` of its own outside parentheses: it wins over `sql_select_limit`,
+/// so the session's limit does not stop its result.
+fn own_limit(sql: &str, mode: MySqlMode) -> bool {
+    let mut depth = 0usize;
+    lex_in(sql, Dialect::MySql(mode)).iter().any(|t| {
+        match t.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        depth == 0 && t.is_word() && t.text(sql).eq_ignore_ascii_case("LIMIT")
+    })
 }
 
 /// Whether `sql` is a listing the server cuts at `sql_select_limit` (`SHOW` but its diagnostics,

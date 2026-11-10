@@ -1747,6 +1747,32 @@ async fn a_capped_read_is_never_read_past_its_cap() {
     a.disconnect().await.unwrap();
 }
 
+/// A capped statement with a `LIMIT` of its own (which wins over the session's row limit) is not
+/// taken for one the server stops at the cap: held or not, it is stopped there, never read on to
+/// the end of its own limit.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_capped_read_with_its_own_limit_is_stopped_at_the_cap() {
+    let test = "a_capped_read_with_its_own_limit_is_stopped_at_the_cap";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "ownlimit", 1200).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let sql = format!("SELECT id, REPEAT('x', 2000) AS v, SLEEP(0.005) AS s FROM {} LIMIT 1000", t.q());
+    for (id, paging) in [(1, PagingMode::NoHold), (3, PagingMode::Hold)] {
+        let t0 = Instant::now();
+        c.session.send(DbCommand::Execute {
+            id,
+            statements: vec![sql.clone()],
+            paging,
+            tx: TxRule::Auto,
+            max_rows: Some(3),
+        });
+        let evs = c.answer(id).await;
+        assert_eq!((page_of(&evs).1.len(), page_of(&evs).2), (3, false), "{paging:?}");
+        assert!(t0.elapsed() < Duration::from_secs(3), "{paging:?}: not read to its own limit: {:?}", t0.elapsed());
+        c.ok(id + 1, "SELECT 1").await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_next_page_runs_the_statement_again_past_the_rows_it_has() {
     let Some((url, admin)) = urls("the_next_page_runs_the_statement_again") else { return };
