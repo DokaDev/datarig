@@ -272,6 +272,26 @@ fn where_and_orderby_complete_their_argument() {
     h.key(KeyCode::Esc);
 }
 
+/// A completion of `:where` belongs to where the cursor is: moved back into a column name, the
+/// list is that name's, and taking it replaces only the name, the rest of the condition kept.
+#[test]
+fn a_command_argument_completes_where_the_cursor_moved() {
+    let mut h = users();
+    h.ctrl('k');
+    h.type_text("where na <> 'x' and id > 1");
+    for _ in 0.." <> 'x' and id > 1".len() {
+        h.key(KeyCode::Left);
+    }
+    let c = h.cmdline().expect("the command line");
+    assert_eq!(c.sql.as_ref().and_then(|s| s.items.first()).map(|i| i.label.clone()).as_deref(), Some("name"));
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.cmdline().map(|c| c.input.text().to_string()).as_deref(), Some("where name <> 'x' and id > 1"));
+    h.key(KeyCode::End);
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name <> 'x' and id > 1)")]]);
+}
+
 #[test]
 fn a_refused_part_is_underlined_in_the_field() {
     let mut h = users();

@@ -391,6 +391,17 @@ impl App {
         }
     }
 
+    /// The cursor moved without an edit: a completion of the argument is for where the cursor
+    /// is, so it is read again there (and the list with it). Other lists depend on the text
+    /// only and keep their selection.
+    fn command_cursor_moved(&mut self) {
+        let Some(c) = self.overlays.command_line() else { return };
+        let (input, cursor, had) = (c.input.text().to_string(), c.input.cursor_byte(), c.sql.is_some());
+        if had || self.command_sql(&input, cursor).is_some() {
+            self.refresh_commands();
+        }
+    }
+
     /// The completion of the argument of `:where` (a condition) or `:orderby` (keys) at byte
     /// `cursor` of `input`, as the filter line's fields complete them, offsets in `input`. Only
     /// on a table tab, with the cursor in the argument.
@@ -461,11 +472,11 @@ impl App {
             KeyCode::Char('p') if ctrl => c.selected = (c.selected + n - 1) % n,
             KeyCode::Down | KeyCode::Tab => c.selected = (c.selected + 1) % n,
             KeyCode::Char('n') if ctrl => c.selected = (c.selected + 1) % n,
-            _ => {
-                if c.input.handle_key(&key) == InputResult::Changed {
-                    self.refresh_commands();
-                }
-            }
+            _ => match c.input.handle_key(&key) {
+                InputResult::Changed => self.refresh_commands(),
+                InputResult::Moved => self.command_cursor_moved(),
+                InputResult::Ignored => {}
+            },
         }
     }
 
