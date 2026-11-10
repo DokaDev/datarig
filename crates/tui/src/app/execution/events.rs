@@ -35,6 +35,7 @@ impl App {
             | DbEvent::TxAborted(_)
             | DbEvent::Block(_)
             | DbEvent::Counted { .. }
+            | DbEvent::Estimated { .. }
             | DbEvent::RepeatChecked { .. }
             | DbEvent::Started { .. }
             | DbEvent::StepRows { .. }

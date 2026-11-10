@@ -46,6 +46,9 @@ pub struct ResultSet {
     /// The count was of the rows committed when it ran, which may differ from the rows paged
     /// (not in the snapshot the pages were read in).
     pub counted_now: bool,
+    /// How many rows the planner expects the result to have, when the user asked for its
+    /// estimate (a table tab's filtered rows): an estimate, never shown as a count.
+    pub planner: Option<u64>,
     /// Which transaction every page so far was read in: a count in that same
     /// transaction, when it has one snapshot, counts what the pages show.
     pub pages_in: PagesIn,
@@ -152,6 +155,7 @@ impl ResultSet {
             more,
             counted: None,
             counted_now: false,
+            planner: None,
             pages_in: PagesIn::Nothing,
             tx: None,
             read_in: Default::default(),

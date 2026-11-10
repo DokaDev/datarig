@@ -215,6 +215,7 @@ impl App {
                 started: Instant::now(),
                 fetch: false,
                 count: false,
+                estimate: false,
                 cancelling: None,
                 stopping: false,
                 refused: false,

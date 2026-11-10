@@ -304,6 +304,7 @@ impl App {
             started: now,
             fetch: true,
             count: false,
+            estimate: false,
             cancelling: None,
             stopping: false,
             refused: false,
@@ -317,25 +318,64 @@ impl App {
 
     /// `#`: count the rows of the shown result, when the user asks: `SELECT count(*)` of its
     /// statement, only on the allowlist, through the checks of a run, announced; answered by
-    /// `DbEvent::Counted`. A result with every row fetched is counted already.
+    /// `DbEvent::Counted`. A result with every row fetched is counted already. A table tab
+    /// whose rows are filtered offers the planner's estimate first ([`App::open_count_menu`]).
     pub(super) fn count_rows(&mut self) {
+        let Some(id) = self.count_ready() else { return };
+        if self.table_query(id).and_then(|tq| tq.shown_filter()).is_some() {
+            return self.open_count_menu(id);
+        }
+        self.count_exact();
+    }
+
+    /// The active tab's shown result may be counted or estimated now (its rows, `!more` said
+    /// as counted already, nothing running, the result on the session it came from): its tab;
+    /// otherwise said why (nothing for a view without rows).
+    pub(super) fn count_ready(&mut self) -> Option<TabId> {
         let t = self.tab();
         let id = t.id;
         if t.exec.view != ResultView::Rows {
-            return;
+            return None;
         }
-        let Results::Rows(rs) = &t.results else { return };
+        let Results::Rows(rs) = &t.results else { return None };
         if !rs.more {
             let count = rs.rows.len() as u64;
-            return self.flash(Notice::new(Msg::ResultsCountComplete { count }, Level::Info));
+            self.flash(Notice::new(Msg::ResultsCountComplete { count }, Level::Info));
+            return None;
         }
         if t.exec.running.is_some() {
-            return self.flash_busy();
+            self.flash_busy();
+            return None;
         }
-        let Some(pid) = t.profile else { return };
+        t.profile?;
         if !(self.answer_here() || self.kept_answer_here()) {
-            return self.flash(Notice::new(Label::ResultsPageStale, Level::Warning));
+            self.flash(Notice::new(Label::ResultsPageStale, Level::Warning));
+            return None;
         }
+        Some(id)
+    }
+
+    /// How long the server may count tab `id`'s rows (`[results] count_timeout`), where a
+    /// limit is set: PostgreSQL only while no transaction is open on the tab's session (inside
+    /// the user's, or a portal's, the count keeps to the transaction's own settings), MySQL
+    /// always (for the statement alone). With `Some` when the limit is left out for an open
+    /// transaction: `true` the user's own, `false` the one that holds the result's portal.
+    pub(super) fn count_limit(&self, id: TabId) -> (Option<std::time::Duration>, Option<bool>) {
+        let Some(t) = self.tabs.get(id) else { return (None, None) };
+        let limit = self.prefs.count_timeout;
+        match self.tab_dialect(id) {
+            datarig_core::sql::dialect::Dialect::MySql(_) => (limit, None),
+            _ if t.exec.tx_open => (None, limit.map(|_| t.exec.in_block)),
+            _ => (limit, None),
+        }
+    }
+
+    /// The exact count of the active tab's shown rows ([`App::count_rows`]), with its time
+    /// limit ([`App::count_limit`]).
+    pub(super) fn count_exact(&mut self) {
+        let Some(id) = self.count_ready() else { return };
+        let t = self.tab();
+        let Some(pid) = t.profile else { return };
         // A table tab's filter is checked again as when it ran (never asked about here), and
         // a cap on its rows is counted within.
         if let Err(why) = self.table_recheck(id).and_then(|()| self.table_locks_recheck(id)) {
@@ -363,6 +403,7 @@ impl App {
             let why = self.i18n.label(Label::RepeatWrites).to_string();
             return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
         }
+        let (limit, unbounded) = self.count_limit(id);
         let now = self.now();
         let Some(t) = self.tabs.get_mut(id) else { return };
         let qid = t.exec.query_id;
@@ -371,16 +412,23 @@ impl App {
             started: now,
             fetch: false,
             count: true,
+            estimate: false,
             cancelling: None,
             stopping: false,
             refused: false,
             export: false,
             apply: false,
         });
-        let note = Notice::new(Msg::ResultsCountSent { sql: super::runlog::excerpt(&sql, 120) }, Level::Info);
+        let excerpt = super::runlog::excerpt(&sql, 120);
+        let m = match unbounded {
+            Some(true) => Msg::ResultsCountSentUnbounded { sql: excerpt },
+            Some(false) => Msg::ResultsCountSentHeld { sql: excerpt },
+            None => Msg::ResultsCountSent { sql: excerpt },
+        };
+        let note = Notice::new(m, Level::Info);
         t.exec.run.notes.push(note.clone());
         self.tab_status(id, note);
-        self.send_tab(id, DbCommand::Count { id: qid, sql });
+        self.send_tab(id, DbCommand::Count { id: qid, sql, limit });
     }
 
     /// The count of tab `id`'s result `qid` came back. `snapshot`: the driver counted in a
@@ -399,7 +447,7 @@ impl App {
             Ok(_) => String::new(),
         };
         let Some(t) = self.tabs.get_mut(id) else { return };
-        if t.exec.query_id != qid || !t.exec.running.is_some_and(|r| r.count) {
+        if t.exec.query_id != qid || !t.exec.running.is_some_and(|r| r.count && !r.estimate) {
             return;
         }
         t.exec.running = None;
@@ -417,6 +465,14 @@ impl App {
                 Notice::new(m, Level::Success)
             }
             Err(datarig_core::driver::DbError::Cancelled) => Notice::new(Label::ResultsCountCancelled, Level::Warning),
+            // Stopped at its time limit, or behind another session's lock: the number is not
+            // known (never 0).
+            Err(datarig_core::driver::DbError::TimedOut(d)) => {
+                Notice::new(Msg::ResultsCountTimedOut { limit: super::estimate::fmt_limit(d) }, Level::Warning)
+            }
+            Err(datarig_core::driver::DbError::LockTimeout(_)) => {
+                Notice::new(Label::ResultsCountLockTimeout, Level::Warning)
+            }
             // The server's side of the allowlist refused it (asked right before).
             Err(datarig_core::driver::DbError::NotRepeatable(r)) => {
                 let why = self.i18n.msg(&why(&r)).to_string();

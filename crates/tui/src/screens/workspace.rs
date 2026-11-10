@@ -911,7 +911,9 @@ fn results_title(app: &App, width: u16) -> (datarig_i18n::Localized, Option<(Vec
     let mut states: Vec<String> = Vec::new();
     let mut style = muted;
     let counting = t.exec.running.is_some_and(|r| r.count);
-    if counting {
+    if t.exec.running.is_some_and(|r| r.estimate) {
+        states.push(app.i18n.label(Label::ResultsTitleEstimating).to_string());
+    } else if counting {
         states.push(app.i18n.label(Label::ResultsTitleCounting).to_string());
     }
     match (paging, app.paging_left()) {
@@ -958,12 +960,15 @@ fn results_title(app: &App, width: u16) -> (datarig_i18n::Localized, Option<(Vec
     let page = (win.start / size + 1).to_string();
     // A table's estimate holds only while the rows fetched do not contradict it (an estimate
     // of 0 rows, or below the rows here, is stale: it would read `page 5 / ~3`).
+    // The planner's estimate of filtered rows likewise, said as the planner's.
     let estimate = app.table_estimate(t).filter(|&n| n > 0 && n >= len as u64);
+    let planner = rs.planner.filter(|&n| n > 0 && n >= len as u64);
     let pages_of = |n| fmt_count(crate::app::paging::pages(n, size));
-    let (pages, unknown) = match (rs.total(), estimate) {
-        (Some(n), _) => (pages_of(n), false),
-        (None, Some(n)) => (format!("~{}", pages_of(n)), false),
-        (None, None) => ("?".to_string(), true),
+    let (pages, unknown, planned) = match (rs.total(), estimate, planner) {
+        (Some(n), _, _) => (pages_of(n), false, false),
+        (None, Some(n), _) => (format!("~{}", pages_of(n)), false, false),
+        (None, None, Some(n)) => (format!("~{}", pages_of(n)), false, true),
+        (None, None, None) => ("?".to_string(), true, false),
     };
     // Unknown pages say which key counts the rows, when they can be counted.
     let count_key = (unknown && !counting && app.may_count())
@@ -981,8 +986,16 @@ fn results_title(app: &App, width: u16) -> (datarig_i18n::Localized, Option<(Vec
     let title_w = crate::text::width(&title.to_string());
     let whole = |text: &str| title_w + crate::text::width(text) + 5 <= (width as usize).saturating_sub(2);
     let hinted = hinted.filter(|h| whole(h));
-    let long = app.i18n.msg(&Msg::ResultsTitlePage { page: page.clone(), pages: pages.clone() });
-    let short = app.i18n.msg(&Msg::ResultsTitlePageShort { page, pages });
+    let long = if planned {
+        app.i18n.msg(&Msg::ResultsTitlePagePlanner { page: page.clone(), pages: pages.clone() })
+    } else {
+        app.i18n.msg(&Msg::ResultsTitlePage { page: page.clone(), pages: pages.clone() })
+    };
+    let short = if planned {
+        app.i18n.msg(&Msg::ResultsTitlePagePlannerShort { page, pages })
+    } else {
+        app.i18n.msg(&Msg::ResultsTitlePageShort { page, pages })
+    };
     let full = with_states(long.to_string());
     let brief = std::iter::once(short.to_string()).chain(states.first().cloned()).collect::<Vec<_>>().join(" · ");
     let least = states.first().cloned().unwrap_or_else(|| short.to_string());

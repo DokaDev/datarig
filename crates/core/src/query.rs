@@ -24,8 +24,8 @@ mod recognise;
 mod render;
 
 pub use check::{
-    BarRefusal, Confirm, FilterVerdict, LexProblem, MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS, PG_FILTER_CALLS,
-    PG_REFUSED_CALLS, ShapeProblem, check_filter,
+    BarRefusal, Confirm, EstimateOff, FilterVerdict, LexProblem, MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS,
+    PG_FILTER_CALLS, PG_REFUSED_CALLS, ShapeProblem, check_filter, estimate_allowed, has_subquery,
 };
 pub use compile::{Compiled, capped, compile, compile_capped};
 pub use order::{OrderError, OrderProblem, SortStep, order_text, parse_order, sort_column};

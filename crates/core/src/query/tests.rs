@@ -1475,3 +1475,38 @@ fn a_condition_names_the_columns_it_compares() {
     // Text kept as written names no column.
     assert_eq!(Cond::Raw("price > 1".into()).columns(), Vec::<&str>::new());
 }
+
+#[test]
+fn a_subquery_is_seen_in_every_form() {
+    for d in [Dialect::Postgres, MY] {
+        for text in [
+            "id IN (SELECT id FROM t)",
+            "EXISTS(select 1)",
+            "id = ( \n WITH x AS (SELECT 1) SELECT * FROM x)",
+            "(id) IN (VALUES (1))",
+            "id IN ((SELECT 1))",
+        ] {
+            assert!(has_subquery(text, d), "{d:?} {text}");
+        }
+        for text in ["id > 1", "(id > 1) AND (name = 'select')", "lower(name) = 'x'", "id IN (1, 2)", "\"select\" = 1"]
+        {
+            assert!(!has_subquery(text, d), "{d:?} {text}");
+        }
+        // A text the lexical check refuses may hold one, as far as is known.
+        assert!(has_subquery("id = 1 -- (select", d));
+        assert!(has_subquery("name = 'open", d));
+    }
+    assert!(has_subquery("id IN (TABLE t)", MY));
+}
+
+#[test]
+fn an_estimate_is_offered_only_for_a_filter_without_unknown_calls_or_mysql_subqueries() {
+    let confirm = FilterVerdict::NeedsConfirm(vec![Confirm::Calls(vec!["f(x)".into()])]);
+    assert_eq!(estimate_allowed(&FilterVerdict::Clear, "id > 1", Dialect::Postgres), Ok(()));
+    assert_eq!(estimate_allowed(&confirm, "f(id) > 1", Dialect::Postgres), Err(EstimateOff::Calls));
+    assert_eq!(estimate_allowed(&confirm, "f(id) > 1", MY), Err(EstimateOff::Calls));
+    let sub = "id IN (SELECT id FROM t)";
+    assert_eq!(estimate_allowed(&FilterVerdict::Clear, sub, Dialect::Postgres), Ok(()));
+    assert_eq!(estimate_allowed(&FilterVerdict::Clear, sub, MY), Err(EstimateOff::Subquery));
+    assert_eq!(estimate_allowed(&FilterVerdict::Clear, "id > 1", MY), Ok(()));
+}

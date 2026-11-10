@@ -189,7 +189,7 @@ fn counts(h: &mut Harness) -> Vec<(u64, String)> {
     h.sent()
         .into_iter()
         .filter_map(|c| match c {
-            DbCommand::Count { id, sql } => Some((id, sql)),
+            DbCommand::Count { id, sql, limit: None } => Some((id, sql)),
             _ => None,
         })
         .collect()

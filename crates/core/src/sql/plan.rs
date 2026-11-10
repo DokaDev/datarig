@@ -389,6 +389,16 @@ impl ExplainFormat {
         }
     }
 
+    /// The rows the planner expects the statement of plan `text` (written in this format, of
+    /// one statement, without `ANALYZE`) to return: its root's estimate, rounded. `None` when
+    /// the text is not such a plan or its root has no estimate (unknown, never 0).
+    pub fn estimated_rows(self, text: &str) -> Option<u64> {
+        let plan = self.read(text).ok()?;
+        let root = plan.roots().next()?;
+        let rows = plan.nodes[root].plan_rows?;
+        (rows.is_finite() && rows >= 0.0 && rows < u64::MAX as f64).then(|| rows.round() as u64)
+    }
+
     /// Read a plan written in this format.
     pub fn read(self, text: &str) -> Result<Plan, PlanError> {
         match self {

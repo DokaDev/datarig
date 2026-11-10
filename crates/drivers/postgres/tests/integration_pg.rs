@@ -3662,7 +3662,7 @@ impl Conn {
 
     /// [`Conn::count`], with whether it counted in a transaction with one snapshot.
     async fn count_in(&mut self, id: u64, sql: &str) -> (Result<u64, DbError>, bool) {
-        self.session.send(DbCommand::Count { id, sql: sql.to_string() });
+        self.session.send(DbCommand::Count { id, sql: sql.to_string(), limit: None });
         let DbEvent::Counted { id: got, result, snapshot } =
             self.wait(|e| matches!(e, DbEvent::Counted { .. }), 30).await
         else {
@@ -3969,7 +3969,7 @@ async fn a_cancelled_count_answers_once_and_the_portal_pages_on() {
     });
     let DbEvent::Page { more: true, .. } = c.result(1).await else { panic!("a page with more") };
     let slow = count_of("SELECT g FROM generate_series(1, 2000000000) g");
-    c.session.send(DbCommand::Count { id: 1, sql: slow });
+    c.session.send(DbCommand::Count { id: 1, sql: slow, limit: None });
     tokio::time::sleep(Duration::from_millis(300)).await;
     c.session.cancel();
     let DbEvent::Counted { result, .. } = c.wait(|e| matches!(e, DbEvent::Counted { .. }), 20).await else {
@@ -5249,8 +5249,8 @@ async fn a_cancel_not_sent_answers_a_fetch_a_count_and_a_check_once() {
     let rows = "SELECT g FROM generate_series(1, 1200) g";
     let cases: [(&str, bool, DbCommand); 5] = [
         ("fetch", true, DbCommand::FetchMore { id: 1 }),
-        ("count", false, DbCommand::Count { id: 2, sql: rows.into() }),
-        ("countin", true, DbCommand::Count { id: 2, sql: rows.into() }),
+        ("count", false, DbCommand::Count { id: 2, sql: rows.into(), limit: None }),
+        ("countin", true, DbCommand::Count { id: 2, sql: rows.into(), limit: None }),
         ("check", false, DbCommand::CheckRepeat { id: 2, sql: rows.into() }),
         ("checkin", true, DbCommand::CheckRepeat { id: 2, sql: rows.into() }),
     ];
@@ -6767,12 +6767,12 @@ async fn a_count_asked_again_after_a_cancel_is_not_cancelled() {
     let (_schema_guard, _terminate, schema, _tag) = scratch(&url, "cancelc");
     let sql = format!("SELECT count(*) FROM {schema}.t");
     let mut c = connecting(&url);
-    c.session.send(DbCommand::Count { id: 7, sql: sql.clone() });
+    c.session.send(DbCommand::Count { id: 7, sql: sql.clone(), limit: None });
     c.session.cancel();
     let counted = |e: &DbEvent| matches!(e, DbEvent::Counted { id: 7, .. });
     let ev = c.wait(counted, 10).await;
     assert!(matches!(ev, DbEvent::Counted { result: Err(DbError::Cancelled), .. }), "{ev:?}");
-    c.session.send(DbCommand::Count { id: 7, sql });
+    c.session.send(DbCommand::Count { id: 7, sql, limit: None });
     let ev = c.wait(counted, 10).await;
     assert!(matches!(ev, DbEvent::Counted { result: Ok(0), .. }), "{ev:?}");
 }
@@ -6807,4 +6807,178 @@ async fn a_cancel_delayed_past_its_run_does_not_stop_the_next_run() {
     assert!(matches!(q.result(1).await, DbEvent::Page { .. }), "the run ended before its cancel left");
     let ev = q.run(2, "SELECT pg_sleep(2)").await;
     assert!(matches!(ev, DbEvent::Page { .. }), "the next run is not stopped: {ev:?}");
+}
+
+// ── a count with a time limit, and the planner's estimate ─────────────────
+
+impl Conn {
+    /// Send `Count` with `limit` for result `id`: its answer, and how long it took.
+    async fn count_within(&mut self, id: u64, sql: &str, limit: Option<Duration>) -> (Result<u64, DbError>, Duration) {
+        let t0 = Instant::now();
+        self.session.send(DbCommand::Count { id, sql: sql.to_string(), limit });
+        let DbEvent::Counted { result, .. } = self.wait(|e| matches!(e, DbEvent::Counted { .. }), 30).await else {
+            unreachable!()
+        };
+        (result, t0.elapsed())
+    }
+
+    /// Send `Estimate` of `sql`: its answer, and how long it took.
+    async fn estimate(&mut self, id: u64, sql: &str) -> (Result<u64, DbError>, Duration) {
+        let t0 = Instant::now();
+        self.session.send(DbCommand::Estimate { id, sql: sql.to_string() });
+        let DbEvent::Estimated { result, .. } = self.wait(|e| matches!(e, DbEvent::Estimated { .. }), 30).await else {
+            unreachable!()
+        };
+        (result, t0.elapsed())
+    }
+
+    /// The first value of the first row `sql` answers.
+    async fn first_value(&mut self, id: u64, sql: &str) -> Option<String> {
+        match self.run(id, sql).await {
+            DbEvent::Page { rows, .. } => rows.first().and_then(|r| r[0].clone()),
+            other => panic!("{sql}: {other:?}"),
+        }
+    }
+}
+
+/// A count with a time limit, behind an `ACCESS EXCLUSIVE` lock another session holds: the
+/// server stops it at the limit (`TimedOut`, told from a cancel), or it gives up waiting for the
+/// lock after 2 s (`LockTimeout`) when the limit is longer; the user's cancel is `Cancelled`; a
+/// shorter limit of the session's own is kept; the connection lost is the usual error. None of
+/// them is a number, and the session's settings are as before each.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_count_is_told_apart_when_stopped_cancelled_or_lost() {
+    let Some(url) = pg_url("a_bounded_count_is_told_apart_when_stopped_cancelled_or_lost") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_bounded_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let tag = format!("bounded{pid}");
+    let (mut q, mut b) = tagged(&url, &tag).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 2000) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let rows = format!("SELECT * FROM {table} WHERE (id > 100)");
+    let counted = count_of(&rows);
+    let limit = Some(Duration::from_secs(30));
+    let settings = "SELECT current_setting('statement_timeout') || ' ' || current_setting('lock_timeout')";
+    let before = q.first_value(1, settings).await;
+    assert_eq!(q.count_within(2, &counted, limit).await.0, Ok(1900));
+    assert_eq!(q.first_value(3, settings).await, before, "nothing stays on the session");
+    // Held by another session.
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    let (got, took) = q.count_within(4, &counted, Some(Duration::from_secs(1))).await;
+    assert_eq!(got, Err(DbError::TimedOut(Duration::from_secs(1))), "{took:?}");
+    assert!(took < Duration::from_millis(1900), "stopped at the limit, before the lock wait's: {took:?}");
+    let (got, took) = q.count_within(5, &counted, limit).await;
+    assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
+    assert!(took >= Duration::from_secs(2) && took < Duration::from_secs(10), "{took:?}");
+    assert_eq!(q.first_value(6, settings).await, before);
+    // The user's cancel while it waits.
+    q.session.send(DbCommand::Count { id: 7, sql: counted.clone(), limit });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    q.session.cancel();
+    let DbEvent::Counted { result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 20).await else {
+        unreachable!()
+    };
+    assert_eq!(result, Err(DbError::Cancelled));
+    // A shorter limit the session has stays the limit (and is the one said).
+    assert!(matches!(q.run(8, "SET statement_timeout = '700ms'").await, DbEvent::Done { .. }));
+    let (got, _) = q.count_within(9, &counted, limit).await;
+    assert_eq!(got, Err(DbError::TimedOut(Duration::from_millis(700))));
+    assert_eq!(q.first_value(10, "SELECT current_setting('statement_timeout')").await.as_deref(), Some("700ms"));
+    assert!(matches!(q.run(11, "RESET statement_timeout").await, DbEvent::Done { .. }));
+    // Inside the user's block: no limit of the count's own, the block's settings unchanged.
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+    assert!(matches!(q.run(12, "BEGIN").await, DbEvent::Done { .. }));
+    assert_eq!(q.count_within(13, &counted, limit).await.0, Ok(1900));
+    assert_eq!(q.first_value(14, settings).await, before, "the block's own settings");
+    assert!(matches!(q.run(15, "ROLLBACK").await, DbEvent::Done { .. }));
+    // The connection lost while it waits: the usual error, never a number.
+    assert!(matches!(b.run(5, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(6, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    q.session.send(DbCommand::Count { id: 16, sql: counted.clone(), limit });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let kill =
+        format!("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'datarig-q-{tag}'");
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    let DbEvent::Page { .. } = c.run(1, &kill).await else { panic!("terminate") };
+    let mut seen = Vec::new();
+    while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(5), q.rx.recv()).await {
+        let lost = matches!(ev, DbEvent::Lost { .. });
+        seen.push(ev);
+        if lost {
+            break;
+        }
+    }
+    assert!(seen.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{seen:?}");
+    assert!(
+        !seen.iter().any(|e| matches!(
+            e,
+            DbEvent::Counted { result: Ok(_) | Err(DbError::TimedOut(_) | DbError::Cancelled), .. }
+        )),
+        "{seen:?}"
+    );
+    assert!(matches!(b.run(7, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
+/// The planner's estimate takes no lock but the `AccessShareLock` of planning, and only while it
+/// plans: it is answered while another session holds `EXCLUSIVE` (which conflicts with every
+/// other lock), waits for `ACCESS EXCLUSIVE` asking for nothing more (`pg_locks`) and gives up
+/// after 2 s, holding nothing after. Not asked inside a transaction block.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_estimate_takes_no_lock_beyond_access_share() {
+    let Some(url) = pg_url("an_estimate_takes_no_lock_beyond_access_share") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_estimate_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let tag = format!("estimate{pid}");
+    let (mut q, mut b) = tagged(&url, &tag).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 5000) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(1, &format!("ANALYZE {table}")).await, DbEvent::Done { .. }));
+    let rows = format!("SELECT * FROM {table} WHERE (id > 1000)");
+    let settings = "SELECT current_setting('statement_timeout') || ' ' || current_setting('lock_timeout')";
+    let before = q.first_value(1, settings).await;
+    let (est, _) = q.estimate(2, &rows).await;
+    let est = est.expect("an estimate");
+    assert!((2_000..=6_000).contains(&est), "{est}");
+    let capped = format!("{rows} LIMIT 10");
+    assert_eq!(q.estimate(3, &capped).await.0, Ok(10), "the cap is the planner's too");
+    assert_eq!(q.first_value(4, settings).await, before, "nothing stays on the session");
+    // EXCLUSIVE conflicts with every lock but ACCESS SHARE.
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    assert!(q.estimate(5, &rows).await.0.is_ok(), "asked for nothing stronger than ACCESS SHARE");
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+    // ACCESS EXCLUSIVE: it waits, asking for ACCESS SHARE only, then gives up.
+    assert!(matches!(b.run(5, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(6, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    let t0 = Instant::now();
+    q.session.send(DbCommand::Estimate { id: 6, sql: rows.clone() });
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    let locks = format!(
+        "SELECT string_agg(l.mode || ':' || l.granted, ',' ORDER BY l.mode) FROM pg_locks l JOIN pg_stat_activity a \
+         ON a.pid = l.pid WHERE a.application_name = 'datarig-q-{tag}' AND l.relation = '{table}'::regclass"
+    );
+    let mut seen = None;
+    for i in 0..50 {
+        seen = c.first_value(10 + i, &locks).await;
+        if seen.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(seen.as_deref(), Some("AccessShareLock:false"));
+    let DbEvent::Estimated { result, .. } = q.wait(|e| matches!(e, DbEvent::Estimated { .. }), 20).await else {
+        unreachable!()
+    };
+    assert!(matches!(result, Err(DbError::LockTimeout(_))), "{result:?}");
+    assert!(t0.elapsed() < Duration::from_secs(10));
+    assert_eq!(c.first_value(100, &locks).await, None, "nothing held after");
+    assert!(matches!(b.run(7, "ROLLBACK").await, DbEvent::Done { .. }));
+    // Inside a transaction block: not asked.
+    assert!(matches!(q.run(7, "BEGIN").await, DbEvent::Done { .. }));
+    assert_eq!(q.estimate(8, &rows).await.0, Err(DbError::NotSupported));
+    assert!(matches!(q.run(9, "ROLLBACK").await, DbEvent::Done { .. }));
+    assert_eq!(q.first_value(10, settings).await, before);
 }

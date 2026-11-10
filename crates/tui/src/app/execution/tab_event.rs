@@ -594,6 +594,8 @@ impl App {
                 }
                 return self.on_counted(id, qid, result, snapshot);
             }
+            // The planner's estimate the user asked for.
+            DbEvent::Estimated { id: qid, result } => return self.on_estimated(id, qid, result),
             // A statement of an export.
             DbEvent::Exported { id: qid, result, cancelled } => return self.on_exported(id, qid, result, cancelled),
             // The server's half of the allowlist, for a text plan to view as a plan.

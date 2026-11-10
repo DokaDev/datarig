@@ -36,6 +36,8 @@
 //! view the Changes tab of a result opens in (its list of changed cells, or its SQL), `[ui]
 //! background` whether the theme paints its background or leaves the terminal's showing.
 //! `[history] filters` says whether a table tab keeps the filters it ran, to pick one again.
+//! `[results] count_timeout` is how long the server may count a result's rows for the user
+//! (`#`) before it stops (default 30 s, `"off"` for no limit).
 //! `[updates] check` says whether datarig asks GitHub once a day for a newer release, and
 //! `[updates] whats_new` whether What's new shows once after an update.
 //! `[monitor] interval` is how often the server monitor reads the server while its tab is shown.
@@ -137,6 +139,8 @@ struct FileConfig {
     updates: Option<UpdatesSection>,
     #[serde(default)]
     history: Option<HistorySection>,
+    #[serde(default)]
+    results: Option<ResultsSection>,
     #[serde(default)]
     monitor: Option<MonitorSection>,
     #[serde(default)]
@@ -256,6 +260,12 @@ const TX_IDLE: &str = "\"5m\", \"30m\", \"1h\" (10s at least), \"off\"";
 
 /// `idle_disconnect`'s literal values, for errors.
 const IDLE_DISCONNECT: &str = "\"300s\", \"5m\", \"1h\" (1m to 24h), \"off\"";
+
+/// `[results] count_timeout`'s literal values, for errors.
+const COUNT_TIMEOUT_VALUES: &str = "\"30s\", \"2m\", \"1h\" (1s to 24h), \"off\"";
+
+/// Default of `[results] count_timeout`.
+pub const COUNT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// `lock_wait`'s literal values, for errors.
 const LOCK_WAIT: &str = "\"5s\", \"30s\", \"1m\" (1s to 24h), \"off\"";
@@ -387,6 +397,13 @@ struct HistorySection {
     /// A string, or `true` / `false` written without quotes.
     #[serde(default)]
     filters: Option<toml::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResultsSection {
+    #[serde(default)]
+    count_timeout: Option<toml::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1128,6 +1145,9 @@ pub struct Prefs {
     pub paste_null: PasteNull,
     /// `[history] filters`.
     pub filter_history: FilterHistory,
+    /// `[results] count_timeout`: how long the server may count a result's rows for the user
+    /// (`None`: no limit).
+    pub count_timeout: Option<std::time::Duration>,
     /// `[updates] check`.
     pub update_check: UpdateCheck,
     /// `[updates] whats_new`.
@@ -1167,6 +1187,7 @@ impl Default for Prefs {
             background: UiBackground::default(),
             paste_null: PasteNull::default(),
             filter_history: FilterHistory::default(),
+            count_timeout: Some(COUNT_TIMEOUT),
             update_check: UpdateCheck::default(),
             whats_new: WhatsNewSetting::default(),
             monitor_interval: MonitorInterval::default(),
@@ -1446,6 +1467,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         f.ui.map(|u| (u.yank_flash, u.tips, u.changes_view, u.background)).unwrap_or_default();
     let paste_null = f.edit.and_then(|e| e.paste_null);
     let filter_history = f.history.and_then(|h| h.filters);
+    let count_timeout = f.results.and_then(|r| r.count_timeout);
     let (update_check, whats_new) = f.updates.map(|u| (u.check, u.whats_new)).unwrap_or_default();
     let monitor_interval = f.monitor.and_then(|m| m.interval);
     let (default_source, keychain_access) =
@@ -1516,6 +1538,11 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             }),
             "on, off",
         )?,
+        count_timeout: match &count_timeout {
+            None => Some(COUNT_TIMEOUT),
+            Some(v) => policy::parse_count_timeout(v)
+                .map_err(|e| bad("results.count_timeout", e).allowed(Some(COUNT_TIMEOUT_VALUES)))?,
+        },
         update_check: choice("updates.check", update_check, "on, off")?,
         whats_new: choice("updates.whats_new", whats_new, "on, off")?,
         monitor_interval: choice("monitor.interval", monitor_interval, "1s, 2s, 5s, 10s, 30s, 60s")?,
@@ -2002,6 +2029,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "edit", "paste_null", null)?;
     let history = (prefs.filter_history.as_str().into(), prefs.filter_history == FilterHistory::default());
     orphans += &nested_setting(&mut doc, "history", "filters", history)?;
+    let count = (policy::format_timeout(prefs.count_timeout).into(), prefs.count_timeout == Some(COUNT_TIMEOUT));
+    orphans += &nested_setting(&mut doc, "results", "count_timeout", count)?;
     let check = (prefs.update_check.as_str().into(), prefs.update_check == UpdateCheck::default());
     orphans += &nested_setting(&mut doc, "updates", "check", check)?;
     let whats_new = (prefs.whats_new.as_str().into(), prefs.whats_new == WhatsNewSetting::default());

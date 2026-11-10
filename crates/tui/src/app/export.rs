@@ -1224,6 +1224,7 @@ impl App {
             started: now,
             fetch: false,
             count: false,
+            estimate: false,
             cancelling: None,
             stopping: false,
             refused: false,

@@ -102,15 +102,15 @@ use crate::link::{Closed, Link, Next};
 use crate::route::Cancel;
 use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display, value_kind};
 use datarig_core::driver::{
-    CancelFailure, CancelMark, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, OwnSession,
-    PagingMode, TxOutcome, TxRule, TxStep,
+    COUNT_LOCK_WAIT, CancelFailure, CancelMark, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, ESTIMATE_LIMIT,
+    Outcome, OwnSession, PagingMode, TxOutcome, TxRule, TxStep,
 };
 use datarig_core::sql::lexer::{Tok, Token, lex, lex_backslash_strings};
 use datarig_core::sql::risk::{self, Class};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Column, FirstPage, Row, SimpleQueryMessage, Statement, Transaction};
@@ -730,6 +730,11 @@ fn cancelled_count(id: u64) -> DbEvent {
     DbEvent::Counted { id, result: Err(DbError::Cancelled), snapshot: false }
 }
 
+/// Estimate `id`'s answer when it was cancelled.
+fn cancelled_estimate(id: u64) -> DbEvent {
+    DbEvent::Estimated { id, result: Err(DbError::Cancelled) }
+}
+
 /// Export `id`'s answer when it was cancelled.
 fn cancelled_export(id: u64) -> DbEvent {
     DbEvent::Exported { id, result: Err(DbError::Cancelled), cancelled: true }
@@ -824,13 +829,25 @@ pub(crate) async fn query_loop(
                 }
             }
             // Answered once; a session the UI closed meanwhile answers nothing.
-            Next::Command(DbCommand::Count { id, sql }) => match count(&client, &mut link, &env, &mut tx, &sql).await {
-                Ok((result, snapshot)) => {
-                    let _ = events.send(DbEvent::Counted { id, result, snapshot });
-                    continue;
+            Next::Command(DbCommand::Count { id, sql, limit }) => {
+                match count(&client, &mut link, &env, &mut tx, &sql, limit).await {
+                    Ok((result, snapshot)) => {
+                        let _ = events.send(DbEvent::Counted { id, result, snapshot });
+                        continue;
+                    }
+                    Err(closed) => unanswered(&events, closed, cancelled_count(id)),
                 }
-                Err(closed) => unanswered(&events, closed, cancelled_count(id)),
-            },
+            }
+            // Answered once; a session the UI closed meanwhile answers nothing.
+            Next::Command(DbCommand::Estimate { id, sql }) => {
+                match estimate(&client, &mut link, &env, &mut tx, &sql).await {
+                    Ok(result) => {
+                        let _ = events.send(DbEvent::Estimated { id, result });
+                        continue;
+                    }
+                    Err(closed) => unanswered(&events, closed, cancelled_estimate(id)),
+                }
+            }
             Next::Command(DbCommand::CheckRepeat { id, sql }) => {
                 match check_repeat(&client, &mut link, &env, &mut tx, &sql).await {
                     Ok(result) => {
@@ -2365,7 +2382,8 @@ async fn portal<'a>(
             Next::Command(DbCommand::ClosePortal { id: cid }) if cid == id => break,
             // A count of this result's rows runs in the portal's transaction, under a
             // savepoint: the portal goes on paging after it, whatever it answered.
-            Next::Command(DbCommand::Count { id: cid, sql }) => {
+            // No time limit: it runs in the portal's transaction, whose settings stay the user's.
+            Next::Command(DbCommand::Count { id: cid, sql, limit: _ }) => {
                 if env.cancel.begin() {
                     let _ = env.events.send(cancelled_count(cid));
                     continue;
@@ -2377,6 +2395,15 @@ async fn portal<'a>(
                     }
                 };
                 let _ = env.events.send(DbEvent::Counted { id: cid, result, snapshot });
+            }
+            // Not while the portal holds a transaction open: the locks planning takes would last
+            // as long as it does. Nothing is sent; the result goes on paging.
+            Next::Command(DbCommand::Estimate { id: cid, .. }) => {
+                if env.cancel.begin() {
+                    let _ = env.events.send(cancelled_estimate(cid));
+                    continue;
+                }
+                let _ = env.events.send(DbEvent::Estimated { id: cid, result: Err(DbError::NotSupported) });
             }
             // So is the allowlist's question, which leaves the portal paging too.
             Next::Command(DbCommand::CheckRepeat { id: cid, sql }) => {
@@ -2497,11 +2524,13 @@ fn countable(sql: &str) -> bool {
 
 /// Count with `sql` while no portal is open. Inside the user's block it runs
 /// under a savepoint, rolled back to on failure, so a failed count never aborts the block (made
-/// read-only first on a read-only session, as the block's first statement); outside it, as a
-/// statement of its own (`BEGIN READ ONLY … COMMIT` on a read-only session). The allowlist's
-/// question to the server goes first ([`check_text`]), in the savepoint's request inside the
-/// block. One round trip when it succeeds. Also answers whether it counted in a snapshot fixed
-/// for the transaction (the user's block at `REPEATABLE READ` or `SERIALIZABLE`, asked with
+/// read-only first on a read-only session, as the block's first statement), without a time
+/// limit (the block's settings are the user's); outside it, as a statement of its own (`BEGIN
+/// READ ONLY … COMMIT` on a read-only session), or with `limit` in a read-only transaction of
+/// its own whose time limits end with it ([`limited_read`]). The allowlist's question to the
+/// server goes first ([`check_text`]), in the savepoint's request inside the block: two round
+/// trips outside it, one inside. Also answers whether it counted in a snapshot fixed for the
+/// transaction (the user's block at `REPEATABLE READ` or `SERIALIZABLE`, asked with
 /// [`ISOLATION`] in the same request); outside a block it never does (it counts the rows
 /// committed when it runs).
 async fn count(
@@ -2510,6 +2539,7 @@ async fn count(
     env: &Env<'_>,
     tx: &mut Tx,
     sql: &str,
+    limit: Option<Duration>,
 ) -> Result<(Result<u64, DbError>, bool), Closed> {
     if !countable(sql) {
         return Ok((Err(DbError::NotSupported), false));
@@ -2518,6 +2548,10 @@ async fn count(
         Ok(check) => check,
         Err(why) => return Ok((Err(why), false)),
     };
+    // Whether a block is open must be known before a transaction of the count's own begins.
+    if limit.is_some() && tx.unsure {
+        probe(client, link, env, tx).await?;
+    }
     let sp = env.savepoint;
     if tx.block {
         let first = tx.take_first_text(env);
@@ -2542,6 +2576,10 @@ async fn count(
     if let (_, Err(why)) = checked(link, env, client.simple_query(&format!("{path}{check}"))).await? {
         return Ok((Err(why), false));
     }
+    if let Some(limit) = limit.filter(|_| !tx.unsure) {
+        let read = limited_read(client, link, env, (limit, COUNT_LOCK_WAIT), sql).await?;
+        return Ok((read.and_then(|msgs| count_of(&msgs)), false));
+    }
     let text = if env.read_only { format!("{BEGIN_READ_ONLY}; {path}{sql}; COMMIT") } else { format!("{path}{sql}") };
     let counted = match link.guard(Some(env.token), client.simple_query(&text)).await? {
         Ok(msgs) => count_of(&msgs),
@@ -2554,6 +2592,107 @@ async fn count(
         }
     };
     Ok((counted, false))
+}
+
+/// The planner's estimate of the rows of `sql` (the app's read of a table, on the allowlist,
+/// checked again here) while no portal is open and outside a transaction block: the
+/// allowlist's question ([`check_text`]), then its `EXPLAIN (FORMAT JSON)`, never `ANALYZE`, in
+/// a read-only transaction of its own ([`limited_read`]): the locks planning takes end with it.
+/// Two round trips. Inside a block (or when whether one is open is not known) nothing is sent:
+/// the locks would last until the user ends it.
+async fn estimate(
+    client: &Client,
+    link: &mut Link,
+    env: &Env<'_>,
+    tx: &mut Tx,
+    sql: &str,
+) -> Result<Result<u64, DbError>, Closed> {
+    if risk::repeat::repeatable(sql).is_err() {
+        return Ok(Err(DbError::NotSupported));
+    }
+    let check = match check_text(sql) {
+        Ok(check) => check,
+        Err(why) => return Ok(Err(why)),
+    };
+    if tx.unsure {
+        probe(client, link, env, tx).await?;
+    }
+    if tx.block || tx.unsure {
+        return Ok(Err(DbError::NotSupported));
+    }
+    let path = env.path_text();
+    if let (_, Err(why)) = checked(link, env, client.simple_query(&format!("{path}{check}"))).await? {
+        return Ok(Err(why));
+    }
+    let format = datarig_core::driver::ExplainFormat::PostgresJson;
+    let explain = format.explain_sql(sql, false);
+    let read = limited_read(client, link, env, (ESTIMATE_LIMIT, COUNT_LOCK_WAIT), &explain).await?;
+    Ok(read.and_then(|msgs| {
+        let plan = msgs.iter().find_map(|m| match m {
+            SimpleQueryMessage::Row(r) => r.get(0).map(str::to_string),
+            _ => None,
+        });
+        plan.and_then(|p| format.estimated_rows(&p)).ok_or(DbError::NoResult)
+    }))
+}
+
+/// Run `text`, a read of the app's own, outside a transaction block with time limits that end
+/// with it: `BEGIN READ ONLY`, the settings of each transaction ([`Env::each_tx`]), then the
+/// statement and lock wait limits ([`limited_begin`]), the statement, `COMMIT`, sent together
+/// (one round trip; a failed statement leaves the transaction aborted, which the `COMMIT` rolls
+/// back). Pooler-safe: every setting is local to that transaction. The server stopping it at its
+/// limit is [`DbError::TimedOut`] with the limit that applied; a cancel of the user's (asked
+/// for this run: [`Env::cancel`]) is `Cancelled`; a lock wait past its limit is
+/// `LockTimeout`.
+async fn limited_read(
+    client: &Client,
+    link: &mut Link,
+    env: &Env<'_>,
+    (statement, lock): (Duration, Duration),
+    text: &str,
+) -> Result<Result<Vec<SimpleQueryMessage>, DbError>, Closed> {
+    let begin = limited_begin(env.each_tx, statement, lock);
+    let (set, read, _) = link
+        .guard(Some(env.token), async {
+            tokio::join!(client.simple_query(&begin), client.simple_query(text), client.batch_execute("COMMIT"))
+        })
+        .await?;
+    let applied = set.as_ref().ok().and_then(|msgs| applied_limit(msgs)).unwrap_or(statement);
+    let failed = |e: &tokio_postgres::Error| {
+        if is_cancel(e) && !env.cancel.asked() { DbError::TimedOut(applied) } else { count_error(e) }
+    };
+    match set {
+        Err(e) => Ok(Err(failed(&e))),
+        Ok(_) => Ok(read.map_err(|e| failed(&e))),
+    }
+}
+
+/// How [`limited_read`] begins: `BEGIN READ ONLY`, the session's settings of each transaction
+/// (`each_tx`), then `statement_timeout` and `lock_timeout` for this transaction alone, each the shorter of
+/// the one given and the one the session has (when it has one: a limit the user set is never
+/// made longer). The query answers with each setting's name and the milliseconds it got.
+fn limited_begin(each_tx: &[String], statement: Duration, lock: Duration) -> String {
+    let ms = |d: Duration| d.as_millis().clamp(1, i32::MAX as u128);
+    let first: Vec<&str> = std::iter::once(BEGIN_READ_ONLY).chain(each_tx.iter().map(String::as_str)).collect();
+    format!(
+        "{}; SELECT s.name, s.ms, pg_catalog.set_config(s.name, s.ms::text, true) FROM (SELECT name, CASE WHEN \
+         setting::bigint > 0 AND setting::bigint < l.ms THEN setting::bigint ELSE l.ms END AS ms FROM \
+         pg_catalog.pg_settings JOIN (VALUES ('statement_timeout', {}::bigint), ('lock_timeout', {}::bigint)) AS \
+         l(name, ms) USING (name)) AS s",
+        first.join("; "),
+        ms(statement),
+        ms(lock),
+    )
+}
+
+/// The statement time limit [`limited_begin`] set, as the server answered it.
+fn applied_limit(msgs: &[SimpleQueryMessage]) -> Option<Duration> {
+    msgs.iter().find_map(|m| match m {
+        SimpleQueryMessage::Row(r) if r.get(0) == Some("statement_timeout") => {
+            r.get(1).and_then(|v| v.parse::<u64>().ok()).map(Duration::from_millis)
+        }
+        _ => None,
+    })
 }
 
 /// Count with `sql` while a portal is open, in the portal's transaction (the user's block, or

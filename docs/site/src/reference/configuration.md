@@ -81,6 +81,14 @@ What datarig keeps on this machine between runs.
 |---|---|---|---|
 | `filters` | `"on"` | `"on"`, `"off"` (`true` and `false` read as `"on"` and `"off"`) | Whether a table tab keeps the filters and orders that ran, per table, in a file of the state directory that only you can read, so Ctrl+R in the filter line can pick one again. Off keeps nothing new; what the file holds stays until :filter history clear removes it. Also `:set history.filters`. |
 
+## `[results]`
+
+The results of a statement.
+
+| Key | Default | Values | Description |
+|---|---|---|---|
+| `count_timeout` | `"30s"` | a duration from `"1s"` to `"24h"` (`"2m"`), or `0` or `"off"` (no limit) | How long the server may count a result's rows when you ask (`#`) before it stops; the count then says the number is not known. Inside your own transaction a PostgreSQL count has no limit. |
+
 ## `[updates]`
 
 The update check and What's new.

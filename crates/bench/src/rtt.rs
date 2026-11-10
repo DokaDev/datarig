@@ -332,12 +332,14 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     let pages = s.next_pages(big, runs).await?;
     out.push(report("next_page", &pages));
     s.paging = PagingMode::NoHold;
-    // A count the user asks for, while a result pages (under a savepoint in
-    // the portal's transaction, `paging = "hold"`) and with no portal open; and a result resumed
+    // A count the user asks for, with its time limit, while a result pages (under a savepoint in
+    // the portal's transaction, `paging = "hold"`, where the limit is not set) and with no portal
+    // open (in a read-only transaction of its own with the limit); and a result resumed
     // past a closed portal or one never held (its statement prepared already): the next page
     // of the default, whose `COMMIT` goes out with it.
     let count = datarig_core::sql::risk::repeat::count_query(small).map_err(|e| format!("{e:?}"))?;
     let counted = |e: &DbEvent| matches!(e, DbEvent::Counted { .. });
+    let limit = Some(datarig_core::config::COUNT_TIMEOUT);
     let paging = s.next_id();
     s.session.send(DbCommand::Execute {
         max_rows: None,
@@ -349,7 +351,7 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     s.page(paging).await?;
     let mut costs = Vec::new();
     for _ in 0..runs {
-        let (c, ev) = s.measure(DbCommand::Count { id: paging, sql: count.clone() }, counted).await?;
+        let (c, ev) = s.measure(DbCommand::Count { id: paging, sql: count.clone(), limit }, counted).await?;
         if !matches!(ev, DbEvent::Counted { result: Ok(100), .. }) {
             return Err(format!("count_while_paging: {ev:?}"));
         }
@@ -359,13 +361,25 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     out.push(report("count_while_paging", &costs));
     let mut costs = Vec::new();
     for _ in 0..runs {
-        let (c, ev) = s.measure(DbCommand::Count { id: paging, sql: count.clone() }, counted).await?;
+        let (c, ev) = s.measure(DbCommand::Count { id: paging, sql: count.clone(), limit }, counted).await?;
         if !matches!(ev, DbEvent::Counted { result: Ok(100), .. }) {
             return Err(format!("count_idle: {ev:?}"));
         }
         costs.push(c);
     }
     out.push(report("count_idle", &costs));
+    // The planner's estimate the user asks for, with no portal open: the allowlist's question,
+    // then its EXPLAIN in a read-only transaction of its own.
+    let mut costs = Vec::new();
+    for _ in 0..runs {
+        let estimated = |e: &DbEvent| matches!(e, DbEvent::Estimated { .. });
+        let (c, ev) = s.measure(DbCommand::Estimate { id: paging, sql: small.to_string() }, estimated).await?;
+        if !matches!(ev, DbEvent::Estimated { result: Ok(_), .. }) {
+            return Err(format!("estimate_idle: {ev:?}"));
+        }
+        costs.push(c);
+    }
+    out.push(report("estimate_idle", &costs));
     let mut costs = Vec::new();
     for i in 0..=runs {
         let id = s.next_id();

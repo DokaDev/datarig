@@ -830,7 +830,9 @@ impl Tab {
             // A count or a fetch of more rows stops; said where it was announced, so its
             // announcement is not the last word.
             Some(r) => {
-                let label = if r.count {
+                let label = if r.estimate {
+                    datarig_i18n::Label::ResultsEstimateSessionClosed
+                } else if r.count {
                     datarig_i18n::Label::ResultsCountSessionClosed
                 } else {
                     datarig_i18n::Label::ResultsFetchSessionClosed

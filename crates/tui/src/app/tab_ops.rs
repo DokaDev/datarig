@@ -78,6 +78,7 @@ impl App {
         let stopped = match t.exec.running.take() {
             // An export says how it ended itself.
             Some(r) if r.export || r.apply => None,
+            Some(r) if r.estimate => Some(Label::ResultsEstimateRebound),
             Some(r) if r.count => Some(Label::ResultsCountRebound),
             Some(r) if r.fetch => Some(Label::ResultsFetchRebound),
             Some(_) => {

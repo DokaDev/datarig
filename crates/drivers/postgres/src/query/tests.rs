@@ -1440,3 +1440,21 @@ fn a_from_in_the_where_clause_is_not_where_the_copy_goes() {
     assert!(!copies_with_client("COPY t FROM '/tmp/in.csv' WHERE a IS DISTINCT FROM stdin"));
     assert!(!copies_with_client("COPY t (a) FROM '/tmp/in.csv' WHERE a IS NOT DISTINCT FROM stdout"));
 }
+
+#[test]
+fn a_limited_read_sets_its_limits_after_the_sessions_own_and_never_longer() {
+    let each = ["SET LOCAL search_path = a".to_string(), "SET LOCAL lock_timeout = 5000".to_string()];
+    let text = super::limited_begin(&each, std::time::Duration::from_secs(30), std::time::Duration::from_secs(2));
+    assert!(
+        text.starts_with("BEGIN READ ONLY; SET LOCAL search_path = a; SET LOCAL lock_timeout = 5000; SELECT s.name"),
+        "{text}"
+    );
+    // Each limit is the shorter of the session's (when it has one, read after its own settings)
+    // and the one given, set for the transaction alone.
+    assert!(text.contains("('statement_timeout', 30000::bigint), ('lock_timeout', 2000::bigint)"), "{text}");
+    assert!(text.contains("CASE WHEN setting::bigint > 0 AND setting::bigint < l.ms"), "{text}");
+    assert!(text.contains("pg_catalog.set_config(s.name, s.ms::text, true)"), "{text}");
+    let none = super::limited_begin(&[], std::time::Duration::from_millis(1500), std::time::Duration::from_secs(2));
+    assert!(none.starts_with("BEGIN READ ONLY; SELECT"), "{none}");
+    assert!(none.contains("('statement_timeout', 1500::bigint)"), "{none}");
+}

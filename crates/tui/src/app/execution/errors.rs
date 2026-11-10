@@ -69,6 +69,12 @@ impl App {
                 return self.i18n.msg(&Msg::DbLockTimeoutAny { error: s.clone() }).to_string();
             }
             DbError::NoAnswer(d) => return self.i18n.msg(&Msg::DbNoAnswer { elapsed: *d }).to_string(),
+            DbError::TimedOut(d) => {
+                return self
+                    .i18n
+                    .msg(&Msg::DbStoppedAtLimit { limit: crate::app::estimate::fmt_limit(*d) })
+                    .to_string();
+            }
             DbError::RowsNotRead(n) => return self.i18n.msg(&Msg::DbRowsNotRead { count: *n }).to_string(),
             DbError::NotUndoable(t) if t.is_empty() => Label::DbNotUndoableUnread,
             DbError::NotUndoable(t) => return self.not_undoable_text(t),

@@ -105,6 +105,10 @@ pub const IDLE_DISCONNECT_FLOOR: Duration = Duration::from_secs(60);
 /// mean no limit).
 pub const LOCK_WAIT_FLOOR: Duration = Duration::from_secs(1);
 
+/// The shortest `[results] count_timeout` (the servers count it in milliseconds or seconds;
+/// zero means no limit).
+pub const COUNT_TIMEOUT_FLOOR: Duration = Duration::from_secs(1);
+
 /// The longest `idle_disconnect` and `lock_wait` (what every server's setting takes).
 pub const SESSION_LIMIT_MAX: Duration = Duration::from_secs(24 * 3600);
 
@@ -461,6 +465,12 @@ pub fn parse_idle_disconnect(v: &toml::Value) -> Result<Option<Duration>, String
 /// (`None`).
 pub fn parse_lock_wait(v: &toml::Value) -> Result<Option<Duration>, String> {
     parse_limit(v, LOCK_WAIT_FLOOR)
+}
+
+/// A `[results] count_timeout` value: a duration from [`COUNT_TIMEOUT_FLOOR`] to
+/// [`SESSION_LIMIT_MAX`], or no limit (`None`: zero or `"off"`).
+pub fn parse_count_timeout(v: &toml::Value) -> Result<Option<Duration>, String> {
+    parse_limit(v, COUNT_TIMEOUT_FLOOR)
 }
 
 /// An `idle_disconnect` typed as text (`:set`, a form's field).

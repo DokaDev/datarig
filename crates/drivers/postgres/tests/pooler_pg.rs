@@ -1202,3 +1202,36 @@ async fn behind_a_pooler_an_apply_is_one_transaction_and_leaves_no_settings() {
         assert_eq!(rows[0][0], idle, "nothing left on the server connection");
     }
 }
+
+/// Behind a pooler a count with a time limit and an estimate run in a read-only transaction of
+/// their own whose limits are `SET LOCAL`: both are answered (the session's lock wait limit,
+/// shorter, is kept in its transactions), and another client going round the pooled server
+/// connections finds the server's own `statement_timeout` and `lock_timeout` on each.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_a_bounded_count_and_an_estimate_leave_no_settings() {
+    let Some(url) = pooler_url("behind_a_pooler_a_bounded_count_and_an_estimate_leave_no_settings") else {
+        return;
+    };
+    let _pool = POOL.read().await;
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let server = "SELECT current_setting('statement_timeout') || ' ' || current_setting('lock_timeout')";
+    let DbEvent::Page { rows, .. } = other.run(1, server).await else { panic!("settings") };
+    let before = rows[0][0].clone();
+    let opts = ConnectOptions::new(PAGE, SessionRole::Query, &format!("poolc{}", std::process::id()))
+        .lock_wait(Some(Duration::from_secs(1)));
+    let mut q = Conn::open_with(&url, SessionRole::Query, opts).await;
+    let rows = "SELECT * FROM pg_catalog.generate_series(1, 300) AS g WHERE (g > 100)";
+    let counted = datarig_core::sql::risk::repeat::count_query(rows).expect("on the allowlist");
+    for id in 1..=3 {
+        q.session.send(DbCommand::Count { id, sql: counted.clone(), limit: Some(Duration::from_secs(30)) });
+        let ev = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 30).await;
+        assert!(matches!(ev, DbEvent::Counted { result: Ok(200), .. }), "{ev:?}");
+        q.session.send(DbCommand::Estimate { id: 10 + id, sql: rows.to_string() });
+        let ev = q.wait(|e| matches!(e, DbEvent::Estimated { .. }), 30).await;
+        assert!(matches!(ev, DbEvent::Estimated { result: Ok(_), .. }), "{ev:?}");
+    }
+    for id in 0..8 {
+        let DbEvent::Page { rows, .. } = other.run(10 + id, server).await else { panic!() };
+        assert_eq!(rows[0][0], before, "nothing left on the server connection");
+    }
+}

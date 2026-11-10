@@ -59,6 +59,8 @@ impl App {
             } else if r.export {
                 let id = self.tab().id;
                 self.export_progress(id).map_or_else(|| self.i18n.label(Label::ExportRunning), |m| self.i18n.msg(&m))
+            } else if r.estimate {
+                self.i18n.label(Label::ResultsTitleEstimating)
             } else if r.count {
                 self.i18n.label(Label::ResultsTitleCounting)
             } else if r.fetch {

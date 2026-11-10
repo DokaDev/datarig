@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_table_estimate.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users * ×                        "
+"│  ＋ New connection   │╭ Results… ─ (1/~12 (planner)) ╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig.shop.users││ id: 0                │"
+"│  ▾ ●   local-pg      ││ [Result 1]  Chart  Messages  ││                      │"
+"│    ▾ datarig default ││ WHERE id > 5    ORDER BY   ⟳ ││                      │"
+"│      ▸ analytics     ││    │ id = ^v                 ││                      │"
+"│      ▸ public        ││    │ int8                    ││                      │"
+"│      ▾ shop          ││  1 │      0                  ││                      │"
+"│        ▾ Tables      ││  2 │      1                  ││                      │"
+"│          ▸ users     ││  3 │      2                  ││                      │"
+"│                      ││  4 │      3                  ││                      │"
+"│                      ││  5 │      4                  ││                      │"
+"│                      ││  6 │      5                  ││                      │"
+"│                      ││  7 │      6                  ││                      │"
+"│                      ││  8 │      7                  ││                      │"
+"│                      ││  9 │      8                  ││                      │"
+"│                      ││ 10 │      9                  ││                      │"
+"│                      ││ 11 │     10                  ││                      │"
+"│                      ││ 12 │     11                  ││                      │"
+"│                      ││ 13 │     12                  ││                      │"
+"│                      ││ 14 │     13                  ││                      │"
+"│                      ││ Showing 500 rows · nothing i…││                      │"
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" local-pg │ Planner estimate: about 5,900 rows (not a count)                 EN "

@@ -2312,7 +2312,7 @@ async fn counts_and_questions_never_run_another_accounts_code() {
     // cancelled.
     let long =
         "SELECT COUNT(*) FROM (\nSELECT a.id FROM shop.events a JOIN shop.events b ON a.id < b.id\n) AS datarig_count";
-    c.session.send(DbCommand::Count { id: 3, sql: long.to_string() });
+    c.session.send(DbCommand::Count { id: 3, sql: long.to_string(), limit: None });
     tokio::time::sleep(Duration::from_millis(1000)).await;
     c.session.cancel();
     match c.wait(|e| matches!(e, DbEvent::Counted { .. } | DbEvent::Lost { .. }), 30).await {
@@ -2898,7 +2898,7 @@ async fn a_procedures_further_result_sets_are_read_and_said() {
 
 /// Count with `sql` (run `id`): the count and whether it saw the transaction's snapshot.
 async fn count(c: &mut Conn, id: u64, sql: String) -> (Result<u64, DbError>, bool) {
-    c.session.send(DbCommand::Count { id, sql });
+    c.session.send(DbCommand::Count { id, sql, limit: None });
     match c.wait(|e| matches!(e, DbEvent::Counted { .. }), 30).await {
         DbEvent::Counted { result, snapshot, .. } => (result, snapshot),
         other => panic!("{other:?}"),
@@ -5664,12 +5664,12 @@ async fn a_count_asked_again_after_a_cancel_is_not_cancelled() {
     side(&admin).await.query_drop(format!("CREATE TABLE {t} (x int PRIMARY KEY)")).await.unwrap();
     let sql = format!("SELECT count(*) FROM {t}");
     let mut c = Conn::start(&admin, SessionRole::Query, false, test);
-    c.session.send(DbCommand::Count { id: 7, sql: sql.clone() });
+    c.session.send(DbCommand::Count { id: 7, sql: sql.clone(), limit: None });
     c.session.cancel();
     let counted = |e: &DbEvent| matches!(e, DbEvent::Counted { id: 7, .. });
     let ev = c.wait(counted, 15).await;
     assert!(matches!(ev, DbEvent::Counted { result: Err(DbError::Cancelled), .. }), "{ev:?}");
-    c.session.send(DbCommand::Count { id: 7, sql });
+    c.session.send(DbCommand::Count { id: 7, sql, limit: None });
     let ev = c.wait(counted, 15).await;
     assert!(matches!(ev, DbEvent::Counted { result: Ok(0), .. }), "{ev:?}");
 }
@@ -5704,7 +5704,7 @@ async fn a_count_cancelled_behind_a_held_result_leaves_the_statement_after_it() 
     c.ok(1, "BEGIN").await;
     let evs = c.run(2, &[&format!("SELECT id FROM {} ORDER BY id", t.q())]).await;
     assert!(page_of(&evs).2, "a result held for more pages");
-    c.session.send(DbCommand::Count { id: 3, sql: format!("SELECT count(*) FROM {}", t.q()) });
+    c.session.send(DbCommand::Count { id: 3, sql: format!("SELECT count(*) FROM {}", t.q()), limit: None });
     c.session.cancel();
     c.session.send(execute(4, "SELECT 1"));
     let ev = c.wait(|e| matches!(e, DbEvent::Counted { id: 3, .. }), 15).await;
@@ -5725,7 +5725,7 @@ async fn a_count_cancelled_behind_a_held_result_is_answered_at_once() {
     c.ok(1, "BEGIN").await;
     let evs = c.run(2, &[&format!("SELECT id FROM {} ORDER BY id", t.q())]).await;
     assert!(page_of(&evs).2, "a result held for more pages");
-    c.session.send(DbCommand::Count { id: 3, sql: format!("SELECT count(*) FROM {}", t.q()) });
+    c.session.send(DbCommand::Count { id: 3, sql: format!("SELECT count(*) FROM {}", t.q()), limit: None });
     tokio::time::sleep(Duration::from_millis(200)).await;
     c.session.cancel();
     let ev = c.wait(|e| matches!(e, DbEvent::Counted { id: 3, .. }), 5).await;
@@ -5736,4 +5736,111 @@ async fn a_count_cancelled_behind_a_held_result_is_answered_at_once() {
         other => panic!("the result goes on: {other:?}"),
     }
     c.ok(4, "ROLLBACK").await;
+}
+
+/// Count with `sql` (run `id`) and time limit `limit`: its answer, and how long it took.
+async fn count_within(c: &mut Conn, id: u64, sql: &str, limit: Option<Duration>) -> (Result<u64, DbError>, Duration) {
+    let t0 = Instant::now();
+    c.session.send(DbCommand::Count { id, sql: sql.to_string(), limit });
+    match c.wait(|e| matches!(e, DbEvent::Counted { .. }), 30).await {
+        DbEvent::Counted { result, .. } => (result, t0.elapsed()),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The planner's estimate of `sql` (run `id`), and how long it took.
+async fn estimate(c: &mut Conn, id: u64, sql: &str) -> (Result<u64, DbError>, Duration) {
+    let t0 = Instant::now();
+    c.session.send(DbCommand::Estimate { id, sql: sql.to_string() });
+    match c.wait(|e| matches!(e, DbEvent::Estimated { .. }), 30).await {
+        DbEvent::Estimated { result, .. } => (result, t0.elapsed()),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A count with a time limit, behind a metadata lock another session holds (`LOCK TABLES …
+/// WRITE`): the server stops it at the limit (`TimedOut`), or it gives up waiting for the lock
+/// after 2 s (`LockTimeout`) when the limit is longer; a cancel is `Cancelled`; a session's own
+/// shorter limit is kept. None of them is a number, and nothing of the limits stays on the session.
+/// The estimate waits for the lock as long, and comes when the table is free.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_count_and_an_estimate_are_told_apart_when_stopped() {
+    let test = "a_bounded_count_and_an_estimate_are_told_apart_when_stopped";
+    let Some((url, admin)) = urls(test) else { return };
+    let _end = EndSessions { admin: admin.clone(), test };
+    let t = numbers(&admin, "bounded", 2000).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let rows = format!("SELECT * FROM {} WHERE (id > 100)", t.q());
+    let counted = format!("SELECT COUNT(*) FROM (\n{rows}\n) AS datarig_count");
+    let limit = Some(Duration::from_secs(30));
+    // Free: counted, and estimated within a factor of the rows.
+    assert_eq!(count_within(&mut c, 1, &counted, limit).await.0, Ok(1900));
+    let (est, _) = estimate(&mut c, 2, &rows).await;
+    let est = est.expect("an estimate");
+    assert!((190..=19_000).contains(&est), "{est}");
+    // Held by another session.
+    let mut b = side(&url).await;
+    b.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
+    let (got, took) = count_within(&mut c, 3, &counted, Some(Duration::from_secs(1))).await;
+    assert_eq!(got, Err(DbError::TimedOut(Duration::from_secs(1))), "{took:?}");
+    assert!(took < Duration::from_secs(2), "stopped at the limit: {took:?}");
+    let (got, took) = count_within(&mut c, 4, &counted, limit).await;
+    assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
+    assert!(took >= Duration::from_secs(2) && took < Duration::from_secs(10), "{took:?}");
+    let (got, took) = estimate(&mut c, 5, &rows).await;
+    assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
+    assert!(took < Duration::from_secs(10), "{took:?}");
+    // The user's cancel (`KILL QUERY`) while it waits.
+    c.session.send(DbCommand::Count { id: 6, sql: counted.clone(), limit });
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    c.session.cancel();
+    let DbEvent::Counted { result, .. } = c.wait(|e| matches!(e, DbEvent::Counted { .. }), 30).await else {
+        unreachable!()
+    };
+    assert_eq!(result, Err(DbError::Cancelled));
+    // A shorter limit of the session's own stays.
+    c.ok(7, "SET SESSION max_execution_time = 700").await;
+    let (got, _) = count_within(&mut c, 8, &counted, limit).await;
+    assert_eq!(got, Err(DbError::TimedOut(Duration::from_millis(700))));
+    b.query_drop("UNLOCK TABLES").await.unwrap();
+    b.disconnect().await.unwrap();
+    // Nothing of the limits stays on the session.
+    let evs = c.run(9, &["SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout"]).await;
+    let (_, values, _) = page_of(&evs);
+    assert_eq!(values[0][0].as_deref(), Some("700"), "the user's own");
+    assert_ne!(values[0][1].as_deref(), Some("2"));
+    c.ok(10, "SET SESSION max_execution_time = 0").await;
+    assert_eq!(count_within(&mut c, 11, &counted, limit).await.0, Ok(1900));
+}
+
+/// The estimate is not asked with a transaction open (its metadata lock would stay until the
+/// transaction ends), nor when the next transaction has settings of its own (it would use them
+/// up); without autocommit it plans in a read-only transaction of its own that it ends.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_estimate_waits_for_no_transaction_and_keeps_the_next_ones_settings() {
+    use datarig_core::driver::Isolation;
+    let test = "an_estimate_waits_for_no_transaction_and_keeps_the_next_ones_settings";
+    let Some((url, admin)) = urls(test) else { return };
+    let _end = EndSessions { admin: admin.clone(), test };
+    let t = numbers(&admin, "estx", 50).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let rows = format!("SELECT * FROM {} WHERE (id > 10)", t.q());
+    c.ok(1, "START TRANSACTION").await;
+    assert_eq!(estimate(&mut c, 2, &rows).await.0, Err(DbError::NotSupported));
+    c.ok(3, "COMMIT").await;
+    let evs = c.run(4, &["SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"]).await;
+    assert_eq!(isolation_of(&evs), Some(None), "{evs:?}");
+    assert_eq!(estimate(&mut c, 5, &rows).await.0, Err(DbError::NextTransactionSet));
+    c.ok(6, "START TRANSACTION").await;
+    let evs = c.run(7, &["SELECT @@SESSION.transaction_isolation"]).await;
+    assert!(!evs.is_empty());
+    c.ok(8, "COMMIT").await;
+    c.ok(9, "SET SESSION autocommit = 0").await;
+    assert!(estimate(&mut c, 10, &rows).await.0.is_ok());
+    // Nothing stays open: a level set now is the session's at once.
+    let evs = c.run(11, &["SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED"]).await;
+    assert_eq!(isolation_of(&evs), Some(Some(Isolation::ReadCommitted)), "{evs:?}");
+    // A view is refused by the allowlist's question, as a count is.
+    let view = "SELECT * FROM shop.order_summary WHERE (1 = 1)";
+    assert!(matches!(estimate(&mut c, 12, view).await.0, Err(DbError::NotRepeatable(_))));
 }

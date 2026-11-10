@@ -55,3 +55,24 @@ fn json_refuses_numbers_and_escapes_json_does_not_allow() {
         assert!(json(good).is_ok(), "{good}");
     }
 }
+
+#[test]
+fn an_estimate_is_the_root_rows_of_a_plan() {
+    let pg = r#"[{"Plan": {"Node Type": "Limit", "Parallel Aware": false, "Startup Cost": 0.00, "Total Cost": 1.50,
+        "Plan Rows": 12, "Plan Width": 40, "Plans": [{"Node Type": "Seq Scan", "Parent Relationship": "Outer",
+        "Parallel Aware": false, "Relation Name": "t", "Alias": "t", "Startup Cost": 0.00, "Total Cost": 25.00,
+        "Plan Rows": 1200, "Plan Width": 40, "Filter": "(a > 1)"}]}}]"#;
+    assert_eq!(ExplainFormat::PostgresJson.estimated_rows(pg), Some(12));
+    let scan = r#"[{"Plan": {"Node Type": "Seq Scan", "Relation Name": "t", "Alias": "t", "Startup Cost": 0.00,
+        "Total Cost": 25.00, "Plan Rows": 1199.6, "Plan Width": 40}}]"#;
+    assert_eq!(ExplainFormat::PostgresJson.estimated_rows(scan), Some(1200));
+    let tree = "-> Limit: 100 row(s)  (cost=0.35 rows=100)\n    -> Filter: (t.a > 1)  (cost=0.35 rows=333)\n        \
+                -> Table scan on t  (cost=0.35 rows=1000)\n";
+    assert_eq!(ExplainFormat::MySqlTree.estimated_rows(tree), Some(100));
+    let scan = "-> Filter: (t.a > 1)  (cost=0.35 rows=333.3)\n    -> Table scan on t  (cost=0.35 rows=1000)\n";
+    assert_eq!(ExplainFormat::MySqlTree.estimated_rows(scan), Some(333));
+    // Not a plan, or no estimate at its root: not known (never 0).
+    assert_eq!(ExplainFormat::PostgresJson.estimated_rows("not json"), None);
+    assert_eq!(ExplainFormat::MySqlTree.estimated_rows(""), None);
+    assert_eq!(ExplainFormat::MySqlTree.estimated_rows("-> Rows fetched before execution\n"), None);
+}

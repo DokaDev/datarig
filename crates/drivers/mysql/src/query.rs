@@ -98,8 +98,8 @@ use crate::link::{Closed, Link, Next};
 use crate::session::{Gate, Killer, Server, Tracked, my_error};
 use crate::values::{column_meta, display};
 use datarig_core::driver::{
-    CancelFailure, CancelMark, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Isolation, Outcome, OwnSession,
-    PagingMode, ServerEnd, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep,
+    COUNT_LOCK_WAIT, CancelFailure, CancelMark, Cell, ColumnMeta, DbCommand, DbError, DbEvent, ESTIMATE_LIMIT, Isolation,
+    Outcome, OwnSession, PagingMode, ServerEnd, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep,
 };
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
@@ -470,12 +470,20 @@ pub(crate) async fn query_loop(
                 end_tx(&mut conn, &mut link, &env, &mut s, id, commit).await
             }
             // Answered once; a session the UI closed meanwhile answers nothing.
-            Next::Command(DbCommand::Count { id, sql }) => {
+            Next::Command(DbCommand::Count { id, sql, limit }) => {
                 link.serving(&events, id);
                 s.request = id;
                 killer.clear();
-                count(&mut conn, &mut link, &env, &mut s, &sql).await.map(|(result, snapshot)| {
+                count(&mut conn, &mut link, &env, &mut s, &sql, limit).await.map(|(result, snapshot)| {
                     let _ = events.send(DbEvent::Counted { id, result, snapshot });
+                })
+            }
+            Next::Command(DbCommand::Estimate { id, sql }) => {
+                link.serving(&events, id);
+                s.request = id;
+                killer.clear();
+                estimate(&mut conn, &mut link, &env, &mut s, &sql).await.map(|result| {
+                    let _ = events.send(DbEvent::Estimated { id, result });
                 })
             }
             Next::Command(DbCommand::CheckRepeat { id, sql }) => {
@@ -557,6 +565,7 @@ fn unanswered(events: &UnboundedSender<DbEvent>, c: DbCommand, error: &DbError) 
             DbEvent::Failed { id, error: error.clone(), cancelled: false }
         }
         DbCommand::Count { id, .. } => DbEvent::Counted { id, result: Err(error.clone()), snapshot: false },
+        DbCommand::Estimate { id, .. } => DbEvent::Estimated { id, result: Err(error.clone()) },
         DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id, result: Err(error.clone()) },
         DbCommand::Export { id, .. } => DbEvent::Exported { id, result: Err(error.clone()), cancelled: false },
         DbCommand::ApplyEdits { id, .. } => {
@@ -1563,7 +1572,9 @@ async fn hold_on(
             }
             // The app closes it (its spill limit, idle): it ends like a finished one.
             Next::Command(DbCommand::ClosePortal { id: cid }) if cid == id => break,
-            Next::Command(c @ (DbCommand::Count { .. } | DbCommand::CheckRepeat { .. })) => held.waiting.push(c),
+            Next::Command(
+                c @ (DbCommand::Count { .. } | DbCommand::Estimate { .. } | DbCommand::CheckRepeat { .. }),
+            ) => held.waiting.push(c),
             // Answered from what is known (nothing is sent while the result is read): it goes on.
             Next::Command(DbCommand::ServerSession { request }) => {
                 let _ = env.events.send(DbEvent::ServerSession { request, own: own_answer(env) });
@@ -1919,29 +1930,102 @@ const OWN_READ_HINTS: &str = "/*+ SET_VAR(lock_wait_timeout=2) MAX_EXECUTION_TIM
 
 /// Ask the server what only it can tell for the allowlist about `sql`, right before the app runs
 /// it again or counts it: whether a name it reads is a view (whose query may call anything) or a
-/// table the server's own. `Ok` with the session's transaction isolation when nothing is in the
-/// way; the refusal otherwise (a text off the allowlist is refused without asking).
+/// table the server's own. `Ok` with what the session has (its transaction isolation and time
+/// limits) when nothing is in the way; the refusal otherwise (a text off the allowlist is
+/// refused without asking).
 async fn asked_server(
     conn: &mut Conn,
     link: &mut Link,
     env: &Env<'_>,
     s: &mut State,
     sql: &str,
-) -> Result<Result<String, DbError>, Closed> {
+) -> Result<Result<Asked, DbError>, Closed> {
     let names = match risk::names(sql, s.mode) {
         Ok(names) => names,
         Err(why) => return Ok(Err(DbError::NotRepeatable(why))),
     };
-    let ask = check_sql(&names, Dialect::MySql(s.mode));
+    let ask = check_sql(&names, Dialect::MySql(s.mode), env.server.mariadb);
     env.busy.store(true, Ordering::SeqCst);
-    let answer = link.guard(Some(env.killer), conn.query_first::<(Option<String>, Option<String>), _>(ask)).await?;
+    type Answer = (Option<String>, Option<String>, Option<String>, Option<String>);
+    let answer = link.guard(Some(env.killer), conn.query_first::<Answer, _>(ask)).await?;
     idle(env, link).await;
     Ok(match answer {
-        Ok(Some((_, Some(view)))) => Err(DbError::NotRepeatable(NotRepeatable::NotATable(view))),
-        Ok(Some((isolation, None))) => Ok(isolation.unwrap_or_default()),
+        Ok(Some((_, Some(view), _, _))) => Err(DbError::NotRepeatable(NotRepeatable::NotATable(view))),
+        Ok(Some((isolation, None, statement, lock))) => Ok(Asked {
+            isolation: isolation.unwrap_or_default(),
+            statement: statement.as_deref().and_then(|v| session_limit(v, env.server.mariadb)),
+            lock: lock.and_then(|v| v.trim().parse::<u64>().ok()).filter(|&n| n > 0).map(Duration::from_secs),
+        }),
         Ok(None) => Err(DbError::NotRepeatable(NotRepeatable::Unreadable)),
         Err(e) => Err(failure(&e).0),
     })
+}
+
+/// What the allowlist's question ([`asked_server`]) learnt of the session besides.
+struct Asked {
+    /// Its transaction isolation, as the server writes it (`REPEATABLE-READ`).
+    isolation: String,
+    /// The time limit of its `SELECT`s (`max_execution_time`, MariaDB's `max_statement_time`),
+    /// when it has one.
+    statement: Option<Duration>,
+    /// How long its statements wait for a metadata lock (`lock_wait_timeout`).
+    lock: Option<Duration>,
+}
+
+/// A session's statement time limit as the server writes it (milliseconds; MariaDB: seconds,
+/// with decimals), `None` for none (0) or a value that does not read.
+fn session_limit(v: &str, mariadb: bool) -> Option<Duration> {
+    let d = if mariadb {
+        let secs: f64 = v.trim().parse().ok()?;
+        (secs.is_finite() && secs > 0.0 && secs < 1e9).then(|| Duration::from_secs_f64(secs))?
+    } else {
+        Duration::from_millis(v.trim().parse::<u64>().ok()?)
+    };
+    (!d.is_zero()).then_some(d)
+}
+
+/// `sql`, a `SELECT` of the app's own, stopped by the server after `statement` and given at most
+/// `lock` to wait for a metadata lock, for this statement alone: MySQL's optimizer hints after its
+/// `SELECT` (on the outermost `SELECT`: one in a derived table is ignored), MariaDB's `SET
+/// STATEMENT … FOR` before it (it reads the hints as a comment). Neither limit is longer than the
+/// one the session has (`asked`), so a shorter limit the user set stays. With the limit that
+/// applies; `None` for a text that does not start with `SELECT`.
+fn bounded_select(
+    sql: &str,
+    statement: Duration,
+    lock: Duration,
+    asked: &Asked,
+    mariadb: bool,
+) -> Option<(String, Duration)> {
+    let rest = sql.strip_prefix("SELECT ").or_else(|| sql.strip_prefix("SELECT\n"))?;
+    let statement = asked.statement.map_or(statement, |s| s.min(statement)).max(Duration::from_millis(1));
+    let lock = asked.lock.map_or(lock, |l| l.min(lock)).as_secs().max(1);
+    let text = if mariadb {
+        let secs = statement.as_secs_f64();
+        format!("SET STATEMENT max_statement_time = {secs}, lock_wait_timeout = {lock} FOR {sql}")
+    } else {
+        let ms = statement.as_millis().min(u128::from(u32::MAX));
+        format!("SELECT /*+ MAX_EXECUTION_TIME({ms}) SET_VAR(lock_wait_timeout={lock}) */ {rest}")
+    };
+    Some((text, statement))
+}
+
+/// ER_QUERY_TIMEOUT: MySQL stopped a `SELECT` at its `MAX_EXECUTION_TIME`.
+const QUERY_TIMEOUT: u16 = 3024;
+
+/// ER_STATEMENT_TIMEOUT: MariaDB stopped a statement at its `max_statement_time`.
+const STATEMENT_TIMEOUT: u16 = 1969;
+
+/// A failed read of the app's own with time limit `applied` ([`bounded_select`]): the server
+/// stopping it there is [`DbError::TimedOut`]; anything else as [`failure`] says it (`KILL
+/// QUERY`, the user's cancel, is `Cancelled`; a lock wait past its limit `LockTimeout`).
+fn bounded_failure(e: &mysql_async::Error, applied: Option<Duration>) -> DbError {
+    match (e, applied) {
+        (mysql_async::Error::Server(s), Some(d)) if s.code == QUERY_TIMEOUT || s.code == STATEMENT_TIMEOUT => {
+            DbError::TimedOut(d)
+        }
+        (e, _) => failure(e).0,
+    }
 }
 
 /// The parts of a name as written (`` shop.`my table` ``, `"a.b"` under `ANSI_QUOTES`), unquoted,
@@ -1975,16 +2059,19 @@ fn name_parts(name: &str) -> Vec<String> {
 }
 
 /// The question [`asked_server`] asks for `names` (every name a statement writes, as
-/// `risk::mysql::names` gives them): the session's transaction isolation, and the first of them
+/// `risk::mysql::names` gives them): the session's transaction isolation and time limits (of a
+/// `SELECT`, of a metadata lock wait), and the first of them
 /// that is a view or a table of the server's own (`information_schema.TABLES` rows other than
 /// `BASE TABLE`), compared without case. A name may be a table of the current database, a
 /// database's table (`db.t`), a column of a table (`t.c`, `db.t.c`) or an alias: every reading
 /// that can name a table is asked about.
-fn check_sql(names: &[String], d: Dialect) -> String {
+fn check_sql(names: &[String], d: Dialect, mariadb: bool) -> String {
     let cond = name_condition(names, d);
+    let limit = if mariadb { "max_statement_time" } else { "max_execution_time" };
     format!(
         "SELECT {OWN_READ_HINTS} @@SESSION.transaction_isolation, (SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME) \
-         FROM information_schema.TABLES t WHERE t.TABLE_TYPE <> 'BASE TABLE' AND ({cond}) LIMIT 1)"
+         FROM information_schema.TABLES t WHERE t.TABLE_TYPE <> 'BASE TABLE' AND ({cond}) LIMIT 1), \
+         @@SESSION.{limit}, @@SESSION.lock_wait_timeout"
     )
 }
 
@@ -2197,13 +2284,15 @@ async fn begin_own(
 /// statement is a consistent read of its own; without autocommit it would open a transaction
 /// (locking every row it reads at `SERIALIZABLE`) and leave it open, so when no transaction was
 /// open before ([`open_before`]) it counts in a read-only one of its own ([`begin_own`]) that it
-/// ends.
+/// ends. With `limit` the server stops it then ([`bounded_select`], for the statement alone,
+/// also inside the user's transaction): [`DbError::TimedOut`].
 async fn count(
     conn: &mut Conn,
     link: &mut Link,
     env: &Env<'_>,
     s: &mut State,
     sql: &str,
+    limit: Option<Duration>,
 ) -> Result<(Result<u64, DbError>, bool), Stop> {
     if let Err(why) = risk::repeatable(sql, s.mode) {
         return Ok((Err(DbError::NotRepeatable(why)), false));
@@ -2212,14 +2301,42 @@ async fn count(
     if let Err(why) = keeps_next(s, was_open) {
         return Ok((Err(why), false));
     }
-    let isolation = match asked_server(conn, link, env, s, sql).await? {
-        Ok(isolation) => isolation,
+    let asked = match asked_server(conn, link, env, s, sql).await? {
+        Ok(asked) => asked,
         Err(why) => return Ok((Err(why), false)),
     };
-    // The count's one row comes whatever the user's limit is (unless it is 0).
+    let snapshot = s.tx.open && matches!(asked.isolation.as_str(), "REPEATABLE-READ" | "SERIALIZABLE");
+    let bounded = limit.and_then(|l| bounded_select(sql, l, COUNT_LOCK_WAIT, &asked, env.server.mariadb));
+    let (text, applied) = match &bounded {
+        Some((text, applied)) => (text.as_str(), Some(*applied)),
+        None => (sql, None),
+    };
+    let result = read_own(conn, link, env, s, text, was_open, applied).await?;
+    let result = result.and_then(|counted| match counted {
+        Some(n) => n.trim().parse::<u64>().map_err(|_| DbError::NoResult),
+        None => Err(DbError::NoResult),
+    });
+    Ok((result, snapshot))
+}
+
+/// The one value `text` (a read of the app's own, checked) answers, read as a count is
+/// ([`count`]): the session's row limit set aside when it is 0, in a read-only transaction of
+/// its own when there was none open before (`was_open`) and the session runs without
+/// autocommit, and what the read left in the session said after it. A failure with a time limit
+/// `applied` is worded by [`bounded_failure`].
+async fn read_own(
+    conn: &mut Conn,
+    link: &mut Link,
+    env: &Env<'_>,
+    s: &mut State,
+    text: &str,
+    was_open: bool,
+    applied: Option<Duration>,
+) -> Result<Result<Option<String>, DbError>, Stop> {
+    // The read's one row comes whatever the user's limit is (unless it is 0).
     if s.limit.current == Some(0) {
         if let Err(e) = link.guard(None, conn.query_drop("SET SESSION sql_select_limit = DEFAULT")).await? {
-            return Ok((Err(my_error(&e)), false));
+            return Ok(Err(my_error(&e)));
         }
         s.tracked.update(conn);
         s.tracked.select_limit = None;
@@ -2230,38 +2347,69 @@ async fn count(
         if e.is_fatal() {
             return Err(Stop::Lost(my_error(&e)));
         }
-        return Ok((Err(failure(&e).0), false));
+        return Ok(Err(failure(&e).0));
     }
     env.busy.store(true, Ordering::SeqCst);
-    let counted = link.guard(Some(env.killer), conn.query_first::<String, _>(sql)).await?;
+    let read = link.guard(Some(env.killer), conn.query_first::<String, _>(text)).await?;
     idle(env, link).await;
-    if own && !link.tainted() && !counted.as_ref().is_err_and(|e| e.is_fatal()) {
+    if own && !link.tainted() && !read.as_ref().is_err_and(|e| e.is_fatal()) {
         // Nothing to keep: a read.
         let _ = link.guard(None, conn.query_drop(ROLLBACK)).await?;
     }
-    let snapshot = s.tx.open && matches!(isolation.as_str(), "REPEATABLE-READ" | "SERIALIZABLE");
     let ask = s.tx.open || !s.tx.autocommit;
-    let result = match counted {
+    Ok(match read {
         Err(e) if e.is_fatal() => return Err(Stop::Lost(my_error(&e))),
         Err(e) => {
             if let Some(error) = after(conn, link, env, s, "", false, ask, false).await? {
                 return Err(Stop::Lost(error));
             }
-            Err(failure(&e).0)
+            Err(bounded_failure(&e, applied))
         }
-        // Counted: what it left in the session too (without autocommit it opened a
-        // transaction, which runs in the level the next one was to run in).
-        Ok(counted) => {
+        // Read: what it left in the session too (without autocommit it opened a transaction,
+        // which runs in the level the next one was to run in).
+        Ok(value) => {
             if let Some(error) = after(conn, link, env, s, "", false, ask, true).await? {
                 return Err(Stop::Lost(error));
             }
-            match counted {
-                Some(n) => n.trim().parse::<u64>().map_err(|_| DbError::NoResult),
-                None => Err(DbError::NoResult),
-            }
+            Ok(value)
         }
+    })
+}
+
+/// The planner's estimate of the rows of `sql` (the app's read of a table, on the allowlist,
+/// checked again here): after the allowlist's question, its `EXPLAIN FORMAT=TREE` (never
+/// `ANALYZE`), read as a count is ([`read_own`]), stopped after [`ESTIMATE_LIMIT`] and waiting at
+/// most [`COUNT_LOCK_WAIT`] for a metadata lock. Only while no transaction is open on the
+/// session ([`open_before`]): the metadata locks planning takes would last until the user's
+/// ends. Not on a server without the tree format (MariaDB, MySQL before 8.0.16): nothing is
+/// sent.
+async fn estimate(
+    conn: &mut Conn,
+    link: &mut Link,
+    env: &Env<'_>,
+    s: &mut State,
+    sql: &str,
+) -> Result<Result<u64, DbError>, Stop> {
+    let Some(format) = env.server.explain() else { return Ok(Err(DbError::NotSupported)) };
+    if let Err(why) = risk::repeatable(sql, s.mode) {
+        return Ok(Err(DbError::NotRepeatable(why)));
+    }
+    if open_before(conn, link, s).await? {
+        return Ok(Err(DbError::NotSupported));
+    }
+    if let Err(why) = keeps_next(s, false) {
+        return Ok(Err(why));
+    }
+    let asked = match asked_server(conn, link, env, s, sql).await? {
+        Ok(asked) => asked,
+        Err(why) => return Ok(Err(why)),
     };
-    Ok((result, snapshot))
+    let Some((bounded, applied)) = bounded_select(sql, ESTIMATE_LIMIT, COUNT_LOCK_WAIT, &asked, false) else {
+        return Ok(Err(DbError::NotSupported));
+    };
+    let text = format.explain_sql(&bounded, false);
+    let plan = read_own(conn, link, env, s, &text, false, Some(applied)).await?;
+    Ok(plan.and_then(|p| p.and_then(|p| format.estimated_rows(&p)).ok_or(DbError::NoResult)))
 }
 
 /// The allowlist's question about `sql` alone (`DbCommand::CheckRepeat`).

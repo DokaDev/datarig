@@ -597,7 +597,7 @@ async fn without_autocommit_the_users_uncommitted_work_is_never_ended() {
         c.id += 1;
         let count = c.id;
         let sql = format!("SELECT COUNT(*) FROM (\nSELECT id FROM {} WHERE v = 'user'\n) AS datarig_count", t.q());
-        c.session.send(DbCommand::Count { id: count, sql });
+        c.session.send(DbCommand::Count { id: count, sql, limit: None });
         match c.wait(|e| matches!(e, DbEvent::Counted { id: i, .. } if *i == count), 30).await {
             DbEvent::Counted { result, .. } => assert_eq!(result, Ok(1), "counted inside the user's transaction"),
             _ => unreachable!(),
@@ -636,7 +636,7 @@ async fn without_autocommit_the_users_uncommitted_work_is_never_ended() {
 async fn counted(c: &mut Conn, sql: &str) -> Result<u64, DbError> {
     c.id += 1;
     let id = c.id;
-    c.session.send(DbCommand::Count { id, sql: sql.to_string() });
+    c.session.send(DbCommand::Count { id, sql: sql.to_string(), limit: None });
     match c.wait(|e| matches!(e, DbEvent::Counted { id: i, .. } if *i == id), 30).await {
         DbEvent::Counted { result, .. } => result,
         _ => unreachable!(),
