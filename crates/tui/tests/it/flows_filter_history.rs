@@ -414,6 +414,59 @@ fn a_link_at_the_file_is_never_followed() {
     assert!(!state.0.join("nowhere.toml").exists(), "nothing created where it points");
 }
 
+/// What the history records in the error log never holds up the app: with an `errors.log`
+/// that blocks whoever writes it (a FIFO nobody reads), a file that cannot be read and a write
+/// that fails are still said at once, and the lines (what failed and the path, never a text)
+/// come once something reads it.
+#[cfg(unix)]
+#[test]
+fn the_error_log_is_written_off_the_ui_thread() {
+    use std::io::Read;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let state = State::new("log-fifo");
+    let cfg = test_db_config();
+    let log = state.0.join("errors.log");
+    let made = std::process::Command::new("mkfifo").arg(&log).status();
+    if !made.is_ok_and(|s| s.success()) {
+        return; // No mkfifo here: nothing to check.
+    }
+    std::fs::write(state.file(), "version = 1\n[[tables]\nwhere = 'secret'\n").unwrap();
+    let mut h = users(&cfg, Some(&state));
+    ran(&mut h, "id > 1");
+    assert!(said(&mut h).contains("Filter history unavailable"), "{}", said(&mut h));
+    h.app.dispatch(datarig_tui::app::action::Action::Quit);
+    drop(h);
+
+    std::fs::remove_file(state.file()).unwrap();
+    let mut h = users(&cfg, Some(&state));
+    let lock = |mode| std::fs::set_permissions(&state.0, std::fs::Permissions::from_mode(mode)).unwrap();
+    lock(0o500);
+    let root = std::fs::write(state.0.join("probe"), "").is_ok();
+    ran(&mut h, "id > 2");
+    flush(&mut h);
+    lock(0o700);
+    assert!(root || said(&mut h).contains("not saved"), "{}", said(&mut h));
+
+    // Read what the writers waited to write.
+    let mut reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+        .open(&log)
+        .unwrap();
+    let (mut text, mut buf) = (String::new(), [0u8; 4096]);
+    let start = std::time::Instant::now();
+    let want = if root { 1 } else { 2 };
+    while text.matches("filter_history.").count() < want && start.elapsed() < Duration::from_secs(5) {
+        match reader.read(&mut buf) {
+            Ok(n) if n > 0 => text.push_str(&String::from_utf8_lossy(&buf[..n])),
+            _ => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    assert!(text.contains("filter_history.unreadable"), "{text}");
+    assert!(root || text.contains("filter_history.save_failed"), "{text}");
+    assert!(text.contains(fh::FILE) && !text.contains("secret") && !text.contains("id >"), "{text}");
+}
+
 /// `history.filters = off`: nothing is kept and `Ctrl+R` says the history is off.
 #[test]
 fn the_setting_off_keeps_nothing() {

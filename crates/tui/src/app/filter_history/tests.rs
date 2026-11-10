@@ -20,8 +20,13 @@ fn a_stuck_write_keeps_one_text_waiting_the_latest() {
     let held = gate.lock().unwrap();
     let writer = gated(&gate, &written);
     let (tx, rx) = mpsc::channel();
-    let write =
-        |seq: u64| Write { path: PathBuf::from("history"), text: seq.to_string(), seq, out: Out::Local(tx.clone()) };
+    let write = |seq: u64| Write {
+        path: PathBuf::from("history"),
+        text: seq.to_string(),
+        seq,
+        out: Out::Local(tx.clone()),
+        log: None,
+    };
     assert!(writer.write(write(1)).is_none());
     // The writer took it and waits at the gate.
     let start = Instant::now();

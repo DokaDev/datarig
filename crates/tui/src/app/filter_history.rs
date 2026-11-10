@@ -14,7 +14,7 @@
 //! is one text, never a queue): a second after the last change
 //! (a run again only moves its entry to the front), at once for a clear, and before the app
 //! quits (waited for at most [`QUIT_FLUSH`]). The texts never go to the error log, only what
-//! failed and the file's path.
+//! failed and the file's path, written by that thread too: the UI thread never waits on it.
 //!
 //! `Ctrl+R` in the filter line (`Space r H`) lists the table's entries, the most recent first,
 //! with both texts under the list; one picked fills the condition and the order (the limit
@@ -78,16 +78,26 @@ struct Write {
     text: String,
     seq: u64,
     out: Out,
+    /// The error log a failure is recorded in (what failed and the path).
+    log: Option<PathBuf>,
+}
+
+/// A line for the error log: where, its context (a message key) and what failed.
+struct LogLine {
+    log: PathBuf,
+    context: &'static str,
+    fault: Fault,
 }
 
 /// How the writer writes a file (the tests stand in for it).
 type WriteFile = Box<dyn Fn(&std::path::Path, &str) -> std::io::Result<()> + Send>;
 
-/// What waits for the writer: at most one write, the latest (a newer one replaces it), and the
-/// flushes, each answered once every write sent before it is done.
+/// What waits for the writer: at most one write, the latest (a newer one replaces it), the
+/// error log's lines, and the flushes, each answered once every write sent before it is done.
 #[derive(Default)]
 struct Queue {
     write: Option<Write>,
+    logs: Vec<LogLine>,
     flushes: Vec<mpsc::Sender<()>>,
     /// The app is gone: the thread ends once the queue is done.
     closed: bool,
@@ -106,8 +116,9 @@ impl Shared {
 }
 
 /// The writer thread of the history: its files are written one at a time, in the order of
-/// their changes, off the UI thread. However long a write takes, what waits behind it stays
-/// one text: an older text is never written after a newer one.
+/// their changes, off the UI thread, and so are its lines of the error log. However long a
+/// write takes, what waits behind it stays one text: an older text is never written after a
+/// newer one.
 struct Writer {
     shared: Arc<Shared>,
 }
@@ -131,6 +142,12 @@ impl Writer {
         old
     }
 
+    /// Record `line` in the error log.
+    fn log(&self, line: LogLine) {
+        self.shared.queue().logs.push(line);
+        self.shared.ready.notify_one();
+    }
+
     /// `done` is answered once every write queued before it is done.
     fn flush(&self, done: mpsc::Sender<()>) {
         self.shared.queue().flushes.push(done);
@@ -151,23 +168,32 @@ impl Drop for Writer {
     }
 }
 
-/// The writer thread: waits for work, takes all of it, writes the latest text and answers the
+/// The writer thread: waits for work, takes all of it, writes the latest text (a failure is
+/// answered first, then recorded in the error log), records the log's lines and answers the
 /// flushes; ends once the app is gone and nothing waits.
 fn run_writer(shared: &Shared, write_file: &WriteFile) {
+    let record = |l: &LogLine| datarig_core::fault::ErrorLog::new(Some(l.log.clone())).record(l.context, &l.fault);
     loop {
-        let (write, flushes) = {
+        let (write, logs, flushes) = {
             let mut q = shared.queue();
-            while q.write.is_none() && q.flushes.is_empty() && !q.closed {
+            while q.write.is_none() && q.logs.is_empty() && q.flushes.is_empty() && !q.closed {
                 q = shared.ready.wait(q).unwrap_or_else(PoisonError::into_inner);
             }
-            if q.write.is_none() && q.flushes.is_empty() {
+            if q.write.is_none() && q.logs.is_empty() && q.flushes.is_empty() {
                 return;
             }
-            (q.write.take(), std::mem::take(&mut q.flushes))
+            (q.write.take(), std::mem::take(&mut q.logs), std::mem::take(&mut q.flushes))
         };
-        if let Some(Write { path, text, seq, out }) = write {
+        for l in &logs {
+            record(l);
+        }
+        if let Some(Write { path, text, seq, out, log }) = write {
             let result = write_file(&path, &text);
+            let failed = result.as_ref().err().map(|e| Fault::io_at(e, &path));
             out.send(AppEvent::FilterHistory(Saved { seq, path, result }));
+            if let (Some(fault), Some(log)) = (failed, log) {
+                record(&LogLine { log, context: "filter_history.save_failed", fault });
+            }
         }
         for f in flushes {
             let _ = f.send(());
@@ -250,8 +276,8 @@ impl App {
     }
 
     /// Why the file at `path` cannot be used, in words; the error log gets what failed and the
-    /// path.
-    fn filter_history_unreadable(&self, u: Unreadable, path: &std::path::Path) -> Msg {
+    /// path (written by the writer thread).
+    fn filter_history_unreadable(&mut self, u: Unreadable, path: &std::path::Path) -> Msg {
         let at = path.display().to_string();
         let (fault, why) = match u {
             Unreadable::Io(kind) => {
@@ -275,8 +301,20 @@ impl App {
                 (Fault::other(format!("{at}: not a plain file")), Msg::TableHistoryNotAFile { path: at.clone() })
             }
         };
-        datarig_core::fault::ErrorLog::new(self.paths.errors_log()).record("filter_history.unreadable", &fault);
+        if let Some(log) = self.paths.errors_log()
+            && let Some(w) = self.filter_history_writer()
+        {
+            w.log(LogLine { log, context: "filter_history.unreadable", fault });
+        }
         why
+    }
+
+    /// The writer thread, started the first time; `None` when it cannot start.
+    fn filter_history_writer(&mut self) -> Option<&Writer> {
+        if self.filter_history.writer.is_none() {
+            self.filter_history.writer = Writer::spawn(Box::new(fh::write)).ok();
+        }
+        self.filter_history.writer.as_ref()
     }
 
     /// The server answered query `q` of table tab `id` with its rows: its filter and order go
@@ -326,16 +364,14 @@ impl App {
         let out = self.filter_history_out();
         self.filter_history.seq += 1;
         let seq = self.filter_history.seq;
-        if self.filter_history.writer.is_none() {
-            match Writer::spawn(Box::new(|path, text| fh::write(path, text))) {
-                Ok(w) => self.filter_history.writer = Some(w),
-                // It cannot start: said as a failed write.
-                Err(error) => return out.send(AppEvent::FilterHistory(Saved { seq, path, result: Err(error) })),
-            }
-        }
-        let Some(writer) = &self.filter_history.writer else { return };
+        let log = self.paths.errors_log();
+        let Some(writer) = self.filter_history_writer() else {
+            // It cannot start: said as a failed write.
+            let error = std::io::Error::other("the writer thread cannot start");
+            return out.send(AppEvent::FilterHistory(Saved { seq, path, result: Err(error) }));
+        };
         // A write still waiting is replaced by this newer one: it is never written nor answered.
-        if let Some(Write { out: Out::Local(_), .. }) = writer.write(Write { path, text, seq, out }) {
+        if let Some(Write { out: Out::Local(_), .. }) = writer.write(Write { path, text, seq, out, log }) {
             self.filter_history.pending.fetch_sub(1, Ordering::SeqCst);
         }
     }
@@ -351,7 +387,8 @@ impl App {
         }
     }
 
-    /// The writer's answer: a failure is said and recorded (with the path, never the texts),
+    /// The writer's answer: a failure is said (the writer records it with the path, never the
+    /// texts),
     /// and the history is still to be written unless a newer text was sent since (the next
     /// change, clear or quitting writes it); what a clear waits for is said once its write is
     /// done.
@@ -369,7 +406,7 @@ impl App {
                 if s.seq == self.filter_history.seq {
                     self.filter_history.dirty = true;
                 }
-                let error = self.fault_text("filter_history.save_failed", &Fault::io_at(&e, &s.path));
+                let error = self.reason_text(&fault_reason(&Fault::io_at(&e, &s.path)));
                 self.flash(Notice::new(Msg::TableHistorySaveFailed { error }, Level::Error));
             }
         }
