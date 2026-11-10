@@ -2618,3 +2618,115 @@ async fn filter_by_value_reads_back_the_rows_it_names() {
     drop(app);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// An app with one table tab on `schema.table` of the profile of `url`, put back from a
+/// workspace in `dir` (nothing run yet).
+fn table_tab_app(url: &str, schema: &str, table: &str, dir: &std::path::Path) -> (App, UnboundedReceiver<AppEvent>) {
+    use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};
+    let pw = datarig_core::profile::dsn::parse(url).unwrap().password.unwrap_or_default();
+    let _ = std::fs::remove_dir_all(dir);
+    let paths = datarig_core::paths::Paths { data: Some(dir.join("data")), state: Some(dir.join("state")) };
+    let p = profile(url);
+    let tab = TabState {
+        id: workspace::new_id(),
+        kind: workspace::TabKind::Table,
+        script: None,
+        profile: Some(p.id),
+        cursor: (0, 0),
+        top: 0,
+        console: 0,
+        table: Some((schema.into(), table.into())),
+        ddl: None,
+        results: None,
+        database: None,
+        schema: None,
+        filter: None,
+        order: Vec::new(),
+        limit: None,
+    };
+    let ws =
+        WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };
+    workspace::save(&dir.join("state"), &ws).unwrap();
+    let store = Arc::new(MemoryStore::new());
+    store.set(&p.id.account(), &pw).unwrap();
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut app = App::new(&cfg, None, Lang::En);
+    app.set_secret_store(store as Arc<dyn SecretStore>);
+    app.set_paths(paths);
+    app.whats_new_paused = true;
+    app.set_instance_tag(&format!("tt{}", std::process::id()));
+    let (tx, rx) = unbounded_channel();
+    app.start(tx, Startup::Normal);
+    assert!(app.tab().is_table());
+    (app, rx)
+}
+
+/// The filter line of the active table tab applied again as it is (`f`, `Enter`), the run
+/// waited for: the ids of the rows read, the filter text and the statement it ran.
+async fn apply_line_again(app: &mut App, rx: &mut UnboundedReceiver<AppEvent>) -> (Vec<String>, String, Vec<String>) {
+    let qid = app.tab().exec.query_id;
+    app.focus = Focus::Results;
+    press(app, 'f');
+    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+    let landed = |a: &App| {
+        a.tab().exec.query_id != qid
+            && a.tab().doc.table_query.as_ref().is_some_and(|q| {
+                q.failure().is_some() || q.requested.as_ref().is_some_and(|(_, r)| q.shown.as_ref() == Some(r))
+            })
+    };
+    pump(app, rx, 30, |a| idle(a, 0) && landed(a)).await;
+    let tq = app.tab().doc.table_query.as_ref().unwrap();
+    assert!(tq.failure().is_none(), "{:?}", app.tab().status.as_ref().map(|n| n.render(&app.i18n).to_string()));
+    let text = tq.shown.as_ref().and_then(|q| q.filter.as_ref()).map(|f| f.text.clone()).unwrap_or_default();
+    let mut got: Vec<String> = held_column(app, 0).into_iter().flatten().collect();
+    got.sort();
+    let sent = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect();
+    if let Some(tq) = app.tab_mut().doc.table_query.as_mut() {
+        tq.line.focus = None;
+    }
+    (got, text, sent)
+}
+
+/// Filter by a value with a line break (LF, CR, CRLF) on PostgreSQL: the condition reads back
+/// the row it names, and the filter line applied again runs the same statement and reads the
+/// same rows (the line shows the text that ran). Makes `public.zz_it_breaks_<pid>` and drops
+/// it.
+#[tokio::test(flavor = "multi_thread")]
+async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::filter_line::TableAction;
+    use datarig_tui::app::filter_value::ByValue as B;
+    let Some(url) = pg_url("filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line") else { return };
+    let table = format!("zz_it_breaks_{}", std::process::id());
+    let t = format!("public.{table}");
+    let _guard = pg_clean::TableGuard::new(&url, &[&t]);
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {t} (id int PRIMARY KEY, name text)")).unwrap();
+    let rows = "(1, E'a\\nb'), (2, E'a\\rb'), (3, E'a\\r\\nb'), (4, 'a b'), (5, E'a\\n')";
+    pg_clean::run_fresh(&url, &format!("INSERT INTO {t} VALUES {rows}")).unwrap();
+    let dir = std::env::temp_dir().join(format!("datarig-it-breaks-{}", std::process::id()));
+    let (mut app, mut rx) = table_tab_app(&url, "public", &table, &dir);
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5).await;
+    type Case<'a> = (&'a [&'a str], B, &'a [&'a str], &'a str);
+    let cases: &[Case] = &[
+        (&["1"], B::Eq, &["1"], r"name = E'a\nb'"),
+        (&["2"], B::Eq, &["2"], r"name = E'a\rb'"),
+        (&["3"], B::Eq, &["3"], r"name = E'a\r\nb'"),
+        (&["1"], B::Ne, &["2", "3", "4", "5"], r"name <> E'a\nb'"),
+        (&["5"], B::StartsWith, &["1", "5"], r"name LIKE E'a\n%' ESCAPE '!'"),
+        (&["1", "2", "3"], B::In, &["1", "2", "3"], r"name IN (E'a\nb', E'a\rb', E'a\r\nb')"),
+    ];
+    for (cells, by, want, text) in cases {
+        let (got, ran) = by_value(&mut app, &mut rx, cells, "name", *by).await;
+        assert_eq!(ran, *text, "{by:?}");
+        assert_eq!(got, want.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "{text}");
+        let first = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
+        let (again, ran_again, sent) = apply_line_again(&mut app, &mut rx).await;
+        assert_eq!((again, ran_again), (got, ran), "the line applied again: {text}");
+        assert_eq!(sent, first, "the same statement: {text}");
+        app.dispatch(Action::Table(TableAction::Clear));
+        pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5).await;
+    }
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}

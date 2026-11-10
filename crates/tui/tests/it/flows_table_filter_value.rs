@@ -448,6 +448,65 @@ fn a_menu_opened_on_other_cells_runs_nothing() {
     assert!(!menu_open(&h));
 }
 
+/// Entry `by` of the open menu picked (by what it filters, not its label).
+fn pick(h: &mut Harness, by: datarig_tui::app::filter_value::ByValue) {
+    use datarig_tui::app::menu::{MenuItem, MenuLine};
+    let m = h.app.overlays.menu_mut().expect("the filter menu");
+    let i = m.lines.iter().position(|l| *l == MenuLine::Item(MenuItem::Filter(by))).expect("the entry");
+    m.selected = i;
+    h.key(KeyCode::Enter);
+}
+
+/// The rows of `shop.users` whose `name` holds line breaks (LF, CR, CRLF), in rows 0 to 2.
+fn broken_lines() -> Vec<Vec<Option<String>>> {
+    let mut rs = rows();
+    for (r, v) in ["a\nb", "a\rb", "a\r\nb"].into_iter().enumerate() {
+        rs[r][1] = Some(v.to_string());
+    }
+    rs
+}
+
+/// A value with a line break goes into the filter line on one line, as the text that runs: `F`
+/// sends the condition the line shows, and `Enter` in the line runs the same statement again.
+#[test]
+fn a_value_with_line_breaks_runs_as_the_line_shows_it() {
+    use datarig_tui::app::filter_value::ByValue as B;
+    let mut h = users();
+    clear_with(&mut h, columns(), broken_lines());
+    let cases: &[(usize, B, &str)] = &[
+        (0, B::Eq, r"name = E'a\nb'"),
+        (1, B::Ne, r"name <> E'a\rb'"),
+        (2, B::Eq, r"name = E'a\r\nb'"),
+        (2, B::StartsWith, r"name LIKE E'a\r\nb%' ESCAPE '!'"),
+    ];
+    for &(row, by, cond) in cases {
+        at(&mut h, row, 1);
+        h.keys("F");
+        assert!(menu_open(&h), "{}", flashed(&h));
+        pick(&mut h, by);
+        let want = vec![vec![format!("{ALL} WHERE ({cond})")]];
+        assert_eq!(runs(&mut h), want, "{by:?}");
+        assert_eq!(where_text(&h), cond, "the line shows what runs");
+        page_with(&mut h, columns(), broken_lines());
+        // Applied again from the line: the same statement.
+        h.keys("f");
+        h.key(KeyCode::Enter);
+        assert_eq!(runs(&mut h), want, "Enter in the line: {by:?}");
+        page_with(&mut h, columns(), broken_lines());
+        // The grid takes the keys back.
+        h.app.tab_mut().doc.table_query.as_mut().unwrap().line.focus = None;
+        assert_eq!(h.app.key_context(), Ctx::Grid);
+        clear_with(&mut h, columns(), broken_lines());
+    }
+    // Several cells: the list on one line too.
+    at(&mut h, 0, 1);
+    h.keys("vjjF");
+    pick(&mut h, B::In);
+    let cond = r"name IN (E'a\nb', E'a\rb', E'a\r\nb')";
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE ({cond})")]]);
+    assert_eq!(where_text(&h), cond);
+}
+
 /// A MySQL profile with `shop.users` open on it, the session's values `charset`, the grid
 /// focused.
 fn mysql(charset: &str, columns: Vec<ColumnMeta>, rows: Vec<Vec<Option<String>>>) -> Harness {
@@ -533,4 +592,34 @@ fn the_filter_menu_screens() {
     at(&mut h, 0, 4);
     h.keys("F");
     shot(&mut h, "refused");
+}
+
+/// On MySQL a value with a line break is its UTF-8 bytes: one line in the filter line, and the
+/// same statement when the line is applied again.
+#[test]
+fn a_mysql_value_with_line_breaks_runs_as_the_line_shows_it() {
+    use datarig_tui::app::filter_value::ByValue as B;
+    let cols = || vec![col("id", "int", ValueKind::Integer), col("name", "varchar", ValueKind::Text)];
+    let s = |v: &str| Some(v.to_string());
+    let rows = || vec![vec![s("1"), s("a\nb")], vec![s("2"), s("a\rb")], vec![s("3"), s("a\r\nb")]];
+    let mut h = mysql("utf8mb4", cols(), rows());
+    for (row, cond) in
+        [(0, "name = _utf8mb4 X'610A62'"), (1, "name = _utf8mb4 X'610D62'"), (2, "name = _utf8mb4 X'610D0A62'")]
+    {
+        at(&mut h, row, 1);
+        h.keys("F");
+        pick(&mut h, B::Eq);
+        let want = vec![vec![format!("{MY_ALL} WHERE ({cond})")]];
+        assert_eq!(runs(&mut h), want);
+        assert_eq!(where_text(&h), cond);
+        page_with(&mut h, cols(), rows());
+        h.keys("f");
+        h.key(KeyCode::Enter);
+        assert_eq!(runs(&mut h), want, "Enter in the line");
+        page_with(&mut h, cols(), rows());
+        // The grid takes the keys back.
+        h.app.tab_mut().doc.table_query.as_mut().unwrap().line.focus = None;
+        assert_eq!(h.app.key_context(), Ctx::Grid);
+        clear_with(&mut h, cols(), rows());
+    }
 }

@@ -597,6 +597,43 @@ fn render_values_of_a_cell_per_type_and_dialect() {
     assert_eq!(render_my(&Cond::IsNull { col: "data".into(), negated: false }, true), "data IS NULL");
 }
 
+/// A value with a line break is written on one line, read back as the value: the filter line
+/// holds one line, and the text it shows is the text that runs. PostgreSQL: an escape string
+/// (`E'…\n…'`); MySQL: its UTF-8 bytes. The same for a pattern and in a list.
+#[test]
+fn render_writes_line_breaks_on_one_line() {
+    let my_t = Target { utf8mb4: true, ..target(MY) };
+    let pg_t = target(Dialect::Postgres);
+    let like =
+        |v: &str| Cond::Like { col: "name".into(), pattern: like_contains(v), negated: false, case: CaseMode::Server };
+    let list = |v: &str| Cond::In { col: "name".into(), values: vec![text(v), text("x")], negated: false };
+    let cases: &[(&str, &str, &str)] = &[
+        ("a\nb", r"E'a\nb'", "X'610A62'"),
+        ("a\rb", r"E'a\rb'", "X'610D62'"),
+        ("a\r\nb", r"E'a\r\nb'", "X'610D0A62'"),
+        ("it's\\\n", r"E'it''s\\\n'", "X'697427735C0A'"),
+    ];
+    for &(v, pg, my) in cases {
+        let r = |c: &Cond, t: &Target| render(c, t).unwrap();
+        assert_eq!(r(&cmp("name", CmpOp::Eq, text(v)), &pg_t), format!("name = {pg}"), "{v:?}");
+        assert_eq!(r(&cmp("name", CmpOp::Eq, text(v)), &my_t), format!("name = _utf8mb4 {my}"), "{v:?}");
+        let pg_like = format!("name LIKE E'%{}%' ESCAPE '!'", &pg[2..pg.len() - 1]);
+        assert_eq!(r(&like(v), &pg_t), pg_like, "{v:?}");
+        assert_eq!(r(&list(v), &pg_t), format!("name IN ({pg}, 'x')"), "{v:?}");
+        assert_eq!(r(&list(v), &my_t), format!("name IN (_utf8mb4 {my}, 'x')"), "{v:?}");
+        for (t, d) in [(&pg_t, Dialect::Postgres), (&my_t, MY)] {
+            for c in [cmp("name", CmpOp::Eq, text(v)), like(v), list(v)] {
+                let out = r(&c, t);
+                assert!(!out.contains(['\n', '\r']), "one line: {out:?}");
+                assert_eq!(check(d, &out, false), Ok(FilterVerdict::Clear), "{out}");
+            }
+        }
+    }
+    // The escape string reads back as the value.
+    let open = crate::sql::dialect::LiteralOpen { prefix: 1, quote: '\'', backslash: true };
+    assert_eq!(Dialect::Postgres.unescape_literal_body(r"it''s\\\r\n", open), "it's\\\r\n");
+}
+
 #[test]
 fn render_in_lists_keep_the_null_forms() {
     let values = |null| {

@@ -946,3 +946,83 @@ async fn filter_by_value_reads_back_the_rows_it_names() {
     drop(app);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Filter by a value with a line break (LF, CR, CRLF) on MySQL: the condition (the value's
+/// UTF-8 bytes) reads back the row it names, and the filter line applied again (`f`, `Enter`)
+/// runs the same statement and reads the same rows. Makes `shop.zz_it_breaks_<pid>` and drops
+/// it.
+#[tokio::test(flavor = "multi_thread")]
+async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::filter_line::TableAction;
+    use datarig_tui::app::filter_value::ByValue as B;
+    let Some((url, admin)) = urls("filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line") else {
+        return;
+    };
+    let table = format!("zz_it_breaks_{}", std::process::id());
+    let t = format!("shop.{table}");
+    let _t = Made::make(
+        &admin,
+        &[
+            format!("CREATE TABLE {t} (id INT PRIMARY KEY, name VARCHAR(20) COLLATE utf8mb4_bin)"),
+            format!("INSERT INTO {t} VALUES (1, 'a\\nb'), (2, 'a\\rb'), (3, 'a\\r\\nb'), (4, 'a b'), (5, 'a\\n')"),
+        ],
+        &[format!("DROP TABLE IF EXISTS {t}")],
+    )
+    .await;
+    let dir = std::env::temp_dir().join(format!("datarig-it-mybreaks-{}", std::process::id()));
+    let (mut app, mut rx) = by_value_app(&url, &table, &dir);
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 5).await;
+    type Case<'a> = (&'a [&'a str], B, &'a [&'a str], &'a str);
+    let cases: &[Case] = &[
+        (&["1"], B::Eq, &["1"], "name = _utf8mb4 X'610A62'"),
+        (&["2"], B::Eq, &["2"], "name = _utf8mb4 X'610D62'"),
+        (&["3"], B::Eq, &["3"], "name = _utf8mb4 X'610D0A62'"),
+        (&["1"], B::Ne, &["2", "3", "4", "5"], "name <> _utf8mb4 X'610A62'"),
+        (&["5"], B::StartsWith, &["1", "5"], "name LIKE _utf8mb4 X'610A25' ESCAPE '!'"),
+        (
+            &["1", "2", "3"],
+            B::In,
+            &["1", "2", "3"],
+            "name IN (_utf8mb4 X'610A62', _utf8mb4 X'610D62', _utf8mb4 X'610D0A62')",
+        ),
+    ];
+    for (cells, by, want, text) in cases {
+        let (got, ran) = by_value(&mut app, &mut rx, cells, "name", *by).await;
+        assert_eq!(ran, *text, "{by:?}");
+        assert_eq!(got, want.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "{text}");
+        let first = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
+        // The filter line applied again as it is.
+        let qid = app.tab().exec.query_id;
+        app.focus = Focus::Results;
+        press(&mut app, 'f');
+        app.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        pump(&mut app, &mut rx, 30, |a| {
+            idle(a)
+                && a.tab().exec.query_id != qid
+                && a.tab()
+                    .doc
+                    .table_query
+                    .as_ref()
+                    .is_some_and(|q| q.shown == q.requested.as_ref().map(|(_, q)| q.clone()))
+        })
+        .await;
+        let tq = app.tab().doc.table_query.as_ref().unwrap();
+        assert!(tq.failure().is_none(), "{text}");
+        let again = tq.shown.as_ref().and_then(|q| q.filter.as_ref()).map(|f| f.text.clone()).unwrap_or_default();
+        assert_eq!(again, *text, "the line applied again");
+        let sent = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
+        assert_eq!(sent, first, "the same statement: {text}");
+        let mut rows: Vec<String> = held_column(&app, 0).into_iter().flatten().collect();
+        rows.sort();
+        assert_eq!(rows, got, "the same rows: {text}");
+        if let Some(tq) = app.tab_mut().doc.table_query.as_mut() {
+            tq.line.focus = None;
+        }
+        app.dispatch(Action::Table(TableAction::Clear));
+        pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 5).await;
+    }
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}

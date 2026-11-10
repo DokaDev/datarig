@@ -9,7 +9,9 @@
 //! `X'…'`; text as a string literal. A PostgreSQL string with a backslash is an escape string (`E'…'`), which reads the same whatever
 //! `standard_conforming_strings` is. A MySQL string is plain only when the session's character
 //! set is known to be `utf8mb4` and it holds no backslash or NUL (which `NO_BACKSLASH_ESCAPES`
-//! reads otherwise); else it is its UTF-8 bytes, `_utf8mb4 X'…'`.
+//! reads otherwise); else it is its UTF-8 bytes, `_utf8mb4 X'…'`. A line break is never written
+//! as it is (the filter line holds one line): PostgreSQL writes it as an escape (`E'…\n…'`),
+//! MySQL the string's bytes.
 //!
 //! A MySQL `TIMESTAMP` value with the offset of the zone it was read in (as a copy as SQL takes
 //! it) is written as that instant in the session's zone when the statement runs, the instant
@@ -430,16 +432,22 @@ fn refused_values(c: &Cond, t: &Target) -> Option<RenderError> {
     }
 }
 
-/// `s` as a string literal that the server reads as `s` (see the module docs).
+/// Characters a literal does not hold as they are: the filter line is one line, and would put
+/// a space for them, so that the text it shows would not be the text that runs.
+const LINE_BREAKS: [char; 2] = ['\n', '\r'];
+
+/// `s` as a string literal that the server reads as `s`, on one line (see the module docs).
 fn text_literal(t: &Target, s: &str) -> String {
     let d = t.dialect;
     match d {
-        Dialect::Postgres if s.contains('\\') => {
+        Dialect::Postgres if s.contains('\\') || s.contains(LINE_BREAKS) => {
             let open = LiteralOpen { prefix: 1, quote: '\'', backslash: true };
-            format!("E'{}'", d.literal_body(s, open))
+            // The backslashes are doubled first: the escapes written after them stay escapes.
+            let body = d.literal_body(s, open).replace('\n', "\\n").replace('\r', "\\r");
+            format!("E'{body}'")
         }
         Dialect::Postgres => d.quote_literal(s),
-        Dialect::MySql(_) if t.utf8mb4 && !s.contains(['\\', '\0']) => d.quote_literal(s),
+        Dialect::MySql(_) if t.utf8mb4 && !s.contains(['\\', '\0']) && !s.contains(LINE_BREAKS) => d.quote_literal(s),
         Dialect::MySql(_) => format!("_utf8mb4 X'{}'", hex(s.as_bytes(), true)),
     }
 }
