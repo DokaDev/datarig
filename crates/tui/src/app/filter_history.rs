@@ -257,7 +257,9 @@ pub struct FilterHistoryState {
     /// replaced by it): the file holds the history as of that write.
     saved: u64,
     /// What to say once write `seq` (or a later one) is done (the clears), dropped when it
-    /// fails (said as failed).
+    /// fails (said as failed): one per write, the latest (a clear asked again for the same
+    /// write replaces it, and a write replaced before it was written passes its own to the
+    /// newer one), so it never grows with the clears asked.
     announce: Vec<(u64, Notice)>,
     /// The table a clear asks about (`None`: every table).
     clear_asked: Option<TableKey>,
@@ -404,9 +406,15 @@ impl App {
             let error = std::io::Error::other("the writer thread cannot start");
             return out.send(AppEvent::FilterHistory(Saved { seq, path, result: Err(error) }));
         };
-        // A write still waiting is replaced by this newer one: it is never written nor answered.
-        if let Some(Write { out: Out::Local(_), .. }) = writer.write(Write { path, text, seq, out, log }) {
-            self.filter_history.pending.fetch_sub(1, Ordering::SeqCst);
+        // A write still waiting is replaced by this newer one: it is never written nor answered,
+        // so what it was to say waits for the newer one.
+        if let Some(old) = writer.write(Write { path, text, seq, out, log }) {
+            if let Out::Local(_) = old.out {
+                self.filter_history.pending.fetch_sub(1, Ordering::SeqCst);
+            }
+            if let Some(n) = self.filter_history.take_announce(old.seq) {
+                self.filter_history.announce_at(seq, n);
+            }
         }
     }
 
@@ -616,11 +624,29 @@ impl App {
                 return self.flash(done);
             }
             // or will once the write on its way is done: said then (or its failure).
-            return fh.announce.push((fh.seq, done));
+            let seq = fh.seq;
+            return fh.announce_at(seq, done);
         }
         fh.dirty = true;
         self.filter_history_send();
-        self.filter_history.announce.push((self.filter_history.seq, done));
+        let seq = self.filter_history.seq;
+        self.filter_history.announce_at(seq, done);
+    }
+}
+
+impl FilterHistoryState {
+    /// Say `n` once write `seq` is done, in place of what that write was to say.
+    fn announce_at(&mut self, seq: u64, n: Notice) {
+        match self.announce.iter_mut().find(|(s, _)| *s == seq) {
+            Some((_, was)) => *was = n,
+            None => self.announce.push((seq, n)),
+        }
+    }
+
+    /// What write `seq` was to say, no longer said for it.
+    fn take_announce(&mut self, seq: u64) -> Option<Notice> {
+        let i = self.announce.iter().position(|(s, _)| *s == seq)?;
+        Some(self.announce.remove(i).1)
     }
 }
 
