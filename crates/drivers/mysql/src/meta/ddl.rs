@@ -152,13 +152,19 @@ fn kind_word(word: &str) -> Option<ObjectKind> {
     }
 }
 
+/// [`FIND_NAMED`] for `name` in `database`, the names written as `d` reads literals, in one
+/// pass: neither name is ever read as a place for the other.
+pub(crate) fn find_named_sql(d: Dialect, database: &str, name: &str) -> String {
+    super::fill(FIND_NAMED, &[("schema", &d.quote_literal(database)), ("name", &d.quote_literal(name))])
+}
+
 /// The one object `typed` ([`typed_name`]) names in its database, `schema` without one (none:
 /// [`DbError::NoDatabase`]).
 async fn find(conn: &mut Conn, mode: MySqlMode, typed: &str, schema: Option<&str>) -> Result<Found, DbError> {
     let d = Dialect::MySql(mode);
     let (wanted, database, name) = typed_name(typed, d)?;
     let database = database.as_deref().or(schema).ok_or(DbError::NoDatabase)?;
-    let sql = FIND_NAMED.replace("{schema}", &d.quote_literal(database)).replace("{name}", &d.quote_literal(&name));
+    let sql = find_named_sql(d, database, &name);
     let rows: Vec<(String, String, String, Option<String>)> = super::rows_of(conn, sql).await?;
     pick(rows, wanted)
 }

@@ -49,6 +49,33 @@ fn read_error(e: &mysql_async::Error) -> DbError {
     }
 }
 
+/// `template` with each `{key}` of `values` replaced by its text, in one pass over the template:
+/// a value put in is never read again for a key (a quoted name that holds `{table}` stays that
+/// name), unlike one `str::replace` after another. A `{` that starts no key stays as it is.
+pub(crate) fn fill(template: &str, values: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(at) = rest.find('{') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        let key = values
+            .iter()
+            .find(|(k, _)| rest.strip_prefix('{').and_then(|r| r.strip_prefix(k)).is_some_and(|r| r.starts_with('}')));
+        match key {
+            Some((k, v)) => {
+                out.push_str(v);
+                rest = &rest[k.len() + 2..];
+            }
+            None => {
+                out.push('{');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// The rows of `sql` as `T`. A value of another type than the read expects (a server or a proxy
 /// that answers otherwise) fails the read instead of the session.
 async fn rows_of<T: FromRow>(conn: &mut Conn, sql: String) -> Result<Vec<T>, DbError> {

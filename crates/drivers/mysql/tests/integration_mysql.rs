@@ -2852,6 +2852,37 @@ fn verbatim(r: Result<datarig_core::driver::ddl::DdlSource, DbError>) -> (String
     }
 }
 
+/// A database whose name holds braces as the metadata statements write their own places
+/// (`{table}`, `{name}`), with a table whose name holds them too and a quote, is read like any
+/// other: the table's structure, and its DDL after the lookup of the name typed.
+#[tokio::test(flavor = "multi_thread")]
+async fn names_with_braces_are_read_like_any_other() {
+    let test = "names_with_braces_are_read_like_any_other";
+    let Some((_, admin)) = urls(test) else { return };
+    let database = format!("zz_it_{{table}}{{name}}_{}", std::process::id());
+    let table = "t {schema} o'k";
+    let _drop = Cleanup { url: admin.clone(), sql: format!("DROP DATABASE IF EXISTS `{database}`") };
+    let mut c = side(&admin).await;
+    c.query_drop(format!("CREATE DATABASE `{database}`")).await.unwrap();
+    c.query_drop(format!("CREATE TABLE `{database}`.`{table}` (id INT PRIMARY KEY, v VARCHAR(10) NOT NULL)"))
+        .await
+        .unwrap();
+    c.disconnect().await.unwrap();
+    let mut m = Conn::start(&admin, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    m.session.send(DbCommand::LoadStructure { schema: database.clone(), table: table.into() });
+    let DbEvent::Structure { result, .. } = m.wait(|e| matches!(e, DbEvent::Structure { .. }), 15).await else {
+        unreachable!()
+    };
+    let st = result.expect("the structure");
+    assert_eq!(st.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "v"]);
+    let typed =
+        datarig_core::driver::ddl::DdlObject::Named { name: format!("`{table}`"), schema: Some(database.clone()) };
+    let (name, text) = verbatim(ddl_of(&mut m, typed).await);
+    assert_eq!(name, format!("{database}.{table}"));
+    assert!(text.starts_with(&format!("CREATE TABLE `{table}`")), "{text}");
+}
+
 /// Run DDL text `text` as the editor runs it (the statements its splitter finds, `DELIMITER`
 /// lines read by it and not sent) on query session `q`: each must succeed.
 async fn replay(q: &mut Conn, id: &mut u64, text: &str) {

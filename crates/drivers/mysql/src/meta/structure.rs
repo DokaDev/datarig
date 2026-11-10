@@ -109,12 +109,18 @@ pub(crate) fn statement(server: Server, mode: MySqlMode, schema: &str, table: &s
         false => "NULL",
     };
     let d = Dialect::MySql(mode);
-    SQL.replace("{expression}", if functional { "x.EXPRESSION" } else { "NULL" })
-        .replace("{visible}", if server.mariadb { "NULL" } else { "x.IS_VISIBLE" })
-        .replace("{checks}", checks)
-        .replace("{grantee}", GRANTEE)
-        .replace("{schema}", &d.quote_literal(schema))
-        .replace("{table}", &d.quote_literal(table))
+    // In one pass: a name is never read as a place for another value.
+    super::fill(
+        SQL,
+        &[
+            ("expression", if functional { "x.EXPRESSION" } else { "NULL" }),
+            ("visible", if server.mariadb { "NULL" } else { "x.IS_VISIBLE" }),
+            ("checks", checks),
+            ("grantee", GRANTEE),
+            ("schema", &d.quote_literal(schema)),
+            ("table", &d.quote_literal(table)),
+        ],
+    )
 }
 
 /// Read the structure of `schema.table` in one round trip: [`DbError::NotFound`] when the
