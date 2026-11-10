@@ -650,6 +650,8 @@ mod terminal {
         tx: Tx,
         prepared: Prepared,
         id: u64,
+        /// Runs started, as the session's loop numbers them.
+        runs: u64,
         cancel: Arc<CancelMark>,
         failed: AtomicBool,
         /// The rule its runs go by (`Auto` unless a test says otherwise).
@@ -681,6 +683,7 @@ mod terminal {
                 tx: Tx::default(),
                 prepared: Prepared::default(),
                 id: 0,
+                runs: 0,
                 cancel: Arc::new(CancelMark::default()),
                 failed: AtomicBool::new(false),
                 rule: TxRule::Auto,
@@ -692,7 +695,8 @@ mod terminal {
         /// Run `statements` with `hook` before each bind; every event of the run.
         async fn run_all(&mut self, statements: &[&str], hook: Option<&BeforeBind>) -> Vec<DbEvent> {
             self.id += 1;
-            self.cancel.begin(self.id);
+            self.cancel.begin();
+            self.runs += 1;
             let env = Env {
                 events: &self.events,
                 own: &crate::query::NO_OWN,
@@ -753,7 +757,8 @@ mod terminal {
         /// exactly one).
         async fn run(&mut self, sql: &str, hook: Option<&BeforeBind>) -> DbEvent {
             self.id += 1;
-            self.cancel.begin(self.id);
+            self.cancel.begin();
+            self.runs += 1;
             let env = Env {
                 events: &self.events,
                 own: &crate::query::NO_OWN,
@@ -968,7 +973,7 @@ mod terminal {
         other.batch_execute(&format!("CREATE TABLE {table} (a int4)")).await.unwrap();
         let mut s = Session::open(&url).await;
         // Flagged while the first statement is bound, as if the user cancelled just as it ended.
-        let (flag, run) = (s.cancel.clone(), s.id + 1);
+        let (flag, run) = (s.cancel.clone(), s.runs + 1);
         let hook: Box<BeforeBind> = Box::new(move || {
             flag.ask(run);
             Box::pin(async {})
@@ -1207,7 +1212,8 @@ mod terminal {
             ) -> (Vec<DbEvent>, Option<DbError>) {
                 use super::super::super::{Env, count_savepoint};
                 self.id += 1;
-                self.cancel.begin(self.id);
+                self.cancel.begin();
+                self.runs += 1;
                 let env = Env {
                     events: &self.events,
                     own: &crate::query::NO_OWN,
@@ -1282,7 +1288,7 @@ mod terminal {
             let Some(url) = pg_url("a_cancel_before_the_first_step_applies_nothing") else { return };
             let (table, _g) = table(&url, "cancel_first").await;
             let mut s = Session::open(&url).await;
-            let (flag, run) = (s.cancel.clone(), s.id + 1);
+            let (flag, run) = (s.cancel.clone(), s.runs + 1);
             let at_first = move |i: usize| {
                 if i == 0 {
                     flag.ask(run);
@@ -1301,7 +1307,7 @@ mod terminal {
             let Some(url) = pg_url("a_cancel_after_the_last_step_rolls_back_instead_of_committing") else { return };
             let (table, _g) = table(&url, "cancel_last").await;
             let mut s = Session::open(&url).await;
-            let (flag, run) = (s.cancel.clone(), s.id + 1);
+            let (flag, run) = (s.cancel.clone(), s.runs + 1);
             let at_end = move |i: usize| {
                 if i == 2 {
                     flag.ask(run);
@@ -1355,7 +1361,7 @@ mod terminal {
             s.rule = manual(&[TxStep::Open]);
             let events = s.run_all(&[&format!("INSERT INTO {table} VALUES (2, 'earlier')")], None).await;
             assert!(events.iter().any(|e| matches!(e, DbEvent::ManualBegun { .. })), "{events:?}");
-            let (flag, run) = (s.cancel.clone(), s.id + 1);
+            let (flag, run) = (s.cancel.clone(), s.runs + 1);
             let at_second = move |i: usize| {
                 if i == 1 {
                     flag.ask(run);

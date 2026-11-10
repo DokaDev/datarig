@@ -6192,7 +6192,7 @@ async fn a_catalog_read_puts_pg_catalog_first_on_the_path() {
     let path = first_cell(&mut c, 105, "SELECT pg_catalog.current_setting('search_path')").await;
     assert_eq!(path.as_deref(), Some("pg_catalog"));
     c.run(106, "ROLLBACK").await;
-||||||| parent of d68f20f (fix(driver): tie a cancel to the run it was pressed for)
+}
 
 /// A session still connecting, with nothing waited for yet: what is sent and cancelled now is
 /// queued behind the connection.
@@ -6221,6 +6221,23 @@ async fn a_cancel_of_a_queued_run_stops_that_run_and_no_later_one() {
     assert!(matches!(c.run(2, &format!("INSERT INTO {schema}.t VALUES (2)")).await, DbEvent::Done { .. }));
     let DbEvent::Page { rows, .. } = c.run(3, &format!("SELECT x FROM {schema}.t")).await else { panic!("rows") };
     assert_eq!(rows, [vec![Some("2".to_string())]], "only the run after it ran");
+}
+
+/// A count cancelled and asked again has the same id, and is another run: it is answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_count_asked_again_after_a_cancel_is_not_cancelled() {
+    let Some(url) = pg_url("a_count_asked_again_after_a_cancel_is_not_cancelled") else { return };
+    let (_schema_guard, _terminate, schema, _tag) = scratch(&url, "cancelc");
+    let sql = format!("SELECT count(*) FROM {schema}.t");
+    let mut c = connecting(&url);
+    c.session.send(DbCommand::Count { id: 7, sql: sql.clone() });
+    c.session.cancel();
+    let counted = |e: &DbEvent| matches!(e, DbEvent::Counted { id: 7, .. });
+    let ev = c.wait(counted, 10).await;
+    assert!(matches!(ev, DbEvent::Counted { result: Err(DbError::Cancelled), .. }), "{ev:?}");
+    c.session.send(DbCommand::Count { id: 7, sql });
+    let ev = c.wait(counted, 10).await;
+    assert!(matches!(ev, DbEvent::Counted { result: Ok(0), .. }), "{ev:?}");
 }
 
 /// A cancel is for the last run sent: a run queued before it still runs.

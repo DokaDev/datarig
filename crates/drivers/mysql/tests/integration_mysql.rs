@@ -4854,6 +4854,26 @@ async fn a_cancel_of_a_queued_run_stops_that_run_and_no_later_one() {
     assert_eq!(xs(&admin, &t).await, [2], "only the run after it ran");
 }
 
+/// A count cancelled and asked again has the same id, and is another run: it is answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_count_asked_again_after_a_cancel_is_not_cancelled() {
+    let test = "a_count_asked_again_after_a_cancel_is_not_cancelled";
+    let Some((_, admin)) = urls(test) else { return };
+    let t = format!("shop.zz_cancelc_{}", std::process::id());
+    let _t = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {t}") };
+    side(&admin).await.query_drop(format!("CREATE TABLE {t} (x int PRIMARY KEY)")).await.unwrap();
+    let sql = format!("SELECT count(*) FROM {t}");
+    let mut c = Conn::start(&admin, SessionRole::Query, false, test);
+    c.session.send(DbCommand::Count { id: 7, sql: sql.clone() });
+    c.session.cancel();
+    let counted = |e: &DbEvent| matches!(e, DbEvent::Counted { id: 7, .. });
+    let ev = c.wait(counted, 15).await;
+    assert!(matches!(ev, DbEvent::Counted { result: Err(DbError::Cancelled), .. }), "{ev:?}");
+    c.session.send(DbCommand::Count { id: 7, sql });
+    let ev = c.wait(counted, 15).await;
+    assert!(matches!(ev, DbEvent::Counted { result: Ok(0), .. }), "{ev:?}");
+}
+
 /// A cancel is for the last run sent: a run queued before it still runs.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cancel_of_a_queued_run_leaves_the_run_before_it() {

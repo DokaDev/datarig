@@ -2347,7 +2347,7 @@ async fn portal<'a>(
             // A count of this result's rows runs in the portal's transaction, under a
             // savepoint: the portal goes on paging after it, whatever it answered.
             Next::Command(DbCommand::Count { id: cid, sql }) => {
-                if env.cancel.begin(cid) {
+                if env.cancel.begin() {
                     let _ = env.events.send(cancelled_count(cid));
                     continue;
                 }
@@ -2361,7 +2361,7 @@ async fn portal<'a>(
             }
             // So is the allowlist's question, which leaves the portal paging too.
             Next::Command(DbCommand::CheckRepeat { id: cid, sql }) => {
-                if env.cancel.begin(cid) {
+                if env.cancel.begin() {
                     let _ = env.events.send(cancelled_check(cid));
                     continue;
                 }
