@@ -2,7 +2,8 @@
 //! `DATARIG_TEST_MYSQL_ADMIN_URL`, as `integration_mysql`): every row streams into a bounded
 //! channel the reader drains, never cut by the session's paging limit; a keyset's chunks read
 //! every row once in key order; a cancel (`KILL QUERY`) and a reader that stops end the statement
-//! and its metadata lock; inside the user's transaction it reads there. Tables are
+//! and its metadata lock; inside the user's transaction it reads there; at `SERIALIZABLE` it
+//! locks no rows. Tables are
 //! `shop.zz_it_export_*` of this process, dropped when each test ends.
 
 use datarig_core::driver::{
@@ -482,4 +483,144 @@ async fn an_export_keeps_to_the_manual_transaction_and_never_chains_its_own() {
         other => panic!("{other:?}"),
     }
     assert_eq!(c.rows(&format!("SELECT COUNT(*) FROM {}", t.q())).await, [[Some("10".into())]]);
+}
+
+/// The InnoDB locks session `id` (its connection id) holds or waits for on `table` in `shop`.
+async fn data_locks(admin: &str, id: u64, table: &str) -> u64 {
+    let mut a = side(admin).await;
+    let n: Option<u64> = a
+        .exec_first(
+            "SELECT COUNT(*) FROM performance_schema.data_locks l JOIN performance_schema.threads t \
+             ON t.THREAD_ID = l.THREAD_ID WHERE t.PROCESSLIST_ID = ? AND l.OBJECT_SCHEMA = 'shop' \
+             AND l.OBJECT_NAME = ?",
+            (id, table),
+        )
+        .await
+        .unwrap();
+    a.disconnect().await.unwrap();
+    n.unwrap_or(0)
+}
+
+/// Whether another session changes row `id` of `table` at once (it waits at most 1 s for a
+/// lock), rolled back after.
+async fn writes_at_once(admin: &str, table: &str, id: u32) -> Result<(), mysql_async::Error> {
+    let mut a = side(admin).await;
+    a.query_drop("SET SESSION innodb_lock_wait_timeout = 1").await.unwrap();
+    a.query_drop("START TRANSACTION").await.unwrap();
+    let r = a.query_drop(format!("UPDATE {table} SET v = CONCAT(v, '') WHERE id = {id}")).await;
+    a.query_drop("ROLLBACK").await.unwrap();
+    a.disconnect().await.unwrap();
+    r
+}
+
+/// At `SERIALIZABLE` InnoDB reads every row of a transaction with a shared lock: an export's own
+/// transaction reads at `REPEATABLE READ` instead, so it locks no rows and another session's
+/// write of an exported row goes through while the export is open, with or without autocommit.
+/// The session's own level is left as it was.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_export_locks_no_rows_when_the_session_is_serializable() {
+    let Some((url, admin)) = urls("an_export_locks_no_rows_when_the_session_is_serializable") else { return };
+    let t = numbers(&admin, "serial", 1_000).await;
+    let mut c = Conn::open(&url, SessionRole::Query, "serial").await;
+    let id: u64 = c.rows("SELECT CONNECTION_ID()").await[0][0].as_deref().unwrap().parse().unwrap();
+    c.ok("SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE").await;
+    for autocommit in ["1", "0"] {
+        c.ok(&format!("SET autocommit = {autocommit}")).await;
+        let (export, mut rx) = c.export(&format!("SELECT * FROM {}", t.q()), ExportGuard::Repeatable, 1, 10);
+        assert!(matches!(rx.recv().await, Some(ExportBatch::Columns(_))));
+        let Some(ExportBatch::Rows(first)) = rx.recv().await else { panic!("rows") };
+        // The export is open, its statement read in part.
+        assert!(!c.answered(export));
+        assert_eq!(data_locks(&admin, id, &t.name).await, 0, "autocommit = {autocommit}: no lock");
+        let wrote = writes_at_once(&admin, &t.q(), 1).await;
+        assert!(wrote.is_ok(), "autocommit = {autocommit}: an exported row is written at once: {wrote:?}");
+        let (_, rows, _) = drain(&mut rx).await;
+        assert_eq!(first.len() + rows.len(), 1_000);
+        assert!(c.exported(export).await.0.unwrap().complete);
+        assert_eq!(
+            c.rows("SELECT @@SESSION.transaction_isolation, @@SESSION.autocommit").await,
+            [[Some("SERIALIZABLE".into()), Some(autocommit.into())]],
+            "the session's own level is left as it was"
+        );
+        if autocommit == "0" {
+            c.ok("ROLLBACK").await;
+        }
+    }
+}
+
+/// What another session reads of `sql` (one value, in autocommit).
+async fn seen_from_side(url: &str, sql: &str) -> Option<String> {
+    let mut a = side(url).await;
+    let v: Option<Option<String>> = a.query_first(sql).await.unwrap();
+    a.disconnect().await.unwrap();
+    v.flatten()
+}
+
+/// Without autocommit the user's statements open a transaction: an export and a count after
+/// the user's uncommitted `UPDATE` read inside it (they see the change) and never end it, so
+/// the change stays uncommitted (another session does not see it) and is not rolled back.
+#[tokio::test(flavor = "multi_thread")]
+async fn without_autocommit_the_users_uncommitted_work_is_never_ended() {
+    let Some((url, admin)) = urls("without_autocommit_the_users_uncommitted_work_is_never_ended") else { return };
+    let t = numbers(&admin, "noac", 10).await;
+    let mut c = Conn::open(&url, SessionRole::Query, "noac").await;
+    let id: u64 = c.rows("SELECT CONNECTION_ID()").await[0][0].as_deref().unwrap().parse().unwrap();
+    let open_trx = |admin: String| async move {
+        let mut a = side(&admin).await;
+        let n: Option<u64> = a
+            .exec_first("SELECT COUNT(*) FROM information_schema.INNODB_TRX WHERE trx_mysql_thread_id = ?", (id,))
+            .await
+            .unwrap();
+        a.disconnect().await.unwrap();
+        n.unwrap_or(0)
+    };
+    let v1 = format!("SELECT v FROM {} WHERE id = 1", t.q());
+    for serializable in [false, true] {
+        if serializable {
+            c.ok("SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE").await;
+        }
+        c.ok("SET autocommit = 0").await;
+        c.ok(&format!("UPDATE {} SET v = 'user' WHERE id = 1", t.q())).await;
+        for guard in [ExportGuard::Repeatable, ExportGuard::Confirmed] {
+            let (export, mut rx) = c.export(&format!("SELECT * FROM {} ORDER BY id", t.q()), guard, 2, 3);
+            let (_, rows, _) = drain(&mut rx).await;
+            assert!(c.exported(export).await.0.unwrap().complete);
+            assert_eq!(rows[0][1].as_deref(), Some("user"), "{guard:?}: read inside the user's transaction");
+        }
+        c.id += 1;
+        let count = c.id;
+        let sql = format!("SELECT COUNT(*) FROM (\nSELECT id FROM {} WHERE v = 'user'\n) AS datarig_count", t.q());
+        c.session.send(DbCommand::Count { id: count, sql });
+        match c.wait(|e| matches!(e, DbEvent::Counted { id: i, .. } if *i == count), 30).await {
+            DbEvent::Counted { result, .. } => assert_eq!(result, Ok(1), "counted inside the user's transaction"),
+            _ => unreachable!(),
+        }
+        assert_eq!(seen_from_side(&admin, &v1).await.as_deref(), Some("row 1"), "never committed");
+        assert_eq!(open_trx(admin.clone()).await, 1, "the user's transaction is still open");
+        // Since the user's UPDATE the session sent nothing that sets, starts or ends a transaction.
+        let mut a = side(&admin).await;
+        let sent: Vec<String> = a
+            .exec(
+                "SELECT h.SQL_TEXT FROM performance_schema.events_statements_history h \
+                 JOIN performance_schema.threads t ON t.THREAD_ID = h.THREAD_ID WHERE t.PROCESSLIST_ID = ? \
+                 AND h.EVENT_ID > (SELECT MAX(u.EVENT_ID) FROM performance_schema.events_statements_history u \
+                 WHERE u.THREAD_ID = h.THREAD_ID AND u.SQL_TEXT LIKE 'UPDATE%') ORDER BY h.EVENT_ID",
+                (id,),
+            )
+            .await
+            .unwrap();
+        a.disconnect().await.unwrap();
+        assert!(sent.len() >= 4, "{sent:?}");
+        assert!(
+            !sent.iter().any(|q| {
+                let q = q.trim_start().to_uppercase();
+                ["SET TRANSACTION", "START", "BEGIN", "COMMIT", "ROLLBACK"].iter().any(|w| q.starts_with(w))
+            }),
+            "{sent:?}"
+        );
+        assert_eq!(c.rows(&v1).await, [[Some("user".into())]], "never rolled back");
+        c.ok("ROLLBACK").await;
+        assert_eq!(seen_from_side(&admin, &v1).await.as_deref(), Some("row 1"));
+        c.ok("SET autocommit = 1").await;
+    }
 }

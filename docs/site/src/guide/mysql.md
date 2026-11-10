@@ -109,6 +109,12 @@ local spill (up to its limit) and the server is free at once. So is a locking re
 (`FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`), which under the page limit would lock fewer
 rows than it asks for.
 
+An export, and a row count (`#`) with autocommit off, read outside your transaction in a
+read-only transaction of their own at `REPEATABLE READ`, set for that one transaction only (your
+session's level stays as it is). So they read one snapshot without locking rows: at
+`SERIALIZABLE` InnoDB would read every row with a shared lock, waiting for other sessions' writes
+and holding them up. Inside your own transaction they read there, at its level.
+
 The explorer and completion read in autocommit with `lock_wait_timeout = 2` and a 10-second
 `max_execution_time`: behind a waiting `ALTER TABLE` they give up after two seconds instead of
 queueing behind it. A read that opens a table's definition (`SHOW CREATE TABLE`) takes a
