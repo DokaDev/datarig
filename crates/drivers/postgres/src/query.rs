@@ -2559,6 +2559,11 @@ async fn count(
     // Whether a block is open must be known before a transaction of the count's own begins.
     if limit.is_some() && tx.unsure {
         probe(client, link, env, tx).await?;
+        // Not known: a count of its own might run in the user's block, and one there has no
+        // limit, which is not what was asked for.
+        if tx.unsure {
+            return Ok((Err(DbError::NotRepeatable(risk::repeat::NotRepeatable::TxUnknown)), false));
+        }
     }
     let sp = env.savepoint;
     if tx.block {
@@ -2579,7 +2584,7 @@ async fn count(
         probe(client, link, env, tx).await?;
         return Ok((Err(counted), false));
     }
-    if let Some(limit) = limit.filter(|_| !tx.unsure) {
+    if let Some(limit) = limit {
         let read = limited_read(client, link, env, (limit, COUNT_LOCK_WAIT), &check, sql).await?;
         return Ok((read.and_then(|msgs| count_of(&msgs)), false));
     }

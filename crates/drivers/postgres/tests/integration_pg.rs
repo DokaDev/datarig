@@ -7428,3 +7428,37 @@ async fn a_bounded_read_never_leaves_its_transaction_open() {
     assert!(seen.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{seen:?}");
     assert!(!seen.iter().any(|e| matches!(e, DbEvent::Counted { result: Ok(_), .. })), "{seen:?}");
 }
+
+/// A count that cannot learn whether a transaction is open is refused, never run without the
+/// limit it asked for: a count that ran here would wait for the lock held below with no limit.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_count_is_refused_when_the_transaction_state_is_unknown() {
+    let Some(url) = pg_url("a_bounded_count_is_refused_when_the_transaction_state_is_unknown") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_unsure_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    let question = "SELECT pg_catalog.now()";
+    let refused = || pg_proxy::Fault::Instead("SELECT 1/0".into());
+    proxy.fault_start(question, refused());
+    assert!(matches!(q.run(1, "SELECT 1/0").await, DbEvent::Failed { .. }));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while proxy.fault_pending() {
+        assert!(Instant::now() < deadline, "the question after the failure never came");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    proxy.fault_start(question, refused());
+    let counted = count_of(&format!("SELECT * FROM {table} WHERE (id > 10)"));
+    let (got, _) = q.count_within(2, &counted, Some(Duration::from_secs(30))).await;
+    assert!(!proxy.fault_pending(), "the count asked again");
+    assert_eq!(got, Err(DbError::NotRepeatable(datarig_core::sql::risk::repeat::NotRepeatable::TxUnknown)));
+    let ran = |s: &pg_proxy::Sent| matches!(s, pg_proxy::Sent::Query(t) if t.contains(&counted));
+    assert!(!proxy.sent().iter().any(ran), "the count was not sent");
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+}

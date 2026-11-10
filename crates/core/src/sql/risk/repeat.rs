@@ -87,6 +87,9 @@ pub enum NotRepeatable {
     /// The server says a column it reads has a type of the user's that functions, operators or
     /// casts of the user's take: the type.
     UserColumnType(String),
+    /// The session could not tell whether a transaction is open, so a count cannot be given the
+    /// time limit it asks for.
+    TxUnknown,
     /// The parser rejects it, or it is too long or too deep to read.
     Unreadable,
     /// MySQL: it reads or sets a variable (`@x`, `@@x`): its value may differ on the next run.
