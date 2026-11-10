@@ -1883,25 +1883,53 @@ pub(crate) enum SetsNext {
     Maybe,
 }
 
-/// Whether `sql` sets settings of the next transaction only, which the server does not report:
-/// `SET TRANSACTION …` (no `SESSION` nor `GLOBAL` before `TRANSACTION`), or an assignment to a
-/// transaction variable by its `@@` name without a scope (`SET @@transaction_isolation = …`,
-/// `` @@`tx_read_only` ``; reading one, `SET @a = @@transaction_isolation`, sets nothing); or
-/// whether it may ([`SetsNext::Maybe`]). A stored function cannot: the statement that calls it
-/// is a transaction already.
+/// Whether `sql` sets settings of the next transaction only, which the server does not report
+/// ([`sets_next_isolation`], [`sets_next_access`]), or whether it may ([`SetsNext::Maybe`]: a
+/// `CALL`, an `EXECUTE` of a prepared text, an executable comment `/*! … */`, whose text is not
+/// read). A stored function cannot: the statement that calls it is a transaction already.
 pub(crate) fn sets_next_transaction(sql: &str, mode: MySqlMode) -> SetsNext {
-    let toks: Vec<Token> = lex_in(sql, Dialect::MySql(mode)).into_iter().filter(|t| !t.is_trivia()).collect();
+    let toks = set_tokens(sql, mode);
     if toks.iter().any(|t| t.kind == Tok::ExecComment) {
         return SetsNext::Maybe;
     }
-    let word = |i: usize| toks.get(i).filter(|t| t.is_word()).map(|t| t.text(sql).to_ascii_uppercase());
-    match word(0).as_deref() {
-        Some("CALL" | "EXECUTE") => return SetsNext::Maybe,
-        Some("SET") => {}
-        _ => return SetsNext::No,
+    if matches!(first_word(sql, mode).as_deref(), Some("CALL" | "EXECUTE")) {
+        return SetsNext::Maybe;
     }
-    if word(1).as_deref() == Some("TRANSACTION") {
-        return SetsNext::Yes;
+    if sets_next_isolation(sql, mode) || sets_next_access(sql, mode) { SetsNext::Yes } else { SetsNext::No }
+}
+
+/// Whether `sql` sets the isolation level of the next transaction only, which the server does not
+/// report as the session's: `SET TRANSACTION ISOLATION LEVEL …` (no `SESSION` nor `GLOBAL` before
+/// `TRANSACTION`), or an assignment to the variable by its `@@` name without a scope
+/// (`SET @@transaction_isolation = …`, `@@tx_isolation`, `` @@`transaction_isolation` ``).
+/// Reading it (`SET @a = @@transaction_isolation`) sets nothing.
+pub(crate) fn sets_next_isolation(sql: &str, mode: MySqlMode) -> bool {
+    sets_next(sql, mode, "ISOLATION", &["@@transaction_isolation", "@@tx_isolation"])
+}
+
+/// Whether `sql` sets the access mode of the next transaction only: `SET TRANSACTION READ ONLY`
+/// or `READ WRITE` (no `SESSION` nor `GLOBAL`), or an assignment to `@@transaction_read_only`
+/// (`@@tx_read_only`) without a scope.
+pub(crate) fn sets_next_access(sql: &str, mode: MySqlMode) -> bool {
+    sets_next(sql, mode, "READ", &["@@transaction_read_only", "@@tx_read_only"])
+}
+
+/// The tokens of `sql`, without trivia.
+fn set_tokens(sql: &str, mode: MySqlMode) -> Vec<Token> {
+    lex_in(sql, Dialect::MySql(mode)).into_iter().filter(|t| !t.is_trivia()).collect()
+}
+
+/// Whether `sql` is `SET TRANSACTION …` naming the characteristic whose first word is `word`
+/// (`ISOLATION`, `READ`), or a `SET` whose assignments' targets include one of `names` (lower
+/// case, `@@` without a scope).
+fn sets_next(sql: &str, mode: MySqlMode, word: &str, names: &[&str]) -> bool {
+    let toks = set_tokens(sql, mode);
+    let upper = |i: usize| toks.get(i).filter(|t| t.is_word()).map(|t| t.text(sql).to_ascii_uppercase());
+    if upper(0).as_deref() != Some("SET") {
+        return false;
+    }
+    if upper(1).as_deref() == Some("TRANSACTION") {
+        return toks.iter().skip(2).any(|t| t.is_word() && t.text(sql).eq_ignore_ascii_case(word));
     }
     // The assignments' targets: right after `SET` or after a comma outside parentheses, up to
     // the `=` (`:=`) that follows. A variable's name as written runs from its first `@` to what
@@ -1917,7 +1945,7 @@ pub(crate) fn sets_next_transaction(sql: &str, mode: MySqlMode) -> SetsNext {
             _ => {}
         }
     }
-    let sets = targets.into_iter().any(|i| {
+    targets.into_iter().any(|i| {
         if !toks.get(i).is_some_and(at) {
             return false;
         }
@@ -1936,13 +1964,8 @@ pub(crate) fn sets_next_transaction(sql: &str, mode: MySqlMode) -> SetsNext {
         // `:=` may lex as `:` and `=`.
         let assigned = toks.get(next).is_some_and(|n| n.kind == Tok::Op && matches!(n.text(sql), "=" | ":=" | ":"));
         let name = name.to_ascii_lowercase().replace('`', "");
-        assigned
-            && matches!(
-                name.as_str(),
-                "@@transaction_isolation" | "@@tx_isolation" | "@@transaction_read_only" | "@@tx_read_only"
-            )
-    });
-    if sets { SetsNext::Yes } else { SetsNext::No }
+        assigned && names.contains(&name.as_str())
+    })
 }
 
 /// Whether `sql` starts or ends a transaction by its first word (`START TRANSACTION`, `BEGIN`,
