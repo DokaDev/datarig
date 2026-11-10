@@ -10,7 +10,8 @@
 //! history lives in memory only; a second instance (the state directory is the first one's)
 //! reads the file and keeps what it adds in memory.
 //!
-//! Writes go to one thread of their own, the latest text only: a second after the last change
+//! Writes go to one thread of their own, the latest text only (what waits behind a slow write
+//! is one text, never a queue): a second after the last change
 //! (a run again only moves its entry to the front), at once for a clear, and before the app
 //! quits (waited for at most [`QUIT_FLUSH`]). The texts never go to the error log, only what
 //! failed and the file's path.
@@ -32,7 +33,7 @@ use ratatui::text::{Line, Span};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 
 /// A change is written this long after the last one.
 pub(super) const DEBOUNCE: Duration = Duration::from_secs(1);
@@ -71,16 +72,107 @@ impl Out {
     }
 }
 
-/// A job of the writer.
-enum Job {
-    Write {
-        path: PathBuf,
-        text: String,
-        seq: u64,
-        out: Out,
-    },
-    /// Answered once every write sent before it is done.
-    Flush(mpsc::Sender<()>),
+/// A write for the writer: the history's text as of change `seq`.
+struct Write {
+    path: PathBuf,
+    text: String,
+    seq: u64,
+    out: Out,
+}
+
+/// How the writer writes a file (the tests stand in for it).
+type WriteFile = Box<dyn Fn(&std::path::Path, &str) -> std::io::Result<()> + Send>;
+
+/// What waits for the writer: at most one write, the latest (a newer one replaces it), and the
+/// flushes, each answered once every write sent before it is done.
+#[derive(Default)]
+struct Queue {
+    write: Option<Write>,
+    flushes: Vec<mpsc::Sender<()>>,
+    /// The app is gone: the thread ends once the queue is done.
+    closed: bool,
+}
+
+#[derive(Default)]
+struct Shared {
+    queue: Mutex<Queue>,
+    ready: Condvar,
+}
+
+impl Shared {
+    fn queue(&self) -> MutexGuard<'_, Queue> {
+        self.queue.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// The writer thread of the history: its files are written one at a time, in the order of
+/// their changes, off the UI thread. However long a write takes, what waits behind it stays
+/// one text: an older text is never written after a newer one.
+struct Writer {
+    shared: Arc<Shared>,
+}
+
+impl Writer {
+    /// Start the thread.
+    fn spawn(write_file: WriteFile) -> std::io::Result<Self> {
+        let shared = Arc::<Shared>::default();
+        let theirs = shared.clone();
+        std::thread::Builder::new()
+            .name("datarig-filter-history".into())
+            .spawn(move || run_writer(&theirs, &write_file))?;
+        Ok(Writer { shared })
+    }
+
+    /// Queue `w`, replacing the write still waiting, if any: that one is never written (`w`
+    /// is newer) and is handed back.
+    fn write(&self, w: Write) -> Option<Write> {
+        let old = self.shared.queue().write.replace(w);
+        self.shared.ready.notify_one();
+        old
+    }
+
+    /// `done` is answered once every write queued before it is done.
+    fn flush(&self, done: mpsc::Sender<()>) {
+        self.shared.queue().flushes.push(done);
+        self.shared.ready.notify_one();
+    }
+
+    /// The writes waiting (not the one being written).
+    #[cfg(test)]
+    fn waiting(&self) -> usize {
+        usize::from(self.shared.queue().write.is_some())
+    }
+}
+
+impl Drop for Writer {
+    fn drop(&mut self) {
+        self.shared.queue().closed = true;
+        self.shared.ready.notify_one();
+    }
+}
+
+/// The writer thread: waits for work, takes all of it, writes the latest text and answers the
+/// flushes; ends once the app is gone and nothing waits.
+fn run_writer(shared: &Shared, write_file: &WriteFile) {
+    loop {
+        let (write, flushes) = {
+            let mut q = shared.queue();
+            while q.write.is_none() && q.flushes.is_empty() && !q.closed {
+                q = shared.ready.wait(q).unwrap_or_else(PoisonError::into_inner);
+            }
+            if q.write.is_none() && q.flushes.is_empty() {
+                return;
+            }
+            (q.write.take(), std::mem::take(&mut q.flushes))
+        };
+        if let Some(Write { path, text, seq, out }) = write {
+            let result = write_file(&path, &text);
+            out.send(AppEvent::FilterHistory(Saved { seq, path, result }));
+        }
+        for f in flushes {
+            let _ = f.send(());
+        }
+    }
 }
 
 /// The history as far as the app knows it.
@@ -102,7 +194,7 @@ pub struct FilterHistoryState {
     dirty: bool,
     /// When the next write is due.
     due: Option<Instant>,
-    writer: Option<mpsc::Sender<Job>>,
+    writer: Option<Writer>,
     /// The number of the last write sent.
     seq: u64,
     /// What to say once write `seq` (or a later one) is done (a clear).
@@ -234,12 +326,17 @@ impl App {
         let out = self.filter_history_out();
         self.filter_history.seq += 1;
         let seq = self.filter_history.seq;
-        let writer = self.filter_history.writer.get_or_insert_with(spawn_writer);
-        if let Err(mpsc::SendError(Job::Write { out, path, .. })) = writer.send(Job::Write { path, text, seq, out }) {
-            // The writer is gone (it cannot start): said as a failed write.
-            self.filter_history.writer = None;
-            let error = std::io::Error::other("the writer thread is not running");
-            out.send(AppEvent::FilterHistory(Saved { seq, path, result: Err(error) }));
+        if self.filter_history.writer.is_none() {
+            match Writer::spawn(Box::new(|path, text| fh::write(path, text))) {
+                Ok(w) => self.filter_history.writer = Some(w),
+                // It cannot start: said as a failed write.
+                Err(error) => return out.send(AppEvent::FilterHistory(Saved { seq, path, result: Err(error) })),
+            }
+        }
+        let Some(writer) = &self.filter_history.writer else { return };
+        // A write still waiting is replaced by this newer one: it is never written nor answered.
+        if let Some(Write { out: Out::Local(_), .. }) = writer.write(Write { path, text, seq, out }) {
+            self.filter_history.pending.fetch_sub(1, Ordering::SeqCst);
         }
     }
 
@@ -295,9 +392,8 @@ impl App {
         self.filter_history_send();
         if let Some(w) = &self.filter_history.writer {
             let (tx, rx) = mpsc::channel();
-            if w.send(Job::Flush(tx)).is_ok() {
-                let _ = rx.recv_timeout(QUIT_FLUSH);
-            }
+            w.flush(tx);
+            let _ = rx.recv_timeout(QUIT_FLUSH);
         }
         self.pump_filter_history(Duration::ZERO);
     }
@@ -478,31 +574,5 @@ fn unix_secs(t: std::time::SystemTime) -> i64 {
     t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
-/// The writer thread: each write replaces the file with the latest text sent (writes waiting
-/// behind it are skipped for it), then the flushes waiting are answered.
-fn spawn_writer() -> mpsc::Sender<Job> {
-    let (tx, rx) = mpsc::channel::<Job>();
-    // Not started: the receiver went with it, and the first send says so.
-    let _ = std::thread::Builder::new().name("datarig-filter-history".into()).spawn(move || {
-        while let Ok(first) = rx.recv() {
-            let mut jobs = vec![first];
-            jobs.extend(rx.try_iter());
-            let mut flushes = Vec::new();
-            let mut latest = None;
-            for j in jobs {
-                match j {
-                    Job::Write { path, text, seq, out } => latest = Some((path, text, seq, out)),
-                    Job::Flush(done) => flushes.push(done),
-                }
-            }
-            if let Some((path, text, seq, out)) = latest {
-                let result = fh::write(&path, &text);
-                out.send(AppEvent::FilterHistory(Saved { seq, path, result }));
-            }
-            for f in flushes {
-                let _ = f.send(());
-            }
-        }
-    });
-    tx
-}
+#[cfg(test)]
+mod tests;
