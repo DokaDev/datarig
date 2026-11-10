@@ -412,3 +412,92 @@ fn the_limit_screens() {
         assert_screen!(format!("table_limit_reached_{tag}_120x30"), lang, h.draw(120, 30));
     }
 }
+
+/// The cap goes to the driver with the statement, so it reads no row past it: the run carries
+/// the limit, a page read again what the limit leaves past the rows held; a run without a
+/// limit carries none.
+#[test]
+fn the_runs_carry_what_the_cap_leaves_to_the_driver() {
+    let mut h = users(Lang::En);
+    set_limit(&mut h, "3");
+    let caps: Vec<Option<u64>> = h
+        .sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::Execute { max_rows, .. } => Some(max_rows),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(caps, vec![Some(3)]);
+    // Read again past a closed portal: what is left of the cap.
+    let size = Harness::connected(Lang::En).app.page_size;
+    let mut h = limited(size as u64 + 2);
+    let (id, index) = (h.app.tab().exec.query_id, h.app.tabs.active_index());
+    h.tab_db(index, DbEvent::Released { id });
+    first_page(&mut h, size, true);
+    h.keys("n");
+    let resumed: Vec<(u64, Option<u64>)> = h
+        .sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::Resume { skip, max_rows, .. } => Some((skip, max_rows)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(resumed, vec![(size as u64, Some(2))]);
+    // No limit: no cap.
+    let mut h = users(Lang::En);
+    h.ctrl('e');
+    let caps: Vec<Option<u64>> = h
+        .sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::Execute { max_rows, .. } => Some(max_rows),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(caps, vec![None]);
+}
+
+/// A count and an export of every row read the statement the rows were read with, only capped:
+/// keys read since (a tie-breaker that would change which rows tie at the cap) do not change
+/// its order.
+#[test]
+fn the_capped_statement_keeps_the_order_the_rows_were_read_in() {
+    let size = Harness::connected(Lang::En).app.page_size;
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    let keys = h.sent().iter().find_map(|c| match c {
+        DbCommand::LoadTableKeys { id, .. } => Some(*id),
+        _ => None,
+    });
+    let keys = keys.expect("the keys are asked for");
+    first_page(&mut h, 3, false);
+    h.key(KeyCode::Tab);
+    h.keys("f");
+    h.key(KeyCode::Tab);
+    h.type_text("name");
+    h.key(KeyCode::Tab);
+    h.type_text("700");
+    h.key(KeyCode::Enter);
+    let ordered = format!(r#"{ALL} ORDER BY "name" ASC"#);
+    assert_eq!(runs(&mut h), vec![vec![ordered.clone()]], "no keys yet: no tie-breaker");
+    let (id, index) = (h.app.tab().exec.query_id, h.app.tabs.active_index());
+    h.tab_db(index, DbEvent::Released { id });
+    first_page(&mut h, size, true);
+    let pk = datarig_core::driver::keys::OrderKeys { primary_key: vec!["id".into()], ..Default::default() };
+    h.meta_db("local-pg", DbEvent::TableKeys { id: keys, result: Ok(pk) });
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.sent();
+    h.keys("#");
+    let counts: Vec<String> = h
+        .sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::Count { sql, .. } => Some(sql),
+            _ => None,
+        })
+        .collect();
+    assert!(counts.len() == 1 && counts[0].contains(&format!("{ordered} LIMIT 700")), "{counts:?}");
+    assert!(!counts[0].contains(r#""id" ASC"#), "{counts:?}");
+}

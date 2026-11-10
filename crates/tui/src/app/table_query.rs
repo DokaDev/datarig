@@ -1085,11 +1085,15 @@ impl App {
     }
 
     /// The statement that reads table tab `id`'s shown rows whole when they have a cap (a
-    /// count counts around it, an export of every row reads it): the shown query with its cap
-    /// written as a `LIMIT`. `None` without a cap: the statement the rows came from reads them.
+    /// count counts around it, an export of every row reads it): the statement the rows were
+    /// read with, as it was sent (its order too, whatever keys were read since), with only the
+    /// cap written after it as a `LIMIT`. `None` without a cap: the statement the rows came
+    /// from reads them.
     pub(super) fn table_capped_sql(&self, id: TabId) -> Option<String> {
-        let q = self.table_query(id)?.shown.as_ref().filter(|q| q.limit.is_some())?;
-        Some(query::compile_capped(q, &self.table_target(id)?).sql)
+        let tq = self.table_query(id)?;
+        let q = tq.shown.as_ref().filter(|q| q.limit.is_some())?;
+        let d = self.tabs.get(id)?.exec.prepared.language().dialect();
+        Some(query::capped(&tq.shown_run()?.sql, q, d))
     }
 
     /// `:where <condition>`: the active table tab's filter (none when blank), then a run.

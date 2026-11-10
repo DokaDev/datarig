@@ -27,7 +27,7 @@ pub use check::{
     BarRefusal, Confirm, FilterVerdict, LexProblem, MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS, PG_FILTER_CALLS,
     PG_REFUSED_CALLS, ShapeProblem, check_filter,
 };
-pub use compile::{Compiled, compile, compile_capped};
+pub use compile::{Compiled, capped, compile, compile_capped};
 pub use order::{OrderError, OrderProblem, order_text, parse_order};
 pub use recognise::recognise;
 pub use render::{RenderError, like_contains, like_starts_with, render};
