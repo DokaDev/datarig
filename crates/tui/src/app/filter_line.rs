@@ -43,6 +43,8 @@ pub enum TableAction {
     SortCycle,
     /// Sort by the cursor's column as one more key, or turn it where it is (`S`).
     SortAdd,
+    /// The menu of filters by the value of the cursor's cell or the selection (`F`).
+    FilterByValue,
 }
 
 impl App {
@@ -159,6 +161,7 @@ impl App {
             TableAction::OpenSql => self.table_open_sql(id),
             TableAction::SortCycle => self.table_sort(id, self.tab().grid.col, query::SortStep::Only),
             TableAction::SortAdd => self.table_sort(id, self.tab().grid.col, query::SortStep::Add),
+            TableAction::FilterByValue => self.filter_by_value(),
         }
     }
 

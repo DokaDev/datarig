@@ -30,7 +30,7 @@ pub use check::{
 pub use compile::{Compiled, capped, compile, compile_capped};
 pub use order::{OrderError, OrderProblem, SortStep, order_text, parse_order, sort_column};
 pub use recognise::recognise;
-pub use render::{RenderError, like_contains, like_starts_with, render};
+pub use render::{RenderError, and_filter, like_contains, like_starts_with, render};
 
 use crate::sql::dialect::Dialect;
 use serde::{Deserialize, Serialize};

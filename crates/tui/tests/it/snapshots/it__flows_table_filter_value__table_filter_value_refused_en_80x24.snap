@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_table_filter_value.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
+"│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig.shop.users││ id: 1                │"
+"│  ▾ ●   local-pg      ││ [Result 1]  Chart  Messages  ││ name: it's           │"
+"│    ▾ datarig default ││ WHERE  f filter            ⟳ ││ score: 1.5           │"
+"│      ▸ analytics     ││   core   │ data   │ doc    ^v││ data: \x01ab         │"
+"│      ▸ public        ││   loat8  │ bytea  │ json     ││ doc: {"a": 1}        │"
+"│      ▾ shop          ││ 1    1.5 │ \x01ab │ {"a": 1} ││ born: 2026-11-10 09:…│"
+"│        ▾ Tables      ││ ╭────────────────────────────────────────────────────╮"
+"│          ▸ users     ││ │ › type to filter                                   │"
+"│                      ││ │ Filter by doc                                      │"
+"│                      ││ │  = '{"a": 1}'                    type not compared │"
+"│                      ││ │  <> '{"a": 1}'                   type not compared │"
+"│                      ││ │  <> '{"a": 1}' (NULLs included)  type not compared │"
+"│                      ││ │  < '{"a": 1}'                    type not compared │"
+"│                      ││ │  > '{"a": 1}'                    type not compared │"
+"│                      ││ │  <= '{"a": 1}'                   type not compared │"
+"│                      ││ │  >= '{"a": 1}'                   type not compared │"
+"│                      ││ ╰────────────────────────────────────────────────────╯"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" local-pg │ 3 rows · 2ms                                                     EN "

@@ -79,6 +79,7 @@ mod flows_tab_drag;
 mod flows_tab_list;
 mod flows_table_filter;
 mod flows_table_filter_keep;
+mod flows_table_filter_value;
 mod flows_table_limit;
 mod flows_table_locks;
 mod flows_table_sort;

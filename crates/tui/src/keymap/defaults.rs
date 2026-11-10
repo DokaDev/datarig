@@ -465,6 +465,8 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Grid, "S", "table.sort.add"),
     (Nav, "space r s", "table.sort.cycle"),
     (Nav, "space r S", "table.sort.add"),
+    (Grid, "F", "table.filter.by_value"),
+    (Nav, "space r F", "table.filter.by_value"),
     (Grid, "L", "results.tab.next"),
     (Grid, "H", "results.tab.prev"),
     (Nav, "space r ]", "results.tab.next"),

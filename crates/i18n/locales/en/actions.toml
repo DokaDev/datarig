@@ -225,6 +225,7 @@
 "action.table.filter.open_sql" = "Table → open its statement in a new console"
 "action.table.sort.cycle" = "Table → sort by this column only (up, down, off)"
 "action.table.sort.add" = "Table → sort by this column too (up, down, off)"
+"action.table.filter.by_value" = "Table → filter by value"
 "action.tx.commit" = "Commit the open transaction"
 "action.tx.rollback" = "Roll back the open transaction"
 "action.tx.summary" = "What the open transaction did"

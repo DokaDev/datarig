@@ -444,6 +444,56 @@ fn text_literal(t: &Target, s: &str) -> String {
     }
 }
 
+/// Filter text `base` with condition `cond` (as [`render`] writes one) added to it: `cond` alone
+/// when `base` is blank, else `base AND cond`. `base` is put in parentheses first unless every
+/// operator outside its own parentheses binds tighter than `AND` (read with the dialect's lexer):
+/// an `OR`, an `XOR`, a `|` (MySQL's `||` is `OR` unless `PIPES_AS_CONCAT`), an assignment, a comment, a
+/// statement's end or parentheses that do not pair up there all wrap it, so that the condition
+/// added never changes what `base` means. Blanks at the end of `base` are left out; the rest of
+/// it is kept as written.
+pub fn and_filter(base: &str, cond: &str, d: Dialect) -> String {
+    let base = base.trim_end();
+    if base.trim().is_empty() {
+        return cond.to_string();
+    }
+    match plain_and_chain(base, d) {
+        true => format!("{base} AND {cond}"),
+        false => format!("({base}) AND {cond}"),
+    }
+}
+
+/// Whether `AND` written after `text` takes the whole of it as its left operand: nothing outside
+/// its parentheses binds more loosely than `AND`, and nothing there hides what follows.
+fn plain_and_chain(text: &str, d: Dialect) -> bool {
+    use crate::sql::lexer::{Tok, lex_in};
+    let mut depth = 0i64;
+    // The end of a `:` the lexer gave as an operator of its own (`:=` comes as `:` then `=`).
+    let mut colon = None;
+    for t in lex_in(text, d) {
+        let s = t.text(text);
+        let after_colon = colon == Some(t.start);
+        colon = (t.kind == Tok::Op && s == ":").then_some(t.end);
+        match t.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            // A comment, a statement's end, code in a comment: what follows may be cut off.
+            Tok::LineComment | Tok::BlockComment | Tok::ExecComment | Tok::Semi | Tok::Directive => return false,
+            _ if depth > 0 => {}
+            Tok::Keyword | Tok::Ident if s.eq_ignore_ascii_case("OR") || s.eq_ignore_ascii_case("XOR") => {
+                return false;
+            }
+            Tok::Op if s == "|" || (s == "=" && after_colon) => return false,
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
 /// Bytes in hexadecimal, two digits each.
 fn hex(b: &[u8], upper: bool) -> String {
     b.iter().map(|b| if upper { format!("{b:02X}") } else { format!("{b:02x}") }).collect()

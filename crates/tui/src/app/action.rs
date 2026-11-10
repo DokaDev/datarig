@@ -1030,6 +1030,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Table(T::OpenSql), "table.filter.open_sql", Label::ActionTableFilterOpenSql, table_tab),
     act(Action::Table(T::SortCycle), "table.sort.cycle", Label::ActionTableSortCycle, table_tab),
     act(Action::Table(T::SortAdd), "table.sort.add", Label::ActionTableSortAdd, table_tab),
+    act(Action::Table(T::FilterByValue), "table.filter.by_value", Label::ActionTableFilterByValue, table_tab),
     act(Action::ExplainAsPlan, "results.view_as_plan", Label::ActionResultsViewAsPlan, text_plan_shown),
     mv(Action::Plan(P::Down), "plan.down", Label::ActionPlanDown, plan_focused),
     mv(Action::Plan(P::Up), "plan.up", Label::ActionPlanUp, plan_focused),

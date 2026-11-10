@@ -570,6 +570,131 @@ fn render_groups_what_needs_it() {
     assert_eq!(render_pg(&between), "id NOT BETWEEN 1 AND 9");
 }
 
+#[test]
+fn render_values_of_a_cell_per_type_and_dialect() {
+    // Numbers bare on a number column, quoted on any other; NaN quoted for the server to read.
+    assert_eq!(render_pg(&cmp("price", CmpOp::Lt, num("19.990"))), "price < 19.990");
+    assert_eq!(render_my(&cmp("price", CmpOp::Gt, num("-0.5")), true), "price > -0.5");
+    assert_eq!(render_pg(&cmp("price", CmpOp::Eq, num("-0"))), "price = '-0'");
+    assert_eq!(render_my(&cmp("name", CmpOp::Eq, num("7")), true), "name = '7'");
+    // Times as the server showed them, quoted: the session reads back what it wrote.
+    let ts = text("2026-11-10 09:30:00.123456+09");
+    assert_eq!(render_pg(&cmp("born", CmpOp::Ge, ts)), "born >= '2026-11-10 09:30:00.123456+09'");
+    assert_eq!(render_my(&cmp("born", CmpOp::Le, text("2026-11-10 09:30:00")), true), "born <= '2026-11-10 09:30:00'");
+    assert_eq!(
+        render_my(&cmp("born", CmpOp::Le, text("2026-11-10")), false),
+        "born <= _utf8mb4 X'323032362D31312D3130'"
+    );
+    // Bytes: never text.
+    let b = || Value::Bytes(vec![0, 0x27, 0x5c, 0xff]);
+    assert_eq!(render_pg(&cmp("data", CmpOp::Eq, b())), r"data = E'\\x00275cff'::bytea");
+    assert_eq!(render_my(&cmp("data", CmpOp::Ne, b()), true), "data <> X'00275CFF'");
+    assert_eq!(render_my(&cmp("data", CmpOp::Ne, b()), false), "data <> X'00275CFF'");
+    // NULL-safe not equal keeps the NULL rows; a NULL cell is `IS NULL`.
+    let ne = Cond::NotDistinct { col: "Mixed Case".into(), value: text("a'b"), negated: true };
+    assert_eq!(render_pg(&ne), r#""Mixed Case" IS DISTINCT FROM 'a''b'"#);
+    assert_eq!(render_my(&ne, true), "NOT (`Mixed Case` <=> 'a''b')");
+    assert_eq!(render_my(&Cond::IsNull { col: "data".into(), negated: false }, true), "data IS NULL");
+}
+
+#[test]
+fn render_in_lists_keep_the_null_forms() {
+    let values = |null| {
+        let mut v = vec![text("a"), text("b'c")];
+        if null {
+            v.push(Value::Null);
+        }
+        v
+    };
+    let r#in = |null, negated| Cond::In { col: "name".into(), values: values(null), negated };
+    // NOT IN that keeps the rows whose value is NULL.
+    let not_in_nulls = Cond::Any(vec![r#in(false, true), Cond::IsNull { col: "name".into(), negated: false }]);
+    for (d, utf8mb4) in [(Dialect::Postgres, false), (MY, true)] {
+        let t = Target { utf8mb4, ..target(d) };
+        let r = |c: &Cond| render(c, &t).unwrap();
+        assert_eq!(r(&r#in(false, false)), "name IN ('a', 'b''c')");
+        assert_eq!(r(&r#in(true, false)), "(name IN ('a', 'b''c') OR name IS NULL)");
+        assert_eq!(r(&r#in(false, true)), "name NOT IN ('a', 'b''c')");
+        assert_eq!(r(&r#in(true, true)), "(name NOT IN ('a', 'b''c') AND name IS NOT NULL)");
+        assert_eq!(r(&not_in_nulls), "(name NOT IN ('a', 'b''c') OR name IS NULL)");
+    }
+    let t = Target { utf8mb4: false, ..target(MY) };
+    assert_eq!(render(&r#in(false, false), &t).unwrap(), "name IN (_utf8mb4 X'61', _utf8mb4 X'622763')");
+}
+
+#[test]
+fn render_like_patterns_read_the_same_in_every_mysql_mode() {
+    let modes =
+        [MY, Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true, dollar_quotes: false })];
+    let starts = |value: &str| Cond::Like {
+        col: "name".into(),
+        pattern: like_starts_with(value),
+        negated: false,
+        case: CaseMode::Server,
+    };
+    for d in modes {
+        let t = Target { utf8mb4: true, ..target(d) };
+        // `%`, `_` and `!` escaped with `!`, never with a backslash.
+        assert_eq!(render(&starts("5%_!"), &t).unwrap(), "name LIKE '5!%!_!!%' ESCAPE '!'", "{d:?}");
+        // A backslash is a character of the value: written as bytes, read the same in both modes.
+        assert_eq!(render(&starts(r"a\"), &t).unwrap(), "name LIKE _utf8mb4 X'615C25' ESCAPE '!'", "{d:?}");
+    }
+    let contains = |col: &str| Cond::Like {
+        col: col.into(),
+        pattern: like_contains("A_"),
+        negated: false,
+        case: CaseMode::Insensitive,
+    };
+    // A `_ci` column compares without case already; a column of no known collation is lowered.
+    assert_eq!(render_my(&contains("email"), true), "email LIKE '%A!_%' ESCAPE '!'");
+    let unknown = contains("Mixed Case");
+    assert_eq!(render_my(&unknown, true), "LOWER(`Mixed Case`) LIKE LOWER('%A!_%') ESCAPE '!'");
+    assert_eq!(render_pg(&unknown), r#""Mixed Case" ILIKE '%A!_%' ESCAPE '!'"#);
+}
+
+#[test]
+fn and_filter_appends_or_wraps_first() {
+    let pg = |base: &str| and_filter(base, "id = 1", Dialect::Postgres);
+    let my = |base: &str| and_filter(base, "id = 1", MY);
+    // Nothing yet: the condition is the text.
+    assert_eq!(pg(""), "id = 1");
+    assert_eq!(pg("   "), "id = 1");
+    // A chain of ANDs (and anything that binds tighter) takes it as one more operand.
+    assert_eq!(pg("a > 2"), "a > 2 AND id = 1");
+    assert_eq!(pg("a > 2 AND b IS NULL  "), "a > 2 AND b IS NULL AND id = 1");
+    assert_eq!(pg("NOT a = 2 AND b BETWEEN 1 AND 3"), "NOT a = 2 AND b BETWEEN 1 AND 3 AND id = 1");
+    assert_eq!(pg("a::int = 2"), "a::int = 2 AND id = 1");
+    assert_eq!(pg("name = 'x OR y'"), "name = 'x OR y' AND id = 1");
+    assert_eq!(pg(r#""or" = 1"#), r#""or" = 1 AND id = 1"#);
+    // Already in parentheses, an OR inside them does not count.
+    assert_eq!(pg("(a = 1 OR b = 2)"), "(a = 1 OR b = 2) AND id = 1");
+    assert_eq!(pg("(a = 1 OR b = 2) AND c = 3"), "(a = 1 OR b = 2) AND c = 3 AND id = 1");
+    // An OR at the top is wrapped, visibly.
+    assert_eq!(pg("a = 1 OR b = 2"), "(a = 1 OR b = 2) AND id = 1");
+    assert_eq!(pg("(a = 1) or (b = 2)"), "((a = 1) or (b = 2)) AND id = 1");
+    assert_eq!(pg("CASE WHEN a OR b THEN 1 END = 1"), "(CASE WHEN a OR b THEN 1 END = 1) AND id = 1");
+    assert_eq!(pg("a || b = 'x'"), "(a || b = 'x') AND id = 1");
+    // MySQL's XOR, `||` and an assignment bind more loosely than AND.
+    assert_eq!(my("a = 1 XOR b = 2"), "(a = 1 XOR b = 2) AND id = 1");
+    assert_eq!(my("a = 1 || b = 2"), "(a = 1 || b = 2) AND id = 1");
+    assert_eq!(my("@v := 1"), "(@v := 1) AND id = 1");
+    assert_eq!(my("a = 1 && b = 2"), "a = 1 && b = 2 AND id = 1");
+    assert_eq!(my("`or` = 1"), "`or` = 1 AND id = 1");
+    // Anything that could cut off or escape what follows is wrapped (and refused by the checks).
+    assert_eq!(pg("a = 1 -- x"), "(a = 1 -- x) AND id = 1");
+    assert_eq!(pg("a = 1) OR (b = 2"), "(a = 1) OR (b = 2) AND id = 1");
+    assert_eq!(pg("(a = 1"), "((a = 1) AND id = 1");
+    // A condition added to a chain is still one: the next one appends again.
+    let twice = and_filter(&pg("a = 1 OR b = 2"), "c = 3", Dialect::Postgres);
+    assert_eq!(twice, "(a = 1 OR b = 2) AND id = 1 AND c = 3");
+    // What it wrote keeps its meaning as a filter: it passes the bar's checks.
+    let t = target(Dialect::Postgres);
+    let c = Cond::In { col: "id".into(), values: vec![num("1"), Value::Null], negated: false };
+    let text = and_filter("id > 0 OR name IS NULL", &render(&c, &t).unwrap(), Dialect::Postgres);
+    assert_eq!(text, "(id > 0 OR name IS NULL) AND (id IN (1) OR id IS NULL)");
+    assert_eq!(check(Dialect::Postgres, &text, false), Ok(FilterVerdict::Clear));
+}
+
 // recognise
 
 /// Conditions that read back as themselves on both dialects.

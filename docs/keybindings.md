@@ -175,6 +175,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r v` | `table.filter.open_sql` | Table → open its statement in a new console |  |
 | `Space r s` | `table.sort.cycle` | Table → sort by this column only (up, down, off) |  |
 | `Space r S` | `table.sort.add` | Table → sort by this column too (up, down, off) |  |
+| `Space r F` | `table.filter.by_value` | Table → filter by value |  |
 | `Space r ]` | `results.tab.next` | Result tabs → next |  |
 | `Space r [` | `results.tab.prev` | Result tabs → previous |  |
 | `Space m m` | `monitor.open` | Monitor → the connection's server monitor |  |
@@ -299,6 +300,7 @@ The result grid. The wheel scrolls the rows; a sideways wheel (a trackpad) or Sh
 | `f` | `table.filter.edit` | Table → filter the rows on the server (WHERE) |  |
 | `s` | `table.sort.cycle` | Table → sort by this column only (up, down, off) |  |
 | `S` | `table.sort.add` | Table → sort by this column too (up, down, off) |  |
+| `F` | `table.filter.by_value` | Table → filter by value |  |
 | `L` | `results.tab.next` | Result tabs → next |  |
 | `H` | `results.tab.prev` | Result tabs → previous |  |
 | `Esc` | `pane.back` | Back to the editor |  |

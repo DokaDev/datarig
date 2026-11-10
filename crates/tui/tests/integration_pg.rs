@@ -2458,3 +2458,163 @@ async fn sorting_a_table_tab_by_a_column_orders_its_rows_on_the_server() {
     drop(app);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The values of column `col` of the rows the active tab holds, in order.
+fn held_column(app: &App, col: usize) -> Vec<Option<String>> {
+    let datarig_tui::app::Results::Rows(rs) = &app.tab().results else { return Vec::new() };
+    let mut out = Vec::new();
+    rs.rows.for_each_chunk(0..rs.rows.len(), 64, |rows| out.extend(rows.iter().map(|r| r[col].clone()))).unwrap();
+    out
+}
+
+/// Filter by value on the active table tab: the cursor on the cells of column `name` of the
+/// rows whose `id` is in `ids` (one cell, or a range down the column), `by` picked from the
+/// menu, the run waited for; then the ids of the rows it read, and the filter text it ran.
+async fn by_value(
+    app: &mut App,
+    rx: &mut UnboundedReceiver<AppEvent>,
+    ids: &[&str],
+    name: &str,
+    by: datarig_tui::app::filter_value::ByValue,
+) -> (Vec<String>, String) {
+    use datarig_tui::app::menu::{MenuItem, MenuLine};
+    let datarig_tui::app::Results::Rows(rs) = &app.tab().results else { panic!("no rows") };
+    let col = rs.columns.iter().position(|c| c.meta.name == name).expect("the column");
+    let held = held_column(app, 0);
+    let at = |id: &str| held.iter().position(|v| v.as_deref() == Some(id)).expect("the row");
+    let (first, last) = (at(ids[0]), at(ids[ids.len() - 1]));
+    assert_eq!(last + 1 - first, ids.len(), "the rows are next to each other");
+    let g = &mut app.tab_mut().grid;
+    (g.row, g.col, g.anchor) = (last, col, (ids.len() > 1).then_some((first, col)));
+    app.focus = Focus::Results;
+    press(app, 'F');
+    let m = app.overlays.menu_mut().expect("the filter menu");
+    let i = m.lines.iter().position(|l| *l == MenuLine::Item(MenuItem::Filter(by))).expect("the entry");
+    m.selected = i;
+    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+    let landed = |a: &App| {
+        a.tab().doc.table_query.as_ref().is_some_and(|q| {
+            q.failure().is_some() || q.requested.as_ref().is_some_and(|(_, r)| q.shown.as_ref() == Some(r))
+        })
+    };
+    pump(app, rx, 30, |a| idle(a, 0) && landed(a)).await;
+    let tq = app.tab().doc.table_query.as_ref().unwrap();
+    assert!(tq.failure().is_none(), "{:?}", app.tab().status.as_ref().map(|n| n.render(&app.i18n).to_string()));
+    let text = tq.shown.as_ref().and_then(|q| q.filter.as_ref()).map(|f| f.text.clone()).unwrap_or_default();
+    let mut got: Vec<String> = held_column(app, 0).into_iter().flatten().collect();
+    got.sort();
+    (got, text)
+}
+
+/// Filter by a cell's value on PostgreSQL, for text (and text of the `C` collation), a number,
+/// a time with its zone, bytes and NULL, one cell and several: each condition reads back the
+/// rows it names. Makes `public.zz_it_byvalue_<pid>` and drops it.
+#[tokio::test(flavor = "multi_thread")]
+async fn filter_by_value_reads_back_the_rows_it_names() {
+    use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::filter_line::TableAction;
+    use datarig_tui::app::filter_value::ByValue as B;
+    let Some(url) = pg_url("filter_by_value_reads_back_the_rows_it_names") else { return };
+    let pw = datarig_core::profile::dsn::parse(&url).unwrap().password.unwrap_or_default();
+    let table = format!("zz_it_byvalue_{}", std::process::id());
+    let t = format!("public.{table}");
+    let _guard = pg_clean::TableGuard::new(&url, &[&t]);
+    let create = format!(
+        "CREATE TABLE {t} (id int PRIMARY KEY, name text, c text COLLATE \"C\", n numeric, at timestamptz, b bytea)"
+    );
+    pg_clean::run_fresh(&url, &create).unwrap();
+    pg_clean::run_fresh(
+        &url,
+        &format!(
+            "INSERT INTO {t} VALUES (1, 'Apple', 'Apple', 1.50, '2026-11-10 09:30:00+00', '\\x01ab'), \
+             (2, 'apple pie', 'apple pie', 2, '2026-11-10 10:00:00+00', '\\x00'), \
+             (3, NULL, NULL, NULL, NULL, NULL), \
+             (4, '50%_off', '50%_off', 3.25, '2026-11-11 00:00:00+00', '\\x0102'), \
+             (5, '50ab_off2', '50ab_off2', 4, '2026-11-12 00:00:00+00', '\\x03')"
+        ),
+    )
+    .unwrap();
+    let dir = std::env::temp_dir().join(format!("datarig-it-byvalue-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let paths = datarig_core::paths::Paths { data: Some(dir.join("data")), state: Some(dir.join("state")) };
+    let p = profile(&url);
+    let tab = TabState {
+        id: workspace::new_id(),
+        kind: workspace::TabKind::Table,
+        script: None,
+        profile: Some(p.id),
+        cursor: (0, 0),
+        top: 0,
+        console: 0,
+        table: Some(("public".into(), table.clone())),
+        ddl: None,
+        results: None,
+        database: None,
+        schema: None,
+        filter: None,
+        order: Vec::new(),
+        limit: None,
+    };
+    let ws =
+        WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };
+    workspace::save(&dir.join("state"), &ws).unwrap();
+    let store = Arc::new(MemoryStore::new());
+    store.set(&p.id.account(), &pw).unwrap();
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut app = App::new(&cfg, None, Lang::En);
+    app.set_secret_store(store as Arc<dyn SecretStore>);
+    app.set_paths(paths);
+    app.whats_new_paused = true;
+    app.set_instance_tag(&format!("byvalue{}", std::process::id()));
+    let (tx, mut rx) = unbounded_channel();
+    app.start(tx, Startup::Normal);
+    assert!(app.tab().is_table());
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5).await;
+    // As the session shows it (its time zone decides the offset).
+    let at = |id: &str| held_column(&app, 4)[id.parse::<usize>().unwrap() - 1].clone().unwrap();
+    let (at1, at2) = (at("1"), at("2"));
+    // The cells (by `id`), the column, the entry, the ids it reads back and the filter it runs.
+    type Case<'a> = (&'a [&'a str], &'a str, B, &'a [&'a str], String);
+    let cases: Vec<Case> = vec![
+        (&["1"], "name", B::Eq, &["1"], "name = 'Apple'".into()),
+        (&["1"], "name", B::Ne, &["2", "4", "5"], "name <> 'Apple'".into()),
+        (&["1"], "name", B::NeNulls, &["2", "3", "4", "5"], "name IS DISTINCT FROM 'Apple'".into()),
+        (&["1"], "name", B::StartsWith, &["1"], "name LIKE 'Apple%' ESCAPE '!'".into()),
+        (&["1"], "name", B::Contains, &["1", "2"], "name ILIKE '%Apple%' ESCAPE '!'".into()),
+        (&["1"], "c", B::Contains, &["1", "2"], "c ILIKE '%Apple%' ESCAPE '!'".into()),
+        // `%` and `_` of the value match themselves only.
+        (&["4"], "name", B::StartsWith, &["4"], "name LIKE '50!%!_off%' ESCAPE '!'".into()),
+        (&["1"], "n", B::Gt, &["2", "4", "5"], "n > 1.50".into()),
+        (&["2"], "at", B::Ge, &["2", "4", "5"], format!("at >= '{at2}'")),
+        (&["1"], "at", B::Eq, &["1"], format!("at = '{at1}'")),
+        (&["1"], "b", B::Eq, &["1"], r"b = E'\\x01ab'::bytea".into()),
+        (&["4"], "b", B::Gt, &["1", "5"], r"b > E'\\x0102'::bytea".into()),
+        (&["3"], "name", B::IsNull, &["3"], "name IS NULL".into()),
+        (&["3"], "name", B::IsNotNull, &["1", "2", "4", "5"], "name IS NOT NULL".into()),
+        (&["1", "2", "3"], "name", B::In, &["1", "2", "3"], "(name IN ('Apple', 'apple pie') OR name IS NULL)".into()),
+        (
+            &["1", "2", "3"],
+            "name",
+            B::NotIn,
+            &["4", "5"],
+            "(name NOT IN ('Apple', 'apple pie') AND name IS NOT NULL)".into(),
+        ),
+        (&["1", "2"], "n", B::NotInNulls, &["3", "4", "5"], "(n NOT IN (1.50, 2) OR n IS NULL)".into()),
+    ];
+    for (cells, name, by, want, text) in cases {
+        let (got, ran) = by_value(&mut app, &mut rx, cells, name, by).await;
+        assert_eq!(ran, text, "{name} {by:?}");
+        assert_eq!(got, want.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "{text}");
+        app.dispatch(Action::Table(TableAction::Clear));
+        pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5).await;
+    }
+    // A second filter by value is added to the first.
+    by_value(&mut app, &mut rx, &["1"], "name", B::Contains).await;
+    let (got, ran) = by_value(&mut app, &mut rx, &["2"], "n", B::Eq).await;
+    assert_eq!(ran, "name ILIKE '%Apple%' ESCAPE '!' AND n = 2");
+    assert_eq!(got, ["2"]);
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}

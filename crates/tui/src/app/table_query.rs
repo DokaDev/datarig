@@ -579,6 +579,11 @@ impl App {
         tree.structures.get(&(table.schema.clone(), table.name.clone()))?.loaded()
     }
 
+    /// The structure of table tab `id`'s table, when the explorer has read it.
+    pub(super) fn table_structure_of(&self, id: TabId) -> Option<&TableStructure> {
+        self.table_structure(self.tabs.get(id).filter(|t| t.is_table())?)
+    }
+
     /// What the app knows of table tab `id`'s table for writing its SQL: the columns of the
     /// rows it holds of its query (else the catalog's names, of unknown kind), with the
     /// explorer's structure when it was read (collations), and the keys of the key-only read on
