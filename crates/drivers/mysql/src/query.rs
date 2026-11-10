@@ -1904,14 +1904,15 @@ pub(crate) fn sets_next_transaction(sql: &str, mode: MySqlMode) -> SetsNext {
 /// (`SET @@transaction_isolation = …`, `@@tx_isolation`, `` @@`transaction_isolation` ``).
 /// Reading it (`SET @a = @@transaction_isolation`) sets nothing.
 pub(crate) fn sets_next_isolation(sql: &str, mode: MySqlMode) -> bool {
-    sets_next(sql, mode, "ISOLATION", &["@@transaction_isolation", "@@tx_isolation"])
+    sets_next(sql, mode, &[&["ISOLATION"]], &["@@transaction_isolation", "@@tx_isolation"])
 }
 
 /// Whether `sql` sets the access mode of the next transaction only: `SET TRANSACTION READ ONLY`
 /// or `READ WRITE` (no `SESSION` nor `GLOBAL`), or an assignment to `@@transaction_read_only`
 /// (`@@tx_read_only`) without a scope.
 pub(crate) fn sets_next_access(sql: &str, mode: MySqlMode) -> bool {
-    sets_next(sql, mode, "READ", &["@@transaction_read_only", "@@tx_read_only"])
+    // `READ COMMITTED` and `READ UNCOMMITTED` are isolation levels.
+    sets_next(sql, mode, &[&["READ", "ONLY"], &["READ", "WRITE"]], &["@@transaction_read_only", "@@tx_read_only"])
 }
 
 /// The tokens of `sql`, without trivia.
@@ -1919,17 +1920,19 @@ fn set_tokens(sql: &str, mode: MySqlMode) -> Vec<Token> {
     lex_in(sql, Dialect::MySql(mode)).into_iter().filter(|t| !t.is_trivia()).collect()
 }
 
-/// Whether `sql` is `SET TRANSACTION …` naming the characteristic whose first word is `word`
-/// (`ISOLATION`, `READ`), or a `SET` whose assignments' targets include one of `names` (lower
-/// case, `@@` without a scope).
-fn sets_next(sql: &str, mode: MySqlMode, word: &str, names: &[&str]) -> bool {
+/// Whether `sql` is `SET TRANSACTION …` naming a characteristic by one of the word sequences
+/// `words` (`ISOLATION`; `READ ONLY`, `READ WRITE`), or a `SET` whose assignments' targets
+/// include one of `names` (lower case, `@@` without a scope).
+fn sets_next(sql: &str, mode: MySqlMode, words: &[&[&str]], names: &[&str]) -> bool {
     let toks = set_tokens(sql, mode);
     let upper = |i: usize| toks.get(i).filter(|t| t.is_word()).map(|t| t.text(sql).to_ascii_uppercase());
     if upper(0).as_deref() != Some("SET") {
         return false;
     }
     if upper(1).as_deref() == Some("TRANSACTION") {
-        return toks.iter().skip(2).any(|t| t.is_word() && t.text(sql).eq_ignore_ascii_case(word));
+        // The words after `TRANSACTION`, in order (commas between characteristics left out).
+        let said: Vec<String> = (2..toks.len()).filter_map(upper).collect();
+        return words.iter().any(|w| said.windows(w.len()).any(|s| s.iter().map(String::as_str).eq(w.iter().copied())));
     }
     // The assignments' targets: right after `SET` or after a comma outside parentheses, up to
     // the `=` (`:=`) that follows. A variable's name as written runs from its first `@` to what

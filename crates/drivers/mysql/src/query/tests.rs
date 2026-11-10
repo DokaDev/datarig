@@ -191,6 +191,9 @@ fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
         ("SET @@transaction_read_only = 1", false, true),
         ("SET @a = @@transaction_isolation, @@tx_read_only = 0", false, true),
         ("SET SESSION TRANSACTION READ ONLY", false, false),
+        ("SET TRANSACTION ISOLATION LEVEL READ COMMITTED", true, false),
+        ("SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED", true, false),
+        ("SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY", true, true),
     ] {
         assert_eq!(sets_next_isolation(sql, MODE), isolation, "{sql}");
         assert_eq!(sets_next_access(sql, MODE), access, "{sql}");
