@@ -14,7 +14,7 @@ expression: backend
 "│         │                                                          │         │"
 "│      Loa│ Forget the filters and orders kept for shop.users?       │         │"
 "│         │                                                          │         │"
-"│         │                 [ Cancel ]     Delete                    │         │"
+"│         │                  [ Cancel ]     Clear                    │         │"
 "│         ╰─────────────────────────── y clear · Enter/n/Esc cancel ─╯         │"
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"

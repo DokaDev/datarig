@@ -71,6 +71,10 @@ fn a_confirmations_buttons_put_the_safe_one_first_and_enter_on_it() {
     assert_eq!((keys, enter), (vec![KeyCode::Esc, KeyCode::Char('r'), KeyCode::Char('o')], None));
     let (b, _) = confirm(conflict, Label::ScriptsConflictMissingKeys).buttons();
     assert_eq!(b, [(Label::DialogButtonLater, KeyCode::Esc), (Label::DialogButtonSaveAgain, KeyCode::Char('o'))]);
+    // A clear says so on its button, as its question and keys do; Enter cancels.
+    let (b, enter) = confirm(ConfirmAction::FilterHistoryClear { all: false }, Label::TableHistoryClearKeys).buttons();
+    assert_eq!(b, [(Label::DialogButtonCancel, KeyCode::Char('n')), (Label::DialogButtonClear, KeyCode::Char('y'))]);
+    assert_eq!(enter, Some(0), "Enter cancels");
 }
 
 #[test]

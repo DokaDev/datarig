@@ -257,8 +257,8 @@ impl Confirm {
             | ConfirmAction::DeleteScriptFolder
             | ConfirmAction::DeleteTunnel(_)
             | ConfirmAction::DeleteEnvironment(_)
-            | ConfirmAction::DeleteSession(_)
-            | ConfirmAction::FilterHistoryClear { .. } => (Label::DialogButtonCancel, Label::DialogButtonDelete),
+            | ConfirmAction::DeleteSession(_) => (Label::DialogButtonCancel, Label::DialogButtonDelete),
+            ConfirmAction::FilterHistoryClear { .. } => (Label::DialogButtonCancel, Label::DialogButtonClear),
             ConfirmAction::SetConnection(_) | ConfirmAction::SetContext(_) => {
                 (Label::DialogButtonKeep, Label::DialogButtonSwitch)
             }
