@@ -7111,6 +7111,49 @@ async fn a_bounded_read_whose_commit_fails_is_no_answer() {
     assert!(!seen.iter().any(|e| matches!(e, DbEvent::Counted { result: Ok(_), .. })), "{seen:?}");
 }
 
+/// A bounded read goes in one query with the `BEGIN READ ONLY` and the limits it needs, so the
+/// server runs it only once they took effect: with the `BEGIN` failing where it stands (as one a
+/// cancel stops before it runs), the rest of the query is skipped. A read that ran anyway would
+/// wait for the lock held here, with no limit at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_read_whose_begin_fails_never_runs() {
+    let Some(url) = pg_url("a_bounded_read_whose_begin_fails_never_runs") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_beginf_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let rows = format!("SELECT * FROM {table} WHERE (id > 10)");
+    let counted = count_of(&rows);
+    let limit = Some(Duration::from_secs(30));
+    let settings = "SELECT current_setting('statement_timeout') || ' ' || current_setting('lock_timeout')";
+    let before = q.first_value(1, settings).await;
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    let failing = || pg_proxy::Fault::Head("SELECT 1/0".into());
+    proxy.fault_start("BEGIN READ ONLY", failing());
+    q.session.send(DbCommand::Count { id: 2, sql: counted.clone(), limit });
+    let DbEvent::Counted { result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 5).await else {
+        unreachable!()
+    };
+    assert!(!proxy.fault_pending(), "the count's BEGIN met the fault");
+    assert!(matches!(&result, Err(DbError::Server(m)) if m.text.contains("division by zero")), "{result:?}");
+    assert_eq!(q.first_value(3, settings).await, before, "the session is as it was");
+    proxy.fault_start("BEGIN READ ONLY", failing());
+    q.session.send(DbCommand::Estimate { id: 4, sql: rows.clone() });
+    let DbEvent::Estimated { result, .. } = q.wait(|e| matches!(e, DbEvent::Estimated { .. }), 5).await else {
+        unreachable!()
+    };
+    assert!(!proxy.fault_pending(), "the estimate's BEGIN met the fault");
+    assert!(matches!(&result, Err(DbError::Server(m)) if m.text.contains("division by zero")), "{result:?}");
+    assert_eq!(q.first_value(5, settings).await, before, "the session is as it was");
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+    assert_eq!(q.count_within(6, &counted, limit).await.0, Ok(40));
+}
+
 /// The user's cancel is for the last run sent, and never for one sent after it: asked before a
 /// bounded count was sent, the count is not cancelled (it runs to its limit, `TimedOut`); asked
 /// while the count waits behind a run, the count is cancelled (`Cancelled`, at once when its

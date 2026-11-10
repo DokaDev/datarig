@@ -27,6 +27,9 @@ pub enum Sent {
 pub enum Fault {
     /// The server gets this text instead.
     Instead(String),
+    /// The start the fault was set for ([`Proxy::fault_start`]) is replaced by this text; what
+    /// follows it goes to the server as it is.
+    Head(String),
     /// The query never reaches the server: both connections are closed.
     Close,
 }
@@ -185,16 +188,19 @@ async fn relay(
         let fault = {
             let mut faults = faults.lock().unwrap();
             match faults.as_ref() {
-                Some((wanted, _)) if tag == b'Q' && wanted.is(&cstr(&msg)) => faults.take().map(|(_, f)| f),
+                Some((wanted, _)) if tag == b'Q' && wanted.is(&cstr(&msg)) => faults.take(),
                 _ => None,
             }
         };
         let msg = match fault {
-            Some(Fault::Close) => {
+            Some((_, Fault::Close)) => {
                 let _ = sw.shutdown().await;
                 return Ok(());
             }
-            Some(Fault::Instead(text)) => [text.as_bytes(), &[0]].concat(),
+            Some((_, Fault::Instead(text))) => [text.as_bytes(), &[0]].concat(),
+            Some((Wanted::Exactly(start) | Wanted::Starting(start), Fault::Head(text))) => {
+                [text.as_bytes(), &msg[start.len()..]].concat()
+            }
             None => msg,
         };
         let len = msg.len() + 4;

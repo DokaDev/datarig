@@ -1483,6 +1483,19 @@ fn a_limited_read_sets_its_limits_after_the_sessions_own_and_never_longer() {
 /// for its command by the time the answer came, whatever time it took; without one it is the
 /// time limit only once the read was sent for at least that long (another cancel stopped it
 /// before).
+/// A bounded read goes out behind the app's own statements: the position in its error counts
+/// from the read, and one before it points at nothing of the user's.
+#[test]
+fn a_bounded_reads_error_points_into_the_read() {
+    use datarig_core::driver::{DbError, ServerMessage};
+    let at = |position| DbError::Server(ServerMessage { text: "e".into(), position, hint: None });
+    assert_eq!(super::in_read(at(Some(107)), 100), at(Some(7)));
+    assert_eq!(super::in_read(at(Some(100)), 100), at(None));
+    assert_eq!(super::in_read(at(Some(40)), 100), at(None));
+    assert_eq!(super::in_read(at(None), 100), at(None));
+    assert_eq!(super::in_read(DbError::Cancelled, 100), DbError::Cancelled);
+}
+
 #[test]
 fn a_stopped_bounded_read_is_the_limit_only_without_a_cancel_and_after_the_limit() {
     use datarig_core::driver::DbError;
