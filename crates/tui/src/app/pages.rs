@@ -121,14 +121,19 @@ impl App {
     }
 
     /// The server's estimate of the rows of the table that table tab `t` shows, as the explorer
-    /// read it with the table's schema or structure (nothing is asked for it). Only while the
-    /// rows shown are of every row of the tab's table (in any order: no filter, no cap), and
-    /// only from the explorer of the profile and database the tab works in. `None` when the
-    /// server has none (never analyzed), and for filtered rows (how many match is not known).
+    /// read it with the table's schema or structure (nothing is asked for it), at most the
+    /// tab's cap on its rows. Only while the rows shown are of every row of the tab's table (in
+    /// any order: no filter), and only from the explorer of the profile and database the tab
+    /// works in. `None` when the server has none (never analyzed), and for filtered rows (how
+    /// many match is not known).
     pub(crate) fn table_estimate(&self, t: &Tab) -> Option<u64> {
         let table = t.doc.table.as_ref().filter(|_| t.is_table())?;
         let shown = t.doc.table_query.as_ref()?.shown.as_ref()?;
-        if !super::table_query::same_rows(shown, &datarig_core::query::Query::table(self.table_name(t.id)?)) {
+        let every = datarig_core::query::Query {
+            limit: shown.limit,
+            ..datarig_core::query::Query::table(self.table_name(t.id)?)
+        };
+        if !super::table_query::same_rows(shown, &every) {
             return None;
         }
         let id = t.profile?;
@@ -136,7 +141,8 @@ impl App {
             None => &self.conns.get(id)?.tree,
             Some(db) => &self.conns.aux(id, db)?.tree,
         };
-        tree.stats_of(&table.schema, &table.name)?.rows
+        let rows = tree.stats_of(&table.schema, &table.name)?.rows?;
+        Some(shown.limit.map_or(rows, |n| rows.min(n)))
     }
 
     /// `n`: the next page of the shown result. A page already fetched is shown at once; the one
@@ -317,7 +323,7 @@ impl App {
         if let Err(why) = self.table_recheck(id) {
             return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
         }
-        let source = self.table_count_source(id).unwrap_or_else(|| t.shown_sql().to_string());
+        let source = self.table_capped_sql(id).unwrap_or_else(|| t.shown_sql().to_string());
         if zone_moved(t, &source) {
             let why = self.i18n.label(Label::RepeatZoneChanged).to_string();
             return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));

@@ -52,3 +52,8 @@
 "table.filter.cancelled_short" = "cancelled"
 "table.filter.unapplied_rows" = "filter not applied: showing previous rows"
 "table.filter.unapplied_short" = "filter not applied"
+"table.limit.refused" = "Limit refused: {why}"
+"table.limit.refused_short" = "limit refused"
+"table.limit.why.not_a_number" = "a limit is a whole number of rows, written in digits"
+"table.limit.why.zero" = "a limit of 0 rows reads nothing (leave it blank for no limit)"
+"table.limit.why.too_large" = "a limit is at most {max} rows"

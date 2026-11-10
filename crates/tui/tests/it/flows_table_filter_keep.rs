@@ -314,3 +314,40 @@ fn a_restored_tab_shows_its_query_in_the_line() {
     assert_screen!("filter_keep_restored_en_120x30", Lang::En, h.draw(120, 30));
     assert!(h.driver.sessions.lock().unwrap().is_empty(), "nothing opened");
 }
+
+/// A limit kept in the file comes back in the line's `LIMIT` field as applied, is not run, and
+/// caps the rows of the run asked for (the statement sent has no `LIMIT`); one set in the line
+/// is written back.
+#[test]
+fn a_restored_limit_shows_in_its_field_and_caps_the_run() {
+    let state = State::new("limit");
+    let cfg = test_db_config();
+    state.write_table_tab(&cfg, "limit = 2");
+    let mut h = launch(&cfg, &state, Lang::En);
+    assert_eq!(h.app.tab().doc.table_query.as_ref().unwrap().applied().limit, Some(2));
+    h.screen(120, 30);
+    let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+    assert_eq!(tq.line.limit.text(), "2");
+    assert!(h.screen(120, 30).contains("LIMIT 2"), "{}", h.screen(120, 30));
+    connect(&mut h);
+    assert!(runs(&mut h).is_empty(), "nothing runs by itself");
+    h.key(KeyCode::Tab);
+    h.ctrl('e');
+    assert_eq!(runs(&mut h), vec![vec![ALL.to_string()]]);
+    answer(&mut h);
+    match &h.app.tab().results {
+        datarig_tui::app::Results::Rows(rs) => assert_eq!((rs.rows.len(), rs.more), (2, false)),
+        _ => panic!("no rows"),
+    }
+    // Another limit typed in the line and applied: kept.
+    h.keys("f");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.ctrl('l');
+    h.type_text("50");
+    h.key(KeyCode::Enter);
+    answer(&mut h);
+    quit(h);
+    let (text, tab) = state.saved();
+    assert_eq!(tab.limit, Some(50), "{text}");
+}

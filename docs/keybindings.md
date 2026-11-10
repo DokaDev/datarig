@@ -171,7 +171,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r e` | `results.export` | Results → export to a file… |  |
 | `Space r f` | `table.filter.edit` | Table → filter the rows on the server (WHERE) |  |
 | `Space r o` | `table.order.edit` | Table → sort the rows on the server (ORDER BY) |  |
-| `Space r x` | `table.filter.clear` | Table → clear the filter and the order, and run it again |  |
+| `Space r x` | `table.filter.clear` | Table → clear the filter, the order and the limit, and run it again |  |
 | `Space r v` | `table.filter.open_sql` | Table → open its statement in a new console |  |
 | `Space r ]` | `results.tab.next` | Result tabs → next |  |
 | `Space r [` | `results.tab.prev` | Result tabs → previous |  |

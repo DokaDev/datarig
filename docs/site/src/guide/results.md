@@ -80,10 +80,10 @@ cells are tinted.
 
 A table tab (opened from the explorer) has a line above its grid with a WHERE condition and an
 ORDER BY, both run on the server. `f` (or `Space r f`) edits the condition and `Space r o` the
-order; `Enter` applies them, `Tab` moves between the two fields, `Ctrl+Space` completes column
+order; `Enter` applies them, `Tab` moves between the fields, `Ctrl+Space` completes column
 names and `Esc` puts back what was applied. A completion list that opens by itself while you
 type does not take `Enter`: once you move through it (arrows, `Ctrl+N`, `Ctrl+P`) or ask for it
-with `Ctrl+Space`, `Enter` picks its entry. `Ctrl+E` always applies. `Space r x` clears both and runs the table again,
+with `Ctrl+Space`, `Enter` picks its entry. `Ctrl+E` always applies. `Space r x` clears them all and runs the table again,
 and `Space r v` opens the statement in a new console. From the command line, `:where`,
 `:orderby` and `:filter clear` do the same.
 
@@ -104,9 +104,18 @@ When the server rejects the condition, the line marks it failed, underlined wher
 says the error is. The rows of the earlier query stay, dimmed, and the line under the grid says
 they are not the filter's answer; a cancelled run or a lost connection leaves them the same way.
 
-The condition and order you applied are kept with the workspace and with a closed tab you bring
-back (`Space t u`): they return to the line without running, and are checked again as above
-when the tab runs.
+The third field, `LIMIT`, caps the rows the tab reads (`-` when there is none; a narrow line
+shows it as `L100`). It takes a whole number of rows, written in digits, and a blank field means
+no cap; `0`, or anything that is not a number, is refused before anything is sent. The cap is
+not written into the statement the grid runs: the pages stop at it instead, the last one cut
+there, and nothing is fetched past it (what the server held open for the result is closed). The
+results title then says `limit 100`. A count (`#`) and an export of every row read the capped
+statement (`… LIMIT 100`), so they see the same rows the pages would. A new limit runs the table
+again from its first page.
+
+The condition, order and limit you applied are kept with the workspace and with a closed tab
+you bring back (`Space t u`): they return to the line without running, and are checked again
+as above when the tab runs.
 
 ## The inspector
 

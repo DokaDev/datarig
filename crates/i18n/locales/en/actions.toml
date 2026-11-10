@@ -221,7 +221,7 @@
 "action.results.export" = "Results → export to a file…"
 "action.table.filter.edit" = "Table → filter the rows on the server (WHERE)"
 "action.table.order.edit" = "Table → sort the rows on the server (ORDER BY)"
-"action.table.filter.clear" = "Table → clear the filter and the order, and run it again"
+"action.table.filter.clear" = "Table → clear the filter, the order and the limit, and run it again"
 "action.table.filter.open_sql" = "Table → open its statement in a new console"
 "action.tx.commit" = "Commit the open transaction"
 "action.tx.rollback" = "Roll back the open transaction"

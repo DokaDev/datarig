@@ -12,6 +12,7 @@
 "results.title.counting" = "세는 중…"
 "results.title.counted" = "{count}행"
 "results.title.counted_now" = "지금 {count}행"
+"results.title.limit" = "{limit}행 제한"
 
 "query.running" = "실행 중… {elapsed}"
 "query.fetching" = "행을 더 불러오는 중…"

@@ -15,5 +15,9 @@
 - When the server rejects the condition, the line marks it failed (and where the error is,
   when the server says), and the earlier rows stay, dimmed, marked as not the filter's answer.
   A cancelled run or a lost connection leaves them the same way.
-- The applied condition and order are kept with the workspace and with a closed tab brought
-  back; they return to the line without running and are checked again when the tab runs.
+- A third field, LIMIT, caps the rows a table tab reads: the pages stop there and nothing is
+  fetched past it, the results title says `limit 100`, and a count or an export of every row
+  reads the same capped set. A limit that is not a whole number of rows is refused.
+- The applied condition, order and limit are kept with the workspace and with a closed tab
+  brought back; they return to the line without running and are checked again when the tab
+  runs.

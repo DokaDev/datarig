@@ -724,6 +724,96 @@ async fn a_server_error_in_a_table_filter_marks_where_it_points() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The rows the active tab's result holds, and whether it says the server has more.
+fn held_rows(app: &App) -> (usize, bool) {
+    match &app.tab().results {
+        datarig_tui::app::Results::Rows(rs) => (rs.rows.len(), rs.more),
+        _ => (0, false),
+    }
+}
+
+/// A table tab's limit caps its rows on the server's own pages (the statement sent has no
+/// `LIMIT`): a limit below a page cuts the first page; past a page, the pages read again past
+/// the released portal, or fetched from a held one, stop at it, the held portal closed there.
+/// Exactly the limit's rows each time. Reads an existing table, makes no object.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_table_tab_limit_caps_its_pages() {
+    use datarig_core::policy::Policy;
+    use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::paging::Paging;
+    let Some(url) = pg_url("a_table_tab_limit_caps_its_pages") else { return };
+    let pw = datarig_core::profile::dsn::parse(&url).unwrap().password.unwrap_or_default();
+    let dir = std::env::temp_dir().join(format!("datarig-it-limit-{}", std::process::id()));
+    for (limit, hold) in [(3u64, false), (503, false), (1203, true)] {
+        let _ = std::fs::remove_dir_all(&dir);
+        let paths = datarig_core::paths::Paths { data: Some(dir.join("data")), state: Some(dir.join("state")) };
+        let mut p = profile(&url);
+        p.policy = hold.then(|| "it-hold".to_string());
+        let tab = TabState {
+            id: workspace::new_id(),
+            kind: workspace::TabKind::Table,
+            script: None,
+            profile: Some(p.id),
+            cursor: (0, 0),
+            top: 0,
+            console: 0,
+            table: Some(("analytics".into(), "events".into())),
+            ddl: None,
+            results: None,
+            database: None,
+            schema: None,
+            filter: None,
+            order: Vec::new(),
+            limit: Some(limit),
+        };
+        let ws =
+            WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };
+        workspace::save(&dir.join("state"), &ws).unwrap();
+        let store = Arc::new(MemoryStore::new());
+        store.set(&p.id.account(), &pw).unwrap();
+        let mut cfg = Config { connections: vec![p], ..Config::default() };
+        cfg.policies.insert("it-hold", Policy { paging: PagingMode::Hold, ..Policy::default() });
+        let mut app = App::new(&cfg, None, Lang::En);
+        app.set_secret_store(store as Arc<dyn SecretStore>);
+        app.set_paths(paths);
+        app.whats_new_paused = true;
+        app.set_instance_tag(&format!("limit{}", std::process::id()));
+        let (tx, mut rx) = unbounded_channel();
+        app.start(tx, Startup::Normal);
+        assert!(app.tab().is_table());
+        app.dispatch(Action::RunStatement);
+        pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 > 0).await;
+        let size = app.page_size;
+        if limit as usize > size {
+            assert_eq!(held_rows(&app), (size, true), "{limit}");
+            let open = matches!(app.tab().exec.paging, Paging::Open { .. });
+            assert_eq!(open, hold, "{limit}: held only when asked");
+        }
+        // Page on until the result says it has no more.
+        app.focus = Focus::Results;
+        for _ in 0..5 {
+            if !held_rows(&app).1 {
+                break;
+            }
+            let before = held_rows(&app).0;
+            press(&mut app, 'n');
+            pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 > before).await;
+        }
+        assert_eq!(held_rows(&app), (limit as usize, false), "{limit}");
+        assert_eq!(app.tab().exec.paging, Paging::None, "{limit}");
+        let sent: Vec<String> = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect();
+        assert_eq!(sent, [r#"SELECT * FROM "analytics"."events""#], "no LIMIT in the statement");
+        // Nothing past the cap; the session runs the tab again.
+        press(&mut app, 'n');
+        assert!(idle(&app, 0));
+        app.dispatch(Action::RunStatement);
+        pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 > 0).await;
+        drop(app);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn pg_url(test: &str) -> Option<String> {
     match std::env::var("DATARIG_TEST_PG_URL") {
         Ok(u) if !u.is_empty() => {

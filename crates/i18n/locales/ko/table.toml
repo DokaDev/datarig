@@ -50,3 +50,8 @@
 "table.filter.cancelled_short" = "취소됨"
 "table.filter.unapplied_rows" = "필터 적용 안 됨: 이전 행을 보여 주는 중"
 "table.filter.unapplied_short" = "필터 적용 안 됨"
+"table.limit.refused" = "행 제한 거부: {why}"
+"table.limit.refused_short" = "행 제한 거부됨"
+"table.limit.why.not_a_number" = "행 제한은 숫자로 쓴 행 수입니다"
+"table.limit.why.zero" = "0행 제한은 아무것도 읽지 않습니다 (제한하지 않으려면 비워 두세요)"
+"table.limit.why.too_large" = "행 제한은 최대 {max}행입니다"

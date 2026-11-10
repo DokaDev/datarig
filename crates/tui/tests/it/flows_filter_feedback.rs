@@ -203,9 +203,11 @@ fn the_order_completes_columns_then_directions() {
     assert_eq!(labels(&h)[0], "id", "after a comma: the columns again");
     h.key(KeyCode::Esc);
     assert_eq!(field_text(&h, Field::Order), "name DESC, ");
-    // `Tab` without a popup moves to the condition: the popup belongs to its field only.
+    // `Tab` without a popup moves to the next field (the limit): the popup belongs to its
+    // field only.
     h.key(KeyCode::Tab);
-    assert_eq!(h.app.tab().doc.table_query.as_ref().and_then(|q| q.line.focus), Some(Field::Where));
+    assert_eq!(h.app.tab().doc.table_query.as_ref().and_then(|q| q.line.focus), Some(Field::Limit));
+    assert!(h.popup().is_none());
 }
 
 #[test]

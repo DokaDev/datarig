@@ -1,13 +1,14 @@
 //! The filter line of a table tab, its fields and keys: `f` (or `Space r f`) edits the
-//! condition, `Space r o` the order, `Space r x` clears both and runs the tab again, and
+//! condition, `Space r o` the order, `Space r x` clears the fields and runs the tab again, and
 //! `Space r v` opens the statement in a new console.
 //!
-//! In a field `Enter` (or the run key) applies what both fields hold (a completion popup takes
+//! In a field `Enter` (or the run key) applies what the three fields hold (a completion popup takes
 //! `Enter` only once the user turned to it: moved its selection, or asked for it with
 //! `Ctrl+Space`; the run key always applies): the order is read into
 //! keys first (refused and said when it is not a list of the table's columns), then the query
 //! runs as any run of the tab does ([`App::table_run`]); a refusal leaves the focus on the
-//! field it is about, else the keys go back to the grid. `Esc` puts back what is applied and
+//! field it is about, else the keys go back to the grid. The limit is a whole number of rows
+//! (blank: none); the grid's pages stop there. `Esc` puts back what is applied and
 //! leaves, `Tab` and `Shift+Tab` move between the fields, `Ctrl+L` empties the field (applied
 //! with `Enter`), `Ctrl+W` deletes a word, `Ctrl+U` the text before the cursor.
 //!
@@ -59,6 +60,7 @@ impl App {
                 filter: String::new(),
                 order: String::new(),
                 keys: Vec::new(),
+                limit: String::new(),
                 tie: None,
                 tie_short: None,
                 dialect,
@@ -103,6 +105,7 @@ impl App {
             filter,
             order: query::order_text(&keys, dialect),
             keys,
+            limit: q.limit.map(|n| n.to_string()).unwrap_or_default(),
             tie,
             tie_short,
             dialect,
@@ -126,7 +129,7 @@ impl App {
         }
         let a = self.filter_line_applied(id);
         if let Some(tq) = self.table_query_mut(id) {
-            tq.line.follow((&a.filter, &a.order));
+            tq.line.follow((&a.filter, &a.order, &a.limit));
         }
     }
 
@@ -198,7 +201,11 @@ impl App {
         // (changed, the character typed); `None`: no edit.
         let edit = match key.code {
             KeyCode::Tab | KeyCode::BackTab => {
-                let next = if f == Field::Where { Field::Order } else { Field::Where };
+                let next = match (f, key.code == KeyCode::Tab) {
+                    (Field::Where, true) | (Field::Limit, false) => Field::Order,
+                    (Field::Order, true) | (Field::Where, false) => Field::Limit,
+                    (Field::Limit, true) | (Field::Order, false) => Field::Where,
+                };
                 tq.line.focus = Some(next);
                 Some((false, None))
             }
@@ -249,7 +256,7 @@ impl App {
         }
     }
 
-    /// `Esc` in a field: both fields back to what is applied, and the query the next run
+    /// `Esc` in a field: the fields back to what is applied, and the query the next run
     /// sends with them (an apply that was refused, or did not run, set it), the keys back to
     /// the grid.
     fn filter_line_cancel(&mut self) {
@@ -260,15 +267,17 @@ impl App {
             let applied = tq.applied().clone();
             tq.draft.filter = applied.filter;
             tq.draft.order = applied.order;
-            tq.line.restore((&a.filter, &a.order));
+            tq.draft.limit = applied.limit;
+            tq.line.restore((&a.filter, &a.order, &a.limit));
             tq.line.focus = None;
             tq.refusal = None;
         }
     }
 
     /// `Enter` (or the run key) in a field: the fields' query runs. The order is read into
-    /// keys first and written back as the app writes it; a refused order or filter keeps the
-    /// focus on its field, else the grid takes the keys back.
+    /// keys first and the limit into a number, both written back as the app writes them; a
+    /// refused order, limit or filter keeps the focus on its field, else the grid takes the keys
+    /// back.
     pub(super) fn filter_line_apply(&mut self) {
         use table_query::{Field, Refusal};
         let id = self.tab().id;
@@ -282,6 +291,7 @@ impl App {
         let d = self.tab_dialect(id);
         let Some(tq) = self.table_query_mut(id) else { return };
         let (filter, order) = (tq.line.where_.text().to_string(), tq.line.order.text().to_string());
+        let limit_text = tq.line.limit.text().to_string();
         let keys = if order.trim().is_empty() {
             Ok(Vec::new())
         } else if target.columns.is_empty() {
@@ -302,10 +312,24 @@ impl App {
                 return self.tab_status(id, notice);
             }
         };
+        let limit = match table_query::parse_limit(&limit_text) {
+            Ok(limit) => limit,
+            Err((at, problem)) => {
+                let why = table_query::limit_why(&self.i18n, problem);
+                let notice = Notice::new(Msg::TableLimitRefused { why }, Level::Warning);
+                let Some(tq) = self.table_query_mut(id) else { return };
+                let (at, text) = (Some(at), limit_text);
+                tq.refusal = Some(Refusal { field: Field::Limit, at, notice: notice.clone(), text });
+                tq.line.focus = Some(Field::Limit);
+                return self.tab_status(id, notice);
+            }
+        };
+        let Some(tq) = self.table_query_mut(id) else { return };
         tq.line.order.set(&query::order_text(&keys, d));
+        tq.line.limit.set(&limit.map(|n| n.to_string()).unwrap_or_default());
         let filter = (!filter.trim().is_empty())
             .then(|| Filter { recognised: query::recognise(&filter, &target), text: filter });
-        tq.draft = Query { filter, order: keys, ..tq.draft.clone() };
+        tq.draft = Query { filter, order: keys, limit, ..tq.draft.clone() };
         tq.refusal = None;
         tq.line.focus = None;
         let q = tq.draft.clone();
@@ -327,7 +351,9 @@ impl App {
             let Some(q) = self.table_query_mut(id).map(|tq| tq.applied().clone()) else { return };
             return self.table_run(id, q);
         }
-        let f = if inside(l.filter_order) {
+        let f = if inside(l.filter_limit) {
+            Field::Limit
+        } else if inside(l.filter_order) {
             Field::Order
         } else if inside(l.filter_where) {
             Field::Where
@@ -370,6 +396,8 @@ impl App {
                 });
             }
             table_query::Field::Order => out.completion = order_completion(text, cursor, &target, force),
+            // A number: nothing to complete.
+            table_query::Field::Limit => {}
         }
         out
     }

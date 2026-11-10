@@ -376,6 +376,7 @@ pub struct Layout {
     pub filter_line: Rect,
     pub filter_where: Rect,
     pub filter_order: Rect,
+    pub filter_limit: Rect,
     pub filter_refresh: Rect,
     pub filter_cursor: Option<(u16, u16)>,
     /// The grid's rows and the lines under them, as drawn last (inside the results pane).

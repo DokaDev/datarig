@@ -38,6 +38,7 @@ pub enum OpenIn {
 pub enum Field {
     Where,
     Order,
+    Limit,
 }
 
 /// Why the app did not run what the user wrote: the part, where in its text (bytes) when
@@ -319,6 +320,64 @@ pub fn same_query(a: &Query, b: &Query) -> bool {
 /// `a` and `b` read the same rows, in any order ([`same_query`] but for the order).
 pub fn same_rows(a: &Query, b: &Query) -> bool {
     same_query(&Query { order: Vec::new(), ..a.clone() }, &Query { order: Vec::new(), ..b.clone() })
+}
+
+/// The largest cap a table tab's rows take: what both servers read as a `LIMIT`
+/// (PostgreSQL's is a signed 64-bit number).
+pub const LIMIT_MAX: u64 = i64::MAX as u64;
+
+/// Why the text of the `LIMIT` field is not a cap on the rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LimitProblem {
+    /// Not a whole number written in digits.
+    NotANumber,
+    /// Zero rows.
+    Zero,
+    /// Above [`LIMIT_MAX`].
+    TooLarge,
+}
+
+/// The cap the `LIMIT` field's `text` sets: `None` for a blank text (no cap), else a whole
+/// number of rows from 1 to [`LIMIT_MAX`], written in digits (blanks around it are left out).
+/// A refusal says where in `text` (bytes) and why.
+pub fn parse_limit(text: &str) -> Result<Option<u64>, (Range<usize>, LimitProblem)> {
+    let digits = text.trim();
+    if digits.is_empty() {
+        return Ok(None);
+    }
+    let start = text.len() - text.trim_start().len();
+    let at = start..start + digits.len();
+    if !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err((at, LimitProblem::NotANumber));
+    }
+    match digits.parse::<u64>() {
+        Ok(0) => Err((at, LimitProblem::Zero)),
+        Ok(n) if n <= LIMIT_MAX => Ok(Some(n)),
+        _ => Err((at, LimitProblem::TooLarge)),
+    }
+}
+
+/// Why the `LIMIT` field is refused, in words.
+pub(super) fn limit_why(i18n: &I18n, p: LimitProblem) -> String {
+    let max = datarig_i18n::fmt_count(LIMIT_MAX);
+    match p {
+        LimitProblem::NotANumber => i18n.label(Label::TableLimitWhyNotANumber).to_string(),
+        LimitProblem::Zero => i18n.label(Label::TableLimitWhyZero).to_string(),
+        LimitProblem::TooLarge => i18n.msg(&Msg::TableLimitWhyTooLarge { max }).to_string(),
+    }
+}
+
+/// A page of `rows` read after the `held` rows a result has, the result capped at `cap` rows:
+/// the rows past the cap are left out. `Some(more)` once the rows reach the cap (`more`: the
+/// server had more, so what it holds open for the result is to be closed: no page past the
+/// cap is fetched), `None` while they do not (or nothing caps them).
+pub(crate) fn cap_page<T>(rows: &mut Vec<T>, held: usize, cap: Option<u64>, more: bool) -> Option<bool> {
+    let left = usize::try_from(cap?).unwrap_or(usize::MAX).saturating_sub(held);
+    if rows.len() < left {
+        return None;
+    }
+    rows.truncate(left);
+    Some(more)
 }
 
 /// The kind of a result column, as the query model writes literals for it.
@@ -848,9 +907,10 @@ impl App {
         }
     }
 
-    /// The statement a count of table tab `id`'s shown rows counts around: the shown query
-    /// with its cap written when it has one, else the statement the rows came from.
-    pub(super) fn table_count_source(&self, id: TabId) -> Option<String> {
+    /// The statement that reads table tab `id`'s shown rows whole when they have a cap (a
+    /// count counts around it, an export of every row reads it): the shown query with its cap
+    /// written as a `LIMIT`. `None` without a cap: the statement the rows came from reads them.
+    pub(super) fn table_capped_sql(&self, id: TabId) -> Option<String> {
         let q = self.table_query(id)?.shown.as_ref().filter(|q| q.limit.is_some())?;
         Some(query::compile_capped(q, &self.table_target(id)?).sql)
     }

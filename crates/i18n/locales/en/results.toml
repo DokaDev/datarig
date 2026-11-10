@@ -14,6 +14,7 @@
 "results.title.counting" = "counting…"
 "results.title.counted" = { one = "{count} row", other = "{count} rows" }
 "results.title.counted_now" = { one = "{count} row now", other = "{count} rows now" }
+"results.title.limit" = "limit {limit}"
 
 "query.running" = "Running… {elapsed}"
 "query.fetching" = "Fetching more rows…"

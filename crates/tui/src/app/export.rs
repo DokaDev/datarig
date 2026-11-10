@@ -790,7 +790,7 @@ impl App {
         }
         self.exports.seq += 1;
         let total = snapshot.as_ref().map(|s| (s.len() as u64, true));
-        let (in_block, sql) = (self.tab().exec.in_block, self.tab().shown_sql().trim().to_string());
+        let (in_block, sql) = (self.tab().exec.in_block, self.export_sql(id));
         let job = Job {
             id: self.exports.seq,
             intent,
@@ -833,6 +833,16 @@ impl App {
                 self.send_meta(pid, DbCommand::LoadStructure { schema: table.schema, table: table.name });
             }
             None => self.export_stream(id, sql, None),
+        }
+    }
+
+    /// The statement every row of tab `id`'s result is read again with: a table tab's query
+    /// with its cap written when it has one (its rows stop there), else the statement the rows
+    /// came from.
+    pub(super) fn export_sql(&self, id: TabId) -> String {
+        match self.table_capped_sql(id) {
+            Some(sql) => sql,
+            None => self.tabs.get(id).map(|t| t.shown_sql().trim().to_string()).unwrap_or_default(),
         }
     }
 
@@ -887,7 +897,7 @@ impl App {
         if t.exec.in_block && t.exec.tx_aborted {
             return Err(Notice::new(Label::ExportTxAborted, Level::Warning));
         }
-        let sql = t.shown_sql().trim().to_string();
+        let sql = self.export_sql(id);
         let statements = vec![sql.clone()];
         if let Some(refused) =
             self.unsupported(id, &statements).or_else(|| self.read_only_refusal(id, pid, &statements))

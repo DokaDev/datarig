@@ -438,7 +438,10 @@ impl App {
         let read = if t.exec.in_block { Label::ExportNoteInTx } else { Label::ExportNoteStatement };
         let mut out = vec![Notice::new(read, Level::Warning)];
         out.extend(estimate.map(|count| Notice::new(Msg::ExportConfirmEstimate { count }, Level::Info)));
-        let (rerun, environment) = self.export_asks(id, t.shown_sql().trim());
+        // A table tab's cap: the export stops there as its pages do.
+        let cap = self.table_query(id).and_then(|q| q.shown.as_ref()).and_then(|q| q.limit);
+        out.extend(cap.map(|count| Notice::new(Msg::ExportNoteLimit { count }, Level::Info)));
+        let (rerun, environment) = self.export_asks(id, &self.export_sql(id));
         out.extend(rerun.map(|why| Notice::new(Msg::ExportNoteRerun { why }, Level::Warning)));
         out.extend(
             environment.map(|environment| Notice::new(Msg::ExportNoteEnvironment { environment }, Level::Warning)),
