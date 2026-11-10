@@ -1084,12 +1084,12 @@ async fn statement<'a>(
                 return held_ended(conn, link, env, s, paged, held, sql, was_open).await.map(|()| None);
             }
             // Not held: whatever the limit did not stop is read to its end and dropped; but a
-            // result at its cap that no limit of the server's stops there is stopped, never
-            // read on past it.
-            stopped = !ended && spent && !bounded;
+            // capped result that no limit of the server's stops is stopped after this page,
+            // never read on past its cap (its next page, when it has one, runs it again).
+            stopped = !ended && cap.is_some() && !bounded;
             if stopped {
                 halt!(stop_result(&mut qr, link, env).await, Some(reply));
-                Got::Rows { columns, page, more: false, info: StatementInfo::default() }
+                Got::Rows { columns, page, more, info: StatementInfo::default() }
             } else {
                 if !ended {
                     match halt!(link.guard(Some(env.killer), drain(&mut qr)).await, Some(reply)) {

@@ -1717,6 +1717,33 @@ async fn a_capped_read_is_never_read_past_its_cap() {
         .flatten();
     let sent = sent.expect("the procedure's statement ran");
     assert!(sent < 600, "stopped near its cap: {sent}");
+    // A cap past the first page: the result is not held, so it is stopped after that page, not
+    // read on to its end past the cap.
+    let t0 = Instant::now();
+    c.session.send(DbCommand::Execute {
+        id: 6,
+        statements: vec![format!("CALL shop.{p}()")],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+        max_rows: Some(PAGE as u64 + 3),
+    });
+    let evs = c.answer(6).await;
+    assert_eq!((page_of(&evs).1.len(), page_of(&evs).2), (PAGE, true), "the first page, more to come");
+    assert!(t0.elapsed() < Duration::from_secs(5), "not read to its end: {:?}", t0.elapsed());
+    c.ok(7, "SELECT 1").await;
+    let sent: Option<u64> = a
+        .exec_first(
+            "SELECT h.ROWS_SENT FROM performance_schema.events_statements_history h \
+             JOIN performance_schema.threads t ON t.THREAD_ID = h.THREAD_ID \
+             WHERE t.PROCESSLIST_ID = ? AND h.EVENT_NAME = 'statement/sp/stmt' \
+             ORDER BY h.EVENT_ID DESC LIMIT 1",
+            (id,),
+        )
+        .await
+        .expect("events_statements_history reads")
+        .flatten();
+    let sent = sent.expect("the procedure's statement ran");
+    assert!(sent <= PAGE as u64 + 3 + 64, "stopped near its cap: {sent}");
     a.disconnect().await.unwrap();
 }
 
