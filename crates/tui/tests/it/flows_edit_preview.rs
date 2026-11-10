@@ -195,8 +195,8 @@ fn counts(h: &mut Harness) -> Vec<(u64, String)> {
         .collect()
 }
 
-const CHECK_1: &str = r#"SELECT 1 FROM "shop"."users" WHERE "id" = '1' AND "email" = 'a@x' FOR UPDATE NOWAIT"#;
-const UPDATE_1: &str = r#"UPDATE "shop"."users" SET "email" = 'z@x' WHERE "id" = '1' AND "email" = 'a@x' RETURNING *"#;
+const CHECK_1: &str = r#"SELECT 1 FROM "shop"."users" WHERE "id" OPERATOR(pg_catalog.=) '1' AND "email" OPERATOR(pg_catalog.=) 'a@x' FOR UPDATE NOWAIT"#;
+const UPDATE_1: &str = r#"UPDATE "shop"."users" SET "email" = 'z@x' WHERE "id" OPERATOR(pg_catalog.=) '1' AND "email" OPERATOR(pg_catalog.=) 'a@x' RETURNING *"#;
 
 #[test]
 fn a_keyed_change_shows_its_check_and_its_write_and_cancel_is_the_default() {
@@ -242,12 +242,16 @@ fn deletes_and_new_rows_come_after_the_checks_in_the_risk_tone_for_deletes() {
         [
             head("Row checks (lock, no waiting)"),
             step(
-                r#"SELECT 1 FROM "shop"."users" WHERE "id" = '2' AND "email" = 'b@x' AND "nickname" IS NULL FOR UPDATE NOWAIT"#,
+                r#"SELECT 1 FROM "shop"."users" WHERE "id" OPERATOR(pg_catalog.=) '2' AND "email" OPERATOR(pg_catalog.=) 'b@x' AND "nickname" IS NULL FOR UPDATE NOWAIT"#,
                 1,
                 false
             ),
             head("Writes"),
-            step(r#"DELETE FROM "shop"."users" WHERE "id" = '2' AND "email" = 'b@x' AND "nickname" IS NULL"#, 1, true),
+            step(
+                r#"DELETE FROM "shop"."users" WHERE "id" OPERATOR(pg_catalog.=) '2' AND "email" OPERATOR(pg_catalog.=) 'b@x' AND "nickname" IS NULL"#,
+                1,
+                true
+            ),
             step(r#"INSERT INTO "shop"."users" ("email") VALUES ('n@x') RETURNING *"#, 1, false),
         ]
     );
@@ -303,9 +307,9 @@ fn rows_found_by_their_values_are_counted_on_the_tab_first() {
     type_cell(&mut h, "z@x");
     h.command("apply");
     let asked = counts(&mut h);
-    let condition = r#""id" = '1' AND "email" = 'a@x' AND "nickname" = 'ann'"#;
+    let condition = r#""id" OPERATOR(pg_catalog.=) '1' AND "email" OPERATOR(pg_catalog.=) 'a@x' AND "nickname" OPERATOR(pg_catalog.=) 'ann'"#;
     assert_eq!(asked.len(), 1);
-    assert_eq!(asked[0].1, format!(r#"SELECT count(*) FROM "shop"."users" WHERE {condition}"#));
+    assert_eq!(asked[0].1, format!(r#"SELECT pg_catalog.count(*) FROM "shop"."users" WHERE {condition}"#));
     // The dialog waits for the count; the status bar says so.
     assert!(h.app.overlays.edit_preview().is_none());
     assert_eq!(h.app.apply_wait_text().as_deref(), Some("Checking 1 row…"));
@@ -1073,7 +1077,7 @@ fn a_mysql_new_rows_number_comes_from_the_insert_id() {
 #[test]
 fn each_failure_says_why_and_the_changes_stay() {
     use datarig_core::driver::{ApplyError, ApplyFailure};
-    let update = r#"UPDATE "shop"."users" SET "email" = 'z@x' WHERE "id" = '1' AND "email" = 'a@x' RETURNING *"#;
+    let update = r#"UPDATE "shop"."users" SET "email" = 'z@x' WHERE "id" OPERATOR(pg_catalog.=) '1' AND "email" OPERATOR(pg_catalog.=) 'a@x' RETURNING *"#;
     let cases: Vec<(Option<usize>, ApplyError, String)> = vec![
         (
             Some(0),

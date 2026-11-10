@@ -105,16 +105,21 @@ fn postgres_chunks_compare_the_key_as_a_row_in_index_order() {
     let last = [Some("9007199254740993".into()), Some("O'Neil \\ x".into()), None, None];
     assert_eq!(
         k.after(&last).unwrap(),
-        "SELECT * FROM \"s\".\"t\" WHERE (\"name\", \"id\") > ('O''Neil \\ x', 9007199254740993) ORDER BY \"name\", \"id\" LIMIT 10000",
+        "SELECT * FROM \"s\".\"t\" WHERE (\"name\", \"id\") OPERATOR(pg_catalog.>) ('O''Neil \\ x', 9007199254740993) ORDER BY \"name\", \"id\" LIMIT 10000",
         "numbers bare (every digit), text a literal"
     );
     let one = Keyset::new(PG, "s", "t", &["id".to_string()], &c, &names(&c), true).unwrap();
     assert_eq!(
         one.after(&[Some("5".into()), None, None, None]).unwrap(),
-        "SELECT * FROM \"s\".\"t\" WHERE \"id\" > 5 ORDER BY \"id\" LIMIT 10000"
+        "SELECT * FROM \"s\".\"t\" WHERE \"id\" OPERATOR(pg_catalog.>) 5 ORDER BY \"id\" LIMIT 10000"
     );
     let bytes = Keyset::new(PG, "s", "t", &["data".to_string()], &c, &names(&c), true).unwrap();
-    assert!(bytes.after(&[None, None, None, Some("\\x00ff".into())]).unwrap().contains("\"data\" > '\\x00ff'"));
+    assert!(
+        bytes
+            .after(&[None, None, None, Some("\\x00ff".into())])
+            .unwrap()
+            .contains("\"data\" OPERATOR(pg_catalog.>) '\\x00ff'")
+    );
 }
 
 #[test]

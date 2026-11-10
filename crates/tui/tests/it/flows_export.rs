@@ -422,7 +422,10 @@ fn a_table_tab_is_read_in_chunks_by_its_key() {
     );
     let (id2, sql2, guard2, sink2) = export_sent(&mut h).expect("the next chunk");
     assert_eq!((id2, guard2), (id, ExportGuard::Keyset));
-    assert_eq!(sql2, "SELECT * FROM \"shop\".\"users\" WHERE \"id\" > 9999 ORDER BY \"id\" LIMIT 10000");
+    assert_eq!(
+        sql2,
+        "SELECT * FROM \"shop\".\"users\" WHERE \"id\" OPERATOR(pg_catalog.>) 9999 ORDER BY \"id\" LIMIT 10000"
+    );
     assert!(h.app.tab_busy(h.app.tab().id));
     send(sink2, 10_000, 1_500);
     h.tab_db(

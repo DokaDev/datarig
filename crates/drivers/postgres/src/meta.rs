@@ -130,11 +130,17 @@ const HIDDEN_SCHEMAS: &str = "n.nspname NOT IN ('pg_catalog', 'information_schem
 /// 2 s, without JIT compilation (PostgreSQL 11 and later: `set_config(…, true)` is a `SET
 /// LOCAL` the older servers, which have no `jit`, skip). A catalog read is short, but a
 /// catalog of some thousand relations can raise its planned cost over `jit_above_cost`, and
-/// compiling it costs far more than running it. Both settings end with the transaction, so
-/// nothing is left on a server connection a pooler hands to another client.
+/// compiling it costs far more than running it. `pg_catalog` goes first on the path, so that a
+/// schema a role's or database's default lists ahead of it shadows none of the functions,
+/// operators and types of the read (the rest of the path stays: what `format_type` and
+/// `regclass` show as visible is what the session sees). All of this ends with the
+/// transaction, so nothing is left on a server connection a pooler hands to another client.
 pub const BEGIN_READ: &str = "BEGIN READ ONLY; SET LOCAL lock_timeout = '2s'; \
+     SELECT pg_catalog.set_config('search_path', \
+       CASE WHEN pg_catalog.current_setting('search_path') OPERATOR(pg_catalog.=) '' THEN 'pg_catalog' \
+       ELSE pg_catalog.concat('pg_catalog, ', pg_catalog.current_setting('search_path')) END, true); \
      SELECT pg_catalog.set_config('jit', 'off', true) \
-     WHERE pg_catalog.current_setting('server_version_num')::int >= 110000";
+     WHERE pg_catalog.current_setting('server_version_num')::int OPERATOR(pg_catalog.>=) 110000";
 
 /// Run the catalog read `sql` in a transaction of its own ([`BEGIN_READ`]). The `BEGIN`, the
 /// statement and the `COMMIT` go out together (one round trip); a failed statement leaves the
@@ -352,7 +358,7 @@ async fn load_catalog(client: &Client) -> Result<Catalog, DbError> {
 /// `server_version_num` (`120000` for 12.0).
 async fn server_version(client: &Client) -> Result<u32, DbError> {
     let row = client
-        .query_typed_one("SELECT current_setting('server_version_num')::int", &[])
+        .query_typed_one("SELECT pg_catalog.current_setting('server_version_num')::int", &[])
         .await
         .map_err(|e| db_error(&e))?;
     Ok(row.get::<_, i32>(0).max(0) as u32)

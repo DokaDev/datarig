@@ -168,8 +168,8 @@ fn four_changes(mut h: Harness) -> Harness {
     h
 }
 
-const CHECK_1: &str = r#"SELECT 1 FROM "shop"."users" WHERE "id" = '1' AND "email" = 'a@x' FOR UPDATE NOWAIT"#;
-const UPDATE_1: &str = r#"UPDATE "shop"."users" SET "email" = 'z@x' WHERE "id" = '1' AND "email" = 'a@x' RETURNING *"#;
+const CHECK_1: &str = r#"SELECT 1 FROM "shop"."users" WHERE "id" OPERATOR(pg_catalog.=) '1' AND "email" OPERATOR(pg_catalog.=) 'a@x' FOR UPDATE NOWAIT"#;
+const UPDATE_1: &str = r#"UPDATE "shop"."users" SET "email" = 'z@x' WHERE "id" OPERATOR(pg_catalog.=) '1' AND "email" OPERATOR(pg_catalog.=) 'a@x' RETURNING *"#;
 
 #[test]
 fn the_tab_comes_with_the_first_change_and_goes_with_the_last() {

@@ -5,7 +5,9 @@
 //! back; one holding a backslash is an escape string (`E'…'`), which reads the same whatever
 //! `standard_conforming_strings` is. A row is compared with `=` (`IS NULL` for NULL), which an
 //! index serves; a text column whose collation is not deterministic is also compared under
-//! `"C"`, byte for byte.
+//! `"C"`, byte for byte. Operators, functions and collations are named with their schema: a
+//! `search_path` of the user's may list its own `=` first, and a row must never be found by it
+//! (only columns of built-in types and enums are compared, whose `=` is `pg_catalog`'s).
 //! Statements change the rows they find and give them back (`RETURNING *`); one of several rows
 //! the same in every column is picked by its physical place, `(tableoid, ctid)`, which holds
 //! across partitions and inheritance.
@@ -16,6 +18,9 @@ use crate::edit::target::{TableColumn, TableRef};
 use crate::sql::dialect::{Dialect, Language};
 
 const D: Dialect = Dialect::Postgres;
+
+/// `=`, whatever the session's `search_path` lists first.
+const EQ: &str = "OPERATOR(pg_catalog.=)";
 
 pub struct Postgres;
 
@@ -57,7 +62,7 @@ impl Postgres {
         match scope {
             Scope::All => format!("WHERE {}", w.as_str()),
             Scope::One => format!(
-                "WHERE (tableoid, ctid) = (SELECT tableoid, ctid FROM {} WHERE {} LIMIT 1)",
+                "WHERE (tableoid, ctid) OPERATOR(pg_catalog.=) (SELECT tableoid, ctid FROM {} WHERE {} LIMIT 1)",
                 self.table(t),
                 w.as_str()
             ),
@@ -115,20 +120,21 @@ impl EditSql for Postgres {
     }
 
     /// `col = '…'` (which an index serves), and for a collation that is not deterministic also
-    /// `col COLLATE "C" = '…'` (byte for byte: the first matches a superset); `col IS NULL`.
+    /// `col COLLATE "C" = '…'` (byte for byte: the first matches a superset), each named with
+    /// its schema; `col IS NULL`.
     fn eq_exact(&self, c: &TableColumn, v: Option<&str>) -> String {
         let col = self.column(&c.column.name);
         let Some(v) = v else { return format!("{col} IS NULL") };
         let lit = literal(v);
         if c.column.collation.as_ref().is_some_and(|k| !k.deterministic) {
-            format!("{col} = {lit} AND {col} COLLATE \"C\" = {lit}")
+            format!("{col} {EQ} {lit} AND {col} COLLATE pg_catalog.\"C\" {EQ} {lit}")
         } else {
-            format!("{col} = {lit}")
+            format!("{col} {EQ} {lit}")
         }
     }
 
     fn count(&self, t: &TableRef, w: &Where) -> String {
-        format!("SELECT count(*) FROM {} WHERE {}", self.table(t), w.as_str())
+        format!("SELECT pg_catalog.count(*) FROM {} WHERE {}", self.table(t), w.as_str())
     }
 
     fn check(&self, t: &TableRef, w: &Where) -> String {

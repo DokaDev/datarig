@@ -914,6 +914,11 @@ pub(crate) async fn query_loop(
     }
 }
 
+/// Whether a transaction block is open: its transaction began before this statement. The
+/// operator is named with its schema, as a `search_path` of the user's may list its own `<>`
+/// first.
+const IN_BLOCK: &str = "SELECT pg_catalog.now() OPERATOR(pg_catalog.<>) pg_catalog.statement_timestamp()";
+
 /// Ask the server whether a transaction block is open (an aborted block answers with
 /// `25P02`) and report a change.
 ///
@@ -926,9 +931,8 @@ async fn probe(client: &Client, link: &mut Link, env: &Env<'_>, tx: &mut Tx) -> 
     // The simple protocol runs it as one message: outside a block its implicit transaction
     // starts with this very statement, so both timestamps are equal. (With the extended
     // protocol the timestamps of Parse and Execute differ.)
-    let sql = "SELECT pg_catalog.now() <> pg_catalog.statement_timestamp()";
     let block;
-    (block, tx.aborted, tx.unsure) = match link.guard(None, client.simple_query(sql)).await? {
+    (block, tx.aborted, tx.unsure) = match link.guard(None, client.simple_query(IN_BLOCK)).await? {
         Ok(msgs) => {
             (msgs.iter().any(|m| matches!(m, SimpleQueryMessage::Row(r) if r.get(0) == Some("t"))), false, false)
         }
@@ -1614,8 +1618,7 @@ async fn settle(
 /// Whether a transaction block is open on the connection, asked as [`probe`] asks (an aborted one
 /// answers `25P02`); `None` when asking failed otherwise.
 async fn block_open(client: &Client, link: &mut Link) -> Result<Option<bool>, Closed> {
-    let sql = "SELECT pg_catalog.now() <> pg_catalog.statement_timestamp()";
-    Ok(match link.guard(None, client.simple_query(sql)).await? {
+    Ok(match link.guard(None, client.simple_query(IN_BLOCK)).await? {
         Ok(msgs) => Some(msgs.iter().any(|m| matches!(m, SimpleQueryMessage::Row(r) if r.get(0) == Some("t")))),
         Err(e) if e.code() == Some(&SqlState::IN_FAILED_SQL_TRANSACTION) => Some(true),
         Err(_) => None,

@@ -6120,3 +6120,76 @@ async fn a_failing_start_up_statement_fails_the_connect() {
         Err(DbError::SessionSql { index: 0, .. })
     ));
 }
+
+/// Create in `schema` an operator `op` for `ty` whose answer is always `answer`.
+fn shadow_operator(url: &str, schema: &str, op: &str, ty: &str, answer: bool) {
+    for sql in [
+        format!("CREATE FUNCTION {schema}.shadow(a {ty}, b {ty}) RETURNS boolean LANGUAGE sql AS 'SELECT {answer}'"),
+        format!("CREATE OPERATOR {schema}.{op} (LEFTARG = {ty}, RIGHTARG = {ty}, FUNCTION = {schema}.shadow)"),
+    ] {
+        pg_clean::run_fresh(url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+}
+
+/// The first column of the first row `sql` answers.
+async fn first_cell(c: &mut Conn, id: u64, sql: &str) -> Option<String> {
+    let DbEvent::Page { rows, .. } = c.run(id, sql).await else { panic!("no rows: {sql}") };
+    rows[0][0].clone()
+}
+
+/// A session whose `search_path` lists a schema ahead of `pg_catalog`, with a `<>` for time
+/// stamps of its own that always answers true: asked whether a block is open after a failed
+/// statement, the session still says no.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_schema_ahead_of_pg_catalog_does_not_answer_whether_a_block_is_open() {
+    let Some(url) = pg_url("a_schema_ahead_of_pg_catalog_does_not_answer_whether_a_block_is_open") else { return };
+    let (_schema_guard, _terminate, schema, _tag) = scratch(&url, "pathblock");
+    shadow_operator(&url, &schema, "<>", "timestamptz", true);
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(c.run(1, &format!("SET search_path = {schema}, pg_catalog")).await, DbEvent::Done { .. }));
+    let now = "SELECT pg_catalog.now() <> pg_catalog.now()";
+    assert_eq!(first_cell(&mut c, 2, now).await.as_deref(), Some("true"), "the schema's operator is in effect");
+    c.drain(200).await;
+    c.session.send(DbCommand::Execute {
+        id: 3,
+        statements: vec!["SELECT 1 / 0".to_string()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    let events = c.drain(500).await;
+    assert!(events.iter().any(|e| matches!(e, DbEvent::Failed { id: 3, .. })), "{events:?}");
+    assert!(!events.iter().any(|e| matches!(e, DbEvent::TxOpen(true))), "no block is open: {events:?}");
+}
+
+/// A catalog read is not led by a schema listed ahead of `pg_catalog`, whatever the session's
+/// path, and the rest of the path stays what it was.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_catalog_read_puts_pg_catalog_first_on_the_path() {
+    use datarig_driver_postgres::catalog_sql::BEGIN_READ;
+    let Some(url) = pg_url("a_catalog_read_puts_pg_catalog_first_on_the_path") else { return };
+    let (_schema_guard, _terminate, schema, _tag) = scratch(&url, "pathread");
+    shadow_operator(&url, &schema, "=", "int", false);
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(c.run(1, &format!("SET search_path = {schema}, pg_catalog")).await, DbEvent::Done { .. }));
+    assert_eq!(first_cell(&mut c, 2, "SELECT 1 = 1").await.as_deref(), Some("false"), "the schema's `=` is in effect");
+    let mut id = 3;
+    let mut begin = async |c: &mut Conn| {
+        for statement in BEGIN_READ.split(';') {
+            id += 1;
+            assert!(!matches!(c.run(id, statement).await, DbEvent::Failed { .. }), "{statement}");
+        }
+    };
+    begin(&mut c).await;
+    assert_eq!(first_cell(&mut c, 100, "SELECT 1 = 1").await.as_deref(), Some("true"), "`pg_catalog` answers");
+    let path = first_cell(&mut c, 101, "SELECT pg_catalog.current_setting('search_path')").await;
+    assert_eq!(path, Some(format!("pg_catalog, {schema}, pg_catalog")));
+    c.run(102, "ROLLBACK").await;
+    assert_eq!(first_cell(&mut c, 103, "SELECT 1 = 1").await.as_deref(), Some("false"), "gone with the transaction");
+
+    // An empty path is no list to add to.
+    c.run(104, "SELECT pg_catalog.set_config('search_path', '', false)").await;
+    begin(&mut c).await;
+    let path = first_cell(&mut c, 105, "SELECT pg_catalog.current_setting('search_path')").await;
+    assert_eq!(path.as_deref(), Some("pg_catalog"));
+    c.run(106, "ROLLBACK").await;
+}

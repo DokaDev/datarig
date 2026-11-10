@@ -43,8 +43,8 @@ fn users_rows() -> Vec<Vec<Option<String>>> {
 }
 
 const SQL: &str = "SELECT id, email, nickname FROM shop.users";
-const CHECK_1: &str = r#"SELECT 1 FROM "shop"."users" WHERE "id" = '1' AND "email" = 'a@x' FOR UPDATE NOWAIT"#;
-const UPDATE_1: &str = r#"UPDATE "shop"."users" SET "email" = 'z@x' WHERE "id" = '1' AND "email" = 'a@x' RETURNING *"#;
+const CHECK_1: &str = r#"SELECT 1 FROM "shop"."users" WHERE "id" OPERATOR(pg_catalog.=) '1' AND "email" OPERATOR(pg_catalog.=) 'a@x' FOR UPDATE NOWAIT"#;
+const UPDATE_1: &str = r#"UPDATE "shop"."users" SET "email" = 'z@x' WHERE "id" OPERATOR(pg_catalog.=) '1' AND "email" OPERATOR(pg_catalog.=) 'a@x' RETURNING *"#;
 
 fn structure(h: &mut Harness, st: TableStructure) {
     let name = h.app.profiles[0].name.clone();

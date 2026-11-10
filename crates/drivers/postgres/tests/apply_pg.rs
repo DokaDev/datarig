@@ -315,6 +315,35 @@ async fn a_keyed_update_delete_and_insert_commit_together_and_return_the_stored_
     assert_eq!(got, [("1".into(), "it's new".into()), ("3".into(), "c".into()), ("4".into(), "added".into())]);
 }
 
+/// A session whose `search_path` lists a schema ahead of `pg_catalog`, with an `=` for integers
+/// of its own that is always true: an edit of one row still finds that row only.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_schema_ahead_of_pg_catalog_does_not_pick_the_rows_of_an_edit() {
+    let Some(url) = pg_url("a_schema_ahead_of_pg_catalog_does_not_pick_the_rows_of_an_edit") else { return };
+    let name = table("shadow");
+    let schema = format!("zz_apply_shadow_{}", std::process::id());
+    let _g = Guard(url.clone(), format!("DROP TABLE IF EXISTS public.{name}"));
+    let _s = Guard(url.clone(), format!("DROP SCHEMA IF EXISTS {schema} CASCADE"));
+    let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    c.ok(&format!("CREATE SCHEMA {schema}")).await;
+    c.ok(&format!("CREATE FUNCTION {schema}.shadow(a int, b int) RETURNS boolean LANGUAGE sql AS 'SELECT true'")).await;
+    c.ok(&format!("CREATE OPERATOR {schema}.= (LEFTARG = int, RIGHTARG = int, FUNCTION = {schema}.shadow)")).await;
+    c.ok(&format!("CREATE TABLE public.{name} (id int PRIMARY KEY, v text)")).await;
+    c.ok(&format!("INSERT INTO public.{name} VALUES (1, 'same'), (2, 'same'), (3, 'same')")).await;
+    let select = format!("SELECT id, v FROM public.{name} ORDER BY id");
+    let e = Editing::new(&url, &mut c, &name, &select).await;
+    c.ok(&format!("SET search_path = {schema}, pg_catalog")).await;
+    assert_eq!(c.rows("SELECT 1 = 2").await[0][0].as_deref(), Some("true"), "the schema's `=` is in effect");
+    let mut b = EditBatch::new();
+    b.set(&[(0, 1)], &text("new"), e.orig());
+    let plan = e.plan(&mut c, &b, &[]).await;
+    let (_, result) = c.apply(plan.steps, ApplyTx::Commit).await;
+    result.expect("applied");
+    let mut side = Conn::open(&url, SessionRole::Query, false).await;
+    let got: Vec<Option<String>> = side.rows(&select).await.into_iter().map(|r| r[1].clone()).collect();
+    assert_eq!(got, [Some("new".to_string()), Some("same".to_string()), Some("same".to_string())]);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_row_changed_elsewhere_fails_its_check_and_nothing_is_written() {
     let Some(url) = pg_url("a_row_changed_elsewhere_fails_its_check_and_nothing_is_written") else { return };
