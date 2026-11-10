@@ -616,7 +616,10 @@ fn the_form_has_basic_and_advanced_sections() {
     h.key(KeyCode::Enter);
     assert_eq!((h.overlay_kind(), h.form().driver), (Some(OverlayKind::ProfileForm), 1), "MySQL");
     assert!(h.form().dsn.text().starts_with("mysql://"), "{}", h.form().dsn.text());
-    // The arrows still step through the ones that can be picked.
+    // The arrows still step through the ones that can be picked: SQLite comes next, then (the
+    // others are not supported yet) back to PostgreSQL.
+    h.key(KeyCode::Right);
+    assert_eq!(h.form().driver, 2, "SQLite");
     h.key(KeyCode::Right);
     assert_eq!(h.form().driver, 0, "the others are not supported yet: back to PostgreSQL");
     assert!(h.form().dsn.text().starts_with("postgres://"), "{}", h.form().dsn.text());

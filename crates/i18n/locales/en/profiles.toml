@@ -13,6 +13,7 @@
 "form.field.user" = "User"
 "form.field.password" = "Password"
 "form.field.database" = "Database"
+"form.field.path" = "File"
 "form.field.sslmode" = "SSL mode"
 "form.field.dsn" = "DSN"
 "form.button.test" = "Test"
@@ -25,6 +26,7 @@
 
 "validate.required" = "required"
 "validate.port" = "must be 1–65535"
+"validate.sqlite_path" = "must be an absolute file path"
 "validate.name_taken" = "name already used"
 
 "dsn.err.scheme" = "must start with postgres://, postgresql://, mysql:// or mariadb://"

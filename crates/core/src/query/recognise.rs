@@ -216,7 +216,7 @@ impl Reader<'_> {
         };
         match self.d {
             Dialect::Postgres => self.cols.iter().find(|c| **c == name).cloned(),
-            Dialect::MySql(_) => self.cols.iter().find(|c| c.eq_ignore_ascii_case(&name)).cloned(),
+            Dialect::MySql(_) | Dialect::Sqlite => self.cols.iter().find(|c| c.eq_ignore_ascii_case(&name)).cloned(),
         }
     }
 

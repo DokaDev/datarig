@@ -254,3 +254,52 @@ fn tunnel_presets_get_their_ids_written() {
     assert!(!again.needs_migration());
     cleanup(&path);
 }
+
+#[test]
+fn a_sqlite_file_kept_in_database_moves_to_path_and_is_saved() {
+    let body =
+        "version = 2\n\n[[connections]]\nname = \"shop\"\ndriver = \"sqlite\"\ndatabase = \"/srv/data/shop.db\"\n";
+    let (path, cfg) = setup("sqlite-file", body);
+    assert!(cfg.needs_migration(), "a SQLite file in `database` is a migration");
+    let id = cfg.connections[0].id;
+    let r = run(&MemoryStore::new(), &MemoryStore::new(), Input::new(&cfg));
+    assert_eq!(r.sqlite_files, vec![id]);
+    let (after, err) = config::load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    let shop = &after.connections[0];
+    assert_eq!(shop.path.as_deref(), Some("/srv/data/shop.db"));
+    assert!(shop.database.is_empty(), "the file left `database`");
+    assert!(!after.needs_migration(), "running again has nothing to move");
+    cleanup(&path);
+}
+
+#[test]
+fn a_sqlite_profile_with_a_path_keeps_its_database_and_other_drivers_are_untouched() {
+    let body = "version = 2\n\n[[connections]]\nname = \"both\"\ndriver = \"sqlite\"\npath = \"/a.db\"\ndatabase = \"/b.db\"\n\n[[connections]]\nname = \"pg\"\ndriver = \"postgres\"\ndatabase = \"shop\"\n";
+    let (path, cfg) = setup("sqlite-both", body);
+    assert!(!config::has_sqlite_file_to_move(&cfg.connections[0]), "the path is set: nothing moves");
+    assert!(!config::has_sqlite_file_to_move(&cfg.connections[1]), "not SQLite: nothing moves");
+    let r = run(&MemoryStore::new(), &MemoryStore::new(), Input::new(&cfg));
+    assert!(r.sqlite_files.is_empty());
+    let (after, _) = config::load(Some(path.clone()));
+    assert_eq!(after.connections[0].database, "/b.db");
+    assert_eq!(after.connections[1].database, "shop");
+    cleanup(&path);
+}
+
+#[test]
+fn the_sqlite_move_keeps_a_copy_of_the_file_it_rewrote() {
+    let body =
+        "version = 2\n\n[[connections]]\nname = \"shop\"\ndriver = \"sqlite\"\ndatabase = \"/srv/data/shop.db\"\n";
+    let (path, cfg) = setup("sqlite-copy", body);
+    run(&MemoryStore::new(), &MemoryStore::new(), Input::new(&cfg));
+    let bak = sqlite_backup_path(&path);
+    assert_eq!(std::fs::read_to_string(&bak).unwrap(), body, "the copy is the file as it was");
+    std::fs::write(&bak, "kept").unwrap();
+    let (cfg2, _) = config::load(Some(path.clone()));
+    // A copy that is there is not overwritten, even when the file moves again.
+    std::fs::write(&path, body).unwrap();
+    run(&MemoryStore::new(), &MemoryStore::new(), Input::new(&cfg2));
+    assert_eq!(std::fs::read_to_string(&bak).unwrap(), "kept");
+    cleanup(&path);
+}

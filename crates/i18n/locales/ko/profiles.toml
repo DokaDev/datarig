@@ -11,6 +11,7 @@
 "form.field.user" = "사용자"
 "form.field.password" = "비밀번호"
 "form.field.database" = "데이터베이스"
+"form.field.path" = "파일"
 "form.field.sslmode" = "SSL 모드"
 "form.field.dsn" = "DSN"
 "form.button.test" = "테스트"
@@ -23,6 +24,7 @@
 
 "validate.required" = "필수 항목"
 "validate.port" = "1–65535 사이여야 함"
+"validate.sqlite_path" = "절대 경로의 파일이어야 함"
 "validate.name_taken" = "이미 있는 이름"
 
 "dsn.err.scheme" = "postgres://, postgresql://, mysql:// 또는 mariadb://로 시작해야 합니다"

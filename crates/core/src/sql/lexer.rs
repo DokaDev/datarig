@@ -151,7 +151,7 @@ impl LexState {
     /// The state after token `t` of `src`, lexed in dialect `d` from this state.
     pub fn after(self, t: &Token, src: &str, d: Dialect) -> Self {
         match d {
-            Dialect::Postgres => self,
+            Dialect::Postgres | Dialect::Sqlite => self,
             Dialect::MySql(_) => mysql::after(self, t, src),
         }
     }
@@ -374,7 +374,7 @@ pub fn lex_in(src: &str, d: Dialect) -> Vec<Token> {
 /// (a line of a longer text: [`LexState::after`] the tokens before it).
 pub fn lex_from(src: &str, d: Dialect, state: LexState) -> Vec<Token> {
     match d {
-        Dialect::Postgres => lex_with(src, d, false),
+        Dialect::Postgres | Dialect::Sqlite => lex_with(src, d, false),
         Dialect::MySql(mode) => mysql::lex(src, mode, state),
     }
 }
@@ -499,7 +499,7 @@ pub fn changes_schema(sql: &str) -> bool {
 /// executable comment before it skipped too (`/*!40101 ALTER … */`).
 pub fn changes_schema_in(sql: &str, d: Dialect) -> bool {
     let words: &[&str] = match d {
-        Dialect::Postgres => &["CREATE", "ALTER", "DROP", "DO", "CALL"],
+        Dialect::Postgres | Dialect::Sqlite => &["CREATE", "ALTER", "DROP", "DO", "CALL"],
         Dialect::MySql(_) => &["CREATE", "ALTER", "DROP", "RENAME", "TRUNCATE", "CALL"],
     };
     lex_in(sql, d)

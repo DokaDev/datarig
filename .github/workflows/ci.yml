@@ -158,6 +158,27 @@ jobs:
           cargo test -p datarig-tui --locked --no-fail-fast --test book_refs --test book_screens
           --test cli_doc --test config_doc --test keybindings_doc --test themes_doc
 
+  # The SQLite driver needs no server: its tests create their own files in a temporary
+  # directory, so they run on every platform without any service and never print SKIPPED. They
+  # also run in `test`; this job names them, so a change to the driver is visible on its own.
+  sqlite:
+    name: SQLite driver (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      # The SQLite library is compiled in (rusqlite's `bundled`): it needs a C compiler only.
+      - name: The SQLite driver and its classifier
+        run: |
+          cargo test --locked --no-fail-fast -p datarig-driver-sqlite
+          cargo test --locked --no-fail-fast -p datarig-core risk::sqlite
+
   integration:
     name: integration (PostgreSQL 17, PgBouncer, MySQL 8.4, SSH, TLS)
     needs: changes

@@ -5,7 +5,8 @@
 
 use super::mysql;
 use super::repeat::{self, NotRepeatable};
-use super::{Form, Prepared, Risk, TxStep};
+use super::sqlite;
+use super::{Class, Form, Prepared, Risk, TxStep};
 use crate::sql::dialect::{Dialect, Language, MySqlMode};
 
 /// The classifier of one session's statements, with what the session prepared so far (see
@@ -18,6 +19,8 @@ pub enum Classifier {
     /// MySQL, read in the session's sql mode. Prepared statements are not remembered: every
     /// `EXECUTE` is one of an unknown statement.
     MySql(MySqlMode),
+    /// SQLite: no state of its own (no prepared statements are kept in the app).
+    Sqlite,
 }
 
 impl Default for Classifier {
@@ -33,6 +36,7 @@ impl Classifier {
         match lang {
             Language::Sql(Dialect::Postgres) => Self::Pg(Prepared::default()),
             Language::Sql(Dialect::MySql(mode)) => Self::MySql(mode),
+            Language::Sql(Dialect::Sqlite) => Self::Sqlite,
         }
     }
 
@@ -41,6 +45,7 @@ impl Classifier {
         match self {
             Self::Pg(_) => Language::Sql(Dialect::Postgres),
             Self::MySql(mode) => Language::Sql(Dialect::MySql(*mode)),
+            Self::Sqlite => Language::Sql(Dialect::Sqlite),
         }
     }
 
@@ -50,6 +55,7 @@ impl Classifier {
         match self {
             Self::Pg(p) => p.classify(sql),
             Self::MySql(mode) => mysql::classify(sql, *mode),
+            Self::Sqlite => sqlite::classify(sql),
         }
     }
 
@@ -63,7 +69,7 @@ impl Classifier {
     pub fn forget(&mut self, sql: &str) {
         match self {
             Self::Pg(p) => p.forget(sql),
-            Self::MySql(_) => {}
+            Self::MySql(_) | Self::Sqlite => {}
         }
     }
 
@@ -71,7 +77,7 @@ impl Classifier {
     pub fn knows(&self, name: &str) -> bool {
         match self {
             Self::Pg(p) => p.knows(name),
-            Self::MySql(_) => false,
+            Self::MySql(_) | Self::Sqlite => false,
         }
     }
 
@@ -81,6 +87,8 @@ impl Classifier {
         match self {
             Self::Pg(_) => repeat::repeatable(sql),
             Self::MySql(mode) => mysql::repeatable(sql, *mode),
+            // SQLite's functions are not listed here: no statement is known to repeat.
+            Self::Sqlite => Err(NotRepeatable::UserFunction),
         }
     }
 
@@ -89,6 +97,7 @@ impl Classifier {
         match self {
             Self::Pg(_) => repeat::ordered(sql),
             Self::MySql(mode) => mysql::ordered(sql, *mode),
+            Self::Sqlite => false,
         }
     }
 
@@ -104,6 +113,11 @@ impl Classifier {
         let (form, risk) = match self {
             Self::Pg(p) => (super::form(sql), p.clone().classify(sql)),
             Self::MySql(mode) => (mysql::form(sql, *mode), mysql::classify(sql, *mode)),
+            Self::Sqlite => {
+                let risk = sqlite::classify(sql);
+                let form = if risk.class == Class::Read { Form::Plain } else { Form::Other };
+                (Some(form), risk)
+            }
         };
         let plain_read = match form {
             None => return TxStep::Opens,
@@ -127,6 +141,8 @@ impl Classifier {
         match lang {
             Language::Sql(Dialect::Postgres) => super::session_set::session_set_pg(sql),
             Language::Sql(Dialect::MySql(_)) => mysql::session_set(sql),
+            // SQLite has no start-up settings of the kind PostgreSQL and MySQL take here.
+            Language::Sql(Dialect::Sqlite) => Err(super::SetProblem::Unread),
         }
     }
 
@@ -135,6 +151,7 @@ impl Classifier {
         match self {
             Self::Pg(_) => repeat::count_query(sql),
             Self::MySql(mode) => mysql::count_query(sql, *mode),
+            Self::Sqlite => Err(NotRepeatable::UserFunction),
         }
     }
 }

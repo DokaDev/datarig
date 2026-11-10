@@ -102,6 +102,9 @@ fn render_at(c: &Cond, t: &Target, place: Place) -> Result<String, RenderError> 
             (Dialect::Postgres, true) => format!("{} IS DISTINCT FROM {}", col(name), lit(name, value)),
             (Dialect::MySql(_), false) => format!("{} <=> {}", col(name), lit(name, value)),
             (Dialect::MySql(_), true) => format!("NOT ({} <=> {})", col(name), lit(name, value)),
+            // SQLite's `IS` and `IS NOT` compare without NULL as a special case.
+            (Dialect::Sqlite, false) => format!("{} IS {}", col(name), lit(name, value)),
+            (Dialect::Sqlite, true) => format!("{} IS NOT {}", col(name), lit(name, value)),
         },
         Cond::IsNull { col: name, negated } => format!("{} IS {}NULL", col(name), not(*negated)),
         Cond::In { col: name, values, negated } => {
@@ -134,6 +137,11 @@ fn render_at(c: &Cond, t: &Target, place: Place) -> Result<String, RenderError> 
                 }
                 (Dialect::MySql(_), CaseMode::Insensitive) => {
                     format!("LOWER({}) {}LIKE LOWER({p}) ESCAPE {e}", col(name), not(*negated))
+                }
+                // SQLite's LIKE folds ASCII letters only, so a case-insensitive text match is not
+                // written for it: refused rather than written wrongly.
+                (Dialect::Sqlite, CaseMode::Insensitive) => {
+                    return Err(RenderError::CaseInsensitiveRefused(name.clone()));
                 }
             }
         }
@@ -169,7 +177,7 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
         Value::Text(s) => text_literal(t, s),
         Value::Bytes(b) => match t.dialect {
             Dialect::Postgres => format!("{}::bytea", text_literal(t, &format!("\\x{}", hex(b, false)))),
-            Dialect::MySql(_) => format!("X'{}'", hex(b, true)),
+            Dialect::MySql(_) | Dialect::Sqlite => format!("X'{}'", hex(b, true)),
         },
     }
 }
@@ -182,7 +190,7 @@ fn text_literal(t: &Target, s: &str) -> String {
             let open = LiteralOpen { prefix: 1, quote: '\'', backslash: true };
             format!("E'{}'", d.literal_body(s, open))
         }
-        Dialect::Postgres => d.quote_literal(s),
+        Dialect::Postgres | Dialect::Sqlite => d.quote_literal(s),
         Dialect::MySql(_) if t.utf8mb4 && !s.contains(['\\', '\0']) => d.quote_literal(s),
         Dialect::MySql(_) => format!("_utf8mb4 X'{}'", hex(s.as_bytes(), true)),
     }

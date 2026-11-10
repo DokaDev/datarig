@@ -84,16 +84,18 @@ impl Default for SessionPresetId {
 pub enum Dbms {
     Postgres,
     MySql,
+    Sqlite,
 }
 
 impl Dbms {
-    pub const ALL: [Dbms; 2] = [Dbms::Postgres, Dbms::MySql];
+    pub const ALL: [Dbms; 3] = [Dbms::Postgres, Dbms::MySql, Dbms::Sqlite];
 
     /// `dbms` as the file writes it: `"postgres"` or `"mysql"`.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "postgres" => Some(Dbms::Postgres),
             "mysql" => Some(Dbms::MySql),
+            "sqlite" => Some(Dbms::Sqlite),
             _ => None,
         }
     }
@@ -102,6 +104,7 @@ impl Dbms {
         match self {
             Dbms::Postgres => "postgres",
             Dbms::MySql => "mysql",
+            Dbms::Sqlite => "sqlite",
         }
     }
 
@@ -110,14 +113,16 @@ impl Dbms {
         match self {
             Dbms::Postgres => "PostgreSQL",
             Dbms::MySql => "MySQL",
+            Dbms::Sqlite => "SQLite",
         }
     }
 
     /// The database of a profile's `driver` (`None`: a driver no preset is for).
     pub fn of_driver(driver: &str) -> Option<Self> {
-        match driver.to_ascii_lowercase().as_str() {
-            "postgres" | "postgresql" | "pg" => Some(Dbms::Postgres),
-            "mysql" | "mariadb" => Some(Dbms::MySql),
+        match super::drivers::canonical(driver)? {
+            "postgres" => Some(Dbms::Postgres),
+            "mysql" => Some(Dbms::MySql),
+            "sqlite" => Some(Dbms::Sqlite),
             _ => None,
         }
     }
@@ -128,6 +133,7 @@ impl Dbms {
         match self {
             Dbms::Postgres => Language::Sql(Dialect::Postgres),
             Dbms::MySql => Language::Sql(Dialect::MySql(MySqlMode::default())),
+            Dbms::Sqlite => Language::Sql(Dialect::Sqlite),
         }
     }
 }
@@ -218,6 +224,7 @@ impl<'de> Deserialize<'de> for SessionRef {
 pub struct SessionMap {
     pub postgres: Option<String>,
     pub mysql: Option<String>,
+    pub sqlite: Option<String>,
 }
 
 impl SessionMap {
@@ -226,6 +233,7 @@ impl SessionMap {
         match dbms {
             Dbms::Postgres => self.postgres.as_deref(),
             Dbms::MySql => self.mysql.as_deref(),
+            Dbms::Sqlite => self.sqlite.as_deref(),
         }
     }
 
@@ -234,11 +242,12 @@ impl SessionMap {
         match dbms {
             Dbms::Postgres => self.postgres = preset,
             Dbms::MySql => self.mysql = preset,
+            Dbms::Sqlite => self.sqlite = preset,
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.postgres.is_none() && self.mysql.is_none()
+        self.postgres.is_none() && self.mysql.is_none() && self.sqlite.is_none()
     }
 
     /// Every preset it names, with its database.
@@ -599,6 +608,9 @@ fn wait_of(dbms: Dbms, value: &str) -> Wait {
             Ok(n) if digits(value) && (1..=31_536_000).contains(&n) => Wait::Limit(Duration::from_secs(n)),
             _ => Wait::Unknown,
         },
+        // SQLite's wait is `busy_timeout` in milliseconds, set by the driver itself: no preset
+        // setting reads as one.
+        Dbms::Sqlite => Wait::Unknown,
     }
 }
 

@@ -46,7 +46,7 @@ fn config(profile: impl FnOnce(&mut ConnectionConfig)) -> Config {
     profile(&mut p);
     let mut cfg = Config { connections: vec![p], sessions: presets(), ..Config::default() };
     let rules = Policy {
-        session: SessionMap { postgres: Some("reporting".into()), mysql: Some("my_ro".into()) },
+        session: SessionMap { postgres: Some("reporting".into()), mysql: Some("my_ro".into()), sqlite: None },
         ..Policy::default()
     };
     cfg.policies.insert("prod", rules);
@@ -316,7 +316,10 @@ fn section_config(dir: &Scratch) -> Config {
     ));
     cfg.sessions.push(SessionPreset::new("fk_off", Dbms::MySql, vec!["SET foreign_key_checks = 0".into()]));
     cfg.sessions.sort_by(|a, b| a.name.cmp(&b.name));
-    let rules = Policy { session: SessionMap { postgres: Some("reporting".into()), mysql: None }, ..Policy::default() };
+    let rules = Policy {
+        session: SessionMap { postgres: Some("reporting".into()), mysql: None, sqlite: None },
+        ..Policy::default()
+    };
     cfg.policies.insert("prod", rules);
     cfg.path = Some(dir.config());
     datarig_core::config::save(
@@ -416,6 +419,8 @@ fn a_new_preset_is_made_in_its_form() {
     h.type_text("analytics");
     h.key(KeyCode::Tab);
     assert_eq!(h.form().focus, Field::SessionDbms);
+    // Three databases now: PostgreSQL → MySQL → SQLite → PostgreSQL.
+    h.key(KeyCode::Right);
     h.key(KeyCode::Right);
     h.key(KeyCode::Right);
     h.key(KeyCode::Tab);

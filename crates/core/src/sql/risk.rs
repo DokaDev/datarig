@@ -110,6 +110,7 @@ mod classifier;
 pub mod mysql;
 pub mod repeat;
 pub mod session_set;
+pub mod sqlite;
 
 pub use classifier::Classifier;
 pub use session_set::{NotLocal, Owner, SessionSet, SetProblem};

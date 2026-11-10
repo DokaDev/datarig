@@ -321,6 +321,14 @@ pub const KEYS: &[KeyDoc] = &[
     ),
     unset(
         "connections",
+        "path",
+        "none",
+        "an absolute file path",
+        "The database file of a SQLite profile. A SQLite profile needs no host, port, login or TLS; it \
+         opens this file read-only (a read-only policy) or read-write, and never creates it.",
+    ),
+    unset(
+        "connections",
         "sslrootcert",
         "none",
         "a file path",
@@ -661,7 +669,7 @@ pub const KEYS: &[KeyDoc] = &[
         "startup.<name>",
         "dbms",
         "none (required)",
-        "`\"postgres\"`, `\"mysql\"`",
+        "`\"postgres\"`, `\"mysql\"`, `\"sqlite\"`",
         "The kind of database the preset is for.",
     ),
     key(

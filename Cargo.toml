@@ -6,6 +6,7 @@ members = [
     "crates/i18n",
     "crates/drivers/postgres",
     "crates/drivers/mysql",
+    "crates/drivers/sqlite",
     "crates/ssh",
     "crates/tls",
     "crates/tui",
@@ -35,6 +36,7 @@ publish = false
 # tui → i18n (the UI text; core has none), tui → export-formats → core; bench → all).
 datarig-core = { path = "crates/core" }
 datarig-driver-mysql = { path = "crates/drivers/mysql" }
+datarig-driver-sqlite = { path = "crates/drivers/sqlite" }
 datarig-driver-postgres = { path = "crates/drivers/postgres" }
 datarig-export-formats = { path = "crates/export-formats" }
 datarig-i18n = { path = "crates/i18n" }
@@ -78,6 +80,9 @@ rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem
 # The editor's search (`/`, `?`, `*`): Rust regular expressions, linear time, Unicode-aware.
 # Already in the tree on Windows (through keyring).
 regex = "1.13"
+# SQLite driver (crates/drivers/sqlite): the library compiled in (`bundled`), so no system library
+# is needed. Synchronous: each session runs on a thread of its own.
+rusqlite = { version = "0.41", default-features = false, features = ["bundled", "hooks", "column_decltype"] }
 # PostgreSQL SCRAM channel binding: the hash of the server's certificate. Already in the tree
 # through russh and rustls.
 ring = "0.17"

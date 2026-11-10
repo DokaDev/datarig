@@ -18,6 +18,7 @@ use crate::widgets::statement_list::StatementList;
 use crate::widgets::text_input::{InputResult, TextInput};
 use datarig_core::policy::{self, CommitRule, Confirm, Environment, EnvironmentId, PagingMode, Policy};
 use datarig_core::profile::color::{self, ProfileColor};
+use datarig_core::profile::drivers::{KNOWN, canonical};
 use datarig_core::profile::dsn::{self, Dsn, DsnError, Scheme};
 use datarig_core::profile::session::{self, Dbms, SessionPreset, SessionPresetId, SessionRef};
 use datarig_core::profile::ssh::{SshAuth, SshSettings};
@@ -29,11 +30,12 @@ use datarig_core::secret::{PasswordSource, SourceKind};
 use datarig_core::tls::{TlsFile, TlsMode};
 use datarig_i18n::{Label, Msg};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::sync::LazyLock;
 
 /// The drivers the form lists, in order: `(driver name, display name)`. Only the ones the
 /// app has a driver for can be picked; the others are shown as not yet supported.
-pub const DRIVERS: [(&str, &str); 4] =
-    [("postgres", "PostgreSQL"), ("mysql", "MySQL"), ("redis", "Redis"), ("elasticsearch", "Elasticsearch")];
+pub static DRIVERS: LazyLock<Vec<(&'static str, &'static str)>> =
+    LazyLock::new(|| KNOWN.iter().map(|k| (k.name, k.display)).collect());
 
 /// The form's sections.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +62,8 @@ pub enum Field {
     /// The driver selector (Basic, first).
     Driver,
     Name,
+    /// The database file of a SQLite profile.
+    Path,
     Host,
     Port,
     User,
@@ -148,6 +152,18 @@ pub const BASIC: [Field; 10] = [
     Field::Command,
     Field::Env,
     Field::Database,
+];
+/// The fields a SQLite profile shows in its Basic section.
+pub const SQLITE_BASIC: [Field; 3] = [Field::Driver, Field::Name, Field::Path];
+/// The advanced fields a SQLite profile does not have: TLS, and the connection options of a server.
+pub const SQLITE_HIDDEN: [Field; 7] = [
+    Field::SslMode,
+    Field::TlsCa,
+    Field::TlsCert,
+    Field::TlsKey,
+    Field::StatementCache,
+    Field::ServerKey,
+    Field::KeyRetrieval,
 ];
 pub const ADVANCED: [Field; 13] = [
     Field::SslMode,
@@ -282,6 +298,7 @@ impl Field {
             Field::Password => Label::FormFieldPassword,
             Field::Command => Label::FormFieldCommand,
             Field::Env => Label::FormFieldEnv,
+            Field::Path => Label::FormFieldPath,
             Field::Database => Label::FormFieldDatabase,
             Field::SslMode => Label::FormFieldSslmode,
             Field::TlsCa => Label::FormFieldTlsCa,
@@ -335,7 +352,7 @@ impl Field {
 
     /// The section the field is in (buttons: both).
     pub fn section(self) -> Option<Section> {
-        if BASIC.contains(&self) || self == Field::Dsn {
+        if BASIC.contains(&self) || matches!(self, Field::Dsn | Field::Path) {
             Some(Section::Basic)
         } else if SSH.contains(&self) {
             Some(Section::Ssh)
@@ -452,6 +469,8 @@ pub enum FormKind {
 pub enum FieldError {
     Required,
     Port,
+    /// A SQLite profile's file is not an absolute path.
+    SqlitePath,
     NameTaken,
     /// Not a name a tunnel preset can have (blanks around it, a control character, too long).
     TunnelName,
@@ -497,6 +516,7 @@ impl FieldError {
         match self {
             FieldError::Required => Label::ValidateRequired,
             FieldError::Port => Label::ValidatePort,
+            FieldError::SqlitePath => Label::ValidateSqlitePath,
             FieldError::NameTaken => Label::ValidateNameTaken,
             FieldError::TunnelName => Label::ValidateTunnelName,
             FieldError::EnvName => Label::ValidateEnvName,
@@ -618,6 +638,8 @@ pub struct ProfileForm {
     pub user: TextInput,
     pub password: TextInput,
     pub database: TextInput,
+    /// The database file of a SQLite profile (its only address).
+    pub path: TextInput,
     pub dsn: TextInput,
     /// The TLS mode, an index into [`TlsMode::ALL`].
     pub sslmode: usize,
@@ -641,7 +663,7 @@ pub struct ProfileForm {
     /// Index into [`DRIVERS`].
     pub driver: usize,
     /// Which [`DRIVERS`] can be picked (the app has a driver for them).
-    pub drivers_enabled: [bool; 4],
+    pub drivers_enabled: [bool; KNOWN.len()],
     pub section: Section,
     /// The environment picked (its name); `None`: the default rules.
     pub environment: Option<String>,
@@ -950,6 +972,7 @@ impl ProfileForm {
             user: TextInput::new(&c.user),
             password: TextInput::new(&password),
             database: TextInput::new(&c.database),
+            path: TextInput::new(c.path.as_deref().unwrap_or("")),
             dsn: TextInput::new(""),
             sslmode: form_mode(c).0,
             unknown_sslmode: form_mode(c).1,
@@ -961,7 +984,7 @@ impl ProfileForm {
             server_key: TextInput::new(c.server_public_key_file.as_deref().unwrap_or("")),
             key_retrieval: c.allow_public_key_retrieval,
             driver: driver_index(&c.driver),
-            drivers_enabled: [true, false, false, false],
+            drivers_enabled: std::array::from_fn(|i| i == 0),
             section: Section::Basic,
             environment: c.policy.clone(),
             environments: Vec::new(),
@@ -1404,6 +1427,11 @@ impl ProfileForm {
         self.scheme() == Scheme::MySql
     }
 
+    /// Whether the profile is an SQLite file (no host, port or login).
+    pub fn is_sqlite(&self) -> bool {
+        DRIVERS[self.driver].0 == "sqlite"
+    }
+
     /// The profile would connect to a server on another machine directly, with TLS off (see
     /// `ConnectionConfig::unencrypted`).
     pub fn unencrypted(&self) -> bool {
@@ -1590,6 +1618,7 @@ impl ProfileForm {
             Field::Command => &mut self.command,
             Field::Env => &mut self.env,
             Field::Database => &mut self.database,
+            Field::Path => &mut self.path,
             Field::Dsn => &mut self.dsn,
             Field::ServerKey => &mut self.server_key,
             Field::TlsCa => &mut self.tls_ca,
@@ -1628,6 +1657,16 @@ impl ProfileForm {
         }
         if self.is_session() {
             let mut out = SESSION.to_vec();
+            out.extend(BUTTONS);
+            return out;
+        }
+        if self.is_sqlite() {
+            // A file has no SSH tunnel and no server login: its section is empty.
+            let mut out: Vec<Field> = match self.section {
+                Section::Basic => SQLITE_BASIC.to_vec(),
+                Section::Advanced => ADVANCED.iter().copied().filter(|f| !SQLITE_HIDDEN.contains(f)).collect(),
+                Section::Ssh => Vec::new(),
+            };
             out.extend(BUTTONS);
             return out;
         }
@@ -1754,9 +1793,11 @@ impl ProfileForm {
         if self.is_tunnel() || self.is_environment() {
             return;
         }
-        let n = Section::ALL.len() as isize;
-        let i = Section::ALL.iter().position(|s| *s == self.section).unwrap_or(0) as isize;
-        self.open_section(Section::ALL[(i + d).rem_euclid(n) as usize]);
+        let sections: Vec<Section> =
+            Section::ALL.into_iter().filter(|s| !(self.is_sqlite() && *s == Section::Ssh)).collect();
+        let n = sections.len() as isize;
+        let i = sections.iter().position(|s| *s == self.section).unwrap_or(0) as isize;
+        self.open_section(sections[(i + d).rem_euclid(n) as usize]);
     }
 
     /// Show section `s` (a click on its tab); the focus goes to its first field.
@@ -1995,10 +2036,8 @@ impl ProfileForm {
                 self.key_retrieval = !self.key_retrieval
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::SessionDbms => {
-                self.session_dbms = match self.session_dbms {
-                    Dbms::Postgres => Dbms::MySql,
-                    Dbms::MySql => Dbms::Postgres,
-                };
+                let at = Dbms::ALL.iter().position(|d| *d == self.session_dbms).unwrap_or(0);
+                self.session_dbms = Dbms::ALL[(at + 1) % Dbms::ALL.len()];
                 self.session_sql.set_dbms(Some(self.session_dbms));
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::EnvReadOnly => {
@@ -2074,6 +2113,15 @@ impl ProfileForm {
 
     /// Field errors. `taken(name)` says whether another profile already uses `name`.
     /// "Required" errors appear only after a save attempt; format errors appear at once.
+    /// What a SQLite profile must name: its file, as an absolute path.
+    fn sqlite_errors(&self) -> Vec<(Field, FieldError)> {
+        let path = self.path.text().trim();
+        if path.is_empty() {
+            return if self.attempted { vec![(Field::Path, FieldError::Required)] } else { Vec::new() };
+        }
+        if std::path::Path::new(path).is_absolute() { Vec::new() } else { vec![(Field::Path, FieldError::SqlitePath)] }
+    }
+
     pub fn errors(&self, taken: impl Fn(&str) -> bool) -> Vec<(Field, FieldError)> {
         let mut out = Vec::new();
         if self.is_environment() {
@@ -2151,6 +2199,10 @@ impl ProfileForm {
             }
         } else if taken(name) {
             out.push((Field::Name, FieldError::NameTaken));
+        }
+        if self.is_sqlite() {
+            out.extend(self.sqlite_errors());
+            return out;
         }
         for (f, inp) in [(Field::Host, &self.host), (Field::User, &self.user)] {
             if self.attempted && inp.text().trim().is_empty() {
@@ -2388,6 +2440,7 @@ impl ProfileForm {
             user: self.user.text().to_string(),
             password: String::new(),
             database: self.database.text().to_string(),
+            path: self.is_sqlite().then(|| self.path.text().trim().to_string()).filter(|p| !p.is_empty()),
             sslmode: self.sslmode_text(),
             sslrootcert: self.tls_file(TlsFile::Ca),
             sslcert: self.tls_file(TlsFile::Cert),
@@ -2467,12 +2520,7 @@ fn form_mode(c: &ConnectionConfig) -> (usize, Option<String>) {
 
 /// Index of a profile's driver in [`DRIVERS`] (`postgresql`/`pg` are `postgres`).
 fn driver_index(driver: &str) -> usize {
-    let d = match driver.to_ascii_lowercase().as_str() {
-        "postgresql" | "pg" => "postgres".to_string(),
-        "mariadb" => "mysql".to_string(),
-        d => d.to_string(),
-    };
-    DRIVERS.iter().position(|x| x.0 == d).unwrap_or(0)
+    canonical(driver).and_then(|name| DRIVERS.iter().position(|x| x.0 == name)).unwrap_or(0)
 }
 
 /// `name`, `name-copy`, `name-copy2`, … whichever is free.
