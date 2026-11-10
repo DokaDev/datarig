@@ -80,6 +80,7 @@ impl App {
             DbError::Cancelled => Label::QueryCancelled,
             DbError::ReadWriteRefused => Label::DbReadWriteRefused,
             DbError::CopyStdio => Label::DbCopyStdio,
+            DbError::CappedOutcome => Label::DbCappedOutcome,
             DbError::CopyStarted => Label::DbCopyStarted,
             DbError::ReadOnlyLost => Label::DbReadOnlyLost,
             DbError::NoTransaction => Label::DbNoTransaction,

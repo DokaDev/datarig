@@ -428,6 +428,7 @@ pub(crate) async fn query_loop(
     let mode = tracked.mode(&server);
     let values = tracked.values();
     let isolation = tracked.isolation();
+    let autocommit = tracked.autocommit != Some(false);
     // The limit the session set up with is its own, not the user's.
     let tracked = Tracked { select_limit: None, ..tracked };
     let mut s = State {
@@ -438,7 +439,8 @@ pub(crate) async fn query_loop(
         routine: false,
         sets_next: SetsNext::No,
         limit: Limit { current: select_limit, user: None },
-        tx: Tx::default(),
+        // Autocommit as the start-up statements left it (set up on, unless they turned it off).
+        tx: Tx { autocommit, ..Tx::default() },
         request: 0,
     };
     let stop = loop {
@@ -906,6 +908,12 @@ async fn statement<'a>(
         (Some(_), None) => false,
     };
     let skip = keeps && reads_outcome(sql, s.mode);
+    // A result with a cap is never read past it: one whose statement keeps a limit that does
+    // not stop it there (or none) is not sent.
+    if step.cap.is_some() && skip && wanted != s.limit.current && limit_applies(sql, s.mode) {
+        reply.fail(DbError::CappedOutcome, false);
+        return Ok(None);
+    }
     if limit_applies(sql, s.mode) && wanted != s.limit.current && !skip {
         let set = format!("SET SESSION sql_select_limit = {}", wanted.map_or("DEFAULT".to_string(), |n| n.to_string()));
         if let Err(e) = halt!(link.guard(None, conn.query_drop(set)).await, Some(reply)) {
@@ -929,6 +937,9 @@ async fn statement<'a>(
         return failed(conn, link, env, s, reply, &e, false, false).await;
     }
     let was_open = s.tx.open;
+    // The result was stopped at its cap ([`stop_result`]): its answer says nothing of the
+    // session, which is asked instead.
+    let mut stopped = false;
     env.busy.store(true, Ordering::SeqCst);
     // Only what is sent may set the next transaction's own settings: a statement refused before
     // it was sent sets nothing.
@@ -1041,8 +1052,10 @@ async fn statement<'a>(
             };
             let more = page.len() > env.page_size;
             let carry = if more { page.pop() } else { None };
-            // At the cap the result ends here (the server stopped it there too).
-            let more = more && !spend(&mut cap, page.len());
+            // At the cap the result ends here (the server stopped it there too). Every page
+            // shown counts against it, the last one too.
+            let spent = spend(&mut cap, page.len());
+            let more = more && !spent;
             if held && more {
                 // Held: the statement runs on while the app reads it (or its last row is still
                 // to come).
@@ -1070,25 +1083,33 @@ async fn statement<'a>(
                 drop(qr);
                 return held_ended(conn, link, env, s, paged, held, sql, was_open).await.map(|()| None);
             }
-            // Not held: whatever the limit did not stop is read to its end and dropped.
-            if !ended {
-                match halt!(link.guard(Some(env.killer), drain(&mut qr)).await, Some(reply)) {
-                    Ok(_) => {}
+            // Not held: whatever the limit did not stop is read to its end and dropped; but a
+            // result at its cap that no limit of the server's stops there is stopped, never
+            // read on past it.
+            stopped = !ended && spent && !bounded;
+            if stopped {
+                halt!(stop_result(&mut qr, link, env).await, Some(reply));
+                Got::Rows { columns, page, more: false, info: StatementInfo::default() }
+            } else {
+                if !ended {
+                    match halt!(link.guard(Some(env.killer), drain(&mut qr)).await, Some(reply)) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            drop(qr);
+                            return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
+                        }
+                    }
+                }
+                let mut info = info_of(&qr);
+                match halt!(link.guard(Some(env.killer), rest(&mut qr)).await, Some(reply)) {
+                    Ok(sets) => info.more_results += sets,
                     Err(e) => {
                         drop(qr);
                         return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                     }
                 }
+                Got::Rows { columns, page, more, info }
             }
-            let mut info = info_of(&qr);
-            match halt!(link.guard(Some(env.killer), rest(&mut qr)).await, Some(reply)) {
-                Ok(sets) => info.more_results += sets,
-                Err(e) => {
-                    drop(qr);
-                    return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
-                }
-            }
-            Got::Rows { columns, page, more, info }
         }
     };
     drop(qr);
@@ -1106,8 +1127,9 @@ async fn statement<'a>(
     // What the statement did to the session, before the run answers. An undo that failed on a
     // connection still in use may have left the statement's transaction open: the server is
     // asked (one that runs nothing more is not).
-    let ask = was_open || !kept;
-    if let Some(error) = halt!(after(conn, link, env, s, sql, risk.implicit_commit, ask, kept).await, Some(reply)) {
+    let ask = was_open || !kept || stopped;
+    let ok = kept && !stopped;
+    if let Some(error) = halt!(after(conn, link, env, s, sql, risk.implicit_commit, ask, ok).await, Some(reply)) {
         reply.fail(error.clone(), false);
         return Err(Halted { stop: Stop::Lost(error), reply: None });
     }
@@ -1531,7 +1553,10 @@ async fn hold_on(
                 if more {
                     carry = rows.pop();
                 }
-                more = more && !spend(&mut cap, rows.len());
+                // Every page counts against the cap, the last one too: at the cap the result
+                // ends where the server stopped it, its end read below.
+                let spent = spend(&mut cap, rows.len());
+                more = more && !spent;
                 let _ = env.events.send(DbEvent::Page { id, columns: None, rows, more, elapsed: t0.elapsed() });
             }
             // The app closes it (its spill limit, idle): it ends like a finished one.
@@ -2199,16 +2224,25 @@ async fn count(
         let _ = link.guard(None, conn.query_drop(ROLLBACK)).await?;
     }
     let snapshot = s.tx.open && matches!(isolation.as_str(), "REPEATABLE-READ" | "SERIALIZABLE");
+    let ask = s.tx.open || !s.tx.autocommit;
     let result = match counted {
-        Ok(Some(n)) => n.trim().parse::<u64>().map_err(|_| DbError::NoResult),
-        Ok(None) => Err(DbError::NoResult),
         Err(e) if e.is_fatal() => return Err(Stop::Lost(my_error(&e))),
         Err(e) => {
-            let ask = s.tx.open || !s.tx.autocommit;
             if let Some(error) = after(conn, link, env, s, "", false, ask, false).await? {
                 return Err(Stop::Lost(error));
             }
             Err(failure(&e).0)
+        }
+        // Counted: what it left in the session too (without autocommit it opened a
+        // transaction, which runs in the level the next one was to run in).
+        Ok(counted) => {
+            if let Some(error) = after(conn, link, env, s, "", false, ask, true).await? {
+                return Err(Stop::Lost(error));
+            }
+            match counted {
+                Some(n) => n.trim().parse::<u64>().map_err(|_| DbError::NoResult),
+                None => Err(DbError::NoResult),
+            }
         }
     };
     Ok((result, snapshot))
@@ -2226,7 +2260,15 @@ async fn check_repeat(
     if let Err(why) = keeps_next(s, open) {
         return Ok(Err(why));
     }
-    Ok(asked_server(conn, link, env, s, sql).await?.map(|_| ()))
+    let answer = asked_server(conn, link, env, s, sql).await?.map(|_| ());
+    // The catalog read may have opened a transaction (without autocommit): said as any other.
+    if answer.is_ok() {
+        let ask = s.tx.open || !s.tx.autocommit;
+        if let Some(error) = after(conn, link, env, s, "", false, ask, true).await? {
+            return Err(Stop::Lost(error));
+        }
+    }
+    Ok(answer)
 }
 
 mod apply;

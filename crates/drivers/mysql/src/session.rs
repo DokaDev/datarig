@@ -349,6 +349,10 @@ pub(crate) struct Tracked {
     /// `None` while none is open. A change of the session's level meanwhile is the next
     /// transaction's, not this one's.
     pub(crate) isolation_active: Option<Option<Isolation>>,
+    /// Whether the session runs with autocommit once it is set up (its start-up statements
+    /// may turn it off), from the status flags of the last statement that set it up; `None`:
+    /// not seen.
+    pub(crate) autocommit: Option<bool>,
 }
 
 impl Tracked {
@@ -515,7 +519,14 @@ pub(crate) async fn open(
             return Err((error, false));
         }
         tracked.update(&conn);
+        // Settings for the next transaction only, which the server does not report.
+        if crate::query::sets_next_transaction(sql, tracked.mode(&server)) != crate::query::SetsNext::No {
+            tracked.next_once = true;
+        }
     }
+    tracked.autocommit = conn
+        .last_ok_packet()
+        .map(|p| p.status_flags().contains(mysql_async::consts::StatusFlags::SERVER_STATUS_AUTOCOMMIT));
     let read_only = settings.read_only || matches!(settings.role, SessionRole::Meta | SessionRole::Monitor);
     // A server (or a proxy in front of it) that did not report them is asked.
     if tracked.sql_mode.is_none() || tracked.values().is_none() || (read_only && tracked.read_only.is_none()) {

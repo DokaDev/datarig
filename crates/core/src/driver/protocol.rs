@@ -143,6 +143,11 @@ pub enum DbError {
     /// connection's COPY sub-protocol, which the session does not carry. The app refuses them
     /// first; this is the driver's own check.
     CopyStdio,
+    /// A statement with a cap ([`DbCommand::Execute`]'s `max_rows`) that reads the outcome of
+    /// the statement before it (MySQL's `ROW_COUNT()`, `FOUND_ROWS()`) was not sent: the row
+    /// limit that stops its result at the cap would be that statement, and the limit the session
+    /// has would let the server read past the cap.
+    CappedOutcome,
     /// The server started a COPY to or from the client that no request asked for (a `COPY …
     /// TO STDOUT` or `FROM STDIN` the driver's own check missed): the connection was closed, so
     /// the server stopped it.
@@ -346,6 +351,7 @@ impl DbError {
             | DbError::Cancelled
             | DbError::ReadWriteRefused
             | DbError::CopyStdio
+            | DbError::CappedOutcome
             | DbError::CopyStarted
             | DbError::NotRepeatable(_)
             | DbError::Locked
