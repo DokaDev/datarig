@@ -2516,6 +2516,13 @@ fn count_error(e: &tokio_postgres::Error) -> DbError {
     if is_cancel(e) { DbError::Cancelled } else { db_error(e) }
 }
 
+/// A failed step of a count or an estimate as the UI hears it: `query_canceled`, which the server
+/// answers at a time limit too, is a cancel only when the user had asked for one for this run
+/// (`asked`); otherwise the server's own words say what stopped it.
+fn asked_error(e: &tokio_postgres::Error, asked: bool) -> DbError {
+    if is_cancel(e) && asked { DbError::Cancelled } else { db_error(e) }
+}
+
 /// Whether the session runs `sql` as a count: only the app's `SELECT count(*)` of a statement
 /// on the allowlist (`risk::repeat`), checked again here, because it goes out as one simple
 /// query with the savepoint around it.
@@ -2562,7 +2569,7 @@ async fn count(
         let counted = match answer {
             Ok(()) => match link.guard(Some(env.token), client.simple_query(&text)).await? {
                 Ok(msgs) => return Ok((count_of(&msgs), fixed)),
-                Err(e) => count_error(&e),
+                Err(e) => asked_error(&e, env.cancel.asked()),
             },
             Err(why) => why,
         };
@@ -2589,7 +2596,7 @@ async fn count(
                 // The failure left the `BEGIN READ ONLY` block open and aborted.
                 let _ = link.guard(None, client.batch_execute("ROLLBACK")).await?;
             }
-            Err(count_error(&e))
+            Err(asked_error(&e, env.cancel.asked()))
         }
     };
     Ok((counted, false))
@@ -2675,21 +2682,23 @@ async fn limited_read(
         })
         .await?;
     let set = limits_end(&msgs);
-    let applied = set.and_then(|end| applied_limit(&msgs[..end])).unwrap_or(statement);
-    let failed = |(e, asked, ran): (&tokio_postgres::Error, bool, Duration)| {
-        if is_cancel(e) { stopped(asked, ran, applied) } else { count_error(e) }
+    // The limit is in force from there on: what stopped the statements before it, or the
+    // `COMMIT` after it, is not told by how long they took.
+    let applied = set.and_then(|end| applied_limit(&msgs[..end]));
+    let failed = |(e, asked, ran): (&tokio_postgres::Error, bool, Duration), applied| {
+        if is_cancel(e) { stopped(asked, ran, applied).unwrap_or_else(|| db_error(e)) } else { db_error(e) }
     };
     let read = match (read, set) {
         ((Ok(()), ..), Some(end)) => Ok(msgs.split_off(end)),
         ((Ok(()), ..), None) => Err(DbError::NoResult),
-        ((Err(e), asked, ran), _) => Err(in_read(failed((&e, asked, ran)), head.chars().count())),
+        ((Err(e), asked, ran), _) => Err(in_read(failed((&e, asked, ran), applied), head.chars().count())),
     };
     let (Err(e), asked, ran) = commit else { return Ok(read) };
     if !e.is_closed() && link.guard(None, client.batch_execute("ROLLBACK")).await?.is_err() {
         probe(client, link, env, tx).await?;
     }
     // A failed read says why; a read whose transaction did not end is no answer.
-    Ok(read.and(Err(failed((&e, asked, ran)))))
+    Ok(read.and(Err(failed((&e, asked, ran), None))))
 }
 
 /// A simple query's messages as far as they came, and how it ended: what ran before a failure
@@ -2722,11 +2731,16 @@ fn in_read(mut why: DbError, head: usize) -> DbError {
 
 /// A bounded read stopped with `query_canceled` (57014), which the server answers to a cancel
 /// request and at the statement time limit alike: a cancel when the user had asked for one for
-/// this run when the answer came (`asked`), or when the read had not been sent for as long
-/// as the limit that applied (`ran` < `applied`: it cannot have been the limit, another cancel
-/// stopped it); the limit otherwise ([`DbError::TimedOut`]).
-fn stopped(asked: bool, ran: Duration, applied: Duration) -> DbError {
-    if asked || ran < applied { DbError::Cancelled } else { DbError::TimedOut(applied) }
+/// this run when the answer came (`asked`); the limit ([`DbError::TimedOut`]) when the read
+/// had been sent for as long as the limit that applied (`None`: it had not taken effect). Neither
+/// (the session's own limit before that, someone else's cancel, or one of the user's that came
+/// too late to be held back): `None`, what stopped it is not known here.
+fn stopped(asked: bool, ran: Duration, applied: Option<Duration>) -> Option<DbError> {
+    match applied {
+        _ if asked => Some(DbError::Cancelled),
+        Some(applied) if ran >= applied => Some(DbError::TimedOut(applied)),
+        _ => None,
+    }
 }
 
 /// How [`limited_read`] begins: `BEGIN READ ONLY`, the session's settings of each transaction
@@ -2802,7 +2816,7 @@ async fn counted_in(
     let counted = match answer {
         Ok(()) => match link.guard(Some(env.token), txn.simple_query(&text)).await? {
             Ok(msgs) => return Ok((count_of(&msgs), fixed)),
-            Err(e) => count_error(&e),
+            Err(e) => asked_error(&e, env.cancel.asked()),
         },
         Err(why) => why,
     };
@@ -2916,7 +2930,7 @@ async fn checked(
             });
             (fixed, check_answer(&msgs))
         }
-        Err(e) => (false, Err(count_error(&e))),
+        Err(e) => (false, Err(asked_error(&e, env.cancel.asked()))),
     })
 }
 

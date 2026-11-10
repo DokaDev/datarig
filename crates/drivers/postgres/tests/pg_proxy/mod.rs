@@ -30,6 +30,8 @@ pub enum Fault {
     /// The start the fault was set for ([`Proxy::fault_start`]) is replaced by this text; what
     /// follows it goes to the server as it is.
     Head(String),
+    /// The query reaches the server this much later.
+    Delay(std::time::Duration),
     /// The query never reaches the server: both connections are closed.
     Close,
 }
@@ -200,6 +202,10 @@ async fn relay(
             Some((_, Fault::Instead(text))) => [text.as_bytes(), &[0]].concat(),
             Some((Wanted::Exactly(start) | Wanted::Starting(start), Fault::Head(text))) => {
                 [text.as_bytes(), &msg[start.len()..]].concat()
+            }
+            Some((_, Fault::Delay(by))) => {
+                tokio::time::sleep(by).await;
+                msg
             }
             None => msg,
         };

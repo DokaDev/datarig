@@ -1501,9 +1501,13 @@ fn a_stopped_bounded_read_is_the_limit_only_without_a_cancel_and_after_the_limit
     use datarig_core::driver::DbError;
     use std::time::Duration;
     let (limit, ms) = (Duration::from_secs(1), Duration::from_millis);
-    assert_eq!(super::stopped(true, ms(1500), limit), DbError::Cancelled);
-    assert_eq!(super::stopped(true, ms(10), limit), DbError::Cancelled);
-    assert_eq!(super::stopped(false, ms(1000), limit), DbError::TimedOut(limit));
-    assert_eq!(super::stopped(false, ms(1500), limit), DbError::TimedOut(limit));
-    assert_eq!(super::stopped(false, ms(999), limit), DbError::Cancelled);
+    assert_eq!(super::stopped(true, ms(1500), Some(limit)), Some(DbError::Cancelled));
+    assert_eq!(super::stopped(true, ms(10), Some(limit)), Some(DbError::Cancelled));
+    assert_eq!(super::stopped(false, ms(1000), Some(limit)), Some(DbError::TimedOut(limit)));
+    assert_eq!(super::stopped(false, ms(1500), Some(limit)), Some(DbError::TimedOut(limit)));
+    // Not asked for and before the limit: not known, never called a cancel of the user's.
+    assert_eq!(super::stopped(false, ms(999), Some(limit)), None);
+    // The limit not in force yet: never said to be what stopped it, however long it took.
+    assert_eq!(super::stopped(false, ms(1500), None), None);
+    assert_eq!(super::stopped(true, ms(1500), None), Some(DbError::Cancelled));
 }
