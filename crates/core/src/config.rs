@@ -35,6 +35,7 @@
 //! key was used, or never; and the welcome panel its first steps), `[ui] changes_view` which
 //! view the Changes tab of a result opens in (its list of changed cells, or its SQL), `[ui]
 //! background` whether the theme paints its background or leaves the terminal's showing.
+//! `[history] filters` says whether a table tab keeps the filters it ran, to pick one again.
 //! `[updates] check` says whether datarig asks GitHub once a day for a newer release, and
 //! `[updates] whats_new` whether What's new shows once after an update.
 //! `[monitor] interval` is how often the server monitor reads the server while its tab is shown.
@@ -134,6 +135,8 @@ struct FileConfig {
     edit: Option<EditSection>,
     #[serde(default)]
     updates: Option<UpdatesSection>,
+    #[serde(default)]
+    history: Option<HistorySection>,
     #[serde(default)]
     monitor: Option<MonitorSection>,
     #[serde(default)]
@@ -376,6 +379,14 @@ struct UiSection {
     changes_view: Option<String>,
     #[serde(default)]
     background: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistorySection {
+    /// A string, or `true` / `false` written without quotes.
+    #[serde(default)]
+    filters: Option<toml::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -773,6 +784,25 @@ impl Choice for YankFlash {
     }
 }
 
+/// `[history] filters`: whether a table tab keeps the filters and orders it ran in the state
+/// directory, to pick one again (on by default).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FilterHistory {
+    #[default]
+    On,
+    Off,
+}
+
+impl Choice for FilterHistory {
+    const ALL: &'static [Self] = &[FilterHistory::On, FilterHistory::Off];
+    fn as_str(self) -> &'static str {
+        match self {
+            FilterHistory::On => "on",
+            FilterHistory::Off => "off",
+        }
+    }
+}
+
 /// `[updates] check`: whether datarig asks GitHub once a day for its latest release (on by
 /// default).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -1096,6 +1126,8 @@ pub struct Prefs {
     pub background: UiBackground,
     /// `[edit] paste_null`.
     pub paste_null: PasteNull,
+    /// `[history] filters`.
+    pub filter_history: FilterHistory,
     /// `[updates] check`.
     pub update_check: UpdateCheck,
     /// `[updates] whats_new`.
@@ -1134,6 +1166,7 @@ impl Default for Prefs {
             changes_view: ChangesView::default(),
             background: UiBackground::default(),
             paste_null: PasteNull::default(),
+            filter_history: FilterHistory::default(),
             update_check: UpdateCheck::default(),
             whats_new: WhatsNewSetting::default(),
             monitor_interval: MonitorInterval::default(),
@@ -1412,6 +1445,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
     let (ui_flash, ui_tips, ui_changes, ui_background) =
         f.ui.map(|u| (u.yank_flash, u.tips, u.changes_view, u.background)).unwrap_or_default();
     let paste_null = f.edit.and_then(|e| e.paste_null);
+    let filter_history = f.history.and_then(|h| h.filters);
     let (update_check, whats_new) = f.updates.map(|u| (u.check, u.whats_new)).unwrap_or_default();
     let monitor_interval = f.monitor.and_then(|m| m.interval);
     let (default_source, keychain_access) =
@@ -1472,6 +1506,16 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         changes_view: choice("ui.changes_view", ui_changes, "list, sql")?,
         background: choice("ui.background", ui_background, "theme, terminal")?,
         paste_null: choice("edit.paste_null", paste_null, "\\N, NULL, none")?,
+        filter_history: choice(
+            "history.filters",
+            filter_history.map(|v| match v {
+                toml::Value::String(s) => s,
+                toml::Value::Boolean(true) => "on".into(),
+                toml::Value::Boolean(false) => "off".into(),
+                other => other.to_string(),
+            }),
+            "on, off",
+        )?,
         update_check: choice("updates.check", update_check, "on, off")?,
         whats_new: choice("updates.whats_new", whats_new, "on, off")?,
         monitor_interval: choice("monitor.interval", monitor_interval, "1s, 2s, 5s, 10s, 30s, 60s")?,
@@ -1955,6 +1999,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "ui", "background", background)?;
     let null = (prefs.paste_null.as_str().into(), prefs.paste_null == PasteNull::default());
     orphans += &nested_setting(&mut doc, "edit", "paste_null", null)?;
+    let history = (prefs.filter_history.as_str().into(), prefs.filter_history == FilterHistory::default());
+    orphans += &nested_setting(&mut doc, "history", "filters", history)?;
     let check = (prefs.update_check.as_str().into(), prefs.update_check == UpdateCheck::default());
     orphans += &nested_setting(&mut doc, "updates", "check", check)?;
     let whats_new = (prefs.whats_new.as_str().into(), prefs.whats_new == WhatsNewSetting::default());

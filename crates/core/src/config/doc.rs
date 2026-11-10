@@ -81,6 +81,12 @@ pub const TABLES: &[TableDoc] = &[
     TableDoc { name: "explorer", header: "[explorer]", about: "The explorer.", alias_of: None },
     TableDoc { name: "ui", header: "[ui]", about: "Things the whole screen shows.", alias_of: None },
     TableDoc { name: "edit", header: "[edit]", about: "Editing a result's rows.", alias_of: None },
+    TableDoc {
+        name: "history",
+        header: "[history]",
+        about: "What datarig keeps on this machine between runs.",
+        alias_of: None,
+    },
     TableDoc { name: "updates", header: "[updates]", about: "The update check and What's new.", alias_of: None },
     TableDoc { name: "monitor", header: "[monitor]", about: "The server monitor.", alias_of: None },
     TableDoc { name: "secrets", header: "[secrets]", about: "Passwords and the OS keychain.", alias_of: None },
@@ -260,6 +266,8 @@ pub const KEYS: &[KeyDoc] = &[
     key("ui", "background", "\"theme\"", "`\"theme\"`, `\"terminal\"`", ""),
     // [edit]
     key("edit", "paste_null", "\"\\\\N\"", "`\"\\\\N\"`, `\"NULL\"`, `\"none\"`", ""),
+    // [history]
+    key("history", "filters", "\"on\"", "`\"on\"`, `\"off\"` (`true` and `false` read as `\"on\"` and `\"off\"`)", ""),
     // [updates]
     key("updates", "check", "\"on\"", "`\"on\"`, `\"off\"`", ""),
     key("updates", "whats_new", "\"on\"", "`\"on\"`, `\"off\"`", ""),
