@@ -243,36 +243,29 @@ fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
 #[test]
 fn a_bounded_read_is_limited_for_its_statement_and_never_longer_than_the_session() {
     let count = "SELECT COUNT(*) FROM (\nSELECT * FROM `t` WHERE (a > 1) LIMIT 10\n) AS datarig_count";
-    let none = Asked { isolation: String::new(), statement: None, lock: None };
-    let (mysql, applied) = bounded_select(count, Duration::from_secs(30), COUNT_LOCK_WAIT, &none, false).unwrap();
+    let none = Asked { isolation: String::new(), statement: None };
+    let (mysql, applied) = bounded_select(count, Duration::from_secs(30), &none, false).unwrap();
     assert_eq!(
         mysql,
-        "SELECT /*+ MAX_EXECUTION_TIME(30000) SET_VAR(lock_wait_timeout=2) */ COUNT(*) FROM (\nSELECT * FROM `t` WHERE \
+        "SELECT /*+ MAX_EXECUTION_TIME(30000) SET_VAR(lock_wait_timeout=1) */ COUNT(*) FROM (\nSELECT * FROM `t` WHERE \
          (a > 1) LIMIT 10\n) AS datarig_count"
     );
     assert_eq!(applied, Duration::from_secs(30));
-    let (maria, _) = bounded_select(count, Duration::from_millis(1500), COUNT_LOCK_WAIT, &none, true).unwrap();
-    assert_eq!(maria, format!("SET STATEMENT max_statement_time = 1.5, lock_wait_timeout = 2 FOR {count}"));
-    // A shorter limit of the session's stays; a longer one is not taken.
-    let short =
-        Asked { isolation: String::new(), statement: Some(Duration::from_secs(5)), lock: Some(Duration::from_secs(1)) };
-    let (text, applied) = bounded_select(count, Duration::from_secs(30), COUNT_LOCK_WAIT, &short, false).unwrap();
+    let (maria, _) = bounded_select(count, Duration::from_millis(1500), &none, true).unwrap();
+    assert_eq!(maria, format!("SET STATEMENT max_statement_time = 1.5, lock_wait_timeout = 1 FOR {count}"));
+    // A shorter time limit of the session's stays; a longer one is not taken. The lock wait is
+    // the shortest the server takes whatever the session's.
+    let short = Asked { isolation: String::new(), statement: Some(Duration::from_secs(5)) };
+    let (text, applied) = bounded_select(count, Duration::from_secs(30), &short, false).unwrap();
     assert!(text.starts_with("SELECT /*+ MAX_EXECUTION_TIME(5000) SET_VAR(lock_wait_timeout=1) */ COUNT(*)"), "{text}");
     assert_eq!(applied, Duration::from_secs(5));
-    let long = Asked {
-        isolation: String::new(),
-        statement: Some(Duration::from_secs(60)),
-        lock: Some(Duration::from_secs(50)),
-    };
-    let (text, applied) = bounded_select(count, Duration::from_secs(30), COUNT_LOCK_WAIT, &long, false).unwrap();
-    assert!(text.starts_with("SELECT /*+ MAX_EXECUTION_TIME(30000) SET_VAR(lock_wait_timeout=2) */"), "{text}");
+    let long = Asked { isolation: String::new(), statement: Some(Duration::from_secs(60)) };
+    let (text, applied) = bounded_select(count, Duration::from_secs(30), &long, false).unwrap();
+    assert!(text.starts_with("SELECT /*+ MAX_EXECUTION_TIME(30000) SET_VAR(lock_wait_timeout=1) */"), "{text}");
     assert_eq!(applied, Duration::from_secs(30));
     // Only the app's own form, a text starting with `SELECT`.
-    assert!(bounded_select(" SELECT 1", Duration::from_secs(1), COUNT_LOCK_WAIT, &none, false).is_none());
-    assert!(
-        bounded_select("WITH x AS (SELECT 1) SELECT * FROM x", Duration::from_secs(1), COUNT_LOCK_WAIT, &none, false)
-            .is_none()
-    );
+    assert!(bounded_select(" SELECT 1", Duration::from_secs(1), &none, false).is_none());
+    assert!(bounded_select("WITH x AS (SELECT 1) SELECT * FROM x", Duration::from_secs(1), &none, false).is_none());
     // The session's limits as the server writes them.
     assert_eq!(session_limit("0", false), None);
     assert_eq!(session_limit("2500", false), Some(Duration::from_millis(2500)));

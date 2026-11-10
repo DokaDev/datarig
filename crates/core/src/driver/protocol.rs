@@ -15,7 +15,9 @@ use std::time::Duration;
 
 /// How long a count or an estimate of the app's own ([`DbCommand::Count`] with a `limit`,
 /// [`DbCommand::Estimate`]) waits for a lock another session holds or asked for before the
-/// server gives up ([`DbError::LockTimeout`]): as long as a lookup of the metadata session.
+/// server gives up ([`DbError::LockTimeout`]) on PostgreSQL: as long as a lookup of the metadata
+/// session. MySQL's waits 1 s, the shortest it takes (the session's own wait is not read on
+/// the way, and the app's is never longer than it).
 pub const COUNT_LOCK_WAIT: Duration = Duration::from_secs(2);
 
 /// How long the server may plan an estimate ([`DbCommand::Estimate`]) before it stops it
@@ -613,7 +615,7 @@ pub enum DbCommand {
     /// longer than a limit the session has already; inside the user's block it runs without
     /// one), MySQL for the statement alone (an optimizer hint; MariaDB's `SET STATEMENT`). A
     /// count the server stopped at the limit answers [`DbError::TimedOut`]; one that waited
-    /// longer than [`COUNT_LOCK_WAIT`] for a lock another session holds answers
+    /// longer than [`COUNT_LOCK_WAIT`] (MySQL: 1 s) for a lock another session holds answers
     /// [`DbError::LockTimeout`]. Never 0 rows for either.
     Count {
         id: u64,
@@ -625,7 +627,7 @@ pub enum DbCommand {
     /// session's plan format, after the allowlist's question to the server. Only while no
     /// transaction is open on the session (no user's block, no portal held): the locks planning
     /// takes end with the read-only transaction of its own it runs in, which waits at most
-    /// [`COUNT_LOCK_WAIT`] for a lock and [`ESTIMATE_LIMIT`] in all. Answered with exactly one
+    /// [`COUNT_LOCK_WAIT`] (MySQL: 1 s) for a lock and [`ESTIMATE_LIMIT`] in all. Answered with exactly one
     /// [`DbEvent::Estimated`]; with a transaction open, or on a server without a plan format the
     /// driver reads, [`DbError::NotSupported`] and nothing is sent. A cancel stops it.
     Estimate {

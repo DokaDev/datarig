@@ -5760,7 +5760,7 @@ async fn estimate(c: &mut Conn, id: u64, sql: &str) -> (Result<u64, DbError>, Du
 
 /// A count with a time limit, behind a metadata lock another session holds (`LOCK TABLES …
 /// WRITE`): the server stops it at the limit (`TimedOut`), or it gives up waiting for the lock
-/// after 2 s (`LockTimeout`) when the limit is longer; a cancel is `Cancelled`; a session's own
+/// after 1 s (`LockTimeout`) when the limit is longer; a cancel is `Cancelled`; a session's own
 /// shorter limit is kept. None of them is a number, and nothing of the limits stays on the session.
 /// The estimate waits for the lock as long, and comes when the table is free.
 #[tokio::test(flavor = "multi_thread")]
@@ -5781,12 +5781,12 @@ async fn a_bounded_count_and_an_estimate_are_told_apart_when_stopped() {
     // Held by another session.
     let mut b = side(&url).await;
     b.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
-    let (got, took) = count_within(&mut c, 3, &counted, Some(Duration::from_secs(1))).await;
-    assert_eq!(got, Err(DbError::TimedOut(Duration::from_secs(1))), "{took:?}");
-    assert!(took < Duration::from_secs(2), "stopped at the limit: {took:?}");
+    let (got, took) = count_within(&mut c, 3, &counted, Some(Duration::from_millis(400))).await;
+    assert_eq!(got, Err(DbError::TimedOut(Duration::from_millis(400))), "{took:?}");
+    assert!(took < Duration::from_secs(1), "stopped at the limit, before the lock wait's: {took:?}");
     let (got, took) = count_within(&mut c, 4, &counted, limit).await;
     assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
-    assert!(took >= Duration::from_secs(2) && took < Duration::from_secs(10), "{took:?}");
+    assert!(took >= Duration::from_secs(1) && took < Duration::from_secs(10), "{took:?}");
     let (got, took) = estimate(&mut c, 5, &rows).await;
     assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
     assert!(took < Duration::from_secs(10), "{took:?}");
@@ -5811,6 +5811,37 @@ async fn a_bounded_count_and_an_estimate_are_told_apart_when_stopped() {
     assert_ne!(values[0][1].as_deref(), Some("2"));
     c.ok(10, "SET SESSION max_execution_time = 0").await;
     assert_eq!(count_within(&mut c, 11, &counted, limit).await.0, Ok(1900));
+}
+
+/// A bounded count and an estimate wait 1 s for a metadata lock another session holds, the
+/// shortest wait the server takes, so never longer than the session's own (here
+/// `lock_wait_timeout = 1`, which the allowlist's question cannot see: its own hint sets the
+/// variable for itself), and the session's value stays.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shorter_lock_wait_of_the_sessions_own_stays_a_bounded_reads_limit() {
+    let test = "a_shorter_lock_wait_of_the_sessions_own_stays_a_bounded_reads_limit";
+    let Some((url, admin)) = urls(test) else { return };
+    let _end = EndSessions { admin: admin.clone(), test };
+    let t = numbers(&admin, "lockwait", 50).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let rows = format!("SELECT * FROM {} WHERE (id > 10)", t.q());
+    let counted = format!("SELECT COUNT(*) FROM (\n{rows}\n) AS datarig_count");
+    let limit = Some(Duration::from_secs(30));
+    c.ok(1, "SET SESSION lock_wait_timeout = 1").await;
+    let mut b = side(&url).await;
+    b.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
+    let (got, took) = count_within(&mut c, 2, &counted, limit).await;
+    assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
+    assert!(took >= Duration::from_secs(1) && took < Duration::from_millis(1800), "the session's 1 s: {took:?}");
+    let (got, took) = estimate(&mut c, 3, &rows).await;
+    assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
+    assert!(took >= Duration::from_secs(1) && took < Duration::from_millis(1800), "the session's 1 s: {took:?}");
+    b.query_drop("UNLOCK TABLES").await.unwrap();
+    b.disconnect().await.unwrap();
+    let evs = c.run(4, &["SELECT @@SESSION.lock_wait_timeout"]).await;
+    let (_, values, _) = page_of(&evs);
+    assert_eq!(values[0][0].as_deref(), Some("1"), "the user's own stays");
+    assert_eq!(count_within(&mut c, 5, &counted, limit).await.0, Ok(40));
 }
 
 /// The estimate is not asked with a transaction open (its metadata lock would stay until the
