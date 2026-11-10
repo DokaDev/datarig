@@ -118,4 +118,6 @@
 "table.filter.by_value.nondeterministic" = "값으로 필터하지 않음: PostgreSQL은 비결정적 콜레이션 {collation}에서 ILIKE를 거부합니다"
 "table.filter.by_value.nondeterministic_column" = "값으로 필터하지 않음: 열 “{column}”의 콜레이션이 비결정적이라 PostgreSQL이 ILIKE를 거부합니다"
 "table.filter.by_value.collation_unknown" = "값으로 필터하지 않음: 열 “{column}”의 콜레이션이 ILIKE를 받는지 아직 모릅니다 (탭의 다음 실행 때 읽습니다)"
+"table.filter.by_value.like_refused" = "값으로 필터하지 않음: PostgreSQL 18 이전 버전은 열 “{column}”의 비결정적 콜레이션에서 LIKE를 거부합니다"
+"table.filter.by_value.like_unknown" = "값으로 필터하지 않음: 서버가 열 “{column}”의 콜레이션에서 LIKE를 받는지 아직 모릅니다 (탭의 다음 실행 때 읽습니다)"
 "table.filter.by_value.base" = "값으로 필터하지 않음: 보이는 행의 필터 뒤에 조건을 붙일 수 없습니다: {why}"

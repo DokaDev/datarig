@@ -1107,6 +1107,11 @@ async fn order_keys_are_read_without_a_lock() {
     let mut meta = Conn { session: PgDriver.connect(&cfg, SessionRole::Meta, o, tx), rx };
     meta.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
     let mut observer = Conn::open(&url, SessionRole::Query).await;
+    // The server's version: `LIKE` takes a nondeterministic collation from 18 on.
+    let DbEvent::Page { rows, .. } = observer.run(1, "SELECT current_setting('server_version_num')::int").await else {
+        panic!("server_version_num")
+    };
+    let version: u32 = rows[0][0].as_deref().and_then(|v| v.parse().ok()).expect("a version");
     let mut n = 100;
     // The keys of `table`, how long they took, and the relation locks the metadata session held
     // or asked for on the schema's relations while they were read (looked at 300 ms in, or when
@@ -1139,14 +1144,18 @@ async fn order_keys_are_read_without_a_lock() {
         unique_not_null: vec![vec!["email".into()], vec!["later".into()]],
         ..OrderKeys::default()
     };
-    // The keys alone (whether each column's collation is deterministic looked at apart).
-    let strip =
-        |r: &Result<OrderKeys, DbError>| r.clone().map(|k| OrderKeys { deterministic: Default::default(), ..k });
+    // The keys alone (whether each column's collation is deterministic, and what `LIKE` takes,
+    // looked at apart).
+    let strip = |r: &Result<OrderKeys, DbError>| {
+        r.clone().map(|k| OrderKeys { deterministic: Default::default(), like_nondeterministic: None, ..k })
+    };
     let deterministic = |pairs: &[(&str, bool)]| pairs.iter().map(|(c, d)| (c.to_string(), *d)).collect();
     let probe_columns: std::collections::BTreeMap<String, bool> =
         deterministic(&[("a", true), ("b", true), ("email", true), ("nick", true), ("note", true), ("later", true)]);
     let (keys, _, _) = ask("keys_probe").await;
     assert_eq!(strip(&keys), Ok(probe.clone()));
+    // Said for the server: `LIKE` on a nondeterministic collation is taken from 18 on.
+    assert_eq!(keys.as_ref().map(|k| k.like_nondeterministic), Ok(Some(version >= 180_000)), "{version}");
     assert_eq!(
         keys.as_ref().map(|k| &k.deterministic),
         Ok(&probe_columns),

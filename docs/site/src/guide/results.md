@@ -109,7 +109,9 @@ they are not the filter's answer; a cancelled run or a lost connection leaves th
 `F` (or `Space r F`, or "Table → filter by value" in the grid's right-click menu) filters a table
 tab by the value of the cell under the cursor. The menu offers `=`, `<>`, `<>` with the rows whose
 value is NULL kept (`IS DISTINCT FROM` on PostgreSQL, `NOT (… <=> …)` on MySQL), `<`, `>`, `<=` and
-`>=`; for text also "starts with" (`LIKE 'value%'`, its `%` and `_` escaped with `!`) and "contains
+`>=`; for text also "starts with" (`LIKE 'value%'`, its `%` and `_` escaped with `!`; on
+PostgreSQL before 18, which refuses `LIKE` on a nondeterministic collation, offered once datarig
+has read that the column's collation is deterministic) and "contains
 (case-insensitive)" (`ILIKE` on PostgreSQL, offered once datarig has read that the column's
 collation is deterministic, which it does with the tab's runs; on MySQL `LIKE`, which a `_ci`
 collation compares without case, else `LOWER(…) LIKE LOWER(…)`). A NULL cell offers only `IS NULL`

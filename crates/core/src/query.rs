@@ -233,13 +233,24 @@ pub struct Target {
     /// MySQL: the session's character set is known to be `utf8mb4`, so a plain string literal
     /// is read as written. When unknown, text is written as its UTF-8 bytes.
     pub utf8mb4: bool,
+    /// PostgreSQL: whether the server takes `LIKE` on a nondeterministic collation (version 18
+    /// and later; `ILIKE` never). `None`: not known.
+    pub like_nondeterministic: Option<bool>,
 }
 
 impl Target {
     /// A table of dialect `d` with these columns and nothing else known: no key, a tie-breaker
-    /// wanted, the session's character set unknown.
+    /// wanted, the session's character set and what `LIKE` takes unknown.
     pub fn new(dialect: Dialect, columns: Vec<ColumnFacts>) -> Self {
-        Self { dialect, columns, primary_key: Vec::new(), unique_keys: Vec::new(), tie_break: true, utf8mb4: false }
+        Self {
+            dialect,
+            columns,
+            primary_key: Vec::new(),
+            unique_keys: Vec::new(),
+            tie_break: true,
+            utf8mb4: false,
+            like_nondeterministic: None,
+        }
     }
 
     /// The facts of column `name`, if known.

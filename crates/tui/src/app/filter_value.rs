@@ -283,6 +283,14 @@ impl App {
                         Notice::new(Msg::TableFilterByValueCollationUnknown { column: column.clone() }, Level::Warning);
                     Off::new(Label::TableFilterByValueOffCollationUnknown, n)
                 }
+                RenderError::LikeRefused(_) => {
+                    let n = Notice::new(Msg::TableFilterByValueLikeRefused { column: column.clone() }, Level::Warning);
+                    Off::new(Label::TableFilterByValueOffCollation, n)
+                }
+                RenderError::LikeUnknown(_) => {
+                    let n = Notice::new(Msg::TableFilterByValueLikeUnknown { column: column.clone() }, Level::Warning);
+                    Off::new(Label::TableFilterByValueOffCollationUnknown, n)
+                }
                 _ => Off::new(Label::TableFilterByValueOffType, self.by_value_type_notice(m)),
             })?;
             // The filter shown is one condition (it ran): refused, never repaired, when not.
@@ -431,8 +439,9 @@ impl App {
                     case_hint,
                     like(query::like_starts_with(v), CaseMode::Server),
                 ));
-                // PostgreSQL: `ILIKE` only on a collation known deterministic, else dimmed with
-                // why; MySQL: a collation not known by name is lowered on both sides.
+                // PostgreSQL: `LIKE` on a collation known deterministic or a server known to take
+                // it on any (18 and later), `ILIKE` only on a collation known deterministic, else
+                // dimmed with why; MySQL: a collation not known by name is lowered on both sides.
                 let known = target.column(&column).is_some_and(|f| f.collation.is_some());
                 let contains_hint = match d {
                     Dialect::MySql(_) if !known => hint(Label::TableFilterByValueHintCollationLower),

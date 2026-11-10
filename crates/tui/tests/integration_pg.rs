@@ -2744,14 +2744,15 @@ async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() 
 /// PostgreSQL's "contains" (`ILIKE`) is offered only on a column whose collation the key-only
 /// catalog read says is deterministic: on a column of a nondeterministic ICU collation it is
 /// dimmed with why (and nothing is sent), on the other text column it runs and reads back its
-/// rows. Makes schema `zz_it_coll_<pid>` with the collation `zz_ci` and a table in it, and
-/// drops them.
+/// rows. "starts with" (`LIKE`) on the nondeterministic column is dimmed before PostgreSQL 18,
+/// which refuses it, and reads back its rows from 18 on. Makes schema `zz_it_coll_<pid>` with
+/// the collation `zz_ci` and a table in it, and drops them.
 #[tokio::test(flavor = "multi_thread")]
-async fn contains_is_offered_only_where_the_collation_is_known_deterministic() {
+async fn patterns_are_offered_only_where_the_collation_takes_them() {
     use datarig_tui::app::action::Action;
     use datarig_tui::app::filter_value::ByValue as B;
     use datarig_tui::app::menu::{MenuItem, MenuLine};
-    let Some(url) = pg_url("contains_is_offered_only_where_the_collation_is_known_deterministic") else { return };
+    let Some(url) = pg_url("patterns_are_offered_only_where_the_collation_takes_them") else { return };
     let schema = format!("zz_it_coll_{}", std::process::id());
     let _guard = SchemaGuard { url: url.clone(), schema: schema.clone() };
     let s = &schema;
@@ -2787,12 +2788,32 @@ async fn contains_is_offered_only_where_the_collation_is_known_deterministic() {
     let why = m.off_of(contains).map(|o| o.notice.render(&app.i18n).to_string());
     assert!(why.as_deref().is_some_and(|w| w.contains("is nondeterministic")), "{why:?}");
     assert!(m.off_of(MenuItem::Filter(B::Eq)).is_none(), "equality is offered");
+    // "starts with" (`LIKE`) there: PostgreSQL before 18 refuses it, 18 takes it.
+    let before_18 = "DO $$ BEGIN IF current_setting('server_version_num')::int < 180000 \
+                     THEN RAISE EXCEPTION 'before 18'; END IF; END $$";
+    let pg18 = match pg_clean::run_fresh(&url, before_18) {
+        Ok(()) => true,
+        Err(e) if e.contains("before 18") => false,
+        Err(e) => panic!("{e}"),
+    };
+    let starts = m.off_of(MenuItem::Filter(B::StartsWith)).map(|o| o.notice.render(&app.i18n).to_string());
+    match pg18 {
+        true => assert_eq!(starts, None, "offered from 18 on"),
+        false => {
+            assert!(starts.as_deref().is_some_and(|w| w.contains("PostgreSQL before 18 refuses LIKE")), "{starts:?}")
+        }
+    }
     app.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
     assert_eq!(app.tab().exec.query_id, qid, "nothing sent");
     // The column of the default collation: offered, and it reads back its rows.
     let (got, ran) = by_value(&mut app, &mut rx, &["1"], "plain", B::Contains).await;
     assert_eq!(ran, "plain ILIKE '%Apple%' ESCAPE '!'");
     assert_eq!(got, ["1", "2"]);
+    if pg18 {
+        let (got, ran) = by_value(&mut app, &mut rx, &["1"], "ci", B::StartsWith).await;
+        assert_eq!(ran, "plain ILIKE '%Apple%' ESCAPE '!' AND ci LIKE 'Apple%' ESCAPE '!'");
+        assert_eq!(got, ["1", "2"], "case as the collation compares");
+    }
     drop(app);
     let _ = std::fs::remove_dir_all(&dir);
 }

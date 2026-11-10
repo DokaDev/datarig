@@ -137,10 +137,23 @@ pub(crate) fn keys_of(rows: Vec<RawRow>) -> Result<OrderKeys, DbError> {
     Ok(keys)
 }
 
-/// Read the keys of `schema.table` ([`ORDER_KEYS`], in a read-only transaction of its own).
-pub(crate) async fn load_order_keys(client: &Client, schema: &str, table: &str) -> Result<OrderKeys, DbError> {
+/// Read the keys of `schema.table` ([`ORDER_KEYS`], in a read-only transaction of its own) on a
+/// server of version `version` (`server_version_num`).
+pub(crate) async fn load_order_keys(
+    client: &Client,
+    schema: &str,
+    table: &str,
+    version: u32,
+) -> Result<OrderKeys, DbError> {
     let rows = read(client, ORDER_KEYS, &[(&schema, Type::TEXT), (&table, Type::TEXT)]).await?;
-    keys_of(rows.iter().map(|r| (r.get(0), r.get(1), r.get(2), r.get(3), r.get(4), r.get(5))).collect())
+    let keys = keys_of(rows.iter().map(|r| (r.get(0), r.get(1), r.get(2), r.get(3), r.get(4), r.get(5))).collect())?;
+    Ok(OrderKeys { like_nondeterministic: Some(like_nondeterministic(version)), ..keys })
+}
+
+/// Whether a server of version `version` takes `LIKE` on a nondeterministic collation: since 18
+/// (`ILIKE` and the regular expressions still refuse it).
+pub(crate) fn like_nondeterministic(version: u32) -> bool {
+    version >= 180_000
 }
 
 #[cfg(test)]
@@ -206,5 +219,13 @@ mod tests {
         assert!(k.deterministic.is_empty());
         // No such table: not found, never "no key".
         assert_eq!(keys_of(Vec::new()), Err(DbError::NotFound));
+    }
+
+    #[test]
+    fn like_takes_a_nondeterministic_collation_from_18() {
+        assert!(!like_nondeterministic(120_000));
+        assert!(!like_nondeterministic(170_006));
+        assert!(like_nondeterministic(180_000));
+        assert!(like_nondeterministic(190_001));
     }
 }

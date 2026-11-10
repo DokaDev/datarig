@@ -656,6 +656,7 @@ impl App {
             for c in target.columns.iter_mut().filter(|c| c.deterministic.is_none()) {
                 c.deterministic = k.deterministic.get(&c.name).copied();
             }
+            target.like_nondeterministic = k.like_nondeterministic;
         }
         if let Some(k) = read.filter(|k| !k.inherited) {
             target.primary_key = k.primary_key.clone();

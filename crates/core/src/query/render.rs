@@ -29,7 +29,9 @@
 //! Patterns are escaped with `!` and written with `ESCAPE '!'`: a backslash would read
 //! differently under MySQL's `NO_BACKSLASH_ESCAPES`. A PostgreSQL pattern without case is
 //! `ILIKE`, written only on a column whose collation is known to be deterministic (the server
-//! refuses it on a nondeterministic one).
+//! refuses it on a nondeterministic one). A PostgreSQL `LIKE` is written on such a column, or on
+//! a server known to take it on any collation (18 and later; before, it refuses a
+//! nondeterministic one).
 
 use super::{BarRefusal, CaseMode, CmpOp, ColumnFacts, ColumnKind, Cond, Target, Value};
 use crate::export::{negative_zero, sql_number};
@@ -63,6 +65,12 @@ pub enum RenderError {
     /// A case-insensitive pattern on a PostgreSQL column whose collation is not known to be
     /// deterministic (it may be one the server refuses `ILIKE` on): the column.
     CollationUnknown(String),
+    /// A pattern with the server's case on a PostgreSQL column whose collation is not
+    /// deterministic, on a server before 18, which refuses `LIKE` there: the column.
+    LikeRefused(String),
+    /// A pattern with the server's case on a PostgreSQL column whose collation is not known to
+    /// be deterministic, on a server not known to take `LIKE` on one that is not: the column.
+    LikeUnknown(String),
 }
 
 /// The escape character of the patterns written here.
@@ -157,7 +165,15 @@ fn render_at(c: &Cond, t: &Target, place: Place) -> Result<String, RenderError> 
             let e = d.quote_literal(&ESCAPE.to_string());
             let facts = t.column(name);
             match (d, case) {
-                (_, CaseMode::Server) => format!("{} {}LIKE {p} ESCAPE {e}", col(name), not(*negated)),
+                (Dialect::Postgres, CaseMode::Server) => {
+                    match (facts.and_then(|f| f.deterministic), t.like_nondeterministic) {
+                        (Some(true), _) | (_, Some(true)) => {}
+                        (Some(false), Some(false)) => return Err(RenderError::LikeRefused(name.clone())),
+                        _ => return Err(RenderError::LikeUnknown(name.clone())),
+                    }
+                    format!("{} {}LIKE {p} ESCAPE {e}", col(name), not(*negated))
+                }
+                (Dialect::MySql(_), CaseMode::Server) => format!("{} {}LIKE {p} ESCAPE {e}", col(name), not(*negated)),
                 (Dialect::Postgres, CaseMode::Insensitive) => {
                     match facts.and_then(|f| f.deterministic) {
                         Some(true) => {}

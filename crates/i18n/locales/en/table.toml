@@ -120,4 +120,6 @@
 "table.filter.by_value.nondeterministic" = "Not filtered by value: PostgreSQL refuses ILIKE on the nondeterministic collation {collation}"
 "table.filter.by_value.nondeterministic_column" = "Not filtered by value: the collation of column “{column}” is nondeterministic, which PostgreSQL refuses ILIKE on"
 "table.filter.by_value.collation_unknown" = "Not filtered by value: whether the collation of column “{column}” takes ILIKE is not known yet (it is read with the tab's next run)"
+"table.filter.by_value.like_refused" = "Not filtered by value: PostgreSQL before 18 refuses LIKE on the nondeterministic collation of column “{column}”"
+"table.filter.by_value.like_unknown" = "Not filtered by value: whether the server takes LIKE on the collation of column “{column}” is not known yet (it is read with the tab's next run)"
 "table.filter.by_value.base" = "Not filtered by value: the filter of the rows shown does not take a condition after it: {why}"

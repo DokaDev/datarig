@@ -84,8 +84,14 @@ fn page(h: &mut Harness) {
 /// The key-only read's answer for `shop.users`: no key, and whether the collation of `name` is
 /// deterministic (`None`: not said).
 fn collations(name: Option<bool>) -> datarig_core::driver::keys::OrderKeys {
+    collations_on(name, None)
+}
+
+/// [`collations`] from a server that says whether it takes `LIKE` on a nondeterministic
+/// collation (`like`; `None`: not said).
+fn collations_on(name: Option<bool>, like: Option<bool>) -> datarig_core::driver::keys::OrderKeys {
     let deterministic = name.map(|d| ("name".to_string(), d)).into_iter().collect();
-    datarig_core::driver::keys::OrderKeys { deterministic, ..Default::default() }
+    datarig_core::driver::keys::OrderKeys { deterministic, like_nondeterministic: like, ..Default::default() }
 }
 
 /// `shop.users` open and answered (the collation of `name` read as deterministic), the grid
@@ -234,9 +240,11 @@ fn the_entries_of_a_cell_with_their_hints() {
 
 /// PostgreSQL's "contains" (`ILIKE`) is offered only on a column whose collation is known to be
 /// deterministic, as the key-only read says (no structure read): not known yet, or known not
-/// to be, it is dimmed with why.
+/// to be, it is dimmed with why. "starts with" (`LIKE`) is offered there too, or on a server
+/// the key-only read says takes `LIKE` on any collation (18 and later): before 18 the server
+/// refuses it on a nondeterministic one.
 #[test]
-fn contains_is_offered_only_on_a_collation_known_deterministic() {
+fn patterns_are_offered_only_where_the_collation_takes_them() {
     let label = "contains 'it's' (case-insensitive)";
     let dimmed = |h: &Harness| h.app.menu_dimmed_rows().into_iter().find(|(l, _)| l == label).map(|(_, why)| why);
     for (keys, why, says) in [
@@ -252,12 +260,48 @@ fn contains_is_offered_only_on_a_collation_known_deterministic() {
         let notice = h.app.menu_dimmed_notice(label).expect("dimmed").render(&h.app.i18n).to_string();
         assert!(notice.contains(says), "{notice}");
         assert!(runs(&mut h).is_empty(), "nothing runs");
-        // The other entries are not about the collation.
+        // Equality is not about the collation.
         h.key(KeyCode::Esc);
-        assert_eq!(
-            filter(&mut h, 0, 1, "starts with 'it's'"),
-            vec![vec![format!("{ALL} WHERE (name LIKE 'it''s%' ESCAPE '!')")]]
-        );
+        assert_eq!(filter(&mut h, 0, 1, "= 'it's'"), vec![vec![format!("{ALL} WHERE (name = 'it''s')")]]);
+    }
+    // "starts with" (`LIKE`): on a collation known deterministic, or on a server known to take
+    // `LIKE` on any (PostgreSQL 18 and later); else dimmed with why.
+    let starts = "starts with 'it's'";
+    let starts_dimmed =
+        |h: &Harness| h.app.menu_dimmed_rows().into_iter().find(|(l, _)| l == starts).map(|(_, why)| why);
+    for (keys, why) in [
+        (None, Some(("collation not known yet", "whether the server takes LIKE on the collation of column “name”"))),
+        (Some(collations_on(None, Some(false))), Some(("collation not known yet", "is not known yet"))),
+        (Some(collations_on(Some(false), None)), Some(("collation not known yet", "is not known yet"))),
+        (
+            Some(collations_on(Some(false), Some(false))),
+            Some(("nondeterministic", "PostgreSQL before 18 refuses LIKE on the nondeterministic collation")),
+        ),
+        (Some(collations_on(Some(false), Some(true))), None),
+        (Some(collations_on(None, Some(true))), None),
+        (Some(collations_on(Some(true), Some(false))), None),
+    ] {
+        let mut h = users_with(keys.clone());
+        at(&mut h, 0, 1);
+        h.keys("F");
+        assert!(menu_open(&h), "{}", flashed(&h));
+        match why {
+            Some((short, says)) => {
+                assert_eq!(starts_dimmed(&h).as_deref(), Some(short), "{keys:?}");
+                let notice = h.app.menu_dimmed_notice(starts).expect("dimmed").render(&h.app.i18n).to_string();
+                assert!(notice.contains(says), "{keys:?}: {notice}");
+                assert!(runs(&mut h).is_empty(), "nothing runs");
+            }
+            None => {
+                assert_eq!(starts_dimmed(&h), None, "{keys:?}");
+                h.key(KeyCode::Esc);
+                assert_eq!(
+                    filter(&mut h, 0, 1, starts),
+                    vec![vec![format!("{ALL} WHERE (name LIKE 'it''s%' ESCAPE '!')")]],
+                    "{keys:?}"
+                );
+            }
+        }
     }
     // Known deterministic: offered.
     let mut h = users();

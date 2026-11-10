@@ -550,7 +550,39 @@ fn render_like_escapes_the_value() {
         render(&like("name", CaseMode::Insensitive), &t),
         Err(RenderError::CaseInsensitiveRefused("name".into()))
     );
-    assert!(render(&like("name", CaseMode::Server), &t).is_ok());
+    assert_eq!(render(&like("name", CaseMode::Server), &t), Err(RenderError::LikeUnknown("name".into())));
+}
+
+/// PostgreSQL before 18 refuses `LIKE` on a nondeterministic collation (18 takes it; `ILIKE`
+/// never): "starts with" is written on a collation known deterministic, or on a server known to
+/// take it; refused when both are known not to, not written when either is not known.
+#[test]
+fn render_like_on_a_nondeterministic_collation_needs_postgres_18() {
+    let like =
+        Cond::Like { col: "name".into(), pattern: like_starts_with("a"), negated: false, case: CaseMode::Server };
+    let ilike =
+        Cond::Like { col: "name".into(), pattern: like_contains("a"), negated: false, case: CaseMode::Insensitive };
+    let written = "name LIKE 'a%' ESCAPE '!'";
+    for takes in [None, Some(false), Some(true)] {
+        let mut t = Target { like_nondeterministic: takes, ..target(Dialect::Postgres) };
+        // Known deterministic: whatever the server.
+        assert_eq!(render(&like, &t).unwrap(), written, "{takes:?}");
+        for det in [Some(false), None] {
+            t.columns[1].deterministic = det;
+            let want = match (det, takes) {
+                (_, Some(true)) => Ok(written.to_string()),
+                (Some(false), Some(false)) => Err(RenderError::LikeRefused("name".into())),
+                _ => Err(RenderError::LikeUnknown("name".into())),
+            };
+            assert_eq!(render(&like, &t), want, "{det:?} {takes:?}");
+            // `ILIKE` stays refused on a collation not known deterministic, on 18 too.
+            assert!(render(&ilike, &t).is_err(), "{det:?} {takes:?}");
+        }
+    }
+    // MySQL: its collations take `LIKE` (known by name, never refused for this).
+    let mut t = Target { utf8mb4: true, ..target(MY) };
+    t.columns[1].deterministic = None;
+    assert_eq!(render(&like, &t).unwrap(), written);
 }
 
 #[test]
