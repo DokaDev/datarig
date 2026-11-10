@@ -6650,6 +6650,7 @@ async fn a_schema_ahead_of_pg_catalog_does_not_answer_whether_a_block_is_open() 
         statements: vec!["SELECT 1 / 0".to_string()],
         paging: PagingMode::Hold,
         tx: TxRule::Auto,
+        max_rows: None,
     });
     let events = c.drain(500).await;
     assert!(events.iter().any(|e| matches!(e, DbEvent::Failed { id: 3, .. })), "{events:?}");
