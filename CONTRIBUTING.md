@@ -20,6 +20,9 @@ the code is good: with a single maintainer, unplanned changes are hard to review
 into the plan. Small fixes such as typos or broken links can skip the issue: say so in the
 description with the line `no issue: <reason>`.
 
+To report a security vulnerability, please don't open an issue: follow
+[the security policy](SECURITY.md) to report it privately.
+
 Planned and in-progress work is tracked in
 [the issues](https://github.com/DokaDev/datarig/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap),
 so it's worth a look before you start. Thank you for bearing with this while the project is
