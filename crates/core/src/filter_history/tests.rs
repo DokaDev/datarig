@@ -54,7 +54,7 @@ fn a_file_that_cannot_be_read_is_not_an_empty_history() {
     assert_eq!(load(&path), Err(Unreadable::Malformed { line: None }), "not UTF-8");
     fs::remove_file(&path).unwrap();
     fs::create_dir(&path).unwrap();
-    assert!(matches!(load(&path), Err(Unreadable::Io(_))), "a folder at the path");
+    assert_eq!(load(&path), Err(Unreadable::NotAFile), "a folder at the path");
     let _ = fs::remove_dir_all(&d);
 }
 
@@ -201,4 +201,81 @@ fn clearing_a_table_or_everything() {
     assert_eq!(h.clear_all(), 1);
     assert_eq!(h, History::default());
     assert_eq!(parse(&h.to_toml()), Ok(History::default()));
+}
+
+/// A valid file of one entry, as text.
+fn one_entry() -> String {
+    let mut h = History::default();
+    h.record(key("orders"), "id = 1", "", 1);
+    h.to_toml()
+}
+
+/// A symbolic link at the path, to a file or to nothing, is never followed: it cannot be read
+/// (never an empty history), a write is refused, and the link and what it points to stay.
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_path_is_never_read_nor_written_through() {
+    let d = dir("link");
+    let path = d.join(FILE);
+    let elsewhere = d.join("elsewhere.toml");
+    fs::write(&elsewhere, one_entry()).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+    assert_eq!(load(&path), Err(Unreadable::NotAFile), "a link to a valid file");
+    assert!(write(&path, "version = 1\n").is_err());
+    assert_eq!(fs::read_to_string(&elsewhere).unwrap(), one_entry(), "the file it points to is untouched");
+    assert!(fs::symlink_metadata(&path).unwrap().file_type().is_symlink(), "the link stays");
+    fs::remove_file(&path).unwrap();
+    let nowhere = d.join("nowhere.toml");
+    std::os::unix::fs::symlink(&nowhere, &path).unwrap();
+    assert_eq!(load(&path), Err(Unreadable::NotAFile), "a link to nothing is not a missing file");
+    assert!(write(&path, "version = 1\n").is_err());
+    assert!(fs::symlink_metadata(&nowhere).is_err(), "nothing is created where it points");
+    assert!(fs::symlink_metadata(&path).unwrap().file_type().is_symlink(), "the link stays");
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// A FIFO at the path is not opened for reading (which would wait for a writer forever).
+#[cfg(unix)]
+#[test]
+fn a_fifo_at_the_path_is_not_a_file() {
+    let d = dir("fifo");
+    let path = d.join(FILE);
+    let made = std::process::Command::new("mkfifo").arg(&path).status();
+    if !made.is_ok_and(|s| s.success()) {
+        return; // No mkfifo here: nothing to check.
+    }
+    assert_eq!(load(&path), Err(Unreadable::NotAFile));
+    assert!(write(&path, "version = 1\n").is_err());
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// Whatever is at the name a write used to put its bytes in first (`.<name>.tmp-<pid>`) is
+/// left alone: a link there is not written through, a second name of the file itself is not
+/// truncated before the new file replaces it, a file there keeps its bytes.
+#[cfg(unix)]
+#[test]
+fn a_write_never_goes_into_what_is_already_there() {
+    let d = dir("planted");
+    let path = d.join(FILE);
+    write(&path, "version = 1\n").unwrap();
+    let planted = d.join(format!(".{FILE}.tmp-{}", std::process::id()));
+    let victim = d.join("victim");
+    fs::write(&victim, "victim").unwrap();
+    std::os::unix::fs::symlink(&victim, &planted).unwrap();
+    write(&path, &one_entry()).unwrap();
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "victim", "not written through the link");
+    assert_eq!(fs::read_to_string(&path).unwrap(), one_entry());
+    assert!(fs::symlink_metadata(&planted).unwrap().file_type().is_symlink(), "the link is left alone");
+    fs::remove_file(&planted).unwrap();
+    // A second name of the file: the old bytes stay under it, the new ones come in a new file.
+    fs::hard_link(&path, &planted).unwrap();
+    write(&path, "version = 1\n").unwrap();
+    assert_eq!(fs::read_to_string(&planted).unwrap(), one_entry(), "the old file was not truncated");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "version = 1\n");
+    fs::remove_file(&planted).unwrap();
+    fs::write(&planted, "someone else's").unwrap();
+    write(&path, &one_entry()).unwrap();
+    assert_eq!(fs::read_to_string(&planted).unwrap(), "someone else's");
+    assert_eq!(fs::read_to_string(&path).unwrap(), one_entry());
+    let _ = fs::remove_dir_all(&d);
 }

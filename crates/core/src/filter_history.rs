@@ -27,7 +27,8 @@
 //! A file that is not there is an empty history. A file that is there but cannot be read, is
 //! not this shape (anything missing, of another type or not known), was written by a newer
 //! version or is larger than [`READ_MAX`] is [`Unreadable`]: never taken for an empty history,
-//! and never written over.
+//! and never written over. So is anything else than a plain file at the path, a symbolic link
+//! too (even one to nothing): it is never followed, neither to read nor to write.
 
 use crate::profile::ProfileId;
 use std::io::{self, Read};
@@ -92,6 +93,9 @@ pub enum Unreadable {
     TooLarge,
     /// A newer version wrote it (its version).
     Newer(i64),
+    /// Something else than a file is at its path: a symbolic link (one to nothing too), a
+    /// folder, a FIFO.
+    NotAFile,
 }
 
 impl History {
@@ -177,13 +181,24 @@ fn table_text(key: &TableKey, entries: &[Entry]) -> String {
     out
 }
 
-/// Read the file: an empty history when there is none.
+/// Read the file: an empty history when there is none. Only a plain file is read: a symbolic
+/// link at the path (one to nothing too) is never followed.
 pub fn load(path: &Path) -> Result<History, Unreadable> {
-    let file = match std::fs::File::open(path) {
-        Ok(f) => f,
+    match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(History::default()),
         Err(e) => return Err(Unreadable::Io(e.kind())),
+        Ok(m) if !m.file_type().is_file() => return Err(Unreadable::NotAFile),
+        Ok(_) => {}
+    }
+    // Replaced by a link or anything else since: still not a file.
+    let not_a_file = |e: io::Error| match std::fs::symlink_metadata(path) {
+        Ok(m) if !m.file_type().is_file() => Unreadable::NotAFile,
+        _ => Unreadable::Io(e.kind()),
     };
+    let file = crate::fsutil::open_no_follow(path).map_err(not_a_file)?;
+    if !file.metadata().map_err(|e| Unreadable::Io(e.kind()))?.file_type().is_file() {
+        return Err(Unreadable::NotAFile);
+    }
     let mut bytes = Vec::new();
     file.take(READ_MAX + 1).read_to_end(&mut bytes).map_err(|e| Unreadable::Io(e.kind()))?;
     if bytes.len() as u64 > READ_MAX {
@@ -241,9 +256,10 @@ fn only(t: &toml::Table, keys: &[&str]) -> Result<(), Unreadable> {
     if t.keys().all(|k| keys.contains(&k.as_str())) { Ok(()) } else { Err(Unreadable::Malformed { line: None }) }
 }
 
-/// Write `text` (a [`History::to_toml`]) as the file, atomically and with mode 0600 on Unix.
+/// Write `text` (a [`History::to_toml`]) as the file, atomically and with mode 0600 on Unix,
+/// never through a link nor into a file already there ([`crate::fsutil::replace_private`]).
 pub fn write(path: &Path, text: &str) -> io::Result<()> {
-    crate::fsutil::atomic_write_private(path, text.as_bytes())
+    crate::fsutil::replace_private(path, text.as_bytes())
 }
 
 /// Write `history` as the file ([`write`]).

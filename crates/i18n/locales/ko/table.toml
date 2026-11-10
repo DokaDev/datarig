@@ -62,6 +62,7 @@
 "table.history.save_failed" = "필터 기록을 저장하지 못함: {error}"
 "table.history.too_large" = "파일이 4 MiB보다 큽니다"
 "table.history.newer" = "더 새 버전의 datarig가 쓴 파일입니다 (버전 {version})"
+"table.history.not_a_file" = "{path}은(는) 일반 파일이 아닙니다 (링크나 폴더 등)"
 "table.history.clear.title" = "필터 기록을 지울까요?"
 "table.history.clear.text" = "{table}에 남은 필터와 정렬을 지울까요?"
 "table.history.clear.text_all" = "모든 테이블에 남은 필터와 정렬을 지울까요?"

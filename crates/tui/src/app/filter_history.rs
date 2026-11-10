@@ -178,6 +178,9 @@ impl App {
                 Fault::other(format!("{at}: version {version}")),
                 Msg::TableHistoryNewer { version: version.to_string() },
             ),
+            Unreadable::NotAFile => {
+                (Fault::other(format!("{at}: not a plain file")), Msg::TableHistoryNotAFile { path: at.clone() })
+            }
         };
         datarig_core::fault::ErrorLog::new(self.paths.errors_log()).record("filter_history.unreadable", &fault);
         why

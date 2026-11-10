@@ -152,6 +152,107 @@ fn parent_of(path: &Path) -> PathBuf {
     }
 }
 
+/// Replace the file at `path` with `bytes`, for a file only this user may read that is never
+/// written anywhere else than at `path` itself:
+///
+/// 1. anything at `path` but a plain file (a symbolic link, one to nothing too, a folder, a
+///    FIFO) is refused (`InvalidInput`) and left as it is;
+/// 2. the bytes go to a new file of an unpredictable name in the same directory, created
+///    exclusively and without following a link (a file or link already at that name is left
+///    alone and another name tried), with mode 0600 from the moment it exists (Unix), and are
+///    flushed to disk;
+/// 3. that file is renamed over `path` (a link put there meanwhile is replaced, never followed)
+///    and on Unix the directory is synced;
+/// 4. on failure the new file is removed and the error returned; `path` is untouched.
+///
+/// Missing parent directories are created. Unlike [`atomic_write_private`], a link is never
+/// written through.
+pub fn replace_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    replace_private_named(path, bytes, &mut random_names())
+}
+
+/// The names [`replace_private`] tries for its new file, before giving up.
+const NEW_NAME_TRIES: usize = 16;
+
+/// [`replace_private`], its new file named `.<name>.tmp-<n>` with `n` from `names`.
+fn replace_private_named(path: &Path, bytes: &[u8], names: &mut dyn Iterator<Item = String>) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(m) if !m.file_type().is_file() => {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a plain file"));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let dir = parent_of(path);
+    fs::create_dir_all(&dir)?;
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut created = None;
+    for n in names.take(NEW_NAME_TRIES) {
+        let tmp = dir.join(format!(".{name}.tmp-{n}"));
+        match create_private(&tmp) {
+            Ok(f) => {
+                created = Some((tmp, f));
+                break;
+            }
+            // Someone else's: left alone.
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    let Some((tmp, mut f)) = created else { return Err(io::Error::from(io::ErrorKind::AlreadyExists)) };
+    let result = f.write_all(bytes).and_then(|()| f.sync_all()).and_then(|()| {
+        drop(f);
+        fs::rename(&tmp, path)
+    });
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result?;
+    sync_dir(&dir);
+    Ok(())
+}
+
+/// Create `path` as a new file (never one already there, never through a link) that only this
+/// user may read: mode 0600 on Unix from the moment it exists.
+fn create_private(path: &Path) -> io::Result<fs::File> {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+        opts.custom_flags(no_follow_flags());
+    }
+    let f = opts.open(path)?;
+    // A umask may have taken more away: exactly 0600, on this very file.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(f)
+}
+
+/// Open `path` for reading without following a symbolic link at it (Unix: the open fails then)
+/// and without waiting for a writer (a FIFO). Check what was opened with `File::metadata`.
+pub fn open_no_follow(path: &Path) -> io::Result<fs::File> {
+    let mut opts = fs::OpenOptions::new();
+    opts.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(no_follow_flags() | rustix::fs::OFlags::NONBLOCK.bits() as i32);
+    }
+    opts.open(path)
+}
+
+/// `O_NOFOLLOW` for `OpenOptionsExt::custom_flags`.
+#[cfg(unix)]
+fn no_follow_flags() -> i32 {
+    rustix::fs::OFlags::NOFOLLOW.bits() as i32
+}
+
 /// Write a new file at `path`, never replacing anything already there (an `AlreadyExists`
 /// error then). The bytes go to a temporary file first, which is flushed and then hard-linked
 /// into place, so the file appears complete or not at all and an existing one is never

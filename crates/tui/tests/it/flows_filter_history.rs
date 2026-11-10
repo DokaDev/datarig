@@ -356,6 +356,38 @@ fn an_unreadable_file_is_never_an_empty_history_nor_written() {
     assert!(!log.contains("secret"), "never its text: {log}");
 }
 
+/// A symbolic link at the file's path (to a history elsewhere, or to nothing) is never
+/// followed: the history is off for the session, the path named, and nothing is written there
+/// nor where the link points.
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_file_is_never_followed() {
+    let state = State::new("link");
+    let cfg = test_db_config();
+    let elsewhere = state.0.join("elsewhere.toml");
+    let mut seed = fh::History::default();
+    seed.record(key(&cfg), "elsewhere = 1", "", 1);
+    fh::save(&elsewhere, &seed).unwrap();
+    let before = std::fs::read_to_string(&elsewhere).unwrap();
+    for target in [elsewhere.clone(), state.0.join("nowhere.toml")] {
+        let _ = std::fs::remove_file(state.file());
+        std::os::unix::fs::symlink(&target, state.file()).unwrap();
+        let mut h = users(&cfg, Some(&state));
+        ran(&mut h, "id > 1");
+        let s = said(&mut h);
+        assert!(s.contains("Filter history unavailable") && s.contains("not a plain file"), "{s}");
+        h.keys(" rH");
+        assert!(!h.app.overlays.is_open(OverlayKind::Picker), "never listed");
+        h.command("filter history clear all");
+        h.keys("y");
+        flush(&mut h);
+        h.app.dispatch(datarig_tui::app::action::Action::Quit);
+        assert!(std::fs::symlink_metadata(state.file()).unwrap().file_type().is_symlink(), "the link stays");
+    }
+    assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), before, "never written through");
+    assert!(!state.0.join("nowhere.toml").exists(), "nothing created where it points");
+}
+
 /// `history.filters = off`: nothing is kept and `Ctrl+R` says the history is off.
 #[test]
 fn the_setting_off_keeps_nothing() {
