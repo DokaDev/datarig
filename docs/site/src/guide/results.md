@@ -117,6 +117,15 @@ The condition, order and limit you applied are kept with the workspace and with 
 you bring back (`Space t u`): they return to the line without running, and are checked again
 as above when the tab runs.
 
+On MySQL, a plain read locks the rows it reads when the session's isolation level is
+SERIALIZABLE and autocommit is off or a transaction is open: other sessions cannot change those
+rows until the transaction ends. In that state, and when the level is not known, a table tab
+asks before it runs (`Enter` cancels, `y` runs); the answer holds for the tab until the session,
+its level or its autocommit changes. A page read again, a count or an export of the tab is
+refused in that state until the tab has run with that answer. A level set with
+`SET TRANSACTION ISOLATION LEVEL` without `SESSION` applies to the next transaction only and the
+server does not report it, so datarig treats the level as not known until that transaction ends.
+
 ## The inspector
 
 `i` shows or hides the inspector next to the grid; `I` switches between its Row and Cell tabs.

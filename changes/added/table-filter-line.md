@@ -21,3 +21,6 @@
 - The applied condition, order and limit are kept with the workspace and with a closed tab
   brought back; they return to the line without running and are checked again when the tab
   runs.
+- On MySQL, a table tab asks before it runs when its reads would lock rows (isolation level
+  SERIALIZABLE, or not known, with autocommit off or a transaction open); a page read again, a
+  count or an export in that state needs that answer first.

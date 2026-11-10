@@ -181,6 +181,10 @@ pub enum ConfirmAction {
     /// Run the filter of table tab `tab` although it calls functions whose effects are not
     /// known (the query waits in the tab's state). Cancel is the default.
     FilterCalls(super::TabId),
+    /// Run the query of table tab `tab` although reads in its session lock rows (MySQL's
+    /// SERIALIZABLE, or a level not known, without autocommit or in a transaction): the query
+    /// waits in the tab's state. Cancel is the default.
+    TableReadLocks(super::TabId),
 }
 
 /// A yes/no question: `y` yes, `n`/`Esc` no; `Enter` no when the answer would lose something
@@ -258,7 +262,7 @@ impl Confirm {
             ConfirmAction::Copy => (Label::DialogButtonCancel, Label::DialogButtonCopy),
             ConfirmAction::FetchThenCopy => (Label::DialogButtonCancel, Label::DialogButtonFetchCopy),
             ConfirmAction::TrustHostKey => (Label::DialogButtonCancel, Label::DialogButtonTrust),
-            ConfirmAction::ExplainAgain | ConfirmAction::FilterCalls(_) => {
+            ConfirmAction::ExplainAgain | ConfirmAction::FilterCalls(_) | ConfirmAction::TableReadLocks(_) => {
                 (Label::DialogButtonCancel, Label::SafetyConfirmRun)
             }
             ConfirmAction::KeychainSecurityTool => (Label::DialogButtonCancel, Label::DialogButtonTurnOn),

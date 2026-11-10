@@ -221,8 +221,9 @@ impl App {
         let refused = |why| {
             if released { Msg::ResultsPageRefusedNoHold { why } } else { Msg::ResultsPageRefused { why } }
         };
-        // A table tab's filter is checked again as when it ran (never asked about here).
-        if let Err(why) = self.table_recheck(id) {
+        // A table tab's filter is checked again as when it ran, and so are reads that lock rows
+        // (never asked about here).
+        if let Err(why) = self.table_recheck(id).and_then(|()| self.table_locks_recheck(id)) {
             return self.tab_status(id, Notice::new(refused(why), Level::Warning));
         }
         let lang = t.exec.prepared.language();
@@ -320,7 +321,7 @@ impl App {
         }
         // A table tab's filter is checked again as when it ran (never asked about here), and
         // a cap on its rows is counted within.
-        if let Err(why) = self.table_recheck(id) {
+        if let Err(why) = self.table_recheck(id).and_then(|()| self.table_locks_recheck(id)) {
             return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
         }
         let source = self.table_capped_sql(id).unwrap_or_else(|| t.shown_sql().to_string());
