@@ -115,7 +115,9 @@ pub fn render() -> String {
          included, but no shell runs it) on a private file in the state directory, removed afterwards. \
          What it saves replaces the text as one undo step; quitting without saving changes nothing, \
          and an editor that fails (Vim's `:cq`) leaves the text as it was. A table tab's query goes as \
-         a copy, and an edited copy opens in a new console. `Ctrl+Z` (and `:suspend`, `:sus`, `:stop`) \
+         a copy (the statement `space r v` opens, its filter and order included, checked as a run \
+         checks them), and an edited copy opens in a new console; it is not run and the table tab's \
+         query stays as it was. `Ctrl+Z` (and `:suspend`, `:sus`, `:stop`) \
          stops datarig as `Ctrl+Z` stops Vim; the shell's `fg` brings it back (Unix only; on Windows \
          `:suspend` says it is not supported). `Ctrl+C` stays the query cancel. Meanwhile a running \
          query goes on on the server: with the editor open its results arrive and wait; while \

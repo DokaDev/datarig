@@ -1,6 +1,7 @@
 - Table tabs have a filter line above the grid: a WHERE condition and an ORDER BY, run on the
   server. `f` (or `space r f`) edits the condition, `space r o` the order, Enter applies,
-  `space r x` clears both and `space r v` opens the statement in a new console. `:where`,
+  `space r x` clears both and `space r v` opens the statement in a new console
+  (`Ctrl+G` hands the same statement to your own editor). `:where`,
   `:orderby` and `:filter clear` do the same from the command line, and both fields complete
   column names with `ctrl+space` (Enter applies unless you moved through the list or asked
   for it). A filtered table tab keeps its mark in a shortened tab title.

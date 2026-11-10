@@ -24,6 +24,15 @@ use datarig_core::query::{
 use std::collections::HashSet;
 use std::ops::Range;
 
+/// Where a table tab's statement is opened, not run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OpenIn {
+    /// A new console (`space r v`).
+    Console,
+    /// The user's editor (`Ctrl+G`); what comes back opens in a new console.
+    Editor,
+}
+
 /// A part of the table tab's query the user writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
@@ -139,8 +148,9 @@ pub struct TableQuery {
     shown_run: Option<Statement>,
     /// The query waiting for the user's word on the functions it calls.
     asked: Option<Query>,
-    /// The query waiting for that word is to be opened in a console (`space r v`), not run.
-    asked_open: bool,
+    /// Where the statement of the query waiting for that word is to be opened instead of run
+    /// (`space r v`, `Ctrl+G`); `None`: it is to run.
+    asked_open: Option<OpenIn>,
     /// The filter texts whose functions the user let run in this tab.
     confirmed: HashSet<String>,
     /// The filter line's fields: what the user types, and which field has the focus.
@@ -163,7 +173,7 @@ impl TableQuery {
             landed: None,
             shown_run: None,
             asked: None,
-            asked_open: false,
+            asked_open: None,
             confirmed: HashSet::new(),
             line: Default::default(),
             order_keys: OrderKeysState::Unknown,
@@ -534,7 +544,7 @@ impl App {
                         .collect();
                     if let Some(tq) = self.table_query_mut(id) {
                         tq.asked = Some(q);
-                        tq.asked_open = false;
+                        tq.asked_open = None;
                     }
                     return self.ask_filter_calls(id, calls);
                 }
@@ -565,11 +575,11 @@ impl App {
         self.tab_status(id, notice);
     }
 
-    /// The statement `space r v` opens for table tab `id`, checked as a run would be: the one
-    /// the rows held were read with (their filter checked again), else the draft's (checked
-    /// as Enter checks it, its unchecked functions asked about first). `None` when refused (said,
-    /// as Enter says it) or asked about.
-    pub(super) fn table_sql_to_open(&mut self, id: TabId) -> Option<String> {
+    /// The statement opened for table tab `id` (in a console, or in the user's editor), checked
+    /// as a run would be: the one the rows held were read with (their filter checked again),
+    /// else the draft's (checked as Enter checks it, its unchecked functions asked about first,
+    /// `y` opening it `to`). `None` when refused (said, as Enter says it) or asked about.
+    pub(super) fn table_sql_to_open(&mut self, id: TabId, to: OpenIn) -> Option<String> {
         let tq = self.table_query(id)?;
         if let Some(s) = tq.shown_run() {
             let sql = s.sql.clone();
@@ -600,7 +610,7 @@ impl App {
                         .collect();
                     if let Some(tq) = self.table_query_mut(id) {
                         tq.asked = Some(q);
-                        tq.asked_open = true;
+                        tq.asked_open = Some(to);
                     }
                     self.ask_filter_calls(id, calls);
                     return None;
@@ -617,7 +627,7 @@ impl App {
         if self.table_query_mut(id).is_none() {
             return;
         }
-        let Some(sql) = self.table_sql_to_open(id) else { return };
+        let Some(sql) = self.table_sql_to_open(id, OpenIn::Console) else { return };
         let Some(t) = self.tabs.get(id) else { return };
         let (profile, context) = (t.profile, t.context.clone());
         self.console_with(&sql, profile, context);
@@ -783,15 +793,18 @@ impl App {
             tq.confirmed.insert(text);
         }
         match open {
-            true => self.table_open_sql(id),
-            false => self.table_run(id, q),
+            Some(OpenIn::Console) => self.table_open_sql(id),
+            // Asked on the tab's own `Ctrl+G`: the editor only for the tab still active.
+            Some(OpenIn::Editor) if self.tab().id == id => self.request_external_edit(),
+            Some(OpenIn::Editor) => {}
+            None => self.table_run(id, q),
         }
     }
 
     /// Anything but `y` to the functions of table tab `id`'s filter: nothing runs (or opens).
     pub(super) fn filter_calls_declined(&mut self, id: TabId) {
         let Some(tq) = self.table_query_mut(id) else { return };
-        tq.asked_open = false;
+        tq.asked_open = None;
         if tq.asked.take().is_some() {
             self.tab_status(id, Notice::new(Label::TableFilterCallsCancelled, Level::Warning));
         }

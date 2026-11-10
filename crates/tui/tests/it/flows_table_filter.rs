@@ -587,3 +587,72 @@ fn a_shortened_title_keeps_the_filter_mark() {
     let tab = bar.split(" 2 ").nth(1).unwrap_or_default();
     assert!(tab.split('\u{d7}').next().is_some_and(|t| t.trim_end().ends_with('*')), "{bar}");
 }
+
+/// `Ctrl+G`, and the text the binary is asked to edit (`None`: nothing asked).
+fn ctrl_g(h: &mut Harness) -> Option<String> {
+    h.ctrl('g');
+    match h.app.take_effect() {
+        Some(datarig_tui::app::effects::Effect::Edit { text, .. }) => Some(text),
+        None => None,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// `Ctrl+G` on a table tab edits the statement of the rows shown, filter and order included
+/// (as `space r v` opens it); the edited copy opens in a new console, is not run, and leaves
+/// the table tab's query as it was.
+#[test]
+fn ctrl_g_edits_the_table_tabs_filtered_statement() {
+    let mut h = users(Lang::En);
+    h.command("where id > 1");
+    answer(&mut h);
+    h.command("orderby id");
+    answer(&mut h);
+    h.sent();
+    let table = h.app.tab().id;
+    let want = format!(r#"{ALL} WHERE (id > 1) ORDER BY "id" ASC"#);
+    assert_eq!(ctrl_g(&mut h).as_deref(), Some(want.as_str()));
+    h.app.external_edit_done(datarig_tui::external::Edited::Changed(format!("{want} LIMIT 5")));
+    assert_ne!(h.app.tab().id, table);
+    assert!(!h.app.tab().is_table());
+    assert_eq!(h.app.tab().editor.text(), format!("{want} LIMIT 5"));
+    assert!(runs(&mut h).is_empty(), "the edited copy is not run");
+    let tq = h.app.tabs.get(table).unwrap().doc.table_query.as_ref().unwrap();
+    let id_asc = vec![OrderKey::user("id", Dir::Asc)];
+    assert!(same_query(tq.shown.as_ref().unwrap(), &users_query(Some("id > 1"), id_asc)), "{:?}", tq.shown);
+}
+
+/// `Ctrl+G` on a table tab checks the statement as a run does: a refused filter hands nothing
+/// to the editor; functions to confirm are asked about first, and `y` opens the editor.
+#[test]
+fn ctrl_g_on_a_table_tab_is_checked_as_a_run() {
+    let mut h = read_only(Lang::En);
+    open_users(&mut h);
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Failed { id, error: datarig_core::driver::DbError::Cancelled, cancelled: true });
+    h.command("where my_fn(id) > 0");
+    h.app.focus = datarig_tui::app::Focus::Results;
+    assert_eq!(ctrl_g(&mut h), None, "refused");
+    assert!(status(&h).contains("read-only connection"), "{}", status(&h));
+
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Failed { id, error: datarig_core::driver::DbError::Cancelled, cancelled: true });
+    h.command("where my_fn(id) > 0");
+    h.key(KeyCode::Enter);
+    h.sent();
+    h.app.focus = datarig_tui::app::Focus::Results;
+    assert_eq!(ctrl_g(&mut h), None, "asked first");
+    assert_eq!(h.app.overlays.confirm().map(|c| c.action), Some(ConfirmAction::FilterCalls(h.app.tab().id)));
+    h.keys("y");
+    match h.app.take_effect() {
+        Some(datarig_tui::app::effects::Effect::Edit { text, .. }) => {
+            assert_eq!(text, format!("{ALL} WHERE (my_fn(id) > 0)"))
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(runs(&mut h).is_empty(), "nothing run");
+}
