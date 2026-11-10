@@ -566,6 +566,45 @@ fn a_clear_that_could_not_be_written_is_written_again() {
     assert!(state.entries(&key(&cfg)).is_empty(), "written on quitting");
 }
 
+/// A clear asked again while the first one's write is still on its way is said cleared only
+/// once that write is done, and as failed when it fails (never cleared before the file is).
+#[cfg(unix)]
+#[test]
+fn a_clear_asked_again_waits_for_the_write_on_its_way() {
+    use std::os::unix::fs::PermissionsExt;
+    let state = State::new("clear-again");
+    let cfg = test_db_config();
+    let mut seed = fh::History::default();
+    seed.record(key(&cfg), "secret = 1", "", 1);
+    let lock = |mode| std::fs::set_permissions(&state.0, std::fs::Permissions::from_mode(mode)).unwrap();
+    for fails in [false, true] {
+        fh::save(&state.file(), &seed).unwrap();
+        let mut h = users(&cfg, Some(&state));
+        if fails {
+            lock(0o500);
+            if std::fs::write(state.0.join("probe"), "").is_ok() {
+                return lock(0o700); // Root writes anywhere: nothing to check.
+            }
+        }
+        h.command("filter history clear");
+        h.keys("y");
+        // The first write is sent, its answer not handed to the app yet.
+        h.command("filter history clear");
+        h.keys("y");
+        assert!(!said(&mut h).contains("cleared"), "said before the write is done: {}", said(&mut h));
+        flush(&mut h);
+        lock(0o700);
+        if fails {
+            assert!(said(&mut h).contains("not saved"), "{}", said(&mut h));
+            assert_eq!(state.entries(&key(&cfg)).len(), 1, "still in the file");
+        } else {
+            assert!(said(&mut h).contains("cleared"), "{}", said(&mut h));
+            assert!(state.entries(&key(&cfg)).is_empty());
+        }
+        drop(h);
+    }
+}
+
 /// Without a state directory the history works in memory; a second instance (another holds
 /// the state directory) reads the file and never writes it.
 #[test]

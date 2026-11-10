@@ -223,8 +223,12 @@ pub struct FilterHistoryState {
     writer: Option<Writer>,
     /// The number of the last write sent.
     seq: u64,
-    /// What to say once write `seq` (or a later one) is done (a clear).
-    announce: Option<(u64, Notice)>,
+    /// The number of the last write the writer said was done (every one before it is done or
+    /// replaced by it): the file holds the history as of that write.
+    saved: u64,
+    /// What to say once write `seq` (or a later one) is done (the clears), dropped when it
+    /// fails (said as failed).
+    announce: Vec<(u64, Notice)>,
     /// The table a clear asks about (`None`: every table).
     clear_asked: Option<TableKey>,
     /// Headless: the writer's answers, and how many are still to come.
@@ -395,14 +399,14 @@ impl App {
     pub(super) fn on_filter_history_saved(&mut self, s: Saved) {
         match s.result {
             Ok(()) => {
-                if let Some((_, n)) = self.filter_history.announce.take_if(|(seq, _)| s.seq >= *seq) {
+                self.filter_history.saved = self.filter_history.saved.max(s.seq);
+                let done: Vec<_> = self.filter_history.announce.extract_if(.., |(seq, _)| s.seq >= *seq).collect();
+                for (_, n) in done {
                     self.flash(n);
                 }
             }
             Err(e) => {
-                if self.filter_history.announce.as_ref().is_some_and(|(seq, _)| s.seq >= *seq) {
-                    self.filter_history.announce = None;
-                }
+                self.filter_history.announce.retain(|(seq, _)| s.seq < *seq);
                 if s.seq == self.filter_history.seq {
                     self.filter_history.dirty = true;
                 }
@@ -571,14 +575,22 @@ impl App {
         if self.read_only && self.paths.state.is_some() {
             return self.flash(Notice::new(Label::TableHistoryClearedHere, Level::Warning));
         }
-        // Nothing forgotten now and nothing left unwritten (a clear whose write failed is):
-        // the file holds it already.
-        if (count == 0 && !self.filter_history.dirty) || self.state_dir().is_none() {
+        if self.state_dir().is_none() {
             return self.flash(done);
         }
-        self.filter_history.dirty = true;
+        let fh = &mut self.filter_history;
+        // Nothing forgotten now and nothing left unwritten (a clear whose write failed is):
+        if count == 0 && !fh.dirty {
+            // the file holds it already,
+            if fh.saved == fh.seq {
+                return self.flash(done);
+            }
+            // or will once the write on its way is done: said then (or its failure).
+            return fh.announce.push((fh.seq, done));
+        }
+        fh.dirty = true;
         self.filter_history_send();
-        self.filter_history.announce = Some((self.filter_history.seq, done));
+        self.filter_history.announce.push((self.filter_history.seq, done));
     }
 }
 
