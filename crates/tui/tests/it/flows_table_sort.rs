@@ -176,10 +176,40 @@ fn the_tie_breaker_keeps_working_and_is_not_marked() {
     assert_eq!(one_run(&mut h), format!(r#"{ALL} ORDER BY "name" ASC, "id" DESC"#));
 }
 
-/// A sort keeps the condition and the limit of the rows shown. What is typed in the line and
-/// not applied: a condition stays typed (not run), an order gives way to the sort's.
+/// The three fields of the line, as they read.
+fn fields(h: &Harness) -> [String; 3] {
+    [field_text(h, Field::Where), field_text(h, Field::Order), field_text(h, Field::Limit)]
+}
+
+fn draft(h: &Harness) -> datarig_core::query::Query {
+    h.app.tab().doc.table_query.as_ref().expect("a table query").draft.clone()
+}
+
+/// Field `f` of the line holds `text`, typed and not applied; the grid has the keys.
+fn typed(h: &mut Harness, f: Field, text: &str) {
+    let line = &mut h.app.tab_mut().doc.table_query.as_mut().expect("a table query").line;
+    match f {
+        Field::Where => line.where_.set(text),
+        Field::Order => line.order.set(text),
+        Field::Limit => line.limit.set(text),
+    }
+    line.focus = None;
+}
+
+/// The sort zone of column `col`'s header, as last drawn at 120x30.
+fn zone(h: &mut Harness, col: usize) -> (u16, u16) {
+    h.draw(120, 30);
+    let g = h.app.tab().grid.clone();
+    let (x, ..) = g.sort_zones.iter().copied().find(|z| z.2 == col).expect("a sort zone");
+    (x, g.header_y)
+}
+
+/// A sort runs the condition and the limit the rows shown were read with. While the line holds
+/// a change not applied, in any field, a sort (`s`, `S`, a click in a sort zone) is refused as
+/// a filter by value is, said, and nothing changes: what was typed stays, the draft is as it
+/// was, nothing is sent.
 #[test]
-fn a_sort_keeps_the_shown_condition_and_limit_and_not_the_typed_ones() {
+fn a_sort_over_changes_not_applied_is_refused_and_keeps_them() {
     let mut h = users(Lang::En);
     h.keys("f");
     h.type_text("id > 1");
@@ -189,26 +219,44 @@ fn a_sort_keeps_the_shown_condition_and_limit_and_not_the_typed_ones() {
     h.key(KeyCode::Enter);
     assert_eq!(one_run(&mut h), format!("{ALL} WHERE (id > 1)"));
     answer(&mut h);
-    // Typed, not applied, and the grid clicked: the fields keep what was typed.
-    h.keys("f");
-    h.ctrl('l');
-    h.type_text("id > 2");
-    h.key(KeyCode::Tab);
-    h.type_text("email desc");
-    h.draw(120, 30);
-    let grid = h.app.tab().grid.clone();
-    let (x, y) = (grid.hit_cols[0].0 + 1, grid.data_y);
-    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
-    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
-    assert_eq!(h.app.key_context(), Ctx::Grid);
+    h.app.tab_mut().doc.table_query.as_mut().unwrap().line.focus = None;
+    // Nothing typed: the condition and the limit applied run with the order.
     h.keys("ls");
     assert_eq!(one_run(&mut h), format!(r#"{ALL} WHERE (id > 1) ORDER BY "name" ASC"#));
-    let q = h.app.tab().doc.table_query.as_ref().unwrap();
-    assert_eq!(q.applied().limit, Some(50));
+    assert_eq!(h.app.tab().doc.table_query.as_ref().unwrap().applied().limit, Some(50));
     answer(&mut h);
-    assert_eq!(field_text(&h, Field::Where), "id > 2", "the typed condition stays typed");
-    assert_eq!(field_text(&h, Field::Order), "name ASC", "the sort's order replaced the typed one");
-    assert_eq!(field_text(&h, Field::Limit), "50");
+    assert_eq!(fields(&h), ["id > 1", "name ASC", "50"]);
+    for (f, text) in [(Field::Where, "id > 2"), (Field::Order, "email desc"), (Field::Limit, "7")] {
+        typed(&mut h, f, text);
+        let (before, d) = (fields(&h), draft(&h));
+        for how in ["s", "S", "click"] {
+            match how {
+                "click" => {
+                    let (x, y) = zone(&mut h, 2);
+                    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+                    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+                }
+                keys => h.keys(keys),
+            }
+            assert!(runs(&mut h).is_empty(), "{f:?} {how}: nothing sent");
+            let status = h.status(120, 30);
+            assert!(status.contains("Not sorted: the filter line has changes not applied"), "{f:?} {how}: {status}");
+            assert_eq!(fields(&h), before, "{f:?} {how}: the typed text stays");
+            assert_eq!(draft(&h), d, "{f:?} {how}: the draft is as it was");
+            assert_eq!(heads(&h)[1], sorted(true, 1), "{f:?} {how}");
+        }
+        // Put back: sorting works again.
+        let back = match f {
+            Field::Where => "id > 1",
+            Field::Order => "name ASC",
+            Field::Limit => "50",
+        };
+        typed(&mut h, f, back);
+    }
+    // The clicks put the cursor on `email`.
+    assert_eq!(h.app.tab().grid.col, 2);
+    h.keys("s");
+    assert_eq!(one_run(&mut h), format!(r#"{ALL} WHERE (id > 1) ORDER BY "email" ASC"#));
 }
 
 #[test]
@@ -245,32 +293,110 @@ fn a_click_in_the_sort_zone_sorts_and_elsewhere_selects_the_column() {
     assert_eq!(one_run(&mut h), format!(r#"{ALL} ORDER BY "email" DESC"#));
 }
 
+/// Over pending edits a sort asks first, as any run does. Enter keeps the edits: nothing runs,
+/// and the line and the draft are as they were (the sort's order is written only once its run
+/// is sent); `y` drops them and runs it.
 #[test]
 fn a_sort_over_pending_edits_asks_first_and_enter_keeps_them() {
     let mut h = users(Lang::En);
+    h.command("where id > 0");
+    answer(&mut h);
+    h.sent();
     if let Results::Rows(rs) = &mut h.app.tab_mut().results {
         assert!(rs.edit.batch.delete(&[0], |_| Vec::new()));
     }
-    let draft = h.app.tab().doc.table_query.as_ref().unwrap().draft.clone();
-    h.keys("ls");
-    assert_eq!(
-        h.app.overlays.confirm().map(|c| c.action),
-        Some(ConfirmAction::LeaveEdits(datarig_tui::app::edit::Leave::Run(h.app.tab().id)))
-    );
-    h.key(KeyCode::Enter);
-    assert!(runs(&mut h).is_empty(), "Enter keeps the edits: nothing runs");
-    assert!(matches!(&h.app.tab().results, Results::Rows(rs) if !rs.edit.batch.is_empty()));
-    // Nothing of the sort stays: the line and the draft are as they were.
-    assert_eq!(field_text(&h, Field::Order), "");
-    assert_eq!(h.app.tab().doc.table_query.as_ref().unwrap().draft, draft);
-    assert!(heads(&h).iter().all(|m| m.sort.is_none()));
+    let (before, d) = (fields(&h), draft(&h));
+    for how in ["s", "S", "click"] {
+        match how {
+            "click" => {
+                let (x, y) = zone(&mut h, 1);
+                h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+                h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+            }
+            keys => h.keys(&format!("{}{keys}", if h.app.tab().grid.col == 1 { "" } else { "l" })),
+        }
+        assert_eq!(
+            h.app.overlays.confirm().map(|c| c.action),
+            Some(ConfirmAction::LeaveEdits(datarig_tui::app::edit::Leave::Run(h.app.tab().id))),
+            "{how}"
+        );
+        h.key(KeyCode::Enter);
+        assert!(runs(&mut h).is_empty(), "{how}: Enter keeps the edits, nothing runs");
+        assert!(matches!(&h.app.tab().results, Results::Rows(rs) if !rs.edit.batch.is_empty()));
+        // Nothing of the sort stays: the line and the draft are as they were.
+        assert_eq!(fields(&h), before, "{how}");
+        assert_eq!(draft(&h), d, "{how}");
+        assert!(heads(&h).iter().all(|m| m.sort.is_none()));
+    }
     // `y` drops them: a new run, never a page read again.
     h.keys("s");
     h.keys("y");
     let sent = h.sent();
-    let want = vec![format!(r#"{ALL} ORDER BY "name" ASC"#)];
+    let want = vec![format!(r#"{ALL} WHERE (id > 0) ORDER BY "name" ASC"#)];
     assert!(sent.iter().any(|c| matches!(c, DbCommand::Execute { statements, .. } if *statements == want)), "{sent:?}");
     assert!(!sent.iter().any(|c| matches!(c, DbCommand::FetchMore { .. } | DbCommand::Resume { .. })));
+    answer(&mut h);
+    h.draw(120, 30);
+    assert_eq!(fields(&h), ["id > 0", "name ASC", ""], "the line shows the order sent");
+}
+
+/// A sort asked about for the reads that lock rows (MySQL at SERIALIZABLE without autocommit)
+/// and declined leaves the line and the draft as they were; `y` runs it.
+#[test]
+fn a_sort_declined_for_locking_reads_leaves_the_line() {
+    use datarig_core::driver::Isolation;
+    use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut p = datarig_core::profile::ConnectionConfig::test_db();
+    (p.name, p.driver) = ("local-my".into(), "mysql".into());
+    let cfg = datarig_core::config::Config { connections: vec![p], ..Default::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+    open_users(&mut h);
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MySql(MySqlMode::default()))));
+    answer(&mut h);
+    h.sent();
+    h.key(KeyCode::Tab);
+    h.tab_db(index, DbEvent::Isolation(Some(Isolation::Serializable)));
+    h.tab_db(index, DbEvent::Autocommit(false));
+    let (before, d) = (fields(&h), draft(&h));
+    h.keys("ls");
+    let id = h.app.tab().id;
+    assert_eq!(h.app.overlays.confirm().map(|c| c.action), Some(ConfirmAction::TableReadLocks(id)));
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty(), "declined: nothing sent");
+    assert_eq!(fields(&h), before);
+    assert_eq!(draft(&h), d);
+    h.keys("s");
+    h.keys("y");
+    assert_eq!(one_run(&mut h), "SELECT * FROM `shop`.`users` ORDER BY `name` ASC");
+    answer(&mut h);
+    assert_eq!(field_text(&h, Field::Order), "name ASC");
+}
+
+/// A sort the read-only environment refuses (the filter shown calls a function whose effects
+/// are not known, let through before the environment turned read-only) sends nothing and leaves
+/// the line and the draft as they were.
+#[test]
+fn a_sort_refused_as_read_only_leaves_the_line() {
+    use datarig_core::policy::Policy;
+    let mut h = users(Lang::En);
+    h.command("where my_fn(id) > 0");
+    h.keys("y");
+    assert_eq!(one_run(&mut h), format!("{ALL} WHERE (my_fn(id) > 0)"));
+    answer(&mut h);
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.app.policies.insert("default", Policy { read_only: true, ..Policy::default() });
+    let (before, d) = (fields(&h), draft(&h));
+    h.keys("ls");
+    assert!(runs(&mut h).is_empty(), "refused: nothing sent");
+    assert!(h.status(120, 30).contains("read-only"), "{}", h.status(120, 30));
+    assert_eq!(fields(&h), before);
+    assert_eq!(draft(&h), d);
+    assert!(heads(&h).iter().all(|m| m.sort.is_none()));
 }
 
 #[test]

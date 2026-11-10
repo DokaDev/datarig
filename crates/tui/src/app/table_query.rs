@@ -1471,9 +1471,10 @@ impl App {
     /// column's sort zone): the order of the rows shown ([`TableQuery::shown`], else what is
     /// applied when the tab shows none) changed by `step` ([`query::sort_column`]), with their
     /// condition and limit, runs as any run of the tab ([`App::table_run`]: checks, asks,
-    /// pending edits). The order field takes the new order once the run is sent (an order
-    /// typed there and not applied gives way to it; a typed condition or limit stays typed);
-    /// a run asked about and declined leaves the line and the draft as they were.
+    /// pending edits). Refused while the filter line holds changes not applied, in any field
+    /// (they are applied or put back first). The line and the draft take the new order only
+    /// once its run is sent: a run asked about and declined, or refused, leaves them as they
+    /// were.
     pub(super) fn table_sort(&mut self, id: TabId, col: usize, step: query::SortStep) {
         let name = match self.tabs.get(id).map(|t| &t.results) {
             Some(Results::Rows(rs)) => rs.columns.get(col).map(|c| c.meta.name.clone()),
@@ -1485,13 +1486,20 @@ impl App {
         if self.tab_busy(id) {
             return self.flash_busy();
         }
-        let applied = self.filter_line_applied(id).order;
+        // What the line holds and was not applied stays the user's: the sort would run a query
+        // the line does not show.
+        self.filter_line_follow_tab(id);
+        let a = self.filter_line_applied(id);
         let Some(tq) = self.table_query_mut(id) else { return };
+        let edited = tq.line.edited(Field::Where, &a.filter)
+            || tq.line.edited(Field::Order, &a.order)
+            || tq.line.edited(Field::Limit, &a.limit);
+        if edited {
+            return self.flash(Notice::new(Label::TableSortUnapplied, Level::Warning));
+        }
         let base = tq.shown.clone().unwrap_or_else(|| tq.applied().clone());
         let q = Query { order: query::sort_column(&base.order, &name, step), ..base };
-        tq.line.order.set(&applied);
         tq.sorted = Some(q.clone());
-        self.filter_line_follow_tab(id);
         self.table_run(id, q);
     }
 

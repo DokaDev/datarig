@@ -69,6 +69,7 @@
 "table.limit.why.too_large" = "a limit is at most {max} rows"
 "table.sort.only_table_tabs" = "Only a table tab sorts by a column: a query's rows are sorted in its text"
 "table.sort.no_columns" = "Nothing to sort: the tab shows no columns yet"
+"table.sort.unapplied" = "Not sorted: the filter line has changes not applied (Enter applies them, Esc puts them back)"
 "table.filter.by_value.title" = "Filter by {column}"
 "table.filter.by_value.title_many" = { one = "Filter by {column} ({count} cell)", other = "Filter by {column} ({count} cells)" }
 "table.filter.by_value.eq" = "= {value}"

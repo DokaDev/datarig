@@ -67,6 +67,7 @@
 "table.limit.why.too_large" = "행 제한은 최대 {max}행입니다"
 "table.sort.only_table_tabs" = "열로 정렬은 테이블 탭에서만 됩니다: 쿼리의 행은 쿼리 텍스트에서 정렬하세요"
 "table.sort.no_columns" = "정렬할 것이 없습니다: 탭에 아직 열이 없습니다"
+"table.sort.unapplied" = "정렬하지 않음: 필터 줄에 적용하지 않은 변경이 있습니다 (Enter로 적용, Esc로 되돌림)"
 "table.filter.by_value.title" = "{column} 값으로 필터"
 "table.filter.by_value.title_many" = "{column} 값으로 필터 (셀 {count}개)"
 "table.filter.by_value.eq" = "= {value}"

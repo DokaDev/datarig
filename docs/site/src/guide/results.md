@@ -134,10 +134,11 @@ going up, the second going down, the third takes the order away. `S` (or `Space 
 column as one more key, after the others; pressed again on a key it turns that key, then takes
 it out, and the other keys stay where they are. A click on the last two columns of a column's
 header (the cursor's column shows `^v` there, a glyph with icons on) sorts as `s` does; a click
-elsewhere on a header selects the column, as on any grid. A sort writes the new order into the
-line and runs it like `Enter` does: it starts from the order of the rows shown, keeps their
-condition and limit, and replaces an order typed but not applied (a condition or limit typed
-but not applied stays in its field, not run). With changes not applied, it asks first.
+elsewhere on a header selects the column, as on any grid. A sort runs the new order like `Enter`
+does and writes it into the line once it is sent: it starts from the order of the rows shown and
+keeps their condition and limit. While the line holds changes you have not applied, in any field,
+it does not sort: apply them with `Enter` or put them back with `Esc` first. Over edits not saved
+yet, it asks first, as any run does.
 
 The headers say how the rows shown are sorted: an arrow after the name (`^` or `v` with icons
 off), with the key's level from the second key on (`v2`); the primary key columns added after
