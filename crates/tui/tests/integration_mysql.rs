@@ -738,11 +738,11 @@ async fn a_table_tab_limit_caps_its_pages() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The first column's values of the rows the active tab holds, as shown.
-fn first_column(app: &App) -> Vec<Option<String>> {
+/// The held values of column `col` of the current tab's rows.
+fn column(app: &App, col: usize) -> Vec<Option<String>> {
     let Results::Rows(rs) = &app.tab().results else { return Vec::new() };
     (0..rs.rows.len())
-        .map(|r| match rs.cell(r, 0) {
+        .map(|r| match rs.cell(r, col) {
             datarig_tui::widgets::grid::CellRef::Here(c) => c.clone(),
             _ => None,
         })
@@ -750,8 +750,8 @@ fn first_column(app: &App) -> Vec<Option<String>> {
 }
 
 /// Sorting a table tab by a column on MySQL (read only, the seed's `shop.products`, capped at
-/// five rows): `s` twice on `stock` sends it going down with the primary key appended (stocks
-/// tie), and the rows come in that order.
+/// five rows): `s` on `stock` sends it going up, then down, with the primary key appended
+/// (stocks tie), and the rows come in that order.
 #[tokio::test(flavor = "multi_thread")]
 async fn sorting_a_table_tab_by_a_column_orders_its_rows_on_the_server() {
     use datarig_tui::app::action::Action;
@@ -774,15 +774,21 @@ async fn sorting_a_table_tab_by_a_column_orders_its_rows_on_the_server() {
     let sent = |app: &App| app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
     app.focus = Focus::Results;
     app.tab_mut().grid.col = stock;
-    for (dir, first) in [("ASC", None), ("DESC", Some(["210", "39", "139", "58", "33"]))] {
+    let num = |v: &Option<String>| v.as_deref().map(|s| s.parse::<i64>().expect("a number"));
+    for dir in ["ASC", "DESC"] {
         let qid = app.tab().exec.query_id;
         press(&mut app, 's');
         pump(&mut app, &mut rx, 30, |a| idle(a) && a.tab().exec.query_id != qid && held_rows(a).0 > 0).await;
         assert_eq!(sent(&app), [format!("SELECT * FROM `shop`.`products` ORDER BY `stock` {dir}, `id` ASC")]);
-        assert_eq!(first_column(&app).len(), 5);
-        if let Some(ids) = first {
-            let want: Vec<Option<String>> = ids.iter().map(|s| Some(s.to_string())).collect();
-            assert_eq!(first_column(&app), want);
+        // The rows come in the order sent: by stock that way, ties by id going up. The seed's
+        // values differ between machines, so the order is checked, not the ids.
+        let rows: Vec<(Option<i64>, Option<i64>)> =
+            column(&app, stock).iter().map(num).zip(column(&app, 0).iter().map(num)).collect();
+        assert_eq!(rows.len(), 5);
+        for pair in rows.windows(2) {
+            let ((s0, id0), (s1, id1)) = (pair[0], pair[1]);
+            let by_stock = if dir == "ASC" { s0.cmp(&s1) } else { s1.cmp(&s0) };
+            assert!(by_stock.is_lt() || (by_stock.is_eq() && id0 < id1), "{dir}: {rows:?}");
         }
     }
     drop(app);
