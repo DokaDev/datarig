@@ -280,6 +280,12 @@ pub enum DbError {
     /// or turns read-only off (`SET TRANSACTION READ WRITE`, `set_config()` of it, …), as the
     /// driver's own check reads it: it was not sent. Send it as [`TxStep::Open`] instead.
     NotAPlainRead,
+    /// MySQL: the session's next transaction has settings of its own, or may have (a `SET
+    /// TRANSACTION` without `SESSION`, `SET @@transaction_isolation = …`, a procedure or an
+    /// executable comment that ran since a transaction last started or ended), which the server
+    /// does not report. A read of the app's own outside a transaction (a count, an export, the
+    /// allowlist's question) would start a transaction and use them up: it was not sent.
+    NextTransactionSet,
     /// Statement `index` (from 0) of what the query session starts with
     /// ([`super::ConnectOptions::session_sql`]), `statement`, failed: the session was closed
     /// before `Connected`. Why, as the server said it.
@@ -363,6 +369,7 @@ impl DbError {
             | DbError::ApplyNotUndone
             | DbError::NotUndoable(_)
             | DbError::NotAPlainRead
+            | DbError::NextTransactionSet
             | DbError::CancelNotTaken(
                 CancelFailure::Refused
                 | CancelFailure::KeptSending

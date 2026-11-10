@@ -133,3 +133,53 @@ fn the_not_undone_question_asks_for_every_kind() {
     assert_eq!(sql.matches("@@GLOBAL.partial_revokes").count(), 1, "{sql}");
     assert!(sql.ends_with("ORDER BY 1 LIMIT 20"), "{sql}");
 }
+
+#[test]
+fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
+    let ansi = MySqlMode { ansi_quotes: true, ..MODE };
+    for mode in [MODE, ansi] {
+        let sets = |sql| sets_next_transaction(sql, mode);
+        for sql in [
+            "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+            "set transaction read write",
+            "SET /* c */ TRANSACTION READ ONLY, ISOLATION LEVEL READ COMMITTED",
+            "SET @@transaction_isolation = 'SERIALIZABLE'",
+            "SET @@TX_ISOLATION := 'READ-COMMITTED'",
+            "SET @@`transaction_isolation` = 'SERIALIZABLE'",
+            "SET @@transaction_read_only = 1",
+            "SET @@tx_read_only = OFF",
+            "SET @a = 1, @@transaction_isolation = 'SERIALIZABLE'",
+            // Not read: may set them.
+            "CALL p()",
+            "EXECUTE s",
+            "/*!80000 SET TRANSACTION ISOLATION LEVEL SERIALIZABLE */",
+        ] {
+            assert!(sets(sql), "{sql}");
+        }
+        for sql in [
+            "SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+            "SET GLOBAL TRANSACTION READ ONLY",
+            "SET @@SESSION.transaction_isolation = 'SERIALIZABLE'",
+            "SET @@session.`transaction_isolation` = 'SERIALIZABLE'",
+            "SET @@LOCAL.transaction_read_only = 1",
+            "SET @@GLOBAL.transaction_isolation = 'SERIALIZABLE'",
+            "SET SESSION transaction_isolation = 'SERIALIZABLE'",
+            "SET transaction_isolation = 'SERIALIZABLE'",
+            "SET @transaction_isolation = 1",
+            "SELECT @@transaction_isolation",
+            "SELECT 'SET TRANSACTION READ WRITE'",
+            "START TRANSACTION",
+        ] {
+            assert!(!sets(sql), "{sql}");
+        }
+    }
+    for (sql, yes) in [
+        ("START TRANSACTION READ ONLY", true),
+        ("begin", true),
+        ("COMMIT", true),
+        ("rollback", true),
+        ("SELECT 1", false),
+    ] {
+        assert_eq!(begins_or_ends(sql, MODE), yes, "{sql}");
+    }
+}

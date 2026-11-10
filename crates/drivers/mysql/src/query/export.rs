@@ -16,8 +16,8 @@
 //! lost, as a connection that broke.
 
 use super::{
-    Closed, Env, Link, State, Stop, after, asked_server, begin_own, cells, failure, idle, limit_applies, open_before,
-    rest, runs_server_code, stop_result,
+    Closed, Env, Link, State, Stop, after, asked_server, begin_own, cells, failure, idle, keeps_next, limit_applies,
+    open_before, rest, runs_server_code, stop_result,
 };
 use crate::session::my_error;
 use crate::values::column_meta;
@@ -60,6 +60,9 @@ pub(super) async fn export(
     // A transaction open before the app's own reads (the user's, or one the server cannot rule
     // out) is read in, never ended.
     let was_open = open_before(conn, link, s).await?;
+    if let Err(why) = keeps_next(s, was_open) {
+        return Ok((Err(why), false));
+    }
     if guard == ExportGuard::Repeatable {
         if let Err(why) = risk::repeatable(sql, s.mode) {
             return Ok((Err(DbError::NotRepeatable(why)), false));
