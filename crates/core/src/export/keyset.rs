@@ -195,9 +195,10 @@ impl Keyset {
             values.push(lit);
         }
         let cond = match d {
-            Dialect::Postgres if names.len() == 1 => format!("{} > {}", names[0], values[0]),
+            // Named with its schema: a `search_path` of the user's may list its own `>` first.
+            Dialect::Postgres if names.len() == 1 => format!("{} OPERATOR(pg_catalog.>) {}", names[0], values[0]),
             // A row comparison: the btree of the key reads from it on.
-            Dialect::Postgres => format!("({}) > ({})", names.join(", "), values.join(", ")),
+            Dialect::Postgres => format!("({}) OPERATOR(pg_catalog.>) ({})", names.join(", "), values.join(", ")),
             // MySQL does not read an index range for a row comparison: the same written out.
             Dialect::MySql(_) => expanded(&names, &values),
         };

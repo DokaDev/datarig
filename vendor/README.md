@@ -29,7 +29,7 @@ format result support", open since 2023-11), has not been merged; see also
 
 ### What is changed
 
-Every change in the source is marked with a `datarig:` comment. Three groups:
+Every change in the source is marked with a `datarig:` comment. Four groups:
 
 **Result formats**:
 
@@ -52,6 +52,12 @@ Every change in the source is marked with a `datarig:` comment. Three groups:
   SSH channel the far end already closed, or whose end of file cannot be queued) and would
   otherwise fail or stall a cancel that was sent (the caller reports a cancel that was not
   sent).
+
+**Names with their schema**:
+
+- `src/prepare.rs`: the type lookups name every operator and type with its schema
+  (`OPERATOR(pg_catalog.=)`): they run on the user's session, whose `search_path` may list a
+  schema of its own before `pg_catalog`.
 
 **Pipelined requests**: upstream
 sends each step of the extended protocol (Parse, Bind, Execute) as a request of its own, ended

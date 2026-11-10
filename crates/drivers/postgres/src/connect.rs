@@ -247,9 +247,9 @@ fn add_option(cfg: &mut Config, option: &str) {
 
 /// The `search_path` value of a session in `schema`: that schema, quoted as an identifier,
 /// then `public`, or `"public"` alone when that is
-/// the schema. `pg_catalog` stays implicitly first (a user's schema never shadows a built-in,
-/// which the classifier's and the re-run allowlist's checks rely on) and `pg_temp` keeps its
-/// implicit place.
+/// the schema. `pg_catalog` stays implicitly first (a schema of the context never shadows a
+/// built-in, which the classifier's and the re-run allowlist's checks rely on; a `SET
+/// search_path` of the user's can still list one first) and `pg_temp` keeps its implicit place.
 pub(crate) fn search_path(schema: &str) -> String {
     let quoted = format!("\"{}\"", schema.replace('"', "\"\""));
     if schema == "public" { quoted } else { format!("{quoted}, public") }
@@ -297,9 +297,9 @@ struct Placed {
 /// may equal it (`database`, `user`); neither is this session's, so both take the path per
 /// transaction. Asked in the same query (no round trip more).
 async fn apply_context(client: &Client, schema: Option<&str>) -> Result<Placed, DbError> {
-    let ask = "SELECT pg_catalog.current_setting('search_path'), pg_catalog.current_database()::text, \
-               pg_catalog.current_schemas(false)::text[], \
-               (SELECT s.source FROM pg_catalog.pg_settings s WHERE s.name = 'search_path')";
+    let ask = "SELECT pg_catalog.current_setting('search_path'), pg_catalog.current_database()::pg_catalog.text, \
+               pg_catalog.current_schemas(false)::pg_catalog.text[], \
+               (SELECT s.source FROM pg_catalog.pg_settings s WHERE s.name OPERATOR(pg_catalog.=) 'search_path')";
     let row = client.query_typed_one(ask, &[]).await.map_err(|e| db_error(&e))?;
     let placed = Placed { database: row.get(1), schemas: row.get(2), per_transaction: None };
     let applied = |s: &str| {
@@ -309,8 +309,8 @@ async fn apply_context(client: &Client, schema: Option<&str>) -> Result<Placed, 
     let set = set_local_path(schema);
     // One simple query is one implicit transaction: the `SET LOCAL` ends with it.
     let text = format!(
-        "{set}; SELECT pg_catalog.current_database()::text; \
-         SELECT pg_catalog.unnest(pg_catalog.current_schemas(false))::text"
+        "{set}; SELECT pg_catalog.current_database()::pg_catalog.text; \
+         SELECT pg_catalog.unnest(pg_catalog.current_schemas(false))::pg_catalog.text"
     );
     let msgs = client.simple_query(&text).await.map_err(|e| db_error(&e))?;
     let (mut done, mut database, mut schemas) = (0, None, Vec::new());
@@ -360,12 +360,12 @@ pub(crate) async fn apply_limits(
         None => "NULL".to_string(),
     };
     let ask = format!(
-        "SELECT d.direct, {}, {} FROM (SELECT pg_catalog.pg_backend_pid() = {pid} AS direct) d",
+        "SELECT d.direct, {}, {} FROM (SELECT pg_catalog.pg_backend_pid() OPERATOR(pg_catalog.=) {pid} AS direct) d",
         set("lock_timeout", lock_wait, ""),
         set(
             "idle_session_timeout",
             server_idle,
-            " AND pg_catalog.current_setting('server_version_num')::int >= 140000"
+            " AND pg_catalog.current_setting('server_version_num')::int OPERATOR(pg_catalog.>=) 140000"
         ),
     );
     match client.simple_query(&ask).await {
