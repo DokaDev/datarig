@@ -141,6 +141,8 @@ fn blank_and_overlong_texts_are_not_kept() {
     assert!(!h.record(key("orders"), "  ", "\n", 1));
     assert!(!h.record(key("orders"), &"x".repeat(ENTRY_MAX_BYTES + 1), "", 1));
     assert!(!h.record(key("orders"), "a = 1", &"y".repeat(ENTRY_MAX_BYTES + 1), 1));
+    let long_name = TableKey { table: "t".repeat(ENTRY_MAX_BYTES + 1), ..key("orders") };
+    assert!(!h.record(long_name, "a = 1", "", 1), "a name the file could not hold");
     assert!(h.record(key("orders"), &"x".repeat(ENTRY_MAX_BYTES), "", 1));
     assert_eq!(h.entries(&key("orders")).len(), 1);
 }
@@ -278,4 +280,44 @@ fn a_write_never_goes_into_what_is_already_there() {
     assert_eq!(fs::read_to_string(&planted).unwrap(), "someone else's");
     assert_eq!(fs::read_to_string(&path).unwrap(), one_entry());
     let _ = fs::remove_dir_all(&d);
+}
+
+/// The file's text of one table `t` with one entry of `filter` (a hand edit can put anything).
+fn file_with(table: &str, filter: &str) -> String {
+    let s = |v: &str| toml_edit::Value::from(v).to_string();
+    format!(
+        "version = 1\n[[tables]]\nprofile = \"3f0b8f5e-0b1c-4d2e-9f3a-1b2c3d4e5f60\"\ndatabase = \"d\"\nschema = \"s\"\ntable = {}\n[[tables.entries]]\nwhere = {}\norder = \"\"\nused = 1\n",
+        s(table),
+        s(filter)
+    )
+}
+
+/// A text longer than an entry may be (one the app would never keep) makes the file
+/// unreadable, read as strictly as the rest: never loaded as it is, never cut.
+#[test]
+fn a_file_with_an_overlong_text_is_unreadable() {
+    let fits = "x".repeat(ENTRY_MAX_BYTES);
+    assert_eq!(parse(&file_with("t", &fits)).map(|h| h.table_count()), Ok(1));
+    let long = "x".repeat(ENTRY_MAX_BYTES + 1);
+    assert_eq!(parse(&file_with("t", &long)), Err(Unreadable::Malformed { line: None }), "a long condition");
+    let order = file_with("t", "a = 1").replace("order = \"\"", &format!("order = \"{long}\""));
+    assert_eq!(parse(&order), Err(Unreadable::Malformed { line: None }), "a long order");
+    assert_eq!(parse(&file_with(&long, "a = 1")), Err(Unreadable::Malformed { line: None }), "a long name");
+}
+
+/// One table alone can be larger than the budget (texts of characters written escaped): its
+/// oldest entries are left out of the file then.
+#[test]
+fn a_single_table_stays_within_the_budget() {
+    let mut h = History::default();
+    let control = "\u{1}".repeat(ENTRY_MAX_BYTES - 2);
+    for i in 0..PER_TABLE {
+        assert!(h.record(key("orders"), &format!("{control}{i:02}"), &control, i as i64));
+    }
+    let text = h.to_toml();
+    assert!(text.len() <= FILE_BUDGET, "{}", text.len());
+    let read = parse(&text).unwrap();
+    let kept = read.entries(&key("orders"));
+    assert!(!kept.is_empty() && kept.len() < PER_TABLE, "{}", kept.len());
+    assert_eq!(kept, &h.entries(&key("orders"))[..kept.len()], "the most recent ones");
 }

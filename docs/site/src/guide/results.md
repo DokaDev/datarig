@@ -201,9 +201,11 @@ readable by you only (mode 0600 on Unix), and never part of the workspace file. 
 hold personal data, such as an email address: `:set history.filters=off` (or
 `[history] filters = "off"` in the config file) stops keeping new ones, `:filter history clear`
 forgets this table's (asked first: `Enter` cancels, `y` clears) and `:filter history clear all`
-every table's; turning the setting off does not delete the file. When the file cannot be read, the
-history is off for the session and says so once; datarig never writes over it, and a clear is
-refused naming the file, for you to fix or delete. A second datarig running at the same time
+every table's; turning the setting off does not delete the file. When the file cannot be read
+(a condition or order in it longer than 4 KiB counts as that too), or something else than a
+plain file is at its path (datarig never follows a symbolic link there), the history is off for
+the session and says so once; datarig never writes over it, and a clear is refused naming the
+file, for you to fix or delete. A second datarig running at the same time
 reads the history but does not write it.
 
 ## The inspector

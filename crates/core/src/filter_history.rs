@@ -7,7 +7,8 @@
 //! filter text, an order text and when it was last used (Unix seconds). Running the same pair
 //! again moves it to the front. At most [`TABLES`] tables are kept, the least recently used one
 //! goes first. A text longer than [`ENTRY_MAX_BYTES`] is not kept, and the file stays under
-//! [`FILE_BUDGET`] by leaving out the tables used longest ago.
+//! [`FILE_BUDGET`] by leaving out the tables used longest ago (and the oldest entries of a
+//! table too large on its own).
 //!
 //! ```toml
 //! version = 1
@@ -25,9 +26,9 @@
 //! ```
 //!
 //! A file that is not there is an empty history. A file that is there but cannot be read, is
-//! not this shape (anything missing, of another type or not known), was written by a newer
-//! version or is larger than [`READ_MAX`] is [`Unreadable`]: never taken for an empty history,
-//! and never written over. So is anything else than a plain file at the path, a symbolic link
+//! not this shape (anything missing, of another type or not known, a text longer than an entry
+//! may be), was written by a newer version or is larger than [`READ_MAX`] is [`Unreadable`]:
+//! never taken for an empty history, and never written over. So is anything else than a plain file at the path, a symbolic link
 //! too (even one to nothing): it is never followed, neither to read nor to write.
 
 use crate::profile::ProfileId;
@@ -46,10 +47,12 @@ pub const PER_TABLE: usize = 50;
 /// The tables kept.
 pub const TABLES: usize = 200;
 
-/// A filter or order text longer than this (bytes) is not kept.
+/// A filter or order text (or a name of the table) longer than this (bytes) is not kept, and a
+/// file holding one is not read.
 pub const ENTRY_MAX_BYTES: usize = 4096;
 
-/// The file written stays under this size: the tables used longest ago are left out.
+/// The file written stays under this size: the tables used longest ago are left out (and the
+/// oldest entries of a table too large on its own).
 pub const FILE_BUDGET: usize = 1 << 20;
 
 /// A file larger than this is not read.
@@ -111,10 +114,12 @@ impl History {
 
     /// `filter` and `order` ran on `key` at `now`: the entry (new, or the same texts run
     /// earlier) moves to the front, and so does the table. Whether anything was kept: both
-    /// texts blank, or one longer than [`ENTRY_MAX_BYTES`], keeps nothing.
+    /// texts blank, or one of them or of the table's names longer than [`ENTRY_MAX_BYTES`],
+    /// keeps nothing.
     pub fn record(&mut self, key: TableKey, filter: &str, order: &str, now: i64) -> bool {
         let (filter, order) = (filter.trim(), order.trim());
-        if (filter.is_empty() && order.is_empty()) || filter.len() > ENTRY_MAX_BYTES || order.len() > ENTRY_MAX_BYTES {
+        let names = [filter, order, &key.database, &key.schema, &key.table];
+        if (filter.is_empty() && order.is_empty()) || names.iter().any(|t| t.len() > ENTRY_MAX_BYTES) {
             return false;
         }
         let mut entries = match self.tables.iter().position(|(k, _)| *k == key) {
@@ -144,14 +149,14 @@ impl History {
         n
     }
 
-    /// The file's text. Tables are added the most recent first while the text stays within
-    /// [`FILE_BUDGET`]; the most recent table is always there (its size is bounded by the
-    /// limits of an entry).
+    /// The file's text, never larger than [`FILE_BUDGET`]. Tables are added whole, the most
+    /// recent first, while they fit; of the most recent table, too large on its own, its most
+    /// recent entries that fit.
     pub fn to_toml(&self) -> String {
         let mut out = format!("version = {VERSION}\n");
         for (i, (key, entries)) in self.tables.iter().enumerate() {
-            let part = table_text(key, entries);
-            if i > 0 && out.len() + part.len() > FILE_BUDGET {
+            let (part, n) = table_text(key, entries, FILE_BUDGET.saturating_sub(out.len()));
+            if n == 0 || (i > 0 && n < entries.len()) {
                 break;
             }
             out.push_str(&part);
@@ -160,8 +165,9 @@ impl History {
     }
 }
 
-/// One table of the file, as text.
-fn table_text(key: &TableKey, entries: &[Entry]) -> String {
+/// One table of the file as text, at most `room` bytes: its first entries that fit, and how
+/// many (none: nothing fits).
+fn table_text(key: &TableKey, entries: &[Entry], room: usize) -> (String, usize) {
     let s = |v: &str| toml_edit::Value::from(v).to_string();
     let mut out = format!(
         "\n[[tables]]\nprofile = {}\ndatabase = {}\nschema = {}\ntable = {}\n",
@@ -170,15 +176,17 @@ fn table_text(key: &TableKey, entries: &[Entry]) -> String {
         s(&key.schema),
         s(&key.table),
     );
+    let mut n = 0;
     for e in entries {
-        out.push_str(&format!(
-            "\n[[tables.entries]]\nwhere = {}\norder = {}\nused = {}\n",
-            s(&e.filter),
-            s(&e.order),
-            e.used
-        ));
+        let entry =
+            format!("\n[[tables.entries]]\nwhere = {}\norder = {}\nused = {}\n", s(&e.filter), s(&e.order), e.used);
+        if out.len() + entry.len() > room {
+            break;
+        }
+        out.push_str(&entry);
+        n += 1;
     }
-    out
+    (out, n)
 }
 
 /// Read the file: an empty history when there is none. Only a plain file is read: a symbolic
@@ -231,14 +239,14 @@ pub fn parse(text: &str) -> Result<History, Unreadable> {
     for t in tables {
         let t = t.as_table().ok_or(malformed)?;
         only(t, &["profile", "database", "schema", "table", "entries"])?;
-        let text = |k: &str| t.get(k).and_then(toml::Value::as_str).map(str::to_string).ok_or(malformed);
+        let text = |k: &str| bounded(t.get(k)).ok_or(malformed);
         let profile = t.get("profile").and_then(toml::Value::as_str).and_then(ProfileId::parse).ok_or(malformed)?;
         let key = TableKey { profile, database: text("database")?, schema: text("schema")?, table: text("table")? };
         let mut entries = Vec::new();
         for e in t.get("entries").and_then(toml::Value::as_array).ok_or(malformed)? {
             let e = e.as_table().ok_or(malformed)?;
             only(e, &["where", "order", "used"])?;
-            let text = |k: &str| e.get(k).and_then(toml::Value::as_str).map(str::to_string).ok_or(malformed);
+            let text = |k: &str| bounded(e.get(k)).ok_or(malformed);
             let used = e.get("used").and_then(toml::Value::as_integer).ok_or(malformed)?;
             entries.push(Entry { filter: text("where")?, order: text("order")?, used });
         }
@@ -249,6 +257,11 @@ pub fn parse(text: &str) -> Result<History, Unreadable> {
         }
     }
     Ok(h)
+}
+
+/// `v` as a text no longer than [`ENTRY_MAX_BYTES`] (one the app keeps).
+fn bounded(v: Option<&toml::Value>) -> Option<String> {
+    v.and_then(toml::Value::as_str).filter(|t| t.len() <= ENTRY_MAX_BYTES).map(str::to_string)
 }
 
 /// `t` has no key but `keys`.
