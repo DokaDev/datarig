@@ -113,9 +113,9 @@ not written into the statement the grid runs: the pages stop at it instead, the 
 there, and nothing is fetched past it (what the server held open for the result is closed). The
 results title then says `limit 100`. A count (`#`) and an export of every row read the capped
 statement (`… LIMIT 100`), so they see the same rows the pages would. A new limit runs the table
-again from its first page. On MySQL a condition that reads the outcome of the statement before
-it (`ROW_COUNT()`, `FOUND_ROWS()`) cannot be capped without changing what it reads: with a
-limit it is not sent, and the run says why.
+again from its first page. On MySQL a condition may not call `ROW_COUNT()` or `FOUND_ROWS()`:
+they read the outcome of the statement before, which for a table tab is one the app sends, so
+the line refuses them.
 
 The condition, order and limit you applied are kept with the workspace and with a closed tab
 you bring back (`Space t u`): they return to the line without running, and are checked again

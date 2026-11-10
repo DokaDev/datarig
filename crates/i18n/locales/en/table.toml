@@ -21,7 +21,7 @@
 "table.filter.why.assignment" = "variable assignment (:=) is not allowed"
 "table.filter.why.sequence" = "NEXT VALUE FOR and .NEXTVAL would advance a sequence for each row read"
 "table.filter.why.not_read" = "not read as a plain read of the table"
-"table.filter.why.refused_calls" = "{names}: waits, locks, changes the session, calls out, or reads or writes the server's files or large objects"
+"table.filter.why.refused_calls" = "{names}: waits, locks, changes the session, calls out, reads or writes the server's files or large objects, or reads the statement before it"
 "table.filter.why.unchecked_calls" = "{names}: not known to be free of side effects (read-only connection)"
 "table.filter.why.read_only" = "read-only connection: {what}"
 "table.filter.why.unconfirmed" = "its functions were not confirmed in this tab"

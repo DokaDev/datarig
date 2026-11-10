@@ -19,7 +19,7 @@
 "table.filter.why.assignment" = "변수 대입(:=)은 쓸 수 없습니다"
 "table.filter.why.sequence" = "NEXT VALUE FOR와 .NEXTVAL은 읽는 행마다 시퀀스를 증가시킵니다"
 "table.filter.why.not_read" = "테이블을 단순히 읽는 문으로 읽히지 않습니다"
-"table.filter.why.refused_calls" = "{names}: 기다리거나, 잠그거나, 세션을 바꾸거나, 외부를 호출하거나, 서버의 파일이나 대형 객체(large object)를 읽거나 씁니다"
+"table.filter.why.refused_calls" = "{names}: 기다리거나, 잠그거나, 세션을 바꾸거나, 외부를 호출하거나, 서버의 파일이나 대형 객체(large object)를 읽거나 쓰거나, 직전 문의 결과를 읽습니다"
 "table.filter.why.unchecked_calls" = "{names}: 부작용이 없다고 알려지지 않은 함수입니다 (읽기 전용 연결)"
 "table.filter.why.read_only" = "읽기 전용 연결: {what}"
 "table.filter.why.unconfirmed" = "이 탭에서 함수 호출을 확인하지 않았습니다"
