@@ -945,6 +945,22 @@ async fn order_keys_are_read_without_a_lock() {
         ),
         format!("CREATE UNIQUE INDEX coll_c ON {s}.coll (v COLLATE \"C\")"),
         format!("CREATE UNIQUE INDEX coll_pattern ON {s}.coll (w text_pattern_ops)"),
+        // The class an ORDER BY of each type picks, or another: a domain over text (text's own
+        // class), varchar (text's, through the cast without a function), bpchar (its own).
+        format!("CREATE DOMAIN {s}.label AS text"),
+        format!("CREATE DOMAIN {s}.label2 AS {s}.label"),
+        format!(
+            "CREATE TABLE {s}.classes (d {s}.label2 NOT NULL, dp {s}.label NOT NULL, vp varchar(9) NOT NULL, \
+             b char(3) NOT NULL, bp char(3) NOT NULL, vb varchar(9) NOT NULL)"
+        ),
+        // Another type's default class (bpchar's) on a varchar column: an ORDER BY of varchar
+        // compares as text does, so it is not the same order.
+        format!("CREATE UNIQUE INDEX classes_vb ON {s}.classes (vb bpchar_ops)"),
+        format!("CREATE UNIQUE INDEX classes_d ON {s}.classes (d)"),
+        format!("CREATE UNIQUE INDEX classes_dp ON {s}.classes (dp text_pattern_ops)"),
+        format!("CREATE UNIQUE INDEX classes_vp ON {s}.classes (vp varchar_pattern_ops)"),
+        format!("CREATE UNIQUE INDEX classes_b ON {s}.classes (b)"),
+        format!("CREATE UNIQUE INDEX classes_bp ON {s}.classes (bp bpchar_pattern_ops)"),
     ] {
         pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
     }
@@ -993,6 +1009,9 @@ async fn order_keys_are_read_without_a_lock() {
     assert_eq!(keys, Ok(OrderKeys { primary_key: vec!["id".into()], inherited: true, ..OrderKeys::default() }));
     let (keys, _, _) = ask("coll").await;
     assert_eq!(keys, Ok(OrderKeys { unique_not_null: vec![vec!["vc".into()]], ..OrderKeys::default() }), "only vc");
+    let (keys, _, _) = ask("classes").await;
+    let want = vec![vec!["b".to_string()], vec!["d".to_string()]];
+    assert_eq!(keys, Ok(OrderKeys { unique_not_null: want, ..OrderKeys::default() }), "the default classes only");
     let (keys, _, _) = ask("nosuch").await;
     assert_eq!(keys, Err(DbError::NotFound));
 
