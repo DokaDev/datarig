@@ -475,3 +475,67 @@ fn the_empty_filter_line_names_the_filter_and_sort_keys_of_the_key_map() {
     let screen = h.screen(120, 30);
     assert!(screen.contains("WHERE  F8 filter · F9 sort "), "{screen}");
 }
+
+/// After a run of the line's query that brought no rows (refused by the server, cancelled),
+/// the rows shown are an earlier query's while the line shows the one that did not land. A
+/// grid action (`s`, `S`, a click in a sort zone, `F` and an entry of its menu) is refused as
+/// over changes not applied, said, and nothing changes: nothing is sent, the line and the draft
+/// keep the query that did not land.
+#[test]
+fn grid_actions_over_a_query_that_did_not_land_are_refused() {
+    use datarig_core::driver::{DbError, ServerMessage};
+    use datarig_tui::app::overlay::OverlayKind;
+    let server =
+        DbError::Server(ServerMessage { text: "column \"idd\" does not exist".into(), position: None, hint: None });
+    for (case, error, cancelled) in [("failed", server, false), ("cancelled", DbError::Cancelled, true)] {
+        let mut h = users(Lang::En);
+        h.keys("f");
+        h.type_text("idd > 1");
+        h.key(KeyCode::Enter);
+        assert_eq!(one_run(&mut h), format!("{ALL} WHERE (idd > 1)"), "{case}");
+        let (id, index) = (h.app.tab().exec.query_id, h.app.tabs.active_index());
+        h.tab_db(index, DbEvent::Failed { id, error, cancelled });
+        let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+        assert!(tq.failure().is_some(), "{case}");
+        assert_eq!(tq.shown.as_ref().and_then(|q| q.filter.as_ref()), None, "{case}: the earlier rows");
+        h.app.focus = datarig_tui::app::Focus::Results;
+        h.app.tab_mut().doc.table_query.as_mut().unwrap().line.focus = None;
+        assert_eq!(h.app.key_context(), Ctx::Grid, "{case}");
+        let (before, d) = (fields(&h), draft(&h));
+        assert_eq!(before[0], "idd > 1", "{case}");
+        for how in ["s", "S", "click", "F"] {
+            match how {
+                "click" => {
+                    let (x, y) = zone(&mut h, 1);
+                    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+                    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+                }
+                keys => h.keys(keys),
+            }
+            assert!(runs(&mut h).is_empty(), "{case} {how}: nothing sent");
+            assert_ne!(h.overlay_kind(), Some(OverlayKind::ContextMenu), "{case} {how}: no menu");
+            let status = h.status(120, 30);
+            let says = if how == "F" { "Not filtered by value: the rows shown" } else { "Not sorted: the rows shown" };
+            assert!(status.contains(says), "{case} {how}: {status}");
+            assert_eq!(fields(&h), before, "{case} {how}: the line keeps the query");
+            assert_eq!(draft(&h), d, "{case} {how}: the draft is as it was");
+            assert!(heads(&h).iter().all(|m| m.sort.is_none()), "{case} {how}");
+        }
+    }
+    // An entry picked from a menu opened over rows of the line's query, once the line's query
+    // is one whose rows are not shown (as a run that did not land leaves it): refused too.
+    let mut h = users(Lang::En);
+    h.keys("F");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
+    let qid = h.app.tab().exec.query_id;
+    let tq = h.app.tab_mut().doc.table_query.as_mut().unwrap();
+    let other = datarig_core::query::Query {
+        filter: Some(datarig_core::query::Filter { text: "idd > 1".into(), recognised: None }),
+        ..tq.shown.clone().unwrap()
+    };
+    tq.requested = Some((qid, other));
+    h.menu_pick("= 0");
+    assert!(runs(&mut h).is_empty(), "the entry sends nothing");
+    let status = h.status(120, 30);
+    assert!(status.contains("Not filtered by value: the rows shown"), "{status}");
+}

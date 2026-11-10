@@ -14,10 +14,12 @@
 //! as SQL judges it), a new row, a cell with an edit on it, or rows that cannot be read back give
 //! no filter. An entry that cannot apply to the value (a type whose comparison is not known,
 //! binary data over 64 KiB, more than 1000 cells) is shown dimmed with why. While the filter
-//! line holds edits not applied, nothing is added to it: they are applied or put back first.
+//! line holds edits not applied, nothing is added to it: they are applied or put back first;
+//! nor while it shows a query whose run brought no rows (refused, cancelled), over the earlier
+//! rows still shown.
 
 use super::menu::{MenuItem, MenuTarget, Off};
-use super::table_query::{Field, filter_text, refusal_why};
+use super::table_query::{LineAhead, filter_text, refusal_why};
 use super::*;
 use crate::widgets::filter_line::FIELD_CAP;
 use crate::widgets::grid::Shape;
@@ -120,6 +122,14 @@ fn compares(d: Dialect, m: &ColumnMeta, enum_known: bool) -> Result<bool, Label>
 /// (equality and order).
 const PG_ORDERED: &[&str] = &["uuid", "inet", "cidr", "macaddr", "macaddr8", "citext"];
 
+/// What a filter by value says when the filter line is ahead of the rows shown.
+fn line_ahead_label(why: LineAhead) -> Label {
+    match why {
+        LineAhead::Edited => Label::TableFilterByValueUnapplied,
+        LineAhead::NotShown => Label::TableFilterByValueNotShown,
+    }
+}
+
 /// Bytes written in hexadecimal after `prefix` (`\x` on PostgreSQL, `0x` on MySQL).
 fn hex_bytes(v: &str, prefix: &str) -> Option<Vec<u8>> {
     let digits = v.strip_prefix(prefix)?.as_bytes();
@@ -183,14 +193,10 @@ impl App {
             return self.flash_busy();
         }
         self.filter_line_follow_tab(id);
-        let a = self.filter_line_applied(id);
-        let Some(tq) = self.table_query(id) else { return };
-        let edited = tq.line.edited(Field::Where, &a.filter)
-            || tq.line.edited(Field::Order, &a.order)
-            || tq.line.edited(Field::Limit, &a.limit);
-        if edited {
-            return self.flash(Notice::new(Label::TableFilterByValueUnapplied, Level::Warning));
+        if let Some(why) = self.line_ahead(id) {
+            return self.flash(Notice::new(line_ahead_label(why), Level::Warning));
         }
+        let Some(tq) = self.table_query(id) else { return };
         let (Some(target), Some(shown)) = (self.table_target(id), tq.shown.clone()) else { return };
         let recognised = query::recognise(&text, &target);
         let Some(tq) = self.table_query_mut(id) else { return };
@@ -221,13 +227,10 @@ impl App {
         if rs.rows.is_empty() || rs.columns.is_empty() || t.exec.view != super::tabs::ResultView::Rows {
             return Err(warn(Label::TableFilterByValueNoRows));
         }
-        // What the line holds and was not applied stays the user's: nothing is added to it.
-        let a = self.filter_line_applied(id);
-        let edited = tq.line.edited(Field::Where, &a.filter)
-            || tq.line.edited(Field::Order, &a.order)
-            || tq.line.edited(Field::Limit, &a.limit);
-        if edited {
-            return Err(warn(Label::TableFilterByValueUnapplied));
+        // What the line holds and was not applied stays the user's: nothing is added to it; nor
+        // to the filter of rows that are not of the line's query.
+        if let Some(why) = self.line_ahead(id) {
+            return Err(warn(line_ahead_label(why)));
         }
         // The cells: the selection's, else the cursor's; read rows of one column only.
         let g = &t.grid;

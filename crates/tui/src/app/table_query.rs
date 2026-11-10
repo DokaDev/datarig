@@ -150,6 +150,16 @@ pub enum OrderKeysState {
     Failed { on: KeysOn },
 }
 
+/// Why a grid action (a sort, a filter by value) is not to run: it would run a query other than
+/// the one the filter line shows ([`App::line_ahead`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LineAhead {
+    /// A field holds changes not applied.
+    Edited,
+    /// The rows shown are not those of the line's query.
+    NotShown,
+}
+
 /// The query state of a table tab.
 #[derive(Clone, Debug)]
 pub struct TableQuery {
@@ -240,6 +250,13 @@ impl TableQuery {
     /// else the one of the rows it holds, else the draft (nothing run yet).
     pub fn applied(&self) -> &Query {
         self.requested.as_ref().map(|(_, q)| q).or(self.shown.as_ref()).unwrap_or(&self.draft)
+    }
+
+    /// Whether the rows held are those of the query the line shows as applied: not after a run
+    /// of the query that brought no rows (refused, cancelled, its session lost), whose query the
+    /// line keeps while the rows held are an earlier query's.
+    pub fn shows_applied(&self) -> bool {
+        self.requested.as_ref().is_none_or(|(_, q)| self.shown.as_ref() == Some(q))
     }
 
     /// Run `qid` sends `statements`: it is the pending query's run when it sends exactly its
@@ -1478,7 +1495,8 @@ impl App {
     /// applied when the tab shows none) changed by `step` ([`query::sort_column`]), with their
     /// condition and limit, runs as any run of the tab ([`App::table_run`]: checks, asks,
     /// pending edits). Refused while the filter line holds changes not applied, in any field
-    /// (they are applied or put back first). The line and the draft take the new order only
+    /// (they are applied or put back first), or a query whose rows are not the ones shown (its
+    /// run was refused or cancelled: the earlier rows are still shown). The line and the draft take the new order only
     /// once its run is sent: a run asked about and declined, or refused, leaves them as they
     /// were.
     pub(super) fn table_sort(&mut self, id: TabId, col: usize, step: query::SortStep) {
@@ -1495,18 +1513,34 @@ impl App {
         // What the line holds and was not applied stays the user's: the sort would run a query
         // the line does not show.
         self.filter_line_follow_tab(id);
-        let a = self.filter_line_applied(id);
-        let Some(tq) = self.table_query_mut(id) else { return };
-        let edited = tq.line.edited(Field::Where, &a.filter)
-            || tq.line.edited(Field::Order, &a.order)
-            || tq.line.edited(Field::Limit, &a.limit);
-        if edited {
-            return self.flash(Notice::new(Label::TableSortUnapplied, Level::Warning));
+        match self.line_ahead(id) {
+            Some(LineAhead::Edited) => return self.flash(Notice::new(Label::TableSortUnapplied, Level::Warning)),
+            Some(LineAhead::NotShown) => return self.flash(Notice::new(Label::TableSortNotShown, Level::Warning)),
+            None => {}
         }
+        let Some(tq) = self.table_query_mut(id) else { return };
         let base = tq.shown.clone().unwrap_or_else(|| tq.applied().clone());
         let q = Query { order: query::sort_column(&base.order, &name, step), ..base };
         tq.sorted = Some(q.clone());
         self.table_run(id, q);
+    }
+
+    /// Why a grid action on table tab `id` (a sort, a filter by value), which runs from the rows
+    /// shown, would run a query other than the one the filter line shows: a field holds changes
+    /// not applied, or the line's query is not the one of the rows shown (its run was refused,
+    /// cancelled, or ended without rows). `None`: neither. The fields follow what is applied
+    /// first ([`App::filter_line_follow_tab`]).
+    pub(super) fn line_ahead(&self, id: TabId) -> Option<LineAhead> {
+        let tq = self.table_query(id)?;
+        let a = self.filter_line_applied(id);
+        let edited = tq.line.edited(Field::Where, &a.filter)
+            || tq.line.edited(Field::Order, &a.order)
+            || tq.line.edited(Field::Limit, &a.limit);
+        match (edited, tq.shows_applied()) {
+            (true, _) => Some(LineAhead::Edited),
+            (false, false) => Some(LineAhead::NotShown),
+            (false, true) => None,
+        }
     }
 
     /// What the headers of table tab `id`'s grid say of the rows shown, by result column: the
