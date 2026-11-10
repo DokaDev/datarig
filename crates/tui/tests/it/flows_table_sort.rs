@@ -332,3 +332,20 @@ fn the_sort_screens() {
         h.app.icons = IconsSetting::Off;
     }
 }
+
+#[test]
+fn the_empty_filter_line_names_the_filter_and_sort_keys_of_the_key_map() {
+    let screen = users(Lang::En).screen(120, 30);
+    assert!(screen.contains("WHERE  f filter · s sort "), "{screen}");
+    let mut cfg = test_db_config();
+    cfg.keymap = datarig_core::config::parse(
+        "[keymap.grid]\n\"f\" = \"none\"\n\"s\" = \"none\"\n\"f8\" = \"table.filter.edit\"\n\"f9\" = \"table.sort.cycle\"\n",
+    )
+    .unwrap()
+    .keymap;
+    let mut h = Harness::connected_with(&cfg, Lang::En);
+    open_users(&mut h);
+    answer(&mut h);
+    let screen = h.screen(120, 30);
+    assert!(screen.contains("WHERE  F8 filter · F9 sort "), "{screen}");
+}

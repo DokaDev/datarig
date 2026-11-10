@@ -400,8 +400,10 @@ fn draw_filter_line(app: &mut App, line: Rect, pane_h: u16, buf: &mut Buffer) ->
     if crate::widgets::filter_line::hidden(blank, focused.is_some(), pane_h) {
         return false;
     }
-    let key = app.key_for(Action::Table(crate::app::filter_line::TableAction::EditFilter), Ctx::Grid);
-    let hint = app.i18n.msg(&Msg::TableFilterHint { key }).to_string();
+    use crate::app::filter_line::TableAction;
+    let filter = app.key_for(Action::Table(TableAction::EditFilter), Ctx::Grid);
+    let sort = app.key_for(Action::Table(TableAction::SortCycle), Ctx::Grid);
+    let hint = app.i18n.msg(&Msg::TableFilterHint { filter, sort }).to_string();
     let mut state = app.table_query(id).map(|q| q.line.clone()).unwrap_or_default();
     let drawn = crate::widgets::filter_line::draw(app, &mut state, &applied, focused, &hint, line, buf);
     if let Some(tq) = app.tab_mut().doc.table_query.as_mut() {

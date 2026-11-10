@@ -51,7 +51,7 @@
 "table.order.columns_unknown" = "실행하지 않음: 테이블의 열을 아직 모릅니다 (먼저 탭을 실행하세요)"
 "table.order.not_unique" = "순서가 유일하지 않음"
 "table.order.not_unique_short" = "유일하지 않음"
-"table.filter.hint" = "WHERE  {key} 필터"
+"table.filter.hint" = "WHERE  {filter} 필터 · {sort} 정렬"
 "table.filter.only_table_tabs" = "필터 줄은 테이블 탭에만 있습니다: 쿼리의 행은 쿼리 텍스트에서 거르세요"
 "table.filter.paste_cut" = "붙여 넣은 텍스트를 잘랐습니다: 필드에는 최대 16 KiB까지 들어갑니다"
 "table.filter.failed_rows" = "필터 실패: 이전 행을 보여 주는 중"
