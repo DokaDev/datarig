@@ -837,3 +837,77 @@ fn the_not_unique_note_stays_at_the_explorers_widest() {
         }
     }
 }
+
+/// `shop.users` open with its key `id` read, then run ordered by `name`: the key is appended.
+/// The table tab stays active, nothing sent since.
+fn ordered_with_its_key() -> Harness {
+    let mut h = users();
+    keys_came(&mut h, "local-pg", &["id"]);
+    h.command("orderby name");
+    let sent = runs(&mut h);
+    assert!(sent.iter().flatten().any(|s| s.ends_with(r#"ORDER BY "name" ASC, "id" ASC"#)), "{sent:?}");
+    answer(&mut h);
+    h.sent();
+    h
+}
+
+/// The table tab's order run again: its statement must not append the key read before (it may
+/// be gone), and the keys are asked for again with it.
+fn run_again_asks_the_keys(h: &mut Harness) {
+    h.command("orderby name");
+    let sent = h.sent();
+    let ran = sent.iter().any(
+        |c| matches!(c, DbCommand::Execute { statements, .. } if statements[0].ends_with(r#"ORDER BY "name" ASC"#)),
+    );
+    assert!(ran, "no tie-breaker from keys that may be out of date: {sent:?}");
+    assert_eq!(keys_asks(&sent).iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(), ["shop.users"], "{sent:?}");
+    answer(h);
+    let screen = h.screen(120, 30);
+    assert!(screen.contains("not unique"), "unknown until read, never no key: {screen}");
+    // Read again: the order is total again.
+    keys_came(h, "local-pg", &["uid"]);
+    h.command("orderby name");
+    let sent = runs(h);
+    assert!(sent.iter().flatten().any(|s| s.ends_with(r#"ORDER BY "name" ASC, "uid" ASC"#)), "{sent:?}");
+}
+
+/// DDL committed in a console of the profile (its key column renamed) drops the keys its table
+/// tabs read: the next ordered run does not append the old column and reads them again.
+#[test]
+fn ddl_in_a_console_makes_table_tabs_read_their_keys_again() {
+    use datarig_core::driver::Outcome;
+    let mut h = ordered_with_its_key();
+    let table = h.app.tabs.active_index();
+    let console = h.app.tabs.iter().position(|t| !t.is_table()).expect("a console");
+    h.app.tabs.activate(console);
+    h.app.run(vec!["ALTER TABLE shop.users RENAME COLUMN id TO uid".into()]);
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(console, DbEvent::Done { id, outcome: Outcome::Command("ALTER TABLE".into()), elapsed: Duration::ZERO });
+    h.app.tabs.activate(table);
+    h.sent();
+    run_again_asks_the_keys(&mut h);
+}
+
+/// Reading the profile's schema again in the explorer drops the keys its table tabs read.
+#[test]
+fn a_metadata_refresh_makes_table_tabs_read_their_keys_again() {
+    let mut h = ordered_with_its_key();
+    let table = h.app.tabs.active_index();
+    h.explore("local-pg");
+    h.keys("r");
+    h.app.tabs.activate(table);
+    h.sent();
+    run_again_asks_the_keys(&mut h);
+}
+
+/// A server's error of an ordered run (another session renamed the key column) drops the keys
+/// read: the next run reads them again rather than append the column again.
+#[test]
+fn a_failed_ordered_run_reads_the_keys_again() {
+    let mut h = ordered_with_its_key();
+    h.command("orderby name");
+    h.sent();
+    fail(&mut h, at(r#"column "id" does not exist"#, None));
+    h.sent();
+    run_again_asks_the_keys(&mut h);
+}

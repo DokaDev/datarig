@@ -787,6 +787,7 @@ impl App {
                 self.send_meta(id, DbCommand::LoadCatalog);
                 // The keys are read again too: the cached ones may be out of date.
                 self.reload_keys(id);
+                self.forget_order_keys(id, Some(None));
             }
             TreeAction::Open { schema, name } => self.open_table(id, None, &schema, &name),
             TreeAction::LoadStructure { schema, name } => {

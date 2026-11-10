@@ -1113,9 +1113,9 @@ impl App {
         }
     }
 
-    /// After DDL run in tab `id` the key cache of its profile may be out of date: read it again
-    /// once the run ends, or, inside a transaction (the metadata session cannot see its
-    /// changes yet), once the transaction ends.
+    /// After DDL run in tab `id` the key cache of its profile, and the keys its table tabs read
+    /// for their order, may be out of date: read again once the run ends, or, inside a
+    /// transaction (the metadata session cannot see its changes yet), once the transaction ends.
     fn keys_after_ddl(&mut self, id: TabId, profile: Option<ProfileId>, run_ended: bool, tx_ended: bool) {
         let Some(t) = self.tabs.get_mut(id) else { return };
         let mut reload = false;
@@ -1131,6 +1131,7 @@ impl App {
         }
         if reload && let Some(p) = profile {
             self.reload_keys(p);
+            self.forget_order_keys(p, None);
             self.conns.forget_checks(p);
         }
     }

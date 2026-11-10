@@ -223,9 +223,13 @@ impl TableQuery {
     /// query's, the query is marked failed, with where in its filter's text the error is when
     /// the server pointed there. PostgreSQL counts characters of the statement as sent; MySQL
     /// quotes the text from the error on (`near '…'`), which marks the filter only when it is
-    /// found once in the statement and starts in the filter.
+    /// found once in the statement and starts in the filter. A server's error of a statement
+    /// with an order drops the keys read: another session may have changed them (a key column
+    /// renamed), and the next run reads them again rather than append a column that may be
+    /// gone (until then the order is not taken for total, never for one without a key).
     pub(super) fn run_failed(&mut self, qid: u64, error: &ServerError<'_>, d: Dialect) {
         let Some((_, s)) = self.statement.as_ref().filter(|(id, _)| *id == qid) else { return };
+        let ordered = !s.order.is_empty();
         let at = s.filter_span.as_ref().and_then(|span| {
             let (start, end) = match (error, d) {
                 (ServerError::Message(m), Dialect::Postgres) => {
@@ -257,6 +261,9 @@ impl TableQuery {
             Some(from..to)
         });
         self.failed = Some((qid, Failure { at, how: Unapplied::Refused }));
+        if ordered && matches!(error, ServerError::Message(_)) {
+            self.order_keys = OrderKeysState::Unknown;
+        }
     }
 
     /// The failure of the query the tab holds as applied, while it is the run sent last.
@@ -699,6 +706,23 @@ impl App {
         }
         if let Some(tq) = self.table_query_mut(id) {
             tq.order_keys = OrderKeysState::Asked { request, on };
+        }
+    }
+
+    /// The keys read for the table tabs of profile `profile` may be out of date: its schema may
+    /// have changed (DDL ran in the app, the explorer read the schema again). `database`: only
+    /// the tabs on that metadata session (`Some(None)`: the profile's own), else every tab of the
+    /// profile (DDL may name a table of any database). Their keys are not known until read
+    /// again: the next run asks for them (until then no order is taken for total), and an
+    /// answer on its way is dropped.
+    pub(super) fn forget_order_keys(&mut self, profile: ProfileId, database: Option<Option<&str>>) {
+        for t in self.tabs.iter_mut().filter(|t| t.profile == Some(profile)) {
+            if database.is_some_and(|db| t.context.database.as_deref() != db) {
+                continue;
+            }
+            if let Some(tq) = t.doc.table_query.as_mut() {
+                tq.order_keys = OrderKeysState::Unknown;
+            }
         }
     }
 
