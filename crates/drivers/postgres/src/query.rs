@@ -2520,7 +2520,14 @@ fn count_error(e: &tokio_postgres::Error) -> DbError {
 /// answers at a time limit too, is a cancel only when the user had asked for one for this run
 /// (`asked`); otherwise the server's own words say what stopped it.
 fn asked_error(e: &tokio_postgres::Error, asked: bool) -> DbError {
-    if is_cancel(e) && asked { DbError::Cancelled } else { db_error(e) }
+    if is_cancel(e) && asked && !said_timeout(e) { DbError::Cancelled } else { db_error(e) }
+}
+
+/// Whether the server says in so many words that its statement time limit stopped the statement.
+/// A cancel and the limit share one code, so its message is the only sign of which it was; a
+/// server that answers in another language says nothing here, and is shown in its own words.
+fn said_timeout(e: &tokio_postgres::Error) -> bool {
+    e.as_db_error().is_some_and(|db| db.message() == "canceling statement due to statement timeout")
 }
 
 /// Whether the session runs `sql` as a count: only the app's `SELECT count(*)` of a statement
@@ -2597,11 +2604,13 @@ async fn count(
     let counted = match link.guard(Some(env.token), client.simple_query(&text)).await? {
         Ok(msgs) => count_of(&msgs),
         Err(e) => {
+            // As it stood when the answer came: a cancel during the cleanup stopped nothing.
+            let why = asked_error(&e, env.cancel.asked());
             if env.read_only {
                 // The failure left the `BEGIN READ ONLY` block open and aborted.
                 let _ = link.guard(None, client.batch_execute("ROLLBACK")).await?;
             }
-            Err(asked_error(&e, env.cancel.asked()))
+            Err(why)
         }
     };
     Ok((counted, false))
@@ -2676,7 +2685,11 @@ async fn limited_read(
     // `COMMIT` after it, is not told by how long they took.
     let applied = set.and_then(|end| applied_limit(&msgs[..end]));
     let failed = |(e, asked, ran): (&tokio_postgres::Error, bool, Duration), applied| {
-        if is_cancel(e) { stopped(asked, ran, applied).unwrap_or_else(|| db_error(e)) } else { db_error(e) }
+        if is_cancel(e) {
+            stopped(asked, said_timeout(e), ran, applied).unwrap_or_else(|| db_error(e))
+        } else {
+            db_error(e)
+        }
     };
     let admitted = match (&end, set) {
         (Err(e), _) => Err(failed((e, asked, ran), applied)),
@@ -2754,15 +2767,16 @@ async fn streamed(client: &Client, query: &str) -> (Vec<SimpleQueryMessage>, Res
 }
 
 /// A bounded read stopped with `query_canceled` (57014), which the server answers to a cancel
-/// request and at the statement time limit alike: a cancel when the user had asked for one for
-/// this run when the answer came (`asked`); the limit ([`DbError::TimedOut`]) when the read
-/// had been sent for as long as the limit that applied (`None`: it had not taken effect). Neither
-/// (the session's own limit before that, someone else's cancel, or one of the user's that came
-/// too late to be held back): `None`, what stopped it is not known here.
-fn stopped(asked: bool, ran: Duration, applied: Option<Duration>) -> Option<DbError> {
+/// request and at the statement time limit alike. The limit ([`DbError::TimedOut`]) only when the
+/// server says so (`said`), that limit had taken effect (`applied`) and the read had been sent
+/// for that long; a cancel when the user had asked for one for this run when the answer came
+/// (`asked`) and the server does not say it was a time limit. Anything else (the session's own
+/// limit before that, someone else's cancel, one of the user's that came too late to be held
+/// back, a time limit said in another language): `None`, the server's own words are the answer.
+fn stopped(asked: bool, said: bool, ran: Duration, applied: Option<Duration>) -> Option<DbError> {
     match applied {
-        _ if asked => Some(DbError::Cancelled),
-        Some(applied) if ran >= applied => Some(DbError::TimedOut(applied)),
+        Some(applied) if said && ran >= applied => Some(DbError::TimedOut(applied)),
+        _ if asked && !said => Some(DbError::Cancelled),
         _ => None,
     }
 }

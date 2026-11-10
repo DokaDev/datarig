@@ -12,6 +12,7 @@
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
 
 /// A message a client sent.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,6 +66,8 @@ pub struct Proxy {
     pub executes: Arc<Mutex<Vec<i32>>>,
     /// The fault set for the next simple query of a text ([`Proxy::fault`]).
     faults: Faults,
+    /// Whether the server's answers are held back ([`Proxy::hold_answers`]).
+    held: Arc<watch::Sender<bool>>,
 }
 
 impl Proxy {
@@ -76,16 +79,24 @@ impl Proxy {
         let dropped = Arc::new(Mutex::new(0));
         let executes = Arc::new(Mutex::new(Vec::new()));
         let faults: Faults = Arc::new(Mutex::new(Vec::new()));
+        let held = Arc::new(watch::channel(false).0);
         let (s, d, e, f, up) = (sent.clone(), dropped.clone(), executes.clone(), faults.clone(), upstream.to_string());
+        let h = held.clone();
         tokio::spawn(async move {
             while let Ok((client, _)) = listener.accept().await {
-                let (s, d, e, f, up) = (s.clone(), d.clone(), e.clone(), f.clone(), up.clone());
+                let (s, d, e, f, up, h) = (s.clone(), d.clone(), e.clone(), f.clone(), up.clone(), h.clone());
                 tokio::spawn(async move {
-                    let _ = relay(client, &up, s, d, e, f).await;
+                    let _ = relay(client, &up, s, d, e, f, h).await;
                 });
             }
         });
-        Proxy { addr, sent, dropped, executes, faults }
+        Proxy { addr, sent, dropped, executes, faults, held }
+    }
+
+    /// Hold what the server answers back from the clients (`true`) until told otherwise
+    /// (`false`), as an answer slow to arrive.
+    pub fn hold_answers(&self, held: bool) {
+        self.held.send_replace(held);
     }
 
     /// The next simple query whose text is `query` (on any connection) meets `fault`, once;
@@ -143,6 +154,7 @@ async fn relay(
     dropped: Arc<Mutex<usize>>,
     executes: Arc<Mutex<Vec<i32>>>,
     faults: Faults,
+    held: Arc<watch::Sender<bool>>,
 ) -> std::io::Result<()> {
     let mut body = read_startup(&mut client).await?;
     // SSLRequest / GSSENCRequest: "no", then the real startup message.
@@ -180,7 +192,14 @@ async fn relay(
     let (mut cr, mut cw) = client.into_split();
     let (mut sr, mut sw) = server.into_split();
     tokio::spawn(async move {
-        let _ = tokio::io::copy(&mut sr, &mut cw).await;
+        let mut buf = vec![0; 16 * 1024];
+        let mut gate = held.subscribe();
+        while let Ok(n) = sr.read(&mut buf).await {
+            let _ = gate.wait_for(|held| !held).await;
+            if n == 0 || cw.write_all(&buf[..n]).await.is_err() {
+                break;
+            }
+        }
         let _ = cw.shutdown().await;
     });
     while let Ok(tag) = cr.read_u8().await {

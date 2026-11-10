@@ -7462,3 +7462,102 @@ async fn a_bounded_count_is_refused_when_the_transaction_state_is_unknown() {
     assert!(!proxy.sent().iter().any(ran), "the count was not sent");
     assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
 }
+
+/// What stopped a bounded read is told by what the server said, not by when the answer arrived:
+/// a time limit whose answer is held back while the user cancels is still the time limit, and
+/// another session's cancel whose answer arrives after the limit passed is the server's words.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_late_answer_does_not_change_what_stopped_a_bounded_read() {
+    let Some(url) = pg_url("a_late_answer_does_not_change_what_stopped_a_bounded_read") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_lateans_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let backend = q.first_value(1, "SELECT pg_backend_pid()").await.unwrap();
+    let counted = count_of(&format!("SELECT * FROM {table} WHERE (id > 10)"));
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    async fn sent(proxy: &pg_proxy::Proxy, sql: &str, times: usize) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let seen = |s: &&pg_proxy::Sent| matches!(s, pg_proxy::Sent::Query(t) if t == sql);
+        while proxy.sent().iter().filter(seen).count() < times {
+            assert!(Instant::now() < deadline, "the read never went out");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+
+    // Stopped at its limit, the answer held; the user cancels before it arrives.
+    let limit = Duration::from_millis(300);
+    q.session.send(DbCommand::Count { id: 2, sql: counted.clone(), limit: Some(limit) });
+    sent(&proxy, &counted, 1).await;
+    proxy.hold_answers(true);
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    q.session.cancel();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    proxy.hold_answers(false);
+    let DbEvent::Counted { result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 10).await else {
+        unreachable!()
+    };
+    assert_eq!(result, Err(DbError::TimedOut(limit)));
+
+    // Another session's cancel, early; its answer arrives after the limit passed.
+    let limit = Duration::from_millis(1500);
+    q.session.send(DbCommand::Count { id: 3, sql: counted.clone(), limit: Some(limit) });
+    sent(&proxy, &counted, 2).await;
+    proxy.hold_answers(true);
+    let mut side = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(side.run(1, &format!("SELECT pg_cancel_backend({backend})")).await, DbEvent::Page { .. }));
+    tokio::time::sleep(limit + Duration::from_millis(300)).await;
+    proxy.hold_answers(false);
+    let DbEvent::Counted { result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 10).await else {
+        unreachable!()
+    };
+    assert!(matches!(&result, Err(DbError::Server(m)) if m.text.contains("user request")), "{result:?}");
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
+/// A count without a limit that failed before the user cancelled is not called cancelled by a
+/// cancel that came during its cleanup.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_during_a_counts_cleanup_changes_nothing() {
+    let Some(url) = pg_url("a_cancel_during_a_counts_cleanup_changes_nothing") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_cleanup_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open_with(&proxy.url(&url), SessionRole::Query, true).await;
+    let backend = q.first_value(1, "SELECT pg_backend_pid()").await.unwrap();
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    let counted = count_of(&format!("SELECT * FROM {table} WHERE (id > 10)"));
+    proxy.fault("ROLLBACK", pg_proxy::Fault::Delay(Duration::from_millis(800)));
+    q.session.send(DbCommand::Count { id: 3, sql: counted, limit: None });
+    let mut side = Conn::open(&url, SessionRole::Query).await;
+    let waiting = format!("SELECT count(*) FROM pg_stat_activity WHERE pid = {backend} AND wait_event_type = 'Lock'");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut n = 100;
+    while side.first_value(n, &waiting).await.as_deref() != Some("1") {
+        assert!(Instant::now() < deadline, "the count never waited for the lock");
+        n += 1;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(matches!(side.run(1, &format!("SELECT pg_cancel_backend({backend})")).await, DbEvent::Page { .. }));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while proxy.fault_pending() {
+        assert!(Instant::now() < deadline, "the ROLLBACK never went out");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    q.session.cancel();
+    let DbEvent::Counted { result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 10).await else {
+        unreachable!()
+    };
+    assert!(matches!(&result, Err(DbError::Server(m)) if m.text.contains("user request")), "{result:?}");
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+}

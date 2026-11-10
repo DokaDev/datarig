@@ -1480,17 +1480,22 @@ fn a_limited_read_sets_its_limits_after_the_sessions_own_and_never_longer() {
 }
 
 #[test]
-fn a_stopped_bounded_read_is_the_limit_only_without_a_cancel_and_after_the_limit() {
+fn a_stopped_bounded_read_is_the_limit_only_when_the_server_says_so_after_the_limit() {
     use datarig_core::driver::DbError;
     use std::time::Duration;
     let (limit, ms) = (Duration::from_secs(1), Duration::from_millis);
-    assert_eq!(super::stopped(true, ms(1500), Some(limit)), Some(DbError::Cancelled));
-    assert_eq!(super::stopped(true, ms(10), Some(limit)), Some(DbError::Cancelled));
-    assert_eq!(super::stopped(false, ms(1000), Some(limit)), Some(DbError::TimedOut(limit)));
-    assert_eq!(super::stopped(false, ms(1500), Some(limit)), Some(DbError::TimedOut(limit)));
-    // Not asked for and before the limit: not known, never called a cancel of the user's.
-    assert_eq!(super::stopped(false, ms(999), Some(limit)), None);
-    // The limit not in force yet: never said to be what stopped it, however long it took.
-    assert_eq!(super::stopped(false, ms(1500), None), None);
-    assert_eq!(super::stopped(true, ms(1500), None), Some(DbError::Cancelled));
+    let limited = Some(limit);
+    // The server says it was the limit, in force for that long: whatever the user asked.
+    assert_eq!(super::stopped(false, true, ms(1000), limited), Some(DbError::TimedOut(limit)));
+    assert_eq!(super::stopped(true, true, ms(1500), limited), Some(DbError::TimedOut(limit)));
+    // The user asked, and the server does not say it was a limit.
+    assert_eq!(super::stopped(true, false, ms(1500), limited), Some(DbError::Cancelled));
+    assert_eq!(super::stopped(true, false, ms(10), limited), Some(DbError::Cancelled));
+    assert_eq!(super::stopped(true, false, ms(10), None), Some(DbError::Cancelled));
+    // Otherwise not known, never called a cancel of the user's or the app's limit: a cancel from
+    // elsewhere however late, the session's own limit before this one took effect.
+    assert_eq!(super::stopped(false, false, ms(1500), limited), None);
+    assert_eq!(super::stopped(false, false, ms(999), limited), None);
+    assert_eq!(super::stopped(false, true, ms(999), limited), None);
+    assert_eq!(super::stopped(true, true, ms(1500), None), None);
 }
