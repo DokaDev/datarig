@@ -468,6 +468,51 @@ fn clearing_asks_first_and_forgets_this_table_or_all() {
     assert!(h.app.overlays.is_open(OverlayKind::Commands));
 }
 
+/// A clear whose write failed is not taken as done: said as failed, and the next clear (with
+/// nothing left to forget in memory) writes it again, said cleared only once written; so does
+/// quitting.
+#[cfg(unix)]
+#[test]
+fn a_clear_that_could_not_be_written_is_written_again() {
+    use std::os::unix::fs::PermissionsExt;
+    let state = State::new("clear-retry");
+    let cfg = test_db_config();
+    let mut seed = fh::History::default();
+    seed.record(key(&cfg), "secret = 1", "", 1);
+    fh::save(&state.file(), &seed).unwrap();
+    let mut h = users(&cfg, Some(&state));
+    let lock = |mode| std::fs::set_permissions(&state.0, std::fs::Permissions::from_mode(mode)).unwrap();
+    lock(0o500);
+    if std::fs::write(state.0.join("probe"), "").is_ok() {
+        return lock(0o700); // Root writes anywhere: nothing to check.
+    }
+    h.command("filter history clear");
+    h.keys("y");
+    flush(&mut h);
+    assert!(said(&mut h).contains("not saved"), "{}", said(&mut h));
+    assert_eq!(state.entries(&key(&cfg)).len(), 1, "still in the file");
+    lock(0o700);
+    h.command("filter history clear");
+    h.keys("y");
+    flush(&mut h);
+    assert!(said(&mut h).contains("cleared"), "{}", said(&mut h));
+    assert!(state.entries(&key(&cfg)).is_empty(), "written this time");
+
+    // A clear that failed, then quitting: written on the way out.
+    h.app.dispatch(datarig_tui::app::action::Action::Quit);
+    drop(h);
+    fh::save(&state.file(), &seed).unwrap();
+    let mut h = users(&cfg, Some(&state));
+    lock(0o500);
+    h.command("filter history clear all");
+    h.keys("y");
+    flush(&mut h);
+    assert_eq!(state.entries(&key(&cfg)).len(), 1);
+    lock(0o700);
+    h.app.dispatch(datarig_tui::app::action::Action::Quit);
+    assert!(state.entries(&key(&cfg)).is_empty(), "written on quitting");
+}
+
 /// Without a state directory the history works in memory; a second instance (another holds
 /// the state directory) reads the file and never writes it.
 #[test]

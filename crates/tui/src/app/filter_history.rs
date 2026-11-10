@@ -351,8 +351,10 @@ impl App {
         }
     }
 
-    /// The writer's answer: a failure is said and recorded (with the path, never the texts);
-    /// what a clear waits for is said once its write is done.
+    /// The writer's answer: a failure is said and recorded (with the path, never the texts),
+    /// and the history is still to be written unless a newer text was sent since (the next
+    /// change, clear or quitting writes it); what a clear waits for is said once its write is
+    /// done.
     pub(super) fn on_filter_history_saved(&mut self, s: Saved) {
         match s.result {
             Ok(()) => {
@@ -363,6 +365,9 @@ impl App {
             Err(e) => {
                 if self.filter_history.announce.as_ref().is_some_and(|(seq, _)| s.seq >= *seq) {
                     self.filter_history.announce = None;
+                }
+                if s.seq == self.filter_history.seq {
+                    self.filter_history.dirty = true;
                 }
                 let error = self.fault_text("filter_history.save_failed", &Fault::io_at(&e, &s.path));
                 self.flash(Notice::new(Msg::TableHistorySaveFailed { error }, Level::Error));
@@ -529,7 +534,9 @@ impl App {
         if self.read_only && self.paths.state.is_some() {
             return self.flash(Notice::new(Label::TableHistoryClearedHere, Level::Warning));
         }
-        if count == 0 || self.state_dir().is_none() {
+        // Nothing forgotten now and nothing left unwritten (a clear whose write failed is):
+        // the file holds it already.
+        if (count == 0 && !self.filter_history.dirty) || self.state_dir().is_none() {
             return self.flash(done);
         }
         self.filter_history.dirty = true;
