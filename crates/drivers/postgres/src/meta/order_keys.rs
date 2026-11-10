@@ -7,8 +7,9 @@
 //! read, and the read does not stop the `ALTER TABLE`.
 //!
 //! A unique index counts when it is on whole columns (no expression), for every row (no
-//! predicate), checked at once (not deferred) and valid; only its key columns count (not those
-//! of `INCLUDE`). The other unique keys count only when all their columns are `NOT NULL`.
+//! predicate), checked at once (not deferred) and valid, and compares each column as an
+//! `ORDER BY` of it does (the column's collation, its type's default btree operator class);
+//! only its key columns count (not those of `INCLUDE`). The other unique keys count only when all their columns are `NOT NULL`.
 
 use super::read;
 use datarig_core::driver::DbError;
@@ -33,8 +34,13 @@ LEFT JOIN LATERAL (
   WHERE i.indrelid = c.oid AND i.indisunique AND i.indimmediate AND i.indisvalid
     AND i.indpred IS NULL AND i.indexprs IS NULL
   GROUP BY i.indexrelid, i.indisprimary, i.indnkeyatts
-  -- Every key column found (an expression's place, 0, has none).
+  -- Every key column found (an expression's place, 0, has none), each compared as an ORDER BY
+  -- of the column compares it: in the column's collation, with its type's default btree
+  -- operator class (a key unique only under another collation or class proves nothing).
   HAVING pg_catalog.count(*) = i.indnkeyatts
+    AND pg_catalog.bool_and(i.indcollation[k.k] = a.attcollation AND EXISTS (
+      SELECT 1 FROM pg_catalog.pg_opclass oc JOIN pg_catalog.pg_am am ON am.oid = oc.opcmethod
+      WHERE oc.oid = i.indclass[k.k] AND oc.opcdefault AND am.amname = 'btree'))
 ) x ON true
 WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'f', 'v', 'm')";
 
@@ -73,6 +79,25 @@ mod tests {
 
     fn cols(c: &[&str]) -> Option<Vec<String>> {
         Some(c.iter().map(|s| s.to_string()).collect())
+    }
+
+    /// A key counts only where it compares each column as an ORDER BY of it does, and on whole,
+    /// immediate, valid, full keys (the live test reads such tables).
+    #[test]
+    fn the_read_keeps_only_keys_an_order_by_compares_alike() {
+        for part in [
+            "i.indcollation[k.k] = a.attcollation",
+            "oc.opcdefault AND am.amname = 'btree'",
+            "i.indimmediate AND i.indisvalid",
+            "i.indpred IS NULL AND i.indexprs IS NULL",
+            "pg_catalog.generate_series(0, i.indnkeyatts - 1)",
+        ] {
+            assert!(ORDER_KEYS.contains(part), "{part}");
+        }
+        // Nothing that opens the relation.
+        for f in ["pg_get_", "::regclass", "pg_relation_size", "pg_total_relation_size"] {
+            assert!(!ORDER_KEYS.contains(f), "{f}");
+        }
     }
 
     #[test]

@@ -273,7 +273,11 @@ pub(crate) fn draw(
         (if w > label_w { w } else { 0 }, true, false)
     } else {
         let short = tie_short.map_or(0, |t| width(t) + 1);
-        (width(&shrunk).saturating_add(short).min(room.saturating_sub(4)), false, false)
+        let w = width(&shrunk).saturating_add(short).min(room.saturating_sub(4));
+        // What is said of the order wins over the condition's last columns too: the arrow and
+        // it, at least.
+        let need = tie_short.map_or(0, |t| width(t) + 2).min(room);
+        (w.max(need), false, false)
     };
     let where_w = if order_w > 0 { room.saturating_sub(order_w + 2) } else { room };
     let where_rect = Rect::new(x0 + field_x as u16, y, where_w as u16, 1);
@@ -307,17 +311,28 @@ pub(crate) fn draw(
     let ox = x0 + (field_x + where_w + 2) as u16;
     drawn.order = Rect::new(ox, y, order_w as u16, 1);
     if !whole {
-        // What is said of the order has its room first; the keys are cut (`…`) to what is left.
-        let said = tie_short.filter(|t| width(t) + 1 + KEYS_SHRUNK_MIN <= order_w);
-        let keys_room = order_w - said.map_or(0, |t| width(t) + 1);
-        let keys = match width(&shrunk) <= keys_room {
-            true => shrunk.clone(),
-            false => format!("{}\u{2026}", crate::text::clip(&shrunk, keys_room.saturating_sub(1))),
+        // What is said of the order has its room first, at every width: the keys are cut (`…`)
+        // to what is left, down to their arrow alone, and left out where not even that fits.
+        let said = tie_short.filter(|t| width(t) <= order_w);
+        let keys_room = match said {
+            Some(t) => order_w.saturating_sub(width(t) + 1),
+            None => order_w,
+        };
+        let arrow: String = shrunk.chars().take(1).collect();
+        let keys = if width(&shrunk) <= keys_room {
+            shrunk.clone()
+        } else if keys_room >= KEYS_SHRUNK_MIN {
+            format!("{}\u{2026}", crate::text::clip(&shrunk, keys_room - 1))
+        } else if keys_room >= width(&arrow) {
+            arrow
+        } else {
+            String::new()
         };
         let keys_w = width(&keys);
         put(buf, ox, y, &keys, keys_w, base);
         if let Some(t) = said {
-            put(buf, ox + keys_w as u16 + 1, y, t, order_w - keys_w - 1, dim);
+            let at = if keys_w == 0 { 0 } else { keys_w + 1 };
+            put(buf, ox + at as u16, y, t, order_w - at, dim);
         }
         return drawn;
     }

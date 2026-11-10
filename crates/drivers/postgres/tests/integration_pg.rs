@@ -938,6 +938,13 @@ async fn order_keys_are_read_without_a_lock() {
         format!("ALTER TABLE {s}.keys_probe ADD CONSTRAINT probe_deferred UNIQUE (note) DEFERRABLE"),
         format!("CREATE TABLE {s}.parent (id int PRIMARY KEY)"),
         format!("CREATE TABLE {s}.child () INHERITS ({s}.parent)"),
+        // Unique only under another collation or operator class than an ORDER BY uses.
+        format!("CREATE COLLATION {s}.ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)"),
+        format!(
+            "CREATE TABLE {s}.coll (v text COLLATE {s}.ci NOT NULL, w text NOT NULL, vc varchar(9) NOT NULL UNIQUE)"
+        ),
+        format!("CREATE UNIQUE INDEX coll_c ON {s}.coll (v COLLATE \"C\")"),
+        format!("CREATE UNIQUE INDEX coll_pattern ON {s}.coll (w text_pattern_ops)"),
     ] {
         pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
     }
@@ -984,6 +991,8 @@ async fn order_keys_are_read_without_a_lock() {
     assert_eq!(keys, Ok(probe.clone()));
     let (keys, _, _) = ask("parent").await;
     assert_eq!(keys, Ok(OrderKeys { primary_key: vec!["id".into()], inherited: true, ..OrderKeys::default() }));
+    let (keys, _, _) = ask("coll").await;
+    assert_eq!(keys, Ok(OrderKeys { unique_not_null: vec![vec!["vc".into()]], ..OrderKeys::default() }), "only vc");
     let (keys, _, _) = ask("nosuch").await;
     assert_eq!(keys, Err(DbError::NotFound));
 

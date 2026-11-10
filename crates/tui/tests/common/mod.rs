@@ -1158,6 +1158,19 @@ pub fn shop_keys() -> KeyCatalog {
     k
 }
 
+/// The key-only read of the active table tab's table answered, on profile `profile`'s own
+/// metadata session: primary key `pk` (none: no key). Panics when the tab asked for none.
+pub fn keys_came(h: &mut Harness, profile: &str, pk: &[&str]) {
+    use datarig_core::driver::keys::OrderKeys;
+    use datarig_tui::app::table_query::OrderKeysState;
+    let request = match h.app.tab().doc.table_query.as_ref().map(|q| &q.order_keys) {
+        Some(OrderKeysState::Asked { request, .. }) => *request,
+        other => panic!("no keys asked for: {other:?}"),
+    };
+    let keys = OrderKeys { primary_key: pk.iter().map(|c| c.to_string()).collect(), ..OrderKeys::default() };
+    h.meta_db(profile, DbEvent::TableKeys { id: request, result: Ok(keys) });
+}
+
 /// The structure of `shop.users` as the driver reports it: about 11,000 rows in 4.2 MB, an
 /// identity-free serial key, a unique email, indexes (one partial), no checks, two triggers (one
 /// disabled), no foreign keys.

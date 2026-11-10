@@ -68,10 +68,9 @@ fn users(lang: Lang) -> Harness {
     h
 }
 
-/// The structure of `shop.users` came (its primary key is `id`).
+/// The keys of `shop.users` came (its primary key is `id`).
 fn structure(h: &mut Harness) {
-    let result = Ok(Box::new(users_structure()));
-    h.meta_db("local-pg", DbEvent::Structure { schema: "shop".into(), table: "users".into(), result });
+    keys_came(h, "local-pg", &["id"]);
 }
 
 /// `shop.users` filtered on `id > 1` and ordered by `name` descending (the structure read).

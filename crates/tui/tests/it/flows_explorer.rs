@@ -1272,3 +1272,58 @@ fn the_menu_of_a_folder_and_of_a_profile() {
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
     assert_eq!(h.app.selected_profile(), Some(id(&h, "v6")));
 }
+
+/// A table tab of another database reads its keys on that database's metadata session; when
+/// that session is lost before it answers, the keys are not taken for asked any more: the next
+/// run opens the session again and asks on it, and an answer of the lost one is dropped.
+#[test]
+fn a_lost_aux_session_asks_the_keys_again() {
+    let mut h = Harness::connected(Lang::En);
+    let p = id(&h, "local-pg");
+    h.explore("local-pg");
+    h.key(KeyCode::Char('h'));
+    h.app.conns.entry(p).databases = None;
+    h.key(KeyCode::Char('l'));
+    h.db(DbEvent::Databases(Ok(vec!["datarig".into(), "sales".into()])));
+    cursor_on(&mut h, "  db:sales");
+    h.key(KeyCode::Char('l'));
+    let aux = last_session(&h, SessionRole::Meta);
+    aux_event(&mut h, "sales", DbEvent::Connected);
+    aux_event(&mut h, "sales", DbEvent::Schemas(Ok(vec!["q1".into()])));
+    cursor_on(&mut h, "    q1");
+    h.key(KeyCode::Char('l'));
+    aux_event(
+        &mut h,
+        "sales",
+        DbEvent::Objects { schema: "q1".into(), result: Ok((vec!["zz_t".into()], vec![]).into()) },
+    );
+    h.sent_to(aux);
+    cursor_on(&mut h, "        zz_t");
+    h.key(KeyCode::Enter);
+    assert!(h.app.tab().is_table());
+    let asked = |cmds: &[DbCommand]| cmds.iter().filter(|c| matches!(c, DbCommand::LoadTableKeys { .. })).count();
+    let first = h.sent_to(aux);
+    assert_eq!(asked(&first), 1, "asked on the database's session: {first:?}");
+    let request = first.iter().find_map(|c| if let DbCommand::LoadTableKeys { id, .. } = c { Some(*id) } else { None });
+    let (id, index) = (h.app.tab().exec.query_id, h.app.tabs.active_index());
+    let columns = Some(vec![meta("id", "int4", true, false)]);
+    h.tab_db(index, DbEvent::Page { id, columns, rows: Vec::new(), more: false, elapsed: Duration::from_millis(1) });
+    // Lost before it answered.
+    let old = h.app.conns.aux(p, "sales").expect("its aux").id;
+    aux_event(&mut h, "sales", DbEvent::Lost { error: datarig_core::driver::DbError::Closed });
+    h.command("orderby id");
+    let new = last_session(&h, SessionRole::Meta);
+    assert_ne!(new, aux, "the database's session opened again");
+    let sent = h.sent_to(new);
+    assert_eq!(asked(&sent), 1, "asked again on it: {sent:?}");
+    // The lost session's answer (by its id) is dropped.
+    let state = |h: &Harness| format!("{:?}", h.app.tab().doc.table_query.as_ref().map(|q| &q.order_keys));
+    let before = state(&h);
+    let keys = datarig_core::driver::keys::OrderKeys { primary_key: vec!["id".into()], ..Default::default() };
+    h.app.on_app_event(datarig_tui::app::AppEvent::Db {
+        target: datarig_tui::app::EventTarget::Aux(old),
+        generation: old,
+        ev: DbEvent::TableKeys { id: request.unwrap(), result: Ok(keys) },
+    });
+    assert_eq!(state(&h), before);
+}

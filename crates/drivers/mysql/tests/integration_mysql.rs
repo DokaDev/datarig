@@ -425,6 +425,40 @@ async fn lookups_never_queue_behind_a_metadata_lock_nor_hold_one_up() {
     assert!(t1.elapsed() < Duration::from_secs(10), "{:?}", t1.elapsed());
 }
 
+/// A table whose name holds braces as the metadata statements write their own places
+/// (`{table}`, `{schema}`), a quote, a backtick, blanks and parentheses is read by its name: its
+/// order keys and its structure. A schema and a table named like those places that do not exist
+/// are not found.
+#[tokio::test(flavor = "multi_thread")]
+async fn order_keys_of_a_table_named_with_braces() {
+    let Some((url, admin)) = urls("order_keys_of_a_table_named_with_braces") else { return };
+    let name = format!("zz_it_{{table}}{{schema}} o'k `q` (x)_{}", std::process::id());
+    let quoted = format!("shop.`{}`", name.replace('`', "``"));
+    let _guard = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {quoted}") };
+    let mut c = side(&admin).await;
+    c.query_drop(format!("CREATE TABLE {quoted} (id INT PRIMARY KEY, v INT NOT NULL UNIQUE)")).await.unwrap();
+    c.disconnect().await.unwrap();
+    let mut m = Conn::start(&url, SessionRole::Meta, false, "bracenames");
+    m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    m.session.send(DbCommand::LoadTableKeys { id: 1, schema: "shop".into(), table: name.clone() });
+    let DbEvent::TableKeys { result, .. } = m.wait(|e| matches!(e, DbEvent::TableKeys { id: 1, .. }), 10).await else {
+        unreachable!()
+    };
+    let keys = result.expect("the keys");
+    assert_eq!((keys.primary_key, keys.unique_not_null), (vec!["id".to_string()], vec![vec!["v".to_string()]]));
+    m.session.send(DbCommand::LoadStructure { schema: "shop".into(), table: name.clone() });
+    let DbEvent::Structure { result, .. } = m.wait(|e| matches!(e, DbEvent::Structure { .. }), 10).await else {
+        unreachable!()
+    };
+    let st = result.expect("the structure");
+    assert_eq!(st.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "v"]);
+    m.session.send(DbCommand::LoadTableKeys { id: 2, schema: "{table}".into(), table: "{schema}".into() });
+    let DbEvent::TableKeys { result, .. } = m.wait(|e| matches!(e, DbEvent::TableKeys { id: 2, .. }), 10).await else {
+        unreachable!()
+    };
+    assert_eq!(result, Err(DbError::NotFound));
+}
+
 /// The keys of a table for a total order come from the data dictionary without opening the
 /// table: while another session holds `LOCK TABLES … WRITE` on it, and while an `ALTER TABLE`
 /// waits for a held result of it, the read answers with the keys (never `Locked`), waits for

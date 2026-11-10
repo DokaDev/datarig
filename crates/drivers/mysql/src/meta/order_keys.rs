@@ -29,7 +29,7 @@ type RawRow = (String, Option<String>, Option<String>, Option<String>, Option<St
 /// The statement for `schema.table`, the names written as `mode` reads literals.
 pub(crate) fn statement(mode: MySqlMode, schema: &str, table: &str) -> String {
     let d = Dialect::MySql(mode);
-    SQL.replace("{schema}", &d.quote_literal(schema)).replace("{table}", &d.quote_literal(table))
+    super::fill(SQL, &[("schema", &d.quote_literal(schema)), ("table", &d.quote_literal(table))])
 }
 
 /// The keys the rows describe. No `T` row: there is no such table to the user

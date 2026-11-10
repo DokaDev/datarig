@@ -81,22 +81,35 @@ pub enum Unapplied {
     Ended,
 }
 
+/// The metadata session a table tab's keys are read on, as it is now: the tab's profile and
+/// database, the tab's binding, and the session itself (the profile's connection generation for
+/// its own database, the aux session's id for another one; both change when it opens again).
+/// What was read on another one, or on this one before it was lost and opened again, is not
+/// this tab's any more.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeysOn {
+    pub profile: ProfileId,
+    pub database: Option<String>,
+    pub binding: u64,
+    pub session: u64,
+}
+
 /// What the tab knows of its table's keys that make an order total, from the key-only catalog
-/// read (`DbCommand::LoadTableKeys`). Each state is bound to the tab's binding it was asked
-/// for: another profile or database's answer never stands for it.
+/// read (`DbCommand::LoadTableKeys`), each state for the session it was asked on ([`KeysOn`]).
+/// Only these facts make an order total: the explorer's structure does not say whether a key
+/// is deferred, valid, or compares as an `ORDER BY` does.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum OrderKeysState {
-    /// Not asked yet (or the tab was bound elsewhere since).
+    /// Not asked yet.
     #[default]
     Unknown,
-    /// Asked: request `request` on profile `profile`'s metadata session of `database`, while
-    /// the tab had `binding` and the profile's connection `generation`.
-    Asked { request: u64, profile: ProfileId, database: Option<String>, binding: u64, generation: u64 },
-    /// Read for `binding`.
-    Known { binding: u64, keys: datarig_core::driver::keys::OrderKeys },
-    /// The read failed for `binding`: not known (an order is not taken for total), asked again
-    /// with the next run.
-    Failed { binding: u64 },
+    /// Request `request` is on its way.
+    Asked { request: u64, on: KeysOn },
+    /// Read.
+    Known { on: KeysOn, keys: datarig_core::driver::keys::OrderKeys },
+    /// The read failed: not known (an order is not taken for total), asked again with the next
+    /// run.
+    Failed { on: KeysOn },
 }
 
 /// The query state of a table tab.
@@ -426,10 +439,9 @@ impl App {
 
     /// What the app knows of table tab `id`'s table for writing its SQL: the columns of the
     /// rows it holds of its query (else the catalog's names, of unknown kind), with the
-    /// explorer's structure when it was read (collations, the primary key and the unique keys
-    /// whose columns are all `NOT NULL`), else the keys of the key-only read for the tab's
-    /// binding ([`OrderKeysState`]). Until either is known no key is: no tie-breaker is appended
-    /// and no order is taken for total.
+    /// explorer's structure when it was read (collations), and the keys of the key-only read on
+    /// the tab's metadata session as it is now ([`OrderKeysState`]). Until they are known no key
+    /// is: no tie-breaker is appended and no order is taken for total.
     pub(crate) fn table_target(&self, id: TabId) -> Option<Target> {
         let t = self.tabs.get(id).filter(|t| t.is_table())?;
         let table = t.doc.table.as_ref()?;
@@ -462,26 +474,15 @@ impl App {
                     c.deterministic = coll.deterministic;
                 }
             }
-            // Rows of tables that inherit from it are read too: its keys do not hold across them.
-            if !s.inherited {
-                target.primary_key = s.primary_key.as_ref().map(|k| k.columns.clone()).unwrap_or_default();
-                let not_null = |c: &String| s.columns.iter().any(|sc| &sc.name == c && sc.not_null);
-                target.unique_keys = s
-                    .unique_constraints
-                    .iter()
-                    .filter(|k| !k.columns.is_empty() && k.columns.iter().all(not_null))
-                    .map(|k| k.columns.clone())
-                    .collect();
-            }
         }
-        // Without the explorer's structure: the keys of the key-only read, for this binding.
+        // The keys that make an order total: only the key-only read's, for the session as it
+        // is now (rows of tables that inherit from it are read too: its keys do not hold).
+        let on = self.keys_on(t);
         let read = t.doc.table_query.as_ref().and_then(|q| match &q.order_keys {
-            OrderKeysState::Known { binding, keys } if *binding == t.binding => Some(keys),
+            OrderKeysState::Known { on: o, keys } if Some(o) == on.as_ref() => Some(keys),
             _ => None,
         });
-        if let (None, Some(k)) = (s, read)
-            && !k.inherited
-        {
+        if let Some(k) = read.filter(|k| !k.inherited) {
             target.primary_key = k.primary_key.clone();
             target.unique_keys = k.unique_not_null.clone();
         }
@@ -650,29 +651,42 @@ impl App {
         }
     }
 
+    /// The metadata session table tab `t`'s keys are read on, as it is now ([`KeysOn`]):
+    /// `None` while there is none open.
+    pub(super) fn keys_on(&self, t: &Tab) -> Option<KeysOn> {
+        let profile = t.profile?;
+        let database = t.context.database.clone();
+        let session = match database.as_deref() {
+            None => self.conns.get(profile).filter(|c| c.meta.is_some()).map(|c| c.generation)?,
+            Some(db) => self.conns.aux(profile, db).filter(|a| a.session.is_some()).map(|a| a.id)?,
+        };
+        Some(KeysOn { profile, database, binding: t.binding, session })
+    }
+
     /// Ask for the keys of table tab `id`'s table that make an order total, with the key-only
-    /// catalog read (never the full structure, whose functions open the table): unless the
-    /// explorer's structure of it is read, or the keys are read or being read for the tab's
-    /// binding. Nothing is asked without the metadata session (the next run asks again).
+    /// catalog read (never the full structure, whose functions open the table): unless they
+    /// are read or being read on the session as it is now. Nothing is asked without a metadata
+    /// session (the next run asks again).
     fn order_keys_ask(&mut self, id: TabId) {
         let Some(t) = self.tabs.get(id) else { return };
         let (Some(pid), Some(table)) = (t.profile, t.doc.table.clone()) else { return };
-        let (binding, database) = (t.binding, t.context.database.clone());
-        if !self.structure_on(pid) || self.table_structure(t).is_some() {
+        if !self.structure_on(pid) {
             return;
         }
-        let generation = self.conns.get(pid).map_or(0, |c| c.generation);
+        // Another database's metadata session opened (again) first, as the DDL's is.
+        if let Some(db) = t.context.database.clone() {
+            self.ensure_aux(pid, &db);
+        }
+        let Some(t) = self.tabs.get(id) else { return };
+        let Some(on) = self.keys_on(t) else { return };
         let current = match t.doc.table_query.as_ref().map(|q| &q.order_keys) {
-            Some(OrderKeysState::Known { binding: b, .. }) => *b == binding,
-            Some(OrderKeysState::Asked { profile, database: db, binding: b, generation: g, .. }) => {
-                *profile == pid && *db == database && *b == binding && *g == generation
-            }
+            Some(OrderKeysState::Known { on: o, .. } | OrderKeysState::Asked { on: o, .. }) => *o == on,
             _ => false,
         };
         if current {
             return;
         }
-        let session = match database.as_deref() {
+        let session = match on.database.as_deref() {
             None => self.conns.get(pid).and_then(|c| c.meta.as_ref()),
             Some(db) => self.conns.aux(pid, db).and_then(|a| a.session.as_ref()),
         };
@@ -680,18 +694,18 @@ impl App {
         self.order_keys_seq += 1;
         let request = self.order_keys_seq;
         session.send(DbCommand::LoadTableKeys { id: request, schema: table.schema, table: table.name });
-        if database.is_none() {
+        if on.database.is_none() {
             self.touch_profile(pid);
         }
         if let Some(tq) = self.table_query_mut(id) {
-            tq.order_keys = OrderKeysState::Asked { request, profile: pid, database, binding, generation };
+            tq.order_keys = OrderKeysState::Asked { request, on };
         }
     }
 
     /// The answer to keys request `request`, from profile `profile`'s metadata session in
-    /// `database` (`None`: its own): kept by the table tab that asked, when it still has the
-    /// binding and the connection it asked on; else dropped (a late answer of an earlier one).
-    /// A failure leaves the keys not known, never taken for none.
+    /// `database` (`None`: its own): kept by the table tab that asked, when the session it
+    /// asked on is still the one now and the tab has the same binding; else dropped (a late
+    /// answer of an earlier one). A failure leaves the keys not known, never taken for none.
     pub(super) fn order_keys_answered(
         &mut self,
         profile: ProfileId,
@@ -699,19 +713,19 @@ impl App {
         request: u64,
         result: Result<datarig_core::driver::keys::OrderKeys, datarig_core::driver::DbError>,
     ) {
-        let generation = self.conns.get(profile).map_or(0, |c| c.generation);
         let tab = self.tabs.iter().find(|t| {
             t.doc.table_query.as_ref().is_some_and(|q| {
-                matches!(&q.order_keys, OrderKeysState::Asked { request: r, profile: p, database: d, binding, generation: g }
-                    if *r == request && *p == profile && d.as_deref() == database && *binding == t.binding
-                        && *g == generation)
+                matches!(&q.order_keys, OrderKeysState::Asked { request: r, on }
+                    if *r == request && on.profile == profile && on.database.as_deref() == database
+                        && self.keys_on(t).as_ref() == Some(on))
             })
         });
-        let Some((id, binding)) = tab.map(|t| (t.id, t.binding)) else { return };
+        let Some(id) = tab.map(|t| t.id) else { return };
         if let Some(tq) = self.tabs.get_mut(id).and_then(|t| t.doc.table_query.as_mut()) {
+            let OrderKeysState::Asked { on, .. } = std::mem::take(&mut tq.order_keys) else { return };
             tq.order_keys = match result {
-                Ok(keys) => OrderKeysState::Known { binding, keys },
-                Err(_) => OrderKeysState::Failed { binding },
+                Ok(keys) => OrderKeysState::Known { on, keys },
+                Err(_) => OrderKeysState::Failed { on },
             };
         }
     }

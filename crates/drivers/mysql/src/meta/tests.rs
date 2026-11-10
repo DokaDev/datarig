@@ -54,9 +54,9 @@ fn shape(sql: &str, d: Dialect) -> (Vec<String>, Vec<String>) {
 /// A statement built with a schema and a table name.
 type Build = Box<dyn Fn(&str, &str) -> String>;
 
-/// The table structure and the object lookup before a DDL put each name in as one string
-/// literal that reads back as the name, whatever the name holds, in both backslash modes: the
-/// statement around the names is the one built with plain names.
+/// The table structure, the object lookup before a DDL and the order keys of a table put each
+/// name in as one string literal that reads back as the name, whatever the name holds, in both
+/// backslash modes: the statement around the names is the one built with plain names.
 #[test]
 fn each_name_is_one_literal_in_the_statements_built_with_it() {
     let servers = [(8, 4, 0, false), (8, 0, 12, false), (10, 11, 0, true)]
@@ -72,6 +72,7 @@ fn each_name_is_one_literal_in_the_statements_built_with_it() {
             })
             .collect();
         builders.push(("lookup".into(), Box::new(move |schema, name| ddl::find_named_sql(d, schema, name))));
+        builders.push(("order keys".into(), Box::new(move |schema, table| order_keys::statement(mode, schema, table))));
         for (what, build) in &builders {
             let (plain_code, plain_literals) = shape(&build("zz_s", "zz_t"), d);
             assert!(plain_literals.iter().any(|l| l == "zz_s") && plain_literals.iter().any(|l| l == "zz_t"));

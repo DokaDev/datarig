@@ -487,20 +487,17 @@ fn paging_again_says_when_the_order_is_not_unique() {
     assert!(said.contains("order not unique"), "{said}");
     // The primary key read: appended, the order is total.
     let mut h = users();
-    h.meta_db(
-        "local-pg",
-        DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(Box::new(users_structure())) },
-    );
+    keys_came(&mut h, "local-pg", &["id"]);
     h.command("orderby name");
     let said = page_again(&mut h);
     assert!(!said.contains("not unique") && said.starts_with("Ran the SELECT again"), "{said}");
 }
 
-/// A structure read after the rows came does not change what is said of them: the order
-/// they were read in was not unique, and the line and a page read again say so (the next
-/// run appends the key).
+/// Keys read after the rows came do not change what is said of them: the order they were
+/// read in was not unique, and the line and a page read again say so (the next run appends
+/// the key).
 #[test]
-fn a_late_structure_does_not_make_the_held_order_unique() {
+fn late_keys_do_not_make_the_held_order_unique() {
     let mut h = users();
     h.command("orderby name");
     let sent = runs(&mut h);
@@ -511,10 +508,7 @@ fn a_late_structure_does_not_make_the_held_order_unique() {
     let columns = Some(vec![meta("id", "int8", true, false), meta("name", "text", false, false)]);
     let rows = (0..h.app.page_size).map(|i| vec![Some(i.to_string()), Some(format!("n{i}"))]).collect();
     h.tab_db(index, DbEvent::Page { id, columns, rows, more: true, elapsed: Duration::from_millis(2) });
-    h.meta_db(
-        "local-pg",
-        DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(Box::new(users_structure())) },
-    );
+    keys_came(&mut h, "local-pg", &["id"]);
     let screen = h.screen(120, 30);
     assert!(screen.contains("order not unique") && !screen.contains("+ id"), "{screen}");
     h.app.focus = datarig_tui::app::Focus::Results;
@@ -762,4 +756,84 @@ fn a_postgres_row_lock_is_refused_as_one_and_underlined() {
     assert!(said.contains("row locks"), "{said}");
     let marked: String = underlined(&mut h, 120, 30, "FOR UPDATE").into_iter().map(|(_, s)| s).collect();
     assert_eq!(marked, "FOR UPDATE");
+}
+
+/// Whether an order is total comes from the key-only read alone: the explorer's structure of
+/// the table (which does not say whether a key is deferred, valid or compares as an ORDER BY
+/// does) changes nothing, before or after it is cached.
+#[test]
+fn the_explorers_structure_does_not_make_an_order_total() {
+    let mut h = users();
+    // The key-only read found no key an order may rely on (a deferrable primary key, say).
+    keys_came(&mut h, "local-pg", &[]);
+    let order = |h: &mut Harness| {
+        h.command("orderby name");
+        let sent = runs(h);
+        answer(h);
+        (sent, h.screen(120, 30).contains("not unique"))
+    };
+    let before = order(&mut h);
+    h.meta_db(
+        "local-pg",
+        DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(Box::new(users_structure())) },
+    );
+    h.command("filter clear");
+    answer(&mut h);
+    h.sent();
+    let after = order(&mut h);
+    assert_eq!(before, after);
+    assert_eq!(after.0, vec![vec![format!(r#"{ALL} ORDER BY "name" ASC"#)]]);
+    assert!(after.1);
+}
+
+/// Keys are the metadata session's they were read on: the profile's session opened again
+/// drops them (the next run asks again), and an answer of the session before is not taken.
+#[test]
+fn keys_are_read_again_when_the_metadata_session_opens_again() {
+    let mut h = users();
+    keys_came(&mut h, "local-pg", &["id"]);
+    h.command("orderby name");
+    assert_eq!(runs(&mut h), vec![vec![format!(r#"{ALL} ORDER BY "name" ASC, "id" ASC"#)]]);
+    answer(&mut h);
+    // The connection is lost (the metadata session and the tab's): the next run opens both again.
+    h.meta_db("local-pg", DbEvent::Lost { error: DbError::Closed });
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Lost { error: DbError::Closed });
+    h.ctrl('e');
+    let sent = h.sent();
+    assert_eq!(keys_asks(&sent).len(), 1, "asked again: {sent:?}");
+    let ran = sent.iter().any(
+        |c| matches!(c, DbCommand::Execute { statements, .. } if statements[0].ends_with(r#"ORDER BY "name" ASC"#)),
+    );
+    assert!(ran, "not total on the new session before its answer: {sent:?}");
+    answer(&mut h);
+    keys_came(&mut h, "local-pg", &["id"]);
+    h.ctrl('e');
+    assert_eq!(runs(&mut h), vec![vec![format!(r#"{ALL} ORDER BY "name" ASC, "id" ASC"#)]]);
+}
+
+/// What is said of an order not known total wins over the column's name at every width: with
+/// the explorer at its widest on 80 columns the keys shrink to their arrow, the note stays
+/// (English and Korean, a short and a long column).
+#[test]
+fn the_not_unique_note_stays_at_the_explorers_widest() {
+    for (lang, said) in [(Lang::En, "not unique"), (Lang::Ko, "\u{c720}\u{c77c}\u{d558}\u{c9c0} \u{c54a}\u{c74c}")] {
+        for col in ["name", "very_long_order_column_name_extra"] {
+            let mut h = Harness::connected(lang);
+            open(&mut h, "users");
+            answer_with_column(&mut h, col);
+            h.sent();
+            h.key(KeyCode::Tab);
+            h.keys("i");
+            h.keys(" ro");
+            h.type_text(col);
+            h.key(KeyCode::Enter);
+            answer_with_column(&mut h, col);
+            h.app.explorer.width = Some(200);
+            let screen = h.screen(80, 24);
+            let line = screen.lines().find(|l| l.contains("WHERE")).unwrap_or_else(|| panic!("{screen}"));
+            assert!(line.contains(said), "{lang:?} {col}: {line}");
+            assert!(line.contains('\u{2191}'), "{lang:?} {col}: the arrow stays: {line}");
+        }
+    }
 }

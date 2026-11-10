@@ -398,9 +398,14 @@ Held by CI budgets (`docs/perf.md`).
   session: PostgreSQL reads `pg_class`, `pg_namespace`, `pg_index` and `pg_attribute` by name,
   with no function that opens the relation (`meta/order_keys.rs`); MySQL reads
   `information_schema` `TABLES`, `STATISTICS` and `COLUMNS` without the columns that open a
-  table. The tab keeps the answer bound to its binding (`table_query::OrderKeysState`; a late
-  answer of another request is dropped, a failure is "not known"), and the explorer's structure,
-  when read, is used first. Both are proven live against a held and a queued table lock.
+  table. Only keys an `ORDER BY` can rely on count: whole columns, checked at once, valid, full,
+  and (PostgreSQL) in the column's collation with its type's default operator class. The tab
+  keeps the answer bound to the metadata session it was read on (`table_query::KeysOn`: its
+  binding, and the session as opened; a lost or reopened session drops it and the next run asks
+  again, a late answer is dropped, a failure is "not known"). The explorer's structure never
+  makes an order total. Both reads are proven live against a held and a queued table lock.
+  MySQL statements put names in with `meta::fill`, in one pass, so a name never reads as
+  another place of the statement.
 - **Show DDL.** A driver with `Capabilities::ddl` answers `DbCommand::LoadDdl { id, object }`
   (`driver::ddl::DdlObject`: a relation, an index, a trigger, a trigger's function, or a name the
   user typed with the tab's schema) with `DbEvent::Ddl { id, result }` on the metadata session

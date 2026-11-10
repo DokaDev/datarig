@@ -11,7 +11,7 @@ expression: backend
 "│      ▸ public              ││   │ int8 │ text                                    ││                                  │"
 "│      ▾ shop                ││ 1 │    0 │ n0                                      ││                                  │"
 "│        ▾ Tables            ││ 2 │    1 │ n1                                      ││                                  │"
-"│          ▸ users  ~11k rows││ 3 │    2 │ n2                                      ││                                  │"
+"│          ▸ users           ││ 3 │    2 │ n2                                      ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│         ╭ Tabs ────────────────────────────────────────────────────────────────────────────────────────────╮         │"
 "│         │ › type part of a name, connection, database, schema, kind or number                              │         │"
