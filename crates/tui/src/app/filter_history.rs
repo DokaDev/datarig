@@ -97,20 +97,34 @@ struct LogLine {
 /// How the writer writes a file (the tests stand in for it).
 type WriteFile = Box<dyn Fn(&std::path::Path, &str) -> std::io::Result<()> + Send>;
 
+/// What the error log's thread is handed: a line, or a sender answered once every line
+/// handed before it is written.
+enum ToLog {
+    Line(LogLine),
+    Drained(mpsc::Sender<()>),
+}
+
 /// The thread of the error log's lines: handed each one without waiting, best effort (a line
 /// is dropped when [`LOG_QUEUE`] wait, as behind an error log that blocks whoever writes it).
 #[derive(Clone)]
-struct Logger(mpsc::SyncSender<LogLine>);
+struct Logger(mpsc::SyncSender<ToLog>);
 
 impl Logger {
     /// Start the thread; `None` when it cannot start (the lines are dropped then).
     fn spawn() -> Option<Self> {
-        let (tx, rx) = mpsc::sync_channel::<LogLine>(LOG_QUEUE);
+        let (tx, rx) = mpsc::sync_channel::<ToLog>(LOG_QUEUE);
         std::thread::Builder::new()
             .name("datarig-filter-history-log".into())
             .spawn(move || {
-                for l in rx {
-                    datarig_core::fault::ErrorLog::new(Some(l.log)).record(l.context, &l.fault);
+                for item in rx {
+                    match item {
+                        ToLog::Line(l) => {
+                            datarig_core::fault::ErrorLog::new(Some(l.log)).record(l.context, &l.fault);
+                        }
+                        ToLog::Drained(done) => {
+                            let _ = done.send(());
+                        }
+                    }
                 }
             })
             .ok()?;
@@ -119,7 +133,13 @@ impl Logger {
 
     /// Hand `line` over, never waiting.
     fn log(&self, line: LogLine) {
-        let _ = self.0.try_send(line);
+        let _ = self.0.try_send(ToLog::Line(line));
+    }
+
+    /// `done` is answered once every line handed before it is written; `false` (never
+    /// answered) when the queue is full.
+    fn drained(&self, done: mpsc::Sender<()>) -> bool {
+        self.0.try_send(ToLog::Drained(done)).is_ok()
     }
 }
 
@@ -180,6 +200,12 @@ impl Writer {
         if let Some(l) = &self.logger {
             l.log(line);
         }
+    }
+
+    /// `done` is answered once every line of the error log handed over before it is written;
+    /// `false` (never answered) without the error log's thread or when it is too far behind.
+    fn log_drained(&self, done: mpsc::Sender<()>) -> bool {
+        self.logger.as_ref().is_some_and(|l| l.drained(done))
     }
 
     /// `done` is answered once every write queued before it is done.
@@ -480,6 +506,16 @@ impl App {
             let _ = rx.recv_timeout(QUIT_FLUSH);
         }
         self.pump_filter_history(Duration::ZERO);
+    }
+
+    /// Wait at most `wait` until the error log's thread wrote every line the history handed it
+    /// so far (after [`App::flush_filter_history`], the failures of the writes it waited for
+    /// too); whether it did. Never waits when that thread is too far behind (an error log that
+    /// blocks). The tests read the error log after it.
+    pub fn drain_filter_history_log(&self, wait: Duration) -> bool {
+        let Some(w) = &self.filter_history.writer else { return true };
+        let (tx, rx) = mpsc::channel();
+        w.log_drained(tx) && rx.recv_timeout(wait).is_ok()
     }
 
     /// `Ctrl+R` / `Space r H`: the list of the filters table tab `id`'s table ran before.

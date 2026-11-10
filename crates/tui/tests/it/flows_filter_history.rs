@@ -377,6 +377,8 @@ fn an_unreadable_file_is_never_an_empty_history_nor_written() {
     h.app.dispatch(datarig_tui::app::action::Action::Quit);
     assert!(h.app.quit);
     assert_eq!(std::fs::read_to_string(state.file()).unwrap(), broken, "left as it was");
+    // The error log is written by a thread of its own: wait for it.
+    assert!(h.app.drain_filter_history_log(Duration::from_secs(5)), "the error log is written");
     let log = std::fs::read_to_string(state.0.join("errors.log")).unwrap();
     assert_eq!(log.matches("filter_history.unreadable").count(), 1, "{log}");
     assert!(!log.contains("secret"), "never its text: {log}");
@@ -509,6 +511,10 @@ fn a_stuck_error_log_never_holds_up_a_write() {
     h.app.dispatch(datarig_tui::app::action::Action::Quit);
     assert!(start.elapsed() < Duration::from_secs(3), "quitting took {:?}", start.elapsed());
     assert_eq!(state.entries(&key(&cfg)), [("id > 1".to_string(), String::new())], "written on quitting");
+    // Waiting for the error log's thread to catch up is bounded too.
+    let start = std::time::Instant::now();
+    assert!(!h.app.drain_filter_history_log(Duration::from_secs(1)), "never written");
+    assert!(start.elapsed() < Duration::from_secs(3), "waited {:?}", start.elapsed());
     // Let the error log's thread go.
     let _reader = std::fs::OpenOptions::new()
         .read(true)
