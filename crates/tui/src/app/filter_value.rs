@@ -143,6 +143,10 @@ impl App {
     pub(super) fn filter_by_value(&mut self) {
         let id = self.tab().id;
         self.close_search_prompt();
+        // The rows shown are about to be replaced: a menu of their cells would be out of date.
+        if self.tab().is_table() && self.tab_busy(id) {
+            return self.flash_busy();
+        }
         // The rows first, as the line's keys do: the menu is about the grid's cells.
         if self.chart_shown() || self.plan_shown() || self.changes_shown() {
             self.tab_mut().exec.view = super::tabs::ResultView::Rows;
@@ -157,7 +161,7 @@ impl App {
             Ok(m) => m,
             Err(why) => return self.flash(why),
         };
-        let Some(grid) = self.menu_grid_target() else { return };
+        let (Some(grid), Some(result)) = (self.menu_grid_target(), self.grid_result_id()) else { return };
         let title = match menu.cells {
             1 => self.i18n.msg(&Msg::TableFilterByValueTitle { column: crate::text::escape_controls(&menu.column) }),
             n => self.i18n.msg(&Msg::TableFilterByValueTitleMany {
@@ -166,28 +170,32 @@ impl App {
             }),
         };
         let at = self.menu_at_cell();
-        self.open_by_value_menu(MenuTarget::Filter(Box::new(grid)), title, menu.entries, at);
+        self.open_by_value_menu(MenuTarget::Filter { grid: Box::new(grid), result }, title, menu.entries, at);
     }
 
-    /// The entry `by` of the menu was picked (what it was opened on is still as it was): its
-    /// filter goes into the line and runs, as `Enter` there runs it.
-    pub(super) fn filter_by_value_run(&mut self, by: ByValue) {
+    /// An entry of the menu was picked, on what it was opened on still (the same cells of the same
+    /// result): `text`, the filter it showed, goes into the line and runs, as `Enter` there runs
+    /// it. Nothing is written again from the cells. Refused while the tab runs, or while the
+    /// line holds changes not applied.
+    pub(super) fn filter_by_value_run(&mut self, text: String) {
         let id = self.tab().id;
+        if self.tab_busy(id) {
+            return self.flash_busy();
+        }
         self.filter_line_follow_tab(id);
-        let entry = match self.by_value_menu(id) {
-            Ok(m) => m.entries.into_iter().find(|e| e.by == by),
-            Err(why) => return self.flash(why),
-        };
-        let Some(entry) = entry else { return };
-        let text = match entry.text {
-            Ok(text) => text,
-            Err(off) => return self.flash(off.notice),
-        };
-        let (Some(target), Some(tq)) = (self.table_target(id), self.table_query(id)) else { return };
-        let Some(shown) = tq.shown.clone() else { return };
+        let a = self.filter_line_applied(id);
+        let Some(tq) = self.table_query(id) else { return };
+        let edited = tq.line.edited(Field::Where, &a.filter)
+            || tq.line.edited(Field::Order, &a.order)
+            || tq.line.edited(Field::Limit, &a.limit);
+        if edited {
+            return self.flash(Notice::new(Label::TableFilterByValueUnapplied, Level::Warning));
+        }
+        let (Some(target), Some(shown)) = (self.table_target(id), tq.shown.clone()) else { return };
         let recognised = query::recognise(&text, &target);
         let Some(tq) = self.table_query_mut(id) else { return };
         tq.line.where_.set(&text);
+        debug_assert_eq!(tq.line.where_.text(), text, "the line holds the text that runs");
         tq.draft = Query { filter: Some(Filter { text, recognised }), ..shown };
         tq.refusal = None;
         tq.line.focus = None;
@@ -529,9 +537,12 @@ impl App {
         Notice::new(Msg::TableFilterByValueOrder { column, ty }, Level::Warning)
     }
 
-    /// The menu entry `by` of the open filter menu runs (from [`App::menu_run`]).
-    pub(super) fn by_value_item(&mut self, by: ByValue) {
-        self.filter_by_value_run(by);
+    /// An entry of the open filter menu runs (from [`App::menu_run`]), with the filter `text`
+    /// the menu showed for it (`None`: it had none, nothing runs).
+    pub(super) fn by_value_item(&mut self, text: Option<String>) {
+        if let Some(text) = text {
+            self.filter_by_value_run(text);
+        }
     }
 
     /// Open the filter menu of `entries` for `target` at `at`, headed `title`: the entries that
@@ -541,6 +552,7 @@ impl App {
         let mut off = Vec::new();
         let mut names = Vec::new();
         let mut hints = Vec::new();
+        let mut filters = Vec::new();
         for e in entries {
             let item = MenuItem::Filter(e.by);
             items.push(item);
@@ -548,10 +560,11 @@ impl App {
             if let Some(h) = e.hint {
                 hints.push((item, h));
             }
-            if let Err(o) = e.text {
-                off.push((item, o));
+            match e.text {
+                Ok(text) => filters.push((item, text)),
+                Err(o) => off.push((item, o)),
             }
         }
-        self.push_filter_menu(target, title.to_string(), (items, off, names, hints), at);
+        self.push_filter_menu(target, title.to_string(), (items, off, names, hints, filters), at);
     }
 }

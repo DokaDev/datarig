@@ -210,10 +210,15 @@ const OPENS_MENU: &[Action] = &[Action::OpenMenu, Action::TabMenu, Action::Explo
 /// A menu's items: the target's, the pane's, and those of them shown dimmed with why.
 type Items = (Vec<MenuItem>, Vec<MenuItem>, Vec<(MenuItem, Off)>);
 
-/// The filter menu's items, those of them shown dimmed with why, their labels and the hints
-/// shown with them.
-pub(super) type FilterItems =
-    (Vec<MenuItem>, Vec<(MenuItem, Off)>, Vec<(MenuItem, Localized)>, Vec<(MenuItem, Localized)>);
+/// The filter menu's items, those of them shown dimmed with why, their labels, the hints
+/// shown with them, and the filter text each one that can run puts in the line.
+pub(super) type FilterItems = (
+    Vec<MenuItem>,
+    Vec<(MenuItem, Off)>,
+    Vec<(MenuItem, Localized)>,
+    Vec<(MenuItem, Localized)>,
+    Vec<(MenuItem, String)>,
+);
 
 /// What a copy of the grid's menu takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -267,8 +272,10 @@ pub enum MenuTarget {
     Monitor { tab: TabId, key: Option<datarig_core::monitor::SessionKey>, read_on: u64 },
     /// The welcome panel (no profile yet).
     Welcome,
-    /// The filters by value of the grid's cell or selection: the grid as it was (its target).
-    Filter(Box<MenuTarget>),
+    /// The filters by value of the grid's cell or selection: the grid as it was (its target),
+    /// and the result its cells were read from ([`crate::widgets::grid::ResultSet::id`]): rows
+    /// read again in their place are another result.
+    Filter { grid: Box<MenuTarget>, result: u64 },
 }
 
 /// A heading of the menu.
@@ -335,6 +342,9 @@ pub struct ContextMenu {
     /// A few words shown with an item that can run, where its keys would be (a filter's
     /// caveat).
     hints: Vec<(MenuItem, Localized)>,
+    /// The filter text each filter item that can run puts in the line, as written when the
+    /// menu opened: what runs is what the menu showed, never written again from the cells.
+    filters: Vec<(MenuItem, String)>,
     /// The explorer row's or the tab's name as shown when the menu opened (its heading).
     title: String,
     /// The focus to give back when the menu closes without running anything.
@@ -661,7 +671,11 @@ impl App {
             MenuTarget::Tab { .. } => self.tab_target(),
             MenuTarget::Monitor { .. } => self.monitor_target(),
             MenuTarget::Welcome => self.profiles.is_empty().then_some(MenuTarget::Welcome),
-            MenuTarget::Filter(grid) => self.menu_target_now(grid).map(|g| MenuTarget::Filter(Box::new(g))),
+            MenuTarget::Filter { grid, .. } => {
+                let grid = Box::new(self.menu_target_now(grid)?);
+                let result = self.grid_result_id()?;
+                Some(MenuTarget::Filter { grid, result })
+            }
         }
     }
 
@@ -850,6 +864,7 @@ impl App {
             off,
             names,
             hints: Vec::new(),
+            filters: Vec::new(),
             title,
             back,
             filter: TextInput::default(),
@@ -1034,6 +1049,17 @@ impl App {
         self.grid_target()
     }
 
+    /// The id of the result the active tab's grid shows, when it shows rows.
+    pub(super) fn grid_result_id(&self) -> Option<u64> {
+        if self.tabs.is_empty() {
+            return None;
+        }
+        match &self.tab().results {
+            Results::Rows(rs) => Some(rs.id),
+            _ => None,
+        }
+    }
+
     /// Open the filter menu: `items` for `target` (the grid as it is) at `at`, headed `title`,
     /// `off` of them dimmed with why, `names` their labels and `hints` the words shown with
     /// them. The focus goes back to the grid when it closes without running anything.
@@ -1041,7 +1067,7 @@ impl App {
         &mut self,
         target: MenuTarget,
         title: String,
-        (items, off, names, hints): FilterItems,
+        (items, off, names, hints, filters): FilterItems,
         at: (u16, u16),
     ) {
         if items.is_empty() {
@@ -1050,11 +1076,12 @@ impl App {
         let back = self.focus;
         self.push_menu_from(back, Ctx::Grid, target, (items, Vec::new(), off), at);
         if let Some(m) = self.overlays.menu_mut()
-            && matches!(m.target, MenuTarget::Filter(_))
+            && matches!(m.target, MenuTarget::Filter { .. })
         {
             m.title = title;
             m.names = names;
             m.hints = hints;
+            m.filters = filters;
         }
         self.menu_refilter();
     }
@@ -1334,9 +1361,11 @@ impl App {
                     self.apply_setting(super::command::Setting::CopyFormat(s));
                 }
             }
-            MenuItem::Filter(by) => {
+            MenuItem::Filter(_) => {
+                let text =
+                    self.overlays.menu().and_then(|m| m.filters.iter().find(|(i, _)| *i == item)).map(|f| f.1.clone());
                 self.overlays.close(OverlayKind::ContextMenu);
-                self.by_value_item(by);
+                self.by_value_item(text);
             }
         }
     }
@@ -1558,7 +1587,10 @@ impl App {
             (Heading::AllActions, _) => self.i18n.label(Label::MenuHeadingAllActions),
             (
                 Heading::Target,
-                MenuTarget::Explorer(..) | MenuTarget::Tab { .. } | MenuTarget::Monitor { .. } | MenuTarget::Filter(_),
+                MenuTarget::Explorer(..)
+                | MenuTarget::Tab { .. }
+                | MenuTarget::Monitor { .. }
+                | MenuTarget::Filter { .. },
             ) => Localized::verbatim(m.title.clone()),
             (Heading::Target, MenuTarget::Grid { range: Some(_), .. }) => self.i18n.label(Label::MenuHeadingSelection),
             (Heading::Target, MenuTarget::Grid { cell: Some((row, col)), .. }) => {
@@ -1594,7 +1626,7 @@ impl App {
             (Heading::Pane, MenuTarget::Plan { .. }) => self.i18n.label(Label::ResultsTabPlan),
             (Heading::Pane, MenuTarget::Chart { .. }) => self.i18n.label(Label::ResultsTabChart),
             (Heading::Pane, MenuTarget::Explorer(..)) => self.i18n.label(Label::PaneTreeTitle),
-            (Heading::Pane, MenuTarget::Grid { .. } | MenuTarget::Filter(_)) => {
+            (Heading::Pane, MenuTarget::Grid { .. } | MenuTarget::Filter { .. }) => {
                 self.i18n.label(Label::PaneResultsTitle)
             }
             (Heading::Pane, MenuTarget::Editor { .. }) => self.i18n.label(Label::PaneEditorTitle),

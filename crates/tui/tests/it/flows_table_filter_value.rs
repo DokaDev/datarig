@@ -448,6 +448,54 @@ fn a_menu_opened_on_other_cells_runs_nothing() {
     assert!(!menu_open(&h));
 }
 
+/// While the tab's run is on its way the menu does not open (its cells are of the rows shown,
+/// which the run is about to replace): said why, and nothing is sent.
+#[test]
+fn the_menu_does_not_open_while_the_tab_runs() {
+    let mut h = users();
+    h.command("where id > 0");
+    assert_eq!(runs(&mut h).len(), 1);
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    at(&mut h, 0, 0);
+    h.keys("F");
+    assert!(!menu_open(&h), "no menu while the run is on its way");
+    assert!(flashed(&h).contains("A query is already running"), "{}", flashed(&h));
+    assert!(runs(&mut h).is_empty());
+    // Its rows came: the menu is of them.
+    page(&mut h);
+    h.keys("F");
+    assert!(menu_open(&h), "{}", flashed(&h));
+}
+
+/// The entry picked runs the condition the menu showed, for the rows it was opened on: rows
+/// read again under it (another result in their place), or a run started meanwhile, make it
+/// out of date, said, and nothing runs.
+#[test]
+fn a_menu_over_rows_read_again_runs_nothing() {
+    let mut h = users();
+    at(&mut h, 0, 0);
+    h.keys("F");
+    assert!(menu_open(&h));
+    // Another result put in the place of the one the menu was opened on, at the same place of
+    // the same run.
+    if let Results::Rows(rs) = &mut h.app.tab_mut().results {
+        rs.id += 1_000_000;
+    }
+    h.menu_pick("= 1");
+    assert!(runs(&mut h).is_empty(), "nothing runs");
+    assert!(!menu_open(&h));
+    assert!(flashed(&h).contains("changed"), "{}", flashed(&h));
+    assert_eq!(where_text(&h), "", "the line is as it was");
+    // A run started under the open menu: out of date too.
+    h.keys("F");
+    assert!(menu_open(&h));
+    h.app.dispatch(datarig_tui::app::action::Action::RunStatement);
+    assert_eq!(runs(&mut h).len(), 1);
+    h.menu_pick("= 1");
+    assert!(runs(&mut h).is_empty(), "nothing more runs");
+    assert_eq!(where_text(&h), "");
+}
+
 /// Entry `by` of the open menu picked (by what it filters, not its label).
 fn pick(h: &mut Harness, by: datarig_tui::app::filter_value::ByValue) {
     use datarig_tui::app::menu::{MenuItem, MenuLine};
