@@ -5773,23 +5773,37 @@ async fn a_bounded_count_and_an_estimate_are_told_apart_when_stopped() {
     let rows = format!("SELECT * FROM {} WHERE (id > 100)", t.q());
     let counted = format!("SELECT COUNT(*) FROM (\n{rows}\n) AS datarig_count");
     let limit = Some(Duration::from_secs(30));
+    // A lock wait of the session's own, unlike the one any bounded statement asks for: exactly
+    // this stays after each of them, however it ended.
+    async fn lock_wait(c: &mut Conn, id: u64) -> Option<String> {
+        let evs = c.run(id, &["SELECT @@SESSION.lock_wait_timeout"]).await;
+        page_of(&evs).1[0][0].clone()
+    }
+    let own = Some("73".to_string());
+    c.ok(20, "SET SESSION lock_wait_timeout = 73").await;
+    assert_eq!(lock_wait(&mut c, 21).await, own);
     // Free: counted, and estimated within a factor of the rows.
     assert_eq!(count_within(&mut c, 1, &counted, limit).await.0, Ok(1900));
+    assert_eq!(lock_wait(&mut c, 22).await, own, "after a count");
     let (est, _) = estimate(&mut c, 2, &rows).await;
     let est = est.expect("an estimate");
     assert!((190..=19_000).contains(&est), "{est}");
+    assert_eq!(lock_wait(&mut c, 23).await, own, "after an estimate");
     // Held by another session.
     let mut b = side(&url).await;
     b.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
     let (got, took) = count_within(&mut c, 3, &counted, Some(Duration::from_millis(400))).await;
     assert_eq!(got, Err(DbError::TimedOut(Duration::from_millis(400))), "{took:?}");
     assert!(took < Duration::from_secs(1), "stopped at the limit, before the lock wait's: {took:?}");
+    assert_eq!(lock_wait(&mut c, 24).await, own, "after a time limit");
     let (got, took) = count_within(&mut c, 4, &counted, limit).await;
     assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
     assert!(took >= Duration::from_secs(1) && took < Duration::from_secs(10), "{took:?}");
+    assert_eq!(lock_wait(&mut c, 25).await, own, "after a count's lock wait");
     let (got, took) = estimate(&mut c, 5, &rows).await;
     assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
     assert!(took < Duration::from_secs(10), "{took:?}");
+    assert_eq!(lock_wait(&mut c, 26).await, own, "after an estimate's lock wait");
     // The user's cancel (`KILL QUERY`) while it waits.
     c.session.send(DbCommand::Count { id: 6, sql: counted.clone(), limit });
     tokio::time::sleep(Duration::from_millis(400)).await;
@@ -5798,6 +5812,7 @@ async fn a_bounded_count_and_an_estimate_are_told_apart_when_stopped() {
         unreachable!()
     };
     assert_eq!(result, Err(DbError::Cancelled));
+    assert_eq!(lock_wait(&mut c, 27).await, own, "after a cancel");
     // A shorter limit of the session's own stays.
     c.ok(7, "SET SESSION max_execution_time = 700").await;
     let (got, _) = count_within(&mut c, 8, &counted, limit).await;
@@ -5808,7 +5823,7 @@ async fn a_bounded_count_and_an_estimate_are_told_apart_when_stopped() {
     let evs = c.run(9, &["SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout"]).await;
     let (_, values, _) = page_of(&evs);
     assert_eq!(values[0][0].as_deref(), Some("700"), "the user's own");
-    assert_ne!(values[0][1].as_deref(), Some("2"));
+    assert_eq!(values[0][1], own, "the user's own");
     c.ok(10, "SET SESSION max_execution_time = 0").await;
     assert_eq!(count_within(&mut c, 11, &counted, limit).await.0, Ok(1900));
 }
