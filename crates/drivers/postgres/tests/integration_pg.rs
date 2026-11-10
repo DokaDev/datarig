@@ -7111,10 +7111,10 @@ async fn a_bounded_read_whose_commit_fails_is_no_answer() {
     assert!(!seen.iter().any(|e| matches!(e, DbEvent::Counted { result: Ok(_), .. })), "{seen:?}");
 }
 
-/// A bounded read goes in one query with the `BEGIN READ ONLY` and the limits it needs, so the
-/// server runs it only once they took effect: with the `BEGIN` failing where it stands (as one a
-/// cancel stops before it runs), the rest of the query is skipped. A read that ran anyway would
-/// wait for the lock held here, with no limit at all.
+/// A bounded read goes out only once the query with the `BEGIN READ ONLY` and the limits it needs
+/// said they took effect: with the `BEGIN` failing where it stands (as one a cancel stops before
+/// it runs), nothing more is sent. A read that ran anyway would wait for the lock held here, with
+/// no limit at all.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bounded_read_whose_begin_fails_never_runs() {
     let Some(url) = pg_url("a_bounded_read_whose_begin_fails_never_runs") else { return };
@@ -7306,13 +7306,13 @@ async fn a_server_time_limit_is_no_cancel_of_the_users() {
     let question = "WITH RECURSIVE named";
 
     proxy.fault_start(question, pg_proxy::Fault::Instead(sleep.into()));
-    let (got, _) = q.count_within(3, &counted, Some(Duration::from_secs(30))).await;
+    let (got, _) = q.count_within(3, &counted, None).await;
     assert!(!proxy.fault_pending());
     assert!(timed_out(&got), "the count's question: {got:?}");
-    proxy.fault_start(question, pg_proxy::Fault::Instead(sleep.into()));
+    proxy.fault_start("BEGIN READ ONLY", pg_proxy::Fault::Head(sleep.into()));
     let (got, _) = q.estimate(4, &rows).await;
     assert!(!proxy.fault_pending());
-    assert!(timed_out(&got), "the estimate's question: {got:?}");
+    assert!(timed_out(&got), "the estimate's setup: {got:?}");
 
     // The session's limit stops the setup, past the limit the count asked for.
     proxy.fault_start("BEGIN READ ONLY", pg_proxy::Fault::Head(sleep.into()));
@@ -7336,4 +7336,43 @@ async fn a_server_time_limit_is_no_cancel_of_the_users() {
     };
     assert_eq!(result, Err(DbError::TimedOut(Duration::from_millis(200))));
     assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
+/// A bounded read is a query of its own, sent after the answer to the one that set its limits: on
+/// a server before PostgreSQL 13 a statement in the same query keeps the timer begun under the
+/// session's longer limit, so the limit asked for would not apply to it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_read_is_a_query_of_its_own() {
+    let Some(url) = pg_url("a_bounded_read_is_a_query_of_its_own") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_ownq_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let rows = format!("SELECT * FROM {table} WHERE (id > 10)");
+    let counted = count_of(&rows);
+    assert_eq!(q.count_within(1, &counted, Some(Duration::from_secs(30))).await.0, Ok(40));
+    assert!(q.estimate(2, &rows).await.0.is_ok());
+    let texts: Vec<String> = proxy
+        .sent()
+        .into_iter()
+        .filter_map(|s| match s {
+            pg_proxy::Sent::Query(t) => Some(t),
+            pg_proxy::Sent::Parse(_) => None,
+        })
+        .collect();
+    let setups: Vec<usize> = texts
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.starts_with("BEGIN READ ONLY; SELECT s.name"))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(setups.len(), 2, "{texts:?}");
+    assert_eq!(texts[setups[0] + 1], counted, "{texts:?}");
+    assert_eq!(texts[setups[0] + 2], "COMMIT", "{texts:?}");
+    assert!(texts[setups[1] + 1].starts_with("EXPLAIN"), "{texts:?}");
+    assert_eq!(texts[setups[1] + 2], "COMMIT", "{texts:?}");
 }

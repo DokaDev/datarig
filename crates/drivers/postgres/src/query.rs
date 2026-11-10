@@ -2579,14 +2579,14 @@ async fn count(
         probe(client, link, env, tx).await?;
         return Ok((Err(counted), false));
     }
+    if let Some(limit) = limit.filter(|_| !tx.unsure) {
+        let read = limited_read(client, link, env, tx, (limit, COUNT_LOCK_WAIT), &check, sql).await?;
+        return Ok((read.and_then(|msgs| count_of(&msgs)), false));
+    }
     // A search path per transaction goes first in each simple query (one implicit transaction).
     let path = env.path_text();
     if let (_, Err(why)) = count_checked(link, env, client.simple_query(&format!("{path}{check}"))).await? {
         return Ok((Err(why), false));
-    }
-    if let Some(limit) = limit.filter(|_| !tx.unsure) {
-        let read = limited_read(client, link, env, tx, (limit, COUNT_LOCK_WAIT), sql).await?;
-        return Ok((read.and_then(|msgs| count_of(&msgs)), false));
     }
     let text = if env.read_only { format!("{BEGIN_READ_ONLY}; {path}{sql}; COMMIT") } else { format!("{path}{sql}") };
     let counted = match link.guard(Some(env.token), client.simple_query(&text)).await? {
@@ -2628,13 +2628,9 @@ async fn estimate(
     if tx.block || tx.unsure {
         return Ok(Err(DbError::NotSupported));
     }
-    let path = env.path_text();
-    if let (_, Err(why)) = count_checked(link, env, client.simple_query(&format!("{path}{check}"))).await? {
-        return Ok(Err(why));
-    }
     let format = datarig_core::driver::ExplainFormat::PostgresJson;
     let explain = format.explain_sql(sql, false);
-    let read = limited_read(client, link, env, tx, (ESTIMATE_LIMIT, COUNT_LOCK_WAIT), &explain).await?;
+    let read = limited_read(client, link, env, tx, (ESTIMATE_LIMIT, COUNT_LOCK_WAIT), &check, &explain).await?;
     Ok(read.and_then(|msgs| {
         let plan = msgs.iter().find_map(|m| match m {
             SimpleQueryMessage::Row(r) => r.get(0).map(str::to_string),
@@ -2645,42 +2641,33 @@ async fn estimate(
 }
 
 /// Run `text`, a read of the app's own, outside a transaction block with time limits that end
-/// with it: `BEGIN READ ONLY`, the settings of each transaction ([`Env::each_tx`]), then the
-/// statement and lock wait limits ([`limited_begin`]) and the statement in one query, so the
-/// server skips the statement when anything before it fails: it never runs outside its
-/// transaction or without its limits. The `COMMIT` goes out with it as a query of its own (one
-/// round trip): a failed statement leaves the transaction aborted, which the `COMMIT` rolls back,
-/// and with no transaction open it does nothing. Pooler-safe: every setting is local to that
-/// transaction. The server stopping it at its limit is [`DbError::TimedOut`] with the limit that
-/// applied, a cancel `Cancelled` ([`stopped`] tells them apart); a lock wait past its limit is
-/// `LockTimeout`. The read is answered only when the `COMMIT` went through: a failed one is the
-/// answer (the transaction may still be open, aborted: it is rolled back, and the session asked
-/// whether a block is open when that fails too); a lost connection is not an answer either.
+/// with it, in two requests. The first is `BEGIN READ ONLY`, the settings of each transaction
+/// ([`Env::each_tx`]), the statement and lock wait limits ([`limited_begin`]) and `ask`, the
+/// allowlist's question: the server skips what follows anything that fails, and `text` goes out
+/// only once its answer says the limits took effect and nothing is in the way. The second is
+/// `text` as a query of its own, with the `COMMIT` as another right behind it (one round trip): on
+/// its own it gets its own statement timer, whatever the server does between the statements of a
+/// query (before PostgreSQL 13 a timer begun under a longer session limit kept running through
+/// them); a failed statement leaves the transaction aborted, which the `COMMIT` rolls back.
+/// Pooler-safe: every setting is local to that transaction. The server stopping it at its limit
+/// is [`DbError::TimedOut`] with the limit that applied, a cancel `Cancelled` ([`stopped`] tells
+/// them apart); a lock wait past its limit is `LockTimeout`. The read is answered only when the
+/// `COMMIT` went through: a failed one is the answer (the transaction may still be open, aborted:
+/// it is rolled back, and the session asked whether a block is open when that fails too); a lost
+/// connection is not an answer either.
 async fn limited_read(
     client: &Client,
     link: &mut Link,
     env: &Env<'_>,
     tx: &mut Tx,
     (statement, lock): (Duration, Duration),
+    ask: &str,
     text: &str,
 ) -> Result<Result<Vec<SimpleQueryMessage>, DbError>, Closed> {
-    let head = format!("{}; ", limited_begin(env.each_tx, statement, lock));
-    let query = format!("{head}{text}");
+    let first = format!("{}; {ask}", limited_begin(env.each_tx, statement, lock));
     let start = Instant::now();
-    // Each answer with what was known when it came: whether the user had asked to cancel this
-    // run, and how long since the read was sent.
-    let when = |answer| (answer, env.cancel.asked(), start.elapsed());
-    let ((mut msgs, read), commit) = link
-        .guard(Some(env.token), async {
-            tokio::join!(
-                async {
-                    let (msgs, end) = streamed(client, &query).await;
-                    (msgs, when(end))
-                },
-                async { when(client.batch_execute("COMMIT").await) },
-            )
-        })
-        .await?;
+    let (msgs, end) = link.guard(Some(env.token), streamed(client, &first)).await?;
+    let (asked, ran) = (env.cancel.asked(), start.elapsed());
     let set = limits_end(&msgs);
     // The limit is in force from there on: what stopped the statements before it, or the
     // `COMMIT` after it, is not told by how long they took.
@@ -2688,12 +2675,42 @@ async fn limited_read(
     let failed = |(e, asked, ran): (&tokio_postgres::Error, bool, Duration), applied| {
         if is_cancel(e) { stopped(asked, ran, applied).unwrap_or_else(|| db_error(e)) } else { db_error(e) }
     };
-    let read = match (read, set) {
-        ((Ok(()), ..), Some(end)) => Ok(msgs.split_off(end)),
-        ((Ok(()), ..), None) => Err(DbError::NoResult),
-        ((Err(e), asked, ran), _) => Err(in_read(failed((&e, asked, ran), applied), head.chars().count())),
+    let admitted = match (&end, set) {
+        (Err(e), _) => Err(failed((e, asked, ran), applied)),
+        (Ok(()), None) => Err(DbError::NoResult),
+        // A cancel that came after the question found nothing running to stop.
+        (Ok(()), Some(_)) if asked => Err(DbError::Cancelled),
+        (Ok(()), Some(at)) => check_answer(&msgs[at..]),
     };
-    let (Err(e), asked, ran) = commit else { return Ok(read) };
+    if let Err(why) = admitted {
+        if !end.is_err_and(|e| e.is_closed())
+            && link.guard(None, client.batch_execute("ROLLBACK")).await?.is_err()
+        {
+            probe(client, link, env, tx).await?;
+        }
+        return Ok(Err(why));
+    }
+    let start = Instant::now();
+    // Each answer with what was known when it came: whether the user had asked to cancel this
+    // run, and how long since the read was sent.
+    let when = || (env.cancel.asked(), start.elapsed());
+    let ((read, read_when), (commit, commit_when)) = link
+        .guard(Some(env.token), async {
+            tokio::join!(
+                async {
+                    let answer = client.simple_query(text).await;
+                    (answer, when())
+                },
+                async {
+                    let answer = client.batch_execute("COMMIT").await;
+                    (answer, when())
+                },
+            )
+        })
+        .await?;
+    let read = read.map_err(|e| failed((&e, read_when.0, read_when.1), applied));
+    let Err(e) = commit else { return Ok(read) };
+    let (asked, ran) = commit_when;
     if !e.is_closed() && link.guard(None, client.batch_execute("ROLLBACK")).await?.is_err() {
         probe(client, link, env, tx).await?;
     }
@@ -2717,16 +2734,6 @@ async fn streamed(client: &Client, query: &str) -> (Vec<SimpleQueryMessage>, Res
         }
     }
     (msgs, Ok(()))
-}
-
-/// `why`, a failure of a query that began with `head` characters of the app's own, as a failure
-/// of the statement after them: a position the server gave counts from that statement.
-fn in_read(mut why: DbError, head: usize) -> DbError {
-    if let DbError::Server(message) = &mut why {
-        let head = u32::try_from(head).unwrap_or(u32::MAX);
-        message.position = message.position.and_then(|at| at.checked_sub(head)).filter(|at| *at > 0);
-    }
-    why
 }
 
 /// A bounded read stopped with `query_canceled` (57014), which the server answers to a cancel
@@ -2772,7 +2779,7 @@ fn limited_begin(each_tx: &[String], statement: Duration, lock: Duration) -> Str
 const LIMITS_COLUMN: &str = "datarig_limit";
 
 /// Where the answer of [`limited_begin`] ends in the messages of its query: what follows is the
-/// read's. `None` when the query did not get that far.
+/// allowlist's. `None` when the query did not get that far.
 fn limits_end(msgs: &[SimpleQueryMessage]) -> Option<usize> {
     let row = msgs.iter().position(
         |m| matches!(m, SimpleQueryMessage::Row(r) if r.columns().last().is_some_and(|c| c.name() == LIMITS_COLUMN)),
