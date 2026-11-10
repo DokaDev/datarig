@@ -4824,3 +4824,51 @@ async fn a_failing_start_up_statement_fails_the_connect() {
         Ok(_) => panic!("a read-only session connected read-write"),
     }
 }
+
+fn execute(id: u64, sql: &str) -> DbCommand {
+    DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::NoHold, tx: TxRule::Auto }
+}
+
+/// The values of column `x` of `table`, in order.
+async fn xs(admin: &str, table: &str) -> Vec<i64> {
+    let mut a = side(admin).await;
+    a.query(format!("SELECT x FROM {table} ORDER BY x")).await.unwrap()
+}
+
+/// A Ctrl+C while a run waits for the connection cancels that run: it is answered cancelled and
+/// never reaches the server, and the run after it is not touched.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_of_a_queued_run_stops_that_run_and_no_later_one() {
+    let test = "a_cancel_of_a_queued_run_stops_that_run_and_no_later_one";
+    let Some((_, admin)) = urls(test) else { return };
+    let t = format!("shop.zz_cancelq_{}", std::process::id());
+    let _t = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {t}") };
+    side(&admin).await.query_drop(format!("CREATE TABLE {t} (x int PRIMARY KEY)")).await.unwrap();
+    let mut c = Conn::start(&admin, SessionRole::Query, false, test);
+    c.session.send(execute(1, &format!("INSERT INTO {t} VALUES (1)")));
+    c.session.cancel();
+    let evs = c.answer(1).await;
+    let last = evs.last().unwrap();
+    assert!(matches!(last, DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. }), "{evs:?}");
+    c.ok(2, &format!("INSERT INTO {t} VALUES (2)")).await;
+    assert_eq!(xs(&admin, &t).await, [2], "only the run after it ran");
+}
+
+/// A cancel is for the last run sent: a run queued before it still runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_of_a_queued_run_leaves_the_run_before_it() {
+    let test = "a_cancel_of_a_queued_run_leaves_the_run_before_it";
+    let Some((_, admin)) = urls(test) else { return };
+    let t = format!("shop.zz_cancelb_{}", std::process::id());
+    let _t = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {t}") };
+    side(&admin).await.query_drop(format!("CREATE TABLE {t} (x int PRIMARY KEY)")).await.unwrap();
+    let mut c = Conn::start(&admin, SessionRole::Query, false, test);
+    c.session.send(execute(1, &format!("INSERT INTO {t} VALUES (1)")));
+    c.session.send(execute(2, &format!("INSERT INTO {t} VALUES (2)")));
+    c.session.cancel();
+    let evs = c.answer(1).await;
+    assert!(!matches!(evs.last().unwrap(), DbEvent::Failed { .. }), "the run before it: {evs:?}");
+    let evs = c.answer(2).await;
+    assert!(matches!(evs.last().unwrap(), DbEvent::Failed { cancelled: true, .. }), "{evs:?}");
+    assert_eq!(xs(&admin, &t).await, [1]);
+}

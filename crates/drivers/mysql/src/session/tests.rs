@@ -858,7 +858,7 @@ async fn a_result_answered_while_its_kill_hangs_is_read_to_its_end_then_the_sess
         conn,
         crate::link::Link::new(rx, wire),
         killer.clone(),
-        Arc::new(AtomicBool::new(true)),
+        Arc::new(datarig_core::driver::CancelMark::default()),
         Arc::new(AtomicBool::new(false)),
         events,
         crate::query::Settings { page_size: 100, read_only: false },
@@ -954,7 +954,7 @@ struct Faked {
     /// The session's server: reads its requests, answers them.
     server: tokio::io::DuplexStream,
     killer: Killer,
-    asked: Arc<AtomicBool>,
+    asked: Arc<datarig_core::driver::CancelMark>,
     busy: Arc<AtomicBool>,
     commands: tokio::sync::mpsc::UnboundedSender<datarig_core::driver::DbCommand>,
     events: tokio::sync::mpsc::UnboundedReceiver<datarig_core::driver::DbEvent>,
@@ -993,7 +993,7 @@ async fn faked() -> Faked {
     let conn = login.await.unwrap().unwrap();
     let (commands, rx) = tokio::sync::mpsc::unbounded_channel();
     let (events_tx, events) = tokio::sync::mpsc::unbounded_channel();
-    let (asked, busy) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+    let (asked, busy) = (Arc::new(datarig_core::driver::CancelMark::default()), Arc::new(AtomicBool::new(false)));
     let session = tokio::spawn(crate::query::query_loop(
         conn,
         crate::link::Link::new(rx, wire),
@@ -1047,11 +1047,11 @@ async fn a_kill_left_unanswered_by_a_statement_that_ended_never_reaches_the_next
     let sent = read_packet(&mut server).await.expect("the statement");
     assert_eq!(&sent[1..], first.as_bytes());
     // The user cancels; the kill is written, and the statement answers before the kill does.
-    asked.store(true, Ordering::SeqCst);
+    asked.ask(1);
     let cancel = tokio::spawn({
         let (asked, busy) = (asked.clone(), busy.clone());
         async move {
-            killer.kill_query_if(move || asked.load(Ordering::SeqCst) && busy.load(Ordering::SeqCst)).await;
+            killer.kill_query_if(move || asked.stands(1) && busy.load(Ordering::SeqCst)).await;
         }
     });
     tokio::time::timeout(std::time::Duration::from_secs(30), written.notified()).await.expect("the kill written");
@@ -1192,7 +1192,7 @@ async fn an_apply_cancelled_before_its_first_step_sends_no_step_and_rolls_back()
     let Faked { mut server, asked, commands, mut events, session, kills, .. } = faked().await;
     commands.send(apply_command()).unwrap();
     assert_eq!(next_request(&mut server).await, "START TRANSACTION");
-    asked.store(true, Ordering::SeqCst);
+    asked.ask(1);
     server.write_all(&ok_packet(0x0003)).await.unwrap();
     assert_eq!(next_request(&mut server).await, "ROLLBACK AND NO CHAIN NO RELEASE", "no step, no commit");
     server.write_all(&ok_packet(0x0002)).await.unwrap();
@@ -1214,7 +1214,7 @@ async fn an_apply_cancelled_after_its_last_step_rolls_back_instead_of_committing
     assert!(next_request(&mut server).await.starts_with("SELECT 1 FROM"));
     server.write_all(&one_row()).await.unwrap();
     assert!(next_request(&mut server).await.starts_with("UPDATE"));
-    asked.store(true, Ordering::SeqCst);
+    asked.ask(1);
     // One row matched.
     server.write_all(&packet(1, &[0, 1, 0, 0x03, 0, 0, 0])).await.unwrap();
     assert_eq!(next_request(&mut server).await, "ROLLBACK AND NO CHAIN NO RELEASE", "never committed");
@@ -1724,7 +1724,7 @@ async fn manual_commit_survives_the_servers_odd_answers() {
     commands.send(run(2, "INSERT INTO shop.t VALUES (2)")).unwrap();
     let start = read_packet(&mut server).await.expect("the start");
     assert_eq!(&start[1..], b"START TRANSACTION");
-    asked.store(true, Ordering::SeqCst);
+    asked.ask(2);
     server.write_all(&in_trans).await.unwrap();
     assert_eq!(answered(&mut server, &idle).await, "ROLLBACK AND NO CHAIN NO RELEASE", "the insert is never sent");
     let evs = events_until(&mut events, |e| matches!(e, DbEvent::ManualRolledBack { .. })).await;

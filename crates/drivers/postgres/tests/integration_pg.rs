@@ -6192,4 +6192,49 @@ async fn a_catalog_read_puts_pg_catalog_first_on_the_path() {
     let path = first_cell(&mut c, 105, "SELECT pg_catalog.current_setting('search_path')").await;
     assert_eq!(path.as_deref(), Some("pg_catalog"));
     c.run(106, "ROLLBACK").await;
+||||||| parent of d68f20f (fix(driver): tie a cancel to the run it was pressed for)
+
+/// A session still connecting, with nothing waited for yet: what is sent and cancelled now is
+/// queued behind the connection.
+fn connecting(url: &str) -> Conn {
+    let cfg = ConnectionConfig { name: "it".into(), dsn: Some(url.to_string()), ..ConnectionConfig::test_db() };
+    let (tx, rx) = unbounded_channel();
+    let session = PgDriver.connect(&cfg, SessionRole::Query, opts(SessionRole::Query), tx);
+    Conn { session, rx }
+}
+
+fn execute(id: u64, sql: &str) -> DbCommand {
+    DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::Hold, tx: TxRule::Auto }
+}
+
+/// A Ctrl+C while a run waits for the connection cancels that run: it is answered cancelled and
+/// never reaches the server, and the run after it is not touched.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_of_a_queued_run_stops_that_run_and_no_later_one() {
+    let Some(url) = pg_url("a_cancel_of_a_queued_run_stops_that_run_and_no_later_one") else { return };
+    let (_schema_guard, _terminate, schema, _tag) = scratch(&url, "cancelq");
+    let mut c = connecting(&url);
+    c.session.send(execute(1, &format!("INSERT INTO {schema}.t VALUES (1)")));
+    c.session.cancel();
+    let ev = c.result(1).await;
+    assert!(matches!(ev, DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. }), "{ev:?}");
+    assert!(matches!(c.run(2, &format!("INSERT INTO {schema}.t VALUES (2)")).await, DbEvent::Done { .. }));
+    let DbEvent::Page { rows, .. } = c.run(3, &format!("SELECT x FROM {schema}.t")).await else { panic!("rows") };
+    assert_eq!(rows, [vec![Some("2".to_string())]], "only the run after it ran");
+}
+
+/// A cancel is for the last run sent: a run queued before it still runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_of_a_queued_run_leaves_the_run_before_it() {
+    let Some(url) = pg_url("a_cancel_of_a_queued_run_leaves_the_run_before_it") else { return };
+    let (_schema_guard, _terminate, schema, _tag) = scratch(&url, "cancelb");
+    let mut c = connecting(&url);
+    c.session.send(execute(1, &format!("INSERT INTO {schema}.t VALUES (1)")));
+    c.session.send(execute(2, &format!("INSERT INTO {schema}.t VALUES (2)")));
+    c.session.cancel();
+    assert!(matches!(c.result(1).await, DbEvent::Done { .. }), "the run before it");
+    let ev = c.result(2).await;
+    assert!(matches!(ev, DbEvent::Failed { cancelled: true, .. }), "{ev:?}");
+    let DbEvent::Page { rows, .. } = c.run(3, &format!("SELECT x FROM {schema}.t")).await else { panic!("rows") };
+    assert_eq!(rows, [vec![Some("1".to_string())]]);
 }

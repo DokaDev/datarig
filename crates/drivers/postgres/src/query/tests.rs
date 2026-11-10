@@ -389,6 +389,7 @@ fn statements_that_deallocate_prepared_statements() {
 mod terminal {
     use super::super::{BeforeBind, Env, Job, Prepared, Reply, State, Tx, end_tx, execute};
     use crate::link::Link;
+    use datarig_core::driver::CancelMark;
     use datarig_core::driver::{DbCommand, DbError, DbEvent, PagingMode, TxOutcome, TxRule, TxStep};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -649,7 +650,7 @@ mod terminal {
         tx: Tx,
         prepared: Prepared,
         id: u64,
-        cancel: Arc<AtomicBool>,
+        cancel: Arc<CancelMark>,
         failed: AtomicBool,
         /// The rule its runs go by (`Auto` unless a test says otherwise).
         rule: TxRule,
@@ -680,7 +681,7 @@ mod terminal {
                 tx: Tx::default(),
                 prepared: Prepared::default(),
                 id: 0,
-                cancel: Arc::new(AtomicBool::new(false)),
+                cancel: Arc::new(CancelMark::default()),
                 failed: AtomicBool::new(false),
                 rule: TxRule::Auto,
                 each_tx: Vec::new(),
@@ -691,6 +692,7 @@ mod terminal {
         /// Run `statements` with `hook` before each bind; every event of the run.
         async fn run_all(&mut self, statements: &[&str], hook: Option<&BeforeBind>) -> Vec<DbEvent> {
             self.id += 1;
+            self.cancel.begin(self.id);
             let env = Env {
                 events: &self.events,
                 own: &crate::query::NO_OWN,
@@ -751,6 +753,7 @@ mod terminal {
         /// exactly one).
         async fn run(&mut self, sql: &str, hook: Option<&BeforeBind>) -> DbEvent {
             self.id += 1;
+            self.cancel.begin(self.id);
             let env = Env {
                 events: &self.events,
                 own: &crate::query::NO_OWN,
@@ -965,9 +968,9 @@ mod terminal {
         other.batch_execute(&format!("CREATE TABLE {table} (a int4)")).await.unwrap();
         let mut s = Session::open(&url).await;
         // Flagged while the first statement is bound, as if the user cancelled just as it ended.
-        let flag = s.cancel.clone();
+        let (flag, run) = (s.cancel.clone(), s.id + 1);
         let hook: Box<BeforeBind> = Box::new(move || {
-            flag.store(true, Ordering::SeqCst);
+            flag.ask(run);
             Box::pin(async {})
         });
         let insert = format!("INSERT INTO {table} VALUES (2)");
@@ -979,7 +982,7 @@ mod terminal {
         let count: i64 = other.query_one(&format!("SELECT count(*) FROM {table}"), &[]).await.unwrap().get(0);
         assert_eq!(count, 0, "the statements after the cancel never ran");
         assert!(!s.tx.block && !s.tx.reported, "nothing stays open");
-        // The flag is still set from that run: the next run starts afresh.
+        // The cancel was that run's: the next run starts afresh.
         let events = s.run_all(&["SELECT 1", &insert], None).await;
         assert_eq!(
             outline(&events),
@@ -1180,7 +1183,6 @@ mod terminal {
         use super::{Session, TableGuard, connect, manual, pg_url};
         use datarig_core::driver::{ApplyError, ApplyFailure, ApplyTx, DbError, DbEvent, TxStep};
         use datarig_core::edit::{Expect, Origin, Step};
-        use std::sync::atomic::Ordering;
 
         fn steps(table: &str) -> Vec<Step> {
             let step = |sql: String, expect| Step { sql, expect, origin: Origin::Row(0) };
@@ -1205,6 +1207,7 @@ mod terminal {
             ) -> (Vec<DbEvent>, Option<DbError>) {
                 use super::super::super::{Env, count_savepoint};
                 self.id += 1;
+                self.cancel.begin(self.id);
                 let env = Env {
                     events: &self.events,
                     own: &crate::query::NO_OWN,
@@ -1279,10 +1282,10 @@ mod terminal {
             let Some(url) = pg_url("a_cancel_before_the_first_step_applies_nothing") else { return };
             let (table, _g) = table(&url, "cancel_first").await;
             let mut s = Session::open(&url).await;
-            let flag = s.cancel.clone();
+            let (flag, run) = (s.cancel.clone(), s.id + 1);
             let at_first = move |i: usize| {
                 if i == 0 {
-                    flag.store(true, Ordering::SeqCst);
+                    flag.ask(run);
                 }
             };
             let hooks = Hooks { before_step: Some(&at_first), ..Hooks::default() };
@@ -1298,10 +1301,10 @@ mod terminal {
             let Some(url) = pg_url("a_cancel_after_the_last_step_rolls_back_instead_of_committing") else { return };
             let (table, _g) = table(&url, "cancel_last").await;
             let mut s = Session::open(&url).await;
-            let flag = s.cancel.clone();
+            let (flag, run) = (s.cancel.clone(), s.id + 1);
             let at_end = move |i: usize| {
                 if i == 2 {
-                    flag.store(true, Ordering::SeqCst);
+                    flag.ask(run);
                 }
             };
             let hooks = Hooks { before_step: Some(&at_end), ..Hooks::default() };
@@ -1352,10 +1355,10 @@ mod terminal {
             s.rule = manual(&[TxStep::Open]);
             let events = s.run_all(&[&format!("INSERT INTO {table} VALUES (2, 'earlier')")], None).await;
             assert!(events.iter().any(|e| matches!(e, DbEvent::ManualBegun { .. })), "{events:?}");
-            let flag = s.cancel.clone();
+            let (flag, run) = (s.cancel.clone(), s.id + 1);
             let at_second = move |i: usize| {
                 if i == 1 {
-                    flag.store(true, Ordering::SeqCst);
+                    flag.ask(run);
                 }
             };
             let hooks = Hooks {

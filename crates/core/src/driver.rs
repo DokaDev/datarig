@@ -324,9 +324,105 @@ pub enum PingError {
     Failed(DbError),
 }
 
-/// Cancels whatever statement the session is currently running.
+/// Cancels run `run` of the session (the `id` of the command that started it): the one running
+/// now, or one that has not started yet, which then never runs.
 pub trait Canceller: Send + Sync {
-    fn cancel(&self);
+    fn cancel(&self, run: u64);
+}
+
+/// Which run of a session the user asked to cancel, shared by its canceller and its loop. A
+/// cancel belongs to the run it was pressed for: asked while that run is still waiting, it
+/// stops that run when it starts; asked late, it stops nothing that comes after. Run numbers
+/// of a session only grow.
+#[derive(Debug, Default)]
+pub struct CancelMark {
+    /// The run asked to cancel, plus one (0: none).
+    asked: AtomicU64,
+    /// The run the session is at, plus one (0: none yet).
+    current: AtomicU64,
+}
+
+impl CancelMark {
+    /// The user asked to cancel `run`. Whether it is the run the session is at, so that there
+    /// is something to stop on the server.
+    pub fn ask(&self, run: u64) -> bool {
+        let mark = run.saturating_add(1);
+        self.asked.fetch_max(mark, Ordering::SeqCst);
+        self.current.load(Ordering::SeqCst) == mark
+    }
+
+    /// The session starts `run`. Whether a cancel for it came first (it must not run). A cancel
+    /// of an earlier run is dropped, one of a later run stays for that run. `current` is set
+    /// before `asked` is read, and [`CancelMark::ask`] does the opposite: of a cancel and a
+    /// start at the same moment, at least one sees the other.
+    pub fn begin(&self, run: u64) -> bool {
+        let mark = run.saturating_add(1);
+        self.current.store(mark, Ordering::SeqCst);
+        let asked = self.asked.load(Ordering::SeqCst);
+        if asked < mark {
+            let _ = self.asked.compare_exchange(asked, 0, Ordering::SeqCst, Ordering::SeqCst);
+        }
+        self.asked.load(Ordering::SeqCst) == mark
+    }
+
+    /// Whether the run the session is at was asked to cancel.
+    pub fn asked(&self) -> bool {
+        let asked = self.asked.load(Ordering::SeqCst);
+        asked != 0 && asked == self.current.load(Ordering::SeqCst)
+    }
+
+    /// Whether the cancel of `run` still stands and `run` is the run the session is at.
+    pub fn stands(&self, run: u64) -> bool {
+        let mark = run.saturating_add(1);
+        self.asked.load(Ordering::SeqCst) == mark && self.current.load(Ordering::SeqCst) == mark
+    }
+}
+
+impl DbCommand {
+    /// The number of the run this command starts; `None` for one that is part of a run, or
+    /// that a cancel never stops.
+    pub fn run(&self) -> Option<u64> {
+        match self {
+            DbCommand::Execute { id, .. }
+            | DbCommand::Resume { id, .. }
+            | DbCommand::Count { id, .. }
+            | DbCommand::CheckRepeat { id, .. }
+            | DbCommand::Export { id, .. }
+            | DbCommand::ApplyEdits { id, .. } => Some(*id),
+            _ => None,
+        }
+    }
+
+    /// The answer of this run when it is cancelled before it starts; `None` for a command that
+    /// starts no run.
+    pub fn cancelled(&self) -> Option<DbEvent> {
+        let error = DbError::Cancelled;
+        Some(match self {
+            DbCommand::Execute { id, .. } | DbCommand::Resume { id, .. } => {
+                DbEvent::Failed { id: *id, error, cancelled: true }
+            }
+            DbCommand::Count { id, .. } => DbEvent::Counted { id: *id, result: Err(error), snapshot: false },
+            DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id: *id, result: Err(error) },
+            DbCommand::Export { id, .. } => DbEvent::Exported { id: *id, result: Err(error), cancelled: true },
+            DbCommand::ApplyEdits { id, .. } => {
+                DbEvent::Applied { id: *id, result: Err(ApplyFailure { step: None, why: ApplyError::Db(error) }) }
+            }
+            _ => return None,
+        })
+    }
+
+    /// Start this command under `mark`: `true` when it is a run that was cancelled before it
+    /// started, whose one answer went to `events` (it must not run).
+    pub fn cancelled_before_start(&self, mark: &CancelMark, events: &UnboundedSender<DbEvent>) -> bool {
+        let Some(run) = self.run() else { return false };
+        if !mark.begin(run) {
+            return false;
+        }
+        if let Some(answer) = self.cancelled() {
+            let _ = events.send(answer);
+        }
+        true
+    }
 }
 
 /// One connection of a given [`SessionRole`]: a command channel and a canceller.
@@ -339,6 +435,8 @@ pub struct Session {
     /// answers its commands one by one, in order, so the n-th answer is the n-th request's.
     structures: AtomicU64,
     structures_answered: AtomicU64,
+    /// The last run sent, plus one (0: none yet): what a cancel is for.
+    last_run: AtomicU64,
 }
 
 impl Session {
@@ -350,19 +448,34 @@ impl Session {
         tx: UnboundedSender<DbCommand>,
         canceller: Arc<dyn Canceller>,
     ) -> Self {
-        Self { caps, role, tx, canceller, structures: AtomicU64::new(0), structures_answered: AtomicU64::new(0) }
+        Self {
+            caps,
+            role,
+            tx,
+            canceller,
+            structures: AtomicU64::new(0),
+            structures_answered: AtomicU64::new(0),
+            last_run: AtomicU64::new(0),
+        }
     }
 
     pub fn send(&self, cmd: DbCommand) {
         if matches!(cmd, DbCommand::LoadStructure { .. }) {
             self.structures.fetch_add(1, Ordering::Relaxed);
         }
+        if let Some(run) = cmd.run() {
+            self.last_run.store(run.saturating_add(1), Ordering::Relaxed);
+        }
         // A closed channel means the connection task ended; the UI already got the reason.
         let _ = self.tx.send(cmd);
     }
 
+    /// Cancel the last run sent, whether it runs by now or still waits its turn (the session
+    /// may still be connecting). Nothing sent yet: nothing to cancel.
     pub fn cancel(&self) {
-        self.canceller.cancel();
+        if let Some(run) = self.last_run.load(Ordering::Relaxed).checked_sub(1) {
+            self.canceller.cancel(run);
+        }
     }
 
     /// How many `LoadStructure` were sent on this session so far.
@@ -381,5 +494,88 @@ impl Session {
     /// No further events are sent for it.
     pub fn close(self) {
         drop(self);
+    }
+}
+
+#[cfg(test)]
+mod cancel_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[test]
+    fn a_cancel_asked_before_a_run_starts_stops_that_run() {
+        let mark = CancelMark::default();
+        assert!(!mark.ask(7), "not started: nothing to stop on the server");
+        assert!(mark.begin(7));
+    }
+
+    #[test]
+    fn a_cancel_of_a_later_run_waits_for_it_and_an_earlier_one_is_dropped() {
+        let mark = CancelMark::default();
+        mark.ask(8);
+        assert!(!mark.begin(7), "a run before the one cancelled runs");
+        assert!(!mark.asked());
+        assert!(mark.begin(8), "the one cancelled does not");
+        assert!(!mark.begin(9), "and the cancel ends with it");
+        assert!(!mark.asked());
+    }
+
+    #[test]
+    fn a_late_cancel_stops_nothing_that_comes_after() {
+        let mark = CancelMark::default();
+        assert!(!mark.begin(3));
+        assert!(mark.ask(3), "the run under way");
+        assert!(mark.asked() && mark.stands(3));
+        assert!(!mark.begin(4));
+        assert!(!mark.asked() && !mark.stands(3));
+        assert!(!mark.ask(3), "a run that is over");
+        assert!(!mark.asked());
+    }
+
+    #[test]
+    fn run_zero_is_a_run() {
+        let mark = CancelMark::default();
+        assert!(!mark.asked());
+        mark.ask(0);
+        assert!(mark.begin(0) && mark.asked());
+    }
+
+    #[derive(Default)]
+    struct Recorded(Mutex<Vec<u64>>);
+
+    impl Canceller for Recorded {
+        fn cancel(&self, run: u64) {
+            self.0.lock().unwrap().push(run);
+        }
+    }
+
+    #[test]
+    fn a_session_cancels_the_last_run_it_sent() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let recorded = Arc::new(Recorded::default());
+        let caps = Capabilities {
+            server_paging: false,
+            cancel: true,
+            introspection: false,
+            key_metadata: false,
+            contexts: false,
+            structure: false,
+            ddl: false,
+            language: Language::Sql(crate::sql::dialect::Dialect::Postgres),
+            hierarchy: Hierarchy::DatabaseSchema,
+            explain: None,
+            reads_held_to_end: false,
+            export: false,
+            manual_commit: false,
+            edit: None,
+            monitor: false,
+        };
+        let session = Session::new(caps, SessionRole::Query, tx, recorded.clone());
+        session.cancel();
+        assert!(recorded.0.lock().unwrap().is_empty(), "nothing sent, nothing to cancel");
+        session.send(DbCommand::Count { id: 4, sql: "x".into() });
+        session.send(DbCommand::FetchMore { id: 2 });
+        session.cancel();
+        assert_eq!(*recorded.0.lock().unwrap(), [4], "a fetch is part of a run");
     }
 }

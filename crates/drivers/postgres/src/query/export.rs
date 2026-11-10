@@ -17,7 +17,6 @@ use crate::connect::{db_error, is_cancel};
 use datarig_core::driver::{Cell, DbError, EXPORT_BATCH_BYTES, ExportBatch, ExportGuard, ExportRead, ExportSink};
 use datarig_core::export::keyset::LOCK_WAIT_SECS;
 use datarig_core::sql::risk;
-use std::sync::atomic::Ordering;
 use tokio_postgres::{Client, FirstPage, Statement, Transaction};
 
 /// The bytes of a row's values.
@@ -45,8 +44,6 @@ pub(super) async fn export(
     if s.tx.unsure {
         probe(client, link, env, s.tx).await?;
     }
-    // A cancel asked for before this belonged to what ran before.
-    env.cancel.store(false, Ordering::SeqCst);
     if s.tx.block && s.tx.aborted {
         return Ok((Err(DbError::NotSupported), false));
     }
@@ -254,7 +251,7 @@ async fn stream(
     while !ended {
         // Cancelled while the page was being written: nothing runs on the server now, so the
         // cancel stops it here.
-        if env.cancel.load(Ordering::SeqCst) {
+        if env.cancel.asked() {
             return Ok(Err((DbError::Cancelled, true)));
         }
         let mut page = match link.guard(Some(env.token), txn.query_portal_raw(&portal, max)).await? {

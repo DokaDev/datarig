@@ -74,7 +74,6 @@ pub(super) async fn apply(
 ) -> Result<(), Stop> {
     link.serving(env.events, id);
     s.request = id;
-    env.asked.store(false, Ordering::SeqCst);
     env.failed.store(false, Ordering::SeqCst);
     env.killer.clear();
     let answer = |result| {
@@ -118,7 +117,7 @@ pub(super) async fn apply(
     let mut failed = None;
     for (i, step) in steps.iter().enumerate() {
         // A cancel asked for, or a connection that runs nothing more (a kill not answered).
-        if env.asked.load(Ordering::SeqCst) || link.tainted() {
+        if env.asked.asked() || link.tainted() {
             failed = Some((fail(Some(i), DbError::Cancelled), None));
             break;
         }
@@ -150,7 +149,7 @@ pub(super) async fn apply(
         }
     }
     // A cancel asked for once the last step ran: nothing is kept.
-    if failed.is_none() && env.asked.load(Ordering::SeqCst) {
+    if failed.is_none() && env.asked.asked() {
         failed = Some((fail(None, DbError::Cancelled), None));
     }
     // A connection that runs nothing more (a kill not answered) is cut at its next request:

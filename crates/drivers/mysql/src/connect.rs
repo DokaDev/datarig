@@ -5,8 +5,8 @@
 use crate::link::Link;
 use crate::session::{self, CONNECT_GUARD, Killer, Opened, Settings, Target, connect_error, my_error};
 use datarig_core::driver::{
-    Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, EditFormat, ExplainFormat, Hierarchy,
-    MySqlEdit, PingError, PingInfo, Session, SessionRole,
+    CancelMark, Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, EditFormat,
+    ExplainFormat, Hierarchy, MySqlEdit, PingError, PingInfo, Session, SessionRole,
 };
 use datarig_core::fault::Fault;
 use datarig_core::panics::caught;
@@ -30,24 +30,24 @@ pub struct MyDriver;
 #[derive(Default)]
 pub(crate) struct MyCanceller {
     killer: Mutex<Option<Killer>>,
-    /// The UI asked to cancel (cleared by the session when a run starts).
-    pub(crate) asked: Arc<AtomicBool>,
+    /// Which run the UI asked to cancel.
+    pub(crate) asked: Arc<CancelMark>,
     /// A statement is on its way to the server or running there: only then is there anything
     /// to stop (a `KILL QUERY` that arrives between statements stops nothing).
     pub(crate) busy: Arc<AtomicBool>,
 }
 
 impl Canceller for MyCanceller {
-    fn cancel(&self) {
-        self.asked.store(true, Ordering::SeqCst);
-        if !self.busy.load(Ordering::SeqCst) {
+    fn cancel(&self, run: u64) {
+        // Not started yet: the session answers it cancelled when its turn comes.
+        if !self.asked.ask(run) || !self.busy.load(Ordering::SeqCst) {
             return;
         }
         let killer = self.killer.lock().ok().and_then(|g| g.clone());
         if let Some(killer) = killer {
-            // Still this run's statement: a run that begins since clears `asked`.
+            // Still this run's statement: a run that begins since is another run.
             let (asked, busy) = (self.asked.clone(), self.busy.clone());
-            let still = move || asked.load(Ordering::SeqCst) && busy.load(Ordering::SeqCst);
+            let still = move || asked.stands(run) && busy.load(Ordering::SeqCst);
             // Unreported either way: a panic in it is only kept off the screen.
             tokio::spawn(AssertUnwindSafe(caught(async move { killer.kill_query_if(still).await })).catch_unwind());
         }
