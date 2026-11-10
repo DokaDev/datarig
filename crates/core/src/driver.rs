@@ -19,8 +19,9 @@ use crate::profile::ConnectionConfig;
 use crate::sql::dialect::Language;
 use crate::transport::DialerRef;
 use futures::future::BoxFuture;
-use std::sync::Arc;
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -336,43 +337,51 @@ pub trait Canceller: Send + Sync {
 /// is its place among the runs of the session, and not the `id` of its command, which a count
 /// asked again or the next chunk of an export repeats.
 #[derive(Debug, Default)]
-pub struct CancelMark {
-    /// The run asked to cancel (0: none).
-    asked: AtomicU64,
+pub struct CancelMark(Mutex<Marks>);
+
+#[derive(Debug, Default)]
+struct Marks {
+    /// The runs asked to cancel that are not over yet.
+    asked: BTreeSet<u64>,
     /// The run the session is at (0: none yet).
-    current: AtomicU64,
+    current: u64,
 }
 
 impl CancelMark {
+    fn marks(&self) -> MutexGuard<'_, Marks> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// The user asked to cancel run number `run`. Whether it is the run the session is at, so
     /// that there is something to stop on the server.
     pub fn ask(&self, run: u64) -> bool {
-        self.asked.fetch_max(run, Ordering::SeqCst);
-        self.current.load(Ordering::SeqCst) == run
+        let mut m = self.marks();
+        if run >= m.current {
+            m.asked.insert(run);
+        }
+        m.current == run
     }
 
     /// The session starts its next run. Whether a cancel for it came first (it must not run).
-    /// A cancel of an earlier run is dropped, one of a later run stays for that run. `current`
-    /// is set before `asked` is read, and [`CancelMark::ask`] does the opposite: of a cancel and
-    /// a start at the same moment, at least one sees the other.
+    /// Cancels of earlier runs are dropped; those of later runs stay for them.
     pub fn begin(&self) -> bool {
-        let run = self.current.fetch_add(1, Ordering::SeqCst) + 1;
-        let asked = self.asked.load(Ordering::SeqCst);
-        if asked < run {
-            let _ = self.asked.compare_exchange(asked, 0, Ordering::SeqCst, Ordering::SeqCst);
-        }
-        self.asked.load(Ordering::SeqCst) == run
+        let mut m = self.marks();
+        m.current += 1;
+        let current = m.current;
+        m.asked = m.asked.split_off(&current);
+        m.asked.contains(&current)
     }
 
     /// Whether the run the session is at was asked to cancel.
     pub fn asked(&self) -> bool {
-        let asked = self.asked.load(Ordering::SeqCst);
-        asked != 0 && asked == self.current.load(Ordering::SeqCst)
+        let m = self.marks();
+        m.asked.contains(&m.current)
     }
 
     /// Whether the cancel of run number `run` still stands and it is the run the session is at.
     pub fn stands(&self, run: u64) -> bool {
-        self.asked.load(Ordering::SeqCst) == run && self.current.load(Ordering::SeqCst) == run
+        let m = self.marks();
+        m.current == run && m.asked.contains(&run)
     }
 }
 
@@ -498,7 +507,6 @@ impl Session {
 #[cfg(test)]
 mod cancel_tests {
     use super::*;
-    use std::sync::Mutex;
 
     #[test]
     fn a_cancel_asked_before_a_run_starts_stops_that_run() {
@@ -516,6 +524,16 @@ mod cancel_tests {
         assert!(mark.begin(), "the one cancelled does not");
         assert!(!mark.begin(), "and the cancel ends with it");
         assert!(!mark.asked());
+    }
+
+    #[test]
+    fn each_waiting_run_keeps_its_own_cancel() {
+        let mark = CancelMark::default();
+        mark.ask(1);
+        mark.ask(2);
+        assert!(mark.begin(), "the first");
+        assert!(mark.begin(), "and the second");
+        assert!(!mark.begin());
     }
 
     #[test]

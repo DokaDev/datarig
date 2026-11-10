@@ -1474,8 +1474,10 @@ async fn hold_on(
                 let _ = env.events.send(DbEvent::ServerSession { request, own: own_answer(env) });
             }
             Next::Command(DbCommand::FetchMore { .. } | DbCommand::ClosePortal { .. }) => {}
+            // Behind what waited already: commands run in the order they were sent, which the
+            // numbers of a session's runs rely on.
             Next::Command(other) => {
-                held.waiting.insert(0, other);
+                held.waiting.push(other);
                 break;
             }
             Next::Closed => {

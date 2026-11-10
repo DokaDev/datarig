@@ -4892,3 +4892,24 @@ async fn a_cancel_of_a_queued_run_leaves_the_run_before_it() {
     assert!(matches!(evs.last().unwrap(), DbEvent::Failed { cancelled: true, .. }), "{evs:?}");
     assert_eq!(xs(&admin, &t).await, [1]);
 }
+
+/// A count waiting behind a held result and cancelled there is the run cancelled, not the
+/// statement sent after it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_count_cancelled_behind_a_held_result_leaves_the_statement_after_it() {
+    let test = "a_count_cancelled_behind_a_held_result";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "heldcancel", 700).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    c.ok(1, "BEGIN").await;
+    let evs = c.run(2, &[&format!("SELECT id FROM {} ORDER BY id", t.q())]).await;
+    assert!(page_of(&evs).2, "a result held for more pages");
+    c.session.send(DbCommand::Count { id: 3, sql: format!("SELECT count(*) FROM {}", t.q()) });
+    c.session.cancel();
+    c.session.send(execute(4, "SELECT 1"));
+    let ev = c.wait(|e| matches!(e, DbEvent::Counted { id: 3, .. }), 15).await;
+    assert!(matches!(ev, DbEvent::Counted { result: Err(DbError::Cancelled), .. }), "{ev:?}");
+    let evs = c.answer(4).await;
+    assert!(!matches!(evs.last().unwrap(), DbEvent::Failed { .. }), "the statement after it runs: {evs:?}");
+    c.ok(5, "ROLLBACK").await;
+}
