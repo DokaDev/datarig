@@ -3,6 +3,20 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.40.4 (2026-11-10)
+
+MySQL exports and row counts no longer lock rows when the session's isolation level is SERIALIZABLE. After a `SET TRANSACTION` without `SESSION`, which sets your next transaction only, they are now refused with a message until a transaction starts or ends, so they never use that setting up. The install guide's Arch Linux command for building from source now upgrades the whole system.
+
+### Fixed
+
+- MySQL: an export, and a row count with autocommit off, no longer lock rows when the session's
+  isolation level is `SERIALIZABLE`. They read one snapshot at `REPEATABLE READ` for their own
+  transaction only, so they neither wait for nor hold up other sessions; the session's level is
+  unchanged.
+- MySQL: after `SET TRANSACTION` without `SESSION`, which sets your next transaction only, an
+  export or a row count no longer uses that setting up. Until a transaction starts or ends they
+  are refused with a note saying how to run them.
+
 ## 0.40.3 (2026-11-10)
 
 MySQL now reads the structure and the DDL of objects in databases whose names contain braces, and the security policy explains how to report a vulnerability privately.
