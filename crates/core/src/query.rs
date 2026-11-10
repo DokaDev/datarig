@@ -28,7 +28,7 @@ pub use check::{
     PG_REFUSED_CALLS, ShapeProblem, check_filter,
 };
 pub use compile::{Compiled, capped, compile, compile_capped};
-pub use order::{OrderError, OrderProblem, order_text, parse_order};
+pub use order::{OrderError, OrderProblem, SortStep, order_text, parse_order, sort_column};
 pub use recognise::recognise;
 pub use render::{RenderError, like_contains, like_starts_with, render};
 
@@ -296,6 +296,39 @@ pub enum ColumnKind {
     Bytes,
     /// Anything else (dates, JSON, …): values are written as strings the server converts.
     Other,
+}
+
+impl Cond {
+    /// The columns the condition compares, each once, in the order they first come. A part
+    /// kept as written ([`Cond::Raw`]) names none here, though it may use columns: a column
+    /// left out is not said to be unused.
+    pub fn columns(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        let mut stack = vec![self];
+        while let Some(c) = stack.pop() {
+            let col = match c {
+                Cond::All(parts) | Cond::Any(parts) => {
+                    stack.extend(parts.iter().rev());
+                    continue;
+                }
+                Cond::Not(inner) => {
+                    stack.push(inner);
+                    continue;
+                }
+                Cond::Raw(_) => continue,
+                Cond::Cmp { col, .. }
+                | Cond::NotDistinct { col, .. }
+                | Cond::IsNull { col, .. }
+                | Cond::In { col, .. }
+                | Cond::Like { col, .. }
+                | Cond::Between { col, .. } => col.as_str(),
+            };
+            if !out.contains(&col) {
+                out.push(col);
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]

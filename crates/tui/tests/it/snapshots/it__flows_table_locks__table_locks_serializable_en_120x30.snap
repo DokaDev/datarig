@@ -7,7 +7,7 @@ expression: backend
 "│▾ Connections 1             ││ local-my / shop.users  127.0.0.1:55432             ││ id: 0                            │"
 "│  ▾ ●   local-my            ││ [Result 1]  Chart  Messages                        ││                                  │"
 "│    ▾ shop                  ││ WHERE  f filter                                  ⟳ ││                                  │"
-"│      ▾ Tables              ││   │ id                                             ││                                  │"
+"│      ▾ Tables              ││   │ id ^v                                          ││                                  │"
 "│        ▸ users             ││   │ int8                                           ││                                  │"
 "│                            ││ 1 │    0                                           ││                                  │"
 "│                            ││ 2 │    1                                           ││                                  │"

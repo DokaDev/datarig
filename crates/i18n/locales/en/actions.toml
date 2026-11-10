@@ -223,6 +223,8 @@
 "action.table.order.edit" = "Table → sort the rows on the server (ORDER BY)"
 "action.table.filter.clear" = "Table → clear the filter, the order and the limit, and run it again"
 "action.table.filter.open_sql" = "Table → open its statement in a new console"
+"action.table.sort.cycle" = "Table → sort by this column only (up, down, off)"
+"action.table.sort.add" = "Table → sort by this column too (up, down, off)"
 "action.tx.commit" = "Commit the open transaction"
 "action.tx.rollback" = "Roll back the open transaction"
 "action.tx.summary" = "What the open transaction did"

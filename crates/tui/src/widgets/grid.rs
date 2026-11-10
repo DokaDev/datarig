@@ -273,6 +273,9 @@ pub struct GridState {
     /// Hit-test info from the last render: (x_start, x_end, column index) of the part of each
     /// column on screen, data origin y.
     pub hit_cols: Vec<(u16, u16, usize)>,
+    /// The sort zones of the headers (a table tab's: a click there sorts by the column), as
+    /// drawn last: (x_start, x_end, column index), all on the headers' first row.
+    pub sort_zones: Vec<(u16, u16, usize)>,
     pub data_y: u16,
     /// The last render could not read the rows it shows from the result's spill file.
     pub read_error: Option<Fault>,
@@ -534,6 +537,15 @@ impl GridState {
         (r < self.window(total).end).then_some(r)
     }
 
+    /// The column whose sort zone is at (x, y), as drawn last (only a table tab's grid has
+    /// them).
+    pub fn sort_zone_col(&self, x: u16, y: u16) -> Option<usize> {
+        if y != self.header_y || y >= self.data_y {
+            return None;
+        }
+        self.sort_zones.iter().find(|(a, b, _)| x >= *a && x < *b).map(|&(_, _, c)| c)
+    }
+
     /// The column whose header is at (x, y), as drawn last.
     pub fn header_col(&self, x: u16, y: u16) -> Option<usize> {
         if y < self.header_y || y >= self.data_y {
@@ -590,6 +602,38 @@ pub struct Look<'a> {
     /// By result column, what a new row's cell left to its default shows (none: the column's
     /// default is not known, `default`).
     pub defaults: &'a [Option<DefaultShown>],
+    /// By result column, what its header says of a table tab's query: how it sorts the rows,
+    /// and whether its condition compares the column (none: nothing said).
+    pub heads: &'a [HeadMarks],
+    /// The headers have sort zones (a table tab's grid): the last two columns of a header's
+    /// first row, where a click sorts by its column; the cursor's column shows its mark there.
+    pub sort_zone: bool,
+}
+
+/// What a column's header says of the table tab's query, after the column's name.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HeadMarks {
+    /// The rows are sorted by it: going up (`true`) or down, and its level among the keys
+    /// (1 for the first).
+    pub sort: Option<(bool, usize)>,
+    /// The condition compares it.
+    pub filtered: bool,
+}
+
+impl HeadMarks {
+    /// The marks as text, each after a blank (` ↓2 =`; empty for none).
+    pub fn text(self, icons: bool) -> String {
+        let mut s = String::new();
+        if let Some((asc, level)) = self.sort {
+            s.push(' ');
+            s.push_str(&crate::icons::sort_mark(asc, level, icons));
+        }
+        if self.filtered {
+            s.push(' ');
+            s.push_str(crate::icons::column_filter(icons));
+        }
+        s
+    }
 }
 
 /// How wide a default's expression is shown in a new row's cell, at most (`<default: now()>`).
@@ -619,6 +663,7 @@ pub fn render(
     let th = theme::cur();
     buf.set_style(area, th.base());
     st.hit_cols.clear();
+    st.sort_zones.clear();
     st.cut_col = None;
     st.drawn_cells = 0;
     if area.height < 3 || area.width < 8 || rs.columns.is_empty() {
@@ -692,18 +737,26 @@ pub fn render(
     let marks: Vec<String> = (0..rs.columns.len())
         .map(|i| look.marks.get(i).map(|m| crate::icons::key_marks_text(*m, look.icons)).unwrap_or_default())
         .collect();
+    // The sort and filter marks after a header's name: the column is wide enough for them, so
+    // they never hide the name (up to the widest a column gets).
+    // A table tab's header leaves room at its end for the sort zone's mark and a blank before
+    // it (the mark ends on the blank after the column).
+    let zone_mark = crate::icons::sort_zone(look.icons);
+    let zone = if look.sort_zone { width(zone_mark) } else { 0 };
+    let tails: Vec<String> =
+        (0..rs.columns.len()).map(|i| look.heads.get(i).map(|h| h.text(look.icons)).unwrap_or_default()).collect();
     let widths: Vec<usize> = rs
         .columns
         .iter()
-        .zip(&marks)
+        .zip(marks.iter().zip(&tails))
         .enumerate()
-        .map(|(i, (c, m))| {
+        .map(|(i, (c, (m, tail)))| {
             let needed = if needs.contains(&i) { width(&needed_label) } else { 0 };
             let shown = match draft_defaults.get(i) {
                 Some(Some((t, _))) if defaulted.contains(&i) => width(t),
                 _ => 0,
             };
-            c.width.max(width(m) + width(&c.meta.name)).max(needed).max(shown).min(MAX_COL_WIDTH)
+            c.width.max(width(m) + width(&c.meta.name) + width(tail) + zone).max(needed).max(shown).min(MAX_COL_WIDTH)
         })
         .collect();
     // The row of all columns, scrolled by character: the selected column whole in view unless
@@ -832,9 +885,20 @@ pub fn render(
         let sep = if inner_sep(ci) { sep_style(th.surface).patch(th.range) } else { sep_style(th.surface) };
         put(buf, cx, y0, "│", sep);
         put(buf, cx, y0 + 1, "│", sep);
-        // The key marks in their colors, then the name.
+        // A table tab's sort zone: the header's last column and the blank after it. The cursor's
+        // column shows its mark there, dimmed, ending on that blank; its name leaves the mark
+        // its room and a blank before it.
+        let zone_x = cx + 1 + w as i32;
+        let zoned = look.sort_zone && ci == st.col && w > zone;
+        if look.sort_zone {
+            let (a, b) = (zone_x.max(i32::from(from)), (zone_x + 2).min(i32::from(right)));
+            if a < b {
+                st.sort_zones.push((a as u16, b as u16, ci));
+            }
+        }
+        // The key marks in their colors, then the name, then the sort and filter marks.
         let mut hx = cx + 2;
-        let mut left = w;
+        let mut left = if zoned { w - zone } else { w };
         for m in crate::icons::key_marks(look.marks.get(ci).copied().unwrap_or_default()) {
             let text = format!("{} ", m.text(look.icons));
             let mw = width(&text);
@@ -845,7 +909,20 @@ pub fn render(
             hx += mw as i32;
             left -= mw;
         }
-        put(buf, hx, y0, &fit(&col.meta.name, left, Align::Left), header_style);
+        // The marks keep their room while the name has a column left; the name is cut first.
+        let tail = &tails[ci];
+        let tw = width(tail);
+        let name_w = if tw < left { left - tw } else { left };
+        let name = fit(&col.meta.name, name_w, Align::Left);
+        let nw = width(&col.meta.name).min(name_w);
+        put(buf, hx, y0, &name, header_style);
+        if tw < left {
+            put(buf, hx + nw as i32, y0, tail, header_style.fg(th.accent));
+        }
+        if zoned {
+            let dim = header_style.fg(th.fg_dim).remove_modifier(Modifier::BOLD);
+            put(buf, cx + 3 + (w - zone) as i32, y0, zone_mark, dim);
+        }
         put(buf, cx + 2, y0 + 1, &fit(&col.meta.type_name, w, Align::Left), type_style);
     }
 

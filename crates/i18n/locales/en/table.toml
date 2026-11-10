@@ -67,3 +67,5 @@
 "table.limit.why.not_a_number" = "a limit is a whole number of rows, written in digits"
 "table.limit.why.zero" = "a limit of 0 rows reads nothing (leave it blank for no limit)"
 "table.limit.why.too_large" = "a limit is at most {max} rows"
+"table.sort.only_table_tabs" = "Only a table tab sorts by a column: a query's rows are sorted in its text"
+"table.sort.no_columns" = "Nothing to sort: the tab shows no columns yet"

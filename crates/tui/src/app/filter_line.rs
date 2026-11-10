@@ -1,6 +1,7 @@
 //! The filter line of a table tab, its fields and keys: `f` (or `Space r f`) edits the
 //! condition, `Space r o` the order, `Space r x` clears the fields and runs the tab again, and
-//! `Space r v` opens the statement in a new console.
+//! `Space r v` opens the statement in a new console. `s` and `S` (`Space r s`, `Space r S`)
+//! sort by the grid's column ([`App::table_sort`]).
 //!
 //! In a field `Enter` (or the run key) applies what the three fields hold (a completion popup takes
 //! `Enter` and `Tab` only once the user turned to it: moved its selection, or asked for it with
@@ -38,6 +39,10 @@ pub enum TableAction {
     Clear,
     /// The statement of the rows shown (else of the draft) in a new console.
     OpenSql,
+    /// Sort by the cursor's column alone: going up, going down, no order (`s`).
+    SortCycle,
+    /// Sort by the cursor's column as one more key, or turn it where it is (`S`).
+    SortAdd,
 }
 
 impl App {
@@ -152,6 +157,8 @@ impl App {
                 self.table_run(id, q);
             }
             TableAction::OpenSql => self.table_open_sql(id),
+            TableAction::SortCycle => self.table_sort(id, self.tab().grid.col, query::SortStep::Only),
+            TableAction::SortAdd => self.table_sort(id, self.tab().grid.col, query::SortStep::Add),
         }
     }
 

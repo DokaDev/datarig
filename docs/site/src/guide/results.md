@@ -106,6 +106,23 @@ When the server rejects the condition, the line marks it failed, underlined wher
 says the error is. The rows of the earlier query stay, dimmed, and the line under the grid says
 they are not the filter's answer; a cancelled run or a lost connection leaves them the same way.
 
+From the grid, `s` (or `Space r s`) sorts by the cursor's column alone: the first press sorts
+going up, the second going down, the third takes the order away. `S` (or `Space r S`) adds the
+column as one more key, after the others; pressed again on a key it turns that key, then takes
+it out, and the other keys stay where they are. A click on the last two columns of a column's
+header (the cursor's column shows `^v` there, a glyph with icons on) sorts as `s` does; a click
+elsewhere on a header selects the column, as on any grid. A sort writes the new order into the
+line and runs it like `Enter` does: it starts from the order of the rows shown, keeps their
+condition and limit, and replaces an order typed but not applied (a condition or limit typed
+but not applied stays in its field, not run). With changes not applied, it asks first.
+
+The headers say how the rows shown are sorted: an arrow after the name (`^` or `v` with icons
+off), with the key's level from the second key on (`v2`); the primary key columns added after
+yours are not marked. A column the condition compares is marked `=` (a filter glyph with icons
+on), as far as datarig reads the condition: a condition it does not read marks nothing, which
+does not mean it compares no column. Sorting is for table tabs only: a query's rows are sorted
+in its text.
+
 The third field, `LIMIT`, caps the rows the tab reads (`-` when there is none; a narrow line
 shows it as `L100`). It takes a whole number of rows, written in digits, and a blank field means
 no cap; `0`, or anything that is not a number, is refused before anything is sent. The cap is

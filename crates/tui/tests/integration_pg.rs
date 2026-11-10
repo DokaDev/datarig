@@ -2362,3 +2362,99 @@ async fn an_idle_manual_transaction_is_rolled_back_and_its_session_stays() {
         assert!(app.tab().exec.session.is_some() && app.tab().exec.generation == generation);
     }
 }
+
+/// The first column's values of the rows the active tab holds, as shown.
+fn first_column(app: &App) -> Vec<Option<String>> {
+    let datarig_tui::app::Results::Rows(rs) = &app.tab().results else { return Vec::new() };
+    (0..rs.rows.len())
+        .map(|r| match rs.cell(r, 0) {
+            datarig_tui::widgets::grid::CellRef::Here(c) => c.clone(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Sorting a table tab by a column (read only, the seed's `shop.products`, capped at five
+/// rows): `s` on `price` sends the order with the primary key appended (prices tie), and the
+/// rows come in that order; `s` again turns it, `S` on `stock` adds a key.
+#[tokio::test(flavor = "multi_thread")]
+async fn sorting_a_table_tab_by_a_column_orders_its_rows_on_the_server() {
+    use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::table_query::OrderKeysState;
+    let Some(url) = pg_url("sorting_a_table_tab_by_a_column_orders_its_rows_on_the_server") else { return };
+    let pw = datarig_core::profile::dsn::parse(&url).unwrap().password.unwrap_or_default();
+    let dir = std::env::temp_dir().join(format!("datarig-it-sort-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let paths = datarig_core::paths::Paths { data: Some(dir.join("data")), state: Some(dir.join("state")) };
+    let p = profile(&url);
+    let tab = TabState {
+        id: workspace::new_id(),
+        kind: workspace::TabKind::Table,
+        script: None,
+        profile: Some(p.id),
+        cursor: (0, 0),
+        top: 0,
+        console: 0,
+        table: Some(("shop".into(), "products".into())),
+        ddl: None,
+        results: None,
+        database: None,
+        schema: None,
+        filter: None,
+        order: Vec::new(),
+        limit: Some(5),
+    };
+    let ws =
+        WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };
+    workspace::save(&dir.join("state"), &ws).unwrap();
+    let store = Arc::new(MemoryStore::new());
+    store.set(&p.id.account(), &pw).unwrap();
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut app = App::new(&cfg, None, Lang::En);
+    app.set_secret_store(store as Arc<dyn SecretStore>);
+    app.set_paths(paths);
+    app.whats_new_paused = true;
+    app.set_instance_tag(&format!("sort{}", std::process::id()));
+    let (tx, mut rx) = unbounded_channel();
+    app.start(tx, Startup::Normal);
+    app.dispatch(Action::RunStatement);
+    let keys_known =
+        |a: &App| matches!(a.tab().doc.table_query.as_ref().map(|q| &q.order_keys), Some(OrderKeysState::Known { .. }));
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 > 0).await;
+    // The first run went before the profile's metadata session was open: the next one reads
+    // the table's keys with it.
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 > 0 && keys_known(a)).await;
+    let col = |app: &App, name: &str| match &app.tab().results {
+        datarig_tui::app::Results::Rows(rs) => rs.columns.iter().position(|c| c.meta.name == name).unwrap(),
+        _ => panic!("no rows"),
+    };
+    let sent = |app: &App| app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
+    let ids = |v: &[&str]| v.iter().map(|s| Some(s.to_string())).collect::<Vec<_>>();
+    app.focus = Focus::Results;
+    app.tab_mut().grid.col = col(&app, "price");
+    let qid = app.tab().exec.query_id;
+    press(&mut app, 's');
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && a.tab().exec.query_id != qid && held_rows(a).0 > 0).await;
+    assert_eq!(sent(&app), [r#"SELECT * FROM "shop"."products" ORDER BY "price" ASC, "id" ASC"#]);
+    let up = first_column(&app);
+    assert_eq!(up.len(), 5);
+    let qid = app.tab().exec.query_id;
+    press(&mut app, 's');
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && a.tab().exec.query_id != qid && held_rows(a).0 > 0).await;
+    assert_eq!(sent(&app), [r#"SELECT * FROM "shop"."products" ORDER BY "price" DESC, "id" ASC"#]);
+    // The seed's dearest products; two of them cost the same, in the order of their keys.
+    assert_eq!(first_column(&app), ids(&["298", "393", "452", "454", "76"]));
+    assert_ne!(up, first_column(&app));
+    // The cursor stayed on its column: `S` on `stock` adds it after `price`.
+    assert_eq!(app.tab().grid.col, col(&app, "price"));
+    app.tab_mut().grid.col = col(&app, "stock");
+    let qid = app.tab().exec.query_id;
+    press(&mut app, 'S');
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && a.tab().exec.query_id != qid && held_rows(a).0 > 0).await;
+    assert_eq!(sent(&app), [r#"SELECT * FROM "shop"."products" ORDER BY "price" DESC, "stock" ASC, "id" ASC"#]);
+    assert_eq!(first_column(&app), ids(&["298", "393", "452", "454", "76"]));
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}

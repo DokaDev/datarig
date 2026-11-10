@@ -77,6 +77,37 @@ pub fn filter(on: bool) -> &'static str {
     if on { FILTER } else { "*" }
 }
 
+/// A table tab's column sorted going up and going down, after its name in the grid's header
+/// (nf-fa-long_arrow_up, nf-fa-long_arrow_down).
+pub const SORT_ASC: &str = "\u{f176}";
+pub const SORT_DESC: &str = "\u{f175}";
+
+/// Where a click sorts a table tab's column, at the right end of its header (nf-md-swap_vertical).
+pub const SORT_ZONE: &str = "\u{f04e2}";
+
+/// The sort mark of a column in the grid's header: the arrow (`^` or `v` with icons off), then
+/// its level among the keys from the second key on (`v2`).
+pub fn sort_mark(asc: bool, level: usize, on: bool) -> String {
+    let arrow = match (asc, on) {
+        (true, true) => SORT_ASC,
+        (false, true) => SORT_DESC,
+        (true, false) => "^",
+        (false, false) => "v",
+    };
+    if level > 1 { format!("{arrow}{level}") } else { arrow.to_string() }
+}
+
+/// The filter mark of a column the table tab's condition compares: the glyph, or `=` with
+/// icons off.
+pub fn column_filter(on: bool) -> &'static str {
+    if on { FILTER } else { "=" }
+}
+
+/// The sort zone's mark, at the right end of a header: the glyph, or `^v` with icons off.
+pub fn sort_zone(on: bool) -> &'static str {
+    if on { SORT_ZONE } else { "^v" }
+}
+
 /// Run a table tab's query again, at the right end of its filter line (nf-fa-refresh).
 pub const REFRESH: &str = "\u{f021}";
 

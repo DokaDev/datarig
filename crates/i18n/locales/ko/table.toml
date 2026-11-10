@@ -65,3 +65,5 @@
 "table.limit.why.not_a_number" = "행 제한은 숫자로 쓴 행 수입니다"
 "table.limit.why.zero" = "0행 제한은 아무것도 읽지 않습니다 (제한하지 않으려면 비워 두세요)"
 "table.limit.why.too_large" = "행 제한은 최대 {max}행입니다"
+"table.sort.only_table_tabs" = "열로 정렬은 테이블 탭에서만 됩니다: 쿼리의 행은 쿼리 텍스트에서 정렬하세요"
+"table.sort.no_columns" = "정렬할 것이 없습니다: 탭에 아직 열이 없습니다"

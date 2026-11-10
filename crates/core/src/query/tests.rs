@@ -1154,3 +1154,90 @@ fn order_text_reads_back_as_the_same_keys() {
     assert_eq!(order_text(&k, pg), "\"order\" ASC");
     assert_eq!(parse_order(&order_text(&k, pg), &t), Ok(k));
 }
+
+// sort actions
+
+fn tie(col: &str) -> OrderKey {
+    OrderKey { origin: KeyOrigin::TieBreak, ..OrderKey::user(col, Dir::Asc) }
+}
+
+#[test]
+fn sorting_by_one_column_goes_up_down_then_off_and_drops_the_others() {
+    use SortStep::Only;
+    let asc = |c: &str| OrderKey::user(c, Dir::Asc);
+    let desc = |c: &str| OrderKey::user(c, Dir::Desc);
+    assert_eq!(sort_column(&[], "name", Only), vec![asc("name")]);
+    assert_eq!(sort_column(&[asc("name")], "name", Only), vec![desc("name")]);
+    assert_eq!(sort_column(&[desc("name")], "name", Only), vec![]);
+    // Another column: it alone, from its own direction (none: up).
+    assert_eq!(sort_column(&[asc("name"), desc("price")], "id", Only), vec![asc("id")]);
+    // A column among several goes on from its own direction, the others go.
+    assert_eq!(sort_column(&[asc("name"), asc("price")], "price", Only), vec![desc("price")]);
+    assert_eq!(sort_column(&[asc("name"), desc("price")], "price", Only), vec![]);
+    // Where its NULLs go is the server's again.
+    let nulls_first = OrderKey { nulls: Some(Nulls::First), ..asc("price") };
+    assert_eq!(sort_column(&[nulls_first], "price", Only), vec![desc("price")]);
+}
+
+#[test]
+fn adding_a_column_puts_it_last_then_turns_it_then_takes_it_out() {
+    use SortStep::Add;
+    let asc = |c: &str| OrderKey::user(c, Dir::Asc);
+    let desc = |c: &str| OrderKey::user(c, Dir::Desc);
+    assert_eq!(sort_column(&[], "name", Add), vec![asc("name")]);
+    let keys = vec![desc("name")];
+    let keys = sort_column(&keys, "price", Add);
+    assert_eq!(keys, vec![desc("name"), asc("price")]);
+    let keys = sort_column(&keys, "price", Add);
+    assert_eq!(keys, vec![desc("name"), desc("price")]);
+    let keys = sort_column(&keys, "price", Add);
+    assert_eq!(keys, vec![desc("name")]);
+    // A key in the middle turns where it is; the others keep their NULLs.
+    let born = OrderKey { nulls: Some(Nulls::Last), ..desc("born") };
+    let keys = vec![asc("name"), asc("price"), born.clone()];
+    assert_eq!(sort_column(&keys, "price", Add), vec![asc("name"), desc("price"), born.clone()]);
+    assert_eq!(sort_column(&[asc("name"), desc("price"), born.clone()], "price", Add), vec![asc("name"), born]);
+}
+
+#[test]
+fn a_tie_breaker_key_is_not_the_users() {
+    // The app appended `id` to make the order total: a sort on it starts it as the user's
+    // own key, and the tie-breaker keys never come back from a sort action.
+    let keys = vec![OrderKey::user("name", Dir::Asc), tie("id")];
+    assert_eq!(sort_column(&keys, "id", SortStep::Only), vec![OrderKey::user("id", Dir::Asc)]);
+    assert_eq!(
+        sort_column(&keys, "id", SortStep::Add),
+        vec![OrderKey::user("name", Dir::Asc), OrderKey::user("id", Dir::Asc)]
+    );
+    assert_eq!(sort_column(&keys, "name", SortStep::Add), vec![OrderKey::user("name", Dir::Desc)]);
+    assert_eq!(sort_column(&keys, "name", SortStep::Only), vec![OrderKey::user("name", Dir::Desc)]);
+    // Compiled, the order is made total again by the app.
+    let q = query(None, sort_column(&keys, "name", SortStep::Only));
+    assert_eq!(
+        compile(&q, &target(Dialect::Postgres)).sql,
+        r#"SELECT * FROM "shop"."users" ORDER BY "name" DESC, "id" ASC"#
+    );
+}
+
+#[test]
+fn the_levels_of_the_keys_follow_their_order() {
+    // Three keys added one after the other: the order text lists them as added.
+    let mut keys = Vec::new();
+    for c in ["price", "name", "born"] {
+        keys = sort_column(&keys, c, SortStep::Add);
+    }
+    assert_eq!(order_text(&keys, Dialect::Postgres), "price ASC, name ASC, born ASC");
+    let keys = sort_column(&keys, "name", SortStep::Add);
+    let keys = sort_column(&keys, "name", SortStep::Add);
+    assert_eq!(order_text(&keys, Dialect::Postgres), "price ASC, born ASC");
+}
+
+#[test]
+fn a_condition_names_the_columns_it_compares() {
+    let t = target(Dialect::Postgres);
+    let c =
+        recognise("id > 1 AND (name = 'a' OR price IS NULL) AND NOT id = 3 AND lower(email) = 'x'", &t).expect("read");
+    assert_eq!(c.columns(), vec!["id", "name", "price"]);
+    // Text kept as written names no column.
+    assert_eq!(Cond::Raw("price > 1".into()).columns(), Vec::<&str>::new());
+}

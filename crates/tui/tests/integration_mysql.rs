@@ -737,3 +737,54 @@ async fn a_table_tab_limit_caps_its_pages() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The first column's values of the rows the active tab holds, as shown.
+fn first_column(app: &App) -> Vec<Option<String>> {
+    let Results::Rows(rs) = &app.tab().results else { return Vec::new() };
+    (0..rs.rows.len())
+        .map(|r| match rs.cell(r, 0) {
+            datarig_tui::widgets::grid::CellRef::Here(c) => c.clone(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Sorting a table tab by a column on MySQL (read only, the seed's `shop.products`, capped at
+/// five rows): `s` twice on `stock` sends it going down with the primary key appended (stocks
+/// tie), and the rows come in that order.
+#[tokio::test(flavor = "multi_thread")]
+async fn sorting_a_table_tab_by_a_column_orders_its_rows_on_the_server() {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::table_query::OrderKeysState;
+    let Some((url, _admin)) = urls("sorting_a_table_tab_by_a_column_orders_its_rows_on_the_server") else { return };
+    let dir = std::env::temp_dir().join(format!("datarig-it-mysort-{}", std::process::id()));
+    let (mut app, mut rx) = limited_table_app(&url, "products", 5, None, &dir);
+    app.dispatch(Action::RunStatement);
+    let keys_known =
+        |a: &App| matches!(a.tab().doc.table_query.as_ref().map(|q| &q.order_keys), Some(OrderKeysState::Known { .. }));
+    pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 > 0).await;
+    // The first run went before the profile's metadata session was open: the next one reads
+    // the table's keys with it.
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 > 0 && keys_known(a)).await;
+    let stock = match &app.tab().results {
+        Results::Rows(rs) => rs.columns.iter().position(|c| c.meta.name == "stock").unwrap(),
+        _ => panic!("no rows"),
+    };
+    let sent = |app: &App| app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
+    app.focus = Focus::Results;
+    app.tab_mut().grid.col = stock;
+    for (dir, first) in [("ASC", None), ("DESC", Some(["210", "39", "139", "58", "33"]))] {
+        let qid = app.tab().exec.query_id;
+        press(&mut app, 's');
+        pump(&mut app, &mut rx, 30, |a| idle(a) && a.tab().exec.query_id != qid && held_rows(a).0 > 0).await;
+        assert_eq!(sent(&app), [format!("SELECT * FROM `shop`.`products` ORDER BY `stock` {dir}, `id` ASC")]);
+        assert_eq!(first_column(&app).len(), 5);
+        if let Some(ids) = first {
+            let want: Vec<Option<String>> = ids.iter().map(|s| Some(s.to_string())).collect();
+            assert_eq!(first_column(&app), want);
+        }
+    }
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}

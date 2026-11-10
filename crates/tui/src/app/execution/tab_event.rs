@@ -841,6 +841,19 @@ impl App {
                     }
                 }
                 let count = rows.len();
+                // A table tab's rows read again with the same columns (a new filter or order):
+                // the cursor stays on its column, the view where it was sideways, so that the
+                // sort key pressed again turns the same column.
+                let kept_col = match &t.results {
+                    Results::Rows(old)
+                        if t.is_table()
+                            && old.columns.len() == cols.len()
+                            && old.columns.iter().zip(&cols).all(|(o, c)| o.meta.name == c.name) =>
+                    {
+                        Some((t.grid.col, t.grid.x_off))
+                    }
+                    _ => None,
+                };
                 // A plan (`EXPLAIN (FORMAT JSON)`, MySQL's tree): shown as one; its rows stay a
                 // result tab.
                 let plan = if t.is_table() { None } else { crate::app::plan::plan_of(&cols, &rows, more, explain) };
@@ -866,6 +879,9 @@ impl App {
                 t.exec.reading.answer = true;
                 t.results = Results::Rows(rs);
                 t.grid = GridState::paged(page_size, page_rows);
+                if let Some((col, x_off)) = kept_col {
+                    (t.grid.col, t.grid.x_off) = (col, x_off);
+                }
                 t.exec.origin = origin;
                 t.exec.shown = t.exec.run.len().checked_sub(1);
                 // A table tab's rows are of the query its run sent, if it sent one.

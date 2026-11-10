@@ -198,6 +198,9 @@ pub struct TableQuery {
     pub line: crate::widgets::filter_line::LineState,
     /// The table's keys for a total order, as far as read.
     pub order_keys: OrderKeysState,
+    /// The query a sort action runs ([`App::table_sort`]): the draft once its statement is
+    /// sent, so that a sort asked about and declined leaves the draft as the line shows it.
+    sorted: Option<Query>,
 }
 
 impl TableQuery {
@@ -222,6 +225,7 @@ impl TableQuery {
             keys_wait: None,
             line: Default::default(),
             order_keys: OrderKeysState::Unknown,
+            sorted: None,
         }
     }
 
@@ -246,6 +250,9 @@ impl TableQuery {
             _ => None,
         };
         self.requested = self.statement.as_ref().map(|(id, s)| (*id, s.query.clone()));
+        if let Some(q) = self.sorted.take().filter(|q| self.requested.as_ref().is_some_and(|(_, r)| r == q)) {
+            self.draft = q;
+        }
     }
 
     /// The first page of run `qid` landed: the rows are of its query, when it was one.
@@ -1453,3 +1460,59 @@ impl App {
 
 #[cfg(test)]
 mod tests;
+
+impl App {
+    /// A sort action on column `col` of table tab `id`'s grid (`s`, `S`, a click in the
+    /// column's sort zone): the order of the rows shown ([`TableQuery::shown`], else what is
+    /// applied when the tab shows none) changed by `step` ([`query::sort_column`]), with their
+    /// condition and limit, runs as any run of the tab ([`App::table_run`]: checks, asks,
+    /// pending edits). The order field takes the new order once the run is sent (an order
+    /// typed there and not applied gives way to it; a typed condition or limit stays typed);
+    /// a run asked about and declined leaves the line and the draft as they were.
+    pub(super) fn table_sort(&mut self, id: TabId, col: usize, step: query::SortStep) {
+        let name = match self.tabs.get(id).map(|t| &t.results) {
+            Some(Results::Rows(rs)) => rs.columns.get(col).map(|c| c.meta.name.clone()),
+            _ => None,
+        };
+        let Some(name) = name else {
+            return self.flash(Notice::new(Label::TableSortNoColumns, Level::Info));
+        };
+        if self.tab_busy(id) {
+            return self.flash_busy();
+        }
+        let applied = self.filter_line_applied(id).order;
+        let Some(tq) = self.table_query_mut(id) else { return };
+        let base = tq.shown.clone().unwrap_or_else(|| tq.applied().clone());
+        let q = Query { order: query::sort_column(&base.order, &name, step), ..base };
+        tq.line.order.set(&applied);
+        tq.sorted = Some(q.clone());
+        self.filter_line_follow_tab(id);
+        self.table_run(id, q);
+    }
+
+    /// What the headers of table tab `id`'s grid say of the rows shown, by result column: the
+    /// user's sort keys (the keys appended to make the order total are not marked: the line
+    /// shows them), and the columns the condition compares as far as the app read it (a
+    /// condition it did not read marks none: no mark is no claim). Empty when the tab shows no
+    /// rows of its query.
+    pub fn table_head_marks(&self, id: TabId) -> Vec<crate::widgets::grid::HeadMarks> {
+        let Some(t) = self.tabs.get(id).filter(|t| t.is_table()) else { return Vec::new() };
+        let (Results::Rows(rs), Some(shown)) = (&t.results, t.doc.table_query.as_ref().and_then(|q| q.shown.as_ref()))
+        else {
+            return Vec::new();
+        };
+        let keys: Vec<&query::OrderKey> = shown.order.iter().filter(|k| k.origin == query::KeyOrigin::User).collect();
+        let compared: Vec<&str> = match &shown.filter {
+            Some(f) if !f.text.trim().is_empty() => f.recognised.as_ref().map(|c| c.columns()).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        rs.columns
+            .iter()
+            .map(|c| {
+                let name = c.meta.name.as_str();
+                let sort = keys.iter().position(|k| k.col == name).map(|i| (keys[i].dir == query::Dir::Asc, i + 1));
+                crate::widgets::grid::HeadMarks { sort, filtered: compared.contains(&name) }
+            })
+            .collect()
+    }
+}

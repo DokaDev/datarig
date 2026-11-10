@@ -7,7 +7,7 @@ expression: backend
 "│▾ Connections 1             ││ local-pg / datarig.shop.users  127.0.0.1:55432                                         │"
 "│  ▾ ●   local-pg            ││ [Result 1]  Chart  Messages  · earlier run                                         H/L │"
 "│    ▾ datarig default       ││✗WHERE name = '日本' AND idd = 1                                  ORDER BY   LIMIT -  ⟳ │" Hidden by multi-width symbols: [(47, " "), (49, " ")]
-"│      ▸ analytics           ││   │ id   │ name                                                                        │"
+"│      ▸ analytics           ││   │ id ^v│ name                                                                        │"
 "│      ▸ public              ││   │ int8 │ text                                                                        │"
 "│      ▾ shop                ││ 1 │    0 │ n0                                                                          │"
 "│        ▾ Tables            ││ 2 │    1 │ n1                                                                          │"
