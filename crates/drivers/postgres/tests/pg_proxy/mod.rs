@@ -5,8 +5,9 @@
 //! apart from them the row count of every `Execute`. It
 //! answers `SSLRequest`/`GSSENCRequest` with "no" and passes everything else through
 //! unchanged (authentication included); a cancel request goes to the server as it is. A
-//! fault can be set for the next simple query of a given text ([`Proxy::fault`]): it goes to the
-//! server as another statement, or the connection is closed in its place.
+//! fault can be set for the next simple query of a given text, or starting with one
+//! ([`Proxy::fault`], [`Proxy::fault_start`]): it goes to the server as another statement, or the
+//! connection is closed in its place.
 
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -30,7 +31,23 @@ pub enum Fault {
     Close,
 }
 
-type Faults = Arc<Mutex<Option<(String, Fault)>>>;
+/// Which simple query a fault waits for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Wanted {
+    Exactly(String),
+    Starting(String),
+}
+
+impl Wanted {
+    fn is(&self, query: &str) -> bool {
+        match self {
+            Wanted::Exactly(text) => query == text,
+            Wanted::Starting(text) => query.starts_with(text.as_str()),
+        }
+    }
+}
+
+type Faults = Arc<Mutex<Option<(Wanted, Fault)>>>;
 
 pub struct Proxy {
     /// `host:port` to connect to instead of the server.
@@ -68,7 +85,12 @@ impl Proxy {
 
     /// The next simple query whose text is `query` (on any connection) meets `fault`, once.
     pub fn fault(&self, query: &str, fault: Fault) {
-        *self.faults.lock().unwrap() = Some((query.to_string(), fault));
+        *self.faults.lock().unwrap() = Some((Wanted::Exactly(query.to_string()), fault));
+    }
+
+    /// The next simple query that starts with `start` (on any connection) meets `fault`, once.
+    pub fn fault_start(&self, start: &str, fault: Fault) {
+        *self.faults.lock().unwrap() = Some((Wanted::Starting(start.to_string()), fault));
     }
 
     /// Whether the fault set is still waiting for its query.
@@ -163,7 +185,7 @@ async fn relay(
         let fault = {
             let mut faults = faults.lock().unwrap();
             match faults.as_ref() {
-                Some((query, _)) if tag == b'Q' && *query == cstr(&msg) => faults.take().map(|(_, f)| f),
+                Some((wanted, _)) if tag == b'Q' && wanted.is(&cstr(&msg)) => faults.take().map(|(_, f)| f),
                 _ => None,
             }
         };

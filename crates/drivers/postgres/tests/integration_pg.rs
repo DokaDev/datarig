@@ -6987,7 +6987,8 @@ async fn an_estimate_takes_no_lock_beyond_access_share() {
 /// names every function it calls in `pg_catalog` and takes no operator or cast whose meaning the
 /// search path could change: with a schema first on the path that has operators of the same
 /// names and argument types as the built-in ones (each fails when it runs), both are answered,
-/// and the session's settings are as before.
+/// and the session's settings are as before. So does the question whether a block is open, which
+/// a bounded read asks first when that is not known.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bounded_read_runs_nothing_the_search_path_can_shadow() {
     let Some(url) = pg_url("a_bounded_read_runs_nothing_the_search_path_can_shadow") else { return };
@@ -6996,8 +6997,9 @@ async fn a_bounded_read_runs_nothing_the_search_path_can_shadow() {
     let _schema = SchemaGuard::new(&url, &schema);
     let table = format!("public.zz_shadowt_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
-    let tag = format!("shadow{pid}");
-    let (mut q, mut b) = tagged(&url, &tag).await;
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
     let fails = |name: &str, args: &str| {
         format!(
             "CREATE FUNCTION {schema}.{name}({args}) RETURNS boolean LANGUAGE plpgsql AS \
@@ -7012,6 +7014,8 @@ async fn a_bounded_read_runs_nothing_the_search_path_can_shadow() {
         format!("CREATE TABLE {table} AS SELECT g::bigint AS id FROM generate_series(1, 50) g"),
         fails("zz_int", "bigint, bigint"),
         fails("zz_text", "text, text"),
+        fails("zz_time", "timestamptz, timestamptz"),
+        operator("<>", "zz_time", "timestamptz"),
         operator("<", "zz_int", "bigint"),
         operator(">", "zz_int", "bigint"),
         operator("=", "zz_int", "bigint"),
@@ -7027,15 +7031,27 @@ async fn a_bounded_read_runs_nothing_the_search_path_can_shadow() {
     let before = q.first_value(1, settings).await;
     let path = format!("SET search_path = {schema}, pg_catalog, public");
     assert!(matches!(q.run(2, &path).await, DbEvent::Done { .. }));
-    // The path is the session's: its operators are the ones a statement of the user's gets.
+    // The path is the session's: its operators are the ones a statement of the user's gets. The
+    // question after that failure gets no answer, so the session does not know whether a block
+    // is open, and the count must ask again.
+    proxy.fault_start("SELECT pg_catalog.now()", pg_proxy::Fault::Instead("SELECT 1/0".into()));
     let shadowed = q.run(3, "SELECT 1::bigint < 2::bigint").await;
     assert!(
         matches!(&shadowed, DbEvent::Failed { error, .. } if format!("{error:?}").contains("zz_ shadow zz_int ran")),
         "{shadowed:?}"
     );
+    // Asked after the run's answer went out.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while proxy.fault_pending() {
+        assert!(Instant::now() < deadline, "the question after the failure never came");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     let counted = count_of(&format!("SELECT * FROM {table} WHERE (id IS NOT NULL)"));
     let limit = Some(Duration::from_secs(30));
     assert_eq!(q.count_within(4, &counted, limit).await.0, Ok(50));
+    let bounded =
+        |s: &pg_proxy::Sent| matches!(s, pg_proxy::Sent::Query(t) if t.starts_with("BEGIN READ ONLY; SELECT s.name"));
+    assert!(proxy.sent().iter().any(bounded), "the question was answered: the count ran within its limits");
     let rows = format!("SELECT * FROM {table} WHERE (id IS NOT NULL) LIMIT 10");
     assert_eq!(q.estimate(5, &rows).await.0, Ok(10));
     assert!(matches!(q.run(6, "RESET search_path").await, DbEvent::Done { .. }));
