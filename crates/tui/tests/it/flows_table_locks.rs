@@ -348,3 +348,89 @@ fn an_export_is_not_held_back_by_the_ask() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(sent.iter().any(|c| matches!(c, DbCommand::Export { .. })), "{sent:?} {}", status(&h));
 }
+
+/// A yes kept for the transaction its run opened is not carried by a count of the same query:
+/// a count whose transaction the server ends (a deadlock victim) ends the yes, and the next
+/// read asks again.
+#[test]
+fn a_count_that_ends_the_transaction_does_not_keep_the_yes() {
+    let mut h = users();
+    session(&mut h, DbEvent::Isolation(Some(Isolation::Serializable)));
+    session(&mut h, DbEvent::Autocommit(false));
+    h.command("where id > 0");
+    h.keys("y");
+    assert_eq!(runs(&mut h).len(), 1);
+    session(&mut h, DbEvent::TxOpen(true));
+    answer_with(&mut h, true);
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys("#");
+    let count = h.sent().into_iter().find_map(|c| match c {
+        DbCommand::Count { id, .. } => Some(id),
+        _ => None,
+    });
+    let id = count.expect("the count goes: the yes holds for the run's own transaction");
+    // The server rolls the transaction back (a deadlock victim) while it counts.
+    session(&mut h, DbEvent::TxClosedBy { id, how: datarig_core::driver::ServerEnd::RolledBack });
+    session(&mut h, DbEvent::TxOpen(false));
+    session(&mut h, DbEvent::Counted { id, result: Err(datarig_core::driver::DbError::NoResult), snapshot: false });
+    h.command("where id > 1");
+    assert!(asks(&h), "the yes ended with the transaction the count saw end");
+    assert!(runs(&mut h).is_empty());
+}
+
+/// A read on a tab whose session is gone opens a new one, and is asked about on it right
+/// before it is sent (once): with manual commit its transaction reads at a level not known
+/// there. No to it sends nothing; asked again, a yes sends it.
+#[test]
+fn a_read_that_opens_its_session_is_asked_about_on_it() {
+    let mut h = users_in(true);
+    session(&mut h, DbEvent::Isolation(Some(Isolation::Serializable)));
+    let before = h.app.tab().exec.generation;
+    session(&mut h, DbEvent::Lost { error: datarig_core::driver::DbError::Closed });
+    h.command("where my_fn(id) > 0");
+    h.keys("y");
+    assert!(asks(&h), "{}", h.screen(120, 30));
+    assert_ne!(h.app.tab().exec.generation, before, "asked on the session it goes to");
+    assert!(runs(&mut h).is_empty(), "nothing sent while it asks");
+    h.key(KeyCode::Enter);
+    assert!(!asks(&h));
+    assert!(runs(&mut h).is_empty());
+    assert!(status(&h).starts_with("Not run: the read may lock rows"), "{}", status(&h));
+    h.command("where my_fn(id) > 0");
+    assert!(asks(&h));
+    h.keys("y");
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (my_fn(id) > 0)")]]);
+}
+
+/// A read that waited for its profile to connect is checked again on the new session right
+/// before it is sent: with manual commit its transaction reads at a level not known there, so
+/// it asks (a yes given for the session before is not this one's), and sends nothing first.
+#[test]
+fn a_read_that_waited_for_the_connection_asks_on_the_new_session() {
+    let mut h = users_in(true);
+    session(&mut h, DbEvent::Isolation(Some(Isolation::Serializable)));
+    h.command("where my_fn(id) > 0");
+    h.keys("y");
+    assert!(asks(&h));
+    h.keys("y");
+    assert_eq!(runs(&mut h).len(), 1);
+    answer(&mut h);
+    // The profile disconnects; the read waits for it to connect again.
+    let pid = h.app.tab().profile.expect("a profile");
+    h.app.dispatch(datarig_tui::app::action::Action::DisconnectCurrent);
+    if h.app.overlays.is_open(OverlayKind::Confirm) {
+        h.keys("y");
+    }
+    assert!(!h.app.conns.is_connected(pid));
+    h.command("where my_fn(id) > 0");
+    if asks(&h) {
+        h.keys("y");
+    }
+    assert!(h.app.is_queued(h.app.tab().id), "it waits for the connection");
+    assert!(runs(&mut h).is_empty());
+    h.db(DbEvent::Connected);
+    assert!(asks(&h), "asked on the session it goes to");
+    assert!(runs(&mut h).is_empty(), "nothing sent before the yes");
+    h.keys("y");
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (my_fn(id) > 0)")]]);
+}

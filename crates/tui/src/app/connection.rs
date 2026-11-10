@@ -439,7 +439,6 @@ impl App {
         self.monitor_profile_failed(id, &text);
         self.ddl_stop(id, None, super::tabs::DdlState::Failed(text), true);
         self.drop_pending(id);
-        self.table_keys_gone(id, None, false);
         let c = self.conns.entry(id);
         c.connecting = None;
         c.connected = false;

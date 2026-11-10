@@ -186,8 +186,10 @@ pub struct TableQuery {
     locks_asked: Option<(Query, LockState)>,
     /// The session state in which the user let reads that lock rows run in this tab.
     locks_confirmed: Option<LockState>,
-    /// The query to run once the table's keys are read (its order is made total with them).
-    keys_wait: Option<Query>,
+    /// The query to run once the table's keys are read (its order is made total with them), and
+    /// the tab binding it waits in: work in progress of the tab until it runs, is cancelled or
+    /// its wait ends ([`App::table_keys_waiting`]).
+    keys_wait: Option<(Query, u64)>,
     /// The filter line's fields: what the user types, and which field has the focus.
     pub line: crate::widgets::filter_line::LineState,
     /// The table's keys for a total order, as far as read.
@@ -642,9 +644,6 @@ impl App {
     /// table's keys are read on the tab's metadata session as it is now (asked for, the
     /// profile connected first); else it runs with what is known.
     fn table_run_with(&mut self, id: TabId, mut q: Query, keys_first: bool) {
-        if let Some(tq) = self.table_query_mut(id) {
-            tq.keys_wait = None;
-        }
         if self.tab_busy(id) {
             return self.flash_busy();
         }
@@ -681,15 +680,31 @@ impl App {
         // before the tab has read anything: its order waits for the keys a tab reads when it
         // opens, so it is made total as one typed after them.
         let first = self.table_query(id).is_some_and(|tq| tq.landed.is_none());
-        if keys_first && first && !q.order.is_empty() && self.keys_to_read(id) {
+        if keys_first && first && !q.order.is_empty() {
+            // Waiting before the keys are asked for: a connect that fails at once ends the wait
+            // (and says so, [`App::table_keys_dropped`]).
+            let binding = self.tabs.get(id).map_or(0, |t| t.binding);
             if let Some(tq) = self.table_query_mut(id) {
-                tq.keys_wait = Some(q);
+                tq.keys_wait = Some((q.clone(), binding));
             }
-            return self.tab_status(id, Notice::new(Label::TableOrderKeysFirst, Level::Info));
+            if self.keys_to_read(id) {
+                if self.table_keys_waiting(id) {
+                    self.tab_status(id, Notice::new(Label::TableOrderKeysFirst, Level::Info));
+                }
+                return;
+            }
+            if let Some(tq) = self.table_query_mut(id) {
+                tq.keys_wait = None;
+            }
         }
         let compiled = query::compile(&q, &target);
         let sql = compiled.sql.clone();
-        if let Some((locks, state)) = self.table_locks(id, Some(&sql)).filter(|(_, st)| !self.locks_confirmed(id, *st))
+        // Asked before the run's own asks on the session the tab has; a run that opens one is
+        // asked about on it, right before it is sent ([`App::table_locks_hold`]).
+        let session = self.tabs.get(id).is_some_and(|t| t.exec.session.is_some());
+        if session
+            && let Some((locks, state)) =
+                self.table_locks(id, Some(&sql)).filter(|(_, st)| !self.locks_confirmed(id, *st))
         {
             if let Some(tq) = self.table_query_mut(id) {
                 tq.locks_asked = Some((q, state));
@@ -864,8 +879,69 @@ impl App {
             if self.keys_to_read(id) {
                 continue;
             }
-            if let Some(q) = self.table_query_mut(id).and_then(|tq| tq.keys_wait.take()) {
+            if let Some(q) = self.table_keys_take(id) {
                 self.table_run_with(id, q, false);
+            }
+        }
+    }
+
+    /// The query table tab `id` waits to run with its keys, taken (the wait ends): `None` when
+    /// none waits, or the one waiting was for another binding of the tab (dropped).
+    fn table_keys_take(&mut self, id: TabId) -> Option<Query> {
+        let binding = self.tabs.get(id)?.binding;
+        let (q, b) = self.table_query_mut(id)?.keys_wait.take()?;
+        (b == binding).then_some(q)
+    }
+
+    /// Whether table tab `id` has a query waiting for its table's keys (work in progress of
+    /// the tab, as a statement waiting for its connection is).
+    pub(in crate::app) fn table_keys_waiting(&self, id: TabId) -> bool {
+        self.table_query(id).is_some_and(|tq| tq.keys_wait.is_some())
+    }
+
+    /// The query table tab `id` waits to run with its keys is cancelled (it never runs, and a
+    /// late answer finds nothing to run); whether one waited.
+    pub(in crate::app) fn table_keys_cancel(&mut self, id: TabId) -> bool {
+        self.table_query_mut(id).is_some_and(|tq| tq.keys_wait.take().is_some())
+    }
+
+    /// Profile `pid`'s attempt ended without a connection: the queries of its table tabs (in
+    /// any database) that waited for their keys are dropped, each tab says so (`name`: the
+    /// profile's).
+    pub(in crate::app) fn table_keys_dropped(&mut self, pid: ProfileId, name: &str) {
+        let waiting: Vec<TabId> = self
+            .tabs
+            .iter()
+            .filter(|t| t.profile == Some(pid))
+            .map(|t| t.id)
+            .filter(|id| self.table_keys_waiting(*id))
+            .collect();
+        for id in waiting {
+            self.table_keys_cancel(id);
+            self.tab_status(id, Notice::new(Msg::QueryQueuedFailed { name: name.to_string() }, Level::Warning));
+        }
+    }
+
+    /// The waits of profile `pid`'s table tabs for their keys, taken (to wait again for the
+    /// profile's next attempt: [`App::table_keys_wait_again`]).
+    pub(in crate::app) fn table_keys_waits(&mut self, pid: ProfileId) -> Vec<(TabId, Query, u64)> {
+        let tabs: Vec<TabId> = self.tabs.iter().filter(|t| t.profile == Some(pid)).map(|t| t.id).collect();
+        tabs.into_iter()
+            .filter_map(|id| {
+                let (q, b) = self.tabs.get_mut(id)?.doc.table_query.as_mut()?.keys_wait.take()?;
+                Some((id, q, b))
+            })
+            .collect()
+    }
+
+    /// The waits taken by [`App::table_keys_waits`] wait again, each in its tab while the tab
+    /// is still bound as it was.
+    pub(in crate::app) fn table_keys_wait_again(&mut self, waits: Vec<(TabId, Query, u64)>) {
+        for (id, q, b) in waits {
+            if self.tabs.get(id).is_some_and(|t| t.binding == b)
+                && let Some(tq) = self.tabs.get_mut(id).and_then(|t| t.doc.table_query.as_mut())
+            {
+                tq.keys_wait = Some((q, b));
             }
         }
     }
@@ -882,7 +958,7 @@ impl App {
             .map(|t| t.id)
             .collect();
         for id in waiting {
-            let Some(q) = self.table_query_mut(id).and_then(|tq| tq.keys_wait.take()) else { continue };
+            let Some(q) = self.table_keys_take(id) else { continue };
             if run {
                 self.table_run_with(id, q, false);
             }
@@ -981,8 +1057,8 @@ impl App {
                 Err(_) => OrderKeysState::Failed { on },
             };
         }
-        // The query that waited for them runs now.
-        if let Some(q) = self.table_query_mut(id).and_then(|tq| tq.keys_wait.take()) {
+        // The query that waited for them runs now (one cancelled meanwhile does not).
+        if let Some(q) = self.table_keys_take(id) {
             self.table_run_with(id, q, false);
         }
     }
@@ -1056,6 +1132,29 @@ impl App {
         Some((Locks { known: e.isolation.is_some(), autocommit_off: e.autocommit_off, manual }, state))
     }
 
+    /// Table tab `id`'s read (`statements`, its query's pending statement) right before it is
+    /// sent, on the session it goes to as it is now: when it locks rows there and the tab did
+    /// not say yes to that in this state, nothing is sent, and the query waits for the user's
+    /// word ([`App::table_locks_confirmed`] runs it again from the start). Whether it waits.
+    pub(in crate::app) fn table_locks_hold(&mut self, id: TabId, statements: &[String]) -> bool {
+        let Some(tq) = self.table_query(id) else { return false };
+        let Some(p) = tq.pending.as_ref().filter(|p| statements.len() == 1 && statements[0] == p.sql) else {
+            return false;
+        };
+        let q = p.query.clone();
+        let Some((locks, state)) =
+            self.table_locks(id, Some(&statements[0])).filter(|(_, st)| !self.locks_confirmed(id, *st))
+        else {
+            return false;
+        };
+        if let Some(tq) = self.table_query_mut(id) {
+            tq.pending = None;
+            tq.locks_asked = Some((q, state));
+        }
+        self.ask_table_locks(id, locks);
+        true
+    }
+
     /// The state of table tab `id`'s session that decides whether its reads lock rows
     /// ([`LockState`]); `None` when they never do (not MySQL).
     pub(in crate::app) fn lock_state(&self, id: TabId) -> Option<LockState> {
@@ -1078,7 +1177,8 @@ impl App {
     pub(in crate::app) fn table_locks_covering(&self, id: TabId) -> Option<LockState> {
         let t = self.tabs.get(id)?;
         let tq = t.doc.table_query.as_ref()?;
-        let running = t.exec.running.as_ref().filter(|r| !r.fetch)?.id;
+        // Only the run itself: never a count, a page, an export or an apply of the same query.
+        let running = t.exec.running.as_ref().filter(|r| !(r.fetch || r.count || r.export || r.apply))?.id;
         let state = self.lock_state(id)?;
         (tq.requested.as_ref().is_some_and(|(qid, _)| *qid == running) && tq.locks_confirmed == Some(state))
             .then_some(state)

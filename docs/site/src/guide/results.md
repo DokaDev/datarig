@@ -92,7 +92,9 @@ names, each with `ASC` or `DESC` (and `NULLS FIRST` or `NULLS LAST` on PostgreSQ
 in its normal form once applied. When the table has a primary key, its columns are added after
 yours (shown dimmed as `+ id`) so that pages read again follow one order; until datarig knows
 the order is unique (the table's keys are read from the catalog when the tab opens, without
-locking the table), the line says "order not unique".
+locking the table), the line says "order not unique". An ordered query brought back with a tab
+waits for those keys before its first run, connecting first when needed; that wait counts as a
+running query (`Ctrl+C` cancels it), and a connection that fails ends it and says so.
 
 Before anything is sent, datarig refuses a condition that could do more than filter this
 table's rows: a comment, a `;`, a row lock (`FOR UPDATE`, `FOR SHARE`), another clause or
@@ -111,7 +113,9 @@ not written into the statement the grid runs: the pages stop at it instead, the 
 there, and nothing is fetched past it (what the server held open for the result is closed). The
 results title then says `limit 100`. A count (`#`) and an export of every row read the capped
 statement (`… LIMIT 100`), so they see the same rows the pages would. A new limit runs the table
-again from its first page.
+again from its first page. On MySQL a condition that reads the outcome of the statement before
+it (`ROW_COUNT()`, `FOUND_ROWS()`) cannot be capped without changing what it reads: with a
+limit it is not sent, and the run says why.
 
 The condition, order and limit you applied are kept with the workspace and with a closed tab
 you bring back (`Space t u`): they return to the line without running, and are checked again
@@ -121,7 +125,9 @@ On MySQL, a plain read locks the rows it reads when the session's isolation leve
 SERIALIZABLE and autocommit is off or a transaction is open (with manual commit, the one datarig
 opens for the read counts too): other sessions cannot change those rows until the transaction
 ends. In that state, and when the level is not known, a table tab asks before it runs (`Enter`
-cancels, `y` runs); the answer holds for the tab until the session, its level, its autocommit or
+cancels, `y` runs), on the session the read is sent on: a read that waits for its connection, or
+opens a new session, asks once it is about to be sent, and nothing is sent before the answer.
+The answer holds for the tab until the session, its level, its autocommit or
 its transaction changes, even if it later changes back. A page read again or a count of the tab
 is refused in that state until the tab has run with that answer. While a transaction is open,
 the level that counts is the one it started with: a `SET SESSION TRANSACTION ISOLATION LEVEL`

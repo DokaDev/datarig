@@ -23,5 +23,8 @@
   runs.
 - On MySQL, a table tab asks before it runs when its reads would lock rows (isolation level
   SERIALIZABLE, or not known, with autocommit off or a transaction open, including one opened
-  for the read with manual commit); a page read again or a count in that state needs that
-  answer first.
+  for the read with manual commit), on the session the read is sent on; a page read again or a
+  count in that state needs that answer first. A condition that reads `ROW_COUNT()` or
+  `FOUND_ROWS()` is not sent with a limit.
+- A table tab brought back with an order waits for the table's keys before its first run; the
+  wait counts as a running query and `Ctrl+C` cancels it.

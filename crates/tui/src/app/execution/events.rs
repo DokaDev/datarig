@@ -77,8 +77,18 @@ impl App {
                 let before = self.tabs.get(id).map(safety);
                 let covering = self.table_locks_covering(id);
                 self.tab_event(id, ev);
-                if self.tabs.get(id).map(safety) != before {
-                    self.table_safety_changed(id, covering);
+                let after = self.tabs.get(id).map(safety);
+                if after != before {
+                    // Only a transaction starting (none ended, nor replaced by another) can be
+                    // the one the covered run opened.
+                    let opened = match (before, after) {
+                        (Some(b), Some(a)) => {
+                            let ((was_tx, was_block), (tx, block)) = ((b.3, b.4), (a.3, a.4));
+                            (!was_tx || tx) && (!was_block || block) && (tx || block) && (a.5 == b.5 || !was_block)
+                        }
+                        _ => false,
+                    };
+                    self.table_safety_changed(id, covering.filter(|_| opened));
                 }
                 self.settle_run_hints(id);
             }

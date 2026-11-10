@@ -138,6 +138,12 @@ impl App {
             self.unstage_run(id);
             return self.tab_status(id, refused);
         }
+        // A table tab's read, checked again right before it is sent on the session it goes to
+        // (its state as it is now, a session still opening as not known yet): one that locks
+        // rows there without the tab's yes for that state asks first, and nothing is sent.
+        if self.table_locks_hold(id, &statements) {
+            return self.unstage_run(id);
+        }
         let tx = self.tx_rule(id, &statements, as_is);
         let manual = self.manual_commit(id);
         let (now, wall) = (self.now(), self.wall_now());

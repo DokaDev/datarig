@@ -182,8 +182,10 @@ impl App {
                     None => Vec::new(),
                 };
                 let ddl = if ask.is_some() { self.ddl_waiting(id) } else { Vec::new() };
+                let keys = if ask.is_some() { self.table_keys_waits(id) } else { Vec::new() };
                 self.attempt_failed(id, reason.clone());
                 self.ddl_wait_again(&ddl);
+                self.table_keys_wait_again(keys);
                 // A tunnel stays open only for the password asked for now.
                 if ask.is_none() {
                     self.close_tunnel(id);

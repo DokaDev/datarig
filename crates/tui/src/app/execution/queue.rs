@@ -24,6 +24,11 @@ impl App {
         {
             return self.cancel_connect(p);
         }
+        // A table tab's query waiting for its table's keys never runs (a late answer finds it
+        // gone).
+        if self.table_keys_cancel(id) {
+            return self.tab_status(id, Notice::new(Label::QueryCancelled, Level::Warning));
+        }
         if self.take_queued(id).is_some() {
             self.unstage_run(id);
             return self.tab_status(id, Notice::new(Label::QueryCancelled, Level::Warning));
@@ -94,9 +99,10 @@ impl App {
         }
     }
 
-    /// Tab `id` has a statement waiting for its profile to connect.
+    /// Tab `id` has a statement waiting for its profile to connect, or a table tab's query
+    /// waiting for its table's keys.
     pub fn is_queued(&self, id: TabId) -> bool {
-        self.conns.iter().any(|(_, c)| c.pending.iter().any(|q| q.tab == id))
+        self.conns.iter().any(|(_, c)| c.pending.iter().any(|q| q.tab == id)) || self.table_keys_waiting(id)
     }
 
     /// Tab `id` runs a statement, has one waiting for its connection, or waits for the answer
@@ -130,6 +136,8 @@ impl App {
         self.ddl_stop(id, None, crate::app::tabs::DdlState::NotLoaded, true);
         let pending = self.conns.get_mut(id).map(|c| std::mem::take(&mut c.pending)).unwrap_or_default();
         let name = self.profile(id).map(|p| p.name.clone()).unwrap_or_default();
+        // So do the table tabs' queries waiting for their keys, in any database of it.
+        self.table_keys_dropped(id, &name);
         for q in pending {
             self.unstage_run(q.tab);
             self.tab_status(q.tab, Notice::new(Msg::QueryQueuedFailed { name: name.clone() }, Level::Warning));

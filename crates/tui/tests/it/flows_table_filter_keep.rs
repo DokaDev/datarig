@@ -398,3 +398,126 @@ fn a_restored_tab_that_never_ran_applies_a_fixed_condition() {
     let ran = keys_first(&mut h);
     assert_eq!(ran, vec![vec![format!(r#"{ALL} WHERE (id > 1) ORDER BY "id" DESC"#)]]);
 }
+
+/// A workspace of one table tab on `shop.users` (in database `database`, when one) ordered by
+/// `id` descending, launched: its run waits for the table's keys.
+fn ordered(cfg: &Config, state: &State, database: Option<&str>) -> Harness {
+    let db = database.map(|d| format!("database = \"{d}\"\n")).unwrap_or_default();
+    state.write_table_tab(cfg, &format!("{db}order = [{{ column = \"id\", dir = \"desc\" }}]"));
+    let h = launch(cfg, state, Lang::En);
+    assert!(h.app.tab().is_table());
+    h
+}
+
+fn keys_request(sent: &[DbCommand]) -> Option<u64> {
+    sent.iter().find_map(|c| match c {
+        DbCommand::LoadTableKeys { id, .. } => Some(*id),
+        _ => None,
+    })
+}
+
+fn pk() -> datarig_core::driver::keys::OrderKeys {
+    datarig_core::driver::keys::OrderKeys { primary_key: vec!["id".into()], ..Default::default() }
+}
+
+/// A run waiting for its table's keys is work in progress of the tab: a cancel ends it, and
+/// the keys' answer that comes after runs nothing.
+#[test]
+fn a_run_waiting_for_its_keys_is_cancelled_and_its_late_answer_runs_nothing() {
+    let cfg = test_db_config();
+    let state = State::new("keyscancel");
+    let mut h = ordered(&cfg, &state, None);
+    connect(&mut h);
+    h.key(KeyCode::Tab);
+    h.ctrl('e');
+    let sent = h.sent();
+    assert!(!sent.iter().any(|c| matches!(c, DbCommand::Execute { .. })), "{sent:?}");
+    let request = keys_request(&sent).expect("the keys are asked for");
+    let tab = h.app.tab().id;
+    assert!(h.app.tab_busy(tab), "the wait is work in progress");
+    h.app.cancel();
+    assert!(!h.app.tab_busy(tab));
+    assert_eq!(status(&h), "Query cancelled");
+    h.meta_db("local-pg", DbEvent::TableKeys { id: request, result: Ok(pk()) });
+    assert!(runs(&mut h).is_empty(), "nothing runs after the cancel");
+}
+
+/// A connect for the keys that fails at once (an environment that is not defined) ends the
+/// wait it was started for, and the tab says so.
+#[test]
+fn a_connect_for_the_keys_that_fails_at_once_ends_the_wait() {
+    let mut cfg = test_db_config();
+    cfg.connections[0].policy = Some("gone".into());
+    let state = State::new("keyssync");
+    let mut h = ordered(&cfg, &state, None);
+    h.key(KeyCode::Tab);
+    h.ctrl('e');
+    let tab = h.app.tab().id;
+    assert!(!h.app.tab_busy(tab), "nothing waits");
+    assert!(status(&h).contains("which did not connect"), "{}", status(&h));
+    assert!(runs(&mut h).is_empty());
+}
+
+/// A password refused for the profile's own database asks again, and the run waiting for the
+/// keys goes on waiting: once the profile connects, the keys are read and it runs.
+#[test]
+fn a_run_waiting_for_its_keys_waits_through_a_password_asked_again() {
+    let cfg = test_db_config();
+    let state = State::new("keysretry");
+    let mut h = ordered(&cfg, &state, None);
+    h.key(KeyCode::Tab);
+    h.ctrl('e');
+    let tab = h.app.tab().id;
+    assert!(h.app.tab_busy(tab));
+    h.db(DbEvent::ConnectFailed { error: "password authentication failed for user \"datarig\"".into(), auth: true });
+    assert!(h.prompt().is_some(), "asked again");
+    assert!(h.app.tab_busy(tab), "still waiting");
+    h.type_text("datarig");
+    h.key(KeyCode::Enter);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+    let ran = keys_first(&mut h);
+    assert_eq!(ran, vec![vec![format!(r#"{ALL} ORDER BY "id" DESC"#)]]);
+}
+
+/// A run in another database waiting for the keys ends when the profile's attempt fails for
+/// good, and says so; connecting later runs nothing by itself.
+#[test]
+fn a_run_in_another_database_waiting_for_its_keys_ends_with_a_failed_connect() {
+    let cfg = test_db_config();
+    let state = State::new("keysotherdb");
+    let mut h = ordered(&cfg, &state, Some("postgres"));
+    h.key(KeyCode::Tab);
+    h.ctrl('e');
+    let tab = h.app.tab().id;
+    assert!(h.app.tab_busy(tab));
+    h.db(DbEvent::ConnectFailed { error: "connection refused".into(), auth: false });
+    assert!(!h.app.tab_busy(tab), "nothing waits");
+    assert!(
+        h.app
+            .tabs
+            .get(tab)
+            .and_then(|t| t.status.as_ref())
+            .is_some_and(|n| matches!(n.msg, Msg::QueryQueuedFailed { .. }))
+    );
+    connect(&mut h);
+    assert!(runs(&mut h).is_empty(), "nothing runs by itself");
+}
+
+/// The metadata session the keys were asked on is lost while the run waits: the run goes
+/// without them (the order not taken for total), and the lost session's late answer runs
+/// nothing more.
+#[test]
+fn a_run_waiting_for_its_keys_on_a_lost_metadata_session_runs_once() {
+    let cfg = test_db_config();
+    let state = State::new("keyslost");
+    let mut h = ordered(&cfg, &state, None);
+    connect(&mut h);
+    h.key(KeyCode::Tab);
+    h.ctrl('e');
+    let request = keys_request(&h.sent()).expect("the keys are asked for");
+    h.db(DbEvent::Lost { error: datarig_core::driver::DbError::Closed });
+    assert_eq!(runs(&mut h), vec![vec![format!(r#"{ALL} ORDER BY "id" DESC"#)]]);
+    h.meta_db("local-pg", DbEvent::TableKeys { id: request, result: Ok(pk()) });
+    assert!(runs(&mut h).is_empty(), "the late answer runs nothing");
+}
