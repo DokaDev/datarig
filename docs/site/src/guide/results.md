@@ -193,7 +193,9 @@ kept. `Ctrl+R` in the filter line (or `Space r H` from the grid) lists the table
 the most recent first, with both texts in full under the list; typing narrows the list. A
 picked entry fills the condition and the order (the `LIMIT` field stays as it is: the history
 does not keep limits) and runs only when you press `Enter`, with the same checks as a condition
-you type. Each table keeps its last 50 entries and the last 200 tables used are kept; a
+you type. A condition or order holding a line break (from a workspace file edited by hand, say)
+is not kept, and one in the file is not filled in, since the one-line field cannot hold it as it
+is. Each table keeps its last 50 entries and the last 200 tables used are kept; a
 condition or order longer than 4 KiB is not kept.
 
 The history stays on this machine: it is the file `filter-history.toml` in the state directory,

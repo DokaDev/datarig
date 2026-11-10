@@ -22,6 +22,7 @@
 use super::*;
 use crate::text::{sanitize_cell, width, wrap_words};
 use crate::widgets::list_picker::{Entry as Item, ListPicker, Outcome};
+use crate::widgets::text_input::TextInput;
 use datarig_core::config::FilterHistory;
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::filter_history::{self as fh, Entry, History, TableKey, Unreadable};
@@ -197,7 +198,11 @@ impl App {
         let filter = table_query::filter_text(q).unwrap_or_default().to_string();
         let keys: Vec<_> = q.order.iter().filter(|k| k.origin == KeyOrigin::User).cloned().collect();
         let order = datarig_core::query::order_text(&keys, self.tab_dialect(id));
-        if filter.trim().is_empty() && order.trim().is_empty() {
+        // Only texts the filter line holds as they are: a pick never alters what it fills in.
+        if (filter.trim().is_empty() && order.trim().is_empty())
+            || !TextInput::holds(&filter)
+            || !TextInput::holds(&order)
+        {
             return;
         }
         let now = unix_secs(self.wall_now());
@@ -343,7 +348,8 @@ impl App {
 
     /// What the list of a table's filters did: a pick fills the filter line's condition and
     /// order of that tab (the limit stays), the condition focused; nothing runs. Only while the
-    /// tab is the active one and its table the one listed.
+    /// tab is the active one and its table the one listed, and only texts the line holds as
+    /// they are (a line break: refused, said why).
     pub(super) fn filter_history_picked(&mut self, out: Outcome<usize>) {
         if out == Outcome::Pending {
             return;
@@ -358,6 +364,9 @@ impl App {
         let Some((tab, key, e)) = picked else { return };
         if self.tabs.is_empty() || self.tab().id != tab || self.filter_history_key(tab).as_ref() != Some(&key) {
             return;
+        }
+        if !TextInput::holds(&e.filter) || !TextInput::holds(&e.order) {
+            return self.flash(Notice::new(Label::TableHistoryNotOneLine, Level::Warning));
         }
         let Some(tq) = self.table_query_mut(tab) else { return };
         tq.line.where_.set(&e.filter);

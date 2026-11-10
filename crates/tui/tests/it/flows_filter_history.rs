@@ -324,6 +324,32 @@ fn a_picked_filter_asks_about_pending_edits_when_it_runs() {
     assert!(runs(&mut h).is_empty(), "Enter keeps the edits: nothing runs");
 }
 
+/// An entry whose condition or order holds a line break (the one-line field cannot hold it
+/// as it is) is not filled in: said why, the line left as it was, nothing run.
+#[test]
+fn an_entry_the_line_cannot_hold_is_refused_never_altered() {
+    let state = State::new("lines");
+    let cfg = test_db_config();
+    let mut seed = fh::History::default();
+    seed.record(key(&cfg), "id > 1", "name\r\nDESC", 1);
+    seed.record(key(&cfg), "note = 'a\nb'", "", 2);
+    fh::save(&state.file(), &seed).unwrap();
+    let mut h = users(&cfg, Some(&state));
+    h.sent();
+    for down in [0, 1] {
+        h.keys(" rH");
+        assert_eq!(listed(&h).len(), 2);
+        for _ in 0..down {
+            h.key(KeyCode::Down);
+        }
+        h.key(KeyCode::Enter);
+        assert!(!h.app.overlays.is_open(OverlayKind::Picker));
+        assert_eq!(line(&h), (String::new(), String::new()), "never filled in altered");
+        assert!(said(&mut h).contains("line break"), "{}", said(&mut h));
+        assert!(runs(&mut h).is_empty());
+    }
+}
+
 /// A file that cannot be read turns the history off: said once, `Ctrl+R` says it is not
 /// available (never "no history"), and the file is never written, not by a clear either.
 #[test]
