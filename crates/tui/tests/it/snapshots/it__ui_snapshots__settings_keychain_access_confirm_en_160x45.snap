@@ -4,7 +4,7 @@ expression: backend
 ---
 "╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          "
 "│  ＋ New connection          ╭ Settings ────────────────────────────────────────────────────────────────────────────────────────╮─────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ 󰒍 Connections 1            │   Nerd Font icons                   ‹ on            ›  Nerd Font icons → on                      │ Space c s switch connection │"
+"│▾ 󰒍 Connections 1            │   Nerd Font icons                   ‹ on            ›  Nerd Font icons → on       ↑ 1 more line  │ Space c s switch connection │"
 "│  ▾ ●  local-pg             │   Command line position             ‹ popup         ›  A popup near the top of the screen        │                             │"
 "│    ▾  datarig default      │   Theme                             ‹ terminal      ›  Your terminal's own colours (the default) │                             │"
 "│      ▸ 󱋣 analytics          │   Explorer: size colours            ‹ 3             ›  3 levels: amber from 1 MiB, red from 1 G… │                             │"

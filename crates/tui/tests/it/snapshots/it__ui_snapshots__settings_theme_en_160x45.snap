@@ -40,7 +40,7 @@ expression: backend
 "│                             │   Check for updates                 ‹ on            ›  On, once a day                            │                             │"
 "│                             │   What's new                        ‹ on            ›  On, once after each update                │                             │"
 "│                             │ Secrets                                                                                          │                             │"
-"│                             │   Password storage of new profiles  ‹ auto          ›  New profiles' password → auto (keychain … │                             │"
+"│                             │   Password storage of new profiles  ‹ auto          ›  New profiles' password → a ↓ 1 more line  │                             │"
 "│                             │ Terminal background: not detected (catppuccin, tokyo-night and gruvbox use their dark variant)   │                             │"
 "│                             │ c copies this theme to a new theme file with every token written out                             │                             │"
 "│                             │ The colours of the whole UI. terminal uses your terminal's own colours. catppuccin, tokyo-night  │                             │"

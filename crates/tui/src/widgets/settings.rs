@@ -1,5 +1,6 @@
 //! The settings screen: a large modal with every setting under its category, its
-//! current value (`‹ value ›`) and what that value means; below the list, the selected
+//! current value (`‹ value ›`) and what that value means (on a short screen the list scrolls
+//! and says how many lines are out of view above and below); below the list, the selected
 //! setting's description, and for `icons` a preview of the glyphs with the hint to turn them
 //! off when they show as boxes; for `theme` the terminal's background, the theme being
 //! previewed and the key that copies it to a new theme file. A configured theme that is not
@@ -81,6 +82,9 @@ pub(crate) fn draw_settings(app: &mut App, area: Rect, buf: &mut Buffer) {
         .find_map(|(g, (start, n))| (screen.selected < start + n).then_some(g + 1 + screen.selected))
         .unwrap_or(0);
     let mut skip = (selected_line + 1).saturating_sub(list_room);
+    // The lines out of view above and below, said once the list is drawn.
+    let (above, below) = (skip, list_lines.saturating_sub(skip + list_room));
+    let list_top = y;
     for (group, items) in groups {
         if y >= list_bottom {
             break;
@@ -142,6 +146,18 @@ pub(crate) fn draw_settings(app: &mut App, area: Rect, buf: &mut Buffer) {
             row += 1;
             y += 1;
         }
+    }
+    // At the right end of the list's first and last lines (one line: the lines below).
+    for (count, at, up) in [(above, list_top, true), (below, list_bottom.saturating_sub(1), false)] {
+        if count == 0 || (up && list_room == 1 && below > 0) {
+            continue;
+        }
+        let count = count as u64;
+        let m = if up { Msg::SessionViewMoreAbove { count } } else { Msg::SessionViewMoreBelow { count } };
+        let text = format!(" {} ", i18n.msg(&m));
+        let end = x + tw as u16;
+        let cx = end.saturating_sub(width(&text) as u16).max(x);
+        put(buf, cx, at, &text, usize::from(end - cx), Style::new().fg(th.fg_dim));
     }
     if let Some(s) = app.overlays.settings_mut() {
         s.rows = rows;

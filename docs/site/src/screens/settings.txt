@@ -15,7 +15,7 @@
 │ │   Auto-pairs                ‹ off           ›  Off, every key types its… │ │
 │ │   Backspace to tab stop     ‹ on            ›  On, spaces back to the t… │ │
 │ │   Run hints                 ‹ on            ›  On, the outcome after ea… │ │
-│ │   Completion delay (ms)     ‹ 60            ›  Opens once no key came f… │t│
+│ │   Completion delay (ms)     ‹ 60            ›  Opens on ↓ 22 more lines  │t│
 │ │ Terminal background: not detected (catppuccin, tokyo-night and gruvbox   │ │
 │ │ use their dark variant)                                                  │ │
 │ │ c copies this theme to a new theme file with every token written out     │ │

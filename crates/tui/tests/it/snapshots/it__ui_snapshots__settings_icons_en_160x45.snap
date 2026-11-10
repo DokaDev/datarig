@@ -40,7 +40,7 @@ expression: backend
 "│                             │   Check for updates                 ‹ on            ›  On, once a day                            │                             │"
 "│                             │   What's new                        ‹ on            ›  On, once after each update                │                             │"
 "│                             │ Secrets                                                                                          │                             │"
-"│                             │   Password storage of new profiles  ‹ auto          ›  New profiles' password → auto (keychain … │                             │"
+"│                             │   Password storage of new profiles  ‹ auto          ›  New profiles' password → a ↓ 1 more line  │                             │"
 "│                             │ Preview:                                                                                     │                             │"
 "│                             │ If these show as □ or ?, your terminal font lacks Nerd Font glyphs: turn icons off, or install   │                             │"
 "│                             │ one from nerdfonts.com.                                                                          │                             │"

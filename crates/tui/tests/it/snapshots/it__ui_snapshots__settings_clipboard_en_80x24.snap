@@ -21,7 +21,7 @@ expression: backend
 "│ │   Run hints                 ‹ on            ›  On, the outcome after ea… │ │"
 "│ │   Completion delay (ms)     ‹ 60            ›  Opens once no key came f… │t│"
 "│ │ Results                                                                  │ │"
-"│ │   Cell detail               ‹ panel         ›  A panel on the right of … │ │"
+"│ │   Cell detail               ‹ panel         ›  A panel  ↓ 20 more lines  │ │"
 "│ │ How many spaces the formatter indents each level with.                   │ │"
 "│ ╰────────────────────────────────────── j/k move · h/l change · Esc close ─╯ │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"

@@ -4,7 +4,7 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│ ╭ Settings ────────────────────────────────────────────────────────────────╮─╮"
-"│▾│ Clipboard                                                                │ │"
+"│▾│ Clipboard                                               ↑ 22 more lines  │ │"
 "│ │   Clipboard                 ‹ auto          ›  Automatic: OSC 52 over S… │e│"
 "│ │   Column names in copies    ‹ auto          ›  When more than one row i… │ │"
 "│ │   Format of y and Y copies  ‹ tsv           ›  TSV (column names as cop… │ │"
