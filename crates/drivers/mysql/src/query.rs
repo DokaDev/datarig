@@ -803,7 +803,6 @@ async fn statement<'a>(
 ) -> Result<Option<(Reply<'a>, Outcome)>, Halted<'a>> {
     let risk = risk::classify(sql, s.mode);
     s.routine = runs_server_code(sql, s.mode, risk.runs_code);
-    s.sets_next = sets_next_transaction(sql, s.mode);
     // A read-only session runs only what the app's read-only policy lets through (the app
     // refuses the rest first): the server's read-only stops writes, not a procedure or an
     // executable comment that turns it off, writes, and turns it on again.
@@ -900,6 +899,9 @@ async fn statement<'a>(
     }
     let was_open = s.tx.open;
     env.busy.store(true, Ordering::SeqCst);
+    // Only what is sent may set the next transaction's own settings: a statement refused before
+    // it was sent sets nothing.
+    s.sets_next = sets_next_transaction(sql, s.mode);
     let sent = halt!(link.guard(Some(env.killer), conn.query_iter(sql)).await, Some(reply));
     let mut qr = match sent {
         Ok(qr) => qr,

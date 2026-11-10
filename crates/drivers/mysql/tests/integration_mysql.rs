@@ -2227,6 +2227,22 @@ async fn a_count_locks_no_rows_when_the_session_is_serializable() {
     a.disconnect().await.unwrap();
 }
 
+/// A statement refused before it was sent (a `CALL` on a read-only session) sets nothing: after
+/// the transaction it was refused in ends, a count runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_statement_refused_unsent_never_marks_the_next_transaction() {
+    let test = "a_statement_refused_unsent_never_marks";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "unsent", 5).await;
+    let mut c = Conn::open(&url, SessionRole::Query, true, test).await;
+    c.ok(1, "BEGIN").await;
+    let evs = c.run(2, &["CALL shop.zz_no_such_procedure()"]).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::ReadWriteRefused, .. })), "{evs:?}");
+    c.end_tx(3, true).await;
+    let sql = format!("SELECT COUNT(*) FROM (\nSELECT id FROM {}\n) AS datarig_count", t.q());
+    assert_eq!(count(&mut c, 4, sql).await, (Ok(5), false));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_read_only_session_refuses_and_never_stays_writable() {
     let Some((url, admin)) = urls("a_read_only_session_refuses") else { return };
