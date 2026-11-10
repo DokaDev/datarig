@@ -824,3 +824,75 @@ fn a_column_named_with_a_line_break_is_neither_filtered_nor_sorted() {
     h.keys("s");
     assert_eq!(runs(&mut h), vec![vec![format!(r#"{ALL} WHERE ("a b" = 'y') ORDER BY "a b" ASC"#)]]);
 }
+
+/// An array compares for equality only where its element type has equality: arrays of the
+/// built-in types known to have it (`text[]`, `int4[]`, …) offer `=`, `<>` and the `IN` forms;
+/// an array of a type with no equality (`xml[]`, `point[]`) or of a type not in that list
+/// (`tsquery[]`) offers them dimmed with why, and nothing is sent. `IS NULL` stays.
+#[test]
+fn arrays_compare_only_where_their_elements_have_equality() {
+    use datarig_core::driver::ArrayElement as E;
+    use datarig_tui::app::filter_value::ByValue as B;
+    let mut h = users();
+    let cols = vec![
+        col("id", "int8", ValueKind::Integer),
+        col("tags", "text[]", ValueKind::Array(E::Text)),
+        col("nums", "int4[]", ValueKind::Array(E::Number)),
+        col("docs", "xml[]", ValueKind::Array(E::Text)),
+        col("spots", "point[]", ValueKind::Array(E::Text)),
+        col("odd", "tsquery[]", ValueKind::Array(E::Text)),
+    ];
+    let s = |v: &str| Some(v.to_string());
+    let rows = vec![
+        vec![s("1"), s("{a,b}"), s("{1,2}"), s("{<a/>}"), s("{\"(1,2)\"}"), s("{'a'}")],
+        vec![s("2"), s("{c}"), s("{3}"), s("{<b/>}"), s("{\"(0,0)\"}"), s("{'b'}")],
+        vec![s("3"), None, None, None, None, None],
+    ];
+    clear_with(&mut h, cols.clone(), rows.clone());
+    // No equality: dimmed with why, nothing sent; one cell and two.
+    for c in [3, 4, 5] {
+        at(&mut h, 0, c);
+        h.keys("F");
+        assert!(menu_open(&h), "{}", flashed(&h));
+        let dimmed = h.app.menu_dimmed_rows();
+        for by in ["= ", "<> "] {
+            assert!(
+                dimmed.iter().any(|(l, why)| l.starts_with(by) && why == "type not compared"),
+                "{c} {by}: {dimmed:?}"
+            );
+        }
+        pick(&mut h, B::Eq);
+        assert!(runs(&mut h).is_empty(), "{c}: nothing sent");
+        assert_eq!(where_text(&h), "");
+        if menu_open(&h) {
+            h.key(KeyCode::Esc);
+        }
+        let g = &mut h.app.tab_mut().grid;
+        (g.row, g.col, g.anchor) = (1, c, Some((0, c)));
+        h.keys("F");
+        assert!(menu_open(&h), "{}", flashed(&h));
+        let dimmed = h.app.menu_dimmed_rows();
+        assert!(dimmed.iter().any(|(l, why)| l.starts_with("IN (") && why == "type not compared"), "{c}: {dimmed:?}");
+        pick(&mut h, B::In);
+        assert!(runs(&mut h).is_empty(), "{c}: nothing sent");
+        if menu_open(&h) {
+            h.key(KeyCode::Esc);
+        }
+    }
+    // NULL is tested as NULL whatever the element type.
+    assert_eq!(filter(&mut h, 2, 3, "IS NULL"), vec![vec![format!("{ALL} WHERE (docs IS NULL)")]]);
+    page_with(&mut h, cols.clone(), rows.clone());
+    clear_with(&mut h, cols.clone(), rows.clone());
+    // Element types with equality: offered and sent.
+    assert_eq!(filter(&mut h, 0, 1, "= '{a,b}'"), vec![vec![format!("{ALL} WHERE (tags = '{{a,b}}')")]]);
+    page_with(&mut h, cols.clone(), rows.clone());
+    clear_with(&mut h, cols.clone(), rows.clone());
+    assert_eq!(filter(&mut h, 0, 2, "<> '{1,2}'"), vec![vec![format!("{ALL} WHERE (nums <> '{{1,2}}')")]]);
+    page_with(&mut h, cols.clone(), rows.clone());
+    clear_with(&mut h, cols, rows);
+    let g = &mut h.app.tab_mut().grid;
+    (g.row, g.col, g.anchor) = (1, 2, Some((0, 2)));
+    h.keys("F");
+    pick(&mut h, B::In);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (nums IN ('{{1,2}}', '{{3}}'))")]]);
+}

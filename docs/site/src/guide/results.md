@@ -129,7 +129,8 @@ them back with `Esc` first. Nor while the line shows a condition that failed or 
 the earlier rows: run it again, or change it, first. A value is taken only as the server holds it: an entry is dimmed, with
 the reason, for a value that is not shown whole (as a copy as SQL judges it), binary data over 64
 KiB, a type whose comparison datarig does not know (`json`, MySQL's JSON, geometry, most types of
-your own; PostgreSQL's `jsonb` and arrays offer equality only), or more than 1000 cells. A new row,
+your own, arrays of a type without equality such as `xml[]`; PostgreSQL's `jsonb` and arrays of
+built-in types with equality offer equality only), or more than 1000 cells. A new row,
 a cell with an edit on it or cells of several columns give no menu. On a query's results there is
 none either: filter them in the statement. A column whose name holds a line break is neither
 filtered by value nor sorted from the grid: the filter line holds one line, and would not hold the

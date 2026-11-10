@@ -112,7 +112,12 @@ fn compares(d: Dialect, m: &ColumnMeta, enum_known: bool) -> Result<bool, Label>
         // JSON string.
         ValueKind::Json if !mysql && ty == "jsonb" => Ok(false),
         ValueKind::Json => Err(Label::TableFilterByValueOffType),
-        ValueKind::Array(ArrayElement::Number | ArrayElement::Bool | ArrayElement::Text) if !mysql => Ok(false),
+        // An array compares through its element type's equality: only one known to have it.
+        ValueKind::Array(ArrayElement::Number | ArrayElement::Bool | ArrayElement::Text)
+            if !mysql && ty.strip_suffix("[]").is_some_and(|e| PG_ELEMENT_EQ.contains(&e)) =>
+        {
+            Ok(false)
+        }
         ValueKind::Array(_) => Err(Label::TableFilterByValueOffType),
         ValueKind::Other if !mysql && (enum_known || PG_ORDERED.contains(&ty.as_str())) => Ok(true),
         ValueKind::Other => Err(Label::TableFilterByValueOffType),
@@ -122,6 +127,40 @@ fn compares(d: Dialect, m: &ColumnMeta, enum_known: bool) -> Result<bool, Label>
 /// PostgreSQL types of no kind of their own whose values compare as their text reads back
 /// (equality and order).
 const PG_ORDERED: &[&str] = &["uuid", "inet", "cidr", "macaddr", "macaddr8", "citext"];
+
+/// Built-in PostgreSQL element types (as an array's type names them, `text` of `text[]`) known
+/// to have the equality an array's `=` compares its elements with. Any other (`xml`, `json`,
+/// `point` and the other geometric types have none) is not compared.
+const PG_ELEMENT_EQ: &[&str] = &[
+    "int2",
+    "int4",
+    "int8",
+    "float4",
+    "float8",
+    "numeric",
+    "oid",
+    "money",
+    "text",
+    "varchar",
+    "bpchar",
+    "char",
+    "name",
+    "bool",
+    "date",
+    "time",
+    "timetz",
+    "timestamp",
+    "timestamptz",
+    "interval",
+    "uuid",
+    "bytea",
+    "inet",
+    "cidr",
+    "macaddr",
+    "macaddr8",
+    "bit",
+    "varbit",
+];
 
 /// What a filter by value says when the filter line is ahead of the rows shown.
 fn line_ahead_label(why: LineAhead) -> Label {
