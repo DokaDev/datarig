@@ -492,6 +492,10 @@ impl App {
                 }
                 t.exec.state = SessionState::Idle;
                 t.exec.running = None;
+                // A table tab's query whose run waited for this session is not applied.
+                if let Some(tq) = t.doc.table_query.as_mut() {
+                    tq.run_over(t.exec.query_id, crate::app::table_query::Unapplied::Ended);
+                }
                 t.exec.unsure();
                 t.exec.paging = Paging::None;
                 if !matches!(t.results, Results::Rows(_)) {

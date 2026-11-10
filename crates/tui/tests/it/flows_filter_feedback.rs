@@ -434,14 +434,19 @@ fn a_failed_filter_keeps_the_earlier_rows_dimmed() {
     assert!(h.app.tab().doc.table_query.as_ref().unwrap().failure().is_none());
 }
 
-/// A table run that ends without its first page (cancelled, its session lost) leaves the
-/// earlier rows: the line keeps the query as not applied, the rows are dimmed and the line
-/// under the grid says why. The rows are never shown as that query's answer.
+/// A table run that ends without its first page (cancelled, its session lost, its session
+/// failing to connect) leaves the earlier rows: the line keeps the query as not applied, the
+/// rows are dimmed and the line under the grid says why. The rows are never shown as that
+/// query's answer.
 #[test]
 fn a_run_that_brings_no_rows_leaves_its_query_not_applied() {
-    let cases: [(DbEvent, &str); 2] = [
+    let cases: [(DbEvent, &str); 3] = [
         (DbEvent::Failed { id: 0, error: DbError::Cancelled, cancelled: true }, "cancelled: showing previous rows"),
         (DbEvent::Lost { error: DbError::Closed }, "filter not applied: showing previous rows"),
+        (
+            DbEvent::ConnectFailed { error: "connection refused".into(), auth: false },
+            "filter not applied: showing previous rows",
+        ),
     ];
     for (ev, note) in cases {
         let mut h = users();
