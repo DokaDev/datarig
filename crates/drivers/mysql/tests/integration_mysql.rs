@@ -350,14 +350,16 @@ async fn a_level_set_in_a_transaction_is_the_next_ones() {
     assert_eq!(isolation_of(&evs), Some(Some(Isolation::ReadCommitted)), "{evs:?}");
 }
 
-/// A count that opens a transaction (autocommit off) opens it in the level the next one was to
-/// run in: a level the session sets while it is open is the next one's, and the session reports
-/// the count's until it ends. A level set for the next transaction only refuses the count
-/// outside a transaction; the transaction that takes it has a level not known.
+/// A count keeps the session's transaction state as it was: with no transaction open it reads in
+/// one of its own that it ends, so a level the session sets afterwards is known at once; inside an
+/// open transaction it reads there, and that transaction keeps the level it started in until it
+/// ends. After a level set for the next transaction only, a count with no transaction open is
+/// refused (it would use that level up), and the level is not said as known until a
+/// transaction ends.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_count_opens_its_transaction_in_the_level_it_starts_in() {
+async fn a_count_leaves_the_transactions_level_as_it_was() {
     use datarig_core::driver::Isolation;
-    let test = "a_count_opens_its_transaction_in_the_level_it_starts_in";
+    let test = "a_count_leaves_the_transactions_level_as_it_was";
     let Some((url, admin)) = urls(test) else { return };
     let t = numbers(&admin, "fix2count", 10).await;
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
@@ -365,22 +367,28 @@ async fn a_count_opens_its_transaction_in_the_level_it_starts_in() {
     let evs = c.run(1, &["SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE"]).await;
     assert_eq!(isolation_of(&evs), Some(Some(Isolation::Serializable)), "{evs:?}");
     c.ok(2, "SET SESSION autocommit = 0").await;
+    // No transaction open: the count ends its own, nothing stays open.
     assert_eq!(count(&mut c, 3, counted.clone()).await.0, Ok(10));
     let evs = c.run(4, &["SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED"]).await;
-    assert_eq!(isolation_of(&evs), None, "the count's transaction stays SERIALIZABLE: {evs:?}");
-    let evs = c.run(5, &["COMMIT"]).await;
+    assert_eq!(isolation_of(&evs), Some(Some(Isolation::ReadCommitted)), "no transaction is open: {evs:?}");
+    // Inside an open transaction: the count reads there and the transaction keeps its level.
+    c.ok(5, "SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE").await;
+    c.ok(6, "START TRANSACTION").await;
+    assert_eq!(count(&mut c, 7, counted.clone()).await.0, Ok(10));
+    let evs = c.run(8, &["SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED"]).await;
+    assert_eq!(isolation_of(&evs), None, "the open transaction stays SERIALIZABLE: {evs:?}");
+    let evs = c.run(9, &["COMMIT"]).await;
     assert_eq!(isolation_of(&evs), Some(Some(Isolation::ReadCommitted)), "the next one's: {evs:?}");
-    // A level for the next transaction only: a count would use it up, so it is refused; the
-    // transaction that takes it has a level not known, and a count reads in it.
-    let evs = c.run(6, &["SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"]).await;
+    // A level for the next transaction only, then a count with no transaction open: refused, so
+    // as not to use that level up; which level the next transaction runs in is not said as known
+    // until it ends.
+    let evs = c.run(10, &["SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"]).await;
     assert_eq!(isolation_of(&evs), Some(None), "{evs:?}");
-    assert_eq!(count(&mut c, 7, counted.clone()).await.0, Err(DbError::NextTransactionSet));
-    c.ok(8, "START TRANSACTION").await;
-    assert_eq!(count(&mut c, 9, counted.clone()).await.0, Ok(10));
-    let evs = c.run(10, &["SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED"]).await;
+    assert_eq!(count(&mut c, 11, counted.clone()).await.0, Err(DbError::NextTransactionSet));
+    let evs = c.run(12, &["START TRANSACTION"]).await;
     assert_eq!(isolation_of(&evs), None, "still not known: {evs:?}");
-    let evs = c.run(11, &["COMMIT"]).await;
-    assert_eq!(isolation_of(&evs), Some(Some(Isolation::ReadUncommitted)), "{evs:?}");
+    let evs = c.run(13, &["COMMIT"]).await;
+    assert_eq!(isolation_of(&evs), Some(Some(Isolation::ReadCommitted)), "the session's again: {evs:?}");
 }
 
 /// A level that code of the server's may have changed (`EXECUTE`, here without the server
