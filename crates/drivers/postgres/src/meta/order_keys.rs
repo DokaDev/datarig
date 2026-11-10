@@ -18,11 +18,27 @@ use datarig_core::driver::keys::OrderKeys;
 use tokio_postgres::Client;
 use tokio_postgres::types::Type;
 
+/// The pick of the default class among `cands (oid, exact, preferred)`, as PostgreSQL's
+/// `GetDefaultOpClass` does: the class of exactly the type; else the only one whose type is the
+/// preferred type of the column type's category; else the only one; else none (`NULL`).
+macro_rules! pick {
+    () => {
+        "COALESCE(
+          (SELECT (pg_catalog.array_agg(c.oid))[1] FROM cands c WHERE c.exact HAVING pg_catalog.count(*) = 1),
+          (SELECT (pg_catalog.array_agg(c.oid))[1] FROM cands c WHERE c.preferred HAVING pg_catalog.count(*) = 1),
+          (SELECT (pg_catalog.array_agg(c.oid))[1] FROM cands c HAVING pg_catalog.count(*) = 1))"
+    };
+}
+
+/// [`pick!`] as text: the live tests run it on candidates of their own.
+pub const PICK: &str = pick!();
+
 /// One row per usable unique index of the table, or one row with NULL index columns when it has
 /// none; no row when there is no such table. Columns: whether reading it reads other tables'
 /// rows (inheritance children of a plain table), whether the index is the primary key, its key
 /// columns in order, whether they are all `NOT NULL`.
-pub const ORDER_KEYS: &str = "SELECT c.relhassubclass AND c.relkind = 'r', x.indisprimary, x.columns, x.not_null
+pub const ORDER_KEYS: &str = concat!(
+    "SELECT c.relhassubclass AND c.relkind = 'r', x.indisprimary, x.columns, x.not_null
 FROM pg_catalog.pg_class c
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 LEFT JOIN LATERAL (
@@ -38,11 +54,9 @@ LEFT JOIN LATERAL (
   -- Every key column found (an expression's place, 0, has none), each compared as an ORDER BY
   -- of the column compares it: in the column's collation, with the operator class an ORDER BY
   -- picks for its type (a key unique only under another collation or class proves nothing).
-  -- The class is picked as the server picks a default one: of the type with its domains
-  -- resolved, the btree default class for exactly that type; only when it has none, the class
-  -- of `anyenum` for an enum or `anyarray` for an array, else the default class of a type it
-  -- converts to implicitly without a function (one, or of several its category's preferred
-  -- type's). Anything else (a range, no single class) is not taken as the same order.
+  -- The class is picked as the server picks a default one ([`PICK`]) among the classes the
+  -- type, its domains resolved, is binary compatible with. Anything else (a range, no single
+  -- class) is not taken as the same order.
   HAVING pg_catalog.count(*) = i.indnkeyatts
     AND pg_catalog.bool_and(i.indcollation[k.k] = a.attcollation AND EXISTS (
       WITH RECURSIVE dom (t, base) AS (
@@ -56,29 +70,29 @@ LEFT JOIN LATERAL (
       )
       SELECT 1 FROM dom b
       JOIN pg_catalog.pg_type bt ON bt.oid = b.t
-      WHERE b.base = 0 AND i.indclass[k.k] = COALESCE(
-        (SELECT d.oid FROM defaults d WHERE d.opcintype = b.t),
-        -- An enum or an array: the class of `anyenum` or `anyarray` (the server's polymorphic
-        -- rule, not a cast). Ranges stay without one (not taken as the same order).
-        (SELECT d.oid FROM defaults d WHERE bt.typtype = 'e' AND d.opcintype = 'pg_catalog.anyenum'::pg_catalog.regtype),
-        (SELECT d.oid FROM defaults d
-         WHERE bt.typelem <> 0 AND bt.typlen = -1 AND bt.typcategory = 'A'
-           AND d.opcintype = 'pg_catalog.anyarray'::pg_catalog.regtype),
-        -- Else a type it converts to implicitly without a function: the only one, or of
-        -- several the preferred type of its own category (varchar converts to text and bpchar
-        -- alike, text is the strings' preferred type; regclass to oid and integer, oid is the
-        -- numbers' preferred type).
-        (SELECT (pg_catalog.array_agg(d.oid))[1] FROM defaults d
-         JOIN pg_catalog.pg_cast cs ON cs.castsource = b.t AND cs.casttarget = d.opcintype
-           AND cs.castmethod = 'b' AND cs.castcontext = 'i'
-         HAVING pg_catalog.count(*) = 1),
-        (SELECT (pg_catalog.array_agg(d.oid))[1] FROM defaults d
-         JOIN pg_catalog.pg_cast cs ON cs.castsource = b.t AND cs.casttarget = d.opcintype
-           AND cs.castmethod = 'b' AND cs.castcontext = 'i'
-         JOIN pg_catalog.pg_type pt ON pt.oid = d.opcintype AND pt.typispreferred AND pt.typcategory = bt.typcategory
-         HAVING pg_catalog.count(*) = 1))))
+      WHERE b.base = 0 AND i.indclass[k.k] = (
+        -- Every default btree class the base type is binary compatible with, as the server
+        -- collects them: its own, the polymorphic one an enum (`anyenum`) or an array
+        -- (`anyarray`) matches, and those of types it converts to implicitly without a
+        -- function. Ranges match none here (not taken as the same order).
+        WITH cands (oid, exact, preferred) AS (
+          SELECT d.oid, d.opcintype = b.t, pt.typispreferred AND pt.typcategory = bt.typcategory
+          FROM defaults d JOIN pg_catalog.pg_type pt ON pt.oid = d.opcintype
+          WHERE d.opcintype = b.t
+             OR (bt.typtype = 'e' AND d.opcintype = 'pg_catalog.anyenum'::pg_catalog.regtype)
+             OR (bt.typelem <> 0 AND bt.typlen = -1 AND bt.typcategory = 'A'
+                 AND d.opcintype = 'pg_catalog.anyarray'::pg_catalog.regtype)
+             OR EXISTS (SELECT 1 FROM pg_catalog.pg_cast cs
+                        WHERE cs.castsource = b.t AND cs.casttarget = d.opcintype
+                          AND cs.castmethod = 'b' AND cs.castcontext = 'i')
+        )
+        SELECT ",
+    pick!(),
+    "
+      )))
 ) x ON true
-WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'f', 'v', 'm')";
+WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'f', 'v', 'm')"
+);
 
 /// One row of [`ORDER_KEYS`]: `(inherited, primary, columns, all NOT NULL)`.
 type RawRow = (bool, Option<bool>, Option<Vec<String>>, Option<bool>);
@@ -124,13 +138,11 @@ mod tests {
         for part in [
             "i.indcollation[k.k] = a.attcollation",
             "WHERE m.amname = 'btree' AND d.opcdefault",
-            "(SELECT d.oid FROM defaults d WHERE d.opcintype = b.t)",
+            "WITH cands (oid, exact, preferred) AS (",
             "AND cs.castmethod = 'b' AND cs.castcontext = 'i'",
-            "pt.typcategory = bt.typcategory",
             "'pg_catalog.anyenum'::pg_catalog.regtype",
             "'pg_catalog.anyarray'::pg_catalog.regtype",
-            "pg_catalog.count(*) = 1",
-            "pt.typispreferred",
+            "pt.typispreferred AND pt.typcategory = bt.typcategory",
             "ty.typbasetype",
             "i.indimmediate AND i.indisvalid",
             "i.indpred IS NULL AND i.indexprs IS NULL",
@@ -138,6 +150,9 @@ mod tests {
         ] {
             assert!(ORDER_KEYS.contains(part), "{part}");
         }
+        // One pick, after every candidate is collected (no class of a kind decided first).
+        assert_eq!(ORDER_KEYS.matches(PICK).count(), 1);
+        assert_eq!(ORDER_KEYS.matches("COALESCE").count(), 1);
         // Nothing that opens the relation.
         for f in ["pg_get_", "::regclass", "::pg_catalog.regclass", "pg_relation_size", "pg_total_relation_size"] {
             assert!(!ORDER_KEYS.contains(f), "{f}");

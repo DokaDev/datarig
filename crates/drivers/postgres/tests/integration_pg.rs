@@ -914,6 +914,36 @@ async fn table_structure_never_waits_for_a_lock() {
     assert!(structure(ask(Some("t")).await).0.is_ok());
 }
 
+/// The default class of a key column is picked among every class its type is binary
+/// compatible with as the server picks it (`GetDefaultOpClass`): exactly the type's; else the
+/// only one of the preferred type of its category, also when a polymorphic class is a
+/// candidate too; else the only one; else none. Candidates are written out here, as the
+/// catalog read collects them (a type with its own extra compatible classes needs C
+/// functions to make).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_default_class_is_picked_as_the_server_picks() {
+    use datarig_driver_postgres::catalog_sql::ORDER_KEY_CLASS_PICK;
+    let Some(url) = pg_url("the_default_class_is_picked_as_the_server_picks") else { return };
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    let mut n = 0;
+    let mut pick = async |cands: &str| {
+        n += 1;
+        let sql =
+            format!("WITH cands (oid, exact, preferred) AS (VALUES {cands}) SELECT ({ORDER_KEY_CLASS_PICK})::text");
+        rows_of(q.run(n, &sql).await)[0][0].clone()
+    };
+    let c = |oid: u32, exact: bool, preferred: bool| format!("({oid}::oid, {exact}, {preferred})");
+    let set = |xs: &[String]| xs.join(", ");
+    // Exactly the type's wins over everything.
+    assert_eq!(pick(&set(&[c(1, false, true), c(2, true, false), c(3, false, false)])).await.as_deref(), Some("2"));
+    // A preferred candidate wins over a polymorphic one (no early polymorphic choice).
+    assert_eq!(pick(&set(&[c(10, false, false), c(11, false, true)])).await.as_deref(), Some("11"));
+    // Two preferred: none; one compatible alone: it; two, none preferred: none.
+    assert_eq!(pick(&set(&[c(20, false, true), c(21, false, true)])).await, None);
+    assert_eq!(pick(&set(&[c(30, false, false)])).await.as_deref(), Some("30"));
+    assert_eq!(pick(&set(&[c(40, false, false), c(41, false, false)])).await, None);
+}
+
 /// The keys of a table for a total order are read from the catalog only: while another
 /// session holds the table in `ACCESS EXCLUSIVE` mode (an open transaction's `LOCK TABLE`), or
 /// waits for that lock behind a reader, the read answers at once with the keys, and the

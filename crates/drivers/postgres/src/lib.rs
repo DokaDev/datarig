@@ -43,6 +43,7 @@ pub use query::count_savepoint;
 /// API.
 #[doc(hidden)]
 pub mod catalog_sql {
+    pub use crate::meta::order_keys::PICK as ORDER_KEY_CLASS_PICK;
     pub use crate::meta::structure::SQL as TABLE_STRUCTURE;
     pub use crate::meta::{BEGIN_READ, SCHEMA_OBJECTS};
 }
