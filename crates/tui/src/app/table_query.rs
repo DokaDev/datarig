@@ -1518,9 +1518,20 @@ impl App {
             Some(LineAhead::NotShown) => return self.flash(Notice::new(Label::TableSortNotShown, Level::Warning)),
             None => {}
         }
-        let Some(tq) = self.table_query_mut(id) else { return };
+        let d = self.tab_dialect(id);
+        let Some(tq) = self.table_query(id) else { return };
         let base = tq.shown.clone().unwrap_or_else(|| tq.applied().clone());
         let q = Query { order: query::sort_column(&base.order, &name, step), ..base };
+        // The order goes into the filter line, which is one line: a name with a line break
+        // would not read back as the same name there.
+        let user: Vec<_> = q.order.iter().filter(|k| k.origin == query::KeyOrigin::User).cloned().collect();
+        if !crate::widgets::text_input::TextInput::holds(&query::order_text(&user, d)) {
+            let held = |k: &&query::OrderKey| crate::widgets::text_input::TextInput::holds(&k.col);
+            let column = user.iter().find(|k| !held(k)).map_or(name, |k| k.col.clone());
+            let column = crate::text::escape_controls(&column);
+            return self.flash(Notice::new(Msg::TableSortName { column }, Level::Warning));
+        }
+        let Some(tq) = self.table_query_mut(id) else { return };
         tq.sorted = Some(q.clone());
         self.table_run(id, q);
     }

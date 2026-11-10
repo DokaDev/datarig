@@ -35,6 +35,9 @@ pub struct TextInput {
 
 pub const MASK: &str = "•";
 
+/// What an input of one line does not hold: each is put in as a space.
+const LINE_BREAKS: [char; 2] = ['\n', '\r'];
+
 impl TextInput {
     pub fn new(text: &str) -> Self {
         let mut t = Self::default();
@@ -56,9 +59,14 @@ impl TextInput {
         self.cursor
     }
 
-    /// Replace the content; cursor goes to the end.
+    /// Whether `text` is held as it is ([`TextInput::set`] puts a space for a line break).
+    pub fn holds(text: &str) -> bool {
+        !text.contains(LINE_BREAKS)
+    }
+
+    /// Replace the content (a line break becomes a space); cursor goes to the end.
     pub fn set(&mut self, text: &str) {
-        self.text = text.replace(['\n', '\r'], " ");
+        self.text = text.replace(LINE_BREAKS, " ");
         self.cursor = self.len();
         self.scroll = 0;
     }
@@ -83,7 +91,7 @@ impl TextInput {
         if range.start > range.end || !starts.contains(&range.start) || !starts.contains(&range.end) {
             return;
         }
-        let s = s.replace(['\n', '\r'], " ");
+        let s = s.replace(LINE_BREAKS, " ");
         self.text.replace_range(range.clone(), &s);
         self.cursor = self.text[..range.start + s.len()].graphemes(true).count();
     }

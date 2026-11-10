@@ -129,7 +129,9 @@ the reason, for a value that is not shown whole (as a copy as SQL judges it), bi
 KiB, a type whose comparison datarig does not know (`json`, MySQL's JSON, geometry, most types of
 your own; PostgreSQL's `jsonb` and arrays offer equality only), or more than 1000 cells. A new row,
 a cell with an edit on it or cells of several columns give no menu. On a query's results there is
-none either: filter them in the statement.
+none either: filter them in the statement. A column whose name holds a line break is neither
+filtered by value nor sorted from the grid: the filter line holds one line, and would not hold the
+name as it is.
 
 From the grid, `s` (or `Space r s`) sorts by the cursor's column alone: the first press sorts
 going up, the second going down, the third takes the order away. `S` (or `Space r S`) adds the

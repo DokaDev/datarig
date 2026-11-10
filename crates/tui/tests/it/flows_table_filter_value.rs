@@ -720,3 +720,63 @@ fn a_mysql_value_with_line_breaks_runs_as_the_line_shows_it() {
         clear_with(&mut h, cols(), rows());
     }
 }
+
+/// A column whose name holds a line break, which the one-line filter line cannot hold as it is:
+/// every entry of `F` on it is dimmed with why, and `s` / `S` on it are refused, said; nothing
+/// is sent and the line stays as it was. The column next to it named with a space (what the line
+/// would have turned the other name into) filters and sorts as usual.
+#[test]
+fn a_column_named_with_a_line_break_is_neither_filtered_nor_sorted() {
+    let mut h = users();
+    let cols = vec![
+        col("id", "int8", ValueKind::Integer),
+        col("a\nb", "text", ValueKind::Text),
+        col("a b", "text", ValueKind::Text),
+    ];
+    let s = |v: &str| Some(v.to_string());
+    clear_with(&mut h, cols, vec![vec![s("1"), s("x"), s("y")], vec![s("2"), None, None]]);
+    use datarig_tui::app::filter_value::ByValue as B;
+    for (row, by) in [(0, B::Eq), (1, B::IsNull)] {
+        at(&mut h, row, 1);
+        h.keys("F");
+        assert!(menu_open(&h), "{}", flashed(&h));
+        let items = lines(&h).len() - 1;
+        let dimmed = h.app.menu_dimmed_rows();
+        assert_eq!(dimmed.len(), items, "every entry dimmed: {dimmed:?}");
+        assert!(dimmed.iter().all(|(_, why)| why == "name not one line"), "{dimmed:?}");
+        let first = dimmed[0].0.to_string();
+        let notice = h.app.menu_dimmed_notice(&first).expect("dimmed").render(&h.app.i18n).to_string();
+        assert!(notice.contains("holds a line break"), "{notice}");
+        pick(&mut h, by);
+        assert!(runs(&mut h).is_empty(), "nothing runs");
+        assert_eq!(where_text(&h), "");
+        if menu_open(&h) {
+            h.key(KeyCode::Esc);
+        }
+    }
+    for keys in ["s", "S"] {
+        at(&mut h, 0, 1);
+        h.keys(keys);
+        assert!(runs(&mut h).is_empty(), "{keys}: nothing sent");
+        assert!(flashed(&h).contains("holds a line break"), "{keys}: {}", flashed(&h));
+        let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+        assert_eq!(tq.line.field(Field::Order).text(), "", "{keys}");
+        assert!(tq.draft.order.is_empty(), "{keys}");
+    }
+    // The column named with a space: as usual.
+    assert_eq!(filter(&mut h, 0, 2, "= 'y'"), vec![vec![format!(r#"{ALL} WHERE ("a b" = 'y')"#)]]);
+    assert_eq!(where_text(&h), r#""a b" = 'y'"#);
+    page_with(
+        &mut h,
+        vec![
+            col("id", "int8", ValueKind::Integer),
+            col("a\nb", "text", ValueKind::Text),
+            col("a b", "text", ValueKind::Text),
+        ],
+        vec![vec![s("1"), s("x"), s("y")]],
+    );
+    h.sent();
+    at(&mut h, 0, 2);
+    h.keys("s");
+    assert_eq!(runs(&mut h), vec![vec![format!(r#"{ALL} WHERE ("a b" = 'y') ORDER BY "a b" ASC"#)]]);
+}

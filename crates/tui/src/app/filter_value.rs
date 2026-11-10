@@ -23,6 +23,7 @@ use super::table_query::{LineAhead, filter_text, refusal_why};
 use super::*;
 use crate::widgets::filter_line::FIELD_CAP;
 use crate::widgets::grid::Shape;
+use crate::widgets::text_input::TextInput;
 use datarig_core::driver::{ArrayElement, ColumnMeta, ReadIn, ValueKind};
 use datarig_core::export;
 use datarig_core::query::{self, CaseMode, CmpOp, Cond, Filter, Query, RenderError, Value};
@@ -198,10 +199,13 @@ impl App {
         }
         let Some(tq) = self.table_query(id) else { return };
         let (Some(target), Some(shown)) = (self.table_target(id), tq.shown.clone()) else { return };
+        // Only a text the line holds as it is runs: the line shows what runs.
+        if !TextInput::holds(&text) {
+            return self.flash(Notice::new(Label::TableFilterByValueNotOneLine, Level::Warning));
+        }
         let recognised = query::recognise(&text, &target);
         let Some(tq) = self.table_query_mut(id) else { return };
         tq.line.where_.set(&text);
-        debug_assert_eq!(tq.line.where_.text(), text, "the line holds the text that runs");
         tq.draft = Query { filter: Some(Filter { text, recognised }), ..shown };
         tq.refusal = None;
         tq.line.focus = None;
@@ -254,8 +258,17 @@ impl App {
         let column = m.name.clone();
         let cells = rows.len();
         let base = filter_text(shown).unwrap_or_default();
+        // The filter line is one line: a name with a line break would not read back as the
+        // same name there (nor run as the line shows it).
+        let not_one_line = || {
+            let n = Msg::TableFilterByValueName { column: crate::text::escape_controls(&column) };
+            Off::new(Label::TableFilterByValueOffName, Notice::new(n, Level::Warning))
+        };
         // The filter text of `c`, or why not.
         let text_of = |c: &Cond| -> Result<String, Off> {
+            if !TextInput::holds(&column) {
+                return Err(not_one_line());
+            }
             let cond = query::render(c, &target).map_err(|e| match e {
                 RenderError::CaseInsensitiveRefused(_) => {
                     let collation = target.column(&column).and_then(|f| f.collation.clone());
@@ -282,6 +295,7 @@ impl App {
             })?;
             match text.len() > FIELD_CAP {
                 true => Err(Off::new(Label::TableFilterByValueOffTooLong, warn(Label::TableFilterByValueTooLong))),
+                false if !TextInput::holds(&text) => Err(not_one_line()),
                 false => Ok(text),
             }
         };

@@ -2796,3 +2796,81 @@ async fn contains_is_offered_only_where_the_collation_is_known_deterministic() {
     drop(app);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A column whose name holds a line break, next to one whose name has a space there: the filter
+/// line (one line) cannot hold the first name as it is, so `F` on it offers every entry dimmed
+/// and `s` / `S` on it are refused; nothing is sent. The second filters and sorts as usual, and
+/// reads back its rows. Makes schema `zz_it_lf_<pid>` and drops it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_column_named_with_a_line_break_is_neither_filtered_nor_sorted() {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::filter_value::ByValue as B;
+    let Some(url) = pg_url("a_column_named_with_a_line_break_is_neither_filtered_nor_sorted") else { return };
+    let schema = format!("zz_it_lf_{}", std::process::id());
+    let _guard = SchemaGuard { url: url.clone(), schema: schema.clone() };
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE TABLE {s}.zz_names (id int PRIMARY KEY, \"a\nb\" text, \"a b\" text)"),
+        format!("INSERT INTO {s}.zz_names VALUES (1, 'x', 'y'), (2, 'y', 'x')"),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let dir = std::env::temp_dir().join(format!("datarig-it-lf-{}", std::process::id()));
+    let (mut app, mut rx) = table_tab_app(&url, &schema, "zz_names", &dir);
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 2).await;
+    let datarig_tui::app::Results::Rows(rs) = &app.tab().results else { panic!("no rows") };
+    let lf = rs.columns.iter().position(|c| c.meta.name == "a\nb").expect("the column");
+    let held = held_column(&app, 0);
+    let row = held.iter().position(|v| v.as_deref() == Some("1")).unwrap();
+    let g = &mut app.tab_mut().grid;
+    (g.row, g.col, g.anchor) = (row, lf, None);
+    app.focus = Focus::Results;
+    let qid = app.tab().exec.query_id;
+    press(&mut app, 'F');
+    let m = app.overlays.menu().expect("the filter menu");
+    let items: Vec<_> = m
+        .lines
+        .iter()
+        .filter_map(|l| match l {
+            datarig_tui::app::menu::MenuLine::Item(i) => Some(*i),
+            _ => None,
+        })
+        .collect();
+    assert!(!items.is_empty());
+    for i in &items {
+        let why = m.off_of(*i).map(|o| o.notice.render(&app.i18n).to_string());
+        assert!(why.as_deref().is_some_and(|w| w.contains("holds a line break")), "{i:?}: {why:?}");
+    }
+    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+    for key in ['s', 'S'] {
+        press(&mut app, key);
+        assert_eq!(app.tab().exec.query_id, qid, "{key}: nothing sent");
+        let tq = app.tab().doc.table_query.as_ref().unwrap();
+        assert!(tq.draft.order.is_empty() && tq.line.order.text().is_empty(), "{key}");
+    }
+    // The column named with a space: filtered and sorted, its own rows read back.
+    let (got, ran) = by_value(&mut app, &mut rx, &["1"], "a b", B::Eq).await;
+    assert_eq!(ran, "\"a b\" = 'y'");
+    assert_eq!(got, ["1"]);
+    let datarig_tui::app::Results::Rows(rs) = &app.tab().results else { panic!("no rows") };
+    let sp = rs.columns.iter().position(|c| c.meta.name == "a b").expect("the column");
+    app.tab_mut().grid.col = sp;
+    press(&mut app, 's');
+    pump(&mut app, &mut rx, 30, |a| {
+        idle(a, 0)
+            && a.tab()
+                .doc
+                .table_query
+                .as_ref()
+                .is_some_and(|q| q.shows_applied() && q.shown.as_ref().is_some_and(|s| !s.order.is_empty()))
+    })
+    .await;
+    let tq = app.tab().doc.table_query.as_ref().unwrap();
+    assert!(tq.failure().is_none());
+    let keys: Vec<_> = tq.shown.as_ref().unwrap().order.iter().map(|k| k.col.as_str()).collect();
+    assert_eq!(keys.first().copied(), Some("a b"));
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
