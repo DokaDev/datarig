@@ -27,7 +27,7 @@
 //! Patterns are escaped with `!` and written with `ESCAPE '!'`: a backslash would read
 //! differently under MySQL's `NO_BACKSLASH_ESCAPES`.
 
-use super::{CaseMode, CmpOp, ColumnFacts, ColumnKind, Cond, Target, Value};
+use super::{BarRefusal, CaseMode, CmpOp, ColumnFacts, ColumnKind, Cond, Target, Value};
 use crate::export::{negative_zero, sql_number};
 use crate::sql::dialect::{Dialect, LiteralOpen};
 
@@ -447,19 +447,27 @@ fn text_literal(t: &Target, s: &str) -> String {
 /// Filter text `base` with condition `cond` (as [`render`] writes one) added to it: `cond` alone
 /// when `base` is blank, else `base AND cond`. `base` is put in parentheses first unless every
 /// operator outside its own parentheses binds tighter than `AND` (read with the dialect's lexer):
-/// an `OR`, an `XOR`, a `|` (MySQL's `||` is `OR` unless `PIPES_AS_CONCAT`), an assignment, a comment, a
-/// statement's end or parentheses that do not pair up there all wrap it, so that the condition
-/// added never changes what `base` means. Blanks at the end of `base` are left out; the rest of
-/// it is kept as written.
-pub fn and_filter(base: &str, cond: &str, d: Dialect) -> String {
-    let base = base.trim_end();
-    if base.trim().is_empty() {
-        return cond.to_string();
+/// an `OR`, an `XOR`, a `|` (MySQL's `||` is `OR` unless `PIPES_AS_CONCAT`) or an assignment
+/// wraps it, so that the condition added never changes what `base` means.
+///
+/// `base` must stand on its own as one condition: one that the filter's lexical check refuses (a
+/// parenthesis that closes one it did not open or is left open, a comment, a statement's end, a
+/// string left open, a text read otherwise under another server setting) is refused with why,
+/// never put in parentheses (which could make it read as another condition). Only the blanks
+/// the dialect's lexer reads as blanks are left out at its end; the rest of it is kept as
+/// written (PostgreSQL reads a space outside ASCII as part of a name).
+pub fn and_filter(base: &str, cond: &str, d: Dialect) -> Result<String, BarRefusal> {
+    use crate::sql::lexer::{Tok, lex_in};
+    let end = lex_in(base, d).iter().rev().find(|t| t.kind != Tok::Whitespace).map_or(0, |t| t.end.min(base.len()));
+    let base = &base[..end];
+    if base.is_empty() {
+        return Ok(cond.to_string());
     }
-    match plain_and_chain(base, d) {
+    super::check::lexical(base, d)?;
+    Ok(match plain_and_chain(base, d) {
         true => format!("{base} AND {cond}"),
         false => format!("({base}) AND {cond}"),
-    }
+    })
 }
 
 /// Whether `AND` written after `text` takes the whole of it as its left operand: nothing outside

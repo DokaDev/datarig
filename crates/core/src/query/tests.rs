@@ -654,8 +654,8 @@ fn render_like_patterns_read_the_same_in_every_mysql_mode() {
 
 #[test]
 fn and_filter_appends_or_wraps_first() {
-    let pg = |base: &str| and_filter(base, "id = 1", Dialect::Postgres);
-    let my = |base: &str| and_filter(base, "id = 1", MY);
+    let pg = |base: &str| and_filter(base, "id = 1", Dialect::Postgres).unwrap();
+    let my = |base: &str| and_filter(base, "id = 1", MY).unwrap();
     // Nothing yet: the condition is the text.
     assert_eq!(pg(""), "id = 1");
     assert_eq!(pg("   "), "id = 1");
@@ -680,19 +680,52 @@ fn and_filter_appends_or_wraps_first() {
     assert_eq!(my("@v := 1"), "(@v := 1) AND id = 1");
     assert_eq!(my("a = 1 && b = 2"), "a = 1 && b = 2 AND id = 1");
     assert_eq!(my("`or` = 1"), "`or` = 1 AND id = 1");
-    // Anything that could cut off or escape what follows is wrapped (and refused by the checks).
-    assert_eq!(pg("a = 1 -- x"), "(a = 1 -- x) AND id = 1");
-    assert_eq!(pg("a = 1) OR (b = 2"), "(a = 1) OR (b = 2) AND id = 1");
-    assert_eq!(pg("(a = 1"), "((a = 1) AND id = 1");
     // A condition added to a chain is still one: the next one appends again.
-    let twice = and_filter(&pg("a = 1 OR b = 2"), "c = 3", Dialect::Postgres);
+    let twice = and_filter(&pg("a = 1 OR b = 2"), "c = 3", Dialect::Postgres).unwrap();
     assert_eq!(twice, "(a = 1 OR b = 2) AND id = 1 AND c = 3");
     // What it wrote keeps its meaning as a filter: it passes the bar's checks.
     let t = target(Dialect::Postgres);
     let c = Cond::In { col: "id".into(), values: vec![num("1"), Value::Null], negated: false };
-    let text = and_filter("id > 0 OR name IS NULL", &render(&c, &t).unwrap(), Dialect::Postgres);
+    let text = and_filter("id > 0 OR name IS NULL", &render(&c, &t).unwrap(), Dialect::Postgres).unwrap();
     assert_eq!(text, "(id > 0 OR name IS NULL) AND (id IN (1) OR id IS NULL)");
     assert_eq!(check(Dialect::Postgres, &text, false), Ok(FilterVerdict::Clear));
+}
+
+/// Only the blanks the dialect's lexer reads as blanks are left out at the end of the filter:
+/// PostgreSQL reads any character outside ASCII as part of a name, so a name that ends in a
+/// no-break space or an ideographic space keeps it (it is another column than the one without).
+#[test]
+fn and_filter_keeps_the_end_of_a_name_the_server_reads() {
+    let pg = |base: &str| and_filter(base, "id = 1", Dialect::Postgres).unwrap();
+    for space in ['\u{00A0}', '\u{3000}'] {
+        let base = format!("paid{space}");
+        assert_eq!(pg(&base), format!("paid{space} AND id = 1"), "{space:?}");
+        assert_eq!(pg(&format!("{base} \t\n")), format!("paid{space} AND id = 1"), "{space:?}");
+        assert_eq!(pg(&format!("a = 1 OR {base}")), format!("(a = 1 OR {base}) AND id = 1"), "{space:?}");
+    }
+    // ASCII blanks at the end are left out on both dialects.
+    assert_eq!(pg("a = 1 \t\r\n"), "a = 1 AND id = 1");
+    assert_eq!(and_filter("a = 1  ", "id = 1", MY).unwrap(), "a = 1 AND id = 1");
+}
+
+/// A filter that does not stand on its own as one condition (a parenthesis that closes one it
+/// did not open or is left open, a comment, a statement's end, a string left open) is refused,
+/// said why, and never put in parentheses (which could make it read as another condition).
+#[test]
+fn and_filter_refuses_a_filter_that_does_not_stand_alone() {
+    let refused = |d: Dialect, base: &str| match and_filter(base, "id = 1", d) {
+        Err(BarRefusal::Lexical { problem, .. }) => problem,
+        other => panic!("{base:?}: {other:?}"),
+    };
+    for d in [Dialect::Postgres, MY] {
+        assert_eq!(refused(d, "a = 1) OR (b = 2"), LexProblem::ClosesOutside);
+        assert_eq!(refused(d, "(a = 1"), LexProblem::Unclosed);
+        assert_eq!(refused(d, "a = 1 -- x"), LexProblem::Comment);
+        assert_eq!(refused(d, "a = 1 /* x */"), LexProblem::Comment);
+        assert_eq!(refused(d, "a = 1; DROP TABLE t"), LexProblem::Semicolon);
+        assert_eq!(refused(d, "name = 'x"), LexProblem::Unterminated);
+    }
+    assert_eq!(refused(MY, "a = 1 # x"), LexProblem::Comment);
 }
 
 // recognise

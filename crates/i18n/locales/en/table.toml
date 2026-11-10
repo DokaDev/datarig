@@ -97,6 +97,7 @@
 "table.filter.by_value.off.too_many" = "too many cells"
 "table.filter.by_value.off.not_whole" = "not shown whole"
 "table.filter.by_value.off.too_big" = "over 64 KiB"
+"table.filter.by_value.off.base" = "filter shown refused"
 "table.filter.by_value.no_rows" = "Not filtered by value: the tab holds no rows of its table yet"
 "table.filter.by_value.unapplied" = "Not filtered by value: the filter line has changes not applied (Enter applies them, Esc puts them back)"
 "table.filter.by_value.new_rows" = "Not filtered by value: a new row is not in the table yet"
@@ -110,3 +111,4 @@
 "table.filter.by_value.type" = "Not filtered by value: how values of {ty} (column “{column}”) compare is not known; write the condition in the filter line (f)"
 "table.filter.by_value.order" = "Not filtered by value: values of {ty} (column “{column}”) compare for equality only"
 "table.filter.by_value.nondeterministic" = "Not filtered by value: PostgreSQL refuses ILIKE on the nondeterministic collation {collation}"
+"table.filter.by_value.base" = "Not filtered by value: the filter of the rows shown does not take a condition after it: {why}"

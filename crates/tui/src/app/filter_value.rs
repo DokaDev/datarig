@@ -17,7 +17,7 @@
 //! line holds edits not applied, nothing is added to it: they are applied or put back first.
 
 use super::menu::{MenuItem, MenuTarget, Off};
-use super::table_query::{Field, filter_text};
+use super::table_query::{Field, filter_text, refusal_why};
 use super::*;
 use crate::widgets::filter_line::FIELD_CAP;
 use crate::widgets::grid::Shape;
@@ -253,7 +253,14 @@ impl App {
                 }
                 _ => Off::new(Label::TableFilterByValueOffType, self.by_value_type_notice(m)),
             })?;
-            let text = query::and_filter(base, &cond, d);
+            // The filter shown is one condition (it ran): refused, never repaired, when not.
+            let text = query::and_filter(base, &cond, d).map_err(|r| {
+                let why = refusal_why(&self.i18n, &r);
+                Off::new(
+                    Label::TableFilterByValueOffBase,
+                    Notice::new(Msg::TableFilterByValueBase { why }, Level::Warning),
+                )
+            })?;
             match text.len() > FIELD_CAP {
                 true => Err(Off::new(Label::TableFilterByValueOffTooLong, warn(Label::TableFilterByValueTooLong))),
                 false => Ok(text),

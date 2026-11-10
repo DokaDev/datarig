@@ -95,6 +95,7 @@
 "table.filter.by_value.off.too_many" = "셀이 너무 많음"
 "table.filter.by_value.off.not_whole" = "온전히 보이지 않음"
 "table.filter.by_value.off.too_big" = "64 KiB 초과"
+"table.filter.by_value.off.base" = "보이는 필터 거부됨"
 "table.filter.by_value.no_rows" = "값으로 필터하지 않음: 탭에 아직 테이블의 행이 없습니다"
 "table.filter.by_value.unapplied" = "값으로 필터하지 않음: 필터 줄에 적용하지 않은 변경이 있습니다 (Enter로 적용, Esc로 되돌림)"
 "table.filter.by_value.new_rows" = "값으로 필터하지 않음: 새 행은 아직 테이블에 없습니다"
@@ -108,3 +109,4 @@
 "table.filter.by_value.type" = "값으로 필터하지 않음: {ty} 값(열 “{column}”)을 어떻게 비교하는지 알 수 없습니다. 필터 줄(f)에 조건을 직접 쓰세요"
 "table.filter.by_value.order" = "값으로 필터하지 않음: {ty} 값(열 “{column}”)은 같음만 비교합니다"
 "table.filter.by_value.nondeterministic" = "값으로 필터하지 않음: PostgreSQL은 비결정적 콜레이션 {collation}에서 ILIKE를 거부합니다"
+"table.filter.by_value.base" = "값으로 필터하지 않음: 보이는 행의 필터 뒤에 조건을 붙일 수 없습니다: {why}"
