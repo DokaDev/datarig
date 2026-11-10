@@ -15,3 +15,5 @@
 - When the server rejects the condition, the line marks it failed (and where the error is,
   when the server says), and the earlier rows stay, dimmed, marked as not the filter's answer.
   A cancelled run or a lost connection leaves them the same way.
+- The applied condition and order are kept with the workspace and with a closed tab brought
+  back; they return to the line without running and are checked again when the tab runs.

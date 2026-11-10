@@ -9,6 +9,7 @@
 
 use super::*;
 use datarig_core::fault::{ErrorLog, Fault, FaultKind, KeychainFault};
+use datarig_core::query::{Filter, KeyOrigin, Query, TableName};
 use datarig_core::scripts::{SaveError, ScriptStore};
 use datarig_core::workspace::{self, Acquired, ExplorerState, TabState, WorkspaceState};
 use datarig_i18n::io_reason;
@@ -110,6 +111,10 @@ impl App {
         }
         if loaded.duplicates > 0 {
             let msg = Msg::WorkspaceDuplicateTabs { count: loaded.duplicates };
+            self.notices.push(Notice::new(msg, Level::Warning));
+        }
+        if loaded.unread_queries > 0 {
+            let msg = Msg::WorkspaceQueriesUnread { count: loaded.unread_queries };
             self.notices.push(Notice::new(msg, Level::Warning));
         }
         // A later version's file: read, never written (neither is anything else of the
@@ -245,6 +250,13 @@ impl App {
             tab.pane = pane;
             // Its database (another database's table); its schema is the default.
             tab.context = datarig_core::driver::SessionContext { database: t.database.clone(), schema: None };
+            // Its filter and order back in the line, as applied and not run.
+            if t.filter.is_some() || !t.order.is_empty() || t.limit.is_some() {
+                let name = TableName { database: t.database.clone(), schema: schema.clone(), name: name.clone() };
+                let filter = t.filter.clone().map(|text| Filter { text, recognised: None });
+                let q = Query { filter, order: t.order.clone(), limit: t.limit, ..Query::table(name) };
+                tab.doc.table_query = Some(Box::new(super::table_query::TableQuery::restored(q)));
+            }
             return Some(tab);
         }
         if let (workspace::TabKind::Ddl, Some(object)) = (t.kind, &t.ddl) {
@@ -324,7 +336,8 @@ impl App {
         let tabs = self
             .tabs
             .iter()
-            .map(|t| TabState {
+            .map(|t| (t, t.doc.table_query.as_ref().map(|q| q.applied())))
+            .map(|(t, q)| TabState {
                 id: t.doc.console_id.clone(),
                 kind: match (&t.doc.table, &t.doc.script) {
                     _ if t.doc.ddl.is_some() => workspace::TabKind::Ddl,
@@ -347,6 +360,12 @@ impl App {
                 }),
                 database: t.context.database.clone(),
                 schema: t.context.schema.clone(),
+                // A table tab's query as its line holds it applied (never a text not applied).
+                filter: q.and_then(super::table_query::filter_text).map(str::to_string),
+                order: q
+                    .map(|q| q.order.iter().filter(|k| k.origin == KeyOrigin::User).cloned().collect())
+                    .unwrap_or_default(),
+                limit: q.and_then(|q| q.limit),
             })
             .collect();
         WorkspaceState {

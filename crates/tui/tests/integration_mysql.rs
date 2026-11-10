@@ -600,6 +600,9 @@ async fn a_syntax_error_in_a_table_filter_marks_the_text_mysql_quotes() {
         results: None,
         database: None,
         schema: None,
+        filter: None,
+        order: Vec::new(),
+        limit: None,
     };
     let ws =
         WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };

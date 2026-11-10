@@ -626,6 +626,9 @@ async fn a_restored_table_tab_pages_outside_any_user_transaction() {
         results: None,
         database: None,
         schema: None,
+        filter: None,
+        order: Vec::new(),
+        limit: None,
     };
     let ws =
         WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };
@@ -685,6 +688,9 @@ async fn a_server_error_in_a_table_filter_marks_where_it_points() {
         results: None,
         database: None,
         schema: None,
+        filter: None,
+        order: Vec::new(),
+        limit: None,
     };
     let ws =
         WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };

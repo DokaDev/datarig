@@ -104,6 +104,10 @@ When the server rejects the condition, the line marks it failed, underlined wher
 says the error is. The rows of the earlier query stay, dimmed, and the line under the grid says
 they are not the filter's answer; a cancelled run or a lost connection leaves them the same way.
 
+The condition and order you applied are kept with the workspace and with a closed tab you bring
+back (`Space t u`): they return to the line without running, and are checked again as above
+when the tab runs.
+
 ## The inspector
 
 `i` shows or hides the inspector next to the grid; `I` switches between its Row and Cell tabs.

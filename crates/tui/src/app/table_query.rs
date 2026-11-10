@@ -180,6 +180,13 @@ impl TableQuery {
         }
     }
 
+    /// Query `q` put back in a tab (the workspace restored, a closed tab reopened): applied in
+    /// the line, nothing run. The next run checks it as any other.
+    pub fn restored(q: Query) -> Self {
+        let query::Source::Table(table) = q.source.clone();
+        Self { draft: q, ..Self::new(table) }
+    }
+
     /// What the tab holds as applied: the query of the run sent last when it was its query,
     /// else the one of the rows it holds, else the draft (nothing run yet).
     pub fn applied(&self) -> &Query {

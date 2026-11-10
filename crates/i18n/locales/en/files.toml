@@ -93,6 +93,7 @@
 "workspace.consoles_missing" = { one = "{count} saved tab's console file was missing; it starts empty", other = "{count} saved tabs' console files were missing; they start empty" }
 "workspace.consoles_folder_unreadable" = "The console folder {path} could not be read ({error}); consoles that were not listed were not looked for"
 "workspace.duplicate_tabs" = { one = "{count} saved tab was left out: it listed the console of an earlier tab", other = "{count} saved tabs were left out: they listed the console of an earlier tab" }
+"workspace.queries_unread" = { one = "{count} table tab's filter, order or row cap could not be read: it is left out of the tab and kept in the file as it is", other = "{count} table tabs' filters, orders or row caps could not be read: they are left out of the tabs and kept in the file as they are" }
 "recover.title" = "Closed consoles"
 "recover.empty" = "No closed console in the trash"
 "recover.unreadable" = "cannot be read ({error})"

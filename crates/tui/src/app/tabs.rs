@@ -1054,6 +1054,8 @@ pub struct ClosedTab {
     pub trashed: Option<String>,
     /// A table tab's table.
     pub table: Option<TableRef>,
+    /// A table tab's query as its line held it applied (it comes back there, not run).
+    pub query: Option<datarig_core::query::Query>,
     /// A DDL tab's object.
     pub ddl: Option<datarig_core::driver::ddl::DdlObject>,
     /// A Monitor tab's interval.
@@ -1201,6 +1203,7 @@ impl TabManager {
             index,
             trashed: None,
             table: tab.doc.table.clone(),
+            query: tab.doc.table_query.as_ref().map(|q| q.applied().clone()),
             ddl: tab.doc.ddl.as_ref().map(|d| d.object.clone()),
             monitor: tab.doc.monitor.as_ref().map(|m| m.interval),
             pane: tab.pane,
@@ -1296,6 +1299,7 @@ impl TabManager {
             t.doc.script = c.script;
             t.doc.kept_profile = c.kept_profile;
             t.doc.table = c.table;
+            t.doc.table_query = c.query.map(|q| Box::new(super::table_query::TableQuery::restored(q)));
             t.pane = c.pane;
             t.context = c.context;
             // Not read again by itself: `r` reads it.
