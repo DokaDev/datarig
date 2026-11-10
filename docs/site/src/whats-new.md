@@ -3,6 +3,15 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.40.3 (2026-11-10)
+
+MySQL now reads the structure and the DDL of objects in databases whose names contain braces, and the security policy explains how to report a vulnerability privately.
+
+### Fixed
+
+- MySQL: the structure and the DDL of objects whose schema or database name contains braces are
+  read correctly.
+
 ## 0.40.2 (2026-11-09)
 
 Install now lists the packages for building datarig from source on Debian, Ubuntu, Fedora and Arch Linux, and the Monitor tab's Locks view reads many MySQL metadata lock waits faster. Otherwise datarig works as before: its code is reorganised for easier development.
