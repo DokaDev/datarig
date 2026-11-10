@@ -115,6 +115,12 @@ session's level stays as it is). So they read one snapshot without locking rows:
 `SERIALIZABLE` InnoDB would read every row with a shared lock, waiting for other sessions' writes
 and holding them up. Inside your own transaction they read there, at its level.
 
+`SET TRANSACTION` without `SESSION` (or `SET @@transaction_isolation = …`) sets your next
+transaction only, which the server does not report. Until a transaction starts or ends, an
+export, a row count and the check before running a statement again are refused with a note, so
+they never use that setting up: start your transaction and run them there, or run them again
+after it. A procedure or an executable comment may set it too, so they count the same way.
+
 The explorer and completion read in autocommit with `lock_wait_timeout = 2` and a 10-second
 `max_execution_time`: behind a waiting `ALTER TABLE` they give up after two seconds instead of
 queueing behind it. A read that opens a table's definition (`SHOW CREATE TABLE`) takes a

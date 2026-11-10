@@ -624,3 +624,88 @@ async fn without_autocommit_the_users_uncommitted_work_is_never_ended() {
         c.ok("SET autocommit = 1").await;
     }
 }
+
+/// Count with `sql`: the count, or why not.
+async fn counted(c: &mut Conn, sql: &str) -> Result<u64, DbError> {
+    c.id += 1;
+    let id = c.id;
+    c.session.send(DbCommand::Count { id, sql: sql.to_string() });
+    match c.wait(|e| matches!(e, DbEvent::Counted { id: i, .. } if *i == id), 30).await {
+        DbEvent::Counted { result, .. } => result,
+        _ => unreachable!(),
+    }
+}
+
+/// The allowlist's question alone: why not, if refused.
+async fn checked(c: &mut Conn, sql: &str) -> Result<(), DbError> {
+    c.id += 1;
+    let id = c.id;
+    c.session.send(DbCommand::CheckRepeat { id, sql: sql.to_string() });
+    match c.wait(|e| matches!(e, DbEvent::RepeatChecked { id: i, .. } if *i == id), 30).await {
+        DbEvent::RepeatChecked { result, .. } => result,
+        _ => unreachable!(),
+    }
+}
+
+/// A `SET TRANSACTION` without `SESSION` sets the next transaction only, which the server does
+/// not report: until a transaction starts or ends, a count, an export and the allowlist's
+/// question are refused, so they never use it up and the user's next transaction runs with it
+/// (at `SERIALIZABLE` its read takes shared locks). In every spelling, a procedure's or an
+/// executable comment's included, and for the access mode too; never after a `SET TRANSACTION`
+/// the server refused, nor after a `SET` that only reads the variable.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_next_transactions_own_settings_are_never_used_up() {
+    let Some((url, admin)) = urls("the_next_transactions_own_settings_are_never_used_up") else { return };
+    let t = numbers(&admin, "once", 10).await;
+    let mut c = Conn::open(&url, SessionRole::Query, "once").await;
+    let id: u64 = c.rows("SELECT CONNECTION_ID()").await[0][0].as_deref().unwrap().parse().unwrap();
+    let all = format!("SELECT * FROM {}", t.q());
+    let count = format!("SELECT COUNT(*) FROM (\n{all}\n) AS datarig_count");
+    // The locks the user's next transaction takes reading the table.
+    let next_reads_lock = async |c: &mut Conn| {
+        c.ok("START TRANSACTION").await;
+        c.rows(&format!("SELECT COUNT(*) FROM {}", t.q())).await;
+        let n = data_locks(&admin, id, &t.name).await;
+        c.ok("ROLLBACK").await;
+        n
+    };
+    assert_eq!(next_reads_lock(&mut c).await, 0, "REPEATABLE READ: no lock");
+    for set in [
+        "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE",
+        "SET @@transaction_isolation = 'SERIALIZABLE'",
+        "SET @@`transaction_isolation` = 'SERIALIZABLE'",
+        "/*!80000 SET TRANSACTION ISOLATION LEVEL SERIALIZABLE */",
+    ] {
+        c.ok(set).await;
+        assert_eq!(counted(&mut c, &count).await, Err(DbError::NextTransactionSet), "{set}");
+        assert_eq!(checked(&mut c, &all).await, Err(DbError::NextTransactionSet), "{set}");
+        for guard in [ExportGuard::Repeatable, ExportGuard::Confirmed, ExportGuard::Keyset] {
+            let (export, mut rx) = c.export(&all, guard, 2, 3);
+            assert!(drain(&mut rx).await.1.is_empty());
+            assert_eq!(c.exported(export).await.0, Err(DbError::NextTransactionSet), "{set} {guard:?}");
+        }
+        assert!(next_reads_lock(&mut c).await > 0, "{set}: the next transaction is SERIALIZABLE");
+        // Used up by that transaction: the app's reads go on, the transaction after it is at the
+        // session's level.
+        assert_eq!(counted(&mut c, &count).await, Ok(10), "{set}");
+        assert_eq!(next_reads_lock(&mut c).await, 0, "{set}");
+    }
+    // The access mode.
+    c.ok("SET TRANSACTION READ ONLY").await;
+    assert_eq!(counted(&mut c, &count).await, Err(DbError::NextTransactionSet));
+    c.ok("START TRANSACTION").await;
+    let insert = c.run(&format!("INSERT INTO {} VALUES (11, 'x')", t.q())).await;
+    assert!(matches!(insert, DbEvent::Failed { .. }), "the next transaction is read-only: {insert:?}");
+    c.ok("ROLLBACK").await;
+    // A COMMIT with none open clears them too.
+    c.ok("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE").await;
+    c.ok("COMMIT").await;
+    assert_eq!(counted(&mut c, &count).await, Ok(10));
+    assert_eq!(next_reads_lock(&mut c).await, 0);
+    // A `SET TRANSACTION` the server refused, and a `SET` that only reads the variable, set
+    // nothing.
+    let refused = c.run("SET TRANSACTION ISOLATION LEVEL NO_SUCH_LEVEL").await;
+    assert!(matches!(refused, DbEvent::Failed { .. }), "{refused:?}");
+    c.ok("SET @saved = @@transaction_isolation").await;
+    assert_eq!(counted(&mut c, &count).await, Ok(10));
+}

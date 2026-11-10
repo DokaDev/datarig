@@ -319,6 +319,12 @@ pub(crate) struct Tracked {
     /// at connect sets, until the server reports another).
     pub(crate) results_charset: Option<String>,
     pub(crate) connection_charset: Option<String>,
+    /// The next transaction has settings of its own, or may have, which the server does not
+    /// report: a statement set them, or may have, since a transaction last started or ended
+    /// (`query::sets_next_transaction`). A read of the app's own outside a transaction would
+    /// use them up, so it is refused while this holds. Cleared only when a transaction starts
+    /// or ends (a statement in autocommit may use them up too, which is not known).
+    pub(crate) next_once: bool,
 }
 
 impl Tracked {

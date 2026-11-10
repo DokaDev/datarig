@@ -200,6 +200,9 @@ struct State {
     /// what that code changes in the session (`SET time_zone`, `SET NAMES`, `SET sql_mode`) the
     /// server does not report, so the session asks once it ended ([`after`]).
     routine: bool,
+    /// The statement running now sets the next transaction's own settings, or may set them
+    /// ([`sets_next_transaction`]): once it ended the session takes it ([`Tracked::next_once`]).
+    sets_next: SetsNext,
     limit: Limit,
     tx: Tx,
     /// The request being served (a run, an `EndTx`, a count), whose id a server's end of the
@@ -429,6 +432,7 @@ pub(crate) async fn query_loop(
         mode,
         values,
         routine: false,
+        sets_next: SetsNext::No,
         limit: Limit { current: select_limit, user: None },
         tx: Tx::default(),
         request: 0,
@@ -895,6 +899,9 @@ async fn statement<'a>(
     }
     let was_open = s.tx.open;
     env.busy.store(true, Ordering::SeqCst);
+    // Only what is sent may set the next transaction's own settings: a statement refused before
+    // it was sent sets nothing.
+    s.sets_next = sets_next_transaction(sql, s.mode);
     let sent = halt!(link.guard(Some(env.killer), conn.query_iter(sql)).await, Some(reply));
     let mut qr = match sent {
         Ok(qr) => qr,
@@ -1154,6 +1161,7 @@ async fn after(
     // A connection that runs nothing more is not asked: what the statement did is answered all
     // the same, and the session ends after it.
     let routine = std::mem::take(&mut s.routine);
+    let sets_next = std::mem::take(&mut s.sets_next);
     if routine && link.tainted() {
         s.tracked.forget_values();
     } else if routine {
@@ -1222,6 +1230,11 @@ async fn after(
             }
         }
         s.tx.open = open;
+        // A transaction started or ended (a `COMMIT` or `ROLLBACK` with none open too): the
+        // settings the next one had of its own were used up or cleared.
+        if open != was_open || switches || (ok && begins_or_ends(sql, s.mode)) {
+            s.tracked.next_once = false;
+        }
         let autocommit = st.contains(StatusFlags::SERVER_STATUS_AUTOCOMMIT);
         if autocommit != s.tx.autocommit {
             s.tx.autocommit = autocommit;
@@ -1232,6 +1245,10 @@ async fn after(
         if s.tx.opening.is_none() || !env.failed.load(Ordering::SeqCst) {
             env.report(&mut s.tx, chained);
         }
+    }
+    // The statement set the next transaction's own settings, or may have.
+    if sets_next == SetsNext::Maybe || (ok && sets_next == SetsNext::Yes) {
+        s.tracked.next_once = true;
     }
     let writable = status.is_some_and(|st| {
         st.contains(StatusFlags::SERVER_STATUS_IN_TRANS) && !st.contains(StatusFlags::SERVER_STATUS_IN_TRANS_READONLY)
@@ -1853,6 +1870,95 @@ fn name_condition(names: &[String], d: Dialect) -> String {
     if cond.is_empty() { "FALSE".to_string() } else { cond.join(" OR ") }
 }
 
+/// Whether a statement sets settings of the next transaction only ([`sets_next_transaction`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SetsNext {
+    /// It does not.
+    #[default]
+    No,
+    /// It does, once it succeeded: `SET TRANSACTION …`, `SET @@transaction_isolation = …`.
+    Yes,
+    /// It may, whether it succeeded or not (code of the server's that may have run in part, or
+    /// text that is not read): a `CALL`, an `EXECUTE`, an executable comment `/*! … */`.
+    Maybe,
+}
+
+/// Whether `sql` sets settings of the next transaction only, which the server does not report:
+/// `SET TRANSACTION …` (no `SESSION` nor `GLOBAL` before `TRANSACTION`), or an assignment to a
+/// transaction variable by its `@@` name without a scope (`SET @@transaction_isolation = …`,
+/// `` @@`tx_read_only` ``; reading one, `SET @a = @@transaction_isolation`, sets nothing); or
+/// whether it may ([`SetsNext::Maybe`]). A stored function cannot: the statement that calls it
+/// is a transaction already.
+pub(crate) fn sets_next_transaction(sql: &str, mode: MySqlMode) -> SetsNext {
+    let toks: Vec<Token> = lex_in(sql, Dialect::MySql(mode)).into_iter().filter(|t| !t.is_trivia()).collect();
+    if toks.iter().any(|t| t.kind == Tok::ExecComment) {
+        return SetsNext::Maybe;
+    }
+    let word = |i: usize| toks.get(i).filter(|t| t.is_word()).map(|t| t.text(sql).to_ascii_uppercase());
+    match word(0).as_deref() {
+        Some("CALL" | "EXECUTE") => return SetsNext::Maybe,
+        Some("SET") => {}
+        _ => return SetsNext::No,
+    }
+    if word(1).as_deref() == Some("TRANSACTION") {
+        return SetsNext::Yes;
+    }
+    // The assignments' targets: right after `SET` or after a comma outside parentheses, up to
+    // the `=` (`:=`) that follows. A variable's name as written runs from its first `@` to what
+    // ends it: `` @@`name` `` lexes as an `@` and a variable, `@@session.name` as one variable.
+    let at = |t: &Token| t.kind == Tok::Variable || (t.kind == Tok::Op && t.text(sql) == "@");
+    let mut depth = 0i32;
+    let mut targets = vec![1];
+    for (i, tok) in toks.iter().enumerate().skip(1) {
+        match tok.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => depth -= 1,
+            Tok::Comma if depth == 0 => targets.push(i + 1),
+            _ => {}
+        }
+    }
+    let sets = targets.into_iter().any(|i| {
+        if !toks.get(i).is_some_and(at) {
+            return false;
+        }
+        let mut name = String::new();
+        let mut end = toks[i].start;
+        let mut next = toks.len();
+        for (j, n) in toks.iter().enumerate().skip(i) {
+            let part = at(n) || matches!(n.kind, Tok::Dot | Tok::Ident | Tok::Keyword | Tok::QuotedIdent);
+            if n.start != end || !part {
+                next = j;
+                break;
+            }
+            name.push_str(n.text(sql));
+            end = n.end;
+        }
+        // `:=` may lex as `:` and `=`.
+        let assigned = toks.get(next).is_some_and(|n| n.kind == Tok::Op && matches!(n.text(sql), "=" | ":=" | ":"));
+        let name = name.to_ascii_lowercase().replace('`', "");
+        assigned
+            && matches!(
+                name.as_str(),
+                "@@transaction_isolation" | "@@tx_isolation" | "@@transaction_read_only" | "@@tx_read_only"
+            )
+    });
+    if sets { SetsNext::Yes } else { SetsNext::No }
+}
+
+/// Whether `sql` starts or ends a transaction by its first word (`START TRANSACTION`, `BEGIN`,
+/// `COMMIT`, `ROLLBACK`): with none open, a `COMMIT` or `ROLLBACK` still clears the settings the
+/// next transaction had of its own.
+fn begins_or_ends(sql: &str, mode: MySqlMode) -> bool {
+    matches!(first_word(sql, mode).as_deref(), Some("START" | "BEGIN" | "COMMIT" | "ROLLBACK"))
+}
+
+/// A read of the app's own outside a transaction (`open`: one was open before it) while the next
+/// transaction has settings of its own, or may have ([`Tracked::next_once`]): it would start a
+/// transaction (or read in one the server starts for it) and use them up, so it is refused.
+fn keeps_next(s: &State, open: bool) -> Result<(), DbError> {
+    if !open && s.tracked.next_once { Err(DbError::NextTransactionSet) } else { Ok(()) }
+}
+
 /// Whether a transaction is open on the session before a read of the app's own: the user's
 /// tracked transaction, or one the server says is open (the status flags of its last answer, or
 /// of a `COM_PING` when there is none). Open when the server cannot say: the read then keeps to
@@ -1920,6 +2026,9 @@ async fn count(
         return Ok((Err(DbError::NotRepeatable(why)), false));
     }
     let was_open = open_before(conn, link, s).await?;
+    if let Err(why) = keeps_next(s, was_open) {
+        return Ok((Err(why), false));
+    }
     let isolation = match asked_server(conn, link, env, s, sql).await? {
         Ok(isolation) => isolation,
         Err(why) => return Ok((Err(why), false)),
@@ -1971,6 +2080,10 @@ async fn check_repeat(
     s: &mut State,
     sql: &str,
 ) -> Result<Result<(), DbError>, Stop> {
+    let open = open_before(conn, link, s).await?;
+    if let Err(why) = keeps_next(s, open) {
+        return Ok(Err(why));
+    }
     Ok(asked_server(conn, link, env, s, sql).await?.map(|_| ()))
 }
 
