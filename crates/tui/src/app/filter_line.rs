@@ -148,11 +148,16 @@ impl App {
         }
     }
 
-    /// Give field `f` of table tab `id`'s filter line the keys, the cursor at its end.
+    /// Give field `f` of table tab `id`'s filter line the keys, the cursor at its end. The line
+    /// is drawn over the rows (and the run's messages) only: from the chart, the plan or the
+    /// changes, the rows come back first, so the field typed into is the one shown.
     fn filter_line_focus(&mut self, id: TabId, f: table_query::Field) {
         self.close_search_prompt();
         self.filter_popup_close();
         self.filter_line_follow();
+        if self.chart_shown() || self.plan_shown() || self.changes_shown() {
+            self.tab_mut().exec.view = super::tabs::ResultView::Rows;
+        }
         self.focus = Focus::Results;
         if let Some(tq) = self.table_query_mut(id) {
             tq.line.focus = Some(f);

@@ -139,6 +139,27 @@ fn f_then_enter_sends_the_condition_as_typed() {
     assert_eq!(focus(&h), Some(Field::Where));
 }
 
+/// The line is not drawn over the chart: `Space r f` and `Space r o` there bring the rows
+/// back first, so what is typed goes into the field shown.
+#[test]
+fn the_keys_of_the_line_bring_the_rows_back_from_the_chart() {
+    let mut h = users(Lang::En);
+    for (keys, field) in [(" rf", Field::Where), (" ro", Field::Order)] {
+        h.keys("c");
+        assert!(h.app.chart_shown(), "the chart is shown");
+        h.keys(keys);
+        assert!(!h.app.chart_shown(), "{keys:?}: the rows are shown");
+        assert_eq!((h.app.key_context(), focus(&h)), (Ctx::FilterLine, Some(field)), "{keys:?}");
+        h.key(KeyCode::Esc);
+    }
+    h.keys("c");
+    h.keys(" rf");
+    h.type_text("id > 1");
+    assert!(h.screen(120, 30).contains("WHERE id > 1"), "the field typed into is on the screen");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 1)")]]);
+}
+
 #[test]
 fn ctrl_e_applies_and_the_order_is_written_back_as_sent() {
     let mut h = users(Lang::En);
