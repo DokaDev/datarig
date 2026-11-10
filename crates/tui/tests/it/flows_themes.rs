@@ -147,12 +147,12 @@ fn the_settings_screen_previews_themes_and_esc_goes_back() {
     h.key(KeyCode::Esc);
     h.command("settings");
     h.keys("jj");
-    assert!(h.screen(160, 48).contains("Terminal background: not detected"), "{}", h.screen(160, 48));
+    assert!(h.screen(160, 45).contains("Terminal background: not detected"), "{}", h.screen(160, 45));
     // l: the next theme is drawn, not saved.
     h.keys("l");
     assert_eq!(*h.app.theme, theme::LIGHT);
     assert_eq!(h.app.theme_name, "dark");
-    let screen = h.screen(160, 48);
+    let screen = h.screen(160, 45);
     assert!(
         screen.contains("‹ light") && screen.contains("Previewing light: Enter keeps it, Esc goes back to dark"),
         "{screen}"
@@ -169,7 +169,7 @@ fn the_settings_screen_previews_themes_and_esc_goes_back() {
     h.keys("jjhh");
     assert_eq!(h.app.theme_name, "dark");
     // h from dark wraps past terminal to the last name: the broken file.
-    assert!(h.screen(160, 48).contains("‹ zz-broken"));
+    assert!(h.screen(160, 45).contains("‹ zz-broken"));
     let preview = h.app.overlays.settings().and_then(|s| s.themes.preview.as_ref()).expect("a preview");
     let error = preview.error.as_ref().expect("why it cannot be used").render(&h.app.i18n).to_string();
     assert!(error.ends_with("zz-broken.toml:1: extends = “nope”: not a built-in theme"), "{error}");
@@ -181,7 +181,7 @@ fn the_settings_screen_previews_themes_and_esc_goes_back() {
     assert_eq!(*h.app.theme, theme::DRACULA);
     assert_eq!(h.app.theme_name, "dracula");
     assert_eq!(s.text(), "theme = \"dracula\"\n");
-    assert!(h.screen(160, 48).contains("‹ dracula"));
+    assert!(h.screen(160, 45).contains("‹ dracula"));
     h.key(KeyCode::Esc);
     assert_eq!(*h.app.theme, theme::DRACULA, "Esc after Enter keeps the kept theme");
     assert_eq!(h.overlay_kind(), None::<OverlayKind>);
@@ -203,7 +203,7 @@ fn a_broken_theme_file_at_launch_draws_the_terminal_theme_and_says_where() {
     assert!(text.ends_with("Drawing with the terminal theme."), "{text}");
     // The settings screen says it too, and the row says the theme is not used.
     h.command("settings");
-    let screen = h.screen(160, 48);
+    let screen = h.screen(160, 45);
     assert!(screen.contains("Theme not used:") && screen.contains("mine.toml:4"), "{screen}");
     assert!(screen.contains("‹ mine") && screen.contains("Not used: drawing with the"), "{screen}");
     // Saving another setting keeps the configured name.
@@ -253,7 +253,7 @@ fn a_family_follows_the_terminal_background_and_a_variant_pins_it() {
     h.app.set_background(Background::Light);
     h.command("settings");
     h.keys("jj");
-    assert!(h.screen(160, 48).contains("Terminal background: light (detected)"));
+    assert!(h.screen(160, 45).contains("Terminal background: light (detected)"));
     h.key(KeyCode::Esc);
     for (name, want) in [("tokyo-night", &theme::TOKYO_NIGHT_DAY), ("gruvbox", &theme::GRUVBOX_LIGHT)] {
         h.command(&format!("set theme={name}"));
@@ -361,13 +361,13 @@ fn c_on_the_settings_screen_copies_the_theme_shown_to_a_named_file() {
     h.keys("c");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Settings), "c only acts on the theme row");
     h.keys("jj");
-    assert!(h.screen(160, 48).contains("c copies this theme to a new theme file"), "{}", h.screen(160, 48));
+    assert!(h.screen(160, 45).contains("c copies this theme to a new theme file"), "{}", h.screen(160, 45));
     // The theme previewed is the one copied.
     h.keys("lc");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::NameInput));
     let input = h.app.overlays.name_input().unwrap();
     assert_eq!(input.input.text(), "light-copy");
-    assert!(h.screen(160, 48).contains("Copy light to a new theme file"), "{}", h.screen(160, 48));
+    assert!(h.screen(160, 45).contains("Copy light to a new theme file"), "{}", h.screen(160, 45));
     // A name another program took meanwhile: said in the input, the file kept.
     std::fs::write(s.theme_file("light-copy"), "# by hand\n").unwrap();
     h.key(KeyCode::Enter);
@@ -383,7 +383,7 @@ fn c_on_the_settings_screen_copies_the_theme_shown_to_a_named_file() {
     assert_eq!(*h.app.theme, theme::LIGHT);
     assert_eq!(h.app.theme_name, "light-copy-2");
     assert_eq!(s.text(), "theme = \"light-copy-2\"\n");
-    let screen = h.screen(160, 48);
+    let screen = h.screen(160, 45);
     assert!(screen.contains("‹ light-copy-2") && !screen.contains("Previewing"), "{screen}");
     // Esc keeps it: the preview is over.
     h.key(KeyCode::Esc);

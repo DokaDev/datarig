@@ -22,7 +22,7 @@ expression: backend
 "│ │   Completion delay (ms)     ‹ 60            ›  Opens once no key came f… │t│"
 "│ │ Results                                                                  │ │"
 "│ │   Cell detail               ‹ panel         ›  A panel on the right of … │ │"
-"│ │   Flash copied cells        ‹ on            ›  On, copied cells flash b… │ │"
+"│ │ How many spaces the formatter indents each level with.                   │ │"
 "│ ╰────────────────────────────────────── j/k move · h/l change · Esc close ─╯ │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
 " NORMAL  local-pg │ Connected to local-pg                                    EN "

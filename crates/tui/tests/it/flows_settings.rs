@@ -25,13 +25,13 @@ fn temp_config(tag: &str, body: &str) -> PathBuf {
 /// The row of the settings screen showing setting `name` (not a category of the same name), as
 /// drawn at 160×45.
 fn row(h: &mut Harness, name: &str) -> String {
-    h.screen(160, 48).lines().find(|l| l.contains(name) && l.contains('‹')).unwrap_or_default().to_string()
+    h.screen(160, 45).lines().find(|l| l.contains(name) && l.contains('‹')).unwrap_or_default().to_string()
 }
 
 /// Put the screen's cursor on the setting labelled `name` (moving with `j`).
 fn select(h: &mut Harness, name: &str) {
     for _ in 0..40 {
-        let screen = h.screen(160, 48);
+        let screen = h.screen(160, 45);
         if screen.lines().any(|l| l.contains(name) && l.contains("‹")) && selected_is(h, name) {
             return;
         }
@@ -41,7 +41,7 @@ fn select(h: &mut Harness, name: &str) {
 }
 
 fn selected_is(h: &mut Harness, name: &str) -> bool {
-    let t = h.draw(160, 48);
+    let t = h.draw(160, 45);
     let buf = t.backend().buffer();
     (0..45).any(|y| {
         let line = row_text(buf, y);
@@ -58,7 +58,7 @@ fn space_comma_and_the_command_open_it_and_changes_are_live_and_saved() {
     h.key(KeyCode::Esc); // Normal mode
     h.keys(" ,");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Settings));
-    let screen = h.screen(160, 48);
+    let screen = h.screen(160, 45);
     for want in ["Display", "Editor", "Results", "Clipboard", "Language", "Secrets", "Command line position"] {
         assert!(screen.contains(want), "{want}:\n{screen}");
     }
@@ -84,7 +84,7 @@ fn space_comma_and_the_command_open_it_and_changes_are_live_and_saved() {
     h.keys("l");
     assert_eq!(h.app.lang_setting, LangSetting::Ko);
     assert!(
-        h.screen(160, 48).contains(ko(datarig_i18n::Label::SettingClipboard)),
+        h.screen(160, 45).contains(ko(datarig_i18n::Label::SettingClipboard)),
         "the screen follows the language at once"
     );
     let text = std::fs::read_to_string(&path).unwrap();
@@ -105,7 +105,7 @@ fn space_comma_and_the_command_open_it_and_changes_are_live_and_saved() {
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Settings));
     let clipboard = ko(datarig_i18n::Label::SettingClipboard);
     // (The editor's "yanks to the clipboard" row has the word too: the row with the value.)
-    let screen = h.screen(160, 48);
+    let screen = h.screen(160, 45);
     assert!(screen.lines().any(|l| l.contains(clipboard) && l.contains("‹ system")), "{screen}");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
@@ -147,7 +147,7 @@ fn a_config_file_with_errors_is_said_and_nothing_is_saved() {
     h.app = datarig_tui::app::App::new(&cfg, err, Lang::En);
     h.app.launch(datarig_tui::app::Startup::Normal);
     h.command("settings");
-    let screen = h.screen(160, 48);
+    let screen = h.screen(160, 45);
     assert!(
         screen.contains("clipboard") && screen.contains("pbcopy") && screen.contains("auto, system, osc52"),
         "{screen}"
@@ -156,4 +156,35 @@ fn a_config_file_with_errors_is_said_and_nothing_is_saved() {
     h.keys("l");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "clipboard = \"pbcopy\"\n", "the file is left alone");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// A short screen scrolls the list (the selected row always shows) and keeps the first lines of
+/// the selected setting's description under it, from the first setting to the last.
+#[test]
+fn a_short_screen_scrolls_the_list_and_keeps_the_description() {
+    let (cfg, _) = config::load(Some(temp_config("short", "")));
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.key(KeyCode::Esc); // Normal mode
+    h.keys(" ,");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Settings));
+    let screen = h.screen(80, 24);
+    assert!(screen.contains("Nerd Font icons") && screen.contains("Preview: "), "{screen}");
+    // From the first row up: the last one.
+    h.keys("k");
+    let screen = h.screen(80, 24);
+    let lines: Vec<&str> = screen.lines().collect();
+    let row = lines.iter().position(|l| l.contains("macOS keychain access") && l.contains('‹')).expect(&screen);
+    let under: Vec<&str> = lines[row + 1..].iter().take_while(|l| !l.contains('╰')).copied().collect();
+    let text = |l: &&str| l.chars().any(|c| c.is_alphanumeric());
+    assert!(under.iter().any(text), "a description under the last row:\n{screen}");
+    assert!(selected_is_at(&mut h, "macOS keychain access", 80, 24), "{screen}");
+}
+
+fn selected_is_at(h: &mut Harness, name: &str, w: u16, ht: u16) -> bool {
+    let t = h.draw(w, ht);
+    let buf = t.backend().buffer();
+    (0..ht).any(|y| {
+        let line = row_text(buf, y);
+        line.contains(name) && (0..w).any(|x| buf[(x, y)].bg == datarig_tui::theme::DARK.selection.bg.unwrap())
+    })
 }

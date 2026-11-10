@@ -6,7 +6,7 @@
 //! used is said on top, as a config file with errors.
 
 use crate::app::App;
-use crate::app::command::{SETTINGS, Values};
+use crate::app::command::{SETTINGS, SettingSpec, Values};
 use crate::app::settings::{SettingsRow, groups};
 use crate::text::{Align, fit, width, wrap_words};
 use crate::theme;
@@ -47,19 +47,29 @@ pub(crate) fn draw_settings(app: &mut App, area: Rect, buf: &mut Buffer) {
             y += 1;
         }
     }
+    // The selected setting's description (and the icons' preview), drawn under the list.
+    let groups = groups();
+    let selected_spec = groups.iter().flat_map(|(_, items)| items.iter()).nth(screen.selected).map(|&k| &SETTINGS[k]);
+    let lines = selected_spec.map(|spec| description(app, spec, tw)).unwrap_or_default();
+    // A short screen keeps the first lines of the description under the list, which scrolls
+    // in what is left.
+    let list_lines = groups.iter().map(|(_, items)| 1 + items.len()).sum::<usize>();
+    let reserved = lines.len().min(DESCRIPTION_MIN);
     // A blank line on top when there is room for it.
-    if inner.height >= 26 {
+    if inner.height >= 26 && list_lines + reserved < usize::from(bottom.saturating_sub(y)) {
         y += 1;
     }
+    let room = usize::from(bottom.saturating_sub(y));
+    let list_room =
+        if list_lines + reserved <= room { list_lines } else { room.saturating_sub(reserved).max(1).min(room) };
+    let list_bottom = y + list_room as u16;
     let name_w = SETTINGS.iter().map(|s| width(&i18n.label(s.label))).max().unwrap_or(10).min(tw / 3);
     // The fixed values line up; a longer theme name widens its own row only.
     let value_w = SETTINGS.iter().flat_map(|s| s.values.fixed().iter().map(|v| width(v.0))).max().unwrap_or(6);
     let mut row = 0;
-    let mut selected_spec = None;
     let mut rows = Vec::new();
     // Lines scrolled off the top so the selected row shows on a short screen: the list's lines
     // are the category titles and the rows.
-    let groups = groups();
     let selected_line = groups
         .iter()
         .scan(0, |before, (_, items)| {
@@ -70,9 +80,9 @@ pub(crate) fn draw_settings(app: &mut App, area: Rect, buf: &mut Buffer) {
         .enumerate()
         .find_map(|(g, (start, n))| (screen.selected < start + n).then_some(g + 1 + screen.selected))
         .unwrap_or(0);
-    let mut skip = (selected_line + 1).saturating_sub(usize::from(bottom.saturating_sub(y)));
+    let mut skip = (selected_line + 1).saturating_sub(list_room);
     for (group, items) in groups {
-        if y >= bottom {
+        if y >= list_bottom {
             break;
         }
         if skip > 0 {
@@ -82,7 +92,7 @@ pub(crate) fn draw_settings(app: &mut App, area: Rect, buf: &mut Buffer) {
             y += 1;
         }
         for k in items {
-            if y >= bottom {
+            if y >= list_bottom {
                 break;
             }
             if skip > 0 {
@@ -129,9 +139,6 @@ pub(crate) fn draw_settings(app: &mut App, area: Rect, buf: &mut Buffer) {
                 let left = tw.saturating_sub((cx - x) as usize);
                 put(buf, cx, y, &label, left, Style::new().fg(th.fg_muted).patch(bg));
             }
-            if on {
-                selected_spec = Some(spec);
-            }
             row += 1;
             y += 1;
         }
@@ -139,9 +146,32 @@ pub(crate) fn draw_settings(app: &mut App, area: Rect, buf: &mut Buffer) {
     if let Some(s) = app.overlays.settings_mut() {
         s.rows = rows;
     }
-    // The selected setting's description (and the icons' preview).
-    let Some(spec) = selected_spec else { return };
-    let Some(screen) = app.overlays.settings() else { return };
+    if lines.is_empty() {
+        return;
+    }
+    // The rule above the description, unless the description needs its line.
+    if usize::from(bottom.saturating_sub(y)) > lines.len() {
+        buf.set_stringn(inner.x, y, "─".repeat(iw), iw, surface(th.border));
+        y += 1;
+    }
+    for (l, style) in lines {
+        if y >= bottom {
+            break;
+        }
+        put(buf, x, y, &l, tw, style);
+        y += 1;
+    }
+}
+
+/// The lines of the description that keep their place under the list on a short screen.
+const DESCRIPTION_MIN: usize = 3;
+
+/// The lines under the list for setting `spec`, `tw` columns wide: its description, after the
+/// icons' preview or the theme's state for those, and the config file's path.
+fn description(app: &App, spec: &SettingSpec, tw: usize) -> Vec<(String, Style)> {
+    let th = theme::cur();
+    let i18n = &app.i18n;
+    let surface = |fg| Style::new().fg(fg).bg(th.surface);
     let mut lines: Vec<(String, Style)> = Vec::new();
     // For `icons` the preview and its hint come first: they must show on a small screen.
     if spec.key == "icons" {
@@ -152,8 +182,9 @@ pub(crate) fn draw_settings(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
     // For `theme`: the preview (or why it cannot be used) and the terminal's background.
     if spec.values == Values::Themes {
-        if let Some(p) = &screen.themes.preview {
-            let name = screen.themes.names.get(p.index).cloned().unwrap_or_default();
+        if let Some(p) = app.overlays.settings().and_then(|s| s.themes.preview.as_ref()) {
+            let names = app.overlays.settings().map(|s| s.themes.names.as_slice()).unwrap_or_default();
+            let name = names.get(p.index).cloned().unwrap_or_default();
             let (text, color) = match &p.error {
                 Some(e) => (e.render(i18n).to_string(), th.error),
                 None => (
@@ -176,16 +207,5 @@ pub(crate) fn draw_settings(app: &mut App, area: Rect, buf: &mut Buffer) {
     if let Some(path) = app.config_file() {
         lines.push((i18n.msg(&Msg::SettingsFile { path }).to_string(), surface(th.fg_dim)));
     }
-    // The rule above the description, unless the description needs its line.
-    if usize::from(bottom.saturating_sub(y)) > lines.len() {
-        buf.set_stringn(inner.x, y, "─".repeat(iw), iw, surface(th.border));
-        y += 1;
-    }
-    for (l, style) in lines {
-        if y >= bottom {
-            break;
-        }
-        put(buf, x, y, &l, tw, style);
-        y += 1;
-    }
+    lines
 }
