@@ -321,6 +321,59 @@ async fn a_query_session_reports_its_isolation_level() {
     assert_eq!(isolation_of(&evs), Some(Some(Isolation::ReadCommitted)), "the session's again: {evs:?}");
 }
 
+/// A session's level set while a transaction is open is the next transaction's: the open one
+/// keeps the level it started in (and one a `SET TRANSACTION` left not known stays so), and
+/// the session reports that one until it ends.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_level_set_in_a_transaction_is_the_next_ones() {
+    use datarig_core::driver::Isolation;
+    let test = "a_level_set_in_a_transaction_is_the_next_ones";
+    let Some(url) = my_url(test) else { return };
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let evs = c.run(1, &["SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE"]).await;
+    assert_eq!(isolation_of(&evs), Some(Some(Isolation::Serializable)), "{evs:?}");
+    let evs = c.run(2, &["START TRANSACTION"]).await;
+    assert_eq!(isolation_of(&evs), None, "it runs in the session's level: {evs:?}");
+    let evs = c.run(3, &["SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED"]).await;
+    assert_eq!(isolation_of(&evs), None, "the open transaction stays SERIALIZABLE: {evs:?}");
+    let evs = c.run(4, &["COMMIT"]).await;
+    assert_eq!(isolation_of(&evs), Some(Some(Isolation::ReadCommitted)), "the next one's: {evs:?}");
+    // A level for the next transaction only: that transaction's is not known, whatever the
+    // session's is set to while it is open.
+    let evs = c.run(5, &["SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"]).await;
+    assert_eq!(isolation_of(&evs), Some(None), "{evs:?}");
+    c.ok(6, "START TRANSACTION").await;
+    let evs = c.run(7, &["SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED"]).await;
+    assert_eq!(isolation_of(&evs), None, "still not known: {evs:?}");
+    let evs = c.run(8, &["COMMIT"]).await;
+    assert_eq!(isolation_of(&evs), Some(Some(Isolation::ReadCommitted)), "{evs:?}");
+}
+
+/// A level that code of the server's may have changed (`EXECUTE`, here without the server
+/// reporting it) stays not known past the end of a transaction, until the server reports the
+/// session's level again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_level_lost_to_code_stays_unknown_until_reported() {
+    use datarig_core::driver::Isolation;
+    let test = "a_level_lost_to_code_stays_unknown_until_reported";
+    let Some(url) = my_url(test) else { return };
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let evs = c.run(1, &["SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ"]).await;
+    let known = isolation_of(&evs).unwrap_or(Some(Isolation::RepeatableRead));
+    assert_eq!(known, Some(Isolation::RepeatableRead), "{evs:?}");
+    c.ok(2, "PREPARE zz_fix1_level FROM 'SET SESSION transaction_isolation = ''SERIALIZABLE'''").await;
+    // The server reports no variable from here on.
+    c.ok(3, "SET SESSION session_track_system_variables = ''").await;
+    let evs = c.run(4, &["EXECUTE zz_fix1_level"]).await;
+    assert_eq!(isolation_of(&evs), Some(None), "{evs:?}");
+    c.ok(5, "START TRANSACTION").await;
+    let evs = c.run(6, &["COMMIT"]).await;
+    assert_eq!(isolation_of(&evs), None, "the end of a transaction does not bring it back: {evs:?}");
+    c.ok(7, "SET SESSION session_track_system_variables = 'transaction_isolation'").await;
+    let evs = c.run(8, &["SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE"]).await;
+    assert_eq!(isolation_of(&evs), Some(Some(Isolation::Serializable)), "reported again: {evs:?}");
+}
+
 /// The metadata session says the mode a new session starts in, then lists the databases, reads
 /// the catalog and the key metadata as soon as it connects.
 #[tokio::test(flavor = "multi_thread")]

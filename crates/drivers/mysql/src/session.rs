@@ -340,6 +340,15 @@ pub(crate) struct Tracked {
     pub(crate) next_once: bool,
     /// `transaction_isolation` (`tx_isolation`), the session's level.
     pub(crate) isolation: Option<String>,
+    /// The session's level may have changed without a report: code of the server's ran (`CALL`,
+    /// `EXECUTE`, an executable comment). Only the server's next report of the level clears it;
+    /// a transaction's end does not.
+    pub(crate) isolation_lost: bool,
+    /// The level of the transaction open on the session, fixed when it started (the next
+    /// transaction's level then, [`Tracked::next_isolation`]; `Some(None)`: not known);
+    /// `None` while none is open. A change of the session's level meanwhile is the next
+    /// transaction's, not this one's.
+    pub(crate) isolation_active: Option<Option<Isolation>>,
 }
 
 impl Tracked {
@@ -362,6 +371,7 @@ impl Tracked {
                             "character_set_connection" => self.connection_charset = Some(value),
                             "transaction_isolation" | "tx_isolation" => {
                                 self.isolation = Some(value);
+                                self.isolation_lost = false;
                             }
                             _ => {}
                         }
@@ -388,14 +398,45 @@ impl Tracked {
         Some(SessionValues { time_zone: self.time_zone.clone()?, charset })
     }
 
-    /// The level the session's next transaction runs in: the session's as the server reported
-    /// it, `None` when it did not or the next one has settings of its own, or may have
-    /// ([`Tracked::next_once`]).
+    /// The level reads run in now: the open transaction's ([`Tracked::isolation_active`]),
+    /// else the next transaction's ([`Tracked::next_isolation`]); `None` when not known.
     pub(crate) fn isolation(&self) -> Option<Isolation> {
-        if self.next_once {
+        match self.isolation_active {
+            Some(active) => active,
+            None => self.next_isolation(),
+        }
+    }
+
+    /// The level the session's next transaction runs in: the session's as the server reported
+    /// it, `None` when it did not, when the next one has settings of its own, or may have
+    /// ([`Tracked::next_once`]), or when code of the server's may have changed it since
+    /// ([`Tracked::isolation_lost`]).
+    pub(crate) fn next_isolation(&self) -> Option<Isolation> {
+        if self.next_once || self.isolation_lost {
             return None;
         }
         Isolation::from_name(self.isolation.as_deref()?)
+    }
+
+    /// A transaction started on the session: it runs in the next transaction's level, which a
+    /// `SET TRANSACTION` without `SESSION` set for it alone.
+    pub(crate) fn transaction_began(&mut self) {
+        self.isolation_active = Some(self.next_isolation());
+    }
+
+    /// The transaction open on the session ended: the next one runs in the session's level.
+    pub(crate) fn transaction_ended(&mut self) {
+        self.isolation_active = None;
+    }
+
+    /// Code of the server's ran (`open`: a transaction is open after it): the session's level
+    /// and the open transaction's (which the code may have ended and started again) are not
+    /// known until the server reports the session's level again.
+    pub(crate) fn isolation_after_code(&mut self, open: bool) {
+        self.isolation_lost = true;
+        if open {
+            self.isolation_active = Some(None);
+        }
     }
 
     /// What [`ASK_VALUES`] answered.

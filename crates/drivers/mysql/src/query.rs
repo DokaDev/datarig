@@ -840,6 +840,8 @@ async fn statement<'a>(
             }
             return Ok(None);
         }
+        // Its level is the next transaction's, as for any other start.
+        s.tracked.transaction_began();
         s.tx.open = true;
         s.tx.opening = Some((reply.id, step.index));
         s.tx.opened = Some(step.index);
@@ -1264,6 +1266,18 @@ async fn after(
                 let _ = env.events.send(DbEvent::TxClosedBy { id: s.request, how });
             }
         }
+        // The level of the transaction open now is the one it started in, whatever the session's
+        // is set to meanwhile; the next one starts in the session's (or the one `SET
+        // TRANSACTION` without `SESSION` set for it). `COMMIT AND CHAIN` starts the next one in
+        // the level of the one it ended.
+        if !(chained && chains(sql, s.mode)) {
+            if was_open && (!open || chained) {
+                s.tracked.transaction_ended();
+            }
+            if open && (!was_open || chained) {
+                s.tracked.transaction_began();
+            }
+        }
         s.tx.open = open;
         // A transaction started or ended (a `COMMIT` or `ROLLBACK` with none open too): the
         // settings the next one had of its own were used up or cleared.
@@ -1281,11 +1295,16 @@ async fn after(
             env.report(&mut s.tx, chained);
         }
     }
-    // The statement set the next transaction's own settings, or may have.
+    // Code of the server's may have changed the session's level, or ended the transaction and
+    // started another, without a report: not known until the server reports the level again.
+    if routine {
+        s.tracked.isolation_after_code(s.tx.open);
+    }
+    // The statement set the next transaction's own settings, or may have: its level is not
+    // known until a transaction starts or ends.
     if sets_next == SetsNext::Maybe || (ok && sets_next == SetsNext::Yes) {
         s.tracked.next_once = true;
     }
-    // The next transaction's level is not known while it has settings of its own.
     report_isolation(env, s);
     let writable = status.is_some_and(|st| {
         st.contains(StatusFlags::SERVER_STATUS_IN_TRANS) && !st.contains(StatusFlags::SERVER_STATUS_IN_TRANS_READONLY)
@@ -1785,7 +1804,8 @@ fn locking(sql: &str, mode: MySqlMode) -> bool {
         || w.windows(4).any(|p| p == ["LOCK", "IN", "SHARE", "MODE"])
 }
 
-/// Tell the app the level the session's next transaction runs in, when that changed.
+/// Tell the app the level the session's reads run in (the open transaction's, else the next
+/// one's), when that changed.
 fn report_isolation(env: &Env<'_>, s: &mut State) {
     let isolation = s.tracked.isolation();
     if isolation != s.isolation {
@@ -2234,6 +2254,7 @@ fn forget_after_code(env: &Env<'_>, s: &mut State) {
         if let Some(v) = s.values.clone() {
             let _ = env.events.send(DbEvent::SessionValues(v));
         }
+        s.tracked.isolation_after_code(s.tx.open);
         report_isolation(env, s);
     }
 }

@@ -546,6 +546,41 @@ fn the_isolation_level_is_known_only_as_reported() {
     assert_eq!(t.isolation(), None, "the next transaction may run in another level");
 }
 
+/// The open transaction's level is the one it started in: a session's level set meanwhile is
+/// the next one's. Knowledge lost to code of the server's stays lost past a transaction's end,
+/// unlike a level set for the next transaction only.
+#[test]
+fn the_open_transaction_keeps_its_level() {
+    use datarig_core::driver::Isolation;
+    let mut t = Tracked { isolation: Some("SERIALIZABLE".into()), ..Tracked::default() };
+    t.transaction_began();
+    t.isolation = Some("READ-COMMITTED".into());
+    assert_eq!(t.isolation(), Some(Isolation::Serializable), "the open one's");
+    assert_eq!(t.next_isolation(), Some(Isolation::ReadCommitted));
+    t.transaction_ended();
+    assert_eq!(t.isolation(), Some(Isolation::ReadCommitted));
+    // Settings for the next transaction only: its level is not known for it, the session's
+    // after it (the session clears them as a transaction starts or ends).
+    t.next_once = true;
+    t.transaction_began();
+    t.next_once = false;
+    assert_eq!(t.isolation(), None);
+    t.transaction_ended();
+    assert_eq!(t.isolation(), Some(Isolation::ReadCommitted));
+    // Code of the server's ran: not known, past a transaction's end too.
+    t.isolation_after_code(false);
+    assert_eq!(t.isolation(), None);
+    t.transaction_began();
+    t.transaction_ended();
+    assert_eq!(t.isolation(), None, "only a report brings it back");
+    t.isolation_lost = false;
+    assert_eq!(t.isolation(), Some(Isolation::ReadCommitted));
+    // Inside a transaction: the open one's is not known either.
+    t.transaction_began();
+    t.isolation_after_code(true);
+    assert_eq!(t.isolation(), None);
+}
+
 /// Both names of the variable are read: MySQL's (and MariaDB's from 11.1) and older MariaDB's.
 #[test]
 fn isolation_names_by_server() {
@@ -922,7 +957,13 @@ async fn a_result_answered_while_its_kill_hangs_is_read_to_its_end_then_the_sess
     ));
     let call = "CALL shop.zz_rows()";
     commands
-        .send(DbCommand::Execute { id: 1, statements: vec![call.into()], paging: PagingMode::NoHold, tx: TxRule::Auto })
+        .send(DbCommand::Execute {
+            max_rows: None,
+            id: 1,
+            statements: vec![call.into()],
+            paging: PagingMode::NoHold,
+            tx: TxRule::Auto,
+        })
         .unwrap();
     let sent = read_packet(&mut server).await.expect("the call");
     assert_eq!(&sent[1..], call.as_bytes());
@@ -1092,6 +1133,7 @@ async fn a_kill_left_unanswered_by_a_statement_that_ended_never_reaches_the_next
     let first = "DELETE FROM shop.t";
     commands
         .send(DbCommand::Execute {
+            max_rows: None,
             id: 1,
             statements: vec![first.into()],
             paging: PagingMode::NoHold,
@@ -1113,7 +1155,13 @@ async fn a_kill_left_unanswered_by_a_statement_that_ended_never_reaches_the_next
     // The user runs the next statement.
     let next = "DELETE FROM shop.u";
     commands
-        .send(DbCommand::Execute { id: 2, statements: vec![next.into()], paging: PagingMode::NoHold, tx: TxRule::Auto })
+        .send(DbCommand::Execute {
+            max_rows: None,
+            id: 2,
+            statements: vec![next.into()],
+            paging: PagingMode::NoHold,
+            tx: TxRule::Auto,
+        })
         .unwrap();
     let after = sent_next(&mut server).await;
     assert!(after.is_none(), "nothing sent after the first statement: {after:?}");
@@ -1140,6 +1188,7 @@ async fn an_explain_analyze_whose_kill_hangs_never_shows_its_transaction_open() 
     let explain = "EXPLAIN ANALYZE DELETE FROM shop.t";
     commands
         .send(DbCommand::Execute {
+            max_rows: None,
             id: 1,
             statements: vec![explain.into()],
             paging: PagingMode::NoHold,
@@ -1348,7 +1397,13 @@ async fn an_apply_whose_step_deadlocks_in_an_open_transaction_keeps_the_session(
     // The user's transaction is open.
     let open = "INSERT INTO shop.t VALUES (2)";
     commands
-        .send(DbCommand::Execute { id: 9, statements: vec![open.into()], paging: PagingMode::NoHold, tx: TxRule::Auto })
+        .send(DbCommand::Execute {
+            max_rows: None,
+            id: 9,
+            statements: vec![open.into()],
+            paging: PagingMode::NoHold,
+            tx: TxRule::Auto,
+        })
         .unwrap();
     assert_eq!(next_request(&mut server).await, open);
     server.write_all(&ok_packet(0x0003)).await.unwrap();
@@ -1394,6 +1449,7 @@ async fn an_apply_whose_step_deadlocks_in_an_open_transaction_keeps_the_session(
     let next = "SELECT 1";
     commands
         .send(DbCommand::Execute {
+            max_rows: None,
             id: 10,
             statements: vec![next.into()],
             paging: PagingMode::NoHold,
@@ -1626,6 +1682,7 @@ async fn manual_commit_opens_a_transaction_right_before_the_first_write_and_ends
     use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
     let Faked { mut server, commands, mut events, kills, session, .. } = faked().await;
     let run = |id: u64, statements: &[&str], opens: &[bool]| DbCommand::Execute {
+        max_rows: None,
         id,
         statements: statements.iter().map(|s| s.to_string()).collect(),
         paging: PagingMode::NoHold,
@@ -1695,8 +1752,13 @@ async fn manual_commit_opens_a_transaction_right_before_the_first_write_and_ends
 async fn a_connection_lost_during_a_commit_leaves_its_outcome_unknown() {
     use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
     let Faked { mut server, commands, mut events, kills, .. } = faked().await;
-    let begin =
-        DbCommand::Execute { id: 1, statements: vec!["BEGIN".into()], paging: PagingMode::NoHold, tx: TxRule::Auto };
+    let begin = DbCommand::Execute {
+        max_rows: None,
+        id: 1,
+        statements: vec!["BEGIN".into()],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+    };
     commands.send(begin).unwrap();
     assert_eq!(answered(&mut server, &ok_packet(0x0003)).await, "BEGIN");
     events_until(&mut events, |e| matches!(e, DbEvent::Done { id: 1, .. })).await;
@@ -1725,8 +1787,13 @@ fn steps(opens: &[bool]) -> Vec<datarig_core::driver::TxStep> {
 async fn faked_in_transaction() -> Faked {
     use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
     let mut f = faked().await;
-    let begin =
-        DbCommand::Execute { id: 1, statements: vec!["BEGIN".into()], paging: PagingMode::NoHold, tx: TxRule::Auto };
+    let begin = DbCommand::Execute {
+        max_rows: None,
+        id: 1,
+        statements: vec!["BEGIN".into()],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+    };
     f.commands.send(begin).unwrap();
     assert_eq!(answered(&mut f.server, &ok_packet(0x0003)).await, "BEGIN");
     events_until(&mut f.events, |e| matches!(e, DbEvent::Done { id: 1, .. })).await;
@@ -1763,6 +1830,7 @@ async fn manual_commit_survives_the_servers_odd_answers() {
     use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
     let Faked { mut server, commands, mut events, kills, asked, .. } = faked().await;
     let run = |id: u64, sql: &str| DbCommand::Execute {
+        max_rows: None,
         id,
         statements: vec![sql.to_string()],
         paging: PagingMode::NoHold,
