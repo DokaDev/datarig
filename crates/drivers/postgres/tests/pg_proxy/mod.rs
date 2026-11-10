@@ -52,7 +52,7 @@ impl Wanted {
     }
 }
 
-type Faults = Arc<Mutex<Option<(Wanted, Fault)>>>;
+type Faults = Arc<Mutex<Vec<(Wanted, Fault)>>>;
 
 pub struct Proxy {
     /// `host:port` to connect to instead of the server.
@@ -75,7 +75,7 @@ impl Proxy {
         let sent = Arc::new(Mutex::new(Vec::new()));
         let dropped = Arc::new(Mutex::new(0));
         let executes = Arc::new(Mutex::new(Vec::new()));
-        let faults: Faults = Arc::new(Mutex::new(None));
+        let faults: Faults = Arc::new(Mutex::new(Vec::new()));
         let (s, d, e, f, up) = (sent.clone(), dropped.clone(), executes.clone(), faults.clone(), upstream.to_string());
         tokio::spawn(async move {
             while let Ok((client, _)) = listener.accept().await {
@@ -88,19 +88,20 @@ impl Proxy {
         Proxy { addr, sent, dropped, executes, faults }
     }
 
-    /// The next simple query whose text is `query` (on any connection) meets `fault`, once.
+    /// The next simple query whose text is `query` (on any connection) meets `fault`, once;
+    /// after the faults set before it for the same text.
     pub fn fault(&self, query: &str, fault: Fault) {
-        *self.faults.lock().unwrap() = Some((Wanted::Exactly(query.to_string()), fault));
+        self.faults.lock().unwrap().push((Wanted::Exactly(query.to_string()), fault));
     }
 
     /// The next simple query that starts with `start` (on any connection) meets `fault`, once.
     pub fn fault_start(&self, start: &str, fault: Fault) {
-        *self.faults.lock().unwrap() = Some((Wanted::Starting(start.to_string()), fault));
+        self.faults.lock().unwrap().push((Wanted::Starting(start.to_string()), fault));
     }
 
-    /// Whether the fault set is still waiting for its query.
+    /// Whether a fault set is still waiting for its query.
     pub fn fault_pending(&self) -> bool {
-        self.faults.lock().unwrap().is_some()
+        !self.faults.lock().unwrap().is_empty()
     }
 
     /// What the clients sent so far.
@@ -189,10 +190,8 @@ async fn relay(
         let cstr = |b: &[u8]| String::from_utf8_lossy(b.split(|x| *x == 0).next().unwrap_or(&[])).to_string();
         let fault = {
             let mut faults = faults.lock().unwrap();
-            match faults.as_ref() {
-                Some((wanted, _)) if tag == b'Q' && wanted.is(&cstr(&msg)) => faults.take(),
-                _ => None,
-            }
+            let met = faults.iter().position(|(wanted, _)| tag == b'Q' && wanted.is(&cstr(&msg)));
+            met.map(|at| faults.remove(at))
         };
         let msg = match fault {
             Some((_, Fault::Close)) => {

@@ -2580,7 +2580,7 @@ async fn count(
         return Ok((Err(counted), false));
     }
     if let Some(limit) = limit.filter(|_| !tx.unsure) {
-        let read = limited_read(client, link, env, tx, (limit, COUNT_LOCK_WAIT), &check, sql).await?;
+        let read = limited_read(client, link, env, (limit, COUNT_LOCK_WAIT), &check, sql).await?;
         return Ok((read.and_then(|msgs| count_of(&msgs)), false));
     }
     // A search path per transaction goes first in each simple query (one implicit transaction).
@@ -2630,7 +2630,7 @@ async fn estimate(
     }
     let format = datarig_core::driver::ExplainFormat::PostgresJson;
     let explain = format.explain_sql(sql, false);
-    let read = limited_read(client, link, env, tx, (ESTIMATE_LIMIT, COUNT_LOCK_WAIT), &check, &explain).await?;
+    let read = limited_read(client, link, env, (ESTIMATE_LIMIT, COUNT_LOCK_WAIT), &check, &explain).await?;
     Ok(read.and_then(|msgs| {
         let plan = msgs.iter().find_map(|m| match m {
             SimpleQueryMessage::Row(r) => r.get(0).map(str::to_string),
@@ -2653,13 +2653,11 @@ async fn estimate(
 /// is [`DbError::TimedOut`] with the limit that applied, a cancel `Cancelled` ([`stopped`] tells
 /// them apart); a lock wait past its limit is `LockTimeout`. The read is answered only when the
 /// `COMMIT` went through: a failed one is the answer (the transaction may still be open, aborted:
-/// it is rolled back, and the session asked whether a block is open when that fails too); a lost
-/// connection is not an answer either.
+/// [`end_own`] ends it); a lost connection is not an answer either.
 async fn limited_read(
     client: &Client,
     link: &mut Link,
     env: &Env<'_>,
-    tx: &mut Tx,
     (statement, lock): (Duration, Duration),
     ask: &str,
     text: &str,
@@ -2683,10 +2681,8 @@ async fn limited_read(
         (Ok(()), Some(at)) => check_answer(&msgs[at..]),
     };
     if let Err(why) = admitted {
-        if !end.is_err_and(|e| e.is_closed())
-            && link.guard(None, client.batch_execute("ROLLBACK")).await?.is_err()
-        {
-            probe(client, link, env, tx).await?;
+        if !end.is_err_and(|e| e.is_closed()) {
+            end_own(client, link).await?;
         }
         return Ok(Err(why));
     }
@@ -2711,11 +2707,27 @@ async fn limited_read(
     let read = read.map_err(|e| failed((&e, read_when.0, read_when.1), applied));
     let Err(e) = commit else { return Ok(read) };
     let (asked, ran) = commit_when;
-    if !e.is_closed() && link.guard(None, client.batch_execute("ROLLBACK")).await?.is_err() {
-        probe(client, link, env, tx).await?;
+    if !e.is_closed() {
+        end_own(client, link).await?;
     }
     // A failed read says why; a read whose transaction did not end is no answer.
     Ok(read.and(Err(failed((&e, asked, ran), None))))
+}
+
+/// End the transaction [`limited_read`] opened, which may still be open. A `ROLLBACK` that went
+/// through leaves the session idle, whatever came before it; one a late cancel stopped is sent
+/// once more. If that fails too the session is not known to be out of it and is not used again:
+/// the connection is closed, which the session reports as lost, and the server rolls back.
+async fn end_own(client: &Client, link: &mut Link) -> Result<(), Closed> {
+    for _ in 0..2 {
+        match link.guard(None, client.batch_execute("ROLLBACK")).await? {
+            Ok(()) => return Ok(()),
+            Err(e) if e.is_closed() => return Ok(()),
+            Err(_) => {}
+        }
+    }
+    link.close();
+    Ok(())
 }
 
 /// A simple query's messages as far as they came, and how it ended: what ran before a failure

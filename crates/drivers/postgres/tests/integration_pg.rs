@@ -7376,3 +7376,55 @@ async fn a_bounded_read_is_a_query_of_its_own() {
     assert!(texts[setups[1] + 1].starts_with("EXPLAIN"), "{texts:?}");
     assert_eq!(texts[setups[1] + 2], "COMMIT", "{texts:?}");
 }
+
+/// A bounded read's own transaction never stays open: when its `COMMIT` and the `ROLLBACK` after
+/// it both fail, the `ROLLBACK` goes out again and the session is idle after it; when that fails
+/// too the session is lost, never kept in a transaction the user did not open. Neither is a
+/// number.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_read_never_leaves_its_transaction_open() {
+    let Some(url) = pg_url("a_bounded_read_never_leaves_its_transaction_open") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_ownend_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let rows = format!("SELECT * FROM {table} WHERE (id > 10)");
+    let counted = count_of(&rows);
+    let limit = Some(Duration::from_secs(30));
+    let refused = || pg_proxy::Fault::Instead("SELECT 1/0".into());
+    // Once for the count, once for the estimate: the session goes on, out of the transaction.
+    proxy.fault("COMMIT", refused());
+    proxy.fault("ROLLBACK", refused());
+    let (got, _) = q.count_within(1, &counted, limit).await;
+    assert!(!proxy.fault_pending(), "the COMMIT and the ROLLBACK met their faults");
+    assert!(matches!(got, Err(DbError::Server(_))), "{got:?}");
+    assert_eq!(q.first_value(2, "SELECT 'idle'").await.as_deref(), Some("idle"));
+    // Answered once the `COMMIT` that ends that statement's transaction is done too.
+    assert_eq!(q.count_within(20, &counted, None).await.0, Ok(40));
+    proxy.fault("COMMIT", refused());
+    proxy.fault("ROLLBACK", refused());
+    let (got, _) = q.estimate(3, &rows).await;
+    assert!(!proxy.fault_pending(), "the COMMIT and the ROLLBACK met their faults");
+    assert!(matches!(got, Err(DbError::Server(_))), "{got:?}");
+    assert_eq!(q.first_value(4, "SELECT 'idle'").await.as_deref(), Some("idle"));
+    assert_eq!(q.count_within(40, &counted, None).await.0, Ok(40));
+    // Neither `ROLLBACK` goes through: the session is lost.
+    proxy.fault("COMMIT", refused());
+    proxy.fault("ROLLBACK", refused());
+    proxy.fault("ROLLBACK", refused());
+    q.session.send(DbCommand::Count { id: 5, sql: counted.clone(), limit });
+    let mut seen = Vec::new();
+    while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), q.rx.recv()).await {
+        let lost = matches!(ev, DbEvent::Lost { .. });
+        seen.push(ev);
+        if lost {
+            break;
+        }
+    }
+    assert!(seen.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{seen:?}");
+    assert!(!seen.iter().any(|e| matches!(e, DbEvent::Counted { result: Ok(_), .. })), "{seen:?}");
+}
