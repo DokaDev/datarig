@@ -14,7 +14,9 @@
 //! is one text, never a queue): a second after the last change
 //! (a run again only moves its entry to the front), at once for a clear, and before the app
 //! quits (waited for at most [`QUIT_FLUSH`]). The texts never go to the error log, only what
-//! failed and the file's path, written by that thread too: the UI thread never waits on it.
+//! failed and the file's path, written by a thread of its own that is handed each line without
+//! waiting (dropped when it is [`LOG_QUEUE`] lines behind): an error log that blocks never holds
+//! up the UI thread nor a write of the history.
 //!
 //! `Ctrl+R` in the filter line (`Space r H`) lists the table's entries, the most recent first,
 //! with both texts under the list; one picked fills the condition and the order (the limit
@@ -40,6 +42,9 @@ pub(super) const DEBOUNCE: Duration = Duration::from_secs(1);
 
 /// How long quitting waits for the last write.
 pub(super) const QUIT_FLUSH: Duration = Duration::from_secs(1);
+
+/// The error log lines waiting for their thread at most; more are dropped.
+pub(super) const LOG_QUEUE: usize = 16;
 
 /// The lines of a picked entry's texts under the list.
 pub(crate) const PREVIEW_LINES: u16 = 6;
@@ -92,12 +97,37 @@ struct LogLine {
 /// How the writer writes a file (the tests stand in for it).
 type WriteFile = Box<dyn Fn(&std::path::Path, &str) -> std::io::Result<()> + Send>;
 
-/// What waits for the writer: at most one write, the latest (a newer one replaces it), the
-/// error log's lines, and the flushes, each answered once every write sent before it is done.
+/// The thread of the error log's lines: handed each one without waiting, best effort (a line
+/// is dropped when [`LOG_QUEUE`] wait, as behind an error log that blocks whoever writes it).
+#[derive(Clone)]
+struct Logger(mpsc::SyncSender<LogLine>);
+
+impl Logger {
+    /// Start the thread; `None` when it cannot start (the lines are dropped then).
+    fn spawn() -> Option<Self> {
+        let (tx, rx) = mpsc::sync_channel::<LogLine>(LOG_QUEUE);
+        std::thread::Builder::new()
+            .name("datarig-filter-history-log".into())
+            .spawn(move || {
+                for l in rx {
+                    datarig_core::fault::ErrorLog::new(Some(l.log)).record(l.context, &l.fault);
+                }
+            })
+            .ok()?;
+        Some(Logger(tx))
+    }
+
+    /// Hand `line` over, never waiting.
+    fn log(&self, line: LogLine) {
+        let _ = self.0.try_send(line);
+    }
+}
+
+/// What waits for the writer: at most one write, the latest (a newer one replaces it), and
+/// the flushes, each answered once every write sent before it is done.
 #[derive(Default)]
 struct Queue {
     write: Option<Write>,
-    logs: Vec<LogLine>,
     flushes: Vec<mpsc::Sender<()>>,
     /// The app is gone: the thread ends once the queue is done.
     closed: bool,
@@ -116,22 +146,25 @@ impl Shared {
 }
 
 /// The writer thread of the history: its files are written one at a time, in the order of
-/// their changes, off the UI thread, and so are its lines of the error log. However long a
-/// write takes, what waits behind it stays one text: an older text is never written after a
-/// newer one.
+/// their changes, off the UI thread; its lines of the error log go to a [`Logger`] of their
+/// own. However long a write takes, what waits behind it stays one text: an older text is
+/// never written after a newer one.
 struct Writer {
     shared: Arc<Shared>,
+    logger: Option<Logger>,
 }
 
 impl Writer {
-    /// Start the thread.
+    /// Start the thread (and the error log's).
     fn spawn(write_file: WriteFile) -> std::io::Result<Self> {
         let shared = Arc::<Shared>::default();
         let theirs = shared.clone();
+        let logger = Logger::spawn();
+        let log = logger.clone();
         std::thread::Builder::new()
             .name("datarig-filter-history".into())
-            .spawn(move || run_writer(&theirs, &write_file))?;
-        Ok(Writer { shared })
+            .spawn(move || run_writer(&theirs, &write_file, log.as_ref()))?;
+        Ok(Writer { shared, logger })
     }
 
     /// Queue `w`, replacing the write still waiting, if any: that one is never written (`w`
@@ -142,10 +175,11 @@ impl Writer {
         old
     }
 
-    /// Record `line` in the error log.
+    /// Record `line` in the error log, never waiting for it.
     fn log(&self, line: LogLine) {
-        self.shared.queue().logs.push(line);
-        self.shared.ready.notify_one();
+        if let Some(l) = &self.logger {
+            l.log(line);
+        }
     }
 
     /// `done` is answered once every write queued before it is done.
@@ -169,30 +203,26 @@ impl Drop for Writer {
 }
 
 /// The writer thread: waits for work, takes all of it, writes the latest text (a failure is
-/// answered first, then recorded in the error log), records the log's lines and answers the
-/// flushes; ends once the app is gone and nothing waits.
-fn run_writer(shared: &Shared, write_file: &WriteFile) {
-    let record = |l: &LogLine| datarig_core::fault::ErrorLog::new(Some(l.log.clone())).record(l.context, &l.fault);
+/// answered, then handed to the error log's thread) and answers the flushes; ends once the app
+/// is gone and nothing waits.
+fn run_writer(shared: &Shared, write_file: &WriteFile, logger: Option<&Logger>) {
     loop {
-        let (write, logs, flushes) = {
+        let (write, flushes) = {
             let mut q = shared.queue();
-            while q.write.is_none() && q.logs.is_empty() && q.flushes.is_empty() && !q.closed {
+            while q.write.is_none() && q.flushes.is_empty() && !q.closed {
                 q = shared.ready.wait(q).unwrap_or_else(PoisonError::into_inner);
             }
-            if q.write.is_none() && q.logs.is_empty() && q.flushes.is_empty() {
+            if q.write.is_none() && q.flushes.is_empty() {
                 return;
             }
-            (q.write.take(), std::mem::take(&mut q.logs), std::mem::take(&mut q.flushes))
+            (q.write.take(), std::mem::take(&mut q.flushes))
         };
-        for l in &logs {
-            record(l);
-        }
         if let Some(Write { path, text, seq, out, log }) = write {
             let result = write_file(&path, &text);
             let failed = result.as_ref().err().map(|e| Fault::io_at(e, &path));
             out.send(AppEvent::FilterHistory(Saved { seq, path, result }));
-            if let (Some(fault), Some(log)) = (failed, log) {
-                record(&LogLine { log, context: "filter_history.save_failed", fault });
+            if let (Some(fault), Some(log), Some(logger)) = (failed, log, logger) {
+                logger.log(LogLine { log, context: "filter_history.save_failed", fault });
             }
         }
         for f in flushes {

@@ -467,6 +467,56 @@ fn the_error_log_is_written_off_the_ui_thread() {
     assert!(text.contains(fh::FILE) && !text.contains("secret") && !text.contains("id >"), "{text}");
 }
 
+/// An error log that blocks for good (a FIFO nobody ever reads) never holds up the history's
+/// writes: once the folder can be written again, a clear after a failed one is written and
+/// said, and quitting stays quick.
+#[cfg(unix)]
+#[test]
+fn a_stuck_error_log_never_holds_up_a_write() {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let state = State::new("log-stuck");
+    let cfg = test_db_config();
+    let log = state.0.join("errors.log");
+    let made = std::process::Command::new("mkfifo").arg(&log).status();
+    if !made.is_ok_and(|s| s.success()) {
+        return; // No mkfifo here: nothing to check.
+    }
+    let mut seed = fh::History::default();
+    seed.record(key(&cfg), "secret = 1", "", 1);
+    fh::save(&state.file(), &seed).unwrap();
+    let mut h = users(&cfg, Some(&state));
+    let lock = |mode| std::fs::set_permissions(&state.0, std::fs::Permissions::from_mode(mode)).unwrap();
+    lock(0o500);
+    if std::fs::write(state.0.join("probe"), "").is_ok() {
+        return lock(0o700); // Root writes anywhere: nothing to check.
+    }
+    // Each fails, and its line for the error log waits for a reader that never comes (more
+    // lines than the log's thread keeps waiting).
+    for _ in 0..20 {
+        h.command("filter history clear");
+        h.keys("y");
+        flush(&mut h);
+        assert!(said(&mut h).contains("not saved"), "{}", said(&mut h));
+    }
+    lock(0o700);
+    h.command("filter history clear");
+    h.keys("y");
+    flush(&mut h);
+    assert!(said(&mut h).contains("cleared"), "{}", said(&mut h));
+    assert!(state.entries(&key(&cfg)).is_empty(), "written");
+    ran(&mut h, "id > 1");
+    let start = std::time::Instant::now();
+    h.app.dispatch(datarig_tui::app::action::Action::Quit);
+    assert!(start.elapsed() < Duration::from_secs(3), "quitting took {:?}", start.elapsed());
+    assert_eq!(state.entries(&key(&cfg)), [("id > 1".to_string(), String::new())], "written on quitting");
+    // Let the error log's thread go.
+    let _reader = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+        .open(&log)
+        .unwrap();
+}
+
 /// `history.filters = off`: nothing is kept and `Ctrl+R` says the history is off.
 #[test]
 fn the_setting_off_keeps_nothing() {
