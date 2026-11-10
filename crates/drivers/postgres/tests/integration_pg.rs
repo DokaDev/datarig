@@ -956,6 +956,13 @@ async fn order_keys_are_read_without_a_lock() {
         // Another type's default class (bpchar's) on a varchar column: an ORDER BY of varchar
         // compares as text does, so it is not the same order.
         format!("CREATE UNIQUE INDEX classes_vb ON {s}.classes (vb bpchar_ops)"),
+        // Primary keys whose type takes a polymorphic or a cast's class: each one's own order.
+        format!("CREATE TYPE {s}.mood AS ENUM ('sad', 'ok', 'happy')"),
+        format!("CREATE DOMAIN {s}.relname AS regclass"),
+        format!("CREATE TABLE {s}.by_enum (m {s}.mood PRIMARY KEY)"),
+        format!("CREATE TABLE {s}.by_array (a integer[] PRIMARY KEY)"),
+        format!("CREATE TABLE {s}.by_regclass (r regclass PRIMARY KEY)"),
+        format!("CREATE TABLE {s}.by_domain (r {s}.relname PRIMARY KEY)"),
         format!("CREATE UNIQUE INDEX classes_d ON {s}.classes (d)"),
         format!("CREATE UNIQUE INDEX classes_dp ON {s}.classes (dp text_pattern_ops)"),
         format!("CREATE UNIQUE INDEX classes_vp ON {s}.classes (vp varchar_pattern_ops)"),
@@ -1012,6 +1019,10 @@ async fn order_keys_are_read_without_a_lock() {
     let (keys, _, _) = ask("classes").await;
     let want = vec![vec!["b".to_string()], vec!["d".to_string()]];
     assert_eq!(keys, Ok(OrderKeys { unique_not_null: want, ..OrderKeys::default() }), "the default classes only");
+    for (table, column) in [("by_enum", "m"), ("by_array", "a"), ("by_regclass", "r"), ("by_domain", "r")] {
+        let (keys, _, _) = ask(table).await;
+        assert_eq!(keys, Ok(OrderKeys { primary_key: vec![column.into()], ..OrderKeys::default() }), "{table}");
+    }
     let (keys, _, _) = ask("nosuch").await;
     assert_eq!(keys, Err(DbError::NotFound));
 

@@ -39,10 +39,10 @@ LEFT JOIN LATERAL (
   -- of the column compares it: in the column's collation, with the operator class an ORDER BY
   -- picks for its type (a key unique only under another collation or class proves nothing).
   -- The class is picked as the server picks a default one: of the type with its domains
-  -- resolved, the btree default class for exactly that type; only when it has none, the one
-  -- default class of a type it converts to without a function (varchar to text), or of
-  -- several such the preferred type's. Anything else (a polymorphic class, no single one) is
-  -- not taken as the same order.
+  -- resolved, the btree default class for exactly that type; only when it has none, the class
+  -- of `anyenum` for an enum or `anyarray` for an array, else the default class of a type it
+  -- converts to implicitly without a function (one, or of several its category's preferred
+  -- type's). Anything else (a range, no single class) is not taken as the same order.
   HAVING pg_catalog.count(*) = i.indnkeyatts
     AND pg_catalog.bool_and(i.indcollation[k.k] = a.attcollation AND EXISTS (
       WITH RECURSIVE dom (t, base) AS (
@@ -55,16 +55,27 @@ LEFT JOIN LATERAL (
         WHERE m.amname = 'btree' AND d.opcdefault
       )
       SELECT 1 FROM dom b
+      JOIN pg_catalog.pg_type bt ON bt.oid = b.t
       WHERE b.base = 0 AND i.indclass[k.k] = COALESCE(
         (SELECT d.oid FROM defaults d WHERE d.opcintype = b.t),
+        -- An enum or an array: the class of `anyenum` or `anyarray` (the server's polymorphic
+        -- rule, not a cast). Ranges stay without one (not taken as the same order).
+        (SELECT d.oid FROM defaults d WHERE bt.typtype = 'e' AND d.opcintype = 'pg_catalog.anyenum'::pg_catalog.regtype),
+        (SELECT d.oid FROM defaults d
+         WHERE bt.typelem <> 0 AND bt.typlen = -1 AND bt.typcategory = 'A'
+           AND d.opcintype = 'pg_catalog.anyarray'::pg_catalog.regtype),
+        -- Else a type it converts to implicitly without a function: the only one, or of
+        -- several the preferred type of its own category (varchar converts to text and bpchar
+        -- alike, text is the strings' preferred type; regclass to oid and integer, oid is the
+        -- numbers' preferred type).
         (SELECT (pg_catalog.array_agg(d.oid))[1] FROM defaults d
-         JOIN pg_catalog.pg_cast cs ON cs.castsource = b.t AND cs.casttarget = d.opcintype AND cs.castmethod = 'b'
+         JOIN pg_catalog.pg_cast cs ON cs.castsource = b.t AND cs.casttarget = d.opcintype
+           AND cs.castmethod = 'b' AND cs.castcontext = 'i'
          HAVING pg_catalog.count(*) = 1),
-        -- Several: the one of its category's preferred type (varchar converts to text and
-        -- bpchar alike; text is the strings' preferred type), as the server picks.
         (SELECT (pg_catalog.array_agg(d.oid))[1] FROM defaults d
-         JOIN pg_catalog.pg_cast cs ON cs.castsource = b.t AND cs.casttarget = d.opcintype AND cs.castmethod = 'b'
-         JOIN pg_catalog.pg_type pt ON pt.oid = d.opcintype AND pt.typispreferred
+         JOIN pg_catalog.pg_cast cs ON cs.castsource = b.t AND cs.casttarget = d.opcintype
+           AND cs.castmethod = 'b' AND cs.castcontext = 'i'
+         JOIN pg_catalog.pg_type pt ON pt.oid = d.opcintype AND pt.typispreferred AND pt.typcategory = bt.typcategory
          HAVING pg_catalog.count(*) = 1))))
 ) x ON true
 WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'f', 'v', 'm')";
@@ -114,7 +125,10 @@ mod tests {
             "i.indcollation[k.k] = a.attcollation",
             "WHERE m.amname = 'btree' AND d.opcdefault",
             "(SELECT d.oid FROM defaults d WHERE d.opcintype = b.t)",
-            "cs.castmethod = 'b'",
+            "AND cs.castmethod = 'b' AND cs.castcontext = 'i'",
+            "pt.typcategory = bt.typcategory",
+            "'pg_catalog.anyenum'::pg_catalog.regtype",
+            "'pg_catalog.anyarray'::pg_catalog.regtype",
             "pg_catalog.count(*) = 1",
             "pt.typispreferred",
             "ty.typbasetype",
@@ -125,7 +139,7 @@ mod tests {
             assert!(ORDER_KEYS.contains(part), "{part}");
         }
         // Nothing that opens the relation.
-        for f in ["pg_get_", "::regclass", "pg_relation_size", "pg_total_relation_size"] {
+        for f in ["pg_get_", "::regclass", "::pg_catalog.regclass", "pg_relation_size", "pg_total_relation_size"] {
             assert!(!ORDER_KEYS.contains(f), "{f}");
         }
     }
