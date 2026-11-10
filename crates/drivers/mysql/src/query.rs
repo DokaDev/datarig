@@ -1853,15 +1853,34 @@ fn name_condition(names: &[String], d: Dialect) -> String {
     if cond.is_empty() { "FALSE".to_string() } else { cond.join(" OR ") }
 }
 
+/// Whether a transaction is open on the session before a read of the app's own: the user's
+/// tracked transaction, or one the server says is open (the status flags of its last answer, or
+/// of a `COM_PING` when there is none). Open when the server cannot say: the read then keeps to
+/// that transaction and never sets, starts or ends one, so it never commits or rolls back what
+/// the user did.
+async fn open_before(conn: &mut Conn, link: &mut Link, s: &State) -> Result<bool, Closed> {
+    if s.tx.open {
+        return Ok(true);
+    }
+    if let Some(p) = conn.last_ok_packet() {
+        return Ok(p.status_flags().contains(StatusFlags::SERVER_STATUS_IN_TRANS));
+    }
+    Ok(match link.guard(None, conn.ping()).await? {
+        Ok(()) => conn.last_ok_packet().is_none_or(|p| p.status_flags().contains(StatusFlags::SERVER_STATUS_IN_TRANS)),
+        Err(_) => true,
+    })
+}
+
 /// Open a read of the app's own in a transaction of its own: read-only, at `REPEATABLE READ` for
 /// this one transaction. At `SERIALIZABLE` InnoDB reads every row of a transaction with a shared
 /// lock, which would make the read wait for other sessions' writes and hold them up; at
 /// `REPEATABLE READ` it reads one consistent snapshot without locks. `SET TRANSACTION` (without
 /// `SESSION`) sets the next transaction only, so the session's own level is left as it was.
 ///
-/// Without autocommit (`autocommit` false) a read of the app's own before it (the allowlist's
-/// question) may have opened a transaction, in which the level cannot be set: that one is ended
-/// first (`START TRANSACTION` would end it all the same). When `START TRANSACTION` fails, the
+/// Only when no transaction was open before the app's own reads ([`open_before`]). Without
+/// autocommit (`autocommit` false) one of them (the allowlist's question) may have opened a
+/// transaction since, in which the level cannot be set: that one holds the app's own reads only
+/// and is ended first (`START TRANSACTION` would end it all the same). When `START TRANSACTION` fails, the
 /// level set for it is cleared again (`ROLLBACK` with no transaction), so it never applies to the
 /// user's next transaction.
 async fn begin_own(
@@ -1887,8 +1906,9 @@ async fn begin_own(
 /// user's transaction at `REPEATABLE READ` or `SERIALIZABLE` it counts in the transaction's
 /// snapshot (InnoDB's consistent read), which the answer says. Outside it, with autocommit the
 /// statement is a consistent read of its own; without autocommit it would open a transaction
-/// (locking every row it reads at `SERIALIZABLE`) and leave it open, so it counts in a read-only
-/// one of its own ([`begin_own`]) that it ends.
+/// (locking every row it reads at `SERIALIZABLE`) and leave it open, so when no transaction was
+/// open before ([`open_before`]) it counts in a read-only one of its own ([`begin_own`]) that it
+/// ends.
 async fn count(
     conn: &mut Conn,
     link: &mut Link,
@@ -1899,6 +1919,7 @@ async fn count(
     if let Err(why) = risk::repeatable(sql, s.mode) {
         return Ok((Err(DbError::NotRepeatable(why)), false));
     }
+    let was_open = open_before(conn, link, s).await?;
     let isolation = match asked_server(conn, link, env, s, sql).await? {
         Ok(isolation) => isolation,
         Err(why) => return Ok((Err(why), false)),
@@ -1912,7 +1933,7 @@ async fn count(
         s.tracked.select_limit = None;
         s.limit.current = None;
     }
-    let own = !s.tx.open && !s.tx.autocommit;
+    let own = !was_open && !s.tx.autocommit;
     if own && let Err(e) = begin_own(conn, link, false).await? {
         if e.is_fatal() {
             return Err(Stop::Lost(my_error(&e)));

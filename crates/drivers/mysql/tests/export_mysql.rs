@@ -547,3 +547,80 @@ async fn an_export_locks_no_rows_when_the_session_is_serializable() {
         }
     }
 }
+
+/// What another session reads of `sql` (one value, in autocommit).
+async fn seen_from_side(url: &str, sql: &str) -> Option<String> {
+    let mut a = side(url).await;
+    let v: Option<Option<String>> = a.query_first(sql).await.unwrap();
+    a.disconnect().await.unwrap();
+    v.flatten()
+}
+
+/// Without autocommit the user's statements open a transaction: an export and a count after
+/// the user's uncommitted `UPDATE` read inside it (they see the change) and never end it, so
+/// the change stays uncommitted (another session does not see it) and is not rolled back.
+#[tokio::test(flavor = "multi_thread")]
+async fn without_autocommit_the_users_uncommitted_work_is_never_ended() {
+    let Some((url, admin)) = urls("without_autocommit_the_users_uncommitted_work_is_never_ended") else { return };
+    let t = numbers(&admin, "noac", 10).await;
+    let mut c = Conn::open(&url, SessionRole::Query, "noac").await;
+    let id: u64 = c.rows("SELECT CONNECTION_ID()").await[0][0].as_deref().unwrap().parse().unwrap();
+    let open_trx = |admin: String| async move {
+        let mut a = side(&admin).await;
+        let n: Option<u64> = a
+            .exec_first("SELECT COUNT(*) FROM information_schema.INNODB_TRX WHERE trx_mysql_thread_id = ?", (id,))
+            .await
+            .unwrap();
+        a.disconnect().await.unwrap();
+        n.unwrap_or(0)
+    };
+    let v1 = format!("SELECT v FROM {} WHERE id = 1", t.q());
+    for serializable in [false, true] {
+        if serializable {
+            c.ok("SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE").await;
+        }
+        c.ok("SET autocommit = 0").await;
+        c.ok(&format!("UPDATE {} SET v = 'user' WHERE id = 1", t.q())).await;
+        for guard in [ExportGuard::Repeatable, ExportGuard::Confirmed] {
+            let (export, mut rx) = c.export(&format!("SELECT * FROM {} ORDER BY id", t.q()), guard, 2, 3);
+            let (_, rows, _) = drain(&mut rx).await;
+            assert!(c.exported(export).await.0.unwrap().complete);
+            assert_eq!(rows[0][1].as_deref(), Some("user"), "{guard:?}: read inside the user's transaction");
+        }
+        c.id += 1;
+        let count = c.id;
+        let sql = format!("SELECT COUNT(*) FROM (\nSELECT id FROM {} WHERE v = 'user'\n) AS datarig_count", t.q());
+        c.session.send(DbCommand::Count { id: count, sql });
+        match c.wait(|e| matches!(e, DbEvent::Counted { id: i, .. } if *i == count), 30).await {
+            DbEvent::Counted { result, .. } => assert_eq!(result, Ok(1), "counted inside the user's transaction"),
+            _ => unreachable!(),
+        }
+        assert_eq!(seen_from_side(&admin, &v1).await.as_deref(), Some("row 1"), "never committed");
+        assert_eq!(open_trx(admin.clone()).await, 1, "the user's transaction is still open");
+        // Since the user's UPDATE the session sent nothing that sets, starts or ends a transaction.
+        let mut a = side(&admin).await;
+        let sent: Vec<String> = a
+            .exec(
+                "SELECT h.SQL_TEXT FROM performance_schema.events_statements_history h \
+                 JOIN performance_schema.threads t ON t.THREAD_ID = h.THREAD_ID WHERE t.PROCESSLIST_ID = ? \
+                 AND h.EVENT_ID > (SELECT MAX(u.EVENT_ID) FROM performance_schema.events_statements_history u \
+                 WHERE u.THREAD_ID = h.THREAD_ID AND u.SQL_TEXT LIKE 'UPDATE%') ORDER BY h.EVENT_ID",
+                (id,),
+            )
+            .await
+            .unwrap();
+        a.disconnect().await.unwrap();
+        assert!(sent.len() >= 4, "{sent:?}");
+        assert!(
+            !sent.iter().any(|q| {
+                let q = q.trim_start().to_uppercase();
+                ["SET TRANSACTION", "START", "BEGIN", "COMMIT", "ROLLBACK"].iter().any(|w| q.starts_with(w))
+            }),
+            "{sent:?}"
+        );
+        assert_eq!(c.rows(&v1).await, [[Some("user".into())]], "never rolled back");
+        c.ok("ROLLBACK").await;
+        assert_eq!(seen_from_side(&admin, &v1).await.as_deref(), Some("row 1"));
+        c.ok("SET autocommit = 1").await;
+    }
+}

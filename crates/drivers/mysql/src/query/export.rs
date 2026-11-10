@@ -16,8 +16,8 @@
 //! lost, as a connection that broke.
 
 use super::{
-    Closed, Env, Link, State, Stop, after, asked_server, begin_own, cells, failure, idle, limit_applies, rest,
-    runs_server_code, stop_result,
+    Closed, Env, Link, State, Stop, after, asked_server, begin_own, cells, failure, idle, limit_applies, open_before,
+    rest, runs_server_code, stop_result,
 };
 use crate::session::my_error;
 use crate::values::column_meta;
@@ -57,6 +57,9 @@ pub(super) async fn export(
     if r.class != Class::Read || r.writes {
         return Ok((Err(DbError::NotSupported), false));
     }
+    // A transaction open before the app's own reads (the user's, or one the server cannot rule
+    // out) is read in, never ended.
+    let was_open = open_before(conn, link, s).await?;
     if guard == ExportGuard::Repeatable {
         if let Err(why) = risk::repeatable(sql, s.mode) {
             return Ok((Err(DbError::NotRepeatable(why)), false));
@@ -78,7 +81,6 @@ pub(super) async fn export(
         s.limit.current = wanted;
     }
     s.routine = runs_server_code(sql, s.mode, r.runs_code);
-    let was_open = s.tx.open;
     // Outside the user's transaction it reads in a read-only one of its own: nothing it calls
     // writes, and every row comes from one snapshot, read without locking rows.
     let own = !was_open;
