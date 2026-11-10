@@ -2459,6 +2459,12 @@ async fn sorting_a_table_tab_by_a_column_orders_its_rows_on_the_server() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The active table tab's keys are read on its metadata session.
+fn keys_known(app: &App) -> bool {
+    use datarig_tui::app::table_query::OrderKeysState;
+    matches!(app.tab().doc.table_query.as_ref().map(|q| &q.order_keys), Some(OrderKeysState::Known { .. }))
+}
+
 /// The values of column `col` of the rows the active tab holds, in order.
 fn held_column(app: &App, col: usize) -> Vec<Option<String>> {
     let datarig_tui::app::Results::Rows(rs) = &app.tab().results else { return Vec::new() };
@@ -2572,6 +2578,10 @@ async fn filter_by_value_reads_back_the_rows_it_names() {
     assert!(app.tab().is_table());
     app.dispatch(Action::RunStatement);
     pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5).await;
+    // The first run went before the profile's metadata session was open: the next one reads
+    // the table's keys with it, and whether each column's collation is deterministic.
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5 && keys_known(a)).await;
     // As the session shows it (its time zone decides the offset).
     let at = |id: &str| held_column(&app, 4)[id.parse::<usize>().unwrap() - 1].clone().unwrap();
     let (at1, at2) = (at("1"), at("2"));
@@ -2727,6 +2737,62 @@ async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() 
         app.dispatch(Action::Table(TableAction::Clear));
         pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5).await;
     }
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// PostgreSQL's "contains" (`ILIKE`) is offered only on a column whose collation the key-only
+/// catalog read says is deterministic: on a column of a nondeterministic ICU collation it is
+/// dimmed with why (and nothing is sent), on the other text column it runs and reads back its
+/// rows. Makes schema `zz_it_coll_<pid>` with the collation `zz_ci` and a table in it, and
+/// drops them.
+#[tokio::test(flavor = "multi_thread")]
+async fn contains_is_offered_only_where_the_collation_is_known_deterministic() {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::filter_value::ByValue as B;
+    use datarig_tui::app::menu::{MenuItem, MenuLine};
+    let Some(url) = pg_url("contains_is_offered_only_where_the_collation_is_known_deterministic") else { return };
+    let schema = format!("zz_it_coll_{}", std::process::id());
+    let _guard = SchemaGuard { url: url.clone(), schema: schema.clone() };
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE COLLATION {s}.zz_ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)"),
+        format!("CREATE TABLE {s}.zz_words (id int PRIMARY KEY, ci text COLLATE {s}.zz_ci, plain text)"),
+        format!(
+            "INSERT INTO {s}.zz_words VALUES (1, 'Apple', 'Apple'), (2, 'apple pie', 'apple pie'), (3, 'pear', 'pear')"
+        ),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let dir = std::env::temp_dir().join(format!("datarig-it-coll-{}", std::process::id()));
+    let (mut app, mut rx) = table_tab_app(&url, &schema, "zz_words", &dir);
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 3).await;
+    // The keys (and the collations) are read with the next run, on the metadata session.
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 3 && keys_known(a)).await;
+    let datarig_tui::app::Results::Rows(rs) = &app.tab().results else { panic!("no rows") };
+    let ci = rs.columns.iter().position(|c| c.meta.name == "ci").unwrap();
+    let held = held_column(&app, 0);
+    let row = held.iter().position(|v| v.as_deref() == Some("1")).unwrap();
+    let g = &mut app.tab_mut().grid;
+    (g.row, g.col, g.anchor) = (row, ci, None);
+    app.focus = Focus::Results;
+    let qid = app.tab().exec.query_id;
+    press(&mut app, 'F');
+    let m = app.overlays.menu().expect("the filter menu");
+    let contains = MenuItem::Filter(B::Contains);
+    assert!(m.lines.contains(&MenuLine::Item(contains)));
+    let why = m.off_of(contains).map(|o| o.notice.render(&app.i18n).to_string());
+    assert!(why.as_deref().is_some_and(|w| w.contains("is nondeterministic")), "{why:?}");
+    assert!(m.off_of(MenuItem::Filter(B::Eq)).is_none(), "equality is offered");
+    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+    assert_eq!(app.tab().exec.query_id, qid, "nothing sent");
+    // The column of the default collation: offered, and it reads back its rows.
+    let (got, ran) = by_value(&mut app, &mut rx, &["1"], "plain", B::Contains).await;
+    assert_eq!(ran, "plain ILIKE '%Apple%' ESCAPE '!'");
+    assert_eq!(got, ["1", "2"]);
     drop(app);
     let _ = std::fs::remove_dir_all(&dir);
 }

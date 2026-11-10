@@ -622,7 +622,8 @@ async fn order_keys_are_read_without_a_metadata_lock() {
     m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
     let mut side_admin = side(&admin).await;
     let meta = only_session(&mut side_admin, SessionRole::Meta, "okeys").await;
-    let want = OrderKeys { primary_key: vec!["id".into()], unique_not_null: vec![vec!["v".into()]], inherited: false };
+    let want =
+        OrderKeys { primary_key: vec!["id".into()], unique_not_null: vec![vec!["v".into()]], ..OrderKeys::default() };
     let mut n = 0;
     let mut ask = |m: &mut Conn| {
         n += 1;

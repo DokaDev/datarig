@@ -1046,7 +1046,9 @@ async fn a_filter_finds_a_real_by_the_value_shown() {
 /// waits for that lock behind a reader, the read answers at once with the keys, and the
 /// metadata session holds or asks for no lock on any relation of the schema meanwhile. Only
 /// whole-column, immediate, full unique keys count, the others only with all columns `NOT
-/// NULL`; a table that others inherit from says so; no such table is not found.
+/// NULL`; a table that others inherit from says so; no such table is not found. With them
+/// comes whether each column's collation is deterministic (a nondeterministic ICU collation of
+/// the schema's is not), read the same way.
 #[tokio::test(flavor = "multi_thread")]
 async fn order_keys_are_read_without_a_lock() {
     use datarig_core::driver::keys::OrderKeys;
@@ -1135,20 +1137,42 @@ async fn order_keys_are_read_without_a_lock() {
     let probe = OrderKeys {
         primary_key: vec!["b".into(), "a".into()],
         unique_not_null: vec![vec!["email".into()], vec!["later".into()]],
-        inherited: false,
+        ..OrderKeys::default()
     };
+    // The keys alone (whether each column's collation is deterministic looked at apart).
+    let strip =
+        |r: &Result<OrderKeys, DbError>| r.clone().map(|k| OrderKeys { deterministic: Default::default(), ..k });
+    let deterministic = |pairs: &[(&str, bool)]| pairs.iter().map(|(c, d)| (c.to_string(), *d)).collect();
+    let probe_columns: std::collections::BTreeMap<String, bool> =
+        deterministic(&[("a", true), ("b", true), ("email", true), ("nick", true), ("note", true), ("later", true)]);
     let (keys, _, _) = ask("keys_probe").await;
-    assert_eq!(keys, Ok(probe.clone()));
+    assert_eq!(strip(&keys), Ok(probe.clone()));
+    assert_eq!(
+        keys.as_ref().map(|k| &k.deterministic),
+        Ok(&probe_columns),
+        "every column, of no collation or a deterministic one"
+    );
     let (keys, _, _) = ask("parent").await;
-    assert_eq!(keys, Ok(OrderKeys { primary_key: vec!["id".into()], inherited: true, ..OrderKeys::default() }));
+    assert_eq!(strip(&keys), Ok(OrderKeys { primary_key: vec!["id".into()], inherited: true, ..OrderKeys::default() }));
     let (keys, _, _) = ask("coll").await;
-    assert_eq!(keys, Ok(OrderKeys { unique_not_null: vec![vec!["vc".into()]], ..OrderKeys::default() }), "only vc");
+    assert_eq!(
+        strip(&keys),
+        Ok(OrderKeys { unique_not_null: vec![vec!["vc".into()]], ..OrderKeys::default() }),
+        "only vc"
+    );
+    // The column of the nondeterministic ICU collation is said to be one; the others are not.
+    let want = deterministic(&[("v", false), ("w", true), ("vc", true)]);
+    assert_eq!(keys.map(|k| k.deterministic), Ok(want), "the collations read with the keys");
     let (keys, _, _) = ask("classes").await;
     let want = vec![vec!["b".to_string()], vec!["d".to_string()]];
-    assert_eq!(keys, Ok(OrderKeys { unique_not_null: want, ..OrderKeys::default() }), "the default classes only");
+    assert_eq!(
+        strip(&keys),
+        Ok(OrderKeys { unique_not_null: want, ..OrderKeys::default() }),
+        "the default classes only"
+    );
     for (table, column) in [("by_enum", "m"), ("by_array", "a"), ("by_regclass", "r"), ("by_domain", "r")] {
         let (keys, _, _) = ask(table).await;
-        assert_eq!(keys, Ok(OrderKeys { primary_key: vec![column.into()], ..OrderKeys::default() }), "{table}");
+        assert_eq!(strip(&keys), Ok(OrderKeys { primary_key: vec![column.into()], ..OrderKeys::default() }), "{table}");
     }
     let (keys, _, _) = ask("nosuch").await;
     assert_eq!(keys, Err(DbError::NotFound));
@@ -1159,7 +1183,8 @@ async fn order_keys_are_read_without_a_lock() {
     let lock = format!("LOCK TABLE {s}.keys_probe IN ACCESS EXCLUSIVE MODE");
     assert!(matches!(holder.run(2, &lock).await, DbEvent::Done { .. }));
     let (keys, took, locks) = ask("keys_probe").await;
-    assert_eq!(keys, Ok(probe.clone()), "read past the held lock");
+    assert_eq!(strip(&keys), Ok(probe.clone()), "read past the held lock");
+    assert_eq!(keys.map(|k| k.deterministic), Ok(probe_columns.clone()), "the collations too");
     assert!(took < Duration::from_secs(1), "at once: {took:?}");
     assert_eq!(locks, "0", "no lock held or asked for on the locked table");
     assert!(matches!(holder.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
@@ -1192,7 +1217,8 @@ async fn order_keys_are_read_without_a_lock() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let (keys, took, locks) = ask("keys_probe").await;
-    assert_eq!(keys, Ok(probe), "not queued behind the waiting lock");
+    assert_eq!(strip(&keys), Ok(probe), "not queued behind the waiting lock");
+    assert_eq!(keys.map(|k| k.deterministic), Ok(probe_columns), "the collations too");
     assert!(took < Duration::from_secs(1), "at once: {took:?}");
     assert_eq!(locks, "0", "no lock asked for behind the waiting one");
     assert!(matches!(reader.run(3, "ROLLBACK").await, DbEvent::Done { .. }));

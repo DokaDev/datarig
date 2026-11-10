@@ -110,9 +110,10 @@ they are not the filter's answer; a cancelled run or a lost connection leaves th
 tab by the value of the cell under the cursor. The menu offers `=`, `<>`, `<>` with the rows whose
 value is NULL kept (`IS DISTINCT FROM` on PostgreSQL, `NOT (… <=> …)` on MySQL), `<`, `>`, `<=` and
 `>=`; for text also "starts with" (`LIKE 'value%'`, its `%` and `_` escaped with `!`) and "contains
-(case-insensitive)" (`ILIKE` on PostgreSQL; on MySQL `LIKE`, which a `_ci` collation compares
-without case, else `LOWER(…) LIKE LOWER(…)`). A NULL cell offers only `IS NULL` and `IS NOT NULL`,
-never `= NULL`. With cells of one column selected (up to 1000), it offers `IN` and `NOT IN` of
+(case-insensitive)" (`ILIKE` on PostgreSQL, offered once datarig has read that the column's
+collation is deterministic, which it does with the tab's runs; on MySQL `LIKE`, which a `_ci`
+collation compares without case, else `LOWER(…) LIKE LOWER(…)`). A NULL cell offers only `IS NULL`
+and `IS NOT NULL`, never `= NULL`. With cells of one column selected (up to 1000), it offers `IN` and `NOT IN` of
 their values; a NULL among them is tested on its own (`IN (…) OR … IS NULL`, `NOT IN (…) AND … IS
 NOT NULL`), and without one a second `NOT IN` keeps the rows whose value is NULL, which a plain
 `NOT IN` leaves out. An equality on a floating-point column may find nothing, and how text compares

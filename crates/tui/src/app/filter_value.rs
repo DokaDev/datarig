@@ -255,9 +255,17 @@ impl App {
         let text_of = |c: &Cond| -> Result<String, Off> {
             let cond = query::render(c, &target).map_err(|e| match e {
                 RenderError::CaseInsensitiveRefused(_) => {
-                    let collation = target.column(&column).and_then(|f| f.collation.clone()).unwrap_or_default();
-                    let n = Notice::new(Msg::TableFilterByValueNondeterministic { collation }, Level::Warning);
-                    Off::new(Label::TableFilterByValueOffCollation, n)
+                    let collation = target.column(&column).and_then(|f| f.collation.clone());
+                    let n = match collation {
+                        Some(collation) => Msg::TableFilterByValueNondeterministic { collation },
+                        None => Msg::TableFilterByValueNondeterministicColumn { column: column.clone() },
+                    };
+                    Off::new(Label::TableFilterByValueOffCollation, Notice::new(n, Level::Warning))
+                }
+                RenderError::CollationUnknown(_) => {
+                    let n =
+                        Notice::new(Msg::TableFilterByValueCollationUnknown { column: column.clone() }, Level::Warning);
+                    Off::new(Label::TableFilterByValueOffCollationUnknown, n)
                 }
                 _ => Off::new(Label::TableFilterByValueOffType, self.by_value_type_notice(m)),
             })?;
@@ -406,12 +414,12 @@ impl App {
                     case_hint,
                     like(query::like_starts_with(v), CaseMode::Server),
                 ));
-                let facts = target.column(&column);
-                let known = facts.is_some_and(|f| f.collation.is_some());
-                let contains_hint = match (known, d) {
-                    (true, _) => None,
-                    (false, Dialect::Postgres) => hint(Label::TableFilterByValueHintCollationPg),
-                    (false, Dialect::MySql(_)) => hint(Label::TableFilterByValueHintCollationLower),
+                // PostgreSQL: `ILIKE` only on a collation known deterministic, else dimmed with
+                // why; MySQL: a collation not known by name is lowered on both sides.
+                let known = target.column(&column).is_some_and(|f| f.collation.is_some());
+                let contains_hint = match d {
+                    Dialect::MySql(_) if !known => hint(Label::TableFilterByValueHintCollationLower),
+                    _ => None,
                 };
                 entries.push(entry(
                     ByValue::Contains,

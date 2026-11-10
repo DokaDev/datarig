@@ -15,7 +15,7 @@ expression: backend
 "│ │  <= 'it's'                                                       │             ││                                  │"
 "│ │  >= 'it's'                                                       │             ││                                  │"
 "│ │  starts with 'it's'                  case as the server compares │             ││                                  │"
-"│ │  contains 'it's' (case-insensitive)   collation not known: ILIKE │             ││                                  │"
+"│ │  contains 'it's' (case-insensitive)                              │             ││                                  │"
 "│ ╰──────────────────────────────────────────────────────────────────╯             ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"

@@ -266,14 +266,14 @@ pub struct ColumnFacts {
     /// Its collation's name, when it has one and the server said it.
     pub collation: Option<String>,
     /// Equal strings are equal byte for byte under its collation (PostgreSQL: a
-    /// nondeterministic ICU collation is not; it refuses `ILIKE`).
-    pub deterministic: bool,
+    /// nondeterministic ICU collation is not; it refuses `ILIKE`). `None`: not known.
+    pub deterministic: Option<bool>,
 }
 
 impl ColumnFacts {
-    /// A column of kind `kind`, with a deterministic collation of unknown name.
+    /// A column of kind `kind`, its collation not known.
     pub fn new(name: impl Into<ColName>, kind: ColumnKind) -> Self {
-        Self { name: name.into(), kind, zoned: false, collation: None, deterministic: true }
+        Self { name: name.into(), kind, zoned: false, collation: None, deterministic: None }
     }
 }
 

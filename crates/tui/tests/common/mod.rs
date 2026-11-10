@@ -1162,12 +1162,18 @@ pub fn shop_keys() -> KeyCatalog {
 /// metadata session: primary key `pk` (none: no key). Panics when the tab asked for none.
 pub fn keys_came(h: &mut Harness, profile: &str, pk: &[&str]) {
     use datarig_core::driver::keys::OrderKeys;
+    let keys = OrderKeys { primary_key: pk.iter().map(|c| c.to_string()).collect(), ..OrderKeys::default() };
+    keys_came_with(h, profile, keys);
+}
+
+/// The key-only read of the active table tab's table answered with `keys`, on profile
+/// `profile`'s own metadata session. Panics when the tab asked for none.
+pub fn keys_came_with(h: &mut Harness, profile: &str, keys: datarig_core::driver::keys::OrderKeys) {
     use datarig_tui::app::table_query::OrderKeysState;
     let request = match h.app.tab().doc.table_query.as_ref().map(|q| &q.order_keys) {
         Some(OrderKeysState::Asked { request, .. }) => *request,
         other => panic!("no keys asked for: {other:?}"),
     };
-    let keys = OrderKeys { primary_key: pk.iter().map(|c| c.to_string()).collect(), ..OrderKeys::default() };
     h.meta_db(profile, DbEvent::TableKeys { id: request, result: Ok(keys) });
 }
 

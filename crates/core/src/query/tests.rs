@@ -12,6 +12,7 @@ fn users() -> TableName {
 fn target(d: Dialect) -> Target {
     let mut name = ColumnFacts::new("name", ColumnKind::Text);
     name.collation = Some("utf8mb4_0900_bin".into());
+    name.deterministic = Some(true);
     let mut email = ColumnFacts::new("email", ColumnKind::Text);
     email.collation = Some("utf8mb4_0900_ai_ci".into());
     let columns = vec![
@@ -544,7 +545,7 @@ fn render_like_escapes_the_value() {
     assert_eq!(render_my(&like("email", CaseMode::Insensitive), true), "email LIKE '%x!_%' ESCAPE '!'");
     assert_eq!(render_my(&like("name", CaseMode::Insensitive), true), "LOWER(name) LIKE LOWER('%x!_%') ESCAPE '!'");
     let mut t = target(Dialect::Postgres);
-    t.columns[1].deterministic = false;
+    t.columns[1].deterministic = Some(false);
     assert_eq!(
         render(&like("name", CaseMode::Insensitive), &t),
         Err(RenderError::CaseInsensitiveRefused("name".into()))
@@ -686,7 +687,13 @@ fn render_like_patterns_read_the_same_in_every_mysql_mode() {
     assert_eq!(render_my(&contains("email"), true), "email LIKE '%A!_%' ESCAPE '!'");
     let unknown = contains("Mixed Case");
     assert_eq!(render_my(&unknown, true), "LOWER(`Mixed Case`) LIKE LOWER('%A!_%') ESCAPE '!'");
-    assert_eq!(render_pg(&unknown), r#""Mixed Case" ILIKE '%A!_%' ESCAPE '!'"#);
+    // PostgreSQL: `ILIKE` only on a collation known deterministic (a nondeterministic one is
+    // refused by the server); not known, it is not written.
+    let t = target(Dialect::Postgres);
+    assert_eq!(render(&unknown, &t), Err(RenderError::CollationUnknown("Mixed Case".into())));
+    let mut known = t.clone();
+    known.columns[3].deterministic = Some(true);
+    assert_eq!(render(&unknown, &known).unwrap(), r#""Mixed Case" ILIKE '%A!_%' ESCAPE '!'"#);
 }
 
 #[test]

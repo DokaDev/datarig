@@ -587,8 +587,9 @@ impl App {
     /// What the app knows of table tab `id`'s table for writing its SQL: the columns of the
     /// rows it holds of its query (else the catalog's names, of unknown kind), with the
     /// explorer's structure when it was read (collations), and the keys of the key-only read on
-    /// the tab's metadata session as it is now ([`OrderKeysState`]). Until they are known no key
-    /// is: no tie-breaker is appended and no order is taken for total.
+    /// the tab's metadata session as it is now ([`OrderKeysState`]), with whether each column's
+    /// collation is deterministic as that read says (when the structure does not). Until they
+    /// are known no key is: no tie-breaker is appended and no order is taken for total.
     pub(crate) fn table_target(&self, id: TabId) -> Option<Target> {
         let t = self.tabs.get(id).filter(|t| t.is_table())?;
         let table = t.doc.table.as_ref()?;
@@ -623,7 +624,7 @@ impl App {
             for c in &mut target.columns {
                 if let Some(coll) = s.columns.iter().find(|sc| sc.name == c.name).and_then(|sc| sc.collation.as_ref()) {
                     c.collation = Some(coll.name.clone());
-                    c.deterministic = coll.deterministic;
+                    c.deterministic = Some(coll.deterministic);
                 }
             }
         }
@@ -634,6 +635,11 @@ impl App {
             OrderKeysState::Known { on: o, keys } if Some(o) == on.as_ref() => Some(keys),
             _ => None,
         });
+        if let Some(k) = read {
+            for c in target.columns.iter_mut().filter(|c| c.deterministic.is_none()) {
+                c.deterministic = k.deterministic.get(&c.name).copied();
+            }
+        }
         if let Some(k) = read.filter(|k| !k.inherited) {
             target.primary_key = k.primary_key.clone();
             target.unique_keys = k.unique_not_null.clone();

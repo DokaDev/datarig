@@ -81,10 +81,26 @@ fn page(h: &mut Harness) {
     page_with(h, columns(), rows());
 }
 
-/// `shop.users` open and answered, the grid focused, nothing sent since.
+/// The key-only read's answer for `shop.users`: no key, and whether the collation of `name` is
+/// deterministic (`None`: not said).
+fn collations(name: Option<bool>) -> datarig_core::driver::keys::OrderKeys {
+    let deterministic = name.map(|d| ("name".to_string(), d)).into_iter().collect();
+    datarig_core::driver::keys::OrderKeys { deterministic, ..Default::default() }
+}
+
+/// `shop.users` open and answered (the collation of `name` read as deterministic), the grid
+/// focused, nothing sent since.
 fn users() -> Harness {
+    users_with(Some(collations(Some(true))))
+}
+
+/// [`users`], the key-only read answered with `keys` (`None`: not answered).
+fn users_with(keys: Option<datarig_core::driver::keys::OrderKeys>) -> Harness {
     let mut h = Harness::connected(Lang::En);
     open_users(&mut h);
+    if let Some(keys) = keys {
+        keys_came_with(&mut h, "local-pg", keys);
+    }
     page(&mut h);
     h.sent();
     h.key(KeyCode::Tab);
@@ -198,7 +214,7 @@ fn the_entries_of_a_cell_with_their_hints() {
             "<= 'it's' | ",
             ">= 'it's' | ",
             "starts with 'it's' | case as the server compares",
-            "contains 'it's' (case-insensitive) | collation not known: ILIKE",
+            "contains 'it's' (case-insensitive) | ",
         ]
     );
     h.key(KeyCode::Esc);
@@ -214,6 +230,39 @@ fn the_entries_of_a_cell_with_their_hints() {
     at(&mut h, 1, 2);
     h.keys("F");
     assert_eq!(lines(&h), vec!["# Filter by score", "IS NULL | ", "IS NOT NULL | "]);
+}
+
+/// PostgreSQL's "contains" (`ILIKE`) is offered only on a column whose collation is known to be
+/// deterministic, as the key-only read says (no structure read): not known yet, or known not
+/// to be, it is dimmed with why.
+#[test]
+fn contains_is_offered_only_on_a_collation_known_deterministic() {
+    let label = "contains 'it's' (case-insensitive)";
+    let dimmed = |h: &Harness| h.app.menu_dimmed_rows().into_iter().find(|(l, _)| l == label).map(|(_, why)| why);
+    for (keys, why, says) in [
+        (None, "collation not known yet", "whether the collation of column “name” takes ILIKE is not known yet"),
+        (Some(collations(None)), "collation not known yet", "is not known yet"),
+        (Some(collations(Some(false))), "nondeterministic", "the collation of column “name” is nondeterministic"),
+    ] {
+        let mut h = users_with(keys);
+        at(&mut h, 0, 1);
+        h.keys("F");
+        assert!(menu_open(&h), "{}", flashed(&h));
+        assert_eq!(dimmed(&h).as_deref(), Some(why));
+        let notice = h.app.menu_dimmed_notice(label).expect("dimmed").render(&h.app.i18n).to_string();
+        assert!(notice.contains(says), "{notice}");
+        assert!(runs(&mut h).is_empty(), "nothing runs");
+        // The other entries are not about the collation.
+        h.key(KeyCode::Esc);
+        assert_eq!(
+            filter(&mut h, 0, 1, "starts with 'it's'"),
+            vec![vec![format!("{ALL} WHERE (name LIKE 'it''s%' ESCAPE '!')")]]
+        );
+    }
+    // Known deterministic: offered.
+    let mut h = users();
+    let sent = filter(&mut h, 0, 1, label);
+    assert_eq!(sent, vec![vec![format!("{ALL} WHERE (name ILIKE '%it''s%' ESCAPE '!')")]]);
 }
 
 #[test]

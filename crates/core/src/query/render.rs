@@ -27,7 +27,9 @@
 //! user expects: `(col IN (…) OR col IS NULL)`, `(col NOT IN (…) AND col IS NOT NULL)`.
 //!
 //! Patterns are escaped with `!` and written with `ESCAPE '!'`: a backslash would read
-//! differently under MySQL's `NO_BACKSLASH_ESCAPES`.
+//! differently under MySQL's `NO_BACKSLASH_ESCAPES`. A PostgreSQL pattern without case is
+//! `ILIKE`, written only on a column whose collation is known to be deterministic (the server
+//! refuses it on a nondeterministic one).
 
 use super::{BarRefusal, CaseMode, CmpOp, ColumnFacts, ColumnKind, Cond, Target, Value};
 use crate::export::{negative_zero, sql_number};
@@ -58,6 +60,9 @@ pub enum RenderError {
     /// A case-insensitive pattern on a PostgreSQL column whose collation is not deterministic,
     /// which the server refuses for `ILIKE`: the column.
     CaseInsensitiveRefused(String),
+    /// A case-insensitive pattern on a PostgreSQL column whose collation is not known to be
+    /// deterministic (it may be one the server refuses `ILIKE` on): the column.
+    CollationUnknown(String),
 }
 
 /// The escape character of the patterns written here.
@@ -154,8 +159,10 @@ fn render_at(c: &Cond, t: &Target, place: Place) -> Result<String, RenderError> 
             match (d, case) {
                 (_, CaseMode::Server) => format!("{} {}LIKE {p} ESCAPE {e}", col(name), not(*negated)),
                 (Dialect::Postgres, CaseMode::Insensitive) => {
-                    if facts.is_some_and(|f| !f.deterministic) {
-                        return Err(RenderError::CaseInsensitiveRefused(name.clone()));
+                    match facts.and_then(|f| f.deterministic) {
+                        Some(true) => {}
+                        Some(false) => return Err(RenderError::CaseInsensitiveRefused(name.clone())),
+                        None => return Err(RenderError::CollationUnknown(name.clone())),
                     }
                     format!("{} {}ILIKE {p} ESCAPE {e}", col(name), not(*negated))
                 }
