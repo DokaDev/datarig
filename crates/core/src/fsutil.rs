@@ -177,7 +177,7 @@ const NEW_NAME_TRIES: usize = 16;
 /// [`replace_private`], its new file named `.<name>.tmp-<n>` with `n` from `names`.
 fn replace_private_named(path: &Path, bytes: &[u8], names: &mut dyn Iterator<Item = String>) -> io::Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(m) if !m.file_type().is_file() => {
+        Ok(m) if !is_plain_file(&m) => {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a plain file"));
         }
         Ok(_) => {}
@@ -224,6 +224,11 @@ fn create_private(path: &Path) -> io::Result<fs::File> {
         opts.mode(0o600);
         opts.custom_flags(no_follow_flags());
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        opts.custom_flags(no_follow_flags());
+    }
     let f = opts.open(path)?;
     // A umask may have taken more away: exactly 0600, on this very file.
     #[cfg(unix)]
@@ -234,8 +239,10 @@ fn create_private(path: &Path) -> io::Result<fs::File> {
     Ok(f)
 }
 
-/// Open `path` for reading without following a symbolic link at it (Unix: the open fails then)
-/// and without waiting for a writer (a FIFO). Check what was opened with `File::metadata`.
+/// Open `path` for reading without following a symbolic link at it and without waiting for a
+/// writer (a FIFO). On Unix opening a link fails; on Windows the link (any reparse point) itself
+/// is opened, never what it points to. Check what was opened with [`is_plain_file`] on
+/// `File::metadata` before reading.
 pub fn open_no_follow(path: &Path) -> io::Result<fs::File> {
     let mut opts = fs::OpenOptions::new();
     opts.read(true);
@@ -244,13 +251,57 @@ pub fn open_no_follow(path: &Path) -> io::Result<fs::File> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.custom_flags(no_follow_flags() | rustix::fs::OFlags::NONBLOCK.bits() as i32);
     }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        opts.custom_flags(no_follow_flags());
+    }
     opts.open(path)
+}
+
+/// Whether `m` (from `symlink_metadata` or an open file) is a plain file: not a folder, a
+/// symbolic link, a FIFO or a device, and on Windows not a reparse point of any kind (a link,
+/// a junction, a placeholder).
+pub fn is_plain_file(m: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        plain_file_attributes(m.file_type().is_file(), m.file_attributes())
+    }
+    #[cfg(not(windows))]
+    m.file_type().is_file()
 }
 
 /// `O_NOFOLLOW` for `OpenOptionsExt::custom_flags`.
 #[cfg(unix)]
 fn no_follow_flags() -> i32 {
     rustix::fs::OFlags::NOFOLLOW.bits() as i32
+}
+
+/// `FILE_FLAG_OPEN_REPARSE_POINT` for `OpenOptionsExt::custom_flags`: a link (any reparse
+/// point) is opened itself, never what it points to.
+#[cfg(any(windows, test))]
+fn no_follow_flags_windows() -> u32 {
+    FILE_FLAG_OPEN_REPARSE_POINT
+}
+
+#[cfg(windows)]
+fn no_follow_flags() -> u32 {
+    no_follow_flags_windows()
+}
+
+/// The Windows `CreateFileW` flag of that name.
+#[cfg(any(windows, test))]
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+/// The Windows file attribute of that name.
+#[cfg(any(windows, test))]
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+
+/// A plain file on Windows: a file by its type and no reparse point by its `attributes`.
+#[cfg(any(windows, test))]
+fn plain_file_attributes(is_file: bool, attributes: u32) -> bool {
+    is_file && attributes & FILE_ATTRIBUTE_REPARSE_POINT == 0
 }
 
 /// Write a new file at `path`, never replacing anything already there (an `AlreadyExists`

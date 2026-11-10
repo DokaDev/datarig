@@ -321,3 +321,38 @@ fn a_private_replacement_refuses_a_link_at_the_path() {
     assert!(leftovers(&dir).is_empty(), "{:?}", leftovers(&dir));
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// On Windows a link (any reparse point) is opened itself, never followed, and is not a plain
+/// file however plain its target is.
+#[test]
+fn a_reparse_point_is_opened_itself_and_never_a_plain_file() {
+    assert_eq!(no_follow_flags_windows(), 0x0020_0000, "FILE_FLAG_OPEN_REPARSE_POINT");
+    assert!(plain_file_attributes(true, 0x0020), "an archived file");
+    assert!(plain_file_attributes(true, 0x0080), "a normal file");
+    assert!(!plain_file_attributes(true, 0x0400 | 0x0020), "a reparse point");
+    assert!(!plain_file_attributes(false, 0x0010), "a folder");
+}
+
+/// A link put at the path after it was looked at is never read through: opening it fails
+/// (Unix) or gives the link itself, which is not a plain file (Windows).
+#[test]
+fn opening_a_link_never_gives_what_it_points_to() {
+    let dir = temp_dir("open-link");
+    let real = dir.join("real");
+    fs::write(&real, "real").unwrap();
+    let link = dir.join("link");
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(&real, &link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(&real, &link);
+    // Windows without the right to make links: nothing to check.
+    if made.is_ok() {
+        assert!(is_plain_file(&fs::metadata(&link).unwrap()), "the target is a plain file");
+        assert!(!is_plain_file(&fs::symlink_metadata(&link).unwrap()));
+        if let Ok(f) = open_no_follow(&link) {
+            assert!(!is_plain_file(&f.metadata().unwrap()), "the link itself was opened");
+        }
+    }
+    assert!(is_plain_file(&open_no_follow(&real).unwrap().metadata().unwrap()));
+    let _ = fs::remove_dir_all(&dir);
+}

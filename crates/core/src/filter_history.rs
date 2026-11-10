@@ -31,6 +31,7 @@
 //! never taken for an empty history, and never written over. So is anything else than a plain file at the path, a symbolic link
 //! too (even one to nothing): it is never followed, neither to read nor to write.
 
+use crate::fsutil::is_plain_file;
 use crate::profile::ProfileId;
 use std::io::{self, Read};
 use std::path::Path;
@@ -195,16 +196,17 @@ pub fn load(path: &Path) -> Result<History, Unreadable> {
     match std::fs::symlink_metadata(path) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(History::default()),
         Err(e) => return Err(Unreadable::Io(e.kind())),
-        Ok(m) if !m.file_type().is_file() => return Err(Unreadable::NotAFile),
+        Ok(m) if !is_plain_file(&m) => return Err(Unreadable::NotAFile),
         Ok(_) => {}
     }
     // Replaced by a link or anything else since: still not a file.
     let not_a_file = |e: io::Error| match std::fs::symlink_metadata(path) {
-        Ok(m) if !m.file_type().is_file() => Unreadable::NotAFile,
+        Ok(m) if !is_plain_file(&m) => Unreadable::NotAFile,
         _ => Unreadable::Io(e.kind()),
     };
     let file = crate::fsutil::open_no_follow(path).map_err(not_a_file)?;
-    if !file.metadata().map_err(|e| Unreadable::Io(e.kind()))?.file_type().is_file() {
+    // What was opened, never what a link put there since points to (Windows opens the link).
+    if !is_plain_file(&file.metadata().map_err(|e| Unreadable::Io(e.kind()))?) {
         return Err(Unreadable::NotAFile);
     }
     let mut bytes = Vec::new();
