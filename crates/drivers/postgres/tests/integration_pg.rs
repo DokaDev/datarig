@@ -7159,8 +7159,8 @@ async fn a_bounded_read_whose_begin_fails_never_runs() {
 /// while the count waits behind a run, the count is cancelled (`Cancelled`, at once when its
 /// turn comes), never left to run to its limit and called stopped there.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_cancel_is_for_the_commands_sent_before_it() {
-    let Some(url) = pg_url("a_cancel_is_for_the_commands_sent_before_it") else { return };
+async fn a_cancel_is_for_the_last_run_sent_before_it() {
+    let Some(url) = pg_url("a_cancel_is_for_the_last_run_sent_before_it") else { return };
     let pid = std::process::id();
     let table = format!("public.zz_cancelfor_{pid}");
     let _guard = TableGuard(url.clone(), table.clone());
@@ -7199,6 +7199,57 @@ async fn a_cancel_is_for_the_commands_sent_before_it() {
     assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
     // A command sent after the cancel is not cancelled by it.
     assert_eq!(q.count_within(5, &counted, limit).await.0, Ok(40));
+}
+
+/// A count taken while a portal is open is cancelled like any other run. A cancel is for the last
+/// one sent: asked while a count runs and another waits behind it, the one waiting does not
+/// start and the one running goes on; asked for the one running, it stops. The portal goes on
+/// paging after either.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_of_a_count_in_a_held_portal_is_for_the_last_one_sent() {
+    let Some(url) = pg_url("a_cancel_of_a_count_in_a_held_portal_is_for_the_last_one_sent") else { return };
+    let pid = std::process::id();
+    let (paged, locked) = (format!("public.zz_cancelp_{pid}"), format!("public.zz_cancell_{pid}"));
+    let _guards = (TableGuard(url.clone(), paged.clone()), TableGuard(url.clone(), locked.clone()));
+    let tag = format!("cancelp{pid}");
+    let (mut q, mut b) = tagged(&url, &tag).await;
+    for sql in [
+        format!("CREATE TABLE {paged} AS SELECT g AS id FROM generate_series(1, 5000) g"),
+        format!("CREATE TABLE {locked} AS SELECT g AS id FROM generate_series(1, 50) g"),
+    ] {
+        assert!(matches!(b.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let page = q.run(1, &format!("SELECT * FROM {paged} ORDER BY id")).await;
+    assert!(matches!(page, DbEvent::Page { more: true, .. }), "{page:?}");
+    let lock = format!("LOCK TABLE {locked} IN ACCESS EXCLUSIVE MODE");
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &lock).await, DbEvent::Done { .. }));
+    let counted = count_of(&format!("SELECT * FROM {locked} WHERE (id > 10)"));
+    q.session.send(DbCommand::Count { id: 2, sql: counted.clone(), limit: None });
+    q.session.send(DbCommand::Count { id: 3, sql: counted.clone(), limit: None });
+    started(&mut b, &tag).await;
+    q.session.cancel();
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+    for (want, answer) in [(2, Ok(40)), (3, Err(DbError::Cancelled))] {
+        let DbEvent::Counted { id, result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 5).await else {
+            unreachable!()
+        };
+        assert_eq!((id, result), (want, answer));
+    }
+    assert!(matches!(b.run(5, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(6, &lock).await, DbEvent::Done { .. }));
+    q.session.send(DbCommand::Count { id: 4, sql: counted.clone(), limit: None });
+    started(&mut b, &tag).await;
+    q.session.cancel();
+    let DbEvent::Counted { id, result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 5).await else {
+        unreachable!()
+    };
+    assert_eq!((id, result), (4, Err(DbError::Cancelled)));
+    assert!(matches!(b.run(7, "ROLLBACK").await, DbEvent::Done { .. }));
+    q.session.send(DbCommand::FetchMore { id: 1 });
+    let more = q.result(1).await;
+    assert!(matches!(&more, DbEvent::Page { rows, .. } if !rows.is_empty()), "{more:?}");
+    assert_eq!(q.count_within(5, &counted, None).await.0, Ok(40));
 }
 
 /// A statement stopped by something other than the user's cancel and before its limit (another

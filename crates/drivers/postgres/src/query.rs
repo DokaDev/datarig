@@ -2565,7 +2565,7 @@ async fn count(
         let first = tx.take_first_text(env);
         let asked = format!("{first}SAVEPOINT {sp}; {ISOLATION}; {check}");
         let text = format!("{sql}; RELEASE SAVEPOINT {sp}");
-        let (fixed, answer) = checked(link, env, client.simple_query(&asked)).await?;
+        let (fixed, answer) = count_checked(link, env, client.simple_query(&asked)).await?;
         let counted = match answer {
             Ok(()) => match link.guard(Some(env.token), client.simple_query(&text)).await? {
                 Ok(msgs) => return Ok((count_of(&msgs), fixed)),
@@ -2581,7 +2581,7 @@ async fn count(
     }
     // A search path per transaction goes first in each simple query (one implicit transaction).
     let path = env.path_text();
-    if let (_, Err(why)) = checked(link, env, client.simple_query(&format!("{path}{check}"))).await? {
+    if let (_, Err(why)) = count_checked(link, env, client.simple_query(&format!("{path}{check}"))).await? {
         return Ok((Err(why), false));
     }
     if let Some(limit) = limit.filter(|_| !tx.unsure) {
@@ -2629,7 +2629,7 @@ async fn estimate(
         return Ok(Err(DbError::NotSupported));
     }
     let path = env.path_text();
-    if let (_, Err(why)) = checked(link, env, client.simple_query(&format!("{path}{check}"))).await? {
+    if let (_, Err(why)) = count_checked(link, env, client.simple_query(&format!("{path}{check}"))).await? {
         return Ok(Err(why));
     }
     let format = datarig_core::driver::ExplainFormat::PostgresJson;
@@ -2812,7 +2812,7 @@ async fn counted_in(
     let sp = env.savepoint;
     let asked = format!("SAVEPOINT {sp}; {ISOLATION}; {check}");
     let text = format!("{sql}; RELEASE SAVEPOINT {sp}");
-    let (fixed, answer) = checked(link, env, txn.simple_query(&asked)).await?;
+    let (fixed, answer) = count_checked(link, env, txn.simple_query(&asked)).await?;
     let counted = match answer {
         Ok(()) => match link.guard(Some(env.token), txn.simple_query(&text)).await? {
             Ok(msgs) => return Ok((count_of(&msgs), fixed)),
@@ -2914,6 +2914,15 @@ fn check_answer(msgs: &[SimpleQueryMessage]) -> Result<(), DbError> {
     }
 }
 
+/// Whether the transaction has one snapshot, from the answer of [`ISOLATION`] asked with
+/// [`check_text`].
+fn snapshot_fixed(msgs: &[SimpleQueryMessage]) -> bool {
+    msgs.iter().any(|m| {
+        matches!(m, SimpleQueryMessage::Row(r) if r.len() == 1
+            && matches!(r.get(0), Some("repeatable read" | "serializable")))
+    })
+}
+
 /// Send the request of [`check_text`] (cancellable) and read its answer: `Err` when the
 /// statement may not run, or asking failed (a cancel is `Cancelled`); with whether the
 /// transaction has one snapshot, when [`ISOLATION`] was asked with it.
@@ -2923,14 +2932,27 @@ async fn checked(
     asked: impl std::future::Future<Output = Result<Vec<SimpleQueryMessage>, tokio_postgres::Error>>,
 ) -> Result<(bool, Result<(), DbError>), Closed> {
     Ok(match link.guard(Some(env.token), asked).await? {
+        Ok(msgs) => (snapshot_fixed(&msgs), check_answer(&msgs)),
+        Err(e) => (false, Err(count_error(&e))),
+    })
+}
+
+/// [`checked`] for a count: a cancel of the user's that came between the question and the count
+/// found nothing running to stop, so the count is not sent; a failure is a cancel only when the
+/// user asked for one ([`asked_error`]).
+async fn count_checked(
+    link: &mut Link,
+    env: &Env<'_>,
+    asked: impl std::future::Future<Output = Result<Vec<SimpleQueryMessage>, tokio_postgres::Error>>,
+) -> Result<(bool, Result<(), DbError>), Closed> {
+    let answer = link.guard(Some(env.token), asked).await?;
+    let cancelled = env.cancel.asked();
+    Ok(match answer {
         Ok(msgs) => {
-            let fixed = msgs.iter().any(|m| {
-                matches!(m, SimpleQueryMessage::Row(r) if r.len() == 1
-                    && matches!(r.get(0), Some("repeatable read" | "serializable")))
-            });
-            (fixed, check_answer(&msgs))
+            let cut = if cancelled { Err(DbError::Cancelled) } else { Ok(()) };
+            (snapshot_fixed(&msgs), check_answer(&msgs).and(cut))
         }
-        Err(e) => (false, Err(asked_error(&e, env.cancel.asked()))),
+        Err(e) => (false, Err(asked_error(&e, cancelled))),
     })
 }
 
