@@ -344,3 +344,21 @@ fn an_estimate_that_could_not_be_had_says_why_and_shows_no_pages() {
     h.tab_db(index, DbEvent::Estimated { id: qid, result: Ok(3) });
     assert!(title(&mut h, 120, 30).contains("page 1 / ?"));
 }
+
+#[test]
+fn a_relation_the_server_will_not_have_planned_dims_the_estimate_with_why() {
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    let mut h = pg(Some("id > 5"));
+    h.keys("#");
+    pick(&mut h, "estimate");
+    let (qid, index) = (h.app.tab().exec.query_id, h.app.tabs.active_index());
+    assert_eq!(estimates(&h.sent()).len(), 1);
+    let why = NotRepeatable::PlannerCode("public.users".into());
+    h.tab_db(index, DbEvent::Estimated { id: qid, result: Err(DbError::NotRepeatable(why)) });
+    assert!(status(&h).contains("planning public.users may run code"), "{}", status(&h));
+    h.keys("#");
+    assert!(entry_line(&mut h, "Estimate (planner)").contains("refused now"));
+    pick(&mut h, "estimate");
+    assert!(estimates(&h.sent()).is_empty(), "not asked again");
+    assert!(status(&h).contains("planning public.users may run code"), "{}", status(&h));
+}

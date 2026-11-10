@@ -165,6 +165,7 @@
 "repeat.writes" = "it may write, lock rows or act on the server"
 "repeat.user_function" = "it calls a function that is not a built-in"
 "repeat.volatile" = "it calls {name}, whose result changes from call to call"
+"repeat.planner_code" = "planning {name} may run code datarig cannot check: an index, a constraint, statistics, a partition key or a generated column uses a function or type not built in, or it has a rule"
 "repeat.tx_unknown" = "the session could not tell whether a transaction is open, so the time limit cannot be set"
 "repeat.unreadable" = "it cannot be read"
 "repeat.variable" = "it uses the variable {name}, whose value may change"

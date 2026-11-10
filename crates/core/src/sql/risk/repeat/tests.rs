@@ -183,3 +183,13 @@ fn the_relations_read_are_locked_by_their_quoted_names_without_the_with_queries(
     assert_eq!(lock_query(&n).as_deref(), Some(r#"LOCK TABLE "public"."Odd ""t", "plain" IN ACCESS SHARE MODE"#));
     assert_eq!(lock_query(&names("SELECT 1").unwrap()), None);
 }
+
+#[test]
+fn what_planning_may_run_is_asked_about_the_relations_read() {
+    let n = names("WITH w AS (SELECT 1) SELECT * FROM public.t, w").unwrap();
+    let q = planner_query(&n).unwrap();
+    assert!(q.contains("VALUES ($datarig$public$datarig$, $datarig$t$datarig$)"), "{q}");
+    assert!(!q.contains("$datarig$w$datarig$"), "{q}");
+    assert_eq!(NotRepeatable::from_check("planner", "t"), Some(NotRepeatable::PlannerCode("t".into())));
+    assert!(planner_query(&names("SELECT 1").unwrap()).unwrap().contains("WHERE false"));
+}

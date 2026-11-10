@@ -7627,3 +7627,67 @@ async fn an_estimate_of_what_cannot_be_locked_is_refused() {
     // The session goes on.
     assert_eq!(q.count_within(3, &count_of(&rows), Some(Duration::from_secs(30))).await.0, Ok(1));
 }
+
+/// Planning a table can run a function its text never names: an index's predicate or expression,
+/// a `CHECK` constraint, a statistics expression, a partition key and a generated column are
+/// folded by the planner. Each is refused on a fresh session and its function never runs (it
+/// would raise); what uses built-ins only is planned.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_estimate_refuses_a_table_whose_planning_could_run_a_function() {
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    let Some(url) = pg_url("an_estimate_refuses_a_table_whose_planning_could_run_a_function") else { return };
+    let schema = format!("zz_planfn_{}", std::process::id());
+    let _schema = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let function = |body: &str| {
+        format!("CREATE OR REPLACE FUNCTION {s}.f() RETURNS int IMMUTABLE LANGUAGE plpgsql AS $$BEGIN {body} END$$")
+    };
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        function("RETURN 0;"),
+        format!("CREATE TABLE {s}.partial (id int)"),
+        format!("CREATE INDEX ON {s}.partial (id) WHERE id > {s}.f()"),
+        format!("CREATE TABLE {s}.expression (id int)"),
+        format!("CREATE INDEX ON {s}.expression ((id + {s}.f()))"),
+        format!("CREATE TABLE {s}.checked (id int CHECK (id > {s}.f()))"),
+        format!("CREATE TABLE {s}.stats (id int, n int)"),
+        format!("CREATE STATISTICS {s}.st ON (id + {s}.f()), n FROM {s}.stats"),
+        format!("CREATE TABLE {s}.parted (id int) PARTITION BY RANGE ((id + {s}.f()))"),
+        format!("CREATE TABLE {s}.parted_a PARTITION OF {s}.parted FOR VALUES FROM (0) TO (10)"),
+        format!("CREATE TABLE {s}.generated (id int, g int GENERATED ALWAYS AS (id + {s}.f()) STORED)"),
+        format!("CREATE TABLE {s}.ruled (id int)"),
+        format!("CREATE RULE r AS ON INSERT TO {s}.ruled DO ALSO NOTHING"),
+        format!("CREATE TABLE {s}.fine (id int CHECK (id > 0), g int GENERATED ALWAYS AS (id + 1) STORED)"),
+        format!("CREATE INDEX ON {s}.fine (id) WHERE id > 5"),
+        format!("CREATE INDEX ON {s}.fine (abs(id))"),
+        format!("CREATE TABLE {s}.defaulted (id int DEFAULT {s}.f())"),
+        function("RAISE EXCEPTION 'zz_ planner ran the function';"),
+    ] {
+        assert!(matches!(b.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    let rows = |t: &str| format!("SELECT * FROM {s}.{t} WHERE (id IS NOT NULL)");
+    let mut id = 1;
+    for (read, named) in [
+        ("partial", "partial"),
+        ("expression", "expression"),
+        ("checked", "checked"),
+        ("stats", "stats"),
+        ("parted", "parted"),
+        // A partition's own bounds come from the key of the table above it.
+        ("parted_a", "parted"),
+        ("generated", "generated"),
+        ("ruled", "ruled"),
+    ] {
+        let (got, _) = q.estimate(id, &rows(read)).await;
+        let want = NotRepeatable::PlannerCode(format!("{s}.{named}"));
+        assert_eq!(got, Err(DbError::NotRepeatable(want)), "{read}");
+        id += 1;
+    }
+    for read in ["fine", "defaulted"] {
+        let (got, _) = q.estimate(id, &rows(read)).await;
+        assert!(got.is_ok(), "{read}: {got:?}");
+        id += 1;
+    }
+}

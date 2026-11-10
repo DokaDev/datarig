@@ -2755,13 +2755,18 @@ async fn end_own(client: &Client, link: &mut Link) -> Result<(), Closed> {
 
 /// What an estimate asks in its first request: the relations it reads locked as reading them
 /// locks them ([`risk::repeat::lock_query`]), then the allowlist's question about what they are
-/// now. Planning follows in the same transaction, so the answer holds for what is planned.
+/// now and whether planning them may run code it does not show
+/// ([`risk::repeat::planner_query`]). Planning follows in the same transaction, so the answer
+/// holds for what is planned.
 fn estimate_text(sql: &str) -> Result<String, DbError> {
-    use risk::repeat::{NotRepeatable, lock_query, names};
+    use risk::repeat::{NotRepeatable, lock_query, names, planner_query};
     let check = check_text(sql)?;
     let names = names(sql).map_err(DbError::NotRepeatable)?;
-    let Some(lock) = lock_query(&names) else { return Err(DbError::NotRepeatable(NotRepeatable::Unreadable)) };
-    Ok(format!("{lock}; {check}"))
+    let Some(planner) = planner_query(&names) else {
+        return Err(DbError::NotRepeatable(NotRepeatable::Unreadable));
+    };
+    let lock = lock_query(&names).map_or(String::new(), |lock| format!("{lock}; "));
+    Ok(format!("{lock}{check}; {planner}"))
 }
 
 /// An estimate whose relations the server cannot lock (a materialized view, a foreign table, one

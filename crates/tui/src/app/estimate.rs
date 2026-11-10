@@ -3,8 +3,10 @@
 //! estimate is the server's `EXPLAIN` of the statement the rows were read with (never
 //! `ANALYZE`), sent on the tab's session through the same checks as a count, only while no
 //! transaction is open there, and for a filter the planner cannot run anything for: no call
-//! outside the filter allowlist, and on MySQL no subquery. Its answer is bound to the rows shown
-//! (the result's query id): a late answer of rows replaced since is dropped.
+//! outside the filter allowlist, and on MySQL no subquery. On PostgreSQL the server is asked
+//! whether planning the relation may run code of its own; a refusal stays with the rows, and the
+//! entry is dimmed with it from then on. Its answer is bound to the rows shown (the result's
+//! query id): a late answer of rows replaced since is dropped.
 
 use super::menu::{MenuItem, MenuTarget, Off};
 use super::tabs::ResultView;
@@ -53,6 +55,12 @@ impl App {
             let notice = Notice::new(Msg::ResultsEstimateRefused { why }, Level::Warning);
             Box::new(Off::new(Label::ResultsEstimateOffRefused, notice))
         };
+        // The server already said these rows' relation is not to be planned.
+        if let Results::Rows(rs) = &t.results
+            && let Some(why) = &rs.planner_off
+        {
+            return Err(refused(why.clone()));
+        }
         self.table_recheck(id).map_err(refused)?;
         let (Some(name), Some(target)) = (self.table_name(id), self.table_target(id)) else {
             return off(Label::ResultsEstimateOffCalls, Label::ResultsEstimateCalls);
@@ -185,6 +193,9 @@ impl App {
             Err(DbError::NotSupported) => Notice::new(Label::ResultsEstimateNotSent, Level::Warning),
             Err(DbError::NotRepeatable(r)) => {
                 let why = self.i18n.msg(&super::pages::why(&r)).to_string();
+                if let Some(rs) = t.shown_rows_mut() {
+                    rs.planner_off = Some(why.clone());
+                }
                 Notice::new(Msg::ResultsEstimateRefused { why }, Level::Warning)
             }
             Err(DbError::NoResult) => Notice::new(Label::ResultsEstimateNone, Level::Warning),

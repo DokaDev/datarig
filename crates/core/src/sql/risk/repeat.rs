@@ -44,6 +44,9 @@
 //! that functions, operators or casts of the user's take (or whose input or output function is
 //! the user's): an operator, a sort or a comparison on such a column could run them.
 //!
+//! A planner's estimate runs no statement but plans it, and planning has code of its own to run:
+//! [`planner_query`] asks about that, for the relations held still by [`lock_query`].
+//!
 //! This is an allowlist: anything it does not recognise is refused, with the reason. What is
 //! still not seen: a cast of the user's from a built-in type to a type of the user's that the
 //! server applies on its own (an implicit cast, to call an operator of the user's), the fields
@@ -87,6 +90,10 @@ pub enum NotRepeatable {
     /// The server says a column it reads has a type of the user's that functions, operators or
     /// casts of the user's take: the type.
     UserColumnType(String),
+    /// The server says planning a relation it reads may run code the statement does not show
+    /// (an index, a constraint, statistics, a partition key or a generated column that uses
+    /// something of the user's; a rule): the relation's name.
+    PlannerCode(String),
     /// The session could not tell whether a transaction is open, so a count cannot be given the
     /// time limit it asks for.
     TxUnknown,
@@ -107,6 +114,7 @@ impl NotRepeatable {
             "shadowed" => NotRepeatable::Shadowed(name),
             "type" => NotRepeatable::UserType(name),
             "column_type" => NotRepeatable::UserColumnType(name),
+            "planner" => NotRepeatable::PlannerCode(name),
             _ => return None,
         })
     }
@@ -439,19 +447,76 @@ g.rngsubdiff::pg_catalog.oid OPERATOR(pg_catalog.>=) 10000::pg_catalog.oid))
     ))
 }
 
+/// The query that asks the server, before a planner's estimate, whether planning the relations
+/// `n` names may run code the statement does not show. Planning loads each table's index
+/// predicates and expressions, `CHECK` constraints, statistics expressions, generated columns and
+/// partition keys (of its partitions and of the tables above it too) and folds their constant
+/// parts, which runs an immutable function; a table access method or an operator class of the
+/// user's is code as well. It answers no row when all of those use only what the server ships
+/// (read from `pg_depend`, so nothing is deparsed), else one row (`planner`, the relation) for
+/// [`NotRepeatable::from_check`]. A table with a rule is refused too. Like [`check_query`], it
+/// reads the catalog only and names every object and operator with its schema. The numbers are
+/// the fixed OIDs of the catalogs: `pg_class` 1259, `pg_constraint` 2606, `pg_attrdef` 2604,
+/// `pg_statistic_ext` 3381, `pg_proc` 1255, `pg_operator` 2617, `pg_opclass` 2616, `pg_opfamily`
+/// 2753, `pg_am` 2601, `pg_type` 1247. `None` when a name cannot be written as a constant.
+pub fn planner_query(n: &Names) -> Option<String> {
+    let mut named = Vec::new();
+    for (schema, rel) in &n.relations {
+        if !(schema.is_empty() && n.ctes.contains(rel)) {
+            named.push(format!("({}, {})", constant(schema)?, constant(rel)?));
+        }
+    }
+    if named.is_empty() {
+        return Some("SELECT NULL::pg_catalog.text, NULL::pg_catalog.text WHERE false".to_string());
+    }
+    let named = named.join(", ");
+    Some(format!(
+        "WITH RECURSIVE named(sch, rel) AS (VALUES {named}),
+top AS (SELECT pg_catalog.to_regclass(CASE WHEN n.sch OPERATOR(pg_catalog.=) '' THEN \
+pg_catalog.quote_ident(n.rel) ELSE pg_catalog.concat(pg_catalog.quote_ident(n.sch), '.', \
+pg_catalog.quote_ident(n.rel)) END)::pg_catalog.oid AS oid FROM named n),
+down(oid) AS (SELECT t.oid FROM top t WHERE t.oid IS NOT NULL UNION SELECT i.inhrelid FROM \
+pg_catalog.pg_inherits i JOIN down r ON i.inhparent OPERATOR(pg_catalog.=) r.oid),
+up(oid) AS (SELECT t.oid FROM top t WHERE t.oid IS NOT NULL UNION SELECT i.inhparent FROM \
+pg_catalog.pg_inherits i JOIN up r ON i.inhrelid OPERATOR(pg_catalog.=) r.oid),
+rels(oid) AS (SELECT d.oid FROM down d UNION SELECT u.oid FROM up u),
+parts(rel, classid, objid) AS (
+SELECT r.oid, 1259::pg_catalog.oid, r.oid FROM rels r
+UNION ALL SELECT r.oid, 1259::pg_catalog.oid, x.indexrelid FROM rels r JOIN pg_catalog.pg_index x ON \
+x.indrelid OPERATOR(pg_catalog.=) r.oid
+UNION ALL SELECT r.oid, 2606::pg_catalog.oid, c.oid FROM rels r JOIN pg_catalog.pg_constraint c ON \
+c.conrelid OPERATOR(pg_catalog.=) r.oid
+UNION ALL SELECT r.oid, 2604::pg_catalog.oid, d.oid FROM rels r JOIN pg_catalog.pg_attrdef d ON \
+d.adrelid OPERATOR(pg_catalog.=) r.oid JOIN pg_catalog.pg_attribute a ON a.attrelid \
+OPERATOR(pg_catalog.=) d.adrelid AND a.attnum OPERATOR(pg_catalog.=) d.adnum WHERE a.attgenerated \
+OPERATOR(pg_catalog.<>) ''::pg_catalog.\"char\"
+UNION ALL SELECT r.oid, 3381::pg_catalog.oid, s.oid FROM rels r JOIN pg_catalog.pg_statistic_ext s ON \
+s.stxrelid OPERATOR(pg_catalog.=) r.oid)
+SELECT 'planner', w.rel::pg_catalog.regclass::pg_catalog.text FROM (
+SELECT r.oid AS rel FROM rels r JOIN pg_catalog.pg_class c ON c.oid OPERATOR(pg_catalog.=) r.oid WHERE \
+c.relhasrules
+UNION ALL SELECT p.rel FROM parts p JOIN pg_catalog.pg_depend d ON d.classid OPERATOR(pg_catalog.=) \
+p.classid AND d.objid OPERATOR(pg_catalog.=) p.objid WHERE d.refobjid OPERATOR(pg_catalog.>=) \
+10000::pg_catalog.oid AND d.refclassid OPERATOR(pg_catalog.=) ANY (ARRAY[1255, 2617, 2616, 2753, 2601, \
+1247]::pg_catalog.oid[]) AND NOT (d.refclassid OPERATOR(pg_catalog.=) 1247::pg_catalog.oid AND p.objid \
+OPERATOR(pg_catalog.=) p.rel)
+) w LIMIT 1"
+    ))
+}
+
 /// `LOCK TABLE … IN ACCESS SHARE MODE` of the relations the statement reads, run before the
 /// server is asked about them and in the same transaction as what is planned: the lock plain
 /// reading takes, held to the transaction's end, so a relation asked about stays what it is (a
-/// rename or a drop waits). `None` for a statement that reads none, or a name that holds a NUL.
+/// rename or a drop waits). `None` for a statement that reads none.
 pub fn lock_query(n: &Names) -> Option<String> {
-    let quoted = |name: &str| (!name.contains('\0')).then(|| format!("\"{}\"", name.replace('"', "\"\"")));
+    let quoted = |name: &str| format!("\"{}\"", name.replace('"', "\"\""));
     let mut relations = Vec::new();
     for (schema, rel) in &n.relations {
         if schema.is_empty() && n.ctes.contains(rel) {
             continue;
         }
-        let name = quoted(rel)?;
-        relations.push(if schema.is_empty() { name } else { format!("{}.{name}", quoted(schema)?) });
+        let name = quoted(rel);
+        relations.push(if schema.is_empty() { name } else { format!("{}.{name}", quoted(schema)) });
     }
     (!relations.is_empty()).then(|| format!("LOCK TABLE {} IN ACCESS SHARE MODE", relations.join(", ")))
 }
