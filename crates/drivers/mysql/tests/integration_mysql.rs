@@ -1605,16 +1605,22 @@ async fn a_capped_result_reads_no_row_past_its_cap() {
     a.disconnect().await.unwrap();
 }
 
-/// The `KILL` statements the server has run so far (all sessions'): a capped result that ends
-/// normally needs none.
+/// The `KILL` statements the server has run so far, all sessions' together: other tests running
+/// at the same time move it too.
 async fn kills(admin: &mut mysql_async::Conn) -> u64 {
     let row: Option<(String, String)> = admin.query_first("SHOW GLOBAL STATUS LIKE 'Com_kill'").await.unwrap();
     row.expect("Com_kill").1.parse().unwrap()
 }
 
+/// How many times a run that must not send a `KILL` is tried. The server counts `KILL`
+/// statements only for all sessions together, so one run the count moved across proves
+/// nothing; a run it did not move across proves that run sent none.
+const KILL_ATTEMPTS: usize = 5;
+
 /// A capped result that ends at its cap, on its first page, a later one, or a later one of
 /// only the row carried over, reads the end the server's limit put there: no `KILL QUERY` is
-/// sent to stop it.
+/// sent to stop it. A driver that sent one would send one on every attempt, so no attempt
+/// would leave the count where it was.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_capped_result_that_ends_at_its_cap_is_not_killed() {
     let test = "a_capped_result_that_ends_at_its_cap_is_not_killed";
@@ -1622,42 +1628,44 @@ async fn a_capped_result_that_ends_at_its_cap_is_not_killed() {
     let t = numbers(&admin, "fix2kill", 1200).await;
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
     let mut a = side(&admin).await;
-    let held = |id: u64, sql: &str, max_rows: u64| DbCommand::Execute {
-        id,
-        statements: vec![sql.to_string()],
-        paging: PagingMode::Hold,
-        tx: TxRule::Auto,
-        max_rows: Some(max_rows),
-    };
-    let before = kills(&mut a).await;
-    // On the first page.
-    c.session.send(held(1, &format!("SELECT id FROM {} ORDER BY id", t.q()), 3));
-    let evs = c.answer(1).await;
-    assert_eq!((page_of(&evs).1.len(), page_of(&evs).2), (3, false));
-    c.ok(2, "SELECT 1").await;
-    assert_eq!(kills(&mut a).await, before, "first page");
-    // On a later page.
-    c.session.send(held(3, &format!("SELECT id AS later FROM {} ORDER BY id", t.q()), 503));
-    let evs = c.answer(3).await;
-    assert_eq!((page_of(&evs).1.len(), page_of(&evs).2), (PAGE, true));
-    c.session.send(DbCommand::FetchMore { id: 3 });
-    match c.next(30).await {
-        DbEvent::Page { id: 3, columns: None, rows, more, .. } => assert_eq!((rows.len(), more), (3, false)),
-        other => panic!("{other:?}"),
+    let phases = [
+        ("first page", "id", 3, (3, false), None),
+        ("later page", "id AS later", 503, (PAGE, true), Some(3)),
+        ("carried row only", "id AS carried", 501, (PAGE, true), Some(1)),
+    ];
+    let mut id = 0;
+    for (phase, column, cap, first, last) in phases {
+        let mut quiet = false;
+        for _ in 0..KILL_ATTEMPTS {
+            let before = kills(&mut a).await;
+            id += 2;
+            let run = id - 1;
+            c.session.send(DbCommand::Execute {
+                id: run,
+                statements: vec![format!("SELECT {column} FROM {} ORDER BY id", t.q())],
+                paging: PagingMode::Hold,
+                tx: TxRule::Auto,
+                max_rows: Some(cap),
+            });
+            let evs = c.answer(run).await;
+            assert_eq!((page_of(&evs).1.len(), page_of(&evs).2), first, "{phase}");
+            if let Some(last) = last {
+                c.session.send(DbCommand::FetchMore { id: run });
+                match c.next(30).await {
+                    DbEvent::Page { id: got, columns: None, rows, more, .. } if got == run => {
+                        assert_eq!((rows.len(), more), (last, false), "{phase}");
+                    }
+                    other => panic!("{phase}: {other:?}"),
+                }
+            }
+            c.ok(id, "SELECT 1").await;
+            if kills(&mut a).await == before {
+                quiet = true;
+                break;
+            }
+        }
+        assert!(quiet, "{phase}: a KILL ran during every one of {KILL_ATTEMPTS} attempts");
     }
-    c.ok(4, "SELECT 1").await;
-    assert_eq!(kills(&mut a).await, before, "later page");
-    // A later page of only the row carried over.
-    c.session.send(held(5, &format!("SELECT id AS carried FROM {} ORDER BY id", t.q()), 501));
-    let evs = c.answer(5).await;
-    assert_eq!((page_of(&evs).1.len(), page_of(&evs).2), (PAGE, true));
-    c.session.send(DbCommand::FetchMore { id: 5 });
-    match c.next(30).await {
-        DbEvent::Page { id: 5, columns: None, rows, more, .. } => assert_eq!((rows.len(), more), (1, false)),
-        other => panic!("{other:?}"),
-    }
-    c.ok(6, "SELECT 1").await;
-    assert_eq!(kills(&mut a).await, before, "carried row only");
     a.disconnect().await.unwrap();
 }
 
