@@ -7561,3 +7561,69 @@ async fn a_cancel_during_a_counts_cleanup_changes_nothing() {
     assert!(matches!(&result, Err(DbError::Server(m)) if m.text.contains("user request")), "{result:?}");
     assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
 }
+
+/// What an estimate asks about stays what it planned: the relation is locked in the transaction
+/// that asks and plans, so swapping it for a view whose function planning would run waits behind
+/// the estimate instead of slipping in between.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_estimate_plans_the_relation_it_asked_about() {
+    let Some(url) = pg_url("an_estimate_plans_the_relation_it_asked_about") else { return };
+    let pid = std::process::id();
+    let schema = format!("zz_swap_{pid}");
+    let _schema = SchemaGuard::new(&url, &schema);
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    for sql in [
+        format!("CREATE SCHEMA {schema}"),
+        format!("CREATE TABLE {schema}.t AS SELECT g AS id FROM generate_series(1, 50) g"),
+        format!(
+            "CREATE FUNCTION {schema}.boom() RETURNS int IMMUTABLE LANGUAGE plpgsql AS \
+             $$BEGIN RAISE EXCEPTION 'zz_ boom ran'; END$$"
+        ),
+    ] {
+        assert!(matches!(b.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    // Held between the question's answer and the planning.
+    proxy.fault_start("EXPLAIN", pg_proxy::Fault::Delay(Duration::from_millis(1200)));
+    q.session.send(DbCommand::Estimate { id: 1, sql: format!("SELECT * FROM {schema}.t WHERE (id > 10)") });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while proxy.fault_pending() {
+        assert!(Instant::now() < deadline, "the EXPLAIN never went out");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, "SET LOCAL lock_timeout = '300ms'").await, DbEvent::Done { .. }));
+    let swapped = b.run(4, &format!("ALTER TABLE {schema}.t RENAME TO old")).await;
+    if matches!(swapped, DbEvent::Done { .. }) {
+        let view = format!("CREATE VIEW {schema}.t AS SELECT * FROM {schema}.old WHERE {schema}.boom() > 0");
+        assert!(matches!(b.run(5, &view).await, DbEvent::Done { .. }));
+        assert!(matches!(b.run(6, "COMMIT").await, DbEvent::Done { .. }));
+    } else {
+        assert!(matches!(b.run(5, "ROLLBACK").await, DbEvent::Done { .. }));
+    }
+    let DbEvent::Estimated { result, .. } = q.wait(|e| matches!(e, DbEvent::Estimated { .. }), 10).await else {
+        unreachable!()
+    };
+    assert!(result.is_ok(), "{result:?}");
+    assert!(matches!(swapped, DbEvent::Failed { .. }), "the rename waited behind the estimate: {swapped:?}");
+}
+
+/// A relation the server cannot lock gets no estimate, and says which.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_estimate_of_what_cannot_be_locked_is_refused() {
+    let Some(url) = pg_url("an_estimate_of_what_cannot_be_locked_is_refused") else { return };
+    let pid = std::process::id();
+    let schema = format!("zz_nolock_{pid}");
+    let _schema = SchemaGuard::new(&url, &schema);
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    for sql in [format!("CREATE SCHEMA {schema}"), format!("CREATE MATERIALIZED VIEW {schema}.m AS SELECT 1 AS id")] {
+        assert!(matches!(q.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let rows = format!("SELECT * FROM {schema}.m WHERE (id > 0)");
+    let (got, _) = q.estimate(2, &rows).await;
+    let not_a_table = datarig_core::sql::risk::repeat::NotRepeatable::NotATable(format!("{schema}.m"));
+    assert_eq!(got, Err(DbError::NotRepeatable(not_a_table)));
+    // The session goes on.
+    assert_eq!(q.count_within(3, &count_of(&rows), Some(Duration::from_secs(30))).await.0, Ok(1));
+}

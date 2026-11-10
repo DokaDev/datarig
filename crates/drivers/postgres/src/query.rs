@@ -2617,10 +2617,10 @@ async fn count(
 }
 
 /// The planner's estimate of the rows of `sql` (the app's read of a table, on the allowlist,
-/// checked again here) while no portal is open and outside a transaction block: the
-/// allowlist's question ([`check_text`]), then its `EXPLAIN (FORMAT JSON)`, never `ANALYZE`, in
-/// a read-only transaction of its own ([`limited_read`]): the locks planning takes end with it.
-/// Two round trips. Inside a block (or when whether one is open is not known) nothing is sent:
+/// checked again here) while no portal is open and outside a transaction block: its relations
+/// locked and the allowlist's question ([`estimate_text`]), then its `EXPLAIN (FORMAT JSON)`,
+/// never `ANALYZE`, in one read-only transaction of its own ([`limited_read`]): what was asked
+/// about is what is planned, and the locks end with it. Two round trips. Inside a block (or when whether one is open is not known) nothing is sent:
 /// the locks would last until the user ends it.
 async fn estimate(
     client: &Client,
@@ -2632,8 +2632,8 @@ async fn estimate(
     if risk::repeat::repeatable(sql).is_err() {
         return Ok(Err(DbError::NotSupported));
     }
-    let check = match check_text(sql) {
-        Ok(check) => check,
+    let ask = match estimate_text(sql) {
+        Ok(ask) => ask,
         Err(why) => return Ok(Err(why)),
     };
     if tx.unsure {
@@ -2644,7 +2644,8 @@ async fn estimate(
     }
     let format = datarig_core::driver::ExplainFormat::PostgresJson;
     let explain = format.explain_sql(sql, false);
-    let read = limited_read(client, link, env, (ESTIMATE_LIMIT, COUNT_LOCK_WAIT), &check, &explain).await?;
+    let read = limited_read(client, link, env, (ESTIMATE_LIMIT, COUNT_LOCK_WAIT), &ask, &explain).await?;
+    let read = read.map_err(|why| if why == DbError::NotFound { not_lockable(sql) } else { why });
     Ok(read.and_then(|msgs| {
         let plan = msgs.iter().find_map(|m| match m {
             SimpleQueryMessage::Row(r) => r.get(0).map(str::to_string),
@@ -2692,6 +2693,10 @@ async fn limited_read(
         }
     };
     let admitted = match (&end, set) {
+        // What the first request names cannot be locked, or is not there.
+        (Err(e), _) if matches!(e.code(), Some(c) if *c == SqlState::WRONG_OBJECT_TYPE || *c == SqlState::UNDEFINED_TABLE) => {
+            Err(DbError::NotFound)
+        }
         (Err(e), _) => Err(failed((e, asked, ran), applied)),
         (Ok(()), None) => Err(DbError::NoResult),
         // A cancel that came after the question found nothing running to stop.
@@ -2746,6 +2751,30 @@ async fn end_own(client: &Client, link: &mut Link) -> Result<(), Closed> {
     }
     link.close();
     Ok(())
+}
+
+/// What an estimate asks in its first request: the relations it reads locked as reading them
+/// locks them ([`risk::repeat::lock_query`]), then the allowlist's question about what they are
+/// now. Planning follows in the same transaction, so the answer holds for what is planned.
+fn estimate_text(sql: &str) -> Result<String, DbError> {
+    use risk::repeat::{NotRepeatable, lock_query, names};
+    let check = check_text(sql)?;
+    let names = names(sql).map_err(DbError::NotRepeatable)?;
+    let Some(lock) = lock_query(&names) else { return Err(DbError::NotRepeatable(NotRepeatable::Unreadable)) };
+    Ok(format!("{lock}; {check}"))
+}
+
+/// An estimate whose relations the server cannot lock (a materialized view, a foreign table, one
+/// not found): what they are cannot be held still, so it is refused, by their names.
+fn not_lockable(sql: &str) -> DbError {
+    use risk::repeat::{NotRepeatable, names};
+    let Ok(names) = names(sql) else { return DbError::NotRepeatable(NotRepeatable::Unreadable) };
+    let written: Vec<String> = names
+        .relations
+        .iter()
+        .map(|(schema, rel)| if schema.is_empty() { rel.clone() } else { format!("{schema}.{rel}") })
+        .collect();
+    DbError::NotRepeatable(NotRepeatable::NotATable(written.join(", ")))
 }
 
 /// A simple query's messages as far as they came, and how it ended: what ran before a failure

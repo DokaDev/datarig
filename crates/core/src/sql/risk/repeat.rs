@@ -439,6 +439,23 @@ g.rngsubdiff::pg_catalog.oid OPERATOR(pg_catalog.>=) 10000::pg_catalog.oid))
     ))
 }
 
+/// `LOCK TABLE … IN ACCESS SHARE MODE` of the relations the statement reads, run before the
+/// server is asked about them and in the same transaction as what is planned: the lock plain
+/// reading takes, held to the transaction's end, so a relation asked about stays what it is (a
+/// rename or a drop waits). `None` for a statement that reads none, or a name that holds a NUL.
+pub fn lock_query(n: &Names) -> Option<String> {
+    let quoted = |name: &str| (!name.contains('\0')).then(|| format!("\"{}\"", name.replace('"', "\"\"")));
+    let mut relations = Vec::new();
+    for (schema, rel) in &n.relations {
+        if schema.is_empty() && n.ctes.contains(rel) {
+            continue;
+        }
+        let name = quoted(rel)?;
+        relations.push(if schema.is_empty() { name } else { format!("{}.{name}", quoted(schema)?) });
+    }
+    (!relations.is_empty()).then(|| format!("LOCK TABLE {} IN ACCESS SHARE MODE", relations.join(", ")))
+}
+
 /// Whether the query `sql` sorts its rows at the top (`ORDER BY`): without it the order of a
 /// run again is not guaranteed to be the same, which the app says when it re-runs one.
 pub fn ordered(sql: &str) -> bool {

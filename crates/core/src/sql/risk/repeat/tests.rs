@@ -176,3 +176,10 @@ fn the_builtin_operator_and_type_lists_are_sorted() {
     assert!(builtin_operator("=") && builtin_operator("||") && !builtin_operator("#~#"));
     assert!(builtin_type("int4") && builtin_type("text") && builtin_type("date") && !builtin_type("int"));
 }
+
+#[test]
+fn the_relations_read_are_locked_by_their_quoted_names_without_the_with_queries() {
+    let n = names(r#"WITH w AS (SELECT 1) SELECT * FROM public."Odd ""t", plain, w"#).unwrap();
+    assert_eq!(lock_query(&n).as_deref(), Some(r#"LOCK TABLE "public"."Odd ""t", "plain" IN ACCESS SHARE MODE"#));
+    assert_eq!(lock_query(&names("SELECT 1").unwrap()), None);
+}
