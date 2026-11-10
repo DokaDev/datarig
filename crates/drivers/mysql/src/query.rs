@@ -1963,7 +1963,9 @@ fn sets_next(sql: &str, mode: MySqlMode, word: &str, names: &[&str]) -> bool {
         }
         // `:=` may lex as `:` and `=`.
         let assigned = toks.get(next).is_some_and(|n| n.kind == Tok::Op && matches!(n.text(sql), "=" | ":=" | ":"));
-        let name = name.to_ascii_lowercase().replace('`', "");
+        // Quoted parts unquoted: backticks, and double quotes under `ANSI_QUOTES` (which MySQL 8
+        // refuses after `@@`, but reading them costs nothing and errs on the safe side).
+        let name = name.to_ascii_lowercase().replace(['`', '"'], "");
         assigned && names.contains(&name.as_str())
     })
 }

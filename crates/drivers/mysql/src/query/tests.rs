@@ -178,6 +178,10 @@ fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
             assert!(!sets(sql), "{sql}");
         }
     }
+    // Under `ANSI_QUOTES` a double-quoted name is an identifier too.
+    let ansi = MySqlMode { ansi_quotes: true, ..MODE };
+    assert!(sets_next_isolation("SET @@\"transaction_isolation\" = 'SERIALIZABLE'", ansi));
+    assert!(sets_next_access("SET @@\"tx_read_only\" = 1", ansi));
     // Each characteristic on its own.
     for (sql, isolation, access) in [
         ("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE", true, false),
