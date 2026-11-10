@@ -195,3 +195,17 @@ fn an_escaped_text_is_cut_before_an_escape_never_in_it() {
     assert_eq!(clip_escaped(r"ab\c", 4), r"ab\c");
     assert_eq!(clip_escaped("short", 9), "short");
 }
+
+#[test]
+fn whole_parts_never_cut_a_part() {
+    let hint = "WHERE  f filter · s sort · Ctrl+R history";
+    assert_eq!(whole_parts(hint, 60), hint);
+    assert_eq!(whole_parts(hint, width(hint)), hint);
+    assert_eq!(whole_parts(hint, width(hint) - 1), "WHERE  f filter · s sort");
+    assert_eq!(whole_parts(hint, 24), "WHERE  f filter · s sort");
+    assert_eq!(whole_parts(hint, 23), "WHERE  f filter");
+    assert_eq!(whole_parts(hint, 15), "WHERE  f filter");
+    assert_eq!(whole_parts(hint, 10), "WHERE  f …");
+    let ko = "WHERE  f 필터 · s 정렬 · Ctrl+R 기록";
+    assert_eq!(whole_parts(ko, width(ko) - 1), "WHERE  f 필터 · s 정렬");
+}

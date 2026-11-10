@@ -693,6 +693,39 @@ fn without_a_writable_state_directory_nothing_is_written() {
     assert_eq!(std::fs::read_to_string(state.file()).unwrap(), before, "never written");
 }
 
+/// The empty line's hint as drawn on a `w` by `h` screen: from `WHERE` to the refresh mark.
+fn hint_drawn(h: &mut Harness, w: u16, hh: u16) -> String {
+    let screen = h.screen(w, hh);
+    let row = screen.lines().find(|l| l.contains("WHERE")).expect("the filter line").to_string();
+    let from = row.find("WHERE").unwrap();
+    let to = row.find('\u{27f3}').expect("the refresh mark");
+    row[from..to].trim_end().to_string()
+}
+
+/// With the explorer and the cell pane open the empty line's hint is narrow: it shows its key
+/// parts whole (as many as fit, the first always), never one cut in its middle, in English and
+/// Korean; with room every part shows.
+#[test]
+fn the_line_hint_drops_whole_parts_when_narrow() {
+    let cfg = test_db_config();
+    let mut h = users(&cfg, None);
+    let msg = datarig_i18n::Msg::TableFilterHint { filter: "f".into(), sort: "s".into(), history: "Ctrl+R".into() };
+    for lang in [Lang::En, Lang::Ko] {
+        h.app.i18n.set_lang(lang);
+        let full = h.app.i18n.msg(&msg).to_string();
+        let parts: Vec<&str> = full.split(" \u{b7} ").collect();
+        assert_eq!(parts.len(), 3, "{full}");
+        let narrow = hint_drawn(&mut h, 80, 24);
+        let whole: Vec<String> = (1..=parts.len()).map(|k| parts[..k].join(" \u{b7} ")).collect();
+        assert!(whole.contains(&narrow), "{lang:?}: {narrow:?} is not whole parts of {full:?}");
+        assert!(!narrow.contains('\u{2026}'), "{lang:?}: {narrow:?}");
+        assert_eq!(hint_drawn(&mut h, 120, 30), full, "{lang:?}");
+    }
+    h.app.i18n.set_lang(Lang::Ko);
+    assert_screen!("filter_history_hint_ko_80x24", Lang::Ko, h.draw(80, 24));
+    assert_screen!("filter_history_hint_ko_120x30", Lang::Ko, h.draw(120, 30));
+}
+
 /// The list with the selected entry's texts under it, the line's hint naming `Ctrl+R`, and
 /// the clear question.
 #[test]

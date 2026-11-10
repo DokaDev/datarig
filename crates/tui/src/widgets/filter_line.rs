@@ -248,7 +248,9 @@ pub(crate) fn draw(
     let limit_edited = state.edited(Field::Limit, &applied.limit);
     let blank = applied.filter.is_empty() && applied.order.is_empty() && applied.limit.is_empty();
     if focused.is_none() && state.empty() && blank {
-        put(buf, x0 + 1, y, hint, end.saturating_sub(1), dim);
+        // Whole parts only: a key cut in its middle says nothing.
+        let room = end.saturating_sub(1);
+        put(buf, x0 + 1, y, &crate::text::whole_parts(hint, room), room, dim);
         drawn.where_ = Rect::new(x0, y, end as u16, 1);
         return drawn;
     }

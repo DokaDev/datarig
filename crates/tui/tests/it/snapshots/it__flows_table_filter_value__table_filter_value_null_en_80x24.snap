@@ -6,7 +6,7 @@ expression: backend
 "│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1       ││ local-pg / datarig.shop.users││ id: 2                │"
 "│  ▾ ●   local-pg      ││ [Result 1]  Chart  Messages  ││ name: NULL           │"
-"│    ▾ datarig default ││ WHERE  f filter · s sort…  ⟳ ││ score: NULL          │"
+"│    ▾ datarig default ││ WHERE  f filter · s sort   ⟳ ││ score: NULL          │"
 "│      ▸ analytics     ││   │ id   │ name  ^v│ score   ││ data: NULL           │"
 "│      ▸ public        ││   │ int8 │ text    │ float8  ││ doc: NULL            │"
 "│      ▾ shop          ││ 1 │    1 │ it's    │     1.5 ││ born: NULL           │"
