@@ -2668,17 +2668,23 @@ async fn limited_read(
 }
 
 /// How [`limited_read`] begins: `BEGIN READ ONLY`, the session's settings of each transaction
-/// (`each_tx`), then `statement_timeout` and `lock_timeout` for this transaction alone, each the shorter of
-/// the one given and the one the session has (when it has one: a limit the user set is never
-/// made longer). The query answers with each setting's name and the milliseconds it got.
+/// (`each_tx`), then `statement_timeout` and `lock_timeout` for this transaction alone, each the
+/// shorter of the one given and the one the session has (when it has one: a limit the user set is
+/// never made longer). The query answers with each setting's name and the milliseconds it got.
+///
+/// It runs on the session's search path, which may put a schema of the user's before
+/// `pg_catalog`: so it takes no operator and no cast (either is looked up on that path, and a
+/// cast between built-in types read through their text can be one of the user's), only
+/// functions named in `pg_catalog`, each given its exact argument types.
 fn limited_begin(each_tx: &[String], statement: Duration, lock: Duration) -> String {
     let ms = |d: Duration| d.as_millis().clamp(1, i32::MAX as u128);
     let first: Vec<&str> = std::iter::once(BEGIN_READ_ONLY).chain(each_tx.iter().map(String::as_str)).collect();
     format!(
-        "{}; SELECT s.name, s.ms, pg_catalog.set_config(s.name, s.ms::text, true) FROM (SELECT name, CASE WHEN \
-         setting::bigint > 0 AND setting::bigint < l.ms THEN setting::bigint ELSE l.ms END AS ms FROM \
-         pg_catalog.pg_settings JOIN (VALUES ('statement_timeout', {}::bigint), ('lock_timeout', {}::bigint)) AS \
-         l(name, ms) USING (name)) AS s",
+        "{}; SELECT s.name, s.ms, pg_catalog.set_config(s.name, pg_catalog.textin(pg_catalog.int8out(s.ms)), \
+         true) FROM (SELECT g.name, CASE WHEN pg_catalog.int8gt(g.v, '0') AND pg_catalog.int8lt(g.v, l.ms) THEN \
+         g.v ELSE l.ms END AS ms FROM (SELECT p.name, pg_catalog.int8in(pg_catalog.textout(p.setting)) AS v FROM \
+         pg_catalog.pg_settings p) AS g JOIN (VALUES ('statement_timeout', pg_catalog.int8in('{}')), \
+         ('lock_timeout', pg_catalog.int8in('{}'))) AS l(name, ms) ON pg_catalog.texteq(g.name, l.name)) AS s",
         first.join("; "),
         ms(statement),
         ms(lock),

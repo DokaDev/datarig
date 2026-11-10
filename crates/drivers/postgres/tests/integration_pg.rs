@@ -6982,3 +6982,62 @@ async fn an_estimate_takes_no_lock_beyond_access_share() {
     assert!(matches!(q.run(9, "ROLLBACK").await, DbEvent::Done { .. }));
     assert_eq!(q.first_value(10, settings).await, before);
 }
+
+/// The limits of a bounded count and of an estimate are set by the app's own statement, which
+/// names every function it calls in `pg_catalog` and takes no operator or cast whose meaning the
+/// search path could change: with a schema first on the path that has operators of the same
+/// names and argument types as the built-in ones (each fails when it runs), both are answered,
+/// and the session's settings are as before.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_read_runs_nothing_the_search_path_can_shadow() {
+    let Some(url) = pg_url("a_bounded_read_runs_nothing_the_search_path_can_shadow") else { return };
+    let pid = std::process::id();
+    let schema = format!("zz_shadow_{pid}");
+    let _schema = SchemaGuard::new(&url, &schema);
+    let table = format!("public.zz_shadowt_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let tag = format!("shadow{pid}");
+    let (mut q, mut b) = tagged(&url, &tag).await;
+    let fails = |name: &str, args: &str| {
+        format!(
+            "CREATE FUNCTION {schema}.{name}({args}) RETURNS boolean LANGUAGE plpgsql AS \
+             $$BEGIN RAISE EXCEPTION 'zz_ shadow {name} ran'; END$$"
+        )
+    };
+    let operator = |op: &str, function: &str, ty: &str| {
+        format!("CREATE OPERATOR {schema}.{op} (LEFTARG = {ty}, RIGHTARG = {ty}, FUNCTION = {schema}.{function})")
+    };
+    for sql in [
+        format!("CREATE SCHEMA {schema}"),
+        format!("CREATE TABLE {table} AS SELECT g::bigint AS id FROM generate_series(1, 50) g"),
+        fails("zz_int", "bigint, bigint"),
+        fails("zz_text", "text, text"),
+        operator("<", "zz_int", "bigint"),
+        operator(">", "zz_int", "bigint"),
+        operator("=", "zz_int", "bigint"),
+        operator("=", "zz_text", "text"),
+        format!(
+            "CREATE FUNCTION {schema}.set_config(text, text, boolean) RETURNS text LANGUAGE plpgsql AS \
+             $$BEGIN RAISE EXCEPTION 'zz_ shadow set_config ran'; END$$"
+        ),
+    ] {
+        assert!(matches!(b.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let settings = "SELECT current_setting('statement_timeout') || ' ' || current_setting('lock_timeout')";
+    let before = q.first_value(1, settings).await;
+    let path = format!("SET search_path = {schema}, pg_catalog, public");
+    assert!(matches!(q.run(2, &path).await, DbEvent::Done { .. }));
+    // The path is the session's: its operators are the ones a statement of the user's gets.
+    let shadowed = q.run(3, "SELECT 1::bigint < 2::bigint").await;
+    assert!(
+        matches!(&shadowed, DbEvent::Failed { error, .. } if format!("{error:?}").contains("zz_ shadow zz_int ran")),
+        "{shadowed:?}"
+    );
+    let counted = count_of(&format!("SELECT * FROM {table} WHERE (id IS NOT NULL)"));
+    let limit = Some(Duration::from_secs(30));
+    assert_eq!(q.count_within(4, &counted, limit).await.0, Ok(50));
+    let rows = format!("SELECT * FROM {table} WHERE (id IS NOT NULL) LIMIT 10");
+    assert_eq!(q.estimate(5, &rows).await.0, Ok(10));
+    assert!(matches!(q.run(6, "RESET search_path").await, DbEvent::Done { .. }));
+    assert_eq!(q.first_value(7, settings).await, before, "nothing stays on the session");
+}

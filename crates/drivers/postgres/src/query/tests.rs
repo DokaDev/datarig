@@ -1451,10 +1451,30 @@ fn a_limited_read_sets_its_limits_after_the_sessions_own_and_never_longer() {
     );
     // Each limit is the shorter of the session's (when it has one, read after its own settings)
     // and the one given, set for the transaction alone.
-    assert!(text.contains("('statement_timeout', 30000::bigint), ('lock_timeout', 2000::bigint)"), "{text}");
-    assert!(text.contains("CASE WHEN setting::bigint > 0 AND setting::bigint < l.ms"), "{text}");
-    assert!(text.contains("pg_catalog.set_config(s.name, s.ms::text, true)"), "{text}");
+    assert!(
+        text.contains("('statement_timeout', pg_catalog.int8in('30000')), ('lock_timeout', pg_catalog.int8in('2000'))"),
+        "{text}"
+    );
+    assert!(text.contains("CASE WHEN pg_catalog.int8gt(g.v, '0') AND pg_catalog.int8lt(g.v, l.ms) THEN g.v"), "{text}");
+    assert!(
+        text.contains("pg_catalog.set_config(s.name, pg_catalog.textin(pg_catalog.int8out(s.ms)), true)"),
+        "{text}"
+    );
     let none = super::limited_begin(&[], std::time::Duration::from_millis(1500), std::time::Duration::from_secs(2));
     assert!(none.starts_with("BEGIN READ ONLY; SELECT"), "{none}");
-    assert!(none.contains("('statement_timeout', 1500::bigint)"), "{none}");
+    assert!(none.contains("('statement_timeout', pg_catalog.int8in('1500'))"), "{none}");
+    // What the app adds after the settings of each transaction runs on the session's search
+    // path: no operator, no cast (each looked up on that path), only `pg_catalog`'s functions.
+    let own = &none["BEGIN READ ONLY; ".len()..];
+    for op in ["::", "=", "<", ">", "+", "-", "*", "/", "||", " USING ", "CAST", "OPERATOR"] {
+        assert!(!own.contains(op), "{op} in {own}");
+    }
+    let mut calls = own.match_indices('(').map(|(i, _)| {
+        let head = own[..i].trim_end();
+        head.rsplit([' ', '(', ',']).next().unwrap_or_default().to_string()
+    });
+    assert!(
+        calls.all(|f| matches!(f.as_str(), "" | "FROM" | "JOIN" | "VALUES" | "l") || f.starts_with("pg_catalog.")),
+        "an unqualified call in {own}"
+    );
 }
