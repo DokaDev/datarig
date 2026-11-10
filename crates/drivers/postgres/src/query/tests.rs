@@ -1478,3 +1478,19 @@ fn a_limited_read_sets_its_limits_after_the_sessions_own_and_never_longer() {
         "an unqualified call in {own}"
     );
 }
+
+/// A bounded read the server stopped with `query_canceled` is the user's cancel when one was asked
+/// for its command by the time the answer came, whatever time it took; without one it is the
+/// time limit only once the read was sent for at least that long (another cancel stopped it
+/// before).
+#[test]
+fn a_stopped_bounded_read_is_the_limit_only_without_a_cancel_and_after_the_limit() {
+    use datarig_core::driver::DbError;
+    use std::time::Duration;
+    let (limit, ms) = (Duration::from_secs(1), Duration::from_millis);
+    assert_eq!(super::stopped(true, ms(1500), limit), DbError::Cancelled);
+    assert_eq!(super::stopped(true, ms(10), limit), DbError::Cancelled);
+    assert_eq!(super::stopped(false, ms(1000), limit), DbError::TimedOut(limit));
+    assert_eq!(super::stopped(false, ms(1500), limit), DbError::TimedOut(limit));
+    assert_eq!(super::stopped(false, ms(999), limit), DbError::Cancelled);
+}

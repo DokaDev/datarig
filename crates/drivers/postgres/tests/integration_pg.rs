@@ -7094,3 +7094,50 @@ async fn a_bounded_read_whose_commit_fails_is_no_answer() {
     assert!(seen.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{seen:?}");
     assert!(!seen.iter().any(|e| matches!(e, DbEvent::Counted { result: Ok(_), .. })), "{seen:?}");
 }
+
+/// The user's cancel is for the last run sent, and never for one sent after it: asked before a
+/// bounded count was sent, the count is not cancelled (it runs to its limit, `TimedOut`); asked
+/// while the count waits behind a run, the count is cancelled (`Cancelled`, at once when its
+/// turn comes), never left to run to its limit and called stopped there.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_is_for_the_commands_sent_before_it() {
+    let Some(url) = pg_url("a_cancel_is_for_the_commands_sent_before_it") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_cancelfor_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let tag = format!("cancelfor{pid}");
+    let (mut q, mut b) = tagged(&url, &tag).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let counted = count_of(&format!("SELECT * FROM {table} WHERE (id > 10)"));
+    let limit = Some(Duration::from_secs(1));
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    // Asked before the count was sent: an earlier command's.
+    q.session.cancel();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (got, took) = q.count_within(1, &counted, limit).await;
+    assert_eq!(got, Err(DbError::TimedOut(Duration::from_secs(1))), "{took:?}");
+    // Asked while the count waits behind a run of the user's: the count's, not the run's.
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 2,
+        statements: vec!["SELECT pg_sleep(1)".into()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    q.session.send(DbCommand::Count { id: 3, sql: counted.clone(), limit });
+    started(&mut b, &tag).await;
+    q.session.cancel();
+    let ran = q.result(2).await;
+    assert!(!matches!(ran, DbEvent::Failed { .. }), "the run before it goes on: {ran:?}");
+    let t0 = Instant::now();
+    let DbEvent::Counted { id, result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 20).await else {
+        unreachable!()
+    };
+    assert_eq!((id, result), (3, Err(DbError::Cancelled)));
+    assert!(t0.elapsed() < Duration::from_secs(1), "cancelled at once: {:?}", t0.elapsed());
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+    // A command sent after the cancel is not cancelled by it.
+    assert_eq!(q.count_within(5, &counted, limit).await.0, Ok(40));
+}

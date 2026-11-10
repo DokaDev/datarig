@@ -2641,10 +2641,9 @@ async fn estimate(
 /// statement and lock wait limits ([`limited_begin`]), the statement, `COMMIT`, sent together
 /// (one round trip; a failed statement leaves the transaction aborted, which the `COMMIT` rolls
 /// back). Pooler-safe: every setting is local to that transaction. The server stopping it at its
-/// limit is [`DbError::TimedOut`] with the limit that applied; a cancel of the user's (asked
-/// for this run: [`Env::cancel`]) is `Cancelled`; a lock wait past its limit is
-/// `LockTimeout`. The read is answered only when the `COMMIT` went through: a failed one is the
-/// answer (the transaction may still be open, aborted: it is rolled back, and the session asked
+/// limit is [`DbError::TimedOut`] with the limit that applied, a cancel `Cancelled` ([`stopped`]
+/// tells them apart); a lock wait past its limit is `LockTimeout`. The read is answered only when
+/// the `COMMIT` went through: a failed one is the answer (the transaction may still be open, aborted: it is rolled back, and the session asked
 /// whether a block is open when that fails too); a lost connection is not an answer either.
 async fn limited_read(
     client: &Client,
@@ -2655,25 +2654,44 @@ async fn limited_read(
     text: &str,
 ) -> Result<Result<Vec<SimpleQueryMessage>, DbError>, Closed> {
     let begin = limited_begin(env.each_tx, statement, lock);
+    let start = Instant::now();
+    // Each answer with what was known when it came: whether the user had asked to cancel this
+    // run, and how long since the read was sent.
+    let when = |answer| (answer, env.cancel.asked(), start.elapsed());
     let (set, read, commit) = link
         .guard(Some(env.token), async {
-            tokio::join!(client.simple_query(&begin), client.simple_query(text), client.batch_execute("COMMIT"))
+            tokio::join!(
+                async { when(client.simple_query(&begin).await.map(Some)) },
+                async { when(client.simple_query(text).await.map(Some)) },
+                async { when(client.batch_execute("COMMIT").await.map(|()| None)) },
+            )
         })
         .await?;
-    let applied = set.as_ref().ok().and_then(|msgs| applied_limit(msgs)).unwrap_or(statement);
-    let failed = |e: &tokio_postgres::Error| {
-        if is_cancel(e) && !env.cancel.asked() { DbError::TimedOut(applied) } else { count_error(e) }
+    let applied =
+        set.0.as_ref().ok().and_then(Option::as_ref).and_then(|msgs| applied_limit(msgs)).unwrap_or(statement);
+    let failed = |(e, asked, ran): (&tokio_postgres::Error, bool, Duration)| {
+        if is_cancel(e) { stopped(asked, ran, applied) } else { count_error(e) }
     };
-    let read = match set {
-        Err(e) => Err(failed(&e)),
-        Ok(_) => read.map_err(|e| failed(&e)),
+    let read = match (&set.0, read) {
+        (Err(e), _) => Err(failed((e, set.1, set.2))),
+        (Ok(_), (Ok(msgs), ..)) => Ok(msgs.unwrap_or_default()),
+        (Ok(_), (Err(e), asked, ran)) => Err(failed((&e, asked, ran))),
     };
-    let Err(e) = commit else { return Ok(read) };
+    let (Err(e), asked, ran) = commit else { return Ok(read) };
     if !e.is_closed() && link.guard(None, client.batch_execute("ROLLBACK")).await?.is_err() {
         probe(client, link, env, tx).await?;
     }
     // A failed read says why; a read whose transaction did not end is no answer.
-    Ok(read.and(Err(failed(&e))))
+    Ok(read.and(Err(failed((&e, asked, ran)))))
+}
+
+/// A bounded read stopped with `query_canceled` (57014), which the server answers to a cancel
+/// request and at the statement time limit alike: a cancel when the user had asked for one for
+/// this run when the answer came (`asked`), or when the read had not been sent for as long
+/// as the limit that applied (`ran` < `applied`: it cannot have been the limit, another cancel
+/// stopped it); the limit otherwise ([`DbError::TimedOut`]).
+fn stopped(asked: bool, ran: Duration, applied: Duration) -> DbError {
+    if asked || ran < applied { DbError::Cancelled } else { DbError::TimedOut(applied) }
 }
 
 /// How [`limited_read`] begins: `BEGIN READ ONLY`, the session's settings of each transaction
