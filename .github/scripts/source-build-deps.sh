@@ -39,7 +39,9 @@ case "$ID" in
     cmd+=(-y --setopt=retries=10)
     ;;
   arch)
-    pacman -Sy --noconfirm --needed curl ca-certificates
+    # A full upgrade: installing against fresh package lists without one is a partial upgrade,
+    # which breaks during a library transition.
+    pacman -Syu --noconfirm --needed curl ca-certificates
     [[ ${cmd[0]} == pacman ]] || { echo "not a pacman command: $line" >&2; exit 1; }
     cmd+=(--noconfirm)
     ;;

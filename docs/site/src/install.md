@@ -46,8 +46,12 @@ datarig yourself you need:
   ```sh
   sudo apt install build-essential clang libclang-dev git     # Debian, Ubuntu
   sudo dnf install gcc clang clang-devel git                  # Fedora
-  sudo pacman -S --needed base-devel clang git                # Arch Linux
+  sudo pacman -Syu --needed base-devel clang git              # Arch Linux
   ```
+
+  On Arch Linux the command upgrades the whole system with the packages: installing them
+  against fresh package lists without upgrading the rest is a partial upgrade, which Arch does
+  not support.
 
   On Windows (untested outside CI), install LLVM and set `LIBCLANG_PATH` if bindgen does not
   find it.
