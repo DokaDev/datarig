@@ -202,7 +202,7 @@ struct State {
     routine: bool,
     /// The statement running now sets the next transaction's own settings, or may set them
     /// ([`sets_next_transaction`]): once it ended the session takes it ([`Tracked::next_once`]).
-    sets_next: bool,
+    sets_next: SetsNext,
     limit: Limit,
     tx: Tx,
     /// The request being served (a run, an `EndTx`, a count), whose id a server's end of the
@@ -432,7 +432,7 @@ pub(crate) async fn query_loop(
         mode,
         values,
         routine: false,
-        sets_next: false,
+        sets_next: SetsNext::No,
         limit: Limit { current: select_limit, user: None },
         tx: Tx::default(),
         request: 0,
@@ -1245,7 +1245,7 @@ async fn after(
         }
     }
     // The statement set the next transaction's own settings, or may have.
-    if sets_next {
+    if sets_next == SetsNext::Maybe || (ok && sets_next == SetsNext::Yes) {
         s.tracked.next_once = true;
     }
     let writable = status.is_some_and(|st| {
@@ -1868,46 +1868,79 @@ fn name_condition(names: &[String], d: Dialect) -> String {
     if cond.is_empty() { "FALSE".to_string() } else { cond.join(" OR ") }
 }
 
+/// Whether a statement sets settings of the next transaction only ([`sets_next_transaction`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SetsNext {
+    /// It does not.
+    #[default]
+    No,
+    /// It does, once it succeeded: `SET TRANSACTION …`, `SET @@transaction_isolation = …`.
+    Yes,
+    /// It may, whether it succeeded or not (code of the server's that may have run in part, or
+    /// text that is not read): a `CALL`, an `EXECUTE`, an executable comment `/*! … */`.
+    Maybe,
+}
+
 /// Whether `sql` sets settings of the next transaction only, which the server does not report:
-/// `SET TRANSACTION …` (no `SESSION` nor `GLOBAL` before `TRANSACTION`), or an assignment of a
+/// `SET TRANSACTION …` (no `SESSION` nor `GLOBAL` before `TRANSACTION`), or an assignment to a
 /// transaction variable by its `@@` name without a scope (`SET @@transaction_isolation = …`,
-/// `` @@`tx_read_only` ``); or whether it may (a `CALL`, an `EXECUTE` of a prepared text, an
-/// executable comment `/*! … */`, whose text is not read). A stored function cannot: the
-/// statement that calls it is a transaction already.
-pub(crate) fn sets_next_transaction(sql: &str, mode: MySqlMode) -> bool {
+/// `` @@`tx_read_only` ``; reading one, `SET @a = @@transaction_isolation`, sets nothing); or
+/// whether it may ([`SetsNext::Maybe`]). A stored function cannot: the statement that calls it
+/// is a transaction already.
+pub(crate) fn sets_next_transaction(sql: &str, mode: MySqlMode) -> SetsNext {
     let toks: Vec<Token> = lex_in(sql, Dialect::MySql(mode)).into_iter().filter(|t| !t.is_trivia()).collect();
     if toks.iter().any(|t| t.kind == Tok::ExecComment) {
-        return true;
+        return SetsNext::Maybe;
     }
     let word = |i: usize| toks.get(i).filter(|t| t.is_word()).map(|t| t.text(sql).to_ascii_uppercase());
     match word(0).as_deref() {
-        Some("CALL" | "EXECUTE") => return true,
+        Some("CALL" | "EXECUTE") => return SetsNext::Maybe,
         Some("SET") => {}
-        _ => return false,
+        _ => return SetsNext::No,
     }
     if word(1).as_deref() == Some("TRANSACTION") {
-        return true;
+        return SetsNext::Yes;
     }
-    // A variable's name as written, from its first `@` to what ends it: `` @@`name` `` lexes as
-    // an `@` and a variable, `@@session.name` as one variable.
+    // The assignments' targets: right after `SET` or after a comma outside parentheses, up to
+    // the `=` (`:=`) that follows. A variable's name as written runs from its first `@` to what
+    // ends it: `` @@`name` `` lexes as an `@` and a variable, `@@session.name` as one variable.
     let at = |t: &Token| t.kind == Tok::Variable || (t.kind == Tok::Op && t.text(sql) == "@");
-    (0..toks.len()).filter(|&i| at(&toks[i]) && (i == 0 || !at(&toks[i - 1]))).any(|i| {
+    let mut depth = 0i32;
+    let mut targets = vec![1];
+    for (i, tok) in toks.iter().enumerate().skip(1) {
+        match tok.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => depth -= 1,
+            Tok::Comma if depth == 0 => targets.push(i + 1),
+            _ => {}
+        }
+    }
+    let sets = targets.into_iter().any(|i| {
+        if !toks.get(i).is_some_and(at) {
+            return false;
+        }
         let mut name = String::new();
         let mut end = toks[i].start;
-        for n in &toks[i..] {
+        let mut next = toks.len();
+        for (j, n) in toks.iter().enumerate().skip(i) {
             let part = at(n) || matches!(n.kind, Tok::Dot | Tok::Ident | Tok::Keyword | Tok::QuotedIdent);
             if n.start != end || !part {
+                next = j;
                 break;
             }
             name.push_str(n.text(sql));
             end = n.end;
         }
+        // `:=` may lex as `:` and `=`.
+        let assigned = toks.get(next).is_some_and(|n| n.kind == Tok::Op && matches!(n.text(sql), "=" | ":=" | ":"));
         let name = name.to_ascii_lowercase().replace('`', "");
-        matches!(
-            name.as_str(),
-            "@@transaction_isolation" | "@@tx_isolation" | "@@transaction_read_only" | "@@tx_read_only"
-        )
-    })
+        assigned
+            && matches!(
+                name.as_str(),
+                "@@transaction_isolation" | "@@tx_isolation" | "@@transaction_read_only" | "@@tx_read_only"
+            )
+    });
+    if sets { SetsNext::Yes } else { SetsNext::No }
 }
 
 /// Whether `sql` starts or ends a transaction by its first word (`START TRANSACTION`, `BEGIN`,

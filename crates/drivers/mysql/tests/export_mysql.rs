@@ -651,7 +651,8 @@ async fn checked(c: &mut Conn, sql: &str) -> Result<(), DbError> {
 /// not report: until a transaction starts or ends, a count, an export and the allowlist's
 /// question are refused, so they never use it up and the user's next transaction runs with it
 /// (at `SERIALIZABLE` its read takes shared locks). In every spelling, a procedure's or an
-/// executable comment's included, and for the access mode too.
+/// executable comment's included, and for the access mode too; never after a `SET TRANSACTION`
+/// the server refused, nor after a `SET` that only reads the variable.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_next_transactions_own_settings_are_never_used_up() {
     let Some((url, admin)) = urls("the_next_transactions_own_settings_are_never_used_up") else { return };
@@ -701,4 +702,10 @@ async fn the_next_transactions_own_settings_are_never_used_up() {
     c.ok("COMMIT").await;
     assert_eq!(counted(&mut c, &count).await, Ok(10));
     assert_eq!(next_reads_lock(&mut c).await, 0);
+    // A `SET TRANSACTION` the server refused, and a `SET` that only reads the variable, set
+    // nothing.
+    let refused = c.run("SET TRANSACTION ISOLATION LEVEL NO_SUCH_LEVEL").await;
+    assert!(matches!(refused, DbEvent::Failed { .. }), "{refused:?}");
+    c.ok("SET @saved = @@transaction_isolation").await;
+    assert_eq!(counted(&mut c, &count).await, Ok(10));
 }
