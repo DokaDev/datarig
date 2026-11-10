@@ -60,7 +60,7 @@ fn runs(h: &mut Harness) -> Vec<(u64, Vec<String>)> {
     h.sent()
         .into_iter()
         .filter_map(|c| match c {
-            DbCommand::Execute { id, statements, paging: PagingMode::NoHold, tx: TxRule::Auto } => {
+            DbCommand::Execute { max_rows: None, id, statements, paging: PagingMode::NoHold, tx: TxRule::Auto } => {
                 Some((id, statements))
             }
             _ => None,

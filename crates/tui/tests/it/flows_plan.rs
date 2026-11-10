@@ -41,7 +41,9 @@ fn plan_page(id: u64, json: &str) -> DbEvent {
 /// The one statement of the run `h` just sent, and the run's id.
 fn sent_one(h: &mut Harness) -> (u64, String) {
     let sent = h.sent();
-    let [DbCommand::Execute { id, statements, paging: PagingMode::NoHold, tx: TxRule::Auto }] = &sent[..] else {
+    let [DbCommand::Execute { max_rows: None, id, statements, paging: PagingMode::NoHold, tx: TxRule::Auto }] =
+        &sent[..]
+    else {
         panic!("one run: {sent:?}")
     };
     let [sql] = &statements[..] else { panic!("one statement: {statements:?}") };
@@ -287,7 +289,7 @@ fn a_plan_of_a_statement_before_the_last_is_kept_with_its_index() {
     h.keys("ggVG");
     h.ctrl('e');
     let (id, statements) = match &h.sent()[..] {
-        [DbCommand::Execute { id, statements, paging: PagingMode::NoHold, tx: TxRule::Auto }] => {
+        [DbCommand::Execute { max_rows: None, id, statements, paging: PagingMode::NoHold, tx: TxRule::Auto }] => {
             (*id, statements.clone())
         }
         s => panic!("{s:?}"),

@@ -450,7 +450,7 @@ pub(crate) async fn query_loop(
             continue;
         }
         let done = match next {
-            Next::Command(DbCommand::Execute { id, statements, paging, tx }) => {
+            Next::Command(DbCommand::Execute { id, statements, paging, tx, max_rows }) => {
                 // MySQL has no idle limit for a transaction (`idle_timeout`), nor a read-only
                 // transaction that costs no round trip of its own: a `ReadOnly` step runs as it
                 // is (a write hidden behind a view's stored function commits by itself).
@@ -458,10 +458,10 @@ pub(crate) async fn query_loop(
                     TxRule::Auto => Vec::new(),
                     TxRule::Manual { steps, .. } => steps.iter().map(|step| *step == TxStep::Open).collect(),
                 };
-                execute(&mut conn, &mut link, &env, &mut s, id, statements, None, paging, &opens).await
+                execute(&mut conn, &mut link, &env, &mut s, id, statements, None, paging, &opens, max_rows).await
             }
-            Next::Command(DbCommand::Resume { id, sql, skip, paging }) => {
-                execute(&mut conn, &mut link, &env, &mut s, id, vec![sql], Some(skip), paging, &[]).await
+            Next::Command(DbCommand::Resume { id, sql, skip, paging, max_rows }) => {
+                execute(&mut conn, &mut link, &env, &mut s, id, vec![sql], Some(skip), paging, &[], max_rows).await
             }
             // Answered once; a session the UI closed meanwhile answers nothing.
             Next::Command(DbCommand::EndTx { id, commit }) => {
@@ -568,8 +568,8 @@ fn unanswered(events: &UnboundedSender<DbEvent>, c: DbCommand, error: &DbError) 
 }
 
 /// Run `statements` (or the one statement of a `Resume` past `skip` rows; `opens`: the ones
-/// that open a transaction for manual commit, [`TxRule::Manual`]); the run ends with exactly one
-/// terminal event ([`Reply`]).
+/// that open a transaction for manual commit, [`TxRule::Manual`]; `max_rows`: the most rows the
+/// last one's result shows); the run ends with exactly one terminal event ([`Reply`]).
 #[allow(clippy::too_many_arguments)]
 async fn execute(
     conn: &mut Conn,
@@ -581,12 +581,13 @@ async fn execute(
     resume: Option<u64>,
     paging: PagingMode,
     opens: &[bool],
+    max_rows: Option<u64>,
 ) -> Result<(), Stop> {
     link.serving(env.events, id);
     s.request = id;
     env.failed.store(false, Ordering::SeqCst);
     let reply = Reply::new(env.events, env.failed, id);
-    let ran = run(conn, link, env, s, reply, statements, resume, paging, opens).await;
+    let ran = run(conn, link, env, s, reply, statements, resume, paging, opens, max_rows).await;
     idle(env, link).await;
     let ran = match ran {
         Ok(()) => settle(conn, link, env, s, id).await,
@@ -626,6 +627,10 @@ struct Step {
     hold: bool,
     /// It opens a transaction for manual commit when none is open ([`TxRule::Manual`]).
     opens: bool,
+    /// The most rows the last statement's result shows (past `skip`), `None`: all. The server
+    /// stops it there (`sql_select_limit`), no row past them is read, and the result ends at
+    /// that row as if it had no more.
+    cap: Option<u64>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -639,6 +644,7 @@ async fn run<'a>(
     resume: Option<u64>,
     paging: PagingMode,
     opens: &[bool],
+    max_rows: Option<u64>,
 ) -> Result<(), Halted<'a>> {
     let n = statements.len();
     if n == 0 {
@@ -664,6 +670,8 @@ async fn run<'a>(
             skip: resume.unwrap_or(0),
             hold: paging == PagingMode::Hold,
             opens: opens.get(i) == Some(&true),
+            // At least one row.
+            cap: if i + 1 == n { max_rows.map(|max| max.max(1)) } else { None },
         };
         if n > 1 {
             // Cancelled between two statements: the rest does not run. Nor on a connection that
@@ -872,13 +880,20 @@ async fn statement<'a>(
     // would lock fewer rows than asked, and its next page would lock them again): read to its
     // end.
     let held = step.last && (step.hold || s.tx.open || lists(sql, s.mode) || locking(sql, s.mode));
-    // The limit: a page and one row more (and the rows a `Resume` skips) for a last statement not
-    // held, else the user's own; set only before a statement it applies to.
-    let wanted = if step.last && !held {
-        let page = (env.page_size as u64).saturating_add(1).saturating_add(step.skip);
-        Some(s.limit.user.map_or(page, |u| u.min(page)))
-    } else {
-        s.limit.user
+    // The limit: a page and one row more (within the result's cap: [`page_want`]), and the rows
+    // a `Resume` skips, for a last statement not held; the cap (and the rows skipped) for a held
+    // one that has one, so the server reads no row past it either; else the user's own. Never
+    // above the user's own; set only before a statement it applies to.
+    let wanted = match (step.last && !held, step.cap) {
+        (true, cap) => {
+            let page = (page_want(env.page_size, cap) as u64).saturating_add(step.skip);
+            Some(s.limit.user.map_or(page, |u| u.min(page)))
+        }
+        (false, Some(cap)) => {
+            let all = cap.saturating_add(step.skip);
+            Some(s.limit.user.map_or(all, |u| u.min(all)))
+        }
+        (false, None) => s.limit.user,
     };
     // Not before a statement that reads the outcome of the one before (`ROW_COUNT()`,
     // `FOUND_ROWS()`): the `SET` would be that statement. It then runs under the limit it finds
@@ -898,6 +913,14 @@ async fn statement<'a>(
         s.tracked.select_limit = None;
         s.limit.current = wanted;
     }
+    // The server stops the result at its cap (or before): once the cap is shown, what is left
+    // of it is its end, read rather than stopped.
+    let bounded = match step.cap {
+        Some(cap) => {
+            limit_applies(sql, s.mode) && s.limit.current.is_some_and(|now| now <= cap.saturating_add(step.skip))
+        }
+        None => false,
+    };
     if let Some(u) = &undo
         && let Err(e) = halt!(link.guard(None, conn.query_drop(u.before.clone())).await, Some(reply))
     {
@@ -997,12 +1020,16 @@ async fn statement<'a>(
                     }
                 }
             }
+            // The rows the result may still show (its cap).
+            let mut cap = step.cap;
             let (mut page, ended) = if left > 0 {
                 // The result now ends within them: an empty last page.
                 (Vec::new(), true)
             } else {
-                match halt!(link.guard(Some(env.killer), read(&mut qr, &columns, env.page_size + 1)).await, Some(reply))
-                {
+                match halt!(
+                    link.guard(Some(env.killer), read(&mut qr, &columns, page_want(env.page_size, cap))).await,
+                    Some(reply)
+                ) {
                     Ok(read) => read,
                     Err(e) => {
                         drop(qr);
@@ -1012,6 +1039,8 @@ async fn statement<'a>(
             };
             let more = page.len() > env.page_size;
             let carry = if more { page.pop() } else { None };
+            // At the cap the result ends here (the server stopped it there too).
+            let more = more && !spend(&mut cap, page.len());
             if held && more {
                 // Held: the statement runs on while the app reads it (or its last row is still
                 // to come).
@@ -1026,7 +1055,7 @@ async fn statement<'a>(
                 }
                 let paged = reply.page(metas, page, true, step.start.elapsed());
                 let id = paged.id;
-                let held = match hold(&mut qr, link, env, id, &columns, carry, ended).await {
+                let held = match hold(&mut qr, link, env, id, &columns, carry, ended, (cap, bounded)).await {
                     Ok(held) => held,
                     Err(stop) => {
                         // A cancel the server did not take: the run's one failure that follows.
@@ -1393,7 +1422,10 @@ struct Held {
 /// (`FetchMore`) until the result ends, `ClosePortal` closes it, or another command comes (it is
 /// processed next); a result stopped before its end is stopped on the server (`KILL QUERY`) and
 /// read to its end. Counts and checks that come meanwhile wait for it; when the session stops
-/// meanwhile, they are put back in line, to be answered.
+/// meanwhile, they are put back in line, to be answered. `cap`: the rows the result may still
+/// show (`None`: all); the pages stay within them, and the result ends once they are shown
+/// (read to its end when the server stopped it there, `bounded`, else stopped).
+#[allow(clippy::too_many_arguments)]
 async fn hold(
     qr: &mut QueryResult<'_, 'static, TextProtocol>,
     link: &mut Link,
@@ -1402,11 +1434,12 @@ async fn hold(
     columns: &[Column],
     carry: Option<Vec<Cell>>,
     ended: bool,
+    (cap, bounded): (Option<u64>, bool),
 ) -> Result<Held, Stop> {
     let mut held = Held { stopped: false, failed: None, info: StatementInfo::default(), waiting: Vec::new() };
     let gate = Gate::new();
     let mut refusal = link.refusal(env.killer, &gate);
-    let out = hold_on(qr, link, env, id, columns, carry, ended, &mut held, &mut refusal).await;
+    let out = hold_on(qr, link, env, id, columns, carry, ended, (cap, bounded), &mut held, &mut refusal).await;
     drop(refusal);
     // Nothing sent again for this statement reaches the next one (see [`Link::guard`]).
     // An unclean gate after the result ended: the result is the run's all the same, and the
@@ -1433,6 +1466,7 @@ async fn hold_on(
     columns: &[Column],
     mut carry: Option<Vec<Cell>>,
     mut ended: bool,
+    (mut cap, bounded): (Option<u64>, bool),
     held: &mut Held,
     refusal: &mut BoxFuture<'static, CancelFailure>,
 ) -> Result<(), Stop> {
@@ -1458,9 +1492,11 @@ async fn hold_on(
         match next {
             Next::Command(DbCommand::FetchMore { id: fid }) if fid == id => {
                 let t0 = Instant::now();
-                let want = page_size + 1 - usize::from(carry.is_some());
-                let (rows, end) = if ended {
-                    (Vec::new(), true)
+                let want = page_want(page_size, cap) - usize::from(carry.is_some());
+                // Nothing to read once the carried-over row is all the cap still lets the page
+                // have.
+                let (rows, end) = if ended || want == 0 {
+                    (Vec::new(), ended)
                 } else {
                     match link.guard(Some(env.killer), read(qr, columns, want)).await? {
                         Ok(read) => read,
@@ -1476,6 +1512,7 @@ async fn hold_on(
                 if more {
                     carry = rows.pop();
                 }
+                more = more && !spend(&mut cap, rows.len());
                 let _ = env.events.send(DbEvent::Page { id, columns: None, rows, more, elapsed: t0.elapsed() });
             }
             // The app closes it (its spill limit, idle): it ends like a finished one.
@@ -1499,6 +1536,16 @@ async fn hold_on(
                 return Err(Stop::Closed);
             }
             Next::Lost(reason) => return Err(Stop::Lost(reason)),
+        }
+    }
+    if !ended && bounded && cap == Some(0) {
+        // At its cap, where the server stopped it: only its end is left to read.
+        match link.guard(Some(env.killer), drain(qr)).await? {
+            Ok(_) => ended = true,
+            Err(e) => {
+                held.failed = Some(e);
+                return Ok(());
+            }
         }
     }
     held.stopped = !ended;
@@ -1568,6 +1615,28 @@ async fn stop_result(
     })
     .await?;
     Ok(())
+}
+
+/// Rows to read for the next page: one more than a page, so a result that fits in one page is
+/// known to have ended; but when the result may show no more than `left` rows (`Some`) and they
+/// fit in a page, exactly those: no row past them is read.
+fn page_want(page_size: usize, left: Option<u64>) -> usize {
+    match left {
+        Some(left) if left <= page_size as u64 => left as usize,
+        _ => page_size + 1,
+    }
+}
+
+/// Count a page of `shown` rows against the rows the result may still show; `true` once none
+/// are left (the result ends there).
+fn spend(left: &mut Option<u64>, shown: usize) -> bool {
+    match left {
+        Some(left) => {
+            *left = left.saturating_sub(shown as u64);
+            *left == 0
+        }
+        None => false,
+    }
 }
 
 /// Up to `max` rows of the current result set, as the app shows them, and whether the set

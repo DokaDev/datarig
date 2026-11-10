@@ -543,12 +543,17 @@ pub enum DbCommand {
     /// ([`DbEvent::Finished`]); a cancel between two statements stops the rest
     /// ([`DbError::Cancelled`]). `paging`: what happens to the last statement's result when it
     /// has more rows than a page (outside the user's block). `tx`: whether statements open a
-    /// transaction that stays open for the user to commit ([`TxRule`]).
+    /// transaction that stays open for the user to commit ([`TxRule`]). `max_rows`: the most
+    /// rows the last statement's result shows (`None`: all; at least 1): the driver never reads
+    /// a row past them from the server (no row to tell whether more follow once they fit in the
+    /// page), and the result ends at that row, `more` false and its portal closed, as if it had
+    /// no more rows. Later `FetchMore`s of the result stay within what is left of it.
     Execute {
         id: u64,
         statements: Vec<String>,
         paging: PagingMode,
         tx: TxRule,
+        max_rows: Option<u64>,
     },
     /// End the transaction block open on the session (one the user opened, or the driver for
     /// [`TxRule::Manual`]): `COMMIT` when `commit`, else `ROLLBACK`. Answered with exactly one
@@ -604,12 +609,14 @@ pub enum DbCommand {
     /// its columns and `more` (an empty last page when the result now has no more than `skip`
     /// rows), `Done` or `Failed`; later pages come with `FetchMore`. Inside the user's block it
     /// runs under a savepoint, released when its portal ends and rolled back to when it fails
-    /// or is cancelled. `paging` as for `Execute`.
+    /// or is cancelled. `paging` as for `Execute`; `max_rows` as for `Execute`, counted past
+    /// the `skip` rows (the rows the result may still show after them).
     Resume {
         id: u64,
         sql: String,
         skip: u64,
         paging: PagingMode,
+        max_rows: Option<u64>,
     },
     /// Read every row of `sql` (one statement that reads) for an export to a file, into `sink`
     /// a batch of at most `batch` rows (and about [`EXPORT_BATCH_BYTES`]) at a time (its columns first, [`ExportBatch`]), awaiting

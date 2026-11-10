@@ -222,7 +222,13 @@ impl Conn {
         self.next += 1;
         let id = self.next;
         let statements = vec![sql.to_string()];
-        self.session.send(DbCommand::Execute { id, statements, paging: PagingMode::Hold, tx: TxRule::Auto });
+        self.session.send(DbCommand::Execute {
+            max_rows: None,
+            id,
+            statements,
+            paging: PagingMode::Hold,
+            tx: TxRule::Auto,
+        });
         id
     }
 

@@ -224,6 +224,7 @@ impl Observer {
         self.seq += 1;
         let id = self.seq;
         self.session.send(DbCommand::Execute {
+            max_rows: None,
             id,
             statements: vec![sql.to_string()],
             paging: PagingMode::Hold,
@@ -247,6 +248,7 @@ impl Observer {
         self.seq += 1;
         let id = self.seq;
         self.session.send(DbCommand::Execute {
+            max_rows: None,
             id,
             statements: vec![sql.to_string()],
             paging: PagingMode::Hold,

@@ -108,6 +108,7 @@ async fn connect(cfg: &ConnectionConfig, dialer: Option<DialerRef>) -> Result<En
 async fn cell(cfg: &ConnectionConfig, sql: &str) -> Option<String> {
     let (session, mut rx) = start(cfg, SessionRole::Query, None);
     session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec![sql.into()],
         paging: PagingMode::Hold,
@@ -129,6 +130,7 @@ async fn forget_logins(env: &Env) {
     admin.database = String::new();
     let (session, mut rx) = start(&admin, SessionRole::Query, None);
     session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec!["FLUSH PRIVILEGES".into()],
         paging: PagingMode::Hold,
@@ -312,6 +314,7 @@ async fn through_a_tunnel_the_profiles_host_is_checked_and_the_kill_is_encrypted
         }
     }
     session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec!["SELECT SLEEP(30)".into()],
         paging: PagingMode::Hold,

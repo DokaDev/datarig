@@ -121,6 +121,7 @@ impl Conn {
     /// Run `sql` as run `id`, not held: its events up to its answer.
     async fn run(&mut self, id: u64, sql: &str) -> Vec<DbEvent> {
         self.session.send(DbCommand::Execute {
+            max_rows: None,
             id,
             statements: vec![sql.to_string()],
             paging: PagingMode::NoHold,
@@ -221,6 +222,7 @@ async fn a_cancel_refused_for_a_moment_is_tried_again() {
     a.disconnect().await.unwrap();
     let mut c = Conn::open(&url, test).await;
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec![format!(
             "SELECT COUNT(*) FROM shop.events a CROSS JOIN shop.events b WHERE shop.{f}(a.id) > 0"

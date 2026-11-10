@@ -144,6 +144,8 @@ impl App {
         self.touch_tab(id);
         self.query_seq += 1;
         let qid = self.query_seq;
+        // The cap of a table tab's query this run sends: the driver reads no row past it.
+        let mut max_rows = None;
         if let Some(t) = self.tabs.get_mut(id) {
             // The driver ends an open portal before it runs the next statement: the rows stay
             // (until this run delivers rows of its own), past them paging is closed.
@@ -158,6 +160,7 @@ impl App {
             // A table tab's query is bound to the run that sends its statement.
             if let Some(tq) = t.doc.table_query.as_mut() {
                 tq.sent(qid, &statements);
+                max_rows = tq.requested.as_ref().filter(|(rid, _)| *rid == qid).and_then(|(_, q)| q.limit);
             }
             // Marked on the editor's text when that is where the user ran them from.
             t.editor.start_run(qid, &statements);
@@ -223,7 +226,7 @@ impl App {
         // Asked first, so its answer comes before the statement runs (a session answers in
         // order, and one that runs answers nothing else until it ends).
         self.monitor_ask_own_at_run(id);
-        self.send_tab(id, DbCommand::Execute { id: qid, statements, paging, tx });
+        self.send_tab(id, DbCommand::Execute { id: qid, statements, paging, tx, max_rows });
     }
 
     /// Open tab `id`'s query session with its profile's password (the first run, or the next

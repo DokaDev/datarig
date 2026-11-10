@@ -806,18 +806,18 @@ pub(crate) async fn query_loop(
             continue;
         }
         let stop = match next {
-            Next::Command(DbCommand::Execute { id, statements, paging, tx: rule }) => {
+            Next::Command(DbCommand::Execute { id, statements, paging, tx: rule, max_rows }) => {
                 let mut s = State { tx: &mut tx, prepared: &mut prepared };
-                let job = Job { statements, resume: None, paging, rule };
+                let job = Job { statements, resume: None, paging, rule, max_rows };
                 match execute(&mut client, &mut link, &env, &mut s, id, job).await {
                     Ok(()) => continue,
                     Err(stop) => stop,
                 }
             }
             // Run again past `skip` rows: an `Execute` of one statement that drops them first.
-            Next::Command(DbCommand::Resume { id, sql, skip, paging }) => {
+            Next::Command(DbCommand::Resume { id, sql, skip, paging, max_rows }) => {
                 let mut s = State { tx: &mut tx, prepared: &mut prepared };
-                let job = Job { statements: vec![sql], resume: Some(skip), paging, rule: TxRule::Auto };
+                let job = Job { statements: vec![sql], resume: Some(skip), paging, rule: TxRule::Auto, max_rows };
                 match execute(&mut client, &mut link, &env, &mut s, id, job).await {
                     Ok(()) => continue,
                     Err(stop) => stop,
@@ -1375,12 +1375,14 @@ async fn no_rows_done<'a>(
 
 /// What a run is asked to do: its statements (one for a `Resume`, past `resume` rows), what
 /// happens to the last one's result ([`PagingMode`]) and whether its statements open a
-/// transaction for manual commit ([`TxRule`]).
+/// transaction for manual commit ([`TxRule`]), and the most rows the last one's result may show
+/// (`None`: all of them).
 struct Job {
     statements: Vec<String>,
     resume: Option<u64>,
     paging: PagingMode,
     rule: TxRule,
+    max_rows: Option<u64>,
 }
 
 /// Run `statements`; for the last row-returning one keep the portal open and serve
@@ -1420,7 +1422,7 @@ async fn run<'a>(
     reply: Reply<'a>,
     job: Job,
 ) -> Result<(), Halted<'a>> {
-    let Job { statements, resume, paging, rule } = job;
+    let Job { statements, resume, paging, rule, max_rows } = job;
     let id = reply.id;
     let n = statements.len();
     if s.tx.unsure {
@@ -1477,7 +1479,9 @@ async fn run<'a>(
         for (i, sql) in statements.iter().enumerate() {
             let (skip, resume) = (resume.unwrap_or(0), resume.is_some());
             let hold = paging == PagingMode::Hold;
-            let step = Step { last: i + 1 == n, index: i, start: Instant::now(), skip, resume, hold };
+            // At least one row: a request for none would read them all.
+            let cap = max_rows.map(|max| max.max(1));
+            let step = Step { last: i + 1 == n, index: i, start: Instant::now(), skip, resume, hold, cap };
             if n > 1 {
                 // Cancelled between two statements: the rest does not run.
                 if i > 0 && env.cancel.asked() {
@@ -1882,7 +1886,7 @@ async fn no_rows<'a>(
     let token = Some(env.token);
     // Before the last statement, rows a rule returned are all read (0: no limit), so the
     // statement runs to its end; they are not shown.
-    let max_rows = if step.last { ask(env.page_size, &None) } else { 0 };
+    let max_rows = if step.last { ask(env.page_size, &None, None) } else { 0 };
     // Read-only or a search path per transaction: in the user's block, after the first
     // statements if it is new; outside it, in a transaction of its own that starts with
     // them (`BEGIN READ ONLY`, `SET LOCAL search_path …`).
@@ -2058,6 +2062,9 @@ struct Step {
     /// A last statement's result with more rows keeps its portal open outside the user's block
     /// (`PagingMode::Hold`); otherwise it ends with its first page.
     hold: bool,
+    /// The most rows a last statement's result shows (past `skip`), `None`: all. Never more
+    /// is read from its portal, and it ends at that row as if the result ended there.
+    cap: Option<u64>,
 }
 
 /// How a row-returning statement ended.
@@ -2091,7 +2098,7 @@ async fn portal<'a>(
     step: Step,
     opened: bool,
 ) -> Result<After<'a>, Halted<'a>> {
-    let Step { last, start, index, skip, resume, hold } = step;
+    let Step { last, start, index, skip, resume, hold, cap } = step;
     // `EXPLAIN ANALYZE` ran its statement only to measure it: its transaction is rolled back.
     let keep = !rolls_back(sql);
     let id = reply.id;
@@ -2134,13 +2141,16 @@ async fn portal<'a>(
     };
     let page_size = env.page_size;
     let mut carry = None;
+    // The rows the result may still show (`cap`, only for the last statement): the next
+    // requests stay within them.
+    let mut left = if last { cap } else { None };
     // A `Resume` reads the rows it skips first, a chunk at a time, and the page after them
     // with the last chunk (one round trip when they fit in one).
-    let max_rows = if skip > 0 { skip_chunk(skip, page_size) } else { ask(page_size, &carry) };
+    let max_rows = if skip > 0 { skip_chunk(skip, page_size, left) } else { ask(page_size, &carry, left) };
     let formats = formats_of(stmt);
     // The first request reads everything the page needs (the skipped rows, the page and the
     // row that tells whether more follow): it can end the transaction too.
-    let end_now = release && skip.saturating_add(page_size as u64 + 1) <= max_rows as u64;
+    let end_now = release && skip.saturating_add(wanted(page_size, left) as u64) <= max_rows as u64;
     let bound = if end_now {
         let end = if keep { "COMMIT" } else { "ROLLBACK" };
         halt!(link.guard(token, txn.bind_first_page_then(stmt, &formats, max_rows, end)).await, Some(reply))
@@ -2183,7 +2193,7 @@ async fn portal<'a>(
             if ended {
                 break;
             }
-            let asked = skip_chunk(left, page_size);
+            let asked = skip_chunk(left, page_size, cap);
             match halt!(link.guard(token, txn.query_portal(&portal, asked)).await, Some(reply)) {
                 Ok(more) => {
                     ended = (more.len() as i32) < asked;
@@ -2195,7 +2205,7 @@ async fn portal<'a>(
                 }
             }
         }
-        let want = ask(page_size, &carry) as usize;
+        let want = ask(page_size, &carry, cap) as usize;
         if failed.is_none() && left == 0 && !ended && rows.len() < want {
             let asked = i32::try_from(want - rows.len()).unwrap_or(i32::MAX);
             match halt!(link.guard(token, txn.query_portal(&portal, asked)).await, Some(reply)) {
@@ -2236,7 +2246,7 @@ async fn portal<'a>(
                 reply.fail(DbError::Cancelled, true);
                 return Ok(After::Failed);
             }
-            match halt!(link.guard(token, txn.query_portal(&portal, ask(page_size, &carry))).await, Some(reply)) {
+            match halt!(link.guard(token, txn.query_portal(&portal, ask(page_size, &carry, None))).await, Some(reply)) {
                 Ok(fetched) => {
                     let (page, m) = split_page(&mut carry, fetched, page_size);
                     more = m;
@@ -2265,6 +2275,8 @@ async fn portal<'a>(
         };
     }
     let (rows, mut more) = split_page(&mut carry, rows, page_size);
+    // At the cap the result ends here, whatever rows the server still has.
+    more = more && !spend(&mut left, rows.len());
     let (columns, rows) = (columns_of(&columns), decode(&rows, &formats));
     if !more {
         // Complete in one page: nothing stays open. A plain read is shown at once and its
@@ -2308,7 +2320,14 @@ async fn portal<'a>(
         match link.next().await {
             Next::Command(DbCommand::FetchMore { id: fid }) if fid == id => {
                 let t0 = Instant::now();
-                let fetched = match link.guard(token, txn.query_portal(&portal, ask(page_size, &carry))).await {
+                let asked = ask(page_size, &carry, left);
+                // The carried-over row is all the cap still lets the page have: nothing to read.
+                let fetched = if asked == 0 {
+                    Ok(Ok(Vec::new()))
+                } else {
+                    link.guard(token, txn.query_portal(&portal, asked)).await
+                };
+                let fetched = match fetched {
                     Ok(fetched) => fetched,
                     Err(closed) => {
                         // The user's cancel could not be sent: the fetch ends cancelled.
@@ -2321,7 +2340,7 @@ async fn portal<'a>(
                 match fetched {
                     Ok(rows) => {
                         let (rows, m) = split_page(&mut carry, rows, page_size);
-                        more = m;
+                        more = m && !spend(&mut left, rows.len());
                         let _ = env.events.send(DbEvent::Page {
                             id,
                             columns: None,
@@ -2436,10 +2455,10 @@ const RESUME_UNDO: &str = "ROLLBACK TO SAVEPOINT datarig_resume; RELEASE SAVEPOI
 const SKIP_CHUNK: u64 = 10_000;
 
 /// Rows to ask for while skipping, `left` still to skip: the page after them too (and the row
-/// that tells whether more follow), at most [`SKIP_CHUNK`] at a time. So the last chunk never
-/// reads past that page, and the portal stays where the page ends.
-fn skip_chunk(left: u64, page_size: usize) -> i32 {
-    let want = left.saturating_add(page_size as u64 + 1);
+/// that tells whether more follow, within `cap`: [`wanted`]), at most [`SKIP_CHUNK`] at a time.
+/// So the last chunk never reads past that page, and the portal stays where the page ends.
+fn skip_chunk(left: u64, page_size: usize, cap: Option<u64>) -> i32 {
+    let want = left.saturating_add(wanted(page_size, cap) as u64);
     i32::try_from(want.min(SKIP_CHUNK.max(page_size as u64 + 1))).unwrap_or(i32::MAX)
 }
 
@@ -2680,10 +2699,32 @@ async fn checked(
     })
 }
 
-/// Rows to ask the portal for: one more than a page (less the row carried over), so a result
-/// that fits in one page is known to be complete and its portal ends at once.
-fn ask(page_size: usize, carry: &Option<Row>) -> i32 {
-    i32::try_from(page_size + 1 - usize::from(carry.is_some())).unwrap_or(i32::MAX)
+/// Rows to ask the portal for: [`wanted`], less the row carried over. 0 (only within a cap)
+/// means nothing is to be read, never a request for all rows.
+fn ask(page_size: usize, carry: &Option<Row>, left: Option<u64>) -> i32 {
+    i32::try_from(wanted(page_size, left) - usize::from(carry.is_some())).unwrap_or(i32::MAX)
+}
+
+/// Rows the next page needs: one more than a page, so a result that fits in one page is known
+/// to be complete and its portal ends at once; but when the result may show no more than
+/// `left` rows (`Some`) and they fit in a page, exactly those: no row past them is read.
+fn wanted(page_size: usize, left: Option<u64>) -> usize {
+    match left {
+        Some(left) if left <= page_size as u64 => left as usize,
+        _ => page_size + 1,
+    }
+}
+
+/// Count a page of `shown` rows against the rows the result may still show; `true` once none
+/// are left (the result ends there).
+fn spend(left: &mut Option<u64>, shown: usize) -> bool {
+    match left {
+        Some(left) => {
+            *left = left.saturating_sub(shown as u64);
+            *left == 0
+        }
+        None => false,
+    }
 }
 
 /// The next page from the carried-over row and the rows just fetched, and whether more follow.

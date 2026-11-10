@@ -187,7 +187,7 @@ impl Conn {
 
     async fn run_as(&mut self, id: u64, sql: &[&str], paging: PagingMode) -> Vec<DbEvent> {
         let statements = sql.iter().map(|s| s.to_string()).collect();
-        self.session.send(DbCommand::Execute { id, statements, paging, tx: TxRule::Auto });
+        self.session.send(DbCommand::Execute { max_rows: None, id, statements, paging, tx: TxRule::Auto });
         self.answer(id).await
     }
 
@@ -1438,6 +1438,75 @@ async fn a_first_page_holds_no_metadata_lock_and_a_held_result_does_until_read()
     a.disconnect().await.unwrap();
 }
 
+/// Rows the server sent for the last statement of connection `id` whose text is `sql`.
+async fn rows_sent(admin: &mut mysql_async::Conn, id: u64, sql: &str) -> Option<u64> {
+    admin
+        .exec_first(
+            "SELECT h.ROWS_SENT FROM performance_schema.events_statements_history h \
+             JOIN performance_schema.threads t ON t.THREAD_ID = h.THREAD_ID \
+             WHERE t.PROCESSLIST_ID = ? AND h.SQL_TEXT = ? ORDER BY h.EVENT_ID DESC LIMIT 1",
+            (id, sql),
+        )
+        .await
+        .expect("events_statements_history reads")
+}
+
+/// A result with a cap (`max_rows`) reads no row past it from the server, on its first page
+/// and its later ones, held or not, and run again past the rows it has: the server sends
+/// exactly the capped rows, and the result ends there.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_capped_result_reads_no_row_past_its_cap() {
+    let test = "a_capped_result_reads_no_row_past_its_cap";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "fix1cap", 1200).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let mut a = side(&admin).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    let execute = |id: u64, sql: &str, paging: PagingMode, max_rows: Option<u64>| DbCommand::Execute {
+        id,
+        statements: vec![sql.to_string()],
+        paging,
+        tx: TxRule::Auto,
+        max_rows,
+    };
+    // Within the first page, not held.
+    let first = format!("SELECT id FROM {} ORDER BY id", t.q());
+    c.session.send(execute(1, &first, PagingMode::NoHold, Some(3)));
+    let evs = c.answer(1).await;
+    let (_, rows, more) = page_of(&evs);
+    assert_eq!((rows.len(), more, released(&evs)), (3, false, false));
+    c.ok(2, "SELECT 1").await;
+    assert_eq!(rows_sent(&mut a, id, &first).await, Some(3), "no row past the cap, none to look ahead");
+    // Past the first page, held: the next page stops at the cap.
+    let held = format!("SELECT id AS held FROM {} ORDER BY id", t.q());
+    c.session.send(execute(3, &held, PagingMode::Hold, Some(503)));
+    let evs = c.answer(3).await;
+    let (_, rows, more) = page_of(&evs);
+    assert_eq!((rows.len(), more), (PAGE, true));
+    c.session.send(DbCommand::FetchMore { id: 3 });
+    match c.next(30).await {
+        DbEvent::Page { id: 3, columns: None, rows, more, .. } => assert_eq!((rows.len(), more), (3, false)),
+        other => panic!("{other:?}"),
+    }
+    c.ok(4, "SELECT 1").await;
+    assert_eq!(rows_sent(&mut a, id, &held).await, Some(503));
+    // Run again past the rows it has: the rows skipped, then what the cap leaves.
+    let resumed = format!("SELECT id AS resumed FROM {} ORDER BY id", t.q());
+    c.session.send(DbCommand::Resume {
+        id: 5,
+        sql: resumed.clone(),
+        skip: 500,
+        paging: PagingMode::NoHold,
+        max_rows: Some(3),
+    });
+    let evs = c.answer(5).await;
+    let (_, rows, more) = page_of(&evs);
+    assert_eq!((rows.first().cloned(), rows.len(), more), (Some(vec![Some("501".into())]), 3, false));
+    c.ok(6, "SELECT 1").await;
+    assert_eq!(rows_sent(&mut a, id, &resumed).await, Some(503));
+    a.disconnect().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_next_page_runs_the_statement_again_past_the_rows_it_has() {
     let Some((url, admin)) = urls("the_next_page_runs_the_statement_again") else { return };
@@ -1446,23 +1515,36 @@ async fn the_next_page_runs_the_statement_again_past_the_rows_it_has() {
     let sql = format!("SELECT id FROM {} ORDER BY id", t.q());
     let evs = c.run(1, &[&sql]).await;
     assert_eq!(page_of(&evs).1.len(), PAGE);
-    c.session.send(DbCommand::Resume { id: 2, sql: sql.clone(), skip: PAGE as u64, paging: PagingMode::NoHold });
+    c.session.send(DbCommand::Resume {
+        max_rows: None,
+        id: 2,
+        sql: sql.clone(),
+        skip: PAGE as u64,
+        paging: PagingMode::NoHold,
+    });
     let evs = c.answer(2).await;
 
     let (_, rows, more) = page_of(&evs);
     assert_eq!((rows.first().cloned(), rows.len(), more), (Some(vec![Some("501".into())]), PAGE, true));
     assert!(released(&evs));
-    c.session.send(DbCommand::Resume { id: 3, sql: sql.clone(), skip: 1000, paging: PagingMode::NoHold });
+    c.session.send(DbCommand::Resume {
+        max_rows: None,
+        id: 3,
+        sql: sql.clone(),
+        skip: 1000,
+        paging: PagingMode::NoHold,
+    });
     let evs = c.answer(3).await;
     let (_, rows, more) = page_of(&evs);
     assert_eq!((rows.len(), more, released(&evs)), (200, false, false));
     // Past its end: an empty last page.
-    c.session.send(DbCommand::Resume { id: 4, sql, skip: 5000, paging: PagingMode::NoHold });
+    c.session.send(DbCommand::Resume { max_rows: None, id: 4, sql, skip: 5000, paging: PagingMode::NoHold });
     let evs = c.answer(4).await;
     let (_, rows, more) = page_of(&evs);
     assert_eq!((rows.len(), more), (0, false));
     // A view, or a text off the allowlist, is not run again.
     c.session.send(DbCommand::Resume {
+        max_rows: None,
         id: 5,
         sql: "SELECT * FROM shop.order_summary".into(),
         skip: 1,
@@ -1474,7 +1556,13 @@ async fn the_next_page_runs_the_statement_again_past_the_rows_it_has() {
         }
         other => panic!("{other:?}"),
     }
-    c.session.send(DbCommand::Resume { id: 6, sql: "SELECT RAND()".into(), skip: 1, paging: PagingMode::NoHold });
+    c.session.send(DbCommand::Resume {
+        max_rows: None,
+        id: 6,
+        sql: "SELECT RAND()".into(),
+        skip: 1,
+        paging: PagingMode::NoHold,
+    });
     assert!(matches!(c.answer(6).await.pop(), Some(DbEvent::Failed { error: DbError::NotRepeatable(_), .. })));
 }
 
@@ -1650,6 +1738,7 @@ async fn a_cancel_stops_the_statement_on_the_server() {
     let mut c = Conn::open(&url, SessionRole::Query, false, "cancel").await;
     let t0 = Instant::now();
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec!["SELECT SLEEP(30)".into()],
         paging: PagingMode::NoHold,
@@ -1668,6 +1757,7 @@ async fn a_cancel_stops_the_statement_on_the_server() {
     c.ok(2, "SELECT 1").await;
     // Between two statements of a run: the rest does not run.
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 3,
         statements: vec!["SELECT SLEEP(30)".into(), "SELECT 2".into()],
         paging: PagingMode::NoHold,
@@ -1689,6 +1779,7 @@ async fn closing_a_session_stops_what_it_runs() {
     let c = Conn::open(&url, SessionRole::Query, false, test).await;
     let id = only_session(&mut a, SessionRole::Query, test).await;
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec!["SELECT SLEEP(30)".into()],
         paging: PagingMode::NoHold,
@@ -1720,6 +1811,7 @@ async fn a_connection_lost_while_a_statement_runs_fails_it_then_is_lost() {
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
     let id = only_session(&mut a, SessionRole::Query, test).await;
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec!["SELECT SLEEP(30)".into()],
         paging: PagingMode::NoHold,
@@ -1814,6 +1906,7 @@ async fn a_cancel_the_server_refuses_ends_the_session_instead_of_reading_on() {
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
     let id = only_session(&mut a, SessionRole::Query, test).await;
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec![format!("CALL shop.{p}()")],
         paging: PagingMode::NoHold,
@@ -1867,6 +1960,7 @@ async fn a_cancel_taken_by_a_long_rollback_keeps_the_session_and_its_transaction
     c.ok(1, "BEGIN").await;
     c.ok(2, &format!("INSERT INTO {t} (v, pad) VALUES (-1, 'marker')")).await;
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 3,
         statements: vec![format!("UPDATE {t} SET v = v + 1, pad = 'y'")],
         paging: PagingMode::NoHold,
@@ -1977,6 +2071,7 @@ async fn a_refused_cancel_of_a_silent_statement_keeps_the_session_and_says_why()
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
     let id = only_session(&mut a, SessionRole::Query, test).await;
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec![format!("CALL shop.{p}()")],
         paging: PagingMode::NoHold,
@@ -2144,6 +2239,7 @@ async fn a_held_result_the_server_will_not_stop_is_not_read_to_its_end() {
     let first = c.run_as(1, &[&format!("CALL shop.{p}()")], PagingMode::Hold).await;
     assert!(matches!(first.last(), Some(DbEvent::Page { id: 1, columns: Some(_), more: true, .. })), "{first:?}");
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 2,
         statements: vec!["SELECT 1".into()],
         paging: PagingMode::NoHold,
@@ -2172,6 +2268,7 @@ async fn a_held_result_the_server_will_not_stop_is_not_read_to_its_end() {
     let c = Conn::open(&url, SessionRole::Query, false, test).await;
     let id = only_session(&mut a, SessionRole::Query, test).await;
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec![format!("CALL shop.{p}()")],
         paging: PagingMode::NoHold,
@@ -2707,6 +2804,7 @@ async fn a_late_cancel_does_not_stop_the_next_run() {
     let mut c = Conn { session, rx };
     c.wait(|e| matches!(e, DbEvent::Connected), 15).await;
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec!["SELECT SLEEP(0.5)".into()],
         paging: PagingMode::NoHold,
@@ -4507,7 +4605,13 @@ async fn a_stopped_procedure_leaves_the_values_not_known() {
     // cannot be stopped so, see
     // `a_cancel_the_server_refuses_ends_the_session_instead_of_reading_on`).
     let statements = vec![format!("CALL shop.{p}()"), "SELECT 1".to_string()];
-    q.session.send(DbCommand::Execute { id: 2, statements, paging: PagingMode::NoHold, tx: TxRule::Auto });
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 2,
+        statements,
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+    });
     let mut evs = Vec::new();
     loop {
         let ev = q.next(60).await;
@@ -4537,7 +4641,7 @@ impl Conn {
     async fn manual(&mut self, id: u64, sql: &[&str], opens: &[bool]) -> Vec<DbEvent> {
         let statements = sql.iter().map(|s| s.to_string()).collect();
         let tx = TxRule::Manual { steps: steps(opens), idle_timeout: Some(Duration::from_secs(60)) };
-        self.session.send(DbCommand::Execute { id, statements, paging: PagingMode::NoHold, tx });
+        self.session.send(DbCommand::Execute { max_rows: None, id, statements, paging: PagingMode::NoHold, tx });
         let mut evs = self.answer(id).await;
         evs.extend(self.settled().await);
         evs
@@ -4669,7 +4773,7 @@ async fn manual_commit_opens_a_transaction_at_the_first_write_only() {
     // (Its answer only: a held result waits for its own pages, not for the mark of `settled`.)
     let tx = TxRule::Manual { steps: steps(&[false]), idle_timeout: None };
     let statements = vec!["SELECT * FROM shop.events".to_string()];
-    c.session.send(DbCommand::Execute { id: 50, statements, paging: PagingMode::NoHold, tx });
+    c.session.send(DbCommand::Execute { max_rows: None, id: 50, statements, paging: PagingMode::NoHold, tx });
     let evs = c.answer(50).await;
     assert!(page_of(&evs).2, "{evs:?}");
     assert_eq!(tx_of(&c.end_tx(6, false).await), ["ended RolledBack", "block false", "tx false"]);
@@ -4752,7 +4856,7 @@ async fn a_deadlock_ends_the_manual_transaction_and_says_so() {
     // The manual session waits for the other's row, then the other for its: a deadlock.
     let tx = TxRule::Manual { steps: steps(&[true]), idle_timeout: None };
     let statements = vec![format!("UPDATE {q} SET v = 'c' WHERE id = 2")];
-    c.session.send(DbCommand::Execute { id: 2, statements, paging: PagingMode::NoHold, tx });
+    c.session.send(DbCommand::Execute { max_rows: None, id: 2, statements, paging: PagingMode::NoHold, tx });
     waits_for_row(&mut a, id, b_id).await;
     b.query_drop(format!("UPDATE {q} SET v = 'b' WHERE id = 1")).await.expect("the other session goes on");
     let mut evs = c.answer(2).await;
@@ -4774,7 +4878,7 @@ async fn a_deadlock_ends_the_manual_transaction_and_says_so() {
     let tx = TxRule::Manual { steps: steps(&[true, true]), idle_timeout: None };
     let statements =
         vec![format!("UPDATE {q} SET v = 'c' WHERE id = 1"), format!("UPDATE {q} SET v = 'c' WHERE id = 2")];
-    c.session.send(DbCommand::Execute { id: 4, statements, paging: PagingMode::NoHold, tx });
+    c.session.send(DbCommand::Execute { max_rows: None, id: 4, statements, paging: PagingMode::NoHold, tx });
     // Only once the manual session holds row 1 and waits for row 2: before, the other session
     // would take row 1 first, and the manual one wait for it until its lock wait ran out.
     waits_for_row(&mut a, id, b_id).await;
@@ -4821,6 +4925,7 @@ async fn a_lock_wait_timeout_or_a_cancel_keeps_the_manual_transaction() {
     let tx = TxRule::Manual { steps: steps(&[true]), idle_timeout: None };
     let statements = vec![format!("UPDATE {q} SET v = CONCAT(v, SLEEP(30)) WHERE id = 3")];
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 4,
         statements: statements.clone(),
         paging: PagingMode::NoHold,
@@ -4835,7 +4940,7 @@ async fn a_lock_wait_timeout_or_a_cancel_keeps_the_manual_transaction() {
     assert_eq!(rows_in(&mut c, 5, &format!("{q} WHERE v = 'c'")).await, "1", "what it did stays");
     assert_eq!(tx_of(&c.end_tx(6, false).await), ["ended RolledBack", "block false", "tx false"]);
     // A cancel of the run that opened it: rolled back at once.
-    c.session.send(DbCommand::Execute { id: 7, statements, paging: PagingMode::NoHold, tx });
+    c.session.send(DbCommand::Execute { max_rows: None, id: 7, statements, paging: PagingMode::NoHold, tx });
     tokio::time::sleep(Duration::from_millis(500)).await;
     c.session.cancel();
     let mut evs = c.answer(7).await;
@@ -4973,7 +5078,7 @@ async fn a_held_result_of_the_opening_statement_says_the_transaction_open() {
     let id = only_session(&mut a, SessionRole::Query, test).await;
     let tx = TxRule::Manual { steps: steps(&[true]), idle_timeout: None };
     let statements = vec![format!("SELECT * FROM {} FOR UPDATE", t.q())];
-    c.session.send(DbCommand::Execute { id: 1, statements, paging: PagingMode::NoHold, tx });
+    c.session.send(DbCommand::Execute { max_rows: None, id: 1, statements, paging: PagingMode::NoHold, tx });
     let evs = c.answer(1).await;
     assert!(page_of(&evs).2, "held, more to come: {evs:?}");
     assert_eq!(tx_of(&evs), ["begun 0", "block true", "tx true"], "{evs:?}");

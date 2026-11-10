@@ -1339,7 +1339,7 @@ pub fn with_edge_results(lang: Lang) -> Harness {
     h.ctrl('e');
     let sent = h.sent();
     assert!(
-        matches!(&sent[..], [DbCommand::Execute { id: 1, statements, paging: PagingMode::NoHold, tx: TxRule::Auto }] if statements == &["SELECT * FROM shop.users WHERE id <= 8"]),
+        matches!(&sent[..], [DbCommand::Execute { max_rows: None, id: 1, statements, paging: PagingMode::NoHold, tx: TxRule::Auto }] if statements == &["SELECT * FROM shop.users WHERE id <= 8"]),
         "{sent:?}"
     );
     let (cols, rows) = edge_rows();

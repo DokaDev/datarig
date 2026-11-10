@@ -138,6 +138,7 @@ impl Conn {
         self.id += 1;
         let id = self.id;
         self.session.send(DbCommand::Execute {
+            max_rows: None,
             id,
             statements: vec![sql.to_string()],
             paging: PagingMode::NoHold,
@@ -468,7 +469,13 @@ async fn an_export_keeps_to_the_manual_transaction_and_never_chains_its_own() {
     let run = c.id;
     let insert = format!("INSERT INTO {} VALUES (11, 'new')", t.q());
     let tx = TxRule::Manual { steps: vec![TxStep::Open], idle_timeout: None };
-    c.session.send(DbCommand::Execute { id: run, statements: vec![insert], paging: PagingMode::NoHold, tx });
+    c.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: run,
+        statements: vec![insert],
+        paging: PagingMode::NoHold,
+        tx,
+    });
     c.wait(|e| matches!(e, DbEvent::TxOpen(true)), 30).await;
     let (id, mut rx) = c.export(&format!("SELECT * FROM {}", t.q()), ExportGuard::Repeatable, 2, 3);
     assert_eq!(drain(&mut rx).await.1.len(), 11, "the transaction's own row");

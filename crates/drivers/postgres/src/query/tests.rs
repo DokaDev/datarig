@@ -715,7 +715,7 @@ mod terminal {
             };
             let mut s = State { tx: &mut self.tx, prepared: &mut self.prepared };
             let statements = statements.iter().map(|s| s.to_string()).collect();
-            let job = Job { statements, resume: None, paging: self.paging, rule: self.rule.clone() };
+            let job = Job { max_rows: None, statements, resume: None, paging: self.paging, rule: self.rule.clone() };
             let run = execute(&mut self.client, &mut self.link, &env, &mut s, self.id, job);
             tokio::time::timeout(std::time::Duration::from_secs(20), run).await.expect("the run returns").ok();
             let mut events = Vec::new();
@@ -776,7 +776,13 @@ mod terminal {
                 before_bind: hook,
             };
             let mut s = State { tx: &mut self.tx, prepared: &mut self.prepared };
-            let job = Job { statements: vec![sql.to_string()], resume: None, paging: self.paging, rule: TxRule::Auto };
+            let job = Job {
+                max_rows: None,
+                statements: vec![sql.to_string()],
+                resume: None,
+                paging: self.paging,
+                rule: TxRule::Auto,
+            };
             let run = execute(&mut self.client, &mut self.link, &env, &mut s, self.id, job);
             tokio::time::timeout(std::time::Duration::from_secs(20), run).await.expect("the run returns").ok();
             let mut terminal = Vec::new();

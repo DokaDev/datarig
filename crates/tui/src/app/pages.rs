@@ -257,6 +257,16 @@ impl App {
         let paging = self.paging_mode(t);
         let Results::Rows(rs) = &t.results else { return };
         let skip = rs.rows.len() as u64;
+        // What the shown query's cap leaves past the rows held: the driver reads no row past it.
+        let max_rows = self
+            .table_query(id)
+            .and_then(|q| q.shown.as_ref())
+            .and_then(|q| q.limit)
+            .map(|limit| limit.saturating_sub(skip));
+        // The rows held reached the cap already: there is nothing past them to read.
+        if max_rows == Some(0) {
+            return;
+        }
         let columns = rs.columns.iter().map(|c| (c.meta.name.clone(), c.meta.type_name.clone())).collect();
         let size = self.page_size as u64;
         let (from, to) = (datarig_i18n::fmt_count(skip + 1), datarig_i18n::fmt_count(skip + size));
@@ -295,7 +305,7 @@ impl App {
         });
         t.exec.run.notes.push(note.clone());
         self.tab_status(id, note);
-        self.send_tab(id, DbCommand::Resume { id: qid, sql, skip, paging });
+        self.send_tab(id, DbCommand::Resume { id: qid, sql, skip, paging, max_rows });
     }
 
     /// `#`: count the rows of the shown result, when the user asks: `SELECT count(*)` of its

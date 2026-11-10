@@ -1,7 +1,8 @@
 //! A connection pooler's part in the tests: an in-process TCP proxy in front of
 //! the test server that drops the `options` parameter from every startup message, as a pooler
 //! does (PgBouncer with `ignore_startup_parameters = options`), and records what each client
-//! sends: the text of every simple `Query` and every `Parse`, in the order they go out. It
+//! sends: the text of every simple `Query` and every `Parse`, in the order they go out, and
+//! apart from them the row count of every `Execute`. It
 //! answers `SSLRequest`/`GSSENCRequest` with "no" and passes everything else through
 //! unchanged (authentication included); a cancel request goes to the server as it is.
 
@@ -25,6 +26,8 @@ pub struct Proxy {
     pub sent: Arc<Mutex<Vec<Sent>>>,
     /// How many startup messages had `options` (dropped).
     pub dropped: Arc<Mutex<usize>>,
+    /// The rows each `Execute` asked for (0: all), in order.
+    pub executes: Arc<Mutex<Vec<i32>>>,
 }
 
 impl Proxy {
@@ -34,21 +37,27 @@ impl Proxy {
         let addr = listener.local_addr().unwrap().to_string();
         let sent = Arc::new(Mutex::new(Vec::new()));
         let dropped = Arc::new(Mutex::new(0));
-        let (s, d, up) = (sent.clone(), dropped.clone(), upstream.to_string());
+        let executes = Arc::new(Mutex::new(Vec::new()));
+        let (s, d, e, up) = (sent.clone(), dropped.clone(), executes.clone(), upstream.to_string());
         tokio::spawn(async move {
             while let Ok((client, _)) = listener.accept().await {
-                let (s, d, up) = (s.clone(), d.clone(), up.clone());
+                let (s, d, e, up) = (s.clone(), d.clone(), e.clone(), up.clone());
                 tokio::spawn(async move {
-                    let _ = relay(client, &up, s, d).await;
+                    let _ = relay(client, &up, s, d, e).await;
                 });
             }
         });
-        Proxy { addr, sent, dropped }
+        Proxy { addr, sent, dropped, executes }
     }
 
     /// What the clients sent so far.
     pub fn sent(&self) -> Vec<Sent> {
         self.sent.lock().unwrap().clone()
+    }
+
+    /// The rows each `Execute` the clients sent so far asked for.
+    pub fn executes(&self) -> Vec<i32> {
+        self.executes.lock().unwrap().clone()
     }
 
     /// `url` with the server's `host:port` replaced by the proxy's.
@@ -78,6 +87,7 @@ async fn relay(
     upstream: &str,
     sent: Arc<Mutex<Vec<Sent>>>,
     dropped: Arc<Mutex<usize>>,
+    executes: Arc<Mutex<Vec<i32>>>,
 ) -> std::io::Result<()> {
     let mut body = read_startup(&mut client).await?;
     // SSLRequest / GSSENCRequest: "no", then the real startup message.
@@ -129,6 +139,13 @@ async fn relay(
                 // The statement's name, then its text.
                 let name_end = msg.iter().position(|b| *b == 0).unwrap_or(0);
                 sent.lock().unwrap().push(Sent::Parse(cstr(&msg[name_end + 1..])));
+            }
+            b'E' => {
+                // The portal's name, then the rows to return.
+                let name_end = msg.iter().position(|b| *b == 0).unwrap_or(0);
+                if let Some(n) = msg.get(name_end + 1..name_end + 5) {
+                    executes.lock().unwrap().push(i32::from_be_bytes(n.try_into().unwrap()));
+                }
             }
             _ => {}
         }

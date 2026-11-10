@@ -147,7 +147,13 @@ impl Conn {
     async fn run_with(&mut self, sql: &str, tx: TxRule) -> DbEvent {
         self.id += 1;
         let id = self.id;
-        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::NoHold, tx });
+        self.session.send(DbCommand::Execute {
+            max_rows: None,
+            id,
+            statements: vec![sql.to_string()],
+            paging: PagingMode::NoHold,
+            tx,
+        });
         self.wait(
             |e| matches!(e, DbEvent::Page { id: i, columns: Some(_), .. } | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id),
             60,
