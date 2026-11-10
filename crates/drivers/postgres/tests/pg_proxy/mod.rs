@@ -4,7 +4,9 @@
 //! sends: the text of every simple `Query` and every `Parse`, in the order they go out, and
 //! apart from them the row count of every `Execute`. It
 //! answers `SSLRequest`/`GSSENCRequest` with "no" and passes everything else through
-//! unchanged (authentication included); a cancel request goes to the server as it is.
+//! unchanged (authentication included); a cancel request goes to the server as it is. A
+//! fault can be set for the next simple query of a given text ([`Proxy::fault`]): it goes to the
+//! server as another statement, or the connection is closed in its place.
 
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -19,6 +21,17 @@ pub enum Sent {
     Parse(String),
 }
 
+/// What happens, once, to the next simple query of a given text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Fault {
+    /// The server gets this text instead.
+    Instead(String),
+    /// The query never reaches the server: both connections are closed.
+    Close,
+}
+
+type Faults = Arc<Mutex<Option<(String, Fault)>>>;
+
 pub struct Proxy {
     /// `host:port` to connect to instead of the server.
     pub addr: String,
@@ -28,6 +41,8 @@ pub struct Proxy {
     pub dropped: Arc<Mutex<usize>>,
     /// The rows each `Execute` asked for (0: all), in order.
     pub executes: Arc<Mutex<Vec<i32>>>,
+    /// The fault set for the next simple query of a text ([`Proxy::fault`]).
+    faults: Faults,
 }
 
 impl Proxy {
@@ -38,16 +53,27 @@ impl Proxy {
         let sent = Arc::new(Mutex::new(Vec::new()));
         let dropped = Arc::new(Mutex::new(0));
         let executes = Arc::new(Mutex::new(Vec::new()));
-        let (s, d, e, up) = (sent.clone(), dropped.clone(), executes.clone(), upstream.to_string());
+        let faults: Faults = Arc::new(Mutex::new(None));
+        let (s, d, e, f, up) = (sent.clone(), dropped.clone(), executes.clone(), faults.clone(), upstream.to_string());
         tokio::spawn(async move {
             while let Ok((client, _)) = listener.accept().await {
-                let (s, d, e, up) = (s.clone(), d.clone(), e.clone(), up.clone());
+                let (s, d, e, f, up) = (s.clone(), d.clone(), e.clone(), f.clone(), up.clone());
                 tokio::spawn(async move {
-                    let _ = relay(client, &up, s, d, e).await;
+                    let _ = relay(client, &up, s, d, e, f).await;
                 });
             }
         });
-        Proxy { addr, sent, dropped, executes }
+        Proxy { addr, sent, dropped, executes, faults }
+    }
+
+    /// The next simple query whose text is `query` (on any connection) meets `fault`, once.
+    pub fn fault(&self, query: &str, fault: Fault) {
+        *self.faults.lock().unwrap() = Some((query.to_string(), fault));
+    }
+
+    /// Whether the fault set is still waiting for its query.
+    pub fn fault_pending(&self) -> bool {
+        self.faults.lock().unwrap().is_some()
     }
 
     /// What the clients sent so far.
@@ -88,6 +114,7 @@ async fn relay(
     sent: Arc<Mutex<Vec<Sent>>>,
     dropped: Arc<Mutex<usize>>,
     executes: Arc<Mutex<Vec<i32>>>,
+    faults: Faults,
 ) -> std::io::Result<()> {
     let mut body = read_startup(&mut client).await?;
     // SSLRequest / GSSENCRequest: "no", then the real startup message.
@@ -133,6 +160,22 @@ async fn relay(
         let mut msg = vec![0; len - 4];
         cr.read_exact(&mut msg).await?;
         let cstr = |b: &[u8]| String::from_utf8_lossy(b.split(|x| *x == 0).next().unwrap_or(&[])).to_string();
+        let fault = {
+            let mut faults = faults.lock().unwrap();
+            match faults.as_ref() {
+                Some((query, _)) if tag == b'Q' && *query == cstr(&msg) => faults.take().map(|(_, f)| f),
+                _ => None,
+            }
+        };
+        let msg = match fault {
+            Some(Fault::Close) => {
+                let _ = sw.shutdown().await;
+                return Ok(());
+            }
+            Some(Fault::Instead(text)) => [text.as_bytes(), &[0]].concat(),
+            None => msg,
+        };
+        let len = msg.len() + 4;
         match tag {
             b'Q' => sent.lock().unwrap().push(Sent::Query(cstr(&msg))),
             b'P' => {

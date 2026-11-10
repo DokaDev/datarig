@@ -2577,7 +2577,7 @@ async fn count(
         return Ok((Err(why), false));
     }
     if let Some(limit) = limit.filter(|_| !tx.unsure) {
-        let read = limited_read(client, link, env, (limit, COUNT_LOCK_WAIT), sql).await?;
+        let read = limited_read(client, link, env, tx, (limit, COUNT_LOCK_WAIT), sql).await?;
         return Ok((read.and_then(|msgs| count_of(&msgs)), false));
     }
     let text = if env.read_only { format!("{BEGIN_READ_ONLY}; {path}{sql}; COMMIT") } else { format!("{path}{sql}") };
@@ -2626,7 +2626,7 @@ async fn estimate(
     }
     let format = datarig_core::driver::ExplainFormat::PostgresJson;
     let explain = format.explain_sql(sql, false);
-    let read = limited_read(client, link, env, (ESTIMATE_LIMIT, COUNT_LOCK_WAIT), &explain).await?;
+    let read = limited_read(client, link, env, tx, (ESTIMATE_LIMIT, COUNT_LOCK_WAIT), &explain).await?;
     Ok(read.and_then(|msgs| {
         let plan = msgs.iter().find_map(|m| match m {
             SimpleQueryMessage::Row(r) => r.get(0).map(str::to_string),
@@ -2643,16 +2643,19 @@ async fn estimate(
 /// back). Pooler-safe: every setting is local to that transaction. The server stopping it at its
 /// limit is [`DbError::TimedOut`] with the limit that applied; a cancel of the user's (asked
 /// for this run: [`Env::cancel`]) is `Cancelled`; a lock wait past its limit is
-/// `LockTimeout`.
+/// `LockTimeout`. The read is answered only when the `COMMIT` went through: a failed one is the
+/// answer (the transaction may still be open, aborted: it is rolled back, and the session asked
+/// whether a block is open when that fails too); a lost connection is not an answer either.
 async fn limited_read(
     client: &Client,
     link: &mut Link,
     env: &Env<'_>,
+    tx: &mut Tx,
     (statement, lock): (Duration, Duration),
     text: &str,
 ) -> Result<Result<Vec<SimpleQueryMessage>, DbError>, Closed> {
     let begin = limited_begin(env.each_tx, statement, lock);
-    let (set, read, _) = link
+    let (set, read, commit) = link
         .guard(Some(env.token), async {
             tokio::join!(client.simple_query(&begin), client.simple_query(text), client.batch_execute("COMMIT"))
         })
@@ -2661,10 +2664,16 @@ async fn limited_read(
     let failed = |e: &tokio_postgres::Error| {
         if is_cancel(e) && !env.cancel.asked() { DbError::TimedOut(applied) } else { count_error(e) }
     };
-    match set {
-        Err(e) => Ok(Err(failed(&e))),
-        Ok(_) => Ok(read.map_err(|e| failed(&e))),
+    let read = match set {
+        Err(e) => Err(failed(&e)),
+        Ok(_) => read.map_err(|e| failed(&e)),
+    };
+    let Err(e) = commit else { return Ok(read) };
+    if !e.is_closed() && link.guard(None, client.batch_execute("ROLLBACK")).await?.is_err() {
+        probe(client, link, env, tx).await?;
     }
+    // A failed read says why; a read whose transaction did not end is no answer.
+    Ok(read.and(Err(failed(&e))))
 }
 
 /// How [`limited_read`] begins: `BEGIN READ ONLY`, the session's settings of each transaction

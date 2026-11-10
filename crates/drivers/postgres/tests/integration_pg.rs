@@ -7041,3 +7041,56 @@ async fn a_bounded_read_runs_nothing_the_search_path_can_shadow() {
     assert!(matches!(q.run(6, "RESET search_path").await, DbEvent::Done { .. }));
     assert_eq!(q.first_value(7, settings).await, before, "nothing stays on the session");
 }
+
+/// A bounded count or an estimate is answered only when its transaction ended: a `COMMIT` the
+/// server refuses (as one a cancel stops before it runs, which leaves the transaction open and
+/// aborted) makes it a failure, and the session is out of that transaction after it (the next
+/// statement runs, with the session's own settings); a connection lost before the `COMMIT` is
+/// answered is never a number either.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_read_whose_commit_fails_is_no_answer() {
+    let Some(url) = pg_url("a_bounded_read_whose_commit_fails_is_no_answer") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_commitf_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let rows = format!("SELECT * FROM {table} WHERE (id > 10)");
+    let counted = count_of(&rows);
+    let limit = Some(Duration::from_secs(30));
+    let settings = "SELECT current_setting('statement_timeout') || ' ' || current_setting('lock_timeout')";
+    let before = q.first_value(1, settings).await;
+    assert_eq!(q.count_within(2, &counted, limit).await.0, Ok(40));
+    // Answered once what the session sent before is done (the `COMMIT` that ends a statement's
+    // transaction of its own too): a count without a limit sends none of its own.
+    let settled = async |q: &mut Conn, id| assert_eq!(q.count_within(id, &counted, None).await.0, Ok(40));
+    let refused = || pg_proxy::Fault::Instead("SELECT 1/0".into());
+    proxy.fault("COMMIT", refused());
+    let (got, _) = q.count_within(3, &counted, limit).await;
+    assert!(!proxy.fault_pending(), "the count's COMMIT met the fault");
+    assert!(matches!(got, Err(DbError::Server(_))), "{got:?}");
+    assert_eq!(q.first_value(4, settings).await, before, "out of the count's transaction");
+    settled(&mut q, 40).await;
+    proxy.fault("COMMIT", refused());
+    let (got, _) = q.estimate(5, &rows).await;
+    assert!(!proxy.fault_pending(), "the estimate's COMMIT met the fault");
+    assert!(matches!(got, Err(DbError::Server(_))), "{got:?}");
+    assert_eq!(q.first_value(6, settings).await, before, "out of the estimate's transaction");
+    settled(&mut q, 60).await;
+    // The connection closed where the COMMIT was to go.
+    proxy.fault("COMMIT", pg_proxy::Fault::Close);
+    q.session.send(DbCommand::Count { id: 7, sql: counted.clone(), limit });
+    let mut seen = Vec::new();
+    while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), q.rx.recv()).await {
+        let lost = matches!(ev, DbEvent::Lost { .. });
+        seen.push(ev);
+        if lost {
+            break;
+        }
+    }
+    assert!(seen.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{seen:?}");
+    assert!(!seen.iter().any(|e| matches!(e, DbEvent::Counted { result: Ok(_), .. })), "{seen:?}");
+}
