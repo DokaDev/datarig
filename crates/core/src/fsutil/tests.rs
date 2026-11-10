@@ -117,3 +117,139 @@ fn a_link_is_written_through_never_replaced() {
     assert!(fs::symlink_metadata(dir.join("loop-a")).unwrap().file_type().is_symlink());
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A link at a name a same-user process could guess, pointing at `victim`.
+#[cfg(unix)]
+fn plant(link: &Path, victim: &Path) {
+    std::os::unix::fs::symlink(victim, link).unwrap();
+}
+
+/// The temporary names a write of `name` could be expected to use, derived from what is known
+/// about the process: none of them may be written through.
+#[cfg(unix)]
+fn guessable(dir: &Path, name: &str) -> Vec<PathBuf> {
+    let pid = std::process::id();
+    [format!(".{name}.tmp-{pid}"), format!(".{name}.new-{pid}"), format!(".tmp-{pid}")]
+        .into_iter()
+        .map(|n| dir.join(n))
+        .collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_at_a_guessable_temporary_name_is_not_followed() {
+    let dir = temp_dir("guess");
+    let victim = dir.join("victim");
+    fs::write(&victim, "keep").unwrap();
+    let links = guessable(&dir, "a.toml");
+    for link in &links {
+        plant(link, &victim);
+    }
+    atomic_write(&dir.join("a.toml"), b"one").unwrap();
+    atomic_write_private(&dir.join("a.toml"), b"two").unwrap();
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "keep", "the link's target is untouched");
+    assert_eq!(fs::read_to_string(dir.join("a.toml")).unwrap(), "two");
+    create_new(&dir.join("b.toml"), b"new").unwrap();
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "keep", "create_new leaves it too");
+    for link in &links {
+        assert!(fs::symlink_metadata(link).unwrap().file_type().is_symlink(), "someone else's link stays");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_taken_temporary_name_is_passed_over_never_opened() {
+    let dir = temp_dir("taken-name");
+    let victim = dir.join("victim");
+    fs::write(&victim, "keep").unwrap();
+    // A link to a file, a link to nowhere, a plain file: each name is taken.
+    plant(&dir.join(".tmp-a"), &victim);
+    plant(&dir.join(".tmp-b"), &dir.join("nowhere"));
+    fs::write(dir.join(".tmp-c"), "theirs").unwrap();
+    let mut names = ["a", "b", "c", "d"].map(String::from).into_iter();
+    write_atomically_named(&dir.join("a.toml"), b"new", false, &mut names).unwrap();
+    assert_eq!(fs::read_to_string(dir.join("a.toml")).unwrap(), "new");
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "keep");
+    assert!(!dir.join("nowhere").exists(), "a dangling link is not created through");
+    assert_eq!(fs::read_to_string(dir.join(".tmp-c")).unwrap(), "theirs");
+    assert!(!dir.join(".tmp-d").exists(), "renamed over the target");
+
+    let mut names = ["a", "b", "c"].map(String::from).into_iter();
+    assert_eq!(
+        create_new_named(&dir.join("b.toml"), b"new", &mut names).unwrap_err().kind(),
+        io::ErrorKind::AlreadyExists,
+        "no free name: an error"
+    );
+    assert!(!dir.join("b.toml").exists());
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "keep");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn temporary_names_are_unpredictable_and_short() {
+    let dir = temp_dir("names");
+    let (one, _a) = create_temp(&dir, TempAccess::OwnerOnly).unwrap();
+    let (two, _b) = create_temp(&dir, TempAccess::OwnerOnly).unwrap();
+    assert_ne!(one, two);
+    let name = one.file_name().unwrap().to_string_lossy().into_owned();
+    assert_eq!(name.len(), ".tmp-".len() + 32, "{name}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A file name as long as a file system takes still fits: the temporary name does not grow
+/// with it.
+#[cfg(unix)]
+#[test]
+fn a_file_name_of_the_longest_length_can_be_written() {
+    let dir = temp_dir("long");
+    let path = dir.join("x".repeat(255));
+    atomic_write(&path, b"one").unwrap();
+    atomic_write(&path, b"two").unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "two");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_temporary_file_is_never_more_open_than_the_file_it_replaces() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let dir = temp_dir("modes");
+    let (owner, _f) = create_temp(&dir, TempAccess::OwnerOnly).unwrap();
+    assert_eq!(mode(&owner), 0o600, "owner-only from the moment it exists");
+
+    // Owner-only stays so, a wider mode is kept, a new file takes the umask's.
+    let secret = dir.join("secret");
+    fs::write(&secret, "old").unwrap();
+    fs::set_permissions(&secret, fs::Permissions::from_mode(0o600)).unwrap();
+    atomic_write(&secret, b"new").unwrap();
+    assert_eq!(mode(&secret), 0o600);
+    let shared = dir.join("shared");
+    fs::write(&shared, "old").unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o640)).unwrap();
+    atomic_write(&shared, b"new").unwrap();
+    assert_eq!(mode(&shared), 0o640);
+    let plain = dir.join("plain");
+    fs::write(&plain, "as a new file").unwrap();
+    let usual = mode(&plain);
+    let fresh = dir.join("fresh");
+    atomic_write(&fresh, b"new").unwrap();
+    assert_eq!(mode(&fresh), usual, "a new file has the usual permissions");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// What the rename does for a crash: until it, the target is the old file, whole.
+#[test]
+fn the_target_is_whole_until_the_rename() {
+    let dir = temp_dir("whole");
+    let path = dir.join("a.toml");
+    atomic_write(&path, b"old").unwrap();
+    let (tmp, mut f) = create_temp(&dir, TempAccess::Usual).unwrap();
+    f.write_all(b"half").unwrap();
+    // A crash here: the temporary file stays behind, and the target is untouched.
+    drop(f);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+    assert!(tmp.exists());
+    let _ = fs::remove_dir_all(&dir);
+}
