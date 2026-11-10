@@ -2786,7 +2786,7 @@ async fn patterns_are_offered_only_where_the_collation_takes_them() {
     let contains = MenuItem::Filter(B::Contains);
     assert!(m.lines.contains(&MenuLine::Item(contains)));
     let why = m.off_of(contains).map(|o| o.notice.render(&app.i18n).to_string());
-    assert!(why.as_deref().is_some_and(|w| w.contains("is nondeterministic")), "{why:?}");
+    assert!(why.as_deref().is_some_and(|w| w.contains("no ILIKE")), "{why:?}");
     assert!(m.off_of(MenuItem::Filter(B::Eq)).is_none(), "equality is offered");
     // "starts with" (`LIKE`) there: PostgreSQL before 18 refuses it, 18 takes it.
     let before_18 = "DO $$ BEGIN IF current_setting('server_version_num')::int < 180000 \
@@ -2800,7 +2800,7 @@ async fn patterns_are_offered_only_where_the_collation_takes_them() {
     match pg18 {
         true => assert_eq!(starts, None, "offered from 18 on"),
         false => {
-            assert!(starts.as_deref().is_some_and(|w| w.contains("PostgreSQL before 18 refuses LIKE")), "{starts:?}")
+            assert!(starts.as_deref().is_some_and(|w| w.contains("takes LIKE from PostgreSQL 18")), "{starts:?}")
         }
     }
     app.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
@@ -2862,7 +2862,7 @@ async fn a_column_named_with_a_line_break_is_neither_filtered_nor_sorted() {
     assert!(!items.is_empty());
     for i in &items {
         let why = m.off_of(*i).map(|o| o.notice.render(&app.i18n).to_string());
-        assert!(why.as_deref().is_some_and(|w| w.contains("holds a line break")), "{i:?}: {why:?}");
+        assert!(why.as_deref().is_some_and(|w| w.contains("a line break in the column name")), "{i:?}: {why:?}");
     }
     app.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
     for key in ['s', 'S'] {

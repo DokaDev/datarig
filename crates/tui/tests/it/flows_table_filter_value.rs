@@ -248,9 +248,9 @@ fn patterns_are_offered_only_where_the_collation_takes_them() {
     let label = "contains 'it's' (case-insensitive)";
     let dimmed = |h: &Harness| h.app.menu_dimmed_rows().into_iter().find(|(l, _)| l == label).map(|(_, why)| why);
     for (keys, why, says) in [
-        (None, "collation not known yet", "whether the collation of column “name” takes ILIKE is not known yet"),
-        (Some(collations(None)), "collation not known yet", "is not known yet"),
-        (Some(collations(Some(false))), "nondeterministic", "the collation of column “name” is nondeterministic"),
+        (None, "collation not known yet", "collation of “name” not read yet (ILIKE needs it)"),
+        (Some(collations(None)), "collation not known yet", "not read yet"),
+        (Some(collations(Some(false))), "nondeterministic", "nondeterministic collation, no ILIKE (“name”)"),
     ] {
         let mut h = users_with(keys);
         at(&mut h, 0, 1);
@@ -270,13 +270,10 @@ fn patterns_are_offered_only_where_the_collation_takes_them() {
     let starts_dimmed =
         |h: &Harness| h.app.menu_dimmed_rows().into_iter().find(|(l, _)| l == starts).map(|(_, why)| why);
     for (keys, why) in [
-        (None, Some(("collation not known yet", "whether the server takes LIKE on the collation of column “name”"))),
-        (Some(collations_on(None, Some(false))), Some(("collation not known yet", "is not known yet"))),
-        (Some(collations_on(Some(false), None)), Some(("collation not known yet", "is not known yet"))),
-        (
-            Some(collations_on(Some(false), Some(false))),
-            Some(("nondeterministic", "PostgreSQL before 18 refuses LIKE on the nondeterministic collation")),
-        ),
+        (None, Some(("collation not known yet", "collation of “name” not read yet (LIKE needs it)"))),
+        (Some(collations_on(None, Some(false))), Some(("collation not known yet", "not read yet"))),
+        (Some(collations_on(Some(false), None)), Some(("collation not known yet", "not read yet"))),
+        (Some(collations_on(Some(false), Some(false))), Some(("nondeterministic", "takes LIKE from PostgreSQL 18"))),
         (Some(collations_on(Some(false), Some(true))), None),
         (Some(collations_on(None, Some(true))), None),
         (Some(collations_on(Some(true), Some(false))), None),
@@ -420,7 +417,7 @@ fn refused_entries_are_dimmed_with_why_and_send_nothing() {
     assert_eq!(dimmed.len(), 7, "{dimmed:?}");
     assert!(dimmed.iter().all(|(_, why)| why == "type not compared"), "{dimmed:?}");
     let why = h.app.menu_dimmed_notice(r#"= '{"a": 1}'"#).expect("dimmed").render(&h.app.i18n).to_string();
-    assert!(why.contains("values of json (column “doc”)"), "{why}");
+    assert!(why.contains("how json compares is not known (“doc”"), "{why}");
     h.key(KeyCode::Enter);
     assert!(runs(&mut h).is_empty());
     h.key(KeyCode::Esc);
@@ -474,7 +471,7 @@ fn changes_not_applied_in_the_line_are_kept_and_nothing_is_added() {
     at(&mut h, 0, 0);
     h.keys("F");
     assert!(!menu_open(&h));
-    assert!(flashed(&h).contains("changes not applied"), "{}", flashed(&h));
+    assert!(flashed(&h).contains("filter line edited"), "{}", flashed(&h));
     assert_eq!(where_text(&h), "id > 5");
     assert!(runs(&mut h).is_empty());
 }
@@ -790,7 +787,7 @@ fn a_column_named_with_a_line_break_is_neither_filtered_nor_sorted() {
         assert!(dimmed.iter().all(|(_, why)| why == "name not one line"), "{dimmed:?}");
         let first = dimmed[0].0.to_string();
         let notice = h.app.menu_dimmed_notice(&first).expect("dimmed").render(&h.app.i18n).to_string();
-        assert!(notice.contains("holds a line break"), "{notice}");
+        assert!(notice.contains("a line break in the column name"), "{notice}");
         pick(&mut h, by);
         assert!(runs(&mut h).is_empty(), "nothing runs");
         assert_eq!(where_text(&h), "");
@@ -802,7 +799,7 @@ fn a_column_named_with_a_line_break_is_neither_filtered_nor_sorted() {
         at(&mut h, 0, 1);
         h.keys(keys);
         assert!(runs(&mut h).is_empty(), "{keys}: nothing sent");
-        assert!(flashed(&h).contains("holds a line break"), "{keys}: {}", flashed(&h));
+        assert!(flashed(&h).contains("a line break in the column name"), "{keys}: {}", flashed(&h));
         let tq = h.app.tab().doc.table_query.as_ref().unwrap();
         assert_eq!(tq.line.field(Field::Order).text(), "", "{keys}");
         assert!(tq.draft.order.is_empty(), "{keys}");

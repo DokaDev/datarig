@@ -240,7 +240,7 @@ fn a_sort_over_changes_not_applied_is_refused_and_keeps_them() {
             }
             assert!(runs(&mut h).is_empty(), "{f:?} {how}: nothing sent");
             let status = h.status(120, 30);
-            assert!(status.contains("Not sorted: the filter line has changes not applied"), "{f:?} {how}: {status}");
+            assert!(status.contains("Not sorted: filter line edited"), "{f:?} {how}: {status}");
             assert_eq!(fields(&h), before, "{f:?} {how}: the typed text stays");
             assert_eq!(draft(&h), d, "{f:?} {how}: the draft is as it was");
             assert_eq!(heads(&h)[1], sorted(true, 1), "{f:?} {how}");
@@ -407,7 +407,7 @@ fn sorting_is_only_for_table_tabs() {
     for keys in ["s", "S", " rs", " rS"] {
         h.keys(keys);
         let status = h.status(120, 30);
-        assert!(status.contains("Only a table tab sorts by a column"), "{keys:?}: {status}");
+        assert!(status.contains("not a table (sort a query in its text)"), "{keys:?}: {status}");
     }
     assert!(runs(&mut h).is_empty());
     // No sort zone on a query's headers.
@@ -515,7 +515,8 @@ fn grid_actions_over_a_query_that_did_not_land_are_refused() {
             assert!(runs(&mut h).is_empty(), "{case} {how}: nothing sent");
             assert_ne!(h.overlay_kind(), Some(OverlayKind::ContextMenu), "{case} {how}: no menu");
             let status = h.status(120, 30);
-            let says = if how == "F" { "Not filtered by value: the rows shown" } else { "Not sorted: the rows shown" };
+            let says =
+                if how == "F" { "Not filtered: showing previous rows" } else { "Not sorted: showing previous rows" };
             assert!(status.contains(says), "{case} {how}: {status}");
             assert_eq!(fields(&h), before, "{case} {how}: the line keeps the query");
             assert_eq!(draft(&h), d, "{case} {how}: the draft is as it was");
@@ -537,5 +538,103 @@ fn grid_actions_over_a_query_that_did_not_land_are_refused() {
     h.menu_pick("= 0");
     assert!(runs(&mut h).is_empty(), "the entry sends nothing");
     let status = h.status(120, 30);
-    assert!(status.contains("Not filtered by value: the rows shown"), "{status}");
+    assert!(status.contains("Not filtered: showing previous rows"), "{status}");
+}
+
+/// The notice the status line shows now, in full.
+fn flashed(h: &Harness) -> String {
+    h.app.transient.as_ref().map(|(n, _)| n.render(&h.app.i18n).to_string()).unwrap_or_default()
+}
+
+/// At 80 columns a refused sort or filter by value says why in full: the status line cuts a
+/// long notice in its middle, which would lose the reason and keep only the keys after it.
+#[test]
+fn a_refused_sort_or_filter_says_why_at_80_columns() {
+    // Changes in the line not applied.
+    let mut h = users(Lang::En);
+    typed(&mut h, Field::Where, "id > 2");
+    for (keys, name) in [("s", "sort"), ("F", "filter")] {
+        h.keys(keys);
+        assert!(runs(&mut h).is_empty(), "{keys}: nothing sent");
+        let said = flashed(&h);
+        assert!(said.contains("filter line edited"), "{keys}: {said}");
+        let status = h.status(80, 24);
+        assert!(status.contains(&said), "{keys}: {status}");
+        assert_screen!(format!("table_sort_refused_unapplied_{name}_en_80x24"), Lang::En, h.draw(80, 24));
+    }
+    // The rows shown are an earlier run's: the line's run was cancelled.
+    let mut h = users(Lang::En);
+    h.keys("f");
+    h.type_text("idd > 1");
+    h.key(KeyCode::Enter);
+    assert_eq!(one_run(&mut h), format!("{ALL} WHERE (idd > 1)"));
+    let (id, index) = (h.app.tab().exec.query_id, h.app.tabs.active_index());
+    h.tab_db(index, DbEvent::Failed { id, error: datarig_core::driver::DbError::Cancelled, cancelled: true });
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.app.tab_mut().doc.table_query.as_mut().unwrap().line.focus = None;
+    for (keys, name) in [("s", "sort"), ("F", "filter")] {
+        h.keys(keys);
+        assert!(runs(&mut h).is_empty(), "{keys}: nothing sent");
+        let said = flashed(&h);
+        assert!(said.contains("showing previous rows"), "{keys}: {said}");
+        let status = h.status(80, 24);
+        assert!(status.contains(&said), "{keys}: {status}");
+        assert_screen!(format!("table_sort_refused_not_shown_{name}_en_80x24"), Lang::En, h.draw(80, 24));
+    }
+    // A query's results.
+    let mut h = with_edge_results(Lang::En);
+    h.key(KeyCode::Tab);
+    h.keys("s");
+    let said = flashed(&h);
+    assert!(said.contains("not a table (sort a query in its text)"), "{said}");
+    assert!(h.status(80, 24).contains(&said), "{}", h.status(80, 24));
+}
+
+/// Every refusal of a sort or a filter by value, in either language, fits the status line at
+/// 80 columns whole (a column, a type and a collation of usual length).
+#[test]
+fn every_refusal_of_a_sort_or_filter_by_value_fits_80_columns() {
+    use datarig_i18n::{Label, Msg};
+    use datarig_tui::app::{Level, Notice};
+    for lang in [Lang::En, Lang::Ko] {
+        let mut h = users(lang);
+        let column = || "email".to_string();
+        let ty = || "jsonb".to_string();
+        let reason = h.app.i18n.label(Label::CopySqlWhyNotShownWhole).to_string();
+        let why = h.app.i18n.label(Label::TableFilterWhyUnclosed).to_string();
+        let all: Vec<Msg> = vec![
+            Label::TableSortOnlyTableTabs.into(),
+            Label::TableSortNoColumns.into(),
+            Label::TableSortUnapplied.into(),
+            Label::TableSortNotShown.into(),
+            Msg::TableSortName { column: column() },
+            Label::TableFilterByValueNoRows.into(),
+            Label::TableFilterByValueUnapplied.into(),
+            Label::TableFilterByValueNotShown.into(),
+            Msg::TableFilterByValueName { column: column() },
+            Label::TableFilterByValueNotOneLine.into(),
+            Label::TableFilterByValueNewRows.into(),
+            Label::TableFilterByValueOneColumn.into(),
+            Label::TableFilterByValueEdited.into(),
+            Label::TableFilterByValueUnread.into(),
+            Label::TableFilterByValueTooLong.into(),
+            Msg::TableFilterByValueTooMany { max: "1000".into() },
+            Msg::TableFilterByValueTooBig { column: column() },
+            Msg::TableFilterByValueNotWhole { column: column(), reason },
+            Msg::TableFilterByValueType { column: column(), ty: ty() },
+            Msg::TableFilterByValueOrder { column: column(), ty: ty() },
+            Msg::TableFilterByValueNondeterministic { collation: "case_insensitive".into() },
+            Msg::TableFilterByValueNondeterministicColumn { column: column() },
+            Msg::TableFilterByValueCollationUnknown { column: column() },
+            Msg::TableFilterByValueLikeRefused { column: column() },
+            Msg::TableFilterByValueLikeUnknown { column: column() },
+            Msg::TableFilterByValueBase { why },
+        ];
+        for m in all {
+            h.app.transient = Some((Notice::new(m.clone(), Level::Warning), std::time::Instant::now()));
+            let said = h.app.i18n.msg(&m).to_string();
+            let status = h.status(80, 24);
+            assert!(status.contains(&said), "{} {m:?}: {status}", lang_tag(lang));
+        }
+    }
 }
