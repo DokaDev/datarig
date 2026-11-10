@@ -4,8 +4,9 @@
 //! (`sql_select_limit` is the user's own, if any): an export is never cut at a page.
 //!
 //! It reads only (a statement that writes or locks rows is refused unsent): outside the user's
-//! transaction in a `START TRANSACTION READ ONLY` of its own (a stored function that writes
-//! fails, and every row comes from one snapshot), inside it in the user's transaction and its
+//! transaction in a `START TRANSACTION READ ONLY` of its own at `REPEATABLE READ` whatever the
+//! session's level (a stored function that writes fails, and every row comes from one snapshot
+//! read without row locks), inside it in the user's transaction and its
 //! snapshot (a failed read does not end a MySQL transaction). A cancel is the session's `KILL QUERY`;
 //! when nobody reads the channel any more (the file failed) the result is stopped the same way
 //! and the answer says it was not read to its end.
@@ -15,8 +16,8 @@
 //! lost, as a connection that broke.
 
 use super::{
-    Closed, Env, Link, State, Stop, after, asked_server, cells, failure, idle, limit_applies, rest, runs_server_code,
-    stop_result,
+    Closed, Env, Link, State, Stop, after, asked_server, begin_own, cells, failure, idle, limit_applies, rest,
+    runs_server_code, stop_result,
 };
 use crate::session::my_error;
 use crate::values::column_meta;
@@ -79,9 +80,9 @@ pub(super) async fn export(
     s.routine = runs_server_code(sql, s.mode, r.runs_code);
     let was_open = s.tx.open;
     // Outside the user's transaction it reads in a read-only one of its own: nothing it calls
-    // writes, and every row comes from one snapshot.
+    // writes, and every row comes from one snapshot, read without locking rows.
     let own = !was_open;
-    if own && let Err(e) = link.guard(None, conn.query_drop("START TRANSACTION READ ONLY")).await? {
+    if own && let Err(e) = begin_own(conn, link, s.tx.autocommit).await? {
         return Ok((Err(my_error(&e)), false));
     }
     env.busy.store(true, Ordering::SeqCst);

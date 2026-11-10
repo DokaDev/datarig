@@ -85,8 +85,9 @@ status.
     until the export finishes.
 - An export only reads: a statement that writes or locks rows is refused unsent. Outside a
   transaction of yours each statement it runs is a read-only transaction of its own
-  (`BEGIN READ ONLY` on PostgreSQL, `START TRANSACTION READ ONLY` on MySQL), so its rows are one
-  snapshot and a function that writes fails. Inside your open transaction it reads there and
+  (`BEGIN READ ONLY` on PostgreSQL, `START TRANSACTION READ ONLY` on MySQL, at `REPEATABLE READ`
+  whatever your session's level), so its rows are one snapshot read without row locks and a
+  function that writes fails. Inside your open transaction it reads there and
   sees what you changed; on PostgreSQL under a savepoint, so a failed or cancelled export does
   not abort your transaction. An aborted transaction refuses an export until you roll it back.
 - A slow file holds the statement back instead of piling rows up in memory. A server may end a

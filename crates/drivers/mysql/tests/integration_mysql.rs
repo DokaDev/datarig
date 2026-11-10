@@ -2178,6 +2178,55 @@ async fn counts_and_the_servers_question() {
     ));
 }
 
+/// The InnoDB locks connection `id` holds or waits for on `table` in `shop`.
+async fn data_locks_of(admin: &mut mysql_async::Conn, id: u64, table: &str) -> u64 {
+    let n: Option<u64> = admin
+        .exec_first(
+            "SELECT COUNT(*) FROM performance_schema.data_locks l JOIN performance_schema.threads t \
+             ON t.THREAD_ID = l.THREAD_ID WHERE t.PROCESSLIST_ID = ? AND l.OBJECT_SCHEMA = 'shop' \
+             AND l.OBJECT_NAME = ?",
+            (id, table),
+        )
+        .await
+        .expect("data_locks reads");
+    n.unwrap_or(0)
+}
+
+/// At `SERIALIZABLE` without autocommit InnoDB reads every row of a transaction with a shared
+/// lock: outside the user's transaction a count reads in a read-only one of its own at
+/// `REPEATABLE READ` and ends it, so it leaves no lock and no transaction behind. The session's
+/// own level and autocommit are left as they were.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_count_locks_no_rows_when_the_session_is_serializable() {
+    let test = "a_count_locks_no_rows_when_serializable";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "scount", 100).await;
+    let mut a = side(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    c.ok(1, "SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE").await;
+    let sql = format!("SELECT COUNT(*) FROM (\nSELECT id FROM {}\n) AS datarig_count", t.q());
+    let mut run = 1;
+    for autocommit in ["1", "0"] {
+        run += 1;
+        c.ok(run, &format!("SET autocommit = {autocommit}")).await;
+        run += 1;
+        assert_eq!(count(&mut c, run, sql.clone()).await, (Ok(100), false), "autocommit = {autocommit}");
+        assert_eq!(data_locks_of(&mut a, id, &t.name).await, 0, "autocommit = {autocommit}: no lock");
+        assert_eq!(variable_of(&mut a, id, "transaction_isolation").await.as_deref(), Some("SERIALIZABLE"));
+        assert_eq!(
+            variable_of(&mut a, id, "autocommit").await.as_deref(),
+            Some(if autocommit == "1" { "ON" } else { "OFF" })
+        );
+        let open: Option<u64> = a
+            .exec_first("SELECT COUNT(*) FROM information_schema.INNODB_TRX WHERE trx_mysql_thread_id = ?", (id,))
+            .await
+            .unwrap();
+        assert_eq!(open, Some(0), "autocommit = {autocommit}: no transaction left open");
+    }
+    a.disconnect().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_read_only_session_refuses_and_never_stays_writable() {
     let Some((url, admin)) = urls("a_read_only_session_refuses") else { return };
