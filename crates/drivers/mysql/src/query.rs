@@ -482,9 +482,19 @@ pub(crate) async fn query_loop(
                 link.serving(&events, id);
                 s.request = id;
                 killer.clear();
-                group::group_count(&mut conn, &mut link, &env, &mut s, &sql, limit).await.map(|(result, snapshot)| {
-                    let _ = events.send(DbEvent::GroupCounted { id, result, snapshot });
-                })
+                match group::group_count(&mut conn, &mut link, &env, &mut s, &sql, limit).await {
+                    Ok((result, snapshot)) => {
+                        let _ = events.send(DbEvent::GroupCounted { id, result, snapshot });
+                        Ok(())
+                    }
+                    // Answered with why the session is lost, before it says so.
+                    Err(Stop::Lost(error)) => {
+                        let error = link.lost_as(error);
+                        let _ = events.send(DbEvent::GroupCounted { id, result: Err(error.clone()), snapshot: false });
+                        Err(Stop::Lost(error))
+                    }
+                    Err(stop) => Err(stop),
+                }
             }
             Next::Command(DbCommand::Estimate { id, sql }) => {
                 link.serving(&events, id);
@@ -2394,7 +2404,7 @@ async fn read_own(
     let read = read_own_as(conn, link, env, s, text, was_open, applied, OwnWant::First).await?;
     Ok(read.map(|got| match got {
         OwnGot::First(value) => value,
-        OwnGot::Rows(..) | OwnGot::Refused(_) => None,
+        OwnGot::Rows(..) => None,
     }))
 }
 
@@ -2413,8 +2423,6 @@ enum OwnGot {
     /// The rows, and whether the server groups their first column by a prefix
     /// ([`group::rows_within`]).
     Rows(Vec<Vec<Cell>>, bool),
-    /// The rows were not taken: why (read to their end and dropped).
-    Refused(DbError),
 }
 
 /// [`read_own`], reading what `want` says.
@@ -2454,10 +2462,18 @@ async fn read_own_as(
         (false, OwnWant::First) => {
             link.guard(Some(env.killer), conn.query_first::<String, _>(text)).await?.map(OwnGot::First)
         }
-        (false, OwnWant::Rows) => link
-            .guard(Some(env.killer), group::rows_within(conn, text))
-            .await?
-            .map(|rows| rows.map_or_else(OwnGot::Refused, |(rows, prefixed)| OwnGot::Rows(rows, prefixed))),
+        (false, OwnWant::Rows) => match link.guard(Some(env.killer), group::rows_within(conn, text)).await? {
+            Ok(Ok((rows, prefixed))) => Ok(OwnGot::Rows(rows, prefixed)),
+            // Refused part way through its answer: the rest is not read (nothing more of it is
+            // received or kept), the connection is cut, and the session is lost for why.
+            Ok(Err(why)) => {
+                idle(env, link).await;
+                link.taint(why.clone());
+                link.cut();
+                return Err(Stop::Lost(why));
+            }
+            Err(e) => Err(e),
+        },
     };
     // Whether the user had asked when the answer came: what is done after it changes nothing.
     let cancelled = env.asked.asked();

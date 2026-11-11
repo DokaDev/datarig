@@ -6479,14 +6479,85 @@ async fn a_group_count_refuses_locking_reads_and_the_next_transactions_settings(
     a.disconnect().await.unwrap();
 }
 
-/// A group count sends only values of a bounded size, whatever the metadata it was written
+/// A dialer whose streams count the bytes the client reads from the server.
+#[derive(Default)]
+struct CountingDialer {
+    read: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// A stream of [`CountingDialer`].
+struct Counted {
+    inner: tokio::net::TcpStream,
+    read: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl tokio::io::AsyncRead for Counted {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let polled = std::pin::Pin::new(&mut self.inner).poll_read(cx, buf);
+        let n = buf.filled().len() - before;
+        self.read.fetch_add(n, std::sync::atomic::Ordering::SeqCst);
+        polled
+    }
+}
+
+impl tokio::io::AsyncWrite for Counted {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+impl Dialer for CountingDialer {
+    fn dial(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<datarig_core::transport::BoxedStream, datarig_core::transport::DialError>,
+    > {
+        let (host, read) = (host.to_string(), self.read.clone());
+        Box::pin(async move {
+            let inner = tokio::net::TcpStream::connect((host.as_str(), port))
+                .await
+                .map_err(|e| datarig_core::transport::DialError::Failed(datarig_core::fault::Fault::io(&e)))?;
+            Ok(Box::new(Counted { inner, read }) as datarig_core::transport::BoxedStream)
+        })
+    }
+}
+
+/// A group count receives only values of a bounded size, whatever the metadata it was written
 /// from says: written for a number column that became `LONGTEXT` since (another session's
-/// `ALTER TABLE`), it is refused as changed (`SchemaChanged`), with autocommit and inside the
-/// user's transaction, never read with its long values whole; written again from the column as
-/// it is now, the long values come as their length alone.
+/// `ALTER TABLE`) with 2 MB of long values, it reads a few kilobytes (each value measured, the
+/// long ones sent as their length alone), with autocommit and inside the user's transaction, and
+/// the session goes on. An answer that comes without its values measured (a statement the app
+/// does not write) is refused before a row of it is read: the connection is cut, so the rest is
+/// never received, and the session is lost for why.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_group_count_sends_only_bounded_values_of_the_columns_current_type() {
-    let test = "a_group_count_sends_only_bounded_values_of_the_columns_current_type";
+async fn a_group_count_receives_only_bounded_values_whatever_the_columns_type_was() {
+    let test = "a_group_count_receives_only_bounded_values_whatever_the_columns_type_was";
     let Some((url, admin)) = urls(test) else { return };
     let t = Table::make(
         &admin,
@@ -6498,25 +6569,45 @@ async fn a_group_count_sends_only_bounded_values_of_the_columns_current_type() {
         ],
     )
     .await;
-    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let d = Arc::new(CountingDialer::default());
+    let o =
+        ConnectOptions::new(PAGE, SessionRole::Query, &tag(test)).dialer(Some(DialerRef(d.clone() as Arc<dyn Dialer>)));
+    let mut c = Conn::open_opts(&url, SessionRole::Query, o).await;
+    let received = || d.read.load(std::sync::atomic::Ordering::SeqCst);
     let stale = group_sql(&t.name, "k", ("int", ValueKind::Integer), None);
     let limit = Some(Duration::from_secs(30));
     let (got, _, _) = group_within(&mut c, 1, &stale, limit).await;
     assert_eq!(got.map(|g| g.values.len()), Ok(3), "counted while it is a number");
     let mut a = side(&admin).await;
     a.query_drop(format!("ALTER TABLE {} MODIFY k LONGTEXT", t.q())).await.unwrap();
-    a.query_drop(format!("UPDATE {} SET k = CONCAT(REPEAT('x', 5000), id) WHERE id <= 10", t.q())).await.unwrap();
-    let (got, _, _) = group_within(&mut c, 2, &stale, limit).await;
-    assert_eq!(got, Err(DbError::SchemaChanged), "with autocommit");
-    c.ok(3, "START TRANSACTION").await;
-    let (got, _, _) = group_within(&mut c, 4, &stale, None).await;
-    assert_eq!(got, Err(DbError::SchemaChanged), "in the user's transaction");
+    a.query_drop(format!("UPDATE {} SET k = CONCAT(REPEAT('x', 200000), id) WHERE id <= 10", t.q())).await.unwrap();
+    for (id, in_tx) in [(2, false), (4, true)] {
+        if in_tx {
+            c.ok(3, "START TRANSACTION").await;
+        }
+        let before = received();
+        let (got, _, _) = group_within(&mut c, id, &stale, if in_tx { None } else { limit }).await;
+        let took = received() - before;
+        let got = got.expect("counted");
+        let long: Vec<_> = got.values.iter().filter(|v| !v.whole).collect();
+        assert_eq!(long.len(), 10, "{id}");
+        assert!(long.iter().all(|v| v.value.is_none() && v.bytes >= Some(200_001)));
+        assert!(took < 64 * 1024, "{id}: {took} bytes received for 2 MB of values");
+    }
     c.ok(5, "COMMIT").await;
-    let fresh = group_sql(&t.name, "k", ("longtext", ValueKind::Text), None);
-    let (got, _, _) = group_within(&mut c, 6, &fresh, limit).await;
-    let got = got.expect("counted");
-    assert_eq!(got.values.iter().filter(|v| !v.whole).count(), 10, "{got:?}");
-    assert!(got.values.iter().filter(|v| !v.whole).all(|v| v.value.is_none() && v.bytes >= Some(5001)));
+    let evs = c.run(6, &["SELECT 1"]).await;
+    assert_eq!(page_of(&evs).1[0][0].as_deref(), Some("1"), "the session goes on");
+    // Not measured: refused at its columns, the rest never received.
+    let unmeasured = format!("SELECT k, NULL, COUNT(*) FROM {} GROUP BY k ORDER BY COUNT(*) DESC LIMIT 201", t.q());
+    let before = received();
+    let (got, _, _) = group_within(&mut c, 7, &unmeasured, limit).await;
+    assert_eq!(got, Err(DbError::SchemaChanged));
+    c.wait(|e| matches!(e, DbEvent::Lost { .. }), 10).await;
+    let took = received() - before;
+    assert!(took < 1024 * 1024, "{took} bytes received of an answer of 2 MB");
+    let mut again = Conn::open(&url, SessionRole::Query, false, test).await;
+    let evs = again.run(1, &[&format!("SELECT COUNT(*) FROM {}", t.q())]).await;
+    assert_eq!(page_of(&evs).1[0][0].as_deref(), Some("30"), "a new session reads");
     a.disconnect().await.unwrap();
 }
 
@@ -6596,7 +6687,9 @@ async fn a_group_count_marks_the_values_the_server_groups_by_a_prefix() {
 
 /// Every value of a group count is the text a cell of it shows in the grid: `DECIMAL` with its
 /// scale, `TIMESTAMP` in the session's time zone, `DATETIME`, binary data as hex, text, an
-/// `ENUM`, `FLOAT`, and NULL; a value over 4 KiB comes as its length alone, not whole.
+/// `ENUM`, `FLOAT`, integers signed and unsigned, `DATE`, `TIME` with fractions, `YEAR`,
+/// `DOUBLE`, `TINYINT(1)`, and NULL (every value measured, whatever its type); a value over
+/// 4 KiB comes as its length alone, not whole.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_group_count_decodes_values_as_the_grid_does() {
     let test = "a_group_count_decodes_values_as_the_grid_does";
@@ -6606,13 +6699,18 @@ async fn a_group_count_decodes_values_as_the_grid_does() {
         "groupvalues",
         &[
             "CREATE TABLE {t} (id INT PRIMARY KEY, n DECIMAL(10, 4), at TIMESTAMP(3) NULL, dt DATETIME NULL, \
-             b VARBINARY(9000), t TEXT, e ENUM('a', 'b c'), f FLOAT)",
+             b VARBINARY(9000), t TEXT, e ENUM('a', 'b c'), f FLOAT, i INT, bi BIGINT UNSIGNED, d DATE, \
+             tm TIME(2), y YEAR, dbl DOUBLE, bo TINYINT(1))",
             "INSERT INTO {t} VALUES \
-             (1, 12.5, '2026-01-02 03:04:05.123', '2026-01-02 03:04:05', X'00FF10', 'x', 'a', 0.1), \
-             (2, 12.5, '2026-01-02 03:04:05.123', '2026-01-02 03:04:05', X'00FF10', 'x', 'a', 0.1), \
-             (3, -0.0001, '1999-12-31 23:59:59', '1000-01-01 00:00:00', X'', '', 'b c', -2.5), \
-             (4, NULL, NULL, NULL, NULL, NULL, NULL, NULL), \
-             (5, 7, '2026-06-01 00:00:00', '2026-06-01 00:00:00', REPEAT(X'AB', 5000), REPEAT('y', 5000), 'a', 3)",
+             (1, 12.5, '2026-01-02 03:04:05.123', '2026-01-02 03:04:05', X'00FF10', 'x', 'a', 0.1, -7, \
+              18446744073709551615, '2026-01-02', '-838:59:59.00', 2026, 0.1, 1), \
+             (2, 12.5, '2026-01-02 03:04:05.123', '2026-01-02 03:04:05', X'00FF10', 'x', 'a', 0.1, -7, \
+              18446744073709551615, '2026-01-02', '-838:59:59.00', 2026, 0.1, 1), \
+             (3, -0.0001, '1999-12-31 23:59:59', '1000-01-01 00:00:00', X'', '', 'b c', -2.5, 0, 0, \
+              '1000-01-01', '12:34:56.78', 1901, 1e300, 0), \
+             (4, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL), \
+             (5, 7, '2026-06-01 00:00:00', '2026-06-01 00:00:00', REPEAT(X'AB', 5000), REPEAT('y', 5000), 'a', 3, \
+              2147483647, 1, '9999-12-31', '00:00:00', 2155, -2.5, 1)",
         ],
     )
     .await;
@@ -6626,6 +6724,13 @@ async fn a_group_count_decodes_values_as_the_grid_does() {
         ("t", ("text", ValueKind::Text)),
         ("e", ("enum", ValueKind::Text)),
         ("f", ("float", ValueKind::Float)),
+        ("i", ("int", ValueKind::Integer)),
+        ("bi", ("bigint unsigned", ValueKind::Integer)),
+        ("d", ("date", ValueKind::Date)),
+        ("tm", ("time", ValueKind::Time)),
+        ("y", ("year", ValueKind::Integer)),
+        ("dbl", ("double", ValueKind::Float)),
+        ("bo", ("tinyint", ValueKind::Integer)),
     ];
     let mut id = 10;
     for (column, ty) in columns {

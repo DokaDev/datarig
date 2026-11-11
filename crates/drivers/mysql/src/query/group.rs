@@ -10,9 +10,10 @@
 //! open it reads in a `REPEATABLE READ` read-only transaction of its own, without row locks,
 //! whatever the session's level ([`read_own_as`]).
 //!
-//! What it reads is bounded ([`rows_within`]): the answer's columns as the server describes them
-//! must send only short values or values measured and cut by the server ([`bounded`]), and each
-//! row is checked against the answer's budget ([`GroupBudget`]) as it comes.
+//! What it reads is bounded by the statement: every value is measured and sent only up to the
+//! preview's size, whatever type its column was said to have. [`rows_within`] checks the
+//! answer's columns say so ([`bounded`]) and each row against the answer's budget
+//! ([`GroupBudget`]) as it comes; past either it stops reading and the connection is cut.
 //!
 //! The server groups strings and bytes by their first `max_sort_length` bytes: values of such a
 //! column at least that long (the session's value, read with the allowlist's question right
@@ -65,7 +66,6 @@ pub(super) async fn group_count(
             }
             counts
         }),
-        OwnGot::Refused(why) => Err(why),
         OwnGot::First(_) => Err(DbError::NoResult),
     });
     Ok((counted, snapshot))
@@ -86,35 +86,51 @@ fn no_locking_read(s: &State, was_open: bool) -> Result<(), DbError> {
 }
 
 /// The rows of `text` (a group count), each value as the session shows a cell of it, read one by
-/// one: only when its columns say its values are bounded ([`bounded`]), and each row within the
-/// answer's budget ([`GroupBudget`]). Once either fails, the rest of the answer is read and
-/// dropped row by row (nothing more is kept), and why it is refused is the answer.
+/// one: only when its columns say every value comes measured ([`bounded`]), and each row within
+/// the answer's budget ([`GroupBudget`]). When either fails, reading stops there: why, with the
+/// rest of the answer unread (the caller cuts the connection, so none of it is received or
+/// kept). With whether the server groups the values by a prefix ([`prefixed`]).
 pub(super) async fn rows_within(
     conn: &mut Conn,
     text: &str,
 ) -> Result<Result<(Vec<Vec<Cell>>, bool), DbError>, mysql_async::Error> {
     let mut qr = conn.query_iter(text).await?;
     let columns = qr.columns().unwrap_or_else(|| Arc::from(Vec::new()));
-    let mut refused = bounded(&columns).err();
+    if let Err(why) = bounded(&columns) {
+        return Ok(Err(why));
+    }
     // As text: the server sends at most the preview's bytes of the value in its column's
     // character set, which the connection's (`utf8mb4`) writes in at most 4 bytes for each.
     let mut budget = GroupBudget::new(4 * GROUP_PREVIEW);
     let mut rows = Vec::new();
     while let Some(row) = qr.next().await? {
-        if refused.is_some() {
-            continue;
-        }
         let bytes = (0..row.len()).map(|i| row.as_ref(i).map_or(0, value_bytes)).sum();
-        match budget.take(bytes) {
-            Ok(()) => rows.push(cells(&columns, &row)),
-            Err(why) => {
-                refused = Some(why);
-                rows = Vec::new();
-            }
+        if let Err(why) = budget.take(bytes) {
+            return Ok(Err(why));
         }
+        rows.push(cells(&columns, &row));
     }
     let prefixed = columns.first().is_some_and(prefixed);
-    Ok(refused.map_or(Ok((rows, prefixed)), Err))
+    Ok(Ok((rows, prefixed)))
+}
+
+/// Whether the columns of a group count's answer, as the server describes them for this run,
+/// send only values of a bounded size: the value comes with the length the server measured (the
+/// second column a `BIGINT`, as `LENGTH` answers it; the value then only up to the preview's
+/// size), as the statement always has it. Any other answer is refused ([`DbError::SchemaChanged`])
+/// before a row of it is read.
+fn bounded(columns: &[Column]) -> Result<(), DbError> {
+    let [_, length, _] = columns else { return Err(DbError::NoResult) };
+    if length.column_type() == ColumnType::MYSQL_TYPE_LONGLONG { Ok(()) } else { Err(DbError::SchemaChanged) }
+}
+
+/// The bytes value `v` took as it came.
+fn value_bytes(v: &Value) -> usize {
+    match v {
+        Value::NULL => 0,
+        Value::Bytes(b) => b.len(),
+        _ => 8,
+    }
 }
 
 /// Whether the server groups the values of result column `c` by their first `max_sort_length`
@@ -133,25 +149,4 @@ fn prefixed(c: &Column) -> bool {
             | MYSQL_TYPE_LONG_BLOB
     );
     stringy && !c.flags().intersects(ColumnFlags::ENUM_FLAG | ColumnFlags::SET_FLAG)
-}
-
-/// Whether the columns of a group count's answer, as the server describes them for this run,
-/// send only values of a bounded size: the value comes with the length the server measured (the
-/// second column a `BIGINT`, as `LENGTH` answers it; the value then only up to the preview's
-/// size), or the server says no value of its column is longer than the preview (the column's
-/// length in bytes). A column whose type changed since the count was written (from a number to
-/// text) is refused ([`DbError::SchemaChanged`]), not read as one of its old type.
-fn bounded(columns: &[Column]) -> Result<(), DbError> {
-    let [value, length, _] = columns else { return Err(DbError::NoResult) };
-    let measured = length.column_type() == ColumnType::MYSQL_TYPE_LONGLONG;
-    if measured || value.column_length() as usize <= GROUP_PREVIEW { Ok(()) } else { Err(DbError::SchemaChanged) }
-}
-
-/// The bytes value `v` took as it came.
-fn value_bytes(v: &Value) -> usize {
-    match v {
-        Value::NULL => 0,
-        Value::Bytes(b) => b.len(),
-        _ => 8,
-    }
 }

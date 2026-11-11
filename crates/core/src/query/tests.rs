@@ -1921,7 +1921,9 @@ fn group_count_writes_one_grouped_read_of_the_table() {
     );
     assert_eq!(
         group(MY, &meta("id", "bigint", ValueKind::Integer), None, false).unwrap(),
-        "SELECT `id`, NULL, COUNT(*) FROM `shop`.`users` GROUP BY `id` ORDER BY COUNT(*) DESC LIMIT 201"
+        "SELECT IF(LENGTH(`id`) <= 4096, `id`, NULL), LENGTH(`id`), COUNT(*) FROM `shop`.`users` GROUP BY `id` \
+         ORDER BY COUNT(*) DESC LIMIT 201",
+        "every MySQL value measured, whatever its type is said to be"
     );
     // The shape every one has: a plain read the app may run on its own.
     for (d, m) in [(Dialect::Postgres, &name), (Dialect::Postgres, &id), (MY, &data)] {

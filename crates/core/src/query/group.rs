@@ -11,8 +11,9 @@
 //!
 //! Values are grouped whole, by the column itself, but a value is sent only when it is at most
 //! [`GROUP_PREVIEW`] bytes long: a longer one comes as its length alone, so the answer holds at
-//! most [`GROUP_VALUES`] + 1 values of that size. Types of a short value of fixed size (numbers,
-//! dates and times, booleans, `uuid`, …) are sent as they are. Only a column whose values a
+//! most [`GROUP_VALUES`] + 1 values of that size. On PostgreSQL, types of a short value of fixed
+//! size (numbers, dates and times, booleans, `uuid`, …) are sent as they are; on MySQL every
+//! value is measured (`LENGTH`), whatever its type is said to be. Only a column whose values a
 //! filter compares for equality is grouped ([`compares`]).
 
 use super::check::{BarRefusal, FilterVerdict, check_filter};
@@ -214,9 +215,12 @@ fn statement(d: Dialect, table: &TableName, column: &ColumnMeta, other: Option<&
 /// as they are; JSON, arrays and `numeric` (a domain over it too) by their text, written by the
 /// type's own output function (no cast, which could be one of the user's).
 ///
-/// The column's type is the one its metadata says, which may be older than the table: the
-/// driver checks the statement's columns as the server prepares it, and refuses a value of a
-/// type that is not short sent without its length.
+/// The column's type is the one its metadata says, which may be older than the table. The
+/// PostgreSQL driver checks the statement's columns as the server prepares it, and refuses a value
+/// of a type that is not short sent without its length. On MySQL, whose answer comes with the
+/// rows it describes, every value is measured (`LENGTH` of a number or a date is that of its
+/// text, which the server sends): what is sent is bounded by the statement itself, and the value
+/// keeps its column's type (and so the grid's reading of it).
 fn length(d: Dialect, column: &ColumnMeta, c: &str) -> Option<String> {
     let ty = column.type_name.to_ascii_lowercase();
     match d {
@@ -230,8 +234,6 @@ fn length(d: Dialect, column: &ColumnMeta, c: &str) -> Option<String> {
             ValueKind::Decimal if ty != "money" => Some(format!("octet_length(textin(numeric_out({c})))")),
             _ => None,
         },
-        Dialect::MySql(_) => {
-            matches!(column.kind, ValueKind::Text | ValueKind::Bytes | ValueKind::Json).then(|| format!("LENGTH({c})"))
-        }
+        Dialect::MySql(_) => Some(format!("LENGTH({c})")),
     }
 }
