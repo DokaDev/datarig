@@ -6700,7 +6700,13 @@ fn connecting(url: &str) -> Conn {
 }
 
 fn execute(id: u64, sql: &str) -> DbCommand {
-    DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::Hold, tx: TxRule::Auto }
+    DbCommand::Execute {
+        id,
+        statements: vec![sql.to_string()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+        max_rows: None,
+    }
 }
 
 /// A Ctrl+C while a run waits for the connection cancels that run: it is answered cancelled and

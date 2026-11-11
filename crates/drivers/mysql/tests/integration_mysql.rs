@@ -5572,7 +5572,13 @@ async fn a_failing_start_up_statement_fails_the_connect() {
 }
 
 fn execute(id: u64, sql: &str) -> DbCommand {
-    DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::NoHold, tx: TxRule::Auto }
+    DbCommand::Execute {
+        id,
+        statements: vec![sql.to_string()],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+        max_rows: None,
+    }
 }
 
 /// The values of column `x` of `table`, in order.
