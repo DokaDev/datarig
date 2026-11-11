@@ -107,6 +107,74 @@ fn cut(s: &str, w: usize) -> String {
     crate::text::fit(s, w, crate::text::Align::Left)
 }
 
+/// What a list of a column's values was read with: the dialect, the result column as the
+/// session described it, and the session's values its rows were read in (time zone, character
+/// set). A value is taken as a filter's literal only as read with these ([`admit`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ValuesFrom<'a> {
+    pub(crate) dialect: Dialect,
+    pub(crate) meta: &'a ColumnMeta,
+    pub(crate) read_in: &'a ReadIn,
+}
+
+/// Why a value read is not taken as a filter's literal ([`admit`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NotAdmitted {
+    /// Shown otherwise than the server holds it, as a copy as SQL judges it (a MySQL `FLOAT`,
+    /// text read in another character set than UTF-8, a `TIMESTAMP` read in another time zone
+    /// than the session's now or in one that is not a fixed offset, bytes not in their shown
+    /// form, values read before the session said its values or across a change of them).
+    NotWhole(export::Refused),
+    /// Binary data over [`MAX_BYTES`].
+    TooBig,
+}
+
+/// Value `v` (as read, not NULL) of the column `from` describes, as a filter compares it; or why
+/// it is not taken. The one judge of every value a filter takes from what was read: a filter by
+/// a cell's value and a value ticked in the filter dialog (from the rows loaded, from an earlier
+/// load, from a count of the server's). `server_zone`: the server's own time zone (for MySQL's
+/// `SYSTEM`); `now`: the session's values now, which a MySQL `TIMESTAMP` must have been read in.
+/// A MySQL `TIMESTAMP` is taken with the offset of the zone it was read in.
+pub(crate) fn admit(
+    from: &ValuesFrom<'_>,
+    server_zone: Option<&str>,
+    now: Option<&datarig_core::driver::SessionValues>,
+    v: &str,
+) -> Result<Value, NotAdmitted> {
+    let (d, m) = (from.dialect, from.meta);
+    let cols = [export::SqlColumn { name: &m.name, type_name: &m.type_name, kind: m.kind, auto_increment: false }];
+    let cells = export::sql_cells(d, &cols, from.read_in, server_zone).map_err(NotAdmitted::NotWhole)?;
+    let cell = cells.cell(0, v).map_err(NotAdmitted::NotWhole)?;
+    let mysql = matches!(d, Dialect::MySql(_));
+    let refused = |why| NotAdmitted::NotWhole(export::Refused { column: m.name.clone(), why });
+    // A MySQL TIMESTAMP is shown in the session's zone: the session reads it back the same only
+    // in the zone it was read in.
+    if mysql && m.kind == ValueKind::TimestampTz {
+        let read = match from.read_in {
+            ReadIn::Values(s) => Some(&s.time_zone),
+            _ => None,
+        };
+        if read.is_none() || now.map(|s| &s.time_zone) != read {
+            return Err(refused(export::NotWhole::SessionChanged));
+        }
+    }
+    Ok(match m.kind {
+        ValueKind::Integer | ValueKind::Decimal | ValueKind::Float => Value::Number(v.to_string()),
+        // With the offset of the zone it was read in (as a copy as SQL writes it): the same
+        // instant in any session's zone, as the filter is run again from the history.
+        ValueKind::TimestampTz if mysql => Value::Text(cell.into_owned()),
+        ValueKind::Bytes => {
+            let bytes =
+                hex_bytes(v, if mysql { "0x" } else { "\\x" }).ok_or_else(|| refused(export::NotWhole::NotShownWhole))?;
+            if bytes.len() > MAX_BYTES {
+                return Err(NotAdmitted::TooBig);
+            }
+            Value::Bytes(bytes)
+        }
+        _ => Value::Text(v.to_string()),
+    })
+}
+
 impl App {
     /// `F`: the menu of filters by the value of the active table tab's cursor cell or selection,
     /// next to the cell; why not, said, when no filter can be built there.
@@ -453,9 +521,7 @@ impl App {
     }
 
     /// Value `v` of column `col` of result `rs` (as read, not NULL) as the filter compares it,
-    /// or why it is not taken: shown otherwise than the server holds it (as a copy as SQL judges
-    /// it), read in another time zone than the session's now, or binary data over
-    /// [`MAX_BYTES`]. A MySQL `TIMESTAMP` carries the offset of the zone it was read in.
+    /// or why it is not taken ([`admit`], with the rows' session values and the tab's now).
     fn by_value_value(
         &self,
         t: &Tab,
@@ -464,46 +530,23 @@ impl App {
         v: &str,
     ) -> Result<Value, Box<Off>> {
         let m = &rs.columns[col].meta;
-        let d = self.tab_dialect(t.id);
-        let keys = self.tab_keys(t).catalog();
-        let cols = [export::SqlColumn { name: &m.name, type_name: &m.type_name, kind: m.kind, auto_increment: false }];
-        let not_whole = |r: &export::Refused| {
-            let reason = self.not_whole_reason(&r.why);
-            let n = Notice::new(Msg::TableFilterByValueNotWhole { column: r.column.clone(), reason }, Level::Warning);
-            Box::new(Off::new(Label::TableFilterByValueOffNotWhole, n))
-        };
-        let cells =
-            export::sql_cells(d, &cols, &rs.read_in, keys.and_then(|k| k.server_zone())).map_err(|r| not_whole(&r))?;
-        let cell = cells.cell(0, v).map_err(|r| not_whole(&r))?;
-        let mysql = matches!(d, Dialect::MySql(_));
-        // A MySQL TIMESTAMP is shown in the session's zone: the session reads it back the same
-        // only in the zone it was read in.
-        if mysql && m.kind == ValueKind::TimestampTz {
-            let read = match &rs.read_in {
-                ReadIn::Values(s) => Some(&s.time_zone),
-                _ => None,
-            };
-            if read.is_none() || t.exec.values.as_ref().map(|s| &s.time_zone) != read {
-                let why = export::Refused { column: m.name.clone(), why: export::NotWhole::SessionChanged };
-                return Err(not_whole(&why));
-            }
-        }
-        Ok(match m.kind {
-            ValueKind::Integer | ValueKind::Decimal | ValueKind::Float => Value::Number(v.to_string()),
-            // With the offset of the zone it was read in (as a copy as SQL writes it): the same
-            // instant in any session's zone, as the filter is run again from the history.
-            ValueKind::TimestampTz if mysql => Value::Text(cell.into_owned()),
-            ValueKind::Bytes => {
-                let bytes = hex_bytes(v, if mysql { "0x" } else { "\\x" }).ok_or_else(|| {
-                    not_whole(&export::Refused { column: m.name.clone(), why: export::NotWhole::NotShownWhole })
-                })?;
-                if bytes.len() > MAX_BYTES {
-                    let n = Notice::new(Msg::TableFilterByValueTooBig { column: m.name.clone() }, Level::Warning);
-                    return Err(Box::new(Off::new(Label::TableFilterByValueOffTooBig, n)));
+        let from = ValuesFrom { dialect: self.tab_dialect(t.id), meta: m, read_in: &rs.read_in };
+        let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
+        admit(&from, zone, t.exec.values.as_ref(), v).map_err(|why| {
+            let n = match &why {
+                NotAdmitted::NotWhole(r) => {
+                    let reason = self.not_whole_reason(&r.why);
+                    Notice::new(Msg::TableFilterByValueNotWhole { column: r.column.clone(), reason }, Level::Warning)
                 }
-                Value::Bytes(bytes)
-            }
-            _ => Value::Text(v.to_string()),
+                NotAdmitted::TooBig => {
+                    Notice::new(Msg::TableFilterByValueTooBig { column: m.name.clone() }, Level::Warning)
+                }
+            };
+            let short = match why {
+                NotAdmitted::NotWhole(_) => Label::TableFilterByValueOffNotWhole,
+                NotAdmitted::TooBig => Label::TableFilterByValueOffTooBig,
+            };
+            Box::new(Off::new(short, n))
         })
     }
 
@@ -550,3 +593,6 @@ impl App {
         self.push_filter_menu(target, title.to_string(), (items, off, names, hints, filters), at);
     }
 }
+
+#[cfg(test)]
+mod tests;
