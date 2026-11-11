@@ -749,7 +749,7 @@ impl App {
             ExportScope::Selection => CopyWhat::Cell,
             ExportScope::Fetched | ExportScope::All => CopyWhat::Every,
         };
-        let Some(b) = self.block(what) else {
+        let Some(b) = self.export_block(what) else {
             return self.flash(Notice::new(Label::ExportNothing, Level::Warning));
         };
         // Every row of a result fetched to its end is the rows fetched.

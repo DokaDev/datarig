@@ -191,6 +191,7 @@ impl App {
             AppEvent::Clipboard(a) => self.on_clipboard_answer(a),
             AppEvent::UpdateChecked(a) => self.update_answered(a),
             AppEvent::FilterHistory(s) => self.on_filter_history_saved(s),
+            AppEvent::TableView(s) => self.on_table_view_saved(s),
         }
         // What an open quick connect list waits for may have arrived.
         if self.overlays.quick().is_some() {

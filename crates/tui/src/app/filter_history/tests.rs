@@ -4,11 +4,14 @@ use std::path::Path;
 /// A writer whose writes wait for `gate` and are recorded in `written` (their texts).
 fn gated(gate: &Arc<Mutex<()>>, written: &Arc<Mutex<Vec<String>>>) -> Writer {
     let (gate, written) = (gate.clone(), written.clone());
-    Writer::spawn(Box::new(move |_: &Path, text: &str| {
-        let _open = gate.lock().unwrap_or_else(PoisonError::into_inner);
-        written.lock().unwrap().push(text.to_string());
-        Ok(())
-    }))
+    Writer::spawn(
+        "datarig-filter-history",
+        Box::new(move |_: &Path, text: &str| {
+            let _open = gate.lock().unwrap_or_else(PoisonError::into_inner);
+            written.lock().unwrap().push(text.to_string());
+            Ok(())
+        }),
+    )
     .unwrap()
 }
 
@@ -26,6 +29,8 @@ fn a_stuck_write_keeps_one_text_waiting_the_latest() {
         seq,
         out: Out::Local(tx.clone()),
         log: None,
+        event: AppEvent::FilterHistory,
+        context: "filter_history.save_failed",
     };
     assert!(writer.write(write(1)).is_none());
     // The writer took it and waits at the gate.

@@ -211,6 +211,17 @@ impl App {
         }
         let Some(q) = self.filter_dialog_query() else { return };
         let Some(d) = self.filter_dialog_mut() else { return };
+        // Only the columns hidden changed: they are, and nothing runs (a view only).
+        let hidden = (!d.draft.same_hidden(&d.applied)).then(|| d.draft.hidden.clone());
+        if let Some(h) = &hidden
+            && d.draft.same_as(&d.applied)
+        {
+            let h = h.clone();
+            self.overlays.close(OverlayKind::FilterDialog);
+            self.set_hidden_columns(tab, &h, true);
+            return;
+        }
+        d.applying_hidden = hidden;
         d.applying = Some(q.clone());
         d.message = None;
         d.mark = None;
@@ -392,7 +403,12 @@ impl App {
         let Some(d) = self.filter_dialog() else { return };
         let waiting = d.applying.as_ref().zip(requested.as_ref()).is_some_and(|(a, r)| table_query::same_query(a, r));
         if d.tab == id && waiting {
+            let hidden = d.applying_hidden.clone();
             self.overlays.close(OverlayKind::FilterDialog);
+            // The columns hidden with it: the run sent kept what was hidden before it.
+            if let Some(h) = hidden {
+                self.set_hidden_columns(id, &h, false);
+            }
         }
     }
 

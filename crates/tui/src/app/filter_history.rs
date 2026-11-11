@@ -52,20 +52,20 @@ pub(crate) const PREVIEW_LINES: u16 = 6;
 /// The writer wrote the text of change `seq` (and every one before it), or failed to.
 #[derive(Debug)]
 pub struct Saved {
-    seq: u64,
-    path: PathBuf,
-    result: std::io::Result<()>,
+    pub(super) seq: u64,
+    pub(super) path: PathBuf,
+    pub(super) result: std::io::Result<()>,
 }
 
 /// Where the writer's answers go.
 #[derive(Clone)]
-enum Out {
+pub(super) enum Out {
     App(tokio::sync::mpsc::UnboundedSender<AppEvent>),
     Local(mpsc::Sender<AppEvent>),
 }
 
 impl Out {
-    fn send(&self, ev: AppEvent) {
+    pub(super) fn send(&self, ev: AppEvent) {
         match self {
             Out::App(tx) => {
                 let _ = tx.send(ev);
@@ -77,25 +77,29 @@ impl Out {
     }
 }
 
-/// A write for the writer: the history's text as of change `seq`.
-struct Write {
-    path: PathBuf,
-    text: String,
-    seq: u64,
-    out: Out,
+/// A write for the writer: the file's text as of change `seq`.
+pub(super) struct Write {
+    pub(super) path: PathBuf,
+    pub(super) text: String,
+    pub(super) seq: u64,
+    pub(super) out: Out,
     /// The error log a failure is recorded in (what failed and the path).
-    log: Option<PathBuf>,
+    pub(super) log: Option<PathBuf>,
+    /// The answer of the write, as the app gets it.
+    pub(super) event: fn(Saved) -> AppEvent,
+    /// What a failure is recorded as in the error log (a message key).
+    pub(super) context: &'static str,
 }
 
 /// A line for the error log: where, its context (a message key) and what failed.
-struct LogLine {
-    log: PathBuf,
-    context: &'static str,
-    fault: Fault,
+pub(super) struct LogLine {
+    pub(super) log: PathBuf,
+    pub(super) context: &'static str,
+    pub(super) fault: Fault,
 }
 
 /// How the writer writes a file (the tests stand in for it).
-type WriteFile = Box<dyn Fn(&std::path::Path, &str) -> std::io::Result<()> + Send>;
+pub(super) type WriteFile = Box<dyn Fn(&std::path::Path, &str) -> std::io::Result<()> + Send>;
 
 /// What the error log's thread is handed: a line, or a sender answered once every line
 /// handed before it is written.
@@ -169,34 +173,32 @@ impl Shared {
 /// their changes, off the UI thread; its lines of the error log go to a [`Logger`] of their
 /// own. However long a write takes, what waits behind it stays one text: an older text is
 /// never written after a newer one.
-struct Writer {
+pub(super) struct Writer {
     shared: Arc<Shared>,
     logger: Option<Logger>,
 }
 
 impl Writer {
-    /// Start the thread (and the error log's).
-    fn spawn(write_file: WriteFile) -> std::io::Result<Self> {
+    /// Start the thread `name` (and the error log's).
+    pub(super) fn spawn(name: &str, write_file: WriteFile) -> std::io::Result<Self> {
         let shared = Arc::<Shared>::default();
         let theirs = shared.clone();
         let logger = Logger::spawn();
         let log = logger.clone();
-        std::thread::Builder::new()
-            .name("datarig-filter-history".into())
-            .spawn(move || run_writer(&theirs, &write_file, log.as_ref()))?;
+        std::thread::Builder::new().name(name.into()).spawn(move || run_writer(&theirs, &write_file, log.as_ref()))?;
         Ok(Writer { shared, logger })
     }
 
     /// Queue `w`, replacing the write still waiting, if any: that one is never written (`w`
     /// is newer) and is handed back.
-    fn write(&self, w: Write) -> Option<Write> {
+    pub(super) fn write(&self, w: Write) -> Option<Write> {
         let old = self.shared.queue().write.replace(w);
         self.shared.ready.notify_one();
         old
     }
 
     /// Record `line` in the error log, never waiting for it.
-    fn log(&self, line: LogLine) {
+    pub(super) fn log(&self, line: LogLine) {
         if let Some(l) = &self.logger {
             l.log(line);
         }
@@ -209,7 +211,7 @@ impl Writer {
     }
 
     /// `done` is answered once every write queued before it is done.
-    fn flush(&self, done: mpsc::Sender<()>) {
+    pub(super) fn flush(&self, done: mpsc::Sender<()>) {
         self.shared.queue().flushes.push(done);
         self.shared.ready.notify_one();
     }
@@ -243,12 +245,12 @@ fn run_writer(shared: &Shared, write_file: &WriteFile, logger: Option<&Logger>) 
             }
             (q.write.take(), std::mem::take(&mut q.flushes))
         };
-        if let Some(Write { path, text, seq, out, log }) = write {
+        if let Some(Write { path, text, seq, out, log, event, context }) = write {
             let result = write_file(&path, &text);
             let failed = result.as_ref().err().map(|e| Fault::io_at(e, &path));
-            out.send(AppEvent::FilterHistory(Saved { seq, path, result }));
+            out.send(event(Saved { seq, path, result }));
             if let (Some(fault), Some(log), Some(logger)) = (failed, log, logger) {
-                logger.log(LogLine { log, context: "filter_history.save_failed", fault });
+                logger.log(LogLine { log, context, fault });
             }
         }
         for f in flushes {
@@ -374,7 +376,7 @@ impl App {
     /// The writer thread, started the first time; `None` when it cannot start.
     fn filter_history_writer(&mut self) -> Option<&Writer> {
         if self.filter_history.writer.is_none() {
-            self.filter_history.writer = Writer::spawn(Box::new(fh::write)).ok();
+            self.filter_history.writer = Writer::spawn("datarig-filter-history", Box::new(fh::write)).ok();
         }
         self.filter_history.writer.as_ref()
     }
@@ -434,7 +436,8 @@ impl App {
         };
         // A write still waiting is replaced by this newer one: it is never written nor answered,
         // so what it was to say waits for the newer one.
-        if let Some(old) = writer.write(Write { path, text, seq, out, log }) {
+        let (event, context) = (AppEvent::FilterHistory as fn(Saved) -> AppEvent, "filter_history.save_failed");
+        if let Some(old) = writer.write(Write { path, text, seq, out, log, event, context }) {
             if let Out::Local(_) = old.out {
                 self.filter_history.pending.fetch_sub(1, Ordering::SeqCst);
             }
@@ -717,7 +720,7 @@ pub(crate) fn preview(e: &Entry, w: usize) -> Vec<Line<'static>> {
 }
 
 /// `t` in Unix seconds (before 1970: 0).
-fn unix_secs(t: std::time::SystemTime) -> i64 {
+pub(super) fn unix_secs(t: std::time::SystemTime) -> i64 {
     t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 

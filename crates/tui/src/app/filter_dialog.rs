@@ -28,12 +28,12 @@ pub(crate) mod values;
 pub use apply::DialogAction;
 pub(crate) use keys::op_off_label;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use super::table_query::OrderKeysState;
 use super::*;
 use crate::widgets::text_input::TextInput;
-use datarig_core::query::{ColName, Query, Target, order_text};
+use datarig_core::query::{Query, Target, order_text};
 use draft::{ColumnInfo, Draft, Undo, Where};
 use std::ops::Range;
 
@@ -314,9 +314,6 @@ pub struct FilterDialog {
     /// The table's columns, in the table's order.
     pub(crate) columns: Vec<ColumnInfo>,
     pub(crate) source: ColumnSource,
-    /// Columns hidden from the grid (not offered yet: always empty).
-    #[allow(dead_code)]
-    pub(crate) hidden: BTreeSet<ColName>,
     /// How many rows the tab holds of its query; `None` when it holds none.
     pub(crate) loaded: Option<usize>,
     pub(crate) draft: Draft,
@@ -346,6 +343,8 @@ pub struct FilterDialog {
     pub(crate) sql: Option<SqlSection>,
     /// The query applied, waiting for its statement to be sent (questions asked meanwhile).
     pub(crate) applying: Option<Query>,
+    /// The columns hidden from the grid once that query is sent, when they change with it.
+    pub(crate) applying_hidden: Option<Vec<String>>,
     pub(crate) hits: DialogHits,
     /// What a press of the pointer armed (it acts on the release over it).
     pub(crate) press: super::overlay::Press<DialogHit>,
@@ -389,9 +388,9 @@ impl FilterDialog {
         self.column().map(|c| self.draft.where_.rows_of(&c.name)).unwrap_or_default()
     }
 
-    /// The draft sends something else than what is applied.
+    /// The draft sends something else than what is applied, or hides other columns.
     pub(crate) fn edited(&self) -> bool {
-        !self.draft.same_as(&self.applied)
+        !self.draft.same_as(&self.applied) || !self.draft.same_hidden(&self.applied)
     }
 
     /// A text field has the keys: what is typed goes into it.
@@ -668,10 +667,14 @@ impl App {
         self.close_search_prompt();
         let (Some(target), Some(name)) = (self.table_target(id), self.table_name(id)) else { return };
         let Some(tq) = self.table_query(id) else { return };
-        let applied = Draft::from_query(tq.applied(), &target);
-        let before_last = tq.before_last.as_ref().map(|q| Draft::from_query(q, &target));
+        let hidden = tq.hidden.clone();
+        let applied = Draft::from_query(tq.applied(), &target).with_hidden(&hidden);
+        let before_last = tq
+            .before_last
+            .as_ref()
+            .map(|q| Draft::from_query(q, &target).with_hidden(tq.before_hidden.as_deref().unwrap_or(&hidden)));
         let failure = tq.failure().map(|f| (f.message.clone(), f.at.clone()));
-        let draft = Draft::from_query(q, &target);
+        let draft = Draft::from_query(q, &target).with_hidden(&hidden);
         let (columns, source) = self.filter_dialog_columns(id, &target);
         let loaded = self.filter_dialog_loaded(id);
         // Where the server said the failed filter is wrong: that chip underlined.
@@ -689,7 +692,6 @@ impl App {
             dialect: target.dialect,
             columns,
             source,
-            hidden: BTreeSet::new(),
             loaded,
             limit: TextInput::new(&draft.limit),
             draft,
@@ -706,6 +708,7 @@ impl App {
             mark,
             sql: None,
             applying: None,
+            applying_hidden: None,
             hits: DialogHits::default(),
             press: Default::default(),
             hover: None,

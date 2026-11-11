@@ -1373,6 +1373,10 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     };
     // A table tab's headers: how its query sorts and filters the rows shown, and the sort zones.
     let heads = app.table_head_marks(app.tab().id);
+    // Every column hidden: what shows them again, said where the grid would be.
+    let open =
+        app.key_for(crate::app::action::Action::Table(crate::app::table_filter::TableAction::EditFilter), Ctx::Grid);
+    let all_hidden = app.i18n.msg(&Msg::TableAllHidden { open }).to_string();
     let look = crate::widgets::grid::Look {
         marks: &marks,
         icons: app.icons_on(),
@@ -1380,6 +1384,7 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         defaults: &defaults,
         heads: &heads,
         sort_zone: app.tab().is_table(),
+        all_hidden: &all_hidden,
     };
     // The portal belongs to the last statement of the rows' run: only its rows page.
     let answer = app.tab().exec.shown.is_some() && app.tab().exec.shown == app.tab().answer_index();

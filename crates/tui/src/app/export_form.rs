@@ -270,7 +270,7 @@ impl App {
         if self.exporting(id) {
             return self.flash(Notice::new(Label::ExportBusyTab, Level::Warning));
         }
-        let Some(every) = self.block(CopyWhat::Every) else {
+        let Some(every) = self.export_block(CopyWhat::Every) else {
             return self.flash(Notice::new(Label::ExportNothing, Level::Warning));
         };
         let t = self.tab();
@@ -363,7 +363,7 @@ impl App {
     /// The active tab's selected range (rows, columns), while there is one.
     fn export_selection(&self) -> Option<(std::ops::Range<usize>, Vec<usize>)> {
         self.tab().grid.anchor?;
-        self.block(CopyWhat::Cell).map(|b| (b.rows, b.cols))
+        self.export_block(CopyWhat::Cell).map(|b| (b.rows, b.cols))
     }
 
     /// The dialog still shows what it was opened on: its tab is the active one, with the same
@@ -386,13 +386,24 @@ impl App {
         }
     }
 
-    /// The dialog's scope notes: how its rows will be read.
+    /// The dialog's scope notes: how its rows will be read, and that the columns hidden from
+    /// a table's grid are exported too (an export is of the rows, not of the grid's view).
     pub(crate) fn export_scope_notes(&self, f: &ExportForm) -> Vec<Notice> {
         if self.tabs.is_empty() || self.tab().id != f.tab {
             return Vec::new();
         }
+        let mut out = self.export_rows_notes(f);
+        let hidden = self.tab().grid.hidden.iter().filter(|h| **h).count();
+        if hidden > 0 {
+            out.push(Notice::new(Msg::ExportNoteHidden { count: hidden as u64 }, Level::Info));
+        }
+        out
+    }
+
+    /// How the dialog's rows will be read.
+    fn export_rows_notes(&self, f: &ExportForm) -> Vec<Notice> {
         let what = if f.scope == ExportScope::Selection { CopyWhat::Cell } else { CopyWhat::Every };
-        let Some(b) = self.block(what) else { return vec![Notice::new(Label::ExportNothing, Level::Warning)] };
+        let Some(b) = self.export_block(what) else { return vec![Notice::new(Label::ExportNothing, Level::Warning)] };
         let count = b.rows.len() as u64;
         let m = match f.scope {
             ExportScope::Selection => Msg::ExportNoteSelection { count },
@@ -463,7 +474,7 @@ impl App {
             return None;
         }
         let what = if scope == ExportScope::Selection { CopyWhat::Cell } else { CopyWhat::Every };
-        let b = self.block(what)?;
+        let b = self.export_block(what)?;
         let t = self.tab();
         let Results::Rows(rs) = &t.results else { return None };
         let db = scope == ExportScope::All && b.partial;

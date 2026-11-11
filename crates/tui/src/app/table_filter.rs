@@ -42,6 +42,8 @@ pub enum TableAction {
     Exclude,
     /// No condition and no order, the limit kept, and a run (`X`).
     ClearAll,
+    /// The cursor's column hidden from the grid (`C`).
+    Hide,
     /// The filters and orders this table ran before (`Ctrl+R` in the dialog, `Space r H`).
     History,
 }
@@ -71,6 +73,7 @@ impl App {
             TableAction::Only => self.grid_filter(super::filter_value::Pick::Only),
             TableAction::Exclude => self.grid_filter(super::filter_value::Pick::Exclude),
             TableAction::ClearAll => self.table_clear_all(id),
+            TableAction::Hide => self.table_hide_column(),
             TableAction::History => self.open_filter_history(self.filter_dialog().map_or(id, |d| d.tab)),
         }
     }

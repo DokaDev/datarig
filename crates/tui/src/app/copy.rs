@@ -378,9 +378,10 @@ impl App {
         if page.is_empty() || ncols == 0 {
             return;
         }
+        let (Some(first), Some(last)) = (g.first_shown(ncols), g.last_shown(ncols)) else { return };
         g.shape = Shape::Cells;
-        g.anchor = Some((page.end - 1, ncols - 1));
-        (g.row, g.col) = (page.start, 0);
+        g.anchor = Some((page.end - 1, last));
+        (g.row, g.col) = (page.start, first);
         g.detached = false;
         self.say_selecting();
     }
@@ -409,7 +410,21 @@ impl App {
         g.row >= len || anchor
     }
 
+    /// What a copy of `what` takes: the shown columns only (a table's hidden columns are not
+    /// copied; see [`App::with_key_columns`] for the SQL formats).
     pub(super) fn block(&self, what: CopyWhat) -> Option<Block> {
+        self.block_with(what, true)
+    }
+
+    /// What an export of `what` takes: every column of its rows, hidden ones too (an export is
+    /// of the result, not of the grid's view).
+    pub(super) fn export_block(&self, what: CopyWhat) -> Option<Block> {
+        self.block_with(what, false)
+    }
+
+    /// The rows and columns of `what`; `shown_only`: the columns the grid shows, else every one
+    /// of the span.
+    fn block_with(&self, what: CopyWhat, shown_only: bool) -> Option<Block> {
         let t = self.tab();
         let Results::Rows(rs) = &t.results else { return None };
         if rs.rows.is_empty() || rs.columns.is_empty() {
@@ -427,14 +442,18 @@ impl App {
             return None;
         }
         let cursor = (g.row.min(rs.rows.len() - 1), g.col.min(rs.columns.len() - 1));
-        let all_cols: Vec<usize> = (0..rs.columns.len()).collect();
+        let keep = |c: &usize| !shown_only || g.shown(*c);
+        let all_cols: Vec<usize> = (0..rs.columns.len()).filter(keep).collect();
+        if all_cols.is_empty() {
+            return None;
+        }
         let more = rs.more || t.exec.paging.closed() || t.exec.paging == Paging::Stopped;
         let sel = g.anchor.map(|a| g.shape.span(a, cursor, rs.rows.len(), rs.columns.len()));
         // Whole columns are every fetched row: the notice says when the server has more.
         let whole_cols = g.shape == Shape::Cols && more;
         Some(match (what, sel) {
             (CopyWhat::Cell | CopyWhat::All, Some((rows, cols))) => {
-                Block { rows, cols: cols.collect(), cell: false, partial: whole_cols }
+                Block { rows, cols: cols.filter(keep).collect(), cell: false, partial: whole_cols }
             }
             (CopyWhat::Row, Some((rows, _))) => Block { rows, cols: all_cols, cell: false, partial: false },
             (CopyWhat::Cell, None) => {
@@ -447,6 +466,28 @@ impl App {
                 Block { rows: 0..rs.rows.len(), cols: all_cols, cell: false, partial: more }
             }
         })
+    }
+
+    /// The key columns of a table tab's rows (its primary key, its unique keys whose columns
+    /// are not NULL) hidden from the grid, added to the columns of `b` in their places: an SQL
+    /// UPDATE or INSERT copy names its rows by them.
+    pub(super) fn with_key_columns(&self, b: &mut Block) {
+        let t = self.tab();
+        let Results::Rows(rs) = &t.results else { return };
+        if !t.grid.hidden.contains(&true) {
+            return;
+        }
+        let Some(target) = self.table_target(t.id) else { return };
+        let keys = target.primary_key.iter().chain(target.unique_keys.iter().flatten());
+        for name in keys {
+            if let Some(c) = rs.columns.iter().position(|c| c.meta.name == *name)
+                && !t.grid.shown(c)
+                && !b.cols.contains(&c)
+            {
+                b.cols.push(c);
+            }
+        }
+        b.cols.sort_unstable();
     }
 
     /// Copy `what` of the active tab's result as `format`. A copy of more than
@@ -494,10 +535,13 @@ impl App {
         if req.keys {
             self.grid_copy = None;
         }
-        let Some(b) = self.block(req.what) else {
+        let Some(mut b) = self.block(req.what) else {
             let why = if self.on_new_rows() { Label::CopyNewRows } else { Label::CopyNothing };
             return self.flash(Notice::new(why, Level::Warning));
         };
+        if matches!(req.format, CopyFormat::SqlInsert | CopyFormat::SqlUpdate) {
+            self.with_key_columns(&mut b);
+        }
         let count = b.rows.len();
         if count > LARGE_COPY && !confirmed {
             self.pending_copy = Some((Intent::of(self.tab()), req));

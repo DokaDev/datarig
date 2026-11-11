@@ -1914,3 +1914,93 @@ fn the_header_of_a_copy_of_simple_application_id_and_content_is_skipped() {
     assert_eq!(drafts(&h), vec![vec![t("3"), t("c@x")]]);
     assert!(h.app.shown_invalid().unwrap().cells.is_empty(), "no invalid row of the header");
 }
+
+/// The grid hides `email` (the middle column): what a table tab's hidden columns do to it.
+fn email_hidden(h: &mut Harness) {
+    h.app.tab_mut().grid.set_hidden(vec![false, true, false], 3);
+}
+
+/// A paste lands on the columns the grid shows: a hidden column between them is stepped over,
+/// never written; one value fills only the shown cells of a selection; a block wider than the
+/// shown columns from the cursor is refused; a header row is the shown columns' names.
+#[test]
+fn a_paste_never_writes_a_hidden_column() {
+    let mut h = ready(Lang::En);
+    email_hidden(&mut h);
+    h.app.tab_mut().grid.col = 0;
+    paste(&mut h, "7\tq\n");
+    assert_eq!(pending(&h, 0, 0), Some(t("7")));
+    assert_eq!(pending(&h, 0, 2), Some(t("q")));
+    assert_eq!(pending(&h, 0, 1), None, "the hidden column is not written");
+    h.app.transient = None;
+    // One value over a selection across the hidden column: the shown cells only.
+    let g = &mut h.app.tab_mut().grid;
+    (g.row, g.col, g.anchor) = (2, 2, Some((1, 0)));
+    paste(&mut h, "z\n");
+    for r in [1, 2] {
+        assert_eq!(pending(&h, r, 2), Some(t("z")), "row {r}");
+        assert_eq!(pending(&h, r, 1), None, "row {r}: the hidden column");
+    }
+    h.app.transient = None;
+    // Two values from the last shown column: no room.
+    let before = revision(&h);
+    let g = &mut h.app.tab_mut().grid;
+    (g.row, g.col, g.anchor) = (0, 2, None);
+    paste(&mut h, "a\tb\n");
+    assert_eq!(revision(&h), before, "nothing pasted");
+    let text = said(&mut h);
+    assert!(text.contains('2') && text.contains('1'), "too wide for the 1 column shown: {text}");
+    // A first line naming the shown columns is a header.
+    let g = &mut h.app.tab_mut().grid;
+    (g.row, g.col) = (0, 0);
+    paste(&mut h, "id\tnickname\n8\tyy\n");
+    assert_eq!(pending(&h, 0, 0), Some(t("8")), "the header skipped");
+    assert_eq!(pending(&h, 0, 2), Some(t("yy")));
+    assert_eq!(pending(&h, 0, 1), None);
+}
+
+/// A paste of many rows waiting for its yes holds only while the grid shows the columns it was
+/// laid over: hiding one makes it out of date, and nothing is pasted.
+#[test]
+fn a_paste_asked_about_is_dropped_when_the_columns_shown_change() {
+    let big: String = (0..1_001).map(|i| format!("n{i}\n")).collect();
+    let mut h = ready(Lang::En);
+    h.keys("l");
+    let before = revision(&h);
+    paste(&mut h, &big);
+    assert_eq!(h.app.key_context(), Ctx::StatusAsk, "a paste of many rows asks");
+    h.app.tab_mut().grid.set_hidden(vec![true, false, false], 3);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.advance(ANSWER_GUARD);
+    h.keys("y");
+    assert_eq!(revision(&h), before, "nothing pasted");
+}
+
+/// The key column hidden from the grid with an edit pending: the edit is of its own column and
+/// row as read, and the Apply names the row by its key, hidden or not.
+#[test]
+fn a_hidden_key_column_still_names_the_rows_an_apply_changes() {
+    let mut h = ready(Lang::En);
+    h.app.tab_mut().grid.set_hidden(vec![true, false, false], 3);
+    let g = &mut h.app.tab_mut().grid;
+    (g.row, g.col) = (0, 1);
+    type_cell(&mut h, "z@x");
+    assert_eq!(pending(&h, 0, 1), Some(t("z@x")), "the edit is of the email column");
+    h.app.transient = None;
+    h.sent();
+    h.keys(" da");
+    if h.app.status_ask_line().is_some() {
+        h.advance(ANSWER_GUARD);
+        h.keys("y");
+    }
+    let steps = h
+        .sent()
+        .into_iter()
+        .find_map(|c| match c {
+            DbCommand::ApplyEdits { steps, .. } => Some(steps),
+            _ => None,
+        })
+        .expect("the Apply was sent");
+    let sql = &steps.iter().find(|s| s.sql.starts_with("UPDATE")).expect("an UPDATE").sql;
+    assert!(sql.contains("'z@x'") && sql.contains(r#"WHERE "id""#) && sql.contains("'1'"), "{sql}");
+}

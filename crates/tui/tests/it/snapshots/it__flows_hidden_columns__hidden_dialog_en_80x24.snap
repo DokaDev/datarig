@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_hidden_columns.rs
+expression: backend
+---
+"╭─ Filter and sort · shop.users edited ──────────────────────── 3 rows loaded ─╮"
+"│ Columns 4 · 1 hidden     │ memo  text  hidden from the grid, still read      │"
+"│ from the loaded result   │                                                   │"
+"│     id                   │ Filter                                            │"
+"│     name                 │   + add condition                                 │"
+"│     score                │                                                   │"
+"│▸    memo          hidden │ Values  ~ count in the 3 loaded rows      # exact │"
+"│                          │   [ ] NULL                ~1  ▄▄▄▄▄▄▄▄▄▄▄▄        │"
+"│                          │   [ ] x                   ~1  ▄▄▄▄▄▄▄▄▄▄▄▄        │"
+"│                          │   [ ] y                   ~1  ▄▄▄▄▄▄▄▄▄▄▄▄        │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │   Sort   (•) none   ( ) ↑ asc   ( ) ↓ desc        │"
+"├──────────────────────────┴───────────────────────────────────────────────────┤"
+"│ Where                                                      undo   clear all  │"
+"│ Order                                              Limit              SQL ▸  │"
+"│ ↑↓ column · → filter · Space hide/show · s sort    Enter apply   Esc cancel  │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"

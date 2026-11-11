@@ -3,10 +3,10 @@
 //! many more, the first key of the order with its direction and how many more). Narrower, the
 //! condition's text is cut (down to [`CUT_MIN`] columns), then each part is only counted
 //! (`▼ 2 · ↓ 2`), then counted tighter (`▼2 ↓2`); where even that does not fit, what fits of it
-//! is drawn.
-//! A run of the query on its way puts the spinner first; a run that brought no rows says so in
-//! the warning colour (`▼ failed`). With no condition and no order, nothing. A click on it
-//! opens the filter dialog.
+//! is drawn. Columns hidden from the grid are said after them (`· 2 hidden`, tightest `◌2`). A
+//! run of the query on its way puts the spinner first; a run that brought no rows says so in the
+//! warning colour (`▼ failed`). With no condition, no order and nothing hidden, nothing. A click
+//! on it opens the filter dialog.
 
 use crate::app::App;
 use crate::app::filter_dialog::draft::Where;
@@ -82,6 +82,13 @@ impl Part {
     pub(crate) fn failed(glyph: &str, word: &str) -> Self {
         let pieces = vec![(format!("{glyph} {word}"), Role::Warning)];
         Self { whole: pieces.clone(), cut: None, counted: pieces.clone(), compact: pieces }
+    }
+
+    /// The columns hidden from the grid: how many, and the word for them.
+    pub(crate) fn hidden(count: usize, word: &str) -> Self {
+        let whole = vec![(count.to_string(), Role::Count), (format!(" {word}"), Role::Text)];
+        let compact = vec![("\u{25cc}".to_string(), Role::Glyph), (count.to_string(), Role::Count)];
+        Self { whole: whole.clone(), cut: None, counted: whole, compact }
     }
 
     fn counted_as(whole: Vec<Piece>, cut: Option<usize>, glyph: &str, count: usize) -> Self {
@@ -176,13 +183,18 @@ fn status_of(app: &App) -> Option<(Vec<Part>, Option<&'static str>)> {
     }
     let tq = t.doc.table_query.as_ref()?;
     let glyph = crate::icons::filter_status(app.icons_on());
+    // The columns hidden from the grid, as many as it leaves out.
+    let hidden = t.grid.hidden.iter().filter(|h| **h).count();
+    let hidden = (hidden > 0).then(|| Part::hidden(hidden, &app.i18n.label(Label::TableStatusHidden)));
     if let Some(f) = tq.failure() {
         let word = match f.how {
             Unapplied::Refused => Label::TableStatusFailed,
             Unapplied::Cancelled => Label::TableStatusCancelled,
             Unapplied::Ended => Label::TableStatusUnapplied,
         };
-        return Some((vec![Part::failed(glyph, &app.i18n.label(word))], None));
+        let mut parts = vec![Part::failed(glyph, &app.i18n.label(word))];
+        parts.extend(hidden);
+        return Some((parts, None));
     }
     let q = tq.applied();
     let mut parts = Vec::new();
@@ -201,6 +213,7 @@ fn status_of(app: &App) -> Option<(Vec<Part>, Option<&'static str>)> {
     if let Some(k) = keys.first() {
         parts.push(Part::order(&crate::text::escape_controls(&k.col), k.dir, keys.len()));
     }
+    parts.extend(hidden);
     let running = t
         .exec
         .running

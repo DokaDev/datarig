@@ -1104,6 +1104,8 @@ pub(crate) struct Draft {
     pub(crate) order: Vec<OrderKey>,
     /// The `LIMIT` field's text (blank: no cap).
     pub(crate) limit: String,
+    /// The columns hidden from the grid, by name (a view only: never in the query).
+    pub(crate) hidden: Vec<String>,
 }
 
 impl Draft {
@@ -1114,6 +1116,7 @@ impl Draft {
             where_: Where::from_text(text, target),
             order: q.order.iter().filter(|k| k.origin == KeyOrigin::User).cloned().collect(),
             limit: q.limit.map(|n| n.to_string()).unwrap_or_default(),
+            hidden: Vec::new(),
         }
     }
 
@@ -1124,6 +1127,27 @@ impl Draft {
         let limit = table_query::parse_limit(&self.limit)?;
         let filter = self.where_.sent().map(|text| Filter { recognised: query::recognise(&text, target), text });
         Ok(Query { source: base.source.clone(), filter, order: self.order.clone(), limit, offset: base.offset })
+    }
+
+    /// The draft with the columns `hidden` hidden from the grid.
+    pub(crate) fn with_hidden(self, hidden: &[String]) -> Self {
+        Self { hidden: hidden.to_vec(), ..self }
+    }
+
+    /// Both hide the same columns (in whatever order they were hidden).
+    pub(crate) fn same_hidden(&self, other: &Draft) -> bool {
+        let set = |h: &[String]| h.iter().cloned().collect::<std::collections::BTreeSet<String>>();
+        set(&self.hidden) == set(&other.hidden)
+    }
+
+    /// Column `name` is hidden from the grid: it is shown again; else it is hidden.
+    pub(crate) fn toggle_hidden(&mut self, name: &str) {
+        match self.hidden.iter().position(|h| h == name) {
+            Some(i) => {
+                self.hidden.remove(i);
+            }
+            None => self.hidden.push(name.to_string()),
+        }
     }
 
     /// Both drafts send the same query: the same `WHERE` text (blank as none), keys and cap.

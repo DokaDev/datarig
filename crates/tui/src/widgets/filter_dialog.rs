@@ -216,7 +216,17 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
     let lw = usize::from(left_w.saturating_sub(2));
     let shown = d.shown_columns();
     let heading = i18n.msg(&Msg::TableDialogColumns { total: d.columns.len().to_string() }).to_string();
-    put(buf, x0, body.y, &heading, lw, if list_focus { bold.fg(th.accent) } else { bold });
+    let hx = x0 + put(buf, x0, body.y, &heading, lw, if list_focus { bold.fg(th.accent) } else { bold });
+    // How many of them are hidden from the grid.
+    let hidden_n = d.columns.iter().filter(|c| d.draft.hidden.contains(&c.name)).count();
+    let heading = match hidden_n {
+        0 => heading,
+        n => {
+            let more = i18n.msg(&Msg::TableDialogHiddenCount { count: n as u64 }).to_string();
+            put(buf, hx, body.y, &format!(" \u{00b7} {more}"), lw.saturating_sub(usize::from(hx - x0)), muted);
+            format!("{heading} \u{00b7} {more}")
+        }
+    };
     let side = match &d.search {
         Some(_) => i18n
             .msg(&Msg::TableDialogSearchCount { shown: shown.len().to_string(), total: d.columns.len().to_string() })
@@ -283,8 +293,27 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
         if let Some((k, color)) = key {
             put(buf, x0 + 1, y, k, 2, Style::new().fg(color));
         }
-        let name_style = if selected { bold } else { Style::new().fg(th.fg) };
+        let hidden = d.draft.hidden.contains(&c.name);
+        let name_style = match (hidden, selected) {
+            // Hidden from the grid: muted and struck through, `hidden` where the marks go.
+            (true, _) => Style::new().fg(th.fg_muted).add_modifier(Modifier::CROSSED_OUT),
+            (false, true) => bold,
+            (false, false) => Style::new().fg(th.fg),
+        };
+        let word = i18n.label(Label::TableDialogHidden).to_string();
+        let ww = width(&word) as u16;
+        // The word ends a column before the pane's edge; a name too long for both is cut.
+        let hx = split.saturating_sub(ww + 1);
+        let name_w = if hidden { name_w.min(usize::from(hx.saturating_sub(x0 + 5))) } else { name_w };
         put(buf, x0 + 4, y, &crate::text::escape_controls(&c.name), name_w, name_style);
+        if hidden {
+            if types {
+                let tx = x0 + 4 + name_w as u16 + 1;
+                put(buf, tx, y, &c.type_name, usize::from(hx.saturating_sub(tx + 1)), muted);
+            }
+            put(buf, hx, y, &word, usize::from(ww), muted.add_modifier(Modifier::ITALIC));
+            continue;
+        }
         if types {
             let tx = x0 + 4 + name_w as u16 + 1;
             // A column `SELECT *` leaves out (MySQL INVISIBLE): filtered and sorted, never loaded.
@@ -328,7 +357,16 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
                 usize::from(pw),
                 if pane_focus { bold.fg(th.accent) } else { bold },
             );
-        put(buf, hx + 2, pane_rows_y, &c.type_name, usize::from(pw.saturating_sub(hx + 2 - px)), muted);
+        let tx =
+            hx + 2 + put(buf, hx + 2, pane_rows_y, &c.type_name, usize::from(pw.saturating_sub(hx + 2 - px)), muted);
+        // Hidden from the grid: still read, which matters for a key the rows are named by.
+        if d.draft.hidden.contains(&c.name) {
+            let (l, style) = match c.primary_key {
+                true => (Label::TableDialogHiddenKey, Style::new().fg(th.warning)),
+                false => (Label::TableDialogHiddenNote, muted),
+            };
+            put(buf, tx + 2, pane_rows_y, &i18n.label(l), usize::from(right.saturating_sub(tx + 2)), style);
+        }
         put(buf, px, pane_rows_y + 2, &i18n.label(Label::TableDialogFilter), usize::from(pw), bold);
         let mut y = pane_rows_y + 3;
         let terms = d.draft.where_.terms();
@@ -1307,6 +1345,7 @@ fn draw_hints(app: &App, d: &FilterDialog, view: Option<&ValuesView>, x: u16, y:
         DialogFocus::Columns => vec![
             l("\u{2191}\u{2193}", Label::TableDialogHintColumn),
             l("\u{2192}", Label::TableDialogHintFilter),
+            l("Space", Label::TableDialogHintHide),
             l("s", Label::TableDialogHintSort),
             l("/", Label::TableDialogHintSearch),
             l("Tab", Label::TableDialogHintNextArea),

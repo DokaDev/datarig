@@ -115,6 +115,7 @@
 "export.format.parquet" = "Parquet"
 "export.note.every" = { one = "The result's {count} row is fetched: it is written from the result, and nothing is sent to the server.", other = "All {count} rows of the result are fetched: they are written from the result, and nothing is sent to the server." }
 "export.note.fetched" = { one = "The {count} row fetched so far (the server has more); nothing is sent to the server.", other = "The {count} rows fetched so far (the server has more); nothing is sent to the server." }
+"export.note.hidden" = { one = "{count} column hidden from the grid is included", other = "{count} columns hidden from the grid are included" }
 "export.note.selection" = { one = "{count} row of the selection; nothing is sent to the server.", other = "{count} rows of the selection; nothing is sent to the server." }
 "export.note.keyset" = "Reads {table} in chunks by its key, each a short read of its own: rows changed meanwhile may appear in a later state."
 "export.note.limit" = { one = "Stops at the tab's limit: {count} row at most.", other = "Stops at the tab's limit: {count} rows at most." }

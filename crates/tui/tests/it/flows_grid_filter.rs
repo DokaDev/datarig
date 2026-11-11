@@ -507,6 +507,8 @@ fn the_column_menu_entries_run_what_they_show() {
             "Only 'it's' | =",
             "Exclude 'it's' | !",
             "Clear filter on this column | no condition",
+            "# ",
+            "Hide column | C",
         ]
     );
     h.key(KeyCode::Esc);

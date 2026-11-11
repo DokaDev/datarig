@@ -563,15 +563,17 @@ impl App {
             .filter(|(r, _)| rows.contains(r))
             .flat_map(|(r, e)| {
                 let marked = e.delete.then_some((r, cols.start));
-                e.set.keys().filter(|c| cols.contains(c)).map(move |c| (r, *c)).chain(marked)
+                // The cells of the shown columns only: a hidden column's change stays.
+                e.set.keys().filter(|c| cols.contains(c) && grid.shown(**c)).map(move |c| (r, *c)).chain(marked)
             })
             .collect();
+        let shown_cols = grid.shown_in(cols.clone());
         let new: Vec<(u64, usize)> = rows
             .filter_map(|r| match row_at(rs, r) {
                 Some(RowAt::New(id)) => Some(id),
                 _ => None,
             })
-            .flat_map(|id| cols.clone().map(move |c| (id, c)))
+            .flat_map(|id| shown_cols.iter().map(move |&c| (id, c)))
             .collect();
         let done = !(cells.is_empty() && new.is_empty()) && rs.edit.batch.revert(&cells, &new);
         self.edit_grid_sync();

@@ -50,6 +50,7 @@ mod flows_grid_filter;
 mod flows_grid_hscroll;
 mod flows_grid_search;
 mod flows_grid_summary;
+mod flows_hidden_columns;
 mod flows_hover;
 mod flows_icons;
 mod flows_idle;

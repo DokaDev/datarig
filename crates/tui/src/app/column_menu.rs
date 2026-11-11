@@ -1,6 +1,6 @@
 //! The column menu of a table tab's grid (`F`, a right click on a column's header): the
 //! cursor's column's sort (ascending, descending, none), its filter (the dialog on that column,
-//! only the cursor's value, everything but it, none of its own conditions). Each
+//! only the cursor's value, everything but it, none of its own conditions) and hiding it. Each
 //! entry that cannot apply is shown dimmed with why; an entry that changes the query runs it as
 //! the tab runs any query ([`App::table_run`]: checks, questions, pending edits), written when
 //! the menu opens (what runs is what the menu showed).
@@ -30,6 +30,8 @@ pub enum ColumnItem {
     Exclude,
     /// None of the column's own conditions (the other terms stay as written).
     ClearFilter,
+    /// The column hidden from the grid (`C`).
+    Hide,
 }
 
 impl ColumnItem {
@@ -38,6 +40,7 @@ impl ColumnItem {
         match self {
             ColumnItem::SortAsc | ColumnItem::SortDesc | ColumnItem::SortClear => 0,
             ColumnItem::Dialog | ColumnItem::Only | ColumnItem::Exclude | ColumnItem::ClearFilter => 1,
+            ColumnItem::Hide => 2,
         }
     }
 }
@@ -139,6 +142,9 @@ impl App {
             Ok(text) => filters.push((item, text)),
             Err(o) => off.push((item, *o)),
         }
+        let item = MenuItem::Column(ColumnItem::Hide);
+        items.push(item);
+        names.push((item, label(Label::TableColumnHide)));
         let title = crate::text::escape_controls(&column);
         let target = MenuTarget::Filter { grid: Box::new(grid), result };
         self.push_filter_menu(target, title, (items, off, names, Vec::new(), filters), at);
@@ -190,6 +196,7 @@ impl App {
                 keys.iter().filter(|k| k.origin == KeyOrigin::User && k.col != c).cloned().collect()
             }),
             ColumnItem::Dialog => self.table_action(TableAction::EditFilter),
+            ColumnItem::Hide => self.table_action(TableAction::Hide),
             ColumnItem::Only | ColumnItem::Exclude | ColumnItem::ClearFilter => {
                 if let Some(text) = text {
                     self.grid_filter_run(text);
@@ -215,6 +222,7 @@ impl App {
             ColumnItem::Dialog => keys(TableAction::EditFilter),
             ColumnItem::Only => keys(TableAction::Only),
             ColumnItem::Exclude => keys(TableAction::Exclude),
+            ColumnItem::Hide => keys(TableAction::Hide),
             ColumnItem::SortClear | ColumnItem::ClearFilter => String::new(),
         }
     }

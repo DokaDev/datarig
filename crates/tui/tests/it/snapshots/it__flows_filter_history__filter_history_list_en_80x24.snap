@@ -24,5 +24,5 @@ expression: backend
 "├──────────────────────────┴───────────────────────────────────────────────────┤"
 "│ Where   = id > 1 ×                                         undo   clear all  │"
 "│ Order  name ↓   id ↑   not unique                  Limit              SQL ▸  │"
-"│ ↑↓ column · → filter · s sort · / search           Enter apply   Esc cancel  │"
+"│ ↑↓ column · → filter · Space hide/show · s sort    Enter apply   Esc cancel  │"
 "╰──────────────────────────────────────────────────────────────────────────────╯"

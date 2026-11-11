@@ -108,6 +108,9 @@ pub struct Matches {
     result: u64,
     rows: usize,
     ncols: usize,
+    /// The columns shown when they were found ([`GridState::vis_rev`]): hidden ones are not
+    /// searched.
+    vis: u64,
     cells: Vec<CellIdx>,
     /// There were more than [`MAX_MATCHES`]: `cells` has the first ones.
     capped: bool,
@@ -118,8 +121,9 @@ pub struct Matches {
 impl Matches {
     /// Whether these are the matches of `rs` as it is now (no rows came since, no value shown
     /// changed).
-    fn current(&self, rs: &ResultSet) -> bool {
+    fn current(&self, rs: &ResultSet, vis: u64) -> bool {
         self.result == rs.id
+            && self.vis == vis
             && self.rows == rs.rows.len()
             && self.ncols == rs.columns.len()
             && *self.over == overlay(rs)
@@ -163,6 +167,9 @@ enum Purpose {
     /// `n`/`N` where the matches found cannot tell (past the cap, or while they are still
     /// being found): only the next match from the cursor is looked for.
     Seek,
+    /// The search that is on, found again over the columns shown once they changed: the cursor
+    /// stays, nothing is said.
+    Recount,
 }
 
 /// A job out on a worker.
@@ -173,6 +180,8 @@ struct Running {
     /// The rows (and columns) it reads: its matches are of these.
     rows: usize,
     ncols: usize,
+    /// The columns shown when it started.
+    vis: u64,
     forward: bool,
     pattern: String,
     re: Regex,
@@ -328,12 +337,14 @@ fn cell(row: usize, col: usize, ncols: usize) -> CellIdx {
 /// `first` is told the first match from cell `origin` in the search's direction (after it when
 /// `forward`, before it otherwise; around the ends when there is none that way, `wrapped`) as
 /// soon as it is known. Returns the first [`MAX_MATCHES`] matches (`cap` in tests) and whether
-/// there were more, or `None` when `stop` was set. NULL never matches.
+/// there were more, or `None` when `stop` was set. NULL never matches, nor does a column
+/// `hidden` says is hidden from the grid.
 #[allow(clippy::too_many_arguments)]
 pub fn scan(
     snap: &RowsSnapshot,
     over: &Overlay,
     ncols: usize,
+    hidden: &[bool],
     re: &Regex,
     origin: CellIdx,
     forward: bool,
@@ -354,6 +365,10 @@ pub fn scan(
         }
         for r in chunk {
             for (c, v) in r.iter().take(ncols).enumerate() {
+                // A column hidden from the grid is not searched.
+                if hidden.get(c).copied().unwrap_or(false) {
+                    continue;
+                }
                 let v = over.get(&(row, c)).map_or(v.as_deref(), |o| o.as_deref());
                 let Some(v) = v else { continue };
                 if !re.is_match(v) {
@@ -410,10 +425,12 @@ pub fn scan(
 /// read a chunk at a time from the cursor's row on (backward: chunks from the end of each part
 /// back). `Ok(None)` when `stop` was set, `Ok(Some(None))` when nothing matches. NULL never
 /// matches.
+#[allow(clippy::too_many_arguments)]
 pub fn seek(
     snap: &RowsSnapshot,
     over: &Overlay,
     ncols: usize,
+    hidden: &[bool],
     re: &Regex,
     origin: CellIdx,
     forward: bool,
@@ -425,7 +442,7 @@ pub fn seek(
     }
     let orow = ((origin / ncols as CellIdx) as usize).min(len - 1);
     let find = |range: Range<usize>, last: bool, keep: &dyn Fn(CellIdx) -> bool| {
-        find_in(snap, over, ncols, re, stop, range, last, keep)
+        find_in(snap, over, ncols, hidden, re, stop, range, last, keep)
     };
     let first =
         if forward { find(orow..len, false, &|c| c > origin)? } else { find(0..orow + 1, true, &|c| c < origin)? };
@@ -451,6 +468,7 @@ fn find_in(
     snap: &RowsSnapshot,
     over: &Overlay,
     ncols: usize,
+    hidden: &[bool],
     re: &Regex,
     stop: &AtomicBool,
     range: Range<usize>,
@@ -467,6 +485,9 @@ fn find_in(
             }
             for (i, r) in rows.iter().enumerate() {
                 for (c, v) in r.iter().take(ncols).enumerate() {
+                    if hidden.get(c).copied().unwrap_or(false) {
+                        continue;
+                    }
                     let v = over.get(&(at + i, c)).map_or(v.as_deref(), |o| o.as_deref());
                     let at = cell(at + i, c, ncols);
                     if v.is_some_and(|v| re.is_match(v)) && keep(at) {
@@ -655,7 +676,7 @@ impl App {
             return;
         }
         let at = cell(t.grid.row, t.grid.col, ncols);
-        let current = a.found.as_ref().filter(|m| m.current(rs));
+        let current = a.found.as_ref().filter(|m| m.current(rs, t.grid.vis_rev));
         let known = current.and_then(|m| step(&m.cells, m.capped, at, forward));
         let finding = t
             .find
@@ -792,6 +813,7 @@ impl App {
         let t = self.tabs.active_mut();
         match purpose {
             Purpose::Seek => t.find.seek = None,
+            Purpose::Recount => t.find.stop_jobs(),
             // A press that waited may start a new search of every row (rows came since): the
             // presses after it keep waiting, for its first match.
             Purpose::Search => {
@@ -824,12 +846,14 @@ impl App {
         let pattern = re.as_str().to_string();
         let t = self.tabs.active_mut();
         let from = (t.grid.row, t.grid.col);
+        let (vis, hidden) = (t.grid.vis_rev, t.grid.hidden.clone());
         let job = Running {
             id,
             purpose,
             result,
             rows,
             ncols,
+            vis,
             forward,
             pattern,
             re: re.clone(),
@@ -849,7 +873,7 @@ impl App {
         std::thread::spawn(move || {
             let first = |cell, wrapped| reply.send(News::First { cell, wrapped });
             let r = match purpose {
-                Purpose::Seek => seek(&snap, &over, ncols, &re, origin, forward, &stop).map(|found| {
+                Purpose::Seek => seek(&snap, &over, ncols, &hidden, &re, origin, forward, &stop).map(|found| {
                     found.map(|f| {
                         if let Some((cell, wrapped)) = f {
                             first(cell, wrapped);
@@ -857,7 +881,7 @@ impl App {
                         (Vec::new(), false)
                     })
                 }),
-                _ => scan(&snap, &over, ncols, &re, origin, forward, cap, &stop, first),
+                _ => scan(&snap, &over, ncols, &hidden, &re, origin, forward, cap, &stop, first),
             };
             reply.done(r);
         });
@@ -915,8 +939,9 @@ impl App {
         let Some(t) = self.tabs.iter_mut().find(|t| t.id == a.tab) else { return };
         let seeking = t.find.seek.as_ref().is_some_and(|j| j.id == a.job);
         let slot = if seeking { &t.find.seek } else { &t.find.job };
-        let Some(result) = slot.as_ref().filter(|j| j.id == a.job).map(|j| j.result) else { return };
-        if shown_rows(t).is_none_or(|rs| rs.id != result) {
+        let Some((result, vis)) = slot.as_ref().filter(|j| j.id == a.job).map(|j| (j.result, j.vis)) else { return };
+        // Of another result, or of other columns shown than the grid's now: dropped.
+        if shown_rows(t).is_none_or(|rs| rs.id != result) || t.grid.vis_rev != vis {
             match seeking {
                 true => t.find.seek = None,
                 false => t.find.job = None,
@@ -930,6 +955,10 @@ impl App {
                 job.found_one = true;
                 let (purpose, from, forward, ncols) = (job.purpose, job.from, job.forward, job.ncols);
                 let re = job.re.clone();
+                // A count again moves nothing.
+                if purpose == Purpose::Recount {
+                    return;
+                }
                 // A seek has said all it had to: its end is not waited for.
                 if purpose == Purpose::Seek {
                     *slot = None;
@@ -967,6 +996,7 @@ impl App {
                             result: job.result,
                             rows: job.rows,
                             ncols: job.ncols,
+                            vis: job.vis,
                             cells,
                             capped,
                             over: job.over.clone(),
@@ -977,7 +1007,7 @@ impl App {
                                     p.preview = Some(m);
                                 }
                             }
-                            Purpose::Search => {
+                            Purpose::Search | Purpose::Recount => {
                                 if let Some(a) = t.find.active.as_mut() {
                                     a.found = Some(m);
                                 }
@@ -985,7 +1015,7 @@ impl App {
                             Purpose::Seek => {}
                         }
                         // A search that matches nothing ends (`n` is the next page again).
-                        let none = !job.found_one && job.purpose != Purpose::Preview;
+                        let none = !job.found_one && matches!(job.purpose, Purpose::Search | Purpose::Seek);
                         if none {
                             t.find.end();
                         }
@@ -998,6 +1028,35 @@ impl App {
         };
         if let Some(n) = notice {
             self.flash(super::update::search_notice(n));
+        }
+    }
+
+    /// The columns tab `id`'s grid shows changed (hidden or shown again): what its search found
+    /// is of other columns. Its jobs stop, its matches and the match to reveal go; on the active
+    /// tab the pattern being typed and the search that is on are looked for again over the
+    /// columns shown (the cursor stays where it is), on another they are found again on its
+    /// next `n`.
+    pub(super) fn grid_search_columns_changed(&mut self, id: TabId) {
+        let active = !self.tabs.is_empty() && self.tab().id == id;
+        let Some(t) = self.tabs.iter_mut().find(|t| t.id == id) else { return };
+        t.find.stop_jobs();
+        t.grid.reveal = None;
+        let typing = t.find.prompt.as_mut().map(|p| p.preview = None).is_some();
+        let on = t.find.active.as_mut().map(|a| {
+            a.found = None;
+            (a.re.clone(), a.forward)
+        });
+        if !active {
+            return;
+        }
+        if typing {
+            return self.grid_preview();
+        }
+        if let Some((re, forward)) = on {
+            let t = self.tab();
+            let ncols = shown_rows(t).map_or(0, |rs| rs.columns.len());
+            let at = cell(t.grid.row, t.grid.col, ncols);
+            self.start_grid_job(Purpose::Recount, re, forward, at);
         }
     }
 

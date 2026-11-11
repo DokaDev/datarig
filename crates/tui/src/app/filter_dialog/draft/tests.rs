@@ -220,7 +220,7 @@ fn an_incomplete_row_is_no_chip_and_never_sent() {
     let mut w = Where::from_text("", &t);
     w.add(Row::new("name", Op::Eq), &t);
     assert_eq!(w.text(), "");
-    let draft = Draft { where_: w, order: Vec::new(), limit: String::new() };
+    let draft = Draft { where_: w, order: Vec::new(), limit: String::new(), hidden: Vec::new() };
     assert_eq!(draft.to_query(&users(), &t).unwrap().filter, None);
 }
 

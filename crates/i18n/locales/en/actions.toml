@@ -230,6 +230,7 @@
 "action.table.filter.only" = "Table → only this value (in place of the column's conditions)"
 "action.table.filter.exclude" = "Table → everything but this value (NULL rows kept)"
 "action.table.filter.clear_all" = "Table → clear the conditions and the order (limit kept), and run it again"
+"action.table.column.hide" = "Table → hide this column from the grid (still read)"
 "action.filter.apply" = "Filter dialog → apply and close"
 "action.filter.cancel" = "Filter dialog → close without applying"
 "action.filter.undo" = "Filter dialog → undo a step"

@@ -203,8 +203,13 @@ pub struct TableQuery {
     /// its wait ends ([`App::table_keys_waiting`]).
     keys_wait: Option<(Query, u64)>,
     /// The query the tab held as applied before its last applied change (a run of another
-    /// condition, order or limit sent): the filter dialog's undo goes back to it once.
+    /// condition, order or limit sent, the columns hidden changed): the filter dialog's undo
+    /// goes back to it once.
     pub before_last: Option<Query>,
+    /// The columns hidden from the grid before that change (with [`TableQuery::before_last`]).
+    pub before_hidden: Option<Vec<String>>,
+    /// The columns hidden from the grid now (the table's, as the app keeps them).
+    pub hidden: Vec<String>,
     /// The query put back in the tab as applied ([`TableQuery::restored`]) while no run of the
     /// tab's query has been sent: what was applied before the first one, though the draft that
     /// run sends is written over it before it is sent (and stays written over when the run is
@@ -238,6 +243,8 @@ impl TableQuery {
             session_wait: None,
             keys_wait: None,
             before_last: None,
+            before_hidden: None,
+            hidden: Vec::new(),
             restored: None,
             order_keys: OrderKeysState::Unknown,
             sorted: None,
@@ -283,6 +290,7 @@ impl TableQuery {
             self.restored = None;
             if changed(&before, q) {
                 self.before_last = Some(before);
+                self.before_hidden = Some(self.hidden.clone());
             }
         }
         if let Some(q) = self.sorted.take().filter(|q| self.requested.as_ref().is_some_and(|(_, r)| r == q)) {
@@ -1253,6 +1261,8 @@ impl App {
                 Err(reason) => OrderKeysState::Failed { on, reason },
             };
         }
+        // The catalogue's columns: names no longer among them are not hidden any more.
+        self.table_view_sync(id);
         self.filter_dialog_columns_came(id);
         // The query that waited for them runs now (one cancelled meanwhile does not).
         if let Some(q) = self.table_keys_take(id) {

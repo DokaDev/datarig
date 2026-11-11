@@ -1041,6 +1041,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Table(T::Only), "table.filter.only", Label::ActionTableFilterOnly, table_tab),
     act(Action::Table(T::Exclude), "table.filter.exclude", Label::ActionTableFilterExclude, table_tab),
     act(Action::Table(T::ClearAll), "table.filter.clear_all", Label::ActionTableFilterClearAll, table_tab),
+    act(Action::Table(T::Hide), "table.column.hide", Label::ActionTableColumnHide, table_tab),
     act(Action::Table(T::History), "table.filter.history", Label::ActionTableFilterHistory, table_tab),
     act(Action::FilterDialog(FD::Apply), "filter.apply", Label::ActionFilterApply, filter_dialog),
     act(Action::FilterDialog(FD::Cancel), "filter.cancel", Label::ActionFilterCancel, filter_dialog),

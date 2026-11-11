@@ -557,8 +557,8 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     assert_eq!(
         results,
         [
-            "!", "#", "+", "-", "=", "F", "H", "I", "S", "X", "[", "]", "a", "c", "e", "f", "h", "i", "n", "o", "p",
-            "s", "v", "x", "y", "z"
+            "!", "#", "+", "-", "=", "C", "F", "H", "I", "S", "X", "[", "]", "a", "c", "e", "f", "h", "i", "n", "o",
+            "p", "s", "v", "x", "y", "z"
         ]
     );
     assert_eq!(km.group_label(Ctx::Explorer, &k("space r y")), Some(Label::GroupCopySelection));

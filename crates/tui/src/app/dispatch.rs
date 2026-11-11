@@ -326,8 +326,9 @@ impl App {
             // The first and last row of the page.
             GridAction::Top => grid.row = grid.window(total).start,
             GridAction::Bottom => grid.row = grid.window(total).end.saturating_sub(1),
-            GridAction::FirstCol => grid.col = 0,
-            GridAction::LastCol => grid.col = ncols.saturating_sub(1),
+            // The first and last shown column (a hidden one is stepped over).
+            GridAction::FirstCol => grid.col = grid.first_shown(ncols).unwrap_or(0),
+            GridAction::LastCol => grid.col = grid.last_shown(ncols).unwrap_or(ncols.saturating_sub(1)),
             GridAction::ViewCell => {
                 if let Some((column, text)) = viewer_text(rs, grid, &self.i18n) {
                     self.overlays.push(Overlay::CellViewer(Viewer { column, text, scroll: 0, view_h: 1 }));
@@ -631,6 +632,8 @@ impl App {
         self.save_workspace();
         // The filter history held back by its debounce, written before the process goes.
         self.flush_filter_history();
+        // So are the hidden columns.
+        self.flush_table_view();
         // Exports end their files (a partial file that reads) before the process goes.
         self.end_exports_for_quit();
         self.close_sessions();

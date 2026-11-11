@@ -43,7 +43,8 @@ struct Key {
     tab: TabId,
     result: u64,
     rows: Range<usize>,
-    cols: Range<usize>,
+    /// The selection's shown columns (a hidden column is not summed).
+    cols: Vec<usize>,
     edits: (u64, bool),
     /// The selection has new rows too (left out).
     new_rows: bool,
@@ -379,7 +380,7 @@ fn num_text(v: &str) -> String {
 
 /// The values the grid shows over the cells of `rows` × `cols` of `rs`: pending ones and those an
 /// Apply wrote (or read again later).
-fn selected_over(rs: &ResultSet, rows: &Range<usize>, cols: &Range<usize>) -> Over {
+fn selected_over(rs: &ResultSet, rows: &Range<usize>, cols: &[usize]) -> Over {
     let mut over = Over::new();
     let mut put = |r: usize, c: usize| {
         if rows.contains(&r)
@@ -462,6 +463,7 @@ impl App {
         }
         let (len, ncols) = (rs.rows.len(), rs.columns.len());
         let (sel_rows, cols) = t.grid.selection(len, ncols)?;
+        let cols = t.grid.shown_in(cols);
         let rows = sel_rows.start.min(len)..sel_rows.end.min(len);
         if rows.is_empty() || cols.is_empty() {
             return None;
@@ -505,7 +507,7 @@ impl App {
             state => {
                 stop(state);
                 let Results::Rows(rs) = &self.tab().results else { return };
-                let numbers = key.cols.clone().all(|c| numeric(rs.columns[c].meta.kind));
+                let numbers = key.cols.iter().all(|&c| numeric(rs.columns[c].meta.kind));
                 let from = key.rows.start;
                 self.start_summary(key, from, Tally::new(numbers), None);
             }
@@ -535,7 +537,7 @@ impl App {
         self.grid_summary.rows_read += rows.len() as u64;
         let job = self.grid_summary.next;
         let stop = Arc::new(AtomicBool::new(false));
-        let cols: Vec<usize> = key.cols.clone().collect();
+        let cols: Vec<usize> = key.cols.clone();
         self.grid_summary.state = Some(State::Working { job, stop: stop.clone(), covers: key, shown });
         let out = self.grid_job_out();
         let reply = Reply { out, job, sent: false };

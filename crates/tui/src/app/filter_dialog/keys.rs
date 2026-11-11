@@ -323,6 +323,11 @@ impl App {
                 }
             }
             KeyCode::Char('/') => d.search = Some(TextInput::new("")),
+            // Hidden from the grid, or shown again (one step; applied with the rest).
+            KeyCode::Char(' ' | 'C') => {
+                let Some(col) = d.column().map(|c| c.name.clone()) else { return };
+                self.filter_dialog_edit(None, |d, _| d.draft.toggle_hidden(&col));
+            }
             KeyCode::Char('s') => {
                 let Some(col) = d.column().map(|c| c.name.clone()) else { return };
                 let next = match d.draft.sort_of(&col) {

@@ -304,6 +304,13 @@ pub struct GridState {
     /// How many new rows the grid shows after the result's last row read (set on render and by
     /// every edit).
     pub new_rows: usize,
+    /// By result column, whether it is hidden from the grid (a table's view; a column past its
+    /// end is shown). Hidden columns are not drawn and the cursor never rests on one; every
+    /// selection, copy, paste and search takes the shown columns only.
+    pub hidden: Vec<bool>,
+    /// Changes whenever [`GridState::hidden`] does: what was worked out over the shown columns
+    /// (a paste waiting for its yes, a search's matches) holds only while it is the same.
+    pub vis_rev: u64,
 }
 
 /// What a grid selection spans.
@@ -437,15 +444,18 @@ impl GridState {
     pub fn drag_edge(&mut self, x: u16) -> Option<usize> {
         let ncols = self.col_x.len().checked_sub(1).filter(|n| *n > 0)?;
         let (from, view) = (self.gutter_x.1, self.view_w as usize);
-        let at = |vx: usize| (0..ncols).find(|&c| self.col_x[c + 1] > vx).unwrap_or(ncols - 1);
+        let (col_x, hidden) = (self.col_x.clone(), self.hidden.clone());
+        let shown = |c: usize| !hidden.get(c).copied().unwrap_or(false);
+        let at = |vx: usize| (0..ncols).find(|&c| shown(c) && col_x[c + 1] > vx).unwrap_or(ncols - 1);
         if x < from {
             self.x_off = self.x_off.saturating_sub(SIDE_STEP);
-            let whole = (0..ncols).find(|&c| self.col_x[c] >= self.x_off && self.col_x[c + 1] <= self.x_off + view);
+            let x_off = self.x_off;
+            let whole = (0..ncols).find(|&c| shown(c) && col_x[c] >= x_off && col_x[c + 1] <= x_off + view);
             Some(whole.unwrap_or_else(|| at(self.x_off)))
         } else if x >= from + self.view_w {
             self.x_off = (self.x_off + SIDE_STEP).min(self.x_max());
-            let whole =
-                (0..ncols).rev().find(|&c| self.col_x[c] >= self.x_off && self.col_x[c + 1] <= self.x_off + view);
+            let x_off = self.x_off;
+            let whole = (0..ncols).rev().find(|&c| shown(c) && col_x[c] >= x_off && col_x[c + 1] <= x_off + view);
             Some(whole.unwrap_or_else(|| at((self.x_off + view).saturating_sub(1))))
         } else {
             None
@@ -461,12 +471,73 @@ impl GridState {
         self.row = (self.row as isize + delta).clamp(w.start as isize, w.end as isize - 1) as usize;
     }
 
+    /// Move the cursor `delta` shown columns (of `total`), hidden ones stepped over; it stops
+    /// at the first and the last shown one.
     pub fn move_col(&mut self, delta: isize, total: usize) {
         self.detached = false;
         if total == 0 {
             return;
         }
-        self.col = (self.col as isize + delta).clamp(0, total as isize - 1) as usize;
+        let mut c = self.col.min(total - 1);
+        for _ in 0..delta.unsigned_abs() {
+            let next =
+                if delta < 0 { (0..c).rev().find(|&x| self.shown(x)) } else { (c + 1..total).find(|&x| self.shown(x)) };
+            match next {
+                Some(x) => c = x,
+                None => break,
+            }
+        }
+        self.col = if self.shown(c) { c } else { self.nearest_shown(c, total).unwrap_or(c) };
+    }
+
+    /// Whether column `c` is shown (not hidden from the grid).
+    pub fn shown(&self, c: usize) -> bool {
+        !self.hidden.get(c).copied().unwrap_or(false)
+    }
+
+    /// The shown columns of `total`, in order: where the grid's own positions (a paste's
+    /// columns, a copy's, a search's) go in the result.
+    pub fn shown_cols(&self, total: usize) -> Vec<usize> {
+        (0..total).filter(|&c| self.shown(c)).collect()
+    }
+
+    /// The shown columns among `cols` (a selection's span of result columns).
+    pub fn shown_in(&self, cols: std::ops::Range<usize>) -> Vec<usize> {
+        cols.filter(|&c| self.shown(c)).collect()
+    }
+
+    /// The first shown column of `total` (`None`: every one is hidden).
+    pub fn first_shown(&self, total: usize) -> Option<usize> {
+        (0..total).find(|&c| self.shown(c))
+    }
+
+    /// The last shown column of `total`.
+    pub fn last_shown(&self, total: usize) -> Option<usize> {
+        (0..total).rev().find(|&c| self.shown(c))
+    }
+
+    /// The shown column nearest `c`: the next one right of it, else the one left of it.
+    pub fn nearest_shown(&self, c: usize, total: usize) -> Option<usize> {
+        (c..total).find(|&x| self.shown(x)).or_else(|| (0..c.min(total)).rev().find(|&x| self.shown(x)))
+    }
+
+    /// The columns of `total` hidden become `hidden` (by result column): the cursor and the
+    /// selection's anchor move off a hidden column to the nearest shown one, and the revision
+    /// changes when anything did.
+    pub fn set_hidden(&mut self, hidden: Vec<bool>, total: usize) {
+        if hidden == self.hidden {
+            return;
+        }
+        self.hidden = hidden;
+        self.vis_rev += 1;
+        if let Some(c) = self.nearest_shown(self.col, total) {
+            self.col = c;
+        }
+        if let Some((r, c)) = self.anchor
+            && !self.shown(c)
+        {
+            self.anchor = self.nearest_shown(c, total).map(|c| (r, c));
+        }
     }
 
     /// The cursor is on the last row of its page.
@@ -616,6 +687,8 @@ pub struct Look<'a> {
     /// The headers have sort zones (a table tab's grid): the last two columns of a header's
     /// first row, where a click sorts by its column; the cursor's column shows its mark there.
     pub sort_zone: bool,
+    /// What the grid says in place of its columns when every one is hidden.
+    pub all_hidden: &'a str,
 }
 
 /// What a column's header says of the table tab's query, after the column's name.
@@ -689,6 +762,19 @@ pub fn render(
     st.page_rows = page_rows;
     st.row = st.row.clamp(win.start, win.end.saturating_sub(1).max(win.start));
     st.col = st.col.min(rs.columns.len() - 1);
+    // The cursor never rests on a hidden column; with every column hidden nothing is drawn but
+    // the note of the results pane.
+    match st.nearest_shown(st.col, rs.columns.len()) {
+        Some(c) => st.col = c,
+        None => {
+            let w = area.width.saturating_sub(2) as usize;
+            let lines = crate::text::wrap_words(look.all_hidden, w);
+            for (i, line) in lines.iter().take(area.height as usize).enumerate() {
+                buf.set_stringn(area.x + 1, area.y + i as u16, line, w, Style::new().fg(th.fg_dim));
+            }
+            return;
+        }
+    }
     st.top = st.top.max(win.start);
     // The view stays within the page, filled to its last row (a jump to another page, as a
     // search's, may leave it past the rows there).
@@ -773,11 +859,14 @@ pub fn render(
     // The row of all columns, scrolled by character: the selected column whole in view unless
     // the wheel moved the view, never past the last column's end (also when the widths or the
     // view's width changed).
+    // A hidden column takes no room.
     st.col_x.clear();
     let mut end = 0;
-    for w in &widths {
+    for (c, w) in widths.iter().enumerate() {
         st.col_x.push(end);
-        end += w + 3;
+        if st.shown(c) {
+            end += w + 3;
+        }
     }
     st.col_x.push(end);
     st.view_w = avail as u16;
@@ -823,7 +912,7 @@ pub fn render(
     let mut layout: Vec<(i32, usize, usize)> = Vec::new(); // (x of its separator, col index, width)
     for (ci, &w) in widths.iter().enumerate() {
         let (start, end) = (st.col_x[ci], st.col_x[ci + 1]);
-        if end <= st.x_off {
+        if !st.shown(ci) || end <= st.x_off {
             continue;
         }
         if start >= st.x_off + avail {
@@ -872,8 +961,11 @@ pub fn render(
     let range = st.selection(total, rs.columns.len());
     let range_cols = range.as_ref().map(|(_, cr)| cr.clone());
     let selected_col = |c: usize| range_cols.as_ref().is_some_and(|cr| cr.contains(&c));
-    // Between two selected columns the separator is the range's too: the block reads as one.
-    let inner_sep = |c: usize| c > 0 && selected_col(c) && selected_col(c - 1);
+    // Between two selected columns the separator is the range's too: the block reads as one
+    // (hidden columns between them are no gap).
+    let hidden = st.hidden.clone();
+    let shown = |c: usize| !hidden.get(c).copied().unwrap_or(false);
+    let inner_sep = |c: usize| selected_col(c) && (0..c).rev().find(|&p| shown(p)).is_some_and(selected_col);
     for &(cx, ci, w) in &layout {
         st.drawn_cells += 1;
         let col = &rs.columns[ci];
