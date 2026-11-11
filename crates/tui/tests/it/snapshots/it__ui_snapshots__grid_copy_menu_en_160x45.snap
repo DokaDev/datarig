@@ -33,7 +33,7 @@ expression: backend
 "│                                      ││ 7 │    7 │ │  Copy the cell (a selected range)                                   y │                                 │"
 "│                                      ││ 8 │    8 │ │  Copy the row (the selected rows)                                   Y │                                 │"
 "│                                      ││            │  Copy selection ▸                                                     │                                 │"
-"│                                      ││            │  Table → filter by value                           only on table tabs │                                 │"
+"│                                      ││            │  Table → this column's menu (sort, filter, hide)   only on table tabs │                                 │"
 "│                                      ││            │  Edit the cell (the selected cells of one column)        not editable │                                 │"
 "│                                      ││            │ Results                                                               │                                 │"
 "│                                      ││            │  Copy all fetched rows ▸                                              │                                 │"

@@ -25,6 +25,7 @@ pub mod action;
 pub mod chart;
 pub mod chooser;
 pub mod cmdline;
+pub mod column_menu;
 pub mod command;
 mod conn;
 mod conn_test;

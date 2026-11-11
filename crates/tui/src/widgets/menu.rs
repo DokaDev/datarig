@@ -83,6 +83,11 @@ pub(crate) fn draw_context_menu(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             _ => base,
         };
         buf.set_stringn(list.x, ry, fit("", iw, Align::Left), iw, bg);
+        if *heading && label.is_empty() {
+            // A rule between groups of items.
+            put(buf, list.x, ry, &"─".repeat(iw), iw, Style::new().fg(th.border).patch(bg));
+            continue;
+        }
         if *heading {
             put(
                 buf,

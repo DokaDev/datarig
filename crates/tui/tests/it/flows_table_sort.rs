@@ -428,7 +428,7 @@ fn grid_actions_over_a_query_that_did_not_land_are_refused() {
         assert_eq!(h.app.key_context(), Ctx::Grid, "{case}");
         let (before, d) = (fields(&h), draft(&h));
         assert_eq!(before[0], "idd > 1", "{case}");
-        for how in ["s", "S", "click", "F"] {
+        for how in ["s", "S", "click", "=", "!"] {
             match how {
                 "click" => {
                     let (x, y) = zone(&mut h, 1);
@@ -440,15 +440,18 @@ fn grid_actions_over_a_query_that_did_not_land_are_refused() {
             assert!(runs(&mut h).is_empty(), "{case} {how}: nothing sent");
             assert_ne!(h.overlay_kind(), Some(OverlayKind::ContextMenu), "{case} {how}: no menu");
             let status = h.status(120, 30);
-            let says =
-                if how == "F" { "Not filtered: showing previous rows" } else { "Not sorted: showing previous rows" };
+            let says = if "=!".contains(how) {
+                "Not filtered: showing previous rows"
+            } else {
+                "Not sorted: showing previous rows"
+            };
             assert!(status.contains(says), "{case} {how}: {status}");
             assert_eq!(fields(&h), before, "{case} {how}: the line keeps the query");
             assert_eq!(draft(&h), d, "{case} {how}: the draft is as it was");
             assert!(heads(&h).iter().all(|m| m.sort.is_none()), "{case} {how}");
         }
     }
-    // An entry picked from a menu opened over rows of the line's query, once the line's query
+    // An entry picked from a column menu opened over the rows shown, once the query applied
     // is one whose rows are not shown (as a run that did not land leaves it): refused too.
     let mut h = users(Lang::En);
     h.keys("F");
@@ -460,7 +463,7 @@ fn grid_actions_over_a_query_that_did_not_land_are_refused() {
         ..tq.shown.clone().unwrap()
     };
     tq.requested = Some((qid, other));
-    h.menu_pick("= 0");
+    h.menu_pick("Only 0");
     assert!(runs(&mut h).is_empty(), "the entry sends nothing");
     let status = h.status(120, 30);
     assert!(status.contains("Not filtered: showing previous rows"), "{status}");
@@ -482,7 +485,7 @@ fn a_refused_sort_or_filter_says_why_at_80_columns() {
     let (id, index) = (h.app.tab().exec.query_id, h.app.tabs.active_index());
     h.tab_db(index, DbEvent::Failed { id, error: datarig_core::driver::DbError::Cancelled, cancelled: true });
     h.app.focus = datarig_tui::app::Focus::Results;
-    for (keys, name) in [("s", "sort"), ("F", "filter")] {
+    for (keys, name) in [("s", "sort"), ("=", "filter")] {
         h.keys(keys);
         assert!(runs(&mut h).is_empty(), "{keys}: nothing sent");
         let said = flashed(&h);
@@ -511,7 +514,6 @@ fn every_refusal_of_a_sort_or_filter_by_value_fits_80_columns() {
         let column = || "email".to_string();
         let ty = || "jsonb".to_string();
         let reason = h.app.i18n.label(Label::CopySqlWhyNotShownWhole).to_string();
-        let why = h.app.i18n.label(Label::TableFilterWhyUnclosed).to_string();
         let all: Vec<Msg> = vec![
             Label::TableSortOnlyTableTabs.into(),
             Label::TableSortNoColumns.into(),
@@ -530,13 +532,15 @@ fn every_refusal_of_a_sort_or_filter_by_value_fits_80_columns() {
             Msg::TableFilterByValueTooBig { column: column() },
             Msg::TableFilterByValueNotWhole { column: column(), reason },
             Msg::TableFilterByValueType { column: column(), ty: ty() },
-            Msg::TableFilterByValueOrder { column: column(), ty: ty() },
             Msg::TableFilterByValueNondeterministic { collation: "case_insensitive".into() },
             Msg::TableFilterByValueNondeterministicColumn { column: column() },
             Msg::TableFilterByValueCollationUnknown { column: column() },
             Msg::TableFilterByValueLikeRefused { column: column() },
             Msg::TableFilterByValueLikeUnknown { column: column() },
-            Msg::TableFilterByValueBase { why },
+            Label::TableClearAllNothing.into(),
+            Label::TableColumnSorted.into(),
+            Label::TableColumnNotSorted.into(),
+            Label::TableColumnNoCondition.into(),
         ];
         for m in all {
             h.app.transient = Some((Notice::new(m.clone(), Level::Warning), std::time::Instant::now()));

@@ -1,7 +1,8 @@
 //! The table keys of a table tab's grid: `f` (or `Space r f`) opens the filter and sort dialog
 //! on the cursor's column, `Space r o` opens it on the order, `Space r x` clears the condition,
-//! the order and the limit and runs the tab again, and `Space r v` opens the statement in a new
-//! console. `s` and `S` (`Space r s`, `Space r S`) sort by the grid's column
+//! the order and the limit and runs the tab again, `X` clears the condition and the order (the
+//! limit kept), and `Space r v` opens the statement in a new console. `=` and `!` filter by the
+//! cursor's value ([`App::grid_pick`]), `F` opens the column's menu ([`App::open_column_menu`]). `s` and `S` (`Space r s`, `Space r S`) sort by the grid's column
 //! ([`App::table_sort`]). `Space r H` (`Ctrl+R` in the dialog) lists the filters this table ran
 //! before ([`App::open_filter_history`]): one picked goes into the dialog's draft, and runs only
 //! when the dialog applies it, checked as any text typed.
@@ -33,8 +34,14 @@ pub enum TableAction {
     SortCycle,
     /// Sort by the cursor's column as one more key, or turn it where it is (`S`).
     SortAdd,
-    /// The menu of filters by the value of the cursor's cell or the selection (`F`).
-    FilterByValue,
+    /// The cursor's column's menu: its sort, its filter, hiding it (`F`).
+    ColumnMenu,
+    /// Only the value of the cursor's cell or of the cells selected in one column (`=`).
+    Only,
+    /// Everything but that value, rows whose value is NULL kept (`!`).
+    Exclude,
+    /// No condition and no order, the limit kept, and a run (`X`).
+    ClearAll,
     /// The filters and orders this table ran before (`Ctrl+R` in the dialog, `Space r H`).
     History,
 }
@@ -60,9 +67,31 @@ impl App {
             TableAction::OpenSql => self.table_open_sql(id),
             TableAction::SortCycle => self.table_sort(id, self.tab().grid.col, query::SortStep::Only),
             TableAction::SortAdd => self.table_sort(id, self.tab().grid.col, query::SortStep::Add),
-            TableAction::FilterByValue => self.filter_by_value(),
+            TableAction::ColumnMenu => self.open_column_menu(),
+            TableAction::Only => self.grid_filter(super::filter_value::Pick::Only),
+            TableAction::Exclude => self.grid_filter(super::filter_value::Pick::Exclude),
+            TableAction::ClearAll => self.table_clear_all(id),
             TableAction::History => self.open_filter_history(self.filter_dialog().map_or(id, |d| d.tab)),
         }
+    }
+
+    /// `X`: table tab `id` runs again without its condition and its order; its limit stays. Said
+    /// when there is neither to clear. The query before is the one the dialog's undo brings back.
+    fn table_clear_all(&mut self, id: TabId) {
+        if self.tab_busy(id) {
+            return self.flash_busy();
+        }
+        let Some(tq) = self.table_query(id) else { return };
+        let base = tq.applied().clone();
+        let user = base.order.iter().any(|k| k.origin == query::KeyOrigin::User);
+        if base.filter.as_ref().is_none_or(|f| f.text.trim().is_empty()) && !user {
+            return self.flash(Notice::new(Label::TableClearAllNothing, Level::Info));
+        }
+        let q = Query { filter: None, order: Vec::new(), ..base };
+        let Some(tq) = self.table_query_mut(id) else { return };
+        tq.draft = q.clone();
+        tq.refusal = None;
+        self.table_run(id, q);
     }
 
     /// Completion of `text` (the cursor at byte `cursor`) as part `f` of table tab `id`'s

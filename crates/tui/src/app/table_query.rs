@@ -1605,6 +1605,17 @@ impl App {
     /// order only once its run is sent: a run asked about and declined, or refused, leaves them as they
     /// were.
     pub(super) fn table_sort(&mut self, id: TabId, col: usize, step: query::SortStep) {
+        self.table_sort_with(id, col, |keys, name| query::sort_column(keys, name, step));
+    }
+
+    /// A sort of column `col` of table tab `id`'s grid as [`App::table_sort`] runs it, the new
+    /// keys made by `keys_of` from the keys of the rows shown and the column's name.
+    pub(super) fn table_sort_with(
+        &mut self,
+        id: TabId,
+        col: usize,
+        keys_of: impl FnOnce(&[query::OrderKey], &str) -> Vec<query::OrderKey>,
+    ) {
         let name = match self.tabs.get(id).map(|t| &t.results) {
             Some(Results::Rows(rs)) => rs.columns.get(col).map(|c| c.meta.name.clone()),
             _ => None,
@@ -1623,7 +1634,7 @@ impl App {
         let d = self.tab_dialect(id);
         let Some(tq) = self.table_query(id) else { return };
         let base = tq.shown.clone().unwrap_or_else(|| tq.applied().clone());
-        let q = Query { order: query::sort_column(&base.order, &name, step), ..base };
+        let q = Query { order: keys_of(&base.order, &name), ..base };
         // The order is shown and edited on one line: a name with a line break would not read
         // back as the same name there.
         let user: Vec<_> = q.order.iter().filter(|k| k.origin == query::KeyOrigin::User).cloned().collect();
