@@ -1946,16 +1946,17 @@ async fn asked_server(
         Ok(names) => names,
         Err(why) => return Ok(Err(DbError::NotRepeatable(why))),
     };
-    let ask = check_sql(&names, Dialect::MySql(s.mode), env.server.mariadb);
+    let ask = check_sql(&names, Dialect::MySql(s.mode), &env.server);
     env.busy.store(true, Ordering::SeqCst);
-    type Answer = (Option<String>, Option<String>, Option<String>);
+    type Answer = (Option<String>, Option<String>, Option<String>, Option<String>);
     let answer = link.guard(Some(env.killer), conn.query_first::<Answer, _>(ask)).await?;
     idle(env, link).await;
     Ok(match answer {
-        Ok(Some((_, Some(view), _))) => Err(DbError::NotRepeatable(NotRepeatable::NotATable(view))),
-        Ok(Some((isolation, None, statement))) => Ok(Asked {
+        Ok(Some((_, Some(view), _, _))) => Err(DbError::NotRepeatable(NotRepeatable::NotATable(view))),
+        Ok(Some((isolation, None, statement, lock))) => Ok(Asked {
             isolation: isolation.unwrap_or_default(),
             statement: statement.as_deref().and_then(|v| session_limit(v, env.server.mariadb)),
+            lock: lock.and_then(|v| v.trim().parse().ok()),
         }),
         Ok(None) => Err(DbError::NotRepeatable(NotRepeatable::Unreadable)),
         Err(e) => Err(failure(&e).0),
@@ -1970,13 +1971,16 @@ struct Asked {
     /// when it has one. The question's own `MAX_EXECUTION_TIME` hint limits the question alone
     /// and leaves this variable as the session has it (unlike `SET_VAR`).
     statement: Option<Duration>,
+    /// MariaDB: the session's `lock_wait_timeout` in seconds (0 is not to wait at all).
+    lock: Option<u64>,
 }
 
 /// How long a bounded read of the app's own ([`bounded_select`]) waits for a metadata lock, in
-/// seconds: the shortest `lock_wait_timeout` the server takes, so never longer than the
-/// session's. The session's own value cannot be read on the way: the allowlist's question sets
-/// it for itself (`SET_VAR` in [`OWN_READ_HINTS`]) and so reads its own value, and asking apart
-/// would cost another round trip.
+/// seconds: on MySQL the shortest `lock_wait_timeout` it takes, so never longer than the
+/// session's. MySQL's own value cannot be read on the way: the allowlist's question sets it for
+/// itself (`SET_VAR` in [`OWN_READ_HINTS`]) and so reads its own value, and asking apart would
+/// cost another round trip. MariaDB reads that hint as a comment, so its value is asked with the
+/// question ([`Asked::lock`]) and never made longer.
 const BOUNDED_LOCK_WAIT: u64 = 1;
 
 /// A session's statement time limit as the server writes it (milliseconds; MariaDB: seconds,
@@ -2006,15 +2010,18 @@ fn bounded_select(
     hints: &str,
 ) -> Option<(String, Duration)> {
     let rest = sql.strip_prefix("SELECT ").or_else(|| sql.strip_prefix("SELECT\n"))?;
-    let statement = asked.statement.map_or(statement, |s| s.min(statement)).max(Duration::from_millis(1));
-    let lock = BOUNDED_LOCK_WAIT;
-    let text = if mariadb {
-        let secs = statement.as_secs_f64();
-        format!("SET STATEMENT max_statement_time = {secs}, lock_wait_timeout = {lock} FOR {sql}")
-    } else {
-        let ms = statement.as_millis().min(u128::from(u32::MAX));
-        format!("SELECT /*+ MAX_EXECUTION_TIME({ms}) SET_VAR(lock_wait_timeout={lock}){hints} */ {rest}")
-    };
+    let statement = asked.statement.map_or(statement, |s| s.min(statement));
+    if mariadb {
+        // Its limits take fractions, and a lock wait of 0 is the session's choice not to wait: a
+        // value that does not read is taken as that, never as a longer wait.
+        let (secs, lock) = (statement.as_secs_f64(), asked.lock.unwrap_or(0).min(BOUNDED_LOCK_WAIT));
+        let text = format!("SET STATEMENT max_statement_time = {secs}, lock_wait_timeout = {lock} FOR {sql}");
+        return Some((text, statement));
+    }
+    // MySQL's limit is in whole milliseconds, 0 for none.
+    let statement = statement.max(Duration::from_millis(1));
+    let (ms, lock) = (statement.as_millis().min(u128::from(u32::MAX)), BOUNDED_LOCK_WAIT);
+    let text = format!("SELECT /*+ MAX_EXECUTION_TIME({ms}) SET_VAR(lock_wait_timeout={lock}){hints} */ {rest}");
     Some((text, statement))
 }
 
@@ -2070,16 +2077,21 @@ fn name_parts(name: &str) -> Vec<String> {
 /// `risk::mysql::names` gives them): the session's transaction isolation and the time limit of
 /// a `SELECT`, and the first of them
 /// that is a view or a table of the server's own (`information_schema.TABLES` rows other than
-/// `BASE TABLE`), compared without case. A name may be a table of the current database, a
-/// database's table (`db.t`), a column of a table (`t.c`, `db.t.c`) or an alias: every reading
-/// that can name a table is asked about.
-fn check_sql(names: &[String], d: Dialect, mariadb: bool) -> String {
+/// `BASE TABLE`), compared without case; on MariaDB the session's lock wait too ([`Asked::lock`]).
+/// A name may be a table of the current database, a database's table (`db.t`), a column of a
+/// table (`t.c`, `db.t.c`) or an alias: every reading that can name a table is asked about.
+fn check_sql(names: &[String], d: Dialect, server: &Server) -> String {
     let cond = name_condition(names, d);
-    let limit = if mariadb { "max_statement_time" } else { "max_execution_time" };
+    let (limit, lock) = if server.mariadb {
+        ("max_statement_time", "@@SESSION.lock_wait_timeout")
+    } else {
+        ("max_execution_time", "NULL")
+    };
+    let isolation = server.isolation_var();
     format!(
-        "SELECT {OWN_READ_HINTS} @@SESSION.transaction_isolation, (SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME) \
+        "SELECT {OWN_READ_HINTS} @@SESSION.{isolation}, (SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME) \
          FROM information_schema.TABLES t WHERE t.TABLE_TYPE <> 'BASE TABLE' AND ({cond}) LIMIT 1), \
-         @@SESSION.{limit}"
+         @@SESSION.{limit}, {lock}"
     )
 }
 
