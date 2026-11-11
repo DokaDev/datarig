@@ -816,3 +816,25 @@ fn the_headers_of_filtered_and_sorted_columns_are_tinted() {
         }
     }
 }
+
+/// Columns hidden: a selection of whole rows (`V`) with one column shown is a selection of
+/// that column; `=` and `!` take its values, NULL among them, not the hidden ones.
+#[test]
+fn a_row_selection_over_one_shown_column_filters_by_it() {
+    let mut h = users();
+    for c in [0, 2, 3, 4, 5, 6] {
+        at(&mut h, 0, c);
+        h.keys("C");
+    }
+    assert!(runs(&mut h).is_empty(), "hiding runs nothing");
+    for (key, cond) in
+        [("=", "(name IN ('it''s') OR name IS NULL)"), ("!", "(name NOT IN ('it''s') AND name IS NOT NULL)")]
+    {
+        at(&mut h, 0, 1);
+        h.keys("Vj");
+        h.keys(key);
+        assert_eq!(runs(&mut h), sent(cond), "{key}: {}", flashed(&h));
+        page(&mut h);
+        clear(&mut h);
+    }
+}

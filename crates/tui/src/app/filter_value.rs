@@ -214,10 +214,11 @@ impl App {
             Some(a) => g.shape.span(a, cursor, len, rs.columns.len()),
             None => (cursor.0..cursor.0 + 1, cursor.1..cursor.1 + 1),
         };
-        if cols.len() != 1 {
-            return Err(off(Label::TableFilterByValueOffOneColumn, Label::TableFilterByValueOneColumn));
+        // The columns the grid shows of the span: whole rows over one shown column are its.
+        match g.shown_in(cols)[..] {
+            [col] => Ok((col, rows)),
+            _ => Err(off(Label::TableFilterByValueOffOneColumn, Label::TableFilterByValueOneColumn)),
         }
-        Ok((cols.start, rows))
     }
 
     /// The filter by value `pick` of table tab `id`'s cursor cell or selection, written into
