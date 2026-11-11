@@ -225,6 +225,7 @@
 "table.dialog.values.containing" = "containing “{text}”"
 "table.dialog.values.earlier_load" = "earlier load"
 "table.dialog.values.long" = "long value ({bytes} bytes)"
+"table.dialog.values.inexact" = "value not shown ({bytes} bytes)"
 "table.dialog.values.long_rows" = { one = "{count} long value not listed", other = "{count} long values not listed" }
 "table.dialog.values.prefix" = "grouped by its first bytes"
 "table.dialog.values.more" = "more values than shown"
@@ -239,6 +240,7 @@
 "table.dialog.tick.not_whole" = "Not ticked: this column {reason}"
 "table.dialog.tick.too_big" = "Not ticked: binary values over 64 KiB are not compared"
 "table.dialog.tick.long" = "Not ticked: a long value ({bytes} bytes) is not sent whole"
+"table.dialog.tick.inexact" = "Not ticked: the server wrote this value otherwise than the grid writes the column"
 "table.dialog.tick.prefix" = "Not ticked: the server may group values by their first bytes (max_sort_length), so its rows may hold others"
 "table.dialog.tick.earlier" = "Not ticked: counted under other conditions or in another session; count again"
 "table.dialog.tick.type_changed" = "Not ticked: an earlier load read this column as another type"

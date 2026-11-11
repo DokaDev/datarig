@@ -46,6 +46,9 @@ pub(crate) enum NotTicked {
     NotAdmitted(NotAdmitted),
     /// Longer than a list keeps: its length in bytes.
     Long(u64),
+    /// Sent by the server written otherwise than the grid writes the column's cell (not shown):
+    /// its length in bytes as the server measures it.
+    Inexact(u64),
     /// The server may count other values that start with the same bytes in its group.
     Prefix,
     /// Of a count whose scope is not the dialog's now.
@@ -286,6 +289,8 @@ impl App {
                 }
                 let tick = if !current {
                     Err(NotTicked::Earlier)
+                } else if g.inexact {
+                    Err(NotTicked::Inexact(g.bytes.unwrap_or(0)))
                 } else if !g.whole {
                     Err(NotTicked::Long(g.bytes.unwrap_or(0)))
                 } else if g.prefix {
@@ -422,6 +427,7 @@ impl App {
             NotTicked::Long(bytes) => {
                 Notice::new(Msg::TableDialogTickLong { bytes: bytes.to_string() }, Level::Warning)
             }
+            NotTicked::Inexact(_) => warn(Label::TableDialogTickInexact),
             NotTicked::Prefix => warn(Label::TableDialogTickPrefix),
             NotTicked::Earlier => warn(Label::TableDialogTickEarlier),
             NotTicked::TypeChanged => warn(Label::TableDialogTickTypeChanged),

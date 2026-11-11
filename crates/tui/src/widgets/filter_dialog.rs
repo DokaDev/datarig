@@ -824,6 +824,10 @@ fn draw_values(
             (None, Err(NotTicked::Long(bytes))) => {
                 (i18n.msg(&Msg::TableDialogValuesLong { bytes: bytes.to_string() }).to_string(), base.fg(th.fg_muted))
             }
+            (None, Err(NotTicked::Inexact(bytes))) => (
+                i18n.msg(&Msg::TableDialogValuesInexact { bytes: bytes.to_string() }).to_string(),
+                base.fg(th.fg_muted),
+            ),
             (None, _) => ("NULL".to_string(), base.fg(th.fg_muted)),
         };
         put(buf, px + 6, ly, &text, usize::from(name_w), style);

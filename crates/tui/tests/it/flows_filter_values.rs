@@ -131,7 +131,14 @@ fn draft(h: &Harness) -> String {
 }
 
 fn value(v: Option<&str>, rows: u64) -> GroupValue {
-    GroupValue { value: v.map(str::to_string), whole: true, bytes: v.map(|v| v.len() as u64), rows, prefix: false, inexact: false }
+    GroupValue {
+        value: v.map(str::to_string),
+        whole: true,
+        bytes: v.map(|v| v.len() as u64),
+        rows,
+        prefix: false,
+        inexact: false,
+    }
 }
 
 /// The server's answer to count `id`.
@@ -556,4 +563,24 @@ fn ctrl_c_cancels_the_count_as_it_does_a_run() {
     assert!(counts(&mut h).is_empty());
     let screen = h.screen(120, 34);
     assert!(screen.contains("Values not counted: The column's type has no equality"), "{screen}");
+}
+
+/// A value the server sent written otherwise than the grid writes the column (not shown) is
+/// listed as that, not as a long value, and is not ticked.
+#[test]
+fn a_value_the_server_writes_otherwise_is_listed_as_not_shown() {
+    let mut h = users();
+    dialog_on(&mut h, 1);
+    h.keys("#");
+    let sent = counts(&mut h);
+    let other = GroupValue { value: None, whole: false, bytes: Some(4), rows: 2, prefix: false, inexact: true };
+    counted(&mut h, sent[0].0, Ok(GroupCounts { values: vec![value(Some("paid"), 9), other], more: false }));
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("value not shown (4 bytes)"), "{screen}");
+    assert!(!screen.contains("long value"), "{screen}");
+    to_values(&mut h, 0);
+    h.keys("G");
+    h.key(KeyCode::Char(' '));
+    assert!(h.screen(120, 34).contains("Not ticked: the server wrote this value otherwise"), "{}", h.screen(120, 34));
+    assert_eq!(draft(&h), "");
 }
