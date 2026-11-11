@@ -1285,7 +1285,8 @@ async fn order_keys_are_read_without_a_lock() {
 /// `int4out`, which the server would call and write after the name) is written without it, for
 /// the type and for an array of it, so the key read runs no procedure but the server's own,
 /// while another session holds the table in `ACCESS EXCLUSIVE` mode. Built-in modifiers are
-/// still written.
+/// still written. A `>=` of the schema's on `(oid, integer)` in the session's path is not called
+/// for the check either.
 #[tokio::test(flavor = "multi_thread")]
 async fn order_keys_never_run_a_types_own_modifier_output() {
     let Some(url) = pg_url("order_keys_never_run_a_types_own_modifier_output") else { return };
@@ -1309,6 +1310,13 @@ async fn order_keys_never_run_a_types_own_modifier_output() {
             "CREATE TABLE {s}.modded (v {s}.tm(7), w {s}.tm(7)[], n numeric(5, 2), vc varchar(3)[], \
              ts timestamptz(3), id int PRIMARY KEY)"
         ),
+        // A `>=` of the schema's on (oid, integer): a closer match than the server's (oid, oid)
+        // for an unqualified `oid >= 16384`. It refuses to run.
+        format!(
+            "CREATE FUNCTION {s}.ge_refused(oid, integer) RETURNS boolean LANGUAGE plpgsql AS \
+             $$BEGIN RAISE EXCEPTION 'zz_ge_refused ran'; END$$"
+        ),
+        format!("CREATE OPERATOR {s}.>= (LEFTARG = oid, RIGHTARG = integer, FUNCTION = {s}.ge_refused)"),
     ] {
         pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
     }
@@ -1320,6 +1328,11 @@ async fn order_keys_never_run_a_types_own_modifier_output() {
     );
     let DbEvent::Page { rows, .. } = observer.run(1, &sql).await else { panic!("format_type") };
     assert_eq!(rows[0][0].as_deref(), Some(&format!("{s}.tm11,{s}.tm11[]")[..]), "the procedure writes 11");
+    // The schema's operator is live where the schema is in the path: it runs, and refuses.
+    let context = || datarig_core::driver::SessionContext { database: None, schema: Some(schema.clone()) };
+    let mut inside = Conn::open_in(&url, SessionRole::Query, false, context()).await;
+    let ev = inside.run(1, "SELECT 1::oid >= 16384").await;
+    assert!(format!("{ev:?}").contains("zz_ge_refused ran"), "{ev:?}");
 
     let mut holder = Conn::open(&url, SessionRole::Query).await;
     assert!(matches!(holder.run(1, "BEGIN").await, DbEvent::Done { .. }));
@@ -1328,7 +1341,8 @@ async fn order_keys_never_run_a_types_own_modifier_output() {
     let tag = format!("tmod{}", std::process::id());
     let cfg = ConnectionConfig { name: "it".into(), dsn: Some(url.clone()), ..ConnectionConfig::test_db() };
     let (tx, rx) = unbounded_channel();
-    let o = ConnectOptions::new(PAGE, SessionRole::Meta, &tag).dialer(dialer());
+    // The metadata session's path holds the schema (and its operator) too.
+    let o = ConnectOptions::new(PAGE, SessionRole::Meta, &tag).dialer(dialer()).context(context());
     let mut meta = Conn { session: PgDriver.connect(&cfg, SessionRole::Meta, o, tx), rx };
     meta.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
     meta.session.send(DbCommand::LoadTableKeys { id: 7, schema: schema.clone(), table: "modded".into() });
@@ -1339,8 +1353,9 @@ async fn order_keys_never_run_a_types_own_modifier_output() {
     assert_eq!(
         types,
         vec![
-            format!("{s}.tm"),
-            format!("{s}.tm[]"),
+            // Unqualified: the schema is in the session's path.
+            "tm".to_string(),
+            "tm[]".to_string(),
             "numeric(5,2)".to_string(),
             "character varying(3)[]".to_string(),
             "timestamp(3) with time zone".to_string(),

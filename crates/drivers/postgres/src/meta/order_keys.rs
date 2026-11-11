@@ -110,11 +110,14 @@ LEFT JOIN LATERAL (
          -- A type's modifier is written by its `typmodout` procedure (an array's, by its
          -- element type's): taken only when that is the server's own (an object number below
          -- 16384, `FirstNormalObjectId`), else the type is written without it, so that no
-         -- procedure of a user's or an extension's runs here.
+         -- procedure of a user's or an extension's runs here. Every comparison names the
+         -- server's own operator on `oid`s: another one in the path (`>=(oid, integer)`) would
+         -- be a closer match than a cast.
          pg_catalog.array_agg(pg_catalog.format_type(a.atttypid, CASE WHEN NOT EXISTS (
            SELECT 1 FROM pg_catalog.pg_type t
-           WHERE t.oid IN (a.atttypid, (SELECT e.typelem FROM pg_catalog.pg_type e WHERE e.oid = a.atttypid))
-             AND t.typmodout::pg_catalog.oid >= 16384
+           WHERE (t.oid OPERATOR(pg_catalog.=) a.atttypid OR t.oid OPERATOR(pg_catalog.=) (
+               SELECT e.typelem FROM pg_catalog.pg_type e WHERE e.oid OPERATOR(pg_catalog.=) a.atttypid))
+             AND t.typmodout::pg_catalog.oid OPERATOR(pg_catalog.>=) 16384::pg_catalog.oid
          ) THEN a.atttypmod END) ORDER BY a.attnum) AS types,
          pg_catalog.array_agg(a.attnotnull ORDER BY a.attnum) AS attnotnull,
          pg_catalog.array_agg(EXISTS (
@@ -272,8 +275,9 @@ mod tests {
         // A modifier only where the server's own procedure writes it: of the type and of an
         // array's element type; never the modifier passed as it is.
         for part in [
-            "WHERE t.oid IN (a.atttypid, (SELECT e.typelem FROM pg_catalog.pg_type e WHERE e.oid = a.atttypid))",
-            "AND t.typmodout::pg_catalog.oid >= 16384",
+            "WHERE (t.oid OPERATOR(pg_catalog.=) a.atttypid OR t.oid OPERATOR(pg_catalog.=) (",
+            "SELECT e.typelem FROM pg_catalog.pg_type e WHERE e.oid OPERATOR(pg_catalog.=) a.atttypid))",
+            "AND t.typmodout::pg_catalog.oid OPERATOR(pg_catalog.>=) 16384::pg_catalog.oid",
             ") THEN a.atttypmod END) ORDER BY a.attnum) AS types",
         ] {
             assert!(ORDER_KEYS.contains(part), "{part}");
