@@ -446,10 +446,13 @@ impl Row {
         self.values.iter().map(|v| value_text(v, d)).collect()
     }
 
-    /// The values as one value field shows them on dialect `d`: one as it is, several joined
-    /// with `, ` (a list).
-    pub(crate) fn input_text(&self, d: Dialect) -> String {
-        self.value_texts(d).join(", ")
+    /// The values as one value field shows them on dialect `d` for column `c`: one as it is,
+    /// a list as [`list_text`] writes it (read back by [`parse_list`] to the same values).
+    pub(crate) fn input_text(&self, d: Dialect, c: &ColumnInfo) -> String {
+        match self.op.arity() {
+            Arity::Many => list_text(&self.values, d, c),
+            _ => self.value_texts(d).join(", "),
+        }
     }
 }
 
@@ -480,23 +483,139 @@ pub(crate) fn value_text(v: &Value, d: Dialect) -> String {
 /// (`BETWEEN` has two; a list has one, its values separated by commas).
 ///
 /// A field left empty gives no value (the row waits for it); the values of a `BETWEEN` stop at
-/// the first empty one. A list's values are trimmed and empty ones left out: a value holding a
-/// comma is ticked in the values, not typed. On a number column a value is a number only when
-/// it is a plain number literal (an optional `-`, digits with at most one point, an optional
+/// the first empty one. A list is read by [`parse_list`]: values separated by commas, trimmed,
+/// empty ones left out, a value in single quotes as it is and `NULL` bare SQL NULL. On a
+/// number column a value is a number only when it is a plain number literal (an optional `-`, digits with at most one point, an optional
 /// exponent); bytes are typed in hexadecimal after `\x` or `0x`. Anything else is text, written
-/// as a string literal the server converts: `NULL` typed is the text `NULL` (a NULL row is
-/// `is NULL`). A pattern's value is always text.
+/// as a string literal the server converts: `NULL` typed in a field of one value is the text
+/// `NULL` (a NULL row is `is NULL`). A pattern's value is always text.
 pub(crate) fn parse_input(op: Op, fields: &[&str], c: &ColumnInfo) -> Vec<Value> {
     let typed = |s: &str| if op.pattern() { Value::Text(s.to_string()) } else { typed_value(s, c) };
     match op.arity() {
         Arity::Zero => Vec::new(),
         Arity::One => fields.first().filter(|s| !s.is_empty()).map(|s| vec![typed(s)]).unwrap_or_default(),
         Arity::Two => fields.iter().take(2).take_while(|s| !s.is_empty()).map(|s| typed(s)).collect(),
-        Arity::Many => fields
-            .first()
-            .map(|s| s.split(',').map(str::trim).filter(|s| !s.is_empty()).map(typed).collect())
-            .unwrap_or_default(),
+        Arity::Many => fields.first().map(|s| parse_list(s, c, &[])).unwrap_or_default(),
     }
+}
+
+/// One value of a list field as written: its text without the blanks around it, and what is
+/// between the quotes when it is written in single quotes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ListItem {
+    pub(crate) written: String,
+    pub(crate) quoted: Option<String>,
+}
+
+/// The values written in list field text `s`, separated by commas outside single quotes. A
+/// value in single quotes is what is between them (a quote inside written twice); a quote left
+/// open runs to the end of the text; text after the closing quote makes the value the text as
+/// written.
+pub(crate) fn list_items(s: &str) -> Vec<ListItem> {
+    let mut items = Vec::new();
+    let mut rest = s;
+    loop {
+        let t = rest.trim_start();
+        let unquoted = |t: &str| ListItem { written: t.trim_end().to_string(), quoted: None };
+        let (item, next) = match t.strip_prefix('\'') {
+            Some(body) => {
+                let mut inner = String::new();
+                let mut close = None;
+                let mut chars = body.char_indices().peekable();
+                while let Some((i, c)) = chars.next() {
+                    if c == '\'' {
+                        if chars.next_if(|&(_, c)| c == '\'').is_some() {
+                            inner.push('\'');
+                            continue;
+                        }
+                        close = Some(1 + i + 1);
+                        break;
+                    }
+                    inner.push(c);
+                }
+                match close {
+                    None => (ListItem { written: t.trim_end().to_string(), quoted: Some(inner) }, None),
+                    Some(at) => {
+                        let (tail, next) = match t[at..].find(',') {
+                            Some(k) => (&t[at..at + k], Some(&t[at + k + 1..])),
+                            None => (&t[at..], None),
+                        };
+                        match tail.trim().is_empty() {
+                            true => (ListItem { written: t[..at].to_string(), quoted: Some(inner) }, next),
+                            false => (unquoted(&t[..at + tail.len()]), next),
+                        }
+                    }
+                }
+            }
+            None => match t.find(',') {
+                Some(k) => (unquoted(&t[..k]), Some(&t[k + 1..])),
+                None => (unquoted(t), None),
+            },
+        };
+        items.push(item);
+        match next {
+            Some(n) => rest = n,
+            None => break,
+        }
+    }
+    items
+}
+
+/// The values of list field text `s` for column `c` ([`list_items`]): a value in quotes is that
+/// text; `NULL` written bare is SQL NULL; anything else as one typed value is
+/// ([`parse_input`]); an empty one is left out. A value written as `kept` gives it (each the
+/// text [`list_text`] wrote for a value the field held, with that value), so editing one value
+/// of a list never changes the others.
+pub(crate) fn parse_list(s: &str, c: &ColumnInfo, kept: &[(String, Value)]) -> Vec<Value> {
+    let mut kept: Vec<Option<&(String, Value)>> = kept.iter().map(Some).collect();
+    list_items(s)
+        .into_iter()
+        .filter_map(|it| {
+            if let Some(slot) = kept.iter_mut().find(|k| k.is_some_and(|(w, _)| *w == it.written)) {
+                return slot.take().map(|(_, v)| v.clone());
+            }
+            match it.quoted {
+                Some(q) => Some(Value::Text(q)),
+                None if it.written.is_empty() => None,
+                None => Some(list_value(&it.written, c)),
+            }
+        })
+        .collect()
+}
+
+/// A list value written bare: `NULL` is SQL NULL, anything else as one typed value is.
+fn list_value(written: &str, c: &ColumnInfo) -> Value {
+    match written.eq_ignore_ascii_case("NULL") {
+        true => Value::Null,
+        false => typed_value(written, c),
+    }
+}
+
+/// Value `v` of a list of column `c` as [`list_text`] writes it on dialect `d`: as the field
+/// shows one value ([`value_text`]) where that reads back as it, else text in single quotes.
+fn list_item_text(v: &Value, d: Dialect, c: &ColumnInfo) -> String {
+    let plain = value_text(v, d);
+    let reads_back = !plain.is_empty()
+        && plain.trim() == plain
+        && !plain.contains(',')
+        && !plain.starts_with('\'')
+        && list_value(&plain, c) == *v;
+    match v {
+        Value::Text(s) if !reads_back => format!("'{}'", s.replace('\'', "''")),
+        _ => plain,
+    }
+}
+
+/// Values `values` of column `c` as a list field shows them on dialect `d`: separated by `, `,
+/// each as [`parse_list`] reads it back to the same value (SQL NULL bare, text that would read
+/// otherwise in single quotes).
+pub(crate) fn list_text(values: &[Value], d: Dialect, c: &ColumnInfo) -> String {
+    values.iter().map(|v| list_item_text(v, d, c)).collect::<Vec<_>>().join(", ")
+}
+
+/// Values `values` each with the text [`list_text`] writes for it, for [`parse_list`].
+pub(crate) fn list_kept(values: &[Value], d: Dialect, c: &ColumnInfo) -> Vec<(String, Value)> {
+    values.iter().map(|v| (list_item_text(v, d, c), v.clone())).collect()
 }
 
 /// Text `s` typed as a value of column `c` (see [`parse_input`]).

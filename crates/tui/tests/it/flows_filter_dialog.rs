@@ -505,3 +505,47 @@ fn the_sort_line_steps_through_none_ascending_and_descending_both_ways() {
     h.key(KeyCode::Left);
     assert_eq!(order(&h), "");
 }
+
+/// In the open dialog, on column `name` (second in the list): the value field of its first
+/// condition, the cursor at its end.
+fn name_values(h: &mut Harness) {
+    h.key(KeyCode::Char('j'));
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::End);
+    assert_eq!(h.app.key_context(), Ctx::FilterDialogText);
+}
+
+#[test]
+fn a_value_added_to_a_list_keeps_its_null_and_its_values_with_commas() {
+    // A list with NULL among its values: adding one keeps the NULL, not the text 'NULL'.
+    let mut h = users();
+    h.command("where (name IN ('paid') OR name IS NULL)");
+    runs(&mut h);
+    answer(&mut h);
+    h.keys("f");
+    name_values(&mut h);
+    h.type_text(", refunded");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE ((name IN ('paid', 'refunded') OR name IS NULL))")]]);
+    // A value holding a comma stays one value when another is changed.
+    let mut h = users();
+    h.command("where name IN ('a,b', 'x')");
+    runs(&mut h);
+    answer(&mut h);
+    h.keys("f");
+    name_values(&mut h);
+    h.type_text("y");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name IN ('a,b', 'xy'))")]]);
+    // Empty text, blanks at the edges and the text 'NULL' stay what they were.
+    let mut h = users();
+    h.command("where name IN ('', ' a ', 'NULL', 'it''s')");
+    runs(&mut h);
+    answer(&mut h);
+    h.keys("f");
+    name_values(&mut h);
+    h.type_text(", z");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name IN ('', ' a ', 'NULL', 'it''s', 'z'))")]]);
+}

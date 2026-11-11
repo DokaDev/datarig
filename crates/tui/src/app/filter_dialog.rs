@@ -436,6 +436,21 @@ impl FilterDialog {
         }
     }
 
+    /// What the dialog knows of column `name`; a column it does not list is of no known kind.
+    pub(crate) fn column_info(&self, name: &str) -> ColumnInfo {
+        self.columns.iter().find(|c| c.name == name).cloned().unwrap_or_else(|| ColumnInfo {
+            name: name.to_string(),
+            type_name: String::new(),
+            kind: datarig_core::query::ColumnKind::Other,
+            meta: None,
+            enum_known: false,
+            primary_key: false,
+            foreign_key: false,
+            not_null: false,
+            invisible: false,
+        })
+    }
+
     /// The value fields of term `t`'s condition, as its values are now.
     pub(crate) fn fill_inputs(&mut self, t: usize) {
         let d = self.dialect;
@@ -446,7 +461,7 @@ impl FilterDialog {
                     let v = row.value_texts(d);
                     (0..2).map(|i| TextInput::new(v.get(i).map_or("", String::as_str))).collect()
                 }
-                _ => vec![TextInput::new(&row.input_text(d))],
+                _ => vec![TextInput::new(&row.input_text(d, &self.column_info(&row.col)))],
             },
             None => Vec::new(),
         };

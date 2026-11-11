@@ -409,12 +409,14 @@ fn typed_lists_and_ranges_split_into_values() {
 
 #[test]
 fn a_rows_values_show_as_the_field_holds_them() {
+    let data = info("data", ColumnKind::Bytes);
+    let f = info("f", ColumnKind::Other);
     let r = row("data", Op::InList, vec![Value::Bytes(vec![0xab, 1]), num("2"), text("a b"), Value::Null]);
-    assert_eq!(r.input_text(PG), "\\xab01, 2, a b, NULL");
-    assert_eq!(r.input_text(MY), "0xAB01, 2, a b, NULL");
+    assert_eq!(r.input_text(PG, &data), "\\xab01, 2, a b, NULL");
+    assert_eq!(r.input_text(MY, &data), "0xAB01, 2, a b, NULL");
     assert_eq!(r.value_texts(PG).len(), 4);
-    assert_eq!(row("f", Op::Eq, vec![Value::Bool(true)]).input_text(PG), "true");
-    assert_eq!(Row::new("f", Op::Eq).input_text(PG), "");
+    assert_eq!(row("f", Op::Eq, vec![Value::Bool(true)]).input_text(PG, &f), "true");
+    assert_eq!(Row::new("f", Op::Eq).input_text(PG, &f), "");
     assert!(!Row::new("f", Op::Eq).complete());
     assert!(Row::new("f", Op::IsNull).complete());
 }
@@ -765,4 +767,35 @@ fn word_operators_show_their_sql() {
     assert_eq!(Op::Between.arity(), Arity::Two);
     assert_eq!(Op::NotInList.arity(), Arity::Many);
     assert_eq!(Op::IsNull.arity(), Arity::Zero);
+}
+
+#[test]
+fn a_list_field_reads_back_to_the_values_it_shows() {
+    let name = info("name", ColumnKind::Text);
+    let id = info("id", ColumnKind::Number);
+    let data = info("data", ColumnKind::Bytes);
+    let cases: Vec<(&ColumnInfo, Vec<Value>, &str)> = vec![
+        (&name, vec![text("paid"), Value::Null], "paid, NULL"),
+        (&name, vec![text("NULL"), text("null")], "'NULL', 'null'"),
+        (&name, vec![text("a,b"), text("x")], "'a,b', x"),
+        (&name, vec![text(""), text(" a "), text("it's"), text("'q")], "'', ' a ', it's, '''q'"),
+        (&id, vec![num("1"), text("12"), text("x y")], "1, '12', x y"),
+        (&data, vec![Value::Bytes(vec![1]), text("0x01")], "\\x01, '0x01'"),
+    ];
+    for (c, values, shown) in cases {
+        let written = list_text(&values, PG, c);
+        assert_eq!(written, shown);
+        assert_eq!(parse_list(&written, c, &[]), values, "{shown}");
+        assert_eq!(parse_list(&written, c, &list_kept(&values, PG, c)), values, "{shown}");
+    }
+    // A value added after the others leaves them as they were.
+    let values = vec![text("a,b"), Value::Null, Value::Bool(true)];
+    let kept = list_kept(&values, PG, &name);
+    let more = format!("{}, z", list_text(&values, PG, &name));
+    assert_eq!(parse_list(&more, &name, &kept), vec![text("a,b"), Value::Null, Value::Bool(true), text("z")]);
+    // Typed: bare NULL in any case is NULL, a quote left open runs to the end, text after a
+    // closing quote is the text as written, empty values are left out.
+    assert_eq!(parse_list("Null, 'a, b", &name, &[]), vec![Value::Null, text("a, b")]);
+    assert_eq!(parse_list("'a'b, , c ,", &name, &[]), vec![text("'a'b"), text("c")]);
+    assert_eq!(list_items("x, 'y").last().map(|i| i.quoted.clone()), Some(Some("y".into())));
 }

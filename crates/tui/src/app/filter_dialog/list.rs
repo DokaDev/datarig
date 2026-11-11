@@ -144,7 +144,10 @@ fn ticked(r: &Row) -> Vec<Value> {
 pub(crate) fn fragment(op: Op, typed: &str) -> Option<String> {
     let f = match op {
         Op::Eq => typed.trim(),
-        Op::InList => typed.rsplit(',').next().unwrap_or("").trim(),
+        Op::InList => {
+            let last = draft::list_items(typed).pop()?;
+            return Some(last.quoted.unwrap_or(last.written)).filter(|f| !f.trim().is_empty());
+        }
         _ => return None,
     };
     (!f.is_empty()).then(|| f.to_string())

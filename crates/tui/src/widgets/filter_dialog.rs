@@ -356,8 +356,11 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
                         cursor = Some((cx, y));
                     }
                 } else {
-                    let text =
-                        if n == 2 { values.get(k).cloned().unwrap_or_default() } else { row.input_text(d.dialect) };
+                    let text = if n == 2 {
+                        values.get(k).cloned().unwrap_or_default()
+                    } else {
+                        row.input_text(d.dialect, &d.column_info(&row.col))
+                    };
                     put(buf, r.x + 1, y, &text, usize::from(r.width.saturating_sub(2)), field);
                 }
                 hits.values.push((r, t, k));

@@ -6,7 +6,7 @@
 use super::draft::{self, Arity, Op, Row};
 use super::*;
 use crate::widgets::text_input::InputResult;
-use datarig_core::query::{ColumnKind, Dir, Value};
+use datarig_core::query::{Dir, Value};
 
 /// The parts `Tab` moves between, in order: the column list, the right pane, the footer's
 /// chips, its keys, the `LIMIT` field and the `SQL` toggle; while the SQL section is open, its
@@ -43,25 +43,13 @@ fn values_for(row: &Row, op: Op, c: &ColumnInfo, d: Dialect) -> Vec<Value> {
         Arity::Zero => Vec::new(),
         Arity::One => texts.first().cloned().into_iter().collect(),
         Arity::Two => texts.iter().take(2).cloned().collect(),
-        Arity::Many => vec![texts.join(", ")],
+        // Each value typed again on its own: a comma inside one does not split it.
+        Arity::Many => {
+            return texts.iter().filter(|t| !t.is_empty()).flat_map(|t| draft::parse_input(Op::Eq, &[t], c)).collect();
+        }
     };
     let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
     draft::parse_input(op, &refs, c)
-}
-
-/// What the dialog knows of column `name`; a column it does not list is of no known kind.
-fn column_info(d: &FilterDialog, name: &str) -> ColumnInfo {
-    d.columns.iter().find(|c| c.name == name).cloned().unwrap_or_else(|| ColumnInfo {
-        name: name.to_string(),
-        type_name: String::new(),
-        kind: ColumnKind::Other,
-        meta: None,
-        enum_known: false,
-        primary_key: false,
-        foreign_key: false,
-        not_null: false,
-        invisible: false,
-    })
 }
 
 impl App {
@@ -257,9 +245,16 @@ impl App {
             DialogFocus::Value(t, k) => {
                 let texts: Vec<String> = d.inputs.iter().map(|i| i.text().to_string()).collect();
                 let Some(row) = d.draft.where_.terms().get(t).and_then(|t| t.row.clone()) else { return };
-                let c = column_info(d, &row.col);
+                let c = d.column_info(&row.col);
                 let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-                let values = draft::parse_input(row.op, &refs, &c);
+                let values = match row.op.arity() {
+                    // Values written as the field showed them stay what they were.
+                    Arity::Many => {
+                        let kept = draft::list_kept(&row.values, d.dialect, &c);
+                        draft::parse_list(refs.first().copied().unwrap_or(""), &c, &kept)
+                    }
+                    _ => draft::parse_input(row.op, &refs, &c),
+                };
                 // What is typed narrows the column's value list.
                 d.narrow = list::fragment(row.op, refs.first().copied().unwrap_or("")).map(|f| (t, f));
                 self.filter_dialog_edit(Some(FieldKey::Value(t, k)), |d, target| {
@@ -332,7 +327,7 @@ impl App {
             KeyCode::Char(' ') => {
                 let tab = d.tab;
                 let Some(row) = d.draft.where_.terms().get(t).and_then(|t| t.row.clone()) else { return };
-                let c = column_info(d, &row.col);
+                let c = d.column_info(&row.col);
                 let Some(target) = self.table_target(tab) else { return };
                 let at = draft::ops_for(&c, &target).iter().position(|(op, _)| *op == row.op).unwrap_or(0);
                 if let Some(d) = self.filter_dialog_mut() {
@@ -372,7 +367,7 @@ impl App {
         let (DialogFocus::Op(t) | DialogFocus::Value(t, _)) = d.focus else { return None };
         let row = d.draft.where_.terms().get(t)?.row.as_ref()?;
         let target = self.table_target(d.tab)?;
-        Some(draft::ops_for(&column_info(d, &row.col), &target))
+        Some(draft::ops_for(&d.column_info(&row.col), &target))
     }
 
     /// The picker's selection becomes the focused condition's operator (a dimmed one is not
@@ -388,7 +383,7 @@ impl App {
         }
         d.picker = None;
         let Some(row) = d.draft.where_.terms().get(t).and_then(|t| t.row.clone()) else { return };
-        let c = column_info(d, &row.col);
+        let c = d.column_info(&row.col);
         let values = values_for(&row, op, &c, d.dialect);
         self.filter_dialog_edit(None, |d, target| {
             d.draft.where_.set(t, Row { op, values, keep_nulls: false, ..row }, target);
