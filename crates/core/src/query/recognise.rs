@@ -13,11 +13,14 @@
 //! model's value would be written back as a string), a NULL in an `IN` list or as a `BETWEEN`
 //! bound (SQL's three-valued logic).
 //!
+//! A list with its own test of NULL, as [`render`](super::render) writes it in parentheses
+//! (`(c IN (…) OR c IS NULL)`, `(c NOT IN (…) AND c IS NOT NULL)`), reads as the one
+//! [`Cond::In`] it is, NULL among its values.
+//!
 //! What [`render`](super::render) writes reads back as the same condition, with these
 //! exceptions: a number written as a string (for a column that is not a number) reads as text;
-//! a NULL in an `IN` list reads as its own test of NULL; on MySQL a case-insensitive pattern of a
-//! `_ci` column reads as the server's case, and `NOT` of a NULL-safe equality as a NULL-safe
-//! inequality.
+//! on MySQL a case-insensitive pattern of a `_ci` column reads as the server's case, and `NOT`
+//! of a NULL-safe equality as a NULL-safe inequality.
 //!
 //! A MySQL `TIMESTAMP`'s instant as [`render`](super::render) writes it,
 //! `CONVERT_TZ('<UTC date and time>', '+00:00', @@session.time_zone)`, reads as that value with
@@ -60,7 +63,7 @@ impl Reader<'_> {
     }
 
     fn word(&self, t: Option<&Token>, w: &str) -> bool {
-        t.is_some_and(|t| t.is_word() && self.text(t).eq_ignore_ascii_case(w))
+        is_word(self.src, t, w)
     }
 
     fn or(&self, toks: &[Token]) -> Option<Cond> {
@@ -104,43 +107,14 @@ impl Reader<'_> {
         Some(Cond::All(parts.into_iter().map(|p| self.not(p)).collect::<Option<_>>()?))
     }
 
-    /// The tokens of `toks` that stand at its own level: outside parentheses, square brackets
-    /// and `CASE … END`, with their index.
+    /// The tokens of `toks` that stand at its own level ([`level`]).
     fn level<'t>(&self, toks: &'t [Token]) -> impl Iterator<Item = (usize, &'t Token)> {
-        let (mut depth, mut cases) = (0usize, 0usize);
-        toks.iter().enumerate().filter(move |(_, t)| {
-            match t.kind {
-                Tok::LParen => depth += 1,
-                Tok::RParen => depth = depth.saturating_sub(1),
-                Tok::Op if self.text(t) == "[" => depth += 1,
-                Tok::Op if self.text(t) == "]" => depth = depth.saturating_sub(1),
-                _ if depth > 0 => {}
-                _ if self.word(Some(t), "CASE") => cases += 1,
-                _ if self.word(Some(t), "END") => cases = cases.saturating_sub(1),
-                _ => return cases == 0,
-            }
-            false
-        })
+        level(self.src, toks)
     }
 
-    /// `toks` cut at each `word` of its own level (for `AND`, not the one of a `BETWEEN`).
+    /// `toks` cut at each `word` of its own level ([`split`]).
     fn split<'t>(&self, toks: &'t [Token], word: &str) -> Vec<&'t [Token]> {
-        let mut parts = Vec::new();
-        let (mut start, mut between) = (0, false);
-        for (i, t) in self.level(toks) {
-            if self.word(Some(t), "BETWEEN") {
-                between = true;
-            } else if self.word(Some(t), word) {
-                if word == "AND" && between {
-                    between = false;
-                } else {
-                    parts.push(&toks[start..i]);
-                    start = i + 1;
-                }
-            }
-        }
-        parts.push(&toks[start..]);
-        parts
+        split(self.src, toks, word)
     }
 
     /// Whether a MySQL operator this reader does not model stands at the level of `toks`:
@@ -178,31 +152,14 @@ impl Reader<'_> {
     fn primary(&self, toks: &[Token]) -> Option<Cond> {
         let (first, last) = (toks.first()?, toks.last()?);
         if let Some(inner) = self.group(toks) {
-            return self.or(inner);
+            return self.or(inner).map(null_aware);
         }
         Some(self.predicate(toks).unwrap_or_else(|| Cond::Raw(self.src[first.start..last.end].to_string())))
     }
 
-    /// What is inside the parentheses, when one pair encloses the whole of `toks`.
+    /// What is inside the parentheses, when one pair encloses the whole of `toks` ([`group`]).
     fn group<'t>(&self, toks: &'t [Token]) -> Option<&'t [Token]> {
-        let (first, last) = (toks.first()?, toks.last()?);
-        if toks.len() < 2 || first.kind != Tok::LParen || last.kind != Tok::RParen {
-            return None;
-        }
-        let mut depth = 0usize;
-        for (i, t) in toks.iter().enumerate() {
-            match t.kind {
-                Tok::LParen => depth += 1,
-                Tok::RParen => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 && i + 1 < toks.len() {
-                        return None;
-                    }
-                }
-                _ => {}
-            }
-        }
-        Some(&toks[1..toks.len() - 1])
+        group(toks)
     }
 
     /// The column `t` names, as the catalog has it: a quoted name exactly, a bare one as the
@@ -475,7 +432,93 @@ impl Reader<'_> {
     }
 }
 
-/// A pattern escaped with a backslash (the default escape) written with `!` instead.
+/// Whether `t` (of text `src`) is the word `w`, in any case.
+pub(super) fn is_word(src: &str, t: Option<&Token>, w: &str) -> bool {
+    t.is_some_and(|t| t.is_word() && t.text(src).eq_ignore_ascii_case(w))
+}
+
+/// The tokens of `toks` (of text `src`, without trivia) that stand at its own level: outside
+/// parentheses, square brackets and `CASE … END`, with their index.
+pub(super) fn level<'t>(src: &str, toks: &'t [Token]) -> impl Iterator<Item = (usize, &'t Token)> {
+    let (mut depth, mut cases) = (0usize, 0usize);
+    toks.iter().enumerate().filter(move |(_, t)| {
+        match t.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => depth = depth.saturating_sub(1),
+            Tok::Op if t.text(src) == "[" => depth += 1,
+            Tok::Op if t.text(src) == "]" => depth = depth.saturating_sub(1),
+            _ if depth > 0 => {}
+            _ if is_word(src, Some(t), "CASE") => cases += 1,
+            _ if is_word(src, Some(t), "END") => cases = cases.saturating_sub(1),
+            _ => return cases == 0,
+        }
+        false
+    })
+}
+
+/// `toks` (of text `src`) cut at each `word` of its own level ([`level`]); for `AND`, not the
+/// one of a `BETWEEN`.
+pub(super) fn split<'t>(src: &str, toks: &'t [Token], word: &str) -> Vec<&'t [Token]> {
+    let mut parts = Vec::new();
+    let (mut start, mut between) = (0, false);
+    for (i, t) in level(src, toks) {
+        if is_word(src, Some(t), "BETWEEN") {
+            between = true;
+        } else if is_word(src, Some(t), word) {
+            if word == "AND" && between {
+                between = false;
+            } else {
+                parts.push(&toks[start..i]);
+                start = i + 1;
+            }
+        }
+    }
+    parts.push(&toks[start..]);
+    parts
+}
+
+/// What is inside the parentheses, when one pair encloses the whole of `toks`.
+pub(super) fn group(toks: &[Token]) -> Option<&[Token]> {
+    let (first, last) = (toks.first()?, toks.last()?);
+    if toks.len() < 2 || first.kind != Tok::LParen || last.kind != Tok::RParen {
+        return None;
+    }
+    let mut depth = 0usize;
+    for (i, t) in toks.iter().enumerate() {
+        match t.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 && i + 1 < toks.len() {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(&toks[1..toks.len() - 1])
+}
+
+/// The lists [`render`](super::render) writes with their test of NULL, read inside their
+/// parentheses, as the one condition they are: `(c IN (…) OR c IS NULL)` is [`Cond::In`] with
+/// NULL among its values, `(c NOT IN (…) AND c IS NOT NULL)` the same negated. The list that
+/// keeps the rows whose value is NULL, `(c NOT IN (…) OR c IS NULL)`, stays the [`Cond::Any`] it
+/// is written as (see [`Cond::column_condition`]). Anything else is `c` as it is.
+fn null_aware(c: Cond) -> Cond {
+    let (Cond::Any(parts) | Cond::All(parts)) = &c else { return c };
+    let any = matches!(c, Cond::Any(_));
+    match parts.as_slice() {
+        [Cond::In { col, values, negated }, Cond::IsNull { col: other, negated: not_null }]
+            if col == other && *negated != any && *not_null != any =>
+        {
+            let mut values = values.clone();
+            values.push(Value::Null);
+            Cond::In { col: col.clone(), values, negated: *negated }
+        }
+        _ => c,
+    }
+}
+
 /// The literal values of a single comparison.
 fn values(c: &Cond) -> Box<dyn Iterator<Item = &Value> + '_> {
     match c {
@@ -497,6 +540,7 @@ fn plain_escapes(text: &str) -> bool {
     true
 }
 
+/// A pattern escaped with a backslash (the default escape) written with `!` instead.
 fn rebang(p: &str) -> String {
     let mut out = String::with_capacity(p.len());
     let mut chars = p.chars();

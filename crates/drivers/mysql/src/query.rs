@@ -478,6 +478,14 @@ pub(crate) async fn query_loop(
                     let _ = events.send(DbEvent::Counted { id, result, snapshot });
                 })
             }
+            Next::Command(DbCommand::GroupCount { id, sql, limit }) => {
+                link.serving(&events, id);
+                s.request = id;
+                killer.clear();
+                group::group_count(&mut conn, &mut link, &env, &mut s, &sql, limit).await.map(|(result, snapshot)| {
+                    let _ = events.send(DbEvent::GroupCounted { id, result, snapshot });
+                })
+            }
             Next::Command(DbCommand::Estimate { id, sql }) => {
                 link.serving(&events, id);
                 s.request = id;
@@ -565,6 +573,7 @@ fn unanswered(events: &UnboundedSender<DbEvent>, c: DbCommand, error: &DbError) 
             DbEvent::Failed { id, error: error.clone(), cancelled: false }
         }
         DbCommand::Count { id, .. } => DbEvent::Counted { id, result: Err(error.clone()), snapshot: false },
+        DbCommand::GroupCount { id, .. } => DbEvent::GroupCounted { id, result: Err(error.clone()), snapshot: false },
         DbCommand::Estimate { id, .. } => DbEvent::Estimated { id, result: Err(error.clone()) },
         DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id, result: Err(error.clone()) },
         DbCommand::Export { id, .. } => DbEvent::Exported { id, result: Err(error.clone()), cancelled: false },
@@ -1580,7 +1589,10 @@ async fn hold_on(
                 let _ = env.events.send(DbEvent::Estimated { id: cid, result: Err(error) });
             }
             Next::Command(
-                c @ (DbCommand::Count { .. } | DbCommand::Estimate { .. } | DbCommand::CheckRepeat { .. }),
+                c @ (DbCommand::Count { .. }
+                | DbCommand::GroupCount { .. }
+                | DbCommand::Estimate { .. }
+                | DbCommand::CheckRepeat { .. }),
             ) => held.waiting.push(c),
             // Answered from what is known (nothing is sent while the result is read): it goes on.
             Next::Command(DbCommand::ServerSession { request }) => {
@@ -2375,6 +2387,40 @@ async fn read_own(
     was_open: bool,
     applied: Option<Duration>,
 ) -> Result<Result<Option<String>, DbError>, Stop> {
+    let read = read_own_as(conn, link, env, s, text, was_open, applied, OwnWant::First).await?;
+    Ok(read.map(|got| match got {
+        OwnGot::First(value) => value,
+        OwnGot::Rows(_) => None,
+    }))
+}
+
+/// What a read of the app's own reads ([`read_own_as`]).
+#[derive(Clone, Copy)]
+enum OwnWant {
+    /// The first row's first value, as text.
+    First,
+    /// Every row, each value as the session shows a cell of it ([`display`]).
+    Rows,
+}
+
+/// What a read of the app's own read ([`OwnWant`]).
+enum OwnGot {
+    First(Option<String>),
+    Rows(Vec<Vec<Cell>>),
+}
+
+/// [`read_own`], reading what `want` says.
+#[allow(clippy::too_many_arguments)]
+async fn read_own_as(
+    conn: &mut Conn,
+    link: &mut Link,
+    env: &Env<'_>,
+    s: &mut State,
+    text: &str,
+    was_open: bool,
+    applied: Option<Duration>,
+    want: OwnWant,
+) -> Result<Result<OwnGot, DbError>, Stop> {
     // The read's one row comes whatever the user's limit is (unless it is 0).
     if s.limit.current == Some(0) {
         if let Err(e) = link.guard(None, conn.query_drop("SET SESSION sql_select_limit = DEFAULT")).await? {
@@ -2395,9 +2441,15 @@ async fn read_own(
     // Cancelled while it was admitted or set up, when nothing ran for the kill to stop: the read
     // is not sent. Looked at with the session busy, so a cancel after this sends its kill.
     let unsent = env.asked.asked();
-    let read = match unsent {
-        true => Ok(None),
-        false => link.guard(Some(env.killer), conn.query_first::<String, _>(text)).await?,
+    let read = match (unsent, want) {
+        (true, _) => Ok(OwnGot::First(None)),
+        (false, OwnWant::First) => {
+            link.guard(Some(env.killer), conn.query_first::<String, _>(text)).await?.map(OwnGot::First)
+        }
+        (false, OwnWant::Rows) => link
+            .guard(Some(env.killer), conn.query::<Row, _>(text))
+            .await?
+            .map(|rows| OwnGot::Rows(rows.iter().map(|r| cells(r.columns_ref(), r)).collect())),
     };
     // Whether the user had asked when the answer came: what is done after it changes nothing.
     let cancelled = env.asked.asked();
@@ -2498,6 +2550,7 @@ async fn check_repeat(
 
 mod apply;
 mod export;
+mod group;
 
 #[cfg(test)]
 mod tests;

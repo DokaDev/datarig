@@ -9,6 +9,10 @@
 //! keys, read from the text of an `ORDER BY` field ([`parse_order`]) and written back as such
 //! ([`order_text`]).
 //!
+//! Filter text is read as the terms of its conjunction ([`split_terms`]) where that is proven,
+//! and terms are joined back ([`join_terms`]). The values of one column under a filter are
+//! counted by the server with [`group_count`].
+//!
 //! Before any statement built from a filter runs, [`check_filter`] checks the text: one boolean
 //! expression and nothing else (no `;`, no comment, no parenthesis that leaves ours), a plain
 //! read of our one table by the risk classifier, and no call of a function that is not known to
@@ -19,18 +23,22 @@
 
 mod check;
 mod compile;
+mod group;
 mod order;
 mod recognise;
 mod render;
+mod terms;
 
 pub use check::{
     BarRefusal, Confirm, EstimateOff, FilterVerdict, LexProblem, MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS,
     PG_FILTER_CALLS, PG_REFUSED_CALLS, ShapeProblem, check_filter, estimate_allowed, has_subquery,
 };
 pub use compile::{Compiled, capped, compile, compile_capped};
+pub use group::{Compares, GROUP_PREVIEW, GROUP_VALUES, GroupCount, GroupRefusal, NoEquality, compares, group_count};
 pub use order::{OrderError, OrderProblem, SortStep, order_text, parse_order, sort_column};
 pub use recognise::recognise;
 pub use render::{RenderError, and_filter, like_contains, like_starts_with, render};
+pub use terms::{LikeKind, join_terms, like_kind, split_terms};
 
 use crate::sql::dialect::Dialect;
 use serde::{Deserialize, Serialize};
@@ -310,6 +318,31 @@ pub enum ColumnKind {
 }
 
 impl Cond {
+    /// The column this condition is about when it is one comparison of one column with values
+    /// ([`Cond::Cmp`], [`Cond::NotDistinct`], [`Cond::IsNull`], [`Cond::In`], [`Cond::Like`],
+    /// [`Cond::Between`]), or the list that keeps the rows whose value is NULL as [`render`]
+    /// writes it (`Any` of a negated [`Cond::In`] without NULL and `IS NULL` of the same
+    /// column). `None` for anything else: several columns, `NOT`, a part kept as written.
+    pub fn column_condition(&self) -> Option<&str> {
+        match self {
+            Cond::Cmp { col, .. }
+            | Cond::NotDistinct { col, .. }
+            | Cond::IsNull { col, .. }
+            | Cond::In { col, .. }
+            | Cond::Like { col, .. }
+            | Cond::Between { col, .. } => Some(col),
+            Cond::Any(parts) => match parts.as_slice() {
+                [Cond::In { col, values, negated: true }, Cond::IsNull { col: other, negated: false }]
+                    if col == other && !values.is_empty() && !values.contains(&Value::Null) =>
+                {
+                    Some(col)
+                }
+                _ => None,
+            },
+            Cond::All(_) | Cond::Not(_) | Cond::Raw(_) => None,
+        }
+    }
+
     /// The columns the condition compares, each once, in the order they first come. A part
     /// kept as written ([`Cond::Raw`]) names none here, though it may use columns: a column
     /// left out is not said to be unused.

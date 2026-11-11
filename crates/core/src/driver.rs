@@ -11,8 +11,8 @@ pub use keys::{KeyCatalog, KeyMarks};
 pub use protocol::{
     AppliedStep, ApplyError, ApplyFailure, ApplyTx, ArrayElement, COUNT_LOCK_WAIT, CancelFailure, Cell, ColumnMeta,
     ColumnOrigin, DbCommand, DbError, DbEvent, ESTIMATE_LIMIT, EXPORT_BATCH_BYTES, ExportBatch, ExportGuard,
-    ExportRead, ExportSink, Isolation, Outcome, OwnSession, PagingMode, ReadIn, SchemaObjects, ServerEnd,
-    ServerMessage, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep, ValueKind,
+    ExportRead, ExportSink, GroupCounts, GroupValue, Isolation, Outcome, OwnSession, PagingMode, ReadIn, SchemaObjects,
+    ServerEnd, ServerMessage, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep, ValueKind,
 };
 
 use crate::profile::ConnectionConfig;
@@ -424,6 +424,7 @@ impl DbCommand {
             DbCommand::Execute { .. }
                 | DbCommand::Resume { .. }
                 | DbCommand::Count { .. }
+                | DbCommand::GroupCount { .. }
                 | DbCommand::Estimate { .. }
                 | DbCommand::CheckRepeat { .. }
                 | DbCommand::Export { .. }
@@ -440,6 +441,7 @@ impl DbCommand {
                 DbEvent::Failed { id: *id, error, cancelled: true }
             }
             DbCommand::Count { id, .. } => DbEvent::Counted { id: *id, result: Err(error), snapshot: false },
+            DbCommand::GroupCount { id, .. } => DbEvent::GroupCounted { id: *id, result: Err(error), snapshot: false },
             DbCommand::Estimate { id, .. } => DbEvent::Estimated { id: *id, result: Err(error) },
             DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id: *id, result: Err(error) },
             DbCommand::Export { id, .. } => DbEvent::Exported { id: *id, result: Err(error), cancelled: true },

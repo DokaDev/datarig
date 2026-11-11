@@ -5,6 +5,7 @@ use super::ddl::{DdlObject, DdlSource, ObjectKind};
 use super::keys::{KeyCatalog, OrderKeys};
 use super::structure::{RelationStats, TableStructure};
 use crate::fault::Fault;
+use crate::query::GROUP_VALUES;
 use crate::sql::complete::Catalog;
 use crate::sql::risk::repeat::NotRepeatable;
 use crate::tls::{Encryption, TlsProblem};
@@ -307,6 +308,10 @@ pub enum DbError {
     /// does not report. A read of the app's own outside a transaction (a count, an export, the
     /// allowlist's question) would start a transaction and use them up: it was not sent.
     NextTransactionSet,
+    /// MySQL: a read of the app's own would take row locks: a transaction is open, or autocommit
+    /// is off, and the session's isolation is `SERIALIZABLE` (InnoDB then reads every row with a
+    /// shared lock) or not known. It was not sent.
+    LockingRead,
     /// Statement `index` (from 0) of what the query session starts with
     /// ([`super::ConnectOptions::session_sql`]), `statement`, failed: the session was closed
     /// before `Connected`. Why, as the server said it.
@@ -393,6 +398,7 @@ impl DbError {
             | DbError::NotUndoable(_)
             | DbError::NotAPlainRead
             | DbError::NextTransactionSet
+            | DbError::LockingRead
             | DbError::CancelNotTaken(
                 CancelFailure::Refused
                 | CancelFailure::KeptSending
@@ -618,6 +624,23 @@ pub enum DbCommand {
     /// longer than [`COUNT_LOCK_WAIT`] (MySQL: 1 s) for a lock another session holds answers
     /// [`DbError::LockTimeout`]. Never 0 rows for either.
     Count {
+        id: u64,
+        sql: String,
+        limit: Option<Duration>,
+    },
+    /// Count the rows of each value of one column of a table: run `sql`, the app's statement
+    /// that groups the rows by the column (`query::group_count`: on the allowlist of
+    /// `sql::risk::repeat`, checked again here, whose server side is asked first: a statement it
+    /// refuses answers [`DbError::NotRepeatable`] and is not sent), and answer with exactly one
+    /// [`DbEvent::GroupCounted`]. It runs, and is bounded by `limit`, exactly as a
+    /// [`DbCommand::Count`] is (PostgreSQL in a read-only transaction of its own outside a
+    /// transaction block and a portal, else under a savepoint without a limit; MySQL with the
+    /// statement's own hints), and is refused where reading would take row locks (MySQL: a
+    /// transaction open or autocommit off at `SERIALIZABLE` or an isolation not known,
+    /// [`DbError::LockingRead`]) or use up the next transaction's settings
+    /// ([`DbError::NextTransactionSet`]). Values are decoded as the session decodes a result's
+    /// cells. A cancel stops it.
+    GroupCount {
         id: u64,
         sql: String,
         limit: Option<Duration>,
@@ -861,6 +884,58 @@ pub struct ExportRead {
     pub complete: bool,
 }
 
+/// The values of one column and the rows that hold each ([`DbEvent::GroupCounted`]), most rows
+/// first.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GroupCounts {
+    /// At most [`GROUP_VALUES`] values.
+    pub values: Vec<GroupValue>,
+    /// The column has more values than these.
+    pub more: bool,
+}
+
+/// One value of a column ([`GroupCounts`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupValue {
+    /// The value as the session shows a cell of it; `None` for NULL, or for a value not sent
+    /// (`whole` false).
+    pub value: Cell,
+    /// The value was sent: it is at most [`GROUP_PREVIEW`](crate::query::GROUP_PREVIEW) bytes
+    /// long. A longer one comes as its length alone.
+    pub whole: bool,
+    /// Its length in bytes as the server measures it (as shown, for a type of short values);
+    /// `None` for NULL.
+    pub bytes: Option<u64>,
+    /// The rows that hold it.
+    pub rows: u64,
+}
+
+impl GroupCounts {
+    /// The rows of a group count's statement (`query::group_count`: the value when sent, its
+    /// length, its rows), decoded as the session decodes cells. One more row than
+    /// [`GROUP_VALUES`] says there are more. A count that does not read as a number:
+    /// [`DbError::NoResult`].
+    pub fn from_rows(rows: Vec<Vec<Cell>>) -> Result<Self, DbError> {
+        let mut values = Vec::with_capacity(rows.len().min(GROUP_VALUES));
+        let more = rows.len() > GROUP_VALUES;
+        for row in rows.into_iter().take(GROUP_VALUES) {
+            let mut cells = row.into_iter();
+            let (Some(value), Some(length), Some(Some(count))) = (cells.next(), cells.next(), cells.next()) else {
+                return Err(DbError::NoResult);
+            };
+            let rows = count.trim().parse::<u64>().map_err(|_| DbError::NoResult)?;
+            let length = match length {
+                Some(l) => Some(l.trim().parse::<u64>().map_err(|_| DbError::NoResult)?),
+                None => None,
+            };
+            let whole = value.is_some() || length.is_none();
+            let bytes = length.or_else(|| value.as_ref().map(|v| v.len() as u64));
+            values.push(GroupValue { value, whole, bytes, rows });
+        }
+        Ok(Self { values, more })
+    }
+}
+
 impl DbCommand {
     /// The answer of a session that does not do this command: [`DbError::NotSupported`] in the
     /// event its kind is answered with, so the caller's wait for it ends.
@@ -883,6 +958,7 @@ impl DbCommand {
             | DbCommand::ClosePortal { id }
             | DbCommand::EndTx { id, .. } => DbEvent::Failed { id: *id, error, cancelled: false },
             DbCommand::Count { id, .. } => DbEvent::Counted { id: *id, result: Err(error), snapshot: false },
+            DbCommand::GroupCount { id, .. } => DbEvent::GroupCounted { id: *id, result: Err(error), snapshot: false },
             DbCommand::Estimate { id, .. } => DbEvent::Estimated { id: *id, result: Err(error) },
             DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id: *id, result: Err(error) },
             DbCommand::Export { id, .. } => DbEvent::Exported { id: *id, result: Err(error), cancelled: false },
@@ -1304,6 +1380,14 @@ pub enum DbEvent {
     Counted {
         id: u64,
         result: Result<u64, DbError>,
+        snapshot: bool,
+    },
+    /// The answer to [`DbCommand::GroupCount`] `id`: the values and their rows, or why they could
+    /// not be counted (a cancel is `DbError::Cancelled`). `snapshot` as for
+    /// [`DbEvent::Counted`].
+    GroupCounted {
+        id: u64,
+        result: Result<GroupCounts, DbError>,
         snapshot: bool,
     },
     /// The answer to [`DbCommand::Estimate`] `id`: the rows the planner expects, or why there is

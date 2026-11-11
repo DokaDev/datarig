@@ -594,6 +594,8 @@ impl App {
                 }
                 return self.on_counted(id, qid, result, snapshot);
             }
+            // A count of a column's values: nothing asks for one yet, so it is no one's answer.
+            DbEvent::GroupCounted { .. } => return,
             // The planner's estimate the user asked for.
             DbEvent::Estimated { id: qid, result } => return self.on_estimated(id, qid, result),
             // A statement of an export.

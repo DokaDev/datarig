@@ -96,6 +96,7 @@ impl App {
             DbError::ReservedSavepoint => Label::DbReservedSavepoint,
             DbError::NotAPlainRead => Label::DbNotAPlainRead,
             DbError::NextTransactionSet => Label::DbNextTransactionSet,
+            DbError::LockingRead => Label::DbLockingRead,
             DbError::SessionSql { index, statement, error } => {
                 let m = Msg::DbSessionSql {
                     index: (index + 1).to_string(),

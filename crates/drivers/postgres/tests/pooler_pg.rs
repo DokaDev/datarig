@@ -1235,3 +1235,63 @@ async fn behind_a_pooler_a_bounded_count_and_an_estimate_leave_no_settings() {
         assert_eq!(rows[0][0], before, "nothing left on the server connection");
     }
 }
+
+/// Behind a pooler a count of a column's values with a time limit runs in a read-only
+/// transaction of its own, its statement prepared in it as the unnamed one: answered again and
+/// again whichever server connection each transaction lands on (no statement of an earlier one
+/// is needed, none is left behind), the same as the server's own count, and another client going
+/// round the pooled server connections finds the server's own `statement_timeout` and
+/// `lock_timeout` on each.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_a_group_count_leaves_no_settings_nor_statements() {
+    use datarig_core::driver::{ColumnMeta, ValueKind};
+    use datarig_core::query::{ColumnFacts, ColumnKind, GroupCount, TableName, Target, group_count};
+    use datarig_core::sql::dialect::{Dialect, Language};
+    let Some(url) = pooler_url("behind_a_pooler_a_group_count_leaves_no_settings_nor_statements") else {
+        return;
+    };
+    let _pool = alone(&url).await;
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let server = "SELECT current_setting('statement_timeout') || ' ' || current_setting('lock_timeout')";
+    let DbEvent::Page { rows, .. } = other.run(1, server).await else { panic!("settings") };
+    let before = rows[0][0].clone();
+    let DbEvent::Page { rows, .. } =
+        other.run(2, "SELECT status, count(*) FROM shop.orders GROUP BY 1 ORDER BY 1").await
+    else {
+        panic!("the server's count")
+    };
+    let mut want: Vec<(Option<String>, u64)> =
+        rows.into_iter().map(|r| (r[0].clone(), r[1].as_deref().and_then(|n| n.parse().ok()).unwrap())).collect();
+    want.sort();
+    let t = TableName { database: None, schema: "shop".into(), name: "orders".into() };
+    let target = Target::new(Dialect::Postgres, vec![ColumnFacts::new("status", ColumnKind::Text)]);
+    let meta = ColumnMeta::new("status".into(), "text".into(), ValueKind::Text, None);
+    let classifier = datarig_core::sql::risk::Classifier::new(Language::Sql(Dialect::Postgres));
+    let g = GroupCount {
+        table: &t,
+        target: &target,
+        column: &meta,
+        enum_known: false,
+        other: None,
+        classifier: &classifier,
+        read_only: false,
+    };
+    let sql = group_count(&g).expect("a group count");
+    for cache in [true, false] {
+        let mut q = Conn::open(&url, SessionRole::Query, cache).await;
+        for id in 1..=4 {
+            q.session.send(DbCommand::GroupCount { id, sql: sql.clone(), limit: Some(Duration::from_secs(30)) });
+            let ev = q.wait(|e| matches!(e, DbEvent::GroupCounted { .. }), 30).await;
+            let DbEvent::GroupCounted { result: Ok(got), .. } = ev else { panic!("{ev:?}") };
+            let mut seen: Vec<(Option<String>, u64)> = got.values.iter().map(|v| (v.value.clone(), v.rows)).collect();
+            seen.sort();
+            assert_eq!(seen, want, "cache {cache}, run {id}");
+            // The session's own statements still run after it.
+            assert!(q.rows(10 + id, TEXTS[(id as usize) % TEXTS.len()]).await.is_ok());
+        }
+    }
+    for id in 0..8 {
+        let DbEvent::Page { rows, .. } = other.run(10 + id, server).await else { panic!() };
+        assert_eq!(rows[0][0], before, "nothing left on the server connection");
+    }
+}
