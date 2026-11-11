@@ -225,6 +225,8 @@
 "results.estimate.server" = "추정치 없음: 이 서버는 datarig가 읽는 실행 계획을 주지 않습니다"
 "results.estimate.off_tx" = "트랜잭션 진행 중"
 "results.estimate.tx" = "탭의 세션에 트랜잭션이 열려 있는 동안은 추정치가 없습니다: 계획을 세우며 잡은 잠금이 트랜잭션이 끝날 때까지 남습니다"
+"results.estimate.off_held" = "결과 유지 중"
+"results.estimate.held" = "탭의 세션에 결과가 열려 있는 동안에는 추정치를 구하지 않음: 그 결과 뒤에서 기다리게 됨"
 "results.estimate.off_calls" = "확인 못 한 호출"
 "results.estimate.calls" = "추정치 없음: 필터가 datarig가 확인할 수 없는 함수를 호출하며, 계획을 세우는 중에 실행될 수 있습니다"
 "results.estimate.off_subquery" = "서브쿼리 포함"

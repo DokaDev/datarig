@@ -227,6 +227,8 @@
 "results.estimate.server" = "No estimate: this server gives no plan datarig reads"
 "results.estimate.off_tx" = "tx is open"
 "results.estimate.tx" = "No estimate while a transaction is open on the tab's session: the locks planning takes would stay until it ends"
+"results.estimate.off_held" = "result held"
+"results.estimate.held" = "No estimate while a result is held open on the tab's session: it would wait behind it"
 "results.estimate.off_calls" = "unchecked calls"
 "results.estimate.calls" = "No estimate: the filter calls functions datarig cannot check, which planning may run"
 "results.estimate.off_subquery" = "subquery inside"

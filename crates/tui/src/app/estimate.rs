@@ -47,6 +47,9 @@ impl App {
         if t.exec.tx_open {
             return off(Label::ResultsEstimateOffTx, Label::ResultsEstimateTx);
         }
+        if matches!(t.exec.paging, Paging::Open { .. }) {
+            return off(Label::ResultsEstimateOffHeld, Label::ResultsEstimateHeld);
+        }
         let Some(text) = self.table_query(id).and_then(|tq| tq.shown_filter()) else {
             return off(Label::ResultsEstimateOffCalls, Label::ResultsEstimateCalls);
         };

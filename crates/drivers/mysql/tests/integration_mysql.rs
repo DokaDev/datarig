@@ -5890,3 +5890,25 @@ async fn an_estimate_waits_for_no_transaction_and_keeps_the_next_ones_settings()
     let view = "SELECT * FROM shop.order_summary WHERE (1 = 1)";
     assert!(matches!(estimate(&mut c, 12, view).await.0, Err(DbError::NotRepeatable(_))));
 }
+
+/// An estimate asked while a result is held is refused at once: queued behind the result it would
+/// wait with its time limit not begun, and the tab with it. The result goes on paging.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_estimate_is_refused_at_once_while_a_result_is_held() {
+    let test = "an_estimate_is_refused_at_once_while_a_result_is_held";
+    let Some((url, admin)) = urls(test) else { return };
+    let _end = EndSessions { admin: admin.clone(), test };
+    let t = numbers(&admin, "heldest", 2000).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let rows = format!("SELECT * FROM {} WHERE (id > 100)", t.q());
+    let evs = c.run_as(1, &[&rows], PagingMode::Hold).await;
+    assert!(page_of(&evs).2, "more rows follow: the result is held");
+    let (got, took) = estimate(&mut c, 2, &rows).await;
+    assert_eq!(got, Err(DbError::NotSupported));
+    assert!(took < Duration::from_secs(2), "{took:?}");
+    c.session.send(DbCommand::FetchMore { id: 1 });
+    match c.next(30).await {
+        DbEvent::Page { id: 1, columns: None, rows, .. } => assert!(!rows.is_empty()),
+        other => panic!("{other:?}"),
+    }
+}

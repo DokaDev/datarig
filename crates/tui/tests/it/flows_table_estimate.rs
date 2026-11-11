@@ -362,3 +362,15 @@ fn a_relation_the_server_will_not_have_planned_dims_the_estimate_with_why() {
     assert!(estimates(&h.sent()).is_empty(), "not asked again");
     assert!(status(&h).contains("planning public.users may run code"), "{}", status(&h));
 }
+
+#[test]
+fn a_held_result_dims_the_estimate_and_keeps_paging() {
+    let mut h = my(Some("id > 5"));
+    h.app.tab_mut().exec.paging =
+        datarig_tui::app::paging::Paging::Open { since: std::time::Instant::now(), in_block: false };
+    h.keys("#");
+    assert!(entry_line(&mut h, "Estimate (planner)").contains("result held"));
+    pick(&mut h, "estimate");
+    assert!(estimates(&h.sent()).is_empty());
+    assert!(h.app.tab().exec.running.is_none(), "nothing waits behind the held result");
+}
