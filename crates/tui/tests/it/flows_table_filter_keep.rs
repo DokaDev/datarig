@@ -581,3 +581,77 @@ fn the_first_change_of_a_restored_filter_is_undone_to_it() {
         assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id = 1)")]], "clear: {clear}");
     }
 }
+
+fn dialog_open(h: &Harness) -> bool {
+    h.app.overlays.is_open(OverlayKind::FilterDialog)
+}
+
+/// The filter dialog of the tab put back, applied (`Enter`) while its run cannot be sent yet:
+/// it stays open, the run waits; `Esc` then closes it and the run waits no more.
+fn apply_then_cancel(h: &mut Harness) {
+    h.key(KeyCode::Tab);
+    h.keys("f");
+    assert!(dialog_open(h));
+    h.key(KeyCode::Enter);
+    let tab = h.app.tab().id;
+    assert!(dialog_open(h), "nothing sent yet: the dialog stays open");
+    assert!(h.app.tab_busy(tab), "the run waits");
+    h.key(KeyCode::Esc);
+    assert!(!dialog_open(h));
+    assert!(!h.app.tab_busy(tab), "cancelled with the dialog");
+    assert_eq!(status(h), "Query cancelled");
+}
+
+/// A run applied in the filter dialog that waits for its profile to connect is cancelled
+/// with the dialog: the connection that comes runs nothing.
+#[test]
+fn a_dialog_cancelled_while_its_run_waits_for_the_connection_runs_nothing() {
+    let cfg = test_db_config();
+    let state = State::new("dialogconnect");
+    state.write_table_tab(&cfg, "filter = \"id > 1\"");
+    let mut h = launch(&cfg, &state, Lang::En);
+    apply_then_cancel(&mut h);
+    connect(&mut h);
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Connected);
+    assert!(runs(&mut h).is_empty(), "the run cancelled never goes");
+}
+
+/// A run applied in the filter dialog that waits for the table's keys is cancelled with the
+/// dialog: the keys' answer runs nothing.
+#[test]
+fn a_dialog_cancelled_while_its_run_waits_for_the_keys_runs_nothing() {
+    let cfg = test_db_config();
+    let state = State::new("dialogkeys");
+    let mut h = ordered(&cfg, &state, None);
+    connect(&mut h);
+    apply_then_cancel(&mut h);
+    let request = keys_request(&h.sent()).expect("the keys are asked for");
+    h.meta_db("local-pg", DbEvent::TableKeys { id: request, result: Ok(pk()) });
+    assert!(runs(&mut h).is_empty(), "the run cancelled never goes");
+}
+
+/// A run applied in the filter dialog whose functions were confirmed (`y`), then waiting for
+/// the connection, is cancelled with the dialog.
+#[test]
+fn a_dialog_cancelled_after_a_confirm_while_its_run_waits_runs_nothing() {
+    let cfg = test_db_config();
+    let state = State::new("dialogconfirm");
+    state.write_table_tab(&cfg, "filter = \"my_fn(id) > 0\"");
+    let mut h = launch(&cfg, &state, Lang::En);
+    h.key(KeyCode::Tab);
+    h.keys("f");
+    h.key(KeyCode::Enter);
+    assert!(h.app.overlays.is_open(OverlayKind::Confirm), "its functions are asked about");
+    h.keys("y");
+    assert!(!h.app.overlays.is_open(OverlayKind::Confirm));
+    let tab = h.app.tab().id;
+    assert!(dialog_open(&h) && h.app.tab_busy(tab), "confirmed, it waits for the connection");
+    h.key(KeyCode::Esc);
+    assert!(!dialog_open(&h));
+    assert!(!h.app.tab_busy(tab));
+    connect(&mut h);
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Connected);
+    assert!(runs(&mut h).is_empty(), "the run cancelled never goes");
+}

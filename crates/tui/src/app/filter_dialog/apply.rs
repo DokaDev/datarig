@@ -308,9 +308,16 @@ impl App {
             self.filter_dialog_close_sql();
             return;
         }
-        let tab = d.tab;
+        let (tab, applying) = (d.tab, d.applying.take());
         self.filter_dialog_popup_close();
         self.overlays.close(OverlayKind::FilterDialog);
+        // The query applied and still waiting (for a connection, the session's state, the
+        // table's keys) is cancelled with the dialog: it never runs.
+        if let Some(q) = applying
+            && self.table_cancel_waiting(tab, &q)
+        {
+            self.tab_status(tab, Notice::new(Label::QueryCancelled, Level::Warning));
+        }
         if let Some(tq) = self.table_query_mut(tab) {
             tq.draft = tq.applied().clone();
             tq.refusal = None;

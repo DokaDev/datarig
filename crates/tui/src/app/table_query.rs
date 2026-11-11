@@ -1009,6 +1009,48 @@ impl App {
         waiting
     }
 
+    /// Query `q` of table tab `id`, applied and not sent yet, is cancelled wherever it waits
+    /// (for its profile to connect, its session to say its state, its table's keys, or the
+    /// user's word on its functions or on reads that lock rows): it never runs, and a late
+    /// answer finds nothing to run. A wait of the tab for another query is left alone. Whether
+    /// one waited.
+    pub(in crate::app) fn table_cancel_waiting(&mut self, id: TabId, q: &Query) -> bool {
+        let Some(tq) = self.table_query_mut(id) else { return false };
+        let mut cancelled = false;
+        if tq.keys_wait.as_ref().is_some_and(|(w, _)| same_query(w, q)) {
+            tq.keys_wait = None;
+            cancelled = true;
+        }
+        if tq.session_wait.as_ref().is_some_and(|(w, _)| same_query(w, q)) {
+            tq.session_wait = None;
+            cancelled = true;
+        }
+        if tq.locks_asked.as_ref().is_some_and(|(w, _)| same_query(w, q)) {
+            tq.locks_asked = None;
+            cancelled = true;
+        }
+        if tq.asked.as_ref().is_some_and(|w| same_query(w, q)) {
+            tq.asked = None;
+            tq.asked_open = None;
+            cancelled = true;
+        }
+        // Its statement, waiting for the profile to connect.
+        let sql = tq.pending.as_ref().filter(|p| same_query(&p.query, q)).map(|p| p.sql.clone());
+        let queued = sql.is_some_and(|sql| {
+            let one = std::slice::from_ref(&sql);
+            self.conns.iter().any(|(_, c)| c.pending.iter().any(|w| w.tab == id && w.statements == one))
+        });
+        if queued {
+            self.take_queued(id);
+            self.unstage_run(id);
+            if let Some(tq) = self.table_query_mut(id) {
+                tq.pending = None;
+            }
+            cancelled = true;
+        }
+        cancelled
+    }
+
     /// Table tab `id`'s session has said its state: the query held for that session runs, checked
     /// from the start against it.
     pub(in crate::app) fn table_session_ready(&mut self, id: TabId) {
