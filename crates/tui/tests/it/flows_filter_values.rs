@@ -631,3 +631,66 @@ fn the_list_of_a_spilled_result_counts_the_rows_in_memory_and_never_reads_the_fi
     assert!(s.contains("paid"), "{s}");
     let _ = std::fs::remove_dir_all(&state);
 }
+
+/// MySQL `INVISIBLE` columns (a number and a text), which `SELECT *` leaves out: no values are
+/// loaded for them, but the server counts them as their catalogue types say, and their counted
+/// values tick into conditions that are sent (a value of a column the rows held do not describe
+/// is written as a string, which the server converts).
+#[test]
+fn count_exactly_counts_a_mysql_invisible_column_by_its_catalogue_type() {
+    use datarig_core::driver::keys::{CatalogColumn, OrderKeys};
+    let mut h = mysql();
+    dialog_on(&mut h, 0);
+    let column = |name: &str, ty: &str, invisible: bool| CatalogColumn {
+        name: name.into(),
+        type_name: ty.into(),
+        not_null: name == "id",
+        primary_key: name == "id",
+        foreign_key: false,
+        invisible,
+    };
+    let keys = OrderKeys {
+        primary_key: vec!["id".into()],
+        columns: Some(vec![
+            column("id", "int", false),
+            column("at", "timestamp", false),
+            column("rank", "int unsigned", true),
+            column("note", "varchar(20)", true),
+        ]),
+        ..Default::default()
+    };
+    keys_came_with(&mut h, "local-my", keys);
+    // The second counted under the condition the first ticked.
+    let cases = [
+        (2, "rank", "", "7", "`rank` = '7'"),
+        (3, "note", " WHERE (`rank` = '7')", "x", "`rank` = '7' AND note = 'x'"),
+    ];
+    for (down, name, other, counted_value, sent_where) in cases {
+        for _ in 0..down {
+            h.key(KeyCode::Char('j'));
+        }
+        let screen = h.screen(120, 34);
+        assert!(screen.contains("not in SELECT *"), "{screen}");
+        h.keys("#");
+        let sent = counts(&mut h);
+        let (preview, limit) = (datarig_core::query::GROUP_PREVIEW, datarig_core::query::GROUP_VALUES + 1);
+        assert_eq!(
+            sent.iter().map(|s| s.1.clone()).collect::<Vec<_>>(),
+            vec![format!(
+                "SELECT IF(LENGTH(`{name}`) <= {preview}, `{name}`, NULL), LENGTH(`{name}`), COUNT(*) \
+                 FROM `shop`.`users`{other} GROUP BY `{name}` ORDER BY COUNT(*) DESC LIMIT {limit}"
+            )],
+            "{name}"
+        );
+        counted(&mut h, sent[0].0, Ok(GroupCounts { values: vec![value(Some(counted_value), 3)], more: false }));
+        to_values(&mut h, 0);
+        h.key(KeyCode::Char(' '));
+        assert_eq!(draft(&h), sent_where, "{}", h.screen(120, 34));
+        h.key(KeyCode::Enter);
+        assert_eq!(runs(&mut h), vec![vec![format!("SELECT * FROM `shop`.`users` WHERE ({sent_where})")]]);
+        my_page(&mut h, &["2026-11-10 09:30:00"]);
+        h.keys("f");
+        // Back to the first column for the next one.
+        h.keys("gg");
+    }
+}

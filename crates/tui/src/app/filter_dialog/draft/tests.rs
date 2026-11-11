@@ -799,3 +799,35 @@ fn a_list_field_reads_back_to_the_values_it_shows() {
     assert_eq!(parse_list("'a'b, , c ,", &name, &[]), vec![text("'a'b"), text("c")]);
     assert_eq!(list_items("x, 'y").last().map(|i| i.quoted.clone()), Some(Some("y".into())));
 }
+
+#[test]
+fn a_mysql_catalogue_type_reads_as_the_driver_describes_its_result_column() {
+    for (ty, name, kind) in [
+        ("int unsigned", "int unsigned", ValueKind::Integer),
+        ("tinyint(1)", "tinyint(1)", ValueKind::Integer),
+        ("bigint", "bigint", ValueKind::Integer),
+        ("decimal(10,2)", "decimal", ValueKind::Decimal),
+        ("double", "double", ValueKind::Float),
+        ("varchar(20)", "varchar", ValueKind::Text),
+        ("enum('a','b')", "enum", ValueKind::Text),
+        ("varbinary(16)", "varbinary", ValueKind::Bytes),
+        ("datetime(3)", "datetime", ValueKind::Timestamp),
+        ("timestamp", "timestamp", ValueKind::TimestampTz),
+        ("time", "time", ValueKind::Interval),
+        ("bit(1)", "bit", ValueKind::Bit),
+        ("json", "json", ValueKind::Json),
+        ("point", "geometry", ValueKind::Bytes),
+        ("vector(3)", "vector", ValueKind::Bytes),
+        ("something new", "something new", ValueKind::Other),
+    ] {
+        let m = catalogue_meta(MY, "c", ty).expect("MySQL");
+        assert_eq!((m.type_name.as_str(), m.kind), (name, kind), "{ty}");
+    }
+    assert!(catalogue_meta(PG, "c", "integer").is_none());
+    // Only a column no result describes is counted by its catalogue type.
+    let mut c = info("c", ColumnKind::Number);
+    c.type_name = "int".into();
+    assert!(c.count_meta(MY).is_none());
+    c.invisible = true;
+    assert_eq!(c.count_meta(MY).map(|m| m.kind), Some(ValueKind::Integer));
+}

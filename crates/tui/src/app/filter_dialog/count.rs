@@ -86,17 +86,18 @@ impl App {
             let key = self.key_for(Action::CancelQuery, Ctx::Nav);
             return Err(warn(Msg::QueryBusy { key }));
         }
-        if c.invisible {
-            return Err(refused(self.i18n.label(Label::TableDialogValuesInvisible).to_string()));
-        }
-        let Some(meta) = c.meta.clone() else {
+        // A column `SELECT *` leaves out is counted as its catalogue says it is.
+        let Some(meta) = c.meta.clone().or_else(|| c.count_meta(d.dialect)) else {
             return Err(refused(self.i18n.label(Label::TableDialogCountUnknown).to_string()));
         };
-        let (Some(t), Some(target), Some(scope)) =
+        let (Some(t), Some(mut target), Some(scope)) =
             (self.tabs.get(tab), self.table_target(tab), self.filter_dialog_scope(d, &c.name))
         else {
             return Ok(());
         };
+        if c.invisible && target.column(&c.name).is_none() {
+            target.columns.push(datarig_core::query::ColumnFacts::new(c.name.clone(), c.kind));
+        }
         if t.exec.session.is_none() {
             return Err(refused(self.i18n.label(Label::TableDialogCountNoSession).to_string()));
         }

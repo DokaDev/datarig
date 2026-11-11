@@ -254,7 +254,7 @@ impl App {
             && t.exec.running.is_some_and(|r| d.counting.as_ref().is_some_and(|k| k.id == r.id));
         // A column with no equality ticks nothing; one whose type is not known yet ticks as its
         // values are judged.
-        let equality = match c.meta.as_ref().or(held) {
+        let equality = match c.meta.clone().or_else(|| held.cloned()).or_else(|| c.count_meta(dialect)).as_ref() {
             Some(m) if query::compares(dialect, m, c.enum_known).is_err() => Err(NotTicked::NoEquality),
             _ => Ok(()),
         };
@@ -263,9 +263,7 @@ impl App {
             admit(&ValuesFrom { dialect, meta, read_in }, zone, now, v).map_err(NotTicked::NotAdmitted)
         };
         let null = equality.clone().map(|()| Value::Null);
-        let count_off = if c.invisible {
-            Some(Label::TableDialogValuesInvisible)
-        } else if c.meta.is_none() {
+        let count_off = if c.meta.is_none() && c.count_meta(dialect).is_none() {
             Some(Label::TableDialogCountUnknown)
         } else {
             equality.as_ref().err().map(|_| Label::TableDialogOpOffNoEquality)

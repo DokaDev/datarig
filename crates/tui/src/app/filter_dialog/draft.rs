@@ -223,6 +223,12 @@ impl ColumnInfo {
         }
     }
 
+    /// What a count of its values reads it as when no rows describe it: a column `SELECT *`
+    /// leaves out (MySQL `INVISIBLE`), as its catalogue type says ([`catalogue_meta`]).
+    pub(crate) fn count_meta(&self, d: Dialect) -> Option<ColumnMeta> {
+        self.invisible.then(|| catalogue_meta(d, &self.name, &self.type_name)).flatten()
+    }
+
     /// The same column with the rows' column `m` known: its kind is the result's.
     pub(crate) fn with_meta(self, m: &ColumnMeta) -> Self {
         Self { kind: table_query::column_kind(m), meta: Some(m.clone()), ..self }
@@ -245,6 +251,43 @@ impl ColumnInfo {
             None => self.kind == ColumnKind::Number || temporal_type(&self.type_name),
         }
     }
+}
+
+/// What a MySQL column whose catalogue type (`COLUMN_TYPE`) is `type_name` would be described
+/// as in a result: its type named and its kind as the MySQL driver names them for a result
+/// column of that type. For a column no result describes (an `INVISIBLE` one, which `SELECT *`
+/// leaves out). `None` on PostgreSQL, which has no such column. A type not named here is of no
+/// kind of its own ([`ValueKind::Other`]), whose values are not compared.
+pub(crate) fn catalogue_meta(d: Dialect, name: &str, type_name: &str) -> Option<ColumnMeta> {
+    if !matches!(d, Dialect::MySql(_)) {
+        return None;
+    }
+    let lower = type_name.to_ascii_lowercase();
+    let base = base_type(type_name);
+    let unsigned = lower.split_whitespace().any(|w| w == "unsigned");
+    let numeric = |n: &str| if unsigned { format!("{n} unsigned") } else { n.to_string() };
+    let (ty, kind) = match base.as_str() {
+        "tinyint" if lower.starts_with("tinyint(1)") => (numeric("tinyint(1)"), ValueKind::Integer),
+        "tinyint" | "smallint" | "mediumint" | "int" | "bigint" => (numeric(&base), ValueKind::Integer),
+        "year" => (base.clone(), ValueKind::Integer),
+        "decimal" => (numeric("decimal"), ValueKind::Decimal),
+        "float" | "double" => (numeric(&base), ValueKind::Float),
+        "bit" => (base.clone(), ValueKind::Bit),
+        "date" => (base.clone(), ValueKind::Date),
+        "time" => (base.clone(), ValueKind::Interval),
+        "datetime" => (base.clone(), ValueKind::Timestamp),
+        "timestamp" => (base.clone(), ValueKind::TimestampTz),
+        "json" => (base.clone(), ValueKind::Json),
+        "char" | "varchar" | "tinytext" | "text" | "mediumtext" | "longtext" | "enum" | "set" => {
+            (base.clone(), ValueKind::Text)
+        }
+        "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => (base.clone(), ValueKind::Bytes),
+        "geometry" | "point" | "linestring" | "polygon" | "multipoint" | "multilinestring" | "multipolygon"
+        | "geometrycollection" | "geomcollection" => ("geometry".to_string(), ValueKind::Bytes),
+        "vector" => (base.clone(), ValueKind::Bytes),
+        _ => (base.clone(), ValueKind::Other),
+    };
+    Some(ColumnMeta::new(name.to_string(), ty, kind, None))
 }
 
 /// A type name lower case, without its arguments (`(20)`, `('a','b')`), MySQL's `unsigned`
