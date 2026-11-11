@@ -96,7 +96,7 @@ fn heads(h: &Harness) -> Vec<HeadMarks> {
 }
 
 fn sorted(asc: bool, level: usize) -> HeadMarks {
-    HeadMarks { sort: Some((asc, level)), filtered: false }
+    HeadMarks { sort: Some((asc, level)), filtered: false, tinted: true }
 }
 
 #[test]

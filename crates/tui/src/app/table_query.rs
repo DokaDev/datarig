@@ -1672,12 +1672,22 @@ impl App {
             Some(f) if !f.text.trim().is_empty() => f.recognised.as_ref().map(|c| c.columns()).unwrap_or_default(),
             _ => Vec::new(),
         };
+        // The columns with a condition of their own (an expression naming one is not that).
+        let own: Vec<String> = match (&shown.filter, self.table_target(id)) {
+            (Some(f), Some(target)) => super::filter_dialog::draft::Where::from_text(&f.text, &target)
+                .terms()
+                .iter()
+                .filter_map(|t| t.row.as_ref().map(|r| r.col.clone()))
+                .collect(),
+            _ => Vec::new(),
+        };
         rs.columns
             .iter()
             .map(|c| {
                 let name = c.meta.name.as_str();
                 let sort = keys.iter().position(|k| k.col == name).map(|i| (keys[i].dir == query::Dir::Asc, i + 1));
-                crate::widgets::grid::HeadMarks { sort, filtered: compared.contains(&name) }
+                let tinted = sort.is_some() || own.iter().any(|o| o == name);
+                crate::widgets::grid::HeadMarks { sort, filtered: compared.contains(&name), tinted }
             })
             .collect()
     }

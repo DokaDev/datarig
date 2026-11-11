@@ -765,3 +765,52 @@ fn arrays_compare_only_where_their_elements_have_equality() {
     clear_with(&mut h, cols, rows);
     assert_eq!(key_on(&mut h, 0, 1, "="), sent("tags = '{a,b}'"));
 }
+
+/// The header of a column with a condition of its own or a sort key is tinted (the accent
+/// blended into the surface; the accent as the text's color in the terminal's colors); one
+/// only an expression names is not, nor are the others, and the cursor's header keeps its own.
+#[test]
+fn the_headers_of_filtered_and_sorted_columns_are_tinted() {
+    use datarig_tui::theme;
+    for (name, th) in [("dark", &theme::DARK), ("light", &theme::LIGHT), ("terminal", &theme::TERMINAL)] {
+        let mut h = users();
+        h.app.theme = std::sync::Arc::new(th.clone());
+        h.command("where name IS NOT NULL AND lower(doc::text) <> 'x'");
+        runs(&mut h);
+        page(&mut h);
+        at(&mut h, 0, 2);
+        h.keys("s");
+        runs(&mut h);
+        page(&mut h);
+        at(&mut h, 0, 0);
+        let t = h.draw(160, 30);
+        let g = h.app.tab().grid.clone();
+        let buf = t.backend().buffer();
+        let head = |c: usize| {
+            let x = g.hit_cols.iter().find(|h| h.2 == c).expect("drawn").0 + 1;
+            (buf[(x, g.header_y)].clone(), buf[(x, g.header_y + 1)].clone())
+        };
+        let tint = th.filtered_header();
+        for c in [1, 2] {
+            for cell in [head(c).0, head(c).1] {
+                match tint.bg {
+                    Some(bg) => {
+                        assert_eq!(cell.bg, bg, "{name}: column {c}");
+                        assert_ne!(bg, th.surface, "{name}: a tint apart from the surface");
+                    }
+                    None => assert_eq!(cell.fg, th.accent, "{name}: column {c}"),
+                }
+            }
+        }
+        // The expression's column, another column, and the cursor's.
+        for c in [3, 4] {
+            assert_eq!(head(c).0.bg, th.surface, "{name}: column {c} untinted");
+        }
+        if let Some(bg) = th.grid_cursor_header.bg {
+            assert_eq!(head(0).0.bg, bg, "{name}: the cursor's header");
+        }
+        if let Some(bg) = tint.bg {
+            assert_ne!(Some(bg), th.grid_cursor_header.bg, "{name}: apart from the cursor's header");
+        }
+    }
+}

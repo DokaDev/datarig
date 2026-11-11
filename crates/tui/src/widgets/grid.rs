@@ -626,6 +626,9 @@ pub struct HeadMarks {
     pub sort: Option<(bool, usize)>,
     /// The condition compares it.
     pub filtered: bool,
+    /// Its header is tinted: a condition of its own (one the filter dialog shows as the
+    /// column's, not an expression naming it) filters it, or the rows are sorted by it.
+    pub tinted: bool,
 }
 
 impl HeadMarks {
@@ -879,6 +882,8 @@ pub fn render(
             Some(th.range)
         } else if ci == st.col {
             Some(th.grid_cursor_header)
+        } else if look.heads.get(ci).is_some_and(|h| h.tinted) {
+            Some(th.filtered_header())
         } else {
             None
         };
