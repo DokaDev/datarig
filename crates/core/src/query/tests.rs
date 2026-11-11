@@ -1902,6 +1902,8 @@ fn group_count_writes_one_grouped_read_of_the_table() {
         (meta("born", "jsonb", ValueKind::Json), "octet_length(textin(jsonb_out(\"born\")))"),
         (meta("born", "text[]", ValueKind::Array(ArrayElement::Text)), "octet_length(textin(array_out(\"born\")))"),
         (meta("price", "numeric", ValueKind::Decimal), "octet_length(textin(numeric_out(\"price\")))"),
+        // A domain over numeric, by its own name.
+        (meta("price", "amount", ValueKind::Decimal), "octet_length(textin(numeric_out(\"price\")))"),
     ] {
         let sql = group(Dialect::Postgres, &m, None, false).unwrap();
         assert!(sql.contains(&format!("CASE WHEN {len} <= 4096 THEN")), "{sql}");
@@ -1999,4 +2001,16 @@ fn group_counts_read_values_lengths_and_more() {
     assert_eq!(GroupCounts::from_rows(vec![vec![s("a"), None, s("x")]]), Err(DbError::NoResult));
     assert_eq!(GroupCounts::from_rows(vec![vec![s("a"), None, None]]), Err(DbError::NoResult));
     assert_eq!(GroupCounts::from_rows(vec![vec![s("a")]]), Err(DbError::NoResult));
+}
+
+#[test]
+fn a_group_counts_answer_is_read_within_its_budget() {
+    use crate::driver::{DbError, GROUP_ROW_BYTES, GroupBudget};
+    let mut budget = GroupBudget::default();
+    for _ in 0..=GROUP_VALUES {
+        assert_eq!(budget.take(GROUP_ROW_BYTES), Ok(()));
+    }
+    assert_eq!(budget.take(1), Err(DbError::SchemaChanged), "one row past the statement's LIMIT");
+    let mut budget = GroupBudget::default();
+    assert_eq!(budget.take(GROUP_ROW_BYTES + 1), Err(DbError::SchemaChanged), "a row past its size");
 }

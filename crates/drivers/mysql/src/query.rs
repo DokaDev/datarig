@@ -2390,7 +2390,7 @@ async fn read_own(
     let read = read_own_as(conn, link, env, s, text, was_open, applied, OwnWant::First).await?;
     Ok(read.map(|got| match got {
         OwnGot::First(value) => value,
-        OwnGot::Rows(_) => None,
+        OwnGot::Rows(_) | OwnGot::Refused(_) => None,
     }))
 }
 
@@ -2407,6 +2407,8 @@ enum OwnWant {
 enum OwnGot {
     First(Option<String>),
     Rows(Vec<Vec<Cell>>),
+    /// The rows were not taken: why (read to their end and dropped).
+    Refused(DbError),
 }
 
 /// [`read_own`], reading what `want` says.
@@ -2447,9 +2449,9 @@ async fn read_own_as(
             link.guard(Some(env.killer), conn.query_first::<String, _>(text)).await?.map(OwnGot::First)
         }
         (false, OwnWant::Rows) => link
-            .guard(Some(env.killer), conn.query::<Row, _>(text))
+            .guard(Some(env.killer), group::rows_within(conn, text))
             .await?
-            .map(|rows| OwnGot::Rows(rows.iter().map(|r| cells(r.columns_ref(), r)).collect())),
+            .map(|rows| rows.map_or_else(OwnGot::Refused, OwnGot::Rows)),
     };
     // Whether the user had asked when the answer came: what is done after it changes nothing.
     let cancelled = env.asked.asked();

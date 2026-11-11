@@ -5,7 +5,7 @@ use super::ddl::{DdlObject, DdlSource, ObjectKind};
 use super::keys::{KeyCatalog, OrderKeys};
 use super::structure::{RelationStats, TableStructure};
 use crate::fault::Fault;
-use crate::query::GROUP_VALUES;
+use crate::query::{GROUP_PREVIEW, GROUP_VALUES};
 use crate::sql::complete::Catalog;
 use crate::sql::risk::repeat::NotRepeatable;
 use crate::tls::{Encryption, TlsProblem};
@@ -140,7 +140,10 @@ pub enum DbError {
     /// some) ran and returned more than were read; only this many were, and the rest are gone.
     RowsNotRead(u64),
     /// The statement's table (or anything else its result depends on) changed while it was
-    /// being prepared and run, again after it was prepared once more: run it again.
+    /// being prepared and run, again after it was prepared once more: run it again. For a group
+    /// count, its column is not of the type the count was written for (its values could be
+    /// long, or the answer is larger than such a count's: [`GroupBudget`]): written again from
+    /// the table's columns as they are now, it may be counted.
     SchemaChanged,
     /// The driver ended the statement without a result (a bug the driver guards against: every
     /// run ends with one result, see the PostgreSQL driver's `Reply`).
@@ -900,7 +903,7 @@ pub struct GroupValue {
     /// The value as the session shows a cell of it; `None` for NULL, or for a value not sent
     /// (`whole` false).
     pub value: Cell,
-    /// The value was sent: it is at most [`GROUP_PREVIEW`](crate::query::GROUP_PREVIEW) bytes
+    /// The value was sent: it is at most [`GROUP_PREVIEW`] bytes
     /// long. A longer one comes as its length alone.
     pub whole: bool,
     /// Its length in bytes as the server measures it (as shown, for a type of short values);
@@ -908,6 +911,28 @@ pub struct GroupValue {
     pub bytes: Option<u64>,
     /// The rows that hold it.
     pub rows: u64,
+}
+
+/// The most bytes one row of a group count's answer takes as it comes from the server: a value
+/// of at most [`GROUP_PREVIEW`] bytes as text, in whatever form the session reads it (an array's
+/// binary form takes more than its text), its length and its count.
+pub const GROUP_ROW_BYTES: usize = 4 * GROUP_PREVIEW + 64;
+
+/// What a group count's answer may take, checked row by row as it is read
+/// ([`GroupBudget::take`]): at most [`GROUP_VALUES`] + 1 rows (the statement's `LIMIT`) of at
+/// most [`GROUP_ROW_BYTES`] each. An answer past it is not the one the statement was written
+/// for (a column whose type changed since): [`DbError::SchemaChanged`], and the reading stops.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GroupBudget {
+    rows: usize,
+}
+
+impl GroupBudget {
+    /// One more row of `bytes` bytes as received; past the budget, why it is refused.
+    pub fn take(&mut self, bytes: usize) -> Result<(), DbError> {
+        self.rows += 1;
+        if self.rows > GROUP_VALUES + 1 || bytes > GROUP_ROW_BYTES { Err(DbError::SchemaChanged) } else { Ok(()) }
+    }
 }
 
 impl GroupCounts {

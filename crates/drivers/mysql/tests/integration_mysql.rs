@@ -6467,6 +6467,47 @@ async fn a_group_count_refuses_locking_reads_and_the_next_transactions_settings(
     a.disconnect().await.unwrap();
 }
 
+/// A group count sends only values of a bounded size, whatever the metadata it was written
+/// from says: written for a number column that became `LONGTEXT` since (another session's
+/// `ALTER TABLE`), it is refused as changed (`SchemaChanged`), with autocommit and inside the
+/// user's transaction, never read with its long values whole; written again from the column as
+/// it is now, the long values come as their length alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_sends_only_bounded_values_of_the_columns_current_type() {
+    let test = "a_group_count_sends_only_bounded_values_of_the_columns_current_type";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = Table::make(
+        &admin,
+        "groupbound",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, k INT)",
+            "INSERT INTO {t} SELECT n, n % 3 FROM (WITH RECURSIVE s (n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s \
+             WHERE n < 30) SELECT n FROM s) AS g",
+        ],
+    )
+    .await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let stale = group_sql(&t.name, "k", ("int", ValueKind::Integer), None);
+    let limit = Some(Duration::from_secs(30));
+    let (got, _, _) = group_within(&mut c, 1, &stale, limit).await;
+    assert_eq!(got.map(|g| g.values.len()), Ok(3), "counted while it is a number");
+    let mut a = side(&admin).await;
+    a.query_drop(format!("ALTER TABLE {} MODIFY k LONGTEXT", t.q())).await.unwrap();
+    a.query_drop(format!("UPDATE {} SET k = CONCAT(REPEAT('x', 5000), id) WHERE id <= 10", t.q())).await.unwrap();
+    let (got, _, _) = group_within(&mut c, 2, &stale, limit).await;
+    assert_eq!(got, Err(DbError::SchemaChanged), "with autocommit");
+    c.ok(3, "START TRANSACTION").await;
+    let (got, _, _) = group_within(&mut c, 4, &stale, None).await;
+    assert_eq!(got, Err(DbError::SchemaChanged), "in the user's transaction");
+    c.ok(5, "COMMIT").await;
+    let fresh = group_sql(&t.name, "k", ("longtext", ValueKind::Text), None);
+    let (got, _, _) = group_within(&mut c, 6, &fresh, limit).await;
+    let got = got.expect("counted");
+    assert_eq!(got.values.iter().filter(|v| !v.whole).count(), 10, "{got:?}");
+    assert!(got.values.iter().filter(|v| !v.whole).all(|v| v.value.is_none() && v.bytes >= Some(5001)));
+    a.disconnect().await.unwrap();
+}
+
 /// Every value of a group count is the text a cell of it shows in the grid: `DECIMAL` with its
 /// scale, `TIMESTAMP` in the session's time zone, `DATETIME`, binary data as hex, text, an
 /// `ENUM`, `FLOAT`, and NULL; a value over 4 KiB comes as its length alone, not whole.

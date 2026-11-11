@@ -10,13 +10,69 @@
 //! with the `COMMIT` in the same write. Inside the user's block, and in the transaction of a held
 //! portal, it runs under the driver's savepoint without a time limit (the transaction's settings
 //! are the user's), released after it and rolled back to when it fails or is cancelled.
+//!
+//! What it reads is bounded: the statement as the server prepared it must send only short values
+//! or values measured and cut by the server ([`bounded`], checked in the transaction that reads
+//! it), its portal is asked for no more rows than its `LIMIT`, and each row is checked against
+//! the answer's budget ([`GroupBudget`]) before it is decoded.
 
 use super::*;
-use datarig_core::driver::GroupCounts;
+use datarig_core::driver::{GroupBudget, GroupCounts};
+use datarig_core::query::GROUP_VALUES;
+use tokio_postgres::types::{Kind, Type};
 
-/// The values the rows of a group count's statement hold (fetched in `formats`).
+/// The rows a group count's portal is asked for: its statement's `LIMIT`, so the server sends
+/// no more whatever the statement says.
+const ROWS: i32 = GROUP_VALUES as i32 + 1;
+
+/// The values the rows of a group count's statement hold (fetched in `formats`), each row
+/// within the answer's budget ([`GroupBudget`]).
 fn counts_of(rows: &[Row], formats: &[i16]) -> Result<GroupCounts, DbError> {
+    let mut budget = GroupBudget::default();
+    for row in rows {
+        budget.take(row.raw_size_bytes())?;
+    }
     GroupCounts::from_rows(decode(rows, formats))
+}
+
+/// Whether the statement, as the server prepared it, sends only values of a bounded size: its
+/// first column (the value; a domain's base type, as the server describes it) of a type whose
+/// values are short ([`short`]), or sent with the length the server measured (the second column
+/// an `int4`, as `octet_length` answers it, and the value then only up to the preview's size).
+/// Looked at in the transaction that reads it: preparing it locked the table, so its columns
+/// stay as they are until that ends. A column whose type changed since the count was written
+/// (from a number to text) is refused ([`DbError::SchemaChanged`]), not read as one of its old
+/// type.
+fn bounded(stmt: &Statement) -> Result<(), DbError> {
+    let [value, length, _] = stmt.columns() else { return Err(DbError::NoResult) };
+    if *length.type_() == Type::INT4 || short(value.type_()) { Ok(()) } else { Err(DbError::SchemaChanged) }
+}
+
+/// Whether every value of type `ty` is short: of a fixed size, or an enum's label.
+fn short(ty: &Type) -> bool {
+    matches!(
+        *ty,
+        Type::BOOL
+            | Type::CHAR
+            | Type::INT2
+            | Type::INT4
+            | Type::INT8
+            | Type::OID
+            | Type::FLOAT4
+            | Type::FLOAT8
+            | Type::MONEY
+            | Type::DATE
+            | Type::TIME
+            | Type::TIMETZ
+            | Type::TIMESTAMP
+            | Type::TIMESTAMPTZ
+            | Type::INTERVAL
+            | Type::UUID
+            | Type::INET
+            | Type::CIDR
+            | Type::MACADDR
+            | Type::MACADDR8
+    ) || matches!(ty.kind(), Kind::Enum(_))
 }
 
 /// Count the rows of each value with `sql` (the app's group count, on the allowlist, checked
@@ -84,10 +140,13 @@ async fn in_block(
     if env.cancel.asked() {
         return Ok(Err(DbError::Cancelled));
     }
+    if let Err(why) = bounded(&stmt) {
+        return Ok(Err(why));
+    }
     let formats = formats_of(&stmt);
     let release = format!("RELEASE SAVEPOINT {}", env.savepoint);
     let mut txn = client.transaction_in_block_with(Vec::new());
-    let read = link.guard(Some(env.token), txn.bind_first_page_then(&stmt, &formats, 0, &release)).await?;
+    let read = link.guard(Some(env.token), txn.bind_first_page_then(&stmt, &formats, ROWS, &release)).await?;
     Ok(match read {
         Ok(page) => counts_of(&page.rows, &formats),
         Err(e) => Err(asked_error(&e, env.cancel.asked())),
@@ -156,13 +215,17 @@ async fn own(
         }
     };
     // A cancel that came while the server answered the preparation stopped nothing.
-    if env.cancel.asked() {
+    let unread = match env.cancel.asked() {
+        true => Err(DbError::Cancelled),
+        false => bounded(&stmt),
+    };
+    if let Err(why) = unread {
         end_own(client, link).await?;
-        return Ok(Err(DbError::Cancelled));
+        return Ok(Err(why));
     }
     let formats = formats_of(&stmt);
     let mut txn = client.transaction_opened();
-    let read = link.guard(Some(env.token), txn.bind_first_page_then(&stmt, &formats, 0, "COMMIT")).await?;
+    let read = link.guard(Some(env.token), txn.bind_first_page_then(&stmt, &formats, ROWS, "COMMIT")).await?;
     let (asked, ran) = (env.cancel.asked(), start.elapsed());
     match read {
         Ok(page) => {
@@ -202,13 +265,16 @@ pub(super) async fn group_counted_in(
         Ok(()) => match link.guard(Some(env.token), txn.prepare(sql)).await? {
             // A cancel that came while the server answered the preparation stopped nothing.
             Ok(_) if env.cancel.asked() => Err(DbError::Cancelled),
-            Ok(stmt) => {
-                let formats = formats_of(&stmt);
-                match link.guard(Some(env.token), txn.bind_first_page(&stmt, &formats, 0)).await? {
-                    Ok(page) => counts_of(&page.rows, &formats),
-                    Err(e) => Err(asked_error(&e, env.cancel.asked())),
+            Ok(stmt) => match bounded(&stmt) {
+                Ok(()) => {
+                    let formats = formats_of(&stmt);
+                    match link.guard(Some(env.token), txn.bind_first_page(&stmt, &formats, ROWS)).await? {
+                        Ok(page) => counts_of(&page.rows, &formats),
+                        Err(e) => Err(asked_error(&e, env.cancel.asked())),
+                    }
                 }
-            }
+                Err(why) => Err(why),
+            },
             Err(e) => Err(asked_error(&e, env.cancel.asked())),
         },
         Err(why) => Err(why),

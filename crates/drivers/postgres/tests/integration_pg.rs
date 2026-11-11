@@ -8363,6 +8363,75 @@ async fn a_group_count_while_paging_keeps_the_portal() {
     c.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
 }
 
+/// A group count sends only values of a bounded size, whatever the metadata it was written
+/// from says: written for a number column that became text since (another session's `ALTER
+/// TABLE`), it is refused as changed (`SchemaChanged`) in a transaction of its own, in the
+/// user's block and while a portal is held, never read with its long values whole; a column of
+/// a domain over `numeric` (by the domain's name) has a value over 4 KiB sent as its length
+/// alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_sends_only_bounded_values_of_the_columns_current_type() {
+    use datarig_core::driver::ValueKind;
+    let Some(url) = pg_url("a_group_count_sends_only_bounded_values_of_the_columns_current_type") else { return };
+    let schema = format!("zz_group_bound_{}", std::process::id());
+    let _guard = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE DOMAIN {s}.amount AS numeric"),
+        format!("CREATE TABLE {s}.t (id int, k int, n {s}.amount)"),
+        format!(
+            "INSERT INTO {s}.t SELECT g, g % 3, CASE WHEN g = 1 THEN repeat('9', 5000)::numeric ELSE 1.5 END \
+             FROM generate_series(1, 1234) g"
+        ),
+    ] {
+        assert!(matches!(q.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    // Written while `k` is a number: sent as it is, without its length.
+    let stale = group_sql(s, "t", "k", ("int4", ValueKind::Integer), None);
+    let (got, _, _) = q.group_within(2, &stale, None).await;
+    assert_eq!(got.map(|g| g.values.len()), Ok(3), "counted while it is a number");
+    for sql in [
+        format!("ALTER TABLE {s}.t ALTER COLUMN k TYPE text USING k::text"),
+        format!("UPDATE {s}.t SET k = repeat('x', 5000) || id WHERE id <= 10"),
+    ] {
+        assert!(matches!(q.run(3, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let (got, _, _) = q.group_within(4, &stale, Some(Duration::from_secs(30))).await;
+    assert_eq!(got, Err(DbError::SchemaChanged), "in a transaction of its own");
+    assert_eq!(q.first_value(5, "SELECT 1").await.as_deref(), Some("1"));
+    assert!(matches!(q.run(6, "BEGIN").await, DbEvent::Done { .. }));
+    let (got, _, _) = q.group_within(7, &stale, None).await;
+    assert_eq!(got, Err(DbError::SchemaChanged), "in the user's block");
+    assert_eq!(q.first_value(8, "SELECT 2").await.as_deref(), Some("2"), "the block goes on");
+    assert!(matches!(q.run(9, "ROLLBACK").await, DbEvent::Done { .. }));
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 10,
+        statements: vec![format!("SELECT * FROM {s}.t ORDER BY id")],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    let DbEvent::Page { more: true, .. } = q.result(10).await else { panic!("a page with more") };
+    let (got, _, _) = q.group_within(11, &stale, None).await;
+    assert_eq!(got, Err(DbError::SchemaChanged), "while a portal is held");
+    q.session.send(DbCommand::ClosePortal { id: 10 });
+    q.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
+    // Written again from the column as it is now: counted, the long values by their length.
+    let fresh = group_sql(s, "t", "k", ("text", ValueKind::Text), None);
+    let (got, _, _) = q.group_within(12, &fresh, None).await;
+    let got = got.expect("counted");
+    assert_eq!(got.values.iter().filter(|v| !v.whole).count(), 10, "{got:?}");
+    // A domain over numeric, named as the domain.
+    let amount = group_sql(s, "t", "n", ("amount", ValueKind::Decimal), None);
+    let (got, _, _) = q.group_within(13, &amount, Some(Duration::from_secs(30))).await;
+    let mut got: Vec<_> =
+        got.expect("counted").values.into_iter().map(|v| (v.value, v.whole, v.bytes, v.rows)).collect();
+    got.sort();
+    assert_eq!(got, vec![(None, false, Some(5000), 1), (Some("1.5".to_string()), true, Some(3), 1233)]);
+}
+
 /// A cancel that reaches the server after it answered a group count's preparation stops
 /// nothing there (the session is idle): the count is not started after it, but answered
 /// `Cancelled`, in each of its three places: in a transaction of its own (ended), in the user's

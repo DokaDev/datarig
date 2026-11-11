@@ -11,8 +11,9 @@ pub use keys::{KeyCatalog, KeyMarks};
 pub use protocol::{
     AppliedStep, ApplyError, ApplyFailure, ApplyTx, ArrayElement, COUNT_LOCK_WAIT, CancelFailure, Cell, ColumnMeta,
     ColumnOrigin, DbCommand, DbError, DbEvent, ESTIMATE_LIMIT, EXPORT_BATCH_BYTES, ExportBatch, ExportGuard,
-    ExportRead, ExportSink, GroupCounts, GroupValue, Isolation, Outcome, OwnSession, PagingMode, ReadIn, SchemaObjects,
-    ServerEnd, ServerMessage, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep, ValueKind,
+    ExportRead, ExportSink, GROUP_ROW_BYTES, GroupBudget, GroupCounts, GroupValue, Isolation, Outcome, OwnSession,
+    PagingMode, ReadIn, SchemaObjects, ServerEnd, ServerMessage, SessionValues, StatementInfo, TxOutcome, TxRule,
+    TxStep, ValueKind,
 };
 
 use crate::profile::ConnectionConfig;

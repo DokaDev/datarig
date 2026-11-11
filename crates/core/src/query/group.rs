@@ -211,8 +211,12 @@ fn statement(d: Dialect, table: &TableName, column: &ColumnMeta, other: Option<&
 
 /// The byte length of value `c` (column `column` quoted) when its type may hold a long one; `None`
 /// for a type whose values are short (a number, a date, …). PostgreSQL measures text and bytes
-/// as they are; JSON, arrays and `numeric` by their text, written by the type's own output
-/// function (no cast, which could be one of the user's).
+/// as they are; JSON, arrays and `numeric` (a domain over it too) by their text, written by the
+/// type's own output function (no cast, which could be one of the user's).
+///
+/// The column's type is the one its metadata says, which may be older than the table: the
+/// driver checks the statement's columns as the server prepares it, and refuses a value of a
+/// type that is not short sent without its length.
 fn length(d: Dialect, column: &ColumnMeta, c: &str) -> Option<String> {
     let ty = column.type_name.to_ascii_lowercase();
     match d {
@@ -221,7 +225,9 @@ fn length(d: Dialect, column: &ColumnMeta, c: &str) -> Option<String> {
             ValueKind::Other if ty == "citext" => Some(format!("octet_length({c})")),
             ValueKind::Json if ty == "jsonb" => Some(format!("octet_length(textin(jsonb_out({c})))")),
             ValueKind::Array(_) => Some(format!("octet_length(textin(array_out({c})))")),
-            ValueKind::Decimal if ty == "numeric" => Some(format!("octet_length(textin(numeric_out({c})))")),
+            // `numeric` and a domain over it (by its own name): its text has no bound of its
+            // own. `money` is short.
+            ValueKind::Decimal if ty != "money" => Some(format!("octet_length(textin(numeric_out({c})))")),
             _ => None,
         },
         Dialect::MySql(_) => {
