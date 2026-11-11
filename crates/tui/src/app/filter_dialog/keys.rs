@@ -454,7 +454,8 @@ impl App {
         let now = d.draft.sort_of(&col).map(|(dir, _)| dir);
         let step = |right: bool| match (now, right) {
             (None, true) => Some(Dir::Asc),
-            (Some(Dir::Asc), true) | (Some(Dir::Desc), _) => Some(Dir::Desc),
+            (Some(Dir::Asc), true) | (Some(Dir::Desc), true) => Some(Dir::Desc),
+            (Some(Dir::Desc), false) => Some(Dir::Asc),
             (Some(Dir::Asc), false) | (None, false) => None,
         };
         match key.code {

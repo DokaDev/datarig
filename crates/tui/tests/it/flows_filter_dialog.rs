@@ -485,3 +485,23 @@ fn the_columns_follow_the_catalogue_read_while_the_dialog_is_open() {
     h.key(KeyCode::Enter);
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name = 'x')")]]);
 }
+
+#[test]
+fn the_sort_line_steps_through_none_ascending_and_descending_both_ways() {
+    let mut h = users();
+    // `Space r o` with no order: the column's sort line.
+    h.keys(" ro");
+    let order = |h: &Harness| h.app.filter_dialog_draft().unwrap().1;
+    h.key(KeyCode::Right);
+    assert_eq!(order(&h), "id ASC");
+    h.key(KeyCode::Right);
+    assert_eq!(order(&h), "id DESC");
+    h.key(KeyCode::Right);
+    assert_eq!(order(&h), "id DESC", "the last choice stays");
+    h.key(KeyCode::Left);
+    assert_eq!(order(&h), "id ASC", "back from descending to ascending");
+    h.key(KeyCode::Left);
+    assert_eq!(order(&h), "");
+    h.key(KeyCode::Left);
+    assert_eq!(order(&h), "");
+}
