@@ -59,7 +59,7 @@
 "commands.arg.where" = "<condition>"
 "command.orderby" = "Sort the table tab's rows on the server and run it again (:orderby <column> [ASC|DESC], …; alone: no order)"
 "commands.arg.orderby" = "<columns>"
-"command.filter" = "Clear the table tab's filter and order and run it again (:filter clear), or the filter history of its table or of every table (:filter history clear [all])"
+"command.filter" = "Clear the table tab's filter, order and limit and run it again (:filter clear), or the filter history of its table or of every table (:filter history clear [all])"
 "commands.arg.filter" = "clear|history …"
 "commands.error.filter_usage" = "Usage: :filter clear | :filter history clear [all]"
 "set.not_one" = "one statement per item"

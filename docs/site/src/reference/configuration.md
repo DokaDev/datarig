@@ -87,7 +87,7 @@ The results of a statement.
 
 | Key | Default | Values | Description |
 |---|---|---|---|
-| `count_timeout` | `"30s"` | a duration from `"1s"` to `"24h"` (`"2m"`), or `0` or `"off"` (no limit) | How long the server may count a result's rows when you ask (`#`) before it stops; the count then says the number is not known. Inside your own transaction a PostgreSQL count has no limit. |
+| `count_timeout` | `"30s"` | a duration from `"1s"` to `"24h"` (`"2m"`), or `0` or `"off"` (no limit) | How long the server may count a result's rows when you ask (`#`) before it stops; the count then says the number is not known. `"off"` also sets no limit on waiting for a lock. Inside your own transaction, or while a result's cursor is held open, a PostgreSQL count has no limit. |
 
 ## `[updates]`
 

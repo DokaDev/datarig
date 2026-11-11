@@ -57,7 +57,7 @@
 "commands.arg.where" = "<조건>"
 "command.orderby" = "테이블 탭의 행을 서버에서 정렬해 다시 실행 (:orderby <열> [ASC|DESC], …; 인자 없이는 정렬 없음)"
 "commands.arg.orderby" = "<열 목록>"
-"command.filter" = "테이블 탭의 필터와 정렬을 지우고 다시 실행 (:filter clear), 또는 이 테이블이나 모든 테이블의 필터 기록 지우기 (:filter history clear [all])"
+"command.filter" = "테이블 탭의 필터, 정렬, 행 제한을 지우고 다시 실행 (:filter clear), 또는 이 테이블이나 모든 테이블의 필터 기록 지우기 (:filter history clear [all])"
 "commands.arg.filter" = "clear|history … (지우기)"
 "commands.error.filter_usage" = "사용법: :filter clear | :filter history clear [all]"
 "set.not_one" = "항목마다 문장 하나"

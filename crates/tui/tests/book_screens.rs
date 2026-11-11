@@ -20,6 +20,7 @@ const SCREENS: &[(&str, &str)] = &[
     ("grid-keys", "it__ui_snapshots__grid_key_marks_text_en_160x45"),
     ("inspector", "it__ui_snapshots__inspector_row_en_160x45"),
     ("grid-search", "it__ui_snapshots__grid_search_matches_terminal_120x40"),
+    ("table-sort", "it__flows_table_sort__table_sort_text_en_120x30"),
     ("plan-tree-postgres", "it__flows_plan__plan_tree_analyze_en_160x45"),
     ("plan-summary-postgres", "it__flows_plan__plan_summary_en_160x45"),
     ("plan-tree-mysql", "it__flows_plan_mysql__plan_mysql_tree_en_120x40"),

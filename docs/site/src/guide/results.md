@@ -22,47 +22,9 @@ The rows already fetched stay in a bounded memory window and spill to a private 
 past it. `#` counts every row on demand (it runs a count query), with a label that says whether
 the count matches the pages you saw.
 
-The server stops a count statement after 30 seconds (`[results] count_timeout` in the
-[configuration](../reference/configuration.md), `"off"` for no limit), and the status line then says
-the number of rows is not known. It also gives up on a single lock another session holds on the
-table after waiting 2 seconds (1 second on MySQL), and says so. These are the server's limits on
-the statement and on each lock wait, not on the whole request: the time to reach the server, or
-to get a connection from a pooler, comes on top. Neither ever reads as 0 rows, and a cancel
-(`Ctrl+C`) is said as one; a stop the server reports for any other reason is shown in its own
-words. On PostgreSQL the limit is set only while no transaction is
-open on the tab's session: inside your own transaction, or while a result's cursor is held open,
-the count keeps to that transaction's settings and has no limit (the status line says so); when
-the session cannot tell whether a transaction is open, the count is refused. On
-MySQL the limit is part of the count statement itself (also inside a transaction). Neither limit
-is ever longer than one your session already has (PostgreSQL's `statement_timeout` and
-`lock_timeout`, MySQL's `max_execution_time`; MySQL's 1 second lock wait is the shortest
-`lock_wait_timeout` it takes).
-
-### Estimate or exact count
-
-On a table tab whose rows are filtered, `#` opens a small choice instead:
-
-- **Estimate (planner)** asks the server's planner how many rows the filter matches, without
-  reading any (`EXPLAIN`, never `EXPLAIN ANALYZE`). The title then reads `page 3 / ~12 (planner)`:
-  an estimate, which can be far off, not a count. It is offered only when the filter calls no
-  function outside the built-ins a filter may call freely (planning may run a function), on
-  MySQL only without a subquery (MySQL may run one while it plans), and only while no transaction
-  is open on the tab's session and no result is held open there (the locks planning takes would
-  last until it ends); otherwise the entry is dimmed with the reason. On PostgreSQL the server is
-  also asked, in the same read-only transaction as the plan, whether planning the table could run
-  a function: a table whose indexes, constraints, statistics, partition key or generated columns
-  use something not built in, one with a column whose type is not one of the server's standard
-  types (a domain, an enum or a composite type included), one with a rule or row-level security,
-  or one that cannot be locked (a materialised view) gets no estimate, and the entry is then
-  dimmed for those rows. The server
-  stops the statement after 5 seconds and gives up on a lock after 2 seconds (1 second on MySQL).
-  On MySQL the statement runs in the session's usual transaction mode, in a read-only transaction
-  of its own only when autocommit is off. MariaDB has no estimate.
-- **Exact count** counts the rows as above, with the same limit.
-
-Without a filter, `#` counts at once, and the title shows the server's statistics for the whole
-table (`~12`) until then, as before. Filtered rows without an estimate or a count show
-`page 3 / ?`.
+A count has a time limit (30 seconds by default) and, when it stops, says the number of rows is
+not known, never 0. On a filtered table tab `#` also offers the planner's estimate. See
+[Estimate or exact count](filtering.md#estimate-or-exact-count).
 
 ## Moving around
 
@@ -120,137 +82,10 @@ cells are tinted.
 
 ## Filter and sort a table tab
 
-A table tab (opened from the explorer) has a line above its grid with a WHERE condition and an
-ORDER BY, both run on the server. `f` (or `Space r f`) edits the condition and `Space r o` the
-order; `Enter` applies them, `Tab` moves between the fields, `Ctrl+Space` completes column
-names and `Esc` puts back what was applied. A completion list that opens by itself while you
-type does not take `Enter` or `Tab`: once you move through it (arrows, `Ctrl+N`, `Ctrl+P`) or ask
-for it with `Ctrl+Space`, `Enter` and `Tab` pick its entry. `Ctrl+E` always applies. `Space r x` clears them all and runs the table again,
-and `Space r v` opens the statement in a new console. From the command line, `:where`,
-`:orderby` and `:filter clear` do the same.
-
-The condition is sent exactly as you typed it, inside parentheses. The order is read as column
-names, each with `ASC` or `DESC` (and `NULLS FIRST` or `NULLS LAST` on PostgreSQL), and shown
-in its normal form once applied. When the table has a primary key, its columns are added after
-yours (shown dimmed as `+ id`) so that pages read again follow one order; until datarig knows
-the order is unique (the table's keys are read from the catalog when the tab opens, without
-locking the table), the line says "order not unique". An ordered query brought back with a tab
-waits for those keys before its first run, connecting first when needed; that wait counts as a
-running query (`Ctrl+C` cancels it), and a connection that fails ends it and says so.
-
-Before anything is sent, datarig refuses a condition that could do more than filter this
-table's rows: a comment, a `;`, a row lock (`FOR UPDATE`, `FOR SHARE`), another clause or
-another table. The refused part is underlined when it can be pointed to; the status line says
-why, and the line under the grid repeats it in full while it stands. A condition that calls functions datarig cannot check for side effects asks first; on
-a read-only connection it is refused.
-
-When the server rejects the condition, the line marks it failed, underlined where the server
-says the error is. The rows of the earlier query stay, dimmed, and the line under the grid says
-they are not the filter's answer; a cancelled run or a lost connection leaves them the same way.
-
-`F` (or `Space r F`, or "Table → filter by value" in the grid's right-click menu) filters a table
-tab by the value of the cell under the cursor. The menu offers `=`, `<>`, `<>` with the rows whose
-value is NULL kept (`IS DISTINCT FROM` on PostgreSQL, `NOT (… <=> …)` on MySQL), `<`, `>`, `<=` and
-`>=`; for text also "starts with" (`LIKE 'value%'`, its `%` and `_` escaped with `!`; on
-PostgreSQL before 18, which refuses `LIKE` on a nondeterministic collation, offered once datarig
-has read that the column's collation is deterministic) and "contains
-(case-insensitive)" (`ILIKE` on PostgreSQL, offered once datarig has read that the column's
-collation is deterministic, which it does with the tab's runs; on MySQL `LIKE`, which a `_ci`
-collation compares without case, else `LOWER(…) LIKE LOWER(…)`). A NULL cell offers only `IS NULL`
-and `IS NOT NULL`, never `= NULL`. With cells of one column selected (up to 1000), it offers `IN` and `NOT IN` of
-their values; a NULL among them is tested on its own (`IN (…) OR … IS NULL`, `NOT IN (…) AND … IS
-NOT NULL`), and without one a second `NOT IN` keeps the rows whose value is NULL, which a plain
-`NOT IN` leaves out. An equality on a floating-point column may find nothing, and how text compares
-follows the column's collation on the server: the menu says so next to those entries.
-
-The condition is added to the filter of the rows shown with `AND`; a filter whose top level is not
-a plain chain of `AND`s (an `OR`, for one) is put in parentheses first. The new text goes into the
-filter line and runs as `Enter` runs it there, with the same checks and questions, pending edits
-included. While the line holds changes you have not applied, nothing is added: apply them or put
-them back with `Esc` first. Nor while the line shows a condition that failed or was cancelled over
-the earlier rows: run it again, or change it, first. A value is taken only as the server holds it: an entry is dimmed, with
-the reason, for a value that is not shown whole (as a copy as SQL judges it), binary data over 64
-KiB, a type whose comparison datarig does not know (`json`, MySQL's JSON, geometry, most types of
-your own, arrays of a type without equality such as `xml[]`; PostgreSQL's `jsonb` and arrays of
-built-in types with equality offer equality only), or more than 1000 cells. A new row,
-a cell with an edit on it or cells of several columns give no menu. On a query's results there is
-none either: filter them in the statement. A column whose name holds a line break is neither
-filtered by value nor sorted from the grid: the filter line holds one line, and would not hold the
-name as it is.
-
-From the grid, `s` (or `Space r s`) sorts by the cursor's column alone: the first press sorts
-going up, the second going down, the third takes the order away. `S` (or `Space r S`) adds the
-column as one more key, after the others; pressed again on a key it turns that key, then takes
-it out, and the other keys stay where they are. A click on the last two columns of a column's
-header (the cursor's column shows `^v` there, a glyph with icons on) sorts as `s` does; a click
-elsewhere on a header selects the column, as on any grid. A sort runs the new order like `Enter`
-does and writes it into the line once it is sent: it starts from the order of the rows shown and
-keeps their condition and limit. While the line holds changes you have not applied, in any field,
-it does not sort: apply them with `Enter` or put them back with `Esc` first; nor while the line
-shows a query that failed or was cancelled over the earlier rows. Over edits not saved
-yet, it asks first, as any run does.
-
-The headers say how the rows shown are sorted: an arrow after the name (`^` or `v` with icons
-off), with the key's level from the second key on (`v2`); the primary key columns added after
-yours are not marked. A column the condition compares is marked `=` (a filter glyph with icons
-on), as far as datarig reads the condition: a condition it does not read marks nothing, which
-does not mean it compares no column. Sorting is for table tabs only: a query's rows are sorted
-in its text.
-
-The third field, `LIMIT`, caps the rows the tab reads (`-` when there is none; a narrow line
-shows it as `L100`). It takes a whole number of rows, written in digits, and a blank field means
-no cap; `0`, or anything that is not a number, is refused before anything is sent. The cap is
-not written into the statement the grid runs: the pages stop at it instead, the last one cut
-there, and nothing is fetched past it (what the server held open for the result is closed). The
-results title then says `limit 100`. A count (`#`) and an export of every row read the capped
-statement (`… LIMIT 100`), so they see the same rows the pages would. A new limit runs the table
-again from its first page. On MySQL a condition may not call `ROW_COUNT()` or `FOUND_ROWS()`:
-they read the outcome of the statement before, which for a table tab is one the app sends, so
-the line refuses them.
-
-The condition, order and limit you applied are kept with the workspace and with a closed tab
-you bring back (`Space t u`): they return to the line without running, and are checked again
-as above when the tab runs.
-
-On MySQL, a plain read locks the rows it reads when the session's isolation level is
-SERIALIZABLE and autocommit is off or a transaction is open (with manual commit, the one datarig
-opens for the read counts too): other sessions cannot change those rows until the transaction
-ends. In that state, and when the level is not known, a table tab asks before it runs (`Enter`
-cancels, `y` runs), on the session the read is sent on: a read that waits for its connection, or
-opens a new session, asks once it is about to be sent, and nothing is sent before the answer.
-The answer holds for the tab until the session, its level, its autocommit or
-its transaction changes, even if it later changes back. A page read again or a count of the tab
-is refused in that state until the tab has run with that answer. While a transaction is open,
-the level that counts is the one it started with: a `SET SESSION TRANSACTION ISOLATION LEVEL`
-inside it applies to later transactions only. A level set with `SET TRANSACTION ISOLATION LEVEL`
-without `SESSION` applies to the next transaction only and the server does not report it, so
-datarig treats the level as not known until that transaction ends; after a `CALL`, an `EXECUTE`
-or an executable comment it stays not known until the session's level is set again.
-
-### Filter history
-
-A condition and order that ran are kept per table (its connection, database, schema and name)
-once the server answered them with rows: a run that was refused, failed or was cancelled is not
-kept. `Ctrl+R` in the filter line (or `Space r H` from the grid) lists the table's earlier ones,
-the most recent first, with both texts in full under the list; typing narrows the list. A
-picked entry fills the condition and the order (the `LIMIT` field stays as it is: the history
-does not keep limits) and runs only when you press `Enter`, with the same checks as a condition
-you type. A condition or order holding a line break (from a workspace file edited by hand, say)
-is not kept, and one in the file is not filled in, since the one-line field cannot hold it as it
-is. Each table keeps its last 50 entries and the last 200 tables used are kept; a
-condition or order longer than 4 KiB is not kept.
-
-The history stays on this machine: it is the file `filter-history.toml` in the state directory,
-readable by you only (mode 0600 on Unix), and never part of the workspace file. A condition can
-hold personal data, such as an email address: `:set history.filters=off` (or
-`[history] filters = "off"` in the config file) stops keeping new ones, `:filter history clear`
-forgets this table's (asked first: `Enter` cancels, `y` clears) and `:filter history clear all`
-every table's; turning the setting off does not delete the file. When the file cannot be read
-(a condition or order in it longer than 4 KiB counts as that too), or something else than a
-plain file is at its path (datarig never follows a symbolic link there), the history is off for
-the session and says so once; datarig never writes over it, and a clear is refused naming the
-file, for you to fix or delete. A second datarig running at the same time
-reads the history but does not write it.
+A table tab (opened from the explorer) has a line above its grid with a `WHERE` condition, an
+`ORDER BY` and a `LIMIT`, run on the server: `f` edits the condition, `s` and `S` sort by the
+cursor's column and `F` filters by the value of its cell. See
+[Filtering and sorting a table](filtering.md).
 
 ## The inspector
 
