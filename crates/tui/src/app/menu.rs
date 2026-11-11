@@ -692,7 +692,9 @@ impl App {
         let t = self.tab();
         // The Messages of a run hide the grid: no cell to act on then. A new row (shown after the
         // rows read) is a cell too, for its edits only.
+        // A hidden column is no cell either (every column hidden).
         let rows = t.exec.view == ResultView::Rows
+            && t.grid.shown(t.grid.col)
             && matches!(&t.results, Results::Rows(rs) if t.grid.row < rs.rows.len() + rs.edit.new_shown());
         Some(MenuTarget::Grid {
             tab: t.id,
@@ -1024,6 +1026,10 @@ impl App {
             pane.push(MenuItem::Scope(MenuScope::Default));
         }
         pane.extend(self.available(RESULTS_MENU, &mut off));
+        // No cell shown (every column hidden): none to select.
+        if self.grid_no_cell() {
+            pane.retain(|i| *i != MenuItem::Action(Action::Grid(GridAction::SelectAll)));
+        }
         self.push_menu_from(back, Ctx::Grid, target, (own, pane, off), at);
         if !self.overlays.is_open(OverlayKind::ContextMenu) {
             self.focus = back;

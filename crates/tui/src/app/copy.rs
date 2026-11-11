@@ -536,6 +536,9 @@ impl App {
         if req.keys {
             self.grid_copy = None;
         }
+        if self.refused_without_cell() {
+            return;
+        }
         // The cells the grid shows: what `g p` keeps (by position), whatever the format.
         let Some(shown) = self.block(req.what) else {
             let why = if self.on_new_rows() { Label::CopyNewRows } else { Label::CopyNothing };

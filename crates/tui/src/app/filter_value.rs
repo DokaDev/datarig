@@ -201,6 +201,9 @@ impl App {
             return Err(off(Label::TableFilterByValueOffNotShown, Label::TableFilterByValueNotShown));
         }
         let g = &t.grid;
+        if !g.shown(g.col) {
+            return Err(Box::new(Off::said(self.no_cell_notice())));
+        }
         let len = rs.rows.len();
         let on_new = g.row >= len || g.anchor.filter(|_| g.shape != Shape::Cols).is_some_and(|a| a.0 >= len);
         if on_new {

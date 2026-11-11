@@ -304,6 +304,13 @@ impl App {
             }
             return;
         }
+        // The cursor's cell, the selection: none while the grid shows no cell (the keys that
+        // copy say so as any copy does).
+        let cells =
+            matches!(g, GridAction::ViewCell | GridAction::Select | GridAction::SelectRows | GridAction::SelectAll);
+        if cells && self.refused_without_cell() {
+            return;
+        }
         let t = self.tabs.active_mut();
         if let (GridAction::ViewCell, Results::Rows(rs)) = (g, &mut t.results) {
             t.grid.load_selected(rs);

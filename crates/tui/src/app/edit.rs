@@ -518,6 +518,16 @@ impl App {
         {
             return;
         }
+        // A key that reads or writes cells by the cursor or the selection: none while the grid
+        // shows no cell there (every column hidden), and a paste waiting for it is dropped.
+        if !matches!(
+            a,
+            EditAction::Undo | EditAction::Redo | EditAction::Apply | EditAction::Discard | EditAction::Preview
+        ) && self.refused_without_cell()
+        {
+            self.paste_in = None;
+            return;
+        }
         match a {
             EditAction::Undo | EditAction::Redo => self.edit_history(a == EditAction::Redo),
             EditAction::Revert => self.edit_revert(),
@@ -975,6 +985,9 @@ impl App {
         let shown = total + rs.edit.batch.drafts().len();
         if row >= shown || col >= ncols {
             return Err(None);
+        }
+        if !t.grid.shown(col) {
+            return Err(Some(self.no_cell_notice()));
         }
         let rows = match t.grid.selection(total, ncols) {
             None => row..row + 1,

@@ -463,3 +463,68 @@ fn a_copy_keeps_the_shown_cells_for_g_p_while_its_sql_names_the_hidden_key() {
     assert_eq!(pending(&h, 2, 2), Some(text("ann")));
     assert!(drafts(&h).is_empty(), "one row over one row");
 }
+
+/// The pending changes' revision of the active tab's rows.
+fn revision(h: &Harness) -> u64 {
+    match &h.app.tab().results {
+        Results::Rows(rs) => rs.edit.batch.revision(),
+        _ => 0,
+    }
+}
+
+/// Every column hidden, the cursor last on a nullable column that is no key: no key reads or
+/// writes a cell the grid does not show (the cell editor, NULL, DEFAULT, rows added, cloned or
+/// deleted, a paste, a copy, `=`, `!`, the column menu, a sort, a selection); each says how to
+/// show a column, and nothing changes, runs or is copied. The grid's menu offers nothing for a
+/// cell. The dialog still opens and shows a column again, and then the keys act on it.
+#[test]
+fn with_every_column_hidden_no_key_reads_or_writes_a_cell() {
+    let mut h = editable();
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    // A cell kept for `g p` and `p`.
+    at(&mut h, 0, 2);
+    h.keys("y");
+    let copied = clip.texts.lock().unwrap().len();
+    for c in [0, 1, 2] {
+        at(&mut h, 0, c);
+        h.keys("C");
+    }
+    assert_eq!(hidden(&h), [true, true, true]);
+    h.sent();
+    let before = revision(&h);
+    for keys in
+        ["e", " de", " dn", " dD", "o", "O", "D", " dr", "gp", "p", "y", "Y", " ryt", "=", "!", "F", "s", "C", "v", "V"]
+    {
+        h.app.transient = None;
+        h.keys(keys);
+        assert!(flashed(&h).starts_with("Every column is hidden from the grid"), "{keys}: {}", flashed(&h));
+        assert_eq!(h.overlay_kind(), None, "{keys}: nothing opens");
+        assert_eq!(h.app.key_context(), Ctx::Grid, "{keys}");
+        assert_eq!(revision(&h), before, "{keys}: nothing changes");
+        assert!(runs(&mut h).is_empty(), "{keys}: nothing runs");
+        assert_eq!(clip.texts.lock().unwrap().len(), copied, "{keys}: nothing copied");
+        assert_eq!(h.app.tab().grid.anchor, None, "{keys}: nothing selected");
+    }
+    // A terminal paste neither.
+    h.app.transient = None;
+    h.event(ratatui::crossterm::event::Event::Paste("z".into()));
+    assert!(flashed(&h).starts_with("Every column is hidden from the grid"), "{}", flashed(&h));
+    assert_eq!(revision(&h), before, "nothing pasted");
+    // The grid's menu: no entry for a cell.
+    h.app.dispatch(datarig_tui::app::action::Action::OpenMenu);
+    let lines: Vec<String> = h.app.menu_lines().into_iter().map(|(_, l, _)| l.to_string()).collect();
+    assert!(lines.iter().any(|l| l.contains("export")), "the pane's entries: {lines:?}");
+    for word in ["NULL", "DEFAULT", "Edit", "Only", "Exclude", "Copy", "Select"] {
+        assert!(!lines.iter().any(|l| l.contains(word)), "{word}: {lines:?}");
+    }
+    h.key(KeyCode::Esc);
+    // The dialog shows the nickname again; then NULL is set on it.
+    h.keys("f");
+    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog));
+    h.keys(" ");
+    h.key(KeyCode::Enter);
+    assert_eq!(hidden(&h), [true, true, false]);
+    assert_eq!(h.app.tab().grid.col, 2);
+    h.keys(" dn");
+    assert_eq!(pending(&h, 0, 2), Some(Value::Null));
+}

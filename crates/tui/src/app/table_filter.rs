@@ -52,6 +52,19 @@ impl App {
     /// The table keys of the grid.
     pub(super) fn table_action(&mut self, a: TableAction) {
         let id = self.tab().id;
+        // The keys of the cursor's column or the selected cells: none while the grid shows none.
+        let cells = matches!(
+            a,
+            TableAction::SortCycle
+                | TableAction::SortAdd
+                | TableAction::ColumnMenu
+                | TableAction::Only
+                | TableAction::Exclude
+                | TableAction::Hide
+        );
+        if cells && self.refused_without_cell() {
+            return;
+        }
         match a {
             TableAction::EditFilter => self.open_filter_dialog(false),
             TableAction::EditOrder => self.open_filter_dialog(true),

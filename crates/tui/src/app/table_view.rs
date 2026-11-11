@@ -174,6 +174,34 @@ impl App {
         true
     }
 
+    /// The active tab's grid has no cell at its cursor: its rows have columns and the cursor's
+    /// is hidden (with every column hidden, the cursor stays on the last one, which addresses
+    /// nothing until a column is shown again).
+    pub(super) fn grid_no_cell(&self) -> bool {
+        if self.tabs.is_empty() {
+            return false;
+        }
+        let t = self.tab();
+        matches!(&t.results, Results::Rows(rs) if !rs.columns.is_empty() && !t.grid.shown(t.grid.col))
+    }
+
+    /// What a key that reads or writes the cursor's cell or the selection says when the grid
+    /// has no cell there ([`App::grid_no_cell`]): how to show a column again.
+    pub(super) fn no_cell_notice(&self) -> Notice {
+        let open = self.key_for(Action::Table(super::table_filter::TableAction::EditFilter), Ctx::Grid);
+        Notice::new(Msg::TableAllHidden { open }, Level::Info)
+    }
+
+    /// Said ([`App::no_cell_notice`]) when the grid has no cell at its cursor: then a key that
+    /// reads or writes cells does nothing.
+    pub(super) fn refused_without_cell(&mut self) -> bool {
+        if !self.grid_no_cell() {
+            return false;
+        }
+        self.flash(self.no_cell_notice());
+        true
+    }
+
     /// `C` (and the column menu's entry): the cursor's column hidden from the grid; the cursor
     /// goes to the next column shown.
     pub(super) fn table_hide_column(&mut self) {
