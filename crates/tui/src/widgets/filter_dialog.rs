@@ -714,6 +714,8 @@ fn draw_values(
         false if pw < 60 => (i18n.msg(&Msg::TableDialogCountExactShort { key: count_key }).to_string(), muted),
         false => (i18n.msg(&Msg::TableDialogCountExactly { key: count_key }).to_string(), muted),
     };
+    // Dimmed where the server cannot count the column (its key says why).
+    let action_style = if v.count_off.is_some() { Style::new().fg(th.fg_dim) } else { action_style };
     let aw = width(&action) as u16;
     let ax = right.saturating_sub(aw);
     put(buf, ax, y, &action, usize::from(aw), action_style);

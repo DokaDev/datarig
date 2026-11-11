@@ -98,6 +98,8 @@ pub(crate) struct ValuesView {
     pub(crate) counting: bool,
     /// The count's other conditions kept an expression that names the column.
     pub(crate) kept_expr: bool,
+    /// Why the server cannot count the column's values (`# count exactly` dimmed).
+    pub(crate) count_off: Option<Label>,
     /// The values ticked: those of the column's `=` / `in list` condition.
     pub(crate) ticked: Vec<Value>,
 }
@@ -247,6 +249,13 @@ impl App {
             admit(&ValuesFrom { dialect, meta, read_in }, zone, now, v).map_err(NotTicked::NotAdmitted)
         };
         let null = equality.clone().map(|()| Value::Null);
+        let count_off = if c.invisible {
+            Some(Label::TableDialogValuesInvisible)
+        } else if c.meta.is_none() {
+            Some(Label::TableDialogCountUnknown)
+        } else {
+            equality.as_ref().err().map(|_| Label::TableDialogOpOffNoEquality)
+        };
         let mut view = ValuesView {
             heading: Heading::Nothing(Label::TableDialogValuesNoRows),
             items: Vec::new(),
@@ -256,6 +265,7 @@ impl App {
             more: false,
             counting,
             kept_expr: false,
+            count_off,
             ticked: ticked.unwrap_or_default(),
         };
         let narrow = narrow.as_deref();

@@ -528,3 +528,32 @@ fn a_mysql_timestamp_is_ticked_only_in_the_zone_it_was_read_in() {
     h.key(KeyCode::Char(' '));
     assert_eq!(draft(&h), "at = '2026-11-10 09:30:00'");
 }
+
+#[test]
+fn ctrl_c_cancels_the_count_as_it_does_a_run() {
+    let mut h = users();
+    dialog_on(&mut h, 1);
+    h.keys("#");
+    let id = counts(&mut h)[0].0;
+    let index = h.app.tabs.active_index();
+    assert!(!h.session_cancelled(index));
+    h.key_mod(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    assert!(h.session_cancelled(index));
+    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog), "the dialog stays");
+    counted(&mut h, id, Err(DbError::Cancelled));
+    assert!(h.screen(120, 34).contains("Values count cancelled"));
+    // A column whose values compare by no equality: `# count exactly` refused with why.
+    h.key(KeyCode::Esc);
+    let mut cols = columns();
+    cols[2] = meta("amount", "json", false, true);
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(
+        index,
+        DbEvent::Page { id, columns: Some(cols), rows: rows(3), more: false, elapsed: Duration::from_millis(2) },
+    );
+    dialog_on(&mut h, 2);
+    h.keys("#");
+    assert!(counts(&mut h).is_empty());
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("Values not counted: The column's type has no equality"), "{screen}");
+}
