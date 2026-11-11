@@ -136,7 +136,7 @@ fn a_run_that_ends_without_its_first_page_is_not_applied() {
     assert_eq!(tq.failure().map(|f| (f.at.clone(), f.how)), None);
     tq.run_over(2, Unapplied::Cancelled);
     assert_eq!(tq.failure().map(|f| (f.at.clone(), f.how)), Some((None, Unapplied::Cancelled)));
-    assert_eq!(tq.applied(), &q, "the line keeps the query, marked");
+    assert_eq!(tq.applied(), &q, "the tab keeps the query, marked");
     // The server's refusal, marked first, stays the reason.
     send(&mut tq, 3);
     tq.run_failed(3, &ServerError::Other, Dialect::Postgres);

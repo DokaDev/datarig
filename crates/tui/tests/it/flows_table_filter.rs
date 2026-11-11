@@ -478,7 +478,7 @@ fn the_statement_opened_in_a_console_is_checked_as_a_run() {
 }
 
 /// The tab's title mark and the tab list describe the rows held: a filter whose run brought
-/// no rows (cancelled) stays in the filter line only.
+/// no rows (cancelled) stays in the filter dialog only.
 #[test]
 fn the_title_mark_is_the_held_rows_filter() {
     let mut h = Harness::connected(Lang::En);

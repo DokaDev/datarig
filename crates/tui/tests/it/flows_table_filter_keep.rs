@@ -1,7 +1,7 @@
 //! A table tab's filter and order are kept: in the workspace across a restart, and with the tab
-//! when it is closed and brought back. They come back in the filter line as applied and are not
+//! when it is closed and brought back. They come back in the tab as applied and are not
 //! run; the run the user then asks for checks them again as any filter is checked (a file edited
-//! by hand may hold a filter the line would refuse, or one whose functions must be confirmed).
+//! by hand may hold a filter the dialog would refuse, or one whose functions must be confirmed).
 
 use crate::common;
 

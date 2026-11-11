@@ -250,7 +250,7 @@ impl App {
             tab.pane = pane;
             // Its database (another database's table); its schema is the default.
             tab.context = datarig_core::driver::SessionContext { database: t.database.clone(), schema: None };
-            // Its filter and order back in the line, as applied and not run.
+            // Its filter and order back in the tab, as applied and not run.
             if t.filter.is_some() || !t.order.is_empty() || t.limit.is_some() {
                 let name = TableName { database: t.database.clone(), schema: schema.clone(), name: name.clone() };
                 let filter = t.filter.clone().map(|text| Filter { text, recognised: None });

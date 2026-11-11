@@ -404,7 +404,7 @@ impl App {
     }
 
     /// The completion of the argument of `:where` (a condition) or `:orderby` (keys) at byte
-    /// `cursor` of `input`, as the filter line's fields complete them, offsets in `input`. Only
+    /// `cursor` of `input`, as the filter dialog's SQL fields complete them, offsets in `input`. Only
     /// on a table tab, with the cursor in the argument.
     fn command_sql(&mut self, input: &str, cursor: usize) -> Option<datarig_core::sql::complete::Completion> {
         let Parsed::Command { spec, arg, arg_started: true } = command::parse(input) else { return None };

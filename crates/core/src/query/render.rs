@@ -10,7 +10,7 @@
 //! `standard_conforming_strings` is. A MySQL string is plain only when the session's character
 //! set is known to be `utf8mb4` and it holds no backslash or NUL (which `NO_BACKSLASH_ESCAPES`
 //! reads otherwise); else it is its UTF-8 bytes, `_utf8mb4 X'…'`. A line break is never written
-//! as it is (the filter line holds one line): PostgreSQL writes it as an escape (`E'…\n…'`),
+//! as it is (the filter's text fields hold one line): PostgreSQL writes it as an escape (`E'…\n…'`),
 //! MySQL the string's bytes.
 //!
 //! A MySQL `TIMESTAMP` value with the offset of the zone it was read in (as a copy as SQL takes
@@ -455,8 +455,8 @@ fn refused_values(c: &Cond, t: &Target) -> Option<RenderError> {
     }
 }
 
-/// Characters a literal does not hold as they are: the filter line is one line, and would put
-/// a space for them, so that the text it shows would not be the text that runs.
+/// Characters a literal does not hold as they are: the filter's text fields are one line, and
+/// would put a space for them, so that the text it shows would not be the text that runs.
 const LINE_BREAKS: [char; 2] = ['\n', '\r'];
 
 /// `s` as a string literal that the server reads as `s`, on one line (see the module docs).

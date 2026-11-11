@@ -593,7 +593,7 @@ fn broken_lines() -> Vec<Vec<Option<String>>> {
     rs
 }
 
-/// A value with a line break goes into the filter line on one line, as the text that runs: `F`
+/// A value with a line break goes into the filter on one line, as the text that runs: `F`
 /// sends the condition shown, and `Enter` in the filter dialog runs the same statement again.
 #[test]
 fn a_value_with_line_breaks_runs_as_the_line_shows_it() {
@@ -729,7 +729,7 @@ fn the_filter_menu_screens() {
     shot(&mut h, "refused");
 }
 
-/// On MySQL a value with a line break is its UTF-8 bytes: one line in the filter line, and the
+/// On MySQL a value with a line break is its UTF-8 bytes: one line in the filter, and the
 /// same statement when the filter dialog applies it again.
 #[test]
 fn a_mysql_value_with_line_breaks_runs_as_the_line_shows_it() {

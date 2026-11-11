@@ -114,9 +114,6 @@ pub fn sort_zone(on: bool) -> &'static str {
     if on { SORT_ZONE } else { "^v" }
 }
 
-/// Run a table tab's query again, at the right end of its filter line (nf-fa-refresh).
-pub const REFRESH: &str = "\u{f021}";
-
 /// A DDL tab (nf-fa-code); with icons off the tab says `DDL` in words.
 pub const DDL: &str = "\u{f121}";
 

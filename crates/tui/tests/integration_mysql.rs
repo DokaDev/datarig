@@ -954,7 +954,7 @@ async fn filter_by_value_reads_back_the_rows_it_names() {
 }
 
 /// Filter by a value with a line break (LF, CR, CRLF) on MySQL: the condition (the value's
-/// UTF-8 bytes) reads back the row it names, and the filter line applied again (`f`, `Enter`)
+/// UTF-8 bytes) reads back the row it names, and the filter applied again (`f`, `Enter`)
 /// runs the same statement and reads the same rows. Makes `shop.zz_it_breaks_<pid>` and drops
 /// it.
 #[tokio::test(flavor = "multi_thread")]

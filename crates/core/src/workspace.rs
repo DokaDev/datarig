@@ -64,8 +64,8 @@
 //!
 //! The `ddl` kind, the explorer's `hidden` and `width`, and a table tab's `filter`, `order` and
 //! `limit` came within version 3: an earlier build keeps such a tab as one of a kind it does
-//! not know, and those keys as keys it does not know (below). A table tab's query is what its
-//! filter line holds as applied; it is read back into the line, never run by itself, and
+//! not know, and those keys as keys it does not know (below). A table tab's query is the
+//! filter, order and limit it applied; it is read back into the tab, never run by itself, and
 //! checked again as any filter is when the tab runs (the file may have been edited by hand).
 //! A `filter`, `order` or `limit` that cannot be read is left out of the tab, said
 //! ([`Loaded::unread_queries`]) and kept in the file as it was until the tab's query is written

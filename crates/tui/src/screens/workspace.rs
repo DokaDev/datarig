@@ -1433,7 +1433,7 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         None => paging_note,
     };
-    // A refusal of what the user wrote in the filter line, while it stands: said whole there
+    // A refusal of the filter the user wrote, while it stands: said whole under the grid
     // (the status bar may cut it), first among the notes; nothing was sent for it.
     let refusal = match app.tab().results {
         Results::Rows(_) => app.tab().doc.table_query.as_ref().and_then(|q| q.refusal.as_ref()),

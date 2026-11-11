@@ -2671,7 +2671,7 @@ fn table_tab_app(url: &str, schema: &str, table: &str, dir: &std::path::Path) ->
     (app, rx)
 }
 
-/// The filter line of the active table tab applied again as it is (`f`, `Enter`), the run
+/// The filter of the active table tab applied again as it is (`f`, `Enter`), the run
 /// waited for: the ids of the rows read, the filter text and the statement it ran.
 async fn apply_line_again(app: &mut App, rx: &mut UnboundedReceiver<AppEvent>) -> (Vec<String>, String, Vec<String>) {
     let qid = app.tab().exec.query_id;
@@ -2695,8 +2695,8 @@ async fn apply_line_again(app: &mut App, rx: &mut UnboundedReceiver<AppEvent>) -
 }
 
 /// Filter by a value with a line break (LF, CR, CRLF) on PostgreSQL: the condition reads back
-/// the row it names, and the filter line applied again runs the same statement and reads the
-/// same rows (the line shows the text that ran). Makes `public.zz_it_breaks_<pid>` and drops
+/// the row it names, and the filter applied again from the dialog runs the same statement and
+/// reads the same rows (the dialog holds the text that ran). Makes `public.zz_it_breaks_<pid>` and drops
 /// it.
 #[tokio::test(flavor = "multi_thread")]
 async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() {

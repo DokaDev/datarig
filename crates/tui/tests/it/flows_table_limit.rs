@@ -1,4 +1,4 @@
-//! A table tab's `LIMIT`: the third field of the filter line caps the rows. It is not written
+//! A table tab's `LIMIT`: the filter dialog's `Limit` field caps the rows. It is not written
 //! into the statement the grid runs (on MySQL a `LIMIT` would override the cap the driver sets
 //! per page): the pages stop at the cap, the last one cut, and nothing is fetched past it (the
 //! portal is closed); the title says so. A count and an export of every row read the capped

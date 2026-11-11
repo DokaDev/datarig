@@ -1,7 +1,7 @@
 //! A table tab's filter history: a filter and order are kept once the server answered them with
 //! rows (never a run refused, failed, cancelled or answered too late), in a file of the state
-//! directory that only the user can read; `Ctrl+R` in the filter line (`Space r H` from the
-//! grid) lists them, and one picked fills the line without running (`Enter` then runs it,
+//! directory that only the user can read; `Ctrl+R` in the filter dialog (`Space r H` from
+//! the grid) lists them, and one picked fills the dialog without running (`Enter` then runs it,
 //! checked as any text). A file that cannot be read is never taken for an empty history nor
 //! written over; the setting turns it off; `:filter history clear [all]` asks first.
 

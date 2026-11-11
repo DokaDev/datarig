@@ -10,7 +10,6 @@ fn every_glyph_is_one_private_use_char_one_column_wide() {
         TABLE,
         DDL,
         FILTER,
-        REFRESH,
         WARNING,
         ENVIRONMENT,
         KEY_PK,
@@ -121,13 +120,12 @@ fn the_ddl_tab_icon_is_pinned() {
 }
 
 #[test]
-fn the_filter_and_refresh_marks_are_pinned_and_have_a_text_form_without_icons() {
+fn the_filter_marks_are_pinned_and_have_a_text_form_without_icons() {
     // Nerd Fonts 3.4.0 glyphnames.json: "fa-filter" f0b0 (a table tab's name while its rows are
-    // filtered), "fa-refresh" f021.
+    // filtered).
     assert_eq!((filter(true), filter(false)), ("\u{f0b0}", "*"));
     // A table tab's conditions on its results' border: the same glyph, `▼` without icons.
     assert_eq!((filter_status(true), filter_status(false)), (FILTER, "\u{25bc}"));
-    assert_eq!(REFRESH, "\u{f021}");
 }
 
 #[test]

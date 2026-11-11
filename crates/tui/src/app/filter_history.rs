@@ -18,9 +18,9 @@
 //! waiting (dropped when it is [`LOG_QUEUE`] lines behind): an error log that blocks never holds
 //! up the UI thread nor a write of the history.
 //!
-//! `Ctrl+R` in the filter line (`Space r H`) lists the table's entries, the most recent first,
-//! with both texts under the list; one picked fills the condition and the order (the limit
-//! stays), and nothing runs until `Enter`, which checks it as any text typed.
+//! `Ctrl+R` in the filter dialog (`Space r H` from the grid) lists the table's entries, the most
+//! recent first, with both texts under the list; one picked fills the dialog's condition and
+//! order (the limit stays), and nothing runs until `Enter`, which checks it as any text typed.
 
 use super::*;
 use crate::text::{sanitize_cell, width, wrap_words};
@@ -390,7 +390,7 @@ impl App {
         let filter = table_query::filter_text(q).unwrap_or_default().to_string();
         let keys: Vec<_> = q.order.iter().filter(|k| k.origin == KeyOrigin::User).cloned().collect();
         let order = datarig_core::query::order_text(&keys, self.tab_dialect(id));
-        // Only texts the filter line holds as they are: a pick never alters what it fills in.
+        // Only texts the filter dialog's fields hold as they are: a pick never alters what it fills in.
         if (filter.trim().is_empty() && order.trim().is_empty())
             || !TextInput::holds(&filter)
             || !TextInput::holds(&order)
