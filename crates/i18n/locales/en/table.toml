@@ -228,7 +228,7 @@
 "table.dialog.values" = "Values"
 "table.dialog.values.loaded" = { one = "~ count in the {count} loaded row", other = "~ count in the {count} loaded rows" }
 "table.dialog.values.loaded_earlier" = { one = "~ count: {count} loaded row + an earlier load", other = "~ count: {count} loaded rows + an earlier load" }
-"table.dialog.values.loaded_held" = { one = "~ count in {count} row in memory of {total}", other = "~ count in {count} rows in memory of {total}" }
+"table.dialog.values.loaded_held" = { one = "sample: {count}/{total}", other = "sample: {count}/{total}" }
 "table.dialog.values.exact" = "exact · other conditions applied"
 "table.dialog.values.exact_all" = "exact · every row"
 "table.dialog.values.earlier_count" = "earlier count (other conditions changed)"

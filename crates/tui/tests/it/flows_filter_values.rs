@@ -627,7 +627,7 @@ fn the_list_of_a_spilled_result_counts_the_rows_in_memory_and_never_reads_the_fi
     h.keys("j");
     let s = h.screen(120, 34);
     assert_eq!(read(&h), before, "no row was read from the spill file");
-    assert!(s.contains("~ count in 1,000 rows in memory of 5,000"), "{s}");
+    assert!(s.contains("sample: 1,000/5,000"), "{s}");
     assert!(s.contains("paid"), "{s}");
     let _ = std::fs::remove_dir_all(&state);
 }
@@ -749,4 +749,58 @@ fn a_mysql_value_with_a_line_break_read_back_stays_when_another_is_edited() {
         runs(&mut h),
         vec![vec!["SELECT * FROM `shop`.`users` WHERE (at IN (_utf8mb4 X'610A62', 'xy'))".to_string()]]
     );
+}
+
+/// `shop.users` with `n` rows loaded (pages of 500) whose `status` is one of `kinds` different
+/// values, in a result window of `window` rows (spilled past it, under `state`).
+fn loaded(n: usize, kinds: usize, window: usize, state: &std::path::Path) -> Harness {
+    let mut cfg = test_db_config();
+    cfg.result_window_rows = window;
+    let mut h = Harness::connected_with(&cfg, Lang::En);
+    h.app.set_paths(datarig_core::paths::Paths { data: None, state: Some(state.to_path_buf()) });
+    open_users(&mut h);
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    let all: Vec<Vec<Option<String>>> =
+        (0..n).map(|i| vec![Some((i + 1).to_string()), Some(format!("s{:02}", i % kinds)), Some("1".into())]).collect();
+    let mut columns = Some(columns());
+    let pages = all.chunks(500).count();
+    for (p, page) in all.chunks(500).enumerate() {
+        let more = p + 1 < pages;
+        let rows = page.to_vec();
+        h.tab_db(index, DbEvent::Page { id, columns: columns.take(), rows, more, elapsed: Duration::from_millis(1) });
+    }
+    h.sent();
+    h.key(KeyCode::Tab);
+    h
+}
+
+/// A state directory of the test's own, removed when it ends.
+struct State(std::path::PathBuf);
+
+impl State {
+    fn new(tag: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("datarig-flows-filter-values-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        State(dir)
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The sample is said at 80 columns too, with the cue of a list longer than the pane.
+#[test]
+fn the_sample_is_said_at_80_columns_beside_the_lists_cue() {
+    let state = State::new("narrow");
+    let mut h = loaded(5_000, 30, 1_000, &state.0);
+    dialog_on(&mut h, 1);
+    let s = h.screen(80, 24);
+    let heading = s.lines().find(|l| l.contains("Values")).unwrap_or_default().to_string();
+    assert!(heading.contains("sample: 1,000/5,000"), "{s}");
+    assert!(heading.contains(" of 30"), "{s}");
 }
