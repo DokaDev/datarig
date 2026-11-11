@@ -271,16 +271,40 @@ impl App {
         }
     }
 
+    /// Column `i` of the list selected, whatever selects it (a key, a click, the wheel): a
+    /// field of the SQL section with the keys is read back first (an order refused keeps it
+    /// and nothing else happens), the column list takes the keys, the value fields and the
+    /// narrowing of the column left go, and the focus is kept where the draft has it.
+    pub(super) fn filter_dialog_select_column(&mut self, i: usize) {
+        if self.filter_dialog().is_some_and(|d| d.sql_field().is_some()) {
+            self.filter_dialog_popup_close();
+            if !self.filter_dialog_read_back() {
+                return;
+            }
+        }
+        let Some(d) = self.filter_dialog_mut() else { return };
+        d.focus_on(DialogFocus::Columns);
+        let last = d.shown_columns().len().saturating_sub(1);
+        if d.cursor != i.min(last) {
+            d.cursor = i.min(last);
+            d.inputs.clear();
+            d.narrow = None;
+            d.values_scroll = 0;
+        }
+        d.settle();
+    }
+
     /// The column list's keys.
     fn filter_dialog_columns_key(&mut self, key: KeyEvent) {
         let Some(d) = self.filter_dialog_mut() else { return };
         let n = d.shown_columns().len();
         let last = n.saturating_sub(1);
+        let at = d.cursor;
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') => d.cursor = d.cursor.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') => d.cursor = (d.cursor + 1).min(last),
-            KeyCode::Home | KeyCode::Char('g') => d.cursor = 0,
-            KeyCode::End | KeyCode::Char('G') => d.cursor = last,
+            KeyCode::Up | KeyCode::Char('k') => self.filter_dialog_select_column(at.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => self.filter_dialog_select_column((at + 1).min(last)),
+            KeyCode::Home | KeyCode::Char('g') => self.filter_dialog_select_column(0),
+            KeyCode::End | KeyCode::Char('G') => self.filter_dialog_select_column(last),
             KeyCode::Right | KeyCode::Char('l') => {
                 if let Some(f) = d.pane_lines().first().copied() {
                     d.focus_on(f);

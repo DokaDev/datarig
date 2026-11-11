@@ -89,10 +89,7 @@ impl App {
         }
         let Some(d) = self.filter_dialog_mut() else { return };
         match h {
-            DialogHit::Column(i) => {
-                d.focus_on(DialogFocus::Columns);
-                d.cursor = i;
-            }
+            DialogHit::Column(i) => self.filter_dialog_select_column(i),
             DialogHit::Op(t) => {
                 d.focus_on(DialogFocus::Op(t));
                 self.filter_dialog_key(press(KeyCode::Char(' ')));
@@ -186,8 +183,8 @@ impl App {
         }
         d.hover = None;
         if DialogHits::span(&d.hits.columns).contains(at) {
-            let last = d.shown_columns().len().saturating_sub(1);
-            d.cursor = d.cursor.saturating_add_signed(delta).min(last);
+            let i = d.cursor.saturating_add_signed(delta);
+            self.filter_dialog_select_column(i);
         } else if DialogHits::span(&d.hits.items).contains(at) {
             match d.focus {
                 DialogFocus::Values(i) => {

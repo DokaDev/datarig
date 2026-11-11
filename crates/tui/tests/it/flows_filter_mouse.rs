@@ -358,3 +358,40 @@ fn the_pointer_lights_a_button_and_keeps_the_focus() {
     let t = h.draw(W, H);
     assert!(!t.backend().buffer()[(x + 2, y)].modifier.contains(Modifier::BOLD));
 }
+
+#[test]
+fn the_wheel_on_the_columns_takes_the_keys_from_a_value_field() {
+    let mut h = dialog();
+    condition(&mut h, "1");
+    assert_eq!(h.app.key_context(), Ctx::FilterDialogText);
+    let (x, y) = find_nth(&mut h, "name", 0, 0);
+    h.mouse(MouseEventKind::ScrollDown, x, y);
+    assert!(h.screen(W, H).contains("name  text"), "the next column");
+    assert_eq!(h.app.key_context(), Ctx::FilterDialog, "the column list has the keys");
+    // What is typed now is not a value of the condition of the column left.
+    h.type_text("5");
+    assert_eq!(draft(&h).0, "id = 1");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id = 1)")]]);
+}
+
+#[test]
+fn the_wheel_on_the_columns_reads_a_sql_field_back_first() {
+    let mut h = dialog();
+    condition(&mut h, "1");
+    h.key(KeyCode::Tab);
+    while h.app.filter_dialog_sql_fields().is_none() {
+        h.key(KeyCode::Char('Q'));
+    }
+    assert_eq!(h.app.key_context(), Ctx::FilterDialogText, "the WHERE field has the keys");
+    h.key(KeyCode::End);
+    h.type_text(" AND id > 2");
+    let (x, y) = find_nth(&mut h, "name", 0, 0);
+    h.mouse(MouseEventKind::ScrollDown, x, y);
+    assert_eq!(h.app.key_context(), Ctx::FilterDialog, "the column list has the keys");
+    assert_eq!(draft(&h).0, "id = 1 AND id > 2", "read back as the field was left");
+    h.type_text("5");
+    assert_eq!(h.app.filter_dialog_sql_fields().map(|f| f.0), Some("id = 1 AND id > 2".to_string()));
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id = 1 AND id > 2)")]]);
+}
