@@ -911,6 +911,11 @@ pub struct GroupValue {
     pub bytes: Option<u64>,
     /// The rows that hold it.
     pub rows: u64,
+    /// Its group may hold other values that start with the same bytes: the server groups such
+    /// values by their first bytes only (MySQL's `max_sort_length`), and this one is at least
+    /// that long ([`GroupCounts::mark_prefix`]). Its rows may not all hold it, so a filter on it
+    /// would not find them all: never one to pick, whether it was sent (`whole`) or not.
+    pub prefix: bool,
 }
 
 /// The most bytes one row of a group count's answer takes as it comes from the server: a value
@@ -955,9 +960,18 @@ impl GroupCounts {
             };
             let whole = value.is_some() || length.is_none();
             let bytes = length.or_else(|| value.as_ref().map(|v| v.len() as u64));
-            values.push(GroupValue { value, whole, bytes, rows });
+            values.push(GroupValue { value, whole, bytes, rows, prefix: false });
         }
         Ok(Self { values, more })
+    }
+
+    /// Mark the values the server may have grouped by a prefix of `limit` bytes
+    /// ([`GroupValue::prefix`]): those at least that long; every one but NULL when the limit is
+    /// not known (`None`).
+    pub fn mark_prefix(&mut self, limit: Option<u64>) {
+        for v in &mut self.values {
+            v.prefix = v.bytes.is_some_and(|b| limit.is_none_or(|l| b >= l));
+        }
     }
 }
 

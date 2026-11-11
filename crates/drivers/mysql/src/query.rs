@@ -1965,16 +1965,17 @@ async fn asked_server(
     };
     let ask = check_sql(&names, Dialect::MySql(s.mode), &env.server);
     env.busy.store(true, Ordering::SeqCst);
-    type Answer = (Option<String>, Option<String>, Option<String>, Option<String>);
+    type Answer = (Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
     let answer = link.guard(Some(env.killer), conn.query_first::<Answer, _>(ask)).await?;
     let cancelled = env.asked.asked();
     idle(env, link).await;
     Ok(match answer {
-        Ok(Some((_, Some(view), _, _))) => Err(DbError::NotRepeatable(NotRepeatable::NotATable(view))),
-        Ok(Some((isolation, None, statement, lock))) => Ok(Asked {
+        Ok(Some((_, Some(view), _, _, _))) => Err(DbError::NotRepeatable(NotRepeatable::NotATable(view))),
+        Ok(Some((isolation, None, statement, lock, sort))) => Ok(Asked {
             isolation: isolation.unwrap_or_default(),
             statement: statement.as_deref().and_then(|v| session_limit(v, env.server.mariadb)),
             lock: lock.and_then(|v| v.trim().parse().ok()),
+            sort_length: sort.and_then(|v| v.trim().parse().ok()),
         }),
         Ok(None) => Err(DbError::NotRepeatable(NotRepeatable::Unreadable)),
         Err(e) => Err(own_failure(&e, cancelled)),
@@ -1991,6 +1992,9 @@ struct Asked {
     statement: Option<Duration>,
     /// MariaDB: the session's `lock_wait_timeout` in seconds (0 is not to wait at all).
     lock: Option<u64>,
+    /// The session's `max_sort_length`: the bytes of a string the server sorts and groups by
+    /// (a group count's values at least this long may share a group with others).
+    sort_length: Option<u64>,
 }
 
 /// How long a bounded read of the app's own ([`bounded_select`]) waits for a metadata lock, in
@@ -2119,7 +2123,7 @@ fn check_sql(names: &[String], d: Dialect, server: &Server) -> String {
     format!(
         "SELECT {OWN_READ_HINTS} @@SESSION.{isolation}, (SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME) \
          FROM information_schema.TABLES t WHERE t.TABLE_TYPE <> 'BASE TABLE' AND ({cond}) LIMIT 1), \
-         @@SESSION.{limit}, {lock}"
+         @@SESSION.{limit}, {lock}, @@SESSION.max_sort_length"
     )
 }
 
@@ -2390,7 +2394,7 @@ async fn read_own(
     let read = read_own_as(conn, link, env, s, text, was_open, applied, OwnWant::First).await?;
     Ok(read.map(|got| match got {
         OwnGot::First(value) => value,
-        OwnGot::Rows(_) | OwnGot::Refused(_) => None,
+        OwnGot::Rows(..) | OwnGot::Refused(_) => None,
     }))
 }
 
@@ -2406,7 +2410,9 @@ enum OwnWant {
 /// What a read of the app's own read ([`OwnWant`]).
 enum OwnGot {
     First(Option<String>),
-    Rows(Vec<Vec<Cell>>),
+    /// The rows, and whether the server groups their first column by a prefix
+    /// ([`group::rows_within`]).
+    Rows(Vec<Vec<Cell>>, bool),
     /// The rows were not taken: why (read to their end and dropped).
     Refused(DbError),
 }
@@ -2451,7 +2457,7 @@ async fn read_own_as(
         (false, OwnWant::Rows) => link
             .guard(Some(env.killer), group::rows_within(conn, text))
             .await?
-            .map(|rows| rows.map_or_else(OwnGot::Refused, OwnGot::Rows)),
+            .map(|rows| rows.map_or_else(OwnGot::Refused, |(rows, prefixed)| OwnGot::Rows(rows, prefixed))),
     };
     // Whether the user had asked when the answer came: what is done after it changes nothing.
     let cancelled = env.asked.asked();

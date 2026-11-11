@@ -12,12 +12,17 @@
 //! What it reads is bounded ([`rows_within`]): the answer's columns as the server describes them
 //! must send only short values or values measured and cut by the server ([`bounded`]), and each
 //! row is checked against the answer's budget ([`GroupBudget`]) as it comes.
+//!
+//! The server groups strings and bytes by their first `max_sort_length` bytes: values of such a
+//! column at least that long (the session's value, read with the allowlist's question right
+//! before the count, on the same session) are marked as possibly sharing a group with others
+//! ([`GroupCounts::mark_prefix`]), apart from whether they were sent whole.
 
 use super::*;
 use datarig_core::driver::{GroupBudget, GroupCounts, Isolation};
 use datarig_core::query::GROUP_PREVIEW;
 use mysql_async::Value;
-use mysql_async::consts::ColumnType;
+use mysql_async::consts::{ColumnFlags, ColumnType};
 
 /// Count the rows of each value with `sql` (the app's group count, on the allowlist, checked
 /// again here); also whether it counted in the snapshot of the user's transaction, as
@@ -52,7 +57,13 @@ pub(super) async fn group_count(
     };
     let read = read_own_as(conn, link, env, s, text, was_open, applied, OwnWant::Rows).await?;
     let counted = read.and_then(|got| match got {
-        OwnGot::Rows(rows) => GroupCounts::from_rows(rows),
+        OwnGot::Rows(rows, prefixed) => GroupCounts::from_rows(rows).map(|mut counts| {
+            // Strings and bytes are grouped by their first `max_sort_length` bytes.
+            if prefixed {
+                counts.mark_prefix(asked.sort_length);
+            }
+            counts
+        }),
         OwnGot::Refused(why) => Err(why),
         OwnGot::First(_) => Err(DbError::NoResult),
     });
@@ -79,7 +90,7 @@ fn no_locking_read(s: &State, was_open: bool) -> Result<(), DbError> {
 pub(super) async fn rows_within(
     conn: &mut Conn,
     text: &str,
-) -> Result<Result<Vec<Vec<Cell>>, DbError>, mysql_async::Error> {
+) -> Result<Result<(Vec<Vec<Cell>>, bool), DbError>, mysql_async::Error> {
     let mut qr = conn.query_iter(text).await?;
     let columns = qr.columns().unwrap_or_else(|| Arc::from(Vec::new()));
     let mut refused = bounded(&columns).err();
@@ -98,7 +109,26 @@ pub(super) async fn rows_within(
             }
         }
     }
-    Ok(refused.map_or(Ok(rows), Err))
+    let prefixed = columns.first().is_some_and(prefixed);
+    Ok(refused.map_or(Ok((rows, prefixed)), Err))
+}
+
+/// Whether the server groups the values of result column `c` by their first `max_sort_length`
+/// bytes: strings and bytes (`CHAR`, `VARCHAR`, `BINARY`, the `TEXT` and `BLOB` types), unless
+/// the column says it is an `ENUM` or a `SET` (compared by their numbers).
+fn prefixed(c: &Column) -> bool {
+    use ColumnType::*;
+    let stringy = matches!(
+        c.column_type(),
+        MYSQL_TYPE_STRING
+            | MYSQL_TYPE_VAR_STRING
+            | MYSQL_TYPE_VARCHAR
+            | MYSQL_TYPE_BLOB
+            | MYSQL_TYPE_TINY_BLOB
+            | MYSQL_TYPE_MEDIUM_BLOB
+            | MYSQL_TYPE_LONG_BLOB
+    );
+    stringy && !c.flags().intersects(ColumnFlags::ENUM_FLAG | ColumnFlags::SET_FLAG)
 }
 
 /// Whether the columns of a group count's answer, as the server describes them for this run,

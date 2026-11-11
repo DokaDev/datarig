@@ -6508,6 +6508,80 @@ async fn a_group_count_sends_only_bounded_values_of_the_columns_current_type() {
     a.disconnect().await.unwrap();
 }
 
+/// The server groups strings and bytes by their first `max_sort_length` bytes: a group count
+/// marks the values at least that long (the session's value as it is when it counts) as possibly
+/// sharing a group, apart from whether they were sent whole; shorter ones, NULL and numbers are
+/// not marked.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_marks_the_values_the_server_groups_by_a_prefix() {
+    let test = "a_group_count_marks_the_values_the_server_groups_by_a_prefix";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = Table::make(
+        &admin,
+        "groupprefix",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, t TEXT, b BLOB, v VARCHAR(3000), n INT)",
+            "INSERT INTO {t} VALUES \
+             (1, 'ab', X'0102', 'ab', 123456), \
+             (2, 'abcdef1', X'01020304AA', 'abcdef1', 123456), \
+             (3, 'abcdef2', X'01020304BB', REPEAT('v', 2000), 7), \
+             (4, REPEAT('y', 2000), REPEAT(X'AB', 5000), NULL, NULL), \
+             (5, NULL, NULL, NULL, NULL)",
+        ],
+    )
+    .await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    // (value, whole, prefix) of each value of `column`, sorted.
+    async fn marks(c: &mut Conn, id: u64, sql: &str) -> Vec<(Option<String>, bool, bool)> {
+        let (got, _, _) = group_within(c, id, sql, Some(Duration::from_secs(30))).await;
+        let mut out: Vec<_> = got.expect("counted").values.into_iter().map(|v| (v.value, v.whole, v.prefix)).collect();
+        out.sort();
+        out
+    }
+    let text = group_sql(&t.name, "t", ("text", ValueKind::Text), None);
+    let blob = group_sql(&t.name, "b", ("blob", ValueKind::Bytes), None);
+    let varchar = group_sql(&t.name, "v", ("varchar", ValueKind::Text), None);
+    let number = group_sql(&t.name, "n", ("int", ValueKind::Integer), None);
+    let s = |v: &str| Some(v.to_string());
+    let y = "y".repeat(2000);
+    // The server's default (1024 bytes): the 2000-byte values, sent whole, are marked.
+    assert_eq!(
+        marks(&mut c, 1, &text).await,
+        vec![
+            (None, true, false),
+            (s("ab"), true, false),
+            (s("abcdef1"), true, false),
+            (s("abcdef2"), true, false),
+            (Some(y.clone()), true, true)
+        ]
+    );
+    let v = "v".repeat(2000);
+    assert_eq!(
+        marks(&mut c, 2, &varchar).await,
+        vec![(None, true, false), (s("ab"), true, false), (s("abcdef1"), true, false), (Some(v), true, true)]
+    );
+    // Lowered for the session: every value at least 4 bytes long, sent or not.
+    c.ok(3, "SET SESSION max_sort_length = 4").await;
+    assert_eq!(
+        marks(&mut c, 4, &text).await,
+        vec![
+            (None, true, false),
+            (s("ab"), true, false),
+            (s("abcdef1"), true, true),
+            (s("abcdef2"), true, true),
+            (Some(y), true, true)
+        ]
+    );
+    let got = marks(&mut c, 5, &blob).await;
+    assert_eq!(got.iter().map(|(_, whole, prefix)| (*whole, *prefix)).collect::<Vec<_>>().len(), 5);
+    assert_eq!(got.iter().filter(|(_, _, prefix)| *prefix).count(), 3, "{got:?}");
+    assert!(got.iter().any(|(value, whole, prefix)| value.is_none() && !whole && *prefix), "the long one, not sent");
+    // Numbers are not strings, whatever their length as text.
+    assert!(marks(&mut c, 6, &number).await.iter().all(|(_, _, prefix)| !prefix));
+    c.ok(7, "SET SESSION max_sort_length = DEFAULT").await;
+    assert!(!marks(&mut c, 8, &text).await[3].2, "back to the default: abcdef2 is not marked");
+}
+
 /// Every value of a group count is the text a cell of it shows in the grid: `DECIMAL` with its
 /// scale, `TIMESTAMP` in the session's time zone, `DATETIME`, binary data as hex, text, an
 /// `ENUM`, `FLOAT`, and NULL; a value over 4 KiB comes as its length alone, not whole.

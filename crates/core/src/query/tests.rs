@@ -1988,10 +1988,10 @@ fn group_counts_read_values_lengths_and_more() {
     assert_eq!(
         got.values,
         vec![
-            GroupValue { value: s("shipped"), whole: true, bytes: Some(7), rows: 40 },
-            GroupValue { value: None, whole: true, bytes: None, rows: 3 },
-            GroupValue { value: None, whole: false, bytes: Some(5000), rows: 1 },
-            GroupValue { value: s("42"), whole: true, bytes: Some(2), rows: 1 },
+            GroupValue { value: s("shipped"), whole: true, bytes: Some(7), rows: 40, prefix: false },
+            GroupValue { value: None, whole: true, bytes: None, rows: 3, prefix: false },
+            GroupValue { value: None, whole: false, bytes: Some(5000), rows: 1, prefix: false },
+            GroupValue { value: s("42"), whole: true, bytes: Some(2), rows: 1, prefix: false },
         ]
     );
     let many: Vec<Vec<Option<String>>> = (0..=GROUP_VALUES).map(|i| vec![s(&i.to_string()), None, s("1")]).collect();
@@ -2001,6 +2001,27 @@ fn group_counts_read_values_lengths_and_more() {
     assert_eq!(GroupCounts::from_rows(vec![vec![s("a"), None, s("x")]]), Err(DbError::NoResult));
     assert_eq!(GroupCounts::from_rows(vec![vec![s("a"), None, None]]), Err(DbError::NoResult));
     assert_eq!(GroupCounts::from_rows(vec![vec![s("a")]]), Err(DbError::NoResult));
+}
+
+#[test]
+fn values_at_least_the_grouping_prefix_long_are_marked() {
+    use crate::driver::GroupCounts;
+    let s = |v: &str| Some(v.to_string());
+    let rows = vec![
+        vec![s("abc"), s("3"), s("4")],
+        vec![s("abcd"), s("4"), s("2")],
+        vec![None, s("5000"), s("1")],
+        vec![None, None, s("1")],
+    ];
+    let marked = |limit| {
+        let mut got = GroupCounts::from_rows(rows.clone()).unwrap();
+        got.mark_prefix(limit);
+        got.values.iter().map(|v| (v.prefix, v.whole)).collect::<Vec<_>>()
+    };
+    assert_eq!(marked(Some(4)), vec![(false, true), (true, true), (true, false), (false, true)]);
+    assert_eq!(marked(Some(1024)), vec![(false, true), (false, true), (true, false), (false, true)]);
+    // Not known: every value but NULL.
+    assert_eq!(marked(None), vec![(true, true), (true, true), (true, false), (false, true)]);
 }
 
 #[test]
