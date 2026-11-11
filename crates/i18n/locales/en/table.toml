@@ -181,6 +181,7 @@
 "table.dialog.failed" = "The server refused this filter: {said}"
 "table.dialog.failed_plain" = "This filter brought no rows (refused, cancelled or ended): the rows shown are of the earlier one"
 "table.dialog.nothing_to_undo" = "Nothing to undo"
+"table.dialog.sql_line_break" = "Not read back: the text holds a line break inside a value, a name or a comment, which this one-line field cannot keep; undo what was typed, or open it in the editor"
 "table.dialog.expr_no_column" = "An expression is not the condition of one column: change it in the SQL"
 "table.dialog.op.between" = "between"
 "table.dialog.op.ne_or_null" = "≠ or NULL"

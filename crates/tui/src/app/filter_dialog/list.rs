@@ -144,11 +144,13 @@ fn ticked(r: &Row) -> Vec<Value> {
     }
 }
 
-/// The text typed for a condition of operator `op` that the list narrows by: what is typed for
-/// `=`, the value being typed (after the last comma) of `in list`; nothing for the others.
+/// The text typed for a condition of operator `op` that the list narrows by: the value typed
+/// for `=` (what is between its quotes when written in them), the value being typed (after the
+/// last comma) of `in list`; nothing for the others.
 pub(crate) fn fragment(op: Op, typed: &str) -> Option<String> {
+    let quoted = draft::field_quoted(typed);
     let f = match op {
-        Op::Eq => typed.trim(),
+        Op::Eq => quoted.as_deref().unwrap_or(typed.trim()),
         Op::InList => {
             let last = draft::list_items(typed).pop()?;
             return Some(last.quoted.unwrap_or(last.written)).filter(|f| !f.trim().is_empty());

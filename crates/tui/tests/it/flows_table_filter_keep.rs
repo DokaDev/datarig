@@ -655,3 +655,37 @@ fn a_dialog_cancelled_after_a_confirm_while_its_run_waits_runs_nothing() {
     h.tab_db(index, DbEvent::Connected);
     assert!(runs(&mut h).is_empty(), "the run cancelled never goes");
 }
+
+/// The SQL section's `WHERE` field given a condition with a line feed inside a string: typed
+/// in, it is not read back (a space in its place would change the value), and says why; a line
+/// break between terms reads back as a space.
+#[test]
+fn a_sql_field_with_a_line_break_in_a_string_is_not_read_back_once_edited() {
+    let cfg = test_db_config();
+    let state = State::new("sqlbreak");
+    state.write_table_tab(&cfg, "filter = \"name = 'a\\nb'\"");
+    let mut h = launch(&cfg, &state, Lang::En);
+    h.key(KeyCode::Tab);
+    h.keys("f");
+    h.keys("Q");
+    h.key(KeyCode::End);
+    h.type_text(" AND id > 1");
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "name = 'a\nb'", "not read back");
+    assert!(h.screen(120, 34).contains("Not read back"), "{}", h.screen(120, 34));
+    // Undone, the field is left.
+    h.key_mod(KeyCode::Char('z'), ratatui::crossterm::event::KeyModifiers::CONTROL);
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "name = 'a\nb'");
+
+    let state = State::new("sqlbreakspace");
+    state.write_table_tab(&cfg, "filter = \"id > 1\\nAND name = 'x'\"");
+    let mut h = launch(&cfg, &state, Lang::En);
+    h.key(KeyCode::Tab);
+    h.keys("f");
+    h.keys("Q");
+    h.key(KeyCode::End);
+    h.type_text(" AND id < 9");
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "id > 1 AND name = 'x' AND id < 9");
+}

@@ -461,7 +461,7 @@ impl FilterDialog {
             Some(row) => match row.op.arity() {
                 draft::Arity::Zero => Vec::new(),
                 draft::Arity::Two => {
-                    let v = row.value_texts(d);
+                    let v = row.field_texts(d, &self.column_info(&row.col));
                     (0..2).map(|i| TextInput::new(v.get(i).map_or("", String::as_str))).collect()
                 }
                 _ => vec![TextInput::new(&row.input_text(d, &self.column_info(&row.col)))],

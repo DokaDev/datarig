@@ -387,7 +387,7 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
                 crate::app::filter_dialog::draft::Arity::Two => 2,
                 _ => 1,
             };
-            let values = row.value_texts(d.dialect);
+            let values = row.field_texts(d.dialect, &d.column_info(&row.col));
             let and = format!(" {} ", i18n.label(Label::TableDialogAnd));
             let each = if n == 2 { vw.saturating_sub(width(&and) as u16) / 2 } else { vw };
             let mut fx = vx;

@@ -877,3 +877,62 @@ fn a_range_of_more_numbers_than_a_list_holds_says_no_more_than_the_range() {
         assert!(!screen.contains("more values than shown"), "nothing is listed, so nothing more: {screen}");
     }
 }
+
+/// A value with a line feed ticked into `=`: its field shows it on one line in quotes, and what
+/// is typed in it keeps the line feed.
+#[test]
+fn a_ticked_value_with_a_line_feed_stays_when_its_field_is_edited() {
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    let rows = (0..3).map(|i| vec![Some(i.to_string()), Some("a\nb".to_string()), Some("1".into())]).collect();
+    answer(&mut h, rows);
+    h.sent();
+    h.key(KeyCode::Tab);
+    dialog_on(&mut h, 1);
+    to_values(&mut h, 0);
+    h.key(KeyCode::Char(' '));
+    let ticked = draft(&h);
+    assert_eq!(ticked, "status = E'a\\nb'");
+    h.key(KeyCode::BackTab);
+    to_first_field(&mut h);
+    // Before the closing quote.
+    h.key(KeyCode::Left);
+    h.type_text("c");
+    assert_eq!(draft(&h), "status = E'a\\nbc'");
+}
+
+/// A value with a carriage return read back from MySQL's SQL into `<`: edited in its field, it
+/// keeps the carriage return.
+#[test]
+fn a_mysql_value_with_a_carriage_return_read_back_stays_when_its_field_is_edited() {
+    let mut h = mysql();
+    h.command("where at < _utf8mb4 X'630D64'");
+    runs(&mut h);
+    my_page(&mut h, &["2026-11-10 09:30:00"]);
+    dialog_on(&mut h, 1);
+    to_first_field(&mut h);
+    h.key(KeyCode::Left);
+    h.type_text("e");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec!["SELECT * FROM `shop`.`users` WHERE (at < _utf8mb4 X'630D6465')".to_string()]]);
+}
+
+/// The first bound of `between` with a line feed (read back from MySQL's SQL) stays as it is
+/// when the second is edited.
+#[test]
+fn a_between_bound_with_a_line_feed_stays_when_the_other_is_edited() {
+    let mut h = mysql();
+    h.command("where at BETWEEN _utf8mb4 X'610A62' AND 'x'");
+    runs(&mut h);
+    my_page(&mut h, &["2026-11-10 09:30:00"]);
+    dialog_on(&mut h, 1);
+    to_first_field(&mut h);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::End);
+    h.type_text("y");
+    h.key(KeyCode::Enter);
+    assert_eq!(
+        runs(&mut h),
+        vec![vec!["SELECT * FROM `shop`.`users` WHERE (at BETWEEN _utf8mb4 X'610A62' AND 'xy')".to_string()]]
+    );
+}

@@ -490,12 +490,18 @@ impl Row {
         self.values.iter().map(|v| value_text(v, d)).collect()
     }
 
-    /// The values as one value field shows them on dialect `d` for column `c`: one as it is,
-    /// a list as [`list_text`] writes it (read back by [`parse_list`] to the same values).
+    /// Each value as its own field shows it on dialect `d` for column `c` ([`field_text`]).
+    pub(crate) fn field_texts(&self, d: Dialect, c: &ColumnInfo) -> Vec<String> {
+        self.values.iter().map(|v| field_text(v, self.op, d, c)).collect()
+    }
+
+    /// The values as one value field shows them on dialect `d` for column `c`: one as
+    /// [`field_text`] writes it, a list as [`list_text`] does (each read back to the same
+    /// values).
     pub(crate) fn input_text(&self, d: Dialect, c: &ColumnInfo) -> String {
         match self.op.arity() {
             Arity::Many => list_text(&self.values, d, c),
-            _ => self.value_texts(d).join(", "),
+            _ => self.field_texts(d, c).join(", "),
         }
     }
 }
@@ -532,14 +538,107 @@ pub(crate) fn value_text(v: &Value, d: Dialect) -> String {
 /// number column a value is a number only when it is a plain number literal (an optional `-`, digits with at most one point, an optional
 /// exponent); bytes are typed in hexadecimal after `\x` or `0x`. Anything else is text, written
 /// as a string literal the server converts: `NULL` typed in a field of one value is the text
-/// `NULL` (a NULL row is `is NULL`). A pattern's value is always text.
+/// `NULL` (a NULL row is `is NULL`). A pattern's value is always text. A field of one value
+/// written in single quotes is that text, as a list's value in quotes is ([`field_quoted`]):
+/// the field holds one line, and shows a value with a line break so ([`field_text`]).
 pub(crate) fn parse_input(op: Op, fields: &[&str], c: &ColumnInfo) -> Vec<Value> {
-    let typed = |s: &str| if op.pattern() { Value::Text(s.to_string()) } else { typed_value(s, c) };
+    parse_with(op, fields, c, &|s| field_value(op, s, c))
+}
+
+/// Values `texts` (each a value's text as it is, [`Row::value_texts`]) as values of a row of
+/// operator `op` on column `c`, each read as typed ([`parse_input`] without the quotes of a
+/// field of one value).
+pub(crate) fn parse_texts(op: Op, texts: &[&str], c: &ColumnInfo) -> Vec<Value> {
+    parse_with(op, texts, c, &|s| if op.pattern() { Value::Text(s.to_string()) } else { typed_value(s, c) })
+}
+
+/// [`parse_input`], each text of one value read by `one`.
+fn parse_with(op: Op, fields: &[&str], c: &ColumnInfo, one: &dyn Fn(&str) -> Value) -> Vec<Value> {
     match op.arity() {
         Arity::Zero => Vec::new(),
-        Arity::One => fields.first().filter(|s| !s.is_empty()).map(|s| vec![typed(s)]).unwrap_or_default(),
-        Arity::Two => fields.iter().take(2).take_while(|s| !s.is_empty()).map(|s| typed(s)).collect(),
+        Arity::One => fields.first().filter(|s| !s.is_empty()).map(|s| vec![one(s)]).unwrap_or_default(),
+        Arity::Two => fields.iter().take(2).take_while(|s| !s.is_empty()).map(|s| one(s)).collect(),
         Arity::Many => fields.first().map(|s| parse_list(s, c, &[])).unwrap_or_default(),
+    }
+}
+
+/// The text after an opening single quote, read as a value in quotes: what is between the
+/// quotes (a quote inside written twice; `\n` a line feed, `\r` a carriage return, `\\` a
+/// backslash, a backslash before anything else itself), and where the closing quote ends,
+/// counted from the opening one (`None`: left open, it runs to the end).
+fn quoted_body(body: &str) -> (String, Option<usize>) {
+    let mut inner = String::new();
+    let mut chars = body.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if c == '\'' {
+            if chars.next_if(|&(_, c)| c == '\'').is_some() {
+                inner.push('\'');
+                continue;
+            }
+            return (inner, Some(1 + i + 1));
+        }
+        if c == '\\' {
+            match chars.next_if(|&(_, c)| matches!(c, 'n' | 'r' | '\\')) {
+                Some((_, 'n')) => inner.push('\n'),
+                Some((_, 'r')) => inner.push('\r'),
+                _ => inner.push('\\'),
+            }
+            continue;
+        }
+        inner.push(c);
+    }
+    (inner, None)
+}
+
+/// Text `s` in single quotes on one line, as [`quoted_body`] reads it back.
+fn quote(s: &str) -> String {
+    let mut q = String::with_capacity(s.len() + 2);
+    q.push('\'');
+    for ch in s.chars() {
+        match ch {
+            '\'' => q.push_str("''"),
+            '\\' => q.push_str("\\\\"),
+            '\n' => q.push_str("\\n"),
+            '\r' => q.push_str("\\r"),
+            ch => q.push(ch),
+        }
+    }
+    q.push('\'');
+    q
+}
+
+/// The value written in single quotes in the text of a field of one value, as a list reads
+/// one ([`list_items`]): the whole text (blanks around it aside) is that value, or a quote left
+/// open runs to its end. `None` when the text is not one value in quotes.
+pub(crate) fn field_quoted(s: &str) -> Option<String> {
+    let t = s.trim_start();
+    let (inner, close) = quoted_body(t.strip_prefix('\'')?);
+    match close {
+        Some(at) if !t[at..].trim().is_empty() => None,
+        _ => Some(inner),
+    }
+}
+
+/// The text of a field of one value of operator `op` on column `c`, as its value: a value in
+/// single quotes is that text ([`field_quoted`]), anything else as typed ([`parse_input`]).
+fn field_value(op: Op, s: &str, c: &ColumnInfo) -> Value {
+    match field_quoted(s) {
+        Some(q) => Value::Text(q),
+        None if op.pattern() => Value::Text(s.to_string()),
+        None => typed_value(s, c),
+    }
+}
+
+/// Value `v` as a field of one value of operator `op` on column `c` shows it on dialect `d`,
+/// on one line: as it is ([`value_text`]) where that reads back as it, else text in single
+/// quotes ([`field_value`] reads it back to the same value).
+pub(crate) fn field_text(v: &Value, op: Op, d: Dialect, c: &ColumnInfo) -> String {
+    let plain = value_text(v, d);
+    match v {
+        Value::Text(s) if plain.is_empty() || plain.contains(['\n', '\r']) || field_value(op, &plain, c) != *v => {
+            quote(s)
+        }
+        _ => plain,
     }
 }
 
@@ -564,28 +663,7 @@ pub(crate) fn list_items(s: &str) -> Vec<ListItem> {
         let unquoted = |t: &str| ListItem { written: t.trim_end().to_string(), quoted: None };
         let (item, next) = match t.strip_prefix('\'') {
             Some(body) => {
-                let mut inner = String::new();
-                let mut close = None;
-                let mut chars = body.char_indices().peekable();
-                while let Some((i, c)) = chars.next() {
-                    if c == '\'' {
-                        if chars.next_if(|&(_, c)| c == '\'').is_some() {
-                            inner.push('\'');
-                            continue;
-                        }
-                        close = Some(1 + i + 1);
-                        break;
-                    }
-                    if c == '\\' {
-                        match chars.next_if(|&(_, c)| matches!(c, 'n' | 'r' | '\\')) {
-                            Some((_, 'n')) => inner.push('\n'),
-                            Some((_, 'r')) => inner.push('\r'),
-                            _ => inner.push('\\'),
-                        }
-                        continue;
-                    }
-                    inner.push(c);
-                }
+                let (inner, close) = quoted_body(body);
                 match close {
                     None => (ListItem { written: t.trim_end().to_string(), quoted: Some(inner) }, None),
                     Some(at) => {
@@ -667,21 +745,7 @@ fn list_item_text(v: &Value, d: Dialect, c: &ColumnInfo) -> String {
         && !plain.starts_with('\'')
         && list_value(&plain, c) == *v;
     match v {
-        Value::Text(s) if !reads_back => {
-            let mut q = String::with_capacity(s.len() + 2);
-            q.push('\'');
-            for ch in s.chars() {
-                match ch {
-                    '\'' => q.push_str("''"),
-                    '\\' => q.push_str("\\\\"),
-                    '\n' => q.push_str("\\n"),
-                    '\r' => q.push_str("\\r"),
-                    ch => q.push(ch),
-                }
-            }
-            q.push('\'');
-            q
-        }
+        Value::Text(s) if !reads_back => quote(s),
         _ => plain,
     }
 }

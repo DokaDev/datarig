@@ -877,3 +877,28 @@ fn a_term_is_followed_to_its_place_after_the_terms_change() {
     w.clear();
     assert_eq!(follow(before.terms(), w.terms(), 2), Moved::Gone(0));
 }
+
+#[test]
+fn a_field_of_one_value_reads_back_to_the_value_it_shows() {
+    let name = info("name", ColumnKind::Text);
+    let id = info("id", ColumnKind::Number);
+    for (col, op, v, shown) in [
+        (&name, Op::Eq, text("a\nb"), "'a\\nb'"),
+        (&name, Op::Lt, text("c\rd"), "'c\\rd'"),
+        (&name, Op::Contains, text("x\\y\n"), "'x\\\\y\\n'"),
+        (&name, Op::Eq, text("'q'"), "'''q'''"),
+        (&name, Op::Eq, text(""), "''"),
+        (&name, Op::Eq, text("it's"), "it's"),
+        (&name, Op::Eq, text(" a "), " a "),
+        (&id, Op::Eq, text("12"), "'12'"),
+        (&id, Op::Eq, num("12"), "12"),
+    ] {
+        assert_eq!(field_text(&v, op, PG, col), shown, "{v:?}");
+        assert_eq!(parse_input(op, &[shown], col), vec![v.clone()], "{shown}");
+    }
+    // A quote left open runs to the end; text after the closing quote is the text as written.
+    assert_eq!(parse_input(Op::Eq, &["'a\\nb"], &name), vec![text("a\nb")]);
+    assert_eq!(parse_input(Op::Eq, &["'a'b"], &name), vec![text("'a'b")]);
+    // The list narrows by the value typed in quotes.
+    assert_eq!(crate::app::filter_dialog::list::fragment(Op::Eq, "'a\\nb'"), Some("a\nb".to_string()));
+}

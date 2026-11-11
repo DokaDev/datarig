@@ -45,11 +45,11 @@ fn values_for(row: &Row, op: Op, c: &ColumnInfo, d: Dialect) -> Vec<Value> {
         Arity::Two => texts.iter().take(2).cloned().collect(),
         // Each value typed again on its own: a comma inside one does not split it.
         Arity::Many => {
-            return texts.iter().filter(|t| !t.is_empty()).flat_map(|t| draft::parse_input(Op::Eq, &[t], c)).collect();
+            return texts.iter().filter(|t| !t.is_empty()).flat_map(|t| draft::parse_texts(Op::Eq, &[t], c)).collect();
         }
     };
     let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
-    draft::parse_input(op, &refs, c)
+    draft::parse_texts(op, &refs, c)
 }
 
 impl App {

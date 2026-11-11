@@ -5,6 +5,7 @@
 use super::draft::{Origin, Where};
 use super::*;
 use datarig_core::query::{self, OrderKey};
+use datarig_core::sql::lexer::Tok;
 
 /// What the keys of the filter dialog do through the key map.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +26,19 @@ pub enum DialogAction {
 
 /// An order refused: what to say, and where in its text when that is known.
 type OrderRefused = Box<(Notice, Option<Range<usize>>)>;
+
+/// Whether text `sql` (dialect `d`), shown in a field of one line with a space for each line
+/// break, would read back as other SQL: a line break inside a string, a quoted name or a
+/// comment, or one that ends a line comment (the comment would run on over what follows).
+pub(super) fn breaks_lost(sql: &str, d: Dialect) -> bool {
+    let broken = |t: &str| t.contains(['\n', '\r']);
+    datarig_core::sql::lexer::lex_in(sql, d).iter().any(|t| match t.kind {
+        Tok::Whitespace => false,
+        // A line comment runs to the end of its line: what follows it would join it.
+        Tok::LineComment => !sql[t.end..].trim().is_empty(),
+        _ => broken(t.text(sql)),
+    })
+}
 
 /// The term of `w` whose text holds byte `at.start` of the text sent ([`Where::text`]).
 pub(super) fn term_at(w: &Where, at: &Range<usize>) -> Option<usize> {
@@ -92,13 +106,29 @@ impl App {
     /// (as text given anew: its terms read again, sent as written); each one step of undo. A
     /// field not typed in changes nothing (its text is the draft's, byte for byte). An order
     /// that is not one is refused: said, underlined where it is wrong, its field focused, and
-    /// nothing is read back (`false`). The fields then hold the draft's texts again.
+    /// nothing is read back (`false`). The fields then hold the draft's texts again. A field
+    /// typed in whose text had a line break its one line would change ([`breaks_lost`]) is
+    /// refused too, said, and keeps the keys.
     pub(super) fn filter_dialog_read_back(&mut self) -> bool {
         let Some(d) = self.filter_dialog() else { return true };
         let Some(sql) = d.sql.as_ref() else { return true };
         let tab = d.tab;
         let where_ = sql.where_.edited().then(|| sql.where_.input.text().to_string());
         let order = sql.order.edited().then(|| sql.order.input.text().to_string());
+        // A field given a text its one line does not hold is not read back once typed in: the
+        // spaces in place of its line breaks would change what it says.
+        let lost = match (where_.is_some() && breaks_lost(sql.where_.from(), d.dialect), order.is_some()) {
+            (true, _) => Some(DialogFocus::SqlWhere),
+            (false, true) if breaks_lost(sql.order.from(), d.dialect) => Some(DialogFocus::SqlOrder),
+            _ => None,
+        };
+        if let Some(field) = lost {
+            self.filter_dialog_popup_close();
+            let Some(d) = self.filter_dialog_mut() else { return false };
+            d.message = Some(Notice::new(Label::TableDialogSqlLineBreak, Level::Warning));
+            d.focus_on(field);
+            return false;
+        }
         let Some(target) = self.table_target(tab) else { return true };
         let keys = match order.map(|text| self.dialog_order_keys(&text, &target)) {
             None => None,

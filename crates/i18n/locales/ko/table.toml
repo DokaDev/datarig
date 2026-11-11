@@ -179,6 +179,7 @@
 "table.dialog.failed" = "서버가 이 필터를 거부함: {said}"
 "table.dialog.failed_plain" = "이 필터는 행을 가져오지 못함 (거부, 취소 또는 종료): 보이는 행은 이전 필터의 것"
 "table.dialog.nothing_to_undo" = "되돌릴 것 없음"
+"table.dialog.sql_line_break" = "다시 읽지 않음: 값, 이름 또는 주석 안에 이 한 줄 필드가 담을 수 없는 줄바꿈이 있습니다. 입력한 것을 되돌리거나 편집기에서 여세요"
 "table.dialog.expr_no_column" = "식은 한 열의 조건이 아님: SQL에서 바꾸기"
 "table.dialog.op.between" = "사이"
 "table.dialog.op.ne_or_null" = "≠ 또는 NULL"
