@@ -22,6 +22,7 @@ pub(crate) mod count;
 pub(crate) mod draft;
 mod keys;
 pub(crate) mod list;
+mod mouse;
 pub(crate) mod values;
 
 pub use apply::DialogAction;
@@ -181,6 +182,129 @@ pub(crate) struct DialogHits {
     pub(crate) cancel: Rect,
 }
 
+/// A part of the dialog the pointer can be over, as [`DialogHits`] keeps where it was drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DialogHit {
+    /// The column at this place of the list (among those the search leaves).
+    Column(usize),
+    /// The operator of the condition of term `.0`.
+    Op(usize),
+    /// The operator at this place of the open picker.
+    Pick(usize),
+    /// Value field `.1` of the condition of term `.0`.
+    Value(usize, usize),
+    /// The `×` of the condition of term `.0`.
+    Remove(usize),
+    /// `+ add condition`.
+    Add,
+    /// The value at this place of the value list.
+    Item(usize),
+    /// `# count exactly`.
+    Count,
+    /// A choice of the sort line (`None`: not sorted).
+    Sort(Option<datarig_core::query::Dir>),
+    /// The chip at this place of the `Where` row, and its `×`.
+    Chip(usize),
+    ChipRemove(usize),
+    /// The key at this place of the `Order` row.
+    Key(usize),
+    Undo,
+    ClearAll,
+    Limit,
+    /// The `SQL` toggle.
+    Sql,
+    SqlWhere,
+    SqlOrder,
+    /// `Open in editor`.
+    OpenSql,
+    Apply,
+    Cancel,
+}
+
+impl DialogHit {
+    /// A text field: a press there focuses it and puts the cursor under the pointer (the
+    /// other parts act on the release over the part pressed).
+    pub(crate) fn field(self) -> bool {
+        matches!(self, DialogHit::Value(..) | DialogHit::Limit | DialogHit::SqlWhere | DialogHit::SqlOrder)
+    }
+
+    /// A row of a list: lit as a list's row under the pointer (the other parts as small
+    /// targets).
+    pub(crate) fn row(self) -> bool {
+        matches!(self, DialogHit::Column(_) | DialogHit::Item(_) | DialogHit::Pick(_))
+    }
+}
+
+impl DialogHits {
+    /// What was drawn at (x, y): only the open operator picker's entries while it is open (it
+    /// covers the parts under it).
+    pub(crate) fn at(&self, x: u16, y: u16) -> Option<DialogHit> {
+        let p = ratatui::layout::Position::new(x, y);
+        let find = |v: &[(Rect, usize)]| v.iter().find(|(r, _)| r.contains(p)).map(|h| h.1);
+        if !self.picker.is_empty() {
+            return find(&self.picker).map(DialogHit::Pick);
+        }
+        let single = [
+            (self.add, DialogHit::Add),
+            (self.count, DialogHit::Count),
+            (self.undo, DialogHit::Undo),
+            (self.clear_all, DialogHit::ClearAll),
+            (self.limit, DialogHit::Limit),
+            (self.sql, DialogHit::Sql),
+            (self.sql_where, DialogHit::SqlWhere),
+            (self.sql_order, DialogHit::SqlOrder),
+            (self.open_sql, DialogHit::OpenSql),
+            (self.apply, DialogHit::Apply),
+            (self.cancel, DialogHit::Cancel),
+        ];
+        find(&self.chip_removes)
+            .map(DialogHit::ChipRemove)
+            .or_else(|| find(&self.chips).map(DialogHit::Chip))
+            .or_else(|| find(&self.removes).map(DialogHit::Remove))
+            .or_else(|| self.values.iter().find(|v| v.0.contains(p)).map(|v| DialogHit::Value(v.1, v.2)))
+            .or_else(|| find(&self.ops).map(DialogHit::Op))
+            .or_else(|| find(&self.items).map(DialogHit::Item))
+            .or_else(|| self.sort.iter().find(|s| s.0.contains(p)).map(|s| DialogHit::Sort(s.1)))
+            .or_else(|| find(&self.columns).map(DialogHit::Column))
+            .or_else(|| find(&self.keys).map(DialogHit::Key))
+            .or_else(|| single.iter().find(|(r, _)| r.contains(p)).map(|s| s.1))
+    }
+
+    /// Where `h` was drawn, when it was.
+    pub(crate) fn rect(&self, h: DialogHit) -> Option<Rect> {
+        let find = |v: &[(Rect, usize)], i: usize| v.iter().find(|x| x.1 == i).map(|x| x.0);
+        let drawn = |r: Rect| (!r.is_empty()).then_some(r);
+        match h {
+            DialogHit::Column(i) => find(&self.columns, i),
+            DialogHit::Op(t) => find(&self.ops, t),
+            DialogHit::Pick(i) => find(&self.picker, i),
+            DialogHit::Value(t, k) => self.values.iter().find(|v| v.1 == t && v.2 == k).map(|v| v.0),
+            DialogHit::Remove(t) => find(&self.removes, t),
+            DialogHit::Item(i) => find(&self.items, i),
+            DialogHit::Sort(d) => self.sort.iter().find(|s| s.1 == d).map(|s| s.0),
+            DialogHit::Chip(i) => find(&self.chips, i),
+            DialogHit::ChipRemove(i) => find(&self.chip_removes, i),
+            DialogHit::Key(i) => find(&self.keys, i),
+            DialogHit::Add => drawn(self.add),
+            DialogHit::Count => drawn(self.count),
+            DialogHit::Undo => drawn(self.undo),
+            DialogHit::ClearAll => drawn(self.clear_all),
+            DialogHit::Limit => drawn(self.limit),
+            DialogHit::Sql => drawn(self.sql),
+            DialogHit::SqlWhere => drawn(self.sql_where),
+            DialogHit::SqlOrder => drawn(self.sql_order),
+            DialogHit::OpenSql => drawn(self.open_sql),
+            DialogHit::Apply => drawn(self.apply),
+            DialogHit::Cancel => drawn(self.cancel),
+        }
+    }
+
+    /// The rows `v` were drawn on, as one rectangle (empty when none were).
+    pub(crate) fn span(v: &[(Rect, usize)]) -> Rect {
+        v.iter().map(|x| x.0).reduce(|a, b| a.union(b)).unwrap_or_default()
+    }
+}
+
 /// The filter and sort dialog of table tab [`FilterDialog::tab`].
 pub struct FilterDialog {
     pub(crate) tab: TabId,
@@ -223,6 +347,10 @@ pub struct FilterDialog {
     /// The query applied, waiting for its statement to be sent (questions asked meanwhile).
     pub(crate) applying: Option<Query>,
     pub(crate) hits: DialogHits,
+    /// What a press of the pointer armed (it acts on the release over it).
+    pub(crate) press: super::overlay::Press<DialogHit>,
+    /// What the pointer is over, lit.
+    pub(crate) hover: Option<DialogHit>,
     /// The value field typed in narrows the value list: its term and the text it looks for.
     pub(crate) narrow: Option<(usize, String)>,
     /// The first value of the list shown.
@@ -503,6 +631,8 @@ impl App {
             sql: None,
             applying: None,
             hits: DialogHits::default(),
+            press: Default::default(),
+            hover: None,
             narrow: None,
             values_scroll: 0,
             listed: 0,

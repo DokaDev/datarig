@@ -70,8 +70,8 @@ impl App {
             OverlayKind::Settings => self.settings_mouse(m),
             OverlayKind::Export => self.export_form_mouse(m),
             OverlayKind::Commands => self.command_mouse(m),
-            // The filter dialog keeps where its parts were drawn; the pointer does not act there yet.
-            OverlayKind::CellViewer | OverlayKind::WhichKey | OverlayKind::Busy | OverlayKind::FilterDialog => {}
+            OverlayKind::FilterDialog => self.filter_dialog_mouse(m),
+            OverlayKind::CellViewer | OverlayKind::WhichKey | OverlayKind::Busy => {}
         }
     }
 
@@ -97,6 +97,9 @@ impl App {
         }
         if let Some(c) = self.overlays.command_line_mut() {
             c.press.disarm();
+        }
+        if let Some(d) = self.overlays.filter_dialog_mut() {
+            d.press.disarm();
         }
         match self.overlays.top().map(|o| o.kind()) {
             Some(OverlayKind::ContextMenu) => self.menu_hover(m),
@@ -126,6 +129,7 @@ impl App {
                 std::mem::replace(&mut q.hover, h) != h
             }
             Some(OverlayKind::TabList) => self.tab_list_hover(m),
+            Some(OverlayKind::FilterDialog) => self.filter_dialog_hover(m),
             Some(OverlayKind::Settings) => {
                 let Some(s) = self.overlays.settings_mut() else { return false };
                 let h = s.rows.iter().find(|r| r.line.contains(Position::new(x, y))).map(|r| r.row);

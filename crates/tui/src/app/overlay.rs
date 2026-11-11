@@ -561,6 +561,7 @@ impl Overlays {
             Some(Overlay::QuickConnect(q)) => q.press = Press::default(),
             Some(Overlay::TabList(l)) => l.press = Press::default(),
             Some(Overlay::Commands(c)) => c.press = Press::default(),
+            Some(Overlay::FilterDialog(d)) => d.press = Press::default(),
             _ => {}
         }
     }

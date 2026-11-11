@@ -15,7 +15,7 @@ use crate::app::action::Action;
 use crate::app::filter_dialog::draft::{Op, Term};
 use crate::app::filter_dialog::list::{Heading, NotTicked, Source, ValuesView};
 use crate::app::filter_dialog::{
-    ColumnSource, DialogAction, DialogFocus, DialogHits, FilterDialog, Mark, op_off_label,
+    ColumnSource, DialogAction, DialogFocus, DialogHit, DialogHits, FilterDialog, Mark, op_off_label,
 };
 use crate::icons;
 use crate::keymap::Ctx;
@@ -617,17 +617,22 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
         let rw = reason.as_ref().map_or(0, |r| width(r));
         let w = ((lw + 3 + sw).max(rw) + 4) as u16;
         let h = ops.len() as u16 + 2 + u16::from(reason.is_some());
-        let room_below = sep_y.saturating_sub(by);
-        let y = if h <= room_below { by } else { by.saturating_sub(h + 1).max(body.y) };
+        // Under its operator, down to the line above the hint line (over the footer), else above
+        // it where there is more room there: the operator itself stays in view. Where the box
+        // is shorter than its entries, they scroll with the selection.
+        let op_y = by - 1;
+        let (below, above) = (hy.saturating_sub(by), op_y.saturating_sub(body.y));
+        let (y, room) = if h <= below || below >= above { (by, below) } else { (op_y - h.min(above), above) };
+        let h = h.min(room);
         let x = bx.min(right.saturating_sub(w));
-        let r = Rect::new(x, y, w.min(right.saturating_sub(x) + 1), h.min(sep_y.saturating_sub(y)));
+        let r = Rect::new(x, y, w.min(right.saturating_sub(x) + 1), h);
         fill(buf, r, base);
         Block::bordered().border_type(BorderType::Rounded).border_style(accent).render(r, buf);
-        for (i, ((label, sql), (_, ok))) in labels.iter().zip(ops.iter()).enumerate() {
-            let y = r.y + 1 + i as u16;
-            if y + 1 >= r.y + r.height {
-                break;
-            }
+        let rows = usize::from(r.height.saturating_sub(2 + u16::from(reason.is_some())));
+        let first = (at + 1).saturating_sub(rows);
+        let entries = labels.iter().zip(ops.iter()).enumerate().skip(first).take(rows);
+        for (k, (i, ((label, sql), (_, ok)))) in entries.enumerate() {
+            let y = r.y + 1 + k as u16;
             let row = Rect::new(r.x + 1, y, r.width - 2, 1);
             let mut style = if ok.is_ok() { Style::new().fg(th.fg) } else { Style::new().fg(th.fg_dim) };
             if i == at {
@@ -652,11 +657,22 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
         }
     }
 
+    // What the pointer is over, lit: a row as a list's row under the pointer, a button or a
+    // mark as a small target; none once it is not drawn any more (over the picker, only its
+    // entries).
+    let lit = d.hover.filter(|h| d.picker.is_none() || matches!(h, DialogHit::Pick(_)));
+    let lit = lit.and_then(|h| hits.rect(h).map(|r| (h, r)));
+    if let Some((h, r)) = lit {
+        buf.set_style(r, if h.row() { crate::widgets::hover_style() } else { crate::widgets::pointer_style() });
+    }
     let top = app.overlays.top().is_some_and(|o| o.kind() == crate::app::overlay::OverlayKind::FilterDialog);
+    let now = app.now();
     if let Some(d) = app.filter_dialog_mut() {
         d.hits = hits;
         d.scroll = scroll;
         d.values_scroll = values_scroll;
+        d.hover = lit.map(|(h, _)| h);
+        d.press.drawn(top, now);
     }
     // The completion popup of the SQL section's field with the keys, at its cursor.
     let field = app.filter_dialog_sql_field();
@@ -909,6 +925,26 @@ fn draw_sql(
     cursor
 }
 
+/// How [`draw_wrapped`] lays `input` out over `height` rows `w` columns wide: the lines (byte
+/// ranges of its text), the first line shown (`focused`: so that the cursor shows, else the
+/// first), the cursor's line and column.
+fn wrapped_view(input: &TextInput, w: usize, height: u16, focused: bool) -> (Vec<Range<usize>>, usize, usize, usize) {
+    use unicode_segmentation::UnicodeSegmentation;
+    let text = input.text();
+    // The cursor's line: one past a full line's end starts the next one.
+    let mut lines = wrap_at(text, w);
+    let at = input.cursor_byte();
+    let mut cl = lines.iter().rposition(|l| l.start <= at).unwrap_or(0);
+    let mut cx = text[lines[cl].start..at].graphemes(true).map(crate::text::grapheme_width).sum::<usize>();
+    if cx >= w {
+        lines.push(at..at);
+        cl = lines.len() - 1;
+        cx = 0;
+    }
+    let first = if focused { (cl + 1).saturating_sub(usize::from(height)) } else { 0 };
+    (lines, first, cl, cx)
+}
+
 /// Draw `input` wrapped over the rows of `r` (each grapheme in `style`, patched by the first
 /// span holding its first byte): from its start, or (`focused`) so that its cursor shows.
 /// Returns where the cursor is when `focused`.
@@ -926,18 +962,7 @@ fn draw_wrapped(
         return None;
     }
     let text = input.text();
-    // The cursor's line: one past a full line's end starts the next one.
-    let mut lines = wrap_at(text, w);
-    let at = input.cursor_byte();
-    let line_of = |lines: &[Range<usize>]| lines.iter().rposition(|l| l.start <= at).unwrap_or(0);
-    let mut cl = line_of(&lines);
-    let mut cx = text[lines[cl].start..at].graphemes(true).map(crate::text::grapheme_width).sum::<usize>();
-    if cx >= w {
-        lines.push(at..at);
-        cl = lines.len() - 1;
-        cx = 0;
-    }
-    let first = if focused { (cl + 1).saturating_sub(usize::from(r.height)) } else { 0 };
+    let (lines, first, cl, cx) = wrapped_view(input, w, r.height, focused);
     for (row, line) in lines.iter().skip(first).take(usize::from(r.height)).enumerate() {
         let y = r.y + row as u16;
         let mut x = r.x;
@@ -950,6 +975,29 @@ fn draw_wrapped(
         }
     }
     focused.then(|| (r.x + cx as u16, r.y + (cl - first) as u16))
+}
+
+/// The byte of `input`'s text a click at (x, y) puts the cursor before, where
+/// [`draw_wrapped`] drew it into `r` (`focused` as it was drawn): the grapheme under the
+/// pointer, the end of its line past the line's end, the end of the text under the last line.
+pub(crate) fn wrapped_byte_at(input: &TextInput, r: Rect, focused: bool, x: u16, y: u16) -> Option<usize> {
+    use unicode_segmentation::UnicodeSegmentation;
+    if !r.contains(ratatui::layout::Position::new(x, y)) || r.width == 0 {
+        return None;
+    }
+    let text = input.text();
+    let (lines, first, ..) = wrapped_view(input, usize::from(r.width), r.height, focused);
+    let Some(line) = lines.get(first + usize::from(y - r.y)) else { return Some(text.len()) };
+    let col = usize::from(x - r.x);
+    let mut acc = 0;
+    for (b, g) in text[line.clone()].grapheme_indices(true) {
+        let gw = crate::text::grapheme_width(g);
+        if col < acc + gw {
+            return Some(line.start + b);
+        }
+        acc += gw;
+    }
+    Some(line.end)
 }
 
 /// The values of view `v` from row `rows.0` (its heading) to the row before `rows.1`, between

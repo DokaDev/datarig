@@ -205,6 +205,23 @@ impl TextInput {
         true
     }
 
+    /// A click at (x, y) on this input as drawn into `area` (`focused`: drawn with the keys,
+    /// nothing masked) by a copy of it: the cursor goes where [`TextInput::click`] puts it after
+    /// a render there. `false` when (x, y) is not in `area`.
+    pub fn click_at(&mut self, area: Rect, focused: bool, x: u16, y: u16) -> bool {
+        let cells = cells(&self.text, false, None);
+        let cursor_x: usize = cells.iter().take(self.cursor).map(|c| c.1).sum();
+        let total: usize = cells.iter().map(|c| c.1).sum();
+        self.scroll = fit_scroll(self.scroll, cursor_x, total, usize::from(area.width), focused);
+        (self.drawn, self.drawn_mask, self.drawn_hide) = (area, false, None);
+        self.click(x, y)
+    }
+
+    /// The cursor before the grapheme that holds byte `at` of the text (at its end past it).
+    pub fn set_cursor_byte(&mut self, at: usize) {
+        self.cursor = self.text.grapheme_indices(true).take_while(|(i, g)| i + g.len() <= at).count();
+    }
+
     /// Draw into a one-line `area` (`mask` replaces every grapheme with `•`, `hide` masks a
     /// byte range, e.g. a password inside a DSN). An unfocused input shows its beginning.
     /// Returns the screen column of the cursor.
@@ -253,17 +270,8 @@ impl TextInput {
         buf.set_stringn(area.x, area.y, " ".repeat(w), w, style);
         let cells = cells(&self.text, mask, hide);
         let cursor_x: usize = cells.iter().take(self.cursor).map(|c| c.1).sum();
-        // Never scrolled further than the text (and the cursor after it) needs.
         let total: usize = cells.iter().map(|c| c.1).sum();
-        self.scroll = self.scroll.min((total + 1).saturating_sub(w));
-        // Keep one column free for the cursor at the end.
-        if !focused {
-            self.scroll = 0;
-        } else if cursor_x < self.scroll {
-            self.scroll = cursor_x;
-        } else if cursor_x >= self.scroll + w {
-            self.scroll = cursor_x + 1 - w;
-        }
+        self.scroll = fit_scroll(self.scroll, cursor_x, total, w, focused);
         let mut x = 0;
         let mut b = 0;
         let starts: Vec<usize> = self
@@ -290,6 +298,23 @@ impl TextInput {
             x += gw;
         }
         area.x + (cursor_x.saturating_sub(self.scroll)).min(w - 1) as u16
+    }
+}
+
+/// The first column shown in `w` columns (`scroll` before), the cursor at column `cursor_x`
+/// of a text `total` columns wide: kept in view while `focused`, else the beginning.
+fn fit_scroll(scroll: usize, cursor_x: usize, total: usize, w: usize, focused: bool) -> usize {
+    // Never scrolled further than the text (and the cursor after it) needs.
+    let scroll = scroll.min((total + 1).saturating_sub(w));
+    // Keep one column free for the cursor at the end.
+    if !focused {
+        0
+    } else if cursor_x < scroll {
+        cursor_x
+    } else if cursor_x >= scroll + w {
+        cursor_x + 1 - w
+    } else {
+        scroll
     }
 }
 

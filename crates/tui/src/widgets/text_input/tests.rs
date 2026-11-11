@@ -141,3 +141,37 @@ fn replace_puts_a_completion_in_and_the_cursor_after_it() {
     t.replace(4..40, "x");
     assert_eq!(t.text(), "日 name = 1");
 }
+
+#[test]
+fn a_click_on_a_copy_drawn_places_the_cursor_where_that_copy_showed_the_text() {
+    let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+    let area = Rect::new(2, 0, 5, 1);
+    // Not focused: drawn from its start.
+    let mut t = TextInput::new("abcdefghij");
+    assert!(t.click_at(area, false, 4, 0));
+    assert_eq!(t.cursor(), 2);
+    // Focused with the cursor at its end: drawn scrolled so that the cursor shows, as a render
+    // of a copy drew it (`ghij` and the cursor).
+    let mut t = TextInput::new("abcdefghij");
+    let mut copy = t.clone();
+    copy.render(area, &mut buf, Style::new(), true, false, None);
+    assert_eq!(buf[(2, 0)].symbol(), "g");
+    assert!(t.click_at(area, true, 3, 0));
+    assert_eq!(t.cursor(), 7, "before the `h` drawn there");
+    // Outside it: nothing.
+    assert!(!t.click_at(area, true, 8, 0));
+    assert_eq!(t.cursor(), 7);
+}
+
+#[test]
+fn the_cursor_goes_before_the_grapheme_holding_a_byte() {
+    let mut t = TextInput::new("a日b");
+    t.set_cursor_byte(1);
+    assert_eq!(t.cursor(), 1);
+    t.set_cursor_byte(2);
+    assert_eq!(t.cursor(), 1, "inside the wide letter: before it");
+    t.set_cursor_byte(4);
+    assert_eq!(t.cursor(), 2);
+    t.set_cursor_byte(40);
+    assert_eq!(t.cursor(), 3);
+}
