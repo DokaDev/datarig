@@ -30,6 +30,10 @@ pub(crate) const TALLY_DISTINCT: usize = 10_000;
 /// The most bytes of values a count of loaded rows keeps.
 pub(crate) const TALLY_BYTES: usize = 4 << 20;
 
+/// The most rows a count of the loaded rows reads (the first of those in memory): it is made
+/// while the dialog is drawn, whatever the result's window in memory.
+pub(crate) const TALLY_ROWS: usize = 20_000;
+
 /// The fewest values (NULL left out) a column's values are judged mostly distinct from.
 pub(crate) const MOSTLY_MIN: u64 = 50;
 

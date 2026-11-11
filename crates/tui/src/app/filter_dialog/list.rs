@@ -16,7 +16,7 @@
 //! what was typed.
 
 use super::draft::{Op, Row};
-use super::values::{Counted, Counter, LIST_VALUES};
+use super::values::{Counted, Counter, LIST_VALUES, TALLY_ROWS};
 use super::*;
 use crate::app::filter_value::{NotAdmitted, ValuesFrom, admit};
 use datarig_core::driver::{ColumnMeta, ValueKind};
@@ -28,7 +28,7 @@ pub(crate) struct TallyOf {
     column: String,
     run: u64,
     rows: usize,
-    /// The rows counted: those in memory.
+    /// The rows counted: the first of those in memory, at most [`TALLY_ROWS`].
     held: std::ops::Range<usize>,
 }
 
@@ -77,7 +77,8 @@ pub(crate) enum Heading {
     /// Nothing is listed, and why.
     Nothing(Label),
     /// Counted in the rows loaded (approximate), with values of an earlier load under them;
-    /// `held`: only so many of them were counted, those in memory.
+    /// `held`: only so many of them were counted (the first of those in memory, at most
+    /// [`TALLY_ROWS`]).
     Loaded { rows: u64, earlier: bool, held: Option<u64> },
     /// Counted by the server, under the other conditions when there are some.
     Exact { others: bool },
@@ -215,14 +216,16 @@ impl App {
             return;
         }
         let Some(ci) = rs.columns.iter().position(|c| c.meta.name == col) else { return };
-        let held = rs.rows.resident();
+        let resident = rs.rows.resident();
+        let held = resident.start..resident.end.min(resident.start + TALLY_ROWS);
         let of = TallyOf { column: col, run: t.exec.query_id, rows: rs.rows.len(), held: held.clone() };
         if self.filter_dialog().and_then(|d| d.tally.as_ref()).is_some_and(|(k, _)| *k == of) {
             return;
         }
         let exact = matches!(rs.columns[ci].meta.kind, ValueKind::Integer | ValueKind::Decimal);
         let mut counter = Counter::new(exact);
-        // Only the rows in memory: drawing never waits on the spill file.
+        // Only rows in memory, so many of them: drawing never waits on the spill file, nor on
+        // a large window.
         let _ = rs.rows.for_each_chunk(held, 256, |rows| {
             for r in rows {
                 counter.add(r.get(ci).and_then(Option::as_deref));
@@ -360,8 +363,7 @@ impl App {
         }
         view.more |= view.items.len() > LIST_VALUES;
         view.items.truncate(LIST_VALUES);
-        let counted = rs.rows.resident().len();
-        let held = (counted < rs.rows.len()).then_some(counted as u64);
+        let held = (tally.rows < rs.rows.len() as u64).then_some(tally.rows);
         view.heading = Heading::Loaded { rows: rs.rows.len() as u64, earlier: with_earlier, held };
         Some(view)
     }

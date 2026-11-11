@@ -793,6 +793,22 @@ impl Drop for State {
     }
 }
 
+/// A large window in memory: the list counts a sample of its rows, and says how many.
+#[test]
+fn the_list_of_a_large_window_in_memory_counts_a_sample_of_it() {
+    let state = State::new("window");
+    let mut h = loaded(30_000, 4, 50_000, &state.0);
+    match &h.app.tab().results {
+        datarig_tui::app::Results::Rows(rs) => assert_eq!(rs.rows.resident().len(), 30_000, "all in memory"),
+        _ => panic!("rows"),
+    }
+    dialog_on(&mut h, 1);
+    let s = h.screen(120, 34);
+    assert!(s.contains("sample: 20,000/30,000"), "{s}");
+    // 20,000 rows of four values in turn: 5,000 each.
+    assert!(s.contains("~5,000"), "{s}");
+}
+
 /// The sample is said at 80 columns too, with the cue of a list longer than the pane.
 #[test]
 fn the_sample_is_said_at_80_columns_beside_the_lists_cue() {
