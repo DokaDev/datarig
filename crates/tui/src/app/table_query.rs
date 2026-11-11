@@ -186,6 +186,10 @@ pub struct TableQuery {
     locks_asked: Option<(Query, LockState)>,
     /// The session state in which the user let reads that lock rows run in this tab.
     locks_confirmed: Option<LockState>,
+    /// The query held until the tab's session, still opening, has said its state, and the
+    /// session (its generation) it waits for: work in progress of the tab until it runs, is
+    /// cancelled or that session is gone.
+    session_wait: Option<(Query, u64)>,
     /// The query to run once the table's keys are read (its order is made total with them), and
     /// the tab binding it waits in: work in progress of the tab until it runs, is cancelled or
     /// its wait ends ([`App::table_keys_waiting`]).
@@ -214,6 +218,7 @@ impl TableQuery {
             confirmed: HashSet::new(),
             locks_asked: None,
             locks_confirmed: None,
+            session_wait: None,
             keys_wait: None,
             line: Default::default(),
             order_keys: OrderKeysState::Unknown,
@@ -905,6 +910,62 @@ impl App {
         self.table_query_mut(id).is_some_and(|tq| tq.keys_wait.take().is_some())
     }
 
+    /// Table tab `id` holds a query for its session to say its state, and that session is still
+    /// opening.
+    pub(in crate::app) fn table_session_waiting(&self, id: TabId) -> bool {
+        self.tabs.get(id).is_some_and(|t| {
+            t.exec.state == SessionState::Opening
+                && t.doc
+                    .table_query
+                    .as_ref()
+                    .and_then(|tq| tq.session_wait.as_ref())
+                    .is_some_and(|(_, generation)| *generation == t.exec.generation)
+        })
+    }
+
+    /// The query table tab `id` holds for its session is cancelled (it never runs); whether one
+    /// waited.
+    pub(in crate::app) fn table_session_cancel(&mut self, id: TabId) -> bool {
+        let waiting = self.table_session_waiting(id);
+        if let Some(tq) = self.table_query_mut(id) {
+            tq.session_wait = None;
+        }
+        waiting
+    }
+
+    /// Table tab `id`'s session has said its state: the query held for that session runs, checked
+    /// from the start against it.
+    pub(in crate::app) fn table_session_ready(&mut self, id: TabId) {
+        let Some(generation) = self.tabs.get(id).map(|t| t.exec.generation) else { return };
+        let Some(tq) = self.table_query_mut(id) else { return };
+        if let Some((q, waited)) = tq.session_wait.take()
+            && waited == generation
+        {
+            self.table_run(id, q);
+        }
+    }
+
+    /// Table tab `id`'s session did not open: the query held for it never runs, and the tab says
+    /// so (while its profile connects, only the profile's own failure is said). A session left
+    /// opening by that, with nothing running on it, is closed, so that the next run opens another
+    /// instead of waiting on it (also when the query held for it was cancelled before).
+    pub(in crate::app) fn table_session_failed(&mut self, id: TabId) {
+        let Some(t) = self.tabs.get_mut(id) else { return };
+        let Some(tq) = t.doc.table_query.as_mut() else { return };
+        let waited = tq.session_wait.take().is_some();
+        if t.exec.state == SessionState::Opening && t.exec.running.is_none() {
+            if let Some(s) = t.exec.session.take() {
+                s.close();
+            }
+            t.exec.state = SessionState::Idle;
+        }
+        if !waited {
+            return;
+        }
+        let name = t.profile.and_then(|p| self.profile(p)).map(|p| p.name.clone()).unwrap_or_default();
+        self.tab_status(id, Notice::new(Msg::QueryQueuedFailed { name }, Level::Warning));
+    }
+
     /// Profile `pid`'s attempt ended without a connection: the queries of its table tabs (in
     /// any database) that waited for their keys are dropped, each tab says so (`name`: the
     /// profile's).
@@ -1142,6 +1203,18 @@ impl App {
             return false;
         };
         let q = p.query.clone();
+        // A session still opening has not said its state: statements of its start-up may turn
+        // autocommit off, and all that is held for it now is how sessions start. The read
+        // waits, and runs from the start once the session is connected.
+        if let Some(state) = self.lock_state(id)
+            && self.tabs.get(id).is_some_and(|t| t.exec.state == SessionState::Opening)
+        {
+            if let Some(tq) = self.table_query_mut(id) {
+                tq.pending = None;
+                tq.session_wait = Some((q, state.generation));
+            }
+            return true;
+        }
         let Some((locks, state)) =
             self.table_locks(id, Some(&statements[0])).filter(|(_, st)| !self.locks_confirmed(id, *st))
         else {

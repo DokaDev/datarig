@@ -279,6 +279,8 @@ impl App {
             (true, true) => Paging::Released,
             (true, false) => Paging::Open { since: now, in_block },
         };
+        let connected = matches!(ev, DbEvent::Connected);
+        let failed = matches!(ev, DbEvent::ConnectFailed { .. });
         let notice = match ev {
             DbEvent::Connected => {
                 t.exec.state = SessionState::Ready;
@@ -1138,6 +1140,12 @@ impl App {
             self.read_held_on(id);
         }
         self.keys_after_ddl(id, profile, run_ended, tx_ended);
+        if connected {
+            self.table_session_ready(id);
+        }
+        if failed {
+            self.table_session_failed(id);
+        }
     }
 
     /// Tab `id`'s result is held open on a session whose statement runs on until the result is

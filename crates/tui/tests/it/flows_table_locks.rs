@@ -11,7 +11,7 @@ use crate::common;
 
 use common::*;
 use datarig_core::config::Config;
-use datarig_core::driver::{DbCommand, DbEvent, Isolation};
+use datarig_core::driver::{DbCommand, DbError, DbEvent, Isolation};
 use datarig_core::policy::{CommitRule, Policy};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
@@ -81,6 +81,7 @@ fn users_in(manual: bool) -> Harness {
     assert!(h.app.tab().is_table());
     let index = h.app.tabs.active_index();
     h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MySql(MySqlMode::default()))));
+    h.tab_db(index, DbEvent::Connected);
     answer(&mut h);
     h.sent();
     h
@@ -98,6 +99,111 @@ fn asks(h: &Harness) -> bool {
 
 fn status(h: &Harness) -> String {
     h.app.tab().status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default()
+}
+
+/// A MySQL profile, connected and known to be MySQL, with `shop.users` opened: the tab's session
+/// is still opening.
+fn users_opening() -> Harness {
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut p = ConnectionConfig::test_db();
+    (p.name, p.driver) = ("local-my".into(), "mysql".into());
+    let cfg = Config { connections: vec![p], ..Default::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+    h.db(DbEvent::Catalog(Ok(catalog())));
+    h.key(KeyCode::BackTab);
+    h.goto("shop");
+    h.key(KeyCode::Char('l'));
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok((vec!["users".into()], Vec::new()).into()) });
+    h.goto("users");
+    h.key(KeyCode::Enter);
+    assert!(h.app.tab().is_table());
+    h
+}
+
+#[test]
+fn the_first_read_waits_for_the_state_a_new_session_says() {
+    // Its start-up statements turned autocommit off at SERIALIZABLE: asked, nothing sent yet.
+    let mut h = users_opening();
+    assert!(runs(&mut h).is_empty(), "the session has not said its state");
+    assert!(h.app.tab_busy(h.app.tab().id), "the read waits as work of the tab");
+    session(&mut h, DbEvent::Autocommit(false));
+    session(&mut h, DbEvent::Isolation(Some(Isolation::Serializable)));
+    assert!(runs(&mut h).is_empty(), "not until the session is connected");
+    session(&mut h, DbEvent::Connected);
+    assert!(asks(&h));
+    assert!(runs(&mut h).is_empty());
+    h.key(KeyCode::Char('y'));
+    assert_eq!(runs(&mut h), vec![vec![ALL.to_string()]]);
+
+    // Nothing that locks: it goes as soon as the session is connected, without asking.
+    let mut h = users_opening();
+    session(&mut h, DbEvent::Isolation(Some(Isolation::Serializable)));
+    assert!(runs(&mut h).is_empty());
+    session(&mut h, DbEvent::Connected);
+    assert!(!asks(&h));
+    assert_eq!(runs(&mut h), vec![vec![ALL.to_string()]]);
+}
+
+#[test]
+fn a_read_waiting_for_its_session_ends_with_a_cancel_or_a_failure() {
+    let mut h = users_opening();
+    let id = h.app.tab().id;
+    h.app.cancel();
+    assert!(status(&h).contains("cancelled"), "{}", status(&h));
+    assert!(!h.app.tab_busy(id));
+    session(&mut h, DbEvent::Connected);
+    assert!(runs(&mut h).is_empty(), "cancelled, it never runs");
+
+    let mut h = users_opening();
+    let id = h.app.tab().id;
+    session(&mut h, DbEvent::ConnectFailed { error: DbError::Closed, auth: false });
+    assert!(!h.app.tab_busy(id), "the session it waited for is gone");
+    assert!(runs(&mut h).is_empty());
+
+    // While the profile connects (only its own failure is said): the read is dropped all the
+    // same, and the next run opens a session of its own instead of waiting on the failed one.
+    let mut h = users_opening();
+    let id = h.app.tab().id;
+    let pid = h.app.tab().profile.expect("a profile");
+    h.app.conns.entry(pid).connecting = Some(datarig_tui::app::Connecting {
+        name: "local-my".into(),
+        started: std::time::Instant::now(),
+        had_password: false,
+        keychain: false,
+        tunnel: None,
+    });
+    session(&mut h, DbEvent::ConnectFailed { error: DbError::Closed, auth: false });
+    assert!(!h.app.tab_busy(id), "not waiting on the failed session");
+    assert!(status(&h).starts_with("Not run"), "{}", status(&h));
+    h.app.conns.entry(pid).connecting = None;
+    let before = h.app.tab().exec.generation;
+    h.command("where id > 0");
+    assert_ne!(h.app.tab().exec.generation, before, "on a session of its own");
+    assert!(runs(&mut h).is_empty());
+    session(&mut h, DbEvent::Connected);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 0)")]]);
+
+    // The same with the read cancelled before the session failed.
+    let mut h = users_opening();
+    let pid = h.app.tab().profile.expect("a profile");
+    h.app.cancel();
+    h.app.conns.entry(pid).connecting = Some(datarig_tui::app::Connecting {
+        name: "local-my".into(),
+        started: std::time::Instant::now(),
+        had_password: false,
+        keychain: false,
+        tunnel: None,
+    });
+    session(&mut h, DbEvent::ConnectFailed { error: DbError::Closed, auth: false });
+    h.app.conns.entry(pid).connecting = None;
+    let before = h.app.tab().exec.generation;
+    h.command("where id > 0");
+    assert_ne!(h.app.tab().exec.generation, before, "on a session of its own");
+    session(&mut h, DbEvent::Connected);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 0)")]]);
 }
 
 #[test]
@@ -389,6 +495,9 @@ fn a_read_that_opens_its_session_is_asked_about_on_it() {
     session(&mut h, DbEvent::Lost { error: datarig_core::driver::DbError::Closed });
     h.command("where my_fn(id) > 0");
     h.keys("y");
+    assert!(!asks(&h), "not before the session says its state");
+    assert!(runs(&mut h).is_empty());
+    session(&mut h, DbEvent::Connected);
     assert!(asks(&h), "{}", h.screen(120, 30));
     assert_ne!(h.app.tab().exec.generation, before, "asked on the session it goes to");
     assert!(runs(&mut h).is_empty(), "nothing sent while it asks");
@@ -429,6 +538,9 @@ fn a_read_that_waited_for_the_connection_asks_on_the_new_session() {
     assert!(h.app.is_queued(h.app.tab().id), "it waits for the connection");
     assert!(runs(&mut h).is_empty());
     h.db(DbEvent::Connected);
+    assert!(!asks(&h), "not before the session says its state");
+    assert!(runs(&mut h).is_empty());
+    session(&mut h, DbEvent::Connected);
     assert!(asks(&h), "asked on the session it goes to");
     assert!(runs(&mut h).is_empty(), "nothing sent before the yes");
     h.keys("y");

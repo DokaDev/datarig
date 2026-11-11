@@ -29,6 +29,10 @@ impl App {
         if self.table_keys_cancel(id) {
             return self.tab_status(id, Notice::new(Label::QueryCancelled, Level::Warning));
         }
+        // So does one held for its session to say its state.
+        if self.table_session_cancel(id) {
+            return self.tab_status(id, Notice::new(Label::QueryCancelled, Level::Warning));
+        }
         if self.take_queued(id).is_some() {
             self.unstage_run(id);
             return self.tab_status(id, Notice::new(Label::QueryCancelled, Level::Warning));
@@ -100,9 +104,11 @@ impl App {
     }
 
     /// Tab `id` has a statement waiting for its profile to connect, or a table tab's query
-    /// waiting for its table's keys.
+    /// waiting for its table's keys or for its session to say its state.
     pub fn is_queued(&self, id: TabId) -> bool {
-        self.conns.iter().any(|(_, c)| c.pending.iter().any(|q| q.tab == id)) || self.table_keys_waiting(id)
+        self.conns.iter().any(|(_, c)| c.pending.iter().any(|q| q.tab == id))
+            || self.table_keys_waiting(id)
+            || self.table_session_waiting(id)
     }
 
     /// Tab `id` runs a statement, has one waiting for its connection, or waits for the answer

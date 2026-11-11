@@ -375,6 +375,7 @@ fn a_mysql_snippet_marks_the_condition_only_when_found_once() {
     open(&mut h, "users");
     let index = h.app.tabs.active_index();
     h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MySql(MySqlMode::default()))));
+    h.tab_db(index, DbEvent::Connected);
     answer(&mut h);
     h.sent();
     h.key(KeyCode::Tab);
