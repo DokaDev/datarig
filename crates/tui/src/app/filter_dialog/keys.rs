@@ -411,6 +411,18 @@ impl App {
         Some(draft::ops_for(&d.column_info(&row.col), &target))
     }
 
+    /// The operators the open filter dialog offers for its focused condition's column, as the
+    /// picker names them, each with why it is dimmed (`None`: offered).
+    pub fn filter_dialog_offers(&self) -> Option<Vec<(String, Option<String>)>> {
+        let ops = self.filter_dialog_ops()?;
+        let why = |off: draft::OpOff| self.i18n.label(op_off_label(off)).to_string();
+        Some(
+            ops.into_iter()
+                .map(|(op, ok)| (crate::widgets::filter_dialog::op_label(self, op), ok.err().map(why)))
+                .collect(),
+        )
+    }
+
     /// The picker's selection becomes the focused condition's operator (a dimmed one is not
     /// taken: why is said); its values kept where they still fit.
     pub(super) fn filter_dialog_pick(&mut self) {

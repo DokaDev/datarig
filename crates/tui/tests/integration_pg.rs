@@ -2798,3 +2798,105 @@ async fn a_column_named_with_a_line_break_is_neither_filtered_nor_sorted() {
     drop(app);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// PostgreSQL's "contains" (`ILIKE`) is offered only on a column whose collation the key-only
+/// catalog read says is deterministic: in the filter dialog's operators of a column of a
+/// nondeterministic ICU collation it is dimmed with why, and "starts with" (`LIKE`) is dimmed
+/// before PostgreSQL 18, which refuses it, and offered from 18 on; nothing is sent. On the
+/// column of the default collation "contains" is offered, runs and reads back its rows. Makes
+/// schema `zz_it_coll_<pid>` with the collation `zz_ci` and a table in it, and drops them.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_dialog_offers_patterns_only_where_the_collation_takes_them() {
+    use datarig_tui::app::action::Action;
+    let Some(url) = pg_url("the_dialog_offers_patterns_only_where_the_collation_takes_them") else { return };
+    let schema = format!("zz_it_coll_{}", std::process::id());
+    let _guard = SchemaGuard { url: url.clone(), schema: schema.clone() };
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE COLLATION {s}.zz_ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)"),
+        format!("CREATE TABLE {s}.zz_words (id int PRIMARY KEY, ci text COLLATE {s}.zz_ci, plain text)"),
+        format!(
+            "INSERT INTO {s}.zz_words VALUES (1, 'Apple', 'Apple'), (2, 'apple pie', 'apple pie'), (3, 'pear', 'pear')"
+        ),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let dir = std::env::temp_dir().join(format!("datarig-it-coll-{}", std::process::id()));
+    let (mut app, mut rx) = table_tab_app(&url, &schema, "zz_words", &dir);
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 3).await;
+    // The keys (and the collations) are read with the next run, on the metadata session.
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 3 && keys_known(a)).await;
+    let key = |app: &mut App, code: KeyCode| app.handle_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    // The dialog on column `name`, a condition added: the operators it offers.
+    let offers = |app: &mut App, name: &str| {
+        let datarig_tui::app::Results::Rows(rs) = &app.tab().results else { panic!("no rows") };
+        let col = rs.columns.iter().position(|c| c.meta.name == name).unwrap();
+        let g = &mut app.tab_mut().grid;
+        (g.row, g.col, g.anchor) = (0, col, None);
+        app.focus = Focus::Results;
+        press(app, 'f');
+        key(app, KeyCode::Right);
+        key(app, KeyCode::Char(' '));
+        app.filter_dialog_offers().expect("the operators of the condition")
+    };
+    let why = |offers: &[(String, Option<String>)], op: &str| {
+        offers.iter().find(|(o, _)| o == op).unwrap_or_else(|| panic!("{op}: {offers:?}")).1.clone()
+    };
+    let qid = app.tab().exec.query_id;
+    let ci = offers(&mut app, "ci");
+    assert_eq!(why(&ci, "contains").as_deref(), Some("PostgreSQL refuses ILIKE on the column's collation"));
+    assert_eq!(why(&ci, "="), None, "equality is offered");
+    // "starts with" (`LIKE`) there: PostgreSQL before 18 refuses it, 18 takes it.
+    let before_18 = "DO $$ BEGIN IF current_setting('server_version_num')::int < 180000 \
+                     THEN RAISE EXCEPTION 'before 18'; END IF; END $$";
+    let pg18 = match pg_clean::run_fresh(&url, before_18) {
+        Ok(()) => true,
+        Err(e) if e.contains("before 18") => false,
+        Err(e) => panic!("{e}"),
+    };
+    match pg18 {
+        true => assert_eq!(why(&ci, "starts with"), None, "offered from 18 on"),
+        false => {
+            assert_eq!(why(&ci, "starts with").as_deref(), Some("The server refuses LIKE on the column's collation"))
+        }
+    }
+    // Picked anyway: not taken, nothing sent.
+    let at = ci.iter().position(|(o, _)| o == "contains").unwrap();
+    key(&mut app, KeyCode::Left);
+    key(&mut app, KeyCode::Char(' '));
+    for _ in 0..at {
+        key(&mut app, KeyCode::Down);
+    }
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.filter_dialog_draft().map(|d| d.0).as_deref(), Some(""), "no condition taken");
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Esc);
+    assert!(!app.overlays.is_open(datarig_tui::app::overlay::OverlayKind::FilterDialog));
+    assert_eq!(app.tab().exec.query_id, qid, "nothing sent");
+    // The column of the default collation: offered, and it reads back its rows.
+    let plain = offers(&mut app, "plain");
+    assert_eq!(why(&plain, "contains"), None);
+    let at = plain.iter().position(|(o, _)| o == "contains").unwrap();
+    key(&mut app, KeyCode::Left);
+    key(&mut app, KeyCode::Char(' '));
+    for _ in 0..at {
+        key(&mut app, KeyCode::Down);
+    }
+    key(&mut app, KeyCode::Enter);
+    for c in "Apple".chars() {
+        press(&mut app, c);
+    }
+    key(&mut app, KeyCode::Enter);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && a.tab().exec.query_id != qid && held_rows(a).0 == 2).await;
+    let filter =
+        app.tab().doc.table_query.as_ref().and_then(|q| q.shown.as_ref()?.filter.as_ref().map(|f| f.text.clone()));
+    assert_eq!(filter.as_deref(), Some("plain ILIKE '%Apple%' ESCAPE '!'"));
+    let mut ids: Vec<_> = held_column(&app, 0).into_iter().flatten().collect();
+    ids.sort();
+    assert_eq!(ids, ["1", "2"]);
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
