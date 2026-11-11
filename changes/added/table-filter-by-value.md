@@ -5,8 +5,8 @@
   column's collation is read to be deterministic. A NULL cell offers `IS NULL` and
   `IS NOT NULL`; cells selected in one column offer `IN` and `NOT IN`, with a NULL among them
   tested on its own. The condition is added to the filter of the rows shown with `AND` (a filter
-  with an `OR` at its top is put in parentheses first), written into the filter line and run as
-  `Enter` runs it there.
+  with an `OR` at its top is put in parentheses first) and run with the same checks as the
+  filter dialog's `Enter`.
 - Values are written as the server reads them back: numbers bare, bytes in hexadecimal, a
   pattern's `%`, `_` and `!` escaped. A value not shown whole, binary data over 64 KiB, a type whose
   comparison datarig does not know or more than 1000 cells are offered dimmed, with the
