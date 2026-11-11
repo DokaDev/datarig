@@ -325,6 +325,7 @@ impl Intent {
 }
 
 /// The rows and columns a copy takes, and whether it is one cell without a selection.
+#[derive(Clone)]
 pub(super) struct Block {
     pub(super) rows: Range<usize>,
     pub(super) cols: Vec<usize>,
@@ -535,14 +536,12 @@ impl App {
         if req.keys {
             self.grid_copy = None;
         }
-        let Some(mut b) = self.block(req.what) else {
+        // The cells the grid shows: what `g p` keeps (by position), whatever the format.
+        let Some(shown) = self.block(req.what) else {
             let why = if self.on_new_rows() { Label::CopyNewRows } else { Label::CopyNothing };
             return self.flash(Notice::new(why, Level::Warning));
         };
-        if matches!(req.format, CopyFormat::SqlInsert | CopyFormat::SqlUpdate) {
-            self.with_key_columns(&mut b);
-        }
-        let count = b.rows.len();
+        let count = shown.rows.len();
         if count > LARGE_COPY && !confirmed {
             self.pending_copy = Some((Intent::of(self.tab()), req));
             self.confirm(Label::CopyConfirmTitle, Label::CopyConfirmTitle, Label::CopyConfirmKeys, ConfirmAction::Copy);
@@ -552,9 +551,20 @@ impl App {
             return;
         }
         // `y` on one cell without a selection copies its value, whatever `copy_format` says.
-        if req.keys && b.cell {
+        if req.keys && shown.cell {
             req.format = CopyFormat::Tsv;
         }
+        // An SQL UPDATE or INSERT copy names its rows by their keys, hidden or not: its own
+        // block, never the one `g p` keeps.
+        let sql = |b: &Block| {
+            let mut b = b.clone();
+            self.with_key_columns(&mut b);
+            b
+        };
+        let mut b = match req.format {
+            CopyFormat::SqlInsert | CopyFormat::SqlUpdate => sql(&shown),
+            _ => shown.clone(),
+        };
         // `y`/`Y` as SQL INSERT: TSV when the rows are not certainly of one table, and why.
         let mut fell_back = None;
         if req.keys
@@ -563,6 +573,7 @@ impl App {
         {
             fell_back = Some(self.why(&why));
             req.format = CopyFormat::Tsv;
+            b = shown.clone();
         }
         let format = req.format;
         // What the grid shows over the rows as read is copied: said when some is pending; a
@@ -580,7 +591,7 @@ impl App {
         if req.keys {
             let kept = {
                 let Results::Rows(rs) = &self.tab().results else { return };
-                self.grid_copy_of(rs, &b)
+                self.grid_copy_of(rs, &shown)
             };
             match kept {
                 Ok(c) => self.grid_copy = Some(Arc::new(c)),

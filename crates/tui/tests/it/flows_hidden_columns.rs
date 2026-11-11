@@ -10,11 +10,14 @@ use crate::common;
 
 use common::*;
 use datarig_core::config::Config;
+use datarig_core::driver::keys::OrderKeys;
 use datarig_core::driver::{ColumnMeta, DbCommand, DbEvent, ValueKind};
+use datarig_core::edit::Value;
 use datarig_core::paths::Paths;
 use datarig_core::secret::{MemoryStore, SecretStore};
 use datarig_core::table_view::{self as tv, TableKey};
 use datarig_i18n::Lang;
+use datarig_tui::app::Results;
 use datarig_tui::app::Startup;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::keymap::Ctx;
@@ -351,4 +354,112 @@ fn a_search_answer_of_other_columns_is_dropped() {
     let count = h.app.grid_search_strip().map(|s| s.count).unwrap_or_default();
     assert!(count.ends_with("/1"), "only the memo's match: {count}");
     assert_ne!(h.app.tab().grid.col, 1, "never on the hidden column");
+}
+
+/// `shop.users` open as a table tab from a connected app, its rows those of the table (`id`,
+/// its primary key, `email`, `nickname`), the key-only read answered and the result resolved
+/// for edits (new rows can be added); the grid focused, nothing sent or said since.
+fn editable() -> Harness {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.key(KeyCode::BackTab);
+    h.goto("shop");
+    h.key(KeyCode::Char('l'));
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok((vec!["users".into()], Vec::new()).into()) });
+    h.goto("users");
+    h.key(KeyCode::Enter);
+    assert!(h.app.tab().is_table());
+    keys_came_with(&mut h, "local-pg", OrderKeys { primary_key: vec!["id".into()], ..Default::default() });
+    let columns = vec![
+        meta_from("id", "int8", true, USERS, 1),
+        meta_from("email", "text", false, USERS, 2),
+        meta_from("nickname", "text", false, USERS, 4),
+    ];
+    let s = |v: &str| Some(v.to_string());
+    let rows = vec![vec![s("1"), s("a@x"), s("ann")], vec![s("2"), s("b@x"), None], vec![s("3"), s("c@x"), s("cy")]];
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::ZERO });
+    h.sent();
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    // `e` on the first row's email resolves the result; the editor closed again.
+    at(&mut h, 0, 1);
+    h.keys("e");
+    let name = h.app.profiles[0].name.clone();
+    // `name` (NOT NULL, not in the rows here) has a default: new rows can be added.
+    let mut st = users_structure();
+    st.columns[2].default = Some("''::text".into());
+    let st = Box::new(st);
+    h.meta_db(&name, DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(st) });
+    assert_eq!(h.app.key_context(), Ctx::CellEdit);
+    h.key(KeyCode::Esc);
+    h.app.transient = None;
+    h.sent();
+    h
+}
+
+/// The value pending in row `r`, column `c` of the rows read.
+fn pending(h: &Harness, r: usize, c: usize) -> Option<Value> {
+    match &h.app.tab().results {
+        Results::Rows(rs) => rs.edit.batch.value(r, c).cloned(),
+        _ => None,
+    }
+}
+
+/// The cells of the new rows, in order.
+fn drafts(h: &Harness) -> Vec<Vec<Value>> {
+    match &h.app.tab().results {
+        Results::Rows(rs) => rs.edit.batch.drafts().iter().map(|d| d.cells.clone()).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn text(v: &str) -> Value {
+    Value::Text(v.to_string())
+}
+
+/// With `copy_format = "insert"` and the key column hidden, `y` and `Y` keep the cells the grid
+/// shows for `g p`: one cell alone (its value copied), a block and a row without the hidden
+/// key, though their SQL INSERT names it. `g p` then lays them over the shown columns from the
+/// cursor, the hidden key never shifted into a shown column.
+#[test]
+fn a_copy_keeps_the_shown_cells_for_g_p_while_its_sql_names_the_hidden_key() {
+    let mut h = editable();
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.command("set copy_format=insert");
+    h.app.transient = None;
+    at(&mut h, 0, 0);
+    h.keys("C");
+    assert_eq!(hidden(&h), [true, false, false]);
+    // One cell: its value, kept alone.
+    at(&mut h, 0, 1);
+    h.keys("y");
+    assert_eq!(clip.last().as_deref(), Some("a@x"));
+    at(&mut h, 1, 1);
+    h.keys("gp");
+    assert_eq!(pending(&h, 1, 1), Some(text("a@x")));
+    assert_eq!(pending(&h, 1, 2), None, "one cell pasted, nothing in the next column");
+    h.keys("u");
+    // A block: the SQL names the key, the shown cells are kept.
+    at(&mut h, 0, 1);
+    h.keys("vjly");
+    let sql = clip.last().unwrap_or_default();
+    assert!(sql.contains(r#"("id", "email", "nickname")"#), "{sql}");
+    at(&mut h, 2, 1);
+    h.keys("gp");
+    assert_eq!(pending(&h, 2, 1), Some(text("a@x")));
+    assert_eq!(pending(&h, 2, 2), Some(text("ann")));
+    assert_eq!(drafts(&h), vec![vec![Value::Default, text("b@x"), Value::Null]]);
+    h.keys("u");
+    // A row: the same.
+    at(&mut h, 0, 2);
+    h.keys("Y");
+    let sql = clip.last().unwrap_or_default();
+    assert!(sql.contains(r#"("id", "email", "nickname")"#), "{sql}");
+    at(&mut h, 2, 1);
+    h.keys("gp");
+    assert_eq!(pending(&h, 2, 1), Some(text("a@x")));
+    assert_eq!(pending(&h, 2, 2), Some(text("ann")));
+    assert!(drafts(&h).is_empty(), "one row over one row");
 }
