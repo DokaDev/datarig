@@ -838,3 +838,23 @@ fn a_row_selection_over_one_shown_column_filters_by_it() {
         clear(&mut h);
     }
 }
+
+/// `F` on a cell, and the grid menu's entry after a right click on a cell (the cursor on
+/// another column before), open the column menu of that cell's column.
+#[test]
+fn the_column_menu_from_a_cell_is_of_that_cells_column() {
+    let mut h = users();
+    at(&mut h, 1, 2);
+    h.keys("F");
+    assert!(menu_open(&h));
+    assert_eq!(lines(&h)[0], "# score");
+    h.key(KeyCode::Esc);
+    at(&mut h, 0, 0);
+    h.draw(120, 30);
+    let g = h.app.tab().grid.clone();
+    let x = g.hit_cols.iter().find(|c| c.2 == 3).unwrap().0 + 1;
+    h.mouse(MouseEventKind::Down(MouseButton::Right), x, g.data_y + 2);
+    h.menu_pick("Table → this column's menu (sort, filter, hide)");
+    assert_eq!(lines(&h)[0], "# data");
+    assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (2, 3));
+}
