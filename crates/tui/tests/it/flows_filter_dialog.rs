@@ -604,3 +604,29 @@ fn many_conditions_scroll_to_the_one_with_the_keys() {
     assert!(focused_row(&s).is_some_and(|l| l.contains("+ add condition")), "{s}");
     assert_screen!("filter_dialog_many_sql_en_80x24", Lang::En, h.draw(80, 24));
 }
+
+#[test]
+fn the_dialog_takes_nothing_of_the_grid_under_it() {
+    use ratatui::style::Modifier;
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    // NULL names: the grid writes NULL in italics.
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    let columns = Some(vec![meta("id", "int8", true, false), meta("name", "text", false, false)]);
+    let rows = (0..20).map(|i| vec![Some(i.to_string()), None]).collect();
+    h.tab_db(index, DbEvent::Page { id, columns, rows, more: false, elapsed: Duration::from_millis(2) });
+    h.key(KeyCode::Tab);
+    for (w, ht) in [(80, 24), (120, 34)] {
+        let t = h.draw(w, ht);
+        let italic =
+            |b: &ratatui::buffer::Buffer| b.content().iter().filter(|c| c.modifier.contains(Modifier::ITALIC)).count();
+        assert!(italic(t.backend().buffer()) > 0, "the grid shows its NULLs in italics");
+        h.key(KeyCode::Char('f'));
+        assert!(open(&h));
+        let t = h.draw(w, ht);
+        assert_eq!(italic(t.backend().buffer()), 0, "no italics come through the dialog at {w}x{ht}");
+        h.key(KeyCode::Esc);
+        assert!(!open(&h));
+    }
+}

@@ -82,12 +82,14 @@ fn key(app: &App, a: crate::app::filter_dialog::DialogAction) -> String {
     app.key_for(Action::FilterDialog(a), Ctx::FilterDialog)
 }
 
-/// Fills `r` with `style`.
+/// Fills `r` with `style`, nothing of what was drawn under it kept (a style only adds
+/// modifiers, so the grid's italics would show through).
 fn fill(buf: &mut Buffer, r: Rect, style: Style) {
-    buf.set_style(r, style);
     for y in r.y..r.y + r.height {
         for x in r.x..r.x + r.width {
-            buf[(x, y)].set_symbol(" ");
+            let cell = &mut buf[(x, y)];
+            cell.reset();
+            cell.set_style(style);
         }
     }
 }
