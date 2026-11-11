@@ -180,8 +180,8 @@ fn each_entry_sends_its_condition_and_puts_it_in_the_line() {
         (0, 1, "contains 'it's' (case-insensitive)", "name ILIKE '%it''s%' ESCAPE '!'"),
         (2, 1, "starts with '50%_off'", "name LIKE '50!%!_off%' ESCAPE '!'"),
         (0, 2, "= 1.5", "score = 1.5"),
-        (0, 3, r"= '\x01ab'", r"data = E'\\x01ab'::bytea"),
-        (2, 3, r"> '\x00'", r"data > E'\\x00'::bytea"),
+        (0, 3, r"= '\x01ab'", r"data = E'\\x01ab'::pg_catalog.bytea"),
+        (2, 3, r"> '\x00'", r"data > E'\\x00'::pg_catalog.bytea"),
         (0, 5, ">= '2026-11-10 09:30:00+09'", "born >= '2026-11-10 09:30:00+09'"),
         (1, 1, "IS NULL", "name IS NULL"),
         (1, 4, "IS NOT NULL", "doc IS NOT NULL"),
@@ -659,6 +659,7 @@ fn mysql(charset: &str, columns: Vec<ColumnMeta>, rows: Vec<Vec<Option<String>>>
     open_users(&mut h);
     let index = h.app.tabs.active_index();
     h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MySql(MySqlMode::default()))));
+    h.tab_db(index, DbEvent::Connected);
     h.tab_db(index, DbEvent::SessionValues(SessionValues { time_zone: "+00:00".into(), charset: charset.into() }));
     page_with(&mut h, columns, rows);
     h.sent();

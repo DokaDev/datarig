@@ -357,6 +357,7 @@ fn a_sort_declined_for_locking_reads_leaves_the_line() {
     open_users(&mut h);
     let index = h.app.tabs.active_index();
     h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MySql(MySqlMode::default()))));
+    h.tab_db(index, DbEvent::Connected);
     answer(&mut h);
     h.sent();
     h.key(KeyCode::Tab);

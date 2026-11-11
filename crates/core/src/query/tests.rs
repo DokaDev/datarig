@@ -620,7 +620,7 @@ fn render_values_of_a_cell_per_type_and_dialect() {
     );
     // Bytes: never text.
     let b = || Value::Bytes(vec![0, 0x27, 0x5c, 0xff]);
-    assert_eq!(render_pg(&cmp("data", CmpOp::Eq, b())), r"data = E'\\x00275cff'::bytea");
+    assert_eq!(render_pg(&cmp("data", CmpOp::Eq, b())), r"data = E'\\x00275cff'::pg_catalog.bytea");
     assert_eq!(render_my(&cmp("data", CmpOp::Ne, b()), true), "data <> X'00275CFF'");
     assert_eq!(render_my(&cmp("data", CmpOp::Ne, b()), false), "data <> X'00275CFF'");
     // NULL-safe not equal keeps the NULL rows; a NULL cell is `IS NULL`.
