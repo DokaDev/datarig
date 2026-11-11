@@ -118,7 +118,10 @@ impl History {
     /// texts blank, or one of them or of the table's names longer than [`ENTRY_MAX_BYTES`],
     /// keeps nothing.
     pub fn record(&mut self, key: TableKey, filter: &str, order: &str, now: i64) -> bool {
-        let (filter, order) = (filter.trim(), order.trim());
+        // Only ASCII blanks: PostgreSQL reads a space outside ASCII as part of a name, so
+        // trimming one would keep another condition than the one that ran.
+        let blank = |c: char| c.is_ascii_whitespace();
+        let (filter, order) = (filter.trim_matches(blank), order.trim_matches(blank));
         let names = [filter, order, &key.database, &key.schema, &key.table];
         if (filter.is_empty() && order.is_empty()) || names.iter().any(|t| t.len() > ENTRY_MAX_BYTES) {
             return false;

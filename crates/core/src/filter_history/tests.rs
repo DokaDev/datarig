@@ -135,6 +135,15 @@ fn the_same_texts_move_to_the_front_and_another_order_is_another_entry() {
     assert_eq!(e[2].filter, "b = 2");
 }
 
+/// Only ASCII blanks are left out around a text: a space outside ASCII can be part of a name.
+#[test]
+fn a_space_outside_ascii_stays_in_what_is_kept() {
+    let mut h = History::default();
+    assert!(h.record(key("t"), " \t active\u{a0} ", " name\u{a0}\n", 1));
+    let e = &h.entries(&key("t"))[0];
+    assert_eq!((e.filter.as_str(), e.order.as_str()), ("active\u{a0}", "name\u{a0}"));
+}
+
 #[test]
 fn blank_and_overlong_texts_are_not_kept() {
     let mut h = History::default();
