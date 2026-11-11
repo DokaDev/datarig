@@ -5877,6 +5877,10 @@ async fn an_estimate_waits_for_no_transaction_and_keeps_the_next_ones_settings()
     let evs = c.run(4, &["SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"]).await;
     assert_eq!(isolation_of(&evs), Some(None), "{evs:?}");
     assert_eq!(estimate(&mut c, 5, &rows).await.0, Err(DbError::NextTransactionSet));
+    // A filtered table's count, with its time limit, is refused the same way.
+    let counted = format!("SELECT COUNT(*) FROM (\n{rows}\n) AS datarig_count");
+    let refused = count_within(&mut c, 13, &counted, Some(Duration::from_secs(30))).await.0;
+    assert_eq!(refused, Err(DbError::NextTransactionSet));
     c.ok(6, "START TRANSACTION").await;
     let evs = c.run(7, &["SELECT @@SESSION.transaction_isolation"]).await;
     assert!(!evs.is_empty());
