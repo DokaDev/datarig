@@ -291,12 +291,14 @@ fn a_bounded_read_stopped_by_the_server_is_told_apart_from_a_cancel_and_a_lock_w
         mysql_async::Error::Server(mysql_async::ServerError { code, message: "stopped".into(), state: "HY000".into() })
     };
     let limit = Some(Duration::from_secs(30));
-    assert_eq!(bounded_failure(&server(3024), limit), DbError::TimedOut(Duration::from_secs(30)));
-    assert_eq!(bounded_failure(&server(1969), limit), DbError::TimedOut(Duration::from_secs(30)));
-    assert_eq!(bounded_failure(&server(1317), limit), DbError::Cancelled);
-    assert!(matches!(bounded_failure(&server(1205), limit), DbError::LockTimeout(_)));
+    assert_eq!(bounded_failure(&server(3024), limit, false), DbError::TimedOut(Duration::from_secs(30)));
+    assert_eq!(bounded_failure(&server(1969), limit, true), DbError::TimedOut(Duration::from_secs(30)));
+    assert_eq!(bounded_failure(&server(1317), limit, true), DbError::Cancelled);
+    assert!(matches!(bounded_failure(&server(1205), limit, false), DbError::LockTimeout(_)));
+    // A kill the user did not ask for is the server's message.
+    assert!(matches!(bounded_failure(&server(1317), limit, false), DbError::Server(_)));
     // Without a limit of the app's, a server's own limit is its message.
-    assert!(matches!(bounded_failure(&server(3024), None), DbError::Server(_)));
+    assert!(matches!(bounded_failure(&server(3024), None, false), DbError::Server(_)));
 }
 
 /// MariaDB's question names the isolation variable its version has and reads the session's lock

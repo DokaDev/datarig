@@ -1955,6 +1955,7 @@ async fn asked_server(
     env.busy.store(true, Ordering::SeqCst);
     type Answer = (Option<String>, Option<String>, Option<String>, Option<String>);
     let answer = link.guard(Some(env.killer), conn.query_first::<Answer, _>(ask)).await?;
+    let cancelled = env.asked.asked();
     idle(env, link).await;
     Ok(match answer {
         Ok(Some((_, Some(view), _, _))) => Err(DbError::NotRepeatable(NotRepeatable::NotATable(view))),
@@ -1964,7 +1965,7 @@ async fn asked_server(
             lock: lock.and_then(|v| v.trim().parse().ok()),
         }),
         Ok(None) => Err(DbError::NotRepeatable(NotRepeatable::Unreadable)),
-        Err(e) => Err(failure(&e).0),
+        Err(e) => Err(own_failure(&e, cancelled)),
     })
 }
 
@@ -2036,15 +2037,25 @@ const QUERY_TIMEOUT: u16 = 3024;
 /// ER_STATEMENT_TIMEOUT: MariaDB stopped a statement at its `max_statement_time`.
 const STATEMENT_TIMEOUT: u16 = 1969;
 
+/// A failed statement of a read of the app's own as the UI hears it: as [`failure`] says it, but
+/// `KILL QUERY` is a cancel only when the user had asked for one for this run when the answer
+/// came (`cancelled`). Someone else's is the server's words.
+fn own_failure(e: &mysql_async::Error, cancelled: bool) -> DbError {
+    match failure(e) {
+        (_, true) if !cancelled => my_error(e),
+        (why, _) => why,
+    }
+}
+
 /// A failed read of the app's own with time limit `applied` ([`bounded_select`]): the server
-/// stopping it there is [`DbError::TimedOut`]; anything else as [`failure`] says it (`KILL
-/// QUERY`, the user's cancel, is `Cancelled`; a lock wait past its limit `LockTimeout`).
-fn bounded_failure(e: &mysql_async::Error, applied: Option<Duration>) -> DbError {
+/// stopping it there is [`DbError::TimedOut`]; anything else as [`own_failure`] says it (a lock
+/// wait past its limit `LockTimeout`).
+fn bounded_failure(e: &mysql_async::Error, applied: Option<Duration>, cancelled: bool) -> DbError {
     match (e, applied) {
         (mysql_async::Error::Server(s), Some(d)) if s.code == QUERY_TIMEOUT || s.code == STATEMENT_TIMEOUT => {
             DbError::TimedOut(d)
         }
-        (e, _) => failure(e).0,
+        (e, _) => own_failure(e, cancelled),
     }
 }
 
@@ -2373,7 +2384,7 @@ async fn read_own(
         if e.is_fatal() {
             return Err(Stop::Lost(my_error(&e)));
         }
-        return Ok(Err(failure(&e).0));
+        return Ok(Err(own_failure(&e, env.asked.asked())));
     }
     env.busy.store(true, Ordering::SeqCst);
     // Cancelled while it was admitted or set up, when nothing ran for the kill to stop: the read
@@ -2383,6 +2394,8 @@ async fn read_own(
         true => Ok(None),
         false => link.guard(Some(env.killer), conn.query_first::<String, _>(text)).await?,
     };
+    // Whether the user had asked when the answer came: what is done after it changes nothing.
+    let cancelled = env.asked.asked();
     idle(env, link).await;
     if own && !link.tainted() && !read.as_ref().is_err_and(|e| e.is_fatal()) {
         // Nothing to keep: a read.
@@ -2401,7 +2414,7 @@ async fn read_own(
             if let Some(error) = after(conn, link, env, s, "", false, ask, false).await? {
                 return Err(Stop::Lost(error));
             }
-            Err(bounded_failure(&e, applied))
+            Err(bounded_failure(&e, applied, cancelled))
         }
         // Read: what it left in the session too (without autocommit it opened a transaction,
         // which runs in the level the next one was to run in).

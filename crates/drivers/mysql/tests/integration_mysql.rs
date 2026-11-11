@@ -6162,3 +6162,60 @@ async fn a_cancel_while_a_read_is_admitted_stops_it_unsent() {
     c.session.send(count(23));
     assert_eq!(read_answer(&mut c).await, Ok(40), "the session goes on");
 }
+
+/// Someone else's `KILL QUERY` of a count or an estimate is not the user's cancel: the server's
+/// words are the answer, also when the user cancels while the read is being cleaned up after.
+#[tokio::test(flavor = "multi_thread")]
+async fn someone_elses_kill_of_a_read_is_not_the_users_cancel() {
+    let test = "someone_elses_kill_of_a_read_is_not_the_users_cancel";
+    let Some((url, admin)) = urls(test) else { return };
+    let _end = EndSessions { admin: admin.clone(), test };
+    let t = numbers(&admin, "otherkill", 50).await;
+    let Some((mut c, tap)) = tapped(&url, test).await else { return };
+    let evs = c.run(1, &["SELECT CONNECTION_ID()"]).await;
+    let session: u64 = page_of(&evs).1[0][0].as_deref().unwrap().parse().unwrap();
+    let rows = format!("SELECT * FROM {} WHERE (id > 10)", t.q());
+    let counted = format!("SELECT COUNT(*) FROM (\n{rows}\n) AS datarig_count");
+    let count = |id| DbCommand::Count { id, sql: counted.clone(), limit: Some(Duration::from_secs(30)) };
+    let plan = |id| DbCommand::Estimate { id, sql: rows.clone() };
+    let mut b = side(&url).await;
+    b.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
+    let mut a = side(&admin).await;
+    let waiting = format!(
+        "SELECT COUNT(*) FROM performance_schema.threads WHERE PROCESSLIST_ID = {session} \
+         AND PROCESSLIST_STATE LIKE '%metadata lock%'"
+    );
+    async fn kill_when_waiting(a: &mut mysql_async::Conn, waiting: &str, session: u64) {
+        let deadline = Instant::now() + Duration::from_millis(900);
+        while a.query_first::<u64, _>(waiting).await.unwrap() != Some(1) {
+            assert!(Instant::now() < deadline, "the read never waited for the lock");
+        }
+        a.query_drop(format!("KILL QUERY {session}")).await.unwrap();
+    }
+    let from_the_server =
+        |got: &Result<u64, DbError>| matches!(got, Err(DbError::Server(m)) if m.text.contains("1317"));
+
+    for (id, command) in [(2, count(2)), (3, plan(3))] {
+        c.session.send(command);
+        kill_when_waiting(&mut a, &waiting, session).await;
+        let got = read_answer(&mut c).await;
+        assert!(from_the_server(&got), "{id}: {got:?}");
+    }
+
+    // Without autocommit the read ends its transaction after it: the user cancels meanwhile.
+    c.ok(4, "SET SESSION autocommit = 0").await;
+    for (id, command) in [(5, count(5)), (6, plan(6))] {
+        tap.hold_after("ROLLBACK");
+        c.session.send(command);
+        kill_when_waiting(&mut a, &waiting, session).await;
+        until("the read was cleaned up after", || tap.held()).await;
+        c.session.cancel();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tap.release();
+        let got = read_answer(&mut c).await;
+        assert!(from_the_server(&got), "{id}: {got:?}");
+    }
+    b.query_drop("UNLOCK TABLES").await.unwrap();
+    b.disconnect().await.unwrap();
+    a.disconnect().await.unwrap();
+}
