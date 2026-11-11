@@ -19,6 +19,8 @@ pub enum DialogAction {
     ClearAll,
     /// Show or hide the statement (`Q`).
     Sql,
+    /// The server counts the selected column's values (`#`).
+    Count,
 }
 
 /// The term of `w` whose text holds byte `at.start` of the text sent ([`Where::text`]).
@@ -53,6 +55,7 @@ impl App {
                 d.draft.order.clear();
             }),
             DialogAction::Sql => self.filter_dialog_toggle_sql(),
+            DialogAction::Count => self.filter_dialog_count(),
         }
     }
 
@@ -145,13 +148,18 @@ impl App {
         }
     }
 
-    /// `Esc`: the open picker, the search or the statement closes; else the dialog, its draft
-    /// dropped (the tab's next run sends what is applied).
+    /// `Esc`: the open picker closes, a count of the values running is cancelled, the search
+    /// or the statement closes; else the dialog, its draft dropped (the tab's next run sends
+    /// what is applied).
     fn filter_dialog_cancel(&mut self) {
         let Some(d) = self.filter_dialog_mut() else { return };
         if d.picker.take().is_some() {
             return;
         }
+        if self.filter_dialog_cancel_count() {
+            return;
+        }
+        let Some(d) = self.filter_dialog_mut() else { return };
         if d.search.is_some() && d.focus == DialogFocus::Columns {
             let name = d.column().map(|c| c.name.clone());
             d.search = None;

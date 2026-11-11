@@ -164,8 +164,8 @@ pub(crate) fn admit(
         // instant in any session's zone, as the filter is run again from the history.
         ValueKind::TimestampTz if mysql => Value::Text(cell.into_owned()),
         ValueKind::Bytes => {
-            let bytes =
-                hex_bytes(v, if mysql { "0x" } else { "\\x" }).ok_or_else(|| refused(export::NotWhole::NotShownWhole))?;
+            let bytes = hex_bytes(v, if mysql { "0x" } else { "\\x" })
+                .ok_or_else(|| refused(export::NotWhole::NotShownWhole))?;
             if bytes.len() > MAX_BYTES {
                 return Err(NotAdmitted::TooBig);
             }

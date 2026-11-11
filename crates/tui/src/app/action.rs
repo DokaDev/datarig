@@ -1044,6 +1044,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::FilterDialog(FD::Undo), "filter.undo", Label::ActionFilterUndo, filter_dialog),
     act(Action::FilterDialog(FD::ClearAll), "filter.clear_all", Label::ActionFilterClearAll, filter_dialog),
     act(Action::FilterDialog(FD::Sql), "filter.sql", Label::ActionFilterSql, filter_dialog),
+    act(Action::FilterDialog(FD::Count), "filter.count", Label::ActionFilterCount, filter_dialog),
     act(Action::ExplainAsPlan, "results.view_as_plan", Label::ActionResultsViewAsPlan, text_plan_shown),
     mv(Action::Plan(P::Down), "plan.down", Label::ActionPlanDown, plan_focused),
     mv(Action::Plan(P::Up), "plan.up", Label::ActionPlanUp, plan_focused),

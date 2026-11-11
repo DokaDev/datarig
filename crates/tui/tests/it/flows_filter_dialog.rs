@@ -356,8 +356,10 @@ fn the_dialog_screens() {
     h.type_text("4");
     assert_screen!("filter_dialog_typing_en_80x24", Lang::En, h.draw(80, 24));
     assert_screen!("filter_dialog_typing_en_120x34", Lang::En, h.draw(120, 34));
-    h.key(KeyCode::Down);
-    h.key(KeyCode::Down);
+    // Past `+ add condition` and the column's three values, the sort line.
+    for _ in 0..5 {
+        h.key(KeyCode::Down);
+    }
     h.key(KeyCode::Right);
     assert_screen!("filter_dialog_sort_en_80x24", Lang::En, h.draw(80, 24));
     assert_screen!("filter_dialog_sort_en_120x34", Lang::En, h.draw(120, 34));

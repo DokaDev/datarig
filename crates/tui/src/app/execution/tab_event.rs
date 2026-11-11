@@ -594,8 +594,8 @@ impl App {
                 }
                 return self.on_counted(id, qid, result, snapshot);
             }
-            // A count of a column's values: nothing asks for one yet, so it is no one's answer.
-            DbEvent::GroupCounted { .. } => return,
+            // A count of a column's values the filter dialog asked for.
+            DbEvent::GroupCounted { id: qid, result, .. } => return self.on_group_counted(id, qid, result),
             // The planner's estimate the user asked for.
             DbEvent::Estimated { id: qid, result } => return self.on_estimated(id, qid, result),
             // A statement of an export.
@@ -1118,6 +1118,10 @@ impl App {
         // The server answered the tab's query with its rows: it ran.
         if let Some(q) = landed {
             self.filter_history_record(id, &q);
+        }
+        // The rows of a table tab's query: its columns' values are remembered.
+        if rows_for == Some(None) {
+            self.remember_values(id);
         }
         match idle_end {
             // Said where the user looks, from another tab too.

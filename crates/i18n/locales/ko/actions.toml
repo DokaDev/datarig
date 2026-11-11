@@ -230,6 +230,7 @@
 "action.filter.undo" = "필터 대화 상자 → 한 단계 되돌리기"
 "action.filter.clear_all" = "필터 대화 상자 → 모든 조건과 정렬 지우기"
 "action.filter.sql" = "필터 대화 상자 → 문장 보이기 또는 숨기기"
+"action.filter.count" = "필터 대화 상자 → 열의 값을 정확히 세기"
 "action.tx.commit" = "열린 트랜잭션 커밋"
 "action.tx.rollback" = "열린 트랜잭션 롤백"
 "action.tx.summary" = "열린 트랜잭션이 한 일"

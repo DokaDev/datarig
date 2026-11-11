@@ -1114,6 +1114,8 @@ impl App {
     /// again: the next run asks for them (until then no order is taken for total), and an
     /// answer on its way is dropped.
     pub(super) fn forget_order_keys(&mut self, profile: ProfileId, database: Option<Option<&str>>) {
+        // What earlier loads showed of the tables' values goes with them.
+        self.value_memory.forget(profile, database);
         for t in self.tabs.iter_mut().filter(|t| t.profile == Some(profile)) {
             if database.is_some_and(|db| t.context.database.as_deref() != db) {
                 continue;

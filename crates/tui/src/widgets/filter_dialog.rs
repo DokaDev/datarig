@@ -12,6 +12,7 @@
 use crate::app::App;
 use crate::app::action::Action;
 use crate::app::filter_dialog::draft::{Op, Term};
+use crate::app::filter_dialog::list::{Heading, NotTicked, Source, ValuesView};
 use crate::app::filter_dialog::{
     ColumnSource, DialogAction, DialogFocus, DialogHits, FilterDialog, Mark, op_off_label,
 };
@@ -91,6 +92,8 @@ fn fill(buf: &mut Buffer, r: Rect, style: Style) {
 /// Draw the filter dialog over `area` (the whole screen); returns the hardware cursor (the
 /// focused text field's).
 pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    // The selected column's values as things are now.
+    let view = app.filter_dialog_list();
     let d = app.filter_dialog()?;
     if area.width < 30 || area.height < 10 {
         return None;
@@ -254,6 +257,7 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
     let pane_rows_y = body.y;
     let sort_y = sep_y - 1;
     let mut picker_at = None;
+    let mut values_scroll = d.values_scroll;
     if let Some(c) = d.column() {
         let hx = px
             + put(
@@ -365,6 +369,12 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
                 if d.focus == DialogFocus::Add { focus_style } else { Style::new().fg(th.fg) },
             );
             hits.add = Rect::new(px + 2, y, aw, 1);
+        }
+        // The values, a blank line under `+ add condition`, up to the line above the sort line.
+        if let Some(v) = &view
+            && y + 3 < sort_y
+        {
+            values_scroll = draw_values(app, d, v, (px, right), (y + 2, sort_y - 1), buf, &mut hits);
         }
         // The sort line, on the pane's last row.
         if d.focus == DialogFocus::Sort {
@@ -615,7 +625,7 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
         Some(n) => {
             put(buf, x0, hy, &n.render(i18n), hint_w, Style::new().fg(level_color(n.level)));
         }
-        None => draw_hints(app, d, x0, hy, hint_w, buf),
+        None => draw_hints(app, d, view.as_ref(), x0, hy, hint_w, buf),
     }
 
     // The operator picker, opaque, over the pane.
@@ -667,12 +677,186 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
     if let Some(d) = app.filter_dialog_mut() {
         d.hits = hits;
         d.scroll = scroll;
+        d.values_scroll = values_scroll;
     }
     cursor.filter(|_| top)
 }
 
+/// The values of view `v` from row `rows.0` (its heading) to the row before `rows.1`, between
+/// `cols.0` and `cols.1`: the heading with what they are and `# count exactly` on its right,
+/// then one value a line (tick box, value, rows, a bar or where it comes from), then what is
+/// not listed. Returns the first value shown (the focused one kept in view).
+fn draw_values(
+    app: &App,
+    d: &FilterDialog,
+    v: &ValuesView,
+    (px, right): (u16, u16),
+    (y, end): (u16, u16),
+    buf: &mut Buffer,
+    hits: &mut DialogHits,
+) -> usize {
+    let th = theme::cur();
+    let i18n = &app.i18n;
+    let muted = Style::new().fg(th.fg_muted);
+    let bold = Style::new().fg(th.fg).add_modifier(Modifier::BOLD);
+    let focus_style = Style::new().fg(th.fg).patch(th.selection);
+    let pw = right.saturating_sub(px);
+    let focused = match d.focus {
+        DialogFocus::Values(i) => Some(i),
+        _ => None,
+    };
+    // The heading.
+    let title = i18n.label(Label::TableDialogValues).to_string();
+    let tw = put(buf, px, y, &title, usize::from(pw), if focused.is_some() { bold.fg(th.accent) } else { bold });
+    let count_key = key(app, DialogAction::Count);
+    let (action, action_style) = match v.counting {
+        true => (i18n.label(Label::TableDialogValuesCounting).to_string(), Style::new().fg(th.accent)),
+        false if pw < 60 => (i18n.msg(&Msg::TableDialogCountExactShort { key: count_key }).to_string(), muted),
+        false => (i18n.msg(&Msg::TableDialogCountExactly { key: count_key }).to_string(), muted),
+    };
+    let aw = width(&action) as u16;
+    let ax = right.saturating_sub(aw);
+    put(buf, ax, y, &action, usize::from(aw), action_style);
+    hits.count = Rect::new(ax, y, aw, 1);
+    let (heading, heading_style) = match (&v.narrow, &v.heading) {
+        (Some(text), _) => (i18n.msg(&Msg::TableDialogValuesContaining { text: text.clone() }).to_string(), muted),
+        (None, Heading::Nothing(l)) => (i18n.label(*l).to_string(), muted),
+        (None, Heading::Loaded { rows, earlier: false }) => {
+            (i18n.msg(&Msg::TableDialogValuesLoaded { count: *rows }).to_string(), muted)
+        }
+        (None, Heading::Loaded { rows, earlier: true }) => {
+            (i18n.msg(&Msg::TableDialogValuesLoadedEarlier { count: *rows }).to_string(), muted)
+        }
+        (None, Heading::Exact { others: true }) => (i18n.label(Label::TableDialogValuesExact).to_string(), muted),
+        (None, Heading::Exact { others: false }) => (i18n.label(Label::TableDialogValuesExactAll).to_string(), muted),
+        (None, Heading::EarlierCount { others }) => {
+            let l = if *others {
+                Label::TableDialogValuesEarlierCount
+            } else {
+                Label::TableDialogValuesEarlierCountSession
+            };
+            (i18n.label(l).to_string(), Style::new().fg(th.warning))
+        }
+    };
+    let hx = px + tw + 2;
+    // What is not listed, under the values.
+    let mut notes: Vec<(String, Style)> = Vec::new();
+    if let Some((lo, hi, n)) = &v.range {
+        let range = i18n.msg(&Msg::TableDialogValuesRange { min: lo.clone(), max: hi.clone(), count: *n });
+        notes.push((range.to_string(), Style::new().fg(th.fg)));
+        notes.push((i18n.label(Label::TableDialogValuesMostlyDistinct).to_string(), muted));
+    }
+    if v.items.is_empty() && v.range.is_none() && v.narrow.is_some() {
+        notes.push((i18n.label(Label::TableDialogValuesNoMatch).to_string(), muted));
+    }
+    if v.long > 0 {
+        notes.push((i18n.msg(&Msg::TableDialogValuesLongRows { count: v.long }).to_string(), muted));
+    }
+    if v.more {
+        notes.push((i18n.label(Label::TableDialogValuesMore).to_string(), muted));
+    }
+    if v.kept_expr {
+        notes.push((i18n.label(Label::TableDialogValuesKeptExpr).to_string(), muted));
+    }
+    let rows = usize::from(end.saturating_sub(y + 1));
+    let shown = rows.saturating_sub(notes.len()).max(rows.min(1));
+    let n = v.items.len();
+    let mut scroll = d.values_scroll.min(n.saturating_sub(shown));
+    if let Some(i) = focused {
+        if i < scroll {
+            scroll = i;
+        } else if shown > 0 && i >= scroll + shown {
+            scroll = i + 1 - shown;
+        }
+    }
+    // Where the list is when it does not fit: `3-9 of 14`.
+    let mut heading_end = ax.saturating_sub(2);
+    if n > shown && shown > 0 {
+        let cue = i18n
+            .msg(&Msg::TableDialogValuesWindow {
+                from: (scroll + 1).to_string(),
+                to: (scroll + shown).min(n).to_string(),
+                total: n.to_string(),
+            })
+            .to_string();
+        let cw = width(&cue) as u16;
+        if heading_end > hx + cw + 2 {
+            put(buf, heading_end - cw, y, &cue, usize::from(cw), muted);
+            heading_end -= cw + 2;
+        }
+    }
+    put(buf, hx, y, &heading, usize::from(heading_end.saturating_sub(hx)), heading_style);
+    // One value a line: the box at `px + 2`, the value, the rows right-aligned, then a bar.
+    let counts: Vec<String> = v
+        .items
+        .iter()
+        .map(|it| {
+            let n = datarig_i18n::fmt_count(it.rows);
+            if it.source == Source::Exact { n } else { format!("~{n}") }
+        })
+        .collect();
+    let cw = counts.iter().skip(scroll).take(shown).map(|c| width(c)).max().unwrap_or(0) as u16;
+    let name_w = (pw.saturating_sub(6) * 45 / 100).max(8);
+    let count_end = (px + 6 + name_w + 1 + cw).min(right);
+    let bar_x = count_end + 2;
+    let bar_w = right.saturating_sub(bar_x + 1).min(12);
+    let max_rows = v.items.iter().filter(|it| it.source != Source::Earlier).map(|it| it.rows).max().unwrap_or(1).max(1);
+    for (k, it) in v.items.iter().enumerate().skip(scroll).take(shown) {
+        let ly = y + 1 + (k - scroll) as u16;
+        let line = Rect::new(px + 2, ly, right.saturating_sub(px + 3), 1);
+        let foc = focused == Some(k);
+        if foc {
+            put(buf, px, ly, "\u{25b8}", 1, Style::new().fg(th.accent));
+            buf.set_style(line, focus_style);
+        }
+        let on = it.tick.as_ref().is_ok_and(|val| v.ticked.contains(val));
+        let base = if foc { focus_style } else { Style::new().fg(th.fg) };
+        let box_style = match (on, it.tick.is_ok()) {
+            (true, _) => base.fg(th.accent).add_modifier(Modifier::BOLD),
+            (false, false) => base.fg(th.fg_dim),
+            (false, true) => base,
+        };
+        put(buf, px + 2, ly, if on { "[x]" } else { "[ ]" }, 3, box_style);
+        let (text, style) = match (&it.value, &it.tick) {
+            (Some(s), _) => (crate::text::escape_controls(s), base),
+            (None, Err(NotTicked::Long(bytes))) => {
+                (i18n.msg(&Msg::TableDialogValuesLong { bytes: bytes.to_string() }).to_string(), base.fg(th.fg_muted))
+            }
+            (None, _) => ("NULL".to_string(), base.fg(th.fg_muted)),
+        };
+        put(buf, px + 6, ly, &text, usize::from(name_w), style);
+        let c = &counts[k];
+        let w = width(c) as u16;
+        put(buf, count_end.saturating_sub(w), ly, c, usize::from(w), base.fg(th.fg_muted));
+        let mark = match (&it.source, &it.tick) {
+            (Source::Earlier, _) => Some(i18n.label(Label::TableDialogValuesEarlierLoad).to_string()),
+            (_, Err(NotTicked::Prefix)) => Some(i18n.label(Label::TableDialogValuesPrefix).to_string()),
+            _ => None,
+        };
+        match mark {
+            Some(m) => {
+                put(buf, bar_x, ly, &m, usize::from(right.saturating_sub(bar_x + 1)), base.fg(th.fg_muted));
+            }
+            None if bar_w > 0 => {
+                let len = ((it.rows * u64::from(bar_w)).div_ceil(max_rows)).clamp(1, u64::from(bar_w)) as usize;
+                put(buf, bar_x, ly, &"\u{2584}".repeat(len), len, base.fg(th.fg_dim));
+            }
+            None => {}
+        }
+        hits.items.push((line, k));
+    }
+    for (i, (text, style)) in notes.iter().enumerate() {
+        let ny = y + 1 + (n.saturating_sub(scroll).min(shown) + i) as u16;
+        if ny >= end {
+            break;
+        }
+        put(buf, px + 2, ny, text, usize::from(pw.saturating_sub(2)), *style);
+    }
+    scroll
+}
+
 /// The keys of the focused part of the dialog, at most five, in the hint line.
-fn draw_hints(app: &App, d: &FilterDialog, x: u16, y: u16, w: usize, buf: &mut Buffer) {
+fn draw_hints(app: &App, d: &FilterDialog, view: Option<&ValuesView>, x: u16, y: u16, w: usize, buf: &mut Buffer) {
     let th = theme::cur();
     let i18n = &app.i18n;
     let l = |k: &str, label: Label| (k.to_string(), i18n.label(label).to_string());
@@ -702,12 +886,32 @@ fn draw_hints(app: &App, d: &FilterDialog, x: u16, y: u16, w: usize, buf: &mut B
             (undo, i18n.label(Label::TableDialogHintUndo).to_string()),
             l("Tab", Label::TableDialogHintNextArea),
         ],
+        DialogFocus::Value(..) if d.listed > 0 => vec![
+            l("\u{2193}", Label::TableDialogHintValues),
+            l("\u{2190}", Label::TableDialogHintOperator),
+            (key(app, DialogAction::Undo), i18n.label(Label::TableDialogHintUndo).to_string()),
+            l("Tab", Label::TableDialogHintNextArea),
+        ],
         DialogFocus::Value(..) => vec![
             l("\u{2190}", Label::TableDialogHintOperator),
             l("\u{2191}\u{2193}", Label::TableDialogHintLines),
             (key(app, DialogAction::Undo), i18n.label(Label::TableDialogHintUndo).to_string()),
             l("Tab", Label::TableDialogHintNextArea),
         ],
+        DialogFocus::Values(i) => {
+            // A value that is not ticked says why instead.
+            if let Some(Err(why)) = view.and_then(|v| v.items.get(i)).map(|it| &it.tick) {
+                let n = app.not_ticked_notice(why);
+                put(buf, x, y, &n.render(i18n), w, Style::new().fg(level_color(n.level)));
+                return;
+            }
+            vec![
+                l("Space", Label::TableDialogHintTick),
+                (key(app, DialogAction::Count), i18n.label(Label::TableDialogHintCount).to_string()),
+                (undo, i18n.label(Label::TableDialogHintUndo).to_string()),
+                l("Tab", Label::TableDialogHintNextArea),
+            ]
+        }
         DialogFocus::Add => vec![
             l("Space", Label::TableDialogHintAdd),
             l("\u{2191}\u{2193}", Label::TableDialogHintLines),

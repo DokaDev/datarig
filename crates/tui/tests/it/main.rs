@@ -40,6 +40,7 @@ mod flows_external;
 mod flows_filter_dialog;
 mod flows_filter_feedback;
 mod flows_filter_history;
+mod flows_filter_values;
 mod flows_folder_pick;
 mod flows_form_discard;
 mod flows_grid;

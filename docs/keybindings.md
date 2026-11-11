@@ -642,6 +642,7 @@ The filter and sort dialog of a table tab (`f` or `Space r f` on the grid's colu
 | `u` | `filter.undo` | Filter dialog → undo a step |  |
 | `X` | `filter.clear_all` | Filter dialog → clear every condition and the order |  |
 | `Q` | `filter.sql` | Filter dialog → show or hide the statement |  |
+| `#` | `filter.count` | Filter dialog → count the column's values exactly |  |
 | `Ctrl+R` | `table.filter.history` | Table → earlier filters of this table |  |
 
 Reserved (filter dialog): `Tab` `Shift+Tab` `Up` `Down` `Left` `Right` `Home` `End` `j` `k` `h` `l` `g` `G` `s` `/` `Space` `x` `Delete` `<` `>`

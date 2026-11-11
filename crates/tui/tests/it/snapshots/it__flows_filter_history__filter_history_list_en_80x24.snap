@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/it/flows_filter_history.rs
-assertion_line: 706
 expression: backend
 ---
 "╭─ Filter and sort · shop.users ─────────────────────────────── 3 rows loaded ─╮"
@@ -10,7 +9,7 @@ expression: backend
 "│   ╭ Earlier filters of this table ───────────────────────────────────────╮ × │"
 "│   │ › type to filter                                                     │   │"
 "│   │                                                                      │   │"
-"│   │ id > 1                            ORDER BY name DESC, id ASC · just… │   │"
+"│   │ id > 1                            ORDER BY name DESC, id ASC · just… │ct │"
 "│   │ status = 'done' AND amount > 15…  ORDER BY name DESC, id ASC · just… │   │"
 "│   │ status = 'done' AND amount > 15…  just now                           │   │"
 "│   │──────────────────────────────────────────────────────────────────────│   │"

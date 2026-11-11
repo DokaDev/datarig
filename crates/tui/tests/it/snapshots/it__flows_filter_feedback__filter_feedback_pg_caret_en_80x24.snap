@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/it/flows_filter_feedback.rs
-assertion_line: 125
 expression: backend
 ---
 "╭─ Filter and sort · shop.users ─────────────────────────────── 3 rows loaded ─╮"
@@ -9,10 +8,10 @@ expression: backend
 "│▸    id                   │ Filter                                            │"
 "│     name           =     │   + add condition                                 │"
 "│                          │                                                   │"
-"│                          │                                                   │"
-"│                          │                                                   │"
-"│                          │                                                   │"
-"│                          │                                                   │"
+"│                          │ Values  ~ count in the 3 loaded rows      # exact │"
+"│                          │   [ ] 0                   ~1  ▄▄▄▄▄▄▄▄▄▄▄▄        │"
+"│                          │   [ ] 1                   ~1  ▄▄▄▄▄▄▄▄▄▄▄▄        │"
+"│                          │   [ ] 2                   ~1  ▄▄▄▄▄▄▄▄▄▄▄▄        │"
 "│                          │                                                   │"
 "│                          │                                                   │"
 "│                          │                                                   │"

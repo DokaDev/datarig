@@ -696,6 +696,8 @@ pub struct App {
     pub tips: tips::TipState,
     /// The filters and orders table tabs ran, per table ([`filter_history`]).
     filter_history: filter_history::FilterHistoryState,
+    /// The values loads of tables showed in this session, for the filter dialog's lists.
+    value_memory: filter_dialog::values::Memory,
     /// What's new does not show by itself at launch, nor is anything written for it (the tests
     /// of other screens set it; `:whatsnew` still works).
     pub whats_new_paused: bool,
@@ -891,6 +893,7 @@ impl App {
             pointer_on: None,
             tips: tips::TipState::default(),
             filter_history: Default::default(),
+            value_memory: Default::default(),
             whats_new_paused: false,
             updates: updates::Updates::default(),
             pending_context: None,

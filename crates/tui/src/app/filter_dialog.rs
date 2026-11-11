@@ -8,19 +8,25 @@
 //! apply was told. The keys are in [`keys`], applying, undoing and closing in [`apply`].
 //!
 //! The dialog is modal and covers the whole screen, the key bar included (it has its own hint
-//! line). Applying keeps it open until the tab's statement is sent: a refusal of the app (the
+//! line). Under the selected column's conditions it lists the column's values ([`list`]):
+//! counted in the rows loaded, remembered from an earlier load of the table ([`values`]), or
+//! counted by the server on request ([`count`]); ticking one writes the column's condition.
+//! Applying keeps it open until the tab's statement is sent: a refusal of the app (the
 //! filter's check, the limit, a busy tab, a read-only profile) is said in its hint line and
 //! the part refused underlined; a question (functions to confirm, reads that lock rows, edits
 //! to leave) opens above it, and a no leaves it as it was. `Esc` closes it and drops the draft.
 
 mod apply;
+pub(crate) mod count;
 pub(crate) mod draft;
 mod keys;
+pub(crate) mod list;
+pub(crate) mod values;
 
 pub use apply::DialogAction;
 pub(crate) use keys::op_off_label;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use super::table_query::OrderKeysState;
 use super::*;
@@ -57,6 +63,8 @@ pub(crate) enum DialogFocus {
     Limit,
     /// The footer's `SQL` toggle.
     Sql,
+    /// The value at this place of the selected column's value list ([`list::ValuesView`]).
+    Values(usize),
 }
 
 /// Where the dialog's columns come from.
@@ -84,6 +92,10 @@ pub(crate) struct DialogHits {
     pub(crate) columns: Vec<(Rect, usize)>,
     pub(crate) ops: Vec<(Rect, usize)>,
     pub(crate) values: Vec<(Rect, usize, usize)>,
+    /// The values of the list: the line of each, its place in the list.
+    pub(crate) items: Vec<(Rect, usize)>,
+    /// `# count exactly`.
+    pub(crate) count: Rect,
     pub(crate) removes: Vec<(Rect, usize)>,
     pub(crate) add: Rect,
     pub(crate) sort: Vec<(Rect, Option<datarig_core::query::Dir>)>,
@@ -141,6 +153,20 @@ pub struct FilterDialog {
     /// The query applied, waiting for its statement to be sent (questions asked meanwhile).
     pub(crate) applying: Option<Query>,
     pub(crate) hits: DialogHits,
+    /// The value field typed in narrows the value list: its term and the text it looks for.
+    pub(crate) narrow: Option<(usize, String)>,
+    /// The first value of the list shown.
+    pub(crate) values_scroll: usize,
+    /// How many values the list of the selected column shows now (kept as the list is made).
+    pub(crate) listed: usize,
+    /// The column the list was made for last: another one starts its list from the top.
+    pub(crate) list_of: Option<String>,
+    /// The selected column's values counted in the rows loaded, for those rows.
+    pub(crate) tally: Option<(list::TallyOf, values::Tally)>,
+    /// The count of a column's values sent and not answered.
+    pub(crate) counting: Option<count::Counting>,
+    /// The counts of the server, by column.
+    pub(crate) exact: HashMap<String, count::Exact>,
 }
 
 impl FilterDialog {
@@ -227,6 +253,13 @@ impl FilterDialog {
                 self.select_column(&name);
             }
         }
+        // The list narrows while its value field or the list itself has the keys.
+        if let Some((t, _)) = self.narrow
+            && !matches!(f, DialogFocus::Value(x, _) if x == t)
+            && !matches!(f, DialogFocus::Values(_))
+        {
+            self.narrow = None;
+        }
         let same_term = matches!((self.focus, f), (DialogFocus::Op(a) | DialogFocus::Value(a, _), DialogFocus::Op(b) | DialogFocus::Value(b, _)) if a == b);
         self.focus = f;
         if let DialogFocus::Op(t) | DialogFocus::Value(t, _) = f
@@ -245,7 +278,11 @@ impl FilterDialog {
     pub(crate) fn pane_lines(&self) -> Vec<DialogFocus> {
         let mut lines: Vec<DialogFocus> = self.rows().into_iter().map(DialogFocus::Op).collect();
         if self.column().is_some() {
-            lines.extend([DialogFocus::Add, DialogFocus::Sort]);
+            lines.push(DialogFocus::Add);
+            if self.listed > 0 {
+                lines.push(DialogFocus::Values(0));
+            }
+            lines.push(DialogFocus::Sort);
         }
         lines
     }
@@ -263,6 +300,8 @@ impl FilterDialog {
             DialogFocus::Chips(i) => DialogFocus::Chips(i.min(chips - 1)),
             DialogFocus::Order(_) if keys == 0 => DialogFocus::Columns,
             DialogFocus::Order(i) => DialogFocus::Order(i.min(keys - 1)),
+            DialogFocus::Values(_) if self.listed == 0 => DialogFocus::Add,
+            DialogFocus::Values(i) => DialogFocus::Values(i.min(self.listed - 1)),
             f => f,
         };
         if let DialogFocus::Op(t) = self.focus {
@@ -361,6 +400,13 @@ impl App {
             sql_open: false,
             applying: None,
             hits: DialogHits::default(),
+            narrow: None,
+            values_scroll: 0,
+            listed: 0,
+            list_of: None,
+            tally: None,
+            counting: None,
+            exact: HashMap::new(),
         };
         if let Some(c) = column {
             d.select_column(c);

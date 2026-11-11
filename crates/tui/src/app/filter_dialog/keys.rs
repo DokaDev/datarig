@@ -13,7 +13,9 @@ use datarig_core::query::{ColumnKind, Dir, Value};
 fn area(f: DialogFocus) -> usize {
     match f {
         DialogFocus::Columns => 0,
-        DialogFocus::Op(_) | DialogFocus::Value(..) | DialogFocus::Add | DialogFocus::Sort => 1,
+        DialogFocus::Op(_) | DialogFocus::Value(..) | DialogFocus::Add | DialogFocus::Values(_) | DialogFocus::Sort => {
+            1
+        }
         DialogFocus::Chips(_) => 2,
         DialogFocus::Order(_) => 3,
         DialogFocus::Limit => 4,
@@ -75,6 +77,8 @@ impl App {
 
     /// A key of the open filter dialog that no action took.
     pub(crate) fn filter_dialog_key(&mut self, key: KeyEvent) {
+        // The list as it is now: how many values the keys move through.
+        self.filter_dialog_list();
         let Some(d) = self.filter_dialog() else { return };
         if d.picker.is_some() {
             return self.filter_dialog_picker_key(key);
@@ -95,6 +99,7 @@ impl App {
                 _ => self.filter_dialog_pane_key(key),
             },
             DialogFocus::Sort => self.filter_dialog_sort_key(key),
+            DialogFocus::Values(i) => self.filter_dialog_values_key(i, key),
             DialogFocus::Chips(i) => self.filter_dialog_chips_key(i, key),
             DialogFocus::Order(i) => self.filter_dialog_order_key(i, key),
             DialogFocus::Sql => {
@@ -166,6 +171,11 @@ impl App {
             (DialogFocus::Value(t, 0), KeyCode::Right) if at_end && d.inputs.len() > 1 => {
                 return d.focus_on(DialogFocus::Value(t, 1));
             }
+            // `↓` into the values (narrowed by what is typed), when there are some.
+            (DialogFocus::Value(..), KeyCode::Down) if d.listed > 0 => {
+                d.values_scroll = 0;
+                return d.focus_on(DialogFocus::Values(0));
+            }
             (DialogFocus::Value(..), KeyCode::Up | KeyCode::Down) => return self.filter_dialog_pane_key(key),
             _ => {}
         }
@@ -198,6 +208,8 @@ impl App {
                 let c = column_info(d, &row.col);
                 let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
                 let values = draft::parse_input(row.op, &refs, &c);
+                // What is typed narrows the column's value list.
+                d.narrow = list::fragment(row.op, refs.first().copied().unwrap_or("")).map(|f| (t, f));
                 self.filter_dialog_edit(Some(FieldKey::Value(t, k)), |d, target| {
                     d.draft.where_.set(t, Row { values, ..row }, target);
                 });
@@ -242,6 +254,7 @@ impl App {
         let lines = d.pane_lines();
         let here = match d.focus {
             DialogFocus::Value(t, _) => DialogFocus::Op(t),
+            DialogFocus::Values(_) => DialogFocus::Values(0),
             f => f,
         };
         let Some(at) = lines.iter().position(|l| *l == here) else { return };
@@ -348,6 +361,31 @@ impl App {
         d.focus_on(DialogFocus::Op(t));
         if !d.inputs.is_empty() {
             d.focus_on(DialogFocus::Value(t, 0));
+        }
+    }
+
+    /// The keys on value `i` of the list: `↑`/`↓` through the values (past the first, back to
+    /// the value field that narrows the list, else the line above), `Space` ticks.
+    fn filter_dialog_values_key(&mut self, i: usize, key: KeyEvent) {
+        let Some(d) = self.filter_dialog() else { return };
+        let (last, narrow) = (d.listed.saturating_sub(1), d.narrow.as_ref().map(|(t, _)| *t));
+        let up = matches!(key.code, KeyCode::Up | KeyCode::Char('k'));
+        let down = matches!(key.code, KeyCode::Down | KeyCode::Char('j'));
+        let to = match key.code {
+            _ if up && i == 0 => match narrow {
+                Some(t) => DialogFocus::Value(t, 0),
+                None => return self.filter_dialog_pane_key(key),
+            },
+            _ if up => DialogFocus::Values(i - 1),
+            _ if down && i >= last => DialogFocus::Sort,
+            _ if down => DialogFocus::Values(i + 1),
+            KeyCode::Home | KeyCode::Char('g') => DialogFocus::Values(0),
+            KeyCode::End | KeyCode::Char('G') => DialogFocus::Values(last),
+            KeyCode::Char(' ') => return self.filter_dialog_tick(i),
+            _ => return self.filter_dialog_pane_key(key),
+        };
+        if let Some(d) = self.filter_dialog_mut() {
+            d.focus_on(to);
         }
     }
 

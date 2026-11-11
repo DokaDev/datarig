@@ -16,7 +16,13 @@ fn session(zone: &str, charset: &str) -> SessionValues {
 }
 
 /// Value `v` of a column `m` read in `read_in`, with the session now in `now`.
-fn judged(d: Dialect, m: &ColumnMeta, read_in: &ReadIn, now: Option<&SessionValues>, v: &str) -> Result<Value, NotAdmitted> {
+fn judged(
+    d: Dialect,
+    m: &ColumnMeta,
+    read_in: &ReadIn,
+    now: Option<&SessionValues>,
+    v: &str,
+) -> Result<Value, NotAdmitted> {
     admit(&ValuesFrom { dialect: d, meta: m, read_in }, None, now, v)
 }
 
@@ -48,7 +54,10 @@ fn values_are_taken_as_the_session_reads_them_back() {
 fn a_rounded_float_is_not_taken() {
     let utc = session("+00:00", "utf8mb4");
     let w = meta("w", "float", ValueKind::Float);
-    assert_eq!(judged(MY, &w, &ReadIn::Values(utc.clone()), Some(&utc), "1.5"), not_whole("w", export::NotWhole::Float));
+    assert_eq!(
+        judged(MY, &w, &ReadIn::Values(utc.clone()), Some(&utc), "1.5"),
+        not_whole("w", export::NotWhole::Float)
+    );
     // A DOUBLE is sent whole.
     let d = meta("d", "double", ValueKind::Float);
     assert_eq!(judged(MY, &d, &ReadIn::Values(utc.clone()), Some(&utc), "1.5"), Ok(Value::Number("1.5".into())));

@@ -1,0 +1,530 @@
+//! The value list of the filter dialog's selected column: counted in the rows loaded, with
+//! the values of an earlier load once the column is filtered, or counted by the server with
+//! `#` (the statement written by the query model, under the draft's other conditions only).
+//! `Space` ticks a value into the column's condition (`=`, then `in list` in the same place);
+//! a value the filter cannot take as read, or of a count whose scope changed, is not ticked.
+
+use crate::common;
+
+use common::*;
+use datarig_core::driver::{
+    ColumnMeta, DbCommand, DbError, DbEvent, GroupCounts, GroupValue, SessionValues, ValueKind,
+};
+use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+use datarig_i18n::Lang;
+use datarig_tui::app::overlay::OverlayKind;
+use datarig_tui::keymap::Ctx;
+use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+use std::time::Duration;
+
+const ALL: &str = r#"SELECT * FROM "shop"."users""#;
+
+/// Open `shop.users` from the explorer (a table tab, which runs its query).
+fn open_users(h: &mut Harness) {
+    h.key(KeyCode::BackTab);
+    h.goto("shop");
+    h.key(KeyCode::Char('l'));
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok((vec!["users".into()], Vec::new()).into()) });
+    h.goto("users");
+    h.key(KeyCode::Enter);
+    assert!(h.app.tab().is_table());
+}
+
+/// The statements of the runs sent since the last look.
+fn runs(h: &mut Harness) -> Vec<Vec<String>> {
+    h.sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::Execute { statements, .. } => Some(statements),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The counts of a column's values sent since the last look: request, statement, time limit.
+fn counts(h: &mut Harness) -> Vec<(u64, String, Option<Duration>)> {
+    h.sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::GroupCount { id, sql, limit } => Some((id, sql, limit)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn columns() -> Vec<ColumnMeta> {
+    vec![meta("id", "int8", true, false), meta("status", "text", false, false), meta("amount", "numeric", true, false)]
+}
+
+/// `n` rows: ids from 1, statuses `paid` (5 of 12), `shipped` (4), `cancelled` (2) and NULL (1)
+/// in turn, amounts all different.
+fn rows(n: usize) -> Vec<Vec<Option<String>>> {
+    const STATUS: [Option<&str>; 12] = [
+        Some("paid"),
+        Some("shipped"),
+        Some("paid"),
+        Some("cancelled"),
+        Some("shipped"),
+        Some("paid"),
+        None,
+        Some("shipped"),
+        Some("paid"),
+        Some("cancelled"),
+        Some("shipped"),
+        Some("paid"),
+    ];
+    (0..n)
+        .map(|i| {
+            vec![
+                Some((i + 1).to_string()),
+                STATUS[i % 12].map(str::to_string),
+                Some(format!("{}.25", 5_448_060 + i * 7_919)),
+            ]
+        })
+        .collect()
+}
+
+/// Only the rows of `rows(n)` whose status is `status`.
+fn rows_of(n: usize, status: &str) -> Vec<Vec<Option<String>>> {
+    rows(n).into_iter().filter(|r| r[1].as_deref() == Some(status)).collect()
+}
+
+/// Answer the active tab's current run with `rows`.
+fn answer(h: &mut Harness, rows: Vec<Vec<Option<String>>>) {
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(
+        index,
+        DbEvent::Page { id, columns: Some(columns()), rows, more: false, elapsed: Duration::from_millis(2) },
+    );
+}
+
+/// `shop.users` open with 60 rows loaded, the grid focused, nothing sent since.
+fn users() -> Harness {
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    answer(&mut h, rows(60));
+    h.sent();
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    h
+}
+
+/// The dialog opened on column `col` of the grid.
+fn dialog_on(h: &mut Harness, col: usize) {
+    h.app.tab_mut().grid.col = col;
+    h.keys("f");
+    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog), "{:?} {}", h.app.key_context(), h.screen(120, 34));
+}
+
+/// From the column list to the first value of the list, past the column's `conditions`.
+fn to_values(h: &mut Harness, conditions: usize) {
+    h.key(KeyCode::Right);
+    for _ in 0..=conditions {
+        h.key(KeyCode::Down);
+    }
+}
+
+/// The open dialog's `WHERE` text as it would be sent.
+fn draft(h: &Harness) -> String {
+    h.app.filter_dialog_draft().expect("the dialog is open").0
+}
+
+fn value(v: Option<&str>, rows: u64) -> GroupValue {
+    GroupValue { value: v.map(str::to_string), whole: true, bytes: v.map(|v| v.len() as u64), rows, prefix: false, inexact: false }
+}
+
+/// The server's answer to count `id`.
+fn counted(h: &mut Harness, id: u64, result: Result<GroupCounts, DbError>) {
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::GroupCounted { id, result, snapshot: false });
+}
+
+/// A count of `status`: `paid` 900, `refunded` 40 (not loaded), NULL 7, a long value of 5000
+/// bytes in 3 rows; more than these.
+fn status_counts() -> GroupCounts {
+    let long = GroupValue { value: None, whole: false, bytes: Some(5000), rows: 3, prefix: false, inexact: false };
+    GroupCounts {
+        values: vec![value(Some("paid"), 900), value(Some("refunded"), 40), value(None, 7), long],
+        more: true,
+    }
+}
+
+#[test]
+fn a_ticked_value_is_sent_as_the_columns_condition() {
+    let mut h = users();
+    dialog_on(&mut h, 1);
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("~ count in the 60 loaded rows"), "{screen}");
+    // Most rows first: paid 25, shipped 20, cancelled 10, NULL 5.
+    to_values(&mut h, 0);
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "status = 'paid'");
+    assert!(runs(&mut h).is_empty(), "a tick changes the draft only");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (status = 'paid')")]]);
+}
+
+#[test]
+fn a_ticked_null_is_is_null_and_a_second_tick_makes_a_list() {
+    let mut h = users();
+    dialog_on(&mut h, 1);
+    to_values(&mut h, 0);
+    for _ in 0..3 {
+        h.key(KeyCode::Down);
+    }
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "status IS NULL");
+    // The cursor stays on NULL; `paid` widens the same condition.
+    h.keys("g");
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "(status IN ('paid') OR status IS NULL)");
+    // Unticked: back to one value, then none.
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "status IS NULL");
+    h.keys("G");
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "");
+    // Each tick was one step.
+    h.keys("u");
+    assert_eq!(draft(&h), "status IS NULL");
+}
+
+#[test]
+fn an_earlier_load_widens_the_condition_to_a_list_in_its_place() {
+    let mut h = users();
+    h.command("where status = 'paid' AND id > 0");
+    assert_eq!(runs(&mut h).len(), 1);
+    answer(&mut h, rows_of(60, "paid"));
+    dialog_on(&mut h, 1);
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("~ count: 25 loaded rows + an earlier load"), "{screen}");
+    assert!(screen.contains("earlier load"), "{screen}");
+    // `paid` loaded, then what the first load showed: shipped, cancelled, NULL.
+    to_values(&mut h, 1);
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "status IN ('paid', 'shipped') AND id > 0", "the chip keeps its place");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (status IN ('paid', 'shipped') AND id > 0)")]]);
+}
+
+#[test]
+fn typing_narrows_the_list_and_a_tick_takes_the_place_of_what_was_typed() {
+    let mut h = users();
+    dialog_on(&mut h, 1);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Char(' '));
+    h.type_text("ip");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("containing “ip”"), "{screen}");
+    assert!(screen.contains("shipped") && !screen.contains("cancelled"), "{screen}");
+    assert_eq!(draft(&h), "status = 'ip'");
+    // `↓` into the list (only `shipped` holds `ip`), the tick replaces `ip`.
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "status = 'shipped'");
+    assert!(h.screen(120, 34).contains("cancelled"), "the list in full again");
+}
+
+#[test]
+fn count_exactly_sends_the_columns_count_under_the_other_conditions_only() {
+    let mut h = users();
+    h.command("where status = 'paid' AND id > 0");
+    runs(&mut h);
+    answer(&mut h, rows_of(60, "paid"));
+    dialog_on(&mut h, 1);
+    h.keys("#");
+    let sent = counts(&mut h);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(
+        sent[0].1,
+        r#"SELECT CASE WHEN octet_length("status") <= 4096 THEN "status" END, octet_length("status"), count(*) FROM "shop"."users" WHERE (id > 0) GROUP BY "status" ORDER BY count(*) DESC LIMIT 201"#
+    );
+    assert!(sent[0].2.is_some(), "an idle session's count has a time limit");
+    assert!(h.screen(120, 34).contains("counting…"));
+    // Busy meanwhile: applying waits for it.
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty());
+    counted(&mut h, sent[0].0, Ok(status_counts()));
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("exact · other conditions applied"), "{screen}");
+    assert!(screen.contains("refunded") && screen.contains("900"), "{screen}");
+    assert!(screen.contains("long value (5000 bytes)"), "{screen}");
+    assert!(screen.contains("more values than shown"), "{screen}");
+    // A value the rows loaded did not hold is ticked from the count.
+    to_values(&mut h, 1);
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "status IN ('paid', 'refunded') AND id > 0");
+    // The long value is not.
+    h.keys("G");
+    h.key(KeyCode::Char(' '));
+    assert!(h.screen(120, 34).contains("Not ticked: a long value (5000 bytes)"), "{}", h.screen(120, 34));
+    assert_eq!(draft(&h), "status IN ('paid', 'refunded') AND id > 0");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (status IN ('paid', 'refunded') AND id > 0)")]]);
+    // With no other condition, no `WHERE`; a number is sent as it is.
+    let mut h = users();
+    dialog_on(&mut h, 0);
+    h.keys("#");
+    let sent = counts(&mut h);
+    assert_eq!(
+        sent[0].1,
+        r#"SELECT "id", NULL, count(*) FROM "shop"."users" GROUP BY "id" ORDER BY count(*) DESC LIMIT 201"#
+    );
+}
+
+#[test]
+fn a_late_answer_of_another_count_is_dropped() {
+    let mut h = users();
+    dialog_on(&mut h, 1);
+    h.keys("#");
+    let first = counts(&mut h)[0].0;
+    // An answer of no count of the dialog's.
+    counted(&mut h, first + 100, Ok(status_counts()));
+    assert!(h.screen(120, 34).contains("counting…"));
+    // `Esc` cancels the count (the dialog stays), its answer says so.
+    let index = h.app.tabs.active_index();
+    h.key(KeyCode::Esc);
+    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog));
+    assert!(h.session_cancelled(index));
+    counted(&mut h, first, Err(DbError::Cancelled));
+    assert!(h.screen(120, 34).contains("Values count cancelled"), "{}", h.screen(120, 34));
+    // Counted again: the first count's answer, late, is dropped.
+    h.keys("#");
+    let second = counts(&mut h)[0].0;
+    assert_ne!(first, second);
+    counted(&mut h, first, Ok(status_counts()));
+    let screen = h.screen(120, 34);
+    assert!(!screen.contains("refunded") && screen.contains("counting…"), "{screen}");
+    let only = GroupCounts { values: vec![value(Some("lost"), 1)], more: false };
+    counted(&mut h, second, Ok(only));
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("lost") && screen.contains("exact · every row"), "{screen}");
+    // `Esc` with no count running closes.
+    h.key(KeyCode::Esc);
+    assert!(!h.app.overlays.is_open(OverlayKind::FilterDialog));
+}
+
+#[test]
+fn a_count_of_other_conditions_is_not_ticked_until_counted_again() {
+    let mut h = users();
+    h.command("where status = 'paid' AND id > 0");
+    runs(&mut h);
+    answer(&mut h, rows_of(60, "paid"));
+    dialog_on(&mut h, 1);
+    h.keys("#");
+    let id = counts(&mut h)[0].0;
+    counted(&mut h, id, Ok(status_counts()));
+    // The other condition taken out: the count is of another scope.
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Char('x'));
+    assert_eq!(draft(&h), "status = 'paid'");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("earlier count (other conditions changed)"), "{screen}");
+    h.key(KeyCode::BackTab);
+    h.key(KeyCode::BackTab);
+    to_values(&mut h, 1);
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "status = 'paid'", "not ticked");
+    assert!(h.screen(120, 34).contains("Not ticked: counted under other conditions"), "{}", h.screen(120, 34));
+    // Undone, the scope is the count's again.
+    h.key_mod(KeyCode::Char('z'), KeyModifiers::CONTROL);
+    assert_eq!(draft(&h), "status = 'paid' AND id > 0");
+    assert!(h.screen(120, 34).contains("exact · other conditions applied"));
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "status IN ('paid', 'refunded') AND id > 0");
+}
+
+#[test]
+fn a_refused_other_condition_refuses_the_count_and_sends_nothing() {
+    let mut h = users();
+    h.command("where status = 'paid' AND pg_sleep(1) IS NULL");
+    assert!(runs(&mut h).is_empty(), "refused by the filter's check");
+    dialog_on(&mut h, 1);
+    h.keys("#");
+    assert!(counts(&mut h).is_empty());
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("Values not counted:"), "{screen}");
+    assert!(screen.contains("pg_sleep"), "{screen}");
+    // A column whose type is not known (no rows of it loaded) is not counted either.
+    h.key(KeyCode::Esc);
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    h.sent();
+    h.keys("\t");
+    h.keys("f");
+    h.keys("#");
+    assert!(counts(&mut h).is_empty());
+}
+
+#[test]
+fn a_read_only_profile_counts_reads_and_refuses_unknown_calls() {
+    let mut cfg = datarig_core::config::Config {
+        connections: vec![datarig_core::profile::ConnectionConfig {
+            policy: Some("prod".into()),
+            ..datarig_core::profile::ConnectionConfig::test_db()
+        }],
+        ..Default::default()
+    };
+    cfg.policies.insert("prod", datarig_core::policy::Policy { read_only: true, ..Default::default() });
+    let mut h = Harness::connected_with(&cfg, Lang::En);
+    open_users(&mut h);
+    answer(&mut h, rows(12));
+    h.sent();
+    for _ in 0..4 {
+        if h.app.key_context() == Ctx::Grid {
+            break;
+        }
+        h.key(KeyCode::Tab);
+    }
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    dialog_on(&mut h, 1);
+    h.keys("#");
+    assert_eq!(counts(&mut h).len(), 1, "a count is a read");
+    let id = h.app.tab().exec.running.map(|r| r.id).expect("the count runs");
+    counted(&mut h, id, Err(DbError::Cancelled));
+    h.key(KeyCode::Esc);
+    h.command("where status = 'paid' AND f(id) > 1");
+    assert!(runs(&mut h).is_empty());
+    dialog_on(&mut h, 1);
+    h.keys("#");
+    assert!(counts(&mut h).is_empty());
+    assert!(h.screen(120, 34).contains("Values not counted:"), "{}", h.screen(120, 34));
+}
+
+#[test]
+fn each_outcome_of_a_count_is_said_and_never_as_counts() {
+    let cases: [(DbError, &str); 6] = [
+        (DbError::TimedOut(Duration::from_secs(30)), "Values count stopped after 30s: not known"),
+        (DbError::LockTimeout("waited".into()), "Values count stopped waiting for a lock"),
+        (DbError::Cancelled, "Values count cancelled"),
+        (DbError::LockingRead, "Values not counted: in the open transaction its reads would lock rows"),
+        (DbError::SchemaChanged, "Values not counted: the column's type changed"),
+        (DbError::AccessDenied("boom".into()), "Values count failed:"),
+    ];
+    let mut h = users();
+    dialog_on(&mut h, 1);
+    for (error, said) in cases {
+        h.keys("#");
+        let id = counts(&mut h)[0].0;
+        counted(&mut h, id, Err(error));
+        let screen = h.screen(120, 34);
+        assert!(screen.contains(said), "{said}: {screen}");
+        assert!(screen.contains("~ count in the 60 loaded rows"), "the loaded values stay: {screen}");
+    }
+}
+
+#[test]
+fn the_values_screens() {
+    let mut h = users();
+    keys_came(&mut h, "local-pg", &["id"]);
+    dialog_on(&mut h, 1);
+    to_values(&mut h, 0);
+    h.key(KeyCode::Char(' '));
+    h.key(KeyCode::Down);
+    assert_screen!("filter_values_column_en_80x24", Lang::En, h.draw(80, 24));
+    assert_screen!("filter_values_column_en_120x34", Lang::En, h.draw(120, 34));
+    // Typing narrows the list.
+    h.key(KeyCode::Esc);
+    h.app.tab_mut().grid.col = 1;
+    h.keys("f");
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Char(' '));
+    h.type_text("p");
+    assert_screen!("filter_values_typing_en_80x24", Lang::En, h.draw(80, 24));
+    assert_screen!("filter_values_typing_en_120x34", Lang::En, h.draw(120, 34));
+    // Numbers mostly distinct: their range.
+    h.key(KeyCode::Esc);
+    dialog_on(&mut h, 2);
+    assert_screen!("filter_values_range_en_80x24", Lang::En, h.draw(80, 24));
+    assert_screen!("filter_values_range_en_120x34", Lang::En, h.draw(120, 34));
+    h.key(KeyCode::Esc);
+    // Widened with an earlier load.
+    h.command("where status = 'paid' AND id > 0");
+    runs(&mut h);
+    answer(&mut h, rows_of(60, "paid"));
+    dialog_on(&mut h, 1);
+    to_values(&mut h, 1);
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Char(' '));
+    assert_screen!("filter_values_widen_en_80x24", Lang::En, h.draw(80, 24));
+    assert_screen!("filter_values_widen_en_120x34", Lang::En, h.draw(120, 34));
+    // The server's count.
+    h.keys("#");
+    let id = counts(&mut h)[0].0;
+    counted(&mut h, id, Ok(status_counts()));
+    assert_screen!("filter_values_exact_en_80x24", Lang::En, h.draw(80, 24));
+    assert_screen!("filter_values_exact_en_120x34", Lang::En, h.draw(120, 34));
+}
+
+fn col(name: &str, ty: &str, kind: ValueKind) -> ColumnMeta {
+    ColumnMeta::new(name.into(), ty.into(), kind, None)
+}
+
+/// A MySQL profile with `shop.users` open on it (an id and a TIMESTAMP), the session's time
+/// zone `+00:00`, its rows loaded, the grid focused.
+fn mysql() -> Harness {
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut p = datarig_core::profile::ConnectionConfig::test_db();
+    (p.name, p.driver) = ("local-my".into(), "mysql".into());
+    let cfg = datarig_core::config::Config { connections: vec![p], ..Default::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+    open_users(&mut h);
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MySql(MySqlMode::default()))));
+    h.tab_db(index, DbEvent::Connected);
+    zone(&mut h, "+00:00");
+    my_page(&mut h, &["2026-11-10 09:30:00", "2026-11-11 10:00:00"]);
+    h.sent();
+    h.key(KeyCode::Tab);
+    h
+}
+
+fn zone(h: &mut Harness, zone: &str) {
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::SessionValues(SessionValues { time_zone: zone.into(), charset: "utf8mb4".into() }));
+}
+
+fn my_page(h: &mut Harness, at: &[&str]) {
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    let columns = vec![col("id", "int", ValueKind::Integer), col("at", "timestamp", ValueKind::TimestampTz)];
+    let rows = at.iter().enumerate().map(|(i, a)| vec![Some(i.to_string()), Some(a.to_string())]).collect();
+    h.tab_db(index, DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::from_millis(2) });
+}
+
+#[test]
+fn a_mysql_timestamp_is_ticked_only_in_the_zone_it_was_read_in() {
+    let mut h = mysql();
+    h.command("where at = '2026-11-10 09:30:00'");
+    runs(&mut h);
+    my_page(&mut h, &["2026-11-10 09:30:00"]);
+    dialog_on(&mut h, 1);
+    // In the zone of both loads: the earlier load's value widens the condition.
+    to_values(&mut h, 1);
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "at IN ('2026-11-10 09:30:00', '2026-11-11 10:00:00')");
+    h.keys("u");
+    h.key(KeyCode::Esc);
+    // The session's zone changed since: neither the loaded nor the earlier value is taken.
+    zone(&mut h, "+09:00");
+    dialog_on(&mut h, 1);
+    to_values(&mut h, 1);
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "at = '2026-11-10 09:30:00'");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("Not ticked: this column was read across a change"), "{screen}");
+    h.key(KeyCode::Up);
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "at = '2026-11-10 09:30:00'");
+}

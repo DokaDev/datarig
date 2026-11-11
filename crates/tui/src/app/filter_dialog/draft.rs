@@ -735,6 +735,18 @@ impl Where {
         self.terms.iter().enumerate().filter(|(_, t)| of(t)).map(|(i, _)| i).collect()
     }
 
+    /// The text sent without column `col`'s own conditions (its rows; an expression stays,
+    /// whatever it names): the text sent as it is when the column has none, else the other
+    /// complete terms' texts joined as [`Where::text`] joins them. `None` when nothing is left.
+    pub(crate) fn text_without(&self, col: &str) -> Option<String> {
+        let own = |t: &Term| t.row.as_ref().is_some_and(|r| r.col == col);
+        if !self.terms.iter().any(own) {
+            return self.sent();
+        }
+        let texts: Vec<&str> = self.terms.iter().filter(|t| !own(t)).filter_map(|t| t.text.as_deref()).collect();
+        Some(query::join_terms(&texts, self.dialect)).filter(|t| !t.trim().is_empty())
+    }
+
     /// A row waits for values or cannot be written.
     pub(crate) fn has_incomplete(&self) -> bool {
         self.terms.iter().any(|t| !t.complete())
