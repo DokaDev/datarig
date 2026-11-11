@@ -2294,23 +2294,28 @@ async fn open_before(conn: &mut Conn, link: &mut Link, s: &State) -> Result<bool
 /// transaction since, in which the level cannot be set: that one holds the app's own reads only
 /// and is ended first (`START TRANSACTION` would end it all the same). When `START TRANSACTION` fails, the
 /// level set for it is cleared again (`ROLLBACK` with no transaction), so it never applies to the
-/// user's next transaction.
+/// user's next transaction. A failure comes with whether the user had asked for a cancel for this
+/// run when it was answered: what is done after it changes nothing.
 async fn begin_own(
     conn: &mut Conn,
     link: &mut Link,
+    env: &Env<'_>,
     autocommit: bool,
-) -> Result<Result<(), mysql_async::Error>, Closed> {
+) -> Result<Result<(), (mysql_async::Error, bool)>, Closed> {
     if !autocommit && let Err(e) = link.guard(None, conn.query_drop(COMMIT)).await? {
-        return Ok(Err(e));
+        return Ok(Err((e, env.asked.asked())));
     }
     if let Err(e) = link.guard(None, conn.query_drop("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")).await? {
-        return Ok(Err(e));
+        return Ok(Err((e, env.asked.asked())));
     }
-    let started = link.guard(None, conn.query_drop("START TRANSACTION READ ONLY")).await?;
-    if started.is_err() && !link.tainted() {
+    let Err(e) = link.guard(None, conn.query_drop("START TRANSACTION READ ONLY")).await? else {
+        return Ok(Ok(()));
+    };
+    let cancelled = env.asked.asked();
+    if !link.tainted() {
         let _ = link.guard(None, conn.query_drop(ROLLBACK)).await?;
     }
-    Ok(started)
+    Ok(Err((e, cancelled)))
 }
 
 /// Count with `sql` (the app's `SELECT COUNT(*) FROM (…) AS datarig_count` of a statement on the
@@ -2380,11 +2385,11 @@ async fn read_own(
         s.limit.current = None;
     }
     let own = !was_open && !s.tx.autocommit;
-    if own && let Err(e) = begin_own(conn, link, false).await? {
+    if own && let Err((e, cancelled)) = begin_own(conn, link, env, false).await? {
         if e.is_fatal() {
             return Err(Stop::Lost(my_error(&e)));
         }
-        return Ok(Err(own_failure(&e, env.asked.asked())));
+        return Ok(Err(own_failure(&e, cancelled)));
     }
     env.busy.store(true, Ordering::SeqCst);
     // Cancelled while it was admitted or set up, when nothing ran for the kill to stop: the read

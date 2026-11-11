@@ -5972,6 +5972,7 @@ struct Tap {
 struct TapState {
     written: std::sync::Mutex<String>,
     armed: std::sync::Mutex<Option<String>>,
+    swap: std::sync::Mutex<Option<(String, String)>>,
     held: std::sync::atomic::AtomicBool,
     wakers: std::sync::Mutex<Vec<std::task::Waker>>,
 }
@@ -5980,6 +5981,13 @@ impl TapState {
     /// Hold the answers from the next request whose bytes contain `text` on.
     fn hold_after(&self, text: &str) {
         *self.armed.lock().unwrap() = Some(text.to_string());
+    }
+
+    /// The next request whose bytes contain `from` goes to the server saying `to` instead, padded
+    /// with blanks to the same length.
+    fn swap(&self, from: &str, to: &str) {
+        assert!(to.len() <= from.len());
+        *self.swap.lock().unwrap() = Some((from.to_string(), format!("{to:<width$}", width = from.len())));
     }
 
     fn held(&self) -> bool {
@@ -6041,9 +6049,17 @@ impl tokio::io::AsyncWrite for Tapped {
                 me.state.held.store(true, std::sync::atomic::Ordering::SeqCst);
             }
         }
-        let wrote = std::pin::Pin::new(&mut me.inner).poll_write(cx, buf);
+        let swap = me.state.swap.lock().unwrap().clone().filter(|(from, _)| me.holds && text.contains(from.as_str()));
+        let swapped = swap.as_ref().map(|(from, to)| {
+            let at = buf.windows(from.len()).position(|w| w == from.as_bytes()).unwrap();
+            [&buf[..at], to.as_bytes(), &buf[at + from.len()..]].concat()
+        });
+        let wrote = std::pin::Pin::new(&mut me.inner).poll_write(cx, swapped.as_deref().unwrap_or(buf));
         if matches!(wrote, std::task::Poll::Ready(Ok(_))) {
             me.state.written.lock().unwrap().push_str(&text);
+            if swap.is_some() {
+                *me.state.swap.lock().unwrap() = None;
+            }
         }
         wrote
     }
@@ -6160,6 +6176,69 @@ async fn a_cancel_while_a_read_is_admitted_stops_it_unsent() {
         assert!(written.contains("ROLLBACK"), "{id}: {written}");
     }
     c.session.send(count(23));
+    assert_eq!(read_answer(&mut c).await, Ok(40), "the session goes on");
+}
+
+/// Someone else's interruption of the start of a read's own transaction is not the user's cancel,
+/// also when the user cancels while the failed start is cleaned up after; one the user had asked
+/// for when the answer came is. Nothing is read either way. The server answers the interruption
+/// from a procedure that raises it, in the start's place: a real `KILL QUERY` cannot be timed to
+/// land inside a statement this short.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_interrupted_start_of_a_reads_transaction_is_cancelled_only_if_asked_by_then() {
+    let test = "an_interrupted_start_of_a_reads_transaction_is_cancelled_only_if_asked_by_then";
+    let Some((url, admin)) = urls(test) else { return };
+    let _end = EndSessions { admin: admin.clone(), test };
+    let t = numbers(&admin, "startkill", 50).await;
+    let procedure = format!("zz_it_stop_{}", std::process::id());
+    let _procedure = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{procedure}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!(
+        "CREATE PROCEDURE shop.{procedure}() SIGNAL SQLSTATE '70100' SET MYSQL_ERRNO = 1317, \
+         MESSAGE_TEXT = 'Query execution was interrupted'"
+    ))
+    .await
+    .unwrap();
+    a.disconnect().await.unwrap();
+    let Some((mut c, tap)) = tapped(&url, test).await else { return };
+    c.ok(1, "SET SESSION autocommit = 0").await;
+    let start = "START TRANSACTION READ ONLY";
+    let call = format!("CALL {procedure}()");
+    let rows = format!("SELECT * FROM {} WHERE (id > 10)", t.q());
+    let counted = format!("SELECT COUNT(*) FROM (\n{rows}\n) AS datarig_count");
+    let count = |id| DbCommand::Count { id, sql: counted.clone(), limit: Some(Duration::from_secs(30)) };
+    let plan = |id| DbCommand::Estimate { id, sql: rows.clone() };
+    let not_read = |written: &str| !written.contains("COUNT(*)") && !written.contains("EXPLAIN");
+
+    // Failed before the user cancelled: the cancel comes while the failed start is rolled back.
+    for (id, command) in [(2, count(2)), (3, plan(3))] {
+        tap.clear();
+        tap.swap(start, &call);
+        tap.hold_after("ROLLBACK");
+        c.session.send(command);
+        until("the failed start was cleaned up after", || tap.held()).await;
+        c.session.cancel();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tap.release();
+        let got = read_answer(&mut c).await;
+        assert!(matches!(&got, Err(DbError::Server(m)) if m.text.contains("1317")), "{id}: {got:?}");
+        assert!(not_read(&tap.written()), "{id}: {}", tap.written());
+    }
+
+    // The user cancelled while the answer was on its way.
+    for (id, command) in [(4, count(4)), (5, plan(5))] {
+        tap.clear();
+        tap.swap(start, &call);
+        tap.hold_after(start);
+        c.session.send(command);
+        until("the start went out", || tap.held()).await;
+        c.session.cancel();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tap.release();
+        assert_eq!(read_answer(&mut c).await, Err(DbError::Cancelled), "{id}");
+        assert!(not_read(&tap.written()), "{id}: {}", tap.written());
+    }
+    c.session.send(count(6));
     assert_eq!(read_answer(&mut c).await, Ok(40), "the session goes on");
 }
 

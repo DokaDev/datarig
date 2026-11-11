@@ -85,7 +85,7 @@ pub(super) async fn export(
     // Outside the user's transaction it reads in a read-only one of its own: nothing it calls
     // writes, and every row comes from one snapshot, read without locking rows.
     let own = !was_open;
-    if own && let Err(e) = begin_own(conn, link, s.tx.autocommit).await? {
+    if own && let Err((e, _)) = begin_own(conn, link, env, s.tx.autocommit).await? {
         return Ok((Err(my_error(&e)), false));
     }
     env.busy.store(true, Ordering::SeqCst);
