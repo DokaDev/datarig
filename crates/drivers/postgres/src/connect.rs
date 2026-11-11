@@ -50,7 +50,8 @@ impl Canceller for PgCanceller {
             // Bound now to the request it is asked during; one that cannot be sent closes the
             // session, which says so (`Link::guard`).
             let request = cancel.unsent.request();
-            tokio::spawn(async move { cancel.ask(request).await });
+            let mark = self.1.clone();
+            tokio::spawn(async move { cancel.ask(request, move || mark.stands(run)).await });
         }
     }
 }
