@@ -835,3 +835,20 @@ fn a_mysql_catalogue_type_reads_as_the_driver_describes_its_result_column() {
     c.invisible = true;
     assert_eq!(c.count_meta(MY).map(|m| m.kind), Some(ValueKind::Integer));
 }
+
+#[test]
+fn editing_a_long_list_reads_it_in_one_pass() {
+    // 4000 values, as many as the field holds (`IN ('x', 'x', ...)`), the last one edited.
+    let name = info("name", ColumnKind::Text);
+    let values: Vec<Value> = (0..4000).map(|_| text("x")).collect();
+    let kept = list_kept(&values, PG, &name);
+    let edited = format!("{}y", list_text(&values, PG, &name));
+    LIST_PROBES.with(|p| p.set(0));
+    let read = parse_list(&edited, &name, &kept);
+    let probes = LIST_PROBES.with(|p| p.get());
+    assert_eq!(read.len(), 4000);
+    assert_eq!(read.last(), Some(&text("xy")));
+    assert!(read[..3999].iter().all(|v| *v == text("x")));
+    // A look per value of the field, not a search through every value held for each.
+    assert!(probes <= 2 * 4000, "{probes}");
+}

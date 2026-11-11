@@ -15,6 +15,7 @@
 //! for a number column ([`parse_input`]); anything else is text, which is written as a string
 //! literal: what is typed is never written into the SQL as it is.
 
+use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 
 use datarig_core::driver::keys::CatalogColumn;
@@ -619,12 +620,18 @@ pub(crate) fn list_items(s: &str) -> Vec<ListItem> {
 /// text [`list_text`] wrote for a value the field held, with that value), so editing one value
 /// of a list never changes the others.
 pub(crate) fn parse_list(s: &str, c: &ColumnInfo, kept: &[(String, Value)]) -> Vec<Value> {
-    let mut kept: Vec<Option<&(String, Value)>> = kept.iter().map(Some).collect();
+    // The values held by how they were written, in their order for one written alike twice.
+    let mut by_text: HashMap<&str, VecDeque<&Value>> = HashMap::with_capacity(kept.len());
+    for (w, v) in kept {
+        by_text.entry(w.as_str()).or_default().push_back(v);
+    }
     list_items(s)
         .into_iter()
         .filter_map(|it| {
-            if let Some(slot) = kept.iter_mut().find(|k| k.is_some_and(|(w, _)| *w == it.written)) {
-                return slot.take().map(|(_, v)| v.clone());
+            #[cfg(test)]
+            LIST_PROBES.with(|p| p.set(p.get() + 1));
+            if let Some(v) = by_text.get_mut(it.written.as_str()).and_then(VecDeque::pop_front) {
+                return Some(v.clone());
             }
             match it.quoted {
                 Some(q) => Some(Value::Text(q)),
@@ -633,6 +640,12 @@ pub(crate) fn parse_list(s: &str, c: &ColumnInfo, kept: &[(String, Value)]) -> V
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many values the field held [`parse_list`] has looked at (tests).
+    pub(crate) static LIST_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A list value written bare: `NULL` is SQL NULL, anything else as one typed value is.
