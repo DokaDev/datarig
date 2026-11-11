@@ -8,7 +8,8 @@ name: PR rule
 # done. Editing the description runs it again. It reads the description and the commit
 # messages through the API when it runs (so a re-run judges the current text), with no
 # checkout: a few seconds, the same for stacked and fork pull requests. A workflow of its own,
-# not a job of ci.yml.
+# not a job of ci.yml. A pull request already merged is not judged: an edit of its description
+# afterwards changes nothing that landed.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
@@ -23,6 +24,7 @@ concurrency:
 jobs:
   pr-rule:
     name: issue reference
+    if: github.event.pull_request.merged != true
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
