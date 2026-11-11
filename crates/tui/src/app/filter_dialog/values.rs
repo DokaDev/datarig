@@ -5,7 +5,9 @@
 //! Every count is bounded: a value longer than [`VALUE_BYTES`] is counted as a long value and
 //! never kept as text, the values kept while counting stop at [`TALLY_DISTINCT`] values or
 //! [`TALLY_BYTES`] bytes (the rows of values past them are counted apart), and what a load leaves
-//! in the session's memory is bounded per column, per table and for the session.
+//! in the session's memory is bounded per column, per table and for the session, in bytes
+//! counted with a cost for every table, column and value kept besides their text (so NULL and
+//! empty values cost too), and in tables.
 
 use std::collections::HashMap;
 
@@ -42,6 +44,24 @@ pub(crate) const MEMORY_TABLE_BYTES: usize = 1 << 20;
 
 /// The most bytes of values the memory holds for the session.
 pub(crate) const MEMORY_BYTES: usize = 4 << 20;
+
+/// The most tables the memory holds for the session.
+pub(crate) const MEMORY_TABLES: usize = 64;
+
+/// What the memory counts for a table it keeps besides its names: its entry and its load.
+const TABLE_COST: usize = 512;
+
+/// What the memory counts for a column it keeps besides its names: its entry, its result
+/// column and the session's values it was read in.
+const COLUMN_COST: usize = 512;
+
+/// What the memory counts for a value it keeps besides its text: its entry and its rows.
+const VALUE_COST: usize = 64;
+
+/// What the memory counts for value `v` kept.
+fn value_cost(v: Option<&str>) -> usize {
+    VALUE_COST + v.map_or(0, str::len)
+}
 
 /// A value of a list and the rows that hold it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -204,8 +224,27 @@ impl Remembered {
         v
     }
 
-    fn bytes(&self) -> usize {
-        self.values.keys().map(|v| v.as_ref().map_or(0, String::len)).sum()
+    /// What the memory counts for it: the column and every value kept.
+    fn cost(&self) -> usize {
+        column_cost(&self.meta) + self.values.keys().map(|v| value_cost(v.as_deref())).sum::<usize>()
+    }
+}
+
+/// What the memory counts for a column of result column `meta`, without its values.
+fn column_cost(meta: &ColumnMeta) -> usize {
+    let origin = match &meta.origin {
+        Some(datarig_core::driver::ColumnOrigin::Named { schema, table, column }) => {
+            schema.len() + table.len() + column.len()
+        }
+        _ => 0,
+    };
+    COLUMN_COST + 2 * meta.name.len() + meta.type_name.len() + origin
+}
+
+impl TableKey {
+    /// What the memory counts for a table of this key, without its columns.
+    fn cost(&self) -> usize {
+        TABLE_COST + self.database.as_ref().map_or(0, String::len) + self.schema.len() + self.table.len()
     }
 }
 
@@ -216,6 +255,7 @@ struct TableMemory {
     load: Option<(TabId, u64)>,
     counted: usize,
     columns: HashMap<String, Remembered>,
+    /// What the memory counts for the table: its key and its columns with their values.
     bytes: usize,
 }
 
@@ -259,10 +299,11 @@ impl Memory {
                     m.columns.remove(&meta.name);
                 }
             }
-            m.bytes = m.columns.values().map(Remembered::bytes).sum();
         }
+        m.bytes = key.cost() + m.columns.values().map(Remembered::cost).sum::<usize>();
         let counted = m.counted;
         self.tables.push((key, m));
+        self.bound();
         counted
     }
 
@@ -274,14 +315,19 @@ impl Memory {
             return;
         }
         for (ci, (meta, free)) in l.columns.iter().enumerate() {
-            if !free || !m.columns.contains_key(&meta.name) && m.columns.len() >= MEMORY_COLUMNS {
+            if !free {
                 continue;
             }
-            let col = m.columns.entry(meta.name.clone()).or_insert_with(|| Remembered {
-                meta: (*meta).clone(),
-                read_in: l.read_in.clone(),
-                values: HashMap::new(),
-            });
+            if !m.columns.contains_key(&meta.name) {
+                let cost = column_cost(meta);
+                if m.columns.len() >= MEMORY_COLUMNS || m.bytes + cost > MEMORY_TABLE_BYTES {
+                    continue;
+                }
+                m.bytes += cost;
+                let col = Remembered { meta: (*meta).clone(), read_in: l.read_in.clone(), values: HashMap::new() };
+                m.columns.insert(meta.name.clone(), col);
+            }
+            let Some(col) = m.columns.get_mut(&meta.name) else { continue };
             for row in rows {
                 let v = row.get(ci).and_then(Option::as_deref);
                 if v.is_some_and(|v| v.len() > VALUE_BYTES) {
@@ -290,15 +336,31 @@ impl Memory {
                 let key = v.map(str::to_string);
                 if let Some(n) = col.values.get_mut(&key) {
                     *n += 1;
-                } else if col.values.len() < MEMORY_VALUES && m.bytes + v.map_or(0, str::len) <= MEMORY_TABLE_BYTES {
-                    m.bytes += v.map_or(0, str::len);
+                } else if col.values.len() < MEMORY_VALUES && m.bytes + value_cost(v) <= MEMORY_TABLE_BYTES {
+                    m.bytes += value_cost(v);
                     col.values.insert(key, 1);
                 }
             }
+            // A column with no value kept is not kept.
+            if col.values.is_empty() {
+                m.bytes -= column_cost(meta);
+                m.columns.remove(&meta.name);
+            }
         }
         m.counted += rows.len();
-        // The session's bound: the tables used least recently go first, never the one counted.
-        while self.bytes() > MEMORY_BYTES && self.tables.len() > 1 {
+        self.bound();
+    }
+
+    /// The session's bounds: a table with no column kept goes unless it is the one counted
+    /// last; then the tables used least recently go first, never the one counted last.
+    fn bound(&mut self) {
+        let last = self.tables.len().saturating_sub(1);
+        let mut i = 0;
+        self.tables.retain(|(_, m)| {
+            i += 1;
+            i - 1 == last || !m.columns.is_empty()
+        });
+        while (self.bytes() > MEMORY_BYTES || self.tables.len() > MEMORY_TABLES) && self.tables.len() > 1 {
             self.tables.remove(0);
         }
     }

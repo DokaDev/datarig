@@ -136,7 +136,7 @@ fn the_memory_is_bounded_per_column_table_and_session() {
     };
     m.start(&l2);
     m.add(&l2, &[vec![Some(long)]]);
-    assert!(m.column(&k, "c").unwrap().values().is_empty());
+    assert!(m.column(&k, "c").is_none(), "a column with no value kept is not kept");
     // At most so many columns of a table.
     let metas: Vec<ColumnMeta> = (0..MEMORY_COLUMNS + 3).map(|i| meta(&format!("c{i}"))).collect();
     let wide = key("wide");
@@ -174,4 +174,52 @@ fn the_memory_is_bounded_per_column_table_and_session() {
     assert!(m.tables() < tables.len(), "the oldest tables were dropped");
     assert!(m.column(&tables[7], "c0").is_some(), "the last one counted stays");
     assert!(m.column(&tables[0], "c0").is_none(), "the first one went");
+}
+
+#[test]
+fn null_and_empty_values_count_toward_the_memorys_bounds() {
+    let metas: Vec<ColumnMeta> = (0..MEMORY_COLUMNS).map(|i| meta(&format!("c{i}"))).collect();
+    let read_in = ReadIn::Unknown;
+    let mut m = Memory::default();
+    let tables: Vec<TableKey> = (0..MEMORY_TABLES * 4).map(|t| key(&format!("t{t}"))).collect();
+    for k in &tables {
+        let l = Load {
+            table: k.clone(),
+            tab: TabId(1),
+            run: 1,
+            columns: metas.iter().map(|m| (m, true)).collect(),
+            read_in: &read_in,
+        };
+        m.start(&l);
+        m.add(&l, &[metas.iter().map(|_| None).collect(), metas.iter().map(|_| Some(String::new())).collect()]);
+        assert!(m.tables() <= MEMORY_TABLES, "{}", m.tables());
+        assert!(m.bytes() <= MEMORY_BYTES, "{}", m.bytes());
+        assert!(m.tables.iter().all(|(_, tm)| tm.bytes <= MEMORY_TABLE_BYTES));
+    }
+    // Each value kept costs: the tables used least recently went.
+    assert!(m.bytes() > 0);
+    assert!(m.column(&tables[tables.len() - 1], "c0").is_some_and(|c| c.values().len() == 2));
+    assert!(m.column(&tables[0], "c0").is_none());
+}
+
+#[test]
+fn a_load_of_no_rows_leaves_nothing_in_the_memory() {
+    let c = meta("c");
+    let read_in = ReadIn::Unknown;
+    let mut m = Memory::default();
+    for t in 0..MEMORY_TABLES * 4 {
+        let l =
+            Load { table: key(&format!("t{t}")), tab: TabId(1), run: 1, columns: vec![(&c, true)], read_in: &read_in };
+        assert_eq!(m.start(&l), 0);
+        m.add(&l, &[]);
+        // Only the table counted last is held, while it is counted.
+        assert_eq!(m.tables(), 1);
+    }
+    // Started only (its first page not come yet): bounded by the tables too.
+    for t in 0..MEMORY_TABLES * 4 {
+        let l =
+            Load { table: key(&format!("s{t}")), tab: TabId(1), run: 1, columns: vec![(&c, true)], read_in: &read_in };
+        m.start(&l);
+        assert_eq!(m.tables(), 1);
+    }
 }
