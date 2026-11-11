@@ -477,7 +477,7 @@ fn the_columns_follow_the_catalogue_read_while_the_dialog_is_open() {
     keys_came_with(&mut h, "local-pg", keys);
     let screen = h.screen(120, 34);
     assert!(screen.contains("Columns 3") && !screen.contains("from the loaded result"), "{screen}");
-    assert!(screen.contains("email           character v"), "{screen}");
+    assert!(screen.contains("email           varchar(200)"), "{screen}");
     // Still on `name` (now the third column, not the second).
     h.key(KeyCode::Right);
     h.key(KeyCode::Char(' '));
@@ -629,4 +629,49 @@ fn the_dialog_takes_nothing_of_the_grid_under_it() {
         h.key(KeyCode::Esc);
         assert!(!open(&h));
     }
+}
+
+/// PostgreSQL's long type names are listed by their short names, so the list does not cut
+/// what tells them apart (with or without a time zone); the heading keeps the long name.
+#[test]
+fn the_column_list_names_postgresql_types_short() {
+    use datarig_core::driver::keys::{CatalogColumn, OrderKeys};
+    let mut h = users();
+    h.keys("f");
+    let col = |name: &str, ty: &str| CatalogColumn {
+        name: name.into(),
+        type_name: ty.into(),
+        not_null: name == "id",
+        primary_key: name == "id",
+        foreign_key: false,
+        invisible: false,
+    };
+    let keys = OrderKeys {
+        primary_key: vec!["id".into()],
+        columns: Some(vec![
+            col("id", "bigint"),
+            col("email", "character varying(200)"),
+            col("seen", "timestamp with time zone"),
+            col("made", "timestamp(3) without time zone"),
+            col("at", "time with time zone[]"),
+            col("score", "double precision"),
+        ]),
+        ..Default::default()
+    };
+    keys_came_with(&mut h, "local-pg", keys);
+    let screen = h.screen(120, 34);
+    for (name, ty) in [
+        ("email", "varchar(200)"),
+        ("seen", "timestamptz"),
+        ("made", "timestamp(3)"),
+        ("at", "timetz[]"),
+        ("score", "float8"),
+    ] {
+        let line = screen.lines().find(|l| l.contains(&format!(" {name} "))).unwrap_or_else(|| panic!("{screen}"));
+        assert!(line.contains(&format!(" {ty} ")), "{name} as {ty}: {screen}");
+    }
+    for _ in 0..2 {
+        h.key(KeyCode::Down);
+    }
+    assert!(h.screen(120, 34).contains("seen  timestamp with time zone"), "{}", h.screen(120, 34));
 }

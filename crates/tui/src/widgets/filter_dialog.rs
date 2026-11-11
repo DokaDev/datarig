@@ -82,6 +82,42 @@ fn key(app: &App, a: crate::app::filter_dialog::DialogAction) -> String {
     app.key_for(Action::FilterDialog(a), Ctx::FilterDialog)
 }
 
+/// `ty` as the column list writes it: a PostgreSQL type by its short name where it has one
+/// (`timestamptz`, `varchar(20)`, `float8`), so a cut does not take what tells types apart;
+/// anything else as written.
+fn short_type(d: Dialect, ty: &str) -> String {
+    if d != Dialect::Postgres {
+        return ty.to_string();
+    }
+    let base = ty.trim_end_matches("[]");
+    let arrays = &ty[base.len()..];
+    for head in ["timestamp", "time"] {
+        let Some(rest) = base.strip_prefix(head) else { continue };
+        let (precision, zone) = rest.split_at(rest.find(' ').unwrap_or(rest.len()));
+        if !(precision.is_empty() || precision.starts_with('(')) {
+            continue;
+        }
+        match zone {
+            " with time zone" => return format!("{head}tz{precision}{arrays}"),
+            " without time zone" => return format!("{head}{precision}{arrays}"),
+            _ => {}
+        }
+    }
+    for (long, short) in [
+        ("character varying", "varchar"),
+        ("character", "char"),
+        ("double precision", "float8"),
+        ("bit varying", "varbit"),
+    ] {
+        if let Some(rest) = base.strip_prefix(long)
+            && (rest.is_empty() || rest.starts_with('('))
+        {
+            return format!("{short}{rest}{arrays}");
+        }
+    }
+    ty.to_string()
+}
+
 /// Fills `r` with `style`, nothing of what was drawn under it kept (a style only adds
 /// modifiers, so the grid's italics would show through).
 fn fill(buf: &mut Buffer, r: Rect, style: Style) {
@@ -252,8 +288,11 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
         if types {
             let tx = x0 + 4 + name_w as u16 + 1;
             // A column `SELECT *` leaves out (MySQL INVISIBLE): filtered and sorted, never loaded.
-            let ty =
-                if c.invisible { i18n.label(Label::TableDialogInvisible).to_string() } else { c.type_name.clone() };
+            let ty = if c.invisible {
+                i18n.label(Label::TableDialogInvisible).to_string()
+            } else {
+                short_type(d.dialect, &c.type_name)
+            };
             put(buf, tx, y, &ty, usize::from(marks_x.saturating_sub(tx + 1)), muted);
         }
         if !d.draft.where_.rows_of(&c.name).iter().all(|&t| !d.draft.where_.terms()[t].complete()) {
@@ -1362,3 +1401,6 @@ fn draw_hints(app: &App, d: &FilterDialog, view: Option<&ValuesView>, x: u16, y:
         cx += put(buf, cx, y, &format!(" {label}"), width(label) + 1, muted);
     }
 }
+
+#[cfg(test)]
+mod tests;
