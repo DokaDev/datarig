@@ -5959,3 +5959,206 @@ async fn an_estimate_is_not_capped_by_the_limit_paging_left() {
     let est = estimate(&mut c, 3, &capped).await.0.expect("an estimate");
     assert!(est <= 10, "{est}");
 }
+
+/// A dialer that keeps what its streams write and can hold back what the server answers on the
+/// first one (the session's), as an answer slow to arrive. The streams after it (a cancel's) pass.
+#[derive(Default)]
+struct Tap {
+    dialer: TcpDialer,
+    state: Arc<TapState>,
+}
+
+#[derive(Default)]
+struct TapState {
+    written: std::sync::Mutex<String>,
+    armed: std::sync::Mutex<Option<String>>,
+    held: std::sync::atomic::AtomicBool,
+    wakers: std::sync::Mutex<Vec<std::task::Waker>>,
+}
+
+impl TapState {
+    /// Hold the answers from the next request whose bytes contain `text` on.
+    fn hold_after(&self, text: &str) {
+        *self.armed.lock().unwrap() = Some(text.to_string());
+    }
+
+    fn held(&self) -> bool {
+        self.held.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn release(&self) {
+        self.held.store(false, std::sync::atomic::Ordering::SeqCst);
+        for waker in self.wakers.lock().unwrap().drain(..) {
+            waker.wake();
+        }
+    }
+
+    fn written(&self) -> String {
+        self.written.lock().unwrap().clone()
+    }
+
+    /// Forget what was written so far.
+    fn clear(&self) {
+        self.written.lock().unwrap().clear();
+    }
+}
+
+struct Tapped {
+    inner: datarig_core::transport::BoxedStream,
+    state: Arc<TapState>,
+    holds: bool,
+}
+
+impl tokio::io::AsyncRead for Tapped {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let me = self.get_mut();
+        if me.holds && me.state.held() {
+            me.state.wakers.lock().unwrap().push(cx.waker().clone());
+            if me.state.held() {
+                return std::task::Poll::Pending;
+            }
+        }
+        std::pin::Pin::new(&mut me.inner).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for Tapped {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let me = self.get_mut();
+        let text = String::from_utf8_lossy(buf);
+        if me.holds {
+            let mut armed = me.state.armed.lock().unwrap();
+            if armed.as_deref().is_some_and(|wanted| text.contains(wanted)) {
+                *armed = None;
+                me.state.held.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let wrote = std::pin::Pin::new(&mut me.inner).poll_write(cx, buf);
+        if matches!(wrote, std::task::Poll::Ready(Ok(_))) {
+            me.state.written.lock().unwrap().push_str(&text);
+        }
+        wrote
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+impl Dialer for Tap {
+    fn dial(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<datarig_core::transport::BoxedStream, datarig_core::transport::DialError>,
+    > {
+        let holds = self.dialer.dials.load(std::sync::atomic::Ordering::SeqCst) == 0;
+        let (dial, state) = (self.dialer.dial(host, port), self.state.clone());
+        Box::pin(async move {
+            let inner = dial.await?;
+            Ok(Box::new(Tapped { inner, state, holds }) as datarig_core::transport::BoxedStream)
+        })
+    }
+}
+
+/// A session of test `test` through a new [`Tap`]; `None` over TLS, whose bytes say nothing.
+async fn tapped(url: &str, test: &str) -> Option<(Conn, Arc<TapState>)> {
+    if std::env::var("DATARIG_TEST_MYSQL_SSLMODE").is_ok_and(|m| !m.eq_ignore_ascii_case("DISABLED")) {
+        return None;
+    }
+    let tap = Arc::new(Tap::default());
+    let state = tap.state.clone();
+    let o = ConnectOptions::new(PAGE, SessionRole::Query, &tag(test)).dialer(Some(DialerRef(tap as Arc<dyn Dialer>)));
+    Some((Conn::open_opts(url, SessionRole::Query, o).await, state))
+}
+
+/// Wait until `done`, at most 10 s.
+async fn until(what: &str, done: impl Fn() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !done() {
+        assert!(Instant::now() < deadline, "never: {what}");
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+}
+
+/// The answer of the count or the estimate the session runs.
+async fn read_answer(c: &mut Conn) -> Result<u64, DbError> {
+    let done = |e: &DbEvent| matches!(e, DbEvent::Counted { .. } | DbEvent::Estimated { .. });
+    match c.wait(done, 30).await {
+        DbEvent::Counted { result, .. } | DbEvent::Estimated { result, .. } => result,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A cancel that comes while a count or an estimate is being admitted finds nothing running at
+/// the server, so it stops nothing there: the read is then not sent at all, and the run is
+/// answered cancelled once. So too for one that comes while its own transaction is opened.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_while_a_read_is_admitted_stops_it_unsent() {
+    let test = "a_cancel_while_a_read_is_admitted_stops_it_unsent";
+    let Some((url, admin)) = urls(test) else { return };
+    let _end = EndSessions { admin: admin.clone(), test };
+    let t = numbers(&admin, "admit", 50).await;
+    let Some((mut c, tap)) = tapped(&url, test).await else { return };
+    let rows = format!("SELECT * FROM {} WHERE (id > 10)", t.q());
+    let counted = format!("SELECT COUNT(*) FROM (\n{rows}\n) AS datarig_count");
+    let limit = Some(Duration::from_secs(30));
+    let count = |id| DbCommand::Count { id, sql: counted.clone(), limit };
+    let plan = |id| DbCommand::Estimate { id, sql: rows.clone() };
+    let not_sent = |written: &str| !written.contains("COUNT(*)") && !written.contains("EXPLAIN");
+
+    // The catalog's answer held back until the kill for it was carried out.
+    for (id, command) in [(1, count(1)), (2, plan(2))] {
+        tap.clear();
+        tap.hold_after("information_schema.TABLES");
+        c.session.send(command);
+        until("the question went out", || tap.held()).await;
+        c.session.cancel();
+        until("the kill went out", || tap.written().contains("KILL QUERY")).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        tap.release();
+        assert_eq!(read_answer(&mut c).await, Err(DbError::Cancelled), "{id}");
+        assert!(not_sent(&tap.written()), "{id}: {}", tap.written());
+        let evs = c.run(10 + id, &["SELECT 1"]).await;
+        assert!(!evs.iter().any(|e| matches!(e, DbEvent::Counted { .. } | DbEvent::Estimated { .. })), "{evs:?}");
+        assert_eq!(page_of(&evs).1, &vec![vec![Some("1".to_string())]]);
+    }
+
+    // Its own transaction opened meanwhile (without autocommit): ended again.
+    c.ok(20, "SET SESSION autocommit = 0").await;
+    for (id, command) in [(21, count(21)), (22, plan(22))] {
+        tap.clear();
+        tap.hold_after("START TRANSACTION READ ONLY");
+        c.session.send(command);
+        until("the transaction was opened", || tap.held()).await;
+        c.session.cancel();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tap.release();
+        assert_eq!(read_answer(&mut c).await, Err(DbError::Cancelled), "{id}");
+        let written = tap.written();
+        assert!(not_sent(&written), "{id}: {written}");
+        assert!(written.contains("ROLLBACK"), "{id}: {written}");
+    }
+    c.session.send(count(23));
+    assert_eq!(read_answer(&mut c).await, Ok(40), "the session goes on");
+}

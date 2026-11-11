@@ -2348,7 +2348,8 @@ async fn count(
 /// ([`count`]): the session's row limit set aside when it is 0, in a read-only transaction of
 /// its own when there was none open before (`was_open`) and the session runs without
 /// autocommit, and what the read left in the session said after it. A failure with a time limit
-/// `applied` is worded by [`bounded_failure`].
+/// `applied` is worded by [`bounded_failure`]. A run cancelled by the time it is ready to read is
+/// answered so, without the read.
 async fn read_own(
     conn: &mut Conn,
     link: &mut Link,
@@ -2375,13 +2376,25 @@ async fn read_own(
         return Ok(Err(failure(&e).0));
     }
     env.busy.store(true, Ordering::SeqCst);
-    let read = link.guard(Some(env.killer), conn.query_first::<String, _>(text)).await?;
+    // Cancelled while it was admitted or set up, when nothing ran for the kill to stop: the read
+    // is not sent. Looked at with the session busy, so a cancel after this sends its kill.
+    let unsent = env.asked.asked();
+    let read = match unsent {
+        true => Ok(None),
+        false => link.guard(Some(env.killer), conn.query_first::<String, _>(text)).await?,
+    };
     idle(env, link).await;
     if own && !link.tainted() && !read.as_ref().is_err_and(|e| e.is_fatal()) {
         // Nothing to keep: a read.
         let _ = link.guard(None, conn.query_drop(ROLLBACK)).await?;
     }
     let ask = s.tx.open || !s.tx.autocommit;
+    if unsent {
+        if let Some(error) = after(conn, link, env, s, "", false, ask, false).await? {
+            return Err(Stop::Lost(error));
+        }
+        return Ok(Err(DbError::Cancelled));
+    }
     Ok(match read {
         Err(e) if e.is_fatal() => return Err(Stop::Lost(my_error(&e))),
         Err(e) => {
