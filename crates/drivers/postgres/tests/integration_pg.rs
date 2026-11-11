@@ -6193,3 +6193,65 @@ async fn a_catalog_read_puts_pg_catalog_first_on_the_path() {
     assert_eq!(path.as_deref(), Some("pg_catalog"));
     c.run(106, "ROLLBACK").await;
 }
+
+/// A session still connecting, with nothing waited for yet: what is sent and cancelled now is
+/// queued behind the connection.
+fn connecting(url: &str) -> Conn {
+    let cfg = ConnectionConfig { name: "it".into(), dsn: Some(url.to_string()), ..ConnectionConfig::test_db() };
+    let (tx, rx) = unbounded_channel();
+    let session = PgDriver.connect(&cfg, SessionRole::Query, opts(SessionRole::Query), tx);
+    Conn { session, rx }
+}
+
+fn execute(id: u64, sql: &str) -> DbCommand {
+    DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::Hold, tx: TxRule::Auto }
+}
+
+/// A Ctrl+C while a run waits for the connection cancels that run: it is answered cancelled and
+/// never reaches the server, and the run after it is not touched.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_of_a_queued_run_stops_that_run_and_no_later_one() {
+    let Some(url) = pg_url("a_cancel_of_a_queued_run_stops_that_run_and_no_later_one") else { return };
+    let (_schema_guard, _terminate, schema, _tag) = scratch(&url, "cancelq");
+    let mut c = connecting(&url);
+    c.session.send(execute(1, &format!("INSERT INTO {schema}.t VALUES (1)")));
+    c.session.cancel();
+    let ev = c.result(1).await;
+    assert!(matches!(ev, DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. }), "{ev:?}");
+    assert!(matches!(c.run(2, &format!("INSERT INTO {schema}.t VALUES (2)")).await, DbEvent::Done { .. }));
+    let DbEvent::Page { rows, .. } = c.run(3, &format!("SELECT x FROM {schema}.t")).await else { panic!("rows") };
+    assert_eq!(rows, [vec![Some("2".to_string())]], "only the run after it ran");
+}
+
+/// A count cancelled and asked again has the same id, and is another run: it is answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_count_asked_again_after_a_cancel_is_not_cancelled() {
+    let Some(url) = pg_url("a_count_asked_again_after_a_cancel_is_not_cancelled") else { return };
+    let (_schema_guard, _terminate, schema, _tag) = scratch(&url, "cancelc");
+    let sql = format!("SELECT count(*) FROM {schema}.t");
+    let mut c = connecting(&url);
+    c.session.send(DbCommand::Count { id: 7, sql: sql.clone() });
+    c.session.cancel();
+    let counted = |e: &DbEvent| matches!(e, DbEvent::Counted { id: 7, .. });
+    let ev = c.wait(counted, 10).await;
+    assert!(matches!(ev, DbEvent::Counted { result: Err(DbError::Cancelled), .. }), "{ev:?}");
+    c.session.send(DbCommand::Count { id: 7, sql });
+    let ev = c.wait(counted, 10).await;
+    assert!(matches!(ev, DbEvent::Counted { result: Ok(0), .. }), "{ev:?}");
+}
+
+/// A cancel is for the last run sent: a run queued before it still runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_of_a_queued_run_leaves_the_run_before_it() {
+    let Some(url) = pg_url("a_cancel_of_a_queued_run_leaves_the_run_before_it") else { return };
+    let (_schema_guard, _terminate, schema, _tag) = scratch(&url, "cancelb");
+    let mut c = connecting(&url);
+    c.session.send(execute(1, &format!("INSERT INTO {schema}.t VALUES (1)")));
+    c.session.send(execute(2, &format!("INSERT INTO {schema}.t VALUES (2)")));
+    c.session.cancel();
+    assert!(matches!(c.result(1).await, DbEvent::Done { .. }), "the run before it");
+    let ev = c.result(2).await;
+    assert!(matches!(ev, DbEvent::Failed { cancelled: true, .. }), "{ev:?}");
+    let DbEvent::Page { rows, .. } = c.run(3, &format!("SELECT x FROM {schema}.t")).await else { panic!("rows") };
+    assert_eq!(rows, [vec![Some("1".to_string())]]);
+}

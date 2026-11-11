@@ -4824,3 +4824,92 @@ async fn a_failing_start_up_statement_fails_the_connect() {
         Ok(_) => panic!("a read-only session connected read-write"),
     }
 }
+
+fn execute(id: u64, sql: &str) -> DbCommand {
+    DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::NoHold, tx: TxRule::Auto }
+}
+
+/// The values of column `x` of `table`, in order.
+async fn xs(admin: &str, table: &str) -> Vec<i64> {
+    let mut a = side(admin).await;
+    a.query(format!("SELECT x FROM {table} ORDER BY x")).await.unwrap()
+}
+
+/// A Ctrl+C while a run waits for the connection cancels that run: it is answered cancelled and
+/// never reaches the server, and the run after it is not touched.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_of_a_queued_run_stops_that_run_and_no_later_one() {
+    let test = "a_cancel_of_a_queued_run_stops_that_run_and_no_later_one";
+    let Some((_, admin)) = urls(test) else { return };
+    let t = format!("shop.zz_cancelq_{}", std::process::id());
+    let _t = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {t}") };
+    side(&admin).await.query_drop(format!("CREATE TABLE {t} (x int PRIMARY KEY)")).await.unwrap();
+    let mut c = Conn::start(&admin, SessionRole::Query, false, test);
+    c.session.send(execute(1, &format!("INSERT INTO {t} VALUES (1)")));
+    c.session.cancel();
+    let evs = c.answer(1).await;
+    let last = evs.last().unwrap();
+    assert!(matches!(last, DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. }), "{evs:?}");
+    c.ok(2, &format!("INSERT INTO {t} VALUES (2)")).await;
+    assert_eq!(xs(&admin, &t).await, [2], "only the run after it ran");
+}
+
+/// A count cancelled and asked again has the same id, and is another run: it is answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_count_asked_again_after_a_cancel_is_not_cancelled() {
+    let test = "a_count_asked_again_after_a_cancel_is_not_cancelled";
+    let Some((_, admin)) = urls(test) else { return };
+    let t = format!("shop.zz_cancelc_{}", std::process::id());
+    let _t = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {t}") };
+    side(&admin).await.query_drop(format!("CREATE TABLE {t} (x int PRIMARY KEY)")).await.unwrap();
+    let sql = format!("SELECT count(*) FROM {t}");
+    let mut c = Conn::start(&admin, SessionRole::Query, false, test);
+    c.session.send(DbCommand::Count { id: 7, sql: sql.clone() });
+    c.session.cancel();
+    let counted = |e: &DbEvent| matches!(e, DbEvent::Counted { id: 7, .. });
+    let ev = c.wait(counted, 15).await;
+    assert!(matches!(ev, DbEvent::Counted { result: Err(DbError::Cancelled), .. }), "{ev:?}");
+    c.session.send(DbCommand::Count { id: 7, sql });
+    let ev = c.wait(counted, 15).await;
+    assert!(matches!(ev, DbEvent::Counted { result: Ok(0), .. }), "{ev:?}");
+}
+
+/// A cancel is for the last run sent: a run queued before it still runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_of_a_queued_run_leaves_the_run_before_it() {
+    let test = "a_cancel_of_a_queued_run_leaves_the_run_before_it";
+    let Some((_, admin)) = urls(test) else { return };
+    let t = format!("shop.zz_cancelb_{}", std::process::id());
+    let _t = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {t}") };
+    side(&admin).await.query_drop(format!("CREATE TABLE {t} (x int PRIMARY KEY)")).await.unwrap();
+    let mut c = Conn::start(&admin, SessionRole::Query, false, test);
+    c.session.send(execute(1, &format!("INSERT INTO {t} VALUES (1)")));
+    c.session.send(execute(2, &format!("INSERT INTO {t} VALUES (2)")));
+    c.session.cancel();
+    let evs = c.answer(1).await;
+    assert!(!matches!(evs.last().unwrap(), DbEvent::Failed { .. }), "the run before it: {evs:?}");
+    let evs = c.answer(2).await;
+    assert!(matches!(evs.last().unwrap(), DbEvent::Failed { cancelled: true, .. }), "{evs:?}");
+    assert_eq!(xs(&admin, &t).await, [1]);
+}
+
+/// A count waiting behind a held result and cancelled there is the run cancelled, not the
+/// statement sent after it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_count_cancelled_behind_a_held_result_leaves_the_statement_after_it() {
+    let test = "a_count_cancelled_behind_a_held_result";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "heldcancel", 700).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    c.ok(1, "BEGIN").await;
+    let evs = c.run(2, &[&format!("SELECT id FROM {} ORDER BY id", t.q())]).await;
+    assert!(page_of(&evs).2, "a result held for more pages");
+    c.session.send(DbCommand::Count { id: 3, sql: format!("SELECT count(*) FROM {}", t.q()) });
+    c.session.cancel();
+    c.session.send(execute(4, "SELECT 1"));
+    let ev = c.wait(|e| matches!(e, DbEvent::Counted { id: 3, .. }), 15).await;
+    assert!(matches!(ev, DbEvent::Counted { result: Err(DbError::Cancelled), .. }), "{ev:?}");
+    let evs = c.answer(4).await;
+    assert!(!matches!(evs.last().unwrap(), DbEvent::Failed { .. }), "the statement after it runs: {evs:?}");
+    c.ok(5, "ROLLBACK").await;
+}

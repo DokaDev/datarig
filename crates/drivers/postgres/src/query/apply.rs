@@ -112,7 +112,6 @@ pub(super) async fn apply(
     cache_off: bool,
     hooks: &Hooks<'_>,
 ) -> Result<Option<DbError>, Closed> {
-    env.cancel.store(false, Ordering::SeqCst);
     env.failed.store(false, Ordering::SeqCst);
     let answer = |result| {
         let _ = env.events.send(DbEvent::Applied { id, result });
@@ -172,7 +171,7 @@ pub(super) async fn apply(
     let mut failure = None;
     for (i, step) in steps.iter().enumerate() {
         hooks.before_step(i);
-        if env.cancel.load(Ordering::SeqCst) {
+        if env.cancel.asked() {
             failure = Some(fail(Some(i), DbError::Cancelled));
             break;
         }
@@ -225,7 +224,7 @@ pub(super) async fn apply(
     if failure.is_none() {
         hooks.before_step(steps.len());
     }
-    if failure.is_none() && env.cancel.load(Ordering::SeqCst) {
+    if failure.is_none() && env.cancel.asked() {
         failure = Some(fail(None, DbError::Cancelled));
     }
     if let Some(failure) = failure {

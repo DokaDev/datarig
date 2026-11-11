@@ -47,8 +47,6 @@ pub(super) async fn export(
     sink: ExportSink,
     batch: usize,
 ) -> Result<Answer, Stop> {
-    // A cancel asked for before this belonged to what ran before.
-    env.asked.store(false, Ordering::SeqCst);
     env.killer.clear();
     let r = risk::classify(sql, s.mode);
     if env.read_only && (r.read_write || r.read_only().is_err()) {
@@ -121,7 +119,7 @@ pub(super) async fn export(
     let mut cancelled = false;
     let batch = batch.max(1);
     while !stopped {
-        if env.asked.load(Ordering::SeqCst) {
+        if env.asked.asked() {
             cancelled = true;
             stopped = true;
             break;

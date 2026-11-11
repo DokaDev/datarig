@@ -11,8 +11,8 @@ use crate::query::query_loop;
 use crate::route::{Cancel, Route, route};
 use crate::tls::{PgTls, TlsError};
 use datarig_core::driver::{
-    Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, EditFormat, ExplainFormat, Hierarchy,
-    PingError, PingInfo, ServerMessage, Session, SessionRole, SessionStatement,
+    CancelMark, Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, EditFormat,
+    ExplainFormat, Hierarchy, PingError, PingInfo, ServerMessage, Session, SessionRole, SessionStatement,
 };
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
@@ -21,7 +21,6 @@ use datarig_core::tls::{TlsProblem, TlsSettings};
 use datarig_core::transport::DialerRef;
 use futures::future::BoxFuture;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -38,11 +37,14 @@ pub(crate) const CONNECT_GUARD: Duration = Duration::from_secs(30);
 
 /// Cancels the query session's statement: flags the request for the session, which stops a run
 /// of several statements before its next one, and asks the server to cancel what runs now.
-struct PgCanceller(Mutex<Option<Cancel>>, Arc<AtomicBool>);
+struct PgCanceller(Mutex<Option<Cancel>>, Arc<CancelMark>);
 
 impl Canceller for PgCanceller {
-    fn cancel(&self) {
-        self.1.store(true, Ordering::SeqCst);
+    fn cancel(&self, run: u64) {
+        // Not started yet: the session answers it cancelled when its turn comes.
+        if !self.1.ask(run) {
+            return;
+        }
         let cancel = self.0.lock().ok().and_then(|g| g.clone());
         if let Some(cancel) = cancel {
             // Bound now to the request it is asked during; one that cannot be sent closes the
@@ -82,7 +84,7 @@ impl Driver for PgDriver {
         events: UnboundedSender<DbEvent>,
     ) -> Session {
         let (tx, rx) = unbounded_channel();
-        let canceller = Arc::new(PgCanceller(Mutex::new(None), Arc::new(AtomicBool::new(false))));
+        let canceller = Arc::new(PgCanceller(Mutex::new(None), Arc::new(CancelMark::default())));
         let cfg = cfg.clone();
         // A monitor session reads the whole server from the profile's own database and sends
         // nothing before its probe: no context, limits or start-up statements.

@@ -102,8 +102,8 @@ use crate::link::{Closed, Link, Next};
 use crate::route::Cancel;
 use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display, value_kind};
 use datarig_core::driver::{
-    CancelFailure, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, OwnSession, PagingMode,
-    TxOutcome, TxRule, TxStep,
+    CancelFailure, CancelMark, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, OwnSession,
+    PagingMode, TxOutcome, TxRule, TxStep,
 };
 use datarig_core::sql::lexer::{Tok, Token, lex, lex_backslash_strings};
 use datarig_core::sql::risk::{self, Class};
@@ -452,9 +452,9 @@ struct Env<'a> {
     /// The connection's own server session ([`DbCommand::ServerSession`]).
     own: &'a Own,
     token: &'a Cancel,
-    /// The UI asked to cancel (set by the session's canceller, cleared when a run starts): a
+    /// The UI asked to cancel this run (set by the session's canceller, for the run it meant): a
     /// run of several statements stops before its next one.
-    cancel: &'a AtomicBool,
+    cancel: &'a CancelMark,
     /// The run going on was answered with a failure (set by its [`Reply`] or [`Paged`], cleared
     /// when a run starts).
     failed: &'a AtomicBool,
@@ -769,7 +769,7 @@ pub(crate) async fn query_loop(
     mut client: Client,
     mut link: Link,
     token: Cancel,
-    cancel: Arc<AtomicBool>,
+    cancel: Arc<CancelMark>,
     events: UnboundedSender<DbEvent>,
     settings: Settings,
 ) {
@@ -798,7 +798,14 @@ pub(crate) async fn query_loop(
     let mut tx = Tx::default();
     let mut prepared = Prepared { off: !settings.statement_cache, ..Prepared::default() };
     loop {
-        let stop = match link.next().await {
+        let next = link.next().await;
+        // Cancelled while it waited its turn: answered, never run.
+        if let Next::Command(cmd) = &next
+            && cmd.cancelled_before_start(&cancel, &events)
+        {
+            continue;
+        }
+        let stop = match next {
             Next::Command(DbCommand::Execute { id, statements, paging, tx: rule }) => {
                 let mut s = State { tx: &mut tx, prepared: &mut prepared };
                 let job = Job { statements, resume: None, paging, rule };
@@ -1423,8 +1430,6 @@ async fn run<'a>(
         reply.done(Outcome::Command(String::new()), std::time::Duration::ZERO);
         return Ok(());
     }
-    // A cancel asked for before this run belonged to the one before.
-    env.cancel.store(false, Ordering::SeqCst);
     env.failed.store(false, Ordering::SeqCst);
     // A statement run again for the user (`Resume`): what only the server can tell for the
     // allowlist is asked first, and inside the user's block the savepoint it runs under is set
@@ -1475,7 +1480,7 @@ async fn run<'a>(
             let step = Step { last: i + 1 == n, index: i, start: Instant::now(), skip, resume, hold };
             if n > 1 {
                 // Cancelled between two statements: the rest does not run.
-                if i > 0 && env.cancel.load(Ordering::SeqCst) {
+                if i > 0 && env.cancel.asked() {
                     reply.fail(DbError::Cancelled, true);
                     break 'steps;
                 }
@@ -2225,7 +2230,7 @@ async fn portal<'a>(
         let _ = env.events.send(DbEvent::StepRows { id, index, columns, rows, more });
         while more {
             // Cancelled between two pages: the statement stops, the rest does not run.
-            if env.cancel.load(Ordering::SeqCst) {
+            if env.cancel.asked() {
                 drop(portal);
                 let _ = halt!(finish(txn, false, link).await, Some(reply));
                 reply.fail(DbError::Cancelled, true);
@@ -2342,6 +2347,10 @@ async fn portal<'a>(
             // A count of this result's rows runs in the portal's transaction, under a
             // savepoint: the portal goes on paging after it, whatever it answered.
             Next::Command(DbCommand::Count { id: cid, sql }) => {
+                if env.cancel.begin() {
+                    let _ = env.events.send(cancelled_count(cid));
+                    continue;
+                }
                 let (result, snapshot) = match counted_in(&txn, link, env, &sql).await {
                     Ok(counted) => counted,
                     Err(closed) => {
@@ -2352,6 +2361,10 @@ async fn portal<'a>(
             }
             // So is the allowlist's question, which leaves the portal paging too.
             Next::Command(DbCommand::CheckRepeat { id: cid, sql }) => {
+                if env.cancel.begin() {
+                    let _ = env.events.send(cancelled_check(cid));
+                    continue;
+                }
                 let result = match checked_repeat_in(&txn, link, env, &sql).await {
                     Ok(result) => result,
                     Err(closed) => {

@@ -41,7 +41,7 @@ pub struct FakeCancel {
     pub any: Arc<AtomicBool>,
 }
 impl Canceller for FakeCancel {
-    fn cancel(&self) {
+    fn cancel(&self, _run: u64) {
         self.own.store(true, Ordering::SeqCst);
         self.any.store(true, Ordering::SeqCst);
     }

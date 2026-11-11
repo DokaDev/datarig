@@ -98,8 +98,8 @@ use crate::link::{Closed, Link, Next};
 use crate::session::{Gate, Killer, Server, Tracked, my_error};
 use crate::values::{column_meta, display};
 use datarig_core::driver::{
-    CancelFailure, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, OwnSession, PagingMode, ServerEnd,
-    SessionValues, StatementInfo, TxOutcome, TxRule, TxStep,
+    CancelFailure, CancelMark, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, OwnSession, PagingMode,
+    ServerEnd, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep,
 };
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
@@ -177,9 +177,9 @@ struct Env<'a> {
     /// ([`DbCommand::ServerSession`]).
     own: &'a OnceLock<bool>,
     killer: &'a Killer,
-    /// The UI asked to cancel (cleared when a run starts): a run of several statements stops
+    /// The UI asked to cancel this run: a run of several statements stops
     /// before its next one.
-    asked: &'a AtomicBool,
+    asked: &'a CancelMark,
     /// A statement of the session is on its way to the server or running there.
     busy: &'a AtomicBool,
     /// The run going on answered with a failure (cleared when a run starts; [`Reply`]).
@@ -402,7 +402,7 @@ pub(crate) async fn query_loop(
     mut conn: Conn,
     mut link: Link,
     killer: Killer,
-    asked: Arc<AtomicBool>,
+    asked: Arc<CancelMark>,
     busy: Arc<AtomicBool>,
     events: UnboundedSender<DbEvent>,
     settings: Settings,
@@ -438,7 +438,14 @@ pub(crate) async fn query_loop(
         request: 0,
     };
     let stop = loop {
-        let done = match link.next().await {
+        let next = link.next().await;
+        // Cancelled while it waited its turn: answered, never run.
+        if let Next::Command(cmd) = &next
+            && cmd.cancelled_before_start(&asked, &events)
+        {
+            continue;
+        }
+        let done = match next {
             Next::Command(DbCommand::Execute { id, statements, paging, tx }) => {
                 // MySQL has no idle limit for a transaction (`idle_timeout`), nor a read-only
                 // transaction that costs no round trip of its own: a `ReadOnly` step runs as it
@@ -457,11 +464,9 @@ pub(crate) async fn query_loop(
                 end_tx(&mut conn, &mut link, &env, &mut s, id, commit).await
             }
             // Answered once; a session the UI closed meanwhile answers nothing.
-            // A count or a check the app asks for: a cancel asked before it was another run's.
             Next::Command(DbCommand::Count { id, sql }) => {
                 link.serving(&events, id);
                 s.request = id;
-                env.asked.store(false, Ordering::SeqCst);
                 killer.clear();
                 count(&mut conn, &mut link, &env, &mut s, &sql).await.map(|(result, snapshot)| {
                     let _ = events.send(DbEvent::Counted { id, result, snapshot });
@@ -470,7 +475,6 @@ pub(crate) async fn query_loop(
             Next::Command(DbCommand::CheckRepeat { id, sql }) => {
                 link.serving(&events, id);
                 s.request = id;
-                env.asked.store(false, Ordering::SeqCst);
                 killer.clear();
                 check_repeat(&mut conn, &mut link, &env, &mut s, &sql).await.map(|result| {
                     let _ = events.send(DbEvent::RepeatChecked { id, result });
@@ -637,8 +641,6 @@ async fn run<'a>(
         reply.done(Outcome::Command(String::new()), Duration::ZERO);
         return Ok(());
     }
-    // A cancel asked for before this run belonged to the one before.
-    env.asked.store(false, Ordering::SeqCst);
     env.killer.clear();
     // A statement run again for the user: what only the server can tell for the allowlist is
     // asked first.
@@ -663,7 +665,7 @@ async fn run<'a>(
             // Cancelled between two statements: the rest does not run. Nor on a connection that
             // runs nothing more (a kill sent again for the statement before never answered,
             // which only a cancel sends).
-            if i > 0 && (env.asked.load(Ordering::SeqCst) || link.tainted()) {
+            if i > 0 && (env.asked.asked() || link.tainted()) {
                 reply.fail(DbError::Cancelled, true);
                 return Ok(());
             }
@@ -830,7 +832,7 @@ async fn statement<'a>(
         s.tx.opening = Some((reply.id, step.index));
         s.tx.opened = Some(step.index);
         // Cancelled while it opened: the statement is not sent, and the run's end rolls back.
-        if env.asked.load(Ordering::SeqCst) {
+        if env.asked.asked() {
             reply.fail(DbError::Cancelled, true);
             return Ok(None);
         }
@@ -846,7 +848,7 @@ async fn statement<'a>(
     if undo.is_some() && (risk.rollback_matters() || unread) {
         let found = halt!(not_undone(conn, link, env, s, sql).await, Some(reply));
         // Cancelled while the server was asked: the statement is not sent.
-        if env.asked.load(Ordering::SeqCst) {
+        if env.asked.asked() {
             reply.fail(DbError::Cancelled, true);
             return Ok(None);
         }
@@ -935,7 +937,7 @@ async fn statement<'a>(
                 let _ = env.events.send(DbEvent::ValuesNotKnown { id: reply.id });
             }
             loop {
-                if env.asked.load(Ordering::SeqCst) {
+                if env.asked.asked() {
                     halt!(stop_result(&mut qr, link, env).await, Some(reply));
                     drop(qr);
                     forget_after_code(env, s);
@@ -1024,7 +1026,7 @@ async fn statement<'a>(
                     Ok(held) => held,
                     Err(stop) => {
                         // A cancel the server did not take: the run's one failure that follows.
-                        if matches!(stop, Stop::Lost(DbError::CancelNotTaken(_))) && env.asked.load(Ordering::SeqCst) {
+                        if matches!(stop, Stop::Lost(DbError::CancelNotTaken(_))) && env.asked.asked() {
                             paged.cancelled();
                         }
                         return Err(Halted { stop, reply: None });
@@ -1472,8 +1474,10 @@ async fn hold_on(
                 let _ = env.events.send(DbEvent::ServerSession { request, own: own_answer(env) });
             }
             Next::Command(DbCommand::FetchMore { .. } | DbCommand::ClosePortal { .. }) => {}
+            // Behind what waited already: commands run in the order they were sent, which the
+            // numbers of a session's runs rely on.
             Next::Command(other) => {
-                held.waiting.insert(0, other);
+                held.waiting.push(other);
                 break;
             }
             Next::Closed => {
