@@ -1663,6 +1663,37 @@ fn split_terms_cuts_only_a_proven_conjunction() {
 }
 
 #[test]
+fn split_terms_leaves_a_mysql_interval_and_its_and_together() {
+    // The first AND belongs to the interval's value: two terms, not three. Not proven, so one.
+    let given = "DATE('2026-01-01') + INTERVAL 1 AND 1 DAY = '2026-01-02' AND flag = 1";
+    assert_eq!(terms_of(MY, given), None);
+    for text in ["d + INTERVAL 1 DAY > now() AND flag = 1", "flag = 1 AND d > now() - interval 2 AND 1 hour"] {
+        assert_eq!(terms_of(MY, text), None, "{text}");
+    }
+    // Not proven: joined with others it goes in parentheses, so it keeps what it means.
+    assert_eq!(join_terms(&[given, "id > 3"], MY), format!("({given}) AND id > 3"));
+    // An interval inside parentheses keeps its AND there; the real terms are cut, and taking out
+    // each of them leaves the others as written.
+    let held = "(DATE('2026-01-01') + INTERVAL 1 AND 1 DAY = '2026-01-02') AND flag = 1 AND id > 3";
+    let terms = terms_of(MY, held).unwrap();
+    assert_eq!(terms, vec!["(DATE('2026-01-01') + INTERVAL 1 AND 1 DAY = '2026-01-02')", "flag = 1", "id > 3"]);
+    for out in 0..terms.len() {
+        let kept: Vec<&str> = terms.iter().enumerate().filter(|(i, _)| *i != out).map(|(_, t)| *t).collect();
+        let joined = join_terms(&kept, MY);
+        assert_eq!(terms_of(MY, &joined), Some(kept.clone()), "{joined}");
+    }
+    assert_eq!(
+        terms_of(MY, "DATE_ADD(d, INTERVAL 1 AND 1 DAY) = '2026-01-02' AND flag = 1"),
+        Some(vec!["DATE_ADD(d, INTERVAL 1 AND 1 DAY) = '2026-01-02'", "flag = 1"])
+    );
+    // PostgreSQL's interval is a typed literal: nothing to hold.
+    assert_eq!(
+        terms_of(Dialect::Postgres, "d + INTERVAL '1 day' > now() AND flag = 1"),
+        Some(vec!["d + INTERVAL '1 day' > now()", "flag = 1"])
+    );
+}
+
+#[test]
 fn split_terms_keeps_the_meaning_of_mixed_precedence() {
     let corpus = [
         "p AND q AND r",

@@ -9,8 +9,9 @@
 //! binds more loosely than `AND` or may be read so: no `OR`, no `XOR`, none of MySQL's `||`,
 //! `&&`, `|`, `&`, `!` or `:=`, and no `NOT` but one over a parenthesised group that starts a
 //! term, or one of `IS NOT`, `NOT IN`, `NOT LIKE`, `NOT ILIKE`, `NOT BETWEEN`, `NOT SIMILAR`,
-//! `NOT REGEXP` and `NOT RLIKE`. Anything else, and text the filter's lexical check refuses, is
-//! one term as written: `None`.
+//! `NOT REGEXP` and `NOT RLIKE`. On MySQL, no `INTERVAL` either: its value is an expression that
+//! runs up to its unit and may hold an `AND` of its own (`d + INTERVAL 1 AND 1 DAY`). Anything
+//! else, and text the filter's lexical check refuses, is one term as written: `None`.
 //!
 //! The terms are byte ranges of the text, so what lies between them (the `AND`s and the blanks
 //! around them, as typed) is kept: text whose terms are not changed is the text as it was, byte
@@ -73,7 +74,8 @@ fn looser_than_and(text: &str, toks: &[Token], i: usize, t: &Token, d: Dialect) 
             let leads = i == 0 || is_word(text, toks.get(i - 1), "AND");
             return !(after_is || before_op || leads);
         }
-        return false;
+        // MySQL's `INTERVAL expr unit`: an `AND` up to the unit belongs to the interval.
+        return matches!(d, Dialect::MySql(_)) && s.eq_ignore_ascii_case("INTERVAL");
     }
     match d {
         Dialect::MySql(_) if t.kind == Tok::Op => match s {
