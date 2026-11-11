@@ -84,7 +84,8 @@ pub(crate) struct Tally {
     pub(crate) others: u64,
     /// The values not NULL counted, long ones included.
     pub(crate) not_null: u64,
-    /// The smallest and the largest value of a number column, as shown.
+    /// The smallest and the largest value of a column of whole or decimal numbers, as shown;
+    /// `None` when a value of it is not one written in plain digits (those are listed).
     pub(crate) range: Option<(String, String)>,
 }
 
@@ -108,16 +109,19 @@ impl Tally {
 pub(crate) struct Counter {
     counts: HashMap<Option<String>, u64>,
     bytes: usize,
-    number: bool,
-    /// The smallest and the largest number so far, as shown and as read.
-    range: Option<(String, f64, String, f64)>,
+    /// The range is kept: a column of numbers compared exactly, every value so far one.
+    ranged: bool,
+    /// The smallest and the largest number so far, as shown.
+    range: Option<(String, String)>,
     tally: Tally,
 }
 
 impl Counter {
-    /// A count of a column of numbers (`number`: their range is kept) or of other values.
-    pub(crate) fn new(number: bool) -> Self {
-        Self { number, ..Self::default() }
+    /// A count of a column of whole or decimal numbers (`exact`: their range is kept, each
+    /// compared digit by digit) or of other values (floating-point numbers among them: a range
+    /// of rounded values could say a wrong one).
+    pub(crate) fn new(exact: bool) -> Self {
+        Self { ranged: exact, ..Self::default() }
     }
 
     /// One more cell, as read (`None`: NULL).
@@ -128,19 +132,19 @@ impl Counter {
             t.not_null += 1;
             if v.len() > VALUE_BYTES {
                 t.long += 1;
+                self.ranged = false;
                 return;
             }
-            if self.number
-                && let Ok(n) = v.trim().parse::<f64>()
-            {
-                match &mut self.range {
-                    None => self.range = Some((v.to_string(), n, v.to_string(), n)),
-                    Some((lo, l, hi, h)) => {
-                        if n < *l {
-                            (*lo, *l) = (v.to_string(), n);
+            if self.ranged {
+                match (Decimal::of(v), &mut self.range) {
+                    (None, _) => self.ranged = false,
+                    (Some(_), None) => self.range = Some((v.to_string(), v.to_string())),
+                    (Some(n), Some((lo, hi))) => {
+                        if Decimal::of(lo).is_some_and(|l| n < l) {
+                            *lo = v.to_string();
                         }
-                        if n > *h {
-                            (*hi, *h) = (v.to_string(), n);
+                        if Decimal::of(hi).is_some_and(|h| n > h) {
+                            *hi = v.to_string();
                         }
                     }
                 }
@@ -160,10 +164,64 @@ impl Counter {
     /// What was counted.
     pub(crate) fn finish(self) -> Tally {
         let mut t = self.tally;
-        t.range = self.range.map(|(lo, _, hi, _)| (lo, hi));
+        t.range = self.range.filter(|_| self.ranged);
         t.values = self.counts.into_iter().map(|(value, rows)| Counted { value, rows }).collect();
         sort(&mut t.values);
         t
+    }
+}
+
+/// A number written in plain digits (an optional sign, digits with at most one point), as it
+/// compares: exactly, whatever its length.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Decimal<'a> {
+    negative: bool,
+    /// The digits before the point, without leading zeros.
+    whole: &'a str,
+    /// The digits after the point, without trailing zeros.
+    fraction: &'a str,
+}
+
+impl<'a> Decimal<'a> {
+    fn of(text: &'a str) -> Option<Self> {
+        let s = text.trim();
+        let (negative, unsigned) = match s.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, s.strip_prefix('+').unwrap_or(s)),
+        };
+        let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+        let digits = |p: &str| p.bytes().all(|b| b.is_ascii_digit());
+        if whole.is_empty() && fraction.is_empty() || !digits(whole) || !digits(fraction) {
+            return None;
+        }
+        let (whole, fraction) = (whole.trim_start_matches('0'), fraction.trim_end_matches('0'));
+        // Zero has no sign.
+        let negative = negative && !(whole.is_empty() && fraction.is_empty());
+        Some(Self { negative, whole, fraction })
+    }
+}
+
+impl Ord for Decimal<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let size = |d: &Self| {
+            d.whole
+                .len()
+                .cmp(&other.whole.len())
+                .then_with(|| d.whole.cmp(other.whole))
+                .then_with(|| d.fraction.cmp(other.fraction))
+        };
+        match (self.negative, other.negative) {
+            (false, true) => std::cmp::Ordering::Greater,
+            (true, false) => std::cmp::Ordering::Less,
+            (false, false) => size(self),
+            (true, true) => size(self).reverse(),
+        }
+    }
+}
+
+impl PartialOrd for Decimal<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 

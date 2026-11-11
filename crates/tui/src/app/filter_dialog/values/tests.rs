@@ -223,3 +223,27 @@ fn a_load_of_no_rows_leaves_nothing_in_the_memory() {
         assert_eq!(m.tables(), 1);
     }
 }
+
+#[test]
+fn the_range_of_whole_and_decimal_numbers_is_exact() {
+    // Sixty adjacent BIGINT values at the top of their range: one f64 for all of them.
+    let big: Vec<String> = (0..60).map(|i| (i64::MAX - i).to_string()).collect();
+    let t = tally(big.iter().map(|v| Some(v.as_str())), true);
+    assert!(t.mostly_distinct());
+    assert_eq!(t.range, Some(("9223372036854775748".to_string(), "9223372036854775807".to_string())));
+    // Negative ones, and a value past what f64 tells apart.
+    let low: Vec<String> = (0..60).map(|i| (i64::MIN + i).to_string()).collect();
+    let t = tally(low.iter().map(|v| Some(v.as_str())).chain([Some("-0"), Some("18446744073709551616")]), true);
+    assert_eq!(t.range, Some(("-9223372036854775808".to_string(), "18446744073709551616".to_string())));
+    // High-precision DECIMAL: digits far past an f64's, leading and trailing zeros.
+    let dec: Vec<String> = (0..60).map(|i| format!("1.0000000000000000000000{i:02}")).collect();
+    let more = [Some("0001.000000000000000000000000"), Some("1.00000000000000000000006000"), Some("-0.5")];
+    let t = tally(dec.iter().map(|v| Some(v.as_str())).chain(more), true);
+    assert_eq!(t.range, Some(("-0.5".to_string(), "1.00000000000000000000006000".to_string())));
+    // A value not written in plain digits (`NaN`, `Infinity`, money): no range, the values listed.
+    for odd in ["NaN", "Infinity", "$1.00", "1e3"] {
+        let t = tally(big.iter().map(|v| Some(v.as_str())).chain([Some(odd)]), true);
+        assert_eq!(t.range, None, "{odd}");
+        assert!(!t.mostly_distinct());
+    }
+}

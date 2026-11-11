@@ -19,7 +19,7 @@ use super::draft::{Op, Row};
 use super::values::{Counted, Counter, LIST_VALUES};
 use super::*;
 use crate::app::filter_value::{NotAdmitted, ValuesFrom, admit};
-use datarig_core::driver::ColumnMeta;
+use datarig_core::driver::{ColumnMeta, ValueKind};
 use datarig_core::query::{self, Value};
 
 /// What a count of the rows loaded is of: the column, the tab's run and the rows it held.
@@ -220,7 +220,8 @@ impl App {
         if self.filter_dialog().and_then(|d| d.tally.as_ref()).is_some_and(|(k, _)| *k == of) {
             return;
         }
-        let mut counter = Counter::new(rs.columns[ci].meta.kind.is_number());
+        let exact = matches!(rs.columns[ci].meta.kind, ValueKind::Integer | ValueKind::Decimal);
+        let mut counter = Counter::new(exact);
         // Only the rows in memory: drawing never waits on the spill file.
         let _ = rs.rows.for_each_chunk(held, 256, |rows| {
             for r in rows {
