@@ -79,7 +79,7 @@ What datarig keeps on this machine between runs.
 
 | Key | Default | Values | Description |
 |---|---|---|---|
-| `filters` | `"on"` | `"on"`, `"off"` (`true` and `false` read as `"on"` and `"off"`) | Whether a table tab keeps the filters and orders that ran, per table, in a file of the state directory that only you can read, so Ctrl+R in the filter line can pick one again. Off keeps nothing new; what the file holds stays until :filter history clear removes it. Also `:set history.filters`. |
+| `filters` | `"on"` | `"on"`, `"off"` (`true` and `false` read as `"on"` and `"off"`) | Whether a table tab keeps the filters and orders that ran, per table, in a file of the state directory that only you can read, so Ctrl+R in the filter dialog can pick one again. Off keeps nothing new; what the file holds stays until :filter history clear removes it. Also `:set history.filters`. |
 
 ## `[results]`
 

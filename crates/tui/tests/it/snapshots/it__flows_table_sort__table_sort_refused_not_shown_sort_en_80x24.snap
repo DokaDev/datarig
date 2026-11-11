@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/it/flows_table_sort.rs
-assertion_line: 492
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
@@ -26,4 +25,4 @@ expression: backend
 "│                      ││                              ││                      │"
 "│                      ││ cancelled: showing previous …││                      │"
 "╰──────────────────────╯╰ ▼ cancelled ─────────────────╯╰──────────────────────╯"
-" local-pg │ Not sorted: showing previous rows (Enter in the line reruns)     EN "
+" local-pg │ Not sorted: showing previous rows (apply the filter again)       EN "
