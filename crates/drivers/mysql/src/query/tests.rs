@@ -244,28 +244,37 @@ fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
 fn a_bounded_read_is_limited_for_its_statement_and_never_longer_than_the_session() {
     let count = "SELECT COUNT(*) FROM (\nSELECT * FROM `t` WHERE (a > 1) LIMIT 10\n) AS datarig_count";
     let none = Asked { isolation: String::new(), statement: None };
-    let (mysql, applied) = bounded_select(count, Duration::from_secs(30), &none, false).unwrap();
+    let (mysql, applied) = bounded_select(count, Duration::from_secs(30), &none, false, "").unwrap();
     assert_eq!(
         mysql,
         "SELECT /*+ MAX_EXECUTION_TIME(30000) SET_VAR(lock_wait_timeout=1) */ COUNT(*) FROM (\nSELECT * FROM `t` WHERE \
          (a > 1) LIMIT 10\n) AS datarig_count"
     );
     assert_eq!(applied, Duration::from_secs(30));
-    let (maria, _) = bounded_select(count, Duration::from_millis(1500), &none, true).unwrap();
+    let (maria, _) = bounded_select(count, Duration::from_millis(1500), &none, true, "").unwrap();
     assert_eq!(maria, format!("SET STATEMENT max_statement_time = 1.5, lock_wait_timeout = 1 FOR {count}"));
     // A shorter time limit of the session's stays; a longer one is not taken. The lock wait is
     // the shortest the server takes whatever the session's.
     let short = Asked { isolation: String::new(), statement: Some(Duration::from_secs(5)) };
-    let (text, applied) = bounded_select(count, Duration::from_secs(30), &short, false).unwrap();
+    let (text, applied) = bounded_select(count, Duration::from_secs(30), &short, false, "").unwrap();
     assert!(text.starts_with("SELECT /*+ MAX_EXECUTION_TIME(5000) SET_VAR(lock_wait_timeout=1) */ COUNT(*)"), "{text}");
     assert_eq!(applied, Duration::from_secs(5));
     let long = Asked { isolation: String::new(), statement: Some(Duration::from_secs(60)) };
-    let (text, applied) = bounded_select(count, Duration::from_secs(30), &long, false).unwrap();
+    let (text, applied) = bounded_select(count, Duration::from_secs(30), &long, false, "").unwrap();
     assert!(text.starts_with("SELECT /*+ MAX_EXECUTION_TIME(30000) SET_VAR(lock_wait_timeout=1) */"), "{text}");
     assert_eq!(applied, Duration::from_secs(30));
     // Only the app's own form, a text starting with `SELECT`.
-    assert!(bounded_select(" SELECT 1", Duration::from_secs(1), &none, false).is_none());
-    assert!(bounded_select("WITH x AS (SELECT 1) SELECT * FROM x", Duration::from_secs(1), &none, false).is_none());
+    assert!(bounded_select(" SELECT 1", Duration::from_secs(1), &none, false, "").is_none());
+    assert!(bounded_select("WITH x AS (SELECT 1) SELECT * FROM x", Duration::from_secs(1), &none, false, "").is_none());
+    // An estimate's own hints go with the others.
+    let (text, _) = bounded_select(count, Duration::from_secs(5), &none, false, ALL_ROWS).unwrap();
+    assert!(
+        text.starts_with(
+            "SELECT /*+ MAX_EXECUTION_TIME(5000) SET_VAR(lock_wait_timeout=1) \
+             SET_VAR(sql_select_limit=18446744073709551615) */ COUNT(*)"
+        ),
+        "{text}"
+    );
     // The session's limits as the server writes them.
     assert_eq!(session_limit("0", false), None);
     assert_eq!(session_limit("2500", false), Some(Duration::from_millis(2500)));

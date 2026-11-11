@@ -1996,9 +1996,15 @@ fn session_limit(v: &str, mariadb: bool) -> Option<Duration> {
 /// hints after its `SELECT` (on the outermost `SELECT`: one in a derived table is ignored),
 /// MariaDB's `SET STATEMENT … FOR` before it (it reads the hints as a comment). The time limit is
 /// never longer than the one the session has (`asked`), so a shorter limit the user set stays;
-/// the lock wait is the shortest the server takes. With the time limit that applies; `None` for
-/// a text that does not start with `SELECT`.
-fn bounded_select(sql: &str, statement: Duration, asked: &Asked, mariadb: bool) -> Option<(String, Duration)> {
+/// the lock wait is the shortest the server takes. `hints` go with MySQL's. With the time limit
+/// that applies; `None` for a text that does not start with `SELECT`.
+fn bounded_select(
+    sql: &str,
+    statement: Duration,
+    asked: &Asked,
+    mariadb: bool,
+    hints: &str,
+) -> Option<(String, Duration)> {
     let rest = sql.strip_prefix("SELECT ").or_else(|| sql.strip_prefix("SELECT\n"))?;
     let statement = asked.statement.map_or(statement, |s| s.min(statement)).max(Duration::from_millis(1));
     let lock = BOUNDED_LOCK_WAIT;
@@ -2007,7 +2013,7 @@ fn bounded_select(sql: &str, statement: Duration, asked: &Asked, mariadb: bool) 
         format!("SET STATEMENT max_statement_time = {secs}, lock_wait_timeout = {lock} FOR {sql}")
     } else {
         let ms = statement.as_millis().min(u128::from(u32::MAX));
-        format!("SELECT /*+ MAX_EXECUTION_TIME({ms}) SET_VAR(lock_wait_timeout={lock}) */ {rest}")
+        format!("SELECT /*+ MAX_EXECUTION_TIME({ms}) SET_VAR(lock_wait_timeout={lock}){hints} */ {rest}")
     };
     Some((text, statement))
 }
@@ -2308,7 +2314,7 @@ async fn count(
         Err(why) => return Ok((Err(why), false)),
     };
     let snapshot = s.tx.open && matches!(asked.isolation.as_str(), "REPEATABLE-READ" | "SERIALIZABLE");
-    let bounded = limit.and_then(|l| bounded_select(sql, l, &asked, env.server.mariadb));
+    let bounded = limit.and_then(|l| bounded_select(sql, l, &asked, env.server.mariadb, ""));
     let (text, applied) = match &bounded {
         Some((text, applied)) => (text.as_str(), Some(*applied)),
         None => (sql, None),
@@ -2378,6 +2384,11 @@ async fn read_own(
     })
 }
 
+/// For this statement alone, no row limit of the session's: the one paging leaves there
+/// (`sql_select_limit`, a page and one row more) caps what the planner expects too. A `LIMIT` the
+/// statement writes still counts.
+const ALL_ROWS: &str = " SET_VAR(sql_select_limit=18446744073709551615)";
+
 /// The planner's estimate of the rows of `sql` (the app's read of a table, on the allowlist,
 /// checked again here): after the allowlist's question, its `EXPLAIN FORMAT=TREE` (never
 /// `ANALYZE`), read as a count is ([`read_own`]), stopped after [`ESTIMATE_LIMIT`] and waiting at
@@ -2406,7 +2417,7 @@ async fn estimate(
         Ok(asked) => asked,
         Err(why) => return Ok(Err(why)),
     };
-    let Some((bounded, applied)) = bounded_select(sql, ESTIMATE_LIMIT, &asked, false) else {
+    let Some((bounded, applied)) = bounded_select(sql, ESTIMATE_LIMIT, &asked, false, ALL_ROWS) else {
         return Ok(Err(DbError::NotSupported));
     };
     let text = format.explain_sql(&bounded, false);

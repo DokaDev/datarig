@@ -5912,3 +5912,22 @@ async fn an_estimate_is_refused_at_once_while_a_result_is_held() {
         other => panic!("{other:?}"),
     }
 }
+
+/// The row limit paging leaves on the session does not cap the planner's estimate; a `LIMIT` the
+/// statement writes does.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_estimate_is_not_capped_by_the_limit_paging_left() {
+    let test = "an_estimate_is_not_capped_by_the_limit_paging_left";
+    let Some((url, admin)) = urls(test) else { return };
+    let _end = EndSessions { admin: admin.clone(), test };
+    let t = numbers(&admin, "estpage", 2000).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let rows = format!("SELECT * FROM {} WHERE (id > 100)", t.q());
+    let evs = c.run(1, &[&rows]).await;
+    assert_eq!(page_of(&evs).1.len(), PAGE);
+    let est = estimate(&mut c, 2, &rows).await.0.expect("an estimate");
+    assert!(est > PAGE as u64 + 1, "{est}");
+    let capped = format!("{rows} LIMIT 10");
+    let est = estimate(&mut c, 3, &capped).await.0.expect("an estimate");
+    assert!(est <= 10, "{est}");
+}
