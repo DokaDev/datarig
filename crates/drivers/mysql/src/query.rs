@@ -1442,6 +1442,12 @@ async fn hold_on(
                 link.cut();
                 return Err(Stop::Lost(DbError::CancelNotTaken(why)));
             }
+            // What waits for this result is cancelled: answered now, as its turn may never
+            // come while the result stays open. The result goes on.
+            () = env.asked.next_asked(), if !held.waiting.is_empty() => {
+                held.waiting.remove(0).cancelled_before_start(env.asked, env.events);
+                continue;
+            }
         };
         match next {
             Next::Command(DbCommand::FetchMore { id: fid }) if fid == id => {

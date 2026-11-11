@@ -4913,3 +4913,27 @@ async fn a_count_cancelled_behind_a_held_result_leaves_the_statement_after_it() 
     assert!(!matches!(evs.last().unwrap(), DbEvent::Failed { .. }), "the statement after it runs: {evs:?}");
     c.ok(5, "ROLLBACK").await;
 }
+
+/// A count waiting behind a held result is answered as soon as it is cancelled, without the
+/// result being closed: its turn may never come while the result stays open.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_count_cancelled_behind_a_held_result_is_answered_at_once() {
+    let test = "a_count_cancelled_behind_a_held_result_at_once";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "heldanswer", 700).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    c.ok(1, "BEGIN").await;
+    let evs = c.run(2, &[&format!("SELECT id FROM {} ORDER BY id", t.q())]).await;
+    assert!(page_of(&evs).2, "a result held for more pages");
+    c.session.send(DbCommand::Count { id: 3, sql: format!("SELECT count(*) FROM {}", t.q()) });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    c.session.cancel();
+    let ev = c.wait(|e| matches!(e, DbEvent::Counted { id: 3, .. }), 5).await;
+    assert!(matches!(ev, DbEvent::Counted { result: Err(DbError::Cancelled), .. }), "{ev:?}");
+    c.session.send(DbCommand::FetchMore { id: 2 });
+    match c.next(30).await {
+        DbEvent::Page { id: 2, columns: None, rows, more: false, .. } => assert_eq!(rows.len(), 200),
+        other => panic!("the result goes on: {other:?}"),
+    }
+    c.ok(4, "ROLLBACK").await;
+}

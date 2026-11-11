@@ -23,6 +23,7 @@ use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
+use tokio::sync::Notify;
 use tokio::sync::mpsc::UnboundedSender;
 
 /// Optional capabilities a driver may provide. The UI checks these instead of the driver type.
@@ -337,7 +338,11 @@ pub trait Canceller: Send + Sync {
 /// is its place among the runs of the session, and not the `id` of its command, which a count
 /// asked again or the next chunk of an export repeats.
 #[derive(Debug, Default)]
-pub struct CancelMark(Mutex<Marks>);
+pub struct CancelMark {
+    marks: Mutex<Marks>,
+    /// A cancel was asked: wakes a session waiting with something queued.
+    asked_now: Notify,
+}
 
 #[derive(Debug, Default)]
 struct Marks {
@@ -349,7 +354,7 @@ struct Marks {
 
 impl CancelMark {
     fn marks(&self) -> MutexGuard<'_, Marks> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.marks.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The user asked to cancel run number `run`. Whether it is the run the session is at, so
@@ -359,7 +364,10 @@ impl CancelMark {
         if run >= m.current {
             m.asked.insert(run);
         }
-        m.current == run
+        let at_it = m.current == run;
+        drop(m);
+        self.asked_now.notify_one();
+        at_it
     }
 
     /// The session starts its next run. Whether a cancel for it came first (it must not run).
@@ -382,6 +390,28 @@ impl CancelMark {
     pub fn stands(&self, run: u64) -> bool {
         let m = self.marks();
         m.current == run && m.asked.contains(&run)
+    }
+
+    /// Resolves once the next run, not started yet, is asked to cancel: for a session that
+    /// holds that run back and would otherwise not look until its turn. One waiter at a time.
+    pub async fn next_asked(&self) {
+        loop {
+            {
+                let m = self.marks();
+                if m.asked.contains(&(m.current + 1)) {
+                    return;
+                }
+            }
+            self.asked_now.notified().await;
+        }
+    }
+
+    /// The run the session is at was answered cancelled: its cancel is spent, and what the
+    /// session goes on with (a held result) is not taken for cancelled.
+    fn spent(&self) {
+        let mut m = self.marks();
+        let current = m.current;
+        m.asked.remove(&current);
     }
 }
 
@@ -427,6 +457,7 @@ impl DbCommand {
         if let Some(answer) = self.cancelled() {
             let _ = events.send(answer);
         }
+        mark.spent();
         true
     }
 }
@@ -534,6 +565,16 @@ mod cancel_tests {
         assert!(mark.begin(), "the first");
         assert!(mark.begin(), "and the second");
         assert!(!mark.begin());
+    }
+
+    #[tokio::test]
+    async fn the_next_run_being_cancelled_is_said_at_once() {
+        let mark = CancelMark::default();
+        assert!(!mark.begin());
+        let no = tokio::time::timeout(std::time::Duration::from_millis(50), mark.next_asked()).await;
+        assert!(no.is_err(), "nothing asked");
+        mark.ask(2);
+        tokio::time::timeout(std::time::Duration::from_secs(5), mark.next_asked()).await.expect("said");
     }
 
     #[test]

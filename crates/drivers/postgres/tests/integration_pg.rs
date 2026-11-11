@@ -4448,6 +4448,8 @@ enum LaterDials {
     /// Connected, but closing the stream's write side never ends (an SSH channel whose end of
     /// file cannot be queued).
     ShutdownHangs,
+    /// Connected, after a second (a slow tunnel).
+    Slow,
 }
 
 /// A dialer that gives the session its connection and treats every later dial (a cancel
@@ -4475,6 +4477,13 @@ impl Dialer for CancelDial {
             }
             (false, LaterDials::Refuse) => Box::pin(async { Err(DialError::NotOpen) }),
             (false, LaterDials::Hang) => Box::pin(std::future::pending()),
+            (false, LaterDials::Slow) => {
+                let dial = self.tcp.dial(host, port);
+                Box::pin(async move {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    dial.await
+                })
+            }
             (false, later @ (LaterDials::ShutdownFails | LaterDials::ShutdownHangs)) => {
                 let (dial, hangs) = (self.tcp.dial(host, port), matches!(later, LaterDials::ShutdownHangs));
                 Box::pin(async move { dial.await.map(|inner| Box::new(FailingShutdown(inner, hangs)) as BoxedStream) })
@@ -6254,4 +6263,20 @@ async fn a_cancel_of_a_queued_run_leaves_the_run_before_it() {
     assert!(matches!(ev, DbEvent::Failed { cancelled: true, .. }), "{ev:?}");
     let DbEvent::Page { rows, .. } = c.run(3, &format!("SELECT x FROM {schema}.t")).await else { panic!("rows") };
     assert_eq!(rows, [vec![Some("1".to_string())]]);
+}
+
+/// A cancel whose stream takes long to open, while its run ends and the next one starts: a
+/// cancel request names no statement, so it is not sent to stop the next one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_delayed_past_its_run_does_not_stop_the_next_run() {
+    let Some(url) = pg_url("a_cancel_delayed_past_its_run_does_not_stop_the_next_run") else { return };
+    let tag = format!("slowcancel{}", std::process::id());
+    let _backends = Backends::new(&url, &tag);
+    let (mut q, _, _obs) = open_cancel_dial(&url, &tag, LaterDials::Slow).await;
+    q.session.send(execute(1, "SELECT pg_sleep(0.2)"));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    q.session.cancel();
+    assert!(matches!(q.result(1).await, DbEvent::Page { .. }), "the run ended before its cancel left");
+    let ev = q.run(2, "SELECT pg_sleep(2)").await;
+    assert!(matches!(ev, DbEvent::Page { .. }), "the next run is not stopped: {ev:?}");
 }

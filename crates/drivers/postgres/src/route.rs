@@ -93,12 +93,22 @@ impl Cancel {
     /// Send a cancel request (directly, or through the route), within [`CANCEL_DIAL`]; why it
     /// could not be sent.
     pub(crate) async fn send(&self) -> Result<(), DbError> {
+        self.send_if(|| true).await
+    }
+
+    /// [`Cancel::send`], unless `still` no longer holds once its stream is open. A cancel
+    /// request names no statement, and a tunnel may take its time: by then another run may be
+    /// at the server.
+    async fn send_if(&self, still: impl Fn() -> bool) -> Result<(), DbError> {
         let sent = async {
             match &self.route {
                 None => self.token.cancel_query(self.tls.clone()).await.map_err(|e| db_error(&e)),
                 Some(route) => {
                     let handshake = self.tls.to(route.name()).map_err(|e| DbError::Tls(e.0))?;
                     let stream = route.dial(CANCEL_DIAL).await?;
+                    if !still() {
+                        return Ok(());
+                    }
                     self.token.cancel_query_raw(stream, handshake).await.map_err(|e| db_error(&e))
                 }
             }
@@ -109,8 +119,9 @@ impl Cancel {
     /// The user's cancel ([`Cancel::send`]), asked during the session's request `request`
     /// ([`Unsent::request`], taken when the user asked). One that could not be sent is noted for
     /// that request ([`Unsent`]): the session must not wait for a statement it cannot stop.
-    pub(crate) async fn ask(&self, request: u64) {
-        if let Err(why) = self.send().await {
+    /// `still`: whether the run it is for is still the one at the server.
+    pub(crate) async fn ask(&self, request: u64, still: impl Fn() -> bool) {
+        if let Err(why) = self.send_if(still).await {
             self.unsent.note(request, why);
         }
     }
