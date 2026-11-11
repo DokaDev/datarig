@@ -5891,6 +5891,34 @@ async fn an_estimate_waits_for_no_transaction_and_keeps_the_next_ones_settings()
     assert!(matches!(estimate(&mut c, 12, view).await.0, Err(DbError::NotRepeatable(_))));
 }
 
+/// An estimate refused while a result is held is a run of the session all the same: a cancel of
+/// the count sent after it reaches that count.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_after_an_estimate_refused_on_a_held_result_reaches_the_next_count() {
+    let test = "a_cancel_after_an_estimate_refused_on_a_held_result";
+    let Some((url, admin)) = urls(test) else { return };
+    let _end = EndSessions { admin: admin.clone(), test };
+    let t = numbers(&admin, "heldnum", 2000).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let rows = format!("SELECT * FROM {} WHERE (id > 100)", t.q());
+    let evs = c.run_as(1, &[&rows], PagingMode::Hold).await;
+    assert!(page_of(&evs).2, "more rows follow: the result is held");
+    assert_eq!(estimate(&mut c, 2, &rows).await.0, Err(DbError::NotSupported));
+    c.session.send(DbCommand::ClosePortal { id: 1 });
+    let mut b = side(&url).await;
+    b.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
+    let counted = format!("SELECT COUNT(*) FROM (\n{rows}\n) AS datarig_count");
+    c.session.send(DbCommand::Count { id: 3, sql: counted, limit: Some(Duration::from_secs(30)) });
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    c.session.cancel();
+    let DbEvent::Counted { result, .. } = c.wait(|e| matches!(e, DbEvent::Counted { .. }), 30).await else {
+        unreachable!()
+    };
+    assert_eq!(result, Err(DbError::Cancelled), "the cancel reached the count, which would give up on the lock");
+    b.query_drop("UNLOCK TABLES").await.unwrap();
+    b.disconnect().await.unwrap();
+}
+
 /// An estimate asked while a result is held is refused at once: queued behind the result it would
 /// wait with its time limit not begun, and the tab with it. The result goes on paging.
 #[tokio::test(flavor = "multi_thread")]

@@ -7186,7 +7186,8 @@ async fn a_cancel_is_for_the_last_run_sent_before_it() {
         tx: TxRule::Auto,
     });
     q.session.send(DbCommand::Count { id: 3, sql: counted.clone(), limit });
-    started(&mut b, &tag).await;
+    let mut side = Conn::open(&url, SessionRole::Query).await;
+    started(&mut side, &tag).await;
     q.session.cancel();
     let ran = q.result(2).await;
     assert!(!matches!(ran, DbEvent::Failed { .. }), "the run before it goes on: {ran:?}");
@@ -7210,24 +7211,33 @@ async fn a_cancel_of_a_count_in_a_held_portal_is_for_the_last_one_sent() {
     let Some(url) = pg_url("a_cancel_of_a_count_in_a_held_portal_is_for_the_last_one_sent") else { return };
     let pid = std::process::id();
     let (paged, locked) = (format!("public.zz_cancelp_{pid}"), format!("public.zz_cancell_{pid}"));
-    let _guards = (TableGuard(url.clone(), paged.clone()), TableGuard(url.clone(), locked.clone()));
+    // A count keeps its read lock until the portal's transaction ends: the second lock is on another table.
+    let again = format!("public.zz_cancela_{pid}");
+    let _guards = (
+        TableGuard(url.clone(), paged.clone()),
+        TableGuard(url.clone(), locked.clone()),
+        TableGuard(url.clone(), again.clone()),
+    );
     let tag = format!("cancelp{pid}");
     let (mut q, mut b) = tagged(&url, &tag).await;
     for sql in [
         format!("CREATE TABLE {paged} AS SELECT g AS id FROM generate_series(1, 5000) g"),
         format!("CREATE TABLE {locked} AS SELECT g AS id FROM generate_series(1, 50) g"),
+        format!("CREATE TABLE {again} AS SELECT g AS id FROM generate_series(1, 50) g"),
     ] {
         assert!(matches!(b.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
     }
     let page = q.run(1, &format!("SELECT * FROM {paged} ORDER BY id")).await;
     assert!(matches!(page, DbEvent::Page { more: true, .. }), "{page:?}");
-    let lock = format!("LOCK TABLE {locked} IN ACCESS EXCLUSIVE MODE");
+    let lock = |table: &str| format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE");
     assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
-    assert!(matches!(b.run(3, &lock).await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &lock(&locked)).await, DbEvent::Done { .. }));
+    // Outside a transaction, whose view of the server's activity would stay as first read.
+    let mut side = Conn::open(&url, SessionRole::Query).await;
     let counted = count_of(&format!("SELECT * FROM {locked} WHERE (id > 10)"));
     q.session.send(DbCommand::Count { id: 2, sql: counted.clone(), limit: None });
     q.session.send(DbCommand::Count { id: 3, sql: counted.clone(), limit: None });
-    started(&mut b, &tag).await;
+    started(&mut side, &tag).await;
     q.session.cancel();
     assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
     for (want, answer) in [(2, Ok(40)), (3, Err(DbError::Cancelled))] {
@@ -7237,9 +7247,12 @@ async fn a_cancel_of_a_count_in_a_held_portal_is_for_the_last_one_sent() {
         assert_eq!((id, result), (want, answer));
     }
     assert!(matches!(b.run(5, "BEGIN").await, DbEvent::Done { .. }));
-    assert!(matches!(b.run(6, &lock).await, DbEvent::Done { .. }));
-    q.session.send(DbCommand::Count { id: 4, sql: counted.clone(), limit: None });
-    started(&mut b, &tag).await;
+    assert!(matches!(b.run(6, &lock(&again)).await, DbEvent::Done { .. }));
+    // An estimate refused here is a run all the same: the cancel below finds the count after it.
+    let rows = format!("SELECT * FROM {again} WHERE (id > 10)");
+    assert_eq!(q.estimate(9, &rows).await.0, Err(DbError::NotSupported));
+    q.session.send(DbCommand::Count { id: 4, sql: count_of(&rows), limit: None });
+    started(&mut side, &tag).await;
     q.session.cancel();
     let DbEvent::Counted { id, result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 5).await else {
         unreachable!()

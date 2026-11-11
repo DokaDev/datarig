@@ -1573,10 +1573,15 @@ async fn hold_on(
             // The app closes it (its spill limit, idle): it ends like a finished one.
             Next::Command(DbCommand::ClosePortal { id: cid }) if cid == id => break,
             // Refused at once: it would wait here until the result ended, its time limit not begun.
-            Next::Command(DbCommand::Estimate { id: cid, .. }) => {
-                let _ = env.events.send(DbEvent::Estimated { id: cid, result: Err(DbError::NotSupported) });
+            // It is a run all the same, whose number must be used up in its place: behind a
+            // command that waits, it takes its turn.
+            Next::Command(DbCommand::Estimate { id: cid, .. }) if held.waiting.is_empty() => {
+                let error = if env.asked.begin() { DbError::Cancelled } else { DbError::NotSupported };
+                let _ = env.events.send(DbEvent::Estimated { id: cid, result: Err(error) });
             }
-            Next::Command(c @ (DbCommand::Count { .. } | DbCommand::CheckRepeat { .. })) => held.waiting.push(c),
+            Next::Command(
+                c @ (DbCommand::Count { .. } | DbCommand::Estimate { .. } | DbCommand::CheckRepeat { .. }),
+            ) => held.waiting.push(c),
             // Answered from what is known (nothing is sent while the result is read): it goes on.
             Next::Command(DbCommand::ServerSession { request }) => {
                 let _ = env.events.send(DbEvent::ServerSession { request, own: own_answer(env) });
