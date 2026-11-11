@@ -3,6 +3,25 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.40.5 (2026-11-11)
+
+Saving datarig's own files and running its own PostgreSQL statements are harder to redirect, and a `Ctrl+C` now cancels the run it was pressed for, including one still waiting for its turn.
+
+### Fixed
+
+- datarig's own files (the workspace, settings and other state) are now written through a
+  temporary file created exclusively under an unpredictable name, so a symbolic link placed
+  next to them can no longer redirect a write. A file name of the longest length a file
+  system allows can now be saved too.
+- A `Ctrl+C` pressed while a run is still waiting (for example while the connection is starting)
+  now cancels that run, and a cancel no longer carries over to a later run.
+- MySQL: cancelling a row count that waits behind a result still being paged now answers at
+  once, instead of waiting a minute and closing the session.
+- On PostgreSQL, the statements datarig sends itself now name their operators, functions and
+  types with their schema, so a `search_path` listing a schema ahead of `pg_catalog` can no
+  longer change what they do, including which rows an edit finds. The SQL shown for an edit
+  therefore reads `OPERATOR(pg_catalog.=)` where it read `=`.
+
 ## 0.40.4 (2026-11-10)
 
 MySQL exports and row counts no longer lock rows when the session's isolation level is SERIALIZABLE. After a `SET TRANSACTION` without `SESSION`, which sets your next transaction only, they are now refused with a message until a transaction starts or ends, so they never use that setting up. The install guide's Arch Linux command for building from source now upgrades the whole system.
