@@ -74,6 +74,7 @@ fn my(filter: Option<&str>) -> Harness {
     open_users(&mut h);
     let index = h.app.tabs.active_index();
     h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MySql(MySqlMode::default()))));
+    h.tab_db(index, DbEvent::Connected);
     page(&mut h);
     if let Some(f) = filter {
         h.command(&format!("where {f}"));

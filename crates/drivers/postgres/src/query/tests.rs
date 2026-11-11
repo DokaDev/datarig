@@ -1,7 +1,8 @@
 use super::{
-    Guard, Tx, TxAfter, command_tag, controls_tx, copies_with_client, forgets_prepared, idle_limit,
+    Guard, Tx, TxAfter, command_tag, controls_tx, copies_with_client, forgets_prepared, idle_limit, limited_begin,
     names_reserved_savepoint, plain_read, returns_no_rows, split_page, tx_after,
 };
+use std::time::Duration;
 
 /// The session's own savepoints are told apart in every form of `SAVEPOINT`, `RELEASE` and
 /// `ROLLBACK TO`, quoted or not, in any statement of the text; other names and other statements
@@ -120,7 +121,6 @@ fn transaction_control_keeps_the_run_savepoint_out() {
 /// which turns it off) and never past what the setting takes.
 #[test]
 fn the_idle_limit_is_set_for_the_transaction() {
-    use std::time::Duration;
     assert_eq!(idle_limit(Duration::from_secs(1800)), "SET LOCAL idle_in_transaction_session_timeout = 1800000");
     assert_eq!(idle_limit(Duration::from_micros(10)), "SET LOCAL idle_in_transaction_session_timeout = 1000");
     assert_eq!(idle_limit(Duration::from_millis(1500)), "SET LOCAL idle_in_transaction_session_timeout = 1500");
@@ -128,6 +128,15 @@ fn the_idle_limit_is_set_for_the_transaction() {
         idle_limit(Duration::from_secs(u64::MAX)),
         format!("SET LOCAL idle_in_transaction_session_timeout = {}", i32::MAX)
     );
+}
+
+/// A read of the app's own holds its locks between its two requests: the server ends it if the
+/// connection stalls there, without making a shorter limit of the session's longer.
+#[test]
+fn a_limited_read_cannot_sit_idle_holding_its_locks() {
+    let text = limited_begin(&[], Duration::from_secs(30), Duration::from_secs(1));
+    assert!(text.contains("('idle_in_transaction_session_timeout', pg_catalog.int8in('10000'))"), "{text}");
+    assert!(text.contains("pg_catalog.int8lt(g.v, l.ms) THEN g.v ELSE l.ms"), "{text}");
 }
 
 #[test]

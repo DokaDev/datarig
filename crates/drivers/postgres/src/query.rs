@@ -2827,9 +2827,10 @@ fn stopped(asked: bool, said: Said, ran: Duration, applied: Option<Duration>) ->
 }
 
 /// How [`limited_read`] begins: `BEGIN READ ONLY`, the session's settings of each transaction
-/// (`each_tx`), then `statement_timeout` and `lock_timeout` for this transaction alone, each the
-/// shorter of the one given and the one the session has (when it has one: a limit the user set is
-/// never made longer). The query answers with each setting's name and the milliseconds it got.
+/// (`each_tx`), then `statement_timeout`, `lock_timeout` and `idle_in_transaction_session_timeout`
+/// ([`OWN_READ_IDLE`]) for this transaction alone, each the shorter of the one given and the one
+/// the session has (when it has one: a limit the user set is never made longer). The query
+/// answers with each setting's name and the milliseconds it got.
 ///
 /// It runs on the session's search path, which may put a schema of the user's before
 /// `pg_catalog`: so it takes no operator and no cast (either is looked up on that path, and a
@@ -2843,12 +2844,19 @@ fn limited_begin(each_tx: &[String], statement: Duration, lock: Duration) -> Str
          true) AS {LIMITS_COLUMN} FROM (SELECT g.name, CASE WHEN pg_catalog.int8gt(g.v, '0') AND pg_catalog.int8lt(g.v, l.ms) THEN \
          g.v ELSE l.ms END AS ms FROM (SELECT p.name, pg_catalog.int8in(pg_catalog.textout(p.setting)) AS v FROM \
          pg_catalog.pg_settings p) AS g JOIN (VALUES ('statement_timeout', pg_catalog.int8in('{}')), \
-         ('lock_timeout', pg_catalog.int8in('{}'))) AS l(name, ms) ON pg_catalog.texteq(g.name, l.name)) AS s",
+         ('lock_timeout', pg_catalog.int8in('{}')), ('idle_in_transaction_session_timeout', \
+         pg_catalog.int8in('{}'))) AS l(name, ms) ON pg_catalog.texteq(g.name, l.name)) AS s",
         first.join("; "),
         ms(statement),
         ms(lock),
+        ms(OWN_READ_IDLE),
     )
 }
+
+/// The most [`limited_read`]'s transaction may sit idle: it holds its locks between its two
+/// requests, and if the connection stalls there the `COMMIT` never comes. The gap is a round trip
+/// when nothing is wrong; past this the server ends the session and its locks with it.
+const OWN_READ_IDLE: Duration = Duration::from_secs(10);
 
 /// The name of the last column of what [`limited_begin`] answers, by which [`limits_end`] finds
 /// it among the answers of the statements around it.
