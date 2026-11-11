@@ -42,7 +42,8 @@ fn counts_of(rows: &[Row], formats: &[i16]) -> Result<GroupCounts, DbError> {
 /// The most bytes a value of type `ty` (a domain's base type) takes on the wire in result
 /// format `format` when its text is at most [`GROUP_PREVIEW`] bytes long, as the statement
 /// sends it ([`bounded`]):
-/// - as text: its text;
+/// - as text: its text; for `bit` and `varbit`, whose packed bytes the server measures
+///   (`octet_length`) and whose text has a character for each bit, 8 bytes for each measured one;
 /// - binary, one value: at most its text and 16 bytes (a type of a fixed size takes at most 16,
 ///   `numeric` 8 and 2 for each 4 digits, `jsonb` one byte and its text, text and `bytea` (whose
 ///   raw length the server measures) themselves);
@@ -53,6 +54,7 @@ fn counts_of(rows: &[Row], formats: &[i16]) -> Result<GroupCounts, DbError> {
 ///   `1` (14 for 2); so at most 10 times the text, and 64 bytes.
 fn wire_bound(ty: &Type, format: i16) -> usize {
     match (format, ty.kind()) {
+        (0, _) if matches!(*ty, Type::BIT | Type::VARBIT) => 8 * GROUP_PREVIEW,
         (0, _) => GROUP_PREVIEW,
         (_, Kind::Array(_)) => 10 * GROUP_PREVIEW + 64,
         _ => GROUP_PREVIEW + 16,

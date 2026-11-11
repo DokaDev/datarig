@@ -8513,6 +8513,72 @@ async fn a_group_count_sends_arrays_whose_binary_form_is_longer_than_their_text(
     assert_eq!(q.first_value(13, &kept).await.as_deref(), Some("1"), "committed with the block");
 }
 
+/// A `bit varying` value is measured by its packed bytes and sent as text, a character for each
+/// bit: one of 8192 bits (1024 bytes) and one at the preview's limit (4096 bytes, 32768 bits)
+/// are sent whole, one byte more is not, in a transaction of its own, in the user's block (whose
+/// work is kept) and while a portal is held; `bit(n)` the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn bit_strings_are_sent_by_a_group_count_up_to_the_preview_of_their_bytes() {
+    use datarig_core::driver::ValueKind;
+    let Some(url) = pg_url("bit_strings_are_sent_by_a_group_count_up_to_the_preview_of_their_bytes") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_group_bits_{pid}");
+    let table = format!("public.{name}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    for sql in [
+        format!("CREATE TABLE {table} (id int, v varbit, b bit(8192))"),
+        format!(
+            "INSERT INTO {table} SELECT g, CASE g WHEN 1 THEN repeat('1', 8192)::varbit WHEN 2 THEN repeat('10', 16384)::varbit \
+             WHEN 3 THEN repeat('1', 32776)::varbit ELSE B'1' END, repeat(CASE WHEN g = 1 THEN '1' ELSE '0' END, 8192)::bit(8192) \
+             FROM generate_series(1, 1234) g"
+        ),
+    ] {
+        assert!(matches!(q.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let varbit = group_sql("public", &name, "v", ("varbit", ValueKind::Bit), None);
+    let bit = group_sql("public", &name, "b", ("bit", ValueKind::Bit), None);
+    // (bits shown, whole, bytes) of each value held by one row, by its length.
+    let once = |got: Result<datarig_core::driver::GroupCounts, DbError>| {
+        let got = got.unwrap_or_else(|e| panic!("{e:?}"));
+        let mut out: Vec<_> = got
+            .values
+            .iter()
+            .filter(|v| v.rows == 1 && v.bytes.is_some())
+            .map(|v| (v.value.as_ref().map(String::len), v.whole, v.bytes))
+            .collect();
+        out.sort();
+        out
+    };
+    let want = vec![(None, false, Some(4097)), (Some(8192), true, Some(1024)), (Some(32768), true, Some(4096))];
+    let (got, _, _) = q.group_within(2, &varbit, Some(Duration::from_secs(30))).await;
+    assert_eq!(once(got), want, "in a transaction of its own");
+    let (got, _, _) = q.group_within(3, &bit, Some(Duration::from_secs(30))).await;
+    assert_eq!(once(got), vec![(Some(8192), true, Some(1024))], "bit(8192)");
+    assert!(matches!(q.run(4, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(q.run(5, &format!("INSERT INTO {table} VALUES (0, NULL, NULL)")).await, DbEvent::Done { .. }));
+    let (got, _, _) = q.group_within(6, &varbit, None).await;
+    assert_eq!(once(got), want, "in the user's block");
+    let kept = format!("SELECT count(*) FROM {table} WHERE id = 0");
+    assert_eq!(q.first_value(7, &kept).await.as_deref(), Some("1"), "the block's work is kept");
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 8,
+        statements: vec![format!("SELECT id FROM {table} ORDER BY id")],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    let DbEvent::Page { more: true, .. } = q.result(8).await else { panic!("a page with more") };
+    let (got, _, _) = q.group_within(9, &varbit, None).await;
+    assert_eq!(once(got), want, "while a portal is held");
+    let (got, _, _) = q.group_within(10, &bit, None).await;
+    assert_eq!(once(got), vec![(Some(8192), true, Some(1024))]);
+    q.session.send(DbCommand::ClosePortal { id: 8 });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(matches!(q.run(11, "COMMIT").await, DbEvent::Done { .. }));
+    assert_eq!(q.first_value(12, &kept).await.as_deref(), Some("1"), "committed");
+}
+
 /// Whatever a group count in the user's block answers, the block goes on with the work done
 /// before it, and commits it: a count whose page is refused after it ran is undone back to its
 /// savepoint, which is released only once the page was taken. (A `numeric[]` whose binary form is
