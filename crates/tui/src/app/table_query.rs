@@ -205,6 +205,11 @@ pub struct TableQuery {
     /// The query the tab held as applied before its last applied change (a run of another
     /// condition, order or limit sent): the filter dialog's undo goes back to it once.
     pub before_last: Option<Query>,
+    /// The query put back in the tab as applied ([`TableQuery::restored`]) while no run of the
+    /// tab's query has been sent: what was applied before the first one, though the draft that
+    /// run sends is written over it before it is sent (and stays written over when the run is
+    /// refused or declined).
+    restored: Option<Query>,
     /// The table's keys for a total order, as far as read.
     pub order_keys: OrderKeysState,
     /// The query a sort action runs ([`App::table_sort`]): the draft once its statement is
@@ -233,6 +238,7 @@ impl TableQuery {
             session_wait: None,
             keys_wait: None,
             before_last: None,
+            restored: None,
             order_keys: OrderKeysState::Unknown,
             sorted: None,
         }
@@ -242,7 +248,7 @@ impl TableQuery {
     /// nothing run. The next run checks it as any other.
     pub fn restored(q: Query) -> Self {
         let query::Source::Table(table) = q.source.clone();
-        Self { draft: q, ..Self::new(table) }
+        Self { draft: q.clone(), restored: Some(q), ..Self::new(table) }
     }
 
     /// What the tab holds as applied: the query of the run sent last when it was its query,
@@ -262,16 +268,22 @@ impl TableQuery {
     /// statement, else the run of something else. A query of another condition, order or limit
     /// than the one applied keeps that one as [`TableQuery::before_last`].
     pub(super) fn sent(&mut self, qid: u64, statements: &[String]) {
-        let before = self.applied().clone();
+        // Before the first run of a tab put back, what it held as applied is what was put back,
+        // not the draft written over it for this run.
+        let before = match (&self.requested, &self.shown, &self.restored) {
+            (None, None, Some(q)) => q.clone(),
+            _ => self.applied().clone(),
+        };
         self.statement = match self.pending.take() {
             Some(s) if statements.len() == 1 && statements[0] == s.sql => Some((qid, s)),
             _ => None,
         };
         self.requested = self.statement.as_ref().map(|(id, s)| (*id, s.query.clone()));
-        if let Some((_, q)) = &self.requested
-            && changed(&before, q)
-        {
-            self.before_last = Some(before);
+        if let Some((_, q)) = &self.requested {
+            self.restored = None;
+            if changed(&before, q) {
+                self.before_last = Some(before);
+            }
         }
         if let Some(q) = self.sorted.take().filter(|q| self.requested.as_ref().is_some_and(|(_, r)| r == q)) {
             self.draft = q;

@@ -547,3 +547,37 @@ fn a_restored_filter_of_more_lines_is_not_kept_in_the_history() {
     assert_eq!(kept, 0, "not kept");
     quit(h);
 }
+
+/// A tab put back with a filter, changed before it ever ran (in the filter dialog, or cleared
+/// from the grid): the filter dialog's undo still goes back to the filter put back.
+#[test]
+fn the_first_change_of_a_restored_filter_is_undone_to_it() {
+    for clear in [false, true] {
+        let cfg = test_db_config();
+        let state = State::new(if clear { "undo-clear" } else { "undo-dialog" });
+        state.write_table_tab(&cfg, "filter = \"id = 1\"");
+        let mut h = launch(&cfg, &state, Lang::En);
+        connect(&mut h);
+        h.key(KeyCode::Tab);
+        if clear {
+            h.keys(" rx");
+        } else {
+            h.keys("f");
+            // Its chip out (no columns known yet: `Tab` goes from the list to the chips), then
+            // a condition of the SQL section's `WHERE`.
+            h.key(KeyCode::Tab);
+            h.key(KeyCode::Char('x'));
+            h.key(KeyCode::Char('Q'));
+            h.type_text("id > 2");
+            h.key(KeyCode::Enter);
+        }
+        let changed = if clear { ALL.to_string() } else { format!("{ALL} WHERE (id > 2)") };
+        assert_eq!(runs(&mut h), vec![vec![changed]], "clear: {clear}");
+        answer(&mut h);
+        h.keys("f");
+        h.keys("u");
+        assert_eq!(h.app.filter_dialog_draft().map(|d| d.0), Some("id = 1".to_string()), "clear: {clear}");
+        h.key(KeyCode::Enter);
+        assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id = 1)")]], "clear: {clear}");
+    }
+}
