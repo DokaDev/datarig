@@ -858,3 +858,28 @@ fn the_column_menu_from_a_cell_is_of_that_cells_column() {
     assert_eq!(lines(&h)[0], "# data");
     assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (2, 3));
 }
+
+/// The column menu has no filter line (its few entries need none): `j`/`k` and the arrows
+/// move, `Enter` runs the entry, and the keys shown next to the entries run them.
+#[test]
+fn the_column_menu_moves_by_keys_without_a_filter() {
+    let mut h = users();
+    at(&mut h, 0, 1);
+    h.keys("F");
+    let screen = h.screen(120, 34);
+    assert!(!screen.contains("type to filter"), "{screen}");
+    // `↓ Sort descending`, then back up and down again: `Enter` runs it.
+    h.keys("jkj");
+    h.key(KeyCode::Up);
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Enter);
+    assert!(!menu_open(&h));
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} ORDER BY \"name\" DESC")]]);
+    page(&mut h);
+    // `=` runs `Only`, as its key shows.
+    at(&mut h, 0, 1);
+    h.keys("F");
+    h.keys("=");
+    assert!(!menu_open(&h));
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name = 'it''s') ORDER BY \"name\" DESC")]]);
+}

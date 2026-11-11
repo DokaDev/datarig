@@ -148,6 +148,30 @@ impl App {
         let title = crate::text::escape_controls(&column);
         let target = MenuTarget::Filter { grid: Box::new(grid), result };
         self.push_filter_menu(target, title, (items, off, names, Vec::new(), filters), at);
+        // Seven entries need no filter: keys move and run them.
+        if let Some(m) = self.overlays.menu_mut()
+            && matches!(m.target, MenuTarget::Filter { .. })
+        {
+            m.typing = false;
+        }
+    }
+
+    /// The column menu's entry key `k` runs (the grid's key shown next to it), if any.
+    pub(super) fn menu_item_of_key(&self, k: crate::keymap::KeyChord) -> Option<MenuItem> {
+        let m = self.overlays.menu()?;
+        let Some(crate::keymap::Target::Action(Action::Table(a))) = self.keymap.resolve_seq(Ctx::Grid, &[k]).0 else {
+            return None;
+        };
+        let c = match a {
+            TableAction::SortCycle => ColumnItem::SortAsc,
+            TableAction::EditFilter => ColumnItem::Dialog,
+            TableAction::Only => ColumnItem::Only,
+            TableAction::Exclude => ColumnItem::Exclude,
+            TableAction::Hide => ColumnItem::Hide,
+            _ => return None,
+        };
+        let item = MenuItem::Column(c);
+        m.own.contains(&item).then_some(item)
     }
 
     /// The filter of table tab `id`'s rows shown without column `column`'s own conditions (the

@@ -356,6 +356,9 @@ pub struct ContextMenu {
     back: Focus,
     /// What was typed to filter the items.
     pub filter: TextInput,
+    /// Typing filters the items (a filter line on top); without, letters move and run the
+    /// keys shown (a menu of a few entries).
+    pub typing: bool,
     /// The lines shown: headings and the items that match the filter.
     pub lines: Vec<MenuLine>,
     /// The selected line (an item, when there is one).
@@ -875,6 +878,7 @@ impl App {
             title,
             back,
             filter: TextInput::default(),
+            typing: true,
             lines: Vec::new(),
             selected: 0,
             scroll: 0,
@@ -1468,6 +1472,14 @@ impl App {
                 let i = m.selected;
                 self.open_sub(i);
             }
+            KeyCode::Char('j') if !m.typing && k.mods.is_empty() => m.step(1),
+            KeyCode::Char('k') if !m.typing && k.mods.is_empty() => m.step(-1),
+            // No filter: a key shown next to an entry runs it.
+            _ if !m.typing => {
+                if !repeat && let Some(item) = self.menu_item_of_key(k) {
+                    self.menu_pick(item);
+                }
+            }
             _ => match m.filter.handle_key(&k.to_event()) {
                 InputResult::Changed => self.menu_refilter(),
                 InputResult::Moved => {}
@@ -1493,7 +1505,7 @@ impl App {
     /// Text pasted while the menu has the keyboard: into its filter.
     pub(super) fn menu_paste(&mut self, text: &str) {
         let Some(m) = self.overlays.menu_mut() else { return };
-        if m.sub.is_none() {
+        if m.sub.is_none() && m.typing {
             m.filter.insert_str(text);
             self.menu_refilter();
         }

@@ -8,7 +8,8 @@
 - `F` (or `Space r F`, or a right click on a column's header) opens the column's menu: sort it
   ascending or descending or take it out of the order, open the filter dialog on it, keep only
   or exclude the cursor's value, clear its own conditions, hide it. Entries that cannot apply
-  are dimmed, with the reason.
+  are dimmed, with the reason. `j` / `k` or the arrows move through it, and the key shown next
+  to an entry runs it.
 - Values are written as the server reads them back: numbers bare, bytes in hexadecimal. A value
   not shown whole, binary data over 64 KiB, a type whose comparison datarig does not know or
   more than 1000 cells are refused, with the reason.
