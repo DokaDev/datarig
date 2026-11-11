@@ -6425,9 +6425,10 @@ async fn a_group_count_is_bounded_and_told_apart_when_stopped() {
     assert!(matches!(got, Err(DbError::NotRepeatable(_))), "{got:?}");
 }
 
-/// A group count is refused unsent where it would lock the rows it reads (a transaction open, or
-/// autocommit off, at `SERIALIZABLE` or a level not known) or use up the next transaction's
-/// settings; with autocommit on and no transaction open it reads without a lock at any level.
+/// A group count is refused unsent where it would lock the rows it reads (a transaction open at
+/// `SERIALIZABLE` or a level not known) or use up the next transaction's settings; with no
+/// transaction open it reads without a lock at any level: with autocommit on as a statement of
+/// its own, with autocommit off in a `REPEATABLE READ` read-only transaction of its own.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_group_count_refuses_locking_reads_and_the_next_transactions_settings() {
     let test = "a_group_count_refuses_locking_reads";
@@ -6443,9 +6444,20 @@ async fn a_group_count_refuses_locking_reads_and_the_next_transactions_settings(
     let (got, _, _) = group_within(&mut c, 2, &sql, limit).await;
     assert_eq!(got.map(|g| g.values.len()), Ok(10));
     assert_eq!(data_locks_of(&mut a, id, &t.name).await, 0, "no lock");
-    // Autocommit off, or a transaction open: refused, not asked.
+    // Autocommit off, no transaction open: read in a REPEATABLE READ read-only transaction of
+    // its own, ended after it; no lock, the session's level and autocommit as they were.
     c.ok(3, "SET autocommit = 0").await;
-    assert_eq!(group_within(&mut c, 4, &sql, limit).await.0, Err(DbError::LockingRead));
+    let (got, snapshot, _) = group_within(&mut c, 4, &sql, limit).await;
+    assert_eq!((got.map(|g| g.values.len()), snapshot), (Ok(10), false));
+    assert_eq!(data_locks_of(&mut a, id, &t.name).await, 0, "no lock");
+    let evs = c.run(40, &["SELECT CONCAT(@@SESSION.autocommit, ' ', @@SESSION.transaction_isolation)"]).await;
+    assert_eq!(page_of(&evs).1[0][0].as_deref(), Some("0 SERIALIZABLE"));
+    c.ok(44, "COMMIT").await;
+    // Autocommit off and a transaction open: refused, not asked.
+    c.ok(41, "START TRANSACTION").await;
+    assert_eq!(group_within(&mut c, 42, &sql, limit).await.0, Err(DbError::LockingRead));
+    assert_eq!(data_locks_of(&mut a, id, &t.name).await, 0, "nothing was read");
+    c.ok(43, "COMMIT").await;
     c.ok(5, "SET autocommit = 1").await;
     c.ok(6, "START TRANSACTION").await;
     assert_eq!(group_within(&mut c, 7, &sql, limit).await.0, Err(DbError::LockingRead));

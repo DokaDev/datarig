@@ -4,10 +4,11 @@
 //! `REPEATABLE READ` when the session runs without autocommit and none is open
 //! ([`read_own_as`]). Every value is shown as a cell of its column is ([`display`]).
 //!
-//! It is refused unsent where reading would take row locks: a transaction open, or autocommit
-//! off, while the level reads run in is `SERIALIZABLE` or not known
-//! ([`DbError::LockingRead`]); and where it would use up the next transaction's settings
-//! ([`keeps_next`]).
+//! It is refused unsent where reading would take row locks: a transaction open while the level
+//! reads run in is `SERIALIZABLE` or not known ([`DbError::LockingRead`]); and where it would use
+//! up the next transaction's settings ([`keeps_next`]). With autocommit off and no transaction
+//! open it reads in a `REPEATABLE READ` read-only transaction of its own, without row locks,
+//! whatever the session's level ([`read_own_as`]).
 //!
 //! What it reads is bounded ([`rows_within`]): the answer's columns as the server describes them
 //! must send only short values or values measured and cut by the server ([`bounded`]), and each
@@ -71,11 +72,12 @@ pub(super) async fn group_count(
 }
 
 /// Refused ([`DbError::LockingRead`]) when a read of the app's own would lock the rows it reads:
-/// it runs in a transaction (one open before it, `was_open`, or one autocommit off opens) whose
-/// level is `SERIALIZABLE` or not known (InnoDB reads every row of such a transaction with a
-/// shared lock).
+/// it runs in the user's transaction (one open before it, `was_open`, or open now) whose level
+/// is `SERIALIZABLE` or not known (InnoDB reads every row of such a transaction with a shared
+/// lock). With autocommit off and none open it runs in a transaction of its own at `REPEATABLE
+/// READ` ([`read_own_as`]), which reads without locks.
 fn no_locking_read(s: &State, was_open: bool) -> Result<(), DbError> {
-    let in_tx = was_open || s.tx.open || !s.tx.autocommit;
+    let in_tx = was_open || s.tx.open;
     let plain = matches!(
         s.tracked.isolation(),
         Some(Isolation::ReadUncommitted | Isolation::ReadCommitted | Isolation::RepeatableRead)

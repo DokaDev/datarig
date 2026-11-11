@@ -311,9 +311,9 @@ pub enum DbError {
     /// does not report. A read of the app's own outside a transaction (a count, an export, the
     /// allowlist's question) would start a transaction and use them up: it was not sent.
     NextTransactionSet,
-    /// MySQL: a read of the app's own would take row locks: a transaction is open, or autocommit
-    /// is off, and the session's isolation is `SERIALIZABLE` (InnoDB then reads every row with a
-    /// shared lock) or not known. It was not sent.
+    /// MySQL: a read of the app's own would take row locks: a transaction is open and the
+    /// session's isolation is `SERIALIZABLE` (InnoDB then reads every row with a shared lock) or
+    /// not known. It was not sent.
     LockingRead,
     /// Statement `index` (from 0) of what the query session starts with
     /// ([`super::ConnectOptions::session_sql`]), `statement`, failed: the session was closed
