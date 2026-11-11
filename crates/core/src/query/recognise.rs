@@ -268,11 +268,14 @@ impl Reader<'_> {
             Tok::Str if !self.escapes_read_exactly(text) => None,
             Tok::Str => {
                 let s = self.d.unquote_literal(text)?;
-                // PostgreSQL bytes: `'\x…'::bytea`.
+                // PostgreSQL bytes: `'\x…'::bytea`, the type with its schema or without.
                 let (cast, next) = self.operator(toks, at + 1);
-                if self.d == Dialect::Postgres && cast == "::" && self.word(toks.get(next), "bytea") {
+                let qualified =
+                    self.word(toks.get(next), "pg_catalog") && toks.get(next + 1).is_some_and(|t| self.text(t) == ".");
+                let name = if qualified { next + 2 } else { next };
+                if self.d == Dialect::Postgres && cast == "::" && self.word(toks.get(name), "bytea") {
                     let bytes = s.strip_prefix("\\x").and_then(unhex)?;
-                    return Some((Value::Bytes(bytes), next + 1));
+                    return Some((Value::Bytes(bytes), name + 1));
                 }
                 Some((Value::Text(s), at + 1))
             }

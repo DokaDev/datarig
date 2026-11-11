@@ -2,8 +2,9 @@
 //!
 //! Literals are written for the column they are compared with: a number bare only for a number
 //! column and a valid number literal (else a string the server converts); bytes as PostgreSQL's
-//! `'\x…'::bytea` (an escape string, see below) or MySQL's `X'…'`; text as a string literal. A
-//! PostgreSQL string with a backslash is an escape string (`E'…'`), which reads the same whatever
+//! `'\x…'::pg_catalog.bytea` (an escape string, see below; the type is named with its schema, so
+//! that a domain of that name earlier on the search path is not the one cast to) or MySQL's
+//! `X'…'`; text as a string literal. A PostgreSQL string with a backslash is an escape string (`E'…'`), which reads the same whatever
 //! `standard_conforming_strings` is. A MySQL string is plain only when the session's character
 //! set is known to be `utf8mb4` and it holds no backslash or NUL (which `NO_BACKSLASH_ESCAPES`
 //! reads otherwise); else it is its UTF-8 bytes, `_utf8mb4 X'…'`.
@@ -168,7 +169,7 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
         Value::Number(n) => text_literal(t, n),
         Value::Text(s) => text_literal(t, s),
         Value::Bytes(b) => match t.dialect {
-            Dialect::Postgres => format!("{}::bytea", text_literal(t, &format!("\\x{}", hex(b, false)))),
+            Dialect::Postgres => format!("{}::pg_catalog.bytea", text_literal(t, &format!("\\x{}", hex(b, false)))),
             Dialect::MySql(_) => format!("X'{}'", hex(b, true)),
         },
     }

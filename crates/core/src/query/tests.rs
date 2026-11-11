@@ -175,7 +175,7 @@ fn render_literals_follow_the_column() {
     assert_eq!(render_pg(&cmp("name", CmpOp::Eq, text(r"C:\x"))), r"name = E'C:\\x'");
     assert_eq!(render_pg(&cmp("Mixed Case", CmpOp::Lt, text("b"))), r#""Mixed Case" < 'b'"#);
     assert_eq!(render_pg(&cmp("born", CmpOp::Gt, text("2026-01-01"))), "born > '2026-01-01'");
-    assert_eq!(render_pg(&cmp("data", CmpOp::Eq, Value::Bytes(vec![1, 0xab]))), r"data = E'\\x01ab'::bytea");
+    assert_eq!(render_pg(&cmp("data", CmpOp::Eq, Value::Bytes(vec![1, 0xab]))), r"data = E'\\x01ab'::pg_catalog.bytea");
     assert_eq!(render_my(&cmp("data", CmpOp::Eq, Value::Bytes(vec![1, 0xab])), true), "data = X'01AB'");
     assert_eq!(render_pg(&cmp("id", CmpOp::Eq, Value::Bool(true))), "id = TRUE");
     // MySQL text: plain only with a known utf8mb4 session and no backslash.
