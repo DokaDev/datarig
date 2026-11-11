@@ -336,3 +336,19 @@ fn an_unreadable_file_is_never_written_over() {
     h.app.flush_table_view();
     assert_eq!(std::fs::read_to_string(state.file()).unwrap(), junk, "never written over");
 }
+
+/// A column hidden while the search's job is still out: its answer is of other columns and is
+/// dropped; the matches found are those of the columns shown.
+#[test]
+fn a_search_answer_of_other_columns_is_dropped() {
+    let mut h = users(None);
+    h.keys("/");
+    h.type_text("bob|y");
+    h.key(KeyCode::Enter);
+    at(&mut h, 0, 1);
+    h.keys("C");
+    h.app.pump_grid_search(Duration::from_secs(5));
+    let count = h.app.grid_search_strip().map(|s| s.count).unwrap_or_default();
+    assert!(count.ends_with("/1"), "only the memo's match: {count}");
+    assert_ne!(h.app.tab().grid.col, 1, "never on the hidden column");
+}
