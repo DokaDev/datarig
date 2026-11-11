@@ -7816,6 +7816,51 @@ async fn an_estimate_takes_only_columns_of_types_planning_is_known_to_handle() {
     assert_eq!(got, Err(DbError::NotRepeatable(NotRepeatable::PlannerCode(format!("{s}.fine")))));
 }
 
+/// A refusal names its relation without running a cast of the user's: the server ships none from
+/// `regclass` to `text`, so one may be added, and a `::text` would run it. In a database of its
+/// own, as it would otherwise reach every session of the server.
+#[tokio::test(flavor = "multi_thread")]
+async fn naming_a_refused_relation_runs_no_cast_of_the_users() {
+    use datarig_core::driver::SessionContext;
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    let Some(url) = pg_url("naming_a_refused_relation_runs_no_cast_of_the_users") else { return };
+    let db = format!("zz_castdb_{}", std::process::id());
+    let _db_guard = DatabaseGuard { url: url.clone(), name: db.clone() };
+    pg_clean::run_fresh(&url, &format!("CREATE DATABASE {db}")).unwrap();
+    let context = || SessionContext { database: Some(db.clone()), schema: Some("public".to_string()) };
+    let mut b = Conn::open_in(&url, SessionRole::Query, false, context()).await;
+    for sql in [
+        "CREATE TABLE plain (id int)",
+        "CREATE SCHEMA zz_s",
+        "CREATE TABLE zz_s.\"Odd t\" (id int)",
+        "CREATE TABLE secured (id int)",
+        "ALTER TABLE secured ENABLE ROW LEVEL SECURITY",
+        "CREATE VIEW shown AS SELECT id FROM plain",
+        "CREATE FUNCTION zz_name(regclass) RETURNS text IMMUTABLE LANGUAGE plpgsql AS \
+         $$BEGIN RAISE EXCEPTION 'zz_ the refusal ran the cast'; END$$",
+        "CREATE CAST (regclass AS text) WITH FUNCTION zz_name(regclass)",
+    ] {
+        assert!(matches!(b.run(1, sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let mut q = Conn::open_in(&url, SessionRole::Query, false, context()).await;
+    let refused = |why| Err(DbError::NotRepeatable(why));
+    let rows = |t: &str| format!("SELECT * FROM {t} WHERE (id IS NOT NULL)");
+    let limit = Some(Duration::from_secs(30));
+
+    // The cast itself is what planning is refused for, on a table with nothing else to it.
+    assert_eq!(q.estimate(1, &rows("plain")).await.0, refused(NotRepeatable::PlannerCode("plain".into())));
+    let odd = "zz_s.\"Odd t\"";
+    assert_eq!(q.estimate(2, &rows(odd)).await.0, refused(NotRepeatable::PlannerCode(odd.into())));
+
+    // The allowlist's question names what it refuses the same way, for a count and an estimate.
+    let secured = NotRepeatable::RowSecurity("secured".into());
+    assert_eq!(q.count_within(3, &count_of(&rows("secured")), limit).await.0, refused(secured.clone()));
+    assert_eq!(q.estimate(4, &rows("secured")).await.0, refused(secured));
+    let shown = NotRepeatable::NotATable("shown".into());
+    assert_eq!(q.count_within(5, &count_of(&rows("shown")), limit).await.0, refused(shown.clone()));
+    assert_eq!(q.estimate(6, &rows("shown")).await.0, refused(shown));
+}
+
 /// The types a planner's estimate takes are what their numbers say on the server (the multiranges
 /// are there from 14 on).
 #[tokio::test(flavor = "multi_thread")]

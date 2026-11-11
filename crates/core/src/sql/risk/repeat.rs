@@ -385,6 +385,14 @@ fn name_array(names: &[String]) -> Option<String> {
     Some(format!("ARRAY[{}]::pg_catalog.name[]", items.join(", ")))
 }
 
+/// The name of the relation numbered `oid`, as a `regclass` shows it, for what the server answers.
+/// Read with the type's own output function: the server ships no cast from `regclass` to `text`,
+/// so one of the user's may exist, and `::text` would run it. Every conversion of the questions
+/// below is between types the server has a cast for, of which there can be only one.
+fn relation_name(oid: &str) -> String {
+    format!("pg_catalog.textin(pg_catalog.regclassout({oid}::pg_catalog.regclass))")
+}
+
 /// The query the app sends right before it runs a statement again or counts it, on the same
 /// session: what only the server can tell for the allowlist (see the module docs), from the
 /// objects the statement names. It answers no row when the statement may run, else one row
@@ -405,6 +413,7 @@ pub fn check_query(n: &Names) -> Option<String> {
     };
     let (functions, attributes) = (name_array(&n.functions)?, name_array(&n.attributes)?);
     let (operators, types) = (name_array(&n.operators)?, name_array(&n.types)?);
+    let relation = relation_name("c.oid");
     Some(format!(
         "WITH RECURSIVE named(sch, rel, cte) AS ({named}),
 top AS (SELECT n.sch, n.rel, n.cte, pg_catalog.to_regclass(CASE WHEN n.sch OPERATOR(pg_catalog.=) '' \
@@ -419,10 +428,10 @@ AND NOT a.attisdropped AND y.oid OPERATOR(pg_catalog.>=) 10000::pg_catalog.oid)
 SELECT w.kind, w.name FROM (
 SELECT 1, 'relation', CASE WHEN t.sch OPERATOR(pg_catalog.=) '' THEN t.rel ELSE \
 pg_catalog.concat(t.sch, '.', t.rel) END FROM top t WHERE t.oid IS NULL AND NOT t.cte
-UNION ALL SELECT 2, 'relation', c.oid::pg_catalog.regclass::pg_catalog.text FROM rels r JOIN \
+UNION ALL SELECT 2, 'relation', {relation} FROM rels r JOIN \
 pg_catalog.pg_class c ON c.oid OPERATOR(pg_catalog.=) r.oid WHERE c.relkind OPERATOR(pg_catalog.<>) \
 ALL (ARRAY['r', 'p', 'm']::pg_catalog.\"char\"[])
-UNION ALL SELECT 3, 'policy', c.oid::pg_catalog.regclass::pg_catalog.text FROM rels r JOIN \
+UNION ALL SELECT 3, 'policy', {relation} FROM rels r JOIN \
 pg_catalog.pg_class c ON c.oid OPERATOR(pg_catalog.=) r.oid WHERE c.relrowsecurity
 UNION ALL SELECT 4, 'shadowed', p.proname::pg_catalog.text FROM pg_catalog.pg_proc p WHERE p.oid \
 OPERATOR(pg_catalog.>=) 10000::pg_catalog.oid AND (p.proname OPERATOR(pg_catalog.=) ANY ({functions}) \
@@ -563,6 +572,7 @@ pub fn planner_query(n: &Names) -> Option<String> {
     let shipped = "OPERATOR(pg_catalog.<) 16384::pg_catalog.oid";
     let is = "OPERATOR(pg_catalog.=)";
     let either = "ANY (ARRAY[c.typ, c.elem])";
+    let relation = relation_name("w.rel");
     Some(format!(
         "WITH RECURSIVE named(sch, rel) AS (VALUES {named}),
 top AS (SELECT pg_catalog.to_regclass(CASE WHEN n.sch OPERATOR(pg_catalog.=) '' THEN \
@@ -588,7 +598,7 @@ s.stxrelid OPERATOR(pg_catalog.=) r.oid),
 cols(typ, elem) AS (SELECT DISTINCT t.oid, t.typelem FROM rels r JOIN pg_catalog.pg_attribute a ON \
 a.attrelid {is} r.oid JOIN pg_catalog.pg_type t ON t.oid {is} a.atttypid WHERE a.attnum \
 OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped)
-SELECT 'planner', w.rel::pg_catalog.regclass::pg_catalog.text FROM (
+SELECT 'planner', {relation} FROM (
 SELECT r.oid AS rel FROM rels r JOIN pg_catalog.pg_class c ON c.oid OPERATOR(pg_catalog.=) r.oid WHERE \
 c.relhasrules
 UNION ALL SELECT p.rel FROM parts p JOIN pg_catalog.pg_depend d ON d.classid OPERATOR(pg_catalog.=) \

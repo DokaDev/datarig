@@ -196,4 +196,8 @@ fn what_planning_may_run_is_asked_about_the_relations_read() {
         assert!(q.contains(&format!("{oid}")), "{oid}");
     }
     assert!(planner_query(&names("SELECT 1").unwrap()).unwrap().contains("WHERE false"));
+    for asked in [q, check_query(&n).unwrap()] {
+        assert!(asked.contains("pg_catalog.regclassout("), "{asked}");
+        assert!(!asked.contains("regclass::pg_catalog.text"), "a cast that may be the user's: {asked}");
+    }
 }
