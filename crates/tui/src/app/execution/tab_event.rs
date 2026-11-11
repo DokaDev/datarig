@@ -1122,6 +1122,7 @@ impl App {
         // The rows of a table tab's query: its columns' values are remembered.
         if rows_for == Some(None) {
             self.remember_values(id);
+            self.filter_dialog_columns_came(id);
         }
         match idle_end {
             // Said where the user looks, from another tab too.

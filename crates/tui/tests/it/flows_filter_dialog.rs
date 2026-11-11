@@ -450,3 +450,38 @@ fn the_search_prompt_says_it_searches_the_held_rows_of_a_filter() {
     h.keys("/");
     assert!(h.screen(120, 30).contains("searching held rows"), "{}", h.screen(120, 30));
 }
+
+/// The table's catalogue read while the dialog is open: its columns become the catalogue's (in
+/// the table's order, with their types), the selected column kept by its name.
+#[test]
+fn the_columns_follow_the_catalogue_read_while_the_dialog_is_open() {
+    use datarig_core::driver::keys::{CatalogColumn, OrderKeys};
+    let mut h = users();
+    h.key(KeyCode::Right);
+    h.keys("f");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("Columns 2") && screen.contains("from the loaded result"), "{screen}");
+    let col = |name: &str, ty: &str| CatalogColumn {
+        name: name.into(),
+        type_name: ty.into(),
+        not_null: name == "id",
+        primary_key: name == "id",
+        foreign_key: false,
+        invisible: false,
+    };
+    let keys = OrderKeys {
+        primary_key: vec!["id".into()],
+        columns: Some(vec![col("id", "bigint"), col("email", "character varying(200)"), col("name", "text")]),
+        ..Default::default()
+    };
+    keys_came_with(&mut h, "local-pg", keys);
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("Columns 3") && !screen.contains("from the loaded result"), "{screen}");
+    assert!(screen.contains("email           character v"), "{screen}");
+    // Still on `name` (now the third column, not the second).
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Char(' '));
+    h.type_text("x");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name = 'x')")]]);
+}

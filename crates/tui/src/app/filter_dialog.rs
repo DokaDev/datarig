@@ -362,10 +362,7 @@ impl App {
         let failure = tq.failure().map(|f| (f.message.clone(), f.at.clone()));
         let draft = Draft::from_query(q, &target);
         let (columns, source) = self.filter_dialog_columns(id, &target);
-        let loaded = match &self.tabs.get(id).map(|t| &t.results) {
-            Some(Results::Rows(rs)) if tq.shown.is_some() => Some(rs.rows.len()),
-            _ => None,
-        };
+        let loaded = self.filter_dialog_loaded(id);
         // Where the server said the failed filter is wrong: that chip underlined.
         let mark = failure
             .as_ref()
@@ -415,6 +412,37 @@ impl App {
             d.focus = if d.draft.order.is_empty() { DialogFocus::Sort } else { DialogFocus::Order(0) };
         }
         self.overlays.push(Overlay::FilterDialog(Box::new(d)));
+    }
+
+    /// How many rows table tab `id` holds of its query; `None` when it holds none.
+    fn filter_dialog_loaded(&self, id: TabId) -> Option<usize> {
+        let shown = self.table_query(id).is_some_and(|tq| tq.shown.is_some());
+        match self.tabs.get(id).map(|t| &t.results) {
+            Some(Results::Rows(rs)) if shown => Some(rs.rows.len()),
+            _ => None,
+        }
+    }
+
+    /// Table tab `id` read its table's catalogue (with its keys) or rows of its query: its open
+    /// dialog's columns become those it would open with now, the selected one kept by its name
+    /// (the list's first when it is gone).
+    pub(crate) fn filter_dialog_columns_came(&mut self, id: TabId) {
+        if self.filter_dialog().is_none_or(|d| d.tab != id) {
+            return;
+        }
+        let Some(target) = self.table_target(id) else { return };
+        let (columns, source) = self.filter_dialog_columns(id, &target);
+        let loaded = self.filter_dialog_loaded(id);
+        let Some(d) = self.filter_dialog_mut() else { return };
+        let selected = d.column().map(|c| c.name.clone());
+        d.columns = columns;
+        d.source = source;
+        d.loaded = loaded;
+        match selected {
+            Some(name) if d.columns.iter().any(|c| c.name == name) => d.select_column(&name),
+            _ => d.cursor = 0,
+        }
+        d.settle();
     }
 
     /// The columns of table tab `id`'s table: the catalogue's, in the table's order, when the

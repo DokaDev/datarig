@@ -1163,6 +1163,7 @@ impl App {
                 Err(reason) => OrderKeysState::Failed { on, reason },
             };
         }
+        self.filter_dialog_columns_came(id);
         // The query that waited for them runs now (one cancelled meanwhile does not).
         if let Some(q) = self.table_keys_take(id) {
             self.table_run_with(id, q, false);
