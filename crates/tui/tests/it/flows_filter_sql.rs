@@ -339,6 +339,28 @@ fn open_in_editor_refuses_and_asks_as_a_run_does() {
     assert!(runs(&mut h).is_empty());
 }
 
+/// On a read-only profile `Enter` with a call the app cannot check refuses the draft without
+/// asking: nothing is sent, the dialog stays with the reason, and the draft fixed is sent.
+#[test]
+fn a_read_only_profile_refuses_an_unknown_call_and_keeps_the_dialog() {
+    let mut h = users_read_only();
+    h.keys("f");
+    h.keys("Q");
+    h.type_text("lower2(name) = 'a'");
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty(), "nothing sent");
+    assert!(dialog_open(&h));
+    assert!(!matches!(h.app.overlays.top(), Some(o) if o.kind() == OverlayKind::Confirm), "not asked");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("Filter refused: lower2"), "{screen}");
+    assert_eq!(draft(&h).0, "lower2(name) = 'a'");
+    clear_field(&mut h);
+    h.type_text("name = 'a'");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name = 'a')")]]);
+    assert!(!dialog_open(&h));
+}
+
 #[test]
 fn the_sql_screens() {
     let mut h = users();

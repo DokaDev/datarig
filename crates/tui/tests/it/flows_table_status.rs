@@ -115,6 +115,33 @@ fn the_border_says_the_first_condition_and_key_and_how_many_more() {
     assert_eq!(h.app.layout.table_status, ratatui::layout::Rect::default());
 }
 
+/// A short filter and sort fit whole at both sizes; a condition longer than the widest pane
+/// is cut at both.
+#[test]
+fn the_border_status_whole_and_cut_at_both_sizes() {
+    let mut h = users();
+    h.command("where id > 1");
+    answer(&mut h);
+    h.command("orderby name desc");
+    answer(&mut h);
+    for (w, hh) in [(80, 24), (120, 34)] {
+        let b = border(&mut h, w, hh);
+        assert!(b.starts_with("\u{2570} \u{25bc} id > 1 \u{00b7} name \u{2193} \u{2500}"), "{w}: {b}");
+    }
+    assert_screen!("table_status_whole_en_120x34", Lang::En, h.draw(120, 34));
+    assert_screen!("table_status_whole_en_80x24", Lang::En, h.draw(80, 24));
+    let long = format!("name <> '{}'", "a name long enough to be cut ".repeat(5).trim_end());
+    h.command(&format!("where {long} AND id > 1"));
+    answer(&mut h);
+    for (w, hh) in [(80, 24), (120, 34)] {
+        let b = border(&mut h, w, hh);
+        assert!(b.contains("\u{2026} +1 \u{00b7} name \u{2193} "), "{w}: {b}");
+    }
+    assert_screen!("table_status_cut_en_120x34", Lang::En, h.draw(120, 34));
+    assert_screen!("table_status_cut_en_80x24", Lang::En, h.draw(80, 24));
+    assert_eq!(runs(&mut h).len(), 3);
+}
+
 #[test]
 fn a_click_on_the_border_status_opens_the_dialog() {
     let mut h = filtered();
