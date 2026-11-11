@@ -335,7 +335,8 @@ impl App {
             let tick = |v: &str| judge(meta, &rs.read_in, v);
             view.items = items(&tally.values, Source::Loaded, narrow, &tick, &null);
         }
-        view.more = tally.more();
+        // A range lists nothing, so there is nothing more than it to say.
+        view.more = tally.more() && view.range.is_none();
         // The values an earlier load showed, once the rows loaded are filtered by the column.
         let own = shown.and_then(|q| q.filter.as_ref()).is_some_and(|f| {
             let target = self.table_target(d.tab);

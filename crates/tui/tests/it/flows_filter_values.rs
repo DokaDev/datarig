@@ -861,3 +861,19 @@ fn a_condition_typed_on_an_invisible_column_is_its_columns() {
         h.keys("f");
     }
 }
+
+#[test]
+fn a_range_of_more_numbers_than_a_list_holds_says_no_more_than_the_range() {
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    // 300 amounts, each its own: more than a list holds, and no list is shown.
+    answer(&mut h, rows(300));
+    h.sent();
+    h.key(KeyCode::Tab);
+    dialog_on(&mut h, 2);
+    for (w, ht) in [(80, 24), (120, 34)] {
+        let screen = h.screen(w, ht);
+        assert!(screen.contains("mostly distinct"), "{screen}");
+        assert!(!screen.contains("more values than shown"), "nothing is listed, so nothing more: {screen}");
+    }
+}
