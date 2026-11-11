@@ -551,9 +551,10 @@ pub(crate) struct ListItem {
 }
 
 /// The values written in list field text `s`, separated by commas outside single quotes. A
-/// value in single quotes is what is between them (a quote inside written twice); a quote left
-/// open runs to the end of the text; text after the closing quote makes the value the text as
-/// written.
+/// value in single quotes is what is between them: a quote inside written twice, and, as the
+/// field holds one line, `\n` a line feed, `\r` a carriage return and `\\` a backslash (a
+/// backslash before anything else is itself). A quote left open runs to the end of the text;
+/// text after the closing quote makes the value the text as written.
 pub(crate) fn list_items(s: &str) -> Vec<ListItem> {
     let mut items = Vec::new();
     let mut rest = s;
@@ -573,6 +574,14 @@ pub(crate) fn list_items(s: &str) -> Vec<ListItem> {
                         }
                         close = Some(1 + i + 1);
                         break;
+                    }
+                    if c == '\\' {
+                        match chars.next_if(|&(_, c)| matches!(c, 'n' | 'r' | '\\')) {
+                            Some((_, 'n')) => inner.push('\n'),
+                            Some((_, 'r')) => inner.push('\r'),
+                            _ => inner.push('\\'),
+                        }
+                        continue;
                     }
                     inner.push(c);
                 }
@@ -635,16 +644,31 @@ fn list_value(written: &str, c: &ColumnInfo) -> Value {
 }
 
 /// Value `v` of a list of column `c` as [`list_text`] writes it on dialect `d`: as the field
-/// shows one value ([`value_text`]) where that reads back as it, else text in single quotes.
+/// shows one value ([`value_text`]) where that reads back as it, else text in single quotes,
+/// on one line ([`list_items`] reads the escapes back).
 fn list_item_text(v: &Value, d: Dialect, c: &ColumnInfo) -> String {
     let plain = value_text(v, d);
     let reads_back = !plain.is_empty()
         && plain.trim() == plain
-        && !plain.contains(',')
+        && !plain.contains([',', '\n', '\r'])
         && !plain.starts_with('\'')
         && list_value(&plain, c) == *v;
     match v {
-        Value::Text(s) if !reads_back => format!("'{}'", s.replace('\'', "''")),
+        Value::Text(s) if !reads_back => {
+            let mut q = String::with_capacity(s.len() + 2);
+            q.push('\'');
+            for ch in s.chars() {
+                match ch {
+                    '\'' => q.push_str("''"),
+                    '\\' => q.push_str("\\\\"),
+                    '\n' => q.push_str("\\n"),
+                    '\r' => q.push_str("\\r"),
+                    ch => q.push(ch),
+                }
+            }
+            q.push('\'');
+            q
+        }
         _ => plain,
     }
 }

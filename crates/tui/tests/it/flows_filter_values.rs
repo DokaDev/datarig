@@ -694,3 +694,59 @@ fn count_exactly_counts_a_mysql_invisible_column_by_its_catalogue_type() {
         h.keys("gg");
     }
 }
+
+/// In the open dialog, from the column list: the value field of the column's first condition,
+/// the cursor at its end.
+fn to_first_field(h: &mut Harness) {
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::End);
+    assert_eq!(h.app.key_context(), Ctx::FilterDialogText);
+}
+
+/// Values with a line feed and a carriage return, ticked into a list: another value of the list
+/// edited leaves them as they are (the field holds one line).
+#[test]
+fn a_ticked_value_with_a_line_break_stays_when_another_is_edited() {
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    let status = [("a\nb", 3), ("c\rd", 2), ("x", 1)];
+    let rows: Vec<Vec<Option<String>>> = status
+        .iter()
+        .flat_map(|(s, n)| std::iter::repeat_n(*s, *n))
+        .enumerate()
+        .map(|(i, s)| vec![Some(i.to_string()), Some(s.to_string()), Some("1".into())])
+        .collect();
+    answer(&mut h, rows);
+    h.sent();
+    h.key(KeyCode::Tab);
+    dialog_on(&mut h, 1);
+    to_values(&mut h, 0);
+    for _ in 0..3 {
+        h.key(KeyCode::Char(' '));
+        h.key(KeyCode::Down);
+    }
+    let before = draft(&h);
+    assert!(before.contains("IN (") && before.contains("'x'"), "{before}");
+    h.key(KeyCode::BackTab);
+    to_first_field(&mut h);
+    h.type_text("y");
+    assert_eq!(draft(&h), before.replace("'x'", "'xy'"));
+}
+
+/// The same read back from MySQL's SQL (a text with a line feed written as bytes).
+#[test]
+fn a_mysql_value_with_a_line_break_read_back_stays_when_another_is_edited() {
+    let mut h = mysql();
+    h.command("where at IN (_utf8mb4 X'610A62', 'x')");
+    runs(&mut h);
+    my_page(&mut h, &["2026-11-10 09:30:00"]);
+    dialog_on(&mut h, 1);
+    to_first_field(&mut h);
+    h.type_text("y");
+    h.key(KeyCode::Enter);
+    assert_eq!(
+        runs(&mut h),
+        vec![vec!["SELECT * FROM `shop`.`users` WHERE (at IN (_utf8mb4 X'610A62', 'xy'))".to_string()]]
+    );
+}

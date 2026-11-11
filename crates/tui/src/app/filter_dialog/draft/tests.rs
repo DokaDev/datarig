@@ -778,6 +778,8 @@ fn a_list_field_reads_back_to_the_values_it_shows() {
         (&name, vec![text("paid"), Value::Null], "paid, NULL"),
         (&name, vec![text("NULL"), text("null")], "'NULL', 'null'"),
         (&name, vec![text("a,b"), text("x")], "'a,b', x"),
+        (&name, vec![text("a\nb"), text("c\rd"), text("x")], "'a\\nb', 'c\\rd', x"),
+        (&name, vec![text("a\\nb"), text("q\\'\n")], "a\\nb, 'q\\\\''\\n'"),
         (&name, vec![text(""), text(" a "), text("it's"), text("'q")], "'', ' a ', it's, '''q'"),
         (&id, vec![num("1"), text("12"), text("x y")], "1, '12', x y"),
         (&data, vec![Value::Bytes(vec![1]), text("0x01")], "\\x01, '0x01'"),
@@ -798,6 +800,8 @@ fn a_list_field_reads_back_to_the_values_it_shows() {
     assert_eq!(parse_list("Null, 'a, b", &name, &[]), vec![Value::Null, text("a, b")]);
     assert_eq!(parse_list("'a'b, , c ,", &name, &[]), vec![text("'a'b"), text("c")]);
     assert_eq!(list_items("x, 'y").last().map(|i| i.quoted.clone()), Some(Some("y".into())));
+    // In quotes a backslash before anything else is itself.
+    assert_eq!(parse_list("'C:\\temp\\x'", &name, &[]), vec![text("C:\\temp\\x")]);
 }
 
 #[test]
