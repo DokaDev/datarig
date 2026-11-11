@@ -122,7 +122,8 @@ pub(super) async fn group_count(
 }
 
 /// The read of [`group_count`] in the user's block, under the savepoint its question set: the
-/// statement prepared, then run with the savepoint's `RELEASE` in the same write.
+/// statement prepared, then run; its page checked and decoded, its portal closed, and only then
+/// the savepoint released (a failure before is undone by the caller, back to the savepoint).
 async fn in_block(
     client: &mut Client,
     link: &mut Link,
@@ -144,12 +145,24 @@ async fn in_block(
         return Ok(Err(why));
     }
     let formats = formats_of(&stmt);
-    let release = format!("RELEASE SAVEPOINT {}", env.savepoint);
-    let mut txn = client.transaction_in_block_with(Vec::new());
-    let read = link.guard(Some(env.token), txn.bind_first_page_then(&stmt, &formats, ROWS, &release)).await?;
-    Ok(match read {
+    let txn = client.transaction_in_block_with(Vec::new());
+    let read = link.guard(Some(env.token), txn.bind_first_page(&stmt, &formats, ROWS)).await?;
+    // Checked and decoded while the savepoint stands, so that a refusal here is undone by the
+    // caller; the page's portal (suspended when it stopped at `ROWS`) is closed as the page goes,
+    // before the savepoint is released.
+    let counts = match read {
         Ok(page) => counts_of(&page.rows, &formats),
         Err(e) => Err(asked_error(&e, env.cancel.asked())),
+    };
+    drop(txn);
+    let counts = match counts {
+        Ok(counts) => counts,
+        Err(why) => return Ok(Err(why)),
+    };
+    let release = format!("RELEASE SAVEPOINT {}", env.savepoint);
+    Ok(match link.guard(None, client.batch_execute(&release)).await? {
+        Ok(()) => Ok(counts),
+        Err(e) => Err(db_error(&e)),
     })
 }
 

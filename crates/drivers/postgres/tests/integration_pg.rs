@@ -8447,6 +8447,57 @@ async fn a_group_count_sends_only_bounded_values_of_the_columns_current_type() {
     assert_eq!(got, vec![(None, false, Some(5000), 1), (Some("1.5".to_string()), true, Some(3), 1233)]);
 }
 
+/// A group count in the user's block that stops at its row limit (more values than it lists)
+/// leaves no portal behind: after several of them the session has none open, the block goes on
+/// with what it did before them, and a portal the user pages through meanwhile still pages.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_in_the_users_block_leaves_no_portal() {
+    use datarig_core::driver::ValueKind;
+    let Some(url) = pg_url("a_group_count_in_the_users_block_leaves_no_portal") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_group_portals_{pid}");
+    let table = format!("public.{name}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id, g % 300 AS k FROM generate_series(1, 1234) g");
+    assert!(matches!(q.run(1, &setup).await, DbEvent::Done { .. }));
+    let sql = group_sql("public", &name, "k", ("int4", ValueKind::Integer), None);
+    // The session's portals of a group count (not the one that reads this).
+    let portals = r"SELECT count(*) FROM pg_catalog.pg_cursors WHERE statement ~ 'GROUP\sBY'";
+    assert!(matches!(q.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(q.run(3, &format!("INSERT INTO {table} VALUES (0, -1)")).await, DbEvent::Done { .. }));
+    for id in 4..7 {
+        let (got, _, _) = q.group_within(id, &sql, None).await;
+        let got = got.expect("counted");
+        assert_eq!((got.values.len(), got.more), (200, true));
+    }
+    assert_eq!(q.first_value(7, portals).await.as_deref(), Some("0"), "no portal left open");
+    // A portal the user pages through, with counts in between.
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 8,
+        statements: vec![format!("SELECT * FROM {table} ORDER BY id")],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    let DbEvent::Page { more: true, .. } = q.result(8).await else { panic!("a page with more") };
+    for id in 9..11 {
+        let (got, _, _) = q.group_within(id, &sql, None).await;
+        assert_eq!(got.map(|g| g.values.len()), Ok(200));
+    }
+    q.session.send(DbCommand::FetchMore { id: 8 });
+    let DbEvent::Page { columns: None, rows, .. } = q.result(8).await else { panic!("the next page") };
+    assert_eq!(rows[0][0].as_deref(), Some("500"), "the portal goes on paging");
+    q.session.send(DbCommand::ClosePortal { id: 8 });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(q.first_value(12, portals).await.as_deref(), Some("0"));
+    // The block goes on, with what it did before the counts.
+    let kept = format!("SELECT count(*) FROM {table} WHERE id = 0");
+    assert_eq!(q.first_value(13, &kept).await.as_deref(), Some("1"));
+    assert!(matches!(q.run(14, "COMMIT").await, DbEvent::Done { .. }));
+    assert_eq!(q.first_value(15, &kept).await.as_deref(), Some("1"), "committed");
+}
+
 /// A cancel that reaches the server after it answered a group count's preparation stops
 /// nothing there (the session is idle): the count is not started after it, but answered
 /// `Cancelled`, in each of its three places: in a transaction of its own (ended), in the user's
