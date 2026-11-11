@@ -19,6 +19,11 @@
 //! column at least that long (the session's value, read with the allowlist's question right
 //! before the count, on the same session) are marked as possibly sharing a group with others
 //! ([`GroupCounts::mark_prefix`]), apart from whether they were sent whole.
+//!
+//! The value is sent as an expression's, which the server writes without its column's
+//! attributes: each one is made the grid's text where that can be told from the length the
+//! server measured of the column's own text, and taken back (not shown, never one to pick)
+//! where it cannot ([`as_the_column`], [`GroupCounts::mark_inexact`]).
 
 use super::*;
 use datarig_core::driver::{GroupBudget, GroupCounts, Isolation};
@@ -59,7 +64,8 @@ pub(super) async fn group_count(
     };
     let read = read_own_as(conn, link, env, s, text, was_open, applied, OwnWant::Rows).await?;
     let counted = read.and_then(|got| match got {
-        OwnGot::Rows(rows, prefixed) => GroupCounts::from_rows(rows).map(|mut counts| {
+        OwnGot::Rows(GroupRows { rows, prefixed, inexact }) => GroupCounts::from_rows(rows).map(|mut counts| {
+            counts.mark_inexact(&inexact);
             // Strings and bytes are grouped by their first `max_sort_length` bytes.
             if prefixed {
                 counts.mark_prefix(asked.sort_length);
@@ -85,15 +91,24 @@ fn no_locking_read(s: &State, was_open: bool) -> Result<(), DbError> {
     if in_tx && !plain { Err(DbError::LockingRead) } else { Ok(()) }
 }
 
+/// What [`rows_within`] read.
+pub(super) struct GroupRows {
+    /// Each row's values as the session shows cells of them, the first as the grid shows it
+    /// ([`as_the_column`]).
+    pub rows: Vec<Vec<Cell>>,
+    /// The server groups the values by a prefix ([`prefixed`]).
+    pub prefixed: bool,
+    /// For each row, whether its value's text could not be told to be the grid's
+    /// ([`as_the_column`]).
+    pub inexact: Vec<bool>,
+}
+
 /// The rows of `text` (a group count), each value as the session shows a cell of it, read one by
 /// one: only when its columns say every value comes measured ([`bounded`]), and each row within
 /// the answer's budget ([`GroupBudget`]). When either fails, reading stops there: why, with the
 /// rest of the answer unread (the caller cuts the connection, so none of it is received or
-/// kept). With whether the server groups the values by a prefix ([`prefixed`]).
-pub(super) async fn rows_within(
-    conn: &mut Conn,
-    text: &str,
-) -> Result<Result<(Vec<Vec<Cell>>, bool), DbError>, mysql_async::Error> {
+/// kept).
+pub(super) async fn rows_within(conn: &mut Conn, text: &str) -> Result<Result<GroupRows, DbError>, mysql_async::Error> {
     let mut qr = conn.query_iter(text).await?;
     let columns = qr.columns().unwrap_or_else(|| Arc::from(Vec::new()));
     if let Err(why) = bounded(&columns) {
@@ -102,16 +117,77 @@ pub(super) async fn rows_within(
     // As text: the server sends at most the preview's bytes of the value in its column's
     // character set, which the connection's (`utf8mb4`) writes in at most 4 bytes for each.
     let mut budget = GroupBudget::new(4 * GROUP_PREVIEW);
-    let mut rows = Vec::new();
+    let (mut rows, mut inexact) = (Vec::new(), Vec::new());
     while let Some(row) = qr.next().await? {
         let bytes = (0..row.len()).map(|i| row.as_ref(i).map_or(0, value_bytes)).sum();
         if let Err(why) = budget.take(bytes) {
             return Ok(Err(why));
         }
-        rows.push(cells(&columns, &row));
+        let mut cells = cells(&columns, &row);
+        let told = match cells.as_mut_slice() {
+            [value, length, ..] => as_the_column(&columns[0], value, length.as_deref()),
+            _ => true,
+        };
+        rows.push(cells);
+        inexact.push(!told);
     }
     let prefixed = columns.first().is_some_and(prefixed);
-    Ok(Ok((rows, prefixed)))
+    Ok(Ok(GroupRows { rows, prefixed, inexact }))
+}
+
+/// Make `value`, a value of the measured expression `c` (`IF(LENGTH(col) <= …, col, NULL)`),
+/// the text the grid shows for its column, whose own text the server measured as `length`
+/// bytes; whether that could be told. The server writes a column by its attributes and an
+/// expression without them: a `YEAR` 0 is `0000` as a column and `0` as an expression, a
+/// `ZEROFILL` number is padded with zeros to its width as a column only. Strings, bytes, `ENUM`
+/// and `SET` values are sent as they are (their length is in the column's character set, not
+/// the text's: not compared). Any other value (numbers, dates and times) is its column's text
+/// when it is as long as the server measured it; an exact number (an integer, `YEAR`,
+/// `DECIMAL`) that is shorter is padded with zeros on the left to that length, which is all a
+/// `YEAR` or a `ZEROFILL` column adds; any other difference is not told (`false`). NULL is NULL.
+fn as_the_column(c: &Column, value: &mut Cell, length: Option<&str>) -> bool {
+    use ColumnType::*;
+    let Some(v) = value.as_mut() else { return true };
+    let exact = matches!(
+        c.column_type(),
+        MYSQL_TYPE_TINY
+            | MYSQL_TYPE_SHORT
+            | MYSQL_TYPE_INT24
+            | MYSQL_TYPE_LONG
+            | MYSQL_TYPE_LONGLONG
+            | MYSQL_TYPE_YEAR
+            | MYSQL_TYPE_DECIMAL
+            | MYSQL_TYPE_NEWDECIMAL
+    );
+    let other = matches!(
+        c.column_type(),
+        MYSQL_TYPE_FLOAT
+            | MYSQL_TYPE_DOUBLE
+            | MYSQL_TYPE_DATE
+            | MYSQL_TYPE_NEWDATE
+            | MYSQL_TYPE_TIME
+            | MYSQL_TYPE_TIME2
+            | MYSQL_TYPE_DATETIME
+            | MYSQL_TYPE_DATETIME2
+            | MYSQL_TYPE_TIMESTAMP
+            | MYSQL_TYPE_TIMESTAMP2
+    );
+    if !exact && !other {
+        return true;
+    }
+    let Some(length) = length.and_then(|l| l.trim().parse::<usize>().ok()) else { return false };
+    if v.len() == length {
+        return true;
+    }
+    let number = |s: &str| {
+        let (whole, fraction) = s.split_once('.').unwrap_or((s, "0"));
+        !whole.is_empty() && !fraction.is_empty() && (whole.bytes().chain(fraction.bytes())).all(|b| b.is_ascii_digit())
+    };
+    if exact && v.len() < length && number(v) {
+        *v = format!("{}{v}", "0".repeat(length - v.len()));
+        return true;
+    }
+    false
 }
 
 /// Whether the columns of a group count's answer, as the server describes them for this run,
@@ -149,4 +225,47 @@ fn prefixed(c: &Column) -> bool {
             | MYSQL_TYPE_LONG_BLOB
     );
     stringy && !c.flags().intersects(ColumnFlags::ENUM_FLAG | ColumnFlags::SET_FLAG)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What [`as_the_column`] makes of `value` of an expression of type `ty` whose column's own
+    /// text the server measured as `length` bytes: the text, and whether it was told.
+    fn told(ty: ColumnType, value: Option<&str>, length: Option<&str>) -> (Option<String>, bool) {
+        let mut cell = value.map(str::to_string);
+        let ok = as_the_column(&Column::new(ty), &mut cell, length);
+        (cell, ok)
+    }
+
+    #[test]
+    fn a_value_is_made_its_columns_text_or_not_told() {
+        use ColumnType::*;
+        let s = |v: &str| Some(v.to_string());
+        // `YEAR` 0 and `ZEROFILL` numbers: padded to what the column writes.
+        assert_eq!(told(MYSQL_TYPE_LONG, Some("0"), Some("4")), (s("0000"), true));
+        assert_eq!(told(MYSQL_TYPE_YEAR, Some("0"), Some("4")), (s("0000"), true));
+        assert_eq!(told(MYSQL_TYPE_LONG, Some("42"), Some("5")), (s("00042"), true));
+        assert_eq!(told(MYSQL_TYPE_NEWDECIMAL, Some("1.50"), Some("7")), (s("0001.50"), true));
+        // As long as the column's own text: as it is.
+        assert_eq!(told(MYSQL_TYPE_LONGLONG, Some("-7"), Some("2")), (s("-7"), true));
+        assert_eq!(told(MYSQL_TYPE_DOUBLE, Some("1.500"), Some("5")), (s("1.500"), true));
+        assert_eq!(
+            told(MYSQL_TYPE_DATETIME, Some("2026-01-02 03:04:05.100000"), Some("26")),
+            (s("2026-01-02 03:04:05.100000"), true)
+        );
+        // Anything else is not told: a sign, a float or a date of another length, a length
+        // that does not read.
+        assert!(!told(MYSQL_TYPE_LONG, Some("-7"), Some("4")).1);
+        assert!(!told(MYSQL_TYPE_LONG, Some("12345"), Some("4")).1);
+        assert!(!told(MYSQL_TYPE_FLOAT, Some("1.5"), Some("4")).1);
+        assert!(!told(MYSQL_TYPE_DATETIME, Some("2026-01-02 03:04:05"), Some("26")).1);
+        assert!(!told(MYSQL_TYPE_LONG, Some("42"), None).1);
+        assert!(!told(MYSQL_TYPE_NEWDECIMAL, Some("1e5"), Some("7")).1);
+        // Strings and bytes are sent as they are; NULL is NULL.
+        assert_eq!(told(MYSQL_TYPE_VAR_STRING, Some("é"), Some("1")), (s("é"), true));
+        assert_eq!(told(MYSQL_TYPE_BLOB, Some("0x41"), Some("1")), (s("0x41"), true));
+        assert_eq!(told(MYSQL_TYPE_LONG, None, None), (None, true));
+    }
 }

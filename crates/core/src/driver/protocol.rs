@@ -904,7 +904,8 @@ pub struct GroupValue {
     /// (`whole` false).
     pub value: Cell,
     /// The value was sent: it is at most [`GROUP_PREVIEW`](crate::query::GROUP_PREVIEW) bytes
-    /// long. A longer one comes as its length alone.
+    /// long. A longer one comes as its length alone, and so does one whose text could not be
+    /// told ([`GroupValue::inexact`]).
     pub whole: bool,
     /// Its length in bytes as the server measures it (as shown, for a type of short values);
     /// `None` for NULL.
@@ -916,6 +917,11 @@ pub struct GroupValue {
     /// that long ([`GroupCounts::mark_prefix`]). Its rows may not all hold it, so a filter on it
     /// would not find them all: never one to pick, whether it was sent (`whole`) or not.
     pub prefix: bool,
+    /// The value was sent, but as a value of an expression, which the server may write otherwise
+    /// than the grid's cell of the column (MySQL writes a column by its attributes: `YEAR`
+    /// `0000`, `ZEROFILL` padding), and it could not be told to be the cell's text: not shown
+    /// (`value` `None`, `whole` false), never one to pick ([`GroupCounts::mark_inexact`]).
+    pub inexact: bool,
 }
 
 /// What a row of a group count's answer takes as it comes from the server besides its value:
@@ -969,9 +975,19 @@ impl GroupCounts {
             };
             let whole = value.is_some() || length.is_none();
             let bytes = length.or_else(|| value.as_ref().map(|v| v.len() as u64));
-            values.push(GroupValue { value, whole, bytes, rows, prefix: false });
+            values.push(GroupValue { value, whole, bytes, rows, prefix: false, inexact: false });
         }
         Ok(Self { values, more })
+    }
+
+    /// Take back the values whose text could not be told to be the grid's ([`GroupValue::inexact`]):
+    /// `inexact` says so for each row of the statement, in order.
+    pub fn mark_inexact(&mut self, inexact: &[bool]) {
+        for (v, _) in self.values.iter_mut().zip(inexact).filter(|(_, i)| **i) {
+            v.value = None;
+            v.whole = false;
+            v.inexact = true;
+        }
     }
 
     /// Mark the values the server may have grouped by a prefix of `limit` bytes

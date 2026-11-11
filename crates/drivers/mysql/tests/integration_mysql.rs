@@ -6756,6 +6756,67 @@ async fn a_group_count_decodes_values_as_the_grid_does() {
     }
 }
 
+/// A group count shows each value as the grid's cell of its column, also where the server writes
+/// the column by its attributes: `YEAR` 0 as `0000`, `ZEROFILL` integers and decimals padded to
+/// their width, `FLOAT(M,D)` and `DOUBLE(M,D)` with their decimals, `DATETIME` and `TIME` with
+/// their fractional digits, `DECIMAL` with its scale, `TINYINT(1)`, `ENUM`, `SET` and binary
+/// strings. A value whose text could not be told is never shown otherwise than the grid shows
+/// it: it is taken back (not shown, `inexact`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_shows_values_as_their_columns_attributes_write_them() {
+    let test = "a_group_count_shows_values_as_their_columns_attributes_write_them";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = Table::make(
+        &admin,
+        "groupattrs",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, y YEAR, z INT(5) UNSIGNED ZEROFILL, \
+             zb BIGINT(12) UNSIGNED ZEROFILL, zd DECIMAL(6, 2) UNSIGNED ZEROFILL, f FLOAT(7, 2), \
+             d DOUBLE(10, 3), dt DATETIME(6), tm TIME(3), dc DECIMAL(10, 4), bo TINYINT(1), \
+             e ENUM('a', 'bb'), st SET('x', 'y'), vb VARBINARY(10))",
+            "INSERT INTO {t} VALUES \
+             (1, 0, 42, 7, 1.5, 1.5, 1.5, '2026-01-02 03:04:05.1', '01:02:03.5', 1.5, 1, 'bb', 'x,y', X'00FF'), \
+             (2, 0, 42, 7, 1.5, 1.5, 1.5, '2026-01-02 03:04:05.1', '01:02:03.5', 1.5, 1, 'bb', 'x,y', X'00FF'), \
+             (3, 2026, 12345, 123456789012, 9999.99, -2.25, -0.001, '1000-01-01 00:00:00', '-838:59:59', -0.0001, 0, \
+              'a', '', X''), \
+             (4, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL), \
+             (5, 1901, 0, 0, 0, 0, 0, '9999-12-31 23:59:59.999999', '00:00:00', 0, -1, 'a', 'y', X'41')",
+        ],
+    )
+    .await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let columns = [
+        ("y", ("year", ValueKind::Integer)),
+        ("z", ("int unsigned zerofill", ValueKind::Integer)),
+        ("zb", ("bigint unsigned zerofill", ValueKind::Integer)),
+        ("zd", ("decimal unsigned zerofill", ValueKind::Decimal)),
+        ("f", ("float", ValueKind::Float)),
+        ("d", ("double", ValueKind::Float)),
+        ("dt", ("datetime", ValueKind::Timestamp)),
+        ("tm", ("time", ValueKind::Time)),
+        ("dc", ("decimal", ValueKind::Decimal)),
+        ("bo", ("tinyint", ValueKind::Integer)),
+        ("e", ("enum", ValueKind::Text)),
+        ("st", ("set", ValueKind::Text)),
+        ("vb", ("varbinary", ValueKind::Bytes)),
+    ];
+    let mut id = 10;
+    for (column, ty) in columns {
+        id += 1;
+        let evs = c.run(id, &[&format!("SELECT {column} FROM {} ORDER BY id", t.q())]).await;
+        let grid: Vec<Option<String>> = page_of(&evs).1.iter().map(|r| r[0].clone()).collect();
+        id += 1;
+        let (got, _, _) = group_within(&mut c, id, &group_sql(&t.name, column, ty, None), None).await;
+        let got = got.unwrap_or_else(|e| panic!("{column}: {e:?}"));
+        assert_eq!(got.values.iter().map(|v| v.rows).sum::<u64>(), 5, "{column}");
+        for v in &got.values {
+            assert!(!v.inexact, "{column}: {v:?} is told");
+            let rows = grid.iter().filter(|g| **g == v.value).count() as u64;
+            assert_eq!(rows, v.rows, "{column}: {:?} as the grid shows it ({grid:?})", v.value);
+        }
+    }
+}
+
 /// The table's columns come with its keys, in its order, with their types, `NOT NULL`, the
 /// primary and foreign keys and the `INVISIBLE` ones.
 #[tokio::test(flavor = "multi_thread")]

@@ -1990,10 +1990,10 @@ fn group_counts_read_values_lengths_and_more() {
     assert_eq!(
         got.values,
         vec![
-            GroupValue { value: s("shipped"), whole: true, bytes: Some(7), rows: 40, prefix: false },
-            GroupValue { value: None, whole: true, bytes: None, rows: 3, prefix: false },
-            GroupValue { value: None, whole: false, bytes: Some(5000), rows: 1, prefix: false },
-            GroupValue { value: s("42"), whole: true, bytes: Some(2), rows: 1, prefix: false },
+            GroupValue { value: s("shipped"), whole: true, bytes: Some(7), rows: 40, prefix: false, inexact: false },
+            GroupValue { value: None, whole: true, bytes: None, rows: 3, prefix: false, inexact: false },
+            GroupValue { value: None, whole: false, bytes: Some(5000), rows: 1, prefix: false, inexact: false },
+            GroupValue { value: s("42"), whole: true, bytes: Some(2), rows: 1, prefix: false, inexact: false },
         ]
     );
     let many: Vec<Vec<Option<String>>> = (0..=GROUP_VALUES).map(|i| vec![s(&i.to_string()), None, s("1")]).collect();
@@ -2024,6 +2024,17 @@ fn values_at_least_the_grouping_prefix_long_are_marked() {
     assert_eq!(marked(Some(1024)), vec![(false, true), (false, true), (true, false), (false, true)]);
     // Not known: every value but NULL.
     assert_eq!(marked(None), vec![(true, true), (true, true), (true, false), (false, true)]);
+}
+
+#[test]
+fn values_whose_text_cannot_be_told_are_taken_back() {
+    use crate::driver::GroupCounts;
+    let s = |v: &str| Some(v.to_string());
+    let rows = vec![vec![s("1.5"), s("7"), s("3")], vec![s("42"), s("2"), s("1")], vec![None, None, s("1")]];
+    let mut got = GroupCounts::from_rows(rows).unwrap();
+    got.mark_inexact(&[true, false, false]);
+    let seen: Vec<_> = got.values.iter().map(|v| (v.value.clone(), v.whole, v.bytes, v.inexact)).collect();
+    assert_eq!(seen, vec![(None, false, Some(7), true), (s("42"), true, Some(2), false), (None, true, None, false)]);
 }
 
 #[test]

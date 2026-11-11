@@ -2422,7 +2422,7 @@ enum OwnGot {
     First(Option<String>),
     /// The rows, and whether the server groups their first column by a prefix
     /// ([`group::rows_within`]).
-    Rows(Vec<Vec<Cell>>, bool),
+    Rows(group::GroupRows),
 }
 
 /// [`read_own`], reading what `want` says.
@@ -2463,7 +2463,7 @@ async fn read_own_as(
             link.guard(Some(env.killer), conn.query_first::<String, _>(text)).await?.map(OwnGot::First)
         }
         (false, OwnWant::Rows) => match link.guard(Some(env.killer), group::rows_within(conn, text)).await? {
-            Ok(Ok((rows, prefixed))) => Ok(OwnGot::Rows(rows, prefixed)),
+            Ok(Ok(rows)) => Ok(OwnGot::Rows(rows)),
             // Refused part way through its answer: the rest is not read (nothing more of it is
             // received or kept), the connection is cut, and the session is lost for why.
             Ok(Err(why)) => {
