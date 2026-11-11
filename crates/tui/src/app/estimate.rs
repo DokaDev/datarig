@@ -79,13 +79,14 @@ impl App {
         }
     }
 
-    /// The choice `#` opens on table tab `id` with filtered rows: the planner's estimate (dimmed
-    /// with why when there is none to ask for) and the exact count, with what each does.
+    /// The choice `#` opens on table tab `id` with filtered rows: the planner's estimate and the
+    /// exact count, with what each does, or dimmed with why when it would be refused.
     pub(super) fn open_count_menu(&mut self, id: TabId) {
         if self.focus != Focus::Inspector {
             self.focus = Focus::Results;
         }
         let (Some(grid), Some(result)) = (self.menu_grid_target(), self.grid_result_id()) else { return };
+        let Some(pid) = self.tab().profile else { return };
         let estimate = MenuItem::Count(CountChoice::Estimate);
         let exact = MenuItem::Count(CountChoice::Exact);
         let mut off = Vec::new();
@@ -94,13 +95,22 @@ impl App {
             off.push((estimate, *o));
             hints.clear();
         }
-        let exact_hint = match self.count_limit(id) {
-            (Some(limit), _) => self.i18n.msg(&Msg::ResultsCountHintLimit { limit: fmt_limit(limit) }),
-            (None, Some(true)) => self.i18n.label(Label::ResultsCountHintInTx),
-            (None, Some(false)) => self.i18n.label(Label::ResultsCountHintHeld),
-            (None, None) => self.i18n.label(Label::ResultsCountHintNoLimit),
-        };
-        hints.push((exact, exact_hint));
+        let mut refused = None;
+        match self.count_sql(id, pid) {
+            Err(o) => {
+                refused = Some(o.notice.clone());
+                off.push((exact, *o));
+            }
+            Ok(_) => hints.push((
+                exact,
+                match self.count_limit(id) {
+                    (Some(limit), _) => self.i18n.msg(&Msg::ResultsCountHintLimit { limit: fmt_limit(limit) }),
+                    (None, Some(true)) => self.i18n.label(Label::ResultsCountHintInTx),
+                    (None, Some(false)) => self.i18n.label(Label::ResultsCountHintHeld),
+                    (None, None) => self.i18n.label(Label::ResultsCountHintNoLimit),
+                },
+            )),
+        }
         let names = vec![
             (estimate, self.i18n.label(Label::ResultsEstimateEntry)),
             (exact, self.i18n.label(Label::ResultsCountEntry)),
@@ -109,6 +119,10 @@ impl App {
         let at = self.menu_at_cell();
         let target = MenuTarget::Filter { grid: Box::new(grid), result };
         self.push_filter_menu(target, title, (vec![estimate, exact], off, names, hints, Vec::new()), at);
+        // Enter does not pick a dimmed entry: what a count would be told is said now.
+        if let Some(why) = refused {
+            self.flash(why);
+        }
     }
 
     /// An entry of the count choice was picked (on the rows it was opened on still).

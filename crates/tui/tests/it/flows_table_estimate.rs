@@ -224,11 +224,10 @@ fn the_estimate_is_dimmed_with_why_when_it_cannot_be_asked() {
     assert!(entry_line(&mut h, "Estimate (planner)").contains("unchecked calls"));
     assert_screen!("table_count_choice_dimmed_en_80x24", Lang::En, h.draw(80, 24));
     assert_screen!("table_count_choice_dimmed_en_120x30", Lang::En, h.draw(120, 30));
-    // Enter runs the entry that can run: the count, which says why it cannot count these
-    // rows either (a call off the allowlist is not run again for the user).
+    // Rows with a call off the allowlist are not run again for the user: no count either.
+    assert!(entry_line(&mut h, "Exact count").contains("refused now"));
     h.key(KeyCode::Enter);
     assert!(counts(&h.sent()).is_empty());
-    assert!(status(&h).starts_with("Rows are not counted for you: "), "{}", status(&h));
     // A transaction open on the session: no estimate, and the count has no limit there.
     let mut h = pg(Some("id > 5"));
     let index = h.app.tabs.active_index();
@@ -361,6 +360,29 @@ fn a_relation_the_server_will_not_have_planned_dims_the_estimate_with_why() {
     pick(&mut h, "estimate");
     assert!(estimates(&h.sent()).is_empty(), "not asked again");
     assert!(status(&h).contains("planning public.users may run code"), "{}", status(&h));
+}
+
+/// Rows that cannot be run again (only their first page is shown, a confirmed call off the
+/// allowlist) get no exact count: its entry is dimmed, not offered and refused, with the reason
+/// a count would be refused with said as the choice opens.
+#[test]
+fn rows_that_cannot_be_run_again_dim_the_exact_count_with_why() {
+    let mut h = pg(None);
+    h.command("where my_fn(id) > 0");
+    h.keys("y");
+    page(&mut h);
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.sent();
+    assert!(h.screen(120, 30).contains("first page only"));
+    h.keys("#");
+    let line = entry_line(&mut h, "Exact count");
+    assert!(line.contains("refused now"), "{line}");
+    assert!(!line.contains("time limit"), "not offered with what it would do: {line}");
+    let screen = h.screen(120, 30);
+    assert!(screen.contains("Rows are not counted for you: it calls a function that is not a built-in"), "{screen}");
+    h.key(KeyCode::Enter);
+    assert!(counts(&h.sent()).is_empty());
+    assert!(h.app.tab().exec.running.is_none());
 }
 
 #[test]

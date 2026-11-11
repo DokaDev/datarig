@@ -7,6 +7,7 @@
 //! asks, with a `SELECT count(*)` of the same allowlist. Both go through the same read-only and
 //! confirm checks as a run, on the session the result came from.
 
+use super::menu::Off;
 use super::tabs::ResultView;
 use super::*;
 use datarig_core::sql::risk::repeat::NotRepeatable;
@@ -372,39 +373,40 @@ impl App {
         }
     }
 
+    /// The statement that counts tab `id`'s shown rows, past every check a count goes by; or why
+    /// there is none, in the words a menu shows and those its pick says.
+    pub(super) fn count_sql(&self, id: TabId, pid: ProfileId) -> Result<String, Box<Off>> {
+        let off = |notice: Notice| Box::new(Off::new(Label::ResultsEstimateOffRefused, notice));
+        let refused = |why: String| off(Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
+        // A table tab's filter is checked again as when it ran (never asked about here), and
+        // a cap on its rows is counted within.
+        self.table_recheck(id).and_then(|()| self.table_locks_recheck(id)).map_err(refused)?;
+        let t = self.tab();
+        let source = self.table_capped_sql(id).unwrap_or_else(|| t.shown_sql().to_string());
+        if zone_moved(t, &source) {
+            return Err(refused(self.i18n.label(Label::RepeatZoneChanged).to_string()));
+        }
+        let sql = t.exec.prepared.count_query(&source).map_err(|r| refused(self.i18n.msg(&why(&r)).to_string()))?;
+        let statements = vec![sql.clone()];
+        if let Some(notice) = self.unsupported(id, &statements).or_else(|| self.read_only_refusal(id, pid, &statements))
+        {
+            return Err(off(notice));
+        }
+        if !self.dangerous(id, pid, &statements).is_empty() {
+            return Err(refused(self.i18n.label(Label::RepeatWrites).to_string()));
+        }
+        Ok(sql)
+    }
+
     /// The exact count of the active tab's shown rows ([`App::count_rows`]), with its time
     /// limit ([`App::count_limit`]).
     pub(super) fn count_exact(&mut self) {
         let Some(id) = self.count_ready() else { return };
-        let t = self.tab();
-        let Some(pid) = t.profile else { return };
-        // A table tab's filter is checked again as when it ran (never asked about here), and
-        // a cap on its rows is counted within.
-        if let Err(why) = self.table_recheck(id).and_then(|()| self.table_locks_recheck(id)) {
-            return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
-        }
-        let source = self.table_capped_sql(id).unwrap_or_else(|| t.shown_sql().to_string());
-        if zone_moved(t, &source) {
-            let why = self.i18n.label(Label::RepeatZoneChanged).to_string();
-            return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
-        }
-        let sql = match t.exec.prepared.count_query(&source) {
+        let Some(pid) = self.tab().profile else { return };
+        let sql = match self.count_sql(id, pid) {
             Ok(sql) => sql,
-            Err(r) => {
-                let why = self.i18n.msg(&why(&r)).to_string();
-                return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
-            }
+            Err(off) => return self.tab_status(id, off.notice),
         };
-        let statements = vec![sql.clone()];
-        if let Some(refused) =
-            self.unsupported(id, &statements).or_else(|| self.read_only_refusal(id, pid, &statements))
-        {
-            return self.tab_status(id, refused);
-        }
-        if !self.dangerous(id, pid, &statements).is_empty() {
-            let why = self.i18n.label(Label::RepeatWrites).to_string();
-            return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
-        }
         let (limit, unbounded) = self.count_limit(id);
         let now = self.now();
         let Some(t) = self.tabs.get_mut(id) else { return };

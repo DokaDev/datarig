@@ -420,9 +420,12 @@ fn paging_and_counting_check_the_shown_filter_again() {
     h.keys("n");
     assert!(h.sent().is_empty());
     assert!(status(&h).contains("comments are not allowed"), "{}", status(&h));
-    exact_count(&mut h);
+    // Not offered: dimmed, with the reason a count is refused with.
+    h.keys("#");
+    let said = h.app.menu_dimmed_notice("Exact count").expect("dimmed").render(&h.app.i18n).to_string();
+    assert!(said.starts_with("Rows are not counted for you: comments"), "{said}");
+    h.key(KeyCode::Esc);
     assert!(h.sent().is_empty());
-    assert!(status(&h).starts_with("Rows are not counted for you: comments"), "{}", status(&h));
     // Calls the user did not let run in this tab: refused, never asked mid-paging.
     shown_mut(&mut h).filter = Some(Filter { text: "my_fn(id) > 0".into(), recognised: None });
     h.keys("n");

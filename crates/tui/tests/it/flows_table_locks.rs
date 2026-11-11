@@ -314,10 +314,13 @@ fn paging_and_counting_are_refused_unless_confirmed() {
     assert!(!h.app.overlays.is_open(OverlayKind::Confirm));
     assert!(h.sent().is_empty());
     assert!(status(&h).contains("may lock rows, not confirmed in this tab"), "{}", status(&h));
-    exact_count(&mut h);
+    // Not offered: dimmed, with the reason a count is refused with.
+    h.keys("#");
     assert!(!h.app.overlays.is_open(OverlayKind::Confirm));
+    let said = h.app.menu_dimmed_notice("Exact count").expect("dimmed").render(&h.app.i18n).to_string();
+    assert!(said.starts_with("Rows are not counted for you: reads in this session"), "{said}");
+    h.key(KeyCode::Esc);
     assert!(h.sent().is_empty());
-    assert!(status(&h).starts_with("Rows are not counted for you: reads in this session"), "{}", status(&h));
     // Confirmed by a run: the next page and the count go.
     h.command("where id > 0");
     h.keys("y");
