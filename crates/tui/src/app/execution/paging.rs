@@ -5,11 +5,12 @@ use crate::app::*;
 impl App {
     /// Ask tab `id`'s session for the next page of its result.
     pub(in crate::app) fn fetch_page(&mut self, id: TabId) {
+        let now = self.now();
         let Some(t) = self.tabs.get_mut(id) else { return };
         let qid = t.exec.query_id;
         t.exec.running = Some(Running {
             id: qid,
-            started: Instant::now(),
+            started: now,
             fetch: true,
             count: false,
             estimate: false,

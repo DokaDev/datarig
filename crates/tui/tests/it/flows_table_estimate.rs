@@ -192,6 +192,20 @@ fn filtered_rows_offer_the_estimate_or_the_exact_count() {
     assert!(title(&mut h, 160, 45).contains("~12 (planner)"));
 }
 
+/// The status bar's spinner turns with the app's clock, as the tab bar's does: what is drawn does
+/// not depend on how long the machine took to get here.
+#[test]
+fn the_status_bar_spinner_turns_with_the_apps_clock() {
+    let mut h = pg(Some("id > 5"));
+    h.keys("#");
+    pick(&mut h, "estimate");
+    let first = h.status(120, 30);
+    assert!(first.contains("\u{280b} estimating"), "{first}");
+    h.advance(Duration::from_millis(250));
+    let later = h.status(120, 30);
+    assert!(later.contains("\u{2839} estimating"), "{later}");
+}
+
 #[test]
 fn an_estimate_of_rows_replaced_since_is_dropped() {
     let mut h = pg(Some("id > 5"));

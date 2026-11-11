@@ -90,6 +90,24 @@ fn first_shown(h: &Harness) -> Option<String> {
     }
 }
 
+/// A run and a fetch start by the app's clock, the one their spinners and elapsed time are read by.
+#[test]
+fn a_run_and_a_fetch_start_by_the_apps_clock() {
+    let mut h = Harness::connected(Lang::En);
+    h.advance(SEC);
+    h.ctrl('e');
+    assert_eq!(h.app.tab().exec.running.expect("a run").started, h.clock.now());
+    let id = h.app.tab().exec.query_id;
+    let columns = Some(vec![meta("id", "int8", true, false)]);
+    h.tab_db(0, DbEvent::TxOpen(true));
+    h.tab_db(0, DbEvent::Page { id, columns, rows: page(0, 500), more: true, elapsed: SEC / 100 });
+    h.advance(SEC);
+    h.key(KeyCode::Tab); // results
+    h.keys("n");
+    assert_eq!(fetches(&h.sent()), 1);
+    assert_eq!(h.app.tab().exec.running.expect("a fetch").started, h.clock.now());
+}
+
 #[test]
 fn an_idle_portal_closes_and_the_next_page_runs_a_select_again() {
     let mut h = Harness::connected(Lang::En);

@@ -3,7 +3,7 @@
 use crate::app::{App, Level};
 use crate::text::{clip, clip_middle, width};
 use crate::theme;
-use crate::widgets::SPINNER;
+use crate::widgets::{SPINNER, spinner_at};
 use datarig_i18n::{Label, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -158,13 +158,8 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let mut msg_segs: Vec<(String, Style)> = Vec::new();
     if let Some((text, level, running)) = status {
         if running {
-            let frame = app
-                .tab()
-                .exec
-                .running
-                .map(|r| (r.started.elapsed().as_millis() / 100) as usize % SPINNER.len())
-                .unwrap_or(0);
-            msg_segs.push((format!("{} ", SPINNER[frame]), Style::new().fg(th.accent).bg(th.surface)));
+            let frame = app.tab().exec.running.map_or(SPINNER[0], |r| spinner_at(r.started, app.now()));
+            msg_segs.push((format!("{frame} "), Style::new().fg(th.accent).bg(th.surface)));
         }
         msg_segs.push((text.to_string(), Style::new().fg(level_color(level)).bg(th.surface)));
     }

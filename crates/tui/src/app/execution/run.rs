@@ -212,7 +212,7 @@ impl App {
             t.exec.unconfirmed = statements.iter().cloned().enumerate().collect();
             t.exec.running = Some(Running {
                 id: qid,
-                started: Instant::now(),
+                started: now,
                 fetch: false,
                 count: false,
                 estimate: false,

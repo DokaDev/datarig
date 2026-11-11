@@ -1375,13 +1375,7 @@ fn applied_values_take_their_token() {
 #[test]
 fn the_apply_on_screen() {
     use datarig_core::driver::{ApplyError, ApplyFailure};
-    screens("edit_apply_applying", |lang| {
-        let mut h = three_applying(ready(lang)).0;
-        // The status bar's spinner by the wall clock: its first frame.
-        let started = std::time::Instant::now() + Duration::from_secs(3600);
-        h.app.tab_mut().exec.running.as_mut().expect("applying").started = started;
-        h
-    });
+    screens("edit_apply_applying", |lang| three_applying(ready(lang)).0);
     screens("edit_apply_applied", |lang| {
         let (mut h, id, steps) = three_applying(ready(lang));
         h.db(DbEvent::Applied { id, result: Ok(three_done(&steps)) });
