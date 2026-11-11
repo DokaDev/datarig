@@ -9,6 +9,7 @@
 //! ([`Proxy::fault`], [`Proxy::fault_start`]): it goes to the server as another statement, or the
 //! connection is closed in its place.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -33,6 +34,9 @@ pub enum Fault {
     Head(String),
     /// The query reaches the server this much later.
     Delay(std::time::Duration),
+    /// The query goes to the server as it is, and from then on its answers are held back, as
+    /// [`Proxy::hold_answers`] does: none can get past before the hold.
+    Hold,
     /// The query never reaches the server: both connections are closed.
     Close,
 }
@@ -70,6 +74,8 @@ pub struct Proxy {
     faults: Faults,
     /// Whether the server's answers are held back ([`Proxy::hold_answers`]).
     held: Arc<watch::Sender<bool>>,
+    /// Whether the server answered something the hold keeps ([`Proxy::answer_held`]).
+    waiting: Arc<AtomicBool>,
     /// What the server's answers say otherwise ([`Proxy::reword`]).
     rewords: Rewords,
 }
@@ -86,24 +92,32 @@ impl Proxy {
         let held = Arc::new(watch::channel(false).0);
         let (s, d, e, f, up) = (sent.clone(), dropped.clone(), executes.clone(), faults.clone(), upstream.to_string());
         let h = held.clone();
+        let waiting = Arc::new(AtomicBool::new(false));
+        let a = waiting.clone();
         let rewords: Rewords = Arc::default();
         let w = rewords.clone();
         tokio::spawn(async move {
             while let Ok((client, _)) = listener.accept().await {
                 let (s, d, e, f, up, h) = (s.clone(), d.clone(), e.clone(), f.clone(), up.clone(), h.clone());
-                let w = w.clone();
+                let (a, w) = (a.clone(), w.clone());
                 tokio::spawn(async move {
-                    let _ = relay(client, &up, s, d, e, f, h, w).await;
+                    let _ = relay(client, &up, s, d, e, f, h, a, w).await;
                 });
             }
         });
-        Proxy { addr, sent, dropped, executes, faults, held, rewords }
+        Proxy { addr, sent, dropped, executes, faults, held, waiting, rewords }
     }
 
     /// Hold what the server answers back from the clients (`true`) until told otherwise
     /// (`false`), as an answer slow to arrive.
     pub fn hold_answers(&self, held: bool) {
+        self.waiting.store(false, Ordering::SeqCst);
         self.held.send_replace(held);
+    }
+
+    /// Whether the server has answered since the hold began, its answer kept from the client.
+    pub fn answer_held(&self) -> bool {
+        self.waiting.load(Ordering::SeqCst)
     }
 
     /// What the server answers says `to` wherever it says `from`, as a server that answers in
@@ -184,6 +198,7 @@ async fn relay(
     executes: Arc<Mutex<Vec<i32>>>,
     faults: Faults,
     held: Arc<watch::Sender<bool>>,
+    waiting: Arc<AtomicBool>,
     rewords: Rewords,
 ) -> std::io::Result<()> {
     let mut body = read_startup(&mut client).await?;
@@ -221,12 +236,16 @@ async fn relay(
     server.write_all(&out).await?;
     let (mut cr, mut cw) = client.into_split();
     let (mut sr, mut sw) = server.into_split();
+    let mut gate = held.subscribe();
+    let answered = waiting.clone();
     tokio::spawn(async move {
         let mut buf = vec![0; 16 * 1024];
         let mut pending = Vec::new();
-        let mut gate = held.subscribe();
         while let Ok(n) = sr.read(&mut buf).await {
             pending.extend_from_slice(&buf[..n]);
+            if n > 0 && *gate.borrow() {
+                answered.store(true, Ordering::SeqCst);
+            }
             let _ = gate.wait_for(|held| !held).await;
             // Whole messages only, so what is reworded is never cut in two; at the end, what came.
             let whole = if n == 0 { pending.len() } else { whole_messages(&pending) };
@@ -263,6 +282,11 @@ async fn relay(
             }
             Some((_, Fault::Delay(by))) => {
                 tokio::time::sleep(by).await;
+                msg
+            }
+            Some((_, Fault::Hold)) => {
+                waiting.store(false, Ordering::SeqCst);
+                held.send_replace(true);
                 msg
             }
             None => msg,
