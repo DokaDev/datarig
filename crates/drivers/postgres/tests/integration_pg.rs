@@ -8447,6 +8447,100 @@ async fn a_group_count_sends_only_bounded_values_of_the_columns_current_type() {
     assert_eq!(got, vec![(None, false, Some(5000), 1), (Some("1.5".to_string()), true, Some(3), 1233)]);
 }
 
+/// An array whose text is within the preview is sent whole although its binary form, which the
+/// grid reads, is several times longer (a `numeric[]` of 2000 zeroes: 4001 bytes of text, 24020
+/// binary; an `interval[]` of 2000 zeroes written `0`: 40020 binary): counted in a transaction of
+/// its own, in the user's block and while a portal is held. In the user's block the work done
+/// before the count is kept, and the block goes on and commits it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_sends_arrays_whose_binary_form_is_longer_than_their_text() {
+    use datarig_core::driver::{ArrayElement, ValueKind};
+    let Some(url) = pg_url("a_group_count_sends_arrays_whose_binary_form_is_longer_than_their_text") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_group_arrays_{pid}");
+    let table = format!("public.{name}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    for sql in [
+        format!("CREATE TABLE {table} (id int, n numeric[], i interval[])"),
+        format!(
+            "INSERT INTO {table} SELECT g, CASE WHEN g = 1 THEN array_fill(0::numeric, ARRAY[2000]) ELSE '{{1}}' END, \
+             CASE WHEN g = 1 THEN array_fill('0'::interval, ARRAY[2000]) ELSE '{{1 day}}' END \
+             FROM generate_series(1, 1234) g"
+        ),
+    ] {
+        assert!(matches!(q.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    assert!(matches!(q.run(2, "SET IntervalStyle = sql_standard").await, DbEvent::Done { .. }));
+    let numbers = group_sql("public", &name, "n", ("numeric[]", ValueKind::Array(ArrayElement::Number)), None);
+    let intervals = group_sql("public", &name, "i", ("interval[]", ValueKind::Array(ArrayElement::Text)), None);
+    // Whether the long one came whole as the grid shows it (its 2000 elements as `zero`), and its
+    // length.
+    let long = |got: Result<datarig_core::driver::GroupCounts, DbError>, zero: &str| {
+        let got = got.unwrap_or_else(|e| panic!("{e:?}"));
+        let v = got.values.iter().find(|v| v.rows == 1 && v.bytes.is_some()).expect("the long one").clone();
+        let zeroes = format!("{{{}}}", vec![zero; 2000].join(","));
+        (v.value.as_deref() == Some(zeroes.as_str()), v.whole, v.bytes)
+    };
+    let want = (true, true, Some(4001));
+    let (got, _, _) = q.group_within(3, &numbers, Some(Duration::from_secs(30))).await;
+    assert_eq!(long(got, "0"), want, "in a transaction of its own");
+    let (got, _, _) = q.group_within(4, &intervals, Some(Duration::from_secs(30))).await;
+    assert_eq!(long(got, "00:00:00"), want, "intervals");
+    // In the user's block, after work of its own.
+    assert!(matches!(q.run(5, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(q.run(6, &format!("INSERT INTO {table} VALUES (0, NULL, NULL)")).await, DbEvent::Done { .. }));
+    let (got, _, _) = q.group_within(7, &numbers, None).await;
+    assert_eq!(long(got, "0"), want, "in the user's block");
+    let (got, _, _) = q.group_within(8, &intervals, None).await;
+    assert_eq!(long(got, "00:00:00"), want);
+    let kept = format!("SELECT count(*) FROM {table} WHERE id = 0");
+    assert_eq!(q.first_value(9, &kept).await.as_deref(), Some("1"), "the block goes on");
+    // While a portal is held.
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 10,
+        statements: vec![format!("SELECT id FROM {table} ORDER BY id")],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    let DbEvent::Page { more: true, .. } = q.result(10).await else { panic!("a page with more") };
+    let (got, _, _) = q.group_within(11, &numbers, None).await;
+    assert_eq!(long(got, "0"), want, "while a portal is held");
+    q.session.send(DbCommand::ClosePortal { id: 10 });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(matches!(q.run(12, "COMMIT").await, DbEvent::Done { .. }));
+    assert_eq!(q.first_value(13, &kept).await.as_deref(), Some("1"), "committed with the block");
+}
+
+/// Whatever a group count in the user's block answers, the block goes on with the work done
+/// before it, and commits it: a count whose page is refused after it ran is undone back to its
+/// savepoint, which is released only once the page was taken. (A `numeric[]` whose binary form is
+/// several times its text was such a page.)
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_in_the_users_block_keeps_the_blocks_work() {
+    use datarig_core::driver::{ArrayElement, ValueKind};
+    let Some(url) = pg_url("a_group_count_in_the_users_block_keeps_the_blocks_work") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_group_kept_{pid}");
+    let table = format!("public.{name}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!(
+        "CREATE TABLE {table} AS SELECT g AS id, CASE WHEN g = 1 THEN array_fill(0::numeric, ARRAY[2000]) \
+         ELSE '{{1}}' END AS n FROM generate_series(1, 10) g"
+    );
+    assert!(matches!(q.run(1, &setup).await, DbEvent::Done { .. }));
+    let sql = group_sql("public", &name, "n", ("numeric[]", ValueKind::Array(ArrayElement::Number)), None);
+    assert!(matches!(q.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(q.run(3, &format!("INSERT INTO {table} VALUES (0, NULL)")).await, DbEvent::Done { .. }));
+    let _ = q.group_within(4, &sql, None).await;
+    let kept = format!("SELECT count(*) FROM {table} WHERE id = 0");
+    assert_eq!(q.first_value(5, &kept).await.as_deref(), Some("1"), "the block goes on with its work");
+    assert!(matches!(q.run(6, "COMMIT").await, DbEvent::Done { .. }));
+    assert_eq!(q.first_value(7, &kept).await.as_deref(), Some("1"), "committed");
+}
+
 /// A group count in the user's block that stops at its row limit (more values than it lists)
 /// leaves no portal behind: after several of them the session has none open, the block goes on
 /// with what it did before them, and a portal the user pages through meanwhile still pages.

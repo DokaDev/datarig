@@ -18,7 +18,7 @@
 
 use super::*;
 use datarig_core::driver::{GroupBudget, GroupCounts};
-use datarig_core::query::GROUP_VALUES;
+use datarig_core::query::{GROUP_PREVIEW, GROUP_VALUES};
 use tokio_postgres::types::{Kind, Type};
 
 /// The rows a group count's portal is asked for: its statement's `LIMIT`, so the server sends
@@ -26,13 +26,37 @@ use tokio_postgres::types::{Kind, Type};
 const ROWS: i32 = GROUP_VALUES as i32 + 1;
 
 /// The values the rows of a group count's statement hold (fetched in `formats`), each row
-/// within the answer's budget ([`GroupBudget`]).
+/// within the answer's budget ([`GroupBudget`], its value's bound by its type and format:
+/// [`wire_bound`]).
 fn counts_of(rows: &[Row], formats: &[i16]) -> Result<GroupCounts, DbError> {
-    let mut budget = GroupBudget::default();
-    for row in rows {
-        budget.take(row.raw_size_bytes())?;
+    if let Some(first) = rows.first() {
+        let ty = first.columns().first().map(|c| c.type_().clone()).unwrap_or(Type::TEXT);
+        let mut budget = GroupBudget::new(wire_bound(&ty, formats.first().copied().unwrap_or(0)));
+        for row in rows {
+            budget.take(row.raw_size_bytes())?;
+        }
     }
     GroupCounts::from_rows(decode(rows, formats))
+}
+
+/// The most bytes a value of type `ty` (a domain's base type) takes on the wire in result
+/// format `format` when its text is at most [`GROUP_PREVIEW`] bytes long, as the statement
+/// sends it ([`bounded`]):
+/// - as text: its text;
+/// - binary, one value: at most its text and 16 bytes (a type of a fixed size takes at most 16,
+///   `numeric` 8 and 2 for each 4 digits, `jsonb` one byte and its text, text and `bytea` (whose
+///   raw length the server measures) themselves);
+/// - binary, an array: 12 bytes and 8 for each dimension (6 at most), then each element as 4
+///   bytes of length and its binary form. The element's text and the comma after it take at
+///   least a tenth of that: the shortest are an `interval` written `0` (`IntervalStyle`
+///   `sql_standard`: 20 bytes for 2), an `inet` written `::` (24 for 3) and a `numeric` written
+///   `1` (14 for 2); so at most 10 times the text, and 64 bytes.
+fn wire_bound(ty: &Type, format: i16) -> usize {
+    match (format, ty.kind()) {
+        (0, _) => GROUP_PREVIEW,
+        (_, Kind::Array(_)) => 10 * GROUP_PREVIEW + 64,
+        _ => GROUP_PREVIEW + 16,
+    }
 }
 
 /// Whether the statement, as the server prepared it, sends only values of a bounded size: its

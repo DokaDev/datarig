@@ -5,7 +5,7 @@ use super::ddl::{DdlObject, DdlSource, ObjectKind};
 use super::keys::{KeyCatalog, OrderKeys};
 use super::structure::{RelationStats, TableStructure};
 use crate::fault::Fault;
-use crate::query::{GROUP_PREVIEW, GROUP_VALUES};
+use crate::query::GROUP_VALUES;
 use crate::sql::complete::Catalog;
 use crate::sql::risk::repeat::NotRepeatable;
 use crate::tls::{Encryption, TlsProblem};
@@ -903,7 +903,7 @@ pub struct GroupValue {
     /// The value as the session shows a cell of it; `None` for NULL, or for a value not sent
     /// (`whole` false).
     pub value: Cell,
-    /// The value was sent: it is at most [`GROUP_PREVIEW`] bytes
+    /// The value was sent: it is at most [`GROUP_PREVIEW`](crate::query::GROUP_PREVIEW) bytes
     /// long. A longer one comes as its length alone.
     pub whole: bool,
     /// Its length in bytes as the server measures it (as shown, for a type of short values);
@@ -918,25 +918,34 @@ pub struct GroupValue {
     pub prefix: bool,
 }
 
-/// The most bytes one row of a group count's answer takes as it comes from the server: a value
-/// of at most [`GROUP_PREVIEW`] bytes as text, in whatever form the session reads it (an array's
-/// binary form takes more than its text), its length and its count.
-pub const GROUP_ROW_BYTES: usize = 4 * GROUP_PREVIEW + 64;
+/// What a row of a group count's answer takes as it comes from the server besides its value:
+/// its length and its count (an `int4` and an `int8` binary, or at most 4 and 20 digits as
+/// text), each with its own length, and the row's framing.
+pub const GROUP_ROW_OVERHEAD: usize = 64;
 
 /// What a group count's answer may take, checked row by row as it is read
-/// ([`GroupBudget::take`]): at most [`GROUP_VALUES`] + 1 rows (the statement's `LIMIT`) of at
-/// most [`GROUP_ROW_BYTES`] each. An answer past it is not the one the statement was written
-/// for (a column whose type changed since): [`DbError::SchemaChanged`], and the reading stops.
-#[derive(Clone, Copy, Debug, Default)]
+/// ([`GroupBudget::take`]): at most [`GROUP_VALUES`] + 1 rows (the statement's `LIMIT`), each of
+/// a value of at most the bytes the driver knows its form on the wire takes for a value whose
+/// text the server sent only up to [`GROUP_PREVIEW`](crate::query::GROUP_PREVIEW) bytes
+/// ([`GroupBudget::new`]), and
+/// [`GROUP_ROW_OVERHEAD`]. An answer past it is not the one the statement was written for (a
+/// column whose type changed since): [`DbError::SchemaChanged`], and the reading stops.
+#[derive(Clone, Copy, Debug)]
 pub struct GroupBudget {
     rows: usize,
+    row_bytes: usize,
 }
 
 impl GroupBudget {
+    /// The budget of an answer whose value takes at most `value_bytes` bytes on the wire.
+    pub fn new(value_bytes: usize) -> Self {
+        Self { rows: 0, row_bytes: value_bytes + GROUP_ROW_OVERHEAD }
+    }
+
     /// One more row of `bytes` bytes as received; past the budget, why it is refused.
     pub fn take(&mut self, bytes: usize) -> Result<(), DbError> {
         self.rows += 1;
-        if self.rows > GROUP_VALUES + 1 || bytes > GROUP_ROW_BYTES { Err(DbError::SchemaChanged) } else { Ok(()) }
+        if self.rows > GROUP_VALUES + 1 || bytes > self.row_bytes { Err(DbError::SchemaChanged) } else { Ok(()) }
     }
 }
 

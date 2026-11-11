@@ -2026,12 +2026,16 @@ fn values_at_least_the_grouping_prefix_long_are_marked() {
 
 #[test]
 fn a_group_counts_answer_is_read_within_its_budget() {
-    use crate::driver::{DbError, GROUP_ROW_BYTES, GroupBudget};
-    let mut budget = GroupBudget::default();
+    use crate::driver::{DbError, GROUP_ROW_OVERHEAD, GroupBudget};
+    let row = 10 * GROUP_PREVIEW + GROUP_ROW_OVERHEAD;
+    let mut budget = GroupBudget::new(10 * GROUP_PREVIEW);
     for _ in 0..=GROUP_VALUES {
-        assert_eq!(budget.take(GROUP_ROW_BYTES), Ok(()));
+        assert_eq!(budget.take(row), Ok(()));
     }
     assert_eq!(budget.take(1), Err(DbError::SchemaChanged), "one row past the statement's LIMIT");
-    let mut budget = GroupBudget::default();
-    assert_eq!(budget.take(GROUP_ROW_BYTES + 1), Err(DbError::SchemaChanged), "a row past its size");
+    let mut budget = GroupBudget::new(10 * GROUP_PREVIEW);
+    assert_eq!(budget.take(row + 1), Err(DbError::SchemaChanged), "a row past its size");
+    let mut budget = GroupBudget::new(GROUP_PREVIEW);
+    assert_eq!(budget.take(GROUP_PREVIEW + GROUP_ROW_OVERHEAD), Ok(()));
+    assert_eq!(budget.take(GROUP_PREVIEW + GROUP_ROW_OVERHEAD + 1), Err(DbError::SchemaChanged));
 }

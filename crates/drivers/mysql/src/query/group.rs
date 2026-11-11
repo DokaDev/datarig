@@ -96,7 +96,9 @@ pub(super) async fn rows_within(
     let mut qr = conn.query_iter(text).await?;
     let columns = qr.columns().unwrap_or_else(|| Arc::from(Vec::new()));
     let mut refused = bounded(&columns).err();
-    let mut budget = GroupBudget::default();
+    // As text: the server sends at most the preview's bytes of the value in its column's
+    // character set, which the connection's (`utf8mb4`) writes in at most 4 bytes for each.
+    let mut budget = GroupBudget::new(4 * GROUP_PREVIEW);
     let mut rows = Vec::new();
     while let Some(row) = qr.next().await? {
         if refused.is_some() {
