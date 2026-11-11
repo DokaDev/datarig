@@ -1280,6 +1280,78 @@ async fn order_keys_are_read_without_a_lock() {
     assert!(matches!(migration.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
 }
 
+/// A column's type is written with its modifier only when the server's own procedure writes
+/// that: a type of the schema's own whose `typmodout` is a procedure of its own (here one over
+/// `int4out`, which the server would call and write after the name) is written without it, for
+/// the type and for an array of it, so the key read runs no procedure but the server's own,
+/// while another session holds the table in `ACCESS EXCLUSIVE` mode. Built-in modifiers are
+/// still written.
+#[tokio::test(flavor = "multi_thread")]
+async fn order_keys_never_run_a_types_own_modifier_output() {
+    let Some(url) = pg_url("order_keys_never_run_a_types_own_modifier_output") else { return };
+    let schema = format!("zz_tmod_{}", std::process::id());
+    let _guard = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE TYPE {s}.tm"),
+        format!("CREATE FUNCTION {s}.tm_in(cstring) RETURNS {s}.tm AS 'textin' LANGUAGE internal IMMUTABLE STRICT"),
+        format!("CREATE FUNCTION {s}.tm_out({s}.tm) RETURNS cstring AS 'textout' LANGUAGE internal IMMUTABLE STRICT"),
+        format!(
+            "CREATE FUNCTION {s}.tm_tmi(cstring[]) RETURNS integer AS 'varchartypmodin' LANGUAGE internal IMMUTABLE STRICT"
+        ),
+        format!("CREATE FUNCTION {s}.tm_tmo(integer) RETURNS cstring AS 'int4out' LANGUAGE internal IMMUTABLE STRICT"),
+        format!(
+            "CREATE TYPE {s}.tm (INPUT = {s}.tm_in, OUTPUT = {s}.tm_out, INTERNALLENGTH = VARIABLE, \
+             TYPMOD_IN = {s}.tm_tmi, TYPMOD_OUT = {s}.tm_tmo)"
+        ),
+        format!(
+            "CREATE TABLE {s}.modded (v {s}.tm(7), w {s}.tm(7)[], n numeric(5, 2), vc varchar(3)[], \
+             ts timestamptz(3), id int PRIMARY KEY)"
+        ),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let mut observer = Conn::open(&url, SessionRole::Query).await;
+    // The type's own procedure is live: the server calls it when asked for the modifier.
+    let sql = format!(
+        "SELECT pg_catalog.string_agg(pg_catalog.format_type(atttypid, atttypmod), ',' ORDER BY attnum) \
+         FROM pg_catalog.pg_attribute WHERE attrelid = '{s}.modded'::regclass AND attnum IN (1, 2)"
+    );
+    let DbEvent::Page { rows, .. } = observer.run(1, &sql).await else { panic!("format_type") };
+    assert_eq!(rows[0][0].as_deref(), Some(&format!("{s}.tm11,{s}.tm11[]")[..]), "the procedure writes 11");
+
+    let mut holder = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(holder.run(1, "BEGIN").await, DbEvent::Done { .. }));
+    let lock = format!("LOCK TABLE {s}.modded IN ACCESS EXCLUSIVE MODE");
+    assert!(matches!(holder.run(2, &lock).await, DbEvent::Done { .. }));
+    let tag = format!("tmod{}", std::process::id());
+    let cfg = ConnectionConfig { name: "it".into(), dsn: Some(url.clone()), ..ConnectionConfig::test_db() };
+    let (tx, rx) = unbounded_channel();
+    let o = ConnectOptions::new(PAGE, SessionRole::Meta, &tag).dialer(dialer());
+    let mut meta = Conn { session: PgDriver.connect(&cfg, SessionRole::Meta, o, tx), rx };
+    meta.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    meta.session.send(DbCommand::LoadTableKeys { id: 7, schema: schema.clone(), table: "modded".into() });
+    let ev = meta.wait(|e| matches!(e, DbEvent::TableKeys { .. }), 10).await;
+    let DbEvent::TableKeys { id: 7, result } = ev else { panic!("{ev:?}") };
+    let keys = result.expect("keys");
+    let types: Vec<String> = keys.columns.expect("the columns are known").into_iter().map(|c| c.type_name).collect();
+    assert_eq!(
+        types,
+        vec![
+            format!("{s}.tm"),
+            format!("{s}.tm[]"),
+            "numeric(5,2)".to_string(),
+            "character varying(3)[]".to_string(),
+            "timestamp(3) with time zone".to_string(),
+            "integer".to_string(),
+        ],
+        "no modifier of the type's own procedure; the server's own still written"
+    );
+    assert_eq!(keys.primary_key, vec!["id".to_string()]);
+    assert!(matches!(holder.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
 /// The size of a table that was never vacuumed or analyzed is unknown, as its rows are: its
 /// heap's `relpages` is still 0 however many rows it has, while its indexes and its TOAST
 /// table's index have pages from their creation on (a text column, a primary key, a partitioned

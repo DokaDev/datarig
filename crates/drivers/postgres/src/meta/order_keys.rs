@@ -15,9 +15,10 @@
 //! With them comes, per column, whether its collation is deterministic (`pg_collation`, by the
 //! column's `attcollation`; a column of no collation is): a pattern without case (`ILIKE`) is
 //! written only on such a column, the server refuses it on another. And the table's columns in
-//! its order ([`OrderKeys::columns`]): each one's type (`format_type`, which reads `pg_type`
-//! only), `NOT NULL`, and whether a primary or a foreign key constraint names it
-//! (`pg_constraint`, by its column numbers).
+//! its order ([`OrderKeys::columns`]): each one's type (`format_type`, which reads `pg_type`;
+//! with its modifier only when the server's own procedure writes that, as a type's own
+//! `typmodout` may be any code), `NOT NULL`, and whether a primary or a foreign key constraint
+//! names it (`pg_constraint`, by its column numbers).
 
 use super::read;
 use datarig_core::driver::DbError;
@@ -106,7 +107,15 @@ LEFT JOIN LATERAL (
   -- the primary key or of a foreign key (constraints by their column numbers).
   SELECT pg_catalog.array_agg(a.attname::text ORDER BY a.attnum) AS names,
          pg_catalog.array_agg(co.collisdeterministic IS NOT FALSE ORDER BY a.attnum) AS deterministic,
-         pg_catalog.array_agg(pg_catalog.format_type(a.atttypid, a.atttypmod) ORDER BY a.attnum) AS types,
+         -- A type's modifier is written by its `typmodout` procedure (an array's, by its
+         -- element type's): taken only when that is the server's own (an object number below
+         -- 16384, `FirstNormalObjectId`), else the type is written without it, so that no
+         -- procedure of a user's or an extension's runs here.
+         pg_catalog.array_agg(pg_catalog.format_type(a.atttypid, CASE WHEN NOT EXISTS (
+           SELECT 1 FROM pg_catalog.pg_type t
+           WHERE t.oid IN (a.atttypid, (SELECT e.typelem FROM pg_catalog.pg_type e WHERE e.oid = a.atttypid))
+             AND t.typmodout::pg_catalog.oid >= 16384
+         ) THEN a.atttypmod END) ORDER BY a.attnum) AS types,
          pg_catalog.array_agg(a.attnotnull ORDER BY a.attnum) AS attnotnull,
          pg_catalog.array_agg(EXISTS (
            SELECT 1 FROM pg_catalog.pg_constraint k
@@ -256,9 +265,20 @@ mod tests {
         // A table of no column: known, none.
         assert_eq!(columns_of(&None, &none()), Some(Vec::new()));
         // Nothing that opens the relation reads them.
-        for part in ["pg_catalog.format_type(a.atttypid, a.atttypmod)", "k.contype = 'p'", "k.contype = 'f'"] {
+        for part in ["pg_catalog.format_type(a.atttypid, CASE WHEN NOT EXISTS (", "k.contype = 'p'", "k.contype = 'f'"]
+        {
             assert!(ORDER_KEYS.contains(part), "{part}");
         }
+        // A modifier only where the server's own procedure writes it: of the type and of an
+        // array's element type; never the modifier passed as it is.
+        for part in [
+            "WHERE t.oid IN (a.atttypid, (SELECT e.typelem FROM pg_catalog.pg_type e WHERE e.oid = a.atttypid))",
+            "AND t.typmodout::pg_catalog.oid >= 16384",
+            ") THEN a.atttypmod END) ORDER BY a.attnum) AS types",
+        ] {
+            assert!(ORDER_KEYS.contains(part), "{part}");
+        }
+        assert!(!ORDER_KEYS.contains("format_type(a.atttypid, a.atttypmod)"));
     }
 
     /// A key counts only where it compares each column as an ORDER BY of it does, and on whole,
