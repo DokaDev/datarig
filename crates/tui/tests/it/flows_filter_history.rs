@@ -711,3 +711,33 @@ fn the_history_list_hint_and_clear_question_look_right() {
     assert_screen!("filter_history_clear_en_80x24", Lang::En, h.draw(80, 24));
     assert_screen!("filter_history_clear_en_120x30", Lang::En, h.draw(120, 30));
 }
+
+/// `Ctrl+R` in a field of the filter dialog's SQL section: the pick replaces what both fields
+/// hold (typed or not) and the draft as one step; nothing runs.
+#[test]
+fn a_pick_from_the_sql_section_fills_its_fields() {
+    let cfg = test_db_config();
+    let mut h = users(&cfg, None);
+    ran(&mut h, "id > 1");
+    h.command("orderby name desc");
+    answer(&mut h);
+    h.command("where");
+    answer(&mut h);
+    h.command("orderby");
+    answer(&mut h);
+    h.sent();
+    h.keys("f");
+    h.keys("Q");
+    h.type_text("name = 'typed'");
+    h.ctrl('r');
+    assert!(h.app.overlays.is_open(OverlayKind::Picker), "the list opens above the dialog");
+    h.type_text("id");
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty(), "nothing runs on a pick");
+    assert_eq!(h.app.filter_dialog_sql_fields(), Some(("id > 1".into(), "name DESC".into())));
+    assert_eq!(line(&h), ("id > 1".into(), "name DESC".into()));
+    // One step back: the draft before the pick (what was typed was never read back).
+    h.key_mod(KeyCode::Char('z'), ratatui::crossterm::event::KeyModifiers::CONTROL);
+    assert_eq!(line(&h), (String::new(), String::new()));
+    assert_eq!(h.app.filter_dialog_sql_fields(), Some((String::new(), String::new())));
+}

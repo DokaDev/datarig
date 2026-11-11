@@ -570,3 +570,18 @@ fn a_paste_into_a_field_is_one_line_and_has_a_cap() {
     h.event(ratatui::crossterm::event::Event::Paste("x".repeat(20_000)));
     assert!(h.screen(120, 34).contains("Pasted text cut"), "{}", h.screen(120, 34));
 }
+
+/// A limit refused is said, and the part of the `Limit` field that is not a number of rows is
+/// underlined (not the blanks around it).
+#[test]
+fn a_refused_limit_is_underlined_where_it_is() {
+    let mut h = users();
+    h.keys("f");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.type_text(" ten ");
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty());
+    assert!(h.screen(120, 34).contains("Limit refused"), "{}", h.screen(120, 34));
+    assert_eq!(underlined(&mut h, 120, 34, "Limit "), "ten");
+}
