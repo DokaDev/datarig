@@ -7533,6 +7533,93 @@ async fn a_late_answer_does_not_change_what_stopped_a_bounded_read() {
     assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
 }
 
+/// A server that answers in another language says nothing the app can read: however the user
+/// asked to cancel, what stopped the statement is told in the server's own words, never called a
+/// cancel. Whether the time limit fired or the cancel did, bounded or not, in the user's block too.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_said_in_another_language_is_the_servers_words() {
+    let Some(url) = pg_url("a_stop_said_in_another_language_is_the_servers_words") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_translated_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let words = "zz other words";
+    for english in ["canceling statement due to statement timeout", "canceling statement due to user request"] {
+        proxy.reword(english, &format!("{words:_<width$}", width = english.len()));
+    }
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let rows = format!("SELECT * FROM {table} WHERE (id > 10)");
+    let counted = count_of(&rows);
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    async fn sent(proxy: &pg_proxy::Proxy, start: &str, times: usize) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let seen = |s: &&pg_proxy::Sent| matches!(s, pg_proxy::Sent::Query(t) if t.starts_with(start));
+        while proxy.sent().iter().filter(seen).count() < times {
+            assert!(Instant::now() < deadline, "the read never went out");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+    async fn answer(q: &mut Conn) -> Result<u64, DbError> {
+        let done = |e: &DbEvent| matches!(e, DbEvent::Counted { .. } | DbEvent::Estimated { .. });
+        match q.wait(done, 10).await {
+            DbEvent::Counted { result, .. } | DbEvent::Estimated { result, .. } => result,
+            other => panic!("{other:?}"),
+        }
+    }
+    let in_its_words = |got: &Result<u64, DbError>| matches!(got, Err(DbError::Server(m)) if m.text.contains(words));
+    let hold_then_cancel = async |q: &mut Conn, wait: Duration| {
+        proxy.hold_answers(true);
+        tokio::time::sleep(wait).await;
+        q.session.cancel();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        proxy.hold_answers(false);
+    };
+
+    // A bounded count at its limit, the answer held while the user cancels.
+    let limit = Duration::from_millis(300);
+    q.session.send(DbCommand::Count { id: 2, sql: counted.clone(), limit: Some(limit) });
+    sent(&proxy, &counted, 1).await;
+    hold_then_cancel(&mut q, Duration::from_millis(600)).await;
+    let got = answer(&mut q).await;
+    assert!(in_its_words(&got), "at the limit: {got:?}");
+
+    // The user's own cancel of a bounded count, and of an estimate waiting for its lock.
+    q.session.send(DbCommand::Count { id: 3, sql: counted.clone(), limit: Some(Duration::from_secs(30)) });
+    sent(&proxy, &counted, 2).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    q.session.cancel();
+    let got = answer(&mut q).await;
+    assert!(in_its_words(&got), "a cancel: {got:?}");
+    q.session.send(DbCommand::Estimate { id: 4, sql: rows.clone() });
+    sent(&proxy, "BEGIN", 3).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    q.session.cancel();
+    let got = answer(&mut q).await;
+    assert!(in_its_words(&got), "an estimate: {got:?}");
+
+    // Without a limit of the app's: the session's own fires, the answer held.
+    assert!(matches!(q.run(5, "SET statement_timeout = 300").await, DbEvent::Done { .. }));
+    q.session.send(DbCommand::Count { id: 6, sql: counted.clone(), limit: None });
+    sent(&proxy, &counted, 3).await;
+    hold_then_cancel(&mut q, Duration::from_millis(600)).await;
+    let got = answer(&mut q).await;
+    assert!(in_its_words(&got), "unbounded: {got:?}");
+
+    // In the user's block, under its savepoint.
+    assert!(matches!(q.run(7, "BEGIN").await, DbEvent::Done { .. }));
+    q.session.send(DbCommand::Count { id: 8, sql: counted.clone(), limit: Some(limit) });
+    sent(&proxy, &counted, 4).await;
+    hold_then_cancel(&mut q, Duration::from_millis(600)).await;
+    let got = answer(&mut q).await;
+    assert!(in_its_words(&got), "in a block: {got:?}");
+    assert!(matches!(q.run(9, "ROLLBACK").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
 /// A count without a limit that failed before the user cancelled is not called cancelled by a
 /// cancel that came during its cleanup.
 #[tokio::test(flavor = "multi_thread")]

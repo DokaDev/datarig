@@ -55,6 +55,8 @@ impl Wanted {
 
 type Faults = Arc<Mutex<Vec<(Wanted, Fault)>>>;
 
+type Rewords = Arc<Mutex<Vec<(Vec<u8>, Vec<u8>)>>>;
+
 pub struct Proxy {
     /// `host:port` to connect to instead of the server.
     pub addr: String,
@@ -68,6 +70,8 @@ pub struct Proxy {
     faults: Faults,
     /// Whether the server's answers are held back ([`Proxy::hold_answers`]).
     held: Arc<watch::Sender<bool>>,
+    /// What the server's answers say otherwise ([`Proxy::reword`]).
+    rewords: Rewords,
 }
 
 impl Proxy {
@@ -82,21 +86,31 @@ impl Proxy {
         let held = Arc::new(watch::channel(false).0);
         let (s, d, e, f, up) = (sent.clone(), dropped.clone(), executes.clone(), faults.clone(), upstream.to_string());
         let h = held.clone();
+        let rewords: Rewords = Arc::default();
+        let w = rewords.clone();
         tokio::spawn(async move {
             while let Ok((client, _)) = listener.accept().await {
                 let (s, d, e, f, up, h) = (s.clone(), d.clone(), e.clone(), f.clone(), up.clone(), h.clone());
+                let w = w.clone();
                 tokio::spawn(async move {
-                    let _ = relay(client, &up, s, d, e, f, h).await;
+                    let _ = relay(client, &up, s, d, e, f, h, w).await;
                 });
             }
         });
-        Proxy { addr, sent, dropped, executes, faults, held }
+        Proxy { addr, sent, dropped, executes, faults, held, rewords }
     }
 
     /// Hold what the server answers back from the clients (`true`) until told otherwise
     /// (`false`), as an answer slow to arrive.
     pub fn hold_answers(&self, held: bool) {
         self.held.send_replace(held);
+    }
+
+    /// What the server answers says `to` wherever it says `from`, as a server that answers in
+    /// another language. Of the same length, so no message changes size.
+    pub fn reword(&self, from: &str, to: &str) {
+        assert_eq!(from.len(), to.len());
+        self.rewords.lock().unwrap().push((from.as_bytes().to_vec(), to.as_bytes().to_vec()));
     }
 
     /// The next simple query whose text is `query` (on any connection) meets `fault`, once;
@@ -147,6 +161,7 @@ async fn read_startup(c: &mut TcpStream) -> std::io::Result<Vec<u8>> {
     Ok(body)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn relay(
     mut client: TcpStream,
     upstream: &str,
@@ -155,6 +170,7 @@ async fn relay(
     executes: Arc<Mutex<Vec<i32>>>,
     faults: Faults,
     held: Arc<watch::Sender<bool>>,
+    rewords: Rewords,
 ) -> std::io::Result<()> {
     let mut body = read_startup(&mut client).await?;
     // SSLRequest / GSSENCRequest: "no", then the real startup message.
@@ -196,6 +212,11 @@ async fn relay(
         let mut gate = held.subscribe();
         while let Ok(n) = sr.read(&mut buf).await {
             let _ = gate.wait_for(|held| !held).await;
+            for (from, to) in rewords.lock().unwrap().iter() {
+                while let Some(at) = buf[..n].windows(from.len()).position(|w| w == from.as_slice()) {
+                    buf[at..at + to.len()].copy_from_slice(to);
+                }
+            }
             if n == 0 || cw.write_all(&buf[..n]).await.is_err() {
                 break;
             }
