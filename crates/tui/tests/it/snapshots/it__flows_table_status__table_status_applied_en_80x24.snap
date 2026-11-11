@@ -1,0 +1,29 @@
+---
+source: crates/tui/tests/it/flows_table_status.rs
+assertion_line: 109
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users * ×                        "
+"│  ＋ New connection   │╭ Results · 3 rows ────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ [Result 1]  Chart  Messages    local-pg / shop.users │"
+"│  ▾ ●   local-pg      ││   │ id = ^v│ name v =                                │"
+"│    ▾ datarig default ││   │ int8   │ text                                    │"
+"│      ▸ analytics     ││ 1 │      0 │ n0                                      │"
+"│      ▸ public        ││ 2 │      1 │ n1                                      │"
+"│      ▾ shop          ││ 3 │      2 │ n2                                      │"
+"│        ▾ Tables      ││                                                      │"
+"│          ▸ users     ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰ ▼ name <> 'a name long enough to be cu… +1 · name ↓ ─╯"
+" local-pg │ 3 rows · 2ms            │ Enter view cell · n next page · y copy EN "

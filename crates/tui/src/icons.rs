@@ -103,6 +103,12 @@ pub fn column_filter(on: bool) -> &'static str {
     if on { FILTER } else { "=" }
 }
 
+/// The mark of a table tab's conditions on its results' bottom border and in the filter
+/// dialog's border status: the glyph, or `▼` with icons off.
+pub fn filter_status(on: bool) -> &'static str {
+    if on { FILTER } else { "\u{25bc}" }
+}
+
 /// The sort zone's mark, at the right end of a header: the glyph, or `^v` with icons off.
 pub fn sort_zone(on: bool) -> &'static str {
     if on { SORT_ZONE } else { "^v" }

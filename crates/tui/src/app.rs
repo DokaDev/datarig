@@ -394,6 +394,9 @@ pub struct Layout {
     /// The previous and next page marks in the results title.
     pub page_prev: Rect,
     pub page_next: Rect,
+    /// A table tab's filter and sort on the results' bottom border (a click opens the filter
+    /// dialog).
+    pub table_status: Rect,
     pub too_small: bool,
 }
 

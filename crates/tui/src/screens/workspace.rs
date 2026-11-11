@@ -325,6 +325,7 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     let rb = panel_with_status(&title, status, app.focus == Focus::Results, grid_area.width);
     let rinner = rb.inner(grid_area);
     rb.render(grid_area, buf);
+    crate::widgets::table_status::draw_table_status(app, grid_area, buf);
     // The result tabs of the last run, the Chart, a Plan and the Messages on the first line (a
     // table tab's connection on its right).
     let strip = app.strip_shown() && rinner.height > 2;

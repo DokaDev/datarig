@@ -1077,6 +1077,11 @@ impl App {
             self.focus = Focus::Results;
             return if inside(l.page_prev) { self.page_prev() } else { self.page_next() };
         }
+        // A table tab's filter and sort on the results' bottom border: the filter dialog.
+        if !self.tabs.is_empty() && inside(l.table_status) {
+            self.focus = Focus::Results;
+            return self.open_filter_dialog(false);
+        }
         // A second click on the same cell soon after the first: the cell viewer (a word
         // in the editor; a third click there: the line).
         let again = self.pointer.last_click.is_some_and(|(t, lx, ly)| t.elapsed() < DOUBLE_CLICK && (lx, ly) == (x, y));

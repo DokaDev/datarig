@@ -31,5 +31,5 @@ expression: backend
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││ filter failed: showing previous rows                                                   │"
-"╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯"
+"╰────────────────────────────╯╰ ▼ failed ──────────────────────────────────────────────────────────────────────────────╯"
 " local-pg │ Error: ERROR: column "idd" does not exist            │ Enter view cell · n next page · y copy · v select EN "

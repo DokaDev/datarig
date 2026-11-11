@@ -33,6 +33,7 @@ pub(crate) mod sparkline;
 pub mod statement_list;
 pub(crate) mod statusbar;
 pub(crate) mod tab_list;
+pub(crate) mod table_status;
 pub(crate) mod update_notice;
 pub(crate) mod whats_new;
 

@@ -87,6 +87,7 @@ mod flows_table_filter_value;
 mod flows_table_limit;
 mod flows_table_locks;
 mod flows_table_sort;
+mod flows_table_status;
 mod flows_tabs;
 mod flows_themes;
 mod flows_timers;

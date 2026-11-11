@@ -25,5 +25,5 @@ expression: backend
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"
 "│                      ││ cancelled: showing previous …││                      │"
-"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+"╰──────────────────────╯╰ ▼ cancelled ─────────────────╯╰──────────────────────╯"
 " local-pg │ Not filtered: showing previous rows (Enter in the line reruns)   EN "
