@@ -956,6 +956,34 @@ impl Where {
     }
 }
 
+/// Where a term went when the terms changed ([`follow`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Moved {
+    /// It is term `.0` now (changed in its place, or moved by terms taken out or put in
+    /// before it).
+    To(usize),
+    /// It is gone; the terms that followed it start at `.0` now.
+    Gone(usize),
+}
+
+/// Where term `t` of `before` is among `after`: the terms both lists start and end with are
+/// the same terms, the part between them is what changed. A term in that part keeps its place
+/// when the part kept its length (changed where it is), else it is gone.
+pub(crate) fn follow(before: &[Term], after: &[Term], t: usize) -> Moved {
+    let head = before.iter().zip(after).take_while(|(a, b)| a == b).count();
+    let room = before.len().min(after.len()) - head;
+    let tail = before.iter().rev().zip(after.iter().rev()).take(room).take_while(|(a, b)| a == b).count();
+    if t < head {
+        Moved::To(t)
+    } else if t >= before.len() - tail {
+        Moved::To(t + after.len() - before.len())
+    } else if before.len() == after.len() {
+        Moved::To(t)
+    } else {
+        Moved::Gone(head)
+    }
+}
+
 /// What the dialog edits: the `WHERE` text, the user's order keys and the `LIMIT` field.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Draft {

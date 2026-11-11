@@ -395,3 +395,55 @@ fn the_wheel_on_the_columns_reads_a_sql_field_back_first() {
     h.key(KeyCode::Enter);
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id = 1 AND id > 2)")]]);
 }
+
+/// `shop.users` filtered by `filter` and answered, the dialog open on `id` and drawn.
+fn dialog_with(filter: &str) -> Harness {
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    answer(&mut h);
+    h.command(&format!("where {filter}"));
+    runs(&mut h);
+    answer(&mut h);
+    h.key(KeyCode::Tab);
+    h.keys("f");
+    assert!(open(&h));
+    h.draw(W, H);
+    h
+}
+
+#[test]
+fn the_x_of_the_condition_being_typed_in_takes_its_value_field_with_it() {
+    let mut h = dialog_with("id > 77 AND id < 42");
+    let px = pane_x(&mut h);
+    let value = find_nth(&mut h, "77", px, 0);
+    click(&mut h, value);
+    assert_eq!(h.app.key_context(), Ctx::FilterDialogText);
+    let (xx, _) = find_nth(&mut h, "\u{00d7}", px, 0);
+    click(&mut h, (xx, value.1));
+    assert_eq!(draft(&h).0, "id < 42");
+    // The condition left has the focus on its operator: what is typed edits no condition.
+    assert_eq!(h.app.key_context(), Ctx::FilterDialog);
+    h.type_text("5");
+    assert_eq!(draft(&h).0, "id < 42");
+    // Its value field holds its own value.
+    h.key(KeyCode::Right);
+    h.key(KeyCode::End);
+    h.type_text("5");
+    assert_eq!(draft(&h).0, "id < 425");
+}
+
+#[test]
+fn the_x_of_a_condition_above_keeps_the_value_field_typed_in() {
+    let mut h = dialog_with("id > 77 AND id < 42");
+    let px = pane_x(&mut h);
+    let first = find_nth(&mut h, "77", px, 0);
+    let value = find_nth(&mut h, "42", px, 0);
+    click(&mut h, (value.0 + 2, value.1));
+    assert_eq!(h.app.key_context(), Ctx::FilterDialogText);
+    let (xx, _) = find_nth(&mut h, "\u{00d7}", px, 0);
+    click(&mut h, (xx, first.1));
+    assert_eq!(draft(&h).0, "id < 42");
+    assert_eq!(h.app.key_context(), Ctx::FilterDialogText, "the value field keeps the keys");
+    h.type_text("5");
+    assert_eq!(draft(&h).0, "id < 425");
+}

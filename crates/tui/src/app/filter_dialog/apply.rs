@@ -340,14 +340,12 @@ impl App {
             d.message = Some(Notice::new(Label::TableDialogNothingToUndo, Level::Info));
             return;
         };
-        d.draft = prev;
+        let before = std::mem::replace(&mut d.draft, prev);
         d.picker = None;
         d.message = None;
         d.mark = None;
+        d.follow_terms(&before.where_, false);
         d.settle();
-        if let DialogFocus::Value(t, _) = d.focus {
-            d.fill_inputs(t);
-        }
     }
 
     /// Table tab `id` sent its query's statement: its filter dialog, waiting for the query it

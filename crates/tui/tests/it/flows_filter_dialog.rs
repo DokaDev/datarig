@@ -675,3 +675,24 @@ fn the_column_list_names_postgresql_types_short() {
     }
     assert!(h.screen(120, 34).contains("seen  timestamp with time zone"), "{}", h.screen(120, 34));
 }
+
+#[test]
+fn undo_keeps_the_value_field_on_its_own_condition() {
+    let mut h = users();
+    h.command("where id > 77 AND id < 42");
+    runs(&mut h);
+    answer(&mut h);
+    h.keys("f");
+    // The first condition's operator: `x` takes it out, the next one's value has the keys.
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Char('x'));
+    h.key(KeyCode::Right);
+    assert_eq!(h.app.key_context(), Ctx::FilterDialogText);
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "id < 42");
+    // Undone, the condition taken out comes back before it: the keys stay in `42`.
+    h.key_mod(KeyCode::Char('z'), KeyModifiers::CONTROL);
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "id > 77 AND id < 42");
+    h.key(KeyCode::End);
+    h.type_text("5");
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "id > 77 AND id < 425");
+}

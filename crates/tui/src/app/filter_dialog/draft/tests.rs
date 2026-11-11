@@ -852,3 +852,28 @@ fn editing_a_long_list_reads_it_in_one_pass() {
     // A look per value of the field, not a search through every value held for each.
     assert!(probes <= 2 * 4000, "{probes}");
 }
+
+#[test]
+fn a_term_is_followed_to_its_place_after_the_terms_change() {
+    let t = target(PG);
+    let before = Where::from_text("id > 1 AND id < 10 AND price = 3", &t);
+    // One taken out: those before it stay, those after it move up, it is gone.
+    let mut w = before.clone();
+    w.remove(1);
+    assert_eq!(follow(before.terms(), w.terms(), 0), Moved::To(0));
+    assert_eq!(follow(before.terms(), w.terms(), 1), Moved::Gone(1));
+    assert_eq!(follow(before.terms(), w.terms(), 2), Moved::To(1));
+    // Put back (undone): those after it move down again.
+    assert_eq!(follow(w.terms(), before.terms(), 1), Moved::To(2));
+    // One changed in its place keeps it; one added after the others moves nothing.
+    let mut w = before.clone();
+    w.set(1, row("id", Op::Lt, vec![num("20")]), &t);
+    assert_eq!(follow(before.terms(), w.terms(), 1), Moved::To(1));
+    let mut w = before.clone();
+    w.add(row("name", Op::IsNull, Vec::new()), &t);
+    assert_eq!(follow(before.terms(), w.terms(), 2), Moved::To(2));
+    // All taken out: every term is gone.
+    let mut w = before.clone();
+    w.clear();
+    assert_eq!(follow(before.terms(), w.terms(), 2), Moved::Gone(0));
+}

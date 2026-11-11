@@ -67,6 +67,7 @@ impl App {
             d.message = None;
             d.mark = None;
         }
+        d.follow_terms(&before.where_, matches!(field, Some(FieldKey::Value(..))));
         d.settle();
     }
 

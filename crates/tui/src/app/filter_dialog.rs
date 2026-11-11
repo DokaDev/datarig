@@ -34,7 +34,7 @@ use super::table_query::OrderKeysState;
 use super::*;
 use crate::widgets::text_input::TextInput;
 use datarig_core::query::{ColName, Query, Target, order_text};
-use draft::{ColumnInfo, Draft, Undo};
+use draft::{ColumnInfo, Draft, Undo, Where};
 use std::ops::Range;
 
 /// A text field of the dialog typing coalesces in ([`Undo`]): a value field of a condition
@@ -502,6 +502,59 @@ impl FilterDialog {
             && self.inputs.len() <= k
         {
             self.focus = if k > 0 && !self.inputs.is_empty() { DialogFocus::Value(t, 0) } else { DialogFocus::Op(t) };
+        }
+    }
+
+    /// The draft's terms changed from `before` (whatever changed them: a condition taken out,
+    /// one added, undo, clear all, a text read back or picked): the focus, the value fields and
+    /// the narrowing of the list stay on the term they were on, at its place now. A term changed
+    /// in its place gets its value fields again from the draft, unless the change is what was
+    /// `typed` in them. The focus on a term gone goes to the selected column's next condition,
+    /// else to `+ add condition`.
+    pub(crate) fn follow_terms(&mut self, before: &Where, typed: bool) {
+        let (old, new) = (before.terms(), self.draft.where_.terms());
+        if old == new {
+            return;
+        }
+        let narrow = self.narrow.take().and_then(|(t, s)| match draft::follow(old, new, t) {
+            draft::Moved::To(n) => Some((n, s)),
+            draft::Moved::Gone(_) => None,
+        });
+        let focused = match self.focus {
+            DialogFocus::Op(t) | DialogFocus::Value(t, _) => Some((t, draft::follow(old, new, t))),
+            _ => None,
+        };
+        let changed = |t: usize, n: usize| old.get(t) != new.get(n);
+        let refill = focused.and_then(|(t, m)| match m {
+            draft::Moved::To(n) => (!typed && changed(t, n)).then_some(n),
+            draft::Moved::Gone(_) => None,
+        });
+        self.narrow = narrow;
+        match focused {
+            None => {}
+            Some((_, draft::Moved::To(n))) => {
+                self.focus = match self.focus {
+                    DialogFocus::Value(_, k) => DialogFocus::Value(n, k),
+                    _ => DialogFocus::Op(n),
+                };
+                if let Some(n) = refill {
+                    self.fill_inputs(n);
+                }
+            }
+            Some((_, draft::Moved::Gone(at))) => {
+                self.picker = None;
+                self.undo.leave_field();
+                match self.rows().into_iter().find(|&r| r >= at) {
+                    Some(r) => {
+                        self.focus = DialogFocus::Op(r);
+                        self.fill_inputs(r);
+                    }
+                    None => {
+                        self.inputs.clear();
+                        self.focus = if self.column().is_some() { DialogFocus::Add } else { DialogFocus::Columns };
+                    }
+                }
+            }
         }
     }
 
