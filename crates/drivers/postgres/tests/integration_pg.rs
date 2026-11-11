@@ -7641,6 +7641,110 @@ async fn an_estimate_of_what_cannot_be_locked_is_refused() {
     assert_eq!(q.count_within(3, &count_of(&rows), Some(Duration::from_secs(30))).await.0, Ok(1));
 }
 
+/// Planning compares values of a column's type by itself: on a server before 14 a range of the
+/// user's over a built-in subtype takes no function of the user's on its own type, yet its
+/// selectivity runs the comparison of its subtype's operator class. Only columns of types the
+/// server ships, compared with its own code, are planned; the function never runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_estimate_takes_only_columns_of_types_planning_is_known_to_handle() {
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    let Some(url) = pg_url("an_estimate_takes_only_columns_of_types_planning_is_known_to_handle") else { return };
+    let schema = format!("zz_plantype_{}", std::process::id());
+    let _schema = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let raising = "IMMUTABLE LANGUAGE plpgsql AS $$BEGIN RAISE EXCEPTION 'zz_ planning ran the function'; END$$";
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE FUNCTION {s}.cmp(int4, int4) RETURNS int {raising}"),
+        format!(
+            "CREATE OPERATOR CLASS {s}.cls FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, \
+             OPERATOR 4 >=, OPERATOR 5 >, FUNCTION 1 {s}.cmp(int4, int4)"
+        ),
+        format!("CREATE TYPE {s}.span AS RANGE (subtype = int4, subtype_opclass = {s}.cls)"),
+        format!("CREATE TABLE {s}.spans (id int, v {s}.span)"),
+        format!("CREATE DOMAIN {s}.positive AS int"),
+        format!("CREATE TABLE {s}.domained (id int, v {s}.positive)"),
+        format!("CREATE TABLE {s}.domains (id int, v {s}.positive[])"),
+        format!("CREATE TYPE {s}.mood AS ENUM ('calm')"),
+        format!("CREATE TABLE {s}.moods (id int, v {s}.mood)"),
+        format!("CREATE TYPE {s}.pair AS (a int, b int)"),
+        format!("CREATE TABLE {s}.pairs (id int, v {s}.pair)"),
+        format!("CREATE TABLE {s}.jsons (id int, v json)"),
+        format!(
+            "CREATE TABLE {s}.fine (id int, a text, b numeric(10, 2), c int4range, d int[], e jsonb, f timestamptz, \
+             g uuid, h varchar(5), i bool)"
+        ),
+        format!("CREATE FUNCTION {s}.jcmp(json, json) RETURNS int {raising}"),
+        format!("CREATE FUNCTION {s}.tojson(int4) RETURNS json {raising}"),
+    ] {
+        assert!(matches!(b.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    let rows = |t: &str| format!("SELECT * FROM {s}.{t} WHERE (id IS NOT NULL)");
+
+    // The range, by the operator that makes planning compare. From 14 on the server's generated
+    // multirange takes it, which the question about column types refuses first.
+    let (got, _) = q.estimate(1, &format!("SELECT * FROM {s}.spans WHERE (v @> 5)")).await;
+    let named = format!("{s}.span");
+    assert!(
+        got == Err(DbError::NotRepeatable(NotRepeatable::PlannerType(named.clone())))
+            || got == Err(DbError::NotRepeatable(NotRepeatable::UserColumnType(named))),
+        "{got:?}"
+    );
+    let mut id = 2;
+    for (table, named) in [
+        ("domained", format!("{s}.positive")),
+        ("domains", format!("{s}.positive[]")),
+        ("moods", format!("{s}.mood")),
+        ("pairs", format!("{s}.pair")),
+    ] {
+        let (got, _) = q.estimate(id, &rows(table)).await;
+        assert_eq!(got, Err(DbError::NotRepeatable(NotRepeatable::PlannerType(named))), "{table}");
+        id += 1;
+    }
+    for table in ["fine", "jsons"] {
+        let (got, _) = q.estimate(id, &rows(table)).await;
+        assert!(got.is_ok(), "{table}: {got:?}");
+        id += 1;
+    }
+
+    // A built-in type that has no comparison may be given one, which an array's comparison finds.
+    let class =
+        format!("CREATE OPERATOR CLASS {s}.jcls DEFAULT FOR TYPE json USING btree AS FUNCTION 1 {s}.jcmp(json, json)");
+    assert!(matches!(b.run(2, &class).await, DbEvent::Done { .. }));
+    let (got, _) = q.estimate(id, &rows("jsons")).await;
+    assert_eq!(got, Err(DbError::NotRepeatable(NotRepeatable::PlannerType("json".into()))));
+    id += 1;
+    assert!(q.estimate(id, &rows("fine")).await.0.is_ok(), "other types go on");
+    id += 1;
+    assert!(matches!(b.run(3, &format!("DROP OPERATOR FAMILY {s}.jcls USING btree")).await, DbEvent::Done { .. }));
+
+    // A cast between built-in types is applied by the server on its own.
+    let cast = format!("CREATE CAST (int4 AS json) WITH FUNCTION {s}.tojson(int4)");
+    assert!(matches!(b.run(4, &cast).await, DbEvent::Done { .. }));
+    let (got, _) = q.estimate(id, &rows("fine")).await;
+    let dropped = b.run(5, "DROP CAST (int4 AS json)").await;
+    assert!(matches!(dropped, DbEvent::Done { .. }), "{dropped:?}");
+    assert_eq!(got, Err(DbError::NotRepeatable(NotRepeatable::PlannerCode(format!("{s}.fine")))));
+}
+
+/// The types a planner's estimate takes are what their numbers say on the server (the multiranges
+/// are there from 14 on).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_types_planning_takes_are_the_servers_own() {
+    use datarig_core::sql::risk::repeat::PLANNER_TYPES;
+    let Some(url) = pg_url("the_types_planning_takes_are_the_servers_own") else { return };
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    for (i, (oid, name)) in PLANNER_TYPES.iter().enumerate() {
+        let ask = format!("SELECT typname::text FROM pg_type WHERE oid = {oid} AND typtype IN ('b', 'r', 'm')");
+        match q.first_value(i as u64 + 1, &ask).await {
+            None => assert!(name.ends_with("multirange"), "{name}"),
+            got => assert_eq!(got.as_deref(), Some(*name)),
+        }
+    }
+}
+
 /// Planning a table can run a function its text never names: an index's predicate or expression,
 /// a `CHECK` constraint, a statistics expression, a partition key and a generated column are
 /// folded by the planner. Each is refused on a fresh session and its function never runs (it

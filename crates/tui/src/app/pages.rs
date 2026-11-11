@@ -46,6 +46,7 @@ pub(super) fn why(r: &NotRepeatable) -> Msg {
         NotRepeatable::Shadowed(name) => Msg::RepeatShadowed { name: name.clone() },
         NotRepeatable::UserColumnType(name) => Msg::RepeatUserColumnType { name: name.clone() },
         NotRepeatable::PlannerCode(name) => Msg::RepeatPlannerCode { name: name.clone() },
+        NotRepeatable::PlannerType(name) => Msg::RepeatPlannerType { name: name.clone() },
         NotRepeatable::TxUnknown => Label::RepeatTxUnknown.into(),
         NotRepeatable::Unreadable => Label::RepeatUnreadable.into(),
         NotRepeatable::Variable(name) => Msg::RepeatVariable { name: name.clone() },

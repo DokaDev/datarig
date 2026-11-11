@@ -51,8 +51,10 @@ On a table tab whose rows are filtered, `#` opens a small choice instead:
   last until it ends); otherwise the entry is dimmed with the reason. On PostgreSQL the server is
   also asked, in the same read-only transaction as the plan, whether planning the table could run
   a function: a table whose indexes, constraints, statistics, partition key or generated columns
-  use something not built in, one with a rule or row-level security, or one that cannot be locked
-  (a materialised view) gets no estimate, and the entry is then dimmed for those rows. The server
+  use something not built in, one with a column whose type is not one of the server's standard
+  types (a domain, an enum or a composite type included), one with a rule or row-level security,
+  or one that cannot be locked (a materialised view) gets no estimate, and the entry is then
+  dimmed for those rows. The server
   stops the statement after 5 seconds and gives up on a lock after 2 seconds (1 second on MySQL).
   On MySQL the statement runs in the session's usual transaction mode, in a read-only transaction
   of its own only when autocommit is off. MariaDB has no estimate.

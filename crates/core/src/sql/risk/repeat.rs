@@ -45,7 +45,8 @@
 //! the user's): an operator, a sort or a comparison on such a column could run them.
 //!
 //! A planner's estimate runs no statement but plans it, and planning has code of its own to run:
-//! [`planner_query`] asks about that, for the relations held still by [`lock_query`].
+//! [`planner_query`] asks about that, for the relations held still by [`lock_query`], and takes
+//! only columns of the types it knows ([`PLANNER_TYPES`]).
 //!
 //! This is an allowlist: anything it does not recognise is refused, with the reason. What is
 //! still not seen: a cast of the user's from a built-in type to a type of the user's that the
@@ -94,6 +95,9 @@ pub enum NotRepeatable {
     /// (an index, a constraint, statistics, a partition key or a generated column that uses
     /// something of the user's; a rule): the relation's name.
     PlannerCode(String),
+    /// The server says a column of a relation it reads has a type planning is not known to
+    /// handle with the server's own code alone ([`PLANNER_TYPES`]): the type.
+    PlannerType(String),
     /// The session could not tell whether a transaction is open, so a count cannot be given the
     /// time limit it asks for.
     TxUnknown,
@@ -115,6 +119,7 @@ impl NotRepeatable {
             "type" => NotRepeatable::UserType(name),
             "column_type" => NotRepeatable::UserColumnType(name),
             "planner" => NotRepeatable::PlannerCode(name),
+            "planner_type" => NotRepeatable::PlannerType(name),
             _ => return None,
         })
     }
@@ -447,6 +452,74 @@ g.rngsubdiff::pg_catalog.oid OPERATOR(pg_catalog.>=) 10000::pg_catalog.oid))
     ))
 }
 
+/// The column types a planner's estimate is given for, with their fixed OIDs (an array of one
+/// of them too): types the server ships, none of which takes code of the user's to compare,
+/// read or estimate. Planning compares values of a column's type on its own, without the
+/// statement naming anything that does: a range's selectivity builds a range of the constant it
+/// is given with the comparison of the range's subtype, an array's or a record's comparison looks
+/// up the one of its element. Any other type, a domain, an enum or a composite of the user's
+/// included, is not known to be free of that, and gets no estimate. Pinned to the server by an
+/// integration test.
+pub const PLANNER_TYPES: &[(u32, &str)] = &[
+    (16, "bool"),
+    (17, "bytea"),
+    (18, "char"),
+    (19, "name"),
+    (20, "int8"),
+    (21, "int2"),
+    (23, "int4"),
+    (25, "text"),
+    (26, "oid"),
+    (27, "tid"),
+    (28, "xid"),
+    (29, "cid"),
+    (114, "json"),
+    (142, "xml"),
+    (600, "point"),
+    (601, "lseg"),
+    (602, "path"),
+    (603, "box"),
+    (604, "polygon"),
+    (628, "line"),
+    (650, "cidr"),
+    (700, "float4"),
+    (701, "float8"),
+    (718, "circle"),
+    (774, "macaddr8"),
+    (790, "money"),
+    (829, "macaddr"),
+    (869, "inet"),
+    (1042, "bpchar"),
+    (1043, "varchar"),
+    (1082, "date"),
+    (1083, "time"),
+    (1114, "timestamp"),
+    (1184, "timestamptz"),
+    (1186, "interval"),
+    (1266, "timetz"),
+    (1560, "bit"),
+    (1562, "varbit"),
+    (1700, "numeric"),
+    (2950, "uuid"),
+    (3220, "pg_lsn"),
+    (3614, "tsvector"),
+    (3615, "tsquery"),
+    (3802, "jsonb"),
+    (3904, "int4range"),
+    (3906, "numrange"),
+    (3908, "tsrange"),
+    (3910, "tstzrange"),
+    (3912, "daterange"),
+    (3926, "int8range"),
+    (4072, "jsonpath"),
+    (4451, "int4multirange"),
+    (4532, "nummultirange"),
+    (4533, "tsmultirange"),
+    (4534, "tstzmultirange"),
+    (4535, "datemultirange"),
+    (4536, "int8multirange"),
+];
+
 /// The query that asks the server, before a planner's estimate, whether planning the relations
 /// `n` names may run code the statement does not show. Planning loads each table's index
 /// predicates and expressions, `CHECK` constraints, statistics expressions, generated columns and
@@ -454,11 +527,23 @@ g.rngsubdiff::pg_catalog.oid OPERATOR(pg_catalog.>=) 10000::pg_catalog.oid))
 /// parts, which runs an immutable function; a table access method or an operator class of the
 /// user's is code as well. It answers no row when all of those use only what the server ships
 /// (read from `pg_depend`, so nothing is deparsed), else one row (`planner`, the relation) for
-/// [`NotRepeatable::from_check`]. A table with a rule is refused too. Like [`check_query`], it
-/// reads the catalog only and names every object and operator with its schema. The numbers are
-/// the fixed OIDs of the catalogs: `pg_class` 1259, `pg_constraint` 2606, `pg_attrdef` 2604,
-/// `pg_statistic_ext` 3381, `pg_proc` 1255, `pg_operator` 2617, `pg_opclass` 2616, `pg_opfamily`
-/// 2753, `pg_am` 2601, `pg_type` 1247. `None` when a name cannot be written as a constant.
+/// [`NotRepeatable::from_check`]. A table with a rule is refused too, and any table on a server
+/// where a built-in operator or function was given an estimator or a support function of the
+/// user's, or a cast between two built-in types is the user's: the planner reaches those by
+/// itself.
+///
+/// Every column must have a type of [`PLANNER_TYPES`], or else one row (`planner_type`, the
+/// type). So must nothing of the user's be what the server compares that type with: a default
+/// `btree` or `hash` operator class of the user's (a built-in type that has none may be given
+/// one, and an array's comparison finds it), or a member added to a built-in operator family.
+/// An operator class of the user's that is not the default is reached through an index only,
+/// which is asked about above.
+///
+/// Like [`check_query`], it reads the catalog only and names every object and operator with its
+/// schema. The numbers are the fixed OIDs of the catalogs: `pg_class` 1259, `pg_constraint` 2606,
+/// `pg_attrdef` 2604, `pg_statistic_ext` 3381, `pg_proc` 1255, `pg_operator` 2617, `pg_opclass`
+/// 2616, `pg_opfamily` 2753, `pg_am` 2601, `pg_type` 1247, and of the access methods `btree` 403,
+/// `hash` 405. `None` when a name cannot be written as a constant.
 pub fn planner_query(n: &Names) -> Option<String> {
     let mut named = Vec::new();
     for (schema, rel) in &n.relations {
@@ -470,6 +555,14 @@ pub fn planner_query(n: &Names) -> Option<String> {
         return Some("SELECT NULL::pg_catalog.text, NULL::pg_catalog.text WHERE false".to_string());
     }
     let named = named.join(", ");
+    let oids: Vec<String> = PLANNER_TYPES.iter().map(|(oid, _)| oid.to_string()).collect();
+    let known = format!("ANY (ARRAY[{}]::pg_catalog.oid[])", oids.join(", "));
+    // Numbered at `initdb` (which goes up to 16383 for the rows it numbers itself, such as those
+    // of `pg_amop`), or since.
+    let user = "OPERATOR(pg_catalog.>=) 16384::pg_catalog.oid";
+    let shipped = "OPERATOR(pg_catalog.<) 16384::pg_catalog.oid";
+    let is = "OPERATOR(pg_catalog.=)";
+    let either = "ANY (ARRAY[c.typ, c.elem])";
     Some(format!(
         "WITH RECURSIVE named(sch, rel) AS (VALUES {named}),
 top AS (SELECT pg_catalog.to_regclass(CASE WHEN n.sch OPERATOR(pg_catalog.=) '' THEN \
@@ -491,7 +584,10 @@ d.adrelid OPERATOR(pg_catalog.=) r.oid JOIN pg_catalog.pg_attribute a ON a.attre
 OPERATOR(pg_catalog.=) d.adrelid AND a.attnum OPERATOR(pg_catalog.=) d.adnum WHERE a.attgenerated \
 OPERATOR(pg_catalog.<>) ''::pg_catalog.\"char\"
 UNION ALL SELECT r.oid, 3381::pg_catalog.oid, s.oid FROM rels r JOIN pg_catalog.pg_statistic_ext s ON \
-s.stxrelid OPERATOR(pg_catalog.=) r.oid)
+s.stxrelid OPERATOR(pg_catalog.=) r.oid),
+cols(typ, elem) AS (SELECT DISTINCT t.oid, t.typelem FROM rels r JOIN pg_catalog.pg_attribute a ON \
+a.attrelid {is} r.oid JOIN pg_catalog.pg_type t ON t.oid {is} a.atttypid WHERE a.attnum \
+OPERATOR(pg_catalog.>) 0 AND NOT a.attisdropped)
 SELECT 'planner', w.rel::pg_catalog.regclass::pg_catalog.text FROM (
 SELECT r.oid AS rel FROM rels r JOIN pg_catalog.pg_class c ON c.oid OPERATOR(pg_catalog.=) r.oid WHERE \
 c.relhasrules
@@ -500,7 +596,20 @@ p.classid AND d.objid OPERATOR(pg_catalog.=) p.objid WHERE d.refobjid OPERATOR(p
 10000::pg_catalog.oid AND d.refclassid OPERATOR(pg_catalog.=) ANY (ARRAY[1255, 2617, 2616, 2753, 2601, \
 1247]::pg_catalog.oid[]) AND NOT (d.refclassid OPERATOR(pg_catalog.=) 1247::pg_catalog.oid AND p.objid \
 OPERATOR(pg_catalog.=) p.rel)
-) w LIMIT 1"
+UNION ALL SELECT r.oid FROM rels r WHERE EXISTS (SELECT FROM pg_catalog.pg_operator o WHERE o.oid {shipped} \
+AND (o.oprcode::pg_catalog.oid {user} OR o.oprrest::pg_catalog.oid {user} OR o.oprjoin::pg_catalog.oid \
+{user})) OR EXISTS (SELECT FROM pg_catalog.pg_proc p WHERE p.oid {shipped} AND \
+p.prosupport::pg_catalog.oid {user}) OR EXISTS (SELECT FROM pg_catalog.pg_cast k WHERE k.oid {user} AND \
+k.castsource {shipped} AND k.casttarget {shipped} AND k.castfunc {user})
+) w
+UNION ALL SELECT 'planner_type', pg_catalog.format_type(c.typ, NULL) FROM cols c WHERE NOT (c.typ \
+OPERATOR(pg_catalog.<) 10000::pg_catalog.oid AND (c.typ {is} {known} OR c.elem {is} {known})) OR EXISTS (SELECT FROM pg_catalog.pg_opclass o WHERE o.oid \
+{user} AND o.opcdefault AND o.opcmethod {is} ANY (ARRAY[403, 405]::pg_catalog.oid[]) AND o.opcintype {is} \
+{either}) OR EXISTS (SELECT FROM pg_catalog.pg_amop m WHERE m.oid {user} AND m.amopfamily {shipped} AND \
+(m.amoplefttype {is} {either} OR m.amoprighttype {is} {either})) OR EXISTS (SELECT FROM \
+pg_catalog.pg_amproc m WHERE m.oid {user} AND m.amprocfamily {shipped} AND (m.amproclefttype {is} {either} \
+OR m.amprocrighttype {is} {either}))
+LIMIT 1"
     ))
 }
 

@@ -191,5 +191,9 @@ fn what_planning_may_run_is_asked_about_the_relations_read() {
     assert!(q.contains("VALUES ($datarig$public$datarig$, $datarig$t$datarig$)"), "{q}");
     assert!(!q.contains("$datarig$w$datarig$"), "{q}");
     assert_eq!(NotRepeatable::from_check("planner", "t"), Some(NotRepeatable::PlannerCode("t".into())));
+    assert_eq!(NotRepeatable::from_check("planner_type", "m"), Some(NotRepeatable::PlannerType("m".into())));
+    for (oid, _) in PLANNER_TYPES {
+        assert!(q.contains(&format!("{oid}")), "{oid}");
+    }
     assert!(planner_query(&names("SELECT 1").unwrap()).unwrap().contains("WHERE false"));
 }
