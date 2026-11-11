@@ -223,7 +223,7 @@ impl Notice {
 
 pub enum Results {
     Empty,
-    Rows(ResultSet),
+    Rows(Box<ResultSet>),
     Message(Notice),
     Error(String),
     Cancelled,

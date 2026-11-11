@@ -723,7 +723,7 @@ impl Tab {
         }
         let Some(next) = self.exec.steps.remove(&i) else { return };
         self.park_shown();
-        self.results = super::Results::Rows(next.rs);
+        self.results = super::Results::Rows(Box::new(next.rs));
         self.grid = next.grid;
         self.exec.shown = Some(i);
     }
@@ -735,7 +735,7 @@ impl Tab {
                 return;
             };
             let grid = std::mem::take(&mut self.grid);
-            self.exec.steps.insert(j, Parked { rs, grid });
+            self.exec.steps.insert(j, Parked { rs: *rs, grid });
         }
         self.exec.shown = None;
     }
@@ -800,7 +800,7 @@ impl Tab {
     /// Every row result the tab keeps (shown or parked).
     pub fn row_results_mut(&mut self) -> impl Iterator<Item = &mut crate::widgets::grid::ResultSet> {
         let shown = match &mut self.results {
-            super::Results::Rows(rs) => Some(rs),
+            super::Results::Rows(rs) => Some(rs.as_mut()),
             _ => None,
         };
         shown.into_iter().chain(self.exec.steps.values_mut().map(|p| &mut p.rs))

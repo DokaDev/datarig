@@ -881,7 +881,7 @@ impl App {
                     t.exec.reading = crate::app::tabs::Reading { query, ..Default::default() };
                 }
                 t.exec.reading.answer = true;
-                t.results = Results::Rows(rs);
+                t.results = Results::Rows(Box::new(rs));
                 t.grid = GridState::paged(page_size, page_rows);
                 if let Some((col, x_off)) = kept_col {
                     (t.grid.col, t.grid.x_off) = (col, x_off);

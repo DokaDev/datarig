@@ -372,7 +372,7 @@ fn an_answer_the_grid_no_longer_waits_for_is_dropped() {
     let (cols, rows) = edge_rows();
     let cols = cols.into_iter().collect();
     let rs = datarig_tui::widgets::grid::ResultSet::in_memory(cols, rows, false, "NULL");
-    h.app.tabs.active_mut().results = Results::Rows(rs);
+    h.app.tabs.active_mut().results = Results::Rows(Box::new(rs));
     assert!(h.app.pump_grid_search(Duration::from_secs(30)) > 0, "the jobs' answers came");
     assert_eq!(cursor(&h), (0, 0), "the new rows' cursor stays");
     assert_ne!(h.app.key_context(), Ctx::GridSearch, "the search of the old rows went");
