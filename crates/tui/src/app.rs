@@ -265,15 +265,17 @@ pub struct Popup {
     pub trail: usize,
     /// The text the popup completes.
     pub owner: PopupOwner,
-    /// The user turned to it (asked for it with `Ctrl+Space`, or moved its selection): in the
-    /// filter line `Enter` then takes its entry, else it applies the line.
+    /// The user turned to it (asked for it with `Ctrl+Space`, or moved its selection): in a
+    /// field of the filter dialog `Enter` then takes its entry, else it applies the dialog.
     pub touched: bool,
 }
 
-/// The text a completion popup completes: the tab's editor, or a field of its filter line.
+/// The text a completion popup completes: the tab's editor, or a field of the filter dialog's
+/// SQL section (`WHERE`, `ORDER BY`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PopupOwner {
     Editor,
+    Dialog(table_query::Field),
 }
 
 pub struct Viewer {

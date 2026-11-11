@@ -645,6 +645,7 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (FilterDialogText, "esc", "filter.cancel"),
     (FilterDialogText, "ctrl+z", "filter.undo"),
     (FilterDialogText, "ctrl+r", "table.filter.history"),
+    (FilterDialogText, "ctrl+space", "editor.complete"),
 ];
 
 /// Every vim command key, including those the editor does not implement yet.

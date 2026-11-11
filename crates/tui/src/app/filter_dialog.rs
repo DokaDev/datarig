@@ -17,6 +17,7 @@
 //! to leave) opens above it, and a no leaves it as it was. `Esc` closes it and drops the draft.
 
 mod apply;
+mod complete;
 pub(crate) mod count;
 pub(crate) mod draft;
 mod keys;
@@ -31,8 +32,9 @@ use std::collections::{BTreeSet, HashMap};
 use super::table_query::OrderKeysState;
 use super::*;
 use crate::widgets::text_input::TextInput;
-use datarig_core::query::{ColName, Query, Target};
+use datarig_core::query::{ColName, Query, Target, order_text};
 use draft::{ColumnInfo, Draft, Undo};
+use std::ops::Range;
 
 /// A text field of the dialog typing coalesces in ([`Undo`]): a value field of a condition
 /// (term index, field) or the `LIMIT` field.
@@ -63,6 +65,12 @@ pub(crate) enum DialogFocus {
     Limit,
     /// The footer's `SQL` toggle.
     Sql,
+    /// The SQL section's `WHERE` field.
+    SqlWhere,
+    /// The SQL section's `ORDER BY` field.
+    SqlOrder,
+    /// The SQL section's `Open in editor` button.
+    SqlOpen,
     /// The value at this place of the selected column's value list ([`list::ValuesView`]).
     Values(usize),
 }
@@ -79,11 +87,69 @@ pub(crate) enum ColumnSource {
 }
 
 /// The part of the dialog the last refusal is about, underlined.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Mark {
-    /// The chip of this term.
-    Term(usize),
-    Limit,
+    /// Bytes `at` of the `WHERE` text sent (the SQL section's `WHERE` field shows them), in
+    /// the chip of term `term` when they are in one.
+    Where { term: Option<usize>, at: Range<usize> },
+    /// Bytes of the `ORDER BY` field's text.
+    Order(Range<usize>),
+    /// Bytes of the `LIMIT` field's text.
+    Limit(Range<usize>),
+}
+
+impl Mark {
+    /// The chip of term `t` is underlined.
+    pub(crate) fn term(&self, t: usize) -> bool {
+        matches!(self, Mark::Where { term: Some(x), .. } if *x == t)
+    }
+}
+
+/// A text field of the SQL section: what it holds, and the draft's text it was given (it is
+/// read back only when typed in since: [`SqlField::edited`]).
+#[derive(Clone, Debug)]
+pub(crate) struct SqlField {
+    pub(crate) input: TextInput,
+    /// The draft's text it was given.
+    from: String,
+    /// The text it held then (a line break is a blank in a field).
+    shown: String,
+}
+
+impl SqlField {
+    /// A field given the draft's text `from`.
+    pub(crate) fn new(from: &str) -> Self {
+        let input = TextInput::new(from);
+        let shown = input.text().to_string();
+        Self { input, from: from.to_string(), shown }
+    }
+
+    /// It holds another text than it was given.
+    pub(crate) fn edited(&self) -> bool {
+        self.input.text() != self.shown
+    }
+
+    /// The draft's text it was given.
+    pub(crate) fn from(&self) -> &str {
+        &self.from
+    }
+}
+
+/// The SQL section under the footer (`Q`, `SQL ▸`): the statement as it would be sent above
+/// the draft's `WHERE` text and order, each in a field. What is typed in them is read back into
+/// the draft when the section closes, a field is left, the draft is applied or opened in an
+/// editor.
+#[derive(Clone, Debug)]
+pub(crate) struct SqlSection {
+    pub(crate) where_: SqlField,
+    pub(crate) order: SqlField,
+}
+
+impl SqlSection {
+    /// The fields of draft `d` (dialect `dialect`).
+    pub(crate) fn of(d: &Draft, dialect: Dialect) -> Self {
+        Self { where_: SqlField::new(&d.where_.text()), order: SqlField::new(&order_text(&d.order, dialect)) }
+    }
 }
 
 /// Where the parts of the dialog were drawn last, for the pointer.
@@ -107,6 +173,10 @@ pub(crate) struct DialogHits {
     pub(crate) clear_all: Rect,
     pub(crate) limit: Rect,
     pub(crate) sql: Rect,
+    /// The SQL section's `WHERE` field (all its rows), `ORDER BY` field, `Open in editor`.
+    pub(crate) sql_where: Rect,
+    pub(crate) sql_order: Rect,
+    pub(crate) open_sql: Rect,
     pub(crate) apply: Rect,
     pub(crate) cancel: Rect,
 }
@@ -148,8 +218,8 @@ pub struct FilterDialog {
     /// What the dialog says in its hint line instead of the keys: a refusal, a failure, a note.
     pub(crate) message: Option<Notice>,
     pub(crate) mark: Option<Mark>,
-    /// The statement shown under the footer (`Q`).
-    pub(crate) sql_open: bool,
+    /// The SQL section, while it is open (`Q`).
+    pub(crate) sql: Option<SqlSection>,
     /// The query applied, waiting for its statement to be sent (questions asked meanwhile).
     pub(crate) applying: Option<Query>,
     pub(crate) hits: DialogHits,
@@ -197,7 +267,10 @@ impl FilterDialog {
     pub(crate) fn typing(&self) -> bool {
         self.picker.is_none()
             && (self.search.is_some() && self.focus == DialogFocus::Columns
-                || matches!(self.focus, DialogFocus::Value(..) | DialogFocus::Limit))
+                || matches!(
+                    self.focus,
+                    DialogFocus::Value(..) | DialogFocus::Limit | DialogFocus::SqlWhere | DialogFocus::SqlOrder
+                ))
     }
 
     /// The text field with the keys.
@@ -209,6 +282,18 @@ impl FilterDialog {
             DialogFocus::Columns => self.search.as_mut(),
             DialogFocus::Value(_, k) => self.inputs.get_mut(k),
             DialogFocus::Limit => Some(&mut self.limit),
+            DialogFocus::SqlWhere => self.sql.as_mut().map(|s| &mut s.where_.input),
+            DialogFocus::SqlOrder => self.sql.as_mut().map(|s| &mut s.order.input),
+            _ => None,
+        }
+    }
+
+    /// The SQL section's field with the keys, when one has them.
+    pub(crate) fn sql_field(&self) -> Option<&SqlField> {
+        let s = self.sql.as_ref()?;
+        match self.focus {
+            DialogFocus::SqlWhere => Some(&s.where_),
+            DialogFocus::SqlOrder => Some(&s.order),
             _ => None,
         }
     }
@@ -315,6 +400,21 @@ impl FilterDialog {
         if self.limit.text() != self.draft.limit {
             self.limit.set(&self.draft.limit);
         }
+        // The SQL section's fields follow the draft they were given (undone, a history pick).
+        let (where_, order) = (self.draft.where_.text(), order_text(&self.draft.order, self.dialect));
+        if let Some(s) = self.sql.as_mut() {
+            if s.where_.from() != where_ {
+                s.where_ = SqlField::new(&where_);
+            }
+            if s.order.from() != order {
+                s.order = SqlField::new(&order);
+            }
+        }
+        if self.sql.is_none()
+            && matches!(self.focus, DialogFocus::SqlWhere | DialogFocus::SqlOrder | DialogFocus::SqlOpen)
+        {
+            self.focus = DialogFocus::Sql;
+        }
         let n = self.shown_columns().len();
         self.cursor = self.cursor.min(n.saturating_sub(1));
     }
@@ -331,6 +431,13 @@ impl App {
     pub fn filter_dialog_draft(&self) -> Option<(String, String)> {
         let d = self.filter_dialog()?;
         Some((d.draft.where_.text(), datarig_core::query::order_text(&d.draft.order, d.dialect)))
+    }
+
+    /// What the open filter dialog's SQL section's `WHERE` and `ORDER BY` fields hold, while
+    /// it is open.
+    pub fn filter_dialog_sql_fields(&self) -> Option<(String, String)> {
+        let s = self.filter_dialog()?.sql.as_ref()?;
+        Some((s.where_.input.text().to_string(), s.order.input.text().to_string()))
     }
 
     pub(crate) fn filter_dialog_mut(&mut self) -> Option<&mut FilterDialog> {
@@ -366,9 +473,8 @@ impl App {
         // Where the server said the failed filter is wrong: that chip underlined.
         let mark = failure
             .as_ref()
-            .and_then(|(_, at)| at.as_ref())
-            .and_then(|at| apply::term_at(&draft.where_, at))
-            .map(Mark::Term);
+            .and_then(|(_, at)| at.clone())
+            .map(|at| Mark::Where { term: apply::term_at(&draft.where_, &at), at });
         let message = failure.map(|(said, _)| match said {
             Some(text) => Notice::new(Msg::TableDialogFailed { said: text }, Level::Error),
             None => Notice::new(Label::TableDialogFailedPlain, Level::Error),
@@ -394,7 +500,7 @@ impl App {
             inputs: Vec::new(),
             message,
             mark,
-            sql_open: false,
+            sql: None,
             applying: None,
             hits: DialogHits::default(),
             narrow: None,

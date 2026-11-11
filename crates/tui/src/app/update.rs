@@ -299,11 +299,27 @@ impl App {
         // The completion popup takes its keys before the text it completes.
         let owner = match ctx {
             Ctx::VimInsert => Some(PopupOwner::Editor),
+            Ctx::FilterDialogText => self.filter_dialog_sql_field().map(PopupOwner::Dialog),
             _ => None,
         };
+        // In a field of the filter dialog `Enter` applies and `Tab` (`Shift+Tab`) moves to the
+        // next part, unless the user turned to the popup (moved in it, or asked for it).
+        let dialog_key = match key.code {
+            KeyCode::Enter | KeyCode::Tab => key.modifiers.is_empty(),
+            KeyCode::BackTab => (key.modifiers - KeyModifiers::SHIFT).is_empty(),
+            _ => false,
+        };
+        let untouched =
+            ctx == Ctx::FilterDialogText && dialog_key && self.tab().popup.as_ref().is_some_and(|p| !p.touched);
+        // The dialog's popup is drawn over it: no other overlay is.
+        let above = match owner {
+            Some(PopupOwner::Dialog(_)) => false,
+            _ => !self.overlays.is_empty(),
+        };
         if owner.is_some()
+            && !untouched
             && self.tab().popup.as_ref().map(|p| p.owner) == owner
-            && self.overlays.is_empty()
+            && !above
             && self.keymap.binds(Ctx::Completion, &chord)
         {
             self.key_state.clear();
@@ -534,6 +550,12 @@ impl App {
                             t.editor.replace_range(start, end, &text);
                         }
                         self.edited();
+                    }
+                    PopupOwner::Dialog(_) => {
+                        if let Some(input) = self.overlays.filter_dialog_mut().and_then(|d| d.input_mut()) {
+                            let end = (input.cursor_byte() + trail).min(input.text().len());
+                            input.replace(start..end, &text);
+                        }
                     }
                 }
             }

@@ -89,7 +89,10 @@ impl App {
             Action::TxSummary => self.tx_summary(),
             Action::OpenCommands => self.toggle_commands(),
             Action::ShowCompletions => {
-                if self.focus == Focus::Editor && self.tab().editor.mode == Mode::Insert {
+                if self.filter_dialog_sql_field().is_some() {
+                    self.tab_mut().completion_due = None;
+                    self.filter_dialog_complete(true, None);
+                } else if self.focus == Focus::Editor && self.tab().editor.mode == Mode::Insert {
                     self.tab_mut().completion_due = None;
                     self.update_completion(true);
                 }

@@ -38,6 +38,9 @@ pub enum OpenIn {
     Console,
     /// The user's editor (`Ctrl+G`); what comes back opens in a new console.
     Editor,
+    /// A new console, from the filter dialog's `Open in editor`: the dialog's draft, not the
+    /// statement of the rows held.
+    Dialog,
 }
 
 /// A part of the table tab's query the user writes.
@@ -796,6 +799,13 @@ impl App {
             return Some(sql);
         }
         let q = tq.draft.clone();
+        self.table_query_sql_to_open(id, q, to)
+    }
+
+    /// The statement of query `q` of table tab `id`, opened `to` and not run: its filter
+    /// checked as Enter checks it, its unchecked functions asked about first (`y` opening it).
+    /// `None` when refused (said, as Enter says it) or asked about.
+    pub(super) fn table_query_sql_to_open(&mut self, id: TabId, q: Query, to: OpenIn) -> Option<String> {
         let (name, target) = (self.table_name(id)?, self.table_target(id)?);
         if let Some(text) = filter_text(&q).map(str::to_string) {
             let read_only = self.tabs.get(id).and_then(|t| t.profile).is_some_and(|p| self.read_only(p));
@@ -1203,6 +1213,11 @@ impl App {
             // Asked on the tab's own `Ctrl+G`: the editor only for the tab still active.
             Some(OpenIn::Editor) if self.tab().id == id => self.request_external_edit(),
             Some(OpenIn::Editor) => {}
+            Some(OpenIn::Dialog) => {
+                if let Some(sql) = self.table_query_sql_to_open(id, q, OpenIn::Dialog) {
+                    self.filter_dialog_opened(id, &sql);
+                }
+            }
             None => self.table_run(id, q),
         }
     }

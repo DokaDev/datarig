@@ -1,10 +1,10 @@
-//! The filter dialog's actions: apply, cancel, undo, clear all, the SQL toggle; a filter
-//! picked from the history; and the dialog closing once the tab's statement is sent.
+//! The filter dialog's actions: apply, cancel, undo, clear all, the SQL section (opened,
+//! read back, closed) and its `Open in editor`; a filter picked from the history; and the
+//! dialog closing once the tab's statement is sent.
 
 use super::draft::{Origin, Where};
 use super::*;
 use datarig_core::query::{self, OrderKey};
-use std::ops::Range;
 
 /// What the keys of the filter dialog do through the key map.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,11 +17,14 @@ pub enum DialogAction {
     Undo,
     /// No condition and no order (the limit stays).
     ClearAll,
-    /// Show or hide the statement (`Q`).
+    /// Open or close the SQL section (`Q`).
     Sql,
     /// The server counts the selected column's values (`#`).
     Count,
 }
+
+/// An order refused: what to say, and where in its text when that is known.
+type OrderRefused = Box<(Notice, Option<Range<usize>>)>;
 
 /// The term of `w` whose text holds byte `at.start` of the text sent ([`Where::text`]).
 pub(super) fn term_at(w: &Where, at: &Range<usize>) -> Option<usize> {
@@ -59,11 +62,85 @@ impl App {
         }
     }
 
-    /// `Q`, or the `SQL` toggle: the statement shown under the footer, or not.
+    /// `Q`, or the `SQL` toggle: the SQL section opens with the draft's texts in its fields
+    /// (the keys in its `WHERE` field), or closes ([`App::filter_dialog_close_sql`]).
     pub(super) fn filter_dialog_toggle_sql(&mut self) {
-        if let Some(d) = self.filter_dialog_mut() {
-            d.sql_open = !d.sql_open;
+        let Some(d) = self.filter_dialog_mut() else { return };
+        if d.sql.is_some() {
+            self.filter_dialog_close_sql();
+            return;
         }
+        d.sql = Some(SqlSection::of(&d.draft, d.dialect));
+        d.focus_on(DialogFocus::SqlWhere);
+    }
+
+    /// The SQL section read back ([`App::filter_dialog_read_back`]) and closed; one refused
+    /// stays open. `false` when it stays.
+    pub(super) fn filter_dialog_close_sql(&mut self) -> bool {
+        if !self.filter_dialog_read_back() {
+            return false;
+        }
+        self.filter_dialog_popup_close();
+        let Some(d) = self.filter_dialog_mut() else { return true };
+        d.sql = None;
+        d.settle();
+        true
+    }
+
+    /// What is typed in the SQL section's fields, into the draft: a changed `ORDER BY` text is
+    /// read into keys of the table's columns, a changed `WHERE` text replaces the conditions
+    /// (as text given anew: its terms read again, sent as written); each one step of undo. A
+    /// field not typed in changes nothing (its text is the draft's, byte for byte). An order
+    /// that is not one is refused: said, underlined where it is wrong, its field focused, and
+    /// nothing is read back (`false`). The fields then hold the draft's texts again.
+    pub(super) fn filter_dialog_read_back(&mut self) -> bool {
+        let Some(d) = self.filter_dialog() else { return true };
+        let Some(sql) = d.sql.as_ref() else { return true };
+        let tab = d.tab;
+        let where_ = sql.where_.edited().then(|| sql.where_.input.text().to_string());
+        let order = sql.order.edited().then(|| sql.order.input.text().to_string());
+        let Some(target) = self.table_target(tab) else { return true };
+        let keys = match order.map(|text| self.dialog_order_keys(&text, &target)) {
+            None => None,
+            Some(Ok(keys)) => Some(keys),
+            Some(Err(refused)) => {
+                let (n, at) = *refused;
+                self.filter_dialog_popup_close();
+                let Some(d) = self.filter_dialog_mut() else { return false };
+                let len = d.sql.as_ref().map_or(0, |s| s.order.input.text().len());
+                d.message = Some(n);
+                d.mark = Some(Mark::Order(at.unwrap_or(0..len)));
+                d.focus_on(DialogFocus::SqlOrder);
+                return false;
+            }
+        };
+        if let Some(text) = where_ {
+            self.filter_dialog_edit(None, |d, target| d.draft.where_.set_text(&text, target));
+        }
+        if let Some(keys) = keys {
+            self.filter_dialog_edit(None, |d, _| d.draft.order = keys);
+        }
+        if let Some(d) = self.filter_dialog_mut()
+            && d.sql.is_some()
+        {
+            d.sql = Some(SqlSection::of(&d.draft, d.dialect));
+        }
+        true
+    }
+
+    /// `ORDER BY` text `text` as keys of `target`'s columns; refused: what to say and where
+    /// (bytes of `text`) when that is known.
+    fn dialog_order_keys(&self, text: &str, target: &Target) -> Result<Vec<OrderKey>, OrderRefused> {
+        if text.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        if target.columns.is_empty() {
+            return Err(Box::new((Notice::new(Label::TableOrderColumnsUnknown, Level::Warning), None)));
+        }
+        query::parse_order(text, target).map_err(|e| {
+            let why = table_query::order_why(&self.i18n, &e);
+            Box::new((Notice::new(Msg::TableOrderRefused { why }, Level::Warning), Some(e.range)))
+        })
     }
 
     /// Notice `n` where the user reads it: in the open filter dialog's hint line (it covers the
@@ -94,25 +171,16 @@ impl App {
             return;
         }
         let tab = d.tab;
+        self.filter_dialog_popup_close();
+        if !self.filter_dialog_read_back() {
+            return;
+        }
         if self.tab_busy(tab) {
             let key = self.key_for(Action::CancelQuery, Ctx::Nav);
             return self.say_over_filter_dialog(Notice::new(Msg::QueryBusy { key }, Level::Warning));
         }
-        let (Some(target), Some(base)) = (self.table_target(tab), self.table_query(tab).map(|tq| tq.applied().clone()))
-        else {
-            return;
-        };
+        let Some(q) = self.filter_dialog_query() else { return };
         let Some(d) = self.filter_dialog_mut() else { return };
-        let q = match d.draft.to_query(&base, &target) {
-            Ok(q) => q,
-            Err((_, problem)) => {
-                let why = table_query::limit_why(&self.i18n, problem);
-                let Some(d) = self.filter_dialog_mut() else { return };
-                d.message = Some(Notice::new(Msg::TableLimitRefused { why }, Level::Warning));
-                d.mark = Some(Mark::Limit);
-                return;
-            }
-        };
         d.applying = Some(q.clone());
         d.message = None;
         d.mark = None;
@@ -127,6 +195,31 @@ impl App {
         if self.filter_dialog().is_none_or(|d| d.tab != tab) {
             return;
         }
+        self.filter_dialog_told(tab);
+    }
+
+    /// The draft as the query it sends, of the tab's table; a `LIMIT` field that is no cap is
+    /// refused (said, underlined) and `None`.
+    fn filter_dialog_query(&mut self) -> Option<Query> {
+        let tab = self.filter_dialog()?.tab;
+        let (target, base) = (self.table_target(tab)?, self.table_query(tab)?.applied().clone());
+        let d = self.filter_dialog()?;
+        match d.draft.to_query(&base, &target) {
+            Ok(q) => Some(q),
+            Err((at, problem)) => {
+                let why = table_query::limit_why(&self.i18n, problem);
+                let d = self.filter_dialog_mut()?;
+                d.message = Some(Notice::new(Msg::TableLimitRefused { why }, Level::Warning));
+                d.mark = Some(Mark::Limit(at));
+                None
+            }
+        }
+    }
+
+    /// What table tab `tab` said to the draft it was given (a refusal, else a notice; nothing
+    /// while a question is open above the dialog), in the dialog's hint line, the part refused
+    /// underlined.
+    fn filter_dialog_told(&mut self, tab: TabId) {
         let refusal = self.table_query(tab).and_then(|tq| tq.refusal.clone());
         let said = refusal
             .as_ref()
@@ -138,8 +231,10 @@ impl App {
         if let Some(r) = &refusal {
             d.applying = None;
             d.mark = match (r.field, &r.at) {
-                (table_query::Field::Where, Some(at)) => term_at(&d.draft.where_, at).map(Mark::Term),
-                (table_query::Field::Limit, _) => Some(Mark::Limit),
+                (table_query::Field::Where, Some(at)) => {
+                    Some(Mark::Where { term: term_at(&d.draft.where_, at), at: at.clone() })
+                }
+                (table_query::Field::Limit, at) => Some(Mark::Limit(at.clone().unwrap_or(0..d.draft.limit.len()))),
                 _ => None,
             };
         }
@@ -148,9 +243,50 @@ impl App {
         }
     }
 
+    /// `Open in editor`: the draft's statement in a new console, checked first as the tab's
+    /// `Space r v` checks it (its functions asked about first, `y` opening it); not run. Opened,
+    /// the dialog closes without applying the draft.
+    pub(super) fn filter_dialog_open_sql(&mut self) {
+        let Some(tab) = self.filter_dialog().map(|d| d.tab) else { return };
+        self.filter_dialog_popup_close();
+        if !self.filter_dialog_read_back() {
+            return;
+        }
+        let Some(q) = self.filter_dialog_query() else { return };
+        if let Some(d) = self.filter_dialog_mut() {
+            d.message = None;
+            d.mark = None;
+        }
+        if let Some(tq) = self.table_query_mut(tab) {
+            tq.refusal = None;
+        }
+        self.status = None;
+        self.transient = None;
+        match self.table_query_sql_to_open(tab, q, table_query::OpenIn::Dialog) {
+            Some(sql) => self.filter_dialog_opened(tab, &sql),
+            None => self.filter_dialog_told(tab),
+        }
+    }
+
+    /// The statement `sql` of table tab `tab`'s dialog's draft, checked: the dialog closes
+    /// (its draft not applied) and a new console holds it.
+    pub(crate) fn filter_dialog_opened(&mut self, tab: TabId, sql: &str) {
+        if self.filter_dialog().is_some_and(|d| d.tab == tab) {
+            self.filter_dialog_popup_close();
+            self.overlays.close(OverlayKind::FilterDialog);
+        }
+        if let Some(tq) = self.table_query_mut(tab) {
+            tq.draft = tq.applied().clone();
+            tq.refusal = None;
+        }
+        let Some(t) = self.tabs.get(tab) else { return };
+        let (profile, context) = (t.profile, t.context.clone());
+        self.console_with(sql, profile, context);
+    }
+
     /// `Esc`: the open picker closes, a count of the values running is cancelled, the search
-    /// or the statement closes; else the dialog, its draft dropped (the tab's next run sends
-    /// what is applied).
+    /// or the SQL section closes (read back first: an order refused keeps it open); else the
+    /// dialog, its draft dropped (the tab's next run sends what is applied).
     fn filter_dialog_cancel(&mut self) {
         let Some(d) = self.filter_dialog_mut() else { return };
         if d.picker.take().is_some() {
@@ -168,10 +304,12 @@ impl App {
             }
             return;
         }
-        if std::mem::take(&mut d.sql_open) {
+        if d.sql.is_some() {
+            self.filter_dialog_close_sql();
             return;
         }
         let tab = d.tab;
+        self.filter_dialog_popup_close();
         self.overlays.close(OverlayKind::FilterDialog);
         if let Some(tq) = self.table_query_mut(tab) {
             tq.draft = tq.applied().clone();
@@ -179,10 +317,25 @@ impl App {
         }
     }
 
-    /// `Ctrl+Z`, `u`: the draft one step back; with no step left, the tab's query before its
+    /// `Ctrl+Z`, `u`: what is typed in the SQL section's field with the keys and not read back
+    /// yet goes; else the draft one step back; with no step left, the tab's query before its
     /// last applied change (once).
     fn filter_dialog_undo(&mut self) {
+        self.filter_dialog_popup_close();
         let Some(d) = self.filter_dialog_mut() else { return };
+        if d.sql_field().is_some_and(SqlField::edited) {
+            let (focus, dialect) = (d.focus, d.dialect);
+            let fresh = SqlSection::of(&d.draft, dialect);
+            if let Some(s) = d.sql.as_mut() {
+                match focus {
+                    DialogFocus::SqlWhere => s.where_ = fresh.where_,
+                    _ => s.order = fresh.order,
+                }
+            }
+            d.message = None;
+            d.mark = None;
+            return;
+        }
         let Some(prev) = d.undo.undo().or_else(|| d.before_last.take()) else {
             d.message = Some(Notice::new(Label::TableDialogNothingToUndo, Level::Info));
             return;
@@ -213,16 +366,7 @@ impl App {
     /// order that is not of the table's columns is said, and the draft keeps its order.
     pub(crate) fn filter_dialog_from_history(&mut self, tab: TabId, filter: &str, order: &str) {
         let Some(target) = self.table_target(tab) else { return };
-        let keys: Result<Vec<OrderKey>, Notice> = if order.trim().is_empty() {
-            Ok(Vec::new())
-        } else if target.columns.is_empty() {
-            Err(Notice::new(Label::TableOrderColumnsUnknown, Level::Warning))
-        } else {
-            query::parse_order(order, &target).map_err(|e| {
-                let why = table_query::order_why(&self.i18n, &e);
-                Notice::new(Msg::TableOrderRefused { why }, Level::Warning)
-            })
-        };
+        let keys = self.dialog_order_keys(order, &target).map_err(|r| r.0);
         if self.filter_dialog().is_none_or(|d| d.tab != tab) {
             let Some(mut q) = self.table_query(tab).map(|tq| tq.applied().clone()) else { return };
             q.filter = (!filter.trim().is_empty())
@@ -239,13 +383,19 @@ impl App {
         }
         let filter = filter.to_string();
         let ok = keys.as_ref().ok().cloned();
+        // The pick replaces what the SQL section's fields hold too.
+        self.filter_dialog_popup_close();
         self.filter_dialog_edit(None, |d, target| {
             d.draft.where_ = Where::from_text(&filter, target);
             if let Some(keys) = ok {
                 d.draft.order = keys;
             }
         });
-        if let (Err(n), Some(d)) = (keys, self.filter_dialog_mut()) {
+        let Some(d) = self.filter_dialog_mut() else { return };
+        if d.sql.is_some() {
+            d.sql = Some(SqlSection::of(&d.draft, d.dialect));
+        }
+        if let Err(n) = keys {
             d.message = Some(n);
         }
     }

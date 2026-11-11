@@ -1,0 +1,29 @@
+---
+source: crates/tui/tests/it/flows_filter_sql.rs
+assertion_line: 493
+expression: backend
+---
+"╭─ Filter and sort · shop.users ─────────────────────────────── 3 rows loaded ─╮"
+"│ Columns 2       / search │ id  int8                                          │"
+"│ from the loaded result   │                                                   │"
+"│▸    id                   │ Filter                                            │"
+"│     name                 │   + add condition                                 │"
+"│                          │                                                   │"
+"│                          │ Values  ~ count in the 3 loaded rows      # exact │"
+"│                          │   [ ] 0                   ~1  ▄▄▄▄▄▄▄▄▄▄▄▄        │"
+"│                          │   [ ] 1                   ~1  ▄▄▄▄▄▄▄▄▄▄▄▄        │"
+"│                          │   [ ] 2                   ~1  ▄▄▄▄▄▄▄▄▄▄▄▄        │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                     ╭─────────────────────────╮                              │"
+"│                     │ name      column   text │( ) ↑ asc   ( ) ↓ desc        │"
+"├─────────────────────│ nickname  column   text │──────────────────────────────┤"
+"│ Where               │ not       keyword       │            undo   clear all  │"
+"│ Order               │ null      keyword       │    Limit              SQL ▾  │"
+"│ SELECT * FROM "shop"│ nullif    keyword       │n)                            │"
+"│ As sent. What is typ╰─────────────────────────╯the field …   Open in editor  │"
+"│ WHERE      id > 1 AND n                                                      │"
+"│ ORDER BY                                                                     │"
+"│ Ctrl+Space complete · Esc close (read back)        Enter apply   Esc cancel  │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"

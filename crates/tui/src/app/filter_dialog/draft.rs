@@ -713,7 +713,6 @@ impl Where {
 
     /// The text of the `WHERE` field read back: nothing changes when it is the text sent
     /// ([`Where::text`]); else the terms are those of `text`, given anew.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn set_text(&mut self, text: &str, target: &Target) {
         if text != self.text() {
             *self = Self::from_text(text, target);
