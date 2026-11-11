@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # By hand, on main: when GitHub lost the push event of a commit and no run started for it.
+  workflow_dispatch:
 
 permissions:
   contents: read
