@@ -226,6 +226,7 @@
 "table.dialog.values" = "값"
 "table.dialog.values.loaded" = "~ 불러온 {count}행에서 센 수"
 "table.dialog.values.loaded_earlier" = "~ 센 수: 불러온 {count}행 + 이전 불러오기"
+"table.dialog.values.loaded_held" = "~ {total}행 중 메모리의 {count}행에서 센 수"
 "table.dialog.values.exact" = "정확 · 다른 조건 적용"
 "table.dialog.values.exact_all" = "정확 · 모든 행"
 "table.dialog.values.earlier_count" = "이전 집계 (다른 조건이 바뀜)"

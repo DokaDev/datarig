@@ -584,3 +584,50 @@ fn a_value_the_server_writes_otherwise_is_listed_as_not_shown() {
     assert!(h.screen(120, 34).contains("Not ticked: the server wrote this value otherwise"), "{}", h.screen(120, 34));
     assert_eq!(draft(&h), "");
 }
+
+/// A table tab's result of 5000 rows that spilled to its file (1000 kept in memory), the
+/// dialog open on it.
+#[test]
+fn the_list_of_a_spilled_result_counts_the_rows_in_memory_and_never_reads_the_file() {
+    let state = std::env::temp_dir().join(format!("datarig-flows-filter-values-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&state);
+    std::fs::create_dir_all(&state).unwrap();
+    let mut cfg = test_db_config();
+    cfg.result_window_rows = 1_000;
+    let mut h = Harness::connected_with(&cfg, Lang::En);
+    h.app.set_paths(datarig_core::paths::Paths { data: None, state: Some(state.clone()) });
+    open_users(&mut h);
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    let all = rows(5_000);
+    let mut columns = Some(columns());
+    for (p, page) in all.chunks(500).enumerate() {
+        let more = p < 9;
+        let rows = page.to_vec();
+        h.tab_db(index, DbEvent::Page { id, columns: columns.take(), rows, more, elapsed: Duration::from_millis(1) });
+    }
+    let read = |h: &Harness| match &h.app.tab().results {
+        datarig_tui::app::Results::Rows(rs) => {
+            assert!(rs.rows.spilled() > 0 && rs.rows.resident().len() < rs.rows.len());
+            rs.rows.rows_read_through()
+        }
+        _ => panic!("rows"),
+    };
+    let before = read(&h);
+    h.key(KeyCode::Tab);
+    h.keys("f");
+    // The list of `id`, then of `status`, then of `amount`, then back, drawn at both sizes.
+    for _ in 0..2 {
+        for k in ["", "j", "j", "k", "k"] {
+            h.keys(k);
+            h.draw(80, 24);
+            h.draw(120, 34);
+        }
+    }
+    h.keys("j");
+    let s = h.screen(120, 34);
+    assert_eq!(read(&h), before, "no row was read from the spill file");
+    assert!(s.contains("~ count in 1,000 rows in memory of 5,000"), "{s}");
+    assert!(s.contains("paid"), "{s}");
+    let _ = std::fs::remove_dir_all(&state);
+}

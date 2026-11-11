@@ -2,7 +2,8 @@
 //!
 //! The list is the server's count of the column's values when one was asked for ([`count`]),
 //! else the values of the rows loaded (approximate: only the rows the tab holds of the query
-//! shown), and under them, once the column has a condition of its own in that query, the values
+//! shown, and of a result that spilled to its file only those in memory, said so: the list is
+//! made while the dialog is drawn and never reads the file), and under them, once the column has a condition of its own in that query, the values
 //! an earlier load of the table without it showed ([`values::Memory`]). The values of a column of
 //! numbers that are mostly distinct are not listed: their range is shown instead.
 //!
@@ -27,6 +28,8 @@ pub(crate) struct TallyOf {
     column: String,
     run: u64,
     rows: usize,
+    /// The rows counted: those in memory.
+    held: std::ops::Range<usize>,
 }
 
 /// Where a value of the list comes from.
@@ -73,8 +76,9 @@ pub(crate) struct Item {
 pub(crate) enum Heading {
     /// Nothing is listed, and why.
     Nothing(Label),
-    /// Counted in the rows loaded (approximate), with values of an earlier load under them.
-    Loaded { rows: u64, earlier: bool },
+    /// Counted in the rows loaded (approximate), with values of an earlier load under them;
+    /// `held`: only so many of them were counted, those in memory.
+    Loaded { rows: u64, earlier: bool, held: Option<u64> },
     /// Counted by the server, under the other conditions when there are some.
     Exact { others: bool },
     /// Counted by the server for another scope: the other conditions changed (`true`), or the
@@ -187,9 +191,9 @@ impl App {
         view
     }
 
-    /// The selected column's values counted in the rows loaded, when the count held is not of
-    /// that column and those rows; another column than the list's last one starts its list from
-    /// the top.
+    /// The selected column's values counted in the rows loaded that are in memory, when the
+    /// count held is not of that column and those rows, and the server's count does not stand
+    /// in its place; another column than the list's last one starts its list from the top.
     fn filter_dialog_tally(&mut self) {
         let Some(d) = self.filter_dialog() else { return };
         let tab = d.tab;
@@ -202,19 +206,23 @@ impl App {
             d.values_scroll = 0;
         }
         let Some(col) = col else { return };
+        if self.filter_dialog().is_some_and(|d| d.exact.contains_key(&col)) {
+            return;
+        }
         let Some(t) = self.tabs.get(tab) else { return };
         let Results::Rows(rs) = &t.results else { return };
         if self.table_query(tab).is_none_or(|tq| tq.shown.is_none()) {
             return;
         }
         let Some(ci) = rs.columns.iter().position(|c| c.meta.name == col) else { return };
-        let of = TallyOf { column: col, run: t.exec.query_id, rows: rs.rows.len() };
+        let held = rs.rows.resident();
+        let of = TallyOf { column: col, run: t.exec.query_id, rows: rs.rows.len(), held: held.clone() };
         if self.filter_dialog().and_then(|d| d.tally.as_ref()).is_some_and(|(k, _)| *k == of) {
             return;
         }
         let mut counter = Counter::new(rs.columns[ci].meta.kind.is_number());
-        // A store that cannot be read gives what was read before it failed: approximate anyway.
-        let _ = rs.rows.for_each_chunk(0..rs.rows.len(), 256, |rows| {
+        // Only the rows in memory: drawing never waits on the spill file.
+        let _ = rs.rows.for_each_chunk(held, 256, |rows| {
             for r in rows {
                 counter.add(r.get(ci).and_then(Option::as_deref));
             }
@@ -353,7 +361,9 @@ impl App {
         }
         view.more |= view.items.len() > LIST_VALUES;
         view.items.truncate(LIST_VALUES);
-        view.heading = Heading::Loaded { rows: rs.rows.len() as u64, earlier: with_earlier };
+        let counted = rs.rows.resident().len();
+        let held = (counted < rs.rows.len()).then_some(counted as u64);
+        view.heading = Heading::Loaded { rows: rs.rows.len() as u64, earlier: with_earlier, held };
         Some(view)
     }
 

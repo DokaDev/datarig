@@ -1086,10 +1086,15 @@ fn draw_values(
     let (heading, heading_style) = match (&v.narrow, &v.heading) {
         (Some(text), _) => (i18n.msg(&Msg::TableDialogValuesContaining { text: text.clone() }).to_string(), muted),
         (None, Heading::Nothing(l)) => (i18n.label(*l).to_string(), muted),
-        (None, Heading::Loaded { rows, earlier: false }) => {
+        (None, Heading::Loaded { rows, held: Some(held), .. }) => (
+            i18n.msg(&Msg::TableDialogValuesLoadedHeld { count: *held, total: datarig_i18n::fmt_count(*rows) })
+                .to_string(),
+            muted,
+        ),
+        (None, Heading::Loaded { rows, earlier: false, .. }) => {
             (i18n.msg(&Msg::TableDialogValuesLoaded { count: *rows }).to_string(), muted)
         }
-        (None, Heading::Loaded { rows, earlier: true }) => {
+        (None, Heading::Loaded { rows, earlier: true, .. }) => {
             (i18n.msg(&Msg::TableDialogValuesLoadedEarlier { count: *rows }).to_string(), muted)
         }
         (None, Heading::Exact { others: true }) => (i18n.label(Label::TableDialogValuesExact).to_string(), muted),
