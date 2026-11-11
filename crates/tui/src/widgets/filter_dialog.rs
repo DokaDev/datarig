@@ -1185,16 +1185,17 @@ fn draw_hints(app: &App, d: &FilterDialog, view: Option<&ValuesView>, x: u16, y:
     let i18n = &app.i18n;
     let l = |k: &str, label: Label| (k.to_string(), i18n.label(label).to_string());
     let undo = key(app, DialogAction::Undo);
+    let (apply, cancel) = (key(app, DialogAction::Apply), key(app, DialogAction::Cancel));
     let mut items: Vec<(String, String)> = match d.focus {
         _ if d.picker.is_some() => vec![
             l("\u{2191}\u{2193}", Label::TableDialogHintOperator),
             l("Space", Label::TableDialogHintPick),
-            l("Esc", Label::TableDialogHintClose),
+            l(&cancel, Label::TableDialogHintClose),
         ],
         DialogFocus::Columns if d.search.is_some() => vec![
             l("\u{2191}\u{2193}", Label::TableDialogHintColumn),
-            l("Enter", Label::TableDialogHintPick),
-            l("Esc", Label::TableDialogHintClose),
+            l(&apply, Label::TableDialogHintPick),
+            l(&cancel, Label::TableDialogHintClose),
         ],
         DialogFocus::Columns => vec![
             l("\u{2191}\u{2193}", Label::TableDialogHintColumn),
