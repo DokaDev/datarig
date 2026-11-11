@@ -44,6 +44,7 @@ pub mod explorer;
 pub mod export;
 pub mod export_form;
 pub mod export_path_pick;
+pub mod filter_dialog;
 pub mod filter_history;
 pub mod filter_line;
 pub mod filter_value;

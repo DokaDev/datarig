@@ -451,7 +451,7 @@ pub(crate) fn cap_page<T>(rows: &mut Vec<T>, held: usize, cap: Option<u64>, more
 }
 
 /// The kind of a result column, as the query model writes literals for it.
-fn column_kind(c: &ColumnMeta) -> ColumnKind {
+pub(crate) fn column_kind(c: &ColumnMeta) -> ColumnKind {
     match c.kind {
         // PostgreSQL's `real` (`float4`), MySQL's `FLOAT`: single precision.
         ValueKind::Float if matches!(c.type_name.as_str(), "float4" | "float" | "float unsigned") => ColumnKind::Real,
