@@ -8362,3 +8362,76 @@ async fn a_group_count_while_paging_keeps_the_portal() {
     c.session.send(DbCommand::ClosePortal { id: 2 });
     c.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
 }
+
+/// A cancel that reaches the server after it answered a group count's preparation stops
+/// nothing there (the session is idle): the count is not started after it, but answered
+/// `Cancelled`, in each of its three places: in a transaction of its own (ended), in the user's
+/// block (rolled back to its savepoint, the block goes on) and while a portal is held (the
+/// portal goes on paging). The server's answer to the preparation is held back by a proxy until
+/// the cancel went through.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_between_a_group_counts_preparation_and_its_run_is_kept() {
+    use datarig_core::driver::ValueKind;
+    let Some(url) = pg_url("a_cancel_between_a_group_counts_preparation_and_its_run_is_kept") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_group_gap_{pid}");
+    let table = format!("public.{name}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id, g % 2 AS odd FROM generate_series(1, 1234) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let sql = group_sql("public", &name, "odd", ("int4", ValueKind::Integer), None);
+    // The group count's preparation answered by the server but held back; the user cancels then.
+    async fn cancelled_between(proxy: &pg_proxy::Proxy, q: &mut Conn, id: u64, sql: &str, limit: Option<Duration>) {
+        proxy.fault_parse("GROUP BY", pg_proxy::Fault::Hold);
+        q.session.send(DbCommand::GroupCount { id, sql: sql.to_string(), limit });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !proxy.answer_held() {
+            assert!(Instant::now() < deadline, "the server never answered the preparation");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        assert!(!proxy.fault_pending(), "held at the preparation");
+        q.session.cancel();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        proxy.hold_answers(false);
+        let DbEvent::GroupCounted { id: got, result, .. } =
+            q.wait(|e| matches!(e, DbEvent::GroupCounted { .. }), 20).await
+        else {
+            unreachable!()
+        };
+        assert_eq!(got, id);
+        assert_eq!(result, Err(DbError::Cancelled), "{id}: not counted after the cancel");
+    }
+    // In a transaction of its own, ended: the session goes on outside a block.
+    cancelled_between(&proxy, &mut q, 2, &sql, Some(Duration::from_secs(30))).await;
+    let ran = |p: &pg_proxy::Proxy| p.executes().len();
+    assert_eq!(q.first_value(3, "SELECT 1").await.as_deref(), Some("1"));
+    let (got, _, _) = q.group_within(4, &sql, Some(Duration::from_secs(30))).await;
+    assert_eq!(got.map(|g| g.values.len()), Ok(2), "the next one counts");
+    // In the user's block: back to its savepoint, the block goes on.
+    assert!(matches!(q.run(5, "BEGIN").await, DbEvent::Done { .. }));
+    let before = ran(&proxy);
+    cancelled_between(&proxy, &mut q, 6, &sql, None).await;
+    assert_eq!(ran(&proxy), before, "nothing run after the preparation");
+    assert_eq!(q.first_value(7, "SELECT 2").await.as_deref(), Some("2"), "the block goes on");
+    assert!(matches!(q.run(8, "ROLLBACK").await, DbEvent::Done { .. }));
+    // While a portal is held: the portal goes on paging.
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 9,
+        statements: vec![format!("SELECT * FROM {table} ORDER BY id")],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    let DbEvent::Page { more: true, .. } = q.result(9).await else { panic!("a page with more") };
+    let before = ran(&proxy);
+    cancelled_between(&proxy, &mut q, 10, &sql, None).await;
+    assert_eq!(ran(&proxy), before, "nothing run after the preparation");
+    q.session.send(DbCommand::FetchMore { id: 9 });
+    let DbEvent::Page { columns: None, rows, .. } = q.result(9).await else { panic!("the next page") };
+    assert_eq!(rows[0][0].as_deref(), Some("501"));
+    q.session.send(DbCommand::ClosePortal { id: 9 });
+    q.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
+}

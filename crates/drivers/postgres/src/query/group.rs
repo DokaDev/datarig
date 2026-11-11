@@ -79,6 +79,11 @@ async fn in_block(
         Ok(stmt) => stmt,
         Err(e) => return Ok(Err(asked_error(&e, env.cancel.asked()))),
     };
+    // A cancel that came while the server answered the preparation stopped nothing: the count
+    // must not start after it (the caller rolls back to the savepoint).
+    if env.cancel.asked() {
+        return Ok(Err(DbError::Cancelled));
+    }
     let formats = formats_of(&stmt);
     let release = format!("RELEASE SAVEPOINT {}", env.savepoint);
     let mut txn = client.transaction_in_block_with(Vec::new());
@@ -150,6 +155,11 @@ async fn own(
             return Ok(Err(why));
         }
     };
+    // A cancel that came while the server answered the preparation stopped nothing.
+    if env.cancel.asked() {
+        end_own(client, link).await?;
+        return Ok(Err(DbError::Cancelled));
+    }
     let formats = formats_of(&stmt);
     let mut txn = client.transaction_opened();
     let read = link.guard(Some(env.token), txn.bind_first_page_then(&stmt, &formats, 0, "COMMIT")).await?;
@@ -190,6 +200,8 @@ pub(super) async fn group_counted_in(
     let (fixed, answer) = count_checked(link, env, txn.simple_query(&asked)).await?;
     let read = match answer {
         Ok(()) => match link.guard(Some(env.token), txn.prepare(sql)).await? {
+            // A cancel that came while the server answered the preparation stopped nothing.
+            Ok(_) if env.cancel.asked() => Err(DbError::Cancelled),
             Ok(stmt) => {
                 let formats = formats_of(&stmt);
                 match link.guard(Some(env.token), txn.bind_first_page(&stmt, &formats, 0)).await? {
