@@ -355,6 +355,9 @@ pub struct FilterDialog {
     pub(crate) narrow: Option<(usize, String)>,
     /// The first value of the list shown.
     pub(crate) values_scroll: usize,
+    /// The first line of the selected column's conditions drawn (they scroll when they do not
+    /// fit).
+    pub(crate) rows_scroll: usize,
     /// How many values the list of the selected column shows now (kept as the list is made).
     pub(crate) listed: usize,
     /// The column the list was made for last: another one starts its list from the top.
@@ -650,6 +653,7 @@ impl App {
             hover: None,
             narrow: None,
             values_scroll: 0,
+            rows_scroll: 0,
             listed: 0,
             list_of: None,
             tally: None,

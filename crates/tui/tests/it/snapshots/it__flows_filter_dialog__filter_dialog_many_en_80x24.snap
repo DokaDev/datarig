@@ -1,0 +1,29 @@
+---
+source: crates/tui/tests/it/flows_filter_dialog.rs
+assertion_line: 573
+expression: backend
+---
+"╭─ Filter and sort · shop.users ─────────────────────────────── 3 rows loaded ─╮"
+"│ Columns 2       / search │ id  int8                                          │"
+"│ from the loaded result   │                                                   │"
+"│▸    id             =     │ Filter                                    7-20/21 │"
+"│     name                 │    >          ▾    700                          × │"
+"│                          │    >          ▾    800                          × │"
+"│                          │    >          ▾    900                          × │"
+"│                          │    >          ▾    1000                         × │"
+"│                          │    >          ▾    1100                         × │"
+"│                          │    >          ▾    1200                         × │"
+"│                          │    >          ▾    1300                         × │"
+"│                          │    >          ▾    1400                         × │"
+"│                          │    >          ▾    1500                         × │"
+"│                          │    >          ▾    1600                         × │"
+"│                          │    >          ▾    1700                         × │"
+"│                          │    >          ▾    1800                         × │"
+"│                          │    >          ▾    1900                         × │"
+"│                          │ ▸  >          ▾    2000                         × │"
+"│                          │   Sort   (•) none   ( ) ↑ asc   ( ) ↓ desc        │"
+"├──────────────────────────┴───────────────────────────────────────────────────┤"
+"│ Where   = id > 100 ×    = id > 200 ×   +18 more            undo   clear all  │"
+"│ Order                                              Limit              SQL ▸  │"
+"│ Space operator · → value · x remove · Ctrl+Z undo  Enter apply   Esc cancel  │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"

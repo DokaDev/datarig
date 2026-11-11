@@ -549,3 +549,58 @@ fn a_value_added_to_a_list_keeps_its_null_and_its_values_with_commas() {
     h.key(KeyCode::Enter);
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name IN ('', ' a ', 'NULL', 'it''s', 'z'))")]]);
 }
+
+/// The row with the keys (`▸`) on screen `s`, when one is drawn right of the column list.
+fn focused_row(s: &str) -> Option<&str> {
+    s.lines().find(|l| l.split('\u{2502}').nth(2).is_some_and(|r| r.contains('\u{25b8}')))
+}
+
+#[test]
+fn many_conditions_scroll_to_the_one_with_the_keys() {
+    let mut h = users();
+    let terms: Vec<String> = (1..=20).map(|i| format!("id > {}", i * 100)).collect();
+    h.command(&format!("where {}", terms.join(" AND ")));
+    runs(&mut h);
+    answer(&mut h);
+    h.keys("f");
+    // The last condition: on screen, with the keys.
+    h.key(KeyCode::Right);
+    for _ in 0..19 {
+        h.key(KeyCode::Char('j'));
+    }
+    let s = h.screen(80, 24);
+    assert!(focused_row(&s).is_some_and(|l| l.contains("2000")), "{s}");
+    assert_screen!("filter_dialog_many_en_80x24", Lang::En, h.draw(80, 24));
+    assert_screen!("filter_dialog_many_en_120x34", Lang::En, h.draw(120, 34));
+    // Its operator picker opens where it is.
+    h.key(KeyCode::Char(' '));
+    let s = h.screen(80, 24);
+    assert!(s.contains("between"), "{s}");
+    h.key(KeyCode::Esc);
+    // `+ add condition` under it.
+    h.key(KeyCode::Char('j'));
+    let s = h.screen(80, 24);
+    assert!(focused_row(&s).is_some_and(|l| l.contains("+ add condition")), "{s}");
+    // With the SQL section open the pane is shorter: the line with the keys is still drawn.
+    h.key(KeyCode::Char('Q'));
+    assert!(h.app.filter_dialog_sql_fields().is_some());
+    for _ in 0..3 {
+        h.key(KeyCode::Tab);
+    }
+    assert_eq!(h.app.key_context(), Ctx::FilterDialog);
+    h.key(KeyCode::Right);
+    for _ in 0..5 {
+        h.key(KeyCode::Char('j'));
+    }
+    let s = h.screen(80, 24);
+    assert!(focused_row(&s).is_some_and(|l| l.contains("600")), "{s}");
+    h.key(KeyCode::Char(' '));
+    assert!(h.screen(80, 24).contains("between"), "{}", h.screen(80, 24));
+    h.key(KeyCode::Esc);
+    for _ in 0..15 {
+        h.key(KeyCode::Char('j'));
+    }
+    let s = h.screen(80, 24);
+    assert!(focused_row(&s).is_some_and(|l| l.contains("+ add condition")), "{s}");
+    assert_screen!("filter_dialog_many_sql_en_80x24", Lang::En, h.draw(80, 24));
+}

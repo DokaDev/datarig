@@ -276,6 +276,7 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
     let sort_y = sep_y - 1;
     let mut picker_at = None;
     let mut values_scroll = d.values_scroll;
+    let mut rows_scroll = d.rows_scroll;
     if let Some(c) = d.column() {
         let hx = px
             + put(
@@ -290,8 +291,19 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
         put(buf, px, pane_rows_y + 2, &i18n.label(Label::TableDialogFilter), usize::from(pw), bold);
         let mut y = pane_rows_y + 3;
         let terms = d.draft.where_.terms();
-        for t in d.rows() {
-            if y + 1 >= sort_y {
+        // The conditions and `+ add condition` scroll when they do not fit above the sort
+        // line, following the line with the keys.
+        let rows = d.rows();
+        let (room, lines) = (usize::from(sort_y.saturating_sub(y)), rows.len() + 1);
+        let top = rows_top(&rows, d.focus, d.rows_scroll, room);
+        rows_scroll = top;
+        if lines > room && room > 0 {
+            let cue = format!("{}-{}/{lines}", top + 1, (top + room).min(lines));
+            let w = width(&cue) as u16;
+            put(buf, right.saturating_sub(w), pane_rows_y + 2, &cue, usize::from(w), muted);
+        }
+        for &t in rows.iter().skip(top) {
+            if y >= sort_y {
                 break;
             }
             let term: &Term = &terms[t];
@@ -611,6 +623,10 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
     }
 
     // The operator picker, opaque, over the pane.
+    // An operator picker whose row has no room is drawn under the pane's heading.
+    let picker_at = picker_at.or_else(|| {
+        d.picker.and_then(|_| matches!(d.focus, DialogFocus::Op(_)).then_some((px + 2, (pane_rows_y + 3).min(sort_y))))
+    });
     if let (Some((bx, by)), Some(at), Some(ops)) = (picker_at, d.picker, ops) {
         let labels: Vec<(String, Option<&str>)> =
             ops.iter().map(|(op, _)| (op_label(app, *op), op.sql_hint(d.dialect))).collect();
@@ -674,6 +690,7 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
         d.hits = hits;
         d.scroll = scroll;
         d.values_scroll = values_scroll;
+        d.rows_scroll = rows_scroll;
         d.hover = lit.map(|(h, _)| h);
         d.press.drawn(top, now);
     }
@@ -694,6 +711,31 @@ type Preview = Result<(String, Option<Range<usize>>), ()>;
 /// The statement the draft sends with what the SQL section's fields hold now (a field typed in
 /// is taken as it would be read back; an order that does not read leaves the draft's keys), and
 /// the bytes of the key the app appends to make the order total (the primary key's columns).
+/// The first of the lines of the selected column's conditions (its rows `rows`, then
+/// `+ add condition`) drawn in `room` rows: from `top` (where they were drawn from), moved as
+/// little as it takes for the line with the keys (`focus`) to be drawn, and no further down
+/// than the last lines filling the room.
+pub(crate) fn rows_top(rows: &[usize], focus: DialogFocus, top: usize, room: usize) -> usize {
+    let lines = rows.len() + 1;
+    if lines <= room || room == 0 {
+        return 0;
+    }
+    let mut top = top.min(lines - room);
+    let at = match focus {
+        DialogFocus::Op(t) | DialogFocus::Value(t, _) => rows.iter().position(|&r| r == t),
+        DialogFocus::Add => Some(rows.len()),
+        _ => None,
+    };
+    if let Some(at) = at {
+        if at < top {
+            top = at;
+        } else if at >= top + room {
+            top = at + 1 - room;
+        }
+    }
+    top
+}
+
 fn sql_preview(d: &FilterDialog, target: &query::Target, base: &query::Query) -> Preview {
     let mut draft = d.draft.clone();
     if let Some(s) = &d.sql {
