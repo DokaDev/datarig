@@ -634,37 +634,13 @@ fn the_list_of_a_spilled_result_counts_the_rows_in_memory_and_never_reads_the_fi
 
 /// MySQL `INVISIBLE` columns (a number and a text), which `SELECT *` leaves out: no values are
 /// loaded for them, but the server counts them as their catalogue types say, and their counted
-/// values tick into conditions that are sent (a value of a column the rows held do not describe
-/// is written as a string, which the server converts).
+/// values tick into conditions that are sent, written as their catalogue types say.
 #[test]
 fn count_exactly_counts_a_mysql_invisible_column_by_its_catalogue_type() {
-    use datarig_core::driver::keys::{CatalogColumn, OrderKeys};
-    let mut h = mysql();
-    dialog_on(&mut h, 0);
-    let column = |name: &str, ty: &str, invisible: bool| CatalogColumn {
-        name: name.into(),
-        type_name: ty.into(),
-        not_null: name == "id",
-        primary_key: name == "id",
-        foreign_key: false,
-        invisible,
-    };
-    let keys = OrderKeys {
-        primary_key: vec!["id".into()],
-        columns: Some(vec![
-            column("id", "int", false),
-            column("at", "timestamp", false),
-            column("rank", "int unsigned", true),
-            column("note", "varchar(20)", true),
-        ]),
-        ..Default::default()
-    };
-    keys_came_with(&mut h, "local-my", keys);
+    let mut h = mysql_invisible();
     // The second counted under the condition the first ticked.
-    let cases = [
-        (2, "rank", "", "7", "`rank` = '7'"),
-        (3, "note", " WHERE (`rank` = '7')", "x", "`rank` = '7' AND note = 'x'"),
-    ];
+    let cases =
+        [(2, "rank", "", "7", "`rank` = 7"), (3, "note", " WHERE (`rank` = 7)", "x", "`rank` = 7 AND note = 'x'")];
     for (down, name, other, counted_value, sent_where) in cases {
         for _ in 0..down {
             h.key(KeyCode::Char('j'));
@@ -819,4 +795,69 @@ fn the_sample_is_said_at_80_columns_beside_the_lists_cue() {
     let heading = s.lines().find(|l| l.contains("Values")).unwrap_or_default().to_string();
     assert!(heading.contains("sample: 1,000/5,000"), "{s}");
     assert!(heading.contains(" of 30"), "{s}");
+}
+
+/// `shop.users` on MySQL with its catalogue read: `id`, `at`, and the INVISIBLE `rank`
+/// (`int unsigned`) and `note` (`varchar(20)`); the dialog open on `id`.
+fn mysql_invisible() -> Harness {
+    use datarig_core::driver::keys::{CatalogColumn, OrderKeys};
+    let mut h = mysql();
+    dialog_on(&mut h, 0);
+    let column = |name: &str, ty: &str, invisible: bool| CatalogColumn {
+        name: name.into(),
+        type_name: ty.into(),
+        not_null: name == "id",
+        primary_key: name == "id",
+        foreign_key: false,
+        invisible,
+    };
+    let keys = OrderKeys {
+        primary_key: vec!["id".into()],
+        columns: Some(vec![
+            column("id", "int", false),
+            column("at", "timestamp", false),
+            column("rank", "int unsigned", true),
+            column("note", "varchar(20)", true),
+        ]),
+        ..Default::default()
+    };
+    keys_came_with(&mut h, "local-my", keys);
+    h
+}
+
+/// A condition typed on an INVISIBLE column is written as its catalogue type says (a number
+/// bare, text quoted), and once applied it reads back as that column's condition, not as an
+/// expression.
+#[test]
+fn a_condition_typed_on_an_invisible_column_is_its_columns() {
+    let mut h = mysql_invisible();
+    for (down, value, term) in [(2, "7", "`rank` = 7"), (3, "abc", "note = 'abc'")] {
+        for _ in 0..down {
+            h.key(KeyCode::Char('j'));
+        }
+        h.key(KeyCode::Right);
+        h.key(KeyCode::Char(' '));
+        h.type_text(value);
+        assert_eq!(draft(&h), term);
+        h.key(KeyCode::Enter);
+        assert_eq!(runs(&mut h), vec![vec![format!("SELECT * FROM `shop`.`users` WHERE ({term})")]]);
+        my_page(&mut h, &["2026-11-10 09:30:00"]);
+        h.keys("f");
+        let screen = h.screen(120, 34);
+        assert!(!screen.contains("expr"), "a column's condition: {screen}");
+        // On the column again, its condition is on the column's line, its value in the field.
+        for _ in 0..down {
+            h.key(KeyCode::Char('j'));
+        }
+        let screen = h.screen(120, 34);
+        let row = screen.lines().find(|l| l.contains('\u{25be}')).unwrap_or_default();
+        assert!(row.contains(value), "{screen}");
+        // Taken out for the next one.
+        h.key(KeyCode::Right);
+        h.key(KeyCode::Char('x'));
+        h.key(KeyCode::Enter);
+        runs(&mut h);
+        my_page(&mut h, &["2026-11-10 09:30:00"]);
+        h.keys("f");
+    }
 }

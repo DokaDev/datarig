@@ -653,6 +653,25 @@ impl App {
                 .map(|r| r.columns.iter().map(|c| ColumnFacts::new(c.name.clone(), ColumnKind::Other)).collect())
                 .unwrap_or_default(),
         };
+        // The keys that make an order total: only the key-only read's, for the session as it
+        // is now (rows of tables that inherit from it are read too: its keys do not hold).
+        let on = self.keys_on(t);
+        let read = t.doc.table_query.as_ref().and_then(|q| match &q.order_keys {
+            OrderKeysState::Known { on: o, keys } if Some(o) == on.as_ref() => Some(keys),
+            _ => None,
+        });
+        // A column `SELECT *` leaves out (MySQL INVISIBLE) is no column of the rows held, but one
+        // of the table: of the kind its catalogue type says.
+        if held && let Some(cat) = read.and_then(|k| k.columns.as_ref()) {
+            for c in cat.iter().filter(|c| c.invisible) {
+                if columns.iter().any(|f| f.name == c.name) {
+                    continue;
+                }
+                let kind = super::filter_dialog::draft::catalogue_meta(d, &c.name, &c.type_name)
+                    .map_or(ColumnKind::Other, |m| column_kind(&m));
+                columns.push(ColumnFacts::new(c.name.clone(), kind));
+            }
+        }
         let s = self.table_structure(t);
         if columns.is_empty()
             && let Some(s) = s
@@ -668,13 +687,6 @@ impl App {
                 }
             }
         }
-        // The keys that make an order total: only the key-only read's, for the session as it
-        // is now (rows of tables that inherit from it are read too: its keys do not hold).
-        let on = self.keys_on(t);
-        let read = t.doc.table_query.as_ref().and_then(|q| match &q.order_keys {
-            OrderKeysState::Known { on: o, keys } if Some(o) == on.as_ref() => Some(keys),
-            _ => None,
-        });
         if let Some(k) = read {
             for c in target.columns.iter_mut().filter(|c| c.deterministic.is_none()) {
                 c.deterministic = k.deterministic.get(&c.name).copied();
