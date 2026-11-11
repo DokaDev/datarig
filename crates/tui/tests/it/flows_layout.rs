@@ -233,12 +233,13 @@ fn a_table_opens_in_a_tab_of_its_own() {
     }
 }
 
-/// A table tab's results pane shows its connection on its first line, as a query tab's editor
-/// does: the profile and `database.schema.table`, its environment's badge and read-only, no key
-/// to switch the connection (a table tab's cannot change). The strip and the grid are one line
-/// lower, and a click on a cell still selects that cell.
+/// A table tab's result strip names its connection on its right, as a query tab's editor
+/// does on its first line: the profile and `database.schema.table`, where it points, its
+/// environment's badge and read-only, no key to switch the connection (a table tab's cannot
+/// change). No line of its own: the strip is the pane's first line, the grid right under it,
+/// and a click on a cell still selects that cell.
 #[test]
-fn a_table_tab_shows_its_connection_line() {
+fn a_table_tabs_strip_names_its_connection() {
     use ratatui::crossterm::event::{MouseButton, MouseEventKind};
     let mut prod = datarig_core::policy::Environment::new(
         "prod",
@@ -254,10 +255,11 @@ fn a_table_tab_shows_its_connection_line() {
     let lines: Vec<&str> = screen.lines().collect();
     let r = h.app.layout.results;
     let line = lines[usize::from(r.y) + 1];
-    assert!(line.contains("local-pg / datarig.shop.users  127.0.0.1:55432"), "{line}");
+    assert!(line.contains("[Result 1]  Chart  Messages"), "{line}");
+    assert!(line.contains("local-pg / datarig.shop.users"), "{line}");
     assert!(!line.contains("switch connection") && !line.contains('?'), "{line}");
-    assert_eq!(h.app.layout.strip.y, r.y + 2, "the strip under it");
-    assert!(h.app.tab().grid.header_y > h.app.layout.strip.y, "the grid under the strip");
+    assert_eq!(h.app.layout.strip.y, r.y + 1, "the strip on the pane's first line");
+    assert_eq!(h.app.tab().grid.header_y, r.y + 2, "the grid right under the strip");
     // A click on a cell selects that cell.
     h.app.focus = Focus::Results;
     h.draw(160, 45);
@@ -271,13 +273,15 @@ fn a_table_tab_shows_its_connection_line() {
     h.app.profiles[0].policy = Some("prod".into());
     let screen = h.screen(160, 45);
     let line = screen.lines().nth(usize::from(h.app.layout.results.y) + 1).unwrap().to_string();
-    assert!(line.contains("local-pg / datarig.shop.users  127.0.0.1:55432  PROD   READ-ONLY "), "{line}");
+    assert!(line.contains("local-pg  PROD   READ-ONLY "), "{line}");
 }
 
-/// A narrow table tab's connection line drops the endpoint and the environment's name first,
-/// keeping the place and the read-only badge.
+/// A narrow table tab's strip names less of its connection, the result tabs keeping their
+/// room: the environment's name goes first, then the endpoint; then the table without its
+/// database, then the profile alone, each with the read-only badge; then the profile's name
+/// alone; then nothing.
 #[test]
-fn a_narrow_table_tabs_connection_line_keeps_the_place_and_read_only() {
+fn a_narrow_table_tabs_strip_names_less_of_its_connection() {
     let prod = datarig_core::policy::Environment::new(
         "prod",
         datarig_core::policy::Policy { read_only: true, ..datarig_core::policy::Policy::default() },
@@ -285,18 +289,34 @@ fn a_narrow_table_tabs_connection_line_keeps_the_place_and_read_only() {
     let mut h = Harness::connected(Lang::En);
     h.app.policies.environments_mut().push(prod);
     h.app.profiles[0].policy = Some("prod".into());
+    // A long name: at the narrowest the strip has no room for it.
+    h.app.profiles[0].name = "local-postgres-main-east-replica".into();
     open_users(&mut h);
-    let line = |h: &mut Harness, w: u16| {
+    // What the strip says right of its tabs at each width, from the widest down.
+    let mut seen: Vec<String> = Vec::new();
+    for w in (80..=170).rev() {
         let screen = h.screen(w, 30);
-        screen.lines().nth(usize::from(h.app.layout.results.y) + 1).unwrap().to_string()
-    };
-    let wide = line(&mut h, 120);
-    assert!(wide.contains("local-pg / datarig.shop.users  127.0.0.1:55432 · prod  READ-ONLY "), "{wide}");
-    let narrower = line(&mut h, 90);
-    assert!(narrower.contains("local-pg / datarig.shop.users  127.0.0.1:55432  READ-ONLY "), "{narrower}");
-    let narrow = line(&mut h, 84);
-    assert!(narrow.contains("local-pg / datarig.shop.users  READ-ONLY "), "{narrow}");
-    assert!(!narrow.contains("127.0.0.1") && !narrow.contains("prod"), "{narrow}");
+        let line = screen.lines().nth(usize::from(h.app.layout.strip.y)).unwrap().to_string();
+        // The last tab, whole or short.
+        let tabs = ["Messages", "Msgs"].iter().find_map(|t| line.find(t).map(|at| at + t.len()));
+        let tabs = tabs.unwrap_or_else(|| panic!("no strip at {w}: {line}"));
+        let right = line[tabs..].trim_end_matches([' ', '\u{2502}']).trim();
+        let right = right.trim_start_matches("H/L").trim().to_string();
+        if seen.last() != Some(&right) {
+            seen.push(right);
+        }
+    }
+    let name = "local-postgres-main-east-replica";
+    let forms = [
+        "/ datarig.shop.users  127.0.0.1:55432 \u{00b7} prod  READ-ONLY",
+        "/ datarig.shop.users  127.0.0.1:55432  READ-ONLY",
+        "/ datarig.shop.users  READ-ONLY",
+        "/ shop.users  READ-ONLY",
+        " READ-ONLY",
+    ];
+    let mut expected: Vec<String> = forms.iter().map(|f| format!("{name} {f}")).collect();
+    expected.extend([name.to_string(), String::new()]);
+    assert_eq!(seen, expected);
 }
 
 /// A table tab whose profile is gone draws no connection line: the strip is on the pane's first

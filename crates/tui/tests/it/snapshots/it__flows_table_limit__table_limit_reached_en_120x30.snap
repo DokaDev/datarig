@@ -5,12 +5,12 @@ expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users ×                                                            "
 "│  ＋ New connection         │╭ Results · 2 rows ────── ‹ (page 1 / 1 · limit 2) › ╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1             ││ local-pg / datarig.shop.users  127.0.0.1:55432     ││ id: 0                            │"
-"│  ▾ ●   local-pg            ││ [Result 1]  Chart  Messages                    H/L ││ name: n0                         │"
-"│    ▾ datarig default       ││   │ id ^v│ name                                    ││                                  │"
-"│      ▸ analytics           ││   │ int8 │ text                                    ││                                  │"
-"│      ▸ public              ││ 1 │    0 │ n0                                      ││                                  │"
-"│      ▾ shop                ││ 2 │    1 │ n1                                      ││                                  │"
+"│▾ Connections 1             ││ [Result 1]  Chart  Messages  local-pg / shop.users ││ id: 0                            │"
+"│  ▾ ●   local-pg            ││   │ id ^v│ name                                    ││ name: n0                         │"
+"│    ▾ datarig default       ││   │ int8 │ text                                    ││                                  │"
+"│      ▸ analytics           ││ 1 │    0 │ n0                                      ││                                  │"
+"│      ▸ public              ││ 2 │    1 │ n1                                      ││                                  │"
+"│      ▾ shop                ││                                                    ││                                  │"
 "│        ▾ Tables            ││                                                    ││                                  │"
 "│          ▸ users           ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"

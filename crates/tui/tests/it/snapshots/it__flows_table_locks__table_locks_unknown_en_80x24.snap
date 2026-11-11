@@ -5,11 +5,11 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
 "│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1       ││ local-my / shop.users        ││ id: 0                │"
-"│  ▾ ●   local-my      ││ [Result 1]  Chart  Messages  ││                      │"
-"│    ▾ shop            ││   │ id ^v                    ││                      │"
-"│      ▾ Tables        ││   │ int8                     ││                      │"
-"│        ▸ users       ││ 1 │    0                     ││                      │"
+"│▾ Connections 1       ││ [Result 1]  Chart  Messages  ││ id: 0                │"
+"│  ▾ ●   local-my      ││   │ id ^v                    ││                      │"
+"│    ▾ shop            ││   │ int8                     ││                      │"
+"│      ▾ Tables        ││ 1 │    0                     ││                      │"
+"│        ▸ users       ││ 2 │    1                     ││                      │"
 "│         ╭ Run a read that may lock rows? ──────────────────────────╮         │"
 "│         │                                                          │         │"
 "│         │ In this session reads may lock rows (no autocommit,      │         │"

@@ -5,9 +5,9 @@ expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 shop.users ×                                                                           "
 "│  ＋ New connection         │╭ Results ───────────────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1             ││ local-pg / datarig.shop.users  127.0.0.1:55432                                         │"
-"│  ▸ ○   local-pg            ││ [Result]  Chart  Messages                                                          H/L │"
-"│                            ││ Not loaded yet: Ctrl+E loads it                                                        │"
+"│▾ Connections 1             ││ [Result]  Chart  Messages          H/L  local-pg / datarig.shop.users  127.0.0.1:55432 │"
+"│  ▸ ○   local-pg            ││ Not loaded yet: Ctrl+E loads it                                                        │"
+"│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
