@@ -455,7 +455,8 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Nav, "space r p", "results.page.prev"),
     (Nav, "space r #", "results.count"),
     (Nav, "space r e", "results.export"),
-    // a table tab's filter line (elsewhere each key says it is only on table tabs)
+    // a table tab's filter and sort dialog and sort (elsewhere each key says it is only on table
+    // tabs)
     (Grid, "f", "table.filter.edit"),
     (Nav, "space r f", "table.filter.edit"),
     (Nav, "space r o", "table.order.edit"),
@@ -630,9 +631,19 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Ddl, "r", "ddl.reload"),
     (Ddl, "o", "ddl.open_console"),
     (VimInsert, "f4", "editor.complete"),
-    // the filter line of a table tab
-    (FilterLine, "ctrl+space", "editor.complete"),
-    (FilterLine, "ctrl+r", "table.filter.history"),
+    // the filter and sort dialog of a table tab: outside its text fields also `u` undoes, `X`
+    // clears, `Q` shows the statement
+    (FilterDialog, "enter", "filter.apply"),
+    (FilterDialog, "esc", "filter.cancel"),
+    (FilterDialog, "ctrl+z", "filter.undo"),
+    (FilterDialog, "u", "filter.undo"),
+    (FilterDialog, "X", "filter.clear_all"),
+    (FilterDialog, "Q", "filter.sql"),
+    (FilterDialog, "ctrl+r", "table.filter.history"),
+    (FilterDialogText, "enter", "filter.apply"),
+    (FilterDialogText, "esc", "filter.cancel"),
+    (FilterDialogText, "ctrl+z", "filter.undo"),
+    (FilterDialogText, "ctrl+r", "table.filter.history"),
 ];
 
 /// Every vim command key, including those the editor does not implement yet.
@@ -709,8 +720,6 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (GridSearch, &["esc", "enter", "ctrl+w"], "grid search"),
     (MonitorFilter, TEXT, "text input"),
     (GridSearch, TEXT, "text input"),
-    (FilterLine, &["esc", "enter", "tab", "shift+tab", "ctrl+w", "ctrl+l"], "filter line"),
-    (FilterLine, TEXT, "text input"),
     (CellEdit, &["esc", "enter", "ctrl+n", "ctrl+d", "ctrl+l"], "cell editor"),
     (CellEdit, TEXT, "text input"),
     (CellEditor, CELL_EDITOR, "cell editor of several lines"),
@@ -733,6 +742,36 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (Export, &["tab", "shift+tab", "down", "up", "enter", "esc"], "export dialog"),
     // On a value `←`/`→` step through what it can be.
     (Export, TEXT, "text input"),
+    // The parts of the filter dialog, its lists and its sort line.
+    (
+        FilterDialog,
+        &[
+            "tab",
+            "shift+tab",
+            "up",
+            "down",
+            "left",
+            "right",
+            "home",
+            "end",
+            "j",
+            "k",
+            "h",
+            "l",
+            "g",
+            "G",
+            "s",
+            "/",
+            "space",
+            "x",
+            "delete",
+            "<",
+            ">",
+        ],
+        "filter dialog",
+    ),
+    (FilterDialogText, &["tab", "shift+tab", "up", "down", "ctrl+w"], "filter dialog"),
+    (FilterDialogText, TEXT, "text input"),
     (Chooser, &["j", "k", "down", "up", "enter", "/", "esc", "q"], "chooser"),
     (ChooserFilter, &["esc", "enter", "down", "up"], "chooser filter"),
     (ChooserFilter, TEXT, "text input"),

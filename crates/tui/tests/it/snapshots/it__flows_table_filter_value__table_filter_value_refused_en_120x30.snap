@@ -1,18 +1,18 @@
 ---
 source: crates/tui/tests/it/flows_table_filter_value.rs
+assertion_line: 703
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users ×                                                            "
 "│  ＋ New connection         │╭ Results · 3 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1             ││ local-pg / datarig.shop.users  127.0.0.1:55432     ││ id: 1                            │"
 "│  ▾ ●   local-pg            ││ [Result 1]  Chart  Messages                    H/L ││ name: it's                       │"
-"│    ▾ datarig default       ││ WHERE  f filter · s sort · Ctrl+R history        ⟳ ││ score: 1.5                       │"
-"│      ▸ analytics           ││   core   │ data   │ doc    ^v│ born                ││ data: \x01ab                     │"
-"│      ▸ public              ││   loat8  │ bytea  │ json     │ timestamptz         ││ doc: {"a": 1}                    │"
-"│      ▾ shop                ││ 1    1.5 │ \x01ab │ {"a": 1} │ 2026-11-10 09:30:00+││ born: 2026-11-10 09:30:00+09     │"
-"│        ▾ Tables            ││ 2 ULL    │ NULL   │ NULL     │ NUL╭────────────────────────────────────────────────────╮"
-"│          ▸ users           ││ 3    2.5 │ \x00   │ []       │ 202│ › type to filter                                   │"
-"│                            ││                                   │ Filter by doc                                      │"
+"│    ▾ datarig default       ││   core   │ data   │ doc    ^v│ born                ││ score: 1.5                       │"
+"│      ▸ analytics           ││   loat8  │ bytea  │ json     │ timestamptz         ││ data: \x01ab                     │"
+"│      ▸ public              ││ 1    1.5 │ \x01ab │ {"a": 1} │ 2026-11-10 09:30:00+││ doc: {"a": 1}                    │"
+"│      ▾ shop                ││ 2 ULL    │ NULL   │ NULL     │ NUL╭────────────────────────────────────────────────────╮"
+"│        ▾ Tables            ││ 3    2.5 │ \x00   │ []       │ 202│ › type to filter                                   │"
+"│          ▸ users           ││                                   │ Filter by doc                                      │"
 "│                            ││                                   │  = '{"a": 1}'                    type not compared │"
 "│                            ││                                   │  <> '{"a": 1}'                   type not compared │"
 "│                            ││                                   │  <> '{"a": 1}' (NULLs included)  type not compared │"
@@ -21,6 +21,7 @@ expression: backend
 "│                            ││                                   │  <= '{"a": 1}'                   type not compared │"
 "│                            ││                                   │  >= '{"a": 1}'                   type not compared │"
 "│                            ││                                   ╰────────────────────────────────────────────────────╯"
+"│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"

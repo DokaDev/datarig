@@ -284,36 +284,6 @@ fn a_clear_on_a_busy_tab_changes_nothing() {
     assert_shown(&h, draft());
 }
 
-/// `Enter` in the filter line of a busy tab is refused before anything changes: the field
-/// keeps the keys and its text, and the query the next run sends is the one it had (the
-/// refused text never becomes the grid's next run).
-#[test]
-fn an_apply_from_the_line_on_a_busy_tab_changes_nothing() {
-    use datarig_tui::app::table_query::Field;
-    let mut h = users(Lang::En);
-    h.command("where id > 1");
-    assert_eq!(runs(&mut h).len(), 1);
-    let draft = || users_query(Some("id > 1"), Vec::new());
-    // The run waits for its rows: the tab is busy.
-    h.app.focus = datarig_tui::app::Focus::Results;
-    h.keys("f");
-    h.ctrl('l');
-    h.type_text("id > 5");
-    h.key(KeyCode::Enter);
-    assert!(runs(&mut h).is_empty(), "nothing is sent");
-    assert!(h.screen(120, 34).contains("already running"), "{}", h.screen(120, 34));
-    let tq = h.app.tab().doc.table_query.as_ref().unwrap();
-    assert!(same_query(&tq.draft, &draft()), "the draft is as it was: {:?}", tq.draft);
-    assert_eq!(tq.line.focus, Some(Field::Where), "the field keeps the keys");
-    assert_eq!(tq.line.where_.text(), "id > 5", "and its text");
-    answer(&mut h);
-    assert_shown(&h, draft());
-    // The run key runs what was applied, not the refused text.
-    h.key(KeyCode::Esc);
-    h.ctrl('e');
-    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 1)")]]);
-}
-
 #[test]
 fn pending_edits_are_asked_about_before_a_filter_runs() {
     let mut h = users(Lang::En);
@@ -653,9 +623,9 @@ fn a_refused_export_keeps_the_held_portal() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `Esc` in the line puts back the query the next run sends, not only the texts: after a
-/// refused apply, and after an apply whose pending-edits question was declined, the run key
-/// runs what is applied.
+/// `Esc` in the filter dialog puts back the query the next run sends: after a refused apply,
+/// and after an apply whose pending-edits question was declined, the run key runs what is
+/// applied.
 #[test]
 fn esc_puts_back_the_query_the_next_run_sends() {
     let mut h = users(Lang::En);
@@ -664,8 +634,11 @@ fn esc_puts_back_the_query_the_next_run_sends() {
     h.sent();
     h.app.focus = datarig_tui::app::Focus::Results;
     h.keys("f");
-    h.ctrl('l');
-    h.type_text("id = 1;");
+    // The limit refused.
+    while h.app.key_context() != datarig_tui::keymap::Ctx::FilterDialogText {
+        h.key(KeyCode::Tab);
+    }
+    h.type_text("lots");
     h.key(KeyCode::Enter);
     assert!(runs(&mut h).is_empty(), "refused");
     h.key(KeyCode::Esc);
@@ -678,13 +651,14 @@ fn esc_puts_back_the_query_the_next_run_sends() {
     }
     h.app.focus = datarig_tui::app::Focus::Results;
     h.keys("f");
-    h.ctrl('l');
-    h.type_text("id > 5");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Char('x'));
     h.key(KeyCode::Enter);
     assert!(h.app.overlays.is_open(OverlayKind::Confirm));
     h.key(KeyCode::Enter);
     assert!(runs(&mut h).is_empty());
-    h.keys("f");
+    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog), "the dialog stays under the question");
     h.key(KeyCode::Esc);
     h.ctrl('e');
     assert!(h.app.overlays.is_open(OverlayKind::Confirm));

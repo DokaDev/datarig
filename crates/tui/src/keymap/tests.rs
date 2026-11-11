@@ -93,8 +93,11 @@ fn contexts_form_the_planned_tree() {
     // grid (whose `n` and `Esc` it may hide).
     assert_eq!(Ctx::GridSearch.chain(), [Ctx::GridSearch, Ctx::Workspace, Ctx::Root]);
     assert!(Ctx::GridSearch.is_text_input() && !Ctx::GridSearch.is_editor());
-    assert_eq!(Ctx::FilterLine.chain(), [Ctx::FilterLine, Ctx::Workspace, Ctx::Root]);
-    assert!(Ctx::FilterLine.is_text_input() && Ctx::FilterLine.is_prompt() && !Ctx::FilterLine.is_editor());
+    // The filter dialog: a dialog under `root`, its text fields a context of their own.
+    assert_eq!(Ctx::FilterDialog.chain(), [Ctx::FilterDialog, Ctx::Root]);
+    assert_eq!(Ctx::FilterDialogText.chain(), [Ctx::FilterDialogText, Ctx::Root]);
+    assert!(!Ctx::FilterDialog.is_text_input() && Ctx::FilterDialogText.is_text_input());
+    assert!(!Ctx::FilterDialogText.is_prompt() && !Ctx::FilterDialogText.is_editor());
     assert_eq!(Ctx::GridMatches.chain(), [Ctx::GridMatches, Ctx::Grid, Ctx::Nav, Ctx::Workspace, Ctx::Root]);
     assert!(Ctx::GridMatches.is_mode() && !Ctx::GridMatches.is_text_input() && !Ctx::Grid.is_mode());
     // The cell editor: text input over the grid, beside the editor.
@@ -217,13 +220,24 @@ fn conflict_check_catches_all_seven_kinds() {
     // The grid's search prompt keeps its `Ctrl+W` over the workspace's tab close.
     assert!(kinds(&with(vec![])).is_empty());
     assert_eq!(Keymap::default().resolve_seq(Ctx::GridSearch, &k("ctrl+w")).0, Some(Target::Reserved("grid search")));
-    // The filter line's editing keys are its own; the run key stays the app's (it applies there).
+    // The filter dialog's keys: `Enter`, `Esc`, undo and the history are actions in its text
+    // fields too; `u`, `X`, `Q` only outside them (typed in a field); its moves are its own.
     let km = Keymap::default();
-    for key in ["ctrl+w", "shift+tab", "tab", "ctrl+l", "esc", "enter"] {
-        assert_eq!(km.resolve_seq(Ctx::FilterLine, &k(key)).0, Some(Target::Reserved("filter line")), "{key}");
+    let act = |id: &str| Some(Target::Action(action::by_id(id).unwrap().action));
+    for ctx in [Ctx::FilterDialog, Ctx::FilterDialogText] {
+        assert_eq!(km.resolve_seq(ctx, &k("enter")).0, act("filter.apply"));
+        assert_eq!(km.resolve_seq(ctx, &k("esc")).0, act("filter.cancel"));
+        assert_eq!(km.resolve_seq(ctx, &k("ctrl+z")).0, act("filter.undo"));
+        assert_eq!(km.resolve_seq(ctx, &k("ctrl+r")).0, act("table.filter.history"));
+        assert_eq!(km.resolve_seq(ctx, &k("tab")).0, Some(Target::Reserved("filter dialog")));
     }
-    let run = action::by_id("query.execute_current").unwrap().action;
-    assert_eq!(km.resolve_seq(Ctx::FilterLine, &k("ctrl+e")).0, Some(Target::Action(run)));
+    assert_eq!(km.resolve_seq(Ctx::FilterDialog, &k("u")).0, act("filter.undo"));
+    assert_eq!(km.resolve_seq(Ctx::FilterDialog, &k("X")).0, act("filter.clear_all"));
+    assert_eq!(km.resolve_seq(Ctx::FilterDialog, &k("Q")).0, act("filter.sql"));
+    assert_eq!(km.resolve_seq(Ctx::FilterDialog, &k("space")).0, Some(Target::Reserved("filter dialog")));
+    assert_eq!(km.resolve_seq(Ctx::FilterDialogText, &k("u")).0, None);
+    // The run key is not the dialog's: it does not apply a draft behind the user's back.
+    assert_eq!(km.resolve_seq(Ctx::FilterDialog, &k("ctrl+e")).0, None);
     // The message names the context, the keys and both sides.
     let msg = check(&dup)[0].to_string();
     assert!(msg.contains("explorer") && msg.contains("x = explorer.refresh"), "{msg}");
@@ -670,10 +684,11 @@ fn a_sequence_cut_by_a_binding_of_its_first_key_is_not_named() {
     assert_eq!(name(Ctx::Grid).as_deref(), Some("Space ?"));
 }
 
-/// The filter line's description names all three fields it applies, the limit too.
+/// The filter dialog's description names its parts and what `Enter` and `Esc` do.
 #[test]
-fn the_filter_lines_description_names_the_limit() {
-    let text = Ctx::FilterLine.describe();
-    assert!(text.contains("the condition, the order and the limit"), "{text}");
-    assert!(!text.contains("both fields"), "{text}");
+fn the_filter_dialogs_description_names_its_parts() {
+    let text = Ctx::FilterDialog.describe();
+    for part in ["`Where` chips", "`Order` keys", "`Limit` field", "`Enter` applies", "`Esc` closes without applying"] {
+        assert!(text.contains(part), "{part}: {text}");
+    }
 }

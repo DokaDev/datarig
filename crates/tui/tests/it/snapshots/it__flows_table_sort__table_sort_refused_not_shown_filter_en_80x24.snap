@@ -1,17 +1,18 @@
 ---
 source: crates/tui/tests/it/flows_table_sort.rs
+assertion_line: 492
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
 "│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1       ││ local-pg / datarig.shop.users││ id: 0                │"
 "│  ▾ ●   local-pg      ││ [Result 1]  Chart  Messages  ││ name: n0             │"
-"│    ▾ datarig default ││✗WHERE idd > 1   ORDER BY   ⟳ ││ email: u0@x          │"
-"│      ▸ analytics     ││   │ id ^v│ name   │ email    ││                      │"
-"│      ▸ public        ││   │ int8 │ text   │ text     ││                      │"
-"│      ▾ shop          ││ 1 │    0 │ n0     │ u0@x     ││                      │"
-"│        ▾ Tables      ││ 2 │    1 │ n1     │ u1@x     ││                      │"
-"│          ▸ users     ││ 3 │    2 │ n2     │ u2@x     ││                      │"
+"│    ▾ datarig default ││   │ id ^v│ name   │ email    ││ email: u0@x          │"
+"│      ▸ analytics     ││   │ int8 │ text   │ text     ││                      │"
+"│      ▸ public        ││ 1 │    0 │ n0     │ u0@x     ││                      │"
+"│      ▾ shop          ││ 2 │    1 │ n1     │ u1@x     ││                      │"
+"│        ▾ Tables      ││ 3 │    2 │ n2     │ u2@x     ││                      │"
+"│          ▸ users     ││                              ││                      │"
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"

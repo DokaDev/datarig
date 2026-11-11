@@ -379,7 +379,6 @@ impl App {
         let editing = !self.modal_open()
             && match w.owner {
                 PopupOwner::Editor => self.focus == Focus::Editor && self.tab().editor.mode == Mode::Insert,
-                PopupOwner::Filter(f) => self.filter_line_focused() && self.filter_line_field() == Some(f),
             };
         if w.profile != profile || w.database.as_deref() != database || w.schema != schema || w.table != table {
             return;
@@ -392,12 +391,6 @@ impl App {
         if current && editing {
             match w.owner {
                 PopupOwner::Editor => self.complete_here(false, Some(w.literal)),
-                PopupOwner::Filter(f) => {
-                    self.filter_complete(false, Some(w.literal));
-                    if let Some(p) = self.tab_mut().popup.as_mut().filter(|p| p.owner == PopupOwner::Filter(f)) {
-                        p.touched |= w.asked;
-                    }
-                }
             }
         }
     }

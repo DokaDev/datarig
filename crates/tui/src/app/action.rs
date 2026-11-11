@@ -201,9 +201,10 @@ pub enum Action {
     Monitor(MonitorAction),
     /// Export the shown result to a file: the export dialog.
     Export,
-    /// A table tab's filter line: edit the condition or the order, clear them, open the
-    /// statement.
-    Table(super::filter_line::TableAction),
+    /// A table tab's query: its filter and sort dialog, clear it, open the statement, sort.
+    Table(super::table_filter::TableAction),
+    /// The filter and sort dialog's keys.
+    FilterDialog(super::filter_dialog::DialogAction),
     /// Change the shown result's cells.
     Edit(super::edit::EditAction),
     /// The Changes tab of the results pane.
@@ -473,6 +474,11 @@ fn key_file_field(a: &App) -> bool {
     })
 }
 
+/// The filter dialog has the keyboard.
+fn filter_dialog(a: &App) -> bool {
+    a.overlays.top().is_some_and(|o| o.kind() == super::overlay::OverlayKind::FilterDialog)
+}
+
 /// The export dialog has the keyboard.
 fn export_dialog(a: &App) -> bool {
     a.overlays.top().is_some_and(|o| o.kind() == super::overlay::OverlayKind::Export)
@@ -528,7 +534,7 @@ fn has_rows(a: &App) -> bool {
         && matches!(&a.tab().results, super::Results::Rows(rs) if !rs.rows.is_empty())
 }
 
-/// The active tab is a table tab: its filter line filters and orders its rows.
+/// The active tab is a table tab: its filter and sort dialog filters and orders its rows.
 fn table_tab(a: &App) -> bool {
     has_tab(a) && a.tab().is_table()
 }
@@ -642,8 +648,9 @@ const fn mv(action: Action, id: &'static str, label: Label, when: fn(&App) -> bo
 
 use super::edit::ChangesAction as K;
 use super::edit::EditAction as D;
-use super::filter_line::TableAction as T;
+use super::filter_dialog::DialogAction as FD;
 use super::grid_search::SearchAction as S;
+use super::table_filter::TableAction as T;
 use ChartAction as C;
 use ExplorerAction as E;
 use GridAction as G;
@@ -1032,6 +1039,11 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Table(T::SortAdd), "table.sort.add", Label::ActionTableSortAdd, table_tab),
     act(Action::Table(T::FilterByValue), "table.filter.by_value", Label::ActionTableFilterByValue, table_tab),
     act(Action::Table(T::History), "table.filter.history", Label::ActionTableFilterHistory, table_tab),
+    act(Action::FilterDialog(FD::Apply), "filter.apply", Label::ActionFilterApply, filter_dialog),
+    act(Action::FilterDialog(FD::Cancel), "filter.cancel", Label::ActionFilterCancel, filter_dialog),
+    act(Action::FilterDialog(FD::Undo), "filter.undo", Label::ActionFilterUndo, filter_dialog),
+    act(Action::FilterDialog(FD::ClearAll), "filter.clear_all", Label::ActionFilterClearAll, filter_dialog),
+    act(Action::FilterDialog(FD::Sql), "filter.sql", Label::ActionFilterSql, filter_dialog),
     act(Action::ExplainAsPlan, "results.view_as_plan", Label::ActionResultsViewAsPlan, text_plan_shown),
     mv(Action::Plan(P::Down), "plan.down", Label::ActionPlanDown, plan_focused),
     mv(Action::Plan(P::Up), "plan.up", Label::ActionPlanUp, plan_focused),

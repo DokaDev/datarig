@@ -1,23 +1,24 @@
 ---
 source: crates/tui/tests/it/flows_table_filter_value.rs
+assertion_line: 702
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
 "│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1       ││ local-pg / datarig.shop.users││ id: 3                │"
 "│  ▾ ●   local-pg      ││ [Result 1]  Chart  Messages  ││ name: 50%_off        │"
-"│    ▾ datarig default ││ WHERE  f filter · s sort   ⟳ ││ score: 2.5           │"
-"│      ▸ analytics     ││   │ id   │ name  ^v│ score   ││ data: \x00           │"
-"│      ▸ public        ││   │ int8 │ text    │ float8  ││ doc: []              │"
-"│      ▾ shop          ││ 1 │    1 │ it's    │     1.5 ││ born: 2026-11-11 00:…│"
-"│        ▾ Tables      ││ 2 │    2 │ NULL    │ NULL    ││ spot: (0,0)          │"
-"│          ▸ users     ││ 3 │    3 │ 50%_off │     2.5 ││                      │"
-"│                      ││                ╭─────────────────────────────────────╮"
+"│    ▾ datarig default ││   │ id   │ name  ^v│ score   ││ score: 2.5           │"
+"│      ▸ analytics     ││   │ int8 │ text    │ float8  ││ data: \x00           │"
+"│      ▸ public        ││ 1 │    1 │ it's    │     1.5 ││ doc: []              │"
+"│      ▾ shop          ││ 2 │    2 │ NULL    │ NULL    ││ born: 2026-11-11 00:…│"
+"│        ▾ Tables      ││ 3 │    3 │ 50%_off │     2.5 ││ spot: (0,0)          │"
+"│          ▸ users     ││                ╭─────────────────────────────────────╮"
 "│                      ││                │ › type to filter                    │"
 "│                      ││                │ Filter by name (3 cells)            │"
 "│                      ││                │  IN ('it's', '50%_off', NULL)       │"
 "│                      ││                │  NOT IN ('it's', '50%_off', NULL)   │"
 "│                      ││                ╰─────────────────────────────────────╯"
+"│                      ││                              ││                      │"
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"

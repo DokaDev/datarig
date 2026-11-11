@@ -1,14 +1,15 @@
 ---
 source: crates/tui/tests/it/flows_table_locks.rs
+assertion_line: 282
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
 "│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1       ││ local-my / shop.users        ││ id: 0                │"
 "│  ▾ ●   local-my      ││ [Result 1]  Chart  Messages  ││                      │"
-"│    ▾ shop            ││ WHERE  f filter · s sort   ⟳ ││                      │"
-"│      ▾ Tables        ││   │ id ^v                    ││                      │"
-"│        ▸ users       ││   │ int8                     ││                      │"
+"│    ▾ shop            ││   │ id ^v                    ││                      │"
+"│      ▾ Tables        ││   │ int8                     ││                      │"
+"│        ▸ users       ││ 1 │    0                     ││                      │"
 "│         ╭ Run a read that may lock rows? ──────────────────────────╮         │"
 "│         │                                                          │         │"
 "│         │ In this session reads may lock rows (no autocommit,      │         │"

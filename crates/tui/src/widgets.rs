@@ -5,7 +5,7 @@
 
 pub mod chart;
 pub mod editor;
-pub mod filter_line;
+pub(crate) mod filter_dialog;
 pub mod grid;
 pub mod list_picker;
 pub mod plan;

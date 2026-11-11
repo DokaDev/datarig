@@ -70,7 +70,8 @@ impl App {
             OverlayKind::Settings => self.settings_mouse(m),
             OverlayKind::Export => self.export_form_mouse(m),
             OverlayKind::Commands => self.command_mouse(m),
-            OverlayKind::CellViewer | OverlayKind::WhichKey | OverlayKind::Busy => {}
+            // The filter dialog keeps where its parts were drawn; the pointer does not act there yet.
+            OverlayKind::CellViewer | OverlayKind::WhichKey | OverlayKind::Busy | OverlayKind::FilterDialog => {}
         }
     }
 

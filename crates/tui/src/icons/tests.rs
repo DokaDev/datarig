@@ -123,11 +123,9 @@ fn the_ddl_tab_icon_is_pinned() {
 #[test]
 fn the_filter_and_refresh_marks_are_pinned_and_have_a_text_form_without_icons() {
     // Nerd Fonts 3.4.0 glyphnames.json: "fa-filter" f0b0 (a table tab's name while its rows are
-    // filtered), "fa-refresh" f021 (the filter line's run-again mark).
+    // filtered), "fa-refresh" f021.
     assert_eq!((filter(true), filter(false)), ("\u{f0b0}", "*"));
     assert_eq!(REFRESH, "\u{f021}");
-    assert_eq!(crate::widgets::filter_line::refresh_mark(false), "\u{27f3}");
-    assert_eq!(width(crate::widgets::filter_line::refresh_mark(false)), 1);
 }
 
 #[test]

@@ -53,7 +53,6 @@
 "keyctx.grid" = "Results"
 "keyctx.grid.matches" = "Results (search on)"
 "keyctx.grid.search" = "Results (search)"
-"keyctx.grid.filter" = "Results (filter line)"
 "keyctx.editor.vim.normal" = "Editor (vim Normal)"
 "keyctx.editor.vim.visual" = "Editor (vim Visual)"
 "keyctx.editor.vim.insert" = "Editor (vim Insert)"
@@ -161,6 +160,8 @@
 "menu.delete_environment" = "Delete environment"
 "menu.add_environment_presets" = "Add the preset environments"
 "keyctx.overlay.export" = "Export dialog"
+"keyctx.overlay.filter" = "Filter and sort dialog"
+"keyctx.overlay.filter.field" = "Filter and sort dialog (text field)"
 
 "group.tx" = "Transaction"
 "keyctx.overlay.tx_summary" = "Transaction summary"

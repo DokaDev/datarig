@@ -1,18 +1,18 @@
 ---
 source: crates/tui/tests/it/flows_table_estimate.rs
+assertion_line: 190
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users * ×                                                          "
 "│  ＋ New connection         │╭ Results ·… ─ (1/~12 (planner) · next page re-runs) ╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1             ││ local-pg / datarig.shop.users  127.0.0.1:55432     ││ id: 0                            │"
 "│  ▾ ●   local-pg            ││ [Result 1]  Chart  Messages                    H/L ││                                  │"
-"│    ▾ datarig default       ││ WHERE id > 5                 ORDER BY   LIMIT -  ⟳ ││                                  │"
-"│      ▸ analytics           ││    │ id = ^v                                       ││                                  │"
-"│      ▸ public              ││    │ int8                                          ││                                  │"
-"│      ▾ shop                ││  1 │      0                                        ││                                  │"
-"│        ▾ Tables            ││  2 │      1                                        ││                                  │"
-"│          ▸ users           ││  3 │      2                                        ││                                  │"
-"│                            ││  4 │      3                                        ││                                  │"
+"│    ▾ datarig default       ││    │ id = ^v                                       ││                                  │"
+"│      ▸ analytics           ││    │ int8                                          ││                                  │"
+"│      ▸ public              ││  1 │      0                                        ││                                  │"
+"│      ▾ shop                ││  2 │      1                                        ││                                  │"
+"│        ▾ Tables            ││  3 │      2                                        ││                                  │"
+"│          ▸ users           ││  4 │      3                                        ││                                  │"
 "│                            ││  5 │      4                                        ││                                  │"
 "│                            ││  6 │      5                                        ││                                  │"
 "│                            ││  7 │      6                                        ││                                  │"
@@ -29,6 +29,7 @@ expression: backend
 "│                            ││ 18 │     17                                        ││                                  │"
 "│                            ││ 19 │     18                                        ││                                  │"
 "│                            ││ 20 │     19                                        ││                                  │"
+"│                            ││ 21 │     20                                        ││                                  │"
 "│                            ││ Showing 500 rows · nothing is held open on the ser…││                                  │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯"
 " local-pg │ Planner estimate: about 5,900 rows (not a count)     │ Enter view cell · n next page · y copy · v select EN "

@@ -101,11 +101,13 @@ impl Statement {
 
 /// The run of the query a tab sent ended without its first page: the rows shown are those of
 /// an earlier query. `at`: where in the filter's text the server said the error is (bytes),
-/// when it pointed into it; `how`: why the run brought no rows.
+/// when it pointed into it; `how`: why the run brought no rows; `message`: the server's words.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failure {
     pub at: Option<Range<usize>>,
     pub how: Unapplied,
+    /// What the server said, when it refused the statement.
+    pub message: Option<String>,
 }
 
 /// Why the run of a table tab's query brought no rows.
@@ -145,20 +147,13 @@ pub enum OrderKeysState {
     Asked { request: u64, on: KeysOn },
     /// Read.
     Known { on: KeysOn, keys: datarig_core::driver::keys::OrderKeys },
-    /// The read failed: not known (an order is not taken for total), asked again with the next
-    /// run.
-    Failed { on: KeysOn },
+    /// The read failed (`reason`, as said): not known (an order is not taken for total), asked
+    /// again with the next run.
+    Failed { on: KeysOn, reason: String },
 }
 
-/// Why a grid action (a sort, a filter by value) is not to run: it would run a query other than
-/// the one the filter line shows ([`App::line_ahead`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum LineAhead {
-    /// A field holds changes not applied.
-    Edited,
-    /// The rows shown are not those of the line's query.
-    NotShown,
-}
+/// The most bytes a text field of a table's query holds (a paste is cut there, and said).
+pub const FIELD_CAP: usize = 16 * 1024;
 
 /// The query state of a table tab.
 #[derive(Clone, Debug)]
@@ -179,7 +174,7 @@ pub struct TableQuery {
     /// The statement of the run in flight when it is the query's ([`TableQuery::requested`]),
     /// by its query id: where a server's error points is read in it.
     statement: Option<(u64, Statement)>,
-    /// The run of the query that failed on the server, by its query id: what the line marks.
+    /// The run of the query that failed on the server, by its query id: what the dialog says.
     failed: Option<(u64, Failure)>,
     /// The run whose first page landed last, by its query id: it brought its query's rows.
     landed: Option<u64>,
@@ -204,12 +199,13 @@ pub struct TableQuery {
     /// the tab binding it waits in: work in progress of the tab until it runs, is cancelled or
     /// its wait ends ([`App::table_keys_waiting`]).
     keys_wait: Option<(Query, u64)>,
-    /// The filter line's fields: what the user types, and which field has the focus.
-    pub line: crate::widgets::filter_line::LineState,
+    /// The query the tab held as applied before its last applied change (a run of another
+    /// condition, order or limit sent): the filter dialog's undo goes back to it once.
+    pub before_last: Option<Query>,
     /// The table's keys for a total order, as far as read.
     pub order_keys: OrderKeysState,
     /// The query a sort action runs ([`App::table_sort`]): the draft once its statement is
-    /// sent, so that a sort asked about and declined leaves the draft as the line shows it.
+    /// sent, so that a sort asked about and declined leaves the draft as it was.
     sorted: Option<Query>,
 }
 
@@ -233,14 +229,14 @@ impl TableQuery {
             locks_confirmed: None,
             session_wait: None,
             keys_wait: None,
-            line: Default::default(),
+            before_last: None,
             order_keys: OrderKeysState::Unknown,
             sorted: None,
         }
     }
 
-    /// Query `q` put back in a tab (the workspace restored, a closed tab reopened): applied in
-    /// the line, nothing run. The next run checks it as any other.
+    /// Query `q` put back in a tab (the workspace restored, a closed tab reopened): applied,
+    /// nothing run. The next run checks it as any other.
     pub fn restored(q: Query) -> Self {
         let query::Source::Table(table) = q.source.clone();
         Self { draft: q, ..Self::new(table) }
@@ -252,21 +248,28 @@ impl TableQuery {
         self.requested.as_ref().map(|(_, q)| q).or(self.shown.as_ref()).unwrap_or(&self.draft)
     }
 
-    /// Whether the rows held are those of the query the line shows as applied: not after a run
-    /// of the query that brought no rows (refused, cancelled, its session lost), whose query the
-    /// line keeps while the rows held are an earlier query's.
+    /// Whether the rows held are those of the query applied: not after a run of the query that
+    /// brought no rows (refused, cancelled, its session lost), whose query stays applied while
+    /// the rows held are an earlier query's.
     pub fn shows_applied(&self) -> bool {
         self.requested.as_ref().is_none_or(|(_, q)| self.shown.as_ref() == Some(q))
     }
 
     /// Run `qid` sends `statements`: it is the pending query's run when it sends exactly its
-    /// statement, else the run of something else.
+    /// statement, else the run of something else. A query of another condition, order or limit
+    /// than the one applied keeps that one as [`TableQuery::before_last`].
     pub(super) fn sent(&mut self, qid: u64, statements: &[String]) {
+        let before = self.applied().clone();
         self.statement = match self.pending.take() {
             Some(s) if statements.len() == 1 && statements[0] == s.sql => Some((qid, s)),
             _ => None,
         };
         self.requested = self.statement.as_ref().map(|(id, s)| (*id, s.query.clone()));
+        if let Some((_, q)) = &self.requested
+            && changed(&before, q)
+        {
+            self.before_last = Some(before);
+        }
         if let Some(q) = self.sorted.take().filter(|q| self.requested.as_ref().is_some_and(|(_, r)| r == q)) {
             self.draft = q;
         }
@@ -287,15 +290,6 @@ impl TableQuery {
         self.shown_run.as_ref().filter(|_| self.shown.is_some())
     }
 
-    /// The statement of what the tab holds as applied ([`TableQuery::applied`]): the run sent
-    /// last when it was the query's, else the one of the rows held; `None` before any ran.
-    pub(super) fn applied_run(&self) -> Option<&Statement> {
-        match &self.requested {
-            Some((qid, _)) => self.statement.as_ref().filter(|(id, _)| id == qid).map(|(_, s)| s),
-            None => self.shown_run(),
-        }
-    }
-
     /// Run `qid` ended (`how`, when it brought no rows): when it was the query's and its first
     /// page did not land, the query is marked not applied (a server's refusal marked already
     /// stays as it is). The rows held stay those of `shown`.
@@ -303,7 +297,7 @@ impl TableQuery {
         let ours = self.requested.as_ref().is_some_and(|(id, _)| *id == qid);
         let marked = self.failed.as_ref().is_some_and(|(id, _)| *id == qid);
         if ours && !marked && self.landed != Some(qid) {
-            self.failed = Some((qid, Failure { at: None, how }));
+            self.failed = Some((qid, Failure { at: None, how, message: None }));
         }
     }
 
@@ -348,7 +342,11 @@ impl TableQuery {
             };
             Some(from..to)
         });
-        self.failed = Some((qid, Failure { at, how: Unapplied::Refused }));
+        let message = match error {
+            ServerError::Message(m) => Some(m.text.clone()),
+            ServerError::Other => None,
+        };
+        self.failed = Some((qid, Failure { at, how: Unapplied::Refused, message }));
         if ordered && matches!(error, ServerError::Message(_)) {
             self.order_keys = OrderKeysState::Unknown;
         }
@@ -366,8 +364,16 @@ impl TableQuery {
     }
 }
 
+/// `b` reads another condition, order (the user's keys) or limit than `a`.
+fn changed(a: &Query, b: &Query) -> bool {
+    let user = |q: &Query| -> Vec<query::OrderKey> {
+        q.order.iter().filter(|k| k.origin == query::KeyOrigin::User).cloned().collect()
+    };
+    filter_text(a) != filter_text(b) || user(a) != user(b) || a.limit != b.limit
+}
+
 /// The condition of the rows table tab `t` holds, when they are filtered (the tab's title and
-/// the tab list say it; a query that did not bring its rows stays in the filter line only).
+/// the tab list say it; a query that did not bring its rows is not said there).
 pub fn applied_filter(t: &Tab) -> Option<&str> {
     t.doc.table_query.as_ref()?.shown_filter()
 }
@@ -507,7 +513,7 @@ pub(super) fn refusal_why(i18n: &I18n, r: &BarRefusal) -> String {
     }
 }
 
-/// What the server said of a failed statement, as the line reads it.
+/// What the server said of a failed statement, as the tab reads it.
 pub(super) enum ServerError<'a> {
     /// Its own message, which may say where the error is.
     Message(&'a datarig_core::driver::ServerMessage),
@@ -676,7 +682,7 @@ impl App {
     }
 
     /// Run `q` in table tab `id`: refused while the tab runs; its filter checked (a refusal is
-    /// said, kept for the line and nothing is sent); calls of functions whose effects are not
+    /// said, kept as the refusal and nothing is sent); calls of functions whose effects are not
     /// known confirmed first (once per text in the tab); then its statement runs as any run
     /// does ([`App::run_in`]: pending edits asked about, read-only and classifier checks).
     pub(crate) fn table_run(&mut self, id: TabId, q: Query) {
@@ -691,7 +697,6 @@ impl App {
             return self.flash_busy();
         }
         let (Some(name), Some(target)) = (self.table_name(id), self.table_target(id)) else { return };
-        self.filter_line_follow_tab(id);
         q.source = query::Source::Table(name.clone());
         if q.filter.as_ref().is_some_and(|f| f.text.trim().is_empty()) {
             q.filter = None;
@@ -762,10 +767,9 @@ impl App {
         // The keys that make an order total: asked for with the first run (the tab opening),
         // so that an order applied later is known total.
         self.order_keys_ask(id);
-        self.filter_line_follow_tab(id);
     }
 
-    /// The filter `text` of table tab `id` is refused (`r`): said, and kept for the line.
+    /// The filter `text` of table tab `id` is refused (`r`): said, and kept as the refusal.
     fn filter_refused(&mut self, id: TabId, r: &BarRefusal, text: String) {
         let why = refusal_why(&self.i18n, r);
         let notice = Notice::new(Msg::TableFilterRefused { why }, Level::Warning);
@@ -837,7 +841,7 @@ impl App {
 
     /// The filter of the table query whose statement run `statements` sends, checked again
     /// with the policy as it is now (a run that waited for its connection while the
-    /// environment turned read-only): `false` when refused (said, kept for the line, and the
+    /// environment turned read-only): `false` when refused (said, kept as the refusal, and the
     /// statement is not bound to the run any more).
     pub(super) fn table_pending_holds(&mut self, id: TabId, statements: &[String]) -> bool {
         let Some(tq) = self.table_query(id) else { return true };
@@ -893,7 +897,7 @@ impl App {
         }
         let on = self.keys_on(t);
         let state = t.doc.table_query.as_ref().map(|q| &q.order_keys);
-        if matches!(state, Some(OrderKeysState::Known { on: o, .. } | OrderKeysState::Failed { on: o }) if Some(o) == on.as_ref())
+        if matches!(state, Some(OrderKeysState::Known { on: o, .. } | OrderKeysState::Failed { on: o, .. }) if Some(o) == on.as_ref())
         {
             return false;
         }
@@ -1047,7 +1051,7 @@ impl App {
 
     /// Profile `pid`'s metadata session (in `database`, `None`: its own) is gone or did not
     /// open: its table tabs that wait for their keys stop waiting; with `run`, their query
-    /// runs with what is known (else it is left in the line, the failure said by the profile).
+    /// runs with what is known (else it is left as the draft, the failure said by the profile).
     pub(super) fn table_keys_gone(&mut self, pid: ProfileId, database: Option<&str>, run: bool) {
         let waiting: Vec<TabId> = self
             .tabs
@@ -1149,11 +1153,12 @@ impl App {
             })
         });
         let Some(id) = tab.map(|t| t.id) else { return };
+        let result = result.map_err(|e| self.db_error_text(&e));
         if let Some(tq) = self.tabs.get_mut(id).and_then(|t| t.doc.table_query.as_mut()) {
             let OrderKeysState::Asked { on, .. } = std::mem::take(&mut tq.order_keys) else { return };
             tq.order_keys = match result {
                 Ok(keys) => OrderKeysState::Known { on, keys },
-                Err(_) => OrderKeysState::Failed { on },
+                Err(reason) => OrderKeysState::Failed { on, reason },
             };
         }
         // The query that waited for them runs now (one cancelled meanwhile does not).
@@ -1497,10 +1502,9 @@ impl App {
     /// column's sort zone): the order of the rows shown ([`TableQuery::shown`], else what is
     /// applied when the tab shows none) changed by `step` ([`query::sort_column`]), with their
     /// condition and limit, runs as any run of the tab ([`App::table_run`]: checks, asks,
-    /// pending edits). Refused while the filter line holds changes not applied, in any field
-    /// (they are applied or put back first), or a query whose rows are not the ones shown (its
-    /// run was refused or cancelled: the earlier rows are still shown). The line and the draft take the new order only
-    /// once its run is sent: a run asked about and declined, or refused, leaves them as they
+    /// pending edits). Refused while the query applied is not the one of the rows shown (its
+    /// run was refused or cancelled: the earlier rows are still shown). The draft takes the new
+    /// order only once its run is sent: a run asked about and declined, or refused, leaves them as they
     /// were.
     pub(super) fn table_sort(&mut self, id: TabId, col: usize, step: query::SortStep) {
         let name = match self.tabs.get(id).map(|t| &t.results) {
@@ -1513,20 +1517,17 @@ impl App {
         if self.tab_busy(id) {
             return self.flash_busy();
         }
-        // What the line holds and was not applied stays the user's: the sort would run a query
-        // the line does not show.
-        self.filter_line_follow_tab(id);
-        match self.line_ahead(id) {
-            Some(LineAhead::Edited) => return self.flash(Notice::new(Label::TableSortUnapplied, Level::Warning)),
-            Some(LineAhead::NotShown) => return self.flash(Notice::new(Label::TableSortNotShown, Level::Warning)),
-            None => {}
+        // A query applied whose rows are not the ones shown stays the user's: the sort would run
+        // from rows of another query.
+        if !self.rows_shown_applied(id) {
+            return self.flash(Notice::new(Label::TableSortNotShown, Level::Warning));
         }
         let d = self.tab_dialect(id);
         let Some(tq) = self.table_query(id) else { return };
         let base = tq.shown.clone().unwrap_or_else(|| tq.applied().clone());
         let q = Query { order: query::sort_column(&base.order, &name, step), ..base };
-        // The order goes into the filter line, which is one line: a name with a line break
-        // would not read back as the same name there.
+        // The order is shown and edited on one line: a name with a line break would not read
+        // back as the same name there.
         let user: Vec<_> = q.order.iter().filter(|k| k.origin == query::KeyOrigin::User).cloned().collect();
         if !crate::widgets::text_input::TextInput::holds(&query::order_text(&user, d)) {
             let held = |k: &&query::OrderKey| crate::widgets::text_input::TextInput::holds(&k.col);
@@ -1539,26 +1540,15 @@ impl App {
         self.table_run(id, q);
     }
 
-    /// Why a grid action on table tab `id` (a sort, a filter by value), which runs from the rows
-    /// shown, would run a query other than the one the filter line shows: a field holds changes
-    /// not applied, or the line's query is not the one of the rows shown (its run was refused,
-    /// cancelled, or ended without rows). `None`: neither. The fields follow what is applied
-    /// first ([`App::filter_line_follow_tab`]).
-    pub(super) fn line_ahead(&self, id: TabId) -> Option<LineAhead> {
-        let tq = self.table_query(id)?;
-        let a = self.filter_line_applied(id);
-        let edited = tq.line.edited(Field::Where, &a.filter)
-            || tq.line.edited(Field::Order, &a.order)
-            || tq.line.edited(Field::Limit, &a.limit);
-        match (edited, tq.shows_applied()) {
-            (true, _) => Some(LineAhead::Edited),
-            (false, false) => Some(LineAhead::NotShown),
-            (false, true) => None,
-        }
+    /// Whether a grid action on table tab `id` (a sort, a filter by value), which runs from the
+    /// rows shown, runs from the query applied: not while that query's run was refused,
+    /// cancelled, or ended without rows (the rows shown are an earlier query's).
+    pub(super) fn rows_shown_applied(&self, id: TabId) -> bool {
+        self.table_query(id).is_none_or(TableQuery::shows_applied)
     }
 
     /// What the headers of table tab `id`'s grid say of the rows shown, by result column: the
-    /// user's sort keys (the keys appended to make the order total are not marked: the line
+    /// user's sort keys (the keys appended to make the order total are not marked: the dialog
     /// shows them), and the columns the condition compares as far as the app read it (a
     /// condition it did not read marks none: no mark is no claim). Empty when the tab shows no
     /// rows of its query.

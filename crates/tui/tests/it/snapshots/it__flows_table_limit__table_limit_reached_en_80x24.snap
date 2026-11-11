@@ -1,16 +1,17 @@
 ---
 source: crates/tui/tests/it/flows_table_limit.rs
+assertion_line: 385
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
 "│  ＋ New connection   │╭ Results ·… ─ (1/1 · limit 2) ╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1       ││ local-pg / datarig.shop.users││ id: 0                │"
 "│  ▾ ●   local-pg      ││ [Result 1]  Chart  Messages  ││ name: n0             │"
-"│    ▾ datarig default ││ WHERE       ORDER BY   L2  ⟳ ││                      │"
-"│      ▸ analytics     ││   │ id ^v│ name              ││                      │"
-"│      ▸ public        ││   │ int8 │ text              ││                      │"
-"│      ▾ shop          ││ 1 │    0 │ n0                ││                      │"
-"│        ▾ Tables      ││ 2 │    1 │ n1                ││                      │"
+"│    ▾ datarig default ││   │ id ^v│ name              ││                      │"
+"│      ▸ analytics     ││   │ int8 │ text              ││                      │"
+"│      ▸ public        ││ 1 │    0 │ n0                ││                      │"
+"│      ▾ shop          ││ 2 │    1 │ n1                ││                      │"
+"│        ▾ Tables      ││                              ││                      │"
 "│          ▸ users     ││                              ││                      │"
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"

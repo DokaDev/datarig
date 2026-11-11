@@ -1,12 +1,13 @@
 ---
 source: crates/tui/tests/it/flows_filter_history.rs
+assertion_line: 706
 expression: backend
 ---
-"╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users * ×                        "
-"│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1       ││ local-pg / datarig.shop.users││ id: 0                │"
-"│  ▾ ●   local-pg      ││ [Result 1]  Chart  Messages  ││ name: n0             │"
-"│   ╭ Earlier filters of this table ───────────────────────────────────────╮   │"
+"╭─ Filter and sort · shop.users ─────────────────────────────── 3 rows loaded ─╮"
+"│ Columns 2       / search │ id  int8                                          │"
+"│ from the loaded result   │                                                   │"
+"│▸    id             = ^2  │ Filter                                            │"
+"│   ╭ Earlier filters of this table ───────────────────────────────────────╮ × │"
 "│   │ › type to filter                                                     │   │"
 "│   │                                                                      │   │"
 "│   │ id > 1                            ORDER BY name DESC, id ASC · just… │   │"
@@ -20,9 +21,9 @@ expression: backend
 "│   │                                                                      │   │"
 "│   │                                                                      │   │"
 "│   ╰──────────────────────────────── Enter pick · ↑↓ select · Esc cancel ─╯   │"
-"│                      ││                              ││                      │"
-"│                      ││                              ││                      │"
-"│                      ││                              ││                      │"
-"│                      ││                              ││                      │"
-"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
-" local-pg │ 3 rows · 2ms                                                     EN "
+"│                          │   Sort   ( ) none   (•) ↑ asc   ( ) ↓ desc   key… │"
+"├──────────────────────────┴───────────────────────────────────────────────────┤"
+"│ Where   = id > 1 ×                                         undo   clear all  │"
+"│ Order  name ↓   id ↑   not unique                  Limit              SQL ▸  │"
+"│ ↑↓ column · → filter · s sort · / search           Enter apply   Esc cancel  │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"

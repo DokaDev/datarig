@@ -169,8 +169,8 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r p` | `results.page.prev` | Results → previous page | ✓ |
 | `Space r #` | `results.count` | Results → count every row (runs a count query) |  |
 | `Space r e` | `results.export` | Results → export to a file… |  |
-| `Space r f` | `table.filter.edit` | Table → filter the rows on the server (WHERE) |  |
-| `Space r o` | `table.order.edit` | Table → sort the rows on the server (ORDER BY) |  |
+| `Space r f` | `table.filter.edit` | Table → filter and sort (dialog, on this column) |  |
+| `Space r o` | `table.order.edit` | Table → filter and sort (dialog, on the order) |  |
 | `Space r x` | `table.filter.clear` | Table → clear the filter, the order and the limit, and run it again |  |
 | `Space r v` | `table.filter.open_sql` | Table → open its statement in a new console |  |
 | `Space r s` | `table.sort.cycle` | Table → sort by this column only (up, down, off) |  |
@@ -298,7 +298,7 @@ The result grid. The wheel scrolls the rows; a sideways wheel (a trackpad) or Sh
 | `#` | `results.count` | Results → count every row (runs a count query) |  |
 | `P` | `results.view_as_plan` | View as plan: the text EXPLAIN again as a plan |  |
 | `c` | `results.chart` | Results → show as a chart / as rows |  |
-| `f` | `table.filter.edit` | Table → filter the rows on the server (WHERE) |  |
+| `f` | `table.filter.edit` | Table → filter and sort (dialog, on this column) |  |
 | `s` | `table.sort.cycle` | Table → sort by this column only (up, down, off) |  |
 | `S` | `table.sort.add` | Table → sort by this column too (up, down, off) |  |
 | `F` | `table.filter.by_value` | Table → filter by value |  |
@@ -322,19 +322,6 @@ The result grid while a search is on (after `/` or `?`): `n` goes to the next ma
 The search prompt of `/` and `?` on the line under the grid: the cursor goes to the first matching cell while the pattern is typed, `Enter` searches (an empty pattern: the last one), `Esc` goes back to where the cursor was, `Ctrl+W` deletes the word before the cursor. The full values are searched as fetched (not the shown cut), cell by cell, row by row. Inside `workspace`.
 
 Reserved (grid search): `Esc` `Enter` `Ctrl+W`
-
-Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
-
-## `grid.filter` [text]
-
-The filter line of a table tab, above the grid (`f` or `Space r f`: the condition, `Space r o`: the order, then `Tab` to the limit): `Enter` (or the run key) applies the condition, the order and the limit and runs the table's query again, `Esc` puts back what is applied, `Tab` and `Shift+Tab` move between the fields, `Ctrl+L` empties the field (applied with `Enter`), `Ctrl+W` deletes the word before the cursor, `Ctrl+U` the text before it, `Ctrl+R` lists this table's earlier filters (picked: the condition and the order fill in, nothing runs until `Enter`). The condition is sent as written (checked first: one condition on this table, no comment, no second statement, no lock, no function known to wait or change anything); the order is a list of columns, each with `ASC` or `DESC` (and on PostgreSQL `NULLS FIRST` or `NULLS LAST`), written back as the app sends it; the limit is a whole number of rows (blank: none). Completion opens as in the editor (`Ctrl+Space` asks for it, and that list takes `Enter` and `Tab`; a list that opened by itself takes neither until you move in it): the table's columns, operators, functions and the values of an enumerated type or of a check inside a literal in the condition; the columns and the directions in the order. A refused part is underlined; where the server says a failed condition is wrong is underlined too, the line marked failed and the rows shown dimmed as an earlier query's. Inside `workspace`.
-
-| Keys | Action | Description | R |
-|---|---|---|---|
-| `Ctrl+Space` | `editor.complete` | Show completions |  |
-| `Ctrl+R` | `table.filter.history` | Table → earlier filters of this table |  |
-
-Reserved (filter line): `Esc` `Enter` `Tab` `Shift+Tab` `Ctrl+W` `Ctrl+L`
 
 Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
@@ -640,6 +627,37 @@ The export dialog (`results.export`, `:export` alone): the rows (every row, the 
 | `Ctrl+O` | `export.pick_path` | Export dialog: pick where the file goes |  |
 
 Reserved (export dialog): `Tab` `Shift+Tab` `Down` `Up` `Enter` `Esc`
+
+Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
+## `overlay.filter`
+
+The filter and sort dialog of a table tab (`f` or `Space r f` on the grid's column, `Space r o` on the order), over the whole screen: the table's columns on the left (`↑`/`↓`, `j`/`k`, `g`/`G`; `/` narrows them by name, `s` cycles the column's sort, `→` goes to its conditions), the selected column's conditions on the right (`Space` on an operator opens the list of operators, those the column cannot take dimmed with why; `→` to its value; `x` or `Delete` takes it out; `+ add condition`, then the sort line: `←`/`→` none, up, down, `<`/`>` its place in the order), and under them the `Where` chips (every term of the condition, as sent; `x` takes one out, `Space` goes to its column), the `Order` keys, the `Limit` field and the `SQL` toggle. `Tab` and `Shift+Tab` move between these parts. `Enter` applies the draft and runs the table's query as any run of the tab (checked first; a refusal keeps the dialog open, says why and underlines the part refused; a question opens above it), `Esc` closes without applying (an open list or the search first), `Ctrl+Z` or `u` undoes a step (with none left: the change applied last), `X` clears every condition and the order, `Q` shows or hides the statement, `Ctrl+R` lists this table's earlier filters (picked: into the draft, nothing runs until `Enter`). Terms the dialog did not change are sent as they were written; a condition still waiting for its value is not sent. Inside `root`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `Enter` | `filter.apply` | Filter dialog → apply and close |  |
+| `Esc` | `filter.cancel` | Filter dialog → close without applying |  |
+| `Ctrl+Z` | `filter.undo` | Filter dialog → undo a step |  |
+| `u` | `filter.undo` | Filter dialog → undo a step |  |
+| `X` | `filter.clear_all` | Filter dialog → clear every condition and the order |  |
+| `Q` | `filter.sql` | Filter dialog → show or hide the statement |  |
+| `Ctrl+R` | `table.filter.history` | Table → earlier filters of this table |  |
+
+Reserved (filter dialog): `Tab` `Shift+Tab` `Up` `Down` `Left` `Right` `Home` `End` `j` `k` `h` `l` `g` `G` `s` `/` `Space` `x` `Delete` `<` `>`
+
+## `overlay.filter.field` [text]
+
+A text field of the filter dialog: the column search, a condition's value, the limit. Characters are typed; `Enter` applies (in the search: keeps the column found), `Esc` closes the dialog (the search: closes it), `Ctrl+Z` undoes a step (typing in one field is one step), `Ctrl+R` lists the earlier filters. In a value, `←` at its start goes back to the operator and `↑`/`↓` to the line above or below; a list's values are separated by commas; on a number column a plain number is written as a number, anything else as a string. Inside `root`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `Enter` | `filter.apply` | Filter dialog → apply and close |  |
+| `Esc` | `filter.cancel` | Filter dialog → close without applying |  |
+| `Ctrl+Z` | `filter.undo` | Filter dialog → undo a step |  |
+| `Ctrl+R` | `table.filter.history` | Table → earlier filters of this table |  |
+
+Reserved (filter dialog): `Tab` `Shift+Tab` `Up` `Down` `Ctrl+W`
 
 Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 

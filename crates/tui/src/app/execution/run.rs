@@ -234,6 +234,8 @@ impl App {
         // order, and one that runs answers nothing else until it ends).
         self.monitor_ask_own_at_run(id);
         self.send_tab(id, DbCommand::Execute { id: qid, statements, paging, tx, max_rows });
+        // A filter dialog that applied this table tab's query closes: its statement is sent.
+        self.filter_dialog_sent(id);
     }
 
     /// Open tab `id`'s query session with its profile's password (the first run, or the next

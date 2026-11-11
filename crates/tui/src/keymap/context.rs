@@ -22,13 +22,13 @@
 //! │  ├─ editor.vim.search     [editor][text]   (the `/` and `?` prompt)
 //! │  ├─ explorer.filter       [text]
 //! │  ├─ grid.search           [text]   (the grid's `/` and `?` prompt)
-//! │  ├─ grid.filter           [text]   (a table tab's filter line: WHERE, ORDER BY)
 //! │  ├─ grid.edit             [text]   (the cell editor over a cell of the grid)
 //! │  └─ overlay.cell_viewer
 //! ├─ overlay.cell_editor    [text]   (a cell's value of several lines, in vim modes)
 //! ├─ status.ask             (the status bar's question: `y` does it, any other key cancels)
 //! └─ overlay.*              (which-key, help, help filter, command line, quick connect,
-//!                            tab list, profile form, settings, export dialog, chooser, chooser filter, name input,
+//!                            tab list, profile form, settings, export dialog, filter dialog
+//!                            and its text fields, chooser, chooser filter, name input,
 //!                            saved-queries tree and its name field, action menu, password,
 //!                            confirm, run confirm, transaction summary, session view, completion)
 //! ```
@@ -45,7 +45,6 @@ pub enum Ctx {
     Grid,
     GridMatches,
     GridSearch,
-    FilterLine,
     CellEdit,
     Inspector,
     Plan,
@@ -65,6 +64,8 @@ pub enum Ctx {
     ProfileForm,
     Settings,
     Export,
+    FilterDialog,
+    FilterDialogText,
     Chooser,
     ChooserFilter,
     Picker,
@@ -92,7 +93,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 52] = [
+    pub const ALL: [Ctx; 53] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -101,7 +102,6 @@ impl Ctx {
         Ctx::Grid,
         Ctx::GridMatches,
         Ctx::GridSearch,
-        Ctx::FilterLine,
         Ctx::CellEdit,
         Ctx::Inspector,
         Ctx::Plan,
@@ -121,6 +121,8 @@ impl Ctx {
         Ctx::ProfileForm,
         Ctx::Settings,
         Ctx::Export,
+        Ctx::FilterDialog,
+        Ctx::FilterDialogText,
         Ctx::Chooser,
         Ctx::ChooserFilter,
         Ctx::Picker,
@@ -158,7 +160,6 @@ impl Ctx {
             Ctx::Grid => "grid",
             Ctx::GridMatches => "grid.matches",
             Ctx::GridSearch => "grid.search",
-            Ctx::FilterLine => "grid.filter",
             Ctx::CellEdit => "grid.edit",
             Ctx::Inspector => "inspector",
             Ctx::Plan => "plan",
@@ -185,6 +186,8 @@ impl Ctx {
             Ctx::ProfileForm => "overlay.profile_form",
             Ctx::Settings => "overlay.settings",
             Ctx::Export => "overlay.export",
+            Ctx::FilterDialog => "overlay.filter",
+            Ctx::FilterDialogText => "overlay.filter.field",
             Ctx::Password => "overlay.password",
             Ctx::Confirm => "overlay.confirm",
             Ctx::RunConfirm => "overlay.run_confirm",
@@ -218,7 +221,6 @@ impl Ctx {
             | Ctx::VimSearch
             | Ctx::ExplorerFilter
             | Ctx::GridSearch
-            | Ctx::FilterLine
             | Ctx::MonitorFilter
             | Ctx::CellEdit
             | Ctx::CellViewer => Some(Ctx::Workspace),
@@ -252,7 +254,6 @@ impl Ctx {
                 | Ctx::VimSearch
                 | Ctx::ExplorerFilter
                 | Ctx::GridSearch
-                | Ctx::FilterLine
                 | Ctx::MonitorFilter
                 | Ctx::CellEdit
                 | Ctx::CellEditor
@@ -261,6 +262,7 @@ impl Ctx {
                 | Ctx::TabList
                 | Ctx::ProfileForm
                 | Ctx::Export
+                | Ctx::FilterDialogText
                 | Ctx::ChooserFilter
                 | Ctx::Picker
                 | Ctx::NameInput
@@ -283,11 +285,10 @@ impl Ctx {
         self == Ctx::GridMatches
     }
 
-    /// A one-line field outside the editor (the grid's search prompt, a table tab's filter
-    /// line): its reserved editing keys (`Ctrl+W`, `Shift+Tab`) win over the workspace's, as
-    /// they do in the editor's own prompt.
+    /// A one-line field outside the editor (the grid's search prompt): its reserved editing
+    /// keys (`Ctrl+W`) win over the workspace's, as they do in the editor's own prompt.
     pub fn is_prompt(self) -> bool {
-        matches!(self, Ctx::GridSearch | Ctx::FilterLine)
+        matches!(self, Ctx::GridSearch)
     }
 
     /// One line for `docs/keybindings.md`.
@@ -308,9 +309,6 @@ impl Ctx {
             }
             Ctx::GridSearch => {
                 "The search prompt of `/` and `?` on the line under the grid: the cursor goes to the first matching cell while the pattern is typed, `Enter` searches (an empty pattern: the last one), `Esc` goes back to where the cursor was, `Ctrl+W` deletes the word before the cursor. The full values are searched as fetched (not the shown cut), cell by cell, row by row."
-            }
-            Ctx::FilterLine => {
-                "The filter line of a table tab, above the grid (`f` or `Space r f`: the condition, `Space r o`: the order, then `Tab` to the limit): `Enter` (or the run key) applies the condition, the order and the limit and runs the table's query again, `Esc` puts back what is applied, `Tab` and `Shift+Tab` move between the fields, `Ctrl+L` empties the field (applied with `Enter`), `Ctrl+W` deletes the word before the cursor, `Ctrl+U` the text before it, `Ctrl+R` lists this table's earlier filters (picked: the condition and the order fill in, nothing runs until `Enter`). The condition is sent as written (checked first: one condition on this table, no comment, no second statement, no lock, no function known to wait or change anything); the order is a list of columns, each with `ASC` or `DESC` (and on PostgreSQL `NULLS FIRST` or `NULLS LAST`), written back as the app sends it; the limit is a whole number of rows (blank: none). Completion opens as in the editor (`Ctrl+Space` asks for it, and that list takes `Enter` and `Tab`; a list that opened by itself takes neither until you move in it): the table's columns, operators, functions and the values of an enumerated type or of a check inside a literal in the condition; the columns and the directions in the order. A refused part is underlined; where the server says a failed condition is wrong is underlined too, the line marked failed and the rows shown dimmed as an earlier query's."
             }
             Ctx::CellEdit => {
                 "The cell editor (`e` in the grid) over the cell: one line, the cell's pending value or its value as read. `Enter` keeps the text (an empty text is the empty string, never NULL), `Esc` cancels, `Ctrl+N` sets NULL, `Ctrl+D` the column's default. With cells of one column selected, each takes the value, as one change (`u` undoes it). `Ctrl+L` takes the text typed so far to the editor of several lines. A value of several lines, and a JSON column's, opens that editor instead; an enum or boolean column lists its values."
@@ -378,6 +376,12 @@ impl Ctx {
             Ctx::Export => {
                 "The export dialog (`results.export`, `:export` alone): the rows (every row, the rows fetched, the selection while there is one), the format, CSV's options and the file. `Tab`/`Shift+Tab` and the arrows move between the fields, `Enter` or `Space` on a value lists what it can be (`←`/`→` step through them), `Space`, `Enter` or `←`/`→` tick the header line, `Enter` in a text field or `Enter`/`Space` on Export exports (on Cancel: closes), `Esc` cancels. Under the rows it says how they will be read, under the format what it cannot do here (a format that comes later, an INSERT or UPDATE the result's keys do not allow, struck through in the list). In the file's field `Tab` first completes a name (again: lists the names, then puts each in turn); `[Browse…]` picks where the file goes in a tree. A click focuses a field, puts the cursor in a text, opens a value's list or ticks the checkbox; Export and Cancel act on the release."
             }
+            Ctx::FilterDialog => {
+                "The filter and sort dialog of a table tab (`f` or `Space r f` on the grid's column, `Space r o` on the order), over the whole screen: the table's columns on the left (`↑`/`↓`, `j`/`k`, `g`/`G`; `/` narrows them by name, `s` cycles the column's sort, `→` goes to its conditions), the selected column's conditions on the right (`Space` on an operator opens the list of operators, those the column cannot take dimmed with why; `→` to its value; `x` or `Delete` takes it out; `+ add condition`, then the sort line: `←`/`→` none, up, down, `<`/`>` its place in the order), and under them the `Where` chips (every term of the condition, as sent; `x` takes one out, `Space` goes to its column), the `Order` keys, the `Limit` field and the `SQL` toggle. `Tab` and `Shift+Tab` move between these parts. `Enter` applies the draft and runs the table's query as any run of the tab (checked first; a refusal keeps the dialog open, says why and underlines the part refused; a question opens above it), `Esc` closes without applying (an open list or the search first), `Ctrl+Z` or `u` undoes a step (with none left: the change applied last), `X` clears every condition and the order, `Q` shows or hides the statement, `Ctrl+R` lists this table's earlier filters (picked: into the draft, nothing runs until `Enter`). Terms the dialog did not change are sent as they were written; a condition still waiting for its value is not sent."
+            }
+            Ctx::FilterDialogText => {
+                "A text field of the filter dialog: the column search, a condition's value, the limit. Characters are typed; `Enter` applies (in the search: keeps the column found), `Esc` closes the dialog (the search: closes it), `Ctrl+Z` undoes a step (typing in one field is one step), `Ctrl+R` lists the earlier filters. In a value, `←` at its start goes back to the operator and `↑`/`↓` to the line above or below; a list's values are separated by commas; on a number column a plain number is written as a number, anything else as a string."
+            }
             Ctx::Password => "Password prompt; a click on the field, the checkbox, OK or Cancel.",
             Ctx::Confirm => {
                 "Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace, discard); for a copy it says yes. A button acts on its release (pressed and released on it, not right after the question appeared) and does what its key does; the pointer only lights its background (Enter stays on the safe one)."
@@ -433,7 +437,6 @@ impl Ctx {
             Ctx::Grid => Label::KeyctxGrid,
             Ctx::GridMatches => Label::KeyctxGridMatches,
             Ctx::GridSearch => Label::KeyctxGridSearch,
-            Ctx::FilterLine => Label::KeyctxGridFilter,
             Ctx::CellEdit => Label::KeyctxGridEdit,
             Ctx::Inspector => Label::KeyctxInspector,
             Ctx::Plan => Label::KeyctxPlan,
@@ -460,6 +463,8 @@ impl Ctx {
             Ctx::ProfileForm => Label::KeyctxOverlayProfileForm,
             Ctx::Settings => Label::KeyctxOverlaySettings,
             Ctx::Export => Label::KeyctxOverlayExport,
+            Ctx::FilterDialog => Label::KeyctxOverlayFilter,
+            Ctx::FilterDialogText => Label::KeyctxOverlayFilterField,
             Ctx::Password => Label::KeyctxOverlayPassword,
             Ctx::Confirm => Label::KeyctxOverlayConfirm,
             Ctx::RunConfirm => Label::KeyctxOverlayRunConfirm,

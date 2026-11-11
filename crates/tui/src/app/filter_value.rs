@@ -6,22 +6,19 @@
 //! kind through the dialect, NULL compared only with `IS NULL` or the NULL-safe forms, patterns
 //! escaped with `!`) and added to the filter of the rows shown with `AND`, a filter whose top
 //! level is not a plain chain of `AND`s put in parentheses first ([`query::and_filter`]). The new
-//! text goes into the filter line and runs as `Enter` runs it there ([`App::table_run`]: the
-//! checks, the questions about functions, row locks and pending edits, read-only profiles), so
-//! what runs is what the line shows.
+//! text runs as the filter dialog runs a filter ([`App::table_run`]: the checks, the questions
+//! about functions, row locks and pending edits, read-only profiles); the dialog shows it after.
 //!
 //! A value is taken only as the server holds it: a cell shown otherwise than its value (as a copy
 //! as SQL judges it), a new row, a cell with an edit on it, or rows that cannot be read back give
 //! no filter. An entry that cannot apply to the value (a type whose comparison is not known,
-//! binary data over 64 KiB, more than 1000 cells) is shown dimmed with why. While the filter
-//! line holds edits not applied, nothing is added to it: they are applied or put back first;
-//! nor while it shows a query whose run brought no rows (refused, cancelled), over the earlier
-//! rows still shown.
+//! binary data over 64 KiB, more than 1000 cells) is shown dimmed with why. Nothing is added
+//! while the query applied is one whose run brought no rows (refused, cancelled), over the
+//! earlier rows still shown.
 
 use super::menu::{MenuItem, MenuTarget, Off};
-use super::table_query::{LineAhead, filter_text, refusal_why};
+use super::table_query::{FIELD_CAP, filter_text, refusal_why};
 use super::*;
-use crate::widgets::filter_line::FIELD_CAP;
 use crate::widgets::grid::Shape;
 use crate::widgets::text_input::TextInput;
 use datarig_core::driver::{ColumnMeta, ReadIn, ValueKind};
@@ -68,7 +65,7 @@ pub enum ByValue {
 }
 
 /// An entry of the menu as built: what it filters by, its label, a hint shown with it, and the
-/// filter text it puts in the line (or why it cannot).
+/// filter text it runs (or why it cannot).
 pub struct Entry {
     pub by: ByValue,
     pub label: Localized,
@@ -90,14 +87,6 @@ fn compares(d: Dialect, m: &ColumnMeta, enum_known: bool) -> Result<bool, Label>
     match query::compares(d, m, enum_known) {
         Ok(c) => Ok(c == query::Compares::Order),
         Err(query::NoEquality) => Err(Label::TableFilterByValueOffType),
-    }
-}
-
-/// What a filter by value says when the filter line is ahead of the rows shown.
-fn line_ahead_label(why: LineAhead) -> Label {
-    match why {
-        LineAhead::Edited => Label::TableFilterByValueUnapplied,
-        LineAhead::NotShown => Label::TableFilterByValueNotShown,
     }
 }
 
@@ -128,16 +117,13 @@ impl App {
         if self.tab().is_table() && self.tab_busy(id) {
             return self.flash_busy();
         }
-        // The rows first, as the line's keys do: the menu is about the grid's cells.
+        // The rows first: the menu is about the grid's cells.
         if self.chart_shown() || self.plan_shown() || self.changes_shown() {
             self.tab_mut().exec.view = super::tabs::ResultView::Rows;
         }
         if self.focus != Focus::Inspector {
             self.focus = Focus::Results;
         }
-        self.filter_line_blur();
-        // Fields not edited show what is applied now, before they are compared with it.
-        self.filter_line_follow_tab(id);
         let menu = match self.by_value_menu(id) {
             Ok(m) => m,
             Err(why) => return self.flash(why),
@@ -155,39 +141,29 @@ impl App {
     }
 
     /// An entry of the menu was picked, on what it was opened on still (the same cells of the same
-    /// result): `text`, the filter it showed, goes into the line and runs, as `Enter` there runs
-    /// it. Nothing is written again from the cells. Refused while the tab runs, or while the
-    /// line holds changes not applied.
+    /// result): `text`, the filter it showed, becomes the draft's and runs, as the filter dialog
+    /// runs it. Nothing is written again from the cells. Refused while the tab runs, or while
+    /// the rows shown are not those of the query applied.
     pub(super) fn filter_by_value_run(&mut self, text: String) {
         let id = self.tab().id;
         if self.tab_busy(id) {
             return self.flash_busy();
         }
-        self.filter_line_follow_tab(id);
-        if let Some(why) = self.line_ahead(id) {
-            return self.flash(Notice::new(line_ahead_label(why), Level::Warning));
+        if !self.rows_shown_applied(id) {
+            return self.flash(Notice::new(Label::TableFilterByValueNotShown, Level::Warning));
         }
         let Some(tq) = self.table_query(id) else { return };
         let (Some(target), Some(shown)) = (self.table_target(id), tq.shown.clone()) else { return };
-        // Only a text the line holds as it is runs: the line shows what runs.
+        // Only a text shown on one line as it is runs: the dialog shows what runs.
         if !TextInput::holds(&text) {
             return self.flash(Notice::new(Label::TableFilterByValueNotOneLine, Level::Warning));
         }
         let recognised = query::recognise(&text, &target);
         let Some(tq) = self.table_query_mut(id) else { return };
-        tq.line.where_.set(&text);
         tq.draft = Query { filter: Some(Filter { text, recognised }), ..shown };
         tq.refusal = None;
-        tq.line.focus = None;
         let q = tq.draft.clone();
         self.table_run(id, q);
-        // As after `Enter`: a refusal leaves the keys in the field it is about.
-        if let Some(tq) = self.table_query_mut(id) {
-            tq.line.focus = tq.refusal.as_ref().map(|r| r.field);
-        }
-        if self.table_query(id).is_some_and(|tq| tq.line.focus.is_some()) {
-            self.focus = Focus::Results;
-        }
     }
 
     /// The menu of filters by value for table tab `id`'s cursor cell or selection, or why there
@@ -201,10 +177,9 @@ impl App {
         if rs.rows.is_empty() || rs.columns.is_empty() || t.exec.view != super::tabs::ResultView::Rows {
             return Err(warn(Label::TableFilterByValueNoRows));
         }
-        // What the line holds and was not applied stays the user's: nothing is added to it; nor
-        // to the filter of rows that are not of the line's query.
-        if let Some(why) = self.line_ahead(id) {
-            return Err(warn(line_ahead_label(why)));
+        // Nothing is added to the filter of rows that are not of the query applied.
+        if !self.rows_shown_applied(id) {
+            return Err(warn(Label::TableFilterByValueNotShown));
         }
         // The cells: the selection's, else the cursor's; read rows of one column only.
         let g = &t.grid;
@@ -228,8 +203,8 @@ impl App {
         let column = m.name.clone();
         let cells = rows.len();
         let base = filter_text(shown).unwrap_or_default();
-        // The filter line is one line: a name with a line break would not read back as the
-        // same name there (nor run as the line shows it).
+        // A filter is shown on one line: a name with a line break would not read back as the
+        // same name there (nor run as it is shown).
         let not_one_line = || {
             let n = Msg::TableFilterByValueName { column: crate::text::escape_controls(&column) };
             Off::new(Label::TableFilterByValueOffName, Notice::new(n, Level::Warning))

@@ -2519,8 +2519,8 @@ async fn by_value(
 async fn filter_by_value_reads_back_the_rows_it_names() {
     use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};
     use datarig_tui::app::action::Action;
-    use datarig_tui::app::filter_line::TableAction;
     use datarig_tui::app::filter_value::ByValue as B;
+    use datarig_tui::app::table_filter::TableAction;
     let Some(url) = pg_url("filter_by_value_reads_back_the_rows_it_names") else { return };
     let pw = datarig_core::profile::dsn::parse(&url).unwrap().password.unwrap_or_default();
     let table = format!("zz_it_byvalue_{}", std::process::id());
@@ -2691,9 +2691,6 @@ async fn apply_line_again(app: &mut App, rx: &mut UnboundedReceiver<AppEvent>) -
     let mut got: Vec<String> = held_column(app, 0).into_iter().flatten().collect();
     got.sort();
     let sent = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect();
-    if let Some(tq) = app.tab_mut().doc.table_query.as_mut() {
-        tq.line.focus = None;
-    }
     (got, text, sent)
 }
 
@@ -2704,8 +2701,8 @@ async fn apply_line_again(app: &mut App, rx: &mut UnboundedReceiver<AppEvent>) -
 #[tokio::test(flavor = "multi_thread")]
 async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() {
     use datarig_tui::app::action::Action;
-    use datarig_tui::app::filter_line::TableAction;
     use datarig_tui::app::filter_value::ByValue as B;
+    use datarig_tui::app::table_filter::TableAction;
     let Some(url) = pg_url("filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line") else { return };
     let table = format!("zz_it_breaks_{}", std::process::id());
     let t = format!("public.{table}");
@@ -2874,7 +2871,7 @@ async fn a_column_named_with_a_line_break_is_neither_filtered_nor_sorted() {
         press(&mut app, key);
         assert_eq!(app.tab().exec.query_id, qid, "{key}: nothing sent");
         let tq = app.tab().doc.table_query.as_ref().unwrap();
-        assert!(tq.draft.order.is_empty() && tq.line.order.text().is_empty(), "{key}");
+        assert!(tq.draft.order.is_empty(), "{key}");
     }
     // The column named with a space: filtered and sorted, its own rows read back.
     let (got, ran) = by_value(&mut app, &mut rx, &["1"], "a b", B::Eq).await;

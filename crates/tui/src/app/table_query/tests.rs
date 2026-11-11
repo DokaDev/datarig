@@ -51,6 +51,69 @@ fn the_query_is_bound_to_the_run_that_sends_its_statement() {
 }
 
 #[test]
+fn a_query_sent_with_another_condition_order_or_limit_keeps_the_one_before() {
+    let mut tq = TableQuery::new(match users().source {
+        query::Source::Table(t) => t,
+    });
+    let send = |tq: &mut TableQuery, q: &Query, qid: u64| {
+        let c = query::compile(q, &Target::new(Dialect::Postgres, Vec::new()));
+        let sql = c.sql.clone();
+        tq.pending = Some(Statement::of(q.clone(), c));
+        tq.sent(qid, &[sql]);
+    };
+    // The tab's first run sends what it was opened with: nothing before it.
+    send(&mut tq, &users(), 1);
+    tq.first_page(1);
+    assert_eq!(tq.before_last, None);
+    // The same query again (a reload) keeps nothing.
+    send(&mut tq, &users(), 2);
+    assert_eq!(tq.before_last, None);
+    let a = filtered("id > 1", None);
+    send(&mut tq, &a, 3);
+    assert_eq!(tq.before_last, Some(users()));
+    // An order, then a limit: each keeps the one before it, one level only.
+    let ordered = Query { order: vec![OrderKey::user("id", Dir::Desc)], ..a.clone() };
+    send(&mut tq, &ordered, 4);
+    assert_eq!(tq.before_last, Some(a.clone()));
+    let capped = Query { limit: Some(5), ..ordered.clone() };
+    send(&mut tq, &capped, 5);
+    assert_eq!(tq.before_last, Some(ordered));
+    // A run of another statement keeps what was kept.
+    tq.sent(6, &["SELECT 1".to_string()]);
+    assert_eq!(tq.before_last.as_ref().map(|q| q.limit), Some(None));
+}
+
+#[test]
+fn a_server_error_keeps_what_the_server_said() {
+    let mut tq = TableQuery::new(match users().source {
+        query::Source::Table(t) => t,
+    });
+    let q = filtered("idd = 1", None);
+    let c = query::compile(&q, &Target::new(Dialect::Postgres, Vec::new()));
+    let sql = c.sql.clone();
+    tq.pending = Some(Statement::of(q, c));
+    tq.sent(1, &[sql]);
+    let m = datarig_core::driver::ServerMessage {
+        text: "column \"idd\" does not exist".into(),
+        position: None,
+        hint: None,
+    };
+    tq.run_failed(1, &ServerError::Message(&m), Dialect::Postgres);
+    assert_eq!(tq.failure().and_then(|f| f.message.as_deref()), Some("column \"idd\" does not exist"));
+    tq.run_over(2, Unapplied::Ended);
+    let mut other = TableQuery::new(match users().source {
+        query::Source::Table(t) => t,
+    });
+    let q = filtered("id = 1", None);
+    let c = query::compile(&q, &Target::new(Dialect::Postgres, Vec::new()));
+    let sql = c.sql.clone();
+    other.pending = Some(Statement::of(q, c));
+    other.sent(1, &[sql]);
+    other.run_failed(1, &ServerError::Other, Dialect::Postgres);
+    assert_eq!(other.failure().map(|f| f.message.clone()), Some(None), "not a server's refusal: nothing said");
+}
+
+#[test]
 fn a_run_that_ends_without_its_first_page_is_not_applied() {
     let mut tq = TableQuery::new(match users().source {
         query::Source::Table(t) => t,
@@ -66,19 +129,19 @@ fn a_run_that_ends_without_its_first_page_is_not_applied() {
     tq.first_page(1);
     // Its first page landed: a cancel after it (or its end) is not a failure of the query.
     tq.run_over(1, Unapplied::Cancelled);
-    assert_eq!(tq.failure(), None);
+    assert_eq!(tq.failure().map(|f| (f.at.clone(), f.how)), None);
     send(&mut tq, 2);
     // Another run's end says nothing about it.
     tq.run_over(1, Unapplied::Ended);
-    assert_eq!(tq.failure(), None);
+    assert_eq!(tq.failure().map(|f| (f.at.clone(), f.how)), None);
     tq.run_over(2, Unapplied::Cancelled);
-    assert_eq!(tq.failure(), Some(&Failure { at: None, how: Unapplied::Cancelled }));
+    assert_eq!(tq.failure().map(|f| (f.at.clone(), f.how)), Some((None, Unapplied::Cancelled)));
     assert_eq!(tq.applied(), &q, "the line keeps the query, marked");
     // The server's refusal, marked first, stays the reason.
     send(&mut tq, 3);
     tq.run_failed(3, &ServerError::Other, Dialect::Postgres);
     tq.run_over(3, Unapplied::Ended);
-    assert_eq!(tq.failure(), Some(&Failure { at: None, how: Unapplied::Refused }));
+    assert_eq!(tq.failure().map(|f| (f.at.clone(), f.how)), Some((None, Unapplied::Refused)));
 }
 
 #[test]
@@ -166,27 +229,27 @@ fn a_server_error_marks_the_filter_where_it_points() {
     sent(&mut tq, Dialect::Postgres, "\u{e9}\u{e9} = 1 OR idd = 2", 1);
     tq.run_failed(1, &ServerError::Message(&pg(37 + 10)), Dialect::Postgres);
     assert_eq!(
-        tq.failure(),
-        Some(&Failure { at: Some(12..15), how: Unapplied::Refused }),
+        tq.failure().map(|f| (f.at.clone(), f.how)),
+        Some((Some(12..15), Unapplied::Refused)),
         "characters, not bytes: `idd`"
     );
     // On a blank: that one character.
     tq.run_failed(1, &ServerError::Message(&pg(37 + 9)), Dialect::Postgres);
-    assert_eq!(tq.failure(), Some(&Failure { at: Some(11..12), how: Unapplied::Refused }));
+    assert_eq!(tq.failure().map(|f| (f.at.clone(), f.how)), Some((Some(11..12), Unapplied::Refused)));
     // Before the filter, after it, or no place: failed, nothing marked.
     for p in [3, 37 + 17] {
         tq.run_failed(1, &ServerError::Message(&pg(p)), Dialect::Postgres);
-        assert_eq!(tq.failure(), Some(&Failure { at: None, how: Unapplied::Refused }), "{p}");
+        assert_eq!(tq.failure().map(|f| (f.at.clone(), f.how)), Some((None, Unapplied::Refused)), "{p}");
     }
     tq.run_failed(1, &ServerError::Other, Dialect::Postgres);
-    assert_eq!(tq.failure(), Some(&Failure { at: None, how: Unapplied::Refused }));
+    assert_eq!(tq.failure().map(|f| (f.at.clone(), f.how)), Some((None, Unapplied::Refused)));
     // Another run's failure is not this query's; a page of the run clears it.
     let mut other = TableQuery::new(table.clone());
     sent(&mut other, Dialect::Postgres, "id = 1", 2);
     other.run_failed(3, &ServerError::Other, Dialect::Postgres);
     assert_eq!(other.failure(), None);
     tq.first_page(1);
-    assert_eq!(tq.failure(), None);
+    assert_eq!(tq.failure().map(|f| (f.at.clone(), f.how)), None);
     // MySQL: the quoted text, found once and inside the filter, marks it to the filter's end.
     let my = Dialect::MySql(Default::default());
     let near =
@@ -195,23 +258,23 @@ fn a_server_error_marks_the_filter_where_it_points() {
     sent(&mut tq, my, "id = 1 AND rank = 1", 4);
     tq.run_failed(4, &ServerError::Message(&near("= 1")), my);
     assert_eq!(
-        tq.failure(),
-        Some(&Failure { at: None, how: Unapplied::Refused }),
+        tq.failure().map(|f| (f.at.clone(), f.how)),
+        Some((None, Unapplied::Refused)),
         "twice in the statement: not located"
     );
     tq.run_failed(4, &ServerError::Message(&near("= 1)")), my);
     assert_eq!(
-        tq.failure(),
-        Some(&Failure { at: Some(16..19), how: Unapplied::Refused }),
+        tq.failure().map(|f| (f.at.clone(), f.how)),
+        Some((Some(16..19), Unapplied::Refused)),
         "the statement's `)` is not the filter's"
     );
     tq.run_failed(4, &ServerError::Message(&near("rank = 1)")), my);
-    assert_eq!(tq.failure(), Some(&Failure { at: Some(11..19), how: Unapplied::Refused }));
+    assert_eq!(tq.failure().map(|f| (f.at.clone(), f.how)), Some((Some(11..19), Unapplied::Refused)));
 }
 
 #[test]
 fn the_order_completes_columns_and_directions() {
-    use crate::app::filter_line::order_completion;
+    use crate::app::table_filter::order_completion;
     use datarig_core::query::{ColumnFacts, ColumnKind};
     let cols = |d| {
         Target::new(d, ["id", "name", "Nick Name"].map(|n| ColumnFacts::new(n.to_string(), ColumnKind::Other)).into())
@@ -249,7 +312,11 @@ fn a_mysql_snippet_found_again_overlapping_is_not_located() {
     tq.sent(1, &[sql]);
     let near = ServerMessage { text: "ERROR 1064 (42000): x near 'aa' at line 1".into(), ..Default::default() };
     tq.run_failed(1, &ServerError::Message(&near), my);
-    assert_eq!(tq.failure(), Some(&Failure { at: None, how: Unapplied::Refused }), "twice, overlapping: not located");
+    assert_eq!(
+        tq.failure().map(|f| (f.at.clone(), f.how)),
+        Some((None, Unapplied::Refused)),
+        "twice, overlapping: not located"
+    );
 }
 
 #[test]

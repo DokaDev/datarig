@@ -1,22 +1,23 @@
 ---
 source: crates/tui/tests/it/flows_table_filter_value.rs
+assertion_line: 703
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users ×                                                            "
 "│  ＋ New connection         │╭ Results · 3 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1             ││ local-pg / datarig.shop.users  127.0.0.1:55432     ││ id: 2                            │"
 "│  ▾ ●   local-pg            ││ [Result 1]  Chart  Messages                    H/L ││ name: NULL                       │"
-"│    ▾ datarig default       ││ WHERE  f filter · s sort · Ctrl+R history        ⟳ ││ score: NULL                      │"
-"│      ▸ analytics           ││   │ id   │ name  ^v│ score   │ data   │ doc      │ ││ data: NULL                       │"
-"│      ▸ public              ││   │ int8 │ text    │ float8  │ bytea  │ json     │ ││ doc: NULL                        │"
-"│      ▾ shop                ││ 1 │    1 │ it's    │     1.5 │ \x01ab │ {"a": 1} │ ││ born: NULL                       │"
-"│        ▾ Tables            ││ 2 │    2 │ NULL    │ NULL    │ NULL   │ NULL     │ ││ spot: NULL                       │"
-"│          ▸ users           ││ 3 │    3 │╭──────────────────╮ \x00   │ []       │ ││                                  │"
-"│                            ││           │ › type to filter │                     ││                                  │"
+"│    ▾ datarig default       ││   │ id   │ name  ^v│ score   │ data   │ doc      │ ││ score: NULL                      │"
+"│      ▸ analytics           ││   │ int8 │ text    │ float8  │ bytea  │ json     │ ││ data: NULL                       │"
+"│      ▸ public              ││ 1 │    1 │ it's    │     1.5 │ \x01ab │ {"a": 1} │ ││ doc: NULL                        │"
+"│      ▾ shop                ││ 2 │    2 │ NULL    │ NULL    │ NULL   │ NULL     │ ││ born: NULL                       │"
+"│        ▾ Tables            ││ 3 │    3 │╭──────────────────╮ \x00   │ []       │ ││ spot: NULL                       │"
+"│          ▸ users           ││           │ › type to filter │                     ││                                  │"
 "│                            ││           │ Filter by name   │                     ││                                  │"
 "│                            ││           │  IS NULL         │                     ││                                  │"
 "│                            ││           │  IS NOT NULL     │                     ││                                  │"
 "│                            ││           ╰──────────────────╯                     ││                                  │"
+"│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"

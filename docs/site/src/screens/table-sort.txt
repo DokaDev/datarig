@@ -2,12 +2,12 @@
 │  ＋ New connection         │╭ Results · 3 rows ──────────────────────────────────────────────────────────────────────╮
 │▾ Connections 1             ││ local-pg / datarig.shop.users  127.0.0.1:55432                                         │
 │  ▾ ●   local-pg            ││ [Result 1]  Chart  Messages                                                        H/L │
-│    ▾ datarig default       ││ WHERE name <> 'zz'                     ORDER BY id ASC, … order not unique  LIMIT -  ⟳ │
-│      ▸ analytics           ││   │ id ^   │ name v2 = ^v│ email                                                       │
-│      ▸ public              ││   │ int8   │ text        │ text                                                        │
-│      ▾ shop                ││ 1 │      0 │ n0          │ u0@x                                                        │
-│        ▾ Tables            ││ 2 │      1 │ n1          │ u1@x                                                        │
-│          ▸ users           ││ 3 │      2 │ n2          │ u2@x                                                        │
+│    ▾ datarig default       ││   │ id ^   │ name v2 = ^v│ email                                                       │
+│      ▸ analytics           ││   │ int8   │ text        │ text                                                        │
+│      ▸ public              ││ 1 │      0 │ n0          │ u0@x                                                        │
+│      ▾ shop                ││ 2 │      1 │ n1          │ u1@x                                                        │
+│        ▾ Tables            ││ 3 │      2 │ n2          │ u2@x                                                        │
+│          ▸ users           ││                                                                                        │
 │                            ││                                                                                        │
 │                            ││                                                                                        │
 │                            ││                                                                                        │

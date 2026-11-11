@@ -1,18 +1,18 @@
 ---
 source: crates/tui/tests/it/flows_table_estimate.rs
+assertion_line: 161
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users * ×                                                          "
 "│  ＋ New connection         │╭ Results · … ─ ‹ (page 1 / ? · next page re-runs) › ╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾╭─────────────────────────────────────────────╮g.shop.users  127.0.0.1:55432     ││ id: 0                            │"
 "│ │ › type to filter                            │  Messages                    H/L ││                                  │"
-"│ │ Rows of the filtered table                  │            ORDER BY   LIMIT -  ⟳ ││                                  │"
+"│ │ Rows of the filtered table                  │                                  ││                                  │"
 "│ │  Estimate (planner)         nothing is read │                                  ││                                  │"
 "│ │  Exact count                stops after 30s │                                  ││                                  │"
 "│ ╰─────────────────────────────────────────────╯                                  ││                                  │"
-"│        ▾ Tables            ││  2 │      1                                        ││                                  │"
-"│          ▸ users           ││  3 │      2                                        ││                                  │"
-"│                            ││  4 │      3                                        ││                                  │"
+"│        ▾ Tables            ││  3 │      2                                        ││                                  │"
+"│          ▸ users           ││  4 │      3                                        ││                                  │"
 "│                            ││  5 │      4                                        ││                                  │"
 "│                            ││  6 │      5                                        ││                                  │"
 "│                            ││  7 │      6                                        ││                                  │"
@@ -29,6 +29,7 @@ expression: backend
 "│                            ││ 18 │     17                                        ││                                  │"
 "│                            ││ 19 │     18                                        ││                                  │"
 "│                            ││ 20 │     19                                        ││                                  │"
+"│                            ││ 21 │     20                                        ││                                  │"
 "│                            ││ Showing 500 rows · nothing is held open on the ser…││                                  │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯"
 " local-pg │ 500+ rows (more pages) · 2ms                                                                             EN "

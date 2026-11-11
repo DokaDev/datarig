@@ -173,20 +173,12 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
     {
         draw_popup(app, cursor, area, f.buffer_mut());
     }
-    // A field of the filter line: under it, or above it near the bottom.
-    if let (Some(crate::app::PopupOwner::Filter(field)), Some(at)) = (owner, app.layout.filter_cursor)
-        && app.filter_line_focused()
-        && app.filter_line_field() == Some(field)
-        && !app.modal_open()
-    {
-        draw_popup(app, at, area, f.buffer_mut());
-    }
     // Real terminal cursor at the focused text input so IME preedit appears in place.
     if app.focus == Focus::Tree {
         filter_cursor
     } else {
         match app.focus {
-            Focus::Results => app.layout.filter_cursor.or(app.layout.grid_prompt_cursor),
+            Focus::Results => app.layout.grid_prompt_cursor,
             _ => (app.focus == Focus::Editor && editor_area.is_some()).then_some(cursor),
         }
     }
@@ -342,7 +334,7 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     // The result tabs of the last run, the Chart, a Plan and the Messages on the first line.
     let strip = app.strip_shown() && rinner.height > 2;
     let old_strip = std::mem::take(&mut app.pointer.strip_hits);
-    let mut content = if strip {
+    let content = if strip {
         let line = Rect { height: 1, ..rinner };
         app.layout.strip = line;
         draw_strip(app, line, buf);
@@ -355,15 +347,6 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
         app.layout.strip = Rect::default();
         rinner
     };
-    // A table tab's filter line above the grid (and above what the run said).
-    if app.tab().is_table() && !app.changes_shown() && !app.plan_shown() && !app.chart_shown() && content.height > 2 {
-        let focused = if app.focus == Focus::Results { app.filter_line_field() } else { None };
-        let rows = crate::widgets::filter_line::rows(content.width, focused).min(content.height - 2);
-        let line = Rect { height: rows, ..content };
-        if draw_filter_line(app, line, grid_area.height, buf) {
-            content = Rect { y: content.y + rows, height: content.height - rows, ..content };
-        }
-    }
     // Another view than the rows: no grid, so no cell of it is under the pointer (it would
     // still be lit when the rows come back).
     let rows = !matches!(app.tab().exec.view, ResultView::Messages | ResultView::Changes)
@@ -386,37 +369,6 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     if panel_w.is_some() {
         crate::widgets::inspector::draw_inspector(app, detail_area, buf);
     }
-}
-
-/// The filter line of the active table tab in `line`, unless it is empty, has no focus and
-/// the results pane (`pane_h` rows) is short: whether it was drawn.
-fn draw_filter_line(app: &mut App, line: Rect, pane_h: u16, buf: &mut Buffer) -> bool {
-    app.filter_line_follow();
-    let id = app.tab().id;
-    let focused = if app.focus == Focus::Results { app.filter_line_field() } else { None };
-    let applied = app.filter_line_applied(id);
-    let empty = app.table_query(id).is_none_or(|q| q.line.empty());
-    let blank = empty && applied.filter.is_empty() && applied.order.is_empty() && applied.limit.is_empty();
-    if crate::widgets::filter_line::hidden(blank, focused.is_some(), pane_h) {
-        return false;
-    }
-    use crate::app::filter_line::TableAction;
-    let filter = app.key_for(Action::Table(TableAction::EditFilter), Ctx::Grid);
-    let sort = app.key_for(Action::Table(TableAction::SortCycle), Ctx::Grid);
-    let history = app.key_for(Action::Table(TableAction::History), Ctx::FilterLine);
-    let hint = app.i18n.msg(&Msg::TableFilterHint { filter, sort, history }).to_string();
-    let mut state = app.table_query(id).map(|q| q.line.clone()).unwrap_or_default();
-    let drawn = crate::widgets::filter_line::draw(app, &mut state, &applied, focused, &hint, line, buf);
-    if let Some(tq) = app.tab_mut().doc.table_query.as_mut() {
-        tq.line = state;
-    }
-    app.layout.filter_line = line;
-    app.layout.filter_where = drawn.where_;
-    app.layout.filter_order = drawn.order;
-    app.layout.filter_limit = drawn.limit;
-    app.layout.filter_refresh = drawn.refresh;
-    app.layout.filter_cursor = drawn.cursor;
-    true
 }
 
 /// The result tab strip: `[Result 1]  Result 3  Changes 2  Plan  Chart  Messages`, the shown

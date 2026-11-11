@@ -26,9 +26,9 @@
 use super::action::{ChartAction, MonitorAction, PanelAction, PlanAction, PlanView};
 use super::copy::{CopyFormat, CopyScope};
 use super::edit::{EditAction, NotOffered};
-use super::filter_line::TableAction;
 use super::filter_value::ByValue;
 use super::monitor::MonitorView;
+use super::table_filter::TableAction;
 use super::tabs::ResultView;
 use super::*;
 use crate::keymap::{Target, keys};

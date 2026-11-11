@@ -186,6 +186,7 @@ pub(crate) struct ColumnInfo {
     pub(crate) enum_known: bool,
     pub(crate) primary_key: bool,
     pub(crate) foreign_key: bool,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) not_null: bool,
     /// MySQL: left out of `SELECT *`.
     pub(crate) invisible: bool,
@@ -435,6 +436,7 @@ impl Row {
     }
 
     /// The row has every value its operator takes.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn complete(&self) -> bool {
         self.cond().is_some()
     }
@@ -643,6 +645,7 @@ impl Where {
     }
 
     /// The text given.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn original(&self) -> &str {
         &self.original
     }
@@ -683,6 +686,7 @@ impl Where {
     /// Row `row` becomes the only condition of its column: the column's own rows are taken
     /// out (expressions and other columns' rows stay as they are) and `row` takes the place of
     /// the first of them, else goes after the others. Its index.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn replace_column(&mut self, row: Row, target: &Target) -> usize {
         let own = |t: &Term| t.row.as_ref().is_some_and(|r| r.col == row.col);
         let at = self.terms.iter().position(own);
@@ -709,6 +713,7 @@ impl Where {
 
     /// The text of the `WHERE` field read back: nothing changes when it is the text sent
     /// ([`Where::text`]); else the terms are those of `text`, given anew.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn set_text(&mut self, text: &str, target: &Target) {
         if text != self.text() {
             *self = Self::from_text(text, target);
@@ -856,6 +861,7 @@ impl<K: PartialEq> Undo<K> {
         self.steps.is_empty()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn len(&self) -> usize {
         self.steps.len()
     }

@@ -1,23 +1,24 @@
 ---
 source: crates/tui/tests/it/flows_table_filter_value.rs
+assertion_line: 703
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users ×                                                            "
 "│  ＋ New connection         │╭ Results · 3 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1             ││ local-pg / datarig.shop.users  127.0.0.1:55432     ││ id: 3                            │"
 "│  ▾ ●   local-pg            ││ [Result 1]  Chart  Messages                    H/L ││ name: 50%_off                    │"
-"│    ▾ datarig default       ││ WHERE  f filter · s sort · Ctrl+R history        ⟳ ││ score: 2.5                       │"
-"│      ▸ analytics           ││   │ id   │ name  ^v│ score   │ data   │ doc      │ ││ data: \x00                       │"
-"│      ▸ public              ││   │ int8 │ text    │ float8  │ bytea  │ json     │ ││ doc: []                          │"
-"│      ▾ shop                ││ 1 │    1 │ it's    │     1.5 │ \x01ab │ {"a": 1} │ ││ born: 2026-11-11 00:00:00+09     │"
-"│        ▾ Tables            ││ 2 │    2 │ NULL    │ NULL    │ NULL   │ NULL     │ ││ spot: (0,0)                      │"
-"│          ▸ users           ││ 3 │    3 │ 50%_off │     2.5 │ \x00   │ []       │ ││                                  │"
-"│                            ││           ╭─────────────────────────────────────╮  ││                                  │"
+"│    ▾ datarig default       ││   │ id   │ name  ^v│ score   │ data   │ doc      │ ││ score: 2.5                       │"
+"│      ▸ analytics           ││   │ int8 │ text    │ float8  │ bytea  │ json     │ ││ data: \x00                       │"
+"│      ▸ public              ││ 1 │    1 │ it's    │     1.5 │ \x01ab │ {"a": 1} │ ││ doc: []                          │"
+"│      ▾ shop                ││ 2 │    2 │ NULL    │ NULL    │ NULL   │ NULL     │ ││ born: 2026-11-11 00:00:00+09     │"
+"│        ▾ Tables            ││ 3 │    3 │ 50%_off │     2.5 │ \x00   │ []       │ ││ spot: (0,0)                      │"
+"│          ▸ users           ││           ╭─────────────────────────────────────╮  ││                                  │"
 "│                            ││           │ › type to filter                    │  ││                                  │"
 "│                            ││           │ Filter by name (3 cells)            │  ││                                  │"
 "│                            ││           │  IN ('it's', '50%_off', NULL)       │  ││                                  │"
 "│                            ││           │  NOT IN ('it's', '50%_off', NULL)   │  ││                                  │"
 "│                            ││           ╰─────────────────────────────────────╯  ││                                  │"
+"│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"

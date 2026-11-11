@@ -46,7 +46,6 @@ pub mod export_form;
 pub mod export_path_pick;
 pub mod filter_dialog;
 pub mod filter_history;
-pub mod filter_line;
 pub mod filter_value;
 pub mod folder_pick;
 pub mod folder_read;
@@ -85,6 +84,7 @@ mod status;
 pub mod tab_drag;
 pub mod tab_list;
 mod tab_ops;
+pub mod table_filter;
 pub mod table_query;
 pub mod tabs;
 pub mod themes;
@@ -274,7 +274,6 @@ pub struct Popup {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PopupOwner {
     Editor,
-    Filter(table_query::Field),
 }
 
 pub struct Viewer {
@@ -380,14 +379,6 @@ pub struct Layout {
     pub editor_cursor: (u16, u16),
     /// Where the cursor of the grid's search prompt was drawn last, while it is open.
     pub grid_prompt_cursor: Option<(u16, u16)>,
-    /// A table tab's filter line as drawn last: the whole line, its condition and its order
-    /// (each with its keyword), its refresh mark, and the cursor of the field with the focus.
-    pub filter_line: Rect,
-    pub filter_where: Rect,
-    pub filter_order: Rect,
-    pub filter_limit: Rect,
-    pub filter_refresh: Rect,
-    pub filter_cursor: Option<(u16, u16)>,
     /// The grid's rows and the lines under them, as drawn last (inside the results pane).
     pub grid_area: Rect,
     /// The editor and the results pane together (a query tab), for resizing the pane.
