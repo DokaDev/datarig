@@ -161,6 +161,20 @@ async fn read_startup(c: &mut TcpStream) -> std::io::Result<Vec<u8>> {
     Ok(body)
 }
 
+/// How many bytes at the start of what a server sent are whole messages (a tag, a length that
+/// counts itself, the body).
+fn whole_messages(bytes: &[u8]) -> usize {
+    let mut at = 0;
+    while let Some(len) = bytes.get(at + 1..at + 5) {
+        let end = at + 1 + i32::from_be_bytes(len.try_into().unwrap()) as usize;
+        if end > bytes.len() {
+            break;
+        }
+        at = end;
+    }
+    at
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn relay(
     mut client: TcpStream,
@@ -209,15 +223,20 @@ async fn relay(
     let (mut sr, mut sw) = server.into_split();
     tokio::spawn(async move {
         let mut buf = vec![0; 16 * 1024];
+        let mut pending = Vec::new();
         let mut gate = held.subscribe();
         while let Ok(n) = sr.read(&mut buf).await {
+            pending.extend_from_slice(&buf[..n]);
             let _ = gate.wait_for(|held| !held).await;
+            // Whole messages only, so what is reworded is never cut in two; at the end, what came.
+            let whole = if n == 0 { pending.len() } else { whole_messages(&pending) };
+            let mut out: Vec<u8> = pending.drain(..whole).collect();
             for (from, to) in rewords.lock().unwrap().iter() {
-                while let Some(at) = buf[..n].windows(from.len()).position(|w| w == from.as_slice()) {
-                    buf[at..at + to.len()].copy_from_slice(to);
+                while let Some(at) = out.windows(from.len()).position(|w| w == from.as_slice()) {
+                    out[at..at + to.len()].copy_from_slice(to);
                 }
             }
-            if n == 0 || cw.write_all(&buf[..n]).await.is_err() {
+            if cw.write_all(&out).await.is_err() || n == 0 {
                 break;
             }
         }

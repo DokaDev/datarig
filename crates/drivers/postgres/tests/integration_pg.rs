@@ -7533,6 +7533,29 @@ async fn a_late_answer_does_not_change_what_stopped_a_bounded_read() {
     assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
 }
 
+/// The proxy rewords a message whole, however the server's answer is cut on its way.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_proxy_rewords_a_message_cut_across_reads() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = pg_proxy::Proxy::start(&server.local_addr().unwrap().to_string()).await;
+    proxy.reword("canceling", "zz_words_");
+    let mut client = tokio::net::TcpStream::connect(&proxy.addr).await.unwrap();
+    client.write_all(&[&9i32.to_be_bytes()[..], &196608i32.to_be_bytes(), &[0]].concat()).await.unwrap();
+    let (mut upstream, _) = server.accept().await.unwrap();
+    upstream.set_nodelay(true).unwrap();
+    upstream.read_exact(&mut [0; 9]).await.unwrap();
+    let body = b"Mcanceling statement\0\0";
+    let message = [&[b'E'][..], &(body.len() as i32 + 4).to_be_bytes(), body].concat();
+    let cut = message.windows(9).position(|w| w == b"canceling").unwrap() + 4;
+    upstream.write_all(&message[..cut]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    upstream.write_all(&message[cut..]).await.unwrap();
+    let mut got = vec![0; message.len()];
+    client.read_exact(&mut got).await.unwrap();
+    assert_eq!(got, [&message[..6], b"zz_words_", &message[15..]].concat());
+}
+
 /// A server that answers in another language says nothing the app can read: however the user
 /// asked to cancel, what stopped the statement is told in the server's own words, never called a
 /// cancel. Whether the time limit fired or the cancel did, bounded or not, in the user's block too.
