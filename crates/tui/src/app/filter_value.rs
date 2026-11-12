@@ -549,7 +549,7 @@ impl App {
     /// Value `v` of column `col` of result `rs` (as read, not NULL) as the filter compares it,
     /// or why it is not taken: shown otherwise than the server holds it (as a copy as SQL judges
     /// it), read in another time zone than the session's now, or binary data over
-    /// [`MAX_BYTES`].
+    /// [`MAX_BYTES`]. A MySQL `TIMESTAMP` carries the offset of the zone it was read in.
     fn by_value_value(
         &self,
         t: &Tab,
@@ -568,7 +568,7 @@ impl App {
         };
         let cells =
             export::sql_cells(d, &cols, &rs.read_in, keys.and_then(|k| k.server_zone())).map_err(|r| not_whole(&r))?;
-        cells.cell(0, v).map_err(|r| not_whole(&r))?;
+        let cell = cells.cell(0, v).map_err(|r| not_whole(&r))?;
         let mysql = matches!(d, Dialect::MySql(_));
         // A MySQL TIMESTAMP is shown in the session's zone: the session reads it back the same
         // only in the zone it was read in.
@@ -584,6 +584,9 @@ impl App {
         }
         Ok(match m.kind {
             ValueKind::Integer | ValueKind::Decimal | ValueKind::Float => Value::Number(v.to_string()),
+            // With the offset of the zone it was read in (as a copy as SQL writes it): the same
+            // instant in any session's zone, as the filter is run again from the history.
+            ValueKind::TimestampTz if mysql => Value::Text(cell.into_owned()),
             ValueKind::Bytes => {
                 let bytes = hex_bytes(v, if mysql { "0x" } else { "\\x" }).ok_or_else(|| {
                     not_whole(&export::Refused { column: m.name.clone(), why: export::NotWhole::NotShownWhole })

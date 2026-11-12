@@ -692,11 +692,12 @@ fn mysql_literals_follow_the_session_and_case_the_collation() {
     assert_eq!(sent, my("LOWER(name) LIKE LOWER(_utf8mb4 X'25697427735C25') ESCAPE '!'"));
     page_with(&mut h, cols(), rows());
     clear_with(&mut h, cols(), rows());
-    // Bytes as X'…'; a TIMESTAMP as shown, in the zone it was read in.
+    // Bytes as X'…'; a TIMESTAMP as shown with the offset of the zone it was read in, so
+    // that it is the same instant in a session of another zone (run again from the history).
     assert_eq!(filter(&mut h, 0, 2, "= '0x01AB'"), my("data = X'01AB'"));
     page_with(&mut h, cols(), rows());
     clear_with(&mut h, cols(), rows());
-    assert_eq!(filter(&mut h, 0, 4, "< '2026-11-10 09:30:00'"), my("at < '2026-11-10 09:30:00'"));
+    assert_eq!(filter(&mut h, 0, 4, "< '2026-11-10 09:30:00'"), my("at < '2026-11-10 09:30:00+00:00'"));
     // A MySQL FLOAT is sent rounded: not taken.
     at(&mut h, 0, 3);
     h.keys("F");
