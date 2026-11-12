@@ -917,3 +917,35 @@ fn a_field_of_one_value_reads_back_to_the_value_it_shows() {
     // The list narrows by the value typed in quotes.
     assert_eq!(crate::app::filter_dialog::list::fragment(Op::Eq, "'a\\nb'"), Some("a\nb".to_string()));
 }
+
+/// A MySQL TIMESTAMP's instant (`CONVERT_TZ('…', '+00:00', @@session.time_zone)`) is a row of
+/// the dialog only on a column known to be a TIMESTAMP, where an edit writes it back as the
+/// instant. On a VARCHAR or a DATETIME, and on any column while the table's types are not read
+/// (a filter from the history then), it is an expression kept as written: an edit would write
+/// its value back as a string.
+#[test]
+fn a_timestamp_instant_is_a_row_only_on_a_timestamp() {
+    let instant = "CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
+    let mut t = target(MY);
+    t.columns.push(ColumnFacts { zoned: true, ..ColumnFacts::new("at", ColumnKind::Other) });
+    for col in ["name", "born"] {
+        let filter = format!("{col} = {instant}");
+        let w = Where::from_text(&filter, &t);
+        assert_eq!(w.terms().len(), 1);
+        assert_eq!(w.terms()[0].row, None, "{filter}");
+        assert_eq!(w.text(), filter);
+    }
+    // On the TIMESTAMP: a row, and changed to a list it is still the instant.
+    let filter = format!("at = {instant}");
+    let mut w = Where::from_text(&filter, &t);
+    let v = text("2026-11-10 09:30:00+00:00");
+    assert_eq!(w.terms()[0].row, Some(row("at", Op::Eq, vec![v.clone()])));
+    assert!(w.set(0, row("at", Op::InList, vec![v]), &t));
+    assert_eq!(w.text(), format!("at IN ({instant})"));
+    // The table's types not read yet: the names alone, every column of unknown type.
+    let names =
+        Target::new(MY, vec![ColumnFacts::new("id", ColumnKind::Other), ColumnFacts::new("at", ColumnKind::Other)]);
+    let w = Where::from_text(&filter, &names);
+    assert_eq!(w.terms()[0].row, None);
+    assert_eq!(w.text(), filter);
+}
