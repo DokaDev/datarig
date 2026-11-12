@@ -127,16 +127,20 @@ pub(crate) mod order_keys;
 const HIDDEN_SCHEMAS: &str = "n.nspname NOT IN ('pg_catalog', 'information_schema') \
      AND n.nspname NOT LIKE 'pg\\_toast%' AND n.nspname NOT LIKE 'pg\\_temp%'";
 
-/// What each read starts with: its own read-only transaction, whose waits for a lock end after
-/// 2 s, without JIT compilation (PostgreSQL 11 and later: `set_config(…, true)` is a `SET
-/// LOCAL` the older servers, which have no `jit`, skip). A catalog read is short, but a
-/// catalog of some thousand relations can raise its planned cost over `jit_above_cost`, and
-/// compiling it costs far more than running it. `pg_catalog` goes first on the path, so that a
-/// schema a role's or database's default lists ahead of it shadows none of the functions,
-/// operators and types of the read (the rest of the path stays: what `format_type` and
-/// `regclass` show as visible is what the session sees). All of this ends with the
-/// transaction, so nothing is left on a server connection a pooler hands to another client.
-pub const BEGIN_READ: &str = "BEGIN READ ONLY; SET LOCAL lock_timeout = '2s'; \
+/// What each read starts with: its own read-only transaction at `READ COMMITTED` (never the
+/// session's default level: at `SERIALIZABLE` the read would take predicate locks that others
+/// can fail on, wait for a safe snapshot when the default is also `DEFERRABLE`, and be refused
+/// on a standby; one statement sees what was committed when it started either way), whose
+/// waits for a lock end after 2 s, without JIT compilation (PostgreSQL 11 and later:
+/// `set_config(…, true)` is a `SET LOCAL` the older servers, which have no `jit`, skip). A
+/// catalog read is short, but a catalog of some thousand relations can raise its planned cost
+/// over `jit_above_cost`, and compiling it costs far more than running it. `pg_catalog` goes
+/// first on the path, so that a schema a role's or database's default lists ahead of it
+/// shadows none of the functions, operators and types of the read (the rest of the path stays:
+/// what `format_type` and `regclass` show as visible is what the session sees). All of this
+/// ends with the transaction, so nothing is left on a server connection a pooler hands to
+/// another client.
+pub const BEGIN_READ: &str = "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SET LOCAL lock_timeout = '2s'; \
      SELECT pg_catalog.set_config('search_path', \
        CASE WHEN pg_catalog.current_setting('search_path') OPERATOR(pg_catalog.=) '' THEN 'pg_catalog' \
        ELSE pg_catalog.concat('pg_catalog, ', pg_catalog.current_setting('search_path')) END, true); \

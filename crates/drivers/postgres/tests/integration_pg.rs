@@ -944,6 +944,55 @@ async fn the_default_class_is_picked_as_the_server_picks() {
     assert_eq!(pick(&set(&[c(40, false, false), c(41, false, false)])).await, None);
 }
 
+/// `url` with `options` that make every transaction of its sessions `SERIALIZABLE` by default,
+/// and `DEFERRABLE` too when `deferrable` (a read-only one then waits for a snapshot no
+/// serializable writer can upset).
+fn serializable_url(url: &str, deferrable: bool) -> String {
+    let sep = if url.contains('?') { '&' } else { '?' };
+    let more = if deferrable { "%20-c%20default_transaction_deferrable%3Don" } else { "" };
+    format!("{url}{sep}options=-c%20default_transaction_isolation%3Dserializable{more}")
+}
+
+/// The app's own catalog reads (a table tab's order keys among them) set their isolation level,
+/// whatever the session's default: under `SERIALIZABLE DEFERRABLE` by default, a read-only
+/// transaction at the default level waits for a safe snapshot while another session's
+/// serializable transaction that wrote is open; the keys come at once all the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn catalog_reads_do_not_take_a_serializable_default() {
+    use datarig_core::driver::keys::OrderKeys;
+    let Some(url) = pg_url("catalog_reads_do_not_take_a_serializable_default") else { return };
+    let schema = format!("zz_serialmeta_{}", std::process::id());
+    let _guard = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE TABLE {s}.t (id int PRIMARY KEY)"),
+        format!("CREATE TABLE {s}.w (id int)"),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let serial = serializable_url(&url, true);
+    let mut probe = Conn::open(&serial, SessionRole::Query).await;
+    let set = first_cell(&mut probe, 1, "SELECT current_setting('default_transaction_isolation')").await;
+    assert_eq!(set.as_deref(), Some("serializable"), "the default is in effect");
+    let tag = format!("serialmeta{}", std::process::id());
+    let cfg = ConnectionConfig { name: "it".into(), dsn: Some(serial), ..ConnectionConfig::test_db() };
+    let (tx, rx) = unbounded_channel();
+    let o = ConnectOptions::new(PAGE, SessionRole::Meta, &tag).dialer(dialer());
+    let mut meta = Conn { session: PgDriver.connect(&cfg, SessionRole::Meta, o, tx), rx };
+    meta.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let mut writer = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(writer.run(1, "BEGIN ISOLATION LEVEL SERIALIZABLE").await, DbEvent::Done { .. }));
+    assert!(matches!(writer.run(2, &format!("INSERT INTO {s}.w VALUES (1)")).await, DbEvent::Done { .. }));
+    meta.session.send(DbCommand::LoadTableKeys { id: 7, schema: schema.clone(), table: "t".into() });
+    let ev = tokio::time::timeout(Duration::from_secs(5), meta.rx.recv()).await;
+    let answered = matches!(&ev, Ok(Some(DbEvent::TableKeys { id: 7, .. })));
+    assert!(matches!(writer.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+    assert!(answered, "the keys waited for the writer: {ev:?}");
+    let Ok(Some(DbEvent::TableKeys { result, .. })) = ev else { unreachable!() };
+    assert_eq!(result, Ok(OrderKeys { primary_key: vec!["id".into()], ..OrderKeys::default() }));
+}
+
 /// A filter written for a `real` column (`ColumnKind::Real`) finds the row of each value as the
 /// session shows it (its shortest text): the number goes as a string the server reads as a
 /// `real` (a bare `0.1` is a `numeric`, compared after both widen to `double precision`, and
