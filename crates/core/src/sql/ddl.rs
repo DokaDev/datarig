@@ -307,7 +307,7 @@ fn relation(r: &RelationDdl) -> Vec<String> {
         }
     }
     for c in &r.columns {
-        out.extend(column_settings(&name, c));
+        out.extend(column_settings(&name, kind, c));
     }
     for o in &r.sequences {
         let seq = qualified(&o.sequence.schema, &o.sequence.name);
@@ -379,14 +379,18 @@ fn relation(r: &RelationDdl) -> Vec<String> {
 }
 
 /// A column's settings `CREATE TABLE` has no clause for: its storage, compression, statistics
-/// target and options.
-fn column_settings(table: &str, c: &ColumnDdl) -> Vec<String> {
+/// target and options. Only those the relation's kind takes: a view takes none of them, a
+/// foreign table no compression (the server refuses the statement otherwise).
+fn column_settings(table: &str, kind: RelationKind, c: &ColumnDdl) -> Vec<String> {
     let alter = format!("ALTER TABLE ONLY {table} ALTER COLUMN {}", sql_ident(&c.name));
     let mut v = Vec::new();
+    if kind == RelationKind::View {
+        return v;
+    }
     if let Some(s) = &c.storage {
         v.push(format!("{alter} SET STORAGE {s};"));
     }
-    if let Some(m) = &c.compression {
+    if let Some(m) = c.compression.as_ref().filter(|_| kind != RelationKind::ForeignTable) {
         v.push(format!("{alter} SET COMPRESSION {m};"));
     }
     if let Some(n) = c.statistics {
