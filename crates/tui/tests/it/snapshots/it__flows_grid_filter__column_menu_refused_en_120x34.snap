@@ -11,7 +11,7 @@ expression: backend
 "│      ▸ public              ││ 2 ULL    │ NULL   │ NULL     │ NULL  ╭─────────────────────────────────────────────────╮"
 "│      ▾ shop                ││ 3    2.5 │ \x00   │ []       │ 2026-1│ doc                                             │"
 "│        ▾ Tables            ││                                      │  ↑ Sort ascending                             s │"
-"│          ▸ users           ││                                      │  ↓ Sort descending                          s s │"
+"│          ▸ users           ││                                      │  ↓ Sort descending                              │"
 "│                            ││                                      │  Clear sort                          not sorted │"
 "│                            ││                                      │─────────────────────────────────────────────────│"
 "│                            ││                                      │  Filter and sort…                             f │"

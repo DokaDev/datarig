@@ -156,24 +156,6 @@ impl App {
         }
     }
 
-    /// The column menu's entry key `k` runs (the grid's key shown next to it), if any.
-    pub(super) fn menu_item_of_key(&self, k: crate::keymap::KeyChord) -> Option<MenuItem> {
-        let m = self.overlays.menu()?;
-        let Some(crate::keymap::Target::Action(Action::Table(a))) = self.keymap.resolve_seq(Ctx::Grid, &[k]).0 else {
-            return None;
-        };
-        let c = match a {
-            TableAction::SortCycle => ColumnItem::SortAsc,
-            TableAction::EditFilter => ColumnItem::Dialog,
-            TableAction::Only => ColumnItem::Only,
-            TableAction::Exclude => ColumnItem::Exclude,
-            TableAction::Hide => ColumnItem::Hide,
-            _ => return None,
-        };
-        let item = MenuItem::Column(c);
-        m.own.contains(&item).then_some(item)
-    }
-
     /// The filter of table tab `id`'s rows shown without column `column`'s own conditions (the
     /// terms the dialog shows as its rows; every other term as written), or why there is none
     /// to take out.
@@ -229,25 +211,53 @@ impl App {
         }
     }
 
-    /// The keys shown with entry `c` of the column menu (in the grid's context).
-    pub(super) fn column_item_keys(&self, c: ColumnItem) -> String {
-        let keys = |t: TableAction| {
-            self.keymap
-                .hint_keys(Action::Table(t), Ctx::Grid, self.enhanced_keys)
-                .map(|k| crate::keymap::keys::label(&k))
-                .unwrap_or_default()
-        };
-        match c {
-            ColumnItem::SortAsc => keys(TableAction::SortCycle),
-            ColumnItem::SortDesc => {
-                let k = keys(TableAction::SortCycle);
-                if k.is_empty() { k } else { format!("{k} {k}") }
+    /// The key that runs entry `c` of the column menu, which it shows: the grid's key of the
+    /// same action when that is one key, no key that moves through the menu, and no other
+    /// entry's. Sorting descending has none (in the grid it is the sort key twice).
+    pub(super) fn column_item_key(&self, c: ColumnItem) -> Option<KeyChord> {
+        let all = [ColumnItem::SortAsc, ColumnItem::Dialog, ColumnItem::Only, ColumnItem::Exclude, ColumnItem::Hide];
+        let key = |c: ColumnItem| {
+            let a = match c {
+                ColumnItem::SortAsc => TableAction::SortCycle,
+                ColumnItem::Dialog => TableAction::EditFilter,
+                ColumnItem::Only => TableAction::Only,
+                ColumnItem::Exclude => TableAction::Exclude,
+                ColumnItem::Hide => TableAction::Hide,
+                ColumnItem::SortDesc | ColumnItem::SortClear | ColumnItem::ClearFilter => return None,
+            };
+            match self.keymap.hint_keys(Action::Table(a), Ctx::Grid, self.enhanced_keys)?[..] {
+                [k] if !column_menu_moves(k) => Some(k),
+                _ => None,
             }
-            ColumnItem::Dialog => keys(TableAction::EditFilter),
-            ColumnItem::Only => keys(TableAction::Only),
-            ColumnItem::Exclude => keys(TableAction::Exclude),
-            ColumnItem::Hide => keys(TableAction::Hide),
-            ColumnItem::SortClear | ColumnItem::ClearFilter => String::new(),
-        }
+        };
+        let k = key(c)?;
+        let others = all.into_iter().filter(|&o| o != c).any(|o| key(o) == Some(k));
+        (!others).then_some(k)
+    }
+
+    /// The keys shown with entry `c` of the column menu: the one that runs it there.
+    pub(super) fn column_item_keys(&self, c: ColumnItem) -> String {
+        self.column_item_key(c).map(|k| k.label()).unwrap_or_default()
+    }
+
+    /// The column menu's entry key `k` runs ([`App::column_item_key`]), if any.
+    pub(super) fn menu_item_of_key(&self, k: KeyChord) -> Option<MenuItem> {
+        let m = self.overlays.menu()?;
+        m.own.iter().copied().find(|i| matches!(i, MenuItem::Column(c) if self.column_item_key(*c) == Some(k)))
+    }
+}
+
+/// A key that moves through (or closes, or runs the selected entry of) the column menu, which
+/// no entry takes.
+pub(super) fn column_menu_moves(k: KeyChord) -> bool {
+    use ratatui::crossterm::event::KeyModifiers;
+    let plain = k.mods.is_empty();
+    let ctrl = k.mods == KeyModifiers::CONTROL;
+    match k.code {
+        KeyCode::Down | KeyCode::Up | KeyCode::Tab | KeyCode::BackTab | KeyCode::Enter | KeyCode::Esc => true,
+        KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End => true,
+        KeyCode::Char('j' | 'k') => plain,
+        KeyCode::Char('n' | 'p') => ctrl,
+        _ => false,
     }
 }

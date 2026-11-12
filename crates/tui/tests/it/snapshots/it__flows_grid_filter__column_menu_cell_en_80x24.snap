@@ -7,7 +7,7 @@ expression: backend
 "│▾╭────────────────────────────────────────────╮sages  ││ id: 1                │"
 "│ │ name                                       │core   ││ name: it's           │"
 "│ │  ↑ Sort ascending                        s │loat8  ││ score: 1.5           │"
-"│ │  ↓ Sort descending                     s s │   1.5 ││ data: \x01ab         │"
+"│ │  ↓ Sort descending                         │   1.5 ││ data: \x01ab         │"
 "│ │  Clear sort                     not sorted │ULL    ││ doc: {"a": 1}        │"
 "│ │────────────────────────────────────────────│   2.5 ││ born: 2026-11-10 09:…│"
 "│ │  Filter and sort…                        f │       ││ spot: (1,2)          │"

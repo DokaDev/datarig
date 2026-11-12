@@ -101,7 +101,11 @@ fn users() -> Harness {
 
 /// [`users`], the key-only read answered with `keys` (`None`: not answered).
 fn users_with(keys: Option<datarig_core::driver::keys::OrderKeys>) -> Harness {
-    let mut h = Harness::connected(Lang::En);
+    users_from(Harness::connected(Lang::En), keys)
+}
+
+/// [`users_with`] in harness `h`.
+fn users_from(mut h: Harness, keys: Option<datarig_core::driver::keys::OrderKeys>) -> Harness {
     open_users(&mut h);
     if let Some(keys) = keys {
         keys_came_with(&mut h, "local-pg", keys);
@@ -500,7 +504,7 @@ fn the_column_menu_entries_run_what_they_show() {
         [
             "# name",
             "↑ Sort ascending | s",
-            "↓ Sort descending | s s",
+            "↓ Sort descending | ",
             "Clear sort | not sorted",
             "# ",
             "Filter and sort… | f",
@@ -882,4 +886,52 @@ fn the_column_menu_moves_by_keys_without_a_filter() {
     h.keys("=");
     assert!(!menu_open(&h));
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name = 'it''s') ORDER BY \"name\" DESC")]]);
+}
+
+/// The keys the column menu shows are the keys it runs: one key each, never one that moves
+/// through the menu, none for an entry no single key runs (sorting descending). On a column
+/// sorted ascending its entry is dimmed and its key says why, the menu staying open.
+#[test]
+fn the_column_menu_shows_only_keys_it_runs() {
+    let keys_of = |h: &Harness| -> Vec<String> { lines(h).into_iter().filter(|l| !l.starts_with('#')).collect() };
+    let mut h = users();
+    at(&mut h, 0, 1);
+    h.keys("s");
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} ORDER BY \"name\" ASC")]]);
+    page(&mut h);
+    at(&mut h, 0, 1);
+    h.keys("F");
+    let shown = keys_of(&h);
+    assert!(shown.contains(&"↑ Sort ascending | sorted so".to_string()), "{shown:?}");
+    assert!(shown.contains(&"↓ Sort descending | ".to_string()), "no key runs it: {shown:?}");
+    h.keys("s");
+    assert!(menu_open(&h), "the dimmed entry says why, the menu stays");
+    assert!(runs(&mut h).is_empty());
+    h.key(KeyCode::Esc);
+    // Keys moved: `C` off, hiding on `j` (which moves in the menu), `=` on two keys.
+    let mut cfg = test_db_config();
+    cfg.keymap = datarig_core::config::parse(
+        "[keymap.grid]\n\"C\" = \"none\"\n\"j\" = \"table.column.hide\"\n\"=\" = \"none\"\n\"g o\" = \"table.filter.only\"\n",
+    )
+    .unwrap()
+    .keymap;
+    let mut h = users_from(Harness::connected_with(&cfg, Lang::En), Some(collations(Some(true))));
+    at(&mut h, 0, 1);
+    h.keys("F");
+    let shown = keys_of(&h);
+    assert!(shown.contains(&"Hide column | ".to_string()), "{shown:?}");
+    assert!(shown.contains(&"Only 'it's' | ".to_string()), "{shown:?}");
+    let selected = h.app.overlays.menu().unwrap().selected;
+    h.keys("j");
+    assert!(menu_open(&h), "j moves");
+    assert_ne!(h.app.overlays.menu().unwrap().selected, selected);
+    assert_eq!(hidden_cols(&h), 0, "nothing hidden");
+    h.keys("g");
+    h.keys("o");
+    assert!(menu_open(&h));
+    assert!(runs(&mut h).is_empty(), "no two-key entries in the menu");
+}
+
+fn hidden_cols(h: &Harness) -> usize {
+    h.app.tab().grid.hidden.iter().filter(|x| **x).count()
 }
