@@ -1960,6 +1960,22 @@ fn group_count_refuses_what_the_filter_bar_refuses_and_unknown_calls() {
         assert!(matches!(g("f(id) > 1", true), Err(GroupRefusal::Filter(BarRefusal::UncheckedCalls(_)))));
         let sleep = if d == MY { "SLEEP(1) = 0" } else { "pg_sleep(1) IS NULL" };
         assert!(matches!(g(sleep, false), Err(GroupRefusal::Filter(BarRefusal::RefusedCalls(_)))));
+        // The server's files and large objects: refused, not asked about, on every profile.
+        let file = if d == MY { "LOAD_FILE('/etc/passwd') IS NULL" } else { "lo_get(1) IS NOT NULL" };
+        for read_only in [false, true] {
+            assert!(matches!(g(file, read_only), Err(GroupRefusal::Filter(_))), "{file}");
+        }
+        if d == Dialect::Postgres {
+            for read_only in [false, true] {
+                assert!(
+                    matches!(
+                        g("pg_catalog.lo_get(1) IS NOT NULL", read_only),
+                        Err(GroupRefusal::Filter(BarRefusal::RefusedCalls(_)))
+                    ),
+                    "{read_only}"
+                );
+            }
+        }
         // An allowlisted call passes.
         assert!(g("lower(name) = 'x'", false).is_ok());
         // Columns that do not group, or are not the table's.
