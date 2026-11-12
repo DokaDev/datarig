@@ -118,10 +118,13 @@ equality on a floating-point column may find nothing, and how text compares foll
 collation on the server: the menu says so next to those entries.
 
 A MySQL `TIMESTAMP` is shown in the session's time zone. Its value is written as the instant it
-was read as, in the session's zone when the filter runs:
-`CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)`. That is the same instant on
-every MySQL and MariaDB, after the session's zone changes and when the filter runs again from the
-history. A value read before the session's zone changed is not taken.
+was read as, worked out in UTC, in the session's zone when the filter runs:
+`CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)`. Every MySQL and MariaDB
+converts it, after the session's zone changes and when the filter runs again from the history. A
+value read before the session's zone changed is not taken, nor one outside the range a
+`TIMESTAMP` holds. Known limit: on MySQL and MariaDB, in a session time zone with daylight saving,
+a value picked in the hour that repeats when the clocks go back may match the other instant of
+that hour; filter that hour by a range instead.
 
 On MySQL a number compared with a number column is written as its exact decimal, an exponent
 written out (`9007199254740993e0` as `9007199254740993`): MySQL compares a number with an exponent,
