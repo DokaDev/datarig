@@ -187,6 +187,38 @@ fn read_only(lang: Lang) -> Harness {
     Harness::connected_with(&cfg, lang)
 }
 
+/// A filter that reads the server's files or reads or writes its large objects is refused on
+/// every profile, never asked about, and nothing is sent.
+#[test]
+fn server_file_and_large_object_calls_are_refused_on_every_profile() {
+    for read_only in [false, true] {
+        let mut h = match read_only {
+            false => users(Lang::En),
+            true => {
+                let mut h = self::read_only(Lang::En);
+                open_users(&mut h);
+                answer(&mut h);
+                h.sent();
+                h
+            }
+        };
+        for text in [
+            "lo_get(id) IS NOT NULL",
+            "pg_catalog.lo_create(0) > 0",
+            "lo_from_bytea(0, decode('00', 'hex')) > 0",
+            "pg_read_file('/etc/passwd') IS NOT NULL",
+            "EXISTS (SELECT 1 FROM pg_ls_summariesdir())",
+        ] {
+            h.command(&format!("where {text}"));
+            assert!(!h.app.overlays.is_open(OverlayKind::Confirm), "{text}: refused, not asked");
+            assert!(runs(&mut h).is_empty(), "{text}: nothing sent");
+            assert!(status(&h).starts_with("Filter refused: "), "{text} ({read_only}): {}", status(&h));
+        }
+        h.command("where lo_get(id) IS NOT NULL");
+        assert!(status(&h).contains("large objects"), "{}", status(&h));
+    }
+}
+
 #[test]
 fn a_read_only_profile_refuses_unchecked_calls_before_sending() {
     let mut h = read_only(Lang::En);

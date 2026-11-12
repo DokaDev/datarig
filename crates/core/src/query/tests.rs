@@ -553,6 +553,64 @@ fn calls_are_confirmed_refused_or_clear() {
     );
 }
 
+/// The server's files and its large objects are out of a filter's reach on every profile:
+/// each call is refused, by a bare name, `pg_catalog.`-qualified or in capitals, before it can
+/// ask (MySQL's `LOAD_FILE` is refused alike).
+#[test]
+fn server_file_and_large_object_calls_are_refused_on_every_profile() {
+    let pg = Dialect::Postgres;
+    let calls = [
+        "pg_read_file('/etc/passwd') IS NOT NULL",
+        "pg_read_binary_file('x', 0, 10, true) IS NOT NULL",
+        "(pg_stat_file('x')).size > 0",
+        "EXISTS (SELECT 1 FROM pg_ls_dir('.'))",
+        "EXISTS (SELECT 1 FROM pg_ls_logdir())",
+        "EXISTS (SELECT 1 FROM pg_ls_waldir())",
+        "EXISTS (SELECT 1 FROM pg_ls_tmpdir())",
+        "EXISTS (SELECT 1 FROM pg_ls_archive_statusdir())",
+        "EXISTS (SELECT 1 FROM pg_ls_logicalsnapdir())",
+        "EXISTS (SELECT 1 FROM pg_ls_logicalmapdir())",
+        "EXISTS (SELECT 1 FROM pg_ls_replslotdir('s'))",
+        "EXISTS (SELECT 1 FROM pg_ls_summariesdir())",
+        "lo_import('/etc/passwd') > 0",
+        "lo_export(16400, '/tmp/zz') = 1",
+        "lo_get(16400) IS NOT NULL",
+        "lo_put(16400, 0, decode('00', 'hex')) IS NULL",
+        "lo_from_bytea(0, decode('00', 'hex')) > 0",
+        "lo_create(0) > 0",
+        "lo_creat(-1) > 0",
+        "lo_unlink(16400) = 1",
+        "lo_open(16400, 262144) >= 0",
+        "lowrite(0, decode('00', 'hex')) > 0",
+        "loread(0, 10) IS NOT NULL",
+        "lo_truncate(0, 0) = 0",
+        "lo_lseek(0, 0, 0) = 0",
+        "lo_tell(0) = 0",
+        "lo_close(0) = 0",
+        "id = 1 OR pg_catalog.lo_get(id) IS NOT NULL",
+        "PG_CATALOG.PG_READ_FILE('x') IS NOT NULL",
+        "LO_GET(16400) IS NOT NULL",
+    ];
+    for text in calls {
+        for read_only in [false, true] {
+            let r = check(pg, text, read_only);
+            let refused = match &r {
+                Err(BarRefusal::RefusedCalls(names)) => !names.is_empty(),
+                // The classifier names a server file first where it knows the call as one.
+                Err(BarRefusal::NotRead { danger: Some(Danger::ServerFile), .. }) => true,
+                _ => false,
+            };
+            assert!(refused, "{text} (read-only: {read_only}): {r:?}");
+        }
+    }
+    for f in ["lo_get", "lo_put", "lo_create", "lo_unlink", "lo_from_bytea", "loread", "lowrite"] {
+        assert!(PG_REFUSED_CALLS.contains(&f), "{f}");
+    }
+    for read_only in [false, true] {
+        assert!(check(MY, "LOAD_FILE('/etc/passwd') IS NULL", read_only).is_err());
+    }
+}
+
 #[test]
 fn the_call_lists_are_sorted_disjoint_built_ins() {
     for list in [PG_FILTER_CALLS, PG_REFUSED_CALLS, MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS] {

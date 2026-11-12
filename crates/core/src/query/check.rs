@@ -18,8 +18,8 @@
 //!    ([`crate::sql::risk`]); a text it cannot read or that is too complex is refused.
 //! 4. **Function calls**: only the built-ins of [`PG_FILTER_CALLS`] or [`MYSQL_FILTER_CALLS`]
 //!    pass without a word (by a bare name, or PostgreSQL's `pg_catalog.` one). A built-in of
-//!    [`PG_REFUSED_CALLS`] or [`MYSQL_REFUSED_CALLS`] (it waits, locks, changes the session or
-//!    calls out) is refused. Any other call asks the user ([`FilterVerdict::NeedsConfirm`]),
+//!    [`PG_REFUSED_CALLS`] or [`MYSQL_REFUSED_CALLS`] (it waits, locks, changes the session,
+//!    calls out, or reads or writes the server's files or large objects) is refused. Any other call asks the user ([`FilterVerdict::NeedsConfirm`]),
 //!    and is refused on a read-only profile: a function may do on the server what a read-only
 //!    transaction does not stop.
 //!
@@ -177,13 +177,33 @@ pub const PG_FILTER_CALLS: &[&str] = &[
 ];
 
 /// PostgreSQL built-ins a filter may not call, by name however qualified: they wait, take
-/// locks, change the session or a sequence, notify, or reach another server. Sorted.
+/// locks, change the session or a sequence, notify, reach another server, or read, list or write
+/// the server's files or its large objects (a filter is one boolean expression with no effect).
+/// Sorted.
 pub const PG_REFUSED_CALLS: &[&str] = &[
     "dblink",
     "dblink_connect",
     "dblink_connect_u",
     "dblink_exec",
     "dblink_send_query",
+    "lo_close",
+    "lo_creat",
+    "lo_create",
+    "lo_export",
+    "lo_from_bytea",
+    "lo_get",
+    "lo_import",
+    "lo_lseek",
+    "lo_lseek64",
+    "lo_open",
+    "lo_put",
+    "lo_tell",
+    "lo_tell64",
+    "lo_truncate",
+    "lo_truncate64",
+    "lo_unlink",
+    "loread",
+    "lowrite",
     "nextval",
     "pg_advisory_lock",
     "pg_advisory_lock_shared",
@@ -192,10 +212,22 @@ pub const PG_REFUSED_CALLS: &[&str] = &[
     "pg_advisory_unlock_shared",
     "pg_advisory_xact_lock",
     "pg_advisory_xact_lock_shared",
+    "pg_ls_archive_statusdir",
+    "pg_ls_dir",
+    "pg_ls_logdir",
+    "pg_ls_logicalmapdir",
+    "pg_ls_logicalsnapdir",
+    "pg_ls_replslotdir",
+    "pg_ls_summariesdir",
+    "pg_ls_tmpdir",
+    "pg_ls_waldir",
     "pg_notify",
+    "pg_read_binary_file",
+    "pg_read_file",
     "pg_sleep",
     "pg_sleep_for",
     "pg_sleep_until",
+    "pg_stat_file",
     "pg_try_advisory_lock",
     "pg_try_advisory_lock_shared",
     "pg_try_advisory_xact_lock",
