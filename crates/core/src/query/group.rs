@@ -13,7 +13,7 @@
 //! [`GROUP_PREVIEW`] bytes long: a longer one comes as its length alone, so the answer holds at
 //! most [`GROUP_VALUES`] + 1 values of that size. On PostgreSQL, types of a short value of fixed
 //! size (numbers, dates and times, booleans, `uuid`, …) are sent as they are; on MySQL every
-//! value is measured (`LENGTH`), whatever its type is said to be. Only a column whose values a
+//! value is measured (`OCTET_LENGTH`), whatever its type is said to be. Only a column whose values a
 //! filter compares for equality is grouped ([`compares`]).
 
 use super::check::{BarRefusal, FilterVerdict, check_filter};
@@ -218,7 +218,7 @@ fn statement(d: Dialect, table: &TableName, column: &ColumnMeta, other: Option<&
 /// The column's type is the one its metadata says, which may be older than the table. The
 /// PostgreSQL driver checks the statement's columns as the server prepares it, and refuses a value
 /// of a type that is not short sent without its length. On MySQL, whose answer comes with the
-/// rows it describes, every value is measured (`LENGTH` of a number or a date is that of its
+/// rows it describes, every value is measured (`OCTET_LENGTH` of a number or a date is that of its
 /// text, which the server sends): what is sent is bounded by the statement itself, and the value
 /// keeps its column's type (and so the grid's reading of it).
 fn length(d: Dialect, column: &ColumnMeta, c: &str) -> Option<String> {
@@ -234,6 +234,7 @@ fn length(d: Dialect, column: &ColumnMeta, c: &str) -> Option<String> {
             ValueKind::Decimal if ty != "money" => Some(format!("octet_length(textin(numeric_out({c})))")),
             _ => None,
         },
-        Dialect::MySql(_) => Some(format!("LENGTH({c})")),
+        // Bytes in every mode: `LENGTH` counts characters under MariaDB's `sql_mode=ORACLE`.
+        Dialect::MySql(_) => Some(format!("OCTET_LENGTH({c})")),
     }
 }

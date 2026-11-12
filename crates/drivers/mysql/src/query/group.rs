@@ -135,7 +135,7 @@ pub(super) async fn rows_within(conn: &mut Conn, text: &str) -> Result<Result<Gr
     Ok(Ok(GroupRows { rows, prefixed, inexact }))
 }
 
-/// Make `value`, a value of the measured expression `c` (`IF(LENGTH(col) <= …, col, NULL)`),
+/// Make `value`, a value of the measured expression `c` (`IF(OCTET_LENGTH(col) <= …, col, NULL)`),
 /// the text the grid shows for its column, whose own text the server measured as `length`
 /// bytes; whether that could be told. The server writes a column by its attributes and an
 /// expression without them: a `YEAR` 0 is `0000` as a column and `0` as an expression, a
@@ -192,7 +192,7 @@ fn as_the_column(c: &Column, value: &mut Cell, length: Option<&str>) -> bool {
 
 /// Whether the columns of a group count's answer, as the server describes them for this run,
 /// send only values of a bounded size: the value comes with the length the server measured (the
-/// second column an integer, as `LENGTH` answers it: a `BIGINT` on MySQL, an `INT` on MariaDB;
+/// second column an integer, as `OCTET_LENGTH` answers it: a `BIGINT` on MySQL, an `INT` on MariaDB;
 /// the value then only up to the preview's size), as the statement always has it. Any other
 /// answer is refused ([`DbError::SchemaChanged`]) before a row of it is read.
 fn bounded(columns: &[Column]) -> Result<(), DbError> {
@@ -248,7 +248,7 @@ mod tests {
         let answer = |length: ColumnType| {
             bounded(&[Column::new(MYSQL_TYPE_VAR_STRING), Column::new(length), Column::new(MYSQL_TYPE_LONGLONG)])
         };
-        // `LENGTH` is a `BIGINT` on MySQL and an `INT` on MariaDB.
+        // `OCTET_LENGTH` is a `BIGINT` on MySQL and an `INT` on MariaDB.
         assert!(answer(MYSQL_TYPE_LONGLONG).is_ok());
         assert!(answer(MYSQL_TYPE_LONG).is_ok());
         // Anything else is not the statement's measured length.

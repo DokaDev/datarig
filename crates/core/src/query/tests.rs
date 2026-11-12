@@ -1916,12 +1916,12 @@ fn group_count_writes_one_grouped_read_of_the_table() {
     let data = meta("data", "varbinary", ValueKind::Bytes);
     assert_eq!(
         group(MY, &data, Some("id > 1"), false).unwrap(),
-        "SELECT IF(LENGTH(`data`) <= 4096, `data`, NULL), LENGTH(`data`), COUNT(*) FROM `shop`.`users` \
+        "SELECT IF(OCTET_LENGTH(`data`) <= 4096, `data`, NULL), OCTET_LENGTH(`data`), COUNT(*) FROM `shop`.`users` \
          WHERE (id > 1) GROUP BY `data` ORDER BY COUNT(*) DESC LIMIT 201"
     );
     assert_eq!(
         group(MY, &meta("id", "bigint", ValueKind::Integer), None, false).unwrap(),
-        "SELECT IF(LENGTH(`id`) <= 4096, `id`, NULL), LENGTH(`id`), COUNT(*) FROM `shop`.`users` GROUP BY `id` \
+        "SELECT IF(OCTET_LENGTH(`id`) <= 4096, `id`, NULL), OCTET_LENGTH(`id`), COUNT(*) FROM `shop`.`users` GROUP BY `id` \
          ORDER BY COUNT(*) DESC LIMIT 201",
         "every MySQL value measured, whatever its type is said to be"
     );
@@ -1941,6 +1941,17 @@ fn group_count_writes_one_grouped_read_of_the_table() {
         assert_eq!(sql.matches(" GROUP BY ").count(), 1);
         assert_eq!(sql.matches(" WHERE (id > 1) GROUP BY ").count(), 1);
     }
+}
+
+#[test]
+fn group_count_on_mysql_measures_bytes_in_every_sql_mode() {
+    // The preview's bound and the length sent are bytes. `LENGTH` counts characters under
+    // MariaDB's `sql_mode=ORACLE`, so a long value of wide characters would pass the bound;
+    // `OCTET_LENGTH` counts bytes on MySQL and on MariaDB in every mode.
+    let text = meta("name", "varchar", crate::driver::ValueKind::Text);
+    let sql = group(MY, &text, None, false).unwrap();
+    assert!(sql.starts_with("SELECT IF(OCTET_LENGTH(`name`) <= 4096, `name`, NULL), OCTET_LENGTH(`name`), "), "{sql}");
+    assert!(!sql.replace("OCTET_LENGTH(", "").contains("LENGTH("), "{sql}");
 }
 
 #[test]
