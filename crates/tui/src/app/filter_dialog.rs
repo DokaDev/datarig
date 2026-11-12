@@ -625,6 +625,11 @@ impl App {
         self.overlays.iter().find_map(|o| if let Overlay::FilterDialog(d) = o { Some(&**d) } else { None })
     }
 
+    /// The filter dialog is the top overlay and its operator picker is open.
+    pub(crate) fn filter_dialog_picker_on_top(&self) -> bool {
+        matches!(self.overlays.top(), Some(Overlay::FilterDialog(d)) if d.picker.is_some())
+    }
+
     /// The open filter dialog's draft as it would be sent: its `WHERE` text and its order as
     /// the app writes it.
     pub fn filter_dialog_draft(&self) -> Option<(String, String)> {

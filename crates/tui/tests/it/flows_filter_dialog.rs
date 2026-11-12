@@ -288,6 +288,38 @@ fn a_busy_tab_keeps_the_dialog_open() {
     assert!(h.screen(120, 34).contains("already running"), "{}", h.screen(120, 34));
 }
 
+/// With the operator picker open only the picker takes the dialog's keys: `X`, `u`, `Ctrl+Z`,
+/// `Q`, `#` and `Ctrl+R` leave the draft, the SQL section and the count as they were.
+#[test]
+fn the_operator_picker_open_keeps_the_dialogs_keys_from_the_dialog_under_it() {
+    let mut h = users();
+    h.keys("f");
+    condition(&mut h, 0, "7");
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "id = 7");
+    // From the value back to its operator, and the picker open.
+    h.key(KeyCode::Left);
+    h.key(KeyCode::Left);
+    h.key(KeyCode::Char(' '));
+    let picker = |h: &mut Harness| h.screen(120, 34).contains("between");
+    assert!(picker(&mut h));
+    h.keys("X");
+    h.keys("u");
+    h.key_mod(KeyCode::Char('z'), KeyModifiers::CONTROL);
+    h.keys("Q");
+    h.keys("#");
+    h.key_mod(KeyCode::Char('r'), KeyModifiers::CONTROL);
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "id = 7", "the draft is as it was");
+    assert!(h.app.filter_dialog_sql_fields().is_none(), "the SQL section stays closed");
+    assert!(!h.app.overlays.is_open(OverlayKind::Picker), "no history listed over it");
+    assert!(h.sent().is_empty(), "nothing is counted");
+    assert!(picker(&mut h), "the picker stays open");
+    // `Esc` closes the picker; then `X` is the dialog's again.
+    h.key(KeyCode::Esc);
+    assert!(!picker(&mut h) && open(&h));
+    h.keys("X");
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "");
+}
+
 #[test]
 fn pending_edits_are_asked_about_above_the_dialog_and_a_no_keeps_it() {
     let mut h = users();

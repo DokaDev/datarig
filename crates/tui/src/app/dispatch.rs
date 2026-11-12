@@ -67,6 +67,17 @@ impl App {
             }
             return;
         }
+        // The filter dialog's operator picker is its top layer: of the dialog's own keys only
+        // `Enter` (picks) and `Esc` (closes it) act; none reaches the dialog under it.
+        if self.filter_dialog_picker_on_top()
+            && matches!(a, Action::FilterDialog(_) | Action::Table(table_filter::TableAction::History))
+            && !matches!(
+                a,
+                Action::FilterDialog(filter_dialog::DialogAction::Apply | filter_dialog::DialogAction::Cancel)
+            )
+        {
+            return;
+        }
         match a {
             // A DDL tab has nothing to run: the run key reads its DDL again.
             Action::RunStatement if self.tab().is_ddl() => self.load_ddl(self.tab().id),
