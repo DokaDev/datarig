@@ -1803,10 +1803,11 @@ fn nested_setting(doc: &mut DocumentMut, table: &str, key: &str, (v, default): (
             orphans
         }
         Item::Value(Value::InlineTable(t)) => {
-            let old = t.get(key).and_then(|o| o.as_str()).map(str::to_string);
+            // Any other value goes back to the default, a boolean or a number as much as a
+            // string, as [`setting`] does for a table.
             if !default {
                 t.insert(key, v);
-            } else if old.is_some_and(|o| Some(o.as_str()) != v.as_str()) {
+            } else if t.get(key).is_some_and(|old| !same(old, &v)) {
                 t.remove(key);
             }
             String::new()

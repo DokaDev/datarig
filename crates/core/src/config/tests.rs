@@ -1027,6 +1027,24 @@ fn the_filter_history_is_on_by_default_and_can_be_turned_off() {
 }
 
 #[test]
+fn a_filter_history_written_as_a_boolean_goes_back_on_when_saved() {
+    let path = temp_file("filter_history_bool");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    for text in ["history = { filters = false }\n", "[history]\nfilters = false\n"] {
+        std::fs::write(&path, text).unwrap();
+        assert_eq!(load(Some(path.clone())).0.prefs.filter_history, FilterHistory::Off, "{text}");
+        save(&path, settings("en"), None).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains("false"), "{text} saved as {saved}");
+        assert_eq!(load(Some(path.clone())).0.prefs.filter_history, FilterHistory::On, "{text} saved as {saved}");
+        let prefs = Prefs { filter_history: FilterHistory::Off, ..Prefs::default() };
+        save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(load(Some(path.clone())).0.prefs.filter_history, FilterHistory::Off, "{text} saved as {saved}");
+    }
+}
+
+#[test]
 fn tips_show_always_by_default_until_used_or_never() {
     assert_eq!(parse("").unwrap().prefs.tips, Tips::Always);
     assert_eq!(parse("[ui]\ntips = \"off\"\n").unwrap().prefs.tips, Tips::Off);
