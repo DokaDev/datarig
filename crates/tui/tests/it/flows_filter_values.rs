@@ -609,8 +609,8 @@ fn typed(h: &mut Harness, value: &str) {
 
 /// MySQL reads text compared with a number as a number without a word (`'abc'` as 0, `'12abc'`
 /// as 12, `'true'` as 0): a value typed on a number column that is no number is not written,
-/// and its row says why; a number is, in quotes too, and TRUE or FALSE on a BOOLEAN
-/// (`tinyint(1)`) only.
+/// and its row says why; a number is, in quotes too (as the number), and TRUE or FALSE on a
+/// BOOLEAN (`tinyint(1)`) only.
 #[test]
 fn mysql_text_typed_on_a_number_column_is_not_written_and_says_why() {
     let s = |v: &str| Some(v.to_string());
@@ -621,7 +621,7 @@ fn mysql_text_typed_on_a_number_column_is_not_written_and_says_why() {
         (0, "'abc'", None),
         (0, "true", None),
         (0, "12", Some("id = 12")),
-        (0, "'12'", Some("id = '12'")),
+        (0, "'12'", Some("id = 12")),
         (1, "true", Some("flag = TRUE")),
         (1, "False", Some("flag = FALSE")),
         (1, "1", Some("flag = 1")),
@@ -638,6 +638,38 @@ fn mysql_text_typed_on_a_number_column_is_not_written_and_says_why() {
                 assert!(screen.contains("not a number"), "{value}: {screen}");
             }
         }
+    }
+}
+
+/// MySQL compares a number column with a string as two doubles, which a list or a range of wide
+/// values does not meet exactly: numbers typed in quotes in a list or a range of a `DECIMAL` are
+/// written as the numbers, mixed with numbers typed bare.
+#[test]
+fn mysql_numbers_typed_in_quotes_in_a_list_or_a_range_are_written_as_numbers() {
+    let s = |v: &str| Some(v.to_string());
+    let cols = || vec![col("n", "decimal(30,0)", ValueKind::Decimal)];
+    // The operator's place in the picker of a number column (see `each_operator_sends_its_term`).
+    for (down, value, second, want) in [
+        (10, "'9007199254740992', 9007199254740994", None, "n IN (9007199254740992, 9007199254740994)"),
+        (11, "'9007199254740992', '9007199254740994'", None, "n NOT IN (9007199254740992, 9007199254740994)"),
+        (1, "'9007199254740990'", Some("'9007199254740992'"), "n BETWEEN 9007199254740990 AND 9007199254740992"),
+    ] {
+        let mut h = table_of(true, cols(), vec![vec![s("9007199254740993")]]);
+        dialog_on(&mut h, 0);
+        h.key(KeyCode::Right);
+        h.key(KeyCode::Char(' '));
+        h.key(KeyCode::Left);
+        h.key(KeyCode::Char(' '));
+        for _ in 0..down {
+            h.key(KeyCode::Down);
+        }
+        h.key(KeyCode::Enter);
+        h.type_text(value);
+        if let Some(second) = second {
+            h.key(KeyCode::Right);
+            h.type_text(second);
+        }
+        assert_eq!(draft(&h), want, "{}", h.screen(120, 34));
     }
 }
 
