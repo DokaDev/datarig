@@ -1019,6 +1019,47 @@ fn info(evs: &[DbEvent]) -> Option<StatementInfo> {
     })
 }
 
+/// Numbers of a generated filter, typed as numbers or as text, compare exactly with a wide
+/// `DECIMAL`: a string would be compared as a double, which takes 9007199254740993 for
+/// 9007199254740992 (in a list, out of one, and between bounds).
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_numbers_compare_exactly_with_a_wide_decimal() {
+    use datarig_core::query::{ColumnFacts, ColumnKind, Cond, Target, Value, render};
+    let test = "generated_numbers_compare_exactly_with_a_wide_decimal";
+    let Some(url) = my_url(test) else { return };
+    let t = Table::make(
+        &url,
+        "widedec",
+        &[
+            "CREATE TABLE {t} (n DECIMAL(30,0) NOT NULL)",
+            "INSERT INTO {t} VALUES (9007199254740992), (9007199254740993), (9007199254740994)",
+        ],
+    )
+    .await;
+    let target = Target {
+        utf8mb4: true,
+        ..Target::new(Dialect::MySql(MySqlMode::default()), vec![ColumnFacts::new("n", ColumnKind::Number)])
+    };
+    let text = |s: &str| Value::Text(s.into());
+    let num = |s: &str| Value::Number(s.into());
+    let (lo, mid, hi) = ("9007199254740992", "9007199254740993", "9007199254740994");
+    let r#in = |values, negated| Cond::In { col: "n".into(), values, negated };
+    let cases = [
+        (r#in(vec![text(lo), text(hi)], false), vec![lo, hi]),
+        (r#in(vec![text(lo), num(hi)], false), vec![lo, hi]),
+        (r#in(vec![text(lo), text(hi)], true), vec![mid]),
+        (Cond::Between { col: "n".into(), lo: text("9007199254740990"), hi: text(lo), negated: false }, vec![lo]),
+        (Cond::Between { col: "n".into(), lo: num("9007199254740990"), hi: text(lo), negated: true }, vec![mid, hi]),
+    ];
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    for (n, (cond, want)) in cases.into_iter().enumerate() {
+        let filter = render(&cond, &target).unwrap();
+        let evs = q.run(n as u64 + 1, &[&format!("SELECT n FROM {} WHERE {filter} ORDER BY n", t.q())]).await;
+        let found: Vec<String> = page_of(&evs).1.iter().map(|r| r[0].clone().unwrap()).collect();
+        assert_eq!(found, want, "{filter}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_small_result_is_one_page_and_nothing_stays_open() {
     let Some(url) = my_url("a_small_result_is_one_page_and_nothing_stays_open") else { return };

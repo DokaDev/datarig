@@ -1,7 +1,8 @@
 //! A [`Cond`] as the text an app action writes into the filter bar.
 //!
 //! Literals are written for the column they are compared with: a number bare only for a number
-//! column and a valid number literal (else a string the server converts); bytes as PostgreSQL's
+//! column and a valid number literal (else a string the server converts), and on MySQL valid
+//! number text too (the server compares a number with a string as two doubles); bytes as PostgreSQL's
 //! `'\x…'::pg_catalog.bytea` (an escape string, see below; the type is named with its schema, so
 //! that a domain of that name earlier on the search path is not the one cast to) or MySQL's
 //! `X'…'`; text as a string literal. A PostgreSQL string with a backslash is an escape string (`E'…'`), which reads the same whatever
@@ -178,6 +179,16 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
             n.clone()
         }
         Value::Number(n) => text_literal(t, n),
+        // MySQL compares a number column with a string as two doubles, which a list or a range
+        // of wide values does not meet exactly: valid number text is written as the number.
+        Value::Text(s)
+            if matches!(t.dialect, Dialect::MySql(_))
+                && c.is_some_and(|c| bare_numbers(t.dialect, c.kind))
+                && sql_number(s)
+                && !negative_zero(s) =>
+        {
+            s.clone()
+        }
         Value::Text(s) => text_literal(t, s),
         Value::Bytes(b) => match t.dialect {
             Dialect::Postgres => format!("{}::pg_catalog.bytea", text_literal(t, &format!("\\x{}", hex(b, false)))),

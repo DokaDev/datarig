@@ -265,11 +265,35 @@ fn render_refuses_mysql_text_that_is_no_number_on_a_number_column() {
     ] {
         assert_eq!(render(&c, &t), not_number, "{c:?}");
     }
-    assert_eq!(render(&cmp("id", CmpOp::Eq, text("12")), &t).as_deref(), Ok("id = '12'"));
+    assert_eq!(render(&cmp("id", CmpOp::Eq, text("12")), &t).as_deref(), Ok("id = 12"));
     assert_eq!(render(&cmp("id", CmpOp::Eq, Value::Bool(true)), &t).as_deref(), Ok("id = TRUE"));
     assert_eq!(render(&cmp("name", CmpOp::Eq, text("abc")), &t).as_deref(), Ok("name = 'abc'"));
     assert_eq!(render(&cmp("born", CmpOp::Eq, text("abc")), &t).as_deref(), Ok("born = 'abc'"));
     assert_eq!(render_pg(&cmp("id", CmpOp::Eq, text("abc"))), "id = 'abc'");
+}
+
+#[test]
+fn render_writes_mysql_number_text_as_a_number() {
+    let t = Target { utf8mb4: true, ..target(MY) };
+    let wide = "9007199254740993";
+    let r#in = |values: Vec<Value>, negated| Cond::In { col: "id".into(), values, negated };
+    let between = |lo, hi| Cond::Between { col: "id".into(), lo, hi, negated: false };
+    for (c, want) in [
+        (
+            r#in(vec![text("9007199254740992"), text("9007199254740994")], false),
+            "id IN (9007199254740992, 9007199254740994)",
+        ),
+        (r#in(vec![text(wide), num("1")], true), "id NOT IN (9007199254740993, 1)"),
+        (between(text("1.5"), text("-2e3")), "id BETWEEN 1.5 AND -2e3"),
+        (cmp("price", CmpOp::Ge, text(wide)), "price >= 9007199254740993"),
+        (cmp("id", CmpOp::Eq, text("-0")), "id = '-0'"),
+        (cmp("name", CmpOp::Eq, text(wide)), "name = '9007199254740993'"),
+        (cmp("born", CmpOp::Eq, text(wide)), "born = '9007199254740993'"),
+    ] {
+        assert_eq!(render(&c, &t).as_deref(), Ok(want), "{c:?}");
+    }
+    // PostgreSQL reads a string as the column's type, exactly: kept as written.
+    assert_eq!(render_pg(&r#in(vec![text(wide)], false)), "id IN ('9007199254740993')");
 }
 
 #[test]
