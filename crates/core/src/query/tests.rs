@@ -358,7 +358,7 @@ fn a_mysql_timestamp_with_its_offset_is_written_as_its_instant_in_the_session_zo
             format!(
                 "at IN ({}, {})",
                 instant("2026-11-10 09:30:00", "+00:00"),
-                instant("2026-11-11 10:00:00.250", "-08:00")
+                instant("2026-11-11 18:00:00.250", "+00:00")
             ),
         ),
         // Typed without an offset: the session's local time, as written.
@@ -369,7 +369,12 @@ fn a_mysql_timestamp_with_its_offset_is_written_as_its_instant_in_the_session_zo
     ] {
         let sql = render(&c, &t).unwrap();
         assert_eq!(sql, want, "{c:?}");
-        assert_eq!(recognise(&sql, &t), Some(c.clone()), "{sql}");
+        // Read back as its instant in UTC, which is written the same.
+        let back = recognise(&sql, &t).unwrap();
+        assert_eq!(render(&back, &t).unwrap(), sql);
+        if !sql.contains("-08:00") && !format!("{c:?}").contains("-08:00") {
+            assert_eq!(back, c, "{sql}");
+        }
         for read_only in [false, true] {
             let r = check_filter(&sql, &users(), &t, &Classifier::new(Language::Sql(MY)), read_only);
             assert_eq!(r, Ok(FilterVerdict::Clear), "{sql}");
@@ -379,6 +384,78 @@ fn a_mysql_timestamp_with_its_offset_is_written_as_its_instant_in_the_session_zo
     let pg =
         Target::new(Dialect::Postgres, vec![ColumnFacts { zoned: true, ..ColumnFacts::new("at", ColumnKind::Other) }]);
     assert_eq!(render(&cmp("at", CmpOp::Eq, text(v)), &pg).unwrap(), format!("at = '{v}'"));
+}
+
+/// A MySQL TIMESTAMP's instant is worked out in UTC and written from `+00:00`, which every
+/// MySQL and MariaDB converts: an offset only MySQL 8.0.19 and later reads (`+14:00`, `-13:59`)
+/// never reaches the server, and a pick runs again the same from the history in any session. A
+/// value with an offset that is no instant the column holds is refused, never written as a
+/// conversion that comes out NULL (or is left unconverted).
+#[test]
+fn a_mysql_timestamp_instant_is_written_from_utc_and_refused_when_it_is_none() {
+    let t = Target {
+        utf8mb4: true,
+        ..Target::new(MY, vec![ColumnFacts { zoned: true, ..ColumnFacts::new("at", ColumnKind::Other) }])
+    };
+    let instant = |at: &str| format!("CONVERT_TZ('{at}', '+00:00', @@session.time_zone)");
+    for (v, utc) in [
+        // The offsets at both ends of what a session may have, crossing a day and a year.
+        ("2026-11-10 14:00:00+14:00", "2026-11-10 00:00:00"),
+        ("2026-11-10 09:30:00+14:00", "2026-11-09 19:30:00"),
+        ("2026-12-31 20:00:00.5-13:59", "2027-01-01 09:59:00.5"),
+        ("2026-11-10 09:30:00+13:00", "2026-11-09 20:30:00"),
+        ("2026-11-10 09:30:00-12:59", "2026-11-10 22:29:00"),
+        ("2026-11-10 09:30:00+05:45", "2026-11-10 03:45:00"),
+        // A leap day.
+        ("2024-02-29 23:30:00-01:00", "2024-03-01 00:30:00"),
+        ("2024-03-01 00:30:00+01:00", "2024-02-29 23:30:00"),
+        // The ends of the TIMESTAMP range.
+        ("1970-01-01 00:00:01+00:00", "1970-01-01 00:00:01"),
+        ("1970-01-01 14:00:01+14:00", "1970-01-01 00:00:01"),
+        ("2038-01-19 03:14:07.999999+00:00", "2038-01-19 03:14:07.999999"),
+        ("2038-01-18 13:15:07-13:59", "2038-01-19 03:14:07"),
+    ] {
+        let c = cmp("at", CmpOp::Eq, text(v));
+        let sql = render(&c, &t).unwrap();
+        assert_eq!(sql, format!("at = {}", instant(utc)), "{v}");
+        // The history's text read back is that instant, and is written the same again.
+        let back = recognise(&sql, &t).unwrap();
+        assert_eq!(back, cmp("at", CmpOp::Eq, text(&format!("{utc}+00:00"))), "{sql}");
+        assert_eq!(render(&back, &t).unwrap(), sql);
+        // Excluded NULL-safely as the same instant.
+        let not = Cond::NotDistinct { col: "at".into(), value: text(v), negated: true };
+        assert_eq!(render(&not, &t).unwrap(), format!("NOT (at <=> {})", instant(utc)), "{v}");
+    }
+    let refused = Err(RenderError::NotInstant("at".into()));
+    for v in [
+        // No session has these offsets.
+        "2026-11-10 09:30:00+14:01",
+        "2026-11-10 09:30:00-14:00",
+        "2026-11-10 09:30:00+15:00",
+        "2026-11-10 09:30:00+05:60",
+        "2026-11-10 09:30:00+99:99",
+        // No such date or time.
+        "2026-02-29 09:30:00+00:00",
+        "2026-04-31 09:30:00+00:00",
+        "2026-13-01 09:30:00+00:00",
+        "0000-00-00 00:00:00+00:00",
+        "2026-11-10 24:00:00+00:00",
+        "2026-11-10 09:60:00+00:00",
+        "2026-11-10 09:30:60+00:00",
+        // Outside the TIMESTAMP range in UTC, which the server would not convert.
+        "1970-01-01 00:00:00+00:00",
+        "1970-01-01 05:00:00+05:30",
+        "2038-01-19 03:14:08+00:00",
+        "2038-01-19 03:14:07-00:01",
+    ] {
+        assert_eq!(render(&cmp("at", CmpOp::Eq, text(v)), &t), refused, "{v}");
+        let list =
+            Cond::In { col: "at".into(), values: vec![text("2026-11-10 09:30:00+00:00"), text(v)], negated: true };
+        assert_eq!(render(&list, &t), refused, "{v}");
+        let range =
+            Cond::Between { col: "at".into(), lo: text("2026-11-10 09:30:00+00:00"), hi: text(v), negated: false };
+        assert_eq!(render(&range, &t), refused, "{v}");
+    }
 }
 
 #[test]

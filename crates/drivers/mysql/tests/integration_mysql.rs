@@ -1071,6 +1071,69 @@ async fn a_filtered_timestamp_is_the_same_instant_in_every_session_zone() {
     }
 }
 
+/// A TIMESTAMP's value read in a session at either end of the offsets a session may have
+/// (`+14:00`, `-13:59`) is written as its instant from UTC, so that it finds its row (and a
+/// NULL-safe exclusion leaves out only that row) in a session of any zone: run again from the
+/// history after a reconnect, the statement holds no offset another server version would not
+/// read.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_timestamp_picked_at_the_ends_of_the_offsets_is_its_instant_in_every_zone() {
+    use datarig_core::query::{CmpOp, ColumnFacts, ColumnKind, Cond, Target, Value, render};
+    let test = "a_timestamp_picked_at_the_ends_of_the_offsets_is_its_instant_in_every_zone";
+    let Some(url) = my_url(test) else { return };
+    let t = Table::make(
+        &url,
+        "tzends",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, at TIMESTAMP(3) NULL)",
+            "INSERT INTO {t} VALUES (1, '2024-10-27 00:30:00.250'), (2, '2024-10-27 01:30:00'), (3, NULL)",
+        ],
+    )
+    .await;
+    let target = Target {
+        utf8mb4: true,
+        ..Target::new(
+            Dialect::MySql(MySqlMode::default()),
+            vec![ColumnFacts { zoned: true, ..ColumnFacts::new("at", ColumnKind::Other) }],
+        )
+    };
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    let mut n = 0;
+    // The values as the sessions at the ends read them.
+    let mut picks = Vec::new();
+    for (zone, id) in [("+14:00", 1), ("-13:59", 2)] {
+        n += 1;
+        q.ok(n, &format!("SET time_zone = '{zone}'")).await;
+        n += 1;
+        let evs = q.run(n, &[&format!("SELECT at FROM {} WHERE id = {id}", t.q())]).await;
+        picks.push(format!("{}{zone}", page_of(&evs).1[0][0].clone().unwrap()));
+    }
+    assert_eq!(picks, ["2024-10-27 14:30:00.250+14:00", "2024-10-26 11:31:00.000-13:59"]);
+    let text = |s: &str| Value::Text(s.into());
+    let filters = [
+        (Cond::Cmp { col: "at".into(), op: CmpOp::Eq, value: text(&picks[0]) }, vec!["1"]),
+        (Cond::Cmp { col: "at".into(), op: CmpOp::Eq, value: text(&picks[1]) }, vec!["2"]),
+        (Cond::In { col: "at".into(), values: vec![text(&picks[0]), text(&picks[1])], negated: false }, vec!["1", "2"]),
+        (Cond::NotDistinct { col: "at".into(), value: text(&picks[0]), negated: true }, vec!["2", "3"]),
+        (Cond::NotDistinct { col: "at".into(), value: text(&picks[1]), negated: true }, vec!["1", "3"]),
+    ];
+    for (cond, _) in &filters {
+        let filter = render(cond, &target).unwrap();
+        assert!(!filter.contains("+14:00") && !filter.contains("-13:59"), "{filter}");
+    }
+    for zone in ["+00:00", "+14:00", "-13:59", "+05:30", "SYSTEM"] {
+        n += 1;
+        q.ok(n, &format!("SET time_zone = '{zone}'")).await;
+        for (cond, want) in &filters {
+            let filter = render(cond, &target).unwrap();
+            n += 1;
+            let evs = q.run(n, &[&format!("SELECT id FROM {} WHERE {filter} ORDER BY id", t.q())]).await;
+            let found: Vec<String> = page_of(&evs).1.iter().map(|r| r[0].clone().unwrap()).collect();
+            assert_eq!(found, *want, "{zone}: {filter}");
+        }
+    }
+}
+
 /// Numbers of a generated filter, typed as numbers or as text, compare exactly with a wide
 /// `DECIMAL`: a string would be compared as a double, which takes 9007199254740993 for
 /// 9007199254740992 (in a list, out of one, and between bounds).
