@@ -26,16 +26,17 @@ A click on the filter at the bottom of the results border, or "Filter and sort�
 
 `Tab` and `Shift+Tab` move from part to part. `Enter` applies what the dialog holds and runs the
 table again; `Esc` closes it and drops your changes, without asking (an open list, the search or
-the SQL section closes first). Nothing you do in the dialog is sent before `Enter`.
+the SQL section closes first). Nothing you change in the dialog is sent before `Enter`; only
+[`# count exactly`](#count-exactly) asks the server something while it is open.
 
 ### Columns
 
 The columns are listed in the table's order, as the catalogue has them, with their keys (`PK`,
-`FK`, `UQ`, or a glyph with icons on), their type (when the window is wide enough), and a mark
+`FK`, or a glyph with icons on), their type (when the window is wide enough), and a mark
 when the column has a condition (`=`, a filter glyph with icons on) or a sort key (an arrow, with
-its place from the second key on). Until the catalogue has been read the list holds the columns of
+its place once there are two keys or more). Until the catalogue has been read the list holds the columns of
 the loaded rows and says `from the loaded result` (with the reason when reading it failed). On
-MySQL, a column declared invisible says `not in SELECT *`: it can be filtered and sorted, but the
+MySQL, a column declared invisible says `not in SELECT *` in place of its type: it can be filtered and sorted, but the
 loaded rows do not hold its values.
 
 `↑` and `↓` (or `j` and `k`, `g` and `G`) select a column, `/` narrows the list by name, `s`
@@ -51,7 +52,7 @@ sent.
 
 The operators, in the order listed: `=`, `between` (numbers, dates and times only), `≠`,
 `≠ or NULL`, `<`, `≤`, `>`, `≥`, `contains` and `starts with` (text), `in list`, `not in list`,
-`is NULL`, `is not NULL`. Those the column cannot take are dimmed, with the reason: a type without
+`is NULL`, `is not NULL`. Those the column cannot take are dimmed, with the reason: once rows are loaded, a type without
 an equality datarig knows (`json`, MySQL's JSON, geometry), a type that compares for equality
 only, patterns on a column that does not hold text or whose type is not known before rows are
 loaded, and on PostgreSQL patterns on a collation the server refuses them on (`ILIKE` on a
@@ -67,7 +68,7 @@ SQL's `=` and `<>` never match NULL, so the operators say what each does with it
 | `contains` | `col ILIKE '%value%' ESCAPE '!'` on PostgreSQL; on MySQL `col LIKE …` on a `_ci` collation, else `LOWER(col) LIKE LOWER(…)` | left out |
 | `starts with` | `col LIKE 'value%' ESCAPE '!'` | left out |
 | `in list` | `col IN (a, b)`, or `(col IN (a, b) OR col IS NULL)` with `NULL` in the list | found only with `NULL` in the list |
-| `not in list` | `col NOT IN (a, b)`, or `(col NOT IN (a, b) AND col IS NOT NULL)` with `NULL` in the list | left out |
+| `not in list` | `col NOT IN (a, b)`, or `(col NOT IN (a, b) AND col IS NOT NULL)` with `NULL` in the list | left out (kept by the `(col NOT IN (…) OR col IS NULL)` the grid's [`!`](#from-the-grid) writes) |
 | `is NULL`, `is not NULL` | `col IS NULL`, `col IS NOT NULL` | found, left out |
 
 In a pattern, `%`, `_` and `!` are escaped with `!`. A value is written as the column reads it: on
@@ -77,7 +78,8 @@ separated by commas outside quotes; a bare `NULL` is SQL's NULL (in a field of o
 is the text `'NULL'`: use `is NULL`), and inside quotes `''` is a quote and `\n`, `\r` and `\\`
 are a line feed, a carriage return and a backslash.
 
-In a value, `←` at its start goes back to the operator, `↑` and `↓` to the row above or below
+In a value, `←` at its start goes back to the operator (from the second value of `between`, to
+the first), `↑` and `↓` to the row above or below
 (`↓` into the values once there are some). Text pasted into a field becomes one line and is cut at
 16 KiB.
 
@@ -90,9 +92,10 @@ Under the conditions, the column's values, each with how many rows hold it and a
   20,000 are counted (`sample: 20,000/30,000`); rows written to disk are never read for it. NULL
   is listed as `NULL`. At most 200 values are listed, the commonest first (`more values than
   shown` when there are more); a value over 4 KiB is counted but not listed.
-- A number column whose values are mostly distinct (more than 80% of 50 or more) shows its range
+- A column of whole or decimal numbers whose values are mostly distinct (more than 80% of 50 or more) shows its range
   instead, `12.50 .. 980.00   412 distinct`: use a condition (`between`, `≥`, `≤`).
-- Typing in a value narrows the list (`containing "p"`).
+- Typing in the value of `=`, or the last value of `in list`, narrows the list
+  (`containing “p”`).
 - `Space` (or a click) ticks a value: it takes the place of what you typed, one value makes `=`,
   two or more `in list`, and a ticked `NULL` `is NULL` (with other values,
   `(col IN (…) OR col IS NULL)`). It goes to the condition you are typing, else to the column's
@@ -111,7 +114,8 @@ tickable, and says why.
 
 ### Count exactly
 
-`#` (or a click on `# count exactly`) asks the server how many rows hold each value of the
+`#` outside a text field (or a click on `# count exactly`, `# exact` in a narrow dialog) asks the
+server how many rows hold each value of the
 column. The count is of the whole table under the dialog's other conditions: the column's own
 conditions are left out, an expression that names the column is kept (the list says so), and the
 `Limit` does not apply. On PostgreSQL it sends:
@@ -130,11 +134,12 @@ and is not tickable until you count again; an answer to an earlier count is drop
 The other conditions go through every [check](#what-is-refused-and-why) a run has, and a function
 a run would ask about refuses the count instead (a count from the dialog asks nothing). It has the
 limits of a [row count](#limits-and-outcomes-of-a-count): it stops after `[results]
-count_timeout` (30 seconds unless set) and gives up on a lock after 2 seconds (1 on MySQL). On
+count_timeout` (30 seconds unless set) and, unless that is `"off"`, gives up on a lock after 2
+seconds (1 on MySQL). On
 PostgreSQL it runs in a read-only transaction of its own; inside your own transaction, or while a
 result is held open, it has no time limit and says so, and when the session cannot tell whether a
 transaction is open it is refused. On MySQL it is refused while settings you gave for the next
-transaction are waiting, and when its read would lock rows: a transaction is open (or may be) and
+transaction are waiting (no transaction open), and when its read would lock rows: a transaction is open (or may be) and
 the isolation level is SERIALIZABLE or not known. With autocommit off and no transaction open it
 reads in a read-only transaction of its own. `Esc` or `Ctrl+C` cancels it. Stopped at the time
 limit, given up on a lock, cancelled or failed, it says so and never shows counts.
@@ -183,7 +188,7 @@ dimmed, above two fields, `WHERE` and `ORDER BY`, holding the dialog's condition
 ```
 
 Type there for anything the chips do not build. What you typed is read back when you leave the
-field, close the section (`Esc`, `Q`) or apply: the condition is taken apart into chips again (an
+field, close the section (`Esc`, or `Q` outside its fields) or apply: the condition is taken apart into chips again (an
 `OR` or a function makes an `expr` chip), and an order that is not the table's columns is refused
 with the part underlined, the field keeping the keys. A field you did not type in changes nothing.
 `Ctrl+Space` completes as `:where` and `:orderby` do: the table's columns, the keywords of a
@@ -195,7 +200,8 @@ string, a quoted name or a comment is not read back once you type in it (undo th
 it in the editor).
 
 `Open in editor` puts the dialog's statement, with its `LIMIT`, in a new console without running
-it, after the same checks as a run (a function datarig cannot check is asked about first). For
+it, after the checks of the condition and the limit a run has (a function datarig cannot check is
+asked about first); as nothing runs, it asks nothing about locks or edits not saved yet. For
 anything beyond this table's condition, order and limit, change it there.
 
 ### Undo and history
@@ -220,7 +226,8 @@ dialog closes once the statement is sent, and the results border shows a spinner
 change of the hidden columns alone runs nothing. While the tab is running, `Enter` is refused
 (`Ctrl+C` cancels the run).
 
-When the server rejects the condition, the border says `▼ failed`. The rows of the earlier query
+When the server rejects the condition, the border says `▼ failed` (a filter glyph in place of
+`▼` with icons on). The rows of the earlier query
 stay, dimmed, and the line under the grid says they are not the filter's answer; a cancelled run
 (`▼ cancelled`) or one that brought no rows, such as on a lost connection (`▼ unapplied`), leaves
 them the same way. `f` opens the dialog on the request that failed, with the server's message in
@@ -255,7 +262,7 @@ On a table tab's grid:
 Each runs at once, with the checks and questions of the dialog's `Enter` (edits not saved yet
 included), keeps the order and the limit of the rows shown, and can be undone in the dialog (`f`,
 `u`, `Enter`). A value is written as the server reads it back: numbers bare, bytes in hexadecimal,
-a line break in text as an escaped string. Nothing is taken while the tab is running or shows rows
+text with a line break as an escape string on PostgreSQL and as its bytes in hexadecimal on MySQL. Nothing is taken while the tab is running or shows rows
 of an earlier query; and a value is refused, with the reason, when it is not shown whole (as a copy
 as SQL judges it), is binary data over 64 KiB, is of a type whose comparison datarig does not know
 (`json`, MySQL's JSON, geometry, most types of your own), is in a new row or a cell with an edit on
@@ -281,8 +288,9 @@ compares no column.
 
 ### Sort from the grid
 
-`s` (or `Space r s`) sorts by the cursor's column alone: the first press sorts going up, the second
-going down, the third takes the order away. `S` (or `Space r S`) adds the column as one more key,
+`s` (or `Space r s`) sorts by the cursor's column alone: going up, then down, then no order at all,
+the next step following the column's direction in the order (on a column that is a later key
+going down, it takes the whole order away). `S` (or `Space r S`) adds the column as one more key,
 after the others; pressed again on a key it turns that key, then takes it out, and the other keys
 stay where they are. A click on the last two columns of the first row of a column's header (the
 cursor's column shows `^v` there, a glyph with icons on) sorts as `s` does; a click elsewhere on a
@@ -311,7 +319,7 @@ takes a hide back. Hiding is a view only: the statement still reads every column
   says that hidden columns are included. Going to a change in a hidden column from the Changes tab
   shows the column again.
 - The results border says how many columns are hidden (`· 2 hidden`), and in the dialog the column
-  is struck through (`hidden from the grid, still read`, or `(row key)` for a key column).
+  is struck through (`hidden from the grid, still read`, followed by `(row key)` for a key column).
 - With every column hidden, the grid says how to show one again, and no key reads or changes a
   cell until then.
 
@@ -332,7 +340,7 @@ A table tab's results border says what is applied, at the bottom left:
 
 the first condition, how many more, the first sort key and how many more, the hidden columns. In
 a narrower window the condition is cut (`…`), then it shows counts (`▼ 2 · ↓ 2`), then
-`▼2 ↓2 ◌2`: it never hides that a filter, a sort or a hidden column is on. A spinner shows while
+`▼2 ↓2 ◌2`, cut only when even that does not fit. A spinner shows while
 the tab's query runs, and `▼ failed`, `▼ cancelled` or `▼ unapplied` when the last run brought no
 rows. A click on it opens the dialog. With nothing applied it shows nothing.
 
@@ -379,7 +387,7 @@ be pointed to, the dialog says why, and nothing reaches the server.
 | A backslash in a string the server may read another way | What would run depends on a server setting. |
 | A row lock (`FOR UPDATE`, `FOR SHARE`), also in a subquery | It would hold up other sessions. |
 | Another clause of the statement outside the condition's own parentheses (`ORDER BY`, `LIMIT`, `GROUP BY`, `HAVING`, `WINDOW`, `UNION` and the like; a subquery may have its own), `INTO` anywhere, MySQL's `:=` | Only a condition is taken; what the statement reads stays this table's rows. |
-| Built-ins that wait, lock, change the session or a sequence, read the server's files or reach another server (`pg_sleep`, `pg_advisory_lock`, `set_config`, `nextval`, `dblink`, MySQL's `SLEEP`, `GET_LOCK`, `LOAD_FILE`), also in attribute notation (`(id::oid).lo_get`); MariaDB's `NEXT VALUE FOR s` and `s.nextval` | A filter runs for every row and must not disturb anything. |
+| Built-ins that wait, lock, change the session or a sequence, read or write the server's files or large objects, or reach another server (`pg_sleep`, `pg_advisory_lock`, `set_config`, `nextval`, `dblink`, `pg_read_file`, `lo_import`, `lo_get`, MySQL's `SLEEP`, `GET_LOCK`, `LOAD_FILE`), also in attribute notation (`(id::oid).lo_get`); MariaDB's `NEXT VALUE FOR s` and `s.nextval` | A filter runs for every row and must not disturb anything, on any connection. |
 | MySQL's `ROW_COUNT()` and `FOUND_ROWS()` | They read the outcome of the statement before, which for a table tab is one the app sends. |
 
 An order is refused unless it is the table's columns, each once; a limit, as
@@ -428,7 +436,7 @@ the session's level is set again.
 A condition and order that ran are kept per table (its connection, database, schema and name)
 once the server answered them with rows: a run that was refused, failed or was cancelled is not
 kept. `Ctrl+R` in the filter dialog (or `Space r H` from the grid) lists the table's earlier ones,
-the most recent first, with both texts in full under the list; typing narrows the list. A picked
+the most recent first, with both texts under the list (up to six lines); typing narrows the list. A picked
 entry fills the dialog's condition and order (opening the dialog from the grid; the limit stays as
 it is: the history does not keep limits) and runs only when you press `Enter`, with the same checks
 as a condition you type. A condition or order holding a line break (from a workspace file edited by
@@ -457,7 +465,7 @@ reads the history but does not write it.
 
 Filtered rows show `page 3 / ?` in the results title (`page 3 / ? · # count` where there is
 room): nothing is counted by itself. `#` opens a
-small choice on a filtered table tab (on any other result it counts at once, and the title of an
+small choice on a filtered table tab whose rows are not all fetched (on any other result it counts at once, and the title of an
 unfiltered table shows the pages the server's statistics suggest, `~12`, until then):
 
 - **Estimate (planner)** asks the server's planner how many rows the filter matches, without

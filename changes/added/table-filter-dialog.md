@@ -8,11 +8,11 @@
   distinct numbers show their range; long values are counted, not listed.
 - `#` in the dialog counts the column's values exactly on the server, under the other
   conditions only, with the time limit, lock rules and refusals of a row count (refused on
-  MySQL when its read would lock rows or settings for the next transaction are waiting).
+  MySQL when its read would lock rows, or while settings for the next transaction wait).
 - The dialog's footer shows the condition as chips, the order, the limit and the SQL section:
   the whole statement as it would be sent, its WHERE and ORDER BY editable as text
   (`Ctrl+Space` completes) and `Open in editor`. A condition left alone is sent byte for byte;
-  one changed is its terms as written, joined with AND. `Enter` applies with every check, a
+  once changed, it is its terms joined with AND, those not touched as written. `Enter` applies with every check, a
   refusal keeps the dialog open with the reason and the refused part underlined, `Esc` drops
   the changes, and `u` or `Ctrl+Z` undoes a step, then the last change applied to the tab.
 - A condition with a comment, a `;`, a row lock (FOR UPDATE, FOR SHARE) or another clause is
@@ -21,13 +21,13 @@
   refused. The order is the table's columns with ASC or DESC (NULLS FIRST or LAST on
   PostgreSQL); the primary key is added after it (`+ id`), and an order not known to be unique
   says so. `Space r v` opens the statement in a new console, `Space r x` clears the condition,
-  order and limit, and `:where`, `:orderby` and `:filter clear` do the same from the command
-  line.
+  order and limit, and from the command line
+  `:where` and `:orderby` set the condition and the order and `:filter clear` clears them.
 - On a table tab's grid, `=` (or `Space r =`) keeps only the value of the cell or of cells
   selected in one column, in place of the column's own conditions, and `!` (or `Space r !`)
   keeps every row but those, the NULL ones included unless NULL is among the cells; `X` (or
   `Space r X`) clears the conditions and the order. `s` (or `Space r s`) sorts by the cursor's
-  column, going up, then down, then not at all, and `S` (or `Space r S`) adds it as one more
+  column alone, going up, then down, then not at all, and `S` (or `Space r S`) adds it as one more
   key; a click at the right end of a header sorts too. `F` (or `Space r F`, or a right click on
   a header) opens the column's menu: sort, open the dialog on it, keep only or exclude the
   value, clear its conditions, hide it. Each runs with the checks of the dialog's `Enter`, and
