@@ -1,4 +1,4 @@
-//! A table tab's `LIMIT`: the third field of the filter line caps the rows. It is not written
+//! A table tab's `LIMIT`: the filter dialog's `Limit` field caps the rows. It is not written
 //! into the statement the grid runs (on MySQL a `LIMIT` would override the cap the driver sets
 //! per page): the pages stop at the cap, the last one cut, and nothing is fetched past it (the
 //! portal is closed); the title says so. A count and an export of every row read the capped
@@ -10,8 +10,7 @@ use crate::common;
 use common::*;
 use datarig_core::driver::{DbCommand, DbEvent};
 use datarig_i18n::Lang;
-use datarig_tui::app::overlay::ConfirmAction;
-use datarig_tui::app::table_query::Field;
+use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
 use datarig_tui::app::{Paging, Results};
 use datarig_tui::keymap::Ctx;
 use ratatui::crossterm::event::KeyCode;
@@ -77,22 +76,27 @@ fn users(lang: Lang) -> Harness {
 }
 
 /// Type `limit` into the line's `LIMIT` field (what it held cleared) and apply.
+/// The filter dialog (opened unless it is open), its `Limit` field set to `limit`, applied.
 fn set_limit(h: &mut Harness, limit: &str) {
-    h.keys("f");
-    h.key(KeyCode::Tab);
-    h.key(KeyCode::Tab);
-    assert_eq!(focus(h), Some(Field::Limit));
-    h.ctrl('l');
+    if !h.app.overlays.is_open(OverlayKind::FilterDialog) {
+        h.keys("f");
+    }
+    for _ in 0..6 {
+        if h.app.key_context() == Ctx::FilterDialogText {
+            break;
+        }
+        h.key(KeyCode::Tab);
+    }
+    assert_eq!(h.app.key_context(), Ctx::FilterDialogText);
+    h.ctrl('u');
     h.type_text(limit);
     h.key(KeyCode::Enter);
 }
 
-fn focus(h: &Harness) -> Option<Field> {
-    h.app.tab().doc.table_query.as_ref().and_then(|q| q.line.focus)
-}
-
-fn field_text(h: &Harness, f: Field) -> String {
-    h.app.tab().doc.table_query.as_ref().expect("a table query").line.field(f).text().to_string()
+/// What the open filter dialog says in its hint line (and anywhere on it).
+fn dialog(h: &mut Harness) -> String {
+    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog), "the dialog is open");
+    h.screen(120, 34)
 }
 
 fn status(h: &Harness) -> String {
@@ -127,16 +131,14 @@ fn limited(limit: u64) -> Harness {
 #[test]
 fn the_limit_applies_with_the_other_fields_and_is_not_sent_in_the_grids_statement() {
     let mut h = users(Lang::En);
-    h.keys("f");
-    h.type_text("id > 1");
-    h.key(KeyCode::Tab);
-    h.type_text("name");
-    h.key(KeyCode::Tab);
-    h.type_text(" 0100 ");
-    h.ctrl('e');
+    h.command("where id > 1");
+    runs(&mut h);
+    first_page(&mut h, 3, false);
+    h.command("orderby name");
+    runs(&mut h);
+    first_page(&mut h, 3, false);
+    set_limit(&mut h, " 0100 ");
     assert_eq!(runs(&mut h), vec![vec![format!(r#"{ALL} WHERE (id > 1) ORDER BY "name" ASC"#)]]);
-    // Written back as the app reads it.
-    assert_eq!(field_text(&h, Field::Limit), "100");
     assert_eq!(h.app.tab().doc.table_query.as_ref().unwrap().applied().limit, Some(100));
     assert_eq!(h.app.key_context(), Ctx::Grid);
     // Blank: no limit.
@@ -144,16 +146,6 @@ fn the_limit_applies_with_the_other_fields_and_is_not_sent_in_the_grids_statemen
     set_limit(&mut h, "  ");
     assert_eq!(runs(&mut h).len(), 1);
     assert_eq!(h.app.tab().doc.table_query.as_ref().unwrap().applied().limit, None);
-    // Tab goes round the three fields, Shift+Tab the other way.
-    h.keys("f");
-    for f in [Field::Order, Field::Limit, Field::Where] {
-        h.key(KeyCode::Tab);
-        assert_eq!(focus(&h), Some(f));
-    }
-    for f in [Field::Limit, Field::Order, Field::Where] {
-        h.key_mod(KeyCode::BackTab, ratatui::crossterm::event::KeyModifiers::SHIFT);
-        assert_eq!(focus(&h), Some(f));
-    }
 }
 
 #[test]
@@ -169,15 +161,14 @@ fn a_limit_that_is_not_a_number_of_rows_is_refused_and_nothing_is_sent() {
     ] {
         set_limit(&mut h, text);
         assert!(runs(&mut h).is_empty(), "{text}");
-        assert!(status(&h).starts_with("Limit refused: "), "{text}: {}", status(&h));
-        assert!(status(&h).contains(why), "{text}: {}", status(&h));
-        let r = h.app.tab().doc.table_query.as_ref().and_then(|q| q.refusal.clone()).expect("a refusal");
-        assert_eq!((r.field, r.at), (Field::Limit, Some(0..text.len())), "{text}");
-        assert_eq!(focus(&h), Some(Field::Limit), "the focus stays on the field");
+        let said = dialog(&mut h);
+        assert!(said.contains("Limit refused: ") && said.contains(why), "{text}: {said}");
+        assert_eq!(h.app.key_context(), Ctx::FilterDialogText, "the field keeps the keys");
         h.key(KeyCode::Esc);
     }
-    // Esc put the applied (no) limit back.
-    assert_eq!(field_text(&h, Field::Limit), "");
+    // Esc dropped the draft: no limit applied, none to run.
+    let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+    assert_eq!((tq.applied().limit, tq.draft.limit), (None, None));
     // The largest a server reads is let through.
     set_limit(&mut h, "9223372036854775807");
     assert_eq!(runs(&mut h).len(), 1);
@@ -281,12 +272,10 @@ fn a_page_read_again_past_a_closed_portal_stops_at_the_limit() {
 fn a_count_and_an_export_of_every_row_read_the_capped_statement() {
     let size = Harness::connected(Lang::En).app.page_size;
     let mut h = users(Lang::En);
-    h.keys("f");
-    h.type_text("id > 0");
-    h.key(KeyCode::Tab);
-    h.key(KeyCode::Tab);
-    h.type_text("700");
-    h.key(KeyCode::Enter);
+    h.command("where id > 0");
+    runs(&mut h);
+    first_page(&mut h, 3, false);
+    set_limit(&mut h, "700");
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 0)")]]);
     let id = h.app.tab().exec.query_id;
     let index = h.app.tabs.active_index();
@@ -372,37 +361,22 @@ fn a_new_limit_over_pending_edits_asks_first_and_enter_keeps_them() {
 fn the_limit_screens() {
     for lang in [Lang::En, Lang::Ko] {
         let tag = lang_tag(lang);
-        // Applied with a condition and an order: `LIMIT 100` before the refresh mark; at 80
-        // columns with a long condition it shrinks to `L100`.
+        // Applied with a condition and an order: the title says the limit.
         let mut h = users(lang);
         keys_came(&mut h, "local-pg", &["id"]);
-        // The inspector hidden: its room is the line's.
         h.keys("i");
-        h.keys("f");
-        h.type_text("id > 1");
-        h.key(KeyCode::Tab);
-        h.type_text("name desc");
-        h.key(KeyCode::Tab);
-        h.type_text("100");
-        h.key(KeyCode::Enter);
+        h.command("where id > 1");
+        first_page(&mut h, 3, false);
+        h.command("orderby name desc");
+        first_page(&mut h, 3, false);
+        set_limit(&mut h, "100");
         first_page(&mut h, 3, false);
         assert_screen!(format!("table_limit_applied_{tag}_80x24"), lang, h.draw(80, 24));
         assert_screen!(format!("table_limit_applied_{tag}_120x30"), lang, h.draw(120, 30));
-        h.keys("f");
-        h.key(KeyCode::End);
-        h.type_text(" AND name NOT IN ('alpha', 'beta', 'gamma', 'delta')");
-        h.key(KeyCode::Enter);
-        first_page(&mut h, 3, false);
-        assert_screen!(format!("table_limit_collapsed_{tag}_80x24"), lang, h.draw(80, 24));
-        // Edited: the field whole with the cursor in it; refused: underlined, the reason said.
-        h.keys("f");
-        h.key(KeyCode::Tab);
-        h.key(KeyCode::Tab);
-        h.ctrl('l');
-        h.type_text("lots");
-        h.key(KeyCode::Enter);
+        // Refused: the field underlined, the reason in the dialog's hint line.
+        set_limit(&mut h, "lots");
         assert_screen!(format!("table_limit_refused_{tag}_80x24"), lang, h.draw(80, 24));
-        assert_screen!(format!("table_limit_refused_{tag}_120x30"), lang, h.draw(120, 30));
+        assert_screen!(format!("table_limit_refused_{tag}_120x34"), lang, h.draw(120, 34));
         // The rows stopped at the cap: the title says it.
         let mut h = users(lang);
         set_limit(&mut h, "2");
@@ -474,12 +448,10 @@ fn the_capped_statement_keeps_the_order_the_rows_were_read_in() {
     let keys = keys.expect("the keys are asked for");
     first_page(&mut h, 3, false);
     h.key(KeyCode::Tab);
-    h.keys("f");
-    h.key(KeyCode::Tab);
-    h.type_text("name");
-    h.key(KeyCode::Tab);
-    h.type_text("700");
-    h.key(KeyCode::Enter);
+    h.command("orderby name");
+    runs(&mut h);
+    first_page(&mut h, 3, false);
+    set_limit(&mut h, "700");
     let ordered = format!(r#"{ALL} ORDER BY "name" ASC"#);
     assert_eq!(runs(&mut h), vec![vec![ordered.clone()]], "no keys yet: no tie-breaker");
     let (id, index) = (h.app.tab().exec.query_id, h.app.tabs.active_index());
@@ -537,23 +509,6 @@ fn the_statement_opened_in_a_console_has_the_cap() {
     h.keys(" rv");
     let text = h.app.tab().editor.text();
     assert_eq!(text.trim(), format!("{ALL} LIMIT 700"), "{text}");
-}
-
-/// The order edited at 80 columns: the condition keeps the columns it needs while the order's
-/// field has room enough, never cut next to a blank gap.
-#[test]
-fn an_edited_order_leaves_the_condition_its_room() {
-    let mut h = users(Lang::En);
-    h.app.dispatch(datarig_tui::app::action::Action::ToggleExplorer);
-    h.app.dispatch(datarig_tui::app::action::Action::ToggleDetail);
-    let cond = "id > 1 and name <> 'zz_nothing_here_at_all'";
-    h.command(&format!("where {cond}"));
-    first_page(&mut h, 3, false);
-    h.command("orderby id desc");
-    first_page(&mut h, 3, false);
-    h.keys(" ro");
-    let screen = h.screen(80, 24);
-    assert!(screen.contains(cond), "{screen}");
 }
 
 /// `#` on filtered rows, then the exact count of the choice it opens.

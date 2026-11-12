@@ -892,8 +892,8 @@ async fn by_value(
 #[tokio::test(flavor = "multi_thread")]
 async fn filter_by_value_reads_back_the_rows_it_names() {
     use datarig_tui::app::action::Action;
-    use datarig_tui::app::filter_line::TableAction;
     use datarig_tui::app::filter_value::ByValue as B;
+    use datarig_tui::app::table_filter::TableAction;
     let Some((url, admin)) = urls("filter_by_value_reads_back_the_rows_it_names") else { return };
     let table = format!("zz_it_byvalue_{}", std::process::id());
     let t = format!("shop.{table}");
@@ -954,14 +954,14 @@ async fn filter_by_value_reads_back_the_rows_it_names() {
 }
 
 /// Filter by a value with a line break (LF, CR, CRLF) on MySQL: the condition (the value's
-/// UTF-8 bytes) reads back the row it names, and the filter line applied again (`f`, `Enter`)
+/// UTF-8 bytes) reads back the row it names, and the filter applied again (`f`, `Enter`)
 /// runs the same statement and reads the same rows. Makes `shop.zz_it_breaks_<pid>` and drops
 /// it.
 #[tokio::test(flavor = "multi_thread")]
 async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() {
     use datarig_tui::app::action::Action;
-    use datarig_tui::app::filter_line::TableAction;
     use datarig_tui::app::filter_value::ByValue as B;
+    use datarig_tui::app::table_filter::TableAction;
     let Some((url, admin)) = urls("filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line") else {
         return;
     };
@@ -999,7 +999,7 @@ async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() 
         assert_eq!(ran, *text, "{by:?}");
         assert_eq!(got, want.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "{text}");
         let first = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
-        // The filter line applied again as it is.
+        // The filter dialog applies it again as it is.
         let qid = app.tab().exec.query_id;
         app.focus = Focus::Results;
         press(&mut app, 'f');
@@ -1017,15 +1017,12 @@ async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() 
         let tq = app.tab().doc.table_query.as_ref().unwrap();
         assert!(tq.failure().is_none(), "{text}");
         let again = tq.shown.as_ref().and_then(|q| q.filter.as_ref()).map(|f| f.text.clone()).unwrap_or_default();
-        assert_eq!(again, *text, "the line applied again");
+        assert_eq!(again, *text, "applied again from the dialog");
         let sent = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
         assert_eq!(sent, first, "the same statement: {text}");
         let mut rows: Vec<String> = held_column(&app, 0).into_iter().flatten().collect();
         rows.sort();
         assert_eq!(rows, got, "the same rows: {text}");
-        if let Some(tq) = app.tab_mut().doc.table_query.as_mut() {
-            tq.line.focus = None;
-        }
         app.dispatch(Action::Table(TableAction::Clear));
         pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 5).await;
     }

@@ -44,8 +44,8 @@ pub mod explorer;
 pub mod export;
 pub mod export_form;
 pub mod export_path_pick;
+pub mod filter_dialog;
 pub mod filter_history;
-pub mod filter_line;
 pub mod filter_value;
 pub mod folder_pick;
 pub mod folder_read;
@@ -84,6 +84,7 @@ mod status;
 pub mod tab_drag;
 pub mod tab_list;
 mod tab_ops;
+pub mod table_filter;
 pub mod table_query;
 pub mod tabs;
 pub mod themes;
@@ -264,16 +265,17 @@ pub struct Popup {
     pub trail: usize,
     /// The text the popup completes.
     pub owner: PopupOwner,
-    /// The user turned to it (asked for it with `Ctrl+Space`, or moved its selection): in the
-    /// filter line `Enter` then takes its entry, else it applies the line.
+    /// The user turned to it (asked for it with `Ctrl+Space`, or moved its selection): in a
+    /// field of the filter dialog `Enter` then takes its entry, else it applies the dialog.
     pub touched: bool,
 }
 
-/// The text a completion popup completes: the tab's editor, or a field of its filter line.
+/// The text a completion popup completes: the tab's editor, or a field of the filter dialog's
+/// SQL section (`WHERE`, `ORDER BY`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PopupOwner {
     Editor,
-    Filter(table_query::Field),
+    Dialog(table_query::Field),
 }
 
 pub struct Viewer {
@@ -379,14 +381,6 @@ pub struct Layout {
     pub editor_cursor: (u16, u16),
     /// Where the cursor of the grid's search prompt was drawn last, while it is open.
     pub grid_prompt_cursor: Option<(u16, u16)>,
-    /// A table tab's filter line as drawn last: the whole line, its condition and its order
-    /// (each with its keyword), its refresh mark, and the cursor of the field with the focus.
-    pub filter_line: Rect,
-    pub filter_where: Rect,
-    pub filter_order: Rect,
-    pub filter_limit: Rect,
-    pub filter_refresh: Rect,
-    pub filter_cursor: Option<(u16, u16)>,
     /// The grid's rows and the lines under them, as drawn last (inside the results pane).
     pub grid_area: Rect,
     /// The editor and the results pane together (a query tab), for resizing the pane.
@@ -400,6 +394,9 @@ pub struct Layout {
     /// The previous and next page marks in the results title.
     pub page_prev: Rect,
     pub page_next: Rect,
+    /// A table tab's filter and sort on the results' bottom border (a click opens the filter
+    /// dialog).
+    pub table_status: Rect,
     pub too_small: bool,
 }
 
@@ -704,6 +701,8 @@ pub struct App {
     pub tips: tips::TipState,
     /// The filters and orders table tabs ran, per table ([`filter_history`]).
     filter_history: filter_history::FilterHistoryState,
+    /// The values loads of tables showed in this session, for the filter dialog's lists.
+    value_memory: filter_dialog::values::Memory,
     /// What's new does not show by itself at launch, nor is anything written for it (the tests
     /// of other screens set it; `:whatsnew` still works).
     pub whats_new_paused: bool,
@@ -899,6 +898,7 @@ impl App {
             pointer_on: None,
             tips: tips::TipState::default(),
             filter_history: Default::default(),
+            value_memory: Default::default(),
             whats_new_paused: false,
             updates: updates::Updates::default(),
             pending_context: None,

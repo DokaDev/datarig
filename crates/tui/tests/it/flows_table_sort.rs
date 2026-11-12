@@ -1,6 +1,6 @@
 //! Sorting a table tab by a column: `s` sorts by the grid's column alone (going up, going
 //! down, no order), `S` adds it as one more key (or turns it where it is). The new order is
-//! written into the filter line and runs on the server as any run of the tab does: a new run,
+//! written into the draft and runs on the server as any run of the tab does: a new run,
 //! asked about first over pending edits. A click in a header's sort zone (its last two
 //! columns, marked on the cursor's column) sorts as `s` does; a click elsewhere on a header
 //! still selects the column. The headers mark the sort keys and the columns the condition
@@ -81,8 +81,14 @@ fn one_run(h: &mut Harness) -> String {
     runs[0][0].clone()
 }
 
+/// Part `f` of the query the tab's next run sends, as text.
 fn field_text(h: &Harness, f: Field) -> String {
-    h.app.tab().doc.table_query.as_ref().expect("a table query").line.field(f).text().to_string()
+    let q = &h.app.tab().doc.table_query.as_ref().expect("a table query").draft;
+    match f {
+        Field::Where => q.filter.as_ref().map(|f| f.text.clone()).unwrap_or_default(),
+        Field::Order => datarig_core::query::order_text(&q.order, datarig_core::sql::dialect::Dialect::Postgres),
+        Field::Limit => q.limit.map(|n| n.to_string()).unwrap_or_default(),
+    }
 }
 
 fn heads(h: &Harness) -> Vec<HeadMarks> {
@@ -153,7 +159,7 @@ fn shift_s_adds_the_column_as_the_next_key() {
     assert_eq!(one_run(&mut h), format!(r#"{ALL} ORDER BY "email" DESC"#));
 }
 
-/// With the table's key read, the order is made total: the key is appended (shown in the line,
+/// With the table's key read, the order is made total: the key is appended (shown in the filter dialog,
 /// not marked in the headers), and a sort on the key column makes it the user's own key.
 #[test]
 fn the_tie_breaker_keeps_working_and_is_not_marked() {
@@ -167,7 +173,11 @@ fn the_tie_breaker_keeps_working_and_is_not_marked() {
     assert_eq!(one_run(&mut h), format!(r#"{ALL} ORDER BY "name" ASC, "id" ASC"#));
     answer(&mut h);
     assert_eq!(heads(&h), vec![HeadMarks::default(), sorted(true, 1), HeadMarks::default()]);
-    assert!(h.screen(200, 45).contains("ORDER BY name ASC + id"), "{}", h.screen(200, 45));
+    h.keys(" ro");
+    let screen = h.screen(200, 45);
+    let line = screen.lines().find(|l| l.contains("Order ")).unwrap_or_else(|| panic!("{screen}"));
+    assert!(line.contains("name \u{2191}") && line.contains("+ id"), "{line}");
+    h.key(KeyCode::Esc);
     h.keys("hS");
     assert_eq!(one_run(&mut h), format!(r#"{ALL} ORDER BY "name" ASC, "id" ASC"#));
     answer(&mut h);
@@ -176,7 +186,7 @@ fn the_tie_breaker_keeps_working_and_is_not_marked() {
     assert_eq!(one_run(&mut h), format!(r#"{ALL} ORDER BY "name" ASC, "id" DESC"#));
 }
 
-/// The three fields of the line, as they read.
+/// The three parts of the draft, as text.
 fn fields(h: &Harness) -> [String; 3] {
     [field_text(h, Field::Where), field_text(h, Field::Order), field_text(h, Field::Limit)]
 }
@@ -185,78 +195,12 @@ fn draft(h: &Harness) -> datarig_core::query::Query {
     h.app.tab().doc.table_query.as_ref().expect("a table query").draft.clone()
 }
 
-/// Field `f` of the line holds `text`, typed and not applied; the grid has the keys.
-fn typed(h: &mut Harness, f: Field, text: &str) {
-    let line = &mut h.app.tab_mut().doc.table_query.as_mut().expect("a table query").line;
-    match f {
-        Field::Where => line.where_.set(text),
-        Field::Order => line.order.set(text),
-        Field::Limit => line.limit.set(text),
-    }
-    line.focus = None;
-}
-
 /// The sort zone of column `col`'s header, as last drawn at 120x30.
 fn zone(h: &mut Harness, col: usize) -> (u16, u16) {
     h.draw(120, 30);
     let g = h.app.tab().grid.clone();
     let (x, ..) = g.sort_zones.iter().copied().find(|z| z.2 == col).expect("a sort zone");
     (x, g.header_y)
-}
-
-/// A sort runs the condition and the limit the rows shown were read with. While the line holds
-/// a change not applied, in any field, a sort (`s`, `S`, a click in a sort zone) is refused as
-/// a filter by value is, said, and nothing changes: what was typed stays, the draft is as it
-/// was, nothing is sent.
-#[test]
-fn a_sort_over_changes_not_applied_is_refused_and_keeps_them() {
-    let mut h = users(Lang::En);
-    h.keys("f");
-    h.type_text("id > 1");
-    h.key(KeyCode::Tab);
-    h.key(KeyCode::Tab);
-    h.type_text("50");
-    h.key(KeyCode::Enter);
-    assert_eq!(one_run(&mut h), format!("{ALL} WHERE (id > 1)"));
-    answer(&mut h);
-    h.app.tab_mut().doc.table_query.as_mut().unwrap().line.focus = None;
-    // Nothing typed: the condition and the limit applied run with the order.
-    h.keys("ls");
-    assert_eq!(one_run(&mut h), format!(r#"{ALL} WHERE (id > 1) ORDER BY "name" ASC"#));
-    assert_eq!(h.app.tab().doc.table_query.as_ref().unwrap().applied().limit, Some(50));
-    answer(&mut h);
-    assert_eq!(fields(&h), ["id > 1", "name ASC", "50"]);
-    for (f, text) in [(Field::Where, "id > 2"), (Field::Order, "email desc"), (Field::Limit, "7")] {
-        typed(&mut h, f, text);
-        let (before, d) = (fields(&h), draft(&h));
-        for how in ["s", "S", "click"] {
-            match how {
-                "click" => {
-                    let (x, y) = zone(&mut h, 2);
-                    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
-                    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
-                }
-                keys => h.keys(keys),
-            }
-            assert!(runs(&mut h).is_empty(), "{f:?} {how}: nothing sent");
-            let status = h.status(120, 30);
-            assert!(status.contains("Not sorted: filter line edited"), "{f:?} {how}: {status}");
-            assert_eq!(fields(&h), before, "{f:?} {how}: the typed text stays");
-            assert_eq!(draft(&h), d, "{f:?} {how}: the draft is as it was");
-            assert_eq!(heads(&h)[1], sorted(true, 1), "{f:?} {how}");
-        }
-        // Put back: sorting works again.
-        let back = match f {
-            Field::Where => "id > 1",
-            Field::Order => "name ASC",
-            Field::Limit => "50",
-        };
-        typed(&mut h, f, back);
-    }
-    // The clicks put the cursor on `email`.
-    assert_eq!(h.app.tab().grid.col, 2);
-    h.keys("s");
-    assert_eq!(one_run(&mut h), format!(r#"{ALL} WHERE (id > 1) ORDER BY "email" ASC"#));
 }
 
 #[test]
@@ -294,7 +238,7 @@ fn a_click_in_the_sort_zone_sorts_and_elsewhere_selects_the_column() {
 }
 
 /// Over pending edits a sort asks first, as any run does. Enter keeps the edits: nothing runs,
-/// and the line and the draft are as they were (the sort's order is written only once its run
+/// and the draft is as it was (the sort's order is written only once its run
 /// is sent); `y` drops them and runs it.
 #[test]
 fn a_sort_over_pending_edits_asks_first_and_enter_keeps_them() {
@@ -323,7 +267,7 @@ fn a_sort_over_pending_edits_asks_first_and_enter_keeps_them() {
         h.key(KeyCode::Enter);
         assert!(runs(&mut h).is_empty(), "{how}: Enter keeps the edits, nothing runs");
         assert!(matches!(&h.app.tab().results, Results::Rows(rs) if !rs.edit.batch.is_empty()));
-        // Nothing of the sort stays: the line and the draft are as they were.
+        // Nothing of the sort stays: the draft is as it was.
         assert_eq!(fields(&h), before, "{how}");
         assert_eq!(draft(&h), d, "{how}");
         assert!(heads(&h).iter().all(|m| m.sort.is_none()));
@@ -337,13 +281,13 @@ fn a_sort_over_pending_edits_asks_first_and_enter_keeps_them() {
     assert!(!sent.iter().any(|c| matches!(c, DbCommand::FetchMore { .. } | DbCommand::Resume { .. })));
     answer(&mut h);
     h.draw(120, 30);
-    assert_eq!(fields(&h), ["id > 0", "name ASC", ""], "the line shows the order sent");
+    assert_eq!(fields(&h), ["id > 0", "name ASC", ""], "the draft holds the order sent");
 }
 
 /// A sort asked about for the reads that lock rows (MySQL at SERIALIZABLE without autocommit)
-/// and declined leaves the line and the draft as they were; `y` runs it.
+/// and declined leaves the draft as it was; `y` runs it.
 #[test]
-fn a_sort_declined_for_locking_reads_leaves_the_line() {
+fn a_sort_declined_for_locking_reads_leaves_the_draft() {
     use datarig_core::driver::Isolation;
     use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
     let driver = FakeDriver::default();
@@ -380,9 +324,9 @@ fn a_sort_declined_for_locking_reads_leaves_the_line() {
 
 /// A sort the read-only environment refuses (the filter shown calls a function whose effects
 /// are not known, let through before the environment turned read-only) sends nothing and leaves
-/// the line and the draft as they were.
+/// the draft as it was.
 #[test]
-fn a_sort_refused_as_read_only_leaves_the_line() {
+fn a_sort_refused_as_read_only_leaves_the_draft() {
     use datarig_core::policy::Policy;
     let mut h = users(Lang::En);
     h.command("where my_fn(id) > 0");
@@ -460,23 +404,6 @@ fn the_sort_screens() {
     }
 }
 
-#[test]
-fn the_empty_filter_line_names_the_filter_and_sort_keys_of_the_key_map() {
-    let screen = users(Lang::En).screen(120, 30);
-    assert!(screen.contains("WHERE  f filter · s sort "), "{screen}");
-    let mut cfg = test_db_config();
-    cfg.keymap = datarig_core::config::parse(
-        "[keymap.grid]\n\"f\" = \"none\"\n\"s\" = \"none\"\n\"f8\" = \"table.filter.edit\"\n\"f9\" = \"table.sort.cycle\"\n",
-    )
-    .unwrap()
-    .keymap;
-    let mut h = Harness::connected_with(&cfg, Lang::En);
-    open_users(&mut h);
-    answer(&mut h);
-    let screen = h.screen(120, 30);
-    assert!(screen.contains("WHERE  F8 filter · F9 sort "), "{screen}");
-}
-
 /// After a run of the line's query that brought no rows (refused by the server, cancelled),
 /// the rows shown are an earlier query's while the line shows the one that did not land. A
 /// grid action (`s`, `S`, a click in a sort zone, `F` and an entry of its menu) is refused as
@@ -490,9 +417,7 @@ fn grid_actions_over_a_query_that_did_not_land_are_refused() {
         DbError::Server(ServerMessage { text: "column \"idd\" does not exist".into(), position: None, hint: None });
     for (case, error, cancelled) in [("failed", server, false), ("cancelled", DbError::Cancelled, true)] {
         let mut h = users(Lang::En);
-        h.keys("f");
-        h.type_text("idd > 1");
-        h.key(KeyCode::Enter);
+        h.command("where idd > 1");
         assert_eq!(one_run(&mut h), format!("{ALL} WHERE (idd > 1)"), "{case}");
         let (id, index) = (h.app.tab().exec.query_id, h.app.tabs.active_index());
         h.tab_db(index, DbEvent::Failed { id, error, cancelled });
@@ -500,7 +425,6 @@ fn grid_actions_over_a_query_that_did_not_land_are_refused() {
         assert!(tq.failure().is_some(), "{case}");
         assert_eq!(tq.shown.as_ref().and_then(|q| q.filter.as_ref()), None, "{case}: the earlier rows");
         h.app.focus = datarig_tui::app::Focus::Results;
-        h.app.tab_mut().doc.table_query.as_mut().unwrap().line.focus = None;
         assert_eq!(h.app.key_context(), Ctx::Grid, "{case}");
         let (before, d) = (fields(&h), draft(&h));
         assert_eq!(before[0], "idd > 1", "{case}");
@@ -551,28 +475,13 @@ fn flashed(h: &Harness) -> String {
 /// long notice in its middle, which would lose the reason and keep only the keys after it.
 #[test]
 fn a_refused_sort_or_filter_says_why_at_80_columns() {
-    // Changes in the line not applied.
+    // The rows shown are an earlier run's: the query's run was cancelled.
     let mut h = users(Lang::En);
-    typed(&mut h, Field::Where, "id > 2");
-    for (keys, name) in [("s", "sort"), ("F", "filter")] {
-        h.keys(keys);
-        assert!(runs(&mut h).is_empty(), "{keys}: nothing sent");
-        let said = flashed(&h);
-        assert!(said.contains("filter line edited"), "{keys}: {said}");
-        let status = h.status(80, 24);
-        assert!(status.contains(&said), "{keys}: {status}");
-        assert_screen!(format!("table_sort_refused_unapplied_{name}_en_80x24"), Lang::En, h.draw(80, 24));
-    }
-    // The rows shown are an earlier run's: the line's run was cancelled.
-    let mut h = users(Lang::En);
-    h.keys("f");
-    h.type_text("idd > 1");
-    h.key(KeyCode::Enter);
+    h.command("where idd > 1");
     assert_eq!(one_run(&mut h), format!("{ALL} WHERE (idd > 1)"));
     let (id, index) = (h.app.tab().exec.query_id, h.app.tabs.active_index());
     h.tab_db(index, DbEvent::Failed { id, error: datarig_core::driver::DbError::Cancelled, cancelled: true });
     h.app.focus = datarig_tui::app::Focus::Results;
-    h.app.tab_mut().doc.table_query.as_mut().unwrap().line.focus = None;
     for (keys, name) in [("s", "sort"), ("F", "filter")] {
         h.keys(keys);
         assert!(runs(&mut h).is_empty(), "{keys}: nothing sent");
@@ -606,11 +515,9 @@ fn every_refusal_of_a_sort_or_filter_by_value_fits_80_columns() {
         let all: Vec<Msg> = vec![
             Label::TableSortOnlyTableTabs.into(),
             Label::TableSortNoColumns.into(),
-            Label::TableSortUnapplied.into(),
             Label::TableSortNotShown.into(),
             Msg::TableSortName { column: column() },
             Label::TableFilterByValueNoRows.into(),
-            Label::TableFilterByValueUnapplied.into(),
             Label::TableFilterByValueNotShown.into(),
             Msg::TableFilterByValueName { column: column() },
             Label::TableFilterByValueNotOneLine.into(),

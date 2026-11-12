@@ -1,7 +1,7 @@
 //! A table tab's filter history: a filter and order are kept once the server answered them with
 //! rows (never a run refused, failed, cancelled or answered too late), in a file of the state
-//! directory that only the user can read; `Ctrl+R` in the filter line (`Space r H` from the
-//! grid) lists them, and one picked fills the line without running (`Enter` then runs it,
+//! directory that only the user can read; `Ctrl+R` in the filter dialog (`Space r H` from
+//! the grid) lists them, and one picked fills the dialog without running (`Enter` then runs it,
 //! checked as any text). A file that cannot be read is never taken for an empty history nor
 //! written over; the setting turns it off; `:filter history clear [all]` asks first.
 
@@ -16,7 +16,6 @@ use datarig_core::secret::{MemoryStore, SecretStore};
 use datarig_i18n::Lang;
 use datarig_tui::app::Startup;
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
-use datarig_tui::app::table_query::Field;
 use ratatui::crossterm::event::KeyCode;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -157,10 +156,9 @@ fn listed(h: &Harness) -> Vec<String> {
     }
 }
 
-/// The filter line's condition and order.
+/// The filter dialog's condition and order.
 fn line(h: &Harness) -> (String, String) {
-    let tq = h.app.tab().doc.table_query.as_ref().expect("a table query");
-    (tq.line.where_.text().to_string(), tq.line.order.text().to_string())
+    h.app.filter_dialog_draft().expect("the filter dialog")
 }
 
 /// Only a run the server answered with rows is kept, after the debounce; written 0600.
@@ -235,7 +233,7 @@ fn a_late_answer_of_an_earlier_filter_is_not_kept() {
 /// them; a pick fills the condition and the order and sends nothing; `Enter` then runs the
 /// compiled statement, checked as any text.
 #[test]
-fn a_picked_filter_fills_the_line_and_runs_only_with_enter() {
+fn a_picked_filter_fills_the_dialog_and_runs_only_with_enter() {
     let cfg = test_db_config();
     let mut h = users(&cfg, None);
     ran(&mut h, "id > 1");
@@ -262,7 +260,7 @@ fn a_picked_filter_fills_the_line_and_runs_only_with_enter() {
     assert!(!h.app.overlays.is_open(OverlayKind::Picker));
     assert!(runs(&mut h).is_empty(), "nothing runs on a pick");
     assert_eq!(line(&h), ("id > 1".into(), String::new()));
-    assert_eq!(h.app.tab().doc.table_query.as_ref().unwrap().line.focus, Some(Field::Where));
+    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog), "the dialog keeps the draft");
     h.key(KeyCode::Enter);
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 1)")]]);
     answer(&mut h);
@@ -281,17 +279,16 @@ fn a_picked_filter_fills_the_line_and_runs_only_with_enter() {
 
 /// `Esc` in the list changes nothing; another tab closes the list.
 #[test]
-fn esc_leaves_the_line_and_another_tab_closes_the_list() {
+fn esc_leaves_the_dialog_and_another_tab_closes_the_list() {
     let cfg = test_db_config();
     let mut h = users(&cfg, None);
     ran(&mut h, "id > 1");
     ran(&mut h, "id > 2");
     h.keys("f");
-    h.type_text(" AND id < 9");
     h.ctrl('r');
     h.key(KeyCode::Esc);
     assert!(!h.app.overlays.is_open(OverlayKind::Picker));
-    assert_eq!(line(&h).0, "id > 2 AND id < 9");
+    assert_eq!(line(&h).0, "id > 2");
     h.key(KeyCode::Esc);
     h.keys(" rH");
     assert!(h.app.overlays.is_open(OverlayKind::Picker));
@@ -324,10 +321,10 @@ fn a_picked_filter_asks_about_pending_edits_when_it_runs() {
     assert!(runs(&mut h).is_empty(), "Enter keeps the edits: nothing runs");
 }
 
-/// An entry whose condition or order holds a line break (the one-line field cannot hold it
-/// as it is) is not filled in: said why, the line left as it was, nothing run.
+/// An entry whose condition or order holds a line break (shown on one line it would not read
+/// as it is) is not filled in: said why, no dialog opened, nothing run.
 #[test]
-fn an_entry_the_line_cannot_hold_is_refused_never_altered() {
+fn an_entry_with_a_line_break_is_refused_never_altered() {
     let state = State::new("lines");
     let cfg = test_db_config();
     let mut seed = fh::History::default();
@@ -344,7 +341,7 @@ fn an_entry_the_line_cannot_hold_is_refused_never_altered() {
         }
         h.key(KeyCode::Enter);
         assert!(!h.app.overlays.is_open(OverlayKind::Picker));
-        assert_eq!(line(&h), (String::new(), String::new()), "never filled in altered");
+        assert_eq!(h.app.filter_dialog_draft(), None, "never filled in altered");
         assert!(said(&mut h).contains("line break"), "{}", said(&mut h));
         assert!(runs(&mut h).is_empty());
     }
@@ -693,47 +690,12 @@ fn without_a_writable_state_directory_nothing_is_written() {
     assert_eq!(std::fs::read_to_string(state.file()).unwrap(), before, "never written");
 }
 
-/// The empty line's hint as drawn on a `w` by `h` screen: from `WHERE` to the refresh mark.
-fn hint_drawn(h: &mut Harness, w: u16, hh: u16) -> String {
-    let screen = h.screen(w, hh);
-    let row = screen.lines().find(|l| l.contains("WHERE")).expect("the filter line").to_string();
-    let from = row.find("WHERE").unwrap();
-    let to = row.find('\u{27f3}').expect("the refresh mark");
-    row[from..to].trim_end().to_string()
-}
-
-/// With the explorer and the cell pane open the empty line's hint is narrow: it shows its key
-/// parts whole (as many as fit, the first always), never one cut in its middle, in English and
-/// Korean; with room every part shows.
-#[test]
-fn the_line_hint_drops_whole_parts_when_narrow() {
-    let cfg = test_db_config();
-    let mut h = users(&cfg, None);
-    let msg = datarig_i18n::Msg::TableFilterHint { filter: "f".into(), sort: "s".into(), history: "Ctrl+R".into() };
-    for lang in [Lang::En, Lang::Ko] {
-        h.app.i18n.set_lang(lang);
-        let full = h.app.i18n.msg(&msg).to_string();
-        let parts: Vec<&str> = full.split(" \u{b7} ").collect();
-        assert_eq!(parts.len(), 3, "{full}");
-        let narrow = hint_drawn(&mut h, 80, 24);
-        let whole: Vec<String> = (1..=parts.len()).map(|k| parts[..k].join(" \u{b7} ")).collect();
-        assert!(whole.contains(&narrow), "{lang:?}: {narrow:?} is not whole parts of {full:?}");
-        assert!(!narrow.contains('\u{2026}'), "{lang:?}: {narrow:?}");
-        assert_eq!(hint_drawn(&mut h, 120, 30), full, "{lang:?}");
-    }
-    h.app.i18n.set_lang(Lang::Ko);
-    assert_screen!("filter_history_hint_ko_80x24", Lang::Ko, h.draw(80, 24));
-    assert_screen!("filter_history_hint_ko_120x30", Lang::Ko, h.draw(120, 30));
-}
-
-/// The list with the selected entry's texts under it, the line's hint naming `Ctrl+R`, and
-/// the clear question.
+/// The list with the selected entry's texts under it (over the filter dialog), and the clear
+/// question.
 #[test]
 fn the_history_list_hint_and_clear_question_look_right() {
     let cfg = test_db_config();
     let mut h = users(&cfg, None);
-    assert_screen!("filter_history_hint_en_80x24", Lang::En, h.draw(80, 24));
-    assert_screen!("filter_history_hint_en_120x30", Lang::En, h.draw(120, 30));
     ran(&mut h, "status = 'done' AND amount > 1500 AND note LIKE '%a very long note that wraps%'");
     h.command("orderby name desc, id");
     answer(&mut h);
@@ -748,4 +710,34 @@ fn the_history_list_hint_and_clear_question_look_right() {
     h.command("filter history clear");
     assert_screen!("filter_history_clear_en_80x24", Lang::En, h.draw(80, 24));
     assert_screen!("filter_history_clear_en_120x30", Lang::En, h.draw(120, 30));
+}
+
+/// `Ctrl+R` in a field of the filter dialog's SQL section: the pick replaces what both fields
+/// hold (typed or not) and the draft as one step; nothing runs.
+#[test]
+fn a_pick_from_the_sql_section_fills_its_fields() {
+    let cfg = test_db_config();
+    let mut h = users(&cfg, None);
+    ran(&mut h, "id > 1");
+    h.command("orderby name desc");
+    answer(&mut h);
+    h.command("where");
+    answer(&mut h);
+    h.command("orderby");
+    answer(&mut h);
+    h.sent();
+    h.keys("f");
+    h.keys("Q");
+    h.type_text("name = 'typed'");
+    h.ctrl('r');
+    assert!(h.app.overlays.is_open(OverlayKind::Picker), "the list opens above the dialog");
+    h.type_text("id");
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty(), "nothing runs on a pick");
+    assert_eq!(h.app.filter_dialog_sql_fields(), Some(("id > 1".into(), "name DESC".into())));
+    assert_eq!(line(&h), ("id > 1".into(), "name DESC".into()));
+    // One step back: the draft before the pick (what was typed was never read back).
+    h.key_mod(KeyCode::Char('z'), ratatui::crossterm::event::KeyModifiers::CONTROL);
+    assert_eq!(line(&h), (String::new(), String::new()));
+    assert_eq!(h.app.filter_dialog_sql_fields(), Some((String::new(), String::new())));
 }

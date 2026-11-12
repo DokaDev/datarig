@@ -28,12 +28,12 @@ impl App {
                 Off::new(Label::MenuOffDdlTab, info(Label::DdlNoRebind))
             }
             // A query's rows are sorted in its text, not by its grid's headers.
-            Action::Table(super::filter_line::TableAction::SortCycle | super::filter_line::TableAction::SortAdd)
+            Action::Table(super::table_filter::TableAction::SortCycle | super::table_filter::TableAction::SortAdd)
                 if !table =>
             {
                 Off::new(Label::MenuOffOnlyTableTabs, info(Label::TableSortOnlyTableTabs))
             }
-            // A query's rows are filtered in its text, not by the filter line.
+            // A query's rows are filtered in its text, not by the filter dialog.
             Action::Table(_) if !table => Off::new(Label::MenuOffOnlyTableTabs, info(Label::TableFilterOnlyTableTabs)),
             // Another result than a text plan is shown, or none.
             Action::ExplainAsPlan
@@ -67,14 +67,24 @@ impl App {
             }
             return;
         }
+        // The filter dialog's operator picker is its top layer: of the dialog's own keys only
+        // `Enter` (picks) and `Esc` (closes it) act; none reaches the dialog under it.
+        if self.filter_dialog_picker_on_top()
+            && matches!(a, Action::FilterDialog(_) | Action::Table(table_filter::TableAction::History))
+            && !matches!(
+                a,
+                Action::FilterDialog(filter_dialog::DialogAction::Apply | filter_dialog::DialogAction::Cancel)
+            )
+        {
+            return;
+        }
         match a {
             // A DDL tab has nothing to run: the run key reads its DDL again.
             Action::RunStatement if self.tab().is_ddl() => self.load_ddl(self.tab().id),
-            // In the filter line the run key applies its fields.
-            Action::RunStatement if self.filter_line_focused() => self.filter_line_apply(),
             // A table tab runs its query (its filter and order).
             Action::RunStatement if self.tab().is_table() => self.table_rerun(self.tab().id),
             Action::Table(t) => self.table_action(t),
+            Action::FilterDialog(a) => self.filter_dialog_action(a),
             Action::RunStatement => {
                 if !self.layout.too_small {
                     let t = self.tab_mut();
@@ -90,12 +100,12 @@ impl App {
             Action::TxSummary => self.tx_summary(),
             Action::OpenCommands => self.toggle_commands(),
             Action::ShowCompletions => {
-                if self.focus == Focus::Editor && self.tab().editor.mode == Mode::Insert {
+                if self.filter_dialog_sql_field().is_some() {
+                    self.tab_mut().completion_due = None;
+                    self.filter_dialog_complete(true, None);
+                } else if self.focus == Focus::Editor && self.tab().editor.mode == Mode::Insert {
                     self.tab_mut().completion_due = None;
                     self.update_completion(true);
-                } else if self.filter_line_focused() {
-                    self.tab_mut().completion_due = None;
-                    self.filter_complete(true, None);
                 }
             }
             Action::ExternalEdit => self.request_external_edit(),

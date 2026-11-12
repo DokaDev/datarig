@@ -18,9 +18,9 @@
 //! waiting (dropped when it is [`LOG_QUEUE`] lines behind): an error log that blocks never holds
 //! up the UI thread nor a write of the history.
 //!
-//! `Ctrl+R` in the filter line (`Space r H`) lists the table's entries, the most recent first,
-//! with both texts under the list; one picked fills the condition and the order (the limit
-//! stays), and nothing runs until `Enter`, which checks it as any text typed.
+//! `Ctrl+R` in the filter dialog (`Space r H` from the grid) lists the table's entries, the most
+//! recent first, with both texts under the list; one picked fills the dialog's condition and
+//! order (the limit stays), and nothing runs until `Enter`, which checks it as any text typed.
 
 use super::*;
 use crate::text::{sanitize_cell, width, wrap_words};
@@ -390,7 +390,7 @@ impl App {
         let filter = table_query::filter_text(q).unwrap_or_default().to_string();
         let keys: Vec<_> = q.order.iter().filter(|k| k.origin == KeyOrigin::User).cloned().collect();
         let order = datarig_core::query::order_text(&keys, self.tab_dialect(id));
-        // Only texts the filter line holds as they are: a pick never alters what it fills in.
+        // Only texts the filter dialog's fields hold as they are: a pick never alters what it fills in.
         if (filter.trim().is_empty() && order.trim().is_empty())
             || !TextInput::holds(&filter)
             || !TextInput::holds(&order)
@@ -521,10 +521,10 @@ impl App {
     /// `Ctrl+R` / `Space r H`: the list of the filters table tab `id`'s table ran before.
     pub(super) fn open_filter_history(&mut self, id: TabId) {
         if self.prefs.filter_history == FilterHistory::Off {
-            return self.flash(Notice::new(Label::TableHistoryOff, Level::Info));
+            return self.say_over_filter_dialog(Notice::new(Label::TableHistoryOff, Level::Info));
         }
         let Some(key) = self.filter_history_key(id) else {
-            return self.flash(Notice::new(Label::TableHistoryEmpty, Level::Info));
+            return self.say_over_filter_dialog(Notice::new(Label::TableHistoryEmpty, Level::Info));
         };
         let was_loaded = !matches!(self.filter_history.held, Held::NotLoaded);
         let items = match self.filter_history_held() {
@@ -533,11 +533,12 @@ impl App {
             Err(_) if !was_loaded => return,
             Err(why) => {
                 let error = self.i18n.msg(&why).to_string();
-                return self.flash(Notice::new(Msg::TableHistoryUnavailable { error }, Level::Warning));
+                return self
+                    .say_over_filter_dialog(Notice::new(Msg::TableHistoryUnavailable { error }, Level::Warning));
             }
         };
         if items.is_empty() {
-            return self.flash(Notice::new(Label::TableHistoryEmpty, Level::Info));
+            return self.say_over_filter_dialog(Notice::new(Label::TableHistoryEmpty, Level::Info));
         }
         let now = unix_secs(self.wall_now());
         let none = self.i18n.label(Label::TableHistoryNoCondition).to_string();
@@ -556,16 +557,15 @@ impl App {
             })
             .collect();
         let list = ListPicker::new(entries, None, Some(&0)).with_max_width(100);
-        self.filter_popup_close();
         self.overlays.close(OverlayKind::WhichKey);
         self.key_state.clear();
         self.overlays.push(Overlay::Picker(super::picker::Picker::FilterHistory { tab: id, key, items, list }));
     }
 
-    /// What the list of a table's filters did: a pick fills the filter line's condition and
-    /// order of that tab (the limit stays), the condition focused; nothing runs. Only while the
-    /// tab is the active one and its table the one listed, and only texts the line holds as
-    /// they are (a line break: refused, said why).
+    /// What the list of a table's filters did: a pick becomes the condition and order of that
+    /// tab's filter dialog (the limit stays), opened for it when it is not open; nothing runs.
+    /// Only while the tab is the active one and its table the one listed, and only texts shown
+    /// on one line as they are (a line break: refused, said why).
     pub(super) fn filter_history_picked(&mut self, out: Outcome<usize>) {
         if out == Outcome::Pending {
             return;
@@ -582,13 +582,12 @@ impl App {
             return;
         }
         if !TextInput::holds(&e.filter) || !TextInput::holds(&e.order) {
-            return self.flash(Notice::new(Label::TableHistoryNotOneLine, Level::Warning));
+            return self.say_over_filter_dialog(Notice::new(Label::TableHistoryNotOneLine, Level::Warning));
         }
-        let Some(tq) = self.table_query_mut(tab) else { return };
-        tq.line.where_.set(&e.filter);
-        tq.line.order.set(&e.order);
-        tq.refusal = None;
-        self.filter_line_focus(tab, table_query::Field::Where);
+        if let Some(tq) = self.table_query_mut(tab) {
+            tq.refusal = None;
+        }
+        self.filter_dialog_from_history(tab, &e.filter, &e.order);
     }
 
     /// `:filter history clear` (`id`: the table of that tab) or `:filter history clear all`

@@ -1,22 +1,23 @@
 ---
 source: crates/tui/tests/it/flows_table_filter_value.rs
+assertion_line: 702
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
 "│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1       ││ local-pg / datarig.shop.users││ id: 2                │"
-"│  ▾ ●   local-pg      ││ [Result 1]  Chart  Messages  ││ name: NULL           │"
-"│    ▾ datarig default ││ WHERE  f filter · s sort   ⟳ ││ score: NULL          │"
-"│      ▸ analytics     ││   │ id   │ name  ^v│ score   ││ data: NULL           │"
-"│      ▸ public        ││   │ int8 │ text    │ float8  ││ doc: NULL            │"
-"│      ▾ shop          ││ 1 │    1 │ it's    │     1.5 ││ born: NULL           │"
-"│        ▾ Tables      ││ 2 │    2 │ NULL    │ NULL    ││ spot: NULL           │"
-"│          ▸ users     ││ 3 │    3 │ 50%_o╭──────────────────╮                 │"
-"│                      ││                 │ › type to filter │                 │"
-"│                      ││                 │ Filter by name   │                 │"
+"│▾ Connections 1       ││ [Result 1]  Chart  Messages  ││ id: 2                │"
+"│  ▾ ●   local-pg      ││   │ id   │ name  ^v│ score   ││ name: NULL           │"
+"│    ▾ datarig default ││   │ int8 │ text    │ float8  ││ score: NULL          │"
+"│      ▸ analytics     ││ 1 │    1 │ it's    │     1.5 ││ data: NULL           │"
+"│      ▸ public        ││ 2 │    2 │ NULL    │ NULL    ││ doc: NULL            │"
+"│      ▾ shop          ││ 3 │    3 │ 50%_o╭──────────────────╮: NULL           │"
+"│        ▾ Tables      ││                 │ › type to filter │: NULL           │"
+"│          ▸ users     ││                 │ Filter by name   │                 │"
 "│                      ││                 │  IS NULL         │                 │"
 "│                      ││                 │  IS NOT NULL     │                 │"
 "│                      ││                 ╰──────────────────╯                 │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"

@@ -1,0 +1,29 @@
+---
+source: crates/tui/tests/it/flows_filter_dialog.rs
+assertion_line: 604
+expression: backend
+---
+"╭─ Filter and sort · shop.users ─────────────────────────────── 3 rows loaded ─╮"
+"│ Columns 2       / search │ id  int8                                          │"
+"│ from the loaded result   │                                                   │"
+"│▸    id             =     │ Filter                                   17-21/21 │"
+"│     name                 │    >          ▾    1700                         × │"
+"│                          │    >          ▾    1800                         × │"
+"│                          │    >          ▾    1900                         × │"
+"│                          │    >          ▾    2000                         × │"
+"│                          │ ▸ + add condition                                 │"
+"│                          │   Sort   (•) none   ( ) ↑ asc   ( ) ↓ desc        │"
+"├──────────────────────────┴───────────────────────────────────────────────────┤"
+"│ Where   = id > 100 ×    = id > 200 ×   +18 more            undo   clear all  │"
+"│ Order                                              Limit              SQL ▾  │"
+"│ SELECT * FROM "shop"."users" WHERE (id > 100 AND id > 200 AND id > 300 AND   │"
+"│ id > 400 AND id > 500 AND id > 600 AND id > 700 AND id > 800 AND id > 900    │"
+"│ AND id > 1000 AND id > 1100 AND id > 1200 AND id > 1300 AND id > 1400 AND    │"
+"│ id > 1500 AND id > 1600 AND id > 1700 AND id > 1800 AND id > 1900 AND id >   │"
+"│ As sent. What is typed below is read back when the field …   Open in editor  │"
+"│ WHERE      id > 100 AND id > 200 AND id > 300 AND id > 400 AND id > 500      │"
+"│            AND id > 600 AND id > 700 AND id > 800 AND id > 900 AND id >      │"
+"│            1000 AND id > 1100 AND id > 1200 AND id > 1300 AND id > 1400      │"
+"│ ORDER BY                                                                     │"
+"│ Space add condition · ↑↓ line · Tab next area      Enter apply   Esc cancel  │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"

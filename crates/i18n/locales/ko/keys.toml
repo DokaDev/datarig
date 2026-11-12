@@ -51,7 +51,6 @@
 "keyctx.grid" = "결과"
 "keyctx.grid.matches" = "결과 (검색 중)"
 "keyctx.grid.search" = "결과 (검색)"
-"keyctx.grid.filter" = "결과 (필터 줄)"
 "keyctx.editor.vim.normal" = "편집기 (vim Normal)"
 "keyctx.editor.vim.visual" = "편집기 (vim Visual)"
 "keyctx.editor.vim.insert" = "편집기 (vim Insert)"
@@ -158,6 +157,8 @@
 "menu.delete_environment" = "환경 삭제"
 "menu.add_environment_presets" = "미리 준비된 환경 추가"
 "keyctx.overlay.export" = "내보내기 대화 상자"
+"keyctx.overlay.filter" = "필터와 정렬 대화 상자"
+"keyctx.overlay.filter.field" = "필터와 정렬 대화 상자 (입력란)"
 
 "group.tx" = "트랜잭션"
 "keyctx.overlay.tx_summary" = "트랜잭션 요약"

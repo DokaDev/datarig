@@ -26,9 +26,9 @@
 use super::action::{ChartAction, MonitorAction, PanelAction, PlanAction, PlanView};
 use super::copy::{CopyFormat, CopyScope};
 use super::edit::{EditAction, NotOffered};
-use super::filter_line::TableAction;
 use super::filter_value::ByValue;
 use super::monitor::MonitorView;
+use super::table_filter::TableAction;
 use super::tabs::ResultView;
 use super::*;
 use crate::keymap::{Target, keys};
@@ -211,7 +211,7 @@ const OPENS_MENU: &[Action] = &[Action::OpenMenu, Action::TabMenu, Action::Explo
 type Items = (Vec<MenuItem>, Vec<MenuItem>, Vec<(MenuItem, Off)>);
 
 /// The filter menu's items, those of them shown dimmed with why, their labels, the hints
-/// shown with them, and the filter text each one that can run puts in the line.
+/// shown with them, and the filter text each one that can run sends.
 pub(super) type FilterItems = (
     Vec<MenuItem>,
     Vec<(MenuItem, Off)>,
@@ -345,7 +345,7 @@ pub struct ContextMenu {
     /// A few words shown with an item that can run, where its keys would be (a filter's
     /// caveat).
     hints: Vec<(MenuItem, Localized)>,
-    /// The filter text each filter item that can run puts in the line, as written when the
+    /// The filter text each filter item that can run sends, as written when the
     /// menu opened: what runs is what the menu showed, never written again from the cells.
     filters: Vec<(MenuItem, String)>,
     /// The explorer row's or the tab's name as shown when the menu opened (its heading).

@@ -557,3 +557,23 @@ fn exact_count(h: &mut Harness) {
     h.keys("exact");
     h.key(KeyCode::Enter);
 }
+
+/// A read applied in the filter dialog that waits for a new session to say its state is
+/// cancelled with the dialog: the session that connects runs nothing.
+#[test]
+fn a_dialog_cancelled_while_its_read_waits_for_the_session_runs_nothing() {
+    let mut h = users();
+    session(&mut h, DbEvent::Lost { error: DbError::Closed });
+    let tab = h.app.tab().id;
+    h.key(KeyCode::Tab);
+    h.keys("f");
+    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog));
+    h.key(KeyCode::Enter);
+    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog), "nothing sent yet");
+    assert!(h.app.tab_busy(tab), "the read waits for its session");
+    h.key(KeyCode::Esc);
+    assert!(!h.app.overlays.is_open(OverlayKind::FilterDialog));
+    assert!(!h.app.tab_busy(tab), "cancelled with the dialog");
+    session(&mut h, DbEvent::Connected);
+    assert!(runs(&mut h).is_empty(), "the read cancelled never goes");
+}

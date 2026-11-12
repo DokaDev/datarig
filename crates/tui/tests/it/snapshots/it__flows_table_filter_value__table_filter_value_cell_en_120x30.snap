@@ -1,17 +1,18 @@
 ---
 source: crates/tui/tests/it/flows_table_filter_value.rs
+assertion_line: 703
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users ×                                                            "
 "│  ＋ New connection         │╭ Results · 3 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾╭──────────────────────────────────────────────────────────────────╮.1:55432     ││ id: 1                            │"
-"│ │ › type to filter                                                 │         H/L ││ name: it's                       │"
-"│ │ Filter by name                                                   │ory        ⟳ ││ score: 1.5                       │"
-"│ │  = 'it's'                            case as the server compares ││ doc      │ ││ data: \x01ab                     │"
-"│ │  <> 'it's'                                  leaves out NULL rows ││ json     │ ││ doc: {"a": 1}                    │"
-"│ │  <> 'it's' (NULLs included)                                      ││ {"a": 1} │ ││ born: 2026-11-10 09:30:00+09     │"
-"│ │  < 'it's'                                                        ││ NULL     │ ││ spot: (1,2)                      │"
-"│ │  > 'it's'                                                        ││ []       │ ││                                  │"
+"│▾╭──────────────────────────────────────────────────────────────────╮/ shop.users ││ id: 1                            │"
+"│ │ › type to filter                                                 ││ doc      │ ││ name: it's                       │"
+"│ │ Filter by name                                                   ││ json     │ ││ score: 1.5                       │"
+"│ │  = 'it's'                            case as the server compares ││ {"a": 1} │ ││ data: \x01ab                     │"
+"│ │  <> 'it's'                                  leaves out NULL rows ││ NULL     │ ││ doc: {"a": 1}                    │"
+"│ │  <> 'it's' (NULLs included)                                      ││ []       │ ││ born: 2026-11-10 09:30:00+09     │"
+"│ │  < 'it's'                                                        │             ││ spot: (1,2)                      │"
+"│ │  > 'it's'                                                        │             ││                                  │"
 "│ │  <= 'it's'                                                       │             ││                                  │"
 "│ │  >= 'it's'                                                       │             ││                                  │"
 "│ │  starts with 'it's'                  case as the server compares │             ││                                  │"

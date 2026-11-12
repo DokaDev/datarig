@@ -72,6 +72,8 @@ pub struct RowStore {
     spill: Option<SpillFile>,
     dir: Option<Arc<SpillDir>>,
     limits: Limits,
+    /// Rows [`RowStore::for_each_chunk`] read from the spill file so far.
+    read_through: std::sync::atomic::AtomicU64,
 }
 
 impl std::fmt::Debug for RowStore {
@@ -94,6 +96,7 @@ impl RowStore {
             spill: None,
             dir,
             limits: Limits { window: limits.window.max(MIN_WINDOW), ..limits },
+            read_through: std::sync::atomic::AtomicU64::new(0),
         };
         // A first page never spills on its own: pages are far smaller than the window.
         s.len = rows.len();
@@ -131,6 +134,12 @@ impl RowStore {
 
     pub fn limits(&self) -> Limits {
         self.limits
+    }
+
+    /// How many rows [`RowStore::for_each_chunk`] has read from the spill file: what a pass
+    /// over rows not in memory cost (a caller that must not read them can be checked by it).
+    pub fn rows_read_through(&self) -> u64 {
+        self.read_through.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn row(&self, i: usize) -> Row<'_> {
@@ -242,6 +251,7 @@ impl RowStore {
                 if rows.len() != e - a {
                     return Err(Fault::other("spill file: fewer rows than written"));
                 }
+                self.read_through.fetch_add(rows.len() as u64, std::sync::atomic::Ordering::Relaxed);
                 f(&rows);
                 a = e;
             }

@@ -630,8 +630,8 @@ fn render_values_of_a_cell_per_type_and_dialect() {
     assert_eq!(render_my(&Cond::IsNull { col: "data".into(), negated: false }, true), "data IS NULL");
 }
 
-/// A value with a line break is written on one line, read back as the value: the filter line
-/// holds one line, and the text it shows is the text that runs. PostgreSQL: an escape string
+/// A value with a line break is written on one line, read back as the value: the filter's text
+/// fields hold one line, and the text it shows is the text that runs. PostgreSQL: an escape string
 /// (`E'…\n…'`); MySQL: its UTF-8 bytes. The same for a pattern and in a list.
 #[test]
 fn render_writes_line_breaks_on_one_line() {

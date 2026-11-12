@@ -1,19 +1,18 @@
 ---
 source: crates/tui/tests/it/flows_table_estimate.rs
+assertion_line: 160
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users * ×                        "
 "│  ＋ New connection   │╭ Results · rows … ─ ‹ (1/?) › ╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾╭─────────────────────────────────────────────╮.users││ id: 0                │"
-"│ │ › type to filter                            │ages  ││                      │"
-"│ │ Rows of the filtered table                  │Y   ⟳ ││                      │"
+"│▾╭─────────────────────────────────────────────╮ages  ││ id: 0                │"
+"│ │ › type to filter                            │      ││                      │"
+"│ │ Rows of the filtered table                  │      ││                      │"
 "│ │  Estimate (planner)         nothing is read │      ││                      │"
 "│ │  Exact count                stops after 30s │      ││                      │"
 "│ ╰─────────────────────────────────────────────╯      ││                      │"
-"│        ▾ Tables      ││  2 │      1                  ││                      │"
-"│          ▸ users     ││  3 │      2                  ││                      │"
-"│                      ││  4 │      3                  ││                      │"
-"│                      ││  5 │      4                  ││                      │"
+"│        ▾ Tables      ││  4 │      3                  ││                      │"
+"│          ▸ users     ││  5 │      4                  ││                      │"
 "│                      ││  6 │      5                  ││                      │"
 "│                      ││  7 │      6                  ││                      │"
 "│                      ││  8 │      7                  ││                      │"
@@ -23,6 +22,8 @@ expression: backend
 "│                      ││ 12 │     11                  ││                      │"
 "│                      ││ 13 │     12                  ││                      │"
 "│                      ││ 14 │     13                  ││                      │"
+"│                      ││ 15 │     14                  ││                      │"
+"│                      ││ 16 │     15                  ││                      │"
 "│                      ││ Showing 500 rows · nothing i…││                      │"
-"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+"╰──────────────────────╯╰ ▼ id > 5 ────────────────────╯╰──────────────────────╯"
 " local-pg │ 500+ rows (more pages) · 2ms                                     EN "

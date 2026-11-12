@@ -1,17 +1,18 @@
 ---
 source: crates/tui/tests/it/flows_filter_feedback.rs
+assertion_line: 126
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users ×                                                            "
 "│  ＋ New connection         │╭ Results · 3 rows ──────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1             ││ local-pg / datarig.shop.users  127.0.0.1:55432                                         │"
-"│  ▾ ●   local-pg            ││ [Result 1]  Chart  Messages  · earlier run                                         H/L │"
-"│    ▾ datarig default       ││✗WHERE idd > 1                                                    ORDER BY   LIMIT -  ⟳ │"
-"│      ▸ analytics           ││   │ id ^v│ name                                                                        │"
-"│      ▸ public              ││   │ int8 │ text                                                                        │"
-"│      ▾ shop                ││ 1 │    0 │ n0                                                                          │"
-"│        ▾ Tables            ││ 2 │    1 │ n1                                                                          │"
-"│          ▸ orders          ││ 3 │    2 │ n2                                                                          │"
+"│▾ Connections 1             ││ [Result 1]  Chart  Messages  · earlier run          H/L  local-pg / datarig.shop.users │"
+"│  ▾ ●   local-pg            ││   │ id ^v│ name                                                                        │"
+"│    ▾ datarig default       ││   │ int8 │ text                                                                        │"
+"│      ▸ analytics           ││ 1 │    0 │ n0                                                                          │"
+"│      ▸ public              ││ 2 │    1 │ n1                                                                          │"
+"│      ▾ shop                ││ 3 │    2 │ n2                                                                          │"
+"│        ▾ Tables            ││                                                                                        │"
+"│          ▸ orders          ││                                                                                        │"
 "│          ▸ users           ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
@@ -30,5 +31,5 @@ expression: backend
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││ filter failed: showing previous rows                                                   │"
-"╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯"
+"╰────────────────────────────╯╰ ▼ failed ──────────────────────────────────────────────────────────────────────────────╯"
 " local-pg │ Error: ERROR: column "idd" does not exist            │ Enter view cell · n next page · y copy · v select EN "

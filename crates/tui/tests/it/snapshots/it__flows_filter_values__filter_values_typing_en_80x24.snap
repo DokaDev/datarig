@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_filter_values.rs
+expression: backend
+---
+"╭─ Filter and sort · shop.users edited ─────────────────────── 60 rows loaded ─╮"
+"│ Columns 3       / search │ status  text                                      │"
+"│ from the loaded result   │                                                   │"
+"│     id                   │ Filter                                            │"
+"│▸    status         =     │ ▸  =          ▾    p                            × │"
+"│     amount               │   + add condition                                 │"
+"│                          │                                                   │"
+"│                          │ Values  containing “p”                    # exact │"
+"│                          │   [ ] paid                ~25  ▄▄▄▄▄▄▄▄▄▄▄▄       │"
+"│                          │   [ ] shipped             ~20  ▄▄▄▄▄▄▄▄▄▄         │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │   Sort   (•) none   ( ) ↑ asc   ( ) ↓ desc        │"
+"├──────────────────────────┴───────────────────────────────────────────────────┤"
+"│ Where   = status = 'p' ×                                   undo   clear all  │"
+"│ Order                                              Limit              SQL ▸  │"
+"│ ↓ values · ← operator · Ctrl+Z undo                Enter apply   Esc cancel  │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"

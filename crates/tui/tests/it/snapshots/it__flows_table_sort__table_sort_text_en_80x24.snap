@@ -1,17 +1,18 @@
 ---
 source: crates/tui/tests/it/flows_table_sort.rs
+assertion_line: 398
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users * ×                        "
 "│  ＋ New connection   │╭ Results · 3 rows ────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1       ││ local-pg / datarig.shop.users  127.0.0.1:55432       │"
-"│  ▾ ●   local-pg      ││ [Result 1]  Chart  Messages                      H/L │"
-"│    ▾ datarig default ││ WHERE name <> 'zz'               ↑id+1 not unique  ⟳ │"
-"│      ▸ analytics     ││   │ id ^   │ name v2 = ^v│ email                     │"
-"│      ▸ public        ││   │ int8   │ text        │ text                      │"
-"│      ▾ shop          ││ 1 │      0 │ n0          │ u0@x                      │"
-"│        ▾ Tables      ││ 2 │      1 │ n1          │ u1@x                      │"
-"│          ▸ users     ││ 3 │      2 │ n2          │ u2@x                      │"
+"│▾ Connections 1       ││ [Result 1]  Chart  Messages    local-pg / shop.users │"
+"│  ▾ ●   local-pg      ││   │ id ^   │ name v2 = ^v│ email                     │"
+"│    ▾ datarig default ││   │ int8   │ text        │ text                      │"
+"│      ▸ analytics     ││ 1 │      0 │ n0          │ u0@x                      │"
+"│      ▸ public        ││ 2 │      1 │ n1          │ u1@x                      │"
+"│      ▾ shop          ││ 3 │      2 │ n2          │ u2@x                      │"
+"│        ▾ Tables      ││                                                      │"
+"│          ▸ users     ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
@@ -24,5 +25,5 @@ expression: backend
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
-"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+"╰──────────────────────╯╰ ▼ name <> 'zz' · id ↑ +1 ────────────────────────────╯"
 " local-pg │ 3 rows · 2ms            │ Enter view cell · n next page · y copy EN "

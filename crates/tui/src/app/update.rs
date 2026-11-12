@@ -247,6 +247,8 @@ impl App {
             self.picker_paste(text);
         } else if self.overlays.top().is_some_and(|o| o.kind() == OverlayKind::Export) {
             self.export_form_paste(text);
+        } else if self.overlays.top().is_some_and(|o| o.kind() == OverlayKind::FilterDialog) {
+            self.filter_dialog_paste(text);
         } else if let Some(f) = self.overlays.form_mut() {
             f.paste(text);
         } else if self.focus == Focus::Tree && self.explorer.filtering && self.overlays.is_empty() {
@@ -260,8 +262,6 @@ impl App {
             // The Monitor tab's views take no text but its filter's.
         } else if self.overlays.is_empty() && self.focus == Focus::Results && self.cell_edit_open() {
             self.cell_edit_paste(text);
-        } else if self.overlays.is_empty() && self.filter_line_focused() {
-            self.filter_line_paste(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Results && self.grid_prompt_open() {
             self.grid_prompt_paste(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Results && !self.tabs.is_empty() {
@@ -299,22 +299,27 @@ impl App {
         // The completion popup takes its keys before the text it completes.
         let owner = match ctx {
             Ctx::VimInsert => Some(PopupOwner::Editor),
-            Ctx::FilterLine => self.filter_line_field().map(PopupOwner::Filter),
+            Ctx::FilterDialogText => self.filter_dialog_sql_field().map(PopupOwner::Dialog),
             _ => None,
         };
-        // In the filter line `Enter` applies the line and `Tab` (`Shift+Tab`) moves to the next
-        // field, unless the user turned to the popup (moved in it, or asked for it).
-        let line_key = match key.code {
+        // In a field of the filter dialog `Enter` applies and `Tab` (`Shift+Tab`) moves to the
+        // next part, unless the user turned to the popup (moved in it, or asked for it).
+        let dialog_key = match key.code {
             KeyCode::Enter | KeyCode::Tab => key.modifiers.is_empty(),
             KeyCode::BackTab => (key.modifiers - KeyModifiers::SHIFT).is_empty(),
             _ => false,
         };
-        let untouched_enter =
-            ctx == Ctx::FilterLine && line_key && self.tab().popup.as_ref().is_some_and(|p| !p.touched);
+        let untouched =
+            ctx == Ctx::FilterDialogText && dialog_key && self.tab().popup.as_ref().is_some_and(|p| !p.touched);
+        // The dialog's popup is drawn over it: no other overlay is.
+        let above = match owner {
+            Some(PopupOwner::Dialog(_)) => false,
+            _ => !self.overlays.is_empty(),
+        };
         if owner.is_some()
-            && !untouched_enter
+            && !untouched
             && self.tab().popup.as_ref().map(|p| p.owner) == owner
-            && self.overlays.is_empty()
+            && !above
             && self.keymap.binds(Ctx::Completion, &chord)
         {
             self.key_state.clear();
@@ -399,7 +404,6 @@ impl App {
             Ctx::Password => keys.iter().for_each(|k| self.prompt_key(k.to_event(), repeat)),
             Ctx::ExplorerFilter => keys.iter().for_each(|k| self.explorer_filter_key(k.to_event())),
             Ctx::GridSearch => keys.iter().for_each(|k| self.grid_prompt_key(k.to_event())),
-            Ctx::FilterLine => keys.iter().for_each(|k| self.filter_line_key(k.to_event())),
             Ctx::MonitorFilter => keys.iter().for_each(|k| self.monitor_filter_key(k.to_event())),
             Ctx::CellEdit => keys.iter().for_each(|k| self.cell_edit_key(k.to_event())),
             Ctx::CellEditor => keys.iter().for_each(|k| self.cell_lines_key(k.to_event())),
@@ -423,6 +427,7 @@ impl App {
             Ctx::ProfileForm => keys.iter().for_each(|k| self.form_key(k.to_event(), repeat)),
             Ctx::Settings => keys.iter().for_each(|k| self.settings_key(k.to_event(), repeat)),
             Ctx::Export => keys.iter().for_each(|k| self.export_form_key(k.to_event(), repeat)),
+            Ctx::FilterDialog | Ctx::FilterDialogText => keys.iter().for_each(|k| self.filter_dialog_key(k.to_event())),
             Ctx::CellViewer => self.viewer_keys(keys),
             Ctx::WhichKey => keys.iter().for_each(|k| self.which_key_key(*k, repeat)),
             Ctx::Help => self.help_keys(keys, repeat),
@@ -546,8 +551,8 @@ impl App {
                         }
                         self.edited();
                     }
-                    PopupOwner::Filter(f) => {
-                        if let Some(input) = t.doc.table_query.as_mut().map(|q| q.line.field_mut(f)) {
+                    PopupOwner::Dialog(_) => {
+                        if let Some(input) = self.overlays.filter_dialog_mut().and_then(|d| d.input_mut()) {
                             let end = (input.cursor_byte() + trail).min(input.text().len());
                             input.replace(start..end, &text);
                         }
@@ -1072,6 +1077,11 @@ impl App {
             self.focus = Focus::Results;
             return if inside(l.page_prev) { self.page_prev() } else { self.page_next() };
         }
+        // A table tab's filter and sort on the results' bottom border: the filter dialog.
+        if !self.tabs.is_empty() && inside(l.table_status) {
+            self.focus = Focus::Results;
+            return self.open_filter_dialog(false);
+        }
         // A second click on the same cell soon after the first: the cell viewer (a word
         // in the editor; a third click there: the line).
         let again = self.pointer.last_click.is_some_and(|(t, lx, ly)| t.elapsed() < DOUBLE_CLICK && (lx, ly) == (x, y));
@@ -1102,10 +1112,6 @@ impl App {
                     }
                 }
             }
-        } else if inside(l.filter_line) {
-            // A table tab's filter line: a field, or its refresh mark.
-            self.focus = Focus::Results;
-            self.filter_line_click(x, y);
         } else if inside(l.strip) {
             // A result tab of the strip.
             self.focus = Focus::Results;
@@ -1140,8 +1146,6 @@ impl App {
             }
         } else if inside(l.results) {
             self.focus = Focus::Results;
-            // The grid takes the keys from the filter line.
-            self.filter_line_blur();
             // A table tab's header sort zone (its last two columns) sorts by the column, as `s`
             // on it does; the column becomes the cursor's.
             let zone = match &self.tab().results {

@@ -1,19 +1,18 @@
 ---
 source: crates/tui/tests/it/flows_table_estimate.rs
+assertion_line: 240
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users * ×                        "
 "│  ＋ New connection   │╭ Results · rows … ─ ‹ (1/?) › ╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾╭─────────────────────────────────────────────╮.users││ id: 0                │"
-"│ │ › type to filter                            │ages  ││                      │"
-"│ │ Rows of the filtered table                  │    ⟳ ││                      │"
+"│▾╭─────────────────────────────────────────────╮ages  ││ id: 0                │"
+"│ │ › type to filter                            │      ││                      │"
+"│ │ Rows of the filtered table                  │      ││                      │"
 "│ │  Estimate (planner)         unchecked calls │      ││                      │"
 "│ │  Exact count                    refused now │      ││                      │"
 "│ ╰─────────────────────────────────────────────╯      ││                      │"
-"│        ▾ Tables      ││  2 │    1                    ││                      │"
-"│          ▸ users     ││  3 │    2                    ││                      │"
-"│                      ││  4 │    3                    ││                      │"
-"│                      ││  5 │    4                    ││                      │"
+"│        ▾ Tables      ││  4 │    3                    ││                      │"
+"│          ▸ users     ││  5 │    4                    ││                      │"
 "│                      ││  6 │    5                    ││                      │"
 "│                      ││  7 │    6                    ││                      │"
 "│                      ││  8 │    7                    ││                      │"
@@ -23,6 +22,8 @@ expression: backend
 "│                      ││ 12 │   11                    ││                      │"
 "│                      ││ 13 │   12                    ││                      │"
 "│                      ││ 14 │   13                    ││                      │"
+"│                      ││ 15 │   14                    ││                      │"
+"│                      ││ 16 │   15                    ││                      │"
 "│                      ││ Showing the first 500 rows o…││                      │"
-"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+"╰──────────────────────╯╰ ▼ my_fn(id) > 0 ─────────────╯╰──────────────────────╯"
 " local-pg │ Rows are not counted for you: it calls a function that is not a… EN "

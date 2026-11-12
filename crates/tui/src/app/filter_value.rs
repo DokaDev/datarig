@@ -6,22 +6,19 @@
 //! kind through the dialect, NULL compared only with `IS NULL` or the NULL-safe forms, patterns
 //! escaped with `!`) and added to the filter of the rows shown with `AND`, a filter whose top
 //! level is not a plain chain of `AND`s put in parentheses first ([`query::and_filter`]). The new
-//! text goes into the filter line and runs as `Enter` runs it there ([`App::table_run`]: the
-//! checks, the questions about functions, row locks and pending edits, read-only profiles), so
-//! what runs is what the line shows.
+//! text runs as the filter dialog runs a filter ([`App::table_run`]: the checks, the questions
+//! about functions, row locks and pending edits, read-only profiles); the dialog shows it after.
 //!
 //! A value is taken only as the server holds it: a cell shown otherwise than its value (as a copy
 //! as SQL judges it), a new row, a cell with an edit on it, or rows that cannot be read back give
 //! no filter. An entry that cannot apply to the value (a type whose comparison is not known,
-//! binary data over 64 KiB, more than 1000 cells) is shown dimmed with why. While the filter
-//! line holds edits not applied, nothing is added to it: they are applied or put back first;
-//! nor while it shows a query whose run brought no rows (refused, cancelled), over the earlier
-//! rows still shown.
+//! binary data over 64 KiB, more than 1000 cells) is shown dimmed with why. Nothing is added
+//! while the query applied is one whose run brought no rows (refused, cancelled), over the
+//! earlier rows still shown.
 
 use super::menu::{MenuItem, MenuTarget, Off};
-use super::table_query::{LineAhead, filter_text, refusal_why};
+use super::table_query::{FIELD_CAP, filter_text, refusal_why};
 use super::*;
-use crate::widgets::filter_line::FIELD_CAP;
 use crate::widgets::grid::Shape;
 use crate::widgets::text_input::TextInput;
 use datarig_core::driver::{ColumnMeta, ReadIn, ValueKind};
@@ -68,7 +65,7 @@ pub enum ByValue {
 }
 
 /// An entry of the menu as built: what it filters by, its label, a hint shown with it, and the
-/// filter text it puts in the line (or why it cannot).
+/// filter text it runs (or why it cannot).
 pub struct Entry {
     pub by: ByValue,
     pub label: Localized,
@@ -93,14 +90,6 @@ fn compares(d: Dialect, m: &ColumnMeta, enum_known: bool) -> Result<bool, Label>
     }
 }
 
-/// What a filter by value says when the filter line is ahead of the rows shown.
-fn line_ahead_label(why: LineAhead) -> Label {
-    match why {
-        LineAhead::Edited => Label::TableFilterByValueUnapplied,
-        LineAhead::NotShown => Label::TableFilterByValueNotShown,
-    }
-}
-
 /// Bytes written in hexadecimal after `prefix` (`\x` on PostgreSQL, `0x` on MySQL).
 fn hex_bytes(v: &str, prefix: &str) -> Option<Vec<u8>> {
     let digits = v.strip_prefix(prefix)?.as_bytes();
@@ -118,6 +107,74 @@ fn cut(s: &str, w: usize) -> String {
     crate::text::fit(s, w, crate::text::Align::Left)
 }
 
+/// What a list of a column's values was read with: the dialect, the result column as the
+/// session described it, and the session's values its rows were read in (time zone, character
+/// set). A value is taken as a filter's literal only as read with these ([`admit`]).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ValuesFrom<'a> {
+    pub(crate) dialect: Dialect,
+    pub(crate) meta: &'a ColumnMeta,
+    pub(crate) read_in: &'a ReadIn,
+}
+
+/// Why a value read is not taken as a filter's literal ([`admit`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NotAdmitted {
+    /// Shown otherwise than the server holds it, as a copy as SQL judges it (a MySQL `FLOAT`,
+    /// text read in another character set than UTF-8, a `TIMESTAMP` read in another time zone
+    /// than the session's now or in one that is not a fixed offset, bytes not in their shown
+    /// form, values read before the session said its values or across a change of them).
+    NotWhole(export::Refused),
+    /// Binary data over [`MAX_BYTES`].
+    TooBig,
+}
+
+/// Value `v` (as read, not NULL) of the column `from` describes, as a filter compares it; or why
+/// it is not taken. The one judge of every value a filter takes from what was read: a filter by
+/// a cell's value and a value ticked in the filter dialog (from the rows loaded, from an earlier
+/// load, from a count of the server's). `server_zone`: the server's own time zone (for MySQL's
+/// `SYSTEM`); `now`: the session's values now, which a MySQL `TIMESTAMP` must have been read in.
+/// A MySQL `TIMESTAMP` is taken with the offset of the zone it was read in.
+pub(crate) fn admit(
+    from: &ValuesFrom<'_>,
+    server_zone: Option<&str>,
+    now: Option<&datarig_core::driver::SessionValues>,
+    v: &str,
+) -> Result<Value, NotAdmitted> {
+    let (d, m) = (from.dialect, from.meta);
+    let cols = [export::SqlColumn { name: &m.name, type_name: &m.type_name, kind: m.kind, auto_increment: false }];
+    let cells = export::sql_cells(d, &cols, from.read_in, server_zone).map_err(NotAdmitted::NotWhole)?;
+    let cell = cells.cell(0, v).map_err(NotAdmitted::NotWhole)?;
+    let mysql = matches!(d, Dialect::MySql(_));
+    let refused = |why| NotAdmitted::NotWhole(export::Refused { column: m.name.clone(), why });
+    // A MySQL TIMESTAMP is shown in the session's zone: the session reads it back the same only
+    // in the zone it was read in.
+    if mysql && m.kind == ValueKind::TimestampTz {
+        let read = match from.read_in {
+            ReadIn::Values(s) => Some(&s.time_zone),
+            _ => None,
+        };
+        if read.is_none() || now.map(|s| &s.time_zone) != read {
+            return Err(refused(export::NotWhole::SessionChanged));
+        }
+    }
+    Ok(match m.kind {
+        ValueKind::Integer | ValueKind::Decimal | ValueKind::Float => Value::Number(v.to_string()),
+        // With the offset of the zone it was read in (as a copy as SQL writes it): the same
+        // instant in any session's zone, as the filter is run again from the history.
+        ValueKind::TimestampTz if mysql => Value::Text(cell.into_owned()),
+        ValueKind::Bytes => {
+            let bytes = hex_bytes(v, if mysql { "0x" } else { "\\x" })
+                .ok_or_else(|| refused(export::NotWhole::NotShownWhole))?;
+            if bytes.len() > MAX_BYTES {
+                return Err(NotAdmitted::TooBig);
+            }
+            Value::Bytes(bytes)
+        }
+        _ => Value::Text(v.to_string()),
+    })
+}
+
 impl App {
     /// `F`: the menu of filters by the value of the active table tab's cursor cell or selection,
     /// next to the cell; why not, said, when no filter can be built there.
@@ -128,16 +185,13 @@ impl App {
         if self.tab().is_table() && self.tab_busy(id) {
             return self.flash_busy();
         }
-        // The rows first, as the line's keys do: the menu is about the grid's cells.
+        // The rows first: the menu is about the grid's cells.
         if self.chart_shown() || self.plan_shown() || self.changes_shown() {
             self.tab_mut().exec.view = super::tabs::ResultView::Rows;
         }
         if self.focus != Focus::Inspector {
             self.focus = Focus::Results;
         }
-        self.filter_line_blur();
-        // Fields not edited show what is applied now, before they are compared with it.
-        self.filter_line_follow_tab(id);
         let menu = match self.by_value_menu(id) {
             Ok(m) => m,
             Err(why) => return self.flash(why),
@@ -155,39 +209,29 @@ impl App {
     }
 
     /// An entry of the menu was picked, on what it was opened on still (the same cells of the same
-    /// result): `text`, the filter it showed, goes into the line and runs, as `Enter` there runs
-    /// it. Nothing is written again from the cells. Refused while the tab runs, or while the
-    /// line holds changes not applied.
+    /// result): `text`, the filter it showed, becomes the draft's and runs, as the filter dialog
+    /// runs it. Nothing is written again from the cells. Refused while the tab runs, or while
+    /// the rows shown are not those of the query applied.
     pub(super) fn filter_by_value_run(&mut self, text: String) {
         let id = self.tab().id;
         if self.tab_busy(id) {
             return self.flash_busy();
         }
-        self.filter_line_follow_tab(id);
-        if let Some(why) = self.line_ahead(id) {
-            return self.flash(Notice::new(line_ahead_label(why), Level::Warning));
+        if !self.rows_shown_applied(id) {
+            return self.flash(Notice::new(Label::TableFilterByValueNotShown, Level::Warning));
         }
         let Some(tq) = self.table_query(id) else { return };
         let (Some(target), Some(shown)) = (self.table_target(id), tq.shown.clone()) else { return };
-        // Only a text the line holds as it is runs: the line shows what runs.
+        // Only a text shown on one line as it is runs: the dialog shows what runs.
         if !TextInput::holds(&text) {
             return self.flash(Notice::new(Label::TableFilterByValueNotOneLine, Level::Warning));
         }
         let recognised = query::recognise(&text, &target);
         let Some(tq) = self.table_query_mut(id) else { return };
-        tq.line.where_.set(&text);
         tq.draft = Query { filter: Some(Filter { text, recognised }), ..shown };
         tq.refusal = None;
-        tq.line.focus = None;
         let q = tq.draft.clone();
         self.table_run(id, q);
-        // As after `Enter`: a refusal leaves the keys in the field it is about.
-        if let Some(tq) = self.table_query_mut(id) {
-            tq.line.focus = tq.refusal.as_ref().map(|r| r.field);
-        }
-        if self.table_query(id).is_some_and(|tq| tq.line.focus.is_some()) {
-            self.focus = Focus::Results;
-        }
     }
 
     /// The menu of filters by value for table tab `id`'s cursor cell or selection, or why there
@@ -201,10 +245,9 @@ impl App {
         if rs.rows.is_empty() || rs.columns.is_empty() || t.exec.view != super::tabs::ResultView::Rows {
             return Err(warn(Label::TableFilterByValueNoRows));
         }
-        // What the line holds and was not applied stays the user's: nothing is added to it; nor
-        // to the filter of rows that are not of the line's query.
-        if let Some(why) = self.line_ahead(id) {
-            return Err(warn(line_ahead_label(why)));
+        // Nothing is added to the filter of rows that are not of the query applied.
+        if !self.rows_shown_applied(id) {
+            return Err(warn(Label::TableFilterByValueNotShown));
         }
         // The cells: the selection's, else the cursor's; read rows of one column only.
         let g = &t.grid;
@@ -228,8 +271,8 @@ impl App {
         let column = m.name.clone();
         let cells = rows.len();
         let base = filter_text(shown).unwrap_or_default();
-        // The filter line is one line: a name with a line break would not read back as the
-        // same name there (nor run as the line shows it).
+        // A filter is shown on one line: a name with a line break would not read back as the
+        // same name there (nor run as it is shown).
         let not_one_line = || {
             let n = Msg::TableFilterByValueName { column: crate::text::escape_controls(&column) };
             Off::new(Label::TableFilterByValueOffName, Notice::new(n, Level::Warning))
@@ -478,9 +521,7 @@ impl App {
     }
 
     /// Value `v` of column `col` of result `rs` (as read, not NULL) as the filter compares it,
-    /// or why it is not taken: shown otherwise than the server holds it (as a copy as SQL judges
-    /// it), read in another time zone than the session's now, or binary data over
-    /// [`MAX_BYTES`]. A MySQL `TIMESTAMP` carries the offset of the zone it was read in.
+    /// or why it is not taken ([`admit`], with the rows' session values and the tab's now).
     fn by_value_value(
         &self,
         t: &Tab,
@@ -489,46 +530,23 @@ impl App {
         v: &str,
     ) -> Result<Value, Box<Off>> {
         let m = &rs.columns[col].meta;
-        let d = self.tab_dialect(t.id);
-        let keys = self.tab_keys(t).catalog();
-        let cols = [export::SqlColumn { name: &m.name, type_name: &m.type_name, kind: m.kind, auto_increment: false }];
-        let not_whole = |r: &export::Refused| {
-            let reason = self.not_whole_reason(&r.why);
-            let n = Notice::new(Msg::TableFilterByValueNotWhole { column: r.column.clone(), reason }, Level::Warning);
-            Box::new(Off::new(Label::TableFilterByValueOffNotWhole, n))
-        };
-        let cells =
-            export::sql_cells(d, &cols, &rs.read_in, keys.and_then(|k| k.server_zone())).map_err(|r| not_whole(&r))?;
-        let cell = cells.cell(0, v).map_err(|r| not_whole(&r))?;
-        let mysql = matches!(d, Dialect::MySql(_));
-        // A MySQL TIMESTAMP is shown in the session's zone: the session reads it back the same
-        // only in the zone it was read in.
-        if mysql && m.kind == ValueKind::TimestampTz {
-            let read = match &rs.read_in {
-                ReadIn::Values(s) => Some(&s.time_zone),
-                _ => None,
-            };
-            if read.is_none() || t.exec.values.as_ref().map(|s| &s.time_zone) != read {
-                let why = export::Refused { column: m.name.clone(), why: export::NotWhole::SessionChanged };
-                return Err(not_whole(&why));
-            }
-        }
-        Ok(match m.kind {
-            ValueKind::Integer | ValueKind::Decimal | ValueKind::Float => Value::Number(v.to_string()),
-            // With the offset of the zone it was read in (as a copy as SQL writes it): the same
-            // instant in any session's zone, as the filter is run again from the history.
-            ValueKind::TimestampTz if mysql => Value::Text(cell.into_owned()),
-            ValueKind::Bytes => {
-                let bytes = hex_bytes(v, if mysql { "0x" } else { "\\x" }).ok_or_else(|| {
-                    not_whole(&export::Refused { column: m.name.clone(), why: export::NotWhole::NotShownWhole })
-                })?;
-                if bytes.len() > MAX_BYTES {
-                    let n = Notice::new(Msg::TableFilterByValueTooBig { column: m.name.clone() }, Level::Warning);
-                    return Err(Box::new(Off::new(Label::TableFilterByValueOffTooBig, n)));
+        let from = ValuesFrom { dialect: self.tab_dialect(t.id), meta: m, read_in: &rs.read_in };
+        let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
+        admit(&from, zone, t.exec.values.as_ref(), v).map_err(|why| {
+            let n = match &why {
+                NotAdmitted::NotWhole(r) => {
+                    let reason = self.not_whole_reason(&r.why);
+                    Notice::new(Msg::TableFilterByValueNotWhole { column: r.column.clone(), reason }, Level::Warning)
                 }
-                Value::Bytes(bytes)
-            }
-            _ => Value::Text(v.to_string()),
+                NotAdmitted::TooBig => {
+                    Notice::new(Msg::TableFilterByValueTooBig { column: m.name.clone() }, Level::Warning)
+                }
+            };
+            let short = match why {
+                NotAdmitted::NotWhole(_) => Label::TableFilterByValueOffNotWhole,
+                NotAdmitted::TooBig => Label::TableFilterByValueOffTooBig,
+            };
+            Box::new(Off::new(short, n))
         })
     }
 
@@ -575,3 +593,6 @@ impl App {
         self.push_filter_menu(target, title.to_string(), (items, off, names, hints, filters), at);
     }
 }
+
+#[cfg(test)]
+mod tests;

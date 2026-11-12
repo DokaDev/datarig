@@ -376,11 +376,12 @@ impl App {
         let t = self.tab();
         let Some(w) = t.values_wait.clone() else { return };
         // The text it waits in still has the keys.
-        let editing = !self.modal_open()
-            && match w.owner {
-                PopupOwner::Editor => self.focus == Focus::Editor && self.tab().editor.mode == Mode::Insert,
-                PopupOwner::Filter(f) => self.filter_line_focused() && self.filter_line_field() == Some(f),
-            };
+        let editing = match w.owner {
+            PopupOwner::Editor => {
+                !self.modal_open() && self.focus == Focus::Editor && self.tab().editor.mode == Mode::Insert
+            }
+            PopupOwner::Dialog(f) => self.filter_dialog_sql_field() == Some(f),
+        };
         if w.profile != profile || w.database.as_deref() != database || w.schema != schema || w.table != table {
             return;
         }
@@ -392,9 +393,9 @@ impl App {
         if current && editing {
             match w.owner {
                 PopupOwner::Editor => self.complete_here(false, Some(w.literal)),
-                PopupOwner::Filter(f) => {
-                    self.filter_complete(false, Some(w.literal));
-                    if let Some(p) = self.tab_mut().popup.as_mut().filter(|p| p.owner == PopupOwner::Filter(f)) {
+                PopupOwner::Dialog(f) => {
+                    self.filter_dialog_complete(false, Some(w.literal));
+                    if let Some(p) = self.tab_mut().popup.as_mut().filter(|p| p.owner == PopupOwner::Dialog(f)) {
                         p.touched |= w.asked;
                     }
                 }

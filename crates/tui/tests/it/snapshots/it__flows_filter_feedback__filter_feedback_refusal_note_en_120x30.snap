@@ -1,17 +1,18 @@
 ---
 source: crates/tui/tests/it/flows_filter_feedback.rs
+assertion_line: 126
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 RO ×  2 shop.users RO ×                                                      "
 "│  ＋ New connection         │╭ Results · 3 rows ──────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1             ││ local-pg / datarig.shop.users  127.0.0.1:55432 · prod  READ-ONLY                       │"
-"│  ▾ ●   local-pg RO         ││ [Result 1]  Chart  Messages                                                        H/L │"
-"│    ▾ datarig default       ││●WHERE lower2(name) = 'a' AND id > 1 AND name IS NOT NULL         ORDER BY   LIMIT -  ⟳ │"
-"│      ▸ analytics           ││   │ id ^v│ name                                                                        │"
-"│      ▸ public              ││   │ int8 │ text                                                                        │"
-"│      ▾ shop                ││ 1 │    0 │ n0                                                                          │"
-"│        ▾ Tables            ││ 2 │    1 │ n1                                                                          │"
-"│          ▸ orders          ││ 3 │    2 │ n2                                                                          │"
+"│▾ Connections 1             ││ [Result 1]  Chart  Messages             H/L  local-pg / datarig.shop.users  READ-ONLY  │"
+"│  ▾ ●   local-pg RO         ││   │ id ^v│ name                                                                        │"
+"│    ▾ datarig default       ││   │ int8 │ text                                                                        │"
+"│      ▸ analytics           ││ 1 │    0 │ n0                                                                          │"
+"│      ▸ public              ││ 2 │    1 │ n1                                                                          │"
+"│      ▾ shop                ││ 3 │    2 │ n2                                                                          │"
+"│        ▾ Tables            ││                                                                                        │"
+"│          ▸ orders          ││                                                                                        │"
 "│          ▸ users           ││                                                                                        │"
 "│▾ Environments 1            ││                                                                                        │"
 "│    ○ Default rules (no env…││                                                                                        │"

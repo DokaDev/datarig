@@ -1,6 +1,6 @@
 //! Filter a table tab by a cell's value (`F`, `Space r F`, the grid menu's entry): each entry
 //! sends exactly its condition added to the filter of the rows shown (an `OR` at its top
-//! wrapped first), puts that text in the filter line and runs it as `Enter` there does (pending
+//! wrapped first), makes that text the draft and runs it as the filter dialog does (pending
 //! edits asked about first); a NULL cell offers `IS NULL` only, several cells the `IN` forms
 //! with NULL taken out of the list; entries that cannot apply are dimmed with why; a query's
 //! rows have no such menu.
@@ -13,7 +13,6 @@ use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_i18n::Lang;
 use datarig_tui::app::Results;
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
-use datarig_tui::app::table_query::Field;
 use datarig_tui::keymap::Ctx;
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 use std::time::Duration;
@@ -138,8 +137,10 @@ fn flashed(h: &Harness) -> String {
     h.app.transient.as_ref().map(|(n, _)| n.render(&h.app.i18n).to_string()).unwrap_or_default()
 }
 
+/// The condition the table tab's next run sends.
 fn where_text(h: &Harness) -> String {
-    h.app.tab().doc.table_query.as_ref().expect("a table query").line.field(Field::Where).text().to_string()
+    let tq = h.app.tab().doc.table_query.as_ref().expect("a table query");
+    tq.draft.filter.as_ref().map(|f| f.text.clone()).unwrap_or_default()
 }
 
 /// `F` on (`row`, `col`), entry `label` picked: the statements sent.
@@ -164,7 +165,7 @@ fn clear_with(h: &mut Harness, columns: Vec<ColumnMeta>, rows: Vec<Vec<Option<St
 }
 
 #[test]
-fn each_entry_sends_its_condition_and_puts_it_in_the_line() {
+fn each_entry_sends_its_condition_as_the_draft() {
     let mut h = users();
     let cases: &[(usize, usize, &str, &str)] = &[
         (0, 0, "= 1", "id = 1"),
@@ -189,8 +190,8 @@ fn each_entry_sends_its_condition_and_puts_it_in_the_line() {
     for &(row, col, label, cond) in cases {
         let sent = filter(&mut h, row, col, label);
         assert_eq!(sent, vec![vec![format!("{ALL} WHERE ({cond})")]], "{label}");
-        assert_eq!(where_text(&h), cond, "the line shows what runs: {label}");
-        assert_eq!(h.app.tab().doc.table_query.as_ref().unwrap().line.focus, None, "the grid keeps the keys");
+        assert_eq!(where_text(&h), cond, "the draft is what runs: {label}");
+        assert_eq!(h.app.key_context(), Ctx::Grid, "the grid keeps the keys");
         page(&mut h);
         let shown = h.app.tab().doc.table_query.as_ref().and_then(|q| q.shown.clone()).unwrap();
         assert_eq!(shown.filter.map(|f| f.text), Some(cond.to_string()));
@@ -391,7 +392,10 @@ fn a_filter_by_value_on_a_sorted_tab_keeps_the_order_and_marks_its_column() {
     let sent = filter(&mut h, 0, 2, "> 1.5");
     assert_eq!(sent, vec![vec![format!(r#"{ALL} WHERE (score > 1.5) ORDER BY "name" DESC"#)]]);
     assert_eq!(where_text(&h), "score > 1.5");
-    let order = |h: &Harness| h.app.tab().doc.table_query.as_ref().unwrap().line.field(Field::Order).text().to_string();
+    let order = |h: &Harness| {
+        let q = &h.app.tab().doc.table_query.as_ref().unwrap().draft;
+        datarig_core::query::order_text(&q.order, datarig_core::sql::dialect::Dialect::Postgres)
+    };
     assert_eq!(order(&h), "name DESC");
     // The marks are of the rows shown: the filter's run is still on its way.
     assert!(marks(&h).iter().all(|m| !m.filtered));
@@ -462,21 +466,6 @@ fn refused_entries_are_dimmed_with_why_and_send_nothing() {
 }
 
 #[test]
-fn changes_not_applied_in_the_line_are_kept_and_nothing_is_added() {
-    let mut h = users();
-    h.keys("f");
-    h.type_text("id > 5");
-    // The grid takes the keys back, the text stays in the field, not applied.
-    h.app.tab_mut().doc.table_query.as_mut().unwrap().line.focus = None;
-    at(&mut h, 0, 0);
-    h.keys("F");
-    assert!(!menu_open(&h));
-    assert!(flashed(&h).contains("filter line edited"), "{}", flashed(&h));
-    assert_eq!(where_text(&h), "id > 5");
-    assert!(runs(&mut h).is_empty());
-}
-
-#[test]
 fn pending_edits_are_asked_about_first_as_enter_asks() {
     let mut h = users();
     if let Results::Rows(rs) = &mut h.app.tab_mut().results {
@@ -488,12 +477,12 @@ fn pending_edits_are_asked_about_first_as_enter_asks() {
         h.app.overlays.confirm().map(|c| c.action),
         Some(ConfirmAction::LeaveEdits(datarig_tui::app::edit::Leave::Run(h.app.tab().id)))
     );
-    // Enter keeps the edits: nothing runs, the line holds the filter, not applied.
+    // Enter keeps the edits: nothing runs, the filter is the draft, not applied.
     h.key(KeyCode::Enter);
     assert!(runs(&mut h).is_empty());
     assert!(matches!(&h.app.tab().results, Results::Rows(rs) if !rs.edit.batch.is_empty()));
     assert_eq!(where_text(&h), "id = 1");
-    // Applied from the line, asked again; `y` drops the edits and runs it.
+    // Applied from the filter dialog, asked again; `y` drops the edits and runs it.
     h.keys("f");
     h.key(KeyCode::Enter);
     assert!(h.app.overlays.is_open(OverlayKind::Confirm));
@@ -519,7 +508,7 @@ fn the_grid_menu_has_the_entry_and_a_query_has_none() {
     h.key(KeyCode::Tab);
     h.keys("F");
     assert!(!menu_open(&h));
-    assert!(flashed(&h).contains("Only a table tab has a filter line"), "{}", flashed(&h));
+    assert!(flashed(&h).contains("Only a table tab has a filter dialog"), "{}", flashed(&h));
     h.keys("  ");
     let dimmed = h.app.menu_dimmed_rows();
     assert!(dimmed.iter().any(|(l, why)| *l == "Table → filter by value" && why == "only on table tabs"), "{dimmed:?}");
@@ -575,7 +564,7 @@ fn a_menu_over_rows_read_again_runs_nothing() {
     assert!(runs(&mut h).is_empty(), "nothing runs");
     assert!(!menu_open(&h));
     assert!(flashed(&h).contains("changed"), "{}", flashed(&h));
-    assert_eq!(where_text(&h), "", "the line is as it was");
+    assert_eq!(where_text(&h), "", "the draft is as it was");
     // A run started under the open menu: out of date too.
     h.keys("F");
     assert!(menu_open(&h));
@@ -604,8 +593,8 @@ fn broken_lines() -> Vec<Vec<Option<String>>> {
     rs
 }
 
-/// A value with a line break goes into the filter line on one line, as the text that runs: `F`
-/// sends the condition the line shows, and `Enter` in the line runs the same statement again.
+/// A value with a line break goes into the filter on one line, as the text that runs: `F`
+/// sends the condition shown, and `Enter` in the filter dialog runs the same statement again.
 #[test]
 fn a_value_with_line_breaks_runs_as_the_line_shows_it() {
     use datarig_tui::app::filter_value::ByValue as B;
@@ -624,15 +613,13 @@ fn a_value_with_line_breaks_runs_as_the_line_shows_it() {
         pick(&mut h, by);
         let want = vec![vec![format!("{ALL} WHERE ({cond})")]];
         assert_eq!(runs(&mut h), want, "{by:?}");
-        assert_eq!(where_text(&h), cond, "the line shows what runs");
+        assert_eq!(where_text(&h), cond, "the draft is what runs");
         page_with(&mut h, columns(), broken_lines());
-        // Applied again from the line: the same statement.
+        // Applied again from the filter dialog: the same statement.
         h.keys("f");
         h.key(KeyCode::Enter);
-        assert_eq!(runs(&mut h), want, "Enter in the line: {by:?}");
+        assert_eq!(runs(&mut h), want, "Enter in the dialog: {by:?}");
         page_with(&mut h, columns(), broken_lines());
-        // The grid takes the keys back.
-        h.app.tab_mut().doc.table_query.as_mut().unwrap().line.focus = None;
         assert_eq!(h.app.key_context(), Ctx::Grid);
         clear_with(&mut h, columns(), broken_lines());
     }
@@ -742,8 +729,8 @@ fn the_filter_menu_screens() {
     shot(&mut h, "refused");
 }
 
-/// On MySQL a value with a line break is its UTF-8 bytes: one line in the filter line, and the
-/// same statement when the line is applied again.
+/// On MySQL a value with a line break is its UTF-8 bytes: one line in the filter, and the
+/// same statement when the filter dialog applies it again.
 #[test]
 fn a_mysql_value_with_line_breaks_runs_as_the_line_shows_it() {
     use datarig_tui::app::filter_value::ByValue as B;
@@ -763,19 +750,17 @@ fn a_mysql_value_with_line_breaks_runs_as_the_line_shows_it() {
         page_with(&mut h, cols(), rows());
         h.keys("f");
         h.key(KeyCode::Enter);
-        assert_eq!(runs(&mut h), want, "Enter in the line");
+        assert_eq!(runs(&mut h), want, "Enter in the dialog");
         page_with(&mut h, cols(), rows());
-        // The grid takes the keys back.
-        h.app.tab_mut().doc.table_query.as_mut().unwrap().line.focus = None;
         assert_eq!(h.app.key_context(), Ctx::Grid);
         clear_with(&mut h, cols(), rows());
     }
 }
 
-/// A column whose name holds a line break, which the one-line filter line cannot hold as it is:
-/// every entry of `F` on it is dimmed with why, and `s` / `S` on it are refused, said; nothing
-/// is sent and the line stays as it was. The column next to it named with a space (what the line
-/// would have turned the other name into) filters and sorts as usual.
+/// A column whose name holds a line break, which a filter shown on one line cannot hold as it
+/// is: every entry of `F` on it is dimmed with why, and `s` / `S` on it are refused, said;
+/// nothing is sent and the draft stays as it was. The column next to it named with a space
+/// (what one line would have turned the other name into) filters and sorts as usual.
 #[test]
 fn a_column_named_with_a_line_break_is_neither_filtered_nor_sorted() {
     let mut h = users();
@@ -811,7 +796,6 @@ fn a_column_named_with_a_line_break_is_neither_filtered_nor_sorted() {
         assert!(runs(&mut h).is_empty(), "{keys}: nothing sent");
         assert!(flashed(&h).contains("a line break in the column name"), "{keys}: {}", flashed(&h));
         let tq = h.app.tab().doc.table_query.as_ref().unwrap();
-        assert_eq!(tq.line.field(Field::Order).text(), "", "{keys}");
         assert!(tq.draft.order.is_empty(), "{keys}");
     }
     // The column named with a space: as usual.

@@ -1,7 +1,7 @@
 //! A table tab's filter and order are kept: in the workspace across a restart, and with the tab
-//! when it is closed and brought back. They come back in the filter line as applied and are not
+//! when it is closed and brought back. They come back in the tab as applied and are not
 //! run; the run the user then asks for checks them again as any filter is checked (a file edited
-//! by hand may hold a filter the line would refuse, or one whose functions must be confirmed).
+//! by hand may hold a filter the dialog would refuse, or one whose functions must be confirmed).
 
 use crate::common;
 
@@ -131,11 +131,15 @@ fn status(h: &Harness) -> String {
     h.app.tab().status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default()
 }
 
-/// The filter line's two fields, as drawn.
+/// The condition and the order the filter dialog opens with (opened, then closed again).
 fn line_texts(h: &mut Harness) -> (String, String) {
-    h.screen(120, 30);
-    let tq = h.app.tab().doc.table_query.as_ref().expect("a table query");
-    (tq.line.where_.text().to_string(), tq.line.order.text().to_string())
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::table_filter::TableAction;
+    h.app.dispatch(Action::Table(TableAction::EditFilter));
+    let texts = h.app.filter_dialog_draft().expect("the filter dialog");
+    h.key(KeyCode::Esc);
+    assert!(!h.app.overlays.is_open(OverlayKind::FilterDialog));
+    texts
 }
 
 /// What the active table tab holds as applied: its filter text and its order.
@@ -166,11 +170,13 @@ fn a_restored_table_tab_keeps_its_query_and_runs_it_only_when_asked() {
     answer(&mut h);
     let want = format!(r#"{ALL} WHERE (id > 1) ORDER BY "name" DESC"#);
     assert_eq!(runs(&mut h).last(), Some(&vec![want.clone()]));
-    // Typed in the line, not applied: not kept.
+    // A condition built in the dialog, not applied: not kept.
     h.key(KeyCode::Tab);
     h.keys("f");
-    h.type_text(" AND name <> ''");
-    assert!(h.app.tab().doc.table_query.as_ref().unwrap().line.focus == Some(Field::Where));
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Char(' '));
+    h.type_text("5");
+    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog));
     quit(h);
     let (text, tab) = state.saved();
     assert_eq!(tab.filter.as_deref(), Some("id > 1"), "{text}");
@@ -199,8 +205,9 @@ fn a_restored_table_tab_keeps_its_query_and_runs_it_only_when_asked() {
     assert_eq!(tab.filter.as_deref(), Some("id > 1"), "{text}");
 }
 
-/// A filter edited by hand into the file that the line refuses: back in the line, and the run
-/// key sends nothing and says why.
+/// A filter edited by hand into the file that the app refuses: back as the tab's query, and the
+/// run key sends nothing and says why; applied from the filter dialog, the dialog stays open
+/// and says why.
 #[test]
 fn a_restored_filter_the_line_refuses_sends_nothing() {
     let cfg = test_db_config();
@@ -217,10 +224,12 @@ fn a_restored_filter_the_line_refuses_sends_nothing() {
         assert!(status(&h).starts_with("Filter refused: "), "{filter}: {}", status(&h));
         let refusal = h.app.tab().doc.table_query.as_ref().and_then(|q| q.refusal.clone()).expect("refusal");
         assert_eq!(refusal.field, Field::Where);
-        // The refresh glyph and Enter in the field are runs too: refused the same way.
+        // `Enter` in the filter dialog is a run too: refused the same way, the dialog open.
         h.keys("f");
         h.key(KeyCode::Enter);
         assert!(runs(&mut h).is_empty(), "{filter}: nothing sent");
+        assert!(h.app.overlays.is_open(OverlayKind::FilterDialog), "{filter}");
+        assert!(h.screen(120, 34).contains("Filter refused: "), "{filter}: {}", h.screen(120, 34));
         quit(h);
     }
 }
@@ -293,8 +302,7 @@ fn a_reopened_table_tab_keeps_its_query() {
     h.keys("y");
     assert_eq!(keys_first(&mut h), vec![vec![want]]);
     answer(&mut h);
-    let screen = h.screen(120, 30);
-    assert!(screen.contains("ORDER BY id DESC") && !screen.contains("not unique"), "{screen}");
+    assert_eq!(line_texts(&mut h).1, "id DESC");
 }
 
 /// A query the file holds that cannot be read is said, in words, and left out of the tab.
@@ -344,10 +352,6 @@ fn a_restored_limit_shows_in_its_field_and_caps_the_run() {
     state.write_table_tab(&cfg, "limit = 2");
     let mut h = launch(&cfg, &state, Lang::En);
     assert_eq!(h.app.tab().doc.table_query.as_ref().unwrap().applied().limit, Some(2));
-    h.screen(120, 30);
-    let tq = h.app.tab().doc.table_query.as_ref().unwrap();
-    assert_eq!(tq.line.limit.text(), "2");
-    assert!(h.screen(120, 30).contains("LIMIT 2"), "{}", h.screen(120, 30));
     connect(&mut h);
     assert!(runs(&mut h).is_empty(), "nothing runs by itself");
     h.key(KeyCode::Tab);
@@ -358,11 +362,11 @@ fn a_restored_limit_shows_in_its_field_and_caps_the_run() {
         datarig_tui::app::Results::Rows(rs) => assert_eq!((rs.rows.len(), rs.more), (2, false)),
         _ => panic!("no rows"),
     }
-    // Another limit typed in the line and applied: kept.
+    // Another limit typed in the dialog and applied: kept.
     h.keys("f");
     h.key(KeyCode::Tab);
     h.key(KeyCode::Tab);
-    h.ctrl('l');
+    h.ctrl('u');
     h.type_text("50");
     h.key(KeyCode::Enter);
     answer(&mut h);
@@ -372,11 +376,10 @@ fn a_restored_limit_shows_in_its_field_and_caps_the_run() {
 }
 
 /// A tab put back that has not run yet, its filter refused (edited by hand), its order kept:
-/// the condition fixed in the line applies, the order as it was (its columns are not known
-/// before the tab runs, and need not be: its keys stand), the profile connected and the keys
-/// read first. Never a dead end that only clearing the whole line gets out of.
+/// the refused chip taken out in the filter dialog applies, the order as it was (its columns are not known before the tab runs, and need not be: its keys stand), the
+/// profile connected and the keys read first. Never a dead end.
 #[test]
-fn a_restored_tab_that_never_ran_applies_a_fixed_condition() {
+fn a_restored_tab_that_never_ran_applies_without_its_refused_chip() {
     let cfg = test_db_config();
     let state = State::new("fixed");
     state.write_table_tab(
@@ -387,16 +390,18 @@ fn a_restored_tab_that_never_ran_applies_a_fixed_condition() {
     assert!(h.app.tab().is_table());
     h.key(KeyCode::Tab);
     h.keys("f");
-    h.ctrl('l');
-    h.type_text("id > 1");
+    // The refused chip out (no columns known yet: `Tab` goes from the list to the chips).
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Char('x'));
+    assert_eq!(h.app.filter_dialog_draft(), Some((String::new(), "id DESC".into())));
     h.key(KeyCode::Enter);
     assert!(!status(&h).contains("columns are not known"), "{}", status(&h));
-    assert_eq!(applied(&h), (Some("id > 1".into()), vec![OrderKey::user("id", Dir::Desc)]));
+    assert_eq!(applied(&h), (None, vec![OrderKey::user("id", Dir::Desc)]));
     // It connects for the keys, then runs.
     h.db(DbEvent::Connected);
     h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
     let ran = keys_first(&mut h);
-    assert_eq!(ran, vec![vec![format!(r#"{ALL} WHERE (id > 1) ORDER BY "id" DESC"#)]]);
+    assert_eq!(ran, vec![vec![format!(r#"{ALL} ORDER BY "id" DESC"#)]]);
 }
 
 /// A workspace of one table tab on `shop.users` (in database `database`, when one) ordered by
@@ -541,4 +546,146 @@ fn a_restored_filter_of_more_lines_is_not_kept_in_the_history() {
     let kept = datarig_core::filter_history::load(&file).expect("the file reads").table_count();
     assert_eq!(kept, 0, "not kept");
     quit(h);
+}
+
+/// A tab put back with a filter, changed before it ever ran (in the filter dialog, or cleared
+/// from the grid): the filter dialog's undo still goes back to the filter put back.
+#[test]
+fn the_first_change_of_a_restored_filter_is_undone_to_it() {
+    for clear in [false, true] {
+        let cfg = test_db_config();
+        let state = State::new(if clear { "undo-clear" } else { "undo-dialog" });
+        state.write_table_tab(&cfg, "filter = \"id = 1\"");
+        let mut h = launch(&cfg, &state, Lang::En);
+        connect(&mut h);
+        h.key(KeyCode::Tab);
+        if clear {
+            h.keys(" rx");
+        } else {
+            h.keys("f");
+            // Its chip out (no columns known yet: `Tab` goes from the list to the chips), then
+            // a condition of the SQL section's `WHERE`.
+            h.key(KeyCode::Tab);
+            h.key(KeyCode::Char('x'));
+            h.key(KeyCode::Char('Q'));
+            h.type_text("id > 2");
+            h.key(KeyCode::Enter);
+        }
+        let changed = if clear { ALL.to_string() } else { format!("{ALL} WHERE (id > 2)") };
+        assert_eq!(runs(&mut h), vec![vec![changed]], "clear: {clear}");
+        answer(&mut h);
+        h.keys("f");
+        h.keys("u");
+        assert_eq!(h.app.filter_dialog_draft().map(|d| d.0), Some("id = 1".to_string()), "clear: {clear}");
+        h.key(KeyCode::Enter);
+        assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id = 1)")]], "clear: {clear}");
+    }
+}
+
+fn dialog_open(h: &Harness) -> bool {
+    h.app.overlays.is_open(OverlayKind::FilterDialog)
+}
+
+/// The filter dialog of the tab put back, applied (`Enter`) while its run cannot be sent yet:
+/// it stays open, the run waits; `Esc` then closes it and the run waits no more.
+fn apply_then_cancel(h: &mut Harness) {
+    h.key(KeyCode::Tab);
+    h.keys("f");
+    assert!(dialog_open(h));
+    h.key(KeyCode::Enter);
+    let tab = h.app.tab().id;
+    assert!(dialog_open(h), "nothing sent yet: the dialog stays open");
+    assert!(h.app.tab_busy(tab), "the run waits");
+    h.key(KeyCode::Esc);
+    assert!(!dialog_open(h));
+    assert!(!h.app.tab_busy(tab), "cancelled with the dialog");
+    assert_eq!(status(h), "Query cancelled");
+}
+
+/// A run applied in the filter dialog that waits for its profile to connect is cancelled
+/// with the dialog: the connection that comes runs nothing.
+#[test]
+fn a_dialog_cancelled_while_its_run_waits_for_the_connection_runs_nothing() {
+    let cfg = test_db_config();
+    let state = State::new("dialogconnect");
+    state.write_table_tab(&cfg, "filter = \"id > 1\"");
+    let mut h = launch(&cfg, &state, Lang::En);
+    apply_then_cancel(&mut h);
+    connect(&mut h);
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Connected);
+    assert!(runs(&mut h).is_empty(), "the run cancelled never goes");
+}
+
+/// A run applied in the filter dialog that waits for the table's keys is cancelled with the
+/// dialog: the keys' answer runs nothing.
+#[test]
+fn a_dialog_cancelled_while_its_run_waits_for_the_keys_runs_nothing() {
+    let cfg = test_db_config();
+    let state = State::new("dialogkeys");
+    let mut h = ordered(&cfg, &state, None);
+    connect(&mut h);
+    apply_then_cancel(&mut h);
+    let request = keys_request(&h.sent()).expect("the keys are asked for");
+    h.meta_db("local-pg", DbEvent::TableKeys { id: request, result: Ok(pk()) });
+    assert!(runs(&mut h).is_empty(), "the run cancelled never goes");
+}
+
+/// A run applied in the filter dialog whose functions were confirmed (`y`), then waiting for
+/// the connection, is cancelled with the dialog.
+#[test]
+fn a_dialog_cancelled_after_a_confirm_while_its_run_waits_runs_nothing() {
+    let cfg = test_db_config();
+    let state = State::new("dialogconfirm");
+    state.write_table_tab(&cfg, "filter = \"my_fn(id) > 0\"");
+    let mut h = launch(&cfg, &state, Lang::En);
+    h.key(KeyCode::Tab);
+    h.keys("f");
+    h.key(KeyCode::Enter);
+    assert!(h.app.overlays.is_open(OverlayKind::Confirm), "its functions are asked about");
+    h.keys("y");
+    assert!(!h.app.overlays.is_open(OverlayKind::Confirm));
+    let tab = h.app.tab().id;
+    assert!(dialog_open(&h) && h.app.tab_busy(tab), "confirmed, it waits for the connection");
+    h.key(KeyCode::Esc);
+    assert!(!dialog_open(&h));
+    assert!(!h.app.tab_busy(tab));
+    connect(&mut h);
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Connected);
+    assert!(runs(&mut h).is_empty(), "the run cancelled never goes");
+}
+
+/// The SQL section's `WHERE` field given a condition with a line feed inside a string: typed
+/// in, it is not read back (a space in its place would change the value), and says why; a line
+/// break between terms reads back as a space.
+#[test]
+fn a_sql_field_with_a_line_break_in_a_string_is_not_read_back_once_edited() {
+    let cfg = test_db_config();
+    let state = State::new("sqlbreak");
+    state.write_table_tab(&cfg, "filter = \"name = 'a\\nb'\"");
+    let mut h = launch(&cfg, &state, Lang::En);
+    h.key(KeyCode::Tab);
+    h.keys("f");
+    h.keys("Q");
+    h.key(KeyCode::End);
+    h.type_text(" AND id > 1");
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "name = 'a\nb'", "not read back");
+    assert!(h.screen(120, 34).contains("Not read back"), "{}", h.screen(120, 34));
+    // Undone, the field is left.
+    h.key_mod(KeyCode::Char('z'), ratatui::crossterm::event::KeyModifiers::CONTROL);
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "name = 'a\nb'");
+
+    let state = State::new("sqlbreakspace");
+    state.write_table_tab(&cfg, "filter = \"id > 1\\nAND name = 'x'\"");
+    let mut h = launch(&cfg, &state, Lang::En);
+    h.key(KeyCode::Tab);
+    h.keys("f");
+    h.keys("Q");
+    h.key(KeyCode::End);
+    h.type_text(" AND id < 9");
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "id > 1 AND name = 'x' AND id < 9");
 }

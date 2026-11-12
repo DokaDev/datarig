@@ -59,10 +59,9 @@ pub(crate) fn draw_popup(app: &App, cursor: (u16, u16), screen: Rect, buf: &mut 
             let (text, at) = (app.tab().editor.text(), app.tab().editor.offset());
             width(text.get(p.replace_start.min(at)..at).unwrap_or(""))
         }
-        PopupOwner::Filter(f) => app.tab().doc.table_query.as_ref().map_or(0, |q| {
-            let input = q.line.field(f);
-            let at = input.cursor_byte();
-            width(input.text().get(p.replace_start.min(at)..at).unwrap_or(""))
+        PopupOwner::Dialog(_) => app.filter_dialog().and_then(|d| d.sql_field()).map_or(0, |f| {
+            let at = f.input.cursor_byte();
+            width(f.input.text().get(p.replace_start.min(at)..at).unwrap_or(""))
         }),
     } as u16;
     // Inside the editor's box when it fits there, else inside the screen.

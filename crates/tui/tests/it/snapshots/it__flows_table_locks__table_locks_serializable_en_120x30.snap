@@ -1,17 +1,18 @@
 ---
 source: crates/tui/tests/it/flows_table_locks.rs
+assertion_line: 244
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users ×                                                            "
 "│  ＋ New connection         │╭ Results · 3 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1             ││ local-my / shop.users  127.0.0.1:55432             ││ id: 0                            │"
-"│  ▾ ●   local-my            ││ [Result 1]  Chart  Messages                        ││                                  │"
-"│    ▾ shop                  ││ WHERE  f filter · s sort · Ctrl+R history        ⟳ ││                                  │"
-"│      ▾ Tables              ││   │ id ^v                                          ││                                  │"
-"│        ▸ users             ││   │ int8                                           ││                                  │"
-"│                            ││ 1 │    0                                           ││                                  │"
-"│                            ││ 2 │    1                                           ││                                  │"
+"│▾ Connections 1             ││ [Result 1]  Chart  Messages  local-my / shop.users ││ id: 0                            │"
+"│  ▾ ●   local-my            ││   │ id ^v                                          ││                                  │"
+"│    ▾ shop                  ││   │ int8                                           ││                                  │"
+"│      ▾ Tables              ││ 1 │    0                                           ││                                  │"
+"│        ▸ users             ││ 2 │    1                                           ││                                  │"
 "│                            ││ 3 │    2                                           ││                                  │"
+"│                            ││                                                    ││                                  │"
+"│                            ││                                                    ││                                  │"
 "│                            │╭ Run a read that locks rows? ─────────────────────────────╮                             │"
 "│                            ││                                                          │                             │"
 "│                            ││ In this session reads lock rows (SERIALIZABLE, no        │                             │"

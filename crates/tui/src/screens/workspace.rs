@@ -173,20 +173,12 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
     {
         draw_popup(app, cursor, area, f.buffer_mut());
     }
-    // A field of the filter line: under it, or above it near the bottom.
-    if let (Some(crate::app::PopupOwner::Filter(field)), Some(at)) = (owner, app.layout.filter_cursor)
-        && app.filter_line_focused()
-        && app.filter_line_field() == Some(field)
-        && !app.modal_open()
-    {
-        draw_popup(app, at, area, f.buffer_mut());
-    }
     // Real terminal cursor at the focused text input so IME preedit appears in place.
     if app.focus == Focus::Tree {
         filter_cursor
     } else {
         match app.focus {
-            Focus::Results => app.layout.filter_cursor.or(app.layout.grid_prompt_cursor),
+            Focus::Results => app.layout.grid_prompt_cursor,
             _ => (app.focus == Focus::Editor && editor_area.is_some()).then_some(cursor),
         }
     }
@@ -331,18 +323,14 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
     }
     let rb = panel_with_status(&title, status, app.focus == Focus::Results, grid_area.width);
-    let mut rinner = rb.inner(grid_area);
+    let rinner = rb.inner(grid_area);
     rb.render(grid_area, buf);
-    // A table tab's connection on the first line, as a query tab's editor has it (only where the
-    // result strip still has room under it).
-    if app.tab().is_table() && app.conn().is_some() && rinner.height > 3 {
-        draw_connection_bar(app, Rect { height: 1, ..rinner }, buf);
-        rinner = Rect { y: rinner.y + 1, height: rinner.height - 1, ..rinner };
-    }
-    // The result tabs of the last run, the Chart, a Plan and the Messages on the first line.
+    crate::widgets::table_status::draw_table_status(app, grid_area, buf);
+    // The result tabs of the last run, the Chart, a Plan and the Messages on the first line (a
+    // table tab's connection on its right).
     let strip = app.strip_shown() && rinner.height > 2;
     let old_strip = std::mem::take(&mut app.pointer.strip_hits);
-    let mut content = if strip {
+    let content = if strip {
         let line = Rect { height: 1, ..rinner };
         app.layout.strip = line;
         draw_strip(app, line, buf);
@@ -355,15 +343,6 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
         app.layout.strip = Rect::default();
         rinner
     };
-    // A table tab's filter line above the grid (and above what the run said).
-    if app.tab().is_table() && !app.changes_shown() && !app.plan_shown() && !app.chart_shown() && content.height > 2 {
-        let focused = if app.focus == Focus::Results { app.filter_line_field() } else { None };
-        let rows = crate::widgets::filter_line::rows(content.width, focused).min(content.height - 2);
-        let line = Rect { height: rows, ..content };
-        if draw_filter_line(app, line, grid_area.height, buf) {
-            content = Rect { y: content.y + rows, height: content.height - rows, ..content };
-        }
-    }
     // Another view than the rows: no grid, so no cell of it is under the pointer (it would
     // still be lit when the rows come back).
     let rows = !matches!(app.tab().exec.view, ResultView::Messages | ResultView::Changes)
@@ -388,44 +367,15 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
 }
 
-/// The filter line of the active table tab in `line`, unless it is empty, has no focus and
-/// the results pane (`pane_h` rows) is short: whether it was drawn.
-fn draw_filter_line(app: &mut App, line: Rect, pane_h: u16, buf: &mut Buffer) -> bool {
-    app.filter_line_follow();
-    let id = app.tab().id;
-    let focused = if app.focus == Focus::Results { app.filter_line_field() } else { None };
-    let applied = app.filter_line_applied(id);
-    let empty = app.table_query(id).is_none_or(|q| q.line.empty());
-    let blank = empty && applied.filter.is_empty() && applied.order.is_empty() && applied.limit.is_empty();
-    if crate::widgets::filter_line::hidden(blank, focused.is_some(), pane_h) {
-        return false;
-    }
-    use crate::app::filter_line::TableAction;
-    let filter = app.key_for(Action::Table(TableAction::EditFilter), Ctx::Grid);
-    let sort = app.key_for(Action::Table(TableAction::SortCycle), Ctx::Grid);
-    let history = app.key_for(Action::Table(TableAction::History), Ctx::FilterLine);
-    let hint = app.i18n.msg(&Msg::TableFilterHint { filter, sort, history }).to_string();
-    let mut state = app.table_query(id).map(|q| q.line.clone()).unwrap_or_default();
-    let drawn = crate::widgets::filter_line::draw(app, &mut state, &applied, focused, &hint, line, buf);
-    if let Some(tq) = app.tab_mut().doc.table_query.as_mut() {
-        tq.line = state;
-    }
-    app.layout.filter_line = line;
-    app.layout.filter_where = drawn.where_;
-    app.layout.filter_order = drawn.order;
-    app.layout.filter_limit = drawn.limit;
-    app.layout.filter_refresh = drawn.refresh;
-    app.layout.filter_cursor = drawn.cursor;
-    true
-}
-
 /// The result tab strip: `[Result 1]  Result 3  Changes 2  Plan  Chart  Messages`, the shown
 /// one in brackets, two blanks between any two; the Changes of the shown result while it has
 /// pending changes. Without a row result there is one `Result` tab (for
 /// what the run said, or what is coming). Then `earlier run` when a later run returned no rows,
 /// the keys that move between the tabs, and on the right what the shown rows' transaction is
 /// (uncommitted, ended, rolled back), and left of it what the rows are to their edits (how many
-/// changes are pending, editable, read-only and why), once an edit key resolved them.
+/// changes are pending, editable, read-only and why), once an edit key resolved them. A table
+/// tab names its connection right-aligned in the room the tabs leave
+/// ([`strip_connection_forms`]); the keys show left of it where they still fit.
 ///
 /// Room goes first to the transaction, then to the edits as far as the tabs' labels (whole, else
 /// short) still fit, then to the tabs: the keys show only when every whole
@@ -573,11 +523,23 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     if let Some(e) = earlier.filter(|e| x as usize + crate::text::width(e) <= end as usize) {
         x += put(buf, x, area.y, &e, (end - x) as usize, dim) + 1;
     }
+    // A table tab's connection, right-aligned in the room the labels leave: its longest form
+    // that fits.
+    let mut keys_end = end;
+    let forms = strip_connection_forms(app, bg);
+    if let Some(parts) = forms.iter().find(|parts| x as usize + parts_width(parts) < end as usize) {
+        let mut at = end - parts_width(parts) as u16 - 1;
+        keys_end = at.saturating_sub(1);
+        for (text, style) in parts {
+            at += put(buf, at, area.y, text, (end - at) as usize, *style);
+        }
+    }
     // The keys that move between the result tabs, at the right end when they fit after the
     // whole labels (the keys bound in the results pane, remapping included).
-    if let Some(keys) = strip_keys(app).filter(|k| whole && x as usize + crate::text::width(k) + 1 < end as usize) {
+    if let Some(keys) = strip_keys(app).filter(|k| whole && x as usize + crate::text::width(k) + 1 < keys_end as usize)
+    {
         let w = crate::text::width(&keys) as u16;
-        put(buf, end - w - 1, area.y, &keys, w as usize, dim);
+        put(buf, keys_end - w - 1, area.y, &keys, w as usize, dim);
     }
     if let Some((text, color)) = tx {
         let w = crate::text::width(&text) as u16;
@@ -771,16 +733,34 @@ fn encryption_part(
     Some((format!(" · {text}"), Style::new().fg(fg).bg(bg)))
 }
 
-/// The first line of the editor of a tab with a connection: the profile (its icon and name in
-/// its color), where it points, its environment (its badge, else its name; and read-only), and
-/// the key that switches the tab to another connection. A table tab's results pane shows it
-/// too, with its table in the place (`database.schema.table`, `database.table` where the schema
-/// is the database) and no switch key: its connection does not change.
-fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
+/// Parts of a line, each a text and its style.
+type Parts = Vec<(String, Style)>;
+
+/// How much of where a tab works the parts of its connection name ([`connection_parts`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Named {
+    /// The profile, then the database with the chosen schema, or a table tab's table
+    /// (`dev-pg / datarig.shop.orders`).
+    Whole,
+    /// The profile and a table tab's table without its database (`dev-pg / shop.orders`).
+    Table,
+    /// The profile alone (`dev-pg`).
+    Profile,
+}
+
+/// The parts of the connection of profile `p` as the active tab's connection line shows
+/// them: first where the tab works, as much of it as `named` says (the profile's icon and name
+/// in its color, the database, the schema or a table tab's table), then what the line says
+/// about it: where it points, its encryption, its environment (its badge, else its name) and
+/// read-only. The optional parts (those starting with two blanks or ` · `) may be left out
+/// where there is no room for them.
+fn connection_parts(
+    app: &App,
+    p: &datarig_core::profile::ConnectionConfig,
+    bg: ratatui::style::Color,
+    named: Named,
+) -> (Parts, Parts) {
     let th = theme::cur();
-    let Some(p) = app.conn() else { return };
-    let bg = th.surface;
-    buf.set_style(area, Style::new().bg(bg));
     let (endpoint, database, _) = p.endpoint();
     // Where the tab works: the server's answer once its session connected, else
     // the chosen database, else the profile's; then the chosen schema.
@@ -794,10 +774,11 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
         (None, None) => database,
     };
     let table = t.doc.table.as_ref().filter(|_| t.is_table());
-    let place_db = match table {
-        Some(tr) if one_level || database.is_empty() => tr.label(),
-        Some(tr) => format!("{database}.{}", tr.label()),
-        None => database,
+    let place_db = match (table, named) {
+        (_, Named::Profile) => String::new(),
+        (Some(tr), _) if one_level || database.is_empty() || named == Named::Table => tr.label(),
+        (Some(tr), _) => format!("{database}.{}", tr.label()),
+        (None, _) => database,
     };
     let mut place = p.name.clone();
     if !place_db.is_empty() {
@@ -807,30 +788,63 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     // A chosen schema the server does not have on the path is marked, in the
     // warning color, for as long as that is so.
     let missing = app.schema_missing(t);
-    let schema = t.context.schema.clone().filter(|s| !s.is_empty() && !one_level && table.is_none()).map(|s| {
-        let style =
-            if missing { Style::new().fg(th.warning).bg(bg).add_modifier(Modifier::BOLD) } else { name_style(p, bg) };
-        (format!(" / {s}{}", if missing { "?" } else { "" }), style)
-    });
+    let schema = t
+        .context
+        .schema
+        .clone()
+        .filter(|s| !s.is_empty() && !one_level && table.is_none() && named == Named::Whole)
+        .map(|s| {
+            let style = if missing {
+                Style::new().fg(th.warning).bg(bg).add_modifier(Modifier::BOLD)
+            } else {
+                name_style(p, bg)
+            };
+            (format!(" / {s}{}", if missing { "?" } else { "" }), style)
+        });
     let name = name_style(p, bg);
     let muted = Style::new().fg(th.fg_muted).bg(bg);
-    let mut parts: Vec<(String, Style)> = Vec::new();
+    let mut head: Parts = Vec::new();
     if app.icons_on() {
-        parts.push((crate::icons::cell(p, true), name));
+        head.push((crate::icons::cell(p, true), name));
     }
-    parts.push((place, name));
-    parts.extend(schema);
-    parts.push((format!("  {endpoint}"), muted));
-    parts.extend(encryption_part(app, p, bg));
-    parts.extend(crate::widgets::statusbar::environment_parts(app, p.id, bg));
+    head.push((place, name));
+    head.extend(schema);
+    let mut tail: Parts = vec![(format!("  {endpoint}"), muted)];
+    tail.extend(encryption_part(app, p, bg));
+    tail.extend(crate::widgets::statusbar::environment_parts(app, p.id, bg));
     if app.read_only(p.id) {
         let ro = Style::new()
             .fg(crate::app::environments::read_only_color(&th))
             .bg(th.surface_alt)
             .add_modifier(Modifier::BOLD);
-        parts.push((" ".to_string(), muted));
-        parts.push((format!(" {} ", crate::app::environments::read_only_badge(app)), ro));
+        tail.push((" ".to_string(), muted));
+        tail.push((format!(" {} ", crate::app::environments::read_only_badge(app)), ro));
     }
+    (head, tail)
+}
+
+/// A part of the connection's line that is left out where there is no room for it.
+fn optional_part(t: &str) -> bool {
+    t.starts_with(" · ") || t.starts_with("  ")
+}
+
+/// The columns `parts` take.
+fn parts_width(parts: &[(String, Style)]) -> usize {
+    parts.iter().map(|(t, _)| crate::text::width(t)).sum()
+}
+
+/// The first line of the editor of a tab with a connection: the profile (its icon and name in
+/// its color), where it points, its environment (its badge, else its name; and read-only), and
+/// the key that switches the tab to another connection. A table tab names its connection in
+/// its result strip instead ([`strip_connection_forms`]).
+fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
+    let Some(p) = app.conn() else { return };
+    let bg = th.surface;
+    buf.set_style(area, Style::new().bg(bg));
+    let (mut parts, tail) = connection_parts(app, p, bg, Named::Whole);
+    parts.extend(tail);
+    let muted = Style::new().fg(th.fg_muted).bg(bg);
     let key = app
         .keymap
         .hint_keys(Action::SetTabConnection, Ctx::Nav, app.enhanced_keys)
@@ -841,14 +855,12 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     let room = area.width.saturating_sub(1);
     // The switch key on the right only when the connection fits whole next to it (narrow
     // panes show the connection; which-key and the help list the key).
-    let width_of = |parts: &[(String, Style)]| parts.iter().map(|(t, _)| crate::text::width(t)).sum::<usize>();
-    let left_w = width_of(&parts);
-    let left_room = if table.is_none() && left_w as u16 + right + 2 <= room { room - right - 1 } else { room };
+    let left_w = parts_width(&parts);
+    let left_room = if !app.tab().is_table() && left_w as u16 + right + 2 <= room { room - right - 1 } else { room };
     // Too narrow for all of it: the environment's name goes first, then the endpoint, so where the
     // tab works and the read-only badge stay (the place grew a database and schema).
-    let optional = |t: &str| t.starts_with(" · ") || t.starts_with("  ");
-    while width_of(&parts) > left_room as usize {
-        let Some(i) = parts.iter().rposition(|(t, _)| optional(t)) else { break };
+    while parts_width(&parts) > left_room as usize {
+        let Some(i) = parts.iter().rposition(|(t, _)| optional_part(t)) else { break };
         parts.remove(i);
     }
     let mut x = area.x + 1;
@@ -862,6 +874,32 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     if left_room < room {
         put(buf, area.x + area.width - right, area.y, &switch, right as usize, muted);
     }
+}
+
+/// A table tab's connection as its result strip names it on the right, from the longest form
+/// to the shortest: the whole line a query tab's editor shows (`dev-pg /
+/// datarig.shop.orders  127.0.0.1:55432`), its optional parts left out one by one from the
+/// right (the environment's name, the encryption, the endpoint); then the table without its
+/// database (`dev-pg / shop.orders`) and then the profile alone (`dev-pg`), each with the
+/// environment's badge and the read-only badge; then the profile's name alone. None on another
+/// tab, or without a connection.
+fn strip_connection_forms(app: &App, bg: ratatui::style::Color) -> Vec<Parts> {
+    let Some(p) = app.conn().filter(|_| app.tab().is_table()) else { return Vec::new() };
+    let (head, tail) = connection_parts(app, p, bg, Named::Whole);
+    let mut parts = [head, tail].concat();
+    let mut forms = vec![parts.clone()];
+    while let Some(i) = parts.iter().rposition(|(t, _)| optional_part(t)) {
+        parts.remove(i);
+        forms.push(parts.clone());
+    }
+    for named in [Named::Table, Named::Profile] {
+        let (head, mut tail) = connection_parts(app, p, bg, named);
+        tail.retain(|(t, _)| !optional_part(t));
+        forms.push([head, tail].concat());
+    }
+    forms.push(connection_parts(app, p, bg, Named::Profile).0);
+    forms.dedup_by(|a, b| a.iter().map(|(t, _)| t).eq(b.iter().map(|(t, _)| t)));
+    forms
 }
 
 /// The results pane's title and, on its right in parentheses, where the pages are:
@@ -1395,7 +1433,7 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         None => paging_note,
     };
-    // A refusal of what the user wrote in the filter line, while it stands: said whole there
+    // A refusal of the filter the user wrote, while it stands: said whole under the grid
     // (the status bar may cut it), first among the notes; nothing was sent for it.
     let refusal = match app.tab().results {
         Results::Rows(_) => app.tab().doc.table_query.as_ref().and_then(|q| q.refusal.as_ref()),
