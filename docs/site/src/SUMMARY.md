@@ -16,6 +16,7 @@
   - [Startup SQL](guide/startup-sql.md)
 - [Editor](guide/editor.md)
 - [Results](guide/results.md)
+  - [Filtering and sorting a table](guide/filtering.md)
   - [Export](guide/export.md)
   - [Charts](guide/charts.md)
   - [Editing data](guide/editing.md)
