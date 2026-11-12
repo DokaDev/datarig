@@ -14,7 +14,6 @@ Type "l"
 Wait+Screen /orders/
 Type "jjjj"
 Enter
-Wait+Screen /acme\.store\.orders/
 Wait+Screen /Heron Express/
 Tab
 Wait+Screen /Enter view cell/

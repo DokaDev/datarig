@@ -21,7 +21,6 @@ Sleep 600ms
 Type "jj"
 Sleep 400ms
 Enter
-Wait+Screen /acme\.store\.customers/
 Wait+Screen /Bram Driftwood/
 Sleep 1.2s
 
