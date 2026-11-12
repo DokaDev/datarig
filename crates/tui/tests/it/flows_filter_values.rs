@@ -577,7 +577,7 @@ fn a_mysql_timestamp_is_ticked_only_in_the_zone_it_was_read_in() {
     to_values(&mut h, 1);
     h.key(KeyCode::Down);
     h.key(KeyCode::Char(' '));
-    assert_eq!(draft(&h), "at IN ('2026-11-10 09:30:00', '2026-11-11 10:00:00')");
+    assert_eq!(draft(&h), "at IN ('2026-11-10 09:30:00', '2026-11-11 10:00:00+00:00')");
     h.keys("u");
     h.key(KeyCode::Esc);
     // The session's zone changed since: neither the loaded nor the earlier value is taken.

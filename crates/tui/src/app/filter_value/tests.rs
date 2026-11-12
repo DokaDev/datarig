@@ -90,7 +90,8 @@ fn a_timestamp_is_taken_only_in_the_zone_it_was_read_in() {
     let seoul = session("+09:00", "utf8mb4");
     let read = ReadIn::Values(utc.clone());
     let v = "2026-11-10 09:30:00";
-    assert_eq!(judged(MY, &at, &read, Some(&utc), v), Ok(Value::Text(v.into())));
+    // With the offset of the zone it was read in: the same instant in another session's zone.
+    assert_eq!(judged(MY, &at, &read, Some(&utc), v), Ok(Value::Text("2026-11-10 09:30:00+00:00".into())));
     // The zone changed since (an earlier load's values too: read in another zone).
     assert_eq!(judged(MY, &at, &read, Some(&seoul), v), not_whole("at", export::NotWhole::SessionChanged));
     assert_eq!(judged(MY, &at, &read, None, v), not_whole("at", export::NotWhole::SessionChanged));
