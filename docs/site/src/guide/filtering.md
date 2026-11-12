@@ -163,7 +163,7 @@ SELECT CASE WHEN octet_length("status") <= 4096 THEN "status" END, octet_length(
 FROM "store"."orders" WHERE (total > 100) GROUP BY "status" ORDER BY count(*) DESC LIMIT 201
 ```
 
-(on MySQL `IF(LENGTH(c) <= 4096, c, NULL)` and `LENGTH(c)`). The list then says
+(on MySQL `IF(OCTET_LENGTH(c) <= 4096, c, NULL)` and `OCTET_LENGTH(c)`). The list then says
 `exact · other conditions applied` (`exact · every row` when there are none) and shows the 200
 commonest values; a value over 4 KiB is listed as `long value (N bytes)` and cannot be ticked.
 When the other conditions change, or the session or the table does, the list says `earlier count`
