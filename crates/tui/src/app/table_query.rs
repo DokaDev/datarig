@@ -625,7 +625,8 @@ impl App {
     }
 
     /// What the app knows of table tab `id`'s table for writing its SQL: the columns of the
-    /// rows it holds of its query (else the catalog's names, of unknown kind), with the
+    /// rows it holds of its query (else those of the key-only read, of their catalogue type's
+    /// kind; else the catalog's names, of unknown kind), with the
     /// explorer's structure when it was read (collations), and the keys of the key-only read on
     /// the tab's metadata session as it is now ([`OrderKeysState`]), with whether each column's
     /// collation is deterministic as that read says (when the structure does not). Until they
@@ -635,14 +636,29 @@ impl App {
         let table = t.doc.table.as_ref()?;
         let d = self.tab_dialect(id);
         let held = t.doc.table_query.as_ref().is_some_and(|q| q.shown.is_some());
-        let mut columns: Vec<ColumnFacts> = match &t.results {
-            Results::Rows(rs) if held => rs
+        // The keys that make an order total: only the key-only read's, for the session as it
+        // is now (rows of tables that inherit from it are read too: its keys do not hold).
+        let on = self.keys_on(t);
+        let read = t.doc.table_query.as_ref().and_then(|q| match &q.order_keys {
+            OrderKeysState::Known { on: o, keys } if Some(o) == on.as_ref() => Some(keys),
+            _ => None,
+        });
+        // No rows held: the columns of that read, of the kind their catalogue type says (as the
+        // filter dialog takes them), so that a value is written for its column as it would be
+        // with rows held; else the explorer's names, of unknown kind.
+        let catalogue = read.and_then(|k| k.columns.as_ref()).filter(|c| !c.is_empty());
+        let mut columns: Vec<ColumnFacts> = match (&t.results, catalogue) {
+            (Results::Rows(rs), _) if held => rs
                 .columns
                 .iter()
                 .map(|c| ColumnFacts {
                     zoned: zoned(d, &c.meta),
                     ..ColumnFacts::new(c.meta.name.clone(), column_kind(&c.meta))
                 })
+                .collect(),
+            (_, Some(cat)) => cat
+                .iter()
+                .map(|c| ColumnFacts::new(c.name.clone(), super::filter_dialog::draft::kind_of_type(d, &c.type_name)))
                 .collect(),
             _ => self
                 .conns
@@ -653,13 +669,6 @@ impl App {
                 .map(|r| r.columns.iter().map(|c| ColumnFacts::new(c.name.clone(), ColumnKind::Other)).collect())
                 .unwrap_or_default(),
         };
-        // The keys that make an order total: only the key-only read's, for the session as it
-        // is now (rows of tables that inherit from it are read too: its keys do not hold).
-        let on = self.keys_on(t);
-        let read = t.doc.table_query.as_ref().and_then(|q| match &q.order_keys {
-            OrderKeysState::Known { on: o, keys } if Some(o) == on.as_ref() => Some(keys),
-            _ => None,
-        });
         // A column `SELECT *` leaves out (MySQL INVISIBLE) is no column of the rows held, but one
         // of the table: of the kind its catalogue type says.
         if held && let Some(cat) = read.and_then(|k| k.columns.as_ref()) {

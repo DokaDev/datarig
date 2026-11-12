@@ -641,6 +641,84 @@ fn mysql_text_typed_on_a_number_column_is_not_written_and_says_why() {
     }
 }
 
+/// With the catalogue read but no rows held (the table's first read cancelled), a value typed
+/// on a MySQL number column is judged by the column's catalogue type as with rows held: text
+/// that is no number is not written and says why, a number in quotes is written as the number,
+/// and no value equals a FLOAT.
+#[test]
+fn values_typed_with_only_the_catalogue_known_are_judged_by_its_types() {
+    use datarig_core::driver::keys::{CatalogColumn, OrderKeys};
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut p = datarig_core::profile::ConnectionConfig::test_db();
+    (p.name, p.driver) = ("local-my".into(), "mysql".into());
+    let cfg = datarig_core::config::Config { connections: vec![p], ..Default::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+    open_users(&mut h);
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MySql(MySqlMode::default()))));
+    h.tab_db(index, DbEvent::Connected);
+    zone(&mut h, "+00:00");
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(index, DbEvent::Failed { id, error: DbError::Cancelled, cancelled: true });
+    let column = |name: &str, ty: &str| CatalogColumn {
+        name: name.into(),
+        type_name: ty.into(),
+        not_null: name == "id",
+        primary_key: name == "id",
+        foreign_key: false,
+        invisible: false,
+    };
+    let keys = OrderKeys {
+        primary_key: vec!["id".into()],
+        columns: Some(vec![column("id", "int"), column("w", "float")]),
+        ..Default::default()
+    };
+    keys_came_with(&mut h, "local-my", keys);
+    h.sent();
+    h.app.focus = datarig_tui::app::Focus::Results;
+    assert!(h.app.tab().doc.table_query.as_ref().unwrap().shown.is_none(), "no rows held");
+    for (column, value, want, why) in [
+        (0, "abc", "", Some("not a number")),
+        (0, "12abc", "", Some("not a number")),
+        (0, "'12'", "id = 12", None),
+        // `=` on a FLOAT is dimmed: the first operator offered is `between`.
+        (1, "1.5", "", Some("between")),
+    ] {
+        // No grid to start from: the dialog opens on the first column.
+        h.keys(" rf");
+        assert!(h.app.overlays.is_open(OverlayKind::FilterDialog), "{:?} {}", h.app.key_context(), h.screen(120, 34));
+        for _ in 0..column {
+            h.key(KeyCode::Char('j'));
+        }
+        typed(&mut h, value);
+        let screen = h.screen(120, 34);
+        assert_eq!(draft(&h), want, "{value}: {screen}");
+        if let Some(why) = why {
+            assert!(screen.contains(why), "{value}: {screen}");
+        }
+        h.key(KeyCode::Esc);
+        h.key(KeyCode::Esc);
+    }
+    // An equality on the FLOAT written in the line is read as the column's condition, which is
+    // not written again: its row says why.
+    h.command("where w = 1.5");
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(index, DbEvent::Failed { id, error: DbError::Cancelled, cancelled: true });
+    h.keys(" rf");
+    h.key(KeyCode::Char('j'));
+    // Its value edited.
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::End);
+    h.type_text("0");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("no exact value"), "{screen}");
+    assert_eq!(draft(&h), "", "{screen}");
+}
+
 /// MySQL compares a number column with a string as two doubles, which a list or a range of wide
 /// values does not meet exactly: numbers typed in quotes in a list or a range of a `DECIMAL` are
 /// written as the numbers, mixed with numbers typed bare.
