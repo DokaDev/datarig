@@ -2,7 +2,8 @@
 //! `▼ status = 'shipped' +1 · total_amount ↓ +1` (the first condition as it is written and how
 //! many more, the first key of the order with its direction and how many more). Narrower, the
 //! condition's text is cut (down to [`CUT_MIN`] columns), then each part is only counted
-//! (`▼ 2 · ↓ 2`), then counted tighter (`▼2 ↓2`): that a filter or an order is on always shows.
+//! (`▼ 2 · ↓ 2`), then counted tighter (`▼2 ↓2`); where even that does not fit, what fits of it
+//! is drawn.
 //! A run of the query on its way puts the spinner first; a run that brought no rows says so in
 //! the warning colour (`▼ failed`). With no condition and no order, nothing. A click on it
 //! opens the filter dialog.
