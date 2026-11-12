@@ -3662,7 +3662,7 @@ impl Conn {
 
     /// [`Conn::count`], with whether it counted in a transaction with one snapshot.
     async fn count_in(&mut self, id: u64, sql: &str) -> (Result<u64, DbError>, bool) {
-        self.session.send(DbCommand::Count { id, sql: sql.to_string() });
+        self.session.send(DbCommand::Count { id, sql: sql.to_string(), limit: None });
         let DbEvent::Counted { id: got, result, snapshot } =
             self.wait(|e| matches!(e, DbEvent::Counted { .. }), 30).await
         else {
@@ -3969,7 +3969,7 @@ async fn a_cancelled_count_answers_once_and_the_portal_pages_on() {
     });
     let DbEvent::Page { more: true, .. } = c.result(1).await else { panic!("a page with more") };
     let slow = count_of("SELECT g FROM generate_series(1, 2000000000) g");
-    c.session.send(DbCommand::Count { id: 1, sql: slow });
+    c.session.send(DbCommand::Count { id: 1, sql: slow, limit: None });
     tokio::time::sleep(Duration::from_millis(300)).await;
     c.session.cancel();
     let DbEvent::Counted { result, .. } = c.wait(|e| matches!(e, DbEvent::Counted { .. }), 20).await else {
@@ -5249,8 +5249,8 @@ async fn a_cancel_not_sent_answers_a_fetch_a_count_and_a_check_once() {
     let rows = "SELECT g FROM generate_series(1, 1200) g";
     let cases: [(&str, bool, DbCommand); 5] = [
         ("fetch", true, DbCommand::FetchMore { id: 1 }),
-        ("count", false, DbCommand::Count { id: 2, sql: rows.into() }),
-        ("countin", true, DbCommand::Count { id: 2, sql: rows.into() }),
+        ("count", false, DbCommand::Count { id: 2, sql: rows.into(), limit: None }),
+        ("countin", true, DbCommand::Count { id: 2, sql: rows.into(), limit: None }),
         ("check", false, DbCommand::CheckRepeat { id: 2, sql: rows.into() }),
         ("checkin", true, DbCommand::CheckRepeat { id: 2, sql: rows.into() }),
     ];
@@ -6767,12 +6767,12 @@ async fn a_count_asked_again_after_a_cancel_is_not_cancelled() {
     let (_schema_guard, _terminate, schema, _tag) = scratch(&url, "cancelc");
     let sql = format!("SELECT count(*) FROM {schema}.t");
     let mut c = connecting(&url);
-    c.session.send(DbCommand::Count { id: 7, sql: sql.clone() });
+    c.session.send(DbCommand::Count { id: 7, sql: sql.clone(), limit: None });
     c.session.cancel();
     let counted = |e: &DbEvent| matches!(e, DbEvent::Counted { id: 7, .. });
     let ev = c.wait(counted, 10).await;
     assert!(matches!(ev, DbEvent::Counted { result: Err(DbError::Cancelled), .. }), "{ev:?}");
-    c.session.send(DbCommand::Count { id: 7, sql });
+    c.session.send(DbCommand::Count { id: 7, sql, limit: None });
     let ev = c.wait(counted, 10).await;
     assert!(matches!(ev, DbEvent::Counted { result: Ok(0), .. }), "{ev:?}");
 }
@@ -6807,4 +6807,1212 @@ async fn a_cancel_delayed_past_its_run_does_not_stop_the_next_run() {
     assert!(matches!(q.result(1).await, DbEvent::Page { .. }), "the run ended before its cancel left");
     let ev = q.run(2, "SELECT pg_sleep(2)").await;
     assert!(matches!(ev, DbEvent::Page { .. }), "the next run is not stopped: {ev:?}");
+}
+
+// ── a count with a time limit, and the planner's estimate ─────────────────
+
+impl Conn {
+    /// Send `Count` with `limit` for result `id`: its answer, and how long it took.
+    async fn count_within(&mut self, id: u64, sql: &str, limit: Option<Duration>) -> (Result<u64, DbError>, Duration) {
+        let t0 = Instant::now();
+        self.session.send(DbCommand::Count { id, sql: sql.to_string(), limit });
+        let DbEvent::Counted { result, .. } = self.wait(|e| matches!(e, DbEvent::Counted { .. }), 30).await else {
+            unreachable!()
+        };
+        (result, t0.elapsed())
+    }
+
+    /// Send `Estimate` of `sql`: its answer, and how long it took.
+    async fn estimate(&mut self, id: u64, sql: &str) -> (Result<u64, DbError>, Duration) {
+        let t0 = Instant::now();
+        self.session.send(DbCommand::Estimate { id, sql: sql.to_string() });
+        let DbEvent::Estimated { result, .. } = self.wait(|e| matches!(e, DbEvent::Estimated { .. }), 30).await else {
+            unreachable!()
+        };
+        (result, t0.elapsed())
+    }
+
+    /// The first value of the first row `sql` answers.
+    async fn first_value(&mut self, id: u64, sql: &str) -> Option<String> {
+        match self.run(id, sql).await {
+            DbEvent::Page { rows, .. } => rows.first().and_then(|r| r[0].clone()),
+            other => panic!("{sql}: {other:?}"),
+        }
+    }
+}
+
+/// A count with a time limit, behind an `ACCESS EXCLUSIVE` lock another session holds: the
+/// server stops it at the limit (`TimedOut`, told from a cancel), or it gives up waiting for the
+/// lock after 2 s (`LockTimeout`) when the limit is longer; the user's cancel is `Cancelled`; a
+/// shorter limit of the session's own is kept; the connection lost is the usual error. None of
+/// them is a number, and the session's settings are as before each.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_count_is_told_apart_when_stopped_cancelled_or_lost() {
+    let Some(url) = pg_url("a_bounded_count_is_told_apart_when_stopped_cancelled_or_lost") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_bounded_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let tag = format!("bounded{pid}");
+    let (mut q, mut b) = tagged(&url, &tag).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 2000) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let rows = format!("SELECT * FROM {table} WHERE (id > 100)");
+    let counted = count_of(&rows);
+    let limit = Some(Duration::from_secs(30));
+    let settings = "SELECT current_setting('statement_timeout') || ' ' || current_setting('lock_timeout')";
+    let before = q.first_value(1, settings).await;
+    assert_eq!(q.count_within(2, &counted, limit).await.0, Ok(1900));
+    assert_eq!(q.first_value(3, settings).await, before, "nothing stays on the session");
+    // Held by another session.
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    let (got, took) = q.count_within(4, &counted, Some(Duration::from_secs(1))).await;
+    assert_eq!(got, Err(DbError::TimedOut(Duration::from_secs(1))), "{took:?}");
+    assert!(took < Duration::from_millis(1900), "stopped at the limit, before the lock wait's: {took:?}");
+    let (got, took) = q.count_within(5, &counted, limit).await;
+    assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
+    assert!(took >= Duration::from_secs(2) && took < Duration::from_secs(10), "{took:?}");
+    assert_eq!(q.first_value(6, settings).await, before);
+    // The user's cancel while it waits.
+    q.session.send(DbCommand::Count { id: 7, sql: counted.clone(), limit });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    q.session.cancel();
+    let DbEvent::Counted { result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 20).await else {
+        unreachable!()
+    };
+    assert_eq!(result, Err(DbError::Cancelled));
+    // A shorter limit the session has stays the limit (and is the one said).
+    assert!(matches!(q.run(8, "SET statement_timeout = '700ms'").await, DbEvent::Done { .. }));
+    let (got, _) = q.count_within(9, &counted, limit).await;
+    assert_eq!(got, Err(DbError::TimedOut(Duration::from_millis(700))));
+    assert_eq!(q.first_value(10, "SELECT current_setting('statement_timeout')").await.as_deref(), Some("700ms"));
+    assert!(matches!(q.run(11, "RESET statement_timeout").await, DbEvent::Done { .. }));
+    // Inside the user's block: no limit of the count's own, the block's settings unchanged.
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+    assert!(matches!(q.run(12, "BEGIN").await, DbEvent::Done { .. }));
+    assert_eq!(q.count_within(13, &counted, limit).await.0, Ok(1900));
+    assert_eq!(q.first_value(14, settings).await, before, "the block's own settings");
+    assert!(matches!(q.run(15, "ROLLBACK").await, DbEvent::Done { .. }));
+    // The connection lost while it waits: the usual error, never a number.
+    assert!(matches!(b.run(5, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(6, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    q.session.send(DbCommand::Count { id: 16, sql: counted.clone(), limit });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let kill =
+        format!("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'datarig-q-{tag}'");
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    let DbEvent::Page { .. } = c.run(1, &kill).await else { panic!("terminate") };
+    let mut seen = Vec::new();
+    while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(5), q.rx.recv()).await {
+        let lost = matches!(ev, DbEvent::Lost { .. });
+        seen.push(ev);
+        if lost {
+            break;
+        }
+    }
+    assert!(seen.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{seen:?}");
+    assert!(
+        !seen.iter().any(|e| matches!(
+            e,
+            DbEvent::Counted { result: Ok(_) | Err(DbError::TimedOut(_) | DbError::Cancelled), .. }
+        )),
+        "{seen:?}"
+    );
+    assert!(matches!(b.run(7, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
+/// The planner's estimate takes no lock but the `AccessShareLock` of planning, and only while it
+/// plans: it is answered while another session holds `EXCLUSIVE` (which conflicts with every
+/// other lock), waits for `ACCESS EXCLUSIVE` asking for nothing more (`pg_locks`) and gives up
+/// after 2 s, holding nothing after. Not asked inside a transaction block.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_estimate_takes_no_lock_beyond_access_share() {
+    let Some(url) = pg_url("an_estimate_takes_no_lock_beyond_access_share") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_estimate_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let tag = format!("estimate{pid}");
+    let (mut q, mut b) = tagged(&url, &tag).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 5000) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(1, &format!("ANALYZE {table}")).await, DbEvent::Done { .. }));
+    let rows = format!("SELECT * FROM {table} WHERE (id > 1000)");
+    let settings = "SELECT current_setting('statement_timeout') || ' ' || current_setting('lock_timeout')";
+    let before = q.first_value(1, settings).await;
+    let (est, _) = q.estimate(2, &rows).await;
+    let est = est.expect("an estimate");
+    assert!((2_000..=6_000).contains(&est), "{est}");
+    let capped = format!("{rows} LIMIT 10");
+    assert_eq!(q.estimate(3, &capped).await.0, Ok(10), "the cap is the planner's too");
+    assert_eq!(q.first_value(4, settings).await, before, "nothing stays on the session");
+    // EXCLUSIVE conflicts with every lock but ACCESS SHARE.
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    assert!(q.estimate(5, &rows).await.0.is_ok(), "asked for nothing stronger than ACCESS SHARE");
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+    // ACCESS EXCLUSIVE: it waits, asking for ACCESS SHARE only, then gives up.
+    assert!(matches!(b.run(5, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(6, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    let t0 = Instant::now();
+    q.session.send(DbCommand::Estimate { id: 6, sql: rows.clone() });
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    let locks = format!(
+        "SELECT string_agg(l.mode || ':' || l.granted, ',' ORDER BY l.mode) FROM pg_locks l JOIN pg_stat_activity a \
+         ON a.pid = l.pid WHERE a.application_name = 'datarig-q-{tag}' AND l.relation = '{table}'::regclass"
+    );
+    let mut seen = None;
+    for i in 0..50 {
+        seen = c.first_value(10 + i, &locks).await;
+        if seen.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(seen.as_deref(), Some("AccessShareLock:false"));
+    let DbEvent::Estimated { result, .. } = q.wait(|e| matches!(e, DbEvent::Estimated { .. }), 20).await else {
+        unreachable!()
+    };
+    assert!(matches!(result, Err(DbError::LockTimeout(_))), "{result:?}");
+    assert!(t0.elapsed() < Duration::from_secs(10));
+    assert_eq!(c.first_value(100, &locks).await, None, "nothing held after");
+    assert!(matches!(b.run(7, "ROLLBACK").await, DbEvent::Done { .. }));
+    // Inside a transaction block: not asked.
+    assert!(matches!(q.run(7, "BEGIN").await, DbEvent::Done { .. }));
+    assert_eq!(q.estimate(8, &rows).await.0, Err(DbError::NotSupported));
+    assert!(matches!(q.run(9, "ROLLBACK").await, DbEvent::Done { .. }));
+    assert_eq!(q.first_value(10, settings).await, before);
+}
+
+/// The limits of a bounded count and of an estimate are set by the app's own statement, which
+/// names every function it calls in `pg_catalog` and takes no operator or cast whose meaning the
+/// search path could change: with a schema first on the path that has operators of the same
+/// names and argument types as the built-in ones (each fails when it runs), both are answered,
+/// and the session's settings are as before. So does the question whether a block is open, which
+/// a bounded read asks first when that is not known.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_read_runs_nothing_the_search_path_can_shadow() {
+    let Some(url) = pg_url("a_bounded_read_runs_nothing_the_search_path_can_shadow") else { return };
+    let pid = std::process::id();
+    let schema = format!("zz_shadow_{pid}");
+    let _schema = SchemaGuard::new(&url, &schema);
+    let table = format!("public.zz_shadowt_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let fails = |name: &str, args: &str| {
+        format!(
+            "CREATE FUNCTION {schema}.{name}({args}) RETURNS boolean LANGUAGE plpgsql AS \
+             $$BEGIN RAISE EXCEPTION 'zz_ shadow {name} ran'; END$$"
+        )
+    };
+    let operator = |op: &str, function: &str, ty: &str| {
+        format!("CREATE OPERATOR {schema}.{op} (LEFTARG = {ty}, RIGHTARG = {ty}, FUNCTION = {schema}.{function})")
+    };
+    for sql in [
+        format!("CREATE SCHEMA {schema}"),
+        format!("CREATE TABLE {table} AS SELECT g::bigint AS id FROM generate_series(1, 50) g"),
+        fails("zz_int", "bigint, bigint"),
+        fails("zz_text", "text, text"),
+        fails("zz_time", "timestamptz, timestamptz"),
+        operator("<>", "zz_time", "timestamptz"),
+        operator("<", "zz_int", "bigint"),
+        operator(">", "zz_int", "bigint"),
+        operator("=", "zz_int", "bigint"),
+        operator("=", "zz_text", "text"),
+        format!(
+            "CREATE FUNCTION {schema}.set_config(text, text, boolean) RETURNS text LANGUAGE plpgsql AS \
+             $$BEGIN RAISE EXCEPTION 'zz_ shadow set_config ran'; END$$"
+        ),
+    ] {
+        assert!(matches!(b.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let settings = "SELECT current_setting('statement_timeout') || ' ' || current_setting('lock_timeout')";
+    let before = q.first_value(1, settings).await;
+    let path = format!("SET search_path = {schema}, pg_catalog, public");
+    assert!(matches!(q.run(2, &path).await, DbEvent::Done { .. }));
+    // The path is the session's: its operators are the ones a statement of the user's gets. The
+    // question after that failure gets no answer, so the session does not know whether a block
+    // is open, and the count must ask again.
+    proxy.fault_start("SELECT pg_catalog.now()", pg_proxy::Fault::Instead("SELECT 1/0".into()));
+    let shadowed = q.run(3, "SELECT 1::bigint < 2::bigint").await;
+    assert!(
+        matches!(&shadowed, DbEvent::Failed { error, .. } if format!("{error:?}").contains("zz_ shadow zz_int ran")),
+        "{shadowed:?}"
+    );
+    // Asked after the run's answer went out.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while proxy.fault_pending() {
+        assert!(Instant::now() < deadline, "the question after the failure never came");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let counted = count_of(&format!("SELECT * FROM {table} WHERE (id IS NOT NULL)"));
+    let limit = Some(Duration::from_secs(30));
+    assert_eq!(q.count_within(4, &counted, limit).await.0, Ok(50));
+    let bounded = |s: &pg_proxy::Sent| matches!(s, pg_proxy::Sent::Query(t) if t.starts_with("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SELECT s.name"));
+    assert!(proxy.sent().iter().any(bounded), "the question was answered: the count ran within its limits");
+    let rows = format!("SELECT * FROM {table} WHERE (id IS NOT NULL) LIMIT 10");
+    assert_eq!(q.estimate(5, &rows).await.0, Ok(10));
+    assert!(matches!(q.run(6, "RESET search_path").await, DbEvent::Done { .. }));
+    assert_eq!(q.first_value(7, settings).await, before, "nothing stays on the session");
+}
+
+/// A bounded count or an estimate is answered only when its transaction ended: a `COMMIT` the
+/// server refuses (as one a cancel stops before it runs, which leaves the transaction open and
+/// aborted) makes it a failure, and the session is out of that transaction after it (the next
+/// statement runs, with the session's own settings); a connection lost before the `COMMIT` is
+/// answered is never a number either.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_read_whose_commit_fails_is_no_answer() {
+    let Some(url) = pg_url("a_bounded_read_whose_commit_fails_is_no_answer") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_commitf_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let rows = format!("SELECT * FROM {table} WHERE (id > 10)");
+    let counted = count_of(&rows);
+    let limit = Some(Duration::from_secs(30));
+    let settings = "SELECT current_setting('statement_timeout') || ' ' || current_setting('lock_timeout')";
+    let before = q.first_value(1, settings).await;
+    assert_eq!(q.count_within(2, &counted, limit).await.0, Ok(40));
+    // Answered once what the session sent before is done (the `COMMIT` that ends a statement's
+    // transaction of its own too): a count without a limit sends none of its own.
+    let settled = async |q: &mut Conn, id| assert_eq!(q.count_within(id, &counted, None).await.0, Ok(40));
+    let refused = || pg_proxy::Fault::Instead("SELECT 1/0".into());
+    proxy.fault("COMMIT", refused());
+    let (got, _) = q.count_within(3, &counted, limit).await;
+    assert!(!proxy.fault_pending(), "the count's COMMIT met the fault");
+    assert!(matches!(got, Err(DbError::Server(_))), "{got:?}");
+    assert_eq!(q.first_value(4, settings).await, before, "out of the count's transaction");
+    settled(&mut q, 40).await;
+    proxy.fault("COMMIT", refused());
+    let (got, _) = q.estimate(5, &rows).await;
+    assert!(!proxy.fault_pending(), "the estimate's COMMIT met the fault");
+    assert!(matches!(got, Err(DbError::Server(_))), "{got:?}");
+    assert_eq!(q.first_value(6, settings).await, before, "out of the estimate's transaction");
+    settled(&mut q, 60).await;
+    // The connection closed where the COMMIT was to go.
+    proxy.fault("COMMIT", pg_proxy::Fault::Close);
+    q.session.send(DbCommand::Count { id: 7, sql: counted.clone(), limit });
+    let mut seen = Vec::new();
+    while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), q.rx.recv()).await {
+        let lost = matches!(ev, DbEvent::Lost { .. });
+        seen.push(ev);
+        if lost {
+            break;
+        }
+    }
+    assert!(seen.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{seen:?}");
+    assert!(!seen.iter().any(|e| matches!(e, DbEvent::Counted { result: Ok(_), .. })), "{seen:?}");
+}
+
+/// A bounded read goes out only once the query with the `BEGIN … READ ONLY` and the limits it needs
+/// said they took effect: with the `BEGIN` failing where it stands (as one a cancel stops before
+/// it runs), nothing more is sent. A read that ran anyway would wait for the lock held here, with
+/// no limit at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_read_whose_begin_fails_never_runs() {
+    let Some(url) = pg_url("a_bounded_read_whose_begin_fails_never_runs") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_beginf_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let rows = format!("SELECT * FROM {table} WHERE (id > 10)");
+    let counted = count_of(&rows);
+    let limit = Some(Duration::from_secs(30));
+    let settings = "SELECT current_setting('statement_timeout') || ' ' || current_setting('lock_timeout')";
+    let before = q.first_value(1, settings).await;
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    let failing = || pg_proxy::Fault::Head("SELECT 1/0".into());
+    proxy.fault_start("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY", failing());
+    q.session.send(DbCommand::Count { id: 2, sql: counted.clone(), limit });
+    let DbEvent::Counted { result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 5).await else {
+        unreachable!()
+    };
+    assert!(!proxy.fault_pending(), "the count's BEGIN met the fault");
+    assert!(matches!(&result, Err(DbError::Server(m)) if m.text.contains("division by zero")), "{result:?}");
+    assert_eq!(q.first_value(3, settings).await, before, "the session is as it was");
+    proxy.fault_start("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY", failing());
+    q.session.send(DbCommand::Estimate { id: 4, sql: rows.clone() });
+    let DbEvent::Estimated { result, .. } = q.wait(|e| matches!(e, DbEvent::Estimated { .. }), 5).await else {
+        unreachable!()
+    };
+    assert!(!proxy.fault_pending(), "the estimate's BEGIN met the fault");
+    assert!(matches!(&result, Err(DbError::Server(m)) if m.text.contains("division by zero")), "{result:?}");
+    assert_eq!(q.first_value(5, settings).await, before, "the session is as it was");
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+    assert_eq!(q.count_within(6, &counted, limit).await.0, Ok(40));
+}
+
+/// The app's bounded reads (a count with its limit, an estimate) set their isolation level:
+/// under a `SERIALIZABLE` default, while another session's serializable transaction that wrote
+/// is open, they take no predicate lock (`SIReadLock`, kept past their end while that one is
+/// open) that other sessions' serializable transactions could fail on. A statement of the
+/// user's at that default takes one, as the server's rules say.
+#[tokio::test(flavor = "multi_thread")]
+async fn bounded_reads_take_no_predicate_lock_under_a_serializable_default() {
+    let Some(url) = pg_url("bounded_reads_take_no_predicate_lock_under_a_serializable_default") else { return };
+    let pid = std::process::id();
+    let (table, other) = (format!("public.zz_siread_{pid}"), format!("public.zz_sireadw_{pid}"));
+    let (_guard, _other) = (TableGuard(url.clone(), table.clone()), TableGuard(url.clone(), other.clone()));
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 100) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(2, &format!("CREATE TABLE {other} (id int)")).await, DbEvent::Done { .. }));
+    let mut q = Conn::open(&serializable_url(&url, false), SessionRole::Query).await;
+    let default = q.first_value(1, "SELECT current_setting('default_transaction_isolation')").await;
+    assert_eq!(default.as_deref(), Some("serializable"));
+    let backend = q.first_value(2, "SELECT pg_backend_pid()::text").await.unwrap();
+    let mut writer = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(writer.run(1, "BEGIN ISOLATION LEVEL SERIALIZABLE").await, DbEvent::Done { .. }));
+    assert!(matches!(writer.run(2, &format!("INSERT INTO {other} VALUES (1)")).await, DbEvent::Done { .. }));
+    let rows = format!("SELECT * FROM {table} WHERE (id > 10)");
+    assert_eq!(q.count_within(3, &count_of(&rows), Some(Duration::from_secs(30))).await.0, Ok(90));
+    q.session.send(DbCommand::Estimate { id: 4, sql: rows.clone() });
+    let DbEvent::Estimated { result, .. } = q.wait(|e| matches!(e, DbEvent::Estimated { .. }), 10).await else {
+        unreachable!()
+    };
+    assert!(result.is_ok(), "{result:?}");
+    let locks = format!("SELECT count(*)::text FROM pg_locks WHERE pid = {backend} AND mode = 'SIReadLock'");
+    assert_eq!(b.first_value(3, &locks).await.as_deref(), Some("0"), "the app's reads");
+    // The measure holds: the user's own statement there takes one.
+    assert!(matches!(q.run(5, &rows).await, DbEvent::Page { .. }));
+    assert_ne!(b.first_value(4, &locks).await.as_deref(), Some("0"), "the user's statement");
+    assert!(matches!(writer.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
+/// The user's cancel is for the last run sent, and never for one sent after it: asked before a
+/// bounded count was sent, the count is not cancelled (it runs to its limit, `TimedOut`); asked
+/// while the count waits behind a run, the count is cancelled (`Cancelled`, at once when its
+/// turn comes), never left to run to its limit and called stopped there.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_is_for_the_last_run_sent_before_it() {
+    let Some(url) = pg_url("a_cancel_is_for_the_last_run_sent_before_it") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_cancelfor_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let tag = format!("cancelfor{pid}");
+    let (mut q, mut b) = tagged(&url, &tag).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let counted = count_of(&format!("SELECT * FROM {table} WHERE (id > 10)"));
+    let limit = Some(Duration::from_secs(1));
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    // Asked before the count was sent: an earlier command's.
+    q.session.cancel();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (got, took) = q.count_within(1, &counted, limit).await;
+    assert_eq!(got, Err(DbError::TimedOut(Duration::from_secs(1))), "{took:?}");
+    // Asked while the count waits behind a run of the user's: the count's, not the run's.
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 2,
+        statements: vec!["SELECT pg_sleep(1)".into()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    q.session.send(DbCommand::Count { id: 3, sql: counted.clone(), limit });
+    let mut side = Conn::open(&url, SessionRole::Query).await;
+    started(&mut side, &tag).await;
+    q.session.cancel();
+    let ran = q.result(2).await;
+    assert!(!matches!(ran, DbEvent::Failed { .. }), "the run before it goes on: {ran:?}");
+    let t0 = Instant::now();
+    let DbEvent::Counted { id, result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 20).await else {
+        unreachable!()
+    };
+    assert_eq!((id, result), (3, Err(DbError::Cancelled)));
+    assert!(t0.elapsed() < Duration::from_secs(1), "cancelled at once: {:?}", t0.elapsed());
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+    // A command sent after the cancel is not cancelled by it.
+    assert_eq!(q.count_within(5, &counted, limit).await.0, Ok(40));
+}
+
+/// A count taken while a portal is open is cancelled like any other run. A cancel is for the last
+/// one sent: asked while a count runs and another waits behind it, the one waiting does not
+/// start and the one running goes on; asked for the one running, it stops. The portal goes on
+/// paging after either.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_of_a_count_in_a_held_portal_is_for_the_last_one_sent() {
+    let Some(url) = pg_url("a_cancel_of_a_count_in_a_held_portal_is_for_the_last_one_sent") else { return };
+    let pid = std::process::id();
+    let (paged, locked) = (format!("public.zz_cancelp_{pid}"), format!("public.zz_cancell_{pid}"));
+    // A count keeps its read lock until the portal's transaction ends: the second lock is on another table.
+    let again = format!("public.zz_cancela_{pid}");
+    let _guards = (
+        TableGuard(url.clone(), paged.clone()),
+        TableGuard(url.clone(), locked.clone()),
+        TableGuard(url.clone(), again.clone()),
+    );
+    let tag = format!("cancelp{pid}");
+    let (mut q, mut b) = tagged(&url, &tag).await;
+    for sql in [
+        format!("CREATE TABLE {paged} AS SELECT g AS id FROM generate_series(1, 5000) g"),
+        format!("CREATE TABLE {locked} AS SELECT g AS id FROM generate_series(1, 50) g"),
+        format!("CREATE TABLE {again} AS SELECT g AS id FROM generate_series(1, 50) g"),
+    ] {
+        assert!(matches!(b.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let page = q.run(1, &format!("SELECT * FROM {paged} ORDER BY id")).await;
+    assert!(matches!(page, DbEvent::Page { more: true, .. }), "{page:?}");
+    let lock = |table: &str| format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE");
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &lock(&locked)).await, DbEvent::Done { .. }));
+    // Outside a transaction, whose view of the server's activity would stay as first read.
+    let mut side = Conn::open(&url, SessionRole::Query).await;
+    let counted = count_of(&format!("SELECT * FROM {locked} WHERE (id > 10)"));
+    q.session.send(DbCommand::Count { id: 2, sql: counted.clone(), limit: None });
+    q.session.send(DbCommand::Count { id: 3, sql: counted.clone(), limit: None });
+    started(&mut side, &tag).await;
+    q.session.cancel();
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+    for (want, answer) in [(2, Ok(40)), (3, Err(DbError::Cancelled))] {
+        let DbEvent::Counted { id, result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 5).await else {
+            unreachable!()
+        };
+        assert_eq!((id, result), (want, answer));
+    }
+    assert!(matches!(b.run(5, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(6, &lock(&again)).await, DbEvent::Done { .. }));
+    // An estimate refused here is a run all the same: the cancel below finds the count after it.
+    let rows = format!("SELECT * FROM {again} WHERE (id > 10)");
+    assert_eq!(q.estimate(9, &rows).await.0, Err(DbError::NotSupported));
+    q.session.send(DbCommand::Count { id: 4, sql: count_of(&rows), limit: None });
+    started(&mut side, &tag).await;
+    q.session.cancel();
+    let DbEvent::Counted { id, result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 5).await else {
+        unreachable!()
+    };
+    assert_eq!((id, result), (4, Err(DbError::Cancelled)));
+    assert!(matches!(b.run(7, "ROLLBACK").await, DbEvent::Done { .. }));
+    q.session.send(DbCommand::FetchMore { id: 1 });
+    let more = q.result(1).await;
+    assert!(matches!(&more, DbEvent::Page { rows, .. } if !rows.is_empty()), "{more:?}");
+    assert_eq!(q.count_within(5, &counted, None).await.0, Ok(40));
+}
+
+/// A statement stopped by something other than the user's cancel and before its limit (another
+/// session's `pg_cancel_backend`) is what the server says it is, not called a cancel of the
+/// user's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_read_stopped_by_someone_else_is_no_cancel_of_the_users() {
+    let Some(url) = pg_url("a_bounded_read_stopped_by_someone_else_is_no_cancel_of_the_users") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_stopped_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let tag = format!("stopped{pid}");
+    let (mut q, mut b) = tagged(&url, &tag).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let backend = q.first_value(1, "SELECT pg_backend_pid()").await.unwrap();
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    let counted = count_of(&format!("SELECT * FROM {table} WHERE (id > 10)"));
+    q.session.send(DbCommand::Count { id: 2, sql: counted, limit: Some(Duration::from_secs(30)) });
+    let mut side = Conn::open(&url, SessionRole::Query).await;
+    started(&mut side, &tag).await;
+    assert!(matches!(side.run(1, &format!("SELECT pg_cancel_backend({backend})")).await, DbEvent::Page { .. }));
+    let DbEvent::Counted { result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 10).await else {
+        unreachable!()
+    };
+    assert!(matches!(&result, Err(DbError::Server(_))), "{result:?}");
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
+/// The server's time limit stopping a statement is not the user's cancel, wherever it strikes:
+/// on the allowlist's question, on the setup of a bounded read (whose own limit is not in force
+/// yet, so it is not said to be), or on a count without a limit. A cancel asked after the read
+/// was stopped at its limit, while its `COMMIT` is still on its way, changes nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_time_limit_is_no_cancel_of_the_users() {
+    let Some(url) = pg_url("a_server_time_limit_is_no_cancel_of_the_users") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_nocancel_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let rows = format!("SELECT * FROM {table} WHERE (id > 10)");
+    let counted = count_of(&rows);
+    let timed_out =
+        |got: &Result<u64, DbError>| matches!(got, Err(DbError::Server(m)) if m.text.contains("statement timeout"));
+    assert!(matches!(q.run(1, "SET statement_timeout = '300ms'").await, DbEvent::Done { .. }));
+    // Answered once what the session sent before is done, as in the tests of a failed `COMMIT`.
+    assert_eq!(q.count_within(2, &counted, None).await.0, Ok(40));
+    let sleep = "SELECT pg_sleep(5)";
+    let question = "WITH RECURSIVE named";
+
+    proxy.fault_start(question, pg_proxy::Fault::Instead(sleep.into()));
+    let (got, _) = q.count_within(3, &counted, None).await;
+    assert!(!proxy.fault_pending());
+    assert!(timed_out(&got), "the count's question: {got:?}");
+    proxy.fault_start("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY", pg_proxy::Fault::Head(sleep.into()));
+    let (got, _) = q.estimate(4, &rows).await;
+    assert!(!proxy.fault_pending());
+    assert!(timed_out(&got), "the estimate's setup: {got:?}");
+
+    // The session's limit stops the setup, past the limit the count asked for.
+    proxy.fault_start("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY", pg_proxy::Fault::Head(sleep.into()));
+    let (got, _) = q.count_within(5, &counted, Some(Duration::from_millis(100))).await;
+    assert!(!proxy.fault_pending());
+    assert!(timed_out(&got), "the setup: {got:?}");
+
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    let (got, _) = q.count_within(6, &counted, None).await;
+    assert!(timed_out(&got), "a count without a limit: {got:?}");
+
+    // Stopped at its limit; the cancel comes while the `COMMIT` is held back.
+    proxy.fault("COMMIT", pg_proxy::Fault::Delay(Duration::from_millis(900)));
+    q.session.send(DbCommand::Count { id: 7, sql: counted.clone(), limit: Some(Duration::from_millis(200)) });
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(!proxy.fault_pending(), "the COMMIT is on its way");
+    q.session.cancel();
+    let DbEvent::Counted { result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 10).await else {
+        unreachable!()
+    };
+    assert_eq!(result, Err(DbError::TimedOut(Duration::from_millis(200))));
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
+/// A bounded read is a query of its own, sent after the answer to the one that set its limits: on
+/// a server before PostgreSQL 13 a statement in the same query keeps the timer begun under the
+/// session's longer limit, so the limit asked for would not apply to it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_read_is_a_query_of_its_own() {
+    let Some(url) = pg_url("a_bounded_read_is_a_query_of_its_own") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_ownq_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let rows = format!("SELECT * FROM {table} WHERE (id > 10)");
+    let counted = count_of(&rows);
+    assert_eq!(q.count_within(1, &counted, Some(Duration::from_secs(30))).await.0, Ok(40));
+    assert!(q.estimate(2, &rows).await.0.is_ok());
+    let texts: Vec<String> = proxy
+        .sent()
+        .into_iter()
+        .filter_map(|s| match s {
+            pg_proxy::Sent::Query(t) => Some(t),
+            pg_proxy::Sent::Parse(_) => None,
+        })
+        .collect();
+    let setups: Vec<usize> = texts
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.starts_with("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SELECT s.name"))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(setups.len(), 2, "{texts:?}");
+    assert_eq!(texts[setups[0] + 1], counted, "{texts:?}");
+    assert_eq!(texts[setups[0] + 2], "COMMIT", "{texts:?}");
+    assert!(texts[setups[1] + 1].starts_with("EXPLAIN"), "{texts:?}");
+    assert_eq!(texts[setups[1] + 2], "COMMIT", "{texts:?}");
+}
+
+/// A bounded read's own transaction never stays open: when its `COMMIT` and the `ROLLBACK` after
+/// it both fail, the `ROLLBACK` goes out again and the session is idle after it; when that fails
+/// too the session is lost, never kept in a transaction the user did not open. Neither is a
+/// number.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_read_never_leaves_its_transaction_open() {
+    let Some(url) = pg_url("a_bounded_read_never_leaves_its_transaction_open") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_ownend_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let rows = format!("SELECT * FROM {table} WHERE (id > 10)");
+    let counted = count_of(&rows);
+    let limit = Some(Duration::from_secs(30));
+    let refused = || pg_proxy::Fault::Instead("SELECT 1/0".into());
+    // Once for the count, once for the estimate: the session goes on, out of the transaction.
+    proxy.fault("COMMIT", refused());
+    proxy.fault("ROLLBACK", refused());
+    let (got, _) = q.count_within(1, &counted, limit).await;
+    assert!(!proxy.fault_pending(), "the COMMIT and the ROLLBACK met their faults");
+    assert!(matches!(got, Err(DbError::Server(_))), "{got:?}");
+    assert_eq!(q.first_value(2, "SELECT 'idle'").await.as_deref(), Some("idle"));
+    // Answered once the `COMMIT` that ends that statement's transaction is done too.
+    assert_eq!(q.count_within(20, &counted, None).await.0, Ok(40));
+    proxy.fault("COMMIT", refused());
+    proxy.fault("ROLLBACK", refused());
+    let (got, _) = q.estimate(3, &rows).await;
+    assert!(!proxy.fault_pending(), "the COMMIT and the ROLLBACK met their faults");
+    assert!(matches!(got, Err(DbError::Server(_))), "{got:?}");
+    assert_eq!(q.first_value(4, "SELECT 'idle'").await.as_deref(), Some("idle"));
+    assert_eq!(q.count_within(40, &counted, None).await.0, Ok(40));
+    // Neither `ROLLBACK` goes through: the session is lost.
+    proxy.fault("COMMIT", refused());
+    proxy.fault("ROLLBACK", refused());
+    proxy.fault("ROLLBACK", refused());
+    q.session.send(DbCommand::Count { id: 5, sql: counted.clone(), limit });
+    let mut seen = Vec::new();
+    while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), q.rx.recv()).await {
+        let lost = matches!(ev, DbEvent::Lost { .. });
+        seen.push(ev);
+        if lost {
+            break;
+        }
+    }
+    assert!(seen.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{seen:?}");
+    assert!(!seen.iter().any(|e| matches!(e, DbEvent::Counted { result: Ok(_), .. })), "{seen:?}");
+}
+
+/// A count that cannot learn whether a transaction is open is refused, never run without the
+/// limit it asked for: a count that ran here would wait for the lock held below with no limit.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bounded_count_is_refused_when_the_transaction_state_is_unknown() {
+    let Some(url) = pg_url("a_bounded_count_is_refused_when_the_transaction_state_is_unknown") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_unsure_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    let question = "SELECT pg_catalog.now()";
+    let refused = || pg_proxy::Fault::Instead("SELECT 1/0".into());
+    proxy.fault_start(question, refused());
+    assert!(matches!(q.run(1, "SELECT 1/0").await, DbEvent::Failed { .. }));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while proxy.fault_pending() {
+        assert!(Instant::now() < deadline, "the question after the failure never came");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    proxy.fault_start(question, refused());
+    let counted = count_of(&format!("SELECT * FROM {table} WHERE (id > 10)"));
+    let (got, _) = q.count_within(2, &counted, Some(Duration::from_secs(30))).await;
+    assert!(!proxy.fault_pending(), "the count asked again");
+    assert_eq!(got, Err(DbError::NotRepeatable(datarig_core::sql::risk::repeat::NotRepeatable::TxUnknown)));
+    let ran = |s: &pg_proxy::Sent| matches!(s, pg_proxy::Sent::Query(t) if t.contains(&counted));
+    assert!(!proxy.sent().iter().any(ran), "the count was not sent");
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
+/// What stopped a bounded read is told by what the server said, not by when the answer arrived:
+/// a time limit whose answer is held back while the user cancels is still the time limit, and
+/// another session's cancel whose answer arrives after the limit passed is the server's words.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_late_answer_does_not_change_what_stopped_a_bounded_read() {
+    let Some(url) = pg_url("a_late_answer_does_not_change_what_stopped_a_bounded_read") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_lateans_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let backend = q.first_value(1, "SELECT pg_backend_pid()").await.unwrap();
+    let counted = count_of(&format!("SELECT * FROM {table} WHERE (id > 10)"));
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    async fn answer_held(proxy: &pg_proxy::Proxy) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !proxy.answer_held() {
+            assert!(Instant::now() < deadline, "the server never answered the read");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+
+    // Stopped at its limit, its answer held from when the read went out; the user cancels once
+    // the server has answered.
+    let limit = Duration::from_millis(300);
+    proxy.fault(&counted, pg_proxy::Fault::Hold);
+    q.session.send(DbCommand::Count { id: 2, sql: counted.clone(), limit: Some(limit) });
+    answer_held(&proxy).await;
+    q.session.cancel();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    proxy.hold_answers(false);
+    let DbEvent::Counted { result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 10).await else {
+        unreachable!()
+    };
+    assert_eq!(result, Err(DbError::TimedOut(limit)));
+
+    // Another session's cancel of a read waiting for the lock; its answer arrives after the limit
+    // passed. The limit stays shorter than the wait for the lock, so only a cancel answered
+    // within it shows anything: a try the server answered later may have been stopped by the
+    // limit, and is made again.
+    let limit = Duration::from_millis(1500);
+    let mut side = Conn::open(&url, SessionRole::Query).await;
+    let waiting = format!("SELECT count(*) FROM pg_stat_activity WHERE pid = {backend} AND wait_event_type = 'Lock'");
+    let (mut tries, mut n) = (3..23, 100);
+    let result = loop {
+        let id = tries.next().expect("no cancel was answered within the limit");
+        let asked = Instant::now();
+        proxy.fault(&counted, pg_proxy::Fault::Hold);
+        q.session.send(DbCommand::Count { id, sql: counted.clone(), limit: Some(limit) });
+        while !proxy.answer_held() && side.first_value(n, &waiting).await.as_deref() != Some("1") {
+            n += 1;
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        n += 1;
+        assert!(matches!(side.run(n, &format!("SELECT pg_cancel_backend({backend})")).await, DbEvent::Page { .. }));
+        answer_held(&proxy).await;
+        let in_time = asked.elapsed() < limit;
+        tokio::time::sleep(limit).await;
+        proxy.hold_answers(false);
+        let DbEvent::Counted { result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 10).await else {
+            unreachable!()
+        };
+        if in_time {
+            break result;
+        }
+    };
+    assert!(matches!(&result, Err(DbError::Server(m)) if m.text.contains("user request")), "{result:?}");
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
+/// The proxy rewords a message whole, however the server's answer is cut on its way.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_proxy_rewords_a_message_cut_across_reads() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy = pg_proxy::Proxy::start(&server.local_addr().unwrap().to_string()).await;
+    proxy.reword("canceling", "zz_words_");
+    let mut client = tokio::net::TcpStream::connect(&proxy.addr).await.unwrap();
+    client.write_all(&[&9i32.to_be_bytes()[..], &196608i32.to_be_bytes(), &[0]].concat()).await.unwrap();
+    let (mut upstream, _) = server.accept().await.unwrap();
+    upstream.set_nodelay(true).unwrap();
+    upstream.read_exact(&mut [0; 9]).await.unwrap();
+    let body = b"Mcanceling statement\0\0";
+    let message = [&[b'E'][..], &(body.len() as i32 + 4).to_be_bytes(), body].concat();
+    let cut = message.windows(9).position(|w| w == b"canceling").unwrap() + 4;
+    upstream.write_all(&message[..cut]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    upstream.write_all(&message[cut..]).await.unwrap();
+    let mut got = vec![0; message.len()];
+    client.read_exact(&mut got).await.unwrap();
+    assert_eq!(got, [&message[..6], b"zz_words_", &message[15..]].concat());
+}
+
+/// A server that answers in another language says nothing the app can read: however the user
+/// asked to cancel, what stopped the statement is told in the server's own words, never called a
+/// cancel. Whether the time limit fired or the cancel did, bounded or not, in the user's block too.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stop_said_in_another_language_is_the_servers_words() {
+    let Some(url) = pg_url("a_stop_said_in_another_language_is_the_servers_words") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_translated_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let words = "zz other words";
+    for english in ["canceling statement due to statement timeout", "canceling statement due to user request"] {
+        proxy.reword(english, &format!("{words:_<width$}", width = english.len()));
+    }
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let rows = format!("SELECT * FROM {table} WHERE (id > 10)");
+    let counted = count_of(&rows);
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    async fn sent(proxy: &pg_proxy::Proxy, start: &str, times: usize) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let seen = |s: &&pg_proxy::Sent| matches!(s, pg_proxy::Sent::Query(t) if t.starts_with(start));
+        while proxy.sent().iter().filter(seen).count() < times {
+            assert!(Instant::now() < deadline, "the read never went out");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    }
+    async fn answer(q: &mut Conn) -> Result<u64, DbError> {
+        let done = |e: &DbEvent| matches!(e, DbEvent::Counted { .. } | DbEvent::Estimated { .. });
+        match q.wait(done, 10).await {
+            DbEvent::Counted { result, .. } | DbEvent::Estimated { result, .. } => result,
+            other => panic!("{other:?}"),
+        }
+    }
+    let in_its_words = |got: &Result<u64, DbError>| matches!(got, Err(DbError::Server(m)) if m.text.contains(words));
+    let hold_then_cancel = async |q: &mut Conn, wait: Duration| {
+        proxy.hold_answers(true);
+        tokio::time::sleep(wait).await;
+        q.session.cancel();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        proxy.hold_answers(false);
+    };
+
+    // A bounded count at its limit, the answer held while the user cancels.
+    let limit = Duration::from_millis(300);
+    q.session.send(DbCommand::Count { id: 2, sql: counted.clone(), limit: Some(limit) });
+    sent(&proxy, &counted, 1).await;
+    hold_then_cancel(&mut q, Duration::from_millis(600)).await;
+    let got = answer(&mut q).await;
+    assert!(in_its_words(&got), "at the limit: {got:?}");
+
+    // The user's own cancel of a bounded count, and of an estimate waiting for its lock.
+    q.session.send(DbCommand::Count { id: 3, sql: counted.clone(), limit: Some(Duration::from_secs(30)) });
+    sent(&proxy, &counted, 2).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    q.session.cancel();
+    let got = answer(&mut q).await;
+    assert!(in_its_words(&got), "a cancel: {got:?}");
+    q.session.send(DbCommand::Estimate { id: 4, sql: rows.clone() });
+    sent(&proxy, "BEGIN", 3).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    q.session.cancel();
+    let got = answer(&mut q).await;
+    assert!(in_its_words(&got), "an estimate: {got:?}");
+
+    // Without a limit of the app's: the session's own fires, the answer held.
+    assert!(matches!(q.run(5, "SET statement_timeout = 300").await, DbEvent::Done { .. }));
+    q.session.send(DbCommand::Count { id: 6, sql: counted.clone(), limit: None });
+    sent(&proxy, &counted, 3).await;
+    hold_then_cancel(&mut q, Duration::from_millis(600)).await;
+    let got = answer(&mut q).await;
+    assert!(in_its_words(&got), "unbounded: {got:?}");
+
+    // In the user's block, under its savepoint.
+    assert!(matches!(q.run(7, "BEGIN").await, DbEvent::Done { .. }));
+    q.session.send(DbCommand::Count { id: 8, sql: counted.clone(), limit: Some(limit) });
+    sent(&proxy, &counted, 4).await;
+    hold_then_cancel(&mut q, Duration::from_millis(600)).await;
+    let got = answer(&mut q).await;
+    assert!(in_its_words(&got), "in a block: {got:?}");
+    assert!(matches!(q.run(9, "ROLLBACK").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
+/// A count without a limit that failed before the user cancelled is not called cancelled by a
+/// cancel that came during its cleanup.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_during_a_counts_cleanup_changes_nothing() {
+    let Some(url) = pg_url("a_cancel_during_a_counts_cleanup_changes_nothing") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_cleanup_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open_with(&proxy.url(&url), SessionRole::Query, true).await;
+    let backend = q.first_value(1, "SELECT pg_backend_pid()").await.unwrap();
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    let counted = count_of(&format!("SELECT * FROM {table} WHERE (id > 10)"));
+    proxy.fault("ROLLBACK", pg_proxy::Fault::Delay(Duration::from_millis(800)));
+    q.session.send(DbCommand::Count { id: 3, sql: counted, limit: None });
+    let mut side = Conn::open(&url, SessionRole::Query).await;
+    let waiting = format!("SELECT count(*) FROM pg_stat_activity WHERE pid = {backend} AND wait_event_type = 'Lock'");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut n = 100;
+    while side.first_value(n, &waiting).await.as_deref() != Some("1") {
+        assert!(Instant::now() < deadline, "the count never waited for the lock");
+        n += 1;
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(matches!(side.run(1, &format!("SELECT pg_cancel_backend({backend})")).await, DbEvent::Page { .. }));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while proxy.fault_pending() {
+        assert!(Instant::now() < deadline, "the ROLLBACK never went out");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    q.session.cancel();
+    let DbEvent::Counted { result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 10).await else {
+        unreachable!()
+    };
+    assert!(matches!(&result, Err(DbError::Server(m)) if m.text.contains("user request")), "{result:?}");
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
+/// What an estimate asks about stays what it planned: the relation is locked in the transaction
+/// that asks and plans, so swapping it for a view whose function planning would run waits behind
+/// the estimate instead of slipping in between.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_estimate_plans_the_relation_it_asked_about() {
+    let Some(url) = pg_url("an_estimate_plans_the_relation_it_asked_about") else { return };
+    let pid = std::process::id();
+    let schema = format!("zz_swap_{pid}");
+    let _schema = SchemaGuard::new(&url, &schema);
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    for sql in [
+        format!("CREATE SCHEMA {schema}"),
+        format!("CREATE TABLE {schema}.t AS SELECT g AS id FROM generate_series(1, 50) g"),
+        format!(
+            "CREATE FUNCTION {schema}.boom() RETURNS int IMMUTABLE LANGUAGE plpgsql AS \
+             $$BEGIN RAISE EXCEPTION 'zz_ boom ran'; END$$"
+        ),
+    ] {
+        assert!(matches!(b.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    // Held between the question's answer and the planning.
+    proxy.fault_start("EXPLAIN", pg_proxy::Fault::Delay(Duration::from_millis(1200)));
+    q.session.send(DbCommand::Estimate { id: 1, sql: format!("SELECT * FROM {schema}.t WHERE (id > 10)") });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while proxy.fault_pending() {
+        assert!(Instant::now() < deadline, "the EXPLAIN never went out");
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, "SET LOCAL lock_timeout = '300ms'").await, DbEvent::Done { .. }));
+    let swapped = b.run(4, &format!("ALTER TABLE {schema}.t RENAME TO old")).await;
+    if matches!(swapped, DbEvent::Done { .. }) {
+        let view = format!("CREATE VIEW {schema}.t AS SELECT * FROM {schema}.old WHERE {schema}.boom() > 0");
+        assert!(matches!(b.run(5, &view).await, DbEvent::Done { .. }));
+        assert!(matches!(b.run(6, "COMMIT").await, DbEvent::Done { .. }));
+    } else {
+        assert!(matches!(b.run(5, "ROLLBACK").await, DbEvent::Done { .. }));
+    }
+    let DbEvent::Estimated { result, .. } = q.wait(|e| matches!(e, DbEvent::Estimated { .. }), 10).await else {
+        unreachable!()
+    };
+    assert!(result.is_ok(), "{result:?}");
+    assert!(matches!(swapped, DbEvent::Failed { .. }), "the rename waited behind the estimate: {swapped:?}");
+}
+
+/// A relation the server cannot lock gets no estimate, and says which.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_estimate_of_what_cannot_be_locked_is_refused() {
+    let Some(url) = pg_url("an_estimate_of_what_cannot_be_locked_is_refused") else { return };
+    let pid = std::process::id();
+    let schema = format!("zz_nolock_{pid}");
+    let _schema = SchemaGuard::new(&url, &schema);
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    for sql in [format!("CREATE SCHEMA {schema}"), format!("CREATE MATERIALIZED VIEW {schema}.m AS SELECT 1 AS id")] {
+        assert!(matches!(q.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let rows = format!("SELECT * FROM {schema}.m WHERE (id > 0)");
+    let (got, _) = q.estimate(2, &rows).await;
+    let not_a_table = datarig_core::sql::risk::repeat::NotRepeatable::NotATable(format!("{schema}.m"));
+    assert_eq!(got, Err(DbError::NotRepeatable(not_a_table)));
+    // The session goes on.
+    assert_eq!(q.count_within(3, &count_of(&rows), Some(Duration::from_secs(30))).await.0, Ok(1));
+}
+
+/// Planning compares values of a column's type by itself: on a server before 14 a range of the
+/// user's over a built-in subtype takes no function of the user's on its own type, yet its
+/// selectivity runs the comparison of its subtype's operator class. Only columns of types the
+/// server ships, compared with its own code, are planned; the function never runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_estimate_takes_only_columns_of_types_planning_is_known_to_handle() {
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    let Some(url) = pg_url("an_estimate_takes_only_columns_of_types_planning_is_known_to_handle") else { return };
+    let schema = format!("zz_plantype_{}", std::process::id());
+    let _schema = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let raising = "IMMUTABLE LANGUAGE plpgsql AS $$BEGIN RAISE EXCEPTION 'zz_ planning ran the function'; END$$";
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE FUNCTION {s}.cmp(int4, int4) RETURNS int {raising}"),
+        format!(
+            "CREATE OPERATOR CLASS {s}.cls FOR TYPE int4 USING btree AS OPERATOR 1 <, OPERATOR 2 <=, OPERATOR 3 =, \
+             OPERATOR 4 >=, OPERATOR 5 >, FUNCTION 1 {s}.cmp(int4, int4)"
+        ),
+        format!("CREATE TYPE {s}.span AS RANGE (subtype = int4, subtype_opclass = {s}.cls)"),
+        format!("CREATE TABLE {s}.spans (id int, v {s}.span)"),
+        format!("CREATE DOMAIN {s}.positive AS int"),
+        format!("CREATE TABLE {s}.domained (id int, v {s}.positive)"),
+        format!("CREATE TABLE {s}.domains (id int, v {s}.positive[])"),
+        format!("CREATE TYPE {s}.mood AS ENUM ('calm')"),
+        format!("CREATE TABLE {s}.moods (id int, v {s}.mood)"),
+        format!("CREATE TYPE {s}.pair AS (a int, b int)"),
+        format!("CREATE TABLE {s}.pairs (id int, v {s}.pair)"),
+        format!("CREATE TABLE {s}.jsons (id int, v json)"),
+        format!(
+            "CREATE TABLE {s}.fine (id int, a text, b numeric(10, 2), c int4range, d int[], e jsonb, f timestamptz, \
+             g uuid, h varchar(5), i bool)"
+        ),
+        format!("CREATE FUNCTION {s}.jcmp(json, json) RETURNS int {raising}"),
+        format!("CREATE FUNCTION {s}.tojson(int4) RETURNS json {raising}"),
+    ] {
+        assert!(matches!(b.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    let rows = |t: &str| format!("SELECT * FROM {s}.{t} WHERE (id IS NOT NULL)");
+
+    // The range, by the operator that makes planning compare. From 14 on the server's generated
+    // multirange takes it, which the question about column types refuses first.
+    let (got, _) = q.estimate(1, &format!("SELECT * FROM {s}.spans WHERE (v @> 5)")).await;
+    let named = format!("{s}.span");
+    assert!(
+        got == Err(DbError::NotRepeatable(NotRepeatable::PlannerType(named.clone())))
+            || got == Err(DbError::NotRepeatable(NotRepeatable::UserColumnType(named))),
+        "{got:?}"
+    );
+    let mut id = 2;
+    for (table, named) in [
+        ("domained", format!("{s}.positive")),
+        ("domains", format!("{s}.positive[]")),
+        ("moods", format!("{s}.mood")),
+        ("pairs", format!("{s}.pair")),
+    ] {
+        let (got, _) = q.estimate(id, &rows(table)).await;
+        assert_eq!(got, Err(DbError::NotRepeatable(NotRepeatable::PlannerType(named))), "{table}");
+        id += 1;
+    }
+    for table in ["fine", "jsons"] {
+        let (got, _) = q.estimate(id, &rows(table)).await;
+        assert!(got.is_ok(), "{table}: {got:?}");
+        id += 1;
+    }
+
+    // A built-in type that has no comparison may be given one, which an array's comparison finds.
+    let class =
+        format!("CREATE OPERATOR CLASS {s}.jcls DEFAULT FOR TYPE json USING btree AS FUNCTION 1 {s}.jcmp(json, json)");
+    assert!(matches!(b.run(2, &class).await, DbEvent::Done { .. }));
+    let (got, _) = q.estimate(id, &rows("jsons")).await;
+    assert_eq!(got, Err(DbError::NotRepeatable(NotRepeatable::PlannerType("json".into()))));
+    id += 1;
+    assert!(q.estimate(id, &rows("fine")).await.0.is_ok(), "other types go on");
+    id += 1;
+    assert!(matches!(b.run(3, &format!("DROP OPERATOR FAMILY {s}.jcls USING btree")).await, DbEvent::Done { .. }));
+
+    // A cast between built-in types is applied by the server on its own.
+    let cast = format!("CREATE CAST (int4 AS json) WITH FUNCTION {s}.tojson(int4)");
+    assert!(matches!(b.run(4, &cast).await, DbEvent::Done { .. }));
+    let (got, _) = q.estimate(id, &rows("fine")).await;
+    let dropped = b.run(5, "DROP CAST (int4 AS json)").await;
+    assert!(matches!(dropped, DbEvent::Done { .. }), "{dropped:?}");
+    assert_eq!(got, Err(DbError::NotRepeatable(NotRepeatable::PlannerCode(format!("{s}.fine")))));
+}
+
+/// A refusal names its relation without running a cast of the user's: the server ships none from
+/// `regclass` to `text`, so one may be added, and a `::text` would run it. In a database of its
+/// own, as it would otherwise reach every session of the server.
+#[tokio::test(flavor = "multi_thread")]
+async fn naming_a_refused_relation_runs_no_cast_of_the_users() {
+    use datarig_core::driver::SessionContext;
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    let Some(url) = pg_url("naming_a_refused_relation_runs_no_cast_of_the_users") else { return };
+    let db = format!("zz_castdb_{}", std::process::id());
+    let _db_guard = DatabaseGuard { url: url.clone(), name: db.clone() };
+    pg_clean::run_fresh(&url, &format!("CREATE DATABASE {db}")).unwrap();
+    let context = || SessionContext { database: Some(db.clone()), schema: Some("public".to_string()) };
+    let mut b = Conn::open_in(&url, SessionRole::Query, false, context()).await;
+    for sql in [
+        "CREATE TABLE plain (id int)",
+        "CREATE SCHEMA zz_s",
+        "CREATE TABLE zz_s.\"Odd t\" (id int)",
+        "CREATE TABLE secured (id int)",
+        "ALTER TABLE secured ENABLE ROW LEVEL SECURITY",
+        "CREATE VIEW shown AS SELECT id FROM plain",
+        "CREATE FUNCTION zz_name(regclass) RETURNS text IMMUTABLE LANGUAGE plpgsql AS \
+         $$BEGIN RAISE EXCEPTION 'zz_ the refusal ran the cast'; END$$",
+        "CREATE CAST (regclass AS text) WITH FUNCTION zz_name(regclass)",
+    ] {
+        assert!(matches!(b.run(1, sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let mut q = Conn::open_in(&url, SessionRole::Query, false, context()).await;
+    let refused = |why| Err(DbError::NotRepeatable(why));
+    let rows = |t: &str| format!("SELECT * FROM {t} WHERE (id IS NOT NULL)");
+    let limit = Some(Duration::from_secs(30));
+
+    // The cast itself is what planning is refused for, on a table with nothing else to it.
+    assert_eq!(q.estimate(1, &rows("plain")).await.0, refused(NotRepeatable::PlannerCode("plain".into())));
+    let odd = "zz_s.\"Odd t\"";
+    assert_eq!(q.estimate(2, &rows(odd)).await.0, refused(NotRepeatable::PlannerCode(odd.into())));
+
+    // The allowlist's question names what it refuses the same way, for a count and an estimate.
+    let secured = NotRepeatable::RowSecurity("secured".into());
+    assert_eq!(q.count_within(3, &count_of(&rows("secured")), limit).await.0, refused(secured.clone()));
+    assert_eq!(q.estimate(4, &rows("secured")).await.0, refused(secured));
+    let shown = NotRepeatable::NotATable("shown".into());
+    assert_eq!(q.count_within(5, &count_of(&rows("shown")), limit).await.0, refused(shown.clone()));
+    assert_eq!(q.estimate(6, &rows("shown")).await.0, refused(shown));
+}
+
+/// The types a planner's estimate takes are what their numbers say on the server (the multiranges
+/// are there from 14 on).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_types_planning_takes_are_the_servers_own() {
+    use datarig_core::sql::risk::repeat::PLANNER_TYPES;
+    let Some(url) = pg_url("the_types_planning_takes_are_the_servers_own") else { return };
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    for (i, (oid, name)) in PLANNER_TYPES.iter().enumerate() {
+        let ask = format!("SELECT typname::text FROM pg_type WHERE oid = {oid} AND typtype IN ('b', 'r', 'm')");
+        match q.first_value(i as u64 + 1, &ask).await {
+            None => assert!(name.ends_with("multirange"), "{name}"),
+            got => assert_eq!(got.as_deref(), Some(*name)),
+        }
+    }
+}
+
+/// Planning a table can run a function its text never names: an index's predicate or expression,
+/// a `CHECK` constraint, a statistics expression, a partition key and a generated column are
+/// folded by the planner. Each is refused on a fresh session and its function never runs (it
+/// would raise); what uses built-ins only is planned.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_estimate_refuses_a_table_whose_planning_could_run_a_function() {
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    let Some(url) = pg_url("an_estimate_refuses_a_table_whose_planning_could_run_a_function") else { return };
+    let schema = format!("zz_planfn_{}", std::process::id());
+    let _schema = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let function = |body: &str| {
+        format!("CREATE OR REPLACE FUNCTION {s}.f() RETURNS int IMMUTABLE LANGUAGE plpgsql AS $$BEGIN {body} END$$")
+    };
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        function("RETURN 0;"),
+        format!("CREATE TABLE {s}.partial (id int)"),
+        format!("CREATE INDEX ON {s}.partial (id) WHERE id > {s}.f()"),
+        format!("CREATE TABLE {s}.expression (id int)"),
+        format!("CREATE INDEX ON {s}.expression ((id + {s}.f()))"),
+        format!("CREATE TABLE {s}.checked (id int CHECK (id > {s}.f()))"),
+        format!("CREATE TABLE {s}.stats (id int, n int)"),
+        format!("CREATE STATISTICS {s}.st ON (id + {s}.f()), n FROM {s}.stats"),
+        format!("CREATE TABLE {s}.parted (id int) PARTITION BY RANGE ((id + {s}.f()))"),
+        format!("CREATE TABLE {s}.parted_a PARTITION OF {s}.parted FOR VALUES FROM (0) TO (10)"),
+        format!("CREATE TABLE {s}.generated (id int, g int GENERATED ALWAYS AS (id + {s}.f()) STORED)"),
+        format!("CREATE TABLE {s}.ruled (id int)"),
+        format!("CREATE RULE r AS ON INSERT TO {s}.ruled DO ALSO NOTHING"),
+        format!("CREATE TABLE {s}.fine (id int CHECK (id > 0), g int GENERATED ALWAYS AS (id + 1) STORED)"),
+        format!("CREATE INDEX ON {s}.fine (id) WHERE id > 5"),
+        format!("CREATE INDEX ON {s}.fine (abs(id))"),
+        format!("CREATE TABLE {s}.defaulted (id int DEFAULT {s}.f())"),
+        function("RAISE EXCEPTION 'zz_ planner ran the function';"),
+    ] {
+        assert!(matches!(b.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    let rows = |t: &str| format!("SELECT * FROM {s}.{t} WHERE (id IS NOT NULL)");
+    let mut id = 1;
+    for (read, named) in [
+        ("partial", "partial"),
+        ("expression", "expression"),
+        ("checked", "checked"),
+        ("stats", "stats"),
+        ("parted", "parted"),
+        // A partition's own bounds come from the key of the table above it.
+        ("parted_a", "parted"),
+        ("generated", "generated"),
+        ("ruled", "ruled"),
+    ] {
+        let (got, _) = q.estimate(id, &rows(read)).await;
+        let want = NotRepeatable::PlannerCode(format!("{s}.{named}"));
+        assert_eq!(got, Err(DbError::NotRepeatable(want)), "{read}");
+        id += 1;
+    }
+    for read in ["fine", "defaulted"] {
+        let (got, _) = q.estimate(id, &rows(read)).await;
+        assert!(got.is_ok(), "{read}: {got:?}");
+        id += 1;
+    }
 }

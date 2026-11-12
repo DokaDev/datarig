@@ -1,6 +1,7 @@
 use super::*;
 
 const MODE: MySqlMode = MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: true };
+const MYSQL: Server = Server { version: (8, 4, 0), mariadb: false };
 
 #[test]
 fn outcomes_name_the_command_or_count_rows() {
@@ -121,7 +122,7 @@ fn names_are_split_unquoted_and_lower_case() {
 #[test]
 fn the_servers_question_asks_every_reading_of_a_name() {
     let d = Dialect::MySql(MODE);
-    let sql = check_sql(&["users".into(), "u.email".into(), "shop.orders.id".into(), "o'k".into()], d);
+    let sql = check_sql(&["users".into(), "u.email".into(), "shop.orders.id".into(), "o'k".into()], d, &MYSQL);
     assert!(
         sql.starts_with(
             "SELECT /*+ SET_VAR(lock_wait_timeout=2) MAX_EXECUTION_TIME(10000) */ @@SESSION.transaction_isolation"
@@ -133,11 +134,11 @@ fn the_servers_question_asks_every_reading_of_a_name() {
     assert!(sql.contains("IN (('shop', 'orders'), ('u', 'email'))"), "{sql}");
     assert!(sql.contains("t.TABLE_TYPE <> 'BASE TABLE'"), "{sql}");
     // Nothing named: nothing can be a view.
-    assert!(check_sql(&[], d).contains("AND (FALSE)"));
+    assert!(check_sql(&[], d, &MYSQL).contains("AND (FALSE)"));
     // Backslashes are written as the session reads them.
     let nbe = Dialect::MySql(MySqlMode { no_backslash_escapes: true, ..MODE });
-    assert!(check_sql(&["a\\b".into()], nbe).contains("('a\\b')"));
-    assert!(check_sql(&["a\\b".into()], d).contains("('a\\\\b')"));
+    assert!(check_sql(&["a\\b".into()], nbe, &MYSQL).contains("('a\\b')"));
+    assert!(check_sql(&["a\\b".into()], d, &MYSQL).contains("('a\\\\b')"));
 }
 
 #[test]
@@ -238,4 +239,89 @@ fn settings_of_the_next_transaction_only_are_seen_in_every_spelling() {
     ] {
         assert_eq!(begins_or_ends(sql, MODE), yes, "{sql}");
     }
+}
+
+#[test]
+fn a_bounded_read_is_limited_for_its_statement_and_never_longer_than_the_session() {
+    let count = "SELECT COUNT(*) FROM (\nSELECT * FROM `t` WHERE (a > 1) LIMIT 10\n) AS datarig_count";
+    let none = Asked { isolation: String::new(), statement: None, lock: None };
+    let (mysql, applied) = bounded_select(count, Duration::from_secs(30), &none, false, "").unwrap();
+    assert_eq!(
+        mysql,
+        "SELECT /*+ MAX_EXECUTION_TIME(30000) SET_VAR(lock_wait_timeout=1) */ COUNT(*) FROM (\nSELECT * FROM `t` WHERE \
+         (a > 1) LIMIT 10\n) AS datarig_count"
+    );
+    assert_eq!(applied, Duration::from_secs(30));
+    let waits = Asked { isolation: String::new(), statement: None, lock: Some(50) };
+    let (maria, _) = bounded_select(count, Duration::from_millis(1500), &waits, true, "").unwrap();
+    assert_eq!(maria, format!("SET STATEMENT max_statement_time = 1.5, lock_wait_timeout = 1 FOR {count}"));
+    // A shorter time limit of the session's stays; a longer one is not taken. The lock wait is
+    // the shortest the server takes whatever the session's.
+    let short = Asked { isolation: String::new(), statement: Some(Duration::from_secs(5)), lock: None };
+    let (text, applied) = bounded_select(count, Duration::from_secs(30), &short, false, "").unwrap();
+    assert!(text.starts_with("SELECT /*+ MAX_EXECUTION_TIME(5000) SET_VAR(lock_wait_timeout=1) */ COUNT(*)"), "{text}");
+    assert_eq!(applied, Duration::from_secs(5));
+    let long = Asked { isolation: String::new(), statement: Some(Duration::from_secs(60)), lock: None };
+    let (text, applied) = bounded_select(count, Duration::from_secs(30), &long, false, "").unwrap();
+    assert!(text.starts_with("SELECT /*+ MAX_EXECUTION_TIME(30000) SET_VAR(lock_wait_timeout=1) */"), "{text}");
+    assert_eq!(applied, Duration::from_secs(30));
+    // Only the app's own form, a text starting with `SELECT`.
+    assert!(bounded_select(" SELECT 1", Duration::from_secs(1), &none, false, "").is_none());
+    assert!(bounded_select("WITH x AS (SELECT 1) SELECT * FROM x", Duration::from_secs(1), &none, false, "").is_none());
+    // An estimate's own hints go with the others.
+    let (text, _) = bounded_select(count, Duration::from_secs(5), &none, false, ALL_ROWS).unwrap();
+    assert!(
+        text.starts_with(
+            "SELECT /*+ MAX_EXECUTION_TIME(5000) SET_VAR(lock_wait_timeout=1) \
+             SET_VAR(sql_select_limit=18446744073709551615) */ COUNT(*)"
+        ),
+        "{text}"
+    );
+    // The session's limits as the server writes them.
+    assert_eq!(session_limit("0", false), None);
+    assert_eq!(session_limit("2500", false), Some(Duration::from_millis(2500)));
+    assert_eq!(session_limit("0.000000", true), None);
+    assert_eq!(session_limit("1.500000", true), Some(Duration::from_millis(1500)));
+    assert_eq!(session_limit("x", false), None);
+}
+
+#[test]
+fn a_bounded_read_stopped_by_the_server_is_told_apart_from_a_cancel_and_a_lock_wait() {
+    let server = |code: u16| {
+        mysql_async::Error::Server(mysql_async::ServerError { code, message: "stopped".into(), state: "HY000".into() })
+    };
+    let limit = Some(Duration::from_secs(30));
+    assert_eq!(bounded_failure(&server(3024), limit, false), DbError::TimedOut(Duration::from_secs(30)));
+    assert_eq!(bounded_failure(&server(1969), limit, true), DbError::TimedOut(Duration::from_secs(30)));
+    assert_eq!(bounded_failure(&server(1317), limit, true), DbError::Cancelled);
+    assert!(matches!(bounded_failure(&server(1205), limit, false), DbError::LockTimeout(_)));
+    // A kill the user did not ask for is the server's message.
+    assert!(matches!(bounded_failure(&server(1317), limit, false), DbError::Server(_)));
+    // Without a limit of the app's, a server's own limit is its message.
+    assert!(matches!(bounded_failure(&server(3024), None, false), DbError::Server(_)));
+}
+
+/// MariaDB's question names the isolation variable its version has and reads the session's lock
+/// wait; a session that does not wait for locks stays so, and a limit below a millisecond stays
+/// what it is.
+#[test]
+fn mariadbs_bounded_read_fits_its_version_and_the_sessions_own_limits() {
+    let d = Dialect::MySql(MODE);
+    let older = check_sql(&[], d, &Server { version: (10, 6, 0), mariadb: true });
+    assert!(older.contains("@@SESSION.tx_isolation,"), "{older}");
+    assert!(older.ends_with("@@SESSION.max_statement_time, @@SESSION.lock_wait_timeout"), "{older}");
+    let newer = check_sql(&[], d, &Server { version: (11, 4, 0), mariadb: true });
+    assert!(newer.contains("@@SESSION.transaction_isolation,"), "{newer}");
+    assert!(check_sql(&[], d, &MYSQL).ends_with("@@SESSION.max_execution_time, NULL"));
+    let sql = "SELECT 1";
+    let asked = |statement, lock| Asked { isolation: String::new(), statement, lock };
+    let limit = Duration::from_secs(30);
+    let (text, _) = bounded_select(sql, limit, &asked(None, Some(0)), true, "").unwrap();
+    assert_eq!(text, "SET STATEMENT max_statement_time = 30, lock_wait_timeout = 0 FOR SELECT 1");
+    let (text, _) = bounded_select(sql, limit, &asked(None, None), true, "").unwrap();
+    assert!(text.contains("lock_wait_timeout = 0 "), "not known: never a longer wait: {text}");
+    let tiny = Duration::from_micros(500);
+    let (text, applied) = bounded_select(sql, limit, &asked(Some(tiny), Some(1)), true, "").unwrap();
+    assert_eq!(text, "SET STATEMENT max_statement_time = 0.0005, lock_wait_timeout = 1 FOR SELECT 1");
+    assert_eq!(applied, tiny);
 }

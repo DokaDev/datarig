@@ -287,7 +287,7 @@ impl App {
         let t = self.tabs.get(tab);
         let rs = t.and_then(|t| {
             let shown = match &t.results {
-                Results::Rows(rs) if rs.id == result => Some(rs),
+                Results::Rows(rs) if rs.id == result => Some(rs.as_ref()),
                 _ => None,
             };
             shown.or_else(|| t.exec.steps.values().map(|p| &p.rs).find(|rs| rs.id == result))

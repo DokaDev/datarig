@@ -80,14 +80,27 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     let mut costs = Vec::new();
     for _ in 0..runs {
         let id = s.next_id();
-        let (c, ev) =
-            s.measure(DbCommand::Count { id, sql: count.clone() }, |e| matches!(e, DbEvent::Counted { .. })).await?;
+        let limit = Some(datarig_core::config::COUNT_TIMEOUT);
+        let (c, ev) = s
+            .measure(DbCommand::Count { id, sql: count.clone(), limit }, |e| matches!(e, DbEvent::Counted { .. }))
+            .await?;
         if !matches!(ev, DbEvent::Counted { result: Ok(100), .. }) {
             return Err(format!("count: {ev:?}"));
         }
         costs.push(c);
     }
     out.push(report("count", &costs));
+    let mut costs = Vec::new();
+    for _ in 0..runs {
+        let id = s.next_id();
+        let estimate = DbCommand::Estimate { id, sql: small.to_string() };
+        let (c, ev) = s.measure(estimate, |e| matches!(e, DbEvent::Estimated { .. })).await?;
+        if !matches!(ev, DbEvent::Estimated { result: Ok(_), .. }) {
+            return Err(format!("estimate: {ev:?}"));
+        }
+        costs.push(c);
+    }
+    out.push(report("estimate", &costs));
     out.push(
         scenario(&mut s, "insert", runs, 0, |i| format!("INSERT INTO zz_bench_rtt VALUES ({}, 'x')", 10_000 + i))
             .await?,

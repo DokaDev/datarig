@@ -22,6 +22,48 @@ The rows already fetched stay in a bounded memory window and spill to a private 
 past it. `#` counts every row on demand (it runs a count query), with a label that says whether
 the count matches the pages you saw.
 
+The server stops a count statement after 30 seconds (`[results] count_timeout` in the
+[configuration](../reference/configuration.md), `"off"` for no limit), and the status line then says
+the number of rows is not known. It also gives up on a single lock another session holds on the
+table after waiting 2 seconds (1 second on MySQL), and says so. These are the server's limits on
+the statement and on each lock wait, not on the whole request: the time to reach the server, or
+to get a connection from a pooler, comes on top. Neither ever reads as 0 rows, and a cancel
+(`Ctrl+C`) is said as one; a stop the server reports for any other reason is shown in its own
+words. On PostgreSQL the limit is set only while no transaction is
+open on the tab's session: inside your own transaction, or while a result's cursor is held open,
+the count keeps to that transaction's settings and has no limit (the status line says so); when
+the session cannot tell whether a transaction is open, the count is refused. On
+MySQL the limit is part of the count statement itself (also inside a transaction). Neither limit
+is ever longer than one your session already has (PostgreSQL's `statement_timeout` and
+`lock_timeout`, MySQL's `max_execution_time`; MySQL's 1 second lock wait is the shortest
+`lock_wait_timeout` it takes).
+
+### Estimate or exact count
+
+On a table tab whose rows are filtered, `#` opens a small choice instead:
+
+- **Estimate (planner)** asks the server's planner how many rows the filter matches, without
+  reading any (`EXPLAIN`, never `EXPLAIN ANALYZE`). The title then reads `page 3 / ~12 (planner)`:
+  an estimate, which can be far off, not a count. It is offered only when the filter calls no
+  function outside the built-ins a filter may call freely (planning may run a function), on
+  MySQL only without a subquery (MySQL may run one while it plans), and only while no transaction
+  is open on the tab's session and no result is held open there (the locks planning takes would
+  last until it ends); otherwise the entry is dimmed with the reason. On PostgreSQL the server is
+  also asked, in the same read-only transaction as the plan, whether planning the table could run
+  a function: a table whose indexes, constraints, statistics, partition key or generated columns
+  use something not built in, one with a column whose type is not one of the server's standard
+  types (a domain, an enum or a composite type included), one with a rule or row-level security,
+  or one that cannot be locked (a materialised view) gets no estimate, and the entry is then
+  dimmed for those rows. The server
+  stops the statement after 5 seconds and gives up on a lock after 2 seconds (1 second on MySQL).
+  On MySQL the statement runs in the session's usual transaction mode, in a read-only transaction
+  of its own only when autocommit is off. MariaDB has no estimate.
+- **Exact count** counts the rows as above, with the same limit.
+
+Without a filter, `#` counts at once, and the title shows the server's statistics for the whole
+table (`~12`) until then, as before. Filtered rows without an estimate or a count show
+`page 3 / ?`.
+
 ## Moving around
 
 - `h` `j` `k` `l` or the arrows move the cell; `0` and `$` go to the first and last column,

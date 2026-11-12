@@ -42,6 +42,7 @@
 "conn.idle_closed_by_server" = "{name}: 유휴 상태가 길어 서버가 연결을 닫았습니다: {error}"
 "db.closed" = "서버가 연결을 닫았습니다"
 "db.no_answer" = "{elapsed} 안에 응답이 없습니다"
+"db.stopped_at_limit" = "서버가 시간 제한 {limit}에 멈췄습니다"
 "db.settings" = "연결 설정이 올바르지 않습니다 (자세한 내용은 errors.log)"
 "db.refused" = "연결이 거부되었습니다 (서버가 실행 중인가요?)"
 "db.host_not_found" = "호스트 이름을 확인할 수 없습니다"

@@ -661,6 +661,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             background: UiBackground::Theme,
             paste_null: PasteNull::BackslashN,
             filter_history: FilterHistory::On,
+            count_timeout: Some(std::time::Duration::from_secs(30)),
             update_check: UpdateCheck::On,
             whats_new: WhatsNewSetting::On,
             monitor_interval: MonitorInterval::S2,
@@ -2642,4 +2643,35 @@ fn completion_delay_is_read_checked_and_saved() {
     assert_eq!(load(Some(path.clone())).0.prefs, prefs);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("completion_delay"), "60 is the default: the key goes");
+}
+
+#[test]
+fn a_count_stops_after_30_seconds_by_default_and_can_take_another_limit_or_none() {
+    use std::time::Duration;
+    assert_eq!(parse("").unwrap().prefs.count_timeout, Some(Duration::from_secs(30)));
+    let at = |v: &str| parse(&format!("[results]\ncount_timeout = {v}\n")).map(|c| c.prefs.count_timeout);
+    assert_eq!(at("\"5m\"").unwrap(), Some(Duration::from_secs(300)));
+    assert_eq!(at("10").unwrap(), Some(Duration::from_secs(10)));
+    assert_eq!(at("\"off\"").unwrap(), None);
+    assert_eq!(at("0").unwrap(), None);
+    for bad in ["\"soon\"", "\"25h\"", "-1", "true"] {
+        assert!(
+            matches!(at(bad), Err(ConfigError::Value { ref key, .. }) if key == "results.count_timeout"),
+            "{bad}: {:?}",
+            at(bad)
+        );
+    }
+    assert!(matches!(parse("[results]\nwhatever = 1\n"), Err(ConfigError::Syntax(_))), "only its own keys");
+    let path = temp_file("count_timeout");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "").unwrap();
+    for (limit, written) in [(None, "\"off\""), (Some(Duration::from_secs(120)), "\"2m\"")] {
+        let prefs = Prefs { count_timeout: limit, ..Prefs::default() };
+        save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(&format!("[results]\ncount_timeout = {written}\n")), "{text}");
+        assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    }
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("count_timeout"), "30 s is the default: the key goes");
 }

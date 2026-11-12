@@ -44,6 +44,7 @@
 "conn.idle_closed_by_server" = "{name}: the server closed the connection because it sat idle: {error}"
 "db.closed" = "the server closed the connection"
 "db.no_answer" = "no answer within {elapsed}"
+"db.stopped_at_limit" = "the server stopped it at its time limit of {limit}"
 "db.settings" = "the connection settings are not valid (details in errors.log)"
 "db.refused" = "the connection was refused (is the server running?)"
 "db.host_not_found" = "the host name could not be resolved"

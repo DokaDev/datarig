@@ -87,6 +87,7 @@ pub const TABLES: &[TableDoc] = &[
         about: "What datarig keeps on this machine between runs.",
         alias_of: None,
     },
+    TableDoc { name: "results", header: "[results]", about: "The results of a statement.", alias_of: None },
     TableDoc { name: "updates", header: "[updates]", about: "The update check and What's new.", alias_of: None },
     TableDoc { name: "monitor", header: "[monitor]", about: "The server monitor.", alias_of: None },
     TableDoc { name: "secrets", header: "[secrets]", about: "Passwords and the OS keychain.", alias_of: None },
@@ -268,6 +269,16 @@ pub const KEYS: &[KeyDoc] = &[
     key("edit", "paste_null", "\"\\\\N\"", "`\"\\\\N\"`, `\"NULL\"`, `\"none\"`", ""),
     // [history]
     key("history", "filters", "\"on\"", "`\"on\"`, `\"off\"` (`true` and `false` read as `\"on\"` and `\"off\"`)", ""),
+    // [results]
+    key(
+        "results",
+        "count_timeout",
+        "\"30s\"",
+        "a duration from `\"1s\"` to `\"24h\"` (`\"2m\"`), or `0` or `\"off\"` (no limit)",
+        "How long the server may count a result's rows when you ask (`#`) before it stops; the \
+         count then says the number is not known. Inside your own transaction a PostgreSQL count \
+         has no limit.",
+    ),
     // [updates]
     key("updates", "check", "\"on\"", "`\"on\"`, `\"off\"`", ""),
     key("updates", "whats_new", "\"on\"", "`\"on\"`, `\"off\"`", ""),

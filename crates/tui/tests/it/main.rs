@@ -78,6 +78,7 @@ mod flows_strip_keys;
 mod flows_structure;
 mod flows_tab_drag;
 mod flows_tab_list;
+mod flows_table_estimate;
 mod flows_table_filter;
 mod flows_table_filter_keep;
 mod flows_table_filter_value;

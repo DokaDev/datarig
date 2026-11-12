@@ -293,7 +293,7 @@ fn a_count_and_an_export_of_every_row_read_the_capped_statement() {
     h.tab_db(index, DbEvent::Released { id });
     first_page(&mut h, size, true);
     h.sent();
-    h.keys("#");
+    exact_count(&mut h);
     let counts: Vec<String> = h
         .sent()
         .into_iter()
@@ -554,4 +554,12 @@ fn an_edited_order_leaves_the_condition_its_room() {
     h.keys(" ro");
     let screen = h.screen(80, 24);
     assert!(screen.contains(cond), "{screen}");
+}
+
+/// `#` on filtered rows, then the exact count of the choice it opens.
+fn exact_count(h: &mut Harness) {
+    h.keys("#");
+    assert!(h.app.overlays.is_open(datarig_tui::app::overlay::OverlayKind::ContextMenu), "the choice opens");
+    h.keys("exact");
+    h.key(KeyCode::Enter);
 }

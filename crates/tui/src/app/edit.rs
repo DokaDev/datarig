@@ -1564,7 +1564,7 @@ impl App {
             let Some(t) = self.tabs.get_mut(id) else { continue };
             let (binding, bound_to, view) = (t.binding, t.profile, t.exec.view);
             let shown = match &mut t.results {
-                Results::Rows(rs) => Some(rs),
+                Results::Rows(rs) => Some(rs.as_mut()),
                 _ => None,
             };
             let shown_id = shown.as_ref().map(|rs| rs.id);
@@ -1659,7 +1659,7 @@ impl App {
     pub(super) fn pending_in(&self, tab: Option<TabId>) -> u64 {
         let pending = |t: &Tab| {
             let shown = match &t.results {
-                Results::Rows(rs) => Some(rs),
+                Results::Rows(rs) => Some(rs.as_ref()),
                 _ => None,
             };
             shown

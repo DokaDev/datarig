@@ -38,6 +38,7 @@ mod dispatch;
 pub mod edit;
 pub mod effects;
 pub mod environments;
+pub mod estimate;
 mod execution;
 pub mod explorer;
 pub mod export;
@@ -222,7 +223,7 @@ impl Notice {
 
 pub enum Results {
     Empty,
-    Rows(ResultSet),
+    Rows(Box<ResultSet>),
     Message(Notice),
     Error(String),
     Cancelled,
@@ -233,8 +234,11 @@ pub struct Running {
     pub id: u64,
     pub started: Instant,
     pub fetch: bool,
-    /// A count of the rows the user asked for.
+    /// A count of the rows the user asked for (or, with `estimate`, the planner's estimate of
+    /// them: as a count, not a run, the rows stay as they are).
     pub count: bool,
+    /// The planner's estimate of the rows the user asked for (`count` is set too).
+    pub estimate: bool,
     /// When the user asked to cancel it, or when its session last said anything since (by the
     /// app's clock): [`CANCEL_GRACE`] counts from it.
     pub cancelling: Option<Instant>,

@@ -240,6 +240,9 @@ pub enum MenuItem {
     Copy(MenuScope, CopyFormat),
     /// A filter by the value of the grid's cell or selection (the filter menu's items).
     Filter(ByValue),
+    /// An entry of the choice `#` opens on a filtered table tab (on the grid's target as the
+    /// filter menu's are).
+    Count(super::estimate::CountChoice),
 }
 
 /// What the menu was opened on, as it was then. An item runs only while it is still so.
@@ -1367,6 +1370,10 @@ impl App {
                 self.overlays.close(OverlayKind::ContextMenu);
                 self.by_value_item(text);
             }
+            MenuItem::Count(choice) => {
+                self.overlays.close(OverlayKind::ContextMenu);
+                self.count_choice(choice);
+            }
         }
     }
 
@@ -1550,7 +1557,7 @@ impl App {
         let own = names.iter().find(|(x, _)| *x == item).map(|(_, l)| l.clone());
         match item {
             MenuItem::Action(a) => (own.unwrap_or_else(|| self.i18n.label(action::spec(a).label)), keys(a)),
-            MenuItem::Filter(_) => (own.unwrap_or_else(|| Localized::verbatim("")), String::new()),
+            MenuItem::Filter(_) | MenuItem::Count(_) => (own.unwrap_or_else(|| Localized::verbatim("")), String::new()),
             MenuItem::Scope(scope) => {
                 let label = match scope {
                     MenuScope::Copy(CopyScope::Selection) => self.i18n.label(Label::CopyScopeSelection),

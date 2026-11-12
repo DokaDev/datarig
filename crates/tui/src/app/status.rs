@@ -59,15 +59,18 @@ impl App {
             } else if r.export {
                 let id = self.tab().id;
                 self.export_progress(id).map_or_else(|| self.i18n.label(Label::ExportRunning), |m| self.i18n.msg(&m))
+            } else if r.estimate {
+                self.i18n.label(Label::ResultsTitleEstimating)
             } else if r.count {
                 self.i18n.label(Label::ResultsTitleCounting)
             } else if r.fetch {
                 self.i18n.label(Label::QueryFetching)
             } else if let Some(i) = step {
                 let (step, total) = ((i + 1).to_string(), log.len().to_string());
-                self.i18n.msg(&Msg::QueryRunningStep { step, total, elapsed: r.started.elapsed() })
+                let elapsed = self.now().saturating_duration_since(r.started);
+                self.i18n.msg(&Msg::QueryRunningStep { step, total, elapsed })
             } else {
-                self.i18n.msg(&Msg::QueryRunning { elapsed: r.started.elapsed() })
+                self.i18n.msg(&Msg::QueryRunning { elapsed: self.now().saturating_duration_since(r.started) })
             };
             return Some((text, if r.cancelling.is_some() { Level::Warning } else { Level::Info }, true));
         }

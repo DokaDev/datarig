@@ -594,6 +594,8 @@ impl App {
                 }
                 return self.on_counted(id, qid, result, snapshot);
             }
+            // The planner's estimate the user asked for.
+            DbEvent::Estimated { id: qid, result } => return self.on_estimated(id, qid, result),
             // A statement of an export.
             DbEvent::Exported { id: qid, result, cancelled } => return self.on_exported(id, qid, result, cancelled),
             // The server's half of the allowlist, for a text plan to view as a plan.
@@ -879,7 +881,7 @@ impl App {
                     t.exec.reading = crate::app::tabs::Reading { query, ..Default::default() };
                 }
                 t.exec.reading.answer = true;
-                t.results = Results::Rows(rs);
+                t.results = Results::Rows(Box::new(rs));
                 t.grid = GridState::paged(page_size, page_rows);
                 if let Some((col, x_off)) = kept_col {
                     (t.grid.col, t.grid.x_off) = (col, x_off);

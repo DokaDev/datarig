@@ -9,10 +9,10 @@ pub mod structure;
 
 pub use keys::{KeyCatalog, KeyMarks};
 pub use protocol::{
-    AppliedStep, ApplyError, ApplyFailure, ApplyTx, ArrayElement, CancelFailure, Cell, ColumnMeta, ColumnOrigin,
-    DbCommand, DbError, DbEvent, EXPORT_BATCH_BYTES, ExportBatch, ExportGuard, ExportRead, ExportSink, Isolation,
-    Outcome, OwnSession, PagingMode, ReadIn, SchemaObjects, ServerEnd, ServerMessage, SessionValues, StatementInfo,
-    TxOutcome, TxRule, TxStep, ValueKind,
+    AppliedStep, ApplyError, ApplyFailure, ApplyTx, ArrayElement, COUNT_LOCK_WAIT, CancelFailure, Cell, ColumnMeta,
+    ColumnOrigin, DbCommand, DbError, DbEvent, ESTIMATE_LIMIT, EXPORT_BATCH_BYTES, ExportBatch, ExportGuard,
+    ExportRead, ExportSink, Isolation, Outcome, OwnSession, PagingMode, ReadIn, SchemaObjects, ServerEnd,
+    ServerMessage, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep, ValueKind,
 };
 
 use crate::profile::ConnectionConfig;
@@ -424,6 +424,7 @@ impl DbCommand {
             DbCommand::Execute { .. }
                 | DbCommand::Resume { .. }
                 | DbCommand::Count { .. }
+                | DbCommand::Estimate { .. }
                 | DbCommand::CheckRepeat { .. }
                 | DbCommand::Export { .. }
                 | DbCommand::ApplyEdits { .. }
@@ -439,6 +440,7 @@ impl DbCommand {
                 DbEvent::Failed { id: *id, error, cancelled: true }
             }
             DbCommand::Count { id, .. } => DbEvent::Counted { id: *id, result: Err(error), snapshot: false },
+            DbCommand::Estimate { id, .. } => DbEvent::Estimated { id: *id, result: Err(error) },
             DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id: *id, result: Err(error) },
             DbCommand::Export { id, .. } => DbEvent::Exported { id: *id, result: Err(error), cancelled: true },
             DbCommand::ApplyEdits { id, .. } => {
@@ -622,12 +624,12 @@ mod cancel_tests {
         let session = Session::new(caps, SessionRole::Query, tx, recorded.clone());
         session.cancel();
         assert!(recorded.0.lock().unwrap().is_empty(), "nothing sent, nothing to cancel");
-        session.send(DbCommand::Count { id: 4, sql: "x".into() });
+        session.send(DbCommand::Count { id: 4, sql: "x".into(), limit: None });
         session.send(DbCommand::FetchMore { id: 2 });
         session.cancel();
         assert_eq!(*recorded.0.lock().unwrap(), [1], "a fetch is part of a run");
         // A count asked again has the same id, and is another run.
-        session.send(DbCommand::Count { id: 4, sql: "x".into() });
+        session.send(DbCommand::Count { id: 4, sql: "x".into(), limit: None });
         session.cancel();
         assert_eq!(*recorded.0.lock().unwrap(), [1, 2]);
     }

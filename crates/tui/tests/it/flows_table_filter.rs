@@ -396,6 +396,14 @@ fn released_with(lang: Lang, filter: Option<&str>) -> Harness {
     h
 }
 
+/// `#` on filtered rows, then the exact count of the choice it opens.
+fn exact_count(h: &mut Harness) {
+    h.keys("#");
+    assert!(h.app.overlays.is_open(OverlayKind::ContextMenu), "the choice opens");
+    h.keys("exact");
+    h.key(KeyCode::Enter);
+}
+
 #[test]
 fn paging_and_counting_check_the_shown_filter_again() {
     // As it ran: the next page runs it again, the count counts it.
@@ -412,9 +420,12 @@ fn paging_and_counting_check_the_shown_filter_again() {
     h.keys("n");
     assert!(h.sent().is_empty());
     assert!(status(&h).contains("comments are not allowed"), "{}", status(&h));
+    // Not offered: dimmed, with the reason a count is refused with.
     h.keys("#");
+    let said = h.app.menu_dimmed_notice("Exact count").expect("dimmed").render(&h.app.i18n).to_string();
+    assert!(said.starts_with("Rows are not counted for you: comments"), "{said}");
+    h.key(KeyCode::Esc);
     assert!(h.sent().is_empty());
-    assert!(status(&h).starts_with("Rows are not counted for you: comments"), "{}", status(&h));
     // Calls the user did not let run in this tab: refused, never asked mid-paging.
     shown_mut(&mut h).filter = Some(Filter { text: "my_fn(id) > 0".into(), recognised: None });
     h.keys("n");
@@ -426,7 +437,7 @@ fn paging_and_counting_check_the_shown_filter_again() {
 #[test]
 fn a_count_of_a_capped_query_counts_within_the_cap() {
     let mut h = released(Lang::En);
-    h.keys("#");
+    exact_count(&mut h);
     let plain: Vec<String> = h
         .sent()
         .into_iter()
@@ -441,7 +452,7 @@ fn a_count_of_a_capped_query_counts_within_the_cap() {
     h.tab_db(index, DbEvent::Counted { id: qid, result: Ok(10), snapshot: false });
     let mut h = released(Lang::En);
     shown_mut(&mut h).limit = Some(5);
-    h.keys("#");
+    exact_count(&mut h);
     let capped: Vec<String> = h
         .sent()
         .into_iter()

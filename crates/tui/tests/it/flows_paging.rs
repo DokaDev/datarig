@@ -73,7 +73,7 @@ fn resumes(cmds: &[DbCommand]) -> Vec<(u64, String, u64)> {
 fn counts(cmds: &[DbCommand]) -> Vec<(u64, String)> {
     cmds.iter()
         .filter_map(|c| match c {
-            DbCommand::Count { id, sql } => Some((*id, sql.clone())),
+            DbCommand::Count { id, sql, .. } => Some((*id, sql.clone())),
             _ => None,
         })
         .collect()
@@ -88,6 +88,24 @@ fn first_shown(h: &Harness) -> Option<String> {
         datarig_tui::widgets::grid::CellRef::Here(c) => c.clone(),
         _ => None,
     }
+}
+
+/// A run and a fetch start by the app's clock, the one their spinners and elapsed time are read by.
+#[test]
+fn a_run_and_a_fetch_start_by_the_apps_clock() {
+    let mut h = Harness::connected(Lang::En);
+    h.advance(SEC);
+    h.ctrl('e');
+    assert_eq!(h.app.tab().exec.running.expect("a run").started, h.clock.now());
+    let id = h.app.tab().exec.query_id;
+    let columns = Some(vec![meta("id", "int8", true, false)]);
+    h.tab_db(0, DbEvent::TxOpen(true));
+    h.tab_db(0, DbEvent::Page { id, columns, rows: page(0, 500), more: true, elapsed: SEC / 100 });
+    h.advance(SEC);
+    h.key(KeyCode::Tab); // results
+    h.keys("n");
+    assert_eq!(fetches(&h.sent()), 1);
+    assert_eq!(h.app.tab().exec.running.expect("a fetch").started, h.clock.now());
 }
 
 #[test]
@@ -413,9 +431,16 @@ fn counting_is_asked_for_announced_and_shown() {
     let [(cid, sql)] = &counts(&sent)[..] else { panic!("{sent:?}") };
     assert_eq!(*cid, id);
     assert_eq!(sql, "SELECT count(*) FROM (\nSELECT * FROM shop.users WHERE id <= 8\n) AS datarig_count");
+    // In the transaction that holds the result's portal: no time limit (its settings stay).
+    assert!(sent.iter().any(|c| matches!(c, DbCommand::Count { limit: None, .. })), "{sent:?}");
     // Announced (the status bar says it is counting while it runs).
     let note = h.app.tab().exec.run.notes.last().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default();
-    assert!(note.starts_with("Counting rows, sent for you: SELECT count(*) FROM ("), "{note}");
+    assert!(
+        note.starts_with(
+            "Counting rows (no time limit while the result is held open), sent for you: SELECT count(*) FROM ("
+        ),
+        "{note}"
+    );
     assert!(h.status(200, 45).contains("counting…"));
     assert!(results_title(&mut h, 160, 45).contains("counting…"));
     assert!(h.app.tab_busy(h.app.tab().id), "nothing else runs meanwhile");
@@ -428,7 +453,7 @@ fn counting_is_asked_for_announced_and_shown() {
     // Messages keep what was sent for the user.
     h.keys("H");
     let screen = h.screen(200, 45);
-    assert!(screen.contains("Counting rows, sent for you") && screen.contains("Counted now: 1,234 rows"), "{screen}");
+    assert!(screen.contains("Counting rows (no time limit") && screen.contains("Counted now: 1,234 rows"), "{screen}");
     h.keys("L");
     // A cancel.
     h.keys("#");

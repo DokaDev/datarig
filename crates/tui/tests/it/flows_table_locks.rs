@@ -314,10 +314,13 @@ fn paging_and_counting_are_refused_unless_confirmed() {
     assert!(!h.app.overlays.is_open(OverlayKind::Confirm));
     assert!(h.sent().is_empty());
     assert!(status(&h).contains("may lock rows, not confirmed in this tab"), "{}", status(&h));
+    // Not offered: dimmed, with the reason a count is refused with.
     h.keys("#");
     assert!(!h.app.overlays.is_open(OverlayKind::Confirm));
+    let said = h.app.menu_dimmed_notice("Exact count").expect("dimmed").render(&h.app.i18n).to_string();
+    assert!(said.starts_with("Rows are not counted for you: reads in this session"), "{said}");
+    h.key(KeyCode::Esc);
     assert!(h.sent().is_empty());
-    assert!(status(&h).starts_with("Rows are not counted for you: reads in this session"), "{}", status(&h));
     // Confirmed by a run: the next page and the count go.
     h.command("where id > 0");
     h.keys("y");
@@ -469,7 +472,7 @@ fn a_count_that_ends_the_transaction_does_not_keep_the_yes() {
     session(&mut h, DbEvent::TxOpen(true));
     answer_with(&mut h, true);
     h.app.focus = datarig_tui::app::Focus::Results;
-    h.keys("#");
+    exact_count(&mut h);
     let count = h.sent().into_iter().find_map(|c| match c {
         DbCommand::Count { id, .. } => Some(id),
         _ => None,
@@ -545,4 +548,12 @@ fn a_read_that_waited_for_the_connection_asks_on_the_new_session() {
     assert!(runs(&mut h).is_empty(), "nothing sent before the yes");
     h.keys("y");
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (my_fn(id) > 0)")]]);
+}
+
+/// `#` on filtered rows, then the exact count of the choice it opens.
+fn exact_count(h: &mut Harness) {
+    h.keys("#");
+    assert!(h.app.overlays.is_open(datarig_tui::app::overlay::OverlayKind::ContextMenu), "the choice opens");
+    h.keys("exact");
+    h.key(KeyCode::Enter);
 }

@@ -4,11 +4,16 @@
 //! sends: the text of every simple `Query` and every `Parse`, in the order they go out, and
 //! apart from them the row count of every `Execute`. It
 //! answers `SSLRequest`/`GSSENCRequest` with "no" and passes everything else through
-//! unchanged (authentication included); a cancel request goes to the server as it is.
+//! unchanged (authentication included); a cancel request goes to the server as it is. A
+//! fault can be set for the next simple query of a given text, or starting with one
+//! ([`Proxy::fault`], [`Proxy::fault_start`]): it goes to the server as another statement, or the
+//! connection is closed in its place.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
 
 /// A message a client sent.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,6 +24,43 @@ pub enum Sent {
     Parse(String),
 }
 
+/// What happens, once, to the next simple query of a given text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Fault {
+    /// The server gets this text instead.
+    Instead(String),
+    /// The start the fault was set for ([`Proxy::fault_start`]) is replaced by this text; what
+    /// follows it goes to the server as it is.
+    Head(String),
+    /// The query reaches the server this much later.
+    Delay(std::time::Duration),
+    /// The query goes to the server as it is, and from then on its answers are held back, as
+    /// [`Proxy::hold_answers`] does: none can get past before the hold.
+    Hold,
+    /// The query never reaches the server: both connections are closed.
+    Close,
+}
+
+/// Which simple query a fault waits for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Wanted {
+    Exactly(String),
+    Starting(String),
+}
+
+impl Wanted {
+    fn is(&self, query: &str) -> bool {
+        match self {
+            Wanted::Exactly(text) => query == text,
+            Wanted::Starting(text) => query.starts_with(text.as_str()),
+        }
+    }
+}
+
+type Faults = Arc<Mutex<Vec<(Wanted, Fault)>>>;
+
+type Rewords = Arc<Mutex<Vec<(Vec<u8>, Vec<u8>)>>>;
+
 pub struct Proxy {
     /// `host:port` to connect to instead of the server.
     pub addr: String,
@@ -28,6 +70,14 @@ pub struct Proxy {
     pub dropped: Arc<Mutex<usize>>,
     /// The rows each `Execute` asked for (0: all), in order.
     pub executes: Arc<Mutex<Vec<i32>>>,
+    /// The fault set for the next simple query of a text ([`Proxy::fault`]).
+    faults: Faults,
+    /// Whether the server's answers are held back ([`Proxy::hold_answers`]).
+    held: Arc<watch::Sender<bool>>,
+    /// Whether the server answered something the hold keeps ([`Proxy::answer_held`]).
+    waiting: Arc<AtomicBool>,
+    /// What the server's answers say otherwise ([`Proxy::reword`]).
+    rewords: Rewords,
 }
 
 impl Proxy {
@@ -38,16 +88,59 @@ impl Proxy {
         let sent = Arc::new(Mutex::new(Vec::new()));
         let dropped = Arc::new(Mutex::new(0));
         let executes = Arc::new(Mutex::new(Vec::new()));
-        let (s, d, e, up) = (sent.clone(), dropped.clone(), executes.clone(), upstream.to_string());
+        let faults: Faults = Arc::new(Mutex::new(Vec::new()));
+        let held = Arc::new(watch::channel(false).0);
+        let (s, d, e, f, up) = (sent.clone(), dropped.clone(), executes.clone(), faults.clone(), upstream.to_string());
+        let h = held.clone();
+        let waiting = Arc::new(AtomicBool::new(false));
+        let a = waiting.clone();
+        let rewords: Rewords = Arc::default();
+        let w = rewords.clone();
         tokio::spawn(async move {
             while let Ok((client, _)) = listener.accept().await {
-                let (s, d, e, up) = (s.clone(), d.clone(), e.clone(), up.clone());
+                let (s, d, e, f, up, h) = (s.clone(), d.clone(), e.clone(), f.clone(), up.clone(), h.clone());
+                let (a, w) = (a.clone(), w.clone());
                 tokio::spawn(async move {
-                    let _ = relay(client, &up, s, d, e).await;
+                    let _ = relay(client, &up, s, d, e, f, h, a, w).await;
                 });
             }
         });
-        Proxy { addr, sent, dropped, executes }
+        Proxy { addr, sent, dropped, executes, faults, held, waiting, rewords }
+    }
+
+    /// Hold what the server answers back from the clients (`true`) until told otherwise
+    /// (`false`), as an answer slow to arrive.
+    pub fn hold_answers(&self, held: bool) {
+        self.waiting.store(false, Ordering::SeqCst);
+        self.held.send_replace(held);
+    }
+
+    /// Whether the server has answered since the hold began, its answer kept from the client.
+    pub fn answer_held(&self) -> bool {
+        self.waiting.load(Ordering::SeqCst)
+    }
+
+    /// What the server answers says `to` wherever it says `from`, as a server that answers in
+    /// another language. Of the same length, so no message changes size.
+    pub fn reword(&self, from: &str, to: &str) {
+        assert_eq!(from.len(), to.len());
+        self.rewords.lock().unwrap().push((from.as_bytes().to_vec(), to.as_bytes().to_vec()));
+    }
+
+    /// The next simple query whose text is `query` (on any connection) meets `fault`, once;
+    /// after the faults set before it for the same text.
+    pub fn fault(&self, query: &str, fault: Fault) {
+        self.faults.lock().unwrap().push((Wanted::Exactly(query.to_string()), fault));
+    }
+
+    /// The next simple query that starts with `start` (on any connection) meets `fault`, once.
+    pub fn fault_start(&self, start: &str, fault: Fault) {
+        self.faults.lock().unwrap().push((Wanted::Starting(start.to_string()), fault));
+    }
+
+    /// Whether a fault set is still waiting for its query.
+    pub fn fault_pending(&self) -> bool {
+        !self.faults.lock().unwrap().is_empty()
     }
 
     /// What the clients sent so far.
@@ -82,12 +175,31 @@ async fn read_startup(c: &mut TcpStream) -> std::io::Result<Vec<u8>> {
     Ok(body)
 }
 
+/// How many bytes at the start of what a server sent are whole messages (a tag, a length that
+/// counts itself, the body).
+fn whole_messages(bytes: &[u8]) -> usize {
+    let mut at = 0;
+    while let Some(len) = bytes.get(at + 1..at + 5) {
+        let end = at + 1 + i32::from_be_bytes(len.try_into().unwrap()) as usize;
+        if end > bytes.len() {
+            break;
+        }
+        at = end;
+    }
+    at
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn relay(
     mut client: TcpStream,
     upstream: &str,
     sent: Arc<Mutex<Vec<Sent>>>,
     dropped: Arc<Mutex<usize>>,
     executes: Arc<Mutex<Vec<i32>>>,
+    faults: Faults,
+    held: Arc<watch::Sender<bool>>,
+    waiting: Arc<AtomicBool>,
+    rewords: Rewords,
 ) -> std::io::Result<()> {
     let mut body = read_startup(&mut client).await?;
     // SSLRequest / GSSENCRequest: "no", then the real startup message.
@@ -124,8 +236,29 @@ async fn relay(
     server.write_all(&out).await?;
     let (mut cr, mut cw) = client.into_split();
     let (mut sr, mut sw) = server.into_split();
+    let mut gate = held.subscribe();
+    let answered = waiting.clone();
     tokio::spawn(async move {
-        let _ = tokio::io::copy(&mut sr, &mut cw).await;
+        let mut buf = vec![0; 16 * 1024];
+        let mut pending = Vec::new();
+        while let Ok(n) = sr.read(&mut buf).await {
+            pending.extend_from_slice(&buf[..n]);
+            if n > 0 && *gate.borrow() {
+                answered.store(true, Ordering::SeqCst);
+            }
+            let _ = gate.wait_for(|held| !held).await;
+            // Whole messages only, so what is reworded is never cut in two; at the end, what came.
+            let whole = if n == 0 { pending.len() } else { whole_messages(&pending) };
+            let mut out: Vec<u8> = pending.drain(..whole).collect();
+            for (from, to) in rewords.lock().unwrap().iter() {
+                while let Some(at) = out.windows(from.len()).position(|w| w == from.as_slice()) {
+                    out[at..at + to.len()].copy_from_slice(to);
+                }
+            }
+            if cw.write_all(&out).await.is_err() || n == 0 {
+                break;
+            }
+        }
         let _ = cw.shutdown().await;
     });
     while let Ok(tag) = cr.read_u8().await {
@@ -133,6 +266,32 @@ async fn relay(
         let mut msg = vec![0; len - 4];
         cr.read_exact(&mut msg).await?;
         let cstr = |b: &[u8]| String::from_utf8_lossy(b.split(|x| *x == 0).next().unwrap_or(&[])).to_string();
+        let fault = {
+            let mut faults = faults.lock().unwrap();
+            let met = faults.iter().position(|(wanted, _)| tag == b'Q' && wanted.is(&cstr(&msg)));
+            met.map(|at| faults.remove(at))
+        };
+        let msg = match fault {
+            Some((_, Fault::Close)) => {
+                let _ = sw.shutdown().await;
+                return Ok(());
+            }
+            Some((_, Fault::Instead(text))) => [text.as_bytes(), &[0]].concat(),
+            Some((Wanted::Exactly(start) | Wanted::Starting(start), Fault::Head(text))) => {
+                [text.as_bytes(), &msg[start.len()..]].concat()
+            }
+            Some((_, Fault::Delay(by))) => {
+                tokio::time::sleep(by).await;
+                msg
+            }
+            Some((_, Fault::Hold)) => {
+                waiting.store(false, Ordering::SeqCst);
+                held.send_replace(true);
+                msg
+            }
+            None => msg,
+        };
+        let len = msg.len() + 4;
         match tag {
             b'Q' => sent.lock().unwrap().push(Sent::Query(cstr(&msg))),
             b'P' => {

@@ -176,3 +176,28 @@ fn the_builtin_operator_and_type_lists_are_sorted() {
     assert!(builtin_operator("=") && builtin_operator("||") && !builtin_operator("#~#"));
     assert!(builtin_type("int4") && builtin_type("text") && builtin_type("date") && !builtin_type("int"));
 }
+
+#[test]
+fn the_relations_read_are_locked_by_their_quoted_names_without_the_with_queries() {
+    let n = names(r#"WITH w AS (SELECT 1) SELECT * FROM public."Odd ""t", plain, w"#).unwrap();
+    assert_eq!(lock_query(&n).as_deref(), Some(r#"LOCK TABLE "public"."Odd ""t", "plain" IN ACCESS SHARE MODE"#));
+    assert_eq!(lock_query(&names("SELECT 1").unwrap()), None);
+}
+
+#[test]
+fn what_planning_may_run_is_asked_about_the_relations_read() {
+    let n = names("WITH w AS (SELECT 1) SELECT * FROM public.t, w").unwrap();
+    let q = planner_query(&n).unwrap();
+    assert!(q.contains("VALUES ($datarig$public$datarig$, $datarig$t$datarig$)"), "{q}");
+    assert!(!q.contains("$datarig$w$datarig$"), "{q}");
+    assert_eq!(NotRepeatable::from_check("planner", "t"), Some(NotRepeatable::PlannerCode("t".into())));
+    assert_eq!(NotRepeatable::from_check("planner_type", "m"), Some(NotRepeatable::PlannerType("m".into())));
+    for (oid, _) in PLANNER_TYPES {
+        assert!(q.contains(&format!("{oid}")), "{oid}");
+    }
+    assert!(planner_query(&names("SELECT 1").unwrap()).unwrap().contains("WHERE false"));
+    for asked in [q, check_query(&n).unwrap()] {
+        assert!(asked.contains("pg_catalog.regclassout("), "{asked}");
+        assert!(!asked.contains("regclass::pg_catalog.text"), "a cast that may be the user's: {asked}");
+    }
+}

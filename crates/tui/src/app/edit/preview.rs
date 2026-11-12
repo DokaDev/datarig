@@ -142,7 +142,7 @@ impl App {
         for (row, sql) in counts {
             self.query_seq += 1;
             let id = self.query_seq;
-            self.send_tab(tab, DbCommand::Count { id, sql });
+            self.send_tab(tab, DbCommand::Count { id, sql, limit: None });
             asked.push((id, row));
         }
         if let Some(rs) = self.tabs.get_mut(tab).and_then(rows_of_mut) {
@@ -389,6 +389,7 @@ impl App {
             started: now,
             fetch: false,
             count: false,
+            estimate: false,
             cancelling: None,
             stopping: false,
             refused: false,

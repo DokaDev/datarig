@@ -75,6 +75,46 @@ pub enum BarRefusal {
     ReadOnly(ReadOnlyBlock),
 }
 
+/// Why a filter gets no planner estimate ([`estimate_allowed`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EstimateOff {
+    /// It calls functions the filter allowlist does not know (even ones the user let run):
+    /// planning may evaluate them.
+    Calls,
+    /// MySQL: it holds a subquery, which the server may run while it plans the statement.
+    Subquery,
+}
+
+/// Whether filter `text`, as [`check_filter`] judged it (`verdict`), may be planned for an
+/// estimate of its rows: only a filter that passed without a word (no call outside the
+/// allowlist, even one the user confirmed), and on MySQL only without a subquery
+/// ([`has_subquery`]).
+pub fn estimate_allowed(verdict: &FilterVerdict, text: &str, d: Dialect) -> Result<(), EstimateOff> {
+    if *verdict != FilterVerdict::Clear {
+        return Err(EstimateOff::Calls);
+    }
+    if matches!(d, Dialect::MySql(_)) && has_subquery(text, d) {
+        return Err(EstimateOff::Subquery);
+    }
+    Ok(())
+}
+
+/// Whether filter `text` may hold a subquery: an opening parenthesis followed by `SELECT`,
+/// `WITH`, `VALUES` or `TABLE` in any reading of it the server may run. A text the lexical
+/// check refuses may hold one as far as is known (`true`).
+pub fn has_subquery(text: &str, d: Dialect) -> bool {
+    let Ok(readings) = readings(text, d) else { return true };
+    readings.iter().any(|r| {
+        let ws: Vec<&Token> = r.tokens.iter().filter(|t| !t.is_trivia()).collect();
+        ws.windows(2).any(|w| {
+            w[0].kind == Tok::LParen
+                && w[1].is_word()
+                && w[1].end <= text.len()
+                && ["SELECT", "WITH", "VALUES", "TABLE"].iter().any(|k| w[1].text(text).eq_ignore_ascii_case(k))
+        })
+    })
+}
+
 /// A token of the text the filter bar refuses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LexProblem {

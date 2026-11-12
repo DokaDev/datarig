@@ -7,6 +7,7 @@
 //! asks, with a `SELECT count(*)` of the same allowlist. Both go through the same read-only and
 //! confirm checks as a run, on the session the result came from.
 
+use super::menu::Off;
 use super::tabs::ResultView;
 use super::*;
 use datarig_core::sql::risk::repeat::NotRepeatable;
@@ -44,6 +45,9 @@ pub(super) fn why(r: &NotRepeatable) -> Msg {
         NotRepeatable::RowSecurity(name) => Msg::RepeatRowSecurity { name: name.clone() },
         NotRepeatable::Shadowed(name) => Msg::RepeatShadowed { name: name.clone() },
         NotRepeatable::UserColumnType(name) => Msg::RepeatUserColumnType { name: name.clone() },
+        NotRepeatable::PlannerCode(name) => Msg::RepeatPlannerCode { name: name.clone() },
+        NotRepeatable::PlannerType(name) => Msg::RepeatPlannerType { name: name.clone() },
+        NotRepeatable::TxUnknown => Label::RepeatTxUnknown.into(),
         NotRepeatable::Unreadable => Label::RepeatUnreadable.into(),
         NotRepeatable::Variable(name) => Msg::RepeatVariable { name: name.clone() },
     }
@@ -304,6 +308,7 @@ impl App {
             started: now,
             fetch: true,
             count: false,
+            estimate: false,
             cancelling: None,
             stopping: false,
             refused: false,
@@ -317,52 +322,93 @@ impl App {
 
     /// `#`: count the rows of the shown result, when the user asks: `SELECT count(*)` of its
     /// statement, only on the allowlist, through the checks of a run, announced; answered by
-    /// `DbEvent::Counted`. A result with every row fetched is counted already.
+    /// `DbEvent::Counted`. A result with every row fetched is counted already. A table tab
+    /// whose rows are filtered offers the planner's estimate first ([`App::open_count_menu`]).
     pub(super) fn count_rows(&mut self) {
+        let Some(id) = self.count_ready() else { return };
+        if self.table_query(id).and_then(|tq| tq.shown_filter()).is_some() {
+            return self.open_count_menu(id);
+        }
+        self.count_exact();
+    }
+
+    /// The active tab's shown result may be counted or estimated now (its rows, `!more` said
+    /// as counted already, nothing running, the result on the session it came from): its tab;
+    /// otherwise said why (nothing for a view without rows).
+    pub(super) fn count_ready(&mut self) -> Option<TabId> {
         let t = self.tab();
         let id = t.id;
         if t.exec.view != ResultView::Rows {
-            return;
+            return None;
         }
-        let Results::Rows(rs) = &t.results else { return };
+        let Results::Rows(rs) = &t.results else { return None };
         if !rs.more {
             let count = rs.rows.len() as u64;
-            return self.flash(Notice::new(Msg::ResultsCountComplete { count }, Level::Info));
+            self.flash(Notice::new(Msg::ResultsCountComplete { count }, Level::Info));
+            return None;
         }
         if t.exec.running.is_some() {
-            return self.flash_busy();
+            self.flash_busy();
+            return None;
         }
-        let Some(pid) = t.profile else { return };
+        t.profile?;
         if !(self.answer_here() || self.kept_answer_here()) {
-            return self.flash(Notice::new(Label::ResultsPageStale, Level::Warning));
+            self.flash(Notice::new(Label::ResultsPageStale, Level::Warning));
+            return None;
         }
+        Some(id)
+    }
+
+    /// How long the server may count tab `id`'s rows (`[results] count_timeout`), where a
+    /// limit is set: PostgreSQL only while no transaction is open on the tab's session (inside
+    /// the user's, or a portal's, the count keeps to the transaction's own settings), MySQL
+    /// always (for the statement alone). With `Some` when the limit is left out for an open
+    /// transaction: `true` the user's own, `false` the one that holds the result's portal.
+    pub(super) fn count_limit(&self, id: TabId) -> (Option<std::time::Duration>, Option<bool>) {
+        let Some(t) = self.tabs.get(id) else { return (None, None) };
+        let limit = self.prefs.count_timeout;
+        match self.tab_dialect(id) {
+            datarig_core::sql::dialect::Dialect::MySql(_) => (limit, None),
+            _ if t.exec.tx_open => (None, limit.map(|_| t.exec.in_block)),
+            _ => (limit, None),
+        }
+    }
+
+    /// The statement that counts tab `id`'s shown rows, past every check a count goes by; or why
+    /// there is none, in the words a menu shows and those its pick says.
+    pub(super) fn count_sql(&self, id: TabId, pid: ProfileId) -> Result<String, Box<Off>> {
+        let off = |notice: Notice| Box::new(Off::new(Label::ResultsEstimateOffRefused, notice));
+        let refused = |why: String| off(Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
         // A table tab's filter is checked again as when it ran (never asked about here), and
         // a cap on its rows is counted within.
-        if let Err(why) = self.table_recheck(id).and_then(|()| self.table_locks_recheck(id)) {
-            return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
-        }
+        self.table_recheck(id).and_then(|()| self.table_locks_recheck(id)).map_err(refused)?;
+        let t = self.tab();
         let source = self.table_capped_sql(id).unwrap_or_else(|| t.shown_sql().to_string());
         if zone_moved(t, &source) {
-            let why = self.i18n.label(Label::RepeatZoneChanged).to_string();
-            return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
+            return Err(refused(self.i18n.label(Label::RepeatZoneChanged).to_string()));
         }
-        let sql = match t.exec.prepared.count_query(&source) {
-            Ok(sql) => sql,
-            Err(r) => {
-                let why = self.i18n.msg(&why(&r)).to_string();
-                return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
-            }
-        };
+        let sql = t.exec.prepared.count_query(&source).map_err(|r| refused(self.i18n.msg(&why(&r)).to_string()))?;
         let statements = vec![sql.clone()];
-        if let Some(refused) =
-            self.unsupported(id, &statements).or_else(|| self.read_only_refusal(id, pid, &statements))
+        if let Some(notice) = self.unsupported(id, &statements).or_else(|| self.read_only_refusal(id, pid, &statements))
         {
-            return self.tab_status(id, refused);
+            return Err(off(notice));
         }
         if !self.dangerous(id, pid, &statements).is_empty() {
-            let why = self.i18n.label(Label::RepeatWrites).to_string();
-            return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
+            return Err(refused(self.i18n.label(Label::RepeatWrites).to_string()));
         }
+        Ok(sql)
+    }
+
+    /// The exact count of the active tab's shown rows ([`App::count_rows`]), with its time
+    /// limit ([`App::count_limit`]).
+    pub(super) fn count_exact(&mut self) {
+        let Some(id) = self.count_ready() else { return };
+        let Some(pid) = self.tab().profile else { return };
+        let sql = match self.count_sql(id, pid) {
+            Ok(sql) => sql,
+            Err(off) => return self.tab_status(id, off.notice),
+        };
+        let (limit, unbounded) = self.count_limit(id);
         let now = self.now();
         let Some(t) = self.tabs.get_mut(id) else { return };
         let qid = t.exec.query_id;
@@ -371,16 +417,23 @@ impl App {
             started: now,
             fetch: false,
             count: true,
+            estimate: false,
             cancelling: None,
             stopping: false,
             refused: false,
             export: false,
             apply: false,
         });
-        let note = Notice::new(Msg::ResultsCountSent { sql: super::runlog::excerpt(&sql, 120) }, Level::Info);
+        let excerpt = super::runlog::excerpt(&sql, 120);
+        let m = match unbounded {
+            Some(true) => Msg::ResultsCountSentUnbounded { sql: excerpt },
+            Some(false) => Msg::ResultsCountSentHeld { sql: excerpt },
+            None => Msg::ResultsCountSent { sql: excerpt },
+        };
+        let note = Notice::new(m, Level::Info);
         t.exec.run.notes.push(note.clone());
         self.tab_status(id, note);
-        self.send_tab(id, DbCommand::Count { id: qid, sql });
+        self.send_tab(id, DbCommand::Count { id: qid, sql, limit });
     }
 
     /// The count of tab `id`'s result `qid` came back. `snapshot`: the driver counted in a
@@ -399,7 +452,7 @@ impl App {
             Ok(_) => String::new(),
         };
         let Some(t) = self.tabs.get_mut(id) else { return };
-        if t.exec.query_id != qid || !t.exec.running.is_some_and(|r| r.count) {
+        if t.exec.query_id != qid || !t.exec.running.is_some_and(|r| r.count && !r.estimate) {
             return;
         }
         t.exec.running = None;
@@ -417,6 +470,18 @@ impl App {
                 Notice::new(m, Level::Success)
             }
             Err(datarig_core::driver::DbError::Cancelled) => Notice::new(Label::ResultsCountCancelled, Level::Warning),
+            // Stopped at its time limit, or behind another session's lock: the number is not
+            // known (never 0).
+            Err(datarig_core::driver::DbError::TimedOut(d)) => {
+                Notice::new(Msg::ResultsCountTimedOut { limit: super::estimate::fmt_limit(d) }, Level::Warning)
+            }
+            Err(datarig_core::driver::DbError::LockTimeout(_)) => {
+                Notice::new(Label::ResultsCountLockTimeout, Level::Warning)
+            }
+            // MySQL: refused before it ran, as it would use up the next transaction's settings.
+            Err(datarig_core::driver::DbError::NextTransactionSet) => {
+                Notice::new(Label::ResultsCountNextTransactionSet, Level::Warning)
+            }
             // The server's side of the allowlist refused it (asked right before).
             Err(datarig_core::driver::DbError::NotRepeatable(r)) => {
                 let why = self.i18n.msg(&why(&r)).to_string();

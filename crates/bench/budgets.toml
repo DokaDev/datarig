@@ -36,6 +36,9 @@ next_page = { to_result = 1, total = 1 }
 # (as every statement there).
 count_while_paging = { to_result = 2, total = 2 }
 count_idle = { to_result = 2, total = 2 }
+# The planner's estimate the user asks for (no portal open): the allowlist's question, then the
+# BEGIN READ ONLY with its time limits, the EXPLAIN and the COMMIT sent together.
+estimate_idle = { to_result = 2, total = 2 }
 resume_warm = { to_result = 2, total = 2 }
 resume_in_block = { to_result = 3, total = 3 }
 insert = { to_result = 1, total = 1 }
@@ -101,6 +104,8 @@ select_page_after_resume = { to_result = 2, total = 2 }
 hold_select_page_of_many = { to_result = 1, total = 1 }
 next_page = { to_result = 1, total = 1 }
 count = { to_result = 2, total = 2 }
+# The planner's estimate: the allowlist's question, then the EXPLAIN with its limits as hints.
+estimate = { to_result = 2, total = 2 }
 insert = { to_result = 1, total = 1 }
 select_small_in_block = { to_result = 1, total = 1 }
 insert_in_block = { to_result = 1, total = 1 }

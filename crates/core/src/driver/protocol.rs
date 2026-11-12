@@ -13,6 +13,17 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
+/// How long a count or an estimate of the app's own ([`DbCommand::Count`] with a `limit`,
+/// [`DbCommand::Estimate`]) waits for a lock another session holds or asked for before the
+/// server gives up ([`DbError::LockTimeout`]) on PostgreSQL: as long as a lookup of the metadata
+/// session. MySQL's waits 1 s, the shortest it takes (the session's own wait is not read on
+/// the way, and the app's is never longer than it).
+pub const COUNT_LOCK_WAIT: Duration = Duration::from_secs(2);
+
+/// How long the server may plan an estimate ([`DbCommand::Estimate`]) before it stops it
+/// ([`DbError::TimedOut`]).
+pub const ESTIMATE_LIMIT: Duration = Duration::from_secs(5);
+
 /// The tables and views of a schema (`DbCommand::LoadObjects`), by name, each list sorted.
 /// Materialized views are listed with the views and named again in `materialized` (the
 /// explorer draws them with an icon of their own). `stats` has the estimates of each relation
@@ -257,6 +268,11 @@ pub enum DbError {
     /// NOWAIT`) found one another session holds, and failed at once (PostgreSQL's SQLSTATE
     /// `55P03` outside a lock wait; MySQL's error 3572). The server's message.
     LockBusy(String),
+    /// The server stopped a statement of the app's own at the time limit the app set for it
+    /// (a count's [`DbCommand::Count`] `limit`, an estimate's [`ESTIMATE_LIMIT`]), or at a
+    /// shorter one the session had already: the limit that applied. Not a cancel of the user's,
+    /// and nothing is known of what it would have answered.
+    TimedOut(Duration),
     /// As [`DbError::LockTimeout`], but the statement ran without the session's lock wait limit:
     /// the server connection's own cut it short (PostgreSQL behind a pooler: a statement outside
     /// the transactions that start with the limit, such as `CALL`, `DO` or `VACUUM`). How long it
@@ -343,6 +359,7 @@ impl DbError {
             }
             DbError::Closed
             | DbError::NoAnswer(_)
+            | DbError::TimedOut(_)
             | DbError::NotSupported
             | DbError::ServerTooOld
             | DbError::RowsNotRead(_)
@@ -591,7 +608,29 @@ pub enum DbCommand {
     /// open, and inside the user's block, it runs in that transaction under a savepoint, so a
     /// failure neither aborts the user's block nor ends the portal; otherwise on its own (a
     /// read-only transaction on a read-only session). A cancel stops it.
+    ///
+    /// `limit`: how long the server may run it (`None`: no limit). Applied only where it cannot
+    /// change anything of the user's session: PostgreSQL outside a transaction block and a
+    /// portal (in a read-only transaction of its own whose `SET LOCAL`s end with it, never
+    /// longer than a limit the session has already; inside the user's block it runs without
+    /// one), MySQL for the statement alone (an optimizer hint; MariaDB's `SET STATEMENT`). A
+    /// count the server stopped at the limit answers [`DbError::TimedOut`]; one that waited
+    /// longer than [`COUNT_LOCK_WAIT`] (MySQL: 1 s) for a lock another session holds answers
+    /// [`DbError::LockTimeout`]. Never 0 rows for either.
     Count {
+        id: u64,
+        sql: String,
+        limit: Option<Duration>,
+    },
+    /// The planner's estimate of the rows `sql` (one read of a table, on the allowlist of
+    /// `sql::risk::repeat`) returns, without running it: its `EXPLAIN` (never `ANALYZE`) in the
+    /// session's plan format, after the allowlist's question to the server. Only while no
+    /// transaction is open on the session (no user's block, no portal held): the locks planning
+    /// takes end with the read-only transaction of its own it runs in, which waits at most
+    /// [`COUNT_LOCK_WAIT`] (MySQL: 1 s) for a lock and [`ESTIMATE_LIMIT`] in all. Answered with exactly one
+    /// [`DbEvent::Estimated`]; with a transaction open, or on a server without a plan format the
+    /// driver reads, [`DbError::NotSupported`] and nothing is sent. A cancel stops it.
+    Estimate {
         id: u64,
         sql: String,
     },
@@ -844,6 +883,7 @@ impl DbCommand {
             | DbCommand::ClosePortal { id }
             | DbCommand::EndTx { id, .. } => DbEvent::Failed { id: *id, error, cancelled: false },
             DbCommand::Count { id, .. } => DbEvent::Counted { id: *id, result: Err(error), snapshot: false },
+            DbCommand::Estimate { id, .. } => DbEvent::Estimated { id: *id, result: Err(error) },
             DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id: *id, result: Err(error) },
             DbCommand::Export { id, .. } => DbEvent::Exported { id: *id, result: Err(error), cancelled: false },
             DbCommand::ApplyEdits { id, .. } => {
@@ -1265,6 +1305,12 @@ pub enum DbEvent {
         id: u64,
         result: Result<u64, DbError>,
         snapshot: bool,
+    },
+    /// The answer to [`DbCommand::Estimate`] `id`: the rows the planner expects, or why there is
+    /// no estimate (a cancel is `DbError::Cancelled`).
+    Estimated {
+        id: u64,
+        result: Result<u64, DbError>,
     },
     /// The answer to [`DbCommand::CheckRepeat`] `id`: `Ok` when the server has nothing against
     /// running the statement again.

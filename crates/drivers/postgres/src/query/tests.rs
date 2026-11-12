@@ -1,7 +1,8 @@
 use super::{
-    Guard, Tx, TxAfter, command_tag, controls_tx, copies_with_client, forgets_prepared, idle_limit,
+    Guard, Tx, TxAfter, command_tag, controls_tx, copies_with_client, forgets_prepared, idle_limit, limited_begin,
     names_reserved_savepoint, plain_read, returns_no_rows, split_page, tx_after,
 };
+use std::time::Duration;
 
 /// The session's own savepoints are told apart in every form of `SAVEPOINT`, `RELEASE` and
 /// `ROLLBACK TO`, quoted or not, in any statement of the text; other names and other statements
@@ -120,7 +121,6 @@ fn transaction_control_keeps_the_run_savepoint_out() {
 /// which turns it off) and never past what the setting takes.
 #[test]
 fn the_idle_limit_is_set_for_the_transaction() {
-    use std::time::Duration;
     assert_eq!(idle_limit(Duration::from_secs(1800)), "SET LOCAL idle_in_transaction_session_timeout = 1800000");
     assert_eq!(idle_limit(Duration::from_micros(10)), "SET LOCAL idle_in_transaction_session_timeout = 1000");
     assert_eq!(idle_limit(Duration::from_millis(1500)), "SET LOCAL idle_in_transaction_session_timeout = 1500");
@@ -128,6 +128,15 @@ fn the_idle_limit_is_set_for_the_transaction() {
         idle_limit(Duration::from_secs(u64::MAX)),
         format!("SET LOCAL idle_in_transaction_session_timeout = {}", i32::MAX)
     );
+}
+
+/// A read of the app's own holds its locks between its two requests: the server ends it if the
+/// connection stalls there, without making a shorter limit of the session's longer.
+#[test]
+fn a_limited_read_cannot_sit_idle_holding_its_locks() {
+    let text = limited_begin(&[], Duration::from_secs(30), Duration::from_secs(1));
+    assert!(text.contains("('idle_in_transaction_session_timeout', pg_catalog.int8in('10000'))"), "{text}");
+    assert!(text.contains("pg_catalog.int8lt(g.v, l.ms) THEN g.v ELSE l.ms"), "{text}");
 }
 
 #[test]
@@ -1439,4 +1448,71 @@ fn copies_with_the_client_are_told_from_the_words() {
 fn a_from_in_the_where_clause_is_not_where_the_copy_goes() {
     assert!(!copies_with_client("COPY t FROM '/tmp/in.csv' WHERE a IS DISTINCT FROM stdin"));
     assert!(!copies_with_client("COPY t (a) FROM '/tmp/in.csv' WHERE a IS NOT DISTINCT FROM stdout"));
+}
+
+#[test]
+fn a_limited_read_sets_its_limits_after_the_sessions_own_and_never_longer() {
+    let each = ["SET LOCAL search_path = a".to_string(), "SET LOCAL lock_timeout = 5000".to_string()];
+    let text = super::limited_begin(&each, std::time::Duration::from_secs(30), std::time::Duration::from_secs(2));
+    assert!(
+        text.starts_with(
+            "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SET LOCAL search_path = a; SET LOCAL lock_timeout = 5000; \
+             SELECT s.name"
+        ),
+        "{text}"
+    );
+    // Each limit is the shorter of the session's (when it has one, read after its own settings)
+    // and the one given, set for the transaction alone.
+    assert!(
+        text.contains("('statement_timeout', pg_catalog.int8in('30000')), ('lock_timeout', pg_catalog.int8in('2000'))"),
+        "{text}"
+    );
+    assert!(text.contains("CASE WHEN pg_catalog.int8gt(g.v, '0') AND pg_catalog.int8lt(g.v, l.ms) THEN g.v"), "{text}");
+    assert!(
+        text.contains("pg_catalog.set_config(s.name, pg_catalog.textin(pg_catalog.int8out(s.ms)), true)"),
+        "{text}"
+    );
+    let none = super::limited_begin(&[], std::time::Duration::from_millis(1500), std::time::Duration::from_secs(2));
+    assert!(none.starts_with("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SELECT"), "{none}");
+    assert!(none.contains("('statement_timeout', pg_catalog.int8in('1500'))"), "{none}");
+    // What the app adds after the settings of each transaction runs on the session's search
+    // path: no operator, no cast (each looked up on that path), only `pg_catalog`'s functions.
+    let own = &none["BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; ".len()..];
+    for op in ["::", "=", "<", ">", "+", "-", "*", "/", "||", " USING ", "CAST", "OPERATOR"] {
+        assert!(!own.contains(op), "{op} in {own}");
+    }
+    let mut calls = own.match_indices('(').map(|(i, _)| {
+        let head = own[..i].trim_end();
+        head.rsplit([' ', '(', ',']).next().unwrap_or_default().to_string()
+    });
+    assert!(
+        calls.all(|f| matches!(f.as_str(), "" | "FROM" | "JOIN" | "VALUES" | "l") || f.starts_with("pg_catalog.")),
+        "an unqualified call in {own}"
+    );
+}
+
+#[test]
+fn a_stopped_bounded_read_is_the_limit_only_when_the_server_says_so_after_the_limit() {
+    use super::Said::{Request, TimeLimit, Unknown};
+    use datarig_core::driver::DbError;
+    use std::time::Duration;
+    let (limit, ms) = (Duration::from_secs(1), Duration::from_millis);
+    let limited = Some(limit);
+    // The server says it was the limit, in force for that long: whatever the user asked.
+    assert_eq!(super::stopped(false, TimeLimit, ms(1000), limited), Some(DbError::TimedOut(limit)));
+    assert_eq!(super::stopped(true, TimeLimit, ms(1500), limited), Some(DbError::TimedOut(limit)));
+    // The user asked, and the server says it was a cancel.
+    assert_eq!(super::stopped(true, Request, ms(1500), limited), Some(DbError::Cancelled));
+    assert_eq!(super::stopped(true, Request, ms(10), limited), Some(DbError::Cancelled));
+    assert_eq!(super::stopped(true, Request, ms(10), None), Some(DbError::Cancelled));
+    // Otherwise not known, never called a cancel of the user's or the app's limit: a cancel from
+    // elsewhere however late, the session's own limit before this one took effect, words the app
+    // cannot read whatever the user asked.
+    assert_eq!(super::stopped(false, Request, ms(1500), limited), None);
+    assert_eq!(super::stopped(false, Request, ms(999), limited), None);
+    assert_eq!(super::stopped(false, TimeLimit, ms(999), limited), None);
+    assert_eq!(super::stopped(true, TimeLimit, ms(1500), None), None);
+    assert_eq!(super::stopped(true, Unknown, ms(1500), limited), None);
+    assert_eq!(super::stopped(true, Unknown, ms(10), None), None);
+    assert_eq!(super::stopped(false, Unknown, ms(1500), limited), None);
 }
