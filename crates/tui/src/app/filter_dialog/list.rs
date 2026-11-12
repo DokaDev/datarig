@@ -470,7 +470,8 @@ impl App {
 
     /// Table tab `id` holds more rows of its query's load (its first page, or more): the
     /// values of each column with no condition of its own in that query are counted into the
-    /// session's memory of the table's values.
+    /// session's memory of the table's values. Only the rows not counted yet are read: a next
+    /// page, held or read by running the statement again, continues the same result.
     pub(crate) fn remember_values(&mut self, id: TabId) {
         let Some(key) = self.values_key(id) else { return };
         let Some(target) = self.table_target(id) else { return };
@@ -491,7 +492,8 @@ impl App {
         let load = values::Load {
             table: key,
             tab: id,
-            run: t.exec.query_id,
+            result: rs.id,
+            held: rs.rows.len(),
             columns: rs.columns.iter().map(|c| (&c.meta, free(&c.meta.name))).collect(),
             read_in: &rs.read_in,
         };

@@ -1064,6 +1064,63 @@ fn the_list_of_a_spilled_result_counts_the_rows_in_memory_and_never_reads_the_fi
     let _ = std::fs::remove_dir_all(&state);
 }
 
+/// A table tab's result not held open (`Released`), paged by running its statement again: each
+/// further page continues the same result, so the memory of its values reads only the page's
+/// own rows, never the rows before it again (which spilled to the file past the window).
+#[test]
+fn further_pages_run_again_are_remembered_without_reading_the_earlier_rows_again() {
+    let state = State::new("rerun-pages");
+    let mut cfg = test_db_config();
+    cfg.result_window_rows = 1_000;
+    let mut h = Harness::connected_with(&cfg, Lang::En);
+    h.app.set_paths(datarig_core::paths::Paths { data: None, state: Some(state.0.clone()) });
+    open_users(&mut h);
+    let size = h.app.page_size;
+    let pages = 8;
+    let all = rows(size * pages);
+    let index = h.app.tabs.active_index();
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(index, DbEvent::Released { id });
+    let first = all[..size].to_vec();
+    h.tab_db(
+        index,
+        DbEvent::Page { id, columns: Some(columns()), rows: first, more: true, elapsed: Duration::from_millis(1) },
+    );
+    let read = |h: &Harness| match &h.app.tab().results {
+        datarig_tui::app::Results::Rows(rs) => (rs.rows.len(), rs.rows.rows_read_through()),
+        _ => panic!("rows"),
+    };
+    let (_, before) = read(&h);
+    h.app.focus = datarig_tui::app::Focus::Results;
+    for p in 1..pages {
+        h.sent();
+        h.keys("n");
+        let rid = h
+            .sent()
+            .into_iter()
+            .find_map(|c| match c {
+                DbCommand::Resume { id, .. } => Some(id),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("page {p} runs the SELECT again"));
+        assert_ne!(rid, id, "a page run again is a run of its own");
+        h.tab_db(index, DbEvent::Released { id: rid });
+        let rows = all[p * size..(p + 1) * size].to_vec();
+        let more = p + 1 < pages;
+        h.tab_db(
+            index,
+            DbEvent::Page { id: rid, columns: Some(columns()), rows, more, elapsed: Duration::from_millis(1) },
+        );
+        assert_eq!(read(&h).0, (p + 1) * size, "page {p} continues the result");
+    }
+    let (held, after) = read(&h);
+    assert!(held > 1_000, "the result spilled past its window");
+    // At most the further pages' own rows: counting all the rows held on every page reads
+    // the spilled ones again each time.
+    let further = (size * (pages - 1)) as u64;
+    assert!(after - before <= further, "rows read from the spill file: {} (further pages: {further})", after - before);
+}
+
 /// MySQL `INVISIBLE` columns (a number and a text), which `SELECT *` leaves out: no values are
 /// loaded for them, but the server counts them as their catalogue types say, and their counted
 /// values tick into conditions that are sent, written as their catalogue types say.

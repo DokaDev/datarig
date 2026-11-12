@@ -86,10 +86,11 @@ fn a_load_is_remembered_for_its_unfiltered_columns() {
     let read_in = ReadIn::Values(SessionValues { time_zone: "+00:00".into(), charset: "utf8mb4".into() });
     let k = key("orders");
     let mut m = Memory::default();
-    let load = |run: u64, status_free: bool| Load {
+    let load = |result: u64, status_free: bool| Load {
         table: k.clone(),
         tab: TabId(1),
-        run,
+        result,
+        held: 3,
         columns: vec![(&status, status_free), (&amount, true)],
         read_in: &read_in,
     };
@@ -118,12 +119,46 @@ fn a_load_is_remembered_for_its_unfiltered_columns() {
 }
 
 #[test]
+fn the_pages_of_one_result_are_counted_once_and_fewer_rows_held_start_afresh() {
+    let c = meta("c");
+    let read_in = ReadIn::Unknown;
+    let k = key("orders");
+    let mut m = Memory::default();
+    let load = |result: u64, held: usize| Load {
+        table: k.clone(),
+        tab: TabId(1),
+        result,
+        held,
+        columns: vec![(&c, true)],
+        read_in: &read_in,
+    };
+    let page = rows(&[&[Some("a")], &[Some("b")]]);
+    // Each page of result 7 (2 rows each) counts only its own rows.
+    for p in 1..=5 {
+        let l = load(7, 2 * p);
+        assert_eq!(m.start(&l), 2 * (p - 1), "page {p}");
+        m.add(&l, &page);
+    }
+    let a = Counted { value: Some("a".into()), rows: 5 };
+    let b = Counted { value: Some("b".into()), rows: 5 };
+    assert_eq!(m.column(&k, "c").unwrap().values(), vec![a, b]);
+    // The same result holding fewer rows than were counted: counted again from its first row.
+    let l = load(7, 2);
+    assert_eq!(m.start(&l), 0);
+    m.add(&l, &page);
+    assert_eq!(m.column(&k, "c").unwrap().values().iter().map(|v| v.rows).collect::<Vec<_>>(), vec![1, 1]);
+    // Another result starts afresh.
+    let l = load(8, 2);
+    assert_eq!(m.start(&l), 0);
+}
+
+#[test]
 fn the_memory_is_bounded_per_column_table_and_session() {
     let c = meta("c");
     let read_in = ReadIn::Unknown;
     let mut m = Memory::default();
     let k = key("t");
-    let l = Load { table: k.clone(), tab: TabId(1), run: 1, columns: vec![(&c, true)], read_in: &read_in };
+    let l = Load { table: k.clone(), tab: TabId(1), result: 1, held: 1, columns: vec![(&c, true)], read_in: &read_in };
     m.start(&l);
     let many: Vec<Vec<Option<String>>> = (0..MEMORY_VALUES + 50).map(|i| vec![Some(format!("v{i}"))]).collect();
     m.add(&l, &many);
@@ -131,8 +166,9 @@ fn the_memory_is_bounded_per_column_table_and_session() {
     // A value past the length kept is not remembered.
     let long = "x".repeat(VALUE_BYTES + 1);
     let l2 = Load {
-        run: 2,
-        ..Load { table: k.clone(), tab: TabId(1), run: 1, columns: vec![(&c, true)], read_in: &read_in }
+        result: 2,
+        held: 1,
+        ..Load { table: k.clone(), tab: TabId(1), result: 1, held: 1, columns: vec![(&c, true)], read_in: &read_in }
     };
     m.start(&l2);
     m.add(&l2, &[vec![Some(long)]]);
@@ -143,7 +179,8 @@ fn the_memory_is_bounded_per_column_table_and_session() {
     let l = Load {
         table: wide.clone(),
         tab: TabId(1),
-        run: 1,
+        result: 1,
+        held: 1,
         columns: metas.iter().map(|m| (m, true)).collect(),
         read_in: &read_in,
     };
@@ -160,7 +197,8 @@ fn the_memory_is_bounded_per_column_table_and_session() {
         let l = Load {
             table: k.clone(),
             tab: TabId(1),
-            run: 1,
+            result: 1,
+            held: 1,
             columns: metas.iter().map(|m| (m, true)).collect(),
             read_in: &read_in,
         };
@@ -186,7 +224,8 @@ fn null_and_empty_values_count_toward_the_memorys_bounds() {
         let l = Load {
             table: k.clone(),
             tab: TabId(1),
-            run: 1,
+            result: 1,
+            held: 1,
             columns: metas.iter().map(|m| (m, true)).collect(),
             read_in: &read_in,
         };
@@ -208,8 +247,14 @@ fn a_load_of_no_rows_leaves_nothing_in_the_memory() {
     let read_in = ReadIn::Unknown;
     let mut m = Memory::default();
     for t in 0..MEMORY_TABLES * 4 {
-        let l =
-            Load { table: key(&format!("t{t}")), tab: TabId(1), run: 1, columns: vec![(&c, true)], read_in: &read_in };
+        let l = Load {
+            table: key(&format!("t{t}")),
+            tab: TabId(1),
+            result: 1,
+            held: 1,
+            columns: vec![(&c, true)],
+            read_in: &read_in,
+        };
         assert_eq!(m.start(&l), 0);
         m.add(&l, &[]);
         // Only the table counted last is held, while it is counted.
@@ -217,8 +262,14 @@ fn a_load_of_no_rows_leaves_nothing_in_the_memory() {
     }
     // Started only (its first page not come yet): bounded by the tables too.
     for t in 0..MEMORY_TABLES * 4 {
-        let l =
-            Load { table: key(&format!("s{t}")), tab: TabId(1), run: 1, columns: vec![(&c, true)], read_in: &read_in };
+        let l = Load {
+            table: key(&format!("s{t}")),
+            tab: TabId(1),
+            result: 1,
+            held: 1,
+            columns: vec![(&c, true)],
+            read_in: &read_in,
+        };
         m.start(&l);
         assert_eq!(m.tables(), 1);
     }

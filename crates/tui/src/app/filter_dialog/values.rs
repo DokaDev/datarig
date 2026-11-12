@@ -313,7 +313,7 @@ impl TableKey {
 /// What the memory keeps of one table: its columns' values and the load they come from.
 #[derive(Clone, Debug, Default)]
 struct TableMemory {
-    /// The load counted last (its tab and its run), and how many of its rows were counted.
+    /// The load counted last (its tab and its result), and how many of its rows were counted.
     load: Option<(TabId, u64)>,
     counted: usize,
     columns: HashMap<String, Remembered>,
@@ -325,7 +325,11 @@ struct TableMemory {
 pub(crate) struct Load<'a> {
     pub(crate) table: TableKey,
     pub(crate) tab: TabId,
-    pub(crate) run: u64,
+    /// The result the rows are in: the same for every page of it, whether its portal was held
+    /// or its statement ran again for the page, and another for every new run.
+    pub(crate) result: u64,
+    /// How many rows the result holds now.
+    pub(crate) held: usize,
     /// The result's columns with whether each had no condition of its own in the load.
     pub(crate) columns: Vec<(&'a ColumnMeta, bool)>,
     pub(crate) read_in: &'a ReadIn,
@@ -341,9 +345,10 @@ pub(crate) struct Memory {
 }
 
 impl Memory {
-    /// Load `l` is counted in: a new load (another run, or another tab) starts its unfiltered
-    /// columns afresh (a column filtered in it keeps what an earlier load left). Returns how many
-    /// of its rows are counted already: [`Memory::add`] takes those after them.
+    /// Load `l` is counted in: a new load (another result, or another tab) starts its unfiltered
+    /// columns afresh (a column filtered in it keeps what an earlier load left), and so does a
+    /// load holding fewer rows than were counted of it. Returns how many of its rows are counted
+    /// already: [`Memory::add`] takes those after them, so each page counts only its own rows.
     pub(crate) fn start(&mut self, l: &Load<'_>) -> usize {
         let at = match self.tables.iter().position(|(k, _)| *k == l.table) {
             Some(i) => i,
@@ -353,8 +358,8 @@ impl Memory {
             }
         };
         let (key, mut m) = self.tables.remove(at);
-        if m.load != Some((l.tab, l.run)) {
-            m.load = Some((l.tab, l.run));
+        if m.load != Some((l.tab, l.result)) || m.counted > l.held {
+            m.load = Some((l.tab, l.result));
             m.counted = 0;
             for (meta, free) in &l.columns {
                 if *free {
@@ -373,7 +378,7 @@ impl Memory {
     /// result's columns, counted in its unfiltered columns.
     pub(crate) fn add(&mut self, l: &Load<'_>, rows: &[Vec<Option<String>>]) {
         let Some((_, m)) = self.tables.iter_mut().find(|(k, _)| *k == l.table) else { return };
-        if m.load != Some((l.tab, l.run)) {
+        if m.load != Some((l.tab, l.result)) {
             return;
         }
         for (ci, (meta, free)) in l.columns.iter().enumerate() {
