@@ -12,17 +12,19 @@
 - The dialog's footer shows the condition as chips, the order, the limit and the SQL section:
   the whole statement as it would be sent, its WHERE and ORDER BY editable as text
   (`Ctrl+Space` completes) and `Open in editor`. A condition left alone is sent byte for byte;
-  once changed, it is its terms joined with AND, those not touched as written. `Enter` applies with every check, a
-  refusal keeps the dialog open with the reason and the refused part underlined, `Esc` drops
-  the changes, and `u` or `Ctrl+Z` undoes a step, then the last change applied to the tab.
+  once changed, it is its terms joined with AND, those not touched as written. `Enter` applies with
+  every check, a refusal keeps the dialog open with the reason and the refused part underlined,
+  `Esc` drops the changes, and `u` or `Ctrl+Z` undoes a step, then the last change applied to the
+  tab.
 - A condition with a comment, a `;`, a row lock (FOR UPDATE, FOR SHARE) or another clause is
   refused before anything is sent, and one that calls functions datarig cannot check asks
   first (refused on a read-only connection); MySQL's `ROW_COUNT()` and `FOUND_ROWS()` are
   refused. The order is the table's columns with ASC or DESC (NULLS FIRST or LAST on
-  PostgreSQL); the primary key is added after it (`+ id`), and an order not known to be unique
-  says so. `Space r v` opens the statement in a new console, `Space r x` clears the condition,
-  order and limit, and from the command line
-  `:where` and `:orderby` set the condition and the order and `:filter clear` clears them.
+  PostgreSQL); the primary key (or, without one, the shortest unique key of `NOT NULL` columns)
+  is added after it (`+ id`), and an order not known to be unique says so. `Space r v` opens the
+  statement in a new console, `Space r x` clears the condition, order and limit, and from the
+  command line `:where` and `:orderby` set the condition and the order and `:filter clear` clears
+  them.
 - On a table tab's grid, `=` (or `Space r =`) keeps only the value of the cell or of cells
   selected in one column, in place of the column's own conditions, and `!` (or `Space r !`)
   keeps every row but those, the NULL ones included unless NULL is among the cells; `X` (or
