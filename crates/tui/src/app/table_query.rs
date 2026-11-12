@@ -150,6 +150,16 @@ pub enum OrderKeysState {
     Failed { on: KeysOn },
 }
 
+/// Why a grid action (a sort, a filter by value) is not to run: it would run a query other than
+/// the one the filter line shows ([`App::line_ahead`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LineAhead {
+    /// A field holds changes not applied.
+    Edited,
+    /// The rows shown are not those of the line's query.
+    NotShown,
+}
+
 /// The query state of a table tab.
 #[derive(Clone, Debug)]
 pub struct TableQuery {
@@ -198,6 +208,9 @@ pub struct TableQuery {
     pub line: crate::widgets::filter_line::LineState,
     /// The table's keys for a total order, as far as read.
     pub order_keys: OrderKeysState,
+    /// The query a sort action runs ([`App::table_sort`]): the draft once its statement is
+    /// sent, so that a sort asked about and declined leaves the draft as the line shows it.
+    sorted: Option<Query>,
 }
 
 impl TableQuery {
@@ -222,6 +235,7 @@ impl TableQuery {
             keys_wait: None,
             line: Default::default(),
             order_keys: OrderKeysState::Unknown,
+            sorted: None,
         }
     }
 
@@ -238,6 +252,13 @@ impl TableQuery {
         self.requested.as_ref().map(|(_, q)| q).or(self.shown.as_ref()).unwrap_or(&self.draft)
     }
 
+    /// Whether the rows held are those of the query the line shows as applied: not after a run
+    /// of the query that brought no rows (refused, cancelled, its session lost), whose query the
+    /// line keeps while the rows held are an earlier query's.
+    pub fn shows_applied(&self) -> bool {
+        self.requested.as_ref().is_none_or(|(_, q)| self.shown.as_ref() == Some(q))
+    }
+
     /// Run `qid` sends `statements`: it is the pending query's run when it sends exactly its
     /// statement, else the run of something else.
     pub(super) fn sent(&mut self, qid: u64, statements: &[String]) {
@@ -246,6 +267,9 @@ impl TableQuery {
             _ => None,
         };
         self.requested = self.statement.as_ref().map(|(id, s)| (*id, s.query.clone()));
+        if let Some(q) = self.sorted.take().filter(|q| self.requested.as_ref().is_some_and(|(_, r)| r == q)) {
+            self.draft = q;
+        }
     }
 
     /// The first page of run `qid` landed: the rows are of its query, when it was one.
@@ -572,11 +596,17 @@ impl App {
         tree.structures.get(&(table.schema.clone(), table.name.clone()))?.loaded()
     }
 
+    /// The structure of table tab `id`'s table, when the explorer has read it.
+    pub(super) fn table_structure_of(&self, id: TabId) -> Option<&TableStructure> {
+        self.table_structure(self.tabs.get(id).filter(|t| t.is_table())?)
+    }
+
     /// What the app knows of table tab `id`'s table for writing its SQL: the columns of the
     /// rows it holds of its query (else the catalog's names, of unknown kind), with the
     /// explorer's structure when it was read (collations), and the keys of the key-only read on
-    /// the tab's metadata session as it is now ([`OrderKeysState`]). Until they are known no key
-    /// is: no tie-breaker is appended and no order is taken for total.
+    /// the tab's metadata session as it is now ([`OrderKeysState`]), with whether each column's
+    /// collation is deterministic as that read says (when the structure does not). Until they
+    /// are known no key is: no tie-breaker is appended and no order is taken for total.
     pub(crate) fn table_target(&self, id: TabId) -> Option<Target> {
         let t = self.tabs.get(id).filter(|t| t.is_table())?;
         let table = t.doc.table.as_ref()?;
@@ -611,7 +641,7 @@ impl App {
             for c in &mut target.columns {
                 if let Some(coll) = s.columns.iter().find(|sc| sc.name == c.name).and_then(|sc| sc.collation.as_ref()) {
                     c.collation = Some(coll.name.clone());
-                    c.deterministic = coll.deterministic;
+                    c.deterministic = Some(coll.deterministic);
                 }
             }
         }
@@ -622,6 +652,12 @@ impl App {
             OrderKeysState::Known { on: o, keys } if Some(o) == on.as_ref() => Some(keys),
             _ => None,
         });
+        if let Some(k) = read {
+            for c in target.columns.iter_mut().filter(|c| c.deterministic.is_none()) {
+                c.deterministic = k.deterministic.get(&c.name).copied();
+            }
+            target.like_nondeterministic = k.like_nondeterministic;
+        }
         if let Some(k) = read.filter(|k| !k.inherited) {
             target.primary_key = k.primary_key.clone();
             target.unique_keys = k.unique_not_null.clone();
@@ -1453,3 +1489,95 @@ impl App {
 
 #[cfg(test)]
 mod tests;
+
+impl App {
+    /// A sort action on column `col` of table tab `id`'s grid (`s`, `S`, a click in the
+    /// column's sort zone): the order of the rows shown ([`TableQuery::shown`], else what is
+    /// applied when the tab shows none) changed by `step` ([`query::sort_column`]), with their
+    /// condition and limit, runs as any run of the tab ([`App::table_run`]: checks, asks,
+    /// pending edits). Refused while the filter line holds changes not applied, in any field
+    /// (they are applied or put back first), or a query whose rows are not the ones shown (its
+    /// run was refused or cancelled: the earlier rows are still shown). The line and the draft take the new order only
+    /// once its run is sent: a run asked about and declined, or refused, leaves them as they
+    /// were.
+    pub(super) fn table_sort(&mut self, id: TabId, col: usize, step: query::SortStep) {
+        let name = match self.tabs.get(id).map(|t| &t.results) {
+            Some(Results::Rows(rs)) => rs.columns.get(col).map(|c| c.meta.name.clone()),
+            _ => None,
+        };
+        let Some(name) = name else {
+            return self.flash(Notice::new(Label::TableSortNoColumns, Level::Info));
+        };
+        if self.tab_busy(id) {
+            return self.flash_busy();
+        }
+        // What the line holds and was not applied stays the user's: the sort would run a query
+        // the line does not show.
+        self.filter_line_follow_tab(id);
+        match self.line_ahead(id) {
+            Some(LineAhead::Edited) => return self.flash(Notice::new(Label::TableSortUnapplied, Level::Warning)),
+            Some(LineAhead::NotShown) => return self.flash(Notice::new(Label::TableSortNotShown, Level::Warning)),
+            None => {}
+        }
+        let d = self.tab_dialect(id);
+        let Some(tq) = self.table_query(id) else { return };
+        let base = tq.shown.clone().unwrap_or_else(|| tq.applied().clone());
+        let q = Query { order: query::sort_column(&base.order, &name, step), ..base };
+        // The order goes into the filter line, which is one line: a name with a line break
+        // would not read back as the same name there.
+        let user: Vec<_> = q.order.iter().filter(|k| k.origin == query::KeyOrigin::User).cloned().collect();
+        if !crate::widgets::text_input::TextInput::holds(&query::order_text(&user, d)) {
+            let held = |k: &&query::OrderKey| crate::widgets::text_input::TextInput::holds(&k.col);
+            let column = user.iter().find(|k| !held(k)).map_or(name, |k| k.col.clone());
+            let column = crate::text::escape_controls(&column);
+            return self.flash(Notice::new(Msg::TableSortName { column }, Level::Warning));
+        }
+        let Some(tq) = self.table_query_mut(id) else { return };
+        tq.sorted = Some(q.clone());
+        self.table_run(id, q);
+    }
+
+    /// Why a grid action on table tab `id` (a sort, a filter by value), which runs from the rows
+    /// shown, would run a query other than the one the filter line shows: a field holds changes
+    /// not applied, or the line's query is not the one of the rows shown (its run was refused,
+    /// cancelled, or ended without rows). `None`: neither. The fields follow what is applied
+    /// first ([`App::filter_line_follow_tab`]).
+    pub(super) fn line_ahead(&self, id: TabId) -> Option<LineAhead> {
+        let tq = self.table_query(id)?;
+        let a = self.filter_line_applied(id);
+        let edited = tq.line.edited(Field::Where, &a.filter)
+            || tq.line.edited(Field::Order, &a.order)
+            || tq.line.edited(Field::Limit, &a.limit);
+        match (edited, tq.shows_applied()) {
+            (true, _) => Some(LineAhead::Edited),
+            (false, false) => Some(LineAhead::NotShown),
+            (false, true) => None,
+        }
+    }
+
+    /// What the headers of table tab `id`'s grid say of the rows shown, by result column: the
+    /// user's sort keys (the keys appended to make the order total are not marked: the line
+    /// shows them), and the columns the condition compares as far as the app read it (a
+    /// condition it did not read marks none: no mark is no claim). Empty when the tab shows no
+    /// rows of its query.
+    pub fn table_head_marks(&self, id: TabId) -> Vec<crate::widgets::grid::HeadMarks> {
+        let Some(t) = self.tabs.get(id).filter(|t| t.is_table()) else { return Vec::new() };
+        let (Results::Rows(rs), Some(shown)) = (&t.results, t.doc.table_query.as_ref().and_then(|q| q.shown.as_ref()))
+        else {
+            return Vec::new();
+        };
+        let keys: Vec<&query::OrderKey> = shown.order.iter().filter(|k| k.origin == query::KeyOrigin::User).collect();
+        let compared: Vec<&str> = match &shown.filter {
+            Some(f) if !f.text.trim().is_empty() => f.recognised.as_ref().map(|c| c.columns()).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        rs.columns
+            .iter()
+            .map(|c| {
+                let name = c.meta.name.as_str();
+                let sort = keys.iter().position(|k| k.col == name).map(|i| (keys[i].dir == query::Dir::Asc, i + 1));
+                crate::widgets::grid::HeadMarks { sort, filtered: compared.contains(&name) }
+            })
+            .collect()
+    }
+}

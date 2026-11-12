@@ -2362,3 +2362,541 @@ async fn an_idle_manual_transaction_is_rolled_back_and_its_session_stays() {
         assert!(app.tab().exec.session.is_some() && app.tab().exec.generation == generation);
     }
 }
+
+/// The first column's values of the rows the active tab holds, as shown.
+fn first_column(app: &App) -> Vec<Option<String>> {
+    let datarig_tui::app::Results::Rows(rs) = &app.tab().results else { return Vec::new() };
+    (0..rs.rows.len())
+        .map(|r| match rs.cell(r, 0) {
+            datarig_tui::widgets::grid::CellRef::Here(c) => c.clone(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Sorting a table tab by a column (read only, the seed's `shop.products`, capped at five
+/// rows): `s` on `price` sends the order with the primary key appended (prices tie), and the
+/// rows come in that order; `s` again turns it, `S` on `stock` adds a key.
+#[tokio::test(flavor = "multi_thread")]
+async fn sorting_a_table_tab_by_a_column_orders_its_rows_on_the_server() {
+    use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::table_query::OrderKeysState;
+    let Some(url) = pg_url("sorting_a_table_tab_by_a_column_orders_its_rows_on_the_server") else { return };
+    let pw = datarig_core::profile::dsn::parse(&url).unwrap().password.unwrap_or_default();
+    let dir = std::env::temp_dir().join(format!("datarig-it-sort-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let paths = datarig_core::paths::Paths { data: Some(dir.join("data")), state: Some(dir.join("state")) };
+    let p = profile(&url);
+    let tab = TabState {
+        id: workspace::new_id(),
+        kind: workspace::TabKind::Table,
+        script: None,
+        profile: Some(p.id),
+        cursor: (0, 0),
+        top: 0,
+        console: 0,
+        table: Some(("shop".into(), "products".into())),
+        ddl: None,
+        results: None,
+        database: None,
+        schema: None,
+        filter: None,
+        order: Vec::new(),
+        limit: Some(5),
+    };
+    let ws =
+        WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };
+    workspace::save(&dir.join("state"), &ws).unwrap();
+    let store = Arc::new(MemoryStore::new());
+    store.set(&p.id.account(), &pw).unwrap();
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut app = App::new(&cfg, None, Lang::En);
+    app.set_secret_store(store as Arc<dyn SecretStore>);
+    app.set_paths(paths);
+    app.whats_new_paused = true;
+    app.set_instance_tag(&format!("sort{}", std::process::id()));
+    let (tx, mut rx) = unbounded_channel();
+    app.start(tx, Startup::Normal);
+    app.dispatch(Action::RunStatement);
+    let keys_known =
+        |a: &App| matches!(a.tab().doc.table_query.as_ref().map(|q| &q.order_keys), Some(OrderKeysState::Known { .. }));
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 > 0).await;
+    // The first run went before the profile's metadata session was open: the next one reads
+    // the table's keys with it.
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 > 0 && keys_known(a)).await;
+    let col = |app: &App, name: &str| match &app.tab().results {
+        datarig_tui::app::Results::Rows(rs) => rs.columns.iter().position(|c| c.meta.name == name).unwrap(),
+        _ => panic!("no rows"),
+    };
+    let sent = |app: &App| app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
+    let ids = |v: &[&str]| v.iter().map(|s| Some(s.to_string())).collect::<Vec<_>>();
+    app.focus = Focus::Results;
+    app.tab_mut().grid.col = col(&app, "price");
+    let qid = app.tab().exec.query_id;
+    press(&mut app, 's');
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && a.tab().exec.query_id != qid && held_rows(a).0 > 0).await;
+    assert_eq!(sent(&app), [r#"SELECT * FROM "shop"."products" ORDER BY "price" ASC, "id" ASC"#]);
+    let up = first_column(&app);
+    assert_eq!(up.len(), 5);
+    let qid = app.tab().exec.query_id;
+    press(&mut app, 's');
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && a.tab().exec.query_id != qid && held_rows(a).0 > 0).await;
+    assert_eq!(sent(&app), [r#"SELECT * FROM "shop"."products" ORDER BY "price" DESC, "id" ASC"#]);
+    // The seed's dearest products; two of them cost the same, in the order of their keys.
+    assert_eq!(first_column(&app), ids(&["298", "393", "452", "454", "76"]));
+    assert_ne!(up, first_column(&app));
+    // The cursor stayed on its column: `S` on `stock` adds it after `price`.
+    assert_eq!(app.tab().grid.col, col(&app, "price"));
+    app.tab_mut().grid.col = col(&app, "stock");
+    let qid = app.tab().exec.query_id;
+    press(&mut app, 'S');
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && a.tab().exec.query_id != qid && held_rows(a).0 > 0).await;
+    assert_eq!(sent(&app), [r#"SELECT * FROM "shop"."products" ORDER BY "price" DESC, "stock" ASC, "id" ASC"#]);
+    assert_eq!(first_column(&app), ids(&["298", "393", "452", "454", "76"]));
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The active table tab's keys are read on its metadata session.
+fn keys_known(app: &App) -> bool {
+    use datarig_tui::app::table_query::OrderKeysState;
+    matches!(app.tab().doc.table_query.as_ref().map(|q| &q.order_keys), Some(OrderKeysState::Known { .. }))
+}
+
+/// The values of column `col` of the rows the active tab holds, in order.
+fn held_column(app: &App, col: usize) -> Vec<Option<String>> {
+    let datarig_tui::app::Results::Rows(rs) = &app.tab().results else { return Vec::new() };
+    let mut out = Vec::new();
+    rs.rows.for_each_chunk(0..rs.rows.len(), 64, |rows| out.extend(rows.iter().map(|r| r[col].clone()))).unwrap();
+    out
+}
+
+/// Filter by value on the active table tab: the cursor on the cells of column `name` of the
+/// rows whose `id` is in `ids` (one cell, or a range down the column), `by` picked from the
+/// menu, the run waited for; then the ids of the rows it read, and the filter text it ran.
+async fn by_value(
+    app: &mut App,
+    rx: &mut UnboundedReceiver<AppEvent>,
+    ids: &[&str],
+    name: &str,
+    by: datarig_tui::app::filter_value::ByValue,
+) -> (Vec<String>, String) {
+    use datarig_tui::app::menu::{MenuItem, MenuLine};
+    let datarig_tui::app::Results::Rows(rs) = &app.tab().results else { panic!("no rows") };
+    let col = rs.columns.iter().position(|c| c.meta.name == name).expect("the column");
+    let held = held_column(app, 0);
+    let at = |id: &str| held.iter().position(|v| v.as_deref() == Some(id)).expect("the row");
+    let (first, last) = (at(ids[0]), at(ids[ids.len() - 1]));
+    assert_eq!(last + 1 - first, ids.len(), "the rows are next to each other");
+    let g = &mut app.tab_mut().grid;
+    (g.row, g.col, g.anchor) = (last, col, (ids.len() > 1).then_some((first, col)));
+    app.focus = Focus::Results;
+    press(app, 'F');
+    let m = app.overlays.menu_mut().expect("the filter menu");
+    let i = m.lines.iter().position(|l| *l == MenuLine::Item(MenuItem::Filter(by))).expect("the entry");
+    m.selected = i;
+    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+    let landed = |a: &App| {
+        a.tab().doc.table_query.as_ref().is_some_and(|q| {
+            q.failure().is_some() || q.requested.as_ref().is_some_and(|(_, r)| q.shown.as_ref() == Some(r))
+        })
+    };
+    pump(app, rx, 30, |a| idle(a, 0) && landed(a)).await;
+    let tq = app.tab().doc.table_query.as_ref().unwrap();
+    assert!(tq.failure().is_none(), "{:?}", app.tab().status.as_ref().map(|n| n.render(&app.i18n).to_string()));
+    let text = tq.shown.as_ref().and_then(|q| q.filter.as_ref()).map(|f| f.text.clone()).unwrap_or_default();
+    let mut got: Vec<String> = held_column(app, 0).into_iter().flatten().collect();
+    got.sort();
+    (got, text)
+}
+
+/// Filter by a cell's value on PostgreSQL, for text (and text of the `C` collation), a number,
+/// a time with its zone, bytes and NULL, one cell and several: each condition reads back the
+/// rows it names. Makes `public.zz_it_byvalue_<pid>` and drops it.
+#[tokio::test(flavor = "multi_thread")]
+async fn filter_by_value_reads_back_the_rows_it_names() {
+    use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::filter_line::TableAction;
+    use datarig_tui::app::filter_value::ByValue as B;
+    let Some(url) = pg_url("filter_by_value_reads_back_the_rows_it_names") else { return };
+    let pw = datarig_core::profile::dsn::parse(&url).unwrap().password.unwrap_or_default();
+    let table = format!("zz_it_byvalue_{}", std::process::id());
+    let t = format!("public.{table}");
+    let _guard = pg_clean::TableGuard::new(&url, &[&t]);
+    let create = format!(
+        "CREATE TABLE {t} (id int PRIMARY KEY, name text, c text COLLATE \"C\", n numeric, at timestamptz, b bytea)"
+    );
+    pg_clean::run_fresh(&url, &create).unwrap();
+    pg_clean::run_fresh(
+        &url,
+        &format!(
+            "INSERT INTO {t} VALUES (1, 'Apple', 'Apple', 1.50, '2026-11-10 09:30:00+00', '\\x01ab'), \
+             (2, 'apple pie', 'apple pie', 2, '2026-11-10 10:00:00+00', '\\x00'), \
+             (3, NULL, NULL, NULL, NULL, NULL), \
+             (4, '50%_off', '50%_off', 3.25, '2026-11-11 00:00:00+00', '\\x0102'), \
+             (5, '50ab_off2', '50ab_off2', 4, '2026-11-12 00:00:00+00', '\\x03')"
+        ),
+    )
+    .unwrap();
+    let dir = std::env::temp_dir().join(format!("datarig-it-byvalue-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let paths = datarig_core::paths::Paths { data: Some(dir.join("data")), state: Some(dir.join("state")) };
+    let p = profile(&url);
+    let tab = TabState {
+        id: workspace::new_id(),
+        kind: workspace::TabKind::Table,
+        script: None,
+        profile: Some(p.id),
+        cursor: (0, 0),
+        top: 0,
+        console: 0,
+        table: Some(("public".into(), table.clone())),
+        ddl: None,
+        results: None,
+        database: None,
+        schema: None,
+        filter: None,
+        order: Vec::new(),
+        limit: None,
+    };
+    let ws =
+        WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };
+    workspace::save(&dir.join("state"), &ws).unwrap();
+    let store = Arc::new(MemoryStore::new());
+    store.set(&p.id.account(), &pw).unwrap();
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut app = App::new(&cfg, None, Lang::En);
+    app.set_secret_store(store as Arc<dyn SecretStore>);
+    app.set_paths(paths);
+    app.whats_new_paused = true;
+    app.set_instance_tag(&format!("byvalue{}", std::process::id()));
+    let (tx, mut rx) = unbounded_channel();
+    app.start(tx, Startup::Normal);
+    assert!(app.tab().is_table());
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5).await;
+    // The first run went before the profile's metadata session was open: the next one reads
+    // the table's keys with it, and whether each column's collation is deterministic.
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5 && keys_known(a)).await;
+    // As the session shows it (its time zone decides the offset).
+    let at = |id: &str| held_column(&app, 4)[id.parse::<usize>().unwrap() - 1].clone().unwrap();
+    let (at1, at2) = (at("1"), at("2"));
+    // The cells (by `id`), the column, the entry, the ids it reads back and the filter it runs.
+    type Case<'a> = (&'a [&'a str], &'a str, B, &'a [&'a str], String);
+    let cases: Vec<Case> = vec![
+        (&["1"], "name", B::Eq, &["1"], "name = 'Apple'".into()),
+        (&["1"], "name", B::Ne, &["2", "4", "5"], "name <> 'Apple'".into()),
+        (&["1"], "name", B::NeNulls, &["2", "3", "4", "5"], "name IS DISTINCT FROM 'Apple'".into()),
+        (&["1"], "name", B::StartsWith, &["1"], "name LIKE 'Apple%' ESCAPE '!'".into()),
+        (&["1"], "name", B::Contains, &["1", "2"], "name ILIKE '%Apple%' ESCAPE '!'".into()),
+        (&["1"], "c", B::Contains, &["1", "2"], "c ILIKE '%Apple%' ESCAPE '!'".into()),
+        // `%` and `_` of the value match themselves only.
+        (&["4"], "name", B::StartsWith, &["4"], "name LIKE '50!%!_off%' ESCAPE '!'".into()),
+        (&["1"], "n", B::Gt, &["2", "4", "5"], "n > 1.50".into()),
+        (&["2"], "at", B::Ge, &["2", "4", "5"], format!("at >= '{at2}'")),
+        (&["1"], "at", B::Eq, &["1"], format!("at = '{at1}'")),
+        (&["1"], "b", B::Eq, &["1"], r"b = E'\\x01ab'::pg_catalog.bytea".into()),
+        (&["4"], "b", B::Gt, &["1", "5"], r"b > E'\\x0102'::pg_catalog.bytea".into()),
+        (&["3"], "name", B::IsNull, &["3"], "name IS NULL".into()),
+        (&["3"], "name", B::IsNotNull, &["1", "2", "4", "5"], "name IS NOT NULL".into()),
+        (&["1", "2", "3"], "name", B::In, &["1", "2", "3"], "(name IN ('Apple', 'apple pie') OR name IS NULL)".into()),
+        (
+            &["1", "2", "3"],
+            "name",
+            B::NotIn,
+            &["4", "5"],
+            "(name NOT IN ('Apple', 'apple pie') AND name IS NOT NULL)".into(),
+        ),
+        (&["1", "2"], "n", B::NotInNulls, &["3", "4", "5"], "(n NOT IN (1.50, 2) OR n IS NULL)".into()),
+    ];
+    for (cells, name, by, want, text) in cases {
+        let (got, ran) = by_value(&mut app, &mut rx, cells, name, by).await;
+        assert_eq!(ran, text, "{name} {by:?}");
+        assert_eq!(got, want.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "{text}");
+        app.dispatch(Action::Table(TableAction::Clear));
+        pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5).await;
+    }
+    // A second filter by value is added to the first.
+    by_value(&mut app, &mut rx, &["1"], "name", B::Contains).await;
+    let (got, ran) = by_value(&mut app, &mut rx, &["2"], "n", B::Eq).await;
+    assert_eq!(ran, "name ILIKE '%Apple%' ESCAPE '!' AND n = 2");
+    assert_eq!(got, ["2"]);
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An app with one table tab on `schema.table` of the profile of `url`, put back from a
+/// workspace in `dir` (nothing run yet).
+fn table_tab_app(url: &str, schema: &str, table: &str, dir: &std::path::Path) -> (App, UnboundedReceiver<AppEvent>) {
+    use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};
+    let pw = datarig_core::profile::dsn::parse(url).unwrap().password.unwrap_or_default();
+    let _ = std::fs::remove_dir_all(dir);
+    let paths = datarig_core::paths::Paths { data: Some(dir.join("data")), state: Some(dir.join("state")) };
+    let p = profile(url);
+    let tab = TabState {
+        id: workspace::new_id(),
+        kind: workspace::TabKind::Table,
+        script: None,
+        profile: Some(p.id),
+        cursor: (0, 0),
+        top: 0,
+        console: 0,
+        table: Some((schema.into(), table.into())),
+        ddl: None,
+        results: None,
+        database: None,
+        schema: None,
+        filter: None,
+        order: Vec::new(),
+        limit: None,
+    };
+    let ws =
+        WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };
+    workspace::save(&dir.join("state"), &ws).unwrap();
+    let store = Arc::new(MemoryStore::new());
+    store.set(&p.id.account(), &pw).unwrap();
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut app = App::new(&cfg, None, Lang::En);
+    app.set_secret_store(store as Arc<dyn SecretStore>);
+    app.set_paths(paths);
+    app.whats_new_paused = true;
+    app.set_instance_tag(&format!("tt{}", std::process::id()));
+    let (tx, rx) = unbounded_channel();
+    app.start(tx, Startup::Normal);
+    assert!(app.tab().is_table());
+    (app, rx)
+}
+
+/// The filter line of the active table tab applied again as it is (`f`, `Enter`), the run
+/// waited for: the ids of the rows read, the filter text and the statement it ran.
+async fn apply_line_again(app: &mut App, rx: &mut UnboundedReceiver<AppEvent>) -> (Vec<String>, String, Vec<String>) {
+    let qid = app.tab().exec.query_id;
+    app.focus = Focus::Results;
+    press(app, 'f');
+    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+    let landed = |a: &App| {
+        a.tab().exec.query_id != qid
+            && a.tab().doc.table_query.as_ref().is_some_and(|q| {
+                q.failure().is_some() || q.requested.as_ref().is_some_and(|(_, r)| q.shown.as_ref() == Some(r))
+            })
+    };
+    pump(app, rx, 30, |a| idle(a, 0) && landed(a)).await;
+    let tq = app.tab().doc.table_query.as_ref().unwrap();
+    assert!(tq.failure().is_none(), "{:?}", app.tab().status.as_ref().map(|n| n.render(&app.i18n).to_string()));
+    let text = tq.shown.as_ref().and_then(|q| q.filter.as_ref()).map(|f| f.text.clone()).unwrap_or_default();
+    let mut got: Vec<String> = held_column(app, 0).into_iter().flatten().collect();
+    got.sort();
+    let sent = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect();
+    if let Some(tq) = app.tab_mut().doc.table_query.as_mut() {
+        tq.line.focus = None;
+    }
+    (got, text, sent)
+}
+
+/// Filter by a value with a line break (LF, CR, CRLF) on PostgreSQL: the condition reads back
+/// the row it names, and the filter line applied again runs the same statement and reads the
+/// same rows (the line shows the text that ran). Makes `public.zz_it_breaks_<pid>` and drops
+/// it.
+#[tokio::test(flavor = "multi_thread")]
+async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::filter_line::TableAction;
+    use datarig_tui::app::filter_value::ByValue as B;
+    let Some(url) = pg_url("filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line") else { return };
+    let table = format!("zz_it_breaks_{}", std::process::id());
+    let t = format!("public.{table}");
+    let _guard = pg_clean::TableGuard::new(&url, &[&t]);
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {t} (id int PRIMARY KEY, name text)")).unwrap();
+    let rows = "(1, E'a\\nb'), (2, E'a\\rb'), (3, E'a\\r\\nb'), (4, 'a b'), (5, E'a\\n')";
+    pg_clean::run_fresh(&url, &format!("INSERT INTO {t} VALUES {rows}")).unwrap();
+    let dir = std::env::temp_dir().join(format!("datarig-it-breaks-{}", std::process::id()));
+    let (mut app, mut rx) = table_tab_app(&url, "public", &table, &dir);
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5).await;
+    // "starts with" is offered once the key-only read says whether the column's collation is
+    // deterministic (until then it is dimmed as not known): that read goes on the metadata
+    // session, beside the runs, and is waited for, however slow it is next to them.
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5 && keys_known(a)).await;
+    type Case<'a> = (&'a [&'a str], B, &'a [&'a str], &'a str);
+    let cases: &[Case] = &[
+        (&["1"], B::Eq, &["1"], r"name = E'a\nb'"),
+        (&["2"], B::Eq, &["2"], r"name = E'a\rb'"),
+        (&["3"], B::Eq, &["3"], r"name = E'a\r\nb'"),
+        (&["1"], B::Ne, &["2", "3", "4", "5"], r"name <> E'a\nb'"),
+        (&["5"], B::StartsWith, &["1", "5"], r"name LIKE E'a\n%' ESCAPE '!'"),
+        (&["1", "2", "3"], B::In, &["1", "2", "3"], r"name IN (E'a\nb', E'a\rb', E'a\r\nb')"),
+    ];
+    for (cells, by, want, text) in cases {
+        let (got, ran) = by_value(&mut app, &mut rx, cells, "name", *by).await;
+        assert_eq!(ran, *text, "{by:?}");
+        assert_eq!(got, want.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "{text}");
+        let first = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
+        let (again, ran_again, sent) = apply_line_again(&mut app, &mut rx).await;
+        assert_eq!((again, ran_again), (got, ran), "the line applied again: {text}");
+        assert_eq!(sent, first, "the same statement: {text}");
+        app.dispatch(Action::Table(TableAction::Clear));
+        pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5).await;
+    }
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// PostgreSQL's "contains" (`ILIKE`) is offered only on a column whose collation the key-only
+/// catalog read says is deterministic: on a column of a nondeterministic ICU collation it is
+/// dimmed with why (and nothing is sent), on the other text column it runs and reads back its
+/// rows. "starts with" (`LIKE`) on the nondeterministic column is dimmed before PostgreSQL 18,
+/// which refuses it, and reads back its rows from 18 on. Makes schema `zz_it_coll_<pid>` with
+/// the collation `zz_ci` and a table in it, and drops them.
+#[tokio::test(flavor = "multi_thread")]
+async fn patterns_are_offered_only_where_the_collation_takes_them() {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::filter_value::ByValue as B;
+    use datarig_tui::app::menu::{MenuItem, MenuLine};
+    let Some(url) = pg_url("patterns_are_offered_only_where_the_collation_takes_them") else { return };
+    let schema = format!("zz_it_coll_{}", std::process::id());
+    let _guard = SchemaGuard { url: url.clone(), schema: schema.clone() };
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE COLLATION {s}.zz_ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)"),
+        format!("CREATE TABLE {s}.zz_words (id int PRIMARY KEY, ci text COLLATE {s}.zz_ci, plain text)"),
+        format!(
+            "INSERT INTO {s}.zz_words VALUES (1, 'Apple', 'Apple'), (2, 'apple pie', 'apple pie'), (3, 'pear', 'pear')"
+        ),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let dir = std::env::temp_dir().join(format!("datarig-it-coll-{}", std::process::id()));
+    let (mut app, mut rx) = table_tab_app(&url, &schema, "zz_words", &dir);
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 3).await;
+    // The keys (and the collations) are read with the next run, on the metadata session.
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 3 && keys_known(a)).await;
+    let datarig_tui::app::Results::Rows(rs) = &app.tab().results else { panic!("no rows") };
+    let ci = rs.columns.iter().position(|c| c.meta.name == "ci").unwrap();
+    let held = held_column(&app, 0);
+    let row = held.iter().position(|v| v.as_deref() == Some("1")).unwrap();
+    let g = &mut app.tab_mut().grid;
+    (g.row, g.col, g.anchor) = (row, ci, None);
+    app.focus = Focus::Results;
+    let qid = app.tab().exec.query_id;
+    press(&mut app, 'F');
+    let m = app.overlays.menu().expect("the filter menu");
+    let contains = MenuItem::Filter(B::Contains);
+    assert!(m.lines.contains(&MenuLine::Item(contains)));
+    let why = m.off_of(contains).map(|o| o.notice.render(&app.i18n).to_string());
+    assert!(why.as_deref().is_some_and(|w| w.contains("no ILIKE")), "{why:?}");
+    assert!(m.off_of(MenuItem::Filter(B::Eq)).is_none(), "equality is offered");
+    // "starts with" (`LIKE`) there: PostgreSQL before 18 refuses it, 18 takes it.
+    let before_18 = "DO $$ BEGIN IF current_setting('server_version_num')::int < 180000 \
+                     THEN RAISE EXCEPTION 'before 18'; END IF; END $$";
+    let pg18 = match pg_clean::run_fresh(&url, before_18) {
+        Ok(()) => true,
+        Err(e) if e.contains("before 18") => false,
+        Err(e) => panic!("{e}"),
+    };
+    let starts = m.off_of(MenuItem::Filter(B::StartsWith)).map(|o| o.notice.render(&app.i18n).to_string());
+    match pg18 {
+        true => assert_eq!(starts, None, "offered from 18 on"),
+        false => {
+            assert!(starts.as_deref().is_some_and(|w| w.contains("takes LIKE from PostgreSQL 18")), "{starts:?}")
+        }
+    }
+    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+    assert_eq!(app.tab().exec.query_id, qid, "nothing sent");
+    // The column of the default collation: offered, and it reads back its rows.
+    let (got, ran) = by_value(&mut app, &mut rx, &["1"], "plain", B::Contains).await;
+    assert_eq!(ran, "plain ILIKE '%Apple%' ESCAPE '!'");
+    assert_eq!(got, ["1", "2"]);
+    if pg18 {
+        let (got, ran) = by_value(&mut app, &mut rx, &["1"], "ci", B::StartsWith).await;
+        assert_eq!(ran, "plain ILIKE '%Apple%' ESCAPE '!' AND ci LIKE 'Apple%' ESCAPE '!'");
+        assert_eq!(got, ["1", "2"], "case as the collation compares");
+    }
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A column whose name holds a line break, next to one whose name has a space there: the filter
+/// line (one line) cannot hold the first name as it is, so `F` on it offers every entry dimmed
+/// and `s` / `S` on it are refused; nothing is sent. The second filters and sorts as usual, and
+/// reads back its rows. Makes schema `zz_it_lf_<pid>` and drops it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_column_named_with_a_line_break_is_neither_filtered_nor_sorted() {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::filter_value::ByValue as B;
+    let Some(url) = pg_url("a_column_named_with_a_line_break_is_neither_filtered_nor_sorted") else { return };
+    let schema = format!("zz_it_lf_{}", std::process::id());
+    let _guard = SchemaGuard { url: url.clone(), schema: schema.clone() };
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE TABLE {s}.zz_names (id int PRIMARY KEY, \"a\nb\" text, \"a b\" text)"),
+        format!("INSERT INTO {s}.zz_names VALUES (1, 'x', 'y'), (2, 'y', 'x')"),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let dir = std::env::temp_dir().join(format!("datarig-it-lf-{}", std::process::id()));
+    let (mut app, mut rx) = table_tab_app(&url, &schema, "zz_names", &dir);
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 2).await;
+    let datarig_tui::app::Results::Rows(rs) = &app.tab().results else { panic!("no rows") };
+    let lf = rs.columns.iter().position(|c| c.meta.name == "a\nb").expect("the column");
+    let held = held_column(&app, 0);
+    let row = held.iter().position(|v| v.as_deref() == Some("1")).unwrap();
+    let g = &mut app.tab_mut().grid;
+    (g.row, g.col, g.anchor) = (row, lf, None);
+    app.focus = Focus::Results;
+    let qid = app.tab().exec.query_id;
+    press(&mut app, 'F');
+    let m = app.overlays.menu().expect("the filter menu");
+    let items: Vec<_> = m
+        .lines
+        .iter()
+        .filter_map(|l| match l {
+            datarig_tui::app::menu::MenuLine::Item(i) => Some(*i),
+            _ => None,
+        })
+        .collect();
+    assert!(!items.is_empty());
+    for i in &items {
+        let why = m.off_of(*i).map(|o| o.notice.render(&app.i18n).to_string());
+        assert!(why.as_deref().is_some_and(|w| w.contains("a line break in the column name")), "{i:?}: {why:?}");
+    }
+    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+    for key in ['s', 'S'] {
+        press(&mut app, key);
+        assert_eq!(app.tab().exec.query_id, qid, "{key}: nothing sent");
+        let tq = app.tab().doc.table_query.as_ref().unwrap();
+        assert!(tq.draft.order.is_empty() && tq.line.order.text().is_empty(), "{key}");
+    }
+    // The column named with a space: filtered and sorted, its own rows read back.
+    let (got, ran) = by_value(&mut app, &mut rx, &["1"], "a b", B::Eq).await;
+    assert_eq!(ran, "\"a b\" = 'y'");
+    assert_eq!(got, ["1"]);
+    let datarig_tui::app::Results::Rows(rs) = &app.tab().results else { panic!("no rows") };
+    let sp = rs.columns.iter().position(|c| c.meta.name == "a b").expect("the column");
+    app.tab_mut().grid.col = sp;
+    press(&mut app, 's');
+    pump(&mut app, &mut rx, 30, |a| {
+        idle(a, 0)
+            && a.tab()
+                .doc
+                .table_query
+                .as_ref()
+                .is_some_and(|q| q.shows_applied() && q.shown.as_ref().is_some_and(|s| !s.order.is_empty()))
+    })
+    .await;
+    let tq = app.tab().doc.table_query.as_ref().unwrap();
+    assert!(tq.failure().is_none());
+    let keys: Vec<_> = tq.shown.as_ref().unwrap().order.iter().map(|k| k.col.as_str()).collect();
+    assert_eq!(keys.first().copied(), Some("a b"));
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}

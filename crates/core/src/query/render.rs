@@ -9,7 +9,9 @@
 //! `X'…'`; text as a string literal. A PostgreSQL string with a backslash is an escape string (`E'…'`), which reads the same whatever
 //! `standard_conforming_strings` is. A MySQL string is plain only when the session's character
 //! set is known to be `utf8mb4` and it holds no backslash or NUL (which `NO_BACKSLASH_ESCAPES`
-//! reads otherwise); else it is its UTF-8 bytes, `_utf8mb4 X'…'`.
+//! reads otherwise); else it is its UTF-8 bytes, `_utf8mb4 X'…'`. A line break is never written
+//! as it is (the filter line holds one line): PostgreSQL writes it as an escape (`E'…\n…'`),
+//! MySQL the string's bytes.
 //!
 //! A MySQL `TIMESTAMP` value with the offset of the zone it was read in (as a copy as SQL takes
 //! it) is written as that instant in the session's zone when the statement runs, the instant
@@ -25,9 +27,13 @@
 //! user expects: `(col IN (…) OR col IS NULL)`, `(col NOT IN (…) AND col IS NOT NULL)`.
 //!
 //! Patterns are escaped with `!` and written with `ESCAPE '!'`: a backslash would read
-//! differently under MySQL's `NO_BACKSLASH_ESCAPES`.
+//! differently under MySQL's `NO_BACKSLASH_ESCAPES`. A PostgreSQL pattern without case is
+//! `ILIKE`, written only on a column whose collation is known to be deterministic (the server
+//! refuses it on a nondeterministic one). A PostgreSQL `LIKE` is written on such a column, or on
+//! a server known to take it on any collation (18 and later; before, it refuses a
+//! nondeterministic one).
 
-use super::{CaseMode, CmpOp, ColumnFacts, ColumnKind, Cond, Target, Value};
+use super::{BarRefusal, CaseMode, CmpOp, ColumnFacts, ColumnKind, Cond, Target, Value};
 use crate::export::{negative_zero, sql_number};
 use crate::sql::dialect::{Dialect, LiteralOpen};
 
@@ -56,6 +62,15 @@ pub enum RenderError {
     /// A case-insensitive pattern on a PostgreSQL column whose collation is not deterministic,
     /// which the server refuses for `ILIKE`: the column.
     CaseInsensitiveRefused(String),
+    /// A case-insensitive pattern on a PostgreSQL column whose collation is not known to be
+    /// deterministic (it may be one the server refuses `ILIKE` on): the column.
+    CollationUnknown(String),
+    /// A pattern with the server's case on a PostgreSQL column whose collation is not
+    /// deterministic, on a server before 18, which refuses `LIKE` there: the column.
+    LikeRefused(String),
+    /// A pattern with the server's case on a PostgreSQL column whose collation is not known to
+    /// be deterministic, on a server not known to take `LIKE` on one that is not: the column.
+    LikeUnknown(String),
 }
 
 /// The escape character of the patterns written here.
@@ -150,10 +165,20 @@ fn render_at(c: &Cond, t: &Target, place: Place) -> Result<String, RenderError> 
             let e = d.quote_literal(&ESCAPE.to_string());
             let facts = t.column(name);
             match (d, case) {
-                (_, CaseMode::Server) => format!("{} {}LIKE {p} ESCAPE {e}", col(name), not(*negated)),
+                (Dialect::Postgres, CaseMode::Server) => {
+                    match (facts.and_then(|f| f.deterministic), t.like_nondeterministic) {
+                        (Some(true), _) | (_, Some(true)) => {}
+                        (Some(false), Some(false)) => return Err(RenderError::LikeRefused(name.clone())),
+                        _ => return Err(RenderError::LikeUnknown(name.clone())),
+                    }
+                    format!("{} {}LIKE {p} ESCAPE {e}", col(name), not(*negated))
+                }
+                (Dialect::MySql(_), CaseMode::Server) => format!("{} {}LIKE {p} ESCAPE {e}", col(name), not(*negated)),
                 (Dialect::Postgres, CaseMode::Insensitive) => {
-                    if facts.is_some_and(|f| !f.deterministic) {
-                        return Err(RenderError::CaseInsensitiveRefused(name.clone()));
+                    match facts.and_then(|f| f.deterministic) {
+                        Some(true) => {}
+                        Some(false) => return Err(RenderError::CaseInsensitiveRefused(name.clone())),
+                        None => return Err(RenderError::CollationUnknown(name.clone())),
                     }
                     format!("{} {}ILIKE {p} ESCAPE {e}", col(name), not(*negated))
                 }
@@ -430,18 +455,82 @@ fn refused_values(c: &Cond, t: &Target) -> Option<RenderError> {
     }
 }
 
-/// `s` as a string literal that the server reads as `s` (see the module docs).
+/// Characters a literal does not hold as they are: the filter line is one line, and would put
+/// a space for them, so that the text it shows would not be the text that runs.
+const LINE_BREAKS: [char; 2] = ['\n', '\r'];
+
+/// `s` as a string literal that the server reads as `s`, on one line (see the module docs).
 fn text_literal(t: &Target, s: &str) -> String {
     let d = t.dialect;
     match d {
-        Dialect::Postgres if s.contains('\\') => {
+        Dialect::Postgres if s.contains('\\') || s.contains(LINE_BREAKS) => {
             let open = LiteralOpen { prefix: 1, quote: '\'', backslash: true };
-            format!("E'{}'", d.literal_body(s, open))
+            // The backslashes are doubled first: the escapes written after them stay escapes.
+            let body = d.literal_body(s, open).replace('\n', "\\n").replace('\r', "\\r");
+            format!("E'{body}'")
         }
         Dialect::Postgres => d.quote_literal(s),
-        Dialect::MySql(_) if t.utf8mb4 && !s.contains(['\\', '\0']) => d.quote_literal(s),
+        Dialect::MySql(_) if t.utf8mb4 && !s.contains(['\\', '\0']) && !s.contains(LINE_BREAKS) => d.quote_literal(s),
         Dialect::MySql(_) => format!("_utf8mb4 X'{}'", hex(s.as_bytes(), true)),
     }
+}
+
+/// Filter text `base` with condition `cond` (as [`render`] writes one) added to it: `cond` alone
+/// when `base` is blank, else `base AND cond`. `base` is put in parentheses first unless every
+/// operator outside its own parentheses binds tighter than `AND` (read with the dialect's lexer):
+/// an `OR`, an `XOR`, a `|` (MySQL's `||` is `OR` unless `PIPES_AS_CONCAT`) or an assignment
+/// wraps it, so that the condition added never changes what `base` means.
+///
+/// `base` must stand on its own as one condition: one that the filter's lexical check refuses (a
+/// parenthesis that closes one it did not open or is left open, a comment, a statement's end, a
+/// string left open, a text read otherwise under another server setting) is refused with why,
+/// never put in parentheses (which could make it read as another condition). Only the blanks
+/// the dialect's lexer reads as blanks are left out at its end; the rest of it is kept as
+/// written (PostgreSQL reads a space outside ASCII as part of a name).
+pub fn and_filter(base: &str, cond: &str, d: Dialect) -> Result<String, BarRefusal> {
+    use crate::sql::lexer::{Tok, lex_in};
+    let end = lex_in(base, d).iter().rev().find(|t| t.kind != Tok::Whitespace).map_or(0, |t| t.end.min(base.len()));
+    let base = &base[..end];
+    if base.is_empty() {
+        return Ok(cond.to_string());
+    }
+    super::check::lexical(base, d)?;
+    Ok(match plain_and_chain(base, d) {
+        true => format!("{base} AND {cond}"),
+        false => format!("({base}) AND {cond}"),
+    })
+}
+
+/// Whether `AND` written after `text` takes the whole of it as its left operand: nothing outside
+/// its parentheses binds more loosely than `AND`, and nothing there hides what follows.
+fn plain_and_chain(text: &str, d: Dialect) -> bool {
+    use crate::sql::lexer::{Tok, lex_in};
+    let mut depth = 0i64;
+    // The end of a `:` the lexer gave as an operator of its own (`:=` comes as `:` then `=`).
+    let mut colon = None;
+    for t in lex_in(text, d) {
+        let s = t.text(text);
+        let after_colon = colon == Some(t.start);
+        colon = (t.kind == Tok::Op && s == ":").then_some(t.end);
+        match t.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            // A comment, a statement's end, code in a comment: what follows may be cut off.
+            Tok::LineComment | Tok::BlockComment | Tok::ExecComment | Tok::Semi | Tok::Directive => return false,
+            _ if depth > 0 => {}
+            Tok::Keyword | Tok::Ident if s.eq_ignore_ascii_case("OR") || s.eq_ignore_ascii_case("XOR") => {
+                return false;
+            }
+            Tok::Op if s == "|" || (s == "=" && after_colon) => return false,
+            _ => {}
+        }
+    }
+    depth == 0
 }
 
 /// Bytes in hexadecimal, two digits each.

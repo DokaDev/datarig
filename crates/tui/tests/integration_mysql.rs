@@ -737,3 +737,298 @@ async fn a_table_tab_limit_caps_its_pages() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The held values of column `col` of the current tab's rows.
+fn column(app: &App, col: usize) -> Vec<Option<String>> {
+    let Results::Rows(rs) = &app.tab().results else { return Vec::new() };
+    (0..rs.rows.len())
+        .map(|r| match rs.cell(r, col) {
+            datarig_tui::widgets::grid::CellRef::Here(c) => c.clone(),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Sorting a table tab by a column on MySQL (read only, the seed's `shop.products`, capped at
+/// five rows): `s` on `stock` sends it going up, then down, with the primary key appended
+/// (stocks tie), and the rows come in that order.
+#[tokio::test(flavor = "multi_thread")]
+async fn sorting_a_table_tab_by_a_column_orders_its_rows_on_the_server() {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::table_query::OrderKeysState;
+    let Some((url, _admin)) = urls("sorting_a_table_tab_by_a_column_orders_its_rows_on_the_server") else { return };
+    let dir = std::env::temp_dir().join(format!("datarig-it-mysort-{}", std::process::id()));
+    let (mut app, mut rx) = limited_table_app(&url, "products", 5, None, &dir);
+    app.dispatch(Action::RunStatement);
+    let keys_known =
+        |a: &App| matches!(a.tab().doc.table_query.as_ref().map(|q| &q.order_keys), Some(OrderKeysState::Known { .. }));
+    pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 > 0).await;
+    // The first run went before the profile's metadata session was open: the next one reads
+    // the table's keys with it.
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 > 0 && keys_known(a)).await;
+    let stock = match &app.tab().results {
+        Results::Rows(rs) => rs.columns.iter().position(|c| c.meta.name == "stock").unwrap(),
+        _ => panic!("no rows"),
+    };
+    let sent = |app: &App| app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
+    app.focus = Focus::Results;
+    app.tab_mut().grid.col = stock;
+    let num = |v: &Option<String>| v.as_deref().map(|s| s.parse::<i64>().expect("a number"));
+    for dir in ["ASC", "DESC"] {
+        let qid = app.tab().exec.query_id;
+        press(&mut app, 's');
+        pump(&mut app, &mut rx, 30, |a| idle(a) && a.tab().exec.query_id != qid && held_rows(a).0 > 0).await;
+        assert_eq!(sent(&app), [format!("SELECT * FROM `shop`.`products` ORDER BY `stock` {dir}, `id` ASC")]);
+        // The rows come in the order sent: by stock that way, ties by id going up. The seed's
+        // values differ between machines, so the order is checked, not the ids.
+        let rows: Vec<(Option<i64>, Option<i64>)> =
+            column(&app, stock).iter().map(num).zip(column(&app, 0).iter().map(num)).collect();
+        assert_eq!(rows.len(), 5);
+        for pair in rows.windows(2) {
+            let ((s0, id0), (s1, id1)) = (pair[0], pair[1]);
+            let by_stock = if dir == "ASC" { s0.cmp(&s1) } else { s1.cmp(&s0) };
+            assert!(by_stock.is_lt() || (by_stock.is_eq() && id0 < id1), "{dir}: {rows:?}");
+        }
+    }
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A table tab of `shop.<table>` on the MySQL profile of `url`, not run yet (state in `dir`).
+fn by_value_app(url: &str, table: &str, dir: &std::path::Path) -> (App, UnboundedReceiver<AppEvent>) {
+    use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};
+    let pw = datarig_core::profile::dsn::parse(url).unwrap().password.unwrap_or_default();
+    let _ = std::fs::remove_dir_all(dir);
+    let paths = datarig_core::paths::Paths { data: Some(dir.join("data")), state: Some(dir.join("state")) };
+    let p = profile(url);
+    let tab = TabState {
+        id: workspace::new_id(),
+        kind: workspace::TabKind::Table,
+        script: None,
+        profile: Some(p.id),
+        cursor: (0, 0),
+        top: 0,
+        console: 0,
+        table: Some(("shop".into(), table.into())),
+        ddl: None,
+        results: None,
+        database: None,
+        schema: None,
+        filter: None,
+        order: Vec::new(),
+        limit: None,
+    };
+    let ws =
+        WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };
+    workspace::save(&dir.join("state"), &ws).unwrap();
+    let store = Arc::new(MemoryStore::new());
+    store.set(&p.id.account(), &pw).unwrap();
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut app = App::new(&cfg, None, Lang::En);
+    app.set_secret_store(store as Arc<dyn SecretStore>);
+    app.set_paths(paths);
+    app.whats_new_paused = true;
+    app.set_instance_tag(&format!("mybyvalue{}", std::process::id()));
+    let (tx, rx) = unbounded_channel();
+    app.start(tx, Startup::Normal);
+    assert!(app.tab().is_table());
+    (app, rx)
+}
+
+/// The values of column `col` of the rows the active tab holds, in order.
+fn held_column(app: &App, col: usize) -> Vec<Option<String>> {
+    let Results::Rows(rs) = &app.tab().results else { return Vec::new() };
+    let mut out = Vec::new();
+    rs.rows.for_each_chunk(0..rs.rows.len(), 64, |rows| out.extend(rows.iter().map(|r| r[col].clone()))).unwrap();
+    out
+}
+
+/// Filter by value on the active table tab: the cursor on the cells of column `name` of the
+/// rows whose `id` is in `ids` (one cell, or a range down the column), `by` picked from the
+/// menu, the run waited for; then the ids of the rows it read, and the filter text it ran.
+async fn by_value(
+    app: &mut App,
+    rx: &mut UnboundedReceiver<AppEvent>,
+    ids: &[&str],
+    name: &str,
+    by: datarig_tui::app::filter_value::ByValue,
+) -> (Vec<String>, String) {
+    use datarig_tui::app::menu::{MenuItem, MenuLine};
+    let Results::Rows(rs) = &app.tab().results else { panic!("no rows") };
+    let col = rs.columns.iter().position(|c| c.meta.name == name).expect("the column");
+    let held = held_column(app, 0);
+    let at = |id: &str| held.iter().position(|v| v.as_deref() == Some(id)).expect("the row");
+    let (first, last) = (at(ids[0]), at(ids[ids.len() - 1]));
+    assert_eq!(last + 1 - first, ids.len(), "the rows are next to each other");
+    let g = &mut app.tab_mut().grid;
+    (g.row, g.col, g.anchor) = (last, col, (ids.len() > 1).then_some((first, col)));
+    app.focus = Focus::Results;
+    press(app, 'F');
+    let m = app.overlays.menu_mut().expect("the filter menu");
+    let i = m.lines.iter().position(|l| *l == MenuLine::Item(MenuItem::Filter(by))).expect("the entry");
+    m.selected = i;
+    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+    pump(app, rx, 30, |a| {
+        idle(a)
+            && a.tab()
+                .doc
+                .table_query
+                .as_ref()
+                .is_some_and(|q| q.requested.is_none() || q.shown == q.requested.as_ref().map(|(_, q)| q.clone()))
+    })
+    .await;
+    let tq = app.tab().doc.table_query.as_ref().unwrap();
+    assert!(tq.failure().is_none(), "{:?}", app.tab().status.as_ref().map(|n| n.render(&app.i18n).to_string()));
+    let text = tq.shown.as_ref().and_then(|q| q.filter.as_ref()).map(|f| f.text.clone()).unwrap_or_default();
+    let mut got: Vec<String> = held_column(app, 0).into_iter().flatten().collect();
+    got.sort();
+    (got, text)
+}
+
+/// Filter by a cell's value on MySQL, for text under a `_ci` and a `_bin` collation, a decimal,
+/// a DATETIME, bytes and NULL, one cell and several: each condition reads back the rows it
+/// names. Makes `shop.zz_it_byvalue_<pid>` and drops it.
+#[tokio::test(flavor = "multi_thread")]
+async fn filter_by_value_reads_back_the_rows_it_names() {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::filter_line::TableAction;
+    use datarig_tui::app::filter_value::ByValue as B;
+    let Some((url, admin)) = urls("filter_by_value_reads_back_the_rows_it_names") else { return };
+    let table = format!("zz_it_byvalue_{}", std::process::id());
+    let t = format!("shop.{table}");
+    let _t = Made::make(
+        &admin,
+        &[
+            format!(
+                "CREATE TABLE {t} (id INT PRIMARY KEY, name VARCHAR(20) COLLATE utf8mb4_0900_ai_ci, \
+                 bname VARCHAR(20) COLLATE utf8mb4_bin, n DECIMAL(10,2), at DATETIME, b VARBINARY(8))"
+            ),
+            format!(
+                "INSERT INTO {t} VALUES (1, 'Apple', 'Apple', 1.50, '2026-11-10 09:30:00', X'01AB'), \
+                 (2, 'apple pie', 'apple pie', 2, '2026-11-10 10:00:00', X'00'), \
+                 (3, NULL, NULL, NULL, NULL, NULL), \
+                 (4, '50%_off', '50%_off', 3.25, '2026-11-11 00:00:00', X'0102'), \
+                 (5, '50ab_off2', '50ab_off2', 4, '2026-11-12 00:00:00', X'03')"
+            ),
+        ],
+        &[format!("DROP TABLE IF EXISTS {t}")],
+    )
+    .await;
+    let dir = std::env::temp_dir().join(format!("datarig-it-mybyvalue-{}", std::process::id()));
+    let (mut app, mut rx) = by_value_app(&url, &table, &dir);
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 5).await;
+    // The cells (by `id`), the column, the entry, the ids it reads back and the filter it runs.
+    type Case<'a> = (&'a [&'a str], &'a str, B, &'a [&'a str], &'a str);
+    let cases: &[Case] = &[
+        (&["1"], "name", B::Eq, &["1"], "name = 'Apple'"),
+        (&["1"], "name", B::Ne, &["2", "4", "5"], "name <> 'Apple'"),
+        (&["1"], "name", B::NeNulls, &["2", "3", "4", "5"], "NOT (name <=> 'Apple')"),
+        // `_ci`: case does not count, for = and LIKE alike; `_bin`: it does.
+        (&["1"], "name", B::StartsWith, &["1", "2"], "name LIKE 'Apple%' ESCAPE '!'"),
+        (&["1"], "bname", B::StartsWith, &["1"], "bname LIKE 'Apple%' ESCAPE '!'"),
+        (&["1"], "bname", B::Contains, &["1", "2"], "LOWER(bname) LIKE LOWER('%Apple%') ESCAPE '!'"),
+        (&["2"], "bname", B::Eq, &["2"], "bname = 'apple pie'"),
+        // `%` and `_` of the value match themselves only.
+        (&["4"], "name", B::StartsWith, &["4"], "name LIKE '50!%!_off%' ESCAPE '!'"),
+        (&["1"], "n", B::Gt, &["2", "4", "5"], "n > 1.50"),
+        (&["2"], "at", B::Ge, &["2", "4", "5"], "at >= '2026-11-10 10:00:00'"),
+        (&["1"], "at", B::Eq, &["1"], "at = '2026-11-10 09:30:00'"),
+        (&["1"], "b", B::Eq, &["1"], "b = X'01AB'"),
+        (&["4"], "b", B::Gt, &["1", "5"], "b > X'0102'"),
+        (&["3"], "name", B::IsNull, &["3"], "name IS NULL"),
+        (&["1", "2", "3"], "name", B::In, &["1", "2", "3"], "(name IN ('Apple', 'apple pie') OR name IS NULL)"),
+        (&["1", "2", "3"], "name", B::NotIn, &["4", "5"], "(name NOT IN ('Apple', 'apple pie') AND name IS NOT NULL)"),
+        (&["1", "2"], "n", B::NotInNulls, &["3", "4", "5"], "(n NOT IN (1.50, 2.00) OR n IS NULL)"),
+    ];
+    for (cells, name, by, want, text) in cases {
+        let (got, ran) = by_value(&mut app, &mut rx, cells, name, *by).await;
+        assert_eq!(ran, *text, "{name} {by:?}");
+        assert_eq!(got, want.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "{text}");
+        app.dispatch(Action::Table(TableAction::Clear));
+        pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 5).await;
+    }
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Filter by a value with a line break (LF, CR, CRLF) on MySQL: the condition (the value's
+/// UTF-8 bytes) reads back the row it names, and the filter line applied again (`f`, `Enter`)
+/// runs the same statement and reads the same rows. Makes `shop.zz_it_breaks_<pid>` and drops
+/// it.
+#[tokio::test(flavor = "multi_thread")]
+async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::filter_line::TableAction;
+    use datarig_tui::app::filter_value::ByValue as B;
+    let Some((url, admin)) = urls("filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line") else {
+        return;
+    };
+    let table = format!("zz_it_breaks_{}", std::process::id());
+    let t = format!("shop.{table}");
+    let _t = Made::make(
+        &admin,
+        &[
+            format!("CREATE TABLE {t} (id INT PRIMARY KEY, name VARCHAR(20) COLLATE utf8mb4_bin)"),
+            format!("INSERT INTO {t} VALUES (1, 'a\\nb'), (2, 'a\\rb'), (3, 'a\\r\\nb'), (4, 'a b'), (5, 'a\\n')"),
+        ],
+        &[format!("DROP TABLE IF EXISTS {t}")],
+    )
+    .await;
+    let dir = std::env::temp_dir().join(format!("datarig-it-mybreaks-{}", std::process::id()));
+    let (mut app, mut rx) = by_value_app(&url, &table, &dir);
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 5).await;
+    type Case<'a> = (&'a [&'a str], B, &'a [&'a str], &'a str);
+    let cases: &[Case] = &[
+        (&["1"], B::Eq, &["1"], "name = _utf8mb4 X'610A62'"),
+        (&["2"], B::Eq, &["2"], "name = _utf8mb4 X'610D62'"),
+        (&["3"], B::Eq, &["3"], "name = _utf8mb4 X'610D0A62'"),
+        (&["1"], B::Ne, &["2", "3", "4", "5"], "name <> _utf8mb4 X'610A62'"),
+        (&["5"], B::StartsWith, &["1", "5"], "name LIKE _utf8mb4 X'610A25' ESCAPE '!'"),
+        (
+            &["1", "2", "3"],
+            B::In,
+            &["1", "2", "3"],
+            "name IN (_utf8mb4 X'610A62', _utf8mb4 X'610D62', _utf8mb4 X'610D0A62')",
+        ),
+    ];
+    for (cells, by, want, text) in cases {
+        let (got, ran) = by_value(&mut app, &mut rx, cells, "name", *by).await;
+        assert_eq!(ran, *text, "{by:?}");
+        assert_eq!(got, want.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "{text}");
+        let first = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
+        // The filter line applied again as it is.
+        let qid = app.tab().exec.query_id;
+        app.focus = Focus::Results;
+        press(&mut app, 'f');
+        app.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        pump(&mut app, &mut rx, 30, |a| {
+            idle(a)
+                && a.tab().exec.query_id != qid
+                && a.tab()
+                    .doc
+                    .table_query
+                    .as_ref()
+                    .is_some_and(|q| q.shown == q.requested.as_ref().map(|(_, q)| q.clone()))
+        })
+        .await;
+        let tq = app.tab().doc.table_query.as_ref().unwrap();
+        assert!(tq.failure().is_none(), "{text}");
+        let again = tq.shown.as_ref().and_then(|q| q.filter.as_ref()).map(|f| f.text.clone()).unwrap_or_default();
+        assert_eq!(again, *text, "the line applied again");
+        let sent = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
+        assert_eq!(sent, first, "the same statement: {text}");
+        let mut rows: Vec<String> = held_column(&app, 0).into_iter().flatten().collect();
+        rows.sort();
+        assert_eq!(rows, got, "the same rows: {text}");
+        if let Some(tq) = app.tab_mut().doc.table_query.as_mut() {
+            tq.line.focus = None;
+        }
+        app.dispatch(Action::Table(TableAction::Clear));
+        pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 5).await;
+    }
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -26,6 +26,8 @@
 use super::action::{ChartAction, MonitorAction, PanelAction, PlanAction, PlanView};
 use super::copy::{CopyFormat, CopyScope};
 use super::edit::{EditAction, NotOffered};
+use super::filter_line::TableAction;
+use super::filter_value::ByValue;
 use super::monitor::MonitorView;
 use super::tabs::ResultView;
 use super::*;
@@ -60,6 +62,9 @@ const GRID_MENU: &[Action] = &[
     Action::Grid(GridAction::CopyCell),
     Action::Grid(GridAction::CopyRow),
 ];
+
+/// The grid's filters by the value of its cell or selection (a table tab's), after its copies.
+const FILTER_MENU: &[Action] = &[Action::Table(TableAction::FilterByValue)];
 
 /// The edits of the grid's cell or selection, after its copies: each only while its key would
 /// act now ([`App::edit_offered`]).
@@ -205,6 +210,16 @@ const OPENS_MENU: &[Action] = &[Action::OpenMenu, Action::TabMenu, Action::Explo
 /// A menu's items: the target's, the pane's, and those of them shown dimmed with why.
 type Items = (Vec<MenuItem>, Vec<MenuItem>, Vec<(MenuItem, Off)>);
 
+/// The filter menu's items, those of them shown dimmed with why, their labels, the hints
+/// shown with them, and the filter text each one that can run puts in the line.
+pub(super) type FilterItems = (
+    Vec<MenuItem>,
+    Vec<(MenuItem, Off)>,
+    Vec<(MenuItem, Localized)>,
+    Vec<(MenuItem, Localized)>,
+    Vec<(MenuItem, String)>,
+);
+
 /// What a copy of the grid's menu takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuScope {
@@ -223,6 +238,8 @@ pub enum MenuItem {
     Scope(MenuScope),
     /// A format of a scope's submenu.
     Copy(MenuScope, CopyFormat),
+    /// A filter by the value of the grid's cell or selection (the filter menu's items).
+    Filter(ByValue),
 }
 
 /// What the menu was opened on, as it was then. An item runs only while it is still so.
@@ -255,6 +272,10 @@ pub enum MenuTarget {
     Monitor { tab: TabId, key: Option<datarig_core::monitor::SessionKey>, read_on: u64 },
     /// The welcome panel (no profile yet).
     Welcome,
+    /// The filters by value of the grid's cell or selection: the grid as it was (its target),
+    /// and the result its cells were read from ([`crate::widgets::grid::ResultSet::id`]): rows
+    /// read again in their place are another result.
+    Filter { grid: Box<MenuTarget>, result: u64 },
 }
 
 /// A heading of the menu.
@@ -315,9 +336,15 @@ pub struct ContextMenu {
     pub pane: Vec<MenuItem>,
     /// The items of `own` and `pane` that cannot run now, shown dimmed, and why.
     pub off: Vec<(MenuItem, Off)>,
-    /// The explorer's own wording of an action for the row, as it was when the menu opened
-    /// (where the console opens, what is deleted).
-    names: Vec<(Action, Localized)>,
+    /// The own wording of an item, as it was when the menu opened: the explorer's of an action
+    /// for the row (where the console opens, what is deleted), a filter's with its value.
+    names: Vec<(MenuItem, Localized)>,
+    /// A few words shown with an item that can run, where its keys would be (a filter's
+    /// caveat).
+    hints: Vec<(MenuItem, Localized)>,
+    /// The filter text each filter item that can run puts in the line, as written when the
+    /// menu opened: what runs is what the menu showed, never written again from the cells.
+    filters: Vec<(MenuItem, String)>,
     /// The explorer row's or the tab's name as shown when the menu opened (its heading).
     title: String,
     /// The focus to give back when the menu closes without running anything.
@@ -644,6 +671,11 @@ impl App {
             MenuTarget::Tab { .. } => self.tab_target(),
             MenuTarget::Monitor { .. } => self.monitor_target(),
             MenuTarget::Welcome => self.profiles.is_empty().then_some(MenuTarget::Welcome),
+            MenuTarget::Filter { grid, .. } => {
+                let grid = Box::new(self.menu_target_now(grid)?);
+                let result = self.grid_result_id()?;
+                Some(MenuTarget::Filter { grid, result })
+            }
         }
     }
 
@@ -820,7 +852,7 @@ impl App {
                 .iter()
                 .chain(&pane)
                 .filter_map(|i| if let MenuItem::Action(a) = i { Some(*a) } else { None })
-                .filter_map(|a| self.explorer_menu_label(a, row).map(|l| (a, l)))
+                .filter_map(|a| self.explorer_menu_label(a, row).map(|l| (MenuItem::Action(a), l)))
                 .collect(),
             _ => Vec::new(),
         };
@@ -831,6 +863,8 @@ impl App {
             pane,
             off,
             names,
+            hints: Vec::new(),
+            filters: Vec::new(),
             title,
             back,
             filter: TextInput::default(),
@@ -936,6 +970,7 @@ impl App {
         let mut pane = Vec::new();
         if read {
             own.push(MenuItem::Scope(MenuScope::Copy(CopyScope::Selection)));
+            own.extend(self.available(FILTER_MENU, &mut off));
         }
         if cell.is_some() {
             // Why the whole result takes no edit is said once, on the first edit; why one does
@@ -989,18 +1024,66 @@ impl App {
 
     /// The results' menu next to the grid's selected cell (the grid's corner without one).
     fn open_results_menu_here(&mut self) {
+        let at = self.menu_at_cell();
+        self.open_results_menu(at);
+    }
+
+    /// Where a menu about the grid's selected cell opens: next to it (the grid's corner when it
+    /// is not shown; the inspector's corner while it is zoomed and the grid is not drawn).
+    pub(super) fn menu_at_cell(&self) -> (u16, u16) {
         let r = self.layout.results;
-        // The inspector zoomed: the grid is not drawn, the menu opens in the inspector's corner.
         if r.width == 0 {
             let d = self.layout.detail;
-            return self.open_results_menu((d.x + 2, d.y + 1));
+            return (d.x + 2, d.y + 1);
         }
         let g = &self.tab().grid;
         let shown = g.row >= g.top && g.row < g.top + g.page_rows.max(1);
         let y = if shown { g.data_y + (g.row - g.top) as u16 } else { g.data_y };
         let x = g.hit_cols.iter().find(|c| c.2 == g.col).map_or(r.x + 2, |c| c.0 + 1);
         let clamp = |v: u16, lo: u16, len: u16| v.clamp(lo, lo + len.saturating_sub(1));
-        self.open_results_menu((clamp(x, r.x, r.width), clamp(y, r.y, r.height)));
+        (clamp(x, r.x, r.width), clamp(y, r.y, r.height))
+    }
+
+    /// The grid's cell and selection as a menu's target, as they are now.
+    pub(super) fn menu_grid_target(&self) -> Option<MenuTarget> {
+        self.grid_target()
+    }
+
+    /// The id of the result the active tab's grid shows, when it shows rows.
+    pub(super) fn grid_result_id(&self) -> Option<u64> {
+        if self.tabs.is_empty() {
+            return None;
+        }
+        match &self.tab().results {
+            Results::Rows(rs) => Some(rs.id),
+            _ => None,
+        }
+    }
+
+    /// Open the filter menu: `items` for `target` (the grid as it is) at `at`, headed `title`,
+    /// `off` of them dimmed with why, `names` their labels and `hints` the words shown with
+    /// them. The focus goes back to the grid when it closes without running anything.
+    pub(super) fn push_filter_menu(
+        &mut self,
+        target: MenuTarget,
+        title: String,
+        (items, off, names, hints, filters): FilterItems,
+        at: (u16, u16),
+    ) {
+        if items.is_empty() {
+            return;
+        }
+        let back = self.focus;
+        self.push_menu_from(back, Ctx::Grid, target, (items, Vec::new(), off), at);
+        if let Some(m) = self.overlays.menu_mut()
+            && matches!(m.target, MenuTarget::Filter { .. })
+        {
+            m.title = title;
+            m.names = names;
+            m.hints = hints;
+            m.filters = filters;
+        }
+        self.menu_refilter();
     }
 
     /// Right click in the editor at (x, y): outside the Visual selection the cursor goes
@@ -1136,7 +1219,7 @@ impl App {
     }
 
     /// The texts an item is found by: its label as shown, its English label and its id.
-    fn item_texts(&self, ctx: Ctx, names: &[(Action, Localized)], item: MenuItem) -> Vec<String> {
+    fn item_texts(&self, ctx: Ctx, names: &[(MenuItem, Localized)], item: MenuItem) -> Vec<String> {
         let mut out = vec![self.menu_row(ctx, names, item).0.to_string()];
         match item {
             MenuItem::Action(a) => {
@@ -1277,6 +1360,12 @@ impl App {
                 if let Some(s) = f.setting() {
                     self.apply_setting(super::command::Setting::CopyFormat(s));
                 }
+            }
+            MenuItem::Filter(_) => {
+                let text =
+                    self.overlays.menu().and_then(|m| m.filters.iter().find(|(i, _)| *i == item)).map(|f| f.1.clone());
+                self.overlays.close(OverlayKind::ContextMenu);
+                self.by_value_item(text);
             }
         }
     }
@@ -1455,14 +1544,13 @@ impl App {
     }
 
     /// The label and keys of a menu item (keys in the menu's context).
-    fn menu_row(&self, ctx: Ctx, names: &[(Action, Localized)], item: MenuItem) -> (Localized, String) {
+    fn menu_row(&self, ctx: Ctx, names: &[(MenuItem, Localized)], item: MenuItem) -> (Localized, String) {
         let keys =
             |a: Action| self.keymap.hint_keys(a, ctx, self.enhanced_keys).map(|k| keys::label(&k)).unwrap_or_default();
+        let own = names.iter().find(|(x, _)| *x == item).map(|(_, l)| l.clone());
         match item {
-            MenuItem::Action(a) => {
-                let own = names.iter().find(|(x, _)| *x == a).map(|(_, l)| l.clone());
-                (own.unwrap_or_else(|| self.i18n.label(action::spec(a).label)), keys(a))
-            }
+            MenuItem::Action(a) => (own.unwrap_or_else(|| self.i18n.label(action::spec(a).label)), keys(a)),
+            MenuItem::Filter(_) => (own.unwrap_or_else(|| Localized::verbatim("")), String::new()),
             MenuItem::Scope(scope) => {
                 let label = match scope {
                     MenuScope::Copy(CopyScope::Selection) => self.i18n.label(Label::CopyScopeSelection),
@@ -1497,9 +1585,13 @@ impl App {
     fn menu_heading(&self, m: &ContextMenu, h: Heading) -> Localized {
         match (h, &m.target) {
             (Heading::AllActions, _) => self.i18n.label(Label::MenuHeadingAllActions),
-            (Heading::Target, MenuTarget::Explorer(..) | MenuTarget::Tab { .. } | MenuTarget::Monitor { .. }) => {
-                Localized::verbatim(m.title.clone())
-            }
+            (
+                Heading::Target,
+                MenuTarget::Explorer(..)
+                | MenuTarget::Tab { .. }
+                | MenuTarget::Monitor { .. }
+                | MenuTarget::Filter { .. },
+            ) => Localized::verbatim(m.title.clone()),
             (Heading::Target, MenuTarget::Grid { range: Some(_), .. }) => self.i18n.label(Label::MenuHeadingSelection),
             (Heading::Target, MenuTarget::Grid { cell: Some((row, col)), .. }) => {
                 let column = match &self.tab().results {
@@ -1534,7 +1626,9 @@ impl App {
             (Heading::Pane, MenuTarget::Plan { .. }) => self.i18n.label(Label::ResultsTabPlan),
             (Heading::Pane, MenuTarget::Chart { .. }) => self.i18n.label(Label::ResultsTabChart),
             (Heading::Pane, MenuTarget::Explorer(..)) => self.i18n.label(Label::PaneTreeTitle),
-            (Heading::Pane, MenuTarget::Grid { .. }) => self.i18n.label(Label::PaneResultsTitle),
+            (Heading::Pane, MenuTarget::Grid { .. } | MenuTarget::Filter { .. }) => {
+                self.i18n.label(Label::PaneResultsTitle)
+            }
             (Heading::Pane, MenuTarget::Editor { .. }) => self.i18n.label(Label::PaneEditorTitle),
             (Heading::Pane, MenuTarget::Tab { .. }) => self.i18n.label(Label::GroupTab),
             (Heading::Pane, MenuTarget::Monitor { .. }) => self.i18n.label(Label::GroupMonitor),
@@ -1547,7 +1641,10 @@ impl App {
         let (label, keys) = self.menu_row(m.ctx, &m.names, item);
         match m.off_of(item).and_then(|o| o.short) {
             Some(why) => (label, self.i18n.label(why).to_string()),
-            None => (label, keys),
+            None => match m.hints.iter().find(|(i, _)| *i == item) {
+                Some((_, hint)) => (label, hint.to_string()),
+                None => (label, keys),
+            },
         }
     }
 
@@ -1571,6 +1668,16 @@ impl App {
     pub fn menu_dimmed(&self) -> Vec<bool> {
         let Some(m) = self.overlays.menu() else { return Vec::new() };
         m.lines.iter().map(|l| matches!(l, MenuLine::Item(i) if m.off_of(*i).is_some())).collect()
+    }
+
+    /// Which of the open menu's lines are items that can run shown with a hint where their keys
+    /// would be.
+    pub fn menu_hinted(&self) -> Vec<bool> {
+        let Some(m) = self.overlays.menu() else { return Vec::new() };
+        m.lines
+            .iter()
+            .map(|l| matches!(l, MenuLine::Item(i) if m.off_of(*i).is_none() && m.hints.iter().any(|(h, _)| h == i)))
+            .collect()
     }
 
     /// The widths of the open menu's item labels (as opened, unfiltered), its headings and its

@@ -44,6 +44,7 @@ pub mod export;
 pub mod export_form;
 pub mod export_path_pick;
 pub mod filter_line;
+pub mod filter_value;
 pub mod folder_pick;
 pub mod folder_read;
 mod format;

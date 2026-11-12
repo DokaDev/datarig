@@ -1141,6 +1141,20 @@ impl App {
             self.focus = Focus::Results;
             // The grid takes the keys from the filter line.
             self.filter_line_blur();
+            // A table tab's header sort zone (its last two columns) sorts by the column, as `s`
+            // on it does; the column becomes the cursor's.
+            let zone = match &self.tab().results {
+                Results::Rows(_) if self.tab().is_table() => self.tab().grid.sort_zone_col(x, y),
+                _ => None,
+            };
+            if let Some(c) = zone {
+                let id = self.tab().id;
+                let g = &mut self.tab_mut().grid;
+                g.col = c;
+                g.anchor = None;
+                g.detached = false;
+                return self.table_sort(id, c, datarig_core::query::SortStep::Only);
+            }
             let t = self.tabs.active_mut();
             // The row-number gutter selects whole rows, a header whole columns;
             // Shift extends the selection there is; a drag from there extends it.

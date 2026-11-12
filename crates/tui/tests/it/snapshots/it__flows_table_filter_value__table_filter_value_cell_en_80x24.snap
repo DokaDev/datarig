@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_table_filter_value.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
+"│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾╭──────────────────────────────────────────────────────────────────╮         │"
+"│ │ › type to filter                                                 │         │"
+"│ │ Filter by name                                                   │         │"
+"│ │  = 'it's'                            case as the server compares │         │"
+"│ │  <> 'it's'                                  leaves out NULL rows │}        │"
+"│ │  <> 'it's' (NULLs included)                                      │1-10 09:…│"
+"│ │  < 'it's'                                                        │         │"
+"│ │  > 'it's'                                                        │         │"
+"│ │  <= 'it's'                                                       │         │"
+"│ │  >= 'it's'                                                       │         │"
+"│ │  starts with 'it's'                  case as the server compares │         │"
+"│ │  contains 'it's' (case-insensitive)                              │         │"
+"│ ╰──────────────────────────────────────────────────────────────────╯         │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" local-pg │ 3 rows · 2ms                                                     EN "

@@ -28,9 +28,9 @@ pub use check::{
     PG_REFUSED_CALLS, ShapeProblem, check_filter,
 };
 pub use compile::{Compiled, capped, compile, compile_capped};
-pub use order::{OrderError, OrderProblem, order_text, parse_order};
+pub use order::{OrderError, OrderProblem, SortStep, order_text, parse_order, sort_column};
 pub use recognise::recognise;
-pub use render::{RenderError, like_contains, like_starts_with, render};
+pub use render::{RenderError, and_filter, like_contains, like_starts_with, render};
 
 use crate::sql::dialect::Dialect;
 use serde::{Deserialize, Serialize};
@@ -233,13 +233,24 @@ pub struct Target {
     /// MySQL: the session's character set is known to be `utf8mb4`, so a plain string literal
     /// is read as written. When unknown, text is written as its UTF-8 bytes.
     pub utf8mb4: bool,
+    /// PostgreSQL: whether the server takes `LIKE` on a nondeterministic collation (version 18
+    /// and later; `ILIKE` never). `None`: not known.
+    pub like_nondeterministic: Option<bool>,
 }
 
 impl Target {
     /// A table of dialect `d` with these columns and nothing else known: no key, a tie-breaker
-    /// wanted, the session's character set unknown.
+    /// wanted, the session's character set and what `LIKE` takes unknown.
     pub fn new(dialect: Dialect, columns: Vec<ColumnFacts>) -> Self {
-        Self { dialect, columns, primary_key: Vec::new(), unique_keys: Vec::new(), tie_break: true, utf8mb4: false }
+        Self {
+            dialect,
+            columns,
+            primary_key: Vec::new(),
+            unique_keys: Vec::new(),
+            tie_break: true,
+            utf8mb4: false,
+            like_nondeterministic: None,
+        }
     }
 
     /// The facts of column `name`, if known.
@@ -266,14 +277,14 @@ pub struct ColumnFacts {
     /// Its collation's name, when it has one and the server said it.
     pub collation: Option<String>,
     /// Equal strings are equal byte for byte under its collation (PostgreSQL: a
-    /// nondeterministic ICU collation is not; it refuses `ILIKE`).
-    pub deterministic: bool,
+    /// nondeterministic ICU collation is not; it refuses `ILIKE`). `None`: not known.
+    pub deterministic: Option<bool>,
 }
 
 impl ColumnFacts {
-    /// A column of kind `kind`, with a deterministic collation of unknown name.
+    /// A column of kind `kind`, its collation not known.
     pub fn new(name: impl Into<ColName>, kind: ColumnKind) -> Self {
-        Self { name: name.into(), kind, zoned: false, collation: None, deterministic: true }
+        Self { name: name.into(), kind, zoned: false, collation: None, deterministic: None }
     }
 }
 
@@ -296,6 +307,39 @@ pub enum ColumnKind {
     Bytes,
     /// Anything else (dates, JSON, …): values are written as strings the server converts.
     Other,
+}
+
+impl Cond {
+    /// The columns the condition compares, each once, in the order they first come. A part
+    /// kept as written ([`Cond::Raw`]) names none here, though it may use columns: a column
+    /// left out is not said to be unused.
+    pub fn columns(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        let mut stack = vec![self];
+        while let Some(c) = stack.pop() {
+            let col = match c {
+                Cond::All(parts) | Cond::Any(parts) => {
+                    stack.extend(parts.iter().rev());
+                    continue;
+                }
+                Cond::Not(inner) => {
+                    stack.push(inner);
+                    continue;
+                }
+                Cond::Raw(_) => continue,
+                Cond::Cmp { col, .. }
+                | Cond::NotDistinct { col, .. }
+                | Cond::IsNull { col, .. }
+                | Cond::In { col, .. }
+                | Cond::Like { col, .. }
+                | Cond::Between { col, .. } => col.as_str(),
+            };
+            if !out.contains(&col) {
+                out.push(col);
+            }
+        }
+        out
+    }
 }
 
 #[cfg(test)]

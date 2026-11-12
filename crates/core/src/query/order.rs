@@ -175,3 +175,41 @@ pub fn order_text(keys: &[OrderKey], d: Dialect) -> String {
     }
     parts.join(", ")
 }
+
+/// How a sort action changes the order for one column ([`sort_column`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortStep {
+    /// The column alone: ascending, then descending, then no order at all. The other keys go.
+    Only,
+    /// The column as one more key: added last ascending, then descending where it is, then
+    /// taken out. The other keys stay as they are.
+    Add,
+}
+
+/// The user's keys of `keys` after a sort action (`step`) on column `col`. The column's next
+/// direction follows the one it has among the user's keys (none, ascending, descending, none
+/// again); a key the app appended to make the order total ([`KeyOrigin::TieBreak`]) is not
+/// the user's, so a column that is only such a key starts ascending. The key written for the
+/// column leaves its NULLs where the server puts them; the other keys kept keep theirs.
+pub fn sort_column(keys: &[OrderKey], col: &str, step: SortStep) -> Vec<OrderKey> {
+    let mut user: Vec<OrderKey> = keys.iter().filter(|k| k.origin == KeyOrigin::User).cloned().collect();
+    let at = user.iter().position(|k| k.col == col);
+    let next = match at.map(|i| user[i].dir) {
+        None => Some(Dir::Asc),
+        Some(Dir::Asc) => Some(Dir::Desc),
+        Some(Dir::Desc) => None,
+    };
+    match step {
+        SortStep::Only => next.map(|dir| vec![OrderKey::user(col, dir)]).unwrap_or_default(),
+        SortStep::Add => {
+            match (at, next) {
+                (Some(i), Some(dir)) => user[i] = OrderKey::user(col, dir),
+                (Some(i), None) => {
+                    user.remove(i);
+                }
+                (None, _) => user.push(OrderKey::user(col, Dir::Asc)),
+            }
+            user
+        }
+    }
+}

@@ -12,6 +12,7 @@ fn users() -> TableName {
 fn target(d: Dialect) -> Target {
     let mut name = ColumnFacts::new("name", ColumnKind::Text);
     name.collation = Some("utf8mb4_0900_bin".into());
+    name.deterministic = Some(true);
     let mut email = ColumnFacts::new("email", ColumnKind::Text);
     email.collation = Some("utf8mb4_0900_ai_ci".into());
     let columns = vec![
@@ -544,12 +545,44 @@ fn render_like_escapes_the_value() {
     assert_eq!(render_my(&like("email", CaseMode::Insensitive), true), "email LIKE '%x!_%' ESCAPE '!'");
     assert_eq!(render_my(&like("name", CaseMode::Insensitive), true), "LOWER(name) LIKE LOWER('%x!_%') ESCAPE '!'");
     let mut t = target(Dialect::Postgres);
-    t.columns[1].deterministic = false;
+    t.columns[1].deterministic = Some(false);
     assert_eq!(
         render(&like("name", CaseMode::Insensitive), &t),
         Err(RenderError::CaseInsensitiveRefused("name".into()))
     );
-    assert!(render(&like("name", CaseMode::Server), &t).is_ok());
+    assert_eq!(render(&like("name", CaseMode::Server), &t), Err(RenderError::LikeUnknown("name".into())));
+}
+
+/// PostgreSQL before 18 refuses `LIKE` on a nondeterministic collation (18 takes it; `ILIKE`
+/// never): "starts with" is written on a collation known deterministic, or on a server known to
+/// take it; refused when both are known not to, not written when either is not known.
+#[test]
+fn render_like_on_a_nondeterministic_collation_needs_postgres_18() {
+    let like =
+        Cond::Like { col: "name".into(), pattern: like_starts_with("a"), negated: false, case: CaseMode::Server };
+    let ilike =
+        Cond::Like { col: "name".into(), pattern: like_contains("a"), negated: false, case: CaseMode::Insensitive };
+    let written = "name LIKE 'a%' ESCAPE '!'";
+    for takes in [None, Some(false), Some(true)] {
+        let mut t = Target { like_nondeterministic: takes, ..target(Dialect::Postgres) };
+        // Known deterministic: whatever the server.
+        assert_eq!(render(&like, &t).unwrap(), written, "{takes:?}");
+        for det in [Some(false), None] {
+            t.columns[1].deterministic = det;
+            let want = match (det, takes) {
+                (_, Some(true)) => Ok(written.to_string()),
+                (Some(false), Some(false)) => Err(RenderError::LikeRefused("name".into())),
+                _ => Err(RenderError::LikeUnknown("name".into())),
+            };
+            assert_eq!(render(&like, &t), want, "{det:?} {takes:?}");
+            // `ILIKE` stays refused on a collation not known deterministic, on 18 too.
+            assert!(render(&ilike, &t).is_err(), "{det:?} {takes:?}");
+        }
+    }
+    // MySQL: its collations take `LIKE` (known by name, never refused for this).
+    let mut t = Target { utf8mb4: true, ..target(MY) };
+    t.columns[1].deterministic = None;
+    assert_eq!(render(&like, &t).unwrap(), written);
 }
 
 #[test]
@@ -568,6 +601,207 @@ fn render_groups_what_needs_it() {
     assert_eq!(render_pg(&raw), "(lower(name) = 'x' OR id = 2)");
     let between = Cond::Between { col: "id".into(), lo: num("1"), hi: num("9"), negated: true };
     assert_eq!(render_pg(&between), "id NOT BETWEEN 1 AND 9");
+}
+
+#[test]
+fn render_values_of_a_cell_per_type_and_dialect() {
+    // Numbers bare on a number column, quoted on any other; NaN quoted for the server to read.
+    assert_eq!(render_pg(&cmp("price", CmpOp::Lt, num("19.990"))), "price < 19.990");
+    assert_eq!(render_my(&cmp("price", CmpOp::Gt, num("-0.5")), true), "price > -0.5");
+    assert_eq!(render_pg(&cmp("price", CmpOp::Eq, num("-0"))), "price = '-0'");
+    assert_eq!(render_my(&cmp("name", CmpOp::Eq, num("7")), true), "name = '7'");
+    // Times as the server showed them, quoted: the session reads back what it wrote.
+    let ts = text("2026-11-10 09:30:00.123456+09");
+    assert_eq!(render_pg(&cmp("born", CmpOp::Ge, ts)), "born >= '2026-11-10 09:30:00.123456+09'");
+    assert_eq!(render_my(&cmp("born", CmpOp::Le, text("2026-11-10 09:30:00")), true), "born <= '2026-11-10 09:30:00'");
+    assert_eq!(
+        render_my(&cmp("born", CmpOp::Le, text("2026-11-10")), false),
+        "born <= _utf8mb4 X'323032362D31312D3130'"
+    );
+    // Bytes: never text.
+    let b = || Value::Bytes(vec![0, 0x27, 0x5c, 0xff]);
+    assert_eq!(render_pg(&cmp("data", CmpOp::Eq, b())), r"data = E'\\x00275cff'::pg_catalog.bytea");
+    assert_eq!(render_my(&cmp("data", CmpOp::Ne, b()), true), "data <> X'00275CFF'");
+    assert_eq!(render_my(&cmp("data", CmpOp::Ne, b()), false), "data <> X'00275CFF'");
+    // NULL-safe not equal keeps the NULL rows; a NULL cell is `IS NULL`.
+    let ne = Cond::NotDistinct { col: "Mixed Case".into(), value: text("a'b"), negated: true };
+    assert_eq!(render_pg(&ne), r#""Mixed Case" IS DISTINCT FROM 'a''b'"#);
+    assert_eq!(render_my(&ne, true), "NOT (`Mixed Case` <=> 'a''b')");
+    assert_eq!(render_my(&Cond::IsNull { col: "data".into(), negated: false }, true), "data IS NULL");
+}
+
+/// A value with a line break is written on one line, read back as the value: the filter line
+/// holds one line, and the text it shows is the text that runs. PostgreSQL: an escape string
+/// (`E'…\n…'`); MySQL: its UTF-8 bytes. The same for a pattern and in a list.
+#[test]
+fn render_writes_line_breaks_on_one_line() {
+    let my_t = Target { utf8mb4: true, ..target(MY) };
+    let pg_t = target(Dialect::Postgres);
+    let like =
+        |v: &str| Cond::Like { col: "name".into(), pattern: like_contains(v), negated: false, case: CaseMode::Server };
+    let list = |v: &str| Cond::In { col: "name".into(), values: vec![text(v), text("x")], negated: false };
+    let cases: &[(&str, &str, &str)] = &[
+        ("a\nb", r"E'a\nb'", "X'610A62'"),
+        ("a\rb", r"E'a\rb'", "X'610D62'"),
+        ("a\r\nb", r"E'a\r\nb'", "X'610D0A62'"),
+        ("it's\\\n", r"E'it''s\\\n'", "X'697427735C0A'"),
+    ];
+    for &(v, pg, my) in cases {
+        let r = |c: &Cond, t: &Target| render(c, t).unwrap();
+        assert_eq!(r(&cmp("name", CmpOp::Eq, text(v)), &pg_t), format!("name = {pg}"), "{v:?}");
+        assert_eq!(r(&cmp("name", CmpOp::Eq, text(v)), &my_t), format!("name = _utf8mb4 {my}"), "{v:?}");
+        let pg_like = format!("name LIKE E'%{}%' ESCAPE '!'", &pg[2..pg.len() - 1]);
+        assert_eq!(r(&like(v), &pg_t), pg_like, "{v:?}");
+        assert_eq!(r(&list(v), &pg_t), format!("name IN ({pg}, 'x')"), "{v:?}");
+        assert_eq!(r(&list(v), &my_t), format!("name IN (_utf8mb4 {my}, 'x')"), "{v:?}");
+        for (t, d) in [(&pg_t, Dialect::Postgres), (&my_t, MY)] {
+            for c in [cmp("name", CmpOp::Eq, text(v)), like(v), list(v)] {
+                let out = r(&c, t);
+                assert!(!out.contains(['\n', '\r']), "one line: {out:?}");
+                assert_eq!(check(d, &out, false), Ok(FilterVerdict::Clear), "{out}");
+            }
+        }
+    }
+    // The escape string reads back as the value.
+    let open = crate::sql::dialect::LiteralOpen { prefix: 1, quote: '\'', backslash: true };
+    assert_eq!(Dialect::Postgres.unescape_literal_body(r"it''s\\\r\n", open), "it's\\\r\n");
+}
+
+#[test]
+fn render_in_lists_keep_the_null_forms() {
+    let values = |null| {
+        let mut v = vec![text("a"), text("b'c")];
+        if null {
+            v.push(Value::Null);
+        }
+        v
+    };
+    let r#in = |null, negated| Cond::In { col: "name".into(), values: values(null), negated };
+    // NOT IN that keeps the rows whose value is NULL.
+    let not_in_nulls = Cond::Any(vec![r#in(false, true), Cond::IsNull { col: "name".into(), negated: false }]);
+    for (d, utf8mb4) in [(Dialect::Postgres, false), (MY, true)] {
+        let t = Target { utf8mb4, ..target(d) };
+        let r = |c: &Cond| render(c, &t).unwrap();
+        assert_eq!(r(&r#in(false, false)), "name IN ('a', 'b''c')");
+        assert_eq!(r(&r#in(true, false)), "(name IN ('a', 'b''c') OR name IS NULL)");
+        assert_eq!(r(&r#in(false, true)), "name NOT IN ('a', 'b''c')");
+        assert_eq!(r(&r#in(true, true)), "(name NOT IN ('a', 'b''c') AND name IS NOT NULL)");
+        assert_eq!(r(&not_in_nulls), "(name NOT IN ('a', 'b''c') OR name IS NULL)");
+    }
+    let t = Target { utf8mb4: false, ..target(MY) };
+    assert_eq!(render(&r#in(false, false), &t).unwrap(), "name IN (_utf8mb4 X'61', _utf8mb4 X'622763')");
+}
+
+#[test]
+fn render_like_patterns_read_the_same_in_every_mysql_mode() {
+    let modes =
+        [MY, Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true, dollar_quotes: false })];
+    let starts = |value: &str| Cond::Like {
+        col: "name".into(),
+        pattern: like_starts_with(value),
+        negated: false,
+        case: CaseMode::Server,
+    };
+    for d in modes {
+        let t = Target { utf8mb4: true, ..target(d) };
+        // `%`, `_` and `!` escaped with `!`, never with a backslash.
+        assert_eq!(render(&starts("5%_!"), &t).unwrap(), "name LIKE '5!%!_!!%' ESCAPE '!'", "{d:?}");
+        // A backslash is a character of the value: written as bytes, read the same in both modes.
+        assert_eq!(render(&starts(r"a\"), &t).unwrap(), "name LIKE _utf8mb4 X'615C25' ESCAPE '!'", "{d:?}");
+    }
+    let contains = |col: &str| Cond::Like {
+        col: col.into(),
+        pattern: like_contains("A_"),
+        negated: false,
+        case: CaseMode::Insensitive,
+    };
+    // A `_ci` column compares without case already; a column of no known collation is lowered.
+    assert_eq!(render_my(&contains("email"), true), "email LIKE '%A!_%' ESCAPE '!'");
+    let unknown = contains("Mixed Case");
+    assert_eq!(render_my(&unknown, true), "LOWER(`Mixed Case`) LIKE LOWER('%A!_%') ESCAPE '!'");
+    // PostgreSQL: `ILIKE` only on a collation known deterministic (a nondeterministic one is
+    // refused by the server); not known, it is not written.
+    let t = target(Dialect::Postgres);
+    assert_eq!(render(&unknown, &t), Err(RenderError::CollationUnknown("Mixed Case".into())));
+    let mut known = t.clone();
+    known.columns[3].deterministic = Some(true);
+    assert_eq!(render(&unknown, &known).unwrap(), r#""Mixed Case" ILIKE '%A!_%' ESCAPE '!'"#);
+}
+
+#[test]
+fn and_filter_appends_or_wraps_first() {
+    let pg = |base: &str| and_filter(base, "id = 1", Dialect::Postgres).unwrap();
+    let my = |base: &str| and_filter(base, "id = 1", MY).unwrap();
+    // Nothing yet: the condition is the text.
+    assert_eq!(pg(""), "id = 1");
+    assert_eq!(pg("   "), "id = 1");
+    // A chain of ANDs (and anything that binds tighter) takes it as one more operand.
+    assert_eq!(pg("a > 2"), "a > 2 AND id = 1");
+    assert_eq!(pg("a > 2 AND b IS NULL  "), "a > 2 AND b IS NULL AND id = 1");
+    assert_eq!(pg("NOT a = 2 AND b BETWEEN 1 AND 3"), "NOT a = 2 AND b BETWEEN 1 AND 3 AND id = 1");
+    assert_eq!(pg("a::int = 2"), "a::int = 2 AND id = 1");
+    assert_eq!(pg("name = 'x OR y'"), "name = 'x OR y' AND id = 1");
+    assert_eq!(pg(r#""or" = 1"#), r#""or" = 1 AND id = 1"#);
+    // Already in parentheses, an OR inside them does not count.
+    assert_eq!(pg("(a = 1 OR b = 2)"), "(a = 1 OR b = 2) AND id = 1");
+    assert_eq!(pg("(a = 1 OR b = 2) AND c = 3"), "(a = 1 OR b = 2) AND c = 3 AND id = 1");
+    // An OR at the top is wrapped, visibly.
+    assert_eq!(pg("a = 1 OR b = 2"), "(a = 1 OR b = 2) AND id = 1");
+    assert_eq!(pg("(a = 1) or (b = 2)"), "((a = 1) or (b = 2)) AND id = 1");
+    assert_eq!(pg("CASE WHEN a OR b THEN 1 END = 1"), "(CASE WHEN a OR b THEN 1 END = 1) AND id = 1");
+    assert_eq!(pg("a || b = 'x'"), "(a || b = 'x') AND id = 1");
+    // MySQL's XOR, `||` and an assignment bind more loosely than AND.
+    assert_eq!(my("a = 1 XOR b = 2"), "(a = 1 XOR b = 2) AND id = 1");
+    assert_eq!(my("a = 1 || b = 2"), "(a = 1 || b = 2) AND id = 1");
+    assert_eq!(my("@v := 1"), "(@v := 1) AND id = 1");
+    assert_eq!(my("a = 1 && b = 2"), "a = 1 && b = 2 AND id = 1");
+    assert_eq!(my("`or` = 1"), "`or` = 1 AND id = 1");
+    // A condition added to a chain is still one: the next one appends again.
+    let twice = and_filter(&pg("a = 1 OR b = 2"), "c = 3", Dialect::Postgres).unwrap();
+    assert_eq!(twice, "(a = 1 OR b = 2) AND id = 1 AND c = 3");
+    // What it wrote keeps its meaning as a filter: it passes the bar's checks.
+    let t = target(Dialect::Postgres);
+    let c = Cond::In { col: "id".into(), values: vec![num("1"), Value::Null], negated: false };
+    let text = and_filter("id > 0 OR name IS NULL", &render(&c, &t).unwrap(), Dialect::Postgres).unwrap();
+    assert_eq!(text, "(id > 0 OR name IS NULL) AND (id IN (1) OR id IS NULL)");
+    assert_eq!(check(Dialect::Postgres, &text, false), Ok(FilterVerdict::Clear));
+}
+
+/// Only the blanks the dialect's lexer reads as blanks are left out at the end of the filter:
+/// PostgreSQL reads any character outside ASCII as part of a name, so a name that ends in a
+/// no-break space or an ideographic space keeps it (it is another column than the one without).
+#[test]
+fn and_filter_keeps_the_end_of_a_name_the_server_reads() {
+    let pg = |base: &str| and_filter(base, "id = 1", Dialect::Postgres).unwrap();
+    for space in ['\u{00A0}', '\u{3000}'] {
+        let base = format!("paid{space}");
+        assert_eq!(pg(&base), format!("paid{space} AND id = 1"), "{space:?}");
+        assert_eq!(pg(&format!("{base} \t\n")), format!("paid{space} AND id = 1"), "{space:?}");
+        assert_eq!(pg(&format!("a = 1 OR {base}")), format!("(a = 1 OR {base}) AND id = 1"), "{space:?}");
+    }
+    // ASCII blanks at the end are left out on both dialects.
+    assert_eq!(pg("a = 1 \t\r\n"), "a = 1 AND id = 1");
+    assert_eq!(and_filter("a = 1  ", "id = 1", MY).unwrap(), "a = 1 AND id = 1");
+}
+
+/// A filter that does not stand on its own as one condition (a parenthesis that closes one it
+/// did not open or is left open, a comment, a statement's end, a string left open) is refused,
+/// said why, and never put in parentheses (which could make it read as another condition).
+#[test]
+fn and_filter_refuses_a_filter_that_does_not_stand_alone() {
+    let refused = |d: Dialect, base: &str| match and_filter(base, "id = 1", d) {
+        Err(BarRefusal::Lexical { problem, .. }) => problem,
+        other => panic!("{base:?}: {other:?}"),
+    };
+    for d in [Dialect::Postgres, MY] {
+        assert_eq!(refused(d, "a = 1) OR (b = 2"), LexProblem::ClosesOutside);
+        assert_eq!(refused(d, "(a = 1"), LexProblem::Unclosed);
+        assert_eq!(refused(d, "a = 1 -- x"), LexProblem::Comment);
+        assert_eq!(refused(d, "a = 1 /* x */"), LexProblem::Comment);
+        assert_eq!(refused(d, "a = 1; DROP TABLE t"), LexProblem::Semicolon);
+        assert_eq!(refused(d, "name = 'x"), LexProblem::Unterminated);
+    }
+    assert_eq!(refused(MY, "a = 1 # x"), LexProblem::Comment);
 }
 
 // recognise
@@ -1153,4 +1387,91 @@ fn order_text_reads_back_as_the_same_keys() {
     let k = vec![OrderKey::user("order", Dir::Asc)];
     assert_eq!(order_text(&k, pg), "\"order\" ASC");
     assert_eq!(parse_order(&order_text(&k, pg), &t), Ok(k));
+}
+
+// sort actions
+
+fn tie(col: &str) -> OrderKey {
+    OrderKey { origin: KeyOrigin::TieBreak, ..OrderKey::user(col, Dir::Asc) }
+}
+
+#[test]
+fn sorting_by_one_column_goes_up_down_then_off_and_drops_the_others() {
+    use SortStep::Only;
+    let asc = |c: &str| OrderKey::user(c, Dir::Asc);
+    let desc = |c: &str| OrderKey::user(c, Dir::Desc);
+    assert_eq!(sort_column(&[], "name", Only), vec![asc("name")]);
+    assert_eq!(sort_column(&[asc("name")], "name", Only), vec![desc("name")]);
+    assert_eq!(sort_column(&[desc("name")], "name", Only), vec![]);
+    // Another column: it alone, from its own direction (none: up).
+    assert_eq!(sort_column(&[asc("name"), desc("price")], "id", Only), vec![asc("id")]);
+    // A column among several goes on from its own direction, the others go.
+    assert_eq!(sort_column(&[asc("name"), asc("price")], "price", Only), vec![desc("price")]);
+    assert_eq!(sort_column(&[asc("name"), desc("price")], "price", Only), vec![]);
+    // Where its NULLs go is the server's again.
+    let nulls_first = OrderKey { nulls: Some(Nulls::First), ..asc("price") };
+    assert_eq!(sort_column(&[nulls_first], "price", Only), vec![desc("price")]);
+}
+
+#[test]
+fn adding_a_column_puts_it_last_then_turns_it_then_takes_it_out() {
+    use SortStep::Add;
+    let asc = |c: &str| OrderKey::user(c, Dir::Asc);
+    let desc = |c: &str| OrderKey::user(c, Dir::Desc);
+    assert_eq!(sort_column(&[], "name", Add), vec![asc("name")]);
+    let keys = vec![desc("name")];
+    let keys = sort_column(&keys, "price", Add);
+    assert_eq!(keys, vec![desc("name"), asc("price")]);
+    let keys = sort_column(&keys, "price", Add);
+    assert_eq!(keys, vec![desc("name"), desc("price")]);
+    let keys = sort_column(&keys, "price", Add);
+    assert_eq!(keys, vec![desc("name")]);
+    // A key in the middle turns where it is; the others keep their NULLs.
+    let born = OrderKey { nulls: Some(Nulls::Last), ..desc("born") };
+    let keys = vec![asc("name"), asc("price"), born.clone()];
+    assert_eq!(sort_column(&keys, "price", Add), vec![asc("name"), desc("price"), born.clone()]);
+    assert_eq!(sort_column(&[asc("name"), desc("price"), born.clone()], "price", Add), vec![asc("name"), born]);
+}
+
+#[test]
+fn a_tie_breaker_key_is_not_the_users() {
+    // The app appended `id` to make the order total: a sort on it starts it as the user's
+    // own key, and the tie-breaker keys never come back from a sort action.
+    let keys = vec![OrderKey::user("name", Dir::Asc), tie("id")];
+    assert_eq!(sort_column(&keys, "id", SortStep::Only), vec![OrderKey::user("id", Dir::Asc)]);
+    assert_eq!(
+        sort_column(&keys, "id", SortStep::Add),
+        vec![OrderKey::user("name", Dir::Asc), OrderKey::user("id", Dir::Asc)]
+    );
+    assert_eq!(sort_column(&keys, "name", SortStep::Add), vec![OrderKey::user("name", Dir::Desc)]);
+    assert_eq!(sort_column(&keys, "name", SortStep::Only), vec![OrderKey::user("name", Dir::Desc)]);
+    // Compiled, the order is made total again by the app.
+    let q = query(None, sort_column(&keys, "name", SortStep::Only));
+    assert_eq!(
+        compile(&q, &target(Dialect::Postgres)).sql,
+        r#"SELECT * FROM "shop"."users" ORDER BY "name" DESC, "id" ASC"#
+    );
+}
+
+#[test]
+fn the_levels_of_the_keys_follow_their_order() {
+    // Three keys added one after the other: the order text lists them as added.
+    let mut keys = Vec::new();
+    for c in ["price", "name", "born"] {
+        keys = sort_column(&keys, c, SortStep::Add);
+    }
+    assert_eq!(order_text(&keys, Dialect::Postgres), "price ASC, name ASC, born ASC");
+    let keys = sort_column(&keys, "name", SortStep::Add);
+    let keys = sort_column(&keys, "name", SortStep::Add);
+    assert_eq!(order_text(&keys, Dialect::Postgres), "price ASC, born ASC");
+}
+
+#[test]
+fn a_condition_names_the_columns_it_compares() {
+    let t = target(Dialect::Postgres);
+    let c =
+        recognise("id > 1 AND (name = 'a' OR price IS NULL) AND NOT id = 3 AND lower(email) = 'x'", &t).expect("read");
+    assert_eq!(c.columns(), vec!["id", "name", "price"]);
+    // Text kept as written names no column.
+    assert_eq!(Cond::Raw("price > 1".into()).columns(), Vec::<&str>::new());
 }

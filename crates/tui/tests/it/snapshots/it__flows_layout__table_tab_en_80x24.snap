@@ -6,8 +6,8 @@ expression: "h.draw(80, 24).backend()"
 "│  ＋ New connection   │╭ Results · 8 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1       ││ local-pg / datarig.shop.users││ id: 1                │"
 "│  ▾ ●   local-pg      ││ [Result 1]  Chart  Messages  ││ name: 陳大文         │" Hidden by multi-width symbols: [(65, " "), (67, " "), (69, " ")]
-"│    ▾ datarig default ││ WHERE  f filter            ⟳ ││ nickname: 大文🐘     │" Hidden by multi-width symbols: [(69, " "), (71, " "), (73, " ")]
-"│      ▸ analytics     ││   │ id   │ name              ││ address: 臺北市信義… │" Hidden by multi-width symbols: [(68, " "), (70, " "), (72, " "), (74, " "), (76, " ")]
+"│    ▾ datarig default ││ WHERE  f filter · s sort   ⟳ ││ nickname: 大文🐘     │" Hidden by multi-width symbols: [(69, " "), (71, " "), (73, " ")]
+"│      ▸ analytics     ││   │ id ^v│ name              ││ address: 臺北市信義… │" Hidden by multi-width symbols: [(68, " "), (70, " "), (72, " "), (74, " "), (76, " ")]
 "│      ▸ public        ││   │ int8 │ text              ││ profile: {"lang": "k…│"
 "│      ▾ shop          ││ 1 │    1 │ 陳大文            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
 "│        ▾ Tables      ││ 2 │    2 │ 林美玲            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]

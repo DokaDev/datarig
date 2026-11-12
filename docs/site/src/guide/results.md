@@ -106,6 +106,55 @@ When the server rejects the condition, the line marks it failed, underlined wher
 says the error is. The rows of the earlier query stay, dimmed, and the line under the grid says
 they are not the filter's answer; a cancelled run or a lost connection leaves them the same way.
 
+`F` (or `Space r F`, or "Table → filter by value" in the grid's right-click menu) filters a table
+tab by the value of the cell under the cursor. The menu offers `=`, `<>`, `<>` with the rows whose
+value is NULL kept (`IS DISTINCT FROM` on PostgreSQL, `NOT (… <=> …)` on MySQL), `<`, `>`, `<=` and
+`>=`; for text also "starts with" (`LIKE 'value%'`, its `%` and `_` escaped with `!`; on
+PostgreSQL before 18, which refuses `LIKE` on a nondeterministic collation, offered once datarig
+has read that the column's collation is deterministic) and "contains
+(case-insensitive)" (`ILIKE` on PostgreSQL, offered once datarig has read that the column's
+collation is deterministic, which it does with the tab's runs; on MySQL `LIKE`, which a `_ci`
+collation compares without case, else `LOWER(…) LIKE LOWER(…)`). A NULL cell offers only `IS NULL`
+and `IS NOT NULL`, never `= NULL`. With cells of one column selected (up to 1000), it offers `IN` and `NOT IN` of
+their values; a NULL among them is tested on its own (`IN (…) OR … IS NULL`, `NOT IN (…) AND … IS
+NOT NULL`), and without one a second `NOT IN` keeps the rows whose value is NULL, which a plain
+`NOT IN` leaves out. An equality on a floating-point column may find nothing, and how text compares
+follows the column's collation on the server: the menu says so next to those entries.
+
+The condition is added to the filter of the rows shown with `AND`; a filter whose top level is not
+a plain chain of `AND`s (an `OR`, for one) is put in parentheses first. The new text goes into the
+filter line and runs as `Enter` runs it there, with the same checks and questions, pending edits
+included. While the line holds changes you have not applied, nothing is added: apply them or put
+them back with `Esc` first. Nor while the line shows a condition that failed or was cancelled over
+the earlier rows: run it again, or change it, first. A value is taken only as the server holds it: an entry is dimmed, with
+the reason, for a value that is not shown whole (as a copy as SQL judges it), binary data over 64
+KiB, a type whose comparison datarig does not know (`json`, MySQL's JSON, geometry, most types of
+your own, arrays of a type without equality such as `xml[]`; PostgreSQL's `jsonb` and arrays of
+built-in types with equality offer equality only), or more than 1000 cells. A new row,
+a cell with an edit on it or cells of several columns give no menu. On a query's results there is
+none either: filter them in the statement. A column whose name holds a line break is neither
+filtered by value nor sorted from the grid: the filter line holds one line, and would not hold the
+name as it is.
+
+From the grid, `s` (or `Space r s`) sorts by the cursor's column alone: the first press sorts
+going up, the second going down, the third takes the order away. `S` (or `Space r S`) adds the
+column as one more key, after the others; pressed again on a key it turns that key, then takes
+it out, and the other keys stay where they are. A click on the last two columns of a column's
+header (the cursor's column shows `^v` there, a glyph with icons on) sorts as `s` does; a click
+elsewhere on a header selects the column, as on any grid. A sort runs the new order like `Enter`
+does and writes it into the line once it is sent: it starts from the order of the rows shown and
+keeps their condition and limit. While the line holds changes you have not applied, in any field,
+it does not sort: apply them with `Enter` or put them back with `Esc` first; nor while the line
+shows a query that failed or was cancelled over the earlier rows. Over edits not saved
+yet, it asks first, as any run does.
+
+The headers say how the rows shown are sorted: an arrow after the name (`^` or `v` with icons
+off), with the key's level from the second key on (`v2`); the primary key columns added after
+yours are not marked. A column the condition compares is marked `=` (a filter glyph with icons
+on), as far as datarig reads the condition: a condition it does not read marks nothing, which
+does not mean it compares no column. Sorting is for table tabs only: a query's rows are sorted
+in its text.
+
 The third field, `LIMIT`, caps the rows the tab reads (`-` when there is none; a narrow line
 shows it as `L100`). It takes a whole number of rows, written in digits, and a blank field means
 no cap; `0`, or anything that is not a number, is refused before anything is sent. The cap is

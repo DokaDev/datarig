@@ -622,7 +622,8 @@ async fn order_keys_are_read_without_a_metadata_lock() {
     m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
     let mut side_admin = side(&admin).await;
     let meta = only_session(&mut side_admin, SessionRole::Meta, "okeys").await;
-    let want = OrderKeys { primary_key: vec!["id".into()], unique_not_null: vec![vec!["v".into()]], inherited: false };
+    let want =
+        OrderKeys { primary_key: vec!["id".into()], unique_not_null: vec![vec!["v".into()]], ..OrderKeys::default() };
     let mut n = 0;
     let mut ask = |m: &mut Conn| {
         n += 1;
@@ -2555,6 +2556,53 @@ async fn a_held_result_the_server_will_not_stop_is_not_read_to_its_end() {
 }
 
 /// How many rows table `q` has, counted by session `c` (run `id`).
+/// A `TIMESTAMP` value with the offset of the zone it was read in (as a filter by value takes
+/// it, through `export::sql_cells`) finds its row in a session of another zone too, as a filter
+/// run again from the history does; the value as shown, without it, is another instant there.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_timestamp_with_its_offset_is_the_same_instant_in_another_zone() {
+    use datarig_core::driver::{ReadIn, SessionValues, ValueKind};
+    use datarig_core::export::{SqlColumn, sql_cells};
+    let test = "a_timestamp_with_its_offset_is_the_same_instant_in_another_zone";
+    let Some(url) = my_url(test) else { return };
+    let t = Table::make(
+        &url,
+        "tzlit",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, at TIMESTAMP(3) NULL)",
+            "INSERT INTO {t} VALUES (1, '2024-10-27 00:30:00.250'), (2, '2024-10-27 01:30:00'), (3, NULL)",
+        ],
+    )
+    .await;
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    q.ok(1, "SET time_zone = '+00:00'").await;
+    let evs = q.run(2, &[&format!("SELECT id, at FROM {} ORDER BY id", t.q())]).await;
+    let (cols, rows, _) = page_of(&evs);
+    assert_eq!(cols[1].kind, ValueKind::TimestampTz);
+    let read_in = ReadIn::Values(SessionValues { time_zone: "+00:00".into(), charset: "utf8mb4".into() });
+    let sql =
+        [SqlColumn { name: &cols[1].name, type_name: &cols[1].type_name, kind: cols[1].kind, auto_increment: false }];
+    let cells = sql_cells(Dialect::MySql(MySqlMode::default()), &sql, &read_in, None).unwrap();
+    let shown: Vec<(String, String)> = rows.iter().filter_map(|r| Some((r[0].clone()?, r[1].clone()?))).collect();
+    assert_eq!(shown.len(), 2);
+    let mut n = 10;
+    for zone in ["+00:00", "+05:30", "-08:00"] {
+        n += 1;
+        q.ok(n, &format!("SET time_zone = '{zone}'")).await;
+        for (id, v) in &shown {
+            let literal = cells.cell(0, v).unwrap();
+            n += 1;
+            let evs = q.run(n, &[&format!("SELECT id FROM {} WHERE at = '{literal}'", t.q())]).await;
+            let found: Vec<_> = page_of(&evs).1.iter().map(|r| r[0].clone().unwrap()).collect();
+            assert_eq!(found, vec![id.clone()], "{zone}: at = '{literal}'");
+            n += 1;
+            let evs = q.run(n, &[&format!("SELECT id FROM {} WHERE at = '{v}'", t.q())]).await;
+            let bare = page_of(&evs).1.len();
+            assert_eq!(bare, usize::from(zone == "+00:00"), "{zone}: at = '{v}' (no offset)");
+        }
+    }
+}
+
 async fn rows_in(c: &mut Conn, id: u64, q: &str) -> String {
     let evs = c.run(id, &[&format!("SELECT COUNT(*) FROM {q}")]).await;
     page_of(&evs).1[0][0].clone().unwrap()

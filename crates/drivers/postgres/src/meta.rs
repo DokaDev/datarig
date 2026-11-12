@@ -201,8 +201,8 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
                 }
                 DbCommand::LoadTableKeys { id, schema, table } => {
                     // It reads `indnkeyatts` (11); the key reads ask for 12.
-                    let result = match version.clone().and_then(keys_supported) {
-                        Ok(()) => order_keys::load_order_keys(&client, &schema, &table).await,
+                    let result = match version.clone().and_then(|v| keys_supported(v).map(|()| v)) {
+                        Ok(v) => order_keys::load_order_keys(&client, &schema, &table, v).await,
                         Err(e) => Err(e),
                     };
                     DbEvent::TableKeys { id, result }

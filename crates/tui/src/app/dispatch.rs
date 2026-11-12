@@ -27,6 +27,12 @@ impl App {
             Action::SetTabConnection | Action::SetTabContext if ddl => {
                 Off::new(Label::MenuOffDdlTab, info(Label::DdlNoRebind))
             }
+            // A query's rows are sorted in its text, not by its grid's headers.
+            Action::Table(super::filter_line::TableAction::SortCycle | super::filter_line::TableAction::SortAdd)
+                if !table =>
+            {
+                Off::new(Label::MenuOffOnlyTableTabs, info(Label::TableSortOnlyTableTabs))
+            }
             // A query's rows are filtered in its text, not by the filter line.
             Action::Table(_) if !table => Off::new(Label::MenuOffOnlyTableTabs, info(Label::TableFilterOnlyTableTabs)),
             // Another result than a text plan is shown, or none.

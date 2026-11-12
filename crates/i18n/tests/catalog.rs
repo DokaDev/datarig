@@ -497,6 +497,17 @@ const SAME_IN_KO: &[&str] = &[
     "commands.arg.analyze",
     // The words typed after `:theme`.
     "commands.arg.theme",
+    // A filter by a cell's value: SQL's own operators and keywords around the value.
+    "table.filter.by_value.eq",
+    "table.filter.by_value.ne",
+    "table.filter.by_value.lt",
+    "table.filter.by_value.gt",
+    "table.filter.by_value.le",
+    "table.filter.by_value.ge",
+    "table.filter.by_value.is_null",
+    "table.filter.by_value.is_not_null",
+    "table.filter.by_value.in",
+    "table.filter.by_value.not_in",
 ];
 
 #[test]

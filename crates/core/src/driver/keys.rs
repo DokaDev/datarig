@@ -45,6 +45,15 @@ pub struct OrderKeys {
     /// Reading the table reads the rows of tables that inherit from it too (PostgreSQL
     /// inheritance, not partitions): its keys do not hold across them.
     pub inherited: bool,
+    /// Per column of the table, by name: whether its collation is deterministic (equal
+    /// strings are equal byte for byte; a column of no collation is). PostgreSQL reads it with
+    /// the keys, from the catalog only; a column not named here is not known (MySQL names
+    /// none: its collations are known by name).
+    pub deterministic: BTreeMap<String, bool>,
+    /// PostgreSQL: whether the server takes `LIKE` on a nondeterministic collation (18 and
+    /// later), as its version was read on the session that read the keys. `None`: not known
+    /// (MySQL says nothing of it).
+    pub like_nondeterministic: Option<bool>,
 }
 
 /// One kind of key.

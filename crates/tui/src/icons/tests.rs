@@ -131,6 +131,31 @@ fn the_filter_and_refresh_marks_are_pinned_and_have_a_text_form_without_icons() 
 }
 
 #[test]
+fn the_sort_marks_are_pinned_and_have_a_text_form_without_icons() {
+    // Nerd Fonts 3.4.0 glyphnames.json: "fa-long_arrow_up" f176, "fa-long_arrow_down" f175 (a
+    // sorted column's direction), "md-swap_vertical" f04e2 (the header's sort zone), "fa-filter"
+    // f0b0 (a column the condition compares).
+    assert_eq!((SORT_ASC, SORT_DESC, SORT_ZONE), ("\u{f176}", "\u{f175}", "\u{f04e2}"));
+    assert_eq!((sort_mark(true, 1, true), sort_mark(false, 2, true)), ("\u{f176}".into(), "\u{f175}2".into()));
+    assert_eq!((sort_mark(true, 1, false), sort_mark(false, 1, false)), ("^".into(), "v".into()));
+    assert_eq!((sort_mark(true, 3, false), sort_mark(false, 12, false)), ("^3".into(), "v12".into()));
+    assert_eq!((column_filter(true), column_filter(false)), (FILTER, "="));
+    assert_eq!((sort_zone(true), sort_zone(false)), ("\u{f04e2}", "^v"));
+    assert_eq!((width(sort_zone(true)), width(sort_zone(false))), (1, 2));
+    for on in [true, false] {
+        assert_eq!(width(column_filter(on)), 1);
+        assert_eq!(width(&sort_mark(true, 1, on)), 1);
+    }
+    for g in [SORT_ASC, SORT_DESC] {
+        let c = g.chars().next().unwrap();
+        assert!(('\u{e000}'..='\u{f8ff}').contains(&c), "{g:?}: in the Private Use Area");
+    }
+    let c = SORT_ZONE.chars().next().unwrap();
+    assert!(('\u{f0001}'..='\u{f1af0}').contains(&c), "Material Design range");
+    assert_eq!(width(SORT_ZONE), 1);
+}
+
+#[test]
 fn warning_has_a_text_form_without_icons() {
     // nf-fa-warning (Nerd Fonts 3.5.1 glyphnames.json).
     assert_eq!((warning(true), warning(false)), ("\u{f071}", "!"));
