@@ -949,3 +949,41 @@ fn a_timestamp_filter_pages_again_only_in_the_zone_it_was_read_in() {
     h.keys("#");
     assert_eq!(counts(&h.sent()), 1);
 }
+
+/// A result read while the session's time zone is not known (the driver reports
+/// [`SessionValues::UNKNOWN`](datarig_core::driver::SessionValues::UNKNOWN), as after a stored
+/// routine that may have changed it): a filter on a `TIMESTAMP` is not paged again nor counted,
+/// though the session still reports the same, since the zone its rows were read in was never
+/// known.
+#[test]
+fn a_timestamp_filter_read_in_an_unknown_zone_is_not_paged_again() {
+    use datarig_core::driver::{ColumnMeta, DbCommand, SessionValues, ValueKind};
+    let sql = "SELECT * FROM `shop`.`orders` WHERE `placed_at` = \
+               CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone) ORDER BY `id`";
+    let mut h = mysql();
+    h.db(DbEvent::Connected);
+    let lang = h.app.tab().editor.language();
+    h.app.tab_mut().editor = datarig_tui::widgets::editor::Editor::new(sql);
+    h.app.tab_mut().editor.set_language(lang);
+    h.ctrl('e');
+    let id = sent_run(&mut h);
+    h.tab_db(0, session(SessionValues::UNKNOWN, SessionValues::UNKNOWN));
+    let cols = Some(vec![ColumnMeta::new("id".into(), "int".into(), ValueKind::Integer, None)]);
+    let rows = (0..500).map(|i| vec![Some(i.to_string())]).collect::<Vec<_>>();
+    h.tab_db(0, DbEvent::Released { id });
+    h.tab_db(0, DbEvent::Page { id, columns: cols, rows, more: true, elapsed: Default::default() });
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys("n");
+    let sent = h.sent();
+    assert!(!sent.iter().any(|c| matches!(c, DbCommand::Resume { .. })), "{sent:?}");
+    let status = h.status(400, 45);
+    assert!(
+        status.contains("is not run again for you (it reads the session's time zone, which is not known to be the one its rows were read in)"),
+        "{status}"
+    );
+    h.keys("#");
+    let sent = h.sent();
+    assert!(!sent.iter().any(|c| matches!(c, DbCommand::Count { .. })), "{sent:?}");
+    let status = h.status(400, 45);
+    assert!(status.contains("Rows are not counted for you: it reads the session's time zone"), "{status}");
+}

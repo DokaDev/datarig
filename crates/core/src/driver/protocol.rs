@@ -1011,6 +1011,17 @@ pub struct SessionValues {
     pub charset: String,
 }
 
+impl SessionValues {
+    /// What a driver reports as both values once it no longer knows them (code of the server's
+    /// may have changed them without saying): no time zone or character set has this name.
+    pub const UNKNOWN: &'static str = "unknown";
+
+    /// The session's time zone is known (not [`SessionValues::UNKNOWN`]).
+    pub fn zone_known(&self) -> bool {
+        self.time_zone != Self::UNKNOWN
+    }
+}
+
 /// What a result's values were read in: the session's values when its first page came, kept
 /// for its later pages.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

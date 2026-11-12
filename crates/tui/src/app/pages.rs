@@ -63,7 +63,7 @@ pub(super) fn zone_moved(t: &Tab, sql: &str) -> bool {
     };
     !matches!(
         (read_in, &t.exec.values),
-        (Some(datarig_core::driver::ReadIn::Values(then)), Some(now)) if then.time_zone == now.time_zone
+        (Some(datarig_core::driver::ReadIn::Values(then)), Some(now)) if then.zone_known() && then.time_zone == now.time_zone
     )
 }
 
