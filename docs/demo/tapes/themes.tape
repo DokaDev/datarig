@@ -17,7 +17,6 @@ Type "l"
 Wait+Screen /products/
 Type "jjjjj"
 Enter
-Wait+Screen /acme\.store\.products/
 Wait+Screen /SKU-0001/
 Tab
 Wait+Screen /Enter view cell/

@@ -82,10 +82,10 @@ cells are tinted.
 
 ## Filter and sort a table tab
 
-A table tab (opened from the explorer) has a line above its grid with a `WHERE` condition, an
-`ORDER BY` and a `LIMIT`, run on the server: `f` edits the condition, `s` and `S` sort by the
-cursor's column and `F` filters by the value of its cell. See
-[Filtering and sorting a table](filtering.md).
+A table tab (opened from the explorer) reads its table with a `WHERE` condition and an
+`ORDER BY` run on the server, and a `LIMIT` its pages stop at: `f` opens the filter dialog, `s` and `S` sort by the cursor's
+column, `=` and `!` keep or exclude the value of its cell, `C` hides the column and `F` opens its
+menu. See [Filtering and sorting a table](filtering.md).
 
 ## The inspector
 

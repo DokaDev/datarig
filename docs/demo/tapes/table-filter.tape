@@ -1,5 +1,6 @@
-# A table tab: a condition typed in the line above its grid, then a sort by two columns from the
-# grid, then a filter by the value of a cell. Each one is a statement run on the server.
+# A table tab: a value ticked in the filter dialog, then only the value of a cell from the grid,
+# a column hidden, the filter cleared and brought back with the dialog's undo. Each filter is a
+# statement run on the server.
 Require datarig
 Source settings.tape
 
@@ -13,7 +14,6 @@ Type "l"
 Wait+Screen /orders/
 Type "jjjj"
 Enter
-Wait+Screen /acme\.store\.orders/
 Wait+Screen /Heron Express/
 Tab
 Wait+Screen /Enter view cell/
@@ -24,40 +24,51 @@ Sleep 300ms
 Show
 
 Sleep 1s
-# The condition, as typed, is what the server runs.
+# The dialog on the status column: its values, counted in the rows loaded.
+Type "ll"
+Sleep 500ms
 Type "f"
-Sleep 500ms
-Type@60ms "status = 'shipped'"
-Sleep 600ms
-Enter
-Wait+Screen /WHERE status = 'shipped'/
-Wait+Screen /page 1 \/ \?/
+Wait+Screen /Filter and sort · store\.orders/
 Sleep 1.5s
-
-# Sort by the total, going down: s goes up, then down.
-Type "lll"
-Sleep 500ms
-Type "s"
-Wait+Screen /ORDER BY total ASC/
+Right
+Sleep 400ms
+Down
+Wait+Screen /Space tick/
 Sleep 1s
-Type "s"
-Wait+Screen /ORDER BY total DESC/
-Sleep 1.5s
-
-# The carrier as a second key.
-Type "lll"
-Sleep 500ms
-Type "S"
-Wait+Screen /ORDER BY total DESC, carrier ASC/
-Sleep 1.5s
-
-# Filter by the value of the cell under the cursor: it is added to the condition.
-Type "F"
-Wait+Screen /Filter by carrier/
+# Tick a value: the condition it makes is what the server runs.
+Space
+Wait+Screen /status = 'delivered' ×/
 Sleep 1.5s
 Enter
-Wait+Screen /WHERE status = 'shipped' AND carrier = 'Heron Express'/
-Wait+Screen /ORDER BY total DESC, carrier ASC/
+Wait+Screen /╰ \S+ status = 'delivered' ─/
+Sleep 1.5s
+
+# Only the carrier of the cell under the cursor.
+Type "llll"
+Sleep 500ms
+Type "="
+Wait+Screen /status = 'delivered' \+1 ─/
+Sleep 1.5s
+
+# Hide a column from the grid: it is still read.
+Type "l"
+Sleep 400ms
+Type "C"
+Wait+Screen /status = 'delivered' \+1 · 1 hidden/
+Sleep 1.5s
+
+# Clear the conditions; the dialog's undo brings them back.
+Type "X"
+Wait+Screen /╰ 1 hidden ─/
+Sleep 1.5s
+Type "f"
+Wait+Screen /Filter and sort · store\.orders/
+Sleep 800ms
+Type "u"
+Wait+Screen /Where .*status = 'delivered' ×/
+Sleep 1.5s
+Enter
+Wait+Screen /status = 'delivered' \+1 · 1 hidden/
 Sleep 2s
 Screenshot table-filter.png
 Sleep 1s
