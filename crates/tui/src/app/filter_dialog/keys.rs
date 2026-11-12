@@ -34,7 +34,8 @@ fn area(f: DialogFocus) -> usize {
 /// where the new operator takes values of the same kind (between comparisons and lists alike),
 /// else each read again on its own from its text as it would be typed for it. A value is never
 /// lost on the way: an empty string stays an empty string (an empty field is what stands for no
-/// value when typed, which an existing value never is).
+/// value when typed, which an existing value never is). The NULL standing for the missing first
+/// bound of a `BETWEEN` is no value and goes.
 fn values_for(row: &Row, op: Op, c: &ColumnInfo, d: Dialect) -> Vec<Value> {
     let keep = match op.arity() {
         Arity::Zero => 0,
@@ -43,14 +44,14 @@ fn values_for(row: &Row, op: Op, c: &ColumnInfo, d: Dialect) -> Vec<Value> {
         Arity::Many => row.values.len(),
     };
     let pattern = |o: Op| matches!(o, Op::Contains | Op::StartsWith);
-    let values = row.values.iter().take(keep);
+    let gap = |v: &Value| row.op.arity() == Arity::Two && *v == Value::Null;
+    let values = row.values.iter().zip(row.value_texts(d)).filter(|(v, _)| !gap(v)).take(keep);
     if pattern(op) == pattern(row.op) {
-        return values.cloned().collect();
+        return values.map(|(v, _)| v.clone()).collect();
     }
     // A pattern's text as it is, else as one value typed for the column.
     let as_typed = if pattern(op) { op } else { Op::Eq };
     values
-        .zip(row.value_texts(d))
         .filter_map(|(v, text)| match v {
             Value::Text(s) if s.is_empty() => Some(Value::Text(String::new())),
             _ => draft::parse_texts(as_typed, &[&text], c).into_iter().next(),

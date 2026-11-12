@@ -418,7 +418,13 @@ fn typed_lists_and_ranges_split_into_values() {
     assert_eq!(parse_input(Op::NotInList, &[""], &id), Vec::<Value>::new());
     assert_eq!(parse_input(Op::Between, &["1", "9"], &id), vec![num("1"), num("9")]);
     assert_eq!(parse_input(Op::Between, &["1", ""], &id), vec![num("1")]);
-    assert_eq!(parse_input(Op::Between, &["", "9"], &id), Vec::<Value>::new());
+    // The second bound without the first keeps its place; the row waits for the first.
+    let gap = parse_input(Op::Between, &["", "9"], &id);
+    assert_eq!(gap, vec![Value::Null, num("9")]);
+    let r = row("id", Op::Between, gap);
+    assert!(!r.complete());
+    assert_eq!(r.field_texts(PG, &id), vec!["", "9"]);
+    assert_eq!(parse_input(Op::Between, &["", ""], &id), Vec::<Value>::new());
     assert_eq!(parse_input(Op::Between, &["1"], &id), vec![num("1")]);
 }
 

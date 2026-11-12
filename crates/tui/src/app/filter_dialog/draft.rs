@@ -409,7 +409,9 @@ fn op_allowed(
 pub(crate) struct Row {
     pub(crate) col: ColName,
     pub(crate) op: Op,
-    /// The values given so far ([`Op::arity`]); a NULL among them is a ticked NULL.
+    /// The values given so far ([`Op::arity`]); a NULL among them is a ticked NULL. A
+    /// `BETWEEN` whose first bound is missing while its second is given holds NULL in the
+    /// first place (a bound is never NULL), so the second stays in its own field.
     pub(crate) values: Vec<Value>,
     /// [`Op::NotInList`]: rows whose value is NULL are kept.
     pub(crate) keep_nulls: bool,
@@ -442,7 +444,9 @@ impl Row {
             Op::NeOrNull => Cond::NotDistinct { col, value: one()?, negated: true },
             Op::Eq | Op::Ne | Op::Lt | Op::Le | Op::Gt | Op::Ge => Cond::Cmp { col, op: self.op.cmp()?, value: one()? },
             Op::Between => match self.values.as_slice() {
-                [lo, hi] => Cond::Between { col, lo: lo.clone(), hi: hi.clone(), negated: false },
+                [lo, hi] if *lo != Value::Null && *hi != Value::Null => {
+                    Cond::Between { col, lo: lo.clone(), hi: hi.clone(), negated: false }
+                }
                 _ => return None,
             },
             Op::Contains => {
@@ -511,9 +515,16 @@ impl Row {
         self.values.iter().map(|v| value_text(v, d)).collect()
     }
 
-    /// Each value as its own field shows it on dialect `d` for column `c` ([`field_text`]).
+    /// Each value as its own field shows it on dialect `d` for column `c` ([`field_text`]); the
+    /// missing first bound of a `BETWEEN` is an empty field.
     pub(crate) fn field_texts(&self, d: Dialect, c: &ColumnInfo) -> Vec<String> {
-        self.values.iter().map(|v| field_text(v, self.op, d, c)).collect()
+        self.values
+            .iter()
+            .map(|v| match v {
+                Value::Null if self.op.arity() == Arity::Two => String::new(),
+                v => field_text(v, self.op, d, c),
+            })
+            .collect()
     }
 
     /// The values as one value field shows them on dialect `d` for column `c`: one as
@@ -553,8 +564,9 @@ pub(crate) fn value_text(v: &Value, d: Dialect) -> String {
 /// The values typed for a row of operator `op` on column `c`, one text per value field
 /// (`BETWEEN` has two; a list has one, its values separated by commas).
 ///
-/// A field left empty gives no value (the row waits for it); the values of a `BETWEEN` stop at
-/// the first empty one. A list is read by [`parse_list`]: values separated by commas, trimmed,
+/// A field left empty gives no value (the row waits for it); a `BETWEEN` whose first field is
+/// empty and second is not keeps the second in its place, NULL standing for the first
+/// ([`Row::values`]). A list is read by [`parse_list`]: values separated by commas, trimmed,
 /// empty ones left out, a value in single quotes as it is and `NULL` bare SQL NULL. On a
 /// number column a value is a number only when it is a plain number literal (an optional `-`, digits with at most one point, an optional
 /// exponent); bytes are typed in hexadecimal after `\x` or `0x`. Anything else is text, written
@@ -578,7 +590,14 @@ fn parse_with(op: Op, fields: &[&str], c: &ColumnInfo, one: &dyn Fn(&str) -> Val
     match op.arity() {
         Arity::Zero => Vec::new(),
         Arity::One => fields.first().filter(|s| !s.is_empty()).map(|s| vec![one(s)]).unwrap_or_default(),
-        Arity::Two => fields.iter().take(2).take_while(|s| !s.is_empty()).map(|s| one(s)).collect(),
+        Arity::Two => {
+            let given = |i: usize| fields.get(i).copied().filter(|s| !s.is_empty());
+            match (given(0), given(1)) {
+                (None, None) => Vec::new(),
+                (Some(lo), None) => vec![one(lo)],
+                (lo, Some(hi)) => vec![lo.map_or(Value::Null, one), one(hi)],
+            }
+        }
         Arity::Many => fields.first().map(|s| parse_list(s, c, &[])).unwrap_or_default(),
     }
 }

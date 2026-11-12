@@ -330,6 +330,59 @@ fn not_in_list_keeping_nulls_picked_again_keeps_them() {
     }
 }
 
+/// A bound of `between` cleared leaves the other in its own field: the condition waits for the
+/// missing bound (it is not sent), and the bound still given is there after the column is left
+/// and taken again, so typing the missing one completes the condition.
+#[test]
+fn a_between_bound_cleared_keeps_the_other_across_a_change_of_column() {
+    // (the field of the bound cleared, the bound typed there again, the term sent)
+    for (field, typed, term) in [(0, "2", "id BETWEEN 2 AND 10"), (1, "7", "id BETWEEN 1 AND 7")] {
+        let mut h = users();
+        h.command("where id BETWEEN 1 AND 10");
+        runs(&mut h);
+        answer(&mut h);
+        h.keys("f");
+        // The first bound's field, then the one to clear.
+        h.key(KeyCode::Right);
+        h.key(KeyCode::Right);
+        h.key(KeyCode::End);
+        for _ in 0..field {
+            h.key(KeyCode::Right);
+            h.key(KeyCode::End);
+        }
+        assert_eq!(h.app.key_context(), Ctx::FilterDialogText);
+        h.key(KeyCode::Backspace);
+        h.key(KeyCode::Backspace);
+        assert_eq!(h.app.filter_dialog_draft().unwrap().0, "", "field {field}");
+        assert!(h.screen(120, 34).contains("incomplete"), "{}", h.screen(120, 34));
+        // Back through the fields and the operator to the column list, another column, then
+        // `id` again: its condition's fields as they were left.
+        for _ in 0..=field {
+            h.key(KeyCode::Home);
+            h.key(KeyCode::Left);
+        }
+        h.key(KeyCode::Left);
+        h.key(KeyCode::Char('j'));
+        assert!(h.screen(120, 34).contains("\u{2502} name  text"), "{}", h.screen(120, 34));
+        h.key(KeyCode::Char('k'));
+        let s = h.screen(120, 34);
+        assert!(s.contains("\u{2502} id  int8"), "{s}");
+        assert!(s.contains("incomplete"), "field {field}: {s}");
+        assert!(s.contains(if field == 0 { "10" } else { "1" }), "field {field}: {s}");
+        h.key(KeyCode::Right);
+        h.key(KeyCode::Right);
+        h.key(KeyCode::End);
+        for _ in 0..field {
+            h.key(KeyCode::Right);
+            h.key(KeyCode::End);
+        }
+        h.type_text(typed);
+        assert_eq!(h.app.filter_dialog_draft().unwrap().0, term, "{}", h.screen(120, 34));
+        h.key(KeyCode::Enter);
+        assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE ({term})")]]);
+    }
+}
+
 #[test]
 fn a_condition_without_its_value_is_not_sent() {
     let mut h = users();
