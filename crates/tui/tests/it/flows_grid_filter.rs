@@ -935,3 +935,28 @@ fn the_column_menu_shows_only_keys_it_runs() {
 fn hidden_cols(h: &Harness) -> usize {
     h.app.tab().grid.hidden.iter().filter(|x| **x).count()
 }
+
+/// With a Korean input source the column menu's keys are the QWERTY keys at the same places
+/// (the jamo at `j` moves as `j`, the one at `s` sorts as `s`); a menu that filters as it is typed in keeps the
+/// Hangul typed.
+#[test]
+fn the_column_menu_takes_keys_typed_with_a_korean_input_source() {
+    let mut h = users();
+    at(&mut h, 0, 1);
+    h.keys("F");
+    let selected = h.app.overlays.menu().unwrap().selected;
+    h.key(KeyCode::Char('\u{3153}'));
+    assert!(menu_open(&h));
+    assert_ne!(h.app.overlays.menu().unwrap().selected, selected, "moved down");
+    h.key(KeyCode::Char('\u{314F}'));
+    assert_eq!(h.app.overlays.menu().unwrap().selected, selected, "and up");
+    h.key(KeyCode::Char('\u{3134}'));
+    assert!(!menu_open(&h));
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} ORDER BY \"name\" ASC")]]);
+    page(&mut h);
+    // The grid's menu filters: the jamo is typed into its filter.
+    h.app.dispatch(datarig_tui::app::action::Action::OpenMenu);
+    assert!(menu_open(&h));
+    h.key(KeyCode::Char('\u{3153}'));
+    assert_eq!(h.app.overlays.menu().unwrap().filter.text(), "\u{3153}");
+}

@@ -332,8 +332,12 @@ impl App {
         // taken as it is typed. The register after `Ctrl+R` in Insert mode is a key too.
         let literal = matches!(ctx, Ctx::VimNormal | Ctx::VimVisual) && self.tab().editor.awaiting_char();
         let register = ctx == Ctx::VimInsert && self.tab().editor.awaiting_key();
+        // A menu nothing is typed in (the column menu) takes keys, not text.
+        let keys_only = ctx == Ctx::ContextMenu && self.overlays.menu().is_some_and(|m| !m.typing && m.sub.is_none());
         let mapped = match chord.code {
-            KeyCode::Char(c) if chord.is_plain_char() && (!ctx.is_text_input() || register) && !literal => {
+            KeyCode::Char(c)
+                if chord.is_plain_char() && (!ctx.is_text_input() || register || keys_only) && !literal =>
+            {
                 hangul::keys(c)
             }
             _ => None,
