@@ -134,12 +134,24 @@ impl server::Handler for Handler {
         Ok(())
     }
 
-    async fn auth_publickey_offered(&mut self, _: &str, key: &PublicKey) -> Result<ServerAuth, Self::Error> {
-        Ok(if self.accounts.keys.contains(key) { ServerAuth::Accept } else { ServerAuth::reject() })
+    async fn auth_publickey_offered(
+        &mut self,
+        _: &str,
+        offer: server::PublicKeyOffer<'_>,
+    ) -> Result<ServerAuth, Self::Error> {
+        Ok(if self.accounts.keys.contains(offer.public_key) { ServerAuth::Accept } else { ServerAuth::reject() })
     }
 
-    async fn auth_publickey(&mut self, user: &str, key: &PublicKey) -> Result<ServerAuth, Self::Error> {
-        Ok(if user == USER && self.accounts.keys.contains(key) { ServerAuth::Accept } else { ServerAuth::reject() })
+    async fn auth_publickey(
+        &mut self,
+        user: &str,
+        verified: server::VerifiedPublicKey<'_>,
+    ) -> Result<ServerAuth, Self::Error> {
+        Ok(if user == USER && self.accounts.keys.contains(verified.public_key) {
+            ServerAuth::Accept
+        } else {
+            ServerAuth::reject()
+        })
     }
 
     async fn auth_password(&mut self, user: &str, password: &str) -> Result<ServerAuth, Self::Error> {

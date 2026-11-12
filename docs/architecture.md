@@ -568,7 +568,7 @@ Held by CI budgets (`docs/perf.md`).
 
 ## SSH tunnels
 
-- **`datarig-ssh`** (russh 0.63, `ring` backend, no compression): `Tunnel::open` connects to one
+- **`datarig-ssh`** (russh 0.65, `ring` backend, no compression): `Tunnel::open` connects to one
   hop (the name resolved here, a per-step timeout that stops while a question waits), checks the
   host key, logs in, and is then a `Dialer` whose dials are `direct-tcpip` channels. The client
   handler refuses every channel the server opens; nothing but `direct-tcpip` is ever requested.
