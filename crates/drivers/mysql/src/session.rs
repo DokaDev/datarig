@@ -5,7 +5,9 @@
 
 use crate::route::{Route, io_fault};
 use crate::wire::{TlsFailed, Wire};
-use datarig_core::driver::{CancelFailure, DbError, EditFormat, ExplainFormat, MySqlEdit, SessionRole, SessionValues};
+use datarig_core::driver::{
+    CancelFailure, DbError, EditFormat, ExplainFormat, Isolation, MySqlEdit, SessionRole, SessionValues,
+};
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn::{self, Scheme};
@@ -190,6 +192,12 @@ impl Server {
         if self.mariadb && self.version < (11, 1, 0) { "tx_read_only" } else { "transaction_read_only" }
     }
 
+    /// The session variable of its transactions' isolation level (`tx_isolation` before
+    /// MariaDB 11.1).
+    pub(crate) fn isolation_var(&self) -> &'static str {
+        if self.mariadb && self.version < (11, 1, 0) { "tx_isolation" } else { "transaction_isolation" }
+    }
+
     /// The `SET` assignment that stops a `SELECT` after `ms` milliseconds.
     fn timeout(&self, ms: u64) -> String {
         if self.mariadb {
@@ -235,8 +243,9 @@ pub(crate) const MONITOR_TIMEOUT_MS: u64 = 5_000;
 
 /// The session's settings, as one `SET` (one round trip): the client character set `utf8mb4`
 /// (the server's default collation for it), the session state the server reports in its OK
-/// packets (the sql mode, read-only and `sql_select_limit`, the current database), the sql
-/// mode assigned to itself so the server reports it at once, and by role:
+/// packets (the sql mode, read-only and `sql_select_limit`, the current database, the
+/// isolation level), the sql mode and the isolation level assigned to themselves so the server
+/// reports them at once, and by role:
 ///
 /// * the query session: `sql_select_limit` (results stop after a page and one row more, so a
 ///   statement ends, and with it every metadata lock it took), and the profile's lock wait
@@ -254,11 +263,12 @@ pub(crate) const MONITOR_TIMEOUT_MS: u64 = 5_000;
 /// * a read-only profile's sessions: read-only.
 pub(crate) fn init_sql(server: &Server, s: &Settings) -> String {
     let ro = server.read_only_var();
+    let iso = server.isolation_var();
     let mut parts = vec![
         "NAMES utf8mb4".to_string(),
         format!(
             "SESSION session_track_system_variables = \
-             'sql_mode,{ro},sql_select_limit,time_zone,character_set_results,character_set_connection'"
+             'sql_mode,{ro},sql_select_limit,time_zone,character_set_results,character_set_connection,{iso}'"
         ),
         "SESSION session_track_schema = ON".to_string(),
         "SESSION sql_mode = @@SESSION.sql_mode".to_string(),
@@ -267,6 +277,9 @@ pub(crate) fn init_sql(server: &Server, s: &Settings) -> String {
         "SESSION time_zone = @@SESSION.time_zone".to_string(),
         "SESSION character_set_results = @@SESSION.character_set_results".to_string(),
         "SESSION character_set_connection = @@SESSION.character_set_connection".to_string(),
+        // The isolation level, reported back as it is: only a level the server reports is
+        // known, as only a server that reports it says when it changes.
+        format!("SESSION {iso} = @@SESSION.{iso}"),
         // Each statement outside a transaction commits on its own, whatever the server's default
         // (`init_connect`, a global `autocommit = 0`): the session follows the flag from here.
         "SESSION autocommit = 1".to_string(),
@@ -325,6 +338,21 @@ pub(crate) struct Tracked {
     /// use them up, so it is refused while this holds. Cleared only when a transaction starts
     /// or ends (a statement in autocommit may use them up too, which is not known).
     pub(crate) next_once: bool,
+    /// `transaction_isolation` (`tx_isolation`), the session's level.
+    pub(crate) isolation: Option<String>,
+    /// The session's level may have changed without a report: code of the server's ran (`CALL`,
+    /// `EXECUTE`, an executable comment). Only the server's next report of the level clears it;
+    /// a transaction's end does not.
+    pub(crate) isolation_lost: bool,
+    /// The level of the transaction open on the session, fixed when it started (the next
+    /// transaction's level then, [`Tracked::next_isolation`]; `Some(None)`: not known);
+    /// `None` while none is open. A change of the session's level meanwhile is the next
+    /// transaction's, not this one's.
+    pub(crate) isolation_active: Option<Option<Isolation>>,
+    /// Whether the session runs with autocommit once it is set up (its start-up statements
+    /// may turn it off), from the status flags of the last statement that set it up; `None`:
+    /// not seen.
+    pub(crate) autocommit: Option<bool>,
 }
 
 impl Tracked {
@@ -345,6 +373,10 @@ impl Tracked {
                             "time_zone" => self.time_zone = Some(value),
                             "character_set_results" => self.results_charset = Some(value),
                             "character_set_connection" => self.connection_charset = Some(value),
+                            "transaction_isolation" | "tx_isolation" => {
+                                self.isolation = Some(value);
+                                self.isolation_lost = false;
+                            }
                             _ => {}
                         }
                     }
@@ -368,6 +400,47 @@ impl Tracked {
         let connection = named(self.connection_charset.as_deref()?);
         let charset = if results == "utf8mb4" && connection != "utf8mb4" { connection } else { results };
         Some(SessionValues { time_zone: self.time_zone.clone()?, charset })
+    }
+
+    /// The level reads run in now: the open transaction's ([`Tracked::isolation_active`]),
+    /// else the next transaction's ([`Tracked::next_isolation`]); `None` when not known.
+    pub(crate) fn isolation(&self) -> Option<Isolation> {
+        match self.isolation_active {
+            Some(active) => active,
+            None => self.next_isolation(),
+        }
+    }
+
+    /// The level the session's next transaction runs in: the session's as the server reported
+    /// it, `None` when it did not, when the next one has settings of its own, or may have
+    /// ([`Tracked::next_once`]), or when code of the server's may have changed it since
+    /// ([`Tracked::isolation_lost`]).
+    pub(crate) fn next_isolation(&self) -> Option<Isolation> {
+        if self.next_once || self.isolation_lost {
+            return None;
+        }
+        Isolation::from_name(self.isolation.as_deref()?)
+    }
+
+    /// A transaction started on the session: it runs in the next transaction's level, which a
+    /// `SET TRANSACTION` without `SESSION` set for it alone.
+    pub(crate) fn transaction_began(&mut self) {
+        self.isolation_active = Some(self.next_isolation());
+    }
+
+    /// The transaction open on the session ended: the next one runs in the session's level.
+    pub(crate) fn transaction_ended(&mut self) {
+        self.isolation_active = None;
+    }
+
+    /// Code of the server's ran (`open`: a transaction is open after it): the session's level
+    /// and the open transaction's (which the code may have ended and started again) are not
+    /// known until the server reports the session's level again.
+    pub(crate) fn isolation_after_code(&mut self, open: bool) {
+        self.isolation_lost = true;
+        if open {
+            self.isolation_active = Some(None);
+        }
     }
 
     /// What [`ASK_VALUES`] answered.
@@ -446,7 +519,14 @@ pub(crate) async fn open(
             return Err((error, false));
         }
         tracked.update(&conn);
+        // Settings for the next transaction only, which the server does not report.
+        if crate::query::sets_next_transaction(sql, tracked.mode(&server)) != crate::query::SetsNext::No {
+            tracked.next_once = true;
+        }
     }
+    tracked.autocommit = conn
+        .last_ok_packet()
+        .map(|p| p.status_flags().contains(mysql_async::consts::StatusFlags::SERVER_STATUS_AUTOCOMMIT));
     let read_only = settings.read_only || matches!(settings.role, SessionRole::Meta | SessionRole::Monitor);
     // A server (or a proxy in front of it) that did not report them is asked.
     if tracked.sql_mode.is_none() || tracked.values().is_none() || (read_only && tracked.read_only.is_none()) {

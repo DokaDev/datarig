@@ -524,6 +524,9 @@ impl App {
                 if let ConfirmAction::FilterCalls(tab) = action {
                     self.filter_calls_declined(tab);
                 }
+                if let ConfirmAction::TableReadLocks(tab) = action {
+                    self.table_locks_declined(tab);
+                }
             }
             _ => {}
         }
@@ -579,6 +582,7 @@ impl App {
             ConfirmAction::LeaveEdits(leave) => self.leave_confirmed(leave),
             ConfirmAction::MonitorAction { tab, .. } => self.monitor_confirmed(tab),
             ConfirmAction::FilterCalls(tab) => self.filter_calls_confirmed(tab),
+            ConfirmAction::TableReadLocks(tab) => self.table_locks_confirmed(tab),
             ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
         }
     }

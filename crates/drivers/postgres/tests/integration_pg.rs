@@ -140,6 +140,7 @@ impl Conn {
 
     async fn run(&mut self, id: u64, sql: &str) -> DbEvent {
         self.session.send(DbCommand::Execute {
+            max_rows: None,
             id,
             statements: vec![sql.to_string()],
             paging: PagingMode::Hold,
@@ -882,6 +883,7 @@ async fn table_structure_never_waits_for_a_lock() {
     let mut migration = Conn::open(&url, SessionRole::Query).await;
     assert!(matches!(migration.run(1, "BEGIN").await, DbEvent::Done { .. }));
     migration.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 2,
         statements: vec![format!("LOCK TABLE {s}.t")],
         paging: PagingMode::Hold,
@@ -1169,6 +1171,7 @@ async fn order_keys_are_read_without_a_lock() {
     let mut migration = Conn::open(&url, SessionRole::Query).await;
     assert!(matches!(migration.run(1, "BEGIN").await, DbEvent::Done { .. }));
     migration.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 2,
         statements: vec![format!("LOCK TABLE {s}.keys_probe")],
         paging: PagingMode::Hold,
@@ -1551,6 +1554,7 @@ async fn portal_paging_fetches_500_rows_per_page() {
     let Some(url) = pg_url("portal_paging_fetches_500_rows_per_page") else { return };
     let mut c = Conn::open(&url, SessionRole::Query).await;
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec!["SELECT * FROM analytics.events".into()],
         paging: PagingMode::Hold,
@@ -1580,6 +1584,7 @@ async fn portal_paging_fetches_500_rows_per_page() {
 
     // Running another statement closes the implicit transaction first.
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 2,
         statements: vec!["SELECT 1 AS one".into()],
         paging: PagingMode::Hold,
@@ -1591,12 +1596,72 @@ async fn portal_paging_fetches_500_rows_per_page() {
     assert!(!more);
 }
 
+/// A result with a cap (`max_rows`) asks its portal for no row past it, on its first page and
+/// its later ones, held or not, and run again past the rows it has: the row counts of the
+/// `Execute`s that ask for some add up to the cap (the skipped rows too), with no row to look
+/// ahead at it, and the result ends there. (An `Execute` of 0 is a statement's without rows to
+/// page, `BEGIN` or `COMMIT`: the uncapped run sends as many.)
+#[tokio::test(flavor = "multi_thread")]
+async fn a_capped_result_reads_no_row_past_its_cap() {
+    let Some(url) = pg_url("a_capped_result_reads_no_row_past_its_cap") else { return };
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut c = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let sql = "SELECT id FROM analytics.events ORDER BY id";
+    let asked = |from: usize| proxy.executes()[from..].iter().copied().filter(|n| *n > 0).collect::<Vec<i32>>();
+    let zeros = |from: usize| proxy.executes()[from..].iter().filter(|n| **n == 0).count();
+    let execute = |id: u64, paging: PagingMode, max_rows: Option<u64>| DbCommand::Execute {
+        id,
+        statements: vec![sql.to_string()],
+        paging,
+        tx: TxRule::Auto,
+        max_rows,
+    };
+    // Within the first page, not held.
+    let before = proxy.executes().len();
+    c.session.send(execute(1, PagingMode::NoHold, Some(3)));
+    let DbEvent::Page { rows, more, .. } = c.result(1).await else { panic!("a page") };
+    assert_eq!((rows.len(), more), (3, false));
+    assert_eq!(asked(before), [3], "no row past the cap, none to look ahead");
+    let capped_zeros = zeros(before);
+    // Past the first page, held: the next request stops at the cap.
+    let before = proxy.executes().len();
+    c.session.send(execute(2, PagingMode::Hold, Some(503)));
+    let DbEvent::Page { rows, more, .. } = c.result(2).await else { panic!("a page") };
+    assert_eq!((rows.len(), more), (PAGE, true));
+    c.session.send(DbCommand::FetchMore { id: 2 });
+    let DbEvent::Page { columns: None, rows, more, .. } = c.result(2).await else { panic!("the next page") };
+    assert_eq!((rows.len(), more), (3, false));
+    let rows = asked(before);
+    assert_eq!(rows.iter().sum::<i32>(), 503, "{rows:?}");
+    // Run again past the rows it has: the rows skipped, then what the cap leaves.
+    let before = proxy.executes().len();
+    c.session.send(DbCommand::Resume {
+        id: 3,
+        sql: sql.into(),
+        skip: PAGE as u64,
+        paging: PagingMode::NoHold,
+        max_rows: Some(3),
+    });
+    let DbEvent::Page { rows, more, .. } = c.result(3).await else { panic!("a page") };
+    assert_eq!((rows.len(), more), (3, false));
+    let rows = asked(before);
+    assert_eq!(rows.iter().sum::<i32>(), 503, "{rows:?}");
+    // Without a cap, as before: a page and one row more.
+    let before = proxy.executes().len();
+    c.session.send(execute(4, PagingMode::NoHold, None));
+    let DbEvent::Page { rows, more, .. } = c.result(4).await else { panic!("a page") };
+    assert_eq!((rows.len(), more), (PAGE, true));
+    assert_eq!(asked(before), [PAGE as i32 + 1]);
+    assert_eq!(zeros(before), capped_zeros, "no Execute of the capped run asks for every row");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn cancel_request_stops_slow_function() {
     let Some(url) = pg_url("cancel_request_stops_slow_function") else { return };
     let tag = format!("cancel{}", std::process::id());
     let (mut c, mut obs) = tagged(&url, &tag).await;
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec!["SELECT analytics.slow(30)".into()],
         paging: PagingMode::Hold,
@@ -1673,6 +1738,7 @@ async fn value_formats_and_outcomes() {
 
     // Visual selection of two statements: last one's result.
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 4,
         statements: vec!["SELECT 1".into(), "SELECT 'last'".into()],
         paging: PagingMode::Hold,
@@ -1821,6 +1887,7 @@ async fn closing_the_session_cancels_the_running_statement() {
     let tag = format!("close{}", std::process::id());
     let (q, mut obs) = tagged(&url, &tag).await;
     q.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec!["SELECT pg_sleep(60)".into()],
         paging: PagingMode::Hold,
@@ -1857,6 +1924,7 @@ async fn closing_the_session_while_rows_stream_in_ends_it_at_once() {
     // materialized first).
     let endless = "SELECT generate_series(1, 1000000000000) AS g, repeat('x', 200) AS pad";
     q.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec![endless.into(), "SELECT 1".into()],
         paging: PagingMode::Hold,
@@ -1892,6 +1960,7 @@ async fn a_terminated_backend_fails_the_statement_then_reports_lost_once() {
         let tag = format!("lost{mode}{}", std::process::id());
         let (mut q, mut obs) = tagged(&url, &tag).await;
         q.session.send(DbCommand::Execute {
+            max_rows: None,
             id: 1,
             statements: vec!["SELECT pg_sleep(30)".into()],
             paging,
@@ -1936,6 +2005,7 @@ async fn reading_inside_a_transaction_keeps_it_open() {
     assert!(matches!(q.run(5, "SELECT 1/0").await, DbEvent::Failed { .. }));
     assert!(matches!(q.run(6, "SELECT 1").await, DbEvent::Failed { .. }), "aborted block refuses statements");
     q.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 7,
         statements: vec!["ROLLBACK".into()],
         paging: PagingMode::Hold,
@@ -1969,6 +2039,7 @@ impl Indicator {
         self.id += 1;
         let id = self.id;
         self.c.session.send(DbCommand::Execute {
+            max_rows: None,
             id,
             statements: vec![sql.to_string()],
             paging: PagingMode::Hold,
@@ -2724,6 +2795,7 @@ async fn pipelined_statements_keep_the_transaction_rules() {
     s.id += 1;
     let id = s.id;
     s.c.session.send(DbCommand::Execute {
+        max_rows: None,
         id,
         statements: vec!["INSERT INTO child VALUES (1) RETURNING p".into()],
         paging: PagingMode::Hold,
@@ -2758,7 +2830,13 @@ async fn cancelling_a_first_page_ends_its_transaction() {
     {
         s.id += 1;
         let id = s.id;
-        s.c.session.send(DbCommand::Execute { id, statements: vec![slow.into()], paging, tx: TxRule::Auto });
+        s.c.session.send(DbCommand::Execute {
+            max_rows: None,
+            id,
+            statements: vec![slow.into()],
+            paging,
+            tx: TxRule::Auto,
+        });
         tokio::time::sleep(Duration::from_millis(400)).await;
         s.c.session.cancel();
         match s.c.result(id).await {
@@ -2773,6 +2851,7 @@ async fn cancelling_a_first_page_ends_its_transaction() {
     s.id += 1;
     let id = s.id;
     s.c.session.send(DbCommand::Execute {
+        max_rows: None,
         id,
         statements: vec![slow.into()],
         paging: PagingMode::NoHold,
@@ -2907,7 +2986,13 @@ async fn every_run_ends_while_the_table_keeps_changing() {
         let id = s.id;
         // Held and not held in turn (not held, the first page's COMMIT goes out with it).
         let paging = if i % 2 == 0 { PagingMode::Hold } else { PagingMode::NoHold };
-        s.c.session.send(DbCommand::Execute { id, statements: vec![sql.clone()], paging, tx: TxRule::Auto });
+        s.c.session.send(DbCommand::Execute {
+            max_rows: None,
+            id,
+            statements: vec![sql.clone()],
+            paging,
+            tx: TxRule::Auto,
+        });
         let ended = tokio::time::timeout(PER_RUN, async {
             loop {
                 match s.c.rx.recv().await {
@@ -3567,6 +3652,7 @@ async fn block_reports_the_users_transaction_only() {
     let Some(url) = pg_url("block_reports_the_users_transaction_only") else { return };
     let mut c = Conn::open(&url, SessionRole::Query).await;
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec!["SELECT g FROM generate_series(1, 2000) g".into()],
         paging: PagingMode::Hold,
@@ -3579,6 +3665,7 @@ async fn block_reports_the_users_transaction_only() {
     c.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
 
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 2,
         statements: vec!["BEGIN".into()],
         paging: PagingMode::Hold,
@@ -3597,6 +3684,7 @@ async fn block_reports_the_users_transaction_only() {
     let events = c.drain(150).await;
     assert!(!events.iter().any(|e| matches!(e, DbEvent::Block(false))), "{events:?}");
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 4,
         statements: vec!["ROLLBACK".into()],
         paging: PagingMode::Hold,
@@ -3614,6 +3702,7 @@ async fn a_count_while_paging_keeps_the_portal() {
     let mut c = Conn::open(&url, SessionRole::Query).await;
     let sql = "SELECT g FROM generate_series(1, 2345) g ORDER BY g";
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec![sql.into()],
         paging: PagingMode::Hold,
@@ -3704,6 +3793,7 @@ async fn the_allowlist_question_alone_changes_nothing() {
     // While a portal pages.
     let sql = "SELECT g FROM generate_series(1, 2345) g ORDER BY g";
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 7,
         statements: vec![sql.into()],
         paging: PagingMode::Hold,
@@ -3769,7 +3859,13 @@ async fn a_resumed_result_starts_after_the_skipped_rows() {
     let Some(url) = pg_url("a_resumed_result_starts_after_the_skipped_rows") else { return };
     let mut c = Conn::open(&url, SessionRole::Query).await;
     let sql = "SELECT g FROM generate_series(1, 25000) g ORDER BY g";
-    c.session.send(DbCommand::Resume { id: 1, sql: sql.into(), skip: 12_000, paging: PagingMode::Hold });
+    c.session.send(DbCommand::Resume {
+        max_rows: None,
+        id: 1,
+        sql: sql.into(),
+        skip: 12_000,
+        paging: PagingMode::Hold,
+    });
     let DbEvent::Page { columns: Some(cols), rows, more: true, .. } = c.result(1).await else { panic!("a page") };
     assert_eq!(cols[0].name, "g");
     assert_eq!(rows.len(), PAGE);
@@ -3781,7 +3877,7 @@ async fn a_resumed_result_starts_after_the_skipped_rows() {
     c.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
     // Past a chunk and just short of one: the page is topped up to its size.
     for (id, skip) in [(4, 9_800), (5, 10_000), (6, 1)] {
-        c.session.send(DbCommand::Resume { id, sql: sql.into(), skip, paging: PagingMode::Hold });
+        c.session.send(DbCommand::Resume { max_rows: None, id, sql: sql.into(), skip, paging: PagingMode::Hold });
         let DbEvent::Page { rows, more: true, .. } = c.result(id).await else { panic!("{skip}") };
         assert_eq!(rows.len(), PAGE, "{skip}");
         assert_eq!(rows[0][0].as_deref(), Some((skip + 1).to_string().as_str()), "{skip}");
@@ -3793,11 +3889,17 @@ async fn a_resumed_result_starts_after_the_skipped_rows() {
         c.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
     }
     // The last rows: a short last page without more.
-    c.session.send(DbCommand::Resume { id: 7, sql: sql.into(), skip: 24_900, paging: PagingMode::Hold });
+    c.session.send(DbCommand::Resume {
+        max_rows: None,
+        id: 7,
+        sql: sql.into(),
+        skip: 24_900,
+        paging: PagingMode::Hold,
+    });
     let DbEvent::Page { rows, more: false, .. } = c.result(7).await else { panic!("the last page") };
     assert_eq!(rows.len(), 100);
     for (id, skip) in [(2, 25_000), (3, 30_000)] {
-        c.session.send(DbCommand::Resume { id, sql: sql.into(), skip, paging: PagingMode::Hold });
+        c.session.send(DbCommand::Resume { max_rows: None, id, sql: sql.into(), skip, paging: PagingMode::Hold });
         let DbEvent::Page { columns: Some(_), rows, more: false, .. } = c.result(id).await else { panic!("{skip}") };
         assert!(rows.is_empty(), "{skip}");
     }
@@ -3812,7 +3914,7 @@ async fn a_resumed_result_is_read_only_on_a_read_only_session() {
     let Some(url) = pg_url("a_resumed_result_is_read_only_on_a_read_only_session") else { return };
     let mut c = Conn::open_with(&url, SessionRole::Query, true).await;
     let sql = "SELECT current_setting('transaction_read_only') FROM generate_series(1, 700)";
-    c.session.send(DbCommand::Resume { id: 1, sql: sql.into(), skip: 1, paging: PagingMode::Hold });
+    c.session.send(DbCommand::Resume { max_rows: None, id: 1, sql: sql.into(), skip: 1, paging: PagingMode::Hold });
     let DbEvent::Page { rows, more: true, .. } = c.result(1).await else { panic!("a page") };
     assert_eq!(rows[0][0].as_deref(), Some("on"));
 }
@@ -3824,6 +3926,7 @@ async fn a_cancelled_count_answers_once_and_the_portal_pages_on() {
     let mut c = Conn::open(&url, SessionRole::Query).await;
     let sql = "SELECT g FROM generate_series(1, 2000) g ORDER BY g";
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec![sql.into()],
         paging: PagingMode::Hold,
@@ -3864,16 +3967,28 @@ async fn a_resumed_result_in_the_users_block_keeps_the_block() {
     };
     // Fails while it skips (row 1,000 of the rows it drops).
     let failing = "SELECT 1 / (g - 1000) AS q FROM generate_series(1, 2000) g";
-    c.session.send(DbCommand::Resume { id: 4, sql: failing.into(), skip: 500, paging: PagingMode::Hold });
+    c.session.send(DbCommand::Resume {
+        max_rows: None,
+        id: 4,
+        sql: failing.into(),
+        skip: 500,
+        paging: PagingMode::Hold,
+    });
     assert!(matches!(c.result(4).await, DbEvent::Failed { .. }));
     assert_eq!(rows_kept(&mut c, 5).await.as_deref(), Some("3"));
     // Fails on its first page.
-    c.session.send(DbCommand::Resume { id: 6, sql: failing.into(), skip: 700, paging: PagingMode::Hold });
+    c.session.send(DbCommand::Resume {
+        max_rows: None,
+        id: 6,
+        sql: failing.into(),
+        skip: 700,
+        paging: PagingMode::Hold,
+    });
     assert!(matches!(c.result(6).await, DbEvent::Failed { .. }));
     assert_eq!(rows_kept(&mut c, 7).await.as_deref(), Some("3"));
     // Fails on a later page (row 1,800).
     let later = "SELECT 1 / (g - 1800) AS q FROM generate_series(1, 3000) g";
-    c.session.send(DbCommand::Resume { id: 8, sql: later.into(), skip: 500, paging: PagingMode::Hold });
+    c.session.send(DbCommand::Resume { max_rows: None, id: 8, sql: later.into(), skip: 500, paging: PagingMode::Hold });
     let DbEvent::Page { more: true, .. } = c.result(8).await else { panic!("a page with more") };
     c.session.send(DbCommand::FetchMore { id: 8 });
     let DbEvent::Page { columns: None, more: true, .. } = c.result(8).await else { panic!("the next page") };
@@ -3882,6 +3997,7 @@ async fn a_resumed_result_in_the_users_block_keeps_the_block() {
     assert_eq!(rows_kept(&mut c, 9).await.as_deref(), Some("3"));
     // Succeeds: the savepoint is gone once the portal ended (the next statement ended it).
     c.session.send(DbCommand::Resume {
+        max_rows: None,
         id: 10,
         sql: "SELECT x FROM zz_resume ORDER BY x".into(),
         skip: 1,
@@ -3890,6 +4006,7 @@ async fn a_resumed_result_in_the_users_block_keeps_the_block() {
     let DbEvent::Page { rows, more: false, .. } = c.result(10).await else { panic!("the rest") };
     assert_eq!(rows.iter().map(|r| r[0].as_deref()).collect::<Vec<_>>(), [Some("2"), Some("3")]);
     c.session.send(DbCommand::Resume {
+        max_rows: None,
         id: 11,
         sql: "SELECT g FROM generate_series(1, 2000) g".into(),
         skip: 1,
@@ -3906,7 +4023,13 @@ async fn a_resumed_result_in_the_users_block_keeps_the_block() {
     // Read-only: the block is made read-only before the savepoint, and stays so after a failure.
     let mut c = Conn::open_with(&url, SessionRole::Query, true).await;
     let _ = c.run(1, "BEGIN").await;
-    c.session.send(DbCommand::Resume { id: 2, sql: failing.into(), skip: 500, paging: PagingMode::Hold });
+    c.session.send(DbCommand::Resume {
+        max_rows: None,
+        id: 2,
+        sql: failing.into(),
+        skip: 500,
+        paging: PagingMode::Hold,
+    });
     assert!(matches!(c.result(2).await, DbEvent::Failed { .. }));
     let DbEvent::Page { rows, .. } = c.run(3, "SELECT current_setting('transaction_read_only')").await else {
         panic!("the block is aborted")
@@ -3915,7 +4038,7 @@ async fn a_resumed_result_in_the_users_block_keeps_the_block() {
     let _ = c.run(4, "ROLLBACK").await;
     let _ = c.run(5, "BEGIN").await;
     let ro = "SELECT current_setting('transaction_read_only') FROM generate_series(1, 700)";
-    c.session.send(DbCommand::Resume { id: 6, sql: ro.into(), skip: 1, paging: PagingMode::Hold });
+    c.session.send(DbCommand::Resume { max_rows: None, id: 6, sql: ro.into(), skip: 1, paging: PagingMode::Hold });
     let DbEvent::Page { rows, more: true, .. } = c.result(6).await else { panic!("a page") };
     assert_eq!(rows[0][0].as_deref(), Some("on"));
     let _ = c.run(7, "ROLLBACK").await;
@@ -3977,7 +4100,7 @@ async fn the_server_is_asked_before_a_statement_runs_again() {
         ("SELECT * FROM m", N::UserColumnType("mood".into())),
     ] {
         assert_eq!(refused(c.count(2, &count_of(sql)).await), why, "{sql}");
-        c.session.send(DbCommand::Resume { id: 3, sql: sql.into(), skip: 1, paging: PagingMode::Hold });
+        c.session.send(DbCommand::Resume { max_rows: None, id: 3, sql: sql.into(), skip: 1, paging: PagingMode::Hold });
         let DbEvent::Failed { error: DbError::NotRepeatable(n), cancelled: false, .. } = c.result(3).await else {
             panic!("{sql}: run again")
         };
@@ -3990,7 +4113,13 @@ async fn the_server_is_asked_before_a_statement_runs_again() {
         ("SELECT * FROM json_to_record('{}') AS r(c mood)".to_string(), N::UserType("mood".into())),
     ] {
         assert_eq!(c.count(4, &sql).await, Err(DbError::NotSupported), "{sql}");
-        c.session.send(DbCommand::Resume { id: 5, sql: sql.clone(), skip: 1, paging: PagingMode::Hold });
+        c.session.send(DbCommand::Resume {
+            max_rows: None,
+            id: 5,
+            sql: sql.clone(),
+            skip: 1,
+            paging: PagingMode::Hold,
+        });
         let DbEvent::Failed { error: DbError::NotRepeatable(n), .. } = c.result(5).await else { panic!("{sql}") };
         assert_eq!(n, why, "{sql}");
     }
@@ -4005,6 +4134,7 @@ async fn the_server_is_asked_before_a_statement_runs_again() {
         assert_eq!(c.count(6, &count_of(sql)).await, Ok(n), "{sql}");
     }
     c.session.send(DbCommand::Resume {
+        max_rows: None,
         id: 7,
         sql: "SELECT id FROM t ORDER BY id".into(),
         skip: 10,
@@ -4020,7 +4150,13 @@ async fn the_server_is_asked_before_a_statement_runs_again() {
         let _ = c.run(10, "CREATE TEMP TABLE zz_kept (x int)").await;
         let _ = c.run(11, "INSERT INTO zz_kept VALUES (1)").await;
         assert_eq!(refused(c.count(12, &count_of("SELECT * FROM v")).await), N::NotATable("v".into()));
-        c.session.send(DbCommand::Resume { id: 13, sql: "SELECT abs('x')".into(), skip: 1, paging: PagingMode::Hold });
+        c.session.send(DbCommand::Resume {
+            max_rows: None,
+            id: 13,
+            sql: "SELECT abs('x')".into(),
+            skip: 1,
+            paging: PagingMode::Hold,
+        });
         assert!(matches!(c.result(13).await, DbEvent::Failed { error: DbError::NotRepeatable(_), .. }));
         assert_eq!(cell(&c.run(14, "SELECT count(*) FROM zz_kept").await).as_deref(), Some("1"));
         let DbEvent::Failed { error: DbError::Server(e), .. } = c.run(15, &format!("RELEASE SAVEPOINT {sp}")).await
@@ -4398,6 +4534,7 @@ async fn behind_a_pooler_the_path_is_set_in_each_transaction() {
     // A count, and a statement run again past rows it skips.
     assert_eq!(c.count(17, &count_of("SELECT x FROM zz_pt")).await, Ok(3));
     c.session.send(DbCommand::Resume {
+        max_rows: None,
         id: 18,
         sql: "SELECT x FROM zz_pt ORDER BY x".into(),
         skip: 1,
@@ -4644,6 +4781,7 @@ async fn sessions_cancels_and_tests_go_through_the_dialer() {
     assert_eq!(rows[0][0].as_deref(), Some(&*(PAGE + 1).to_string()));
 
     q.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 2,
         statements: vec!["SELECT pg_sleep(60)".into()],
         paging: PagingMode::Hold,
@@ -4660,6 +4798,7 @@ async fn sessions_cancels_and_tests_go_through_the_dialer() {
     // Closing the session while it runs cancels the statement through the dialer too. (Waited
     // for by its own text: the cancelled one may still show as active for a moment.)
     q.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 3,
         statements: vec!["SELECT pg_sleep(61)".into()],
         paging: PagingMode::Hold,
@@ -4873,6 +5012,7 @@ const ENDLESS_NOTICES: &str = "DO $$ BEGIN LOOP RAISE NOTICE 'tick'; PERFORM pg_
 /// Start `sql` on `q` (tagged `tag`) and wait until the server runs it.
 async fn start(q: &Conn, obs: &mut Conn, tag: &str, sql: &str) {
     q.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec![sql.into()],
         paging: PagingMode::Hold,
@@ -5046,7 +5186,13 @@ async fn a_cancel_not_sent_ends_a_run_of_several_statements_once() {
     let _backends = Backends::new(&url, &tag);
     let (mut q, _, mut obs) = open_cancel_dial(&url, &tag, LaterDials::Refuse).await;
     let statements = vec!["SELECT 1".into(), "SELECT pg_sleep(30)".into()];
-    q.session.send(DbCommand::Execute { id: 1, statements, paging: PagingMode::Hold, tx: TxRule::Auto });
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 1,
+        statements,
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     let mut n = 70_000;
     while !active_queries(&mut obs, n, &tag).await.iter().any(|t| t.contains("pg_sleep(30)")) {
         n += 1;
@@ -5168,7 +5314,13 @@ async fn alter_quickly(migration: &mut Conn, id: u64, table: &str, column: &str)
         format!("ALTER TABLE {table} ADD COLUMN {column} int"),
         "COMMIT".to_string(),
     ];
-    migration.session.send(DbCommand::Execute { id, statements, paging: PagingMode::Hold, tx: TxRule::Auto });
+    migration.session.send(DbCommand::Execute {
+        max_rows: None,
+        id,
+        statements,
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     match migration.result(id).await {
         DbEvent::Done { .. } => Ok(()),
         DbEvent::Failed { error, .. } => {
@@ -5196,6 +5348,7 @@ async fn a_result_not_held_leaves_no_lock_and_no_transaction() {
     assert!(matches!(obs.run(1, &create).await, DbEvent::Done { .. }));
     let sql = format!("SELECT x FROM {table} ORDER BY x");
     q.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec![sql.clone()],
         paging: PagingMode::NoHold,
@@ -5218,7 +5371,13 @@ async fn a_result_not_held_leaves_no_lock_and_no_transaction() {
     let mut migration = Conn::open(&url, SessionRole::Query).await;
     assert_eq!(alter_quickly(&mut migration, 1, &table, "y").await, Ok(()), "the deploy is not blocked");
     // The next page: the statement again, after the 500 rows shown.
-    q.session.send(DbCommand::Resume { id: 2, sql: sql.clone(), skip: 500, paging: PagingMode::NoHold });
+    q.session.send(DbCommand::Resume {
+        max_rows: None,
+        id: 2,
+        sql: sql.clone(),
+        skip: 500,
+        paging: PagingMode::NoHold,
+    });
     let released = q.wait(|e| matches!(e, DbEvent::Released { .. } | DbEvent::Page { .. }), 30).await;
     assert!(matches!(released, DbEvent::Released { id: 2 }), "{released:?}");
     let DbEvent::Page { columns: Some(_), rows, more: true, .. } = q.result(2).await else { panic!("page 2") };
@@ -5226,7 +5385,7 @@ async fn a_result_not_held_leaves_no_lock_and_no_transaction() {
     assert_eq!(server_view(&mut obs, 3, &tag).await, ("idle".to_string(), "0".to_string()));
     assert_eq!(alter_quickly(&mut migration, 3, &table, "z").await, Ok(()));
     // The last page ends the result: nothing to release.
-    q.session.send(DbCommand::Resume { id: 3, sql, skip: 1000, paging: PagingMode::NoHold });
+    q.session.send(DbCommand::Resume { max_rows: None, id: 3, sql, skip: 1000, paging: PagingMode::NoHold });
     let DbEvent::Page { rows, more: false, .. } = q.result(3).await else { panic!("the last page") };
     assert_eq!((rows.len(), rows[199][0].as_deref()), (200, Some("1200")));
     let events = q.drain(150).await;
@@ -5248,7 +5407,13 @@ async fn a_held_result_keeps_its_transaction_and_lock_until_closed() {
     let create = format!("CREATE TABLE {table} AS SELECT g AS x FROM generate_series(1, 1200) g");
     assert!(matches!(obs.run(1, &create).await, DbEvent::Done { .. }));
     let sql = format!("SELECT x FROM {table} ORDER BY x");
-    q.session.send(DbCommand::Execute { id: 1, statements: vec![sql], paging: PagingMode::Hold, tx: TxRule::Auto });
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 1,
+        statements: vec![sql],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     q.wait(|e| matches!(e, DbEvent::TxOpen(true)), 10).await;
     let DbEvent::Page { more: true, .. } = q.result(1).await else { panic!("a page with more") };
     let (state, locks) = server_view(&mut obs, 2, &tag).await;
@@ -5275,6 +5440,7 @@ async fn a_result_in_the_users_block_is_held_without_hold_too() {
     assert!(matches!(c.run(1, "BEGIN").await, DbEvent::Done { .. }));
     let sql = "SELECT g FROM generate_series(1, 1200) g";
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 2,
         statements: vec![sql.into()],
         paging: PagingMode::NoHold,
@@ -5297,6 +5463,7 @@ async fn a_result_not_held_is_read_only_on_a_read_only_session() {
     let mut c = Conn::open_with(&url, SessionRole::Query, true).await;
     let sql = "SELECT current_setting('transaction_read_only') FROM generate_series(1, 700)";
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec![sql.into()],
         paging: PagingMode::NoHold,
@@ -5304,7 +5471,7 @@ async fn a_result_not_held_is_read_only_on_a_read_only_session() {
     });
     let DbEvent::Page { rows, more: true, .. } = c.result(1).await else { panic!("a page") };
     assert_eq!(rows[0][0].as_deref(), Some("on"));
-    c.session.send(DbCommand::Resume { id: 2, sql: sql.into(), skip: 500, paging: PagingMode::NoHold });
+    c.session.send(DbCommand::Resume { max_rows: None, id: 2, sql: sql.into(), skip: 500, paging: PagingMode::NoHold });
     let DbEvent::Page { rows, more: false, .. } = c.result(2).await else { panic!("the rest") };
     assert_eq!((rows.len(), rows[0][0].as_deref()), (200, Some("on")));
 }
@@ -5322,6 +5489,7 @@ async fn a_write_not_held_is_shown_only_once_committed() {
     assert!(matches!(c.run(1, create).await, DbEvent::Done { .. }));
     let insert = "INSERT INTO zz_nohold_w SELECT g FROM generate_series(1, 700) g RETURNING x";
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 2,
         statements: vec![insert.into()],
         paging: PagingMode::NoHold,
@@ -5333,6 +5501,7 @@ async fn a_write_not_held_is_shown_only_once_committed() {
     assert_eq!(rows[0][0].as_deref(), Some("700"), "committed");
     let twice = "INSERT INTO zz_nohold_w SELECT 1 FROM generate_series(1, 600) RETURNING x";
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 4,
         statements: vec![twice.into()],
         paging: PagingMode::NoHold,
@@ -5345,7 +5514,13 @@ async fn a_write_not_held_is_shown_only_once_committed() {
     };
     assert_eq!(rows[0][0].as_deref(), Some("700"));
     let sql = "SELECT g FROM generate_series(1, 25000) g ORDER BY g";
-    c.session.send(DbCommand::Resume { id: 6, sql: sql.into(), skip: 12_000, paging: PagingMode::NoHold });
+    c.session.send(DbCommand::Resume {
+        max_rows: None,
+        id: 6,
+        sql: sql.into(),
+        skip: 12_000,
+        paging: PagingMode::NoHold,
+    });
     let DbEvent::Page { rows, more: true, .. } = c.result(6).await else { panic!("a page") };
     assert_eq!(rows[0][0].as_deref(), Some("12001"));
     let events = c.drain(150).await;
@@ -5427,7 +5602,13 @@ async fn copy_to_or_from_the_client_ends_the_run_and_leaves_nothing_running() {
             let (mut q, mut obs) = tagged(&url, &tag).await;
             let create = "CREATE TEMP TABLE zz_copy AS SELECT g FROM generate_series(1, 10) g";
             assert!(matches!(q.run(1, create).await, DbEvent::Done { .. }));
-            q.session.send(DbCommand::Execute { id: 2, statements: vec![copy.to_string()], paging, tx: TxRule::Auto });
+            q.session.send(DbCommand::Execute {
+                max_rows: None,
+                id: 2,
+                statements: vec![copy.to_string()],
+                paging,
+                tx: TxRule::Auto,
+            });
             let answers = answers_to(&mut q, 2).await;
             assert_eq!(answers.len(), 1, "{copy} ({paging:?}): one answer: {answers:?}");
             assert!(
@@ -5499,6 +5680,7 @@ async fn a_copy_hidden_by_backslash_strings_is_refused_too() {
             assert!(matches!(ev, DbEvent::Done { .. }), "{case}: {sql}: {ev:?}");
         }
         q.session.send(DbCommand::Execute {
+            max_rows: None,
             id: 10,
             statements: vec![hidden(*rows)],
             paging: PagingMode::Hold,
@@ -5529,6 +5711,7 @@ async fn a_copy_of_a_table_named_to_is_refused() {
     let (mut q, mut obs) = tagged(&url, &tag).await;
     assert!(matches!(q.run(1, r#"CREATE TEMP TABLE "to" (a int)"#).await, DbEvent::Done { .. }));
     q.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 2,
         statements: vec!["COPY pg_temp.to TO STDOUT".into()],
         paging: PagingMode::Hold,
@@ -5593,7 +5776,7 @@ impl Conn {
 
     async fn manual_with(&mut self, id: u64, statements: &[&str], tx: TxRule) -> Vec<DbEvent> {
         let statements = statements.iter().map(|s| s.to_string()).collect();
-        self.events_of(DbCommand::Execute { id, statements, paging: PagingMode::Hold, tx }).await
+        self.events_of(DbCommand::Execute { max_rows: None, id, statements, paging: PagingMode::Hold, tx }).await
     }
 
     /// End the open transaction (`commit` or roll back): every event it brings.
@@ -5707,8 +5890,13 @@ async fn a_manual_first_write_costs_what_an_autocommit_write_costs() {
         assert_eq!(wire.get().1, probes, "no probe: {events:?}");
         (wire.delivered() - before, wire.texts()[texts..].to_vec(), events)
     };
-    let exec =
-        |id, sql: &str, tx| DbCommand::Execute { id, statements: vec![sql.into()], paging: PagingMode::Hold, tx };
+    let exec = |id, sql: &str, tx| DbCommand::Execute {
+        max_rows: None,
+        id,
+        statements: vec![sql.into()],
+        paging: PagingMode::Hold,
+        tx,
+    };
     let insert = |x| format!("INSERT INTO {s}.t VALUES ({x})");
     let (n, texts, events) = cost(exec(1, &insert(1), TxRule::Auto)).await;
     assert_eq!((n, texts), (1, vec![insert(1)]), "autocommit");
@@ -5788,6 +5976,7 @@ async fn a_failed_or_cancelled_run_is_undone_and_the_transaction_kept() {
     assert_eq!(rows[0][0].as_deref(), Some("1"), "the failed run's insert is gone, the earlier one kept");
     // Cancelled while its second statement runs.
     q.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 4,
         statements: vec![insert(3), "SELECT pg_sleep(30)".into()],
         paging: PagingMode::Hold,
@@ -5946,7 +6135,13 @@ async fn explain_count_and_resume_inside_a_manual_transaction() {
     assert!(facts(&events).is_empty(), "{events:?}");
     let select = format!("SELECT x FROM {s}.t ORDER BY x");
     assert_eq!(q.count(3, &count_of(&select)).await, Ok(30));
-    q.session.send(DbCommand::Resume { id: 4, sql: select.clone(), skip: 25, paging: PagingMode::Hold });
+    q.session.send(DbCommand::Resume {
+        max_rows: None,
+        id: 4,
+        sql: select.clone(),
+        skip: 25,
+        paging: PagingMode::Hold,
+    });
     let DbEvent::Page { rows, more: false, .. } = q.result(4).await else { panic!("the rest") };
     assert_eq!(
         rows.iter().map(|r| r[0].clone().unwrap_or_default()).collect::<Vec<_>>(),
@@ -6053,8 +6248,13 @@ async fn a_plain_read_outside_a_transaction_runs_read_only() {
     );
     pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
     let (mut q, wire) = wired(&url, ONE_WAY).await;
-    let exec =
-        |id, sql: &str, tx| DbCommand::Execute { id, statements: vec![sql.into()], paging: PagingMode::Hold, tx };
+    let exec = |id, sql: &str, tx| DbCommand::Execute {
+        max_rows: None,
+        id,
+        statements: vec![sql.into()],
+        paging: PagingMode::Hold,
+        tx,
+    };
     let read = format!("SELECT count(*) FROM {s}.t");
     let (_, texts, _) = cost(&mut q, &wire, exec(1, &read, TxRule::Auto)).await;
     let begin_commit = |begin: &str| [begin.to_string(), "COMMIT".to_string()];
@@ -6162,6 +6362,7 @@ async fn manual_commit_around_reads_cancels_and_held_results() {
     let (mut q, mut obs) = tagged(&url, &tag).await;
     // A cancel of the opening write.
     q.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec![format!("INSERT INTO {s}.t SELECT 1 FROM pg_sleep(30)")],
         paging: PagingMode::Hold,
@@ -6180,6 +6381,7 @@ async fn manual_commit_around_reads_cancels_and_held_results() {
     // A held result, then EndTx.
     assert_eq!(facts(&q.manual(3, &[&insert(1)], &[true]).await), OPENED);
     q.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 4,
         statements: vec!["SELECT g FROM generate_series(1, 2000) g".into()],
         paging: PagingMode::Hold,
@@ -6192,6 +6394,7 @@ async fn manual_commit_around_reads_cancels_and_held_results() {
     // A later page that fails.
     assert_eq!(facts(&q.manual(6, &[&insert(2)], &[true]).await), OPENED);
     q.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 7,
         statements: vec!["SELECT 1 / (600 - g) FROM generate_series(1, 1000) g".into()],
         paging: PagingMode::Hold,
@@ -6447,6 +6650,7 @@ async fn a_schema_ahead_of_pg_catalog_does_not_answer_whether_a_block_is_open() 
         statements: vec!["SELECT 1 / 0".to_string()],
         paging: PagingMode::Hold,
         tx: TxRule::Auto,
+        max_rows: None,
     });
     let events = c.drain(500).await;
     assert!(events.iter().any(|e| matches!(e, DbEvent::Failed { id: 3, .. })), "{events:?}");
@@ -6496,7 +6700,13 @@ fn connecting(url: &str) -> Conn {
 }
 
 fn execute(id: u64, sql: &str) -> DbCommand {
-    DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::Hold, tx: TxRule::Auto }
+    DbCommand::Execute {
+        id,
+        statements: vec![sql.to_string()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+        max_rows: None,
+    }
 }
 
 /// A Ctrl+C while a run waits for the connection cancels that run: it is answered cancelled and

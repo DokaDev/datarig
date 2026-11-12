@@ -61,6 +61,10 @@ impl App {
             self.cancel_in(tab);
         }
         self.drop_queued(tab, |name| Msg::QueryQueuedDropped { name });
+        // A table tab's query waiting for its keys ends with the binding it waited in.
+        if self.table_keys_cancel(tab) {
+            self.tab_status(tab, Notice::new(Label::QueryCancelledRebound, Level::Warning));
+        }
         let generation = self.tabs.next_generation();
         let Some(t) = self.tabs.get_mut(tab) else { return };
         if let Some(s) = t.exec.session.take() {

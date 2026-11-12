@@ -12,6 +12,7 @@
 "results.title.counting" = "세는 중…"
 "results.title.counted" = "{count}행"
 "results.title.counted_now" = "지금 {count}행"
+"results.title.limit" = "{limit}행 제한"
 
 "query.running" = "실행 중… {elapsed}"
 "query.fetching" = "행을 더 불러오는 중…"
@@ -136,6 +137,7 @@
 "results.tab.messages" = "메시지"
 "results.tab.earlier" = "이전 실행"
 "results.page.last" = "마지막 페이지: 더 가져올 행이 없습니다"
+"results.page.limit_reached" = "마지막 페이지: {count}행 제한에 도달했습니다"
 "results.page.first" = "첫 페이지"
 "results.page.hint" = "페이지 끝: {key}로 다음 페이지"
 "results.page.stale" = "이 결과의 세션이 없어졌습니다(다시 연결했거나 다른 연결): 더 보려면 문장을 다시 실행하세요"

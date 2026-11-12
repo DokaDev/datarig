@@ -80,10 +80,10 @@ cells are tinted.
 
 A table tab (opened from the explorer) has a line above its grid with a WHERE condition and an
 ORDER BY, both run on the server. `f` (or `Space r f`) edits the condition and `Space r o` the
-order; `Enter` applies them, `Tab` moves between the two fields, `Ctrl+Space` completes column
+order; `Enter` applies them, `Tab` moves between the fields, `Ctrl+Space` completes column
 names and `Esc` puts back what was applied. A completion list that opens by itself while you
-type does not take `Enter`: once you move through it (arrows, `Ctrl+N`, `Ctrl+P`) or ask for it
-with `Ctrl+Space`, `Enter` picks its entry. `Ctrl+E` always applies. `Space r x` clears both and runs the table again,
+type does not take `Enter` or `Tab`: once you move through it (arrows, `Ctrl+N`, `Ctrl+P`) or ask
+for it with `Ctrl+Space`, `Enter` and `Tab` pick its entry. `Ctrl+E` always applies. `Space r x` clears them all and runs the table again,
 and `Space r v` opens the statement in a new console. From the command line, `:where`,
 `:orderby` and `:filter clear` do the same.
 
@@ -92,7 +92,9 @@ names, each with `ASC` or `DESC` (and `NULLS FIRST` or `NULLS LAST` on PostgreSQ
 in its normal form once applied. When the table has a primary key, its columns are added after
 yours (shown dimmed as `+ id`) so that pages read again follow one order; until datarig knows
 the order is unique (the table's keys are read from the catalog when the tab opens, without
-locking the table), the line says "order not unique".
+locking the table), the line says "order not unique". An ordered query brought back with a tab
+waits for those keys before its first run, connecting first when needed; that wait counts as a
+running query (`Ctrl+C` cancels it), and a connection that fails ends it and says so.
 
 Before anything is sent, datarig refuses a condition that could do more than filter this
 table's rows: a comment, a `;`, a row lock (`FOR UPDATE`, `FOR SHARE`), another clause or
@@ -103,6 +105,36 @@ a read-only connection it is refused.
 When the server rejects the condition, the line marks it failed, underlined where the server
 says the error is. The rows of the earlier query stay, dimmed, and the line under the grid says
 they are not the filter's answer; a cancelled run or a lost connection leaves them the same way.
+
+The third field, `LIMIT`, caps the rows the tab reads (`-` when there is none; a narrow line
+shows it as `L100`). It takes a whole number of rows, written in digits, and a blank field means
+no cap; `0`, or anything that is not a number, is refused before anything is sent. The cap is
+not written into the statement the grid runs: the pages stop at it instead, the last one cut
+there, and nothing is fetched past it (what the server held open for the result is closed). The
+results title then says `limit 100`. A count (`#`) and an export of every row read the capped
+statement (`… LIMIT 100`), so they see the same rows the pages would. A new limit runs the table
+again from its first page. On MySQL a condition may not call `ROW_COUNT()` or `FOUND_ROWS()`:
+they read the outcome of the statement before, which for a table tab is one the app sends, so
+the line refuses them.
+
+The condition, order and limit you applied are kept with the workspace and with a closed tab
+you bring back (`Space t u`): they return to the line without running, and are checked again
+as above when the tab runs.
+
+On MySQL, a plain read locks the rows it reads when the session's isolation level is
+SERIALIZABLE and autocommit is off or a transaction is open (with manual commit, the one datarig
+opens for the read counts too): other sessions cannot change those rows until the transaction
+ends. In that state, and when the level is not known, a table tab asks before it runs (`Enter`
+cancels, `y` runs), on the session the read is sent on: a read that waits for its connection, or
+opens a new session, asks once it is about to be sent, and nothing is sent before the answer.
+The answer holds for the tab until the session, its level, its autocommit or
+its transaction changes, even if it later changes back. A page read again or a count of the tab
+is refused in that state until the tab has run with that answer. While a transaction is open,
+the level that counts is the one it started with: a `SET SESSION TRANSACTION ISOLATION LEVEL`
+inside it applies to later transactions only. A level set with `SET TRANSACTION ISOLATION LEVEL`
+without `SESSION` applies to the next transaction only and the server does not report it, so
+datarig treats the level as not known until that transaction ends; after a `CALL`, an `EXECUTE`
+or an executable comment it stays not known until the session's level is set again.
 
 ## The inspector
 

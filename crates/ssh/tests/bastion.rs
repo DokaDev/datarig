@@ -132,6 +132,7 @@ async fn a_session_pages_and_cancels_through_the_bastion() {
     assert!(matches!(next().await, DbEvent::Encryption(Encryption::Plain)));
     assert!(matches!(next().await, DbEvent::Connected));
     session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec!["SELECT g FROM generate_series(1, 250) g".into()],
         paging: PagingMode::Hold,
@@ -153,6 +154,7 @@ async fn a_session_pages_and_cancels_through_the_bastion() {
     }
     assert_eq!(rows, 250);
     session.send(DbCommand::Execute {
+        max_rows: None,
         id: 2,
         statements: vec!["SELECT pg_sleep(60)".into()],
         paging: PagingMode::Hold,

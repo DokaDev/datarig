@@ -120,6 +120,9 @@ impl Home {
                             results: None,
                             database: None,
                             schema: None,
+                            filter: None,
+                            order: Vec::new(),
+                            limit: None,
                         })
                         .map_err(|e| e.to_string())
                 })
@@ -141,6 +144,9 @@ impl Home {
                     results: None,
                     database: None,
                     schema: None,
+                    filter: None,
+                    order: Vec::new(),
+                    limit: None,
                 });
             }
             let ws = WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs, unknown_tabs: Vec::new() };

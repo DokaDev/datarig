@@ -395,8 +395,8 @@ fn draw_filter_line(app: &mut App, line: Rect, pane_h: u16, buf: &mut Buffer) ->
     let id = app.tab().id;
     let focused = if app.focus == Focus::Results { app.filter_line_field() } else { None };
     let applied = app.filter_line_applied(id);
-    let empty = app.table_query(id).is_none_or(|q| q.line.where_.text().is_empty() && q.line.order.text().is_empty());
-    let blank = empty && applied.filter.is_empty() && applied.order.is_empty();
+    let empty = app.table_query(id).is_none_or(|q| q.line.empty());
+    let blank = empty && applied.filter.is_empty() && applied.order.is_empty() && applied.limit.is_empty();
     if crate::widgets::filter_line::hidden(blank, focused.is_some(), pane_h) {
         return false;
     }
@@ -410,6 +410,7 @@ fn draw_filter_line(app: &mut App, line: Rect, pane_h: u16, buf: &mut Buffer) ->
     app.layout.filter_line = line;
     app.layout.filter_where = drawn.where_;
     app.layout.filter_order = drawn.order;
+    app.layout.filter_limit = drawn.limit;
     app.layout.filter_refresh = drawn.refresh;
     app.layout.filter_cursor = drawn.cursor;
     true
@@ -943,6 +944,11 @@ fn results_title(app: &App, width: u16) -> (datarig_i18n::Localized, Option<(Vec
         };
         states.push(app.i18n.msg(&m).to_string());
     }
+    // A table tab's rows stopped at its cap: said, as no page follows.
+    let cap = app.table_query(t.id).and_then(|q| q.shown.as_ref()).and_then(|q| q.limit);
+    if let Some(n) = cap.filter(|&n| answer && len as u64 >= n) {
+        states.push(app.i18n.msg(&Msg::ResultsTitleLimit { limit: fmt_count(n) }).to_string());
+    }
     if !paged && states.is_empty() {
         return (title, None);
     }
@@ -1381,6 +1387,7 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             let short = match r.field {
                 crate::app::table_query::Field::Where => Label::TableFilterRefusedShort,
                 crate::app::table_query::Field::Order => Label::TableOrderRefusedShort,
+                crate::app::table_query::Field::Limit => Label::TableLimitRefusedShort,
             };
             Some((r.notice.render(&app.i18n), app.i18n.label(short)))
         }

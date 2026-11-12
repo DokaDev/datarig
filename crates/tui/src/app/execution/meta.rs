@@ -58,6 +58,7 @@ impl App {
         }
         if matches!(ev, DbEvent::ConnectFailed { .. } | DbEvent::Lost { .. }) {
             self.ddl_stop(profile, Some(Some(&database)), crate::app::tabs::DdlState::Failed(text.clone()), true);
+            self.table_keys_gone(profile, Some(&database), true);
         }
         let Some(a) = self.conns.aux_by_id(id) else { return };
         match ev {
@@ -181,8 +182,10 @@ impl App {
                     None => Vec::new(),
                 };
                 let ddl = if ask.is_some() { self.ddl_waiting(id) } else { Vec::new() };
+                let keys = if ask.is_some() { self.table_keys_waits(id) } else { Vec::new() };
                 self.attempt_failed(id, reason.clone());
                 self.ddl_wait_again(&ddl);
+                self.table_keys_wait_again(keys);
                 // A tunnel stays open only for the password asked for now.
                 if ask.is_none() {
                     self.close_tunnel(id);
@@ -264,6 +267,7 @@ impl App {
                 });
                 let why = self.i18n.msg(&m.msg).to_string();
                 self.ddl_stop(id, Some(None), crate::app::tabs::DdlState::Failed(why), true);
+                self.table_keys_gone(id, None, true);
                 let c = self.conns.entry(id);
                 c.meta = None;
                 c.connected = false;
@@ -312,6 +316,7 @@ impl App {
             | DbEvent::TxEnded { .. }
             | DbEvent::TxClosedBy { .. }
             | DbEvent::Autocommit(_)
+            | DbEvent::Isolation(_)
             | DbEvent::Applied { .. } => {}
             DbEvent::Ddl { id: request, result } => self.ddl_answered(id, None, request, result),
             DbEvent::TableKeys { id: request, result } => self.order_keys_answered(id, None, request, result),
@@ -385,7 +390,12 @@ impl App {
         if current && editing {
             match w.owner {
                 PopupOwner::Editor => self.complete_here(false, Some(w.literal)),
-                PopupOwner::Filter(_) => self.filter_complete(false, Some(w.literal)),
+                PopupOwner::Filter(f) => {
+                    self.filter_complete(false, Some(w.literal));
+                    if let Some(p) = self.tab_mut().popup.as_mut().filter(|p| p.owner == PopupOwner::Filter(f)) {
+                        p.touched |= w.asked;
+                    }
+                }
             }
         }
     }

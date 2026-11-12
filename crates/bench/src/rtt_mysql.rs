@@ -57,7 +57,8 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     let mut costs = Vec::new();
     for _ in 0..runs {
         let id = s.next_id();
-        let resume = DbCommand::Resume { id, sql: big.to_string(), skip: 500, paging: PagingMode::NoHold };
+        let resume =
+            DbCommand::Resume { max_rows: None, id, sql: big.to_string(), skip: 500, paging: PagingMode::NoHold };
         let (c, ev) = s
             .measure(resume, |e| matches!(e, DbEvent::Page { id: p, .. } | DbEvent::Failed { id: p, .. } if *p == id))
             .await?;

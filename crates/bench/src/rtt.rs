@@ -92,11 +92,13 @@ impl WiredSession {
     }
 
     /// Wait for `Connected` (how the traffic goes comes first and must be plain: the budgets
-    /// count unencrypted round trips).
+    /// count unencrypted round trips; the session's start-up state, as a MySQL session says it
+    /// before it counts as connected, is not a round trip of its own).
     async fn connected(&mut self, within: Duration) -> Result<(), String> {
         loop {
             match self.next(within).await? {
                 DbEvent::Encryption(datarig_core::tls::Encryption::Plain) => {}
+                DbEvent::Isolation(_) | DbEvent::Autocommit(_) => {}
                 DbEvent::Connected => return Ok(()),
                 ev => return Err(format!("connect: {ev:?}")),
             }
@@ -153,6 +155,7 @@ impl WiredSession {
         let before = self.counts.flights();
         let t0 = Instant::now();
         self.session.send(DbCommand::Execute {
+            max_rows: None,
             id,
             statements: vec![sql.to_string()],
             paging: self.paging,
@@ -190,6 +193,7 @@ impl WiredSession {
         self.id += 1;
         let id = self.id;
         self.session.send(DbCommand::Execute {
+            max_rows: None,
             id,
             statements: vec![sql.to_string()],
             paging: PagingMode::Hold,
@@ -336,6 +340,7 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     let counted = |e: &DbEvent| matches!(e, DbEvent::Counted { .. });
     let paging = s.next_id();
     s.session.send(DbCommand::Execute {
+        max_rows: None,
         id: paging,
         statements: vec![big.to_string()],
         paging: PagingMode::Hold,
@@ -364,7 +369,8 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     let mut costs = Vec::new();
     for i in 0..=runs {
         let id = s.next_id();
-        let resume = DbCommand::Resume { id, sql: big.to_string(), skip: 500, paging: PagingMode::NoHold };
+        let resume =
+            DbCommand::Resume { max_rows: None, id, sql: big.to_string(), skip: 500, paging: PagingMode::NoHold };
         let (c, ev) = s
             .measure(resume, |e| matches!(e, DbEvent::Page { id: p, .. } | DbEvent::Failed { id: p, .. } if *p == id))
             .await?;
@@ -385,6 +391,7 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     for i in 0..runs {
         let id = s.next_id();
         let write = DbCommand::Execute {
+            max_rows: None,
             id,
             statements: vec![format!("INSERT INTO zz_bench_rtt VALUES ({i})")],
             paging: PagingMode::NoHold,
@@ -412,7 +419,8 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     let mut costs = Vec::new();
     for i in 0..=runs {
         let id = s.next_id();
-        let resume = DbCommand::Resume { id, sql: big.to_string(), skip: 500, paging: PagingMode::Hold };
+        let resume =
+            DbCommand::Resume { max_rows: None, id, sql: big.to_string(), skip: 500, paging: PagingMode::Hold };
         let (c, ev) = s
             .measure(resume, |e| matches!(e, DbEvent::Page { id: p, .. } | DbEvent::Failed { id: p, .. } if *p == id))
             .await?;

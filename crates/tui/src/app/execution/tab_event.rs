@@ -279,6 +279,8 @@ impl App {
             (true, true) => Paging::Released,
             (true, false) => Paging::Open { since: now, in_block },
         };
+        let connected = matches!(ev, DbEvent::Connected);
+        let failed = matches!(ev, DbEvent::ConnectFailed { .. });
         let notice = match ev {
             DbEvent::Connected => {
                 t.exec.state = SessionState::Ready;
@@ -462,6 +464,10 @@ impl App {
             }
             DbEvent::Autocommit(on) => {
                 t.exec.autocommit_off = !on;
+                None
+            }
+            DbEvent::Isolation(level) => {
+                t.exec.isolation = level;
                 None
             }
             // The server dropped the schema's startup option (a pooler): the driver sets the
@@ -731,7 +737,7 @@ impl App {
             }
             // The statement ran again past its closed portal: its next page
             // goes after the rows the result has, when its columns are the same.
-            DbEvent::Page { columns: Some(cols), rows, more, elapsed, .. } if t.exec.resuming.is_some() => {
+            DbEvent::Page { columns: Some(cols), mut rows, mut more, elapsed, .. } if t.exec.resuming.is_some() => {
                 let r = t.exec.resuming.take();
                 t.exec.running = None;
                 t.exec.released = false;
@@ -742,11 +748,21 @@ impl App {
                 // What was announced when it was sent stays in the status bar with its rows.
                 let announced = t.exec.run.notes.last().cloned();
                 let values = t.exec.values.clone();
+                let cap = shown_cap(t);
+                let qid = t.exec.query_id;
                 let answer = t.answer_rows_mut();
                 match (answer, r) {
                     (Some((rs, grid)), Some(r)) if same => {
                         rs.read_in.page(values.as_ref());
                         let read = rs.rows.len();
+                        // A table tab's cap: the rows past it are left out, and nothing is
+                        // read past it.
+                        if let Some(open) = crate::app::table_query::cap_page(&mut rows, read, cap, more) {
+                            more = false;
+                            if open && !released {
+                                close_portal = Some(qid);
+                            }
+                        }
                         let appended = rs.rows.append(rows);
                         grid.rows_came(read, rs.rows.len() - read);
                         match appended {
@@ -804,10 +820,26 @@ impl App {
                 t.exec.run.notes.push(m.clone());
                 Some(m)
             }
-            DbEvent::Page { columns: Some(cols), rows, more, elapsed, .. } => {
+            DbEvent::Page { columns: Some(cols), mut rows, mut more, elapsed, .. } => {
                 t.exec.succeeded(None);
                 t.exec.running = None;
                 t.exec.released = false;
+                // A table tab's cap on its query's rows: the first page past it is cut there,
+                // and what the server holds open past it is closed (one not held is gone).
+                let query = t.exec.query_id;
+                let cap = t
+                    .doc
+                    .table_query
+                    .as_ref()
+                    .and_then(|tq| tq.requested.as_ref())
+                    .filter(|(q, _)| *q == query)
+                    .and_then(|(_, q)| q.limit);
+                if let Some(open) = crate::app::table_query::cap_page(&mut rows, 0, cap, more) {
+                    more = false;
+                    if open && !released {
+                        close_portal = Some(query);
+                    }
+                }
                 let count = rows.len();
                 // A plan (`EXPLAIN (FORMAT JSON)`, MySQL's tree): shown as one; its rows stay a
                 // result tab.
@@ -886,8 +918,17 @@ impl App {
                     })
                 }
             }
-            DbEvent::Page { columns: None, rows, more, elapsed, .. } => {
+            DbEvent::Page { columns: None, mut rows, mut more, elapsed, .. } => {
                 t.exec.running = None;
+                // A table tab's cap: the rows past it are left out, and its portal is closed.
+                let cap = shown_cap(t);
+                let held = t.answer_rows_mut().map_or(0, |(rs, _)| rs.rows.len());
+                if let Some(open) = crate::app::table_query::cap_page(&mut rows, held, cap, more) {
+                    more = false;
+                    if open {
+                        close_portal = Some(t.exec.query_id);
+                    }
+                }
                 t.exec.paging = paging(more);
                 let want = t.exec.want_page.take();
                 let values = t.exec.values.clone();
@@ -1099,6 +1140,12 @@ impl App {
             self.read_held_on(id);
         }
         self.keys_after_ddl(id, profile, run_ended, tx_ended);
+        if connected {
+            self.table_session_ready(id);
+        }
+        if failed {
+            self.table_session_failed(id);
+        }
     }
 
     /// Tab `id`'s result is held open on a session whose statement runs on until the result is
@@ -1197,4 +1244,10 @@ fn read_in(exec: &mut crate::app::tabs::TabSession) -> ReadIn {
     };
     reading.not_known = false;
     read_in
+}
+
+/// The cap on the rows of table tab `t`'s shown query, when it has one: the pages read after
+/// the first stop there.
+fn shown_cap(t: &crate::app::Tab) -> Option<u64> {
+    t.doc.table_query.as_ref()?.shown.as_ref()?.limit
 }

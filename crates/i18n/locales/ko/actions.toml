@@ -219,7 +219,7 @@
 "action.results.export" = "결과 → 파일로 내보내기…"
 "action.table.filter.edit" = "테이블 → 서버에서 행 거르기 (WHERE)"
 "action.table.order.edit" = "테이블 → 서버에서 행 정렬 (ORDER BY)"
-"action.table.filter.clear" = "테이블 → 필터와 정렬을 지우고 다시 실행"
+"action.table.filter.clear" = "테이블 → 필터, 정렬, 행 제한을 지우고 다시 실행"
 "action.table.filter.open_sql" = "테이블 → 문장을 새 콘솔에서 열기"
 "action.tx.commit" = "열린 트랜잭션 커밋"
 "action.tx.rollback" = "열린 트랜잭션 롤백"

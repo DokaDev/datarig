@@ -162,7 +162,15 @@ fn the_condition_completes_the_tables_columns() {
     h.settle();
     assert_eq!(labels(&h)[0], "name");
     assert_eq!(h.popup().unwrap().items[0].kind, Kind::Column);
-    // Tab takes the label (it does not apply), the cursor after it.
+    // A list that opened by itself does not take Tab: it moves to the order, the list closed.
+    h.key(KeyCode::Tab);
+    assert_eq!(field_text(&h, Field::Where), "id > 1 AND na");
+    assert_eq!(h.app.tab().doc.table_query.as_ref().and_then(|q| q.line.focus), Some(Field::Order));
+    assert!(h.popup().is_none());
+    h.key(KeyCode::BackTab);
+    // Asked for, Tab takes the label (it does not apply), the cursor after it.
+    ctrl_space(&mut h);
+    assert_eq!(labels(&h)[0], "name");
     h.key(KeyCode::Tab);
     assert_eq!(field_text(&h, Field::Where), "id > 1 AND name");
     assert!(runs(&mut h).is_empty());
@@ -203,9 +211,11 @@ fn the_order_completes_columns_then_directions() {
     assert_eq!(labels(&h)[0], "id", "after a comma: the columns again");
     h.key(KeyCode::Esc);
     assert_eq!(field_text(&h, Field::Order), "name DESC, ");
-    // `Tab` without a popup moves to the condition: the popup belongs to its field only.
+    // `Tab` without a popup moves to the next field (the limit): the popup belongs to its
+    // field only.
     h.key(KeyCode::Tab);
-    assert_eq!(h.app.tab().doc.table_query.as_ref().and_then(|q| q.line.focus), Some(Field::Where));
+    assert_eq!(h.app.tab().doc.table_query.as_ref().and_then(|q| q.line.focus), Some(Field::Limit));
+    assert!(h.popup().is_none());
 }
 
 #[test]
@@ -365,6 +375,7 @@ fn a_mysql_snippet_marks_the_condition_only_when_found_once() {
     open(&mut h, "users");
     let index = h.app.tabs.active_index();
     h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MySql(MySqlMode::default()))));
+    h.tab_db(index, DbEvent::Connected);
     answer(&mut h);
     h.sent();
     h.key(KeyCode::Tab);

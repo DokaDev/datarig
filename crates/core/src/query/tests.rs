@@ -874,6 +874,11 @@ fn calls_are_confirmed_refused_or_clear() {
     assert_eq!(check(MY, "my_fn(id) > 0", false), confirm(&["MY_FN"]));
     assert_eq!(check(MY, "shop.lower(name) = 'a'", false), confirm(&["LOWER"]));
     assert_eq!(check(MY, "SLEEP(1) = 0", false), Err(BarRefusal::RefusedCalls(vec!["SLEEP".into()])));
+    // The outcome of the statement before: for a table's statement, one the app sent.
+    for f in ["FOUND_ROWS", "ROW_COUNT"] {
+        let text = format!("{f}() >= 0");
+        assert_eq!(check(MY, &text, true), Err(BarRefusal::RefusedCalls(vec![f.into()])), "{text}");
+    }
     assert!(check(MY, "GET_LOCK('a', 1) = 1", false).is_err());
     assert!(matches!(check(MY, "my_fn(id) > 0", true), Err(BarRefusal::UncheckedCalls(_) | BarRefusal::ReadOnly(_))));
     assert_eq!(

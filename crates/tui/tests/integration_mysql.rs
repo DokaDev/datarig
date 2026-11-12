@@ -600,6 +600,9 @@ async fn a_syntax_error_in_a_table_filter_marks_the_text_mysql_quotes() {
         results: None,
         database: None,
         schema: None,
+        filter: None,
+        order: Vec::new(),
+        limit: None,
     };
     let ws =
         WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };
@@ -630,5 +633,107 @@ async fn a_syntax_error_in_a_table_filter_marks_the_text_mysql_quotes() {
     assert_eq!(tq.failure().and_then(|f| f.at.clone()), Some(start..filter.len()), "{status}");
     assert_eq!(tq.shown, None, "no rows of it are held");
     drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An app whose workspace holds one table tab of `shop.<table>` capped at `limit` rows, under
+/// `policy` (as [`app_on`]), not run yet; `dir` holds its files.
+fn limited_table_app(
+    url: &str,
+    table: &str,
+    limit: u64,
+    policy: Option<&str>,
+    dir: &std::path::Path,
+) -> (App, UnboundedReceiver<AppEvent>) {
+    use datarig_core::policy::Policy;
+    use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};
+    let pw = datarig_core::profile::dsn::parse(url).unwrap().password.unwrap_or_default();
+    let _ = std::fs::remove_dir_all(dir);
+    let paths = datarig_core::paths::Paths { data: Some(dir.join("data")), state: Some(dir.join("state")) };
+    let mut p = profile(url);
+    p.policy = policy.map(str::to_string);
+    let tab = TabState {
+        id: workspace::new_id(),
+        kind: workspace::TabKind::Table,
+        script: None,
+        profile: Some(p.id),
+        cursor: (0, 0),
+        top: 0,
+        console: 0,
+        table: Some(("shop".into(), table.into())),
+        ddl: None,
+        results: None,
+        database: None,
+        schema: None,
+        filter: None,
+        order: Vec::new(),
+        limit: Some(limit),
+    };
+    let ws =
+        WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };
+    workspace::save(&dir.join("state"), &ws).unwrap();
+    let store = Arc::new(MemoryStore::new());
+    store.set(&p.id.account(), &pw).unwrap();
+    let mut cfg = Config { connections: vec![p], ..Config::default() };
+    cfg.policies.insert("it-hold", Policy { paging: PagingMode::Hold, ..Policy::default() });
+    let mut app = App::new(&cfg, None, Lang::En);
+    app.set_secret_store(store as Arc<dyn SecretStore>);
+    app.set_paths(paths);
+    app.whats_new_paused = true;
+    app.set_instance_tag(&format!("mylimit{}", std::process::id()));
+    let (tx, rx) = unbounded_channel();
+    app.start(tx, Startup::Normal);
+    assert!(app.tab().is_table());
+    (app, rx)
+}
+
+/// The rows the active tab's result holds, and whether it says the server has more.
+fn held_rows(app: &App) -> (usize, bool) {
+    match &app.tab().results {
+        Results::Rows(rs) => (rs.rows.len(), rs.more),
+        _ => (0, false),
+    }
+}
+
+/// A table tab's limit caps its rows on MySQL's own pages (the statement sent has no `LIMIT`,
+/// which would override the cap the driver sets per page): a limit below a page cuts the first
+/// page, one past it stops the page run again there, and a held result read page by page stops
+/// at it (the rest stopped on the server). Exactly the limit's rows each time.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_table_tab_limit_caps_its_pages() {
+    use datarig_tui::app::action::Action;
+    let Some((url, admin)) = urls("a_table_tab_limit_caps_its_pages") else { return };
+    let (_t, t) = numbers(&admin, "tuilimit", 2500).await;
+    let table = t.trim_start_matches("shop.").to_string();
+    let dir = std::env::temp_dir().join(format!("datarig-it-mylimit-{}", std::process::id()));
+    for (limit, policy) in [(3, None), (503, None), (1203, Some("it-hold"))] {
+        let (mut app, mut rx) = limited_table_app(&url, &table, limit, policy, &dir);
+        app.dispatch(Action::RunStatement);
+        pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 > 0).await;
+        let size = app.page_size as u64;
+        if limit > size && policy.is_none() {
+            // Not held: the next page runs the statement again, past the rows it has.
+            assert_eq!(held_rows(&app), (size as usize, true), "{limit}");
+            app.focus = Focus::Results;
+            press(&mut app, 'n');
+            pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 > size as usize).await;
+        }
+        if policy.is_some() {
+            pump(&mut app, &mut rx, 30, |a| idle(a) && !held_rows(a).1).await;
+        }
+        assert_eq!(held_rows(&app), (limit as usize, false), "{limit} {policy:?}");
+        assert_eq!(app.tab().exec.paging, Paging::None, "{limit}");
+        let sent = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
+        assert_eq!(sent, [format!("SELECT * FROM `shop`.`{table}`")], "no LIMIT in the statement");
+        // Nothing past the cap: the next page is the last.
+        app.focus = Focus::Results;
+        press(&mut app, 'n');
+        assert!(idle(&app));
+        // The session is fine after its result was stopped: it runs the tab again.
+        app.dispatch(Action::RunStatement);
+        pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 > 0).await;
+        assert!(held_rows(&app).0 as u64 <= limit);
+        drop(app);
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }

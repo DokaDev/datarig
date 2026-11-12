@@ -20,9 +20,10 @@
 //! 4. **Function calls**: only the built-ins of [`PG_FILTER_CALLS`] or [`MYSQL_FILTER_CALLS`]
 //!    pass without a word (by a bare name, or PostgreSQL's `pg_catalog.` one). A built-in of
 //!    [`PG_REFUSED_CALLS`] or [`MYSQL_REFUSED_CALLS`] (it waits, locks, changes the session,
-//!    calls out, or reads or writes the server's files or large objects) is refused. Any other call asks the user ([`FilterVerdict::NeedsConfirm`]),
-//!    and is refused on a read-only profile: a function may do on the server what a read-only
-//!    transaction does not stop.
+//!    calls out, reads or writes the server's files or large objects, or reads the outcome of
+//!    the statement before it) is refused. Any other call asks the user
+//!    ([`FilterVerdict::NeedsConfirm`]), and is refused on a read-only profile: a function may do
+//!    on the server what a read-only transaction does not stop.
 //!
 //! A refused built-in is refused in attribute notation too (`(oid).lo_get`, `t.lo_unlink`),
 //! where any later name of a column reference or an indirection counts, even a column's.
@@ -324,9 +325,12 @@ pub const MYSQL_FILTER_CALLS: &[&str] = &[
 ];
 
 /// MySQL built-ins a filter may not call: they wait, take or test user locks, read a file of the
-/// server, or advance or set a sequence (MariaDB's `NEXTVAL`, `SETVAL`). Sorted.
+/// server, or advance or set a sequence (MariaDB's `NEXTVAL`, `SETVAL`); or they read the
+/// outcome of the statement before (`FOUND_ROWS`, `ROW_COUNT`), which for a table's statement
+/// is one the app sent. Sorted.
 pub const MYSQL_REFUSED_CALLS: &[&str] = &[
     "BENCHMARK",
+    "FOUND_ROWS",
     "GET_LOCK",
     "IS_FREE_LOCK",
     "IS_USED_LOCK",
@@ -335,6 +339,7 @@ pub const MYSQL_REFUSED_CALLS: &[&str] = &[
     "NEXTVAL",
     "RELEASE_ALL_LOCKS",
     "RELEASE_LOCK",
+    "ROW_COUNT",
     "SETVAL",
     "SLEEP",
     "SOURCE_POS_WAIT",

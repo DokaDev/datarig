@@ -86,7 +86,13 @@ impl Conn {
     async fn run(&mut self, statements: Vec<String>) -> Result<Vec<Vec<Option<String>>>, String> {
         self.next += 1;
         let id = self.next;
-        self.session.send(DbCommand::Execute { id, statements, paging: PagingMode::Hold, tx: TxRule::Auto });
+        self.session.send(DbCommand::Execute {
+            max_rows: None,
+            id,
+            statements,
+            paging: PagingMode::Hold,
+            tx: TxRule::Auto,
+        });
         let ev = self
             .wait(
                 |e| matches!(e, DbEvent::Page { id: i, .. } | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id),
@@ -612,6 +618,7 @@ async fn a_ddl_never_waits_for_a_lock() {
     holder.next += 1;
     let waiting_id = holder.next;
     holder.session.send(DbCommand::Execute {
+        max_rows: None,
         id: waiting_id,
         statements: vec!["BEGIN".into(), format!("LOCK TABLE {s}.base IN ACCESS EXCLUSIVE MODE")],
         paging: PagingMode::Hold,

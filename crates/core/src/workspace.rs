@@ -48,6 +48,9 @@
 //! schema = "shop"
 //! table = "users"
 //! profile = "3f0b8f5e-…"
+//! filter = "status = 'done'"   # its filter, exactly as typed; none: no filter
+//! order = [{ column = "id", dir = "desc" }, { column = "name", dir = "asc", nulls = "last" }]
+//! limit = 100             # a cap on the rows it reads; none: no cap
 //!
 //! [[tabs]]
 //! id = "e5f6…"
@@ -59,9 +62,14 @@
 //! profile = "3f0b8f5e-…"
 //! ```
 //!
-//! The `ddl` kind and the explorer's `hidden` and `width` came within version 3: an earlier
-//! build keeps such a tab as one of a kind it does not know, and those keys as keys it does not
-//! know (below).
+//! The `ddl` kind, the explorer's `hidden` and `width`, and a table tab's `filter`, `order` and
+//! `limit` came within version 3: an earlier build keeps such a tab as one of a kind it does
+//! not know, and those keys as keys it does not know (below). A table tab's query is what its
+//! filter line holds as applied; it is read back into the line, never run by itself, and
+//! checked again as any filter is when the tab runs (the file may have been edited by hand).
+//! A `filter`, `order` or `limit` that cannot be read is left out of the tab, said
+//! ([`Loaded::unread_queries`]) and kept in the file as it was until the tab's query is written
+//! over it: unknown is not absent.
 //!
 //! Version 2 added `console`, the `table` kind and `results`; version 3
 //! a query tab's `context` (its database and schema). A file of an earlier
@@ -77,6 +85,7 @@
 use crate::fault::Fault;
 use crate::fsutil::{atomic_write, create_new, free_backup, rename_new};
 use crate::profile::ProfileId;
+use crate::query::{Dir, KeyOrigin, Nulls, OrderKey};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -158,6 +167,12 @@ pub struct TabState {
     /// A query tab's database and schema (each `None`: the profile's default).
     pub database: Option<String>,
     pub schema: Option<String>,
+    /// A table tab's filter, exactly as typed (`None`: none).
+    pub filter: Option<String>,
+    /// A table tab's sort keys (the user's own, no tie-breaker).
+    pub order: Vec<OrderKey>,
+    /// A table tab's cap on the rows it reads.
+    pub limit: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -201,6 +216,10 @@ pub struct Loaded {
     /// The file's version when it is later than this build's ([`VERSION`]): what this version
     /// knows of it was read, and it must not be written ([`save`] refuses).
     pub newer: Option<i64>,
+    /// Table tabs with a `filter`, `order` or `limit` that could not be read: those keys are
+    /// left out of the tab (the rest of its query comes back) and kept in the file as they
+    /// are until the tab's query is written over them ([`merge`]).
+    pub unread_queries: u64,
 }
 
 /// Read `<state>/workspace.toml`. A missing file is an empty workspace; a broken or unreadable
@@ -218,9 +237,9 @@ pub fn load(state: &Path) -> Loaded {
         Err(e) => return Loaded { found: true, broken: Some((Fault::io_at(&e, &path), moved())), ..Loaded::default() },
     };
     match parse(&text) {
-        Ok((s, duplicates)) => {
+        Ok((s, duplicates, unread_queries)) => {
             let newer = version_of(&text).filter(|v| *v > VERSION);
-            Loaded { state: s, found: true, broken: None, duplicates, newer }
+            Loaded { state: s, found: true, broken: None, duplicates, newer, unread_queries }
         }
         Err(e) => Loaded { found: true, broken: Some((e, moved())), ..Loaded::default() },
     }
@@ -238,7 +257,7 @@ fn version_of(text: &str) -> Option<i64> {
 /// One console file is open in one tab at most: two tabs on one file would each save over the
 /// other, and closing one would trash the file under the other. The first console tab with an
 /// id keeps it and later ones are left out.
-fn parse(text: &str) -> Result<(WorkspaceState, u64), Fault> {
+fn parse(text: &str) -> Result<(WorkspaceState, u64, u64), Fault> {
     let doc: toml::Table = text.parse().map_err(|e: toml::de::Error| Fault::toml_de(text, &e))?;
     let int = |v: Option<&toml::Value>| v.and_then(toml::Value::as_integer).map_or(0, |i| i.max(0) as usize);
     let strings = |v: Option<&toml::Value>| -> Vec<String> {
@@ -266,6 +285,7 @@ fn parse(text: &str) -> Result<(WorkspaceState, u64), Fault> {
     }
     let mut consoles = std::collections::HashSet::new();
     let mut duplicates = 0;
+    let mut unread_queries = 0;
     for (pos, t) in tabs.into_iter().flatten().enumerate() {
         // The active tab is the one the file's index names, else the last one before it.
         if pos <= active {
@@ -317,6 +337,30 @@ fn parse(text: &str) -> Result<(WorkspaceState, u64), Fault> {
         };
         let cursor = t.get("cursor").and_then(toml::Value::as_array);
         let at = |i: usize| int(cursor.and_then(|c| c.get(i)));
+        // A table tab's query: each key read when it can be, else left out (and counted).
+        let (mut filter, mut order, mut limit) = (None, Vec::new(), None);
+        if kind == TabKind::Table {
+            let mut unread = false;
+            if let Some(v) = t.get("filter") {
+                match read_filter(v) {
+                    Some(f) => filter = f,
+                    None => unread = true,
+                }
+            }
+            if let Some(v) = t.get("order") {
+                match read_order(v) {
+                    Some(o) => order = o,
+                    None => unread = true,
+                }
+            }
+            if let Some(v) = t.get("limit") {
+                match read_limit(v) {
+                    Some(l) => limit = Some(l),
+                    None => unread = true,
+                }
+            }
+            unread_queries += u64::from(unread);
+        }
         let results = t.get("results").and_then(toml::Value::as_table).map(|r| PaneState {
             share: r.get("share").map_or(DEFAULT_SHARE, |v| u16::try_from(int(Some(v))).unwrap_or(u16::MAX)),
             hidden: r.get("hidden").and_then(toml::Value::as_bool).unwrap_or(false),
@@ -335,12 +379,68 @@ fn parse(text: &str) -> Result<(WorkspaceState, u64), Fault> {
             results,
             database: context_text("database"),
             schema: context_text("schema"),
+            filter,
+            order,
+            limit,
         });
         if pos == active {
             s.active = s.tabs.len() - 1;
         }
     }
-    Ok((s, duplicates))
+    Ok((s, duplicates, unread_queries))
+}
+
+/// A table tab's `filter`: its text as written (`Some(None)`: blank, no filter); `None` when
+/// it is not a text.
+fn read_filter(v: &toml::Value) -> Option<Option<String>> {
+    let text = v.as_str()?;
+    Some((!text.trim().is_empty()).then(|| text.to_string()))
+}
+
+/// A table tab's `order`: a list of keys, each `{ column = "…", dir = "asc" | "desc" }` with an
+/// optional `nulls = "first" | "last"`; `None` when any key is not one of those (an unknown
+/// key in it included: a later version's) or names a column twice. A part of an order is a
+/// different order, so it is read whole or not at all.
+fn read_order(v: &toml::Value) -> Option<Vec<OrderKey>> {
+    let mut keys: Vec<OrderKey> = Vec::new();
+    for k in v.as_array()? {
+        let k = k.as_table()?;
+        if k.keys().any(|name| !["column", "dir", "nulls"].contains(&name.as_str())) {
+            return None;
+        }
+        let col = k.get("column")?.as_str().filter(|c| !c.is_empty())?;
+        let dir = match k.get("dir")?.as_str()? {
+            "asc" => Dir::Asc,
+            "desc" => Dir::Desc,
+            _ => return None,
+        };
+        let nulls = match k.get("nulls").map(toml::Value::as_str) {
+            None => None,
+            Some(Some("first")) => Some(Nulls::First),
+            Some(Some("last")) => Some(Nulls::Last),
+            Some(_) => return None,
+        };
+        if keys.iter().any(|o| o.col == col) {
+            return None;
+        }
+        keys.push(OrderKey { col: col.to_string(), dir, nulls, origin: KeyOrigin::User });
+    }
+    Some(keys)
+}
+
+/// A table tab's `limit`: a whole number above 0; `None` otherwise.
+fn read_limit(v: &toml::Value) -> Option<u64> {
+    v.as_integer().filter(|n| *n > 0).map(|n| n as u64)
+}
+
+/// Whether `key` of a table tab of the file holds a value [`parse`] cannot read.
+fn unread_query_key(key: &str, v: &toml::Value) -> bool {
+    match key {
+        "filter" => read_filter(v).is_none(),
+        "order" => read_order(v).is_none(),
+        "limit" => read_limit(v).is_none(),
+        _ => false,
+    }
 }
 
 /// Write `<state>/workspace.toml` (atomically). The file it replaces is read first: one of a
@@ -377,10 +477,13 @@ pub fn save(state: &Path, s: &WorkspaceState) -> io::Result<()> {
 const TOP_KEYS: [&str; 4] = ["version", "active", "explorer", "tabs"];
 const EXPLORER_KEYS: [&str; 6] =
     ["expanded_folders", "connections_collapsed", "scripts_expanded", "script_folders", "hidden", "width"];
-const TAB_KEYS: [&str; 14] = [
+const TAB_KEYS: [&str; 17] = [
     "id", "kind", "script", "console", "schema", "table", "profile", "cursor", "top", "results", "context", "object",
-    "on", "name",
+    "on", "name", "filter", "order", "limit",
 ];
+/// The keys of a table tab's query: one this version cannot read is written back as it was
+/// while the tab's query does not write it ([`merge`]).
+const QUERY_KEYS: [&str; 3] = ["filter", "order", "limit"];
 const RESULTS_KEYS: [&str; 3] = ["share", "hidden", "maximized"];
 const CONTEXT_KEYS: [&str; 2] = ["database", "schema"];
 
@@ -424,12 +527,25 @@ fn merge(old: &toml_edit::DocumentMut, new: &mut toml_edit::DocumentMut) {
     }
     let Some(old_tabs) = old.get("tabs").and_then(toml_edit::Item::as_array_of_tables) else { return };
     let Some(new_tabs) = new["tabs"].as_array_of_tables_mut() else { return };
+    // The old tabs as `parse` reads them, in the same order, to tell a value it cannot read.
+    let plain: Option<toml::Table> = old.to_string().parse().ok();
+    let plain_tabs = plain.as_ref().and_then(|p| p.get("tabs")).and_then(toml::Value::as_array);
     for n in new_tabs.iter_mut() {
         let Some(key) = tab_key(n) else { continue };
-        let Some(o) = old_tabs.iter().find(|o| tab_key(*o).as_deref() == Some(key.as_str())) else { continue };
+        let Some(i) = old_tabs.iter().position(|o| tab_key(o).as_deref() == Some(key.as_str())) else { continue };
+        let Some(o) = old_tabs.get(i) else { continue };
         for (k, v) in o.iter() {
             if !TAB_KEYS.contains(&k) && !n.contains_key(k) {
                 n.insert(k, v.clone());
+            }
+        }
+        let plain_tab = plain_tabs.and_then(|t| t.get(i)).and_then(toml::Value::as_table);
+        if n.get("kind").and_then(toml_edit::Item::as_str) == Some("table") {
+            for k in QUERY_KEYS {
+                let unread = plain_tab.and_then(|t| t.get(k)).is_some_and(|v| unread_query_key(k, v));
+                if let (true, false, Some(v)) = (unread, n.contains_key(k), o.get(k)) {
+                    n.insert(k, v.clone());
+                }
             }
         }
         for (key, known) in [("results", &RESULTS_KEYS[..]), ("context", &CONTEXT_KEYS[..])] {
@@ -565,6 +681,35 @@ fn build(s: &WorkspaceState) -> toml_edit::DocumentMut {
                 ct.insert("schema", s.as_str().into());
             }
             tt["context"] = toml_edit::value(ct);
+        }
+        if let Some(f) = t.filter.as_deref().filter(|f| !f.trim().is_empty()) {
+            tt["filter"] = toml_edit::value(f);
+        }
+        let keys: Vec<&OrderKey> = t.order.iter().filter(|k| k.origin == KeyOrigin::User).collect();
+        if !keys.is_empty() {
+            let mut list = toml_edit::Array::new();
+            for k in keys {
+                let mut kt = toml_edit::InlineTable::new();
+                kt.insert("column", k.col.as_str().into());
+                kt.insert(
+                    "dir",
+                    match k.dir {
+                        Dir::Asc => "asc",
+                        Dir::Desc => "desc",
+                    }
+                    .into(),
+                );
+                match k.nulls {
+                    Some(Nulls::First) => kt.insert("nulls", "first".into()),
+                    Some(Nulls::Last) => kt.insert("nulls", "last".into()),
+                    None => None,
+                };
+                list.push(kt);
+            }
+            tt["order"] = toml_edit::value(list);
+        }
+        if let Some(l) = t.limit {
+            tt["limit"] = toml_edit::value(i64::try_from(l).unwrap_or(i64::MAX));
         }
         tabs.push(tt);
     }

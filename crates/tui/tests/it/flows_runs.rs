@@ -26,7 +26,9 @@ fn run_three() -> (Harness, u64) {
     h.sent();
     h.ctrl('e');
     let sent = h.sent();
-    let [DbCommand::Execute { id, statements, paging: PagingMode::NoHold, tx: TxRule::Auto }] = &sent[..] else {
+    let [DbCommand::Execute { max_rows: None, id, statements, paging: PagingMode::NoHold, tx: TxRule::Auto }] =
+        &sent[..]
+    else {
         panic!("{sent:?}")
     };
     assert_eq!(statements, &["INSERT INTO t VALUES (1)", "SELECT 1/0", "SELECT * FROM t"], "one run, in order");

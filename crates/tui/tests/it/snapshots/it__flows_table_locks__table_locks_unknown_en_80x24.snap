@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_table_locks.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
+"│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-my / shop.users        ││ id: 0                │"
+"│  ▾ ●   local-my      ││ [Result 1]  Chart  Messages  ││                      │"
+"│    ▾ shop            ││ WHERE  f filter            ⟳ ││                      │"
+"│      ▾ Tables        ││   │ id                       ││                      │"
+"│        ▸ users       ││   │ int8                     ││                      │"
+"│         ╭ Run a read that may lock rows? ──────────────────────────╮         │"
+"│         │                                                          │         │"
+"│         │ In this session reads may lock rows (no autocommit,      │         │"
+"│         │ isolation level not known): at SERIALIZABLE, other       │         │"
+"│         │ sessions cannot change the rows this read touches until  │         │"
+"│         │ the transaction ends.                                    │         │"
+"│         │                                                          │         │"
+"│         │                   [ Cancel ]     Run                     │         │"
+"│         ╰───────────────────────────── y run · Enter/n/Esc cancel ─╯         │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" local-my │ autocommit off (session) │ 3 rows · 2ms                          EN "

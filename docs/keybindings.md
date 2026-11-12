@@ -171,7 +171,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r e` | `results.export` | Results → export to a file… |  |
 | `Space r f` | `table.filter.edit` | Table → filter the rows on the server (WHERE) |  |
 | `Space r o` | `table.order.edit` | Table → sort the rows on the server (ORDER BY) |  |
-| `Space r x` | `table.filter.clear` | Table → clear the filter and the order, and run it again |  |
+| `Space r x` | `table.filter.clear` | Table → clear the filter, the order and the limit, and run it again |  |
 | `Space r v` | `table.filter.open_sql` | Table → open its statement in a new console |  |
 | `Space r ]` | `results.tab.next` | Result tabs → next |  |
 | `Space r [` | `results.tab.prev` | Result tabs → previous |  |
@@ -320,7 +320,7 @@ Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U`
 
 ## `grid.filter` [text]
 
-The filter line of a table tab, above the grid (`f` or `Space r f`: the condition, `Space r o`: the order): `Enter` (or the run key) applies both fields and runs the table's query again, `Esc` puts back what is applied, `Tab` and `Shift+Tab` move between the fields, `Ctrl+L` empties the field (applied with `Enter`), `Ctrl+W` deletes the word before the cursor, `Ctrl+U` the text before it. The condition is sent as written (checked first: one condition on this table, no comment, no second statement, no lock, no function known to wait or change anything); the order is a list of columns, each with `ASC` or `DESC` (and on PostgreSQL `NULLS FIRST` or `NULLS LAST`), written back as the app sends it. Completion opens as in the editor (`Ctrl+Space` asks for it): the table's columns, operators, functions and the values of an enumerated column inside a literal in the condition; the columns and the directions in the order. A refused part is underlined; where the server says a failed condition is wrong is underlined too, the line marked failed and the rows shown dimmed as an earlier query's. Inside `workspace`.
+The filter line of a table tab, above the grid (`f` or `Space r f`: the condition, `Space r o`: the order, then `Tab` to the limit): `Enter` (or the run key) applies the condition, the order and the limit and runs the table's query again, `Esc` puts back what is applied, `Tab` and `Shift+Tab` move between the fields, `Ctrl+L` empties the field (applied with `Enter`), `Ctrl+W` deletes the word before the cursor, `Ctrl+U` the text before it. The condition is sent as written (checked first: one condition on this table, no comment, no second statement, no lock, no function known to wait or change anything); the order is a list of columns, each with `ASC` or `DESC` (and on PostgreSQL `NULLS FIRST` or `NULLS LAST`), written back as the app sends it; the limit is a whole number of rows (blank: none). Completion opens as in the editor (`Ctrl+Space` asks for it; a list that opened by itself takes neither `Enter` nor `Tab` until you move in it): the table's columns, operators, functions and the values of an enumerated column inside a literal in the condition; the columns and the directions in the order. A refused part is underlined; where the server says a failed condition is wrong is underlined too, the line marked failed and the rows shown dimmed as an earlier query's. Inside `workspace`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|

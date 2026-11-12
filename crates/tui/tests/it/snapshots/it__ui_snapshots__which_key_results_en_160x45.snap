@@ -40,7 +40,7 @@ expression: backend
 "╭ Space r: Results ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮"
 "│ #  Results → count every row (runs a count query)   c  Results → show as a chart / as rows              p  Results → previous page                           │"
 "│ +  Results pane → taller                            e  Results → export to a file…                      v  Table → open its statement in a new console       │"
-"│ -  Results pane → shorter                           f  Table → filter the rows on the server (WHERE)    x  Table → clear the filter and the order, and ru…   │"
+"│ -  Results pane → shorter                           f  Table → filter the rows on the server (WHERE)    x  Table → clear the filter, the order and the li…   │"
 "│ I  Result detail → Cell / Row                       h  Results pane → hide / show                       y  +Copy selection                                   │"
 "│ [  Result tabs → previous                           i  Result detail → show / hide                      z  Results pane → zoom (maximise) / restore          │"
 "│ ]  Result tabs → next                               n  Results → next page                                                                                   │"

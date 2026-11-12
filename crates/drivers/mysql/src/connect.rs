@@ -235,6 +235,17 @@ async fn run_session(
     }
     connected.store(true, Ordering::SeqCst);
     let _ = events.send(DbEvent::Encryption(encryption));
+    // What decides whether a query session's reads lock rows, as its start-up statements left
+    // it, before it says it is connected: the app checks a statement against it before sending
+    // it, and takes `Connected` as the session's state being known. The level its transactions
+    // run in (`None`: not known, as the server did not report it, or a start-up statement set
+    // the next transaction's), and autocommit when they turned it off.
+    if role == SessionRole::Query {
+        let _ = events.send(DbEvent::Isolation(tracked.isolation()));
+        if tracked.autocommit == Some(false) {
+            let _ = events.send(DbEvent::Autocommit(false));
+        }
+    }
     let _ = events.send(DbEvent::Connected);
     // The mode the session starts in; the metadata session's is what a new session of this
     // account starts in, which the app checks a tab's first run in.

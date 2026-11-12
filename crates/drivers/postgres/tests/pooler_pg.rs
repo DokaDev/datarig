@@ -114,6 +114,7 @@ impl Conn {
 
     async fn run(&mut self, id: u64, sql: &str) -> DbEvent {
         self.session.send(DbCommand::Execute {
+            max_rows: None,
             id,
             statements: vec![sql.to_string()],
             paging: PagingMode::Hold,
@@ -348,6 +349,7 @@ async fn results_not_held_page_behind_a_pooler() {
         for round in 0..10 {
             id += 1;
             c.session.send(DbCommand::Execute {
+                max_rows: None,
                 id,
                 statements: vec![sql.into()],
                 paging: PagingMode::NoHold,
@@ -362,7 +364,13 @@ async fn results_not_held_page_behind_a_pooler() {
                 panic!("cache {cache}, round {round}: a page with more")
             };
             id += 1;
-            c.session.send(DbCommand::Resume { id, sql: sql.into(), skip: PAGE as u64, paging: PagingMode::NoHold });
+            c.session.send(DbCommand::Resume {
+                max_rows: None,
+                id,
+                sql: sql.into(),
+                skip: PAGE as u64,
+                paging: PagingMode::NoHold,
+            });
             let page2 = match c
                 .wait(|e| matches!(e, DbEvent::Page { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id), 30)
                 .await
@@ -411,7 +419,13 @@ async fn copy_to_the_client_is_refused_behind_a_pooler() {
         let opts = ConnectOptions::new(PAGE, SessionRole::Query, "pool").read_only(read_only).statement_cache(cache);
         let mut c = Conn::open_with(&url, SessionRole::Query, opts).await;
         for (id, paging) in [(1, PagingMode::Hold), (2, PagingMode::NoHold)] {
-            c.session.send(DbCommand::Execute { id, statements: vec![copy.into()], paging, tx: TxRule::Auto });
+            c.session.send(DbCommand::Execute {
+                max_rows: None,
+                id,
+                statements: vec![copy.into()],
+                paging,
+                tx: TxRule::Auto,
+            });
             let ev = c
                 .wait(|e| matches!(e, DbEvent::Page { id: i, .. } | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id), 30)
                 .await;
@@ -487,7 +501,13 @@ async fn a_copy_hidden_by_backslash_strings_is_refused_behind_a_pooler() {
         assert!(matches!(ev, DbEvent::Done { .. }), "{sql}: {ev:?}");
     }
     let copy = format!(r"COPY (SELECT g, 'a\'' FROM generate_series(1, 200000000) g) TO STDOUT -- ' {tag}");
-    c.session.send(DbCommand::Execute { id: 3, statements: vec![copy], paging: PagingMode::Hold, tx: TxRule::Auto });
+    c.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 3,
+        statements: vec![copy],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     let mut seen = Vec::new();
     let mut deadline = Instant::now() + Duration::from_secs(10);
     while let Ok(Some(ev)) = tokio::time::timeout_at(deadline.into(), c.rx.recv()).await {
@@ -531,6 +551,7 @@ async fn a_copy_of_a_table_named_to_is_refused_behind_a_pooler() {
         assert!(matches!(ev, DbEvent::Done { .. }), "{sql}: {ev:?}");
     }
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 3,
         statements: vec!["COPY pg_temp.to TO STDOUT".into()],
         paging: PagingMode::Hold,
@@ -568,6 +589,7 @@ async fn a_cancel_goes_through_the_pooler_and_the_session_works_on() {
     let _pool = POOL.read().await;
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
     c.session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec!["SELECT pg_sleep(30)".into()],
         paging: PagingMode::Hold,
@@ -636,6 +658,7 @@ async fn a_manual_transaction_stays_on_one_server_connection_behind_a_pooler() {
             idle_timeout: Some(Duration::from_secs(90)),
         };
         let run = |id, sqls: &[&str], tx| DbCommand::Execute {
+            max_rows: None,
             id,
             statements: sqls.iter().map(|s| s.to_string()).collect(),
             paging: PagingMode::Hold,
@@ -715,6 +738,7 @@ async fn behind_a_pooler_the_lock_wait_limit_is_per_transaction_and_no_idle_limi
         // Another client holds a transaction-level advisory lock (gone with its transaction).
         let key = 0x7a7a_0000_i64 + i64::from(std::process::id());
         let hold = DbCommand::Execute {
+            max_rows: None,
             id: 2,
             statements: vec![format!("SELECT pg_catalog.pg_advisory_xact_lock({key})")],
             paging: PagingMode::Hold,
@@ -996,6 +1020,7 @@ async fn behind_a_pooler_a_lock_wait_outside_the_sessions_transactions_is_the_se
             .lock_wait(Some(Duration::from_secs(1)));
         let mut q = Conn::open_with(&url, SessionRole::Query, opts).await;
         let hold = DbCommand::Execute {
+            max_rows: None,
             id: 2,
             statements: vec![format!("SELECT pg_catalog.pg_advisory_xact_lock({key})")],
             paging: PagingMode::Hold,

@@ -393,6 +393,7 @@ impl App {
         }
         self.quick_connected(id);
         self.ddl_connected(id);
+        self.table_keys_connected(id);
         self.monitor_connected(id);
         // The explorer's node is open: its databases level asks for the server's databases.
         if self.conns.get(id).is_some_and(|c| c.expanded) {

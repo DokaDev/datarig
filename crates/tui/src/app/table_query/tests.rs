@@ -251,3 +251,43 @@ fn a_mysql_snippet_found_again_overlapping_is_not_located() {
     tq.run_failed(1, &ServerError::Message(&near), my);
     assert_eq!(tq.failure(), Some(&Failure { at: None, how: Unapplied::Refused }), "twice, overlapping: not located");
 }
+
+#[test]
+fn a_limit_is_a_whole_number_of_rows_or_none() {
+    assert_eq!(parse_limit(""), Ok(None));
+    assert_eq!(parse_limit("   "), Ok(None));
+    assert_eq!(parse_limit("100"), Ok(Some(100)));
+    assert_eq!(parse_limit(" 7 "), Ok(Some(7)));
+    assert_eq!(parse_limit(&LIMIT_MAX.to_string()), Ok(Some(LIMIT_MAX)));
+    // Where the refused text is: what is between the blanks.
+    assert_eq!(parse_limit(" 0 "), Err((1..2, LimitProblem::Zero)));
+    assert_eq!(parse_limit("000"), Err((0..3, LimitProblem::Zero)));
+    for text in ["-1", "1e3", "10.5", "1_000", "1,000", "+5", "ten", "5 rows", "\u{0661}"] {
+        assert_eq!(parse_limit(text).map_err(|(_, p)| p), Err(LimitProblem::NotANumber), "{text}");
+    }
+    assert_eq!(parse_limit(&(LIMIT_MAX + 1).to_string()), Err((0..19, LimitProblem::TooLarge)));
+    assert_eq!(parse_limit("99999999999999999999999").map_err(|(_, p)| p), Err(LimitProblem::TooLarge));
+}
+
+#[test]
+fn a_page_past_the_cap_is_cut_there() {
+    // No cap, or one not reached: the page as it came.
+    let mut rows = vec![1, 2, 3];
+    assert_eq!(cap_page(&mut rows, 0, None, true), None);
+    assert_eq!(cap_page(&mut rows, 0, Some(4), true), None);
+    assert_eq!(rows, vec![1, 2, 3]);
+    // Below a page: cut, and the server had more.
+    assert_eq!(cap_page(&mut rows, 0, Some(2), true), Some(true));
+    assert_eq!(rows, vec![1, 2]);
+    // Reached exactly: nothing cut; whether the server had more says what to close.
+    let mut rows = vec![1, 2, 3];
+    assert_eq!(cap_page(&mut rows, 0, Some(3), false), Some(false));
+    assert_eq!(cap_page(&mut rows, 0, Some(3), true), Some(true));
+    assert_eq!(rows.len(), 3);
+    // A later page, after the rows held.
+    let mut rows = vec![4, 5, 6];
+    assert_eq!(cap_page(&mut rows, 3, Some(5), true), Some(true));
+    assert_eq!(rows, vec![4, 5]);
+    let mut rows = vec![4, 5, 6];
+    assert_eq!(cap_page(&mut rows, 3, Some(9), true), None);
+}

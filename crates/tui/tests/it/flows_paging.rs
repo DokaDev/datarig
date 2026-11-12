@@ -62,7 +62,9 @@ fn fetches(cmds: &[DbCommand]) -> usize {
 fn resumes(cmds: &[DbCommand]) -> Vec<(u64, String, u64)> {
     cmds.iter()
         .filter_map(|c| match c {
-            DbCommand::Resume { id, sql, skip, paging: PagingMode::NoHold } => Some((*id, sql.clone(), *skip)),
+            DbCommand::Resume { max_rows: None, id, sql, skip, paging: PagingMode::NoHold } => {
+                Some((*id, sql.clone(), *skip))
+            }
             _ => None,
         })
         .collect()

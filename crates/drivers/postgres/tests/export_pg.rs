@@ -83,6 +83,7 @@ impl Conn {
         self.id += 1;
         let id = self.id;
         self.session.send(DbCommand::Execute {
+            max_rows: None,
             id,
             statements: vec![sql.to_string()],
             paging: PagingMode::Hold,

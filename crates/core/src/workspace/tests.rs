@@ -1,4 +1,5 @@
 use super::*;
+use crate::query::{Dir, Nulls, OrderKey};
 
 fn temp_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("datarig-ws-{}-{tag}", std::process::id()));
@@ -33,6 +34,9 @@ fn sample() -> WorkspaceState {
                 results: Some(PaneState { share: 35, hidden: true, maximized: false }),
                 database: Some("sales".into()),
                 schema: Some("shop".into()),
+                filter: None,
+                order: Vec::new(),
+                limit: None,
             },
             TabState {
                 id: new_id(),
@@ -47,6 +51,9 @@ fn sample() -> WorkspaceState {
                 results: None,
                 database: None,
                 schema: Some("Sales 2026".into()),
+                filter: None,
+                order: Vec::new(),
+                limit: None,
             },
             TabState {
                 id: new_id(),
@@ -61,6 +68,12 @@ fn sample() -> WorkspaceState {
                 results: Some(PaneState { share: 50, hidden: false, maximized: true }),
                 database: None,
                 schema: None,
+                filter: Some("status = 'done' -- \"x\"\n  AND 名前 <> ''".into()),
+                order: vec![
+                    OrderKey::user("Total", Dir::Desc),
+                    OrderKey { nulls: Some(Nulls::Last), ..OrderKey::user("id", Dir::Asc) },
+                ],
+                limit: Some(100),
             },
         ],
         unknown_tabs: Vec::new(),
@@ -81,6 +94,107 @@ fn the_state_file_round_trips() {
     assert!(text.contains("version = 3") && text.contains("kind = \"script\""), "{text}");
     assert!(text.contains("context = { database = \"sales\", schema = \"shop\" }"), "{text}");
     assert!(text.contains("kind = \"table\"") && text.contains("table = \"Order Items\""), "{text}");
+    assert!(text.contains("{ column = \"Total\", dir = \"desc\" }"), "{text}");
+    assert!(text.contains("{ column = \"id\", dir = \"asc\", nulls = \"last\" }"), "{text}");
+    assert!(text.contains("limit = 100"), "{text}");
+    assert_eq!(l.unread_queries, 0);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A table tab of a file written before tabs kept their query reads with none: no filter, no
+/// order, no cap, and nothing said about it.
+#[test]
+fn a_table_tab_of_an_earlier_file_has_no_query() {
+    let dir = temp_dir("noquery");
+    let p = ProfileId::new();
+    for version in [2, 3] {
+        let text = format!(
+            "version = {version}\nactive = 0\n\n[[tabs]]\nid = \"cccc\"\nkind = \"table\"\nprofile = \"{p}\"\n\
+             schema = \"shop\"\ntable = \"users\"\n"
+        );
+        fs::write(dir.join(FILE), text).unwrap();
+        let l = load(&dir);
+        assert!(l.broken.is_none());
+        let t = &l.state.tabs[0];
+        assert_eq!((t.kind, t.table.clone()), (TabKind::Table, Some(("shop".into(), "users".into()))));
+        assert_eq!((&t.filter, &t.order, t.limit, l.unread_queries), (&None, &Vec::new(), None, 0));
+        save(&dir, &l.state).unwrap();
+        let written = fs::read_to_string(dir.join(FILE)).unwrap();
+        assert!(!written.contains("filter") && !written.contains("order") && !written.contains("limit"), "{written}");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A table tab's `filter`, `order` or `limit` edited by hand into something this version cannot
+/// read: each such key is left out of the tab (the others come back), counted, and written back
+/// as it was until the tab's query writes that key again. A blank filter is none.
+#[test]
+fn a_query_that_cannot_be_read_is_left_out_and_kept() {
+    let dir = temp_dir("badquery");
+    let p = ProfileId::new();
+    let tab = |keys: &str| {
+        format!(
+            "version = 3\nactive = 0\n\n[[tabs]]\nid = \"cccc\"\nkind = \"table\"\nprofile = \"{p}\"\n\
+             schema = \"shop\"\ntable = \"users\"\n{keys}\n"
+        )
+    };
+    let id_desc = || vec![OrderKey::user("id", Dir::Desc)];
+    // The keys of the tab; its filter, order and cap as read; how many tabs were not read whole.
+    type Case = (&'static str, Option<&'static str>, Vec<OrderKey>, Option<u64>, u64);
+    let cases: [Case; 13] = [
+        (
+            "filter = \"id > 1\"\norder = [{ column = \"id\", dir = \"desc\" }]\nlimit = 5",
+            Some("id > 1"),
+            id_desc(),
+            Some(5),
+            0,
+        ),
+        ("filter = \"   \"", None, vec![], None, 0),
+        ("order = []", None, vec![], None, 0),
+        ("filter = 7\norder = [{ column = \"id\", dir = \"desc\" }]", None, id_desc(), None, 1),
+        ("filter = \"id > 1\"\norder = \"id DESC\"", Some("id > 1"), vec![], None, 1),
+        ("order = [{ column = \"id\", dir = \"down\" }]", None, vec![], None, 1),
+        ("order = [{ column = \"id\", dir = \"desc\" }, { column = \"\", dir = \"asc\" }]", None, vec![], None, 1),
+        ("order = [{ column = \"id\", dir = \"desc\" }, { column = \"id\", dir = \"asc\" }]", None, vec![], None, 1),
+        ("order = [{ column = \"id\", dir = \"desc\", nulls = \"middle\" }]", None, vec![], None, 1),
+        ("order = [{ column = \"id\", dir = \"desc\", collate = \"C\" }]", None, vec![], None, 1),
+        ("[[tabs.order]]\ncolumn = \"id\"\ndir = \"desc\"", None, id_desc(), None, 0),
+        ("limit = 0", None, vec![], None, 1),
+        ("filter = \"id > 1\"\nlimit = \"ten\"", Some("id > 1"), vec![], None, 1),
+    ];
+    for (keys, filter, order, limit, unread) in cases {
+        fs::write(dir.join(FILE), tab(keys)).unwrap();
+        let l = load(&dir);
+        assert!(l.broken.is_none(), "{keys}");
+        let t = &l.state.tabs[0];
+        assert_eq!(
+            (t.filter.as_deref(), &t.order, t.limit, l.unread_queries),
+            (filter, &order, limit, unread),
+            "{keys}"
+        );
+    }
+    // Written back as they were while the tab writes none of them; what it reads is written.
+    fs::write(dir.join(FILE), tab("filter = 7\norder = [{ column = \"id\", dir = \"down\" }]\nlimit = -1")).unwrap();
+    let mut s = load(&dir).state;
+    save(&dir, &s).unwrap();
+    let doc: toml::Table = fs::read_to_string(dir.join(FILE)).unwrap().parse().unwrap();
+    let t = &doc["tabs"][0];
+    assert_eq!(t["filter"].as_integer(), Some(7));
+    assert_eq!(t["order"][0]["dir"].as_str(), Some("down"));
+    assert_eq!(t["limit"].as_integer(), Some(-1));
+    assert_eq!(load(&dir).unread_queries, 1, "still said");
+    // The tab's own query replaces them.
+    s.tabs[0].filter = Some("id > 2".into());
+    s.tabs[0].order = vec![OrderKey::user("name", Dir::Asc)];
+    s.tabs[0].limit = Some(10);
+    save(&dir, &s).unwrap();
+    let l = load(&dir);
+    assert_eq!(l.unread_queries, 0);
+    assert_eq!(l.state, s);
+    // A filter read once and then dropped by the tab is not written back.
+    s.tabs[0].filter = None;
+    save(&dir, &s).unwrap();
+    assert!(!fs::read_to_string(dir.join(FILE)).unwrap().contains("filter"));
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -102,6 +216,9 @@ fn ddl_tabs_round_trip_with_their_objects() {
         results: None,
         database: database.map(str::to_string),
         schema: None,
+        filter: None,
+        order: Vec::new(),
+        limit: None,
     };
     let s = WorkspaceState {
         tabs: vec![
@@ -463,7 +580,7 @@ fn keys_this_version_does_not_know_are_written_back() {
          results = {{ share = 40, hidden = false, maximized = false, split = \"v\" }}\n\n\
          [[tabs]]\nid = \"bbbb\"\nkind = \"script\"\nscript = \"r/daily.sql\"\ncolor = \"red\"\n\n\
          [[tabs]]\nid = \"cccc\"\nkind = \"table\"\nprofile = \"{p}\"\nschema = \"s\"\ntable = \"t\"\n\
-         filter = \"id > 3\"\nresults = {{ zoom = 2 }}\n"
+         group = \"id\"\nresults = {{ zoom = 2 }}\n"
     );
     fs::write(dir.join(FILE), &text).unwrap();
     let mut l = load(&dir);
@@ -483,7 +600,7 @@ fn keys_this_version_does_not_know_are_written_back() {
         assert_eq!(tabs[0]["results"]["split"].as_str(), Some("v"), "{written}");
         assert_eq!(tabs[0]["results"]["share"].as_integer(), Some(40), "{written}");
         assert_eq!(tabs[1]["color"].as_str(), Some("red"), "{written}");
-        assert_eq!(tabs[2]["filter"].as_str(), Some("id > 3"), "{written}");
+        assert_eq!(tabs[2]["group"].as_str(), Some("id"), "{written}");
         assert_eq!(tabs[2]["results"]["zoom"].as_integer(), Some(2), "{written}");
     };
     check();

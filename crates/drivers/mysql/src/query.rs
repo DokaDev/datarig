@@ -98,8 +98,8 @@ use crate::link::{Closed, Link, Next};
 use crate::session::{Gate, Killer, Server, Tracked, my_error};
 use crate::values::{column_meta, display};
 use datarig_core::driver::{
-    CancelFailure, CancelMark, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, OwnSession, PagingMode,
-    ServerEnd, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep,
+    CancelFailure, CancelMark, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Isolation, Outcome, OwnSession,
+    PagingMode, ServerEnd, SessionValues, StatementInfo, TxOutcome, TxRule, TxStep,
 };
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
@@ -196,6 +196,8 @@ struct State {
     mode: MySqlMode,
     /// What the values are read in, as last reported to the app (`DbEvent::SessionValues`).
     values: Option<SessionValues>,
+    /// The isolation level as last reported to the app (`DbEvent::Isolation`).
+    isolation: Option<Isolation>,
     /// The statement running now may run code of the server's (a procedure, a stored function):
     /// what that code changes in the session (`SET time_zone`, `SET NAMES`, `SET sql_mode`) the
     /// server does not report, so the session asks once it ended ([`after`]).
@@ -425,16 +427,20 @@ pub(crate) async fn query_loop(
     };
     let mode = tracked.mode(&server);
     let values = tracked.values();
+    let isolation = tracked.isolation();
+    let autocommit = tracked.autocommit != Some(false);
     // The limit the session set up with is its own, not the user's.
     let tracked = Tracked { select_limit: None, ..tracked };
     let mut s = State {
         tracked,
         mode,
         values,
+        isolation,
         routine: false,
         sets_next: SetsNext::No,
         limit: Limit { current: select_limit, user: None },
-        tx: Tx::default(),
+        // Autocommit as the start-up statements left it (set up on, unless they turned it off).
+        tx: Tx { autocommit, ..Tx::default() },
         request: 0,
     };
     let stop = loop {
@@ -446,7 +452,7 @@ pub(crate) async fn query_loop(
             continue;
         }
         let done = match next {
-            Next::Command(DbCommand::Execute { id, statements, paging, tx }) => {
+            Next::Command(DbCommand::Execute { id, statements, paging, tx, max_rows }) => {
                 // MySQL has no idle limit for a transaction (`idle_timeout`), nor a read-only
                 // transaction that costs no round trip of its own: a `ReadOnly` step runs as it
                 // is (a write hidden behind a view's stored function commits by itself).
@@ -454,10 +460,10 @@ pub(crate) async fn query_loop(
                     TxRule::Auto => Vec::new(),
                     TxRule::Manual { steps, .. } => steps.iter().map(|step| *step == TxStep::Open).collect(),
                 };
-                execute(&mut conn, &mut link, &env, &mut s, id, statements, None, paging, &opens).await
+                execute(&mut conn, &mut link, &env, &mut s, id, statements, None, paging, &opens, max_rows).await
             }
-            Next::Command(DbCommand::Resume { id, sql, skip, paging }) => {
-                execute(&mut conn, &mut link, &env, &mut s, id, vec![sql], Some(skip), paging, &[]).await
+            Next::Command(DbCommand::Resume { id, sql, skip, paging, max_rows }) => {
+                execute(&mut conn, &mut link, &env, &mut s, id, vec![sql], Some(skip), paging, &[], max_rows).await
             }
             // Answered once; a session the UI closed meanwhile answers nothing.
             Next::Command(DbCommand::EndTx { id, commit }) => {
@@ -564,8 +570,8 @@ fn unanswered(events: &UnboundedSender<DbEvent>, c: DbCommand, error: &DbError) 
 }
 
 /// Run `statements` (or the one statement of a `Resume` past `skip` rows; `opens`: the ones
-/// that open a transaction for manual commit, [`TxRule::Manual`]); the run ends with exactly one
-/// terminal event ([`Reply`]).
+/// that open a transaction for manual commit, [`TxRule::Manual`]; `max_rows`: the most rows the
+/// last one's result shows); the run ends with exactly one terminal event ([`Reply`]).
 #[allow(clippy::too_many_arguments)]
 async fn execute(
     conn: &mut Conn,
@@ -577,12 +583,13 @@ async fn execute(
     resume: Option<u64>,
     paging: PagingMode,
     opens: &[bool],
+    max_rows: Option<u64>,
 ) -> Result<(), Stop> {
     link.serving(env.events, id);
     s.request = id;
     env.failed.store(false, Ordering::SeqCst);
     let reply = Reply::new(env.events, env.failed, id);
-    let ran = run(conn, link, env, s, reply, statements, resume, paging, opens).await;
+    let ran = run(conn, link, env, s, reply, statements, resume, paging, opens, max_rows).await;
     idle(env, link).await;
     let ran = match ran {
         Ok(()) => settle(conn, link, env, s, id).await,
@@ -622,6 +629,10 @@ struct Step {
     hold: bool,
     /// It opens a transaction for manual commit when none is open ([`TxRule::Manual`]).
     opens: bool,
+    /// The most rows the last statement's result shows (past `skip`), `None`: all. The server
+    /// stops it there (`sql_select_limit`), no row past them is read, and the result ends at
+    /// that row as if it had no more.
+    cap: Option<u64>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -635,6 +646,7 @@ async fn run<'a>(
     resume: Option<u64>,
     paging: PagingMode,
     opens: &[bool],
+    max_rows: Option<u64>,
 ) -> Result<(), Halted<'a>> {
     let n = statements.len();
     if n == 0 {
@@ -660,6 +672,8 @@ async fn run<'a>(
             skip: resume.unwrap_or(0),
             hold: paging == PagingMode::Hold,
             opens: opens.get(i) == Some(&true),
+            // At least one row.
+            cap: if i + 1 == n { max_rows.map(|max| max.max(1)) } else { None },
         };
         if n > 1 {
             // Cancelled between two statements: the rest does not run. Nor on a connection that
@@ -828,6 +842,8 @@ async fn statement<'a>(
             }
             return Ok(None);
         }
+        // Its level is the next transaction's, as for any other start.
+        s.tracked.transaction_began();
         s.tx.open = true;
         s.tx.opening = Some((reply.id, step.index));
         s.tx.opened = Some(step.index);
@@ -868,13 +884,20 @@ async fn statement<'a>(
     // would lock fewer rows than asked, and its next page would lock them again): read to its
     // end.
     let held = step.last && (step.hold || s.tx.open || lists(sql, s.mode) || locking(sql, s.mode));
-    // The limit: a page and one row more (and the rows a `Resume` skips) for a last statement not
-    // held, else the user's own; set only before a statement it applies to.
-    let wanted = if step.last && !held {
-        let page = (env.page_size as u64).saturating_add(1).saturating_add(step.skip);
-        Some(s.limit.user.map_or(page, |u| u.min(page)))
-    } else {
-        s.limit.user
+    // The limit: a page and one row more (within the result's cap: [`page_want`]), and the rows
+    // a `Resume` skips, for a last statement not held; the cap (and the rows skipped) for a held
+    // one that has one, so the server reads no row past it either; else the user's own. Never
+    // above the user's own; set only before a statement it applies to.
+    let wanted = match (step.last && !held, step.cap) {
+        (true, cap) => {
+            let page = (page_want(env.page_size, cap) as u64).saturating_add(step.skip);
+            Some(s.limit.user.map_or(page, |u| u.min(page)))
+        }
+        (false, Some(cap)) => {
+            let all = cap.saturating_add(step.skip);
+            Some(s.limit.user.map_or(all, |u| u.min(all)))
+        }
+        (false, None) => s.limit.user,
     };
     // Not before a statement that reads the outcome of the one before (`ROW_COUNT()`,
     // `FOUND_ROWS()`): the `SET` would be that statement. It then runs under the limit it finds
@@ -885,6 +908,12 @@ async fn statement<'a>(
         (Some(_), None) => false,
     };
     let skip = keeps && reads_outcome(sql, s.mode);
+    // A result with a cap is never read past it: one whose statement keeps a limit that does
+    // not stop it there (or none) is not sent.
+    if step.cap.is_some() && skip && wanted != s.limit.current && limit_applies(sql, s.mode) {
+        reply.fail(DbError::CappedOutcome, false);
+        return Ok(None);
+    }
     if limit_applies(sql, s.mode) && wanted != s.limit.current && !skip {
         let set = format!("SET SESSION sql_select_limit = {}", wanted.map_or("DEFAULT".to_string(), |n| n.to_string()));
         if let Err(e) = halt!(link.guard(None, conn.query_drop(set)).await, Some(reply)) {
@@ -894,12 +923,25 @@ async fn statement<'a>(
         s.tracked.select_limit = None;
         s.limit.current = wanted;
     }
+    // The server stops the result at its cap (or before): once the cap is shown, what is left
+    // of it is its end, read rather than stopped.
+    let bounded = match step.cap {
+        Some(cap) => {
+            limit_applies(sql, s.mode)
+                && !own_limit(sql, s.mode)
+                && s.limit.current.is_some_and(|now| now <= cap.saturating_add(step.skip))
+        }
+        None => false,
+    };
     if let Some(u) = &undo
         && let Err(e) = halt!(link.guard(None, conn.query_drop(u.before.clone())).await, Some(reply))
     {
         return failed(conn, link, env, s, reply, &e, false, false).await;
     }
     let was_open = s.tx.open;
+    // The result was stopped at its cap ([`stop_result`]): its answer says nothing of the
+    // session, which is asked instead.
+    let mut stopped = false;
     env.busy.store(true, Ordering::SeqCst);
     // Only what is sent may set the next transaction's own settings: a statement refused before
     // it was sent sets nothing.
@@ -993,12 +1035,16 @@ async fn statement<'a>(
                     }
                 }
             }
+            // The rows the result may still show (its cap).
+            let mut cap = step.cap;
             let (mut page, ended) = if left > 0 {
                 // The result now ends within them: an empty last page.
                 (Vec::new(), true)
             } else {
-                match halt!(link.guard(Some(env.killer), read(&mut qr, &columns, env.page_size + 1)).await, Some(reply))
-                {
+                match halt!(
+                    link.guard(Some(env.killer), read(&mut qr, &columns, page_want(env.page_size, cap))).await,
+                    Some(reply)
+                ) {
                     Ok(read) => read,
                     Err(e) => {
                         drop(qr);
@@ -1008,6 +1054,10 @@ async fn statement<'a>(
             };
             let more = page.len() > env.page_size;
             let carry = if more { page.pop() } else { None };
+            // At the cap the result ends here (the server stopped it there too). Every page
+            // shown counts against it, the last one too.
+            let spent = spend(&mut cap, page.len());
+            let more = more && !spent;
             if held && more {
                 // Held: the statement runs on while the app reads it (or its last row is still
                 // to come).
@@ -1022,7 +1072,7 @@ async fn statement<'a>(
                 }
                 let paged = reply.page(metas, page, true, step.start.elapsed());
                 let id = paged.id;
-                let held = match hold(&mut qr, link, env, id, &columns, carry, ended).await {
+                let held = match hold(&mut qr, link, env, id, &columns, carry, ended, (cap, bounded)).await {
                     Ok(held) => held,
                     Err(stop) => {
                         // A cancel the server did not take: the run's one failure that follows.
@@ -1035,25 +1085,33 @@ async fn statement<'a>(
                 drop(qr);
                 return held_ended(conn, link, env, s, paged, held, sql, was_open).await.map(|()| None);
             }
-            // Not held: whatever the limit did not stop is read to its end and dropped.
-            if !ended {
-                match halt!(link.guard(Some(env.killer), drain(&mut qr)).await, Some(reply)) {
-                    Ok(_) => {}
+            // Not held: whatever the limit did not stop is read to its end and dropped; but a
+            // capped result that no limit of the server's stops is stopped after this page,
+            // never read on past its cap (its next page, when it has one, runs it again).
+            stopped = !ended && cap.is_some() && !bounded;
+            if stopped {
+                halt!(stop_result(&mut qr, link, env).await, Some(reply));
+                Got::Rows { columns, page, more, info: StatementInfo::default() }
+            } else {
+                if !ended {
+                    match halt!(link.guard(Some(env.killer), drain(&mut qr)).await, Some(reply)) {
+                        Ok(_) => {}
+                        Err(e) => {
+                            drop(qr);
+                            return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
+                        }
+                    }
+                }
+                let mut info = info_of(&qr);
+                match halt!(link.guard(Some(env.killer), rest(&mut qr)).await, Some(reply)) {
+                    Ok(sets) => info.more_results += sets,
                     Err(e) => {
                         drop(qr);
                         return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                     }
                 }
+                Got::Rows { columns, page, more, info }
             }
-            let mut info = info_of(&qr);
-            match halt!(link.guard(Some(env.killer), rest(&mut qr)).await, Some(reply)) {
-                Ok(sets) => info.more_results += sets,
-                Err(e) => {
-                    drop(qr);
-                    return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
-                }
-            }
-            Got::Rows { columns, page, more, info }
         }
     };
     drop(qr);
@@ -1071,8 +1129,9 @@ async fn statement<'a>(
     // What the statement did to the session, before the run answers. An undo that failed on a
     // connection still in use may have left the statement's transaction open: the server is
     // asked (one that runs nothing more is not).
-    let ask = was_open || !kept;
-    if let Some(error) = halt!(after(conn, link, env, s, sql, risk.implicit_commit, ask, kept).await, Some(reply)) {
+    let ask = was_open || !kept || stopped;
+    let ok = kept && !stopped;
+    if let Some(error) = halt!(after(conn, link, env, s, sql, risk.implicit_commit, ask, ok).await, Some(reply)) {
         reply.fail(error.clone(), false);
         return Err(Halted { stop: Stop::Lost(error), reply: None });
     }
@@ -1231,6 +1290,18 @@ async fn after(
                 let _ = env.events.send(DbEvent::TxClosedBy { id: s.request, how });
             }
         }
+        // The level of the transaction open now is the one it started in, whatever the session's
+        // is set to meanwhile; the next one starts in the session's (or the one `SET
+        // TRANSACTION` without `SESSION` set for it). `COMMIT AND CHAIN` starts the next one in
+        // the level of the one it ended.
+        if !(chained && chains(sql, s.mode)) {
+            if was_open && (!open || chained) {
+                s.tracked.transaction_ended();
+            }
+            if open && (!was_open || chained) {
+                s.tracked.transaction_began();
+            }
+        }
         s.tx.open = open;
         // A transaction started or ended (a `COMMIT` or `ROLLBACK` with none open too): the
         // settings the next one had of its own were used up or cleared.
@@ -1248,10 +1319,17 @@ async fn after(
             env.report(&mut s.tx, chained);
         }
     }
-    // The statement set the next transaction's own settings, or may have.
+    // Code of the server's may have changed the session's level, or ended the transaction and
+    // started another, without a report: not known until the server reports the level again.
+    if routine {
+        s.tracked.isolation_after_code(s.tx.open);
+    }
+    // The statement set the next transaction's own settings, or may have: its level is not
+    // known until a transaction starts or ends.
     if sets_next == SetsNext::Maybe || (ok && sets_next == SetsNext::Yes) {
         s.tracked.next_once = true;
     }
+    report_isolation(env, s);
     let writable = status.is_some_and(|st| {
         st.contains(StatusFlags::SERVER_STATUS_IN_TRANS) && !st.contains(StatusFlags::SERVER_STATUS_IN_TRANS_READONLY)
     });
@@ -1387,7 +1465,10 @@ struct Held {
 /// (`FetchMore`) until the result ends, `ClosePortal` closes it, or another command comes (it is
 /// processed next); a result stopped before its end is stopped on the server (`KILL QUERY`) and
 /// read to its end. Counts and checks that come meanwhile wait for it; when the session stops
-/// meanwhile, they are put back in line, to be answered.
+/// meanwhile, they are put back in line, to be answered. `cap`: the rows the result may still
+/// show (`None`: all); the pages stay within them, and the result ends once they are shown
+/// (read to its end when the server stopped it there, `bounded`, else stopped).
+#[allow(clippy::too_many_arguments)]
 async fn hold(
     qr: &mut QueryResult<'_, 'static, TextProtocol>,
     link: &mut Link,
@@ -1396,11 +1477,12 @@ async fn hold(
     columns: &[Column],
     carry: Option<Vec<Cell>>,
     ended: bool,
+    (cap, bounded): (Option<u64>, bool),
 ) -> Result<Held, Stop> {
     let mut held = Held { stopped: false, failed: None, info: StatementInfo::default(), waiting: Vec::new() };
     let gate = Gate::new();
     let mut refusal = link.refusal(env.killer, &gate);
-    let out = hold_on(qr, link, env, id, columns, carry, ended, &mut held, &mut refusal).await;
+    let out = hold_on(qr, link, env, id, columns, carry, ended, (cap, bounded), &mut held, &mut refusal).await;
     drop(refusal);
     // Nothing sent again for this statement reaches the next one (see [`Link::guard`]).
     // An unclean gate after the result ended: the result is the run's all the same, and the
@@ -1427,6 +1509,7 @@ async fn hold_on(
     columns: &[Column],
     mut carry: Option<Vec<Cell>>,
     mut ended: bool,
+    (mut cap, bounded): (Option<u64>, bool),
     held: &mut Held,
     refusal: &mut BoxFuture<'static, CancelFailure>,
 ) -> Result<(), Stop> {
@@ -1452,9 +1535,11 @@ async fn hold_on(
         match next {
             Next::Command(DbCommand::FetchMore { id: fid }) if fid == id => {
                 let t0 = Instant::now();
-                let want = page_size + 1 - usize::from(carry.is_some());
-                let (rows, end) = if ended {
-                    (Vec::new(), true)
+                let want = page_want(page_size, cap) - usize::from(carry.is_some());
+                // Nothing to read once the carried-over row is all the cap still lets the page
+                // have.
+                let (rows, end) = if ended || want == 0 {
+                    (Vec::new(), ended)
                 } else {
                     match link.guard(Some(env.killer), read(qr, columns, want)).await? {
                         Ok(read) => read,
@@ -1470,6 +1555,10 @@ async fn hold_on(
                 if more {
                     carry = rows.pop();
                 }
+                // Every page counts against the cap, the last one too: at the cap the result
+                // ends where the server stopped it, its end read below.
+                let spent = spend(&mut cap, rows.len());
+                more = more && !spent;
                 let _ = env.events.send(DbEvent::Page { id, columns: None, rows, more, elapsed: t0.elapsed() });
             }
             // The app closes it (its spill limit, idle): it ends like a finished one.
@@ -1493,6 +1582,16 @@ async fn hold_on(
                 return Err(Stop::Closed);
             }
             Next::Lost(reason) => return Err(Stop::Lost(reason)),
+        }
+    }
+    if !ended && bounded && cap == Some(0) {
+        // At its cap, where the server stopped it: only its end is left to read.
+        match link.guard(Some(env.killer), drain(qr)).await? {
+            Ok(_) => ended = true,
+            Err(e) => {
+                held.failed = Some(e);
+                return Ok(());
+            }
         }
     }
     held.stopped = !ended;
@@ -1562,6 +1661,28 @@ async fn stop_result(
     })
     .await?;
     Ok(())
+}
+
+/// Rows to read for the next page: one more than a page, so a result that fits in one page is
+/// known to have ended; but when the result may show no more than `left` rows (`Some`) and they
+/// fit in a page, exactly those: no row past them is read.
+fn page_want(page_size: usize, left: Option<u64>) -> usize {
+    match left {
+        Some(left) if left <= page_size as u64 => left as usize,
+        _ => page_size + 1,
+    }
+}
+
+/// Count a page of `shown` rows against the rows the result may still show; `true` once none
+/// are left (the result ends there).
+fn spend(left: &mut Option<u64>, shown: usize) -> bool {
+    match left {
+        Some(left) => {
+            *left = left.saturating_sub(shown as u64);
+            *left == 0
+        }
+        None => false,
+    }
 }
 
 /// Up to `max` rows of the current result set, as the app shows them, and whether the set
@@ -1665,6 +1786,20 @@ fn limit_applies(sql: &str, mode: MySqlMode) -> bool {
     }
 }
 
+/// Whether `sql` has a `LIMIT` of its own outside parentheses: it wins over `sql_select_limit`,
+/// so the session's limit does not stop its result.
+fn own_limit(sql: &str, mode: MySqlMode) -> bool {
+    let mut depth = 0usize;
+    lex_in(sql, Dialect::MySql(mode)).iter().any(|t| {
+        match t.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        depth == 0 && t.is_word() && t.text(sql).eq_ignore_ascii_case("LIMIT")
+    })
+}
+
 /// Whether `sql` is a listing the server cuts at `sql_select_limit` (`SHOW` but its diagnostics,
 /// `DESCRIBE`/`DESC` of a table, not of a statement: that is an `EXPLAIN`): it is read without
 /// the page limit, to its end.
@@ -1708,6 +1843,16 @@ fn locking(sql: &str, mode: MySqlMode) -> bool {
     let w = words(sql, mode);
     w.windows(2).any(|p| p[0] == "FOR" && (p[1] == "UPDATE" || p[1] == "SHARE"))
         || w.windows(4).any(|p| p == ["LOCK", "IN", "SHARE", "MODE"])
+}
+
+/// Tell the app the level the session's reads run in (the open transaction's, else the next
+/// one's), when that changed.
+fn report_isolation(env: &Env<'_>, s: &mut State) {
+    let isolation = s.tracked.isolation();
+    if isolation != s.isolation {
+        s.isolation = isolation;
+        let _ = env.events.send(DbEvent::Isolation(isolation));
+    }
 }
 
 /// Whether `sql` ends the transaction and opens another at once: `COMMIT`/`ROLLBACK … AND CHAIN`
@@ -2095,16 +2240,25 @@ async fn count(
         let _ = link.guard(None, conn.query_drop(ROLLBACK)).await?;
     }
     let snapshot = s.tx.open && matches!(isolation.as_str(), "REPEATABLE-READ" | "SERIALIZABLE");
+    let ask = s.tx.open || !s.tx.autocommit;
     let result = match counted {
-        Ok(Some(n)) => n.trim().parse::<u64>().map_err(|_| DbError::NoResult),
-        Ok(None) => Err(DbError::NoResult),
         Err(e) if e.is_fatal() => return Err(Stop::Lost(my_error(&e))),
         Err(e) => {
-            let ask = s.tx.open || !s.tx.autocommit;
             if let Some(error) = after(conn, link, env, s, "", false, ask, false).await? {
                 return Err(Stop::Lost(error));
             }
             Err(failure(&e).0)
+        }
+        // Counted: what it left in the session too (without autocommit it opened a
+        // transaction, which runs in the level the next one was to run in).
+        Ok(counted) => {
+            if let Some(error) = after(conn, link, env, s, "", false, ask, true).await? {
+                return Err(Stop::Lost(error));
+            }
+            match counted {
+                Some(n) => n.trim().parse::<u64>().map_err(|_| DbError::NoResult),
+                None => Err(DbError::NoResult),
+            }
         }
     };
     Ok((result, snapshot))
@@ -2122,7 +2276,15 @@ async fn check_repeat(
     if let Err(why) = keeps_next(s, open) {
         return Ok(Err(why));
     }
-    Ok(asked_server(conn, link, env, s, sql).await?.map(|_| ()))
+    let answer = asked_server(conn, link, env, s, sql).await?.map(|_| ());
+    // The catalog read may have opened a transaction (without autocommit): said as any other.
+    if answer.is_ok() {
+        let ask = s.tx.open || !s.tx.autocommit;
+        if let Some(error) = after(conn, link, env, s, "", false, ask, true).await? {
+            return Err(Stop::Lost(error));
+        }
+    }
+    Ok(answer)
 }
 
 mod apply;
@@ -2150,5 +2312,7 @@ fn forget_after_code(env: &Env<'_>, s: &mut State) {
         if let Some(v) = s.values.clone() {
             let _ = env.events.send(DbEvent::SessionValues(v));
         }
+        s.tracked.isolation_after_code(s.tx.open);
+        report_isolation(env, s);
     }
 }

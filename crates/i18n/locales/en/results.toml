@@ -14,6 +14,7 @@
 "results.title.counting" = "counting…"
 "results.title.counted" = { one = "{count} row", other = "{count} rows" }
 "results.title.counted_now" = { one = "{count} row now", other = "{count} rows now" }
+"results.title.limit" = "limit {limit}"
 
 "query.running" = "Running… {elapsed}"
 "query.fetching" = "Fetching more rows…"
@@ -138,6 +139,7 @@
 "results.tab.messages" = "Messages"
 "results.tab.earlier" = "earlier run"
 "results.page.last" = "Last page: the result has no more rows"
+"results.page.limit_reached" = { one = "Last page: the limit of {count} row is reached", other = "Last page: the limit of {count} rows is reached" }
 "results.page.first" = "First page"
 "results.page.hint" = "End of the page: {key} shows the next one"
 "results.page.stale" = "This result's session is gone (reconnected, or another connection): run the statement again to see more"

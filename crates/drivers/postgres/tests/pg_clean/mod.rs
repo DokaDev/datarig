@@ -79,6 +79,7 @@ pub fn run_fresh(url: &str, sql: &str) -> Result<(), String> {
             let opts = ConnectOptions::new(1, SessionRole::Query, "it-clean");
             let session = PgDriver.connect(&cfg, SessionRole::Query, opts, tx);
             session.send(DbCommand::Execute {
+                max_rows: None,
                 id: 1,
                 statements: vec![sql],
                 paging: PagingMode::Hold,

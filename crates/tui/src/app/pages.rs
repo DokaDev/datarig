@@ -121,14 +121,19 @@ impl App {
     }
 
     /// The server's estimate of the rows of the table that table tab `t` shows, as the explorer
-    /// read it with the table's schema or structure (nothing is asked for it). Only while the
-    /// rows shown are of every row of the tab's table (in any order: no filter, no cap), and
-    /// only from the explorer of the profile and database the tab works in. `None` when the
-    /// server has none (never analyzed), and for filtered rows (how many match is not known).
+    /// read it with the table's schema or structure (nothing is asked for it), at most the
+    /// tab's cap on its rows. Only while the rows shown are of every row of the tab's table (in
+    /// any order: no filter), and only from the explorer of the profile and database the tab
+    /// works in. `None` when the server has none (never analyzed), and for filtered rows (how
+    /// many match is not known).
     pub(crate) fn table_estimate(&self, t: &Tab) -> Option<u64> {
         let table = t.doc.table.as_ref().filter(|_| t.is_table())?;
         let shown = t.doc.table_query.as_ref()?.shown.as_ref()?;
-        if !super::table_query::same_rows(shown, &datarig_core::query::Query::table(self.table_name(t.id)?)) {
+        let every = datarig_core::query::Query {
+            limit: shown.limit,
+            ..datarig_core::query::Query::table(self.table_name(t.id)?)
+        };
+        if !super::table_query::same_rows(shown, &every) {
             return None;
         }
         let id = t.profile?;
@@ -136,7 +141,8 @@ impl App {
             None => &self.conns.get(id)?.tree,
             Some(db) => &self.conns.aux(id, db)?.tree,
         };
-        tree.stats_of(&table.schema, &table.name)?.rows
+        let rows = tree.stats_of(&table.schema, &table.name)?.rows?;
+        Some(shown.limit.map_or(rows, |n| rows.min(n)))
     }
 
     /// `n`: the next page of the shown result. A page already fetched is shown at once; the one
@@ -159,6 +165,11 @@ impl App {
             return self.flash_busy();
         }
         if !more {
+            // A table tab's rows that end at its cap: the limit ended them, not the table.
+            let cap = self.table_query(t.id).and_then(|q| q.shown.as_ref()).and_then(|q| q.limit);
+            if let Some(count) = cap.filter(|n| *n == len as u64) {
+                return self.flash(Notice::new(Msg::ResultsPageLimitReached { count }, Level::Info));
+            }
             return self.flash(Notice::new(Label::ResultsPageLast, Level::Info));
         }
         // An Apply changed the table under these rows (a deleted row moves the rows after it
@@ -215,8 +226,9 @@ impl App {
         let refused = |why| {
             if released { Msg::ResultsPageRefusedNoHold { why } } else { Msg::ResultsPageRefused { why } }
         };
-        // A table tab's filter is checked again as when it ran (never asked about here).
-        if let Err(why) = self.table_recheck(id) {
+        // A table tab's filter is checked again as when it ran, and so are reads that lock rows
+        // (never asked about here).
+        if let Err(why) = self.table_recheck(id).and_then(|()| self.table_locks_recheck(id)) {
             return self.tab_status(id, Notice::new(refused(why), Level::Warning));
         }
         let lang = t.exec.prepared.language();
@@ -250,9 +262,21 @@ impl App {
         let paging = self.paging_mode(t);
         let Results::Rows(rs) = &t.results else { return };
         let skip = rs.rows.len() as u64;
+        // What the shown query's cap leaves past the rows held: the driver reads no row past it.
+        let max_rows = self
+            .table_query(id)
+            .and_then(|q| q.shown.as_ref())
+            .and_then(|q| q.limit)
+            .map(|limit| limit.saturating_sub(skip));
+        // The rows held reached the cap already: there is nothing past them to read.
+        if max_rows == Some(0) {
+            return;
+        }
         let columns = rs.columns.iter().map(|c| (c.meta.name.clone(), c.meta.type_name.clone())).collect();
         let size = self.page_size as u64;
-        let (from, to) = (datarig_i18n::fmt_count(skip + 1), datarig_i18n::fmt_count(skip + size));
+        // The last row this page may bring: the cap's, when it ends the page early.
+        let last = max_rows.map_or(skip + size, |left| skip + left.min(size));
+        let (from, to) = (datarig_i18n::fmt_count(skip + 1), datarig_i18n::fmt_count(last));
         // A table tab's order is total only when its keys end in a key the structure says is
         // unique (not known yet: not unique).
         // As the held rows' statement was sent: a structure read since does not make it total.
@@ -288,7 +312,7 @@ impl App {
         });
         t.exec.run.notes.push(note.clone());
         self.tab_status(id, note);
-        self.send_tab(id, DbCommand::Resume { id: qid, sql, skip, paging });
+        self.send_tab(id, DbCommand::Resume { id: qid, sql, skip, paging, max_rows });
     }
 
     /// `#`: count the rows of the shown result, when the user asks: `SELECT count(*)` of its
@@ -314,10 +338,10 @@ impl App {
         }
         // A table tab's filter is checked again as when it ran (never asked about here), and
         // a cap on its rows is counted within.
-        if let Err(why) = self.table_recheck(id) {
+        if let Err(why) = self.table_recheck(id).and_then(|()| self.table_locks_recheck(id)) {
             return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
         }
-        let source = self.table_count_source(id).unwrap_or_else(|| t.shown_sql().to_string());
+        let source = self.table_capped_sql(id).unwrap_or_else(|| t.shown_sql().to_string());
         if zone_moved(t, &source) {
             let why = self.i18n.label(Label::RepeatZoneChanged).to_string();
             return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));

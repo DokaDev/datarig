@@ -317,6 +317,13 @@ pub struct TabSession {
     /// The session runs without autocommit (the user's `SET autocommit = 0`, MySQL:
     /// `DbEvent::Autocommit`).
     pub autocommit_off: bool,
+    /// The isolation level the session's next transaction runs in, as its driver reports it
+    /// (MySQL: `DbEvent::Isolation`); `None`: not known.
+    pub isolation: Option<datarig_core::driver::Isolation>,
+    /// Goes up whenever what decides whether a read locks rows may have changed: the session,
+    /// its level, its autocommit, a transaction's start or end. Never goes back, so a state that
+    /// comes back to earlier values is never the earlier one.
+    pub safety_rev: u64,
     /// The last run went to the session with `TxRule::Manual`.
     pub sent_manual: bool,
     /// A procedure that commits by itself failed as the first statement of a transaction
@@ -408,6 +415,8 @@ impl TabSession {
             ending: None,
             last_end: None,
             autocommit_off: false,
+            isolation: None,
+            safety_rev: 0,
             sent_manual: false,
             outside_offer: None,
             own: OwnAsk::NotAsked,
@@ -464,6 +473,9 @@ pub struct ValuesWait {
     pub literal: usize,
     /// The text the literal is in (offsets are in it).
     pub owner: crate::app::PopupOwner,
+    /// The user asked for the completion (`Ctrl+Space`): the list the values bring is asked
+    /// for too.
+    pub asked: bool,
 }
 
 /// How the user's transaction ended, as far as the app can tell.
@@ -871,6 +883,8 @@ impl Tab {
         self.applied_gone(datarig_i18n::Label::EditAppliedGone);
         self.exec.ending = None;
         self.exec.autocommit_off = false;
+        self.exec.isolation = None;
+        self.exec.safety_rev += 1;
         self.exec.outside_offer = None;
     }
 
@@ -1054,6 +1068,8 @@ pub struct ClosedTab {
     pub trashed: Option<String>,
     /// A table tab's table.
     pub table: Option<TableRef>,
+    /// A table tab's query as its line held it applied (it comes back there, not run).
+    pub query: Option<datarig_core::query::Query>,
     /// A DDL tab's object.
     pub ddl: Option<datarig_core::driver::ddl::DdlObject>,
     /// A Monitor tab's interval.
@@ -1201,6 +1217,7 @@ impl TabManager {
             index,
             trashed: None,
             table: tab.doc.table.clone(),
+            query: tab.doc.table_query.as_ref().map(|q| q.applied().clone()),
             ddl: tab.doc.ddl.as_ref().map(|d| d.object.clone()),
             monitor: tab.doc.monitor.as_ref().map(|m| m.interval),
             pane: tab.pane,
@@ -1296,6 +1313,7 @@ impl TabManager {
             t.doc.script = c.script;
             t.doc.kept_profile = c.kept_profile;
             t.doc.table = c.table;
+            t.doc.table_query = c.query.map(|q| Box::new(super::table_query::TableQuery::restored(q)));
             t.pane = c.pane;
             t.context = c.context;
             // Not read again by itself: `r` reads it.

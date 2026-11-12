@@ -91,6 +91,7 @@
 "workspace.consoles_missing" = "저장된 탭 {count}개의 콘솔 파일이 없어 빈 상태로 시작합니다"
 "workspace.consoles_folder_unreadable" = "콘솔 폴더 {path}을(를) 읽을 수 없어({error}) 목록에 없는 콘솔을 찾지 못했습니다"
 "workspace.duplicate_tabs" = "저장된 탭 {count}개는 앞선 탭과 같은 콘솔을 가리켜서 열지 않았습니다"
+"workspace.queries_unread" = "테이블 탭 {count}개의 필터, 정렬 또는 행 제한을 읽지 못했습니다. 탭에는 넣지 않고 파일에는 그대로 둡니다"
 "recover.title" = "닫은 콘솔"
 "recover.empty" = "휴지통에 닫은 콘솔이 없습니다"
 "recover.unreadable" = "읽을 수 없음 ({error})"

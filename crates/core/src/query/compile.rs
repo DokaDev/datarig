@@ -51,17 +51,29 @@ fn build(q: &Query, t: &Target, capped: bool) -> Compiled {
         sql.push_str(&keys.join(", "));
     }
     if capped {
-        match (q.limit, q.offset, d) {
-            (Some(n), Some(m), _) => sql.push_str(&format!(" LIMIT {n} OFFSET {m}")),
-            (Some(n), None, _) => sql.push_str(&format!(" LIMIT {n}")),
-            (None, Some(m), Dialect::Postgres) => sql.push_str(&format!(" OFFSET {m}")),
-            // MySQL has no `OFFSET` without a `LIMIT`: the largest one stands for none.
-            (None, Some(m), Dialect::MySql(_)) => sql.push_str(&format!(" LIMIT {} OFFSET {m}", u64::MAX)),
-            (None, None, _) => {}
-        }
+        sql.push_str(&cap_clause(q, d));
     }
     let total = !order.is_empty() && total(&order, t);
     Compiled { sql, filter_span, order, total }
+}
+
+/// `sql`, a statement [`compile`] wrote for `q` (as it was sent, whatever the table's keys are
+/// now), with `q`'s `LIMIT` and `OFFSET` written after it as [`compile_capped`] writes them:
+/// the same rows in the same order, only capped.
+pub fn capped(sql: &str, q: &Query, d: Dialect) -> String {
+    format!("{sql}{}", cap_clause(q, d))
+}
+
+/// `q`'s `LIMIT` and `OFFSET` as SQL (with a leading space), empty when it sets neither.
+fn cap_clause(q: &Query, d: Dialect) -> String {
+    match (q.limit, q.offset, d) {
+        (Some(n), Some(m), _) => format!(" LIMIT {n} OFFSET {m}"),
+        (Some(n), None, _) => format!(" LIMIT {n}"),
+        (None, Some(m), Dialect::Postgres) => format!(" OFFSET {m}"),
+        // MySQL has no `OFFSET` without a `LIMIT`: the largest one stands for none.
+        (None, Some(m), Dialect::MySql(_)) => format!(" LIMIT {} OFFSET {m}", u64::MAX),
+        (None, None, _) => String::new(),
+    }
 }
 
 /// The user's keys of `order`, then (with [`Target::tie_break`]) the columns of the primary key

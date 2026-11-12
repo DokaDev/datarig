@@ -191,6 +191,7 @@ async fn the_server_sees_the_session_encrypted_and_the_test_says_how() {
     let cfg = profile(&url, "verify-full", &certs, [Some("ca.crt"), None, None]);
     let (session, mut rx) = start(&cfg, SessionRole::Query, None);
     session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec!["SELECT ssl::text || ' ' || version FROM pg_stat_ssl WHERE pid = pg_backend_pid()".into()],
         paging: PagingMode::Hold,
@@ -301,6 +302,7 @@ async fn through_a_tunnel_the_profiles_host_is_checked_and_the_cancel_is_encrypt
     tunnel.streams.lock().unwrap().clear();
     let (session, mut rx) = start(&cfg, SessionRole::Query, dialer);
     session.send(DbCommand::Execute {
+        max_rows: None,
         id: 1,
         statements: vec!["SELECT pg_sleep(30)".into()],
         paging: PagingMode::Hold,
