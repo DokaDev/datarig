@@ -780,6 +780,10 @@ fn the_lexical_check_refuses_with_the_place() {
     assert_eq!(lexical(MY, "id = 1 /*! OR 1=1 */"), Some((LexProblem::ExecutableComment, "/*!".into())));
     assert_eq!(lexical(MY, "id = 1 /*M! OR 1=1 */"), Some((LexProblem::ExecutableComment, "/*M! OR 1=1 */".into())));
     assert_eq!(lexical(MY, "id = 1 \\g"), Some((LexProblem::Semicolon, "\\g".into())));
+    // A block comment left open runs past the text: refused, never read beyond its end.
+    assert_eq!(lexical(MY, "id = 1 /*"), Some((LexProblem::Comment, "/*".into())));
+    assert_eq!(lexical(MY, "id = 1 /*M"), Some((LexProblem::Comment, "/*M".into())));
+    assert_eq!(lexical(Dialect::Postgres, "id = 1 /*"), Some((LexProblem::Comment, "/*".into())));
     assert_eq!(lexical(MY, "name = `abc"), Some((LexProblem::Unterminated, "`abc".into())));
     assert_eq!(lexical(Dialect::Postgres, "name = $$abc"), Some((LexProblem::Unterminated, "$$abc".into())));
     // MySQL under NO_BACKSLASH_ESCAPES the string ends at the backslash and a comment follows.

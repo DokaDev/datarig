@@ -536,7 +536,7 @@ fn problems(tokens: &[Token], text: &str, d: Dialect) -> Result<(), (LexProblem,
         let problem = match t.kind {
             Tok::Semi => LexProblem::Semicolon,
             Tok::LineComment => LexProblem::Comment,
-            Tok::BlockComment if matches!(d, Dialect::MySql(_)) && t.text(text).starts_with("/*M!") => {
+            Tok::BlockComment if matches!(d, Dialect::MySql(_)) && text[at.clone()].starts_with("/*M!") => {
                 LexProblem::ExecutableComment
             }
             Tok::BlockComment => LexProblem::Comment,
