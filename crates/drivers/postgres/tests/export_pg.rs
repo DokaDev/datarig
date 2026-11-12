@@ -7,6 +7,8 @@
 
 #[allow(dead_code)]
 mod pg_clean;
+#[allow(dead_code)]
+mod pg_proxy;
 
 use datarig_core::driver::{
     Cell, ColumnMeta, ConnectOptions, DbCommand, DbError, DbEvent, Driver, ExportBatch, ExportGuard, ExportRead,
@@ -336,6 +338,105 @@ async fn a_read_only_session_exports_and_runs_no_write() {
     let (result, _) = w2.exported(id).await;
     assert!(matches!(&result, Err(DbError::Server(m)) if m.contains("read-only")), "{result:?}");
     assert_eq!(w.rows(&format!("SELECT count(*) FROM {t}")).await, [[Some("2".into())]]);
+}
+
+/// An export's transaction of its own sets its isolation level, whatever the session's default
+/// (each guard, a keyset chunk's among them): under a `SERIALIZABLE` default, while another
+/// session's serializable transaction that wrote is open, it takes no predicate lock
+/// (`SIReadLock`, kept past its end while that one is open). Inside the user's block it reads
+/// there, at the block's level, whose predicate locks it takes.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_export_takes_no_predicate_lock_under_a_serializable_default() {
+    let Some(url) = pg_url("an_export_takes_no_predicate_lock_under_a_serializable_default") else { return };
+    let (t, w) = (table("siread"), table("sireadw"));
+    let _g = Guard(url.clone(), format!("DROP TABLE IF EXISTS {t}, {w}"));
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {t} (id int PRIMARY KEY)")).unwrap();
+    pg_clean::run_fresh(&url, &format!("INSERT INTO {t} SELECT generate_series(1, 100)")).unwrap();
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {w} (id int)")).unwrap();
+    let mut b = Conn::open(&url, SessionRole::Query, false).await;
+    let mut writer = Conn::open(&url, SessionRole::Query, false).await;
+    writer.ok("BEGIN ISOLATION LEVEL SERIALIZABLE").await;
+    writer.ok(&format!("INSERT INTO {w} VALUES (1)")).await;
+    let sep = if url.contains('?') { '&' } else { '?' };
+    let serial = format!("{url}{sep}options=-c%20default_transaction_isolation%3Dserializable");
+    let level = "SELECT current_setting('transaction_isolation')";
+    let sql = format!("SELECT * FROM {t} WHERE id > 10");
+    for read_only in [false, true] {
+        let mut c = Conn::open(&serial, SessionRole::Query, read_only).await;
+        assert_eq!(c.rows(level).await, [[Some("serializable".into())]]);
+        let backend = c.rows("SELECT pg_backend_pid()::text").await[0][0].clone().unwrap();
+        let locks = format!("SELECT count(*)::text FROM pg_locks WHERE pid = {backend} AND mode = 'SIReadLock'");
+        for guard in [ExportGuard::Repeatable, ExportGuard::Confirmed, ExportGuard::Keyset] {
+            let (id, mut rx) = c.export(&sql, guard, 2, 1_000);
+            assert_eq!(drain(&mut rx).await.1.len(), 90);
+            assert_eq!(c.exported(id).await.0.unwrap().rows, 90);
+            assert_eq!(b.rows(&locks).await, [[Some("0".into())]], "read-only {read_only}, {guard:?}");
+        }
+        // In the user's block the export is the block's: its level, its predicate locks.
+        c.ok("BEGIN").await;
+        let (id, mut rx) = c.export(&sql, ExportGuard::Repeatable, 2, 1_000);
+        assert_eq!(drain(&mut rx).await.1.len(), 90);
+        assert_eq!(c.exported(id).await.0.unwrap().rows, 90);
+        assert_eq!(c.rows(level).await, [[Some("serializable".into())]]);
+        assert_ne!(b.rows(&locks).await, [[Some("0".into())]], "read-only {read_only}: in the block");
+        c.ok("ROLLBACK").await;
+    }
+    writer.ok("ROLLBACK").await;
+}
+
+/// Under `SERIALIZABLE DEFERRABLE` by default on a read-only session, a transaction at the
+/// default level waits for a safe snapshot while another session's serializable transaction
+/// that wrote is open. An export, its allowlist question included, sets its own level, so it
+/// streams at once all the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_export_does_not_wait_for_a_safe_snapshot() {
+    let Some(url) = pg_url("an_export_does_not_wait_for_a_safe_snapshot") else { return };
+    let (t, w) = (table("defer"), table("deferw"));
+    let _g = Guard(url.clone(), format!("DROP TABLE IF EXISTS {t}, {w}"));
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {t} (id int PRIMARY KEY)")).unwrap();
+    pg_clean::run_fresh(&url, &format!("INSERT INTO {t} SELECT generate_series(1, 100)")).unwrap();
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {w} (id int)")).unwrap();
+    let sep = if url.contains('?') { '&' } else { '?' };
+    let serial = format!(
+        "{url}{sep}options=-c%20default_transaction_isolation%3Dserializable%20-c%20default_transaction_deferrable%3Don"
+    );
+    let mut c = Conn::open(&serial, SessionRole::Query, true).await;
+    let mut writer = Conn::open(&url, SessionRole::Query, false).await;
+    writer.ok("BEGIN ISOLATION LEVEL SERIALIZABLE").await;
+    writer.ok(&format!("INSERT INTO {w} VALUES (1)")).await;
+    let (id, mut rx) = c.export(&format!("SELECT * FROM {t}"), ExportGuard::Repeatable, 2, 1_000);
+    let answer = tokio::time::timeout(Duration::from_secs(5), async {
+        let rows = drain(&mut rx).await.1.len();
+        (rows, c.exported(id).await.0)
+    })
+    .await;
+    writer.ok("ROLLBACK").await;
+    let (rows, read) = answer.expect("streamed at once");
+    assert_eq!(rows, 100);
+    assert_eq!(read.unwrap().rows, 100);
+}
+
+/// An export that fails leaves its own transaction open (and aborted): it is rolled back for
+/// sure, whether the statement failed to parse or while its rows streamed. A rollback that fails
+/// once (as one a late cancel stops) is sent again, and the session runs on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_export_ends_its_transaction() {
+    let Some(url) = pg_url("a_failed_export_ends_its_transaction") else { return };
+    let t = table("clean");
+    let _g = Guard(url.clone(), format!("DROP TABLE IF EXISTS {t}"));
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {t} (id int PRIMARY KEY)")).unwrap();
+    pg_clean::run_fresh(&url, &format!("INSERT INTO {t} SELECT generate_series(1, 100)")).unwrap();
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut c = Conn::open(&proxy.url(&url), SessionRole::Query, false).await;
+    for sql in [format!("SELECT nothing_here FROM {t}"), format!("SELECT 1 / (id - 50) FROM {t} ORDER BY id")] {
+        proxy.fault("ROLLBACK", pg_proxy::Fault::Instead("SELECT 1/0".into()));
+        let (id, mut rx) = c.export(&sql, ExportGuard::Confirmed, 2, 10);
+        drain(&mut rx).await;
+        let (result, _) = c.exported(id).await;
+        assert!(matches!(result, Err(DbError::Server(_))), "{sql}: {result:?}");
+        assert!(!proxy.fault_pending(), "{sql}: the rollback was sent");
+        assert_eq!(c.rows("SELECT 1").await, [[Some("1".into())]], "{sql}: no aborted transaction is left");
+    }
 }
 
 /// Behind a pooler in transaction mode (`DATARIG_TEST_POOLER_URL`): the export's statement, its

@@ -98,8 +98,9 @@ pub enum NotRepeatable {
     /// The server says a column of a relation it reads has a type planning is not known to
     /// handle with the server's own code alone ([`PLANNER_TYPES`]): the type.
     PlannerType(String),
-    /// The session could not tell whether a transaction is open, so a count cannot be given the
-    /// time limit it asks for.
+    /// The session could not tell whether a transaction is open, so a read of the app's own (a
+    /// count, an export) can neither be given a transaction of its own (its `COMMIT` could end
+    /// the user's) nor the time limit it asks for.
     TxUnknown,
     /// The parser rejects it, or it is too long or too deep to read.
     Unreadable,

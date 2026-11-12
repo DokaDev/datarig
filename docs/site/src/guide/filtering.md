@@ -581,7 +581,7 @@ Neither is ever longer than one your session already has (PostgreSQL's `statemen
 On PostgreSQL the limit is set only while no transaction is open on the tab's session: inside your
 own transaction, or while a result's cursor is held open, the count keeps to that transaction's
 settings and has no limit (the status line says so); when the session cannot tell whether a
-transaction is open, a count with a limit is refused. On MySQL the limit is part of the count
+transaction is open, a count is refused (with a limit or without). On MySQL the limit is part of the count
 statement itself (also inside a transaction).
 
 The outcomes are kept apart, and none of them ever reads as 0 rows:

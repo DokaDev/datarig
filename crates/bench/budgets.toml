@@ -37,7 +37,7 @@ next_page = { to_result = 1, total = 1 }
 count_while_paging = { to_result = 2, total = 2 }
 count_idle = { to_result = 2, total = 2 }
 # The planner's estimate the user asks for (no portal open): the allowlist's question, then the
-# BEGIN READ ONLY with its time limits, the EXPLAIN and the COMMIT sent together.
+# read-only BEGIN at READ COMMITTED with its time limits, the EXPLAIN and the COMMIT sent together.
 estimate_idle = { to_result = 2, total = 2 }
 resume_warm = { to_result = 2, total = 2 }
 resume_in_block = { to_result = 3, total = 3 }
@@ -53,8 +53,9 @@ ro_select_small_warm = { to_result = 1, total = 1 }
 ro_select_page_of_4m_warm = { to_result = 1, total = 1 }
 ro_set = { to_result = 1, total = 1 }
 ro_first_in_block = { to_result = 2, total = 3 }
-# A chunk of an export of a table read by its key: its own read-only transaction opened with the
-# statement's Parse (one round trip), the rows of the chunk with its Bind (one), its COMMIT (one).
+# A chunk of an export of a table read by its key: its own read-only transaction at READ COMMITTED
+# opened with the statement's Parse (one round trip), the rows of the chunk with its Bind (one),
+# its COMMIT (one).
 export_keyset_chunk = { to_result = 3, total = 3 }
 # Opening a table in the explorer: its whole structure (columns, keys, indexes, constraints,
 # triggers, size estimate) is one catalog statement on the metadata session.
