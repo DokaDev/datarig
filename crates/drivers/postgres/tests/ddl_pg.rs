@@ -449,6 +449,72 @@ async fn every_part_of_a_ddl_round_trips() {
     }
 }
 
+/// A column's storage, compression, statistics target and options, set on each relation kind
+/// that takes them, are in its DDL and only there: a view's columns take none (the server
+/// refuses each statement), a foreign table's no compression, and the options the server keeps
+/// of its own (PostgreSQL 17.12 `pg_attver`, on views' columns too) are never written out. Each
+/// DDL runs as written and reads back the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn column_settings_only_where_the_relation_kind_takes_them() {
+    let Some(url) = pg_url("column_settings_only_where_the_relation_kind_takes_them") else { return };
+    let pid = std::process::id();
+    let (s, fdw) = (format!("zz_ddl_cols_{pid}"), format!("zz_ddl_cols_fdw_{pid}"));
+    let _fdw = cleanup(&url, format!("DROP FOREIGN DATA WRAPPER IF EXISTS {fdw} CASCADE"));
+    let _schema = cleanup(&url, format!("DROP SCHEMA IF EXISTS {s} CASCADE"));
+    let tag = format!("zzddlcols{pid}");
+    let mut q = Conn::open(&url, SessionRole::Query, &tag).await;
+    let v = major(&mut q).await;
+    let mut fixture = vec![
+        format!("CREATE FOREIGN DATA WRAPPER {fdw}"),
+        format!("CREATE SERVER {fdw} FOREIGN DATA WRAPPER {fdw}"),
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE TABLE {s}.t (a int, b text)"),
+        format!("CREATE TABLE {s}.pt (a int, b text) PARTITION BY RANGE (a)"),
+        format!("CREATE FOREIGN TABLE {s}.f (a int, b text) SERVER {fdw}"),
+        format!("CREATE MATERIALIZED VIEW {s}.m AS SELECT 1 AS a, 'x'::text AS b WITH NO DATA"),
+        format!("CREATE VIEW {s}.v AS SELECT t.a, t.b FROM {s}.t"),
+    ];
+    let mut want = Vec::new();
+    for (name, compression) in [("t", true), ("pt", true), ("f", false), ("m", true)] {
+        fixture.push(format!("ALTER TABLE {s}.{name} ALTER COLUMN a SET STATISTICS 50"));
+        fixture.push(format!("ALTER TABLE {s}.{name} ALTER COLUMN a SET (n_distinct = -1)"));
+        fixture.push(format!("ALTER TABLE {s}.{name} ALTER COLUMN b SET STORAGE MAIN"));
+        let mut lines = vec![
+            format!("ALTER TABLE ONLY {s}.{name} ALTER COLUMN a SET STATISTICS 50;"),
+            format!("ALTER TABLE ONLY {s}.{name} ALTER COLUMN a SET (n_distinct=-1);"),
+            format!("ALTER TABLE ONLY {s}.{name} ALTER COLUMN b SET STORAGE MAIN;"),
+        ];
+        if compression && v >= 14 {
+            fixture.push(format!("ALTER TABLE {s}.{name} ALTER COLUMN b SET COMPRESSION pglz"));
+            lines.push(format!("ALTER TABLE ONLY {s}.{name} ALTER COLUMN b SET COMPRESSION pglz;"));
+        }
+        want.push((name, lines));
+    }
+    want.push(("v", Vec::new()));
+    q.run(fixture).await.unwrap();
+
+    let mut meta = Conn::open(&url, SessionRole::Meta, &tag).await;
+    let mut before = Vec::new();
+    for (name, lines) in &want {
+        let text = meta.text(relation(&s, name)).await;
+        assert!(!text.contains("pg_attver"), "{text}");
+        let mut got: Vec<String> = text.lines().filter(|l| l.contains(" ALTER COLUMN ")).map(str::to_string).collect();
+        let mut lines = lines.clone();
+        got.sort();
+        lines.sort();
+        assert_eq!(got, lines, "{name}:\n{text}");
+        before.push((name, text));
+    }
+
+    q.run(vec![format!("DROP SCHEMA {s} CASCADE"), format!("CREATE SCHEMA {s}")]).await.unwrap();
+    for (name, text) in &before {
+        q.run(statements(text)).await.unwrap_or_else(|e| panic!("{name}: {e}\n{text}"));
+    }
+    for (name, text) in &before {
+        assert_eq!(&meta.text(relation(&s, name)).await, text, "{name}");
+    }
+}
+
 /// Every kind of object, its own way: an index (and the constraint an index backs), a
 /// trigger, a trigger's function, a name typed by the user in the tab's schema (a relation, a
 /// function), and what is not there.

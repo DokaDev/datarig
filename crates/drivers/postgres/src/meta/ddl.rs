@@ -640,6 +640,13 @@ fn grants(raw: Option<Vec<RawGrant>>) -> Vec<Grant> {
         .collect()
 }
 
+/// The column options a user set (`n_distinct=100`). The server keeps options of its own there
+/// too (PostgreSQL 17.12 `pg_attver=…` on every column, views' included), which no statement
+/// sets: their names start with `pg_`.
+fn user_options(options: Vec<String>) -> Vec<String> {
+    options.into_iter().filter(|o| !o.starts_with("pg_")).collect()
+}
+
 /// `pg_trigger.tgenabled`.
 fn trigger_mode(code: &str) -> TriggerMode {
     match code {
@@ -758,7 +765,7 @@ fn relation(structure: datarig_core::driver::structure::TableStructure, d: RawRe
             compression: c.compression.as_deref().and_then(compression),
             // `-1` before PostgreSQL 17, `NULL` since: the default.
             statistics: c.statistics.filter(|n| *n >= 0),
-            options: c.options.unwrap_or_default(),
+            options: user_options(c.options.unwrap_or_default()),
             identity: c.identity.map(SequenceDdl::from),
             comment: c.comment,
             grants: grants(c.grants),

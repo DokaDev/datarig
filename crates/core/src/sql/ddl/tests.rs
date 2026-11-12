@@ -664,3 +664,32 @@ fn the_servers_own_text_is_shown_as_it_is() {
     assert_eq!(ddl_text(&ddl), text, "no header, nothing added");
     assert_eq!(ddl.label(), "shop.orders");
 }
+
+/// Each relation kind gets only the column settings the server takes for it: a view none, a
+/// foreign table no compression.
+#[test]
+fn column_settings_only_where_the_relation_kind_takes_them() {
+    let settings = |kind: RelationKind| {
+        let mut s = TableStructure::new(kind);
+        s.columns = vec![col("note", "text", false, None)];
+        let mut r = RelationDdl::new("s", "x", "o", s);
+        r.view_definition = Some(" SELECT 'a'::text AS note;".into());
+        r.columns[0].storage = Some("MAIN".into());
+        r.columns[0].compression = Some("pglz".into());
+        r.columns[0].statistics = Some(50);
+        r.columns[0].options = vec!["n_distinct=-1".into()];
+        let text = ddl_text(&DdlSource::Relation(Box::new(r)));
+        text.lines().filter(|l| l.contains(" ALTER COLUMN ")).map(str::to_string).collect::<Vec<_>>()
+    };
+    let all = [
+        "ALTER TABLE ONLY s.x ALTER COLUMN note SET STORAGE MAIN;",
+        "ALTER TABLE ONLY s.x ALTER COLUMN note SET COMPRESSION pglz;",
+        "ALTER TABLE ONLY s.x ALTER COLUMN note SET STATISTICS 50;",
+        "ALTER TABLE ONLY s.x ALTER COLUMN note SET (n_distinct=-1);",
+    ];
+    for kind in [RelationKind::Table, RelationKind::PartitionedTable, RelationKind::MaterializedView] {
+        assert_eq!(settings(kind), all, "{kind:?}");
+    }
+    assert_eq!(settings(RelationKind::ForeignTable), [all[0], all[2], all[3]]);
+    assert_eq!(settings(RelationKind::View), Vec::<String>::new());
+}
