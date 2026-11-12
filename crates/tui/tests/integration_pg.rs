@@ -2717,6 +2717,11 @@ async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() 
     let (mut app, mut rx) = table_tab_app(&url, "public", &table, &dir);
     app.dispatch(Action::RunStatement);
     pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5).await;
+    // "starts with" is offered once the key-only read says whether the column's collation is
+    // deterministic (until then it is dimmed as not known): that read goes on the metadata
+    // session, beside the runs, and is waited for, however slow it is next to them.
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a, 0) && held_rows(a).0 == 5 && keys_known(a)).await;
     type Case<'a> = (&'a [&'a str], B, &'a [&'a str], &'a str);
     let cases: &[Case] = &[
         (&["1"], B::Eq, &["1"], r"name = E'a\nb'"),
