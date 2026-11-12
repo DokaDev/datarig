@@ -320,6 +320,27 @@ fn the_operator_picker_open_keeps_the_dialogs_keys_from_the_dialog_under_it() {
     assert_eq!(h.app.filter_dialog_draft().unwrap().0, "");
 }
 
+/// `Space r x`, `:filter clear`, `:where` and `:orderby` on a busy tab are refused before
+/// anything changes: the query its next run sends is the one it had.
+#[test]
+fn a_clear_on_a_busy_tab_changes_nothing() {
+    let mut h = users();
+    h.command("where id > 1");
+    assert_eq!(runs(&mut h).len(), 1);
+    // The run waits for its rows: the tab is busy.
+    for clear in [" rx", ":filter clear", ":where id > 5", ":orderby name"] {
+        match clear.strip_prefix(':') {
+            Some(c) => h.command(c),
+            None => h.keys(clear),
+        }
+        assert!(runs(&mut h).is_empty(), "{clear}: nothing is sent");
+        assert!(h.screen(120, 34).contains("already running"), "{clear}: {}", h.screen(120, 34));
+    }
+    answer(&mut h);
+    h.keys("f");
+    assert_eq!(h.app.filter_dialog_draft().unwrap(), ("id > 1".to_string(), String::new()), "the draft is as it was");
+}
+
 #[test]
 fn pending_edits_are_asked_about_above_the_dialog_and_a_no_keeps_it() {
     let mut h = users();

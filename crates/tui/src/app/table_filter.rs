@@ -47,6 +47,10 @@ impl App {
             TableAction::EditFilter => self.open_filter_dialog(false),
             TableAction::EditOrder => self.open_filter_dialog(true),
             TableAction::Clear => {
+                // Refused before the draft changes: a busy tab keeps what it would run next.
+                if self.tab_busy(id) {
+                    return self.flash_busy();
+                }
                 let Some(name) = self.table_name(id) else { return };
                 let Some(tq) = self.table_query_mut(id) else { return };
                 tq.draft = Query::table(name);
