@@ -117,6 +117,13 @@ With cells of one column selected (up to 1000), it offers `IN` and `NOT IN` of t
 equality on a floating-point column may find nothing, and how text compares follows the column's
 collation on the server: the menu says so next to those entries.
 
+A MySQL `TIMESTAMP` is shown in the session's time zone. On MySQL 8.0.19 and later its value is
+written with the offset of the zone it was read in (`'2026-11-10 09:30:00+00:00'`), the same
+instant in a session of another zone, as when the filter runs again from the history. MariaDB and
+older MySQL read no offset in a literal: there the value is written as shown, which is the instant
+only in a session of the zone it was read in, and each entry says "as read in this session's
+time zone". A value read before the session's zone changed is not taken.
+
 The condition is added to the filter of the rows shown with `AND`; a filter whose top level is
 not a plain chain of `AND`s (an `OR`, for one) is put in parentheses first. The new text goes
 into the filter line and runs as `Enter` runs it there, with the same checks and questions,
@@ -164,7 +171,7 @@ grid repeats it in full while it stands. Nothing reaches the server.
 | A backslash in a string the server may read another way | What would run depends on a server setting. |
 | A row lock (`FOR UPDATE`, `FOR SHARE`), also in a subquery | It would hold up other sessions. |
 | Another clause of the statement outside the condition's own parentheses (`ORDER BY`, `LIMIT`, `GROUP BY`, `HAVING`, `WINDOW`, `UNION` and the like; a subquery may have its own), `INTO` anywhere, MySQL's `:=` | Only a condition is taken; what the statement reads stays this table's rows. |
-| Built-ins that wait, lock, change the session or a sequence, read the server's files or reach another server (`pg_sleep`, `pg_advisory_lock`, `set_config`, `nextval`, `dblink`, MySQL's `SLEEP`, `GET_LOCK`, `LOAD_FILE`) | A filter runs for every row and must not disturb anything. |
+| Built-ins that wait, lock, change the session or a sequence, read the server's files or reach another server (`pg_sleep`, `pg_advisory_lock`, `set_config`, `nextval`, `dblink`, MySQL's `SLEEP`, `GET_LOCK`, `LOAD_FILE`), also in attribute notation (`(id::oid).lo_get`); MariaDB's `NEXT VALUE FOR s` and `s.nextval` | A filter runs for every row and must not disturb anything. |
 | MySQL's `ROW_COUNT()` and `FOUND_ROWS()` | They read the outcome of the statement before, which for a table tab is one the app sends. |
 
 An order is refused unless it is the table's columns, each once; a limit, as
@@ -184,7 +191,8 @@ what a read-only transaction does not stop.
 The checks run again on every statement built from a condition: a page read again, a count, an
 estimate, an export, a condition from the history and one brought back with a tab. As for the
 editor, some things are not seen: a function of yours called in attribute notation (`t.f`), an
-operator of your own, and code a view or a policy runs.
+operator of your own, and code a view or a policy runs. MariaDB's reads of a sequence's last
+value (`LASTVAL(s)`, `PREVIOUS VALUE FOR s`, `s.currval`) ask as such a call does.
 
 ### Reads that lock rows on MySQL
 
