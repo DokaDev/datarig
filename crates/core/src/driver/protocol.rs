@@ -638,8 +638,9 @@ pub enum DbCommand {
     /// [`DbEvent::GroupCounted`]. It runs, and is bounded by `limit`, exactly as a
     /// [`DbCommand::Count`] is (PostgreSQL in a read-only transaction of its own outside a
     /// transaction block and a portal, else under a savepoint without a limit; MySQL with the
-    /// statement's own hints), and is refused where reading would take row locks (MySQL: a
-    /// transaction open or autocommit off at `SERIALIZABLE` or an isolation not known,
+    /// statement's own hints; with autocommit off and no transaction open, in a read-only
+    /// transaction of its own at `REPEATABLE READ`), and is refused where reading would take
+    /// row locks (MySQL: a transaction open at `SERIALIZABLE` or an isolation not known,
     /// [`DbError::LockingRead`]) or use up the next transaction's settings
     /// ([`DbError::NextTransactionSet`]). Values are decoded as the session decodes a result's
     /// cells. A cancel stops it.
