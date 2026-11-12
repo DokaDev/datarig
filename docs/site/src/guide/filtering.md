@@ -117,12 +117,16 @@ With cells of one column selected (up to 1000), it offers `IN` and `NOT IN` of t
 equality on a floating-point column may find nothing, and how text compares follows the column's
 collation on the server: the menu says so next to those entries.
 
-A MySQL `TIMESTAMP` is shown in the session's time zone. On MySQL 8.0.19 and later its value is
-written with the offset of the zone it was read in (`'2026-11-10 09:30:00+00:00'`), the same
-instant in a session of another zone, as when the filter runs again from the history. MariaDB and
-older MySQL read no offset in a literal: there the value is written as shown, which is the instant
-only in a session of the zone it was read in, and each entry says "as read in this session's
-time zone". A value read before the session's zone changed is not taken.
+A MySQL `TIMESTAMP` is shown in the session's time zone. Its value is written as the instant it
+was read as, in the session's zone when the filter runs:
+`CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)`. That is the same instant on
+every MySQL and MariaDB, after the session's zone changes and when the filter runs again from the
+history. A value read before the session's zone changed is not taken.
+
+On MySQL a number compared with a number column is written as its exact decimal, an exponent
+written out (`9007199254740993e0` as `9007199254740993`): MySQL compares a number with an exponent,
+or one in quotes, as a double. A number with no exact decimal within a `DECIMAL` (65 digits, 30
+after the point) is not written.
 
 The condition is added to the filter of the rows shown with `AND`; a filter whose top level is
 not a plain chain of `AND`s (an `OR`, for one) is put in parentheses first. The new text goes
