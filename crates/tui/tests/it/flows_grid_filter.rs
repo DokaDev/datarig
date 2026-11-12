@@ -523,8 +523,8 @@ fn the_column_menu_entries_run_what_they_show() {
         lines(&h),
         [
             "# name",
-            "↑ Sort ascending | s",
-            "↓ Sort descending | ",
+            "↑ Sort ascending, NULLs last | s",
+            "↓ Sort descending, NULLs first | ",
             "Clear sort | not sorted",
             "# ",
             "Filter and sort… | f",
@@ -536,7 +536,10 @@ fn the_column_menu_entries_run_what_they_show() {
         ]
     );
     h.key(KeyCode::Esc);
-    assert_eq!(menu(&mut h, 0, 1, "↓ Sort descending"), vec![vec![format!(r#"{ALL} ORDER BY "name" DESC"#)]]);
+    assert_eq!(
+        menu(&mut h, 0, 1, "↓ Sort descending, NULLs first"),
+        vec![vec![format!(r#"{ALL} ORDER BY "name" DESC"#)]]
+    );
     page(&mut h);
     at(&mut h, 0, 0);
     h.keys("S");
@@ -548,8 +551,8 @@ fn the_column_menu_entries_run_what_they_show() {
     // Sorted so already: dimmed, with why.
     at(&mut h, 0, 0);
     h.keys("F");
-    assert!(h.app.menu_dimmed_rows().iter().any(|(l, w)| *l == "↑ Sort ascending" && w == "sorted so"));
-    let why = h.app.menu_dimmed_notice("↑ Sort ascending").expect("dimmed").render(&h.app.i18n).to_string();
+    assert!(h.app.menu_dimmed_rows().iter().any(|(l, w)| *l == "↑ Sort ascending, NULLs last" && w == "sorted so"));
+    let why = h.app.menu_dimmed_notice("↑ Sort ascending, NULLs last").expect("dimmed").render(&h.app.i18n).to_string();
     assert!(why.contains("sorted by this column alone already"), "{why}");
     h.key(KeyCode::Esc);
     assert_eq!(
@@ -740,6 +743,13 @@ fn mysql_literals_follow_the_session() {
     clear_with(&mut h, cols(), rows());
     // A MySQL FLOAT is sent rounded: not taken.
     assert!(key_on(&mut h, 0, 3, "=").is_empty());
+    // The column menu's sorts say where this server puts NULLs: first going up.
+    at(&mut h, 0, 1);
+    h.keys("F");
+    let shown = lines(&h);
+    assert!(shown.contains(&"↑ Sort ascending, NULLs first | s".to_string()), "{shown:?}");
+    assert!(shown.contains(&"↓ Sort descending, NULLs last | ".to_string()), "{shown:?}");
+    h.key(KeyCode::Esc);
     assert!(flashed(&h).contains("column “w”"), "{}", flashed(&h));
     // Text read in another character set than utf8mb4: not taken.
     let mut h = mysql("latin1", cols(), rows());
@@ -892,7 +902,7 @@ fn the_column_menu_moves_by_keys_without_a_filter() {
     h.keys("F");
     let screen = h.screen(120, 34);
     assert!(!screen.contains("type to filter"), "{screen}");
-    // `↓ Sort descending`, then back up and down again: `Enter` runs it.
+    // `↓ Sort descending, NULLs first`, then back up and down again: `Enter` runs it.
     h.keys("jkj");
     h.key(KeyCode::Up);
     h.key(KeyCode::Down);
@@ -922,8 +932,8 @@ fn the_column_menu_shows_only_keys_it_runs() {
     at(&mut h, 0, 1);
     h.keys("F");
     let shown = keys_of(&h);
-    assert!(shown.contains(&"↑ Sort ascending | sorted so".to_string()), "{shown:?}");
-    assert!(shown.contains(&"↓ Sort descending | ".to_string()), "no key runs it: {shown:?}");
+    assert!(shown.contains(&"↑ Sort ascending, NULLs last | sorted so".to_string()), "{shown:?}");
+    assert!(shown.contains(&"↓ Sort descending, NULLs first | ".to_string()), "no key runs it: {shown:?}");
     h.keys("s");
     assert!(menu_open(&h), "the dimmed entry says why, the menu stays");
     assert!(runs(&mut h).is_empty());

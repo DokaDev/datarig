@@ -86,6 +86,7 @@ impl App {
             .unwrap_or_default();
         let alone = |dir: Dir| user.len() == 1 && user[0].col == column && user[0].dir == dir;
         let sorted = user.iter().any(|k| k.col == column);
+        let dialect = self.tab_dialect(id);
         for (c, glyph, l) in [
             (ColumnItem::SortAsc, "↑", Label::TableColumnSortAsc),
             (ColumnItem::SortDesc, "↓", Label::TableColumnSortDesc),
@@ -93,7 +94,16 @@ impl App {
         ] {
             let item = MenuItem::Column(c);
             items.push(item);
-            let name = if glyph.is_empty() { label(l).to_string() } else { format!("{glyph} {}", label(l)) };
+            // A sort says where this server puts NULLs in it.
+            let nulls = |dir: Dir| match OrderKey::user(column.clone(), dir).nulls_first(dialect) {
+                true => label(Label::TableDialogNullsFirst),
+                false => label(Label::TableDialogNullsLast),
+            };
+            let name = match c {
+                ColumnItem::SortAsc => format!("{glyph} {}, {}", label(l), nulls(Dir::Asc)),
+                ColumnItem::SortDesc => format!("{glyph} {}, {}", label(l), nulls(Dir::Desc)),
+                _ => label(l).to_string(),
+            };
             names.push((item, Localized::verbatim(name)));
             let why = match c {
                 ColumnItem::SortAsc if alone(Dir::Asc) => {
