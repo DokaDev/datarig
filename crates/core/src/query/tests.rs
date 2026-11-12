@@ -284,7 +284,7 @@ fn render_writes_mysql_number_text_as_a_number() {
             "id IN (9007199254740992, 9007199254740994)",
         ),
         (r#in(vec![text(wide), num("1")], true), "id NOT IN (9007199254740993, 1)"),
-        (between(text("1.5"), text("-2e3")), "id BETWEEN 1.5 AND -2e3"),
+        (between(text("1.5"), text("-2e3")), "id BETWEEN 1.5 AND -2000"),
         (cmp("price", CmpOp::Ge, text(wide)), "price >= 9007199254740993"),
         (cmp("id", CmpOp::Eq, text("-0")), "id = '-0'"),
         (cmp("name", CmpOp::Eq, text(wide)), "name = '9007199254740993'"),
@@ -294,6 +294,44 @@ fn render_writes_mysql_number_text_as_a_number() {
     }
     // PostgreSQL reads a string as the column's type, exactly: kept as written.
     assert_eq!(render_pg(&r#in(vec![text(wide)], false)), "id IN ('9007199254740993')");
+}
+
+/// MySQL reads a number with an exponent as a double, in quotes or bare: on a number column it
+/// is written as its exact decimal, and one with none within a DECIMAL is refused.
+#[test]
+fn render_writes_mysql_exponents_as_exact_decimals() {
+    let t = Target { utf8mb4: true, ..target(MY) };
+    let r#in = |values: Vec<Value>, negated| Cond::In { col: "id".into(), values, negated };
+    let between = |lo, hi, negated| Cond::Between { col: "id".into(), lo, hi, negated };
+    for (c, want) in [
+        (
+            r#in(vec![text("9007199254740992e0"), num("9007199254740994E+0")], false),
+            "id IN (9007199254740992, 9007199254740994)",
+        ),
+        (
+            r#in(vec![num("90071992547409.93e2"), text("9007199254740995")], true),
+            "id NOT IN (9007199254740993, 9007199254740995)",
+        ),
+        (
+            between(text("900719925474099e1"), num("90071992547409920e-1"), false),
+            "id BETWEEN 9007199254740990 AND 9007199254740992",
+        ),
+        (between(num("-15e-1"), text("1.25E1"), true), "id NOT BETWEEN -1.5 AND 12.5"),
+        (cmp("id", CmpOp::Eq, num("0e9999")), "id = 0"),
+        (cmp("id", CmpOp::Lt, text("1e-30")), "id < 0.000000000000000000000000000001"),
+        (cmp("id", CmpOp::Lt, num(".5e1")), "id < 5"),
+        (cmp("id", CmpOp::Eq, num("12")), "id = 12"),
+    ] {
+        assert_eq!(render(&c, &t).as_deref(), Ok(want), "{c:?}");
+    }
+    let not_exact = Err(RenderError::NotExact("id".into()));
+    for v in [num("1e300"), text("1e-31"), num("1e65"), text(&"9".repeat(66)), num("1e99999")] {
+        assert_eq!(render(&cmp("id", CmpOp::Eq, v.clone()), &t), not_exact, "{v:?}");
+        assert_eq!(render(&r#in(vec![num("1"), v.clone()], false), &t), not_exact, "{v:?}");
+    }
+    assert_eq!(render(&cmp("id", CmpOp::Eq, num(&"9".repeat(65))), &t), Ok(format!("id = {}", "9".repeat(65))));
+    // PostgreSQL reads a number with an exponent as numeric, exactly: kept as written.
+    assert_eq!(render_pg(&cmp("id", CmpOp::Eq, num("9007199254740993e0"))), "id = 9007199254740993e0");
 }
 
 #[test]

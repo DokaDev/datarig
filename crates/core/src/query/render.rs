@@ -2,7 +2,8 @@
 //!
 //! Literals are written for the column they are compared with: a number bare only for a number
 //! column and a valid number literal (else a string the server converts), and on MySQL valid
-//! number text too (the server compares a number with a string as two doubles); bytes as PostgreSQL's
+//! number text too (the server compares a number with a string as two doubles), an exponent
+//! written out as the exact decimal (MySQL reads a number with one as a double); bytes as PostgreSQL's
 //! `'\x…'::pg_catalog.bytea` (an escape string, see below; the type is named with its schema, so
 //! that a domain of that name earlier on the search path is not the one cast to) or MySQL's
 //! `X'…'`; text as a string literal. A PostgreSQL string with a backslash is an escape string (`E'…'`), which reads the same whatever
@@ -31,6 +32,10 @@ pub enum RenderError {
     /// MySQL text that is not a number compared with a number column, which the server reads
     /// as a number without a word (`'abc'` as 0, `'12abc'` as 12, `'true'` as 0): the column.
     NotNumber(String),
+    /// A MySQL number compared with a number column that has no exact decimal spelling within
+    /// MySQL's `DECIMAL` (65 digits, 30 after the point; `1e300`, `1e-40`): the server would
+    /// read it as a double, which other values of the column round to as well. The column.
+    NotExact(String),
     /// A comparison or a `BETWEEN` with NULL, which matches no row: the column.
     NullCompare(String),
     /// `IN` of no value: the column.
@@ -173,14 +178,24 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
         Value::Null => "NULL".to_string(),
         Value::Bool(true) => "TRUE".to_string(),
         Value::Bool(false) => "FALSE".to_string(),
+        // MySQL reads a number with an exponent as a double, and compares a number column with a
+        // string as two doubles: a number for a number column is written as its exact decimal
+        // (a number that has none is refused before, `RenderError::NotExact`).
+        Value::Number(n) | Value::Text(n)
+            if matches!(t.dialect, Dialect::MySql(_))
+                && c.is_some_and(|c| c.kind == ColumnKind::Number)
+                && sql_number(n)
+                && !negative_zero(n) =>
+        {
+            exact_decimal(n).unwrap_or_else(|| n.clone())
+        }
         Value::Number(n)
             if c.is_some_and(|c| bare_numbers(t.dialect, c.kind)) && sql_number(n) && !negative_zero(n) =>
         {
             n.clone()
         }
         Value::Number(n) => text_literal(t, n),
-        // MySQL compares a number column with a string as two doubles, which a list or a range
-        // of wide values does not meet exactly: valid number text is written as the number.
+        // A MySQL `FLOAT`: compared as a double whatever is written, the number as typed.
         Value::Text(s)
             if matches!(t.dialect, Dialect::MySql(_))
                 && c.is_some_and(|c| bare_numbers(t.dialect, c.kind))
@@ -197,6 +212,58 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
     }
 }
 
+/// The most digits of a MySQL `DECIMAL`, and of them the most after the point: an exact value
+/// literal within them is read as a `DECIMAL`.
+const DECIMAL_DIGITS: usize = 65;
+const DECIMAL_SCALE: usize = 30;
+
+/// Valid number text `s` ([`sql_number`]) as an exact MySQL decimal literal: as written when it
+/// has no exponent, else with its exponent written out (`9007199254740993e0` is
+/// `9007199254740993`, `15e-1` is `1.5`), never through a float. `None` when it needs more than
+/// [`DECIMAL_DIGITS`] digits or [`DECIMAL_SCALE`] after the point, where MySQL reads a double.
+pub(super) fn exact_decimal(s: &str) -> Option<String> {
+    let (sign, t) = match s.strip_prefix('-') {
+        Some(t) => ("-", t),
+        None => ("", s),
+    };
+    let (mantissa, exponent) = match t.split_once(['e', 'E']) {
+        Some((m, e)) => (m, Some(e)),
+        None => (t, None),
+    };
+    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = format!("{int}{frac}");
+    if digits.bytes().all(|b| b == b'0') {
+        return Some(if exponent.is_some() { "0".to_string() } else { s.to_string() });
+    }
+    let e: i64 = match exponent {
+        None => 0,
+        // Beyond this the value has far more digits than a DECIMAL either way.
+        Some(e) if e.trim_start_matches(['+', '-']).len() > 4 => return None,
+        Some(e) => e.strip_prefix('+').unwrap_or(e).parse().ok()?,
+    };
+    let point = int.len() as i64 + e;
+    let (whole, fraction) = if point <= 0 {
+        ("0".to_string(), format!("{}{digits}", "0".repeat(usize::try_from(-point).ok()?)))
+    } else if point as usize >= digits.len() {
+        (format!("{digits}{}", "0".repeat(point as usize - digits.len())), String::new())
+    } else {
+        (digits[..point as usize].to_string(), digits[point as usize..].to_string())
+    };
+    let whole = whole.trim_start_matches('0');
+    let fraction = fraction.trim_end_matches('0');
+    if whole.len() + fraction.len() > DECIMAL_DIGITS || fraction.len() > DECIMAL_SCALE {
+        return None;
+    }
+    if exponent.is_none() {
+        return Some(s.to_string());
+    }
+    let whole = if whole.is_empty() { "0" } else { whole };
+    Some(match fraction.is_empty() {
+        true => format!("{sign}{whole}"),
+        false => format!("{sign}{whole}.{fraction}"),
+    })
+}
+
 /// A number compared with a column of kind `kind` of dialect `d` is written bare: a number
 /// column, or a MySQL `FLOAT` (a PostgreSQL `real` takes it as a string, see [`ColumnKind::Real`]).
 pub(super) fn bare_numbers(d: Dialect, kind: ColumnKind) -> bool {
@@ -208,8 +275,9 @@ pub(super) fn bare_numbers(d: Dialect, kind: ColumnKind) -> bool {
 }
 
 /// Why the values of comparison `c` are not written for its column on `t`'s dialect: on MySQL
-/// a `FLOAT` compared for equality ([`RenderError::InexactEquality`]), or text that is not a
-/// number compared with a number column ([`RenderError::NotNumber`]). PostgreSQL refuses such
+/// a `FLOAT` compared for equality ([`RenderError::InexactEquality`]), text that is not a
+/// number compared with a number column ([`RenderError::NotNumber`]), or a number with no exact
+/// decimal spelling compared with one ([`RenderError::NotExact`]). PostgreSQL refuses such
 /// text itself (an error, never a silent conversion).
 fn refused_values(c: &Cond, t: &Target) -> Option<RenderError> {
     if t.dialect == Dialect::Postgres {
@@ -230,6 +298,14 @@ fn refused_values(c: &Cond, t: &Target) -> Option<RenderError> {
             if values.iter().any(|v| matches!(v, Value::Text(s) if !sql_number(s))) =>
         {
             Some(RenderError::NotNumber(name.to_string()))
+        }
+        ColumnKind::Number
+            if values.iter().any(|v| {
+                matches!(v, Value::Number(n) | Value::Text(n)
+                    if sql_number(n) && !negative_zero(n) && exact_decimal(n).is_none())
+            }) =>
+        {
+            Some(RenderError::NotExact(name.to_string()))
         }
         _ => None,
     }

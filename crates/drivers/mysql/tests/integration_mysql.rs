@@ -1050,6 +1050,18 @@ async fn generated_numbers_compare_exactly_with_a_wide_decimal() {
         (r#in(vec![text(lo), text(hi)], true), vec![mid]),
         (Cond::Between { col: "n".into(), lo: text("9007199254740990"), hi: text(lo), negated: false }, vec![lo]),
         (Cond::Between { col: "n".into(), lo: num("9007199254740990"), hi: text(lo), negated: true }, vec![mid, hi]),
+        // An exponent, zero, positive or negative, typed or in quotes: the exact decimal.
+        (r#in(vec![text("9007199254740992e0"), num("9007199254740994E0")], false), vec![lo, hi]),
+        (r#in(vec![num("900719925474099.2e1"), text("90071992547409940e-1")], true), vec![mid]),
+        (
+            Cond::Between {
+                col: "n".into(),
+                lo: text("900719925474099e1"),
+                hi: num("90071992547409920e-1"),
+                negated: false,
+            },
+            vec![lo],
+        ),
     ];
     let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
     for (n, (cond, want)) in cases.into_iter().enumerate() {
