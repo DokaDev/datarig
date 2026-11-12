@@ -158,6 +158,7 @@
 "table.dialog.problem.not_number" = "not a number"
 "table.dialog.problem.inexact" = "no exact value"
 "table.dialog.problem.not_exact" = "too many digits"
+"table.dialog.problem.not_instant" = "no such instant"
 "table.dialog.sort" = "Sort"
 "table.dialog.sort_none" = "none"
 "table.dialog.sort_asc" = "ascending"

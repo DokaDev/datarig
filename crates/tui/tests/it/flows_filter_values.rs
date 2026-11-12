@@ -846,7 +846,7 @@ fn a_ticked_mysql_timestamp_is_the_same_instant_after_the_zone_changes() {
 }
 
 /// With only the catalogue read, a MySQL TIMESTAMP typed with an offset is written as that
-/// instant too.
+/// instant too, from UTC.
 #[test]
 fn a_timestamp_typed_with_an_offset_on_the_catalogue_is_its_instant() {
     use datarig_core::driver::keys::{CatalogColumn, OrderKeys};
@@ -888,10 +888,54 @@ fn a_timestamp_typed_with_an_offset_on_the_catalogue_is_its_instant() {
     typed(&mut h, "2026-11-10 09:30:00+05:30");
     assert_eq!(
         draft(&h),
-        "at = CONVERT_TZ('2026-11-10 09:30:00', '+05:30', @@session.time_zone)",
+        "at = CONVERT_TZ('2026-11-10 04:00:00', '+00:00', @@session.time_zone)",
         "{}",
         h.screen(120, 34)
     );
+}
+
+/// A MySQL TIMESTAMP ticked or typed with an offset is written from its instant in UTC: one read
+/// in a session at `+14:00` (an offset MySQL before 8.0.19 and MariaDB do not read) runs again
+/// the same after the zone changes, as from the history. One typed with an offset no session
+/// has, a date that does not exist or an instant outside the TIMESTAMP range is not written, and
+/// its row says why.
+#[test]
+fn a_mysql_timestamp_is_written_from_utc_or_not_at_all() {
+    let mut h = mysql();
+    zone(&mut h, "+14:00");
+    h.app.dispatch(datarig_tui::app::action::Action::RunStatement);
+    runs(&mut h);
+    my_page(&mut h, &["2026-11-10 23:30:00"]);
+    dialog_on(&mut h, 1);
+    to_values(&mut h, 0);
+    h.key(KeyCode::Char(' '));
+    let instant = "at = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
+    assert_eq!(draft(&h), instant, "{}", h.screen(120, 34));
+    h.key(KeyCode::Enter);
+    let sent = vec![vec![format!("SELECT * FROM `shop`.`users` WHERE ({instant})")]];
+    assert_eq!(runs(&mut h), sent);
+    my_page(&mut h, &["2026-11-10 23:30:00"]);
+    zone(&mut h, "-13:59");
+    h.app.dispatch(datarig_tui::app::action::Action::RunStatement);
+    assert_eq!(runs(&mut h), sent, "run again in another zone");
+
+    let s = |v: &str| Some(v.to_string());
+    let cols = || vec![col("id", "int", ValueKind::Integer), col("at", "timestamp", ValueKind::TimestampTz)];
+    for (value, want) in [
+        ("2026-11-10 14:00:00+14:00", Some("at = CONVERT_TZ('2026-11-10 00:00:00', '+00:00', @@session.time_zone)")),
+        ("2026-12-31 20:00:00-13:59", Some("at = CONVERT_TZ('2027-01-01 09:59:00', '+00:00', @@session.time_zone)")),
+        ("2026-11-10 09:30:00+14:01", None),
+        ("2026-11-10 09:30:00-14:00", None),
+        ("2026-02-29 09:30:00+00:00", None),
+        ("2038-01-19 03:14:08+00:00", None),
+    ] {
+        let mut h = table_of(true, cols(), vec![vec![s("1"), s("2026-11-10 09:30:00")]]);
+        dialog_on(&mut h, 1);
+        typed(&mut h, value);
+        let screen = h.screen(120, 34);
+        assert_eq!(draft(&h), want.unwrap_or_default(), "{value}: {screen}");
+        assert_eq!(screen.contains("no such instant"), want.is_none(), "{value}: {screen}");
+    }
 }
 
 #[test]
