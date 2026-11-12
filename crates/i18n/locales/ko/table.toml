@@ -155,6 +155,7 @@
 "table.dialog.incomplete" = "미완성"
 "table.dialog.problem.not_number" = "숫자가 아님"
 "table.dialog.problem.inexact" = "정확히 같은 값 없음"
+"table.dialog.problem.not_exact" = "자릿수가 너무 많음"
 "table.dialog.sort" = "정렬"
 "table.dialog.sort_none" = "없음"
 "table.dialog.sort_asc" = "오름차순"

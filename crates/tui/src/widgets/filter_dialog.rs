@@ -384,6 +384,7 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
                 (_, false) => String::new(),
                 (Some(RenderError::NotNumber(_)), _) => i18n.label(Label::TableDialogProblemNotNumber).to_string(),
                 (Some(RenderError::InexactEquality(_)), _) => i18n.label(Label::TableDialogProblemInexact).to_string(),
+                (Some(RenderError::NotExact(_)), _) => i18n.label(Label::TableDialogProblemNotExact).to_string(),
                 _ => i18n.label(Label::TableDialogIncomplete).to_string(),
             };
             let note_w = if incomplete { width(&note) as u16 + 2 } else { 0 };

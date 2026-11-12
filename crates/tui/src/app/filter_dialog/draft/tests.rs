@@ -260,7 +260,7 @@ fn rendered() -> Vec<(Row, &'static str, &'static str)> {
         (
             row("price", Op::Between, vec![num("1.5"), num("-2e3")]),
             "price BETWEEN 1.5 AND -2e3",
-            "price BETWEEN 1.5 AND -2e3",
+            "price BETWEEN 1.5 AND -2000",
         ),
         (row("id", Op::Ne, vec![num("7")]), "id <> 7", "id <> 7"),
         (row("name", Op::NeOrNull, vec![text("a")]), "name IS DISTINCT FROM 'a'", "NOT (name <=> 'a')"),
@@ -331,6 +331,15 @@ fn rows_read_back_from_what_they_write() {
         }
         for r in rows {
             let sql = query::render(&r.cond().unwrap(), &t).unwrap();
+            // MySQL writes a number with an exponent as its exact decimal, which reads back so.
+            let mut r = r;
+            if d == MY {
+                for v in &mut r.values {
+                    if *v == num("-2e3") {
+                        *v = num("-2000");
+                    }
+                }
+            }
             let back = query::recognise(&sql, &t).and_then(|c| Row::from_cond(&c, &t));
             assert_eq!(back.as_ref(), Some(&r), "{d:?} {sql}");
             // And as a chip of a text given.

@@ -391,7 +391,8 @@ fn op_allowed(
         | RenderError::NullCompare(_)
         | RenderError::EmptyList(_)
         | RenderError::InexactEquality(_)
-        | RenderError::NotNumber(_) => OpOff::LikeUnknown,
+        | RenderError::NotNumber(_)
+        | RenderError::NotExact(_) => OpOff::LikeUnknown,
     })
 }
 

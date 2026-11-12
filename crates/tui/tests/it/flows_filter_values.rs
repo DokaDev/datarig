@@ -731,6 +731,9 @@ fn mysql_numbers_typed_in_quotes_in_a_list_or_a_range_are_written_as_numbers() {
         (10, "'9007199254740992', 9007199254740994", None, "n IN (9007199254740992, 9007199254740994)"),
         (11, "'9007199254740992', '9007199254740994'", None, "n NOT IN (9007199254740992, 9007199254740994)"),
         (1, "'9007199254740990'", Some("'9007199254740992'"), "n BETWEEN 9007199254740990 AND 9007199254740992"),
+        // With an exponent (MySQL reads it as a double): the exact decimal.
+        (10, "'9007199254740992e0', 900719925474099.4e1", None, "n IN (9007199254740992, 9007199254740994)"),
+        (1, "9007199254740990E0", Some("'90071992547409920e-1'"), "n BETWEEN 9007199254740990 AND 9007199254740992"),
     ] {
         let mut h = table_of(true, cols(), vec![vec![s("9007199254740993")]]);
         dialog_on(&mut h, 0);
@@ -748,6 +751,15 @@ fn mysql_numbers_typed_in_quotes_in_a_list_or_a_range_are_written_as_numbers() {
             h.type_text(second);
         }
         assert_eq!(draft(&h), want, "{}", h.screen(120, 34));
+    }
+    // A number with no exact decimal within a DECIMAL is not written, and its row says why.
+    for value in ["1e300", "'1e-31'"] {
+        let mut h = table_of(true, cols(), vec![vec![s("9007199254740993")]]);
+        dialog_on(&mut h, 0);
+        typed(&mut h, value);
+        let screen = h.screen(120, 34);
+        assert_eq!(draft(&h), "", "{value}: {screen}");
+        assert!(screen.contains("too many digits"), "{value}: {screen}");
     }
 }
 
