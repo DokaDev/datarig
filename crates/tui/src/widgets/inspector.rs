@@ -13,7 +13,7 @@ use crate::icons;
 use crate::keymap::Ctx;
 use crate::text::{clip, sanitize_cell, width, wrap, wrap_words};
 use crate::theme;
-use crate::widgets::grid::{ResultSet, Shown, viewer_text};
+use crate::widgets::grid::{ResultSet, Shown, viewer_text_of};
 use crate::widgets::{panel, put};
 use datarig_core::driver::KeyMarks;
 use datarig_i18n::{I18n, Label, Localized, Msg};
@@ -102,7 +102,7 @@ pub(crate) fn draw_inspector(app: &mut App, area: Rect, buf: &mut Buffer) {
         // Why an Apply is refused for the cursor's cell of a new row, wrapped below.
         let draft = (t.grid.row - rs.rows.len()).checked_sub(rs.edit.applied_new());
         let at = draft.and_then(|i| rs.edit.batch.drafts().get(i)).map(|d| crate::app::edit::RowAt::New(d.id));
-        if let Some(why) = at.and_then(|at| app.problem_reason(at, t.grid.col)) {
+        if let Some(why) = at.and_then(|at| app.problem_reason(at, t.grid.inspected())) {
             let th = theme::cur();
             let style = Style::new().fg(th.edit_invalid.fg.unwrap_or(th.error));
             let room = (body.height as usize).saturating_sub(2);
@@ -158,7 +158,7 @@ fn put_marks(m: KeyMarks, on: bool, x: u16, y: u16, room: usize, bg: Style, buf:
 fn draw_cell(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     let t = app.tab();
-    let (row, col) = (t.grid.row.min(rs.rows.len() - 1), t.grid.col.min(rs.columns.len().saturating_sub(1)));
+    let (row, col) = (t.grid.row.min(rs.rows.len() - 1), t.grid.inspected().min(rs.columns.len().saturating_sub(1)));
     let Some(column) = rs.columns.get(col) else { return };
     let w = body.width as usize - 1;
     let x = body.x + 1;
@@ -184,7 +184,7 @@ fn draw_cell(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mu
     if y >= bottom {
         return;
     }
-    let text = viewer_text(rs, &t.grid, &app.i18n).map(|(_, t)| t).unwrap_or_default();
+    let text = viewer_text_of(rs, row, col, &app.i18n).map(|(_, t)| t).unwrap_or_default();
     let style = if value.is_none() {
         Style::new().fg(th.null_fg).bg(th.bg).add_modifier(Modifier::ITALIC)
     } else {
@@ -228,7 +228,7 @@ fn draw_row(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut
         y += 1;
     }
     let room = (bottom.saturating_sub(y)) as usize;
-    let col = t.grid.col.min(rs.columns.len().saturating_sub(1));
+    let col = t.grid.inspected().min(rs.columns.len().saturating_sub(1));
     // As far as before, unless the grid's column went out of view; never past the last column.
     let mut first = app.detail.first;
     if col < first {

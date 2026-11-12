@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/it/ui_snapshots.rs
-assertion_line: 1099
 expression: backend
 ---
 "╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          "
@@ -36,15 +35,15 @@ expression: backend
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
-"│                                      ││                                                                                                                      │"
 "╭ Space r: Results ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮"
-"│ #  Results → count every row (runs a count query)   ]  Result tabs → next                               o  Table → filter and sort (dialog, on the order)    │"
-"│ +  Results pane → taller                            a  +Copy all fetched rows                           p  Results → previous page                           │"
-"│ -  Results pane → shorter                           c  Results → show as a chart / as rows              s  Table → sort by this column only (up, down, of…   │"
-"│ F  Table → filter by value                          e  Results → export to a file…                      v  Table → open its statement in a new console       │"
-"│ H  Table → earlier filters of this table            f  Table → filter and sort (dialog, on this colum…  x  Table → clear the filter, the order and the li…   │"
-"│ I  Result detail → Cell / Row                       h  Results pane → hide / show                       y  +Copy selection                                   │"
-"│ S  Table → sort by this column too (up, down, off)  i  Result detail → show / hide                      z  Results pane → zoom (maximise) / restore          │"
-"│ [  Result tabs → previous                           n  Results → next page                                                                                   │"
+"│ !  Table → everything but this value (NULL rows k…  S  Table → sort by this column too (up, down, off)  i  Result detail → show / hide                       │"
+"│ #  Results → count every row (runs a count query)   X  Table → clear the conditions and the order (li…  n  Results → next page                               │"
+"│ +  Results pane → taller                            [  Result tabs → previous                           o  Table → filter and sort (dialog, on the order)    │"
+"│ -  Results pane → shorter                           ]  Result tabs → next                               p  Results → previous page                           │"
+"│ =  Table → only this value (in place of the colum…  a  +Copy all fetched rows                           s  Table → sort by this column only (up, down, of…   │"
+"│ C  Table → hide this column from the grid (still …  c  Results → show as a chart / as rows              v  Table → open its statement in a new console       │"
+"│ F  Table → this column's menu (sort, filter, hide)  e  Results → export to a file…                      x  Table → clear the filter, the order and the li…   │"
+"│ H  Table → earlier filters of this table            f  Table → filter and sort (dialog, on this colum…  y  +Copy selection                                   │"
+"│ I  Result detail → Cell / Row                       h  Results pane → hide / show                       z  Results pane → zoom (maximise) / restore          │"
 "╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Esc close · Backspace back · : commands ─╯"
 " NORMAL  local-pg │ Connected to local-pg                                                                                                                    EN "

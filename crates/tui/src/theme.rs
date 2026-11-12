@@ -726,6 +726,16 @@ impl Theme {
         }
     }
 
+    /// The header of a result grid's column the table tab's query filters (by a condition of its
+    /// own) or sorts by: the accent blended into the surface, derived where it is drawn (no
+    /// token of its own); the accent as the text's color where either is not RGB.
+    pub fn filtered_header(&self) -> Style {
+        match (self.accent, self.surface) {
+            (Color::Rgb(..), Color::Rgb(..)) => Style::new().bg(blend(self.accent, self.surface, 28)),
+            _ => Style::new().fg(self.accent),
+        }
+    }
+
     /// `c` as text on `back` at a contrast of `min` or more: blended toward white on a dark
     /// `back`, toward black on a light one, in steps of 5%. Unchanged where either is not RGB
     /// (the terminal's palette decides).

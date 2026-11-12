@@ -34,5 +34,5 @@ expression: backend
 "├────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────────────┤"
 "│ Where   = expr id > 1 OR name = 'x' ×                                                              undo   clear all  │"
 "│ Order                                                                                      Limit              SQL ▸  │"
-"│ ↑↓ column · → filter · s sort · / search · Tab next area                                   Enter apply   Esc cancel  │"
+"│ ↑↓ column · → filter · Space hide/show · s sort · / search                                 Enter apply   Esc cancel  │"
 "╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"

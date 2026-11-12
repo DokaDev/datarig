@@ -97,6 +97,12 @@ impl Paths {
         self.state.as_ref().map(|s| s.join(crate::filter_history::FILE))
     }
 
+    /// `<state>/table-view.toml`: the columns hidden from each table's grid
+    /// ([`crate::table_view`]).
+    pub fn table_view_file(&self) -> Option<PathBuf> {
+        self.state.as_ref().map(|s| s.join(crate::table_view::FILE))
+    }
+
     /// `<state>/update.toml`: the update check's last answer and the newest version that ran here
     /// ([`crate::update`]).
     pub fn update_file(&self) -> Option<PathBuf> {

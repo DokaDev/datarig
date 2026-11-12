@@ -191,6 +191,7 @@ impl App {
             AppEvent::Clipboard(a) => self.on_clipboard_answer(a),
             AppEvent::UpdateChecked(a) => self.update_answered(a),
             AppEvent::FilterHistory(s) => self.on_filter_history_saved(s),
+            AppEvent::TableView(s) => self.on_table_view_saved(s),
         }
         // What an open quick connect list waits for may have arrived.
         if self.overlays.quick().is_some() {
@@ -331,8 +332,12 @@ impl App {
         // taken as it is typed. The register after `Ctrl+R` in Insert mode is a key too.
         let literal = matches!(ctx, Ctx::VimNormal | Ctx::VimVisual) && self.tab().editor.awaiting_char();
         let register = ctx == Ctx::VimInsert && self.tab().editor.awaiting_key();
+        // A menu nothing is typed in (the column menu) takes keys, not text.
+        let keys_only = ctx == Ctx::ContextMenu && self.overlays.menu().is_some_and(|m| !m.typing && m.sub.is_none());
         let mapped = match chord.code {
-            KeyCode::Char(c) if chord.is_plain_char() && (!ctx.is_text_input() || register) && !literal => {
+            KeyCode::Char(c)
+                if chord.is_plain_char() && (!ctx.is_text_input() || register || keys_only) && !literal =>
+            {
                 hangul::keys(c)
             }
             _ => None,
@@ -1009,8 +1014,13 @@ impl App {
             self.pointer.detail_picked = None;
             return;
         };
-        let g = &mut self.tabs.active_mut().grid;
-        g.col = picked.1;
+        let t = self.tabs.active_mut();
+        let total = match &t.results {
+            Results::Rows(rs) => rs.columns.len(),
+            _ => 0,
+        };
+        let g = &mut t.grid;
+        g.inspect_col(picked.1, total);
         g.anchor = None;
         g.detached = false;
         let again = self.pointer.clicks == 2 && self.pointer.detail_picked == Some(picked);
@@ -1155,10 +1165,14 @@ impl App {
             if let Some(c) = zone {
                 let id = self.tab().id;
                 let g = &mut self.tab_mut().grid;
-                g.col = c;
+                g.go_to(g.row, c);
                 g.anchor = None;
                 g.detached = false;
                 return self.table_sort(id, c, datarig_core::query::SortStep::Only);
+            }
+            // No cell shown (every column hidden): nothing to select or drag.
+            if self.grid_no_cell() {
+                return;
             }
             let t = self.tabs.active_mut();
             // The row-number gutter selects whole rows, a header whole columns;
@@ -1231,6 +1245,7 @@ impl App {
             Some(Drag::Divider) if !self.tabs.is_empty() => self.drag_divider(y),
             // The border follows the pointer: the explorer ends on its column.
             Some(Drag::ExplorerEdge) => self.resize_explorer((x + 1).saturating_sub(self.layout.workspace.x)),
+            Some(Drag::Grid { .. }) if !self.tabs.is_empty() && self.grid_no_cell() => self.pointer.drag = None,
             Some(Drag::Grid { anchor, shape }) if self.focus == Focus::Results && !self.tabs.is_empty() => {
                 self.pointer.drag_at = Some((x, y));
                 let t = self.tabs.active_mut();
@@ -1248,7 +1263,7 @@ impl App {
                     Shape::Rows => (row, t.grid.col),
                     Shape::Cols => (t.grid.row, col),
                 };
-                (t.grid.row, t.grid.col) = to;
+                t.grid.go_to(to.0, to.1);
                 t.grid.detached = false;
                 // A rectangle as `v` makes it, once the pointer left the first cell.
                 if shape != Shape::Cells || to != anchor || t.grid.anchor.is_some() {

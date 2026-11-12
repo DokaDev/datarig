@@ -22,7 +22,7 @@ expression: "h.draw(120, 34).backend()"
 "│                            ││   ││  Copy the cell (a selected range)                                   y │           │"
 "│                            ││ 1 ││  Copy the row (the selected rows)                                   Y │ 功二路 55…│" Hidden by multi-width symbols: [(110, " "), (112, " "), (114, " ")]
 "│                            ││ 2 ││  Copy selection ▸                                                     │           │"
-"│                            ││ 3 ││  Table → filter by value                           only on table tabs │           │"
+"│                            ││ 3 ││  Table → this column's menu (sort, filter, hide)   only on table tabs │           │"
 "│                            ││ 4 ││  Edit the cell (the selected cells of one column)        not editable │           │"
 "│                            ││ 5 ││ Results                                                               │           │"
 "│                            ││ 6 ││  Copy all fetched rows ▸                                              │           │"

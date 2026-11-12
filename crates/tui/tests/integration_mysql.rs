@@ -845,16 +845,16 @@ fn held_column(app: &App, col: usize) -> Vec<Option<String>> {
 }
 
 /// Filter by value on the active table tab: the cursor on the cells of column `name` of the
-/// rows whose `id` is in `ids` (one cell, or a range down the column), `by` picked from the
-/// menu, the run waited for; then the ids of the rows it read, and the filter text it ran.
+/// rows whose `id` is in `ids` (one cell, or a range down the column), grid key `key` (`=` only
+/// the value, `!` everything but it) pressed, the run waited for; then the ids of the rows it
+/// read, and the filter text it ran.
 async fn by_value(
     app: &mut App,
     rx: &mut UnboundedReceiver<AppEvent>,
     ids: &[&str],
     name: &str,
-    by: datarig_tui::app::filter_value::ByValue,
+    key: char,
 ) -> (Vec<String>, String) {
-    use datarig_tui::app::menu::{MenuItem, MenuLine};
     let Results::Rows(rs) = &app.tab().results else { panic!("no rows") };
     let col = rs.columns.iter().position(|c| c.meta.name == name).expect("the column");
     let held = held_column(app, 0);
@@ -864,11 +864,7 @@ async fn by_value(
     let g = &mut app.tab_mut().grid;
     (g.row, g.col, g.anchor) = (last, col, (ids.len() > 1).then_some((first, col)));
     app.focus = Focus::Results;
-    press(app, 'F');
-    let m = app.overlays.menu_mut().expect("the filter menu");
-    let i = m.lines.iter().position(|l| *l == MenuLine::Item(MenuItem::Filter(by))).expect("the entry");
-    m.selected = i;
-    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+    press(app, key);
     pump(app, rx, 30, |a| {
         idle(a)
             && a.tab()
@@ -886,13 +882,12 @@ async fn by_value(
     (got, text)
 }
 
-/// Filter by a cell's value on MySQL, for text under a `_ci` and a `_bin` collation, a decimal,
+/// Filter by a cell's value (`=`, `!`) on MySQL, for text under a `_ci` and a `_bin` collation, a decimal,
 /// a DATETIME, bytes and NULL, one cell and several: each condition reads back the rows it
 /// names. Makes `shop.zz_it_byvalue_<pid>` and drops it.
 #[tokio::test(flavor = "multi_thread")]
 async fn filter_by_value_reads_back_the_rows_it_names() {
     use datarig_tui::app::action::Action;
-    use datarig_tui::app::filter_value::ByValue as B;
     use datarig_tui::app::table_filter::TableAction;
     let Some((url, admin)) = urls("filter_by_value_reads_back_the_rows_it_names") else { return };
     let table = format!("zz_it_byvalue_{}", std::process::id());
@@ -920,31 +915,28 @@ async fn filter_by_value_reads_back_the_rows_it_names() {
     app.dispatch(Action::RunStatement);
     pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 5).await;
     // The cells (by `id`), the column, the entry, the ids it reads back and the filter it runs.
-    type Case<'a> = (&'a [&'a str], &'a str, B, &'a [&'a str], &'a str);
+    type Case<'a> = (&'a [&'a str], &'a str, char, &'a [&'a str], &'a str);
     let cases: &[Case] = &[
-        (&["1"], "name", B::Eq, &["1"], "name = 'Apple'"),
-        (&["1"], "name", B::Ne, &["2", "4", "5"], "name <> 'Apple'"),
-        (&["1"], "name", B::NeNulls, &["2", "3", "4", "5"], "NOT (name <=> 'Apple')"),
-        // `_ci`: case does not count, for = and LIKE alike; `_bin`: it does.
-        (&["1"], "name", B::StartsWith, &["1", "2"], "name LIKE 'Apple%' ESCAPE '!'"),
-        (&["1"], "bname", B::StartsWith, &["1"], "bname LIKE 'Apple%' ESCAPE '!'"),
-        (&["1"], "bname", B::Contains, &["1", "2"], "LOWER(bname) LIKE LOWER('%Apple%') ESCAPE '!'"),
-        (&["2"], "bname", B::Eq, &["2"], "bname = 'apple pie'"),
-        // `%` and `_` of the value match themselves only.
-        (&["4"], "name", B::StartsWith, &["4"], "name LIKE '50!%!_off%' ESCAPE '!'"),
-        (&["1"], "n", B::Gt, &["2", "4", "5"], "n > 1.50"),
-        (&["2"], "at", B::Ge, &["2", "4", "5"], "at >= '2026-11-10 10:00:00'"),
-        (&["1"], "at", B::Eq, &["1"], "at = '2026-11-10 09:30:00'"),
-        (&["1"], "b", B::Eq, &["1"], "b = X'01AB'"),
-        (&["4"], "b", B::Gt, &["1", "5"], "b > X'0102'"),
-        (&["3"], "name", B::IsNull, &["3"], "name IS NULL"),
-        (&["1", "2", "3"], "name", B::In, &["1", "2", "3"], "(name IN ('Apple', 'apple pie') OR name IS NULL)"),
-        (&["1", "2", "3"], "name", B::NotIn, &["4", "5"], "(name NOT IN ('Apple', 'apple pie') AND name IS NOT NULL)"),
-        (&["1", "2"], "n", B::NotInNulls, &["3", "4", "5"], "(n NOT IN (1.50, 2.00) OR n IS NULL)"),
+        (&["1"], "name", '=', &["1"], "name = 'Apple'"),
+        (&["1"], "name", '!', &["2", "3", "4", "5"], "NOT (name <=> 'Apple')"),
+        // `_ci`: case does not count; `_bin`: it does.
+        (&["2"], "name", '=', &["2"], "name = 'apple pie'"),
+        (&["2"], "bname", '=', &["2"], "bname = 'apple pie'"),
+        (&["4"], "name", '=', &["4"], "name = '50%_off'"),
+        (&["1"], "n", '=', &["1"], "n = 1.50"),
+        (&["2"], "at", '!', &["1", "3", "4", "5"], "NOT (at <=> '2026-11-10 10:00:00')"),
+        (&["1"], "at", '=', &["1"], "at = '2026-11-10 09:30:00'"),
+        (&["1"], "b", '=', &["1"], "b = X'01AB'"),
+        (&["4"], "b", '!', &["1", "2", "3", "5"], "NOT (b <=> X'0102')"),
+        (&["3"], "name", '=', &["3"], "name IS NULL"),
+        (&["3"], "name", '!', &["1", "2", "4", "5"], "name IS NOT NULL"),
+        (&["1", "2", "3"], "name", '=', &["1", "2", "3"], "(name IN ('Apple', 'apple pie') OR name IS NULL)"),
+        (&["1", "2", "3"], "name", '!', &["4", "5"], "(name NOT IN ('Apple', 'apple pie') AND name IS NOT NULL)"),
+        (&["1", "2"], "n", '!', &["3", "4", "5"], "(n NOT IN (1.50, 2.00) OR n IS NULL)"),
     ];
-    for (cells, name, by, want, text) in cases {
-        let (got, ran) = by_value(&mut app, &mut rx, cells, name, *by).await;
-        assert_eq!(ran, *text, "{name} {by:?}");
+    for (cells, name, key, want, text) in cases {
+        let (got, ran) = by_value(&mut app, &mut rx, cells, name, *key).await;
+        assert_eq!(ran, *text, "{name} {key}");
         assert_eq!(got, want.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "{text}");
         app.dispatch(Action::Table(TableAction::Clear));
         pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 5).await;
@@ -960,7 +952,6 @@ async fn filter_by_value_reads_back_the_rows_it_names() {
 #[tokio::test(flavor = "multi_thread")]
 async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() {
     use datarig_tui::app::action::Action;
-    use datarig_tui::app::filter_value::ByValue as B;
     use datarig_tui::app::table_filter::TableAction;
     let Some((url, admin)) = urls("filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line") else {
         return;
@@ -980,23 +971,22 @@ async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() 
     let (mut app, mut rx) = by_value_app(&url, &table, &dir);
     app.dispatch(Action::RunStatement);
     pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 5).await;
-    type Case<'a> = (&'a [&'a str], B, &'a [&'a str], &'a str);
+    type Case<'a> = (&'a [&'a str], char, &'a [&'a str], &'a str);
     let cases: &[Case] = &[
-        (&["1"], B::Eq, &["1"], "name = _utf8mb4 X'610A62'"),
-        (&["2"], B::Eq, &["2"], "name = _utf8mb4 X'610D62'"),
-        (&["3"], B::Eq, &["3"], "name = _utf8mb4 X'610D0A62'"),
-        (&["1"], B::Ne, &["2", "3", "4", "5"], "name <> _utf8mb4 X'610A62'"),
-        (&["5"], B::StartsWith, &["1", "5"], "name LIKE _utf8mb4 X'610A25' ESCAPE '!'"),
+        (&["1"], '=', &["1"], "name = _utf8mb4 X'610A62'"),
+        (&["2"], '=', &["2"], "name = _utf8mb4 X'610D62'"),
+        (&["3"], '=', &["3"], "name = _utf8mb4 X'610D0A62'"),
+        (&["1"], '!', &["2", "3", "4", "5"], "NOT (name <=> _utf8mb4 X'610A62')"),
         (
             &["1", "2", "3"],
-            B::In,
+            '=',
             &["1", "2", "3"],
             "name IN (_utf8mb4 X'610A62', _utf8mb4 X'610D62', _utf8mb4 X'610D0A62')",
         ),
     ];
-    for (cells, by, want, text) in cases {
-        let (got, ran) = by_value(&mut app, &mut rx, cells, "name", *by).await;
-        assert_eq!(ran, *text, "{by:?}");
+    for (cells, key, want, text) in cases {
+        let (got, ran) = by_value(&mut app, &mut rx, cells, "name", *key).await;
+        assert_eq!(ran, *text, "{key}");
         assert_eq!(got, want.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "{text}");
         let first = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
         // The filter dialog applies it again as it is.

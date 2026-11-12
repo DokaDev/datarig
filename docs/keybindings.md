@@ -175,7 +175,11 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r v` | `table.filter.open_sql` | Table → open its statement in a new console |  |
 | `Space r s` | `table.sort.cycle` | Table → sort by this column only (up, down, off) |  |
 | `Space r S` | `table.sort.add` | Table → sort by this column too (up, down, off) |  |
-| `Space r F` | `table.filter.by_value` | Table → filter by value |  |
+| `Space r F` | `table.column.menu` | Table → this column's menu (sort, filter, hide) |  |
+| `Space r =` | `table.filter.only` | Table → only this value (in place of the column's conditions) |  |
+| `Space r !` | `table.filter.exclude` | Table → everything but this value (NULL rows kept) |  |
+| `Space r X` | `table.filter.clear_all` | Table → clear the conditions and the order (limit kept), and run it again |  |
+| `Space r C` | `table.column.hide` | Table → hide this column from the grid (still read) |  |
 | `Space r H` | `table.filter.history` | Table → earlier filters of this table |  |
 | `Space r ]` | `results.tab.next` | Result tabs → next |  |
 | `Space r [` | `results.tab.prev` | Result tabs → previous |  |
@@ -301,7 +305,11 @@ The result grid. The wheel scrolls the rows; a sideways wheel (a trackpad) or Sh
 | `f` | `table.filter.edit` | Table → filter and sort (dialog, on this column) |  |
 | `s` | `table.sort.cycle` | Table → sort by this column only (up, down, off) |  |
 | `S` | `table.sort.add` | Table → sort by this column too (up, down, off) |  |
-| `F` | `table.filter.by_value` | Table → filter by value |  |
+| `F` | `table.column.menu` | Table → this column's menu (sort, filter, hide) |  |
+| `=` | `table.filter.only` | Table → only this value (in place of the column's conditions) |  |
+| `!` | `table.filter.exclude` | Table → everything but this value (NULL rows kept) |  |
+| `X` | `table.filter.clear_all` | Table → clear the conditions and the order (limit kept), and run it again |  |
+| `C` | `table.column.hide` | Table → hide this column from the grid (still read) |  |
 | `L` | `results.tab.next` | Result tabs → next |  |
 | `H` | `results.tab.prev` | Result tabs → previous |  |
 | `Esc` | `pane.back` | Back to the editor |  |
@@ -645,7 +653,7 @@ The filter and sort dialog of a table tab (`f` or `Space r f` on the grid's colu
 | `#` | `filter.count` | Filter dialog → count the column's values exactly |  |
 | `Ctrl+R` | `table.filter.history` | Table → earlier filters of this table |  |
 
-Reserved (filter dialog): `Tab` `Shift+Tab` `Up` `Down` `Left` `Right` `Home` `End` `j` `k` `h` `l` `g` `G` `s` `/` `Space` `x` `Delete` `<` `>`
+Reserved (filter dialog): `Tab` `Shift+Tab` `Up` `Down` `Left` `Right` `Home` `End` `j` `k` `h` `l` `g` `G` `s` `/` `Space` `C` `x` `Delete` `<` `>`
 
 ## `overlay.filter.field` [text]
 

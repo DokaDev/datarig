@@ -56,6 +56,9 @@ pub struct PasteIn {
     rows: bool,
     /// A first line naming the columns is pasted as values, not skipped (`space d V`).
     keep_header: bool,
+    /// The columns the grid showed when it was pasted ([`GridState::vis_rev`]): its cells go
+    /// to the shown ones, so with others shown it is not pasted.
+    vis: u64,
 }
 
 /// The cells `y` or `Y` last copied in a grid, which `g p` pastes: a row of values each, as
@@ -101,22 +104,25 @@ impl LastPaste {
     }
 }
 
-/// The grid's cursor and selection.
+/// The grid's cursor and selection, and which columns it shows ([`GridState::vis_rev`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Spot {
     cursor: (usize, usize),
     anchor: Option<(usize, usize)>,
     shape: Shape,
+    vis: u64,
 }
 
 /// A paste of many rows waiting for `y`: its tab, result and binding, the revision of the
-/// changes it was made for, what it does, and (`space d V`) the paste it reads again.
+/// changes it was made for and of the columns the grid showed (its columns are the shown ones),
+/// what it does, and (`space d V`) the paste it reads again.
 #[derive(Debug)]
 pub struct PasteAsk {
     tab: TabId,
     result: u64,
     bound: Bound,
     revision: u64,
+    vis: u64,
     plan: PastePlan,
     last: Option<LastPaste>,
     again: Option<LastPaste>,
@@ -269,6 +275,7 @@ impl App {
             copy: None,
             rows: false,
             keep_header: false,
+            vis: t.grid.vis_rev,
         });
         self.edit_action(EditAction::Pasted);
     }
@@ -291,10 +298,11 @@ impl App {
             return self.flash(Notice::new(Label::EditPasteGridOnly, Level::Info));
         }
         let Some(rs) = rows_of(t) else { return };
-        let (tab, result) = (t.id, rs.id);
+        let (tab, result, vis) = (t.id, rs.id, t.grid.vis_rev);
         let copy = Some(copy);
         let text = String::new();
-        self.paste_in = Some(PasteIn { tab, result, text, format: None, again: None, copy, rows, keep_header: false });
+        let keep_header = false;
+        self.paste_in = Some(PasteIn { tab, result, text, format: None, again: None, copy, rows, keep_header, vis });
         self.edit_action(EditAction::Pasted);
     }
 
@@ -310,7 +318,8 @@ impl App {
         if clipboard::plan(self.prefs.clipboard, ssh) == ClipPlan::Osc52 {
             return self.flash(Notice::new(Label::EditPasteNeedsSystem, Level::Info));
         }
-        let spot = Spot { cursor: (t.grid.row, t.grid.col), anchor: t.grid.anchor, shape: t.grid.shape };
+        let spot =
+            Spot { cursor: (t.grid.row, t.grid.col), anchor: t.grid.anchor, shape: t.grid.shape, vis: t.grid.vis_rev };
         let (tab, result, revision) = (t.id, rs.id, rs.edit.batch.revision());
         let clip = match self.clipboard.take() {
             Some(c) => c,
@@ -401,7 +410,12 @@ impl App {
                 t.id == tab
                     && t.exec.view == tabs::ResultView::Rows
                     && rows_of(t).is_some_and(|rs| rs.id == result && rs.edit.batch.revision() == revision)
-                    && Spot { cursor: (t.grid.row, t.grid.col), anchor: t.grid.anchor, shape: t.grid.shape } == spot
+                    && Spot {
+                        cursor: (t.grid.row, t.grid.col),
+                        anchor: t.grid.anchor,
+                        shape: t.grid.shape,
+                        vis: t.grid.vis_rev,
+                    } == spot
             };
         if !still {
             return self.flash(Notice::new(Label::EditPasteReadMoved, Level::Info));
@@ -428,6 +442,11 @@ impl App {
         if self.edit_gate().is_none() {
             return;
         }
+        // Pasted while the grid showed other columns: read again it would go to other ones.
+        // Refused before its step is undone, so it stays as it was.
+        if self.last_paste.as_ref().is_some_and(|l| l.at.vis != self.tab().grid.vis_rev) {
+            return self.flash(Notice::new(Label::EditPasteColumnsChanged, Level::Info));
+        }
         let Some(last) = self.last_paste.take() else { return };
         let t = self.tabs.active_mut();
         let Some(rs) = shown_mut(&mut t.results, t.exec.view) else { return };
@@ -435,22 +454,41 @@ impl App {
             rs.edit.batch.undo();
         }
         let g = &mut t.grid;
-        (g.row, g.col) = last.at.cursor;
+        g.go_to(last.at.cursor.0, last.at.cursor.1);
         g.anchor = last.at.anchor;
         g.shape = last.at.shape;
         self.edit_grid_sync();
         // A first line skipped as the columns' names: the same format again, keeping it.
         let keep_header = last.header;
         let format = Some(last.format.filter(|_| keep_header).unwrap_or_else(|| next_format(last.format)));
-        let (tab, result, text) = (last.tab, last.result, last.text.clone());
+        let (tab, result, text, vis) = (last.tab, last.result, last.text.clone(), last.at.vis);
         self.paste_in =
-            Some(PasteIn { tab, result, text, format, again: Some(last), copy: None, rows: false, keep_header });
+            Some(PasteIn { tab, result, text, format, again: Some(last), copy: None, rows: false, keep_header, vis });
         self.edit_action(EditAction::Pasted);
         // Not read now (refused before it, or waiting for the table): the paste as it was.
         if let Some(PasteIn { again: Some(again), .. }) = self.paste_in.take_if(|p| p.again.is_some()) {
             let format = again.format;
             self.paste_put_back(again, format);
         }
+    }
+
+    /// The paste waiting in [`App::paste_in`] dropped, not pasted: one read again (`space d V`)
+    /// put back as it was (its step was undone for it).
+    pub(super) fn paste_in_dropped(&mut self) {
+        if let Some(again) = self.paste_in.take().and_then(|p| p.again) {
+            let format = again.format;
+            self.paste_put_back(again, format);
+        }
+    }
+
+    /// Paste `p` made while the grid showed other columns than now: not pasted (its cells
+    /// would go to other columns), said; one read again (`space d V`) put back as it was.
+    pub(super) fn paste_columns_changed(&mut self, p: PasteIn) {
+        if let Some(again) = p.again {
+            let format = again.format;
+            self.paste_put_back(again, format);
+        }
+        self.flash(Notice::new(Label::EditPasteColumnsChanged, Level::Info));
     }
 
     /// Paste `again`, whose step `space d V` undid, put back as it was (its step redone while it
@@ -512,9 +550,13 @@ impl App {
     pub(super) fn edit_paste(&mut self, target: &EditTarget) {
         let t = self.tab();
         let Some(rs) = rows_of(t) else { return };
-        let at = Spot { cursor: (t.grid.row, t.grid.col), anchor: t.grid.anchor, shape: t.grid.shape };
+        let at =
+            Spot { cursor: (t.grid.row, t.grid.col), anchor: t.grid.anchor, shape: t.grid.shape, vis: t.grid.vis_rev };
         let (tab, result, revision) = (t.id, rs.id, rs.edit.batch.revision());
         let Some(p) = self.paste_in.take_if(|p| p.tab == tab && p.result == result) else { return };
+        if p.vis != at.vis {
+            return self.paste_columns_changed(p);
+        }
         let PasteIn { text, format, again, copy, rows, keep_header, .. } = p;
         if let Some(copy) = copy {
             if rows {
@@ -567,8 +609,10 @@ impl App {
         let t = self.tab();
         let Some(rs) = rows_of(t) else { return false };
         let c0 = t.grid.selection(rs.rows.len(), rs.columns.len()).map_or(t.grid.col, |(_, c)| c.start);
+        // The shown columns from there: a hidden one is no column a paste lands in.
+        let cols: Vec<usize> = t.grid.shown_cols(rs.columns.len()).into_iter().filter(|&c| c >= c0).collect();
         line.iter().enumerate().all(|(k, v)| match v {
-            Value::Text(s) => rs.columns.get(c0 + k).is_some_and(|c| c.meta.name == *s),
+            Value::Text(s) => cols.get(k).and_then(|&c| rs.columns.get(c)).is_some_and(|c| c.meta.name == *s),
             _ => false,
         })
     }
@@ -623,7 +667,8 @@ impl App {
                 return self.flash(Notice::new(Label::EditPasteCancelled, Level::Info));
             };
             let forms = self.paste_ask_forms(rows, &plan);
-            let action = AskAction::Paste(Box::new(PasteAsk { tab, result, bound, revision, plan, last, again }));
+            let vis = self.tab().grid.vis_rev;
+            let action = AskAction::Paste(Box::new(PasteAsk { tab, result, bound, revision, vis, plan, last, again }));
             self.ask = Some(StatusAsk { forms, tone: Level::Warning, action });
             return;
         }
@@ -686,6 +731,7 @@ impl App {
             copy: None,
             rows: false,
             keep_header: false,
+            vis: a.at.vis,
         });
         self.edit_action(EditAction::Pasted);
     }
@@ -700,7 +746,12 @@ impl App {
         t.id == a.tab
             && t.exec.view == tabs::ResultView::Rows
             && rows_of(t).is_some_and(|rs| rs.id == a.result && rs.edit.batch.revision() == a.revision)
-            && Spot { cursor: (t.grid.row, t.grid.col), anchor: t.grid.anchor, shape: t.grid.shape } == a.at
+            && Spot {
+                cursor: (t.grid.row, t.grid.col),
+                anchor: t.grid.anchor,
+                shape: t.grid.shape,
+                vis: t.grid.vis_rev,
+            } == a.at
             && self.edit_check().is_ok_and(|(_, _, b)| b == a.bound)
     }
 
@@ -732,6 +783,7 @@ impl App {
         }
         let t = self.tab();
         t.id == a.tab
+            && t.grid.vis_rev == a.vis
             && rows_of(t).is_some_and(|rs| rs.id == a.result && rs.edit.batch.revision() == a.revision)
             && self.edit_check().is_ok_and(|(_, _, b)| b == a.bound)
     }
@@ -764,7 +816,7 @@ impl App {
         self.last_paste = last.map(|l| LastPaste { revision, step, ..l });
         self.edit_grid_sync();
         let t = self.tabs.active_mut();
-        (t.grid.row, t.grid.col) = top;
+        t.grid.go_to(top.0, top.1);
         t.grid.anchor = None;
         t.grid.detached = false;
         self.selecting_done();
@@ -963,15 +1015,20 @@ impl App {
         let many = sel.as_ref().is_some_and(|(r, c)| r.len() * c.len() > 1);
         let one = h == 1 && w == 1;
         let (r0, c0) = sel.as_ref().map_or((t.grid.row, t.grid.col), |(r, c)| (r.start, c.start));
-        // One value fills the selection; a block goes at its corner.
-        let (rows, cols) = match &sel {
-            Some((r, c)) if one && many => (r.clone(), c.clone()),
-            _ => (r0..r0 + h, c0..c0 + w),
+        // The columns a paste lands in are the shown ones: a hidden column is never written.
+        // One value fills the selection's shown cells; a block goes at its corner, its columns
+        // on the shown columns from there.
+        let room: Vec<usize> = t.grid.shown_cols(ncols).into_iter().filter(|&c| c >= c0).collect();
+        let (rows, cols): (Range<usize>, Vec<usize>) = match &sel {
+            Some((r, c)) if one && many => (r.clone(), t.grid.shown_in(c.clone())),
+            _ => (r0..r0 + h, room.iter().copied().take(w).collect()),
         };
+        // The pasted value of row `r`, column `k` of `cols`.
         let value =
-            |r: usize, c: usize| -> Value { if one { pasted[0][0].clone() } else { pasted[r - r0][c - c0].clone() } };
-        if cols.end > ncols {
-            let (width, room) = (w.to_string(), ncols.saturating_sub(c0).to_string());
+            |r: usize, k: usize| -> Value { if one { pasted[0][0].clone() } else { pasted[r - r0][k].clone() } };
+        let fill = one && many;
+        if (fill && cols.is_empty()) || (!fill && cols.len() < w) {
+            let (width, room) = (w.to_string(), room.len().to_string());
             let short = text(Msg::EditPasteTooWideShort { width: width.clone(), room: room.clone() });
             return Err((text(Msg::EditPasteTooWide { width, room }), Some(short)));
         }
@@ -998,7 +1055,7 @@ impl App {
         }
         let reads = at.iter().any(|(_, a)| matches!(a, RowAt::Read(_)));
         let inserts = new > 0 || at.iter().any(|(_, a)| matches!(a, RowAt::New(_)));
-        for c in cols.clone() {
+        for &c in &cols {
             for (on, w) in [(reads, Write::Update), (inserts, Write::Insert)] {
                 match target.allows(c, w) {
                     Err(r) if on => return Err((text(column_reason(r, rs.columns[c].meta.name.clone())), None)),
@@ -1041,22 +1098,22 @@ impl App {
         }
         let mut ops = PasteOps { width: ncols, ..PasteOps::default() };
         for &(r, a) in &at {
-            for c in cols.clone() {
+            for (k, &c) in cols.iter().enumerate() {
                 match a {
-                    RowAt::Read(i) => ops.set.push(((i, c), value(r, c))),
-                    RowAt::New(id) => ops.set_new.push(((id, c), value(r, c))),
+                    RowAt::Read(i) => ops.set.push(((i, c), value(r, k))),
+                    RowAt::New(id) => ops.set_new.push(((id, c), value(r, k))),
                 }
             }
         }
         for r in shown.max(rows.start)..rows.end {
             let mut cells = vec![Value::Default; ncols];
-            for c in cols.clone() {
-                cells[c] = value(r, c);
+            for (k, &c) in cols.iter().enumerate() {
+                cells[c] = value(r, k);
             }
             ops.add.push(cells);
         }
         // One value fills every selected cell.
-        let map = cols.clone().map(|c| (if one { 0 } else { c - c0 }, c)).collect();
+        let map = cols.iter().enumerate().map(|(k, &c)| (if one { 0 } else { k }, c)).collect();
         Ok(PastePlan {
             map,
             as_rows: false,
@@ -1065,7 +1122,7 @@ impl App {
             ops,
             first: read_range.start,
             read,
-            top: (rows.start, cols.start),
+            top: (rows.start, cols[0]),
             size: (rows.len(), cols.len()),
             format,
             corner: !one && many,
@@ -1158,13 +1215,14 @@ impl App {
                 Msg::EditPasteRowsComputed { column: column.clone() },
                 Msg::EditPasteRowsComputedShort { column },
             );
-        } else if w > ncols {
-            let (width, room) = (w.to_string(), ncols.to_string());
+        } else if w > t.grid.shown_cols(ncols).len() {
+            let (width, room) = (w.to_string(), t.grid.shown_cols(ncols).len().to_string());
             let short = Msg::EditPasteRowsTooWideShort { width: width.clone(), room: room.clone() };
             return refuse(Msg::EditPasteRowsTooWide { width, room }, short);
         } else {
-            // From another table or result: by position.
-            (0..w).map(Some).collect()
+            // From another table or result: by position among the shown columns (a hidden
+            // column is left to its default).
+            t.grid.shown_cols(ncols).into_iter().take(w).map(Some).collect()
         };
         // The new rows go after the last row: past the rows read while the server has more.
         if rs.more {

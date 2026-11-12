@@ -1,29 +1,29 @@
-//! Filter a table tab by a cell's value (`F`, `Space r F`, and "filter by value" in the grid's
-//! menu): a menu of conditions on the cursor's cell, or on the cells selected in one column, each
-//! of which adds its condition to the filter of the rows shown and runs the tab again.
+//! Filter a table tab by the value of a cell (`=` only this value, `!` everything but it, and
+//! their entries in the column menu): the cursor's cell, or the cells selected in one column.
 //!
 //! The condition is written by the query model ([`query::render`]: literals for the column's
-//! kind through the dialect, NULL compared only with `IS NULL` or the NULL-safe forms, patterns
-//! escaped with `!`) and added to the filter of the rows shown with `AND`, a filter whose top
-//! level is not a plain chain of `AND`s put in parentheses first ([`query::and_filter`]). The new
-//! text runs as the filter dialog runs a filter ([`App::table_run`]: the checks, the questions
-//! about functions, row locks and pending edits, read-only profiles); the dialog shows it after.
+//! kind through the dialect, NULL compared only with `IS NULL` or the NULL-safe forms) into the
+//! filter of the rows shown, as the filter dialog writes a term: the filter's other terms stay
+//! as they are written ([`Where`]). The new text runs as the filter dialog runs a filter
+//! ([`App::table_run`]: the checks, the questions about functions, row locks and pending
+//! edits, read-only profiles).
 //!
-//! A value is taken only as the server holds it: a cell shown otherwise than its value (as a copy
-//! as SQL judges it), a new row, a cell with an edit on it, or rows that cannot be read back give
-//! no filter. An entry that cannot apply to the value (a type whose comparison is not known,
-//! binary data over 64 KiB, more than 1000 cells) is shown dimmed with why. Nothing is added
-//! while the query applied is one whose run brought no rows (refused, cancelled), over the
-//! earlier rows still shown.
+//! A value is taken only as the server holds it ([`admit`]): a cell shown otherwise than its
+//! value (as a copy as SQL judges it), a new row, a cell with an edit on it, or rows that cannot
+//! be read back give no filter; nor do a type whose comparison is not known, binary data over
+//! 64 KiB, or more than 1000 cells. Nothing is added while the query applied is one whose run
+//! brought no rows (refused, cancelled), over the earlier rows still shown.
 
-use super::menu::{MenuItem, MenuTarget, Off};
-use super::table_query::{FIELD_CAP, filter_text, refusal_why};
+use super::filter_dialog::draft::{Op, Row, Where};
+use super::menu::Off;
+use super::table_query::{FIELD_CAP, filter_text};
 use super::*;
 use crate::widgets::grid::Shape;
 use crate::widgets::text_input::TextInput;
 use datarig_core::driver::{ColumnMeta, ReadIn, ValueKind};
 use datarig_core::export;
-use datarig_core::query::{self, CaseMode, CmpOp, Cond, Filter, Query, RenderError, Value};
+use datarig_core::query::{self, Filter, Query, RenderError, Target, Value};
+use std::ops::Range;
 
 /// The most cells of a selection a filter takes values from.
 pub const MAX_VALUES: usize = 1000;
@@ -37,57 +37,24 @@ const VALUE_W: usize = 24;
 /// Display columns of the values of a list in a menu entry's label.
 const VALUES_W: usize = 32;
 
-/// What an entry of the menu filters by.
+/// What a filter by the value of the grid's cells keeps ([`App::grid_pick`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ByValue {
-    /// `= value`
-    Eq,
-    /// `<> value` (rows whose value is NULL are left out).
-    Ne,
-    /// Not equal, NULL-safe: rows whose value is NULL are kept.
-    NeNulls,
-    Lt,
-    Gt,
-    Le,
-    Ge,
-    IsNull,
-    IsNotNull,
-    /// One of the values selected (NULL among them tested on its own).
-    In,
-    /// None of the values selected (rows whose value is NULL are left out).
-    NotIn,
-    /// None of the values selected, rows whose value is NULL kept.
-    NotInNulls,
-    /// Text that starts with the value (`LIKE 'value%'`).
-    StartsWith,
-    /// Text that contains the value, whatever the case.
-    Contains,
+pub enum Pick {
+    /// Only the rows with the value (`=`): the column's own conditions replaced.
+    Only,
+    /// Every row but those with the value or values (`!`), added to the other conditions: rows
+    /// whose value is NULL are kept unless NULL is among the cells (a NULL cell alone is `IS
+    /// NOT NULL`).
+    Exclude,
 }
 
-/// An entry of the menu as built: what it filters by, its label, a hint shown with it, and the
-/// filter text it runs (or why it cannot).
-pub struct Entry {
-    pub by: ByValue,
-    pub label: Localized,
-    pub hint: Option<Localized>,
-    pub text: Result<String, Off>,
-}
-
-/// The menu for the cursor's cell or the selection: the column's name (its heading) and the
-/// entries.
-pub struct ByValueMenu {
+/// A filter by the value of the grid's cells, ready to run: the column, its values as a menu
+/// entry names them, and the whole filter text it runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Picked {
     pub column: String,
-    pub cells: usize,
-    pub entries: Vec<Entry>,
-}
-
-/// What a column's values compare by, as far as a filter writes them: `Ok(true)` with an order
-/// too (`<`, `>`), `Ok(false)` equality only; `Err` with why not ([`query::compares`]).
-fn compares(d: Dialect, m: &ColumnMeta, enum_known: bool) -> Result<bool, Label> {
-    match query::compares(d, m, enum_known) {
-        Ok(c) => Ok(c == query::Compares::Order),
-        Err(query::NoEquality) => Err(Label::TableFilterByValueOffType),
-    }
+    pub shown: String,
+    pub text: String,
 }
 
 /// Bytes written in hexadecimal after `prefix` (`\x` on PostgreSQL, `0x` on MySQL).
@@ -176,43 +143,26 @@ pub(crate) fn admit(
 }
 
 impl App {
-    /// `F`: the menu of filters by the value of the active table tab's cursor cell or selection,
-    /// next to the cell; why not, said, when no filter can be built there.
-    pub(super) fn filter_by_value(&mut self) {
+    /// `=` (`Pick::Only`) and `!` (`Pick::Exclude`) on the active table tab's grid: the filter
+    /// by the value of the cursor's cell (or of the cells selected in one column) runs; why not,
+    /// said, when there is none.
+    pub(super) fn grid_filter(&mut self, pick: Pick) {
         let id = self.tab().id;
         self.close_search_prompt();
-        // The rows shown are about to be replaced: a menu of their cells would be out of date.
-        if self.tab().is_table() && self.tab_busy(id) {
+        if self.tab_busy(id) {
             return self.flash_busy();
         }
-        // The rows first: the menu is about the grid's cells.
-        if self.chart_shown() || self.plan_shown() || self.changes_shown() {
-            self.tab_mut().exec.view = super::tabs::ResultView::Rows;
+        match self.grid_pick(id, pick) {
+            Ok(p) => self.grid_filter_run(p.text),
+            Err(off) => self.flash(off.notice),
         }
-        if self.focus != Focus::Inspector {
-            self.focus = Focus::Results;
-        }
-        let menu = match self.by_value_menu(id) {
-            Ok(m) => m,
-            Err(why) => return self.flash(why),
-        };
-        let (Some(grid), Some(result)) = (self.menu_grid_target(), self.grid_result_id()) else { return };
-        let title = match menu.cells {
-            1 => self.i18n.msg(&Msg::TableFilterByValueTitle { column: crate::text::escape_controls(&menu.column) }),
-            n => self.i18n.msg(&Msg::TableFilterByValueTitleMany {
-                column: crate::text::escape_controls(&menu.column),
-                count: n as u64,
-            }),
-        };
-        let at = self.menu_at_cell();
-        self.open_by_value_menu(MenuTarget::Filter { grid: Box::new(grid), result }, title, menu.entries, at);
     }
 
-    /// An entry of the menu was picked, on what it was opened on still (the same cells of the same
-    /// result): `text`, the filter it showed, becomes the draft's and runs, as the filter dialog
-    /// runs it. Nothing is written again from the cells. Refused while the tab runs, or while
-    /// the rows shown are not those of the query applied.
-    pub(super) fn filter_by_value_run(&mut self, text: String) {
+    /// The filter `text` (a filter by value, written from the cells of the rows shown) becomes
+    /// the draft's and runs, as the filter dialog runs it. Nothing is written again from the
+    /// cells. Refused while the tab runs, or while the rows shown are not those of the query
+    /// applied.
+    pub(super) fn grid_filter_run(&mut self, text: String) {
         let id = self.tab().id;
         if self.tab_busy(id) {
             return self.flash_busy();
@@ -222,164 +172,158 @@ impl App {
         }
         let Some(tq) = self.table_query(id) else { return };
         let (Some(target), Some(shown)) = (self.table_target(id), tq.shown.clone()) else { return };
-        // Only a text shown on one line as it is runs: the dialog shows what runs.
-        if !TextInput::holds(&text) {
-            return self.flash(Notice::new(Label::TableFilterByValueNotOneLine, Level::Warning));
-        }
         let recognised = query::recognise(&text, &target);
+        let filter = (!text.trim().is_empty()).then_some(Filter { text, recognised });
         let Some(tq) = self.table_query_mut(id) else { return };
-        tq.draft = Query { filter: Some(Filter { text, recognised }), ..shown };
+        tq.draft = Query { filter, ..shown };
         tq.refusal = None;
         let q = tq.draft.clone();
         self.table_run(id, q);
     }
 
-    /// The menu of filters by value for table tab `id`'s cursor cell or selection, or why there
-    /// is none (said as it is).
-    pub(super) fn by_value_menu(&self, id: TabId) -> Result<ByValueMenu, Notice> {
-        let warn = |l: Label| Notice::new(l, Level::Warning);
-        let t = self.tabs.get(id).filter(|t| t.is_table()).ok_or_else(|| warn(Label::TableFilterOnlyTableTabs))?;
-        let tq = t.doc.table_query.as_ref().ok_or_else(|| warn(Label::TableFilterByValueNoRows))?;
-        let shown = tq.shown.as_ref().ok_or_else(|| warn(Label::TableFilterByValueNoRows))?;
-        let Results::Rows(rs) = &t.results else { return Err(warn(Label::TableFilterByValueNoRows)) };
+    /// The cells of table tab `id`'s grid a filter by value takes its values from (the
+    /// selection's, else the cursor's): their column and rows; or why there are none.
+    fn value_cells(&self, id: TabId) -> Result<(usize, Range<usize>), Box<Off>> {
+        let off = |short: Label, l: Label| Box::new(Off::new(short, Notice::new(l, Level::Warning)));
+        let no_rows = || off(Label::TableFilterByValueOffNoRows, Label::TableFilterByValueNoRows);
+        let t = self
+            .tabs
+            .get(id)
+            .filter(|t| t.is_table())
+            .ok_or_else(|| off(Label::MenuOffOnlyTableTabs, Label::TableFilterOnlyTableTabs))?;
+        let tq = t.doc.table_query.as_ref().ok_or_else(no_rows)?;
+        tq.shown.as_ref().ok_or_else(no_rows)?;
+        let Results::Rows(rs) = &t.results else { return Err(no_rows()) };
         if rs.rows.is_empty() || rs.columns.is_empty() || t.exec.view != super::tabs::ResultView::Rows {
-            return Err(warn(Label::TableFilterByValueNoRows));
+            return Err(no_rows());
         }
         // Nothing is added to the filter of rows that are not of the query applied.
         if !self.rows_shown_applied(id) {
-            return Err(warn(Label::TableFilterByValueNotShown));
+            return Err(off(Label::TableFilterByValueOffNotShown, Label::TableFilterByValueNotShown));
         }
-        // The cells: the selection's, else the cursor's; read rows of one column only.
         let g = &t.grid;
+        if !g.shown(g.col) {
+            return Err(Box::new(Off::said(self.no_cell_notice())));
+        }
         let len = rs.rows.len();
         let on_new = g.row >= len || g.anchor.filter(|_| g.shape != Shape::Cols).is_some_and(|a| a.0 >= len);
         if on_new {
-            return Err(warn(Label::TableFilterByValueNewRows));
+            return Err(off(Label::TableFilterByValueOffNewRow, Label::TableFilterByValueNewRows));
         }
         let cursor = (g.row, g.col.min(rs.columns.len() - 1));
         let (rows, cols) = match g.anchor {
             Some(a) => g.shape.span(a, cursor, len, rs.columns.len()),
             None => (cursor.0..cursor.0 + 1, cursor.1..cursor.1 + 1),
         };
-        if cols.len() != 1 {
-            return Err(warn(Label::TableFilterByValueOneColumn));
+        // The columns the grid shows of the span: whole rows over one shown column are its.
+        match g.shown_in(cols)[..] {
+            [col] => Ok((col, rows)),
+            _ => Err(off(Label::TableFilterByValueOffOneColumn, Label::TableFilterByValueOneColumn)),
         }
-        let col = cols.start;
+    }
+
+    /// The filter by value `pick` of table tab `id`'s cursor cell or selection, written into
+    /// the filter of the rows shown, or why there is none (what an entry dimmed shows, and what
+    /// its key says).
+    ///
+    /// Only the value (`=`): the column's own conditions (those the dialog shows as its rows)
+    /// are replaced by `= value`, by `IS NULL` for a NULL cell, by `IN (…)` for several values
+    /// (with `OR … IS NULL` when NULL is among them); every other term stays as written.
+    /// Everything but the value (`!`) is added to them: `IS DISTINCT FROM` (MySQL `NOT (… <=>
+    /// …)`) so that rows whose value is NULL stay, `IS NOT NULL` for a NULL cell, `NOT IN (…)`
+    /// for several values, rows whose value is NULL kept unless NULL is among the cells.
+    pub(crate) fn grid_pick(&self, id: TabId, pick: Pick) -> Result<Picked, Box<Off>> {
+        let warn = |l: Label| Notice::new(l, Level::Warning);
+        let (col, rows) = self.value_cells(id)?;
+        let no_rows = || Box::new(Off::new(Label::TableFilterByValueOffNoRows, warn(Label::TableFilterByValueNoRows)));
+        let t = self.tabs.get(id).ok_or_else(no_rows)?;
+        let Results::Rows(rs) = &t.results else { return Err(no_rows()) };
+        let shown = t.doc.table_query.as_ref().and_then(|q| q.shown.as_ref());
+        let (Some(shown), Some(target)) = (shown, self.table_target(id)) else { return Err(no_rows()) };
         let m = &rs.columns[col].meta;
-        let target = self.table_target(id).ok_or_else(|| warn(Label::TableFilterByValueNoRows))?;
         let d = target.dialect;
         let column = m.name.clone();
         let cells = rows.len();
-        let base = filter_text(shown).unwrap_or_default();
         // A filter is shown on one line: a name with a line break would not read back as the
         // same name there (nor run as it is shown).
         let not_one_line = || {
             let n = Msg::TableFilterByValueName { column: crate::text::escape_controls(&column) };
-            Off::new(Label::TableFilterByValueOffName, Notice::new(n, Level::Warning))
+            Box::new(Off::new(Label::TableFilterByValueOffName, Notice::new(n, Level::Warning)))
         };
-        // The filter text of `c`, or why not.
-        let text_of = |c: &Cond| -> Result<String, Off> {
-            if !TextInput::holds(&column) {
-                return Err(not_one_line());
-            }
-            let cond = query::render(c, &target).map_err(|e| match e {
-                RenderError::CaseInsensitiveRefused(_) => {
-                    let collation = target.column(&column).and_then(|f| f.collation.clone());
-                    let n = match collation {
-                        Some(collation) => Msg::TableFilterByValueNondeterministic { collation },
-                        None => Msg::TableFilterByValueNondeterministicColumn { column: column.clone() },
-                    };
-                    Off::new(Label::TableFilterByValueOffCollation, Notice::new(n, Level::Warning))
-                }
-                RenderError::CollationUnknown(_) => {
-                    let n =
-                        Notice::new(Msg::TableFilterByValueCollationUnknown { column: column.clone() }, Level::Warning);
-                    Off::new(Label::TableFilterByValueOffCollationUnknown, n)
-                }
-                RenderError::LikeRefused(_) => {
-                    let n = Notice::new(Msg::TableFilterByValueLikeRefused { column: column.clone() }, Level::Warning);
-                    Off::new(Label::TableFilterByValueOffCollation, n)
-                }
-                RenderError::LikeUnknown(_) => {
-                    let n = Notice::new(Msg::TableFilterByValueLikeUnknown { column: column.clone() }, Level::Warning);
-                    Off::new(Label::TableFilterByValueOffCollationUnknown, n)
-                }
-                _ => Off::new(Label::TableFilterByValueOffType, self.by_value_type_notice(m)),
-            })?;
-            // The filter shown is one condition (it ran): refused, never repaired, when not.
-            let text = query::and_filter(base, &cond, d).map_err(|r| {
-                let why = refusal_why(&self.i18n, &r);
-                Off::new(
-                    Label::TableFilterByValueOffBase,
-                    Notice::new(Msg::TableFilterByValueBase { why }, Level::Warning),
-                )
-            })?;
-            match text.len() > FIELD_CAP {
-                true => Err(Off::new(Label::TableFilterByValueOffTooLong, warn(Label::TableFilterByValueTooLong))),
-                false if !TextInput::holds(&text) => Err(not_one_line()),
-                false => Ok(text),
-            }
-        };
-        // Whether the column's values compare, and with an order.
-        let enum_known = self
-            .table_structure_of(id)
-            .and_then(|s| s.columns.iter().find(|c| c.name == column))
-            .is_some_and(|c| !c.enum_labels.is_empty());
-        let compares = compares(d, m, enum_known).map_err(|short| Off::new(short, self.by_value_type_notice(m)));
-        let ordered = compares.clone().and_then(|o| match o {
-            true => Ok(()),
-            false => Err(Off::new(Label::TableFilterByValueOffOrder, self.by_value_order_notice(m))),
-        });
-        let equality = compares.map(drop);
-        let col_of = || column.clone();
-        let mut entries = Vec::new();
-        let entry = |by: ByValue, label: Localized, hint: Option<Localized>, text: Result<String, Off>| Entry {
-            by,
-            label,
-            hint,
-            text,
-        };
-        let label = |l: Label| self.i18n.label(l);
+        if !TextInput::holds(&column) {
+            return Err(not_one_line());
+        }
         if cells > MAX_VALUES {
-            let off = || {
-                let max = datarig_i18n::fmt_count(MAX_VALUES as u64);
-                let n = Notice::new(Msg::TableFilterByValueTooMany { max }, Level::Warning);
-                Off::new(Label::TableFilterByValueOffTooMany, n)
-            };
-            let many = Localized::verbatim("…");
-            entries.push(entry(
-                ByValue::In,
-                self.i18n.msg(&Msg::TableFilterByValueIn { values: many.to_string() }),
-                None,
-                Err(off()),
-            ));
-            entries.push(entry(
-                ByValue::NotIn,
-                self.i18n.msg(&Msg::TableFilterByValueNotIn { values: many.to_string() }),
-                None,
-                Err(off()),
-            ));
-            return Ok(ByValueMenu { column, cells, entries });
+            let max = datarig_i18n::fmt_count(MAX_VALUES as u64);
+            let n = Notice::new(Msg::TableFilterByValueTooMany { max }, Level::Warning);
+            return Err(Box::new(Off::new(Label::TableFilterByValueOffTooMany, n)));
         }
         // The values as read: an edit over one, or rows that cannot be read back, give none.
         if rows.clone().any(|r| rs.over(r, col).is_some()) {
-            return Err(warn(Label::TableFilterByValueEdited));
+            return Err(Box::new(Off::new(Label::TableFilterByValueOffEdited, warn(Label::TableFilterByValueEdited))));
         }
-        let mut cells_read: Vec<Option<String>> = Vec::with_capacity(cells);
+        let unread = || Box::new(Off::new(Label::TableFilterByValueOffUnread, warn(Label::TableFilterByValueUnread)));
+        let mut read: Vec<Option<String>> = Vec::with_capacity(cells);
         rs.rows
-            .for_each_chunk(rows.clone(), 256, |chunk| {
-                cells_read.extend(chunk.iter().map(|r| r.get(col).cloned().flatten()));
-            })
-            .map_err(|_| warn(Label::TableFilterByValueUnread))?;
-        if cells_read.len() != cells {
-            return Err(warn(Label::TableFilterByValueUnread));
+            .for_each_chunk(rows.clone(), 256, |chunk| read.extend(chunk.iter().map(|r| r.get(col).cloned().flatten())))
+            .map_err(|_| unread())?;
+        if read.len() != cells {
+            return Err(unread());
         }
         // Each value once, in the order selected; NULL apart.
         let mut seen = std::collections::HashSet::new();
-        let distinct: Vec<&str> = cells_read.iter().flatten().map(String::as_str).filter(|v| seen.insert(*v)).collect();
-        let null = cells_read.iter().any(Option::is_none);
-        let values: Result<Vec<Value>, Off> =
-            distinct.iter().map(|v| self.by_value_value(t, rs, col, v).map_err(|o| *o)).collect();
+        let distinct: Vec<&str> = read.iter().flatten().map(String::as_str).filter(|v| seen.insert(*v)).collect();
+        let null = read.iter().any(Option::is_none);
+        // A value compares only on a column whose values have equality; NULL alone is tested
+        // with `IS NULL`, whatever the type.
+        if !distinct.is_empty() {
+            let enum_known = self
+                .table_structure_of(id)
+                .and_then(|s| s.columns.iter().find(|c| c.name == column))
+                .is_some_and(|c| !c.enum_labels.is_empty());
+            query::compares(d, m, enum_known)
+                .map_err(|_| Box::new(Off::new(Label::TableFilterByValueOffType, self.by_value_type_notice(m))))?;
+        }
+        let mut values = distinct.iter().map(|v| self.by_value_value(t, rs, col, v)).collect::<Result<Vec<_>, _>>()?;
+        let row = match (pick, values.len(), null) {
+            (Pick::Only, 0, _) => Row::new(column.clone(), Op::IsNull),
+            (Pick::Exclude, 0, _) => Row::new(column.clone(), Op::IsNotNull),
+            (Pick::Only, 1, false) => Row { values, ..Row::new(column.clone(), Op::Eq) },
+            (Pick::Exclude, 1, false) => Row { values, ..Row::new(column.clone(), Op::NeOrNull) },
+            (pick, _, null) => {
+                if null {
+                    values.push(Value::Null);
+                }
+                let op = if pick == Pick::Only { Op::InList } else { Op::NotInList };
+                Row { values, keep_nulls: !null, ..Row::new(column.clone(), op) }
+            }
+        };
+        let cond = row.cond().ok_or_else(no_rows)?;
+        query::render(&cond, &target).map_err(|e| Box::new(self.render_off(e, &target, m)))?;
+        let mut terms = Where::from_text(filter_text(shown).unwrap_or_default(), &target);
+        match pick {
+            Pick::Only => terms.replace_column(row, &target),
+            Pick::Exclude => terms.add(row, &target),
+        };
+        let text = terms.text();
+        if text.len() > FIELD_CAP {
+            return Err(Box::new(Off::new(
+                Label::TableFilterByValueOffTooLong,
+                warn(Label::TableFilterByValueTooLong),
+            )));
+        }
+        if !TextInput::holds(&text) {
+            return Err(Box::new(Off::new(
+                Label::TableFilterByValueOffLineBreak,
+                warn(Label::TableFilterByValueNotOneLine),
+            )));
+        }
+        Ok(Picked { column, shown: self.picked_values(m, &distinct, null), text })
+    }
+
+    /// The values of a filter by value as its menu entry names them: one value as the grid
+    /// shows it (text quoted), several as a list cut with `…`, NULL as `NULL`.
+    fn picked_values(&self, m: &ColumnMeta, distinct: &[&str], null: bool) -> String {
         // As the grid shows it: bytes in their hexadecimal form, text with its control
         // characters spelled out.
         let shown_value = |v: &str| {
@@ -389,87 +333,6 @@ impl App {
                 false => format!("'{}'", cut(&v, VALUE_W)),
             }
         };
-        let float = m.kind == ValueKind::Float;
-        let text_col = m.kind == ValueKind::Text;
-        let hint = |l: Label| Some(label(l));
-        if distinct.is_empty() {
-            // Only NULL: tested as NULL, never with `=`.
-            for (by, l, negated) in [
-                (ByValue::IsNull, Label::TableFilterByValueIsNull, false),
-                (ByValue::IsNotNull, Label::TableFilterByValueIsNotNull, true),
-            ] {
-                let c = Cond::IsNull { col: col_of(), negated };
-                entries.push(entry(by, label(l), None, text_of(&c)));
-            }
-            return Ok(ByValueMenu { column, cells, entries });
-        }
-        if cells == 1 {
-            let v = distinct[0];
-            let shown = shown_value(v);
-            let value = values.map(|mut v| v.remove(0));
-            let with = |ok: &Result<(), Off>, c: &dyn Fn(Value) -> Cond| -> Result<String, Off> {
-                ok.clone()?;
-                text_of(&c(value.clone()?))
-            };
-            let cmp = |op: CmpOp| move |v: Value| Cond::Cmp { col: col_of(), op, value: v };
-            let case_hint = if text_col { hint(Label::TableFilterByValueHintServerCase) } else { None };
-            let float_hint = if float { hint(Label::TableFilterByValueHintFloat) } else { None };
-            entries.push(entry(
-                ByValue::Eq,
-                self.i18n.msg(&Msg::TableFilterByValueEq { value: shown.clone() }),
-                float_hint.clone().or(case_hint.clone()),
-                with(&equality, &cmp(CmpOp::Eq)),
-            ));
-            entries.push(entry(
-                ByValue::Ne,
-                self.i18n.msg(&Msg::TableFilterByValueNe { value: shown.clone() }),
-                float_hint.clone().or(hint(Label::TableFilterByValueHintDropsNulls)),
-                with(&equality, &cmp(CmpOp::Ne)),
-            ));
-            entries.push(entry(
-                ByValue::NeNulls,
-                self.i18n.msg(&Msg::TableFilterByValueNeNulls { value: shown.clone() }),
-                float_hint,
-                with(&equality, &|v| Cond::NotDistinct { col: col_of(), value: v, negated: true }),
-            ));
-            for (by, op, msg) in [
-                (ByValue::Lt, CmpOp::Lt, Msg::TableFilterByValueLt { value: shown.clone() }),
-                (ByValue::Gt, CmpOp::Gt, Msg::TableFilterByValueGt { value: shown.clone() }),
-                (ByValue::Le, CmpOp::Le, Msg::TableFilterByValueLe { value: shown.clone() }),
-                (ByValue::Ge, CmpOp::Ge, Msg::TableFilterByValueGe { value: shown.clone() }),
-            ] {
-                entries.push(entry(by, self.i18n.msg(&msg), None, with(&ordered, &cmp(op))));
-            }
-            if text_col {
-                let like = |pattern: String, case: CaseMode| -> Result<String, Off> {
-                    equality.clone()?;
-                    value.clone()?;
-                    text_of(&Cond::Like { col: col_of(), pattern, negated: false, case })
-                };
-                entries.push(entry(
-                    ByValue::StartsWith,
-                    self.i18n.msg(&Msg::TableFilterByValueStartsWith { value: shown.clone() }),
-                    case_hint,
-                    like(query::like_starts_with(v), CaseMode::Server),
-                ));
-                // PostgreSQL: `LIKE` on a collation known deterministic or a server known to take
-                // it on any (18 and later), `ILIKE` only on a collation known deterministic, else
-                // dimmed with why; MySQL: a collation not known by name is lowered on both sides.
-                let known = target.column(&column).is_some_and(|f| f.collation.is_some());
-                let contains_hint = match d {
-                    Dialect::MySql(_) if !known => hint(Label::TableFilterByValueHintCollationLower),
-                    _ => None,
-                };
-                entries.push(entry(
-                    ByValue::Contains,
-                    self.i18n.msg(&Msg::TableFilterByValueContains { value: shown }),
-                    contains_hint,
-                    like(query::like_contains(v), CaseMode::Insensitive),
-                ));
-            }
-            return Ok(ByValueMenu { column, cells, entries });
-        }
-        // Several cells: the values as a list, NULL tested on its own.
         let mut list = String::new();
         for (i, v) in distinct.iter().enumerate() {
             let next = if i == 0 { shown_value(v) } else { format!("{list}, {}", shown_value(v)) };
@@ -479,45 +342,40 @@ impl App {
             }
             list = next;
         }
-        if null {
-            list.push_str(", NULL");
+        match (list.is_empty(), null) {
+            (true, _) => "NULL".to_string(),
+            (false, true) => format!("{list}, NULL"),
+            (false, false) => list,
         }
-        let in_cond = |negated: bool, with_null: bool| -> Result<Cond, Off> {
-            let mut vs = values.clone()?;
-            if with_null {
-                vs.push(Value::Null);
+    }
+
+    /// Why a condition on column `m` of table `target` is not written ([`query::render`]), as an
+    /// entry dimmed shows it and its key says it.
+    fn render_off(&self, e: RenderError, target: &Target, m: &ColumnMeta) -> Off {
+        let column = m.name.clone();
+        let warn = |n: Msg| Notice::new(n, Level::Warning);
+        match e {
+            RenderError::CaseInsensitiveRefused(_) => {
+                let collation = target.column(&column).and_then(|f| f.collation.clone());
+                let n = match collation {
+                    Some(collation) => Msg::TableFilterByValueNondeterministic { collation },
+                    None => Msg::TableFilterByValueNondeterministicColumn { column },
+                };
+                Off::new(Label::TableFilterByValueOffCollation, warn(n))
             }
-            Ok(Cond::In { col: col_of(), values: vs, negated })
-        };
-        let listed = |c: Result<Cond, Off>| -> Result<String, Off> {
-            equality.clone()?;
-            text_of(&c?)
-        };
-        entries.push(entry(
-            ByValue::In,
-            self.i18n.msg(&Msg::TableFilterByValueIn { values: list.clone() }),
-            None,
-            listed(in_cond(false, null)),
-        ));
-        // With NULL selected, NOT IN leaves out the NULL rows as asked (and says it in its text);
-        // without, plain NOT IN leaves them out too (said), and the other one keeps them.
-        entries.push(entry(
-            ByValue::NotIn,
-            self.i18n.msg(&Msg::TableFilterByValueNotIn { values: list.clone() }),
-            (!null).then(|| label(Label::TableFilterByValueHintDropsNulls)),
-            listed(in_cond(true, null)),
-        ));
-        if !null {
-            let keeps =
-                in_cond(true, false).map(|c| Cond::Any(vec![c, Cond::IsNull { col: col_of(), negated: false }]));
-            entries.push(entry(
-                ByValue::NotInNulls,
-                self.i18n.msg(&Msg::TableFilterByValueNotInNulls { values: list }),
-                None,
-                listed(keeps),
-            ));
+            RenderError::CollationUnknown(_) => Off::new(
+                Label::TableFilterByValueOffCollationUnknown,
+                warn(Msg::TableFilterByValueCollationUnknown { column }),
+            ),
+            RenderError::LikeRefused(_) => {
+                Off::new(Label::TableFilterByValueOffCollation, warn(Msg::TableFilterByValueLikeRefused { column }))
+            }
+            RenderError::LikeUnknown(_) => Off::new(
+                Label::TableFilterByValueOffCollationUnknown,
+                warn(Msg::TableFilterByValueLikeUnknown { column }),
+            ),
+            _ => Off::new(Label::TableFilterByValueOffType, self.by_value_type_notice(m)),
         }
-        Ok(ByValueMenu { column, cells, entries })
     }
 
     /// Value `v` of column `col` of result `rs` (as read, not NULL) as the filter compares it,
@@ -554,43 +412,6 @@ impl App {
     fn by_value_type_notice(&self, m: &ColumnMeta) -> Notice {
         let (column, ty) = (m.name.clone(), m.type_name.clone());
         Notice::new(Msg::TableFilterByValueType { column, ty }, Level::Warning)
-    }
-
-    /// Why column `m`'s values are compared for equality only, in full.
-    fn by_value_order_notice(&self, m: &ColumnMeta) -> Notice {
-        let (column, ty) = (m.name.clone(), m.type_name.clone());
-        Notice::new(Msg::TableFilterByValueOrder { column, ty }, Level::Warning)
-    }
-
-    /// An entry of the open filter menu runs (from [`App::menu_run`]), with the filter `text`
-    /// the menu showed for it (`None`: it had none, nothing runs).
-    pub(super) fn by_value_item(&mut self, text: Option<String>) {
-        if let Some(text) = text {
-            self.filter_by_value_run(text);
-        }
-    }
-
-    /// Open the filter menu of `entries` for `target` at `at`, headed `title`: the entries that
-    /// cannot apply dimmed with why, the others with their hints.
-    fn open_by_value_menu(&mut self, target: MenuTarget, title: Localized, entries: Vec<Entry>, at: (u16, u16)) {
-        let mut items = Vec::new();
-        let mut off = Vec::new();
-        let mut names = Vec::new();
-        let mut hints = Vec::new();
-        let mut filters = Vec::new();
-        for e in entries {
-            let item = MenuItem::Filter(e.by);
-            items.push(item);
-            names.push((item, e.label));
-            if let Some(h) = e.hint {
-                hints.push((item, h));
-            }
-            match e.text {
-                Ok(text) => filters.push((item, text)),
-                Err(o) => off.push((item, o)),
-            }
-        }
-        self.push_filter_menu(target, title.to_string(), (items, off, names, hints, filters), at);
     }
 }
 

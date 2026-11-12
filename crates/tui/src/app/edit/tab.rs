@@ -166,6 +166,10 @@ impl App {
         }
         let col = col.unwrap_or(self.tab().grid.col);
         self.tab_mut().exec.view = tabs::ResultView::Rows;
+        // A column hidden from the grid is shown again to reach its change.
+        if !self.tab().grid.shown(col) {
+            self.show_column(col);
+        }
         self.edit_cursor_to(at, col);
         Went::There
     }

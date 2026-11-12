@@ -24,9 +24,9 @@
 //! tree was reloaded, the result was replaced, the tab went), nothing runs.
 
 use super::action::{ChartAction, MonitorAction, PanelAction, PlanAction, PlanView};
+use super::column_menu::ColumnItem;
 use super::copy::{CopyFormat, CopyScope};
 use super::edit::{EditAction, NotOffered};
-use super::filter_value::ByValue;
 use super::monitor::MonitorView;
 use super::table_filter::TableAction;
 use super::tabs::ResultView;
@@ -64,7 +64,7 @@ const GRID_MENU: &[Action] = &[
 ];
 
 /// The grid's filters by the value of its cell or selection (a table tab's), after its copies.
-const FILTER_MENU: &[Action] = &[Action::Table(TableAction::FilterByValue)];
+const FILTER_MENU: &[Action] = &[Action::Table(TableAction::ColumnMenu)];
 
 /// The edits of the grid's cell or selection, after its copies: each only while its key would
 /// act now ([`App::edit_offered`]).
@@ -238,8 +238,8 @@ pub enum MenuItem {
     Scope(MenuScope),
     /// A format of a scope's submenu.
     Copy(MenuScope, CopyFormat),
-    /// A filter by the value of the grid's cell or selection (the filter menu's items).
-    Filter(ByValue),
+    /// An entry of the column menu (on the grid's target, as the count choice's).
+    Column(ColumnItem),
     /// An entry of the choice `#` opens on a filtered table tab (on the grid's target as the
     /// filter menu's are).
     Count(super::estimate::CountChoice),
@@ -319,6 +319,8 @@ pub enum MenuLine {
     Item(MenuItem),
     /// Nothing matches the filter, not even among every action.
     NoMatch,
+    /// A rule between groups of the target's items (the column menu's), while nothing is typed.
+    Rule,
 }
 
 /// The second level of a menu: the formats of a copy scope, next to its row.
@@ -354,6 +356,9 @@ pub struct ContextMenu {
     back: Focus,
     /// What was typed to filter the items.
     pub filter: TextInput,
+    /// Typing filters the items (a filter line on top); without, letters move and run the
+    /// keys shown (a menu of a few entries).
+    pub typing: bool,
     /// The lines shown: headings and the items that match the filter.
     pub lines: Vec<MenuLine>,
     /// The selected line (an item, when there is one).
@@ -690,7 +695,9 @@ impl App {
         let t = self.tab();
         // The Messages of a run hide the grid: no cell to act on then. A new row (shown after the
         // rows read) is a cell too, for its edits only.
+        // A hidden column is no cell either (every column hidden).
         let rows = t.exec.view == ResultView::Rows
+            && t.grid.shown(t.grid.col)
             && matches!(&t.results, Results::Rows(rs) if t.grid.row < rs.rows.len() + rs.edit.new_shown());
         Some(MenuTarget::Grid {
             tab: t.id,
@@ -871,6 +878,7 @@ impl App {
             title,
             back,
             filter: TextInput::default(),
+            typing: true,
             lines: Vec::new(),
             selected: 0,
             scroll: 0,
@@ -944,7 +952,18 @@ impl App {
             self.chart_click(x, y, false);
             return self.open_chart_menu((x, y));
         }
+        let table = self.tab().is_table();
         let t = self.tabs.active_mut();
+        // A table tab's header: that column's menu (the cursor goes to its column).
+        if table
+            && t.exec.view == ResultView::Rows
+            && let Some(c) = t.grid.header_col(x, y)
+        {
+            t.grid.go_to(t.grid.row, c);
+            t.grid.anchor = None;
+            t.grid.detached = false;
+            return self.open_column_menu_at((x, y));
+        }
         if let (ResultView::Rows, Results::Rows(rs)) = (t.exec.view, &t.results) {
             let (total, ncols) = (rs.rows.len(), rs.columns.len());
             let on_range = t.grid.cell_at(x, y, total).is_some_and(|c| t.grid.in_range(c, total, ncols));
@@ -1011,6 +1030,10 @@ impl App {
             pane.push(MenuItem::Scope(MenuScope::Default));
         }
         pane.extend(self.available(RESULTS_MENU, &mut off));
+        // No cell shown (every column hidden): none to select.
+        if self.grid_no_cell() {
+            pane.retain(|i| *i != MenuItem::Action(Action::Grid(GridAction::SelectAll)));
+        }
         self.push_menu_from(back, Ctx::Grid, target, (own, pane, off), at);
         if !self.overlays.is_open(OverlayKind::ContextMenu) {
             self.focus = back;
@@ -1262,7 +1285,16 @@ impl App {
             }
             ranked.sort_by_key(|&(r, i, _)| (r, i));
             lines.push(MenuLine::Heading(heading));
+            let mut group = None;
             for (r, _, item) in ranked {
+                let g = match item {
+                    MenuItem::Column(c) if query.is_empty() => Some(c.group()),
+                    _ => None,
+                };
+                if group.is_some() && g.is_some() && g != group {
+                    lines.push(MenuLine::Rule);
+                }
+                group = g;
                 if !off.contains(&item) && best.is_none_or(|(b, _)| r < b) {
                     best = Some((r, lines.len()));
                 }
@@ -1364,11 +1396,11 @@ impl App {
                     self.apply_setting(super::command::Setting::CopyFormat(s));
                 }
             }
-            MenuItem::Filter(_) => {
+            MenuItem::Column(c) => {
                 let text =
                     self.overlays.menu().and_then(|m| m.filters.iter().find(|(i, _)| *i == item)).map(|f| f.1.clone());
                 self.overlays.close(OverlayKind::ContextMenu);
-                self.by_value_item(text);
+                self.column_item(c, text);
             }
             MenuItem::Count(choice) => {
                 self.overlays.close(OverlayKind::ContextMenu);
@@ -1440,6 +1472,14 @@ impl App {
                 let i = m.selected;
                 self.open_sub(i);
             }
+            KeyCode::Char('j') if !m.typing && k.mods.is_empty() => m.step(1),
+            KeyCode::Char('k') if !m.typing && k.mods.is_empty() => m.step(-1),
+            // No filter: a key shown next to an entry runs it.
+            _ if !m.typing => {
+                if !repeat && let Some(item) = self.menu_item_of_key(k) {
+                    self.menu_pick(item);
+                }
+            }
             _ => match m.filter.handle_key(&k.to_event()) {
                 InputResult::Changed => self.menu_refilter(),
                 InputResult::Moved => {}
@@ -1465,7 +1505,7 @@ impl App {
     /// Text pasted while the menu has the keyboard: into its filter.
     pub(super) fn menu_paste(&mut self, text: &str) {
         let Some(m) = self.overlays.menu_mut() else { return };
-        if m.sub.is_none() {
+        if m.sub.is_none() && m.typing {
             m.filter.insert_str(text);
             self.menu_refilter();
         }
@@ -1557,7 +1597,8 @@ impl App {
         let own = names.iter().find(|(x, _)| *x == item).map(|(_, l)| l.clone());
         match item {
             MenuItem::Action(a) => (own.unwrap_or_else(|| self.i18n.label(action::spec(a).label)), keys(a)),
-            MenuItem::Filter(_) | MenuItem::Count(_) => (own.unwrap_or_else(|| Localized::verbatim("")), String::new()),
+            MenuItem::Column(c) => (own.unwrap_or_else(|| Localized::verbatim("")), self.column_item_keys(c)),
+            MenuItem::Count(_) => (own.unwrap_or_else(|| Localized::verbatim("")), String::new()),
             MenuItem::Scope(scope) => {
                 let label = match scope {
                     MenuScope::Copy(CopyScope::Selection) => self.i18n.label(Label::CopyScopeSelection),
@@ -1667,6 +1708,8 @@ impl App {
                     (false, label, keys)
                 }
                 MenuLine::NoMatch => (true, self.i18n.label(Label::MenuNoMatch), String::new()),
+                // A heading with no text: drawn as a rule.
+                MenuLine::Rule => (true, Localized::verbatim(""), String::new()),
             })
             .collect()
     }

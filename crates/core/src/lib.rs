@@ -11,6 +11,7 @@
 //! * [`paths`] — the data and state directories; [`fsutil`] — atomic file writes.
 //! * [`scripts`] — saved queries and their index; [`workspace`] — tab restore and the instance
 //!   lock.
+//! * [`table_view`]: the columns hidden from each table's grid (`table-view.toml`).
 //! * [`filter_history`]: the filters and orders each table ran (`filter-history.toml`), to
 //!   pick one again.
 //! * [`usage`] — how often actions ran by key, menu and command line (`usage.toml`), for tips.
@@ -52,6 +53,7 @@ pub mod scripts;
 pub mod secret;
 pub mod shown;
 pub mod sql;
+pub mod table_view;
 pub mod theme;
 pub mod tls;
 pub mod transport;

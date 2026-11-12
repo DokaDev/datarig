@@ -26,6 +26,7 @@ impl App {
             || self.changes_count_due().is_some()
             || self.monitor_due().is_some()
             || self.filter_history_due().is_some()
+            || self.table_view_due().is_some()
     }
 
     /// Aux session `a` is open and no tab works in its database: it closes
@@ -110,6 +111,10 @@ impl App {
         if let Some(due) = self.filter_history_due() {
             at(due);
         }
+        // The hidden columns' write after its debounce.
+        if let Some(due) = self.table_view_due() {
+            at(due);
+        }
         // Never sooner than a fine tick, never in the past.
         next.map(|n| n.max(now + Duration::from_millis(1)))
     }
@@ -127,6 +132,7 @@ impl App {
         self.sweep_status_ask();
         self.autosave_tick(now);
         self.filter_history_tick(now);
+        self.table_view_tick(now);
         // Aux sessions no tab works in, unused for a while, close; what they read stays.
         let idle: Vec<u64> = self
             .conns

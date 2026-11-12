@@ -1,7 +1,7 @@
 //! The action menu: a box at the pointer or next to the selection with the filter on its first
-//! row, then headings and one item per row with its keys on the right (a dimmed item: why it
-//! cannot run, in their place); an open submenu (the grid's copy formats) is a second box next
-//! to its row.
+//! row (none in a menu of a few entries: the column menu), then headings and one item per row
+//! with its keys on the right (a dimmed item: why it cannot run, in their place); an open
+//! submenu (the grid's copy formats) is a second box next to its row.
 
 use crate::app::App;
 use crate::text::{Align, fit, width};
@@ -31,9 +31,14 @@ pub(crate) fn draw_context_menu(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let label_w =
         lines.iter().map(|(h, l, _)| width(l) + usize::from(!*h)).max().unwrap_or(0).max(label_w + 1).max(heading_w);
     let key_w = lines.iter().map(|(_, _, k)| width(k)).max().unwrap_or(0).max(key_w);
-    let inner_w = (label_w + key_w + 4).max(width(PROMPT) + width(&hint) + 2).max(width(m.filter.text()) + 4);
+    // The filter's line, when typing filters.
+    let top = u16::from(m.typing);
+    let inner_w = match m.typing {
+        true => (label_w + key_w + 4).max(width(PROMPT) + width(&hint) + 2).max(width(m.filter.text()) + 4),
+        false => label_w + key_w + 4,
+    };
     let w = (inner_w as u16 + 2).min(area.width);
-    let h = (lines.len() as u16 + 3).min(area.height);
+    let h = (lines.len() as u16 + 2 + top).min(area.height);
     // Below the row it was opened on, moved in to stay on the screen.
     let x = ax.min(area.x + area.width - w);
     let y = (ay + 1).min(area.y + area.height - h);
@@ -46,17 +51,21 @@ pub(crate) fn draw_context_menu(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         .style(Style::new().bg(th.surface).fg(th.fg));
     let inner = block.inner(rect);
     block.render(rect, buf);
-    if inner.height == 0 || inner.width < 3 {
+    if inner.height < top + 1 || inner.width < 3 {
         return None;
     }
     // The filter, or what typing does.
     let iw = inner.width as usize;
     let base = Style::new().bg(th.surface);
-    put(buf, inner.x + 1, inner.y, PROMPT, iw - 1, base.fg(th.accent));
+    if m.typing {
+        put(buf, inner.x + 1, inner.y, PROMPT, iw - 1, base.fg(th.accent));
+    }
     let fx = inner.x + 1 + width(PROMPT) as u16;
     let room = Rect::new(fx, inner.y, inner.width.saturating_sub(fx - inner.x + 1), 1);
     let typing = m.sub.is_none();
-    let cursor = if m.filter.text().is_empty() {
+    let cursor = if !m.typing {
+        None
+    } else if m.filter.text().is_empty() {
         put(buf, fx, inner.y, &hint, room.width as usize, base.fg(th.fg_dim));
         typing.then_some((fx, inner.y))
     } else {
@@ -64,7 +73,7 @@ pub(crate) fn draw_context_menu(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         typing.then_some((cx, inner.y))
     };
     // The lines, scrolled so the selected one is on screen.
-    let list = Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1);
+    let list = Rect::new(inner.x, inner.y + top, inner.width, inner.height - top);
     let visible = list.height as usize;
     if m.selected < m.scroll {
         // Its section's heading stays in sight above the first item.
@@ -83,6 +92,11 @@ pub(crate) fn draw_context_menu(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             _ => base,
         };
         buf.set_stringn(list.x, ry, fit("", iw, Align::Left), iw, bg);
+        if *heading && label.is_empty() {
+            // A rule between groups of items.
+            put(buf, list.x, ry, &"─".repeat(iw), iw, Style::new().fg(th.border).patch(bg));
+            continue;
+        }
         if *heading {
             put(
                 buf,

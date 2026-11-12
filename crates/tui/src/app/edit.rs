@@ -289,8 +289,12 @@ pub struct EditWait {
     ticket: u64,
     source: EditSource,
     format: EditFormat,
-    then: (EditAction, (usize, usize), Option<(usize, usize)>),
+    then: Press,
 }
+
+/// An edit key's press waiting for the table: its key, the cursor, the selection's anchor, and
+/// the columns the grid showed ([`crate::widgets::grid::GridState::vis_rev`]).
+type Press = (EditAction, (usize, usize), Option<(usize, usize)>, u64);
 
 /// What an edit key that sets cells acts on, every check passed: rows read `rows` (as read,
 /// `read`), or new rows' `cells` (the cursor's new row `at`, id `id`); and the column.
@@ -518,6 +522,16 @@ impl App {
         {
             return;
         }
+        // A key that reads or writes cells by the cursor or the selection: none while the grid
+        // shows no cell there (every column hidden), and a paste waiting for it is dropped.
+        if !matches!(
+            a,
+            EditAction::Undo | EditAction::Redo | EditAction::Apply | EditAction::Discard | EditAction::Preview
+        ) && self.refused_without_cell()
+        {
+            self.paste_in_dropped();
+            return;
+        }
         match a {
             EditAction::Undo | EditAction::Redo => self.edit_history(a == EditAction::Redo),
             EditAction::Revert => self.edit_revert(),
@@ -563,15 +577,17 @@ impl App {
             .filter(|(r, _)| rows.contains(r))
             .flat_map(|(r, e)| {
                 let marked = e.delete.then_some((r, cols.start));
-                e.set.keys().filter(|c| cols.contains(c)).map(move |c| (r, *c)).chain(marked)
+                // The cells of the shown columns only: a hidden column's change stays.
+                e.set.keys().filter(|c| cols.contains(c) && grid.shown(**c)).map(move |c| (r, *c)).chain(marked)
             })
             .collect();
+        let shown_cols = grid.shown_in(cols.clone());
         let new: Vec<(u64, usize)> = rows
             .filter_map(|r| match row_at(rs, r) {
                 Some(RowAt::New(id)) => Some(id),
                 _ => None,
             })
-            .flat_map(|id| cols.clone().map(move |c| (id, c)))
+            .flat_map(|id| shown_cols.iter().map(move |&c| (id, c)))
             .collect();
         let done = !(cells.is_empty() && new.is_empty()) && rs.edit.batch.revert(&cells, &new);
         self.edit_grid_sync();
@@ -610,7 +626,7 @@ impl App {
                 RowAt::New(_) => g.page = len.saturating_sub(1) / g.page_size,
             }
         }
-        (g.row, g.col) = (row, col);
+        g.go_to(row, col);
         g.anchor = None;
         g.detached = false;
         self.selecting_done();
@@ -780,7 +796,7 @@ impl App {
         let source = self.edit_source(t, rs);
         let generation = self.conns.get(pid).map_or(0, |c| c.generation);
         let aux = self.open_aux(pid, bound.database.as_deref());
-        let (tab, then) = (t.id, (a, (t.grid.row, t.grid.col), t.grid.anchor));
+        let (tab, then) = (t.id, (a, (t.grid.row, t.grid.col), t.grid.anchor, t.grid.vis_rev));
         let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
         let result = rs.id;
         let st = &mut rs.edit;
@@ -973,6 +989,9 @@ impl App {
         let shown = total + rs.edit.batch.drafts().len();
         if row >= shown || col >= ncols {
             return Err(None);
+        }
+        if !t.grid.shown(col) {
+            return Err(Some(self.no_cell_notice()));
         }
         let rows = match t.grid.selection(total, ncols) {
             None => row..row + 1,
@@ -1606,7 +1625,7 @@ impl App {
                 }
             }
         }
-        let Some(((a, cursor, anchor), why)) = came else { return };
+        let Some(((a, cursor, anchor, vis), why)) = came else { return };
         // The details came: the press is done or refused now, no longer loading.
         if self.transient.as_ref().is_some_and(|(n, _)| n.msg == Label::EditLoading.into()) {
             self.transient = None;
@@ -1614,6 +1633,15 @@ impl App {
         let t = self.tab();
         let still = (t.grid.row, t.grid.col) == cursor && t.grid.anchor == anchor;
         if !still || self.focus != Focus::Results || self.modal_open() {
+            return;
+        }
+        // Other columns shown: a paste waiting would land on other columns; not done.
+        if t.grid.vis_rev != vis {
+            if a == EditAction::Pasted
+                && let Some(p) = self.paste_in.take()
+            {
+                self.paste_columns_changed(p);
+            }
             return;
         }
         match why {

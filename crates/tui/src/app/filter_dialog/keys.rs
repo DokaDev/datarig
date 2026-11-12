@@ -323,6 +323,11 @@ impl App {
                 }
             }
             KeyCode::Char('/') => d.search = Some(TextInput::new("")),
+            // Hidden from the grid, or shown again (one step; applied with the rest).
+            KeyCode::Char(' ' | 'C') => {
+                let Some(col) = d.column().map(|c| c.name.clone()) else { return };
+                self.filter_dialog_edit(None, |d, _| d.draft.toggle_hidden(&col));
+            }
             KeyCode::Char('s') => {
                 let Some(col) = d.column().map(|c| c.name.clone()) else { return };
                 let next = match d.draft.sort_of(&col) {
@@ -404,6 +409,18 @@ impl App {
         let row = d.draft.where_.terms().get(t)?.row.as_ref()?;
         let target = self.table_target(d.tab)?;
         Some(draft::ops_for(&d.column_info(&row.col), &target))
+    }
+
+    /// The operators the open filter dialog offers for its focused condition's column, as the
+    /// picker names them, each with why it is dimmed (`None`: offered).
+    pub fn filter_dialog_offers(&self) -> Option<Vec<(String, Option<String>)>> {
+        let ops = self.filter_dialog_ops()?;
+        let why = |off: draft::OpOff| self.i18n.label(op_off_label(off)).to_string();
+        Some(
+            ops.into_iter()
+                .map(|(op, ok)| (crate::widgets::filter_dialog::op_label(self, op), ok.err().map(why)))
+                .collect(),
+        )
     }
 
     /// The picker's selection becomes the focused condition's operator (a dimmed one is not

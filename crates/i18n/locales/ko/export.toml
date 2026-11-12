@@ -113,6 +113,7 @@
 "export.format.parquet" = "Parquet"
 "export.note.every" = "결과의 {count}행을 모두 가져왔습니다: 결과에서 쓰며 서버에는 아무것도 보내지 않습니다."
 "export.note.fetched" = "지금까지 가져온 {count}행 (서버에 더 있음). 서버에는 아무것도 보내지 않습니다."
+"export.note.hidden" = { one = "그리드에서 숨긴 열 {count}개도 포함", other = "그리드에서 숨긴 열 {count}개도 포함" }
 "export.note.selection" = "선택 영역의 {count}행. 서버에는 아무것도 보내지 않습니다."
 "export.note.keyset" = "{table}을(를) 키 순서대로 조각조각 읽습니다 (조각마다 짧은 읽기): 그사이 바뀐 행은 바뀐 뒤의 상태로 나올 수 있습니다."
 "export.note.limit" = "탭의 행 제한에서 멈춥니다: 최대 {count}행."

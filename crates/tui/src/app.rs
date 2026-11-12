@@ -25,6 +25,7 @@ pub mod action;
 pub mod chart;
 pub mod chooser;
 pub mod cmdline;
+pub mod column_menu;
 pub mod command;
 mod conn;
 mod conn_test;
@@ -86,6 +87,7 @@ pub mod tab_list;
 mod tab_ops;
 pub mod table_filter;
 pub mod table_query;
+mod table_view;
 pub mod tabs;
 pub mod themes;
 mod tick;
@@ -117,7 +119,7 @@ use crate::input::keyboard::{self, KeyUse};
 use crate::input::kitty;
 use crate::keymap::{Ctx, IssueKind, KeyChord, KeyError, KeyState, Keymap, Resolved};
 use crate::widgets::editor::{EdEvent, Editor, Mode};
-use crate::widgets::grid::{GridState, ResultSet, viewer_text};
+use crate::widgets::grid::{GridState, ResultSet, viewer_text_of};
 use crate::widgets::text_input::TextInput;
 use crate::widgets::tree::TreeAction;
 use action::{Action, ExplorerAction, GridAction, LangSetting, REGISTRY};
@@ -325,6 +327,8 @@ pub enum AppEvent {
     UpdateChecked(datarig_core::update::Answer),
     /// The filter history's writer wrote the file, or failed to.
     FilterHistory(filter_history::Saved),
+    /// The hidden columns' writer wrote (or failed to).
+    TableView(filter_history::Saved),
 }
 
 /// Which session a driver event comes from.
@@ -701,6 +705,7 @@ pub struct App {
     pub tips: tips::TipState,
     /// The filters and orders table tabs ran, per table ([`filter_history`]).
     filter_history: filter_history::FilterHistoryState,
+    table_view: table_view::TableViewState,
     /// The values loads of tables showed in this session, for the filter dialog's lists.
     value_memory: filter_dialog::values::Memory,
     /// What's new does not show by itself at launch, nor is anything written for it (the tests
@@ -898,6 +903,7 @@ impl App {
             pointer_on: None,
             tips: tips::TipState::default(),
             filter_history: Default::default(),
+            table_view: Default::default(),
             value_memory: Default::default(),
             whats_new_paused: false,
             updates: updates::Updates::default(),

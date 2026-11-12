@@ -203,8 +203,13 @@ pub struct TableQuery {
     /// its wait ends ([`App::table_keys_waiting`]).
     keys_wait: Option<(Query, u64)>,
     /// The query the tab held as applied before its last applied change (a run of another
-    /// condition, order or limit sent): the filter dialog's undo goes back to it once.
+    /// condition, order or limit sent, the columns hidden changed): the filter dialog's undo
+    /// goes back to it once.
     pub before_last: Option<Query>,
+    /// The columns hidden from the grid before that change (with [`TableQuery::before_last`]).
+    pub before_hidden: Option<Vec<String>>,
+    /// The columns hidden from the grid now (the table's, as the app keeps them).
+    pub hidden: Vec<String>,
     /// The query put back in the tab as applied ([`TableQuery::restored`]) while no run of the
     /// tab's query has been sent: what was applied before the first one, though the draft that
     /// run sends is written over it before it is sent (and stays written over when the run is
@@ -238,6 +243,8 @@ impl TableQuery {
             session_wait: None,
             keys_wait: None,
             before_last: None,
+            before_hidden: None,
+            hidden: Vec::new(),
             restored: None,
             order_keys: OrderKeysState::Unknown,
             sorted: None,
@@ -283,6 +290,7 @@ impl TableQuery {
             self.restored = None;
             if changed(&before, q) {
                 self.before_last = Some(before);
+                self.before_hidden = Some(self.hidden.clone());
             }
         }
         if let Some(q) = self.sorted.take().filter(|q| self.requested.as_ref().is_some_and(|(_, r)| r == q)) {
@@ -1253,6 +1261,8 @@ impl App {
                 Err(reason) => OrderKeysState::Failed { on, reason },
             };
         }
+        // The catalogue's columns: names no longer among them are not hidden any more.
+        self.table_view_sync(id);
         self.filter_dialog_columns_came(id);
         // The query that waited for them runs now (one cancelled meanwhile does not).
         if let Some(q) = self.table_keys_take(id) {
@@ -1605,6 +1615,17 @@ impl App {
     /// order only once its run is sent: a run asked about and declined, or refused, leaves them as they
     /// were.
     pub(super) fn table_sort(&mut self, id: TabId, col: usize, step: query::SortStep) {
+        self.table_sort_with(id, col, |keys, name| query::sort_column(keys, name, step));
+    }
+
+    /// A sort of column `col` of table tab `id`'s grid as [`App::table_sort`] runs it, the new
+    /// keys made by `keys_of` from the keys of the rows shown and the column's name.
+    pub(super) fn table_sort_with(
+        &mut self,
+        id: TabId,
+        col: usize,
+        keys_of: impl FnOnce(&[query::OrderKey], &str) -> Vec<query::OrderKey>,
+    ) {
         let name = match self.tabs.get(id).map(|t| &t.results) {
             Some(Results::Rows(rs)) => rs.columns.get(col).map(|c| c.meta.name.clone()),
             _ => None,
@@ -1623,7 +1644,7 @@ impl App {
         let d = self.tab_dialect(id);
         let Some(tq) = self.table_query(id) else { return };
         let base = tq.shown.clone().unwrap_or_else(|| tq.applied().clone());
-        let q = Query { order: query::sort_column(&base.order, &name, step), ..base };
+        let q = Query { order: keys_of(&base.order, &name), ..base };
         // The order is shown and edited on one line: a name with a line break would not read
         // back as the same name there.
         let user: Vec<_> = q.order.iter().filter(|k| k.origin == query::KeyOrigin::User).cloned().collect();
@@ -1661,12 +1682,22 @@ impl App {
             Some(f) if !f.text.trim().is_empty() => f.recognised.as_ref().map(|c| c.columns()).unwrap_or_default(),
             _ => Vec::new(),
         };
+        // The columns with a condition of their own (an expression naming one is not that).
+        let own: Vec<String> = match (&shown.filter, self.table_target(id)) {
+            (Some(f), Some(target)) => super::filter_dialog::draft::Where::from_text(&f.text, &target)
+                .terms()
+                .iter()
+                .filter_map(|t| t.row.as_ref().map(|r| r.col.clone()))
+                .collect(),
+            _ => Vec::new(),
+        };
         rs.columns
             .iter()
             .map(|c| {
                 let name = c.meta.name.as_str();
                 let sort = keys.iter().position(|k| k.col == name).map(|i| (keys[i].dir == query::Dir::Asc, i + 1));
-                crate::widgets::grid::HeadMarks { sort, filtered: compared.contains(&name) }
+                let tinted = sort.is_some() || own.iter().any(|o| o == name);
+                crate::widgets::grid::HeadMarks { sort, filtered: compared.contains(&name), tinted }
             })
             .collect()
     }
