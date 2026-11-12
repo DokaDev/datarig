@@ -92,6 +92,7 @@
 "table.filter.by_value.hint.drops_nulls" = "leaves out NULL rows"
 "table.filter.by_value.hint.server_case" = "case as the server compares"
 "table.filter.by_value.hint.collation_lower" = "collation not known: LOWER()"
+"table.filter.by_value.hint.session_zone" = "as read in this session's time zone"
 "table.filter.by_value.off.type" = "type not compared"
 "table.filter.by_value.off.order" = "no order"
 "table.filter.by_value.off.collation" = "nondeterministic"

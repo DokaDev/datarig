@@ -1121,6 +1121,11 @@ pub enum DbEvent {
     /// the whole driver's ([`Capabilities::edit`](super::Capabilities)). Sent right after
     /// `Connected`; a driver whose servers all take its format sends nothing.
     Edit(Option<super::EditFormat>),
+    /// Whether the session's server reads a time zone offset in a date and time literal
+    /// (`'2026-01-02 03:04:05+05:30'`: one instant whatever the session's zone), where it is the
+    /// server's: MySQL from 8.0.19 on, not MariaDB. Sent right after `Connected` by a driver
+    /// whose servers differ (MySQL); until a session says, it is not known, taken as no.
+    ZoneOffsets(bool),
     /// Sent right after `Connected` of a read-only session (a read-only policy) when the
     /// server did not apply the read-only default (a pooler that drops startup options): the
     /// session runs anyway, because the driver makes each transaction it opens read-only.

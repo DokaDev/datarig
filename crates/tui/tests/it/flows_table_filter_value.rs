@@ -692,11 +692,28 @@ fn mysql_literals_follow_the_session_and_case_the_collation() {
     assert_eq!(sent, my("LOWER(name) LIKE LOWER(_utf8mb4 X'25697427735C25') ESCAPE '!'"));
     page_with(&mut h, cols(), rows());
     clear_with(&mut h, cols(), rows());
-    // Bytes as X'…'; a TIMESTAMP as shown with the offset of the zone it was read in, so
-    // that it is the same instant in a session of another zone (run again from the history).
+    // Bytes as X'…'.
     assert_eq!(filter(&mut h, 0, 2, "= '0x01AB'"), my("data = X'01AB'"));
     page_with(&mut h, cols(), rows());
     clear_with(&mut h, cols(), rows());
+    // A TIMESTAMP on a server not known to read an offset in a literal (MariaDB, MySQL before
+    // 8.0.19): as shown, the instant only in a session of the zone it was read in, as each
+    // comparison says.
+    at(&mut h, 0, 4);
+    h.keys("F");
+    assert!(h.screen(120, 30).contains("as read in this session's time zone"), "{}", h.screen(120, 30));
+    h.key(KeyCode::Esc);
+    assert_eq!(filter(&mut h, 0, 4, "< '2026-11-10 09:30:00'"), my("at < '2026-11-10 09:30:00'"));
+    page_with(&mut h, cols(), rows());
+    clear_with(&mut h, cols(), rows());
+    // Where the server reads one (MySQL 8.0.19 and later): with the offset of the zone it was
+    // read in, the same instant in a session of another zone (run again from the history).
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::ZoneOffsets(true));
+    at(&mut h, 0, 4);
+    h.keys("F");
+    assert!(!h.screen(120, 30).contains("as read in this session's time zone"), "{}", h.screen(120, 30));
+    h.key(KeyCode::Esc);
     assert_eq!(filter(&mut h, 0, 4, "< '2026-11-10 09:30:00'"), my("at < '2026-11-10 09:30:00+00:00'"));
     // A MySQL FLOAT is sent rounded: not taken.
     at(&mut h, 0, 3);

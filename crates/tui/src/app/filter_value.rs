@@ -207,10 +207,18 @@ impl App {
         self.filter_line_blur();
         // Fields not edited show what is applied now, before they are compared with it.
         self.filter_line_follow_tab(id);
-        let menu = match self.by_value_menu(id) {
+        let mut menu = match self.by_value_menu(id) {
             Ok(m) => m,
             Err(why) => return self.flash(why),
         };
+        // A MySQL TIMESTAMP written without its offset (the server reads none) is the instant
+        // only in a session of the zone it was read in: each comparison says so.
+        if self.by_value_zone_bound(id) {
+            let hint = self.i18n.label(Label::TableFilterByValueHintSessionZone);
+            for e in menu.entries.iter_mut().filter(|e| e.hint.is_none() && e.text.is_ok()) {
+                e.hint = Some(hint.clone());
+            }
+        }
         let (Some(grid), Some(result)) = (self.menu_grid_target(), self.grid_result_id()) else { return };
         let title = match menu.cells {
             1 => self.i18n.msg(&Msg::TableFilterByValueTitle { column: crate::text::escape_controls(&menu.column) }),
@@ -546,10 +554,29 @@ impl App {
         Ok(ByValueMenu { column, cells, entries })
     }
 
+    /// Whether the column of table tab `id`'s cursor is a MySQL `TIMESTAMP` whose values a
+    /// filter writes as shown, without the offset of the zone they were read in.
+    fn by_value_zone_bound(&self, id: TabId) -> bool {
+        let Some(t) = self.tabs.get(id) else { return false };
+        let Results::Rows(rs) = &t.results else { return false };
+        let col = t.grid.col.min(rs.columns.len().saturating_sub(1));
+        matches!(self.tab_dialect(id), Dialect::MySql(_))
+            && rs.columns.get(col).is_some_and(|c| c.meta.kind == ValueKind::TimestampTz)
+            && !self.zone_offsets(t)
+    }
+
+    /// Whether tab `t`'s server reads a time zone offset in a date and time literal, as a session
+    /// of its profile said (`DbEvent::ZoneOffsets`); not known is no.
+    pub(super) fn zone_offsets(&self, t: &Tab) -> bool {
+        t.profile.and_then(|p| self.conns.get(p)).and_then(|c| c.zone_offsets) == Some(true)
+    }
+
     /// Value `v` of column `col` of result `rs` (as read, not NULL) as the filter compares it,
     /// or why it is not taken: shown otherwise than the server holds it (as a copy as SQL judges
     /// it), read in another time zone than the session's now, or binary data over
-    /// [`MAX_BYTES`]. A MySQL `TIMESTAMP` carries the offset of the zone it was read in.
+    /// [`MAX_BYTES`]. A MySQL `TIMESTAMP` carries the offset of the zone it was read in where
+    /// the server reads one ([`App::zone_offsets`]); elsewhere it is the value as shown, the
+    /// same instant only in a session of the zone it was read in.
     fn by_value_value(
         &self,
         t: &Tab,
@@ -586,7 +613,7 @@ impl App {
             ValueKind::Integer | ValueKind::Decimal | ValueKind::Float => Value::Number(v.to_string()),
             // With the offset of the zone it was read in (as a copy as SQL writes it): the same
             // instant in any session's zone, as the filter is run again from the history.
-            ValueKind::TimestampTz if mysql => Value::Text(cell.into_owned()),
+            ValueKind::TimestampTz if mysql && self.zone_offsets(t) => Value::Text(cell.into_owned()),
             ValueKind::Bytes => {
                 let bytes = hex_bytes(v, if mysql { "0x" } else { "\\x" }).ok_or_else(|| {
                     not_whole(&export::Refused { column: m.name.clone(), why: export::NotWhole::NotShownWhole })

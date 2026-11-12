@@ -90,6 +90,7 @@
 "table.filter.by_value.hint.drops_nulls" = "NULL 행은 빠짐"
 "table.filter.by_value.hint.server_case" = "대소문자는 서버 비교대로"
 "table.filter.by_value.hint.collation_lower" = "콜레이션 모름: LOWER()"
+"table.filter.by_value.hint.session_zone" = "이 세션의 시간대로 읽은 값"
 "table.filter.by_value.off.type" = "비교 불가 형식"
 "table.filter.by_value.off.order" = "순서 없음"
 "table.filter.by_value.off.collation" = "비결정적 콜레이션"

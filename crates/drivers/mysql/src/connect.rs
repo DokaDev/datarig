@@ -252,6 +252,7 @@ async fn run_session(
     let _ = events.send(DbEvent::Language(Language::Sql(Dialect::MySql(tracked.mode(&server)))));
     let _ = events.send(DbEvent::Explain(server.explain()));
     let _ = events.send(DbEvent::Edit(server.edit()));
+    let _ = events.send(DbEvent::ZoneOffsets(server.zone_offsets()));
     // What a query session's values are read in (copying them as SQL needs it).
     if let Some(values) = tracked.values().filter(|_| role == SessionRole::Query) {
         let _ = events.send(DbEvent::SessionValues(values));
