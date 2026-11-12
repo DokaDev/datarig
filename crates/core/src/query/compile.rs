@@ -64,14 +64,20 @@ fn build(q: &Query, t: &Target, capped: bool) -> Compiled {
     Compiled { sql, filter_span, order, total }
 }
 
-/// The user's keys of `order`, then (with [`Target::tie_break`]) the primary key's columns
-/// that are not among them, ascending. No keys at all stay none: an unordered read.
+/// The user's keys of `order`, then (with [`Target::tie_break`]) the columns of the primary key
+/// that are not among them, ascending; a table without one takes the shortest unique key
+/// whose columns are all `NOT NULL` (the first of that length). No keys at all stay none: an
+/// unordered read.
 fn keys(order: &[OrderKey], t: &Target) -> Vec<OrderKey> {
     let mut out: Vec<OrderKey> = order.iter().filter(|k| k.origin == KeyOrigin::User).cloned().collect();
     if out.is_empty() || !t.tie_break {
         return out;
     }
-    for col in &t.primary_key {
+    let tie = match t.primary_key.is_empty() {
+        true => t.unique_keys.iter().filter(|k| !k.is_empty()).min_by_key(|k| k.len()).map_or(&[][..], Vec::as_slice),
+        false => &t.primary_key[..],
+    };
+    for col in tie {
         if !out.iter().any(|k| &k.col == col) {
             out.push(OrderKey { col: col.clone(), dir: Dir::Asc, nulls: None, origin: KeyOrigin::TieBreak });
         }

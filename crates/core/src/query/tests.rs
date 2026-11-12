@@ -88,6 +88,25 @@ fn compile_appends_the_primary_key_as_tie_breaker() {
     assert!(c.order.is_empty() && !c.total);
 }
 
+/// A table without a primary key takes the shortest unique key whose columns are all `NOT
+/// NULL` as the tie-breaker: the order is total, and its pages do not repeat or skip rows.
+#[test]
+fn compile_breaks_ties_with_a_unique_key_without_a_primary_key() {
+    let t = Target {
+        primary_key: vec![],
+        unique_keys: vec![vec!["email".into(), "born".into()], vec!["price".into()], vec!["data".into()]],
+        ..target(Dialect::Postgres)
+    };
+    let c = compile(&query(None, vec![OrderKey::user("name", Dir::Desc)]), &t);
+    assert_eq!(c.sql, r#"SELECT * FROM "shop"."users" ORDER BY "name" DESC, "price" ASC"#);
+    assert_eq!(c.order[1].origin, KeyOrigin::TieBreak);
+    assert!(c.total);
+    // A key the user's order holds already is not appended again.
+    let c = compile(&query(None, vec![OrderKey::user("price", Dir::Desc)]), &t);
+    assert_eq!(c.sql, r#"SELECT * FROM "shop"."users" ORDER BY "price" DESC"#);
+    assert!(c.total);
+}
+
 #[test]
 fn compile_total_order_needs_a_key() {
     let mut t = Target { primary_key: vec![], ..target(Dialect::Postgres) };

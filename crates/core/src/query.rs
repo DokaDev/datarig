@@ -204,7 +204,8 @@ pub enum Nulls {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KeyOrigin {
     User,
-    /// A primary key column the app appended so that pages follow one order.
+    /// A column of the primary key (or, without one, of a unique key) the app appended so that
+    /// pages follow one order.
     TieBreak,
 }
 
@@ -226,7 +227,8 @@ pub struct Target {
     pub primary_key: Vec<ColName>,
     /// The other unique keys whose columns are all `NOT NULL`, each in key order.
     pub unique_keys: Vec<Vec<ColName>>,
-    /// Append the primary key's missing columns to a user's order ([`KeyOrigin::TieBreak`]).
+    /// Append the primary key's missing columns to a user's order ([`KeyOrigin::TieBreak`]),
+    /// or those of the shortest unique key of [`Target::unique_keys`] when it has none.
     pub tie_break: bool,
     /// MySQL: the session's character set is known to be `utf8mb4`, so a plain string literal
     /// is read as written. When unknown, text is written as its UTF-8 bytes.
