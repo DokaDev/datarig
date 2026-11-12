@@ -35,8 +35,12 @@ fn area(f: DialogFocus) -> usize {
 /// else each read again on its own from its text as it would be typed for it. A value is never
 /// lost on the way: an empty string stays an empty string (an empty field is what stands for no
 /// value when typed, which an existing value never is). The NULL standing for the missing first
-/// bound of a `BETWEEN` is no value and goes.
+/// bound of a `BETWEEN` is no value and goes, unless the operator stays what it is: then
+/// nothing changes, so a bound typed stays in its own field.
 fn values_for(row: &Row, op: Op, c: &ColumnInfo, d: Dialect) -> Vec<Value> {
+    if op == row.op {
+        return row.values.clone();
+    }
     let keep = match op.arity() {
         Arity::Zero => 0,
         Arity::One => 1,

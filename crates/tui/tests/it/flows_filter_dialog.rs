@@ -383,6 +383,34 @@ fn a_between_bound_cleared_keeps_the_other_across_a_change_of_column() {
     }
 }
 
+/// Taking `between` again in the operator list, with its first bound cleared, changes nothing:
+/// the second bound stays in its own field.
+#[test]
+fn between_picked_again_keeps_a_bound_in_its_own_field() {
+    for accept in [KeyCode::Enter, KeyCode::Char(' ')] {
+        let mut h = users();
+        h.command("where id BETWEEN 1 AND 10");
+        runs(&mut h);
+        answer(&mut h);
+        h.keys("f");
+        h.key(KeyCode::Right);
+        h.key(KeyCode::Right);
+        h.key(KeyCode::End);
+        h.key(KeyCode::Backspace);
+        assert_eq!(h.app.filter_dialog_draft().unwrap().0, "", "{accept:?}");
+        // Back to the operator, its list, and `between` (the one shown) taken again.
+        h.key(KeyCode::Home);
+        h.key(KeyCode::Left);
+        h.key(KeyCode::Char(' '));
+        h.key(accept);
+        // The pick goes on to the first bound's field.
+        assert_eq!(h.app.key_context(), Ctx::FilterDialogText, "{accept:?}: {}", h.screen(120, 34));
+        h.key(KeyCode::End);
+        h.type_text("2");
+        assert_eq!(h.app.filter_dialog_draft().unwrap().0, "id BETWEEN 2 AND 10", "{accept:?}: {}", h.screen(120, 34));
+    }
+}
+
 #[test]
 fn a_condition_without_its_value_is_not_sent() {
     let mut h = users();
