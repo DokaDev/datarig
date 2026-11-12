@@ -13,6 +13,7 @@ impl App {
     ///
     /// Each call is a use (the session stays while used); one closed for being
     /// idle, failed or lost opens again (what it read stays until the new one reads it again).
+    /// Nothing opens when [`App::session_checks`] fail: the status bar says why.
     pub(in crate::app) fn ensure_aux(&mut self, id: ProfileId, database: &str) {
         let now = self.now();
         let known = self.conns.aux(id, database).map(|a| (a.id, a.session.is_some()));
@@ -25,6 +26,11 @@ impl App {
             return;
         }
         let Some(cfg) = self.conns.get(id).filter(|c| c.connected).and_then(|c| c.resolved.clone()) else { return };
+        // Checked as a connect checks (the profile may have changed since it connected).
+        if let Err(m) = self.session_checks(&cfg) {
+            self.status = Some(m);
+            return;
+        }
         let aux = match known {
             Some((old, _)) => match self.conns.renew_aux(old) {
                 Some(aux) => aux,

@@ -400,6 +400,24 @@ fn a_run_ended_by_a_connection_change_says_so() {
     }
 }
 
+/// The metadata session of another database opens only as a connect would: once the profile
+/// names an environment that is not defined, none opens and the status bar says why.
+#[test]
+fn another_databases_metadata_session_needs_the_connect_checks() {
+    let mut h = Harness::connected(Lang::En);
+    let p = h.app.profiles[0].id;
+    let before = h.roles().len();
+    h.app.profiles[0].policy = Some("gone".into());
+    h.ctrl('o');
+    h.key(KeyCode::Right);
+    h.meta_db("local-pg", DbEvent::Databases(Ok(vec!["datarig".into(), "sales".into()])));
+    select(&mut h, &QuickRow::Database(p, "sales".into()));
+    h.key(KeyCode::Right);
+    assert_eq!(h.roles().len(), before, "no session opened: {:?}", h.roles());
+    let status = h.app.status.as_ref().map(|n| h.app.i18n.msg(&n.msg).to_string()).unwrap_or_default();
+    assert!(status.contains("Environment “gone” not found"), "{status}");
+}
+
 /// An aux metadata session (another database's) that no tab works in and
 /// nothing used for `AUX_IDLE` closes; what it read stays. The next use opens it again; one a
 /// tab works in stays open; a failed one says why and opens again on the next use.

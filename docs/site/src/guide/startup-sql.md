@@ -82,10 +82,11 @@ A statement may set the server's idle limit: PostgreSQL `SET idle_session_timeou
 (version 14 or later), MySQL `SET SESSION wait_timeout = 600`. That value is then the idle
 disconnect of those sessions instead of the environment's `idle_disconnect`:
 
-- datarig's own timer follows it: a tab's session closes after that long unused, a tab with an
-  open transaction is warned a minute before, and the message names that time. The server has
-  the same limit, so either one may end the session first; a session the server ended is
-  reported as closed for being idle.
+- datarig's own timer follows it, a little earlier (a tenth of it, from 1 second to 30
+  seconds), so that datarig ends the session before the server does and says why: a tab's
+  session closes after that long unused, a tab with an open transaction is warned a minute
+  before, and the message names the time it waited. A session the server ended anyway (the
+  machine slept) is reported as closed for being idle.
 - The connection's other sessions and its SSH tunnel stay open as long as its longest tab limit,
   so a tab never loses its tunnel before its own limit.
 - PostgreSQL's `0` turns the limit off for those sessions.

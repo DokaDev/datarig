@@ -212,6 +212,24 @@ fn a_preset_gone_since_the_connect_opens_no_query_session() {
     assert!(status.contains("“reporting” for PostgreSQL, which does not exist"), "{status}");
 }
 
+/// A lost metadata session reopens only as a connect would: with the preset gone since the
+/// profile connected, the next run opens neither it nor a query session, and the tab says why.
+#[test]
+fn a_lost_metadata_session_is_not_reopened_past_the_connect_checks() {
+    let cfg = config(|_| {});
+    let mut h = connected(&cfg);
+    h.meta_db("local-pg", DbEvent::Lost { error: DbError::Server("terminated".into()) });
+    h.app.session_presets.clear();
+    run(&mut h, "SELECT 1");
+    assert_eq!(h.roles(), [SessionRole::Meta], "neither a new metadata session nor a query session");
+    let status = h.app.tab().status.as_ref().map(|n| h.app.i18n.msg(&n.msg).to_string()).unwrap_or_default();
+    assert!(status.contains("“reporting” for PostgreSQL, which does not exist"), "{status}");
+    // Back as it was: both open.
+    h.app.session_presets = presets();
+    run(&mut h, "SELECT 1");
+    assert_eq!(h.roles(), [SessionRole::Meta, SessionRole::Meta, SessionRole::Query]);
+}
+
 /// A start-up statement the server refused: the tab says which, of what, and the server's
 /// words; the run did not happen.
 #[test]
