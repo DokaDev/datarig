@@ -1,0 +1,34 @@
+╭─ Filter and sort · shop.users edited ─────────────────────────────────────────────────────────────── 60 rows loaded ─╮
+│ Columns 3                     / search │ status  text                                                                │
+│ from the loaded result                 │                                                                             │
+│     id              int8               │ Filter                                                                      │
+│▸    status          text         =     │    =          ▾    paid                                                   × │
+│     amount          numeric            │   + add condition                                                           │
+│                                        │                                                                             │
+│                                        │ Values  ~ count in the 60 loaded rows                       # count exactly │
+│                                        │   [x] paid                            ~25  ▄▄▄▄▄▄▄▄▄▄▄▄                     │
+│                                        │ ▸ [ ] shipped                         ~20  ▄▄▄▄▄▄▄▄▄▄                       │
+│                                        │   [ ] cancelled                       ~10  ▄▄▄▄▄                            │
+│                                        │   [ ] NULL                             ~5  ▄▄▄                              │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │                                                                             │
+│                                        │   Sort   (•) none   ( ) ↑ ascending   ( ) ↓ descending                      │
+├────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────────────┤
+│ Where   = status = 'paid' ×                                                                        undo   clear all  │
+│ Order                                                                                      Limit              SQL ▸  │
+│ Space tick (two or more: in list) · # count exactly · Ctrl+Z undo · Tab next area          Enter apply   Esc cancel  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
