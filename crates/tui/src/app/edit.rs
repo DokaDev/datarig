@@ -626,7 +626,7 @@ impl App {
                 RowAt::New(_) => g.page = len.saturating_sub(1) / g.page_size,
             }
         }
-        (g.row, g.col) = (row, col);
+        g.go_to(row, col);
         g.anchor = None;
         g.detached = false;
         self.selecting_done();

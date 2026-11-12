@@ -312,8 +312,9 @@ pub struct GridState {
     /// (a paste waiting for its yes, a search's matches) holds only while it is the same.
     pub vis_rev: u64,
     /// A column picked in the inspector (which lists every column) that the grid does not
-    /// show, with the grid's column it was picked at: the inspector shows it while the grid's
-    /// cell stays on that column.
+    /// show, with the grid's column it was picked at: the inspector shows it until the grid's
+    /// cell is moved to a column ([`GridState::go_to`], [`GridState::move_col`]) or the columns
+    /// shown change, and only while the grid's cell is on that column.
     pub inspect: Option<(usize, usize)>,
 }
 
@@ -501,6 +502,13 @@ impl GridState {
         self.inspect.filter(|&(_, at)| at == self.col).map_or(self.col, |(c, _)| c)
     }
 
+    /// The grid's cell moves to row `row`, column `col` (a key, a click, a jump): a column the
+    /// inspector picked is dropped, so that it shows the grid's cell again.
+    pub fn go_to(&mut self, row: usize, col: usize) {
+        (self.row, self.col) = (row, col);
+        self.inspect = None;
+    }
+
     /// Column `c` (of `total`) picked in the inspector: a shown one moves the grid's cell
     /// there, a hidden one is the inspector's only (the grid's cell stays on a shown column).
     pub fn inspect_col(&mut self, c: usize, total: usize) {
@@ -556,6 +564,7 @@ impl GridState {
         }
         self.hidden = hidden;
         self.vis_rev += 1;
+        self.inspect = None;
         if let Some(c) = self.nearest_shown(self.col, total) {
             self.col = c;
         }
@@ -667,7 +676,7 @@ impl GridState {
             self.anchor = Some(to);
         }
         self.shape = shape;
-        (self.row, self.col) = to;
+        self.go_to(to.0, to.1);
         self.detached = false;
     }
 
@@ -680,8 +689,7 @@ impl GridState {
             return false;
         }
         if let Some(&(_, _, c)) = self.hit_cols.iter().find(|(a, b, _)| x >= *a && x < *b) {
-            self.row = r;
-            self.col = c;
+            self.go_to(r, c);
             self.detached = false;
             return true;
         }

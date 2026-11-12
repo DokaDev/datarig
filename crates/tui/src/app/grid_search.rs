@@ -549,7 +549,7 @@ fn goto(g: &mut GridState, at: CellIdx, ncols: usize) {
         g.page = row / g.page_size;
         g.anchor = None;
     }
-    (g.row, g.col) = (row, col);
+    g.go_to(row, col);
     g.detached = false;
 }
 

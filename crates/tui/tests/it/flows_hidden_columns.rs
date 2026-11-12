@@ -714,3 +714,73 @@ fn a_change_in_a_hidden_column_is_reached_from_the_changes_tab() {
     h.keys(" dr");
     assert_eq!(pending(&h, 0, 2), None, "reverted");
 }
+
+/// A hidden column picked in the inspector holds until the grid's cell is moved to a column:
+/// after `0` and `$`, a click away and back, or a jump from the Changes tab, the inspector
+/// shows the grid's cell again (Enter shows that value), and the grid's keys act on it.
+#[test]
+fn the_grid_moving_drops_the_inspectors_hidden_column() {
+    use datarig_tui::app::Focus;
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let mut h = users(None);
+    at(&mut h, 0, 3);
+    h.keys("C");
+    h.app.detail.visible = true;
+    let pick_memo = |h: &mut Harness| {
+        h.app.focus = Focus::Inspector;
+        h.keys("j");
+        assert_eq!((h.app.tab().grid.inspected(), h.app.tab().grid.col), (3, 2), "the hidden memo");
+        h.app.focus = Focus::Results;
+    };
+    // `0` then `$`: back on `score`, which the inspector shows.
+    pick_memo(&mut h);
+    h.keys("0");
+    assert_eq!((h.app.tab().grid.inspected(), h.app.tab().grid.col), (0, 0));
+    h.keys("$");
+    assert_eq!((h.app.tab().grid.inspected(), h.app.tab().grid.col), (2, 2));
+    h.app.focus = Focus::Inspector;
+    h.key(KeyCode::Enter);
+    assert_eq!(h.viewer().unwrap().text, "1.5", "the value of score");
+    h.key(KeyCode::Esc);
+    // A click on `name`, then on `score`.
+    pick_memo(&mut h);
+    h.draw(160, 45);
+    let g = h.app.tab().grid.clone();
+    let x = |c: usize| g.hit_cols.iter().find(|h| h.2 == c).unwrap().0 + 1;
+    for c in [1, 2] {
+        h.mouse(MouseEventKind::Down(MouseButton::Left), x(c), g.data_y);
+        h.mouse(MouseEventKind::Up(MouseButton::Left), x(c), g.data_y);
+        h.advance(Duration::from_secs(1));
+    }
+    assert_eq!((h.app.tab().grid.inspected(), h.app.tab().grid.col), (2, 2));
+    // The grid's key acts on its cell, `score`.
+    h.keys("C");
+    assert_eq!(hidden(&h), [false, false, true, true]);
+}
+
+/// A jump from the Changes tab back to the grid's column drops a hidden column the inspector
+/// picked: the inspector shows the change's cell, and an edit key acts on it.
+#[test]
+fn a_changes_jump_drops_the_inspectors_hidden_column() {
+    use datarig_tui::app::Focus;
+    let mut h = editable();
+    at(&mut h, 0, 1);
+    h.keys("e");
+    h.type_text("z");
+    h.key(KeyCode::Enter);
+    at(&mut h, 0, 2);
+    h.keys("C");
+    assert_eq!(h.app.tab().grid.col, 1);
+    h.app.detail.visible = true;
+    h.app.focus = Focus::Inspector;
+    h.keys("j");
+    assert_eq!((h.app.tab().grid.inspected(), h.app.tab().grid.col), (2, 1), "the hidden nickname");
+    h.app.focus = Focus::Results;
+    h.command("changes");
+    h.key(KeyCode::Enter);
+    assert_eq!((h.app.tab().grid.inspected(), h.app.tab().grid.col), (1, 1), "the email's change");
+    // An edit key: the email's cell (`space d r` reverts its change).
+    h.keys(" dr");
+    assert_eq!(pending(&h, 0, 1), None, "the email's change reverted");
+    assert_eq!(hidden(&h), [false, false, true], "the nickname still hidden");
+}

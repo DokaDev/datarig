@@ -350,8 +350,8 @@ impl App {
             GridAction::Top => grid.row = grid.window(total).start,
             GridAction::Bottom => grid.row = grid.window(total).end.saturating_sub(1),
             // The first and last shown column (a hidden one is stepped over).
-            GridAction::FirstCol => grid.col = grid.first_shown(ncols).unwrap_or(0),
-            GridAction::LastCol => grid.col = grid.last_shown(ncols).unwrap_or(ncols.saturating_sub(1)),
+            GridAction::FirstCol => grid.go_to(grid.row, grid.first_shown(ncols).unwrap_or(0)),
+            GridAction::LastCol => grid.go_to(grid.row, grid.last_shown(ncols).unwrap_or(ncols.saturating_sub(1))),
             GridAction::ViewCell => {
                 let col = if inspector { grid.inspected() } else { grid.col };
                 if let Some((column, text)) = viewer_text_of(rs, grid.row, col, &self.i18n) {

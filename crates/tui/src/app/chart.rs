@@ -422,9 +422,8 @@ impl App {
         if g.page_size > 0 {
             g.page = row / g.page_size;
         }
-        g.row = row;
+        g.go_to(row, col);
         g.top = row;
-        g.col = col;
         g.anchor = None;
         g.detached = false;
         t.exec.view = super::tabs::ResultView::Rows;

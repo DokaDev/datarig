@@ -1165,7 +1165,7 @@ impl App {
             if let Some(c) = zone {
                 let id = self.tab().id;
                 let g = &mut self.tab_mut().grid;
-                g.col = c;
+                g.go_to(g.row, c);
                 g.anchor = None;
                 g.detached = false;
                 return self.table_sort(id, c, datarig_core::query::SortStep::Only);
@@ -1263,7 +1263,7 @@ impl App {
                     Shape::Rows => (row, t.grid.col),
                     Shape::Cols => (t.grid.row, col),
                 };
-                (t.grid.row, t.grid.col) = to;
+                t.grid.go_to(to.0, to.1);
                 t.grid.detached = false;
                 // A rectangle as `v` makes it, once the pointer left the first cell.
                 if shape != Shape::Cells || to != anchor || t.grid.anchor.is_some() {

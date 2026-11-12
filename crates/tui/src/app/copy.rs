@@ -382,7 +382,7 @@ impl App {
         let (Some(first), Some(last)) = (g.first_shown(ncols), g.last_shown(ncols)) else { return };
         g.shape = Shape::Cells;
         g.anchor = Some((page.end - 1, last));
-        (g.row, g.col) = (page.start, first);
+        g.go_to(page.start, first);
         g.detached = false;
         self.say_selecting();
     }

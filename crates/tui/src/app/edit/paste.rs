@@ -454,7 +454,7 @@ impl App {
             rs.edit.batch.undo();
         }
         let g = &mut t.grid;
-        (g.row, g.col) = last.at.cursor;
+        g.go_to(last.at.cursor.0, last.at.cursor.1);
         g.anchor = last.at.anchor;
         g.shape = last.at.shape;
         self.edit_grid_sync();
@@ -816,7 +816,7 @@ impl App {
         self.last_paste = last.map(|l| LastPaste { revision, step, ..l });
         self.edit_grid_sync();
         let t = self.tabs.active_mut();
-        (t.grid.row, t.grid.col) = top;
+        t.grid.go_to(top.0, top.1);
         t.grid.anchor = None;
         t.grid.detached = false;
         self.selecting_done();

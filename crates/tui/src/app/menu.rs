@@ -959,7 +959,7 @@ impl App {
             && t.exec.view == ResultView::Rows
             && let Some(c) = t.grid.header_col(x, y)
         {
-            t.grid.col = c;
+            t.grid.go_to(t.grid.row, c);
             t.grid.anchor = None;
             t.grid.detached = false;
             return self.open_column_menu_at((x, y));
