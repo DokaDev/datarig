@@ -378,12 +378,6 @@ impl App {
         }
     }
 
-    /// Whether tab `t`'s server reads a time zone offset in a date and time literal, as a session
-    /// of its profile said (`DbEvent::ZoneOffsets`); not known is no.
-    pub(super) fn zone_offsets(&self, t: &Tab) -> bool {
-        t.profile.and_then(|p| self.conns.get(p)).and_then(|c| c.zone_offsets) == Some(true)
-    }
-
     /// Value `v` of column `col` of result `rs` (as read, not NULL) as the filter compares it,
     /// or why it is not taken ([`admit`], with the rows' session values and the tab's now).
     fn by_value_value(

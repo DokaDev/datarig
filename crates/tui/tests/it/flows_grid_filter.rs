@@ -749,13 +749,21 @@ fn mysql_literals_follow_the_session() {
     assert_eq!(key_on(&mut h, 0, 1, "!"), my("NOT (name <=> _utf8mb4 X'697427735C')"));
     page_with(&mut h, cols(), rows());
     clear_with(&mut h, cols(), rows());
-    // Bytes as X'…'; a TIMESTAMP as shown with the offset of the zone it was read in, so
-    // that it is the same instant in a session of another zone (run again from the history).
+    // Bytes as X'…'.
     assert_eq!(key_on(&mut h, 0, 2, "="), my("data = X'01AB'"));
     page_with(&mut h, cols(), rows());
     clear_with(&mut h, cols(), rows());
-    assert_eq!(key_on(&mut h, 0, 4, "="), my("at = '2026-11-10 09:30:00+00:00'"));
+    // A TIMESTAMP as the instant it was read as, in the session's zone when it runs: the same
+    // instant on every server, and when it runs again after the session's zone changed.
+    let instant = "at = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
+    assert_eq!(key_on(&mut h, 0, 4, "="), my(instant));
     page_with(&mut h, cols(), rows());
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::SessionValues(SessionValues { time_zone: "+05:30".into(), charset: "utf8mb4".into() }));
+    h.app.dispatch(datarig_tui::app::action::Action::RunStatement);
+    assert_eq!(runs(&mut h), my(instant), "run again in another zone: the same instant");
+    page_with(&mut h, cols(), rows());
+    h.tab_db(index, DbEvent::SessionValues(SessionValues { time_zone: "+00:00".into(), charset: "utf8mb4".into() }));
     clear_with(&mut h, cols(), rows());
     // A MySQL FLOAT is sent rounded: not taken.
     assert!(key_on(&mut h, 0, 3, "=").is_empty());
