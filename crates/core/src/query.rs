@@ -258,6 +258,11 @@ impl Target {
 pub struct ColumnFacts {
     pub name: ColName,
     pub kind: ColumnKind,
+    /// MySQL `TIMESTAMP`: an instant, shown and compared in the session's time zone. A value
+    /// written with the offset of the zone it was read in (`2026-11-10 09:30:00+00:00`, as a
+    /// copy as SQL takes it) is written as that instant in the session's zone when the
+    /// statement runs, whatever the zone is then ([`render`]).
+    pub zoned: bool,
     /// Its collation's name, when it has one and the server said it.
     pub collation: Option<String>,
     /// Equal strings are equal byte for byte under its collation (PostgreSQL: a
@@ -268,7 +273,7 @@ pub struct ColumnFacts {
 impl ColumnFacts {
     /// A column of kind `kind`, with a deterministic collation of unknown name.
     pub fn new(name: impl Into<ColName>, kind: ColumnKind) -> Self {
-        Self { name: name.into(), kind, collation: None, deterministic: true }
+        Self { name: name.into(), kind, zoned: false, collation: None, deterministic: true }
     }
 }
 

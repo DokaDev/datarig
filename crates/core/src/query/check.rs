@@ -257,6 +257,7 @@ pub const MYSQL_FILTER_CALLS: &[&str] = &[
     "CONCAT",
     "CONCAT_WS",
     "CONVERT",
+    "CONVERT_TZ",
     "CURDATE",
     "CURRENT_DATE",
     "CURRENT_TIMESTAMP",

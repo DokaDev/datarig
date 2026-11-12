@@ -327,6 +327,11 @@ fn column_kind(c: &ColumnMeta) -> ColumnKind {
     }
 }
 
+/// A result column of dialect `d` that is a MySQL `TIMESTAMP` ([`ColumnFacts::zoned`]).
+fn zoned(d: Dialect, c: &ColumnMeta) -> bool {
+    matches!(d, Dialect::MySql(_)) && c.kind == ValueKind::TimestampTz
+}
+
 /// Why the bar refuses a filter, in words (the part in parentheses of the refusal).
 pub(super) fn refusal_why(i18n: &I18n, r: &BarRefusal) -> String {
     let label = |l: Label| i18n.label(l).to_string();
@@ -468,9 +473,14 @@ impl App {
         let d = self.tab_dialect(id);
         let held = t.doc.table_query.as_ref().is_some_and(|q| q.shown.is_some());
         let mut columns: Vec<ColumnFacts> = match &t.results {
-            Results::Rows(rs) if held => {
-                rs.columns.iter().map(|c| ColumnFacts::new(c.meta.name.clone(), column_kind(&c.meta))).collect()
-            }
+            Results::Rows(rs) if held => rs
+                .columns
+                .iter()
+                .map(|c| ColumnFacts {
+                    zoned: zoned(d, &c.meta),
+                    ..ColumnFacts::new(c.meta.name.clone(), column_kind(&c.meta))
+                })
+                .collect(),
             _ => self
                 .conns
                 .catalog_in(t.profile, t.context.database.as_deref())

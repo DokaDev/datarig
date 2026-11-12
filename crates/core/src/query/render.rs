@@ -11,6 +11,11 @@
 //! set is known to be `utf8mb4` and it holds no backslash or NUL (which `NO_BACKSLASH_ESCAPES`
 //! reads otherwise); else it is its UTF-8 bytes, `_utf8mb4 X'…'`.
 //!
+//! A MySQL `TIMESTAMP` value with the offset of the zone it was read in (as a copy as SQL takes
+//! it) is written as that instant in the session's zone when the statement runs,
+//! `CONVERT_TZ('…', '+00:00', @@session.time_zone)`: every MySQL and MariaDB reads it, and it is
+//! the same instant in a session of another zone, as when it runs again from the history.
+//!
 //! NULL is never compared with `=`: [`Cond::IsNull`] and the NULL-safe [`Cond::NotDistinct`]
 //! (PostgreSQL `IS [NOT] DISTINCT FROM`, MySQL `<=>` and `NOT (… <=> …)`). A NULL among the
 //! values of [`Cond::In`] is taken out of the list and tested on its own, so it matches as the
@@ -204,12 +209,38 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
         {
             s.clone()
         }
+        // A MySQL TIMESTAMP's value with the offset of the zone it was read in: that instant in
+        // the session's zone when the statement runs. Every MySQL and MariaDB reads this (a
+        // literal with an offset only MySQL 8.0.19 and later), and it stays the same instant
+        // after a change of the session's zone and run again from the history.
+        Value::Text(s) if matches!(t.dialect, Dialect::MySql(_)) && c.is_some_and(|c| c.zoned) => match zoned(s) {
+            Some((at, offset)) => {
+                format!("CONVERT_TZ({}, {}, @@session.time_zone)", text_literal(t, at), text_literal(t, offset))
+            }
+            None => text_literal(t, s),
+        },
         Value::Text(s) => text_literal(t, s),
         Value::Bytes(b) => match t.dialect {
             Dialect::Postgres => format!("{}::pg_catalog.bytea", text_literal(t, &format!("\\x{}", hex(b, false)))),
             Dialect::MySql(_) => format!("X'{}'", hex(b, true)),
         },
     }
+}
+
+/// A date and time with a time zone offset, `YYYY-MM-DD HH:MM:SS[.ffffff]±HH:MM`: the date and
+/// time, and the offset.
+pub(super) fn zoned(s: &str) -> Option<(&str, &str)> {
+    let at = s.len().checked_sub(6)?;
+    let (when, offset) = (s.get(..at)?, s.get(at..)?);
+    let digits = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+    let shaped = |text: &str, shape: &str| {
+        text.len() == shape.len()
+            && text.bytes().zip(shape.bytes()).all(|(b, c)| if c == b'9' { b.is_ascii_digit() } else { b == c })
+    };
+    let (whole, fraction) = when.split_once('.').unwrap_or((when, ""));
+    let fraction_ok = fraction.is_empty() && !when.contains('.') || digits(fraction) && fraction.len() <= 6;
+    let offset_ok = (offset.starts_with('+') || offset.starts_with('-')) && shaped(&offset[1..], "99:99");
+    (shaped(whole, "9999-99-99 99:99:99") && fraction_ok && offset_ok).then_some((when, offset))
 }
 
 /// The most digits of a MySQL `DECIMAL`, and of them the most after the point: an exact value

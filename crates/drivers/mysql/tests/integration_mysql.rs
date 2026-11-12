@@ -1019,6 +1019,58 @@ fn info(evs: &[DbEvent]) -> Option<StatementInfo> {
     })
 }
 
+/// A TIMESTAMP's value with the offset of the zone it was read in, as a filter writes it, finds
+/// its row in a session of any zone: a filter written once and run again after the session's
+/// zone changed (or from the history) compares the same instant.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_filtered_timestamp_is_the_same_instant_in_every_session_zone() {
+    use datarig_core::query::{CmpOp, ColumnFacts, ColumnKind, Cond, Target, Value, render};
+    let test = "a_filtered_timestamp_is_the_same_instant_in_every_session_zone";
+    let Some(url) = my_url(test) else { return };
+    let t = Table::make(
+        &url,
+        "tzfilter",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, at TIMESTAMP(3) NULL)",
+            "INSERT INTO {t} VALUES (1, '2024-10-27 00:30:00.250'), (2, '2024-10-27 01:30:00'), (3, NULL)",
+        ],
+    )
+    .await;
+    let target = Target {
+        utf8mb4: true,
+        ..Target::new(
+            Dialect::MySql(MySqlMode::default()),
+            vec![ColumnFacts { zoned: true, ..ColumnFacts::new("at", ColumnKind::Other) }],
+        )
+    };
+    let text = |s: &str| Value::Text(s.into());
+    // Read in +00:00 (row 1) and in -08:00 (row 2, 2024-10-26 17:30 there).
+    let filters = [
+        (Cond::Cmp { col: "at".into(), op: CmpOp::Eq, value: text("2024-10-27 00:30:00.250+00:00") }, vec!["1"]),
+        (
+            Cond::In {
+                col: "at".into(),
+                values: vec![text("2024-10-27 00:30:00.250+00:00"), text("2024-10-26 17:30:00-08:00")],
+                negated: false,
+            },
+            vec!["1", "2"],
+        ),
+    ];
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    let mut n = 0;
+    for zone in ["+00:00", "+05:30", "-08:00", "SYSTEM"] {
+        n += 1;
+        q.ok(n, &format!("SET time_zone = '{zone}'")).await;
+        for (cond, want) in &filters {
+            let filter = render(cond, &target).unwrap();
+            n += 1;
+            let evs = q.run(n, &[&format!("SELECT id FROM {} WHERE {filter} ORDER BY id", t.q())]).await;
+            let found: Vec<String> = page_of(&evs).1.iter().map(|r| r[0].clone().unwrap()).collect();
+            assert_eq!(found, *want, "{zone}: {filter}");
+        }
+    }
+}
+
 /// Numbers of a generated filter, typed as numbers or as text, compare exactly with a wide
 /// `DECIMAL`: a string would be compared as a double, which takes 9007199254740993 for
 /// 9007199254740992 (in a list, out of one, and between bounds).

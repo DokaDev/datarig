@@ -240,6 +240,21 @@ impl Reader<'_> {
                 "NULL" => Value::Null,
                 "TRUE" => Value::Bool(true),
                 "FALSE" => Value::Bool(false),
+                // A MySQL TIMESTAMP's instant as `render` writes it:
+                // `CONVERT_TZ('…', '+00:00', @@session.time_zone)`, the value with its offset.
+                "CONVERT_TZ" if matches!(self.d, Dialect::MySql(_)) => {
+                    toks.get(at + 1).filter(|t| t.kind == Tok::LParen)?;
+                    let (Value::Text(when), comma) = self.value(toks, at + 2)? else { return None };
+                    toks.get(comma).filter(|t| t.kind == Tok::Comma)?;
+                    let (Value::Text(offset), comma) = self.value(toks, comma + 1)? else { return None };
+                    toks.get(comma).filter(|t| t.kind == Tok::Comma)?;
+                    let zone = toks.get(comma + 1).filter(|t| t.kind == Tok::Variable)?;
+                    self.text(zone).eq_ignore_ascii_case("@@session.time_zone").then_some(())?;
+                    toks.get(comma + 2).filter(|t| t.kind == Tok::RParen)?;
+                    let v = format!("{when}{offset}");
+                    super::render::zoned(&v)?;
+                    return Some((Value::Text(v), comma + 3));
+                }
                 // MySQL text written as its UTF-8 bytes: `_utf8mb4 X'…'`.
                 "_UTF8MB4" if matches!(self.d, Dialect::MySql(_)) => {
                     let bytes = self.hex_string(toks.get(at + 1)?)?;

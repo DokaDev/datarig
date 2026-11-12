@@ -334,6 +334,53 @@ fn render_writes_mysql_exponents_as_exact_decimals() {
     assert_eq!(render_pg(&cmp("id", CmpOp::Eq, num("9007199254740993e0"))), "id = 9007199254740993e0");
 }
 
+/// A MySQL TIMESTAMP's value with the offset of the zone it was read in is written as that
+/// instant in the session's zone when the statement runs: the same instant in any zone, on every
+/// MySQL and MariaDB; it reads back as the same value and passes the filter checks.
+#[test]
+fn a_mysql_timestamp_with_its_offset_is_written_as_its_instant_in_the_session_zone() {
+    let t = Target {
+        utf8mb4: true,
+        ..Target::new(
+            MY,
+            vec![
+                ColumnFacts { zoned: true, ..ColumnFacts::new("at", ColumnKind::Other) },
+                ColumnFacts::new("born", ColumnKind::Other),
+            ],
+        )
+    };
+    let instant = |at: &str, off: &str| format!("CONVERT_TZ('{at}', '{off}', @@session.time_zone)");
+    let v = "2026-11-10 09:30:00+00:00";
+    for (c, want) in [
+        (cmp("at", CmpOp::Eq, text(v)), format!("at = {}", instant("2026-11-10 09:30:00", "+00:00"))),
+        (
+            Cond::In { col: "at".into(), values: vec![text(v), text("2026-11-11 10:00:00.250-08:00")], negated: false },
+            format!(
+                "at IN ({}, {})",
+                instant("2026-11-10 09:30:00", "+00:00"),
+                instant("2026-11-11 10:00:00.250", "-08:00")
+            ),
+        ),
+        // Typed without an offset: the session's local time, as written.
+        (cmp("at", CmpOp::Lt, text("2026-11-10 09:30:00")), "at < '2026-11-10 09:30:00'".to_string()),
+        (cmp("at", CmpOp::Eq, text("+05:30")), "at = '+05:30'".to_string()),
+        // Not a TIMESTAMP: a string.
+        (cmp("born", CmpOp::Eq, text(v)), format!("born = '{v}'")),
+    ] {
+        let sql = render(&c, &t).unwrap();
+        assert_eq!(sql, want, "{c:?}");
+        assert_eq!(recognise(&sql, &t), Some(c.clone()), "{sql}");
+        for read_only in [false, true] {
+            let r = check_filter(&sql, &users(), &t, &Classifier::new(Language::Sql(MY)), read_only);
+            assert_eq!(r, Ok(FilterVerdict::Clear), "{sql}");
+        }
+    }
+    // PostgreSQL's timestamptz reads the offset itself.
+    let pg =
+        Target::new(Dialect::Postgres, vec![ColumnFacts { zoned: true, ..ColumnFacts::new("at", ColumnKind::Other) }]);
+    assert_eq!(render(&cmp("at", CmpOp::Eq, text(v)), &pg).unwrap(), format!("at = '{v}'"));
+}
+
 #[test]
 fn render_in_takes_null_out_of_the_list() {
     let r#in = |values: Vec<Value>, negated| Cond::In { col: "id".into(), values, negated };
