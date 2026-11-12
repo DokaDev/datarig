@@ -304,6 +304,32 @@ fn a_chip_taken_out_leaves_the_others_as_written() {
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (lower(name) = 'x')")]]);
 }
 
+/// `not in list` that keeps NULL rows, its operator picked again as it is (with the picker's
+/// `Enter` and with `Space`), still keeps them: the condition and what is sent are as they were.
+#[test]
+fn not_in_list_keeping_nulls_picked_again_keeps_them() {
+    let term = "(name NOT IN ('a', 'b') OR name IS NULL)";
+    for pick in [KeyCode::Enter, KeyCode::Char(' ')] {
+        let mut h = users();
+        h.command(&format!("where {term}"));
+        runs(&mut h);
+        answer(&mut h);
+        h.keys("f");
+        h.key(KeyCode::Char('j'));
+        // From the column list to the condition's value, back to its operator, its picker open
+        // on the operator it has.
+        h.key(KeyCode::Right);
+        h.key(KeyCode::Right);
+        h.key(KeyCode::Home);
+        h.key(KeyCode::Left);
+        h.key(KeyCode::Char(' '));
+        h.key(pick);
+        assert_eq!(h.app.filter_dialog_draft().unwrap().0, term, "{pick:?}: {}", h.screen(120, 34));
+        h.key(KeyCode::Enter);
+        assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE ({term})")]], "{pick:?}");
+    }
+}
+
 #[test]
 fn a_condition_without_its_value_is_not_sent() {
     let mut h = users();

@@ -416,8 +416,10 @@ impl App {
         let Some(row) = d.draft.where_.terms().get(t).and_then(|t| t.row.clone()) else { return };
         let c = d.column_info(&row.col);
         let values = values_for(&row, op, &c, d.dialect);
+        // NULL rows kept stay kept while the operator stays what it was.
+        let keep_nulls = row.keep_nulls && op == row.op;
         self.filter_dialog_edit(None, |d, target| {
-            d.draft.where_.set(t, Row { op, values, keep_nulls: false, ..row }, target);
+            d.draft.where_.set(t, Row { op, values, keep_nulls, ..row }, target);
         });
         if let Some(d) = self.filter_dialog_mut() {
             d.fill_inputs(t);
