@@ -1161,6 +1161,10 @@ impl App {
                 g.detached = false;
                 return self.table_sort(id, c, datarig_core::query::SortStep::Only);
             }
+            // No cell shown (every column hidden): nothing to select or drag.
+            if self.grid_no_cell() {
+                return;
+            }
             let t = self.tabs.active_mut();
             // The row-number gutter selects whole rows, a header whole columns;
             // Shift extends the selection there is; a drag from there extends it.
@@ -1232,6 +1236,7 @@ impl App {
             Some(Drag::Divider) if !self.tabs.is_empty() => self.drag_divider(y),
             // The border follows the pointer: the explorer ends on its column.
             Some(Drag::ExplorerEdge) => self.resize_explorer((x + 1).saturating_sub(self.layout.workspace.x)),
+            Some(Drag::Grid { .. }) if !self.tabs.is_empty() && self.grid_no_cell() => self.pointer.drag = None,
             Some(Drag::Grid { anchor, shape }) if self.focus == Focus::Results && !self.tabs.is_empty() => {
                 self.pointer.drag_at = Some((x, y));
                 let t = self.tabs.active_mut();

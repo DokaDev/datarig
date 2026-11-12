@@ -604,3 +604,27 @@ fn a_paste_read_again_after_its_column_was_hidden_stays_as_it_was() {
     h.ctrl('r');
     assert_eq!(pending(&h, 0, 2), Some(text("zz")), "and redoes");
 }
+
+/// Every column hidden, the note drawn: a click or a drag where the row numbers were selects
+/// nothing.
+#[test]
+fn with_every_column_hidden_the_mouse_selects_nothing() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let mut h = users(None);
+    h.draw(120, 34);
+    let g = h.app.tab().grid.clone();
+    let (x, y) = (g.gutter_x.0, g.data_y + 1);
+    assert!(g.gutter_x.1 > g.gutter_x.0, "the row numbers were drawn");
+    for _ in 0..4 {
+        h.keys("C");
+    }
+    assert_eq!(hidden(&h), [true, true, true, true]);
+    h.draw(120, 34);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), x, y + 1);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y + 1);
+    assert_eq!(h.app.tab().grid.anchor, None, "nothing selected");
+    // A header's place neither.
+    h.mouse(MouseEventKind::Down(MouseButton::Left), g.hit_cols[0].0 + 1, g.header_y);
+    assert_eq!(h.app.tab().grid.anchor, None);
+}

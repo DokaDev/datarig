@@ -767,6 +767,8 @@ pub fn render(
     match st.nearest_shown(st.col, rs.columns.len()) {
         Some(c) => st.col = c,
         None => {
+            // No row numbers either: nothing for the pointer to select.
+            st.gutter_x = (0, 0);
             let w = area.width.saturating_sub(2) as usize;
             let lines = crate::text::wrap_words(look.all_hidden, w);
             for (i, line) in lines.iter().take(area.height as usize).enumerate() {
