@@ -1910,9 +1910,11 @@ fn quoted_target<'c, 'a>(item: &'c [W<'a>]) -> Option<(Option<String>, bool, &'c
 
 /// Whether the app may run `sql` again (to fetch a later page) or count its rows, as far as its
 /// text tells: one query on the allowlist of reads, with no `INTO`, no locking clause, no
-/// variable, no call of a function that is not a built-in or that is [`VOLATILE`], and no name
-/// in a schema of the server's own (`performance_schema`, `information_schema`, `sys`, `mysql`,
-/// whose rows change on their own), in every sql mode that reads it differently ([`readings`]).
+/// variable (but the session's time zone where a filter on a `TIMESTAMP` reads it,
+/// [`zone_reads`]), no call of a function that is not a built-in or that is [`VOLATILE`], and
+/// no name in a schema of the server's own (`performance_schema`, `information_schema`, `sys`,
+/// `mysql`, whose rows change on their own), in every sql mode that reads it differently
+/// ([`readings`]).
 /// What only the server can tell (whether a name it reads is a view, whose query may call
 /// anything) is for the driver to ask before it runs it again, with the names of [`names`].
 pub fn repeatable(sql: &str, mode: MySqlMode) -> Result<(), NotRepeatable> {
@@ -2043,10 +2045,56 @@ fn names_of(stmts: &[Vec<W>], hint: bool) -> Result<Vec<String>, NotRepeatable> 
     }
     // Last: the app lets a read of a variable that passes every other check run outside a
     // transaction ([`super::Classifier::tx_step`]).
-    if let Some(v) = ws.iter().find(|w| w.kind == Tok::Variable) {
+    let zone = zone_reads(ws);
+    if let Some((_, v)) = ws.iter().enumerate().find(|(i, w)| w.kind == Tok::Variable && !zone.contains(i)) {
         return Err(NotRepeatable::Variable(v.text.to_string()));
     }
     Ok(out)
+}
+
+/// The session's time zone as a filter on a `TIMESTAMP` reads it
+/// (`CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)`, so that the same
+/// instant is matched in any zone): `@@session.time_zone` (or `@@time_zone`, the same variable
+/// in a query) as the last argument of the built-in `CONVERT_TZ`, called by its bare name,
+/// whose first two arguments are string literals (`'…'`, or `_utf8mb4` and one). The indices of
+/// those variables in `ws`. Run again in the same zone, the call gives the same value; whether
+/// the session's zone is still the one a result was read in is for the app to tell
+/// ([`reads_zone`]).
+fn zone_reads(ws: &[W]) -> Vec<usize> {
+    let literal = |i: usize| match ws.get(i) {
+        Some(w) if w.kind == Tok::Str => Some(i + 1),
+        Some(w) if w.is("_UTF8MB4") => ws.get(i + 1).filter(|s| s.kind == Tok::Str).map(|_| i + 2),
+        _ => None,
+    };
+    let kind = |i: usize, k: Tok| ws.get(i).is_some_and(|w| w.kind == k);
+    let mut out = Vec::new();
+    for i in 0..ws.len() {
+        let bare = i == 0 || ws[i - 1].kind != Tok::Dot;
+        if !(bare && ws[i].is("CONVERT_TZ") && kind(i + 1, Tok::LParen)) {
+            continue;
+        }
+        let Some(at) = literal(i + 2).filter(|&a| kind(a, Tok::Comma)) else { continue };
+        let Some(at) = literal(at + 1).filter(|&a| kind(a, Tok::Comma)) else { continue };
+        let v = at + 1;
+        if kind(v, Tok::Variable) && is_zone(ws[v].text) && kind(v + 1, Tok::RParen) {
+            out.push(v);
+        }
+    }
+    out
+}
+
+/// The session's time zone variable as [`zone_reads`] takes it, in any case.
+fn is_zone(text: &str) -> bool {
+    text.eq_ignore_ascii_case("@@session.time_zone") || text.eq_ignore_ascii_case("@@time_zone")
+}
+
+/// Whether the text of `sql` names the session's time zone variable ([`zone_reads`]) in any sql
+/// mode that reads it differently ([`readings`]): run again, it reads the zone the session has
+/// then, so its rows are those of the first run only while that zone is the same.
+pub fn reads_zone(sql: &str, mode: MySqlMode) -> bool {
+    readings(sql, mode)
+        .into_iter()
+        .any(|m| lex_in(sql, Dialect::MySql(m)).iter().any(|t| t.kind == Tok::Variable && is_zone(t.text(sql))))
 }
 
 /// The form of `sql` for [`super::tx_step`] when it is exactly one statement in every sql mode

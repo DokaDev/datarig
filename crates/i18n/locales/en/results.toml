@@ -165,6 +165,7 @@
 "repeat.volatile" = "it calls {name}, whose result changes from call to call"
 "repeat.unreadable" = "it cannot be read"
 "repeat.variable" = "it uses the variable {name}, whose value may change"
+"repeat.zone_changed" = "it reads the session's time zone, which is not known to be the one its rows were read in"
 "repeat.user_operator" = "it uses the operator {name}, which is not a built-in"
 "repeat.user_type" = "it names the type {name}, which is not a built-in"
 "repeat.not_a_table" = "it reads {name}, which is not a table (a view, a foreign table, …) or is not found"

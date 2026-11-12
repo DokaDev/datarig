@@ -470,6 +470,89 @@ fn repeatable_is_the_plain_query_allowlist() {
 }
 
 #[test]
+fn repeatable_takes_the_session_zone_only_as_a_timestamp_filter_writes_it() {
+    // As the table filter writes a TIMESTAMP's instant: the same instant in any zone.
+    let ok = [
+        "SELECT * FROM `shop`.`orders` WHERE `placed_at` = \
+         CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)",
+        "SELECT * FROM t WHERE NOT (placed_at <=> CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)) \
+         ORDER BY id",
+        "SELECT * FROM t WHERE placed_at = CONVERT_TZ(_utf8mb4 X'323032362D31312D31302030393A33303A3030', \
+         '+00:00', @@session.time_zone)",
+        "SELECT * FROM t WHERE placed_at IN (CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@SESSION.TIME_ZONE), \
+         convert_tz('2026-11-10 10:30:00', '+00:00', @@time_zone))",
+        "SELECT COUNT(*) FROM (\nSELECT * FROM t WHERE placed_at = \
+         CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)\n) AS datarig_count",
+    ];
+    for sql in ok {
+        assert_eq!(repeatable(sql, MODE), Ok(()), "{sql}");
+        assert!(reads_zone(sql, MODE), "{sql}");
+        assert!(count_query(sql, MODE).is_ok(), "{sql}");
+    }
+    let var = |v: &str| Err(NotRepeatable::Variable(v.into()));
+    let no = [
+        // Any other variable, also next to the zone or inside CONVERT_TZ.
+        ("SELECT * FROM t WHERE a = @x", var("@x")),
+        ("SELECT @@global.time_zone", var("@@global.time_zone")),
+        ("SELECT @@session.time_zone", var("@@session.time_zone")),
+        ("SELECT * FROM t WHERE a = @@session.sql_mode", var("@@session.sql_mode")),
+        (
+            "SELECT * FROM t WHERE a = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.sql_mode)",
+            var("@@session.sql_mode"),
+        ),
+        (
+            "SELECT * FROM t WHERE a = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@global.time_zone)",
+            var("@@global.time_zone"),
+        ),
+        (
+            "SELECT * FROM t WHERE a = CONVERT_TZ('2026-11-10 09:30:00', @@session.time_zone, '+00:00')",
+            var("@@session.time_zone"),
+        ),
+        (
+            "SELECT * FROM t WHERE a = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone) AND b = @x",
+            var("@x"),
+        ),
+        // Not literals as the first two arguments.
+        ("SELECT * FROM t WHERE a = CONVERT_TZ(b, '+00:00', @@session.time_zone)", var("@@session.time_zone")),
+        (
+            "SELECT * FROM t WHERE a = CONVERT_TZ('2026-11-10 09:30:00', c, @@session.time_zone)",
+            var("@@session.time_zone"),
+        ),
+        ("SELECT * FROM t WHERE a = CONVERT_TZ(CONCAT('2026', @x), '+00:00', @@session.time_zone)", var("@x")),
+        (
+            "SELECT * FROM t WHERE a = CONVERT_TZ('2026-11-10 09:30:00' '', '+00:00', @@session.time_zone)",
+            var("@@session.time_zone"),
+        ),
+        // The zone in an expression, or another function.
+        (
+            "SELECT * FROM t WHERE a = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone + 0)",
+            var("@@session.time_zone"),
+        ),
+        ("SELECT * FROM t WHERE a = CONCAT('a', 'b', @@session.time_zone)", var("@@session.time_zone")),
+        // A function of the user's of that name, or one quoted.
+        (
+            "SELECT * FROM t WHERE a = zz.CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)",
+            Err(NotRepeatable::UserFunction),
+        ),
+        // An assignment to it.
+        ("SELECT @@session.time_zone := '+00:00'", var("@@session.time_zone")),
+    ];
+    for (sql, want) in no {
+        assert_eq!(repeatable(sql, MODE), want, "{sql}");
+    }
+    // A string under ANSI_QUOTES is a column there: not a literal.
+    let ansi = MySqlMode { ansi_quotes: true, ..MODE };
+    let quoted = "SELECT * FROM t WHERE a = CONVERT_TZ(\"2026-11-10 09:30:00\", '+00:00', @@session.time_zone)";
+    assert_eq!(repeatable(quoted, ansi), var("@@session.time_zone"));
+    // Only a variable counts: a string or a comment that says it does not.
+    assert!(!reads_zone("SELECT '@@session.time_zone' FROM t # @@time_zone", MODE));
+    assert!(!reads_zone("SELECT * FROM t WHERE a = @x", MODE));
+    let c = Classifier::MySql(MODE);
+    assert!(c.reads_zone(ok[0]));
+    assert!(!Classifier::Pg(Default::default()).reads_zone(ok[0]));
+}
+
+#[test]
 fn ordered_reads_the_top_level_order_by() {
     for (sql, want) in [
         ("SELECT * FROM t ORDER BY a", true),

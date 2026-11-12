@@ -220,6 +220,64 @@ async fn pages_are_not_held_and_the_next_one_runs_again() {
     assert!(app.status.as_ref().is_some_and(|n| matches!(n.msg, Msg::ResultsFirstPageOnly { .. })), "{:?}", app.status);
 }
 
+/// A filter on a `TIMESTAMP` as the table filter writes it (the instant from UTC, converted to
+/// the session's zone) is run again for the next page; once the session's zone changed, it is
+/// not, and the reason is said.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_timestamp_filter_pages_again_in_the_zone_its_rows_were_read_in() {
+    let Some((url, admin)) = urls("a_timestamp_filter_pages_again_in_the_zone_its_rows_were_read_in") else {
+        return;
+    };
+    let t = format!("shop.zz_it_tzpages_{}", std::process::id());
+    let _t = Made::make(
+        &admin,
+        &[
+            "SET time_zone = '+00:00'".to_string(),
+            format!("CREATE TABLE {t} (id INT PRIMARY KEY, placed_at TIMESTAMP NULL)"),
+            format!(
+                "INSERT INTO {t} WITH RECURSIVE d (i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM d WHERE i < 99) \
+                 SELECT g.n, IF(g.n % 7 = 0, '2026-11-10 10:30:00', '2026-11-10 09:30:00') \
+                 FROM (SELECT a.i + b.i * 100 + 1 AS n FROM d a, d b) g WHERE g.n <= 1234"
+            ),
+        ],
+        &[format!("DROP TABLE IF EXISTS {t}")],
+    )
+    .await;
+    let (mut app, mut rx) = app_on(&url, &format!("mz{}", std::process::id()), None).await;
+    run(&mut app, &mut rx, "SET time_zone = '+09:00'").await;
+    let sql = format!(
+        "SELECT id FROM {t} WHERE placed_at = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone) \
+         ORDER BY id"
+    );
+    run(&mut app, &mut rx, &sql).await;
+    assert_eq!(shown_page(&app), (Some("1".into()), 500));
+    assert_eq!(app.tab().exec.paging, Paging::Released);
+    assert!(app.can_run_again(), "{:?}", app.status);
+    app.focus = Focus::Results;
+    press(&mut app, 'n');
+    pump(&mut app, &mut rx, 15, idle).await;
+    // 1058 rows match (every id but the multiples of 7): the 501st is id 584.
+    assert_eq!(shown_page(&app), (Some("584".into()), 1000));
+    // The session's zone changes: the rows stay, and the next page is not run again.
+    run(&mut app, &mut rx, "SET time_zone = '+00:00'").await;
+    // Its Messages are shown: back to the rows.
+    app.tab_mut().exec.view = datarig_tui::app::tabs::ResultView::Rows;
+    app.focus = Focus::Results;
+    press(&mut app, 'n');
+    pump(&mut app, &mut rx, 5, idle).await;
+    assert_eq!(shown_page(&app), (Some("584".into()), 1000));
+    let status = app.status.as_ref().map(|n| n.render(&app.i18n).to_string()).unwrap_or_default();
+    assert!(status.contains("it reads the session's time zone"), "{status}");
+    // Back in the zone the rows were read in: the last page comes.
+    run(&mut app, &mut rx, "SET time_zone = '+09:00'").await;
+    // Its Messages are shown: back to the rows.
+    app.tab_mut().exec.view = datarig_tui::app::tabs::ResultView::Rows;
+    app.focus = Focus::Results;
+    press(&mut app, 'n');
+    pump(&mut app, &mut rx, 15, idle).await;
+    assert!(matches!(&app.tab().results, Results::Rows(rs) if rs.rows.len() == 1058 && !rs.more));
+}
+
 /// `paging = "hold"`: the app reads the result to its end at once (the statement and its
 /// metadata locks end with it), page by page into its store.
 #[tokio::test(flavor = "multi_thread")]

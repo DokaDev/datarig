@@ -84,6 +84,15 @@ impl Classifier {
         }
     }
 
+    /// Whether `sql` reads the session's time zone ([`mysql::reads_zone`]): run again, its rows
+    /// are those of the first run only while the zone is the same. Never on PostgreSQL.
+    pub fn reads_zone(&self, sql: &str) -> bool {
+        match self {
+            Self::Pg(_) => false,
+            Self::MySql(mode) => mysql::reads_zone(sql, *mode),
+        }
+    }
+
     /// Whether the query `sql` sorts its rows at the top ([`repeat::ordered`]).
     pub fn ordered(&self, sql: &str) -> bool {
         match self {

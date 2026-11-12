@@ -49,6 +49,24 @@ pub(super) fn why(r: &NotRepeatable) -> Msg {
     }
 }
 
+/// Tab `t`'s shown result, run again with `sql`, may not match the rows it has: `sql` reads the
+/// session's time zone (a filter on a MySQL `TIMESTAMP`, [`Classifier::reads_zone`]) and the
+/// result's rows are not known to be read in the zone the session has now (it changed since,
+/// or between its pages, or what it was is not known).
+pub(super) fn zone_moved(t: &Tab, sql: &str) -> bool {
+    if !t.exec.prepared.reads_zone(sql) {
+        return false;
+    }
+    let read_in = match &t.results {
+        Results::Rows(rs) => Some(&rs.read_in),
+        _ => None,
+    };
+    !matches!(
+        (read_in, &t.exec.values),
+        (Some(datarig_core::driver::ReadIn::Values(then)), Some(now)) if then.time_zone == now.time_zone
+    )
+}
+
 /// A statement (in `lang`) that changes rows and keeps the change (not an `EXPLAIN ANALYZE`,
 /// whose changes are rolled back).
 fn commits_a_write(lang: Language, sql: &str) -> bool {
@@ -214,6 +232,10 @@ impl App {
             let why = self.i18n.msg(&why(&r)).to_string();
             return self.tab_status(id, Notice::new(refused(why), Level::Warning));
         }
+        if zone_moved(t, &sql) {
+            let why = self.i18n.label(Label::RepeatZoneChanged).to_string();
+            return self.tab_status(id, Notice::new(refused(why), Level::Warning));
+        }
         let statements = vec![sql.clone()];
         if let Some(refused) =
             self.unsupported(id, &statements).or_else(|| self.read_only_refusal(id, pid, &statements))
@@ -296,6 +318,10 @@ impl App {
             return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
         }
         let source = self.table_count_source(id).unwrap_or_else(|| t.shown_sql().to_string());
+        if zone_moved(t, &source) {
+            let why = self.i18n.label(Label::RepeatZoneChanged).to_string();
+            return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
+        }
         let sql = match t.exec.prepared.count_query(&source) {
             Ok(sql) => sql,
             Err(r) => {
