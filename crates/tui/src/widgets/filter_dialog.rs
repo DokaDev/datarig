@@ -25,7 +25,7 @@ use crate::widgets::popup::draw_popup;
 use crate::widgets::put;
 use crate::widgets::statusbar::level_color;
 use crate::widgets::text_input::TextInput;
-use datarig_core::query::{self, Dir};
+use datarig_core::query::{self, Dir, RenderError};
 use datarig_core::sql::dialect::Dialect;
 use datarig_core::sql::lexer::{Tok, lex_in};
 use datarig_i18n::{Label, Msg};
@@ -379,7 +379,13 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
             let remove_x = right.saturating_sub(1);
             let vx = ob.x + ob.width + 2;
             let incomplete = !term.complete();
-            let note = if incomplete { i18n.label(Label::TableDialogIncomplete).to_string() } else { String::new() };
+            // Why a row with its values is not written, where it is the value's; else it waits.
+            let note = match (&term.problem, incomplete) {
+                (_, false) => String::new(),
+                (Some(RenderError::NotNumber(_)), _) => i18n.label(Label::TableDialogProblemNotNumber).to_string(),
+                (Some(RenderError::InexactEquality(_)), _) => i18n.label(Label::TableDialogProblemInexact).to_string(),
+                _ => i18n.label(Label::TableDialogIncomplete).to_string(),
+            };
             let note_w = if incomplete { width(&note) as u16 + 2 } else { 0 };
             let vw = remove_x.saturating_sub(vx + 2 + note_w);
             let n = match row.op.arity() {

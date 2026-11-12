@@ -371,15 +371,21 @@ fn typed_values_are_numbers_only_when_plain_numbers() {
     for s in ["1 OR 1=1", "+1", "-0", "-0.0", "1.2.3", "1e", "0x1F", "NaN", "1;", "1--", "-", "."] {
         assert_eq!(one(s, &id), vec![text(s)], "{s}");
     }
-    // Typed text never reaches the SQL as it is.
-    for d in [PG, MY] {
-        let t = target(d);
-        let mut w = Where::from_text("", &t);
-        w.add(Row { values: one("1 OR 1=1", &id), ..Row::new("id", Op::Eq) }, &t);
-        assert_eq!(w.text(), "id = '1 OR 1=1'");
-        w.add(Row { values: one("x' OR '1'='1", &info("name", ColumnKind::Text)), ..Row::new("name", Op::Eq) }, &t);
-        assert_eq!(w.text(), "id = '1 OR 1=1' AND name = 'x'' OR ''1''=''1'");
-    }
+    // Typed text never reaches the SQL as it is: a string PostgreSQL converts or refuses; on
+    // MySQL, which would read it as a number without a word, text that is no number on a number
+    // column is not written at all.
+    let t = target(PG);
+    let mut w = Where::from_text("", &t);
+    w.add(Row { values: one("1 OR 1=1", &id), ..Row::new("id", Op::Eq) }, &t);
+    assert_eq!(w.text(), "id = '1 OR 1=1'");
+    w.add(Row { values: one("x' OR '1'='1", &info("name", ColumnKind::Text)), ..Row::new("name", Op::Eq) }, &t);
+    assert_eq!(w.text(), "id = '1 OR 1=1' AND name = 'x'' OR ''1''=''1'");
+    let t = target(MY);
+    let mut w = Where::from_text("", &t);
+    let i = w.add(Row { values: one("1 OR 1=1", &id), ..Row::new("id", Op::Eq) }, &t);
+    assert_eq!(w.terms()[i].problem, Some(RenderError::NotNumber("id".into())));
+    w.add(Row { values: one("x' OR '1'='1", &info("name", ColumnKind::Text)), ..Row::new("name", Op::Eq) }, &t);
+    assert_eq!(w.text(), "name = 'x'' OR ''1''=''1'");
     // Text as typed, NULL as text, an empty field as no value.
     let name = info("name", ColumnKind::Text);
     assert_eq!(one(" a b ", &name), vec![text(" a b ")]);

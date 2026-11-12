@@ -566,6 +566,117 @@ fn my_page(h: &mut Harness, at: &[&str]) {
     h.tab_db(index, DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::from_millis(2) });
 }
 
+/// `shop.users` of `columns` open on a profile of `driver` (`mysql`: a MySQL one, its session's
+/// zone `+00:00`), `rows` loaded, the grid focused, nothing sent since.
+fn table_of(mysql: bool, columns: Vec<ColumnMeta>, rows: Vec<Vec<Option<String>>>) -> Harness {
+    let mut h = match mysql {
+        true => {
+            let driver = FakeDriver::default();
+            driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+            let mut p = datarig_core::profile::ConnectionConfig::test_db();
+            (p.name, p.driver) = ("local-my".into(), "mysql".into());
+            let cfg = datarig_core::config::Config { connections: vec![p], ..Default::default() };
+            let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+            h.db(DbEvent::Connected);
+            h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+            open_users(&mut h);
+            let index = h.app.tabs.active_index();
+            h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MySql(MySqlMode::default()))));
+            h.tab_db(index, DbEvent::Connected);
+            zone(&mut h, "+00:00");
+            h
+        }
+        false => {
+            let mut h = Harness::connected(Lang::En);
+            open_users(&mut h);
+            h
+        }
+    };
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::from_millis(2) });
+    h.sent();
+    h.key(KeyCode::Tab);
+    h
+}
+
+/// In the open dialog on a column: a condition with the first operator it takes, `value` typed.
+fn typed(h: &mut Harness, value: &str) {
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Char(' '));
+    h.type_text(value);
+}
+
+/// MySQL reads text compared with a number as a number without a word (`'abc'` as 0, `'12abc'`
+/// as 12, `'true'` as 0): a value typed on a number column that is no number is not written,
+/// and its row says why; a number is, in quotes too, and TRUE or FALSE on a BOOLEAN
+/// (`tinyint(1)`) only.
+#[test]
+fn mysql_text_typed_on_a_number_column_is_not_written_and_says_why() {
+    let s = |v: &str| Some(v.to_string());
+    let cols = || vec![col("id", "int", ValueKind::Integer), col("flag", "tinyint(1)", ValueKind::Integer)];
+    for (column, value, want) in [
+        (0, "abc", None),
+        (0, "12abc", None),
+        (0, "'abc'", None),
+        (0, "true", None),
+        (0, "12", Some("id = 12")),
+        (0, "'12'", Some("id = '12'")),
+        (1, "true", Some("flag = TRUE")),
+        (1, "False", Some("flag = FALSE")),
+        (1, "1", Some("flag = 1")),
+        (1, "yes", None),
+    ] {
+        let mut h = table_of(true, cols(), vec![vec![s("1"), s("0")]]);
+        dialog_on(&mut h, column);
+        typed(&mut h, value);
+        let screen = h.screen(120, 34);
+        match want {
+            Some(w) => assert_eq!(draft(&h), w, "{value}: {screen}"),
+            None => {
+                assert_eq!(draft(&h), "", "{value}");
+                assert!(screen.contains("not a number"), "{value}: {screen}");
+            }
+        }
+    }
+}
+
+/// A single-precision float: on PostgreSQL (`real`) a typed or ticked value is written as a
+/// string the server reads as a `real` (a bare `0.1` would match nothing); on MySQL (`FLOAT`) no
+/// value equals one exactly: `=`, `≠` and the lists are dimmed with why, and a value of the rows
+/// is not ticked; an order comparison is written as typed.
+#[test]
+fn a_single_precision_float_is_compared_as_it_is_held() {
+    let s = |v: &str| Some(v.to_string());
+    let cols = |ty: &str| vec![col("id", "int8", ValueKind::Integer), col("r", ty, ValueKind::Float)];
+    let rows = || vec![vec![s("1"), s("0.1")], vec![s("2"), s("1.5")]];
+    let mut h = table_of(false, cols("float4"), rows());
+    dialog_on(&mut h, 1);
+    typed(&mut h, "0.1");
+    assert_eq!(draft(&h), "r = '0.1'");
+    h.key(KeyCode::Esc);
+    dialog_on(&mut h, 1);
+    to_values(&mut h, 0);
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "r = '0.1'", "{}", h.screen(120, 34));
+    h.key(KeyCode::Esc);
+    let mut h = table_of(true, cols("float"), rows());
+    dialog_on(&mut h, 1);
+    typed(&mut h, "0.1");
+    assert_eq!(draft(&h), "", "the first operator it takes is a range: {}", h.screen(120, 34));
+    h.key(KeyCode::Esc);
+    // The operator picker: `=` dimmed, why said.
+    dialog_on(&mut h, 1);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Char(' '));
+    h.key(KeyCode::Left);
+    h.key(KeyCode::Char(' '));
+    h.key(KeyCode::Char('g'));
+    h.key(KeyCode::Char(' '));
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("A MySQL FLOAT is held more precisely than it is shown"), "{screen}");
+}
+
 #[test]
 fn a_mysql_timestamp_is_ticked_only_in_the_zone_it_was_read_in() {
     let mut h = mysql();

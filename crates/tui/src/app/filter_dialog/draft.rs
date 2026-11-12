@@ -158,6 +158,8 @@ pub(crate) enum OpOff {
     NoEquality,
     /// The column's type compares for equality only.
     NoOrder,
+    /// A MySQL `FLOAT`, held more precisely than any value written for it: no equality.
+    InexactEquality,
     /// The column does not hold text.
     NotText,
     /// The column's type is not known yet (no rows held), and the operator needs text.
@@ -249,7 +251,7 @@ impl ColumnInfo {
                     | ValueKind::TimestampTz
                     | ValueKind::Interval
             ),
-            None => self.kind == ColumnKind::Number || temporal_type(&self.type_name),
+            None => matches!(self.kind, ColumnKind::Number | ColumnKind::Real) || temporal_type(&self.type_name),
         }
     }
 }
@@ -313,15 +315,17 @@ pub(crate) fn kind_of_type(d: Dialect, type_name: &str) -> ColumnKind {
     }
     match d {
         Dialect::Postgres => match base.as_str() {
-            "smallint" | "integer" | "int" | "bigint" | "int2" | "int4" | "int8" | "oid" | "real" | "float4"
-            | "double precision" | "float8" | "numeric" | "decimal" => ColumnKind::Number,
+            "real" | "float4" => ColumnKind::Real,
+            "smallint" | "integer" | "int" | "bigint" | "int2" | "int4" | "int8" | "oid" | "double precision"
+            | "float8" | "numeric" | "decimal" => ColumnKind::Number,
             "text" | "character varying" | "varchar" | "character" | "char" | "bpchar" | "name" => ColumnKind::Text,
             "bytea" => ColumnKind::Bytes,
             _ => ColumnKind::Other,
         },
         Dialect::MySql(_) => match base.as_str() {
+            "float" => ColumnKind::Real,
             "tinyint" | "smallint" | "mediumint" | "int" | "integer" | "bigint" | "year" | "decimal" | "numeric"
-            | "dec" | "fixed" | "float" | "double" | "double precision" | "real" => ColumnKind::Number,
+            | "dec" | "fixed" | "double" | "double precision" | "real" => ColumnKind::Number,
             "char" | "varchar" | "tinytext" | "text" | "mediumtext" | "longtext" | "enum" | "set" => ColumnKind::Text,
             "binary" | "varbinary" | "tinyblob" | "blob" | "mediumblob" | "longblob" => ColumnKind::Bytes,
             _ => ColumnKind::Other,
@@ -364,6 +368,10 @@ fn op_allowed(
         Some(Ok(Compares::Equality)) if op.ordered() => return Err(OpOff::NoOrder),
         _ => {}
     }
+    let equality = matches!(op, Op::Eq | Op::Ne | Op::NeOrNull | Op::InList | Op::NotInList);
+    if equality && c.kind == ColumnKind::Real && matches!(target.dialect, Dialect::MySql(_)) {
+        return Err(OpOff::InexactEquality);
+    }
     if !op.pattern() {
         return Ok(());
     }
@@ -379,7 +387,11 @@ fn op_allowed(
         RenderError::CaseInsensitiveRefused(_) => OpOff::CaseInsensitiveRefused,
         RenderError::CollationUnknown(_) => OpOff::CollationUnknown,
         RenderError::LikeRefused(_) => OpOff::LikeRefused,
-        RenderError::LikeUnknown(_) | RenderError::NullCompare(_) | RenderError::EmptyList(_) => OpOff::LikeUnknown,
+        RenderError::LikeUnknown(_)
+        | RenderError::NullCompare(_)
+        | RenderError::EmptyList(_)
+        | RenderError::InexactEquality(_)
+        | RenderError::NotNumber(_) => OpOff::LikeUnknown,
     })
 }
 
@@ -766,7 +778,15 @@ pub(crate) fn list_kept(values: &[Value], d: Dialect, c: &ColumnInfo) -> Vec<(St
 fn typed_value(s: &str, c: &ColumnInfo) -> Value {
     let t = s.trim();
     match c.kind {
-        ColumnKind::Number if plain_number(t) => Value::Number(t.to_string()),
+        ColumnKind::Number | ColumnKind::Real if plain_number(t) => Value::Number(t.to_string()),
+        // MySQL's BOOLEAN (`tinyint(1)`) takes TRUE and FALSE (1 and 0); text that is no number
+        // on any other number column is refused when written (the server would read it as 0).
+        ColumnKind::Number if c.type_name.starts_with("tinyint(1)") && t.eq_ignore_ascii_case("true") => {
+            Value::Bool(true)
+        }
+        ColumnKind::Number if c.type_name.starts_with("tinyint(1)") && t.eq_ignore_ascii_case("false") => {
+            Value::Bool(false)
+        }
         ColumnKind::Bytes => match hex_bytes(t) {
             Some(b) => Value::Bytes(b),
             None => Value::Text(s.to_string()),

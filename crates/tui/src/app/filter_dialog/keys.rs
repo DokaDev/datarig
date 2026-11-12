@@ -553,6 +553,7 @@ pub(crate) fn op_off_label(off: draft::OpOff) -> Label {
     match off {
         draft::OpOff::NoEquality => Label::TableDialogOpOffNoEquality,
         draft::OpOff::NoOrder => Label::TableDialogOpOffNoOrder,
+        draft::OpOff::InexactEquality => Label::TableDialogOpOffInexact,
         draft::OpOff::NotText => Label::TableDialogOpOffNotText,
         draft::OpOff::TypeUnknown => Label::TableDialogOpOffTypeUnknown,
         draft::OpOff::CaseInsensitiveRefused => Label::TableDialogOpOffCaseInsensitive,
