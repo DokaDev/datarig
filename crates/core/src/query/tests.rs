@@ -197,6 +197,62 @@ fn render_null_safe_forms() {
     assert_eq!(render(&cmp("name", CmpOp::Eq, Value::Null), &t), Err(RenderError::NullCompare("name".into())));
 }
 
+/// A single-precision float (PostgreSQL `real`) takes a number as a string, which the server
+/// reads as a `real`: a bare decimal is a `numeric`, compared after both widen to `double
+/// precision`, where `0.1` is not the `real` 0.1. MySQL's `FLOAT` has no literal of its type: a
+/// number is bare, and it is compared with an order only (never `=`, `<>`, `<=>` or `IN`).
+#[test]
+fn render_writes_a_real_number_that_compares_exactly() {
+    let real = |d| Target::new(d, vec![ColumnFacts::new("r", ColumnKind::Real)]);
+    let (pg, my) = (real(Dialect::Postgres), real(MY));
+    let r#in = |values: Vec<Value>| Cond::In { col: "r".into(), values, negated: false };
+    let nd = |value| Cond::NotDistinct { col: "r".into(), value, negated: true };
+    let between = Cond::Between { col: "r".into(), lo: num("0.1"), hi: num("1.5"), negated: false };
+    let ok = |c: &Cond, t: &Target| render(c, t).unwrap();
+    assert_eq!(ok(&cmp("r", CmpOp::Eq, num("0.1")), &pg), "r = '0.1'");
+    assert_eq!(ok(&cmp("r", CmpOp::Ne, num("3.4028235e+38")), &pg), "r <> '3.4028235e+38'");
+    assert_eq!(ok(&nd(num("0.1")), &pg), "r IS DISTINCT FROM '0.1'");
+    assert_eq!(ok(&r#in(vec![num("0.1"), num("1.5"), Value::Null]), &pg), "(r IN ('0.1', '1.5') OR r IS NULL)");
+    assert_eq!(ok(&cmp("r", CmpOp::Lt, num("0.1")), &pg), "r < '0.1'");
+    assert_eq!(ok(&between, &pg), "r BETWEEN '0.1' AND '1.5'");
+    let inexact = Err(RenderError::InexactEquality("r".into()));
+    for c in [cmp("r", CmpOp::Eq, num("0.1")), cmp("r", CmpOp::Ne, num("0.1")), nd(num("0.1")), r#in(vec![num("0.1")])]
+    {
+        assert_eq!(render(&c, &my), inexact, "{c:?}");
+    }
+    assert_eq!(render(&r#in(vec![Value::Null, num("1")]), &my), inexact);
+    assert_eq!(ok(&r#in(vec![Value::Null]), &my), "r IS NULL");
+    assert_eq!(ok(&nd(Value::Null), &my), "NOT (r <=> NULL)");
+    assert_eq!(ok(&cmp("r", CmpOp::Ge, num("0.1")), &my), "r >= 0.1");
+    assert_eq!(ok(&between, &my), "r BETWEEN 0.1 AND 1.5");
+}
+
+/// MySQL reads text compared with a number as a number without a word (`'abc'` as 0, `'12abc'`
+/// as 12, `'true'` as 0): such text is not written for a number column. A number in a string
+/// reads as that number; PostgreSQL refuses the others itself.
+#[test]
+fn render_refuses_mysql_text_that_is_no_number_on_a_number_column() {
+    let t = Target { utf8mb4: true, ..target(MY) };
+    let not_number = Err(RenderError::NotNumber("id".into()));
+    let between = |lo, hi| Cond::Between { col: "id".into(), lo, hi, negated: false };
+    for c in [
+        cmp("id", CmpOp::Eq, text("abc")),
+        cmp("id", CmpOp::Eq, text("12abc")),
+        cmp("id", CmpOp::Eq, text("true")),
+        cmp("id", CmpOp::Lt, text("")),
+        Cond::NotDistinct { col: "id".into(), value: text("abc"), negated: true },
+        Cond::In { col: "id".into(), values: vec![num("1"), text("abc")], negated: false },
+        between(text("abc"), num("5")),
+    ] {
+        assert_eq!(render(&c, &t), not_number, "{c:?}");
+    }
+    assert_eq!(render(&cmp("id", CmpOp::Eq, text("12")), &t).as_deref(), Ok("id = '12'"));
+    assert_eq!(render(&cmp("id", CmpOp::Eq, Value::Bool(true)), &t).as_deref(), Ok("id = TRUE"));
+    assert_eq!(render(&cmp("name", CmpOp::Eq, text("abc")), &t).as_deref(), Ok("name = 'abc'"));
+    assert_eq!(render(&cmp("born", CmpOp::Eq, text("abc")), &t).as_deref(), Ok("born = 'abc'"));
+    assert_eq!(render_pg(&cmp("id", CmpOp::Eq, text("abc"))), "id = 'abc'");
+}
+
 #[test]
 fn render_in_takes_null_out_of_the_list() {
     let r#in = |values: Vec<Value>, negated| Cond::In { col: "id".into(), values, negated };

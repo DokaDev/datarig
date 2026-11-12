@@ -22,7 +22,7 @@
 use std::cell::Cell;
 
 use super::check::lexical;
-use super::{CaseMode, CmpOp, ColName, ColumnKind, Cond, Target, Value};
+use super::{CaseMode, CmpOp, ColName, Cond, Target, Value};
 use crate::export::{negative_zero, sql_number};
 use crate::sql::dialect::Dialect;
 use crate::sql::lexer::{Tok, Token, lex_in};
@@ -309,7 +309,7 @@ impl Reader<'_> {
             return None;
         }
         let number = |v: &Value| matches!(v, Value::Number(_));
-        let numeric = |col: &str| self.target.column(col).is_some_and(|f| f.kind == ColumnKind::Number);
+        let numeric = |col: &str| self.target.column(col).is_some_and(|f| super::render::bare_numbers(self.d, f.kind));
         let keeps = match &c {
             Cond::Cmp { col, value, .. } | Cond::NotDistinct { col, value, .. } => !number(value) || numeric(col),
             Cond::In { col, values, .. } => !values.iter().any(number) || numeric(col),

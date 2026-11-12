@@ -317,6 +317,8 @@ pub fn same_rows(a: &Query, b: &Query) -> bool {
 /// The kind of a result column, as the query model writes literals for it.
 fn column_kind(c: &ColumnMeta) -> ColumnKind {
     match c.kind {
+        // PostgreSQL's `real` (`float4`), MySQL's `FLOAT`: single precision.
+        ValueKind::Float if matches!(c.type_name.as_str(), "float4" | "float" | "float unsigned") => ColumnKind::Real,
         ValueKind::Integer | ValueKind::Float => ColumnKind::Number,
         ValueKind::Decimal if c.type_name != "money" => ColumnKind::Number,
         ValueKind::Text => ColumnKind::Text,

@@ -944,6 +944,53 @@ async fn the_default_class_is_picked_as_the_server_picks() {
     assert_eq!(pick(&set(&[c(40, false, false), c(41, false, false)])).await, None);
 }
 
+/// A filter written for a `real` column (`ColumnKind::Real`) finds the row of each value as the
+/// session shows it (its shortest text): the number goes as a string the server reads as a
+/// `real` (a bare `0.1` is a `numeric`, compared after both widen to `double precision`, and
+/// finds nothing). A `double precision` value is shown exactly and written bare.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_filter_finds_a_real_by_the_value_shown() {
+    use datarig_core::query::{CmpOp, ColumnFacts, ColumnKind, Cond, Target, Value, render};
+    let Some(url) = pg_url("a_filter_finds_a_real_by_the_value_shown") else { return };
+    let schema = format!("zz_real_{}", std::process::id());
+    let _guard = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE TABLE {s}.f (id int PRIMARY KEY, r real, d double precision)"),
+        format!(
+            "INSERT INTO {s}.f VALUES (1, 0.1, 0.1), (2, 1.5, 0.30000000000000004), (3, 3.4028235e38, 1e-300), \
+             (4, -0.3, NULL), (5, NULL, 2.5)"
+        ),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    let shown = rows_of(c.run(1, &format!("SELECT id, r, d FROM {s}.f ORDER BY id")).await);
+    let target = Target::new(
+        datarig_core::sql::dialect::Dialect::Postgres,
+        vec![ColumnFacts::new("r", ColumnKind::Real), ColumnFacts::new("d", ColumnKind::Number)],
+    );
+    let mut n = 10;
+    let mut ids = async |c: &mut Conn, cond: Cond| -> Vec<String> {
+        n += 1;
+        let text = render(&cond, &target).unwrap();
+        let sql = format!("SELECT id FROM {s}.f WHERE {text} ORDER BY id");
+        rows_of(c.run(n, &sql).await).into_iter().map(|r| r[0].clone().unwrap()).collect()
+    };
+    for (col, i) in [("r", 1), ("d", 2)] {
+        for row in &shown {
+            let (id, Some(v)) = (row[0].clone().unwrap(), row[i].clone()) else { continue };
+            let eq = Cond::Cmp { col: col.into(), op: CmpOp::Eq, value: Value::Number(v.clone()) };
+            assert_eq!(ids(&mut c, eq).await, vec![id.clone()], "{col} = {v}");
+            let ne = Cond::NotDistinct { col: col.into(), value: Value::Number(v.clone()), negated: true };
+            assert_eq!(ids(&mut c, ne).await.len(), 4, "{col} distinct from {v}");
+            let one = Cond::In { col: col.into(), values: vec![Value::Number(v.clone())], negated: false };
+            assert_eq!(ids(&mut c, one).await, vec![id.clone()], "{col} in ({v})");
+        }
+    }
+}
+
 /// The keys of a table for a total order are read from the catalog only: while another
 /// session holds the table in `ACCESS EXCLUSIVE` mode (an open transaction's `LOCK TABLE`), or
 /// waits for that lock behind a reader, the read answers at once with the keys, and the

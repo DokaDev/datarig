@@ -24,6 +24,12 @@ use crate::sql::dialect::{Dialect, LiteralOpen};
 /// Why a condition is not written.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RenderError {
+    /// A MySQL `FLOAT` compared for equality (`=`, `<>`, `<=>`, `IN`), which a literal never
+    /// meets exactly: the column.
+    InexactEquality(String),
+    /// MySQL text that is not a number compared with a number column, which the server reads
+    /// as a number without a word (`'abc'` as 0, `'12abc'` as 12, `'true'` as 0): the column.
+    NotNumber(String),
     /// A comparison or a `BETWEEN` with NULL, which matches no row: the column.
     NullCompare(String),
     /// `IN` of no value: the column.
@@ -76,6 +82,9 @@ fn render_at(c: &Cond, t: &Target, place: Place) -> Result<String, RenderError> 
     let col = |name: &str| d.quote_ident(name);
     let lit = |name: &str, v: &Value| literal(t, t.column(name), v);
     let not = |negated: bool| if negated { "NOT " } else { "" };
+    if let Some(e) = refused_values(c, t) {
+        return Err(e);
+    }
     Ok(match c {
         Cond::All(cs) if cs.len() == 1 => render_at(&cs[0], t, place)?,
         Cond::Any(cs) if cs.len() == 1 => render_at(&cs[0], t, place)?,
@@ -163,7 +172,9 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
         Value::Null => "NULL".to_string(),
         Value::Bool(true) => "TRUE".to_string(),
         Value::Bool(false) => "FALSE".to_string(),
-        Value::Number(n) if c.is_some_and(|c| c.kind == ColumnKind::Number) && sql_number(n) && !negative_zero(n) => {
+        Value::Number(n)
+            if c.is_some_and(|c| bare_numbers(t.dialect, c.kind)) && sql_number(n) && !negative_zero(n) =>
+        {
             n.clone()
         }
         Value::Number(n) => text_literal(t, n),
@@ -172,6 +183,44 @@ fn literal(t: &Target, c: Option<&ColumnFacts>, v: &Value) -> String {
             Dialect::Postgres => format!("{}::pg_catalog.bytea", text_literal(t, &format!("\\x{}", hex(b, false)))),
             Dialect::MySql(_) => format!("X'{}'", hex(b, true)),
         },
+    }
+}
+
+/// A number compared with a column of kind `kind` of dialect `d` is written bare: a number
+/// column, or a MySQL `FLOAT` (a PostgreSQL `real` takes it as a string, see [`ColumnKind::Real`]).
+pub(super) fn bare_numbers(d: Dialect, kind: ColumnKind) -> bool {
+    match kind {
+        ColumnKind::Number => true,
+        ColumnKind::Real => matches!(d, Dialect::MySql(_)),
+        _ => false,
+    }
+}
+
+/// Why the values of comparison `c` are not written for its column on `t`'s dialect: on MySQL
+/// a `FLOAT` compared for equality ([`RenderError::InexactEquality`]), or text that is not a
+/// number compared with a number column ([`RenderError::NotNumber`]). PostgreSQL refuses such
+/// text itself (an error, never a silent conversion).
+fn refused_values(c: &Cond, t: &Target) -> Option<RenderError> {
+    if t.dialect == Dialect::Postgres {
+        return None;
+    }
+    let (name, values, equality): (&str, Vec<&Value>, bool) = match c {
+        Cond::Cmp { col, op, value } => (col, vec![value], matches!(op, CmpOp::Eq | CmpOp::Ne)),
+        Cond::NotDistinct { col, value, .. } => (col, vec![value], true),
+        Cond::In { col, values, .. } => (col, values.iter().collect(), true),
+        Cond::Between { col, lo, hi, .. } => (col, vec![lo, hi], false),
+        _ => return None,
+    };
+    let kind = t.column(name)?.kind;
+    let values: Vec<&Value> = values.into_iter().filter(|v| **v != Value::Null).collect();
+    match kind {
+        ColumnKind::Real if equality && !values.is_empty() => Some(RenderError::InexactEquality(name.to_string())),
+        ColumnKind::Number | ColumnKind::Real
+            if values.iter().any(|v| matches!(v, Value::Text(s) if !sql_number(s))) =>
+        {
+            Some(RenderError::NotNumber(name.to_string()))
+        }
+        _ => None,
     }
 }
 

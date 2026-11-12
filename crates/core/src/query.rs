@@ -275,6 +275,14 @@ impl ColumnFacts {
 pub enum ColumnKind {
     /// A number type: a number is written bare.
     Number,
+    /// A binary floating-point number of single precision (PostgreSQL `real`, MySQL `FLOAT`),
+    /// whose values are shown as the shortest decimal that reads back as them, not as they are
+    /// held: a bare decimal compared with one is read as another type and widened to `double
+    /// precision`, where the column's value is another number (`0.1` is not the `real` 0.1).
+    /// PostgreSQL: a number is written as a string, which the server reads as the column's
+    /// type, so that it compares exactly. MySQL: a number is written bare (it has no literal of
+    /// that type), and it is not compared for equality.
+    Real,
     /// Characters: patterns apply.
     Text,
     /// Binary data.
