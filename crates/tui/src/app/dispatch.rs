@@ -266,7 +266,7 @@ impl App {
             Action::OpenSettings => self.open_settings(),
             Action::ToggleDetail => self.detail.visible = !self.detail.visible,
             Action::DetailTab => self.detail.tab = self.detail.tab.other(),
-            Action::DetailStep(next) => self.grid_action(if next { GridAction::Right } else { GridAction::Left }),
+            Action::DetailStep(next) => self.detail_step(next),
             Action::Explorer(e) => self.explorer_action(e),
             Action::Grid(g) => self.grid_action(g),
             Action::Panel(p) => self.panel_action(p),
@@ -288,6 +288,20 @@ impl App {
         }
     }
 
+    /// `j` / `k` in the inspector: the next or previous column of the row, a hidden one too
+    /// (then the grid's cell stays where it is).
+    fn detail_step(&mut self, next: bool) {
+        let t = self.tabs.active_mut();
+        let Results::Rows(rs) = &t.results else { return };
+        let n = rs.columns.len();
+        if n == 0 {
+            return;
+        }
+        let c = t.grid.inspected();
+        let to = if next { (c + 1).min(n - 1) } else { c.saturating_sub(1) };
+        t.grid.inspect_col(to, n);
+    }
+
     pub(super) fn grid_action(&mut self, g: GridAction) {
         // The Messages of the run: the movement keys scroll the list.
         if self.tab().exec.view == super::tabs::ResultView::Messages {
@@ -306,9 +320,11 @@ impl App {
         }
         // The cursor's cell, the selection: none while the grid shows no cell (the keys that
         // copy say so as any copy does).
+        // The inspector's column is any of the row's, a hidden one too.
+        let inspector = g == GridAction::ViewCell && self.focus == Focus::Inspector;
         let cells =
             matches!(g, GridAction::ViewCell | GridAction::Select | GridAction::SelectRows | GridAction::SelectAll);
-        if cells && self.refused_without_cell() {
+        if cells && !inspector && self.refused_without_cell() {
             return;
         }
         let t = self.tabs.active_mut();
@@ -337,7 +353,8 @@ impl App {
             GridAction::FirstCol => grid.col = grid.first_shown(ncols).unwrap_or(0),
             GridAction::LastCol => grid.col = grid.last_shown(ncols).unwrap_or(ncols.saturating_sub(1)),
             GridAction::ViewCell => {
-                if let Some((column, text)) = viewer_text(rs, grid, &self.i18n) {
+                let col = if inspector { grid.inspected() } else { grid.col };
+                if let Some((column, text)) = viewer_text_of(rs, grid.row, col, &self.i18n) {
                     self.overlays.push(Overlay::CellViewer(Viewer { column, text, scroll: 0, view_h: 1 }));
                 }
             }

@@ -628,3 +628,89 @@ fn with_every_column_hidden_the_mouse_selects_nothing() {
     h.mouse(MouseEventKind::Down(MouseButton::Left), g.hit_cols[0].0 + 1, g.header_y);
     assert_eq!(h.app.tab().grid.anchor, None);
 }
+
+/// The inspector lists every column, the hidden ones too: `j` and `k` step onto a hidden one
+/// (the grid's cell staying on a shown column), `Enter` and a second click on its entry show
+/// its long value whole. The grid's own keys still act only on the cell it shows.
+#[test]
+fn the_inspector_reaches_a_hidden_column() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let mut h = users(None);
+    let long = "a long memo ".repeat(30);
+    h.app.dispatch(datarig_tui::app::action::Action::RunStatement);
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    let mut rows = rows();
+    rows[0][3] = Some(long.clone());
+    h.tab_db(index, DbEvent::Page { id, columns: Some(columns()), rows, more: false, elapsed: Duration::ZERO });
+    at(&mut h, 0, 3);
+    h.keys("C");
+    assert_eq!(hidden(&h), [false, false, false, true]);
+    assert_eq!(h.app.tab().grid.col, 2);
+    h.app.detail.visible = true;
+    h.app.focus = datarig_tui::app::Focus::Inspector;
+    h.keys("j");
+    h.draw(160, 45);
+    assert_eq!(h.app.tab().grid.inspected(), 3, "on the hidden memo");
+    assert_eq!(h.app.tab().grid.col, 2, "the grid's cell stays on a shown column");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::CellViewer));
+    assert_eq!(h.viewer().unwrap().text, long);
+    h.key(KeyCode::Esc);
+    h.keys("k");
+    assert_eq!((h.app.tab().grid.inspected(), h.app.tab().grid.col), (2, 2));
+    // A click on the memo's entry picks it; a second shows it whole.
+    h.draw(160, 45);
+    h.advance(datarig_tui::app::overlay::ARM_DELAY);
+    let l = h.app.layout.detail_list;
+    let y = l.y + (3 - h.app.detail.first) as u16;
+    for _ in 0..2 {
+        h.mouse(MouseEventKind::Down(MouseButton::Left), l.x + 3, y);
+        h.mouse(MouseEventKind::Up(MouseButton::Left), l.x + 3, y);
+        h.draw(160, 45);
+    }
+    assert_eq!(h.app.tab().grid.inspected(), 3);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::CellViewer));
+    assert_eq!(h.viewer().unwrap().text, long);
+    h.key(KeyCode::Esc);
+    // The grid's keys: its cell, a shown one.
+    h.key(KeyCode::Tab);
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys("C");
+    assert_eq!(hidden(&h), [false, false, true, true], "C hides the grid's cell's column");
+}
+
+/// A change in a hidden column: `Enter` on its line in the Changes tab shows the column again
+/// (said) with the cursor on it; an edit key or a revert there acts on that exact cell.
+#[test]
+fn a_change_in_a_hidden_column_is_reached_from_the_changes_tab() {
+    let mut h = editable();
+    at(&mut h, 0, 2);
+    h.keys("e");
+    h.type_text("zz");
+    h.key(KeyCode::Enter);
+    assert_eq!(pending(&h, 0, 2), Some(text("annzz")));
+    let hide = |h: &mut Harness| {
+        at(h, 0, 2);
+        h.keys("C");
+        assert_eq!(hidden(h), [false, false, true]);
+    };
+    hide(&mut h);
+    h.command("changes");
+    h.app.transient = None;
+    h.key(KeyCode::Enter);
+    assert_eq!(hidden(&h), [false, false, false], "shown again");
+    assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (0, 2));
+    assert_eq!(flashed(&h), "Column “nickname” is shown again to reach its change");
+    // NULL from the Changes tab.
+    hide(&mut h);
+    h.command("changes");
+    h.keys(" dn");
+    assert_eq!(pending(&h, 0, 2), Some(Value::Null));
+    assert_eq!(hidden(&h), [false, false, false]);
+    // A revert from the Changes tab.
+    hide(&mut h);
+    h.command("changes");
+    h.keys(" dr");
+    assert_eq!(pending(&h, 0, 2), None, "reverted");
+}

@@ -1014,8 +1014,13 @@ impl App {
             self.pointer.detail_picked = None;
             return;
         };
-        let g = &mut self.tabs.active_mut().grid;
-        g.col = picked.1;
+        let t = self.tabs.active_mut();
+        let total = match &t.results {
+            Results::Rows(rs) => rs.columns.len(),
+            _ => 0,
+        };
+        let g = &mut t.grid;
+        g.inspect_col(picked.1, total);
         g.anchor = None;
         g.detached = false;
         let again = self.pointer.clicks == 2 && self.pointer.detail_picked == Some(picked);

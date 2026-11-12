@@ -149,6 +149,7 @@
 "changes.title" = "Changes: {result} · {table}"
 "changes.problems" = { one = "{count} problem", other = "{count} problems" }
 "changes.row" = "row {n}"
+"changes.column_shown" = "Column “{column}” is shown again to reach its change"
 "changes.new" = "new {n}"
 "changes.by_values" = "(located by its values)"
 "changes.delete" = "delete"

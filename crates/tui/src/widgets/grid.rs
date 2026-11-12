@@ -311,6 +311,10 @@ pub struct GridState {
     /// Changes whenever [`GridState::hidden`] does: what was worked out over the shown columns
     /// (a paste waiting for its yes, a search's matches) holds only while it is the same.
     pub vis_rev: u64,
+    /// A column picked in the inspector (which lists every column) that the grid does not
+    /// show, with the grid's column it was picked at: the inspector shows it while the grid's
+    /// cell stays on that column.
+    pub inspect: Option<(usize, usize)>,
 }
 
 /// What a grid selection spans.
@@ -475,6 +479,7 @@ impl GridState {
     /// at the first and the last shown one.
     pub fn move_col(&mut self, delta: isize, total: usize) {
         self.detached = false;
+        self.inspect = None;
         if total == 0 {
             return;
         }
@@ -488,6 +493,27 @@ impl GridState {
             }
         }
         self.col = if self.shown(c) { c } else { self.nearest_shown(c, total).unwrap_or(c) };
+    }
+
+    /// The column the inspector shows of the cursor's row: the grid's, or a hidden one picked
+    /// there ([`GridState::inspect`]).
+    pub fn inspected(&self) -> usize {
+        self.inspect.filter(|&(_, at)| at == self.col).map_or(self.col, |(c, _)| c)
+    }
+
+    /// Column `c` (of `total`) picked in the inspector: a shown one moves the grid's cell
+    /// there, a hidden one is the inspector's only (the grid's cell stays on a shown column).
+    pub fn inspect_col(&mut self, c: usize, total: usize) {
+        if c >= total {
+            return;
+        }
+        self.detached = false;
+        if self.shown(c) {
+            self.col = c;
+            self.inspect = None;
+        } else {
+            self.inspect = Some((c, self.col));
+        }
     }
 
     /// Whether column `c` is shown (not hidden from the grid).
@@ -1196,11 +1222,11 @@ pub fn render(
     }
 }
 
-/// Full value for the cell viewer, as the grid shows it; json/jsonb pretty-printed. A cell
-/// whose row is not in memory is "not read".
-pub fn viewer_text(rs: &ResultSet, st: &GridState, i18n: &I18n) -> Option<(String, String)> {
-    let col = rs.columns.get(st.col)?;
-    let text = match rs.shown(st.row, st.col) {
+/// Full value of column `c` of row `row` for the cell viewer, as the grid shows it; json/jsonb
+/// pretty-printed. A cell whose row is not in memory is "not read".
+pub fn viewer_text_of(rs: &ResultSet, row: usize, c: usize, i18n: &I18n) -> Option<(String, String)> {
+    let col = rs.columns.get(c)?;
+    let text = match rs.shown(row, c) {
         Shown::Missing => return None,
         Shown::NotRead => i18n.label(Label::ResultsNotRead).to_string(),
         Shown::Label(l) => i18n.label(l).to_string(),

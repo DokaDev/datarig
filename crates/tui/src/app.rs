@@ -119,7 +119,7 @@ use crate::input::keyboard::{self, KeyUse};
 use crate::input::kitty;
 use crate::keymap::{Ctx, IssueKind, KeyChord, KeyError, KeyState, Keymap, Resolved};
 use crate::widgets::editor::{EdEvent, Editor, Mode};
-use crate::widgets::grid::{GridState, ResultSet, viewer_text};
+use crate::widgets::grid::{GridState, ResultSet, viewer_text_of};
 use crate::widgets::text_input::TextInput;
 use crate::widgets::tree::TreeAction;
 use action::{Action, ExplorerAction, GridAction, LangSetting, REGISTRY};

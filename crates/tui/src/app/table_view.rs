@@ -174,6 +174,23 @@ impl App {
         true
     }
 
+    /// Column `col` of the active tab's rows, hidden from its grid, shown again (as the dialog
+    /// shows it: one change its undo brings back), and said.
+    pub(super) fn show_column(&mut self, col: usize) {
+        let id = self.tab().id;
+        let name = match &self.tab().results {
+            Results::Rows(rs) => rs.columns.get(col).map(|c| c.meta.name.clone()),
+            _ => None,
+        };
+        let Some(name) = name else { return };
+        let names: Vec<String> = self.hidden_columns(id).into_iter().filter(|n| *n != name).collect();
+        if !self.set_hidden_columns(id, &names, true) {
+            return;
+        }
+        let column = crate::text::escape_controls(&name);
+        self.flash(Notice::new(Msg::ChangesColumnShown { column }, Level::Info));
+    }
+
     /// The active tab's grid has no cell at its cursor: its rows have columns and the cursor's
     /// is hidden (with every column hidden, the cursor stays on the last one, which addresses
     /// nothing until a column is shown again).
