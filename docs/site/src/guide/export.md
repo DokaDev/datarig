@@ -89,7 +89,8 @@ status.
   `START TRANSACTION READ ONLY` at `REPEATABLE READ` on MySQL), so its rows are one snapshot read
   without row locks and a function that writes fails. Inside your open transaction it reads there and
   sees what you changed; on PostgreSQL under a savepoint, so a failed or cancelled export does
-  not abort your transaction. An aborted transaction refuses an export until you roll it back.
+  not abort your transaction. An aborted transaction refuses an export until you roll it back,
+  and on PostgreSQL so does a session that cannot tell whether a transaction is open.
 - A slow file holds the statement back instead of piling rows up in memory. A server may end a
   slow export (MySQL's `net_write_timeout`, 60 s by default; PostgreSQL's
   `idle_in_transaction_session_timeout` or a pooler's idle timeout).

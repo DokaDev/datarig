@@ -2601,13 +2601,13 @@ fn countable(sql: &str) -> bool {
 /// limit (the block's settings are the user's); outside it, in a read-only transaction of its
 /// own at `READ COMMITTED` ([`BEGIN_OWN_READ`] … `COMMIT`, one simple query), or with `limit` in
 /// one whose time limits end with it too ([`limited_read`]). While whether a block is open is not
-/// known (a probe failed), a count without a limit on a session that is not read-only goes out
-/// as a simple query alone, as it did: a `COMMIT` of its own would end a block of the user's.
-/// The allowlist's question to the server goes first ([`check_text`]), in the savepoint's request
-/// inside the block: two round trips outside it, one inside. Also answers whether it counted in a snapshot fixed for the
-/// transaction (the user's block at `REPEATABLE READ` or `SERIALIZABLE`, asked with
-/// [`ISOLATION`] in the same request); outside a block it never does (it counts the rows
-/// committed when it runs).
+/// known (a probe failed) it is refused: a transaction of its own would end a block of the
+/// user's with its `COMMIT`, and one there would have no limit. The allowlist's question to the
+/// server goes first ([`check_text`]): in the savepoint's request inside the block, in a
+/// transaction of its own as the count's outside it ([`own_check`]); two round trips outside
+/// it, one inside. Also answers whether it counted in a snapshot fixed for the transaction (the
+/// user's block at `REPEATABLE READ` or `SERIALIZABLE`, asked with [`ISOLATION`] in the same
+/// request); outside a block it never does (it counts the rows committed when it runs).
 async fn count(
     client: &Client,
     link: &mut Link,
@@ -2626,9 +2626,7 @@ async fn count(
     // Whether a block is open must be known before a transaction of the count's own begins.
     if tx.unsure {
         probe(client, link, env, tx).await?;
-        // Not known: a count with a limit might run in the user's block, and one there has no
-        // limit, which is not what was asked for. One without a limit goes on (see below).
-        if limit.is_some() && tx.unsure {
+        if tx.unsure {
             return Ok((Err(DbError::NotRepeatable(risk::repeat::NotRepeatable::TxUnknown)), false));
         }
     }
@@ -2655,28 +2653,58 @@ async fn count(
         let read = limited_read(client, link, env, (limit, COUNT_LOCK_WAIT), &check, sql).await?;
         return Ok((read.and_then(|msgs| count_of(&msgs)), false));
     }
-    // A search path per transaction goes first in each simple query (one implicit transaction).
-    let path = env.path_text();
-    if let (_, Err(why)) = count_checked(link, env, client.simple_query(&format!("{path}{check}"))).await? {
+    if let Err(why) = own_check(client, link, env, &check, true).await? {
         return Ok((Err(why), false));
     }
     // Its own transaction, at `READ COMMITTED` whatever the session's default, in the same
     // request: no round trip more than the statement alone.
-    let own = env.read_only || !tx.unsure;
-    let text = if own { format!("{BEGIN_OWN_READ}; {path}{sql}; COMMIT") } else { format!("{path}{sql}") };
+    let text = format!("{BEGIN_OWN_READ}; {}{sql}; COMMIT", env.path_text());
     let counted = match link.guard(Some(env.token), client.simple_query(&text)).await? {
         Ok(msgs) => count_of(&msgs),
         Err(e) => {
             // As it stood when the answer came: a cancel during the cleanup stopped nothing.
             let why = asked_error(&e, env.cancel.asked());
-            if own {
-                // The failure left the `BEGIN … READ ONLY` block open and aborted.
-                let _ = link.guard(None, client.batch_execute("ROLLBACK")).await?;
+            // The failure left the transaction open and aborted (its `COMMIT` did not run).
+            if !e.is_closed() {
+                end_own(client, link).await?;
             }
             Err(why)
         }
     };
     Ok((counted, false))
+}
+
+/// The allowlist's question ([`check_text`]) outside a transaction block, in a read-only
+/// transaction of its own at `READ COMMITTED` with the search path set per transaction, all in
+/// one simple query ([`BEGIN_OWN_READ`] … `COMMIT`): whatever the session's default, it neither
+/// waits for a safe snapshot (`SERIALIZABLE`, `default_transaction_deferrable`) nor is refused
+/// on a standby. A refusal is a row of the answer, after which the `COMMIT` ran; a failure left
+/// the transaction open and aborted, and it is ended ([`end_own`]). For a count (`count`) a
+/// cancel of the user's that came while it was asked is `Cancelled` and a failure is worded by
+/// [`asked_error`], as [`count_checked`] does; else as [`checked`] does.
+async fn own_check(
+    client: &Client,
+    link: &mut Link,
+    env: &Env<'_>,
+    check: &str,
+    count: bool,
+) -> Result<Result<(), DbError>, Closed> {
+    let text = format!("{BEGIN_OWN_READ}; {}{check}; COMMIT", env.path_text());
+    let answer = link.guard(Some(env.token), client.simple_query(&text)).await?;
+    let cancelled = env.cancel.asked();
+    Ok(match answer {
+        Ok(msgs) => {
+            let cut = if count && cancelled { Err(DbError::Cancelled) } else { Ok(()) };
+            check_answer(&msgs).and(cut)
+        }
+        Err(e) => {
+            let why = if count { asked_error(&e, cancelled) } else { count_error(&e) };
+            if !e.is_closed() {
+                end_own(client, link).await?;
+            }
+            Err(why)
+        }
+    })
 }
 
 /// The planner's estimate of the rows of `sql` (the app's read of a table, on the allowlist,

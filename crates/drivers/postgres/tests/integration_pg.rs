@@ -7524,9 +7524,11 @@ async fn a_server_time_limit_is_no_cancel_of_the_users() {
     // Answered once what the session sent before is done, as in the tests of a failed `COMMIT`.
     assert_eq!(q.count_within(2, &counted, None).await.0, Ok(40));
     let sleep = "SELECT pg_sleep(5)";
-    let question = "WITH RECURSIVE named";
+    // The question goes in a read-only transaction of its own, as the count does.
+    let own = "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY";
+    let question = format!("{own}; WITH RECURSIVE named");
 
-    proxy.fault_start(question, pg_proxy::Fault::Instead(sleep.into()));
+    proxy.fault_start(&question, pg_proxy::Fault::Instead(format!("{own}; {sleep}; COMMIT")));
     let (got, _) = q.count_within(3, &counted, None).await;
     assert!(!proxy.fault_pending());
     assert!(timed_out(&got), "the count's question: {got:?}");
@@ -7682,6 +7684,139 @@ async fn a_bounded_count_is_refused_when_the_transaction_state_is_unknown() {
     let ran = |s: &pg_proxy::Sent| matches!(s, pg_proxy::Sent::Query(t) if t.contains(&counted));
     assert!(!proxy.sent().iter().any(ran), "the count was not sent");
     assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
+/// A count without a limit, or an export, that cannot learn whether a transaction is open is
+/// refused, never sent: its own transaction's `COMMIT` would end a block of the user's, and
+/// without one it would run at the session's default level.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_exact_count_and_an_export_are_refused_when_the_transaction_state_is_unknown() {
+    use datarig_core::driver::ExportGuard;
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    let test = "an_exact_count_and_an_export_are_refused_when_the_transaction_state_is_unknown";
+    let Some(url) = pg_url(test) else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_xunsure_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let question = "SELECT pg_catalog.now()";
+    let refused = || pg_proxy::Fault::Instead("SELECT 1/0".into());
+    proxy.fault_start(question, refused());
+    assert!(matches!(q.run(1, "SELECT 1/0").await, DbEvent::Failed { .. }));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while proxy.fault_pending() {
+        assert!(Instant::now() < deadline, "the question after the failure never came");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let rows = format!("SELECT * FROM {table} WHERE (id > 10)");
+    let counted = count_of(&rows);
+    proxy.fault_start(question, refused());
+    let (got, _) = q.count_within(2, &counted, None).await;
+    assert!(!proxy.fault_pending(), "the count asked again");
+    assert_eq!(got, Err(DbError::NotRepeatable(NotRepeatable::TxUnknown)));
+    proxy.fault_start(question, refused());
+    let (sink, mut batches) = tokio::sync::mpsc::channel(4);
+    q.session.send(DbCommand::Export { id: 3, sql: rows.clone(), guard: ExportGuard::Repeatable, sink, batch: 100 });
+    let DbEvent::Exported { result, .. } = q.wait(|e| matches!(e, DbEvent::Exported { .. }), 10).await else {
+        unreachable!()
+    };
+    assert!(!proxy.fault_pending(), "the export asked again");
+    assert_eq!(result.map(|r| r.rows), Err(DbError::NotRepeatable(NotRepeatable::TxUnknown)));
+    assert!(batches.recv().await.is_none(), "nothing read");
+    let ran = |s: &pg_proxy::Sent| matches!(s, pg_proxy::Sent::Query(t) if t.contains(&rows) || t.contains("BEGIN ISOLATION"));
+    assert!(!proxy.sent().iter().any(ran), "neither was sent: {:?}", proxy.sent());
+    // Once the session can tell again, both run.
+    assert_eq!(q.count_within(4, &counted, None).await.0, Ok(40));
+}
+
+/// A count without a limit that fails leaves its own transaction open and aborted (its `COMMIT`
+/// does not run): it is rolled back for sure. A rollback that fails once (as one a late cancel
+/// stops) is sent again, and the session runs on outside any transaction; one that fails again
+/// leaves the session's state not known, so its connection is closed (`Lost`) rather than used.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_exact_count_ends_its_transaction_or_the_session() {
+    let Some(url) = pg_url("a_failed_exact_count_ends_its_transaction_or_the_session") else { return };
+    let pid = std::process::id();
+    let table = format!("public.zz_xclean_{pid}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 50) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let counted = count_of(&format!("SELECT * FROM {table} WHERE (id > 10)"));
+    let own = format!("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; {counted}; COMMIT");
+    let failing =
+        || pg_proxy::Fault::Instead("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SELECT 1/0; COMMIT".into());
+    let rollback_fails = || pg_proxy::Fault::Instead("SELECT 1/0".into());
+    let zero =
+        |got: &Result<u64, DbError>| matches!(got, Err(DbError::Server(m)) if m.text.contains("division by zero"));
+
+    // The rollback fails once: sent again, and the session is out of the transaction.
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    proxy.fault(&own, failing());
+    proxy.fault("ROLLBACK", rollback_fails());
+    let (got, _) = q.count_within(1, &counted, None).await;
+    assert!(!proxy.fault_pending());
+    assert!(zero(&got), "{got:?}");
+    let level = "SELECT current_setting('transaction_isolation')";
+    assert!(matches!(q.run(2, level).await, DbEvent::Page { .. }), "no aborted transaction is left");
+    assert_eq!(q.count_within(3, &counted, None).await.0, Ok(40));
+
+    // It fails twice: the connection is closed, never used in a state not known.
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    proxy.fault(&own, failing());
+    proxy.fault("ROLLBACK", rollback_fails());
+    proxy.fault("ROLLBACK", rollback_fails());
+    q.session.send(DbCommand::Count { id: 1, sql: counted.clone(), limit: None });
+    let mut seen = Vec::new();
+    while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(10), q.rx.recv()).await {
+        let lost = matches!(ev, DbEvent::Lost { .. });
+        seen.push(ev);
+        if lost {
+            break;
+        }
+    }
+    assert!(!proxy.fault_pending());
+    assert!(seen.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{seen:?}");
+    assert!(!seen.iter().any(|e| matches!(e, DbEvent::Counted { result: Ok(_), .. })), "{seen:?}");
+}
+
+/// Under `SERIALIZABLE DEFERRABLE` by default on a read-only session, a transaction at the
+/// default level waits for a safe snapshot while another session's serializable transaction
+/// that wrote is open. A count without a limit, its allowlist question included, sets its own
+/// level, so it is answered at once all the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_exact_count_does_not_wait_for_a_safe_snapshot() {
+    let Some(url) = pg_url("an_exact_count_does_not_wait_for_a_safe_snapshot") else { return };
+    let pid = std::process::id();
+    let (table, other) = (format!("public.zz_xdefer_{pid}"), format!("public.zz_xdeferw_{pid}"));
+    let (_guard, _other) = (TableGuard(url.clone(), table.clone()), TableGuard(url.clone(), other.clone()));
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 100) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(2, &format!("CREATE TABLE {other} (id int)")).await, DbEvent::Done { .. }));
+    let mut q = Conn::open_with(&serializable_url(&url, true), SessionRole::Query, true).await;
+    let mut writer = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(writer.run(1, "BEGIN ISOLATION LEVEL SERIALIZABLE").await, DbEvent::Done { .. }));
+    assert!(matches!(writer.run(2, &format!("INSERT INTO {other} VALUES (1)")).await, DbEvent::Done { .. }));
+    let counted = count_of(&format!("SELECT * FROM {table} WHERE (id > 10)"));
+    q.session.send(DbCommand::Count { id: 1, sql: counted, limit: None });
+    let answer = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match q.rx.recv().await {
+                Some(DbEvent::Counted { result, .. }) => return result,
+                Some(_) => {}
+                None => panic!("event channel closed"),
+            }
+        }
+    })
+    .await;
+    assert!(matches!(writer.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+    assert_eq!(answer.expect("answered at once"), Ok(90));
 }
 
 /// What stopped a bounded read is told by what the server said, not by when the answer arrived:

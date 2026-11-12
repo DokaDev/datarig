@@ -9,10 +9,13 @@
 //! (its portal's), nothing written whatever it calls. Inside the user's block it runs under the
 //! driver's savepoint ([`Env::savepoint`]), released after it and rolled back to when it fails
 //! or is cancelled, so the block is never aborted by it; an aborted block refuses it unasked.
+//! Outside it the allowlist's question goes first in a transaction of its own as well
+//! ([`own_check`]), and a transaction left open by a failure is ended for sure ([`end_own`]).
+//! While whether a block is open is not known (a probe failed) it is refused.
 
 use super::{
     BEGIN_OWN_READ, Closed, Env, Link, State, check_text, checked, columns_of, copies_with_client, count_error,
-    count_undo, decode, finish, formats_of, probe,
+    count_undo, decode, end_own, finish, formats_of, own_check, probe,
 };
 use crate::connect::{db_error, is_cancel};
 use datarig_core::driver::{Cell, DbError, EXPORT_BATCH_BYTES, ExportBatch, ExportGuard, ExportRead, ExportSink};
@@ -42,8 +45,13 @@ pub(super) async fn export(
     sink: ExportSink,
     batch: usize,
 ) -> Result<Answer, Closed> {
+    // Whether a block is open must be known: outside it the export opens a transaction of its
+    // own, whose `COMMIT` would end a block of the user's.
     if s.tx.unsure {
         probe(client, link, env, s.tx).await?;
+        if s.tx.unsure {
+            return Ok((Err(DbError::NotRepeatable(risk::repeat::NotRepeatable::TxUnknown)), false));
+        }
     }
     if s.tx.block && s.tx.aborted {
         return Ok((Err(DbError::NotSupported), false));
@@ -113,12 +121,11 @@ pub(super) async fn export(
         probe(client, link, env, s.tx).await?;
         return Ok(answer);
     }
-    if let Some(c) = &check {
-        let path = env.path_text();
-        if let (_, Err(why)) = checked(link, env, client.simple_query(&format!("{path}{c}"))).await? {
-            let cancelled = why == DbError::Cancelled;
-            return Ok((Err(why), cancelled));
-        }
+    if let Some(c) = &check
+        && let Err(why) = own_check(client, link, env, c, false).await?
+    {
+        let cancelled = why == DbError::Cancelled;
+        return Ok((Err(why), cancelled));
     }
     // Its own read-only transaction, opened in the request that parses the statement.
     let mut begin = vec![BEGIN_OWN_READ.to_string()];
@@ -129,8 +136,8 @@ pub(super) async fn export(
     let stmt = match prepared(client, link, env, s, sql, &begin).await? {
         Ok(stmt) => stmt,
         Err(why) => {
-            // The failure left the transaction it was parsed in open and aborted.
-            let _ = link.guard(None, client.batch_execute("ROLLBACK")).await?;
+            // The failure left the transaction it was parsed in open (and aborted).
+            end_own(client, link).await?;
             let cancelled = why == DbError::Cancelled;
             return Ok((Err(why), cancelled));
         }
@@ -144,7 +151,10 @@ pub(super) async fn export(
             Err(e) => (Err(db_error(&e)), false),
         },
         Err((error, cancelled)) => {
-            let _ = finish(txn, false, link).await?;
+            // A rollback a late cancel stopped leaves the transaction open: ended for sure.
+            if finish(txn, false, link).await?.is_err_and(|e| !e.is_closed()) {
+                end_own(client, link).await?;
+            }
             (Err(error), cancelled)
         }
     })

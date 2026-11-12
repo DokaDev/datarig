@@ -167,7 +167,7 @@
 "repeat.volatile" = "it calls {name}, whose result changes from call to call"
 "repeat.planner_code" = "planning {name} may run code datarig cannot check: an index, a constraint, statistics, a partition key or a generated column uses a function or type not built in, or it has a rule, or the server's own planning code was changed"
 "repeat.planner_type" = "a column it reads has type {name}, and datarig cannot check what planning would run for it"
-"repeat.tx_unknown" = "the session could not tell whether a transaction is open, so the time limit cannot be set"
+"repeat.tx_unknown" = "the session could not tell whether a transaction is open (try again)"
 "repeat.unreadable" = "it cannot be read"
 "repeat.variable" = "it uses the variable {name}, whose value may change"
 "repeat.zone_changed" = "it reads the session's time zone, which is not known to be the one its rows were read in"
