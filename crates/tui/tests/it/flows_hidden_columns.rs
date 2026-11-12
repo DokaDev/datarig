@@ -581,3 +581,26 @@ fn a_paste_waiting_for_the_table_is_dropped_when_the_columns_shown_change() {
         assert_eq!(flashed(&h), "Paste cancelled: the columns shown changed", "{how}");
     }
 }
+
+/// `space d V` on a paste whose column was hidden since: refused before anything changes, the
+/// paste staying as it was (pending, undone by `u`); with the column shown again it reads it
+/// again.
+#[test]
+fn a_paste_read_again_after_its_column_was_hidden_stays_as_it_was() {
+    let mut h = editable();
+    at(&mut h, 0, 2);
+    h.event(ratatui::crossterm::event::Event::Paste("zz".into()));
+    assert_eq!(pending(&h, 0, 2), Some(text("zz")));
+    h.keys("C");
+    assert_eq!(hidden(&h), [false, false, true]);
+    let before = revision(&h);
+    h.app.transient = None;
+    h.keys(" dV");
+    assert_eq!(flashed(&h), "Paste cancelled: the columns shown changed");
+    assert_eq!(pending(&h, 0, 2), Some(text("zz")), "the paste stays");
+    assert_eq!(revision(&h), before, "nothing changed");
+    h.keys("u");
+    assert_eq!(pending(&h, 0, 2), None, "its step is still the one u undoes");
+    h.ctrl('r');
+    assert_eq!(pending(&h, 0, 2), Some(text("zz")), "and redoes");
+}

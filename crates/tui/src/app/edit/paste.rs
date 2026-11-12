@@ -442,6 +442,11 @@ impl App {
         if self.edit_gate().is_none() {
             return;
         }
+        // Pasted while the grid showed other columns: read again it would go to other ones.
+        // Refused before its step is undone, so it stays as it was.
+        if self.last_paste.as_ref().is_some_and(|l| l.at.vis != self.tab().grid.vis_rev) {
+            return self.flash(Notice::new(Label::EditPasteColumnsChanged, Level::Info));
+        }
         let Some(last) = self.last_paste.take() else { return };
         let t = self.tabs.active_mut();
         let Some(rs) = shown_mut(&mut t.results, t.exec.view) else { return };
@@ -462,6 +467,15 @@ impl App {
         self.edit_action(EditAction::Pasted);
         // Not read now (refused before it, or waiting for the table): the paste as it was.
         if let Some(PasteIn { again: Some(again), .. }) = self.paste_in.take_if(|p| p.again.is_some()) {
+            let format = again.format;
+            self.paste_put_back(again, format);
+        }
+    }
+
+    /// The paste waiting in [`App::paste_in`] dropped, not pasted: one read again (`space d V`)
+    /// put back as it was (its step was undone for it).
+    pub(super) fn paste_in_dropped(&mut self) {
+        if let Some(again) = self.paste_in.take().and_then(|p| p.again) {
             let format = again.format;
             self.paste_put_back(again, format);
         }

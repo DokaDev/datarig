@@ -529,7 +529,7 @@ impl App {
             EditAction::Undo | EditAction::Redo | EditAction::Apply | EditAction::Discard | EditAction::Preview
         ) && self.refused_without_cell()
         {
-            self.paste_in = None;
+            self.paste_in_dropped();
             return;
         }
         match a {
