@@ -232,8 +232,10 @@ first_frame_ms_p95_max = 250.0
 # update check (ureq with rustls and the platform's verifier, its notice and status) adds 0.45
 # MiB on the CI's Linux x86_64 (24.74 -> 25.19 MiB): 26 MiB. The server monitor (Overview,
 # Sessions, Locks, actions, then the Replication view and the server in full) brings it to
-# 26.054 MiB on the CI's Linux x86_64 (25.878 -> 26.054 MiB for replication): 27 MiB.
-binary_mib_max = 27.0
+# 26.054 MiB on the CI's Linux x86_64 (25.878 -> 26.054 MiB for replication): 27 MiB. Filtering
+# and sorting a table (the query model and its checks, then the value counts) brings it to 27.028
+# MiB on the CI's Linux x86_64: 28 MiB.
+binary_mib_max = 28.0
 
 [plan]
 # A plan of 666 nodes (40 joins deep with a subplan each, parallel workers, a CTE, an Append
