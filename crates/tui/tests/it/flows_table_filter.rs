@@ -261,6 +261,29 @@ fn a_read_only_profile_refuses_unchecked_calls_before_sending() {
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (lower(name) = 'a')")]]);
 }
 
+/// `Space r x`, `:filter clear`, `:where` and `:orderby` on a busy tab are refused before
+/// anything changes: the query its next run sends is the one it had.
+#[test]
+fn a_clear_on_a_busy_tab_changes_nothing() {
+    let mut h = users(Lang::En);
+    h.command("where id > 1");
+    assert_eq!(runs(&mut h).len(), 1);
+    let draft = || users_query(Some("id > 1"), Vec::new());
+    // The run waits for its rows: the tab is busy.
+    for clear in [" rx", ":filter clear", ":where id > 5", ":orderby name"] {
+        match clear.strip_prefix(':') {
+            Some(c) => h.command(c),
+            None => h.keys(clear),
+        }
+        assert!(runs(&mut h).is_empty(), "{clear}: nothing is sent");
+        assert!(h.screen(120, 34).contains("already running"), "{clear}: {}", h.screen(120, 34));
+        let tq = h.app.tab().doc.table_query.as_ref().unwrap();
+        assert!(same_query(&tq.draft, &draft()), "{clear}: the draft is as it was: {:?}", tq.draft);
+    }
+    answer(&mut h);
+    assert_shown(&h, draft());
+}
+
 #[test]
 fn pending_edits_are_asked_about_before_a_filter_runs() {
     let mut h = users(Lang::En);

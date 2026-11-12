@@ -137,6 +137,10 @@ impl App {
             TableAction::EditFilter => self.filter_line_focus(id, table_query::Field::Where),
             TableAction::EditOrder => self.filter_line_focus(id, table_query::Field::Order),
             TableAction::Clear => {
+                // Refused before the draft changes: a busy tab keeps what it would run next.
+                if self.tab_busy(id) {
+                    return self.flash_busy();
+                }
                 let Some(name) = self.table_name(id) else { return };
                 let Some(tq) = self.table_query_mut(id) else { return };
                 tq.line.focus = None;

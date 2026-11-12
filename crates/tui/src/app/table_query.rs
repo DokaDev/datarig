@@ -841,6 +841,11 @@ impl App {
     /// `:where <condition>`: the active table tab's filter (none when blank), then a run.
     pub(super) fn where_command(&mut self, text: &str) -> Result<(), Notice> {
         let id = self.table_command_tab("where")?;
+        // Refused before the draft changes: a busy tab keeps what it would run next.
+        if self.tab_busy(id) {
+            self.flash_busy();
+            return Ok(());
+        }
         let Some(target) = self.table_target(id) else { return Ok(()) };
         let filter = (!text.trim().is_empty())
             .then(|| Filter { text: text.to_string(), recognised: query::recognise(text, &target) });
@@ -855,6 +860,11 @@ impl App {
     /// that is not a list of its columns is refused and said; nothing runs.
     pub(super) fn orderby_command(&mut self, text: &str) -> Result<(), Notice> {
         let id = self.table_command_tab("orderby")?;
+        // Refused before the draft changes: a busy tab keeps what it would run next.
+        if self.tab_busy(id) {
+            self.flash_busy();
+            return Ok(());
+        }
         let Some(target) = self.table_target(id) else { return Ok(()) };
         if !text.trim().is_empty() && target.columns.is_empty() {
             // Unknown, not absent: no column is said not to exist.
@@ -884,6 +894,11 @@ impl App {
     /// `:filter clear`: the active table tab's every row, unordered, then a run.
     pub(super) fn filter_command(&mut self) -> Result<(), Notice> {
         let id = self.table_command_tab("filter")?;
+        // Refused before the draft changes: a busy tab keeps what it would run next.
+        if self.tab_busy(id) {
+            self.flash_busy();
+            return Ok(());
+        }
         let Some(name) = self.table_name(id) else { return Ok(()) };
         let Some(tq) = self.table_query_mut(id) else { return Ok(()) };
         tq.draft = Query::table(name);
