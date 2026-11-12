@@ -974,7 +974,7 @@ checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
 name = "datarig-bench"
-version = "0.40.5"
+version = "0.41.0"
 dependencies = [
  "datarig-core",
  "datarig-driver-mysql",
@@ -991,7 +991,7 @@ dependencies = [
 
 [[package]]
 name = "datarig-core"
-version = "0.40.5"
+version = "0.41.0"
 dependencies = [
  "chrono",
  "futures",
@@ -1012,7 +1012,7 @@ dependencies = [
 
 [[package]]
 name = "datarig-driver-mysql"
-version = "0.40.5"
+version = "0.41.0"
 dependencies = [
  "datarig-core",
  "datarig-tls",
@@ -1026,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "datarig-driver-postgres"
-version = "0.40.5"
+version = "0.41.0"
 dependencies = [
  "chrono",
  "datarig-core",
@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "datarig-export-formats"
-version = "0.40.5"
+version = "0.41.0"
 dependencies = [
  "bytes",
  "datarig-core",
@@ -1054,14 +1054,14 @@ dependencies = [
 
 [[package]]
 name = "datarig-i18n"
-version = "0.40.5"
+version = "0.41.0"
 dependencies = [
  "toml",
 ]
 
 [[package]]
 name = "datarig-ssh"
-version = "0.40.5"
+version = "0.41.0"
 dependencies = [
  "data-encoding",
  "datarig-core",
@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "datarig-tls"
-version = "0.40.5"
+version = "0.41.0"
 dependencies = [
  "datarig-core",
  "rcgen",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "datarig-tui"
-version = "0.40.5"
+version = "0.41.0"
 dependencies = [
  "arboard",
  "chrono",
@@ -1121,7 +1121,7 @@ dependencies = [
 
 [[package]]
 name = "datarig-update"
-version = "0.40.5"
+version = "0.41.0"
 dependencies = [
  "datarig-core",
  "rcgen",
