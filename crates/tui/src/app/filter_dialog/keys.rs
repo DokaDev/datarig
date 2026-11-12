@@ -31,12 +31,19 @@ fn area(f: DialogFocus) -> usize {
 }
 
 /// The values of a condition whose operator becomes `op`: kept as they are where the new
-/// operator takes values of the same kind and number, else read again from their texts as
-/// they would be typed for it.
+/// operator takes values of the same kind (between comparisons and lists alike: as many as it
+/// takes, an empty string a value like any other), else read again from their texts as they
+/// would be typed for it.
 fn values_for(row: &Row, op: Op, c: &ColumnInfo, d: Dialect) -> Vec<Value> {
     let pattern = |o: Op| matches!(o, Op::Contains | Op::StartsWith);
-    if op.arity() == row.op.arity() && pattern(op) == pattern(row.op) {
-        return row.values.clone();
+    if pattern(op) == pattern(row.op) {
+        let keep = match op.arity() {
+            Arity::Zero => 0,
+            Arity::One => 1,
+            Arity::Two => 2,
+            Arity::Many => row.values.len(),
+        };
+        return row.values.iter().take(keep).cloned().collect();
     }
     let texts = row.value_texts(d);
     let fields: Vec<String> = match op.arity() {

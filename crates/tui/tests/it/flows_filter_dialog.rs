@@ -146,6 +146,45 @@ fn each_operator_sends_its_term() {
     }
 }
 
+/// An empty string is a value: changing `name = ''` to `in list` or `not in list` keeps it (the
+/// condition is not left out), and back again keeps an empty first item of the list.
+#[test]
+fn an_empty_string_value_survives_a_change_of_operator() {
+    // The operator picker of a text column: =, ≠, ≠ or NULL, <, ≤, >, ≥, contains, starts with,
+    // in list, not in list.
+    let change = |h: &mut Harness, from: usize, to: usize| {
+        // From the value's start back to its operator, its picker open.
+        h.key(KeyCode::Home);
+        h.key(KeyCode::Left);
+        h.key(KeyCode::Char(' '));
+        for _ in from..to {
+            h.key(KeyCode::Down);
+        }
+        for _ in to..from {
+            h.key(KeyCode::Up);
+        }
+        h.key(KeyCode::Enter);
+    };
+    for (to, term) in [(9, "name IN ('')"), (10, "name NOT IN ('')")] {
+        let mut h = users();
+        h.keys("f");
+        h.key(KeyCode::Char('j'));
+        condition(&mut h, 0, "''");
+        assert_eq!(h.app.filter_dialog_draft().unwrap().0, "name = ''");
+        change(&mut h, 0, to);
+        assert_eq!(h.app.filter_dialog_draft().unwrap().0, term, "{}", h.screen(120, 34));
+        h.key(KeyCode::Enter);
+        assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE ({term})")]]);
+    }
+    let mut h = users();
+    h.keys("f");
+    h.key(KeyCode::Char('j'));
+    condition(&mut h, 9, "'', 'a'");
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "name IN ('', 'a')");
+    change(&mut h, 9, 0);
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "name = ''", "{}", h.screen(120, 34));
+}
+
 #[test]
 fn text_patterns_send_their_like() {
     // A text column: no `between`; `contains` and `starts with` after the comparisons, offered
