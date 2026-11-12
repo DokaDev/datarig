@@ -267,7 +267,7 @@ impl Tx {
 /// How a read-only session starts a transaction of its own.
 const BEGIN_READ_ONLY: &str = "BEGIN READ ONLY";
 
-/// How a read of the app's own (a bounded count, an estimate)
+/// How a read of the app's own (a bounded count, an estimate, a count of a column's values)
 /// starts its transaction: read-only, at `READ COMMITTED` whatever the session's default. Each
 /// of these reads is one statement, whose answer is what was committed when it started (as a
 /// count outside the user's block says), so no snapshot of the transaction's is needed; at

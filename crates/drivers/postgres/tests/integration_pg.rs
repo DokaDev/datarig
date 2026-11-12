@@ -8204,6 +8204,36 @@ fn pairs(g: &datarig_core::driver::GroupCounts) -> Vec<(Option<String>, u64)> {
     g.values.iter().map(|v| (v.value.clone(), v.rows)).collect()
 }
 
+/// A count of a column's values in a read-only transaction of its own (with a time limit or
+/// without) sets its isolation level: under a `SERIALIZABLE` default, while another session's
+/// serializable transaction that wrote is open, it takes no predicate lock (`SIReadLock`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_takes_no_predicate_lock_under_a_serializable_default() {
+    use datarig_core::driver::ValueKind;
+    let Some(url) = pg_url("a_group_count_takes_no_predicate_lock_under_a_serializable_default") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_gsiread_{pid}");
+    let (table, other) = (format!("public.{name}"), format!("public.zz_gsireadw_{pid}"));
+    let (_guard, _other) = (TableGuard(url.clone(), table.clone()), TableGuard(url.clone(), other.clone()));
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id, (g % 3)::text AS k FROM generate_series(1, 300) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(2, &format!("CREATE TABLE {other} (id int)")).await, DbEvent::Done { .. }));
+    let mut q = Conn::open(&serializable_url(&url, false), SessionRole::Query).await;
+    let backend = q.first_value(1, "SELECT pg_backend_pid()::text").await.unwrap();
+    let mut writer = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(writer.run(1, "BEGIN ISOLATION LEVEL SERIALIZABLE").await, DbEvent::Done { .. }));
+    assert!(matches!(writer.run(2, &format!("INSERT INTO {other} VALUES (1)")).await, DbEvent::Done { .. }));
+    let sql = group_sql("public", &name, "k", ("text", ValueKind::Text), Some("id > 100"));
+    let locks = format!("SELECT count(*)::text FROM pg_locks WHERE pid = {backend} AND mode = 'SIReadLock'");
+    for (id, limit) in [(2, Some(Duration::from_secs(30))), (3, None)] {
+        let (got, _, _) = q.group_within(id, &sql, limit).await;
+        assert_eq!(got.expect("counted").values.len(), 3);
+        assert_eq!(b.first_value(id, &locks).await.as_deref(), Some("0"), "limit {limit:?}");
+    }
+    assert!(matches!(writer.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
 /// A group count with a time limit runs as a bounded count does: in a read-only transaction of
 /// its own whose limits end with it (the session's settings as before), stopped at its limit
 /// (`TimedOut`) or after 2 s behind another session's `ACCESS EXCLUSIVE` lock (`LockTimeout`),

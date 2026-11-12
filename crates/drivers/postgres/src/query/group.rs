@@ -207,10 +207,9 @@ async fn own(
 ) -> Result<Result<GroupCounts, DbError>, Closed> {
     let begin = match limit {
         Some(limit) => limited_begin(env.each_tx, limit, COUNT_LOCK_WAIT),
-        None => std::iter::once(BEGIN_READ_ONLY)
-            .chain(env.each_tx.iter().map(String::as_str))
-            .collect::<Vec<_>>()
-            .join("; "),
+        None => {
+            std::iter::once(BEGIN_OWN_READ).chain(env.each_tx.iter().map(String::as_str)).collect::<Vec<_>>().join("; ")
+        }
     };
     let first = format!("{begin}; {check}");
     let start = Instant::now();
