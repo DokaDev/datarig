@@ -267,6 +267,17 @@ impl Tx {
 /// How a read-only session starts a transaction of its own.
 const BEGIN_READ_ONLY: &str = "BEGIN READ ONLY";
 
+/// How a read of the app's own (a bounded count, an estimate)
+/// starts its transaction: read-only, at `READ COMMITTED` whatever the session's default. Each
+/// of these reads is one statement, whose answer is what was committed when it started (as a
+/// count outside the user's block says), so no snapshot of the transaction's is needed; at
+/// `SERIALIZABLE` (a role's or the database's default) it would take predicate locks held until
+/// every overlapping transaction ends, on which other sessions' serializable transactions can
+/// fail, wait for a safe snapshot under `default_transaction_deferrable`, and be refused on a
+/// standby. `REPEATABLE READ` takes no predicate lock either, but holds one snapshot across the
+/// read's two requests for nothing. The level ends with the transaction (pooler-safe).
+const BEGIN_OWN_READ: &str = "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY";
+
 /// What a read-only session runs first in the user's block.
 const SET_READ_ONLY: &str = "SET TRANSACTION READ ONLY";
 
@@ -2826,7 +2837,7 @@ fn stopped(asked: bool, said: Said, ran: Duration, applied: Option<Duration>) ->
     }
 }
 
-/// How [`limited_read`] begins: `BEGIN READ ONLY`, the session's settings of each transaction
+/// How [`limited_read`] begins: [`BEGIN_OWN_READ`], the session's settings of each transaction
 /// (`each_tx`), then `statement_timeout`, `lock_timeout` and `idle_in_transaction_session_timeout`
 /// ([`OWN_READ_IDLE`]) for this transaction alone, each the shorter of the one given and the one
 /// the session has (when it has one: a limit the user set is never made longer). The query
@@ -2838,7 +2849,7 @@ fn stopped(asked: bool, said: Said, ran: Duration, applied: Option<Duration>) ->
 /// functions named in `pg_catalog`, each given its exact argument types.
 fn limited_begin(each_tx: &[String], statement: Duration, lock: Duration) -> String {
     let ms = |d: Duration| d.as_millis().clamp(1, i32::MAX as u128);
-    let first: Vec<&str> = std::iter::once(BEGIN_READ_ONLY).chain(each_tx.iter().map(String::as_str)).collect();
+    let first: Vec<&str> = std::iter::once(BEGIN_OWN_READ).chain(each_tx.iter().map(String::as_str)).collect();
     format!(
         "{}; SELECT s.name, s.ms, pg_catalog.set_config(s.name, pg_catalog.textin(pg_catalog.int8out(s.ms)), \
          true) AS {LIMITS_COLUMN} FROM (SELECT g.name, CASE WHEN pg_catalog.int8gt(g.v, '0') AND pg_catalog.int8lt(g.v, l.ms) THEN \

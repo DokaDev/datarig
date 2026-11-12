@@ -7049,8 +7049,7 @@ async fn a_bounded_read_runs_nothing_the_search_path_can_shadow() {
     let counted = count_of(&format!("SELECT * FROM {table} WHERE (id IS NOT NULL)"));
     let limit = Some(Duration::from_secs(30));
     assert_eq!(q.count_within(4, &counted, limit).await.0, Ok(50));
-    let bounded =
-        |s: &pg_proxy::Sent| matches!(s, pg_proxy::Sent::Query(t) if t.starts_with("BEGIN READ ONLY; SELECT s.name"));
+    let bounded = |s: &pg_proxy::Sent| matches!(s, pg_proxy::Sent::Query(t) if t.starts_with("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SELECT s.name"));
     assert!(proxy.sent().iter().any(bounded), "the question was answered: the count ran within its limits");
     let rows = format!("SELECT * FROM {table} WHERE (id IS NOT NULL) LIMIT 10");
     assert_eq!(q.estimate(5, &rows).await.0, Ok(10));
@@ -7111,7 +7110,7 @@ async fn a_bounded_read_whose_commit_fails_is_no_answer() {
     assert!(!seen.iter().any(|e| matches!(e, DbEvent::Counted { result: Ok(_), .. })), "{seen:?}");
 }
 
-/// A bounded read goes out only once the query with the `BEGIN READ ONLY` and the limits it needs
+/// A bounded read goes out only once the query with the `BEGIN … READ ONLY` and the limits it needs
 /// said they took effect: with the `BEGIN` failing where it stands (as one a cancel stops before
 /// it runs), nothing more is sent. A read that ran anyway would wait for the lock held here, with
 /// no limit at all.
@@ -7134,7 +7133,7 @@ async fn a_bounded_read_whose_begin_fails_never_runs() {
     assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
     assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
     let failing = || pg_proxy::Fault::Head("SELECT 1/0".into());
-    proxy.fault_start("BEGIN READ ONLY", failing());
+    proxy.fault_start("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY", failing());
     q.session.send(DbCommand::Count { id: 2, sql: counted.clone(), limit });
     let DbEvent::Counted { result, .. } = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 5).await else {
         unreachable!()
@@ -7142,7 +7141,7 @@ async fn a_bounded_read_whose_begin_fails_never_runs() {
     assert!(!proxy.fault_pending(), "the count's BEGIN met the fault");
     assert!(matches!(&result, Err(DbError::Server(m)) if m.text.contains("division by zero")), "{result:?}");
     assert_eq!(q.first_value(3, settings).await, before, "the session is as it was");
-    proxy.fault_start("BEGIN READ ONLY", failing());
+    proxy.fault_start("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY", failing());
     q.session.send(DbCommand::Estimate { id: 4, sql: rows.clone() });
     let DbEvent::Estimated { result, .. } = q.wait(|e| matches!(e, DbEvent::Estimated { .. }), 5).await else {
         unreachable!()
@@ -7152,6 +7151,43 @@ async fn a_bounded_read_whose_begin_fails_never_runs() {
     assert_eq!(q.first_value(5, settings).await, before, "the session is as it was");
     assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
     assert_eq!(q.count_within(6, &counted, limit).await.0, Ok(40));
+}
+
+/// The app's bounded reads (a count with its limit, an estimate) set their isolation level:
+/// under a `SERIALIZABLE` default, while another session's serializable transaction that wrote
+/// is open, they take no predicate lock (`SIReadLock`, kept past their end while that one is
+/// open) that other sessions' serializable transactions could fail on. A statement of the
+/// user's at that default takes one, as the server's rules say.
+#[tokio::test(flavor = "multi_thread")]
+async fn bounded_reads_take_no_predicate_lock_under_a_serializable_default() {
+    let Some(url) = pg_url("bounded_reads_take_no_predicate_lock_under_a_serializable_default") else { return };
+    let pid = std::process::id();
+    let (table, other) = (format!("public.zz_siread_{pid}"), format!("public.zz_sireadw_{pid}"));
+    let (_guard, _other) = (TableGuard(url.clone(), table.clone()), TableGuard(url.clone(), other.clone()));
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 100) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(2, &format!("CREATE TABLE {other} (id int)")).await, DbEvent::Done { .. }));
+    let mut q = Conn::open(&serializable_url(&url, false), SessionRole::Query).await;
+    let default = q.first_value(1, "SELECT current_setting('default_transaction_isolation')").await;
+    assert_eq!(default.as_deref(), Some("serializable"));
+    let backend = q.first_value(2, "SELECT pg_backend_pid()::text").await.unwrap();
+    let mut writer = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(writer.run(1, "BEGIN ISOLATION LEVEL SERIALIZABLE").await, DbEvent::Done { .. }));
+    assert!(matches!(writer.run(2, &format!("INSERT INTO {other} VALUES (1)")).await, DbEvent::Done { .. }));
+    let rows = format!("SELECT * FROM {table} WHERE (id > 10)");
+    assert_eq!(q.count_within(3, &count_of(&rows), Some(Duration::from_secs(30))).await.0, Ok(90));
+    q.session.send(DbCommand::Estimate { id: 4, sql: rows.clone() });
+    let DbEvent::Estimated { result, .. } = q.wait(|e| matches!(e, DbEvent::Estimated { .. }), 10).await else {
+        unreachable!()
+    };
+    assert!(result.is_ok(), "{result:?}");
+    let locks = format!("SELECT count(*)::text FROM pg_locks WHERE pid = {backend} AND mode = 'SIReadLock'");
+    assert_eq!(b.first_value(3, &locks).await.as_deref(), Some("0"), "the app's reads");
+    // The measure holds: the user's own statement there takes one.
+    assert!(matches!(q.run(5, &rows).await, DbEvent::Page { .. }));
+    assert_ne!(b.first_value(4, &locks).await.as_deref(), Some("0"), "the user's statement");
+    assert!(matches!(writer.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
 }
 
 /// The user's cancel is for the last run sent, and never for one sent after it: asked before a
@@ -7322,13 +7358,13 @@ async fn a_server_time_limit_is_no_cancel_of_the_users() {
     let (got, _) = q.count_within(3, &counted, None).await;
     assert!(!proxy.fault_pending());
     assert!(timed_out(&got), "the count's question: {got:?}");
-    proxy.fault_start("BEGIN READ ONLY", pg_proxy::Fault::Head(sleep.into()));
+    proxy.fault_start("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY", pg_proxy::Fault::Head(sleep.into()));
     let (got, _) = q.estimate(4, &rows).await;
     assert!(!proxy.fault_pending());
     assert!(timed_out(&got), "the estimate's setup: {got:?}");
 
     // The session's limit stops the setup, past the limit the count asked for.
-    proxy.fault_start("BEGIN READ ONLY", pg_proxy::Fault::Head(sleep.into()));
+    proxy.fault_start("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY", pg_proxy::Fault::Head(sleep.into()));
     let (got, _) = q.count_within(5, &counted, Some(Duration::from_millis(100))).await;
     assert!(!proxy.fault_pending());
     assert!(timed_out(&got), "the setup: {got:?}");
@@ -7380,7 +7416,7 @@ async fn a_bounded_read_is_a_query_of_its_own() {
     let setups: Vec<usize> = texts
         .iter()
         .enumerate()
-        .filter(|(_, t)| t.starts_with("BEGIN READ ONLY; SELECT s.name"))
+        .filter(|(_, t)| t.starts_with("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SELECT s.name"))
         .map(|(i, _)| i)
         .collect();
     assert_eq!(setups.len(), 2, "{texts:?}");

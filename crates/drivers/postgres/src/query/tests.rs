@@ -1455,7 +1455,10 @@ fn a_limited_read_sets_its_limits_after_the_sessions_own_and_never_longer() {
     let each = ["SET LOCAL search_path = a".to_string(), "SET LOCAL lock_timeout = 5000".to_string()];
     let text = super::limited_begin(&each, std::time::Duration::from_secs(30), std::time::Duration::from_secs(2));
     assert!(
-        text.starts_with("BEGIN READ ONLY; SET LOCAL search_path = a; SET LOCAL lock_timeout = 5000; SELECT s.name"),
+        text.starts_with(
+            "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SET LOCAL search_path = a; SET LOCAL lock_timeout = 5000; \
+             SELECT s.name"
+        ),
         "{text}"
     );
     // Each limit is the shorter of the session's (when it has one, read after its own settings)
@@ -1470,11 +1473,11 @@ fn a_limited_read_sets_its_limits_after_the_sessions_own_and_never_longer() {
         "{text}"
     );
     let none = super::limited_begin(&[], std::time::Duration::from_millis(1500), std::time::Duration::from_secs(2));
-    assert!(none.starts_with("BEGIN READ ONLY; SELECT"), "{none}");
+    assert!(none.starts_with("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SELECT"), "{none}");
     assert!(none.contains("('statement_timeout', pg_catalog.int8in('1500'))"), "{none}");
     // What the app adds after the settings of each transaction runs on the session's search
     // path: no operator, no cast (each looked up on that path), only `pg_catalog`'s functions.
-    let own = &none["BEGIN READ ONLY; ".len()..];
+    let own = &none["BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; ".len()..];
     for op in ["::", "=", "<", ">", "+", "-", "*", "/", "||", " USING ", "CAST", "OPERATOR"] {
         assert!(!own.contains(op), "{op} in {own}");
     }
