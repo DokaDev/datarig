@@ -267,15 +267,17 @@ impl Tx {
 /// How a read-only session starts a transaction of its own.
 const BEGIN_READ_ONLY: &str = "BEGIN READ ONLY";
 
-/// How a read of the app's own (a bounded count, an estimate, a count of a column's values)
-/// starts its transaction: read-only, at `READ COMMITTED` whatever the session's default. Each
-/// of these reads is one statement, whose answer is what was committed when it started (as a
-/// count outside the user's block says), so no snapshot of the transaction's is needed; at
-/// `SERIALIZABLE` (a role's or the database's default) it would take predicate locks held until
-/// every overlapping transaction ends, on which other sessions' serializable transactions can
-/// fail, wait for a safe snapshot under `default_transaction_deferrable`, and be refused on a
-/// standby. `REPEATABLE READ` takes no predicate lock either, but holds one snapshot across the
-/// read's two requests for nothing. The level ends with the transaction (pooler-safe).
+/// How a read of the app's own (a count outside the user's block, an estimate, a count of a
+/// column's values, an export's transaction) starts its transaction: read-only, at `READ
+/// COMMITTED` whatever the session's default. Each of these reads is one statement, whose answer
+/// is what was committed when it started (as a count outside the user's block says; an export's
+/// portal keeps the snapshot its statement started with across its pages), so no snapshot of the
+/// transaction's is needed; at `SERIALIZABLE` (a role's or the database's default) it would take
+/// predicate locks held until every overlapping transaction ends, on which other sessions'
+/// serializable transactions can fail, wait for a safe snapshot under
+/// `default_transaction_deferrable`, and be refused on a standby. `REPEATABLE READ` takes no
+/// predicate lock either, but holds one snapshot across the read's two requests for nothing. The
+/// level ends with the transaction (pooler-safe).
 const BEGIN_OWN_READ: &str = "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY";
 
 /// What a read-only session runs first in the user's block.
@@ -2596,11 +2598,13 @@ fn countable(sql: &str) -> bool {
 /// Count with `sql` while no portal is open. Inside the user's block it runs
 /// under a savepoint, rolled back to on failure, so a failed count never aborts the block (made
 /// read-only first on a read-only session, as the block's first statement), without a time
-/// limit (the block's settings are the user's); outside it, as a statement of its own (`BEGIN
-/// READ ONLY … COMMIT` on a read-only session), or with `limit` in a read-only transaction of
-/// its own whose time limits end with it ([`limited_read`]). The allowlist's question to the
-/// server goes first ([`check_text`]), in the savepoint's request inside the block: two round
-/// trips outside it, one inside. Also answers whether it counted in a snapshot fixed for the
+/// limit (the block's settings are the user's); outside it, in a read-only transaction of its
+/// own at `READ COMMITTED` ([`BEGIN_OWN_READ`] … `COMMIT`, one simple query), or with `limit` in
+/// one whose time limits end with it too ([`limited_read`]). While whether a block is open is not
+/// known (a probe failed), a count without a limit on a session that is not read-only goes out
+/// as a simple query alone, as it did: a `COMMIT` of its own would end a block of the user's.
+/// The allowlist's question to the server goes first ([`check_text`]), in the savepoint's request
+/// inside the block: two round trips outside it, one inside. Also answers whether it counted in a snapshot fixed for the
 /// transaction (the user's block at `REPEATABLE READ` or `SERIALIZABLE`, asked with
 /// [`ISOLATION`] in the same request); outside a block it never does (it counts the rows
 /// committed when it runs).
@@ -2620,11 +2624,11 @@ async fn count(
         Err(why) => return Ok((Err(why), false)),
     };
     // Whether a block is open must be known before a transaction of the count's own begins.
-    if limit.is_some() && tx.unsure {
+    if tx.unsure {
         probe(client, link, env, tx).await?;
-        // Not known: a count of its own might run in the user's block, and one there has no
-        // limit, which is not what was asked for.
-        if tx.unsure {
+        // Not known: a count with a limit might run in the user's block, and one there has no
+        // limit, which is not what was asked for. One without a limit goes on (see below).
+        if limit.is_some() && tx.unsure {
             return Ok((Err(DbError::NotRepeatable(risk::repeat::NotRepeatable::TxUnknown)), false));
         }
     }
@@ -2656,14 +2660,17 @@ async fn count(
     if let (_, Err(why)) = count_checked(link, env, client.simple_query(&format!("{path}{check}"))).await? {
         return Ok((Err(why), false));
     }
-    let text = if env.read_only { format!("{BEGIN_READ_ONLY}; {path}{sql}; COMMIT") } else { format!("{path}{sql}") };
+    // Its own transaction, at `READ COMMITTED` whatever the session's default, in the same
+    // request: no round trip more than the statement alone.
+    let own = env.read_only || !tx.unsure;
+    let text = if own { format!("{BEGIN_OWN_READ}; {path}{sql}; COMMIT") } else { format!("{path}{sql}") };
     let counted = match link.guard(Some(env.token), client.simple_query(&text)).await? {
         Ok(msgs) => count_of(&msgs),
         Err(e) => {
             // As it stood when the answer came: a cancel during the cleanup stopped nothing.
             let why = asked_error(&e, env.cancel.asked());
-            if env.read_only {
-                // The failure left the `BEGIN READ ONLY` block open and aborted.
+            if own {
+                // The failure left the `BEGIN … READ ONLY` block open and aborted.
                 let _ = link.guard(None, client.batch_execute("ROLLBACK")).await?;
             }
             Err(why)

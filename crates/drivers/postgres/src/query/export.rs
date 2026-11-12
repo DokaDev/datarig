@@ -2,15 +2,16 @@
 //! portal page at a time, the next page asked for only once the channel took the one before
 //! (so a slow file holds the statement back instead of rows piling up in memory).
 //!
-//! Outside the user's block the statement runs in a `BEGIN READ ONLY` transaction of its own
-//! (with the session's search path when it is set per transaction, and a keyset chunk's
-//! `lock_timeout`), committed after the last page: one statement, one snapshot, nothing
-//! written whatever it calls. Inside the user's block it runs under the driver's savepoint
-//! ([`Env::savepoint`]), released after it and rolled back to when it fails or is cancelled,
-//! so the block is never aborted by it; an aborted block refuses it unasked.
+//! Outside the user's block the statement runs in a read-only transaction of its own at `READ
+//! COMMITTED` ([`BEGIN_OWN_READ`], whatever the session's default: no predicate lock under a
+//! `SERIALIZABLE` one), with the session's search path when it is set per transaction and a
+//! keyset chunk's `lock_timeout`, committed after the last page: one statement, one snapshot
+//! (its portal's), nothing written whatever it calls. Inside the user's block it runs under the
+//! driver's savepoint ([`Env::savepoint`]), released after it and rolled back to when it fails
+//! or is cancelled, so the block is never aborted by it; an aborted block refuses it unasked.
 
 use super::{
-    BEGIN_READ_ONLY, Closed, Env, Link, State, check_text, checked, columns_of, copies_with_client, count_error,
+    BEGIN_OWN_READ, Closed, Env, Link, State, check_text, checked, columns_of, copies_with_client, count_error,
     count_undo, decode, finish, formats_of, probe,
 };
 use crate::connect::{db_error, is_cancel};
@@ -120,7 +121,7 @@ pub(super) async fn export(
         }
     }
     // Its own read-only transaction, opened in the request that parses the statement.
-    let mut begin = vec![BEGIN_READ_ONLY.to_string()];
+    let mut begin = vec![BEGIN_OWN_READ.to_string()];
     begin.extend(env.each_tx.iter().cloned());
     if guard == ExportGuard::Keyset {
         begin.push(format!("SET LOCAL lock_timeout = '{LOCK_WAIT_SECS}s'"));

@@ -1204,9 +1204,10 @@ async fn behind_a_pooler_an_apply_is_one_transaction_and_leaves_no_settings() {
 }
 
 /// Behind a pooler a count with a time limit and an estimate run in a read-only transaction of
-/// their own whose limits are `SET LOCAL`: both are answered (the session's lock wait limit,
-/// shorter, is kept in its transactions), and another client going round the pooled server
-/// connections finds the server's own `statement_timeout` and `lock_timeout` on each.
+/// their own whose limits are `SET LOCAL`, a count without one in a read-only transaction of its
+/// own: all are answered (the session's lock wait limit, shorter, is kept in its transactions),
+/// and another client going round the pooled server connections finds the server's own
+/// `statement_timeout` and `lock_timeout` on each.
 #[tokio::test(flavor = "multi_thread")]
 async fn behind_a_pooler_a_bounded_count_and_an_estimate_leave_no_settings() {
     let Some(url) = pooler_url("behind_a_pooler_a_bounded_count_and_an_estimate_leave_no_settings") else {
@@ -1229,6 +1230,10 @@ async fn behind_a_pooler_a_bounded_count_and_an_estimate_leave_no_settings() {
         q.session.send(DbCommand::Estimate { id: 10 + id, sql: rows.to_string() });
         let ev = q.wait(|e| matches!(e, DbEvent::Estimated { .. }), 30).await;
         assert!(matches!(ev, DbEvent::Estimated { result: Ok(_), .. }), "{ev:?}");
+        // Without a limit: its own transaction too, its level set in its `BEGIN`.
+        q.session.send(DbCommand::Count { id: 20 + id, sql: counted.clone(), limit: None });
+        let ev = q.wait(|e| matches!(e, DbEvent::Counted { .. }), 30).await;
+        assert!(matches!(ev, DbEvent::Counted { result: Ok(200), .. }), "{ev:?}");
     }
     for id in 0..8 {
         let DbEvent::Page { rows, .. } = other.run(10 + id, server).await else { panic!() };

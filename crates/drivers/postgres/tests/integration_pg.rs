@@ -7322,6 +7322,46 @@ async fn bounded_reads_take_no_predicate_lock_under_a_serializable_default() {
     assert!(matches!(writer.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
 }
 
+/// A count without a time limit outside the user's block (the exact count of a table tab) sets
+/// its isolation level too, on a read-only session and on one that is not: under a
+/// `SERIALIZABLE` default, while another session's serializable transaction that wrote is open,
+/// it takes no predicate lock. Inside the user's block it runs in that block as it is: at the
+/// block's level (the default, `SERIALIZABLE`), whose predicate locks it takes.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_exact_count_takes_no_predicate_lock_under_a_serializable_default() {
+    let Some(url) = pg_url("an_exact_count_takes_no_predicate_lock_under_a_serializable_default") else { return };
+    let pid = std::process::id();
+    let (table, other) = (format!("public.zz_xsiread_{pid}"), format!("public.zz_xsireadw_{pid}"));
+    let (_guard, _other) = (TableGuard(url.clone(), table.clone()), TableGuard(url.clone(), other.clone()));
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id FROM generate_series(1, 100) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(2, &format!("CREATE TABLE {other} (id int)")).await, DbEvent::Done { .. }));
+    let mut writer = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(writer.run(1, "BEGIN ISOLATION LEVEL SERIALIZABLE").await, DbEvent::Done { .. }));
+    assert!(matches!(writer.run(2, &format!("INSERT INTO {other} VALUES (1)")).await, DbEvent::Done { .. }));
+    let counted = count_of(&format!("SELECT * FROM {table} WHERE (id > 10)"));
+    let level = "SELECT current_setting('transaction_isolation')";
+    let mut id = 2;
+    for read_only in [false, true] {
+        let mut q = Conn::open_with(&serializable_url(&url, false), SessionRole::Query, read_only).await;
+        assert_eq!(q.first_value(1, level).await.as_deref(), Some("serializable"), "read-only {read_only}");
+        let backend = q.first_value(2, "SELECT pg_backend_pid()::text").await.unwrap();
+        let locks = format!("SELECT count(*)::text FROM pg_locks WHERE pid = {backend} AND mode = 'SIReadLock'");
+        assert_eq!(q.count_within(3, &counted, None).await.0, Ok(90), "read-only {read_only}");
+        id += 1;
+        assert_eq!(b.first_value(id, &locks).await.as_deref(), Some("0"), "read-only {read_only}: the count");
+        // In the user's block the count is the block's: its level, its predicate locks.
+        assert!(matches!(q.run(4, "BEGIN").await, DbEvent::Done { .. }));
+        assert_eq!(q.count_within(5, &counted, None).await.0, Ok(90), "read-only {read_only}");
+        assert_eq!(q.first_value(6, level).await.as_deref(), Some("serializable"), "read-only {read_only}");
+        id += 1;
+        assert_ne!(b.first_value(id, &locks).await.as_deref(), Some("0"), "read-only {read_only}: in the block");
+        assert!(matches!(q.run(7, "ROLLBACK").await, DbEvent::Done { .. }));
+    }
+    assert!(matches!(writer.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
 /// The user's cancel is for the last run sent, and never for one sent after it: asked before a
 /// bounded count was sent, the count is not cancelled (it runs to its limit, `TimedOut`); asked
 /// while the count waits behind a run, the count is cancelled (`Cancelled`, at once when its
@@ -7812,7 +7852,7 @@ async fn a_stop_said_in_another_language_is_the_servers_words() {
     // Without a limit of the app's: the session's own fires, the answer held.
     assert!(matches!(q.run(5, "SET statement_timeout = 300").await, DbEvent::Done { .. }));
     q.session.send(DbCommand::Count { id: 6, sql: counted.clone(), limit: None });
-    sent(&proxy, &counted, 3).await;
+    sent(&proxy, &format!("BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; {counted}; COMMIT"), 1).await;
     hold_then_cancel(&mut q, Duration::from_millis(600)).await;
     let got = answer(&mut q).await;
     assert!(in_its_words(&got), "unbounded: {got:?}");
@@ -7820,7 +7860,7 @@ async fn a_stop_said_in_another_language_is_the_servers_words() {
     // In the user's block, under its savepoint.
     assert!(matches!(q.run(7, "BEGIN").await, DbEvent::Done { .. }));
     q.session.send(DbCommand::Count { id: 8, sql: counted.clone(), limit: Some(limit) });
-    sent(&proxy, &counted, 4).await;
+    sent(&proxy, &counted, 3).await;
     hold_then_cancel(&mut q, Duration::from_millis(600)).await;
     let got = answer(&mut q).await;
     assert!(in_its_words(&got), "in a block: {got:?}");

@@ -338,6 +338,50 @@ async fn a_read_only_session_exports_and_runs_no_write() {
     assert_eq!(w.rows(&format!("SELECT count(*) FROM {t}")).await, [[Some("2".into())]]);
 }
 
+/// An export's transaction of its own sets its isolation level, whatever the session's default
+/// (each guard, a keyset chunk's among them): under a `SERIALIZABLE` default, while another
+/// session's serializable transaction that wrote is open, it takes no predicate lock
+/// (`SIReadLock`, kept past its end while that one is open). Inside the user's block it reads
+/// there, at the block's level, whose predicate locks it takes.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_export_takes_no_predicate_lock_under_a_serializable_default() {
+    let Some(url) = pg_url("an_export_takes_no_predicate_lock_under_a_serializable_default") else { return };
+    let (t, w) = (table("siread"), table("sireadw"));
+    let _g = Guard(url.clone(), format!("DROP TABLE IF EXISTS {t}, {w}"));
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {t} (id int PRIMARY KEY)")).unwrap();
+    pg_clean::run_fresh(&url, &format!("INSERT INTO {t} SELECT generate_series(1, 100)")).unwrap();
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {w} (id int)")).unwrap();
+    let mut b = Conn::open(&url, SessionRole::Query, false).await;
+    let mut writer = Conn::open(&url, SessionRole::Query, false).await;
+    writer.ok("BEGIN ISOLATION LEVEL SERIALIZABLE").await;
+    writer.ok(&format!("INSERT INTO {w} VALUES (1)")).await;
+    let sep = if url.contains('?') { '&' } else { '?' };
+    let serial = format!("{url}{sep}options=-c%20default_transaction_isolation%3Dserializable");
+    let level = "SELECT current_setting('transaction_isolation')";
+    let sql = format!("SELECT * FROM {t} WHERE id > 10");
+    for read_only in [false, true] {
+        let mut c = Conn::open(&serial, SessionRole::Query, read_only).await;
+        assert_eq!(c.rows(level).await, [[Some("serializable".into())]]);
+        let backend = c.rows("SELECT pg_backend_pid()::text").await[0][0].clone().unwrap();
+        let locks = format!("SELECT count(*)::text FROM pg_locks WHERE pid = {backend} AND mode = 'SIReadLock'");
+        for guard in [ExportGuard::Repeatable, ExportGuard::Confirmed, ExportGuard::Keyset] {
+            let (id, mut rx) = c.export(&sql, guard, 2, 1_000);
+            assert_eq!(drain(&mut rx).await.1.len(), 90);
+            assert_eq!(c.exported(id).await.0.unwrap().rows, 90);
+            assert_eq!(b.rows(&locks).await, [[Some("0".into())]], "read-only {read_only}, {guard:?}");
+        }
+        // In the user's block the export is the block's: its level, its predicate locks.
+        c.ok("BEGIN").await;
+        let (id, mut rx) = c.export(&sql, ExportGuard::Repeatable, 2, 1_000);
+        assert_eq!(drain(&mut rx).await.1.len(), 90);
+        assert_eq!(c.exported(id).await.0.unwrap().rows, 90);
+        assert_eq!(c.rows(level).await, [[Some("serializable".into())]]);
+        assert_ne!(b.rows(&locks).await, [[Some("0".into())]], "read-only {read_only}: in the block");
+        c.ok("ROLLBACK").await;
+    }
+    writer.ok("ROLLBACK").await;
+}
+
 /// Behind a pooler in transaction mode (`DATARIG_TEST_POOLER_URL`): the export's statement, its
 /// pages and its COMMIT stay in one transaction, so on one server connection.
 #[tokio::test(flavor = "multi_thread")]
