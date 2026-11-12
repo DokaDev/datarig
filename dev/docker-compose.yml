@@ -47,6 +47,36 @@ services:
       timeout: 3s
       retries: 60
 
+  # MariaDB 11.4 LTS (pinned by digest), loaded with the same dev/init-mysql/*.sql as `mysql`.
+  # Its performance_schema is off by default: the tests look at the driver's sessions from the
+  # side through it (connection attributes, statement history, metadata locks), so it is on here.
+  # Only with `--profile mariadb`: `docker compose --profile mariadb up -d mariadb`.
+  mariadb:
+    image: mariadb:11.4@sha256:1292844148b311e4ed4300022a996d39083f415a963e970cf47cad1b3b18e3a6
+    container_name: datarig-mariadb
+    profiles: ["mariadb"]
+    command:
+      - --performance-schema=ON
+      - --performance-schema-consumer-events-statements-current=ON
+      - --performance-schema-consumer-events-statements-history=ON
+      - --performance-schema-instrument=wait/lock/metadata/sql/mdl=ON
+    environment:
+      MARIADB_USER: datarig
+      MARIADB_PASSWORD: datarig
+      MARIADB_DATABASE: datarig
+      # Root password for admin access; the app itself uses the datarig user above.
+      MARIADB_ROOT_PASSWORD: datarig-root
+    ports:
+      - "53316:3306"
+    volumes:
+      - ./init-mysql:/docker-entrypoint-initdb.d:ro
+      - datarig-mariadbdata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+
   # A pooler in front of `postgres` the way many companies run one: transaction mode without
   # prepared statement support (`max_prepared_statements = 0`, PgBouncer's default before
   # 1.22), round robin over three server connections so consecutive transactions of one client
@@ -89,3 +119,4 @@ services:
 volumes:
   datarig-pgdata:
   datarig-mysqldata:
+  datarig-mariadbdata:

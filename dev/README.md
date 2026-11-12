@@ -1,8 +1,9 @@
 # dev: test databases and services
 
 Docker Compose services for developing and testing datarig: PostgreSQL 17 (with the test data
-the integration tests expect), MySQL 8.4 (with the data the MySQL driver's tests expect),
-PgBouncer and an OpenSSH bastion. Every credential here is a throwaway for local testing.
+the integration tests expect), MySQL 8.4 and MariaDB 11.4 (with the data the MySQL driver's
+tests expect), PgBouncer and an OpenSSH bastion. Every credential here is a throwaway for local
+testing.
 
 ## Start
 
@@ -16,6 +17,7 @@ Optional services (compose profiles):
 
 ```sh
 docker compose --profile pooler up -d pgbouncer
+docker compose --profile mariadb up -d mariadb
 
 sh ssh/make-fixture.sh      # SSH keys for the bastion, written to ssh/.fixture (git-ignored)
 docker compose --profile ssh up -d --build ssh-bastion
@@ -27,6 +29,7 @@ docker compose --profile ssh up -d --build ssh-bastion
 |---|---|---|---|---|
 | PostgreSQL 17 (`datarig-pg`) | 55432 | `datarig` / `datarig` | `datarig` | scram-sha-256 authentication |
 | MySQL 8.4 (`datarig-mysql`) | 53306 | `datarig` / `datarig` | `datarig` (tables in `shop`) | root password `datarig-root` |
+| MariaDB 11.4 (`datarig-mariadb`, profile `mariadb`) | 53316 | `datarig` / `datarig` | `datarig` (tables in `shop`) | root password `datarig-root`; performance_schema on |
 | PgBouncer 1.25 (`datarig-pgbouncer`, profile `pooler`) | 56432 | `datarig` / `datarig` | `datarig` | transaction mode, no prepared statements, round robin over three server connections, `options` dropped |
 | OpenSSH bastion (`datarig-ssh-bastion`, profile `ssh`) | 127.0.0.1:52222 | `tunnel` (key) / `pw` (password `datarig-pw`) | | forwards only to `postgres:5432`, `pgbouncer:5432` and `mysql:3306` |
 
@@ -34,6 +37,7 @@ docker compose --profile ssh up -d --build ssh-bastion
 - PgBouncer: `postgres://datarig:datarig@127.0.0.1:56432/datarig`
 - MySQL: `mysql://datarig:datarig@127.0.0.1:53306/shop` (the user may use `shop` and its own
   `datarig`)
+- MariaDB: `mysql://datarig:datarig@127.0.0.1:53316/shop` (likewise)
 
 ## Data
 
@@ -46,8 +50,8 @@ docker compose --profile ssh up -d --build ssh-bastion
   text, Hangul mixed with Latin, other CJK and emoji, compatibility jamo, and a name in
   decomposed jamo (NFD) for width and normalization checks. Their text is written as `U&''`
   escapes the server decodes on load, with an English comment on each row.
-- MySQL (`init-mysql/*.sql`): a comparable `shop` schema, the same Korean rows (as
-  `_utf8mb4 X''` hex literals) and about 1,000,000 `events` rows.
+- MySQL and MariaDB (`init-mysql/*.sql`, the same files on both): a comparable `shop` schema,
+  the same Korean rows (as `_utf8mb4 X''` hex literals) and about 1,000,000 `events` rows.
 
 The integration tests create and drop their own tables; they leave `public` empty. On MySQL they
 make only `zz_`-named tables, databases and accounts, and drop them.
@@ -70,6 +74,10 @@ make only `zz_`-named tables, databases and accounts, and drop them.
 | `DATARIG_TEST_MYSQL_SSLMODE` | the TLS mode of the MySQL suite's profiles (default `DISABLED`; CI runs it again with `PREFERRED`) |
 | `DATARIG_REQUIRE_PG`, `DATARIG_REQUIRE_POOLER`, `DATARIG_REQUIRE_SSH`, `DATARIG_REQUIRE_MYSQL`, `DATARIG_REQUIRE_TLS` | `1` makes a missing service a failure instead of a skip |
 
+The MySQL tests run against MariaDB the same way: point `DATARIG_TEST_MYSQL_URL` and
+`DATARIG_TEST_MYSQL_ADMIN_URL` at port 53316 and set `DATARIG_TEST_MYSQL_CLIENT` to
+`docker exec -i datarig-mariadb mariadb -udatarig -pdatarig shop`.
+
 ## TLS servers
 
 Scratch servers for the TLS tests, never the services above or their volumes: PostgreSQL 17 on
@@ -87,12 +95,13 @@ sh tls/down.sh                # removes them
 ## Stop and reset
 
 ```sh
-docker compose --profile pooler --profile ssh down      # stop; the data stays in named volumes
-docker compose --profile pooler --profile ssh down -v   # also delete the volumes: the next start loads the init scripts again
+docker compose --profile pooler --profile ssh --profile mariadb down      # stop; the data stays in named volumes
+docker compose --profile pooler --profile ssh --profile mariadb down -v   # also delete the volumes: the next start loads the init scripts again
 ```
 
-The data lives in the named volumes `datarig-pgdata` and `datarig-mysqldata`. CI does not use
-this file: `.github/workflows/ci.yml` starts the same images as service containers.
+The data lives in the named volumes `datarig-pgdata`, `datarig-mysqldata` and
+`datarig-mariadbdata`. CI does not use this file: `.github/workflows/ci.yml` starts the same
+images as service containers.
 
 ## Vim test cases
 
