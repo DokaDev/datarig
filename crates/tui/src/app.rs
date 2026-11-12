@@ -43,6 +43,7 @@ pub mod explorer;
 pub mod export;
 pub mod export_form;
 pub mod export_path_pick;
+pub mod filter_history;
 pub mod filter_line;
 pub mod filter_value;
 pub mod folder_pick;
@@ -316,6 +317,8 @@ pub enum AppEvent {
     Clipboard(edit::ClipAnswer),
     /// The update check answered.
     UpdateChecked(datarig_core::update::Answer),
+    /// The filter history's writer wrote the file, or failed to.
+    FilterHistory(filter_history::Saved),
 }
 
 /// Which session a driver event comes from.
@@ -695,6 +698,8 @@ pub struct App {
     pub pointer_on: Option<hover::PointerOn>,
     /// The tips: usage counts, the page they turn with, each place's pick ([`tips`]).
     pub tips: tips::TipState,
+    /// The filters and orders table tabs ran, per table ([`filter_history`]).
+    filter_history: filter_history::FilterHistoryState,
     /// What's new does not show by itself at launch, nor is anything written for it (the tests
     /// of other screens set it; `:whatsnew` still works).
     pub whats_new_paused: bool,
@@ -889,6 +894,7 @@ impl App {
             unknown_tabs: Vec::new(),
             pointer_on: None,
             tips: tips::TipState::default(),
+            filter_history: Default::default(),
             whats_new_paused: false,
             updates: updates::Updates::default(),
             pending_context: None,

@@ -19,7 +19,7 @@ use datarig_core::config::{
     Tips, YankFlash,
 };
 use datarig_core::config::{
-    ChangesView, CompletionDelay, MonitorInterval, PasteNull, UiBackground, UpdateCheck, WhatsNewSetting,
+    ChangesView, CompletionDelay, FilterHistory, MonitorInterval, PasteNull, UiBackground, UpdateCheck, WhatsNewSetting,
 };
 use datarig_core::secret::{DefaultSource, SourceKind};
 use datarig_i18n::Label;
@@ -564,6 +564,7 @@ pub enum Setting {
     ChangesView(ChangesView),
     Background(UiBackground),
     PasteNull(PasteNull),
+    FilterHistory(FilterHistory),
     CompletionDelay(CompletionDelay),
     WhatsNew(WhatsNewSetting),
     UpdateCheck(UpdateCheck),
@@ -839,6 +840,16 @@ pub const SETTINGS: &[SettingSpec] = &[
         values: Values::Fixed(&[
             ("on", Setting::YankFlash(YankFlash::On), Label::SettingYankFlashOn),
             ("off", Setting::YankFlash(YankFlash::Off), Label::SettingYankFlashOff),
+        ]),
+    },
+    SettingSpec {
+        key: "history.filters",
+        label: Label::SettingFilterHistory,
+        about: Label::SettingFilterHistoryAbout,
+        group: SettingGroup::Results,
+        values: Values::Fixed(&[
+            ("on", Setting::FilterHistory(FilterHistory::On), Label::SettingFilterHistoryOn),
+            ("off", Setting::FilterHistory(FilterHistory::Off), Label::SettingFilterHistoryOff),
         ]),
     },
     SettingSpec {

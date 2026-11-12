@@ -38,6 +38,7 @@ mod flows_export_path;
 mod flows_export_xlsx;
 mod flows_external;
 mod flows_filter_feedback;
+mod flows_filter_history;
 mod flows_filter_line;
 mod flows_folder_pick;
 mod flows_form_discard;

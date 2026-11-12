@@ -93,6 +93,7 @@ impl App {
             Setting::ChangesView(v) => *v == self.prefs.changes_view,
             Setting::Background(b) => *b == self.prefs.background,
             Setting::PasteNull(n) => *n == self.prefs.paste_null,
+            Setting::FilterHistory(h) => *h == self.prefs.filter_history,
             Setting::WhatsNew(w) => *w == self.prefs.whats_new,
             Setting::UpdateCheck(c) => *c == self.prefs.update_check,
             Setting::MonitorInterval(i) => *i == self.prefs.monitor_interval,

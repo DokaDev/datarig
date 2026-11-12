@@ -272,12 +272,14 @@ impl TableQuery {
         }
     }
 
-    /// The first page of run `qid` landed: the rows are of its query, when it was one.
-    pub(super) fn first_page(&mut self, qid: u64) {
+    /// The first page of run `qid` landed: the rows are of its query, when it was one. Returns
+    /// that query (`None`: the run was not the query's, or an earlier run's).
+    pub(super) fn first_page(&mut self, qid: u64) -> Option<Query> {
         self.shown = self.requested.as_ref().filter(|(id, _)| *id == qid).map(|(_, q)| q.clone());
         self.shown_run = self.statement.as_ref().filter(|(id, _)| *id == qid).map(|(_, s)| s.clone());
         self.failed = None;
         self.landed = Some(qid);
+        self.shown.clone()
     }
 
     /// The statement the rows held were read with, when they are of the tab's query.

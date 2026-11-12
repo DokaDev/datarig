@@ -93,6 +93,21 @@ pub(crate) fn draw_picker(app: &mut App, area: Rect, buf: &mut Buffer) -> Option
     let footer = i18n.label(Label::PickerKeys);
     let (placeholder, none) = (i18n.label(Label::MenuFilterHint), i18n.label(Label::ChooserNone));
     let p = app.overlays.picker_mut()?;
+    // A table's earlier filters: the selected one's texts in full under the list.
+    if let crate::app::picker::Picker::FilterHistory { items, list, .. } = p {
+        let of =
+            |i: &usize, w: usize| items.get(*i).map(|e| crate::app::filter_history::preview(e, w)).unwrap_or_default();
+        let lines = crate::app::filter_history::PREVIEW_LINES;
+        return Some(list.draw_with_preview(
+            area,
+            buf,
+            (&title, &footer),
+            (&placeholder, &none),
+            top,
+            now,
+            Some((lines, &of)),
+        ));
+    }
     Some(p.draw(area, buf, (&title, &footer), (&placeholder, &none), top, now))
 }
 

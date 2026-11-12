@@ -190,6 +190,7 @@ impl App {
             AppEvent::GridSummary(a) => self.on_grid_summary(a),
             AppEvent::Clipboard(a) => self.on_clipboard_answer(a),
             AppEvent::UpdateChecked(a) => self.update_answered(a),
+            AppEvent::FilterHistory(s) => self.on_filter_history_saved(s),
         }
         // What an open quick connect list waits for may have arrived.
         if self.overlays.quick().is_some() {

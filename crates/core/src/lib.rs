@@ -11,6 +11,8 @@
 //! * [`paths`] — the data and state directories; [`fsutil`] — atomic file writes.
 //! * [`scripts`] — saved queries and their index; [`workspace`] — tab restore and the instance
 //!   lock.
+//! * [`filter_history`]: the filters and orders each table ran (`filter-history.toml`), to
+//!   pick one again.
 //! * [`usage`] — how often actions ran by key, menu and command line (`usage.toml`), for tips.
 //! * [`shown`] — the notices shown once (`shown.toml`), as opaque ids.
 //! * [`update`]: the update check's facts (`update.toml`) and decisions, and the release notes
@@ -36,6 +38,7 @@ pub mod driver;
 pub mod edit;
 pub mod export;
 pub mod fault;
+pub mod filter_history;
 pub mod fsutil;
 pub mod migrate;
 pub mod monitor;

@@ -157,3 +157,40 @@ fn a_config_file_with_errors_is_said_and_nothing_is_saved() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "clipboard = \"pbcopy\"\n", "the file is left alone");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
+
+/// A short screen scrolls the list (the selected row always shows), says how many lines are out
+/// of view above and below, and keeps the first lines of the selected setting's description
+/// under it, from the first setting to the last.
+#[test]
+fn a_short_screen_scrolls_the_list_and_keeps_the_description() {
+    let (cfg, _) = config::load(Some(temp_config("short", "")));
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.key(KeyCode::Esc); // Normal mode
+    h.keys(" ,");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Settings));
+    let screen = h.screen(80, 24);
+    assert!(screen.contains("Nerd Font icons") && screen.contains("Preview: "), "{screen}");
+    // The rows out of view are said: below only, at the top.
+    assert!(screen.contains("more lines") && screen.contains("↓ ") && !screen.contains("↑ "), "{screen}");
+    // From the first row up: the last one.
+    h.keys("k");
+    let screen = h.screen(80, 24);
+    assert!(screen.contains("↑ ") && !screen.contains("↓ "), "above only, at the bottom:\n{screen}");
+    assert_screen!("settings_scrolled_last_en_80x24", Lang::En, h.draw(80, 24));
+    assert_screen!("settings_scrolled_last_en_160x45", Lang::En, h.draw(160, 45));
+    let lines: Vec<&str> = screen.lines().collect();
+    let row = lines.iter().position(|l| l.contains("macOS keychain access") && l.contains('‹')).expect(&screen);
+    let under: Vec<&str> = lines[row + 1..].iter().take_while(|l| !l.contains('╰')).copied().collect();
+    let text = |l: &&str| l.chars().any(|c| c.is_alphanumeric());
+    assert!(under.iter().any(text), "a description under the last row:\n{screen}");
+    assert!(selected_is_at(&mut h, "macOS keychain access", 80, 24), "{screen}");
+}
+
+fn selected_is_at(h: &mut Harness, name: &str, w: u16, ht: u16) -> bool {
+    let t = h.draw(w, ht);
+    let buf = t.backend().buffer();
+    (0..ht).any(|y| {
+        let line = row_text(buf, y);
+        line.contains(name) && (0..w).any(|x| buf[(x, y)].bg == datarig_tui::theme::DARK.selection.bg.unwrap())
+    })
+}

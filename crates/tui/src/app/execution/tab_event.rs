@@ -249,6 +249,8 @@ impl App {
         // The portal of this result to close after the event (a resumed statement's rows that
         // are not added, or stopped at the spill limit).
         let mut close_portal: Option<u64> = None;
+        // The query of a table tab whose first page landed: kept in the filter history.
+        let mut landed: Option<datarig_core::query::Query> = None;
         let page_size = self.page_size;
         let origin = self.tabs.get(id).and_then(Self::origin_now);
         let wall = self.wall_now();
@@ -886,7 +888,7 @@ impl App {
                 t.exec.shown = t.exec.run.len().checked_sub(1);
                 // A table tab's rows are of the query its run sent, if it sent one.
                 if let Some(tq) = t.doc.table_query.as_mut() {
-                    tq.first_page(query);
+                    landed = tq.first_page(query);
                 }
                 // The Chart tab shown before stays: it draws these rows.
                 let charted = t.exec.view == crate::app::tabs::ResultView::Chart;
@@ -1108,6 +1110,10 @@ impl App {
         };
         if let Some(m) = notice {
             self.tab_status(id, m);
+        }
+        // The server answered the tab's query with its rows: it ran.
+        if let Some(q) = landed {
+            self.filter_history_record(id, &q);
         }
         match idle_end {
             // Said where the user looks, from another tab too.

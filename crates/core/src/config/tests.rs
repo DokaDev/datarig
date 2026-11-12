@@ -660,6 +660,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             changes_view: ChangesView::List,
             background: UiBackground::Theme,
             paste_null: PasteNull::BackslashN,
+            filter_history: FilterHistory::On,
             update_check: UpdateCheck::On,
             whats_new: WhatsNewSetting::On,
             monitor_interval: MonitorInterval::S2,
@@ -994,6 +995,53 @@ fn the_yank_flash_is_on_by_default_and_can_be_turned_off() {
     assert_eq!(load(Some(path.clone())).0.prefs, prefs);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("yank_flash"), "on is the default: the key goes");
+}
+
+#[test]
+fn the_filter_history_is_on_by_default_and_can_be_turned_off() {
+    assert_eq!(parse("").unwrap().prefs.filter_history, FilterHistory::On);
+    assert_eq!(parse("[history]\nfilters = \"off\"\n").unwrap().prefs.filter_history, FilterHistory::Off);
+    assert_eq!(parse("[history]\nfilters = \"on\"\n").unwrap().prefs.filter_history, FilterHistory::On);
+    assert_eq!(parse("[history]\nfilters = false\n").unwrap().prefs.filter_history, FilterHistory::Off);
+    assert_eq!(parse("[history]\nfilters = true\n").unwrap().prefs.filter_history, FilterHistory::On);
+    assert_eq!(
+        parse("[history]\nfilters = \"later\"\n").unwrap_err(),
+        ConfigError::Value {
+            key: "history.filters".into(),
+            value: "later".into(),
+            profile: None,
+            allowed: Some("on, off")
+        }
+    );
+    assert!(matches!(parse("[history]\nqueries = true\n"), Err(ConfigError::Syntax(_))), "only its own keys");
+    let path = temp_file("filter_history");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "").unwrap();
+    let prefs = Prefs { filter_history: FilterHistory::Off, ..Prefs::default() };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[history]\nfilters = \"off\"\n"), "{text}");
+    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("filters"), "on is the default: the key goes");
+}
+
+#[test]
+fn a_filter_history_written_as_a_boolean_goes_back_on_when_saved() {
+    let path = temp_file("filter_history_bool");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    for text in ["history = { filters = false }\n", "[history]\nfilters = false\n"] {
+        std::fs::write(&path, text).unwrap();
+        assert_eq!(load(Some(path.clone())).0.prefs.filter_history, FilterHistory::Off, "{text}");
+        save(&path, settings("en"), None).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains("false"), "{text} saved as {saved}");
+        assert_eq!(load(Some(path.clone())).0.prefs.filter_history, FilterHistory::On, "{text} saved as {saved}");
+        let prefs = Prefs { filter_history: FilterHistory::Off, ..Prefs::default() };
+        save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(load(Some(path.clone())).0.prefs.filter_history, FilterHistory::Off, "{text} saved as {saved}");
+    }
 }
 
 #[test]

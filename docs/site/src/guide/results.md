@@ -185,6 +185,31 @@ without `SESSION` applies to the next transaction only and the server does not r
 datarig treats the level as not known until that transaction ends; after a `CALL`, an `EXECUTE`
 or an executable comment it stays not known until the session's level is set again.
 
+### Filter history
+
+A condition and order that ran are kept per table (its connection, database, schema and name)
+once the server answered them with rows: a run that was refused, failed or was cancelled is not
+kept. `Ctrl+R` in the filter line (or `Space r H` from the grid) lists the table's earlier ones,
+the most recent first, with both texts in full under the list; typing narrows the list. A
+picked entry fills the condition and the order (the `LIMIT` field stays as it is: the history
+does not keep limits) and runs only when you press `Enter`, with the same checks as a condition
+you type. A condition or order holding a line break (from a workspace file edited by hand, say)
+is not kept, and one in the file is not filled in, since the one-line field cannot hold it as it
+is. Each table keeps its last 50 entries and the last 200 tables used are kept; a
+condition or order longer than 4 KiB is not kept.
+
+The history stays on this machine: it is the file `filter-history.toml` in the state directory,
+readable by you only (mode 0600 on Unix), and never part of the workspace file. A condition can
+hold personal data, such as an email address: `:set history.filters=off` (or
+`[history] filters = "off"` in the config file) stops keeping new ones, `:filter history clear`
+forgets this table's (asked first: `Enter` cancels, `y` clears) and `:filter history clear all`
+every table's; turning the setting off does not delete the file. When the file cannot be read
+(a condition or order in it longer than 4 KiB counts as that too), or something else than a
+plain file is at its path (datarig never follows a symbolic link there), the history is off for
+the session and says so once; datarig never writes over it, and a clear is refused naming the
+file, for you to fix or delete. A second datarig running at the same time
+reads the history but does not write it.
+
 ## The inspector
 
 `i` shows or hides the inspector next to the grid; `I` switches between its Row and Cell tabs.

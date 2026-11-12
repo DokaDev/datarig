@@ -91,6 +91,12 @@ impl Paths {
         self.state.as_ref().map(|s| s.join(crate::usage::FILE))
     }
 
+    /// `<state>/filter-history.toml`: the filters and orders each table ran
+    /// ([`crate::filter_history`]).
+    pub fn filter_history_file(&self) -> Option<PathBuf> {
+        self.state.as_ref().map(|s| s.join(crate::filter_history::FILE))
+    }
+
     /// `<state>/update.toml`: the update check's last answer and the newest version that ran here
     /// ([`crate::update`]).
     pub fn update_file(&self) -> Option<PathBuf> {

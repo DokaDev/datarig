@@ -195,6 +195,21 @@ pub fn clip_middle(s: &str, w: usize) -> String {
     }
 }
 
+/// The ` · ` parts of `s` that fit `w` columns: the first always (clipped when even it does not
+/// fit), then each next one while it fits whole, so no part is ever cut in its middle.
+pub fn whole_parts(s: &str, w: usize) -> String {
+    let mut parts = s.split(" · ");
+    let mut out = parts.next().unwrap_or_default().to_string();
+    for part in parts {
+        if width(&out) + 3 + width(part) > w {
+            break;
+        }
+        out.push_str(" · ");
+        out.push_str(part);
+    }
+    clip(&out, w)
+}
+
 /// Word-agnostic hard wrap used by the cell viewer: keeps explicit newlines, expands tabs
 /// to 4 spaces, and breaks lines at grapheme boundaries when they exceed `w` columns.
 pub fn wrap(s: &str, w: usize) -> Vec<String> {

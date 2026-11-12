@@ -253,3 +253,106 @@ fn the_target_is_whole_until_the_rename() {
     assert!(tmp.exists());
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// What is already at a name the new file could take is left alone and another name used: a
+/// link is not followed, a second name of the file is not truncated, a file keeps its bytes
+/// and its mode. With every name taken nothing is written.
+#[cfg(unix)]
+#[test]
+fn a_private_replacement_leaves_what_is_at_its_new_names_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_dir("replace-private");
+    let path = dir.join("h.toml");
+    fs::write(&path, "old").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    let victim = dir.join("victim");
+    fs::write(&victim, "victim").unwrap();
+    std::os::unix::fs::symlink(&victim, dir.join(".h.toml.tmp-a")).unwrap();
+    fs::hard_link(&path, dir.join(".h.toml.tmp-b")).unwrap();
+    fs::write(dir.join(".h.toml.tmp-c"), "c").unwrap();
+    fs::set_permissions(dir.join(".h.toml.tmp-c"), fs::Permissions::from_mode(0o644)).unwrap();
+    let mut names = ["a", "b", "c", "d"].into_iter().map(String::from);
+    replace_private_named(&path, b"new", &mut names).unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+    assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(fs::read_to_string(&victim).unwrap(), "victim", "the link is not followed");
+    assert_eq!(fs::read_to_string(dir.join(".h.toml.tmp-b")).unwrap(), "old", "the old file is not truncated");
+    assert_eq!(fs::read_to_string(dir.join(".h.toml.tmp-c")).unwrap(), "c");
+    assert_eq!(fs::metadata(dir.join(".h.toml.tmp-c")).unwrap().permissions().mode() & 0o777, 0o644);
+    assert!(fs::symlink_metadata(dir.join(".h.toml.tmp-d")).is_err(), "renamed into place");
+    let mut taken = ["a", "b", "c"].into_iter().map(String::from);
+    let e = replace_private_named(&path, b"newer", &mut taken).unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read_to_string(&path).unwrap(), "new", "untouched");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The new file is 0600 from the moment it exists (not made so after its bytes are in).
+#[cfg(unix)]
+#[test]
+fn a_private_new_file_is_0600_when_created() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_dir("create-private");
+    let path = dir.join("new");
+    let f = create_private(&path).unwrap();
+    assert_eq!(f.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(fs::metadata(&path).unwrap().len(), 0, "nothing written yet");
+    drop(f);
+    assert_eq!(create_private(&path).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A link at the path, one to nothing too, is refused and left as it is.
+#[cfg(unix)]
+#[test]
+fn a_private_replacement_refuses_a_link_at_the_path() {
+    let dir = temp_dir("replace-link");
+    let real = dir.join("real");
+    fs::write(&real, "real").unwrap();
+    std::os::unix::fs::symlink(&real, dir.join("to-real")).unwrap();
+    std::os::unix::fs::symlink(dir.join("none"), dir.join("to-none")).unwrap();
+    for link in ["to-real", "to-none"] {
+        let e = replace_private(&dir.join(link), b"x").unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidInput, "{link}");
+        assert!(fs::symlink_metadata(dir.join(link)).unwrap().file_type().is_symlink());
+    }
+    assert_eq!(fs::read_to_string(&real).unwrap(), "real");
+    assert!(fs::symlink_metadata(dir.join("none")).is_err());
+    assert!(leftovers(&dir).is_empty(), "{:?}", leftovers(&dir));
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// On Windows a link (any reparse point) is opened itself, never followed, and is not a plain
+/// file however plain its target is.
+#[test]
+fn a_reparse_point_is_opened_itself_and_never_a_plain_file() {
+    assert_eq!(no_follow_flags_windows(), 0x0020_0000, "FILE_FLAG_OPEN_REPARSE_POINT");
+    assert!(plain_file_attributes(true, 0x0020), "an archived file");
+    assert!(plain_file_attributes(true, 0x0080), "a normal file");
+    assert!(!plain_file_attributes(true, 0x0400 | 0x0020), "a reparse point");
+    assert!(!plain_file_attributes(false, 0x0010), "a folder");
+}
+
+/// A link put at the path after it was looked at is never read through: opening it fails
+/// (Unix) or gives the link itself, which is not a plain file (Windows).
+#[test]
+fn opening_a_link_never_gives_what_it_points_to() {
+    let dir = temp_dir("open-link");
+    let real = dir.join("real");
+    fs::write(&real, "real").unwrap();
+    let link = dir.join("link");
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(&real, &link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(&real, &link);
+    // Windows without the right to make links: nothing to check.
+    if made.is_ok() {
+        assert!(is_plain_file(&fs::metadata(&link).unwrap()), "the target is a plain file");
+        assert!(!is_plain_file(&fs::symlink_metadata(&link).unwrap()));
+        if let Ok(f) = open_no_follow(&link) {
+            assert!(!is_plain_file(&f.metadata().unwrap()), "the link itself was opened");
+        }
+    }
+    assert!(is_plain_file(&open_no_follow(&real).unwrap().metadata().unwrap()));
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -195,3 +195,18 @@ fn an_escaped_text_is_cut_before_an_escape_never_in_it() {
     assert_eq!(clip_escaped(r"ab\c", 4), r"ab\c");
     assert_eq!(clip_escaped("short", 9), "short");
 }
+
+#[test]
+fn whole_parts_never_cut_a_part() {
+    let hint = "WHERE  f filter · s sort · Ctrl+R history";
+    assert_eq!(whole_parts(hint, 60), hint);
+    assert_eq!(whole_parts(hint, width(hint)), hint);
+    assert_eq!(whole_parts(hint, width(hint) - 1), "WHERE  f filter · s sort");
+    assert_eq!(whole_parts(hint, 24), "WHERE  f filter · s sort");
+    assert_eq!(whole_parts(hint, 23), "WHERE  f filter");
+    assert_eq!(whole_parts(hint, 15), "WHERE  f filter");
+    assert_eq!(whole_parts(hint, 10), "WHERE  f …");
+    // Wide (two-column) letters: "WHERE  f <wide> · s <wide> · Ctrl+R <wide>".
+    let ko = "WHERE  f \u{d544}\u{d130} \u{b7} s \u{c815}\u{b82c} \u{b7} Ctrl+R \u{ae30}\u{b85d}";
+    assert_eq!(whole_parts(ko, width(ko) - 1), "WHERE  f \u{d544}\u{d130} \u{b7} s \u{c815}\u{b82c}");
+}

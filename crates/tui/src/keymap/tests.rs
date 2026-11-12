@@ -542,7 +542,10 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     let results: Vec<String> = shown(Ctx::VimNormal, "space r").into_iter().map(|(k, _)| k).collect();
     assert_eq!(
         results,
-        ["#", "+", "-", "F", "I", "S", "[", "]", "a", "c", "e", "f", "h", "i", "n", "o", "p", "s", "v", "x", "y", "z"]
+        [
+            "#", "+", "-", "F", "H", "I", "S", "[", "]", "a", "c", "e", "f", "h", "i", "n", "o", "p", "s", "v", "x",
+            "y", "z"
+        ]
     );
     assert_eq!(km.group_label(Ctx::Explorer, &k("space r y")), Some(Label::GroupCopySelection));
     let formats: String = shown(Ctx::Grid, "space r a").into_iter().map(|(k, _)| k).collect();

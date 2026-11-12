@@ -521,3 +521,24 @@ fn a_run_waiting_for_its_keys_on_a_lost_metadata_session_runs_once() {
     h.meta_db("local-pg", DbEvent::TableKeys { id: request, result: Ok(pk()) });
     assert!(runs(&mut h).is_empty(), "the late answer runs nothing");
 }
+
+/// A restored condition of more than one line (edited into the file by hand: the line cannot
+/// hold it as it is) runs as it is, but the filter history never keeps it.
+#[test]
+fn a_restored_filter_of_more_lines_is_not_kept_in_the_history() {
+    let state = State::new("lines");
+    let cfg = test_db_config();
+    state.write_table_tab(&cfg, "filter = \"id = 1 OR\\nid = 2\"");
+    let mut h = launch(&cfg, &state, Lang::En);
+    assert_eq!(applied(&h).0.as_deref(), Some("id = 1 OR\nid = 2"));
+    connect(&mut h);
+    h.key(KeyCode::Tab);
+    h.ctrl('e');
+    assert_eq!(runs(&mut h).len(), 1, "{}", status(&h));
+    answer(&mut h);
+    h.app.flush_filter_history();
+    let file = state.0.join(datarig_core::filter_history::FILE);
+    let kept = datarig_core::filter_history::load(&file).expect("the file reads").table_count();
+    assert_eq!(kept, 0, "not kept");
+    quit(h);
+}

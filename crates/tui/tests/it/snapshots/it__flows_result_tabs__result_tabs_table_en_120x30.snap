@@ -6,7 +6,7 @@ expression: backend
 "│  ＋ New connection         │╭ Results · 8 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1             ││ local-pg / datarig.shop.users  127.0.0.1:55432     ││ id: 1                            │"
 "│  ▾ ●   local-pg            ││ [Result 1]  Chart  Messages                    H/L ││ name: 陳大文                     │" Hidden by multi-width symbols: [(93, " "), (95, " "), (97, " ")]
-"│    ▾ datarig default       ││ WHERE  f filter · s sort                         ⟳ ││ nickname: 大文🐘                 │" Hidden by multi-width symbols: [(97, " "), (99, " "), (101, " ")]
+"│    ▾ datarig default       ││ WHERE  f filter · s sort · Ctrl+R history        ⟳ ││ nickname: 大文🐘                 │" Hidden by multi-width symbols: [(97, " "), (99, " "), (101, " ")]
 "│      ▸ analytics           ││   │ id ^v│ name                 │ nickname    │ add││ address: 臺北市信義區信義路五段7…│" Hidden by multi-width symbols: [(96, " "), (98, " "), (100, " "), (102, " "), (104, " "), (106, " "), (108, " "), (110, " "), (112, " "), (114, " "), (116, " ")]
 "│      ▸ public              ││   │ int8 │ text                 │ text        │ tex││ profile: {"lang": "ko", "tags": …│"
 "│      ▾ shop                ││ 1 │    1 │ 陳大文               │ 大文🐘      │ 臺 ││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " "), (69, " "), (71, " "), (81, " ")]

@@ -73,6 +73,14 @@ Editing a result's rows.
 |---|---|---|---|
 | `paste_null` | `"\\N"` | `"\\N"`, `"NULL"`, `"none"` | The text an unquoted field of a range pasted into a result reads as NULL. An empty field is an empty value, never NULL. Also `:set edit.paste_null`. |
 
+## `[history]`
+
+What datarig keeps on this machine between runs.
+
+| Key | Default | Values | Description |
+|---|---|---|---|
+| `filters` | `"on"` | `"on"`, `"off"` (`true` and `false` read as `"on"` and `"off"`) | Whether a table tab keeps the filters and orders that ran, per table, in a file of the state directory that only you can read, so Ctrl+R in the filter line can pick one again. Off keeps nothing new; what the file holds stays until :filter history clear removes it. Also `:set history.filters`. |
+
 ## `[updates]`
 
 The update check and What's new.

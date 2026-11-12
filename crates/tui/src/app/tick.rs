@@ -25,6 +25,7 @@ impl App {
             || self.idle_due(self.now()).is_some()
             || self.changes_count_due().is_some()
             || self.monitor_due().is_some()
+            || self.filter_history_due().is_some()
     }
 
     /// Aux session `a` is open and no tab works in its database: it closes
@@ -105,6 +106,10 @@ impl App {
         if let Some(due) = self.monitor_due() {
             at(due);
         }
+        // The filter history's write after its debounce.
+        if let Some(due) = self.filter_history_due() {
+            at(due);
+        }
         // Never sooner than a fine tick, never in the past.
         next.map(|n| n.max(now + Duration::from_millis(1)))
     }
@@ -121,6 +126,7 @@ impl App {
         // A timer may move what the status bar asks about (an idle transaction rolled back).
         self.sweep_status_ask();
         self.autosave_tick(now);
+        self.filter_history_tick(now);
         // Aux sessions no tab works in, unused for a while, close; what they read stays.
         let idle: Vec<u64> = self
             .conns

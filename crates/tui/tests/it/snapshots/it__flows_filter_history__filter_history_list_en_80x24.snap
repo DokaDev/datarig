@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_filter_history.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users * ×                        "
+"│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig.shop.users││ id: 0                │"
+"│  ▾ ●   local-pg      ││ [Result 1]  Chart  Messages  ││ name: n0             │"
+"│   ╭ Earlier filters of this table ───────────────────────────────────────╮   │"
+"│   │ › type to filter                                                     │   │"
+"│   │                                                                      │   │"
+"│   │ id > 1                            ORDER BY name DESC, id ASC · just… │   │"
+"│   │ status = 'done' AND amount > 15…  ORDER BY name DESC, id ASC · just… │   │"
+"│   │ status = 'done' AND amount > 15…  just now                           │   │"
+"│   │──────────────────────────────────────────────────────────────────────│   │"
+"│   │ WHERE status = 'done' AND amount > 1500 AND note LIKE '%a very long  │   │"
+"│   │ note that wraps%'                                                    │   │"
+"│   │ ORDER BY name DESC, id ASC                                           │   │"
+"│   │                                                                      │   │"
+"│   │                                                                      │   │"
+"│   │                                                                      │   │"
+"│   ╰──────────────────────────────── Enter pick · ↑↓ select · Esc cancel ─╯   │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" local-pg │ 3 rows · 2ms                                                     EN "
