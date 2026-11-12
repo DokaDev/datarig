@@ -148,7 +148,7 @@ impl App {
         let title = crate::text::escape_controls(&column);
         let target = MenuTarget::Filter { grid: Box::new(grid), result };
         self.push_filter_menu(target, title, (items, off, names, Vec::new(), filters), at);
-        // Seven entries need no filter: keys move and run them.
+        // Its few entries need no typed filter: keys move and run them.
         if let Some(m) = self.overlays.menu_mut()
             && matches!(m.target, MenuTarget::Filter { .. })
         {

@@ -38,7 +38,8 @@ pub enum TableAction {
     ColumnMenu,
     /// Only the value of the cursor's cell or of the cells selected in one column (`=`).
     Only,
-    /// Everything but that value, rows whose value is NULL kept (`!`).
+    /// Everything but those values (`!`): rows whose value is NULL kept unless NULL is among the
+    /// cells.
     Exclude,
     /// No condition and no order, the limit kept, and a run (`X`).
     ClearAll,

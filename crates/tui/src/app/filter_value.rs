@@ -42,8 +42,9 @@ const VALUES_W: usize = 32;
 pub enum Pick {
     /// Only the rows with the value (`=`): the column's own conditions replaced.
     Only,
-    /// Every row but those with the value (`!`), rows whose value is NULL kept: added to the
-    /// other conditions.
+    /// Every row but those with the value or values (`!`), added to the other conditions: rows
+    /// whose value is NULL are kept unless NULL is among the cells (a NULL cell alone is `IS
+    /// NOT NULL`).
     Exclude,
 }
 
