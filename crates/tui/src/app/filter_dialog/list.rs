@@ -144,6 +144,15 @@ fn ticked(r: &Row) -> Vec<Value> {
     }
 }
 
+/// Whether value `v` of a condition on column `c` is the one `typed` (the text the list is
+/// narrowed by, [`fragment`]) gives: written as the field shows it (the blanks around it aside),
+/// or the same value as that text read for the column (`0xab` is the bytes shown `0xAB`, `' a'`
+/// the text with its blank).
+fn typed_is(v: &Value, typed: &str, c: &ColumnInfo, d: Dialect) -> bool {
+    let shown = draft::value_text(v, d);
+    shown == typed || shown.trim() == typed || draft::parse_texts(Op::Eq, &[typed], c).first() == Some(v)
+}
+
 /// The text typed for a condition of operator `op` that the list narrows by: the value typed
 /// for `=` (what is between its quotes when written in them), the value being typed (after the
 /// last comma) of `in list`; nothing for the others.
@@ -387,7 +396,8 @@ impl App {
         };
         let shown = item.value.clone();
         let Some(d) = self.filter_dialog() else { return };
-        let Some(col) = d.column().map(|c| c.name.clone()) else { return };
+        let Some(c) = d.column().cloned() else { return };
+        let col = c.name.clone();
         let at = tick_row(d, &col);
         let narrow = d.narrow.clone();
         let dialect = d.dialect;
@@ -400,7 +410,7 @@ impl App {
             let mut values = ticked(&row);
             // What was typed to find the value is replaced by it.
             if let Some((_, typed)) = narrow.as_ref().filter(|(n, _)| *n == t)
-                && values.last().is_some_and(|v| draft::value_text(v, dialect).trim() == typed.as_str())
+                && values.last().is_some_and(|v| typed_is(v, typed, &c, dialect))
             {
                 values.pop();
             }

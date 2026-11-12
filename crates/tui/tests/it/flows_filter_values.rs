@@ -234,6 +234,60 @@ fn typing_narrows_the_list_and_a_tick_takes_the_place_of_what_was_typed() {
     assert!(h.screen(120, 34).contains("cancelled"), "the list in full again");
 }
 
+/// A value typed in quotes with a blank around it narrows the list; the value ticked takes its
+/// place, as one typed bare does.
+#[test]
+fn a_tick_takes_the_place_of_a_value_typed_in_quotes() {
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    let rows = ["x a", "x a", "y"]
+        .iter()
+        .enumerate()
+        .map(|(i, s)| vec![Some(i.to_string()), Some(s.to_string()), Some("1".into())])
+        .collect();
+    answer(&mut h, rows);
+    h.sent();
+    h.key(KeyCode::Tab);
+    dialog_on(&mut h, 1);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Char(' '));
+    h.type_text("' a'");
+    assert_eq!(draft(&h), "status = ' a'");
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), "status = 'x a'");
+}
+
+/// MySQL bytes typed `0xab` are the value the list shows `0xAB`: ticking it keeps one `=`,
+/// never a list of the same value twice nor no condition.
+#[test]
+fn a_tick_of_the_bytes_typed_in_another_case_keeps_one_value() {
+    let mut h = mysql();
+    // Run again for a page of bytes.
+    h.command("filter clear");
+    assert_eq!(runs(&mut h).len(), 1);
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    let columns = vec![col("id", "int", ValueKind::Integer), col("b", "varbinary", ValueKind::Bytes)];
+    let rows = ["0xAB", "0xAB", "0xCD"]
+        .iter()
+        .enumerate()
+        .map(|(i, b)| vec![Some(i.to_string()), Some(b.to_string())])
+        .collect();
+    h.tab_db(index, DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::from_millis(2) });
+    dialog_on(&mut h, 1);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Char(' '));
+    h.type_text("0xab");
+    let typed = draft(&h);
+    assert!(typed.starts_with("b = ") && typed.to_lowercase().contains("ab"), "{typed}");
+    h.key(KeyCode::Down);
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("0xAB") && !screen.contains("0xCD"), "{screen}");
+    h.key(KeyCode::Char(' '));
+    assert_eq!(draft(&h), typed, "the same value, once");
+}
+
 #[test]
 fn count_exactly_sends_the_columns_count_under_the_other_conditions_only() {
     let mut h = users();
