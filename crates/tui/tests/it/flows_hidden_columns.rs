@@ -357,9 +357,9 @@ fn a_search_answer_of_other_columns_is_dropped() {
 }
 
 /// `shop.users` open as a table tab from a connected app, its rows those of the table (`id`,
-/// its primary key, `email`, `nickname`), the key-only read answered and the result resolved
-/// for edits (new rows can be added); the grid focused, nothing sent or said since.
-fn editable() -> Harness {
+/// its primary key, then `email`, and `name` too when `name`, then `nickname`), the key-only read
+/// answered; the grid focused, nothing sent since. Its edits are not resolved yet.
+fn table_rows(name: bool) -> Harness {
     let mut h = Harness::connected(Lang::En);
     h.db(DbEvent::Keys(Ok(shop_keys())));
     h.key(KeyCode::BackTab);
@@ -370,28 +370,45 @@ fn editable() -> Harness {
     h.key(KeyCode::Enter);
     assert!(h.app.tab().is_table());
     keys_came_with(&mut h, "local-pg", OrderKeys { primary_key: vec!["id".into()], ..Default::default() });
-    let columns = vec![
-        meta_from("id", "int8", true, USERS, 1),
-        meta_from("email", "text", false, USERS, 2),
-        meta_from("nickname", "text", false, USERS, 4),
-    ];
     let s = |v: &str| Some(v.to_string());
-    let rows = vec![vec![s("1"), s("a@x"), s("ann")], vec![s("2"), s("b@x"), None], vec![s("3"), s("c@x"), s("cy")]];
+    let mut columns = vec![meta_from("id", "int8", true, USERS, 1), meta_from("email", "text", false, USERS, 2)];
+    let mut rows = vec![vec![s("1"), s("a@x")], vec![s("2"), s("b@x")], vec![s("3"), s("c@x")]];
+    if name {
+        columns.push(meta_from("name", "text", false, USERS, 3));
+        for (r, v) in rows.iter_mut().zip(["Ann", "Bob", "Cy"]) {
+            r.push(s(v));
+        }
+    }
+    columns.push(meta_from("nickname", "text", false, USERS, 4));
+    for (r, v) in rows.iter_mut().zip([s("ann"), None, s("cy")]) {
+        r.push(v);
+    }
     let id = h.app.tab().exec.query_id;
     let index = h.app.tabs.active_index();
     h.tab_db(index, DbEvent::Page { id, columns: Some(columns), rows, more: false, elapsed: Duration::ZERO });
     h.sent();
     h.key(KeyCode::Tab);
     assert_eq!(h.app.key_context(), Ctx::Grid);
+    h
+}
+
+/// The structure of `shop.users` answered (`name`, NOT NULL, has a default: new rows can be
+/// added).
+fn structure_came(h: &mut Harness) {
+    let name = h.app.profiles[0].name.clone();
+    let mut st = users_structure();
+    st.columns[2].default = Some("''::text".into());
+    h.meta_db(&name, DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(Box::new(st)) });
+}
+
+/// [`table_rows`] without `name`, the result resolved for edits (new rows can be added); the
+/// grid focused, nothing sent or said since.
+fn editable() -> Harness {
+    let mut h = table_rows(false);
     // `e` on the first row's email resolves the result; the editor closed again.
     at(&mut h, 0, 1);
     h.keys("e");
-    let name = h.app.profiles[0].name.clone();
-    // `name` (NOT NULL, not in the rows here) has a default: new rows can be added.
-    let mut st = users_structure();
-    st.columns[2].default = Some("''::text".into());
-    let st = Box::new(st);
-    h.meta_db(&name, DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(st) });
+    structure_came(&mut h);
     assert_eq!(h.app.key_context(), Ctx::CellEdit);
     h.key(KeyCode::Esc);
     h.app.transient = None;
@@ -527,4 +544,40 @@ fn with_every_column_hidden_no_key_reads_or_writes_a_cell() {
     assert_eq!(h.app.tab().grid.col, 2);
     h.keys(" dn");
     assert_eq!(pending(&h, 0, 2), Some(Value::Null));
+}
+
+/// A paste waiting for the table's structure (a terminal paste, `g p`, `space d v` once the
+/// clipboard was read) while the columns shown change: when the structure comes, nothing is
+/// pasted and that is said; the cells never move onto other columns.
+#[test]
+fn a_paste_waiting_for_the_table_is_dropped_when_the_columns_shown_change() {
+    for how in ["paste", "gp", "space d v"] {
+        let mut h = table_rows(true);
+        let clip = FakeClipboard::attach(&mut h, false, &[]);
+        let before = revision(&h);
+        if how == "gp" {
+            at(&mut h, 0, 1);
+            h.keys("vly");
+        }
+        at(&mut h, 1, 1);
+        match how {
+            "paste" => h.event(ratatui::crossterm::event::Event::Paste("x@x\tXx".into())),
+            "gp" => h.keys("gp"),
+            _ => {
+                clip.hold("x@x\tXx");
+                h.app.prefs.clipboard = datarig_core::config::ClipboardSetting::System;
+                h.keys(" dv");
+                h.app.pump_clipboard_reads(Duration::from_secs(2));
+            }
+        }
+        assert!(flashed(&h).contains("Loading"), "{how}: waits for the table: {}", flashed(&h));
+        // `name` hidden meanwhile (the cursor stays on `email`).
+        let n = 4;
+        h.app.tab_mut().grid.set_hidden(vec![false, false, true, false], n);
+        assert_eq!(h.app.tab().grid.col, 1);
+        structure_came(&mut h);
+        assert_eq!(revision(&h), before, "{how}: nothing pasted");
+        assert_eq!((pending(&h, 1, 1), pending(&h, 1, 3)), (None, None), "{how}");
+        assert_eq!(flashed(&h), "Paste cancelled: the columns shown changed", "{how}");
+    }
 }

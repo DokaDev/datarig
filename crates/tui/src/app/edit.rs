@@ -289,8 +289,12 @@ pub struct EditWait {
     ticket: u64,
     source: EditSource,
     format: EditFormat,
-    then: (EditAction, (usize, usize), Option<(usize, usize)>),
+    then: Press,
 }
+
+/// An edit key's press waiting for the table: its key, the cursor, the selection's anchor, and
+/// the columns the grid showed ([`crate::widgets::grid::GridState::vis_rev`]).
+type Press = (EditAction, (usize, usize), Option<(usize, usize)>, u64);
 
 /// What an edit key that sets cells acts on, every check passed: rows read `rows` (as read,
 /// `read`), or new rows' `cells` (the cursor's new row `at`, id `id`); and the column.
@@ -792,7 +796,7 @@ impl App {
         let source = self.edit_source(t, rs);
         let generation = self.conns.get(pid).map_or(0, |c| c.generation);
         let aux = self.open_aux(pid, bound.database.as_deref());
-        let (tab, then) = (t.id, (a, (t.grid.row, t.grid.col), t.grid.anchor));
+        let (tab, then) = (t.id, (a, (t.grid.row, t.grid.col), t.grid.anchor, t.grid.vis_rev));
         let Some(rs) = rows_of_mut(self.tabs.active_mut()) else { return };
         let result = rs.id;
         let st = &mut rs.edit;
@@ -1621,7 +1625,7 @@ impl App {
                 }
             }
         }
-        let Some(((a, cursor, anchor), why)) = came else { return };
+        let Some(((a, cursor, anchor, vis), why)) = came else { return };
         // The details came: the press is done or refused now, no longer loading.
         if self.transient.as_ref().is_some_and(|(n, _)| n.msg == Label::EditLoading.into()) {
             self.transient = None;
@@ -1629,6 +1633,15 @@ impl App {
         let t = self.tab();
         let still = (t.grid.row, t.grid.col) == cursor && t.grid.anchor == anchor;
         if !still || self.focus != Focus::Results || self.modal_open() {
+            return;
+        }
+        // Other columns shown: a paste waiting would land on other columns; not done.
+        if t.grid.vis_rev != vis {
+            if a == EditAction::Pasted
+                && let Some(p) = self.paste_in.take()
+            {
+                self.paste_columns_changed(p);
+            }
             return;
         }
         match why {

@@ -236,6 +236,7 @@
 "edit.paste.ask_short" = "{rows}행 붙여 넣기? y"
 "edit.paste.cancelled" = "붙여 넣기를 취소했습니다"
 "edit.paste.moved" = "붙여 넣기를 취소했습니다: 행이 바뀌었습니다"
+"edit.paste.columns_changed" = "붙여 넣기를 취소했습니다: 표시된 열이 바뀌었습니다"
 "edit.paste.ask_csv" = "CSV({columns}) 또는 {plain} 형식으로 읽을까요? c / 1 · 다른 키는 취소"
 "edit.paste.ask_csv_mid" = "CSV({columns}) 또는 {plain} 형식으로 읽을까요? c / 1"
 "edit.paste.ask_csv_short" = "CSV({columns}) 또는 {plain}? c / 1"

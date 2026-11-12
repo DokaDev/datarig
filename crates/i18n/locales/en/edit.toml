@@ -238,6 +238,7 @@
 "edit.paste.ask_short" = "Paste {rows} rows? y"
 "edit.paste.cancelled" = "Paste cancelled"
 "edit.paste.moved" = "Paste cancelled: the rows changed"
+"edit.paste.columns_changed" = "Paste cancelled: the columns shown changed"
 "edit.paste.ask_csv" = "Read as CSV ({columns}) or {plain}? c / 1 · any other key cancels"
 "edit.paste.ask_csv_mid" = "Read as CSV ({columns}) or {plain}? c / 1"
 "edit.paste.ask_csv_short" = "CSV ({columns}) or {plain}? c / 1"

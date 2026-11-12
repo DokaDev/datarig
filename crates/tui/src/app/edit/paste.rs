@@ -56,6 +56,9 @@ pub struct PasteIn {
     rows: bool,
     /// A first line naming the columns is pasted as values, not skipped (`space d V`).
     keep_header: bool,
+    /// The columns the grid showed when it was pasted ([`GridState::vis_rev`]): its cells go
+    /// to the shown ones, so with others shown it is not pasted.
+    vis: u64,
 }
 
 /// The cells `y` or `Y` last copied in a grid, which `g p` pastes: a row of values each, as
@@ -272,6 +275,7 @@ impl App {
             copy: None,
             rows: false,
             keep_header: false,
+            vis: t.grid.vis_rev,
         });
         self.edit_action(EditAction::Pasted);
     }
@@ -294,10 +298,11 @@ impl App {
             return self.flash(Notice::new(Label::EditPasteGridOnly, Level::Info));
         }
         let Some(rs) = rows_of(t) else { return };
-        let (tab, result) = (t.id, rs.id);
+        let (tab, result, vis) = (t.id, rs.id, t.grid.vis_rev);
         let copy = Some(copy);
         let text = String::new();
-        self.paste_in = Some(PasteIn { tab, result, text, format: None, again: None, copy, rows, keep_header: false });
+        let keep_header = false;
+        self.paste_in = Some(PasteIn { tab, result, text, format: None, again: None, copy, rows, keep_header, vis });
         self.edit_action(EditAction::Pasted);
     }
 
@@ -451,15 +456,25 @@ impl App {
         // A first line skipped as the columns' names: the same format again, keeping it.
         let keep_header = last.header;
         let format = Some(last.format.filter(|_| keep_header).unwrap_or_else(|| next_format(last.format)));
-        let (tab, result, text) = (last.tab, last.result, last.text.clone());
+        let (tab, result, text, vis) = (last.tab, last.result, last.text.clone(), last.at.vis);
         self.paste_in =
-            Some(PasteIn { tab, result, text, format, again: Some(last), copy: None, rows: false, keep_header });
+            Some(PasteIn { tab, result, text, format, again: Some(last), copy: None, rows: false, keep_header, vis });
         self.edit_action(EditAction::Pasted);
         // Not read now (refused before it, or waiting for the table): the paste as it was.
         if let Some(PasteIn { again: Some(again), .. }) = self.paste_in.take_if(|p| p.again.is_some()) {
             let format = again.format;
             self.paste_put_back(again, format);
         }
+    }
+
+    /// Paste `p` made while the grid showed other columns than now: not pasted (its cells
+    /// would go to other columns), said; one read again (`space d V`) put back as it was.
+    pub(super) fn paste_columns_changed(&mut self, p: PasteIn) {
+        if let Some(again) = p.again {
+            let format = again.format;
+            self.paste_put_back(again, format);
+        }
+        self.flash(Notice::new(Label::EditPasteColumnsChanged, Level::Info));
     }
 
     /// Paste `again`, whose step `space d V` undid, put back as it was (its step redone while it
@@ -525,6 +540,9 @@ impl App {
             Spot { cursor: (t.grid.row, t.grid.col), anchor: t.grid.anchor, shape: t.grid.shape, vis: t.grid.vis_rev };
         let (tab, result, revision) = (t.id, rs.id, rs.edit.batch.revision());
         let Some(p) = self.paste_in.take_if(|p| p.tab == tab && p.result == result) else { return };
+        if p.vis != at.vis {
+            return self.paste_columns_changed(p);
+        }
         let PasteIn { text, format, again, copy, rows, keep_header, .. } = p;
         if let Some(copy) = copy {
             if rows {
@@ -699,6 +717,7 @@ impl App {
             copy: None,
             rows: false,
             keep_header: false,
+            vis: a.at.vis,
         });
         self.edit_action(EditAction::Pasted);
     }
