@@ -13,7 +13,8 @@
 //!    table's `*`, no set operation, no `INTO` and no row lock anywhere, no clause but the
 //!    `WHERE`. MySQL, on the text's tokens: no `INTO`, `LOCK`, `PROCEDURE` or `FOR UPDATE`/`FOR
 //!    SHARE` anywhere, no `UNION`, `INTERSECT`, `EXCEPT`, `FOR`, `LIMIT`, `ORDER`, `GROUP`,
-//!    `HAVING` or `WINDOW` outside the text's own parentheses, and no assignment (`:=`).
+//!    `HAVING` or `WINDOW` outside the text's own parentheses, no assignment (`:=`), and no
+//!    `NEXT VALUE FOR` (MariaDB's, which advances a sequence for each row read).
 //! 3. **Classifier**: the whole statement is a plain read with no danger
 //!    ([`crate::sql::risk`]); a text it cannot read or that is too complex is refused.
 //! 4. **Function calls**: only the built-ins of [`PG_FILTER_CALLS`] or [`MYSQL_FILTER_CALLS`]
@@ -111,6 +112,8 @@ pub enum ShapeProblem {
     Into,
     /// MySQL: a variable assignment (`:=`).
     Assignment,
+    /// MariaDB: `NEXT VALUE FOR`, which advances a sequence for each row read.
+    Sequence,
 }
 
 /// PostgreSQL built-ins a filter may call without asking, by name: they read their arguments
@@ -315,8 +318,8 @@ pub const MYSQL_FILTER_CALLS: &[&str] = &[
     "YEAR",
 ];
 
-/// MySQL built-ins a filter may not call: they wait, take or test user locks, or read a file of
-/// the server. Sorted.
+/// MySQL built-ins a filter may not call: they wait, take or test user locks, read a file of the
+/// server, or advance or set a sequence (MariaDB's `NEXTVAL`, `SETVAL`). Sorted.
 pub const MYSQL_REFUSED_CALLS: &[&str] = &[
     "BENCHMARK",
     "GET_LOCK",
@@ -324,8 +327,10 @@ pub const MYSQL_REFUSED_CALLS: &[&str] = &[
     "IS_USED_LOCK",
     "LOAD_FILE",
     "MASTER_POS_WAIT",
+    "NEXTVAL",
     "RELEASE_ALL_LOCKS",
     "RELEASE_LOCK",
+    "SETVAL",
     "SLEEP",
     "SOURCE_POS_WAIT",
     "WAIT_FOR_EXECUTED_GTID_SET",
@@ -570,6 +575,7 @@ fn mysql_shape(tokens: &[Token], text: &str) -> Result<(), (ShapeProblem, Range<
                 ShapeProblem::Assignment
             }
             (_, "INTO") => ShapeProblem::Into,
+            (_, "NEXT") if next_is(&["VALUE"]) => ShapeProblem::Sequence,
             (_, "LOCK") => ShapeProblem::Locking,
             (_, "FOR") if next_is(&["UPDATE", "SHARE"]) => ShapeProblem::Locking,
             (_, "PROCEDURE") => ShapeProblem::Clause,

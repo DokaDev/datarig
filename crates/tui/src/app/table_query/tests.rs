@@ -103,6 +103,7 @@ fn every_refusal_has_its_own_words() {
         shape(ShapeProblem::Locking),
         shape(ShapeProblem::Into),
         shape(ShapeProblem::Assignment),
+        shape(ShapeProblem::Sequence),
         BarRefusal::NotRead { class: Class::Write, danger: None },
         BarRefusal::RefusedCalls(vec!["pg_sleep".into()]),
         BarRefusal::UncheckedCalls(vec!["my_fn".into()]),
@@ -113,7 +114,7 @@ fn every_refusal_has_its_own_words() {
         assert!(!w.is_empty(), "{:?}", all[i]);
         assert!(!words[..i].contains(w), "{w}");
     }
-    assert!(words[16].contains("pg_sleep") && words[17].contains("my_fn"));
+    assert!(words[17].contains("pg_sleep") && words[18].contains("my_fn"));
     assert_eq!(refusal_at(&lex(LexProblem::Comment)), Some(0..1));
     assert_eq!(refusal_at(&BarRefusal::RefusedCalls(vec![])), None);
 }

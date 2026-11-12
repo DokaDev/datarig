@@ -350,6 +350,7 @@ pub(super) fn refusal_why(i18n: &I18n, r: &BarRefusal) -> String {
             ShapeProblem::Locking => Label::TableFilterWhyLocking,
             ShapeProblem::Into => Label::TableFilterWhyInto,
             ShapeProblem::Assignment => Label::TableFilterWhyAssignment,
+            ShapeProblem::Sequence => Label::TableFilterWhySequence,
         }),
         BarRefusal::NotRead { .. } => label(Label::TableFilterWhyNotRead),
         BarRefusal::RefusedCalls(names) => {

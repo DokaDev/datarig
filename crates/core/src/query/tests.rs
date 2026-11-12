@@ -612,6 +612,26 @@ fn calls_are_confirmed_refused_or_clear() {
 /// The server's files and its large objects are out of a filter's reach on every profile:
 /// each call is refused, by a bare name, `pg_catalog.`-qualified or in capitals, before it can
 /// ask (MySQL's `LOAD_FILE` is refused alike).
+/// MariaDB's sequences: `NEXTVAL` and `SETVAL` are refused calls, and `NEXT VALUE FOR` (no
+/// call, a form of its own) is refused anywhere in the text, inside parentheses too, on every
+/// profile: it would advance the sequence for each row read. Reading one (`LASTVAL`,
+/// `PREVIOUS VALUE FOR`) stays a call that asks, or a clause outside parentheses.
+#[test]
+fn mariadb_sequences_are_not_advanced_by_a_filter() {
+    for read_only in [false, true] {
+        for text in ["id < NEXTVAL(s)", "id < nextval(s)", "SETVAL(s, 5) > 0"] {
+            let r = check(MY, text, read_only);
+            assert!(matches!(&r, Err(BarRefusal::RefusedCalls(n)) if !n.is_empty()), "{text}: {r:?}");
+        }
+        for text in ["id < (NEXT VALUE FOR s)", "id IN (1, (next value for s))"] {
+            let r = check(MY, text, read_only);
+            let at = text.to_ascii_uppercase().find("NEXT").unwrap();
+            assert_eq!(r, Err(BarRefusal::Shape { problem: ShapeProblem::Sequence, at: Some(at..at + 4) }), "{text}");
+        }
+    }
+    assert!(matches!(check(MY, "id < LASTVAL(s)", false), Ok(FilterVerdict::NeedsConfirm(_))));
+}
+
 #[test]
 fn server_file_and_large_object_calls_are_refused_on_every_profile() {
     let pg = Dialect::Postgres;
