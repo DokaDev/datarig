@@ -1510,3 +1510,572 @@ fn an_estimate_is_offered_only_for_a_filter_without_unknown_calls_or_mysql_subqu
     assert_eq!(estimate_allowed(&FilterVerdict::Clear, sub, MY), Err(EstimateOff::Subquery));
     assert_eq!(estimate_allowed(&FilterVerdict::Clear, "id > 1", MY), Ok(()));
 }
+
+// terms
+
+/// The terms of `text` as written, or `None` when it is one term not proven to be a conjunction.
+fn terms_of(d: Dialect, text: &str) -> Option<Vec<&str>> {
+    split_terms(text, d).map(|r| r.into_iter().map(|r| &text[r]).collect())
+}
+
+/// A boolean expression of atoms (`p`, `q`, `r`, `s`), `TRUE` and `FALSE`, read with SQL's
+/// precedence (MySQL's: `OR` below `XOR` below `AND` below `NOT`), for the truth tables.
+struct Truth<'a> {
+    toks: Vec<String>,
+    at: usize,
+    env: &'a [bool; 4],
+}
+
+impl Truth<'_> {
+    fn eval(text: &str, env: &[bool; 4]) -> bool {
+        let spaced = text.replace('(', " ( ").replace(')', " ) ");
+        let toks = spaced.split_whitespace().map(str::to_ascii_uppercase).collect();
+        let mut t = Truth { toks, at: 0, env };
+        let v = t.or();
+        assert_eq!(t.at, t.toks.len(), "not read whole: {text}");
+        v
+    }
+    fn peek(&self) -> Option<&str> {
+        self.toks.get(self.at).map(String::as_str)
+    }
+    fn or(&mut self) -> bool {
+        let mut v = self.xor();
+        while self.peek() == Some("OR") {
+            self.at += 1;
+            let r = self.xor();
+            v = v || r;
+        }
+        v
+    }
+    fn xor(&mut self) -> bool {
+        let mut v = self.and();
+        while self.peek() == Some("XOR") {
+            self.at += 1;
+            let r = self.and();
+            v ^= r;
+        }
+        v
+    }
+    fn and(&mut self) -> bool {
+        let mut v = self.not();
+        while self.peek() == Some("AND") {
+            self.at += 1;
+            let r = self.not();
+            v = v && r;
+        }
+        v
+    }
+    fn not(&mut self) -> bool {
+        if self.peek() == Some("NOT") {
+            self.at += 1;
+            return !self.not();
+        }
+        let tok = self.toks[self.at].clone();
+        self.at += 1;
+        match tok.as_str() {
+            "(" => {
+                let v = self.or();
+                assert_eq!(self.peek(), Some(")"));
+                self.at += 1;
+                v
+            }
+            "TRUE" => true,
+            "FALSE" => false,
+            atom => self.env[(atom.as_bytes()[0] - b'P') as usize],
+        }
+    }
+}
+
+/// Every assignment of the four atoms.
+fn assignments() -> impl Iterator<Item = [bool; 4]> {
+    (0..16u8).map(|n| [n & 1 != 0, n & 2 != 0, n & 4 != 0, n & 8 != 0])
+}
+
+#[test]
+fn split_terms_cuts_only_a_proven_conjunction() {
+    for d in [Dialect::Postgres, MY] {
+        let t = |s| terms_of(d, s);
+        assert_eq!(t("id = 1"), Some(vec!["id = 1"]));
+        assert_eq!(t("  id = 1   AND\tname = 'a'  "), Some(vec!["id = 1", "name = 'a'"]));
+        assert_eq!(t("id = 1 and name = 'a' AnD price > 2"), Some(vec!["id = 1", "name = 'a'", "price > 2"]));
+        assert_eq!(t(""), Some(vec![]));
+        assert_eq!(t("   "), Some(vec![]));
+        // BETWEEN keeps its AND; parentheses keep theirs, OR inside them too.
+        assert_eq!(
+            t("price BETWEEN 1 AND 5 AND id NOT BETWEEN 2 AND 3 AND (a = 1 OR b = 2 AND c = 3)"),
+            Some(vec!["price BETWEEN 1 AND 5", "id NOT BETWEEN 2 AND 3", "(a = 1 OR b = 2 AND c = 3)"])
+        );
+        // Strings and quoted names holding ` AND `.
+        let q = d.force_quote_ident("a AND b");
+        let text = format!("name = 'x AND y' AND {q} = 1");
+        assert_eq!(t(&text), Some(vec!["name = 'x AND y'", &format!("{q} = 1")[..]]));
+        // OR at the top level, in any place: one term.
+        assert_eq!(t("a = 1 OR b = 2 AND c = 3"), None);
+        assert_eq!(t("a = 1 AND b = 2 OR c = 3"), None);
+        assert_eq!(t("a = 1 XOR b = 2"), None);
+        // NOT: over a parenthesised group, or inside a comparison.
+        assert_eq!(t("NOT (a = 1 AND b = 2) AND c = 3"), Some(vec!["NOT (a = 1 AND b = 2)", "c = 3"]));
+        assert_eq!(
+            t("a IS NOT NULL AND b NOT IN (1, 2) AND c NOT LIKE 'x%' AND d IS NOT DISTINCT FROM 1"),
+            Some(vec!["a IS NOT NULL", "b NOT IN (1, 2)", "c NOT LIKE 'x%'", "d IS NOT DISTINCT FROM 1"])
+        );
+        assert_eq!(t("NOT a = 1 AND b = 2"), None);
+        assert_eq!(t("a = 1 AND NOT b = 2"), None);
+        assert_eq!(t("a = NOT b AND c = 1"), None);
+        // One term led by NOT stays one term as written.
+        assert_eq!(t("NOT a = 1"), Some(vec!["NOT a = 1"]));
+        // CASE … END and square brackets hold their own ANDs and ORs.
+        let case = "CASE WHEN a = 1 AND b = 2 OR c = 3 THEN 1 ELSE 0 END = 1";
+        let with = format!("{case} AND id > 3");
+        assert_eq!(t(&with), Some(vec![case, "id > 3"]));
+        assert_eq!(t("CASE WHEN a = 1 THEN 1 AND id > 3"), None);
+        // What the lexical check refuses, and empty terms.
+        for refused in ["a = 1 AND b = 2 -- c", "a = 1; b = 2", "(a = 1 AND b = 2", "a = 1) AND (b = 2", "name = 'x"] {
+            assert_eq!(t(refused), None, "{refused}");
+        }
+        for empty in ["a = 1 AND", "AND a = 1", "a = 1 AND AND b = 2"] {
+            assert_eq!(t(empty), None, "{empty}");
+        }
+    }
+    // PostgreSQL array subscripts and slices.
+    assert_eq!(
+        terms_of(Dialect::Postgres, "tags[1] = 'a' AND m[1:2][1] = '{1}' AND id > 1"),
+        Some(vec!["tags[1] = 'a'", "m[1:2][1] = '{1}'", "id > 1"])
+    );
+    // PostgreSQL: `||` concatenates, `!=` compares.
+    assert_eq!(
+        terms_of(Dialect::Postgres, "name || 'x' = 'ax' AND id != 1"),
+        Some(vec!["name || 'x' = 'ax'", "id != 1"])
+    );
+    // MySQL: `||` and `&&` may be OR and AND, `|` and `&` are bitwise, `!` is NOT, `:=` assigns.
+    for text in [
+        "a = 1 || b = 2",
+        "a = 1 && b = 2",
+        "a | 1 = 1 AND b = 2",
+        "a & 1 AND b = 2",
+        "!a AND b = 2",
+        "@v := 1 AND b = 2",
+    ] {
+        assert_eq!(terms_of(MY, text), None, "{text}");
+    }
+    assert_eq!(terms_of(MY, "a != 1 AND b <=> 2"), Some(vec!["a != 1", "b <=> 2"]));
+    assert_eq!(terms_of(MY, "(a = 1 || b = 2) AND c = 3"), Some(vec!["(a = 1 || b = 2)", "c = 3"]));
+}
+
+#[test]
+fn split_terms_leaves_a_mysql_interval_and_its_and_together() {
+    // The first AND belongs to the interval's value: two terms, not three. Not proven, so one.
+    let given = "DATE('2026-01-01') + INTERVAL 1 AND 1 DAY = '2026-01-02' AND flag = 1";
+    assert_eq!(terms_of(MY, given), None);
+    for text in ["d + INTERVAL 1 DAY > now() AND flag = 1", "flag = 1 AND d > now() - interval 2 AND 1 hour"] {
+        assert_eq!(terms_of(MY, text), None, "{text}");
+    }
+    // Not proven: joined with others it goes in parentheses, so it keeps what it means.
+    assert_eq!(join_terms(&[given, "id > 3"], MY), format!("({given}) AND id > 3"));
+    // An interval inside parentheses keeps its AND there; the real terms are cut, and taking out
+    // each of them leaves the others as written.
+    let held = "(DATE('2026-01-01') + INTERVAL 1 AND 1 DAY = '2026-01-02') AND flag = 1 AND id > 3";
+    let terms = terms_of(MY, held).unwrap();
+    assert_eq!(terms, vec!["(DATE('2026-01-01') + INTERVAL 1 AND 1 DAY = '2026-01-02')", "flag = 1", "id > 3"]);
+    for out in 0..terms.len() {
+        let kept: Vec<&str> = terms.iter().enumerate().filter(|(i, _)| *i != out).map(|(_, t)| *t).collect();
+        let joined = join_terms(&kept, MY);
+        assert_eq!(terms_of(MY, &joined), Some(kept.clone()), "{joined}");
+    }
+    assert_eq!(
+        terms_of(MY, "DATE_ADD(d, INTERVAL 1 AND 1 DAY) = '2026-01-02' AND flag = 1"),
+        Some(vec!["DATE_ADD(d, INTERVAL 1 AND 1 DAY) = '2026-01-02'", "flag = 1"])
+    );
+    // PostgreSQL's interval is a typed literal: nothing to hold.
+    assert_eq!(
+        terms_of(Dialect::Postgres, "d + INTERVAL '1 day' > now() AND flag = 1"),
+        Some(vec!["d + INTERVAL '1 day' > now()", "flag = 1"])
+    );
+}
+
+#[test]
+fn split_terms_keeps_the_meaning_of_mixed_precedence() {
+    let corpus = [
+        "p AND q AND r",
+        "p OR q AND r",
+        "p AND q OR r",
+        "p AND (q OR r) AND s",
+        "(p OR q) AND (r OR s)",
+        "NOT p AND q",
+        "p AND NOT q",
+        "NOT (p AND q) AND r",
+        "NOT (p OR q) AND NOT (r AND s)",
+        "p XOR q AND r",
+        "p AND q XOR r AND s",
+        "(p XOR q) AND r",
+        "NOT p OR q AND r",
+        "((p)) AND (q AND (r OR s))",
+        "TRUE AND p OR FALSE AND q",
+    ];
+    for d in [Dialect::Postgres, MY] {
+        for text in corpus {
+            let Some(terms) = terms_of(d, text) else { continue };
+            for env in assignments() {
+                let whole = Truth::eval(text, &env);
+                assert_eq!(terms.iter().all(|t| Truth::eval(t, &env)), whole, "{d:?} {text} {env:?}");
+                // Joined again, with or without one term, it keeps the meaning of its terms.
+                assert_eq!(Truth::eval(&join_terms(&terms, d), &env), whole, "{d:?} {text} {env:?}");
+                for skip in 0..terms.len() {
+                    let rest: Vec<&str> =
+                        terms.iter().enumerate().filter(|(i, _)| *i != skip).map(|(_, t)| *t).collect();
+                    if rest.is_empty() {
+                        continue;
+                    }
+                    let want = rest.iter().all(|t| Truth::eval(t, &env));
+                    assert_eq!(Truth::eval(&join_terms(&rest, d), &env), want, "{d:?} {text} without {skip}");
+                }
+            }
+        }
+        // What is cut and what is not.
+        assert!(terms_of(d, "p OR q AND r").is_none());
+        assert!(terms_of(d, "p XOR q AND r").is_none());
+        assert!(terms_of(d, "NOT p AND q").is_none());
+        assert_eq!(terms_of(d, "p AND (q OR r) AND s"), Some(vec!["p", "(q OR r)", "s"]));
+    }
+}
+
+#[test]
+fn split_terms_rebuild_the_text_byte_for_byte() {
+    for d in [Dialect::Postgres, MY] {
+        for text in [
+            "id = 1",
+            "  id = 1 AND name = 'a'  ",
+            "id = 1\n  and\tname = 'it''s'   AND price BETWEEN 1 AND 2",
+            "(a = 1 OR b = 2) AND c = 3",
+            "lower(name) = 'x' AND id IN (1, 2, 3)",
+        ] {
+            let ranges = split_terms(text, d).expect(text);
+            // What lies between the terms is an AND with the blanks around it as typed.
+            let mut rebuilt = String::new();
+            let mut at = 0;
+            for (i, r) in ranges.iter().enumerate() {
+                let between = &text[at..r.start];
+                if i == 0 {
+                    assert!(between.trim().is_empty(), "{text}");
+                } else {
+                    assert!(between.trim().eq_ignore_ascii_case("AND"), "{text}: {between:?}");
+                }
+                rebuilt.push_str(between);
+                rebuilt.push_str(&text[r.clone()]);
+                at = r.end;
+            }
+            assert!(text[at..].trim().is_empty());
+            rebuilt.push_str(&text[at..]);
+            assert_eq!(rebuilt, text);
+        }
+        // Text written as joined terms is its own join.
+        let text = "id = 1 AND (a = 1 OR b = 2) AND name LIKE 'x%' ESCAPE '!'";
+        let terms = terms_of(d, text).unwrap();
+        assert_eq!(join_terms(&terms, d), text);
+    }
+}
+
+#[test]
+fn join_terms_puts_what_is_not_a_plain_term_in_parentheses() {
+    for d in [Dialect::Postgres, MY] {
+        assert_eq!(join_terms(&["a = 1 OR b = 2"], d), "a = 1 OR b = 2");
+        assert_eq!(join_terms(&["a = 1 OR b = 2", "c = 3"], d), "(a = 1 OR b = 2) AND c = 3");
+        assert_eq!(join_terms(&["c = 3", "NOT a = 1 AND b = 2"], d), "c = 3 AND (NOT a = 1 AND b = 2)");
+        assert_eq!(join_terms(&["(a = 1 OR b = 2)", "c = 3"], d), "(a = 1 OR b = 2) AND c = 3");
+        assert_eq!(join_terms(&["a = 1 AND b = 2", "c = 3"], d), "a = 1 AND b = 2 AND c = 3");
+        assert_eq!(join_terms(&[], d), "");
+    }
+    assert_eq!(join_terms(&["a = 1 || b = 2", "c = 3"], MY), "(a = 1 || b = 2) AND c = 3");
+    assert_eq!(join_terms(&["a = 1 XOR b = 2", "c = 3"], MY), "(a = 1 XOR b = 2) AND c = 3");
+}
+
+#[test]
+fn like_kind_reads_back_what_the_pattern_helpers_write() {
+    for v in ["", "a", "50%_x!", "it's", "!!%%__", "ü ß 漢", "\\", "100%"] {
+        assert_eq!(like_kind(&like_contains(v), '!'), Some(LikeKind::Contains(v.to_string())), "{v}");
+        assert_eq!(like_kind(&like_starts_with(v), '!'), Some(LikeKind::StartsWith(v.to_string())), "{v}");
+    }
+    for p in ["abc", "%a", "a%b%", "%a%b%", "a_b%", "!a%", "%a!", "_%", "%a_%"] {
+        assert_eq!(like_kind(p, '!'), None, "{p}");
+    }
+    // Another escape character.
+    assert_eq!(like_kind("%a\\%b%", '\\'), Some(LikeKind::Contains("a%b".into())));
+}
+
+// NULL-aware lists
+
+#[test]
+fn null_aware_lists_read_as_one_condition_of_their_column() {
+    let list = |negated, null: bool| {
+        let mut values = vec![text("a"), text("b")];
+        if null {
+            values.push(Value::Null);
+        }
+        Cond::In { col: "name".into(), values, negated }
+    };
+    let keeps_nulls = Cond::Any(vec![list(true, false), Cond::IsNull { col: "name".into(), negated: false }]);
+    for (d, utf8mb4) in [(Dialect::Postgres, false), (MY, true), (MY, false)] {
+        let t = Target { utf8mb4, ..target(d) };
+        for c in [list(false, true), list(true, true), keeps_nulls.clone(), list(false, false), list(true, false)] {
+            let written = render(&c, &t).unwrap();
+            assert_eq!(recognise(&written, &t), Some(c.clone()), "{d:?} {written}");
+            assert_eq!(c.column_condition(), Some("name"), "{written}");
+            // One term each, beside others.
+            let with = format!("id > 1 AND {written}");
+            let terms = terms_of(d, &with).unwrap();
+            assert_eq!(terms, vec!["id > 1", written.as_str()]);
+            assert_eq!(recognise(terms[1], &t), Some(c.clone()));
+        }
+    }
+    let t = target(Dialect::Postgres);
+    // As typed with the other column, or the other test of NULL, it stays what it says.
+    assert_eq!(
+        recognise("(name IN ('a') OR email IS NULL)", &t),
+        Some(Cond::Any(vec![
+            Cond::In { col: "name".into(), values: vec![text("a")], negated: false },
+            Cond::IsNull { col: "email".into(), negated: false },
+        ]))
+    );
+    let mixed = recognise("(name IN ('a') OR name IS NOT NULL)", &t).unwrap();
+    assert!(matches!(mixed, Cond::Any(_)));
+    assert_eq!(mixed.column_condition(), None);
+    // Without its parentheses it is two conditions of a conjunction.
+    assert_eq!(
+        recognise("name NOT IN ('a') AND name IS NOT NULL", &t),
+        Some(Cond::All(vec![
+            Cond::In { col: "name".into(), values: vec![text("a")], negated: true },
+            Cond::IsNull { col: "name".into(), negated: true },
+        ]))
+    );
+    // Conditions of one column, and what is not one.
+    assert_eq!(cmp("id", CmpOp::Eq, num("1")).column_condition(), Some("id"));
+    assert_eq!(Cond::Raw("id = 1".into()).column_condition(), None);
+    assert_eq!(Cond::Not(Box::new(cmp("id", CmpOp::Eq, num("1")))).column_condition(), None);
+    assert_eq!(
+        Cond::All(vec![cmp("id", CmpOp::Eq, num("1")), cmp("id", CmpOp::Ne, num("2"))]).column_condition(),
+        None
+    );
+}
+
+// group count
+
+fn meta(name: &str, type_name: &str, kind: crate::driver::ValueKind) -> crate::driver::ColumnMeta {
+    crate::driver::ColumnMeta::new(name.into(), type_name.into(), kind, None)
+}
+
+fn group(
+    d: Dialect,
+    column: &crate::driver::ColumnMeta,
+    other: Option<&str>,
+    read_only: bool,
+) -> Result<String, GroupRefusal> {
+    let t = Target { utf8mb4: true, ..target(d) };
+    let classifier = Classifier::new(Language::Sql(d));
+    group_count(&GroupCount {
+        table: &users(),
+        target: &t,
+        column,
+        enum_known: false,
+        other,
+        classifier: &classifier,
+        read_only,
+    })
+}
+
+#[test]
+fn group_count_writes_one_grouped_read_of_the_table() {
+    use crate::driver::{ArrayElement, ValueKind};
+    let name = meta("name", "text", ValueKind::Text);
+    assert_eq!(
+        group(Dialect::Postgres, &name, Some("id > 1 AND price < 5"), false).unwrap(),
+        "SELECT CASE WHEN octet_length(\"name\") <= 4096 THEN \"name\" END, octet_length(\"name\"), count(*) \
+         FROM \"shop\".\"users\" WHERE (id > 1 AND price < 5) GROUP BY \"name\" ORDER BY count(*) DESC LIMIT 201"
+    );
+    // No other condition: every row; a blank one is none.
+    let id = meta("id", "int4", ValueKind::Integer);
+    let all = "SELECT \"id\", NULL, count(*) FROM \"shop\".\"users\" GROUP BY \"id\" ORDER BY count(*) DESC LIMIT 201";
+    assert_eq!(group(Dialect::Postgres, &id, None, false).unwrap(), all);
+    assert_eq!(group(Dialect::Postgres, &id, Some("  "), true).unwrap(), all);
+    // Long values of other types measured by their own output function, never a cast.
+    for (m, len) in [
+        (meta("data", "bytea", ValueKind::Bytes), "octet_length(\"data\")"),
+        (meta("born", "jsonb", ValueKind::Json), "octet_length(textin(jsonb_out(\"born\")))"),
+        (meta("born", "text[]", ValueKind::Array(ArrayElement::Text)), "octet_length(textin(array_out(\"born\")))"),
+        (meta("price", "numeric", ValueKind::Decimal), "octet_length(textin(numeric_out(\"price\")))"),
+        // A domain over numeric, by its own name.
+        (meta("price", "amount", ValueKind::Decimal), "octet_length(textin(numeric_out(\"price\")))"),
+    ] {
+        let sql = group(Dialect::Postgres, &m, None, false).unwrap();
+        assert!(sql.contains(&format!("CASE WHEN {len} <= 4096 THEN")), "{sql}");
+        assert!(!sql.contains("::"), "{sql}");
+    }
+    for m in [meta("price", "money", ValueKind::Decimal), meta("born", "timestamptz", ValueKind::TimestampTz)] {
+        assert!(group(Dialect::Postgres, &m, None, false).unwrap().contains(", NULL, count(*)"));
+    }
+    // MySQL.
+    let data = meta("data", "varbinary", ValueKind::Bytes);
+    assert_eq!(
+        group(MY, &data, Some("id > 1"), false).unwrap(),
+        "SELECT IF(OCTET_LENGTH(`data`) <= 4096, `data`, NULL), OCTET_LENGTH(`data`), COUNT(*) FROM `shop`.`users` \
+         WHERE (id > 1) GROUP BY `data` ORDER BY COUNT(*) DESC LIMIT 201"
+    );
+    assert_eq!(
+        group(MY, &meta("id", "bigint", ValueKind::Integer), None, false).unwrap(),
+        "SELECT IF(OCTET_LENGTH(`id`) <= 4096, `id`, NULL), OCTET_LENGTH(`id`), COUNT(*) FROM `shop`.`users` GROUP BY `id` \
+         ORDER BY COUNT(*) DESC LIMIT 201",
+        "every MySQL value measured, whatever its type is said to be"
+    );
+    // The shape every one has: a plain read the app may run on its own.
+    for (d, m) in [(Dialect::Postgres, &name), (Dialect::Postgres, &id), (MY, &data)] {
+        let sql = group(d, m, Some("id > 1"), false).unwrap();
+        let classifier = Classifier::new(Language::Sql(d));
+        let risk = classifier.clone().classify(&sql);
+        assert_eq!((risk.class, risk.danger, risk.read_write), (Class::Read, None, false), "{sql}");
+        assert_eq!(classifier.repeatable(&sql), Ok(()), "{sql}");
+        assert!(sql.starts_with("SELECT "));
+        assert!(sql.ends_with(&format!(
+            " ORDER BY {} DESC LIMIT {}",
+            if d == MY { "COUNT(*)" } else { "count(*)" },
+            GROUP_VALUES + 1
+        )));
+        assert_eq!(sql.matches(" GROUP BY ").count(), 1);
+        assert_eq!(sql.matches(" WHERE (id > 1) GROUP BY ").count(), 1);
+    }
+}
+
+#[test]
+fn group_count_on_mysql_measures_bytes_in_every_sql_mode() {
+    // The preview's bound and the length sent are bytes. `LENGTH` counts characters under
+    // MariaDB's `sql_mode=ORACLE`, so a long value of wide characters would pass the bound;
+    // `OCTET_LENGTH` counts bytes on MySQL and on MariaDB in every mode.
+    let text = meta("name", "varchar", crate::driver::ValueKind::Text);
+    let sql = group(MY, &text, None, false).unwrap();
+    assert!(sql.starts_with("SELECT IF(OCTET_LENGTH(`name`) <= 4096, `name`, NULL), OCTET_LENGTH(`name`), "), "{sql}");
+    assert!(!sql.replace("OCTET_LENGTH(", "").contains("LENGTH("), "{sql}");
+}
+
+#[test]
+fn group_count_refuses_what_the_filter_bar_refuses_and_unknown_calls() {
+    use crate::driver::ValueKind;
+    let name = meta("name", "text", ValueKind::Text);
+    for d in [Dialect::Postgres, MY] {
+        let g = |other: &str, read_only| group(d, &name, Some(other), read_only);
+        assert!(matches!(g("id = 1 -- x", false), Err(GroupRefusal::Filter(BarRefusal::Lexical { .. }))));
+        assert!(matches!(g("1 = 1) OR (1 = 1", false), Err(GroupRefusal::Filter(BarRefusal::Lexical { .. }))));
+        assert!(matches!(g("id = 1 UNION SELECT 1", false), Err(GroupRefusal::Filter(_))));
+        // A call the bar would ask about is refused here, with the calls.
+        assert_eq!(
+            g("f(id) > 1", false),
+            Err(GroupRefusal::Calls(vec![if d == MY { "F".into() } else { "f".into() }]))
+        );
+        assert!(matches!(g("f(id) > 1", true), Err(GroupRefusal::Filter(BarRefusal::UncheckedCalls(_)))));
+        let sleep = if d == MY { "SLEEP(1) = 0" } else { "pg_sleep(1) IS NULL" };
+        assert!(matches!(g(sleep, false), Err(GroupRefusal::Filter(BarRefusal::RefusedCalls(_)))));
+        // The server's files and large objects: refused, not asked about, on every profile.
+        let file = if d == MY { "LOAD_FILE('/etc/passwd') IS NULL" } else { "lo_get(1) IS NOT NULL" };
+        for read_only in [false, true] {
+            assert!(matches!(g(file, read_only), Err(GroupRefusal::Filter(_))), "{file}");
+        }
+        if d == Dialect::Postgres {
+            for read_only in [false, true] {
+                assert!(
+                    matches!(
+                        g("pg_catalog.lo_get(1) IS NOT NULL", read_only),
+                        Err(GroupRefusal::Filter(BarRefusal::RefusedCalls(_)))
+                    ),
+                    "{read_only}"
+                );
+            }
+        }
+        // An allowlisted call passes.
+        assert!(g("lower(name) = 'x'", false).is_ok());
+        // Columns that do not group, or are not the table's.
+        let json = meta("born", "json", ValueKind::Json);
+        assert_eq!(group(d, &json, None, false), Err(GroupRefusal::NoEquality));
+        assert_eq!(group(d, &meta("other", "text", ValueKind::Text), None, false), Err(GroupRefusal::UnknownColumn));
+    }
+    assert_eq!(group(MY, &meta("data", "geometry", ValueKind::Bytes), None, false), Err(GroupRefusal::NoEquality));
+    assert_eq!(
+        group(Dialect::Postgres, &meta("born", "point", ValueKind::Other), None, false),
+        Err(GroupRefusal::NoEquality)
+    );
+    assert!(group(Dialect::Postgres, &meta("born", "uuid", ValueKind::Other), None, false).is_ok());
+}
+
+#[test]
+fn group_counts_read_values_lengths_and_more() {
+    use crate::driver::{DbError, GroupCounts, GroupValue};
+    let s = |v: &str| Some(v.to_string());
+    let rows = vec![
+        vec![s("shipped"), s("7"), s("40")],
+        vec![None, None, s("3")],
+        vec![None, s("5000"), s("1")],
+        vec![s("42"), None, s("1")],
+    ];
+    let got = GroupCounts::from_rows(rows).unwrap();
+    assert!(!got.more);
+    assert_eq!(
+        got.values,
+        vec![
+            GroupValue { value: s("shipped"), whole: true, bytes: Some(7), rows: 40, prefix: false, inexact: false },
+            GroupValue { value: None, whole: true, bytes: None, rows: 3, prefix: false, inexact: false },
+            GroupValue { value: None, whole: false, bytes: Some(5000), rows: 1, prefix: false, inexact: false },
+            GroupValue { value: s("42"), whole: true, bytes: Some(2), rows: 1, prefix: false, inexact: false },
+        ]
+    );
+    let many: Vec<Vec<Option<String>>> = (0..=GROUP_VALUES).map(|i| vec![s(&i.to_string()), None, s("1")]).collect();
+    let got = GroupCounts::from_rows(many).unwrap();
+    assert!(got.more);
+    assert_eq!(got.values.len(), GROUP_VALUES);
+    assert_eq!(GroupCounts::from_rows(vec![vec![s("a"), None, s("x")]]), Err(DbError::NoResult));
+    assert_eq!(GroupCounts::from_rows(vec![vec![s("a"), None, None]]), Err(DbError::NoResult));
+    assert_eq!(GroupCounts::from_rows(vec![vec![s("a")]]), Err(DbError::NoResult));
+}
+
+#[test]
+fn values_at_least_the_grouping_prefix_long_are_marked() {
+    use crate::driver::GroupCounts;
+    let s = |v: &str| Some(v.to_string());
+    let rows = vec![
+        vec![s("abc"), s("3"), s("4")],
+        vec![s("abcd"), s("4"), s("2")],
+        vec![None, s("5000"), s("1")],
+        vec![None, None, s("1")],
+    ];
+    let marked = |limit| {
+        let mut got = GroupCounts::from_rows(rows.clone()).unwrap();
+        got.mark_prefix(limit);
+        got.values.iter().map(|v| (v.prefix, v.whole)).collect::<Vec<_>>()
+    };
+    assert_eq!(marked(Some(4)), vec![(false, true), (true, true), (true, false), (false, true)]);
+    assert_eq!(marked(Some(1024)), vec![(false, true), (false, true), (true, false), (false, true)]);
+    // Not known: every value but NULL.
+    assert_eq!(marked(None), vec![(true, true), (true, true), (true, false), (false, true)]);
+}
+
+#[test]
+fn values_whose_text_cannot_be_told_are_taken_back() {
+    use crate::driver::GroupCounts;
+    let s = |v: &str| Some(v.to_string());
+    let rows = vec![vec![s("1.5"), s("7"), s("3")], vec![s("42"), s("2"), s("1")], vec![None, None, s("1")]];
+    let mut got = GroupCounts::from_rows(rows).unwrap();
+    got.mark_inexact(&[true, false, false]);
+    let seen: Vec<_> = got.values.iter().map(|v| (v.value.clone(), v.whole, v.bytes, v.inexact)).collect();
+    assert_eq!(seen, vec![(None, false, Some(7), true), (s("42"), true, Some(2), false), (None, true, None, false)]);
+}
+
+#[test]
+fn a_group_counts_answer_is_read_within_its_budget() {
+    use crate::driver::{DbError, GROUP_ROW_OVERHEAD, GroupBudget};
+    let row = 10 * GROUP_PREVIEW + GROUP_ROW_OVERHEAD;
+    let mut budget = GroupBudget::new(10 * GROUP_PREVIEW);
+    for _ in 0..=GROUP_VALUES {
+        assert_eq!(budget.take(row), Ok(()));
+    }
+    assert_eq!(budget.take(1), Err(DbError::SchemaChanged), "one row past the statement's LIMIT");
+    let mut budget = GroupBudget::new(10 * GROUP_PREVIEW);
+    assert_eq!(budget.take(row + 1), Err(DbError::SchemaChanged), "a row past its size");
+    let mut budget = GroupBudget::new(GROUP_PREVIEW);
+    assert_eq!(budget.take(GROUP_PREVIEW + GROUP_ROW_OVERHEAD), Ok(()));
+    assert_eq!(budget.take(GROUP_PREVIEW + GROUP_ROW_OVERHEAD + 1), Err(DbError::SchemaChanged));
+}

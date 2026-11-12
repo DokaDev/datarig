@@ -624,6 +624,16 @@ async fn order_keys_are_read_without_a_metadata_lock() {
     let meta = only_session(&mut side_admin, SessionRole::Meta, "okeys").await;
     let want =
         OrderKeys { primary_key: vec!["id".into()], unique_not_null: vec![vec!["v".into()]], ..OrderKeys::default() };
+    // The table's columns, read with the keys: the same whatever holds the table.
+    let columns = vec![
+        ("id".to_string(), "int".to_string(), true, true),
+        ("v".to_string(), "varchar(40)".to_string(), true, false),
+        ("nick".to_string(), "int".to_string(), false, false),
+    ];
+    let described = |k: &OrderKeys| -> Vec<(String, String, bool, bool)> {
+        let cols = k.columns.as_ref().expect("the columns are known");
+        cols.iter().map(|c| (c.name.clone(), c.type_name.clone(), c.not_null, c.primary_key)).collect()
+    };
     let mut n = 0;
     let mut ask = |m: &mut Conn| {
         n += 1;
@@ -631,7 +641,10 @@ async fn order_keys_are_read_without_a_metadata_lock() {
         n
     };
     let keys_of = |ev: DbEvent| match ev {
-        DbEvent::TableKeys { result, .. } => result,
+        DbEvent::TableKeys { result, .. } => result.map(|k| {
+            assert_eq!(described(&k), columns);
+            OrderKeys { columns: None, ..k }
+        }),
         ev => panic!("{ev:?}"),
     };
     let id = ask(&mut m);
@@ -6301,4 +6314,588 @@ async fn someone_elses_kill_of_a_read_is_not_the_users_cancel() {
     b.query_drop("UNLOCK TABLES").await.unwrap();
     b.disconnect().await.unwrap();
     a.disconnect().await.unwrap();
+}
+
+// ── a count of a column's values ──────────────────────────────────────────
+
+/// The app's group count of `column` (of type `type_name`, kind `kind`) of `shop.table`, under
+/// filter text `other`, as `query::group_count` writes it.
+fn group_sql(table: &str, column: &str, (type_name, kind): (&str, ValueKind), other: Option<&str>) -> String {
+    use datarig_core::query::{ColumnFacts, ColumnKind, GroupCount, TableName, Target, group_count};
+    let d = Dialect::MySql(MySqlMode::default());
+    let t = TableName { database: None, schema: "shop".into(), name: table.into() };
+    let target = Target::new(d, vec![ColumnFacts::new(column, ColumnKind::Other)]);
+    let meta = datarig_core::driver::ColumnMeta::new(column.into(), type_name.into(), kind, None);
+    let classifier = datarig_core::sql::risk::Classifier::new(Language::Sql(d));
+    let g = GroupCount {
+        table: &t,
+        target: &target,
+        column: &meta,
+        enum_known: false,
+        other,
+        classifier: &classifier,
+        read_only: false,
+    };
+    group_count(&g).expect("a group count")
+}
+
+/// Send `GroupCount` with `limit` as run `id`: its answer, whether it counted in the user's
+/// transaction's snapshot, and how long it took.
+async fn group_within(
+    c: &mut Conn,
+    id: u64,
+    sql: &str,
+    limit: Option<Duration>,
+) -> (Result<datarig_core::driver::GroupCounts, DbError>, bool, Duration) {
+    let t0 = Instant::now();
+    c.session.send(DbCommand::GroupCount { id, sql: sql.to_string(), limit });
+    match c.wait(|e| matches!(e, DbEvent::GroupCounted { .. }), 30).await {
+        DbEvent::GroupCounted { id: got, result, snapshot } => {
+            assert_eq!(got, id);
+            (result, snapshot, t0.elapsed())
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The values and their rows of a group count, sorted.
+fn group_pairs(g: &datarig_core::driver::GroupCounts) -> Vec<(Option<String>, u64)> {
+    let mut out: Vec<(Option<String>, u64)> = g.values.iter().map(|v| (v.value.clone(), v.rows)).collect();
+    out.sort();
+    out
+}
+
+/// A group count with a time limit runs as a bounded count does, with the statement's own hints:
+/// behind a metadata lock another session holds it is stopped at the limit (`TimedOut`) or gives
+/// up waiting after 1 s (`LockTimeout`), the user's cancel is `Cancelled`, never a list; the
+/// session's own limits stay as they were; inside the user's transaction it reads in its
+/// snapshot.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_is_bounded_and_told_apart_when_stopped() {
+    let test = "a_group_count_is_bounded_and_told_apart_when_stopped";
+    let Some((url, admin)) = urls(test) else { return };
+    let _end = EndSessions { admin: admin.clone(), test };
+    let t = numbers(&admin, "group", 2000).await;
+    let mut a = side(&admin).await;
+    a.query_drop(format!("ALTER TABLE {} ADD COLUMN k VARCHAR(10)", t.q())).await.unwrap();
+    a.query_drop(format!("UPDATE {} SET k = CAST(id % 3 AS CHAR)", t.q())).await.unwrap();
+    a.disconnect().await.unwrap();
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let sql = group_sql(&t.name, "k", ("varchar", ValueKind::Text), Some("id > 100"));
+    let limit = Some(Duration::from_secs(30));
+    async fn limits(c: &mut Conn, id: u64) -> Vec<Cell> {
+        let evs = c.run(id, &["SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout"]).await;
+        page_of(&evs).1[0].clone()
+    }
+    c.ok(20, "SET SESSION lock_wait_timeout = 73").await;
+    let own = limits(&mut c, 21).await;
+    let want = vec![(Some("0".to_string()), 633), (Some("1".to_string()), 633), (Some("2".to_string()), 634)];
+    let (got, snapshot, _) = group_within(&mut c, 1, &sql, limit).await;
+    assert_eq!(got.as_ref().map(group_pairs), Ok(want.clone()));
+    assert!(!snapshot);
+    assert_eq!(limits(&mut c, 22).await, own, "after a group count");
+    // Held by another session.
+    let mut b = side(&url).await;
+    b.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
+    let (got, _, took) = group_within(&mut c, 2, &sql, Some(Duration::from_millis(400))).await;
+    assert_eq!(got, Err(DbError::TimedOut(Duration::from_millis(400))), "{took:?}");
+    assert!(took < Duration::from_secs(1), "stopped at the limit, before the lock wait's: {took:?}");
+    let (got, _, took) = group_within(&mut c, 3, &sql, limit).await;
+    assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
+    assert!(took >= Duration::from_secs(1) && took < Duration::from_secs(10), "{took:?}");
+    assert_eq!(limits(&mut c, 23).await, own, "after a lock wait");
+    c.session.send(DbCommand::GroupCount { id: 4, sql: sql.clone(), limit });
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    c.session.cancel();
+    let DbEvent::GroupCounted { result, .. } = c.wait(|e| matches!(e, DbEvent::GroupCounted { .. }), 30).await else {
+        unreachable!()
+    };
+    assert_eq!(result, Err(DbError::Cancelled));
+    assert_eq!(limits(&mut c, 24).await, own, "after a cancel");
+    b.query_drop("UNLOCK TABLES").await.unwrap();
+    b.disconnect().await.unwrap();
+    // Inside the user's transaction (REPEATABLE READ): its snapshot.
+    c.ok(5, "BEGIN").await;
+    let (got, snapshot, _) = group_within(&mut c, 6, &sql, limit).await;
+    assert_eq!(got.as_ref().map(group_pairs), Ok(want));
+    assert!(snapshot, "the transaction's snapshot");
+    c.ok(7, "ROLLBACK").await;
+    // Text off the allowlist is never sent.
+    let (got, _, _) = group_within(&mut c, 8, "SELECT SLEEP(5)", limit).await;
+    assert!(matches!(got, Err(DbError::NotRepeatable(_))), "{got:?}");
+}
+
+/// A group count is refused unsent where it would lock the rows it reads (a transaction open at
+/// `SERIALIZABLE` or a level not known) or use up the next transaction's settings; with no
+/// transaction open it reads without a lock at any level: with autocommit on as a statement of
+/// its own, with autocommit off in a `REPEATABLE READ` read-only transaction of its own.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_refuses_locking_reads_and_the_next_transactions_settings() {
+    let test = "a_group_count_refuses_locking_reads";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "grouplocks", 100).await;
+    let mut a = side(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    let sql = group_sql(&t.name, "v", ("varchar", ValueKind::Text), Some("id <= 10"));
+    let limit = Some(Duration::from_secs(30));
+    c.ok(1, "SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE").await;
+    // Autocommit on, no transaction: a read of its own, no lock.
+    let (got, _, _) = group_within(&mut c, 2, &sql, limit).await;
+    assert_eq!(got.map(|g| g.values.len()), Ok(10));
+    assert_eq!(data_locks_of(&mut a, id, &t.name).await, 0, "no lock");
+    // Autocommit off, no transaction open: read in a REPEATABLE READ read-only transaction of
+    // its own, ended after it; no lock, the session's level and autocommit as they were.
+    c.ok(3, "SET autocommit = 0").await;
+    let (got, snapshot, _) = group_within(&mut c, 4, &sql, limit).await;
+    assert_eq!((got.map(|g| g.values.len()), snapshot), (Ok(10), false));
+    assert_eq!(data_locks_of(&mut a, id, &t.name).await, 0, "no lock");
+    let evs = c.run(40, &["SELECT CONCAT(@@SESSION.autocommit, ' ', @@SESSION.transaction_isolation)"]).await;
+    assert_eq!(page_of(&evs).1[0][0].as_deref(), Some("0 SERIALIZABLE"));
+    c.ok(44, "COMMIT").await;
+    // Autocommit off and a transaction open: refused, not asked.
+    c.ok(41, "START TRANSACTION").await;
+    assert_eq!(group_within(&mut c, 42, &sql, limit).await.0, Err(DbError::LockingRead));
+    assert_eq!(data_locks_of(&mut a, id, &t.name).await, 0, "nothing was read");
+    c.ok(43, "COMMIT").await;
+    c.ok(5, "SET autocommit = 1").await;
+    c.ok(6, "START TRANSACTION").await;
+    assert_eq!(group_within(&mut c, 7, &sql, limit).await.0, Err(DbError::LockingRead));
+    assert_eq!(data_locks_of(&mut a, id, &t.name).await, 0, "nothing was read");
+    c.ok(8, "COMMIT").await;
+    // At REPEATABLE READ inside a transaction: read in its snapshot.
+    c.ok(9, "SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ").await;
+    c.ok(10, "START TRANSACTION").await;
+    let (got, snapshot, _) = group_within(&mut c, 11, &sql, limit).await;
+    assert_eq!((got.map(|g| g.values.len()), snapshot), (Ok(10), true));
+    c.ok(12, "COMMIT").await;
+    // A level for the next transaction only: refused, so as not to use it up.
+    c.ok(13, "SET TRANSACTION ISOLATION LEVEL READ COMMITTED").await;
+    assert_eq!(group_within(&mut c, 14, &sql, limit).await.0, Err(DbError::NextTransactionSet));
+    c.ok(15, "START TRANSACTION").await;
+    c.ok(16, "COMMIT").await;
+    let (got, _, _) = group_within(&mut c, 17, &sql, limit).await;
+    assert_eq!(got.map(|g| g.values.len()), Ok(10));
+    a.disconnect().await.unwrap();
+}
+
+/// A dialer whose streams count the bytes the client reads from the server.
+#[derive(Default)]
+struct CountingDialer {
+    read: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// A stream of [`CountingDialer`].
+struct Counted {
+    inner: tokio::net::TcpStream,
+    read: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl tokio::io::AsyncRead for Counted {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let polled = std::pin::Pin::new(&mut self.inner).poll_read(cx, buf);
+        let n = buf.filled().len() - before;
+        self.read.fetch_add(n, std::sync::atomic::Ordering::SeqCst);
+        polled
+    }
+}
+
+impl tokio::io::AsyncWrite for Counted {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+impl Dialer for CountingDialer {
+    fn dial(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<datarig_core::transport::BoxedStream, datarig_core::transport::DialError>,
+    > {
+        let (host, read) = (host.to_string(), self.read.clone());
+        Box::pin(async move {
+            let inner = tokio::net::TcpStream::connect((host.as_str(), port))
+                .await
+                .map_err(|e| datarig_core::transport::DialError::Failed(datarig_core::fault::Fault::io(&e)))?;
+            Ok(Box::new(Counted { inner, read }) as datarig_core::transport::BoxedStream)
+        })
+    }
+}
+
+/// A group count receives only values of a bounded size, whatever the metadata it was written
+/// from says: written for a number column that became `LONGTEXT` since (another session's
+/// `ALTER TABLE`) with 2 MB of long values, it reads a few kilobytes (each value measured, the
+/// long ones sent as their length alone), with autocommit and inside the user's transaction, and
+/// the session goes on. An answer that comes without its values measured (a statement the app
+/// does not write) is refused before a row of it is read: the connection is cut, so the rest is
+/// never received, and the session is lost for why.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_receives_only_bounded_values_whatever_the_columns_type_was() {
+    let test = "a_group_count_receives_only_bounded_values_whatever_the_columns_type_was";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = Table::make(
+        &admin,
+        "groupbound",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, k INT)",
+            "INSERT INTO {t} SELECT n, n % 3 FROM (WITH RECURSIVE s (n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s \
+             WHERE n < 30) SELECT n FROM s) AS g",
+        ],
+    )
+    .await;
+    let d = Arc::new(CountingDialer::default());
+    let o =
+        ConnectOptions::new(PAGE, SessionRole::Query, &tag(test)).dialer(Some(DialerRef(d.clone() as Arc<dyn Dialer>)));
+    let mut c = Conn::open_opts(&url, SessionRole::Query, o).await;
+    let received = || d.read.load(std::sync::atomic::Ordering::SeqCst);
+    let stale = group_sql(&t.name, "k", ("int", ValueKind::Integer), None);
+    let limit = Some(Duration::from_secs(30));
+    let (got, _, _) = group_within(&mut c, 1, &stale, limit).await;
+    assert_eq!(got.map(|g| g.values.len()), Ok(3), "counted while it is a number");
+    let mut a = side(&admin).await;
+    a.query_drop(format!("ALTER TABLE {} MODIFY k LONGTEXT", t.q())).await.unwrap();
+    a.query_drop(format!("UPDATE {} SET k = CONCAT(REPEAT('x', 200000), id) WHERE id <= 10", t.q())).await.unwrap();
+    for (id, in_tx) in [(2, false), (4, true)] {
+        if in_tx {
+            c.ok(3, "START TRANSACTION").await;
+        }
+        let before = received();
+        let (got, _, _) = group_within(&mut c, id, &stale, if in_tx { None } else { limit }).await;
+        let took = received() - before;
+        let got = got.expect("counted");
+        let long: Vec<_> = got.values.iter().filter(|v| !v.whole).collect();
+        assert_eq!(long.len(), 10, "{id}");
+        assert!(long.iter().all(|v| v.value.is_none() && v.bytes >= Some(200_001)));
+        assert!(took < 64 * 1024, "{id}: {took} bytes received for 2 MB of values");
+    }
+    c.ok(5, "COMMIT").await;
+    let evs = c.run(6, &["SELECT 1"]).await;
+    assert_eq!(page_of(&evs).1[0][0].as_deref(), Some("1"), "the session goes on");
+    // Not measured: refused at its columns, the rest never received.
+    let unmeasured = format!("SELECT k, NULL, COUNT(*) FROM {} GROUP BY k ORDER BY COUNT(*) DESC LIMIT 201", t.q());
+    let before = received();
+    let (got, _, _) = group_within(&mut c, 7, &unmeasured, limit).await;
+    assert_eq!(got, Err(DbError::SchemaChanged));
+    c.wait(|e| matches!(e, DbEvent::Lost { .. }), 10).await;
+    let took = received() - before;
+    assert!(took < 1024 * 1024, "{took} bytes received of an answer of 2 MB");
+    let mut again = Conn::open(&url, SessionRole::Query, false, test).await;
+    let evs = again.run(1, &[&format!("SELECT COUNT(*) FROM {}", t.q())]).await;
+    assert_eq!(page_of(&evs).1[0][0].as_deref(), Some("30"), "a new session reads");
+    a.disconnect().await.unwrap();
+}
+
+/// The server groups strings and bytes by their first `max_sort_length` bytes: a group count
+/// marks the values at least that long (the session's value as it is when it counts) as possibly
+/// sharing a group, apart from whether they were sent whole; shorter ones, NULL and numbers are
+/// not marked.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_marks_the_values_the_server_groups_by_a_prefix() {
+    let test = "a_group_count_marks_the_values_the_server_groups_by_a_prefix";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = Table::make(
+        &admin,
+        "groupprefix",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, t TEXT, b BLOB, v VARCHAR(3000), n INT)",
+            "INSERT INTO {t} VALUES \
+             (1, 'ab', X'0102', 'ab', 123456), \
+             (2, 'abcdef1', X'01020304AA', 'abcdef1', 123456), \
+             (3, 'abcdef2', X'01020304BB', REPEAT('v', 2000), 7), \
+             (4, REPEAT('y', 2000), REPEAT(X'AB', 5000), NULL, NULL), \
+             (5, NULL, NULL, NULL, NULL)",
+        ],
+    )
+    .await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    // (value, whole, prefix) of each value of `column`, sorted.
+    async fn marks(c: &mut Conn, id: u64, sql: &str) -> Vec<(Option<String>, bool, bool)> {
+        let (got, _, _) = group_within(c, id, sql, Some(Duration::from_secs(30))).await;
+        let mut out: Vec<_> = got.expect("counted").values.into_iter().map(|v| (v.value, v.whole, v.prefix)).collect();
+        out.sort();
+        out
+    }
+    let text = group_sql(&t.name, "t", ("text", ValueKind::Text), None);
+    let blob = group_sql(&t.name, "b", ("blob", ValueKind::Bytes), None);
+    let varchar = group_sql(&t.name, "v", ("varchar", ValueKind::Text), None);
+    let number = group_sql(&t.name, "n", ("int", ValueKind::Integer), None);
+    let s = |v: &str| Some(v.to_string());
+    let y = "y".repeat(2000);
+    // The server's default (1024 bytes): the 2000-byte values, sent whole, are marked.
+    assert_eq!(
+        marks(&mut c, 1, &text).await,
+        vec![
+            (None, true, false),
+            (s("ab"), true, false),
+            (s("abcdef1"), true, false),
+            (s("abcdef2"), true, false),
+            (Some(y.clone()), true, true)
+        ]
+    );
+    let v = "v".repeat(2000);
+    assert_eq!(
+        marks(&mut c, 2, &varchar).await,
+        vec![(None, true, false), (s("ab"), true, false), (s("abcdef1"), true, false), (Some(v), true, true)]
+    );
+    // Lowered for the session: every value at least 4 bytes long, sent or not.
+    c.ok(3, "SET SESSION max_sort_length = 4").await;
+    assert_eq!(
+        marks(&mut c, 4, &text).await,
+        vec![
+            (None, true, false),
+            (s("ab"), true, false),
+            (s("abcdef1"), true, true),
+            (s("abcdef2"), true, true),
+            (Some(y), true, true)
+        ]
+    );
+    let got = marks(&mut c, 5, &blob).await;
+    assert_eq!(got.iter().map(|(_, whole, prefix)| (*whole, *prefix)).collect::<Vec<_>>().len(), 5);
+    assert_eq!(got.iter().filter(|(_, _, prefix)| *prefix).count(), 3, "{got:?}");
+    assert!(got.iter().any(|(value, whole, prefix)| value.is_none() && !whole && *prefix), "the long one, not sent");
+    // Numbers are not strings, whatever their length as text.
+    assert!(marks(&mut c, 6, &number).await.iter().all(|(_, _, prefix)| !prefix));
+    c.ok(7, "SET SESSION max_sort_length = DEFAULT").await;
+    assert!(!marks(&mut c, 8, &text).await[3].2, "back to the default: abcdef2 is not marked");
+}
+
+/// Every value of a group count is the text a cell of it shows in the grid: `DECIMAL` with its
+/// scale, `TIMESTAMP` in the session's time zone, `DATETIME`, binary data as hex, text, an
+/// `ENUM`, `FLOAT`, integers signed and unsigned, `DATE`, `TIME` with fractions, `YEAR`,
+/// `DOUBLE`, `TINYINT(1)`, and NULL (every value measured, whatever its type); a value over
+/// 4 KiB comes as its length alone, not whole.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_decodes_values_as_the_grid_does() {
+    let test = "a_group_count_decodes_values_as_the_grid_does";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = Table::make(
+        &admin,
+        "groupvalues",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, n DECIMAL(10, 4), at TIMESTAMP(3) NULL, dt DATETIME NULL, \
+             b VARBINARY(9000), t TEXT, e ENUM('a', 'b c'), f FLOAT, i INT, bi BIGINT UNSIGNED, d DATE, \
+             tm TIME(2), y YEAR, dbl DOUBLE, bo TINYINT(1))",
+            "INSERT INTO {t} VALUES \
+             (1, 12.5, '2026-01-02 03:04:05.123', '2026-01-02 03:04:05', X'00FF10', 'x', 'a', 0.1, -7, \
+              18446744073709551615, '2026-01-02', '-838:59:59.00', 2026, 0.1, 1), \
+             (2, 12.5, '2026-01-02 03:04:05.123', '2026-01-02 03:04:05', X'00FF10', 'x', 'a', 0.1, -7, \
+              18446744073709551615, '2026-01-02', '-838:59:59.00', 2026, 0.1, 1), \
+             (3, -0.0001, '1999-12-31 23:59:59', '1000-01-01 00:00:00', X'', '', 'b c', -2.5, 0, 0, \
+              '1000-01-01', '12:34:56.78', 1901, 1e300, 0), \
+             (4, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL), \
+             (5, 7, '2026-06-01 00:00:00', '2026-06-01 00:00:00', REPEAT(X'AB', 5000), REPEAT('y', 5000), 'a', 3, \
+              2147483647, 1, '9999-12-31', '00:00:00', 2155, -2.5, 1)",
+        ],
+    )
+    .await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    c.ok(1, "SET time_zone = '+09:00'").await;
+    let columns = [
+        ("n", ("decimal", ValueKind::Decimal)),
+        ("at", ("timestamp", ValueKind::TimestampTz)),
+        ("dt", ("datetime", ValueKind::Timestamp)),
+        ("b", ("varbinary", ValueKind::Bytes)),
+        ("t", ("text", ValueKind::Text)),
+        ("e", ("enum", ValueKind::Text)),
+        ("f", ("float", ValueKind::Float)),
+        ("i", ("int", ValueKind::Integer)),
+        ("bi", ("bigint unsigned", ValueKind::Integer)),
+        ("d", ("date", ValueKind::Date)),
+        ("tm", ("time", ValueKind::Time)),
+        ("y", ("year", ValueKind::Integer)),
+        ("dbl", ("double", ValueKind::Float)),
+        ("bo", ("tinyint", ValueKind::Integer)),
+    ];
+    let mut id = 10;
+    for (column, ty) in columns {
+        id += 1;
+        let evs = c.run(id, &[&format!("SELECT {column} FROM {} ORDER BY id", t.q())]).await;
+        let grid: Vec<Option<String>> = page_of(&evs).1.iter().map(|r| r[0].clone()).collect();
+        id += 1;
+        let (got, _, _) = group_within(&mut c, id, &group_sql(&t.name, column, ty, None), None).await;
+        let got = got.unwrap_or_else(|e| panic!("{column}: {e:?}"));
+        assert_eq!(got.values.iter().map(|v| v.rows).sum::<u64>(), 5, "{column}");
+        for v in &got.values {
+            if v.whole {
+                let rows = grid.iter().filter(|g| **g == v.value).count() as u64;
+                assert_eq!(rows, v.rows, "{column}: {:?} as the grid shows it", v.value);
+            } else {
+                assert_eq!((column, v.value.as_deref(), v.bytes, v.rows), (column, None, Some(5000), 1));
+            }
+        }
+        let long = got.values.iter().filter(|v| !v.whole).count();
+        assert_eq!(long, usize::from(matches!(column, "b" | "t")), "{column}");
+        let null = got.values.iter().find(|v| v.value.is_none() && v.whole).expect("the NULL group");
+        assert_eq!((null.bytes, null.rows), (None, 1), "{column}");
+    }
+}
+
+/// A group count shows each value as the grid's cell of its column, also where the server writes
+/// the column by its attributes: `YEAR` 0 as `0000`, `ZEROFILL` integers and decimals padded to
+/// their width, `FLOAT(M,D)` and `DOUBLE(M,D)` with their decimals, `DATETIME` and `TIME` with
+/// their fractional digits, `DECIMAL` with its scale, `TINYINT(1)`, `ENUM`, `SET` and binary
+/// strings. A value whose text could not be told is never shown otherwise than the grid shows
+/// it: it is taken back (not shown, `inexact`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_shows_values_as_their_columns_attributes_write_them() {
+    let test = "a_group_count_shows_values_as_their_columns_attributes_write_them";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = Table::make(
+        &admin,
+        "groupattrs",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, y YEAR, z INT(5) UNSIGNED ZEROFILL, \
+             zb BIGINT(12) UNSIGNED ZEROFILL, zd DECIMAL(6, 2) UNSIGNED ZEROFILL, f FLOAT(7, 2), \
+             d DOUBLE(10, 3), dt DATETIME(6), tm TIME(3), dc DECIMAL(10, 4), bo TINYINT(1), \
+             e ENUM('a', 'bb'), st SET('x', 'y'), vb VARBINARY(10))",
+            "INSERT INTO {t} VALUES \
+             (1, 0, 42, 7, 1.5, 1.5, 1.5, '2026-01-02 03:04:05.1', '01:02:03.5', 1.5, 1, 'bb', 'x,y', X'00FF'), \
+             (2, 0, 42, 7, 1.5, 1.5, 1.5, '2026-01-02 03:04:05.1', '01:02:03.5', 1.5, 1, 'bb', 'x,y', X'00FF'), \
+             (3, 2026, 12345, 123456789012, 9999.99, -2.25, -0.001, '1000-01-01 00:00:00', '-838:59:59', -0.0001, 0, \
+              'a', '', X''), \
+             (4, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL), \
+             (5, 1901, 0, 0, 0, 0, 0, '9999-12-31 23:59:59.999999', '00:00:00', 0, -1, 'a', 'y', X'41')",
+        ],
+    )
+    .await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let columns = [
+        ("y", ("year", ValueKind::Integer)),
+        ("z", ("int unsigned zerofill", ValueKind::Integer)),
+        ("zb", ("bigint unsigned zerofill", ValueKind::Integer)),
+        ("zd", ("decimal unsigned zerofill", ValueKind::Decimal)),
+        ("f", ("float", ValueKind::Float)),
+        ("d", ("double", ValueKind::Float)),
+        ("dt", ("datetime", ValueKind::Timestamp)),
+        ("tm", ("time", ValueKind::Time)),
+        ("dc", ("decimal", ValueKind::Decimal)),
+        ("bo", ("tinyint", ValueKind::Integer)),
+        ("e", ("enum", ValueKind::Text)),
+        ("st", ("set", ValueKind::Text)),
+        ("vb", ("varbinary", ValueKind::Bytes)),
+    ];
+    let mut id = 10;
+    for (column, ty) in columns {
+        id += 1;
+        let evs = c.run(id, &[&format!("SELECT {column} FROM {} ORDER BY id", t.q())]).await;
+        let grid: Vec<Option<String>> = page_of(&evs).1.iter().map(|r| r[0].clone()).collect();
+        id += 1;
+        let (got, _, _) = group_within(&mut c, id, &group_sql(&t.name, column, ty, None), None).await;
+        let got = got.unwrap_or_else(|e| panic!("{column}: {e:?}"));
+        assert_eq!(got.values.iter().map(|v| v.rows).sum::<u64>(), 5, "{column}");
+        for v in &got.values {
+            assert!(!v.inexact, "{column}: {v:?} is told");
+            let rows = grid.iter().filter(|g| **g == v.value).count() as u64;
+            assert_eq!(rows, v.rows, "{column}: {:?} as the grid shows it ({grid:?})", v.value);
+        }
+    }
+}
+
+/// The table's columns come with its keys, in its order, with their types, `NOT NULL`, the
+/// primary and foreign keys and the `INVISIBLE` ones.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_keys_read_says_the_tables_columns() {
+    let test = "the_keys_read_says_the_tables_columns";
+    let Some((url, admin)) = urls(test) else { return };
+    let parent = Table::make(&admin, "colparent", &["CREATE TABLE {t} (id BIGINT UNSIGNED PRIMARY KEY)"]).await;
+    let child = Table::make(
+        &admin,
+        "colchild",
+        &[&format!(
+            "CREATE TABLE {{t}} (id INT NOT NULL, `Mixed Name` VARCHAR(20) NOT NULL, hidden INT NULL INVISIBLE, \
+             parent_id BIGINT UNSIGNED NULL, amount DECIMAL(14, 2), PRIMARY KEY (id), \
+             CONSTRAINT {{t}}_fk FOREIGN KEY (parent_id) REFERENCES {} (id))",
+            parent.q()
+        )
+        .replace("{t}_fk", &format!("zz_it_colchild_fk_{}", std::process::id()))],
+    )
+    .await;
+    let mut m = Conn::start(&url, SessionRole::Meta, false, "colread");
+    m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    m.session.send(DbCommand::LoadTableKeys { id: 1, schema: "shop".into(), table: child.name.clone() });
+    let DbEvent::TableKeys { result, .. } = m.wait(|e| matches!(e, DbEvent::TableKeys { id: 1, .. }), 10).await else {
+        unreachable!()
+    };
+    let keys = result.expect("the keys");
+    assert_eq!(keys.primary_key, ["id"]);
+    let got: Vec<(String, String, bool, bool, bool, bool)> = keys
+        .columns
+        .expect("the columns are known")
+        .into_iter()
+        .map(|c| (c.name, c.type_name, c.not_null, c.primary_key, c.foreign_key, c.invisible))
+        .collect();
+    let col = |n: &str, t: &str, nn, pk, fk, inv| (n.to_string(), t.to_string(), nn, pk, fk, inv);
+    assert_eq!(
+        got,
+        vec![
+            col("id", "int", true, true, false, false),
+            col("Mixed Name", "varchar(20)", true, false, false, false),
+            col("hidden", "int", false, false, false, true),
+            col("parent_id", "bigint unsigned", false, false, true, false),
+            col("amount", "decimal(14,2)", false, false, false, false),
+        ]
+    );
+    drop(child);
+    drop(parent);
+}
+
+/// A group count sent while a result is held waits behind it (nothing else is sent while it is
+/// read) and runs once the result is closed; cancelled while it waits, it is answered at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_waits_behind_a_held_result() {
+    let test = "a_group_count_waits_behind_a_held_result";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "groupheld", 700).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let sql = group_sql(&t.name, "v", ("varchar", ValueKind::Text), Some("id <= 3"));
+    let evs = c.run_as(1, &[&format!("SELECT id FROM {} ORDER BY id", t.q())], PagingMode::Hold).await;
+    assert!(page_of(&evs).2, "a result held for more pages");
+    c.session.send(DbCommand::GroupCount { id: 2, sql: sql.clone(), limit: Some(Duration::from_secs(30)) });
+    let early =
+        tokio::time::timeout(Duration::from_millis(300), c.wait(|e| matches!(e, DbEvent::GroupCounted { .. }), 1))
+            .await;
+    assert!(early.is_err(), "not answered while the result is held");
+    c.session.send(DbCommand::ClosePortal { id: 1 });
+    let ev = c.wait(|e| matches!(e, DbEvent::GroupCounted { id: 2, .. }), 15).await;
+    let DbEvent::GroupCounted { result: Ok(got), .. } = ev else { panic!("{ev:?}") };
+    assert_eq!(
+        group_pairs(&got),
+        vec![(Some("row 1".into()), 1), (Some("row 2".into()), 1), (Some("row 3".into()), 1)]
+    );
+    // Cancelled while it waits: answered at once.
+    let evs = c.run_as(3, &[&format!("SELECT id FROM {} ORDER BY id", t.q())], PagingMode::Hold).await;
+    assert!(page_of(&evs).2);
+    c.session.send(DbCommand::GroupCount { id: 4, sql, limit: None });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    c.session.cancel();
+    let ev = c.wait(|e| matches!(e, DbEvent::GroupCounted { id: 4, .. }), 5).await;
+    assert!(matches!(ev, DbEvent::GroupCounted { result: Err(DbError::Cancelled), .. }), "{ev:?}");
+    c.session.send(DbCommand::ClosePortal { id: 3 });
+    c.ok(5, "SELECT 1").await;
 }

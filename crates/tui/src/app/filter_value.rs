@@ -24,7 +24,7 @@ use super::*;
 use crate::widgets::filter_line::FIELD_CAP;
 use crate::widgets::grid::Shape;
 use crate::widgets::text_input::TextInput;
-use datarig_core::driver::{ArrayElement, ColumnMeta, ReadIn, ValueKind};
+use datarig_core::driver::{ColumnMeta, ReadIn, ValueKind};
 use datarig_core::export;
 use datarig_core::query::{self, CaseMode, CmpOp, Cond, Filter, Query, RenderError, Value};
 
@@ -85,82 +85,13 @@ pub struct ByValueMenu {
 }
 
 /// What a column's values compare by, as far as a filter writes them: `Ok(true)` with an order
-/// too (`<`, `>`), `Ok(false)` equality only; `Err` with why not.
+/// too (`<`, `>`), `Ok(false)` equality only; `Err` with why not ([`query::compares`]).
 fn compares(d: Dialect, m: &ColumnMeta, enum_known: bool) -> Result<bool, Label> {
-    let mysql = matches!(d, Dialect::MySql(_));
-    let ty = m.type_name.to_ascii_lowercase();
-    match m.kind {
-        ValueKind::Integer
-        | ValueKind::Decimal
-        | ValueKind::Float
-        | ValueKind::Text
-        | ValueKind::Bool
-        | ValueKind::Date
-        | ValueKind::Time
-        | ValueKind::Timestamp
-        | ValueKind::TimestampTz
-        | ValueKind::Interval => Ok(true),
-        // MySQL's spatial and vector types come as bytes but do not compare as such.
-        ValueKind::Bytes if mysql && matches!(ty.as_str(), "geometry" | "vector") => {
-            Err(Label::TableFilterByValueOffType)
-        }
-        ValueKind::Bytes => Ok(true),
-        // MySQL shows bits as `b'…'`, which is no string literal of them.
-        ValueKind::Bit if mysql => Err(Label::TableFilterByValueOffType),
-        ValueKind::Bit => Ok(true),
-        // `jsonb` has equality; `json` has none, and MySQL compares JSON with a string as a
-        // JSON string.
-        ValueKind::Json if !mysql && ty == "jsonb" => Ok(false),
-        ValueKind::Json => Err(Label::TableFilterByValueOffType),
-        // An array compares through its element type's equality: only one known to have it.
-        ValueKind::Array(ArrayElement::Number | ArrayElement::Bool | ArrayElement::Text)
-            if !mysql && ty.strip_suffix("[]").is_some_and(|e| PG_ELEMENT_EQ.contains(&e)) =>
-        {
-            Ok(false)
-        }
-        ValueKind::Array(_) => Err(Label::TableFilterByValueOffType),
-        ValueKind::Other if !mysql && (enum_known || PG_ORDERED.contains(&ty.as_str())) => Ok(true),
-        ValueKind::Other => Err(Label::TableFilterByValueOffType),
+    match query::compares(d, m, enum_known) {
+        Ok(c) => Ok(c == query::Compares::Order),
+        Err(query::NoEquality) => Err(Label::TableFilterByValueOffType),
     }
 }
-
-/// PostgreSQL types of no kind of their own whose values compare as their text reads back
-/// (equality and order).
-const PG_ORDERED: &[&str] = &["uuid", "inet", "cidr", "macaddr", "macaddr8", "citext"];
-
-/// Built-in PostgreSQL element types (as an array's type names them, `text` of `text[]`) known
-/// to have the equality an array's `=` compares its elements with. Any other (`xml`, `json`,
-/// `point` and the other geometric types have none) is not compared.
-const PG_ELEMENT_EQ: &[&str] = &[
-    "int2",
-    "int4",
-    "int8",
-    "float4",
-    "float8",
-    "numeric",
-    "oid",
-    "money",
-    "text",
-    "varchar",
-    "bpchar",
-    "char",
-    "name",
-    "bool",
-    "date",
-    "time",
-    "timetz",
-    "timestamp",
-    "timestamptz",
-    "interval",
-    "uuid",
-    "bytea",
-    "inet",
-    "cidr",
-    "macaddr",
-    "macaddr8",
-    "bit",
-    "varbit",
-];
 
 /// What a filter by value says when the filter line is ahead of the rows shown.
 fn line_ahead_label(why: LineAhead) -> Label {

@@ -14,11 +14,15 @@
 //!
 //! With them comes, per column, whether its collation is deterministic (`pg_collation`, by the
 //! column's `attcollation`; a column of no collation is): a pattern without case (`ILIKE`) is
-//! written only on such a column, the server refuses it on another.
+//! written only on such a column, the server refuses it on another. And the table's columns in
+//! its order ([`OrderKeys::columns`]): each one's type (`format_type`, which reads `pg_type`;
+//! with its modifier only when the server's own procedure writes that, as a type's own
+//! `typmodout` may be any code), `NOT NULL`, and whether a primary or a foreign key constraint
+//! names it (`pg_constraint`, by its column numbers).
 
 use super::read;
 use datarig_core::driver::DbError;
-use datarig_core::driver::keys::OrderKeys;
+use datarig_core::driver::keys::{CatalogColumn, OrderKeys};
 use tokio_postgres::Client;
 use tokio_postgres::types::Type;
 
@@ -43,7 +47,8 @@ pub const PICK: &str = pick!();
 /// columns in order, whether they are all `NOT NULL`; then the table's columns and whether the
 /// collation of each is deterministic (the same on every row).
 pub const ORDER_KEYS: &str = concat!(
-    "SELECT c.relhassubclass AND c.relkind = 'r', x.indisprimary, x.columns, x.not_null, d.names, d.deterministic
+    "SELECT c.relhassubclass AND c.relkind = 'r', x.indisprimary, x.columns, x.not_null, d.names, d.deterministic,
+       d.types, d.attnotnull, d.pk, d.fk
 FROM pg_catalog.pg_class c
 JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 LEFT JOIN LATERAL (
@@ -97,9 +102,32 @@ LEFT JOIN LATERAL (
       )))
 ) x ON true
 LEFT JOIN LATERAL (
-  -- Per column, whether its collation is deterministic: a column of no collation (0) is.
+  -- Per column, in the table's order: whether its collation is deterministic (a column of no
+  -- collation, 0, is), its type as the server writes it, NOT NULL, and whether it is part of
+  -- the primary key or of a foreign key (constraints by their column numbers).
   SELECT pg_catalog.array_agg(a.attname::text ORDER BY a.attnum) AS names,
-         pg_catalog.array_agg(co.collisdeterministic IS NOT FALSE ORDER BY a.attnum) AS deterministic
+         pg_catalog.array_agg(co.collisdeterministic IS NOT FALSE ORDER BY a.attnum) AS deterministic,
+         -- A type's modifier is written by its `typmodout` procedure (an array's, by its
+         -- element type's): taken only when that is the server's own (an object number below
+         -- 16384, `FirstNormalObjectId`), else the type is written without it, so that no
+         -- procedure of a user's or an extension's runs here. Every comparison names the
+         -- server's own operator on `oid`s: another one in the path (`>=(oid, integer)`) would
+         -- be a closer match than a cast.
+         pg_catalog.array_agg(pg_catalog.format_type(a.atttypid, CASE WHEN NOT EXISTS (
+           SELECT 1 FROM pg_catalog.pg_type t
+           WHERE (t.oid OPERATOR(pg_catalog.=) a.atttypid OR t.oid OPERATOR(pg_catalog.=) (
+               SELECT e.typelem FROM pg_catalog.pg_type e WHERE e.oid OPERATOR(pg_catalog.=) a.atttypid))
+             AND t.typmodout::pg_catalog.oid OPERATOR(pg_catalog.>=) 16384::pg_catalog.oid
+         ) THEN a.atttypmod END) ORDER BY a.attnum) AS types,
+         pg_catalog.array_agg(a.attnotnull ORDER BY a.attnum) AS attnotnull,
+         pg_catalog.array_agg(EXISTS (
+           SELECT 1 FROM pg_catalog.pg_constraint k
+           WHERE k.conrelid = c.oid AND k.contype = 'p' AND a.attnum = ANY (k.conkey)
+         ) ORDER BY a.attnum) AS pk,
+         pg_catalog.array_agg(EXISTS (
+           SELECT 1 FROM pg_catalog.pg_constraint k
+           WHERE k.conrelid = c.oid AND k.contype = 'f' AND a.attnum = ANY (k.conkey)
+         ) ORDER BY a.attnum) AS fk
   FROM pg_catalog.pg_attribute a
   LEFT JOIN pg_catalog.pg_collation co ON co.oid = a.attcollation
   WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
@@ -108,14 +136,45 @@ WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'f', 'v', 'm
 );
 
 /// One row of [`ORDER_KEYS`]: `(inherited, primary, columns, all NOT NULL, the table's
-/// columns, whether each one's collation is deterministic)`.
-type RawRow = (bool, Option<bool>, Option<Vec<String>>, Option<bool>, Option<Vec<String>>, Option<Vec<bool>>);
+/// columns, whether each one's collation is deterministic)`, then the table's columns
+/// ([`Described`]).
+type RawRow =
+    (bool, Option<bool>, Option<Vec<String>>, Option<bool>, Option<Vec<String>>, Option<Vec<bool>>, Described);
+
+/// Per column of the table, in its order: its type, NOT NULL, part of the primary key, part of
+/// a foreign key.
+type Described = (Option<Vec<String>>, Option<Vec<bool>>, Option<Vec<bool>>, Option<Vec<bool>>);
+
+/// The table's columns from the names and what [`Described`] says of each: `None` (not known)
+/// when the lists do not pair up; none at all for a table of no column (the lists are NULL).
+fn columns_of(names: &Option<Vec<String>>, (types, not_null, pk, fk): &Described) -> Option<Vec<CatalogColumn>> {
+    let (Some(names), Some(types), Some(not_null), Some(pk), Some(fk)) = (names, types, not_null, pk, fk) else {
+        let none = names.is_none() && types.is_none() && not_null.is_none() && pk.is_none() && fk.is_none();
+        return none.then(Vec::new);
+    };
+    let n = names.len();
+    if [types.len(), not_null.len(), pk.len(), fk.len()].iter().any(|&l| l != n) {
+        return None;
+    }
+    Some(
+        (0..n)
+            .map(|i| CatalogColumn {
+                name: names[i].clone(),
+                type_name: types[i].clone(),
+                not_null: not_null[i],
+                primary_key: pk[i],
+                foreign_key: fk[i],
+                invisible: false,
+            })
+            .collect(),
+    )
+}
 
 /// The rows of [`ORDER_KEYS`] as the keys.
 /// No row: there is no such table ([`DbError::NotFound`]).
 pub(crate) fn keys_of(rows: Vec<RawRow>) -> Result<OrderKeys, DbError> {
     let Some(first) = rows.first() else { return Err(DbError::NotFound) };
-    let mut keys = OrderKeys { inherited: first.0, ..OrderKeys::default() };
+    let mut keys = OrderKeys { inherited: first.0, columns: columns_of(&first.4, &first.6), ..OrderKeys::default() };
     // One answer per column, or none taken (not known).
     if let (Some(names), Some(det)) = (&first.4, &first.5)
         && names.len() == det.len()
@@ -146,7 +205,13 @@ pub(crate) async fn load_order_keys(
     version: u32,
 ) -> Result<OrderKeys, DbError> {
     let rows = read(client, ORDER_KEYS, &[(&schema, Type::TEXT), (&table, Type::TEXT)]).await?;
-    let keys = keys_of(rows.iter().map(|r| (r.get(0), r.get(1), r.get(2), r.get(3), r.get(4), r.get(5))).collect())?;
+    let keys = keys_of(
+        rows.iter()
+            .map(|r| {
+                (r.get(0), r.get(1), r.get(2), r.get(3), r.get(4), r.get(5), (r.get(6), r.get(7), r.get(8), r.get(9)))
+            })
+            .collect(),
+    )?;
     Ok(OrderKeys { like_nondeterministic: Some(like_nondeterministic(version)), ..keys })
 }
 
@@ -162,6 +227,62 @@ mod tests {
 
     fn cols(c: &[&str]) -> Option<Vec<String>> {
         Some(c.iter().map(|s| s.to_string()).collect())
+    }
+
+    /// No description of the columns (the lists did not come).
+    fn none() -> Described {
+        (None, None, None, None)
+    }
+
+    #[test]
+    fn the_columns_come_in_the_tables_order_with_their_types_and_keys() {
+        let described: Described = (
+            cols(&["integer", "character varying(20)", "bigint"]),
+            Some(vec![true, false, false]),
+            Some(vec![true, false, false]),
+            Some(vec![false, false, true]),
+        );
+        let row =
+            (false, Some(true), cols(&["id"]), Some(true), cols(&["id", "name", "owner"]), None, described.clone());
+        let k = keys_of(vec![row]).unwrap();
+        let col = |name: &str, type_name: &str, not_null, primary_key, foreign_key| CatalogColumn {
+            name: name.into(),
+            type_name: type_name.into(),
+            not_null,
+            primary_key,
+            foreign_key,
+            invisible: false,
+        };
+        assert_eq!(
+            k.columns,
+            Some(vec![
+                col("id", "integer", true, true, false),
+                col("name", "character varying(20)", false, false, false),
+                col("owner", "bigint", false, false, true),
+            ])
+        );
+        // Lists that do not pair up: not known, never a shorter list.
+        let short = (cols(&["integer"]), described.1.clone(), described.2.clone(), described.3.clone());
+        assert_eq!(columns_of(&cols(&["id", "name", "owner"]), &short), None);
+        assert_eq!(columns_of(&None, &described), None);
+        // A table of no column: known, none.
+        assert_eq!(columns_of(&None, &none()), Some(Vec::new()));
+        // Nothing that opens the relation reads them.
+        for part in ["pg_catalog.format_type(a.atttypid, CASE WHEN NOT EXISTS (", "k.contype = 'p'", "k.contype = 'f'"]
+        {
+            assert!(ORDER_KEYS.contains(part), "{part}");
+        }
+        // A modifier only where the server's own procedure writes it: of the type and of an
+        // array's element type; never the modifier passed as it is.
+        for part in [
+            "WHERE (t.oid OPERATOR(pg_catalog.=) a.atttypid OR t.oid OPERATOR(pg_catalog.=) (",
+            "SELECT e.typelem FROM pg_catalog.pg_type e WHERE e.oid OPERATOR(pg_catalog.=) a.atttypid))",
+            "AND t.typmodout::pg_catalog.oid OPERATOR(pg_catalog.>=) 16384::pg_catalog.oid",
+            ") THEN a.atttypmod END) ORDER BY a.attnum) AS types",
+        ] {
+            assert!(ORDER_KEYS.contains(part), "{part}");
+        }
+        assert!(!ORDER_KEYS.contains("format_type(a.atttypid, a.atttypmod)"));
     }
 
     /// A key counts only where it compares each column as an ORDER BY of it does, and on whole,
@@ -200,9 +321,9 @@ mod tests {
         let names = cols(&["id", "email", "nick"]);
         let det = Some(vec![true, true, false]);
         let rows = vec![
-            (false, Some(false), cols(&["email"]), Some(true), names.clone(), det.clone()),
-            (false, Some(true), cols(&["id"]), Some(true), names.clone(), det.clone()),
-            (false, Some(false), cols(&["nick"]), Some(false), names.clone(), det.clone()),
+            (false, Some(false), cols(&["email"]), Some(true), names.clone(), det.clone(), none()),
+            (false, Some(true), cols(&["id"]), Some(true), names.clone(), det.clone(), none()),
+            (false, Some(false), cols(&["nick"]), Some(false), names.clone(), det.clone(), none()),
         ];
         let k = keys_of(rows).unwrap();
         assert_eq!(k.primary_key, ["id"]);
@@ -211,11 +332,11 @@ mod tests {
         let want = [("email", true), ("id", true), ("nick", false)].map(|(c, d)| (c.to_string(), d));
         assert_eq!(k.deterministic, want.into_iter().collect());
         // A table without a usable key: one row without an index, its columns still read.
-        let k = keys_of(vec![(true, None, None, None, cols(&["a"]), Some(vec![false]))]).unwrap();
+        let k = keys_of(vec![(true, None, None, None, cols(&["a"]), Some(vec![false]), none())]).unwrap();
         let deterministic = [("a".to_string(), false)].into_iter().collect();
-        assert_eq!(k, OrderKeys { inherited: true, deterministic, ..OrderKeys::default() });
+        assert_eq!(k, OrderKeys { inherited: true, deterministic, columns: None, ..OrderKeys::default() });
         // Answers that do not pair up with the columns: none taken (not known).
-        let k = keys_of(vec![(false, None, None, None, cols(&["a", "b"]), Some(vec![true]))]).unwrap();
+        let k = keys_of(vec![(false, None, None, None, cols(&["a", "b"]), Some(vec![true]), none())]).unwrap();
         assert!(k.deterministic.is_empty());
         // No such table: not found, never "no key".
         assert_eq!(keys_of(Vec::new()), Err(DbError::NotFound));

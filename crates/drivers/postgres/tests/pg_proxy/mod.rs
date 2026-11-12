@@ -41,18 +41,22 @@ pub enum Fault {
     Close,
 }
 
-/// Which simple query a fault waits for.
+/// Which message a fault waits for: a simple query of a text or starting with one, or a
+/// `Parse` whose statement holds a text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Wanted {
     Exactly(String),
     Starting(String),
+    Parsing(String),
 }
 
 impl Wanted {
-    fn is(&self, query: &str) -> bool {
+    /// Whether message `tag` with text `query` (a `Parse`'s: its statement's) is the one.
+    fn is(&self, tag: u8, query: &str) -> bool {
         match self {
-            Wanted::Exactly(text) => query == text,
-            Wanted::Starting(text) => query.starts_with(text.as_str()),
+            Wanted::Exactly(text) => tag == b'Q' && query == text,
+            Wanted::Starting(text) => tag == b'Q' && query.starts_with(text.as_str()),
+            Wanted::Parsing(text) => tag == b'P' && query.contains(text.as_str()),
         }
     }
 }
@@ -136,6 +140,12 @@ impl Proxy {
     /// The next simple query that starts with `start` (on any connection) meets `fault`, once.
     pub fn fault_start(&self, start: &str, fault: Fault) {
         self.faults.lock().unwrap().push((Wanted::Starting(start.to_string()), fault));
+    }
+
+    /// The next `Parse` (on any connection) of a statement holding `text` meets `fault`, once
+    /// (only [`Fault::Hold`] and [`Fault::Delay`] mean anything for it).
+    pub fn fault_parse(&self, text: &str, fault: Fault) {
+        self.faults.lock().unwrap().push((Wanted::Parsing(text.to_string()), fault));
     }
 
     /// Whether a fault set is still waiting for its query.
@@ -268,7 +278,12 @@ async fn relay(
         let cstr = |b: &[u8]| String::from_utf8_lossy(b.split(|x| *x == 0).next().unwrap_or(&[])).to_string();
         let fault = {
             let mut faults = faults.lock().unwrap();
-            let met = faults.iter().position(|(wanted, _)| tag == b'Q' && wanted.is(&cstr(&msg)));
+            // A `Parse`: the statement's name, then its text.
+            let text = match tag {
+                b'P' => cstr(&msg[msg.iter().position(|b| *b == 0).map_or(0, |i| i + 1)..]),
+                _ => cstr(&msg),
+            };
+            let met = faults.iter().position(|(wanted, _)| wanted.is(tag, &text));
             met.map(|at| faults.remove(at))
         };
         let msg = match fault {
@@ -277,7 +292,7 @@ async fn relay(
                 return Ok(());
             }
             Some((_, Fault::Instead(text))) => [text.as_bytes(), &[0]].concat(),
-            Some((Wanted::Exactly(start) | Wanted::Starting(start), Fault::Head(text))) => {
+            Some((Wanted::Exactly(start) | Wanted::Starting(start) | Wanted::Parsing(start), Fault::Head(text))) => {
                 [text.as_bytes(), &msg[start.len()..]].concat()
             }
             Some((_, Fault::Delay(by))) => {

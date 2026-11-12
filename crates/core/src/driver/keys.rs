@@ -54,6 +54,25 @@ pub struct OrderKeys {
     /// later), as its version was read on the session that read the keys. `None`: not known
     /// (MySQL says nothing of it).
     pub like_nondeterministic: Option<bool>,
+    /// The table's columns in the table's order, read from the catalog with the keys (no
+    /// relation opened either). `None`: not known (the answer did not read as one list).
+    pub columns: Option<Vec<CatalogColumn>>,
+}
+
+/// One column of a table as the catalog describes it ([`OrderKeys::columns`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatalogColumn {
+    pub name: String,
+    /// Its type as the server writes it (PostgreSQL `format_type`: `character varying(20)`;
+    /// MySQL `COLUMN_TYPE`: `varchar(20)`).
+    pub type_name: String,
+    pub not_null: bool,
+    /// Part of the primary key.
+    pub primary_key: bool,
+    /// Part of a foreign key (it references another table).
+    pub foreign_key: bool,
+    /// MySQL: an `INVISIBLE` column, which `SELECT *` leaves out (PostgreSQL has none).
+    pub invisible: bool,
 }
 
 /// One kind of key.

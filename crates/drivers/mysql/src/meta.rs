@@ -150,6 +150,9 @@ pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedS
                 DbCommand::Count { id, .. } => {
                     DbEvent::Counted { id, result: Err(DbError::NotSupported), snapshot: false }
                 }
+                DbCommand::GroupCount { id, .. } => {
+                    DbEvent::GroupCounted { id, result: Err(DbError::NotSupported), snapshot: false }
+                }
                 DbCommand::Estimate { id, .. } => DbEvent::Estimated { id, result: Err(DbError::NotSupported) },
                 DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id, result: Err(DbError::NotSupported) },
                 DbCommand::Export { id, .. } => {

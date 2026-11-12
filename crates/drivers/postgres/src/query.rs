@@ -267,7 +267,7 @@ impl Tx {
 /// How a read-only session starts a transaction of its own.
 const BEGIN_READ_ONLY: &str = "BEGIN READ ONLY";
 
-/// How a read of the app's own (a bounded count, an estimate)
+/// How a read of the app's own (a bounded count, an estimate, a count of a column's values)
 /// starts its transaction: read-only, at `READ COMMITTED` whatever the session's default. Each
 /// of these reads is one statement, whose answer is what was committed when it started (as a
 /// count outside the user's block says), so no snapshot of the transaction's is needed; at
@@ -742,6 +742,11 @@ fn cancelled_count(id: u64) -> DbEvent {
     DbEvent::Counted { id, result: Err(DbError::Cancelled), snapshot: false }
 }
 
+/// Group count `id`'s answer when it was cancelled.
+fn cancelled_group_count(id: u64) -> DbEvent {
+    DbEvent::GroupCounted { id, result: Err(DbError::Cancelled), snapshot: false }
+}
+
 /// Estimate `id`'s answer when it was cancelled.
 fn cancelled_estimate(id: u64) -> DbEvent {
     DbEvent::Estimated { id, result: Err(DbError::Cancelled) }
@@ -848,6 +853,16 @@ pub(crate) async fn query_loop(
                         continue;
                     }
                     Err(closed) => unanswered(&events, closed, cancelled_count(id)),
+                }
+            }
+            // Answered once; a session the UI closed meanwhile answers nothing.
+            Next::Command(DbCommand::GroupCount { id, sql, limit }) => {
+                match group::group_count(&mut client, &mut link, &env, &mut tx, &sql, limit).await {
+                    Ok((result, snapshot)) => {
+                        let _ = events.send(DbEvent::GroupCounted { id, result, snapshot });
+                        continue;
+                    }
+                    Err(closed) => unanswered(&events, closed, cancelled_group_count(id)),
                 }
             }
             // Answered once; a session the UI closed meanwhile answers nothing.
@@ -2408,6 +2423,21 @@ async fn portal<'a>(
                 };
                 let _ = env.events.send(DbEvent::Counted { id: cid, result, snapshot });
             }
+            // So does a count of a column's values.
+            Next::Command(DbCommand::GroupCount { id: cid, sql, limit: _ }) => {
+                if env.cancel.begin() {
+                    let _ = env.events.send(cancelled_group_count(cid));
+                    continue;
+                }
+                let (result, snapshot) = match group::group_counted_in(&txn, link, env, &sql).await {
+                    Ok(counted) => counted,
+                    Err(closed) => {
+                        let stop = unanswered(env.events, closed, cancelled_group_count(cid));
+                        return Err(Halted { stop, reply: None });
+                    }
+                };
+                let _ = env.events.send(DbEvent::GroupCounted { id: cid, result, snapshot });
+            }
             // Not while the portal holds a transaction open: the locks planning takes would last
             // as long as it does. Nothing is sent; the result goes on paging.
             Next::Command(DbCommand::Estimate { id: cid, .. }) => {
@@ -3101,6 +3131,7 @@ fn split_page<T>(carry: &mut Option<T>, fetched: Vec<T>, page_size: usize) -> (V
 
 mod apply;
 mod export;
+mod group;
 
 #[cfg(test)]
 mod tests;

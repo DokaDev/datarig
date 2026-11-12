@@ -1067,6 +1067,12 @@ async fn order_keys_are_read_without_a_lock() {
         format!("ALTER TABLE {s}.keys_probe ADD CONSTRAINT probe_deferred UNIQUE (note) DEFERRABLE"),
         format!("CREATE TABLE {s}.parent (id int PRIMARY KEY)"),
         format!("CREATE TABLE {s}.child () INHERITS ({s}.parent)"),
+        // Columns in the table's order, one dropped, a foreign key.
+        format!(
+            "CREATE TABLE {s}.described (gone int, \"Mixed\" varchar(20) NOT NULL, parent_id int REFERENCES {s}.parent, \
+             at timestamptz, id bigint PRIMARY KEY, amount numeric(14, 2), tags text[])"
+        ),
+        format!("ALTER TABLE {s}.described DROP COLUMN gone"),
         // Unique only under another collation or operator class than an ORDER BY uses.
         format!("CREATE COLLATION {s}.ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)"),
         format!(
@@ -1144,16 +1150,53 @@ async fn order_keys_are_read_without_a_lock() {
         unique_not_null: vec![vec!["email".into()], vec!["later".into()]],
         ..OrderKeys::default()
     };
-    // The keys alone (whether each column's collation is deterministic, and what `LIKE` takes,
-    // looked at apart).
+    // The keys alone (whether each column's collation is deterministic, what `LIKE` takes and
+    // the table's columns, looked at apart).
     let strip = |r: &Result<OrderKeys, DbError>| {
-        r.clone().map(|k| OrderKeys { deterministic: Default::default(), like_nondeterministic: None, ..k })
+        r.clone().map(|k| OrderKeys {
+            deterministic: Default::default(),
+            like_nondeterministic: None,
+            columns: None,
+            ..k
+        })
     };
+    // The table's columns as (name, type, NOT NULL, primary key, foreign key).
+    let described = |r: &Result<OrderKeys, DbError>| -> Vec<(String, String, bool, bool, bool)> {
+        let k = r.as_ref().expect("keys");
+        let columns = k.columns.as_ref().expect("the columns are known");
+        assert!(columns.iter().all(|c| !c.invisible), "PostgreSQL has no invisible column");
+        columns
+            .iter()
+            .map(|c| (c.name.clone(), c.type_name.clone(), c.not_null, c.primary_key, c.foreign_key))
+            .collect()
+    };
+    let col = |n: &str, t: &str, nn, pk, fk| (n.to_string(), t.to_string(), nn, pk, fk);
+    let probe_described = vec![
+        col("a", "integer", true, true, false),
+        col("b", "integer", true, true, false),
+        col("email", "text", true, false, false),
+        col("nick", "text", false, false, false),
+        col("note", "text", true, false, false),
+        col("later", "integer", true, false, false),
+    ];
     let deterministic = |pairs: &[(&str, bool)]| pairs.iter().map(|(c, d)| (c.to_string(), *d)).collect();
     let probe_columns: std::collections::BTreeMap<String, bool> =
         deterministic(&[("a", true), ("b", true), ("email", true), ("nick", true), ("note", true), ("later", true)]);
     let (keys, _, _) = ask("keys_probe").await;
     assert_eq!(strip(&keys), Ok(probe.clone()));
+    assert_eq!(described(&keys), probe_described);
+    let (other, _, _) = ask("described").await;
+    assert_eq!(
+        described(&other),
+        vec![
+            col("Mixed", "character varying(20)", true, false, false),
+            col("parent_id", "integer", false, false, true),
+            col("at", "timestamp with time zone", false, false, false),
+            col("id", "bigint", true, true, false),
+            col("amount", "numeric(14,2)", false, false, false),
+            col("tags", "text[]", false, false, false),
+        ]
+    );
     // Said for the server: `LIKE` on a nondeterministic collation is taken from 18 on.
     assert_eq!(keys.as_ref().map(|k| k.like_nondeterministic), Ok(Some(version >= 180_000)), "{version}");
     assert_eq!(
@@ -1193,6 +1236,7 @@ async fn order_keys_are_read_without_a_lock() {
     assert!(matches!(holder.run(2, &lock).await, DbEvent::Done { .. }));
     let (keys, took, locks) = ask("keys_probe").await;
     assert_eq!(strip(&keys), Ok(probe.clone()), "read past the held lock");
+    assert_eq!(described(&keys), probe_described, "the columns too");
     assert_eq!(keys.map(|k| k.deterministic), Ok(probe_columns.clone()), "the collations too");
     assert!(took < Duration::from_secs(1), "at once: {took:?}");
     assert_eq!(locks, "0", "no lock held or asked for on the locked table");
@@ -1227,12 +1271,100 @@ async fn order_keys_are_read_without_a_lock() {
     }
     let (keys, took, locks) = ask("keys_probe").await;
     assert_eq!(strip(&keys), Ok(probe), "not queued behind the waiting lock");
+    assert_eq!(described(&keys), probe_described, "the columns too");
     assert_eq!(keys.map(|k| k.deterministic), Ok(probe_columns), "the collations too");
     assert!(took < Duration::from_secs(1), "at once: {took:?}");
     assert_eq!(locks, "0", "no lock asked for behind the waiting one");
     assert!(matches!(reader.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
     assert!(matches!(migration.result(2).await, DbEvent::Done { .. }), "the lock was granted");
     assert!(matches!(migration.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
+/// A column's type is written with its modifier only when the server's own procedure writes
+/// that: a type of the schema's own whose `typmodout` is a procedure of its own (here one over
+/// `int4out`, which the server would call and write after the name) is written without it, for
+/// the type and for an array of it, so the key read runs no procedure but the server's own,
+/// while another session holds the table in `ACCESS EXCLUSIVE` mode. Built-in modifiers are
+/// still written. A `>=` of the schema's on `(oid, integer)` in the session's path is not called
+/// for the check either.
+#[tokio::test(flavor = "multi_thread")]
+async fn order_keys_never_run_a_types_own_modifier_output() {
+    let Some(url) = pg_url("order_keys_never_run_a_types_own_modifier_output") else { return };
+    let schema = format!("zz_tmod_{}", std::process::id());
+    let _guard = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE TYPE {s}.tm"),
+        format!("CREATE FUNCTION {s}.tm_in(cstring) RETURNS {s}.tm AS 'textin' LANGUAGE internal IMMUTABLE STRICT"),
+        format!("CREATE FUNCTION {s}.tm_out({s}.tm) RETURNS cstring AS 'textout' LANGUAGE internal IMMUTABLE STRICT"),
+        format!(
+            "CREATE FUNCTION {s}.tm_tmi(cstring[]) RETURNS integer AS 'varchartypmodin' LANGUAGE internal IMMUTABLE STRICT"
+        ),
+        format!("CREATE FUNCTION {s}.tm_tmo(integer) RETURNS cstring AS 'int4out' LANGUAGE internal IMMUTABLE STRICT"),
+        format!(
+            "CREATE TYPE {s}.tm (INPUT = {s}.tm_in, OUTPUT = {s}.tm_out, INTERNALLENGTH = VARIABLE, \
+             TYPMOD_IN = {s}.tm_tmi, TYPMOD_OUT = {s}.tm_tmo)"
+        ),
+        format!(
+            "CREATE TABLE {s}.modded (v {s}.tm(7), w {s}.tm(7)[], n numeric(5, 2), vc varchar(3)[], \
+             ts timestamptz(3), id int PRIMARY KEY)"
+        ),
+        // A `>=` of the schema's on (oid, integer): a closer match than the server's (oid, oid)
+        // for an unqualified `oid >= 16384`. It refuses to run.
+        format!(
+            "CREATE FUNCTION {s}.ge_refused(oid, integer) RETURNS boolean LANGUAGE plpgsql AS \
+             $$BEGIN RAISE EXCEPTION 'zz_ge_refused ran'; END$$"
+        ),
+        format!("CREATE OPERATOR {s}.>= (LEFTARG = oid, RIGHTARG = integer, FUNCTION = {s}.ge_refused)"),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let mut observer = Conn::open(&url, SessionRole::Query).await;
+    // The type's own procedure is live: the server calls it when asked for the modifier.
+    let sql = format!(
+        "SELECT pg_catalog.string_agg(pg_catalog.format_type(atttypid, atttypmod), ',' ORDER BY attnum) \
+         FROM pg_catalog.pg_attribute WHERE attrelid = '{s}.modded'::regclass AND attnum IN (1, 2)"
+    );
+    let DbEvent::Page { rows, .. } = observer.run(1, &sql).await else { panic!("format_type") };
+    assert_eq!(rows[0][0].as_deref(), Some(&format!("{s}.tm11,{s}.tm11[]")[..]), "the procedure writes 11");
+    // The schema's operator is live where the schema is in the path: it runs, and refuses.
+    let context = || datarig_core::driver::SessionContext { database: None, schema: Some(schema.clone()) };
+    let mut inside = Conn::open_in(&url, SessionRole::Query, false, context()).await;
+    let ev = inside.run(1, "SELECT 1::oid >= 16384").await;
+    assert!(format!("{ev:?}").contains("zz_ge_refused ran"), "{ev:?}");
+
+    let mut holder = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(holder.run(1, "BEGIN").await, DbEvent::Done { .. }));
+    let lock = format!("LOCK TABLE {s}.modded IN ACCESS EXCLUSIVE MODE");
+    assert!(matches!(holder.run(2, &lock).await, DbEvent::Done { .. }));
+    let tag = format!("tmod{}", std::process::id());
+    let cfg = ConnectionConfig { name: "it".into(), dsn: Some(url.clone()), ..ConnectionConfig::test_db() };
+    let (tx, rx) = unbounded_channel();
+    // The metadata session's path holds the schema (and its operator) too.
+    let o = ConnectOptions::new(PAGE, SessionRole::Meta, &tag).dialer(dialer()).context(context());
+    let mut meta = Conn { session: PgDriver.connect(&cfg, SessionRole::Meta, o, tx), rx };
+    meta.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    meta.session.send(DbCommand::LoadTableKeys { id: 7, schema: schema.clone(), table: "modded".into() });
+    let ev = meta.wait(|e| matches!(e, DbEvent::TableKeys { .. }), 10).await;
+    let DbEvent::TableKeys { id: 7, result } = ev else { panic!("{ev:?}") };
+    let keys = result.expect("keys");
+    let types: Vec<String> = keys.columns.expect("the columns are known").into_iter().map(|c| c.type_name).collect();
+    assert_eq!(
+        types,
+        vec![
+            // Unqualified: the schema is in the session's path.
+            "tm".to_string(),
+            "tm[]".to_string(),
+            "numeric(5,2)".to_string(),
+            "character varying(3)[]".to_string(),
+            "timestamp(3) with time zone".to_string(),
+            "integer".to_string(),
+        ],
+        "no modifier of the type's own procedure; the server's own still written"
+    );
+    assert_eq!(keys.primary_key, vec!["id".to_string()]);
+    assert!(matches!(holder.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
 }
 
 /// The size of a table that was never vacuumed or analyzed is unknown, as its rows are: its
@@ -8015,4 +8147,616 @@ async fn an_estimate_refuses_a_table_whose_planning_could_run_a_function() {
         assert!(got.is_ok(), "{read}: {got:?}");
         id += 1;
     }
+}
+
+// ── a count of a column's values ──────────────────────────────────────────
+
+/// The app's group count of `column` (of type `type_name`, kind `kind`) of `schema.table`, under
+/// filter text `other`, as `query::group_count` writes it.
+fn group_sql(
+    schema: &str,
+    table: &str,
+    column: &str,
+    (type_name, kind): (&str, datarig_core::driver::ValueKind),
+    other: Option<&str>,
+) -> String {
+    use datarig_core::query::{ColumnFacts, ColumnKind, GroupCount, TableName, Target, group_count};
+    use datarig_core::sql::dialect::{Dialect, Language};
+    let t = TableName { database: None, schema: schema.into(), name: table.into() };
+    let target = Target::new(Dialect::Postgres, vec![ColumnFacts::new(column, ColumnKind::Other)]);
+    let meta = datarig_core::driver::ColumnMeta::new(column.into(), type_name.into(), kind, None);
+    let classifier = datarig_core::sql::risk::Classifier::new(Language::Sql(Dialect::Postgres));
+    let g = GroupCount {
+        table: &t,
+        target: &target,
+        column: &meta,
+        enum_known: false,
+        other,
+        classifier: &classifier,
+        read_only: false,
+    };
+    group_count(&g).expect("a group count")
+}
+
+impl Conn {
+    /// Send `GroupCount` with `limit`: its answer, whether it counted in a snapshot, and how long
+    /// it took.
+    async fn group_within(
+        &mut self,
+        id: u64,
+        sql: &str,
+        limit: Option<Duration>,
+    ) -> (Result<datarig_core::driver::GroupCounts, DbError>, bool, Duration) {
+        let t0 = Instant::now();
+        self.session.send(DbCommand::GroupCount { id, sql: sql.to_string(), limit });
+        let DbEvent::GroupCounted { id: got, result, snapshot } =
+            self.wait(|e| matches!(e, DbEvent::GroupCounted { .. }), 30).await
+        else {
+            unreachable!()
+        };
+        assert_eq!(got, id);
+        (result, snapshot, t0.elapsed())
+    }
+}
+
+/// The values and their rows of a group count, as pairs.
+fn pairs(g: &datarig_core::driver::GroupCounts) -> Vec<(Option<String>, u64)> {
+    g.values.iter().map(|v| (v.value.clone(), v.rows)).collect()
+}
+
+/// A count of a column's values in a read-only transaction of its own (with a time limit or
+/// without) sets its isolation level: under a `SERIALIZABLE` default, while another session's
+/// serializable transaction that wrote is open, it takes no predicate lock (`SIReadLock`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_takes_no_predicate_lock_under_a_serializable_default() {
+    use datarig_core::driver::ValueKind;
+    let Some(url) = pg_url("a_group_count_takes_no_predicate_lock_under_a_serializable_default") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_gsiread_{pid}");
+    let (table, other) = (format!("public.{name}"), format!("public.zz_gsireadw_{pid}"));
+    let (_guard, _other) = (TableGuard(url.clone(), table.clone()), TableGuard(url.clone(), other.clone()));
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id, (g % 3)::text AS k FROM generate_series(1, 300) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(2, &format!("CREATE TABLE {other} (id int)")).await, DbEvent::Done { .. }));
+    let mut q = Conn::open(&serializable_url(&url, false), SessionRole::Query).await;
+    let backend = q.first_value(1, "SELECT pg_backend_pid()::text").await.unwrap();
+    let mut writer = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(writer.run(1, "BEGIN ISOLATION LEVEL SERIALIZABLE").await, DbEvent::Done { .. }));
+    assert!(matches!(writer.run(2, &format!("INSERT INTO {other} VALUES (1)")).await, DbEvent::Done { .. }));
+    let sql = group_sql("public", &name, "k", ("text", ValueKind::Text), Some("id > 100"));
+    let locks = format!("SELECT count(*)::text FROM pg_locks WHERE pid = {backend} AND mode = 'SIReadLock'");
+    for (id, limit) in [(2, Some(Duration::from_secs(30))), (3, None)] {
+        let (got, _, _) = q.group_within(id, &sql, limit).await;
+        assert_eq!(got.expect("counted").values.len(), 3);
+        assert_eq!(b.first_value(id, &locks).await.as_deref(), Some("0"), "limit {limit:?}");
+    }
+    assert!(matches!(writer.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
+/// A group count with a time limit runs as a bounded count does: in a read-only transaction of
+/// its own whose limits end with it (the session's settings as before), stopped at its limit
+/// (`TimedOut`) or after 2 s behind another session's `ACCESS EXCLUSIVE` lock (`LockTimeout`),
+/// cancelled by the user (`Cancelled`), never a list; inside the user's block without a limit of
+/// its own, in the block's snapshot, the block's isolation and settings untouched.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_is_bounded_and_told_apart_when_stopped_cancelled_or_locked() {
+    use datarig_core::driver::ValueKind;
+    let Some(url) = pg_url("a_group_count_is_bounded_and_told_apart_when_stopped_cancelled_or_locked") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_group_{pid}");
+    let table = format!("public.{name}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let tag = format!("group{pid}");
+    let (mut q, mut b) = tagged(&url, &tag).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id, (g % 3)::text AS k FROM generate_series(1, 2000) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let sql = group_sql("public", &name, "k", ("text", ValueKind::Text), Some("id > 100"));
+    let limit = Some(Duration::from_secs(30));
+    let settings = "SELECT current_setting('statement_timeout') || ' ' || current_setting('lock_timeout') || ' ' \
+                    || current_setting('idle_in_transaction_session_timeout') || ' ' || current_setting('transaction_isolation')";
+    let before = q.first_value(1, settings).await;
+    let (got, snapshot, _) = q.group_within(2, &sql, limit).await;
+    let got = got.expect("counted");
+    let mut want = vec![(Some("0".to_string()), 633), (Some("1".to_string()), 633), (Some("2".to_string()), 634)];
+    let mut seen = pairs(&got);
+    seen.sort();
+    want.sort();
+    assert_eq!(seen, want);
+    assert!(!got.more && !snapshot);
+    assert_eq!(q.first_value(3, settings).await, before, "nothing stays on the session");
+    assert!(matches!(q.run(4, "SELECT 1").await, DbEvent::Page { .. }), "the session goes on");
+    // Held by another session.
+    assert!(matches!(b.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(b.run(3, &format!("LOCK TABLE {table} IN ACCESS EXCLUSIVE MODE")).await, DbEvent::Done { .. }));
+    let (got, _, took) = q.group_within(5, &sql, Some(Duration::from_secs(1))).await;
+    assert_eq!(got, Err(DbError::TimedOut(Duration::from_secs(1))), "{took:?}");
+    assert!(took < Duration::from_millis(1900), "stopped at the limit, before the lock wait's: {took:?}");
+    let (got, _, took) = q.group_within(6, &sql, limit).await;
+    assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
+    assert!(took >= Duration::from_secs(2) && took < Duration::from_secs(10), "{took:?}");
+    assert_eq!(q.first_value(7, settings).await, before);
+    // The user's cancel while it waits.
+    q.session.send(DbCommand::GroupCount { id: 8, sql: sql.clone(), limit });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    q.session.cancel();
+    let DbEvent::GroupCounted { result, .. } = q.wait(|e| matches!(e, DbEvent::GroupCounted { .. }), 20).await else {
+        unreachable!()
+    };
+    assert_eq!(result, Err(DbError::Cancelled));
+    assert_eq!(q.first_value(9, settings).await, before);
+    assert!(matches!(b.run(4, "ROLLBACK").await, DbEvent::Done { .. }));
+    // Inside the user's block: no limit of its own, the block's level and settings unchanged.
+    assert!(matches!(q.run(10, "BEGIN ISOLATION LEVEL REPEATABLE READ").await, DbEvent::Done { .. }));
+    let in_block = q.first_value(11, settings).await;
+    let (got, snapshot, _) = q.group_within(12, &sql, limit).await;
+    assert_eq!(got.map(|g| g.values.len()), Ok(3));
+    assert!(snapshot, "counted in the block's snapshot");
+    assert_eq!(q.first_value(13, settings).await, in_block, "the block's own settings");
+    // A failed one is rolled back to its savepoint: the block goes on.
+    let failing = group_sql("public", &name, "k", ("text", ValueKind::Text), Some("1 / (id - 7) > 0"));
+    let (got, _, _) = q.group_within(14, &failing, limit).await;
+    assert!(matches!(got, Err(DbError::Server(_))), "{got:?}");
+    assert_eq!(q.first_value(15, "SELECT count(*) FROM pg_catalog.pg_class WHERE false").await.as_deref(), Some("0"));
+    assert!(matches!(q.run(16, "ROLLBACK").await, DbEvent::Done { .. }));
+    // Text off the allowlist is never sent.
+    let (got, _, _) = q.group_within(17, "SELECT nextval('zz_none')", limit).await;
+    assert_eq!(got, Err(DbError::NotSupported));
+}
+
+/// Every value of a group count is the text a cell of it shows in the grid (the same result
+/// formats and decoding): numbers, `numeric` with its scale, `timestamptz`, `bytea`, `float8`,
+/// booleans, arrays, `jsonb`, and NULL; a value over 4 KiB comes as its length alone, not whole.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_decodes_values_as_the_grid_does() {
+    use datarig_core::driver::{ArrayElement, ValueKind};
+    let Some(url) = pg_url("a_group_count_decodes_values_as_the_grid_does") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_group_values_{pid}");
+    let table = format!("public.{name}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    for sql in [
+        format!(
+            "CREATE TABLE {table} (id int, n numeric(10, 4), at timestamptz, b bytea, f float8, ok bool, \
+             tags text[], doc jsonb, t text)"
+        ),
+        format!(
+            "INSERT INTO {table} VALUES \
+             (1, 12.5, '2026-01-02 03:04:05.123456+00', '\\x00ff10', 0.1, true, '{{a,\"b c\"}}', '{{\"k\": [1, 2]}}', 'x'), \
+             (2, 12.5, '2026-01-02 03:04:05.123456+00', '\\x00ff10', 0.1, true, '{{a,\"b c\"}}', '{{\"k\": [1, 2]}}', 'x'), \
+             (3, -0.0001, '1999-12-31 23:59:59+05:30', '\\x', 1e300, false, '{{}}', 'null', ''), \
+             (4, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL), \
+             (5, 7, '2026-06-01 00:00:00+00', decode(repeat('ab', 5000), 'hex'), -2.5, NULL, '{{z}}', '[]', repeat('y', 5000))"
+        ),
+    ] {
+        assert!(matches!(q.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    // The session shows times in a zone of its own: both read them in it.
+    assert!(matches!(q.run(2, "SET TIME ZONE 'Asia/Seoul'").await, DbEvent::Done { .. }));
+    let columns = [
+        ("n", ("numeric", ValueKind::Decimal)),
+        ("at", ("timestamptz", ValueKind::TimestampTz)),
+        ("b", ("bytea", ValueKind::Bytes)),
+        ("f", ("float8", ValueKind::Float)),
+        ("ok", ("bool", ValueKind::Bool)),
+        ("tags", ("text[]", ValueKind::Array(ArrayElement::Text))),
+        ("doc", ("jsonb", ValueKind::Json)),
+        ("t", ("text", ValueKind::Text)),
+    ];
+    let mut id = 10;
+    for (column, ty) in columns {
+        id += 1;
+        let DbEvent::Page { rows, .. } = q.run(id, &format!("SELECT {column} FROM {table} ORDER BY id")).await else {
+            panic!("{column}")
+        };
+        let grid: Vec<Option<String>> = rows.into_iter().map(|r| r[0].clone()).collect();
+        id += 1;
+        let (got, _, _) = q.group_within(id, &group_sql("public", &name, column, ty, None), None).await;
+        let got = got.unwrap_or_else(|e| panic!("{column}: {e:?}"));
+        let total: u64 = got.values.iter().map(|v| v.rows).sum();
+        assert_eq!(total, 5, "{column}");
+        for v in &got.values {
+            if v.whole {
+                let rows = grid.iter().filter(|g| **g == v.value).count() as u64;
+                assert_eq!(rows, v.rows, "{column}: {:?} as the grid shows it", v.value);
+            } else {
+                // Only the value over 4 KiB, by its length.
+                assert_eq!((column, v.value.as_deref(), v.bytes, v.rows), (column, None, Some(5000), 1));
+            }
+        }
+        let long = got.values.iter().filter(|v| !v.whole).count();
+        assert_eq!(long, usize::from(matches!(column, "b" | "t")), "{column}");
+        let null = got.values.iter().find(|v| v.value.is_none() && v.whole).expect("the NULL group");
+        assert_eq!((null.bytes, null.rows), (None, 1 + u64::from(column == "ok")), "{column}");
+    }
+}
+
+/// While a portal pages, a group count runs in its transaction under a savepoint: the portal
+/// goes on paging after it, also after one that fails.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_while_paging_keeps_the_portal() {
+    use datarig_core::driver::ValueKind;
+    let Some(url) = pg_url("a_group_count_while_paging_keeps_the_portal") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_group_paged_{pid}");
+    let table = format!("public.{name}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id, g % 2 AS odd FROM generate_series(1, 1234) g");
+    assert!(matches!(c.run(1, &setup).await, DbEvent::Done { .. }));
+    c.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 2,
+        statements: vec![format!("SELECT * FROM {table} ORDER BY id")],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    let DbEvent::Page { more: true, .. } = c.result(2).await else { panic!("a page with more") };
+    let sql = group_sql("public", &name, "odd", ("int4", ValueKind::Integer), None);
+    let (got, _, _) = c.group_within(3, &sql, Some(Duration::from_secs(30))).await;
+    let mut got = pairs(&got.expect("counted"));
+    got.sort();
+    assert_eq!(got, vec![(Some("0".into()), 617), (Some("1".into()), 617)]);
+    let failing = group_sql("public", &name, "odd", ("int4", ValueKind::Integer), Some("1 / (id - 7) > 0"));
+    let (got, _, _) = c.group_within(4, &failing, None).await;
+    assert!(matches!(got, Err(DbError::Server(_))), "{got:?}");
+    c.session.send(DbCommand::FetchMore { id: 2 });
+    let DbEvent::Page { columns: None, rows, .. } = c.result(2).await else { panic!("the next page") };
+    assert_eq!(rows[0][0].as_deref(), Some("501"));
+    c.session.send(DbCommand::ClosePortal { id: 2 });
+    c.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
+}
+
+/// A group count sends only values of a bounded size, whatever the metadata it was written
+/// from says: written for a number column that became text since (another session's `ALTER
+/// TABLE`), it is refused as changed (`SchemaChanged`) in a transaction of its own, in the
+/// user's block and while a portal is held, never read with its long values whole; a column of
+/// a domain over `numeric` (by the domain's name) has a value over 4 KiB sent as its length
+/// alone.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_sends_only_bounded_values_of_the_columns_current_type() {
+    use datarig_core::driver::ValueKind;
+    let Some(url) = pg_url("a_group_count_sends_only_bounded_values_of_the_columns_current_type") else { return };
+    let schema = format!("zz_group_bound_{}", std::process::id());
+    let _guard = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE DOMAIN {s}.amount AS numeric"),
+        format!("CREATE TABLE {s}.t (id int, k int, n {s}.amount)"),
+        format!(
+            "INSERT INTO {s}.t SELECT g, g % 3, CASE WHEN g = 1 THEN repeat('9', 5000)::numeric ELSE 1.5 END \
+             FROM generate_series(1, 1234) g"
+        ),
+    ] {
+        assert!(matches!(q.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    // Written while `k` is a number: sent as it is, without its length.
+    let stale = group_sql(s, "t", "k", ("int4", ValueKind::Integer), None);
+    let (got, _, _) = q.group_within(2, &stale, None).await;
+    assert_eq!(got.map(|g| g.values.len()), Ok(3), "counted while it is a number");
+    for sql in [
+        format!("ALTER TABLE {s}.t ALTER COLUMN k TYPE text USING k::text"),
+        format!("UPDATE {s}.t SET k = repeat('x', 5000) || id WHERE id <= 10"),
+    ] {
+        assert!(matches!(q.run(3, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let (got, _, _) = q.group_within(4, &stale, Some(Duration::from_secs(30))).await;
+    assert_eq!(got, Err(DbError::SchemaChanged), "in a transaction of its own");
+    assert_eq!(q.first_value(5, "SELECT 1").await.as_deref(), Some("1"));
+    assert!(matches!(q.run(6, "BEGIN").await, DbEvent::Done { .. }));
+    let (got, _, _) = q.group_within(7, &stale, None).await;
+    assert_eq!(got, Err(DbError::SchemaChanged), "in the user's block");
+    assert_eq!(q.first_value(8, "SELECT 2").await.as_deref(), Some("2"), "the block goes on");
+    assert!(matches!(q.run(9, "ROLLBACK").await, DbEvent::Done { .. }));
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 10,
+        statements: vec![format!("SELECT * FROM {s}.t ORDER BY id")],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    let DbEvent::Page { more: true, .. } = q.result(10).await else { panic!("a page with more") };
+    let (got, _, _) = q.group_within(11, &stale, None).await;
+    assert_eq!(got, Err(DbError::SchemaChanged), "while a portal is held");
+    q.session.send(DbCommand::ClosePortal { id: 10 });
+    q.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
+    // Written again from the column as it is now: counted, the long values by their length.
+    let fresh = group_sql(s, "t", "k", ("text", ValueKind::Text), None);
+    let (got, _, _) = q.group_within(12, &fresh, None).await;
+    let got = got.expect("counted");
+    assert_eq!(got.values.iter().filter(|v| !v.whole).count(), 10, "{got:?}");
+    // A domain over numeric, named as the domain.
+    let amount = group_sql(s, "t", "n", ("amount", ValueKind::Decimal), None);
+    let (got, _, _) = q.group_within(13, &amount, Some(Duration::from_secs(30))).await;
+    let mut got: Vec<_> =
+        got.expect("counted").values.into_iter().map(|v| (v.value, v.whole, v.bytes, v.rows)).collect();
+    got.sort();
+    assert_eq!(got, vec![(None, false, Some(5000), 1), (Some("1.5".to_string()), true, Some(3), 1233)]);
+}
+
+/// An array whose text is within the preview is sent whole although its binary form, which the
+/// grid reads, is several times longer (a `numeric[]` of 2000 zeroes: 4001 bytes of text, 24020
+/// binary; an `interval[]` of 2000 zeroes written `0`: 40020 binary): counted in a transaction of
+/// its own, in the user's block and while a portal is held. In the user's block the work done
+/// before the count is kept, and the block goes on and commits it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_sends_arrays_whose_binary_form_is_longer_than_their_text() {
+    use datarig_core::driver::{ArrayElement, ValueKind};
+    let Some(url) = pg_url("a_group_count_sends_arrays_whose_binary_form_is_longer_than_their_text") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_group_arrays_{pid}");
+    let table = format!("public.{name}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    for sql in [
+        format!("CREATE TABLE {table} (id int, n numeric[], i interval[])"),
+        format!(
+            "INSERT INTO {table} SELECT g, CASE WHEN g = 1 THEN array_fill(0::numeric, ARRAY[2000]) ELSE '{{1}}' END, \
+             CASE WHEN g = 1 THEN array_fill('0'::interval, ARRAY[2000]) ELSE '{{1 day}}' END \
+             FROM generate_series(1, 1234) g"
+        ),
+    ] {
+        assert!(matches!(q.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    assert!(matches!(q.run(2, "SET IntervalStyle = sql_standard").await, DbEvent::Done { .. }));
+    let numbers = group_sql("public", &name, "n", ("numeric[]", ValueKind::Array(ArrayElement::Number)), None);
+    let intervals = group_sql("public", &name, "i", ("interval[]", ValueKind::Array(ArrayElement::Text)), None);
+    // Whether the long one came whole as the grid shows it (its 2000 elements as `zero`), and its
+    // length.
+    let long = |got: Result<datarig_core::driver::GroupCounts, DbError>, zero: &str| {
+        let got = got.unwrap_or_else(|e| panic!("{e:?}"));
+        let v = got.values.iter().find(|v| v.rows == 1 && v.bytes.is_some()).expect("the long one").clone();
+        let zeroes = format!("{{{}}}", vec![zero; 2000].join(","));
+        (v.value.as_deref() == Some(zeroes.as_str()), v.whole, v.bytes)
+    };
+    let want = (true, true, Some(4001));
+    let (got, _, _) = q.group_within(3, &numbers, Some(Duration::from_secs(30))).await;
+    assert_eq!(long(got, "0"), want, "in a transaction of its own");
+    let (got, _, _) = q.group_within(4, &intervals, Some(Duration::from_secs(30))).await;
+    assert_eq!(long(got, "00:00:00"), want, "intervals");
+    // In the user's block, after work of its own.
+    assert!(matches!(q.run(5, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(q.run(6, &format!("INSERT INTO {table} VALUES (0, NULL, NULL)")).await, DbEvent::Done { .. }));
+    let (got, _, _) = q.group_within(7, &numbers, None).await;
+    assert_eq!(long(got, "0"), want, "in the user's block");
+    let (got, _, _) = q.group_within(8, &intervals, None).await;
+    assert_eq!(long(got, "00:00:00"), want);
+    let kept = format!("SELECT count(*) FROM {table} WHERE id = 0");
+    assert_eq!(q.first_value(9, &kept).await.as_deref(), Some("1"), "the block goes on");
+    // While a portal is held.
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 10,
+        statements: vec![format!("SELECT id FROM {table} ORDER BY id")],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    let DbEvent::Page { more: true, .. } = q.result(10).await else { panic!("a page with more") };
+    let (got, _, _) = q.group_within(11, &numbers, None).await;
+    assert_eq!(long(got, "0"), want, "while a portal is held");
+    q.session.send(DbCommand::ClosePortal { id: 10 });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(matches!(q.run(12, "COMMIT").await, DbEvent::Done { .. }));
+    assert_eq!(q.first_value(13, &kept).await.as_deref(), Some("1"), "committed with the block");
+}
+
+/// A `bit varying` value is measured by its packed bytes and sent as text, a character for each
+/// bit: one of 8192 bits (1024 bytes) and one at the preview's limit (4096 bytes, 32768 bits)
+/// are sent whole, one byte more is not, in a transaction of its own, in the user's block (whose
+/// work is kept) and while a portal is held; `bit(n)` the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn bit_strings_are_sent_by_a_group_count_up_to_the_preview_of_their_bytes() {
+    use datarig_core::driver::ValueKind;
+    let Some(url) = pg_url("bit_strings_are_sent_by_a_group_count_up_to_the_preview_of_their_bytes") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_group_bits_{pid}");
+    let table = format!("public.{name}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    for sql in [
+        format!("CREATE TABLE {table} (id int, v varbit, b bit(8192))"),
+        format!(
+            "INSERT INTO {table} SELECT g, CASE g WHEN 1 THEN repeat('1', 8192)::varbit WHEN 2 THEN repeat('10', 16384)::varbit \
+             WHEN 3 THEN repeat('1', 32776)::varbit ELSE B'1' END, repeat(CASE WHEN g = 1 THEN '1' ELSE '0' END, 8192)::bit(8192) \
+             FROM generate_series(1, 1234) g"
+        ),
+    ] {
+        assert!(matches!(q.run(1, &sql).await, DbEvent::Done { .. }), "{sql}");
+    }
+    let varbit = group_sql("public", &name, "v", ("varbit", ValueKind::Bit), None);
+    let bit = group_sql("public", &name, "b", ("bit", ValueKind::Bit), None);
+    // (bits shown, whole, bytes) of each value held by one row, by its length.
+    let once = |got: Result<datarig_core::driver::GroupCounts, DbError>| {
+        let got = got.unwrap_or_else(|e| panic!("{e:?}"));
+        let mut out: Vec<_> = got
+            .values
+            .iter()
+            .filter(|v| v.rows == 1 && v.bytes.is_some())
+            .map(|v| (v.value.as_ref().map(String::len), v.whole, v.bytes))
+            .collect();
+        out.sort();
+        out
+    };
+    let want = vec![(None, false, Some(4097)), (Some(8192), true, Some(1024)), (Some(32768), true, Some(4096))];
+    let (got, _, _) = q.group_within(2, &varbit, Some(Duration::from_secs(30))).await;
+    assert_eq!(once(got), want, "in a transaction of its own");
+    let (got, _, _) = q.group_within(3, &bit, Some(Duration::from_secs(30))).await;
+    assert_eq!(once(got), vec![(Some(8192), true, Some(1024))], "bit(8192)");
+    assert!(matches!(q.run(4, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(q.run(5, &format!("INSERT INTO {table} VALUES (0, NULL, NULL)")).await, DbEvent::Done { .. }));
+    let (got, _, _) = q.group_within(6, &varbit, None).await;
+    assert_eq!(once(got), want, "in the user's block");
+    let kept = format!("SELECT count(*) FROM {table} WHERE id = 0");
+    assert_eq!(q.first_value(7, &kept).await.as_deref(), Some("1"), "the block's work is kept");
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 8,
+        statements: vec![format!("SELECT id FROM {table} ORDER BY id")],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    let DbEvent::Page { more: true, .. } = q.result(8).await else { panic!("a page with more") };
+    let (got, _, _) = q.group_within(9, &varbit, None).await;
+    assert_eq!(once(got), want, "while a portal is held");
+    let (got, _, _) = q.group_within(10, &bit, None).await;
+    assert_eq!(once(got), vec![(Some(8192), true, Some(1024))]);
+    q.session.send(DbCommand::ClosePortal { id: 8 });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(matches!(q.run(11, "COMMIT").await, DbEvent::Done { .. }));
+    assert_eq!(q.first_value(12, &kept).await.as_deref(), Some("1"), "committed");
+}
+
+/// Whatever a group count in the user's block answers, the block goes on with the work done
+/// before it, and commits it: a count whose page is refused after it ran is undone back to its
+/// savepoint, which is released only once the page was taken. (A `numeric[]` whose binary form is
+/// several times its text was such a page.)
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_in_the_users_block_keeps_the_blocks_work() {
+    use datarig_core::driver::{ArrayElement, ValueKind};
+    let Some(url) = pg_url("a_group_count_in_the_users_block_keeps_the_blocks_work") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_group_kept_{pid}");
+    let table = format!("public.{name}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!(
+        "CREATE TABLE {table} AS SELECT g AS id, CASE WHEN g = 1 THEN array_fill(0::numeric, ARRAY[2000]) \
+         ELSE '{{1}}' END AS n FROM generate_series(1, 10) g"
+    );
+    assert!(matches!(q.run(1, &setup).await, DbEvent::Done { .. }));
+    let sql = group_sql("public", &name, "n", ("numeric[]", ValueKind::Array(ArrayElement::Number)), None);
+    assert!(matches!(q.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(q.run(3, &format!("INSERT INTO {table} VALUES (0, NULL)")).await, DbEvent::Done { .. }));
+    let _ = q.group_within(4, &sql, None).await;
+    let kept = format!("SELECT count(*) FROM {table} WHERE id = 0");
+    assert_eq!(q.first_value(5, &kept).await.as_deref(), Some("1"), "the block goes on with its work");
+    assert!(matches!(q.run(6, "COMMIT").await, DbEvent::Done { .. }));
+    assert_eq!(q.first_value(7, &kept).await.as_deref(), Some("1"), "committed");
+}
+
+/// A group count in the user's block that stops at its row limit (more values than it lists)
+/// leaves no portal behind: after several of them the session has none open, the block goes on
+/// with what it did before them, and a portal the user pages through meanwhile still pages.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_group_count_in_the_users_block_leaves_no_portal() {
+    use datarig_core::driver::ValueKind;
+    let Some(url) = pg_url("a_group_count_in_the_users_block_leaves_no_portal") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_group_portals_{pid}");
+    let table = format!("public.{name}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id, g % 300 AS k FROM generate_series(1, 1234) g");
+    assert!(matches!(q.run(1, &setup).await, DbEvent::Done { .. }));
+    let sql = group_sql("public", &name, "k", ("int4", ValueKind::Integer), None);
+    // The session's portals of a group count (not the one that reads this).
+    let portals = r"SELECT count(*) FROM pg_catalog.pg_cursors WHERE statement ~ 'GROUP\sBY'";
+    assert!(matches!(q.run(2, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(q.run(3, &format!("INSERT INTO {table} VALUES (0, -1)")).await, DbEvent::Done { .. }));
+    for id in 4..7 {
+        let (got, _, _) = q.group_within(id, &sql, None).await;
+        let got = got.expect("counted");
+        assert_eq!((got.values.len(), got.more), (200, true));
+    }
+    assert_eq!(q.first_value(7, portals).await.as_deref(), Some("0"), "no portal left open");
+    // A portal the user pages through, with counts in between.
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 8,
+        statements: vec![format!("SELECT * FROM {table} ORDER BY id")],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    let DbEvent::Page { more: true, .. } = q.result(8).await else { panic!("a page with more") };
+    for id in 9..11 {
+        let (got, _, _) = q.group_within(id, &sql, None).await;
+        assert_eq!(got.map(|g| g.values.len()), Ok(200));
+    }
+    q.session.send(DbCommand::FetchMore { id: 8 });
+    let DbEvent::Page { columns: None, rows, .. } = q.result(8).await else { panic!("the next page") };
+    assert_eq!(rows[0][0].as_deref(), Some("500"), "the portal goes on paging");
+    q.session.send(DbCommand::ClosePortal { id: 8 });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(q.first_value(12, portals).await.as_deref(), Some("0"));
+    // The block goes on, with what it did before the counts.
+    let kept = format!("SELECT count(*) FROM {table} WHERE id = 0");
+    assert_eq!(q.first_value(13, &kept).await.as_deref(), Some("1"));
+    assert!(matches!(q.run(14, "COMMIT").await, DbEvent::Done { .. }));
+    assert_eq!(q.first_value(15, &kept).await.as_deref(), Some("1"), "committed");
+}
+
+/// A cancel that reaches the server after it answered a group count's preparation stops
+/// nothing there (the session is idle): the count is not started after it, but answered
+/// `Cancelled`, in each of its three places: in a transaction of its own (ended), in the user's
+/// block (rolled back to its savepoint, the block goes on) and while a portal is held (the
+/// portal goes on paging). The server's answer to the preparation is held back by a proxy until
+/// the cancel went through.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_between_a_group_counts_preparation_and_its_run_is_kept() {
+    use datarig_core::driver::ValueKind;
+    let Some(url) = pg_url("a_cancel_between_a_group_counts_preparation_and_its_run_is_kept") else { return };
+    let pid = std::process::id();
+    let name = format!("zz_group_gap_{pid}");
+    let table = format!("public.{name}");
+    let _guard = TableGuard(url.clone(), table.clone());
+    let mut b = Conn::open(&url, SessionRole::Query).await;
+    let setup = format!("CREATE TABLE {table} AS SELECT g AS id, g % 2 AS odd FROM generate_series(1, 1234) g");
+    assert!(matches!(b.run(1, &setup).await, DbEvent::Done { .. }));
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut q = Conn::open(&proxy.url(&url), SessionRole::Query).await;
+    let sql = group_sql("public", &name, "odd", ("int4", ValueKind::Integer), None);
+    // The group count's preparation answered by the server but held back; the user cancels then.
+    async fn cancelled_between(proxy: &pg_proxy::Proxy, q: &mut Conn, id: u64, sql: &str, limit: Option<Duration>) {
+        proxy.fault_parse("GROUP BY", pg_proxy::Fault::Hold);
+        q.session.send(DbCommand::GroupCount { id, sql: sql.to_string(), limit });
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !proxy.answer_held() {
+            assert!(Instant::now() < deadline, "the server never answered the preparation");
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        assert!(!proxy.fault_pending(), "held at the preparation");
+        q.session.cancel();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        proxy.hold_answers(false);
+        let DbEvent::GroupCounted { id: got, result, .. } =
+            q.wait(|e| matches!(e, DbEvent::GroupCounted { .. }), 20).await
+        else {
+            unreachable!()
+        };
+        assert_eq!(got, id);
+        assert_eq!(result, Err(DbError::Cancelled), "{id}: not counted after the cancel");
+    }
+    // In a transaction of its own, ended: the session goes on outside a block.
+    cancelled_between(&proxy, &mut q, 2, &sql, Some(Duration::from_secs(30))).await;
+    let ran = |p: &pg_proxy::Proxy| p.executes().len();
+    assert_eq!(q.first_value(3, "SELECT 1").await.as_deref(), Some("1"));
+    let (got, _, _) = q.group_within(4, &sql, Some(Duration::from_secs(30))).await;
+    assert_eq!(got.map(|g| g.values.len()), Ok(2), "the next one counts");
+    // In the user's block: back to its savepoint, the block goes on.
+    assert!(matches!(q.run(5, "BEGIN").await, DbEvent::Done { .. }));
+    let before = ran(&proxy);
+    cancelled_between(&proxy, &mut q, 6, &sql, None).await;
+    assert_eq!(ran(&proxy), before, "nothing run after the preparation");
+    assert_eq!(q.first_value(7, "SELECT 2").await.as_deref(), Some("2"), "the block goes on");
+    assert!(matches!(q.run(8, "ROLLBACK").await, DbEvent::Done { .. }));
+    // While a portal is held: the portal goes on paging.
+    q.session.send(DbCommand::Execute {
+        max_rows: None,
+        id: 9,
+        statements: vec![format!("SELECT * FROM {table} ORDER BY id")],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    let DbEvent::Page { more: true, .. } = q.result(9).await else { panic!("a page with more") };
+    let before = ran(&proxy);
+    cancelled_between(&proxy, &mut q, 10, &sql, None).await;
+    assert_eq!(ran(&proxy), before, "nothing run after the preparation");
+    q.session.send(DbCommand::FetchMore { id: 9 });
+    let DbEvent::Page { columns: None, rows, .. } = q.result(9).await else { panic!("the next page") };
+    assert_eq!(rows[0][0].as_deref(), Some("501"));
+    q.session.send(DbCommand::ClosePortal { id: 9 });
+    q.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
 }

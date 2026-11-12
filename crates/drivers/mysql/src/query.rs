@@ -478,6 +478,24 @@ pub(crate) async fn query_loop(
                     let _ = events.send(DbEvent::Counted { id, result, snapshot });
                 })
             }
+            Next::Command(DbCommand::GroupCount { id, sql, limit }) => {
+                link.serving(&events, id);
+                s.request = id;
+                killer.clear();
+                match group::group_count(&mut conn, &mut link, &env, &mut s, &sql, limit).await {
+                    Ok((result, snapshot)) => {
+                        let _ = events.send(DbEvent::GroupCounted { id, result, snapshot });
+                        Ok(())
+                    }
+                    // Answered with why the session is lost, before it says so.
+                    Err(Stop::Lost(error)) => {
+                        let error = link.lost_as(error);
+                        let _ = events.send(DbEvent::GroupCounted { id, result: Err(error.clone()), snapshot: false });
+                        Err(Stop::Lost(error))
+                    }
+                    Err(stop) => Err(stop),
+                }
+            }
             Next::Command(DbCommand::Estimate { id, sql }) => {
                 link.serving(&events, id);
                 s.request = id;
@@ -565,6 +583,7 @@ fn unanswered(events: &UnboundedSender<DbEvent>, c: DbCommand, error: &DbError) 
             DbEvent::Failed { id, error: error.clone(), cancelled: false }
         }
         DbCommand::Count { id, .. } => DbEvent::Counted { id, result: Err(error.clone()), snapshot: false },
+        DbCommand::GroupCount { id, .. } => DbEvent::GroupCounted { id, result: Err(error.clone()), snapshot: false },
         DbCommand::Estimate { id, .. } => DbEvent::Estimated { id, result: Err(error.clone()) },
         DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id, result: Err(error.clone()) },
         DbCommand::Export { id, .. } => DbEvent::Exported { id, result: Err(error.clone()), cancelled: false },
@@ -1580,7 +1599,10 @@ async fn hold_on(
                 let _ = env.events.send(DbEvent::Estimated { id: cid, result: Err(error) });
             }
             Next::Command(
-                c @ (DbCommand::Count { .. } | DbCommand::Estimate { .. } | DbCommand::CheckRepeat { .. }),
+                c @ (DbCommand::Count { .. }
+                | DbCommand::GroupCount { .. }
+                | DbCommand::Estimate { .. }
+                | DbCommand::CheckRepeat { .. }),
             ) => held.waiting.push(c),
             // Answered from what is known (nothing is sent while the result is read): it goes on.
             Next::Command(DbCommand::ServerSession { request }) => {
@@ -1953,16 +1975,17 @@ async fn asked_server(
     };
     let ask = check_sql(&names, Dialect::MySql(s.mode), &env.server);
     env.busy.store(true, Ordering::SeqCst);
-    type Answer = (Option<String>, Option<String>, Option<String>, Option<String>);
+    type Answer = (Option<String>, Option<String>, Option<String>, Option<String>, Option<String>);
     let answer = link.guard(Some(env.killer), conn.query_first::<Answer, _>(ask)).await?;
     let cancelled = env.asked.asked();
     idle(env, link).await;
     Ok(match answer {
-        Ok(Some((_, Some(view), _, _))) => Err(DbError::NotRepeatable(NotRepeatable::NotATable(view))),
-        Ok(Some((isolation, None, statement, lock))) => Ok(Asked {
+        Ok(Some((_, Some(view), _, _, _))) => Err(DbError::NotRepeatable(NotRepeatable::NotATable(view))),
+        Ok(Some((isolation, None, statement, lock, sort))) => Ok(Asked {
             isolation: isolation.unwrap_or_default(),
             statement: statement.as_deref().and_then(|v| session_limit(v, env.server.mariadb)),
             lock: lock.and_then(|v| v.trim().parse().ok()),
+            sort_length: sort.and_then(|v| v.trim().parse().ok()),
         }),
         Ok(None) => Err(DbError::NotRepeatable(NotRepeatable::Unreadable)),
         Err(e) => Err(own_failure(&e, cancelled)),
@@ -1979,6 +2002,9 @@ struct Asked {
     statement: Option<Duration>,
     /// MariaDB: the session's `lock_wait_timeout` in seconds (0 is not to wait at all).
     lock: Option<u64>,
+    /// The session's `max_sort_length`: the bytes of a string the server sorts and groups by
+    /// (a group count's values at least this long may share a group with others).
+    sort_length: Option<u64>,
 }
 
 /// How long a bounded read of the app's own ([`bounded_select`]) waits for a metadata lock, in
@@ -2107,7 +2133,7 @@ fn check_sql(names: &[String], d: Dialect, server: &Server) -> String {
     format!(
         "SELECT {OWN_READ_HINTS} @@SESSION.{isolation}, (SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME) \
          FROM information_schema.TABLES t WHERE t.TABLE_TYPE <> 'BASE TABLE' AND ({cond}) LIMIT 1), \
-         @@SESSION.{limit}, {lock}"
+         @@SESSION.{limit}, {lock}, @@SESSION.max_sort_length"
     )
 }
 
@@ -2375,6 +2401,42 @@ async fn read_own(
     was_open: bool,
     applied: Option<Duration>,
 ) -> Result<Result<Option<String>, DbError>, Stop> {
+    let read = read_own_as(conn, link, env, s, text, was_open, applied, OwnWant::First).await?;
+    Ok(read.map(|got| match got {
+        OwnGot::First(value) => value,
+        OwnGot::Rows(..) => None,
+    }))
+}
+
+/// What a read of the app's own reads ([`read_own_as`]).
+#[derive(Clone, Copy)]
+enum OwnWant {
+    /// The first row's first value, as text.
+    First,
+    /// Every row, each value as the session shows a cell of it ([`display`]).
+    Rows,
+}
+
+/// What a read of the app's own read ([`OwnWant`]).
+enum OwnGot {
+    First(Option<String>),
+    /// The rows, and whether the server groups their first column by a prefix
+    /// ([`group::rows_within`]).
+    Rows(group::GroupRows),
+}
+
+/// [`read_own`], reading what `want` says.
+#[allow(clippy::too_many_arguments)]
+async fn read_own_as(
+    conn: &mut Conn,
+    link: &mut Link,
+    env: &Env<'_>,
+    s: &mut State,
+    text: &str,
+    was_open: bool,
+    applied: Option<Duration>,
+    want: OwnWant,
+) -> Result<Result<OwnGot, DbError>, Stop> {
     // The read's one row comes whatever the user's limit is (unless it is 0).
     if s.limit.current == Some(0) {
         if let Err(e) = link.guard(None, conn.query_drop("SET SESSION sql_select_limit = DEFAULT")).await? {
@@ -2395,9 +2457,23 @@ async fn read_own(
     // Cancelled while it was admitted or set up, when nothing ran for the kill to stop: the read
     // is not sent. Looked at with the session busy, so a cancel after this sends its kill.
     let unsent = env.asked.asked();
-    let read = match unsent {
-        true => Ok(None),
-        false => link.guard(Some(env.killer), conn.query_first::<String, _>(text)).await?,
+    let read = match (unsent, want) {
+        (true, _) => Ok(OwnGot::First(None)),
+        (false, OwnWant::First) => {
+            link.guard(Some(env.killer), conn.query_first::<String, _>(text)).await?.map(OwnGot::First)
+        }
+        (false, OwnWant::Rows) => match link.guard(Some(env.killer), group::rows_within(conn, text)).await? {
+            Ok(Ok(rows)) => Ok(OwnGot::Rows(rows)),
+            // Refused part way through its answer: the rest is not read (nothing more of it is
+            // received or kept), the connection is cut, and the session is lost for why.
+            Ok(Err(why)) => {
+                idle(env, link).await;
+                link.taint(why.clone());
+                link.cut();
+                return Err(Stop::Lost(why));
+            }
+            Err(e) => Err(e),
+        },
     };
     // Whether the user had asked when the answer came: what is done after it changes nothing.
     let cancelled = env.asked.asked();
@@ -2498,6 +2574,7 @@ async fn check_repeat(
 
 mod apply;
 mod export;
+mod group;
 
 #[cfg(test)]
 mod tests;
