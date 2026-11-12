@@ -126,6 +126,7 @@
 "table.filter.by_value.off.not_whole" = "not shown whole"
 "table.filter.by_value.off.too_big" = "over 64 KiB"
 "table.filter.by_value.off.name" = "name not one line"
+"table.filter.by_value.off.line_break" = "line break"
 "table.filter.by_value.off.no_rows" = "no rows"
 "table.filter.by_value.off.not_shown" = "previous rows"
 "table.filter.by_value.off.new_row" = "new row"

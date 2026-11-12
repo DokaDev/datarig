@@ -124,6 +124,7 @@
 "table.filter.by_value.off.not_whole" = "온전히 보이지 않음"
 "table.filter.by_value.off.too_big" = "64 KiB 초과"
 "table.filter.by_value.off.name" = "한 줄이 아닌 이름"
+"table.filter.by_value.off.line_break" = "줄바꿈 있음"
 "table.filter.by_value.off.no_rows" = "행 없음"
 "table.filter.by_value.off.not_shown" = "이전 행"
 "table.filter.by_value.off.new_row" = "새 행"

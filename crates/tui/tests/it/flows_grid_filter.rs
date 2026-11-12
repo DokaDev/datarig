@@ -180,6 +180,26 @@ fn clear_with(h: &mut Harness, columns: Vec<ColumnMeta>, rows: Vec<Vec<Option<St
     h.sent();
 }
 
+/// A filter by value whose whole text would hold a line break (one of the other terms has one)
+/// is dimmed in the column menu for that reason, not for the column's name.
+#[test]
+fn a_filter_text_with_a_line_break_is_dimmed_as_one() {
+    let mut h = users();
+    assert_eq!(key_on(&mut h, 0, 0, "="), sent("id = 1"));
+    page(&mut h);
+    // The rows shown are those of a condition written over two lines.
+    let tq = h.app.tab_mut().doc.table_query.as_mut().expect("a table query");
+    for q in [&mut tq.draft].into_iter().chain(tq.shown.as_mut()).chain(tq.requested.as_mut().map(|(_, q)| q)) {
+        q.filter.as_mut().expect("a filter").text = "id = 1\nOR id = 3".into();
+    }
+    at(&mut h, 0, 1);
+    h.keys("F");
+    assert!(menu_open(&h), "{}", flashed(&h));
+    let dimmed = h.app.menu_dimmed_rows();
+    assert!(dimmed.iter().any(|(l, w)| *l == "Only this value" && w == "line break"), "{dimmed:?}");
+    assert!(!dimmed.iter().any(|(_, w)| w == "name not one line"), "{dimmed:?}");
+}
+
 #[test]
 fn equals_sends_only_the_cells_value() {
     let mut h = users();

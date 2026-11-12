@@ -313,7 +313,7 @@ impl App {
         }
         if !TextInput::holds(&text) {
             return Err(Box::new(Off::new(
-                Label::TableFilterByValueOffName,
+                Label::TableFilterByValueOffLineBreak,
                 warn(Label::TableFilterByValueNotOneLine),
             )));
         }
