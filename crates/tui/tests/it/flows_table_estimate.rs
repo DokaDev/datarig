@@ -418,3 +418,50 @@ fn a_held_result_dims_the_estimate_and_keeps_paging() {
     assert!(estimates(&h.sent()).is_empty());
     assert!(h.app.tab().exec.running.is_none(), "nothing waits behind the held result");
 }
+
+/// A filter on a MySQL `TIMESTAMP` reads the session's time zone
+/// (`CONVERT_TZ(…, '+00:00', @@session.time_zone)`): once the zone is not the one the rows were
+/// read in, the planner's estimate would be of other rows: its entry is dimmed, a pick made
+/// after the zone changed is refused with why (as the count is), and back in that zone it is
+/// asked again.
+#[test]
+fn a_timestamp_filter_is_estimated_only_in_the_zone_its_rows_were_read_in() {
+    use datarig_core::driver::SessionValues;
+    let zone = |z: &str| DbEvent::SessionValues(SessionValues { time_zone: z.into(), charset: "utf8mb4".into() });
+    let filter = "id < CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
+    let mut h = my(None);
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, zone("+00:00"));
+    h.command(&format!("where {filter}"));
+    page(&mut h);
+    h.sent();
+    // The session's zone changes (a `SET time_zone` the user ran).
+    h.tab_db(index, zone("+09:00"));
+    h.keys("#");
+    let line = entry_line(&mut h, "Estimate (planner)");
+    assert!(line.contains("refused now"), "{line}");
+    pick(&mut h, "estimate");
+    let sent = h.sent();
+    assert!(estimates(&sent).is_empty(), "{sent:?}");
+    h.key(KeyCode::Esc);
+    // The choice opened in the zone the rows were read in, picked once the zone changed: the
+    // pick checks again and says why.
+    h.tab_db(index, zone("+00:00"));
+    h.keys("#");
+    h.tab_db(index, zone("+09:00"));
+    pick(&mut h, "estimate");
+    let sent = h.sent();
+    assert!(estimates(&sent).is_empty(), "{sent:?}");
+    assert_eq!(
+        status(&h),
+        "No estimate for you: it reads the session's time zone, which is not known to be the one its rows \
+         were read in"
+    );
+    // Back in the zone the rows were read in.
+    assert!(!menu_open(&h));
+    h.tab_db(index, zone("+00:00"));
+    h.keys("#");
+    pick(&mut h, "estimate");
+    let qid = h.app.tab().exec.query_id;
+    assert_eq!(estimates(&h.sent()), vec![(qid, format!("{MY_ALL} WHERE ({filter})"))]);
+}

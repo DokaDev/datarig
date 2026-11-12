@@ -65,6 +65,12 @@ impl App {
             return Err(refused(why.clone()));
         }
         self.table_recheck(id).map_err(refused)?;
+        // Planned in a time zone other than the one the rows were read in, a filter on a
+        // `TIMESTAMP` would be an estimate of other rows.
+        let sql = self.table_capped_sql(id).unwrap_or_else(|| t.shown_sql().to_string());
+        if super::pages::zone_moved(t, &sql) {
+            return Err(refused(self.i18n.label(Label::RepeatZoneChanged).to_string()));
+        }
         let (Some(name), Some(target)) = (self.table_name(id), self.table_target(id)) else {
             return off(Label::ResultsEstimateOffCalls, Label::ResultsEstimateCalls);
         };
