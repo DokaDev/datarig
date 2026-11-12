@@ -30,33 +30,32 @@ fn area(f: DialogFocus) -> usize {
     }
 }
 
-/// The values of a condition whose operator becomes `op`: kept as they are where the new
-/// operator takes values of the same kind (between comparisons and lists alike: as many as it
-/// takes, an empty string a value like any other), else read again from their texts as they
-/// would be typed for it.
+/// The values of a condition whose operator becomes `op` (as many as it takes): kept as they are
+/// where the new operator takes values of the same kind (between comparisons and lists alike),
+/// else each read again on its own from its text as it would be typed for it. A value is never
+/// lost on the way: an empty string stays an empty string (an empty field is what stands for no
+/// value when typed, which an existing value never is).
 fn values_for(row: &Row, op: Op, c: &ColumnInfo, d: Dialect) -> Vec<Value> {
-    let pattern = |o: Op| matches!(o, Op::Contains | Op::StartsWith);
-    if pattern(op) == pattern(row.op) {
-        let keep = match op.arity() {
-            Arity::Zero => 0,
-            Arity::One => 1,
-            Arity::Two => 2,
-            Arity::Many => row.values.len(),
-        };
-        return row.values.iter().take(keep).cloned().collect();
-    }
-    let texts = row.value_texts(d);
-    let fields: Vec<String> = match op.arity() {
-        Arity::Zero => Vec::new(),
-        Arity::One => texts.first().cloned().into_iter().collect(),
-        Arity::Two => texts.iter().take(2).cloned().collect(),
-        // Each value typed again on its own: a comma inside one does not split it.
-        Arity::Many => {
-            return texts.iter().filter(|t| !t.is_empty()).flat_map(|t| draft::parse_texts(Op::Eq, &[t], c)).collect();
-        }
+    let keep = match op.arity() {
+        Arity::Zero => 0,
+        Arity::One => 1,
+        Arity::Two => 2,
+        Arity::Many => row.values.len(),
     };
-    let refs: Vec<&str> = fields.iter().map(String::as_str).collect();
-    draft::parse_texts(op, &refs, c)
+    let pattern = |o: Op| matches!(o, Op::Contains | Op::StartsWith);
+    let values = row.values.iter().take(keep);
+    if pattern(op) == pattern(row.op) {
+        return values.cloned().collect();
+    }
+    // A pattern's text as it is, else as one value typed for the column.
+    let as_typed = if pattern(op) { op } else { Op::Eq };
+    values
+        .zip(row.value_texts(d))
+        .filter_map(|(v, text)| match v {
+            Value::Text(s) if s.is_empty() => Some(Value::Text(String::new())),
+            _ => draft::parse_texts(as_typed, &[&text], c).into_iter().next(),
+        })
+        .collect()
 }
 
 impl App {

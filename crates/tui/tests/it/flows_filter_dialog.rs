@@ -185,6 +185,67 @@ fn an_empty_string_value_survives_a_change_of_operator() {
     assert_eq!(h.app.filter_dialog_draft().unwrap().0, "name = ''", "{}", h.screen(120, 34));
 }
 
+/// An empty string is a value across the pattern boundary too: `= ''` changed to `contains` or
+/// `starts with` keeps it (an empty pattern), and an empty pattern changed to `=` or a list
+/// keeps it; only a value never given leaves the condition incomplete.
+#[test]
+fn an_empty_string_survives_a_change_between_patterns_and_comparisons() {
+    // The operator picker of a text column: =, ≠, ≠ or NULL, <, ≤, >, ≥, contains, starts with,
+    // in list, not in list.
+    let change = |h: &mut Harness, from: usize, to: usize| {
+        h.key(KeyCode::Home);
+        h.key(KeyCode::Left);
+        h.key(KeyCode::Char(' '));
+        for _ in from..to {
+            h.key(KeyCode::Down);
+        }
+        for _ in to..from {
+            h.key(KeyCode::Up);
+        }
+        h.key(KeyCode::Enter);
+    };
+    let collation_known = |h: &mut Harness| {
+        let keys = datarig_core::driver::keys::OrderKeys {
+            primary_key: vec!["id".into()],
+            deterministic: [("name".to_string(), true)].into(),
+            ..Default::default()
+        };
+        keys_came_with(h, "local-pg", keys);
+        h.key(KeyCode::Right);
+    };
+    let contains = "name ILIKE '%%' ESCAPE '!'";
+    let starts = "name LIKE '%' ESCAPE '!'";
+    for (from, to, first, then) in [
+        (0, 7, "name = ''", contains),
+        (0, 8, "name = ''", starts),
+        (9, 7, "name IN ('')", contains),
+        (10, 8, "name NOT IN ('')", starts),
+        (7, 0, contains, "name = ''"),
+        (8, 0, starts, "name = ''"),
+        (7, 9, contains, "name IN ('')"),
+        (8, 10, starts, "name NOT IN ('')"),
+    ] {
+        let mut h = users();
+        collation_known(&mut h);
+        h.keys("f");
+        h.key(KeyCode::Char('j'));
+        condition(&mut h, from, "''");
+        assert_eq!(h.app.filter_dialog_draft().unwrap().0, first, "{}", h.screen(120, 34));
+        change(&mut h, from, to);
+        assert_eq!(h.app.filter_dialog_draft().unwrap().0, then, "{from} -> {to}: {}", h.screen(120, 34));
+        h.key(KeyCode::Enter);
+        assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE ({then})")]], "{from} -> {to}");
+    }
+    // A value never given stays incomplete, across the boundary as within it.
+    let mut h = users();
+    collation_known(&mut h);
+    h.keys("f");
+    h.key(KeyCode::Char('j'));
+    condition(&mut h, 0, "");
+    change(&mut h, 0, 7);
+    assert_eq!(h.app.filter_dialog_draft().unwrap().0, "", "{}", h.screen(120, 34));
+}
+
 #[test]
 fn text_patterns_send_their_like() {
     // A text column: no `between`; `contains` and `starts with` after the comparisons, offered
