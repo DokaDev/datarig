@@ -163,6 +163,8 @@
 "table.dialog.sort_desc_short" = "내림"
 "table.dialog.sort_place" = "{keys}개 중 {place}번째 키"
 "table.dialog.sort_move" = "< > 이동"
+"table.dialog.nulls_first" = "NULL 먼저"
+"table.dialog.nulls_last" = "NULL 마지막"
 "table.dialog.where" = "조건"
 "table.dialog.order" = "순서"
 "table.dialog.limit" = "행 제한"

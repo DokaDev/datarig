@@ -194,6 +194,15 @@ impl OrderKey {
     pub fn user(col: impl Into<ColName>, dir: Dir) -> Self {
         Self { col: col.into(), dir, nulls: None, origin: KeyOrigin::User }
     }
+
+    /// Whether its NULLs come first on dialect `d`: where it asks, else where the server puts
+    /// them (PostgreSQL sorts NULL as larger than any value, MySQL and MariaDB as smaller).
+    pub fn nulls_first(&self, d: Dialect) -> bool {
+        match self.nulls {
+            Some(n) => n == Nulls::First,
+            None => (self.dir == Dir::Asc) == matches!(d, Dialect::MySql(_)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

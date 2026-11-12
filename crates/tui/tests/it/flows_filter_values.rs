@@ -677,6 +677,32 @@ fn a_single_precision_float_is_compared_as_it_is_held() {
     assert!(screen.contains("A MySQL FLOAT is held more precisely than it is shown"), "{screen}");
 }
 
+/// The dialog's sort line says where this server puts NULLs in the order chosen for the column:
+/// PostgreSQL last going up and first going down, MySQL the other way round.
+#[test]
+fn the_sort_line_says_where_nulls_go_on_this_server() {
+    let s = |v: &str| Some(v.to_string());
+    let cols = || vec![col("id", "int8", ValueKind::Integer), col("note", "text", ValueKind::Text)];
+    for (mysql, dir, said) in [
+        (false, "ASC", "NULLs last"),
+        (false, "DESC", "NULLs first"),
+        (true, "ASC", "NULLs first"),
+        (true, "DESC", "NULLs last"),
+    ] {
+        let mut h = table_of(mysql, cols(), vec![vec![s("1"), None]]);
+        h.command(&format!("orderby note {dir}"));
+        let id = h.app.tab().exec.query_id;
+        let index = h.app.tabs.active_index();
+        let rows = vec![vec![s("1"), None]];
+        h.tab_db(index, DbEvent::Page { id, columns: Some(cols()), rows, more: false, elapsed: Duration::ZERO });
+        h.sent();
+        dialog_on(&mut h, 1);
+        let screen = h.screen(120, 34);
+        let sort = screen.lines().find(|l| l.contains("(\u{2022})")).unwrap_or_default().to_string();
+        assert!(sort.contains(said), "{mysql} {dir}: {screen}");
+    }
+}
+
 #[test]
 fn a_mysql_timestamp_is_ticked_only_in_the_zone_it_was_read_in() {
     let mut h = mysql();

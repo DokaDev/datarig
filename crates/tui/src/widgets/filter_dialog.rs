@@ -499,14 +499,22 @@ pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
                 .to_string();
             sx += put(buf, sx, sort_y, &p, usize::from(right.saturating_sub(sx)), muted) + 3;
             if d.focus == DialogFocus::Sort {
-                put(
+                sx += put(
                     buf,
                     sx,
                     sort_y,
                     &i18n.label(Label::TableDialogSortMove),
                     usize::from(right.saturating_sub(sx)),
                     muted,
-                );
+                ) + 3;
+            }
+        }
+        // Where this server puts NULLs in the order chosen, where it fits whole.
+        if let Some(k) = d.draft.order.iter().find(|k| k.col == c.name) {
+            let l = if k.nulls_first(d.dialect) { Label::TableDialogNullsFirst } else { Label::TableDialogNullsLast };
+            let note = i18n.label(l).to_string();
+            if sx + width(&note) as u16 <= right {
+                put(buf, sx, sort_y, &note, width(&note), muted);
             }
         }
     }

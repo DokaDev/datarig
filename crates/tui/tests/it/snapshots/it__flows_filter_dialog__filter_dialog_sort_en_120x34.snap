@@ -30,7 +30,7 @@ expression: backend
 "│                                        │                                                                             │"
 "│                                        │                                                                             │"
 "│                                        │                                                                             │"
-"│                                        │ ▸ Sort   ( ) none   (•) ↑ ascending   ( ) ↓ descending                      │"
+"│                                        │ ▸ Sort   ( ) none   (•) ↑ ascending   ( ) ↓ descending   NULLs last         │"
 "├────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────────────┤"
 "│ Where   = expr id > 1 OR name = 'x' ×    = id = 4 ×                                                undo   clear all  │"
 "│ Order  id ↑                                                                                Limit              SQL ▸  │"
