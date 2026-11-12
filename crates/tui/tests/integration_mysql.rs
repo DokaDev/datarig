@@ -220,6 +220,64 @@ async fn pages_are_not_held_and_the_next_one_runs_again() {
     assert!(app.status.as_ref().is_some_and(|n| matches!(n.msg, Msg::ResultsFirstPageOnly { .. })), "{:?}", app.status);
 }
 
+/// A filter on a `TIMESTAMP` as the table filter writes it (the instant from UTC, converted to
+/// the session's zone) is run again for the next page; once the session's zone changed, it is
+/// not, and the reason is said.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_timestamp_filter_pages_again_in_the_zone_its_rows_were_read_in() {
+    let Some((url, admin)) = urls("a_timestamp_filter_pages_again_in_the_zone_its_rows_were_read_in") else {
+        return;
+    };
+    let t = format!("shop.zz_it_tzpages_{}", std::process::id());
+    let _t = Made::make(
+        &admin,
+        &[
+            "SET time_zone = '+00:00'".to_string(),
+            format!("CREATE TABLE {t} (id INT PRIMARY KEY, placed_at TIMESTAMP NULL)"),
+            format!(
+                "INSERT INTO {t} WITH RECURSIVE d (i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM d WHERE i < 99) \
+                 SELECT g.n, IF(g.n % 7 = 0, '2026-11-10 10:30:00', '2026-11-10 09:30:00') \
+                 FROM (SELECT a.i + b.i * 100 + 1 AS n FROM d a, d b) g WHERE g.n <= 1234"
+            ),
+        ],
+        &[format!("DROP TABLE IF EXISTS {t}")],
+    )
+    .await;
+    let (mut app, mut rx) = app_on(&url, &format!("mz{}", std::process::id()), None).await;
+    run(&mut app, &mut rx, "SET time_zone = '+09:00'").await;
+    let sql = format!(
+        "SELECT id FROM {t} WHERE placed_at = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone) \
+         ORDER BY id"
+    );
+    run(&mut app, &mut rx, &sql).await;
+    assert_eq!(shown_page(&app), (Some("1".into()), 500));
+    assert_eq!(app.tab().exec.paging, Paging::Released);
+    assert!(app.can_run_again(), "{:?}", app.status);
+    app.focus = Focus::Results;
+    press(&mut app, 'n');
+    pump(&mut app, &mut rx, 15, idle).await;
+    // 1058 rows match (every id but the multiples of 7): the 501st is id 584.
+    assert_eq!(shown_page(&app), (Some("584".into()), 1000));
+    // The session's zone changes: the rows stay, and the next page is not run again.
+    run(&mut app, &mut rx, "SET time_zone = '+00:00'").await;
+    // Its Messages are shown: back to the rows.
+    app.tab_mut().exec.view = datarig_tui::app::tabs::ResultView::Rows;
+    app.focus = Focus::Results;
+    press(&mut app, 'n');
+    pump(&mut app, &mut rx, 5, idle).await;
+    assert_eq!(shown_page(&app), (Some("584".into()), 1000));
+    let status = app.status.as_ref().map(|n| n.render(&app.i18n).to_string()).unwrap_or_default();
+    assert!(status.contains("it reads the session's time zone"), "{status}");
+    // Back in the zone the rows were read in: the last page comes.
+    run(&mut app, &mut rx, "SET time_zone = '+09:00'").await;
+    // Its Messages are shown: back to the rows.
+    app.tab_mut().exec.view = datarig_tui::app::tabs::ResultView::Rows;
+    app.focus = Focus::Results;
+    press(&mut app, 'n');
+    pump(&mut app, &mut rx, 15, idle).await;
+    assert!(matches!(&app.tab().results, Results::Rows(rs) if rs.rows.len() == 1058 && !rs.more));
+}
+
 /// `paging = "hold"`: the app reads the result to its end at once (the statement and its
 /// metadata locks end with it), page by page into its store.
 #[tokio::test(flavor = "multi_thread")]
@@ -509,4 +567,68 @@ async fn the_explain_actions_show_mysqls_tree_as_a_plan() {
         let want = if analyzed { "EXPLAIN ANALYZE FORMAT=TREE SELECT" } else { "EXPLAIN FORMAT=TREE SELECT" };
         assert!(sent.starts_with(want), "{keys}: {sent}");
     }
+}
+
+/// A table tab's filter MySQL refuses as a syntax error: the text it quotes (`near '…'`) is
+/// found once in the statement, inside the filter, and marks it from there; the tab keeps no
+/// rows of it. Reads an existing table, makes no object.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_syntax_error_in_a_table_filter_marks_the_text_mysql_quotes() {
+    use datarig_core::query::{Filter, TableName};
+    use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::table_query::TableQuery;
+    let test = "a_syntax_error_in_a_table_filter_marks_the_text_mysql_quotes";
+    let Some(url) = env_url("DATARIG_TEST_MYSQL_URL", test, "mysql://datarig:datarig@127.0.0.1:53306/shop") else {
+        return;
+    };
+    let pw = datarig_core::profile::dsn::parse(&url).unwrap().password.unwrap_or_default();
+    let dir = std::env::temp_dir().join(format!("datarig-it-mynear-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let paths = datarig_core::paths::Paths { data: Some(dir.join("data")), state: Some(dir.join("state")) };
+    let p = profile(&url);
+    let tab = TabState {
+        id: workspace::new_id(),
+        kind: workspace::TabKind::Table,
+        script: None,
+        profile: Some(p.id),
+        cursor: (0, 0),
+        top: 0,
+        console: 0,
+        table: Some(("shop".into(), "users".into())),
+        ddl: None,
+        results: None,
+        database: None,
+        schema: None,
+    };
+    let ws =
+        WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };
+    workspace::save(&dir.join("state"), &ws).unwrap();
+    let store = Arc::new(MemoryStore::new());
+    store.set(&p.id.account(), &pw).unwrap();
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut app = App::new(&cfg, None, Lang::En);
+    app.set_secret_store(store as Arc<dyn SecretStore>);
+    app.set_paths(paths);
+    app.whats_new_paused = true;
+    app.set_instance_tag(&format!("mynear{}", std::process::id()));
+    let (tx, mut rx) = unbounded_channel();
+    app.start(tx, Startup::Normal);
+    assert!(app.tab().is_table());
+    // `RANK` is a reserved word of MySQL 8: the server stops reading at the `=` after it.
+    let filter = "name = '\u{65e5}\u{672c}' AND rank = 1";
+    let mut tq = TableQuery::new(TableName { database: None, schema: "shop".into(), name: "users".into() });
+    tq.draft.filter = Some(Filter { text: filter.into(), recognised: None });
+    app.tab_mut().doc.table_query = Some(Box::new(tq));
+    app.dispatch(Action::RunStatement);
+    let failed = |a: &App| a.tab().doc.table_query.as_ref().is_some_and(|q| q.failure().is_some());
+    pump(&mut app, &mut rx, 20, failed).await;
+    let status = app.tab().status.as_ref().map(|n| n.render(&app.i18n).to_string()).unwrap_or_default();
+    assert!(status.contains("ERROR 1064"), "{status}");
+    let tq = app.tab().doc.table_query.as_ref().unwrap();
+    let start = filter.find("= 1").unwrap();
+    assert_eq!(tq.failure().and_then(|f| f.at.clone()), Some(start..filter.len()), "{status}");
+    assert_eq!(tq.shown, None, "no rows of it are held");
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
 }

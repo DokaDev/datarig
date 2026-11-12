@@ -763,7 +763,7 @@ impl App {
             if not_loaded {
                 // Its query, not what `Ctrl+E` took in it before.
                 self.unstage_run(t);
-                self.run_in(t, vec![table.query(self.tab_dialect(t))]);
+                self.table_rerun(t);
             }
             return;
         }
@@ -778,7 +778,7 @@ impl App {
             t.context = context;
         }
         self.entered_tab();
-        self.run_in(tab, vec![query]);
+        self.table_rerun(tab);
     }
 
     pub(super) fn clear_test(&mut self) {

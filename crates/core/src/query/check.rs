@@ -13,16 +13,19 @@
 //!    table's `*`, no set operation, no `INTO` and no row lock anywhere, no clause but the
 //!    `WHERE`. MySQL, on the text's tokens: no `INTO`, `LOCK`, `PROCEDURE` or `FOR UPDATE`/`FOR
 //!    SHARE` anywhere, no `UNION`, `INTERSECT`, `EXCEPT`, `FOR`, `LIMIT`, `ORDER`, `GROUP`,
-//!    `HAVING` or `WINDOW` outside the text's own parentheses, and no assignment (`:=`).
+//!    `HAVING` or `WINDOW` outside the text's own parentheses, no assignment (`:=`), and no
+//!    `NEXT VALUE FOR` nor `s.nextval` (MariaDB's, which advance a sequence for each row read).
 //! 3. **Classifier**: the whole statement is a plain read with no danger
 //!    ([`crate::sql::risk`]); a text it cannot read or that is too complex is refused.
 //! 4. **Function calls**: only the built-ins of [`PG_FILTER_CALLS`] or [`MYSQL_FILTER_CALLS`]
 //!    pass without a word (by a bare name, or PostgreSQL's `pg_catalog.` one). A built-in of
-//!    [`PG_REFUSED_CALLS`] or [`MYSQL_REFUSED_CALLS`] (it waits, locks, changes the session or
-//!    calls out) is refused. Any other call asks the user ([`FilterVerdict::NeedsConfirm`]),
+//!    [`PG_REFUSED_CALLS`] or [`MYSQL_REFUSED_CALLS`] (it waits, locks, changes the session,
+//!    calls out, or reads or writes the server's files or large objects) is refused. Any other call asks the user ([`FilterVerdict::NeedsConfirm`]),
 //!    and is refused on a read-only profile: a function may do on the server what a read-only
 //!    transaction does not stop.
 //!
+//! A refused built-in is refused in attribute notation too (`(oid).lo_get`, `t.lo_unlink`),
+//! where any later name of a column reference or an indirection counts, even a column's.
 //! What is not seen, as for the editor's classifier: a function of the user's called in
 //! attribute notation (`t.f`), a user-defined operator, and code a view or a policy runs.
 
@@ -111,6 +114,10 @@ pub enum ShapeProblem {
     Into,
     /// MySQL: a variable assignment (`:=`).
     Assignment,
+    /// MariaDB: `NEXT VALUE FOR` or `s.nextval` (the ORACLE sql mode's spelling), which
+    /// advance a sequence for each row read. Refused whatever the session's sql mode: a name
+    /// `nextval` after a `.` counts, even a column's.
+    Sequence,
 }
 
 /// PostgreSQL built-ins a filter may call without asking, by name: they read their arguments
@@ -177,13 +184,33 @@ pub const PG_FILTER_CALLS: &[&str] = &[
 ];
 
 /// PostgreSQL built-ins a filter may not call, by name however qualified: they wait, take
-/// locks, change the session or a sequence, notify, or reach another server. Sorted.
+/// locks, change the session or a sequence, notify, reach another server, or read, list or write
+/// the server's files or its large objects (a filter is one boolean expression with no effect).
+/// Sorted.
 pub const PG_REFUSED_CALLS: &[&str] = &[
     "dblink",
     "dblink_connect",
     "dblink_connect_u",
     "dblink_exec",
     "dblink_send_query",
+    "lo_close",
+    "lo_creat",
+    "lo_create",
+    "lo_export",
+    "lo_from_bytea",
+    "lo_get",
+    "lo_import",
+    "lo_lseek",
+    "lo_lseek64",
+    "lo_open",
+    "lo_put",
+    "lo_tell",
+    "lo_tell64",
+    "lo_truncate",
+    "lo_truncate64",
+    "lo_unlink",
+    "loread",
+    "lowrite",
     "nextval",
     "pg_advisory_lock",
     "pg_advisory_lock_shared",
@@ -192,10 +219,22 @@ pub const PG_REFUSED_CALLS: &[&str] = &[
     "pg_advisory_unlock_shared",
     "pg_advisory_xact_lock",
     "pg_advisory_xact_lock_shared",
+    "pg_ls_archive_statusdir",
+    "pg_ls_dir",
+    "pg_ls_logdir",
+    "pg_ls_logicalmapdir",
+    "pg_ls_logicalsnapdir",
+    "pg_ls_replslotdir",
+    "pg_ls_summariesdir",
+    "pg_ls_tmpdir",
+    "pg_ls_waldir",
     "pg_notify",
+    "pg_read_binary_file",
+    "pg_read_file",
     "pg_sleep",
     "pg_sleep_for",
     "pg_sleep_until",
+    "pg_stat_file",
     "pg_try_advisory_lock",
     "pg_try_advisory_lock_shared",
     "pg_try_advisory_xact_lock",
@@ -218,6 +257,7 @@ pub const MYSQL_FILTER_CALLS: &[&str] = &[
     "CONCAT",
     "CONCAT_WS",
     "CONVERT",
+    "CONVERT_TZ",
     "CURDATE",
     "CURRENT_DATE",
     "CURRENT_TIMESTAMP",
@@ -283,8 +323,8 @@ pub const MYSQL_FILTER_CALLS: &[&str] = &[
     "YEAR",
 ];
 
-/// MySQL built-ins a filter may not call: they wait, take or test user locks, or read a file of
-/// the server. Sorted.
+/// MySQL built-ins a filter may not call: they wait, take or test user locks, read a file of the
+/// server, or advance or set a sequence (MariaDB's `NEXTVAL`, `SETVAL`). Sorted.
 pub const MYSQL_REFUSED_CALLS: &[&str] = &[
     "BENCHMARK",
     "GET_LOCK",
@@ -292,8 +332,10 @@ pub const MYSQL_REFUSED_CALLS: &[&str] = &[
     "IS_USED_LOCK",
     "LOAD_FILE",
     "MASTER_POS_WAIT",
+    "NEXTVAL",
     "RELEASE_ALL_LOCKS",
     "RELEASE_LOCK",
+    "SETVAL",
     "SLEEP",
     "SOURCE_POS_WAIT",
     "WAIT_FOR_EXECUTED_GTID_SET",
@@ -315,19 +357,44 @@ pub fn check_filter(
         Query { filter: Some(Filter { text: text.to_string(), recognised: None }), ..Query::table(table.clone()) };
     let sql = compile(&query, target).sql;
     let risk = classifier.clone().classify(&sql);
+    // PostgreSQL: a row lock written in the text is named as one, where it is, also when it
+    // leaves the statement unparsed (`x = 1 FOR UPDATE` inside the parentheses).
+    let pg_lock = || {
+        let at = readings.first().and_then(|r| pg_lock_at(&r.tokens, text));
+        BarRefusal::Shape { problem: ShapeProblem::Locking, at }
+    };
     if matches!(risk.danger, Some(Danger::Unparsed | Danger::TooComplex)) {
+        if target.dialect == Dialect::Postgres
+            && readings.first().is_some_and(|r| pg_lock_at(&r.tokens, text).is_some())
+        {
+            return Err(pg_lock());
+        }
         return Err(BarRefusal::NotRead { class: risk.class, danger: risk.danger });
     }
     let unread = || BarRefusal::NotRead { class: Class::Unknown, danger: Some(Danger::Unparsed) };
     let calls: Vec<Call> = match target.dialect {
         Dialect::Postgres => {
             let Source::Table(t) = &query.source;
-            pg_tree(&sql, t).ok_or_else(unread)?.map_err(|problem| BarRefusal::Shape { problem, at: None })?
+            match pg_tree(&sql, t) {
+                Some(Ok(calls)) => calls,
+                Some(Err(ShapeProblem::Locking)) => return Err(pg_lock()),
+                Some(Err(problem)) => return Err(BarRefusal::Shape { problem, at: None }),
+                None if readings.first().is_some_and(|r| pg_lock_at(&r.tokens, text).is_some()) => {
+                    return Err(pg_lock());
+                }
+                None => return Err(unread()),
+            }
         }
         Dialect::MySql(_) => {
             let mut calls = Vec::new();
             for r in &readings {
                 mysql_shape(&r.tokens, text).map_err(|(problem, at)| BarRefusal::Shape { problem, at: Some(at) })?;
+                for written in mysql_sequence_reads(&r.tokens, text) {
+                    let call = Call { written, allowed: false, refused: false };
+                    if !calls.contains(&call) {
+                        calls.push(call);
+                    }
+                }
                 let Dialect::MySql(mode) = r.dialect else { continue };
                 let unread_here = || BarRefusal::NotRead { class: risk.class, danger: Some(Danger::Unrecognized) };
                 for (name, qualified) in risk::mysql::called(&sql, mode).ok_or_else(unread_here)? {
@@ -469,7 +536,7 @@ fn problems(tokens: &[Token], text: &str, d: Dialect) -> Result<(), (LexProblem,
         let problem = match t.kind {
             Tok::Semi => LexProblem::Semicolon,
             Tok::LineComment => LexProblem::Comment,
-            Tok::BlockComment if matches!(d, Dialect::MySql(_)) && t.text(text).starts_with("/*M!") => {
+            Tok::BlockComment if matches!(d, Dialect::MySql(_)) && text[at.clone()].starts_with("/*M!") => {
                 LexProblem::ExecutableComment
             }
             Tok::BlockComment => LexProblem::Comment,
@@ -519,6 +586,8 @@ fn mysql_shape(tokens: &[Token], text: &str) -> Result<(), (ShapeProblem, Range<
                 ShapeProblem::Assignment
             }
             (_, "INTO") => ShapeProblem::Into,
+            (_, "NEXT") if next_is(&["VALUE"]) => ShapeProblem::Sequence,
+            _ if after_dot(&ws, i) && unquoted(t.text(text)).eq_ignore_ascii_case("NEXTVAL") => ShapeProblem::Sequence,
             (_, "LOCK") => ShapeProblem::Locking,
             (_, "FOR") if next_is(&["UPDATE", "SHARE"]) => ShapeProblem::Locking,
             (_, "PROCEDURE") => ShapeProblem::Clause,
@@ -529,6 +598,61 @@ fn mysql_shape(tokens: &[Token], text: &str) -> Result<(), (ShapeProblem, Range<
         return Err((problem, at));
     }
     Ok(())
+}
+
+/// Whether word `i` of `ws` follows a `.`: a name in attribute notation (`s.nextval`).
+fn after_dot(ws: &[&Token], i: usize) -> bool {
+    (ws[i].is_word() || ws[i].kind == Tok::QuotedIdent) && i > 0 && ws[i - 1].kind == Tok::Dot
+}
+
+/// A name without its quotes (`` `a` ``, `"a"`), as the server reads it when no quote is doubled.
+fn unquoted(name: &str) -> &str {
+    let quoted = name.len() >= 2
+        && ((name.starts_with('`') && name.ends_with('`')) || (name.starts_with('"') && name.ends_with('"')));
+    if quoted { &name[1..name.len() - 1] } else { name }
+}
+
+/// MariaDB's reads of a sequence's last value that are not written as a call: `s.currval` (a
+/// session in the ORACLE sql mode) and `PREVIOUS VALUE FOR s`, named as `CURRVAL` and `PREVIOUS
+/// VALUE FOR`. They change nothing but answer from what the session did before, as `LASTVAL(s)`
+/// does, so they are asked about as a call whose effects are not known.
+fn mysql_sequence_reads(tokens: &[Token], text: &str) -> Vec<String> {
+    let ws: Vec<&Token> = tokens.iter().filter(|t| !t.is_trivia() && t.start < text.len()).collect();
+    let word = |i: usize, w: &str| ws.get(i).is_some_and(|t| t.is_word() && t.text(text).eq_ignore_ascii_case(w));
+    let mut out = Vec::new();
+    for i in 0..ws.len() {
+        let name = if after_dot(&ws, i) && unquoted(ws[i].text(text)).eq_ignore_ascii_case("CURRVAL") {
+            "CURRVAL"
+        } else if word(i, "PREVIOUS") && word(i + 1, "VALUE") && word(i + 2, "FOR") {
+            "PREVIOUS VALUE FOR"
+        } else {
+            continue;
+        };
+        if !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+    }
+    out
+}
+
+/// PostgreSQL: where text `text` (its tokens `tokens`) writes a row lock, `FOR` through its
+/// last word (`FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE`, `FOR KEY SHARE`); `None` when
+/// it writes none.
+fn pg_lock_at(tokens: &[Token], text: &str) -> Option<Range<usize>> {
+    let ws: Vec<&Token> = tokens.iter().filter(|t| !t.is_trivia() && t.start < text.len()).collect();
+    let word = |i: usize, w: &str| ws.get(i).is_some_and(|t| t.is_word() && t.text(text).eq_ignore_ascii_case(w));
+    (0..ws.len()).filter(|&i| word(i, "FOR")).find_map(|i| {
+        let last = if word(i + 1, "UPDATE") || word(i + 1, "SHARE") {
+            i + 1
+        } else if word(i + 1, "NO") && word(i + 2, "KEY") && word(i + 3, "UPDATE") {
+            i + 3
+        } else if word(i + 1, "KEY") && word(i + 2, "SHARE") {
+            i + 2
+        } else {
+            return None;
+        };
+        Some(clamp(ws[i], text).start..clamp(ws[last], text).end)
+    })
 }
 
 /// The PostgreSQL shape check of statement `sql` on its parse tree, read on the classifier's
@@ -603,15 +727,28 @@ fn pg_shape(stmts: &[Value], table: &TableName) -> Result<Vec<Call>, ShapeProble
     if b["where_clause"].is_null() || lists.iter().any(|k| !empty(&b[k])) || nodes.iter().any(|k| !b[k].is_null()) {
         return Err(ShapeProblem::Clause);
     }
+    // Every call, however it is written: a `FuncCall`, or attribute notation (`(expr).f`,
+    // `t.f`), which the server runs as `f(expr)` when there is no column or field `f`. A name in
+    // attribute notation counts only when refused: any other is a column or a field as often as
+    // a call, and is not asked about (see the module docs).
     let mut calls = Vec::new();
     risk::walk(b, &mut |o| {
-        let Some(call) = o.get("FuncCall") else { return };
-        let names: Vec<&str> = call["funcname"].as_array().into_iter().flatten().filter_map(risk::text).collect();
-        let allowed = matches!(names.as_slice(), [f] | ["pg_catalog", f] if PG_FILTER_CALLS.binary_search(f).is_ok());
-        let refused = names.last().is_some_and(|f| PG_REFUSED_CALLS.binary_search(f).is_ok());
-        let call = Call { written: names.join("."), allowed, refused };
-        if !calls.contains(&call) {
-            calls.push(call);
+        for found in risk::calls(o) {
+            let call = match found {
+                risk::Call::Func(names, _) => {
+                    let allowed =
+                        matches!(names.as_slice(), [f] | ["pg_catalog", f] if PG_FILTER_CALLS.binary_search(f).is_ok());
+                    let refused = names.last().is_some_and(|f| PG_REFUSED_CALLS.binary_search(f).is_ok());
+                    Call { written: names.join("."), allowed, refused }
+                }
+                risk::Call::Attribute(f, _) if PG_REFUSED_CALLS.binary_search(&f).is_ok() => {
+                    Call { written: f.to_string(), allowed: false, refused: true }
+                }
+                risk::Call::Attribute(..) => continue,
+            };
+            if !calls.contains(&call) {
+                calls.push(call);
+            }
         }
     });
     Ok(calls)

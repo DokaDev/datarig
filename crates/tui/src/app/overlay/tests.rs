@@ -12,6 +12,7 @@ fn commands() -> Overlay {
         list: Default::default(),
         offset: 0,
         press: Default::default(),
+        sql: None,
     })
 }
 

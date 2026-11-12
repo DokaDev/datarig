@@ -69,6 +69,17 @@ pub const FILE: &str = "\u{f15b}";
 /// A table tab (nf-fa-table); with icons off the tab shows the name alone.
 pub const TABLE: &str = "\u{f0ce}";
 
+/// A table tab whose rows are filtered, after its name (nf-fa-filter); `*` with icons off.
+pub const FILTER: &str = "\u{f0b0}";
+
+/// The filter mark of a table tab's name: the glyph, or `*` with icons off.
+pub fn filter(on: bool) -> &'static str {
+    if on { FILTER } else { "*" }
+}
+
+/// Run a table tab's query again, at the right end of its filter line (nf-fa-refresh).
+pub const REFRESH: &str = "\u{f021}";
+
 /// A DDL tab (nf-fa-code); with icons off the tab says `DDL` in words.
 pub const DDL: &str = "\u{f121}";
 

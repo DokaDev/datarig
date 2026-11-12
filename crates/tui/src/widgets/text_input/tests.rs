@@ -110,3 +110,34 @@ fn a_click_puts_the_cursor_under_the_pointer_as_drawn() {
     assert!(d.click(9, 0));
     assert_eq!(d.cursor(), 9, "the `@` after the hidden password");
 }
+
+#[test]
+fn spans_style_the_graphemes_they_start_in() {
+    use ratatui::style::Color;
+    let mut t = TextInput::new("a 日b");
+    let mut buf = Buffer::empty(Rect::new(0, 0, 8, 1));
+    let red = Style::new().fg(Color::Red);
+    // Bytes 2..5 are the wide syllable, 5..6 the `b`.
+    t.render_spans(Rect::new(0, 0, 8, 1), &mut buf, Style::new().bg(Color::Blue), false, &[(2..5, red)]);
+    assert_eq!(buf[(2, 0)].symbol(), "日");
+    assert_eq!((buf[(2, 0)].fg, buf[(2, 0)].bg), (Color::Red, Color::Blue));
+    assert_eq!(buf[(0, 0)].fg, Color::Reset, "outside every span: the base style");
+    assert_eq!(buf[(4, 0)].fg, Color::Reset);
+}
+
+#[test]
+fn replace_puts_a_completion_in_and_the_cursor_after_it() {
+    let mut t = TextInput::new("日 na = 1");
+    // The cursor after `na` (graphemes: 日, ' ', n, a).
+    t.handle_key(&KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+    for _ in 0..4 {
+        t.handle_key(&KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    }
+    assert_eq!(t.cursor_byte(), 6);
+    t.replace(4..6, "name");
+    assert_eq!((t.text(), t.cursor(), t.cursor_byte()), ("日 name = 1", 6, 8));
+    // Inside the wide letter, or past the text: nothing changes.
+    t.replace(1..2, "x");
+    t.replace(4..40, "x");
+    assert_eq!(t.text(), "日 name = 1");
+}

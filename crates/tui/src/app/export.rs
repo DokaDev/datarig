@@ -323,6 +323,9 @@ pub enum Failure {
     MySqlLost,
     /// The tab's result changed before the export could start.
     Stale,
+    /// Its statement is refused now (why, in words): checked again just before it is sent (a
+    /// table tab's filter, the environment turned read-only meanwhile).
+    Refused(String),
     /// The statement failed (the server's error).
     Db(DbError),
     /// A key value of the last row read cannot be written for the next chunk.
@@ -834,13 +837,20 @@ impl App {
     }
 
     /// The table of table tab `id` when every row of its result may be read by the table's key:
-    /// its query is the table's own, outside the user's block, in the profile's own database,
-    /// with a metadata session to read the key on (without one, nothing would answer).
+    /// its query is the table's own (no filter, no order, no cap), outside the user's block, in
+    /// the profile's own database, with a metadata session to read the key on (without one,
+    /// nothing would answer). Filtered rows are read by running their statement again.
     pub(super) fn export_keyset_table(&self, id: TabId) -> Option<(ProfileId, TableRef)> {
         let t = self.tabs.get(id)?;
         let table = t.doc.table.clone()?;
         let pid = t.profile?;
-        let own = t.shown_sql().trim() == table.query(self.tab_dialect(id));
+        let plain = match t.doc.table_query.as_ref().and_then(|q| q.shown.as_ref()) {
+            Some(shown) => self
+                .table_name(id)
+                .is_some_and(|name| super::table_query::same_query(shown, &datarig_core::query::Query::table(name))),
+            None => true,
+        };
+        let own = plain && t.shown_sql().trim() == table.query(self.tab_dialect(id));
         let meta = self.structure_on(pid) && self.conns.get(pid).is_some_and(|c| c.meta.is_some());
         (own && !t.exec.in_block && t.context.database.is_none() && meta).then_some((pid, table))
     }
@@ -1178,6 +1188,17 @@ impl App {
             Plan::Keyset(k) => (k.first(), ExportGuard::Keyset),
             Plan::Local => return,
         };
+        // Checked as the policy is now before anything changes: a refused export leaves a held
+        // portal open and is not said to start.
+        if let Some(why) = self.export_refused_now(id, &sql) {
+            if let Some(j) = self.exports.jobs.get_mut(&id) {
+                j.told = true;
+                if let Some(ctl) = &j.ctl {
+                    let _ = ctl.send(Ctl::Fail(Failure::Refused(why)));
+                }
+            }
+            return;
+        }
         let now = self.now();
         let Some(t) = self.tabs.get_mut(id) else { return };
         // A held portal is closed first (its rows stay): the statement runs again.
@@ -1229,13 +1250,38 @@ impl App {
     }
 
     /// Send statement `sql` of tab `id`'s export with a channel of its own, handed to the writer.
+    /// Checked again first, as the policy is now: a table tab's shown filter and the read-only
+    /// rule (the environment may have changed while the dialog or the file waited); refused,
+    /// nothing is sent and the export ends saying why.
     fn export_send(&mut self, id: TabId, sql: String, guard: ExportGuard) {
+        if let Some(why) = self.export_refused_now(id, &sql) {
+            if let Some(t) = self.tabs.get_mut(id) {
+                t.exec.running = None;
+            }
+            if let Some(j) = self.exports.jobs.get_mut(&id) {
+                j.told = true;
+                if let Some(ctl) = &j.ctl {
+                    let _ = ctl.send(Ctl::Fail(Failure::Refused(why)));
+                }
+            }
+            return;
+        }
         let Some(j) = self.exports.jobs.get(&id) else { return };
         let Some(ctl) = j.ctl.as_ref() else { return };
         let (sink, rx) = tokio::sync::mpsc::channel(CHANNEL_BATCHES);
         let _ = ctl.send(Ctl::Rows(rx));
         let qid = self.tabs.get(id).map_or(0, |t| t.exec.query_id);
         self.send_tab(id, DbCommand::Export { id: qid, sql, guard, sink, batch: BATCH_ROWS });
+    }
+
+    /// Why statement `sql` of tab `id`'s export may not be sent now, in words.
+    fn export_refused_now(&self, id: TabId, sql: &str) -> Option<String> {
+        if let Err(why) = self.table_recheck(id) {
+            return Some(self.i18n.msg(&Msg::TableFilterRefused { why }).to_string());
+        }
+        let pid = self.tabs.get(id)?.profile?;
+        let refused = self.read_only_refusal(id, pid, &[sql.to_string()])?;
+        Some(refused.render(&self.i18n).to_string())
     }
 
     /// The session answered a statement of tab `id`'s export: the next chunk, or the end.
@@ -1535,6 +1581,7 @@ impl App {
             Failure::SessionEnded => self.i18n.label(Label::ExportWhySessionEnded).to_string(),
             Failure::MySqlLost => self.i18n.label(Label::ExportWhyMysqlLost).to_string(),
             Failure::Stale => self.i18n.label(Label::ExportStale).to_string(),
+            Failure::Refused(why) => why.clone(),
             Failure::Db(DbError::NotRepeatable(r)) => self.i18n.msg(&super::pages::why(r)).to_string(),
             Failure::Db(DbError::NotSupported) => self.i18n.label(Label::ExportWhyNotSupported).to_string(),
             Failure::Db(e) => self.db_error_text(e),

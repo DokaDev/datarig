@@ -6,8 +6,11 @@
 //!
 //! The editor's text replaces the tab's as one undo step (`u` undoes it). A table tab's query
 //! and a DDL tab's text are not texts anybody wrote: the editor gets a copy, and an edited copy
-//! opens in a new console on the same connection, database and schema.
+//! opens in a new console on the same connection, database and schema. A table tab's copy is
+//! the statement `space r v` opens (its filter and order, checked as a run checks them); what
+//! comes back never goes into the table tab and is not run.
 
+use super::table_query::OpenIn;
 use super::*;
 use crate::external::{EditFailure, Edited, Ended};
 use datarig_core::driver::SessionContext;
@@ -45,11 +48,21 @@ impl App {
     }
 
     /// `Ctrl+G`: the active tab's text in the user's editor. The editor goes back to Normal
-    /// mode first (as `Esc` does: Insert ends, a selection or a pending command goes).
+    /// mode first (as `Esc` does: Insert ends, a selection or a pending command goes). A table
+    /// tab's text is its statement as `space r v` opens it ([`App::table_sql_to_open`]): a
+    /// refused filter opens nothing, functions to confirm are asked about first.
     pub(super) fn request_external_edit(&mut self) {
         if self.effect.is_some() {
             return;
         }
+        let table = self.tab().is_table().then(|| self.tab().id);
+        let table_sql = match table {
+            Some(id) => match self.table_sql_to_open(id, OpenIn::Editor) {
+                Some(sql) => Some(sql),
+                None => return,
+            },
+            None => None,
+        };
         // A table tab's query and a DDL tab's text are not the tab's to change: a copy, which
         // goes to a new console.
         let copy = !self.tab().is_query();
@@ -73,7 +86,7 @@ impl App {
             profile: t.profile,
             context: t.context.clone(),
         };
-        let text = t.editor.text();
+        let text = table_sql.unwrap_or_else(|| t.editor.text());
         self.editing = Some(pending);
         let dir = self.paths.state.as_ref().map(|s| s.join("edit"));
         self.effect = Some(Effect::Edit { text, dir });

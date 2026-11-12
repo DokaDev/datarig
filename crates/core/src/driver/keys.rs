@@ -30,6 +30,23 @@ impl KeyMarks {
     }
 }
 
+/// The keys of one table that make an order of its rows total (`DbCommand::LoadTableKeys`):
+/// what a sort appends as its tie-breaker. Read from the catalog only, by the table's name: no
+/// relation is opened and no lock taken on it, so the read never waits for nor holds up another
+/// session's DDL. Only keys on whole columns that the server checks at once count (no
+/// expression, no prefix, no partial index, nothing deferred).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OrderKeys {
+    /// The primary key's columns, in the key's order; empty for none.
+    pub primary_key: Vec<String>,
+    /// The other unique keys whose columns are all `NOT NULL` (no two rows share them), each
+    /// in its order.
+    pub unique_not_null: Vec<Vec<String>>,
+    /// Reading the table reads the rows of tables that inherit from it too (PostgreSQL
+    /// inheritance, not partitions): its keys do not hold across them.
+    pub inherited: bool,
+}
+
 /// One kind of key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyKind {

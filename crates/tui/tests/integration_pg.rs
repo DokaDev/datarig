@@ -657,6 +657,67 @@ async fn a_restored_table_tab_pages_outside_any_user_transaction() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A table tab's filter the server refuses: the place PostgreSQL gives (a count of characters
+/// of the statement as sent) marks the filter's text where it points, past the wide characters
+/// before it; the tab keeps no rows of it. Reads an existing table, makes no object.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_error_in_a_table_filter_marks_where_it_points() {
+    use datarig_core::query::{Filter, TableName};
+    use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::table_query::TableQuery;
+    let Some(url) = pg_url("a_server_error_in_a_table_filter_marks_where_it_points") else { return };
+    let pw = datarig_core::profile::dsn::parse(&url).unwrap().password.unwrap_or_default();
+    let dir = std::env::temp_dir().join(format!("datarig-it-caret-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let paths = datarig_core::paths::Paths { data: Some(dir.join("data")), state: Some(dir.join("state")) };
+    let p = profile(&url);
+    let tab = TabState {
+        id: workspace::new_id(),
+        kind: workspace::TabKind::Table,
+        script: None,
+        profile: Some(p.id),
+        cursor: (0, 0),
+        top: 0,
+        console: 0,
+        table: Some(("analytics".into(), "events".into())),
+        ddl: None,
+        results: None,
+        database: None,
+        schema: None,
+    };
+    let ws =
+        WorkspaceState { active: 0, explorer: ExplorerState::default(), tabs: vec![tab], unknown_tabs: Vec::new() };
+    workspace::save(&dir.join("state"), &ws).unwrap();
+    let store = Arc::new(MemoryStore::new());
+    store.set(&p.id.account(), &pw).unwrap();
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut app = App::new(&cfg, None, Lang::En);
+    app.set_secret_store(store as Arc<dyn SecretStore>);
+    app.set_paths(paths);
+    app.whats_new_paused = true;
+    app.set_instance_tag(&format!("caret{}", std::process::id()));
+    let (tx, mut rx) = unbounded_channel();
+    app.start(tx, Startup::Normal);
+    assert!(app.tab().is_table());
+    // Wide characters (three bytes each, one character) before the column that is not there.
+    let filter = "event_type = '\u{30ed}\u{30b0}\u{30a4}\u{30f3}' AND nosuch = 1";
+    let mut tq = TableQuery::new(TableName { database: None, schema: "analytics".into(), name: "events".into() });
+    tq.draft.filter = Some(Filter { text: filter.into(), recognised: None });
+    app.tab_mut().doc.table_query = Some(Box::new(tq));
+    app.dispatch(Action::RunStatement);
+    let failed = |a: &App| a.tab().doc.table_query.as_ref().is_some_and(|q| q.failure().is_some());
+    pump(&mut app, &mut rx, 20, failed).await;
+    let tq = app.tab().doc.table_query.as_ref().unwrap();
+    let start = filter.find("nosuch").unwrap();
+    assert_eq!(tq.failure().and_then(|f| f.at.clone()), Some(start..start + "nosuch".len()));
+    assert_eq!(tq.shown, None, "no rows of it are held");
+    let status = app.tab().status.as_ref().map(|n| n.render(&app.i18n).to_string()).unwrap_or_default();
+    assert!(status.contains("nosuch"), "{status}");
+    drop(app);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn pg_url(test: &str) -> Option<String> {
     match std::env::var("DATARIG_TEST_PG_URL") {
         Ok(u) if !u.is_empty() => {

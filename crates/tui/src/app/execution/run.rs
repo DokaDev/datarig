@@ -101,6 +101,11 @@ impl App {
             return;
         }
         let Some(pid) = self.tabs.get(id).and_then(|t| t.profile) else { return };
+        // A table tab's filter checked again as the policy is now (it may have waited for the
+        // connection while the environment changed).
+        if !self.table_pending_holds(id, &statements) {
+            return self.unstage_run(id);
+        }
         if let Some(refused) = self.read_only_refusal(id, pid, &statements) {
             self.unstage_run(id);
             return self.tab_status(id, refused);
@@ -150,6 +155,10 @@ impl App {
             t.exec.resuming = None;
             t.exec.released = false;
             t.exec.query_id = qid;
+            // A table tab's query is bound to the run that sends its statement.
+            if let Some(tq) = t.doc.table_query.as_mut() {
+                tq.sent(qid, &statements);
+            }
             // Marked on the editor's text when that is where the user ran them from.
             t.editor.start_run(qid, &statements);
             // The row results stay until this run delivers its first rows:

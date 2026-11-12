@@ -165,15 +165,28 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
 
     draw_status(app, rows[1], f.buffer_mut());
 
-    if editor_area.is_some() && app.tab().popup.is_some() && app.focus == Focus::Editor && !app.modal_open() {
+    let owner = app.tab().popup.as_ref().map(|p| p.owner);
+    if editor_area.is_some()
+        && owner == Some(crate::app::PopupOwner::Editor)
+        && app.focus == Focus::Editor
+        && !app.modal_open()
+    {
         draw_popup(app, cursor, area, f.buffer_mut());
+    }
+    // A field of the filter line: under it, or above it near the bottom.
+    if let (Some(crate::app::PopupOwner::Filter(field)), Some(at)) = (owner, app.layout.filter_cursor)
+        && app.filter_line_focused()
+        && app.filter_line_field() == Some(field)
+        && !app.modal_open()
+    {
+        draw_popup(app, at, area, f.buffer_mut());
     }
     // Real terminal cursor at the focused text input so IME preedit appears in place.
     if app.focus == Focus::Tree {
         filter_cursor
     } else {
         match app.focus {
-            Focus::Results => app.layout.grid_prompt_cursor,
+            Focus::Results => app.layout.filter_cursor.or(app.layout.grid_prompt_cursor),
             _ => (app.focus == Focus::Editor && editor_area.is_some()).then_some(cursor),
         }
     }
@@ -329,7 +342,7 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     // The result tabs of the last run, the Chart, a Plan and the Messages on the first line.
     let strip = app.strip_shown() && rinner.height > 2;
     let old_strip = std::mem::take(&mut app.pointer.strip_hits);
-    let content = if strip {
+    let mut content = if strip {
         let line = Rect { height: 1, ..rinner };
         app.layout.strip = line;
         draw_strip(app, line, buf);
@@ -342,6 +355,15 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
         app.layout.strip = Rect::default();
         rinner
     };
+    // A table tab's filter line above the grid (and above what the run said).
+    if app.tab().is_table() && !app.changes_shown() && !app.plan_shown() && !app.chart_shown() && content.height > 2 {
+        let focused = if app.focus == Focus::Results { app.filter_line_field() } else { None };
+        let rows = crate::widgets::filter_line::rows(content.width, focused).min(content.height - 2);
+        let line = Rect { height: rows, ..content };
+        if draw_filter_line(app, line, grid_area.height, buf) {
+            content = Rect { y: content.y + rows, height: content.height - rows, ..content };
+        }
+    }
     // Another view than the rows: no grid, so no cell of it is under the pointer (it would
     // still be lit when the rows come back).
     let rows = !matches!(app.tab().exec.view, ResultView::Messages | ResultView::Changes)
@@ -364,6 +386,33 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     if panel_w.is_some() {
         crate::widgets::inspector::draw_inspector(app, detail_area, buf);
     }
+}
+
+/// The filter line of the active table tab in `line`, unless it is empty, has no focus and
+/// the results pane (`pane_h` rows) is short: whether it was drawn.
+fn draw_filter_line(app: &mut App, line: Rect, pane_h: u16, buf: &mut Buffer) -> bool {
+    app.filter_line_follow();
+    let id = app.tab().id;
+    let focused = if app.focus == Focus::Results { app.filter_line_field() } else { None };
+    let applied = app.filter_line_applied(id);
+    let empty = app.table_query(id).is_none_or(|q| q.line.where_.text().is_empty() && q.line.order.text().is_empty());
+    let blank = empty && applied.filter.is_empty() && applied.order.is_empty();
+    if crate::widgets::filter_line::hidden(blank, focused.is_some(), pane_h) {
+        return false;
+    }
+    let key = app.key_for(Action::Table(crate::app::filter_line::TableAction::EditFilter), Ctx::Grid);
+    let hint = app.i18n.msg(&Msg::TableFilterHint { key }).to_string();
+    let mut state = app.table_query(id).map(|q| q.line.clone()).unwrap_or_default();
+    let drawn = crate::widgets::filter_line::draw(app, &mut state, &applied, focused, &hint, line, buf);
+    if let Some(tq) = app.tab_mut().doc.table_query.as_mut() {
+        tq.line = state;
+    }
+    app.layout.filter_line = line;
+    app.layout.filter_where = drawn.where_;
+    app.layout.filter_order = drawn.order;
+    app.layout.filter_refresh = drawn.refresh;
+    app.layout.filter_cursor = drawn.cursor;
+    true
 }
 
 /// The result tab strip: `[Result 1]  Result 3  Changes 2  Plan  Chart  Messages`, the shown
@@ -1301,6 +1350,42 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         _ => None,
     };
+    // A table tab whose query's run brought no rows (refused, cancelled, its session gone) holds
+    // the rows of an earlier one: dimmed, and said in place of a note about the paging (never
+    // shown as that query's answer).
+    let unapplied = match app.tab().results {
+        Results::Rows(_) => app.tab().doc.table_query.as_ref().and_then(|q| q.failure()).map(|f| f.how),
+        _ => None,
+    };
+    let paging_note = match unapplied {
+        Some(how) => {
+            use crate::app::table_query::Unapplied;
+            let (long, short) = match how {
+                Unapplied::Refused => (Label::TableFilterFailedRows, Label::TableFilterFailedShort),
+                Unapplied::Cancelled => (Label::TableFilterCancelledRows, Label::TableFilterCancelledShort),
+                Unapplied::Ended => (Label::TableFilterUnappliedRows, Label::TableFilterUnappliedShort),
+            };
+            Some((app.i18n.label(long), app.i18n.label(short)))
+        }
+        None => paging_note,
+    };
+    // A refusal of what the user wrote in the filter line, while it stands: said whole there
+    // (the status bar may cut it), first among the notes; nothing was sent for it.
+    let refusal = match app.tab().results {
+        Results::Rows(_) => app.tab().doc.table_query.as_ref().and_then(|q| q.refusal.as_ref()),
+        _ => None,
+    };
+    let refused = refusal.is_some();
+    let paging_note = match refusal {
+        Some(r) => {
+            let short = match r.field {
+                crate::app::table_query::Field::Where => Label::TableFilterRefusedShort,
+                crate::app::table_query::Field::Order => Label::TableOrderRefusedShort,
+            };
+            Some((r.notice.render(&app.i18n), app.i18n.label(short)))
+        }
+        None => paging_note,
+    };
     // The grid's search: its prompt or the search that is on, on the line under the grid; a
     // note about the paging goes on that line too, first among what is not searched.
     let mut strip = app.grid_search_strip().filter(|_| area.height > 3);
@@ -1343,13 +1428,32 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             crate::widgets::grid::render(rs, &mut t.grid, grid, buf, &app.i18n, focused, look);
         }
         Results::Rows(rs) if area.height > 3 && paging_note.is_some() => {
-            let grid = Rect { height: area.height - 1, ..area };
-            crate::widgets::grid::render(rs, &mut t.grid, grid, buf, &app.i18n, focused, look);
             let text = paging_note.as_ref().map(|(long, _)| long.to_string()).unwrap_or_default();
-            let y = area.y + area.height - 1;
-            buf.set_style(Rect { y, height: 1, ..area }, Style::new().bg(th.surface));
             let w = area.width.saturating_sub(1) as usize;
-            buf.set_stringn(area.x + 1, y, clip(&text, w), w, Style::new().fg(th.warning).bg(th.surface));
+            // A refusal is wrapped (up to three lines, the grid keeping three); a note about the
+            // paging is one line.
+            let lines = match refused {
+                true => {
+                    let most = usize::from(area.height - 3).clamp(1, 3);
+                    let mut lines = wrap_words(&text, w);
+                    if lines.len() > most {
+                        lines.truncate(most);
+                        if let Some(last) = lines.last_mut() {
+                            *last = clip(&format!("{last}\u{2026}"), w);
+                        }
+                    }
+                    lines
+                }
+                false => vec![clip(&text, w)],
+            };
+            let n = lines.len().max(1) as u16;
+            let grid = Rect { height: area.height - n, ..area };
+            crate::widgets::grid::render(rs, &mut t.grid, grid, buf, &app.i18n, focused, look);
+            let y0 = area.y + area.height - n;
+            buf.set_style(Rect { y: y0, height: n, ..area }, Style::new().bg(th.surface));
+            for (i, line) in lines.iter().enumerate() {
+                buf.set_stringn(area.x + 1, y0 + i as u16, line, w, Style::new().fg(th.warning).bg(th.surface));
+            }
         }
         // A text plan: the line below its rows offers to view it as a plan.
         Results::Rows(rs) if area.height > 3 && text_plan.is_some() => {
@@ -1378,6 +1482,11 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             msg_line(buf, &app.i18n.msg(&msg), th.error)
         }
         Results::Cancelled => msg_line(buf, &app.i18n.label(Label::QueryCancelled), th.warning),
+    }
+    if unapplied.is_some() {
+        let below = strip.is_some() || (area.height > 3 && paging_note.is_some());
+        let grid = Rect { height: area.height - u16::from(below), ..area };
+        buf.set_style(grid, Style::new().fg(th.fg_dim).add_modifier(Modifier::DIM));
     }
     if let Some(strip) = &strip {
         draw_search_strip(app, strip, Rect { y: area.y + area.height - 1, height: 1, ..area }, buf);

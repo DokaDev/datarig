@@ -914,6 +914,289 @@ async fn table_structure_never_waits_for_a_lock() {
     assert!(structure(ask(Some("t")).await).0.is_ok());
 }
 
+/// The default class of a key column is picked among every class its type is binary
+/// compatible with as the server picks it (`GetDefaultOpClass`): exactly the type's; else the
+/// only one of the preferred type of its category, also when a polymorphic class is a
+/// candidate too; else the only one; else none. Candidates are written out here, as the
+/// catalog read collects them (a type with its own extra compatible classes needs C
+/// functions to make).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_default_class_is_picked_as_the_server_picks() {
+    use datarig_driver_postgres::catalog_sql::ORDER_KEY_CLASS_PICK;
+    let Some(url) = pg_url("the_default_class_is_picked_as_the_server_picks") else { return };
+    let mut q = Conn::open(&url, SessionRole::Query).await;
+    let mut n = 0;
+    let mut pick = async |cands: &str| {
+        n += 1;
+        let sql =
+            format!("WITH cands (oid, exact, preferred) AS (VALUES {cands}) SELECT ({ORDER_KEY_CLASS_PICK})::text");
+        rows_of(q.run(n, &sql).await)[0][0].clone()
+    };
+    let c = |oid: u32, exact: bool, preferred: bool| format!("({oid}::oid, {exact}, {preferred})");
+    let set = |xs: &[String]| xs.join(", ");
+    // Exactly the type's wins over everything.
+    assert_eq!(pick(&set(&[c(1, false, true), c(2, true, false), c(3, false, false)])).await.as_deref(), Some("2"));
+    // A preferred candidate wins over a polymorphic one (no early polymorphic choice).
+    assert_eq!(pick(&set(&[c(10, false, false), c(11, false, true)])).await.as_deref(), Some("11"));
+    // Two preferred: none; one compatible alone: it; two, none preferred: none.
+    assert_eq!(pick(&set(&[c(20, false, true), c(21, false, true)])).await, None);
+    assert_eq!(pick(&set(&[c(30, false, false)])).await.as_deref(), Some("30"));
+    assert_eq!(pick(&set(&[c(40, false, false), c(41, false, false)])).await, None);
+}
+
+/// `url` with `options` that make every transaction of its sessions `SERIALIZABLE` by default,
+/// and `DEFERRABLE` too when `deferrable` (a read-only one then waits for a snapshot no
+/// serializable writer can upset).
+fn serializable_url(url: &str, deferrable: bool) -> String {
+    let sep = if url.contains('?') { '&' } else { '?' };
+    let more = if deferrable { "%20-c%20default_transaction_deferrable%3Don" } else { "" };
+    format!("{url}{sep}options=-c%20default_transaction_isolation%3Dserializable{more}")
+}
+
+/// The app's own catalog reads (a table tab's order keys among them) set their isolation level,
+/// whatever the session's default: under `SERIALIZABLE DEFERRABLE` by default, a read-only
+/// transaction at the default level waits for a safe snapshot while another session's
+/// serializable transaction that wrote is open; the keys come at once all the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn catalog_reads_do_not_take_a_serializable_default() {
+    let Some(url) = pg_url("catalog_reads_do_not_take_a_serializable_default") else { return };
+    let schema = format!("zz_serialmeta_{}", std::process::id());
+    let _guard = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE TABLE {s}.t (id int PRIMARY KEY)"),
+        format!("CREATE TABLE {s}.w (id int)"),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let serial = serializable_url(&url, true);
+    let mut probe = Conn::open(&serial, SessionRole::Query).await;
+    let set = first_cell(&mut probe, 1, "SELECT current_setting('default_transaction_isolation')").await;
+    assert_eq!(set.as_deref(), Some("serializable"), "the default is in effect");
+    let tag = format!("serialmeta{}", std::process::id());
+    let cfg = ConnectionConfig { name: "it".into(), dsn: Some(serial), ..ConnectionConfig::test_db() };
+    let (tx, rx) = unbounded_channel();
+    let o = ConnectOptions::new(PAGE, SessionRole::Meta, &tag).dialer(dialer());
+    let mut meta = Conn { session: PgDriver.connect(&cfg, SessionRole::Meta, o, tx), rx };
+    meta.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let mut writer = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(writer.run(1, "BEGIN ISOLATION LEVEL SERIALIZABLE").await, DbEvent::Done { .. }));
+    assert!(matches!(writer.run(2, &format!("INSERT INTO {s}.w VALUES (1)")).await, DbEvent::Done { .. }));
+    meta.session.send(DbCommand::LoadTableKeys { id: 7, schema: schema.clone(), table: "t".into() });
+    let ev = tokio::time::timeout(Duration::from_secs(5), meta.rx.recv()).await;
+    let answered = matches!(&ev, Ok(Some(DbEvent::TableKeys { id: 7, .. })));
+    assert!(matches!(writer.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+    assert!(answered, "the keys waited for the writer: {ev:?}");
+    let Ok(Some(DbEvent::TableKeys { result, .. })) = ev else { unreachable!() };
+    assert_eq!(result.map(|k| k.primary_key), Ok(vec!["id".to_string()]));
+}
+
+/// A filter written for a `real` column (`ColumnKind::Real`) finds the row of each value as the
+/// session shows it (its shortest text): the number goes as a string the server reads as a
+/// `real` (a bare `0.1` is a `numeric`, compared after both widen to `double precision`, and
+/// finds nothing). A `double precision` value is shown exactly and written bare.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_filter_finds_a_real_by_the_value_shown() {
+    use datarig_core::query::{CmpOp, ColumnFacts, ColumnKind, Cond, Target, Value, render};
+    let Some(url) = pg_url("a_filter_finds_a_real_by_the_value_shown") else { return };
+    let schema = format!("zz_real_{}", std::process::id());
+    let _guard = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE TABLE {s}.f (id int PRIMARY KEY, r real, d double precision)"),
+        format!(
+            "INSERT INTO {s}.f VALUES (1, 0.1, 0.1), (2, 1.5, 0.30000000000000004), (3, 3.4028235e38, 1e-300), \
+             (4, -0.3, NULL), (5, NULL, 2.5)"
+        ),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    let shown = rows_of(c.run(1, &format!("SELECT id, r, d FROM {s}.f ORDER BY id")).await);
+    let target = Target::new(
+        datarig_core::sql::dialect::Dialect::Postgres,
+        vec![ColumnFacts::new("r", ColumnKind::Real), ColumnFacts::new("d", ColumnKind::Number)],
+    );
+    let mut n = 10;
+    let mut ids = async |c: &mut Conn, cond: Cond| -> Vec<String> {
+        n += 1;
+        let text = render(&cond, &target).unwrap();
+        let sql = format!("SELECT id FROM {s}.f WHERE {text} ORDER BY id");
+        rows_of(c.run(n, &sql).await).into_iter().map(|r| r[0].clone().unwrap()).collect()
+    };
+    for (col, i) in [("r", 1), ("d", 2)] {
+        for row in &shown {
+            let (id, Some(v)) = (row[0].clone().unwrap(), row[i].clone()) else { continue };
+            let eq = Cond::Cmp { col: col.into(), op: CmpOp::Eq, value: Value::Number(v.clone()) };
+            assert_eq!(ids(&mut c, eq).await, vec![id.clone()], "{col} = {v}");
+            let ne = Cond::NotDistinct { col: col.into(), value: Value::Number(v.clone()), negated: true };
+            assert_eq!(ids(&mut c, ne).await.len(), 4, "{col} distinct from {v}");
+            let one = Cond::In { col: col.into(), values: vec![Value::Number(v.clone())], negated: false };
+            assert_eq!(ids(&mut c, one).await, vec![id.clone()], "{col} in ({v})");
+        }
+    }
+}
+
+/// The keys of a table for a total order are read from the catalog only: while another
+/// session holds the table in `ACCESS EXCLUSIVE` mode (an open transaction's `LOCK TABLE`), or
+/// waits for that lock behind a reader, the read answers at once with the keys, and the
+/// metadata session holds or asks for no lock on any relation of the schema meanwhile. Only
+/// whole-column, immediate, full unique keys count, the others only with all columns `NOT
+/// NULL`; a table that others inherit from says so; no such table is not found.
+#[tokio::test(flavor = "multi_thread")]
+async fn order_keys_are_read_without_a_lock() {
+    use datarig_core::driver::keys::OrderKeys;
+    let Some(url) = pg_url("order_keys_are_read_without_a_lock") else { return };
+    let schema = format!("zz_okeys_{}", std::process::id());
+    let _guard = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!(
+            "CREATE TABLE {s}.keys_probe (a int, b int, email text NOT NULL UNIQUE, nick text UNIQUE,              note text NOT NULL, later int NOT NULL, PRIMARY KEY (b, a))"
+        ),
+        format!("CREATE UNIQUE INDEX probe_lower ON {s}.keys_probe (lower(note))"),
+        format!("CREATE UNIQUE INDEX probe_part ON {s}.keys_probe (note) WHERE a > 0"),
+        format!("CREATE UNIQUE INDEX probe_incl ON {s}.keys_probe (later) INCLUDE (nick)"),
+        format!("ALTER TABLE {s}.keys_probe ADD CONSTRAINT probe_deferred UNIQUE (note) DEFERRABLE"),
+        format!("CREATE TABLE {s}.parent (id int PRIMARY KEY)"),
+        format!("CREATE TABLE {s}.child () INHERITS ({s}.parent)"),
+        // Unique only under another collation or operator class than an ORDER BY uses.
+        format!("CREATE COLLATION {s}.ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)"),
+        format!(
+            "CREATE TABLE {s}.coll (v text COLLATE {s}.ci NOT NULL, w text NOT NULL, vc varchar(9) NOT NULL UNIQUE)"
+        ),
+        format!("CREATE UNIQUE INDEX coll_c ON {s}.coll (v COLLATE \"C\")"),
+        format!("CREATE UNIQUE INDEX coll_pattern ON {s}.coll (w text_pattern_ops)"),
+        // The class an ORDER BY of each type picks, or another: a domain over text (text's own
+        // class), varchar (text's, through the cast without a function), bpchar (its own).
+        format!("CREATE DOMAIN {s}.label AS text"),
+        format!("CREATE DOMAIN {s}.label2 AS {s}.label"),
+        format!(
+            "CREATE TABLE {s}.classes (d {s}.label2 NOT NULL, dp {s}.label NOT NULL, vp varchar(9) NOT NULL, \
+             b char(3) NOT NULL, bp char(3) NOT NULL, vb varchar(9) NOT NULL)"
+        ),
+        // Another type's default class (bpchar's) on a varchar column: an ORDER BY of varchar
+        // compares as text does, so it is not the same order.
+        format!("CREATE UNIQUE INDEX classes_vb ON {s}.classes (vb bpchar_ops)"),
+        // Primary keys whose type takes a polymorphic or a cast's class: each one's own order.
+        format!("CREATE TYPE {s}.mood AS ENUM ('sad', 'ok', 'happy')"),
+        format!("CREATE DOMAIN {s}.relname AS regclass"),
+        format!("CREATE TABLE {s}.by_enum (m {s}.mood PRIMARY KEY)"),
+        format!("CREATE TABLE {s}.by_array (a integer[] PRIMARY KEY)"),
+        format!("CREATE TABLE {s}.by_regclass (r regclass PRIMARY KEY)"),
+        format!("CREATE TABLE {s}.by_domain (r {s}.relname PRIMARY KEY)"),
+        format!("CREATE UNIQUE INDEX classes_d ON {s}.classes (d)"),
+        format!("CREATE UNIQUE INDEX classes_dp ON {s}.classes (dp text_pattern_ops)"),
+        format!("CREATE UNIQUE INDEX classes_vp ON {s}.classes (vp varchar_pattern_ops)"),
+        format!("CREATE UNIQUE INDEX classes_b ON {s}.classes (b)"),
+        format!("CREATE UNIQUE INDEX classes_bp ON {s}.classes (bp bpchar_pattern_ops)"),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let tag = format!("okeys{}", std::process::id());
+    let cfg = ConnectionConfig { name: "it".into(), dsn: Some(url.clone()), ..ConnectionConfig::test_db() };
+    let (tx, rx) = unbounded_channel();
+    let o = ConnectOptions::new(PAGE, SessionRole::Meta, &tag).dialer(dialer());
+    let mut meta = Conn { session: PgDriver.connect(&cfg, SessionRole::Meta, o, tx), rx };
+    meta.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let mut observer = Conn::open(&url, SessionRole::Query).await;
+    let mut n = 100;
+    // The keys of `table`, how long they took, and the relation locks the metadata session held
+    // or asked for on the schema's relations while they were read (looked at 300 ms in, or when
+    // they came).
+    let mut ask = async |table: &str| {
+        n += 1;
+        let t0 = Instant::now();
+        meta.session.send(DbCommand::LoadTableKeys { id: n, schema: schema.clone(), table: table.to_string() });
+        let ev = tokio::time::timeout(Duration::from_millis(300), meta.rx.recv()).await;
+        let sql = format!(
+            "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
+             WHERE a.application_name = 'datarig-meta-{tag}' AND l.locktype = 'relation' \
+             AND l.relation IN (SELECT c.oid FROM pg_catalog.pg_class c WHERE c.relnamespace = '{s}'::regnamespace)"
+        );
+        let DbEvent::Page { rows, .. } = observer.run(n, &sql).await else { panic!("pg_locks") };
+        let locks = rows[0][0].clone().unwrap_or_default();
+        let ev = match ev {
+            Ok(Some(ev)) => ev,
+            _ => tokio::time::timeout(Duration::from_secs(10), meta.rx.recv())
+                .await
+                .unwrap_or_else(|_| panic!("{table}: no answer within 10 s ({locks} locks asked for)"))
+                .expect("the metadata session ended"),
+        };
+        let DbEvent::TableKeys { id, result } = ev else { panic!("{ev:?}") };
+        assert_eq!(id, n);
+        (result, t0.elapsed(), locks)
+    };
+    let probe = OrderKeys {
+        primary_key: vec!["b".into(), "a".into()],
+        unique_not_null: vec![vec!["email".into()], vec!["later".into()]],
+        inherited: false,
+    };
+    let (keys, _, _) = ask("keys_probe").await;
+    assert_eq!(keys, Ok(probe.clone()));
+    let (keys, _, _) = ask("parent").await;
+    assert_eq!(keys, Ok(OrderKeys { primary_key: vec!["id".into()], inherited: true, ..OrderKeys::default() }));
+    let (keys, _, _) = ask("coll").await;
+    assert_eq!(keys, Ok(OrderKeys { unique_not_null: vec![vec!["vc".into()]], ..OrderKeys::default() }), "only vc");
+    let (keys, _, _) = ask("classes").await;
+    let want = vec![vec!["b".to_string()], vec!["d".to_string()]];
+    assert_eq!(keys, Ok(OrderKeys { unique_not_null: want, ..OrderKeys::default() }), "the default classes only");
+    for (table, column) in [("by_enum", "m"), ("by_array", "a"), ("by_regclass", "r"), ("by_domain", "r")] {
+        let (keys, _, _) = ask(table).await;
+        assert_eq!(keys, Ok(OrderKeys { primary_key: vec![column.into()], ..OrderKeys::default() }), "{table}");
+    }
+    let (keys, _, _) = ask("nosuch").await;
+    assert_eq!(keys, Err(DbError::NotFound));
+
+    // Held: an open transaction's `LOCK TABLE … ACCESS EXCLUSIVE`.
+    let mut holder = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(holder.run(1, "BEGIN").await, DbEvent::Done { .. }));
+    let lock = format!("LOCK TABLE {s}.keys_probe IN ACCESS EXCLUSIVE MODE");
+    assert!(matches!(holder.run(2, &lock).await, DbEvent::Done { .. }));
+    let (keys, took, locks) = ask("keys_probe").await;
+    assert_eq!(keys, Ok(probe.clone()), "read past the held lock");
+    assert!(took < Duration::from_secs(1), "at once: {took:?}");
+    assert_eq!(locks, "0", "no lock held or asked for on the locked table");
+    assert!(matches!(holder.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+
+    // Waited for: a reader holds the table, a `LOCK TABLE` waits behind it.
+    let mut reader = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(reader.run(1, "BEGIN").await, DbEvent::Done { .. }));
+    assert!(matches!(reader.run(2, &format!("SELECT count(*) FROM {s}.keys_probe")).await, DbEvent::Page { .. }));
+    let mut migration = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(migration.run(1, "BEGIN").await, DbEvent::Done { .. }));
+    migration.session.send(DbCommand::Execute {
+        id: 2,
+        statements: vec![format!("LOCK TABLE {s}.keys_probe")],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
+    let waiting = format!(
+        "SELECT count(*) FROM pg_locks WHERE relation = '{s}.keys_probe'::regclass \
+         AND mode = 'AccessExclusiveLock' AND NOT granted"
+    );
+    let mut watch = Conn::open(&url, SessionRole::Query).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    for id in 1.. {
+        let DbEvent::Page { rows, .. } = watch.run(id, &waiting).await else { panic!("pg_locks") };
+        if rows[0][0].as_deref() == Some("1") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the LOCK TABLE never queued");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let (keys, took, locks) = ask("keys_probe").await;
+    assert_eq!(keys, Ok(probe), "not queued behind the waiting lock");
+    assert!(took < Duration::from_secs(1), "at once: {took:?}");
+    assert_eq!(locks, "0", "no lock asked for behind the waiting one");
+    assert!(matches!(reader.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+    assert!(matches!(migration.result(2).await, DbEvent::Done { .. }), "the lock was granted");
+    assert!(matches!(migration.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+}
+
 /// The size of a table that was never vacuumed or analyzed is unknown, as its rows are: its
 /// heap's `relpages` is still 0 however many rows it has, while its indexes and its TOAST
 /// table's index have pages from their creation on (a text column, a primary key, a partitioned

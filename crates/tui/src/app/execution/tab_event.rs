@@ -146,6 +146,23 @@ impl App {
         }
         // The run ends (its result, its outcome or its failure), or a transaction ends.
         let current = self.tabs.get(id).map_or(0, |t| t.exec.query_id);
+        // The statement of a table tab's query failed (not a page fetched after its first): the
+        // line marks the query failed, and where the server says the error is in its filter.
+        if let DbEvent::Failed { id: q, error, cancelled: false, .. } = &ev
+            && *q == current
+        {
+            let d = self.tab_dialect(id);
+            if let Some(t) = self.tabs.get_mut(id)
+                && !t.exec.running.is_some_and(|r| r.fetch)
+                && let Some(tq) = t.doc.table_query.as_mut()
+            {
+                let e = match error {
+                    DbError::Server(m) => crate::app::table_query::ServerError::Message(m),
+                    _ => crate::app::table_query::ServerError::Other,
+                };
+                tq.run_failed(*q, &e, d);
+            }
+        }
         let run_ended = matches!(&ev, DbEvent::Page { id: q, columns: Some(_), .. } | DbEvent::Done { id: q, .. }
             | DbEvent::Failed { id: q, .. } if *q == current);
         let tx_ended = matches!(ev, DbEvent::TxOpen(false));
@@ -475,6 +492,10 @@ impl App {
                 }
                 t.exec.state = SessionState::Idle;
                 t.exec.running = None;
+                // A table tab's query whose run waited for this session is not applied.
+                if let Some(tq) = t.doc.table_query.as_mut() {
+                    tq.run_over(t.exec.query_id, crate::app::table_query::Unapplied::Ended);
+                }
                 t.exec.unsure();
                 t.exec.paging = Paging::None;
                 if !matches!(t.results, Results::Rows(_)) {
@@ -490,6 +511,7 @@ impl App {
             | DbEvent::Keys(_)
             | DbEvent::Structure { .. }
             | DbEvent::Ddl { .. }
+            | DbEvent::TableKeys { .. }
             | DbEvent::Databases(_) => None,
             // Where the session works, as the server says: a chosen schema it does not list
             // does not exist there or cannot be used (said, never taken as fine).
@@ -574,6 +596,10 @@ impl App {
                 t.exec.state = SessionState::Lost;
                 t.exec.lost_tx = t.exec.tx_at_risk();
                 t.exec.running = None;
+                // A table tab's query whose run had not brought its rows is not applied.
+                if let Some(tq) = t.doc.table_query.as_mut() {
+                    tq.run_over(t.exec.query_id, crate::app::table_query::Unapplied::Ended);
+                }
                 let had_tx = t.exec.user_tx();
                 // Lost while the app rolled its idle transaction back: said in the status bar
                 // too, as a failed rollback is.
@@ -810,6 +836,10 @@ impl App {
                 t.grid = GridState::paged(page_size, page_rows);
                 t.exec.origin = origin;
                 t.exec.shown = t.exec.run.len().checked_sub(1);
+                // A table tab's rows are of the query its run sent, if it sent one.
+                if let Some(tq) = t.doc.table_query.as_mut() {
+                    tq.first_page(query);
+                }
                 // The Chart tab shown before stays: it draws these rows.
                 let charted = t.exec.view == crate::app::tabs::ResultView::Chart;
                 t.exec.view =
@@ -1087,9 +1117,9 @@ impl App {
         }
     }
 
-    /// After DDL run in tab `id` the key cache of its profile may be out of date: read it again
-    /// once the run ends, or, inside a transaction (the metadata session cannot see its
-    /// changes yet), once the transaction ends.
+    /// After DDL run in tab `id` the key cache of its profile, and the keys its table tabs read
+    /// for their order, may be out of date: read again once the run ends, or, inside a
+    /// transaction (the metadata session cannot see its changes yet), once the transaction ends.
     fn keys_after_ddl(&mut self, id: TabId, profile: Option<ProfileId>, run_ended: bool, tx_ended: bool) {
         let Some(t) = self.tabs.get_mut(id) else { return };
         let mut reload = false;
@@ -1105,6 +1135,7 @@ impl App {
         }
         if reload && let Some(p) = profile {
             self.reload_keys(p);
+            self.forget_order_keys(p, None);
             self.conns.forget_checks(p);
         }
     }

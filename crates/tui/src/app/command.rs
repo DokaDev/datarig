@@ -102,6 +102,12 @@ pub enum Command {
     Apply,
     /// `:discard`: drop the shown result's pending changes (asked first).
     Discard,
+    /// `:where [condition]`: a table tab's filter (none when left out), then a run.
+    Where,
+    /// `:orderby [keys]`: a table tab's order (none when left out), then a run.
+    OrderBy,
+    /// `:filter clear`: a table tab's every row, unordered, then a run.
+    Filter,
 }
 
 /// The type of a command's argument (it decides the completions).
@@ -134,6 +140,12 @@ pub enum ArgKind {
     TabPosition,
     /// An export's format, scope and path (`:export`), each optional.
     Export,
+    /// A table tab's filter: a condition as SQL writes it; may be left out.
+    Where,
+    /// A table tab's order: columns, each with `ASC` or `DESC`; may be left out.
+    OrderBy,
+    /// What `:filter` does (`clear`).
+    FilterOp,
 }
 
 impl ArgKind {
@@ -149,6 +161,8 @@ impl ArgKind {
                 | ArgKind::Analyze
                 | ArgKind::TabPosition
                 | ArgKind::Export
+                | ArgKind::Where
+                | ArgKind::OrderBy
         )
     }
 }
@@ -448,6 +462,30 @@ pub const COMMANDS: &[CommandSpec] = &[
         arg: None,
         label: Label::ActionUpdate,
         action: Some(Action::UpdateStatus),
+    },
+    CommandSpec {
+        command: Command::Where,
+        name: "where",
+        aliases: &[],
+        arg: Some(ArgKind::Where),
+        label: Label::CommandWhere,
+        action: None,
+    },
+    CommandSpec {
+        command: Command::OrderBy,
+        name: "orderby",
+        aliases: &[],
+        arg: Some(ArgKind::OrderBy),
+        label: Label::CommandOrderby,
+        action: None,
+    },
+    CommandSpec {
+        command: Command::Filter,
+        name: "filter",
+        aliases: &[],
+        arg: Some(ArgKind::FilterOp),
+        label: Label::CommandFilter,
+        action: None,
     },
 ];
 
@@ -1047,6 +1085,9 @@ pub enum ArgCompletion {
     /// The theme file `:theme update` adds the missing tokens to (never a built-in theme): an
     /// index into the theme names given to [`complete_arg`].
     ThemeFile(usize),
+    /// A completion of the SQL of `:where` or `:orderby`: an index into the command line's
+    /// [`super::CommandLine::sql`] (not made by [`complete_arg`]).
+    Sql(usize),
 }
 
 /// The words of `:theme`, each with its label.
@@ -1190,8 +1231,16 @@ pub fn complete_arg(kind: ArgKind, arg: &str, names: &[&str]) -> Vec<ArgCompleti
             rank(arg, names.iter().copied().enumerate()).into_iter().map(ArgCompletion::Context).collect()
         }
         // A new name, or any object's: nothing to pick from (`analyze` is the only word; a
-        // tab's place is a number).
-        ArgKind::NewScript | ArgKind::Object | ArgKind::Analyze | ArgKind::TabPosition | ArgKind::Export => Vec::new(),
+        // tab's place is a number). A condition and an order are completed as SQL, by the app
+        // (they need the table's catalog).
+        ArgKind::NewScript
+        | ArgKind::Object
+        | ArgKind::Analyze
+        | ArgKind::TabPosition
+        | ArgKind::Export
+        | ArgKind::Where
+        | ArgKind::OrderBy
+        | ArgKind::FilterOp => Vec::new(),
         ArgKind::Format => {
             use super::copy::{CopyFormat, CopyScope};
             let names = CopyFormat::MENU.map(|f| f.name());

@@ -244,6 +244,11 @@ fn label(app: &App, index: usize, place: usize, tab: &Tab, active: bool, doc_max
     if tab.is_table() && app.icons_on() {
         name = format!("{} {name}", icons::TABLE);
     }
+    // A table tab whose rows are filtered says so after its name (an order alone does not):
+    // a shortened name is cut before the mark, which stays.
+    let filtered = crate::app::table_query::applied_filter(tab)
+        .map(|_| format!(" {}", icons::filter(app.icons_on())))
+        .unwrap_or_default();
     // A DDL tab says so, with its icon or in words.
     if tab.is_ddl() {
         name = match app.icons_on() {
@@ -251,7 +256,8 @@ fn label(app: &App, index: usize, place: usize, tab: &Tab, active: bool, doc_max
             false => app.i18n.msg(&Msg::TabDdl { name }).to_string(),
         };
     }
-    parts.push(Part { text: clip(&name, doc_max.max(1)), style: doc, kind: PartKind::Document });
+    let text = format!("{}{filtered}", clip(&name, doc_max.saturating_sub(width(&filtered)).max(1)));
+    parts.push(Part { text, style: doc, kind: PartKind::Document });
     parts.extend(marks(app, tab, bg).into_iter().map(|(text, style)| part(text, style)));
     if let Some(l) = unbound(app, tab) {
         parts.push(part(format!(" {}", app.i18n.label(l)), mark(th.fg_dim)));

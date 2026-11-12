@@ -5,7 +5,9 @@
 //! inside one pair of parentheses, never rewritten. What the app understands of it
 //! ([`recognise`]) is kept beside it ([`Filter::recognised`]) for marks and history; `None`
 //! there means "not understood", not "no filter". An app action that filters by a cell's value
-//! writes the text of a condition ([`render`]) for the user to see before it runs.
+//! writes the text of a condition ([`render`]) for the user to see before it runs. The order is
+//! keys, read from the text of an `ORDER BY` field ([`parse_order`]) and written back as such
+//! ([`order_text`]).
 //!
 //! Before any statement built from a filter runs, [`check_filter`] checks the text: one boolean
 //! expression and nothing else (no `;`, no comment, no parenthesis that leaves ours), a plain
@@ -17,6 +19,7 @@
 
 mod check;
 mod compile;
+mod order;
 mod recognise;
 mod render;
 
@@ -25,6 +28,7 @@ pub use check::{
     PG_REFUSED_CALLS, ShapeProblem, check_filter,
 };
 pub use compile::{Compiled, compile, compile_capped};
+pub use order::{OrderError, OrderProblem, order_text, parse_order};
 pub use recognise::recognise;
 pub use render::{RenderError, like_contains, like_starts_with, render};
 
@@ -200,7 +204,8 @@ pub enum Nulls {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum KeyOrigin {
     User,
-    /// A primary key column the app appended so that pages follow one order.
+    /// A column of the primary key (or, without one, of a unique key) the app appended so that
+    /// pages follow one order.
     TieBreak,
 }
 
@@ -222,7 +227,8 @@ pub struct Target {
     pub primary_key: Vec<ColName>,
     /// The other unique keys whose columns are all `NOT NULL`, each in key order.
     pub unique_keys: Vec<Vec<ColName>>,
-    /// Append the primary key's missing columns to a user's order ([`KeyOrigin::TieBreak`]).
+    /// Append the primary key's missing columns to a user's order ([`KeyOrigin::TieBreak`]),
+    /// or those of the shortest unique key of [`Target::unique_keys`] when it has none.
     pub tie_break: bool,
     /// MySQL: the session's character set is known to be `utf8mb4`, so a plain string literal
     /// is read as written. When unknown, text is written as its UTF-8 bytes.
@@ -252,6 +258,11 @@ impl Target {
 pub struct ColumnFacts {
     pub name: ColName,
     pub kind: ColumnKind,
+    /// MySQL `TIMESTAMP`: an instant, shown and compared in the session's time zone. A value
+    /// written with the offset of the zone it was read in (`2026-11-10 09:30:00+00:00`, as a
+    /// copy as SQL takes it) is written as that instant in the session's zone when the
+    /// statement runs, whatever the zone is then ([`render`]).
+    pub zoned: bool,
     /// Its collation's name, when it has one and the server said it.
     pub collation: Option<String>,
     /// Equal strings are equal byte for byte under its collation (PostgreSQL: a
@@ -262,7 +273,7 @@ pub struct ColumnFacts {
 impl ColumnFacts {
     /// A column of kind `kind`, with a deterministic collation of unknown name.
     pub fn new(name: impl Into<ColName>, kind: ColumnKind) -> Self {
-        Self { name: name.into(), kind, collation: None, deterministic: true }
+        Self { name: name.into(), kind, zoned: false, collation: None, deterministic: true }
     }
 }
 
@@ -271,6 +282,14 @@ impl ColumnFacts {
 pub enum ColumnKind {
     /// A number type: a number is written bare.
     Number,
+    /// A binary floating-point number of single precision (PostgreSQL `real`, MySQL `FLOAT`),
+    /// whose values are shown as the shortest decimal that reads back as them, not as they are
+    /// held: a bare decimal compared with one is read as another type and widened to `double
+    /// precision`, where the column's value is another number (`0.1` is not the `real` 0.1).
+    /// PostgreSQL: a number is written as a string, which the server reads as the column's
+    /// type, so that it compares exactly. MySQL: a number is written bare (it has no literal of
+    /// that type), and it is not compared for equality.
+    Real,
     /// Characters: patterns apply.
     Text,
     /// Binary data.

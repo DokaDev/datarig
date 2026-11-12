@@ -43,6 +43,7 @@ pub mod explorer;
 pub mod export;
 pub mod export_form;
 pub mod export_path_pick;
+pub mod filter_line;
 pub mod folder_pick;
 pub mod folder_read;
 mod format;
@@ -80,6 +81,7 @@ mod status;
 pub mod tab_drag;
 pub mod tab_list;
 mod tab_ops;
+pub mod table_query;
 pub mod tabs;
 pub mod themes;
 mod tick;
@@ -250,9 +252,22 @@ pub struct Running {
 pub struct Popup {
     pub items: Vec<Candidate>,
     pub selected: usize,
+    /// Byte offset in its owner's text where the accepted label starts.
     pub replace_start: usize,
     /// Bytes after the cursor the accepted label replaces too (a closing `"`).
     pub trail: usize,
+    /// The text the popup completes.
+    pub owner: PopupOwner,
+    /// The user turned to it (asked for it with `Ctrl+Space`, or moved its selection): in the
+    /// filter line `Enter` then takes its entry, else it applies the line.
+    pub touched: bool,
+}
+
+/// The text a completion popup completes: the tab's editor, or a field of its filter line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PopupOwner {
+    Editor,
+    Filter(table_query::Field),
 }
 
 pub struct Viewer {
@@ -356,6 +371,13 @@ pub struct Layout {
     pub editor_cursor: (u16, u16),
     /// Where the cursor of the grid's search prompt was drawn last, while it is open.
     pub grid_prompt_cursor: Option<(u16, u16)>,
+    /// A table tab's filter line as drawn last: the whole line, its condition and its order
+    /// (each with its keyword), its refresh mark, and the cursor of the field with the focus.
+    pub filter_line: Rect,
+    pub filter_where: Rect,
+    pub filter_order: Rect,
+    pub filter_refresh: Rect,
+    pub filter_cursor: Option<(u16, u16)>,
     /// The grid's rows and the lines under them, as drawn last (inside the results pane).
     pub grid_area: Rect,
     /// The editor and the results pane together (a query tab), for resizing the pane.
@@ -632,6 +654,8 @@ pub struct App {
     query_seq: u64,
     /// Last DDL request id handed out (a DDL tab waits for the answer of its own).
     ddl_seq: u64,
+    /// The last request of a table's keys for its order (`DbCommand::LoadTableKeys`).
+    order_keys_seq: u64,
     /// Saved queries (`None` without a data directory).
     pub scripts: Option<datarig_core::scripts::ScriptStore>,
     /// The saved queries as last scanned (the explorer's "Saved queries" section).
@@ -849,6 +873,7 @@ impl App {
             test_seq: 0,
             query_seq: 0,
             ddl_seq: 0,
+            order_keys_seq: 0,
             pointer: Default::default(),
             scripts: None,
             script_list: Vec::new(),

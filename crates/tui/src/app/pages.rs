@@ -49,6 +49,24 @@ pub(super) fn why(r: &NotRepeatable) -> Msg {
     }
 }
 
+/// Tab `t`'s shown result, run again with `sql`, may not match the rows it has: `sql` reads the
+/// session's time zone (a filter on a MySQL `TIMESTAMP`, [`Classifier::reads_zone`]) and the
+/// result's rows are not known to be read in the zone the session has now (it changed since,
+/// or between its pages, or what it was is not known).
+pub(super) fn zone_moved(t: &Tab, sql: &str) -> bool {
+    if !t.exec.prepared.reads_zone(sql) {
+        return false;
+    }
+    let read_in = match &t.results {
+        Results::Rows(rs) => Some(&rs.read_in),
+        _ => None,
+    };
+    !matches!(
+        (read_in, &t.exec.values),
+        (Some(datarig_core::driver::ReadIn::Values(then)), Some(now)) if then.zone_known() && then.time_zone == now.time_zone
+    )
+}
+
 /// A statement (in `lang`) that changes rows and keeps the change (not an `EXPLAIN ANALYZE`,
 /// whose changes are rolled back).
 fn commits_a_write(lang: Language, sql: &str) -> bool {
@@ -104,11 +122,13 @@ impl App {
 
     /// The server's estimate of the rows of the table that table tab `t` shows, as the explorer
     /// read it with the table's schema or structure (nothing is asked for it). Only while the
-    /// result shown is the tab's own query of its table, and only from the explorer of the
-    /// profile and database the tab works in. `None` when the server has none (never analyzed).
+    /// rows shown are of every row of the tab's table (in any order: no filter, no cap), and
+    /// only from the explorer of the profile and database the tab works in. `None` when the
+    /// server has none (never analyzed), and for filtered rows (how many match is not known).
     pub(crate) fn table_estimate(&self, t: &Tab) -> Option<u64> {
         let table = t.doc.table.as_ref().filter(|_| t.is_table())?;
-        if t.shown_sql().trim() != table.query(self.tab_dialect(t.id)) {
+        let shown = t.doc.table_query.as_ref()?.shown.as_ref()?;
+        if !super::table_query::same_rows(shown, &datarig_core::query::Query::table(self.table_name(t.id)?)) {
             return None;
         }
         let id = t.profile?;
@@ -195,6 +215,10 @@ impl App {
         let refused = |why| {
             if released { Msg::ResultsPageRefusedNoHold { why } } else { Msg::ResultsPageRefused { why } }
         };
+        // A table tab's filter is checked again as when it ran (never asked about here).
+        if let Err(why) = self.table_recheck(id) {
+            return self.tab_status(id, Notice::new(refused(why), Level::Warning));
+        }
         let lang = t.exec.prepared.language();
         if let Err(r) = t.exec.prepared.repeatable(&sql) {
             if released && commits_a_write(lang, &sql) {
@@ -206,6 +230,10 @@ impl App {
                 return self.tab_status(id, Notice::new(m, Level::Warning));
             }
             let why = self.i18n.msg(&why(&r)).to_string();
+            return self.tab_status(id, Notice::new(refused(why), Level::Warning));
+        }
+        if zone_moved(t, &sql) {
+            let why = self.i18n.label(Label::RepeatZoneChanged).to_string();
             return self.tab_status(id, Notice::new(refused(why), Level::Warning));
         }
         let statements = vec![sql.clone()];
@@ -225,11 +253,20 @@ impl App {
         let columns = rs.columns.iter().map(|c| (c.meta.name.clone(), c.meta.type_name.clone())).collect();
         let size = self.page_size as u64;
         let (from, to) = (datarig_i18n::fmt_count(skip + 1), datarig_i18n::fmt_count(skip + size));
-        let note = match (t.exec.prepared.ordered(&sql), released) {
-            (true, false) => Notice::new(Msg::ResultsPageResumed { from, to }, Level::Info),
-            (false, false) => Notice::new(Msg::ResultsPageResumedUnordered { from, to }, Level::Warning),
-            (true, true) => Notice::new(Msg::ResultsPageRerun { from, to }, Level::Info),
-            (false, true) => Notice::new(Msg::ResultsPageRerunUnordered { from, to }, Level::Warning),
+        // A table tab's order is total only when its keys end in a key the structure says is
+        // unique (not known yet: not unique).
+        // As the held rows' statement was sent: a structure read since does not make it total.
+        let unique = match self.table_query(id) {
+            Some(q) if q.shown.is_some() => q.shown_run().is_some_and(|s| s.total),
+            _ => true,
+        };
+        let note = match (t.exec.prepared.ordered(&sql), unique, released) {
+            (true, true, false) => Notice::new(Msg::ResultsPageResumed { from, to }, Level::Info),
+            (true, false, false) => Notice::new(Msg::ResultsPageResumedNotUnique { from, to }, Level::Warning),
+            (false, _, false) => Notice::new(Msg::ResultsPageResumedUnordered { from, to }, Level::Warning),
+            (true, true, true) => Notice::new(Msg::ResultsPageRerun { from, to }, Level::Info),
+            (true, false, true) => Notice::new(Msg::ResultsPageRerunNotUnique { from, to }, Level::Warning),
+            (false, _, true) => Notice::new(Msg::ResultsPageRerunUnordered { from, to }, Level::Warning),
         };
         self.query_seq += 1;
         let qid = self.query_seq;
@@ -275,7 +312,17 @@ impl App {
         if !(self.answer_here() || self.kept_answer_here()) {
             return self.flash(Notice::new(Label::ResultsPageStale, Level::Warning));
         }
-        let sql = match t.exec.prepared.count_query(t.shown_sql()) {
+        // A table tab's filter is checked again as when it ran (never asked about here), and
+        // a cap on its rows is counted within.
+        if let Err(why) = self.table_recheck(id) {
+            return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
+        }
+        let source = self.table_count_source(id).unwrap_or_else(|| t.shown_sql().to_string());
+        if zone_moved(t, &source) {
+            let why = self.i18n.label(Label::RepeatZoneChanged).to_string();
+            return self.tab_status(id, Notice::new(Msg::ResultsCountRefused { why }, Level::Warning));
+        }
+        let sql = match t.exec.prepared.count_query(&source) {
             Ok(sql) => sql,
             Err(r) => {
                 let why = self.i18n.msg(&why(&r)).to_string();

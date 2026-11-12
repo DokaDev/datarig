@@ -462,6 +462,8 @@ pub struct ValuesWait {
     pub schema: String,
     pub table: String,
     pub literal: usize,
+    /// The text the literal is in (offsets are in it).
+    pub owner: crate::app::PopupOwner,
 }
 
 /// How the user's transaction ended, as far as the app can tell.
@@ -553,6 +555,9 @@ pub struct Doc {
     pub console_no: u32,
     /// The table a table tab shows.
     pub table: Option<TableRef>,
+    /// A table tab's query: its filter and order, as written, sent and shown (made at its
+    /// first run).
+    pub table_query: Option<Box<super::table_query::TableQuery>>,
     /// The object a DDL tab shows.
     pub ddl: Option<DdlTab>,
     /// A Monitor tab's connection, reads and views.
@@ -577,6 +582,7 @@ impl Doc {
             kept_profile: None,
             console_no: 0,
             table: None,
+            table_query: None,
             ddl: None,
             monitor: None,
         }
@@ -741,6 +747,17 @@ impl Tab {
     /// rows and did not fail, else its Messages. A table tab shows its result or its error.
     pub fn run_ended(&mut self, failed: bool) {
         self.exec.replace_pending = false;
+        // A table tab's query whose run brought no rows is not applied: its rows are still
+        // those of the query before (never passed off as this one's answer).
+        if let Some(tq) = self.doc.table_query.as_mut() {
+            use super::table_query::Unapplied;
+            let how = match self.exec.run.statements.last().map(|s| &s.outcome) {
+                Some(super::runlog::StatementOutcome::Cancelled) => Unapplied::Cancelled,
+                Some(super::runlog::StatementOutcome::Failed(_)) => Unapplied::Refused,
+                _ => Unapplied::Ended,
+            };
+            tq.run_over(self.exec.query_id, how);
+        }
         if self.is_table() {
             // Its rows or its error; the Chart tab shown before the run draws the new rows.
             if failed || self.exec.view != ResultView::Chart {

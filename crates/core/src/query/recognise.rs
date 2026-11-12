@@ -18,11 +18,17 @@
 //! a NULL in an `IN` list reads as its own test of NULL; on MySQL a case-insensitive pattern of a
 //! `_ci` column reads as the server's case, and `NOT` of a NULL-safe equality as a NULL-safe
 //! inequality.
+//!
+//! A MySQL `TIMESTAMP`'s instant as [`render`](super::render) writes it,
+//! `CONVERT_TZ('<UTC date and time>', '+00:00', @@session.time_zone)`, reads as that value with
+//! the offset `+00:00` (the instant of a value with another offset), and only when it is compared
+//! with a column known to be a `TIMESTAMP`, in exactly that form; any other `CONVERT_TZ` stays as
+//! written.
 
 use std::cell::Cell;
 
 use super::check::lexical;
-use super::{CaseMode, CmpOp, ColName, ColumnKind, Cond, Target, Value};
+use super::{CaseMode, CmpOp, ColName, Cond, Target, Value};
 use crate::export::{negative_zero, sql_number};
 use crate::sql::dialect::Dialect;
 use crate::sql::lexer::{Tok, Token, lex_in};
@@ -231,6 +237,31 @@ impl Reader<'_> {
         (op, i)
     }
 
+    /// A literal compared with column `col` starting at `at`, and the index after it: as
+    /// [`value`](Self::value), and on a column known to be a MySQL `TIMESTAMP`
+    /// ([`ColumnFacts::zoned`](super::ColumnFacts::zoned)) also an instant exactly as `render`
+    /// writes it, `CONVERT_TZ('<UTC date and time>', '+00:00', @@session.time_zone)`, read as
+    /// the value with the offset `+00:00`. Anywhere else such a call stays as written: `render`
+    /// would write that value back as a string, not as the call.
+    fn value_for(&self, col: &str, toks: &[Token], at: usize) -> Option<(Value, usize)> {
+        let zoned = matches!(self.d, Dialect::MySql(_)) && self.target.column(col).is_some_and(|f| f.zoned);
+        if !self.word(toks.get(at), "CONVERT_TZ") {
+            return self.value(toks, at);
+        }
+        zoned.then_some(())?;
+        toks.get(at + 1).filter(|t| t.kind == Tok::LParen)?;
+        let (Value::Text(when), comma) = self.value(toks, at + 2)? else { return None };
+        toks.get(comma).filter(|t| t.kind == Tok::Comma)?;
+        toks.get(comma + 1).filter(|t| t.kind == Tok::Str && self.text(t) == "'+00:00'")?;
+        toks.get(comma + 2).filter(|t| t.kind == Tok::Comma)?;
+        toks.get(comma + 3).filter(|t| t.kind == Tok::Variable && self.text(t) == "@@session.time_zone")?;
+        toks.get(comma + 4).filter(|t| t.kind == Tok::RParen)?;
+        // Only a date and time that is itself an instant the column holds, in UTC.
+        let v = format!("{when}+00:00");
+        (super::render::instant(&v) == Some(Some(when))).then_some(())?;
+        Some((Value::Text(v), comma + 5))
+    }
+
     /// A literal starting at `at`, and the index after it.
     fn value(&self, toks: &[Token], at: usize) -> Option<(Value, usize)> {
         let t = toks.get(at)?;
@@ -268,11 +299,14 @@ impl Reader<'_> {
             Tok::Str if !self.escapes_read_exactly(text) => None,
             Tok::Str => {
                 let s = self.d.unquote_literal(text)?;
-                // PostgreSQL bytes: `'\x…'::bytea`.
+                // PostgreSQL bytes: `'\x…'::bytea`, the type with its schema or without.
                 let (cast, next) = self.operator(toks, at + 1);
-                if self.d == Dialect::Postgres && cast == "::" && self.word(toks.get(next), "bytea") {
+                let qualified =
+                    self.word(toks.get(next), "pg_catalog") && toks.get(next + 1).is_some_and(|t| self.text(t) == ".");
+                let name = if qualified { next + 2 } else { next };
+                if self.d == Dialect::Postgres && cast == "::" && self.word(toks.get(name), "bytea") {
                     let bytes = s.strip_prefix("\\x").and_then(unhex)?;
-                    return Some((Value::Bytes(bytes), next + 1));
+                    return Some((Value::Bytes(bytes), name + 1));
                 }
                 Some((Value::Text(s), at + 1))
             }
@@ -306,7 +340,7 @@ impl Reader<'_> {
             return None;
         }
         let number = |v: &Value| matches!(v, Value::Number(_));
-        let numeric = |col: &str| self.target.column(col).is_some_and(|f| f.kind == ColumnKind::Number);
+        let numeric = |col: &str| self.target.column(col).is_some_and(|f| super::render::bare_numbers(self.d, f.kind));
         let keeps = match &c {
             Cond::Cmp { col, value, .. } | Cond::NotDistinct { col, value, .. } => !number(value) || numeric(col),
             Cond::In { col, values, .. } => !values.iter().any(number) || numeric(col),
@@ -352,7 +386,7 @@ impl Reader<'_> {
                 return Some(Cond::IsNull { col, negated });
             }
             if self.word(toks.get(i), "DISTINCT") && self.word(toks.get(i + 1), "FROM") {
-                let (value, end) = self.value(toks, i + 2)?;
+                let (value, end) = self.value_for(&col, toks, i + 2)?;
                 // `IS NOT DISTINCT FROM` is the NULL-safe equality.
                 return done(end).then_some(Cond::NotDistinct { col, value, negated: !negated });
             }
@@ -365,7 +399,7 @@ impl Reader<'_> {
             let mut values = Vec::new();
             let mut j = 0;
             while j < list.len() {
-                let (v, end) = self.value(list, j)?;
+                let (v, end) = self.value_for(&col, list, j)?;
                 values.push(v);
                 match list.get(end) {
                     None => j = end,
@@ -387,11 +421,11 @@ impl Reader<'_> {
             return Some(Cond::Like { col, pattern, negated, case });
         }
         if self.word(toks.get(i), "BETWEEN") {
-            let (lo, end) = self.value(toks, i + 1)?;
+            let (lo, end) = self.value_for(&col, toks, i + 1)?;
             if !self.word(toks.get(end), "AND") {
                 return None;
             }
-            let (hi, end) = self.value(toks, end + 1)?;
+            let (hi, end) = self.value_for(&col, toks, end + 1)?;
             return done(end).then_some(Cond::Between { col, lo, hi, negated });
         }
         if negated {
@@ -403,7 +437,7 @@ impl Reader<'_> {
             Some(rest) if CmpOp::from_sql(rest).is_some() || rest == "<=>" => (rest.to_string(), at - 1),
             _ => (op, at),
         };
-        let (value, end) = self.value(toks, at)?;
+        let (value, end) = self.value_for(&col, toks, at)?;
         if !done(end) {
             return None;
         }

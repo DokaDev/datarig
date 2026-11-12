@@ -24,7 +24,7 @@ use ratatui::style::{Color, Modifier, Style};
 /// marks) and whether it is the active tab.
 enum Line {
     Heading(String),
-    Entry { index: usize, parts: Parts, active: bool },
+    Entry { index: usize, parts: Box<Parts>, active: bool },
 }
 
 struct Parts {
@@ -39,6 +39,8 @@ struct Parts {
     /// muted while not connected.
     profile_name: Option<(String, Style)>,
     marks: Vec<(String, Style)>,
+    /// After the name, dimmed: a table tab's condition.
+    hint: Option<String>,
 }
 
 /// Draw the tab list; returns the hardware cursor (its filter).
@@ -68,6 +70,7 @@ pub(crate) fn draw_tab_list(app: &mut App, area: Rect, buf: &mut Buffer) -> Opti
                         .ok_or_else(|| tabbar::unbound(app, t).unwrap_or(Label::TabUnbound)),
                     marks: tabbar::marks(app, t, th.surface),
                     profile_name: profile.map(|p| (p.name.clone(), app.profile_name_style(p.id))),
+                    hint: crate::app::table_query::applied_filter(t).map(str::to_string),
                 }
             }
             TabEntry::Closed(serial) => {
@@ -81,11 +84,12 @@ pub(crate) fn draw_tab_list(app: &mut App, area: Rect, buf: &mut Buffer) -> Opti
                     place: app.tab_place(c.profile, &c.context).ok_or(Label::TabUnbound),
                     marks: Vec::new(),
                     profile_name: profile.map(|p| (p.name.clone(), app.profile_name_style(p.id))),
+                    hint: None,
                 }
             }
         };
         let is_active = matches!(e, TabEntry::Open(id) if Some(*id) == active);
-        lines.push(Line::Entry { index, parts, active: is_active });
+        lines.push(Line::Entry { index, parts: Box::new(parts), active: is_active });
     }
     let title = app.i18n.label(Label::TabListTitle);
     let footer = app.i18n.label(Label::TabListKeys);
@@ -106,7 +110,8 @@ pub(crate) fn draw_tab_list(app: &mut App, area: Rect, buf: &mut Buffer) -> Opti
     let kind_w = entry_parts().map(|p| width(&p.kind)).max().unwrap_or(0);
     // Each mark has a blank before it.
     let marks_w = entry_parts().map(|p| p.marks.iter().map(|m| width(&m.0)).sum::<usize>()).max().unwrap_or(0);
-    let name_max = entry_parts().map(|p| width(&p.name)).max().unwrap_or(0);
+    let name_max =
+        entry_parts().map(|p| width(&p.name) + p.hint.as_ref().map_or(0, |h| 2 + width(h))).max().unwrap_or(0);
     // One blank at each side, two between the columns (the marks bring one of their own).
     let rest = iw.saturating_sub(2 + num_w + marks_w + 2 + 2 + kind_w + 2);
     let name_w = name_max.min(rest * 11 / 20).max(rest.min(8));
@@ -164,7 +169,14 @@ pub(crate) fn draw_tab_list(app: &mut App, area: Rect, buf: &mut Buffer) -> Opti
                     col(text, width(text), *style, &mut x);
                 }
                 col("", usize::from(marks_end - x) + 2, dim, &mut x);
-                col(&parts.name, name_w, name, &mut x);
+                match &parts.hint {
+                    Some(hint) => {
+                        let used = width(&parts.name).min(name_w);
+                        col(&parts.name, used, name, &mut x);
+                        col(&format!("  {hint}"), name_w - used, dim, &mut x);
+                    }
+                    None => col(&parts.name, name_w, name, &mut x),
+                }
                 col("", 2, dim, &mut x);
                 col(&parts.kind, kind_w, Style::new().fg(th.fg_muted), &mut x);
                 col("", 2, dim, &mut x);

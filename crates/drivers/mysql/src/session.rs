@@ -378,10 +378,10 @@ impl Tracked {
         self.connection_charset = Some(connection);
     }
 
-    /// The session's values are not known any more: reported as `unknown`, which no copy takes
-    /// for a fixed time zone or for UTF-8.
+    /// The session's values are not known any more: reported as [`SessionValues::UNKNOWN`], which
+    /// no copy takes for a fixed time zone or for UTF-8.
     pub(crate) fn forget_values(&mut self) {
-        let unknown = || Some("unknown".to_string());
+        let unknown = || Some(SessionValues::UNKNOWN.to_string());
         (self.time_zone, self.results_charset, self.connection_charset) = (unknown(), unknown(), unknown());
     }
 

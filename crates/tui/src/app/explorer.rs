@@ -1027,6 +1027,7 @@ impl App {
                 if let Some(a) = self.conns.aux_mut(id, db) {
                     a.keys = Keys::Unknown;
                 }
+                self.forget_order_keys(id, Some(Some(db)));
                 vec![DbCommand::LoadSchemas, DbCommand::LoadCatalog, DbCommand::LoadKeys]
             }
             TreeAction::Open { schema, name } => return self.open_table(id, Some(db.to_string()), &schema, &name),

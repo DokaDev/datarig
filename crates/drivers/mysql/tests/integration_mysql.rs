@@ -425,6 +425,119 @@ async fn lookups_never_queue_behind_a_metadata_lock_nor_hold_one_up() {
     assert!(t1.elapsed() < Duration::from_secs(10), "{:?}", t1.elapsed());
 }
 
+/// A table whose name holds braces as the metadata statements write their own places
+/// (`{table}`, `{schema}`), a quote, a backtick, blanks and parentheses is read by its name: its
+/// order keys and its structure. A schema and a table named like those places that do not exist
+/// are not found.
+#[tokio::test(flavor = "multi_thread")]
+async fn order_keys_of_a_table_named_with_braces() {
+    let Some((url, admin)) = urls("order_keys_of_a_table_named_with_braces") else { return };
+    let name = format!("zz_it_{{table}}{{schema}} o'k `q` (x)_{}", std::process::id());
+    let quoted = format!("shop.`{}`", name.replace('`', "``"));
+    let _guard = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {quoted}") };
+    let mut c = side(&admin).await;
+    c.query_drop(format!("CREATE TABLE {quoted} (id INT PRIMARY KEY, v INT NOT NULL UNIQUE)")).await.unwrap();
+    c.disconnect().await.unwrap();
+    let mut m = Conn::start(&url, SessionRole::Meta, false, "bracenames");
+    m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    m.session.send(DbCommand::LoadTableKeys { id: 1, schema: "shop".into(), table: name.clone() });
+    let DbEvent::TableKeys { result, .. } = m.wait(|e| matches!(e, DbEvent::TableKeys { id: 1, .. }), 10).await else {
+        unreachable!()
+    };
+    let keys = result.expect("the keys");
+    assert_eq!((keys.primary_key, keys.unique_not_null), (vec!["id".to_string()], vec![vec!["v".to_string()]]));
+    m.session.send(DbCommand::LoadStructure { schema: "shop".into(), table: name.clone() });
+    let DbEvent::Structure { result, .. } = m.wait(|e| matches!(e, DbEvent::Structure { .. }), 10).await else {
+        unreachable!()
+    };
+    let st = result.expect("the structure");
+    assert_eq!(st.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "v"]);
+    m.session.send(DbCommand::LoadTableKeys { id: 2, schema: "{table}".into(), table: "{schema}".into() });
+    let DbEvent::TableKeys { result, .. } = m.wait(|e| matches!(e, DbEvent::TableKeys { id: 2, .. }), 10).await else {
+        unreachable!()
+    };
+    assert_eq!(result, Err(DbError::NotFound));
+}
+
+/// The keys of a table for a total order come from the data dictionary without opening the
+/// table: while another session holds `LOCK TABLES … WRITE` on it, and while an `ALTER TABLE`
+/// waits for a held result of it, the read answers with the keys (never `Locked`), waits for
+/// neither, holds up neither (no lock of the metadata session's is waited for, not even a
+/// momentary one) and keeps no metadata lock.
+#[tokio::test(flavor = "multi_thread")]
+async fn order_keys_are_read_without_a_metadata_lock() {
+    use datarig_core::driver::keys::OrderKeys;
+    let Some((url, admin)) = urls("order_keys_are_read_without_a_metadata_lock") else { return };
+    let t = numbers(&admin, "okeys", 200_000).await;
+    let mut wide = side(&admin).await;
+    wide.query_drop(format!(
+        "ALTER TABLE {} MODIFY v VARCHAR(40) NOT NULL, ADD UNIQUE KEY uv (v), ADD COLUMN nick INT NULL UNIQUE",
+        t.q()
+    ))
+    .await
+    .unwrap();
+    wide.disconnect().await.unwrap();
+    let mut m = Conn::start(&url, SessionRole::Meta, false, "okeys");
+    m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let mut side_admin = side(&admin).await;
+    let meta = only_session(&mut side_admin, SessionRole::Meta, "okeys").await;
+    let want = OrderKeys { primary_key: vec!["id".into()], unique_not_null: vec![vec!["v".into()]], inherited: false };
+    let mut n = 0;
+    let mut ask = |m: &mut Conn| {
+        n += 1;
+        m.session.send(DbCommand::LoadTableKeys { id: n, schema: "shop".into(), table: t.name.clone() });
+        n
+    };
+    let keys_of = |ev: DbEvent| match ev {
+        DbEvent::TableKeys { result, .. } => result,
+        ev => panic!("{ev:?}"),
+    };
+    let id = ask(&mut m);
+    let ev = m.wait(|e| matches!(e, DbEvent::TableKeys { id: i, .. } if *i == id), 10).await;
+    assert_eq!(keys_of(ev), Ok(want.clone()));
+    // 1. Another session holds `LOCK TABLES … WRITE`, and writes while the read runs.
+    let mut lock = side(&admin).await;
+    lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
+    let locker = u64::from(lock.id());
+    let t0 = Instant::now();
+    let (ev, seen) = watched(&admin, meta, &[locker], &t.name, async {
+        let id = ask(&mut m);
+        lock.query_drop(format!("INSERT INTO {} (id, v) VALUES (999999, 'w')", t.q())).await.unwrap();
+        m.wait(|e| matches!(e, DbEvent::TableKeys { id: i, .. } if *i == id), 10).await
+    })
+    .await;
+    assert_eq!(keys_of(ev), Ok(want.clone()), "read past the held lock");
+    assert!(t0.elapsed() < Duration::from_secs(2), "at once: {:?}", t0.elapsed());
+    assert!(seen.queued.is_empty(), "the read waited for the locking session: {:?}", seen.queued);
+    assert!(seen.held_up.is_empty(), "the locking session waited for the read: {:?}", seen.held_up);
+    assert_eq!(metadata_locks_of(&mut side_admin, meta).await, 0, "no lock kept");
+    lock.query_drop("UNLOCK TABLES").await.unwrap();
+    // 2. A held result, and an `ALTER TABLE` waiting for it.
+    let mut q = Conn::open(&url, SessionRole::Query, false, "okeys").await;
+    let evs = q.run_as(1, &[&format!("SELECT * FROM {}", t.q())], PagingMode::Hold).await;
+    assert!(page_of(&evs).2);
+    let (alter_id, alter) = waiting_alter(&admin, &t.q()).await;
+    let t0 = Instant::now();
+    let (ev, seen) = watched(&admin, meta, &[alter_id], &t.name, async {
+        let id = ask(&mut m);
+        m.wait(|e| matches!(e, DbEvent::TableKeys { id: i, .. } if *i == id), 10).await
+    })
+    .await;
+    assert_eq!(keys_of(ev), Ok(want), "not queued behind the waiting ALTER");
+    assert!(t0.elapsed() < Duration::from_secs(2), "at once: {:?}", t0.elapsed());
+    assert!(seen.queued.is_empty(), "the read waited: {:?}", seen.queued);
+    assert!(seen.held_up.is_empty(), "the ALTER waited for a lock of the read: {:?}", seen.held_up);
+    assert_eq!(metadata_locks_of(&mut side_admin, meta).await, 0, "no lock kept");
+    assert!(alter_waits(&mut side_admin, alter_id).await, "the ALTER still waits for the held result");
+    q.session.send(DbCommand::ClosePortal { id: 1 });
+    q.ok(2, "SELECT 1").await;
+    assert!(alter.await.unwrap().is_ok());
+    // No such table: not found, never "no key".
+    m.session.send(DbCommand::LoadTableKeys { id: 99, schema: "shop".into(), table: "zz_it_no_such_table".into() });
+    let ev = m.wait(|e| matches!(e, DbEvent::TableKeys { id: 99, .. }), 10).await;
+    assert_eq!(keys_of(ev), Err(DbError::NotFound));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn sessions_are_set_up_on_the_server_by_role_and_policy() {
     let Some((url, admin)) = urls("sessions_are_set_up_on_the_server_by_role_and_policy") else { return };
@@ -904,6 +1017,174 @@ fn info(evs: &[DbEvent]) -> Option<StatementInfo> {
         DbEvent::Info { info, .. } => Some(info.clone()),
         _ => None,
     })
+}
+
+/// A TIMESTAMP's value with the offset of the zone it was read in, as a filter writes it, finds
+/// its row in a session of any zone: a filter written once and run again after the session's
+/// zone changed (or from the history) compares the same instant.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_filtered_timestamp_is_the_same_instant_in_every_session_zone() {
+    use datarig_core::query::{CmpOp, ColumnFacts, ColumnKind, Cond, Target, Value, render};
+    let test = "a_filtered_timestamp_is_the_same_instant_in_every_session_zone";
+    let Some(url) = my_url(test) else { return };
+    let t = Table::make(
+        &url,
+        "tzfilter",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, at TIMESTAMP(3) NULL)",
+            "INSERT INTO {t} VALUES (1, '2024-10-27 00:30:00.250'), (2, '2024-10-27 01:30:00'), (3, NULL)",
+        ],
+    )
+    .await;
+    let target = Target {
+        utf8mb4: true,
+        ..Target::new(
+            Dialect::MySql(MySqlMode::default()),
+            vec![ColumnFacts { zoned: true, ..ColumnFacts::new("at", ColumnKind::Other) }],
+        )
+    };
+    let text = |s: &str| Value::Text(s.into());
+    // Read in +00:00 (row 1) and in -08:00 (row 2, 2024-10-26 17:30 there).
+    let filters = [
+        (Cond::Cmp { col: "at".into(), op: CmpOp::Eq, value: text("2024-10-27 00:30:00.250+00:00") }, vec!["1"]),
+        (
+            Cond::In {
+                col: "at".into(),
+                values: vec![text("2024-10-27 00:30:00.250+00:00"), text("2024-10-26 17:30:00-08:00")],
+                negated: false,
+            },
+            vec!["1", "2"],
+        ),
+    ];
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    let mut n = 0;
+    for zone in ["+00:00", "+05:30", "-08:00", "SYSTEM"] {
+        n += 1;
+        q.ok(n, &format!("SET time_zone = '{zone}'")).await;
+        for (cond, want) in &filters {
+            let filter = render(cond, &target).unwrap();
+            n += 1;
+            let evs = q.run(n, &[&format!("SELECT id FROM {} WHERE {filter} ORDER BY id", t.q())]).await;
+            let found: Vec<String> = page_of(&evs).1.iter().map(|r| r[0].clone().unwrap()).collect();
+            assert_eq!(found, *want, "{zone}: {filter}");
+        }
+    }
+}
+
+/// A TIMESTAMP's value read in a session at either end of the offsets a session may have
+/// (`+14:00`, `-13:59`) is written as its instant from UTC, so that it finds its row (and a
+/// NULL-safe exclusion leaves out only that row) in a session of any zone: run again from the
+/// history after a reconnect, the statement holds no offset another server version would not
+/// read.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_timestamp_picked_at_the_ends_of_the_offsets_is_its_instant_in_every_zone() {
+    use datarig_core::query::{CmpOp, ColumnFacts, ColumnKind, Cond, Target, Value, render};
+    let test = "a_timestamp_picked_at_the_ends_of_the_offsets_is_its_instant_in_every_zone";
+    let Some(url) = my_url(test) else { return };
+    let t = Table::make(
+        &url,
+        "tzends",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, at TIMESTAMP(3) NULL)",
+            "INSERT INTO {t} VALUES (1, '2024-10-27 00:30:00.250'), (2, '2024-10-27 01:30:00'), (3, NULL)",
+        ],
+    )
+    .await;
+    let target = Target {
+        utf8mb4: true,
+        ..Target::new(
+            Dialect::MySql(MySqlMode::default()),
+            vec![ColumnFacts { zoned: true, ..ColumnFacts::new("at", ColumnKind::Other) }],
+        )
+    };
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    let mut n = 0;
+    // The values as the sessions at the ends read them.
+    let mut picks = Vec::new();
+    for (zone, id) in [("+14:00", 1), ("-13:59", 2)] {
+        n += 1;
+        q.ok(n, &format!("SET time_zone = '{zone}'")).await;
+        n += 1;
+        let evs = q.run(n, &[&format!("SELECT at FROM {} WHERE id = {id}", t.q())]).await;
+        picks.push(format!("{}{zone}", page_of(&evs).1[0][0].clone().unwrap()));
+    }
+    assert_eq!(picks, ["2024-10-27 14:30:00.250+14:00", "2024-10-26 11:31:00.000-13:59"]);
+    let text = |s: &str| Value::Text(s.into());
+    let filters = [
+        (Cond::Cmp { col: "at".into(), op: CmpOp::Eq, value: text(&picks[0]) }, vec!["1"]),
+        (Cond::Cmp { col: "at".into(), op: CmpOp::Eq, value: text(&picks[1]) }, vec!["2"]),
+        (Cond::In { col: "at".into(), values: vec![text(&picks[0]), text(&picks[1])], negated: false }, vec!["1", "2"]),
+        (Cond::NotDistinct { col: "at".into(), value: text(&picks[0]), negated: true }, vec!["2", "3"]),
+        (Cond::NotDistinct { col: "at".into(), value: text(&picks[1]), negated: true }, vec!["1", "3"]),
+    ];
+    for (cond, _) in &filters {
+        let filter = render(cond, &target).unwrap();
+        assert!(!filter.contains("+14:00") && !filter.contains("-13:59"), "{filter}");
+    }
+    for zone in ["+00:00", "+14:00", "-13:59", "+05:30", "SYSTEM"] {
+        n += 1;
+        q.ok(n, &format!("SET time_zone = '{zone}'")).await;
+        for (cond, want) in &filters {
+            let filter = render(cond, &target).unwrap();
+            n += 1;
+            let evs = q.run(n, &[&format!("SELECT id FROM {} WHERE {filter} ORDER BY id", t.q())]).await;
+            let found: Vec<String> = page_of(&evs).1.iter().map(|r| r[0].clone().unwrap()).collect();
+            assert_eq!(found, *want, "{zone}: {filter}");
+        }
+    }
+}
+
+/// Numbers of a generated filter, typed as numbers or as text, compare exactly with a wide
+/// `DECIMAL`: a string would be compared as a double, which takes 9007199254740993 for
+/// 9007199254740992 (in a list, out of one, and between bounds).
+#[tokio::test(flavor = "multi_thread")]
+async fn generated_numbers_compare_exactly_with_a_wide_decimal() {
+    use datarig_core::query::{ColumnFacts, ColumnKind, Cond, Target, Value, render};
+    let test = "generated_numbers_compare_exactly_with_a_wide_decimal";
+    let Some(url) = my_url(test) else { return };
+    let t = Table::make(
+        &url,
+        "widedec",
+        &[
+            "CREATE TABLE {t} (n DECIMAL(30,0) NOT NULL)",
+            "INSERT INTO {t} VALUES (9007199254740992), (9007199254740993), (9007199254740994)",
+        ],
+    )
+    .await;
+    let target = Target {
+        utf8mb4: true,
+        ..Target::new(Dialect::MySql(MySqlMode::default()), vec![ColumnFacts::new("n", ColumnKind::Number)])
+    };
+    let text = |s: &str| Value::Text(s.into());
+    let num = |s: &str| Value::Number(s.into());
+    let (lo, mid, hi) = ("9007199254740992", "9007199254740993", "9007199254740994");
+    let r#in = |values, negated| Cond::In { col: "n".into(), values, negated };
+    let cases = [
+        (r#in(vec![text(lo), text(hi)], false), vec![lo, hi]),
+        (r#in(vec![text(lo), num(hi)], false), vec![lo, hi]),
+        (r#in(vec![text(lo), text(hi)], true), vec![mid]),
+        (Cond::Between { col: "n".into(), lo: text("9007199254740990"), hi: text(lo), negated: false }, vec![lo]),
+        (Cond::Between { col: "n".into(), lo: num("9007199254740990"), hi: text(lo), negated: true }, vec![mid, hi]),
+        // An exponent, zero, positive or negative, typed or in quotes: the exact decimal.
+        (r#in(vec![text("9007199254740992e0"), num("9007199254740994E0")], false), vec![lo, hi]),
+        (r#in(vec![num("900719925474099.2e1"), text("90071992547409940e-1")], true), vec![mid]),
+        (
+            Cond::Between {
+                col: "n".into(),
+                lo: text("900719925474099e1"),
+                hi: num("90071992547409920e-1"),
+                negated: false,
+            },
+            vec![lo],
+        ),
+    ];
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    for (n, (cond, want)) in cases.into_iter().enumerate() {
+        let filter = render(&cond, &target).unwrap();
+        let evs = q.run(n as u64 + 1, &[&format!("SELECT n FROM {} WHERE {filter} ORDER BY n", t.q())]).await;
+        let found: Vec<String> = page_of(&evs).1.iter().map(|r| r[0].clone().unwrap()).collect();
+        assert_eq!(found, want, "{filter}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

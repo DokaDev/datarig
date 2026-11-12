@@ -125,6 +125,7 @@
 "detail.preview" = "{column}: {value}"
 "grid.search.more" = { one = "in {count} row read · more rows on the server ({key}: next page)", other = "in {count} rows read · more rows on the server ({key}: next page)" }
 "grid.search.more_short" = "more on server"
+"grid.search.held" = "searching held rows"
 "grid.search.no_room" = "No room for the search line under the grid: make the results taller ({key} zooms them)"
 "query.running_step" = "Running statement {step} of {total}… {elapsed}"
 "query.step_failed" = "Statement {step} of {total} failed ({sql}): {error}"
@@ -143,6 +144,7 @@
 "results.page.refused" = "Paging closed and this statement is not run again for you ({why}): run it again to see more"
 "results.page.resumed" = "Paging had closed: ran the SELECT again to fetch rows {from}–{to}; they may differ if the data changed"
 "results.page.resumed_unordered" = "Paging had closed: ran the SELECT again to fetch rows {from}–{to}; without ORDER BY they may come in another order, and they may differ if the data changed"
+"results.page.resumed_not_unique" = "Paging had closed: ran the SELECT again to fetch rows {from}–{to}; order not unique, so rows with equal keys may come in another order, and they may differ if the data changed"
 "results.page.columns_changed" = "Not added: the statement's columns changed since it first ran; run it again"
 "results.paging_closed_rerun" = { one = "Showing {count} row · paging closed: {key} runs the SELECT again for the next page", other = "Showing {count} rows · paging closed: {key} runs the SELECT again for the next page" }
 "results.paging_replaced" = { one = "Showing {count} row · paging closed after another statement ran: run it again to load more", other = "Showing {count} rows · paging closed after another statement ran: run it again to load more" }
@@ -154,6 +156,7 @@
 "results.page.refused_no_hold" = "Only the first page was read: the statement stopped there and is not run again for you ({why}). Page it yourself with LIMIT/OFFSET, or set paging = \"hold\" in the profile's environment"
 "results.page.rerun" = "Ran the SELECT again for rows {from}–{to} (nothing is held open between pages); they may differ if the data changed"
 "results.page.rerun_unordered" = "Ran the SELECT again for rows {from}–{to} (nothing is held open between pages); without ORDER BY the server may return its rows in another order, so rows may repeat or be missing, and they may differ if the data changed"
+"results.page.rerun_not_unique" = "Ran the SELECT again for rows {from}–{to} (nothing is held open between pages); order not unique, so rows with equal keys may come in another order, repeat or be missing, and they may differ if the data changed"
 "results.page.applied" = "Changes were applied to these rows: re-run the query to see the rest"
 "repeat.not_one" = "it is not one statement"
 "repeat.not_select" = "it is not a plain SELECT"
@@ -162,6 +165,7 @@
 "repeat.volatile" = "it calls {name}, whose result changes from call to call"
 "repeat.unreadable" = "it cannot be read"
 "repeat.variable" = "it uses the variable {name}, whose value may change"
+"repeat.zone_changed" = "it reads the session's time zone, which is not known to be the one its rows were read in"
 "repeat.user_operator" = "it uses the operator {name}, which is not a built-in"
 "repeat.user_type" = "it names the type {name}, which is not a built-in"
 "repeat.not_a_table" = "it reads {name}, which is not a table (a view, a foreign table, …) or is not found"

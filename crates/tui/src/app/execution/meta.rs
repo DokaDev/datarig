@@ -53,6 +53,9 @@ impl App {
         if let DbEvent::Ddl { id: request, result } = ev {
             return self.ddl_answered(profile, Some(&database), request, result);
         }
+        if let DbEvent::TableKeys { id: request, result } = ev {
+            return self.order_keys_answered(profile, Some(&database), request, result);
+        }
         if matches!(ev, DbEvent::ConnectFailed { .. } | DbEvent::Lost { .. }) {
             self.ddl_stop(profile, Some(Some(&database)), crate::app::tabs::DdlState::Failed(text.clone()), true);
         }
@@ -311,6 +314,7 @@ impl App {
             | DbEvent::Autocommit(_)
             | DbEvent::Applied { .. } => {}
             DbEvent::Ddl { id: request, result } => self.ddl_answered(id, None, request, result),
+            DbEvent::TableKeys { id: request, result } => self.order_keys_answered(id, None, request, result),
         }
     }
 
@@ -362,9 +366,14 @@ impl App {
     fn values_came(&mut self, profile: ProfileId, database: Option<&str>, schema: &str, table: &str) {
         let generation = self.conns.get(profile).map(|c| c.generation);
         let other = self.other_database(self.tab()).map(str::to_string);
-        let editing = self.focus == Focus::Editor && self.tab().editor.mode == Mode::Insert && !self.modal_open();
         let t = self.tab();
         let Some(w) = t.values_wait.clone() else { return };
+        // The text it waits in still has the keys.
+        let editing = !self.modal_open()
+            && match w.owner {
+                PopupOwner::Editor => self.focus == Focus::Editor && self.tab().editor.mode == Mode::Insert,
+                PopupOwner::Filter(f) => self.filter_line_focused() && self.filter_line_field() == Some(f),
+            };
         if w.profile != profile || w.database.as_deref() != database || w.schema != schema || w.table != table {
             return;
         }
@@ -374,7 +383,10 @@ impl App {
             && other == w.database;
         self.tab_mut().values_wait = None;
         if current && editing {
-            self.complete_here(false, Some(w.literal));
+            match w.owner {
+                PopupOwner::Editor => self.complete_here(false, Some(w.literal)),
+                PopupOwner::Filter(_) => self.filter_complete(false, Some(w.literal)),
+            }
         }
     }
 }

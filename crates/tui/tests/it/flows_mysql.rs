@@ -886,3 +886,104 @@ fn an_insert_copy_flashes_only_the_columns_it_wrote() {
     h.command("copy csv all");
     assert_eq!(flash(&h), Some((0..1, vec![0, 1, 2, 3])));
 }
+
+/// A filter on a `TIMESTAMP` reads the session's time zone (`CONVERT_TZ(…, '+00:00',
+/// @@session.time_zone)`): not held, its next page runs it again and it is counted, while the
+/// session's zone is the one its rows were read in. Once the zone changed, neither runs, and
+/// the reason is said; back in that zone, both run again.
+#[test]
+fn a_timestamp_filter_pages_again_only_in_the_zone_it_was_read_in() {
+    use datarig_core::driver::{ColumnMeta, DbCommand, PagingMode, ValueKind};
+    let sql = "SELECT * FROM `shop`.`orders` WHERE `placed_at` = \
+               CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone) ORDER BY `id`";
+    let mut h = mysql();
+    h.db(DbEvent::Connected);
+    let lang = h.app.tab().editor.language();
+    h.app.tab_mut().editor = datarig_tui::widgets::editor::Editor::new(sql);
+    h.app.tab_mut().editor.set_language(lang);
+    h.ctrl('e');
+    let id = sent_run(&mut h);
+    h.tab_db(0, session("+00:00", "utf8mb4"));
+    let cols = || Some(vec![ColumnMeta::new("id".into(), "int".into(), ValueKind::Integer, None)]);
+    let rows = |from: usize| (from..from + 500).map(|i| vec![Some(i.to_string())]).collect::<Vec<_>>();
+    h.tab_db(0, DbEvent::Released { id });
+    h.tab_db(0, DbEvent::Page { id, columns: cols(), rows: rows(0), more: true, elapsed: Default::default() });
+    let status = h.status(400, 45);
+    assert!(!status.contains("First 500 rows only"), "{status}");
+    assert!(h.app.can_run_again());
+    h.app.focus = datarig_tui::app::Focus::Results;
+    let resumes = |sent: &[DbCommand]| {
+        sent.iter()
+            .filter_map(|c| match c {
+                DbCommand::Resume { id, sql, skip, paging: PagingMode::NoHold, .. } => Some((*id, sql.clone(), *skip)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let counts = |sent: &[DbCommand]| sent.iter().filter(|c| matches!(c, DbCommand::Count { .. })).count();
+    h.keys("n");
+    let sent = h.sent();
+    let [(rid, resumed, 500)] = &resumes(&sent)[..] else { panic!("{sent:?}") };
+    assert_eq!(resumed, sql);
+    h.tab_db(0, DbEvent::Released { id: *rid });
+    h.tab_db(0, DbEvent::Page { id: *rid, columns: cols(), rows: rows(500), more: true, elapsed: Default::default() });
+    assert!(matches!(&h.app.tab().results, datarig_tui::app::Results::Rows(rs) if rs.rows.len() == 1000 && rs.more));
+    // The session's zone changes (a `SET time_zone` the user ran): the rows were read in
+    // another one.
+    h.tab_db(0, session("+09:00", "utf8mb4"));
+    h.keys("n");
+    let sent = h.sent();
+    assert!(resumes(&sent).is_empty(), "{sent:?}");
+    let status = h.status(400, 45);
+    assert!(
+        status.contains("is not run again for you (it reads the session's time zone, which is not known to be the one its rows were read in)"),
+        "{status}"
+    );
+    h.keys("#");
+    let sent = h.sent();
+    assert_eq!(counts(&sent), 0, "{sent:?}");
+    let status = h.status(400, 45);
+    assert!(status.contains("Rows are not counted for you: it reads the session's time zone"), "{status}");
+    // Back in the zone the rows were read in.
+    h.tab_db(0, session("+00:00", "utf8mb4"));
+    h.keys("#");
+    assert_eq!(counts(&h.sent()), 1);
+}
+
+/// A result read while the session's time zone is not known (the driver reports
+/// [`SessionValues::UNKNOWN`](datarig_core::driver::SessionValues::UNKNOWN), as after a stored
+/// routine that may have changed it): a filter on a `TIMESTAMP` is not paged again nor counted,
+/// though the session still reports the same, since the zone its rows were read in was never
+/// known.
+#[test]
+fn a_timestamp_filter_read_in_an_unknown_zone_is_not_paged_again() {
+    use datarig_core::driver::{ColumnMeta, DbCommand, SessionValues, ValueKind};
+    let sql = "SELECT * FROM `shop`.`orders` WHERE `placed_at` = \
+               CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone) ORDER BY `id`";
+    let mut h = mysql();
+    h.db(DbEvent::Connected);
+    let lang = h.app.tab().editor.language();
+    h.app.tab_mut().editor = datarig_tui::widgets::editor::Editor::new(sql);
+    h.app.tab_mut().editor.set_language(lang);
+    h.ctrl('e');
+    let id = sent_run(&mut h);
+    h.tab_db(0, session(SessionValues::UNKNOWN, SessionValues::UNKNOWN));
+    let cols = Some(vec![ColumnMeta::new("id".into(), "int".into(), ValueKind::Integer, None)]);
+    let rows = (0..500).map(|i| vec![Some(i.to_string())]).collect::<Vec<_>>();
+    h.tab_db(0, DbEvent::Released { id });
+    h.tab_db(0, DbEvent::Page { id, columns: cols, rows, more: true, elapsed: Default::default() });
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys("n");
+    let sent = h.sent();
+    assert!(!sent.iter().any(|c| matches!(c, DbCommand::Resume { .. })), "{sent:?}");
+    let status = h.status(400, 45);
+    assert!(
+        status.contains("is not run again for you (it reads the session's time zone, which is not known to be the one its rows were read in)"),
+        "{status}"
+    );
+    h.keys("#");
+    let sent = h.sent();
+    assert!(!sent.iter().any(|c| matches!(c, DbCommand::Count { .. })), "{sent:?}");
+    let status = h.status(400, 45);
+    assert!(status.contains("Rows are not counted for you: it reads the session's time zone"), "{status}");
+}

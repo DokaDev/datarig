@@ -950,6 +950,48 @@ fn ddl_run_in_the_app_reads_the_keys_again() {
     assert_eq!(loads(&mut h), 1, "after CALL");
 }
 
+/// DDL run on one profile drops the order keys of its own table tabs only: a table tab of
+/// another profile keeps the keys it read (its next ordered run appends them, asking nothing).
+#[test]
+fn ddl_keeps_the_order_keys_of_another_profiles_table_tabs() {
+    use datarig_core::driver::Outcome;
+    let mut h = three_profiles();
+    connect(&mut h, "other");
+    h.meta_db("other", DbEvent::Schemas(Ok(vec!["shop".into()])));
+    h.explore("other");
+    h.keys("jj");
+    h.key(KeyCode::Enter);
+    h.meta_db(
+        "other",
+        DbEvent::Objects { schema: "shop".into(), result: Ok((vec!["users".into()], Vec::new()).into()) },
+    );
+    h.keys("jj");
+    h.key(KeyCode::Enter);
+    assert!(h.app.tab().is_table() && h.app.tab().profile == Some(id(&h, "other")));
+    let table = h.app.tabs.active_index();
+    keys_came(&mut h, "other", &["id"]);
+    let columns = Some(vec![meta("id", "int8", true, false), meta("name", "text", false, false)]);
+    let qid = h.app.tab().exec.query_id;
+    h.tab_db(table, DbEvent::Page { id: qid, columns, rows: Vec::new(), more: false, elapsed: Duration::ZERO });
+    // DDL committed in local-pg's console.
+    let pg = id(&h, "local-pg");
+    let console = h.app.tabs.iter().position(|t| t.profile == Some(pg) && !t.is_table()).expect("a console");
+    h.app.tabs.activate(console);
+    h.app.run(vec!["ALTER TABLE shop.users RENAME COLUMN id TO uid".into()]);
+    let qid = h.app.tab().exec.query_id;
+    h.tab_db(
+        console,
+        DbEvent::Done { id: qid, outcome: Outcome::Command("ALTER TABLE".into()), elapsed: Duration::ZERO },
+    );
+    assert!(h.sent().iter().any(|c| matches!(c, DbCommand::LoadKeys)), "local-pg's keys read again");
+    h.app.tabs.activate(table);
+    h.command("orderby name");
+    let sent = h.sent();
+    let ran = executes(&sent);
+    assert_eq!(ran, [r#"SELECT * FROM "shop"."users" ORDER BY "name" ASC, "id" ASC"#], "{sent:?}");
+    assert!(!sent.iter().any(|c| matches!(c, DbCommand::LoadTableKeys { .. })), "{sent:?}");
+}
+
 // ── the server's databases ────────────────────────────
 
 /// Put the explorer's cursor on the row shown as `text` (as `Harness::rows` writes it).
@@ -1271,4 +1313,59 @@ fn the_menu_of_a_folder_and_of_a_profile() {
     h.menu_pick("Move connection profile to a folder");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
     assert_eq!(h.app.selected_profile(), Some(id(&h, "v6")));
+}
+
+/// A table tab of another database reads its keys on that database's metadata session; when
+/// that session is lost before it answers, the keys are not taken for asked any more: the next
+/// run opens the session again and asks on it, and an answer of the lost one is dropped.
+#[test]
+fn a_lost_aux_session_asks_the_keys_again() {
+    let mut h = Harness::connected(Lang::En);
+    let p = id(&h, "local-pg");
+    h.explore("local-pg");
+    h.key(KeyCode::Char('h'));
+    h.app.conns.entry(p).databases = None;
+    h.key(KeyCode::Char('l'));
+    h.db(DbEvent::Databases(Ok(vec!["datarig".into(), "sales".into()])));
+    cursor_on(&mut h, "  db:sales");
+    h.key(KeyCode::Char('l'));
+    let aux = last_session(&h, SessionRole::Meta);
+    aux_event(&mut h, "sales", DbEvent::Connected);
+    aux_event(&mut h, "sales", DbEvent::Schemas(Ok(vec!["q1".into()])));
+    cursor_on(&mut h, "    q1");
+    h.key(KeyCode::Char('l'));
+    aux_event(
+        &mut h,
+        "sales",
+        DbEvent::Objects { schema: "q1".into(), result: Ok((vec!["zz_t".into()], vec![]).into()) },
+    );
+    h.sent_to(aux);
+    cursor_on(&mut h, "        zz_t");
+    h.key(KeyCode::Enter);
+    assert!(h.app.tab().is_table());
+    let asked = |cmds: &[DbCommand]| cmds.iter().filter(|c| matches!(c, DbCommand::LoadTableKeys { .. })).count();
+    let first = h.sent_to(aux);
+    assert_eq!(asked(&first), 1, "asked on the database's session: {first:?}");
+    let request = first.iter().find_map(|c| if let DbCommand::LoadTableKeys { id, .. } = c { Some(*id) } else { None });
+    let (id, index) = (h.app.tab().exec.query_id, h.app.tabs.active_index());
+    let columns = Some(vec![meta("id", "int4", true, false)]);
+    h.tab_db(index, DbEvent::Page { id, columns, rows: Vec::new(), more: false, elapsed: Duration::from_millis(1) });
+    // Lost before it answered.
+    let old = h.app.conns.aux(p, "sales").expect("its aux").id;
+    aux_event(&mut h, "sales", DbEvent::Lost { error: datarig_core::driver::DbError::Closed });
+    h.command("orderby id");
+    let new = last_session(&h, SessionRole::Meta);
+    assert_ne!(new, aux, "the database's session opened again");
+    let sent = h.sent_to(new);
+    assert_eq!(asked(&sent), 1, "asked again on it: {sent:?}");
+    // The lost session's answer (by its id) is dropped.
+    let state = |h: &Harness| format!("{:?}", h.app.tab().doc.table_query.as_ref().map(|q| &q.order_keys));
+    let before = state(&h);
+    let keys = datarig_core::driver::keys::OrderKeys { primary_key: vec!["id".into()], ..Default::default() };
+    h.app.on_app_event(datarig_tui::app::AppEvent::Db {
+        target: datarig_tui::app::EventTarget::Aux(old),
+        generation: old,
+        ev: DbEvent::TableKeys { id: request.unwrap(), result: Ok(keys) },
+    });
+    assert_eq!(state(&h), before);
 }

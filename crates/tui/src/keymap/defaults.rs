@@ -455,6 +455,12 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Nav, "space r p", "results.page.prev"),
     (Nav, "space r #", "results.count"),
     (Nav, "space r e", "results.export"),
+    // a table tab's filter line (elsewhere each key says it is only on table tabs)
+    (Grid, "f", "table.filter.edit"),
+    (Nav, "space r f", "table.filter.edit"),
+    (Nav, "space r o", "table.order.edit"),
+    (Nav, "space r x", "table.filter.clear"),
+    (Nav, "space r v", "table.filter.open_sql"),
     (Grid, "L", "results.tab.next"),
     (Grid, "H", "results.tab.prev"),
     (Nav, "space r ]", "results.tab.next"),
@@ -617,6 +623,8 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Ddl, "r", "ddl.reload"),
     (Ddl, "o", "ddl.open_console"),
     (VimInsert, "f4", "editor.complete"),
+    // the filter line of a table tab
+    (FilterLine, "ctrl+space", "editor.complete"),
 ];
 
 /// Every vim command key, including those the editor does not implement yet.
@@ -693,6 +701,8 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (GridSearch, &["esc", "enter", "ctrl+w"], "grid search"),
     (MonitorFilter, TEXT, "text input"),
     (GridSearch, TEXT, "text input"),
+    (FilterLine, &["esc", "enter", "tab", "shift+tab", "ctrl+w", "ctrl+l"], "filter line"),
+    (FilterLine, TEXT, "text input"),
     (CellEdit, &["esc", "enter", "ctrl+n", "ctrl+d", "ctrl+l"], "cell editor"),
     (CellEdit, TEXT, "text input"),
     (CellEditor, CELL_EDITOR, "cell editor of several lines"),
