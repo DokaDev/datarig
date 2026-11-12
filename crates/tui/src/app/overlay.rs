@@ -145,6 +145,9 @@ pub enum ConfirmAction {
     TrustHostKey,
     /// Delete this tunnel preset (and its saved secret).
     DeleteTunnel(datarig_core::profile::tunnel::TunnelId),
+    /// Save the open environment form although profiles that already name it (while no
+    /// environment had that name) take its rules. Cancel is the default.
+    AdoptEnvironment,
     /// Delete this environment.
     DeleteEnvironment(datarig_core::policy::EnvironmentId),
     /// Delete this session preset.
@@ -260,6 +263,7 @@ impl Confirm {
             | ConfirmAction::DeleteEnvironment(_)
             | ConfirmAction::DeleteSession(_) => (Label::DialogButtonCancel, Label::DialogButtonDelete),
             ConfirmAction::FilterHistoryClear { .. } => (Label::DialogButtonCancel, Label::DialogButtonClear),
+            ConfirmAction::AdoptEnvironment => (Label::DialogButtonCancel, Label::DialogButtonSave),
             ConfirmAction::SetConnection(_) | ConfirmAction::SetContext(_) => {
                 (Label::DialogButtonKeep, Label::DialogButtonSwitch)
             }

@@ -270,6 +270,7 @@ impl App {
         if self.overlays.form().is_some_and(ProfileForm::is_default_rules) {
             return self.save_default_rules_form();
         }
+        let adopt_confirmed = std::mem::take(&mut self.env_adopt_confirmed);
         let Some(form) = self.overlays.form_mut().filter(|f| !f.saving && f.is_environment()) else { return };
         form.attempted = true;
         let FormKind::Environment { id, editing } = form.kind else { return };
@@ -282,6 +283,17 @@ impl App {
         let old = self.environments().iter().position(|q| q.id == id).filter(|_| editing);
         let before = old.map(|i| self.environments()[i].clone());
         let renamed = before.as_ref().map(|b| b.name.clone()).filter(|n| *n != e.name);
+        // Profiles that already name the new name, which no environment had: they did not
+        // connect, and would take these rules without being asked. Listed, and asked first.
+        if !adopt_confirmed
+            && before.as_ref().is_none_or(|b| b.name != e.name)
+            && self.policies.environment(&e.name).is_none()
+        {
+            let users: Vec<String> = self.environment_users(&e.name).iter().map(|c| c.name.clone()).collect();
+            if !users.is_empty() {
+                return self.ask_adopt_environment(&e, users);
+            }
+        }
         e.origin = before.as_ref().and_then(|b| b.origin.clone());
         let (policies, profiles) = (self.policies.clone(), self.profiles.clone());
         match old {
@@ -312,6 +324,32 @@ impl App {
         if !self.commit_rule_changed(&policies) {
             self.flash(Notice::new(Msg::EnvironmentSaved { name: e.name }, Level::Success));
         }
+    }
+
+    /// Ask before environment `e` is saved under a name the profiles `users` already name.
+    fn ask_adopt_environment(&mut self, e: &Environment, users: Vec<String>) {
+        let rules = self.rules_hint(&e.policy);
+        let text =
+            Msg::EnvironmentAdopt { name: e.name.clone(), count: users.len() as u64, names: users.join(", "), rules };
+        self.overlays.push(Overlay::Confirm(Confirm {
+            title: Label::EnvironmentAdoptTitle,
+            text,
+            details: Vec::new(),
+            keys: Label::EnvironmentAdoptKeys,
+            action: ConfirmAction::AdoptEnvironment,
+            folder: None,
+            path: None,
+            tx: None,
+            buttons: Default::default(),
+        }));
+    }
+
+    /// `y` to [`Self::ask_adopt_environment`]: the form is saved (it may still fail to be
+    /// written, or have changed meanwhile; it is checked again).
+    pub(super) fn adopt_environment_confirmed(&mut self) {
+        self.env_adopt_confirmed = true;
+        self.save_environment_form();
+        self.env_adopt_confirmed = false;
     }
 
     /// The profiles naming environment `from` name `to` instead, and so do the copies their

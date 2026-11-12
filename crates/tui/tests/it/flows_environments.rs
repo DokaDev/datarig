@@ -323,6 +323,60 @@ fn a_rename_that_cannot_be_written_changes_nothing() {
     assert_eq!(h.app.profiles[0].policy.as_deref(), Some("prod"));
 }
 
+/// A rename (or a new environment) to a name some profiles already name while no environment
+/// has it: those profiles would take its rules, so they are listed and asked about first. `Enter`
+/// keeps the form open with nothing written; `y` saves.
+#[test]
+fn a_name_profiles_already_use_asks_before_they_take_its_rules() {
+    let dir = scratch("adopt");
+    let mut cfg = config(Some(&dir), two());
+    cfg.connections[1].policy = Some("staging".into());
+    let other = cfg.connections[1].name.clone();
+    let mut h = harness_with(&cfg, Lang::En);
+    // A rename of `dev` (standard rules) to `staging`.
+    on_env(&mut h, "dev");
+    h.keys("R");
+    h.ctrl('u');
+    h.type_text("staging");
+    h.ctrl('s');
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "asked first");
+    assert_eq!(h.app.overlays.confirm().unwrap().action, ConfirmAction::AdoptEnvironment);
+    let text = h.app.i18n.msg(&h.app.overlays.confirm().unwrap().text).to_string();
+    assert_eq!(
+        text,
+        format!(
+            "{other} already names “staging”, which is not defined: saving gives it these rules (standard rules). Save?"
+        )
+    );
+    h.key(KeyCode::Enter);
+    assert!(h.form_open(), "Enter keeps the form");
+    assert_eq!(names(&h), ["prod", "dev"], "nothing saved");
+    assert!(!dir.text().contains("[policy.staging]"), "{}", dir.text());
+    h.ctrl('s');
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "asked again");
+    h.keys("y");
+    assert!(!h.form_open());
+    assert_eq!(names(&h), ["prod", "staging"]);
+    assert_eq!(h.app.profiles[1].policy.as_deref(), Some("staging"));
+    assert!(dir.text().contains("[policy.staging]"), "{}", dir.text());
+    // A plain edit of a defined one is not asked about; a new environment of a name a profile
+    // already names is, the same way.
+    on_env(&mut h, "staging");
+    h.keys("e");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Right);
+    h.ctrl('s');
+    assert!(!h.form_open() && h.overlay_kind() != Some(OverlayKind::Confirm), "an edit is not asked about");
+    h.app.profiles[0].policy = Some("qa".into());
+    on_env(&mut h, "prod");
+    h.keys("n");
+    h.type_text("qa");
+    h.ctrl('s');
+    assert_eq!(h.app.overlays.confirm().map(|c| c.action), Some(ConfirmAction::AdoptEnvironment));
+    h.keys("n");
+    assert!(h.form_open() && !names(&h).contains(&"qa".to_string()), "no keeps the form, nothing saved");
+}
+
 /// `d` on an environment some profiles name: asked first, listing them; `Enter` keeps it, `y`
 /// deletes it. The profiles keep the name, so they show the error and do not connect.
 #[test]

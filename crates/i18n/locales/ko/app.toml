@@ -62,6 +62,7 @@
 "dialog.button.later" = "나중에"
 "dialog.button.save_again" = "다시 저장"
 "dialog.button.clear" = "지우기"
+"dialog.button.save" = "저장"
 "busy.keys" = "{keys} 종료"
 
 "status.hangul" = "한/A"

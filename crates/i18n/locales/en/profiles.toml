@@ -209,6 +209,9 @@
 "environment.presets_added" = "Added the environments {names}"
 "environment.delete" = "Delete the environment “{name}”?"
 "environment.delete_users" = { one = "{names} uses it: it will not connect until you pick another environment in its form (never under the default rules instead).", other = "{count} profiles use it ({names}): they will not connect until you pick another environment in their forms (never under the default rules instead)." }
+"environment.adopt.title" = "Environment rules"
+"environment.adopt" = { one = "{names} already names “{name}”, which is not defined: saving gives it these rules ({rules}). Save?", other = "{count} profiles already name “{name}”, which is not defined ({names}): saving gives them these rules ({rules}). Save?" }
+"environment.adopt.keys" = "y save · n/Enter cancel"
 "environment.delete_connected" = "A connected profile that uses it runs nothing until another environment is picked."
 "environment.deleted" = "Deleted the environment “{name}”"
 "environment.deleted_used" = { one = "Deleted the environment “{name}”; the profile that used it needs another environment", other = "Deleted the environment “{name}”; the {count} profiles that used it need another environment" }

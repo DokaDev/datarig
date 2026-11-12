@@ -612,6 +612,7 @@ impl App {
             ConfirmAction::TrustHostKey => self.host_key_answered(true),
             ConfirmAction::DeleteTunnel(id) => self.delete_tunnel(id),
             ConfirmAction::DeleteEnvironment(id) => self.delete_environment(id),
+            ConfirmAction::AdoptEnvironment => self.adopt_environment_confirmed(),
             ConfirmAction::DeleteSession(id) => self.delete_session(id),
             ConfirmAction::ExplainAgain => self.explain_as_plan_confirmed(),
             ConfirmAction::KeychainSecurityTool => self.keychain_access_changed(KeychainAccess::SecurityTool),
