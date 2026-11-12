@@ -192,12 +192,15 @@ fn as_the_column(c: &Column, value: &mut Cell, length: Option<&str>) -> bool {
 
 /// Whether the columns of a group count's answer, as the server describes them for this run,
 /// send only values of a bounded size: the value comes with the length the server measured (the
-/// second column a `BIGINT`, as `LENGTH` answers it; the value then only up to the preview's
-/// size), as the statement always has it. Any other answer is refused ([`DbError::SchemaChanged`])
-/// before a row of it is read.
+/// second column an integer, as `LENGTH` answers it: a `BIGINT` on MySQL, an `INT` on MariaDB;
+/// the value then only up to the preview's size), as the statement always has it. Any other
+/// answer is refused ([`DbError::SchemaChanged`]) before a row of it is read.
 fn bounded(columns: &[Column]) -> Result<(), DbError> {
     let [_, length, _] = columns else { return Err(DbError::NoResult) };
-    if length.column_type() == ColumnType::MYSQL_TYPE_LONGLONG { Ok(()) } else { Err(DbError::SchemaChanged) }
+    match length.column_type() {
+        ColumnType::MYSQL_TYPE_LONGLONG | ColumnType::MYSQL_TYPE_LONG => Ok(()),
+        _ => Err(DbError::SchemaChanged),
+    }
 }
 
 /// The bytes value `v` took as it came.
@@ -237,6 +240,22 @@ mod tests {
         let mut cell = value.map(str::to_string);
         let ok = as_the_column(&Column::new(ty), &mut cell, length);
         (cell, ok)
+    }
+
+    #[test]
+    fn an_answer_is_bounded_with_the_length_as_mysql_and_mariadb_type_it() {
+        use ColumnType::*;
+        let answer = |length: ColumnType| {
+            bounded(&[Column::new(MYSQL_TYPE_VAR_STRING), Column::new(length), Column::new(MYSQL_TYPE_LONGLONG)])
+        };
+        // `LENGTH` is a `BIGINT` on MySQL and an `INT` on MariaDB.
+        assert!(answer(MYSQL_TYPE_LONGLONG).is_ok());
+        assert!(answer(MYSQL_TYPE_LONG).is_ok());
+        // Anything else is not the statement's measured length.
+        for other in [MYSQL_TYPE_VAR_STRING, MYSQL_TYPE_BLOB, MYSQL_TYPE_NEWDECIMAL, MYSQL_TYPE_DOUBLE] {
+            assert!(matches!(answer(other), Err(DbError::SchemaChanged)), "{other:?}");
+        }
+        assert!(matches!(bounded(&[Column::new(MYSQL_TYPE_LONGLONG)]), Err(DbError::NoResult)));
     }
 
     #[test]
