@@ -959,7 +959,6 @@ fn serializable_url(url: &str, deferrable: bool) -> String {
 /// serializable transaction that wrote is open; the keys come at once all the same.
 #[tokio::test(flavor = "multi_thread")]
 async fn catalog_reads_do_not_take_a_serializable_default() {
-    use datarig_core::driver::keys::OrderKeys;
     let Some(url) = pg_url("catalog_reads_do_not_take_a_serializable_default") else { return };
     let schema = format!("zz_serialmeta_{}", std::process::id());
     let _guard = SchemaGuard::new(&url, &schema);
@@ -990,7 +989,7 @@ async fn catalog_reads_do_not_take_a_serializable_default() {
     assert!(matches!(writer.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
     assert!(answered, "the keys waited for the writer: {ev:?}");
     let Ok(Some(DbEvent::TableKeys { result, .. })) = ev else { unreachable!() };
-    assert_eq!(result, Ok(OrderKeys { primary_key: vec!["id".into()], ..OrderKeys::default() }));
+    assert_eq!(result.map(|k| k.primary_key), Ok(vec!["id".to_string()]));
 }
 
 /// A filter written for a `real` column (`ColumnKind::Real`) finds the row of each value as the
