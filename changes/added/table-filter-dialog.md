@@ -32,6 +32,10 @@
   a header) opens the column's menu: sort, open the dialog on it, keep only or exclude the
   value, clear its conditions, hide it. Each runs with the checks of the dialog's `Enter`, and
   the headers of filtered or sorted columns are tinted and marked.
+- The dialog's sort line and the column menu's sorts say where the server puts NULLs (`NULLs
+  last`, `NULLs first`), and a MySQL `TIMESTAMP` ticked or taken from the grid is written as the
+  instant it was read as (`CONVERT_TZ(…, '+00:00', @@session.time_zone)`), the same after the
+  session's time zone changes.
 - Columns can be hidden from a table tab's grid: `C` (or `Space r C`), "Hide column" in its
   menu, or `Space` / `C` in the dialog's column list, which shows them again. Hiding is a view
   only: every column is still read, and exports, the chart and the inspector see them all. The

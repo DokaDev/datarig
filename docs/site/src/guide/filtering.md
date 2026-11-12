@@ -56,7 +56,10 @@ The operators, in the order listed: `=`, `between` (numbers, dates and times onl
 an equality datarig knows (`json`, MySQL's JSON, geometry), a type that compares for equality
 only, patterns on a column that does not hold text or whose type is not known before rows are
 loaded, and on PostgreSQL patterns on a collation the server refuses them on (`ILIKE` on a
-nondeterministic collation, `LIKE` on one before PostgreSQL 18) or not known yet to take them.
+nondeterministic collation, `LIKE` on one before PostgreSQL 18) or not known yet to take them. On
+MySQL, `=`, `≠`, `≠ or NULL`, `in list` and `not in list` are dimmed on a `FLOAT` column: "A
+MySQL FLOAT is held more precisely than it is shown: no value equals it exactly". `<`, `≤`, `>`,
+`≥` and `between` still take it.
 
 SQL's `=` and `<>` never match NULL, so the operators say what each does with it:
 
@@ -71,12 +74,28 @@ SQL's `=` and `<>` never match NULL, so the operators say what each does with it
 | `not in list` | `col NOT IN (a, b)`, or `(col NOT IN (a, b) AND col IS NOT NULL)` with `NULL` in the list | left out (kept by the `(col NOT IN (…) OR col IS NULL)` the grid's [`!`](#from-the-grid) writes) |
 | `is NULL`, `is not NULL` | `col IS NULL`, `col IS NOT NULL` | found, left out |
 
-In a pattern, `%`, `_` and `!` are escaped with `!`. A value is written as the column reads it: on
-a number column a plain number is sent as a number and anything else as a string; bytes are typed
-in hexadecimal after `\x` or `0x`; text in single quotes is that text. In a list the values are
-separated by commas outside quotes; a bare `NULL` is SQL's NULL (in a field of one value, `NULL`
-is the text `'NULL'`: use `is NULL`), and inside quotes `''` is a quote and `\n`, `\r` and `\\`
-are a line feed, a carriage return and a backslash.
+How `contains` and `starts with` treat case depends on the server. On PostgreSQL, `contains` is
+`ILIKE`, which ignores case, and `starts with` is `LIKE`, which does not. On MySQL and MariaDB both
+are `LIKE`, and the column's collation decides: on a collation whose name ends in `_ci` case does
+not count, and accents count as that collation says. `contains` on any other collation, or on a
+column whose collation datarig has not read (yet), is written `LOWER(col) LIKE LOWER(…)`, so
+that it still ignores case; `starts with` then follows the collation. The operator list shows the SQL each one writes (`ILIKE '%…%'`, `LIKE '…%'`).
+
+In a pattern, `%`, `_` and `!` are escaped with `!`. A value is written as the column reads it:
+bytes are typed in hexadecimal after `\x` or `0x`; text in single quotes is that text. On a number
+column a plain number is sent as a number. On PostgreSQL anything else is sent as a string, for
+the server to read or refuse, and on a `real` column a number is a string too (`'0.1'`): the
+server reads it as a `real` and it compares exactly, where a bare `0.1` would be read as `double
+precision`, and the `real` 0.1 is not that number. On MySQL a number is written as its exact
+decimal, an exponent written out (`9007199254740993e0` as `9007199254740993`): MySQL compares a
+number with an exponent, or one in quotes, as a double (a `FLOAT` takes the number as typed). Text
+that is not a number is not written there, and its row says `not a number` (MySQL would read
+`'abc'` as 0), nor is a number with no exact decimal within a `DECIMAL` (65 digits, 30 after the
+point), whose row says `too many digits`.
+
+In a list the values are separated by commas outside quotes; a bare `NULL` is SQL's NULL (in a
+field of one value, `NULL` is the text `'NULL'`: use `is NULL`), and inside quotes `''` is a quote
+and `\n`, `\r` and `\\` are a line feed, a carriage return and a backslash.
 
 In a value, `←` at its start goes back to the operator (from the second value of `between`, to
 the first), `↑` and `↓` to the row above or below
@@ -111,6 +130,18 @@ A value is ticked only as the server holds it, with the checks of the [grid's ke
 one not shown whole (a copy as SQL judges it), binary data over 64 KiB, a long value, one the
 server writes otherwise than the grid, or one read as another type stays in the list, not
 tickable, and says why.
+
+A MySQL `TIMESTAMP` is shown in the session's time zone. A value ticked, or kept or excluded with
+the grid's `=` and `!`, is written as the instant it was read as, worked out in UTC and converted
+to the session's zone when the filter runs:
+`CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)`. Every MySQL and MariaDB reads
+it, and it is the same instant after the session's zone changes and when the filter runs again
+from the [history](#history). A value typed with an offset (`2026-11-10 09:30:00+05:30`) is written
+the same way. A value read before the session's zone changed is not taken, nor one read in a named
+zone other than `UTC` (such as `Europe/Berlin`, where a time shown in the hour the clocks go back
+is two instants): only `UTC` or an offset such as `+09:00` is taken. A typed value that is no
+instant a `TIMESTAMP` holds (a date that does not exist, an offset no session has, a time outside
+the type's range) says `no such instant` and is not written.
 
 ### Count exactly
 
@@ -153,6 +184,14 @@ before rows are loaded. It is refused while the tab is running, and before the t
 The last row of the right side sorts by the column: `(•) none  ( ) ↑ ascending  ( ) ↓ descending`
 (`←` and `→`, or a click), with its place among the keys (`key 1 of 2`); `<` and `>` move the key
 earlier or later in the order.
+
+Once the column is sorted, the line also says where its NULLs go, when it fits: `NULLs last` or
+`NULLs first`. The dialog leaves that to the server and writes no `NULLS FIRST` or `NULLS LAST` of
+its own.
+PostgreSQL puts NULLs last going up and first going down; MySQL and MariaDB put them first going
+up and last going down. On PostgreSQL you can ask for another place in the
+[`ORDER BY` field](#the-sql-section) (`total DESC NULLS LAST`), and the line says so; MySQL has no
+such syntax, and it is refused there.
 
 ### Where, Order, Limit
 
@@ -271,9 +310,14 @@ break is neither filtered by value nor sorted from the grid.
 
 The column's menu (`F`) sorts it ascending or descending or takes it out of the order, opens the
 dialog on it ("Filter and sort…"), keeps only or excludes the cursor's value (`=`, `!`), clears its
-own conditions, or hides it. `j`, `k` and the arrows move through it, and the key shown next to an
-entry runs it; an entry that cannot apply is dimmed, with the reason in place of its key. A right
-click on a cell opens the grid's menu, whose "this column's menu" entry opens it.
+own conditions, or hides it. Its sorts say where the server puts NULLs in them ("Sort ascending,
+NULLs last" on PostgreSQL, "NULLs first" on MySQL and MariaDB; see [Sort](#sort)). `j`, `k` and
+the arrows move through it, `Enter` runs the selected entry and `Esc` closes it. An entry with a
+key shown next to it runs with that key too: the grid's key for the same action, `s` for "Sort
+ascending", `f`, `=`, `!` and `C` with the default keys. "Sort descending", "Clear sort" and
+"Clear filter on this column" have no key of their own. An entry that cannot apply is dimmed, with
+the reason in place of its key. A right click on a cell opens the grid's menu, whose "this
+column's menu" entry opens it.
 
 ```text
 {{#include ../screens/column-menu.txt}}
@@ -317,7 +361,7 @@ takes a hide back. Hiding is a view only: the statement still reads every column
   cancelled.
 - An [export](export.md), the chart, the inspector and edits see every column; the export dialog
   says that hidden columns are included. Going to a change in a hidden column from the Changes tab
-  shows the column again.
+  (`Enter`, or an edit key) shows the column again and says so; the dialog's undo hides it again.
 - The results border says how many columns are hidden (`· 2 hidden`), and in the dialog the column
   is struck through (`hidden from the grid, still read`, followed by `(row key)` for a key column).
 - With every column hidden, the grid says how to show one again, and no key reads or changes a
@@ -387,7 +431,7 @@ be pointed to, the dialog says why, and nothing reaches the server.
 | A backslash in a string the server may read another way | What would run depends on a server setting. |
 | A row lock (`FOR UPDATE`, `FOR SHARE`), also in a subquery | It would hold up other sessions. |
 | Another clause of the statement outside the condition's own parentheses (`ORDER BY`, `LIMIT`, `GROUP BY`, `HAVING`, `WINDOW`, `UNION` and the like; a subquery may have its own), `INTO` anywhere, MySQL's `:=` | Only a condition is taken; what the statement reads stays this table's rows. |
-| Built-ins that wait, lock, change the session or a sequence, read or write the server's files or large objects, or reach another server (`pg_sleep`, `pg_advisory_lock`, `set_config`, `nextval`, `dblink`, `pg_read_file`, `lo_import`, `lo_get`, MySQL's `SLEEP`, `GET_LOCK`, `LOAD_FILE`), also in attribute notation (`(id::oid).lo_get`); MariaDB's `NEXT VALUE FOR s` and `s.nextval` | A filter runs for every row and must not disturb anything, on any connection. |
+| Built-ins that wait, lock, change the session or a sequence, read, list or write the server's files or large objects, or reach another server (`pg_sleep`, `pg_advisory_lock`, `set_config`, `nextval`, `dblink`, `pg_read_file`, `lo_import`, `lo_get`, MySQL's `SLEEP`, `GET_LOCK`, `LOAD_FILE`), also in attribute notation (`(id::oid).lo_get`); MariaDB's `NEXT VALUE FOR s` and `s.nextval` | A filter runs for every row and must not disturb anything, on any connection. |
 | MySQL's `ROW_COUNT()` and `FOUND_ROWS()` | They read the outcome of the statement before, which for a table tab is one the app sends. |
 
 An order is refused unless it is the table's columns, each once; a limit, as
@@ -430,6 +474,18 @@ set with `SET TRANSACTION ISOLATION LEVEL` without `SESSION` applies to the next
 and the server does not report it, so datarig treats the level as not known until that
 transaction ends; after a `CALL`, an `EXECUTE` or an executable comment it stays not known until
 the session's level is set again.
+
+### Known limits
+
+- A MySQL `TIMESTAMP` condition runs in whatever time zone the session has when it runs. Run again
+  from the history, or typed with an offset, in a session zone with daylight saving, a value in
+  the hour that repeats when the clocks go back may match the other instant of that hour: filter
+  that hour by a range instead.
+- On MySQL and MariaDB, a condition with an `INTERVAL` outside parentheses stays one `expr` chip:
+  the interval's value runs up to its unit and may hold an `AND` of its own
+  (`d + INTERVAL 1 AND 1 DAY`). Put the interval's term in parentheses to keep the others apart.
+- A right click on a cell opens the grid's menu, not the column's: its "this column's menu" entry
+  (`F`) opens that one. A right click on a header opens the column's menu at once.
 
 ## History
 
