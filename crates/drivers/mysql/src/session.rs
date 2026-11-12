@@ -163,12 +163,6 @@ impl Server {
         (!self.mariadb && self.version >= (8, 0, 17)).then_some(EditFormat::MySql(MySqlEdit { nowait: true }))
     }
 
-    /// Whether the server reads a time zone offset in a date and time literal
-    /// (`'2026-01-02 03:04:05+05:30'`): MySQL from 8.0.19 on; MariaDB does not.
-    pub(crate) fn zone_offsets(&self) -> bool {
-        !self.mariadb && self.version >= (8, 0, 19)
-    }
-
     /// `MySQL 8.4.6`, `MariaDB 11.4.2`.
     pub(crate) fn label(&self) -> String {
         let (a, b, c) = self.version;

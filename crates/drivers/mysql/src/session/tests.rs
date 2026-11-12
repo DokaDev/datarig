@@ -8,16 +8,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 const MYSQL_84: Server = Server { version: (8, 4, 6), mariadb: false };
 
 #[test]
-fn a_zone_offset_in_a_literal_is_read_from_mysql_8_0_19_on_and_not_by_mariadb() {
-    let my = |v| Server { version: v, mariadb: false };
-    assert!(!my((8, 0, 18)).zone_offsets());
-    assert!(my((8, 0, 19)).zone_offsets());
-    assert!(my((8, 4, 6)).zone_offsets());
-    assert!(!Server { version: (11, 4, 2), mariadb: true }.zone_offsets());
-    assert!(!Server { version: (10, 6, 0), mariadb: true }.zone_offsets());
-}
-
-#[test]
 fn versions_before_mysql_8_and_mariadb_10_6_are_refused_with_their_name() {
     let refused = |version, mariadb| Server { version, mariadb }.check().err();
     assert_eq!(

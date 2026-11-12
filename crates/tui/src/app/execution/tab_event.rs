@@ -85,13 +85,6 @@ impl App {
             }
             return;
         }
-        // Likewise whether its server reads a time zone offset in a literal.
-        if let DbEvent::ZoneOffsets(on) = ev {
-            if let Some(p) = profile {
-                self.conns.entry(p).zone_offsets = Some(on);
-            }
-            return;
-        }
         // The editor and the risk classifier read the text as the session does from now on.
         if let DbEvent::Language(lang) = ev {
             let first = self.tabs.get_mut(id).is_some_and(|t| t.exec.language.replace(lang).is_none());
@@ -300,7 +293,6 @@ impl App {
             | DbEvent::Language(_)
             | DbEvent::Explain(_)
             | DbEvent::Edit(_)
-            | DbEvent::ZoneOffsets(_)
             | DbEvent::SessionValues(_)
             | DbEvent::Stopping { .. }
             | DbEvent::CancelRefused { .. }

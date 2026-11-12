@@ -283,8 +283,6 @@ impl App {
             DbEvent::Explain(format) => self.conns.entry(id).explain = Some(format),
             // The edits its server takes.
             DbEvent::Edit(format) => self.conns.entry(id).edit = Some(format),
-            // Whether its server reads a time zone offset in a literal.
-            DbEvent::ZoneOffsets(on) => self.conns.entry(id).zone_offsets = Some(on),
             // A query session's own (copying its values as SQL needs it).
             DbEvent::SessionValues(_) | DbEvent::ValuesNotKnown { .. } => {}
             // A monitor session's own.

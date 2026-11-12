@@ -273,17 +273,6 @@ async fn a_query_session_says_how_its_text_is_read() {
     let (major, minor) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
     // `select $$` is a syntax error from 8.1 on (MySQL's client then reads dollar quotes).
     assert_eq!(mode, MySqlMode { dollar_quotes: (major, minor) >= (8, 1), ..MySqlMode::default() }, "{version}");
-    // Whether it reads a time zone offset in a literal: MySQL from 8.0.19 on, not MariaDB.
-    let patch = parts.next().unwrap_or(0);
-    let zone_offsets = !version.contains("MariaDB") && (major, minor, patch) >= (8, 0, 19);
-    let said = c.wait(|e| matches!(e, DbEvent::ZoneOffsets(_)), 5).await;
-    assert!(matches!(said, DbEvent::ZoneOffsets(z) if z == zone_offsets), "{version}: {said:?}");
-    if zone_offsets {
-        probe.query_drop("SET time_zone = '+00:00'").await.unwrap();
-        let zoned: String =
-            probe.query_first("SELECT CAST('2026-01-02 03:04:05+05:30' AS DATETIME)").await.unwrap().unwrap();
-        assert_eq!(zoned, "2026-01-01 21:34:05", "read as the instant, in the session's zone");
-    }
     probe.disconnect().await.unwrap();
 }
 
@@ -443,9 +432,6 @@ async fn the_metadata_session_reads_the_databases_and_the_catalog() {
     // The edits the server takes (MySQL 8.0.17 on).
     let edit = c.next(15).await;
     assert!(matches!(edit, DbEvent::Edit(Some(EditFormat::MySql(MySqlEdit { nowait: true })))), "{edit:?}");
-    // It reads a time zone offset in a literal (MySQL 8.0.19 on).
-    let zone_offsets = c.next(15).await;
-    assert!(matches!(zone_offsets, DbEvent::ZoneOffsets(true)), "{zone_offsets:?}");
     match c.next(15).await {
         DbEvent::Schemas(Ok(s)) => {
             assert!(s.contains(&"shop".to_string()), "{s:?}");

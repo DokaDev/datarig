@@ -10,8 +10,7 @@
   pattern's `%` and `_` escaped. A value not shown whole, binary data over 64 KiB, a type whose
   comparison datarig does not know or more than 1000 cells are offered dimmed, with the
   reason.
-- A MySQL `TIMESTAMP` value is written with the offset of the time zone it was read in on MySQL
-  8.0.19 and later, so the filter is the same instant in a session of another zone. MariaDB and
-  older MySQL read no offset in a literal: there the value is written as shown, the instant
-  only in a session of the zone it was read in, and each entry says "as read in this session's
-  time zone".
+- A MySQL `TIMESTAMP` value is written as the instant it was read as, in the session's time zone
+  when the filter runs (`CONVERT_TZ('…', '+00:00', @@session.time_zone)`): the same instant on
+  every MySQL and MariaDB, after a change of the session's zone and when the filter runs again
+  from the history.

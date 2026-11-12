@@ -696,25 +696,16 @@ fn mysql_literals_follow_the_session_and_case_the_collation() {
     assert_eq!(filter(&mut h, 0, 2, "= '0x01AB'"), my("data = X'01AB'"));
     page_with(&mut h, cols(), rows());
     clear_with(&mut h, cols(), rows());
-    // A TIMESTAMP on a server not known to read an offset in a literal (MariaDB, MySQL before
-    // 8.0.19): as shown, the instant only in a session of the zone it was read in, as each
-    // comparison says.
-    at(&mut h, 0, 4);
-    h.keys("F");
-    assert!(h.screen(120, 30).contains("as read in this session's time zone"), "{}", h.screen(120, 30));
-    h.key(KeyCode::Esc);
-    assert_eq!(filter(&mut h, 0, 4, "< '2026-11-10 09:30:00'"), my("at < '2026-11-10 09:30:00'"));
+    // A TIMESTAMP as the instant it was read as, in the session's zone when it runs: the same
+    // instant on every server, whatever the session's zone is when it runs again.
+    let instant = "at < CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
+    assert_eq!(filter(&mut h, 0, 4, "< '2026-11-10 09:30:00'"), my(instant));
     page_with(&mut h, cols(), rows());
-    clear_with(&mut h, cols(), rows());
-    // Where the server reads one (MySQL 8.0.19 and later): with the offset of the zone it was
-    // read in, the same instant in a session of another zone (run again from the history).
     let index = h.app.tabs.active_index();
-    h.tab_db(index, DbEvent::ZoneOffsets(true));
-    at(&mut h, 0, 4);
-    h.keys("F");
-    assert!(!h.screen(120, 30).contains("as read in this session's time zone"), "{}", h.screen(120, 30));
-    h.key(KeyCode::Esc);
-    assert_eq!(filter(&mut h, 0, 4, "< '2026-11-10 09:30:00'"), my("at < '2026-11-10 09:30:00+00:00'"));
+    h.tab_db(index, DbEvent::SessionValues(SessionValues { time_zone: "+05:30".into(), charset: "utf8mb4".into() }));
+    h.app.dispatch(datarig_tui::app::action::Action::RunStatement);
+    assert_eq!(runs(&mut h), my(instant), "run again in another zone: the same instant");
+    page_with(&mut h, cols(), rows());
     // A MySQL FLOAT is sent rounded: not taken.
     at(&mut h, 0, 3);
     h.keys("F");

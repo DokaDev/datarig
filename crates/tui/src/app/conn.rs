@@ -164,9 +164,6 @@ pub struct ProfileConn {
     /// (`DbEvent::Edit`); `None` until one says, when the driver's (`Capabilities::edit`)
     /// holds.
     pub edit: Option<Option<datarig_core::driver::EditFormat>>,
-    /// Whether the current attempt's server reads a time zone offset in a date and time
-    /// literal, as a session of it said (`DbEvent::ZoneOffsets`); `None` until one says.
-    pub zone_offsets: Option<bool>,
     /// How the current attempt's metadata session's traffic goes (`DbEvent::Encryption`, sent
     /// right before `Connected`); `None` until it says.
     pub encryption: Option<datarig_core::tls::Encryption>,
@@ -209,7 +206,6 @@ impl ProfileConn {
             tunnel_lost: None,
             language: None,
             explain: None,
-            zone_offsets: None,
             edit: None,
             encryption: None,
             used: None,
@@ -309,7 +305,6 @@ impl ConnectionManager {
         c.encryption = None;
         c.explain = None;
         c.edit = None;
-        c.zone_offsets = None;
         generation
     }
 

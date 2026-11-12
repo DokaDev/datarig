@@ -23,7 +23,6 @@ impl App {
             | DbEvent::Language(_)
             | DbEvent::Explain(_)
             | DbEvent::Edit(_)
-            | DbEvent::ZoneOffsets(_)
             | DbEvent::SessionValues(_)
             | DbEvent::ValuesNotKnown { .. }
             | DbEvent::Info { .. }
