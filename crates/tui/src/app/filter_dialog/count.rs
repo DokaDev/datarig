@@ -196,6 +196,7 @@ impl App {
                 Notice::new(Label::TableDialogCountLockTimeout, Level::Warning)
             }
             Err(DbError::LockingRead) => Notice::new(Label::TableDialogCountLockingRead, Level::Warning),
+            Err(DbError::NextTransactionSet) => Notice::new(Label::TableDialogCountNextTransactionSet, Level::Warning),
             Err(DbError::SchemaChanged) => Notice::new(Label::TableDialogCountSchemaChanged, Level::Warning),
             Err(DbError::NotRepeatable(r)) => {
                 let why = self.i18n.msg(&super::super::pages::why(r)).to_string();

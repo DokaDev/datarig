@@ -271,6 +271,7 @@
 "table.dialog.count.timed_out" = "Values count stopped after {limit}: not known"
 "table.dialog.count.lock_timeout" = "Values count stopped waiting for a lock another session holds: not known"
 "table.dialog.count.locking_read" = "Values not counted: in the open transaction its reads would lock rows (SERIALIZABLE or a level not known)"
+"table.dialog.count.next_transaction_set" = "Values not counted: your next transaction has settings of its own, or may have (a SET TRANSACTION without SESSION, or a procedure that ran), and a count would use them up. Start your transaction first, or count again once a transaction has started or ended"
 "table.dialog.count.schema_changed" = "Values not counted: the column's type changed since the rows were loaded; load them again"
 "table.dialog.count.failed" = "Values count failed: {error}"
 "table.dialog.values.window" = "{from}-{to} of {total}"

@@ -269,6 +269,7 @@
 "table.dialog.count.timed_out" = "값 세기가 {limit} 뒤 멈춤: 알 수 없음"
 "table.dialog.count.lock_timeout" = "다른 세션이 잡은 잠금을 기다리다 값 세기가 멈춤: 알 수 없음"
 "table.dialog.count.locking_read" = "값을 세지 않음: 열린 트랜잭션에서는 읽기가 행을 잠금 (SERIALIZABLE 또는 알 수 없는 격리 수준)"
+"table.dialog.count.next_transaction_set" = "값을 세지 않음: 다음 트랜잭션에 따로 정한 설정이 있거나 있을 수 있어 (SESSION 없는 SET TRANSACTION, 실행된 프로시저) 세면 그 설정을 써 버림. 트랜잭션을 먼저 시작하거나, 트랜잭션이 시작되거나 끝난 뒤 다시 세세요"
 "table.dialog.count.schema_changed" = "값을 세지 않음: 행을 불러온 뒤 열의 타입이 바뀜. 다시 불러오세요"
 "table.dialog.count.failed" = "값 세기 실패: {error}"
 "table.dialog.values.window" = "{total}개 중 {from}-{to}"

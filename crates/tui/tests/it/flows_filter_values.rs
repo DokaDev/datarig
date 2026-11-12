@@ -460,11 +460,14 @@ fn a_read_only_profile_counts_reads_and_refuses_unknown_calls() {
 
 #[test]
 fn each_outcome_of_a_count_is_said_and_never_as_counts() {
-    let cases: [(DbError, &str); 6] = [
+    let cases: [(DbError, &str); 7] = [
         (DbError::TimedOut(Duration::from_secs(30)), "Values count stopped after 30s: not known"),
         (DbError::LockTimeout("waited".into()), "Values count stopped waiting for a lock"),
         (DbError::Cancelled, "Values count cancelled"),
         (DbError::LockingRead, "Values not counted: in the open transaction its reads would lock rows"),
+        // A refusal said as one, with why (MySQL: a count would use up the next transaction's
+        // settings), never as a failure.
+        (DbError::NextTransactionSet, "Values not counted: your next transaction has settings"),
         (DbError::SchemaChanged, "Values not counted: the column's type changed"),
         (DbError::AccessDenied("boom".into()), "Values count failed:"),
     ];
@@ -476,6 +479,7 @@ fn each_outcome_of_a_count_is_said_and_never_as_counts() {
         counted(&mut h, id, Err(error));
         let screen = h.screen(120, 34);
         assert!(screen.contains(said), "{said}: {screen}");
+        assert!(said.contains("failed") || !screen.contains("failed"), "{said}: not said as a failure: {screen}");
         assert!(screen.contains("~ count in the 60 loaded rows"), "the loaded values stay: {screen}");
     }
 }
