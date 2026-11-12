@@ -1142,7 +1142,7 @@ fn count_exactly_counts_a_mysql_invisible_column_by_its_catalogue_type() {
         assert_eq!(
             sent.iter().map(|s| s.1.clone()).collect::<Vec<_>>(),
             vec![format!(
-                "SELECT IF(LENGTH(`{name}`) <= {preview}, `{name}`, NULL), LENGTH(`{name}`), COUNT(*) \
+                "SELECT IF(OCTET_LENGTH(`{name}`) <= {preview}, `{name}`, NULL), OCTET_LENGTH(`{name}`), COUNT(*) \
                  FROM `shop`.`users`{other} GROUP BY `{name}` ORDER BY COUNT(*) DESC LIMIT {limit}"
             )],
             "{name}"
