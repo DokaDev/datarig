@@ -658,7 +658,10 @@ impl App {
                 .collect(),
             (_, Some(cat)) => cat
                 .iter()
-                .map(|c| ColumnFacts::new(c.name.clone(), super::filter_dialog::draft::kind_of_type(d, &c.type_name)))
+                .map(|c| ColumnFacts {
+                    zoned: super::filter_dialog::draft::zoned_type(d, &c.type_name),
+                    ..ColumnFacts::new(c.name.clone(), super::filter_dialog::draft::kind_of_type(d, &c.type_name))
+                })
                 .collect(),
             _ => self
                 .conns

@@ -295,6 +295,13 @@ pub(crate) fn catalogue_meta(d: Dialect, name: &str, type_name: &str) -> Option<
 
 /// A type name lower case, without its arguments (`(20)`, `('a','b')`), MySQL's `unsigned`
 /// and `zerofill`, and with single spaces: `character varying(20)` is `character varying`.
+/// A catalogue type of dialect `d` that is a MySQL `TIMESTAMP` ([`ColumnFacts::zoned`]).
+///
+/// [`ColumnFacts::zoned`]: datarig_core::query::ColumnFacts::zoned
+pub(crate) fn zoned_type(d: Dialect, type_name: &str) -> bool {
+    matches!(d, Dialect::MySql(_)) && base_type(type_name) == "timestamp"
+}
+
 fn base_type(type_name: &str) -> String {
     let lower = type_name.to_ascii_lowercase();
     let rest = match (lower.find('('), lower.rfind(')')) {

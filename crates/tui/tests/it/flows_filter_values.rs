@@ -825,6 +825,75 @@ fn the_sort_line_says_where_nulls_go_on_this_server() {
     }
 }
 
+/// A ticked MySQL TIMESTAMP is the instant it was read as: the session's zone changing after the
+/// tick and before Apply, or before the filter runs again, compares the same instant.
+#[test]
+fn a_ticked_mysql_timestamp_is_the_same_instant_after_the_zone_changes() {
+    let mut h = mysql();
+    dialog_on(&mut h, 1);
+    to_values(&mut h, 0);
+    h.key(KeyCode::Char(' '));
+    let instant = "at = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
+    assert_eq!(draft(&h), instant);
+    zone(&mut h, "+05:30");
+    h.key(KeyCode::Enter);
+    let sent = vec![vec![format!("SELECT * FROM `shop`.`users` WHERE ({instant})")]];
+    assert_eq!(runs(&mut h), sent, "applied after the zone changed");
+    my_page(&mut h, &["2026-11-10 15:00:00"]);
+    zone(&mut h, "-08:00");
+    h.app.dispatch(datarig_tui::app::action::Action::RunStatement);
+    assert_eq!(runs(&mut h), sent, "run again in another zone");
+}
+
+/// With only the catalogue read, a MySQL TIMESTAMP typed with an offset is written as that
+/// instant too.
+#[test]
+fn a_timestamp_typed_with_an_offset_on_the_catalogue_is_its_instant() {
+    use datarig_core::driver::keys::{CatalogColumn, OrderKeys};
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut p = datarig_core::profile::ConnectionConfig::test_db();
+    (p.name, p.driver) = ("local-my".into(), "mysql".into());
+    let cfg = datarig_core::config::Config { connections: vec![p], ..Default::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+    open_users(&mut h);
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Language(Language::Sql(Dialect::MySql(MySqlMode::default()))));
+    h.tab_db(index, DbEvent::Connected);
+    zone(&mut h, "+00:00");
+    // The table's first read cancelled: no rows held.
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(index, DbEvent::Failed { id, error: DbError::Cancelled, cancelled: true });
+    let column = |name: &str, ty: &str| CatalogColumn {
+        name: name.into(),
+        type_name: ty.into(),
+        not_null: name == "id",
+        primary_key: name == "id",
+        foreign_key: false,
+        invisible: false,
+    };
+    let keys = OrderKeys {
+        primary_key: vec!["id".into()],
+        columns: Some(vec![column("id", "int"), column("at", "timestamp(3)")]),
+        ..Default::default()
+    };
+    keys_came_with(&mut h, "local-my", keys);
+    h.sent();
+    assert!(h.app.tab().doc.table_query.as_ref().unwrap().shown.is_none(), "no rows held");
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys(" rf");
+    h.key(KeyCode::Char('j'));
+    typed(&mut h, "2026-11-10 09:30:00+05:30");
+    assert_eq!(
+        draft(&h),
+        "at = CONVERT_TZ('2026-11-10 09:30:00', '+05:30', @@session.time_zone)",
+        "{}",
+        h.screen(120, 34)
+    );
+}
+
 #[test]
 fn a_mysql_timestamp_is_ticked_only_in_the_zone_it_was_read_in() {
     let mut h = mysql();
@@ -832,11 +901,13 @@ fn a_mysql_timestamp_is_ticked_only_in_the_zone_it_was_read_in() {
     runs(&mut h);
     my_page(&mut h, &["2026-11-10 09:30:00"]);
     dialog_on(&mut h, 1);
-    // In the zone of both loads: the earlier load's value widens the condition.
+    // In the zone of both loads: the earlier load's value widens the condition, as the instant
+    // it was read as (the condition typed stays as written).
     to_values(&mut h, 1);
     h.key(KeyCode::Down);
     h.key(KeyCode::Char(' '));
-    assert_eq!(draft(&h), "at IN ('2026-11-10 09:30:00', '2026-11-11 10:00:00+00:00')");
+    let earlier = "CONVERT_TZ('2026-11-11 10:00:00', '+00:00', @@session.time_zone)";
+    assert_eq!(draft(&h), format!("at IN ('2026-11-10 09:30:00', {earlier})"));
     h.keys("u");
     h.key(KeyCode::Esc);
     // The session's zone changed since: neither the loaded nor the earlier value is taken.
