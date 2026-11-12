@@ -1230,7 +1230,7 @@ fn the_sample_is_said_at_80_columns_beside_the_lists_cue() {
 }
 
 /// `shop.users` on MySQL with its catalogue read: `id`, `at`, and the INVISIBLE `rank`
-/// (`int unsigned`) and `note` (`varchar(20)`); the dialog open on `id`.
+/// (`int unsigned`), `note` (`varchar(20)`) and `seen` (`timestamp`); the dialog open on `id`.
 fn mysql_invisible() -> Harness {
     use datarig_core::driver::keys::{CatalogColumn, OrderKeys};
     let mut h = mysql();
@@ -1250,11 +1250,41 @@ fn mysql_invisible() -> Harness {
             column("at", "timestamp", false),
             column("rank", "int unsigned", true),
             column("note", "varchar(20)", true),
+            column("seen", "timestamp", true),
         ]),
         ..Default::default()
     };
     keys_came_with(&mut h, "local-my", keys);
     h
+}
+
+/// An INVISIBLE MySQL TIMESTAMP is written from its instant in UTC, as a visible one is: a
+/// value typed with an offset, and a counted value ticked (an instant of the session's zone),
+/// go out as `CONVERT_TZ`, never as text with an offset (which MariaDB does not read).
+#[test]
+fn an_invisible_mysql_timestamp_is_written_from_its_instant() {
+    let mut h = mysql_invisible();
+    for _ in 0..4 {
+        h.key(KeyCode::Char('j'));
+    }
+    typed(&mut h, "2026-11-10 09:30:00+05:30");
+    let typed_instant = "seen = CONVERT_TZ('2026-11-10 04:00:00', '+00:00', @@session.time_zone)";
+    assert_eq!(draft(&h), typed_instant, "{}", h.screen(120, 34));
+    // Counted on a dialog of its own.
+    let mut h = mysql_invisible();
+    for _ in 0..4 {
+        h.key(KeyCode::Char('j'));
+    }
+    h.keys("#");
+    let sent = counts(&mut h);
+    assert_eq!(sent.len(), 1, "{}", h.screen(120, 34));
+    counted(&mut h, sent[0].0, Ok(GroupCounts { values: vec![value(Some("2026-11-10 09:30:00"), 3)], more: false }));
+    to_values(&mut h, 0);
+    h.key(KeyCode::Char(' '));
+    let instant = "seen = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
+    assert_eq!(draft(&h), instant, "{}", h.screen(120, 34));
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("SELECT * FROM `shop`.`users` WHERE ({instant})")]]);
 }
 
 /// A condition typed on an INVISIBLE column is written as its catalogue type says (a number

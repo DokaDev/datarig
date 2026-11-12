@@ -681,7 +681,9 @@ impl App {
                 }
                 let kind = super::filter_dialog::draft::catalogue_meta(d, &c.name, &c.type_name)
                     .map_or(ColumnKind::Other, |m| column_kind(&m));
-                columns.push(ColumnFacts::new(c.name.clone(), kind));
+                // A TIMESTAMP is written from its instant, as one of the rows is.
+                let zoned = super::filter_dialog::draft::zoned_type(d, &c.type_name);
+                columns.push(ColumnFacts { zoned, ..ColumnFacts::new(c.name.clone(), kind) });
             }
         }
         let s = self.table_structure(t);
