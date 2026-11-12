@@ -512,6 +512,27 @@ fn the_dialog_undoes_a_grid_key() {
     assert_eq!(runs(&mut h), sent("id > 0"));
 }
 
+/// A sort with NULLs asked elsewhere than the server puts them is another order: the menu's
+/// sort of the column the same way (NULLs where the server puts them) is offered, not dimmed.
+#[test]
+fn a_sort_with_nulls_asked_elsewhere_is_not_sorted_so() {
+    let mut h = users();
+    h.command("orderby name ASC NULLS FIRST");
+    assert_eq!(runs(&mut h), vec![vec![format!(r#"{ALL} ORDER BY "name" ASC NULLS FIRST"#)]]);
+    page(&mut h);
+    at(&mut h, 0, 1);
+    h.keys("F");
+    let dimmed = h.app.menu_dimmed_rows();
+    assert!(!dimmed.iter().any(|(l, _)| *l == "↑ Sort ascending, NULLs last"), "{dimmed:?}");
+    h.key(KeyCode::Esc);
+    assert_eq!(menu(&mut h, 0, 1, "↑ Sort ascending, NULLs last"), vec![vec![format!(r#"{ALL} ORDER BY "name" ASC"#)]]);
+    page(&mut h);
+    // Sorted so now: dimmed.
+    at(&mut h, 0, 1);
+    h.keys("F");
+    assert!(h.app.menu_dimmed_rows().iter().any(|(l, w)| *l == "↑ Sort ascending, NULLs last" && w == "sorted so"));
+}
+
 /// The column menu: the column's sort, the dialog, only and exclude the cursor's value, the
 /// column's own conditions out; each runs what it showed.
 #[test]

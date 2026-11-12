@@ -84,9 +84,16 @@ impl App {
             .as_ref()
             .map(|q| q.order.iter().filter(|k| k.origin == KeyOrigin::User).cloned().collect())
             .unwrap_or_default();
-        let alone = |dir: Dir| user.len() == 1 && user[0].col == column && user[0].dir == dir;
-        let sorted = user.iter().any(|k| k.col == column);
         let dialect = self.tab_dialect(id);
+        // Sorted by this column alone, this way, with NULLs where the entry puts them (the
+        // server's place): one with NULLs asked elsewhere is another order.
+        let alone = |dir: Dir| {
+            user.len() == 1
+                && user[0].col == column
+                && user[0].dir == dir
+                && user[0].nulls_first(dialect) == OrderKey::user(column.clone(), dir).nulls_first(dialect)
+        };
+        let sorted = user.iter().any(|k| k.col == column);
         for (c, glyph, l) in [
             (ColumnItem::SortAsc, "↑", Label::TableColumnSortAsc),
             (ColumnItem::SortDesc, "↓", Label::TableColumnSortDesc),
