@@ -212,8 +212,9 @@ impl App {
     }
 
     /// The key that runs entry `c` of the column menu, which it shows: the grid's key of the
-    /// same action when that is one key, no key that moves through the menu, and no other
-    /// entry's. Sorting descending has none (in the grid it is the sort key twice).
+    /// same action that is one key the menu's own keys leave to it (the one the grid's hints
+    /// show first), no key that moves through the menu, and no other entry's. Sorting
+    /// descending has none (in the grid it is the sort key twice).
     pub(super) fn column_item_key(&self, c: ColumnItem) -> Option<KeyChord> {
         let all = [ColumnItem::SortAsc, ColumnItem::Dialog, ColumnItem::Only, ColumnItem::Exclude, ColumnItem::Hide];
         let key = |c: ColumnItem| {
@@ -225,14 +226,24 @@ impl App {
                 ColumnItem::Hide => TableAction::Hide,
                 ColumnItem::SortDesc | ColumnItem::SortClear | ColumnItem::ClearFilter => return None,
             };
-            match self.keymap.hint_keys(Action::Table(a), Ctx::Grid, self.enhanced_keys)?[..] {
-                [k] if !column_menu_moves(k) => Some(k),
+            // The key the grid's hints show first, else another of its keys.
+            let a = Action::Table(a);
+            let hint = self.keymap.hint_keys(a, Ctx::Grid, self.enhanced_keys);
+            hint.into_iter().chain(self.keymap.keys_for(a, Ctx::Grid)).find_map(|keys| match keys[..] {
+                [k] if !column_menu_moves(k) && self.reaches_menu(k) => Some(k),
                 _ => None,
-            }
+            })
         };
         let k = key(c)?;
         let others = all.into_iter().filter(|&o| o != c).any(|o| key(o) == Some(k));
         (!others).then_some(k)
+    }
+
+    /// Key `k` pressed in the menu comes to the menu itself: no key of the menu's own (nor
+    /// the start of one) takes it first.
+    fn reaches_menu(&self, k: KeyChord) -> bool {
+        let (exact, longer) = self.keymap.resolve_seq(Ctx::ContextMenu, &[k]);
+        !longer && matches!(exact, None | Some(crate::keymap::Target::Reserved(_)))
     }
 
     /// The keys shown with entry `c` of the column menu: the one that runs it there.

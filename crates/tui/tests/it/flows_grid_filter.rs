@@ -960,3 +960,23 @@ fn the_column_menu_takes_keys_typed_with_a_korean_input_source() {
     h.key(KeyCode::Char('\u{3153}'));
     assert_eq!(h.app.overlays.menu().unwrap().filter.text(), "\u{3153}");
 }
+
+/// An entry's grid key that the menu's own keys take first (a key of the menu, or the start of
+/// one) is neither shown nor run as the entry's: the menu's key keeps its meaning.
+#[test]
+fn the_column_menu_shows_no_key_its_own_keys_take() {
+    for menu_keys in ["\"f2\" = \"help.context\"", "\"f2 f3\" = \"help.context\""] {
+        let mut cfg = test_db_config();
+        let text = format!(
+            "[keymap.grid]\n\"f2\" = \"table.column.hide\"\n\n[keymap.\"overlay.context_menu\"]\n{menu_keys}\n"
+        );
+        cfg.keymap = datarig_core::config::parse(&text).unwrap().keymap;
+        let mut h = users_from(Harness::connected_with(&cfg, Lang::En), Some(collations(Some(true))));
+        at(&mut h, 0, 1);
+        h.keys("F");
+        let shown: Vec<String> = lines(&h).into_iter().filter(|l| l.starts_with("Hide")).collect();
+        assert_eq!(shown, ["Hide column | C"], "{menu_keys}: the grid's other key, which the menu runs");
+        h.key(KeyCode::F(2));
+        assert_eq!(hidden_cols(&h), 0, "{menu_keys}: F2 is the menu's");
+    }
+}
