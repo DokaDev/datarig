@@ -273,6 +273,11 @@ impl App {
         use table_query::{Field, Refusal};
         let id = self.tab().id;
         self.filter_popup_close();
+        // Refused before the draft changes: a busy tab keeps what it would run next, and the
+        // field keeps the keys and the text not applied.
+        if self.tab_busy(id) {
+            return self.flash_busy();
+        }
         let Some(target) = self.table_target(id) else { return };
         let d = self.tab_dialect(id);
         let Some(tq) = self.table_query_mut(id) else { return };
