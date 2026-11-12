@@ -1218,7 +1218,7 @@ fn sets_session_path(v: &Value) -> bool {
 }
 
 /// A function an object of the parse tree may call, by name.
-enum Call<'a> {
+pub(crate) enum Call<'a> {
     /// A `FuncCall`: the names it is written with (`f`, `schema.f`, `database.schema.f`), and
     /// the call (its arguments).
     Func(Vec<&'a str>, &'a Value),
@@ -1233,7 +1233,7 @@ enum Call<'a> {
 }
 
 /// The calls of one object of the parse tree ([`Call`]).
-fn calls(o: &serde_json::Map<String, Value>) -> Vec<Call<'_>> {
+pub(crate) fn calls(o: &serde_json::Map<String, Value>) -> Vec<Call<'_>> {
     if let Some(call) = o.get("FuncCall") {
         return vec![Call::Func(call["funcname"].as_array().into_iter().flatten().filter_map(text).collect(), call)];
     }

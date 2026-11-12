@@ -707,6 +707,32 @@ fn server_file_and_large_object_calls_are_refused_on_every_profile() {
 }
 
 #[test]
+fn refused_calls_in_attribute_notation_are_refused_on_every_profile() {
+    let pg = Dialect::Postgres;
+    for (text, f) in [
+        ("(id::pg_catalog.oid).lo_get IS NOT NULL", "lo_get"),
+        ("(0::pg_catalog.oid).lo_create > 0", "lo_create"),
+        ("(16400::oid).lo_unlink = 1", "lo_unlink"),
+        ("(id::oid).LO_GET IS NOT NULL", "lo_get"),
+        ("((id::oid).\"lo_get\") IS NOT NULL", "lo_get"),
+        ("id = 1 OR (id::oid).lo_get IS NOT NULL", "lo_get"),
+        ("EXISTS (SELECT 1 WHERE (id::oid).lo_unlink = 1)", "lo_unlink"),
+        ("users.lo_get IS NOT NULL", "lo_get"),
+        ("(0.5).pg_sleep IS NULL", "pg_sleep"),
+        ("('zz_s'::regclass).nextval > 0", "nextval"),
+    ] {
+        for read_only in [false, true] {
+            let r = check(pg, text, read_only);
+            assert_eq!(r, Err(BarRefusal::RefusedCalls(vec![f.to_string()])), "{text} (read-only: {read_only})");
+        }
+    }
+    // A field or column in attribute notation that is no refused built-in is not a call.
+    for text in ["users.id = 1", "(users).id = 1", "(id::text) = 'a'"] {
+        assert_eq!(check(pg, text, false), Ok(FilterVerdict::Clear), "{text}");
+    }
+}
+
+#[test]
 fn the_call_lists_are_sorted_disjoint_built_ins() {
     for list in [PG_FILTER_CALLS, PG_REFUSED_CALLS, MYSQL_FILTER_CALLS, MYSQL_REFUSED_CALLS] {
         assert!(list.windows(2).all(|w| w[0] < w[1]), "{list:?}");

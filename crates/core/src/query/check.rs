@@ -24,6 +24,8 @@
 //!    and is refused on a read-only profile: a function may do on the server what a read-only
 //!    transaction does not stop.
 //!
+//! A refused built-in is refused in attribute notation too (`(oid).lo_get`, `t.lo_unlink`),
+//! where any later name of a column reference or an indirection counts, even a column's.
 //! What is not seen, as for the editor's classifier: a function of the user's called in
 //! attribute notation (`t.f`), a user-defined operator, and code a view or a policy runs.
 
@@ -680,15 +682,28 @@ fn pg_shape(stmts: &[Value], table: &TableName) -> Result<Vec<Call>, ShapeProble
     if b["where_clause"].is_null() || lists.iter().any(|k| !empty(&b[k])) || nodes.iter().any(|k| !b[k].is_null()) {
         return Err(ShapeProblem::Clause);
     }
+    // Every call, however it is written: a `FuncCall`, or attribute notation (`(expr).f`,
+    // `t.f`), which the server runs as `f(expr)` when there is no column or field `f`. A name in
+    // attribute notation counts only when refused: any other is a column or a field as often as
+    // a call, and is not asked about (see the module docs).
     let mut calls = Vec::new();
     risk::walk(b, &mut |o| {
-        let Some(call) = o.get("FuncCall") else { return };
-        let names: Vec<&str> = call["funcname"].as_array().into_iter().flatten().filter_map(risk::text).collect();
-        let allowed = matches!(names.as_slice(), [f] | ["pg_catalog", f] if PG_FILTER_CALLS.binary_search(f).is_ok());
-        let refused = names.last().is_some_and(|f| PG_REFUSED_CALLS.binary_search(f).is_ok());
-        let call = Call { written: names.join("."), allowed, refused };
-        if !calls.contains(&call) {
-            calls.push(call);
+        for found in risk::calls(o) {
+            let call = match found {
+                risk::Call::Func(names, _) => {
+                    let allowed =
+                        matches!(names.as_slice(), [f] | ["pg_catalog", f] if PG_FILTER_CALLS.binary_search(f).is_ok());
+                    let refused = names.last().is_some_and(|f| PG_REFUSED_CALLS.binary_search(f).is_ok());
+                    Call { written: names.join("."), allowed, refused }
+                }
+                risk::Call::Attribute(f, _) if PG_REFUSED_CALLS.binary_search(&f).is_ok() => {
+                    Call { written: f.to_string(), allowed: false, refused: true }
+                }
+                risk::Call::Attribute(..) => continue,
+            };
+            if !calls.contains(&call) {
+                calls.push(call);
+            }
         }
     });
     Ok(calls)

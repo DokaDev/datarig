@@ -220,6 +220,33 @@ fn server_file_and_large_object_calls_are_refused_on_every_profile() {
 }
 
 #[test]
+fn refused_calls_in_attribute_notation_are_refused_on_every_profile() {
+    for read_only in [false, true] {
+        let mut h = match read_only {
+            false => users(Lang::En),
+            true => {
+                let mut h = self::read_only(Lang::En);
+                open_users(&mut h);
+                answer(&mut h);
+                h.sent();
+                h
+            }
+        };
+        for text in [
+            "(id::pg_catalog.oid).lo_get IS NOT NULL",
+            "(0::pg_catalog.oid).lo_create > 0",
+            "(16400::oid).lo_unlink = 1",
+        ] {
+            h.command(&format!("where {text}"));
+            assert!(!h.app.overlays.is_open(OverlayKind::Confirm), "{text}: refused, not asked");
+            assert!(runs(&mut h).is_empty(), "{text}: nothing sent");
+            assert!(status(&h).starts_with("Filter refused: "), "{text} ({read_only}): {}", status(&h));
+            assert!(status(&h).contains("large objects"), "{text}: {}", status(&h));
+        }
+    }
+}
+
+#[test]
 fn a_read_only_profile_refuses_unchecked_calls_before_sending() {
     let mut h = read_only(Lang::En);
     open_users(&mut h);
