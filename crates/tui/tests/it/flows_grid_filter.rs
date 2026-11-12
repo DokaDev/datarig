@@ -711,6 +711,22 @@ fn mysql(charset: &str, columns: Vec<ColumnMeta>, rows: Vec<Vec<Option<String>>>
     h
 }
 
+/// A PostgreSQL `real` cell's value as the grid shows it (its shortest text) goes as a string
+/// the server reads as a `real`, for `=` and `!` alike: a bare `0.1` is a `numeric`, compared
+/// after both widen to `double precision`, and would match nothing and exclude nothing.
+#[test]
+fn a_real_cell_filters_by_the_value_it_holds() {
+    let mut h = users();
+    let s = |v: &str| Some(v.to_string());
+    let cols = || vec![col("id", "int8", ValueKind::Integer), col("r", "float4", ValueKind::Float)];
+    let rows = || vec![vec![s("1"), s("0.1")], vec![s("2"), None]];
+    clear_with(&mut h, cols(), rows());
+    assert_eq!(key_on(&mut h, 0, 1, "="), vec![vec![format!("{ALL} WHERE (r = '0.1')")]]);
+    page_with(&mut h, cols(), rows());
+    clear_with(&mut h, cols(), rows());
+    assert_eq!(key_on(&mut h, 0, 1, "!"), vec![vec![format!("{ALL} WHERE (r IS DISTINCT FROM '0.1')")]]);
+}
+
 #[test]
 fn mysql_literals_follow_the_session() {
     let cols = || {
