@@ -458,6 +458,70 @@ fn a_mysql_timestamp_instant_is_written_from_utc_and_refused_when_it_is_none() {
     }
 }
 
+/// The instant `render` writes for a MySQL TIMESTAMP is read back only where it would be written
+/// again: compared with a column known to be a TIMESTAMP, in exactly the form written. On a
+/// VARCHAR, a DATETIME or a column of unknown type (as from the history before the table's types
+/// are read) it stays as written: an edit would write its value back as a string.
+#[test]
+fn a_convert_tz_is_read_as_an_instant_only_on_a_timestamp_in_the_form_written() {
+    let facts = |name: &str, kind, zoned| ColumnFacts { zoned, ..ColumnFacts::new(name, kind) };
+    let t = Target {
+        utf8mb4: true,
+        ..Target::new(
+            MY,
+            vec![
+                facts("at", ColumnKind::Other, true),
+                facts("name", ColumnKind::Text, false),
+                facts("made", ColumnKind::Other, false),
+            ],
+        )
+    };
+    let instant = "CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@session.time_zone)";
+    let v = text("2026-11-10 09:30:00+00:00");
+    for (sql, want) in [
+        (format!("at = {instant}"), cmp("at", CmpOp::Eq, v.clone())),
+        (format!("at <=> {instant}"), Cond::NotDistinct { col: "at".into(), value: v.clone(), negated: false }),
+        (format!("at IN ({instant})"), Cond::In { col: "at".into(), values: vec![v.clone()], negated: false }),
+        (
+            format!("at BETWEEN {instant} AND '2026-11-11'"),
+            Cond::Between { col: "at".into(), lo: v.clone(), hi: text("2026-11-11"), negated: false },
+        ),
+    ] {
+        assert_eq!(recognise(&sql, &t), Some(want), "{sql}");
+    }
+    let raw = |sql: &str| Some(Cond::Raw(sql.to_string()));
+    for sql in [
+        // A VARCHAR, a DATETIME: `render` writes the value back as a string.
+        format!("name = {instant}"),
+        format!("name IN ('a', {instant})"),
+        format!("made = {instant}"),
+        format!("made BETWEEN {instant} AND '2026-11-11'"),
+        // Not the form written: another source zone, another destination, not an instant.
+        "at = CONVERT_TZ('2026-11-10 09:30:00', '+05:30', @@session.time_zone)".to_string(),
+        "at = CONVERT_TZ('2026-11-10 09:30:00', '+0:00', @@session.time_zone)".to_string(),
+        "at = CONVERT_TZ('2026-11-10 09:30:00', 'UTC', @@session.time_zone)".to_string(),
+        "at = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@time_zone)".to_string(),
+        "at = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', @@global.time_zone)".to_string(),
+        "at = CONVERT_TZ('2026-11-10 09:30:00', '+00:00', '+00:00')".to_string(),
+        "at = CONVERT_TZ('2026-02-30 09:30:00', '+00:00', @@session.time_zone)".to_string(),
+        "at = CONVERT_TZ('1970-01-01 00:00:00', '+00:00', @@session.time_zone)".to_string(),
+        "at = CONVERT_TZ('2026-11-10 09:30:00+00:00', '+00:00', @@session.time_zone)".to_string(),
+        // Not a comparison.
+        format!("at LIKE {instant}"),
+    ] {
+        assert_eq!(recognise(&sql, &t), raw(&sql), "{sql}");
+    }
+    // The table's types not read yet (the history's filter before they are): every column of
+    // unknown type, so the instant stays as written; with them read, it is the instant.
+    let names = Target::new(MY, vec![ColumnFacts::new("at", ColumnKind::Other)]);
+    let sql = format!("at = {instant}");
+    assert_eq!(recognise(&sql, &names), raw(&sql));
+    assert_eq!(recognise(&sql, &t), Some(cmp("at", CmpOp::Eq, v.clone())));
+    // PostgreSQL has no such function: as written.
+    let pg = Target::new(Dialect::Postgres, vec![facts("at", ColumnKind::Other, true)]);
+    assert_eq!(recognise(&sql, &pg), raw(&sql));
+}
+
 #[test]
 fn render_in_takes_null_out_of_the_list() {
     let r#in = |values: Vec<Value>, negated| Cond::In { col: "id".into(), values, negated };
