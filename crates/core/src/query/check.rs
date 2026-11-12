@@ -14,7 +14,7 @@
 //!    `WHERE`. MySQL, on the text's tokens: no `INTO`, `LOCK`, `PROCEDURE` or `FOR UPDATE`/`FOR
 //!    SHARE` anywhere, no `UNION`, `INTERSECT`, `EXCEPT`, `FOR`, `LIMIT`, `ORDER`, `GROUP`,
 //!    `HAVING` or `WINDOW` outside the text's own parentheses, no assignment (`:=`), and no
-//!    `NEXT VALUE FOR` (MariaDB's, which advances a sequence for each row read).
+//!    `NEXT VALUE FOR` nor `s.nextval` (MariaDB's, which advance a sequence for each row read).
 //! 3. **Classifier**: the whole statement is a plain read with no danger
 //!    ([`crate::sql::risk`]); a text it cannot read or that is too complex is refused.
 //! 4. **Function calls**: only the built-ins of [`PG_FILTER_CALLS`] or [`MYSQL_FILTER_CALLS`]
@@ -114,7 +114,9 @@ pub enum ShapeProblem {
     Into,
     /// MySQL: a variable assignment (`:=`).
     Assignment,
-    /// MariaDB: `NEXT VALUE FOR`, which advances a sequence for each row read.
+    /// MariaDB: `NEXT VALUE FOR` or `s.nextval` (the ORACLE sql mode's spelling), which
+    /// advance a sequence for each row read. Refused whatever the session's sql mode: a name
+    /// `nextval` after a `.` counts, even a column's.
     Sequence,
 }
 
@@ -386,6 +388,12 @@ pub fn check_filter(
             let mut calls = Vec::new();
             for r in &readings {
                 mysql_shape(&r.tokens, text).map_err(|(problem, at)| BarRefusal::Shape { problem, at: Some(at) })?;
+                for written in mysql_sequence_reads(&r.tokens, text) {
+                    let call = Call { written, allowed: false, refused: false };
+                    if !calls.contains(&call) {
+                        calls.push(call);
+                    }
+                }
                 let Dialect::MySql(mode) = r.dialect else { continue };
                 let unread_here = || BarRefusal::NotRead { class: risk.class, danger: Some(Danger::Unrecognized) };
                 for (name, qualified) in risk::mysql::called(&sql, mode).ok_or_else(unread_here)? {
@@ -578,6 +586,7 @@ fn mysql_shape(tokens: &[Token], text: &str) -> Result<(), (ShapeProblem, Range<
             }
             (_, "INTO") => ShapeProblem::Into,
             (_, "NEXT") if next_is(&["VALUE"]) => ShapeProblem::Sequence,
+            _ if after_dot(&ws, i) && unquoted(t.text(text)).eq_ignore_ascii_case("NEXTVAL") => ShapeProblem::Sequence,
             (_, "LOCK") => ShapeProblem::Locking,
             (_, "FOR") if next_is(&["UPDATE", "SHARE"]) => ShapeProblem::Locking,
             (_, "PROCEDURE") => ShapeProblem::Clause,
@@ -588,6 +597,41 @@ fn mysql_shape(tokens: &[Token], text: &str) -> Result<(), (ShapeProblem, Range<
         return Err((problem, at));
     }
     Ok(())
+}
+
+/// Whether word `i` of `ws` follows a `.`: a name in attribute notation (`s.nextval`).
+fn after_dot(ws: &[&Token], i: usize) -> bool {
+    (ws[i].is_word() || ws[i].kind == Tok::QuotedIdent) && i > 0 && ws[i - 1].kind == Tok::Dot
+}
+
+/// A name without its quotes (`` `a` ``, `"a"`), as the server reads it when no quote is doubled.
+fn unquoted(name: &str) -> &str {
+    let quoted = name.len() >= 2
+        && ((name.starts_with('`') && name.ends_with('`')) || (name.starts_with('"') && name.ends_with('"')));
+    if quoted { &name[1..name.len() - 1] } else { name }
+}
+
+/// MariaDB's reads of a sequence's last value that are not written as a call: `s.currval` (a
+/// session in the ORACLE sql mode) and `PREVIOUS VALUE FOR s`, named as `CURRVAL` and `PREVIOUS
+/// VALUE FOR`. They change nothing but answer from what the session did before, as `LASTVAL(s)`
+/// does, so they are asked about as a call whose effects are not known.
+fn mysql_sequence_reads(tokens: &[Token], text: &str) -> Vec<String> {
+    let ws: Vec<&Token> = tokens.iter().filter(|t| !t.is_trivia() && t.start < text.len()).collect();
+    let word = |i: usize, w: &str| ws.get(i).is_some_and(|t| t.is_word() && t.text(text).eq_ignore_ascii_case(w));
+    let mut out = Vec::new();
+    for i in 0..ws.len() {
+        let name = if after_dot(&ws, i) && unquoted(ws[i].text(text)).eq_ignore_ascii_case("CURRVAL") {
+            "CURRVAL"
+        } else if word(i, "PREVIOUS") && word(i + 1, "VALUE") && word(i + 2, "FOR") {
+            "PREVIOUS VALUE FOR"
+        } else {
+            continue;
+        };
+        if !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+    }
+    out
 }
 
 /// PostgreSQL: where text `text` (its tokens `tokens`) writes a row lock, `FOR` through its

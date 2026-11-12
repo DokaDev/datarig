@@ -19,7 +19,7 @@
 "table.filter.why.locking" = "row locks (FOR UPDATE, FOR SHARE) hold up other sessions"
 "table.filter.why.into" = "INTO is not allowed"
 "table.filter.why.assignment" = "variable assignment (:=) is not allowed"
-"table.filter.why.sequence" = "NEXT VALUE FOR would advance a sequence for each row read"
+"table.filter.why.sequence" = "NEXT VALUE FOR and .NEXTVAL would advance a sequence for each row read"
 "table.filter.why.not_read" = "not read as a plain read of the table"
 "table.filter.why.refused_calls" = "{names}: waits, locks, changes the session, calls out, or reads or writes the server's files or large objects"
 "table.filter.why.unchecked_calls" = "{names}: not known to be free of side effects (read-only connection)"

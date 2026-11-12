@@ -652,6 +652,46 @@ fn mariadb_sequences_are_not_advanced_by_a_filter() {
 }
 
 #[test]
+fn mariadb_oracle_mode_sequence_names_are_not_advanced_or_read_unasked() {
+    for read_only in [false, true] {
+        // `s.nextval` advances the sequence in the ORACLE sql mode: refused in every mode.
+        for (text, name) in [
+            ("id < s.nextval", "nextval"),
+            ("id < S.NEXTVAL", "NEXTVAL"),
+            ("id < `s`.`nextval`", "`nextval`"),
+            ("id < shop.s.nextval", "nextval"),
+            ("id < (s.nextval)", "nextval"),
+            ("id IN (1, (s . nextval))", "nextval"),
+        ] {
+            let r = check(MY, text, read_only);
+            let at = text.rfind(name).unwrap();
+            assert_eq!(
+                r,
+                Err(BarRefusal::Shape { problem: ShapeProblem::Sequence, at: Some(at..at + name.len()) }),
+                "{text} (read-only: {read_only})"
+            );
+        }
+        // The last value read back changes nothing: asked about, refused when read-only, as
+        // `LASTVAL(s)` is.
+        for (text, name) in [
+            ("id < s.currval", "CURRVAL"),
+            ("id < `shop`.`s`.`CurrVal`", "CURRVAL"),
+            ("id < (PREVIOUS VALUE FOR s)", "PREVIOUS VALUE FOR"),
+        ] {
+            let r = check(MY, text, read_only);
+            match read_only {
+                false => {
+                    assert_eq!(r, Ok(FilterVerdict::NeedsConfirm(vec![Confirm::Calls(vec![name.into()])])), "{text}")
+                }
+                true => assert_eq!(r, Err(BarRefusal::UncheckedCalls(vec![name.into()])), "{text}"),
+            }
+        }
+    }
+    // A name that is no sequence's in attribute notation stays a column.
+    assert_eq!(check(MY, "users.id < 3", false), Ok(FilterVerdict::Clear));
+}
+
+#[test]
 fn server_file_and_large_object_calls_are_refused_on_every_profile() {
     let pg = Dialect::Postgres;
     let calls = [
