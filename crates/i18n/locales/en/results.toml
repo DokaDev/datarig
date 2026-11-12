@@ -216,6 +216,7 @@
 "results.count.sent_held" = "Counting rows (no time limit while the result is held open), sent for you: {sql}"
 "results.count.timed_out" = "Count stopped after {limit}: the number of rows is not known"
 "results.count.lock_timeout" = "Count stopped: it waited too long for a lock another session holds (the number of rows is not known)"
+"results.count.next_transaction_set" = "Rows not counted: your next transaction has settings of its own, or may have (a SET TRANSACTION without SESSION, or a procedure that ran), and a count would use them up. Start your transaction first, or count again once a transaction has started or ended"
 "results.count.menu_title" = "Rows of the filtered table"
 "results.count.entry" = "Exact count"
 "results.count.hint_limit" = "stops after {limit}"

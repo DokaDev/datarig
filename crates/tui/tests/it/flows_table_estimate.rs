@@ -16,6 +16,7 @@ use datarig_core::driver::{DbCommand, DbError, DbEvent};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_i18n::Lang;
+use datarig_tui::app::Level;
 use datarig_tui::app::overlay::OverlayKind;
 use ratatui::crossterm::event::KeyCode;
 use std::time::Duration;
@@ -302,6 +303,8 @@ fn a_count_stopped_cancelled_or_lost_is_never_a_number() {
         assert!(h.app.tab().exec.running.is_none());
         let t = title(&mut h, 120, 30);
         assert!(t.contains("page 1 / ?"), "{t}");
+        // A count that did not come is said as a warning (a failure of the server's as an error).
+        assert_eq!(h.app.tab().status.as_ref().map(|n| n.level), Some(Level::Warning), "{}", status(&h));
         status(&h)
     };
     assert_eq!(
@@ -317,6 +320,10 @@ fn a_count_stopped_cancelled_or_lost_is_never_a_number() {
             .starts_with("Count stopped: it waited too long for a lock")
     );
     assert_eq!(answer(DbError::Cancelled), "Count cancelled");
+    // MySQL's refusal to use up the next transaction's settings: said as a refusal with why,
+    // as a warning, never as a failure.
+    let refused = answer(DbError::NextTransactionSet);
+    assert!(refused.starts_with("Rows not counted: your next transaction has settings"), "{refused}");
     // The connection lost while it counts: the usual words, no count.
     let mut h = pg(None);
     h.keys("#");

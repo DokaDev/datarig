@@ -478,6 +478,10 @@ impl App {
             Err(datarig_core::driver::DbError::LockTimeout(_)) => {
                 Notice::new(Label::ResultsCountLockTimeout, Level::Warning)
             }
+            // MySQL: refused before it ran, as it would use up the next transaction's settings.
+            Err(datarig_core::driver::DbError::NextTransactionSet) => {
+                Notice::new(Label::ResultsCountNextTransactionSet, Level::Warning)
+            }
             // The server's side of the allowlist refused it (asked right before).
             Err(datarig_core::driver::DbError::NotRepeatable(r)) => {
                 let why = self.i18n.msg(&why(&r)).to_string();

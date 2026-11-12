@@ -214,6 +214,7 @@
 "results.count.sent_held" = "행 수 세는 중 (결과를 열어 둔 동안은 시간 제한 없음, 대신 보냄): {sql}"
 "results.count.timed_out" = "{limit} 뒤 행 수 세기를 멈췄습니다: 행 수는 알 수 없습니다"
 "results.count.lock_timeout" = "행 수 세기를 멈췄습니다: 다른 세션이 가진 잠금을 너무 오래 기다렸습니다 (행 수는 알 수 없음)"
+"results.count.next_transaction_set" = "행 수를 세지 않음: 다음 트랜잭션에 따로 정한 설정이 있거나 있을 수 있어 (SESSION 없는 SET TRANSACTION, 실행된 프로시저) 세면 그 설정을 써 버림. 트랜잭션을 먼저 시작하거나, 트랜잭션이 시작되거나 끝난 뒤 다시 세세요"
 "results.count.menu_title" = "필터한 테이블의 행 수"
 "results.count.entry" = "정확한 행 수"
 "results.count.hint_limit" = "{limit} 뒤 멈춤"
