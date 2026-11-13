@@ -624,7 +624,10 @@ impl App {
 /// rolled back, one tab at a time ([`App::tx_choice`]).
 pub(super) struct PendingEnd {
     pub action: ConfirmAction,
+    /// Commit (a failed transaction is rolled back instead), or roll back.
     pub commit: bool,
+    /// A commit where some of the transactions failed (those are rolled back).
+    pub mixed: bool,
     /// The tabs still to end, in order.
     pub tabs: VecDeque<TabId>,
     /// The tab whose end the server is asked for now.
@@ -677,7 +680,15 @@ impl App {
         if !at_risk.iter().all(|id| self.tabs.get(*id).is_some_and(endable)) {
             return;
         }
-        let commit = !at_risk.iter().any(|id| self.tabs.get(*id).is_some_and(|t| t.exec.tx_aborted));
+        // A failed transaction can only be rolled back; the others may still be committed.
+        let failed: Vec<String> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| at_risk.contains(&t.id) && t.exec.tx_aborted)
+            .map(|(i, _)| (i + 1).to_string())
+            .collect();
+        let commit = failed.len() < at_risk.len();
         let several =
             matches!(action, ConfirmAction::Quit | ConfirmAction::Disconnect { .. } | ConfirmAction::DeleteProfile(_));
         let mut lines = Vec::new();
@@ -700,6 +711,10 @@ impl App {
                 c.text = Msg::QuitTxTabs { count: n };
             }
             c.details.extend(lines);
+            if commit && !failed.is_empty() {
+                let count = failed.len() as u64;
+                c.details.push(Msg::TxChoiceFailedTabs { count, tabs: failed.join(", ") });
+            }
         }
     }
 
@@ -713,7 +728,7 @@ impl App {
     }
 
     /// `c` (`commit`) or `r` on a question that offers it: end the open transactions its answer
-    /// would end, one tab at a time, and go on with the answer once the server confirmed each.
+    /// would end, one tab at a time (a commit rolls back the ones that failed), and go on with the answer once the server confirmed each.
     /// The first that does not end as asked (a failed commit, a rollback instead, an unknown
     /// outcome, a lost connection) stops it all: nothing more is ended and the answer does not
     /// go on; the tab says why. While it waits the status bar says so, and `Esc` stops waiting.
@@ -750,7 +765,8 @@ impl App {
             .filter(|id| self.tabs.get(*id).is_some_and(|t| t.exec.user_tx()))
             .collect();
         let total = tabs.len();
-        self.pending_end = Some(PendingEnd { action, commit, tabs, current: None, total, asked: 0 });
+        let mixed = commit && tabs.iter().any(|id| self.tabs.get(*id).is_some_and(|t| t.exec.tx_aborted));
+        self.pending_end = Some(PendingEnd { action, commit, mixed, tabs, current: None, total, asked: 0 });
         self.end_next();
     }
 
@@ -770,7 +786,9 @@ impl App {
             // Whatever ends the sessions now: nothing open is lost.
             return self.confirmed(p.action, None, None);
         };
-        let commit = p.commit;
+        // A failed transaction cannot commit: it is rolled back.
+        let commit = p.commit && !self.tabs.get(id).is_some_and(|t| t.exec.tx_aborted);
+        let Some(p) = self.pending_end.as_mut() else { return };
         p.current = Some(id);
         p.asked += 1;
         if !self.tabs.get(id).is_some_and(|t| t.exec.user_tx()) {
@@ -823,9 +841,13 @@ impl App {
 
     /// The pending answer stops at tab `id`: nothing more ends, and nothing goes on.
     fn end_stopped(&mut self, id: TabId) {
-        let commit = self.pending_end.take().is_some_and(|p| p.commit);
+        let (commit, mixed) = self.pending_end.take().map_or((false, false), |p| (p.commit, p.mixed));
         let tab = self.tabs.iter().position(|t| t.id == id).map_or_else(String::new, |i| (i + 1).to_string());
-        let m = if commit { Msg::TxEndStoppedCommit { tab } } else { Msg::TxEndStoppedRollback { tab } };
+        let m = match (commit, mixed) {
+            (true, true) => Msg::TxEndStoppedMixed { tab },
+            (true, false) => Msg::TxEndStoppedCommit { tab },
+            (false, _) => Msg::TxEndStoppedRollback { tab },
+        };
         self.status = Some(Notice::new(m, Level::Error));
     }
 
@@ -854,9 +876,10 @@ impl App {
         let p = self.pending_end.as_ref()?;
         let go = self.i18n.label(Self::go_label(p.action)).to_string();
         let (n, total) = (p.asked.max(1).to_string(), p.total.to_string());
-        Some(self.i18n.msg(&match p.commit {
-            true => Msg::TxEndPendingCommit { n, total, go },
-            false => Msg::TxEndPendingRollback { n, total, go },
+        Some(self.i18n.msg(&match (p.commit, p.mixed) {
+            (true, true) => Msg::TxEndPendingMixed { n, total, go },
+            (true, false) => Msg::TxEndPendingCommit { n, total, go },
+            (false, _) => Msg::TxEndPendingRollback { n, total, go },
         }))
     }
 }

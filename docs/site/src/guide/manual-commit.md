@@ -147,7 +147,9 @@ Closing a tab, disconnecting, quitting, switching a tab's connection or database
 or deleting the profile with a transaction open asks first, with what it holds:
 
 - `c` commits first, `r` rolls back first, `y` goes on anyway (the server rolls back), `Enter`
-  or `n` stays. A failed transaction offers only `r` and `y`.
+  or `n` stays. A failed transaction cannot commit: when every one the answer ends failed, it
+  offers only `r` and `y`; when only some did (quitting or disconnecting with several tabs),
+  `c` rolls those back and commits the others, and the question names them.
 - After `c` or `r` it goes on only once the server confirmed; one that fails stops there.
 - Quitting with several tabs ends them one at a time and stops at the first that fails.
 

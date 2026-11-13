@@ -220,7 +220,7 @@ pub struct Confirm {
 /// ([`Confirm::tx`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TxChoices {
-    /// `c` too: none of them failed (a failed one can only be rolled back).
+    /// `c` too: one of them has not failed (a failed one can only be rolled back).
     pub commit: bool,
     /// The transactions it offers to end: each tab and its transaction (`tx_epoch`). One that
     /// ended meanwhile (its session closed for being idle, the server ended it) stops the
