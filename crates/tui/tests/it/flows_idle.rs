@@ -384,6 +384,21 @@ fn a_lock_wait_limit_set_by_hand_is_not_named_as_the_planned_one() {
     assert!(screen.contains("waited too long for a lock another session holds"), "{screen}");
     let screen = lock_wait(false);
     assert!(screen.contains("Waited longer than 5s"), "refused: the planned limit stands: {screen}");
+    // A function of the user's may set it (code the text does not show), and so may a routine
+    // that failed after it did: not named either.
+    for (sql, ok) in [("SELECT shop.set_limits()", true), ("DO $$ BEGIN PERFORM 1; END $$", false)] {
+        let mut h = connected(Policy::default());
+        let id = run(&mut h, sql);
+        let ev = match ok {
+            true => DbEvent::Done { id, outcome: Outcome::Affected(0), elapsed: MS },
+            false => DbEvent::Failed { id, error: DbError::Server("ERROR: raised".into()), cancelled: false },
+        };
+        h.tab_db(0, ev);
+        let id = run(&mut h, "UPDATE shop.users SET name = 'x' WHERE id = 1");
+        h.tab_db(0, DbEvent::Failed { id, error: DbError::LockTimeout(server.into()), cancelled: false });
+        let screen = h.screen(200, 45);
+        assert!(!screen.contains("Waited longer than 5s"), "{sql}: {screen}");
+    }
 }
 
 #[test]

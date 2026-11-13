@@ -166,8 +166,10 @@ impl App {
         let run_ended = matches!(&ev, DbEvent::Page { id: q, columns: Some(_), .. } | DbEvent::Done { id: q, .. }
             | DbEvent::Failed { id: q, .. } if *q == current);
         // A statement of the run that ran without error may have set the lock wait limit by
-        // hand: from then on the session's planned limit is not known to be the one in force,
-        // and a lock wait error does not name it.
+        // hand (it names it, or runs code the text does not show: a routine, a function of the
+        // user's), and so may the code of the one that failed: from then on the session's
+        // planned limit is not known to be the one in force, and a lock wait error does not
+        // name it.
         if run_ended && let Some(t) = self.tabs.get_mut(id) {
             let statements = &t.exec.run.statements;
             let ok = match &ev {
@@ -175,7 +177,16 @@ impl App {
                 _ => statements.len(),
             };
             let d = t.exec.prepared.language().dialect();
-            if statements[..ok].iter().any(|s| may_set_lock_wait(&s.sql, d)) {
+            let mut classifier = t.exec.prepared.clone();
+            // A write's triggers run code too; only a call of code (a function of the user's)
+            // counts here, not every write.
+            let mut runs_code = |sql: &str| {
+                let r = classifier.classify(sql);
+                r.runs_code && !r.writes
+            };
+            let set = statements[..ok].iter().any(|s| may_set_lock_wait(&s.sql, d) || runs_code(&s.sql))
+                || statements.get(ok).is_some_and(|s| runs_code(&s.sql));
+            if set {
                 t.exec.lock_wait = None;
             }
         }

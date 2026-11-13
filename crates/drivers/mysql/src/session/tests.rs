@@ -2026,13 +2026,20 @@ fn the_monitor_session_only_reads_waits_a_second_and_reads_whole_lists_in_system
 
 /// A cancel that lands while the server looks up the definer of a `SQL SECURITY DEFINER`
 /// routine ends the statement with error 1449 (the definer "does not exist") instead of 1317:
-/// the run ends as cancelled. Without a cancel, 1449 is the server's error as it is.
+/// once the server says it took the run's kill, the run ends as cancelled. Without a cancel, or
+/// with a kill the server refused, 1449 is the server's error as it is.
 #[tokio::test(start_paused = true)]
 async fn a_definer_lookup_stopped_by_a_cancel_ends_as_cancelled() {
     use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
     let missing = err_packet(1449, "HY000", "The user specified as a definer ('gone'@'%') does not exist");
-    for cancel in [true, false] {
-        let Faked { mut server, asked, commands, mut events, session, kills, .. } = faked().await;
+    // (cancel asked, what became of its kill, ends as cancelled)
+    let cases = [
+        (true, Some(Kill::Taken(Instant::now())), true),
+        (true, Some(Kill::Failed(KillFailure::Refused(KILL_DENIED))), false),
+        (false, None, false),
+    ];
+    for (cancel, kill, cancelled) in cases {
+        let Faked { mut server, killer, asked, commands, mut events, session, kills, .. } = faked().await;
         commands
             .send(DbCommand::Execute {
                 max_rows: None,
@@ -2047,12 +2054,17 @@ async fn a_definer_lookup_stopped_by_a_cancel_ends_as_cancelled() {
             asked.ask(1);
         }
         server.write_all(&missing).await.unwrap();
+        // The kill's answer comes after the statement's.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        if let Some(k) = kill {
+            killer.record(k, || true);
+        }
         let evs = events_until(&mut events, |e| matches!(e, DbEvent::Failed { .. })).await;
-        match (cancel, evs.last()) {
+        match (cancelled, evs.last()) {
             (true, Some(DbEvent::Failed { id: 1, error: DbError::Cancelled, cancelled: true })) => {}
             (false, Some(DbEvent::Failed { id: 1, error: DbError::Server(m), cancelled: false }))
                 if m.contains("1449") => {}
-            other => panic!("{other:?}"),
+            other => panic!("{cancel} {kill:?}: {other:?}"),
         }
         drop(commands);
         drop(server);
