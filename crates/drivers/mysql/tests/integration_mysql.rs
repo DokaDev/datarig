@@ -3693,9 +3693,9 @@ async fn is_open(a: &mut mysql_async::Conn, name: &str) -> bool {
     open.iter().any(|(_, table, _, _)| table == name)
 }
 
-/// Reading a table's structure does not open the table (step 1 is a guard against that, not a
-/// proof: on the metadata session, which is read-only, a read of the estimates did not open a
-/// table without cached statistics either), never queues behind another session's metadata lock
+/// Reading a table's structure opens no other table, and on MySQL not the table either (step 1
+/// is a guard against that, not a proof: on the metadata session, which is read-only, a read of
+/// the estimates did not open a table without cached statistics either), never queues behind another session's metadata lock
 /// (held by `LOCK TABLES … WRITE`, or asked for by an `ALTER TABLE` that waits behind a held
 /// result) nor waits for any lock, and answers with the structure; no other session waits for a
 /// lock of its while it runs, and it keeps none once it has answered (as the server shows them,
@@ -3726,7 +3726,13 @@ async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     read(structure_of(&mut m, &t.name).await, 2);
     assert!(!is_open(&mut side_admin, &fresh.name).await, "flushed");
     read(structure_of(&mut m, &fresh.name).await, 2);
-    assert!(!is_open(&mut side_admin, &fresh.name).await, "the table was not opened");
+    if mariadb(&admin).await {
+        // MariaDB keeps a table's columns in its definition file only: the catalog opens the
+        // table to list them (briefly; steps 2 and 3 show it waits for no lock and keeps none).
+        not_on_mariadb(test, "reading a table's columns opens that table's definition there");
+    } else {
+        assert!(!is_open(&mut side_admin, &fresh.name).await, "the table was not opened");
+    }
     // 2. Another session holds `LOCK TABLES … WRITE`, and writes while the read runs.
     let mut lock = side(&admin).await;
     lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();

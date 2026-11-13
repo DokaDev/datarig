@@ -294,6 +294,13 @@ fn the_statement_asks_only_for_what_the_server_has() {
     assert!(sql.contains("x.EXPRESSION") && sql.contains("tc.ENFORCED"));
     assert!(sql.contains(r"t.TABLE_SCHEMA = 'it''s' AND t.TABLE_NAME = 't'"), "{sql}");
     assert!(!sql.contains("CARDINALITY"), "it can open the table");
+    // Every catalog table is filtered by the names themselves, never by the outer row or a join
+    // (MariaDB would open every table of the server to read it).
+    assert!(sql.contains(r"c.TABLE_SCHEMA = 'it''s' AND c.TABLE_NAME = 't'"), "{sql}");
+    assert!(sql.contains(r"r.CONSTRAINT_SCHEMA = 'it''s' AND r.TABLE_NAME = 't'"), "{sql}");
+    assert!(sql.contains(r"tc.TABLE_SCHEMA = 'it''s' AND tc.TABLE_NAME = 't'"), "{sql}");
+    let outer = sql.matches("t.TABLE_SCHEMA").count() + sql.matches("t.TABLE_NAME").count();
+    assert_eq!(outer, 2, "only the outer table names itself: {sql}");
     // MariaDB and MySQL before 8.0.14 cannot name the outer table inside a derived table.
     assert!(!sql.contains("FROM ("), "no derived table: {sql}");
     let old = statement(my((8, 0, 12)), MY, "s", "t");
@@ -301,7 +308,7 @@ fn the_statement_asks_only_for_what_the_server_has() {
     let mid = statement(my((8, 0, 15)), MY, "s", "t");
     assert!(mid.contains("x.EXPRESSION") && !mid.contains("CHECK_CONSTRAINTS"));
     let maria = statement(Server { version: (11, 4, 2), mariadb: true }, MY, "s", "t");
-    assert!(!maria.contains("x.EXPRESSION") && maria.contains("cc.TABLE_NAME = t.TABLE_NAME"));
+    assert!(!maria.contains("x.EXPRESSION") && maria.contains("cc.TABLE_NAME = 't'"));
     let plain = statement(my((8, 4, 6)), MySqlMode { no_backslash_escapes: true, ..MY }, r"a\b", "t");
     assert!(plain.contains(r"t.TABLE_SCHEMA = 'a\b'"), "{plain}");
 }

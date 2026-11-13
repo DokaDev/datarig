@@ -46,38 +46,41 @@ use serde::Deserialize;
 /// index key's expression (or `NULL`), `{visible}` whether an index is visible (or `NULL`),
 /// `{checks}` the checks' subquery (or `NULL`), `{grantee}`
 /// the session's user ([`GRANTEE`]). No subquery is a derived table that names the outer table:
-/// MariaDB and MySQL before 8.0.14 have no such reference.
+/// MariaDB and MySQL before 8.0.14 have no such reference. Each catalog table is filtered by the
+/// literals, never by the outer row or a join: MariaDB reads a catalog table it cannot filter so
+/// as a scan of every table of the server, opening each (slow, and it can wait on another
+/// table's lock); the foreign keys' rules are therefore a derived table of the literals.
 const SQL: &str = "SELECT JSON_OBJECT(
   'kind', t.TABLE_TYPE,
   'columns', (SELECT JSON_ARRAYAGG(JSON_OBJECT('position', c.ORDINAL_POSITION, 'name', c.COLUMN_NAME,
       'type', c.COLUMN_TYPE, 'data_type', c.DATA_TYPE, 'nullable', c.IS_NULLABLE, 'default', c.COLUMN_DEFAULT,
       'extra', c.EXTRA, 'generation', c.GENERATION_EXPRESSION, 'charset', c.CHARACTER_SET_NAME,
       'collation', c.COLLATION_NAME))
-    FROM information_schema.COLUMNS c WHERE c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME),
+    FROM information_schema.COLUMNS c WHERE c.TABLE_SCHEMA = {schema} AND c.TABLE_NAME = {table}),
   'indexes', (SELECT JSON_ARRAYAGG(JSON_OBJECT('name', x.INDEX_NAME, 'seq', x.SEQ_IN_INDEX,
       'column', x.COLUMN_NAME, 'expression', {expression}, 'sub_part', x.SUB_PART, 'collation', x.COLLATION,
       'non_unique', x.NON_UNIQUE, 'type', x.INDEX_TYPE, 'visible', {visible}))
-    FROM information_schema.STATISTICS x WHERE x.TABLE_SCHEMA = t.TABLE_SCHEMA AND x.TABLE_NAME = t.TABLE_NAME),
+    FROM information_schema.STATISTICS x WHERE x.TABLE_SCHEMA = {schema} AND x.TABLE_NAME = {table}),
   'foreign_keys', (SELECT JSON_ARRAYAGG(JSON_OBJECT('name', k.CONSTRAINT_NAME, 'position', k.ORDINAL_POSITION,
       'column', k.COLUMN_NAME, 'ref_schema', k.REFERENCED_TABLE_SCHEMA, 'ref_table', k.REFERENCED_TABLE_NAME,
       'ref_column', k.REFERENCED_COLUMN_NAME, 'on_delete', r.DELETE_RULE, 'on_update', r.UPDATE_RULE))
-    FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_CONSTRAINTS r
-      ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
-      AND r.TABLE_NAME = k.TABLE_NAME
-    WHERE k.TABLE_SCHEMA = t.TABLE_SCHEMA AND k.TABLE_NAME = t.TABLE_NAME AND k.REFERENCED_TABLE_NAME IS NOT NULL),
+    FROM information_schema.KEY_COLUMN_USAGE k JOIN (SELECT r.CONSTRAINT_NAME, r.DELETE_RULE, r.UPDATE_RULE
+      FROM information_schema.REFERENTIAL_CONSTRAINTS r
+      WHERE r.CONSTRAINT_SCHEMA = {schema} AND r.TABLE_NAME = {table}) r ON r.CONSTRAINT_NAME = k.CONSTRAINT_NAME
+    WHERE k.TABLE_SCHEMA = {schema} AND k.TABLE_NAME = {table} AND k.REFERENCED_TABLE_NAME IS NOT NULL),
   'checks', {checks},
   'triggers', (SELECT JSON_ARRAYAGG(JSON_OBJECT('name', g.TRIGGER_NAME, 'timing', g.ACTION_TIMING,
       'event', g.EVENT_MANIPULATION, 'orientation', g.ACTION_ORIENTATION, 'statement', g.ACTION_STATEMENT,
       'order', g.ACTION_ORDER))
     FROM information_schema.TRIGGERS g
-    WHERE g.EVENT_OBJECT_SCHEMA = t.TABLE_SCHEMA AND g.EVENT_OBJECT_TABLE = t.TABLE_NAME),
+    WHERE g.EVENT_OBJECT_SCHEMA = {schema} AND g.EVENT_OBJECT_TABLE = {table}),
   'trigger_privilege', EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES p
       WHERE p.PRIVILEGE_TYPE = 'TRIGGER' AND p.GRANTEE = {grantee})
     OR EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES p
-      WHERE p.PRIVILEGE_TYPE = 'TRIGGER' AND p.GRANTEE = {grantee} AND t.TABLE_SCHEMA LIKE p.TABLE_SCHEMA)
+      WHERE p.PRIVILEGE_TYPE = 'TRIGGER' AND p.GRANTEE = {grantee} AND {schema} LIKE p.TABLE_SCHEMA)
     OR EXISTS (SELECT 1 FROM information_schema.TABLE_PRIVILEGES p
       WHERE p.PRIVILEGE_TYPE = 'TRIGGER' AND p.GRANTEE = {grantee}
-      AND p.TABLE_SCHEMA = t.TABLE_SCHEMA AND p.TABLE_NAME = t.TABLE_NAME))
+      AND p.TABLE_SCHEMA = {schema} AND p.TABLE_NAME = {table}))
 FROM information_schema.TABLES t WHERE t.TABLE_SCHEMA = {schema} AND t.TABLE_NAME = {table}";
 
 /// The user the session is, as the privilege tables name a grantee (`'user'@'host'`): the host
@@ -92,13 +95,13 @@ const MYSQL_CHECKS: &str = "(SELECT JSON_ARRAYAGG(JSON_OBJECT('name', tc.CONSTRA
       'clause', cc.CHECK_CLAUSE, 'enforced', tc.ENFORCED))
     FROM information_schema.TABLE_CONSTRAINTS tc JOIN information_schema.CHECK_CONSTRAINTS cc
       ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
-    WHERE tc.TABLE_SCHEMA = t.TABLE_SCHEMA AND tc.TABLE_NAME = t.TABLE_NAME AND tc.CONSTRAINT_TYPE = 'CHECK')";
+    WHERE tc.TABLE_SCHEMA = {schema} AND tc.TABLE_NAME = {table} AND tc.CONSTRAINT_TYPE = 'CHECK')";
 
 /// MariaDB's (a check's name is the table's; every check is enforced).
 const MARIADB_CHECKS: &str = "(SELECT JSON_ARRAYAGG(JSON_OBJECT('name', cc.CONSTRAINT_NAME,
       'clause', cc.CHECK_CLAUSE, 'enforced', 'YES'))
     FROM information_schema.CHECK_CONSTRAINTS cc
-    WHERE cc.CONSTRAINT_SCHEMA = t.TABLE_SCHEMA AND cc.TABLE_NAME = t.TABLE_NAME)";
+    WHERE cc.CONSTRAINT_SCHEMA = {schema} AND cc.TABLE_NAME = {table})";
 
 /// The statement for `schema.table` on `server`, the names written as `mode` reads literals.
 pub(crate) fn statement(server: Server, mode: MySqlMode, schema: &str, table: &str) -> String {
@@ -109,16 +112,21 @@ pub(crate) fn statement(server: Server, mode: MySqlMode, schema: &str, table: &s
         false => "NULL",
     };
     let d = Dialect::MySql(mode);
+    let names = [("schema", d.quote_literal(schema)), ("table", d.quote_literal(table))];
+    let names = names.each_ref().map(|(k, v)| (*k, v.as_str()));
+    // The checks' subquery names the table too; it is filled first, as a value of the
+    // statement is never read again for places.
+    let checks = super::fill(checks, &names);
     // In one pass: a name is never read as a place for another value.
     super::fill(
         SQL,
         &[
             ("expression", if functional { "x.EXPRESSION" } else { "NULL" }),
             ("visible", if server.mariadb { "NULL" } else { "x.IS_VISIBLE" }),
-            ("checks", checks),
+            ("checks", &checks),
             ("grantee", GRANTEE),
-            ("schema", &d.quote_literal(schema)),
-            ("table", &d.quote_literal(table)),
+            names[0],
+            names[1],
         ],
     )
 }
