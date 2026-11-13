@@ -504,6 +504,25 @@ fn a_statement_that_needs_no_transaction_says_how_to_run_it() {
             "{screen}"
         );
     }
+    // Manual commit: a statement it leaves as it is (no `ManualBegun`) still failed for the
+    // schema's transaction, and gets its advice; one it opened a transaction for does not.
+    for begun in [false, true] {
+        let mut h = Harness::connected(Lang::En);
+        h.command("use .shop");
+        h.ctrl('e');
+        let (t, generation, id) = (h.app.tab().id, h.app.tab().exec.generation, h.app.tab().exec.query_id);
+        h.app.tab_mut().exec.sent_manual = true;
+        let db_ev = |ev| AppEvent::Db { target: EventTarget::Tab(t), generation, ev };
+        h.app.on_app_event(db_ev(DbEvent::ContextPerTransaction));
+        if begun {
+            h.app.on_app_event(db_ev(DbEvent::ManualBegun { id, index: 0 }));
+        }
+        let error = DbError::NeedsNoTransaction("ERROR: VACUUM cannot run inside a transaction block".into());
+        h.app.on_app_event(db_ev(DbEvent::Failed { id, error, cancelled: false }));
+        let notes = &h.app.tab().exec.run.notes;
+        let schema = notes.iter().any(|n| matches!(n.msg, Msg::ContextNoTransaction { .. }));
+        assert_eq!(schema, !begun, "{notes:?}");
+    }
     // Refused in a transaction the app opened for anything but the tab's schema (here the
     // session never said its schema goes per transaction): not blamed on the schema.
     let mut h = Harness::connected(Lang::En);

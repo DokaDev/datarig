@@ -257,12 +257,14 @@ impl App {
         };
         // A statement that cannot run in a transaction, refused in one the app opened for it.
         let no_tx = outside.is_none() && matches!(&ev, DbEvent::Failed { error: DbError::NeedsNoTransaction(_), .. });
-        // Refused only because the tab's schema is set in one behind a pooler (not a
-        // transaction opened for manual commit right before it): said why, and how to run it.
+        // Refused only because the tab's schema is set in one behind a pooler (not in a
+        // transaction the session opened for manual commit in this run, `ManualBegun`: a
+        // statement manual commit leaves as it is still gets the schema's): said why, and how
+        // to run it.
         let schema_tx = self
             .tabs
             .get(id)
-            .is_some_and(|t| t.exec.path_per_transaction && !(t.exec.sent_manual && t.exec.tx_from.is_none()));
+            .is_some_and(|t| t.exec.path_per_transaction && t.exec.manual_begun.is_none_or(|(run, _)| run != current));
         let needs_no_tx = (no_tx && schema_tx).then(|| {
             let t = self.tabs.get(id);
             let own = profile.map(|p| self.own_database(p)).unwrap_or_default();
