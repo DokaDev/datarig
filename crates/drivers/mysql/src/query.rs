@@ -803,7 +803,7 @@ async fn not_undone(
     sql: &str,
 ) -> Result<Option<Vec<String>>, Closed> {
     let Some(names) = risk::named(sql, s.mode) else { return Ok(None) };
-    let ask = not_undone_sql(&names, Dialect::MySql(s.mode));
+    let ask = not_undone_sql(&names, Dialect::MySql(s.mode), env.server.mariadb);
     env.busy.store(true, Ordering::SeqCst);
     let answer = link.guard(Some(env.killer), conn.query::<String, _>(ask)).await?;
     idle(env, link).await;
@@ -815,13 +815,15 @@ async fn not_undone(
 }
 
 /// The question [`not_undone`] asks about `names` (as `risk::mysql::named` gives them), read
-/// as [`check_sql`] reads them.
-fn not_undone_sql(names: &[String], d: Dialect) -> String {
+/// as [`check_sql`] reads them, of a MariaDB server or not.
+fn not_undone_sql(names: &[String], d: Dialect, mariadb: bool) -> String {
     let cond = name_condition(names, d);
     // The session's account as the privilege tables write a grantee (`'user'@'host'`); a grant
     // that reaches it otherwise (through a role) is not seen, so the table counts as one whose
     // triggers are not visible. A global grant counts only without partial revokes: with them on,
-    // it may be revoked for the table's schema, which the privilege tables do not show.
+    // it may be revoked for the table's schema, which the privilege tables do not show. MariaDB
+    // has no partial revokes (nor the variable): a global grant counts there.
+    let global = if mariadb { "" } else { " AND @@GLOBAL.partial_revokes = 0" };
     let me =
         "CONCAT(QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), '@', QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1)))";
     format!(
@@ -834,7 +836,7 @@ fn not_undone_sql(names: &[String], d: Dialect) -> String {
          UNION SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (triggers not visible)') \
          FROM information_schema.TABLES t WHERE t.TABLE_TYPE = 'BASE TABLE' AND ({cond}) \
          AND NOT EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES p \
-         WHERE p.GRANTEE = {me} AND p.PRIVILEGE_TYPE = 'TRIGGER' AND @@GLOBAL.partial_revokes = 0) \
+         WHERE p.GRANTEE = {me} AND p.PRIVILEGE_TYPE = 'TRIGGER'{global}) \
          AND NOT EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES p \
          WHERE p.GRANTEE = {me} AND p.PRIVILEGE_TYPE = 'TRIGGER' AND p.TABLE_SCHEMA = t.TABLE_SCHEMA) \
          AND NOT EXISTS (SELECT 1 FROM information_schema.TABLE_PRIVILEGES p \
