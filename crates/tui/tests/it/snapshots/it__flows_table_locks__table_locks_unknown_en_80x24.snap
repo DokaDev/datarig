@@ -1,11 +1,10 @@
 ---
 source: crates/tui/tests/it/flows_table_locks.rs
-assertion_line: 282
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
-"│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1       ││ [Result 1]  Chart  Messages  ││ id: 0                │"
+"│  ＋ New connection   │╭ [Result 1]  Chart  Messages  ╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││                            ⋯ ││ id: 0                │"
 "│  ▾ ●   local-my      ││   │ id ^v                    ││                      │"
 "│    ▾ shop            ││   │ int8                     ││                      │"
 "│      ▾ Tables        ││ 1 │    0                     ││                      │"

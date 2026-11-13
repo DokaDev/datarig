@@ -105,10 +105,18 @@
 "table.dialog.hidden_key" = "hidden from the grid, still read (row key)"
 "table.dialog.hidden_note" = "hidden from the grid, still read"
 "table.dialog.hint.hide" = "hide/show"
-"table.status.hidden" = "hidden"
 "table.status.failed" = "failed"
 "table.status.cancelled" = "cancelled"
 "table.status.unapplied" = "unapplied"
+"table.bar.none" = "none"
+"table.bar.advanced" = "Advanced"
+"table.bar.refused" = "refused"
+"table.bar.conditions" = { one = "{count} condition", other = "{count} conditions" }
+"table.bar.cols" = { one = "{count} col", other = "{count} cols" }
+"table.bar.cols_hidden" = "{shown}/{total} cols"
+"table.bar.rows" = { one = "{count} row", other = "{count} rows" }
+"table.bar.rows_text" = "{rows} rows"
+"table.bar.rows_range" = "{from}–{to} of {total} rows"
 "table.limit.refused" = "Limit refused: {why}"
 "table.limit.refused_short" = "limit refused"
 "table.limit.why.not_a_number" = "a limit is a whole number of rows, written in digits"

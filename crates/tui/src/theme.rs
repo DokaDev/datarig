@@ -726,6 +726,12 @@ impl Theme {
         }
     }
 
+    /// The theme paints backgrounds of its own (a surface for chips and fields): not one that
+    /// leaves the terminal's background everywhere, as `terminal` does.
+    pub fn has_backgrounds(&self) -> bool {
+        self.surface_alt != Color::Reset
+    }
+
     /// The header of a result grid's column the table tab's query filters (by a condition of its
     /// own) or sorts by: the accent blended into the surface, derived where it is drawn (no
     /// token of its own); the accent as the text's color where either is not RGB.

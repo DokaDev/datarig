@@ -1,11 +1,10 @@
 ---
-source: crates/tui/tests/it/flows_table_status.rs
-assertion_line: 154
+source: crates/tui/tests/it/flows_query_bar.rs
 expression: backend
 ---
-"╭ Explorer ────────────╮ 1 console 1 ×  ⠋ shop.users ×                          "
-"│  ＋ New connection   │╭ Results · 3 rows ────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1       ││ [Result 1]  Chart  Messages  · earlier run  local-pg │"
+"╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
+"│  ＋ New connection   │╭ [Result 1]  Chart  Messages  · earlier run  local-pg ╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ failed ▼1                                          ⋯ │"
 "│  ▾ ●   local-pg      ││   │ id ^v│ name                                      │"
 "│    ▾ datarig default ││   │ int8 │ text                                      │"
 "│      ▸ analytics     ││ 1 │    0 │ n0                                        │"
@@ -24,6 +23,6 @@ expression: backend
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
-"│                      ││                                                      │"
-"╰──────────────────────╯╰ ⠋ ▼ id > 1 ──────────────────────────────────────────╯"
-" local-pg │ ⠋ Running… 0ms   │ Ctrl+C cancel · Enter view cell · n next page EN "
+"│                      ││ filter failed: showing previous rows                 │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" local-pg │ Error: no    │ Enter view cell · n next page · y copy · v select EN "

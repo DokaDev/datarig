@@ -164,7 +164,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |
 | `Space r +` | `results.panel.grow` | Results pane → taller | ✓ |
 | `Space r -` | `results.panel.shrink` | Results pane → shorter | ✓ |
-| `Space r c` | `results.chart` | Results → show as a chart / as rows |  |
+| `Space r g` | `results.chart` | Results → show as a chart / as rows |  |
 | `Space r n` | `results.page.next` | Results → next page | ✓ |
 | `Space r p` | `results.page.prev` | Results → previous page | ✓ |
 | `Space r #` | `results.count` | Results → count every row (runs a count query) |  |
@@ -181,6 +181,11 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r X` | `table.filter.clear_all` | Table → clear the conditions and the order (limit kept), and run it again |  |
 | `Space r C` | `table.column.hide` | Table → hide this column from the grid (still read) |  |
 | `Space r H` | `table.filter.history` | Table → earlier filters of this table |  |
+| `Space r w` | `table.bar.where` | Table → put the keys on the query bar's conditions |  |
+| `Space r l` | `table.bar.limit` | Table → type the limit in the query bar |  |
+| `Space r c` | `table.bar.columns` | Table → columns shown and hidden (dialog) |  |
+| `Space r r` | `table.bar.rows` | Table → count every row (as #) |  |
+| `Space r A` | `table.filter.edit` | Table → filter and sort (dialog, on this column) |  |
 | `Space r ]` | `results.tab.next` | Result tabs → next |  |
 | `Space r [` | `results.tab.prev` | Result tabs → previous |  |
 | `Space m m` | `monitor.open` | Monitor → the connection's server monitor |  |
@@ -332,6 +337,32 @@ The search prompt of `/` and `?` on the line under the grid: the cursor goes to 
 Reserved (grid search): `Esc` `Enter` `Ctrl+W`
 
 Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
+## `grid.bar`
+
+A table tab's query bar with the keys on its conditions (`Space r w`): `←`/`→` (`h`/`l`) move between the conditions, the count of those left out and `+`, `Enter` opens the one the keys are on in the filter dialog, `x` (`Delete`) takes the condition out and runs the query again (the other conditions sent as they were written), `+` (`a`) adds a condition, `Esc` goes back to the grid. The keys leave the bar when the tab, the result or the view changes, or the focus moves. Inside `grid`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `Left` | `table.bar.prev` | Query bar → previous condition | ✓ |
+| `h` | `table.bar.prev` | Query bar → previous condition | ✓ |
+| `Right` | `table.bar.next` | Query bar → next condition | ✓ |
+| `l` | `table.bar.next` | Query bar → next condition | ✓ |
+| `Enter` | `table.bar.open` | Query bar → open this condition (dialog) |  |
+| `x` | `table.bar.remove` | Query bar → take this condition out, and run it again |  |
+| `Delete` | `table.bar.remove` | Query bar → take this condition out, and run it again |  |
+| `+` | `table.bar.add` | Query bar → add a condition (dialog) |  |
+| `a` | `table.bar.add` | Query bar → add a condition (dialog) |  |
+| `Esc` | `table.bar.leave` | Query bar → back to the grid |  |
+
+## `grid.bar.limit` [text]
+
+The `LIMIT` field of a table tab's query bar (`Space r l`, or a click on `LIMIT`): digits, `Backspace`, a paste; `Enter` runs the query with that cap (empty: no cap; a text that is no cap is refused and stays), `Esc` leaves the cap as it was. Inside `workspace`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `Enter` | `table.bar.limit_apply` | Query bar → run it again with this limit |  |
+| `Esc` | `table.bar.limit_cancel` | Query bar → leave the limit as it was |  |
 
 ## `grid.edit` [text]
 

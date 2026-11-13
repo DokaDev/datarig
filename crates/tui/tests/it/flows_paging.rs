@@ -46,6 +46,12 @@ fn results_title(h: &mut Harness, w: u16, hh: u16) -> String {
     row_text(t.backend().buffer(), h.app.layout.results.y)
 }
 
+/// A table tab's query bar (the rows of the result shown are said there).
+fn bar_line(h: &mut Harness, w: u16, hh: u16) -> String {
+    let t = h.draw(w, hh);
+    row_text(t.backend().buffer(), h.app.layout.results.y + 1)
+}
+
 fn close_requests(cmds: &[DbCommand]) -> Vec<u64> {
     cmds.iter()
         .filter_map(|c| match c {
@@ -1137,31 +1143,32 @@ fn table_page(h: &mut Harness) {
     h.tab_db(index, DbEvent::Page { id, columns, rows: page(0, 500), more: true, elapsed: SEC / 100 });
 }
 
-/// A table tab's pages come from the explorer's estimate of its rows (nothing is counted or
-/// asked for it), marked `~`, the pages with thousands separators.
+/// A table tab's rows come from the explorer's estimate (nothing is counted or asked for it),
+/// marked `~` in its query bar, with thousands separators (shortened where narrow).
 #[test]
 fn a_table_tab_shows_its_pages_from_the_estimate() {
     let mut h = Harness::connected(Lang::En);
     h.app.detail.visible = false;
     users_table(&mut h, Some(1_234_567));
-    let title = results_title(&mut h, 160, 45);
-    assert!(title.contains("(page 1 / ~2,470 · next page re-runs) ›"), "{title}");
+    let title = bar_line(&mut h, 160, 45);
+    assert!(title.contains("1–500 of ~1,234,567 rows"), "{title}");
     assert!(counts(&h.sent()).is_empty(), "nothing counted");
-    // At 80 columns too.
-    let title = results_title(&mut h, 80, 24);
-    assert!(title.contains("/ ~2,470"), "{title}");
+    // At 80 columns too, shorter.
+    let title = bar_line(&mut h, 80, 24);
+    assert!(title.contains("~1.2M rows"), "{title}");
 }
 
 /// No estimate (never analyzed), an estimate of no rows, or one below the rows already
-/// fetched: the pages are not known, and the title says which key counts them.
+/// fetched: how many rows there are is not known, and the query bar says the rows read and
+/// more.
 #[test]
 fn an_unknown_or_stale_estimate_shows_no_pages_and_the_count_key() {
     for rows in [None, Some(0), Some(300)] {
         let mut h = Harness::connected(Lang::En);
         h.app.detail.visible = false;
         users_table(&mut h, rows);
-        let title = results_title(&mut h, 160, 45);
-        assert!(title.contains("(page 1 / ? · # count · next page re-runs) ›"), "{rows:?}: {title}");
+        let title = bar_line(&mut h, 160, 45);
+        assert!(title.contains("1–500 of 500+ rows"), "{rows:?}: {title}");
         assert!(!title.contains('~'), "{rows:?}: {title}");
     }
 }
@@ -1251,17 +1258,17 @@ fn a_filtered_table_tab_has_no_estimate() {
     let mut h = Harness::connected(Lang::En);
     h.app.detail.visible = false;
     users_table(&mut h, Some(1_234_567));
-    assert!(results_title(&mut h, 160, 45).contains("/ ~2,470"));
+    assert!(bar_line(&mut h, 160, 45).contains("of ~1,234,567 rows"));
     h.command("where id > 10");
     table_page(&mut h);
-    let title = results_title(&mut h, 160, 45);
-    assert!(title.contains("(page 1 / ? · # count · next page re-runs) ›") && !title.contains('~'), "{title}");
+    let title = bar_line(&mut h, 160, 45);
+    assert!(title.contains("of 500+ rows") && !title.contains('~'), "{title}");
     h.command("filter clear");
     table_page(&mut h);
-    assert!(results_title(&mut h, 160, 45).contains("/ ~2,470"));
+    assert!(bar_line(&mut h, 160, 45).contains("of ~1,234,567 rows"));
     h.command("orderby id DESC");
     table_page(&mut h);
-    assert!(results_title(&mut h, 160, 45).contains("/ ~2,470"), "the order changes no count");
+    assert!(bar_line(&mut h, 160, 45).contains("of ~1,234,567 rows"), "the order changes no count");
     // The hidden editor's text is not what the run key runs on a table tab.
     h.app.tab_mut().editor = Editor::new(r#"SELECT * FROM "shop"."users" WHERE id > 10"#);
     h.sent();
@@ -1295,8 +1302,8 @@ fn the_estimate_is_of_the_tabs_own_schema() {
     h.key(KeyCode::Enter);
     assert_eq!(h.app.tab().doc.table.as_ref().map(|t| t.label()).as_deref(), Some("shop.users"));
     table_page(&mut h);
-    let title = results_title(&mut h, 160, 45);
-    assert!(title.contains("(page 1 / ? · # count · next page re-runs) ›") && !title.contains('~'), "{title}");
+    let title = bar_line(&mut h, 160, 45);
+    assert!(title.contains("of 500+ rows") && !title.contains('~'), "{title}");
 }
 
 /// The count key's hint is the first thing a narrow title drops: beside the inspector the row

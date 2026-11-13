@@ -58,6 +58,8 @@ impl App {
                 _ if self.profiles.is_empty() => Ctx::Welcome,
                 // No tab: the empty state has no keys of its own.
                 _ if self.tabs.is_empty() => Ctx::Explorer,
+                Focus::Results if self.bar_editing() => Ctx::QueryBarText,
+                Focus::Results if self.bar_focused() => Ctx::QueryBar,
                 Focus::Results | Focus::Inspector if self.monitor_filtering() => Ctx::MonitorFilter,
                 Focus::Results | Focus::Inspector if self.monitor_shown() => Ctx::Monitor,
                 Focus::Results | Focus::Inspector if self.plan_shown() => Ctx::Plan,

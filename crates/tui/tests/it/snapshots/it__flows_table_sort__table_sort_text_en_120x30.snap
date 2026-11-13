@@ -1,11 +1,10 @@
 ---
 source: crates/tui/tests/it/flows_table_sort.rs
-assertion_line: 399
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users * ×                                                          "
-"│  ＋ New connection         │╭ Results · 3 rows ──────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1             ││ [Result 1]  Chart  Messages        H/L  local-pg / datarig.shop.users  127.0.0.1:55432 │"
+"│  ＋ New connection         │╭ [Result 1]  Chart  Messages        H/L  local-pg / datarig.shop.users  127.0.0.1:55432 ╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1             ││ WHERE  name <> 'zz' ×  + │ ORDER BY ↑ id, ↓ name + │ LIMIT none │ 3 cols │ 3 rows    ⋯ │"
 "│  ▾ ●   local-pg            ││   │ id ^   │ name v2 = ^v│ email                                                       │"
 "│    ▾ datarig default       ││   │ int8   │ text        │ text                                                        │"
 "│      ▸ analytics           ││ 1 │      0 │ n0          │ u0@x                                                        │"
@@ -31,5 +30,5 @@ expression: backend
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
-"╰────────────────────────────╯╰ ▼ name <> 'zz' · id ↑ +1 ──────────────────────────────────────────────────────────────╯"
+"╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯"
 " local-pg │ 3 rows · 2ms   │ Enter view cell · n next page · y copy · v select · i detail · Esc back · Tab next pane EN "

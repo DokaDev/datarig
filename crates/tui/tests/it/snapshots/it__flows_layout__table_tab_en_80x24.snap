@@ -1,11 +1,10 @@
 ---
 source: crates/tui/tests/it/flows_layout.rs
-assertion_line: 218
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
-"│  ＋ New connection   │╭ Results · 8 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1       ││ [Result 1]  Chart  Messages  ││ id: 1                │"
+"│  ＋ New connection   │╭ [Result 1]  Chart  Messages  ╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││                            ⋯ ││ id: 1                │"
 "│  ▾ ●   local-pg      ││   │ id ^v│ name              ││ name: 陳大文         │" Hidden by multi-width symbols: [(65, " "), (67, " "), (69, " ")]
 "│    ▾ datarig default ││   │ int8 │ text              ││ nickname: 大文🐘     │" Hidden by multi-width symbols: [(69, " "), (71, " "), (73, " ")]
 "│      ▸ analytics     ││ 1 │    1 │ 陳大文            ││ address: 臺北市信義… │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " "), (68, " "), (70, " "), (72, " "), (74, " "), (76, " ")]
