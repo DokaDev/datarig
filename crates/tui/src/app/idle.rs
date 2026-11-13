@@ -130,11 +130,17 @@ impl App {
     /// pooler), else its profile's limit. `None`: never closed for that.
     pub(super) fn tab_idle_limit(&self, t: &Tab) -> Option<Duration> {
         use datarig_core::profile::session::Wait;
-        let own = t.exec.idle.as_ref().map(|o| if t.exec.session_pooled { o.pooled } else { o.direct });
+        // Behind a pooler a statement that was not sent leaves the environment's limit, which
+        // only the app keeps: no server closes the session first then.
+        let own = t.exec.idle.as_ref().map(|o| match t.exec.session_pooled {
+            true => (o.pooled, o.pooled_set),
+            false => (o.direct, true),
+        });
         match own {
-            Some(Wait::Limit(d)) => Some(d.saturating_sub(own_idle_lead(d))),
-            Some(Wait::NoLimit) => None,
-            Some(Wait::Unknown) | None => self.idle_disconnect_of(t.profile?),
+            Some((Wait::Limit(d), true)) => Some(d.saturating_sub(own_idle_lead(d))),
+            Some((Wait::Limit(d), false)) => Some(d),
+            Some((Wait::NoLimit, _)) => None,
+            Some((Wait::Unknown, _)) | None => self.idle_disconnect_of(t.profile?),
         }
     }
 

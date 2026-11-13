@@ -334,6 +334,9 @@ pub struct IdleOverride {
     /// The same behind a pooler in transaction mode, where a statement with no form for one
     /// transaction is not sent: the intent's limit when none is sent there.
     pub pooled: Wait,
+    /// A statement sets [`IdleOverride::pooled`] on the server (else it is the intent's limit,
+    /// which only the app keeps).
+    pub pooled_set: bool,
 }
 
 /// A lock wait limit a plan's statements set, which overrides the environment's `lock_wait`.
@@ -483,13 +486,15 @@ struct IdleLimits {
     values: [Wait; 2],
     /// Where the last statement that set it comes from.
     source: Option<Source>,
+    /// A statement set it behind a pooler too.
+    pooled_set: bool,
 }
 
 impl IdleLimits {
     /// The limit the app keeps before the statements (`idle_disconnect`; `None`: never).
     fn new(dbms: Dbms, idle_disconnect: Option<Duration>) -> Self {
         let first = idle_disconnect.map_or(Wait::NoLimit, Wait::Limit);
-        IdleLimits { dbms, values: [first; 2], source: None }
+        IdleLimits { dbms, values: [first; 2], source: None, pooled_set: false }
     }
 
     /// A statement of `source` that sets `settings`; `pooled` its way behind a pooler.
@@ -505,6 +510,7 @@ impl IdleLimits {
             self.values[0] = wait;
             if !matches!(pooled, Some(OnPooler::Refused(_))) {
                 self.values[1] = wait;
+                self.pooled_set = true;
             }
             self.source = Some(source.clone());
         }
@@ -512,7 +518,8 @@ impl IdleLimits {
 
     fn overridden(self) -> Option<IdleOverride> {
         let [direct, pooled] = self.values;
-        self.source.map(|source| IdleOverride { source, direct, pooled })
+        let pooled_set = self.pooled_set;
+        self.source.map(|source| IdleOverride { source, direct, pooled, pooled_set })
     }
 }
 

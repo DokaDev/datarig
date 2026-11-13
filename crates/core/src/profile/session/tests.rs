@@ -362,7 +362,12 @@ fn the_servers_idle_limit_overrides_the_idle_disconnect() {
         let presets: Vec<_> = preset.map(|s| SessionPreset::new("p", dbms, vec![s.into()])).into_iter().collect();
         plan(&c, &rules, Defaults::default(), &presets).unwrap().idle
     };
-    let of = |source: Source, direct: Wait, pooled: Wait| Some(IdleOverride { source, direct, pooled });
+    // PostgreSQL's statement is not sent behind a pooler (`pooled` is the environment's limit);
+    // MySQL has no pooler, the same either way.
+    let of =
+        |source: Source, direct: Wait, pooled: Wait| Some(IdleOverride { source, direct, pooled, pooled_set: false });
+    let set =
+        |source: Source, direct: Wait, pooled: Wait| Some(IdleOverride { source, direct, pooled, pooled_set: true });
     let env = Wait::Limit(secs(300));
     let by_preset = Source::Preset { name: "p".into(), by: PickedBy::Profile };
     assert_eq!(idle("postgres", None, &[]), None);
@@ -383,10 +388,10 @@ fn the_servers_idle_limit_overrides_the_idle_disconnect() {
     );
     // MySQL has no pooler: the same either way.
     let ten = Wait::Limit(secs(600));
-    assert_eq!(idle("mysql", Some("SET SESSION wait_timeout = 600"), &[]), of(by_preset, ten, ten));
+    assert_eq!(idle("mysql", Some("SET SESSION wait_timeout = 600"), &[]), set(by_preset, ten, ten));
     assert_eq!(
         idle("mysql", None, &["SET SESSION lock_wait_timeout = 3, wait_timeout = 600"]),
-        of(Source::Profile, ten, ten)
+        set(Source::Profile, ten, ten)
     );
     // Without an environment's limit the app never closes for being idle: that stays behind a
     // pooler.

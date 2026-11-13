@@ -334,7 +334,10 @@ fn behind_a_pooler_the_tab_keeps_the_environments_idle_disconnect() {
     let id = run(&mut h, "SELECT 1");
     h.tab_db(0, DbEvent::SessionPerTransaction { refused: vec![0] });
     h.tab_db(0, DbEvent::Done { id, outcome: Outcome::Affected(0), elapsed: MS });
-    h.advance(LIMIT);
+    // No server limit was set there: none closes it first, so the app keeps the whole 5m.
+    h.advance(LIMIT - Duration::from_secs(1));
+    assert!(!h.session_closed(1), "not before the environment's 5m");
+    h.advance(Duration::from_secs(1));
     assert!(h.session_closed(1), "after the environment's 5m");
     assert!(said(&h, |m| *m == Msg::QueryIdleClosed { time: "5m".into() }));
 }
