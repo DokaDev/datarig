@@ -398,7 +398,7 @@ fn draw_table_frame(app: &mut App, grid_area: Rect, buf: &mut Buffer) -> Rect {
         app.qbar.press = Default::default();
     }
     app.qbar.drawn_for = place;
-    app.qbar.press.drawn(model.is_some() && !app.modal_open(), now);
+    app.qbar.press.drawn(model.is_some() && app.bar_input_free(), now);
     let Some(m) = model else {
         app.qbar.last.clear();
         return rinner;

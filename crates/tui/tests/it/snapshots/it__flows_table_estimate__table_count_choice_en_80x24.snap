@@ -4,7 +4,7 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users * ×                        "
 "│  ＋ New connection   │╭ [Result 1]  Chart  Messages    local-pg / shop.users ╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾╭─────────────────────────────────────────────╮ ORDER + │ LIMIT none       ⋯ │"
+"│▾╭─────────────────────────────────────────────╮ ORDER + │ LIMIT none │ ‹ › ⋯ │"
 "│ │ › type to filter                            │                              │"
 "│ │ Rows of the filtered table                  │                              │"
 "│ │  Estimate (planner)         nothing is read │                              │"

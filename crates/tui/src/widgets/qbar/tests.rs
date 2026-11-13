@@ -56,7 +56,8 @@ fn bar(w: &Words, s: &Spec) -> Bar {
             full: w.msg(&Msg::TableBarRowsRange { from: "1".into(), to: "500".into(), total: long.clone() }),
             mid: w.msg(&Msg::TableBarRowsText { rows: long }),
             short: w.msg(&Msg::TableBarRowsText { rows: format!("~{}", compact(n)) }),
-            mark: Some((w.label(Label::ResultsTitleInTx), false)),
+            state: Some((w.label(Label::ResultsTitleInTx), false)),
+            notes: vec![w.label(Label::TableBarPlanner)],
             arrows: Some((false, true)),
         }
     });
@@ -177,29 +178,31 @@ fn the_whole_bar_and_its_steps() {
     assert_eq!(whole.level, 0);
     assert_eq!(
         text(&whole),
-        "WHERE  status = 'paid' ×   total_amount > 1000 ×  + │ ORDER BY ↓ total_amount, ↑ ordered_at + │ LIMIT 500 │ 7 cols │ 1–500 of ~50,001 rows · in tx ‹ › | ⋯ Advanced"
+        "WHERE  status = 'paid' ×   total_amount > 1000 ×  + │ ORDER BY ↓ total_amount, ↑ ordered_at + │ LIMIT 500 │ 7 cols │ 1–500 of ~50,001 rows · in tx · planner ‹ › | ⋯ Advanced"
     );
     // Narrower, each step in its turn.
     let at = |level: usize| {
         (30..=200).rev().map(|n| layout(&m, n)).find(|l| l.level >= level).map(|l| text(&l)).unwrap_or_default()
     };
     assert!(at(1).ends_with("| ⋯"), "{}", at(1));
-    assert!(at(2).contains("~50,001 rows · in tx"), "{}", at(2));
+    assert!(at(2).contains("~50,001 rows · in tx · planner"), "{}", at(2));
     assert!(at(3).contains("~50k rows"), "{}", at(3));
     assert!(at(4).contains("ORDER BY ↓ total_amount +1"), "{}", at(4));
     assert!(at(5).contains(" +1  +"), "{}", at(5));
     assert!(at(6).contains("ORDER ↓ total_amount +1"), "{}", at(6));
-    assert!(at(8).contains("2 conditions"), "{}", at(8));
+    assert!(at(7).contains("~50k rows · in tx ‹ ›") && !at(7).contains("planner"), "notes go: {}", at(7));
+    assert!(at(9).contains("2 conditions"), "{}", at(9));
     assert!(!at(2).contains("7 cols"), "nothing hidden: the count goes early: {}", at(2));
-    assert!(!at(10).contains("cols"), "{}", at(10));
-    assert!(at(11).contains("ORDER ↓2"), "{}", at(11));
+    assert!(!at(11).contains("cols"), "{}", at(11));
+    assert!(at(12).contains("ORDER ↓2"), "{}", at(12));
     // The short form's own steps, each as it is drawn.
     let short = |level: usize| text(&at_level(&m, level, 200).unwrap());
-    assert_eq!(short(13), "▼2 + │ ↓2 │ L500 │ ‹ › | ⋯");
-    assert_eq!(short(14), "▼2 + ↓2 L500 ‹ › | ⋯");
-    assert_eq!(short(15), "▼2 + ↓2 L500 | ⋯");
-    assert_eq!(short(16), "▼2 ↓2 L500 | ⋯");
-    assert_eq!(short(18), "▼2 ↓2 L | ⋯");
+    assert!(short(13).ends_with("│ in tx | ⋯"), "the rows go, their state stays: {}", short(13));
+    assert_eq!(short(14), "▼2 + │ ↓2 │ L500 │ in tx ‹ › | ⋯");
+    assert_eq!(short(15), "▼2 + ↓2 L500 in tx ‹ › | ⋯");
+    assert_eq!(short(16), "▼2 + ↓2 L500 in tx | ⋯");
+    assert_eq!(short(17), "▼2 ↓2 L500 in tx | ⋯");
+    assert_eq!(short(19), "▼2 ↓2 L in tx | ⋯");
     // The keys' letters underlined: W̲HERE O̲RDER BY L̲IMIT c̲ols r̲ows A̲dvanced.
     let ul: Vec<String> =
         whole.segs().filter_map(|g| g.ul.map(|i| g.text.chars().nth(i).unwrap().to_string())).collect();
@@ -211,7 +214,10 @@ fn the_empty_bar_is_dim() {
     let w = Words::new(Lang::En);
     let m = bar(&w, &specs()[0]);
     let l = layout(&m, 200);
-    assert_eq!(text(&l), "WHERE + │ ORDER BY + │ LIMIT none │ 7 cols │ 1–500 of ~50,001 rows · in tx ‹ › | ⋯ Advanced");
+    assert_eq!(
+        text(&l),
+        "WHERE + │ ORDER BY + │ LIMIT none │ 7 cols │ 1–500 of ~50,001 rows · in tx · planner ‹ › | ⋯ Advanced"
+    );
     let dim: Vec<&str> = l.segs().filter(|g| g.tone == Tone::KeywordDim).map(|g| g.text.as_str()).collect();
     assert_eq!(dim, ["WHERE", "ORDER BY", "LIMIT"]);
 }
@@ -280,16 +286,31 @@ const NARROW: usize = 52;
 fn at_80_columns_the_short_form_keeps_every_part_it_can() {
     let w = Words::new(Lang::En);
     let applied = Spec { rows: Some(50_001), ..specs()[1].clone() };
-    let l = layout(&bar(&w, &applied), NARROW);
-    assert!(l.level < 13, "the long form still fits: {}", text(&l));
+    // Without a paging state the long form still fits, the rows left out.
+    let mut quiet = bar(&w, &applied);
+    if let Some(r) = quiet.rows.as_mut() {
+        r.state = None;
+    }
+    let l = layout(&quiet, NARROW);
+    assert_eq!(text(&l), "WHERE  2 conditions  + │ ORDER ↓2 │ LIMIT 500 | ⋯");
     let hidden = Spec { hidden: 1, ..applied.clone() };
-    assert_eq!(text(&layout(&bar(&w, &hidden), NARROW)), "▼2 + │ ↓2 │ L500 │ 6/7 │ ‹ › | ⋯");
+    assert_eq!(text(&layout(&bar(&w, &hidden), NARROW)), "▼2 + │ ↓2 │ L500 │ 6/7 │ in tx ‹ › | ⋯");
     let failed = Spec { failed: true, hidden: 1, ..applied.clone() };
-    assert_eq!(text(&layout(&bar(&w, &failed), NARROW)), "failed │ ▼2 + │ ↓2 │ L500 │ 6/7 │ ‹ › | ⋯");
+    assert_eq!(text(&layout(&bar(&w, &failed), NARROW)), "failed │ ▼2 + │ ↓2 │ L500 │ 6/7 │ in tx ‹ › | ⋯");
     // At 120 columns (the pane with the explorer) `6/7 cols` keeps its word: the conditions
     // shorten first.
     let l = layout(&bar(&w, &hidden), 92);
     assert!(text(&l).contains("6/7 cols"), "{}", text(&l));
+    // At 120 columns the first condition stays with the count of the others: the rows' notes
+    // and range go before it is counted.
+    // (The rows of a capped result read whole: no paging state, no note.)
+    let mut plain = bar(&w, &Spec { limit: Some(500), ..applied.clone() });
+    if let Some(r) = plain.rows.as_mut() {
+        (r.state, r.notes, r.arrows) = (None, Vec::new(), None);
+        (r.full, r.mid, r.short) = ("500 rows".into(), "500 rows".into(), "500 rows".into());
+    }
+    let l = layout(&plain, 86);
+    assert_eq!(text(&l), "WHERE  status = 'paid' ×   +1  + │ ORDER BY ↓ total_amount +1 │ LIMIT 500 │ 500 rows | ⋯");
     // The limit as a short number in the short form.
     let big = Spec { limit: Some(50_000), failed: true, hidden: 1, ..applied };
     assert!(text(&layout(&bar(&w, &big), NARROW)).contains("L50k"), "{}", text(&layout(&bar(&w, &big), NARROW)));
@@ -302,4 +323,56 @@ fn a_limit_typed_shows_selected_until_a_key_replaces_it() {
     m.limit = LimitM::Editing { text: "500".into(), cursor: 3, selected: true };
     let l = layout(&m, 200);
     assert!(l.segs().any(|g| g.tone == Tone::FieldSelected && g.text == "500 "));
+}
+
+/// The bar while its `LIMIT` is typed in, at every width: the field is drawn (at most a few
+/// columns of it, around its cursor, which is in it) and nothing applied leaves, also with the
+/// largest cap and a wide paste.
+#[test]
+fn the_limit_field_is_drawn_at_every_width() {
+    let wide = "\u{540d}\u{524d}".repeat(10);
+    let texts = [("9223372036854775807".to_string(), 19), (wide.clone(), 20), (wide.clone(), 6), (String::new(), 0)];
+    for lang in [Lang::En, Lang::Ko] {
+        let w = Words::new(lang);
+        for base in [specs()[1].clone(), Spec { hidden: 1, failed: true, running: true, ..specs()[1].clone() }] {
+            for (text, cursor) in &texts {
+                let mut m = bar(&w, &base);
+                m.limit = LimitM::Editing { text: text.clone(), cursor: *cursor, selected: false };
+                for width in 30..=200 {
+                    let l = layout(&m, width);
+                    let what = format!("{lang:?} {text} @{cursor} width {width}: {}", super::tests::text(&l));
+                    assert!(l.width() <= width, "does not fit: {what}");
+                    let field = l.segs().find(|g| g.caret.is_some()).unwrap_or_else(|| panic!("no field: {what}"));
+                    assert!(field.caret.unwrap() < crate::text::width(&field.text), "cursor out of the field: {what}");
+                    assert!(has(&l, BarHit::More) || has(&l, BarHit::Chip(0)), "{what}");
+                    assert!(has(&l, BarHit::Order), "{what}");
+                    if base.hidden > 0 {
+                        assert!(has(&l, BarHit::Cols), "{what}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The paging state (held, in a transaction, a countdown in the warning colour) stays in the
+/// short forms, bounded.
+#[test]
+fn the_paging_state_stays_in_the_short_forms() {
+    let w = Words::new(Lang::En);
+    for (state, warn) in [("paging", false), ("in tx", false), ("4:59", true), ("first page only", true)] {
+        let mut m = bar(&w, &Spec { hidden: 1, ..specs()[1].clone() });
+        if let Some(r) = m.rows.as_mut() {
+            r.state = Some((state.to_string(), warn));
+        }
+        for level in 13..LEVELS.len() - 1 {
+            let l = at_level(&m, level, 200).unwrap();
+            let g = l
+                .segs()
+                .find(|g| g.hit == Some(BarHit::Rows))
+                .unwrap_or_else(|| panic!("{state} at {level}: {}", text(&l)));
+            assert!(crate::text::width(&g.text) <= STATE_MAX, "{}", g.text);
+            assert_eq!(g.tone, if warn { Tone::Warn } else { Tone::Muted });
+        }
+    }
 }

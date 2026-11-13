@@ -82,16 +82,26 @@ pub struct StateM {
 }
 
 /// The rows of the result shown: from the longest form (`1–500 of ~50,001 rows`) to the
-/// shortest (`~50k rows`), a short mark of its paging state (`warn`: in the warning colour), and
-/// the previous and next page arrows with whether each can be used (none: one page only).
+/// shortest (`~50k rows`), a short mark of its paging state (`warn`: in the warning colour; it
+/// stays in every form while the rows have one), notes said while there is room (where the
+/// number comes from, the key that counts them), and the previous and next page arrows with
+/// whether each can be used (none: one page only).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RowsM {
     pub full: String,
     pub mid: String,
     pub short: String,
-    pub mark: Option<(String, bool)>,
+    pub state: Option<(String, bool)>,
+    pub notes: Vec<String>,
     pub arrows: Option<(bool, bool)>,
 }
+
+/// The most columns the paging state takes in the short forms.
+const STATE_MAX: usize = 8;
+
+/// The most columns the `LIMIT` field takes: in the long forms, and in the short ones.
+const FIELD_LONG: usize = 21;
+const FIELD_SHORT: usize = 8;
 
 /// The column count: `7 cols`, or `6/7 cols` with `short` (`6/7`) while some are hidden.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,6 +189,8 @@ pub struct Seg {
     pub hit: Option<BarHit>,
     pub ul: Option<usize>,
     pub focus: bool,
+    /// The cursor of the `LIMIT` field, in columns from the start of this piece.
+    pub caret: Option<usize>,
 }
 
 /// The bar laid out: the pieces from the left, and those at the right end.
@@ -227,7 +239,7 @@ pub struct Lv {
     /// `⋯ Advanced` → `⋯`.
     adv_short: bool,
     /// The rows: 0 whole, 1 without the range, 2 the number shortened, 3 the arrows only, 4
-    /// nothing.
+    /// the paging state only.
     rows: u8,
     /// The order keys after the first counted (`+1`).
     order_more: bool,
@@ -235,6 +247,8 @@ pub struct Lv {
     chips_more: bool,
     /// `ORDER BY` → `ORDER`.
     order_word: bool,
+    /// The rows' notes said (the paging state stays without them).
+    notes: bool,
     /// The first condition cut with `…`.
     cut: bool,
     /// The conditions counted (`2 conditions`).
@@ -255,9 +269,9 @@ pub struct Lv {
 const fn lv(n: usize) -> Lv {
     Lv {
         adv_short: n >= 1,
-        rows: if n >= 12 {
+        rows: if n >= 13 {
             4
-        } else if n >= 9 {
+        } else if n >= 10 {
             3
         } else if n >= 3 {
             2
@@ -269,23 +283,24 @@ const fn lv(n: usize) -> Lv {
         order_more: n >= 4,
         chips_more: n >= 5,
         order_word: n >= 6,
-        cut: n >= 7,
-        chips_count: n >= 8,
-        cols_short: n >= 10,
-        order_count: n >= 11,
-        short: if n >= 13 && n <= 19 {
-            (n - 12) as u8
-        } else if n > 19 {
+        notes: n < 7,
+        cut: n >= 8,
+        chips_count: n >= 9,
+        cols_short: n >= 11,
+        order_count: n >= 12,
+        short: if n >= 14 && n <= 20 {
+            (n - 13) as u8
+        } else if n > 20 {
             7
         } else {
             0
         },
-        bare: n >= 20,
+        bare: n >= 21,
     }
 }
 
 /// The steps, from the whole bar to the narrowest.
-pub const LEVELS: [Lv; 21] = [
+pub const LEVELS: [Lv; 22] = [
     lv(0),
     lv(1),
     lv(2),
@@ -307,7 +322,24 @@ pub const LEVELS: [Lv; 21] = [
     lv(18),
     lv(19),
     lv(20),
+    lv(21),
 ];
+
+/// The `LIMIT` field's text in at most `room` columns around its cursor (`cursor`: columns from
+/// its start), and where the cursor is in what is shown.
+fn field_window(text: &str, cursor: usize, room: usize) -> (String, usize) {
+    let total = width(text);
+    let start = cursor.saturating_sub(room.saturating_sub(1)).min(total.saturating_sub(room.saturating_sub(1)));
+    let shown = crate::text::slice_cols(text, start, room.saturating_sub(1));
+    (shown, cursor.saturating_sub(start))
+}
+
+/// The `LIMIT` field as a piece, at most `room` columns of its text and a blank for the cursor.
+fn field_seg(text: &str, cursor: usize, selected: bool, room: usize) -> Seg {
+    let tone = if selected { Tone::FieldSelected } else { Tone::Field };
+    let (shown, at) = field_window(text, cursor, room);
+    Seg { caret: Some(at), ..seg(format!("{shown} "), tone, Some(BarHit::Limit)) }
+}
 
 /// A count in at most four characters (`99+` above 99).
 fn capped(n: usize) -> String {
@@ -342,7 +374,7 @@ fn mnemonic(text: &str, key: char) -> Option<usize> {
 }
 
 fn seg(text: impl Into<String>, tone: Tone, hit: Option<BarHit>) -> Seg {
-    Seg { text: text.into(), tone, hit, ul: None, focus: false }
+    Seg { text: text.into(), tone, hit, ul: None, focus: false, caret: None }
 }
 
 fn keyword(text: &str, key: char, dim: bool, hit: BarHit) -> Seg {
@@ -406,22 +438,32 @@ fn short_form(m: &Bar, k: u8, out: &mut Vec<Seg>) {
         LimitM::None(_) => {}
         LimitM::Cap(c) if k < 6 => parts.push(vec![seg(format!("L{}", compact(*c)), Tone::Text, l)]),
         LimitM::Cap(_) => parts.push(vec![seg("L", Tone::Text, l)]),
-        LimitM::Editing { text, selected, .. } => {
-            let tone = if *selected { Tone::FieldSelected } else { Tone::Field };
-            parts.push(vec![seg("L ", Tone::Text, l), seg(format!("{text} "), tone, l)])
+        LimitM::Editing { text, cursor, selected } => {
+            let room = if k < 6 { FIELD_SHORT } else { FIELD_SHORT - 2 };
+            parts.push(vec![seg("L ", Tone::Text, l), field_seg(text, *cursor, *selected, room)])
         }
     }
     if let Some(c) = m.cols.as_ref().filter(|c| c.hidden > 0) {
         let text = if k < 5 { c.short.clone() } else { format!("\u{25cc}{}", capped(c.hidden)) };
         parts.push(vec![seg(text, Tone::Warn, Some(BarHit::Cols))]);
     }
+    let mut rows: Vec<Seg> = Vec::new();
+    if let Some((state, warn)) = m.rows.as_ref().and_then(|r| r.state.as_ref()) {
+        let tone = if *warn { Tone::Warn } else { Tone::Muted };
+        let room = if k < 7 { STATE_MAX } else { STATE_MAX / 2 };
+        rows.push(seg(clip(state, room), tone, Some(BarHit::Rows)));
+    }
     if let Some((prev, next)) = m.rows.as_ref().and_then(|r| r.arrows).filter(|_| k < 3) {
         let tone = |on: bool| if on { Tone::Accent } else { Tone::Dim };
-        parts.push(vec![
-            seg(m.glyphs.prev, tone(prev), Some(BarHit::Prev)),
-            seg(" ", Tone::Muted, None),
-            seg(m.glyphs.next, tone(next), Some(BarHit::Next)),
-        ]);
+        if !rows.is_empty() {
+            rows.push(seg(" ", Tone::Muted, None));
+        }
+        rows.push(seg(m.glyphs.prev, tone(prev), Some(BarHit::Prev)));
+        rows.push(seg(" ", Tone::Muted, None));
+        rows.push(seg(m.glyphs.next, tone(next), Some(BarHit::Next)));
+    }
+    if !rows.is_empty() {
+        parts.push(rows);
     }
     let sep = if k < 2 { SEP } else { " " };
     // After the state: the same separator as between the parts.
@@ -526,10 +568,7 @@ fn line(m: &Bar, lv: Lv, cut: Option<usize>) -> Vec<Seg> {
     match &m.limit {
         LimitM::None(word) => out.push(seg(word.clone(), Tone::Muted, l)),
         LimitM::Cap(n) => out.push(seg(n.to_string(), Tone::Text, l)),
-        LimitM::Editing { text, selected, .. } => {
-            let tone = if *selected { Tone::FieldSelected } else { Tone::Field };
-            out.push(seg(format!("{text} "), tone, l))
-        }
+        LimitM::Editing { text, cursor, selected } => out.push(field_seg(text, *cursor, *selected, FIELD_LONG)),
     }
     // cols
     if let Some(c) = &m.cols {
@@ -548,7 +587,7 @@ fn line(m: &Bar, lv: Lv, cut: Option<usize>) -> Vec<Seg> {
         }
     }
     // rows
-    if let Some(r) = m.rows.as_ref().filter(|_| lv.rows < 4) {
+    if let Some(r) = &m.rows {
         out.push(seg(SEP, Tone::Sep, None));
         let text = match lv.rows {
             0 => Some(&r.full),
@@ -561,13 +600,19 @@ fn line(m: &Bar, lv: Lv, cut: Option<usize>) -> Vec<Seg> {
             out.push(Seg { ul: mnemonic(t, 'r'), ..seg(t.clone(), Tone::Muted, Some(BarHit::Rows)) });
             first = false;
         }
-        if let Some((mark, warn)) = &r.mark {
+        if let Some((state, warn)) = &r.state {
             let sep = if first { "" } else { " \u{00b7} " };
             let tone = if *warn { Tone::Warn } else { Tone::Muted };
-            out.push(seg(format!("{sep}{mark}"), tone, Some(BarHit::Rows)));
+            let state = if lv.rows >= 3 { clip(state, STATE_MAX) } else { state.clone() };
+            out.push(seg(format!("{sep}{state}"), tone, Some(BarHit::Rows)));
             first = false;
         }
-        if let Some((prev, next)) = r.arrows {
+        for note in r.notes.iter().filter(|_| lv.notes && lv.rows < 3) {
+            let sep = if first { "" } else { " \u{00b7} " };
+            out.push(seg(format!("{sep}{note}"), Tone::Muted, Some(BarHit::Rows)));
+            first = false;
+        }
+        if let Some((prev, next)) = r.arrows.filter(|_| lv.rows < 4) {
             let tone = |on: bool| if on { Tone::Accent } else { Tone::Dim };
             if !first {
                 out.push(seg(" ", Tone::Muted, None));
@@ -712,10 +757,8 @@ pub(crate) fn draw(app: &App, m: &Bar, area: Rect, buf: &mut Buffer) -> (Hits, O
                 _ => hits.push((r, h)),
             }
         }
-        if matches!(s.tone, Tone::Field | Tone::FieldSelected)
-            && let LimitM::Editing { cursor: c, .. } = &m.limit
-        {
-            cursor = Some(((x + *c as u16).min(end.saturating_sub(1)), area.y));
+        if let Some(c) = s.caret {
+            cursor = Some(((x + c as u16).min(end.saturating_sub(1)), area.y));
         }
     }
     (hits, cursor)
