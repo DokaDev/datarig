@@ -479,7 +479,7 @@ pub(crate) fn model(
 /// Column `c`: how it is filled (generated, `AUTO_INCREMENT`, its default) from `EXTRA`.
 fn column(c: RawColumn, mariadb: bool, d: Dialect) -> StructureColumn {
     let extra = c.extra.unwrap_or_default();
-    let has = |word: &str| extra.split_whitespace().any(|w| w.eq_ignore_ascii_case(word));
+    let has = |word: &str| words(&extra).any(|w| w.eq_ignore_ascii_case(word));
     // MySQL puts some expressions in parentheses (`(`qty` * 2)`), others not: the model has
     // them without, as a check's condition.
     let generation = unwrapped(&c.generation.unwrap_or_default()).to_string();
@@ -566,7 +566,9 @@ fn is_binary_type(t: &str) -> bool {
 
 /// The words of `EXTRA`.
 fn words(extra: &str) -> impl Iterator<Item = &str> {
-    extra.split_whitespace()
+    // MariaDB separates its attributes with a comma too (`VIRTUAL GENERATED, INVISIBLE`,
+    // `on update current_timestamp(), INVISIBLE`): no word keeps it.
+    extra.split(|c: char| c.is_whitespace() || c == ',').filter(|w| !w.is_empty())
 }
 
 /// `REFERENTIAL_CONSTRAINTS.DELETE_RULE` / `UPDATE_RULE` of foreign key `name`: a rule the model
