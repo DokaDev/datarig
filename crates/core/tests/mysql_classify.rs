@@ -106,6 +106,17 @@ fn run(client: &[String], script: &str) -> (String, String) {
     (String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
+/// Whether the client's server is MariaDB, from its own version line (asked once per process).
+fn mariadb(client: &[String]) -> bool {
+    static MARIADB: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *MARIADB.get_or_init(|| run(client, "SELECT VERSION();").0.contains("MariaDB"))
+}
+
+/// What MariaDB does otherwise, said on stderr with why.
+fn on_mariadb(test: &str, reason: &str) {
+    let _ = writeln!(std::io::stderr(), "MARIADB {test}: {reason}");
+}
+
 /// Run each of `statements` (sent whole, each after a marker and followed by `SHOW ERRORS`),
 /// after `prelude`: the first error each one raised, by index.
 fn errors(client: &[String], prelude: &str, statements: &[(usize, &str)]) -> BTreeMap<usize, u32> {
@@ -113,7 +124,11 @@ fn errors(client: &[String], prelude: &str, statements: &[(usize, &str)]) -> BTr
     let mut script = format!("{prelude}\nDELIMITER {END}\n");
     for (i, sql) in statements {
         assert!(!sql.contains(END), "{sql}");
-        script.push_str(&format!("SELECT 'zz_begin {i}'{END}\n{sql}\n{END}\nSHOW ERRORS{END}\n"));
+        // The marker reads a table: MariaDB keeps the errors of the statement before for one
+        // that reads none.
+        script.push_str(&format!(
+            "SELECT 'zz_begin {i}' FROM information_schema.schemata LIMIT 1{END}\n{sql}\n{END}\nSHOW ERRORS{END}\n"
+        ));
     }
     script.push_str("DELIMITER ;\n");
     let (out, _) = run(client, &script);
@@ -158,15 +173,22 @@ fn reads_run_on_a_read_only_session_and_writes_fail_there() {
     let (left, _) = run(&client, LEFT);
     assert!(left.trim().is_empty(), "{left}");
 
+    let mariadb = mariadb(&client);
     let mut wrong = Vec::new();
     let mut other = Vec::new();
     let mut denied = Vec::new();
+    // MariaDB: MySQL's syntax it cannot parse (never reaching the read-only check), and the plan
+    // of a locking read, which it refuses in a read-only transaction too.
+    let mut unparsed = Vec::new();
+    let mut stricter = Vec::new();
     for (i, sql) in &statements {
         let (_, want) = CORPUS[*i];
         let class = Classifier::classify_once(MY, sql).class;
         let error = errors.get(i).copied();
         let server_allows = want.split(' ').any(|w| w == "srvok");
+        let locking_plan = sql.starts_with("EXPLAIN ") && sql.contains(" FOR UPDATE");
         match class {
+            Class::Read if mariadb && locking_plan && error == Some(READ_ONLY) => stricter.push(sql.to_string()),
             Class::Read if error == Some(READ_ONLY) => wrong.push(format!("read refused as a write: {sql}")),
             Class::Read => {
                 if let Some(e) = error {
@@ -178,6 +200,7 @@ fn reads_run_on_a_read_only_session_and_writes_fail_there() {
             }
             _ if server_allows => {}
             _ if error.is_some_and(|e| DENIED.contains(&e)) => denied.push(format!("{error:?} {sql}")),
+            _ if mariadb && error == Some(1064) => unparsed.push(sql.to_string()),
             _ if error != Some(READ_ONLY) => wrong.push(format!("{class:?} not refused ({error:?}): {sql}")),
             _ => {}
         }
@@ -190,6 +213,19 @@ fn reads_run_on_a_read_only_session_and_writes_fail_there() {
         other.join("\n"),
         denied.join("\n")
     );
+    let test = "reads_run_on_a_read_only_session_and_writes_fail_there";
+    if !unparsed.is_empty() {
+        on_mariadb(
+            test,
+            &format!("MySQL syntax the server does not parse, not shown refused as writes:\n{}", unparsed.join("\n")),
+        );
+    }
+    if !stricter.is_empty() {
+        on_mariadb(
+            test,
+            &format!("the server refuses the plan of a locking read as a write:\n{}", stricter.join("\n")),
+        );
+    }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
@@ -209,6 +245,13 @@ fn every_built_in_is_a_function_of_the_server() {
     // Functions only some supported versions have.
     const NOT_EVERYWHERE: &[&str] =
         &["MD5", "SHA1", "STRING_TO_VECTOR", "VECTOR_DIM", "VECTOR_TO_STRING", "WAIT_UNTIL_SQL_THREAD_AFTER_GTIDS"];
+    if mariadb(&client) {
+        on_mariadb(
+            "every_built_in_is_a_function_of_the_server",
+            "the built-in list is MySQL's; names MariaDB lacks are not checked here",
+        );
+        return;
+    }
     let missing: Vec<&&str> = unknown.iter().filter(|n| !NOT_EVERYWHERE.contains(n)).collect();
     assert!(missing.is_empty(), "not functions of this server: {missing:?}");
 }

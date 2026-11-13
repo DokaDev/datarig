@@ -17,6 +17,7 @@ use datarig_driver_mysql::MyDriver;
 use mysql_async::prelude::Queryable;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
@@ -31,6 +32,45 @@ fn url(test: &str) -> Option<String> {
             None
         }
     }
+}
+
+/// Whether the server is MariaDB, from its own version line (asked once per process).
+async fn mariadb(url: &str) -> bool {
+    static MARIADB: OnceLock<bool> = OnceLock::new();
+    if let Some(m) = MARIADB.get() {
+        return *m;
+    }
+    let mut c = side(url).await;
+    let line: String = c.query_first("SELECT VERSION()").await.unwrap().expect("a version");
+    let _ = c.disconnect().await;
+    *MARIADB.get_or_init(|| line.contains("MariaDB"))
+}
+
+/// A test of what MariaDB does not offer says so on stderr, with why.
+fn not_on_mariadb(test: &str, reason: &str) {
+    let _ = writeln!(std::io::stderr(), "MARIADB {test}: {reason}");
+}
+
+/// Why MariaDB takes no edits.
+const NO_EDITS: &str = "no edits are offered, its collations and row locks are not MySQL's";
+
+/// On MariaDB, which takes no edits: the session said so (`Edit(None)`), and an apply sent
+/// anyway is refused unsent, the table as it was. Says so on stderr and gives true; false on
+/// MySQL.
+async fn refuses_edits(url: &str, c: &mut Conn, t: &Table, test: &str) -> bool {
+    if !mariadb(url).await {
+        return false;
+    }
+    assert_eq!(c.edit, None);
+    let all = format!("SELECT * FROM {}", t.q());
+    let before = c.rows(&all).await;
+    let step =
+        edit::Step { sql: format!("DELETE FROM {}", t.q()), expect: Expect::Affected(1), origin: edit::Origin::Row(0) };
+    let failure = c.apply(vec![step], ApplyTx::Commit).await.unwrap_err();
+    assert_eq!(failure, ApplyFailure { step: None, why: ApplyError::Db(DbError::NotSupported) });
+    assert_eq!(c.rows(&all).await, before, "nothing was written");
+    not_on_mariadb(test, NO_EDITS);
+    true
 }
 
 fn profile(url: &str) -> ConnectionConfig {
@@ -302,6 +342,11 @@ async fn a_server_that_takes_edits_says_so_and_a_keyed_apply_commits_with_the_in
     )
     .await;
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    if refuses_edits(&url, &mut c, &t, "a_server_that_takes_edits_says_so_and_a_keyed_apply_commits_with_the_insert_id")
+        .await
+    {
+        return;
+    }
     assert_eq!(c.edit, Some(EditFormat::MySql(MySqlEdit { nowait: true })));
     let select = format!("SELECT id, v, n FROM {} ORDER BY id", t.q());
     let e = Editing::new(&url, &mut c, &t, &select).await;
@@ -341,6 +386,9 @@ async fn a_value_set_to_what_the_table_holds_counts_as_the_row_it_matched() {
     )
     .await;
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    if refuses_edits(&url, &mut c, &t, "a_value_set_to_what_the_table_holds_counts_as_the_row_it_matched").await {
+        return;
+    }
     let select = format!("SELECT id, d FROM {}", t.q());
     let e = Editing::new(&url, &mut c, &t, &select).await;
     let mut b = EditBatch::new();
@@ -364,6 +412,9 @@ async fn a_row_changed_elsewhere_or_locked_fails_and_nothing_is_written() {
     )
     .await;
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    if refuses_edits(&url, &mut c, &t, "a_row_changed_elsewhere_or_locked_fails_and_nothing_is_written").await {
+        return;
+    }
     let select = format!("SELECT id, v FROM {} ORDER BY id", t.q());
     let e = Editing::new(&url, &mut c, &t, &select).await;
     let mut b = EditBatch::new();
@@ -406,6 +457,11 @@ async fn identical_rows_of_a_keyless_table_change_one_or_all_and_text_compares_e
     )
     .await;
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    if refuses_edits(&url, &mut c, &t, "identical_rows_of_a_keyless_table_change_one_or_all_and_text_compares_exactly")
+        .await
+    {
+        return;
+    }
     let select = format!("SELECT k, v FROM {} ORDER BY k, v COLLATE utf8mb4_bin", t.q());
     let e = Editing::new(&url, &mut c, &t, &select).await;
     // `abc` and `ABC` are equal in the column's collation, `a` and `a ` too (PAD SPACE): each
@@ -459,6 +515,9 @@ async fn rows_that_differ_only_where_values_do_not_compare_are_refused() {
     )
     .await;
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    if refuses_edits(&url, &mut c, &t, "rows_that_differ_only_where_values_do_not_compare_are_refused").await {
+        return;
+    }
     let select = format!("SELECT k, f FROM {} ORDER BY f", t.q());
     let e = Editing::new(&url, &mut c, &t, &select).await;
     let mut b = EditBatch::new();
@@ -479,6 +538,9 @@ async fn a_table_whose_invisible_key_the_result_hides_is_edited_by_its_values() 
     )
     .await;
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    if refuses_edits(&url, &mut c, &t, "a_table_whose_invisible_key_the_result_hides_is_edited_by_its_values").await {
+        return;
+    }
     let select = format!("SELECT * FROM {} ORDER BY v", t.q());
     let e = Editing::new(&url, &mut c, &t, &select).await;
     assert!(matches!(e.target.identity, edit::Identity::Values { .. }), "{:?}", e.target.identity);
@@ -504,6 +566,16 @@ async fn in_an_open_transaction_a_failed_apply_goes_back_to_its_savepoint_and_ma
     )
     .await;
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    if refuses_edits(
+        &url,
+        &mut c,
+        &t,
+        "in_an_open_transaction_a_failed_apply_goes_back_to_its_savepoint_and_manual_commit_keeps_it_open",
+    )
+    .await
+    {
+        return;
+    }
     let select = format!("SELECT id, v FROM {} ORDER BY id", t.q());
     let e = Editing::new(&url, &mut c, &t, &select).await;
     // Manual commit, no transaction open: the Apply opens one and leaves it open.
@@ -555,12 +627,25 @@ async fn a_read_only_session_refuses_an_apply_unsent() {
     .await;
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
     let select = format!("SELECT id, v FROM {}", t.q());
-    let e = Editing::new(&url, &mut c, &t, &select).await;
-    let mut b = EditBatch::new();
-    b.set(&[(0, 1)], &text("mine"), e.orig());
-    let plan = e.plan(&mut c, &b, &[]).await;
+    // MariaDB plans no edits: the statement is written by hand there, the refusal is the same.
+    let steps = if mariadb(&url).await {
+        not_on_mariadb(
+            "a_read_only_session_refuses_an_apply_unsent",
+            "the update is written by hand, no edits are planned",
+        );
+        vec![edit::Step {
+            sql: format!("UPDATE {} SET v = 'mine' WHERE id = 1", t.q()),
+            expect: Expect::Affected(1),
+            origin: edit::Origin::Row(0),
+        }]
+    } else {
+        let e = Editing::new(&url, &mut c, &t, &select).await;
+        let mut b = EditBatch::new();
+        b.set(&[(0, 1)], &text("mine"), e.orig());
+        e.plan(&mut c, &b, &[]).await.steps
+    };
     let mut ro = Conn::open(&url, SessionRole::Query, true).await;
-    let failure = ro.apply(plan.steps, ApplyTx::Commit).await.unwrap_err();
+    let failure = ro.apply(steps, ApplyTx::Commit).await.unwrap_err();
     assert_eq!(failure, ApplyFailure { step: None, why: ApplyError::Db(DbError::ReadWriteRefused) });
     assert_eq!(cells(&c.rows(&select).await), [vec![Some("1"), Some("a")]]);
 }
@@ -583,6 +668,9 @@ async fn a_pasted_block_overwrites_two_rows_and_adds_one() {
     )
     .await;
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    if refuses_edits(&url, &mut c, &t, "a_pasted_block_overwrites_two_rows_and_adds_one").await {
+        return;
+    }
     let select = format!("SELECT id, v, n, w FROM {} ORDER BY id", t.q());
     let e = Editing::new(&url, &mut c, &t, &select).await;
     let pasted =
@@ -637,6 +725,9 @@ async fn cells_copied_in_the_grid_paste_back_exactly() {
     )
     .await;
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    if refuses_edits(&url, &mut c, &t, "cells_copied_in_the_grid_paste_back_exactly").await {
+        return;
+    }
     let select = format!("SELECT id, v, w FROM {} ORDER BY id", t.q());
     let read = c.rows(&select).await;
     let e = Editing::new(&url, &mut c, &t, &select).await;
@@ -674,6 +765,9 @@ async fn a_paste_of_a_thousand_keyed_updates_stays_within_its_statements() {
     let insert = format!("INSERT INTO {{t}} VALUES {}", values.join(", "));
     let t = Table::make(&url, "paste_1k", &["CREATE TABLE {t} (id INT PRIMARY KEY, v VARCHAR(20))", &insert]).await;
     let mut c = Conn::open_paged(&url, SessionRole::Query, false, 2_000).await;
+    if refuses_edits(&url, &mut c, &t, "a_paste_of_a_thousand_keyed_updates_stays_within_its_statements").await {
+        return;
+    }
     let select = format!("SELECT id, v FROM {} ORDER BY id", t.q());
     let e = Editing::new(&url, &mut c, &t, &select).await;
     assert_eq!(e.rows.len(), 1_000);

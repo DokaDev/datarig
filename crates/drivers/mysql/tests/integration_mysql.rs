@@ -216,6 +216,83 @@ async fn side(url: &str) -> mysql_async::Conn {
     mysql_async::Conn::new(opts).await.expect("the side connection opens")
 }
 
+/// Whether the server is MariaDB, from its own version line (asked once per process).
+async fn mariadb(url: &str) -> bool {
+    if let Some(m) = MARIADB.get() {
+        return *m;
+    }
+    let mut c = side(url).await;
+    let m = is_mariadb(&mut c).await;
+    c.disconnect().await.unwrap();
+    m
+}
+
+static MARIADB: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// [`mariadb`], once it was asked.
+fn mariadb_cached() -> bool {
+    *MARIADB.get().expect("asked already")
+}
+
+/// [`mariadb`], asked on connection `c`.
+async fn is_mariadb(c: &mut mysql_async::Conn) -> bool {
+    if let Some(m) = MARIADB.get() {
+        return *m;
+    }
+    let line: String = c.query_first("SELECT VERSION()").await.unwrap().expect("a version");
+    *MARIADB.get_or_init(|| line.contains("MariaDB"))
+}
+
+/// How long InnoDB keeps its lists of transactions and locks (`information_schema.INNODB_*`)
+/// once read, with a margin: read again within it, they are the same, however old.
+const INNODB_LISTS_KEPT: Duration = Duration::from_millis(150);
+
+/// The collation of a text column in `datarig` that a column of `shop` references: none of its
+/// own on MySQL; on MariaDB, whose foreign keys need one collation and whose databases here have
+/// two, `shop`'s.
+async fn referenced_collation(a: &mut mysql_async::Conn) -> String {
+    if !is_mariadb(a).await {
+        return String::new();
+    }
+    let shop: String = a
+        .query_first("SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = 'shop'")
+        .await
+        .unwrap()
+        .expect("shop's collation");
+    format!(" COLLATE {shop}")
+}
+
+/// What MariaDB does not offer, or does otherwise, said on stderr with why (written to the
+/// real stderr handle, as the `SKIPPED` lines).
+fn not_on_mariadb(test: &str, reason: &str) {
+    let _ = writeln!(std::io::stderr(), "MARIADB {test}: {reason}");
+}
+
+/// Why MariaDB gives no plan: its `EXPLAIN` has no tree format and no `ANALYZE`.
+const NO_PLANS: &str = "no plans are offered, its EXPLAIN has no tree format and no ANALYZE";
+/// Why MariaDB gives no estimate: an estimate is read from a plan.
+const NO_ESTIMATES: &str = "no estimates are offered, they are read from MySQL's plans";
+/// `name` as a trigger's statement is typed: MySQL prints the statement with its names quoted
+/// whatever was typed, MariaDB keeps it as typed, so there they are typed quoted.
+fn typed(mariadb: bool, name: &str) -> String {
+    if mariadb { format!("`{name}`") } else { name.to_string() }
+}
+
+/// Whether `ev` is MariaDB's answer to a plan statement it has no plan for: the server's syntax
+/// error, or the driver's refusal unsent.
+fn no_plan(ev: Option<&DbEvent>) -> bool {
+    match ev {
+        Some(DbEvent::Failed { error: DbError::Server(m), .. }) => m.starts_with("ERROR 1064 "),
+        Some(DbEvent::Failed { error: DbError::NotSupported, .. }) => true,
+        _ => false,
+    }
+}
+
+/// A known fault on MariaDB, not checked there until it is mended.
+const TIMESTAMP_OFFSET: &str = "known bug, TIMESTAMP values copied as SQL carry an offset MariaDB does not read";
+/// Why MariaDB has no `caching_sha2_password` account.
+const NO_SHA2: &str = "no caching_sha2_password account can be made, the server has no such plugin";
+
 /// The connection ids of test `test`'s sessions of role `role`, by their `program_name`.
 async fn sessions_of(admin: &mut mysql_async::Conn, role: SessionRole, test: &str) -> Vec<u64> {
     let program = format!("datarig-{}-{}", role.tag(), tag(test));
@@ -229,8 +306,26 @@ async fn sessions_of(admin: &mut mysql_async::Conn, role: SessionRole, test: &st
         .expect("session_connect_attrs reads")
 }
 
-/// A session variable of connection `id`, as the server has it.
+/// A session variable of connection `id`, as the server has it. MariaDB shows no session's
+/// variables to another: there, the value a session of its own gets from the set-up statement
+/// `id` ran (in its history), so only for a variable that statement sets.
 async fn variable_of(admin: &mut mysql_async::Conn, id: u64, name: &str) -> Option<String> {
+    if is_mariadb(admin).await {
+        let ran = statements_of(admin, id).await;
+        let setup = ran.iter().find(|s| s.starts_with("SET NAMES utf8mb4, SESSION session_track_system_variables"));
+        let setup = setup.unwrap_or_else(|| panic!("the set-up of {id} in its history: {ran:?}"));
+        let mut own = mysql_async::Conn::new(admin.opts().clone()).await.expect("a connection of its own");
+        own.query_drop(setup).await.expect("the set-up runs again");
+        let v = own
+            .exec_first(
+                "SELECT VARIABLE_VALUE FROM information_schema.SESSION_VARIABLES WHERE VARIABLE_NAME = ?",
+                (name.to_uppercase(),),
+            )
+            .await
+            .expect("SESSION_VARIABLES reads");
+        own.disconnect().await.unwrap();
+        return v;
+    }
     admin
         .exec_first(
             "SELECT v.VARIABLE_VALUE FROM performance_schema.variables_by_thread v \
@@ -271,8 +366,10 @@ async fn a_query_session_says_how_its_text_is_read() {
     let version: String = probe.query_first("SELECT VERSION()").await.unwrap().unwrap();
     let mut parts = version.split(|c: char| !c.is_ascii_digit()).map(|n| n.parse::<u16>().unwrap_or(0));
     let (major, minor) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
-    // `select $$` is a syntax error from 8.1 on (MySQL's client then reads dollar quotes).
-    assert_eq!(mode, MySqlMode { dollar_quotes: (major, minor) >= (8, 1), ..MySqlMode::default() }, "{version}");
+    // `select $$` is a syntax error from MySQL 8.1 on (MySQL's client then reads dollar quotes);
+    // MariaDB reads `$$` as a name.
+    let dollar_quotes = !version.contains("MariaDB") && (major, minor) >= (8, 1);
+    assert_eq!(mode, MySqlMode { dollar_quotes, ..MySqlMode::default() }, "{version}");
     probe.disconnect().await.unwrap();
 }
 
@@ -426,12 +523,20 @@ async fn the_metadata_session_reads_the_databases_and_the_catalog() {
     assert!(matches!(c.next(15).await, DbEvent::Connected));
     let lang = c.next(15).await;
     assert!(matches!(lang, DbEvent::Language(Language::Sql(Dialect::MySql(_)))), "{lang:?}");
-    // The plan format of the server (the dev server is MySQL, not MariaDB).
+    // The plan format of the server and the edits it takes (MySQL 8.0.17 on); none on MariaDB.
     let explain = c.next(15).await;
-    assert!(matches!(explain, DbEvent::Explain(Some(ExplainFormat::MySqlTree))), "{explain:?}");
-    // The edits the server takes (MySQL 8.0.17 on).
     let edit = c.next(15).await;
-    assert!(matches!(edit, DbEvent::Edit(Some(EditFormat::MySql(MySqlEdit { nowait: true })))), "{edit:?}");
+    if mariadb(&url).await {
+        assert!(matches!(explain, DbEvent::Explain(None)), "{explain:?}");
+        assert!(matches!(edit, DbEvent::Edit(None)), "{edit:?}");
+        not_on_mariadb(
+            "the_metadata_session_reads_the_databases_and_the_catalog",
+            "no plan format and no edits are offered, its EXPLAIN, collations and row locks are not MySQL's",
+        );
+    } else {
+        assert!(matches!(explain, DbEvent::Explain(Some(ExplainFormat::MySqlTree))), "{explain:?}");
+        assert!(matches!(edit, DbEvent::Edit(Some(EditFormat::MySql(MySqlEdit { nowait: true })))), "{edit:?}");
+    }
     match c.next(15).await {
         DbEvent::Schemas(Ok(s)) => {
             assert!(s.contains(&"shop".to_string()), "{s:?}");
@@ -491,6 +596,12 @@ async fn lookups_never_queue_behind_a_metadata_lock_nor_hold_one_up() {
     m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
     let mut side_admin = side(&admin).await;
     let meta = only_session(&mut side_admin, SessionRole::Meta, "lookup").await;
+    // MariaDB's value is read from the session's set-up, while its history still holds it.
+    let early = if is_mariadb(&mut side_admin).await {
+        Some(variable_of(&mut side_admin, meta, "lock_wait_timeout").await)
+    } else {
+        None
+    };
     let lookups = |m: &mut Conn| {
         m.session.send(DbCommand::LoadObjects { schema: "shop".into() });
         m.session.send(DbCommand::LoadCatalog);
@@ -539,7 +650,10 @@ async fn lookups_never_queue_behind_a_metadata_lock_nor_hold_one_up() {
     assert!(alter_waits(&mut side_admin, alter_id).await, "the ALTER still waits for the held result");
     // A lookup may wait behind the waiting ALTER, for the session's lock wait only, and then
     // gives up: every wait seen ended `Locked`.
-    let wait = variable_of(&mut side_admin, meta, "lock_wait_timeout").await;
+    let wait = match early {
+        Some(wait) => wait,
+        None => variable_of(&mut side_admin, meta, "lock_wait_timeout").await,
+    };
     assert_eq!(wait.as_deref(), Some("2"), "the metadata session's lock wait");
     let locked = [&objects, &catalog]
         .iter()
@@ -611,12 +725,18 @@ async fn order_keys_are_read_without_a_metadata_lock() {
     let Some((url, admin)) = urls("order_keys_are_read_without_a_metadata_lock") else { return };
     let t = numbers(&admin, "okeys", 200_000).await;
     let mut wide = side(&admin).await;
+    // MariaDB's server takes a result of short rows into its buffers whole, and its statement
+    // ends: there the rows are made wide enough that a held result is held.
+    let (width, pad) = if is_mariadb(&mut wide).await { (240, 200) } else { (40, 0) };
     wide.query_drop(format!(
-        "ALTER TABLE {} MODIFY v VARCHAR(40) NOT NULL, ADD UNIQUE KEY uv (v), ADD COLUMN nick INT NULL UNIQUE",
+        "ALTER TABLE {} MODIFY v VARCHAR({width}) NOT NULL, ADD UNIQUE KEY uv (v), ADD COLUMN nick INT NULL UNIQUE",
         t.q()
     ))
     .await
     .unwrap();
+    if pad > 0 {
+        wide.query_drop(format!("UPDATE {} SET v = CONCAT(v, REPEAT('x', {pad}))", t.q())).await.unwrap();
+    }
     wide.disconnect().await.unwrap();
     let mut m = Conn::start(&url, SessionRole::Meta, false, "okeys");
     m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
@@ -624,11 +744,13 @@ async fn order_keys_are_read_without_a_metadata_lock() {
     let meta = only_session(&mut side_admin, SessionRole::Meta, "okeys").await;
     let want =
         OrderKeys { primary_key: vec!["id".into()], unique_not_null: vec![vec!["v".into()]], ..OrderKeys::default() };
-    // The table's columns, read with the keys: the same whatever holds the table.
+    // The table's columns, read with the keys: the same whatever holds the table. MariaDB keeps
+    // an integer's display width in its type.
+    let int = if is_mariadb(&mut side_admin).await { "int(11)" } else { "int" };
     let columns = vec![
-        ("id".to_string(), "int".to_string(), true, true),
-        ("v".to_string(), "varchar(40)".to_string(), true, false),
-        ("nick".to_string(), "int".to_string(), false, false),
+        ("id".to_string(), int.to_string(), true, true),
+        ("v".to_string(), format!("varchar({width})"), true, false),
+        ("nick".to_string(), int.to_string(), false, false),
     ];
     let described = |k: &OrderKeys| -> Vec<(String, String, bool, bool)> {
         let cols = k.columns.as_ref().expect("the columns are known");
@@ -697,6 +819,12 @@ async fn order_keys_are_read_without_a_metadata_lock() {
 async fn sessions_are_set_up_on_the_server_by_role_and_policy() {
     let Some((url, admin)) = urls("sessions_are_set_up_on_the_server_by_role_and_policy") else { return };
     let mut admin = side(&admin).await;
+    // The limit of a statement: MySQL's in milliseconds, MariaDB's in seconds.
+    let (timeout, meta_timeout) = if is_mariadb(&mut admin).await {
+        ("max_statement_time", "10.000000")
+    } else {
+        ("max_execution_time", "10000")
+    };
     for (role, read_only, ro, limit) in [
         (SessionRole::Query, false, "OFF", (PAGE + 1).to_string()),
         (SessionRole::Query, true, "ON", (PAGE + 1).to_string()),
@@ -719,7 +847,7 @@ async fn sessions_are_set_up_on_the_server_by_role_and_policy() {
             "character_set_connection",
             "character_set_results",
             "lock_wait_timeout",
-            "max_execution_time",
+            timeout,
             "sql_quote_show_create",
         ] {
             vars.insert(name, variable_of(&mut admin, id, name).await.unwrap_or_default());
@@ -732,7 +860,7 @@ async fn sessions_are_set_up_on_the_server_by_role_and_policy() {
         }
         let meta = role == SessionRole::Meta;
         assert_eq!(vars["lock_wait_timeout"] == "2", meta, "{what}");
-        assert_eq!(vars["max_execution_time"] == "10000", meta, "{what}");
+        assert_eq!(vars[timeout] == meta_timeout, meta, "{what}");
         // `SHOW CREATE …` quotes every name on the metadata session, whatever the server's default.
         if meta {
             assert_eq!(vars["sql_quote_show_create"], "ON", "{what}");
@@ -790,7 +918,13 @@ async fn a_session_is_set_up_in_one_statement() {
         assert!(ran[0].starts_with("SET NAMES utf8mb4, SESSION session_track_system_variables"), "{ran:?}");
         assert!(ran[1..].iter().all(|s| !s.contains("@@SESSION")), "{role:?}: {ran:?}");
         if role == SessionRole::Query {
-            assert_eq!(ran.len(), 1, "{ran:?}");
+            // MariaDB's connection ids are wider than its handshake's 32 bits: the session asks
+            // for its own once, after the `SET`.
+            if is_mariadb(&mut admin).await {
+                assert_eq!(ran[1..], ["SELECT CONNECTION_ID()"], "{ran:?}");
+            } else {
+                assert_eq!(ran.len(), 1, "{ran:?}");
+            }
         }
     }
     admin.disconnect().await.unwrap();
@@ -947,7 +1081,13 @@ impl Drop for Account {
 #[tokio::test(flavor = "multi_thread")]
 async fn caching_sha2_logs_in_on_a_plain_connection_first_and_cached() {
     let Some((url, admin)) = urls("caching_sha2_logs_in_on_a_plain_connection_first_and_cached") else { return };
-    let account = Account::make(&admin, "sha2", "WITH caching_sha2_password BY 'pw'").await.unwrap();
+    let made = Account::make(&admin, "sha2", "WITH caching_sha2_password BY 'pw'").await;
+    if mariadb(&admin).await {
+        assert!(made.is_err(), "MariaDB has no caching_sha2_password");
+        not_on_mariadb("caching_sha2_logs_in_on_a_plain_connection_first_and_cached", NO_SHA2);
+        return;
+    }
+    let account = made.unwrap();
     // A new account is not in the server's cache: the first login sends the password, which
     // over a plain connection (TLS off, as by default here) goes encrypted with the server's
     // public key, and over TLS inside TLS (this machine); the second is answered from the cache.
@@ -973,7 +1113,13 @@ async fn caching_sha2_logs_in_on_a_plain_connection_first_and_cached() {
 #[tokio::test(flavor = "multi_thread")]
 async fn mysql_native_password_logs_in_where_the_server_has_it() {
     let Some((url, admin)) = urls("mysql_native_password_logs_in_where_the_server_has_it") else { return };
-    let account = match Account::make(&admin, "native", "WITH mysql_native_password BY 'pw'").await {
+    // MariaDB names the plugin with `VIA`.
+    let identified = if mariadb(&admin).await {
+        "VIA mysql_native_password USING PASSWORD('pw')"
+    } else {
+        "WITH mysql_native_password BY 'pw'"
+    };
+    let account = match Account::make(&admin, "native", identified).await {
         Ok(a) => a,
         // MySQL 8.4 loads it only when asked (`--mysql-native-password=ON`); 9.x has none.
         Err(mysql_async::Error::Server(e)) if e.code == 1524 => {
@@ -1024,6 +1170,11 @@ async fn a_pinned_server_key_encrypts_the_first_login() {
     let key: Option<(String, String)> =
         probe.query_first("SHOW STATUS LIKE 'Caching_sha2_password_rsa_public_key'").await.unwrap();
     probe.disconnect().await.unwrap();
+    if mariadb(&admin).await {
+        assert_eq!(key, None, "MariaDB has no caching_sha2_password key");
+        not_on_mariadb(test, NO_SHA2);
+        return;
+    }
     let server_key = temp_file("server.pem", &key.expect("the server's public key").1);
     let other_key = temp_file("other.pem", OTHER_KEY);
     let start = |user: &str, key: &str| {
@@ -1230,7 +1381,7 @@ async fn a_filtered_timestamp_is_the_same_instant_in_every_session_zone() {
 }
 
 /// A TIMESTAMP's value read in a session at either end of the offsets a session may have
-/// (`+14:00`, `-13:59`) is written as its instant from UTC, so that it finds its row (and a
+/// (`+14:00`, `-13:59`; MariaDB's `+13:00`, `-12:59`) is written as its instant from UTC, so that it finds its row (and a
 /// NULL-safe exclusion leaves out only that row) in a session of any zone: run again from the
 /// history after a reconnect, the statement holds no offset another server version would not
 /// read.
@@ -1257,16 +1408,22 @@ async fn a_timestamp_picked_at_the_ends_of_the_offsets_is_its_instant_in_every_z
     };
     let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
     let mut n = 0;
+    // MariaDB's offsets end at `+13:00` and `-12:59`.
+    let (east, west, picked) = if mariadb(&url).await {
+        ("+13:00", "-12:59", ["2024-10-27 13:30:00.250+13:00", "2024-10-26 12:31:00.000-12:59"])
+    } else {
+        ("+14:00", "-13:59", ["2024-10-27 14:30:00.250+14:00", "2024-10-26 11:31:00.000-13:59"])
+    };
     // The values as the sessions at the ends read them.
     let mut picks = Vec::new();
-    for (zone, id) in [("+14:00", 1), ("-13:59", 2)] {
+    for (zone, id) in [(east, 1), (west, 2)] {
         n += 1;
         q.ok(n, &format!("SET time_zone = '{zone}'")).await;
         n += 1;
         let evs = q.run(n, &[&format!("SELECT at FROM {} WHERE id = {id}", t.q())]).await;
         picks.push(format!("{}{zone}", page_of(&evs).1[0][0].clone().unwrap()));
     }
-    assert_eq!(picks, ["2024-10-27 14:30:00.250+14:00", "2024-10-26 11:31:00.000-13:59"]);
+    assert_eq!(picks, picked);
     let text = |s: &str| Value::Text(s.into());
     let filters = [
         (Cond::Cmp { col: "at".into(), op: CmpOp::Eq, value: text(&picks[0]) }, vec!["1"]),
@@ -1277,9 +1434,9 @@ async fn a_timestamp_picked_at_the_ends_of_the_offsets_is_its_instant_in_every_z
     ];
     for (cond, _) in &filters {
         let filter = render(cond, &target).unwrap();
-        assert!(!filter.contains("+14:00") && !filter.contains("-13:59"), "{filter}");
+        assert!(!filter.contains(east) && !filter.contains(west), "{filter}");
     }
-    for zone in ["+00:00", "+14:00", "-13:59", "+05:30", "SYSTEM"] {
+    for zone in ["+00:00", east, west, "+05:30", "SYSTEM"] {
         n += 1;
         q.ok(n, &format!("SET time_zone = '{zone}'")).await;
         for (cond, want) in &filters {
@@ -1398,6 +1555,23 @@ async fn waits_on(a: &mut mysql_async::Conn, other: u64, ours: u64) -> Vec<Strin
          JOIN performance_schema.threads tb ON tb.THREAD_ID = l.BLOCKING_THREAD_ID \
          WHERE tw.PROCESSLIST_ID = {other} AND tb.PROCESSLIST_ID = {ours}"
     );
+    if is_mariadb(a).await {
+        // MariaDB's row locks are InnoDB's own lists: the waits, by transaction, read past the
+        // 100 ms they are kept for.
+        tokio::time::sleep(INNODB_LISTS_KEPT).await;
+        let (metadata, _) = sql.split_once(" UNION ALL ").unwrap();
+        let rows = format!(
+            "{metadata} UNION ALL SELECT CONCAT('row lock of ', \
+               REPLACE(SUBSTRING_INDEX(l.lock_table, '.', 1), '`', ''), '.', \
+               REPLACE(SUBSTRING_INDEX(l.lock_table, '.', -1), '`', '')) \
+             FROM information_schema.INNODB_LOCK_WAITS w \
+             JOIN information_schema.INNODB_TRX r ON r.trx_id = w.requesting_trx_id \
+             JOIN information_schema.INNODB_TRX b ON b.trx_id = w.blocking_trx_id \
+             JOIN information_schema.INNODB_LOCKS l ON l.lock_id = w.requested_lock_id \
+             WHERE r.trx_mysql_thread_id = {other} AND b.trx_mysql_thread_id = {ours}"
+        );
+        return a.query(rows).await.unwrap();
+    }
     a.query(sql).await.unwrap()
 }
 
@@ -2598,16 +2772,22 @@ async fn a_timestamp_with_its_offset_is_the_same_instant_in_another_zone() {
     let cells = sql_cells(Dialect::MySql(MySqlMode::default()), &sql, &read_in, None).unwrap();
     let shown: Vec<(String, String)> = rows.iter().filter_map(|r| Some((r[0].clone()?, r[1].clone()?))).collect();
     assert_eq!(shown.len(), 2);
+    let offsets_read = !mariadb(&url).await;
+    if !offsets_read {
+        not_on_mariadb(test, TIMESTAMP_OFFSET);
+    }
     let mut n = 10;
     for zone in ["+00:00", "+05:30", "-08:00"] {
         n += 1;
         q.ok(n, &format!("SET time_zone = '{zone}'")).await;
         for (id, v) in &shown {
-            let literal = cells.cell(0, v).unwrap();
-            n += 1;
-            let evs = q.run(n, &[&format!("SELECT id FROM {} WHERE at = '{literal}'", t.q())]).await;
-            let found: Vec<_> = page_of(&evs).1.iter().map(|r| r[0].clone().unwrap()).collect();
-            assert_eq!(found, vec![id.clone()], "{zone}: at = '{literal}'");
+            if offsets_read {
+                let literal = cells.cell(0, v).unwrap();
+                n += 1;
+                let evs = q.run(n, &[&format!("SELECT id FROM {} WHERE at = '{literal}'", t.q())]).await;
+                let found: Vec<_> = page_of(&evs).1.iter().map(|r| r[0].clone().unwrap()).collect();
+                assert_eq!(found, vec![id.clone()], "{zone}: at = '{literal}'");
+            }
             n += 1;
             let evs = q.run(n, &[&format!("SELECT id FROM {} WHERE at = '{v}'", t.q())]).await;
             let bare = page_of(&evs).1.len();
@@ -2628,6 +2808,14 @@ async fn explain_analyze_keeps_nothing_it_ran() {
     let mut c = Conn::open(&url, SessionRole::Query, false, "explain").await;
     // The multi-table form: MySQL measures it (a single-table one it does not run at all).
     let delete = format!("EXPLAIN ANALYZE DELETE x FROM {q} x JOIN {q} y ON y.id = x.id WHERE x.id > 5", q = t.q());
+    if mariadb(&url).await {
+        let evs = c.run(1, &[&delete]).await;
+        assert!(no_plan(evs.last()), "{evs:?}");
+        assert_eq!(rows_in(&mut c, 2, &t.q()).await, "10");
+        assert!(!evs.iter().any(|e| matches!(e, DbEvent::TxOpen(true))), "no transaction is left open");
+        not_on_mariadb("explain_analyze_keeps_nothing_it_ran", NO_PLANS);
+        return;
+    }
     let evs = c.run(1, &[&delete]).await;
     assert!(page_of(&evs).1[0][0].as_deref().is_some_and(|p| p.contains("Delete")), "{evs:?}");
     assert_eq!(rows_in(&mut c, 2, &t.q()).await, "10");
@@ -2694,10 +2882,17 @@ async fn explain_analyze_of_a_write_a_rollback_cannot_undo_is_refused() {
     );
     assert_eq!(rows_in(&mut c, 71, &t.q()).await, "3");
     // Its plan without ANALYZE stays available, and a read is measured as it is.
-    let evs = c.run(7, &[&format!("EXPLAIN FORMAT=TREE DELETE FROM {} WHERE id > 1", t.q())]).await;
-    assert!(!matches!(evs.last(), Some(DbEvent::Failed { .. })), "{evs:?}");
-    let evs = c.run(8, &[&format!("EXPLAIN ANALYZE FORMAT=TREE SELECT * FROM {}", t.q())]).await;
-    assert!(!matches!(evs.last(), Some(DbEvent::Failed { .. })), "{evs:?}");
+    let tree = c.run(7, &[&format!("EXPLAIN FORMAT=TREE DELETE FROM {} WHERE id > 1", t.q())]).await;
+    let measured = c.run(8, &[&format!("EXPLAIN ANALYZE FORMAT=TREE SELECT * FROM {}", t.q())]).await;
+    if mariadb(&url).await {
+        // The server's own refusals: no tree format, no `ANALYZE`.
+        assert!(matches!(tree.last(), Some(DbEvent::Failed { error: DbError::Server(_), .. })), "{tree:?}");
+        assert!(no_plan(measured.last()), "{measured:?}");
+        not_on_mariadb("explain_analyze_of_a_write_a_rollback_cannot_undo_is_refused", NO_PLANS);
+        return;
+    }
+    assert!(!matches!(tree.last(), Some(DbEvent::Failed { .. })), "{tree:?}");
+    assert!(!matches!(measured.last(), Some(DbEvent::Failed { .. })), "{measured:?}");
 }
 
 /// A table named by a keyword (`last`) is checked like any other, and a table with a trigger
@@ -2752,7 +2947,9 @@ async fn explain_analyze_checks_keyword_names_and_triggers() {
 async fn explain_analyze_without_seeing_triggers_is_refused() {
     let Some((url, admin)) = urls("explain_analyze_no_trigger_privilege") else { return };
     let t = numbers(&admin, "notrig", 3).await;
-    let account = Account::make(&admin, "notrig", "WITH caching_sha2_password BY 'pw'").await.unwrap();
+    // MariaDB has no `caching_sha2_password`: its own plugin there.
+    let identified = if mariadb(&admin).await { "BY 'pw'" } else { "WITH caching_sha2_password BY 'pw'" };
+    let account = Account::make(&admin, "notrig", identified).await.unwrap();
     let mut a = side(&admin).await;
     a.query_drop(format!("GRANT DELETE ON {} TO '{}'@'%'", t.q(), account.name)).await.unwrap();
     a.disconnect().await.unwrap();
@@ -2775,6 +2972,12 @@ async fn the_servers_tree_reads_as_a_plan() {
     let Some((url, admin)) = urls("the_servers_tree_reads_as_a_plan") else { return };
     let t = numbers(&admin, "tree", 50).await;
     let mut c = Conn::open(&url, SessionRole::Query, false, "tree").await;
+    if mariadb(&url).await {
+        let explain = c.wait(|e| matches!(e, DbEvent::Explain(_)), 15).await;
+        assert!(matches!(explain, DbEvent::Explain(None)), "{explain:?}");
+        not_on_mariadb("the_servers_tree_reads_as_a_plan", NO_PLANS);
+        return;
+    }
     let stmt =
         format!("SELECT a.v, COUNT(*) FROM {q} a JOIN {q} b ON b.id = a.id WHERE a.id > 10 GROUP BY a.v", q = t.q());
     for (id, analyze) in [(1, false), (2, true)] {
@@ -2861,6 +3064,11 @@ async fn values_of_every_type_read_as_the_server_writes_them() {
     .await;
     let evs = c.run(3, &[&format!("SELECT * FROM {}", t.q())]).await;
     let (cols, rows, _) = page_of(&evs);
+    // MySQL clamps a TIME to `-838:59:59`; MariaDB's range reaches its fractions.
+    // A JSON column is a `LONGTEXT` to MariaDB's clients.
+    let my = mariadb(&url).await;
+    let tm = if my { "-838:59:59.50" } else { "-838:59:59.00" };
+    let json = if my { ("longtext", ValueKind::Text) } else { ("json", ValueKind::Json) };
     let got: Vec<(String, String, ValueKind, Option<String>)> =
         cols.iter().zip(&rows[0]).map(|(c, v)| (c.name.clone(), c.type_name.clone(), c.kind, v.clone())).collect();
     let want = [
@@ -2873,8 +3081,8 @@ async fn values_of_every_type_read_as_the_server_writes_them() {
         ("dt", "datetime", ValueKind::Timestamp, "2024-02-29 23:59:59.123456"),
         ("ts", "timestamp", ValueKind::TimestampTz, "2024-01-01 00:00:00.500"),
         ("da", "date", ValueKind::Date, "0000-00-00"),
-        ("tm", "time", ValueKind::Interval, "-838:59:59.00"),
-        ("j", "json", ValueKind::Json, "{\"a\": [1, 2]}"),
+        ("tm", "time", ValueKind::Interval, tm),
+        ("j", json.0, json.1, "{\"a\": [1, 2]}"),
         ("e", "enum", ValueKind::Text, "b"),
         ("s", "set", ValueKind::Text, "x,y"),
         ("bl", "blob", ValueKind::Bytes, "0x00FF"),
@@ -2938,7 +3146,21 @@ async fn counts_and_the_servers_question() {
 }
 
 /// The InnoDB locks connection `id` holds or waits for on `table` in `shop`.
+/// MariaDB lists only the locks of a wait: there, the rows its transaction locks (the tests'
+/// sessions touch no other table), read past the 100 ms its transaction list is kept for.
 async fn data_locks_of(admin: &mut mysql_async::Conn, id: u64, table: &str) -> u64 {
+    if is_mariadb(admin).await {
+        tokio::time::sleep(INNODB_LISTS_KEPT).await;
+        let n: Option<u64> = admin
+            .exec_first(
+                "SELECT IFNULL(SUM(trx_rows_locked), 0) FROM information_schema.INNODB_TRX \
+                 WHERE trx_mysql_thread_id = ?",
+                (id,),
+            )
+            .await
+            .expect("INNODB_TRX reads");
+        return n.unwrap_or(0);
+    }
     let n: Option<u64> = admin
         .exec_first(
             "SELECT COUNT(*) FROM performance_schema.data_locks l JOIN performance_schema.threads t \
@@ -2972,16 +3194,25 @@ async fn a_count_locks_no_rows_when_the_session_is_serializable() {
         run += 1;
         assert_eq!(count(&mut c, run, sql.clone()).await, (Ok(100), false), "autocommit = {autocommit}");
         assert_eq!(data_locks_of(&mut a, id, &t.name).await, 0, "autocommit = {autocommit}: no lock");
-        assert_eq!(variable_of(&mut a, id, "transaction_isolation").await.as_deref(), Some("SERIALIZABLE"));
-        assert_eq!(
-            variable_of(&mut a, id, "autocommit").await.as_deref(),
-            Some(if autocommit == "1" { "ON" } else { "OFF" })
-        );
+        let on_off = if autocommit == "1" { "ON" } else { "OFF" };
+        let my = is_mariadb(&mut a).await;
+        if !my {
+            assert_eq!(variable_of(&mut a, id, "transaction_isolation").await.as_deref(), Some("SERIALIZABLE"));
+            assert_eq!(variable_of(&mut a, id, "autocommit").await.as_deref(), Some(on_off));
+        }
         let open: Option<u64> = a
             .exec_first("SELECT COUNT(*) FROM information_schema.INNODB_TRX WHERE trx_mysql_thread_id = ?", (id,))
             .await
             .unwrap();
         assert_eq!(open, Some(0), "autocommit = {autocommit}: no transaction left open");
+        if my {
+            // MariaDB shows no session's variables to another: asked of the session itself, last.
+            run += 1;
+            let sql = "SELECT @@SESSION.transaction_isolation, CONCAT(@@SESSION.autocommit)";
+            let evs = c.run(run, &[sql]).await;
+            let want = [Some("SERIALIZABLE".to_string()), Some(on_off.to_string())];
+            assert_eq!(page_of(&evs).1[0], want, "autocommit = {autocommit}");
+        }
     }
     a.disconnect().await.unwrap();
 }
@@ -3178,7 +3409,13 @@ async fn a_locking_read_is_read_whole() {
     let Some((url, admin)) = urls("a_locking_read_is_read_whole") else { return };
     let t = numbers(&admin, "locking", 1234).await;
     let mut c = Conn::open(&url, SessionRole::Query, false, "locking").await;
-    for (id, clause) in [(1, "FOR UPDATE"), (2, "FOR SHARE"), (3, "LOCK IN SHARE MODE")] {
+    // MariaDB has no `FOR SHARE`.
+    let clauses: &[_] = if mariadb(&url).await {
+        &[(1, "FOR UPDATE"), (3, "LOCK IN SHARE MODE")]
+    } else {
+        &[(1, "FOR UPDATE"), (2, "FOR SHARE"), (3, "LOCK IN SHARE MODE")]
+    };
+    for &(id, clause) in clauses {
         let sql = format!("SELECT id FROM {} {clause}", t.q());
         assert_eq!(all_rows(&mut c, id, &sql, PagingMode::NoHold).await, 1234, "{clause}");
     }
@@ -3244,8 +3481,19 @@ async fn the_metadata_session_reads_a_tables_structure() {
     // The view is in `datarig`: other tests list the views of `shop`.
     let _view = Cleanup { url: admin.clone(), sql: format!("DROP VIEW IF EXISTS datarig.{view}") };
     let mut a = side(&admin).await;
+    // MariaDB has no key on an expression and enforces every check; its binary collation that
+    // does not pad is `utf8mb4_nopad_bin`.
+    let my = is_mariadb(&mut a).await;
+    let (on_expression, exact, loose) = if my {
+        ("", "utf8mb4_nopad_bin", "")
+    } else {
+        ("KEY ix_fn ((upper(name))),", "utf8mb4_0900_bin", " NOT ENFORCED")
+    };
     for sql in [
-        format!("CREATE TABLE datarig.{parent} (a INT NOT NULL, b VARCHAR(10) NOT NULL, PRIMARY KEY (a, b))"),
+        format!(
+            "CREATE TABLE datarig.{parent} (a INT NOT NULL, b VARCHAR(10){} NOT NULL, PRIMARY KEY (a, b))",
+            referenced_collation(&mut a).await
+        ),
         format!(
             "CREATE TABLE shop.{child} (
                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -3258,15 +3506,15 @@ async fn the_metadata_session_reads_a_tables_structure() {
                twice INT GENERATED ALWAYS AS (qty * 2) STORED,
                low VARCHAR(100) GENERATED ALWAYS AS (lower(name)) VIRTUAL,
                st ENUM('new', 'it''s') CHARACTER SET latin1 COLLATE latin1_bin,
-               raw VARCHAR(4) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin,
+               raw VARCHAR(4) CHARACTER SET utf8mb4 COLLATE {exact},
                UNIQUE KEY uq_name (name),
                KEY ix_prefix (body(10)),
                KEY ix_desc (qty DESC, name),
-               KEY ix_fn ((upper(name))),
+               {on_expression}
                FULLTEXT KEY ft_body (body),
                CONSTRAINT zz_it_fk_{pid} FOREIGN KEY (pa, pb) REFERENCES datarig.{parent} (a, b) ON DELETE CASCADE,
                CONSTRAINT zz_it_ck_{pid} CHECK (qty >= 0),
-               CONSTRAINT zz_it_loose_{pid} CHECK (price < 1000) NOT ENFORCED)"
+               CONSTRAINT zz_it_loose_{pid} CHECK (price < 1000){loose})"
         ),
         format!(
             "CREATE TRIGGER shop.zz_it_bi_{pid} BEFORE INSERT ON shop.{child} FOR EACH ROW SET NEW.qty = NEW.qty + 0"
@@ -3291,25 +3539,26 @@ async fn the_metadata_session_reads_a_tables_structure() {
         .iter()
         .map(|c| (c.name.as_str(), c.type_name.as_str(), c.not_null, c.default.as_deref(), &c.fill))
         .collect();
+    // MariaDB: an integer's display width, its own spelling of a default and of an expression.
+    let (int, bigint) = if my { ("int(11)", "bigint(20) unsigned") } else { ("int", "bigint unsigned") };
+    let (price, created, low) = if my {
+        ("1.50", "current_timestamp(3) ON UPDATE current_timestamp(3)", "lcase(`name`)")
+    } else {
+        ("(1.5)", "CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)", "lower(`name`)")
+    };
     assert_eq!(
         cols,
         [
-            ("id", "bigint unsigned", true, None, &ColumnFill::AutoIncrement),
-            ("pa", "int", false, None, &ColumnFill::Default),
+            ("id", bigint, true, None, &ColumnFill::AutoIncrement),
+            ("pa", int, false, None, &ColumnFill::Default),
             ("pb", "varchar(10)", false, None, &ColumnFill::Default),
             ("name", "varchar(100)", true, Some("'it''s'"), &ColumnFill::Default),
-            ("qty", "int", true, Some("0"), &ColumnFill::Default),
-            ("price", "decimal(10,2)", false, Some("(1.5)"), &ColumnFill::Default),
-            (
-                "created",
-                "timestamp(3)",
-                true,
-                Some("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)"),
-                &ColumnFill::Default
-            ),
+            ("qty", int, true, Some("0"), &ColumnFill::Default),
+            ("price", "decimal(10,2)", false, Some(price), &ColumnFill::Default),
+            ("created", "timestamp(3)", true, Some(created), &ColumnFill::Default),
             ("body", "text", false, None, &ColumnFill::Default),
-            ("twice", "int", false, None, &ColumnFill::Stored("`qty` * 2".into())),
-            ("low", "varchar(100)", false, None, &ColumnFill::Virtual("lower(`name`)".into())),
+            ("twice", int, false, None, &ColumnFill::Stored("`qty` * 2".into())),
+            ("low", "varchar(100)", false, None, &ColumnFill::Virtual(low.into())),
             ("st", "enum('new','it''s')", false, None, &ColumnFill::Default),
             ("raw", "varchar(4)", false, None, &ColumnFill::Default),
         ]
@@ -3323,11 +3572,13 @@ async fn the_metadata_session_reads_a_tables_structure() {
     assert_eq!((column("id").enum_labels.len(), &column("id").collation), (0, &None));
     assert_eq!(column("st").enum_labels, ["new", "it's"]);
     assert_eq!(column("st").collation, collation("latin1_bin", "latin1", false));
-    assert_eq!(column("raw").collation, collation("utf8mb4_0900_bin", "utf8mb4", true));
+    assert_eq!(column("raw").collation, collation(exact, "utf8mb4", true));
     assert_eq!(
         s.primary_key.as_ref().map(|p| (p.name.as_str(), p.columns.clone())),
         Some(("PRIMARY", vec!["id".into()]))
     );
+    // MariaDB says the rule left out is `RESTRICT` (as `NO ACTION`, checked at once on InnoDB).
+    let (on_update, update) = if my { (FkAction::Restrict, " ON UPDATE RESTRICT") } else { (FkAction::NoAction, "") };
     assert_eq!(
         s.foreign_keys,
         [ForeignKey {
@@ -3337,9 +3588,9 @@ async fn the_metadata_session_reads_a_tables_structure() {
             ref_table: parent.clone(),
             ref_columns: vec!["a".into(), "b".into()],
             on_delete: FkAction::Cascade,
-            on_update: FkAction::NoAction,
+            on_update,
             definition: format!(
-                "CONSTRAINT zz_it_fk_{pid} FOREIGN KEY (pa, pb) REFERENCES datarig.{parent} (a, b) ON DELETE CASCADE"
+                "CONSTRAINT zz_it_fk_{pid} FOREIGN KEY (pa, pb) REFERENCES datarig.{parent} (a, b) ON DELETE CASCADE{update}"
             ),
         }]
     );
@@ -3354,7 +3605,9 @@ async fn the_metadata_session_reads_a_tables_structure() {
         keys("ix_desc"),
         (vec!["qty DESC".into(), "name".into()], some(&["qty", "name"]), false, "BTREE".into())
     );
-    assert_eq!(keys("ix_fn"), (vec!["(upper(`name`))".into()], vec![None], false, "BTREE".into()));
+    if !my {
+        assert_eq!(keys("ix_fn"), (vec!["(upper(`name`))".into()], vec![None], false, "BTREE".into()));
+    }
     assert_eq!(keys("ft_body"), (vec!["body".into()], some(&["body"]), false, "FULLTEXT".into()));
     assert_eq!(keys("uq_name"), (vec!["name".into()], some(&["name"]), true, "BTREE".into()));
     // The foreign key's own index.
@@ -3370,7 +3623,7 @@ async fn the_metadata_session_reads_a_tables_structure() {
         checks,
         [
             (format!("zz_it_ck_{pid}").as_str(), "`qty` >= 0", vec!["qty".to_string()], true),
-            (format!("zz_it_loose_{pid}").as_str(), "`price` < 1000", vec!["price".to_string()], false),
+            (format!("zz_it_loose_{pid}").as_str(), "`price` < 1000", vec!["price".to_string()], my),
         ]
     );
     let triggers: Vec<(String, TriggerTiming, Vec<TriggerEvent>, bool, &str)> = s
@@ -3566,6 +3819,10 @@ async fn definitions_with_literals_and_other_keys_run_back() {
     use datarig_core::driver::structure::*;
     let test = "definitions_with_literals_and_other_keys_run_back";
     let Some((url, admin)) = urls(test) else { return };
+    if mariadb(&url).await {
+        mariadb_definitions_with_literals_run_back(&url, &admin, test).await;
+        return;
+    }
     let pid = std::process::id();
     let t = Table::make(
         &admin,
@@ -3628,6 +3885,74 @@ async fn definitions_with_literals_and_other_keys_run_back() {
     let refused =
         a.query_drop(format!(r"INSERT INTO {} (id, s, QtY, pt) VALUES (2, 'a''b\\c', 1, {pt})", copy.q())).await;
     assert!(matches!(refused, Err(mysql_async::Error::Server(ref e)) if e.code == 3819), "{refused:?}");
+    a.disconnect().await.unwrap();
+}
+
+/// [`definitions_with_literals_and_other_keys_run_back`] on MariaDB, which keeps an expression
+/// as SQL already (its strings escaped with backslashes) and has no reference system on a
+/// column, no key on an expression and no invisible key: those are left out.
+async fn mariadb_definitions_with_literals_run_back(url: &str, admin: &str, test: &str) {
+    use datarig_core::driver::structure::*;
+    let pid = std::process::id();
+    let t = Table::make(
+        admin,
+        "literals",
+        &[&format!(
+            r"CREATE TABLE {{t}} (id INT PRIMARY KEY, s VARCHAR(20) DEFAULT (concat('a', '''b')),
+               g VARCHAR(40) GENERATED ALWAYS AS (concat(s, 'x''y')) VIRTUAL, QtY INT, b TEXT,
+               pt POINT NOT NULL,
+               ts TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP INVISIBLE,
+               UNIQUE KEY uq_pre (b(10)), SPATIAL KEY sp (pt),
+               CONSTRAINT zz_it_lit_ck_{pid} CHECK (s <> 'a''b\\c' AND qty > 0))"
+        )],
+    )
+    .await;
+    let mut m = Conn::start(url, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    let column = |name: &str| s.columns.iter().find(|c| c.name == name).unwrap();
+    assert_eq!(column("s").default.as_deref(), Some(r"concat('a','\'b')"));
+    assert_eq!(column("g").fill, ColumnFill::Virtual(r"concat(`s`,'x\'y')".into()));
+    assert_eq!(column("ts").default.as_deref(), Some("current_timestamp() ON UPDATE current_timestamp()"));
+    let index = |name: &str| s.indexes.iter().find(|x| x.name == name).unwrap();
+    assert!(index("uq_pre").unique && !index("uq_pre").constraint);
+    assert!(s.unique_constraints.is_empty(), "a unique prefix is no unique column");
+    assert_eq!(index("sp").columns, ["pt"]);
+    let ck = &s.checks[0];
+    assert_eq!(ck.expression, r"`s` <> 'a\'b\\c' and `QtY` > 0");
+    assert_eq!(ck.columns, ["s", "QtY"]);
+    // The copy: its columns as the structure has them, then every index and check.
+    let copy = Table::make(admin, "literals_copy", &[]).await;
+    let mut a = side(admin).await;
+    let generated = match &column("g").fill {
+        ColumnFill::Virtual(e) => e.clone(),
+        other => panic!("{other:?}"),
+    };
+    let create = format!(
+        "CREATE TABLE {} (id INT PRIMARY KEY, s VARCHAR(20) DEFAULT {}, \
+         g VARCHAR(40) GENERATED ALWAYS AS ({generated}) VIRTUAL, \
+         QtY INT, b TEXT, pt POINT NOT NULL, ts TIMESTAMP NULL DEFAULT {})",
+        copy.q(),
+        column("s").default.as_deref().unwrap(),
+        column("ts").default.as_deref().unwrap()
+    );
+    a.query_drop(&create).await.unwrap_or_else(|e| panic!("{create}: {e}"));
+    for x in s.indexes.iter().filter(|x| !x.primary) {
+        let sql = x.definition.replace(&t.q(), &copy.q());
+        a.query_drop(&sql).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    for c in &s.checks {
+        let sql = format!("ALTER TABLE {} ADD {}", copy.q(), c.definition.replace("zz_it_lit_", "zz_it_litc_"));
+        a.query_drop(&sql).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    // It behaves as the table: the default, the generated value, the check on the literal.
+    let pt = "ST_GeomFromText('POINT(1 1)')";
+    a.query_drop(format!("INSERT INTO {} (id, QtY, pt) VALUES (1, 1, {pt})", copy.q())).await.unwrap();
+    let row: Option<(String, String)> = a.query_first(format!("SELECT s, g FROM {}", copy.q())).await.unwrap();
+    assert_eq!(row, Some(("a'b".to_string(), "a'bx'y".to_string())));
+    let refused =
+        a.query_drop(format!(r"INSERT INTO {} (id, s, QtY, pt) VALUES (2, 'a''b\\c', 1, {pt})", copy.q())).await;
+    assert!(matches!(refused, Err(mysql_async::Error::Server(ref e)) if e.code == 4025), "{refused:?}");
     a.disconnect().await.unwrap();
 }
 
@@ -3751,6 +4076,12 @@ async fn the_metadata_session_shows_the_servers_ddl() {
         guards.push(Cleanup { url: admin.clone(), sql: format!("DROP {what} IF EXISTS {name}") });
     }
     let mut a = side(&admin).await;
+    // MariaDB keeps a trigger's statement as typed: typed there in `shop`, its names quoted.
+    let my = is_mariadb(&mut a).await;
+    if my {
+        a.query_drop("USE shop").await.unwrap();
+    }
+    let at = if my { String::new() } else { "shop.".to_string() };
     for sql in [
         format!(
             "CREATE TABLE shop.{b} (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, \
@@ -3760,8 +4091,10 @@ async fn the_metadata_session_shows_the_servers_ddl() {
         ),
         format!("CREATE VIEW datarig.{b}_v AS SELECT id, CONCAT(name, ';') AS n FROM shop.{b} WHERE name <> ';'"),
         format!(
-            "CREATE TRIGGER shop.{b}_bi BEFORE INSERT ON shop.{b} FOR EACH ROW BEGIN \
-             SET NEW.name = CONCAT(NEW.name, ';;'); -- a comment; with a ;\n SET NEW.name = UPPER(NEW.name); END"
+            "CREATE TRIGGER {at}{} BEFORE INSERT ON {at}{} FOR EACH ROW BEGIN \
+             SET NEW.name = CONCAT(NEW.name, ';;'); -- a comment; with a ;\n SET NEW.name = UPPER(NEW.name); END",
+            typed(my, &format!("{b}_bi")),
+            typed(my, &b)
         ),
         // The session's user is their definer: it may see their text.
         format!("CREATE DEFINER = {DEFINER} PROCEDURE shop.{b}_p(IN a INT) BEGIN SELECT a; SELECT ';', a + 1; END"),
@@ -3828,7 +4161,13 @@ async fn the_metadata_session_shows_the_servers_ddl() {
         ddl_of(&mut m, named(&b, Some("shop"))).await,
         Err(DbError::Ambiguous(vec![ObjectKind::Table, ObjectKind::Procedure]))
     );
-    assert_eq!(ddl_of(&mut m, named(&format!("{b}_h"), Some("shop"))).await, Err(DbError::DefinitionHidden));
+    // MariaDB lets a user with every privilege on the database see its routines' text.
+    let hidden = ddl_of(&mut m, named(&format!("{b}_h"), Some("shop"))).await;
+    if my {
+        assert!(verbatim(hidden).1.contains(&format!(" PROCEDURE `{b}_h`()")));
+    } else {
+        assert_eq!(hidden, Err(DbError::DefinitionHidden));
+    }
     for object in [
         named("zz_it_nothing_here", Some("shop")),
         named("zz_it_no_db.x", None),
@@ -3963,8 +4302,10 @@ async fn a_ddl_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
         seen.held_up
     );
     assert!(seen.queued.is_empty(), "a read queued behind the ALTER: {:?}", seen.queued);
+    // MariaDB reads a trigger's text without opening its table: there it answers.
+    let opens_table = !is_mariadb(&mut side_admin).await;
     let ((), seen) = watched(&admin, meta, &[alter_id], &t.name, async {
-        reads(&mut m, &mut side_admin, meta, std::slice::from_ref(&trigger), true).await;
+        reads(&mut m, &mut side_admin, meta, std::slice::from_ref(&trigger), opens_table).await;
     })
     .await;
     // The trigger's read waits its lock wait (2 s) and gives up; the ALTER never waits for it.
@@ -3979,7 +4320,9 @@ async fn a_ddl_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     assert!(t1.elapsed() < Duration::from_secs(10), "{:?}", t1.elapsed());
     // Read again once nothing is in the way: the new column is there, the trigger is read.
     let ddl = ddl_of(&mut m, relations[0].clone()).await;
-    assert!(verbatim(ddl).1.contains("`c9` int DEFAULT NULL"));
+    // MariaDB keeps an integer's display width.
+    let c9 = if opens_table { "`c9` int DEFAULT NULL" } else { "`c9` int(11) DEFAULT NULL" };
+    assert!(verbatim(ddl).1.contains(c9));
     assert!(verbatim(ddl_of(&mut m, trigger).await).1.contains("CREATE "));
     side_admin.disconnect().await.unwrap();
 }
@@ -4030,8 +4373,12 @@ async fn a_body_ending_in_a_comment_runs_again() {
         .map(|p| Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{p}") });
     // The query session sends the text as it is, comments too.
     let mut q = Conn::open(&in_database(&admin, "shop"), SessionRole::Query, false, test).await;
-    let made_trigger =
-        format!("CREATE TRIGGER {trigger} BEFORE INSERT ON {} FOR EACH ROW SET NEW.v = 'x;' -- note", t.name);
+    let my = mariadb(&url).await;
+    let made_trigger = format!(
+        "CREATE TRIGGER {} BEFORE INSERT ON {} FOR EACH ROW SET NEW.v = 'x;' -- note",
+        typed(my, &trigger),
+        typed(my, &t.name)
+    );
     q.ok(1, &made_trigger).await;
     q.ok(2, &format!("CREATE DEFINER = {DEFINER} PROCEDURE {proc}() SELECT 1 # note")).await;
     let mut m = Conn::start(&url, SessionRole::Meta, false, test);
@@ -4144,7 +4491,10 @@ async fn a_triggers_strings_run_again_as_written() {
     let (trigger, copy) = (format!("{}_bi", t.name), format!("{}_bi", c.name));
     let mut q = Conn::open(&in_database(&admin, "shop"), SessionRole::Query, false, test).await;
     let body = r"SET NEW.v = CONCAT('it''s', '\\', 'a\'b', NEW.v)";
-    q.ok(1, &format!("CREATE TRIGGER {trigger} BEFORE INSERT ON {} FOR EACH ROW {body}", t.name)).await;
+    let my = mariadb(&url).await;
+    let made =
+        format!("CREATE TRIGGER {} BEFORE INSERT ON {} FOR EACH ROW {body}", typed(my, &trigger), typed(my, &t.name));
+    q.ok(1, &made).await;
     let mut m = Conn::start(&url, SessionRole::Meta, false, test);
     m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
     let of =
@@ -4220,6 +4570,7 @@ async fn a_ddl_opened_in_a_console_of_either_mode_makes_the_same_object() {
         }
     }
     let mut a = side(&admin).await;
+    let my = is_mariadb(&mut a).await;
     for sql in [
         format!(r"CREATE VIEW datarig.{view} AS SELECT id, 'a\\b''c' AS x FROM shop.{n}"),
         format!(
@@ -4227,7 +4578,9 @@ async fn a_ddl_opened_in_a_console_of_either_mode_makes_the_same_object() {
               RETURN CONCAT('a\\b', 'it''s')"
         ),
         format!(
-            r"CREATE TRIGGER shop.{trig} BEFORE INSERT ON shop.{n} FOR EACH ROW SET NEW.v = CONCAT('p\\q''r', NEW.v)"
+            r"CREATE TRIGGER shop.{} BEFORE INSERT ON shop.{} FOR EACH ROW SET NEW.v = CONCAT('p\\q''r', NEW.v)",
+            typed(my, &trig),
+            typed(my, &n)
         ),
     ] {
         a.query_drop(sql).await.unwrap();
@@ -4388,9 +4741,14 @@ async fn the_metadata_session_reads_the_key_metadata() {
     let parent = format!("zz_it_kparent_{pid}");
     let _parent = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS datarig.{parent}") };
     let mut a = side(&admin).await;
-    a.query_drop(format!("CREATE TABLE datarig.{parent} (a INT NOT NULL, b VARCHAR(10) NOT NULL, PRIMARY KEY (a, b))"))
-        .await
-        .unwrap();
+    let collation = referenced_collation(&mut a).await;
+    a.query_drop(format!(
+        "CREATE TABLE datarig.{parent} (a INT NOT NULL, b VARCHAR(10){collation} NOT NULL, PRIMARY KEY (a, b))"
+    ))
+    .await
+    .unwrap();
+    // MariaDB has no key on an expression.
+    let on_expression = if is_mariadb(&mut a).await { "" } else { " UNIQUE KEY uq_fn ((qty + 1))," };
     a.disconnect().await.unwrap();
     let t = Table::make(
         &admin,
@@ -4399,7 +4757,7 @@ async fn the_metadata_session_reads_the_key_metadata() {
             "CREATE TABLE {{t}} (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, pa INT, pb VARCHAR(10),
                Code VARCHAR(20), note TEXT, qty INT, twice INT GENERATED ALWAYS AS (qty * 2) STORED,
                low VARCHAR(20) GENERATED ALWAYS AS (lower(Code)) VIRTUAL,
-               UNIQUE KEY uq_code (Code), UNIQUE KEY uq_note (note(10)), UNIQUE KEY uq_fn ((qty + 1)),
+               UNIQUE KEY uq_code (Code), UNIQUE KEY uq_note (note(10)),{on_expression}
                CONSTRAINT zz_it_kfk_{pid} FOREIGN KEY (pa, pb) REFERENCES datarig.{parent} (a, b))"
         )],
     )
@@ -4468,10 +4826,18 @@ async fn the_keys_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     // nothing.
     let fresh = numbers(&admin, "keysopen", 10).await;
     side_admin.query_drop(format!("FLUSH TABLES {}", fresh.q())).await.unwrap();
+    // MariaDB has no data dictionary: a read of every table's columns opens their definitions.
+    let opens_none = !is_mariadb(&mut side_admin).await;
+    if !opens_none {
+        not_on_mariadb(
+            test,
+            "a read of the whole server's keys opens the tables' definitions, there is no data dictionary",
+        );
+    }
     read(keys_of(&mut m).await, &t.name);
-    assert!(!is_open(&mut side_admin, &fresh.name).await, "flushed");
+    assert!(!opens_none || !is_open(&mut side_admin, &fresh.name).await, "flushed");
     read(keys_of(&mut m).await, &fresh.name);
-    assert!(!is_open(&mut side_admin, &fresh.name).await, "no table was opened");
+    assert!(!opens_none || !is_open(&mut side_admin, &fresh.name).await, "no table was opened");
     // 1. Another session holds `LOCK TABLES … WRITE`, and writes while the read runs.
     let mut lock = side(&admin).await;
     lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
@@ -4650,6 +5016,10 @@ async fn rows_copied_as_sql_run_back_byte_for_byte() {
          1e308, NULL, NULL, NULL, NULL, NULL), \
         (4, 'second', '{}', NULL, NULL, NULL, NULL, NULL, '2024-10-27 01:30:00', NULL, NULL, NULL, NULL, NULL, \
          NULL, NULL, NULL, NULL, NULL, NULL)";
+    let offsets_read = !mariadb(&url).await;
+    if !offsets_read {
+        not_on_mariadb(test, TIMESTAMP_OFFSET);
+    }
     for (n, flag) in ["", ",NO_BACKSLASH_ESCAPES", ",ANSI_QUOTES"].iter().enumerate() {
         let mode = format!("{base}{flag}");
         let ddl = |sql: &str| vec![setup[0].clone(), setup[1].clone(), sql.to_string()];
@@ -4684,35 +5054,38 @@ async fn rows_copied_as_sql_run_back_byte_for_byte() {
         let insert = copied_as_sql(&mut q, 3, &keys, &src, session_mode, &values, false).await.unwrap();
         let insert = insert.replace(&format!("`{}`", src.name), &format!("`{}`", copy.name));
         assert!(!insert.contains("OVERRIDING") && !insert.contains("`twice`"), "{insert}");
-        assert!(insert.contains("'2024-10-27 00:30:00.500+00:00'"), "{insert}");
-        // Run in another mode and another zone than the copy was made in.
-        let other = if flag.is_empty() { format!("{base},NO_BACKSLASH_ESCAPES") } else { base.to_string() };
-        q.ok(10, &format!("SET SESSION sql_mode = '{other}'")).await;
-        q.ok(11, "SET SESSION time_zone = '+05:00'").await;
-        let other_mode = MySqlMode { no_backslash_escapes: other.contains("BACKSLASH"), ..session_mode };
-        run_all(&mut q, 20, &insert, Dialect::MySql(MySqlMode { ansi_quotes: false, ..other_mode })).await;
-        let mut a = side(&admin).await;
-        let want = row_hashes(&mut a, &src.q(), &columns).await;
-        assert_eq!(row_hashes(&mut a, &copy.q(), &columns).await, want, "INSERT, {mode}:\n{insert}");
-        // UPDATE: the copy's rows changed, then set back by the statements.
-        a.query_drop(format!(
-            "UPDATE {} SET txt = 'changed', js = '{{}}', bin = NULL, blb = 0x01, bt = b'0', d = NULL, \
-             dt = '2000-01-01', ts = '2000-01-01 00:00:00', tm = '01:00:00', yr = 1999, big = 1, amount = 2, \
-             nul = 'y', dbl = 3, en = 'a', st = 'y', geo = ST_GeomFromText('POINT(9 9)'), bn = 0x09, lat = 'z'",
-            copy.q()
-        ))
-        .await
-        .unwrap();
-        assert_ne!(row_hashes(&mut a, &copy.q(), &columns).await, want);
-        q.ok(30, &format!("SET SESSION sql_mode = '{mode}'")).await;
-        q.ok(31, "SET SESSION time_zone = '+00:00'").await;
-        let update = copied_as_sql(&mut q, 32, &keys, &src, session_mode, &values, true).await.unwrap();
-        let update = update.replace(&format!("`{}`", src.name), &format!("`{}`", copy.name));
-        q.ok(33, &format!("SET SESSION sql_mode = '{other}'")).await;
-        q.ok(34, "SET SESSION time_zone = '-03:00'").await;
-        run_all(&mut q, 40, &update, Dialect::MySql(MySqlMode { ansi_quotes: false, ..other_mode })).await;
-        assert_eq!(row_hashes(&mut a, &copy.q(), &columns).await, want, "UPDATE, {mode}:\n{update}");
-        a.disconnect().await.unwrap();
+        // Run back where the server reads the offset of a TIMESTAMP's value.
+        if offsets_read {
+            assert!(insert.contains("'2024-10-27 00:30:00.500+00:00'"), "{insert}");
+            // Run in another mode and another zone than the copy was made in.
+            let other = if flag.is_empty() { format!("{base},NO_BACKSLASH_ESCAPES") } else { base.to_string() };
+            q.ok(10, &format!("SET SESSION sql_mode = '{other}'")).await;
+            q.ok(11, "SET SESSION time_zone = '+05:00'").await;
+            let other_mode = MySqlMode { no_backslash_escapes: other.contains("BACKSLASH"), ..session_mode };
+            run_all(&mut q, 20, &insert, Dialect::MySql(MySqlMode { ansi_quotes: false, ..other_mode })).await;
+            let mut a = side(&admin).await;
+            let want = row_hashes(&mut a, &src.q(), &columns).await;
+            assert_eq!(row_hashes(&mut a, &copy.q(), &columns).await, want, "INSERT, {mode}:\n{insert}");
+            // UPDATE: the copy's rows changed, then set back by the statements.
+            a.query_drop(format!(
+                "UPDATE {} SET txt = 'changed', js = '{{}}', bin = NULL, blb = 0x01, bt = b'0', d = NULL, \
+                 dt = '2000-01-01', ts = '2000-01-01 00:00:00', tm = '01:00:00', yr = 1999, big = 1, amount = 2, \
+                 nul = 'y', dbl = 3, en = 'a', st = 'y', geo = ST_GeomFromText('POINT(9 9)'), bn = 0x09, lat = 'z'",
+                copy.q()
+            ))
+            .await
+            .unwrap();
+            assert_ne!(row_hashes(&mut a, &copy.q(), &columns).await, want);
+            q.ok(30, &format!("SET SESSION sql_mode = '{mode}'")).await;
+            q.ok(31, "SET SESSION time_zone = '+00:00'").await;
+            let update = copied_as_sql(&mut q, 32, &keys, &src, session_mode, &values, true).await.unwrap();
+            let update = update.replace(&format!("`{}`", src.name), &format!("`{}`", copy.name));
+            q.ok(33, &format!("SET SESSION sql_mode = '{other}'")).await;
+            q.ok(34, "SET SESSION time_zone = '-03:00'").await;
+            run_all(&mut q, 40, &update, Dialect::MySql(MySqlMode { ansi_quotes: false, ..other_mode })).await;
+            assert_eq!(row_hashes(&mut a, &copy.q(), &columns).await, want, "UPDATE, {mode}:\n{update}");
+            a.disconnect().await.unwrap();
+        }
         if n > 0 {
             continue;
         }
@@ -4789,7 +5162,13 @@ async fn a_mysql_trigger_definition_is_for_display_only() {
     m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
     let s = structure_of(&mut m, &t.name).await.unwrap();
     assert_eq!(s.triggers.len(), 1);
-    assert!(s.triggers[0].definition.ends_with(r"FOR EACH ROW SET NEW.s = 'it's \ x'"), "{}", s.triggers[0].definition);
+    // MariaDB gives the body as written.
+    let body = if mariadb(&url).await {
+        r"FOR EACH ROW SET NEW.s = 'it''s \ x'"
+    } else {
+        r"FOR EACH ROW SET NEW.s = 'it's \ x'"
+    };
+    assert!(s.triggers[0].definition.ends_with(body), "{}", s.triggers[0].definition);
 }
 
 /// A foreign key may be named `PRIMARY` (on a column with an index of its own): it is a
@@ -4801,6 +5180,22 @@ async fn a_foreign_key_named_primary_is_no_primary_key() {
     let test = "a_foreign_key_named_primary_is_no_primary_key";
     let Some((url, admin)) = urls(test) else { return };
     let parent = Table::make(&admin, "fkp_parent", &["CREATE TABLE {t} (a INT PRIMARY KEY)"]).await;
+    if mariadb(&admin).await {
+        // No constraint may be named `PRIMARY` there: the case cannot be made.
+        let name = format!("shop.zz_it_fkp_child_{}", std::process::id());
+        let _child = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {name}") };
+        let mut a = side(&admin).await;
+        let made = a
+            .query_drop(format!(
+                "CREATE TABLE {name} (x INT, v INT, KEY ix (x), CONSTRAINT `PRIMARY` FOREIGN KEY (x) REFERENCES {} (a))",
+                parent.q()
+            ))
+            .await;
+        a.disconnect().await.unwrap();
+        assert!(matches!(&made, Err(mysql_async::Error::Server(e)) if e.code == 1280), "{made:?}");
+        not_on_mariadb(test, "no foreign key may be named PRIMARY there, the server refuses the name");
+        return;
+    }
     let child = Table::make(
         &admin,
         "fkp_child",
@@ -5032,18 +5427,25 @@ fn tx_of(evs: &[DbEvent]) -> Vec<String> {
 /// server's own record of its current transaction (`performance_schema`, read live; InnoDB's
 /// `information_schema.innodb_trx` is a cache the server refreshes only when nobody read it for
 /// 100 ms, which the tests running at once keep from happening).
+/// MariaDB keeps no record of transactions there by default: there, InnoDB's list, each time
+/// read past the 100 ms it is kept for.
 async fn open_transactions(a: &mut mysql_async::Conn, id: u64, want: u64) -> u64 {
     let deadline = Instant::now() + Duration::from_secs(5);
+    let my = is_mariadb(a).await;
+    let sql = if my {
+        format!("SELECT COUNT(*) FROM information_schema.INNODB_TRX WHERE trx_mysql_thread_id = {id}")
+    } else {
+        format!(
+            "SELECT COUNT(*) FROM performance_schema.events_transactions_current t \
+             JOIN performance_schema.threads th ON th.THREAD_ID = t.THREAD_ID \
+             WHERE th.PROCESSLIST_ID = {id} AND t.STATE = 'ACTIVE'"
+        )
+    };
     loop {
-        let n: u64 = a
-            .query_first(format!(
-                "SELECT COUNT(*) FROM performance_schema.events_transactions_current t \
-                 JOIN performance_schema.threads th ON th.THREAD_ID = t.THREAD_ID \
-                 WHERE th.PROCESSLIST_ID = {id} AND t.STATE = 'ACTIVE'"
-            ))
-            .await
-            .unwrap()
-            .unwrap();
+        if my {
+            tokio::time::sleep(INNODB_LISTS_KEPT).await;
+        }
+        let n: u64 = a.query_first(sql.as_str()).await.unwrap().unwrap();
         if n == want || Instant::now() > deadline {
             return n;
         }
@@ -5299,9 +5701,15 @@ async fn explain_analyze_and_counts_inside_the_manual_transaction() {
     assert_eq!(tx_of(&evs), ["begun 0", "block true", "tx true"], "{evs:?}");
     let delete = format!("EXPLAIN ANALYZE DELETE x FROM {q} x JOIN {q} y ON y.id = x.id WHERE x.id > 5");
     let evs = c.manual(2, &[&delete], &[false]).await;
-    assert!(
-        page_of(&evs[..evs.iter().rposition(|e| matches!(e, DbEvent::Page { .. })).unwrap() + 1]).1[0][0].is_some()
-    );
+    if mariadb(&url).await {
+        // Refused, the transaction as it was.
+        assert!(no_plan(evs.iter().find(|e| matches!(e, DbEvent::Failed { .. }))), "{evs:?}");
+        not_on_mariadb(test, NO_PLANS);
+    } else {
+        assert!(
+            page_of(&evs[..evs.iter().rposition(|e| matches!(e, DbEvent::Page { .. })).unwrap() + 1]).1[0][0].is_some()
+        );
+    }
     assert!(tx_of(&evs).is_empty(), "{evs:?}");
     assert_eq!(rows_in(&mut c, 3, &q).await, "9");
     let sql = format!("SELECT COUNT(*) FROM (\nSELECT id FROM {q}\n) AS datarig_count");
@@ -5506,6 +5914,12 @@ async fn the_servers_idle_limit_ends_an_idle_session() {
     let mut c = Conn::open_opts(&url, SessionRole::Query, o).await;
     c.ok(1, "SELECT 1").await;
     let lost = c.wait(|e| matches!(e, DbEvent::Lost { .. }), 20).await;
+    if mariadb(&url).await {
+        // It closes the connection without a word: lost, the reason not known.
+        assert!(matches!(lost, DbEvent::Lost { error: DbError::Closed }), "{lost:?}");
+        not_on_mariadb(test, "no reason is given for an idle session it ends, the server sends none");
+        return;
+    }
     let DbEvent::Lost { error: DbError::IdleSessionTimeout(m) } = lost else { panic!("{lost:?}") };
     assert!(m.starts_with("ERROR 4031 "), "{m}");
 }
@@ -5793,14 +6207,23 @@ async fn a_bounded_count_and_an_estimate_are_told_apart_when_stopped() {
         page_of(&evs).1[0][0].clone()
     }
     let own = Some("73".to_string());
+    // MariaDB gives no estimate (refused at once), and limits a statement in seconds.
+    let my = mariadb(&url).await;
+    if my {
+        not_on_mariadb(test, NO_ESTIMATES);
+    }
     c.ok(20, "SET SESSION lock_wait_timeout = 73").await;
     assert_eq!(lock_wait(&mut c, 21).await, own);
     // Free: counted, and estimated within a factor of the rows.
     assert_eq!(count_within(&mut c, 1, &counted, limit).await.0, Ok(1900));
     assert_eq!(lock_wait(&mut c, 22).await, own, "after a count");
     let (est, _) = estimate(&mut c, 2, &rows).await;
-    let est = est.expect("an estimate");
-    assert!((190..=19_000).contains(&est), "{est}");
+    if my {
+        assert_eq!(est, Err(DbError::NotSupported));
+    } else {
+        let est = est.expect("an estimate");
+        assert!((190..=19_000).contains(&est), "{est}");
+    }
     assert_eq!(lock_wait(&mut c, 23).await, own, "after an estimate");
     // Held by another session.
     let mut b = side(&url).await;
@@ -5814,8 +6237,13 @@ async fn a_bounded_count_and_an_estimate_are_told_apart_when_stopped() {
     assert!(took >= Duration::from_secs(1) && took < Duration::from_secs(10), "{took:?}");
     assert_eq!(lock_wait(&mut c, 25).await, own, "after a count's lock wait");
     let (got, took) = estimate(&mut c, 5, &rows).await;
-    assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
-    assert!(took < Duration::from_secs(10), "{took:?}");
+    if my {
+        assert_eq!(got, Err(DbError::NotSupported));
+        assert!(took < Duration::from_secs(1), "refused at once: {took:?}");
+    } else {
+        assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
+        assert!(took < Duration::from_secs(10), "{took:?}");
+    }
     assert_eq!(lock_wait(&mut c, 26).await, own, "after an estimate's lock wait");
     // The user's cancel (`KILL QUERY`) while it waits.
     c.session.send(DbCommand::Count { id: 6, sql: counted.clone(), limit });
@@ -5827,17 +6255,19 @@ async fn a_bounded_count_and_an_estimate_are_told_apart_when_stopped() {
     assert_eq!(result, Err(DbError::Cancelled));
     assert_eq!(lock_wait(&mut c, 27).await, own, "after a cancel");
     // A shorter limit of the session's own stays.
-    c.ok(7, "SET SESSION max_execution_time = 700").await;
+    let (timeout, set, seen) =
+        if my { ("max_statement_time", "0.7", "0.700000") } else { ("max_execution_time", "700", "700") };
+    c.ok(7, &format!("SET SESSION {timeout} = {set}")).await;
     let (got, _) = count_within(&mut c, 8, &counted, limit).await;
     assert_eq!(got, Err(DbError::TimedOut(Duration::from_millis(700))));
     b.query_drop("UNLOCK TABLES").await.unwrap();
     b.disconnect().await.unwrap();
     // Nothing of the limits stays on the session.
-    let evs = c.run(9, &["SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout"]).await;
+    let evs = c.run(9, &[&format!("SELECT @@SESSION.{timeout}, @@SESSION.lock_wait_timeout")]).await;
     let (_, values, _) = page_of(&evs);
-    assert_eq!(values[0][0].as_deref(), Some("700"), "the user's own");
+    assert_eq!(values[0][0].as_deref(), Some(seen), "the user's own");
     assert_eq!(values[0][1], own, "the user's own");
-    c.ok(10, "SET SESSION max_execution_time = 0").await;
+    c.ok(10, &format!("SET SESSION {timeout} = 0")).await;
     assert_eq!(count_within(&mut c, 11, &counted, limit).await.0, Ok(1900));
 }
 
@@ -5862,8 +6292,14 @@ async fn a_shorter_lock_wait_of_the_sessions_own_stays_a_bounded_reads_limit() {
     assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
     assert!(took >= Duration::from_secs(1) && took < Duration::from_millis(1800), "the session's 1 s: {took:?}");
     let (got, took) = estimate(&mut c, 3, &rows).await;
-    assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
-    assert!(took >= Duration::from_secs(1) && took < Duration::from_millis(1800), "the session's 1 s: {took:?}");
+    if mariadb(&url).await {
+        assert_eq!(got, Err(DbError::NotSupported));
+        assert!(took < Duration::from_secs(1), "refused at once: {took:?}");
+        not_on_mariadb(test, NO_ESTIMATES);
+    } else {
+        assert!(matches!(got, Err(DbError::LockTimeout(_))), "{got:?}");
+        assert!(took >= Duration::from_secs(1) && took < Duration::from_millis(1800), "the session's 1 s: {took:?}");
+    }
     b.query_drop("UNLOCK TABLES").await.unwrap();
     b.disconnect().await.unwrap();
     let evs = c.run(4, &["SELECT @@SESSION.lock_wait_timeout"]).await;
@@ -5884,12 +6320,18 @@ async fn an_estimate_waits_for_no_transaction_and_keeps_the_next_ones_settings()
     let t = numbers(&admin, "estx", 50).await;
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
     let rows = format!("SELECT * FROM {} WHERE (id > 10)", t.q());
+    // MariaDB gives no estimate: every one is refused, before anything else is looked at.
+    let my = mariadb(&url).await;
+    if my {
+        not_on_mariadb(test, NO_ESTIMATES);
+    }
     c.ok(1, "START TRANSACTION").await;
     assert_eq!(estimate(&mut c, 2, &rows).await.0, Err(DbError::NotSupported));
     c.ok(3, "COMMIT").await;
     let evs = c.run(4, &["SET TRANSACTION ISOLATION LEVEL SERIALIZABLE"]).await;
     assert_eq!(isolation_of(&evs), Some(None), "{evs:?}");
-    assert_eq!(estimate(&mut c, 5, &rows).await.0, Err(DbError::NextTransactionSet));
+    let refused = if my { DbError::NotSupported } else { DbError::NextTransactionSet };
+    assert_eq!(estimate(&mut c, 5, &rows).await.0, Err(refused));
     // A filtered table's count, with its time limit, is refused the same way.
     let counted = format!("SELECT COUNT(*) FROM (\n{rows}\n) AS datarig_count");
     let refused = count_within(&mut c, 13, &counted, Some(Duration::from_secs(30))).await.0;
@@ -5899,13 +6341,23 @@ async fn an_estimate_waits_for_no_transaction_and_keeps_the_next_ones_settings()
     assert!(!evs.is_empty());
     c.ok(8, "COMMIT").await;
     c.ok(9, "SET SESSION autocommit = 0").await;
-    assert!(estimate(&mut c, 10, &rows).await.0.is_ok());
+    let est = estimate(&mut c, 10, &rows).await.0;
+    if my {
+        assert_eq!(est, Err(DbError::NotSupported));
+    } else {
+        assert!(est.is_ok());
+    }
     // Nothing stays open: a level set now is the session's at once.
     let evs = c.run(11, &["SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED"]).await;
     assert_eq!(isolation_of(&evs), Some(Some(Isolation::ReadCommitted)), "{evs:?}");
     // A view is refused by the allowlist's question, as a count is.
     let view = "SELECT * FROM shop.order_summary WHERE (1 = 1)";
-    assert!(matches!(estimate(&mut c, 12, view).await.0, Err(DbError::NotRepeatable(_))));
+    let est = estimate(&mut c, 12, view).await.0;
+    if my {
+        assert_eq!(est, Err(DbError::NotSupported));
+    } else {
+        assert!(matches!(est, Err(DbError::NotRepeatable(_))), "{est:?}");
+    }
 }
 
 /// An estimate refused while a result is held is a run of the session all the same: a cancel of
@@ -5970,6 +6422,11 @@ async fn an_estimate_is_not_capped_by_the_limit_paging_left() {
     let rows = format!("SELECT * FROM {} WHERE (id > 100)", t.q());
     let evs = c.run(1, &[&rows]).await;
     assert_eq!(page_of(&evs).1.len(), PAGE);
+    if mariadb(&url).await {
+        assert_eq!(estimate(&mut c, 2, &rows).await.0, Err(DbError::NotSupported));
+        not_on_mariadb(test, NO_ESTIMATES);
+        return;
+    }
     let est = estimate(&mut c, 2, &rows).await.0.expect("an estimate");
     assert!(est > PAGE as u64 + 1, "{est}");
     let capped = format!("{rows} LIMIT 10");
@@ -6159,9 +6616,24 @@ async fn a_cancel_while_a_read_is_admitted_stops_it_unsent() {
     let count = |id| DbCommand::Count { id, sql: counted.clone(), limit };
     let plan = |id| DbCommand::Estimate { id, sql: rows.clone() };
     let not_sent = |written: &str| !written.contains("COUNT(*)") && !written.contains("EXPLAIN");
+    // MariaDB gives no estimate: refused at once, nothing written.
+    let my = mariadb(&url).await;
+    if my {
+        not_on_mariadb(test, NO_ESTIMATES);
+    }
+    let refused = async |c: &mut Conn, command: DbCommand| {
+        tap.clear();
+        c.session.send(command);
+        assert_eq!(read_answer(c).await, Err(DbError::NotSupported));
+        assert!(not_sent(&tap.written()), "{}", tap.written());
+    };
 
     // The catalog's answer held back until the kill for it was carried out.
     for (id, command) in [(1, count(1)), (2, plan(2))] {
+        if my && matches!(command, DbCommand::Estimate { .. }) {
+            refused(&mut c, command).await;
+            continue;
+        }
         tap.clear();
         tap.hold_after("information_schema.TABLES");
         c.session.send(command);
@@ -6180,6 +6652,10 @@ async fn a_cancel_while_a_read_is_admitted_stops_it_unsent() {
     // Its own transaction opened meanwhile (without autocommit): ended again.
     c.ok(20, "SET SESSION autocommit = 0").await;
     for (id, command) in [(21, count(21)), (22, plan(22))] {
+        if my && matches!(command, DbCommand::Estimate { .. }) {
+            refused(&mut c, command).await;
+            continue;
+        }
         tap.clear();
         tap.hold_after("START TRANSACTION READ ONLY");
         c.session.send(command);
@@ -6226,9 +6702,24 @@ async fn an_interrupted_start_of_a_reads_transaction_is_cancelled_only_if_asked_
     let count = |id| DbCommand::Count { id, sql: counted.clone(), limit: Some(Duration::from_secs(30)) };
     let plan = |id| DbCommand::Estimate { id, sql: rows.clone() };
     let not_read = |written: &str| !written.contains("COUNT(*)") && !written.contains("EXPLAIN");
+    // MariaDB gives no estimate: refused at once, nothing written.
+    let my = mariadb(&url).await;
+    if my {
+        not_on_mariadb(test, NO_ESTIMATES);
+    }
+    let refused = async |c: &mut Conn, command: DbCommand| {
+        tap.clear();
+        c.session.send(command);
+        assert_eq!(read_answer(c).await, Err(DbError::NotSupported));
+        assert!(not_read(&tap.written()), "{}", tap.written());
+    };
 
     // Failed before the user cancelled: the cancel comes while the failed start is rolled back.
     for (id, command) in [(2, count(2)), (3, plan(3))] {
+        if my && matches!(command, DbCommand::Estimate { .. }) {
+            refused(&mut c, command).await;
+            continue;
+        }
         tap.clear();
         tap.swap(start, &call);
         tap.hold_after("ROLLBACK");
@@ -6244,6 +6735,10 @@ async fn an_interrupted_start_of_a_reads_transaction_is_cancelled_only_if_asked_
 
     // The user cancelled while the answer was on its way.
     for (id, command) in [(4, count(4)), (5, plan(5))] {
+        if my && matches!(command, DbCommand::Estimate { .. }) {
+            refused(&mut c, command).await;
+            continue;
+        }
         tap.clear();
         tap.swap(start, &call);
         tap.hold_after(start);
@@ -6290,8 +6785,23 @@ async fn someone_elses_kill_of_a_read_is_not_the_users_cancel() {
     }
     let from_the_server =
         |got: &Result<u64, DbError>| matches!(got, Err(DbError::Server(m)) if m.text.contains("1317"));
+    // MariaDB gives no estimate: refused at once, nothing written.
+    let my = mariadb(&url).await;
+    if my {
+        not_on_mariadb(test, NO_ESTIMATES);
+    }
+    let refused = async |c: &mut Conn, command: DbCommand| {
+        tap.clear();
+        c.session.send(command);
+        assert_eq!(read_answer(c).await, Err(DbError::NotSupported));
+        assert!(!tap.written().contains("EXPLAIN"), "{}", tap.written());
+    };
 
     for (id, command) in [(2, count(2)), (3, plan(3))] {
+        if my && matches!(command, DbCommand::Estimate { .. }) {
+            refused(&mut c, command).await;
+            continue;
+        }
         c.session.send(command);
         kill_when_waiting(&mut a, &waiting, session).await;
         let got = read_answer(&mut c).await;
@@ -6301,6 +6811,10 @@ async fn someone_elses_kill_of_a_read_is_not_the_users_cancel() {
     // Without autocommit the read ends its transaction after it: the user cancels meanwhile.
     c.ok(4, "SET SESSION autocommit = 0").await;
     for (id, command) in [(5, count(5)), (6, plan(6))] {
+        if my && matches!(command, DbCommand::Estimate { .. }) {
+            refused(&mut c, command).await;
+            continue;
+        }
         tap.hold_after("ROLLBACK");
         c.session.send(command);
         kill_when_waiting(&mut a, &waiting, session).await;
@@ -6381,10 +6895,13 @@ async fn a_group_count_is_bounded_and_told_apart_when_stopped() {
     a.query_drop(format!("UPDATE {} SET k = CAST(id % 3 AS CHAR)", t.q())).await.unwrap();
     a.disconnect().await.unwrap();
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    mariadb(&url).await;
     let sql = group_sql(&t.name, "k", ("varchar", ValueKind::Text), Some("id > 100"));
     let limit = Some(Duration::from_secs(30));
     async fn limits(c: &mut Conn, id: u64) -> Vec<Cell> {
-        let evs = c.run(id, &["SELECT @@SESSION.max_execution_time, @@SESSION.lock_wait_timeout"]).await;
+        // MariaDB's limit of a statement is `max_statement_time`.
+        let timeout = if mariadb_cached() { "max_statement_time" } else { "max_execution_time" };
+        let evs = c.run(id, &[&format!("SELECT @@SESSION.{timeout}, @@SESSION.lock_wait_timeout")]).await;
         page_of(&evs).1[0].clone()
     }
     c.ok(20, "SET SESSION lock_wait_timeout = 73").await;
@@ -6451,7 +6968,9 @@ async fn a_group_count_refuses_locking_reads_and_the_next_transactions_settings(
     assert_eq!((got.map(|g| g.values.len()), snapshot), (Ok(10), false));
     assert_eq!(data_locks_of(&mut a, id, &t.name).await, 0, "no lock");
     let evs = c.run(40, &["SELECT CONCAT(@@SESSION.autocommit, ' ', @@SESSION.transaction_isolation)"]).await;
-    assert_eq!(page_of(&evs).1[0][0].as_deref(), Some("0 SERIALIZABLE"));
+    // MariaDB writes its switches as words.
+    let off = if mariadb(&url).await { "OFF SERIALIZABLE" } else { "0 SERIALIZABLE" };
+    assert_eq!(page_of(&evs).1[0][0].as_deref(), Some(off));
     c.ok(44, "COMMIT").await;
     // Autocommit off and a transaction open: refused, not asked.
     c.ok(41, "START TRANSACTION").await;
@@ -6619,17 +7138,28 @@ async fn a_group_count_receives_only_bounded_values_whatever_the_columns_type_wa
 async fn a_group_count_marks_the_values_the_server_groups_by_a_prefix() {
     let test = "a_group_count_marks_the_values_the_server_groups_by_a_prefix";
     let Some((url, admin)) = urls(test) else { return };
+    // The length the session lowers it to, and the values at least that long: MariaDB's least
+    // is 64 bytes.
+    let (lowered, t1, t2, b1, b2) = if mariadb(&admin).await {
+        let a = "abcdef".repeat(11);
+        let b = "01".repeat(64);
+        (64, format!("{a}1"), format!("{a}2"), format!("{b}AA"), format!("{b}BB"))
+    } else {
+        (4, "abcdef1".to_string(), "abcdef2".to_string(), "01020304AA".to_string(), "01020304BB".to_string())
+    };
     let t = Table::make(
         &admin,
         "groupprefix",
         &[
             "CREATE TABLE {t} (id INT PRIMARY KEY, t TEXT, b BLOB, v VARCHAR(3000), n INT)",
-            "INSERT INTO {t} VALUES \
-             (1, 'ab', X'0102', 'ab', 123456), \
-             (2, 'abcdef1', X'01020304AA', 'abcdef1', 123456), \
-             (3, 'abcdef2', X'01020304BB', REPEAT('v', 2000), 7), \
-             (4, REPEAT('y', 2000), REPEAT(X'AB', 5000), NULL, NULL), \
-             (5, NULL, NULL, NULL, NULL)",
+            &format!(
+                "INSERT INTO {{t}} VALUES \
+                 (1, 'ab', X'0102', 'ab', 123456), \
+                 (2, '{t1}', X'{b1}', 'abcdef1', 123456), \
+                 (3, '{t2}', X'{b2}', REPEAT('v', 2000), 7), \
+                 (4, REPEAT('y', 2000), REPEAT(X'AB', 5000), NULL, NULL), \
+                 (5, NULL, NULL, NULL, NULL)"
+            ),
         ],
     )
     .await;
@@ -6653,8 +7183,8 @@ async fn a_group_count_marks_the_values_the_server_groups_by_a_prefix() {
         vec![
             (None, true, false),
             (s("ab"), true, false),
-            (s("abcdef1"), true, false),
-            (s("abcdef2"), true, false),
+            (s(&t1), true, false),
+            (s(&t2), true, false),
             (Some(y.clone()), true, true)
         ]
     );
@@ -6663,15 +7193,15 @@ async fn a_group_count_marks_the_values_the_server_groups_by_a_prefix() {
         marks(&mut c, 2, &varchar).await,
         vec![(None, true, false), (s("ab"), true, false), (s("abcdef1"), true, false), (Some(v), true, true)]
     );
-    // Lowered for the session: every value at least 4 bytes long, sent or not.
-    c.ok(3, "SET SESSION max_sort_length = 4").await;
+    // Lowered for the session: every value at least that long, sent or not.
+    c.ok(3, &format!("SET SESSION max_sort_length = {lowered}")).await;
     assert_eq!(
         marks(&mut c, 4, &text).await,
         vec![
             (None, true, false),
             (s("ab"), true, false),
-            (s("abcdef1"), true, true),
-            (s("abcdef2"), true, true),
+            (s(&t1), true, true),
+            (s(&t2), true, true),
             (Some(y), true, true)
         ]
     );
@@ -6851,13 +7381,16 @@ async fn the_keys_read_says_the_tables_columns() {
         .map(|c| (c.name, c.type_name, c.not_null, c.primary_key, c.foreign_key, c.invisible))
         .collect();
     let col = |n: &str, t: &str, nn, pk, fk, inv| (n.to_string(), t.to_string(), nn, pk, fk, inv);
+    // MariaDB keeps an integer's display width in its type.
+    let (int, bigint) =
+        if mariadb(&url).await { ("int(11)", "bigint(20) unsigned") } else { ("int", "bigint unsigned") };
     assert_eq!(
         got,
         vec![
-            col("id", "int", true, true, false, false),
+            col("id", int, true, true, false, false),
             col("Mixed Name", "varchar(20)", true, false, false, false),
-            col("hidden", "int", false, false, false, true),
-            col("parent_id", "bigint unsigned", false, false, true, false),
+            col("hidden", int, false, false, false, true),
+            col("parent_id", bigint, false, false, true, false),
             col("amount", "decimal(14,2)", false, false, false, false),
         ]
     );

@@ -179,6 +179,23 @@ async fn side(url: &str) -> mysql_async::Conn {
     mysql_async::Conn::new(opts).await.unwrap()
 }
 
+/// Whether the server is MariaDB, from its own version line (asked once per process).
+async fn mariadb(url: &str) -> bool {
+    static MARIADB: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if let Some(m) = MARIADB.get() {
+        return *m;
+    }
+    let mut c = side(url).await;
+    let line: String = c.query_first("SELECT VERSION()").await.unwrap().expect("a version");
+    let _ = c.disconnect().await;
+    *MARIADB.get_or_init(|| line.contains("MariaDB"))
+}
+
+/// A test of what MariaDB does not offer says so on stderr, with why.
+fn not_on_mariadb(test: &str, reason: &str) {
+    let _ = writeln!(std::io::stderr(), "MARIADB {test}: {reason}");
+}
+
 /// A table `shop.zz_it_<what>_<pid>` of `n` rows (`id` 1..=n).
 async fn numbers(admin: &str, what: &str, n: u32) -> (Made, String) {
     let t = format!("shop.zz_it_{what}_{}", std::process::id());
@@ -546,6 +563,32 @@ async fn the_explain_actions_show_mysqls_tree_as_a_plan() {
     let Some((url, _)) = urls("the_explain_actions_show_mysqls_tree_as_a_plan") else { return };
     let (mut app, mut rx) = app_on(&url, &format!("mx{}", std::process::id()), None).await;
     let sql = "SELECT u.id, COUNT(*) FROM users u JOIN orders o ON o.user_id = u.id GROUP BY u.id ORDER BY 2 DESC;";
+    if mariadb(&url).await {
+        // Once the session said it has no plan format, the actions run nothing.
+        let id = first(&app);
+        pump(&mut app, &mut rx, 15, |a| a.conns.get(id).is_some_and(|c| c.explain.is_some())).await;
+        assert!(matches!(app.conns.get(id).unwrap().explain, Some(None)));
+        for keys in [" ex", " ea"] {
+            let mut editor = datarig_tui::widgets::editor::Editor::new(sql);
+            editor.set_language(app.tab_language(app.tab().id));
+            app.tab_mut().editor = editor;
+            app.focus = Focus::Editor;
+            for c in keys.chars() {
+                press(&mut app, c);
+            }
+            while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
+                app.on_app_event(ev);
+            }
+            let t = app.tab();
+            assert!(idle(&app) && t.exec.plan.is_none(), "{keys}: {:?}", app.status);
+            assert!(t.exec.run.statements.is_empty(), "{keys}: {:?}", t.exec.run.statements);
+        }
+        not_on_mariadb(
+            "the_explain_actions_show_mysqls_tree_as_a_plan",
+            "no plans are offered, its EXPLAIN has no tree format and no ANALYZE",
+        );
+        return;
+    }
     for (keys, analyzed) in [(" ex", false), (" ea", true)] {
         let mut editor = datarig_tui::widgets::editor::Editor::new(sql);
         editor.set_language(app.tab_language(app.tab().id));
@@ -618,8 +661,11 @@ async fn a_syntax_error_in_a_table_filter_marks_the_text_mysql_quotes() {
     let (tx, mut rx) = unbounded_channel();
     app.start(tx, Startup::Normal);
     assert!(app.tab().is_table());
-    // `RANK` is a reserved word of MySQL 8: the server stops reading at the `=` after it.
-    let filter = "name = '\u{65e5}\u{672c}' AND rank = 1";
+    // `RANK` is a reserved word of MySQL 8 (MariaDB reads it as a name; `EXISTS` is reserved
+    // there): the server stops reading at the `=` after it.
+    let word = if mariadb(&url).await { "exists" } else { "rank" };
+    let filter = format!("name = '\u{65e5}\u{672c}' AND {word} = 1");
+    let filter = filter.as_str();
     let mut tq = TableQuery::new(TableName { database: None, schema: "shop".into(), name: "users".into() });
     tq.draft.filter = Some(Filter { text: filter.into(), recognised: None });
     app.tab_mut().doc.table_query = Some(Box::new(tq));
