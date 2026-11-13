@@ -590,6 +590,10 @@ pub struct App {
     prompt_queue: VecDeque<(ProfileId, Notice)>,
     /// A profile form save waiting for the source-change confirmation.
     pending_save: bool,
+    /// A save of an environment (its form, one picked in a profile form, the presets) confirmed
+    /// although it gives its rules to profiles that already named it while it was not defined:
+    /// the next save goes through without asking.
+    env_adopt_confirmed: bool,
     /// Environment variables (the `env` source); tests replace it.
     env: EnvLookup,
     /// The launch-time migration still to run.
@@ -851,6 +855,7 @@ impl App {
             prompted: None,
             prompt_queue: VecDeque::new(),
             pending_save: false,
+            env_adopt_confirmed: false,
             env: password::process_env(),
             migration: (config_error.is_none() && cfg.needs_migration()).then(|| migrate::Input::new(cfg)),
             paths: Paths::default(),

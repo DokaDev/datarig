@@ -270,6 +270,7 @@ impl App {
         if self.overlays.form().is_some_and(ProfileForm::is_default_rules) {
             return self.save_default_rules_form();
         }
+        let adopt_confirmed = std::mem::take(&mut self.env_adopt_confirmed);
         let Some(form) = self.overlays.form_mut().filter(|f| !f.saving && f.is_environment()) else { return };
         form.attempted = true;
         let FormKind::Environment { id, editing } = form.kind else { return };
@@ -282,6 +283,14 @@ impl App {
         let old = self.environments().iter().position(|q| q.id == id).filter(|_| editing);
         let before = old.map(|i| self.environments()[i].clone());
         let renamed = before.as_ref().map(|b| b.name.clone()).filter(|n| *n != e.name);
+        // Profiles that already name the new name, which no environment had: they did not
+        // connect, and would take these rules without being asked. Listed, and asked first.
+        if !adopt_confirmed && before.as_ref().is_none_or(|b| b.name != e.name) {
+            let users = self.environment_adopters(&e.name, None);
+            if !users.is_empty() {
+                return self.ask_adopt_environment(&e, users);
+            }
+        }
         e.origin = before.as_ref().and_then(|b| b.origin.clone());
         let (policies, profiles) = (self.policies.clone(), self.profiles.clone());
         match old {
@@ -312,6 +321,60 @@ impl App {
         if !self.commit_rule_changed(&policies) {
             self.flash(Notice::new(Msg::EnvironmentSaved { name: e.name }, Level::Success));
         }
+    }
+
+    /// The names of the profiles that would take environment `name`'s rules once it is defined
+    /// (none while an environment has that name): the profiles naming it, and those connected
+    /// with a copy naming it (a profile changed since it connected), but `except` (the profile
+    /// whose own form defines it).
+    pub(super) fn environment_adopters(&self, name: &str, except: Option<ProfileId>) -> Vec<String> {
+        if self.policies.environment(name).is_some() {
+            return Vec::new();
+        }
+        let copy = |id| self.conns.get(id).and_then(|c| c.resolved.as_ref()).and_then(|r| r.policy.as_deref());
+        self.profiles
+            .iter()
+            .filter(|c| Some(c.id) != except)
+            .filter(|c| c.policy.as_deref() == Some(name) || copy(c.id) == Some(name))
+            .map(|c| c.name.clone())
+            .collect()
+    }
+
+    /// `names` for a question: the first few, then `…` (the question says how many there are).
+    fn adopter_names(names: &[String]) -> String {
+        const SHOWN: usize = 5;
+        let mut s = names.iter().take(SHOWN).cloned().collect::<Vec<_>>().join(", ");
+        if names.len() > SHOWN {
+            s.push_str(", …");
+        }
+        s
+    }
+
+    /// Ask before environment `e` is saved under a name the profiles `users` already name.
+    pub(super) fn ask_adopt_environment(&mut self, e: &Environment, users: Vec<String>) {
+        let rules = self.rules_hint(&e.policy);
+        let (count, names) = (users.len() as u64, Self::adopter_names(&users));
+        let text = Msg::EnvironmentAdopt { name: e.name.clone(), count, names, rules };
+        self.overlays.push(Overlay::Confirm(Confirm {
+            title: Label::EnvironmentAdoptTitle,
+            text,
+            details: Vec::new(),
+            keys: Label::EnvironmentAdoptKeys,
+            action: ConfirmAction::AdoptEnvironment,
+            folder: None,
+            path: None,
+            tx: None,
+            buttons: Default::default(),
+        }));
+    }
+
+    /// `y` to [`Self::ask_adopt_environment`]: the open form (the environment's, or the profile
+    /// form that picked a preset) is saved; it may still fail to be written, or have changed
+    /// meanwhile (it is checked again).
+    pub(super) fn adopt_environment_confirmed(&mut self) {
+        self.env_adopt_confirmed = true;
+        self.save_form();
+        self.env_adopt_confirmed = false;
     }
 
     /// The profiles naming environment `from` name `to` instead, and so do the copies their
@@ -351,6 +414,29 @@ impl App {
             return self.flash(Notice::new(Label::ConfigReadonly, Level::Warning));
         }
         let presets = policy::presets();
+        // Profiles that already name some of them would take their rules: asked first.
+        let adopt: Vec<Msg> = presets
+            .iter()
+            .filter_map(|e| {
+                let users = self.environment_adopters(&e.name, None);
+                let (name, rules, names) = (e.name.clone(), self.rules_hint(&e.policy), Self::adopter_names(&users));
+                (!users.is_empty()).then_some(Msg::EnvironmentAdoptLine { name, rules, names })
+            })
+            .collect();
+        if !adopt.is_empty() && !std::mem::take(&mut self.env_adopt_confirmed) {
+            self.overlays.push(Overlay::Confirm(Confirm {
+                title: Label::EnvironmentAdoptTitle,
+                text: Label::EnvironmentAdoptPresets.into(),
+                details: adopt,
+                keys: Label::EnvironmentAdoptPresetsKeys,
+                action: ConfirmAction::AdoptPresets,
+                folder: None,
+                path: None,
+                tx: None,
+                buttons: Default::default(),
+            }));
+            return;
+        }
         let first = presets[0].id;
         let names = presets.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ");
         self.policies.environments_mut().extend(presets);

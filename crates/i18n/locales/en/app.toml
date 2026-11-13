@@ -64,6 +64,7 @@
 "dialog.button.later" = "Later"
 "dialog.button.save_again" = "Save again"
 "dialog.button.clear" = "Clear"
+"dialog.button.save" = "Save"
 "busy.keys" = "{keys} quit"
 
 "status.hangul" = "\uD55C/A"

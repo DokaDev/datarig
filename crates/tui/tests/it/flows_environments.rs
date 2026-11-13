@@ -187,6 +187,16 @@ fn the_empty_section_adds_the_presets() {
     on_row(&mut h, RowKind::EnvironmentPresets);
     assert!(h.explorer_line().contains("＋ Add presets: dev, test, staging, prod"), "{}", h.explorer_line());
     h.key(KeyCode::Enter);
+    // `local-pg` already names `prod`, which is not defined: asked first, naming it and the
+    // rules it would take; `Enter` adds nothing.
+    assert_eq!(h.app.overlays.confirm().map(|c| c.action), Some(ConfirmAction::AdoptPresets));
+    let details: Vec<String> =
+        h.app.overlays.confirm().unwrap().details.iter().map(|m| h.app.i18n.msg(m).to_string()).collect();
+    assert_eq!(details, ["“prod” (read-only · asks before every write): local-pg"]);
+    h.key(KeyCode::Enter);
+    assert!(names(&h).is_empty() && !dir.text().contains("[policy."), "nothing added");
+    h.key(KeyCode::Enter);
+    h.keys("y");
     assert_eq!(names(&h), ["dev", "test", "staging", "prod"]);
     assert!(said(&h).contains("Added the environments dev, test, staging, prod"), "{}", said(&h));
     let text = dir.text();
@@ -220,6 +230,7 @@ fn presets_that_cannot_be_written_are_not_added() {
     std::fs::create_dir_all(dir.config()).unwrap();
     on_row(&mut h, RowKind::EnvironmentPresets);
     h.key(KeyCode::Enter);
+    h.keys("y"); // `local-pg` names `prod` already: asked first.
     assert!(names(&h).is_empty());
     assert!(said(&h).contains("Could not save config"), "{}", said(&h));
 }
@@ -321,6 +332,95 @@ fn a_rename_that_cannot_be_written_changes_nothing() {
     assert!(said(&h).contains("Could not save config"), "{}", said(&h));
     assert_eq!(names(&h), ["prod", "dev"]);
     assert_eq!(h.app.profiles[0].policy.as_deref(), Some("prod"));
+}
+
+/// A rename (or a new environment) to a name some profiles already name while no environment
+/// has it: those profiles would take its rules, so they are listed and asked about first. `Enter`
+/// keeps the form open with nothing written; `y` saves.
+#[test]
+fn a_name_profiles_already_use_asks_before_they_take_its_rules() {
+    let dir = scratch("adopt");
+    let mut cfg = config(Some(&dir), two());
+    cfg.connections[1].policy = Some("staging".into());
+    let other = cfg.connections[1].name.clone();
+    let mut h = harness_with(&cfg, Lang::En);
+    // A rename of `dev` (standard rules) to `staging`.
+    on_env(&mut h, "dev");
+    h.keys("R");
+    h.ctrl('u');
+    h.type_text("staging");
+    h.ctrl('s');
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "asked first");
+    assert_eq!(h.app.overlays.confirm().unwrap().action, ConfirmAction::AdoptEnvironment);
+    let text = h.app.i18n.msg(&h.app.overlays.confirm().unwrap().text).to_string();
+    assert_eq!(
+        text,
+        format!(
+            "Saving “staging” gives its rules (standard rules) to a profile that already names it while no environment has that name: {other}. Save?"
+        )
+    );
+    h.key(KeyCode::Enter);
+    assert!(h.form_open(), "Enter keeps the form");
+    assert_eq!(names(&h), ["prod", "dev"], "nothing saved");
+    assert!(!dir.text().contains("[policy.staging]"), "{}", dir.text());
+    h.ctrl('s');
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "asked again");
+    h.keys("y");
+    assert!(!h.form_open());
+    assert_eq!(names(&h), ["prod", "staging"]);
+    assert_eq!(h.app.profiles[1].policy.as_deref(), Some("staging"));
+    assert!(dir.text().contains("[policy.staging]"), "{}", dir.text());
+    // A plain edit of a defined one is not asked about; a new environment of a name a profile
+    // already names is, the same way.
+    on_env(&mut h, "staging");
+    h.keys("e");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Right);
+    h.ctrl('s');
+    assert!(!h.form_open() && h.overlay_kind() != Some(OverlayKind::Confirm), "an edit is not asked about");
+    h.app.profiles[0].policy = Some("qa".into());
+    on_env(&mut h, "prod");
+    h.keys("n");
+    h.type_text("qa");
+    h.ctrl('s');
+    assert_eq!(h.app.overlays.confirm().map(|c| c.action), Some(ConfirmAction::AdoptEnvironment));
+    h.keys("n");
+    assert!(h.form_open() && !names(&h).contains(&"qa".to_string()), "no keeps the form, nothing saved");
+}
+
+/// A profile connected with a copy that names an environment it no longer names (it was changed
+/// since) counts as using it: defining that name asks too. Many profiles are named a few at a
+/// time, with how many there are.
+#[test]
+fn a_connected_copy_and_many_profiles_are_asked_about_too() {
+    let mut envs = two();
+    envs.push(Environment::new("qa", Policy::default()));
+    let mut cfg = config(None, envs);
+    for n in ["zz-a", "zz-b", "zz-c", "zz-d"] {
+        cfg.connections.push(datarig_core::profile::ConnectionConfig { name: n.into(), ..Default::default() });
+    }
+    for c in cfg.connections.iter_mut() {
+        c.policy = Some("qa".into());
+    }
+    let mut h = harness_with(&cfg, Lang::En);
+    h.explore("local-pg");
+    h.key(KeyCode::Enter);
+    h.db(DbEvent::Connected);
+    // `qa` goes, and `local-pg` names `prod` since: the copy it connected with still names `qa`.
+    h.app.policies.environments_mut().retain(|e| e.name != "qa");
+    h.app.profiles[0].policy = Some("prod".into());
+    let rest = h.app.profiles.len() - 1;
+    on_env(&mut h, "dev");
+    h.keys("R");
+    h.ctrl('u');
+    h.type_text("qa");
+    h.ctrl('s');
+    let text = h.app.i18n.msg(&h.app.overlays.confirm().expect("asked").text).to_string();
+    let count = rest + 1;
+    assert!(text.contains(&format!("to {count} profiles that already name it")), "{text}");
+    assert!(text.contains("local-pg"), "the connected copy names it: {text}");
+    assert_eq!(count, 7);
+    assert!(text.contains(", …. Save?") && !text.contains("zz-d"), "five names, then …: {text}");
 }
 
 /// `d` on an environment some profiles name: asked first, listing them; `Enter` keeps it, `y`
@@ -450,9 +550,23 @@ fn a_preset_picked_in_the_profile_form_is_written_with_the_profile() {
     h.ctrl('s');
     assert!(h.form_open() && names(&h).is_empty());
     assert_eq!(h.app.profiles[2].policy, None);
-    // Saved: the preset and the profile naming it, one write.
+    // Saved: the preset and the profile naming it, one write. Another profile already names
+    // `prod`, which is not defined: asked first (the profile whose form picked it is not
+    // listed); `n` keeps the form open with nothing written.
     std::fs::remove_dir_all(dir.config()).unwrap();
+    h.app.profiles[1].policy = Some("prod".into());
+    let other = h.app.profiles[1].name.clone();
     h.ctrl('s');
+    assert_eq!(h.app.overlays.confirm().map(|c| c.action), Some(ConfirmAction::AdoptEnvironment));
+    let text = h.app.i18n.msg(&h.app.overlays.confirm().unwrap().text).to_string();
+    assert!(
+        text.contains(&format!("to a profile that already names it while no environment has that name: {other}.")),
+        "{text}"
+    );
+    h.keys("n");
+    assert!(h.form_open() && names(&h).is_empty() && !dir.text().contains("[policy.prod]"));
+    h.ctrl('s');
+    h.keys("y");
     assert!(!h.form_open());
     assert_eq!(names(&h), ["prod"]);
     assert_eq!(h.app.profiles[2].policy.as_deref(), Some("prod"));
@@ -538,6 +652,7 @@ fn environment_screens() {
             on_row(&mut h, RowKind::EnvironmentPresets);
             assert_screen!(format!("environments_empty_{tag}_{w}x{ht}"), lang, h.draw(w, ht));
             h.key(KeyCode::Enter);
+            h.keys("y"); // `local-pg` names `prod` already: asked first.
             on_env(&mut h, "prod");
             h.key(KeyCode::Char('l'));
             assert_screen!(format!("environments_section_{tag}_{w}x{ht}"), lang, h.draw(w, ht));
@@ -654,6 +769,9 @@ fn a_picked_preset_keeps_its_row_once_an_environment_exists() {
     h.key(KeyCode::Enter);
     assert_eq!(h.form().env_choice(), EnvChoice::Preset("prod".into()));
     h.ctrl('s');
+    // `local-pg` names `prod` already: asked first.
+    assert_eq!(h.app.overlays.confirm().map(|c| c.action), Some(ConfirmAction::AdoptEnvironment));
+    h.keys("y");
     assert_eq!(names(&h), ["qa", "prod"]);
     assert_eq!(h.app.profiles[2].policy.as_deref(), Some("prod"));
 }
