@@ -757,3 +757,51 @@ async fn the_next_transactions_own_settings_are_never_used_up() {
     c.ok("SET @saved = @@transaction_isolation").await;
     assert_eq!(counted(&mut c, &count).await, Ok(10));
 }
+
+/// A test of a table shape MySQL does not have says so on stderr when the server is MySQL.
+fn only_on_mariadb(test: &str) {
+    let _ = writeln!(std::io::stderr(), "MYSQL {test}: MariaDB-only shape");
+}
+
+/// An export of a MariaDB table with `INVISIBLE` columns and of a system-versioned one, read as
+/// a table tab reads them (`SELECT *`, on the allowlist): every row once, the columns the table
+/// tab shows (`SELECT *` leaves the invisible ones out), the same rows as the table read; and
+/// no metadata lock is left once it ended.
+#[tokio::test(flavor = "multi_thread")]
+async fn mariadb_invisible_and_versioned_tables_are_exported_whole() {
+    let test = "mariadb_invisible_and_versioned_tables_are_exported_whole";
+    let Some((url, admin)) = urls(test) else { return };
+    if !mariadb(&url).await {
+        only_on_mariadb(test);
+        return;
+    }
+    let fill = "INSERT INTO {t} (id, v) WITH RECURSIVE d (i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM d WHERE i < 99) \
+         SELECT g.n, CONCAT('row ', g.n) FROM (SELECT a.i + b.i * 100 + 1 AS n FROM d a, d b) g WHERE g.n <= 300";
+    let invisible = Table::make(
+        &admin,
+        "invisible",
+        &["CREATE TABLE {t} (id INT PRIMARY KEY, c INT INVISIBLE DEFAULT 7, v VARCHAR(40))", fill],
+    )
+    .await;
+    let versioned = Table::make(
+        &admin,
+        "versioned",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, v VARCHAR(40)) WITH SYSTEM VERSIONING",
+            fill,
+            "UPDATE {t} SET v = CONCAT('new ', id) WHERE id <= 10",
+        ],
+    )
+    .await;
+    let mut c = Conn::open(&url, SessionRole::Query, test).await;
+    for t in [&invisible, &versioned] {
+        let sql = format!("SELECT * FROM `shop`.`{}`", t.name);
+        let (id, mut rx) = c.export(&sql, ExportGuard::Repeatable, 2, 100);
+        let (cols, rows, _) = drain(&mut rx).await;
+        let read = c.exported(id).await.0;
+        assert!(read.as_ref().is_ok_and(|r| r.complete && r.rows == 300), "{}: {read:?}", t.name);
+        assert_eq!(cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "v"], "{}", t.name);
+        assert_eq!(rows, c.rows(&sql).await, "{}: the rows the table read shows", t.name);
+        assert_eq!(metadata_locks(&admin, &t.name).await, 0, "{}: the statement ended", t.name);
+    }
+}

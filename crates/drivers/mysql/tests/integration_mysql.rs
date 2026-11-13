@@ -7457,3 +7457,379 @@ async fn a_group_count_waits_behind_a_held_result() {
     c.session.send(DbCommand::ClosePortal { id: 3 });
     c.ok(5, "SELECT 1").await;
 }
+
+// ── MariaDB's own table shapes ─────────────────────────────────────────────
+
+/// A test of a table shape MySQL does not have says so on stderr when the server is MySQL
+/// (written to the real stderr handle, as the `SKIPPED` lines).
+fn only_on_mariadb(test: &str) {
+    let _ = writeln!(std::io::stderr(), "MYSQL {test}: MariaDB-only shape");
+}
+
+/// The statement the app reads a table tab of `shop.<name>` with, and its count of it.
+fn table_read(name: &str, filter: Option<&str>) -> (String, String) {
+    let sql = match filter {
+        Some(f) => format!("SELECT * FROM `shop`.`{name}` WHERE {f}"),
+        None => format!("SELECT * FROM `shop`.`{name}`"),
+    };
+    let count = format!("SELECT COUNT(*) FROM (\n{sql}\n) AS datarig_count");
+    (sql, count)
+}
+
+/// The page run `id` reads past the first `skip` rows of `sql` (the next page of a table tab,
+/// the statement run again).
+async fn resumed(c: &mut Conn, id: u64, sql: &str, skip: u64) -> Vec<DbEvent> {
+    c.session.send(DbCommand::Resume { max_rows: None, id, sql: sql.to_string(), skip, paging: PagingMode::NoHold });
+    c.answer(id).await
+}
+
+/// The first cells of the rows of a page.
+fn first_cells(rows: &[Vec<Cell>]) -> Vec<Option<String>> {
+    rows.iter().map(|r| r[0].clone()).collect()
+}
+
+/// A MariaDB table with `INVISIBLE` columns (one plain with a default, one generated), as the
+/// app reads it: the catalog and the database's listing have it as a table; the structure has
+/// every column with its type, default and generation, and the keys read says which columns
+/// are invisible; the server's DDL names them so and runs back into a copy that has them
+/// invisible too. The table read (`SELECT *`, as a table tab sends it) shows the visible columns
+/// only, as the server's own `SELECT *` does, and pages past the first page; its count is
+/// exact; a filter on a visible column, and on an invisible one, reads the rows it names; the
+/// rows copied as SQL run back into the copy (the invisible column, not shown, takes its
+/// default there). The reads keep no metadata lock and no transaction open.
+#[tokio::test(flavor = "multi_thread")]
+async fn mariadb_invisible_columns_are_listed_read_and_copied() {
+    use datarig_core::driver::ddl::DdlObject;
+    use datarig_core::driver::structure::{ColumnFill, RelationKind};
+    let test = "mariadb_invisible_columns_are_listed_read_and_copied";
+    let Some((url, admin)) = urls(test) else { return };
+    if !mariadb(&url).await {
+        only_on_mariadb(test);
+        return;
+    }
+    let fill = "INSERT INTO {t} (id, c, v) WITH RECURSIVE d (i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM d WHERE i < 99) \
+         SELECT g.n, g.n + 1000, CONCAT('row ', g.n) FROM (SELECT a.i + b.i * 100 + 1 AS n FROM d a, d b) g \
+         WHERE g.n <= 1200";
+    let t = Table::make(
+        &admin,
+        "invisible",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, c INT INVISIBLE DEFAULT 7, v VARCHAR(40), \
+             g INT AS (id * 2) VIRTUAL INVISIBLE)",
+            fill,
+        ],
+    )
+    .await;
+    let copy = Table::make(&admin, "invisible_copy", &[]).await;
+    let mut a = side(&admin).await;
+
+    // The catalog and the listing.
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    match m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await {
+        DbEvent::Catalog(Ok(cat)) => {
+            let r = cat.relations.iter().find(|r| r.schema == "shop" && r.name == t.name).expect("the table");
+            assert!(!r.is_view, "a table");
+            let names: Vec<&str> = r.columns.iter().map(|c| c.name.as_str()).collect();
+            assert_eq!(names, ["id", "c", "v", "g"], "every column, for completion");
+        }
+        other => panic!("{other:?}"),
+    }
+    m.session.send(DbCommand::LoadObjects { schema: "shop".into() });
+    match m.wait(|e| matches!(e, DbEvent::Objects { .. }), 15).await {
+        DbEvent::Objects { result: Ok(o), .. } => {
+            assert!(o.tables.contains(&t.name) && !o.views.contains(&t.name), "{o:?}");
+            assert!(o.stats.contains_key(&t.name), "a table's estimates");
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // The structure, and which columns are invisible.
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    assert_eq!(s.kind, RelationKind::Table);
+    let cols: Vec<(&str, &str, bool, Option<&str>, &ColumnFill)> = s
+        .columns
+        .iter()
+        .map(|c| (c.name.as_str(), c.type_name.as_str(), c.not_null, c.default.as_deref(), &c.fill))
+        .collect();
+    assert_eq!(
+        cols,
+        [
+            ("id", "int(11)", true, None, &ColumnFill::Default),
+            ("c", "int(11)", false, Some("7"), &ColumnFill::Default),
+            ("v", "varchar(40)", false, None, &ColumnFill::Default),
+            ("g", "int(11)", false, None, &ColumnFill::Virtual("`id` * 2".into())),
+        ],
+        "an invisible generated column is generated"
+    );
+    m.session.send(DbCommand::LoadTableKeys { id: 1, schema: "shop".into(), table: t.name.clone() });
+    let DbEvent::TableKeys { result, .. } = m.wait(|e| matches!(e, DbEvent::TableKeys { id: 1, .. }), 10).await else {
+        unreachable!()
+    };
+    let keys = result.expect("the keys");
+    assert_eq!(keys.primary_key, ["id"]);
+    let invisible: Vec<(String, bool)> =
+        keys.columns.expect("the columns").into_iter().map(|c| (c.name, c.invisible)).collect();
+    assert_eq!(
+        invisible,
+        [("id".into(), false), ("c".into(), true), ("v".into(), false), ("g".into(), true)],
+        "which columns `SELECT *` leaves out"
+    );
+
+    // The server's DDL, run back as the editor runs it into the copy.
+    let (name, ddl) =
+        verbatim(ddl_of(&mut m, DdlObject::Relation { schema: "shop".into(), name: t.name.clone() }).await);
+    assert_eq!(name, t.q());
+    assert!(ddl.contains("`c` int(11) INVISIBLE DEFAULT 7"), "{ddl}");
+    assert!(ddl.contains("`g` int(11) GENERATED ALWAYS AS (`id` * 2) VIRTUAL INVISIBLE"), "{ddl}");
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    let mut n = 0;
+    replay(&mut q, &mut n, &ddl.replacen(&format!("`{}`", t.name), &format!("`{}`", copy.name), 1)).await;
+    let extra: Vec<(String, String)> = a
+        .exec(
+            "SELECT COLUMN_NAME, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'shop' \
+             AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
+            (copy.name.as_str(),),
+        )
+        .await
+        .unwrap();
+    let hidden: Vec<&str> = extra.iter().filter(|(_, e)| e.contains("INVISIBLE")).map(|(c, _)| c.as_str()).collect();
+    assert_eq!(hidden, ["c", "g"], "the copy's invisible columns: {extra:?}");
+
+    // The table read: the visible columns, page by page.
+    let qid = only_session(&mut a, SessionRole::Query, test).await;
+    let (sql, count_sql) = table_read(&t.name, None);
+    n += 1;
+    let evs = q.run(n, &[&sql]).await;
+    let (cols, rows, more) = page_of(&evs);
+    assert_eq!(cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "v"], "as `SELECT *` shows it");
+    assert_eq!((rows.len(), more, released(&evs)), (PAGE, true, true));
+    assert_eq!(rows[0], [Some("1".to_string()), Some("row 1".to_string())]);
+    assert_eq!(table_locks(&mut a, qid, &t.name).await, 0, "no metadata lock while the page is on screen");
+    assert_eq!(open_transactions(&mut a, qid, 0).await, 0, "no transaction");
+    n += 1;
+    let evs = resumed(&mut q, n, &sql, PAGE as u64).await;
+    let (cols, rows, more) = page_of(&evs);
+    assert_eq!(cols.len(), 2);
+    assert_eq!((first_cells(rows).first().cloned().flatten().as_deref(), rows.len(), more), (Some("501"), PAGE, true));
+    n += 1;
+    assert_eq!(count(&mut q, n, count_sql).await, (Ok(1200), false), "the exact count");
+
+    // A filter on a visible column, and on an invisible one.
+    for (filter, want) in [("v = 'row 7'", "7"), ("c = 1009", "9"), ("v LIKE 'row 11%' AND c > 1110", "111")] {
+        let (sql, count_sql) = table_read(&t.name, Some(filter));
+        n += 1;
+        let evs = q.run(n, &[&sql]).await;
+        let (_, rows, more) = page_of(&evs);
+        assert!(!more, "{filter}");
+        assert_eq!(first_cells(rows).first().cloned().flatten().as_deref(), Some(want), "{filter}");
+        n += 1;
+        assert_eq!(count(&mut q, n, count_sql).await.0, Ok(rows.len() as u64), "{filter}");
+    }
+    assert_eq!(table_locks(&mut a, qid, &t.name).await, 0, "no metadata lock after the reads");
+    assert_eq!(open_transactions(&mut a, qid, 0).await, 0, "no transaction after the reads");
+    let mid = only_session(&mut a, SessionRole::Meta, test).await;
+    assert_eq!(metadata_locks_of(&mut a, mid).await, 0, "the metadata session keeps no lock");
+
+    // The rows copied as SQL run back into the copy.
+    a.query_drop(format!("DELETE FROM {} WHERE id > 3", t.q())).await.unwrap();
+    let keys = keys_of(&mut m).await.unwrap();
+    n += 1;
+    let evs = q.run(n, &["SET SESSION time_zone = '+00:00'"]).await;
+    let values = reported(&evs).0.expect("the session's values");
+    n += 1;
+    let insert = copied_as_sql(&mut q, n, &keys, &t, MySqlMode::default(), &values, false).await.unwrap();
+    assert!(!insert.contains("`c`") && !insert.contains("`g`"), "the columns shown: {insert}");
+    let insert = insert.replace(&format!("`{}`", t.name), &format!("`{}`", copy.name));
+    run_all(&mut q, 100, &insert, Dialect::MySql(MySqlMode::default())).await;
+    let got: Vec<(i64, i64, String, i64)> =
+        a.query(format!("SELECT id, c, v, g FROM {} ORDER BY id", copy.q())).await.unwrap();
+    let want: Vec<(i64, i64, String, i64)> = (1..=3).map(|i| (i, 7, format!("row {i}"), i * 2)).collect();
+    assert_eq!(got, want);
+    a.disconnect().await.unwrap();
+}
+
+/// A MariaDB system-versioned table (`WITH SYSTEM VERSIONING`, `TABLE_TYPE` `SYSTEM VERSIONED`;
+/// its row start and end are invisible, or columns of its own declared `INVISIBLE`) is a table
+/// to the app: the catalog and the database's listing have it as a table, not a view; its
+/// structure is a table's, the declared row start and end generated by the server; its DDL is
+/// the server's and runs back into a copy that is versioned too. The table read pages past the
+/// first page (the statement run again, as for any table), its count is exact and a filter
+/// reads the rows it names; a user's `FOR SYSTEM_TIME ALL`, which reads the history too, runs
+/// and pages. The reads keep no metadata lock and no transaction open.
+#[tokio::test(flavor = "multi_thread")]
+async fn mariadb_system_versioned_tables_are_listed_read_and_paged_as_tables() {
+    use datarig_core::driver::ddl::DdlObject;
+    use datarig_core::driver::structure::{ColumnFill, RelationKind};
+    let test = "mariadb_system_versioned_tables_are_listed_read_and_paged_as_tables";
+    let Some((url, admin)) = urls(test) else { return };
+    if !mariadb(&url).await {
+        only_on_mariadb(test);
+        return;
+    }
+    let fill = "INSERT INTO {t} (id, v) WITH RECURSIVE d (i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM d WHERE i < 99) \
+         SELECT g.n, CONCAT('row ', g.n) FROM (SELECT a.i + b.i * 100 + 1 AS n FROM d a, d b) g WHERE g.n <= 1200";
+    // Ten rows changed: ten rows of history.
+    let t = Table::make(
+        &admin,
+        "versioned",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, v VARCHAR(40)) WITH SYSTEM VERSIONING",
+            fill,
+            "UPDATE {t} SET v = CONCAT('new ', id) WHERE id <= 10",
+        ],
+    )
+    .await;
+    let declared = Table::make(
+        &admin,
+        "versioned_rows",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, v INT, \
+             rs TIMESTAMP(6) GENERATED ALWAYS AS ROW START INVISIBLE, \
+             re TIMESTAMP(6) GENERATED ALWAYS AS ROW END INVISIBLE, \
+             PERIOD FOR SYSTEM_TIME (rs, re)) WITH SYSTEM VERSIONING",
+            "INSERT INTO {t} (id, v) VALUES (1, 10), (2, 20)",
+        ],
+    )
+    .await;
+    let copy = Table::make(&admin, "versioned_copy", &[]).await;
+    let mut a = side(&admin).await;
+    let kind: Option<String> = a
+        .exec_first(
+            "SELECT TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'shop' AND TABLE_NAME = ?",
+            (t.name.as_str(),),
+        )
+        .await
+        .unwrap();
+    assert_eq!(kind.as_deref(), Some("SYSTEM VERSIONED"), "the shape under test");
+
+    // The catalog and the listing: tables, not views.
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    match m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await {
+        DbEvent::Catalog(Ok(cat)) => {
+            for (name, columns) in [(&t.name, &["id", "v"][..]), (&declared.name, &["id", "v", "rs", "re"][..])] {
+                let r = cat.relations.iter().find(|r| r.schema == "shop" && &r.name == name).expect("the table");
+                assert!(!r.is_view, "{name} is a table, not a view");
+                assert_eq!(r.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), columns);
+            }
+        }
+        other => panic!("{other:?}"),
+    }
+    m.session.send(DbCommand::LoadObjects { schema: "shop".into() });
+    match m.wait(|e| matches!(e, DbEvent::Objects { .. }), 15).await {
+        DbEvent::Objects { result: Ok(o), .. } => {
+            for name in [&t.name, &declared.name] {
+                assert!(o.tables.contains(name), "{name} listed with the tables: {o:?}");
+                assert!(!o.views.contains(name), "{name} not listed with the views: {o:?}");
+                assert!(o.stats.contains_key(name), "{name}: a table's estimates");
+            }
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // The structure.
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    assert_eq!(s.kind, RelationKind::Table);
+    assert_eq!(s.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "v"]);
+    let s = structure_of(&mut m, &declared.name).await.unwrap();
+    assert_eq!(s.kind, RelationKind::Table);
+    let fills: Vec<(&str, &ColumnFill)> = s.columns.iter().map(|c| (c.name.as_str(), &c.fill)).collect();
+    assert_eq!(
+        fills,
+        [
+            ("id", &ColumnFill::Default),
+            ("v", &ColumnFill::Default),
+            ("rs", &ColumnFill::Stored("ROW START".into())),
+            ("re", &ColumnFill::Stored("ROW END".into())),
+        ],
+        "the row start and end are the server's to fill"
+    );
+
+    // The server's DDL, run back into the copy, which is versioned too.
+    let (name, ddl) =
+        verbatim(ddl_of(&mut m, DdlObject::Relation { schema: "shop".into(), name: t.name.clone() }).await);
+    assert_eq!(name, t.q());
+    assert!(ddl.contains(" WITH SYSTEM VERSIONING"), "{ddl}");
+    let (_, rows_ddl) =
+        verbatim(ddl_of(&mut m, DdlObject::Relation { schema: "shop".into(), name: declared.name.clone() }).await);
+    assert!(rows_ddl.contains("PERIOD FOR SYSTEM_TIME (`rs`, `re`)"), "{rows_ddl}");
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    let mut n = 0;
+    replay(&mut q, &mut n, &ddl.replacen(&format!("`{}`", t.name), &format!("`{}`", copy.name), 1)).await;
+    let kind: Option<String> = a
+        .exec_first(
+            "SELECT TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'shop' AND TABLE_NAME = ?",
+            (copy.name.as_str(),),
+        )
+        .await
+        .unwrap();
+    assert_eq!(kind.as_deref(), Some("SYSTEM VERSIONED"), "the copy is versioned");
+
+    // The table read, page by page; its count; a filter.
+    let qid = only_session(&mut a, SessionRole::Query, test).await;
+    let (sql, count_sql) = table_read(&t.name, None);
+    n += 1;
+    let evs = q.run(n, &[&sql]).await;
+    let (cols, rows, more) = page_of(&evs);
+    assert_eq!(cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "v"]);
+    assert_eq!((rows.len(), more, released(&evs)), (PAGE, true, true));
+    assert_eq!(table_locks(&mut a, qid, &t.name).await, 0, "no metadata lock while the page is on screen");
+    assert_eq!(open_transactions(&mut a, qid, 0).await, 0, "no transaction");
+    n += 1;
+    let evs = resumed(&mut q, n, &sql, PAGE as u64).await;
+    match evs.last() {
+        Some(DbEvent::Page { columns: Some(_), rows, more, .. }) => {
+            assert_eq!((rows.len(), *more), (PAGE, true), "the next page of a table");
+        }
+        other => panic!("the next page of a system-versioned table: {other:?}"),
+    }
+    n += 1;
+    assert_eq!(count(&mut q, n, count_sql).await, (Ok(1200), false), "the exact count of a table");
+    let (filtered, filtered_count) = table_read(&t.name, Some("v = 'new 3' OR v = 'row 11'"));
+    n += 1;
+    let evs = q.run(n, &[&filtered]).await;
+    let (_, rows, more) = page_of(&evs);
+    let mut ids = first_cells(rows);
+    ids.sort();
+    assert_eq!((ids, more), (vec![Some("11".to_string()), Some("3".to_string())], false));
+    n += 1;
+    assert_eq!(count(&mut q, n, filtered_count).await.0, Ok(2), "the filter's count");
+
+    // A user's read of the history: the current rows and the ten changed ones, page by page.
+    let all = format!("SELECT id, v FROM {} FOR SYSTEM_TIME ALL ORDER BY id, v", t.q());
+    n += 1;
+    let evs = q.run(n, &[&all]).await;
+    let (_, rows, more) = page_of(&evs);
+    assert_eq!((rows.len(), more), (PAGE, true));
+    assert_eq!(rows[0], [Some("1".to_string()), Some("new 1".to_string())]);
+    assert_eq!(rows[1], [Some("1".to_string()), Some("row 1".to_string())], "the history too");
+    n += 1;
+    let evs = resumed(&mut q, n, &all, 1000).await;
+    match evs.last() {
+        Some(DbEvent::Page { columns: Some(_), rows, more, .. }) => {
+            assert_eq!((rows.len(), *more), (210, false), "the last page of the history");
+        }
+        other => panic!("the next page of a FOR SYSTEM_TIME ALL read: {other:?}"),
+    }
+
+    // The rows of the table with a declared row start and end, copied as SQL, run back into a
+    // copy made from its DDL: the server fills the row start and end there.
+    let rows_copy = Table::make(&admin, "versioned_rows_copy", &[]).await;
+    replay(&mut q, &mut n, &rows_ddl.replacen(&format!("`{}`", declared.name), &format!("`{}`", rows_copy.name), 1))
+        .await;
+    let keys = keys_of(&mut m).await.unwrap();
+    n += 1;
+    let evs = q.run(n, &["SET SESSION time_zone = '+00:00'"]).await;
+    let values = reported(&evs).0.expect("the session's values");
+    n += 1;
+    let insert = copied_as_sql(&mut q, n, &keys, &declared, MySqlMode::default(), &values, false).await.unwrap();
+    assert!(!insert.contains("`rs`") && !insert.contains("`re`"), "the columns shown: {insert}");
+    let insert = insert.replace(&format!("`{}`", declared.name), &format!("`{}`", rows_copy.name));
+    run_all(&mut q, 100, &insert, Dialect::MySql(MySqlMode::default())).await;
+    let got: Vec<(i64, i64)> = a.query(format!("SELECT id, v FROM {} ORDER BY id", rows_copy.q())).await.unwrap();
+    assert_eq!(got, [(1, 10), (2, 20)]);
+    assert_eq!(table_locks(&mut a, qid, &t.name).await, 0, "no metadata lock after the reads");
+    assert_eq!(open_transactions(&mut a, qid, 0).await, 0, "no transaction after the reads");
+    let mid = only_session(&mut a, SessionRole::Meta, test).await;
+    assert_eq!(metadata_locks_of(&mut a, mid).await, 0, "the metadata session keeps no lock");
+    a.disconnect().await.unwrap();
+}

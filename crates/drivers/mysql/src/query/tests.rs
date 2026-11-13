@@ -132,7 +132,8 @@ fn the_servers_question_asks_every_reading_of_a_name() {
     // Bare names (and the first part of `t.c`) in the current database; qualified pairs anywhere.
     assert!(sql.contains("LOWER(t.TABLE_NAME) IN ('o''k', 'u', 'users')"), "{sql}");
     assert!(sql.contains("IN (('shop', 'orders'), ('u', 'email'))"), "{sql}");
-    assert!(sql.contains("t.TABLE_TYPE <> 'BASE TABLE'"), "{sql}");
+    // A table is a base table or MariaDB's system-versioned one; anything else is not a table.
+    assert!(sql.contains("t.TABLE_TYPE NOT IN ('BASE TABLE', 'SYSTEM VERSIONED')"), "{sql}");
     // Nothing named: nothing can be a view.
     assert!(check_sql(&[], d, &MYSQL).contains("AND (FALSE)"));
     // Backslashes are written as the session reads them.

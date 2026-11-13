@@ -1065,3 +1065,115 @@ async fn filter_by_a_value_with_line_breaks_reads_the_same_rows_from_the_line() 
     drop(app);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A test of a table shape MySQL does not have says so on stderr when the server is MySQL.
+fn only_on_mariadb(test: &str) {
+    let _ = writeln!(std::io::stderr(), "MYSQL {test}: MariaDB-only shape");
+}
+
+/// The names of the columns of the active tab's rows.
+fn column_names(app: &App) -> Vec<String> {
+    match &app.tab().results {
+        Results::Rows(rs) => rs.columns.iter().map(|c| c.meta.name.clone()).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// A table tab of MariaDB table `shop.<table>` of 1200 rows (`id`, `v` `row <id>`) as a user
+/// works it: opened, it sends `SELECT *` and shows the columns that shows; the next page reads
+/// on past the rows it has; the count is exact; filter by value on `v` reads back the row it
+/// names; cleared, the first page again.
+async fn a_table_tab_pages_counts_and_filters(url: &str, table: &str, dir: &std::path::Path) {
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::table_filter::TableAction;
+    let (mut app, mut rx) = by_value_app(url, table, dir);
+    app.dispatch(Action::RunStatement);
+    pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 > 0).await;
+    let sent = app.tab().exec.run.statements.iter().map(|s| s.sql.clone()).collect::<Vec<_>>();
+    assert_eq!(sent, [format!("SELECT * FROM `shop`.`{table}`")]);
+    assert_eq!(column_names(&app), ["id", "v"], "the columns `SELECT *` shows");
+    assert_eq!(held_rows(&app), (500, true));
+    assert_eq!(app.tab().exec.paging, Paging::Released);
+    // The next page.
+    app.focus = Focus::Results;
+    press(&mut app, 'n');
+    pump(&mut app, &mut rx, 30, idle).await;
+    let status = app.status.as_ref().map(|n| n.render(&app.i18n).to_string());
+    assert_eq!(held_rows(&app), (1000, true), "the next page of {table}: {status:?}");
+    // The count.
+    app.dispatch(Action::CountRows);
+    let counted = |a: &App| matches!(&a.tab().results, Results::Rows(rs) if rs.counted.is_some());
+    pump(&mut app, &mut rx, 30, |a| idle(a) && counted(a)).await;
+    assert!(matches!(&app.tab().results, Results::Rows(rs) if rs.counted == Some(1200)), "the exact count");
+    // Filter by a value of `v`, then cleared.
+    let (got, text) = by_value(&mut app, &mut rx, &["7"], "v", '=').await;
+    assert_eq!((got, text.as_str()), (vec!["7".to_string()], "v = 'row 7'"));
+    app.dispatch(Action::Table(TableAction::Clear));
+    pump(&mut app, &mut rx, 30, |a| idle(a) && held_rows(a).0 == 500).await;
+    drop(app);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The rows `shop.<table>` is filled with: 1200, `id` 1..=1200, `v` `row <id>`.
+fn fill_1200(t: &str, columns: &str, values: &str) -> String {
+    format!(
+        "INSERT INTO {t} ({columns}) WITH RECURSIVE d (i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM d WHERE i < 99) \
+         SELECT {values} FROM (SELECT a.i + b.i * 100 + 1 AS n FROM d a, d b) g WHERE g.n <= 1200"
+    )
+}
+
+/// A table tab of a MariaDB table with `INVISIBLE` columns (one plain, one generated): it shows
+/// the visible columns, as `SELECT *` does, pages, counts and filters by value. Makes
+/// `shop.zz_it_invisible_<pid>` and drops it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mariadb_table_tab_of_invisible_columns_pages_counts_and_filters() {
+    let test = "a_mariadb_table_tab_of_invisible_columns_pages_counts_and_filters";
+    let Some((url, admin)) = urls(test) else { return };
+    if !mariadb(&url).await {
+        only_on_mariadb(test);
+        return;
+    }
+    let table = format!("zz_it_invisible_{}", std::process::id());
+    let t = format!("shop.{table}");
+    let _t = Made::make(
+        &admin,
+        &[
+            format!(
+                "CREATE TABLE {t} (id INT PRIMARY KEY, c INT INVISIBLE DEFAULT 7, v VARCHAR(40), \
+                 g INT AS (id * 2) VIRTUAL INVISIBLE)"
+            ),
+            fill_1200(&t, "id, c, v", "g.n, g.n + 1000, CONCAT('row ', g.n)"),
+        ],
+        &[format!("DROP TABLE IF EXISTS {t}")],
+    )
+    .await;
+    let dir = std::env::temp_dir().join(format!("datarig-it-myinvisible-{}", std::process::id()));
+    a_table_tab_pages_counts_and_filters(&url, &table, &dir).await;
+}
+
+/// A table tab of a MariaDB system-versioned table (`WITH SYSTEM VERSIONING`, with history)
+/// works as one of any table: it pages, counts and filters by value. Makes
+/// `shop.zz_it_versioned_<pid>` and drops it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mariadb_table_tab_of_a_system_versioned_table_pages_counts_and_filters() {
+    let test = "a_mariadb_table_tab_of_a_system_versioned_table_pages_counts_and_filters";
+    let Some((url, admin)) = urls(test) else { return };
+    if !mariadb(&url).await {
+        only_on_mariadb(test);
+        return;
+    }
+    let table = format!("zz_it_versioned_{}", std::process::id());
+    let t = format!("shop.{table}");
+    let _t = Made::make(
+        &admin,
+        &[
+            format!("CREATE TABLE {t} (id INT PRIMARY KEY, v VARCHAR(40)) WITH SYSTEM VERSIONING"),
+            fill_1200(&t, "id, v", "g.n, CONCAT('old ', g.n)"),
+            format!("UPDATE {t} SET v = CONCAT('row ', id)"),
+        ],
+        &[format!("DROP TABLE IF EXISTS {t}")],
+    )
+    .await;
+    let dir = std::env::temp_dir().join(format!("datarig-it-myversioned-{}", std::process::id()));
+    a_table_tab_pages_counts_and_filters(&url, &table, &dir).await;
+}

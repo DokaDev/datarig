@@ -196,12 +196,17 @@ async fn load_schemas(conn: &mut Conn) -> Result<Vec<String>, DbError> {
 const SCHEMA_OBJECTS: &str = "SELECT TABLE_NAME, TABLE_TYPE, TABLE_ROWS, DATA_LENGTH + INDEX_LENGTH \
      FROM information_schema.TABLES WHERE TABLE_SCHEMA = {schema} ORDER BY TABLE_NAME";
 
+/// Whether a `TABLE_TYPE` is a table's: MariaDB's system-versioned tables say `SYSTEM VERSIONED`.
+pub(crate) fn is_table(kind: &str) -> bool {
+    matches!(kind, "BASE TABLE" | "SYSTEM VERSIONED")
+}
+
 async fn load_objects(conn: &mut Conn, schema: &str, mode: MySqlMode) -> Result<SchemaObjects, DbError> {
     let sql = SCHEMA_OBJECTS.replace("{schema}", &Dialect::MySql(mode).quote_literal(schema));
     let rows: Vec<(String, String, Option<u64>, Option<u64>)> = rows_of(conn, sql).await?;
     let mut out = SchemaObjects::default();
     for (name, kind, rows, bytes) in rows {
-        if kind == "BASE TABLE" {
+        if is_table(&kind) {
             out.stats.insert(name.clone(), RelationStats { rows, bytes });
             out.tables.push(name);
         } else {
@@ -225,7 +230,7 @@ async fn load_catalog(conn: &mut Conn) -> Result<Catalog, DbError> {
     let mut relations: Vec<Relation> = Vec::new();
     for (schema, name, kind, column, ty) in rows {
         if relations.last().is_none_or(|l| l.schema != schema || l.name != name) {
-            relations.push(Relation { schema, name, is_view: kind != "BASE TABLE", columns: Vec::new() });
+            relations.push(Relation { schema, name, is_view: !is_table(&kind), columns: Vec::new() });
         }
         if let Some(rel) = relations.last_mut() {
             let values = enum_values(&ty).map(Into::into);
