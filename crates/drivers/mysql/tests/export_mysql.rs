@@ -219,14 +219,16 @@ async fn drain(rx: &mut Receiver<ExportBatch>) -> (Vec<ColumnMeta>, Vec<Vec<Cell
     (cols, rows, largest)
 }
 
-/// The metadata locks other sessions hold on `table` (by name, in `shop`).
+/// The metadata locks other client sessions hold on `table` (by name, in `shop`). Only client
+/// sessions count: a server's own background threads take short locks of their own on a table
+/// just written (MariaDB's InnoDB does, right after the rows the tests insert).
 async fn metadata_locks(admin: &str, table: &str) -> u64 {
     let mut a = side(admin).await;
     let n: Option<u64> = a
         .exec_first(
             "SELECT COUNT(*) FROM performance_schema.metadata_locks WHERE OBJECT_SCHEMA = 'shop' AND OBJECT_NAME = ? \
-             AND OWNER_THREAD_ID <> (SELECT THREAD_ID FROM performance_schema.threads \
-             WHERE PROCESSLIST_ID = CONNECTION_ID())",
+             AND OWNER_THREAD_ID IN (SELECT THREAD_ID FROM performance_schema.threads \
+             WHERE TYPE = 'FOREGROUND' AND PROCESSLIST_ID <> CONNECTION_ID())",
             (table,),
         )
         .await
