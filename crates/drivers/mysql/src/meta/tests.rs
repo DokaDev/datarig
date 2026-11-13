@@ -104,3 +104,10 @@ fn fill_reads_each_place_once() {
     assert_eq!(fill("{ab} {a}", &[("a", "1")]), "{ab} 1");
     assert_eq!(fill("", &[("a", "1")]), "");
 }
+
+/// MariaDB's system-versioned tables are tables (`SYSTEM VERSIONED`), never views.
+#[test]
+fn a_system_versioned_table_is_a_table() {
+    assert!(super::is_table("BASE TABLE") && super::is_table("SYSTEM VERSIONED"));
+    assert!(!super::is_table("VIEW") && !super::is_table("SYSTEM VIEW") && !super::is_table("SEQUENCE"));
+}

@@ -834,7 +834,7 @@ fn not_undone_sql(names: &[String], d: Dialect, mariadb: bool) -> String {
          WHERE EXISTS (SELECT 1 FROM information_schema.TRIGGERS g WHERE g.EVENT_OBJECT_SCHEMA = t.TABLE_SCHEMA \
          AND g.EVENT_OBJECT_TABLE = t.TABLE_NAME) AND ({cond}) \
          UNION SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (triggers not visible)') \
-         FROM information_schema.TABLES t WHERE t.TABLE_TYPE = 'BASE TABLE' AND ({cond}) \
+         FROM information_schema.TABLES t WHERE t.TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED') AND ({cond}) \
          AND NOT EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES p \
          WHERE p.GRANTEE = {me} AND p.PRIVILEGE_TYPE = 'TRIGGER'{global}) \
          AND NOT EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES p \
@@ -2163,7 +2163,7 @@ fn name_parts(name: &str) -> Vec<String> {
 /// `risk::mysql::names` gives them): the session's transaction isolation and the time limit of
 /// a `SELECT`, and the first of them
 /// that is a view or a table of the server's own (`information_schema.TABLES` rows other than
-/// `BASE TABLE`), compared without case; on MariaDB the session's lock wait too ([`Asked::lock`]).
+/// `BASE TABLE` and MariaDB's `SYSTEM VERSIONED`), compared without case; on MariaDB the session's lock wait too ([`Asked::lock`]).
 /// A name may be a table of the current database, a database's table (`db.t`), a column of a
 /// table (`t.c`, `db.t.c`) or an alias: every reading that can name a table is asked about.
 fn check_sql(names: &[String], d: Dialect, server: &Server) -> String {
@@ -2176,7 +2176,8 @@ fn check_sql(names: &[String], d: Dialect, server: &Server) -> String {
     let isolation = server.isolation_var();
     format!(
         "SELECT {OWN_READ_HINTS} @@SESSION.{isolation}, (SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME) \
-         FROM information_schema.TABLES t WHERE t.TABLE_TYPE <> 'BASE TABLE' AND ({cond}) LIMIT 1), \
+         FROM information_schema.TABLES t WHERE t.TABLE_TYPE NOT IN ('BASE TABLE', 'SYSTEM VERSIONED') \
+         AND ({cond}) LIMIT 1), \
          @@SESSION.{limit}, {lock}, @@SESSION.max_sort_length"
     )
 }
