@@ -32,7 +32,7 @@ fn zoom(h: &Harness) -> Option<Focus> {
 #[test]
 fn every_pane_zooms_to_the_whole_workspace_and_back() {
     let mut h = with_results();
-    let l = h.app.layout;
+    let l = h.app.layout.clone();
     assert!(l.tree.width > 0 && l.editor.height > 0 && l.results.height > 0 && l.detail.width > 0);
     assert!(!h.status(160, 45).contains("ZOOM"));
     let whole = ratatui::layout::Rect { x: 0, y: 1, width: 160, height: 43 };
@@ -42,7 +42,7 @@ fn every_pane_zooms_to_the_whole_workspace_and_back() {
     assert_eq!(zoom(&h), Some(Focus::Editor));
     let status = h.status(160, 45);
     assert!(status.contains(" ZOOM "), "{status}");
-    let l = h.app.layout;
+    let l = h.app.layout.clone();
     assert_eq!(l.editor, whole);
     assert_eq!((l.tree.width, l.results.height, l.detail.width, l.divider.height), (0, 0, 0, 0));
     assert_eq!(l.tab_bar.width, 160, "the tab bar stays, as wide as the workspace");
@@ -55,7 +55,7 @@ fn every_pane_zooms_to_the_whole_workspace_and_back() {
     assert_eq!(h.app.focus, Focus::Tree);
     h.keys(" z");
     h.draw(160, 45);
-    let l = h.app.layout;
+    let l = h.app.layout.clone();
     assert_eq!(l.tree, whole);
     assert_eq!((l.editor.height, l.results.height, l.explorer_edge.width), (0, 0, 0));
     h.keys(" z");
@@ -67,7 +67,7 @@ fn every_pane_zooms_to_the_whole_workspace_and_back() {
     h.keys(" z");
     assert_eq!(zoom(&h), Some(Focus::Results));
     h.draw(160, 45);
-    let l = h.app.layout;
+    let l = h.app.layout.clone();
     assert_eq!((l.results.x, l.results.y, l.results.height), (0, 1, 43));
     assert_eq!(l.results.width + l.detail.width, 160);
     assert_eq!((l.tree.width, l.editor.height), (0, 0));
@@ -86,7 +86,7 @@ fn every_pane_zooms_to_the_whole_workspace_and_back() {
     h.keys(" z");
     assert_eq!(zoom(&h), Some(Focus::Inspector));
     h.draw(160, 45);
-    let l = h.app.layout;
+    let l = h.app.layout.clone();
     assert_eq!(l.detail, whole);
     assert_eq!((l.results.width, l.editor.height, l.tree.width), (0, 0, 0));
     // Its grid is hidden: going back to it ends the zoom.
@@ -140,7 +140,7 @@ fn a_zoom_survives_a_resize_and_the_mouse_hits_only_the_zoomed_pane() {
     h.keys(" z");
     for (w, ht) in [(100, 30), (80, 24), (200, 60)] {
         h.draw(w, ht);
-        let l = h.app.layout;
+        let l = h.app.layout.clone();
         assert_eq!((l.editor.x, l.editor.y, l.editor.width, l.editor.height), (0, 1, w, ht - 2), "{w}x{ht}");
         assert_eq!((l.tree.width, l.results.height), (0, 0));
     }
@@ -192,7 +192,7 @@ fn the_explorer_hides_and_shows_again() {
     assert!(h.app.explorer.hidden);
     assert_eq!(h.app.focus, Focus::Editor);
     h.draw(160, 45);
-    let l = h.app.layout;
+    let l = h.app.layout.clone();
     assert_eq!((l.tree.width, l.explorer_edge.width, l.editor.x, l.editor.width, l.tab_bar.x), (0, 0, 0, 160, 0));
     assert!(!h.status(160, 45).contains("ZOOM"), "hidden is not a zoom");
     // Pane cycling skips it; a click where it was is the editor's.

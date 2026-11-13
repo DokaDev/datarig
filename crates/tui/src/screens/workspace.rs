@@ -19,7 +19,7 @@ use datarig_i18n::{Label, Msg};
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Direction, Layout as RLayout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::Widget;
 
 /// Explorer, editor, results and status bar. Returns where the hardware cursor belongs.
@@ -292,8 +292,9 @@ fn ddl_state_text(app: &App) -> Option<String> {
     Some(app.i18n.msg(&msg).to_string())
 }
 
-/// The results pane: the title with the paging state on its right, the grid, and the
-/// inspector on the right of the grid when it is shown as a panel.
+/// The results pane: its frame (a query tab's title with the paging state, its strip; a table
+/// tab's strip on the border and its query bar), the grid, and the inspector on the right of
+/// the grid when it is shown as a panel.
 fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     // The chart follows the result before its title names it.
     if app.chart_shown() {
@@ -304,44 +305,14 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
         Some(w) => (Rect { width: area.width - w, ..area }, Rect { x: area.x + area.width - w, width: w, ..area }),
         None => (area, Rect::default()),
     };
-    let (title, status) = results_title(app, grid_area.width);
-    let status = status.as_ref().map(|(texts, style)| (texts.as_slice(), *style));
     app.layout.results = grid_area;
     app.layout.detail = detail_area;
-    // Where the previous and next page marks are, for the mouse: at both ends of the right
-    // side of the top border, when it is drawn with them.
     (app.layout.page_prev, app.layout.page_next) = (Rect::default(), Rect::default());
-    if let Some((texts, _)) = status {
-        let (_, shown) = crate::widgets::title_and_status(&title, texts, grid_area.width);
-        let (prev, next) = crate::icons::page_arrows(app.icons_on());
-        if let Some(s) = shown.filter(|s| s.starts_with(prev) && s.ends_with(next)) {
-            let w = crate::text::width(&s) as u16 + 2;
-            let start = grid_area.x + grid_area.width - 1 - w;
-            let (pw, nw) = (crate::text::width(prev) as u16, crate::text::width(next) as u16);
-            app.layout.page_prev = Rect { x: start + 1, y: grid_area.y, width: pw, height: 1 };
-            app.layout.page_next = Rect { x: start + w - 1 - nw, y: grid_area.y, width: nw, height: 1 };
-        }
-    }
-    let rb = panel_with_status(&title, status, app.focus == Focus::Results, grid_area.width);
-    let rinner = rb.inner(grid_area);
-    rb.render(grid_area, buf);
-    crate::widgets::table_status::draw_table_status(app, grid_area, buf);
-    // The result tabs of the last run, the Chart, a Plan and the Messages on the first line (a
-    // table tab's connection on its right).
-    let strip = app.strip_shown() && rinner.height > 2;
-    let old_strip = std::mem::take(&mut app.pointer.strip_hits);
-    let content = if strip {
-        let line = Rect { height: 1, ..rinner };
-        app.layout.strip = line;
-        draw_strip(app, line, buf);
-        if app.pointer.strip_hits != old_strip && matches!(app.pointer_on, Some(PointerOn::Strip(..))) {
-            app.pointer_on = None;
-            draw_strip(app, line, buf);
-        }
-        Rect { y: rinner.y + 1, height: rinner.height - 1, ..rinner }
+    let content = if app.tab().is_table() {
+        draw_table_frame(app, grid_area, buf)
     } else {
-        app.layout.strip = Rect::default();
-        rinner
+        app.qbar.press.drawn(false, app.now());
+        draw_query_frame(app, grid_area, buf)
     };
     // Another view than the rows: no grid, so no cell of it is under the pointer (it would
     // still be lit when the rows come back).
@@ -367,6 +338,92 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
 }
 
+/// A query tab's results pane frame: the title with the paging state on its right on the top
+/// border, the result tab strip on the first line inside. Returns the room left for the
+/// result.
+fn draw_query_frame(app: &mut App, grid_area: Rect, buf: &mut Buffer) -> Rect {
+    let (title, status) = results_title(app, grid_area.width);
+    let status = status.as_ref().map(|(texts, style)| (texts.as_slice(), *style));
+    // Where the previous and next page marks are, for the mouse: at both ends of the right
+    // side of the top border, when it is drawn with them.
+    if let Some((texts, _)) = status {
+        let (_, shown) = crate::widgets::title_and_status(&title, texts, grid_area.width);
+        let (prev, next) = crate::icons::page_arrows(app.icons_on());
+        if let Some(s) = shown.filter(|s| s.starts_with(prev) && s.ends_with(next)) {
+            let w = crate::text::width(&s) as u16 + 2;
+            let start = grid_area.x + grid_area.width - 1 - w;
+            let (pw, nw) = (crate::text::width(prev) as u16, crate::text::width(next) as u16);
+            app.layout.page_prev = Rect { x: start + 1, y: grid_area.y, width: pw, height: 1 };
+            app.layout.page_next = Rect { x: start + w - 1 - nw, y: grid_area.y, width: nw, height: 1 };
+        }
+    }
+    let rb = panel_with_status(&title, status, app.focus == Focus::Results, grid_area.width);
+    let rinner = rb.inner(grid_area);
+    rb.render(grid_area, buf);
+    // The result tabs of the last run, the Chart, a Plan and the Messages on the first line.
+    if app.strip_shown() && rinner.height > 2 {
+        let line = Rect { height: 1, ..rinner };
+        strip_at(app, line, theme::cur().surface, buf);
+        Rect { y: rinner.y + 1, height: rinner.height - 1, ..rinner }
+    } else {
+        app.layout.strip = Rect::default();
+        app.pointer.strip_hits.clear();
+        rinner
+    }
+}
+
+/// A table tab's results pane frame: the result tab strip on the top border (the tab's
+/// connection on its right), and the query bar on the first line inside. Returns the room left
+/// for the result.
+fn draw_table_frame(app: &mut App, grid_area: Rect, buf: &mut Buffer) -> Rect {
+    let th = theme::cur();
+    let rb = crate::widgets::frame(app.focus == Focus::Results);
+    let rinner = rb.inner(grid_area);
+    rb.render(grid_area, buf);
+    if app.strip_shown() && grid_area.width > 4 {
+        let line = Rect { x: grid_area.x + 1, width: grid_area.width - 2, height: 1, ..grid_area };
+        buf.set_string(line.x, line.y, " ".repeat(usize::from(line.width)), Style::new().bg(th.bg));
+        strip_at(app, line, th.bg, buf);
+    } else {
+        app.layout.strip = Rect::default();
+        app.pointer.strip_hits.clear();
+    }
+    let now = app.now();
+    let model = (rinner.height > 2).then(|| app.bar_model()).flatten();
+    app.qbar.press.drawn(model.is_some() && !app.modal_open(), now);
+    let Some(m) = model else {
+        app.qbar.last.clear();
+        return rinner;
+    };
+    // A blank at both ends, as the grid's rows leave from the border.
+    buf.set_style(Rect { height: 1, ..rinner }, Style::new().bg(th.bg));
+    let line = Rect { x: rinner.x + 1, width: rinner.width.saturating_sub(2), height: 1, ..rinner };
+    let (mut hits, mut cursor) = crate::widgets::qbar::draw(app, &m, line, buf);
+    // Laid out otherwise: what was under the pointer is not there any more.
+    if hits != app.qbar.last && matches!(app.pointer_on, Some(PointerOn::Bar(_))) {
+        app.pointer_on = None;
+        (hits, cursor) = crate::widgets::qbar::draw(app, &m, line, buf);
+    }
+    app.qbar.last = hits.clone();
+    app.layout.qbar = hits;
+    if cursor.is_some() {
+        app.layout.grid_prompt_cursor = cursor;
+    }
+    Rect { y: rinner.y + 1, height: rinner.height - 1, ..rinner }
+}
+
+/// The result tab strip on line `line` on background `bg`, drawn again when its tabs moved
+/// from under the pointer.
+fn strip_at(app: &mut App, line: Rect, bg: Color, buf: &mut Buffer) {
+    let old_strip = std::mem::take(&mut app.pointer.strip_hits);
+    app.layout.strip = line;
+    draw_strip(app, line, bg, buf);
+    if app.pointer.strip_hits != old_strip && matches!(app.pointer_on, Some(PointerOn::Strip(..))) {
+        app.pointer_on = None;
+        draw_strip(app, line, bg, buf);
+    }
+}
+
 /// The result tab strip: `[Result 1]  Result 3  Changes 2  Plan  Chart  Messages`, the shown
 /// one in brackets, two blanks between any two; the Changes of the shown result while it has
 /// pending changes. Without a row result there is one `Result` tab (for
@@ -384,10 +441,9 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
 /// Messages and as many
 /// of the shown one's neighbours as fit, `…` where some are left out (`H`/`L` reach them); at
 /// last the shown one alone. `earlier run` goes first. Records where each tab is.
-fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
+fn draw_strip(app: &mut App, area: Rect, bg: Color, buf: &mut Buffer) {
     let th = theme::cur();
     use crate::widgets::grid::TxMark;
-    let bg = th.surface;
     buf.set_style(area, Style::new().bg(bg));
     let t = app.tab();
     let active = |(i, view): (Option<usize>, ResultView)| match (t.exec.view, i) {

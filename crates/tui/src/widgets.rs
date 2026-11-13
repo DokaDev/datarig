@@ -26,6 +26,7 @@ pub(crate) mod inspector;
 pub(crate) mod menu;
 pub mod monitor;
 pub(crate) mod popup;
+pub(crate) mod qbar;
 pub(crate) mod quick;
 pub(crate) mod script_tree;
 pub(crate) mod settings;
@@ -33,7 +34,6 @@ pub(crate) mod sparkline;
 pub mod statement_list;
 pub(crate) mod statusbar;
 pub(crate) mod tab_list;
-pub(crate) mod table_status;
 pub(crate) mod update_notice;
 pub(crate) mod whats_new;
 
@@ -53,7 +53,7 @@ pub(crate) fn panel(title: &Localized, focused: bool, width: u16) -> Block<'stat
 }
 
 /// A panel's border and background, without a title.
-fn frame(focused: bool) -> Block<'static> {
+pub(crate) fn frame(focused: bool) -> Block<'static> {
     let th = theme::cur();
     let border = if focused { th.accent } else { th.border };
     Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(border).bg(th.bg)).style(th.base())

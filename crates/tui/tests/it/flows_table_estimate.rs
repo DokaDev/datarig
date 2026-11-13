@@ -3,7 +3,7 @@
 //! is the statement the rows were read with, sent as `DbCommand::Estimate` only when the filter
 //! calls nothing outside the allowlist (MySQL: no subquery), no transaction is open and the
 //! server has a plan format; otherwise its entry is dimmed with why. Its answer is shown as the
-//! planner's (`page 1 / ~N (planner)`), and a late one of rows replaced since is dropped. The
+//! planner's (`~N rows` in the query bar), and a late one of rows replaced since is dropped. The
 //! count has a time limit (`[results] count_timeout`), left out inside a PostgreSQL transaction
 //! (said so); a count the server stopped, one cancelled and one behind a lock are told apart,
 //! and none of them is 0.
@@ -57,6 +57,8 @@ fn pg(filter: Option<&str>) -> Harness {
         page(&mut h);
     }
     h.app.focus = datarig_tui::app::Focus::Results;
+    // The pane at its widest: no inspector beside it (the query bar says the rows whole).
+    h.app.detail.visible = false;
     h.sent();
     h
 }
@@ -82,6 +84,8 @@ fn my(filter: Option<&str>) -> Harness {
         page(&mut h);
     }
     h.app.focus = datarig_tui::app::Focus::Results;
+    // The pane at its widest: no inspector beside it (the query bar says the rows whole).
+    h.app.detail.visible = false;
     h.sent();
     h
 }
@@ -90,10 +94,10 @@ fn status(h: &Harness) -> String {
     h.app.tab().status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default()
 }
 
-/// The results title row.
+/// The query bar's row (the rows of the result shown are said there).
 fn title(h: &mut Harness, w: u16, hh: u16) -> String {
     let t = h.draw(w, hh);
-    row_text(t.backend().buffer(), h.app.layout.results.y)
+    row_text(t.backend().buffer(), h.app.layout.results.y + 1)
 }
 
 /// The counts sent since the last look: their statement and limit.
@@ -186,12 +190,12 @@ fn filtered_rows_offer_the_estimate_or_the_exact_count() {
     assert!(h.app.tab().exec.running.is_none());
     assert!(status(&h).contains("Planner estimate: about 5,900 rows (not a count)"), "{}", status(&h));
     let wide = title(&mut h, 160, 45);
-    assert!(wide.contains("page 1 / ~12 (planner)"), "{wide}");
+    assert!(wide.contains("1–500 of ~5,900 rows"), "{wide}");
     assert_screen!("table_estimate_title_en_80x24", Lang::En, h.draw(80, 24));
     assert_screen!("table_estimate_title_en_120x30", Lang::En, h.draw(120, 30));
     // A late answer of another request changes nothing.
     h.tab_db(index, DbEvent::Estimated { id: qid + 7, result: Ok(1) });
-    assert!(title(&mut h, 160, 45).contains("~12 (planner)"));
+    assert!(title(&mut h, 160, 45).contains("of ~5,900 rows"));
 }
 
 /// The status bar's spinner turns with the app's clock, as the tab bar's does: what is drawn does
@@ -223,7 +227,7 @@ fn an_estimate_of_rows_replaced_since_is_dropped() {
     h.command("where id > 6");
     page(&mut h);
     h.tab_db(index, DbEvent::Estimated { id: old, result: Ok(9_999) });
-    assert!(title(&mut h, 120, 30).contains("page 1 / ?"), "{}", title(&mut h, 120, 30));
+    assert!(title(&mut h, 120, 30).contains("500+ rows"), "{}", title(&mut h, 120, 30));
     assert!(!status(&h).contains("9,999"));
 }
 
@@ -302,7 +306,7 @@ fn a_count_stopped_cancelled_or_lost_is_never_a_number() {
         h.tab_db(index, DbEvent::Counted { id: qid, result: Err(error), snapshot: false });
         assert!(h.app.tab().exec.running.is_none());
         let t = title(&mut h, 120, 30);
-        assert!(t.contains("page 1 / ?"), "{t}");
+        assert!(t.contains("500+ rows"), "{t}");
         // A count that did not come is said as a warning (a failure of the server's as an error).
         assert_eq!(h.app.tab().status.as_ref().map(|n| n.level), Some(Level::Warning), "{}", status(&h));
         status(&h)
@@ -349,7 +353,7 @@ fn an_estimate_that_could_not_be_had_says_why_and_shows_no_pages() {
         let (qid, index) = (h.app.tab().exec.query_id, h.app.tabs.active_index());
         h.tab_db(index, DbEvent::Estimated { id: qid, result: Err(error) });
         assert!(h.app.tab().exec.running.is_none());
-        assert!(title(&mut h, 120, 30).contains("page 1 / ?"));
+        assert!(title(&mut h, 120, 30).contains("500+ rows"));
         status(&h)
     };
     assert_eq!(answer(DbError::TimedOut(Duration::from_secs(5))), "Estimate stopped after 5s: no estimate");
@@ -363,7 +367,7 @@ fn an_estimate_that_could_not_be_had_says_why_and_shows_no_pages() {
     pick(&mut h, "estimate");
     let (qid, index) = (h.app.tab().exec.query_id, h.app.tabs.active_index());
     h.tab_db(index, DbEvent::Estimated { id: qid, result: Ok(3) });
-    assert!(title(&mut h, 120, 30).contains("page 1 / ?"));
+    assert!(title(&mut h, 120, 30).contains("500+ rows"));
 }
 
 #[test]

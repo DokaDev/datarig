@@ -72,6 +72,7 @@ pub mod plan;
 mod pointer;
 pub mod presets;
 pub mod profiles;
+pub mod qbar;
 pub mod quick;
 mod run_hints;
 pub mod runlog;
@@ -363,7 +364,7 @@ fn local_time_of_day() -> (u32, u32) {
     (now.hour(), now.minute())
 }
 
-#[derive(Default, Clone, Copy, Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct Layout {
     /// The area the explorer and the tabs (their bar and panes) share, between the banner and
     /// the status bar: the explorer's width is measured against it.
@@ -398,9 +399,8 @@ pub struct Layout {
     /// The previous and next page marks in the results title.
     pub page_prev: Rect,
     pub page_next: Rect,
-    /// A table tab's filter and sort on the results' bottom border (a click opens the filter
-    /// dialog).
-    pub table_status: Rect,
+    /// The parts of a table tab's query bar, as drawn last (a click acts on them).
+    pub qbar: Vec<(Rect, qbar::BarHit)>,
     pub too_small: bool,
 }
 
@@ -705,6 +705,8 @@ pub struct App {
     pending_use: Option<cmdline::PendingUse>,
     /// The small clickable target under the pointer (drawn highlighted).
     pub pointer_on: Option<hover::PointerOn>,
+    /// A table tab's query bar: its keys, its `LIMIT` field, a press on it.
+    pub(crate) qbar: qbar::QueryBar,
     /// The tips: usage counts, the page they turn with, each place's pick ([`tips`]).
     pub tips: tips::TipState,
     /// The filters and orders table tabs ran, per table ([`filter_history`]).
@@ -906,6 +908,7 @@ impl App {
             last_focus: Focus::Tree,
             unknown_tabs: Vec::new(),
             pointer_on: None,
+            qbar: Default::default(),
             tips: tips::TipState::default(),
             filter_history: Default::default(),
             table_view: Default::default(),

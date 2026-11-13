@@ -1,11 +1,10 @@
 ---
 source: crates/tui/tests/it/flows_filter_history.rs
-assertion_line: 712
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users * ×                                                          "
-"│  ＋ New connection         │╭ Results · 3 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1             ││ [Result 1]  Chart  Messages  local-pg / shop.users ││ id: 0                            │"
+"│  ＋ New connection         │╭ [Result 1]  Chart  Messages  local-pg / shop.users ╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1             ││ WHERE  1 condition  + │ ORDER ↓2 │ LIMIT none    ⋯ ││ id: 0                            │"
 "│  ▾ ●   local-pg            ││   │ id ^2 = ^v│ name v                             ││ name: n0                         │"
 "│    ▾ datarig default       ││   │ int8      │ text                               ││                                  │"
 "│      ▸ analytics           ││ 1 │         0 │ n0                                 ││                                  │"
@@ -31,5 +30,5 @@ expression: backend
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
-"╰────────────────────────────╯╰ ▼ id > 1 · name ↓ +1 ──────────────────────────────╯╰──────────────────────────────────╯"
+"╰────────────────────────────╯╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯"
 " local-pg │ 3 rows · 2ms                                                                                             EN "

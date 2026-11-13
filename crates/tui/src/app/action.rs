@@ -539,6 +539,16 @@ fn table_tab(a: &App) -> bool {
     has_tab(a) && a.tab().is_table()
 }
 
+/// The keys are on a table tab's query bar.
+fn bar_focused(a: &App) -> bool {
+    has_tab(a) && a.bar_focused()
+}
+
+/// A table tab's query bar has its `LIMIT` field typed in.
+fn bar_editing(a: &App) -> bool {
+    has_tab(a) && a.bar_editing()
+}
+
 /// The active tab shows a row result (a grid to page through).
 fn rows_shown(a: &App) -> bool {
     has_tab(a)
@@ -650,6 +660,7 @@ use super::edit::ChangesAction as K;
 use super::edit::EditAction as D;
 use super::filter_dialog::DialogAction as FD;
 use super::grid_search::SearchAction as S;
+use super::qbar::BarKey as B;
 use super::table_filter::TableAction as T;
 use ChartAction as C;
 use ExplorerAction as E;
@@ -1043,6 +1054,18 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Table(T::ClearAll), "table.filter.clear_all", Label::ActionTableFilterClearAll, table_tab),
     act(Action::Table(T::Hide), "table.column.hide", Label::ActionTableColumnHide, table_tab),
     act(Action::Table(T::History), "table.filter.history", Label::ActionTableFilterHistory, table_tab),
+    act(Action::Table(T::BarWhere), "table.bar.where", Label::ActionTableBarWhere, table_tab),
+    act(Action::Table(T::BarLimit), "table.bar.limit", Label::ActionTableBarLimit, table_tab),
+    act(Action::Table(T::BarColumns), "table.bar.columns", Label::ActionTableBarColumns, table_tab),
+    act(Action::Table(T::BarRows), "table.bar.rows", Label::ActionTableBarRows, rows_shown),
+    mv(Action::Table(T::Bar(B::Prev)), "table.bar.prev", Label::ActionTableBarPrev, bar_focused),
+    mv(Action::Table(T::Bar(B::Next)), "table.bar.next", Label::ActionTableBarNext, bar_focused),
+    act(Action::Table(T::Bar(B::Open)), "table.bar.open", Label::ActionTableBarOpen, bar_focused),
+    act(Action::Table(T::Bar(B::Remove)), "table.bar.remove", Label::ActionTableBarRemove, bar_focused),
+    act(Action::Table(T::Bar(B::Add)), "table.bar.add", Label::ActionTableBarAdd, bar_focused),
+    act(Action::Table(T::Bar(B::Leave)), "table.bar.leave", Label::ActionTableBarLeave, bar_focused),
+    act(Action::Table(T::Bar(B::LimitApply)), "table.bar.limit_apply", Label::ActionTableBarLimitApply, bar_editing),
+    act(Action::Table(T::Bar(B::LimitCancel)), "table.bar.limit_cancel", Label::ActionTableBarLimitCancel, bar_editing),
     act(Action::FilterDialog(FD::Apply), "filter.apply", Label::ActionFilterApply, filter_dialog),
     act(Action::FilterDialog(FD::Cancel), "filter.cancel", Label::ActionFilterCancel, filter_dialog),
     act(Action::FilterDialog(FD::Undo), "filter.undo", Label::ActionFilterUndo, filter_dialog),

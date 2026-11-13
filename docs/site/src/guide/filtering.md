@@ -14,7 +14,8 @@ A query's rows have no such dialog: filter and sort them in the statement.
 ## The filter dialog
 
 `f` (or `Space r f`) opens the dialog on the cursor's column; `Space r o` opens it on the order.
-A click on the filter at the bottom of the results border, or "Filter and sort…" in a column's
+A click on a part of the [query bar](#the-query-bar-and-the-connection) (`⋯ Advanced`, a
+condition, `ORDER BY`, the columns), `Space r A`, or "Filter and sort…" in a column's
 [menu](#from-the-grid), opens it too. It covers the whole screen:
 
 - the title names the table, says `edited` once what you changed differs from what is applied,
@@ -224,7 +225,9 @@ yours, dimmed (`+ id`), or `order not unique` when the table has none that make 
 `Limit` caps the rows the tab reads: a whole number of rows, in digits; blank means no cap. `0`, a
 number above 9,223,372,036,854,775,807 or anything that is not a number is refused when you
 apply, the field underlined. A new limit runs the table again from its first page, and once the
-rows reach it the results title says `limit 100`.
+rows reach it the query bar says `LIMIT 100` and the rows it holds. `Space r l` (or a click on
+`LIMIT` in the query bar) types the limit in the bar itself: digits, `Enter` runs it, `Esc`
+leaves it as it was, empty means no cap.
 
 ### The SQL section
 
@@ -270,14 +273,14 @@ the order (the limit stays) and runs only with `Enter`.
 and question (functions datarig cannot check, reads that lock rows on MySQL, edits not saved
 yet). A refusal keeps the dialog open: the hint line says why and the refused chip, or part of a
 field, is underlined. A question opens above the dialog, and a no keeps it with your changes. The
-dialog closes once the statement is sent, and the results border shows a spinner while it runs. A
+dialog closes once the statement is sent, and the query bar shows a spinner while it runs. A
 change of the hidden columns alone runs nothing. While the tab is running, `Enter` is refused
 (`Ctrl+C` cancels the run).
 
-When the server rejects the condition, the border says `▼ failed` (a filter glyph in place of
-`▼` with icons on). The rows of the earlier query
+When the server rejects the condition, the query bar starts with `failed` and keeps the conditions
+you asked for. The rows of the earlier query
 stay, dimmed, and the line under the grid says they are not the filter's answer; a cancelled run
-(`▼ cancelled`) or one that brought no rows, such as on a lost connection (`▼ unapplied`), leaves
+(`cancelled`) or one that brought no rows, such as on a lost connection (`unapplied`), leaves
 them the same way. `f` opens the dialog on the request that failed, with the server's message in
 its hint line and the chip where the server says the error is underlined.
 
@@ -375,7 +378,7 @@ takes a hide back. Hiding is a view only: the statement still reads every column
 - An [export](export.md), the chart, the inspector and edits see every column; the export dialog
   says that hidden columns are included. Going to a change in a hidden column from the Changes tab
   (`Enter`, or an edit key) shows the column again and says so; the dialog's undo hides it again.
-- The results border says how many columns are hidden (`· 2 hidden`), and in the dialog the column
+- The query bar says how many columns are shown (`6/7 cols`), and in the dialog the column
   is struck through (`hidden from the grid, still read`, followed by `(row key)` for a key column).
 - With every column hidden, the grid says how to show one again, and no key reads or changes a
   cell until then.
@@ -387,22 +390,32 @@ been read. When the file cannot be read, hidden columns are kept for the session
 so once; datarig never writes over that file. The file keeps the last 500 tables and up to 1000
 names per table.
 
-## The results border and the connection
+## The query bar and the connection
 
-A table tab's results border says what is applied, at the bottom left:
+A table tab's results pane has a query bar on its first line. It says what is applied, in the
+order of the statement:
 
 ```text
-▼ status = 'shipped' +1 · total ↓ +1 · 2 hidden
+WHERE [status = 'shipped' ×] [total > 1000 ×] + │ ORDER BY ↓ total + │ LIMIT 500 │ 6/7 cols │ 1–500 of ~50,001 rows ‹ ›  ⋯ Advanced
 ```
 
-the first condition, how many more, the first sort key and how many more, the hidden columns. In
-a narrower window the condition is cut (`…`), then it shows counts (`▼ 2 · ↓ 2`), then
-`▼2 ↓2 ◌2`, cut only when even that does not fit. A spinner shows while
-the tab's query runs, and `▼ failed`, `▼ cancelled` or `▼ unapplied` when the last run brought no
-rows. A click on it opens the dialog. With nothing applied it shows nothing.
+Each condition is a chip with the text that is sent; its `×` takes it out and runs the others as
+they were written. A condition datarig does not read as one column's is in the warning colour.
+`6/7 cols` says columns are hidden. The rows are those of the result shown (`~` an estimate,
+`500+` while not known), with the page arrows. In a narrower window the bar says less in steps
+(`⋯` alone, shorter rows, `+1` for the conditions and keys after the first, `2 conditions`,
+`ORDER ↓2`), down to marks only (`▼2 ↓2 L ◌1 ⋯`); what is applied always keeps a mark. A spinner
+goes first while the tab's query runs, and `failed`, `cancelled`, `unapplied` or `refused` when
+the last run brought no rows or was refused.
 
-On a table tab the connection is named on the right of the result strip, on the same line as the
-result tabs (`local-pg / datarig.shop.orders  127.0.0.1:55432`), shorter as the window narrows.
+Keys: `Space r w` puts the keys on the conditions (`←`/`→` move, `Enter` opens one in the dialog,
+`x` takes it out and runs, `+` adds one, `Esc` goes back to the grid), `Space r l` types the
+limit, `Space r c` opens the dialog on the columns, `Space r r` counts the rows (as `#`), and
+`Space r A` opens the dialog. A click on a part does the same.
+
+On a table tab the result strip (the result tabs and the connection,
+`local-pg / datarig.shop.orders  127.0.0.1:55432`, shorter as the window narrows) is on the
+results pane's top border.
 
 ## What runs is what you see
 
@@ -534,15 +547,15 @@ reads the history but does not write it.
 
 ## Estimate or exact count
 
-Filtered rows show `page 3 / ?` in the results title (`page 3 / ? · # count` where there is
-room): nothing is counted by itself. `#` opens a
+Filtered rows show `1,001–1,500 of 1,500+ rows` in the query bar: nothing is counted by
+itself. `#` opens a
 small choice on a filtered table tab whose rows are not all fetched (on any other result it counts
-at once, and the title of an unfiltered table shows the pages the server's statistics suggest,
-`~12`, until then):
+at once, and the query bar of an unfiltered table shows the rows the server's statistics
+suggest, `~5,900 rows`, until then):
 
 - **Estimate (planner)** asks the server's planner how many rows the filter matches, without
-  reading any (`EXPLAIN`, never `EXPLAIN ANALYZE`). The title then reads `page 3 / ~12 (planner)`,
-  about 12 pages: an estimate, which can be far off, not a count. An estimate of no rows, or of
+  reading any (`EXPLAIN`, never `EXPLAIN ANALYZE`). The query bar then reads `~5,900 rows`: an
+  estimate, which can be far off, not a count. An estimate of no rows, or of
   fewer than the tab holds, is not shown.
 - **Exact count** counts the rows.
 

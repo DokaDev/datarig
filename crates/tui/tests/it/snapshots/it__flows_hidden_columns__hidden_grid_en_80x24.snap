@@ -3,8 +3,8 @@ source: crates/tui/tests/it/flows_hidden_columns.rs
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users * ×                        "
-"│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1       ││ [Result 1]  Chart  Messages  ││ id: 1                │"
+"│  ＋ New connection   │╭ [Result 1]  Chart  Messages  ╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ ▼1 ↑1 ◌1                   ⋯ ││ id: 1                │"
 "│  ▾ ●   local-pg      ││   │ id ^v│ name =   │ score ^││ name: ann            │"
 "│    ▾ datarig default ││   │ int8 │ text     │ float8 ││ score: 1.5           │"
 "│      ▸ analytics     ││ 1 │    1 │ ann      │       1││ memo: x              │"
@@ -24,5 +24,5 @@ expression: backend
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"
-"╰──────────────────────╯╰ ▼ 1 · ↑ 1 · 1 hidden ────────╯╰──────────────────────╯"
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
 " local-pg │ 3 rows · 0ms            │ Enter view cell · n next page · y copy EN "
