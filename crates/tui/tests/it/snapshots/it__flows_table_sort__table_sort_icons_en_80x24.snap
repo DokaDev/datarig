@@ -1,11 +1,10 @@
 ---
 source: crates/tui/tests/it/flows_table_sort.rs
-assertion_line: 401
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2  shop.users  ×                      "
-"│  ＋ New connection   │╭ Results · 3 rows ────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ 󰒍 Connections 1     ││ [Result 1]  Chart  Messages   local-pg / shop.users │"
+"│  ＋ New connection   │╭ [Result 1]  Chart  Messages   local-pg / shop.users ╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ 󰒍 Connections 1     ││ WHERE  1 condition  + │ ORDER ↑ id +1 │ LIMIT none ⋯ │"
 "│  ▾ ●  local-pg      ││   │ id   │ name 2  󰓢│ email                       │"
 "│    ▾  datarig defau…││   │ int8  │ text       │ text                        │"
 "│      ▸ 󱋣 analytics   ││ 1 │     0 │ n0         │ u0@x                        │"
@@ -25,5 +24,5 @@ expression: backend
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
-"╰──────────────────────╯╰  name <> 'zz' · id ↑ +1 ────────────────────────────╯"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
 " local-pg │ 3 rows · 2ms            │ Enter view cell · n next page · y copy EN "

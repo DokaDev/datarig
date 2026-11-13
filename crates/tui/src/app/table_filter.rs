@@ -47,6 +47,16 @@ pub enum TableAction {
     Hide,
     /// The filters and orders this table ran before (`Ctrl+R` in the dialog, `Space r H`).
     History,
+    /// The keys on the query bar's conditions (`Space r w`).
+    BarWhere,
+    /// The query bar's `LIMIT` typed in it (`Space r l`).
+    BarLimit,
+    /// The columns, shown and hidden (`Space r c`): the filter dialog on its column list.
+    BarColumns,
+    /// The rows counted (`Space r r`), as `#` counts them.
+    BarRows,
+    /// A key of the query bar while it has the keys.
+    Bar(super::qbar::BarKey),
 }
 
 impl App {
@@ -89,6 +99,11 @@ impl App {
             TableAction::ClearAll => self.table_clear_all(id),
             TableAction::Hide => self.table_hide_column(),
             TableAction::History => self.open_filter_history(self.filter_dialog().map_or(id, |d| d.tab)),
+            TableAction::BarWhere => self.bar_where(),
+            TableAction::BarLimit => self.bar_limit(),
+            TableAction::BarColumns => self.bar_hit(super::qbar::BarHit::Cols),
+            TableAction::BarRows => self.bar_hit(super::qbar::BarHit::Rows),
+            TableAction::Bar(k) => self.bar_key(k),
         }
     }
 

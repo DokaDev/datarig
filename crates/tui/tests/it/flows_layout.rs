@@ -98,7 +98,7 @@ fn the_results_pane_hides_maximises_and_resizes_by_keys() {
     h.draw(160, 45);
     assert_eq!(h.app.tab().pane.zoom, Some(Focus::Results));
     assert_eq!((h.app.layout.editor.height, h.app.layout.tree.width), (0, 0));
-    let l = h.app.layout;
+    let l = h.app.layout.clone();
     assert_eq!((l.results.height, l.results.width + l.detail.width), (43, 160), "with the inspector");
     // Tab moves on to the next pane (the explorer, after the results), which ends the zoom.
     h.key(KeyCode::Tab);
@@ -236,8 +236,8 @@ fn a_table_opens_in_a_tab_of_its_own() {
 /// A table tab's result strip names its connection on its right, as a query tab's editor
 /// does on its first line: the profile and `database.schema.table`, where it points, its
 /// environment's badge and read-only, no key to switch the connection (a table tab's cannot
-/// change). No line of its own: the strip is the pane's first line, the grid right under it,
-/// and a click on a cell still selects that cell.
+/// change). No line of its own: the strip is on the pane's top border, the query bar on the
+/// first line, the grid right under it, and a click on a cell still selects that cell.
 #[test]
 fn a_table_tabs_strip_names_its_connection() {
     use ratatui::crossterm::event::{MouseButton, MouseEventKind};
@@ -254,12 +254,13 @@ fn a_table_tabs_strip_names_its_connection() {
     let screen = h.screen(160, 45);
     let lines: Vec<&str> = screen.lines().collect();
     let r = h.app.layout.results;
-    let line = lines[usize::from(r.y) + 1];
+    let line = lines[usize::from(r.y)];
     assert!(line.contains("[Result 1]  Chart  Messages"), "{line}");
     assert!(line.contains("local-pg / datarig.shop.users"), "{line}");
     assert!(!line.contains("switch connection") && !line.contains('?'), "{line}");
-    assert_eq!(h.app.layout.strip.y, r.y + 1, "the strip on the pane's first line");
-    assert_eq!(h.app.tab().grid.header_y, r.y + 2, "the grid right under the strip");
+    assert_eq!(h.app.layout.strip.y, r.y, "the strip on the pane's top border");
+    assert!(lines[usize::from(r.y) + 1].contains("WHERE"), "the query bar on the first line");
+    assert_eq!(h.app.tab().grid.header_y, r.y + 2, "the grid right under the bar");
     // A click on a cell selects that cell.
     h.app.focus = Focus::Results;
     h.draw(160, 45);
@@ -272,7 +273,7 @@ fn a_table_tabs_strip_names_its_connection() {
     h.app.policies.environments_mut().push(prod);
     h.app.profiles[0].policy = Some("prod".into());
     let screen = h.screen(160, 45);
-    let line = screen.lines().nth(usize::from(h.app.layout.results.y) + 1).unwrap().to_string();
+    let line = screen.lines().nth(usize::from(h.app.layout.results.y)).unwrap().to_string();
     assert!(line.contains("local-pg  PROD   READ-ONLY "), "{line}");
 }
 
@@ -300,7 +301,7 @@ fn a_narrow_table_tabs_strip_names_less_of_its_connection() {
         // The last tab, whole or short.
         let tabs = ["Messages", "Msgs"].iter().find_map(|t| line.find(t).map(|at| at + t.len()));
         let tabs = tabs.unwrap_or_else(|| panic!("no strip at {w}: {line}"));
-        let right = line[tabs..].trim_end_matches([' ', '\u{2502}']).trim();
+        let right = line[tabs..].trim_end_matches([' ', '\u{2502}', '\u{256e}']).trim();
         let right = right.trim_start_matches("H/L").trim().to_string();
         if seen.last() != Some(&right) {
             seen.push(right);
@@ -319,8 +320,8 @@ fn a_narrow_table_tabs_strip_names_less_of_its_connection() {
     assert_eq!(seen, expected);
 }
 
-/// A table tab whose profile is gone draws no connection line: the strip is on the pane's first
-/// line.
+/// A table tab whose profile is gone draws no connection line: the strip is on the pane's top
+/// border.
 #[test]
 fn a_table_tab_without_its_profile_draws_no_connection_line() {
     let mut h = Harness::connected(Lang::En);
@@ -333,8 +334,8 @@ fn a_table_tab_without_its_profile_draws_no_connection_line() {
     assert!(h.app.tab().is_table() && h.app.conn().is_none());
     let screen = h.screen(160, 45);
     let r = h.app.layout.results;
-    assert_eq!(h.app.layout.strip.y, r.y + 1, "the strip on the first line");
-    let line = screen.lines().nth(usize::from(r.y) + 1).unwrap().to_string();
+    assert_eq!(h.app.layout.strip.y, r.y, "the strip on the top border");
+    let line = screen.lines().nth(usize::from(r.y)).unwrap().to_string();
     assert!(line.contains("[Result 1]") && !line.contains("local-pg"), "{line}");
 }
 
@@ -358,7 +359,7 @@ fn a_mysql_table_tabs_connection_line_names_database_and_table() {
     h.key(KeyCode::Enter);
     assert!(h.app.tab().is_table());
     let screen = h.screen(160, 45);
-    let line = screen.lines().nth(usize::from(h.app.layout.results.y) + 1).unwrap().to_string();
+    let line = screen.lines().nth(usize::from(h.app.layout.results.y)).unwrap().to_string();
     assert!(line.contains("local-my / shop.items  "), "{line}");
     assert!(!line.contains("switch connection"), "{line}");
 }

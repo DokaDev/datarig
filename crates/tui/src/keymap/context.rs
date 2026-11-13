@@ -9,7 +9,8 @@
 //! │  ├─ nav                 (non-text panes: leader, `:`, Tab)
 //! │  │  ├─ explorer
 //! │  │  ├─ grid
-//! │  │  │  └─ grid.matches     (a search of the grid is on: `n`/`N` go to its matches)
+//! │  │  │  ├─ grid.matches     (a search of the grid is on: `n`/`N` go to its matches)
+//! │  │  │  └─ grid.bar         (a table tab's query bar has the keys: its conditions)
 //! │  │  ├─ inspector          (the result inspector panel, once clicked)
 //! │  │  ├─ plan               (the Plan tab of the results pane)
 //! │  │  ├─ chart              (the Chart tab of the results pane)
@@ -22,6 +23,7 @@
 //! │  ├─ editor.vim.search     [editor][text]   (the `/` and `?` prompt)
 //! │  ├─ explorer.filter       [text]
 //! │  ├─ grid.search           [text]   (the grid's `/` and `?` prompt)
+//! │  ├─ grid.bar.limit        [text]   (the query bar's `LIMIT` field)
 //! │  ├─ grid.edit             [text]   (the cell editor over a cell of the grid)
 //! │  └─ overlay.cell_viewer
 //! ├─ overlay.cell_editor    [text]   (a cell's value of several lines, in vim modes)
@@ -45,6 +47,8 @@ pub enum Ctx {
     Grid,
     GridMatches,
     GridSearch,
+    QueryBar,
+    QueryBarText,
     CellEdit,
     Inspector,
     Plan,
@@ -93,7 +97,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 53] = [
+    pub const ALL: [Ctx; 55] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -102,6 +106,8 @@ impl Ctx {
         Ctx::Grid,
         Ctx::GridMatches,
         Ctx::GridSearch,
+        Ctx::QueryBar,
+        Ctx::QueryBarText,
         Ctx::CellEdit,
         Ctx::Inspector,
         Ctx::Plan,
@@ -160,6 +166,8 @@ impl Ctx {
             Ctx::Grid => "grid",
             Ctx::GridMatches => "grid.matches",
             Ctx::GridSearch => "grid.search",
+            Ctx::QueryBar => "grid.bar",
+            Ctx::QueryBarText => "grid.bar.limit",
             Ctx::CellEdit => "grid.edit",
             Ctx::Inspector => "inspector",
             Ctx::Plan => "plan",
@@ -221,10 +229,11 @@ impl Ctx {
             | Ctx::VimSearch
             | Ctx::ExplorerFilter
             | Ctx::GridSearch
+            | Ctx::QueryBarText
             | Ctx::MonitorFilter
             | Ctx::CellEdit
             | Ctx::CellViewer => Some(Ctx::Workspace),
-            Ctx::GridMatches => Some(Ctx::Grid),
+            Ctx::GridMatches | Ctx::QueryBar => Some(Ctx::Grid),
             Ctx::Explorer
             | Ctx::Grid
             | Ctx::Inspector
@@ -254,6 +263,7 @@ impl Ctx {
                 | Ctx::VimSearch
                 | Ctx::ExplorerFilter
                 | Ctx::GridSearch
+                | Ctx::QueryBarText
                 | Ctx::MonitorFilter
                 | Ctx::CellEdit
                 | Ctx::CellEditor
@@ -282,7 +292,7 @@ impl Ctx {
     /// A mode of its parent: while it is on, its keys may hide the parent's (the grid while a
     /// search is on: `n` and `Esc` there are the search's, not the grid's).
     pub fn is_mode(self) -> bool {
-        self == Ctx::GridMatches
+        matches!(self, Ctx::GridMatches | Ctx::QueryBar)
     }
 
     /// A one-line field outside the editor (the grid's search prompt): its reserved editing
@@ -309,6 +319,12 @@ impl Ctx {
             }
             Ctx::GridSearch => {
                 "The search prompt of `/` and `?` on the line under the grid: the cursor goes to the first matching cell while the pattern is typed, `Enter` searches (an empty pattern: the last one), `Esc` goes back to where the cursor was, `Ctrl+W` deletes the word before the cursor. The full values are searched as fetched (not the shown cut), cell by cell, row by row."
+            }
+            Ctx::QueryBar => {
+                "A table tab's query bar with the keys on its conditions (`Space r w`): `←`/`→` (`h`/`l`) move between the conditions, the count of those left out and `+`, `Enter` opens the one the keys are on in the filter dialog, `x` (`Delete`) takes the condition out and runs the query again (the other conditions sent as they were written), `+` (`a`) adds a condition, `Esc` goes back to the grid. The keys leave the bar when the tab, the result or the view changes, or the focus moves."
+            }
+            Ctx::QueryBarText => {
+                "The `LIMIT` field of a table tab's query bar (`Space r l`, or a click on `LIMIT`): digits, `Backspace`, a paste; `Enter` runs the query with that cap (empty: no cap; a text that is no cap is refused and stays), `Esc` leaves the cap as it was."
             }
             Ctx::CellEdit => {
                 "The cell editor (`e` in the grid) over the cell: one line, the cell's pending value or its value as read. `Enter` keeps the text (an empty text is the empty string, never NULL), `Esc` cancels, `Ctrl+N` sets NULL, `Ctrl+D` the column's default. With cells of one column selected, each takes the value, as one change (`u` undoes it). `Ctrl+L` takes the text typed so far to the editor of several lines. A value of several lines, and a JSON column's, opens that editor instead; an enum or boolean column lists its values."
@@ -437,6 +453,8 @@ impl Ctx {
             Ctx::Grid => Label::KeyctxGrid,
             Ctx::GridMatches => Label::KeyctxGridMatches,
             Ctx::GridSearch => Label::KeyctxGridSearch,
+            Ctx::QueryBar => Label::KeyctxGridBar,
+            Ctx::QueryBarText => Label::KeyctxGridBarLimit,
             Ctx::CellEdit => Label::KeyctxGridEdit,
             Ctx::Inspector => Label::KeyctxInspector,
             Ctx::Plan => Label::KeyctxPlan,

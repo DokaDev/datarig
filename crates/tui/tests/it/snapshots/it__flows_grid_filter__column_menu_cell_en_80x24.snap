@@ -3,8 +3,8 @@ source: crates/tui/tests/it/flows_grid_filter.rs
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
-"│  ＋ New connection   │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾╭───────────────────────────────────────────────╮es  ││ id: 1                │"
+"│  ＋ New connection   │╭ [Result 1]  Chart  Messages  ╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾╭───────────────────────────────────────────────╮  ⋯ ││ id: 1                │"
 "│ │ name                                          │e   ││ name: it's           │"
 "│ │  ↑ Sort ascending, NULLs last               s │t8  ││ score: 1.5           │"
 "│ │  ↓ Sort descending, NULLs first               │1.5 ││ data: \x01ab         │"

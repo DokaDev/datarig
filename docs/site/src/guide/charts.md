@@ -1,7 +1,7 @@
 # Charts
 
 The Chart tab of the results pane draws the rows a result has fetched as vertical bars,
-horizontal bars or lines (in braille dots). Open it with `c` in the grid, `Space r c`, its tab
+horizontal bars or lines (in braille dots). Open it with `c` in the grid, `Space r g`, its tab
 in the strip, or the action menu. Nothing is asked of the server and nothing runs again; nothing
 is read for a chart until its tab is viewed.
 
