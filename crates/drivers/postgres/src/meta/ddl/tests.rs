@@ -78,3 +78,12 @@ fn a_relation_reads_its_catalog_codes() {
         (false, Some("UPDATE"), vec![None, Some("r".into())])
     );
 }
+
+#[test]
+fn a_columns_options_are_the_users_not_the_servers() {
+    assert_eq!(
+        user_options(vec!["pg_attver=27128032".into(), "n_distinct=-1".into(), "n_distinct_inherited=5".into()]),
+        ["n_distinct=-1", "n_distinct_inherited=5"]
+    );
+    assert_eq!(user_options(vec!["pg_attver=27128032".into()]), Vec::<String>::new());
+}
