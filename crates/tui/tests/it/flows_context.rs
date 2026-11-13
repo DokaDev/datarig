@@ -416,6 +416,11 @@ fn another_databases_metadata_session_needs_the_connect_checks() {
     assert_eq!(h.roles().len(), before, "no session opened: {:?}", h.roles());
     let status = h.app.status.as_ref().map(|n| h.app.i18n.msg(&n.msg).to_string()).unwrap_or_default();
     assert!(status.contains("Environment “gone” not found"), "{status}");
+    // Not left loading: the picker says why.
+    let a = h.app.conns.aux(p, "sales").expect("the database's entry");
+    assert!(matches!(&a.schemas, Some(Err(e)) if e.contains("Environment “gone” not found")), "{:?}", a.schemas);
+    assert!(!a.tree.schemas_loading);
+    assert_ne!(rows(&h).last(), Some(&QuickRow::Note(p, Some("sales".into()), QuickNote::Loading)), "{:?}", rows(&h));
 }
 
 /// An aux metadata session (another database's) that no tab works in and

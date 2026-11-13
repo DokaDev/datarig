@@ -174,14 +174,22 @@ impl App {
     /// preset that is there, and what its query sessions start with can be planned. `cfg`: the
     /// copy the profile connected with. The notice says what is wrong (as the connect says it).
     pub(super) fn session_checks(&self, cfg: &ConnectionConfig) -> Result<(), Notice> {
+        self.reach_checks(cfg)?;
+        if let Err(e) = self.session_plan_of(cfg) {
+            return Err(self.session_error_notice(cfg, &e));
+        }
+        Ok(())
+    }
+
+    /// [`App::session_checks`] but what the query sessions start with: the profile's environment
+    /// is defined and its tunnel setting names a preset that is there (a session that starts
+    /// with something else, a Startup SQL's test, checks its own statements).
+    pub(super) fn reach_checks(&self, cfg: &ConnectionConfig) -> Result<(), Notice> {
         if let Err(e) = self.policy_of(cfg.id) {
             return Err(self.unknown_environment_notice(&cfg.name, &e));
         }
         if let Err(e) = self.route_of(cfg) {
             return Err(self.route_error_notice(&cfg.name, &e));
-        }
-        if let Err(e) = self.session_plan_of(cfg) {
-            return Err(self.session_error_notice(cfg, &e));
         }
         Ok(())
     }

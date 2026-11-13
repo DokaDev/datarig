@@ -784,6 +784,20 @@ fn the_menu_of_a_preset_says_what_it_does() {
 
 // ── test ────────────────────────────────────────────────────────────────
 
+/// A test reaches the connection as a connect would: once the connected profile names an
+/// environment that is not defined, nothing opens and the test says why.
+#[test]
+fn a_test_on_a_profile_whose_environment_went_opens_nothing() {
+    let cfg = config(|_| {});
+    let mut h = connected(&cfg);
+    h.app.profiles[0].policy = Some("gone".into());
+    on_preset(&mut h, "reporting");
+    h.keys("t");
+    assert_eq!(h.roles(), [SessionRole::Meta], "nothing opened");
+    let state = h.app.conn_test.as_ref().map(|t| format!("{:?}", t.state)).unwrap_or_default();
+    assert!(state.contains("Environment “gone” not found"), "{state}");
+}
+
 /// A test needs a connected profile: none of the database, or none connected, is said; on the
 /// one connected it opens a query session that starts with the preset alone, and once that
 /// connected it says so and closes it.

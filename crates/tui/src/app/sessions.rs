@@ -826,6 +826,10 @@ impl App {
     pub(super) fn run_session_test(&mut self, p: SessionPreset, pid: ProfileId) {
         self.clear_test();
         let Some(mut cfg) = self.conns.get(pid).and_then(|c| c.resolved.clone()) else { return };
+        // The connection is reached as a connect would (its environment, its tunnel setting).
+        if let Err(m) = self.reach_checks(&cfg) {
+            return self.test_refused(m.render(&self.i18n).to_string());
+        }
         cfg.session = SessionRef::Named(p.name.clone());
         cfg.session_sql.clear();
         let mut presets: Vec<SessionPreset> = self.session_presets.iter().filter(|q| q.id != p.id).cloned().collect();
