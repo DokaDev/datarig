@@ -330,6 +330,56 @@ jobs:
             exit 1
           fi
 
+  # The MySQL driver's suites, the app's MySQL flows and the classifier's MySQL tests once more
+  # against MariaDB 11.4 LTS, which the driver serves too. The tests ask the server what it is:
+  # where MariaDB offers less (no plans, no edits, no monitor), they check the refusal and say
+  # so in a `MARIADB` line. The server is started by a step (start-mariadb.sh), not as a service
+  # container, which cannot be given the performance_schema options the tests read from the side.
+  integration-mariadb:
+    name: integration (MariaDB 11.4)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    env:
+      DATARIG_TEST_MYSQL_URL: mysql://datarig:datarig@127.0.0.1:13308/shop
+      DATARIG_TEST_MYSQL_ADMIN_URL: mysql://root:datarig-root@127.0.0.1:13308/
+      DATARIG_REQUIRE_MYSQL: "1"
+      DATARIG_TEST_MYSQL_CLIENT: docker exec -i zz_datarig_mariadb mariadb -udatarig -pdatarig shop
+    steps:
+      - uses: actions/checkout@v7
+      - name: Host ports below the ephemeral range
+        run: bash .github/scripts/host-ports.sh 13308
+      - uses: Swatinem/rust-cache@v2
+      - name: C compiler and libclang for pg_query
+        run: bash .github/scripts/pg-query-build-deps.sh
+      - name: MariaDB 11.4, loaded with dev/init-mysql/*.sql
+        run: >-
+          bash .github/scripts/start-mariadb.sh
+          mariadb:11.4@sha256:1292844148b311e4ed4300022a996d39083f415a963e970cf47cad1b3b18e3a6 13308
+      - name: The MySQL driver's suites
+        run: cargo test -p datarig-driver-mysql --locked --no-fail-fast
+      - name: The app's MySQL flows
+        run: cargo test -p datarig-tui --test integration_mysql --locked --no-fail-fast
+      - name: The classifier's and the splitter's MySQL tests
+        run: cargo test -p datarig-core -p datarig-tui --test mysql_split --test mysql_classify --locked --no-fail-fast
+      # Nothing named zz_ is left on the server, as on MySQL in `integration`.
+      - name: The tests left the MariaDB server clean
+        if: ${{ !cancelled() }}
+        run: |
+          left=$(docker exec -i zz_datarig_mariadb mariadb -uroot -pdatarig-root -N -B -e "
+            SELECT CONCAT(TABLE_SCHEMA, '.', TABLE_NAME) FROM information_schema.TABLES WHERE TABLE_NAME LIKE 'zz%'
+            UNION ALL SELECT CONCAT(ROUTINE_SCHEMA, '.', ROUTINE_NAME) FROM information_schema.ROUTINES
+              WHERE ROUTINE_NAME LIKE 'zz%'
+            UNION ALL SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'zz%'
+            UNION ALL SELECT CONCAT(User, '@', Host) FROM mysql.user WHERE User LIKE 'zz%'
+            UNION ALL SELECT CONCAT('grant on ', Db) FROM mysql.db WHERE User LIKE 'zz%' OR Db LIKE 'zz%'
+            UNION ALL SELECT CONCAT('grant on ', Db, '.', Table_name) FROM mysql.tables_priv
+              WHERE User LIKE 'zz%' OR Table_name LIKE 'zz%'")
+          if [ -n "$left" ]; then
+            echo "left on the MariaDB server: $left"
+            exit 1
+          fi
+
   # Performance budgets (docs/perf.md): round trips per statement through a latency proxy
   # (exact counts, also through the SSH bastion), memory while paging 4,000,000 rows (flat past
   # the window of rows kept in memory), keystroke-to-frame time in a 5 MB file, idle memory, CPU
