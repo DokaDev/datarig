@@ -118,6 +118,11 @@ use tokio::sync::mpsc::UnboundedSender;
 /// ER_QUERY_INTERRUPTED: `KILL QUERY` stopped the statement.
 const INTERRUPTED: u16 = 1317;
 
+/// ER_NO_SUCH_USER: what the server answers instead of [`INTERRUPTED`] when a `KILL QUERY`
+/// lands while it looks up the definer of a `SQL SECURITY DEFINER` routine (the lookup is
+/// stopped, and reported as a definer that does not exist).
+const NO_SUCH_USER: u16 = 1449;
+
 /// `sql_select_limit`'s value for no limit (its `DEFAULT`).
 const NO_LIMIT: u64 = u64::MAX;
 
@@ -346,8 +351,8 @@ struct Paged<'a> {
 }
 
 impl Paged<'_> {
-    fn fail_with(self, e: &mysql_async::Error) {
-        let (error, cancelled) = failure(e);
+    fn fail_with(self, env: &Env, e: &mysql_async::Error) {
+        let (error, cancelled) = run_failure(env, e);
         self.failed.store(true, Ordering::SeqCst);
         let _ = self.events.send(DbEvent::Failed { id: self.id, error, cancelled });
     }
@@ -396,6 +401,18 @@ fn failure(e: &mysql_async::Error) -> (DbError, bool) {
     match e {
         mysql_async::Error::Server(s) if s.code == INTERRUPTED => (DbError::Cancelled, true),
         e => (my_error(e), false),
+    }
+}
+
+/// [`failure`] of a statement of the run going on: a definer that "does not exist" once the
+/// user asked to cancel this run (or the server took its `KILL QUERY`, whose answer may come
+/// after the statement's) is the kill landing in the definer's lookup ([`NO_SUCH_USER`]), a
+/// cancel. Otherwise it is the server's error as it is.
+fn run_failure(env: &Env, e: &mysql_async::Error) -> (DbError, bool) {
+    let killed = env.asked.asked() || matches!(*env.killer.watch().borrow(), crate::session::Kill::Taken(_));
+    match e {
+        mysql_async::Error::Server(s) if s.code == NO_SUCH_USER && killed => (DbError::Cancelled, true),
+        e => failure(e),
     }
 }
 
@@ -1213,8 +1230,8 @@ async fn failed<'a>(
         reply.fail_with(e);
         return Err(Halted { stop: Stop::Lost(error), reply: None });
     }
-    reply.fail_with(e);
-    let cancelled = failure(e).1;
+    let (error, cancelled) = run_failure(env, e);
+    reply.fail(error, cancelled);
     // Without autocommit the failed statement may have opened a transaction: asked too.
     let ask = was_open || cancelled || !s.tx.autocommit;
     if let Some(error) = halt!(after(conn, link, env, s, "", implicit_commit, ask, false).await, None) {
@@ -1664,7 +1681,7 @@ async fn held_ended<'a>(
     let id = paged.id;
     let ok = held.failed.is_none() && !held.stopped;
     if let Some(e) = &held.failed {
-        paged.fail_with(e);
+        paged.fail_with(env, e);
         if e.is_fatal() {
             return Err(Halted { stop: Stop::Lost(my_error(e)), reply: None });
         }

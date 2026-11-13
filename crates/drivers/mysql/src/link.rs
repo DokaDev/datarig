@@ -120,12 +120,11 @@ impl Link {
     }
 
     /// The next command while a result is still coming: the stream is not watched (its bytes
-    /// are the result's; a connection that ends shows when the result is read on).
+    /// are the result's; a connection that ends shows when the result is read on). A connection
+    /// that runs nothing more ([`Link::taint`]) is not lost here: the rest of the result is still
+    /// the run's, to be read as the app asks for it, and nothing new can reach the server
+    /// meanwhile. The session is lost once the result ended ([`Link::next`]).
     pub(crate) async fn next_command(&mut self) -> Next {
-        if let Some(why) = self.tainted.take() {
-            self.wire.cut();
-            return Next::Lost(why);
-        }
         if let Some(c) = self.queued.pop_front() {
             return Next::Command(c);
         }
@@ -162,7 +161,8 @@ impl Link {
     /// The connection is to run nothing more, for `why`: what the server still sends of the
     /// statement's answer is read, and the connection is cut at the next request (any request
     /// written cuts it instead of reaching the server, [`Wire::seal`]); the session is lost at
-    /// its next command ([`Link::next`], [`Link::next_command`]) with that reason, whatever else
+    /// its next command once that answer ended ([`Link::next`]; a held result is still paged
+    /// to its end as the app asks, [`Link::next_command`]) with that reason, whatever else
     /// failed meanwhile ([`Link::lost_as`]). A connection cut already runs nothing either: it is
     /// lost for why it was cut.
     pub(crate) fn taint(&mut self, why: DbError) {

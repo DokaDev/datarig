@@ -1003,6 +1003,141 @@ async fn a_result_answered_while_its_kill_hangs_is_read_to_its_end_then_the_sess
     kills.abort();
 }
 
+/// A held result (one row a page) whose first page comes while a kill sent again for it never
+/// gets its answer: the app asks for the next pages and gets every row and the result's end;
+/// no request follows it on the connection, and the session is lost only after the last page,
+/// saying that the kill was sent and not answered.
+#[tokio::test(start_paused = true)]
+async fn a_held_result_answered_while_its_kill_hangs_is_paged_to_its_end_then_the_session_is_lost() {
+    held_while_its_kill_hangs(false).await;
+}
+
+/// The same held result, closed by the app after its first page: it is stopped without a
+/// request on the connection, and the session is lost, saying that the kill was sent and not
+/// answered.
+#[tokio::test(start_paused = true)]
+async fn a_held_result_closed_while_its_kill_hangs_sends_nothing_then_the_session_is_lost() {
+    held_while_its_kill_hangs(true).await;
+}
+
+/// A held result whose first page comes while a kill sent again for it never gets its answer,
+/// then paged to its end (`close`: closed after its first page instead).
+async fn held_while_its_kill_hangs(close: bool) {
+    use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
+    // The kill's server: the kill sent again is read, and never answered.
+    let (kill_client, mut kill_server) = tokio::io::duplex(1 << 16);
+    let dialed = Arc::new(tokio::sync::Notify::new());
+    let cfg = mysql("127.0.0.1");
+    let dialer = OneStreamSaid(std::sync::Mutex::new(Some(kill_client)), dialed.clone());
+    let route = Route::new(&cfg.host, 3306, Some(DialerRef(Arc::new(dialer))));
+    let opts = Target::of(&cfg).unwrap().opts(None, "datarig-q-test", &route);
+    let killer = Killer::new(route, opts.clone(), 7);
+    let written = Arc::new(tokio::sync::Notify::new());
+    let kills = tokio::spawn({
+        let written = written.clone();
+        async move {
+            dialed.notified().await;
+            greet(&mut kill_server).await;
+            logged_in(&mut kill_server).await;
+            let kill = read_packet(&mut kill_server).await;
+            written.notify_one();
+            tokio::time::sleep(KILL_TIMEOUT * 3).await;
+            kill
+        }
+    });
+    // The session's own connection.
+    let (client, mut server) = tokio::io::duplex(1 << 16);
+    let (wire, stream) = Wire::new(Box::new(client));
+    let login = tokio::spawn(Conn::connect_with_stream(opts, Box::new(stream)));
+    greet(&mut server).await;
+    logged_in(&mut server).await;
+    let conn = login.await.unwrap().unwrap();
+    let (commands, rx) = tokio::sync::mpsc::unbounded_channel();
+    let (events, mut got) = tokio::sync::mpsc::unbounded_channel();
+    let session = tokio::spawn(crate::query::query_loop(
+        conn,
+        crate::link::Link::new(rx, wire),
+        killer.clone(),
+        Arc::new(datarig_core::driver::CancelMark::default()),
+        Arc::new(AtomicBool::new(false)),
+        events,
+        crate::query::Settings { page_size: 1, read_only: false },
+        MYSQL_84,
+        Tracked::default(),
+        None,
+    ));
+    let select = "SELECT v FROM shop.zz_rows";
+    commands
+        .send(DbCommand::Execute {
+            max_rows: None,
+            id: 1,
+            statements: vec![select.into()],
+            paging: PagingMode::Hold,
+            tx: TxRule::Auto,
+        })
+        .unwrap();
+    let sent = read_packet(&mut server).await.expect("the statement");
+    assert_eq!(&sent[1..], select.as_bytes());
+    // The server refused the user's cancel (the statement runs as another account); the
+    // session sends it again, and the statement answers once that kill is on its way.
+    killer.record(Kill::Failed(KillFailure::Refused(KILL_DENIED)), || true);
+    tokio::time::timeout(std::time::Duration::from_secs(30), written.notified()).await.expect("the kill sent again");
+    // Its head and the first page's rows come first; the rest once the first page was shown.
+    let values = ["a", "b", "c", "d"];
+    let mut packets = vec![vec![1], column("v")];
+    for v in values {
+        packets.push(vec![1, v.as_bytes()[0]]);
+    }
+    // The result set's end (`OK` in place of `EOF`), no more results.
+    packets.push(vec![0xfe, 0, 0, 0x02, 0, 0, 0]);
+    let mut answer = packets.iter().zip(1u8..).map(|(p, seq)| packet(seq, p));
+    let head: Vec<u8> = answer.by_ref().take(4).flatten().collect();
+    let tail: Vec<u8> = answer.flatten().collect();
+    server.write_all(&head).await.unwrap();
+    let mut evs = events_until(&mut got, |e| matches!(e, DbEvent::Page { .. } | DbEvent::Lost { .. })).await;
+    // (A session that cut its connection reads none of it.)
+    let _ = server.write_all(&tail).await;
+    if close {
+        let _ = commands.send(DbCommand::ClosePortal { id: 1 });
+    }
+    // The app asks for each next page once the last one came, until the result ended.
+    while let Some(DbEvent::Page { more: true, .. }) = evs.last().filter(|_| !close) {
+        let _ = commands.send(DbCommand::FetchMore { id: 1 });
+        evs.extend(events_until(&mut got, |e| matches!(e, DbEvent::Page { .. } | DbEvent::Lost { .. })).await);
+    }
+    // No request follows the statement: the connection is closed instead.
+    let after = tokio::time::timeout(KILL_TIMEOUT * 2, async {
+        let mut buf = [0u8; 64];
+        server.read(&mut buf).await.map(|n| buf[..n].to_vec())
+    })
+    .await
+    .expect("the connection ends");
+    assert!(after.as_ref().is_ok_and(Vec::is_empty) || after.is_err(), "nothing sent after the statement: {after:?}");
+    tokio::time::timeout(std::time::Duration::from_secs(5), session).await.expect("the session ends").unwrap();
+    evs.extend(std::iter::from_fn(|| got.try_recv().ok()));
+    let pages: Vec<(Vec<Vec<Option<String>>>, bool)> = evs
+        .iter()
+        .filter_map(|e| match e {
+            DbEvent::Page { id: 1, rows, more, .. } => Some((rows.clone(), *more)),
+            _ => None,
+        })
+        .collect();
+    let rows: Vec<Vec<Option<String>>> = pages.iter().flat_map(|p| p.0.clone()).collect();
+    let shown = if close { &values[..1] } else { &values[..] };
+    let want: Vec<Vec<Option<String>>> = shown.iter().map(|v| vec![Some(v.to_string())]).collect();
+    assert_eq!(rows, want, "every row, in its pages: {evs:?}");
+    assert!(close || pages.last().is_some_and(|p| !p.1), "the result ended: {evs:?}");
+    assert!(!evs.iter().any(|e| matches!(e, DbEvent::Failed { .. })), "{evs:?}");
+    let last_page = evs.iter().rposition(|e| matches!(e, DbEvent::Page { .. })).unwrap();
+    let lost = evs.iter().position(|e| matches!(e, DbEvent::Lost { .. }));
+    assert!(lost.is_some_and(|l| l > last_page), "lost only after the last page: {evs:?}");
+    match evs.last() {
+        Some(DbEvent::Lost { error: DbError::CancelNotTaken(CancelFailure::StopPending(KILL_TIMEOUT)) }) => {}
+        other => panic!("{other:?}"),
+    }
+    kills.abort();
+}
+
 /// A kill written to the server that never gets its answer was sent: it is not one that could
 /// not reach the server (it may still be carried out), and is said so.
 #[tokio::test]
@@ -1887,4 +2022,41 @@ fn the_monitor_session_only_reads_waits_a_second_and_reads_whole_lists_in_system
         "{sql}"
     );
     assert!(!sql.contains("innodb_lock_wait_timeout"), "{sql}");
+}
+
+/// A cancel that lands while the server looks up the definer of a `SQL SECURITY DEFINER`
+/// routine ends the statement with error 1449 (the definer "does not exist") instead of 1317:
+/// the run ends as cancelled. Without a cancel, 1449 is the server's error as it is.
+#[tokio::test(start_paused = true)]
+async fn a_definer_lookup_stopped_by_a_cancel_ends_as_cancelled() {
+    use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
+    let missing = err_packet(1449, "HY000", "The user specified as a definer ('gone'@'%') does not exist");
+    for cancel in [true, false] {
+        let Faked { mut server, asked, commands, mut events, session, kills, .. } = faked().await;
+        commands
+            .send(DbCommand::Execute {
+                max_rows: None,
+                id: 1,
+                statements: vec!["SELECT shop.definer_fn()".into()],
+                paging: PagingMode::NoHold,
+                tx: TxRule::Auto,
+            })
+            .unwrap();
+        read_packet(&mut server).await.expect("the statement");
+        if cancel {
+            asked.ask(1);
+        }
+        server.write_all(&missing).await.unwrap();
+        let evs = events_until(&mut events, |e| matches!(e, DbEvent::Failed { .. })).await;
+        match (cancel, evs.last()) {
+            (true, Some(DbEvent::Failed { id: 1, error: DbError::Cancelled, cancelled: true })) => {}
+            (false, Some(DbEvent::Failed { id: 1, error: DbError::Server(m), cancelled: false }))
+                if m.contains("1449") => {}
+            other => panic!("{other:?}"),
+        }
+        drop(commands);
+        drop(server);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), session).await;
+        kills.abort();
+    }
 }
