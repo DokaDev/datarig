@@ -628,8 +628,9 @@ pub(super) struct PendingEnd {
     pub commit: bool,
     /// A commit where some of the transactions failed (those are rolled back).
     pub mixed: bool,
-    /// The tabs still to end, in order.
-    pub tabs: VecDeque<TabId>,
+    /// The tabs still to end, in order, each with whether it is committed (a commit rolls back
+    /// the ones the question said had failed: decided when it was answered).
+    pub tabs: VecDeque<(TabId, bool)>,
     /// The tab whose end the server is asked for now.
     pub current: Option<TabId>,
     /// How many tabs it ends in all, and how many were asked for so far.
@@ -681,13 +682,14 @@ impl App {
             return;
         }
         // A failed transaction can only be rolled back; the others may still be committed.
-        let failed: Vec<String> = self
+        let failed_tabs: Vec<(usize, TabId)> = self
             .tabs
             .iter()
             .enumerate()
             .filter(|(_, t)| at_risk.contains(&t.id) && t.exec.tx_aborted)
-            .map(|(i, _)| (i + 1).to_string())
+            .map(|(i, t)| (i + 1, t.id))
             .collect();
+        let failed: Vec<String> = failed_tabs.iter().map(|(n, _)| n.to_string()).collect();
         let commit = failed.len() < at_risk.len();
         let several =
             matches!(action, ConfirmAction::Quit | ConfirmAction::Disconnect { .. } | ConfirmAction::DeleteProfile(_));
@@ -705,7 +707,8 @@ impl App {
         let n = at_risk.len() as u64;
         let ends = at_risk.iter().filter_map(|id| self.tabs.get(*id).map(|t| (*id, t.exec.tx_epoch))).collect();
         if let Some(c) = self.overlays.confirm_mut() {
-            c.tx = Some(super::overlay::TxChoices { commit, ends });
+            let failed_ids = failed_tabs.iter().map(|(_, id)| *id).collect();
+            c.tx = Some(super::overlay::TxChoices { commit, failed: failed_ids, ends });
             // Several tabs' transactions: said so.
             if action == ConfirmAction::Quit && n > 1 {
                 c.text = Msg::QuitTxTabs { count: n };
@@ -735,6 +738,7 @@ impl App {
     pub(super) fn tx_choice(&mut self, commit: bool) {
         let Some(action) = self.overlays.confirm().map(|c| c.action) else { return };
         let ends = self.overlays.confirm().and_then(|c| c.tx.as_ref()).map(|x| x.ends.clone()).unwrap_or_default();
+        let failed = self.overlays.confirm().and_then(|c| c.tx.as_ref()).map(|x| x.failed.clone()).unwrap_or_default();
         self.overlays.close(OverlayKind::Confirm);
         if self.pending_end.is_some() {
             return self.flash(Notice::new(Label::TxEndBusy, Level::Warning));
@@ -759,13 +763,16 @@ impl App {
             self.status = Some(Notice::new(Msg::TxEndGone { tab }, Level::Warning));
             return;
         }
-        let tabs: VecDeque<TabId> = self
+        // A tab the question said had failed is rolled back, whatever it says now; a tab that
+        // failed since is asked to commit as answered, and stops it all (it rolls back instead).
+        let tabs: VecDeque<(TabId, bool)> = self
             .ended_by(action)
             .into_iter()
             .filter(|id| self.tabs.get(*id).is_some_and(|t| t.exec.user_tx()))
+            .map(|id| (id, commit && !failed.contains(&id)))
             .collect();
         let total = tabs.len();
-        let mixed = commit && tabs.iter().any(|id| self.tabs.get(*id).is_some_and(|t| t.exec.tx_aborted));
+        let mixed = commit && tabs.iter().any(|(_, c)| !c);
         self.pending_end = Some(PendingEnd { action, commit, mixed, tabs, current: None, total, asked: 0 });
         self.end_next();
     }
@@ -775,7 +782,7 @@ impl App {
     /// (started meanwhile): then the question is asked again, as it is now.
     fn end_next(&mut self) {
         let Some(p) = self.pending_end.as_mut() else { return };
-        let Some(id) = p.tabs.pop_front() else {
+        let Some((id, commit)) = p.tabs.pop_front() else {
             let Some(p) = self.pending_end.take() else { return };
             let tabs = self.ended_by(p.action);
             let changed =
@@ -786,9 +793,6 @@ impl App {
             // Whatever ends the sessions now: nothing open is lost.
             return self.confirmed(p.action, None, None);
         };
-        // A failed transaction cannot commit: it is rolled back.
-        let commit = p.commit && !self.tabs.get(id).is_some_and(|t| t.exec.tx_aborted);
-        let Some(p) = self.pending_end.as_mut() else { return };
         p.current = Some(id);
         p.asked += 1;
         if !self.tabs.get(id).is_some_and(|t| t.exec.user_tx()) {
@@ -855,7 +859,7 @@ impl App {
     /// stops, and says so.
     pub(super) fn end_tab_gone(&mut self, id: TabId) {
         let Some(p) = self.pending_end.as_ref() else { return };
-        if p.current == Some(id) || p.tabs.contains(&id) {
+        if p.current == Some(id) || p.tabs.iter().any(|(t, _)| *t == id) {
             self.pending_end = None;
             self.flash(Notice::new(Label::TxEndTabGone, Level::Warning));
         }

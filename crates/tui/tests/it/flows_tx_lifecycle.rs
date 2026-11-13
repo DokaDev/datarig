@@ -280,6 +280,21 @@ fn quitting_commits_the_healthy_transactions_and_rolls_back_the_failed_ones() {
     ended(&mut h, 1, second[0].0, TxOutcome::RolledBack);
     assert!(h.app.quit, "quit once both ended");
 
+    // The failed one recovers (a `ROLLBACK TO SAVEPOINT`) while the first commits: it is still
+    // rolled back, as the question said.
+    let mut h = connected();
+    write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3);
+    h.ctrl('t');
+    write(&mut h, "DELETE FROM shop.orders WHERE id = 9", 1);
+    h.tab_db(1, DbEvent::TxAborted(true));
+    h.command("qa");
+    h.keys("c");
+    let first = ends(&mut h);
+    h.tab_db(1, DbEvent::TxAborted(false));
+    ended(&mut h, 0, first[0].0, TxOutcome::Committed);
+    let second = ends(&mut h);
+    assert!(!second[0].1, "rolled back as the question said");
+
     // The rollback of the failed one fails: stopped there, said as a mixed end.
     let mut h = connected();
     write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3);
