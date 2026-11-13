@@ -134,6 +134,30 @@ fn defaults_are_written_as_sql() {
         def(Some("current_timestamp()"), "timestamp", "on update current_timestamp()", true, my).as_deref(),
         Some("current_timestamp() ON UPDATE current_timestamp()")
     );
+    // MariaDB lists the next word after a comma: it is not part of the timestamp.
+    assert_eq!(
+        def(Some("current_timestamp(3)"), "timestamp", "on update current_timestamp(3), INVISIBLE", true, my)
+            .as_deref(),
+        Some("current_timestamp(3) ON UPDATE current_timestamp(3)")
+    );
+}
+
+/// MariaDB separates a column's attributes with a comma: a generated column that is also
+/// invisible (a system-versioned table's `ROW START`, too) is still read as generated.
+#[test]
+fn mariadb_attributes_after_a_comma_are_read() {
+    let raw = |extra: &str| {
+        serde_json::from_value::<super::RawColumn>(serde_json::json!({
+            "position": 1, "name": "g", "type": "int(11)", "data_type": "int", "nullable": "YES",
+            "default": null, "extra": extra, "generation": "`a` + 1",
+        }))
+        .unwrap()
+    };
+    let my = Dialect::MySql(MY);
+    let fill = |extra: &str| super::column(raw(extra), true, my).fill;
+    assert_eq!(fill("VIRTUAL GENERATED, INVISIBLE"), ColumnFill::Virtual("`a` + 1".into()));
+    assert_eq!(fill("STORED GENERATED, INVISIBLE"), ColumnFill::Stored("`a` + 1".into()));
+    assert_eq!(fill("VIRTUAL GENERATED"), ColumnFill::Virtual("`a` + 1".into()));
 }
 
 #[test]
