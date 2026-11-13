@@ -74,6 +74,11 @@ make only `zz_`-named tables, databases and accounts, and drop them.
 | `DATARIG_TEST_MYSQL_SSLMODE` | the TLS mode of the MySQL suite's profiles (default `DISABLED`; CI runs it again with `PREFERRED`) |
 | `DATARIG_REQUIRE_PG`, `DATARIG_REQUIRE_POOLER`, `DATARIG_REQUIRE_SSH`, `DATARIG_REQUIRE_MYSQL`, `DATARIG_REQUIRE_TLS` | `1` makes a missing service a failure instead of a skip |
 
+The MySQL tests run against MariaDB too: point `DATARIG_TEST_MYSQL_URL` and
+`DATARIG_TEST_MYSQL_ADMIN_URL` at port 53316 and set `DATARIG_TEST_MYSQL_CLIENT` to
+`docker exec -i datarig-mariadb mariadb -udatarig -pdatarig shop`. Tests that need what MariaDB
+does not offer check its refusal instead and say so with a `MARIADB` line.
+
 ## TLS servers
 
 Scratch servers for the TLS tests, never the services above or their volumes: PostgreSQL 17 on

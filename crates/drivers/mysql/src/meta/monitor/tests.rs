@@ -119,6 +119,45 @@ fn a_tick_reads_what_is_wanted_in_order() {
     assert_eq!(super::limit(Duration::ZERO), "SET SESSION max_execution_time = 1");
 }
 
+/// Whether the server is MariaDB, from its own version line. The monitor reads no MariaDB: on
+/// one, only the probe's statements are sent, each still gives its decoder's columns, and the
+/// probe's answers are refused as a server the monitor does not read. Says so on stderr.
+async fn refused_as_mariadb(conn: &mut mysql_async::Conn, test: &str) -> bool {
+    use mysql_async::prelude::Queryable;
+    use std::io::Write;
+    let line: String = conn.query_first("SELECT VERSION()").await.expect("version").expect("a row");
+    if !line.contains("MariaDB") {
+        return false;
+    }
+    let shapes: [&[&str]; 6] = [PROBE, NAME_VALUE, &["PRIVILEGE_TYPE"], &["trx_id"], PROBE_LOCKS, PROBE_STATEMENTS];
+    let mut answers = Vec::new();
+    for (sql, shape) in probe().into_iter().zip(shapes) {
+        let result = conn.query_iter(sql.as_str()).await.unwrap_or_else(|e| panic!("probe {sql}: {e}"));
+        let columns: Vec<String> = result.columns_ref().iter().map(|c| c.name_str().into_owned()).collect();
+        let rows: Vec<mysql_async::Row> = result.collect_and_drop().await.expect("the probe's rows");
+        assert_eq!(columns, shape, "probe {sql}");
+        let cell = |v: mysql_async::Value| match v {
+            mysql_async::Value::NULL => None,
+            mysql_async::Value::Bytes(b) => Some(String::from_utf8_lossy(&b).into_owned()),
+            other => Some(other.as_sql(false)),
+        };
+        answers.push(datarig_core::monitor::decode::Answer::Rows(
+            rows.into_iter().map(|r| r.unwrap().into_iter().map(cell).collect()).collect(),
+        ));
+    }
+    let decoded = datarig_core::monitor::decode::mysql::probe(&answers);
+    assert!(
+        matches!(&decoded, Err(datarig_core::monitor::decode::DecodeError::Unsupported(l)) if l.contains("MariaDB")),
+        "{decoded:?}"
+    );
+    // Written to the real stderr handle so it is visible even with output capture.
+    let _ = writeln!(
+        std::io::stderr(),
+        "MARIADB {test}: no monitor statement past the probe, the monitor does not read MariaDB"
+    );
+    true
+}
+
 /// Each statement of every variant gives exactly the columns its decoder reads, in order, on
 /// the real server (`DATARIG_TEST_MYSQL_ADMIN_URL`, an account that may read them all). They
 /// only read; the older versions' statements read tables the newer servers still have.
@@ -137,6 +176,10 @@ async fn every_statement_gives_its_decoders_columns() {
     let opts =
         mysql_async::OptsBuilder::from_opts(mysql_async::Opts::from_url(&url).expect("a URL")).prefer_socket(false);
     let mut conn = mysql_async::Conn::new(opts).await.expect("connect");
+    if refused_as_mariadb(&mut conn, "every_statement_gives_its_decoders_columns").await {
+        let _ = conn.disconnect().await;
+        return;
+    }
     for (variant, m) in variants() {
         for (name, sql, shape) in every(&m) {
             let result = conn.query_iter(sql.as_str()).await.unwrap_or_else(|e| panic!("{variant} {name}: {e}"));
@@ -293,6 +336,10 @@ async fn every_replication_statement_gives_its_decoders_columns() {
     let opts =
         mysql_async::OptsBuilder::from_opts(mysql_async::Opts::from_url(&url).expect("a URL")).prefer_socket(false);
     let mut conn = mysql_async::Conn::new(opts).await.expect("connect");
+    if refused_as_mariadb(&mut conn, "every_replication_statement_gives_its_decoders_columns").await {
+        let _ = conn.disconnect().await;
+        return;
+    }
     let line: String = conn.query_first("SELECT VERSION()").await.expect("version").expect("a row");
     let mut parts = line.split(['.', '-']).map(|p| p.parse::<u32>().unwrap_or(0));
     let version = parts.next().unwrap_or(0) * 10000 + parts.next().unwrap_or(0) * 100 + parts.next().unwrap_or(0);

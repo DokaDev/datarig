@@ -24,6 +24,7 @@ use datarig_core::profile::ConnectionConfig;
 use datarig_driver_mysql::MyDriver;
 use mysql_async::prelude::Queryable;
 use std::io::Write;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
@@ -239,6 +240,58 @@ async fn side(url: &str) -> mysql_async::Conn {
     mysql_async::Conn::new(mysql_async::OptsBuilder::from_opts(opts).prefer_socket(false)).await.expect("side")
 }
 
+/// Whether the server is MariaDB, from its own version line (asked once per process).
+async fn mariadb(url: &str) -> bool {
+    static MARIADB: OnceLock<bool> = OnceLock::new();
+    if let Some(m) = MARIADB.get() {
+        return *m;
+    }
+    let mut c = side(url).await;
+    let line: String = c.query_first("SELECT VERSION()").await.unwrap().expect("a version");
+    let _ = c.disconnect().await;
+    *MARIADB.get_or_init(|| line.contains("MariaDB"))
+}
+
+/// A test of what MariaDB does not offer says so on stderr, with why.
+fn not_on_mariadb(test: &str, reason: &str) {
+    let _ = writeln!(std::io::stderr(), "MARIADB {test}: {reason}");
+}
+
+/// Why MariaDB has no monitor.
+const NO_MONITOR: &str = "no monitor is offered, it reads MySQL's own tables and statements";
+
+/// On MariaDB, which the monitor does not read: the monitor session says the server is not
+/// supported, and a tick and both actions sent anyway are refused unsent (the session they
+/// name goes on). Says so on stderr and gives true; false on MySQL.
+async fn refuses_monitor(url: &str, test: &str, read_only: bool) -> bool {
+    if !mariadb(url).await {
+        return false;
+    }
+    let tag = format!("monm{}", std::process::id());
+    let opts = ConnectOptions::new(500, SessionRole::Monitor, &tag).read_only(read_only);
+    let mut c = Conn::open_with(url, SessionRole::Monitor, opts).await;
+    match c.wait(|e| matches!(e, DbEvent::Monitor(_)), 20).await {
+        DbEvent::Monitor(Err(DbError::VersionUnsupported { server, .. })) => {
+            assert!(server.contains("MariaDB"), "{server}");
+        }
+        other => panic!("probe: {other:?}"),
+    }
+    let tick = c.tick(TICK).await;
+    assert!(matches!(tick, Err(DbError::NotSupported)), "{tick:?}");
+    let mut other = side(url).await;
+    let id: i64 = other.query_first("SELECT CONNECTION_ID()").await.unwrap().expect("an id");
+    let target = ActionTarget { key: SessionKey { id, started: None }, user: None, thread: None, stamp: None };
+    for kind in [ActionKind::Cancel, ActionKind::Terminate] {
+        let outcome = c.act(kind, &target).await;
+        assert!(matches!(outcome, ActionOutcome::Failed(DbError::NotSupported)), "{kind:?}: {outcome:?}");
+    }
+    let alive: Option<i64> = other.query_first("SELECT 1").await.expect("the named session goes on");
+    assert_eq!(alive, Some(1));
+    let _ = other.disconnect().await;
+    not_on_mariadb(test, NO_MONITOR);
+    true
+}
+
 /// The connection id of the one session whose `program_name` is `program`.
 async fn id_of(admin: &mut mysql_async::Conn, program: &str) -> i64 {
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -295,6 +348,9 @@ fn row(snapshot: &Snapshot, id: i64) -> &SessionRow {
 async fn sessions_show_row_and_metadata_lock_waits() {
     let test = "sessions_show_row_and_metadata_lock_waits";
     let Some((url, admin_url)) = urls(test) else { return };
+    if refuses_monitor(&url, "sessions_show_row_and_metadata_lock_waits", false).await {
+        return;
+    }
     let pid = std::process::id();
     let table = format!("zz_it_mon_{pid}");
     let myisam = format!("zz_it_mon_m_{pid}");
@@ -395,6 +451,9 @@ async fn sessions_show_row_and_metadata_lock_waits() {
 async fn what_an_account_cannot_see_names_the_privilege() {
     let test = "what_an_account_cannot_see_names_the_privilege";
     let Some((url, admin_url)) = urls(test) else { return };
+    if refuses_monitor(&url, "what_an_account_cannot_see_names_the_privilege", false).await {
+        return;
+    }
     let pid = std::process::id();
     let user = format!("zz_mon_{pid}");
     let password = format!("zz-{pid}");
@@ -453,6 +512,9 @@ async fn what_an_account_cannot_see_names_the_privilege() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_statements_whole_text_is_read_only_while_it_runs() {
     let Some((url, _)) = urls("a_statements_whole_text_is_read_only_while_it_runs") else { return };
+    if refuses_monitor(&url, "a_statements_whole_text_is_read_only_while_it_runs", false).await {
+        return;
+    }
     let pid = std::process::id();
     let tag = format!("mont{pid}");
     let mut runner = Conn::open(&url, SessionRole::Query, &format!("{tag}r")).await;
@@ -510,6 +572,9 @@ async fn a_statements_whole_text_is_read_only_while_it_runs() {
 #[tokio::test(flavor = "multi_thread")]
 async fn only_the_monitor_session_reads_ticks() {
     let Some((url, _)) = urls("only_the_monitor_session_reads_ticks") else { return };
+    if refuses_monitor(&url, "only_the_monitor_session_reads_ticks", false).await {
+        return;
+    }
     let pid = std::process::id();
     let (mut monitor, _) = Conn::monitor(&url, &format!("monx{pid}")).await;
     let id = monitor.send("SELECT 1");
@@ -536,6 +601,9 @@ async fn only_the_monitor_session_reads_ticks() {
 async fn statements_by_type_leave_out_our_own_selects() {
     let test = "statements_by_type_leave_out_our_own_selects";
     let Some((url, admin_url)) = urls(test) else { return };
+    if refuses_monitor(&url, "statements_by_type_leave_out_our_own_selects", false).await {
+        return;
+    }
     let pid = std::process::id();
     let table = format!("zz_it_mon_t_{pid}");
     let _drop = Cleanup { url: url.clone(), sql: format!("DROP TABLE IF EXISTS {table}, {table}_b") };
@@ -603,6 +671,9 @@ async fn sleep_table(url: &str, table: &str) {
 async fn kill_query_stops_only_the_statement_the_row_showed() {
     let test = "kill_query_stops_only_the_statement_the_row_showed";
     let Some((url, admin_url)) = urls(test) else { return };
+    if refuses_monitor(&url, "kill_query_stops_only_the_statement_the_row_showed", false).await {
+        return;
+    }
     let pid = std::process::id();
     let table = format!("zz_it_mon_k_{pid}");
     let _drop = Cleanup { url: url.clone(), sql: format!("DROP TABLE IF EXISTS {table}") };
@@ -655,6 +726,9 @@ async fn kill_query_stops_only_the_statement_the_row_showed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn kill_is_confirmed_when_the_session_is_gone() {
     let Some((url, admin_url)) = urls("kill_is_confirmed_when_the_session_is_gone") else { return };
+    if refuses_monitor(&url, "kill_is_confirmed_when_the_session_is_gone", false).await {
+        return;
+    }
     let tag = format!("monkt{}", std::process::id());
     let mut victim = Conn::open(&url, SessionRole::Query, &format!("{tag}v")).await;
     victim.run("SELECT 1").await;
@@ -685,6 +759,9 @@ async fn kill_is_confirmed_when_the_session_is_gone() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_read_only_profile_sends_no_action() {
     let Some((url, admin_url)) = urls("a_read_only_profile_sends_no_action") else { return };
+    if refuses_monitor(&url, "a_read_only_profile_sends_no_action", true).await {
+        return;
+    }
     let pid = std::process::id();
     let table = format!("zz_it_mon_r_{pid}");
     let _drop = Cleanup { url: url.clone(), sql: format!("DROP TABLE IF EXISTS {table}") };
@@ -721,6 +798,9 @@ async fn a_read_only_profile_sends_no_action() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_refusal_names_what_would_allow_it() {
     let Some((url, admin_url)) = urls("a_refusal_names_what_would_allow_it") else { return };
+    if refuses_monitor(&url, "a_refusal_names_what_would_allow_it", false).await {
+        return;
+    }
     let pid = std::process::id();
     let (plain, admin_user) = (format!("zz_mon_act_{pid}"), format!("zz_mon_a_{pid}"));
     let password = format!("zz-{pid}");

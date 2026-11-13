@@ -16,6 +16,7 @@ use datarig_core::sql::dialect::Dialect;
 use datarig_driver_mysql::MyDriver;
 use mysql_async::prelude::Queryable;
 use std::io::Write;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{Receiver, UnboundedReceiver, unbounded_channel};
 
@@ -53,6 +54,23 @@ async fn side(url: &str) -> mysql_async::Conn {
     let opts = mysql_async::Opts::from_url(url).expect("a mysql:// URL");
     let opts = mysql_async::OptsBuilder::from_opts(opts).prefer_socket(false);
     mysql_async::Conn::new(opts).await.expect("the side connection opens")
+}
+
+/// Whether the server is MariaDB, from its own version line (asked once per process).
+async fn mariadb(url: &str) -> bool {
+    static MARIADB: OnceLock<bool> = OnceLock::new();
+    if let Some(m) = MARIADB.get() {
+        return *m;
+    }
+    let mut c = side(url).await;
+    let line: String = c.query_first("SELECT VERSION()").await.unwrap().expect("a version");
+    let _ = c.disconnect().await;
+    *MARIADB.get_or_init(|| line.contains("MariaDB"))
+}
+
+/// What MariaDB does otherwise, said on stderr with why.
+fn on_mariadb(test: &str, reason: &str) {
+    let _ = writeln!(std::io::stderr(), "MARIADB {test}: {reason}");
 }
 
 /// `shop.zz_it_export_<name>_<pid>`, made on a side connection, dropped with the guard.
@@ -201,13 +219,16 @@ async fn drain(rx: &mut Receiver<ExportBatch>) -> (Vec<ColumnMeta>, Vec<Vec<Cell
     (cols, rows, largest)
 }
 
-/// The metadata locks other sessions hold on `table` (by name, in `shop`).
+/// The metadata locks other client sessions hold on `table` (by name, in `shop`). Only client
+/// sessions count: a server's own background threads take short locks of their own on a table
+/// just written (MariaDB's InnoDB does, right after the rows the tests insert).
 async fn metadata_locks(admin: &str, table: &str) -> u64 {
     let mut a = side(admin).await;
     let n: Option<u64> = a
         .exec_first(
             "SELECT COUNT(*) FROM performance_schema.metadata_locks WHERE OBJECT_SCHEMA = 'shop' AND OBJECT_NAME = ? \
-             AND OWNER_THREAD_ID <> PS_CURRENT_THREAD_ID()",
+             AND OWNER_THREAD_ID IN (SELECT THREAD_ID FROM performance_schema.threads \
+             WHERE TYPE = 'FOREGROUND' AND PROCESSLIST_ID <> CONNECTION_ID())",
             (table,),
         )
         .await
@@ -493,17 +514,28 @@ async fn an_export_keeps_to_the_manual_transaction_and_never_chains_its_own() {
 }
 
 /// The InnoDB locks session `id` (its connection id) holds or waits for on `table` in `shop`.
+/// MariaDB lists only the locks of a wait: there, the rows its transaction locks (the tests'
+/// sessions touch no other table), read past the 100 ms its transaction list is kept for.
 async fn data_locks(admin: &str, id: u64, table: &str) -> u64 {
     let mut a = side(admin).await;
-    let n: Option<u64> = a
-        .exec_first(
+    let n: Option<u64> = if mariadb(admin).await {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        a.exec_first(
+            "SELECT IFNULL(SUM(trx_rows_locked), 0) FROM information_schema.INNODB_TRX WHERE trx_mysql_thread_id = ?",
+            (id,),
+        )
+        .await
+        .unwrap()
+    } else {
+        a.exec_first(
             "SELECT COUNT(*) FROM performance_schema.data_locks l JOIN performance_schema.threads t \
              ON t.THREAD_ID = l.THREAD_ID WHERE t.PROCESSLIST_ID = ? AND l.OBJECT_SCHEMA = 'shop' \
              AND l.OBJECT_NAME = ?",
             (id, table),
         )
         .await
-        .unwrap();
+        .unwrap()
+    };
     a.disconnect().await.unwrap();
     n.unwrap_or(0)
 }
@@ -691,7 +723,16 @@ async fn the_next_transactions_own_settings_are_never_used_up() {
             assert!(drain(&mut rx).await.1.is_empty());
             assert_eq!(c.exported(export).await.0, Err(DbError::NextTransactionSet), "{set} {guard:?}");
         }
-        assert!(next_reads_lock(&mut c).await > 0, "{set}: the next transaction is SERIALIZABLE");
+        if set.starts_with("/*!80000") && mariadb(&admin).await {
+            // MariaDB skips MySQL's version comments: the refusals above are the app's caution.
+            on_mariadb(
+                "the_next_transactions_own_settings_are_never_used_up",
+                "the server skips /*!80000 */, so that spelling leaves the next transaction as it was",
+            );
+            assert_eq!(next_reads_lock(&mut c).await, 0, "{set}: skipped by the server");
+        } else {
+            assert!(next_reads_lock(&mut c).await > 0, "{set}: the next transaction is SERIALIZABLE");
+        }
         // Used up by that transaction: the app's reads go on, the transaction after it is at the
         // session's level.
         assert_eq!(counted(&mut c, &count).await, Ok(10), "{set}");
