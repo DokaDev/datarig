@@ -14,7 +14,11 @@ impl App {
         let now = self.now();
         self.tx_idle_tick(now);
         self.idle_tick(now);
+        // The query bar's keys leave with what they were for (another tab, the focus elsewhere,
+        // a field over the grid), whatever event moved it.
+        self.bar_settle();
         self.handle_event_here(ev);
+        self.bar_settle();
         self.tips_follow();
         self.sweep_cell_edit();
         self.sweep_as_plan();

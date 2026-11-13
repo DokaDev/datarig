@@ -312,6 +312,7 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
         draw_table_frame(app, grid_area, buf)
     } else {
         app.qbar.press.drawn(false, app.now());
+        app.qbar.drawn_for = None;
         draw_query_frame(app, grid_area, buf)
     };
     // Another view than the rows: no grid, so no cell of it is under the pointer (it would
@@ -389,7 +390,14 @@ fn draw_table_frame(app: &mut App, grid_area: Rect, buf: &mut Buffer) -> Rect {
         app.pointer.strip_hits.clear();
     }
     let now = app.now();
+    app.bar_settle();
     let model = (rinner.height > 2).then(|| app.bar_model()).flatten();
+    // Another tab's bar (or the same tab's with another result or view) arms anew.
+    let place = model.as_ref().and_then(|_| app.bar_place());
+    if place != app.qbar.drawn_for {
+        app.qbar.press = Default::default();
+    }
+    app.qbar.drawn_for = place;
     app.qbar.press.drawn(model.is_some() && !app.modal_open(), now);
     let Some(m) = model else {
         app.qbar.last.clear();

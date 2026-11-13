@@ -183,7 +183,8 @@ fn a_first_page_stops_at_a_limit_below_a_page() {
     assert_eq!(h.app.tab().exec.paging, Paging::None);
     let sent = h.sent();
     assert!(closed(&sent), "what the server holds past the cap is closed: {sent:?}");
-    assert!(h.screen(120, 30).contains("LIMIT 2 "), "{}", h.screen(120, 30));
+    // The query bar says the cap reached: the rows counted, the limit marked.
+    assert!(h.screen(120, 30).contains("2 rows \u{00b7} limit 2"), "{}", h.screen(120, 30));
     // Nothing is fetched past the cap.
     h.keys("n");
     assert_eq!(fetches(&h.sent()), 0);
@@ -226,7 +227,7 @@ fn later_pages_stop_at_a_limit_past_the_first() {
     let sent = h.sent();
     assert!(closed(&sent), "{sent:?}");
     assert_eq!(h.app.tab().exec.paging, Paging::None);
-    let said = format!("LIMIT {} ", size * 2 + 3);
+    let said = format!("limit {}", datarig_i18n::fmt_count(size as u64 * 2 + 3));
     assert!(h.screen(120, 30).contains(&said), "{}", h.screen(120, 30));
     h.keys("nn");
     assert_eq!(fetches(&h.sent()), 0, "nothing past the cap");

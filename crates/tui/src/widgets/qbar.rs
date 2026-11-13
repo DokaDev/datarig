@@ -5,13 +5,15 @@
 //! goes first, before `WHERE`.
 //!
 //! [`layout`] is pure: from a [`Bar`] (every text already in the user's language) and a width it
-//! picks the longest form that fits, narrowing in steps ([`LEVELS`]): `⋯ Advanced` becomes `⋯`,
+//! picks the richest form that fits, narrowing in steps ([`LEVELS`]): `⋯ Advanced` becomes `⋯`,
 //! the rows are said shorter, the order keys and the conditions after the first are counted
-//! (`+1`), `ORDER BY` becomes `ORDER`, the column count leaves (it stays while columns are
-//! hidden), the first condition is cut, the conditions are counted (`2 conditions`), the order
-//! too (`ORDER ↓2`), and at last only marks are left (`▼2 ↓2 L ◌1 ⋯`). Nothing applied ever
-//! leaves: a condition, an order, a limit, hidden columns and the state keep a mark in every
-//! form. [`draw`] draws the form picked and returns where each clickable part is.
+//! (`+1`), `ORDER BY` becomes `ORDER`, the first condition is cut, the conditions are counted
+//! (`2 conditions`), the rows keep only their arrows, the column count leaves (`6/7` stays
+//! while columns are hidden), the order is counted (`ORDER ↓2`), the rows go, and then a short form is left (`failed │ ▼2 + │ ↓2 │
+//! L500 │ 6/7 │ ‹ › ⋯`) that narrows in its own steps down to marks (`! ▼2 ↓2 L ◌1 ⋯`).
+//! Nothing applied ever leaves: a condition, an order, a limit, hidden columns and the state
+//! keep a mark in every form. [`draw`] draws the form picked and returns where each clickable
+//! part is.
 
 use crate::app::App;
 use crate::app::hover::PointerOn;
@@ -100,12 +102,13 @@ pub struct ColsM {
 }
 
 /// The `LIMIT` part: none (its word), a cap, or the field it is typed in (its cursor in
-/// columns from the start of the text).
+/// columns from the start of the text; `selected`: its text as it opened, which the first key
+/// typed replaces).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LimitM {
     None(String),
     Cap(u64),
-    Editing { text: String, cursor: usize },
+    Editing { text: String, cursor: usize, selected: bool },
 }
 
 /// The marks the bar draws, by the icons setting.
@@ -161,8 +164,10 @@ pub enum Tone {
     Spinner,
     /// A page arrow that does not work now.
     Dim,
-    /// The `LIMIT` field being typed in.
+    /// The `LIMIT` field being typed in, and its text while it is selected (the first key
+    /// typed replaces it).
     Field,
+    FieldSelected,
 }
 
 /// A piece of the bar: its text, its style, what a click on it does, the character of the
@@ -221,7 +226,8 @@ impl Line {
 pub struct Lv {
     /// `⋯ Advanced` → `⋯`.
     adv_short: bool,
-    /// The rows: 0 whole, 1 without the range, 2 the number shortened, 3 the arrows only.
+    /// The rows: 0 whole, 1 without the range, 2 the number shortened, 3 the arrows only, 4
+    /// nothing.
     rows: u8,
     /// The order keys after the first counted (`+1`).
     order_more: bool,
@@ -229,18 +235,19 @@ pub struct Lv {
     chips_more: bool,
     /// `ORDER BY` → `ORDER`.
     order_word: bool,
-    /// The column count left out (`6/7` while some are hidden).
-    cols_short: bool,
     /// The first condition cut with `…`.
     cut: bool,
     /// The conditions counted (`2 conditions`).
     chips_count: bool,
+    /// The column count of hidden columns said as numbers only (`6/7`); with none hidden it goes
+    /// from step 2 on.
+    cols_short: bool,
     /// The order counted (`ORDER ↓2`).
     order_count: bool,
-    /// Marks only (`▼2 ↓2 L ◌1 ⋯`).
-    glyphs: bool,
-    /// The state as its mark.
-    state_short: bool,
+    /// The short form (`failed │ ▼2 + │ ↓2 │ L500 │ 6/7 │ ‹ › ⋯`) and how far it is narrowed:
+    /// 0 not used; 1 whole; 2 single blanks between the parts; 3 no page arrows; 4 no `+`; 5
+    /// hidden columns as `◌1`; 6 the limit as `L` alone; 7 the state as its mark.
+    short: u8,
     /// The state and `⋯` alone.
     bare: bool,
 }
@@ -248,7 +255,9 @@ pub struct Lv {
 const fn lv(n: usize) -> Lv {
     Lv {
         adv_short: n >= 1,
-        rows: if n >= 10 {
+        rows: if n >= 12 {
+            4
+        } else if n >= 9 {
             3
         } else if n >= 3 {
             2
@@ -260,19 +269,45 @@ const fn lv(n: usize) -> Lv {
         order_more: n >= 4,
         chips_more: n >= 5,
         order_word: n >= 6,
-        cols_short: n >= 7,
-        cut: n >= 8,
-        chips_count: n >= 9,
-        order_count: n >= 10,
-        glyphs: n >= 11,
-        state_short: n >= 12,
-        bare: n >= 13,
+        cut: n >= 7,
+        chips_count: n >= 8,
+        cols_short: n >= 10,
+        order_count: n >= 11,
+        short: if n >= 13 && n <= 19 {
+            (n - 12) as u8
+        } else if n > 19 {
+            7
+        } else {
+            0
+        },
+        bare: n >= 20,
     }
 }
 
 /// The steps, from the whole bar to the narrowest.
-pub const LEVELS: [Lv; 14] =
-    [lv(0), lv(1), lv(2), lv(3), lv(4), lv(5), lv(6), lv(7), lv(8), lv(9), lv(10), lv(11), lv(12), lv(13)];
+pub const LEVELS: [Lv; 21] = [
+    lv(0),
+    lv(1),
+    lv(2),
+    lv(3),
+    lv(4),
+    lv(5),
+    lv(6),
+    lv(7),
+    lv(8),
+    lv(9),
+    lv(10),
+    lv(11),
+    lv(12),
+    lv(13),
+    lv(14),
+    lv(15),
+    lv(16),
+    lv(17),
+    lv(18),
+    lv(19),
+    lv(20),
+];
 
 /// A count in at most four characters (`99+` above 99).
 fn capped(n: usize) -> String {
@@ -349,6 +384,59 @@ fn token(out: &mut Vec<Seg>, text: &str, hit: BarHit, bg: bool) {
 
 const SEP: &str = " \u{2502} ";
 
+/// The short form at its step `k` ([`Lv::short`]) after the state already in `out`: a mark for
+/// each part applied (`▼2 +`, `↓2`, `L500`, `6/7`) and the page arrows.
+fn short_form(m: &Bar, k: u8, out: &mut Vec<Seg>) {
+    let n = m.chips.len();
+    let mut parts: Vec<Vec<Seg>> = Vec::new();
+    if n > 0 {
+        let mut p = vec![seg(format!("{}{}", m.glyphs.filter, capped(n)), Tone::Accent, Some(BarHit::More))];
+        if k < 4 {
+            p.push(seg(" ", Tone::Muted, None));
+            p.push(seg("+", Tone::Accent, Some(BarHit::Add)));
+        }
+        parts.push(p);
+    }
+    if let Some((_, d)) = m.order.first() {
+        let text = format!("{}{}", arrow(*d), capped(m.order.len()));
+        parts.push(vec![seg(text, Tone::Accent, Some(BarHit::Order))]);
+    }
+    let l = Some(BarHit::Limit);
+    match &m.limit {
+        LimitM::None(_) => {}
+        LimitM::Cap(c) if k < 6 => parts.push(vec![seg(format!("L{}", compact(*c)), Tone::Text, l)]),
+        LimitM::Cap(_) => parts.push(vec![seg("L", Tone::Text, l)]),
+        LimitM::Editing { text, selected, .. } => {
+            let tone = if *selected { Tone::FieldSelected } else { Tone::Field };
+            parts.push(vec![seg("L ", Tone::Text, l), seg(format!("{text} "), tone, l)])
+        }
+    }
+    if let Some(c) = m.cols.as_ref().filter(|c| c.hidden > 0) {
+        let text = if k < 5 { c.short.clone() } else { format!("\u{25cc}{}", capped(c.hidden)) };
+        parts.push(vec![seg(text, Tone::Warn, Some(BarHit::Cols))]);
+    }
+    if let Some((prev, next)) = m.rows.as_ref().and_then(|r| r.arrows).filter(|_| k < 3) {
+        let tone = |on: bool| if on { Tone::Accent } else { Tone::Dim };
+        parts.push(vec![
+            seg(m.glyphs.prev, tone(prev), Some(BarHit::Prev)),
+            seg(" ", Tone::Muted, None),
+            seg(m.glyphs.next, tone(next), Some(BarHit::Next)),
+        ]);
+    }
+    let sep = if k < 2 { SEP } else { " " };
+    // After the state: the same separator as between the parts.
+    if m.state.is_some() && !parts.is_empty() && k < 2 {
+        out.pop();
+        out.push(seg(SEP, Tone::Sep, None));
+    }
+    for (i, p) in parts.into_iter().enumerate() {
+        if i > 0 {
+            out.push(seg(sep, if k < 2 { Tone::Sep } else { Tone::Muted }, None));
+        }
+        out.extend(p);
+    }
+}
+
 /// The bar at step `lv`, the first condition cut to `cut` columns when given.
 fn line(m: &Bar, lv: Lv, cut: Option<usize>) -> Vec<Seg> {
     let mut out = Vec::new();
@@ -357,7 +445,7 @@ fn line(m: &Bar, lv: Lv, cut: Option<usize>) -> Vec<Seg> {
         if let Some(sp) = &s.spinner {
             parts.push(seg(sp.clone(), Tone::Spinner, None));
         }
-        match (&s.word, lv.state_short) {
+        match (&s.word, lv.short >= 7) {
             (Some(w), false) => parts.push(seg(w.clone(), Tone::Warn, None)),
             (Some(_), true) => parts.push(seg(s.mark.clone(), Tone::Warn, None)),
             (None, _) => {}
@@ -374,32 +462,8 @@ fn line(m: &Bar, lv: Lv, cut: Option<usize>) -> Vec<Seg> {
         return out;
     }
     let n = m.chips.len();
-    if lv.glyphs {
-        let mut marks: Vec<Vec<Seg>> = Vec::new();
-        if n > 0 {
-            marks.push(vec![seg(format!("{}{}", m.glyphs.filter, capped(n)), Tone::Accent, Some(BarHit::More))]);
-        }
-        if let Some((_, d)) = m.order.first() {
-            let text = format!("{}{}", arrow(*d), capped(m.order.len()));
-            marks.push(vec![seg(text, Tone::Accent, Some(BarHit::Order))]);
-        }
-        match &m.limit {
-            LimitM::None(_) => {}
-            LimitM::Cap(_) => marks.push(vec![seg("L", Tone::Text, Some(BarHit::Limit))]),
-            LimitM::Editing { text, .. } => marks.push(vec![
-                seg("L ", Tone::Text, Some(BarHit::Limit)),
-                seg(format!("{text} "), Tone::Field, Some(BarHit::Limit)),
-            ]),
-        }
-        if let Some(c) = m.cols.as_ref().filter(|c| c.hidden > 0) {
-            marks.push(vec![seg(format!("\u{25cc}{}", capped(c.hidden)), Tone::Warn, Some(BarHit::Cols))]);
-        }
-        for (i, mk) in marks.into_iter().enumerate() {
-            if i > 0 {
-                out.push(seg(" ", Tone::Muted, None));
-            }
-            out.extend(mk);
-        }
+    if lv.short > 0 {
+        short_form(m, lv.short, &mut out);
         return out;
     }
     // WHERE
@@ -462,11 +526,17 @@ fn line(m: &Bar, lv: Lv, cut: Option<usize>) -> Vec<Seg> {
     match &m.limit {
         LimitM::None(word) => out.push(seg(word.clone(), Tone::Muted, l)),
         LimitM::Cap(n) => out.push(seg(n.to_string(), Tone::Text, l)),
-        LimitM::Editing { text, .. } => out.push(seg(format!("{text} "), Tone::Field, l)),
+        LimitM::Editing { text, selected, .. } => {
+            let tone = if *selected { Tone::FieldSelected } else { Tone::Field };
+            out.push(seg(format!("{text} "), tone, l))
+        }
     }
     // cols
     if let Some(c) = &m.cols {
+        // Nothing hidden: the count says little and is the first to go; hidden columns keep
+        // their word longer, then their numbers.
         let text = match (c.hidden > 0, lv.cols_short) {
+            (false, _) if lv.rows >= 1 => None,
             (_, false) => Some(&c.full),
             (true, true) => Some(&c.short),
             (false, true) => None,
@@ -478,7 +548,7 @@ fn line(m: &Bar, lv: Lv, cut: Option<usize>) -> Vec<Seg> {
         }
     }
     // rows
-    if let Some(r) = &m.rows {
+    if let Some(r) = m.rows.as_ref().filter(|_| lv.rows < 4) {
         out.push(seg(SEP, Tone::Sep, None));
         let text = match lv.rows {
             0 => Some(&r.full),
@@ -516,7 +586,7 @@ fn line(m: &Bar, lv: Lv, cut: Option<usize>) -> Vec<Seg> {
 /// The `⋯ Advanced` end of the bar at step `lv`.
 fn right(m: &Bar, lv: Lv) -> Vec<Seg> {
     let a = Some(BarHit::Advanced);
-    if lv.adv_short || lv.glyphs {
+    if lv.adv_short || lv.short > 0 {
         return vec![seg("\u{22ef}", Tone::Accent, a)];
     }
     vec![
@@ -525,39 +595,30 @@ fn right(m: &Bar, lv: Lv) -> Vec<Seg> {
     ]
 }
 
+/// The bar at step `level` of [`LEVELS`] when it fits in `w` columns (the first condition cut
+/// where that step cuts it), else `None`.
+pub fn at_level(m: &Bar, level: usize, w: usize) -> Option<Line> {
+    let lv = LEVELS[level];
+    let make = |cut: Option<usize>| Line { left: line(m, lv, cut), right: right(m, lv), level };
+    let l = make(None);
+    if l.width() <= w {
+        return Some(l);
+    }
+    // The first condition cut to what is left, keeping enough of it to read.
+    let first = m.chips.first().filter(|_| lv.cut && !lv.chips_count && lv.short == 0)?;
+    let keep = width(&first.text).saturating_sub(l.width() - w);
+    (keep >= CUT_MIN).then(|| make(Some(keep))).filter(|l| l.width() <= w)
+}
+
 /// The bar in `w` columns: the first step of [`LEVELS`] whose form fits (the last when none
 /// does), the bar's focus marked on what it is on.
 pub fn layout(m: &Bar, w: usize) -> Line {
-    let make = |level: usize, cut: Option<usize>| Line {
-        left: line(m, LEVELS[level], cut),
-        right: right(m, LEVELS[level]),
-        level,
-    };
-    let mut out = None;
-    for (level, lv) in LEVELS.iter().enumerate() {
-        let l = make(level, None);
-        if l.width() <= w {
-            out = Some(l);
-            break;
-        }
-        // The first condition cut to what is left, keeping enough of it to read.
-        if lv.cut
-            && !lv.chips_count
-            && !lv.glyphs
-            && let Some(first) = m.chips.first()
-        {
-            let over = l.width() - w;
-            let keep = width(&first.text).saturating_sub(over);
-            if keep >= CUT_MIN {
-                let l = make(level, Some(keep));
-                if l.width() <= w {
-                    out = Some(l);
-                    break;
-                }
-            }
-        }
-    }
-    let mut out = out.unwrap_or_else(|| make(LEVELS.len() - 1, None));
+    let last = LEVELS.len() - 1;
+    let mut out = (0..LEVELS.len()).find_map(|level| at_level(m, level, w)).unwrap_or_else(|| Line {
+        left: line(m, LEVELS[last], None),
+        right: right(m, LEVELS[last]),
+        level: last,
+    });
     if let Some(f) = m.focus {
         mark_focus(&mut out, f);
     }
@@ -601,6 +662,7 @@ fn style_of(tone: Tone, bg: bool) -> Style {
         Tone::Sep => Style::new().fg(th.border),
         Tone::Dim => Style::new().fg(th.fg_dim),
         Tone::Field => Style::new().fg(th.fg).bg(th.surface_alt).add_modifier(Modifier::UNDERLINED),
+        Tone::FieldSelected => Style::new().fg(th.fg).patch(th.selection).add_modifier(Modifier::UNDERLINED),
     }
 }
 
@@ -627,7 +689,8 @@ pub(crate) fn draw(app: &App, m: &Bar, area: Rect, buf: &mut Buffer) -> (Hits, O
         let room = usize::from(end - x);
         let mut style = Style::new().bg(th.bg).patch(style_of(s.tone, m.backgrounds));
         if s.focus {
-            style = style.patch(th.selection);
+            // The selection, in bold and underlined: it reads on a chip's own background too.
+            style = style.patch(th.selection).add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
         }
         if s.hit.is_some() && s.hit == hovered {
             style = style.patch(crate::widgets::pointer_style());
@@ -649,7 +712,7 @@ pub(crate) fn draw(app: &App, m: &Bar, area: Rect, buf: &mut Buffer) -> (Hits, O
                 _ => hits.push((r, h)),
             }
         }
-        if s.tone == Tone::Field
+        if matches!(s.tone, Tone::Field | Tone::FieldSelected)
             && let LimitM::Editing { cursor: c, .. } = &m.limit
         {
             cursor = Some(((x + *c as u16).min(end.saturating_sub(1)), area.y));

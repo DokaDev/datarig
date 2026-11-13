@@ -116,6 +116,11 @@
 "table.bar.cols_hidden" = "{shown}/{total} cols"
 "table.bar.rows" = { one = "{count} row", other = "{count} rows" }
 "table.bar.rows_text" = "{rows} rows"
+"table.bar.rows_about" = { one = "~{count} row", other = "~{count} rows" }
+"table.bar.rows_at_least" = { one = "{count}+ row", other = "{count}+ rows" }
+"table.bar.planner" = "planner"
+"table.bar.counted_now" = "counted now"
+"table.bar.count_key" = "{key} count"
 "table.bar.rows_range" = "{from}–{to} of {total} rows"
 "table.limit.refused" = "Limit refused: {why}"
 "table.limit.refused_short" = "limit refused"

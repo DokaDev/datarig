@@ -37,6 +37,9 @@ pub(crate) struct BarFocus {
 pub(crate) struct LimitEdit {
     on: BarOwner,
     pub(crate) input: TextInput,
+    /// The text is still the cap it opened with, selected: the first digit typed (or a paste)
+    /// replaces it, `Backspace` and `Delete` clear it; a key that moves the cursor keeps it.
+    pub(crate) selected: bool,
 }
 
 /// The query bar's state.
@@ -44,8 +47,11 @@ pub(crate) struct LimitEdit {
 pub(crate) struct QueryBar {
     pub(crate) focus: Option<BarFocus>,
     pub(crate) edit: Option<LimitEdit>,
-    /// A press on a part of the bar: it acts on the release over the same part.
-    pub(crate) press: overlay::Press<BarHit>,
+    /// A press on a part of the bar, with the bar it was on: it acts on the release over the
+    /// same part of the same bar.
+    pub(crate) press: overlay::Press<(BarOwner, BarHit)>,
+    /// The bar the press clock runs for (another one starts it over).
+    pub(crate) drawn_for: Option<BarOwner>,
     /// Where the parts were drawn by the frame before (the pointer's highlight is dropped when
     /// they move).
     pub(crate) last: Vec<(Rect, BarHit)>,
@@ -70,6 +76,9 @@ pub enum BarKey {
     LimitCancel,
 }
 
+/// The most characters the `LIMIT` field holds: the largest cap has 19 digits.
+const LIMIT_FIELD: usize = 20;
+
 /// How many rows the result shown has, as far as known.
 enum Total {
     Exact(u64),
@@ -78,14 +87,23 @@ enum Total {
 }
 
 impl App {
-    /// The bar the keys may be on now: the active table tab's, its results focused, no dialog
-    /// open.
-    fn bar_owner(&self) -> Option<BarOwner> {
-        if self.profiles.is_empty() || self.tabs.is_empty() || self.focus != Focus::Results || self.modal_open() {
+    /// The bar of the active tab as it is now, when it is a table tab's: the tab, its result and
+    /// its view (a press on the bar is bound to it).
+    pub(crate) fn bar_place(&self) -> Option<BarOwner> {
+        if self.profiles.is_empty() || self.tabs.is_empty() {
             return None;
         }
         let t = self.tab();
         t.is_table().then_some(BarOwner { tab: t.id, shown: t.exec.shown, view: t.exec.view })
+    }
+
+    /// The bar the keys may be on now: the active table tab's, its rows shown and focused, with
+    /// no dialog open and nothing else typed in over the grid (its search prompt, a cell editor).
+    fn bar_owner(&self) -> Option<BarOwner> {
+        let place = self.bar_place()?;
+        let rows = place.view == ResultView::Rows && !self.plan_shown() && !self.chart_shown() && !self.changes_shown();
+        let typing = self.cell_edit_open() || self.cell_lines_open() || self.grid_prompt_open();
+        (self.focus == Focus::Results && !self.modal_open() && rows && !typing).then_some(place)
     }
 
     /// The keys are on the bar's `WHERE` segment.
@@ -98,13 +116,19 @@ impl App {
         self.qbar.edit.as_ref().is_some_and(|e| Some(e.on) == self.bar_owner())
     }
 
-    /// The bar's keys and field leave once what they were for is gone.
+    /// The bar's keys and field leave once what they were for is gone (another tab, result or
+    /// view, the focus elsewhere, a dialog or a field over the grid), for good: coming back does
+    /// not bring them back. A press on another bar is dropped.
     pub(crate) fn bar_settle(&mut self) {
         if !self.bar_focused() {
             self.qbar.focus = None;
         }
         if !self.bar_editing() {
             self.qbar.edit = None;
+        }
+        let place = self.bar_place();
+        if self.qbar.press.armed.is_some_and(|(on, _)| Some(on) != place) {
+            self.qbar.press.disarm();
         }
     }
 
@@ -139,7 +163,7 @@ impl App {
             Some(e) => {
                 let text = e.input.text().to_string();
                 let cursor = crate::text::width(&text[..e.input.cursor_byte().min(text.len())]);
-                LimitM::Editing { text, cursor }
+                LimitM::Editing { text, cursor, selected: e.selected }
             }
             None => match q.limit {
                 Some(n) => LimitM::Cap(n),
@@ -232,10 +256,11 @@ impl App {
         };
         let mid = match total {
             Total::Exact(n) => self.i18n.msg(&Msg::TableBarRows { count: n }).to_string(),
-            _ => self.i18n.msg(&Msg::TableBarRowsText { rows: long.clone() }).to_string(),
+            Total::About(n) => self.i18n.msg(&Msg::TableBarRowsAbout { count: n }).to_string(),
+            Total::AtLeast(n) => self.i18n.msg(&Msg::TableBarRowsAtLeast { count: n }).to_string(),
         };
         let short = match total {
-            Total::Exact(n) if n < 1000 => mid.clone(),
+            Total::Exact(n) | Total::About(n) | Total::AtLeast(n) if n < 1000 => mid.clone(),
             _ => self.i18n.msg(&Msg::TableBarRowsText { rows: short }).to_string(),
         };
         let full = if paged && !win.is_empty() {
@@ -248,9 +273,10 @@ impl App {
         let answer = t.exec.shown.is_some() && t.exec.shown == t.answer_index();
         let paging = if answer { t.exec.paging } else { Paging::None };
         let label = |l: Label| self.i18n.label(l).to_string();
-        let mark = if t.exec.running.is_some_and(|r| r.estimate) {
+        let counting = t.exec.running.is_some_and(|r| r.count);
+        let paging_mark = if t.exec.running.is_some_and(|r| r.estimate) {
             Some((label(Label::ResultsTitleEstimating), false))
-        } else if t.exec.running.is_some_and(|r| r.count) {
+        } else if counting {
             Some((label(Label::ResultsTitleCounting), false))
         } else {
             match (paging, self.paging_left()) {
@@ -267,6 +293,30 @@ impl App {
                 _ => None,
             }
         };
+        // Then where the number comes from and what stops the rows: the planner's estimate, a
+        // count taken apart from the pages' reads, the query's cap reached, the key that counts
+        // rows not known yet.
+        let mut marks: Vec<(String, bool)> = paging_mark.into_iter().collect();
+        if matches!(total, Total::About(_)) && estimate.is_none() {
+            marks.push((label(Label::TableBarPlanner), false));
+        }
+        if rs.counted.is_some() && rs.more && rs.counted_now {
+            marks.push((label(Label::TableBarCountedNow), false));
+        }
+        if let Some(n) = cap.filter(|&n| answer && len as u64 >= n) {
+            marks.push((self.i18n.msg(&Msg::ResultsTitleLimit { limit: fmt_count(n) }).to_string(), false));
+        }
+        let count_key = (matches!(total, Total::AtLeast(_)) && !counting && self.may_count())
+            .then(|| self.keymap.hint_keys(Action::CountRows, Ctx::Grid, self.enhanced_keys))
+            .flatten()
+            .map(|k| crate::keymap::keys::label(&k));
+        if let Some(key) = count_key {
+            marks.push((self.i18n.msg(&Msg::TableBarCountKey { key }).to_string(), false));
+        }
+        let mark = (!marks.is_empty()).then(|| {
+            let warn = marks.iter().any(|(_, w)| *w);
+            (marks.into_iter().map(|(m, _)| m).collect::<Vec<_>>().join(" \u{00b7} "), warn)
+        });
         // The next page: one read already, or one the paging state can bring.
         let more = rs.more
             && t.exec.running.is_none()
@@ -297,10 +347,16 @@ impl App {
     /// `Space r l` (a click on `LIMIT`): the limit typed in the bar, from the one applied.
     pub(super) fn bar_limit(&mut self) {
         self.focus = Focus::Results;
+        // Typed in already: what is typed stays.
+        if self.bar_editing() {
+            return;
+        }
         self.qbar.focus = None;
         let Some(on) = self.bar_owner() else { return };
         let text = self.table_query(on.tab).and_then(|tq| tq.applied().limit).map(|n| n.to_string());
-        self.qbar.edit = Some(LimitEdit { on, input: TextInput::new(text.as_deref().unwrap_or("")) });
+        let text = text.unwrap_or_default();
+        let selected = !text.is_empty();
+        self.qbar.edit = Some(LimitEdit { on, input: TextInput::new(&text), selected });
     }
 
     /// The filter dialog of the active table tab on column `column` (else the grid's), with its
@@ -325,14 +381,19 @@ impl App {
             BarHit::Chip(term) => {
                 let id = self.tab().id;
                 let target = self.table_target(id);
-                let applied = self.table_query(id).map(|tq| tq.applied().clone());
-                let (Some(target), Some(applied)) = (target, applied) else { return };
+                let queries = self.table_query(id).map(|tq| (tq.applied().clone(), tq.draft.clone()));
+                let (Some(target), Some((applied, draft))) = (target, queries) else { return };
                 let w = Draft::from_query(&applied, &target).where_;
-                match w.terms().get(term).and_then(|t| t.row.as_ref()) {
+                let Some(t) = w.terms().get(term) else { return };
+                match &t.row {
                     Some(row) => self.bar_dialog(Some(row.col.clone()), false, None),
-                    // An expression: its chip in the dialog's footer.
+                    // An expression: its chip in the dialog's footer, among the chips of the
+                    // draft the dialog opens with (found by its text; the first when it is not
+                    // there).
                     None => {
-                        let at = w.chips().iter().position(|c| c.index == term).unwrap_or(0);
+                        let text = t.text.clone();
+                        let dw = Draft::from_query(&draft, &target).where_;
+                        let at = dw.chips().iter().position(|c| Some(c.text) == text.as_deref()).unwrap_or(0);
                         self.bar_dialog(None, false, Some(DialogFocus::Chips(at)))
                     }
                 }
@@ -366,6 +427,7 @@ impl App {
         let Ok(q) = d.to_query(&base, &target) else { return };
         let Some(tq) = self.table_query_mut(id) else { return };
         tq.draft = q.clone();
+        tq.refusal = None;
         self.table_run(id, q);
     }
 
@@ -397,8 +459,14 @@ impl App {
                 }
             }
             BarKey::Remove => {
-                if let Some(BarHit::Chip(t)) = self.qbar.focus.filter(|_| self.bar_focused()).map(|f| f.hit) {
-                    self.bar_remove(t);
+                let Some(hit) = self.qbar.focus.filter(|_| self.bar_focused()).map(|f| f.hit) else { return };
+                let drawn = self.layout.qbar.iter().any(|(_, h)| *h == hit);
+                match hit {
+                    // Only a condition on screen is taken out; one left out of the bar (its
+                    // count has the focus) opens the list of them instead.
+                    BarHit::Chip(t) if drawn => self.bar_remove(t),
+                    BarHit::Chip(_) | BarHit::More => self.bar_hit(BarHit::More),
+                    _ => {}
                 }
             }
             BarKey::Add => self.bar_hit(BarHit::Add),
@@ -425,10 +493,13 @@ impl App {
                 let why = table_query::limit_why(&self.i18n, problem);
                 self.tab_status(id, Notice::new(Msg::TableLimitRefused { why }, Level::Warning));
             }
+            // The cap as it is: nothing to run.
+            Ok(q) if q.limit == base.limit => self.qbar.edit = None,
             Ok(q) => {
                 self.qbar.edit = None;
                 let Some(tq) = self.table_query_mut(id) else { return };
                 tq.draft = q.clone();
+                tq.refusal = None;
                 self.table_run(id, q);
             }
         }
@@ -438,8 +509,15 @@ impl App {
     pub(super) fn bar_text_key(&mut self, key: KeyEvent) {
         let Some(e) = self.qbar.edit.as_mut() else { return };
         let plain = (key.modifiers - KeyModifiers::SHIFT).is_empty();
+        let selected = std::mem::take(&mut e.selected);
         match key.code {
-            KeyCode::Char(c) if plain && !c.is_ascii_digit() => {}
+            KeyCode::Char(c) if plain && !c.is_ascii_digit() => e.selected = selected,
+            KeyCode::Char(_) if plain && selected => {
+                e.input.set("");
+                e.input.handle_key(&key);
+            }
+            KeyCode::Char(_) if plain && e.input.text().chars().count() >= LIMIT_FIELD => {}
+            KeyCode::Backspace | KeyCode::Delete if selected => e.input.set(""),
             _ => {
                 e.input.handle_key(&key);
             }
@@ -449,12 +527,23 @@ impl App {
     /// Text pasted into the `LIMIT` field (checked when it is applied).
     pub(super) fn bar_paste(&mut self, text: &str) {
         if let Some(e) = self.qbar.edit.as_mut() {
-            e.input.insert_str(text.trim());
+            // No cap is longer than this: what is past it is left out (the text is checked on
+            // `Enter`).
+            if std::mem::take(&mut e.selected) {
+                e.input.set("");
+            }
+            let room = LIMIT_FIELD.saturating_sub(e.input.text().chars().count());
+            let text: String = text.trim().chars().take(room).collect();
+            e.input.insert_str(&text);
         }
     }
 
-    /// The part of the bar drawn at (x, y).
+    /// The part of the bar drawn at (x, y), while the bar drawn last is the active tab's as it
+    /// is now.
     pub(super) fn bar_hit_at(&self, x: u16, y: u16) -> Option<BarHit> {
+        if self.qbar.drawn_for.is_none() || self.qbar.drawn_for != self.bar_place() {
+            return None;
+        }
         self.layout.qbar.iter().find(|(r, _)| r.contains(Position::new(x, y))).map(|(_, h)| *h)
     }
 
@@ -468,18 +557,19 @@ impl App {
         if hit.is_none_or(|h| !h.in_where()) {
             self.qbar.focus = None;
         }
-        let Some(hit) = hit else { return false };
+        let (Some(hit), Some(on)) = (hit, self.bar_place()) else { return false };
         self.focus = Focus::Results;
         let now = self.now();
-        self.qbar.press.press(MouseEventKind::Down(MouseButton::Left), Some(hit), now);
+        self.qbar.press.press(MouseEventKind::Down(MouseButton::Left), Some((on, hit)), now);
         true
     }
 
-    /// A left release at (x, y): over the part a press armed, that part acts.
+    /// A left release at (x, y): over the part a press armed, of the same bar, that part acts.
     pub(super) fn bar_release(&mut self, x: u16, y: u16) {
         let hit = if self.tabs.is_empty() { None } else { self.bar_hit_at(x, y) };
+        let hit = self.bar_place().zip(hit);
         let now = self.now();
-        if let Some(h) = self.qbar.press.press(MouseEventKind::Up(MouseButton::Left), hit, now) {
+        if let Some((_, h)) = self.qbar.press.press(MouseEventKind::Up(MouseButton::Left), hit, now) {
             self.bar_hit(h);
         }
     }

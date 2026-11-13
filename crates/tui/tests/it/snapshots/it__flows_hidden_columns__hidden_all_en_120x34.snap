@@ -4,7 +4,7 @@ expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users ×                                                            "
 "│  ＋ New connection         │╭ [Result 1]  Chart  Messages  local-pg / shop.users ╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1             ││ WHERE + │ ORDER + │ LIMIT none │ 0/4 │ 3 rows    ⋯ ││ id: 1                            │"
+"│▾ Connections 1             ││ WHERE + │ ORDER + │ LIMIT none │ 0/4 cols        ⋯ ││ id: 1                            │"
 "│  ▾ ●   local-pg            ││ Every column is hidden from the grid: f, then C on ││ name: ann                        │"
 "│    ▾ datarig default       ││ a column shows it                                  ││ score: 1.5                       │"
 "│      ▸ analytics           ││                                                    ││ memo: x                          │"

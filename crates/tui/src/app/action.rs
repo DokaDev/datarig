@@ -539,6 +539,11 @@ fn table_tab(a: &App) -> bool {
     has_tab(a) && a.tab().is_table()
 }
 
+/// The active tab is a table tab showing its rows (`Space r r` counts them).
+fn table_rows(a: &App) -> bool {
+    table_tab(a) && rows_shown(a)
+}
+
 /// The keys are on a table tab's query bar.
 fn bar_focused(a: &App) -> bool {
     has_tab(a) && a.bar_focused()
@@ -1057,7 +1062,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Table(T::BarWhere), "table.bar.where", Label::ActionTableBarWhere, table_tab),
     act(Action::Table(T::BarLimit), "table.bar.limit", Label::ActionTableBarLimit, table_tab),
     act(Action::Table(T::BarColumns), "table.bar.columns", Label::ActionTableBarColumns, table_tab),
-    act(Action::Table(T::BarRows), "table.bar.rows", Label::ActionTableBarRows, rows_shown),
+    act(Action::Table(T::BarRows), "table.bar.rows", Label::ActionTableBarRows, table_rows),
     mv(Action::Table(T::Bar(B::Prev)), "table.bar.prev", Label::ActionTableBarPrev, bar_focused),
     mv(Action::Table(T::Bar(B::Next)), "table.bar.next", Label::ActionTableBarNext, bar_focused),
     act(Action::Table(T::Bar(B::Open)), "table.bar.open", Label::ActionTableBarOpen, bar_focused),

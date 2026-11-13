@@ -4,7 +4,7 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2  shop.users  ×                      "
 "│  ＋ New connection   │╭ [Result 1]  Chart  Messages   local-pg / shop.users ╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ 󰒍 Connections 1     ││ WHERE  1 condition  + │ ORDER ↑2 │ LIMIT none      ⋯ │"
+"│▾ 󰒍 Connections 1     ││ WHERE  1 condition  + │ ORDER ↑ id +1 │ LIMIT none ⋯ │"
 "│  ▾ ●  local-pg      ││   │ id   │ name 2  󰓢│ email                       │"
 "│    ▾  datarig defau…││   │ int8  │ text       │ text                        │"
 "│      ▸ 󱋣 analytics   ││ 1 │     0 │ n0         │ u0@x                        │"

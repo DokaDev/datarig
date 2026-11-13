@@ -1168,7 +1168,7 @@ fn an_unknown_or_stale_estimate_shows_no_pages_and_the_count_key() {
         h.app.detail.visible = false;
         users_table(&mut h, rows);
         let title = bar_line(&mut h, 160, 45);
-        assert!(title.contains("1–500 of 500+ rows"), "{rows:?}: {title}");
+        assert!(title.contains("1–500 of 500+ rows \u{00b7} # count"), "{rows:?}: {title}");
         assert!(!title.contains('~'), "{rows:?}: {title}");
     }
 }
@@ -1262,7 +1262,7 @@ fn a_filtered_table_tab_has_no_estimate() {
     h.command("where id > 10");
     table_page(&mut h);
     let title = bar_line(&mut h, 160, 45);
-    assert!(title.contains("of 500+ rows") && !title.contains('~'), "{title}");
+    assert!(title.contains("of 500+ rows \u{00b7} # count") && !title.contains('~'), "{title}");
     h.command("filter clear");
     table_page(&mut h);
     assert!(bar_line(&mut h, 160, 45).contains("of ~1,234,567 rows"));
@@ -1303,7 +1303,7 @@ fn the_estimate_is_of_the_tabs_own_schema() {
     assert_eq!(h.app.tab().doc.table.as_ref().map(|t| t.label()).as_deref(), Some("shop.users"));
     table_page(&mut h);
     let title = bar_line(&mut h, 160, 45);
-    assert!(title.contains("of 500+ rows") && !title.contains('~'), "{title}");
+    assert!(title.contains("of 500+ rows \u{00b7} # count") && !title.contains('~'), "{title}");
 }
 
 /// The count key's hint is the first thing a narrow title drops: beside the inspector the row

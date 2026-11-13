@@ -190,12 +190,12 @@ fn filtered_rows_offer_the_estimate_or_the_exact_count() {
     assert!(h.app.tab().exec.running.is_none());
     assert!(status(&h).contains("Planner estimate: about 5,900 rows (not a count)"), "{}", status(&h));
     let wide = title(&mut h, 160, 45);
-    assert!(wide.contains("1–500 of ~5,900 rows"), "{wide}");
+    assert!(wide.contains("1–500 of ~5,900 rows \u{00b7} planner"), "{wide}");
     assert_screen!("table_estimate_title_en_80x24", Lang::En, h.draw(80, 24));
     assert_screen!("table_estimate_title_en_120x30", Lang::En, h.draw(120, 30));
     // A late answer of another request changes nothing.
     h.tab_db(index, DbEvent::Estimated { id: qid + 7, result: Ok(1) });
-    assert!(title(&mut h, 160, 45).contains("of ~5,900 rows"));
+    assert!(title(&mut h, 160, 45).contains("of ~5,900 rows \u{00b7} planner"));
 }
 
 /// The status bar's spinner turns with the app's clock, as the tab bar's does: what is drawn does
