@@ -3563,6 +3563,25 @@ async fn read_only_transactions_cost_no_round_trips() {
     assert_eq!(counts[0], counts[1]);
 }
 
+/// Built-ins a minor release added (PostgreSQL 17.12): a server of an earlier minor release of
+/// the same major lacks them, so the lists of the server's built-ins are compared without them
+/// there.
+const MINOR_RELEASE_BUILTINS: &[&str] = &["binary_upgrade_set_next_attribute_versions"];
+
+/// `names` (one per line) less the [`MINOR_RELEASE_BUILTINS`] the server does not have.
+async fn on_this_server(c: &mut Conn, names: &str) -> String {
+    let list: Vec<String> = MINOR_RELEASE_BUILTINS.iter().map(|n| format!("'{n}'")).collect();
+    let sql = format!(
+        "SELECT string_agg(n, ',') FROM unnest(ARRAY[{}]::text[]) n WHERE NOT EXISTS (SELECT 1 FROM pg_proc \
+         WHERE pronamespace = 'pg_catalog'::regnamespace AND oid < 10000 AND proname = n)",
+        list.join(", ")
+    );
+    let DbEvent::Page { rows, .. } = c.run(9, &sql).await else { panic!("{sql}") };
+    let lacking = rows[0][0].clone().unwrap_or_default();
+    let lacking: Vec<&str> = lacking.split(',').collect();
+    names.lines().filter(|n| !lacking.contains(n)).collect::<Vec<_>>().join("\n")
+}
+
 /// The classifier's list of built-in functions (`risk::BUILTINS`, which a call may name
 /// without making a tab's prepared statements unknown) is exactly the server's: every function
 /// of `pg_catalog` that initdb creates, less the ones that run SQL or code they are given
@@ -3581,7 +3600,7 @@ async fn the_builtin_functions_are_the_servers() {
         list(RUNS_CODE)
     );
     let DbEvent::Page { rows, .. } = c.run(1, &sql).await else { panic!("{sql}") };
-    assert_eq!(rows[0][0].as_deref(), Some(BUILTINS.trim_end()));
+    assert_eq!(rows[0][0].as_deref(), Some(on_this_server(&mut c, BUILTINS).await.as_str()));
     for (what, names) in [("RUNS_CODE", RUNS_CODE), ("SERVER_FILES", SERVER_FILES), ("SERVER_ACTIONS", SERVER_ACTIONS)]
     {
         let sql = format!(
@@ -3605,7 +3624,7 @@ async fn the_volatile_builtins_are_the_servers() {
     let sql = "SELECT string_agg(DISTINCT proname::text COLLATE \"C\", E'\\n' ORDER BY proname::text COLLATE \"C\") \
                FROM pg_proc WHERE pronamespace = 'pg_catalog'::regnamespace AND oid < 10000 AND provolatile = 'v'";
     let DbEvent::Page { rows, .. } = c.run(1, sql).await else { panic!("{sql}") };
-    assert_eq!(rows[0][0].as_deref(), Some(VOLATILE.trim_end()));
+    assert_eq!(rows[0][0].as_deref(), Some(on_this_server(&mut c, VOLATILE).await.as_str()));
 }
 
 /// An audit, pinned: every volatile built-in (a function with side effects is
@@ -3634,6 +3653,7 @@ async fn every_volatile_builtin_was_read() {
         "binary_upgrade_replorigin_advance",
         "binary_upgrade_set_missing_value",
         "binary_upgrade_set_next_array_pg_type_oid",
+        "binary_upgrade_set_next_attribute_versions",
         "binary_upgrade_set_next_heap_pg_class_oid",
         "binary_upgrade_set_next_heap_relfilenode",
         "binary_upgrade_set_next_index_pg_class_oid",
