@@ -356,10 +356,12 @@ async fn a_query_session_says_how_its_text_is_read() {
     let mut c = Conn::start(&url, SessionRole::Query, false, "a_query_session_says_how_its_text_is_read");
     assert!(matches!(c.next(15).await, DbEvent::Encryption(_)), "how its traffic goes, first");
     assert!(matches!(c.next(15).await, DbEvent::Isolation(_)), "its level, before it is connected");
-    assert!(matches!(c.next(15).await, DbEvent::Connected));
     let DbEvent::Language(Language::Sql(Dialect::MySql(mode))) = c.next(5).await else {
-        panic!("the language follows Connected")
+        panic!("the language comes before Connected")
     };
+    assert!(matches!(c.next(15).await, DbEvent::Explain(_)), "the plan format, before it is connected");
+    assert!(matches!(c.next(15).await, DbEvent::Edit(_)), "the edits, before it is connected");
+    assert!(matches!(c.next(15).await, DbEvent::Connected));
     // The dev server runs the default sql mode.
     assert_eq!((mode.ansi_quotes, mode.no_backslash_escapes), (false, false));
     let mut probe = side(&url).await;
@@ -520,12 +522,12 @@ async fn the_metadata_session_reads_the_databases_and_the_catalog() {
     let Some(url) = my_url("the_metadata_session_reads_the_databases_and_the_catalog") else { return };
     let mut c = Conn::start(&url, SessionRole::Meta, false, "metaread");
     assert!(matches!(c.next(15).await, DbEvent::Encryption(_)), "how its traffic goes, first");
-    assert!(matches!(c.next(15).await, DbEvent::Connected));
     let lang = c.next(15).await;
     assert!(matches!(lang, DbEvent::Language(Language::Sql(Dialect::MySql(_)))), "{lang:?}");
     // The plan format of the server and the edits it takes (MySQL 8.0.17 on); none on MariaDB.
     let explain = c.next(15).await;
     let edit = c.next(15).await;
+    assert!(matches!(c.next(15).await, DbEvent::Connected));
     if mariadb(&url).await {
         assert!(matches!(explain, DbEvent::Explain(None)), "{explain:?}");
         assert!(matches!(edit, DbEvent::Edit(None)), "{edit:?}");
@@ -551,7 +553,9 @@ async fn the_metadata_session_reads_the_databases_and_the_catalog() {
             let users = cat.relations.iter().find(|r| r.schema == "shop" && r.name == "users").expect("shop.users");
             assert!(!users.is_view);
             assert_eq!(users.columns[0].name, "id");
-            assert_eq!(users.columns[0].type_name, "bigint unsigned");
+            // MariaDB keeps an integer's display width in its type.
+            let bigint = if mariadb(&url).await { "bigint(20) unsigned" } else { "bigint unsigned" };
+            assert_eq!(users.columns[0].type_name, bigint);
             assert!(cat.relations.iter().any(|r| r.name == "order_summary" && r.is_view));
         }
         other => panic!("{other:?}"),
@@ -991,6 +995,9 @@ async fn a_session_may_start_without_a_database() {
         Conn::start(&in_database(&url, ""), SessionRole::Query, false, "a_session_may_start_without_a_database");
     assert!(matches!(c.next(15).await, DbEvent::Encryption(_)), "how its traffic goes, first");
     assert!(matches!(c.next(15).await, DbEvent::Isolation(_)), "its level, before it is connected");
+    assert!(matches!(c.next(15).await, DbEvent::Language(_)), "its language, before it is connected");
+    assert!(matches!(c.next(15).await, DbEvent::Explain(_)), "the plan format, before it is connected");
+    assert!(matches!(c.next(15).await, DbEvent::Edit(_)), "the edits, before it is connected");
     assert!(matches!(c.next(15).await, DbEvent::Connected));
 }
 
@@ -1022,6 +1029,12 @@ async fn sessions_and_test_connections_go_through_a_dialer() {
     assert!(matches!(first, Some(DbEvent::Encryption(_))), "{first:?}");
     let next = tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.unwrap();
     assert!(matches!(next, Some(DbEvent::Isolation(_))), "{next:?}");
+    let next = tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.unwrap();
+    assert!(matches!(next, Some(DbEvent::Language(_))), "{next:?}");
+    let next = tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.unwrap();
+    assert!(matches!(next, Some(DbEvent::Explain(_))), "{next:?}");
+    let next = tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.unwrap();
+    assert!(matches!(next, Some(DbEvent::Edit(_))), "{next:?}");
     let next = tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.unwrap();
     assert!(matches!(next, Some(DbEvent::Connected)), "{next:?}");
     MyDriver.ping(&profile(&url), Duration::from_secs(10), via).await.expect("the server answers");
@@ -2971,9 +2984,10 @@ async fn the_servers_tree_reads_as_a_plan() {
     use datarig_core::driver::ExplainFormat;
     let Some((url, admin)) = urls("the_servers_tree_reads_as_a_plan") else { return };
     let t = numbers(&admin, "tree", 50).await;
-    let mut c = Conn::open(&url, SessionRole::Query, false, "tree").await;
+    let mut c = Conn::start(&url, SessionRole::Query, false, "tree");
+    let explain = c.wait(|e| matches!(e, DbEvent::Explain(_)), 15).await;
+    c.wait(|e| matches!(e, DbEvent::Connected), 15).await;
     if mariadb(&url).await {
-        let explain = c.wait(|e| matches!(e, DbEvent::Explain(_)), 15).await;
         assert!(matches!(explain, DbEvent::Explain(None)), "{explain:?}");
         not_on_mariadb("the_servers_tree_reads_as_a_plan", NO_PLANS);
         return;
@@ -5045,12 +5059,20 @@ async fn rows_copied_as_sql_run_back_byte_for_byte() {
         let mut m = Conn::start(&url, SessionRole::Meta, false, test);
         m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
         let keys = keys_of(&mut m).await.unwrap();
-        let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+        // The session says its mode as it starts, which a statement that leaves it as it is
+        // does not say again.
+        let mut q = Conn::start(&url, SessionRole::Query, false, test);
+        let DbEvent::Language(Language::Sql(Dialect::MySql(started))) =
+            q.wait(|e| matches!(e, DbEvent::Language(_)), 15).await
+        else {
+            panic!("a MySQL language")
+        };
+        q.wait(|e| matches!(e, DbEvent::Connected), 15).await;
         let evs = q.run(1, &[&format!("SET SESSION sql_mode = '{mode}'")]).await;
         let evs2 = q.run(2, &["SET SESSION time_zone = '+00:00'"]).await;
         let (_, session_mode) = reported(&evs);
         let (values, _) = reported(&evs2);
-        let (session_mode, values) = (session_mode.expect("the new mode"), values.expect("the new zone"));
+        let (session_mode, values) = (session_mode.unwrap_or(started), values.expect("the new zone"));
         assert_eq!(values.time_zone, "+00:00");
         assert_eq!(
             (session_mode.no_backslash_escapes, session_mode.ansi_quotes),
@@ -5947,15 +5969,12 @@ async fn starting(
     let o = opts(role, test).read_only(read_only).session_sql(sql);
     let (tx, mut rx) = unbounded_channel();
     let session = MyDriver.connect(&profile(url), role, o, tx);
-    let mut connected = false;
+    let mut language = None;
     loop {
         match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
-            Some(DbEvent::Connected) => connected = true,
-            Some(DbEvent::Language(l)) if connected => return Ok((Conn { session, rx }, Some(l))),
-            Some(DbEvent::ConnectFailed { error, .. }) => {
-                assert!(!connected, "a failure after Connected: {error:?}");
-                return Err(error);
-            }
+            Some(DbEvent::Language(l)) => language = Some(l),
+            Some(DbEvent::Connected) => return Ok((Conn { session, rx }, language)),
+            Some(DbEvent::ConnectFailed { error, .. }) => return Err(error),
             Some(_) => {}
             None => panic!("closed"),
         }
