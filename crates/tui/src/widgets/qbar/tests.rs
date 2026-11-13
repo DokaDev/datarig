@@ -140,6 +140,10 @@ fn every_width_fits_steps_are_monotone_and_nothing_applied_leaves() {
                 assert!(l.width() <= width, "does not fit: {what}");
                 assert!(l.level <= last, "a step back: {what}");
                 last = l.level;
+                // The richest form that fits: no step before it fits.
+                for k in 0..l.level {
+                    assert!(at_level(&m, k, width).is_none(), "step {k} fits too: {what}");
+                }
                 if !s.chips.is_empty() {
                     assert!(has(&l, BarHit::More) || has(&l, BarHit::Chip(0)), "conditions left: {what}");
                 }
@@ -185,10 +189,17 @@ fn the_whole_bar_and_its_steps() {
     assert!(at(4).contains("ORDER BY ↓ total_amount +1"), "{}", at(4));
     assert!(at(5).contains(" +1  +"), "{}", at(5));
     assert!(at(6).contains("ORDER ↓ total_amount +1"), "{}", at(6));
-    assert!(!at(7).contains("cols"), "{}", at(7));
-    assert!(at(9).contains("2 conditions"), "{}", at(9));
-    assert!(at(10).contains("ORDER ↓2"), "{}", at(10));
-    assert!(at(11).starts_with("▼2 ↓2 L"), "{}", at(11));
+    assert!(at(8).contains("2 conditions"), "{}", at(8));
+    assert!(!at(2).contains("7 cols"), "nothing hidden: the count goes early: {}", at(2));
+    assert!(!at(10).contains("cols"), "{}", at(10));
+    assert!(at(11).contains("ORDER ↓2"), "{}", at(11));
+    // The short form's own steps, each as it is drawn.
+    let short = |level: usize| text(&at_level(&m, level, 200).unwrap());
+    assert_eq!(short(13), "▼2 + │ ↓2 │ L500 │ ‹ › | ⋯");
+    assert_eq!(short(14), "▼2 + ↓2 L500 ‹ › | ⋯");
+    assert_eq!(short(15), "▼2 + ↓2 L500 | ⋯");
+    assert_eq!(short(16), "▼2 ↓2 L500 | ⋯");
+    assert_eq!(short(18), "▼2 ↓2 L | ⋯");
     // The keys' letters underlined: W̲HERE O̲RDER BY L̲IMIT c̲ols r̲ows A̲dvanced.
     let ul: Vec<String> =
         whole.segs().filter_map(|g| g.ul.map(|i| g.text.chars().nth(i).unwrap().to_string())).collect();
@@ -259,4 +270,36 @@ fn placed_puts_the_right_end_at_the_right() {
     let placed = l.placed(10, 120);
     let (x, last) = placed.last().unwrap();
     assert_eq!(usize::from(*x) + width(&last.text), 130);
+}
+
+/// The bar's room at 80x24 with the explorer open (the pane inside its border, a blank at both
+/// ends).
+const NARROW: usize = 52;
+
+#[test]
+fn at_80_columns_the_short_form_keeps_every_part_it_can() {
+    let w = Words::new(Lang::En);
+    let applied = Spec { rows: Some(50_001), ..specs()[1].clone() };
+    let l = layout(&bar(&w, &applied), NARROW);
+    assert!(l.level < 13, "the long form still fits: {}", text(&l));
+    let hidden = Spec { hidden: 1, ..applied.clone() };
+    assert_eq!(text(&layout(&bar(&w, &hidden), NARROW)), "▼2 + │ ↓2 │ L500 │ 6/7 │ ‹ › | ⋯");
+    let failed = Spec { failed: true, hidden: 1, ..applied.clone() };
+    assert_eq!(text(&layout(&bar(&w, &failed), NARROW)), "failed │ ▼2 + │ ↓2 │ L500 │ 6/7 │ ‹ › | ⋯");
+    // At 120 columns (the pane with the explorer) `6/7 cols` keeps its word: the conditions
+    // shorten first.
+    let l = layout(&bar(&w, &hidden), 92);
+    assert!(text(&l).contains("6/7 cols"), "{}", text(&l));
+    // The limit as a short number in the short form.
+    let big = Spec { limit: Some(50_000), failed: true, hidden: 1, ..applied };
+    assert!(text(&layout(&bar(&w, &big), NARROW)).contains("L50k"), "{}", text(&layout(&bar(&w, &big), NARROW)));
+}
+
+#[test]
+fn a_limit_typed_shows_selected_until_a_key_replaces_it() {
+    let w = Words::new(Lang::En);
+    let mut m = bar(&w, &specs()[1]);
+    m.limit = LimitM::Editing { text: "500".into(), cursor: 3, selected: true };
+    let l = layout(&m, 200);
+    assert!(l.segs().any(|g| g.tone == Tone::FieldSelected && g.text == "500 "));
 }

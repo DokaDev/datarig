@@ -404,13 +404,14 @@ they were written. A condition datarig does not read as one column's is in the w
 `6/7 cols` says columns are hidden. The rows are those of the result shown (`~` an estimate,
 `500+` while not known), with the page arrows. In a narrower window the bar says less in steps
 (`⋯` alone, shorter rows, `+1` for the conditions and keys after the first, `2 conditions`,
-`ORDER ↓2`), down to marks only (`▼2 ↓2 L ◌1 ⋯`); what is applied always keeps a mark. A spinner
+`ORDER ↓2`), then a short form (`failed │ ▼2 + │ ↓2 │ L500 │ 6/7 │ ‹ › ⋯`) and at last marks
+only (`▼2 ↓2 L ◌1 ⋯`); what is applied always keeps a mark. A spinner
 goes first while the tab's query runs, and `failed`, `cancelled`, `unapplied` or `refused` when
 the last run brought no rows or was refused.
 
 Keys: `Space r w` puts the keys on the conditions (`←`/`→` move, `Enter` opens one in the dialog,
 `x` takes it out and runs, `+` adds one, `Esc` goes back to the grid), `Space r l` types the
-limit, `Space r c` opens the dialog on the columns, `Space r r` counts the rows (as `#`), and
+limit (the cap opens selected: the first digit replaces it), `Space r c` opens the dialog on the columns, `Space r r` counts the rows (as `#`), and
 `Space r A` opens the dialog. A click on a part does the same.
 
 On a table tab the result strip (the result tabs and the connection,

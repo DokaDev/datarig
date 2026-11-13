@@ -4,7 +4,7 @@ expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users * ×                                                          "
 "│  ＋ New connection         │╭ [Result 1]  Chart  Messages        H/L  local-pg / datarig.shop.users  127.0.0.1:55432 ╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾╭─────────────────────────────────────────────╮+ │ ORDER BY + │ LIMIT none │ 1 col │ 1–500 of 500+ rows ‹ ›        ⋯ │"
+"│▾╭─────────────────────────────────────────────╮+ │ ORDER BY + │ LIMIT none │ 500+ rows · # count ‹ ›               ⋯ │"
 "│ │ › type to filter                            │                                                                      │"
 "│ │ Rows of the filtered table                  │                                                                      │"
 "│ │  Estimate (planner)         nothing is read │                                                                      │"
