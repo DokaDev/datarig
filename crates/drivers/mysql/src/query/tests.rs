@@ -153,7 +153,7 @@ fn limits_the_server_reports() {
 /// the table's schema, which the privilege tables do not show).
 #[test]
 fn the_not_undone_question_asks_for_every_kind() {
-    let sql = not_undone_sql(&["shop.t".into(), "u".into()], Dialect::MySql(MODE));
+    let sql = not_undone_sql(&["shop.t".into(), "u".into()], Dialect::MySql(MODE), false);
     for part in ["'INNODB', 'NDBCLUSTER', 'NDB'", "TABLE_TYPE = 'VIEW'", "' (trigger)'", "' (triggers not visible)'"] {
         assert!(sql.contains(part), "{part}: {sql}");
     }
@@ -164,6 +164,16 @@ fn the_not_undone_question_asks_for_every_kind() {
     // Schema and table grants count whatever partial revokes are.
     assert_eq!(sql.matches("@@GLOBAL.partial_revokes").count(), 1, "{sql}");
     assert!(sql.ends_with("ORDER BY 1 LIMIT 20"), "{sql}");
+}
+
+/// MariaDB has no partial revokes, nor the variable that says whether they are on: its question
+/// never reads it (the server would refuse the whole question), and a global grant counts.
+#[test]
+fn the_not_undone_question_of_mariadb_reads_no_partial_revokes() {
+    let sql = not_undone_sql(&["shop.t".into()], Dialect::MySql(MODE), true);
+    assert!(!sql.contains("partial_revokes"), "{sql}");
+    assert!(sql.contains("FROM information_schema.USER_PRIVILEGES p WHERE p.GRANTEE = "), "{sql}");
+    assert!(sql.contains("' (triggers not visible)'") && sql.ends_with("ORDER BY 1 LIMIT 20"), "{sql}");
 }
 
 #[test]
