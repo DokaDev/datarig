@@ -253,6 +253,70 @@ fn quitting_commits_every_open_transaction_one_by_one_then_quits() {
     assert_eq!(status(&h), Some(Msg::TxEndStoppedCommit { tab: "2".into() }));
 }
 
+/// One tab's transaction failed, another's did not: quitting still offers to commit; `c` commits
+/// the healthy one and rolls the failed one back (it cannot commit), then quits.
+#[test]
+fn quitting_commits_the_healthy_transactions_and_rolls_back_the_failed_ones() {
+    let mut h = connected();
+    write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3);
+    h.ctrl('t');
+    write(&mut h, "DELETE FROM shop.orders WHERE id = 9", 1);
+    h.tab_db(1, DbEvent::TxAborted(true));
+    h.command("qa");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    assert!(buttons(&h).contains(&Label::TxButtonCommit), "{:?}", buttons(&h));
+    let screen = h.screen(100, 30);
+    assert!(screen.contains("c commit · r roll back · y quit anyway (rolls back) · Enter/n stay"), "{screen}");
+    assert!(screen.contains("1 transaction failed (tab 2): c rolls it back and commits the others."), "{screen}");
+    h.keys("c");
+    let first = ends(&mut h);
+    assert_eq!(first.len(), 1);
+    assert!(first[0].1, "the healthy one commits");
+    ended(&mut h, 0, first[0].0, TxOutcome::Committed);
+    assert!(!h.app.quit);
+    let second = ends(&mut h);
+    assert_eq!(second.len(), 1);
+    assert!(!second[0].1, "the failed one rolls back");
+    ended(&mut h, 1, second[0].0, TxOutcome::RolledBack);
+    assert!(h.app.quit, "quit once both ended");
+
+    // The failed one recovers (a `ROLLBACK TO SAVEPOINT`) while the first commits: it is still
+    // rolled back, as the question said.
+    let mut h = connected();
+    write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3);
+    h.ctrl('t');
+    write(&mut h, "DELETE FROM shop.orders WHERE id = 9", 1);
+    h.tab_db(1, DbEvent::TxAborted(true));
+    h.command("qa");
+    h.keys("c");
+    let first = ends(&mut h);
+    h.tab_db(1, DbEvent::TxAborted(false));
+    ended(&mut h, 0, first[0].0, TxOutcome::Committed);
+    let second = ends(&mut h);
+    assert!(!second[0].1, "rolled back as the question said");
+
+    // The rollback of the failed one fails: stopped there, said as a mixed end.
+    let mut h = connected();
+    write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3);
+    h.ctrl('t');
+    write(&mut h, "DELETE FROM shop.orders WHERE id = 9", 1);
+    h.tab_db(1, DbEvent::TxAborted(true));
+    h.command("qa");
+    h.keys("c");
+    let first = ends(&mut h);
+    ended(&mut h, 0, first[0].0, TxOutcome::Committed);
+    let second = ends(&mut h);
+    h.tab_db(1, DbEvent::Failed { id: second[0].0, error: DbError::Server("gone".into()), cancelled: false });
+    assert!(!h.app.quit);
+    assert_eq!(status(&h), Some(Msg::TxEndStoppedMixed { tab: "2".into() }));
+    // Every one failed: only rollback, as before.
+    let mut h = connected();
+    write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3);
+    h.tab_db(0, DbEvent::TxAborted(true));
+    h.command("qa");
+    assert!(!buttons(&h).contains(&Label::TxButtonCommit), "{:?}", buttons(&h));
+}
+
 #[test]
 fn disconnect_rolls_back_first_then_disconnects() {
     let mut h = connected();

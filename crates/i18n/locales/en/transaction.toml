@@ -55,6 +55,9 @@
 "tx.ddl_lock_share" = "Statement {step} holds a SHARE lock on {target} until you commit or roll back: other sessions' writes to it wait"
 "tx.call_in_tx" = "This procedure or DO block ends transactions itself, so it can't run in the open transaction: commit or roll back first, then run it again"
 "tx.choice_keys" = "c commit · r roll back · y {go} (rolls back) · Enter/n stay"
+"tx.choice_failed_tabs" = { one = "{count} transaction failed (tab {tabs}): c rolls it back and commits the others.", other = "{count} transactions failed (tabs {tabs}): c rolls them back and commits the others." }
+"tx.end_stopped_mixed" = "Stopped at tab {tab}: its transaction did not end as asked (that tab says why). The tabs before it were committed, or rolled back where they had failed; nothing after it was done"
+"tx.end_pending_mixed" = "Ending tab {n} of {total} first (committing, or rolling back a failed one), then {go} · Esc stops waiting"
 "tx.choice_keys_rollback" = "r roll back · y {go} (rolls back) · Enter/n stay"
 "tx.go.close" = "close anyway"
 "tx.go.quit" = "quit anyway"
