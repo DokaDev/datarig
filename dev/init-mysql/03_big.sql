@@ -1,7 +1,7 @@
 -- Moderately big table (~1,000,000 rows) for streaming / row-limit tests.
 -- Deliberately has no index beyond the PK, so ORDER BY created_at forces a full sort.
 -- Built from a 100x100x100 cross join (recursion depth 100, well under the default
--- cte_max_recursion_depth of 1000) instead of row-by-row inserts, so this stays fast.
+-- recursion limit of 1000) instead of row-by-row inserts, so this stays fast.
 
 -- The image loads these files with a client in the POSIX locale (latin1): say what they are.
 SET NAMES utf8mb4;

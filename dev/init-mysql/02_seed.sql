@@ -6,8 +6,11 @@ SET NAMES utf8mb4;
 
 USE shop;
 
--- Recursive CTEs below go past the default depth of 1000.
-SET SESSION cte_max_recursion_depth = 20000;
+-- Recursive CTEs below go past the default depth of 1000. The servers name the limit
+-- differently: MySQL runs only the first comment (MariaDB skips versions 50700 to 99999),
+-- MariaDB only the second.
+/*!80000 SET SESSION cte_max_recursion_depth = 20000 */;
+/*M!100200 SET SESSION max_recursive_iterations = 20000 */;
 
 -- ── handcrafted edge-case users (ids 1..8) ──────────────────────────
 INSERT INTO users (email, name, nickname, address, phone, bio, profile, is_active, created_at) VALUES
