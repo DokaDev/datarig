@@ -148,6 +148,9 @@ pub enum ConfirmAction {
     /// Save the open environment form although profiles that already name it (while no
     /// environment had that name) take its rules. Cancel is the default.
     AdoptEnvironment,
+    /// Add the environment presets although profiles that already name some of them (while no
+    /// environment had those names) take their rules. Cancel is the default.
+    AdoptPresets,
     /// Delete this environment.
     DeleteEnvironment(datarig_core::policy::EnvironmentId),
     /// Delete this session preset.
@@ -264,6 +267,7 @@ impl Confirm {
             | ConfirmAction::DeleteSession(_) => (Label::DialogButtonCancel, Label::DialogButtonDelete),
             ConfirmAction::FilterHistoryClear { .. } => (Label::DialogButtonCancel, Label::DialogButtonClear),
             ConfirmAction::AdoptEnvironment => (Label::DialogButtonCancel, Label::DialogButtonSave),
+            ConfirmAction::AdoptPresets => (Label::DialogButtonCancel, Label::DialogButtonContinue),
             ConfirmAction::SetConnection(_) | ConfirmAction::SetContext(_) => {
                 (Label::DialogButtonKeep, Label::DialogButtonSwitch)
             }

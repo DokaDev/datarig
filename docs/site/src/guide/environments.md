@@ -54,8 +54,9 @@ blue, "asks before every write" and "manual commit" in the warning colour, "hold
 paging" in the error colour. `n` makes one, `e` edits, `c` copies, `R` renames, `d` deletes,
 and `Enter` or `l` lists the profiles that use it. A rename takes those profiles along;
 deleting one that profiles use asks first and names them. Saving an environment under a name
-that profiles already use while no environment has it (a rename, a copy or a new one) also asks
-first: it names those profiles and the rules they would take. The command line also finds the
+that profiles already use while no environment has it (a rename, a copy, a new one, a preset
+picked in a profile's form, or the presets added at once) also asks first: it names those
+profiles and the rules they would take. The command line also finds the
 action `env.new`.
 
 While there is no environment, the section offers **Add presets: dev, test, staging, prod**,

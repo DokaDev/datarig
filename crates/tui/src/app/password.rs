@@ -424,6 +424,7 @@ impl App {
         if self.overlays.form().is_some_and(ProfileForm::is_session) {
             return self.save_session_form();
         }
+        let adopt_confirmed = std::mem::take(&mut self.env_adopt_confirmed);
         let Some(form) = self.overlays.form_mut().filter(|f| !f.saving) else { return };
         form.attempted = true;
         let editing = form.editing;
@@ -436,6 +437,16 @@ impl App {
             }
             return;
         }
+        // A preset environment picked here is written with the profile: other profiles that
+        // already name it (while no environment has that name) would take its rules. Asked first.
+        let (made_env, id) = (form.made_environment().cloned(), form.profile_id());
+        if !adopt_confirmed && let Some(e) = made_env {
+            let users = self.environment_adopters(&e.name, Some(id));
+            if !users.is_empty() {
+                return self.ask_adopt_environment(&e, users);
+            }
+        }
+        let Some(form) = self.overlays.form() else { return };
         // One move at a time: the database password's (a change of its storage), then (another
         // save) the tunnel secret's into a preset made of the profile's own tunnel.
         if form.made_preset().is_some() && form.original_source().is_some_and(|from| from != form.source) {

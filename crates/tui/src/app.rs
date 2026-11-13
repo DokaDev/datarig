@@ -590,8 +590,9 @@ pub struct App {
     prompt_queue: VecDeque<(ProfileId, Notice)>,
     /// A profile form save waiting for the source-change confirmation.
     pending_save: bool,
-    /// An environment form save confirmed although it gives its rules to profiles that already
-    /// named it while it was not defined (the next save goes through without asking).
+    /// A save of an environment (its form, one picked in a profile form, the presets) confirmed
+    /// although it gives its rules to profiles that already named it while it was not defined:
+    /// the next save goes through without asking.
     env_adopt_confirmed: bool,
     /// Environment variables (the `env` source); tests replace it.
     env: EnvLookup,
