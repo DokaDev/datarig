@@ -362,6 +362,45 @@ fn a_lock_wait_past_the_limit_says_how_long_it_waited() {
     assert!(screen.contains("waited too long for a lock another session holds"), "{screen}");
 }
 
+/// A lock wait limit set by hand in the tab (`SET lock_timeout`, once the server ran it): the
+/// lock wait error no longer names the planned limit. One the server refused leaves it named.
+#[test]
+fn a_lock_wait_limit_set_by_hand_is_not_named_as_the_planned_one() {
+    let server = "ERROR: canceling statement due to lock timeout";
+    let lock_wait = |set_ok: bool| {
+        let mut h = connected(Policy::default());
+        let id = run(&mut h, "SET lock_timeout = '1s'");
+        let ev = match set_ok {
+            true => DbEvent::Done { id, outcome: Outcome::Affected(0), elapsed: MS },
+            false => DbEvent::Failed { id, error: DbError::Server("ERROR: invalid value".into()), cancelled: false },
+        };
+        h.tab_db(0, ev);
+        let id = run(&mut h, "UPDATE shop.users SET name = 'x' WHERE id = 1");
+        h.tab_db(0, DbEvent::Failed { id, error: DbError::LockTimeout(server.into()), cancelled: false });
+        h.screen(200, 45)
+    };
+    let screen = lock_wait(true);
+    assert!(!screen.contains("Waited longer than 5s"), "{screen}");
+    assert!(screen.contains("waited too long for a lock another session holds"), "{screen}");
+    let screen = lock_wait(false);
+    assert!(screen.contains("Waited longer than 5s"), "refused: the planned limit stands: {screen}");
+    // A function of the user's may set it (code the text does not show), and so may a routine
+    // that failed after it did: not named either.
+    for (sql, ok) in [("SELECT shop.set_limits()", true), ("DO $$ BEGIN PERFORM 1; END $$", false)] {
+        let mut h = connected(Policy::default());
+        let id = run(&mut h, sql);
+        let ev = match ok {
+            true => DbEvent::Done { id, outcome: Outcome::Affected(0), elapsed: MS },
+            false => DbEvent::Failed { id, error: DbError::Server("ERROR: raised".into()), cancelled: false },
+        };
+        h.tab_db(0, ev);
+        let id = run(&mut h, "UPDATE shop.users SET name = 'x' WHERE id = 1");
+        h.tab_db(0, DbEvent::Failed { id, error: DbError::LockTimeout(server.into()), cancelled: false });
+        let screen = h.screen(200, 45);
+        assert!(!screen.contains("Waited longer than 5s"), "{sql}: {screen}");
+    }
+}
+
 #[test]
 fn set_takes_any_duration_in_range_and_refuses_the_rest() {
     let mut h = connected(Policy::default());

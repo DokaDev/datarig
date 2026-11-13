@@ -7,7 +7,7 @@ use crate::common;
 
 use common::*;
 use datarig_core::driver::{DbCommand, DbEvent, SessionContext, SessionRole};
-use datarig_i18n::{I18n, Lang, Msg};
+use datarig_i18n::{I18n, Label, Lang, Msg};
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::quick::{QuickNote, QuickRow};
 use datarig_tui::app::{AppEvent, EventTarget, Focus};
@@ -504,6 +504,42 @@ fn a_statement_that_needs_no_transaction_says_how_to_run_it() {
             "{screen}"
         );
     }
+    // Manual commit: a statement it leaves as it is (no `ManualBegun`) still failed for the
+    // schema's transaction, and gets its advice; one it opened a transaction for does not.
+    for begun in [false, true] {
+        let mut h = Harness::connected(Lang::En);
+        h.command("use .shop");
+        h.ctrl('e');
+        let (t, generation, id) = (h.app.tab().id, h.app.tab().exec.generation, h.app.tab().exec.query_id);
+        h.app.tab_mut().exec.sent_manual = true;
+        let db_ev = |ev| AppEvent::Db { target: EventTarget::Tab(t), generation, ev };
+        h.app.on_app_event(db_ev(DbEvent::ContextPerTransaction));
+        if begun {
+            h.app.on_app_event(db_ev(DbEvent::ManualBegun { id, index: 0 }));
+        }
+        let error = DbError::NeedsNoTransaction("ERROR: VACUUM cannot run inside a transaction block".into());
+        h.app.on_app_event(db_ev(DbEvent::Failed { id, error, cancelled: false }));
+        let notes = &h.app.tab().exec.run.notes;
+        let schema = notes.iter().any(|n| matches!(n.msg, Msg::ContextNoTransaction { .. }));
+        assert_eq!(schema, !begun, "{notes:?}");
+    }
+    // Refused in a transaction the app opened for anything but the tab's schema (here the
+    // session never said its schema goes per transaction): not blamed on the schema.
+    let mut h = Harness::connected(Lang::En);
+    h.command("use .shop");
+    h.ctrl('e');
+    let (t, generation, id) = (h.app.tab().id, h.app.tab().exec.generation, h.app.tab().exec.query_id);
+    let error = DbError::NeedsNoTransaction("ERROR: VACUUM cannot run inside a transaction block".into());
+    let ev = DbEvent::Failed { id, error, cancelled: false };
+    h.app.on_app_event(AppEvent::Db { target: EventTarget::Tab(t), generation, ev });
+    let notes = &h.app.tab().exec.run.notes;
+    assert!(!notes.iter().any(|n| matches!(n.msg, Msg::ContextNoTransaction { .. })), "{notes:?}");
+    assert!(notes.iter().any(|n| n.msg == Msg::Label(Label::QueryNeedsNoTransaction)), "{notes:?}");
+    let status = h.status(250, 40);
+    assert!(
+        status.contains("VACUUM cannot run inside a transaction block") && !status.contains("without a schema"),
+        "{status}"
+    );
     // A plain server error: no hint.
     h.ctrl('e');
     let t = h.app.tab().id;

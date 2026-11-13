@@ -165,6 +165,31 @@ impl App {
         }
         let run_ended = matches!(&ev, DbEvent::Page { id: q, columns: Some(_), .. } | DbEvent::Done { id: q, .. }
             | DbEvent::Failed { id: q, .. } if *q == current);
+        // A statement of the run that ran without error may have set the lock wait limit by
+        // hand (it names it, or runs code the text does not show: a routine, a function of the
+        // user's), and so may the code of the one that failed: from then on the session's
+        // planned limit is not known to be the one in force, and a lock wait error does not
+        // name it.
+        if run_ended && let Some(t) = self.tabs.get_mut(id) {
+            let statements = &t.exec.run.statements;
+            let ok = match &ev {
+                DbEvent::Failed { .. } => t.exec.run.current().unwrap_or(statements.len()).min(statements.len()),
+                _ => statements.len(),
+            };
+            let d = t.exec.prepared.language().dialect();
+            let mut classifier = t.exec.prepared.clone();
+            // A write's triggers run code too; only a call of code (a function of the user's)
+            // counts here, not every write.
+            let mut runs_code = |sql: &str| {
+                let r = classifier.classify(sql);
+                r.runs_code && !r.writes
+            };
+            let set = statements[..ok].iter().any(|s| may_set_lock_wait(&s.sql, d) || runs_code(&s.sql))
+                || statements.get(ok).is_some_and(|s| runs_code(&s.sql));
+            if set {
+                t.exec.lock_wait = None;
+            }
+        }
         let tx_ended = matches!(ev, DbEvent::TxOpen(false));
         // Rows that land for a result of this run: the answer's (`None`) or a statement's
         // before it. Read inside the user's transaction, the result says so.
@@ -230,15 +255,24 @@ impl App {
             }),
             _ => None,
         };
-        // A statement that cannot run in a transaction, refused only because the tab's schema
-        // is set in one behind a pooler: said why, and how to run it.
-        let needs_no_tx = (outside.is_none()
-            && matches!(&ev, DbEvent::Failed { error: DbError::NeedsNoTransaction(_), .. }))
-        .then(|| {
+        // A statement that cannot run in a transaction, refused in one the app opened for it.
+        let no_tx = outside.is_none() && matches!(&ev, DbEvent::Failed { error: DbError::NeedsNoTransaction(_), .. });
+        // Refused only because the tab's schema is set in one behind a pooler (not in a
+        // transaction the session opened for manual commit in this run, `ManualBegun`: a
+        // statement manual commit leaves as it is still gets the schema's): said why, and how
+        // to run it.
+        let schema_tx = self
+            .tabs
+            .get(id)
+            .is_some_and(|t| t.exec.path_per_transaction && t.exec.manual_begun.is_none_or(|(run, _)| run != current));
+        let needs_no_tx = (no_tx && schema_tx).then(|| {
             let t = self.tabs.get(id);
             let own = profile.map(|p| self.own_database(p)).unwrap_or_default();
             t.and_then(|t| t.context.database.clone()).unwrap_or(own)
         });
+        // Any other transaction of the app's (manual commit's, the connection's settings'):
+        // said so, without the schema's advice.
+        let other_tx = no_tx && !schema_tx;
         // Where the result's rows may spill, and how much.
         let (spill, limits) =
             (self.spill.clone(), self.tabs.get(id).map(|t| self.result_limits(t)).unwrap_or_default());
@@ -1101,6 +1135,9 @@ impl App {
                 if let Some(database) = needs_no_tx {
                     t.exec.run.notes.push(Notice::new(Msg::ContextNoTransaction { database }, Level::Warning));
                 }
+                if other_tx {
+                    t.exec.run.notes.push(Notice::new(Label::QueryNeedsNoTransaction, Level::Warning));
+                }
                 // Row results stay (a failed fetch keeps `more` as it was); Messages says what
                 // failed.
                 if !matches!(t.results, Results::Rows(_)) {
@@ -1282,4 +1319,18 @@ fn read_in(exec: &mut crate::app::tabs::TabSession) -> ReadIn {
 /// the first stop there.
 fn shown_cap(t: &crate::app::Tab) -> Option<u64> {
     t.doc.table_query.as_ref()?.shown.as_ref()?.limit
+}
+
+/// Whether `sql` may change the session's lock wait limit: it names it (PostgreSQL's
+/// `lock_timeout`, MySQL's `lock_wait_timeout` and `innodb_lock_wait_timeout`) or `set_config`,
+/// or it resets settings or runs code the text does not show (`RESET`, `DISCARD`, `CALL`, `DO`,
+/// `EXECUTE`). A cheap look that errs towards "may".
+fn may_set_lock_wait(sql: &str, d: datarig_core::sql::dialect::Dialect) -> bool {
+    let l = sql.to_ascii_lowercase();
+    if ["lock_timeout", "lock_wait_timeout", "set_config"].iter().any(|w| l.contains(w)) {
+        return true;
+    }
+    let first = datarig_core::sql::lexer::lex_in(sql, d).into_iter().find(|w| w.is_word());
+    let first = first.map(|w| w.text(sql).to_ascii_lowercase());
+    matches!(first.as_deref(), Some("reset" | "discard" | "call" | "do" | "execute"))
 }

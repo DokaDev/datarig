@@ -206,6 +206,9 @@ disconnect and Lock wait fields; empty takes the config's value, `"off"` turns i
   whole seconds.
 - A statement that waited too long fails with "Waited longer than 5s for a lock another
   session holds, so the server cancelled the statement", followed by the server's own error.
+  Once you set the limit yourself in that tab (`SET lock_timeout`, `SET innodb_lock_wait_timeout`,
+  a `RESET ALL`, a procedure), the message no longer names a time, as the one in force is not
+  known.
 - It does not change how commits work: with automatic commit only that statement failed; in a
   manual transaction on PostgreSQL only that run is undone (its savepoint) and the transaction
   keeps what earlier runs did; on MySQL the server undoes the statement only (unless

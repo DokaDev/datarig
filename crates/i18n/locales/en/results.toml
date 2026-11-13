@@ -31,6 +31,7 @@
 "query.cancelled_session_closed" = "Cancelled: the tab's connection was closed while it ran"
 "query.cancel_unanswered" = "Query cancelled: the connection did not answer, so it was closed (the next run reconnects)"
 "query.error" = "Error: {error}"
+"query.needs_no_transaction" = "It ran inside a transaction the app opened for it (for manual commit, or to apply this connection's settings), and it cannot run inside one."
 "query.no_statement" = "No statement under cursor"
 "query.busy" = "A query is already running ({key} to cancel)"
 "query.queued_dropped" = "Not run: this statement waited for {name}, but the tab's connection changed before it connected"
