@@ -170,9 +170,15 @@ jobs:
     # can be held by an outgoing connection, such as one of those pulling the next image, and
     # the container then fails to start ("address already in use"). The first step checks it
     # (.github/scripts/host-ports.sh). The dev compose file's ports are a developer's own.
+    #
+    # Every image here (the services, the TLS servers below and those of `perf`) is pinned by
+    # digest, so a new image under the same tag never changes a run by itself. To move to a newer
+    # one on purpose, read its digest with `docker buildx imagetools inspect <image>:<tag>` (the
+    # first `Digest:`, which covers every platform), put it in every place that names the image
+    # in this file, and let the pull request's run show what changed.
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
         env:
           POSTGRES_USER: datarig
           POSTGRES_PASSWORD: datarig
@@ -187,7 +193,7 @@ jobs:
       # PgBouncer in transaction mode without prepared statement support, as in
       # dev/docker-compose.yml (service `pgbouncer`): the driver's pooler_pg tests.
       pgbouncer:
-        image: edoburu/pgbouncer:v1.25.2-p0
+        image: edoburu/pgbouncer:v1.25.2-p0@sha256:7d7a27d9e90985cab5cf42256f5c13a3120baa4b055b69df37beb272b89b2340
         env:
           DATABASE_URL: postgres://datarig:datarig@postgres:5432/datarig
           AUTH_TYPE: scram-sha-256
@@ -202,7 +208,7 @@ jobs:
       # MySQL 8.4 as in dev/docker-compose.yml (service `mysql`; utf8mb4 and utf8mb4_0900_ai_ci are
       # 8.4's defaults), loaded with dev/init-mysql/*.sql below.
       mysql:
-        image: mysql:8.4
+        image: mysql:8.4@sha256:a81d043930e51745522bd5c430961cf8286f0a23f0a9a2a6e0108f7ea71b0902
         env:
           MYSQL_USER: datarig
           MYSQL_PASSWORD: datarig
@@ -262,6 +268,8 @@ jobs:
           NETWORK: ${{ job.services.postgres.network }}
           PG_TLS_PORT: "15433"
           MYSQL_TLS_PORT: "13307"
+          PG_TLS_IMAGE: postgres:17@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
+          MYSQL_TLS_IMAGE: mysql:8.4@sha256:a81d043930e51745522bd5c430961cf8286f0a23f0a9a2a6e0108f7ea71b0902
         run: |
           sh dev/tls/make-certs.sh "$RUNNER_TEMP/tls"
           sh dev/tls/up.sh "$RUNNER_TEMP/tls" "$NETWORK"
@@ -332,10 +340,11 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    # Host ports below the runner's ephemeral ports, as in `integration`.
+    # Host ports below the runner's ephemeral ports, and images pinned by digest, as in
+    # `integration`.
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:ff87138949ad9a46f32ff23bd6852b52ce024a13dffe9b4087be98292cdd3b4f
         env:
           POSTGRES_USER: datarig
           POSTGRES_PASSWORD: datarig
@@ -350,7 +359,7 @@ jobs:
       # The MySQL driver's round trips (`rtt_mysql`) need a server only: their rows are a
       # temporary table of the session's own.
       mysql:
-        image: mysql:8.4
+        image: mysql:8.4@sha256:a81d043930e51745522bd5c430961cf8286f0a23f0a9a2a6e0108f7ea71b0902
         env:
           MYSQL_USER: datarig
           MYSQL_PASSWORD: datarig

@@ -1,9 +1,9 @@
 #!/bin/sh
 # Scratch TLS servers for the tests (never the dev services or their volumes): PostgreSQL 17 on
-# 55433 and MySQL 8.4 on 53307 of 127.0.0.1 (PG_TLS_PORT and MYSQL_TLS_PORT choose others, as
-# CI does), with the certificates of make-certs.sh, on the dev compose network (so the SSH
-# bastion reaches them as pg-tls.test and mysql-tls.test). Throwaway: no volumes; `down.sh`
-# removes them.
+# 55433 and MySQL 8.4 on 53307 of 127.0.0.1 (PG_TLS_PORT and MYSQL_TLS_PORT choose others, and
+# PG_TLS_IMAGE and MYSQL_TLS_IMAGE other images, as CI does to pin them by digest), with the
+# certificates of make-certs.sh, on the dev compose network (so the SSH bastion reaches them as
+# pg-tls.test and mysql-tls.test). Throwaway: no volumes; `down.sh` removes them.
 #   PostgreSQL: TLS on, every login over TLS with a password (SCRAM), except zz_cert, which logs
 #   in with its client certificate; client certificates of client-ca are asked for.
 #   MySQL: require_secure_transport=ON (an unencrypted login is refused).
@@ -13,9 +13,11 @@ certs=$(cd "$1" && pwd)
 net=${2:-datarig-dev_default}
 pg_port=${PG_TLS_PORT:-55433}
 mysql_port=${MYSQL_TLS_PORT:-53307}
+pg_image=${PG_TLS_IMAGE:-postgres:17}
+mysql_image=${MYSQL_TLS_IMAGE:-mysql:8.4}
 docker run -d --name zz_datarig_pg_tls --network "$net" --network-alias pg-tls.test \
     -p "127.0.0.1:$pg_port:5432" -e POSTGRES_USER=datarig -e POSTGRES_PASSWORD=datarig -e POSTGRES_DB=datarig \
-    -e POSTGRES_HOST_AUTH_METHOD=scram-sha-256 -v "$certs:/src:ro" --entrypoint sh postgres:17 -c '
+    -e POSTGRES_HOST_AUTH_METHOD=scram-sha-256 -v "$certs:/src:ro" --entrypoint sh "$pg_image" -c '
         mkdir -p /certs && cp /src/server.crt /src/server.key /src/client-ca.crt /certs/ &&
         chown postgres /certs/* && chmod 600 /certs/server.key &&
         printf "%s\n" "local all all trust" "hostssl all zz_cert all cert" \
@@ -25,7 +27,7 @@ docker run -d --name zz_datarig_pg_tls --network "$net" --network-alias pg-tls.t
             -c ssl_key_file=/certs/server.key -c ssl_ca_file=/certs/client-ca.crt -c hba_file=/certs/pg_hba.conf'
 docker run -d --name zz_datarig_mysql_tls --network "$net" --network-alias mysql-tls.test \
     -p "127.0.0.1:$mysql_port:3306" -e MYSQL_USER=datarig -e MYSQL_PASSWORD=datarig -e MYSQL_DATABASE=datarig \
-    -e MYSQL_ROOT_PASSWORD=datarig-root -v "$certs:/src:ro" --entrypoint sh mysql:8.4 -c '
+    -e MYSQL_ROOT_PASSWORD=datarig-root -v "$certs:/src:ro" --entrypoint sh "$mysql_image" -c '
         mkdir -p /certs && cp /src/ca.crt /src/server.crt /src/server.key /certs/ &&
         chown mysql /certs/* && chmod 600 /certs/server.key &&
         exec docker-entrypoint.sh mysqld --require-secure-transport=ON --ssl-ca=/certs/ca.crt \
