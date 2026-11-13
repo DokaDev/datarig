@@ -147,7 +147,7 @@ async fn refused_as_mariadb(conn: &mut mysql_async::Conn, test: &str) -> bool {
     }
     let decoded = datarig_core::monitor::decode::mysql::probe(&answers);
     assert!(
-        matches!(&decoded, Err(datarig_core::monitor::decode::DecodeError::Unsupported(l)) if l.contains("MariaDB")),
+        matches!(&decoded, Err(datarig_core::monitor::decode::DecodeError::NotRead(l)) if l.starts_with("MariaDB ")),
         "{decoded:?}"
     );
     // Written to the real stderr handle so it is visible even with output capture.

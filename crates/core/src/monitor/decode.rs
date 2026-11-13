@@ -33,8 +33,10 @@ pub enum Answer {
 pub enum DecodeError {
     /// The rows are not what the statement gives.
     Malformed { what: &'static str, detail: String },
-    /// The server is a version or product the monitor does not read (its version line).
+    /// The server is a version the monitor does not read (its version line).
     Unsupported(String),
+    /// The server is a product the monitor does not read at any version (`MariaDB 11.4.13`).
+    NotRead(String),
     /// The probe's first statement failed, so nothing is known of the server.
     ProbeFailed(String),
     /// A read failed for another reason than a privilege refused: what it would show is not
@@ -47,6 +49,7 @@ impl fmt::Display for DecodeError {
         match self {
             DecodeError::Malformed { what, detail } => write!(f, "unexpected monitor rows ({what}): {detail}"),
             DecodeError::Unsupported(version) => write!(f, "server not supported by the monitor: {version}"),
+            DecodeError::NotRead(server) => write!(f, "server not read by the monitor: {server}"),
             DecodeError::ProbeFailed(message) => write!(f, "monitor probe failed: {message}"),
             DecodeError::Failed(message) => write!(f, "monitor read failed: {message}"),
         }
@@ -61,6 +64,7 @@ impl DecodeError {
     pub fn into_db(self, oldest: &str) -> DbError {
         match self {
             DecodeError::Unsupported(server) => DbError::VersionUnsupported { server, needed: oldest.to_owned() },
+            DecodeError::NotRead(server) => DbError::MonitorUnsupported(server),
             DecodeError::ProbeFailed(message) | DecodeError::Failed(message) => DbError::Server(message.into()),
             e @ DecodeError::Malformed { .. } => DbError::Connection(Fault::other(e.to_string())),
         }

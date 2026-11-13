@@ -351,8 +351,16 @@ fn mysql_versions_the_monitor_does_not_read() {
     assert_eq!(probe("8.0.35-0ubuntu0.22.04.1"), Ok(80035));
     assert_eq!(probe("8.0.28-log"), Ok(80028));
     assert_eq!(probe("8.0.17"), Ok(80017));
-    for old in ["8.0.16", "5.7.44-log", "10.11.6-MariaDB", "8.0.mysql_aurora.3.05.2", "eight"] {
+    for old in ["8.0.16", "5.7.44-log", "8.0.mysql_aurora.3.05.2", "eight"] {
         assert!(matches!(probe(old), Err(DecodeError::Unsupported(_))), "{old}");
+    }
+    // MariaDB is no MySQL too old: the monitor does not read it at any version, and says so.
+    for (line, server) in [("10.11.6-MariaDB", "MariaDB 10.11.6"), ("11.4.13-MariaDB-ubu2404", "MariaDB 11.4.13")] {
+        assert_eq!(probe(line), Err(DecodeError::NotRead(server.into())), "{line}");
+        assert_eq!(
+            DecodeError::NotRead(server.into()).into_db(format::MYSQL_OLDEST),
+            crate::driver::DbError::MonitorUnsupported(server.into())
+        );
     }
     let failed = Answer::Error { code: Some(2013), message: "Lost connection".into() };
     assert_eq!(

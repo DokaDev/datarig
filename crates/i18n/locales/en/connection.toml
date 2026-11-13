@@ -117,6 +117,7 @@
 "tls.not_for_server" = "the server's certificate is not meant for a server (its extended key usage names another purpose)"
 "tls.plain_tunnel" = "no TLS (the SSH tunnel encrypts it to the bastion)"
 "db.version_unsupported" = "{server} is not supported: datarig needs {needed} or newer"
+"db.monitor_unsupported" = "the monitor does not read {server}: it reads MySQL and PostgreSQL servers"
 "db.auth_unsupported" = "the server asks for the authentication method “{name}”, which datarig does not support"
 "db.access_denied" = "{message} (a wrong user or password, or the account requires TLS, REQUIRE SSL, on a connection without it; after a mistyped password, connecting again asks for it again)"
 "db.key_retrieval_refused" = "not logged in: the password would be encrypted with a public key the server sends over this unencrypted connection, which anyone in between could replace. Connect through an SSH tunnel, set the server's public key file, or allow key retrieval (the profile's Advanced section)"

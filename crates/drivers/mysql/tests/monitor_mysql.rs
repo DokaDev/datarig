@@ -271,8 +271,8 @@ async fn refuses_monitor(url: &str, test: &str, read_only: bool) -> bool {
     let opts = ConnectOptions::new(500, SessionRole::Monitor, &tag).read_only(read_only);
     let mut c = Conn::open_with(url, SessionRole::Monitor, opts).await;
     match c.wait(|e| matches!(e, DbEvent::Monitor(_)), 20).await {
-        DbEvent::Monitor(Err(DbError::VersionUnsupported { server, .. })) => {
-            assert!(server.contains("MariaDB"), "{server}");
+        DbEvent::Monitor(Err(DbError::MonitorUnsupported(server))) => {
+            assert!(server.starts_with("MariaDB "), "{server}");
         }
         other => panic!("probe: {other:?}"),
     }
