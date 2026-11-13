@@ -168,10 +168,41 @@ impl App {
         c.resolved = Some(cfg);
     }
 
+    /// What a connect checks before anything is asked or sent, checked again before a session of
+    /// a connected profile opens later (its metadata session after it was lost, one in another
+    /// database, a monitor's, a tab's): its environment is defined, its tunnel setting names a
+    /// preset that is there, and what its query sessions start with can be planned. `cfg`: the
+    /// copy the profile connected with. The notice says what is wrong (as the connect says it).
+    pub(super) fn session_checks(&self, cfg: &ConnectionConfig) -> Result<(), Notice> {
+        self.reach_checks(cfg)?;
+        if let Err(e) = self.session_plan_of(cfg) {
+            return Err(self.session_error_notice(cfg, &e));
+        }
+        Ok(())
+    }
+
+    /// [`App::session_checks`] but what the query sessions start with: the profile's environment
+    /// is defined and its tunnel setting names a preset that is there (a session that starts
+    /// with something else, a Startup SQL's test, checks its own statements).
+    pub(super) fn reach_checks(&self, cfg: &ConnectionConfig) -> Result<(), Notice> {
+        if let Err(e) = self.policy_of(cfg.id) {
+            return Err(self.unknown_environment_notice(&cfg.name, &e));
+        }
+        if let Err(e) = self.route_of(cfg) {
+            return Err(self.route_error_notice(&cfg.name, &e));
+        }
+        Ok(())
+    }
+
     /// Reopen the metadata session of profile `id` after it was lost (a new generation; the
-    /// tree and catalog reload).
+    /// tree and catalog reload), once [`App::session_checks`] pass (else the status bar says
+    /// why and nothing opens).
     pub(super) fn reopen_meta(&mut self, id: ProfileId) {
         let Some(cfg) = self.conns.get(id).and_then(|c| c.resolved.clone()) else { return };
+        if let Err(m) = self.session_checks(&cfg) {
+            self.status = Some(m);
+            return;
+        }
         let generation = self.conns.next_generation(id);
         let meta = self.open_session(&cfg, SessionRole::Meta, EventTarget::Meta(id), generation, Default::default());
         let c = self.conns.entry(id);

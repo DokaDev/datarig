@@ -1088,11 +1088,22 @@ impl App {
         }
     }
 
-    /// Open tab `id`'s monitor connection on profile `profile` (connected).
+    /// Open tab `id`'s monitor connection on profile `profile` (connected), once
+    /// [`App::session_checks`] pass (else the tab says why).
     fn monitor_open(&mut self, id: TabId, profile: ProfileId) {
         let Some(cfg) = self.conns.get(profile).filter(|c| c.connected).and_then(|c| c.resolved.clone()) else {
             return;
         };
+        if let Err(n) = self.session_checks(&cfg) {
+            let why = self.i18n.msg(&n.msg).to_string();
+            let generation = self.tabs.next_generation();
+            if let Some(m) = self.monitor_mut(id) {
+                m.drop_connection();
+                m.generation = generation;
+                m.state = MonState::Unavailable(why);
+            }
+            return;
+        }
         let generation = self.tabs.next_generation();
         let session = self.open_session(
             &cfg,

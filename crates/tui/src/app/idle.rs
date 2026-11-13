@@ -17,8 +17,10 @@
 //!
 //! A tab's start-up statements may set that server limit themselves (PostgreSQL's
 //! `idle_session_timeout`, MySQL's `wait_timeout`; `SessionPlan::idle`): it is then the tab's
-//! limit in place of the profile's, the app's timer and the server's on the same value (a value
-//! the app cannot read keeps the profile's limit on the app's side). Its connection stays open as
+//! limit in place of the profile's: the app's timer ends the session [`own_idle_lead`] before the
+//! server would (the server counts from its last answer, before the app gets it), so the app
+//! closes first and says why (a value the app cannot read keeps the profile's limit on the app's
+//! side). Its connection stays open as
 //! long as the longest limit of its open tabs, so a tab never loses its tunnel before its own
 //! limit.
 //!
@@ -39,6 +41,12 @@ use std::time::SystemTime;
 /// The server's idle limit for a query session is the app's plus this: the app closes first and
 /// says why.
 pub const SERVER_IDLE_MARGIN: Duration = Duration::from_secs(60);
+
+/// How much earlier than a server idle limit `limit` set by a tab's start-up statements the app
+/// ends that tab's session: a tenth of it, from 1 s to 30 s (at most half of it).
+pub fn own_idle_lead(limit: Duration) -> Duration {
+    (limit / 10).clamp(Duration::from_secs(1), Duration::from_secs(30)).min(limit / 2)
+}
 
 /// How long before an idle session with an open transaction closes, or that transaction is
 /// rolled back, the app says so (at most half the limit).
@@ -117,16 +125,22 @@ impl App {
         app.max(wall)
     }
 
-    /// How long tab `t`'s session may sit unused: what its start-up statements set the server's
-    /// idle limit to on its way (direct, or behind a pooler), else its profile's limit. `None`:
-    /// never closed for that.
+    /// How long tab `t`'s session may sit unused: a little less ([`own_idle_lead`]) than what its
+    /// start-up statements set the server's idle limit to on its way (direct, or behind a
+    /// pooler), else its profile's limit. `None`: never closed for that.
     pub(super) fn tab_idle_limit(&self, t: &Tab) -> Option<Duration> {
         use datarig_core::profile::session::Wait;
-        let own = t.exec.idle.as_ref().map(|o| if t.exec.session_pooled { o.pooled } else { o.direct });
+        // Behind a pooler a statement that was not sent leaves the environment's limit, which
+        // only the app keeps: no server closes the session first then.
+        let own = t.exec.idle.as_ref().map(|o| match t.exec.session_pooled {
+            true => (o.pooled, o.pooled_set),
+            false => (o.direct, true),
+        });
         match own {
-            Some(Wait::Limit(d)) => Some(d),
-            Some(Wait::NoLimit) => None,
-            Some(Wait::Unknown) | None => self.idle_disconnect_of(t.profile?),
+            Some((Wait::Limit(d), true)) => Some(d.saturating_sub(own_idle_lead(d))),
+            Some((Wait::Limit(d), false)) => Some(d),
+            Some((Wait::NoLimit, _)) => None,
+            Some((Wait::Unknown, _)) | None => self.idle_disconnect_of(t.profile?),
         }
     }
 

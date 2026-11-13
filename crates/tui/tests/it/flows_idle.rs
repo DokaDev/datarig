@@ -258,23 +258,26 @@ fn a_startup_statement_that_sets_the_servers_idle_limit_is_the_tabs_idle_disconn
     }
     h.app.transient = None;
     let now = h.clock.now();
-    assert_eq!(h.app.next_tick(now), Some(now + Duration::from_secs(600)), "one wakeup, at the tab's 10m");
+    // 30 s before the server's 10m, so the app ends it first and says why.
+    assert_eq!(h.app.next_tick(now), Some(now + Duration::from_secs(570)), "one wakeup, before the tab's 10m");
     h.advance(LIMIT);
     assert!(!h.session_closed(1), "not after the environment's 5m");
     assert!(!h.session_closed(0), "the connection stays while its tab may");
-    h.advance(Duration::from_secs(300));
-    assert!(h.session_closed(1), "closed after 10m");
-    assert!(said(&h, |m| *m == Msg::QueryIdleClosed { time: "10m".into() }));
-    assert!(h.session_closed(0), "nothing used the connection for 10m either");
+    h.advance(Duration::from_secs(269));
+    assert!(!h.session_closed(1), "not yet");
+    h.advance(Duration::from_secs(1));
+    assert!(h.session_closed(1), "closed 30 s before the server's 10m");
+    assert!(said(&h, |m| *m == Msg::QueryIdleClosed { time: "570s".into() }), "{:?}", status(&h));
+    assert!(h.session_closed(0), "nothing used the connection for that long either");
 
     // A shorter one closes the tab first; the connection keeps the environment's 5m.
     let mut h = idle_set_by_startup("SET idle_session_timeout = '1min'");
     ran(&mut h, "SELECT 1");
-    h.advance(Duration::from_secs(60));
-    assert!(h.session_closed(1));
-    assert!(said(&h, |m| *m == Msg::QueryIdleClosed { time: "1m".into() }));
+    h.advance(Duration::from_secs(54));
+    assert!(h.session_closed(1), "6 s before the server's 1m");
+    assert!(said(&h, |m| *m == Msg::QueryIdleClosed { time: "54s".into() }), "{:?}", status(&h));
     assert!(!h.session_closed(0));
-    h.advance(Duration::from_secs(240));
+    h.advance(Duration::from_secs(246));
     assert!(h.session_closed(0), "the connection after the environment's 5m");
 
     // `0` turns it off for that session: only the app's timer would have closed it.
@@ -311,9 +314,11 @@ fn a_mysql_wait_timeout_is_the_tabs_idle_disconnect() {
     ran(&mut h, "SELECT 1");
     h.advance(LIMIT);
     assert!(!h.session_closed(1), "not after the environment's 5m");
-    h.advance(Duration::from_secs(300));
-    assert!(h.session_closed(1));
-    assert!(said(&h, |m| *m == Msg::QueryIdleClosed { time: "10m".into() }));
+    h.advance(Duration::from_secs(269));
+    assert!(!h.session_closed(1), "not yet");
+    h.advance(Duration::from_secs(1));
+    assert!(h.session_closed(1), "30 s before the server's own close, which would roll back first");
+    assert!(said(&h, |m| *m == Msg::QueryIdleClosed { time: "570s".into() }), "{:?}", status(&h));
     let mut h = mysql("SET SESSION wait_timeout = DEFAULT");
     h.db(DbEvent::Connected);
     h.sent();
@@ -329,7 +334,10 @@ fn behind_a_pooler_the_tab_keeps_the_environments_idle_disconnect() {
     let id = run(&mut h, "SELECT 1");
     h.tab_db(0, DbEvent::SessionPerTransaction { refused: vec![0] });
     h.tab_db(0, DbEvent::Done { id, outcome: Outcome::Affected(0), elapsed: MS });
-    h.advance(LIMIT);
+    // No server limit was set there: none closes it first, so the app keeps the whole 5m.
+    h.advance(LIMIT - Duration::from_secs(1));
+    assert!(!h.session_closed(1), "not before the environment's 5m");
+    h.advance(Duration::from_secs(1));
     assert!(h.session_closed(1), "after the environment's 5m");
     assert!(said(&h, |m| *m == Msg::QueryIdleClosed { time: "5m".into() }));
 }

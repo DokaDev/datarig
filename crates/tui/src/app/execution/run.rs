@@ -244,6 +244,14 @@ impl App {
         let Some(pid) = self.tabs.get(id).and_then(|t| t.profile) else { return false };
         let Some(c) = self.conns.get(pid) else { return false };
         let Some(cfg) = c.resolved.clone() else { return false };
+        // Checked again as a connect checks (the environment, the tunnel setting, what the
+        // session starts with may have changed since the profile connected): nothing opens,
+        // not even the metadata session it lost, without them.
+        if let Err(m) = self.session_checks(&cfg) {
+            self.tab_status(id, m);
+            return false;
+        }
+        let Some(c) = self.conns.get(pid) else { return false };
         if c.meta.is_none() && c.connecting.is_none() {
             self.reopen_meta(pid);
         }
@@ -255,13 +263,6 @@ impl App {
         // session of their own.
         if let Some(db) = self.tabs.get(id).and_then(|t| self.other_database(t)).map(str::to_string) {
             self.ensure_aux(pid, &db);
-        }
-        // What the session starts with is checked again (a preset may have changed since the
-        // profile connected): nothing opens without it.
-        if let Err(e) = self.session_plan_of(&cfg) {
-            let m = self.session_error_notice(&cfg, &e);
-            self.tab_status(id, m);
-            return false;
         }
         self.open_tab_session(id, &cfg);
         let Some(t) = self.tabs.get_mut(id) else { return false };
