@@ -206,6 +206,9 @@ pub enum DbError {
     /// The server's version is older than the driver supports: `server` is what it is
     /// (`MySQL 5.7.44`), `needed` the oldest version the driver works with (`MySQL 8.0`).
     VersionUnsupported { server: String, needed: String },
+    /// The monitor does not read this kind of server at any version: `server` is what it is
+    /// (`MariaDB 11.4.13`).
+    MonitorUnsupported(String),
     /// The server accepts only encrypted connections (MySQL's `require_secure_transport`), and
     /// the profile's TLS mode is off.
     TlsRequired,
@@ -387,6 +390,7 @@ impl DbError {
             | DbError::NoDatabase
             | DbError::KindUnsupported(_)
             | DbError::VersionUnsupported { .. }
+            | DbError::MonitorUnsupported(_)
             | DbError::TlsRequired
             | DbError::KeyRetrievalRefused
             | DbError::ServerKeyPathRelative(_)

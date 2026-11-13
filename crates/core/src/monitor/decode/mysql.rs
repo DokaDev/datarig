@@ -177,8 +177,14 @@ pub fn probe(answers: &[Answer]) -> Result<MySqlMonitor, DecodeError> {
     };
     let row = one(rows, "probe", PROBE)?;
     let line = row.required("version")?;
+    // MariaDB at any version: its system tables differ (`11.4.13-MariaDB-ubu2404` reads as
+    // `MariaDB 11.4.13`), never "too old".
+    if line.contains("MariaDB") {
+        let number = line.split('-').next().unwrap_or(line);
+        return Err(DecodeError::NotRead(format!("MariaDB {number}")));
+    }
     let version = match version_number(line) {
-        Some(v) if v >= MYSQL_MIN_VERSION && !line.contains("MariaDB") => v,
+        Some(v) if v >= MYSQL_MIN_VERSION => v,
         _ => return Err(DecodeError::Unsupported(format!("MySQL {line}"))),
     };
     let current = row.required("user")?;

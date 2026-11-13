@@ -163,6 +163,9 @@ impl App {
                     .msg(&Msg::DbVersionUnsupported { server: server.clone(), needed: needed.clone() })
                     .to_string();
             }
+            DbError::MonitorUnsupported(server) => {
+                return self.i18n.msg(&Msg::DbMonitorUnsupported { server: server.clone() }).to_string();
+            }
             DbError::AuthUnsupported(name) => {
                 return self.i18n.msg(&Msg::DbAuthUnsupported { name: name.clone() }).to_string();
             }
