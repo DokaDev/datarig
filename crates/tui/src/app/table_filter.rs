@@ -102,7 +102,7 @@ impl App {
             TableAction::BarWhere => self.bar_where(),
             TableAction::BarLimit => self.bar_limit(),
             TableAction::BarColumns => self.bar_hit(super::qbar::BarHit::Cols),
-            TableAction::BarRows => self.count_rows(),
+            TableAction::BarRows => self.bar_hit(super::qbar::BarHit::Rows),
             TableAction::Bar(k) => self.bar_key(k),
         }
     }
