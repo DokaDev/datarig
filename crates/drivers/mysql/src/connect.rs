@@ -246,12 +246,14 @@ async fn run_session(
             let _ = events.send(DbEvent::Autocommit(false));
         }
     }
-    let _ = events.send(DbEvent::Connected);
     // The mode the session starts in; the metadata session's is what a new session of this
-    // account starts in, which the app checks a tab's first run in.
+    // account starts in, which the app checks a tab's first run in. With the plan format and the
+    // edits the server takes, before `Connected`: the app acts on a connected session at once
+    // (a plan asked for then is built in the server's format, never the driver's default).
     let _ = events.send(DbEvent::Language(Language::Sql(Dialect::MySql(tracked.mode(&server)))));
     let _ = events.send(DbEvent::Explain(server.explain()));
     let _ = events.send(DbEvent::Edit(server.edit()));
+    let _ = events.send(DbEvent::Connected);
     // What a query session's values are read in (copying them as SQL needs it).
     if let Some(values) = tracked.values().filter(|_| role == SessionRole::Query) {
         let _ = events.send(DbEvent::SessionValues(values));

@@ -564,10 +564,10 @@ async fn the_explain_actions_show_mysqls_tree_as_a_plan() {
     let (mut app, mut rx) = app_on(&url, &format!("mx{}", std::process::id()), None).await;
     let sql = "SELECT u.id, COUNT(*) FROM users u JOIN orders o ON o.user_id = u.id GROUP BY u.id ORDER BY 2 DESC;";
     if mariadb(&url).await {
-        // Once the session said it has no plan format, the actions run nothing.
+        // The session said it has no plan format by the time it said it is connected: the
+        // actions, pressed at once, run nothing (never the driver's default format).
         let id = first(&app);
-        pump(&mut app, &mut rx, 15, |a| a.conns.get(id).is_some_and(|c| c.explain.is_some())).await;
-        assert!(matches!(app.conns.get(id).unwrap().explain, Some(None)));
+        assert!(matches!(app.conns.get(id).unwrap().explain, Some(None)), "{:?}", app.conns.get(id).unwrap().explain);
         for keys in [" ex", " ea"] {
             let mut editor = datarig_tui::widgets::editor::Editor::new(sql);
             editor.set_language(app.tab_language(app.tab().id));
