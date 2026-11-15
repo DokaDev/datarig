@@ -85,6 +85,16 @@ fn find_nth(h: &mut Harness, text: &str, from: u16, n: usize) -> (u16, u16) {
         .unwrap_or_else(|| panic!("no {text:?} on screen:\n{}", h.screen(W, H)))
 }
 
+/// Where `text` starts on row `y` right of column `from`.
+fn find_on_row(h: &mut Harness, text: &str, from: u16, y: u16) -> u16 {
+    let t = h.draw(W, H);
+    let row = row_text(t.backend().buffer(), y);
+    row.match_indices(text)
+        .map(|(i, _)| datarig_tui::text::width(&row[..i]) as u16)
+        .find(|x| *x >= from)
+        .unwrap_or_else(|| panic!("no {text:?} on row {y}:\n{}", h.screen(W, H)))
+}
+
 fn find(h: &mut Harness, text: &str) -> (u16, u16) {
     find_nth(h, text, 0, 0)
 }
@@ -174,7 +184,7 @@ fn a_chips_x_takes_it_out_and_leaves_the_others_as_written() {
     assert!(x < px, "the column list's `name`");
     click(&mut h, (x, y));
     let (_, ry) = find_nth(&mut h, "\u{25be}", px, 0);
-    let (xx, _) = find_nth(&mut h, "\u{00d7}", px, 0);
+    let xx = find_on_row(&mut h, "\u{00d7}", px, ry);
     click(&mut h, (xx, ry));
     assert_eq!(draft(&h).0, "id  >  1");
 }
@@ -418,7 +428,7 @@ fn the_x_of_the_condition_being_typed_in_takes_its_value_field_with_it() {
     let value = find_nth(&mut h, "77", px, 0);
     click(&mut h, value);
     assert_eq!(h.app.key_context(), Ctx::FilterDialogText);
-    let (xx, _) = find_nth(&mut h, "\u{00d7}", px, 0);
+    let xx = find_on_row(&mut h, "\u{00d7}", px, value.1);
     click(&mut h, (xx, value.1));
     assert_eq!(draft(&h).0, "id < 42");
     // The condition left has the focus on its operator: what is typed edits no condition.
@@ -440,7 +450,7 @@ fn the_x_of_a_condition_above_keeps_the_value_field_typed_in() {
     let value = find_nth(&mut h, "42", px, 0);
     click(&mut h, (value.0 + 2, value.1));
     assert_eq!(h.app.key_context(), Ctx::FilterDialogText);
-    let (xx, _) = find_nth(&mut h, "\u{00d7}", px, 0);
+    let xx = find_on_row(&mut h, "\u{00d7}", px, first.1);
     click(&mut h, (xx, first.1));
     assert_eq!(draft(&h).0, "id < 42");
     assert_eq!(h.app.key_context(), Ctx::FilterDialogText, "the value field keeps the keys");

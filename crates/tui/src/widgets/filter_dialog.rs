@@ -1,5 +1,5 @@
-//! The filter and sort dialog of a table tab ([`crate::app::filter_dialog`]), over the whole
-//! screen: the title with what is loaded, the table's columns on the left, the selected
+//! The filter and sort dialog of a table tab ([`crate::app::filter_dialog`]), centred over the
+//! screen dimmed around it: the title with what is loaded, the table's columns on the left, the selected
 //! column's conditions and sort line on the right, and a footer of three rows: the `Where`
 //! chips with `undo` and `clear all`, the `Order` keys with the `Limit` field and the `SQL`
 //! toggle, and one hint line with `Enter apply` and `Esc cancel`. The operator picker is an
@@ -17,6 +17,7 @@ use crate::app::filter_dialog::view::{PopupKind, PopupKindId};
 use crate::app::filter_dialog::{ColumnSource, DialogAction, DialogFocus, DialogHit, DialogHits, FilterDialog, Mark};
 use crate::icons;
 use crate::keymap::Ctx;
+use crate::screens::{MIN_H, MIN_W};
 use crate::text::{clip, width};
 use crate::theme;
 use crate::widgets::condition_pane::{PaneOpts, draw_condition_pane, draw_op_picker, fill};
@@ -93,9 +94,20 @@ pub(crate) fn short_type(d: Dialect, ty: &str) -> String {
     ty.to_string()
 }
 
-/// Draw the filter dialog as it is shown: the whole dialog over `area` (the whole screen), or a
-/// popup by the query bar inside the results pane's border (the screen above the status line
-/// where the pane is too small). Returns the hardware cursor (the focused text field's).
+/// Where the whole dialog is drawn on screen `area`: centred, 92% of its width and 90% of its
+/// height, each side kept at least as large as the smallest screen's ([`MIN_W`] x [`MIN_H`]),
+/// so the dialog is never laid out tighter than on that screen; on the smallest screen (and on
+/// a side not larger than it) the whole side.
+pub(crate) fn dialog_rect(area: Rect) -> Rect {
+    let w = (area.width * 92 / 100).max(MIN_W).min(area.width);
+    let h = (area.height * 90 / 100).max(MIN_H).min(area.height);
+    crate::widgets::dialog::centered(area, w, h)
+}
+
+/// Draw the filter dialog as it is shown: the whole dialog centred over `area` (the whole
+/// screen, [`dialog_rect`]), or a popup by the query bar inside the results pane's border (the
+/// screen above the status line where the pane is too small). Returns the hardware cursor (the
+/// focused text field's).
 pub(crate) fn draw(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
     if app.filter_dialog().is_some_and(FilterDialog::is_popup) {
         let r = app.layout.results.intersection(area);
@@ -106,10 +118,10 @@ pub(crate) fn draw(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, 
         };
         return crate::widgets::qbar::draw_popup_view(app, bounds, buf);
     }
-    draw_filter_dialog(app, area, buf)
+    draw_filter_dialog(app, dialog_rect(area), buf)
 }
 
-/// Draw the whole filter dialog over `area` (the whole screen); returns the hardware cursor
+/// Draw the whole filter dialog over `area`; returns the hardware cursor
 /// (the focused text field's).
 fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
     // The selected column's values as things are now.

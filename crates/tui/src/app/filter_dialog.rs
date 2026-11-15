@@ -8,8 +8,8 @@
 //! is applied, where the keys are, the operator picker, the column search, and what the last
 //! apply was told. The keys are in [`keys`], applying, undoing and closing in [`apply`].
 //!
-//! The dialog is modal and covers the whole screen, the key bar included (it has its own hint
-//! line). Under the selected column's conditions it lists the column's values ([`list`]):
+//! The dialog is modal and centred over the whole screen, dimmed around it, the key bar included
+//! (it has its own hint line). Under the selected column's conditions it lists the column's values ([`list`]):
 //! counted in the rows loaded, remembered from an earlier load of the table ([`values`]), or
 //! counted by the server on request ([`count`]); ticking one writes the column's condition.
 //! Applying keeps it open until the tab's statement is sent: a refusal of the app (the
