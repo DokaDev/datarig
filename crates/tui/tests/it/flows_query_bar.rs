@@ -847,6 +847,28 @@ fn the_bar_focus_in_the_terminal_theme_is_the_only_one() {
     assert!(!cursor(&mut h).contains(Modifier::DIM));
 }
 
+/// In a theme without backgrounds the pointer over the part the bar's keys are on keeps its
+/// focus: no block of the selection, the opening bracket in the accent.
+#[test]
+fn the_bar_focus_in_the_terminal_theme_holds_under_the_pointer() {
+    use ratatui::style::Modifier;
+    let th = datarig_tui::theme::TERMINAL.clone();
+    let mut h = users();
+    filtered(&mut h, "name = 'a'");
+    h.app.theme = std::sync::Arc::new(th.clone());
+    h.keys(" rw");
+    h.draw(160, 34);
+    let r = h.app.layout.qbar.iter().find(|(_, x)| *x == BarHit::Chip(0)).map(|(r, _)| *r).expect("drawn");
+    h.mouse(MouseEventKind::Moved, r.x + 1, r.y);
+    let t = h.draw(160, 34);
+    let buf = t.backend().buffer();
+    let (open, text) = (&buf[(r.x, r.y)], &buf[(r.x + 1, r.y)]);
+    assert_eq!((open.symbol(), open.fg), ("[", th.accent));
+    assert!(!open.modifier.contains(Modifier::REVERSED), "no block around the chip");
+    assert!(text.modifier.contains(Modifier::BOLD | Modifier::UNDERLINED), "{:?}", text.modifier);
+    assert!(!text.modifier.contains(Modifier::REVERSED), "no block on the chip");
+}
+
 /// On a count of conditions the remove key opens them in the dialog, and the hint says so.
 #[test]
 fn the_remove_key_on_a_count_is_said_to_open() {

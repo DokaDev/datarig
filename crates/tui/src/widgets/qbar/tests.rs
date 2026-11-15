@@ -126,6 +126,8 @@ fn specs() -> Vec<Spec> {
         Spec { chips: vec![("name = '\u{540d}\u{524d}\u{540d}\u{524d}\u{540d}\u{524d}'", false)], ..applied.clone() },
         Spec { icons: false, backgrounds: false, ..applied.clone() },
         Spec { rows: None, ..applied },
+        // One short condition: counted, it is wider than it is written out.
+        Spec { chips: vec![("x", false)], rows: Some(1), ..base.clone() },
     ]
 }
 
@@ -135,13 +137,15 @@ fn every_width_fits_steps_are_monotone_and_nothing_applied_leaves() {
         let w = Words::new(lang);
         for (k, s) in specs().iter().enumerate() {
             let m = bar(&w, s);
-            let mut last = usize::MAX;
+            let (mut last, mut used) = (usize::MAX, 0);
             for width in 30..=200 {
                 let l = layout(&m, width);
                 let what = format!("{lang:?} spec {k} width {width}: {}", text(&l));
                 assert!(l.width() <= width, "does not fit: {what}");
                 assert!(l.level <= last, "a step back: {what}");
-                last = l.level;
+                // A wider bar never takes a form narrower than the one it took before.
+                assert!(l.width() >= used, "narrower than at {}: {what}", width - 1);
+                (last, used) = (l.level, l.width());
                 // The richest form that fits: no step before it fits.
                 for k in 0..l.level {
                     assert!(at_level(&m, k, width).is_none(), "step {k} fits too: {what}");
@@ -398,7 +402,7 @@ fn the_bar_holds_its_form_while_the_limit_is_typed() {
         let mut e = m.clone();
         e.limit = LimitM::Editing { text: "500".into(), cursor: 3, selected: true };
         let open = layout(&e, width);
-        e.hold = Some((open.level, open.cut));
+        e.hold = Some(((open.level, open.cut), width));
         let mut moved = false;
         for (text, cursor) in [("7", 1), ("", 0), ("75", 2), ("750", 3), ("7", 1)] {
             e.limit = LimitM::Editing { text: text.into(), cursor, selected: false };
@@ -423,6 +427,36 @@ fn the_bar_holds_its_form_while_the_limit_is_typed() {
             assert!(l.width() <= narrower, "width {narrower}: {}", super::tests::text(&l));
         }
     }
+}
+
+/// A form without the `LIMIT` field (the bar too narrow for any form with it, as it can be with
+/// the explorer widened) is never held: once the field fits, as its text gets shorter, it is
+/// shown. Nor is a form held at another width: a wider (or narrower) bar takes the richest form
+/// that fits it, never running over.
+#[test]
+fn a_form_without_its_field_or_at_another_width_is_not_held() {
+    let w = Words::new(Lang::En);
+    let mut m = bar(&w, &specs()[9]);
+    m.limit = LimitM::Editing { text: "9223372036854775807".into(), cursor: 19, selected: true };
+    let field = |l: &Line| l.segs().any(|g| g.caret.is_some());
+    let mut bare = false;
+    for narrow in 10..=40 {
+        let open = layout(&m, narrow);
+        bare |= !field(&open);
+        let mut e = m.clone();
+        e.hold = Some(((open.level, open.cut), narrow));
+        e.limit = LimitM::Editing { text: "7".into(), cursor: 1, selected: false };
+        for width in narrow.min(20)..=200 {
+            let l = layout(&e, width);
+            let walk = layout(&Bar { hold: None, ..e.clone() }, width);
+            let what = format!("held at {narrow}, width {width}: {}", text(&l));
+            assert!(l.width() <= width, "does not fit: {what}");
+            if width != narrow || !field(&open) {
+                assert_eq!((l.level, l.cut), (walk.level, walk.cut), "{what}");
+            }
+        }
+    }
+    assert!(bare, "no width too narrow for the field");
 }
 
 /// Without backgrounds the focus is in the text alone: no block of the selection behind it, the

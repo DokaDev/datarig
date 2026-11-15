@@ -412,10 +412,14 @@ fn draw_table_frame(app: &mut App, grid_area: Rect, buf: &mut Buffer) -> Rect {
         app.pointer_on = None;
         (hits, cursor, form) = crate::widgets::qbar::draw(app, &m, line, buf);
     }
-    // The `LIMIT` field keeps the form the bar had as it opened.
+    // The `LIMIT` field keeps the form the bar had as it opened, at that width: a form that
+    // does not show the field is not kept, and a bar of another width keeps what it draws now.
     if let Some(e) = app.qbar.edit.as_mut().filter(|_| matches!(m.limit, crate::widgets::qbar::LimitM::Editing { .. }))
     {
-        e.hold.get_or_insert(form);
+        let w = usize::from(line.width);
+        if e.hold.is_none_or(|(_, at)| at != w) {
+            e.hold = cursor.map(|_| (form, w));
+        }
     }
     app.qbar.last = hits.clone();
     app.layout.qbar = hits;

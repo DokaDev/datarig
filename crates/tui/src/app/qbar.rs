@@ -45,9 +45,10 @@ pub(crate) struct LimitEdit {
     /// The text is still the cap it opened with, selected: the first digit typed (or a paste)
     /// replaces it, `Backspace` and `Delete` clear it; a key that moves the cursor keeps it.
     pub(crate) selected: bool,
-    /// The form the bar was drawn in as the field opened (its step and cut), kept while it
-    /// fits: typing does not lay the rest of the bar out anew. Set by the first frame drawn.
-    pub(crate) hold: Option<crate::widgets::qbar::Form>,
+    /// The form the bar was drawn in as the field opened (its step and cut) and the bar's width
+    /// then, kept while it fits: typing does not lay the rest of the bar out anew. Set by the
+    /// first frame that shows the field, and anew by one at another width.
+    pub(crate) hold: Option<(crate::widgets::qbar::Form, usize)>,
 }
 
 /// The query bar's state.

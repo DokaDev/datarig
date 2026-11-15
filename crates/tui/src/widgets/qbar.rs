@@ -150,9 +150,10 @@ pub struct Bar {
     /// The theme paints backgrounds: chips are drawn on one, else in brackets.
     pub backgrounds: bool,
     /// The step of [`LEVELS`] (and the columns its first condition is cut to) to keep while it
-    /// fits: the form the bar had as its `LIMIT` field opened, so that typing in the field does
-    /// not lay the rest of the bar out anew.
-    pub hold: Option<Form>,
+    /// fits, and the bar's width it was drawn at: the form the bar had as its `LIMIT` field
+    /// opened, so that typing in the field does not lay the rest of the bar out anew. Kept only
+    /// at that width and while it shows the field.
+    pub hold: Option<(Form, usize)>,
 }
 
 /// What a piece of the bar is, for its style.
@@ -695,9 +696,11 @@ pub fn at_level(m: &Bar, level: usize, w: usize) -> Option<Line> {
     let lv = LEVELS[level];
     let make = |cut: Option<usize>| Line { left: line(m, lv, cut), right: right(m, lv), level, cut };
     let l = make(None);
-    // The short form with its words says the rows the step before it left out: where that makes
-    // it the wider of the two it is no step between them, and is not offered.
-    if lv.short_words && level > 0 {
+    // The short form with its words says the rows the step before it left out, and a count of
+    // conditions can take more columns than a short one written out: where that makes a step the
+    // wider of it and the step before it, it is no step between them, and is not offered.
+    let counted = lv.chips_count && level > 0 && !LEVELS[level - 1].chips_count;
+    if (lv.short_words || counted) && level > 0 {
         let before = LEVELS[level - 1];
         let before = Line { left: line(m, before, None), right: right(m, before), level: level - 1, cut: None };
         if l.width() > before.width() {
@@ -714,14 +717,16 @@ pub fn at_level(m: &Bar, level: usize, w: usize) -> Option<Line> {
 }
 
 /// The bar in `w` columns: the form held ([`Bar::hold`]) while it fits (its first condition cut
-/// anew when only that makes it fit), else the first step of [`LEVELS`] whose form fits (the
-/// last when none does), the bar's focus marked on what it is on.
+/// anew when only that makes it fit), at the width it was held at and with the `LIMIT` field
+/// shown, else the first step of [`LEVELS`] whose form fits (the last when none does), the
+/// bar's focus marked on what it is on.
 pub fn layout(m: &Bar, w: usize) -> Line {
     let last = LEVELS.len() - 1;
-    let held = m.hold.filter(|(level, _)| *level < LEVELS.len()).and_then(|(level, cut)| {
+    let held = m.hold.filter(|((level, _), at)| *level < LEVELS.len() && *at == w).and_then(|((level, cut), _)| {
         let lv = LEVELS[level];
         let l = Line { left: line(m, lv, cut), right: right(m, lv), level, cut };
-        if l.width() <= w { Some(l) } else { at_level(m, level, w) }
+        let l = if l.width() <= w { Some(l) } else { at_level(m, level, w) };
+        l.filter(|l| l.segs().any(|s| s.caret.is_some()))
     });
     let walk = || (0..LEVELS.len()).find_map(|level| at_level(m, level, w));
     let mut out = held.or_else(walk).unwrap_or_else(|| Line {
@@ -818,7 +823,8 @@ pub(crate) fn draw(app: &App, m: &Bar, area: Rect, buf: &mut Buffer) -> (Hits, O
         if s.focus {
             style = focused(style, s.tone, m.backgrounds);
         }
-        if s.hit.is_some() && s.hit == hovered {
+        // Without backgrounds the pointer's block would hide the focus: the focus stays.
+        if s.hit.is_some() && s.hit == hovered && (m.backgrounds || !s.focus) {
             style = style.patch(crate::widgets::pointer_style());
         }
         let w = crate::widgets::put(buf, x, area.y, &s.text, room, style);
