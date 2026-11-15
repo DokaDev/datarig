@@ -453,18 +453,20 @@ async fn idle_paging_portal_closes_outside_the_users_transaction_only() {
     app.run(vec!["ROLLBACK".into()]);
     pump(&mut app, &mut rx, 10, |a| !a.tab().exec.tx_open && idle(a, 0)).await;
 
-    // Exactly one page (the page size is 500): complete at once, nothing stays open.
+    // Exactly one page (the page size is 500): complete at once, nothing stays open. The page is
+    // the answer and its implicit transaction is committed right after it, with nothing said
+    // (it never read as open): the server shows the session idle once that `COMMIT` is done,
+    // without anything else sent to it.
     app.run(vec!["SELECT generate_series(1, 500)".into()]);
     pump(&mut app, &mut rx, 10, |a| idle(a, 0) && cell(a, 0).is_some()).await;
-    let t0 = Instant::now();
-    while app.tab().exec.tx_open {
-        assert!(t0.elapsed() < Duration::from_secs(10), "the implicit transaction stayed open");
-        if let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
-            app.on_app_event(ev);
-        }
-    }
+    assert!(!app.tab().exec.tx_open, "never read as open");
     assert_eq!(app.tab().exec.paging, Paging::None);
-    assert_eq!(obs.column(&state).await, ["idle"]);
+    let t0 = Instant::now();
+    while obs.column(&state).await != ["idle"] {
+        // A hang guard, not a measure.
+        assert!(t0.elapsed() < Duration::from_secs(10), "the implicit transaction stayed open");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     app.dispatch(datarig_tui::app::action::Action::Quit);
 }
 
