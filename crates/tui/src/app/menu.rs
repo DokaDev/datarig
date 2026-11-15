@@ -1749,11 +1749,21 @@ impl App {
         let (label, keys) = self.menu_row(m.ctx, &m.names, item);
         match m.off_of(item).and_then(|o| o.short) {
             Some(why) => (label, self.i18n.label(why).to_string()),
-            None => match m.hints.iter().find(|(i, _)| *i == item) {
-                Some((_, hint)) => (label, hint.to_string()),
+            None => match self.menu_hint(m, item) {
+                Some(hint) => (label, hint.to_string()),
                 None => (label, keys),
             },
         }
+    }
+
+    /// The words shown with `item` where its keys would be, while they still hold: the copy of
+    /// the rows fetched says the server has more only as long as it has (a page that ends the
+    /// result while the menu is open takes the words away with the label's count).
+    fn menu_hint<'m>(&self, m: &'m ContextMenu, item: MenuItem) -> Option<&'m Localized> {
+        if item == MenuItem::Scope(MenuScope::Copy(CopyScope::Fetched)) && self.fetched_partial().is_none() {
+            return None;
+        }
+        m.hints.iter().find(|(i, _)| *i == item).map(|(_, h)| h)
     }
 
     /// The open menu's lines as drawn: (heading?, label, keys or why a dimmed item cannot run).
@@ -1786,7 +1796,7 @@ impl App {
         let Some(m) = self.overlays.menu() else { return Vec::new() };
         m.lines
             .iter()
-            .map(|l| matches!(l, MenuLine::Item(i) if m.off_of(*i).is_none() && m.hints.iter().any(|(h, _)| h == i)))
+            .map(|l| matches!(l, MenuLine::Item(i) if m.off_of(*i).is_none() && self.menu_hint(m, *i).is_some()))
             .collect()
     }
 
