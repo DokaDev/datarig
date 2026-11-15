@@ -60,6 +60,12 @@ Every change in the source is marked with a `datarig:` comment. These groups:
   of file within the bound, or reading failed: `Settled::Unknown`). The driver holds a cancel as
   on its way until then, so it does not land on the session's next statement, and closes the
   session when it stays unknown. The upstream functions behave as before.
+- `src/client.rs`: `Client::refuse_sends_when` and the check at the top of `InnerClient::send`,
+  where every request (a query, a preparation's type lookups, the closing of a statement) is
+  handed to the connection: once the flag it was given is true, a request fails as on a closed
+  connection before it goes out, while the answers of requests already sent are still read. The
+  driver sets it once a user's cancel stays unconfirmed (it could land on anything sent next).
+  Without the flag, nothing changes.
 
 **Names with their schema**:
 

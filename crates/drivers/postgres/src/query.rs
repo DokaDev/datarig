@@ -740,7 +740,9 @@ impl From<Closed> for Stop {
         match closed {
             Closed::Ui => Stop::Closed,
             Closed::CancelNotSent(why) => Stop::Lost(DbError::CancelNotTaken(CancelFailure::NotSent(Box::new(why)))),
-            Closed::CancelPending(bound) => Stop::Lost(DbError::CancelNotTaken(CancelFailure::StopPending(bound))),
+            Closed::CancelPending(bound) | Closed::AnswerLost(bound) => {
+                Stop::Lost(DbError::CancelNotTaken(CancelFailure::StopPending(bound)))
+            }
         }
     }
 }
@@ -749,7 +751,7 @@ impl From<Closed> for Stop {
 /// cancel that could not be sent it still gets its one answer (`cancelled`) before the session
 /// is lost; a session the UI closed answers nothing.
 fn unanswered(events: &UnboundedSender<DbEvent>, closed: Closed, cancelled: DbEvent) -> Stop {
-    if matches!(closed, Closed::CancelNotSent(_) | Closed::CancelPending(_)) {
+    if matches!(closed, Closed::CancelNotSent(_) | Closed::CancelPending(_) | Closed::AnswerLost(_)) {
         let _ = events.send(cancelled);
     }
     Stop::from(closed)
@@ -946,10 +948,15 @@ async fn command(
             }
         }
         // Answered once; a session the UI closed meanwhile answers nothing.
-        Next::Command(DbCommand::EndTx { id, commit }) => match end_tx(&*client, link, env, tx, id, commit).await {
-            Ok(()) => return None,
-            Err(closed) => answered(env.events, closed, |error| DbEvent::Failed { id, error, cancelled: false }),
-        },
+        Next::Command(DbCommand::EndTx { id, commit }) => {
+            let mut told = false;
+            match end_tx(&*client, link, env, tx, id, commit, &mut told).await {
+                Ok(()) => return None,
+                // Answered already: the session only ends.
+                Err(closed) if told => Stop::from(closed),
+                Err(closed) => answered(env.events, closed, |error| DbEvent::Failed { id, error, cancelled: false }),
+            }
+        }
         // Answered once; a session the UI closed meanwhile answers nothing.
         Next::Command(DbCommand::ApplyEdits { id, steps, tx: rule }) => {
             match apply::apply(&*client, link, env, tx, id, &steps, rule, prepared.off, &Default::default()).await {
@@ -1775,6 +1782,7 @@ async fn end_tx(
     tx: &mut Tx,
     id: u64,
     commit: bool,
+    told: &mut bool,
 ) -> Result<(), Closed> {
     if tx.unsure {
         probe(client, link, env, tx).await?;
@@ -1790,7 +1798,21 @@ async fn end_tx(
         return Ok(());
     }
     let sql = if commit { "COMMIT" } else { "ROLLBACK" };
-    match link.guard(None, client.command_tag(sql)).await? {
+    let ended = match link.guard(None, client.command_tag(sql)).await {
+        Ok(ended) => ended,
+        // Sent, and given up on (a cancel of the user's stayed unconfirmed meanwhile): whether
+        // the `COMMIT` went through is not known.
+        Err(closed @ Closed::AnswerLost(_)) => {
+            let error = if commit { DbError::CommitUnknown } else { DbError::Closed };
+            let _ = env.events.send(DbEvent::Failed { id, error, cancelled: false });
+            (*told, tx.unsure) = (true, true);
+            return Err(closed);
+        }
+        Err(closed) => return Err(closed),
+    };
+    // Answered below, whatever follows.
+    *told = true;
+    match ended {
         Ok(tag) => {
             let outcome = match (commit, tag.as_str()) {
                 (false, _) => TxOutcome::RolledBack,
@@ -2465,7 +2487,8 @@ async fn portal<'a>(
                     Ok(fetched) => fetched,
                     Err(closed) => {
                         // The user's cancel could not be sent: the fetch ends cancelled.
-                        if matches!(closed, Closed::CancelNotSent(_) | Closed::CancelPending(_)) {
+                        if matches!(closed, Closed::CancelNotSent(_) | Closed::CancelPending(_) | Closed::AnswerLost(_))
+                        {
                             paged.fail(DbError::Cancelled, true);
                         }
                         return Err(Halted { stop: Stop::from(closed), reply: None });

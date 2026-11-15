@@ -138,7 +138,9 @@ released or undone, waits, and the read ends cancelled; one asked while the read
 stops it. A cancel already on its way is waited for until the server has taken it in; when
 the server does not confirm it within 10 seconds (a slow tunnel), it could still stop whatever
 runs next, so datarig sends nothing more and closes the session, which rolls your transaction
-back, and says so.
+back, and says so. A statement already on its way (a commit above all) is still waited for, up
+to 60 seconds: its answer says what it did, and without one datarig says the commit's outcome is
+not known.
 
 - The status line question says so: "Apply 1 change to shop.users (1 update)? Opens a
   transaction; nothing is committed.  y apply · any other key cancels".

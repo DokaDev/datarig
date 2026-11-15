@@ -82,6 +82,12 @@ pub const CANCEL_DIAL: Duration = Duration::from_secs(10);
 /// ([`Unsent::pending`]).
 pub(crate) const CANCEL_SETTLE: Duration = Duration::from_secs(10);
 
+/// How long a request already on its way is still waited for once a user's cancel stayed
+/// unconfirmed ([`CANCEL_SETTLE`]): its answer tells what it did (a `COMMIT` above all), but one
+/// that never comes must not hold the session for good. Then the connection is closed and the
+/// request's outcome is not known. Of the order of the app's own limit for a cancel to end a run.
+pub(crate) const CANCEL_ANSWER_WAIT: Duration = Duration::from_secs(60);
+
 /// What a session needs to ask the server to cancel its running statement.
 #[derive(Clone)]
 pub(crate) struct Cancel {
@@ -95,6 +101,8 @@ pub(crate) struct Cancel {
     pub(crate) hold: Arc<Hold>,
     /// How long the server is given to take a user's cancel in ([`CANCEL_SETTLE`]).
     pub(crate) settle: Duration,
+    /// How long a request on its way is waited for after that ([`CANCEL_ANSWER_WAIT`]).
+    pub(crate) answer_wait: Duration,
 }
 
 /// Holds the user's cancels back while the session runs statements a cancel must not land on:
@@ -183,7 +191,15 @@ impl Drop for Held<'_> {
 
 impl Cancel {
     pub(crate) fn new(token: CancelToken, route: Option<Route>, tls: PgTls) -> Self {
-        Self { token, route, tls, unsent: Unsent::default(), hold: Arc::default(), settle: CANCEL_SETTLE }
+        Self {
+            token,
+            route,
+            tls,
+            unsent: Unsent::default(),
+            hold: Arc::default(),
+            settle: CANCEL_SETTLE,
+            answer_wait: CANCEL_ANSWER_WAIT,
+        }
     }
 
     /// Send a cancel request (directly, or through the route), within [`CANCEL_DIAL`]; why it
@@ -254,7 +270,8 @@ impl Cancel {
             Ok(Settled::Closed) => {}
             // It may still land on anything: the session sends nothing more.
             Ok(Settled::Unknown) => {
-                self.unsent.pending.send_replace(Some(self.settle));
+                self.unsent.refuse.store(true, Ordering::SeqCst);
+                self.unsent.pending.send_replace(Some(Pending { settle: self.settle, wait: self.answer_wait }));
             }
             Err(why) => self.unsent.note(request, why),
         }
@@ -269,10 +286,22 @@ impl Cancel {
 pub(crate) struct Unsent {
     request: Arc<AtomicU64>,
     noted: Arc<watch::Sender<Option<(u64, DbError)>>>,
-    /// A user's cancel was sent and the server was not seen to take it in within this time
-    /// ([`Cancel::settle`]): it may still land on anything the session sends, whatever request it
-    /// was asked during.
-    pub(crate) pending: Arc<watch::Sender<Option<Duration>>>,
+    /// A user's cancel was sent and the server was not seen to take it in ([`Pending`]): it may
+    /// still land on anything the session sends, whatever request it was asked during.
+    pub(crate) pending: Arc<watch::Sender<Option<Pending>>>,
+    /// Set with [`Unsent::pending`]: the session's client hands no request to its connection
+    /// any more (`Client::refuse_sends_when`), a type lookup in the middle of a preparation
+    /// included.
+    pub(crate) refuse: Arc<AtomicBool>,
+}
+
+/// A user's cancel the server was not seen to take in ([`Unsent::pending`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Pending {
+    /// How long the server was given to take it in.
+    pub(crate) settle: Duration,
+    /// How long a request on its way is still waited for.
+    pub(crate) wait: Duration,
 }
 
 impl Default for Unsent {
@@ -281,6 +310,7 @@ impl Default for Unsent {
             request: Arc::default(),
             noted: Arc::new(watch::channel(None).0),
             pending: Arc::new(watch::channel(None).0),
+            refuse: Arc::default(),
         }
     }
 }

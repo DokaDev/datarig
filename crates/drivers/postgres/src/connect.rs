@@ -586,6 +586,8 @@ async fn run_session(
         SessionRole::Query => {
             let Some(events) = text else { return };
             let cancel = Cancel::new(client.cancel_token(), route.clone(), tls.clone());
+            // Once a cancel of the user's stays unconfirmed, nothing more leaves for the server.
+            client.refuse_sends_when(cancel.unsent.refuse.clone());
             let link = Link::new(rx, ended, conn, Some(cancel.unsent.clone()));
             if let Ok(mut g) = canceller.0.lock() {
                 *g = Some(cancel.clone());
