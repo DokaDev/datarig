@@ -13,6 +13,7 @@ use crate::app::App;
 use crate::app::PopupOwner;
 use crate::app::action::Action;
 use crate::app::filter_dialog::list::ValuesView;
+use crate::app::filter_dialog::view::{PopupKind, PopupKindId};
 use crate::app::filter_dialog::{ColumnSource, DialogAction, DialogFocus, DialogHit, DialogHits, FilterDialog, Mark};
 use crate::icons;
 use crate::keymap::Ctx;
@@ -838,12 +839,21 @@ pub(crate) fn hint_parts(app: &App, d: &FilterDialog, view: Option<&ValuesView>,
     let l = |k: &str, label: Label| (k.to_string(), i18n.label(label).to_string());
     let undo = key(app, DialogAction::Undo);
     let (apply, cancel) = (key(app, DialogAction::Apply), key(app, DialogAction::Cancel));
+    let kind = d.popup_kind().map(PopupKind::id);
     let mut items: Vec<(String, String)> = match d.focus {
         _ if d.picker.is_some() => vec![
             l("\u{2191}\u{2193}", Label::TableDialogHintOperator),
             l("Space", Label::TableDialogHintPick),
             l(&cancel, Label::TableDialogHintClose),
         ],
+        // The add popup: `Enter` picks the column (the search is closed by `Esc`).
+        _ if kind == Some(PopupKindId::AddPick) && d.search.is_some() => Vec::new(),
+        _ if kind == Some(PopupKindId::AddPick) => vec![l("/", Label::TableDialogHintSearch)],
+        // The WHERE list: `Enter` opens the line.
+        DialogFocus::Chips(_) if kind == Some(PopupKindId::WhereList) => {
+            vec![l("x", Label::TableDialogHintRemove), l("+", Label::HintAdd)]
+        }
+        _ if kind == Some(PopupKindId::WhereList) => Vec::new(),
         DialogFocus::Columns if d.search.is_some() => vec![
             l("\u{2191}\u{2193}", Label::TableDialogHintColumn),
             l(&apply, Label::TableDialogHintPick),
@@ -940,10 +950,18 @@ pub(crate) fn hint_parts(app: &App, d: &FilterDialog, view: Option<&ValuesView>,
     let incomplete = d.draft.where_.has_incomplete().then(|| i18n.label(Label::TableDialogIncomplete).to_string());
     if d.is_popup() {
         items.retain(|(k, _)| k != "Tab");
-        let ends = [
-            (apply, i18n.label(Label::TableDialogHintApply).to_string()),
-            (cancel, i18n.label(Label::TableDialogHintCancel).to_string()),
-        ];
+        // What `Enter` does: the add popup picks, the WHERE list opens, the others apply;
+        // `Esc` closes the add popup's search before it cancels.
+        let enter = match kind {
+            Some(PopupKindId::AddPick) => Label::TableDialogHintPick,
+            Some(PopupKindId::WhereList) => Label::HintOpen,
+            _ => Label::TableDialogHintApply,
+        };
+        let esc = match kind {
+            Some(PopupKindId::AddPick) if d.search.is_some() => Label::TableDialogHintClose,
+            _ => Label::TableDialogHintCancel,
+        };
+        let ends = [(apply, i18n.label(enter).to_string()), (cancel, i18n.label(esc).to_string())];
         let need = |items: &[(String, String)]| {
             let keys: usize = items.iter().chain(&ends).map(|(k, l)| width(k) + 1 + width(l)).sum();
             keys + 3 * (items.len() + 1) + incomplete.as_ref().map_or(0, |t| width(t) + 3)

@@ -23,6 +23,7 @@ pub(crate) mod draft;
 mod keys;
 pub(crate) mod list;
 mod mouse;
+mod popups;
 pub(crate) mod values;
 pub mod view;
 
@@ -602,6 +603,10 @@ impl FilterDialog {
             DialogFocus::Op(t) | DialogFocus::Value(t, _) if t >= terms || !self.rows().contains(&t) => {
                 if self.column().is_some() { DialogFocus::Add } else { DialogFocus::Columns }
             }
+            // The WHERE list keeps its `+ add condition` when no condition is left.
+            DialogFocus::Chips(_) if chips == 0 && matches!(self.popup_kind(), Some(view::PopupKind::WhereList)) => {
+                DialogFocus::Add
+            }
             DialogFocus::Chips(_) if chips == 0 => DialogFocus::Columns,
             DialogFocus::Chips(i) => DialogFocus::Chips(i.min(chips - 1)),
             DialogFocus::Order(_) if keys == 0 => DialogFocus::Columns,
@@ -771,7 +776,8 @@ impl App {
     /// The filter dialog of the active table tab, with the query its next run sends as its
     /// draft, shown as popup `kind` by `anchor`. A condition popup is on its column, its keys
     /// on the condition whose text is `term` (the first of the column's when none is), else on
-    /// `+ add condition`.
+    /// `+ add condition`; the add popup on the first column; the WHERE list on its first
+    /// condition, else on its `+ add condition`.
     pub(super) fn open_filter_popup(&mut self, kind: view::PopupKind, anchor: view::Anchor, term: Option<&str>) {
         let id = self.tab().id;
         let Some(q) = self.table_query(id).map(|tq| tq.draft.clone()) else { return };
@@ -779,8 +785,13 @@ impl App {
             view::PopupKind::Condition { col } => Some(col.clone()),
             _ => None,
         };
+        let list = kind == view::PopupKind::WhereList;
         self.open_filter_dialog_with(id, &q, column.as_deref(), false, View::Popup { kind, anchor });
         let Some(d) = self.filter_dialog_mut() else { return };
+        if list {
+            let f = if d.draft.where_.chips().is_empty() { DialogFocus::Add } else { DialogFocus::Chips(0) };
+            return d.focus_on(f);
+        }
         if column.is_none() {
             return;
         }

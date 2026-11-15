@@ -109,7 +109,13 @@ impl App {
         }
         let Some(d) = self.filter_dialog_mut() else { return };
         match h {
-            DialogHit::Column(i) => self.filter_dialog_select_column(i),
+            DialogHit::Column(i) => {
+                self.filter_dialog_select_column(i);
+                // The add popup picks the column clicked.
+                if self.filter_dialog().is_some_and(|d| d.popup_kind() == Some(&view::PopupKind::AddPick)) {
+                    self.filter_add_pick();
+                }
+            }
             DialogHit::Op(t) => {
                 d.focus_on(DialogFocus::Op(t));
                 self.filter_dialog_key(press(KeyCode::Char(' ')));

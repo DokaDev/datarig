@@ -3,6 +3,12 @@
 //! apply waiting, the checks and questions of a run all as the whole dialog's), `Enter` applies
 //! through the tab's run and it closes once the statement is sent; `Esc` or a press outside
 //! closes it without applying; `A` or `⋯ Advanced` turns it into the whole dialog.
+//!
+//! `WHERE` and `+` open the column list of a new condition (the add popup): picking a column
+//! turns it into that column's condition popup with a new condition waiting for its value.
+//! The count of conditions left out of the bar (`+N`) opens the WHERE list: one condition a
+//! line, `Enter` opens one, `x` takes it out of the draft, `+` adds. Neither list sends
+//! anything.
 
 use crate::common;
 
@@ -524,5 +530,227 @@ fn the_condition_popup_screens() {
         assert_screen!(format!("query_popup_condition_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
         h.app.theme = std::sync::Arc::new(datarig_tui::theme::TERMINAL.clone());
         assert_screen!(format!("query_popup_condition_terminal_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
+    }
+}
+
+/// Four conditions, more than the bar shows at 120x34: the last ones are counted (`+N`).
+const MANY: &str = "name = 'n1' AND id > 1 AND id < 9 AND name <> 'a rather long text to leave out of the bar'";
+
+/// A click on part `hit` of the bar at `w` x `hh`, then the popup it opened on screen long
+/// enough to take clicks.
+fn open_at(h: &mut Harness, hit: BarHit, w: u16, hh: u16) {
+    let r = hit_rect(h, hit, w, hh);
+    h.advance(Duration::from_millis(500));
+    click_at(h, r.x, r.y);
+    h.draw(w, hh);
+    h.advance(Duration::from_millis(500));
+}
+
+/// `+` opens the column list of a new condition; `Enter` picks the column (nothing is sent),
+/// the popup becomes that column's condition popup with a new condition waiting for its value;
+/// `Enter` then runs it.
+#[test]
+fn adding_picks_a_column_then_enter_runs_it() {
+    let mut h = users_where("name = 'n1'");
+    let plus = hit_rect(&mut h, BarHit::Add, 120, 34);
+    open_at(&mut h, BarHit::Add, 120, 34);
+    assert_eq!(popup(&h), Some(PopupKindId::AddPick));
+    let t = h.draw(120, 34);
+    let buf = t.backend().buffer();
+    assert_eq!(buf[(plus.x, plus.y + 1)].symbol(), "\u{256d}", "under the `+`, from its left edge");
+    let top = row_text(buf, plus.y + 1);
+    assert!(top.contains(" WHERE \u{2026} new condition on "), "{top}");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("Enter pick") && screen.contains("/ search"), "{screen}");
+    // The first column, `id`: picked.
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty(), "picking sends nothing");
+    assert_eq!(popup(&h), Some(PopupKindId::Condition));
+    assert_eq!(h.app.key_context(), Ctx::FilterDialogText, "the new condition's value has the keys");
+    let top = row_text(h.draw(120, 34).backend().buffer(), plus.y + 1);
+    assert!(top.contains(" id  int8 "), "{top}");
+    h.type_text("2");
+    h.key(KeyCode::Enter);
+    let sent = runs(&mut h);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(sent[0][0].contains("name = 'n1'") && sent[0][0].contains("id = 2"), "{sent:?}");
+    assert!(!open(&h), "closed once sent");
+}
+
+/// The `WHERE` keyword opens the same list; a click on a column picks it on the release.
+#[test]
+fn where_opens_the_list_and_a_click_picks() {
+    let mut h = users_where("name = 'n1'");
+    open_at(&mut h, BarHit::Where, 120, 34);
+    assert_eq!(popup(&h), Some(PopupKindId::AddPick));
+    let (x, y) = find(&mut h, 120, 34, "name  text").expect("listed");
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x + 1, y);
+    assert_eq!(popup(&h), Some(PopupKindId::AddPick), "the press alone picks nothing");
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x + 1, y);
+    assert_eq!(popup(&h), Some(PopupKindId::Condition));
+    assert!(runs(&mut h).is_empty());
+    assert!(draft_where(&h).starts_with("name = 'n1'"), "{}", draft_where(&h));
+    let screen = h.screen(120, 34);
+    assert!(screen.contains(" name  text "), "{screen}");
+}
+
+/// `/` searches the columns: what is typed narrows the list (the count says how many are
+/// left), `Esc` closes the search and keeps the popup, `Enter` picks the column found.
+#[test]
+fn slash_filters_the_columns() {
+    let mut h = users_where("name = 'n1'");
+    open_at(&mut h, BarHit::Add, 120, 34);
+    h.keys("/");
+    assert_eq!(h.app.key_context(), Ctx::FilterDialogText);
+    h.type_text("am");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("1 of 2") && !screen.contains("id    int8"), "{screen}");
+    assert!(screen.contains("Enter pick") && screen.contains("Esc close"), "{screen}");
+    h.key(KeyCode::Esc);
+    assert_eq!(popup(&h), Some(PopupKindId::AddPick), "the search closed, the popup kept");
+    h.keys("/");
+    h.type_text("nam");
+    h.key(KeyCode::Enter);
+    assert_eq!(popup(&h), Some(PopupKindId::Condition));
+    assert!(runs(&mut h).is_empty());
+    let screen = h.screen(120, 34);
+    assert!(screen.contains(" name  text "), "{screen}");
+    // Typed in the search, `j`, `k` and `g` are letters.
+    let mut h = users_where("name = 'n1'");
+    open_at(&mut h, BarHit::Add, 120, 34);
+    h.keys("/jkg");
+    assert!(h.screen(120, 34).contains("/ jkg"), "{}", h.screen(120, 34));
+}
+
+/// The count of conditions left out of the bar (`+N`) opens the WHERE list; `x` on it in the
+/// bar's keys opens the list too and takes nothing out.
+#[test]
+fn plus_n_opens_the_where_list() {
+    let mut h = users_where(MANY);
+    open_at(&mut h, BarHit::More, 120, 34);
+    assert_eq!(popup(&h), Some(PopupKindId::WhereList));
+    let screen = h.screen(120, 34);
+    assert!(screen.contains(" WHERE  4 conditions "), "{screen}");
+    assert!(screen.contains("+ add condition") && screen.contains("Enter open"), "{screen}");
+    h.key(KeyCode::Esc);
+    assert!(!open(&h));
+    // The bar's keys: on to the count, then `x`.
+    h.draw(120, 34);
+    h.keys(" rw");
+    let items: Vec<BarHit> = h.app.layout.qbar.iter().map(|(_, b)| *b).filter(|b| b.in_where()).collect();
+    let at = items.iter().position(|b| *b == BarHit::More).expect("counted");
+    for _ in 0..at {
+        h.key(KeyCode::Right);
+    }
+    h.key(KeyCode::Char('x'));
+    assert!(runs(&mut h).is_empty(), "nothing taken out");
+    assert_eq!(popup(&h), Some(PopupKindId::WhereList));
+}
+
+/// In the WHERE list `x` takes the focused condition out of the draft (sent with the rest
+/// later, nothing now) and `Enter` opens a condition in its column's popup, which applies.
+#[test]
+fn the_where_list_removes_and_opens() {
+    let mut h = users_where(MANY);
+    open_at(&mut h, BarHit::More, 120, 34);
+    h.key(KeyCode::Down);
+    h.keys("x");
+    assert!(runs(&mut h).is_empty());
+    assert_eq!(draft_where(&h), "name = 'n1' AND id < 9 AND name <> 'a rather long text to leave out of the bar'");
+    assert_eq!(popup(&h), Some(PopupKindId::WhereList));
+    // The focus on the next one (`id < 9`): opened, in the popup of `id`.
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty(), "opening sends nothing");
+    assert_eq!(popup(&h), Some(PopupKindId::Condition));
+    let screen = h.screen(120, 34);
+    assert!(screen.contains(" id  int8 ") && screen.contains("Space operator"), "{screen}");
+    h.key(KeyCode::Enter);
+    let sent = runs(&mut h);
+    assert_eq!(sent.len(), 1);
+    assert!(!sent[0][0].contains("id > 1") && sent[0][0].contains("id < 9"), "{sent:?}");
+    // `+` turns the list into the add popup; a click on a condition's line opens it.
+    let mut h = users_where(MANY);
+    open_at(&mut h, BarHit::More, 120, 34);
+    h.keys("+");
+    assert_eq!(popup(&h), Some(PopupKindId::AddPick));
+    let mut h = users_where(MANY);
+    open_at(&mut h, BarHit::More, 120, 34);
+    let (x, y) = find(&mut h, 120, 34, "id > 1").expect("listed");
+    click_at(&mut h, x, y);
+    assert_eq!(popup(&h), Some(PopupKindId::Condition));
+    assert!(runs(&mut h).is_empty());
+}
+
+/// An expression in the WHERE list opens the whole dialog on its chip.
+#[test]
+fn an_expression_in_the_where_list_opens_advanced() {
+    let mut h = users_where(&format!("(name = 'n1' OR id > 1) AND {MANY}"));
+    open_at(&mut h, BarHit::More, 120, 34);
+    assert_eq!(popup(&h), Some(PopupKindId::WhereList));
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("expr (name = 'n1' OR id > 1)"), "{screen}");
+    h.key(KeyCode::Enter);
+    assert!(open(&h));
+    assert_eq!(popup(&h), None, "the whole dialog");
+    assert!(runs(&mut h).is_empty());
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("go to its column"), "the keys on the expression's chip: {screen}");
+}
+
+/// The list's steps are one session: a condition taken out in the WHERE list, `+`, a column
+/// picked, then two undos give back the draft the list opened with.
+#[test]
+fn from_the_list_to_a_condition_keeps_the_draft_and_its_undo() {
+    let mut h = users_where(MANY);
+    open_at(&mut h, BarHit::More, 120, 34);
+    h.keys("x+");
+    h.key(KeyCode::Enter);
+    assert_eq!(popup(&h), Some(PopupKindId::Condition));
+    assert!(draft_where(&h).starts_with("id > 1 AND"), "{}", draft_where(&h));
+    h.key_mod(KeyCode::Char('z'), KeyModifiers::CONTROL);
+    h.key_mod(KeyCode::Char('z'), KeyModifiers::CONTROL);
+    assert_eq!(draft_where(&h), MANY);
+    // `A` keeps it too.
+    let mut h = users_where(MANY);
+    open_at(&mut h, BarHit::More, 120, 34);
+    h.keys("xA");
+    assert_eq!(popup(&h), None);
+    assert!(!draft_where(&h).contains("name = 'n1'"), "{}", draft_where(&h));
+    assert!(runs(&mut h).is_empty());
+}
+
+/// The add popup and the WHERE list have no count of values.
+#[test]
+fn the_list_popups_count_no_values() {
+    let mut h = users_where(MANY);
+    open_at(&mut h, BarHit::More, 120, 34);
+    h.keys("#");
+    open_at(&mut h, BarHit::Add, 120, 34);
+    h.keys("#");
+    let sent = h.sent();
+    assert!(sent.iter().all(|c| !matches!(c, DbCommand::Execute { .. })), "{sent:?}");
+}
+
+/// The add popup's screens (its column list, then the condition popup of the column picked)
+/// and the WHERE list's: on the grid with the explorer open at 80x24, and at 120x34; the add
+/// popup in the terminal theme.
+#[test]
+fn the_add_and_where_list_screens() {
+    for (w, hh) in [(80u16, 24u16), (120, 34)] {
+        let mut h = users_where("name = 'n1' AND id > 1");
+        assert!(h.app.explorer_shown());
+        open_at(&mut h, BarHit::Add, w, hh);
+        assert_screen!(format!("query_popup_add_pick_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
+        let theme = h.app.theme.clone();
+        h.app.theme = std::sync::Arc::new(datarig_tui::theme::TERMINAL.clone());
+        assert_screen!(format!("query_popup_add_pick_terminal_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
+        h.app.theme = theme;
+        h.key(KeyCode::Down);
+        h.key(KeyCode::Enter);
+        assert_screen!(format!("query_popup_add_condition_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
+        let mut h = users_where(MANY);
+        open_at(&mut h, BarHit::More, w, hh);
+        h.key(KeyCode::Down);
+        assert_screen!(format!("query_popup_where_list_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
     }
 }

@@ -29,8 +29,8 @@ pub(crate) struct PaneOpts {
     /// The column is named by the border around the pane: no name and type row, no `Filter`
     /// heading; the conditions start on the pane's first row.
     pub(crate) title_in_border: bool,
-    /// Short words where the pane is small: the sort line's short labels and the values'
-    /// short `count exactly`, whatever the width.
+    /// Short words where the pane is small: the sort line's short labels, the values' short
+    /// heading (`~ loaded`) and short `count exactly`, whatever the width.
     pub(crate) compact: bool,
 }
 
@@ -424,7 +424,8 @@ pub(crate) fn draw_op_picker(
 /// The values of view `v` in `area` (its first row the heading, up to the row before its
 /// bottom): the heading with what they are and `# count exactly` on its right,
 /// then one value a line (tick box, value, rows, a bar or where it comes from), then what is
-/// not listed; `compact`: the short `count exactly` whatever the width. Returns the first value
+/// not listed; `compact`: the short heading (`~ loaded`) and `count exactly` whatever the
+/// width. Returns the first value
 /// shown (the focused one kept in view).
 fn draw_values(
     app: &App,
@@ -471,6 +472,13 @@ fn draw_values(
                 .to_string(),
             muted,
         ),
+        // A popup's short words: `~ loaded`.
+        (None, Heading::Loaded { earlier: false, .. }) if compact => {
+            (i18n.label(Label::TableDialogValuesLoadedShort).to_string(), muted)
+        }
+        (None, Heading::Loaded { earlier: true, .. }) if compact => {
+            (i18n.label(Label::TableDialogValuesLoadedEarlierShort).to_string(), muted)
+        }
         (None, Heading::Loaded { rows, earlier: false, .. }) => {
             (i18n.msg(&Msg::TableDialogValuesLoaded { count: *rows }).to_string(), muted)
         }

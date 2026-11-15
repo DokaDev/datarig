@@ -437,16 +437,20 @@ impl App {
     }
 
     /// Where a popup opened on part `hit` of the bar is drawn from: that part, where it was
-    /// drawn last.
+    /// drawn last; a part not drawn (`+` left out of a narrow bar), the `WHERE` keyword.
     pub(super) fn bar_anchor(&self, hit: BarHit) -> Anchor {
-        let at = self.layout.qbar.iter().find(|(_, h)| *h == hit).map(|(r, _)| *r);
-        Anchor { seg: Some(hit), at: at.unwrap_or(self.layout.results) }
+        let drawn = |hit: BarHit| self.layout.qbar.iter().find(|(_, h)| *h == hit).map(|(r, _)| (*r, hit));
+        match drawn(hit).or_else(|| drawn(BarHit::Where)) {
+            Some((at, seg)) => Anchor { seg: Some(seg), at },
+            None => Anchor { seg: Some(hit), at: self.layout.results },
+        }
     }
 
     /// What a part of the bar does when it is clicked, or opened by its keys.
     pub(super) fn bar_hit(&mut self, hit: BarHit) {
         match hit {
-            BarHit::Where | BarHit::Add => self.bar_dialog(None, false, Some(DialogFocus::Add)),
+            // The column of a new condition, to pick.
+            BarHit::Where | BarHit::Add => self.open_filter_popup(PopupKind::AddPick, self.bar_anchor(hit), None),
             BarHit::Chip(term) => {
                 let id = self.tab().id;
                 let target = self.table_target(id);
@@ -474,7 +478,8 @@ impl App {
                 }
             }
             BarHit::Remove(term) => self.bar_remove(term),
-            BarHit::More => self.bar_dialog(None, false, Some(DialogFocus::Chips(0))),
+            // The conditions, one a line.
+            BarHit::More => self.open_filter_popup(PopupKind::WhereList, self.bar_anchor(hit), None),
             BarHit::Order => self.bar_dialog(None, true, None),
             BarHit::Cols => self.bar_dialog(None, false, Some(DialogFocus::Columns)),
             BarHit::Advanced => self.bar_dialog(None, false, None),
@@ -560,8 +565,8 @@ impl App {
             BarKey::Remove => {
                 let Some(hit) = self.qbar.focus.filter(|_| self.bar_focused()).map(|f| f.hit) else { return };
                 match self.bar_resolve(hit) {
-                    // Only a condition on screen is taken out; one left out of the bar (its
-                    // count has the focus) opens the list of them instead.
+                    // Only a condition on screen is taken out; on those left out of the bar
+                    // (their count has the focus) it opens the WHERE list, removing nothing.
                     BarHit::Chip(t) => self.bar_remove(t),
                     BarHit::More => self.bar_hit(BarHit::More),
                     _ => {}

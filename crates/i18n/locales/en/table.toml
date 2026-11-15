@@ -110,6 +110,8 @@
 "table.status.unapplied" = "unapplied"
 "table.bar.none" = "none"
 "table.bar.advanced" = "Advanced"
+"table.bar.new_condition" = "new condition on"
+"table.bar.no_column" = "no column matches"
 "table.bar.refused" = "refused"
 "table.bar.conditions" = { one = "{count} condition", other = "{count} conditions" }
 "table.bar.cols" = { one = "{count} col", other = "{count} cols" }
@@ -260,6 +262,8 @@
 "table.dialog.values" = "Values"
 "table.dialog.values.loaded" = { one = "~ count in the {count} loaded row", other = "~ count in the {count} loaded rows" }
 "table.dialog.values.loaded_earlier" = { one = "~ count: {count} loaded row + an earlier load", other = "~ count: {count} loaded rows + an earlier load" }
+"table.dialog.values.loaded_short" = "~ loaded"
+"table.dialog.values.loaded_earlier_short" = "~ loaded + earlier load"
 "table.dialog.values.loaded_held" = { one = "sample: {count}/{total}", other = "sample: {count}/{total}" }
 "table.dialog.values.exact" = "exact · other conditions applied"
 "table.dialog.values.exact_all" = "exact · every row"

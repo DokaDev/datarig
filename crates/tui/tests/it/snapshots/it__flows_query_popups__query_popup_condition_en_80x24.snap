@@ -9,7 +9,7 @@ expression: backend
 "│    ▾ datarig default │││ ▸  =          ▾    n1                            × ││"
 "│      ▸ analytics     │││   + add condition                                  ││"
 "│      ▸ public        │││                                                    ││"
-"│      ▾ shop          │││ Values  ~ count in the 3 loaded rows       # exact ││"
+"│      ▾ shop          │││ Values  ~ loaded                           # exact ││"
 "│        ▾ Tables      │││   [ ] n0                  ~1  ▄▄▄▄▄▄▄▄▄▄▄▄         ││"
 "│          ▸ users     │││   [x] n1                  ~1  ▄▄▄▄▄▄▄▄▄▄▄▄         ││"
 "│                      │││   [ ] n2                  ~1  ▄▄▄▄▄▄▄▄▄▄▄▄         ││"

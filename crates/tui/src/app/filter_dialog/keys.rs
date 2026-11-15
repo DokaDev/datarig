@@ -97,6 +97,10 @@ impl App {
             KeyCode::BackTab => return self.filter_dialog_area(false),
             _ => {}
         }
+        // The add popup and the WHERE list have keys of their own.
+        if matches!(d.popup_kind(), Some(view::PopupKind::AddPick | view::PopupKind::WhereList)) {
+            return self.filter_list_key(key);
+        }
         if d.typing() {
             return self.filter_dialog_text_key(key);
         }
@@ -195,7 +199,7 @@ impl App {
 
     /// A key while a text field has the keys: the column search, a value field, the `LIMIT`
     /// field.
-    fn filter_dialog_text_key(&mut self, key: KeyEvent) {
+    pub(super) fn filter_dialog_text_key(&mut self, key: KeyEvent) {
         let Some(d) = self.filter_dialog_mut() else { return };
         let focus = d.focus;
         let at_start = d.input_mut().is_some_and(|i| i.cursor() == 0);
@@ -458,7 +462,7 @@ impl App {
 
     /// `+ add condition`: a condition of the selected column with the first operator it takes,
     /// waiting for its value (never sent before it has one).
-    fn filter_dialog_add(&mut self) {
+    pub(super) fn filter_dialog_add(&mut self) {
         let Some(d) = self.filter_dialog() else { return };
         let Some(c) = d.column().cloned() else { return };
         let Some(target) = self.table_target(d.tab) else { return };

@@ -80,12 +80,14 @@ impl App {
     }
 
     /// `A`, `⋯ Advanced`: the popup shown becomes the whole dialog, on what the popup was on (a
-    /// condition popup: its column, the keys where they were).
+    /// condition popup: its column, the keys where they were; the add popup: its column; the
+    /// WHERE list: the chip of its condition).
     fn filter_dialog_advanced(&mut self) {
         let Some(d) = self.filter_dialog_mut() else { return };
         let Some(kind) = d.popup_kind() else { return };
-        let focus = match kind {
-            view::PopupKind::Condition { .. } => d.focus,
+        let focus = match (kind, d.focus) {
+            (view::PopupKind::Condition { .. }, f) => f,
+            (view::PopupKind::WhereList, f @ DialogFocus::Chips(_)) => f,
             _ => DialogFocus::Columns,
         };
         d.set_view(View::Full);
@@ -208,6 +210,12 @@ impl App {
         let Some(d) = self.filter_dialog_mut() else { return };
         if d.picker.is_some() {
             return self.filter_dialog_pick();
+        }
+        // The add popup and the WHERE list send nothing: they pick a column, open a condition.
+        match d.popup_kind() {
+            Some(view::PopupKind::AddPick) => return self.filter_add_pick(),
+            Some(view::PopupKind::WhereList) => return self.filter_where_list_open(),
+            _ => {}
         }
         if d.search.is_some() && d.focus == DialogFocus::Columns {
             let name = d.column().map(|c| c.name.clone());
