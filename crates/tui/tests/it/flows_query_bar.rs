@@ -140,6 +140,19 @@ fn a_console_tab_has_no_bar() {
 }
 
 #[test]
+fn the_bar_keys_do_nothing_on_a_console_tab() {
+    for keys in [" rw", " rl", " rc", " rr", " rA"] {
+        let mut h = Harness::connected(Lang::En);
+        h.draw(120, 34);
+        h.keys(keys);
+        assert!(!h.app.overlays.is_open(OverlayKind::FilterDialog), "{keys}");
+        assert_ne!(h.app.key_context(), Ctx::QueryBar, "{keys}");
+        assert_ne!(h.app.key_context(), Ctx::QueryBarText, "{keys}");
+        assert!(runs(&mut h).is_empty(), "{keys}");
+    }
+}
+
+#[test]
 fn a_chips_cross_takes_its_condition_out_and_sends_the_others_as_written() {
     let mut h = users();
     filtered(&mut h, "name = 'a'  AND id>1 AND (id < 9 OR  id = 20)");
@@ -677,8 +690,6 @@ fn bar_changes_go_through_the_checks() {
     assert!(bar_line(&mut h).contains("refused"), "{}", bar_line(&mut h));
 }
 
-/// The state goes first whatever part failed: an order alone, a limit alone; and the last
-/// condition taken out then cancelled says so over an empty `WHERE`.
 /// The cap in the field is selected when it opens: typing replaces it, `Backspace` clears it, a
 /// key that moves keeps it and types after it.
 #[test]
@@ -701,6 +712,8 @@ fn the_limit_field_opens_with_its_cap_selected() {
     assert!(bar_line(&mut h).contains("LIMIT 5001"), "{}", bar_line(&mut h));
 }
 
+/// The state goes first whatever part failed: an order alone, a limit alone; and the last
+/// condition taken out then cancelled says so over an empty `WHERE`.
 #[test]
 fn the_state_of_a_failed_order_limit_or_cancelled_run() {
     let mut h = users();
@@ -725,6 +738,17 @@ fn the_state_of_a_failed_order_limit_or_cancelled_run() {
     fail(&mut h, true);
     let line = bar_line(&mut h);
     assert!(line.contains(" cancelled WHERE + │"), "{line}");
+
+    // The last one taken out, then the session lost before the first page: the rows shown are
+    // still the filtered ones, and the bar says so.
+    let mut h = users();
+    filtered(&mut h, "id > 1");
+    click(&mut h, BarHit::Remove(0));
+    assert_eq!(runs(&mut h), vec![vec![ALL.to_string()]]);
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Lost { error: DbError::Closed });
+    let line = bar_line(&mut h);
+    assert!(line.contains(" unapplied WHERE + │"), "{line}");
 }
 
 /// A `LIMIT` typed as it is applied runs nothing; a paste longer than any cap is cut.

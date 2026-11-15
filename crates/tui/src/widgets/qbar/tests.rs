@@ -376,3 +376,34 @@ fn the_paging_state_stays_in_the_short_forms() {
         }
     }
 }
+
+/// The last form is presence marks within 16 columns besides the run's state and the paging
+/// mark, whatever is applied (counts capped, the cap only as `L`), in every language.
+#[test]
+fn the_glyph_form_stays_within_its_budget() {
+    let last = LEVELS.len() - 1;
+    for lang in [Lang::En, Lang::Ko] {
+        let w = Words::new(lang);
+        for (k, s) in specs().iter().enumerate() {
+            let m = bar(&w, s);
+            let l = Line { left: line(&m, LEVELS[last], None), right: right(&m, LEVELS[last]), level: last };
+            let state = m.state.is_some();
+            let mut marks = 0;
+            let mut lead = state;
+            for g in l.segs() {
+                // The run's state comes first and carries no target.
+                if lead && g.hit.is_none() {
+                    continue;
+                }
+                lead = false;
+                // The paging mark is bounded on its own.
+                if g.hit == Some(BarHit::Rows) {
+                    assert!(crate::text::width(&g.text) <= STATE_MAX, "{lang:?} spec {k}: {}", g.text);
+                    continue;
+                }
+                marks += crate::text::width(&g.text);
+            }
+            assert!(marks <= 16, "{lang:?} spec {k}: {marks} columns: {}", text(&l));
+        }
+    }
+}
