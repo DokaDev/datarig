@@ -166,13 +166,60 @@ pub struct EditState {
     pub gone: Option<Label>,
     /// The cells of the changes whose value their column does not take, as last found.
     pub invalid: InvalidCache,
-    /// Text pasted from columns whose text is written in the session's date settings (`styled`),
-    /// by result column, with the settings it was written in (`None`: not known): such a value
-    /// pending in that column is applied only while the session reads it the same.
-    pub styled: Vec<(usize, String, Option<datarig_core::driver::TextStyle>)>,
+    /// The cells given text pasted from columns whose text is written in the session's date
+    /// settings (`styled`), by the action that pasted it: such a value is applied only while the
+    /// session reads it the same. It is the cell's only while that action gave its pending value
+    /// ([`EditState::pasted_style`]).
+    pub styled: Vec<PastedStyle>,
+}
+
+/// A cell of a result's rows as the edit planner names it.
+fn cell_origin(at: RowAt) -> datarig_core::edit::Origin {
+    match at {
+        RowAt::Read(r) => datarig_core::edit::Origin::Row(r),
+        RowAt::New(id) => datarig_core::edit::Origin::New(id),
+    }
+}
+
+/// Text pasted into a cell from a `styled` column, by action `step`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PastedStyle {
+    pub step: u64,
+    pub at: RowAt,
+    pub col: usize,
+    /// The settings it was written in (`None`: not known).
+    pub written: Option<datarig_core::driver::TextStyle>,
+    /// It may hold a time with a time zone (`ColumnMeta::zoned` of the column it was copied
+    /// from).
+    pub zoned: bool,
 }
 
 impl EditState {
+    /// How the pending value of the cell in column `col` of `at` was written, when an action
+    /// still done pasted it from a `styled` column and no later one changed it (a value typed,
+    /// another paste, a revert, an undo of the paste: then not this).
+    pub fn pasted_style(&self, at: RowAt, col: usize) -> Option<&PastedStyle> {
+        let step = self.batch.setter(cell_origin(at), col)?;
+        self.styled.iter().find(|p| p.step == step && p.at == at && p.col == col)
+    }
+
+    /// A paste gave the cell in column `col` of `at` its pending value (or the same value
+    /// again): written in `written` (`None` for the settings: not known), it may hold a time with a
+    /// zone (`zoned`), when copied from a `styled` column (`from`); otherwise it is no
+    /// `styled` text. Kept for the action the value is from.
+    pub(super) fn pasted(
+        &mut self,
+        at: RowAt,
+        col: usize,
+        from: Option<(Option<datarig_core::driver::TextStyle>, bool)>,
+    ) {
+        let Some(step) = self.batch.setter(cell_origin(at), col) else { return };
+        self.styled.retain(|p| !(p.step == step && p.at == at && p.col == col));
+        if let Some((written, zoned)) = from {
+            self.styled.push(PastedStyle { step, at, col, written, zoned });
+        }
+    }
+
     /// The rows were read under `bound` (`None`: under no profile, so never edited).
     pub(super) fn bind(&mut self, bound: Option<Bound>) {
         self.bound = bound;

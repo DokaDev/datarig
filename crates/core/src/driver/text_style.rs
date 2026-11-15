@@ -43,11 +43,14 @@ impl TextStyle {
 /// Whether text a session wrote in `from` reads back as the same values in a session in `to`
 /// (`None`: not known). Text written in a style not known is never taken to: it may be in any.
 /// Text in a style that [reads anywhere](TextStyle::reads_anywhere) does; other text only in a
-/// session with the very same settings.
-pub fn reads_same(from: Option<&TextStyle>, to: Option<&TextStyle>) -> bool {
+/// session with the very same settings, and only when it holds no time with a time zone
+/// (`zoned`, [`ColumnMeta::zoned`](super::ColumnMeta)): outside ISO such a time is written with
+/// the zone's abbreviation, read in the reading session's `timezone_abbreviations`, which the
+/// server never reports (`CST` is UTC-06:00 in `Default` and UTC+09:30 in `Australia`).
+pub fn reads_same(from: Option<&TextStyle>, to: Option<&TextStyle>, zoned: bool) -> bool {
     match from {
         None => false,
-        Some(f) => f.reads_anywhere() || to == Some(f),
+        Some(f) => f.reads_anywhere() || (!zoned && to == Some(f)),
     }
 }
 

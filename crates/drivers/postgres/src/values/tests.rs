@@ -302,6 +302,7 @@ fn meta_of(ty: &Type) -> datarig_core::driver::ColumnMeta {
         kind: value_kind(ty),
         origin: None,
         styled: styled(ty),
+        zoned: zoned_in(ty, format_code(ty)),
     }
 }
 

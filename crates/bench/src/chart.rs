@@ -22,6 +22,7 @@ fn column(name: &str, type_name: &str, numeric: bool, kind: ValueKind) -> Column
         kind,
         origin: None,
         styled: false,
+        zoned: false,
     }
 }
 

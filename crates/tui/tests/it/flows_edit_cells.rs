@@ -1689,8 +1689,10 @@ fn a_pg_date_a_text_and_a_range_into_text_are_pasted_whatever_the_date_style() {
     assert_eq!(pending, Some(Value::Text(copied.into())));
 }
 
-/// A result keeps the settings its first page was read in; a later page read under others (or
-/// while they changed, which the session says as settings not known) leaves them not known.
+/// A result keeps the settings its first page was read in, once the server says its statement
+/// runs no code that could change them; a later page read under others (or while they changed,
+/// which the session says as settings not known) before that answer leaves them not known,
+/// whatever the answer.
 #[test]
 fn a_pg_result_read_across_a_change_of_its_date_settings_is_read_in_settings_not_known() {
     let mut h = Harness::connected(Lang::En);
@@ -1698,19 +1700,27 @@ fn a_pg_result_read_across_a_change_of_its_date_settings_is_read_in_settings_not
     h.db(DbEvent::TextStyle(Some(pg_style("SQL, DMY"))));
     h.app.run(vec!["SELECT id, email, nickname FROM shop.users".to_string()]);
     let id = h.app.tab().exec.query_id;
+    let mut columns = users_columns();
+    columns[2] =
+        ColumnMeta { kind: ValueKind::Other, styled: true, ..meta_from("nickname", "daterange", false, USERS, 4) };
     let page = |rows| DbEvent::Page { id, columns: None, rows, more: true, elapsed: Duration::ZERO };
-    h.db(DbEvent::Page { id, columns: Some(users_columns()), rows: users_rows(), more: true, elapsed: Duration::ZERO });
+    h.db(DbEvent::Page { id, columns: Some(columns), rows: users_rows(), more: true, elapsed: Duration::ZERO });
+    let check = h.sent().into_iter().find_map(|c| match c {
+        DbCommand::CheckRepeat { id, .. } => Some(id),
+        _ => None,
+    });
+    let check = check.expect("the allowlist's question is asked");
     let text_in = |h: &Harness| match &h.app.tab().results {
         Results::Rows(rs) => rs.text_in.clone(),
         _ => panic!("no row result"),
     };
-    assert_eq!(text_in(&h), Some(pg_style("SQL, DMY")));
+    assert_eq!(text_in(&h), None, "not known before the server says");
     h.db(page(vec![vec![s("4"), s("d@x"), None]]));
-    assert_eq!(text_in(&h), Some(pg_style("SQL, DMY")), "the same settings");
     h.db(DbEvent::TextStyle(None));
     h.db(page(vec![vec![s("5"), s("e@x"), None]]));
     h.db(DbEvent::TextStyle(Some(pg_style("SQL, DMY"))));
-    assert_eq!(text_in(&h), None);
+    h.db(DbEvent::RepeatChecked { id: check, result: Ok(()) });
+    assert_eq!(text_in(&h), None, "a page came in settings not known before the answer");
     assert_eq!(h.app.tab().exec.text, Some(pg_style("SQL, DMY")));
 }
 
@@ -1819,4 +1829,104 @@ fn a_pg_copy_of_pending_values_says_the_settings_they_were_written_in() {
     structure(&mut h, Ok(st()));
     let said = said_text(&mut h);
     assert!(said.contains("written in settings not known"), "{said}");
+}
+
+const TSTZRANGE: (&str, ValueKind, bool) = ("tstzrange", ValueKind::Other, true);
+
+/// The nickname read again as a `tstzrange` (written with zone abbreviations outside ISO).
+fn pg_zoned(h: &mut Harness, style: Option<&str>, value: &str) {
+    h.db(DbEvent::TextStyle(style.map(pg_style)));
+    let mut columns = users_columns();
+    columns[2] = ColumnMeta {
+        kind: ValueKind::Other,
+        styled: true,
+        zoned: true,
+        ..meta_from("nickname", "tstzrange", false, USERS, 4)
+    };
+    answer(h, "SELECT id, email, nickname FROM shop.users", columns, vec![vec![s("1"), s("a@x"), s(value)]]);
+    if let Some(id) = h.sent().into_iter().find_map(|c| match c {
+        DbCommand::CheckRepeat { id, .. } => Some(id),
+        _ => None,
+    }) {
+        h.db(DbEvent::RepeatChecked { id, result: Ok(()) });
+    }
+    h.app.transient = None;
+}
+
+/// A time with a zone written outside ISO carries the zone's abbreviation (`CST`), which the
+/// reading session reads in its own `timezone_abbreviations`, never reported: in the very same
+/// reported settings it is not taken to read the same. Written in ISO (a numeric offset) it is.
+#[test]
+fn a_pg_time_with_a_zone_written_outside_iso_is_never_pasted_by_equal_settings() {
+    let st = || {
+        let mut st = users_structure();
+        st.columns[3].type_name = "tstzrange".into();
+        st
+    };
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    pg_zoned(&mut h, Some("SQL, DMY"), "[\"02/01/2026 00:00:00 CST\",)");
+    h.keys("lly");
+    pg_zoned(&mut h, Some("SQL, DMY"), "[\"03/01/2026 00:00:00 CST\",)");
+    h.keys("llgp");
+    structure(&mut h, Ok(st()));
+    let said = said_text(&mut h);
+    assert!(said.starts_with("Not pasted: column \u{201C}nickname\u{201D}"), "{said}");
+    let _ = TSTZRANGE;
+    // In ISO: pasted.
+    pg_zoned(&mut h, Some("ISO, MDY"), "[\"2026-01-02 00:00:00-06\",)");
+    h.keys("lly");
+    pg_zoned(&mut h, Some("SQL, DMY"), "[\"03/01/2026 00:00:00 CST\",)");
+    h.keys("llgp");
+    structure(&mut h, Ok(st()));
+    let said = said_text(&mut h);
+    assert!(said.starts_with("Pasted the copied cells"), "{said}");
+}
+
+/// The settings a pasted value was written in are those of the last paste that gave the cell its
+/// value, also the same text again: pasted again from where the session reads it the same, it
+/// is valid, and a copy of it says so. (Which action gave a cell its value, through undo and
+/// redo, is `EditBatch::setter`'s.)
+#[test]
+fn a_pg_value_pasted_again_keeps_the_settings_of_the_last_paste() {
+    use datarig_tui::app::edit::RowAt;
+    let st = || {
+        let mut st = users_structure();
+        st.columns[3].type_name = "daterange".into();
+        st
+    };
+    let copied = "[02/01/2026,05/01/2026)";
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    // Copied and pasted in `SQL, DMY`.
+    pg_again(&mut h, Some("SQL, DMY"), DATERANGE, copied);
+    h.keys("lly");
+    pg_again(&mut h, Some("SQL, DMY"), DATERANGE, "[2026-03-01,2026-03-02)");
+    h.keys("llgp");
+    structure(&mut h, Ok(st()));
+    assert!(said_text(&mut h).starts_with("Pasted the copied cells"));
+    let invalid = |h: &Harness| h.app.shown_invalid().is_some_and(|i| i.cells.contains_key(&(RowAt::Read(0), 2)));
+    // The session now reads `SQL, MDY` (a rollback of a `SET LOCAL`): invalid.
+    h.db(DbEvent::TextStyle(Some(pg_style("SQL, MDY"))));
+    assert!(invalid(&h));
+    // The same text copied from another tab read in `SQL, MDY`, pasted over it: valid.
+    h.ctrl('t');
+    pg_again(&mut h, Some("SQL, MDY"), DATERANGE, copied);
+    h.keys("lly");
+    h.app.tabs.activate(0);
+    h.db(DbEvent::TextStyle(Some(pg_style("SQL, MDY"))));
+    h.app.focus = Focus::Results;
+    h.app.tab_mut().grid.row = 0;
+    h.app.tab_mut().grid.col = 2;
+    h.keys("gp");
+    let said = said_text(&mut h);
+    assert!(said.starts_with("Pasted the copied cells") || said.is_empty(), "{said}");
+    assert!(!invalid(&h), "pasted again from where it reads the same");
+    // A copy of it says the settings it was pasted in last.
+    h.keys("y");
+    h.ctrl('t');
+    pg_again(&mut h, Some("SQL, MDY"), DATERANGE, "[2026-04-01,2026-04-02)");
+    h.keys("llgp");
+    structure(&mut h, Ok(st()));
+    assert!(said_text(&mut h).starts_with("Pasted the copied cells"));
 }

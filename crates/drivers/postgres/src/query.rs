@@ -100,7 +100,9 @@
 use crate::connect::{db_error, is_cancel};
 use crate::link::{Closed, Link, Next};
 use crate::route::Cancel;
-use crate::values::{Raw, format_code, format_value, is_json, is_numeric, styled_in, type_display, value_kind};
+use crate::values::{
+    Raw, format_code, format_value, is_json, is_numeric, styled_in, type_display, value_kind, zoned_in,
+};
 use datarig_core::driver::{
     COUNT_LOCK_WAIT, CancelFailure, CancelMark, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent,
     ESTIMATE_LIMIT, Outcome, OwnSession, PagingMode, TxOutcome, TxRule, TxStep,
@@ -1156,6 +1158,7 @@ fn columns_of(columns: &[Column], formats: &[i16]) -> Vec<ColumnMeta> {
             };
             let meta = ColumnMeta {
                 styled: styled_in(c.type_(), formats.get(i).copied().unwrap_or(1)),
+                zoned: zoned_in(c.type_(), formats.get(i).copied().unwrap_or(1)),
                 ..ColumnMeta::new(c.name().to_string(), type_display(c.type_()), value_kind(c.type_()), origin)
             };
             debug_assert_eq!(

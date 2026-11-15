@@ -342,3 +342,24 @@ fn an_action_keeps_its_id_while_it_is_undone_and_redone_and_a_paste_counts_the_r
     b.set(&[(3, 1)], &text("z"), orig);
     assert!(b.last_step().is_some_and(|id| id != first && id != second));
 }
+
+/// The action a pending value came from follows the changes: the last one still done that
+/// changed the cell, back to the earlier one when the later is undone, none once reverted.
+#[test]
+fn a_cells_pending_value_names_the_action_that_set_it() {
+    use super::super::Origin;
+    let mut b = EditBatch::new();
+    assert!(b.set(&[(1, 1)], &text("a"), orig));
+    let first = b.last_step();
+    assert!(b.set(&[(1, 0)], &text("9"), orig));
+    assert_eq!(b.setter(Origin::Row(1), 1), first, "another cell of the row changed after it");
+    assert!(b.set(&[(1, 1)], &text("b"), orig));
+    let second = b.last_step();
+    assert_ne!(first, second);
+    assert_eq!(b.setter(Origin::Row(1), 1), second);
+    assert!(b.undo());
+    assert_eq!(b.setter(Origin::Row(1), 1), first);
+    assert!(b.redo());
+    assert_eq!(b.setter(Origin::Row(1), 1), second);
+    assert_eq!(b.setter(Origin::Row(2), 1), None, "no pending value");
+}

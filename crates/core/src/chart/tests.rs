@@ -22,6 +22,7 @@ fn meta(name: &str, ty: &str, numeric: bool) -> ColumnMeta {
         kind,
         origin: None,
         styled: false,
+        zoned: false,
     }
 }
 

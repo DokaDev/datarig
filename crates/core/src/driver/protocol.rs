@@ -1097,13 +1097,28 @@ pub struct ColumnMeta {
     /// them, and types the driver cannot tell. Such text reads back as the same values only
     /// where [`super::text_style::reads_same`] says so.
     pub styled: bool,
+    /// Of a `styled` column: its text may hold a time with a time zone (a `timestamptz` or
+    /// `timetz` in a range, an array or a composite, a type the driver cannot tell), which a
+    /// `DateStyle` other than ISO writes with the zone's abbreviation (`CST`). Such text reads
+    /// back in the reading session's `timezone_abbreviations`, which no server reports, so it
+    /// reads the same only when written in ISO (numeric offsets).
+    pub zoned: bool,
 }
 
 impl ColumnMeta {
     /// A result column whose `numeric` and `json` follow from `kind`, so they cannot disagree
     /// with it (what a driver builds; a literal must keep them in step itself), not `styled`.
     pub fn new(name: String, type_name: String, kind: ValueKind, origin: Option<ColumnOrigin>) -> Self {
-        Self { name, type_name, numeric: kind.is_number(), json: kind == ValueKind::Json, kind, origin, styled: false }
+        Self {
+            name,
+            type_name,
+            numeric: kind.is_number(),
+            json: kind == ValueKind::Json,
+            kind,
+            origin,
+            styled: false,
+            zoned: false,
+        }
     }
 }
 

@@ -140,6 +140,31 @@ pub fn styled_in(ty: &Type, format: i16) -> bool {
     format == 0 && styled_text(ty)
 }
 
+/// Of a column [`styled_in`]: whether its text may hold a time with a time zone, which a
+/// `DateStyle` other than ISO writes with the zone's abbreviation: a `timestamptz` or `timetz`,
+/// a range, multirange, array or domain of one, a composite with such a field, and any type
+/// [`styled_text`] cannot tell. A date, a time or timestamp without a zone, an interval and
+/// what holds only those do not.
+pub fn zoned_in(ty: &Type, format: i16) -> bool {
+    styled_in(ty, format) && zoned_text(ty)
+}
+
+fn zoned_text(ty: &Type) -> bool {
+    match ty.kind() {
+        Kind::Array(inner) | Kind::Range(inner) | Kind::Multirange(inner) | Kind::Domain(inner) => {
+            return zoned_text(inner);
+        }
+        Kind::Composite(fields) => return fields.iter().any(|f| zoned_text(f.type_())),
+        Kind::Enum(_) => return false,
+        _ => {}
+    }
+    match *ty {
+        Type::TIMESTAMPTZ | Type::TIMETZ => true,
+        Type::DATE | Type::TIME | Type::TIMESTAMP | Type::INTERVAL => false,
+        _ => styled_text(ty),
+    }
+}
+
 /// Whether PostgreSQL's text output of `ty` may depend on `DateStyle`, `IntervalStyle` or
 /// `TimeZone`: a date, time, timestamp or interval, a range, multirange, array or domain of
 /// one, a composite with such a field. A built-in type known to hold none (numbers, text,

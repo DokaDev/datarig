@@ -9,3 +9,8 @@
   the Apply (a `RESET`, the end of a `SET LOCAL`); the cell is marked invalid, saying why. The
   settings of a result are known only for a plain read the server confirms, and a copy of
   values typed or written back by an Apply counts as of settings not known.
+- PostgreSQL: a time with a time zone written with the zone's abbreviation (any `DateStyle`
+  but ISO) pastes only when written in ISO, since the abbreviation is read in each session's
+  `timezone_abbreviations`; behind a pooler, results of a session whose Startup SQL goes in
+  each transaction are of settings not known; and a value pasted again into a cell keeps the
+  settings of the last paste.

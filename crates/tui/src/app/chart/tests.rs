@@ -18,6 +18,7 @@ fn result(cols: &[(&str, &str, bool)], rows: &[&[&str]]) -> ResultSet {
             },
             origin: None,
             styled: false,
+            zoned: false,
         })
         .collect();
     let rows = rows.iter().map(|r| r.iter().map(|c| Some(c.to_string())).collect()).collect();

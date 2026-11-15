@@ -464,6 +464,14 @@ pasted value is applied only while the session still reads it the same: after a 
 commit or rollback that ends a `SET LOCAL`, the cell is marked invalid, saying why, and the
 changes are not applied until it is pasted again or the session's settings are set back.
 
+A time with a time zone (a `timestamptz` or `timetz` in a range, an array or a composite, or a
+type the driver cannot tell) written in a `DateStyle` other than ISO carries the zone's
+abbreviation (`CST`), which the reading session reads in its own `timezone_abbreviations`, a
+setting no server reports: such cells paste only when written in ISO, never by equal settings.
+A session whose Startup SQL goes first in each transaction (behind a pooler) may change the
+settings for the one request that reads and commits a page, so its results' settings are
+never known.
+
 ## Undo, revert, discard
 
 - `u` undoes the last change of the result and `Ctrl+R` redoes it. A change of several selected

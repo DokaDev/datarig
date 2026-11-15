@@ -956,11 +956,12 @@ impl App {
                             // Another value with none to show (one only a run shows) refused the
                             // copy before.
                             Some(o) => {
-                                if let Some(Some(v)) = o.cell() {
+                                if let Some(Some(_)) = o.cell() {
+                                    // A pasted time with a zone, outside ISO, is in the
+                                    // abbreviations of where it was pasted from.
                                     let pasted = match o {
-                                        Over::Pending(_) => (rs.edit.styled.iter())
-                                            .find(|(col, text, _)| *col == c && text == v)
-                                            .and_then(|(_, _, s)| s.clone()),
+                                        Over::Pending(_) => (rs.edit.pasted_style(edit::RowAt::Read(at + i), c))
+                                            .and_then(|p| p.written.clone().filter(|s| !p.zoned || s.reads_anywhere())),
                                         _ => None,
                                     };
                                     note(j, pasted);
