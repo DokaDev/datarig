@@ -166,6 +166,10 @@ pub struct EditState {
     pub gone: Option<Label>,
     /// The cells of the changes whose value their column does not take, as last found.
     pub invalid: InvalidCache,
+    /// Text pasted from columns whose text is written in the session's date settings (`styled`),
+    /// by result column, with the settings it was written in (`None`: not known): such a value
+    /// pending in that column is applied only while the session reads it the same.
+    pub styled: Vec<(usize, String, Option<datarig_core::driver::TextStyle>)>,
 }
 
 impl EditState {

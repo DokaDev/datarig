@@ -928,6 +928,15 @@ impl App {
         let mut refused: Option<export::Refused> = None;
         let (mut short, mut bytes) = (None, 0usize);
         let mut default: Option<usize> = None;
+        // By column, the settings its text values were written in (`Some(None)`: not known, or
+        // more than one): as read, as pasted (`EditState::styled`), not known when typed or
+        // written by an Apply.
+        let mut written: Vec<Option<Option<datarig_core::driver::TextStyle>>> = vec![None; b.cols.len()];
+        let mut note = |j: usize, s: Option<datarig_core::driver::TextStyle>| match &mut written[j] {
+            slot @ None => *slot = Some(s),
+            Some(prev) if *prev != s => *prev = None,
+            Some(_) => {}
+        };
         let mut at = b.rows.start;
         rs.rows
             .for_each_chunk(b.rows.clone(), COPY_CHUNK, |chunk| {
@@ -946,7 +955,18 @@ impl App {
                             }
                             // Another value with none to show (one only a run shows) refused the
                             // copy before.
-                            Some(o) => o.cell().flatten().map_or(Value::Null, |v| Value::Text(v.to_string())),
+                            Some(o) => {
+                                if let Some(Some(v)) = o.cell() {
+                                    let pasted = match o {
+                                        Over::Pending(_) => (rs.edit.styled.iter())
+                                            .find(|(col, text, _)| *col == c && text == v)
+                                            .and_then(|(_, _, s)| s.clone()),
+                                        _ => None,
+                                    };
+                                    note(j, pasted);
+                                }
+                                o.cell().flatten().map_or(Value::Null, |v| Value::Text(v.to_string()))
+                            }
                             None => match r.get(c) {
                                 None => {
                                     short.get_or_insert(at + i);
@@ -954,6 +974,7 @@ impl App {
                                 }
                                 Some(None) => Value::Null,
                                 Some(Some(v)) => {
+                                    note(j, rs.text_in.clone());
                                     if refused.is_none() {
                                         refused = cells[j]
                                             .as_ref()
@@ -1004,7 +1025,8 @@ impl App {
         let columns = b.cols.iter().map(|&c| rs.columns[c].meta.clone()).collect();
         // Without a profile the cells are no table's rows: never matched by column.
         let source = t.profile.map(|p| (p, self.other_database(t).map(str::to_string)));
-        Ok(edit::GridCopy { source, columns, offsets, text_in: rs.text_in.clone(), rows })
+        let text_in = written.into_iter().map(Option::flatten).collect();
+        Ok(edit::GridCopy { source, columns, offsets, text_in, rows })
     }
 
     /// Whether the rest of the active tab's rows can be fetched: its portal is open, the

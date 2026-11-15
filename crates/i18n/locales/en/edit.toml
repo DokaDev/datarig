@@ -28,6 +28,7 @@
 "edit.why.value_not_whole" = "row {row}: {column} {reason}, so its value can't be edited as shown"
 "edit.why.not_read" = "row {row} could not be read"
 "edit.why.not_null" = "{column} is NOT NULL"
+"edit.why.style_changed" = "{column} was pasted as text whose dates and times are written in {from}, but the session now reads such text in {to}: paste it again, or set the session back"
 "edit.why.no_default" = "{column} has no default"
 "edit.why.new_number" = "{column} would take a new number; type a value instead"
 "edit.why.shown_rounded" = "{column} is shown rounded; edit its cells one at a time"

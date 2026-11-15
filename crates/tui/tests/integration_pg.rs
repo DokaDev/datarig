@@ -2938,6 +2938,8 @@ async fn a_range_copied_in_another_date_style_is_not_pasted_as_other_dates() {
     run_and_wait(&mut app, &mut rx, "SET DateStyle = 'SQL, DMY'", None).await;
     run_and_wait(&mut app, &mut rx, &select, None).await;
     assert_eq!(cell_at(&app, 0, 1).as_deref(), Some("[02/01/2026,05/01/2026)"));
+    // The server says the statement runs no code that could change the settings within it.
+    pump(&mut app, &mut rx, 10, |a| matches!(&a.tab().results, Results::Rows(rs) if rs.text_in.is_some())).await;
     app.focus = datarig_tui::app::Focus::Results;
     (app.tab_mut().grid.row, app.tab_mut().grid.col) = (0, 1);
     press(&mut app, 'y');

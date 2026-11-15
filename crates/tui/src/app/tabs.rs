@@ -802,6 +802,22 @@ impl Tab {
         }
     }
 
+    /// The server answered the allowlist's question `check` about a result's statement
+    /// (`ResultSet::text_check`): `ok`, its text is known to be written in the settings its
+    /// first page came in. Whether a result asked it.
+    pub fn style_checked(&mut self, check: u64, ok: bool) -> bool {
+        let mut asked = false;
+        for rs in self.row_results_mut() {
+            if rs.text_check.as_ref().is_some_and(|(c, _)| *c == check) {
+                asked = true;
+                if let Some((_, style)) = rs.text_check.take().filter(|_| ok) {
+                    rs.text_in = Some(style);
+                }
+            }
+        }
+        asked
+    }
+
     /// Every row result the tab keeps (shown or parked).
     pub fn row_results_mut(&mut self) -> impl Iterator<Item = &mut crate::widgets::grid::ResultSet> {
         let shown = match &mut self.results {

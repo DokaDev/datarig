@@ -26,6 +26,7 @@
 "edit.why.value_not_whole" = "{row}행 {column} 열: {reason}. 보이는 값으로는 편집할 수 없습니다"
 "edit.why.not_read" = "{row}행을 읽지 못했습니다"
 "edit.why.not_null" = "{column} 열은 NOT NULL입니다"
+"edit.why.style_changed" = "{column} 열은 날짜와 시각을 {from} 설정으로 쓴 텍스트로 붙여 넣었지만, 세션은 이제 이런 텍스트를 {to} 설정으로 읽습니다. 다시 붙여 넣거나 세션 설정을 되돌리십시오"
 "edit.why.no_default" = "{column} 열에는 기본값이 없습니다"
 "edit.why.new_number" = "{column} 열은 새 번호를 받게 됩니다. 값을 직접 입력하세요"
 "edit.why.shown_rounded" = "{column} 열은 반올림되어 보입니다. 셀을 하나씩 편집하세요"

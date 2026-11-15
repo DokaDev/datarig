@@ -197,6 +197,9 @@ struct ModelKey {
     /// is shown whole.
     dialect: Dialect,
     read_in: ReadIn,
+    /// How the session writes dates as text now (a pasted value of a `styled` column is judged
+    /// by it).
+    text: Option<datarig_core::driver::TextStyle>,
     /// The NULL token a paste reads (an empty pasted value's problem names it).
     null: datarig_core::config::PasteNull,
 }
@@ -421,6 +424,7 @@ impl App {
             applied: rs.edit.batch.is_empty() && rs.edit.applied.is_some(),
             dialect: self.tab_dialect(t.id),
             read_in: rs.read_in.clone(),
+            text: t.exec.text.clone(),
             null: self.prefs.paste_null,
         };
         let cache = &rs.edit.changes;

@@ -454,6 +454,16 @@ again. Dates, times and intervals of the plain types (`date`, `timestamptz`, `in
 arrays of them) are read in ISO whatever the settings and paste as they are, as do text,
 numbers and JSON, and such text pastes as it was shown into a text column.
 
+The settings of a result are known only for a statement that cannot change them while it runs:
+one on the plain-read allowlist (a `SELECT` of tables with known built-ins, which the server
+confirms right after its first page). A statement that calls `set_config`, a function of the
+user's or a view may change them and change them back within itself, which the server never
+reports, so its cells' settings are not known. A value typed in the grid, or written back by an
+Apply, is of settings not known too; a pasted one keeps the settings it was written in. Such a
+pasted value is applied only while the session still reads it the same: after a `RESET`, or a
+commit or rollback that ends a `SET LOCAL`, the cell is marked invalid, saying why, and the
+changes are not applied until it is pasted again or the session's settings are set back.
+
 ## Undo, revert, discard
 
 - `u` undoes the last change of the result and `Ctrl+R` redoes it. A change of several selected

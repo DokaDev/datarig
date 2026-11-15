@@ -72,10 +72,12 @@ pub struct GridCopy {
     pub source: Option<(ProfileId, Option<String>)>,
     pub columns: Vec<datarig_core::driver::ColumnMeta>,
     pub offsets: Vec<Option<String>>,
-    /// How the text of its `styled` columns was written (the result's
-    /// [`text_in`](crate::widgets::grid::ResultSet::text_in); `None`: not known): pasted only
-    /// where it reads back the same ([`datarig_core::driver::text_style::reads_same`]).
-    pub text_in: Option<datarig_core::driver::TextStyle>,
+    /// By column, how the text of its values was written: the result's `text_in` for values as
+    /// read, the settings a pasted value was written in, and `None` (not known) for a value
+    /// typed or written by an Apply, or a column whose values were written in more than one.
+    /// A `styled` column's text is pasted only where it reads back the same
+    /// ([`datarig_core::driver::text_style::reads_same`]).
+    pub text_in: Vec<Option<datarig_core::driver::TextStyle>>,
     pub rows: Vec<Vec<Value>>,
 }
 
@@ -169,6 +171,10 @@ struct PastePlan {
     header: bool,
     /// Copied columns the table computes or numbers itself, left to it (`p`).
     generated: usize,
+    /// The columns (of the result) that take text copied from a `styled` column, with the
+    /// settings it was written in (`None`: not known): kept with the values, so an Apply under
+    /// others is refused.
+    styled: Vec<(usize, Option<datarig_core::driver::TextStyle>)>,
 }
 
 /// Why a paste is refused, in words, and in fewer words for a narrow status bar.
@@ -193,6 +199,10 @@ pub struct Invalids {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct InvalidKey {
     revision: u64,
+    /// How the session writes dates as text now, and how many pasted texts keep theirs: what
+    /// a pasted value of a `styled` column is judged by.
+    text: Option<datarig_core::driver::TextStyle>,
+    styled: usize,
     lang: Lang,
     null: datarig_core::config::PasteNull,
     dialect: Dialect,
@@ -659,6 +669,13 @@ impl App {
         let Some(rs) = rows_of(t) else { return };
         let (tab, result, revision) = (t.id, rs.id, rs.edit.batch.revision());
         let refused = copy.and_then(|c| self.copy_zone_refused(c, &plan).or_else(|| self.copy_style_refused(c, &plan)));
+        let mut plan = plan;
+        if let Some(c) = copy {
+            plan.styled = (plan.map.iter())
+                .filter(|&&(j, _)| c.columns.get(j).is_some_and(|m| m.styled))
+                .map(|&(j, col)| (col, c.text_in.get(j).cloned().flatten()))
+                .collect();
+        }
         if let Some(reason) = refused {
             self.paste_not_done(last, again);
             return self.paste_refused((reason, None));
@@ -796,7 +813,8 @@ impl App {
     /// Do paste `plan` (read at `last`): one step of the changes; the cursor on its first cell,
     /// the selection dropped; what it did said.
     fn paste_do(&mut self, plan: PastePlan, last: Option<LastPaste>, again: Option<LastPaste>) {
-        let PastePlan { ops, first, read, top, size, format, corner, map, as_rows, header, generated, .. } = plan;
+        let PastePlan { ops, first, read, top, size, format, corner, map, as_rows, header, generated, styled, .. } =
+            plan;
         let pasted: Vec<(RowAt, usize)> = (ops.set.iter().map(|((r, c), _)| (RowAt::Read(*r), *c)))
             .chain(ops.set_new.iter().map(|((id, c), _)| (RowAt::New(*id), *c)))
             .collect();
@@ -817,6 +835,21 @@ impl App {
         let step = if revision != before { rs.edit.batch.last_step() } else { None };
         let mut pasted = pasted;
         pasted.extend(done.added.iter().flat_map(|id| cols.iter().map(|c| (RowAt::New(*id), *c))));
+        // The text pasted from `styled` columns keeps the settings it was written in.
+        for (c, style) in &styled {
+            for &(at, col) in pasted.iter().filter(|(_, col)| col == c) {
+                let v = match at {
+                    RowAt::Read(r) => rs.edit.batch.value(r, col),
+                    RowAt::New(id) => rs.edit.batch.drafts().iter().find(|d| d.id == id).and_then(|d| d.cells.get(col)),
+                };
+                if let Some(Value::Text(s)) = v {
+                    let kept = (col, s.clone(), style.clone());
+                    if !rs.edit.styled.contains(&kept) {
+                        rs.edit.styled.push(kept);
+                    }
+                }
+            }
+        }
         // Cells copied in a grid are no text `space d V` reads again.
         self.last_paste = last.map(|l| LastPaste { revision, step, ..l });
         self.edit_grid_sync();
@@ -946,10 +979,25 @@ impl App {
         use datarig_core::driver::text_style;
         let t = self.tab();
         let rs = rows_of(t)?;
-        if text_style::reads_same(copy.text_in.as_ref(), t.exec.text.as_ref()) {
-            return None;
-        }
-        let words = |s: Option<&datarig_core::driver::TextStyle>| match s {
+        plan.map.iter().find_map(|&(j, c)| {
+            let from = copy.columns.get(j)?;
+            let valued = copy.rows.iter().any(|r| matches!(r.get(j), Some(Value::Text(_))));
+            if !from.styled || !valued || !reads_styled(&rs.columns.get(c)?.meta) {
+                return None;
+            }
+            let written = copy.text_in.get(j).and_then(Option::as_ref);
+            if text_style::reads_same(written, t.exec.text.as_ref()) {
+                return None;
+            }
+            let (column, from, to) =
+                (from.name.clone(), self.style_words(written), self.style_words(t.exec.text.as_ref()));
+            Some(self.i18n.msg(&Msg::EditPasteRegisterStyle { column, from, to }).to_string())
+        })
+    }
+
+    /// Settings a session writes dates in, in words (`None`: not known).
+    fn style_words(&self, s: Option<&datarig_core::driver::TextStyle>) -> String {
+        match s {
             Some(s) => self
                 .i18n
                 .msg(&Msg::EditPasteStyle {
@@ -959,16 +1007,7 @@ impl App {
                 })
                 .to_string(),
             None => self.i18n.label(Label::EditPasteStyleUnknown).to_string(),
-        };
-        plan.map.iter().find_map(|&(j, c)| {
-            let from = copy.columns.get(j)?;
-            let valued = copy.rows.iter().any(|r| matches!(r.get(j), Some(Value::Text(_))));
-            if !from.styled || !valued || !reads_styled(&rs.columns.get(c)?.meta) {
-                return None;
-            }
-            let (column, from, to) = (from.name.clone(), words(copy.text_in.as_ref()), words(t.exec.text.as_ref()));
-            Some(self.i18n.msg(&Msg::EditPasteRegisterStyle { column, from, to }).to_string())
-        })
+        }
     }
 
     /// A paste refused for `reason` (and its shorter form), said.
@@ -1158,6 +1197,7 @@ impl App {
             map,
             as_rows: false,
             header: false,
+            styled: Vec::new(),
             generated: 0,
             ops,
             first: read_range.start,
@@ -1305,6 +1345,7 @@ impl App {
         let first_col = pairs.iter().map(|&(_, c)| c).min().unwrap_or(0);
         Ok(PastePlan {
             ops: PasteOps { width: ncols, add, ..PasteOps::default() },
+            styled: Vec::new(),
             first: 0,
             read: Vec::new(),
             top: (shown, first_col),
@@ -1330,6 +1371,8 @@ impl App {
         let zone = self.tab_keys(t).catalog().and_then(|k| k.server_zone());
         let key = InvalidKey {
             revision: rs.edit.batch.revision(),
+            text: t.exec.text.clone(),
+            styled: rs.edit.styled.len(),
             lang: self.i18n.lang,
             null: self.prefs.paste_null,
             dialect: self.tab_dialect(t.id),
@@ -1380,6 +1423,21 @@ impl App {
                 Value::Null => tc.column.not_null.then(|| self.i18n.msg(&Msg::EditWhyNotNull { column }).to_string()),
                 Value::Text(s) => {
                     let Some(m) = rs.columns.get(c).map(|c| &c.meta) else { return };
+                    // Pasted text written in settings the session does not read the same now
+                    // (they changed since the paste: a `RESET`, a rollback, a commit that ended
+                    // a `SET LOCAL`).
+                    let written = (rs.edit.styled.iter())
+                        .find(|(col, text, _)| *col == c && text == s)
+                        .map(|(_, _, style)| style.as_ref());
+                    if let Some(written) = written
+                        && reads_styled(m)
+                        && !datarig_core::driver::text_style::reads_same(written, t.exec.text.as_ref())
+                    {
+                        let (from, to) = (self.style_words(written), self.style_words(t.exec.text.as_ref()));
+                        let why = Msg::EditWhyStyleChanged { column, from, to };
+                        out.cells.insert((at, c), self.i18n.msg(&why).to_string());
+                        return;
+                    }
                     let cells = sessions.entry(c).or_insert_with(|| {
                         let cols = [export::SqlColumn {
                             name: &m.name,

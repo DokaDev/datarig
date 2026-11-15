@@ -308,6 +308,10 @@ impl App {
         let mut idle_end: Option<Result<Notice, (Duration, crate::app::idle::RollbackFailed)>> = None;
         // The plan format a result of the tab may be in (one shows as a plan).
         let explain = self.tab_explain(id);
+        // The allowlist's question about a result's statement, for the settings its text was
+        // written in (`ResultSet::first_styled`).
+        let pg = self.tab_dialect(id) == datarig_core::sql::dialect::Dialect::Postgres;
+        let mut ask_style: Option<(u64, String)> = None;
         let Some(t) = self.tabs.get_mut(id) else { return };
         if outside.is_some() {
             t.exec.outside_offer = outside;
@@ -645,7 +649,13 @@ impl App {
             // A statement of an export.
             DbEvent::Exported { id: qid, result, cancelled } => return self.on_exported(id, qid, result, cancelled),
             // The server's half of the allowlist, for a text plan to view as a plan.
-            DbEvent::RepeatChecked { id: check, result } => return self.as_plan_checked(id, check, result),
+            DbEvent::RepeatChecked { id: check, result } => {
+                // Or a result's, for the settings its text was written in.
+                if t.style_checked(check, result.is_ok()) {
+                    return;
+                }
+                return self.as_plan_checked(id, check, result);
+            }
             DbEvent::Lost { error } => {
                 t.exec.session = None;
                 t.exec.unsure();
@@ -745,7 +755,8 @@ impl App {
                         let store = datarig_core::results::RowStore::new(rows, spill, limits);
                         let mut rs = ResultSet::new(cols, store, more, &null);
                         rs.read_in = read_in(&mut t.exec);
-                        rs.text_in = t.exec.text.clone();
+                        let sql = t.exec.run.statements.get(index).map_or("", |s| s.sql.as_str());
+                        ask_style = rs.first_styled(t.exec.text.as_ref(), sql, pg, &mut self.query_seq);
                         rs.edit.bind(bound);
                         let n = rs.rows.len();
                         let grid = GridState::paged(page_size, t.grid.page_rows);
@@ -925,7 +936,8 @@ impl App {
                 let mut rs = ResultSet::new(cols, store, more, &null);
                 // Bound to the session's values now: a later `SET time_zone` is not this result's.
                 rs.read_in = read_in(&mut t.exec);
-                rs.text_in = t.exec.text.clone();
+                let sql = t.exec.run.statements.last().map_or("", |s| s.sql.as_str());
+                ask_style = rs.first_styled(t.exec.text.as_ref(), sql, pg, &mut self.query_seq);
                 rs.edit.bind(bound);
                 let query = t.exec.query_id;
                 if t.exec.reading.query != query {
@@ -1187,6 +1199,9 @@ impl App {
         }
         if let Some(qid) = close_portal {
             self.send_tab(id, DbCommand::ClosePortal { id: qid });
+        }
+        if let Some((check, sql)) = ask_style {
+            self.send_tab(id, DbCommand::CheckRepeat { id: check, sql });
         }
         if let (Some(target), Some(t)) = (rows_for, self.tabs.get_mut(id)) {
             let (in_block, epoch) = (t.exec.in_block, t.exec.tx_epoch);
