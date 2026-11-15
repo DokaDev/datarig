@@ -45,6 +45,9 @@ pub(crate) struct LimitEdit {
     /// The text is still the cap it opened with, selected: the first digit typed (or a paste)
     /// replaces it, `Backspace` and `Delete` clear it; a key that moves the cursor keeps it.
     pub(crate) selected: bool,
+    /// The form the bar was drawn in as the field opened (its step and cut), kept while it
+    /// fits: typing does not lay the rest of the bar out anew. Set by the first frame drawn.
+    pub(crate) hold: Option<crate::widgets::qbar::Form>,
 }
 
 /// The query bar's state.
@@ -257,6 +260,7 @@ impl App {
             focus: self.qbar.focus.filter(|_| self.bar_focused()).map(|f| f.hit),
             glyphs: Glyphs { filter: crate::icons::filter_status(icons), prev, next },
             backgrounds: crate::theme::cur().has_backgrounds(),
+            hold: self.qbar.edit.as_ref().filter(|_| self.bar_editing()).and_then(|e| e.hold),
         })
     }
 
@@ -412,7 +416,7 @@ impl App {
         let text = self.table_query(on.tab).and_then(|tq| tq.applied().limit).map(|n| n.to_string());
         let text = text.unwrap_or_default();
         let selected = !text.is_empty();
-        self.qbar.edit = Some(LimitEdit { on, input: TextInput::new(&text), selected });
+        self.qbar.edit = Some(LimitEdit { on, input: TextInput::new(&text), selected, hold: None });
     }
 
     /// The filter dialog of the active table tab on column `column` (else the grid's), with its

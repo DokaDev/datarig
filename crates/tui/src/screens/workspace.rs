@@ -406,11 +406,16 @@ fn draw_table_frame(app: &mut App, grid_area: Rect, buf: &mut Buffer) -> Rect {
     // A blank at both ends, as the grid's rows leave from the border.
     buf.set_style(Rect { height: 1, ..rinner }, Style::new().bg(th.bg));
     let line = Rect { x: rinner.x + 1, width: rinner.width.saturating_sub(2), height: 1, ..rinner };
-    let (mut hits, mut cursor) = crate::widgets::qbar::draw(app, &m, line, buf);
+    let (mut hits, mut cursor, mut form) = crate::widgets::qbar::draw(app, &m, line, buf);
     // Laid out otherwise: what was under the pointer is not there any more.
     if hits != app.qbar.last && matches!(app.pointer_on, Some(PointerOn::Bar(_))) {
         app.pointer_on = None;
-        (hits, cursor) = crate::widgets::qbar::draw(app, &m, line, buf);
+        (hits, cursor, form) = crate::widgets::qbar::draw(app, &m, line, buf);
+    }
+    // The `LIMIT` field keeps the form the bar had as it opened.
+    if let Some(e) = app.qbar.edit.as_mut().filter(|_| matches!(m.limit, crate::widgets::qbar::LimitM::Editing { .. }))
+    {
+        e.hold.get_or_insert(form);
     }
     app.qbar.last = hits.clone();
     app.layout.qbar = hits;

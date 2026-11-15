@@ -10,8 +10,9 @@
 //! (`+1`), `ORDER BY` becomes `ORDER`, the first condition is cut, the conditions are counted
 //! (`2 conditions`), the rows keep only their arrows, the column count leaves (`6/7` stays
 //! while columns are hidden), the order is counted (`ORDER ↓2`), the rows go, and then a short
-//! form is left (`failed │ ▼2 + │ ↓2 │ L500 │ 6/7 │ 500 rows ‹ › ⋯`) that narrows in its own steps
-//! down to marks (`! ▼2 ↓2 L ◌1 ⋯`), its rows' words the first to go.
+//! form is left (`failed │ ▼2 + │ ORDER ↓2 │ LIMIT 500 │ 6/7 │ 500 rows ‹ › ⋯`) that narrows in
+//! its own steps down to marks (`! ▼2 ↓2 L ◌1 ⋯`): its `ORDER` and `LIMIT` words the first to
+//! go (`↓2`, `L500`), then its rows' words.
 //! Nothing applied ever leaves: a condition, an order, a limit, hidden columns and the state
 //! keep a mark in every form. [`draw`] draws the form picked and returns where each clickable
 //! part is.
@@ -148,6 +149,10 @@ pub struct Bar {
     pub glyphs: Glyphs,
     /// The theme paints backgrounds: chips are drawn on one, else in brackets.
     pub backgrounds: bool,
+    /// The step of [`LEVELS`] (and the columns its first condition is cut to) to keep while it
+    /// fits: the form the bar had as its `LIMIT` field opened, so that typing in the field does
+    /// not lay the rest of the bar out anew.
+    pub hold: Option<Form>,
 }
 
 /// What a piece of the bar is, for its style.
@@ -201,6 +206,8 @@ pub struct Line {
     pub right: Vec<Seg>,
     /// The step of [`LEVELS`] that made it.
     pub level: usize,
+    /// The columns the first condition is cut to, when it is.
+    pub cut: Option<usize>,
 }
 
 impl Line {
@@ -265,6 +272,9 @@ pub struct Lv {
     short: u8,
     /// The short form says the rows too, in their shortest words (`500 rows`, `~50k rows`).
     short_rows: bool,
+    /// The short form keeps the `ORDER` and `LIMIT` words (`ORDER ↓2`, `LIMIT 500`): the step
+    /// between the counted long form and the marks.
+    short_words: bool,
     /// The state and `⋯` alone.
     bare: bool,
 }
@@ -291,20 +301,23 @@ const fn lv(n: usize) -> Lv {
         chips_count: n >= 9,
         cols_short: n >= 11,
         order_count: n >= 12,
-        short: if n >= 14 && n <= 21 {
-            if n == 14 { 1 } else { (n - 14) as u8 }
-        } else if n > 21 {
+        short: if n >= 22 {
             7
+        } else if n >= 16 {
+            (n - 15) as u8
+        } else if n >= 14 {
+            1
         } else {
             0
         },
-        short_rows: n == 14,
-        bare: n >= 22,
+        short_rows: n == 14 || n == 15,
+        short_words: n == 14,
+        bare: n >= 23,
     }
 }
 
 /// The steps, from the whole bar to the narrowest.
-pub const LEVELS: [Lv; 23] = [
+pub const LEVELS: [Lv; 24] = [
     lv(0),
     lv(1),
     lv(2),
@@ -328,6 +341,7 @@ pub const LEVELS: [Lv; 23] = [
     lv(20),
     lv(21),
     lv(22),
+    lv(23),
 ];
 
 /// The `LIMIT` field's text in at most `room` columns around its cursor (`cursor`: columns from
@@ -431,10 +445,12 @@ fn token(out: &mut Vec<Seg>, text: &str, hit: BarHit, bg: bool) {
 
 const SEP: &str = " \u{2502} ";
 
-/// The short form at its step `k` ([`Lv::short`]) after the state already in `out`: a mark for
-/// each part applied (`▼2 +`, `↓2`, `L500`, `6/7`), the rows in their shortest words with
-/// `words`, and the page arrows.
-fn short_form(m: &Bar, k: u8, words: bool, out: &mut Vec<Seg>) {
+/// The short form at step `lv` ([`Lv::short`]) after the state already in `out`: a mark for
+/// each part applied (`▼2 +`, `↓2`, `L500`, `6/7`; `ORDER ↓2` and `LIMIT 500` with
+/// [`Lv::short_words`]), the rows in their shortest words with [`Lv::short_rows`], and the page
+/// arrows.
+fn short_form(m: &Bar, lv: Lv, out: &mut Vec<Seg>) {
+    let (k, words) = (lv.short, lv.short_rows);
     let n = m.chips.len();
     let mut parts: Vec<Vec<Seg>> = Vec::new();
     if n > 0 {
@@ -447,11 +463,24 @@ fn short_form(m: &Bar, k: u8, words: bool, out: &mut Vec<Seg>) {
     }
     if let Some((_, d)) = m.order.first() {
         let text = format!("{}{}", arrow(*d), capped(m.order.len()));
-        parts.push(vec![seg(text, Tone::Accent, Some(BarHit::Order))]);
+        let mut p = Vec::new();
+        if lv.short_words {
+            p.push(keyword("ORDER", 'O', false, BarHit::Order));
+            p.push(seg(" ", Tone::Muted, Some(BarHit::Order)));
+        }
+        p.push(seg(text, Tone::Accent, Some(BarHit::Order)));
+        parts.push(p);
     }
     let l = Some(BarHit::Limit);
+    let limit_word = || vec![keyword("LIMIT", 'L', false, BarHit::Limit), seg(" ", Tone::Muted, l)];
     match &m.limit {
         LimitM::None(_) => {}
+        LimitM::Cap(c) if lv.short_words => {
+            parts.push([limit_word(), vec![seg(c.to_string(), Tone::Text, l)]].concat())
+        }
+        LimitM::Editing { text, cursor, selected } if lv.short_words => {
+            parts.push([limit_word(), vec![field_seg(text, *cursor, *selected, FIELD_LONG)]].concat())
+        }
         LimitM::Cap(c) if k < 6 => parts.push(vec![seg(format!("L{}", compact(*c)), Tone::Text, l)]),
         LimitM::Cap(_) => parts.push(vec![seg("L", Tone::Text, l)]),
         LimitM::Editing { text, cursor, selected } => {
@@ -525,7 +554,7 @@ fn line(m: &Bar, lv: Lv, cut: Option<usize>) -> Vec<Seg> {
     }
     let n = m.chips.len();
     if lv.short > 0 {
-        short_form(m, lv.short, lv.short_rows, &mut out);
+        short_form(m, lv, &mut out);
         return out;
     }
     // WHERE
@@ -661,11 +690,20 @@ fn right(m: &Bar, lv: Lv) -> Vec<Seg> {
 }
 
 /// The bar at step `level` of [`LEVELS`] when it fits in `w` columns (the first condition cut
-/// where that step cuts it), else `None`.
+/// where that step cuts it), else `None` (also for a step not offered for this bar).
 pub fn at_level(m: &Bar, level: usize, w: usize) -> Option<Line> {
     let lv = LEVELS[level];
-    let make = |cut: Option<usize>| Line { left: line(m, lv, cut), right: right(m, lv), level };
+    let make = |cut: Option<usize>| Line { left: line(m, lv, cut), right: right(m, lv), level, cut };
     let l = make(None);
+    // The short form with its words says the rows the step before it left out: where that makes
+    // it the wider of the two it is no step between them, and is not offered.
+    if lv.short_words && level > 0 {
+        let before = LEVELS[level - 1];
+        let before = Line { left: line(m, before, None), right: right(m, before), level: level - 1, cut: None };
+        if l.width() > before.width() {
+            return None;
+        }
+    }
     if l.width() <= w {
         return Some(l);
     }
@@ -675,14 +713,22 @@ pub fn at_level(m: &Bar, level: usize, w: usize) -> Option<Line> {
     (keep >= CUT_MIN).then(|| make(Some(keep))).filter(|l| l.width() <= w)
 }
 
-/// The bar in `w` columns: the first step of [`LEVELS`] whose form fits (the last when none
-/// does), the bar's focus marked on what it is on.
+/// The bar in `w` columns: the form held ([`Bar::hold`]) while it fits (its first condition cut
+/// anew when only that makes it fit), else the first step of [`LEVELS`] whose form fits (the
+/// last when none does), the bar's focus marked on what it is on.
 pub fn layout(m: &Bar, w: usize) -> Line {
     let last = LEVELS.len() - 1;
-    let mut out = (0..LEVELS.len()).find_map(|level| at_level(m, level, w)).unwrap_or_else(|| Line {
+    let held = m.hold.filter(|(level, _)| *level < LEVELS.len()).and_then(|(level, cut)| {
+        let lv = LEVELS[level];
+        let l = Line { left: line(m, lv, cut), right: right(m, lv), level, cut };
+        if l.width() <= w { Some(l) } else { at_level(m, level, w) }
+    });
+    let walk = || (0..LEVELS.len()).find_map(|level| at_level(m, level, w));
+    let mut out = held.or_else(walk).unwrap_or_else(|| Line {
         left: line(m, LEVELS[last], None),
         right: right(m, LEVELS[last]),
         level: last,
+        cut: None,
     });
     if let Some(f) = m.focus {
         mark_focus(&mut out, f);
@@ -743,12 +789,16 @@ fn focused(style: Style, tone: Tone, bg: bool) -> Style {
     }
 }
 
+/// A form of the bar: its step of [`LEVELS`] and the columns its first condition is cut to.
+pub type Form = (usize, Option<usize>);
+
 /// Where each clickable part of the bar was drawn.
 pub(crate) type Hits = Vec<(Rect, BarHit)>;
 
-/// Draw bar `m` on the line `area` and return where each clickable part is, and where the
-/// cursor of the `LIMIT` field is while it is typed in.
-pub(crate) fn draw(app: &App, m: &Bar, area: Rect, buf: &mut Buffer) -> (Hits, Option<(u16, u16)>) {
+/// Draw bar `m` on the line `area` and return where each clickable part is, where the cursor
+/// of the `LIMIT` field is while it is typed in, and the form drawn (its step and cut, for
+/// [`Bar::hold`]).
+pub(crate) fn draw(app: &App, m: &Bar, area: Rect, buf: &mut Buffer) -> (Hits, Option<(u16, u16)>, Form) {
     let th = theme::cur();
     buf.set_style(area, Style::new().bg(th.bg));
     let l = layout(m, usize::from(area.width));
@@ -792,7 +842,7 @@ pub(crate) fn draw(app: &App, m: &Bar, area: Rect, buf: &mut Buffer) -> (Hits, O
             cursor = Some(((x + c as u16).min(end.saturating_sub(1)), area.y));
         }
     }
-    (hits, cursor)
+    (hits, cursor, (l.level, l.cut))
 }
 
 #[cfg(test)]

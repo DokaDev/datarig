@@ -77,6 +77,7 @@ fn bar(w: &Words, s: &Spec) -> Bar {
         focus: None,
         glyphs: Glyphs { filter: crate::icons::filter_status(s.icons), prev, next },
         backgrounds: s.backgrounds,
+        hold: None,
     }
 }
 
@@ -145,12 +146,14 @@ fn every_width_fits_steps_are_monotone_and_nothing_applied_leaves() {
                 for k in 0..l.level {
                     assert!(at_level(&m, k, width).is_none(), "step {k} fits too: {what}");
                 }
-                // No step is wider than the one before it: none is passed over for a narrower
-                // one that says less.
+                // No step offered is wider than the one offered before it: none is passed over
+                // for a narrower one that says less.
                 if width == 200 {
-                    let whole = |k: usize| at_level(&m, k, usize::MAX).map(|l| l.width()).unwrap_or(0);
-                    for k in 1..LEVELS.len() {
-                        assert!(whole(k) <= whole(k - 1), "step {k} wider than step {}: {what}", k - 1);
+                    let mut before = (usize::MAX, 0);
+                    for k in 0..LEVELS.len() {
+                        let Some(whole) = at_level(&m, k, usize::MAX).map(|l| l.width()) else { continue };
+                        assert!(whole <= before.0, "step {k} wider than step {}: {what}", before.1);
+                        before = (whole, k);
                     }
                 }
                 if !s.chips.is_empty() {
@@ -206,12 +209,13 @@ fn the_whole_bar_and_its_steps() {
     // The short form's own steps, each as it is drawn.
     let short = |level: usize| text(&at_level(&m, level, 200).unwrap());
     assert!(short(13).ends_with("│ in tx | ⋯"), "the rows go, their state stays: {}", short(13));
-    assert_eq!(short(14), "▼2 + │ ↓2 │ L500 │ ~50k rows · in tx ‹ › | ⋯");
-    assert_eq!(short(15), "▼2 + │ ↓2 │ L500 │ in tx ‹ › | ⋯");
-    assert_eq!(short(16), "▼2 + ↓2 L500 in tx ‹ › | ⋯");
-    assert_eq!(short(17), "▼2 + ↓2 L500 in tx | ⋯");
-    assert_eq!(short(18), "▼2 ↓2 L500 in tx | ⋯");
-    assert_eq!(short(20), "▼2 ↓2 L in tx | ⋯");
+    assert_eq!(short(14), "▼2 + │ ORDER ↓2 │ LIMIT 500 │ ~50k rows · in tx ‹ › | ⋯");
+    assert_eq!(short(15), "▼2 + │ ↓2 │ L500 │ ~50k rows · in tx ‹ › | ⋯");
+    assert_eq!(short(16), "▼2 + │ ↓2 │ L500 │ in tx ‹ › | ⋯");
+    assert_eq!(short(17), "▼2 + ↓2 L500 in tx ‹ › | ⋯");
+    assert_eq!(short(18), "▼2 + ↓2 L500 in tx | ⋯");
+    assert_eq!(short(19), "▼2 ↓2 L500 in tx | ⋯");
+    assert_eq!(short(21), "▼2 ↓2 L in tx | ⋯");
     // The keys' letters underlined: W̲HERE O̲RDER BY L̲IMIT c̲ols r̲ows A̲dvanced.
     let ul: Vec<String> =
         whole.segs().filter_map(|g| g.ul.map(|i| g.text.chars().nth(i).unwrap().to_string())).collect();
@@ -369,8 +373,56 @@ fn at_80_columns_a_hidden_column_keeps_the_rows() {
         (r.full, r.mid, r.short) = ("500 rows".into(), "500 rows".into(), "500 rows".into());
     }
     let l = layout(&m, NARROW);
-    assert_eq!(text(&l), "▼2 + │ ↓2 │ L500 │ 6/7 │ 500 rows | ⋯");
+    assert_eq!(text(&l), "▼2 + │ ORDER ↓2 │ LIMIT 500 │ 6/7 │ 500 rows | ⋯");
     assert!(has(&l, BarHit::Rows));
+    // Between the counted long form and the marks the bar gives up few columns: at most the
+    // words `ORDER ` and `LIMIT ` a step (12 columns, the same at every width).
+    let wide = |k: usize| at_level(&m, k, usize::MAX).unwrap().width();
+    assert!(wide(13) - wide(14) <= 12 && wide(14) - wide(15) <= 12, "{} {} {}", wide(13), wide(14), wide(15));
+}
+
+/// While the `LIMIT` field is typed in the bar keeps the form it had as the field opened: the
+/// digits typed and taken out move nothing else, at 120 and at 80 columns; when the bar gets
+/// too narrow for that form it walks the steps again, and never runs over.
+#[test]
+fn the_bar_holds_its_form_while_the_limit_is_typed() {
+    let w = Words::new(Lang::En);
+    let mut m = bar(&w, &Spec { hidden: 1, ..specs()[1].clone() });
+    if let Some(r) = m.rows.as_mut() {
+        (r.state, r.notes, r.arrows) = (None, Vec::new(), None);
+        (r.full, r.mid, r.short) = ("500 rows".into(), "500 rows".into(), "500 rows".into());
+    }
+    let others =
+        |l: &Line| l.segs().filter(|g| g.hit != Some(BarHit::Limit)).map(|g| g.text.clone()).collect::<Vec<_>>();
+    for width in [92, NARROW] {
+        let mut e = m.clone();
+        e.limit = LimitM::Editing { text: "500".into(), cursor: 3, selected: true };
+        let open = layout(&e, width);
+        e.hold = Some((open.level, open.cut));
+        let mut moved = false;
+        for (text, cursor) in [("7", 1), ("", 0), ("75", 2), ("750", 3), ("7", 1)] {
+            e.limit = LimitM::Editing { text: text.into(), cursor, selected: false };
+            let l = layout(&e, width);
+            let what = format!("width {width} {text:?}: {}", super::tests::text(&l));
+            assert!(l.width() <= width, "{what}");
+            assert_eq!(l.level, open.level, "{what}");
+            // Shorter than the cap it opened with (the field's blank for the cursor included):
+            // nothing else moves. As long as it, the first condition may give up that column.
+            if text.len() < 3 {
+                assert_eq!(l.cut, open.cut, "{what}");
+                assert_eq!(others(&l), others(&open), "{what}");
+            }
+            moved |= layout(&Bar { hold: None, ..e.clone() }, width).level != open.level;
+        }
+        assert!(moved, "width {width}: without the hold the walk picks another form for one of these");
+        // A field grown past the form held, or a bar narrower than it: the walk again, within
+        // the width.
+        e.limit = LimitM::Editing { text: "9223372036854775807".into(), cursor: 19, selected: false };
+        for narrower in 30..=width {
+            let l = layout(&e, narrower);
+            assert!(l.width() <= narrower, "width {narrower}: {}", super::tests::text(&l));
+        }
+    }
 }
 
 /// Without backgrounds the focus is in the text alone: no block of the selection behind it, the
@@ -452,7 +504,7 @@ fn the_glyph_form_stays_within_its_budget() {
         let w = Words::new(lang);
         for (k, s) in specs().iter().enumerate() {
             let m = bar(&w, s);
-            let l = Line { left: line(&m, LEVELS[last], None), right: right(&m, LEVELS[last]), level: last };
+            let l = Line { left: line(&m, LEVELS[last], None), right: right(&m, LEVELS[last]), level: last, cut: None };
             let state = m.state.is_some();
             let mut marks = 0;
             let mut lead = state;

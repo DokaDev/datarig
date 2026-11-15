@@ -862,3 +862,50 @@ fn the_remove_key_on_a_count_is_said_to_open() {
     assert!(h.app.overlays.is_open(OverlayKind::FilterDialog));
     assert!(runs(&mut h).is_empty());
 }
+
+/// The bar's line at `w`x`hh`, split around its `LIMIT` part: what is before it, and the words
+/// after it (the blank before the right end, which takes what the field gives up, left out).
+fn around_limit(h: &mut Harness, w: u16, hh: u16) -> (String, String) {
+    let t = h.draw(w, hh);
+    let y = h.app.layout.results.y + 1;
+    let r = h.app.layout.qbar.iter().find(|(_, x)| *x == BarHit::Limit).map(|(r, _)| *r).expect("LIMIT drawn");
+    let cells: Vec<String> = (0..w).map(|x| t.backend().buffer()[(x, y)].symbol().to_string()).collect();
+    let before = cells[..usize::from(r.x)].concat();
+    let after = cells[usize::from(r.x + r.width)..].concat();
+    (before, after.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// While the `LIMIT` field is typed in the rest of the bar stays as it was when the field
+/// opened: digits typed and taken out move no other part, at 120 and at 80 columns, and the bar
+/// still fits when the terminal is resized meanwhile (wider or narrower, down to 80 columns).
+#[test]
+fn the_bar_stays_still_while_the_limit_is_typed() {
+    for (w, hh) in [(120u16, 34u16), (80, 24)] {
+        let mut h = users();
+        filtered(&mut h, "name = 'a' AND id > 1");
+        h.keys("s");
+        runs(&mut h);
+        answer(&mut h);
+        h.keys(" rl500");
+        h.key(KeyCode::Enter);
+        runs(&mut h);
+        answer(&mut h);
+        h.app.focus = Focus::Results;
+        h.keys(" rl");
+        let open = around_limit(&mut h, w, hh);
+        for k in ["7", "\u{8}", "7", "5"] {
+            match k {
+                "\u{8}" => h.key(KeyCode::Backspace),
+                _ => h.keys(k),
+            }
+            assert_eq!(around_limit(&mut h, w, hh), open, "{w}x{hh} after {k:?}");
+        }
+        for other in [160u16, 100, 90, 80] {
+            h.draw(other, hh);
+            let (r, bar) = (h.app.layout.results, &h.app.layout.qbar);
+            assert!(bar.iter().any(|(_, x)| *x == BarHit::Limit), "{other}: {bar:?}");
+            assert!(bar.iter().all(|(q, _)| q.x + q.width <= r.x + r.width), "{other}: {bar:?}");
+        }
+        h.key(KeyCode::Esc);
+    }
+}
