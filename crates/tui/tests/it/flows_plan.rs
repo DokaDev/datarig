@@ -511,19 +511,13 @@ fn the_plans_menu_acts_on_the_plan_it_was_opened_on() {
     h.keys("j  ");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
     let labels = h.menu_labels();
-    for want in [
-        "Plan: show or hide the selected node's detail",
-        "Plan: copy as the raw view shows it",
-        "Plan: copy as the server sent it (its JSON, or its text)",
-        "Plan view: tree",
-        "Plan view: raw (the server's own words, or the text form of a JSON plan)",
-    ] {
+    for want in ["Node detail", "Copy as text", "Copy as sent", "Tree", "Raw"] {
         assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
     }
     let heading = h.app.menu_lines()[0].1.to_string();
     assert_eq!(heading, plan(&h).plan.label(1), "the selected node");
     insta::assert_snapshot!("plan_menu_en_120x34", h.draw(120, 34).backend());
-    h.menu_pick("Plan view: raw (the server's own words, or the text form of a JSON plan)");
+    h.menu_pick("Raw");
     assert_eq!(plan(&h).view, PlanView::Raw);
     // Copies: the text as psql shows it, and the JSON as the server sent it.
     h.keys("y");
@@ -537,7 +531,7 @@ fn the_plans_menu_acts_on_the_plan_it_was_opened_on() {
     h.app.run(vec!["EXPLAIN (FORMAT JSON) SELECT 2".into()]);
     let (id, _) = sent_one(&mut h);
     h.db(plan_page(id, &fixture(17, "simple.plan.json")));
-    h.menu_pick("Plan view: tree");
+    h.menu_pick("Tree");
     assert!(h.status(160, 45).contains("Not run: what the menu was opened on has changed"), "{}", h.status(160, 45));
     assert_eq!(plan(&h).view, PlanView::Tree, "the new plan, as it opened");
     // The editor's menu explains.
@@ -545,8 +539,8 @@ fn the_plans_menu_acts_on_the_plan_it_was_opened_on() {
     h.app.focus = Focus::Editor;
     h.keys("  ");
     let labels = h.menu_labels();
-    assert!(labels.contains(&"Explain: the statement's plan (nothing runs)".to_string()), "{labels:?}");
-    h.menu_pick("Explain analyze: run and measure the statement (writes rolled back)");
+    assert!(labels.contains(&"Explain".to_string()), "{labels:?}");
+    h.menu_pick("Explain (ANALYZE)");
     assert_eq!(sent_one(&mut h).1, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) SELECT 2");
 }
 
@@ -581,7 +575,7 @@ fn a_menu_opened_on_a_plan_is_stale_once_the_running_runs_plan_arrives() {
     h.keys("  ");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
     h.db(plan_page(id, &fixture(17, "join.plan.json")));
-    h.menu_pick("Plan view: raw (the server's own words, or the text form of a JSON plan)");
+    h.menu_pick("Raw");
     assert!(h.status(160, 45).contains("Not run: what the menu was opened on has changed"), "{}", h.status(160, 45));
     assert_eq!(plan(&h).view, PlanView::Tree);
 }

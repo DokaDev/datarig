@@ -464,7 +464,7 @@ fn an_environment_lists_its_profiles_and_has_its_menu() {
     assert_eq!(
         h.menu_labels(),
         [
-            "Explorer: open or toggle",
+            "Open",
             "New environment",
             "Edit environment",
             "Duplicate environment",
@@ -474,10 +474,10 @@ fn an_environment_lists_its_profiles_and_has_its_menu() {
     );
     h.key(KeyCode::Esc);
     h.right_click_row("[environments]");
-    assert_eq!(h.menu_labels(), ["Explorer: open or toggle", "New environment"]);
+    assert_eq!(h.menu_labels(), ["Open", "New environment"]);
     h.key(KeyCode::Esc);
     h.right_click_row("@local-pg");
-    assert_eq!(h.menu_labels(), ["Explorer: open or toggle"]);
+    assert_eq!(h.menu_labels(), ["Open"]);
     h.key(KeyCode::Esc);
     h.key(KeyCode::Enter);
     assert!(h.explorer_line().contains("local-pg") && h.app.selected_profile().is_some());
@@ -799,7 +799,7 @@ fn the_default_rules_are_a_row_of_their_own() {
         assert!(said(&h).contains("cannot be renamed, copied or deleted"), "{k}: {}", said(&h));
     }
     h.right_click_row("(default rules)");
-    assert_eq!(h.menu_labels(), ["Explorer: open or toggle", "New environment", "Edit the default rules"]);
+    assert_eq!(h.menu_labels(), ["Open", "New environment", "Edit the default rules"]);
     h.key(KeyCode::Esc);
     // Edited: read-only for every profile without an environment.
     on_row(&mut h, RowKind::DefaultRules);

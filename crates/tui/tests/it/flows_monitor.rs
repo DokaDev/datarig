@@ -2457,13 +2457,10 @@ fn the_menu_lists_cancel_and_end_dimmed_with_why() {
     h.keys("  ");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
     let dimmed = h.app.menu_dimmed_rows();
-    assert!(
-        dimmed.iter().any(|(l, why)| l.as_str() == "Monitor: cancel the session's statement" && why == "no statement"),
-        "{dimmed:?}"
-    );
+    assert!(dimmed.iter().any(|(l, why)| l.as_str() == "Cancel statement" && why == "no statement"), "{dimmed:?}");
     let live = h.app.menu_rows();
-    assert!(live.iter().any(|(l, _)| l.as_str() == "Monitor: end the session"), "{live:?}");
-    assert!(live.iter().any(|(l, _)| l.as_str() == "Monitor: show / hide the action list"), "{live:?}");
+    assert!(live.iter().any(|(l, _)| l.as_str() == "End session"), "{live:?}");
+    assert!(live.iter().any(|(l, _)| l.as_str() == "Action list"), "{live:?}");
 }
 
 #[test]
@@ -2472,14 +2469,14 @@ fn the_menu_lists_every_view_and_the_server_pane_too() {
     h.keys("  ");
     let live = h.app.menu_rows();
     for item in [
-        "Monitor: Overview",
-        "Monitor: Sessions",
-        "Monitor: Locks",
-        "Monitor: Replication",
-        "Monitor: the server in full",
-        "Monitor: cancel the session's statement",
-        "Monitor: end the session",
-        "Monitor: show / hide the action list",
+        "Overview",
+        "Sessions",
+        "Locks",
+        "Replication",
+        "Server details",
+        "Cancel statement",
+        "End session",
+        "Action list",
     ] {
         assert!(live.iter().any(|(l, _)| l.as_str() == item), "{item}: {live:?}");
     }
@@ -2500,8 +2497,8 @@ fn the_server_pane_over_the_sessions_hides_the_row_from_cancel_and_end() {
     // The menu over the pane offers no action on the hidden row.
     h.keys("  ");
     let live = h.app.menu_rows();
-    assert!(!live.iter().any(|(l, _)| l.as_str() == "Monitor: cancel the session's statement"), "{live:?}");
-    assert!(!live.iter().any(|(l, _)| l.as_str() == "Monitor: end the session"), "{live:?}");
+    assert!(!live.iter().any(|(l, _)| l.as_str() == "Cancel statement"), "{live:?}");
+    assert!(!live.iter().any(|(l, _)| l.as_str() == "End session"), "{live:?}");
     h.key(KeyCode::Esc);
     // Closed, the row is there to act on again.
     h.key(KeyCode::Esc);
@@ -2551,7 +2548,7 @@ fn rows_read_before_a_reconnect_take_no_action_until_read_again() {
     // The menu says so too.
     h.keys("  ");
     let dimmed = h.app.menu_dimmed_rows();
-    assert!(dimmed.iter().any(|(l, _)| l.as_str() == "Monitor: end the session"), "{dimmed:?}");
+    assert!(dimmed.iter().any(|(l, _)| l.as_str() == "End session"), "{dimmed:?}");
     h.key(KeyCode::Esc);
     // Read again on the new connection: offered again.
     answer_read(&mut h, snapshot(10.0, 1100, rows(), true));

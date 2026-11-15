@@ -133,7 +133,7 @@ fn c_draws_the_fetched_rows_without_asking_the_server() {
     // From the results menu and `Space r g` too.
     h.keys("c");
     h.keys("  ");
-    h.menu_pick("Results → show as a chart / as rows");
+    h.menu_pick("Chart / rows");
     assert_eq!(view(&h), ResultView::Chart);
     h.keys("c");
     h.app.focus = Focus::Editor;
@@ -187,22 +187,22 @@ fn kinds_switch_with_keys_the_menu_and_a_click() {
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
     let labels = h.menu_labels();
     for want in [
-        "Chart: show the point's row in the grid",
-        "Chart: copy its numbers as TSV",
-        "Chart: copy the drawing as text",
-        "Chart kind: bars",
-        "Chart kind: line",
-        "Chart: choose the X column",
-        "Chart: choose the value columns (Y)",
-        "Chart: split the values into series by a column",
-        "Chart: logarithmic scale on or off",
-        "Results → show as a chart / as rows",
+        "Show row",
+        "Copy data (TSV)",
+        "Copy as text",
+        "Bars",
+        "Line",
+        "X column…",
+        "Value columns…",
+        "Series by…",
+        "Log scale",
+        "Chart / rows",
     ] {
         assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
     }
     assert_eq!(h.app.menu_lines()[0].1.to_string(), "2026-09-01", "the point at the cursor");
     insta::assert_snapshot!("chart_menu_en_120x34", h.draw(120, 34).backend());
-    h.menu_pick("Chart kind: bars");
+    h.menu_pick("Bars");
     assert_eq!(chart(&mut h).spec.kind, datarig_core::chart::Kind::Bar);
     // `S`: a logarithmic scale, said on the columns' line.
     h.keys("S");
@@ -544,7 +544,7 @@ fn a_chart_follows_the_shown_result_and_drops_stale_choices() {
     let cols = vec![meta("product", "text", false, false), meta("sold", "int4", true, false)];
     let rows = vec![vec![s("a"), s("1")], vec![s("b"), s("2")]];
     h.db(DbEvent::Page { id, columns: Some(cols), rows, more: false, elapsed: Duration::from_millis(3) });
-    h.menu_pick("Chart kind: line");
+    h.menu_pick("Line");
     assert!(h.status(120, 34).contains("Not run: what the menu was opened on has changed"), "{}", h.status(120, 34));
     assert_ne!(chart(&mut h).spec.kind, datarig_core::chart::Kind::Line);
     assert_eq!(chart(&mut h).model().map(|m| m.rows), Some(2));

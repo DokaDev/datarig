@@ -642,7 +642,7 @@ fn a_right_click_on_a_header_opens_its_column_popup() {
     let g = h.app.tab().grid.clone();
     let x = g.hit_cols.iter().find(|c| c.2 == 0).unwrap().0 + 1;
     h.mouse(MouseEventKind::Down(MouseButton::Right), x, g.data_y);
-    let entry = "Table → this column's conditions, sort and hiding";
+    let entry = "Column…";
     assert!(h.app.menu_rows().iter().any(|(l, k)| *l == entry && k == "F"), "{:?}", h.menu_labels());
     h.menu_pick(entry);
     assert_eq!(popup_lines(&h)[0], "Only 1 | ");
@@ -903,7 +903,7 @@ fn the_column_popup_from_a_cell_is_of_that_cells_column() {
     let g = h.app.tab().grid.clone();
     let x = g.hit_cols.iter().find(|c| c.2 == 3).unwrap().0 + 1;
     h.mouse(MouseEventKind::Down(MouseButton::Right), x, g.data_y + 2);
-    h.menu_pick("Table → this column's conditions, sort and hiding");
+    h.menu_pick("Column…");
     assert!(h.screen(120, 34).contains("\u{256d}\u{2500} data  bytea "), "{}", h.screen(120, 34));
     assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (2, 3));
 }

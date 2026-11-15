@@ -127,10 +127,10 @@ fn moving_the_focus_to_a_hidden_pane_ends_the_zoom() {
     h.draw(160, 45);
     h.keys("  ");
     let labels = h.menu_labels();
-    for want in ["Toggle pane zoom", "Toggle explorer"] {
+    for want in ["Zoom pane", "Show / hide explorer"] {
         assert!(labels.iter().any(|l| l.contains(want)), "{want}: {labels:?}");
     }
-    h.menu_pick("Toggle pane zoom");
+    h.menu_pick("Zoom pane");
     assert_eq!(zoom(&h), Some(Focus::Editor));
 }
 

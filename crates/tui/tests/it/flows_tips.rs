@@ -349,11 +349,13 @@ fn the_third_command_line_run_names_the_key_once() {
 
 #[test]
 fn the_third_menu_run_names_the_key_unless_the_key_was_used() {
-    let label = "Comment the line or the selected lines out with -- (or back in)";
+    // Picked by its menu's short label; the tip names the action by its long one.
+    let label = "Comment out / in";
+    let long = "Comment the line or the selected lines out with -- (or back in)";
     let mut h = connected();
     h.ctrl('t');
     let key = h.app.key_for(Action::ToggleComment, Ctx::VimNormal);
-    let named = format!("Tip: {key} runs “{label}” here without the menu");
+    let named = format!("Tip: {key} runs “{long}” here without the menu");
     for i in 0..3 {
         h.keys("  ");
         h.menu_pick(label);

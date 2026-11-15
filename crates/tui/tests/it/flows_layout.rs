@@ -516,10 +516,7 @@ fn a_table_tab_says_why_it_cannot_be_saved_or_switched() {
     let dimmed: Vec<(String, String)> =
         h.app.menu_dimmed_rows().into_iter().map(|(l, why)| (l.to_string(), why)).collect();
     let names: Vec<&str> = dimmed.iter().map(|(l, _)| l.as_str()).collect();
-    assert_eq!(
-        names,
-        ["Save query", "Save query as…", "Change this tab's connection", "Choose this tab's database and schema"]
-    );
+    assert_eq!(names, ["Save query", "Save query as…", "Connection…", "Database and schema…"]);
     assert!(dimmed.iter().all(|(_, why)| why == "table tab"), "{dimmed:?}");
     assert!(!h.menu_labels().iter().any(|l| l.starts_with("Save query")), "not runnable");
     let save = h.app.menu_dimmed_notice("Save query").expect("dimmed");

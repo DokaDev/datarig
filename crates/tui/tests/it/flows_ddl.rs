@@ -322,7 +322,7 @@ fn the_menu_shows_the_ddl() {
     h.app.focus = Focus::Editor;
     h.keys("  ");
     let labels = h.menu_labels();
-    for l in ["DDL tab: read the DDL again", "DDL tab: open the DDL in a new console", "DDL tab: copy the whole DDL"] {
+    for l in ["Reload DDL", "Open in a console", "Copy DDL"] {
         assert!(labels.contains(&l.to_string()), "{l}: {labels:?}");
     }
     assert!(!labels.iter().any(|l| l.starts_with("Format")), "{labels:?}");

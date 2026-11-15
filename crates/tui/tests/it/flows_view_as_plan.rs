@@ -185,7 +185,7 @@ fn the_hint_and_the_action_are_only_for_a_text_plan() {
     h.keys("  ");
     let dimmed: Vec<(String, String)> =
         h.app.menu_dimmed_rows().into_iter().map(|(l, why)| (l.to_string(), why)).collect();
-    let as_plan = "View as plan: the text EXPLAIN again as a plan";
+    let as_plan = "View as plan";
     assert!(dimmed.contains(&(as_plan.to_string(), "already a plan".to_string())), "{dimmed:?}");
     assert_eq!(h.app.menu_dimmed_notice(as_plan).expect("dimmed").msg, Label::PlanAsPlanAlreadyJson.into());
     h.key(KeyCode::Esc);
@@ -218,7 +218,7 @@ fn the_leader_key_and_the_menu_view_it_as_a_plan_too() {
     // The results' action menu lists it first among the pane's actions.
     let mut h = text_plan("EXPLAIN SELECT * FROM t;");
     h.keys("  ");
-    let label = Label::ActionResultsViewAsPlan.text(Lang::En);
+    let label = Label::MenuShortResultsViewAsPlan.text(Lang::En);
     assert!(h.menu_labels().iter().any(|l| l == label), "{:?}", h.menu_labels());
     h.menu_pick(label);
     allowed(&mut h);
@@ -744,7 +744,12 @@ fn commands_for(h: &mut Harness, typed: &str) -> Vec<String> {
 fn a_driver_without_plans_offers_no_plan_actions() {
     let explain = Label::ActionQueryExplain.text(Lang::En).to_string();
     let analyze = Label::ActionQueryExplainAnalyze.text(Lang::En).to_string();
-    let as_plan = Label::ActionResultsViewAsPlan.text(Lang::En).to_string();
+    // The menus name them by their short labels.
+    let (m_explain, m_analyze) = (
+        Label::MenuShortQueryExplain.text(Lang::En).to_string(),
+        Label::MenuShortQueryExplainAnalyze.text(Lang::En).to_string(),
+    );
+    let as_plan = Label::MenuShortResultsViewAsPlan.text(Lang::En).to_string();
     let mut h = text_plan("EXPLAIN SELECT * FROM t WHERE a > 1;");
     h.driver.no_explain.store(true, std::sync::atomic::Ordering::SeqCst);
     let before = status(&h);
@@ -762,7 +767,7 @@ fn a_driver_without_plans_offers_no_plan_actions() {
     h.app.focus = Focus::Editor;
     h.app.tab_mut().editor = Editor::new("SELECT * FROM t;");
     let menu = menu_offers(&mut h);
-    assert!(!menu.contains(&explain) && !menu.contains(&analyze), "{menu:?}");
+    assert!(!menu.contains(&m_explain) && !menu.contains(&m_analyze), "{menu:?}");
     let rows = commands_for(&mut h, "explain");
     assert!(!rows.iter().any(|r| r.starts_with(":explain") || *r == explain || *r == analyze), "{rows:?}");
     h.keys(" ex");
@@ -773,7 +778,7 @@ fn a_driver_without_plans_offers_no_plan_actions() {
     // The same driver with plans: all of it is back.
     h.driver.no_explain.store(false, std::sync::atomic::Ordering::SeqCst);
     let menu = menu_offers(&mut h);
-    assert!(menu.contains(&explain) && menu.contains(&analyze), "{menu:?}");
+    assert!(menu.contains(&m_explain) && menu.contains(&m_analyze), "{menu:?}");
     let rows = commands_for(&mut h, "explain");
     assert!(rows.iter().any(|r| r.starts_with(":explain")) && rows.contains(&analyze), "{rows:?}");
     h.app.focus = Focus::Results;

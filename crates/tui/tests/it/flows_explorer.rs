@@ -1218,7 +1218,7 @@ fn the_menus_console_opens_where_the_click_was() {
     h.right_click_row("local-pg");
     let ids = menu_ids(&h);
     assert!(ids.contains(&"conn.open_console") && !ids.contains(&"explorer.new_console_here"), "{ids:?}");
-    h.menu_pick("New console on this connection");
+    h.menu_pick("New console");
     assert_eq!(h.app.tab().context, SessionContext::default());
 }
 

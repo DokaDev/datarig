@@ -414,7 +414,7 @@ fn copy_as_every_format_through_keys_commands_and_the_menu() {
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
     assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (2, 1));
     let screen = h.screen(160, 45);
-    for want in ["view cell value", "Copy the cell", "Copy selection ▸", "Copy all fetched rows ▸"] {
+    for want in ["View value", "Copy cell", "Copy selection ▸", "Copy all fetched rows ▸"] {
         assert!(screen.contains(want), "{want}:\n{screen}");
     }
     assert!(!screen.contains("Fetch every row"), "every row is fetched");
@@ -440,7 +440,7 @@ fn copy_as_every_format_through_keys_commands_and_the_menu() {
     assert_eq!(clip.last().unwrap().lines().count(), 1, "a comma list of every fetched row");
     // The key shown next to an item of the first level runs it.
     click(&mut h, x, y, MouseButton::Right);
-    h.menu_pick("Copy the cell (a selected range)");
+    h.menu_pick("Copy cell");
     assert_eq!(clip.last().as_deref(), Some("張志明"), "typing finds the item, Enter runs it");
     assert!(h.overlay_kind().is_none());
 }
@@ -1332,7 +1332,7 @@ fn copies_through_keys_commands_and_the_menu_flash() {
     h.draw(160, 45);
     let (x, y) = (h.app.tabs.active().grid.hit_cols[1].0 + 2, h.app.tabs.active().grid.data_y + 2);
     click(&mut h, x, y, MouseButton::Right);
-    h.menu_pick("Copy the cell (a selected range)");
+    h.menu_pick("Copy cell");
     assert_eq!(clip.last().as_deref(), Some("張志明"));
     assert_eq!(flashed_cells(&mut h), [(2, 1)]);
 }
@@ -1420,7 +1420,7 @@ fn select_all_is_in_the_menu_and_on_the_command_line() {
     let (x, y) = (h.app.tab().grid.hit_cols[0].0 + 2, h.app.tab().grid.data_y);
     click(&mut h, x, y, MouseButton::Right);
     let screen = h.screen(160, 45);
-    assert!(screen.contains("Select every cell of the page"), "{screen}");
+    assert!(screen.contains("Select all"), "{screen}");
     h.key(KeyCode::Esc);
     h.ctrl('k');
     h.type_text("select every");

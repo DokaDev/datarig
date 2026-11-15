@@ -415,7 +415,7 @@ fn a_right_click_on_a_cell_keeps_the_menu_whose_entry_opens_the_popup() {
     let x = g.hit_cols.iter().find(|c| c.2 == 2).unwrap().0 + 1;
     h.mouse(MouseEventKind::Down(MouseButton::Right), x, g.data_y + 1);
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
-    let entry = "Table → this column's conditions, sort and hiding";
+    let entry = "Column…";
     assert!(h.app.menu_rows().iter().any(|(l, k)| *l == entry && k == "F"), "{:?}", h.menu_labels());
     h.menu_pick(entry);
     assert_eq!(popup_on(&mut h).as_deref(), Some("email"));

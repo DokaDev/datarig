@@ -1066,15 +1066,15 @@ fn the_wheel_closes_the_editor_and_scrolls() {
 }
 
 /// The edits the action menu of a cell can offer, as it labels them.
-const EDIT_CELL: &str = "Edit the cell (the selected cells of one column)";
-const SET_NULL: &str = "Set the cell (the selected cells) to NULL";
-const UNDO: &str = "Undo the last change of the result's cells";
+const EDIT_CELL: &str = "Edit";
+const SET_NULL: &str = "Set NULL";
+const UNDO: &str = "Undo change";
 const PREVIEW: &str = "Show changes";
-const DISCARD: &str = "Drop every pending change of the result";
-const SET_DEFAULT: &str = "Set the cell (the selected cells) to the column's default";
-const ADD_ROW: &str = "Add a new row, shown after the rows read";
-const CLONE_ROW: &str = "Add a new row with the values of the cursor's row";
-const DELETE_ROW: &str = "Mark the row (the selected rows) to be deleted, or unmark it; a new row is removed";
+const DISCARD: &str = "Discard changes";
+const SET_DEFAULT: &str = "Set DEFAULT";
+const ADD_ROW: &str = "New row";
+const CLONE_ROW: &str = "Duplicate row";
+const DELETE_ROW: &str = "Delete row";
 const EDITS: [&str; 9] = [EDIT_CELL, SET_NULL, SET_DEFAULT, ADD_ROW, CLONE_ROW, DELETE_ROW, UNDO, PREVIEW, DISCARD];
 
 /// The open menu's lines as shown: headings as `# text`, items as `label | keys`.
@@ -1129,13 +1129,7 @@ fn the_menu_of_a_cell_offers_its_edits_and_edit_cell_edits_the_cell_clicked() {
     assert_eq!((g.row, g.col), (1, 1), "the clicked cell is selected first");
     let shown = menu_lines(&h);
     assert_eq!(shown[0], "# Cell email, row 2", "{shown:?}");
-    for item in [
-        "Edit the cell (the selected cells of one column) | e",
-        "Set the cell (the selected cells) to NULL | Space d n",
-        "Add a new row, shown after the rows read | o",
-        "Add a new row with the values of the cursor's row | O",
-        "Mark the row (the selected rows) to be deleted, or unmark it; a new row is removed | D",
-    ] {
+    for item in ["Edit | e", "Set NULL | Space d n", "New row | o", "Duplicate row | O", "Delete row | D"] {
         assert!(shown.iter().any(|l| l == item), "{item}: {shown:?}");
     }
     // Nothing pending: nothing to undo, preview or drop.
@@ -1205,7 +1199,7 @@ fn a_result_that_cannot_be_edited_offers_no_edits() {
     // Why, once: on the first edit, dimmed.
     assert_eq!(menu_dimmed_edits(&h), dimmed(&[(EDIT_CELL, "not editable")]));
     assert!(dimmed_notice(&h, EDIT_CELL).starts_with("Read-only: "), "{}", dimmed_notice(&h, EDIT_CELL));
-    assert!(h.menu_labels().iter().any(|l| l == "Copy the cell (a selected range)"), "the rest stays");
+    assert!(h.menu_labels().iter().any(|l| l == "Copy cell"), "the rest stays");
     insta::assert_snapshot!("edit_menu_read_only_en_120x40", h.draw(120, 40).backend());
     // A read-only environment.
     let mut cfg = Config {
@@ -1344,9 +1338,9 @@ fn a_new_row_offers_its_edits_and_nothing_that_reads_a_row() {
     );
     let labels = h.menu_labels();
     for item in [
-        "Results: view cell value",
-        "Result detail → show / hide",
-        "Copy the cell (a selected range)",
+        "View value",
+        "Detail panel",
+        "Copy cell",
         "Copy the row (the selected rows) as TSV",
         "Copy selection ▸",
         "Copy all fetched rows ▸",

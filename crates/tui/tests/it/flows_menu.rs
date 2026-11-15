@@ -89,7 +89,7 @@ fn every_key_opens_the_explorers_menu_next_to_the_row_with_the_right_clicks_item
     h.command("explorer.context_menu");
     assert_eq!(ids(&h), by_key);
     // Enter runs the selected item: the first, open or toggle.
-    assert_eq!(selected(&h), "Explorer: open or toggle");
+    assert_eq!(selected(&h), "Open");
 }
 
 #[test]
@@ -114,14 +114,14 @@ fn the_grids_menu_opens_at_the_cell_and_by_right_click_with_the_same_items() {
     h.mouse(MouseEventKind::Down(MouseButton::Right), x, y);
     assert_eq!(lines(&h), by_key, "the right click on that cell");
     // Typing finds an item; Enter runs it on that cell.
-    h.menu_pick("Copy the cell (a selected range)");
+    h.menu_pick("Copy cell");
     assert!(!menu_open(&h));
     let cell = clip.last().expect("copied");
     // A range selected with `v`: the menu is the selection's.
     h.keys("vj");
     h.keys("  ");
     assert_eq!(lines(&h)[0], "# Selection");
-    h.menu_pick("Copy the cell (a selected range)");
+    h.menu_pick("Copy cell");
     assert_ne!(clip.last().as_deref(), Some(cell.as_str()), "the range, not the cell");
     // From the inspector: the grid's menu.
     h.app.focus = Focus::Inspector;
@@ -180,7 +180,7 @@ fn the_editors_menu_in_normal_and_visual_mode_not_while_typing() {
     assert_eq!(shown[0], "# Statement under the cursor");
     assert_eq!(&ids(&h)[..3], ["query.execute_current", "editor.format", "editor.comment_toggle"]);
     assert!(shown.contains(&"# Query".to_string()), "{shown:?}");
-    assert!(shown.iter().any(|l| l.starts_with("Format the statement") && l.ends_with("Space e f")), "{shown:?}");
+    assert!(shown.contains(&"Format | Space e f".to_string()), "{shown:?}");
     // Enter on the first item runs the statement under the cursor.
     h.sent();
     h.key(KeyCode::Enter);
@@ -250,7 +250,7 @@ fn typing_filters_prefix_first_then_searches_every_action() {
     // Backspace to an empty filter: every item again; once more keeps the menu open.
     h.key(KeyCode::Backspace);
     assert_eq!(h.app.overlays.menu().unwrap().filter.text(), "");
-    assert_eq!(selected(&h), "Explorer: open or toggle");
+    assert_eq!(selected(&h), "Open");
     h.key(KeyCode::Backspace);
     assert!(menu_open(&h), "Backspace on an empty filter does not close");
     // Nothing in the menu matches: every action, under its own heading.
@@ -314,7 +314,7 @@ fn a_menu_whose_cell_was_replaced_runs_nothing() {
     let (cols, rows) = edge_rows();
     h.db(DbEvent::Page { id, columns: Some(cols), rows, more: false, elapsed: Duration::from_millis(3) });
     assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (0, 0), "the new result starts at its first cell");
-    h.menu_pick("Copy the cell (a selected range)");
+    h.menu_pick("Copy cell");
     assert!(!menu_open(&h));
     assert!(clip.last().is_none(), "nothing copied");
     assert!(h.status(160, 45).contains("Not run: what the menu was opened on has changed"), "{}", h.status(160, 45));
@@ -389,6 +389,60 @@ fn the_menus_items_are_in_sections_with_headings_that_select_nothing() {
     assert_eq!(h.app.overlays.menu().unwrap().selected, 1);
     // Insta: the menu as drawn, by key, in the explorer.
     insta::assert_snapshot!("action_menu_explorer_en_100x30", h.draw(100, 30).backend());
+}
+
+/// Whether `label` names an area before what it does (`Results:`, `Table →`).
+fn names_its_area(label: &str) -> bool {
+    label.contains(" \u{2192} ")
+        || label.split_once(": ").is_some_and(|(head, _)| !head.is_empty() && head.split(' ').count() <= 3)
+}
+
+/// The lines of the open menu as shown: rules between groups (never first in a section, never
+/// two together, never last), and no row that names its area; typed into, it has no rules.
+fn check_groups(h: &mut Harness, what: &str) {
+    let shown = lines(h);
+    let rule = "# ".to_string();
+    assert!(shown.contains(&rule), "{what}: groups: {shown:?}");
+    for (i, l) in shown.iter().enumerate() {
+        if *l == rule {
+            let (before, after) = (&shown[i - 1], shown.get(i + 1));
+            assert!(!before.starts_with("# "), "{what}: a rule after a heading or a rule: {shown:?}");
+            assert!(after.is_some_and(|a| !a.starts_with("# ")), "{what}: a rule before a heading or last: {shown:?}");
+        } else if !l.starts_with("# ") {
+            assert!(!names_its_area(l), "{what}: {l:?} names its area");
+        }
+    }
+    h.type_text("e");
+    assert!(!lines(h).contains(&rule), "{what}: filtered, no rules: {:?}", lines(h));
+    h.key(KeyCode::Esc);
+}
+
+/// Every menu is in groups with rules between them and short labels: the explorer's, the
+/// grid's cell, the editor's, a tab's.
+#[test]
+fn every_menu_is_grouped_with_short_labels() {
+    let mut h = with_edge_results(Lang::En);
+    h.explore("local-pg");
+    h.keys("  ");
+    check_groups(&mut h, "explorer");
+    h.key(KeyCode::Tab);
+    h.app.focus = Focus::Results;
+    h.keys("j");
+    h.draw(120, 34);
+    h.keys("  ");
+    let shown = lines(&h);
+    // The cell's: view, copy, then the result's: its copies, the result, its views, the result tabs.
+    let at = |l: &str| shown.iter().position(|x| x.starts_with(l)).unwrap_or_else(|| panic!("{l}: {shown:?}"));
+    assert_eq!(at("Detail panel") + 2, at("Copy cell"), "{shown:?}");
+    assert_eq!(at("Select all") + 2, at("Chart / rows"), "{shown:?}");
+    assert_eq!(at("Count rows") + 2, at("Next result"), "{shown:?}");
+    check_groups(&mut h, "grid");
+    h.app.focus = Focus::Editor;
+    h.draw(120, 34);
+    h.keys("  ");
+    check_groups(&mut h, "editor");
+    h.keys(" tm");
+    check_groups(&mut h, "tab");
 }
 
 #[test]
@@ -518,7 +572,7 @@ fn the_label_shown_ranks_above_the_id() {
     let mut h = Harness::connected(Lang::En);
     h.explore("local-pg");
     h.keys("  ");
-    h.type_text("f");
+    h.type_text("fo");
     assert_eq!(selected(&h), "Move connection profile to a folder");
 }
 

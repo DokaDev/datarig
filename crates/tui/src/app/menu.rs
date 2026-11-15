@@ -54,160 +54,185 @@ const NOT_IN_MENU: &[Action] = &[
 const EXPLORER_PANE: &[Action] =
     &[Action::NewProfile, Action::Explorer(ExplorerAction::NewFolder), Action::Explorer(ExplorerAction::Filter)];
 
-/// The grid's actions for its cell or selection, in order; the selection's copy scope follows.
-const GRID_MENU: &[Action] = &[
-    Action::Grid(GridAction::ViewCell),
-    Action::ToggleDetail,
-    Action::Grid(GridAction::CopyCell),
-    Action::Grid(GridAction::CopyRow),
+/// The kinds of the explorer's actions for a row: opening it, managing it, its connection, its
+/// consoles and DDL. Listed in the key map's order, a rule goes between two actions of different
+/// kinds (any other action is a kind of its own).
+const EXPLORER_GROUPS: &[&[Action]] = &[
+    &[Action::Explorer(ExplorerAction::Activate), Action::Explorer(ExplorerAction::Refresh)],
+    &[
+        Action::NewProfile,
+        Action::NewTunnel,
+        Action::NewEnvironment,
+        Action::NewSession,
+        Action::Explorer(ExplorerAction::NewFolder),
+        Action::EditProfile,
+        Action::DuplicateProfile,
+        Action::Explorer(ExplorerAction::Move),
+        Action::Explorer(ExplorerAction::Rename),
+        Action::Explorer(ExplorerAction::Delete),
+    ],
+    &[Action::TestConnection, Action::Disconnect],
+    &[
+        Action::OpenConsole,
+        Action::Explorer(ExplorerAction::ConsoleHere),
+        Action::Explorer(ExplorerAction::ShowDdl),
+        Action::Explorer(ExplorerAction::ShowFunctionDdl),
+    ],
 ];
 
-/// The grid's filters by the value of its cell or selection (a table tab's), after its copies.
+/// The grid's actions for its cell or selection, in groups: viewing it, copying it (the
+/// selection's copy scope follows).
+const GRID_VIEW: &[Action] = &[Action::Grid(GridAction::ViewCell), Action::ToggleDetail];
+const GRID_COPY: &[Action] = &[Action::Grid(GridAction::CopyCell), Action::Grid(GridAction::CopyRow)];
+
+/// The grid's column entry (a table tab's): its popup, after the copies.
 const FILTER_MENU: &[Action] = &[Action::Table(TableAction::ColumnMenu)];
 
-/// The edits of the grid's cell or selection, after its copies: each only while its key would
-/// act now ([`App::edit_offered`]).
-const EDIT_MENU: &[EditAction] = &[
-    EditAction::Cell,
-    EditAction::SetNull,
-    EditAction::SetDefault,
-    EditAction::AddRow,
-    EditAction::CloneRow,
-    EditAction::DeleteRow,
-    EditAction::PasteRows,
-    EditAction::PasteRegister,
-    EditAction::Undo,
-    EditAction::Preview,
-    EditAction::Apply,
-    EditAction::Discard,
+/// The edits of the grid's cell or selection, after its copies, in groups (the cells, the rows,
+/// the pending changes): each only while its key would act now ([`App::edit_offered`]).
+const EDIT_MENU: &[&[EditAction]] = &[
+    &[EditAction::Cell, EditAction::SetNull, EditAction::SetDefault],
+    &[
+        EditAction::AddRow,
+        EditAction::CloneRow,
+        EditAction::DeleteRow,
+        EditAction::PasteRows,
+        EditAction::PasteRegister,
+    ],
+    &[EditAction::Undo, EditAction::Preview, EditAction::Apply, EditAction::Discard],
 ];
 
-/// The results pane's actions, after the copies of every row.
-const RESULTS_MENU: &[Action] = &[
-    Action::Export,
-    Action::Grid(GridAction::SelectAll),
-    Action::Chart(ChartAction::Toggle),
-    Action::ExplainAsPlan,
-    Action::CountRows,
-    Action::ResultTab(true),
-    Action::ResultTab(false),
-    Action::Panel(PanelAction::Maximize),
+/// The results pane's actions, after the copies of every row: the result as a whole, other views
+/// of it, the result tabs and the pane.
+const RESULTS_MENU: &[&[Action]] = &[
+    &[Action::Export, Action::Grid(GridAction::SelectAll)],
+    &[Action::Chart(ChartAction::Toggle), Action::ExplainAsPlan, Action::CountRows],
+    RESULT_TABS,
 ];
+
+/// The result tabs and the pane's zoom: the last group of the results pane's menus.
+const RESULT_TABS: &[Action] =
+    &[Action::ResultTab(true), Action::ResultTab(false), Action::Panel(PanelAction::Maximize)];
 
 /// The editor's actions for the statement under the cursor or the selection.
-const EDITOR_MENU: &[Action] =
-    &[Action::RunStatement, Action::FormatSql, Action::ToggleComment, Action::Explain(false), Action::Explain(true)];
+const EDITOR_MENU: &[&[Action]] = &[
+    &[Action::RunStatement],
+    &[Action::FormatSql, Action::ToggleComment],
+    &[Action::Explain(false), Action::Explain(true)],
+];
 
 /// The Plan tab's actions for the selected node and the plan, then its pane's: the views.
-const PLAN_MENU: &[Action] =
-    &[Action::Plan(PlanAction::Detail), Action::Plan(PlanAction::CopyText), Action::Plan(PlanAction::CopyJson)];
-const PLAN_PANE_MENU: &[Action] = &[
-    Action::Plan(PlanAction::View(PlanView::Tree)),
-    Action::Plan(PlanAction::View(PlanView::Summary)),
-    Action::Plan(PlanAction::View(PlanView::Icicle)),
-    Action::Plan(PlanAction::View(PlanView::Flame)),
-    Action::Plan(PlanAction::View(PlanView::Timeline)),
-    Action::Plan(PlanAction::View(PlanView::Rows)),
-    Action::Plan(PlanAction::View(PlanView::Treemap)),
-    Action::Plan(PlanAction::View(PlanView::Boxes)),
-    Action::Plan(PlanAction::View(PlanView::Raw)),
-    Action::ResultTab(true),
-    Action::ResultTab(false),
-    Action::Panel(PanelAction::Maximize),
+const PLAN_MENU: &[&[Action]] =
+    &[&[Action::Plan(PlanAction::Detail)], &[Action::Plan(PlanAction::CopyText), Action::Plan(PlanAction::CopyJson)]];
+const PLAN_PANE_MENU: &[&[Action]] = &[
+    &[
+        Action::Plan(PlanAction::View(PlanView::Tree)),
+        Action::Plan(PlanAction::View(PlanView::Summary)),
+        Action::Plan(PlanAction::View(PlanView::Icicle)),
+        Action::Plan(PlanAction::View(PlanView::Flame)),
+        Action::Plan(PlanAction::View(PlanView::Timeline)),
+        Action::Plan(PlanAction::View(PlanView::Rows)),
+        Action::Plan(PlanAction::View(PlanView::Treemap)),
+        Action::Plan(PlanAction::View(PlanView::Boxes)),
+        Action::Plan(PlanAction::View(PlanView::Raw)),
+    ],
+    RESULT_TABS,
 ];
 
 /// The Chart tab's actions for the point at the cursor and the chart, then its pane's: the
 /// kinds and the columns.
-const CHART_MENU: &[Action] =
-    &[Action::Chart(ChartAction::GotoRow), Action::Chart(ChartAction::CopyData), Action::Chart(ChartAction::CopyText)];
-const CHART_PANE_MENU: &[Action] = &[
-    Action::Chart(ChartAction::Kind(ChartKind::Bar)),
-    Action::Chart(ChartAction::Kind(ChartKind::HBar)),
-    Action::Chart(ChartAction::Kind(ChartKind::Line)),
-    Action::Chart(ChartAction::PickX),
-    Action::Chart(ChartAction::PickY),
-    Action::Chart(ChartAction::PickBy),
-    Action::Chart(ChartAction::Log),
-    Action::Chart(ChartAction::Toggle),
-    Action::ResultTab(true),
-    Action::ResultTab(false),
-    Action::Panel(PanelAction::Maximize),
+const CHART_MENU: &[&[Action]] = &[
+    &[Action::Chart(ChartAction::GotoRow)],
+    &[Action::Chart(ChartAction::CopyData), Action::Chart(ChartAction::CopyText)],
+];
+const CHART_PANE_MENU: &[&[Action]] = &[
+    &[
+        Action::Chart(ChartAction::Kind(ChartKind::Bar)),
+        Action::Chart(ChartAction::Kind(ChartKind::HBar)),
+        Action::Chart(ChartAction::Kind(ChartKind::Line)),
+    ],
+    &[
+        Action::Chart(ChartAction::PickX),
+        Action::Chart(ChartAction::PickY),
+        Action::Chart(ChartAction::PickBy),
+        Action::Chart(ChartAction::Log),
+    ],
+    &[Action::Chart(ChartAction::Toggle)],
+    RESULT_TABS,
 ];
 
 /// The Monitor tab's actions for the selected session, then its pane's.
-const MONITOR_MENU: &[Action] = &[
-    Action::Monitor(MonitorAction::Details),
-    Action::Monitor(MonitorAction::Cancel),
-    Action::Monitor(MonitorAction::Terminate),
-    Action::Monitor(MonitorAction::OpenConsole),
-    Action::Monitor(MonitorAction::CopyQuery),
-    Action::Monitor(MonitorAction::Format),
+const MONITOR_MENU: &[&[Action]] = &[
+    &[Action::Monitor(MonitorAction::Details)],
+    &[Action::Monitor(MonitorAction::Cancel), Action::Monitor(MonitorAction::Terminate)],
+    &[
+        Action::Monitor(MonitorAction::OpenConsole),
+        Action::Monitor(MonitorAction::CopyQuery),
+        Action::Monitor(MonitorAction::Format),
+    ],
 ];
-const MONITOR_PANE_MENU: &[Action] = &[
-    Action::Monitor(MonitorAction::View(MonitorView::Overview)),
-    Action::Monitor(MonitorAction::View(MonitorView::Sessions)),
-    Action::Monitor(MonitorAction::View(MonitorView::Locks)),
-    Action::Monitor(MonitorAction::View(MonitorView::Replication)),
-    Action::Monitor(MonitorAction::ServerInfo),
-    Action::Monitor(MonitorAction::Actions),
-    Action::Monitor(MonitorAction::Pause),
-    Action::Monitor(MonitorAction::ReadNow),
-    Action::Monitor(MonitorAction::ShowIdle),
+const MONITOR_PANE_MENU: &[&[Action]] = &[
+    &[
+        Action::Monitor(MonitorAction::View(MonitorView::Overview)),
+        Action::Monitor(MonitorAction::View(MonitorView::Sessions)),
+        Action::Monitor(MonitorAction::View(MonitorView::Locks)),
+        Action::Monitor(MonitorAction::View(MonitorView::Replication)),
+    ],
+    &[Action::Monitor(MonitorAction::ServerInfo), Action::Monitor(MonitorAction::Actions)],
+    &[
+        Action::Monitor(MonitorAction::Pause),
+        Action::Monitor(MonitorAction::ReadNow),
+        Action::Monitor(MonitorAction::ShowIdle),
+    ],
 ];
 
 /// A DDL tab's actions for its text, and its pane's.
-const DDL_MENU: &[Action] = &[Action::ReloadDdl, Action::DdlToConsole, Action::CopyDdl];
-const DDL_PANE_MENU: &[Action] = &[Action::ExternalEdit];
+const DDL_MENU: &[&[Action]] = &[&[Action::ReloadDdl], &[Action::DdlToConsole, Action::CopyDdl]];
+const DDL_PANE_MENU: &[&[Action]] = &[&[Action::ExternalEdit]];
+
+/// The tab's connection and its transaction: groups of the query pane's and a tab's menus.
+const TAB_CONNECTION: &[Action] = &[Action::SetTabConnection, Action::SetTabContext];
+const TAB_TX: &[Action] = &[Action::TxCommit, Action::TxRollback, Action::TxSummary];
 
 /// The query pane's own actions.
-const QUERY_MENU: &[Action] = &[
-    Action::ExternalEdit,
-    Action::ScriptSave,
-    Action::ScriptSaveAs,
-    Action::SetTabConnection,
-    Action::SetTabContext,
-    Action::TxCommit,
-    Action::TxRollback,
-    Action::TxSummary,
-    Action::Panel(PanelAction::Toggle),
+const QUERY_MENU: &[&[Action]] = &[
+    &[Action::ExternalEdit],
+    &[Action::ScriptSave, Action::ScriptSaveAs],
+    TAB_CONNECTION,
+    TAB_TX,
+    &[Action::Panel(PanelAction::Toggle)],
 ];
 
 /// The actions of a tab.
-const TAB_MENU: &[Action] = &[
-    Action::CloseTab,
-    Action::MoveTab(false),
-    Action::MoveTab(true),
-    Action::GrabTab,
-    Action::ScriptSave,
-    Action::ScriptSaveAs,
-    Action::ScriptRename,
-    Action::ScriptDelete,
-    Action::SetTabConnection,
-    Action::SetTabContext,
-    Action::TxCommit,
-    Action::TxRollback,
-    Action::TxSummary,
-    Action::ReconnectCurrent,
-    Action::DisconnectCurrent,
+const TAB_MENU: &[&[Action]] = &[
+    &[Action::CloseTab],
+    &[Action::MoveTab(false), Action::MoveTab(true), Action::GrabTab],
+    &[Action::ScriptSave, Action::ScriptSaveAs, Action::ScriptRename, Action::ScriptDelete],
+    TAB_CONNECTION,
+    TAB_TX,
+    &[Action::ReconnectCurrent, Action::DisconnectCurrent],
 ];
 
 /// The tab bar's own actions.
-const TABS_MENU: &[Action] = &[Action::NewTab, Action::TabList, Action::ReopenTab, Action::ScriptOpen];
+const TABS_MENU: &[&[Action]] = &[&[Action::NewTab, Action::TabList, Action::ReopenTab, Action::ScriptOpen]];
 
 /// The layout's actions, after the editor's own (the tab bar's also resize the explorer; the
 /// results' zoom is their maximise).
-const LAYOUT_MENU: &[Action] = &[Action::TabList, Action::Zoom, Action::ToggleExplorer];
-const EXPLORER_LAYOUT_MENU: &[Action] =
-    &[Action::Zoom, Action::ToggleExplorer, Action::ExplorerWidth(false), Action::ExplorerWidth(true)];
+const LAYOUT_MENU: &[&[Action]] = &[&[Action::TabList, Action::Zoom, Action::ToggleExplorer]];
+const EXPLORER_LAYOUT_MENU: &[&[Action]] =
+    &[&[Action::Zoom, Action::ToggleExplorer, Action::ExplorerWidth(false), Action::ExplorerWidth(true)]];
 
 /// The welcome panel's (no profile yet).
-const WELCOME_MENU: &[Action] = &[Action::NewProfile, Action::OpenSettings, Action::Help];
+const WELCOME_MENU: &[&[Action]] = &[&[Action::NewProfile, Action::OpenSettings, Action::Help]];
 
 /// Actions that open a menu: not offered by the search of a menu.
 const OPENS_MENU: &[Action] = &[Action::OpenMenu, Action::TabMenu, Action::Explorer(ExplorerAction::ContextMenu)];
 
+/// A section of a menu's items, in groups (a rule between two while nothing filters them).
+type Groups = Vec<Vec<MenuItem>>;
+
 /// A menu's items: the target's, the pane's, and those of them shown dimmed with why.
-type Items = (Vec<MenuItem>, Vec<MenuItem>, Vec<(MenuItem, Off)>);
+type Items = (Groups, Groups, Vec<(MenuItem, Off)>);
 
 /// The filter menu's items, those of them shown dimmed with why, their labels, and the hints
 /// shown with them.
@@ -309,6 +334,8 @@ impl Off {
 pub enum MenuLine {
     Heading(Heading),
     Item(MenuItem),
+    /// A rule between two groups of items of a section (only while nothing filters them).
+    Rule,
     /// Nothing matches the filter, not even among every action.
     NoMatch,
 }
@@ -329,6 +356,9 @@ pub struct ContextMenu {
     /// The items for the target and the pane's, as opened (the filter picks from these).
     pub own: Vec<MenuItem>,
     pub pane: Vec<MenuItem>,
+    /// The items of `own` and `pane` that start a group after the first of their section: a
+    /// rule goes above each while nothing filters the items.
+    pub rules: Vec<MenuItem>,
     /// The items of `own` and `pane` that cannot run now, shown dimmed, and why.
     pub off: Vec<(MenuItem, Off)>,
     /// The own wording of an item, as it was when the menu opened: the explorer's of an action
@@ -824,6 +854,19 @@ impl App {
     /// [`App::push_menu`], giving the focus back to `back` when it closes without running
     /// anything.
     fn push_menu_from(&mut self, back: Focus, ctx: Ctx, target: MenuTarget, (own, pane, off): Items, at: (u16, u16)) {
+        // Each section flat; the first item of each of its groups but the first starts a rule.
+        let mut rules = Vec::new();
+        let mut flat = |groups: Groups| -> Vec<MenuItem> {
+            let mut items = Vec::new();
+            for g in groups.into_iter().filter(|g| !g.is_empty()) {
+                if !items.is_empty() {
+                    rules.push(g[0]);
+                }
+                items.extend(g);
+            }
+            items
+        };
+        let (own, pane) = (flat(own), flat(pane));
         if own.is_empty() && pane.is_empty() {
             return;
         }
@@ -855,6 +898,7 @@ impl App {
             target,
             own,
             pane,
+            rules,
             off,
             names,
             hints: Vec::new(),
@@ -872,20 +916,24 @@ impl App {
         self.menu_refilter();
     }
 
-    /// The actions of `list` that can run now, as items, and those that cannot for a reason a
-    /// menu shows (added to `off` with it).
-    fn available(&self, list: &[Action], off: &mut Vec<(MenuItem, Off)>) -> Vec<MenuItem> {
-        let mut items = Vec::new();
-        for &a in list {
-            let item = MenuItem::Action(a);
-            if (action::spec(a).when)(self) {
-                items.push(item);
-            } else if let Some(o) = self.unavailable_why(a).filter(|o| o.short.is_some()) {
-                items.push(item);
-                off.push((item, o));
+    /// The actions of the groups of `list` that can run now, as items in their groups, and those
+    /// that cannot for a reason a menu shows (added to `off` with it).
+    fn available(&self, list: &[&[Action]], off: &mut Vec<(MenuItem, Off)>) -> Groups {
+        let mut groups = Vec::new();
+        for group in list {
+            let mut items = Vec::new();
+            for &a in *group {
+                let item = MenuItem::Action(a);
+                if (action::spec(a).when)(self) {
+                    items.push(item);
+                } else if let Some(o) = self.unavailable_why(a).filter(|o| o.short.is_some()) {
+                    items.push(item);
+                    off.push((item, o));
+                }
             }
+            groups.push(items);
         }
-        items
+        groups
     }
 
     /// Right click on the explorer at (x, y): select the row there (blank space: the
@@ -907,8 +955,20 @@ impl App {
         let Some(row) = self.explorer_row() else { return };
         let (own, pane) = self.explorer_sections(&row);
         let key = crate::widgets::explorer::row_key(self, &row);
-        let items = |v: Vec<Action>| v.into_iter().map(MenuItem::Action).collect();
-        self.push_menu(Ctx::Explorer, MenuTarget::Explorer(row, key), (items(own), items(pane), Vec::new()), at);
+        // The row's in the key map's order, a new group where the kind changes; the pane's in one.
+        let kind = |a: &Action| EXPLORER_GROUPS.iter().position(|g| g.contains(a));
+        let mut groups: Groups = Vec::new();
+        let mut last = None;
+        for a in &own {
+            if groups.is_empty() || kind(a) != last || kind(a).is_none() {
+                groups.push(Vec::new());
+            }
+            last = kind(a);
+            groups.last_mut().expect("pushed above").push(MenuItem::Action(*a));
+        }
+        let own = groups;
+        let pane = vec![pane.into_iter().map(MenuItem::Action).collect()];
+        self.push_menu(Ctx::Explorer, MenuTarget::Explorer(row, key), (own, pane, Vec::new()), at);
     }
 
     /// `explorer.context_menu`, or the action menu in the explorer: the menu next to the
@@ -970,52 +1030,64 @@ impl App {
         };
         // A new row is no row of the result: nothing reads it but its edits.
         let read = cell.is_some_and(|(row, _)| row < self.shown_rows_read());
+        // In groups: view, copy, the column, the cells' edits, the rows, the pending changes;
+        // then the pane's: the copies of every row, the result, its other views, the result tabs.
         let mut off = Vec::new();
-        let mut own = if read { self.available(GRID_MENU, &mut off) } else { Vec::new() };
-        let mut pane = Vec::new();
+        let mut own: Groups = Vec::new();
+        let mut pane: Groups = Vec::new();
         if read {
-            own.push(MenuItem::Scope(MenuScope::Copy(CopyScope::Selection)));
-            own.extend(self.available(FILTER_MENU, &mut off));
+            own.extend(self.available(&[GRID_VIEW, GRID_COPY], &mut off));
+            if let Some(copy) = own.last_mut() {
+                copy.push(MenuItem::Scope(MenuScope::Copy(CopyScope::Selection)));
+            }
+            own.extend(self.available(&[FILTER_MENU], &mut off));
         }
         if cell.is_some() {
             // Why the whole result takes no edit is said once, on the first edit; why one does
             // not act on this cell or selection, on that edit.
             let mut said = false;
-            for &e in EDIT_MENU {
-                let item = MenuItem::Action(Action::Edit(e));
-                if !(action::spec(Action::Edit(e)).when)(self) {
-                    continue;
-                }
-                match self.edit_offer(e) {
-                    Ok(()) => own.push(item),
-                    Err(NotOffered::Here(o)) => {
-                        own.push(item);
-                        off.push((item, *o));
+            for group in EDIT_MENU {
+                let mut items = Vec::new();
+                for &e in *group {
+                    let item = MenuItem::Action(Action::Edit(e));
+                    if !(action::spec(Action::Edit(e)).when)(self) {
+                        continue;
                     }
-                    Err(NotOffered::Result(o)) if !said => {
-                        said = true;
-                        own.push(item);
-                        off.push((item, *o));
+                    match self.edit_offer(e) {
+                        Ok(()) => items.push(item),
+                        Err(NotOffered::Here(o)) => {
+                            items.push(item);
+                            off.push((item, *o));
+                        }
+                        Err(NotOffered::Result(o)) if !said => {
+                            said = true;
+                            items.push(item);
+                            off.push((item, *o));
+                        }
+                        Err(_) => {}
                     }
-                    Err(_) => {}
                 }
+                own.push(items);
             }
         }
         if read {
-            pane.push(MenuItem::Scope(MenuScope::Copy(CopyScope::Fetched)));
+            let mut copies = vec![MenuItem::Scope(MenuScope::Copy(CopyScope::Fetched))];
             let item = MenuItem::Scope(MenuScope::FetchFirst);
             if self.can_fetch_rest() {
-                pane.push(item);
+                copies.push(item);
             } else if let Some(o) = self.fetch_off() {
-                pane.push(item);
+                copies.push(item);
                 off.push((item, o));
             }
-            pane.push(MenuItem::Scope(MenuScope::Default));
+            copies.push(MenuItem::Scope(MenuScope::Default));
+            pane.push(copies);
         }
         pane.extend(self.available(RESULTS_MENU, &mut off));
         // No cell shown (every column hidden): none to select.
         if self.grid_no_cell() {
-            pane.retain(|i| *i != MenuItem::Action(Action::Grid(GridAction::SelectAll)));
+            for g in &mut pane {
+                g.retain(|i| *i != MenuItem::Action(Action::Grid(GridAction::SelectAll)));
+            }
         }
         self.push_menu_from(back, Ctx::Grid, target, (own, pane, off), at);
         if !self.overlays.is_open(OverlayKind::ContextMenu) {
@@ -1083,7 +1155,7 @@ impl App {
             return;
         }
         let back = self.focus;
-        self.push_menu_from(back, Ctx::Grid, target, (items, Vec::new(), off), at);
+        self.push_menu_from(back, Ctx::Grid, target, (vec![items], Vec::new(), off), at);
         if let Some(m) = self.overlays.menu_mut()
             && matches!(m.target, MenuTarget::Filter { .. })
         {
@@ -1151,7 +1223,9 @@ impl App {
         let mut own = self.available(TAB_MENU, &mut off);
         // Disconnecting a tab's profile that is not connected does nothing.
         let gone = self.tab().profile.is_none_or(|id| self.conns.state(id) == NodeState::Disconnected);
-        own.retain(|i| !(gone && *i == MenuItem::Action(Action::DisconnectCurrent)));
+        for g in &mut own {
+            g.retain(|i| !(gone && *i == MenuItem::Action(Action::DisconnectCurrent)));
+        }
         let mut pane = self.available(TABS_MENU, &mut off);
         pane.extend(self.available(EXPLORER_LAYOUT_MENU, &mut off));
         self.push_menu(Ctx::Nav, target, (own, pane, off), at);
@@ -1186,7 +1260,7 @@ impl App {
             [(MonitorAction::Cancel, ActionKind::Cancel), (MonitorAction::Terminate, ActionKind::Terminate)]
         {
             let item = MenuItem::Action(Action::Monitor(a));
-            if own.contains(&item)
+            if own.iter().any(|g| g.contains(&item))
                 && let Some(o) = self.monitor_action_off(kind)
             {
                 off.push((item, o));
@@ -1226,12 +1300,14 @@ impl App {
         }
     }
 
-    /// The texts an item is found by: its label as shown, its English label and its id.
+    /// The texts an item is found by: its label as shown, its long label (as the which-key and
+    /// the help show it, and in English) and its id.
     fn item_texts(&self, ctx: Ctx, names: &[(MenuItem, Localized)], item: MenuItem) -> Vec<String> {
         let mut out = vec![self.menu_row(ctx, names, item).0.to_string()];
         match item {
             MenuItem::Action(a) => {
                 let s = action::spec(a);
+                out.push(self.i18n.label(s.label).to_string());
                 out.push(s.label.text(datarig_i18n::Lang::En).to_string());
                 out.push(s.id.to_string());
             }
@@ -1247,7 +1323,7 @@ impl App {
     pub(super) fn menu_refilter(&mut self) {
         let Some(m) = self.overlays.menu() else { return };
         let query = m.filter.text().trim().to_string();
-        let (ctx, names) = (m.ctx, m.names.clone());
+        let (ctx, names, rules) = (m.ctx, m.names.clone(), m.rules.clone());
         let off: Vec<MenuItem> = m.off.iter().map(|(i, _)| *i).collect();
         let sections = [(Heading::Target, m.own.clone()), (Heading::Pane, m.pane.clone())];
         let mut lines: Vec<MenuLine> = Vec::new();
@@ -1268,6 +1344,10 @@ impl App {
             ranked.sort_by_key(|&(r, i, _)| (r, i));
             lines.push(MenuLine::Heading(heading));
             for (r, _, item) in ranked {
+                // The items keep their order and their groups while nothing filters them.
+                if query.is_empty() && rules.contains(&item) {
+                    lines.push(MenuLine::Rule);
+                }
                 if !off.contains(&item) && best.is_none_or(|(b, _)| r < b) {
                     best = Some((r, lines.len()));
                 }
@@ -1555,7 +1635,7 @@ impl App {
             |a: Action| self.keymap.hint_keys(a, ctx, self.enhanced_keys).map(|k| keys::label(&k)).unwrap_or_default();
         let own = names.iter().find(|(x, _)| *x == item).map(|(_, l)| l.clone());
         match item {
-            MenuItem::Action(a) => (own.unwrap_or_else(|| self.i18n.label(action::spec(a).label)), keys(a)),
+            MenuItem::Action(a) => (own.unwrap_or_else(|| self.i18n.label(action::spec(a).menu_label())), keys(a)),
             MenuItem::Count(_) => (own.unwrap_or_else(|| Localized::verbatim("")), String::new()),
             MenuItem::Scope(scope) => {
                 let label = match scope {
@@ -1665,6 +1745,8 @@ impl App {
                     let (label, keys) = self.menu_entry(m, *i);
                     (false, label, keys)
                 }
+                // A heading without a label is drawn as a rule.
+                MenuLine::Rule => (true, Localized::verbatim(""), String::new()),
                 MenuLine::NoMatch => (true, self.i18n.label(Label::MenuNoMatch), String::new()),
             })
             .collect()
@@ -1735,7 +1817,62 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::rank;
+    use super::*;
+    use datarig_i18n::Lang;
+
+    /// A label that names an area before what it does: `Results:`, `Table →`, `Plan view:`.
+    pub(crate) fn names_its_area(label: &str) -> bool {
+        label.contains(" \u{2192} ")
+            || label.split_once(": ").is_some_and(|(head, _)| !head.is_empty() && head.split(' ').count() <= 3)
+    }
+
+    #[test]
+    fn the_area_prefixes_are_seen() {
+        for l in ["Results: view cell value", "Table \u{2192} the order", "Plan view: tree", "결과: 셀 값 보기"] {
+            assert!(names_its_area(l), "{l}");
+        }
+        for l in ["Copy selection \u{25b8}", "Column\u{2026}", "Copy data (TSV)", "Chart / rows"] {
+            assert!(!names_its_area(l), "{l}");
+        }
+    }
+
+    /// No row of any menu table names its area, in either language: each action of them has a
+    /// short label where its long one does (the long one stays for the which-key, the help and
+    /// the command line). The explorer's rows come from its key map: every action with a short
+    /// label is checked too.
+    #[test]
+    fn no_menu_row_names_its_area() {
+        let tables: &[&[&[Action]]] = &[
+            EXPLORER_GROUPS,
+            &[EXPLORER_PANE, GRID_VIEW, GRID_COPY, FILTER_MENU],
+            RESULTS_MENU,
+            EDITOR_MENU,
+            PLAN_MENU,
+            PLAN_PANE_MENU,
+            CHART_MENU,
+            CHART_PANE_MENU,
+            MONITOR_MENU,
+            MONITOR_PANE_MENU,
+            DDL_MENU,
+            DDL_PANE_MENU,
+            QUERY_MENU,
+            TAB_MENU,
+            TABS_MENU,
+            LAYOUT_MENU,
+            EXPLORER_LAYOUT_MENU,
+            WELCOME_MENU,
+        ];
+        let edits = EDIT_MENU.iter().flat_map(|g| g.iter()).map(|e| Action::Edit(*e));
+        let shorts = action::REGISTRY.iter().filter(|s| s.short.is_some()).map(|s| s.action);
+        let all: Vec<Action> =
+            tables.iter().flat_map(|t| t.iter().flat_map(|g| g.iter().copied())).chain(edits).chain(shorts).collect();
+        for a in all {
+            let label = action::spec(a).menu_label();
+            for lang in [Lang::En, Lang::Ko] {
+                assert!(!names_its_area(label.text(lang)), "{}: {:?}", action::spec(a).id, label.text(lang));
+            }
+        }
+    }
 
     #[test]
     fn prefix_first_then_a_word_then_letters_in_order() {
