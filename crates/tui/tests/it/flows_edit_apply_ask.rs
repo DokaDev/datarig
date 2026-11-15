@@ -851,7 +851,7 @@ fn the_action_menu_offers_show_changes_and_apply() {
     h.keys("  ");
     let labels = h.menu_labels();
     assert!(labels.iter().any(|l| l == "Show changes"), "{labels:?}");
-    h.menu_pick("Apply the pending changes (asked first)");
+    h.menu_pick("Apply changes…");
     assert!(asked(&h).is_some(), "the menu asks as the key does");
     h.key(KeyCode::Esc);
     h.keys("  ");

@@ -727,7 +727,7 @@ fn a_pick_from_the_sql_section_fills_its_fields() {
     answer(&mut h);
     h.sent();
     h.keys("f");
-    h.keys("Q");
+    h.keys("QQ");
     h.type_text("name = 'typed'");
     h.ctrl('r');
     assert!(h.app.overlays.is_open(OverlayKind::Picker), "the list opens above the dialog");

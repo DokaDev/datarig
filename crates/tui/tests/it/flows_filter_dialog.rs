@@ -596,6 +596,47 @@ fn a_server_error_closes_the_dialog_and_f_shows_it() {
     assert!(screen.contains("id = 1"), "the draft is the failed request: {screen}");
 }
 
+/// The whole dialog is centred, 92% x 90% of the screen, each side never smaller than the
+/// smallest screen's (80 x 24): on that screen it takes it all. Around it the screen stays,
+/// dimmed (the `terminal` theme dims with the modifier); inside nothing is dimmed.
+#[test]
+fn the_dialog_is_centred_over_the_screen_dimmed() {
+    use ratatui::style::Modifier;
+    // (screen, the dialog's box)
+    let cases = [((120, 34), (5, 2, 110, 30)), ((80, 24), (0, 0, 80, 24)), ((84, 26), (2, 1, 80, 24))];
+    for terminal in [false, true] {
+        let mut h = users();
+        if terminal {
+            h.app.theme = std::sync::Arc::new(datarig_tui::theme::TERMINAL.clone());
+        }
+        let before: Vec<_> = cases.iter().map(|&((w, hh), _)| h.draw(w, hh).backend().buffer().clone()).collect();
+        h.keys("f");
+        for (((w, hh), (x, y, bw, bh)), before) in cases.into_iter().zip(before) {
+            let term = h.draw(w, hh);
+            let buf = term.backend().buffer();
+            let what = format!("{w}x{hh}, terminal theme {terminal}");
+            assert_eq!(buf[(x, y)].symbol(), "\u{256d}", "{what}");
+            assert_eq!(buf[(x + bw - 1, y)].symbol(), "\u{256e}", "{what}");
+            assert_eq!(buf[(x, y + bh - 1)].symbol(), "\u{2570}", "{what}");
+            assert_eq!(buf[(x + bw - 1, y + bh - 1)].symbol(), "\u{256f}", "{what}");
+            for (cx, cy) in [(x + 2, y + 3), (x + bw / 2, y + bh / 2)] {
+                assert!(!buf[(cx, cy)].modifier.contains(Modifier::DIM), "{what}: inside at {cx},{cy}");
+            }
+            if (bw, bh) == (w, hh) {
+                continue;
+            }
+            // Outside: the screen as it was (its text), dimmed.
+            let (ox, oy) = (x.saturating_sub(1), hh - 1);
+            let (now, was) = (&buf[(ox, oy)], &before[(ox, oy)]);
+            assert_eq!(now.symbol(), was.symbol(), "{what}: the screen stays behind");
+            match terminal {
+                true => assert!(now.modifier.contains(Modifier::DIM), "{what}"),
+                false => assert_ne!((now.fg, now.bg), (was.fg, was.bg), "{what}: dimmed"),
+            }
+        }
+    }
+}
+
 #[test]
 fn the_dialog_screens() {
     let mut h = users();
@@ -736,7 +777,9 @@ fn the_columns_follow_the_catalogue_read_while_the_dialog_is_open() {
         ..Default::default()
     };
     keys_came_with(&mut h, "local-pg", keys);
-    let screen = h.screen(120, 34);
+    // A screen whose centred dialog is as wide as the whole one at 120 columns (room for the
+    // whole type).
+    let screen = h.screen(132, 34);
     assert!(screen.contains("Columns 3") && !screen.contains("from the loaded result"), "{screen}");
     assert!(screen.contains("email           varchar(200)"), "{screen}");
     // Still on `name` (now the third column, not the second).
@@ -843,12 +886,17 @@ fn many_conditions_scroll_to_the_one_with_the_keys() {
     h.key(KeyCode::Char('j'));
     let s = h.screen(80, 24);
     assert!(focused_row(&s).is_some_and(|l| l.contains("+ add condition")), "{s}");
-    // With the SQL section open the pane is shorter: the line with the keys is still drawn.
+    // The SQL view takes the pane: its lines go out of reach (the keys to the `SQL` toggle), and
+    // are back once it closes.
+    h.key(KeyCode::Char('Q'));
+    let s = h.screen(80, 24);
+    assert!(!s.contains("+ add condition") && focused_row(&s).is_none(), "{s}");
+    h.key(KeyCode::Right);
     h.key(KeyCode::Char('Q'));
     assert!(h.app.filter_dialog_sql_fields().is_some());
-    for _ in 0..3 {
-        h.key(KeyCode::Tab);
-    }
+    h.key(KeyCode::Esc);
+    assert!(h.app.filter_dialog_sql_fields().is_none());
+    h.key(KeyCode::Tab);
     assert_eq!(h.app.key_context(), Ctx::FilterDialog);
     h.key(KeyCode::Right);
     for _ in 0..5 {
@@ -864,7 +912,7 @@ fn many_conditions_scroll_to_the_one_with_the_keys() {
     }
     let s = h.screen(80, 24);
     assert!(focused_row(&s).is_some_and(|l| l.contains("+ add condition")), "{s}");
-    assert_screen!("filter_dialog_many_sql_en_80x24", Lang::En, h.draw(80, 24));
+    assert_screen!("filter_dialog_many_end_en_80x24", Lang::En, h.draw(80, 24));
 }
 
 #[test]
@@ -921,7 +969,9 @@ fn the_column_list_names_postgresql_types_short() {
         ..Default::default()
     };
     keys_came_with(&mut h, "local-pg", keys);
-    let screen = h.screen(120, 34);
+    // A screen whose centred dialog is as wide as the whole one at 120 columns (room for the
+    // whole type).
+    let screen = h.screen(132, 34);
     for (name, ty) in [
         ("email", "varchar(200)"),
         ("seen", "timestamptz"),
@@ -935,7 +985,7 @@ fn the_column_list_names_postgresql_types_short() {
     for _ in 0..2 {
         h.key(KeyCode::Down);
     }
-    assert!(h.screen(120, 34).contains("seen  timestamp with time zone"), "{}", h.screen(120, 34));
+    assert!(h.screen(132, 34).contains("seen  timestamp with time zone"), "{}", h.screen(132, 34));
 }
 
 #[test]

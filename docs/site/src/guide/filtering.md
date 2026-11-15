@@ -16,7 +16,8 @@ A query's rows have no such dialog: filter and sort them in the statement.
 `f` (or `Space r f`) opens the dialog on the cursor's column. `⋯ Advanced` on the
 [query bar](#the-query-bar-and-the-connection), `Space r A`, or "Filter and sort…" in a column's
 [menu](#from-the-grid), opens it too; a part of the bar opens a small popup under it, and `A` in
-the popup turns it into the dialog. It covers the whole screen:
+the popup turns it into the dialog. It opens centred over the screen, dimmed around it (on an
+80 x 24 terminal it takes the whole screen):
 
 - the title names the table, says `edited` once what you changed differs from what is applied,
   and how many rows the tab holds;
@@ -27,7 +28,7 @@ the popup turns it into the dialog. It covers the whole screen:
 
 `Tab` and `Shift+Tab` move from part to part. `Enter` applies what the dialog holds and runs the
 table again; `Esc` closes it and drops your changes, without asking (an open list, a running
-[`# count exactly`](#count-exactly), the search or the SQL section is closed or cancelled first,
+[`# count exactly`](#count-exactly), the search or the SQL view is closed or cancelled first,
 and the dialog stays open). Nothing you change in the dialog is sent before `Enter`; only
 [`# count exactly`](#count-exactly) asks the server something while it is open.
 
@@ -199,7 +200,7 @@ Once the column is sorted, the line also says where its NULLs go, when it fits: 
 its own.
 PostgreSQL puts NULLs last going up and first going down; MySQL and MariaDB put them first going
 up and last going down. On PostgreSQL you can ask for another place in the
-[`ORDER BY` field](#the-sql-section) (`total DESC NULLS LAST`), and the line says so; MySQL has no
+[`ORDER BY` field](#the-sql-view) (`total DESC NULLS LAST`), and the line says so; MySQL has no
 such syntax, and it is refused there.
 
 ### Where, Order, Limit
@@ -229,17 +230,20 @@ rows reach it the query bar says `LIMIT 100` and the rows it holds. `Space r l` 
 `LIMIT` in the query bar) types the limit in the bar itself: digits, `Enter` runs it, `Esc`
 leaves it as it was, empty means no cap.
 
-### The SQL section
+### The SQL view
 
-`Q` (or `SQL ▸`) opens the statement as it would be sent, coloured, the key columns datarig adds
-dimmed, above two fields, `WHERE` and `ORDER BY`, holding the dialog's condition and order:
+`Q` (or `SQL ▸`) shows the SQL in the right pane, in place of the column's conditions, one view
+at a time: first the statement as it would be sent, coloured, the key columns datarig adds dimmed,
+read only:
 
 ```text
 {{#include ../screens/filter-sql.txt}}
 ```
 
-Type there for anything the chips do not build. What you typed is read back when you leave the
-field, close the section (`Esc`, or `Q` outside its fields) or apply: the condition is taken apart
+`Q` again shows two fields, `WHERE` and `ORDER BY`, holding the dialog's condition and order; once
+more, it closes. The chips are hidden while either view is shown. Type in the fields for anything
+the chips do not build. What you typed is read back when you leave the field, close the view
+(`Esc`, or `Q` outside its fields) or apply: the condition is taken apart
 into chips again (an `OR` or a function makes an `expr` chip), and an order that is not the table's
 columns is refused with the part underlined, the field keeping the keys. A field you did not type in
 changes nothing. `Ctrl+Space` completes as `:where` and `:orderby` do: the table's columns, the

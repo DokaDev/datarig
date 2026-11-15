@@ -8,10 +8,10 @@ use super::*;
 use crate::widgets::text_input::InputResult;
 use datarig_core::query::{Dir, Value};
 
-/// The parts `Tab` moves between, in order: the column list, the right pane, the footer's
-/// chips, its keys, the `LIMIT` field and the `SQL` toggle; while the SQL section is open, its
-/// `WHERE` and `ORDER BY` fields and its `Open in editor` button.
-const AREAS: usize = 9;
+/// The parts `Tab` moves between, in order: the column list, the right pane (the column's
+/// lines, or the SQL view in their place), the footer's chips (none while the SQL view hides
+/// them), its keys, the `LIMIT` field and the `SQL` toggle.
+const AREAS: usize = 6;
 
 /// The part of the dialog focus `f` is in ([`AREAS`]).
 fn area(f: DialogFocus) -> usize {
@@ -22,14 +22,14 @@ fn area(f: DialogFocus) -> usize {
         | DialogFocus::Add
         | DialogFocus::Values(_)
         | DialogFocus::Sort
-        | DialogFocus::Line(_) => 1,
+        | DialogFocus::Line(_)
+        | DialogFocus::SqlWhere
+        | DialogFocus::SqlOrder
+        | DialogFocus::SqlOpen => 1,
         DialogFocus::Chips(_) => 2,
         DialogFocus::Order(_) | DialogFocus::Sorted(_) => 3,
         DialogFocus::Limit => 4,
         DialogFocus::Sql => 5,
-        DialogFocus::SqlWhere => 6,
-        DialogFocus::SqlOrder => 7,
-        DialogFocus::SqlOpen => 8,
     }
 }
 
@@ -112,7 +112,7 @@ impl App {
             return self.filter_dialog_text_key(key);
         }
         // A column's popup opened on the column: `C` hides it, as in the grid.
-        let focus = d.focus;
+        let (focus, fields) = (d.focus, d.sql_fields().is_some());
         if key.code == KeyCode::Char('C') && self.column_line_key(ColumnLine::Hide) {
             return;
         }
@@ -138,7 +138,8 @@ impl App {
             }
             DialogFocus::SqlOpen => match key.code {
                 KeyCode::Char(' ') => self.filter_dialog_open_sql(),
-                KeyCode::Up | KeyCode::Char('k') => self.filter_dialog_sql_move(DialogFocus::SqlOrder),
+                // The fields above it, in their view.
+                KeyCode::Up | KeyCode::Char('k') if fields => self.filter_dialog_sql_move(DialogFocus::SqlOrder),
                 _ => {}
             },
             DialogFocus::Value(..)
@@ -182,22 +183,22 @@ impl App {
             return;
         }
         self.filter_dialog_popup_close();
-        // A field of the SQL section is read back as it is left; an order refused keeps it.
+        // A field of the SQL view is read back as it is left; an order refused keeps it.
         if self.filter_dialog().is_some_and(|d| d.sql_field().is_some()) && !self.filter_dialog_read_back() {
             return;
         }
         let Some(d) = self.filter_dialog_mut() else { return };
         let first = |d: &FilterDialog, a: usize| -> Option<DialogFocus> {
-            match a {
-                0 => Some(DialogFocus::Columns),
-                1 => d.pane_lines().first().copied(),
-                2 => (!d.draft.where_.chips().is_empty()).then_some(DialogFocus::Chips(0)),
-                3 => (!d.draft.order.is_empty()).then_some(DialogFocus::Order(0)),
-                4 => Some(DialogFocus::Limit),
-                5 => Some(DialogFocus::Sql),
-                6 => d.sql.is_some().then_some(DialogFocus::SqlWhere),
-                7 => d.sql.is_some().then_some(DialogFocus::SqlOrder),
-                _ => d.sql.is_some().then_some(DialogFocus::SqlOpen),
+            match (a, d.sql_view()) {
+                (0, _) => Some(DialogFocus::Columns),
+                (1, None) => d.pane_lines().first().copied(),
+                (1, Some(SqlView::Statement)) => Some(DialogFocus::SqlOpen),
+                (1, Some(SqlView::Fields)) => Some(DialogFocus::SqlWhere),
+                (2, None) => (!d.draft.where_.chips().is_empty()).then_some(DialogFocus::Chips(0)),
+                (2, Some(_)) => None,
+                (3, _) => (!d.draft.order.is_empty()).then_some(DialogFocus::Order(0)),
+                (4, _) => Some(DialogFocus::Limit),
+                _ => Some(DialogFocus::Sql),
             }
         };
         let mut a = area(d.focus);
@@ -209,7 +210,7 @@ impl App {
         }
     }
 
-    /// `↑`/`↓` between the SQL section's fields and its button: the field left read back
+    /// `↑`/`↓` between the SQL view's fields and its button: the field left read back
     /// first (an order refused keeps the keys in it).
     fn filter_dialog_sql_move(&mut self, to: DialogFocus) {
         self.filter_dialog_popup_close();
@@ -254,7 +255,7 @@ impl App {
             _ => input.handle_key(&key),
         };
         if matches!(focus, DialogFocus::SqlWhere | DialogFocus::SqlOrder) {
-            // What is typed in the SQL section waits there until it is read back.
+            // What is typed in the SQL view waits there until it is read back.
             let typed = if let KeyCode::Char(c) = key.code { Some(c) } else { None };
             match r {
                 InputResult::Changed => self.filter_dialog_sql_typed(true, typed),
@@ -306,7 +307,7 @@ impl App {
                     d.draft.where_.set(t, Row { values, ..row }, target);
                 });
             }
-            // Pasted into the SQL section: it waits there until it is read back.
+            // Pasted into the SQL view: it waits there until it is read back.
             DialogFocus::SqlWhere | DialogFocus::SqlOrder => {
                 d.message = None;
                 d.mark = None;
@@ -317,7 +318,7 @@ impl App {
     }
 
     /// Column `i` of the list selected, whatever selects it (a key, a click, the wheel): a
-    /// field of the SQL section with the keys is read back first (an order refused keeps it
+    /// field of the SQL view with the keys is read back first (an order refused keeps it
     /// and nothing else happens), the column list takes the keys, the value fields and the
     /// narrowing of the column left go, and the focus is kept where the draft has it.
     pub(super) fn filter_dialog_select_column(&mut self, i: usize) {
@@ -603,9 +604,12 @@ impl App {
             }
             KeyCode::Char('x') | KeyCode::Delete => self.filter_dialog_edit(None, |d, _| d.draft.set_sort(&col, None)),
             KeyCode::Char(' ') => {
+                // Its column's sort line, unless the SQL view holds the pane: then its column.
                 if d.columns.iter().any(|c| c.name == col) {
                     d.select_column(&col);
-                    d.focus_on(DialogFocus::Sort);
+                    if d.sql.is_none() {
+                        d.focus_on(DialogFocus::Sort);
+                    }
                 }
             }
             _ => {}

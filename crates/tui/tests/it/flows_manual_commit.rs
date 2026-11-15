@@ -712,10 +712,10 @@ fn the_summary_and_the_menus() {
     h.draw(160, 45);
     h.app.dispatch(Action::TabMenu);
     let labels = h.menu_labels();
-    for l in ["Commit the open transaction", "Roll back the open transaction", "What the open transaction did"] {
+    for l in ["Commit", "Roll back", "Transaction summary"] {
         assert!(labels.iter().any(|x| x == l), "{l}: {labels:?}");
     }
-    h.menu_pick("Commit the open transaction");
+    h.menu_pick("Commit");
     assert_eq!(ends(&mut h).len(), 1);
     // No transaction: not in the menu.
     let mut h = connected("stg", false);

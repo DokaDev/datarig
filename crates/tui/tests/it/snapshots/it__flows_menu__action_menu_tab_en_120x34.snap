@@ -3,29 +3,29 @@ source: crates/tui/tests/it/flows_menu.rs
 expression: "h.draw(120, 34).backend()"
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
-"│  ＋ New connection         │╭───────────────────────────────────────────────────╮────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1             ││ › type to filter                                  │        Space c s switch connection │"
-"│  ▾ ●   local-pg            ││ console 1                                         │he cursor                           │"
-"│    ▾ datarig default       ││  Close tab                                 Ctrl+W │s · 12ms · 14:03                    │"
-"│      ▸ analytics           ││  Save query                                Ctrl+S │                                    │"
-"│      ▸ public              ││  Save query as…                         Space s a │                                    │"
-"│      ▸ shop                ││  Change this tab's connection           Space c s │                                    │"
-"│                            ││  Choose this tab's database and schema  Space c d │                                    │"
-"│                            ││  Reconnect this tab's connection        Space c r │                                    │"
-"│                            ││  Disconnect this tab's connection       Space c x │                                    │"
-"│                            ││ Tabs                                              │                                    │"
-"│                            ││  New console tab                           Ctrl+T │                                    │"
-"│                            ││  List tabs                              Space t t │────────────────────────────────────╯"
-"│                            ││  Reopen closed tab                      Space t u │╮╭ Cell [Row] · I ──────────────────╮"
-"│                            ││  Toggle pane zoom                         Space z │││ id: 2                            │"
-"│                            ││  Toggle explorer                          Space b │││ name: 林美玲                     │" Hidden by multi-width symbols: [(93, " "), (95, " "), (97, " ")]
-"│                            ││  Narrow explorer                          Space < │││ nickname: NULL                   │"
-"│                            ││  Widen explorer                           Space > │││ address: 高雄市前鎮區成功二路 55…│" Hidden by multi-width symbols: [(96, " "), (98, " "), (100, " "), (102, " "), (104, " "), (106, " "), (108, " "), (110, " "), (112, " "), (114, " ")]
-"│                            │╰───────────────────────────────────────────────────╯││ profile: {}                      │"
-"│                            ││ 3 │    3 │ 張志明               │ 👨‍👩‍👧‍👦 family   │ NUL││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " ")]
-"│                            ││ 4 │    4 │ Emoji テスト         │ 🔥🚀✨🎉    │ 沖 ││                                  │" Hidden by multi-width symbols: [(50, " "), (52, " "), (54, " "), (67, " "), (69, " "), (71, " "), (73, " "), (81, " ")]
-"│                            ││ 5 │    5 │ 山田太郎             │ やまだ      │ 東 ││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (50, " "), (67, " "), (69, " "), (71, " "), (81, " ")]
-"│                            ││ 6 │    6 │ 王小明               │ NULL        │ 北 ││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (81, " ")]
+"│  ＋ New connection         │╭──────────────────────────────────╮─────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1             ││ › type to filter                 │2                        Space c s switch connection │"
+"│  ▾ ●   local-pg            ││ console 1                        │statement under the cursor                           │"
+"│    ▾ datarig default       ││  Close tab                Ctrl+W │id <= 8;  ✓ 8 rows · 12ms · 14:03                    │"
+"│      ▸ analytics           ││──────────────────────────────────│                                                     │"
+"│      ▸ public              ││  Save query               Ctrl+S │l_amount                                             │"
+"│      ▸ shop                ││  Save query as…        Space s a │                                                     │"
+"│                            ││──────────────────────────────────│ser_id                                               │"
+"│                            ││  Connection…           Space c s │                                                     │"
+"│                            ││  Database and schema…  Space c d │                                                     │"
+"│                            ││──────────────────────────────────│                                                     │"
+"│                            ││  Reconnect             Space c r │                                                     │"
+"│                            ││  Disconnect            Space c x │─────────────────────────────────────────────────────╯"
+"│                            ││ Tabs                             │─────────────────╮╭ Cell [Row] · I ──────────────────╮"
+"│                            ││  New console tab          Ctrl+T │                 ││ id: 2                            │"
+"│                            ││  List tabs             Space t t │nickname    │ add││ name: 林美玲                     │" Hidden by multi-width symbols: [(93, " "), (95, " "), (97, " ")]
+"│                            ││  Reopen closed tab     Space t u │text        │ tex││ nickname: NULL                   │"
+"│                            ││──────────────────────────────────│大文🐘      │ 臺 ││ address: 高雄市前鎮區成功二路 55…│" Hidden by multi-width symbols: [(67, " "), (69, " "), (71, " "), (81, " "), (96, " "), (98, " "), (100, " "), (102, " "), (104, " "), (106, " "), (108, " "), (110, " "), (112, " "), (114, " ")]
+"│                            ││  Zoom pane               Space z │NULL        │ 高 ││ profile: {}                      │" Hidden by multi-width symbols: [(81, " ")]
+"│                            ││  Show / hide explorer    Space b │👨‍👩‍👧‍👦 family   │ NUL││                                  │" Hidden by multi-width symbols: [(67, " ")]
+"│                            ││  Narrow explorer         Space < │🔥🚀✨🎉    │ 沖 ││                                  │" Hidden by multi-width symbols: [(67, " "), (69, " "), (71, " "), (73, " "), (81, " ")]
+"│                            ││  Widen explorer          Space > │やまだ      │ 東 ││                                  │" Hidden by multi-width symbols: [(67, " "), (69, " "), (71, " "), (81, " ")]
+"│                            │╰──────────────────────────────────╯NULL        │ 北 ││                                  │" Hidden by multi-width symbols: [(81, " ")]
 "│                            ││ 7 │    7 │ Plain ASCII User     │ ascii_only  │ 160││                                  │"
 "│                            ││ 8 │    8 │ 全角 ＡＢＣ 半角 ｱｲｳ │ é combining │ タ ││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (49, " "), (51, " "), (53, " "), (56, " "), (58, " "), (81, " ")]
 "│                            ││                                                    ││                                  │"

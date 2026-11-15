@@ -1,4 +1,4 @@
-//! Completion in the SQL section's fields of the filter dialog, as in `:where` and `:orderby`
+//! Completion in the SQL view's fields of the filter dialog, as in `:where` and `:orderby`
 //! ([`App::filter_completion`]): the `WHERE` field through the editor's engine on the statement
 //! the condition goes into, the `ORDER BY` field from the table's columns. The popup opens by
 //! itself after the completion delay as in the editor, or on `Ctrl+Space`; it is drawn at the
@@ -9,13 +9,13 @@ use super::*;
 use crate::app::table_query::Field;
 
 impl App {
-    /// The SQL section's field that has the keys, while the dialog is the top overlay.
+    /// The SQL view's field that has the keys, while the dialog is the top overlay.
     pub(crate) fn filter_dialog_sql_field(&self) -> Option<Field> {
         if self.overlays.top().is_none_or(|o| o.kind() != OverlayKind::FilterDialog) {
             return None;
         }
         let d = self.filter_dialog()?;
-        if d.sql.is_none() || d.picker.is_some() {
+        if d.sql_fields().is_none() || d.picker.is_some() {
             return None;
         }
         match d.focus {
@@ -35,7 +35,7 @@ impl App {
         t.completion_due = None;
     }
 
-    /// Completion at the cursor of the SQL section's field with the keys. `literal`: the
+    /// Completion at the cursor of the SQL view's field with the keys. `literal`: the
     /// checks' values came late, and the popup shows only if it offers values for the literal
     /// whose value starts there.
     pub(crate) fn filter_dialog_complete(&mut self, force: bool, literal: Option<usize>) {
@@ -63,7 +63,7 @@ impl App {
         }
     }
 
-    /// A key changed or moved through the SQL section's field (`typed`: the character it
+    /// A key changed or moved through the SQL view's field (`typed`: the character it
     /// typed): an open popup follows the text, a character that starts a name, a qualified
     /// name or a literal schedules one (`[editor] completion_delay_ms`, as in the editor),
     /// anything else closes it.
@@ -104,7 +104,7 @@ impl App {
         }
     }
 
-    /// The name characters right before the cursor of the SQL section's field with the keys.
+    /// The name characters right before the cursor of the SQL view's field with the keys.
     fn filter_dialog_word_before(&self) -> String {
         let Some(input) = self.filter_dialog().and_then(|d| d.sql_field()).map(|s| &s.input) else {
             return String::new();

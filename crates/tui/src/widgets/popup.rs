@@ -66,14 +66,16 @@ pub(crate) fn draw_popup(app: &App, cursor: (u16, u16), screen: Rect, buf: &mut 
     } as u16;
     // Inside the editor's box when it fits there, else inside the screen.
     let editor = app.layout.editor;
+    // `screen` need not start at the origin (the centred filter dialog): every bound is its own.
+    let (left, top, screen_right) = (screen.x, screen.y, screen.x + screen.width);
     let right = match p.owner == PopupOwner::Editor && editor.width > w + 1 {
         true => editor.x + editor.width - 1 - w,
-        false => screen.width.saturating_sub(w),
+        false => screen_right.saturating_sub(w),
     };
-    let x = cursor.0.saturating_sub(prefix_w + 2).min(right).min(screen.width.saturating_sub(w));
-    let bottom = screen.height - 1; // keep the status bar visible
-    let y = if cursor.1 + 1 + h <= bottom { cursor.1 + 1 } else { cursor.1.saturating_sub(h) };
-    let rect = Rect::new(x, y, w, h.min(screen.height));
+    let x = cursor.0.saturating_sub(prefix_w + 2).min(right).min(screen_right.saturating_sub(w)).max(left);
+    let bottom = top + screen.height.saturating_sub(1); // keep the status bar visible
+    let y = if cursor.1 + 1 + h <= bottom { cursor.1 + 1 } else { cursor.1.saturating_sub(h).max(top) };
+    let rect = Rect::new(x, y, w, h.min((top + screen.height).saturating_sub(y)));
     clear_overlay(rect, buf);
     Block::bordered()
         .border_type(BorderType::Rounded)

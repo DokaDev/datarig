@@ -46,24 +46,26 @@ fn row_bg(h: &mut Harness, list: Rect, y: u16) -> ratatui::style::Color {
 fn the_pointer_selects_the_menu_item_under_it() {
     let (mut h, list) = profile_menu();
     assert_eq!(menu_selected(&h), 1, "the first item, under the node's heading");
-    // Onto the fourth item: selected, drawn as the keys' selection.
-    assert!(hover(&mut h, list.x + 2, list.y + 3), "the selection moved: a frame");
-    assert_eq!(menu_selected(&h), 3);
-    assert_eq!(row_bg(&mut h, list, list.y + 3), datarig_tui::theme::DARK.selection.bg.unwrap());
+    // Onto the third item (past the rule after the second): selected, drawn as the keys'
+    // selection.
+    assert!(hover(&mut h, list.x + 2, list.y + 4), "the selection moved: a frame");
+    assert_eq!(menu_selected(&h), 4);
+    assert_eq!(row_bg(&mut h, list, list.y + 4), datarig_tui::theme::DARK.selection.bg.unwrap());
     assert_eq!(row_bg(&mut h, list, list.y), datarig_tui::theme::DARK.surface);
     // Along the same item, onto the border, off the menu: nothing changes, no frame.
-    assert!(!hover(&mut h, list.x + 6, list.y + 3));
+    assert!(!hover(&mut h, list.x + 6, list.y + 4));
     assert!(!hover(&mut h, list.x + 2, list.y - 1));
     assert!(!hover(&mut h, list.x + list.width + 3, list.y + 1));
     assert!(!hover(&mut h, 0, 0));
-    assert_eq!(menu_selected(&h), 3, "leaving the menu keeps the selection");
+    assert_eq!(menu_selected(&h), 4, "leaving the menu keeps the selection");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
     // The keys go on from the item the pointer chose.
     h.key(KeyCode::Down);
-    assert_eq!(menu_selected(&h), 4);
-    // A heading is not selected.
+    assert_eq!(menu_selected(&h), 5);
+    // A heading is not selected, nor a rule.
     assert!(!hover(&mut h, list.x + 2, list.y));
-    assert_eq!(menu_selected(&h), 4);
+    assert!(!hover(&mut h, list.x + 2, list.y + 3));
+    assert_eq!(menu_selected(&h), 5);
     // Enter runs the item under the pointer: the second reloads the schemas.
     assert!(hover(&mut h, list.x + 2, list.y + 2));
     h.sent();
@@ -75,12 +77,12 @@ fn the_pointer_selects_the_menu_item_under_it() {
 #[test]
 fn a_click_after_the_pointer_moved_runs_the_item_under_it() {
     let (mut h, list) = profile_menu();
-    for y in list.y..list.y + 5 {
+    for y in list.y..list.y + 6 {
         hover(&mut h, list.x + 2, y);
     }
-    assert!(hover(&mut h, list.x + 2, list.y + 3));
-    assert_eq!(menu_selected(&h), 3);
-    h.mouse(MouseEventKind::Down(MouseButton::Left), list.x + 2, list.y + 3);
+    assert!(hover(&mut h, list.x + 2, list.y + 4));
+    assert_eq!(menu_selected(&h), 4);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), list.x + 2, list.y + 4);
     assert!(h.form_open(), "the third item: edit the profile");
 }
 

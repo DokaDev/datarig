@@ -8,8 +8,8 @@
 //! is applied, where the keys are, the operator picker, the column search, and what the last
 //! apply was told. The keys are in [`keys`], applying, undoing and closing in [`apply`].
 //!
-//! The dialog is modal and covers the whole screen, the key bar included (it has its own hint
-//! line). Under the selected column's conditions it lists the column's values ([`list`]):
+//! The dialog is modal and centred over the whole screen, dimmed around it, the key bar included
+//! (it has its own hint line). Under the selected column's conditions it lists the column's values ([`list`]):
 //! counted in the rows loaded, remembered from an earlier load of the table ([`values`]), or
 //! counted by the server on request ([`count`]); ticking one writes the column's condition.
 //! Applying keeps it open until the tab's statement is sent: a refusal of the app (the
@@ -70,11 +70,11 @@ pub(crate) enum DialogFocus {
     Limit,
     /// The footer's `SQL` toggle.
     Sql,
-    /// The SQL section's `WHERE` field.
+    /// The SQL view's `WHERE` field (the view of the fields).
     SqlWhere,
-    /// The SQL section's `ORDER BY` field.
+    /// The SQL view's `ORDER BY` field (the view of the fields).
     SqlOrder,
-    /// The SQL section's `Open in editor` button.
+    /// The SQL view's `Open in editor` button.
     SqlOpen,
     /// The value at this place of the selected column's value list ([`list::ValuesView`]).
     Values(usize),
@@ -170,7 +170,7 @@ pub(crate) enum ColumnSource {
 /// The part of the dialog the last refusal is about, underlined.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Mark {
-    /// Bytes `at` of the `WHERE` text sent (the SQL section's `WHERE` field shows them), in
+    /// Bytes `at` of the `WHERE` text sent (the SQL view's `WHERE` field shows them), in
     /// the chip of term `term` when they are in one.
     Where { term: Option<usize>, at: Range<usize> },
     /// Bytes of the `ORDER BY` field's text.
@@ -186,7 +186,7 @@ impl Mark {
     }
 }
 
-/// A text field of the SQL section: what it holds, and the draft's text it was given (it is
+/// A text field of the SQL view: what it holds, and the draft's text it was given (it is
 /// read back only when typed in since: [`SqlField::edited`]).
 #[derive(Clone, Debug)]
 pub(crate) struct SqlField {
@@ -216,20 +216,30 @@ impl SqlField {
     }
 }
 
-/// The SQL section under the footer (`Q`, `SQL ▸`): the statement as it would be sent above
-/// the draft's `WHERE` text and order, each in a field. What is typed in them is read back into
-/// the draft when the section closes, a field is left, the draft is applied or opened in an
-/// editor.
+/// What the SQL view in the right pane shows, one at a time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SqlView {
+    /// The statement as it would be sent, read only.
+    Statement,
+    /// The draft's `WHERE` text and order, each in a field to edit.
+    Fields,
+}
+
+/// The SQL view in the right pane, in place of the selected column's conditions (`Q`, `SQL ▸`
+/// cycle: none, the statement, the fields, none): the statement as it would be sent, or the
+/// draft's `WHERE` text and order, each in a field. What is typed in the fields is read back into
+/// the draft when a field is left, the view closes, the draft is applied or opened in an editor.
 #[derive(Clone, Debug)]
 pub(crate) struct SqlSection {
     pub(crate) where_: SqlField,
     pub(crate) order: SqlField,
+    pub(crate) view: SqlView,
 }
 
 impl SqlSection {
-    /// The fields of draft `d` (dialect `dialect`).
-    pub(crate) fn of(d: &Draft, dialect: Dialect) -> Self {
-        Self { where_: SqlField::new(&d.where_.text()), order: SqlField::new(&order_text(&d.order, dialect)) }
+    /// The fields of draft `d` (dialect `dialect`), shown as `view`.
+    pub(crate) fn of(d: &Draft, dialect: Dialect, view: SqlView) -> Self {
+        Self { where_: SqlField::new(&d.where_.text()), order: SqlField::new(&order_text(&d.order, dialect)), view }
     }
 }
 
@@ -256,7 +266,7 @@ pub(crate) struct DialogHits {
     pub(crate) clear_all: Rect,
     pub(crate) limit: Rect,
     pub(crate) sql: Rect,
-    /// The SQL section's `WHERE` field (all its rows), `ORDER BY` field, `Open in editor`.
+    /// The SQL view's `WHERE` field (all its rows), `ORDER BY` field, `Open in editor`.
     pub(crate) sql_where: Rect,
     pub(crate) sql_order: Rect,
     pub(crate) open_sql: Rect,
@@ -455,7 +465,7 @@ pub struct FilterDialog {
     /// What the dialog says in its hint line instead of the keys: a refusal, a failure, a note.
     pub(crate) message: Option<Notice>,
     pub(crate) mark: Option<Mark>,
-    /// The SQL section, while it is open (`Q`).
+    /// The SQL view in the right pane, while it is open (`Q`).
     pub(crate) sql: Option<SqlSection>,
     /// The query applied, waiting for its statement to be sent (questions asked meanwhile).
     pub(crate) applying: Option<Query>,
@@ -534,10 +544,18 @@ impl FilterDialog {
     pub(crate) fn typing(&self) -> bool {
         self.picker.is_none()
             && (self.search.is_some() && self.focus == DialogFocus::Columns
-                || matches!(
-                    self.focus,
-                    DialogFocus::Value(..) | DialogFocus::Limit | DialogFocus::SqlWhere | DialogFocus::SqlOrder
-                ))
+                || matches!(self.focus, DialogFocus::Value(..) | DialogFocus::Limit)
+                || self.sql_fields().is_some() && matches!(self.focus, DialogFocus::SqlWhere | DialogFocus::SqlOrder))
+    }
+
+    /// The SQL view's fields, while it shows them (the statement's view has none to edit).
+    pub(crate) fn sql_fields(&self) -> Option<&SqlSection> {
+        self.sql.as_ref().filter(|s| s.view == SqlView::Fields)
+    }
+
+    /// The SQL view's view, while it is open.
+    pub(crate) fn sql_view(&self) -> Option<SqlView> {
+        self.sql.as_ref().map(|s| s.view)
     }
 
     /// The text field with the keys.
@@ -549,15 +567,19 @@ impl FilterDialog {
             DialogFocus::Columns => self.search.as_mut(),
             DialogFocus::Value(_, k) => self.inputs.get_mut(k),
             DialogFocus::Limit => Some(&mut self.limit),
-            DialogFocus::SqlWhere => self.sql.as_mut().map(|s| &mut s.where_.input),
-            DialogFocus::SqlOrder => self.sql.as_mut().map(|s| &mut s.order.input),
+            DialogFocus::SqlWhere => {
+                self.sql.as_mut().filter(|s| s.view == SqlView::Fields).map(|s| &mut s.where_.input)
+            }
+            DialogFocus::SqlOrder => {
+                self.sql.as_mut().filter(|s| s.view == SqlView::Fields).map(|s| &mut s.order.input)
+            }
             _ => None,
         }
     }
 
-    /// The SQL section's field with the keys, when one has them.
+    /// The SQL view's field with the keys, when one has them.
     pub(crate) fn sql_field(&self) -> Option<&SqlField> {
-        let s = self.sql.as_ref()?;
+        let s = self.sql_fields()?;
         match self.focus {
             DialogFocus::SqlWhere => Some(&s.where_),
             DialogFocus::SqlOrder => Some(&s.order),
@@ -694,8 +716,12 @@ impl FilterDialog {
         }
     }
 
-    /// The lines of the right pane the keys move through, top to bottom.
+    /// The lines of the right pane the keys move through, top to bottom; none while the SQL view
+    /// holds the pane.
     pub(crate) fn pane_lines(&self) -> Vec<DialogFocus> {
+        if self.sql.is_some() {
+            return Vec::new();
+        }
         let above = self.column_lines.as_ref().map(ColumnLines::lines).unwrap_or_default();
         let mut lines: Vec<DialogFocus> = above.into_iter().map(DialogFocus::Line).collect();
         lines.extend(self.rows().into_iter().map(DialogFocus::Op));
@@ -752,7 +778,7 @@ impl FilterDialog {
         if self.limit.text() != self.draft.limit {
             self.limit.set(&self.draft.limit);
         }
-        // The SQL section's fields follow the draft they were given (undone, a history pick).
+        // The SQL view's fields follow the draft they were given (undone, a history pick).
         let (where_, order) = (self.draft.where_.text(), order_text(&self.draft.order, self.dialect));
         if let Some(s) = self.sql.as_mut() {
             if s.where_.from() != where_ {
@@ -762,10 +788,24 @@ impl FilterDialog {
                 s.order = SqlField::new(&order);
             }
         }
-        if self.sql.is_none()
-            && matches!(self.focus, DialogFocus::SqlWhere | DialogFocus::SqlOrder | DialogFocus::SqlOpen)
-        {
-            self.focus = DialogFocus::Sql;
+        // The focus follows what is drawn: the SQL view in the right pane hides the column's
+        // lines and the chips; its statement has no field to edit.
+        let in_pane = matches!(
+            self.focus,
+            DialogFocus::Op(_)
+                | DialogFocus::Value(..)
+                | DialogFocus::Add
+                | DialogFocus::Values(_)
+                | DialogFocus::Sort
+                | DialogFocus::Line(_)
+                | DialogFocus::Chips(_)
+        );
+        let fields = matches!(self.focus, DialogFocus::SqlWhere | DialogFocus::SqlOrder);
+        match self.sql_view() {
+            None if fields || self.focus == DialogFocus::SqlOpen => self.focus = DialogFocus::Sql,
+            Some(_) if in_pane => self.focus_on(DialogFocus::Sql),
+            Some(SqlView::Statement) if fields => self.focus = DialogFocus::SqlOpen,
+            _ => {}
         }
         let n = self.shown_columns().len();
         self.cursor = self.cursor.min(n.saturating_sub(1));
@@ -790,10 +830,10 @@ impl App {
         Some((d.draft.where_.text(), datarig_core::query::order_text(&d.draft.order, d.dialect)))
     }
 
-    /// What the open filter dialog's SQL section's `WHERE` and `ORDER BY` fields hold, while
-    /// it is open.
+    /// What the open filter dialog's SQL view's `WHERE` and `ORDER BY` fields hold, while it
+    /// shows them.
     pub fn filter_dialog_sql_fields(&self) -> Option<(String, String)> {
-        let s = self.filter_dialog()?.sql.as_ref()?;
+        let s = self.filter_dialog()?.sql_fields()?;
         Some((s.where_.input.text().to_string(), s.order.input.text().to_string()))
     }
 

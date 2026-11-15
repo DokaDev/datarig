@@ -1369,7 +1369,11 @@ fn a_condition_typed_on_an_invisible_column_is_its_columns() {
             h.key(KeyCode::Char('j'));
         }
         let screen = h.screen(120, 34);
-        let row = screen.lines().find(|l| l.contains('\u{25be}')).unwrap_or_default();
+        // In the right pane (the screen around the dialog has its own marks).
+        let row = screen
+            .lines()
+            .find(|l| l.split('\u{2502}').nth(3).is_some_and(|p| p.contains('\u{25be}')))
+            .unwrap_or_default();
         assert!(row.contains(value), "{screen}");
         // Taken out for the next one.
         h.key(KeyCode::Right);

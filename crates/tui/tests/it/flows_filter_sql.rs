@@ -1,9 +1,11 @@
-//! The SQL section of the filter dialog (`Q`, `SQL ▸`): the statement as it would be sent above
-//! the draft's `WHERE` text and order, each in a field. What is typed there is read back into
-//! the chips and the keys when the field is left, the section closes or the draft is applied: a
-//! text not typed in is sent byte for byte, an order that is not one keeps the section open.
-//! Completion in the fields is that of `:where` and `:orderby`. `Open in editor` puts the
-//! draft's statement, checked as `Space r v` checks it, in a new console.
+//! The SQL view of the filter dialog (`Q`, `SQL ▸`), in the right pane in place of the column's
+//! conditions, one view at a time: `Q` shows the statement as it would be sent (read only), then
+//! the draft's `WHERE` text and order, each in a field, then closes; the chips are hidden while
+//! it is open. What is typed in the fields is read back into the chips and the keys when the
+//! field is left, the view closes or the draft is applied: a text not typed in is sent byte for
+//! byte, an order that is not one keeps the fields open. Completion in the fields is that of
+//! `:where` and `:orderby`. `Open in editor` puts the draft's statement, checked as `Space r v`
+//! checks it, in a new console.
 
 use crate::common;
 
@@ -92,9 +94,16 @@ fn dialog_open(h: &Harness) -> bool {
     h.app.overlays.is_open(OverlayKind::FilterDialog)
 }
 
-/// The SQL section's `WHERE` and `ORDER BY` fields.
+/// The SQL view's `WHERE` and `ORDER BY` fields.
 fn fields(h: &Harness) -> (String, String) {
-    h.app.filter_dialog_sql_fields().expect("the SQL section is open")
+    h.app.filter_dialog_sql_fields().expect("the SQL view shows its fields")
+}
+
+/// `Q` twice: past the statement, the SQL view's fields (the keys in the `WHERE` field).
+fn to_fields(h: &mut Harness) {
+    h.keys("Q");
+    h.keys("Q");
+    assert_eq!(h.app.key_context(), Ctx::FilterDialogText);
 }
 
 /// The draft's `WHERE` text and order, as they would be sent.
@@ -110,7 +119,7 @@ fn ctrl_space(h: &mut Harness) {
     h.key_mod(KeyCode::Char(' '), KeyModifiers::CONTROL);
 }
 
-/// Clears the SQL section's field with the keys.
+/// Clears the SQL view's field with the keys.
 fn clear_field(h: &mut Harness) {
     h.key(KeyCode::End);
     h.ctrl('u');
@@ -133,26 +142,32 @@ fn underlined(h: &mut Harness, w: u16, hh: u16, text: &str) -> String {
 }
 
 /// A `WHERE` text the dialog did not write (its blanks, its case, an `OR` in parentheses) is
-/// sent byte for byte after the SQL section was opened and closed, and after its field was
-/// left without a change.
+/// sent byte for byte after the SQL view was opened and closed, and after its field was left
+/// without a change; `Enter` from either view sends it as written too.
 #[test]
 fn opening_and_closing_the_sql_sends_the_where_text_as_written() {
     let text = "id  >  1   and (name = 'a'  OR  name = 'b')";
     let mut h = users();
     applied(&mut h, text);
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     assert_eq!(fields(&h).0, text);
     assert_eq!(h.app.key_context(), Ctx::FilterDialogText, "the keys are in the WHERE field");
     // Left and back, then closed: nothing read back.
     h.key(KeyCode::Tab);
     h.key(KeyCode::BackTab);
+    assert_eq!(h.app.key_context(), Ctx::FilterDialogText, "back in the WHERE field");
     h.key(KeyCode::Esc);
-    assert!(dialog_open(&h) && h.app.filter_dialog_sql_fields().is_none(), "Esc closes the section first");
+    assert!(dialog_open(&h) && h.app.filter_dialog_sql_fields().is_none(), "Esc closes the SQL view first");
     assert_eq!(draft(&h).0, text);
     h.key(KeyCode::Enter);
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE ({text})")]]);
-    // `Enter` with the section open sends it as written too.
+    // `Enter` with the fields shown, then with the statement shown.
+    answer(&mut h);
+    h.keys("f");
+    to_fields(&mut h);
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE ({text})")]]);
     answer(&mut h);
     h.keys("f");
     h.keys("Q");
@@ -167,7 +182,7 @@ fn an_or_typed_in_the_where_field_makes_one_expression_chip() {
     let mut h = users();
     applied(&mut h, "id > 1");
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     h.key(KeyCode::End);
     h.type_text(" OR name = 'x'");
     assert_eq!(draft(&h).0, "id > 1", "not read back while typed");
@@ -180,36 +195,42 @@ fn an_or_typed_in_the_where_field_makes_one_expression_chip() {
     // One step back: the condition as it was, its chip a column's again.
     h.keys("u");
     assert_eq!(draft(&h).0, "id > 1");
-    h.keys("Q");
+    to_fields(&mut h);
     h.key(KeyCode::End);
     h.type_text(" OR name = 'x'");
     h.key(KeyCode::Enter);
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 1 OR name = 'x')")]]);
 }
 
-/// The statement shows what `Enter` would send with what the fields hold, the key the app
+/// The statement view shows what `Enter` sends with what the fields read back, the key the app
 /// appends to the order dimmed.
 #[test]
-fn the_statement_follows_the_fields_and_dims_the_appended_key() {
+fn the_statement_shows_what_is_sent_and_dims_the_appended_key() {
+    let (w, hh) = (160, 45);
     let mut h = users();
     keys_came(&mut h, "local-pg", &["id"]);
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     h.type_text("name <> 'x'");
     h.key(KeyCode::Down);
     h.type_text("name DESC");
-    let sql = format!(r#"{ALL} WHERE (name <> 'x') ORDER BY "name" DESC, "id" ASC"#);
-    let screen = h.screen(120, 34);
-    assert!(screen.contains(&sql), "{screen}");
-    let term = h.draw(120, 34);
-    let buf = term.backend().buffer();
-    let y = screen.lines().position(|l| l.contains(&sql)).unwrap() as u16;
-    let x = screen.lines().nth(usize::from(y)).unwrap().find(r#""id" ASC"#).unwrap() as u16;
-    let (tie, key) = (&buf[(x, y)], &buf[(x - 8, y)]);
-    assert_ne!(tie.fg, key.fg, "the appended key is dimmed");
     // Read back as the field is left.
     h.key(KeyCode::Tab);
     assert_eq!(draft(&h), ("name <> 'x'".into(), "name DESC".into()));
+    // The fields close, then the statement.
+    h.keys("Q");
+    assert!(h.app.filter_dialog_sql_fields().is_none());
+    h.keys("Q");
+    let sql = format!(r#"{ALL} WHERE (name <> 'x') ORDER BY "name" DESC, "id" ASC"#);
+    let screen = h.screen(w, hh);
+    assert!(screen.contains(&sql), "{screen}");
+    let term = h.draw(w, hh);
+    let buf = term.backend().buffer();
+    let y = screen.lines().position(|l| l.contains(&sql)).unwrap() as u16;
+    let row = row_text(buf, y);
+    let x = datarig_tui::text::width(&row[..row.find(r#""id" ASC"#).unwrap()]) as u16;
+    let (tie, key) = (&buf[(x, y)], &buf[(x - 8, y)]);
+    assert_ne!(tie.fg, key.fg, "the appended key is dimmed");
     h.key(KeyCode::Enter);
     assert_eq!(runs(&mut h), vec![vec![sql]]);
 }
@@ -220,7 +241,7 @@ fn the_statement_follows_the_fields_and_dims_the_appended_key() {
 fn an_order_refused_keeps_the_sql_open() {
     let mut h = users();
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     h.type_text("id > 1");
     h.key(KeyCode::Down);
     h.type_text("name, nope DESC");
@@ -248,7 +269,7 @@ fn an_order_refused_keeps_the_sql_open() {
 fn a_refused_where_is_underlined_in_its_field() {
     let mut h = users();
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     h.type_text("id > 1 FOR UPDATE");
     h.key(KeyCode::Enter);
     assert!(runs(&mut h).is_empty());
@@ -257,7 +278,7 @@ fn a_refused_where_is_underlined_in_its_field() {
     assert!(screen.contains("row locks"), "{screen}");
     let field = screen
         .lines()
-        .find(|l| l.trim_start_matches(['\u{2502}', ' ']).starts_with("WHERE ") && l.contains("FOR UPDATE"))
+        .find(|l| l.contains("WHERE ") && l.contains("FOR UPDATE"))
         .unwrap_or_else(|| panic!("{screen}"))
         .to_string();
     assert!(underlined(&mut h, 120, 34, &field).contains("FOR UPDATE"), "{field}");
@@ -269,7 +290,7 @@ fn undo_in_a_field_takes_its_typing_back_first() {
     let mut h = users();
     applied(&mut h, "id > 1");
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     h.type_text(" AND name = 'x'");
     h.key_mod(KeyCode::Char('z'), KeyModifiers::CONTROL);
     assert_eq!(fields(&h).0, "id > 1");
@@ -289,7 +310,7 @@ fn open_in_editor_opens_the_checked_draft_in_a_console() {
     keys_came(&mut h, "local-pg", &["id"]);
     applied(&mut h, "id > 0");
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     clear_field(&mut h);
     h.type_text("name <> 'x'");
     h.key(KeyCode::Down);
@@ -312,7 +333,7 @@ fn open_in_editor_opens_the_checked_draft_in_a_console() {
 fn open_in_editor_refuses_and_asks_as_a_run_does() {
     let mut h = users_read_only();
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     h.type_text("lower2(name) = 'a'");
     h.key(KeyCode::Down);
     h.key(KeyCode::Down);
@@ -325,7 +346,7 @@ fn open_in_editor_refuses_and_asks_as_a_run_does() {
     let mut h = users();
     applied(&mut h, "id > 0");
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     clear_field(&mut h);
     h.type_text("lower2(name) = 'a'");
     h.key(KeyCode::Down);
@@ -345,7 +366,7 @@ fn open_in_editor_refuses_and_asks_as_a_run_does() {
 fn a_read_only_profile_refuses_an_unknown_call_and_keeps_the_dialog() {
     let mut h = users_read_only();
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     h.type_text("lower2(name) = 'a'");
     h.key(KeyCode::Enter);
     assert!(runs(&mut h).is_empty(), "nothing sent");
@@ -373,6 +394,9 @@ fn the_sql_screens() {
     h.keys("Q");
     assert_screen!("filter_sql_open_en_80x24", Lang::En, h.draw(80, 24));
     assert_screen!("filter_sql_open_en_120x34", Lang::En, h.draw(120, 34));
+    h.keys("Q");
+    assert_screen!("filter_sql_fields_en_80x24", Lang::En, h.draw(80, 24));
+    assert_screen!("filter_sql_fields_en_120x34", Lang::En, h.draw(120, 34));
     h.key(KeyCode::End);
     h.type_text(" AND id < 1000 AND name IS NOT NULL AND name <> 'a long text to wrap the field'");
     h.key(KeyCode::Down);
@@ -389,7 +413,7 @@ fn the_sql_screens() {
 fn the_where_field_completes_the_tables_columns() {
     let mut h = users();
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     // Asked for with nothing typed: the table's columns.
     ctrl_space(&mut h);
     let p = h.popup().expect("a popup");
@@ -436,7 +460,7 @@ fn the_where_field_completes_the_tables_columns() {
 fn the_order_field_completes_columns_then_directions() {
     let mut h = users();
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     h.key(KeyCode::Down);
     h.type_text("na");
     ctrl_space(&mut h);
@@ -477,7 +501,7 @@ fn a_late_values_answer_for_a_literal_the_cursor_left_is_dropped() {
     };
     // In a literal compared with an enumerated column: its values, and its checks asked for.
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     h.type_text("status = 're");
     ctrl_space(&mut h);
     assert!(h.popup().is_none(), "no value of the type starts with it");
@@ -505,7 +529,7 @@ fn a_late_values_answer_for_a_literal_the_cursor_left_is_dropped() {
 fn completion_in_the_where_field_screen() {
     let mut h = users();
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     h.type_text("id > 1 AND n");
     ctrl_space(&mut h);
     assert_eq!(labels(&h)[..1], ["name"]);
@@ -519,7 +543,7 @@ fn completion_in_the_where_field_screen() {
 fn enter_applies_unless_the_popup_was_turned_to() {
     let mut h = users();
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     h.type_text("name");
     h.settle();
     assert!(h.popup().is_some(), "opened by itself");
@@ -529,7 +553,7 @@ fn enter_applies_unless_the_popup_was_turned_to() {
     answer(&mut h);
     // Moved through: Enter takes the entry selected.
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     clear_field(&mut h);
     h.type_text("na");
     h.settle();
@@ -563,7 +587,7 @@ fn enter_applies_unless_the_popup_was_turned_to() {
 fn the_where_field_offers_only_condition_keywords() {
     let mut h = users();
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     h.type_text("id > 1 a");
     ctrl_space(&mut h);
     let l = labels(&h);
@@ -586,7 +610,7 @@ fn the_where_field_offers_only_condition_keywords() {
 fn a_paste_into_a_field_is_one_line_and_has_a_cap() {
     let mut h = users();
     h.keys("f");
-    h.keys("Q");
+    to_fields(&mut h);
     h.event(ratatui::crossterm::event::Event::Paste("id > 1\nAND\r\nname = 'x'".into()));
     assert_eq!(fields(&h).0, "id > 1 AND  name = 'x'");
     h.event(ratatui::crossterm::event::Event::Paste("x".repeat(20_000)));
@@ -606,4 +630,156 @@ fn a_refused_limit_is_underlined_where_it_is() {
     assert!(runs(&mut h).is_empty());
     assert!(h.screen(120, 34).contains("Limit refused"), "{}", h.screen(120, 34));
     assert_eq!(underlined(&mut h, 120, 34, "Limit "), "ten");
+}
+
+/// The `Where` row of the dialog's footer, as drawn at 120 x 34.
+fn where_row(h: &mut Harness) -> String {
+    let screen = h.screen(120, 34);
+    screen.lines().find(|l| l.contains("Where ")).unwrap_or_else(|| panic!("{screen}")).to_string()
+}
+
+/// `Q` cycles the SQL view in the right pane: the statement, the fields, none. The statement is
+/// read only (what is typed changes nothing); the chips are hidden, and out of reach of the keys,
+/// while either view is open; the fields typed in read back once as they are left (an order
+/// refused keeps them), and the view then closes without reading them again.
+#[test]
+fn q_cycles_the_statement_the_fields_and_none() {
+    let mut h = users();
+    keys_came(&mut h, "local-pg", &["id"]);
+    applied(&mut h, "id > 1");
+    h.keys("f");
+    assert!(where_row(&mut h).contains("id > 1 \u{00d7}"), "the chip");
+    // The statement.
+    h.keys("Q");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("the statement as it is sent"), "{screen}");
+    assert!(screen.contains(&format!("{ALL} WHERE (id > 1)")), "{screen}");
+    assert!(!screen.contains("+ add condition"), "the pane holds the SQL: {screen}");
+    assert!(!where_row(&mut h).contains("id > 1"), "no chips: {}", where_row(&mut h));
+    assert_eq!(h.app.key_context(), Ctx::FilterDialog, "no field to type in");
+    assert!(h.app.filter_dialog_sql_fields().is_none());
+    h.type_text("zz");
+    assert_eq!(draft(&h), ("id > 1".into(), String::new()), "typing changes nothing");
+    // Every part `Tab` reaches, `Delete` there: a chip would go, none does.
+    for _ in 0..8 {
+        h.key(KeyCode::Tab);
+        h.key(KeyCode::Delete);
+        assert_eq!(draft(&h).0, "id > 1", "no chip reached: {}", h.screen(120, 34));
+    }
+    // The fields, dirty and refused: an order of no column.
+    h.keys("Q");
+    assert_eq!(fields(&h), ("id > 1".into(), String::new()));
+    h.key(KeyCode::End);
+    h.type_text(" AND name = 'x'");
+    h.key(KeyCode::Down);
+    h.type_text("nope");
+    h.key(KeyCode::BackTab);
+    assert!(h.screen(120, 34).contains("Order refused"), "{}", h.screen(120, 34));
+    assert_eq!(h.app.key_context(), Ctx::FilterDialogText, "the keys stay in the field refused");
+    assert_eq!(draft(&h), ("id > 1 AND name = 'x'".into(), String::new()), "the WHERE field was read back");
+    assert!(!where_row(&mut h).contains("name = 'x'"), "still no chips");
+    // Fixed, left: read back; `Q` then closes without reading again (one step of undo each).
+    clear_field(&mut h);
+    h.type_text("name DESC");
+    h.key(KeyCode::BackTab);
+    assert_eq!(h.app.key_context(), Ctx::FilterDialog);
+    assert_eq!(draft(&h), ("id > 1 AND name = 'x'".into(), "name DESC".into()));
+    assert!(h.app.filter_dialog_sql_fields().is_some(), "the fields stay shown");
+    h.keys("Q");
+    assert!(h.app.filter_dialog_sql_fields().is_none());
+    assert!(!h.screen(120, 34).contains("the texts sent"), "closed");
+    assert!(where_row(&mut h).contains("name = 'x' \u{00d7}"), "the chips again: {}", where_row(&mut h));
+    assert!(h.screen(120, 34).contains("+ add condition"), "the column's lines again");
+    h.keys("u");
+    assert_eq!(draft(&h), ("id > 1 AND name = 'x'".into(), String::new()));
+    h.keys("u");
+    assert_eq!(draft(&h), ("id > 1".into(), String::new()));
+    // A click where a chip was drawn, with the statement shown, does nothing.
+    h.keys("Q");
+    let screen = h.screen(120, 34);
+    let y = screen.lines().position(|l| l.contains("Where ")).unwrap() as u16;
+    h.advance(Duration::from_millis(500));
+    for x in 10..60 {
+        h.mouse(ratatui::crossterm::event::MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left), x, y);
+        h.mouse(ratatui::crossterm::event::MouseEventKind::Up(ratatui::crossterm::event::MouseButton::Left), x, y);
+    }
+    assert_eq!(draft(&h).0, "id > 1");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 1)")]]);
+}
+
+/// `Open in editor` is under the statement too, reached by `Tab`.
+#[test]
+fn open_in_editor_from_the_statement() {
+    let mut h = users();
+    applied(&mut h, "id > 0");
+    h.keys("f");
+    h.keys("Q");
+    // From the column list to the right pane: the button.
+    let at_button = |h: &mut Harness| h.screen(120, 34).contains("Space open in a new console");
+    for _ in 0..6 {
+        if at_button(&mut h) {
+            break;
+        }
+        h.key(KeyCode::Tab);
+    }
+    assert!(at_button(&mut h), "{}", h.screen(120, 34));
+    h.key(KeyCode::Char(' '));
+    assert!(!dialog_open(&h));
+    assert_eq!(h.app.tab().editor.text(), format!("{ALL} WHERE (id > 0)"));
+    assert!(runs(&mut h).is_empty());
+}
+
+/// The completion popup of a SQL view field stays inside the centred dialog: on a screen a
+/// little larger than the smallest the dialog has a margin, and a popup placed as if the dialog
+/// began at the screen's corner would cover the tab line or the screen's left edge. Every
+/// cell outside the dialog is the same with the popup open and after `Esc` closed it.
+#[test]
+fn the_fields_completion_stays_inside_the_centred_dialog() {
+    let (w, hh) = (86, 26);
+    let mut h = users();
+    h.keys("f");
+    to_fields(&mut h);
+    let mut shown = 0;
+    for n in (1..=48).step_by(3) {
+        clear_field(&mut h);
+        h.type_text(&"id > 1 AND ".repeat(n));
+        ctrl_space(&mut h);
+        if h.popup().is_none() {
+            continue;
+        }
+        shown += 1;
+        let with = h.draw(w, hh).backend().buffer().clone();
+        h.key(KeyCode::Esc);
+        assert!(h.popup().is_none(), "Esc closes the popup first");
+        let without = h.draw(w, hh).backend().buffer().clone();
+        // The dialog at 86x26: 80x24 (its smallest size), centred.
+        let (x0, y0, x1, y1) = (3, 1, 82, 24);
+        assert_eq!(without[(x0, y0)].symbol(), "\u{256d}", "the dialog's corner");
+        assert_eq!(without[(x1, y1)].symbol(), "\u{256f}", "the dialog's other corner");
+        for y in 0..hh {
+            for x in 0..w {
+                if (x0..=x1).contains(&x) && (y0..=y1).contains(&y) {
+                    continue;
+                }
+                assert_eq!(
+                    with[(x, y)].symbol(),
+                    without[(x, y)].symbol(),
+                    "{n} terms: the popup drew outside the dialog at ({x}, {y})"
+                );
+            }
+        }
+    }
+    assert!(shown > 0, "no popup was shown");
+}
+
+/// A very wide screen draws the dialog: 92% of more than 712 cells, or 34% of its inner
+/// width past 1927 cells, does not fit 16 bits.
+#[test]
+fn a_very_wide_screen_draws_the_dialog() {
+    let mut h = users();
+    h.keys("f");
+    assert!(dialog_open(&h));
+    let screen = h.screen(2100, 40);
+    assert!(screen.contains("Filter and sort"), "{screen}");
 }

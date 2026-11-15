@@ -1,4 +1,4 @@
-//! The filter dialog's actions: apply, cancel, undo, clear all, the SQL section (opened,
+//! The filter dialog's actions: apply, cancel, undo, clear all, the SQL view (opened,
 //! read back, closed) and its `Open in editor`; a filter picked from the history; and the
 //! dialog closing once the tab's statement is sent.
 
@@ -18,7 +18,7 @@ pub enum DialogAction {
     Undo,
     /// No condition and no order (the limit stays).
     ClearAll,
-    /// Open or close the SQL section (`Q`).
+    /// The next view of the SQL in the right pane: the statement, the fields, none (`Q`).
     Sql,
     /// The server counts the selected column's values (`#`).
     Count,
@@ -108,19 +108,29 @@ impl App {
         d.settle();
     }
 
-    /// `Q`, or the `SQL` toggle: the SQL section opens with the draft's texts in its fields
-    /// (the keys in its `WHERE` field), or closes ([`App::filter_dialog_close_sql`]).
+    /// `Q`, or the `SQL` toggle: the next view of the SQL in the right pane. Closed, it opens on
+    /// the statement as it would be sent (the keys leave the column's lines and the chips it
+    /// hides); the statement gives way to the draft's texts in their fields (the keys in the
+    /// `WHERE` field); the fields close ([`App::filter_dialog_close_sql`]: read back first, a
+    /// text refused keeps them).
     pub(super) fn filter_dialog_toggle_sql(&mut self) {
         let Some(d) = self.filter_dialog_mut() else { return };
-        if d.sql.is_some() {
-            self.filter_dialog_close_sql();
-            return;
+        match d.sql_view() {
+            None => {
+                d.sql = Some(SqlSection::of(&d.draft, d.dialect, SqlView::Statement));
+                d.settle();
+            }
+            Some(SqlView::Statement) => {
+                d.sql = Some(SqlSection::of(&d.draft, d.dialect, SqlView::Fields));
+                d.focus_on(DialogFocus::SqlWhere);
+            }
+            Some(SqlView::Fields) => {
+                self.filter_dialog_close_sql();
+            }
         }
-        d.sql = Some(SqlSection::of(&d.draft, d.dialect));
-        d.focus_on(DialogFocus::SqlWhere);
     }
 
-    /// The SQL section read back ([`App::filter_dialog_read_back`]) and closed; one refused
+    /// The SQL view read back ([`App::filter_dialog_read_back`]) and closed; one refused
     /// stays open. `false` when it stays.
     pub(super) fn filter_dialog_close_sql(&mut self) -> bool {
         if !self.filter_dialog_read_back() {
@@ -133,7 +143,7 @@ impl App {
         true
     }
 
-    /// What is typed in the SQL section's fields, into the draft: a changed `ORDER BY` text is
+    /// What is typed in the SQL view's fields, into the draft: a changed `ORDER BY` text is
     /// read into keys of the table's columns, a changed `WHERE` text replaces the conditions
     /// (as text given anew: its terms read again, sent as written); each one step of undo. A
     /// field not typed in changes nothing (its text is the draft's, byte for byte). An order
@@ -183,9 +193,9 @@ impl App {
             self.filter_dialog_edit(None, |d, _| d.draft.order = keys);
         }
         if let Some(d) = self.filter_dialog_mut()
-            && d.sql.is_some()
+            && let Some(view) = d.sql_view()
         {
-            d.sql = Some(SqlSection::of(&d.draft, d.dialect));
+            d.sql = Some(SqlSection::of(&d.draft, d.dialect, view));
         }
         true
     }
@@ -376,7 +386,7 @@ impl App {
     }
 
     /// `Esc`: the open picker closes, a count of the values running is cancelled, the search
-    /// or the SQL section closes (read back first: an order refused keeps it open); else the
+    /// or the SQL view closes (read back first: an order refused keeps it open); else the
     /// dialog, its draft dropped (the tab's next run sends what is applied).
     fn filter_dialog_cancel(&mut self) {
         let Some(d) = self.filter_dialog_mut() else { return };
@@ -432,7 +442,7 @@ impl App {
         }
     }
 
-    /// `Ctrl+Z`, `u`: what is typed in the SQL section's field with the keys and not read back
+    /// `Ctrl+Z`, `u`: what is typed in the SQL view's field with the keys and not read back
     /// yet goes; else the draft one step back; with no step left, the tab's query before its
     /// last applied change (once).
     fn filter_dialog_undo(&mut self) {
@@ -440,7 +450,7 @@ impl App {
         let Some(d) = self.filter_dialog_mut() else { return };
         if d.sql_field().is_some_and(SqlField::edited) {
             let (focus, dialect) = (d.focus, d.dialect);
-            let fresh = SqlSection::of(&d.draft, dialect);
+            let fresh = SqlSection::of(&d.draft, dialect, SqlView::Fields);
             if let Some(s) = d.sql.as_mut() {
                 match focus {
                     DialogFocus::SqlWhere => s.where_ = fresh.where_,
@@ -503,7 +513,7 @@ impl App {
         }
         let filter = filter.to_string();
         let ok = keys.as_ref().ok().cloned();
-        // The pick replaces what the SQL section's fields hold too.
+        // The pick replaces what the SQL view's fields hold too.
         self.filter_dialog_popup_close();
         self.filter_dialog_edit(None, |d, target| {
             d.draft.where_ = Where::from_text(&filter, target);
@@ -512,8 +522,8 @@ impl App {
             }
         });
         let Some(d) = self.filter_dialog_mut() else { return };
-        if d.sql.is_some() {
-            d.sql = Some(SqlSection::of(&d.draft, d.dialect));
+        if let Some(view) = d.sql_view() {
+            d.sql = Some(SqlSection::of(&d.draft, d.dialect, view));
         }
         if let Err(n) = keys {
             d.message = Some(n);

@@ -310,7 +310,7 @@ fn a_delete_confirmation_deletes_on_a_click_and_keeps_on_cancel() {
     let open = || {
         let mut h = launched();
         h.right_click_row("v6");
-        h.menu_pick("Delete connection profile");
+        h.menu_pick("Delete connection");
         assert!(matches!(h.app.overlays.confirm().map(|c| c.action), Some(ConfirmAction::DeleteProfile(_))));
         h
     };

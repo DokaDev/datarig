@@ -955,8 +955,8 @@ fn a_result_not_held_pages_by_running_its_select_again() {
     let (x, y) = (h.app.tab().grid.hit_cols[0].0 + 2, h.app.tab().grid.data_y);
     h.mouse(MouseEventKind::Down(MouseButton::Right), x, y);
     let screen = h.screen(160, 45);
-    assert!(screen.contains("(the server has more)"), "{screen}");
-    let fetch = "Fetch every row, then copy ▸";
+    assert!(screen.contains("more on the server"), "{screen}");
+    let fetch = "Fetch all, then copy ▸";
     assert!(!h.menu_labels().iter().any(|l| l == fetch), "{:?}", h.menu_labels());
     let dimmed: Vec<(String, String)> =
         h.app.menu_dimmed_rows().into_iter().map(|(l, why)| (l.to_string(), why)).filter(|(l, _)| l == fetch).collect();
@@ -1318,4 +1318,56 @@ fn a_narrow_title_drops_the_count_hint_before_the_row_range() {
     // With the room for it, the hint is there.
     h.app.detail.visible = false;
     assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · # count · next page re-runs) ›"));
+}
+
+/// The copy of the rows fetched says the server has more only while it has: the menu opened
+/// while the next page is on its way, the page that ends the result takes the words away
+/// together with the label's count.
+#[test]
+fn the_more_on_the_server_hint_follows_the_last_page() {
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('e');
+    h.sent();
+    let cols = vec![meta("id", "int8", true, false)];
+    h.db(DbEvent::TxOpen(true));
+    h.db(DbEvent::Page { id: 1, columns: Some(cols), rows: page(0, 500), more: true, elapsed: SEC / 100 });
+    h.key(KeyCode::Tab);
+    h.keys("n");
+    assert!(matches!(&h.sent()[..], [DbCommand::FetchMore { id: 1 }]));
+    h.screen(160, 45);
+    let (x, y) = (h.app.tab().grid.hit_cols[0].0 + 2, h.app.tab().grid.data_y);
+    h.mouse(MouseEventKind::Down(MouseButton::Right), x, y);
+    let screen = h.screen(160, 45);
+    assert!(screen.contains("Copy 500 fetched rows ▸") && screen.contains("more on the server"), "{screen}");
+    h.db(DbEvent::Page { id: 1, columns: None, rows: page(500, 10), more: false, elapsed: SEC / 100 });
+    let screen = h.screen(160, 45);
+    assert!(h.menu_labels().iter().any(|l| l == "Copy all fetched rows ▸"), "{:?}", h.menu_labels());
+    assert!(!screen.contains("more on the server"), "{screen}");
+}
+
+/// The other way: the menu opened on a complete result, a run already sent answers with a
+/// first page that has more; the copy of the rows fetched gains its count and the words.
+#[test]
+fn the_more_on_the_server_hint_comes_with_a_partial_result() {
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('e');
+    h.sent();
+    let cols = vec![meta("id", "int8", true, false)];
+    h.db(DbEvent::Page { id: 1, columns: Some(cols.clone()), rows: page(0, 10), more: false, elapsed: SEC / 100 });
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::BackTab);
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    h.key(KeyCode::Tab);
+    h.screen(160, 45);
+    let (x, y) = (h.app.tab().grid.hit_cols[0].0 + 2, h.app.tab().grid.data_y);
+    h.mouse(MouseEventKind::Down(MouseButton::Right), x, y);
+    assert!(h.menu_labels().iter().any(|l| l == "Copy all fetched rows ▸"), "{:?}", h.menu_labels());
+    assert!(!h.screen(160, 45).contains("more on the server"));
+    h.db(DbEvent::TxOpen(true));
+    h.db(DbEvent::Page { id, columns: Some(cols), rows: page(0, 500), more: true, elapsed: SEC / 100 });
+    let screen = h.screen(160, 45);
+    assert!(h.app.overlays.menu().is_some(), "the menu stays open:\n{screen}");
+    assert!(h.menu_labels().iter().any(|l| l == "Copy 500 fetched rows ▸"), "{:?}", h.menu_labels());
+    assert!(screen.contains("more on the server"), "{screen}");
 }

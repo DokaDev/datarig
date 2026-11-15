@@ -128,7 +128,7 @@ fn the_key_the_menu_and_the_command_open_it_and_esc_closes_it() {
     // The results menu.
     h.keys("  ");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
-    h.menu_pick("Results → export to a file…");
+    h.menu_pick("Export…");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Export));
     h.key(KeyCode::Esc);
     // `:export` alone; with words it still exports at once.

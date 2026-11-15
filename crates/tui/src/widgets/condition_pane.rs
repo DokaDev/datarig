@@ -571,7 +571,7 @@ fn draw_values(
         })
         .collect();
     let cw = counts.iter().skip(scroll).take(shown).map(|c| width(c)).max().unwrap_or(0) as u16;
-    let name_w = (pw.saturating_sub(6) * 45 / 100).max(8);
+    let name_w = (u32::from(pw.saturating_sub(6)) * 45 / 100).max(8) as u16;
     let count_end = (px + 6 + name_w + 1 + cw).min(right);
     let bar_x = count_end + 2;
     let bar_w = right.saturating_sub(bar_x + 1).min(12);

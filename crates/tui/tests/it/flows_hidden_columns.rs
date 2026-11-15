@@ -248,7 +248,7 @@ fn the_dialog_hides_and_its_undo_shows_again() {
     at(&mut h, 0, 3);
     h.keys("f");
     h.keys(" ");
-    h.keys("Q");
+    h.keys("QQ");
     h.type_text("id > 1");
     h.key(KeyCode::Enter);
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 1)")]]);
@@ -531,7 +531,7 @@ fn with_every_column_hidden_no_key_reads_or_writes_a_cell() {
     // The grid's menu: no entry for a cell.
     h.app.dispatch(datarig_tui::app::action::Action::OpenMenu);
     let lines: Vec<String> = h.app.menu_lines().into_iter().map(|(_, l, _)| l.to_string()).collect();
-    assert!(lines.iter().any(|l| l.contains("export")), "the pane's entries: {lines:?}");
+    assert!(lines.iter().any(|l| l.contains("Export")), "the pane's entries: {lines:?}");
     for word in ["NULL", "DEFAULT", "Edit", "Only", "Exclude", "Copy", "Select"] {
         assert!(!lines.iter().any(|l| l.contains(word)), "{word}: {lines:?}");
     }

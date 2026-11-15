@@ -298,6 +298,25 @@ pub struct ActionSpec {
     pub when: fn(&App) -> bool,
     /// Terminal auto-repeat (a held key) runs it again: movement yes, commands no.
     pub repeatable: bool,
+    /// The label of a menu's row, where the long one names the area the menu already is in
+    /// (`Results:`, `Table →`) or says more than a row has room for; `None`: the long one.
+    pub short: Option<Label>,
+}
+
+impl ActionSpec {
+    /// The spec with `short` as its menu label.
+    const fn short(mut self, short: Label) -> Self {
+        self.short = Some(short);
+        self
+    }
+
+    /// The label a menu's row shows.
+    pub fn menu_label(&self) -> Label {
+        match self.short {
+            Some(l) => l,
+            None => self.label,
+        }
+    }
 }
 
 fn anywhere(_: &App) -> bool {
@@ -672,12 +691,12 @@ fn explorer_sized(a: &App) -> bool {
 }
 
 const fn act(action: Action, id: &'static str, label: Label, when: fn(&App) -> bool) -> ActionSpec {
-    ActionSpec { action, id, label, when, repeatable: false }
+    ActionSpec { action, id, label, when, repeatable: false, short: None }
 }
 
 /// Movement: repeats while the key is held.
 const fn mv(action: Action, id: &'static str, label: Label, when: fn(&App) -> bool) -> ActionSpec {
-    ActionSpec { action, id, label, when, repeatable: true }
+    ActionSpec { action, id, label, when, repeatable: true, short: None }
 }
 
 use super::edit::ChangesAction as K;
@@ -694,34 +713,48 @@ use PlanAction as P;
 
 /// Every action, in command-line order.
 pub const REGISTRY: &[ActionSpec] = &[
-    act(Action::RunStatement, "query.execute_current", Label::ActionQueryExecuteCurrent, has_tab),
+    act(Action::RunStatement, "query.execute_current", Label::ActionQueryExecuteCurrent, has_tab)
+        .short(Label::MenuShortQueryExecuteCurrent),
     act(Action::CancelQuery, "query.cancel", Label::ActionQueryCancel, has_tab),
     act(Action::ShowCompletions, "editor.complete", Label::ActionEditorComplete, has_tab),
-    act(Action::ExternalEdit, "editor.open_external", Label::ActionEditorOpenExternal, has_tab),
-    act(Action::FormatSql, "editor.format", Label::ActionEditorFormat, query_tab),
-    act(Action::Explain(false), "query.explain", Label::ActionQueryExplain, query_tab_explains),
-    act(Action::Explain(true), "query.explain_analyze", Label::ActionQueryExplainAnalyze, query_tab_explains),
-    act(Action::ToggleComment, "editor.comment_toggle", Label::ActionEditorCommentToggle, query_tab),
+    act(Action::ExternalEdit, "editor.open_external", Label::ActionEditorOpenExternal, has_tab)
+        .short(Label::MenuShortEditorOpenExternal),
+    act(Action::FormatSql, "editor.format", Label::ActionEditorFormat, query_tab).short(Label::MenuShortEditorFormat),
+    act(Action::Explain(false), "query.explain", Label::ActionQueryExplain, query_tab_explains)
+        .short(Label::MenuShortQueryExplain),
+    act(Action::Explain(true), "query.explain_analyze", Label::ActionQueryExplainAnalyze, query_tab_explains)
+        .short(Label::MenuShortQueryExplainAnalyze),
+    act(Action::ToggleComment, "editor.comment_toggle", Label::ActionEditorCommentToggle, query_tab)
+        .short(Label::MenuShortEditorCommentToggle),
     act(Action::QuickConnect, "conn.quick_connect", Label::ActionConnQuickConnect, in_workspace),
     act(Action::NewProfile, "conn.new", Label::ActionConnNew, anywhere),
-    act(Action::EditProfile, "conn.edit", Label::ActionConnEdit, explorer_profile_or_tunnel),
-    act(Action::DuplicateProfile, "conn.duplicate", Label::ActionConnDuplicate, explorer_profile_or_tunnel),
-    act(Action::NewTunnel, "tunnel.new", Label::ActionTunnelNew, presets_writable),
-    act(Action::NewEnvironment, "env.new", Label::ActionEnvNew, environments_writable),
-    act(Action::NewSession, "session.new", Label::ActionSessionNew, sessions_writable),
-    act(Action::SessionView, "session.show", Label::ActionSessionShow, profile_chosen),
+    act(Action::EditProfile, "conn.edit", Label::ActionConnEdit, explorer_profile_or_tunnel)
+        .short(Label::MenuShortConnEdit),
+    act(Action::DuplicateProfile, "conn.duplicate", Label::ActionConnDuplicate, explorer_profile_or_tunnel)
+        .short(Label::MenuShortConnDuplicate),
+    act(Action::NewTunnel, "tunnel.new", Label::ActionTunnelNew, presets_writable).short(Label::MenuShortTunnelNew),
+    act(Action::NewEnvironment, "env.new", Label::ActionEnvNew, environments_writable).short(Label::MenuShortEnvNew),
+    act(Action::NewSession, "session.new", Label::ActionSessionNew, sessions_writable)
+        .short(Label::MenuShortSessionNew),
+    act(Action::SessionView, "session.show", Label::ActionSessionShow, profile_chosen)
+        .short(Label::MenuShortSessionShow),
     act(Action::TestConnection, "conn.test", Label::ActionConnTest, action_profile),
     act(Action::Disconnect, "conn.disconnect", Label::ActionConnDisconnect, explorer_profile),
-    act(Action::OpenConsole, "conn.open_console", Label::ActionConnOpenConsole, explorer_profile),
+    act(Action::OpenConsole, "conn.open_console", Label::ActionConnOpenConsole, explorer_profile)
+        .short(Label::MenuShortConnOpenConsole),
     act(Action::EditCurrent, "conn.edit_current", Label::ActionConnEditCurrent, tab_profile),
     act(Action::TestCurrent, "conn.test_current", Label::ActionConnTestCurrent, tab_profile),
-    act(Action::DisconnectCurrent, "conn.disconnect_current", Label::ActionConnDisconnectCurrent, tab_profile),
-    act(Action::ReconnectCurrent, "conn.reconnect_current", Label::ActionConnReconnectCurrent, tab_profile),
-    act(Action::TxCommit, "tx.commit", Label::ActionTxCommit, tx_endable),
-    act(Action::TxRollback, "tx.rollback", Label::ActionTxRollback, tx_endable),
-    act(Action::TxSummary, "tx.summary", Label::ActionTxSummary, tx_open),
-    act(Action::SetTabConnection, "tab.set_connection", Label::ActionTabSetConnection, query_tab),
-    act(Action::SetTabContext, "tab.set_context", Label::ActionTabSetContext, query_tab_profile),
+    act(Action::DisconnectCurrent, "conn.disconnect_current", Label::ActionConnDisconnectCurrent, tab_profile)
+        .short(Label::MenuShortConnDisconnectCurrent),
+    act(Action::ReconnectCurrent, "conn.reconnect_current", Label::ActionConnReconnectCurrent, tab_profile)
+        .short(Label::MenuShortConnReconnectCurrent),
+    act(Action::TxCommit, "tx.commit", Label::ActionTxCommit, tx_endable).short(Label::MenuShortTxCommit),
+    act(Action::TxRollback, "tx.rollback", Label::ActionTxRollback, tx_endable).short(Label::MenuShortTxRollback),
+    act(Action::TxSummary, "tx.summary", Label::ActionTxSummary, tx_open).short(Label::MenuShortTxSummary),
+    act(Action::SetTabConnection, "tab.set_connection", Label::ActionTabSetConnection, query_tab)
+        .short(Label::MenuShortTabSetConnection),
+    act(Action::SetTabContext, "tab.set_context", Label::ActionTabSetContext, query_tab_profile)
+        .short(Label::MenuShortTabSetContext),
     act(Action::SetLanguage(LangSetting::En), "ui.language.en", Label::ActionUiLanguageEn, anywhere),
     act(Action::SetLanguage(LangSetting::Ko), "ui.language.ko", Label::ActionUiLanguageKo, anywhere),
     act(Action::SetLanguage(LangSetting::Auto), "ui.language.auto", Label::ActionUiLanguageAuto, anywhere),
@@ -794,9 +827,11 @@ pub const REGISTRY: &[ActionSpec] = &[
     // Without a data directory these say why (they are the first thing a user tries).
     act(Action::ScriptSave, "script.save", Label::ActionScriptSave, query_tab),
     act(Action::ScriptSaveAs, "script.save_as", Label::ActionScriptSaveAs, query_tab),
-    act(Action::ScriptRename, "script.rename", Label::ActionScriptRename, tab_script),
+    act(Action::ScriptRename, "script.rename", Label::ActionScriptRename, tab_script)
+        .short(Label::MenuShortScriptRename),
     act(Action::ScriptOpen, "script.open", Label::ActionScriptOpen, scripts),
-    act(Action::ScriptDelete, "script.delete", Label::ActionScriptDelete, tab_script),
+    act(Action::ScriptDelete, "script.delete", Label::ActionScriptDelete, tab_script)
+        .short(Label::MenuShortScriptDelete),
     act(Action::PickKeyFile, "form.pick_key_file", Label::ActionFormPickKeyFile, key_file_field),
     act(Action::PickExportPath, "export.pick_path", Label::ActionExportPickPath, export_dialog),
     act(Action::SaveAsTunnel, "form.save_as_tunnel", Label::ActionFormSaveAsTunnel, own_tunnel_field),
@@ -807,19 +842,23 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::UpdateStatus, "app.update", Label::ActionUpdate, anywhere),
     act(Action::DismissOnboarding, "tips.dismiss_onboarding", Label::ActionTipsDismissOnboarding, onboarding_open),
     act(Action::PaneBack, "pane.back", Label::ActionPaneBack, results_focused),
-    act(Action::Zoom, "pane.zoom", Label::ActionPaneZoom, zoomable),
-    act(Action::ToggleExplorer, "explorer.toggle", Label::ActionExplorerToggle, tab_drawn),
+    act(Action::Zoom, "pane.zoom", Label::ActionPaneZoom, zoomable).short(Label::MenuShortPaneZoom),
+    act(Action::ToggleExplorer, "explorer.toggle", Label::ActionExplorerToggle, tab_drawn)
+        .short(Label::MenuShortExplorerToggle),
     mv(Action::ExplorerWidth(true), "explorer.wider", Label::ActionExplorerWider, explorer_sized),
     mv(Action::ExplorerWidth(false), "explorer.narrower", Label::ActionExplorerNarrower, explorer_sized),
     mv(Action::Explorer(E::Down), "explorer.down", Label::ActionExplorerDown, explorer_focused),
     mv(Action::Explorer(E::Up), "explorer.up", Label::ActionExplorerUp, explorer_focused),
     act(Action::Explorer(E::Expand), "explorer.expand", Label::ActionExplorerExpand, explorer_focused),
     act(Action::Explorer(E::Collapse), "explorer.collapse", Label::ActionExplorerCollapse, explorer_focused),
-    act(Action::Explorer(E::Activate), "explorer.activate", Label::ActionExplorerActivate, explorer_focused),
+    act(Action::Explorer(E::Activate), "explorer.activate", Label::ActionExplorerActivate, explorer_focused)
+        .short(Label::MenuShortExplorerActivate),
     act(Action::Explorer(E::Top), "explorer.top", Label::ActionExplorerTop, explorer_focused),
     act(Action::Explorer(E::Bottom), "explorer.bottom", Label::ActionExplorerBottom, explorer_focused),
-    act(Action::Explorer(E::Refresh), "explorer.refresh", Label::ActionExplorerRefresh, explorer_focused),
-    act(Action::Explorer(E::Filter), "explorer.filter", Label::ActionExplorerFilter, explorer_focused),
+    act(Action::Explorer(E::Refresh), "explorer.refresh", Label::ActionExplorerRefresh, explorer_focused)
+        .short(Label::MenuShortExplorerRefresh),
+    act(Action::Explorer(E::Filter), "explorer.filter", Label::ActionExplorerFilter, explorer_focused)
+        .short(Label::MenuShortExplorerFilter),
     act(
         Action::Explorer(E::FilterClear),
         "explorer.filter_clear",
@@ -833,27 +872,34 @@ pub const REGISTRY: &[ActionSpec] = &[
         explorer_filtering,
     ),
     act(Action::Explorer(E::Back), "explorer.back", Label::ActionExplorerBack, explorer_focused),
-    act(Action::Explorer(E::Delete), "explorer.delete", Label::ActionExplorerDelete, explorer_focused),
-    act(Action::Explorer(E::Move), "explorer.move", Label::ActionExplorerMove, explorer_focused),
+    act(Action::Explorer(E::Delete), "explorer.delete", Label::ActionExplorerDelete, explorer_focused)
+        .short(Label::MenuShortExplorerDelete),
+    act(Action::Explorer(E::Move), "explorer.move", Label::ActionExplorerMove, explorer_focused)
+        .short(Label::MenuShortExplorerMove),
     act(Action::Explorer(E::NewFolder), "folder.new", Label::ActionFolderNew, explorer_focused),
-    act(Action::Explorer(E::Rename), "explorer.rename", Label::ActionExplorerRename, explorer_focused),
+    act(Action::Explorer(E::Rename), "explorer.rename", Label::ActionExplorerRename, explorer_focused)
+        .short(Label::MenuShortExplorerRename),
     act(Action::Explorer(E::ContextMenu), "explorer.context_menu", Label::ActionExplorerContextMenu, explorer_focused),
     act(
         Action::Explorer(E::ConsoleHere),
         "explorer.new_console_here",
         Label::ActionExplorerNewConsoleHere,
         explorer_profile,
-    ),
-    act(Action::Explorer(E::ShowDdl), "explorer.show_ddl", Label::ActionExplorerShowDdl, explorer_focused),
+    )
+    .short(Label::MenuShortExplorerNewConsoleHere),
+    act(Action::Explorer(E::ShowDdl), "explorer.show_ddl", Label::ActionExplorerShowDdl, explorer_focused)
+        .short(Label::MenuShortExplorerShowDdl),
     act(
         Action::Explorer(E::ShowFunctionDdl),
         "explorer.show_function_ddl",
         Label::ActionExplorerShowFunctionDdl,
         explorer_focused,
-    ),
-    act(Action::ReloadDdl, "ddl.reload", Label::ActionDdlReload, ddl_tab),
-    act(Action::DdlToConsole, "ddl.open_console", Label::ActionDdlOpenConsole, ddl_tab),
-    act(Action::CopyDdl, "ddl.copy", Label::ActionDdlCopy, ddl_tab),
+    )
+    .short(Label::MenuShortExplorerShowFunctionDdl),
+    act(Action::ReloadDdl, "ddl.reload", Label::ActionDdlReload, ddl_tab).short(Label::MenuShortDdlReload),
+    act(Action::DdlToConsole, "ddl.open_console", Label::ActionDdlOpenConsole, ddl_tab)
+        .short(Label::MenuShortDdlOpenConsole),
+    act(Action::CopyDdl, "ddl.copy", Label::ActionDdlCopy, ddl_tab).short(Label::MenuShortDdlCopy),
     mv(Action::Grid(G::Left), "grid.left", Label::ActionGridLeft, grid_focused),
     mv(Action::Grid(G::Right), "grid.right", Label::ActionGridRight, grid_focused),
     mv(Action::Grid(G::Down), "grid.down", Label::ActionGridDown, grid_focused),
@@ -866,12 +912,16 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Grid(G::Bottom), "grid.bottom", Label::ActionGridBottom, grid_focused),
     act(Action::Grid(G::FirstCol), "grid.first_col", Label::ActionGridFirstCol, grid_focused),
     act(Action::Grid(G::LastCol), "grid.last_col", Label::ActionGridLastCol, grid_focused),
-    act(Action::Grid(G::ViewCell), "grid.view_cell", Label::ActionGridViewCell, results_focused),
-    act(Action::Grid(G::CopyCell), "grid.copy_cell", Label::ActionGridCopyCell, grid_focused),
-    act(Action::Grid(G::CopyRow), "grid.copy_row", Label::ActionGridCopyRow, grid_focused),
+    act(Action::Grid(G::ViewCell), "grid.view_cell", Label::ActionGridViewCell, results_focused)
+        .short(Label::MenuShortGridViewCell),
+    act(Action::Grid(G::CopyCell), "grid.copy_cell", Label::ActionGridCopyCell, grid_focused)
+        .short(Label::MenuShortGridCopyCell),
+    act(Action::Grid(G::CopyRow), "grid.copy_row", Label::ActionGridCopyRow, grid_focused)
+        .short(Label::MenuShortGridCopyRow),
     act(Action::Grid(G::Select), "grid.select", Label::ActionGridSelect, grid_focused),
     act(Action::Grid(G::SelectRows), "grid.select_rows", Label::ActionGridSelectRows, grid_focused),
-    act(Action::Grid(G::SelectAll), "grid.select_all", Label::ActionGridSelectAll, grid_focused),
+    act(Action::Grid(G::SelectAll), "grid.select_all", Label::ActionGridSelectAll, grid_focused)
+        .short(Label::MenuShortGridSelectAll),
     act(Action::GridSearch(S::Open { forward: true }), "grid.search", Label::ActionGridSearch, grid_rows_focused),
     act(
         Action::GridSearch(S::Open { forward: false }),
@@ -882,22 +932,30 @@ pub const REGISTRY: &[ActionSpec] = &[
     mv(Action::GridSearch(S::Next { same: true }), "grid.search_next", Label::ActionGridSearchNext, grid_searching),
     mv(Action::GridSearch(S::Next { same: false }), "grid.search_prev", Label::ActionGridSearchPrev, grid_searching),
     act(Action::GridSearch(S::Clear), "grid.search_clear", Label::ActionGridSearchClear, grid_searching),
-    act(Action::Edit(D::Cell), "edit.cell", Label::ActionEditCell, edit_focused),
-    act(Action::Edit(D::SetNull), "edit.set_null", Label::ActionEditSetNull, edit_focused),
-    act(Action::Edit(D::SetDefault), "edit.set_default", Label::ActionEditSetDefault, edit_focused),
-    act(Action::Edit(D::Undo), "edit.undo", Label::ActionEditUndo, edit_focused),
+    act(Action::Edit(D::Cell), "edit.cell", Label::ActionEditCell, edit_focused).short(Label::MenuShortEditCell),
+    act(Action::Edit(D::SetNull), "edit.set_null", Label::ActionEditSetNull, edit_focused)
+        .short(Label::MenuShortEditSetNull),
+    act(Action::Edit(D::SetDefault), "edit.set_default", Label::ActionEditSetDefault, edit_focused)
+        .short(Label::MenuShortEditSetDefault),
+    act(Action::Edit(D::Undo), "edit.undo", Label::ActionEditUndo, edit_focused).short(Label::MenuShortEditUndo),
     act(Action::Edit(D::Redo), "edit.redo", Label::ActionEditRedo, edit_focused),
     act(Action::Edit(D::Revert), "edit.revert", Label::ActionEditRevert, edit_focused),
-    act(Action::Edit(D::AddRow), "edit.add_row", Label::ActionEditAddRow, edit_focused),
-    act(Action::Edit(D::CloneRow), "edit.clone_row", Label::ActionEditCloneRow, edit_focused),
-    act(Action::Edit(D::DeleteRow), "edit.delete_row", Label::ActionEditDeleteRow, edit_focused),
+    act(Action::Edit(D::AddRow), "edit.add_row", Label::ActionEditAddRow, edit_focused)
+        .short(Label::MenuShortEditAddRow),
+    act(Action::Edit(D::CloneRow), "edit.clone_row", Label::ActionEditCloneRow, edit_focused)
+        .short(Label::MenuShortEditCloneRow),
+    act(Action::Edit(D::DeleteRow), "edit.delete_row", Label::ActionEditDeleteRow, edit_focused)
+        .short(Label::MenuShortEditDeleteRow),
     act(Action::Edit(D::Preview), "edit.preview", Label::ActionEditPreview, changes_reachable),
-    act(Action::Edit(D::Apply), "edit.apply", Label::ActionEditApply, edit_focused),
-    act(Action::Edit(D::Discard), "edit.discard", Label::ActionEditDiscard, edit_focused),
+    act(Action::Edit(D::Apply), "edit.apply", Label::ActionEditApply, edit_focused).short(Label::MenuShortEditApply),
+    act(Action::Edit(D::Discard), "edit.discard", Label::ActionEditDiscard, edit_focused)
+        .short(Label::MenuShortEditDiscard),
     act(Action::Edit(D::Paste), "edit.paste", Label::ActionEditPaste, edit_focused),
     act(Action::Edit(D::PasteAs), "edit.paste_as", Label::ActionEditPasteAs, edit_focused),
-    act(Action::Edit(D::PasteRegister), "edit.paste_register", Label::ActionEditPasteRegister, edit_focused),
-    act(Action::Edit(D::PasteRows), "edit.paste_rows", Label::ActionEditPasteRows, edit_focused),
+    act(Action::Edit(D::PasteRegister), "edit.paste_register", Label::ActionEditPasteRegister, edit_focused)
+        .short(Label::MenuShortEditPasteRegister),
+    act(Action::Edit(D::PasteRows), "edit.paste_rows", Label::ActionEditPasteRows, edit_focused)
+        .short(Label::MenuShortEditPasteRows),
     mv(Action::Changes(K::Down), "changes.down", Label::ActionChangesDown, changes_focused),
     mv(Action::Changes(K::Up), "changes.up", Label::ActionChangesUp, changes_focused),
     mv(Action::Changes(K::HalfDown), "changes.half_down", Label::ActionChangesHalfDown, changes_focused),
@@ -1052,27 +1110,33 @@ pub const REGISTRY: &[ActionSpec] = &[
         Label::ActionResultsCopyAllUpdate,
         has_rows,
     ),
-    act(Action::Export, "results.export", Label::ActionResultsExport, has_rows),
-    act(Action::ToggleDetail, "results.detail", Label::ActionResultsDetail, has_tab),
+    act(Action::Export, "results.export", Label::ActionResultsExport, has_rows).short(Label::MenuShortResultsExport),
+    act(Action::ToggleDetail, "results.detail", Label::ActionResultsDetail, has_tab)
+        .short(Label::MenuShortResultsDetail),
     act(Action::DetailTab, "results.detail_tab", Label::ActionResultsDetailTab, detail_panel),
     mv(Action::DetailStep(true), "results.detail_next", Label::ActionResultsDetailNext, detail_focused),
     mv(Action::DetailStep(false), "results.detail_prev", Label::ActionResultsDetailPrev, detail_focused),
-    act(Action::Panel(PanelAction::Toggle), "results.panel.toggle", Label::ActionResultsPanelToggle, pane_known),
-    act(Action::Panel(PanelAction::Maximize), "results.panel.maximize", Label::ActionResultsPanelMaximize, pane_shown),
+    act(Action::Panel(PanelAction::Toggle), "results.panel.toggle", Label::ActionResultsPanelToggle, pane_known)
+        .short(Label::MenuShortResultsPanelToggle),
+    act(Action::Panel(PanelAction::Maximize), "results.panel.maximize", Label::ActionResultsPanelMaximize, pane_shown)
+        .short(Label::MenuShortResultsPanelMaximize),
     mv(Action::Panel(PanelAction::Grow), "results.panel.grow", Label::ActionResultsPanelGrow, pane_sized),
     mv(Action::Panel(PanelAction::Shrink), "results.panel.shrink", Label::ActionResultsPanelShrink, pane_sized),
-    act(Action::ResultTab(true), "results.tab.next", Label::ActionResultsTabNext, result_tabs),
-    act(Action::ResultTab(false), "results.tab.prev", Label::ActionResultsTabPrev, result_tabs),
+    act(Action::ResultTab(true), "results.tab.next", Label::ActionResultsTabNext, result_tabs)
+        .short(Label::MenuShortResultsTabNext),
+    act(Action::ResultTab(false), "results.tab.prev", Label::ActionResultsTabPrev, result_tabs)
+        .short(Label::MenuShortResultsTabPrev),
     mv(Action::PageNext, "results.page.next", Label::ActionResultsPageNext, rows_shown),
     mv(Action::PagePrev, "results.page.prev", Label::ActionResultsPagePrev, rows_shown),
-    act(Action::CountRows, "results.count", Label::ActionResultsCount, rows_shown),
+    act(Action::CountRows, "results.count", Label::ActionResultsCount, rows_shown).short(Label::MenuShortResultsCount),
     act(Action::Table(T::EditFilter), "table.filter.edit", Label::ActionTableFilterEdit, table_tab),
     act(Action::Table(T::EditOrder), "table.order.edit", Label::ActionTableOrderEdit, table_tab),
     act(Action::Table(T::Clear), "table.filter.clear", Label::ActionTableFilterClear, table_tab),
     act(Action::Table(T::OpenSql), "table.filter.open_sql", Label::ActionTableFilterOpenSql, table_tab),
     act(Action::Table(T::SortCycle), "table.sort.cycle", Label::ActionTableSortCycle, table_tab),
     act(Action::Table(T::SortAdd), "table.sort.add", Label::ActionTableSortAdd, table_tab),
-    act(Action::Table(T::ColumnMenu), "table.column.menu", Label::ActionTableColumnMenu, table_tab),
+    act(Action::Table(T::ColumnMenu), "table.column.menu", Label::ActionTableColumnMenu, table_tab)
+        .short(Label::MenuShortTableColumnMenu),
     act(Action::Table(T::Only), "table.filter.only", Label::ActionTableFilterOnly, table_tab),
     act(Action::Table(T::Exclude), "table.filter.exclude", Label::ActionTableFilterExclude, table_tab),
     act(Action::Table(T::ClearAll), "table.filter.clear_all", Label::ActionTableFilterClearAll, table_tab),
@@ -1097,7 +1161,8 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::FilterDialog(FD::Sql), "filter.sql", Label::ActionFilterSql, filter_full),
     act(Action::FilterDialog(FD::Count), "filter.count", Label::ActionFilterCount, filter_values),
     act(Action::FilterDialog(FD::Advanced), "filter.advanced", Label::ActionFilterAdvanced, filter_popup),
-    act(Action::ExplainAsPlan, "results.view_as_plan", Label::ActionResultsViewAsPlan, text_plan_shown),
+    act(Action::ExplainAsPlan, "results.view_as_plan", Label::ActionResultsViewAsPlan, text_plan_shown)
+        .short(Label::MenuShortResultsViewAsPlan),
     mv(Action::Plan(P::Down), "plan.down", Label::ActionPlanDown, plan_focused),
     mv(Action::Plan(P::Up), "plan.up", Label::ActionPlanUp, plan_focused),
     act(Action::Plan(P::Top), "plan.top", Label::ActionPlanTop, plan_focused),
@@ -1106,23 +1171,35 @@ pub const REGISTRY: &[ActionSpec] = &[
     mv(Action::Plan(P::PageUp), "plan.page_up", Label::ActionPlanPageUp, plan_focused),
     act(Action::Plan(P::Expand), "plan.expand", Label::ActionPlanExpand, plan_focused),
     act(Action::Plan(P::Collapse), "plan.collapse", Label::ActionPlanCollapse, plan_focused),
-    act(Action::Plan(P::Detail), "plan.detail", Label::ActionPlanDetail, plan_shown),
+    act(Action::Plan(P::Detail), "plan.detail", Label::ActionPlanDetail, plan_shown).short(Label::MenuShortPlanDetail),
     act(Action::Plan(P::NextView(true)), "plan.view.next", Label::ActionPlanViewNext, has_plan),
     act(Action::Plan(P::NextView(false)), "plan.view.prev", Label::ActionPlanViewPrev, has_plan),
-    act(Action::Plan(P::View(PlanView::Tree)), "plan.view.tree", Label::ActionPlanViewTree, has_plan),
-    act(Action::Plan(P::View(PlanView::Summary)), "plan.view.summary", Label::ActionPlanViewSummary, has_plan),
-    act(Action::Plan(P::View(PlanView::Icicle)), "plan.view.icicle", Label::ActionPlanViewIcicle, has_plan),
-    act(Action::Plan(P::View(PlanView::Flame)), "plan.view.flame", Label::ActionPlanViewFlame, has_plan),
-    act(Action::Plan(P::View(PlanView::Timeline)), "plan.view.timeline", Label::ActionPlanViewTimeline, has_plan),
-    act(Action::Plan(P::View(PlanView::Rows)), "plan.view.rows", Label::ActionPlanViewRows, has_plan),
-    act(Action::Plan(P::View(PlanView::Treemap)), "plan.view.treemap", Label::ActionPlanViewTreemap, has_plan),
-    act(Action::Plan(P::View(PlanView::Boxes)), "plan.view.boxes", Label::ActionPlanViewBoxes, has_plan),
-    act(Action::Plan(P::View(PlanView::Raw)), "plan.view.raw", Label::ActionPlanViewRaw, has_plan),
+    act(Action::Plan(P::View(PlanView::Tree)), "plan.view.tree", Label::ActionPlanViewTree, has_plan)
+        .short(Label::MenuShortPlanViewTree),
+    act(Action::Plan(P::View(PlanView::Summary)), "plan.view.summary", Label::ActionPlanViewSummary, has_plan)
+        .short(Label::MenuShortPlanViewSummary),
+    act(Action::Plan(P::View(PlanView::Icicle)), "plan.view.icicle", Label::ActionPlanViewIcicle, has_plan)
+        .short(Label::MenuShortPlanViewIcicle),
+    act(Action::Plan(P::View(PlanView::Flame)), "plan.view.flame", Label::ActionPlanViewFlame, has_plan)
+        .short(Label::MenuShortPlanViewFlame),
+    act(Action::Plan(P::View(PlanView::Timeline)), "plan.view.timeline", Label::ActionPlanViewTimeline, has_plan)
+        .short(Label::MenuShortPlanViewTimeline),
+    act(Action::Plan(P::View(PlanView::Rows)), "plan.view.rows", Label::ActionPlanViewRows, has_plan)
+        .short(Label::MenuShortPlanViewRows),
+    act(Action::Plan(P::View(PlanView::Treemap)), "plan.view.treemap", Label::ActionPlanViewTreemap, has_plan)
+        .short(Label::MenuShortPlanViewTreemap),
+    act(Action::Plan(P::View(PlanView::Boxes)), "plan.view.boxes", Label::ActionPlanViewBoxes, has_plan)
+        .short(Label::MenuShortPlanViewBoxes),
+    act(Action::Plan(P::View(PlanView::Raw)), "plan.view.raw", Label::ActionPlanViewRaw, has_plan)
+        .short(Label::MenuShortPlanViewRaw),
     mv(Action::Plan(P::PanLeft), "plan.pan_left", Label::ActionPlanPanLeft, plan_focused),
     mv(Action::Plan(P::PanRight), "plan.pan_right", Label::ActionPlanPanRight, plan_focused),
-    act(Action::Plan(P::CopyText), "plan.copy_text", Label::ActionPlanCopyText, has_plan),
-    act(Action::Plan(P::CopyJson), "plan.copy_json", Label::ActionPlanCopyJson, has_plan),
-    act(Action::Chart(C::Toggle), "results.chart", Label::ActionResultsChart, chartable),
+    act(Action::Plan(P::CopyText), "plan.copy_text", Label::ActionPlanCopyText, has_plan)
+        .short(Label::MenuShortPlanCopyText),
+    act(Action::Plan(P::CopyJson), "plan.copy_json", Label::ActionPlanCopyJson, has_plan)
+        .short(Label::MenuShortPlanCopyJson),
+    act(Action::Chart(C::Toggle), "results.chart", Label::ActionResultsChart, chartable)
+        .short(Label::MenuShortResultsChart),
     mv(Action::Chart(C::Left), "chart.left", Label::ActionChartLeft, chart_focused),
     mv(Action::Chart(C::Right), "chart.right", Label::ActionChartRight, chart_focused),
     mv(Action::Chart(C::Up), "chart.up", Label::ActionChartUp, chart_focused),
@@ -1131,36 +1208,48 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Chart(C::Last), "chart.last", Label::ActionChartLast, chart_focused),
     act(Action::Chart(C::NextKind(true)), "chart.kind.next", Label::ActionChartKindNext, has_chart),
     act(Action::Chart(C::NextKind(false)), "chart.kind.prev", Label::ActionChartKindPrev, has_chart),
-    act(Action::Chart(C::Kind(Kind::Bar)), "chart.kind.bar", Label::ActionChartKindBar, has_chart),
-    act(Action::Chart(C::Kind(Kind::HBar)), "chart.kind.hbar", Label::ActionChartKindHbar, has_chart),
-    act(Action::Chart(C::Kind(Kind::Line)), "chart.kind.line", Label::ActionChartKindLine, has_chart),
-    act(Action::Chart(C::PickX), "chart.pick_x", Label::ActionChartPickX, has_chart),
-    act(Action::Chart(C::PickY), "chart.pick_y", Label::ActionChartPickY, has_chart),
-    act(Action::Chart(C::PickBy), "chart.pick_by", Label::ActionChartPickBy, has_chart),
-    act(Action::Chart(C::Log), "chart.log", Label::ActionChartLog, has_chart),
-    act(Action::Chart(C::CopyData), "chart.copy_data", Label::ActionChartCopyData, has_chart),
-    act(Action::Chart(C::CopyText), "chart.copy_text", Label::ActionChartCopyText, has_chart),
-    act(Action::Chart(C::GotoRow), "chart.goto_row", Label::ActionChartGotoRow, chart_focused),
-    act(Action::Monitor(M::Open), "monitor.open", Label::ActionMonitorOpen, monitor_profile),
+    act(Action::Chart(C::Kind(Kind::Bar)), "chart.kind.bar", Label::ActionChartKindBar, has_chart)
+        .short(Label::MenuShortChartKindBar),
+    act(Action::Chart(C::Kind(Kind::HBar)), "chart.kind.hbar", Label::ActionChartKindHbar, has_chart)
+        .short(Label::MenuShortChartKindHbar),
+    act(Action::Chart(C::Kind(Kind::Line)), "chart.kind.line", Label::ActionChartKindLine, has_chart)
+        .short(Label::MenuShortChartKindLine),
+    act(Action::Chart(C::PickX), "chart.pick_x", Label::ActionChartPickX, has_chart).short(Label::MenuShortChartPickX),
+    act(Action::Chart(C::PickY), "chart.pick_y", Label::ActionChartPickY, has_chart).short(Label::MenuShortChartPickY),
+    act(Action::Chart(C::PickBy), "chart.pick_by", Label::ActionChartPickBy, has_chart)
+        .short(Label::MenuShortChartPickBy),
+    act(Action::Chart(C::Log), "chart.log", Label::ActionChartLog, has_chart).short(Label::MenuShortChartLog),
+    act(Action::Chart(C::CopyData), "chart.copy_data", Label::ActionChartCopyData, has_chart)
+        .short(Label::MenuShortChartCopyData),
+    act(Action::Chart(C::CopyText), "chart.copy_text", Label::ActionChartCopyText, has_chart)
+        .short(Label::MenuShortChartCopyText),
+    act(Action::Chart(C::GotoRow), "chart.goto_row", Label::ActionChartGotoRow, chart_focused)
+        .short(Label::MenuShortChartGotoRow),
+    act(Action::Monitor(M::Open), "monitor.open", Label::ActionMonitorOpen, monitor_profile)
+        .short(Label::MenuShortMonitorOpen),
     act(
         Action::Monitor(M::View(MonitorView::Overview)),
         "monitor.overview",
         Label::ActionMonitorOverview,
         monitor_focused,
-    ),
+    )
+    .short(Label::MenuShortMonitorOverview),
     act(
         Action::Monitor(M::View(MonitorView::Sessions)),
         "monitor.sessions",
         Label::ActionMonitorSessions,
         monitor_focused,
-    ),
-    act(Action::Monitor(M::View(MonitorView::Locks)), "monitor.locks", Label::ActionMonitorLocks, monitor_focused),
+    )
+    .short(Label::MenuShortMonitorSessions),
+    act(Action::Monitor(M::View(MonitorView::Locks)), "monitor.locks", Label::ActionMonitorLocks, monitor_focused)
+        .short(Label::MenuShortMonitorLocks),
     act(
         Action::Monitor(M::View(MonitorView::Replication)),
         "monitor.replication",
         Label::ActionMonitorReplication,
         monitor_focused,
-    ),
+    )
+    .short(Label::MenuShortMonitorReplication),
     act(Action::Monitor(M::NextView), "monitor.view.next", Label::ActionMonitorViewNext, monitor_focused),
     mv(Action::Monitor(M::Up), "monitor.up", Label::ActionMonitorUp, monitor_focused),
     mv(Action::Monitor(M::Down), "monitor.down", Label::ActionMonitorDown, monitor_focused),
@@ -1168,24 +1257,35 @@ pub const REGISTRY: &[ActionSpec] = &[
     mv(Action::Monitor(M::PageDown), "monitor.page_down", Label::ActionMonitorPageDown, monitor_focused),
     act(Action::Monitor(M::First), "monitor.first", Label::ActionMonitorFirst, monitor_focused),
     act(Action::Monitor(M::Last), "monitor.last", Label::ActionMonitorLast, monitor_focused),
-    act(Action::Monitor(M::Pause), "monitor.pause", Label::ActionMonitorPause, monitor_focused),
-    act(Action::Monitor(M::ReadNow), "monitor.read", Label::ActionMonitorRead, monitor_focused),
+    act(Action::Monitor(M::Pause), "monitor.pause", Label::ActionMonitorPause, monitor_focused)
+        .short(Label::MenuShortMonitorPause),
+    act(Action::Monitor(M::ReadNow), "monitor.read", Label::ActionMonitorRead, monitor_focused)
+        .short(Label::MenuShortMonitorRead),
     act(Action::Monitor(M::Faster), "monitor.faster", Label::ActionMonitorFaster, monitor_focused),
     act(Action::Monitor(M::Slower), "monitor.slower", Label::ActionMonitorSlower, monitor_focused),
-    act(Action::Monitor(M::ShowIdle), "monitor.idle", Label::ActionMonitorIdle, monitor_focused),
+    act(Action::Monitor(M::ShowIdle), "monitor.idle", Label::ActionMonitorIdle, monitor_focused)
+        .short(Label::MenuShortMonitorIdle),
     act(Action::Monitor(M::Sort), "monitor.sort", Label::ActionMonitorSort, monitor_focused),
     act(Action::Monitor(M::SortReverse), "monitor.sort_reverse", Label::ActionMonitorSortReverse, monitor_focused),
     act(Action::Monitor(M::Filter), "monitor.filter", Label::ActionMonitorFilter, monitor_focused),
-    act(Action::Monitor(M::Details), "monitor.details", Label::ActionMonitorDetails, monitor_focused),
-    act(Action::Monitor(M::OpenConsole), "monitor.open_console", Label::ActionMonitorOpenConsole, monitor_focused),
-    act(Action::Monitor(M::CopyQuery), "monitor.copy_query", Label::ActionMonitorCopyQuery, monitor_focused),
-    act(Action::Monitor(M::Format), "monitor.format", Label::ActionMonitorFormat, monitor_focused),
+    act(Action::Monitor(M::Details), "monitor.details", Label::ActionMonitorDetails, monitor_focused)
+        .short(Label::MenuShortMonitorDetails),
+    act(Action::Monitor(M::OpenConsole), "monitor.open_console", Label::ActionMonitorOpenConsole, monitor_focused)
+        .short(Label::MenuShortMonitorOpenConsole),
+    act(Action::Monitor(M::CopyQuery), "monitor.copy_query", Label::ActionMonitorCopyQuery, monitor_focused)
+        .short(Label::MenuShortMonitorCopyQuery),
+    act(Action::Monitor(M::Format), "monitor.format", Label::ActionMonitorFormat, monitor_focused)
+        .short(Label::MenuShortMonitorFormat),
     act(Action::Monitor(M::Root), "monitor.root", Label::ActionMonitorRoot, monitor_focused),
-    act(Action::Monitor(M::ServerInfo), "monitor.server", Label::ActionMonitorServer, monitor_focused),
+    act(Action::Monitor(M::ServerInfo), "monitor.server", Label::ActionMonitorServer, monitor_focused)
+        .short(Label::MenuShortMonitorServer),
     act(Action::Monitor(M::Back), "monitor.back", Label::ActionMonitorBack, monitor_focused),
-    act(Action::Monitor(M::Cancel), "monitor.cancel", Label::ActionMonitorCancel, monitor_focused),
-    act(Action::Monitor(M::Terminate), "monitor.terminate", Label::ActionMonitorTerminate, monitor_focused),
-    act(Action::Monitor(M::Actions), "monitor.actions", Label::ActionMonitorActions, monitor_focused),
+    act(Action::Monitor(M::Cancel), "monitor.cancel", Label::ActionMonitorCancel, monitor_focused)
+        .short(Label::MenuShortMonitorCancel),
+    act(Action::Monitor(M::Terminate), "monitor.terminate", Label::ActionMonitorTerminate, monitor_focused)
+        .short(Label::MenuShortMonitorTerminate),
+    act(Action::Monitor(M::Actions), "monitor.actions", Label::ActionMonitorActions, monitor_focused)
+        .short(Label::MenuShortMonitorActions),
 ];
 
 pub fn spec(a: Action) -> &'static ActionSpec {

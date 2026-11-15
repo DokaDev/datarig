@@ -6,7 +6,7 @@
 //! press arms the part and the release over it acts, presses right after the dialog came on
 //! top are ignored ([`crate::app::overlay::ARM_DELAY`]). A text field (a value, `Limit`, the SQL
 //! section's `WHERE` and `ORDER BY`) takes the focus and the cursor on the press. Leaving a
-//! field of the SQL section reads it back first, as `Tab` does. While the operator picker is
+//! field of the SQL view reads it back first, as `Tab` does. While the operator picker is
 //! open a press elsewhere closes it; a press outside a popup closes the popup without
 //! applying (`⋯ Advanced` on its border turns it into the whole dialog). The wheel moves
 //! through the column list, the value list and the picker. The pointer lights the part under
@@ -89,7 +89,7 @@ impl App {
     /// The part `h` clicked at (x, y): what its key does.
     fn filter_dialog_hit(&mut self, h: DialogHit, x: u16, y: u16) {
         let Some(d) = self.filter_dialog() else { return };
-        // The field of the SQL section with the keys is read back as it is left (an order
+        // The field of the SQL view with the keys is read back as it is left (an order
         // refused keeps the keys in it); the actions that close or undo it see to it themselves.
         let stays = match h {
             DialogHit::SqlWhere => d.focus == DialogFocus::SqlWhere,

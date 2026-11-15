@@ -750,8 +750,8 @@ fn right_click_opens_the_nodes_actions_and_runs_them() {
     let mut h = three_profiles();
     h.meta_db("local-pg", DbEvent::Schemas(Ok(vec!["public".into()])));
     h.draw(120, 30);
-    // A connected profile (row 2, below the Connections head): its actions, in the explorer's
-    // key order.
+    // A connected profile (row 2, below the Connections head): its actions, by kind (managing
+    // it, its connection, its consoles), then the pane's.
     right_click(&mut h, 2);
     assert_eq!(h.app.key_context(), Ctx::ContextMenu);
     assert_eq!(h.app.focus, Focus::Tree);
@@ -763,11 +763,11 @@ fn right_click_opens_the_nodes_actions_and_runs_them() {
             "explorer.refresh",
             "conn.edit",
             "conn.duplicate",
+            "explorer.move",
             "explorer.delete",
             "conn.test",
             "conn.disconnect",
             "conn.open_console",
-            "explorer.move",
             // The pane's, after the node's.
             "explorer.filter",
             "conn.new",
@@ -778,9 +778,9 @@ fn right_click_opens_the_nodes_actions_and_runs_them() {
     let help: Vec<_> = h.app.keymap.section(Ctx::Explorer, Some(Ctx::Explorer)).iter().map(|e| e.action).collect();
     assert!(h.app.overlays.menu().unwrap().actions().iter().all(|a| help.contains(a)));
     let screen = h.screen(120, 30);
-    assert!(screen.contains("Edit connection profile") && screen.contains(" e │"), "{screen}");
+    assert!(screen.contains("Edit connection") && screen.contains(" e │"), "{screen}");
     // Typing filters; Enter runs the item found.
-    h.menu_pick("Edit connection profile");
+    h.menu_pick("Edit connection");
     assert!(h.form_open());
     h.key(KeyCode::Esc);
     // The arrows and Enter: the second item reloads the schemas.
@@ -1218,7 +1218,7 @@ fn the_menus_console_opens_where_the_click_was() {
     h.right_click_row("local-pg");
     let ids = menu_ids(&h);
     assert!(ids.contains(&"conn.open_console") && !ids.contains(&"explorer.new_console_here"), "{ids:?}");
-    h.menu_pick("New console on this connection");
+    h.menu_pick("New console");
     assert_eq!(h.app.tab().context, SessionContext::default());
 }
 
@@ -1303,14 +1303,14 @@ fn the_menu_of_a_folder_and_of_a_profile() {
     cursor_on(&mut h, "work/");
     h.right_click_row("v6");
     let labels = h.menu_labels();
-    for want in ["Delete connection profile", "Move connection profile to a folder"] {
+    for want in ["Delete connection", "Move to a folder…"] {
         assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
     }
-    h.menu_pick("Delete connection profile");
+    h.menu_pick("Delete connection");
     assert!(h.screen(160, 45).contains("Delete the connection profile “v6”?"));
     h.keys("n");
     h.right_click_row("v6");
-    h.menu_pick("Move connection profile to a folder");
+    h.menu_pick("Move to a folder…");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
     assert_eq!(h.app.selected_profile(), Some(id(&h, "v6")));
 }

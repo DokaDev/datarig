@@ -371,7 +371,12 @@ fn a_statement_without_a_tree_says_so() {
 fn a_server_without_a_plan_the_app_reads_offers_no_plan_action() {
     let explain = Label::ActionQueryExplain.text(Lang::En).to_string();
     let analyze = Label::ActionQueryExplainAnalyze.text(Lang::En).to_string();
-    let as_plan = Label::ActionResultsViewAsPlan.text(Lang::En).to_string();
+    // The menus name them by their short labels.
+    let (m_explain, m_analyze) = (
+        Label::MenuShortQueryExplain.text(Lang::En).to_string(),
+        Label::MenuShortQueryExplainAnalyze.text(Lang::En).to_string(),
+    );
+    let as_plan = Label::MenuShortResultsViewAsPlan.text(Lang::En).to_string();
     let mut h = table_plan("EXPLAIN SELECT * FROM c WHERE id < 5;");
     let menu = |h: &mut Harness| {
         h.key_mod(KeyCode::F(10), ratatui::crossterm::event::KeyModifiers::SHIFT);
@@ -402,7 +407,7 @@ fn a_server_without_a_plan_the_app_reads_offers_no_plan_action() {
     h.app.focus = Focus::Editor;
     edit(&mut h, "SELECT * FROM c;");
     let menu_now = menu(&mut h);
-    assert!(!menu_now.contains(&explain) && !menu_now.contains(&analyze), "{menu_now:?}");
+    assert!(!menu_now.contains(&m_explain) && !menu_now.contains(&m_analyze), "{menu_now:?}");
     let rows = commands(&mut h);
     assert!(!rows.iter().any(|r| r.starts_with(":explain") || *r == explain || *r == analyze), "{rows:?}");
     h.keys(" ex");
@@ -420,15 +425,15 @@ fn a_server_without_a_plan_the_app_reads_offers_no_plan_action() {
     let old = h.app.conns.get(id).unwrap().generation;
     h.app.conns.next_generation(id);
     let menu_now = menu(&mut h);
-    assert!(menu_now.contains(&explain), "forgotten at a new attempt: {menu_now:?}");
+    assert!(menu_now.contains(&m_explain), "forgotten at a new attempt: {menu_now:?}");
     h.app.on_app_event(AppEvent::Db { target: EventTarget::Meta(id), generation: old, ev: DbEvent::Explain(None) });
-    assert!(menu(&mut h).contains(&explain), "an older attempt's word is dropped");
+    assert!(menu(&mut h).contains(&m_explain), "an older attempt's word is dropped");
     h.meta_db("local-my", DbEvent::Explain(None));
-    assert!(!menu(&mut h).contains(&explain), "the current attempt's counts");
+    assert!(!menu(&mut h).contains(&m_explain), "the current attempt's counts");
     // The metadata session's word counts too: a server that gives the tree offers it all again.
     h.meta_db("local-my", DbEvent::Explain(Some(ExplainFormat::MySqlTree)));
     let menu_now = menu(&mut h);
-    assert!(menu_now.contains(&explain) && menu_now.contains(&analyze), "{menu_now:?}");
+    assert!(menu_now.contains(&m_explain) && menu_now.contains(&m_analyze), "{menu_now:?}");
     h.keys(" ex");
     assert_eq!(sent_one(&mut h).1, "EXPLAIN FORMAT=TREE SELECT * FROM c");
 }
