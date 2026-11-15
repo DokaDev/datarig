@@ -24,8 +24,9 @@ use std::sync::atomic::Ordering;
 const SAVEPOINT: &str = "datarig_apply";
 
 /// How the session's writes reach the binary log: its format, whether the server keeps one,
-/// whether this session's writes go to it.
-const LOGGING: &str = "SELECT @@SESSION.binlog_format, @@GLOBAL.log_bin, @@SESSION.sql_log_bin";
+/// whether this session's writes go to it. Its own `LIMIT` outranks the session's
+/// `sql_select_limit`, which could return no row.
+const LOGGING: &str = "SELECT @@SESSION.binlog_format, @@GLOBAL.log_bin, @@SESSION.sql_log_bin LIMIT 1";
 
 /// Where the steps run.
 #[derive(Clone, Copy, PartialEq, Eq)]

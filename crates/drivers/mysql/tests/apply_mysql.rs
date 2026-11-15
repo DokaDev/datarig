@@ -551,9 +551,11 @@ async fn just_one_of_identical_rows_is_refused_while_the_binary_log_keeps_statem
     // All of them is the same statement on every server: sent.
     let all = e.plan(&mut c, &b, &[(0, Choice::All)]).await;
     assert!(all.steps.iter().all(|s| !s.one), "{:?}", all.steps);
-    // MIXED logs a statement with LIMIT as rows: sent.
+    // MIXED logs a statement with LIMIT as rows: sent, whatever the session's row limit.
     c.ok("SET SESSION binlog_format = 'MIXED'").await;
+    c.ok("SET SESSION sql_select_limit = 0").await;
     assert_eq!(counts(&c.apply(one.steps, ApplyTx::Commit).await.expect("applied")), [2, 1]);
+    c.ok("SET SESSION sql_select_limit = DEFAULT").await;
     assert_eq!(cells(&c.rows(&sorted).await), [[Some("1"), Some("one")], [Some("1"), Some("same")]]);
 }
 
