@@ -184,6 +184,12 @@ impl App {
         }
     }
 
+    /// The bar's focus is on a count of conditions (`+1`, `2 conditions`): its remove key opens
+    /// them in the dialog.
+    pub(crate) fn bar_on_count(&self) -> bool {
+        self.qbar.focus.filter(|_| self.bar_focused()).is_some_and(|f| self.bar_resolve(f.hit) == BarHit::More)
+    }
+
     /// What the active tab's bar says, when it is a table tab.
     pub(crate) fn bar_model(&self) -> Option<Bar> {
         let t = self.tab();

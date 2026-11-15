@@ -349,8 +349,8 @@ A table tab's query bar with the keys on its conditions (`Space r w`): `←`/`�
 | `Right` | `table.bar.next` | Query bar → next condition | ✓ |
 | `l` | `table.bar.next` | Query bar → next condition | ✓ |
 | `Enter` | `table.bar.open` | Query bar → open this condition (dialog) |  |
-| `x` | `table.bar.remove` | Query bar → take this condition out, and run it again |  |
-| `Delete` | `table.bar.remove` | Query bar → take this condition out, and run it again |  |
+| `x` | `table.bar.remove` | Query bar → take this condition out, and run it again (on a count of conditions: open them in the dialog) |  |
+| `Delete` | `table.bar.remove` | Query bar → take this condition out, and run it again (on a count of conditions: open them in the dialog) |  |
 | `+` | `table.bar.add` | Query bar → add a condition (dialog) |  |
 | `a` | `table.bar.add` | Query bar → add a condition (dialog) |  |
 | `Esc` | `table.bar.leave` | Query bar → back to the grid |  |

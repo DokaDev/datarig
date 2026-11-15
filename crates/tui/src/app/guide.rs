@@ -507,7 +507,12 @@ impl App {
             let shown = list
                 .iter()
                 .copied()
-                .filter(|(id, _)| !(past_rows && *id == "grid.view_cell" || none_pending && *id == "edit.apply"));
+                .filter(|(id, _)| !(past_rows && *id == "grid.view_cell" || none_pending && *id == "edit.apply"))
+                // On a count of conditions the remove key opens them instead.
+                .map(|(id, l)| match id == "table.bar.remove" && self.bar_on_count() {
+                    true => (id, Label::HintOpen),
+                    false => (id, l),
+                });
             out.extend(shown.filter_map(action));
         }
         let leader = parse_keys(LEADER).unwrap_or_default();

@@ -806,3 +806,59 @@ fn the_bar_screens() {
         assert_screen!(format!("query_bar_hidden_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
     }
 }
+
+/// In a theme without backgrounds the chip the bar's keys are on is marked in its text (no
+/// block of the selection, its brackets in the accent), and while the bar has the keys the
+/// grid's cursor looks as it does with another pane focused: one thing reads as focused.
+#[test]
+fn the_bar_focus_in_the_terminal_theme_is_the_only_one() {
+    use ratatui::style::Modifier;
+    let th = datarig_tui::theme::TERMINAL.clone();
+    let mut h = users();
+    filtered(&mut h, "name = 'a'");
+    h.app.theme = std::sync::Arc::new(th.clone());
+    // The look of the cell under the grid's cursor.
+    let cursor = |h: &mut Harness| {
+        let t = h.draw(160, 34);
+        let g = &h.app.tab().grid;
+        let len = match &h.app.tab().results {
+            Results::Rows(rs) => rs.rows.len(),
+            _ => 0,
+        };
+        let r = g.cell_rect(g.row, g.col, len).expect("the cursor's cell is drawn");
+        t.backend().buffer()[(r.x + 1, r.y)].modifier
+    };
+    let unfocused = th.selection_unfocused().add_modifier;
+    assert!(!cursor(&mut h).contains(Modifier::DIM), "the grid has the keys: its own cursor");
+    h.keys(" rw");
+    assert_eq!(h.app.key_context(), Ctx::QueryBar);
+    assert!(cursor(&mut h).contains(unfocused), "the bar has the keys: the grid's cursor as unfocused");
+    let t = h.draw(160, 34);
+    let buf = t.backend().buffer();
+    let r = h.app.layout.qbar.iter().find(|(_, x)| *x == BarHit::Chip(0)).map(|(r, _)| *r).expect("drawn");
+    let (open, text) = (&buf[(r.x, r.y)], &buf[(r.x + 1, r.y)]);
+    assert_eq!((open.symbol(), open.fg), ("[", th.accent));
+    assert!(!open.modifier.contains(Modifier::REVERSED), "no block around the chip");
+    assert!(text.modifier.contains(Modifier::BOLD | Modifier::UNDERLINED), "{:?}", text.modifier);
+    assert!(!text.modifier.contains(Modifier::REVERSED), "no block on the chip");
+    // Back on the grid: its cursor as before.
+    h.key(KeyCode::Esc);
+    assert_eq!(h.app.key_context(), Ctx::Grid);
+    assert!(!cursor(&mut h).contains(Modifier::DIM));
+}
+
+/// On a count of conditions the remove key opens them in the dialog, and the hint says so.
+#[test]
+fn the_remove_key_on_a_count_is_said_to_open() {
+    let mut h = users();
+    filtered(&mut h, "name = 'a' AND id > 1");
+    h.keys(" rw");
+    assert!(h.status(160, 34).contains("x remove"), "{}", h.status(160, 34));
+    // Narrow: the conditions are counted, the keys on the count.
+    h.draw(80, 24);
+    let narrow = h.status(80, 24);
+    assert!(narrow.contains("x open") && !narrow.contains("x remove"), "{narrow}");
+    h.key(KeyCode::Char('x'));
+    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog));
+    assert!(runs(&mut h).is_empty());
+}

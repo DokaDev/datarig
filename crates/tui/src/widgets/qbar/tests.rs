@@ -145,6 +145,14 @@ fn every_width_fits_steps_are_monotone_and_nothing_applied_leaves() {
                 for k in 0..l.level {
                     assert!(at_level(&m, k, width).is_none(), "step {k} fits too: {what}");
                 }
+                // No step is wider than the one before it: none is passed over for a narrower
+                // one that says less.
+                if width == 200 {
+                    let whole = |k: usize| at_level(&m, k, usize::MAX).map(|l| l.width()).unwrap_or(0);
+                    for k in 1..LEVELS.len() {
+                        assert!(whole(k) <= whole(k - 1), "step {k} wider than step {}: {what}", k - 1);
+                    }
+                }
                 if !s.chips.is_empty() {
                     assert!(has(&l, BarHit::More) || has(&l, BarHit::Chip(0)), "conditions left: {what}");
                 }
@@ -198,11 +206,12 @@ fn the_whole_bar_and_its_steps() {
     // The short form's own steps, each as it is drawn.
     let short = |level: usize| text(&at_level(&m, level, 200).unwrap());
     assert!(short(13).ends_with("│ in tx | ⋯"), "the rows go, their state stays: {}", short(13));
-    assert_eq!(short(14), "▼2 + │ ↓2 │ L500 │ in tx ‹ › | ⋯");
-    assert_eq!(short(15), "▼2 + ↓2 L500 in tx ‹ › | ⋯");
-    assert_eq!(short(16), "▼2 + ↓2 L500 in tx | ⋯");
-    assert_eq!(short(17), "▼2 ↓2 L500 in tx | ⋯");
-    assert_eq!(short(19), "▼2 ↓2 L in tx | ⋯");
+    assert_eq!(short(14), "▼2 + │ ↓2 │ L500 │ ~50k rows · in tx ‹ › | ⋯");
+    assert_eq!(short(15), "▼2 + │ ↓2 │ L500 │ in tx ‹ › | ⋯");
+    assert_eq!(short(16), "▼2 + ↓2 L500 in tx ‹ › | ⋯");
+    assert_eq!(short(17), "▼2 + ↓2 L500 in tx | ⋯");
+    assert_eq!(short(18), "▼2 ↓2 L500 in tx | ⋯");
+    assert_eq!(short(20), "▼2 ↓2 L in tx | ⋯");
     // The keys' letters underlined: W̲HERE O̲RDER BY L̲IMIT c̲ols r̲ows A̲dvanced.
     let ul: Vec<String> =
         whole.segs().filter_map(|g| g.ul.map(|i| g.text.chars().nth(i).unwrap().to_string())).collect();
@@ -294,7 +303,7 @@ fn at_80_columns_the_short_form_keeps_every_part_it_can() {
     let l = layout(&quiet, NARROW);
     assert_eq!(text(&l), "WHERE  2 conditions  + │ ORDER ↓2 │ LIMIT 500 | ⋯");
     let hidden = Spec { hidden: 1, ..applied.clone() };
-    assert_eq!(text(&layout(&bar(&w, &hidden), NARROW)), "▼2 + │ ↓2 │ L500 │ 6/7 │ in tx ‹ › | ⋯");
+    assert_eq!(text(&layout(&bar(&w, &hidden), NARROW)), "▼2 + │ ↓2 │ L500 │ 6/7 │ ~50k rows · in tx ‹ › | ⋯");
     let failed = Spec { failed: true, hidden: 1, ..applied.clone() };
     assert_eq!(text(&layout(&bar(&w, &failed), NARROW)), "failed │ ▼2 + │ ↓2 │ L500 │ 6/7 │ in tx ‹ › | ⋯");
     // At 120 columns (the pane with the explorer) `6/7 cols` keeps its word: the conditions
@@ -322,7 +331,63 @@ fn a_limit_typed_shows_selected_until_a_key_replaces_it() {
     let mut m = bar(&w, &specs()[1]);
     m.limit = LimitM::Editing { text: "500".into(), cursor: 3, selected: true };
     let l = layout(&m, 200);
-    assert!(l.segs().any(|g| g.tone == Tone::FieldSelected && g.text == "500 "));
+    let field = l.segs().find(|g| g.tone == Tone::FieldSelected).unwrap();
+    assert_eq!((field.text.as_str(), field.caret), ("500", Some(2)), "the cap's columns, the cursor on its last");
+}
+
+/// The field opening with the cap in it takes the cap's columns: the bar does not move, at any
+/// width, in the long forms and the short ones.
+#[test]
+fn the_limit_field_opens_without_moving_the_bar() {
+    for lang in [Lang::En, Lang::Ko] {
+        let w = Words::new(lang);
+        for (k, s) in specs().iter().enumerate().filter(|(_, s)| s.limit == Some(500)) {
+            let applied = bar(&w, s);
+            let mut editing = applied.clone();
+            editing.limit = LimitM::Editing { text: "500".into(), cursor: 3, selected: true };
+            for width in 30..=200 {
+                let (a, e) = (layout(&applied, width), layout(&editing, width));
+                let what = format!("{lang:?} spec {k} width {width}: {} / {}", text(&a), text(&e));
+                assert_eq!((a.level, a.width()), (e.level, e.width()), "{what}");
+                let others = |l: &Line| {
+                    l.segs().filter(|g| g.hit != Some(BarHit::Limit)).map(|g| g.text.clone()).collect::<Vec<_>>()
+                };
+                assert_eq!(others(&a), others(&e), "{what}");
+            }
+        }
+    }
+}
+
+/// The bar at 80x24 with the explorer open and a hidden column, the result read whole (500
+/// rows, one page): the short form keeps the rows' words, it does not leave half the bar blank.
+#[test]
+fn at_80_columns_a_hidden_column_keeps_the_rows() {
+    let w = Words::new(Lang::En);
+    let mut m = bar(&w, &Spec { hidden: 1, ..specs()[1].clone() });
+    if let Some(r) = m.rows.as_mut() {
+        (r.state, r.notes, r.arrows) = (None, Vec::new(), None);
+        (r.full, r.mid, r.short) = ("500 rows".into(), "500 rows".into(), "500 rows".into());
+    }
+    let l = layout(&m, NARROW);
+    assert_eq!(text(&l), "▼2 + │ ↓2 │ L500 │ 6/7 │ 500 rows | ⋯");
+    assert!(has(&l, BarHit::Rows));
+}
+
+/// Without backgrounds the focus is in the text alone: no block of the selection behind it, the
+/// brackets in the accent.
+#[test]
+fn the_focus_without_backgrounds_is_in_the_text() {
+    let th = theme::cur();
+    let base = Style::new().fg(th.fg_muted);
+    let bracket = focused(base, Tone::Bracket, false);
+    assert_eq!((bracket.fg, bracket.bg), (Some(th.accent), None));
+    assert!(!bracket.add_modifier.contains(Modifier::REVERSED));
+    let text = focused(Style::new().fg(th.fg), Tone::Chip, false);
+    assert_eq!((text.fg, text.bg), (Some(th.fg), None));
+    assert!(text.add_modifier.contains(Modifier::BOLD | Modifier::UNDERLINED));
+    assert!(!text.add_modifier.contains(Modifier::REVERSED));
+    // With backgrounds: the selection.
+    assert_eq!(focused(base, Tone::Chip, true).bg, th.selection.bg);
 }
 
 /// The bar while its `LIMIT` is typed in, at every width: the field is drawn (at most a few
@@ -369,9 +434,10 @@ fn the_paging_state_stays_in_the_short_forms() {
             let l = at_level(&m, level, 200).unwrap();
             let g = l
                 .segs()
-                .find(|g| g.hit == Some(BarHit::Rows))
+                .find(|g| g.hit == Some(BarHit::Rows) && !g.text.contains("rows"))
                 .unwrap_or_else(|| panic!("{state} at {level}: {}", text(&l)));
-            assert!(crate::text::width(&g.text) <= STATE_MAX, "{}", g.text);
+            let mark = g.text.trim_start_matches(" \u{00b7} ");
+            assert!(crate::text::width(mark) <= STATE_MAX, "{}", g.text);
             assert_eq!(g.tone, if warn { Tone::Warn } else { Tone::Muted });
         }
     }

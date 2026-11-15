@@ -1412,7 +1412,9 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             );
         }
     };
-    let focused = app.focus == Focus::Results;
+    // The keys on the bar: the grid's cursor and selection look as they do with another pane
+    // focused, so one thing at a time reads as focused.
+    let focused = app.focus == Focus::Results && !app.bar_focused() && !app.bar_editing();
     // The key marks of the result's columns, from the profile's key cache (none while it is
     // not known).
     let keys = Some(app.tab_keys(app.tab()));

@@ -238,7 +238,7 @@
 "action.table.bar.prev" = "Query bar → previous condition"
 "action.table.bar.next" = "Query bar → next condition"
 "action.table.bar.open" = "Query bar → open this condition (dialog)"
-"action.table.bar.remove" = "Query bar → take this condition out, and run it again"
+"action.table.bar.remove" = "Query bar → take this condition out, and run it again (on a count of conditions: open them in the dialog)"
 "action.table.bar.add" = "Query bar → add a condition (dialog)"
 "action.table.bar.leave" = "Query bar → back to the grid"
 "action.table.bar.limit_apply" = "Query bar → run it again with this limit"
