@@ -42,7 +42,7 @@ pub(crate) fn frame(buf: &mut Buffer, rect: Rect, title: &[(String, Style)], hin
     let th = theme::cur();
     clear_overlay(rect, buf);
     fill(buf, rect, th.base());
-    Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(th.border)).render(rect, buf);
+    Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(th.accent)).render(rect, buf);
     let end = rect.right().saturating_sub(2);
     for (parts, y) in [(title, rect.y), (hint, rect.bottom() - 1)] {
         let mut x = rect.x + 2;
