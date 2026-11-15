@@ -21,6 +21,8 @@ const SCREENS: &[(&str, &str)] = &[
     ("inspector", "it__ui_snapshots__inspector_row_en_160x45"),
     ("grid-search", "it__ui_snapshots__grid_search_matches_terminal_120x40"),
     ("table-sort", "it__flows_table_sort__table_sort_text_en_120x30"),
+    ("query-bar", "it__flows_query_bar__query_bar_applied_en_120x34"),
+    ("condition-popup", "it__flows_query_popups__query_popup_condition_en_120x34"),
     ("filter-dialog", "it__flows_filter_values__filter_values_column_en_120x34"),
     ("filter-sql", "it__flows_filter_sql__filter_sql_open_en_120x34"),
     ("column-popup", "it__flows_column_popup__column_popup_cell_en_80x24"),
