@@ -1364,3 +1364,29 @@ fn the_where_list_removes_from_the_draft_it_shows() {
     let s = &sent[0][0];
     assert!(s.contains("name = 'a'") && !s.contains("name = 'b'") && !s.contains("id > 0"), "{s}");
 }
+
+/// A value of the list focused at 120x50, then the terminal made 80x24, where the column's
+/// conditions leave no room for the list (no line for a value, with 12; none at all, with 14):
+/// the keys leave it and `Space` ticks nothing unseen, in the popup and in the whole dialog.
+#[test]
+fn values_hidden_by_a_resize_are_left() {
+    for (n, advanced) in [(12, false), (14, false), (12, true), (14, true)] {
+        let terms: Vec<String> = (1..=n).map(|i| format!("id > {i}")).collect();
+        let all = terms.join(" AND ");
+        let mut h = users_where(&all);
+        open_chip(&mut h, 0);
+        if advanced {
+            h.keys("A");
+        }
+        // Past the conditions and `+ add condition`, onto the list's first value.
+        for _ in 0..=n {
+            h.draw(120, 50);
+            h.key(KeyCode::Down);
+        }
+        let screen = h.screen(120, 50);
+        assert!(screen.contains("\u{25b8} [ ] 0"), "on the list's first value: {screen}");
+        h.draw(80, 24);
+        h.key(KeyCode::Char(' '));
+        assert_eq!(draft_where(&h), all, "{n}, advanced: {advanced}: nothing unseen ticked");
+    }
+}

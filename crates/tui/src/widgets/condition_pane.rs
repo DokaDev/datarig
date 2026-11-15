@@ -47,7 +47,7 @@ pub(crate) struct PaneOut {
     pub(crate) picker_at: Option<(u16, u16)>,
     /// The first value of the list drawn.
     pub(crate) values_scroll: usize,
-    /// The values were drawn: there was room for their list.
+    /// The values were drawn: there was room for their list (a value at least).
     pub(crate) values_drawn: bool,
     /// The first line of the conditions drawn.
     pub(crate) rows_scroll: usize,
@@ -298,11 +298,10 @@ pub(crate) fn draw_condition_pane(
         if let Some(v) = view
             && y + 3 < sort_y
         {
-            out.values_scroll = {
-                let area = Rect::new(px, y + 2, right - px, sort_y - 1 - (y + 2));
-                draw_values(app, d, v, area, opts.compact, buf, hits)
-            };
-            out.values_drawn = true;
+            let area = Rect::new(px, y + 2, right - px, sort_y - 1 - (y + 2));
+            out.values_scroll = draw_values(app, d, v, area, opts.compact, buf, hits);
+            // Drawn with a line for a value under its heading.
+            out.values_drawn = area.height > 1;
         }
         // The sort line, on the pane's last row.
         if d.focus == DialogFocus::Sort {

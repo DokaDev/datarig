@@ -491,11 +491,7 @@ fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u1
         d.scroll = scroll;
         d.values_scroll = out.values_scroll;
         d.rows_scroll = out.rows_scroll;
-        // Values not drawn are not reached by the keys.
-        d.values_drawn = out.values_drawn;
-        if !out.values_drawn {
-            d.listed = 0;
-        }
+        d.set_values_drawn(out.values_drawn);
         d.hover = lit.map(|(h, _)| h);
         d.press.drawn(top, now);
     }
