@@ -2,9 +2,10 @@
 
 A table tab (opened from the explorer) reads its table with a `WHERE` condition, an `ORDER BY`
 and a `LIMIT` that run on the server, over the whole table: the rows you get are the server's
-answer. The [query bar](#the-query-bar) on top of the rows says what is applied; a click on one of
-its parts (or its key) opens a small [popup](#popups) under it to change that part, and a click
-on a column's header opens that column's popup [from the grid](#from-the-grid), as do keys on a
+answer. The [query bar](#the-query-bar) on top of the rows says what is applied; a click on a
+condition, `WHERE`, `ORDER BY`, the columns or the rows (or its key) opens a small
+[popup](#popups) under it to change that part (the limit is typed in the bar itself, and the
+arrows page), and a click on a column's header opens that column's popup [from the grid](#from-the-grid), as do keys on a
 cell. [Advanced](#advanced), the filter dialog, holds every part at once, with the SQL it sends.
 A query's rows have no such bar: filter and sort them in the statement.
 
@@ -20,8 +21,13 @@ A table tab's results pane has a query bar on its first line. It says what is ap
 order of the statement:
 
 ```text
-WHERE [status = 'shipped' ×] [total > 1000 ×] + │ ORDER BY ↓ total + │ LIMIT 500 │ 6/7 cols │ 1–500 of ~50,001 rows ‹ ›  ⋯ Advanced
+WHERE  status = 'shipped' ×   total > 1000 ×  + │ ORDER BY ↓ total + │ LIMIT 500 │ 6/7 cols │ 1–500 of ~50,001 rows ‹ ›  ⋯ Advanced
 ```
+
+Each chip is drawn on a background of its own (in brackets on the terminal theme, which has no
+backgrounds). The letter of each part's key is underlined: `W` of `WHERE`, `O` of `ORDER BY`,
+`L` of `LIMIT`, `c` of `cols`, `r` of `rows` and `A` of `Advanced`, as `Space r w`, `Space r o`,
+`Space r l`, `Space r c`, `Space r r` and `Space r A` open them.
 
 - `WHERE`: each condition is a chip with the text that is sent; its `×` takes it out and runs
   the others as they were written, and `+` adds one. A condition datarig does not read as one
@@ -32,7 +38,10 @@ WHERE [status = 'shipped' ×] [total > 1000 ×] + │ ORDER BY ↓ total + │ L
 - The columns: how many there are (`7 cols`), and how many are shown once some are
   [hidden](#hidden-columns) (`6/7 cols`).
 - The rows of the result shown (`~` an estimate, `500+` while not known, `# count` when `#`
-  can count them), with the page arrows.
+  can count them), with the page arrows, and notes on them: `planner` when the number is the
+  server's estimate, `counted now` for a count taken apart from the pages read, `estimating…` or
+  `counting…` while one runs, and how the rows are paged (`in tx`, `paging closed`,
+  `fetching stopped`, `first page only`).
 - `⋯ Advanced` opens the [whole dialog](#advanced).
 
 A spinner goes first while the tab's query runs, and `failed`, `cancelled`, `unapplied` or
@@ -41,14 +50,19 @@ A spinner goes first while the tab's query runs, and `failed`, `cancelled`, `una
 
 In a narrower window the bar says less in steps (`⋯` alone, shorter rows, `+1` for the
 conditions and keys after the first, `2 conditions`, `ORDER ↓2`), then a short form
-(`failed │ ▼2 + │ ↓2 │ L500 │ 6/7 │ ‹ › ⋯`) and at last marks only (`▼2 ↓2 L ◌1 ⋯`); what is
+(`failed │ ▼2 + │ ↓2 │ L500 │ 6/7 │ ‹ › ⋯`) and at last marks only (`▼2 ↓2 L ⋯`); what is
 applied always keeps a mark.
 
 Keys: `Space r w` puts the keys on the conditions (`←`/`→` move, `Enter` opens one in its
-popup, `x` takes it out and runs, `+` adds one, `Esc` goes back to the grid), `Space r o` opens
-the order popup, `Space r l` types the limit in the bar (the cap opens selected: the first digit
-replaces it; `Enter` runs it, `Esc` leaves it as it was, empty means no cap), `Space r c` opens
-the columns popup, `Space r r` the rows popup, and `Space r A` opens Advanced.
+popup, `x` takes it out and runs, on a count of conditions left out opening their list, `+`
+adds one, `Esc` goes back to the grid), `Space r o` opens the order popup, `Space r l` types the
+limit in the bar (digits only, the cap opening selected so that the first digit replaces it;
+`Enter` runs it, and nothing when the cap is the same; `Esc` leaves it as it was; empty means no
+cap; a cap refused is said on the status line and the field stays), `Space r c` opens the
+columns popup, `Space r r` the rows popup, and `Space r A` opens Advanced.
+
+A change on the bar (a chip's `×`, `x`, a new limit) is refused, and says so, while the tab is
+running; over edits not saved yet it asks first, as any run does.
 
 On a table tab the result strip (the result tabs and the connection,
 `local-pg / datarig.shop.orders  127.0.0.1:55432`, shorter as the window narrows) is on the
@@ -56,7 +70,7 @@ results pane's top border, above the bar.
 
 ## Popups
 
-A click on a part of the bar, or its key, opens a small popup under that part:
+A click on one of these parts of the bar, or its key, opens a small popup under that part:
 
 | Part of the bar | Key | The popup |
 |---|---|---|
@@ -70,8 +84,8 @@ A click on a part of the bar, or its key, opens a small popup under that part:
 Nothing is sent before `Enter`, and in every popup:
 
 - `Enter` applies what the popup holds and runs the table, as Advanced's [`Enter`](#applying)
-  does (a list of columns or of conditions picks or opens its line instead, and the rows popup
-  does its item);
+  does (the column list of a new condition and the list of conditions pick or open their line
+  instead, and the rows popup does its item);
 - `Esc`, or a click outside, closes it without applying;
 - `u` (or `Ctrl+Z`) undoes a step, and with none left the change applied last, as in
   [Advanced](#undo-and-history);
@@ -433,8 +447,9 @@ yours, dimmed (`+ id`), or `order not unique` when the table has none that make 
 
 `Limit` caps the rows the tab reads: a whole number of rows, in digits; blank means no cap. `0`, a
 number above 9,223,372,036,854,775,807 or anything that is not a number is refused when you
-apply, the field underlined. A new limit runs the table again from its first page, and once the
-rows reach it the query bar says `LIMIT 100` and the rows it holds. `Space r l` (or a click on
+apply, the field underlined. A new limit runs the table again from its first page; the query
+bar says `LIMIT 100`, and once the rows reach it the next page's arrow is dimmed and the
+[rows popup](#the-rows-popup) says `limit 100`. `Space r l` (or a click on
 `LIMIT` in the query bar) types the limit in the bar itself: digits, `Enter` runs it, `Esc`
 leaves it as it was, empty means no cap.
 

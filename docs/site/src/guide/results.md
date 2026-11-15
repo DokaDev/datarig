@@ -84,8 +84,9 @@ cells are tinted.
 
 A table tab (opened from the explorer) reads its table with a `WHERE` condition and an
 `ORDER BY` run on the server, and a `LIMIT` its pages stop at. The query bar on top of its rows
-says what is applied, and a click on a part of it opens a small popup to change that part; a
-click on a column's header, or `F`, opens that column's popup (its conditions, values and sort).
+says what is applied, and a click on a condition, the order, the columns or the rows opens a
+small popup to change that part (the limit is typed in the bar itself); a click on a column's
+header, or `F`, opens that column's popup (its conditions, values and sort).
 `s` and `S` sort by the cursor's column, `=` and `!` keep or exclude the value of its cell, `C`
 hides the column, and `f` opens Advanced, the filter dialog with every part at once. See
 [Filtering and sorting a table](filtering.md).

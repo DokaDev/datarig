@@ -58,8 +58,9 @@ graph, a treemap, a timeline, the row flow and more.
 ![A plan as a tree, its summary, then as an icicle, a flame graph and a treemap](https://dokadev.github.io/datarig/demo/plans.gif)
 
 **Filter and sort a table on the server.** A query bar over a table's rows shows its WHERE as
-chips, its ORDER BY and its LIMIT; a click on a chip, on a part of the bar or on a column's header
-opens a small popup with the column's values, counted exactly on the server when you ask.
+chips, its ORDER BY and its LIMIT; a click on a chip or on a column's header opens a small popup
+with the column's conditions and values, counted exactly on the server when you ask, and the
+bar's other parts open popups of their own.
 Advanced holds every part at once with its SQL, keys on the grid keep or exclude a cell's value
 and hide columns, and what runs is the text you see, checked first.
 [Filtering and sorting a table](https://dokadev.github.io/datarig/guide/filtering.html)
