@@ -50,13 +50,13 @@ A spinner goes first while the tab's query runs, and `failed`, `cancelled`, `una
 
 In a narrower window the bar says less in steps (`⋯` alone, shorter rows, `+1` for the
 conditions and keys after the first, `2 conditions`, `ORDER ↓2`), then a short form
-(`failed │ ▼2 + │ ↓2 │ L500 │ 6/7 │ ‹ › ⋯`) and at last marks only (`▼2 ↓2 L ⋯`); what is
-applied always keeps a mark.
+(`failed │ ▼2 + │ ↓2 │ L500 │ 6/7 │ ‹ › ⋯`) and at last marks only (`▼2 ↓2 L in tx | ⋯`, the paging state kept); what
+is applied always keeps a mark.
 
 Keys: `Space r w` puts the keys on the conditions (`←`/`→` move, `Enter` opens one in its
 popup, `x` takes it out and runs, on a count of conditions left out opening their list, `+`
 adds one, `Esc` goes back to the grid), `Space r o` opens the order popup, `Space r l` types the
-limit in the bar (digits only, the cap opening selected so that the first digit replaces it;
+limit in the bar (digits only when typed, a paste checked on `Enter`; the cap opening selected so that the first digit replaces it;
 `Enter` runs it, and nothing when the cap is the same; `Esc` leaves it as it was; empty means no
 cap; a cap refused is said on the status line and the field stays), `Space r c` opens the
 columns popup, `Space r r` the rows popup, and `Space r A` opens Advanced.
