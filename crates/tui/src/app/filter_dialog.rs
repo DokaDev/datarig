@@ -169,6 +169,8 @@ pub(crate) struct DialogHits {
     pub(crate) add: Rect,
     pub(crate) sort: Vec<(Rect, Option<datarig_core::query::Dir>)>,
     pub(crate) picker: Vec<(Rect, usize)>,
+    /// The open operator picker's box, border included.
+    pub(crate) picker_box: Rect,
     pub(crate) chips: Vec<(Rect, usize)>,
     pub(crate) chip_removes: Vec<(Rect, usize)>,
     pub(crate) keys: Vec<(Rect, usize)>,
@@ -182,6 +184,10 @@ pub(crate) struct DialogHits {
     pub(crate) open_sql: Rect,
     pub(crate) apply: Rect,
     pub(crate) cancel: Rect,
+    /// A popup's box, border included (a press outside it closes the popup).
+    pub(crate) frame: Rect,
+    /// A popup's `⋯ Advanced`.
+    pub(crate) advanced: Rect,
 }
 
 /// A part of the dialog the pointer can be over, as [`DialogHits`] keeps where it was drawn.
@@ -221,6 +227,8 @@ pub(crate) enum DialogHit {
     OpenSql,
     Apply,
     Cancel,
+    /// A popup's `⋯ Advanced`.
+    Advanced,
 }
 
 impl DialogHit {
@@ -258,6 +266,7 @@ impl DialogHits {
             (self.open_sql, DialogHit::OpenSql),
             (self.apply, DialogHit::Apply),
             (self.cancel, DialogHit::Cancel),
+            (self.advanced, DialogHit::Advanced),
         ];
         find(&self.chip_removes)
             .map(DialogHit::ChipRemove)
@@ -298,6 +307,7 @@ impl DialogHits {
             DialogHit::OpenSql => drawn(self.open_sql),
             DialogHit::Apply => drawn(self.apply),
             DialogHit::Cancel => drawn(self.cancel),
+            DialogHit::Advanced => drawn(self.advanced),
         }
     }
 
@@ -578,6 +588,13 @@ impl FilterDialog {
 
     /// The focus kept where the draft still has it: a term gone, a chip or key past the last.
     pub(crate) fn settle(&mut self) {
+        // A condition popup stays on its column.
+        if let Some(view::PopupKind::Condition { col }) = self.popup_kind()
+            && self.column().is_none_or(|c| c.name != *col)
+        {
+            let col = col.clone();
+            self.select_column(&col);
+        }
         let terms = self.draft.where_.terms().len();
         let chips = self.draft.where_.chips().len();
         let keys = self.draft.order.len();
@@ -749,6 +766,28 @@ impl App {
             d.focus = if d.draft.order.is_empty() { DialogFocus::Sort } else { DialogFocus::Order(0) };
         }
         self.overlays.push(Overlay::FilterDialog(Box::new(d)));
+    }
+
+    /// The filter dialog of the active table tab, with the query its next run sends as its
+    /// draft, shown as popup `kind` by `anchor`. A condition popup is on its column, its keys
+    /// on the condition whose text is `term` (the first of the column's when none is), else on
+    /// `+ add condition`.
+    pub(super) fn open_filter_popup(&mut self, kind: view::PopupKind, anchor: view::Anchor, term: Option<&str>) {
+        let id = self.tab().id;
+        let Some(q) = self.table_query(id).map(|tq| tq.draft.clone()) else { return };
+        let column = match &kind {
+            view::PopupKind::Condition { col } => Some(col.clone()),
+            _ => None,
+        };
+        self.open_filter_dialog_with(id, &q, column.as_deref(), false, View::Popup { kind, anchor });
+        let Some(d) = self.filter_dialog_mut() else { return };
+        if column.is_none() {
+            return;
+        }
+        let rows = d.rows();
+        let same = rows.iter().copied().find(|&t| term.is_some() && d.draft.where_.terms()[t].text.as_deref() == term);
+        let focus = same.or(rows.first().copied()).map_or(DialogFocus::Add, DialogFocus::Op);
+        d.focus_on(focus);
     }
 
     /// How many rows table tab `id` holds of its query; `None` when it holds none.

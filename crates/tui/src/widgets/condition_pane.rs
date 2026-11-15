@@ -45,6 +45,10 @@ pub(crate) struct PaneOut {
     pub(crate) values_scroll: usize,
     /// The first line of the conditions drawn.
     pub(crate) rows_scroll: usize,
+    /// Where the conditions and `+ add condition` are when they do not fit, with no heading to
+    /// say it on (the border names the column): the first and last lines drawn (from 1) and
+    /// how many there are.
+    pub(crate) rows_window: Option<(usize, usize, usize)>,
 }
 
 /// An operator as the dialog names it.
@@ -150,10 +154,15 @@ pub(crate) fn draw_condition_pane(
         let top = rows_top(&rows, d.focus, d.rows_scroll, room);
         out.rows_scroll = top;
         // Where they are, on the `Filter` heading's right (no heading, no cue).
-        if lines > room && room > 0 && !opts.title_in_border {
-            let cue = format!("{}-{}/{lines}", top + 1, (top + room).min(lines));
-            let w = width(&cue) as u16;
-            put(buf, right.saturating_sub(w), pane_rows_y + 2, &cue, usize::from(w), muted);
+        if lines > room && room > 0 {
+            let (from, to) = (top + 1, (top + room).min(lines));
+            if opts.title_in_border {
+                out.rows_window = Some((from, to, lines));
+            } else {
+                let cue = format!("{from}-{to}/{lines}");
+                let w = width(&cue) as u16;
+                put(buf, right.saturating_sub(w), pane_rows_y + 2, &cue, usize::from(w), muted);
+            }
         }
         for &t in rows.iter().skip(top) {
             if y >= sort_y {
@@ -208,6 +217,10 @@ pub(crate) fn draw_condition_pane(
                 _ => 1,
             };
             let values = row.field_texts(d.dialect, &d.column_info(&row.col));
+            // The condition the last refusal points into: its values underlined.
+            let refused = d.mark.as_ref().is_some_and(|m| m.term(t));
+            let text_style =
+                if refused { field.fg(th.error).add_modifier(Modifier::UNDERLINED | Modifier::BOLD) } else { field };
             let and = format!(" {} ", i18n.label(Label::TableDialogAnd));
             let each = if n == 2 { vw.saturating_sub(width(&and) as u16) / 2 } else { vw };
             let mut fx = vx;
@@ -220,7 +233,7 @@ pub(crate) fn draw_condition_pane(
                     let cx = input.render(
                         Rect::new(r.x + 1, y, r.width.saturating_sub(2), 1),
                         buf,
-                        field,
+                        text_style,
                         focused,
                         false,
                         None,
@@ -234,7 +247,7 @@ pub(crate) fn draw_condition_pane(
                     } else {
                         row.input_text(d.dialect, &d.column_info(&row.col))
                     };
-                    put(buf, r.x + 1, y, &text, usize::from(r.width.saturating_sub(2)), field);
+                    put(buf, r.x + 1, y, &text, usize::from(r.width.saturating_sub(2)), text_style);
                 }
                 hits.values.push((r, t, k));
                 fx += each;
@@ -378,6 +391,7 @@ pub(crate) fn draw_op_picker(
     let r = Rect::new(x, y, w.min(right.saturating_sub(x) + 1), h);
     fill(buf, r, th.base());
     Block::bordered().border_type(BorderType::Rounded).border_style(accent).render(r, buf);
+    hits.picker_box = r;
     let rows = usize::from(r.height.saturating_sub(2 + u16::from(reason.is_some())));
     let first = (at + 1).saturating_sub(rows);
     let entries = labels.iter().zip(ops.iter()).enumerate().skip(first).take(rows);

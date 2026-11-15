@@ -851,5 +851,14 @@ pub(crate) fn draw(app: &App, m: &Bar, area: Rect, buf: &mut Buffer) -> (Hits, O
     (hits, cursor, (l.level, l.cut))
 }
 
+/// Draw the open filter dialog's popup inside `bounds` (the results pane); returns the hardware
+/// cursor.
+pub(crate) fn draw_popup_view(app: &mut App, bounds: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    condition::draw_condition_popup(app, bounds, buf)
+}
+
+pub(crate) mod condition;
+pub(crate) mod frame;
+
 #[cfg(test)]
 mod tests;

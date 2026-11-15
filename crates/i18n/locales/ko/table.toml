@@ -253,6 +253,8 @@
 "table.dialog.hint.tick" = "선택 (둘 이상: 목록에 포함)"
 "table.dialog.hint.count" = "정확히 세기"
 "table.dialog.hint.values" = "값 목록"
+"table.dialog.hint.apply" = "적용"
+"table.dialog.hint.cancel" = "취소"
 "table.dialog.values" = "값"
 "table.dialog.values.loaded" = "~ 불러온 {count}행에서 센 수"
 "table.dialog.values.loaded_earlier" = "~ 센 수: 불러온 {count}행 + 이전 불러오기"

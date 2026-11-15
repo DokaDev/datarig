@@ -255,6 +255,8 @@
 "table.dialog.hint.tick" = "tick (two or more: in list)"
 "table.dialog.hint.count" = "count exactly"
 "table.dialog.hint.values" = "values"
+"table.dialog.hint.apply" = "apply"
+"table.dialog.hint.cancel" = "cancel"
 "table.dialog.values" = "Values"
 "table.dialog.values.loaded" = { one = "~ count in the {count} loaded row", other = "~ count in the {count} loaded rows" }
 "table.dialog.values.loaded_earlier" = { one = "~ count: {count} loaded row + an earlier load", other = "~ count: {count} loaded rows + an earlier load" }

@@ -59,13 +59,18 @@ impl<T: Copy + PartialEq> Press<T> {
     pub fn press(&mut self, kind: MouseEventKind, hit: Option<T>, now: Instant) -> Option<T> {
         match kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                let ready = self.shown_at.is_some_and(|t| now.saturating_duration_since(t) >= ARM_DELAY);
+                let ready = self.ready(now);
                 self.armed = hit.filter(|_| ready);
                 None
             }
             MouseEventKind::Up(MouseButton::Left) => self.armed.take().filter(|a| hit == Some(*a)),
             _ => None,
         }
+    }
+
+    /// A press at `now` counts: the dialog has been on top for [`ARM_DELAY`].
+    pub fn ready(&self, now: Instant) -> bool {
+        self.shown_at.is_some_and(|t| now.saturating_duration_since(t) >= ARM_DELAY)
     }
 
     /// The pointer moved with no button held: a press is not in progress (its release was lost).

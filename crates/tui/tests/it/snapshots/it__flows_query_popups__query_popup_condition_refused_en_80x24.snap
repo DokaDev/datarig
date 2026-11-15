@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_query_popups.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 RO ×  2 shop.users * RO ×                  "
+"│  ＋ New connection   │╭ [Result 1]  Chart  Messages     local-pg  READ-ONLY  ╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ refused │ ▼2 + │ 3 rows                            ⋯ │"
+"│  ▾ ●   local-pg RO   ││╭─ name  text ───────────────────────────────────────╮│"
+"│    ▾ datarig default │││ ▸  =          ▾    n1x                           × ││"
+"│      ▸ analytics     │││   + add condition                                  ││"
+"│      ▸ public        │││                                                    ││"
+"│      ▾ shop          │││ Values  containing “n1x”                   # exact ││"
+"│        ▾ Tables      │││   no value listed matches                          ││"
+"│          ▸ users     │││                                                    ││"
+"│▾ Environments 1      │││   Sort   (•) none   ( ) ↑ asc   ( ) ↓ desc         ││"
+"│    ○ Default rules (…││╰─ Filter refused: my_fn: not known to … ⋯ Advanced ─╯│"
+"│  ▸ ○ ro  read-only ·…││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││ Filter refused: my_fn: not known to be free of side  │"
+"│                      ││ effects (read-only connection)                       │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" local-pg  READ-ONLY  │ Filter refused: my_fn: not k… (read-only connection) EN "

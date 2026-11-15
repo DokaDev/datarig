@@ -677,6 +677,7 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (FilterDialog, "X", "filter.clear_all"),
     (FilterDialog, "Q", "filter.sql"),
     (FilterDialog, "#", "filter.count"),
+    (FilterDialog, "A", "filter.advanced"),
     (FilterDialog, "ctrl+r", "table.filter.history"),
     (FilterDialogText, "enter", "filter.apply"),
     (FilterDialogText, "esc", "filter.cancel"),

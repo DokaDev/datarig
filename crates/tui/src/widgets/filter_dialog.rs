@@ -59,7 +59,7 @@ pub(super) fn key(app: &App, a: DialogAction) -> String {
 /// `ty` as the column list writes it: a PostgreSQL type by its short name where it has one
 /// (`timestamptz`, `varchar(20)`, `float8`), so a cut does not take what tells types apart;
 /// anything else as written.
-fn short_type(d: Dialect, ty: &str) -> String {
+pub(crate) fn short_type(d: Dialect, ty: &str) -> String {
     if d != Dialect::Postgres {
         return ty.to_string();
     }
@@ -92,9 +92,25 @@ fn short_type(d: Dialect, ty: &str) -> String {
     ty.to_string()
 }
 
-/// Draw the filter dialog over `area` (the whole screen); returns the hardware cursor (the
-/// focused text field's).
-pub(crate) fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+/// Draw the filter dialog as it is shown: the whole dialog over `area` (the whole screen), or a
+/// popup by the query bar inside the results pane's border (the screen above the status line
+/// where the pane is too small). Returns the hardware cursor (the focused text field's).
+pub(crate) fn draw(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    if app.filter_dialog().is_some_and(FilterDialog::is_popup) {
+        let r = app.layout.results.intersection(area);
+        let pane = Rect::new(r.x + 1, r.y + 1, r.width.saturating_sub(2), r.height.saturating_sub(2));
+        let bounds = match pane.width < 40 || pane.height < 8 {
+            true => Rect { height: area.height.saturating_sub(1), ..area },
+            false => pane,
+        };
+        return crate::widgets::qbar::draw_popup_view(app, bounds, buf);
+    }
+    draw_filter_dialog(app, area, buf)
+}
+
+/// Draw the whole filter dialog over `area` (the whole screen); returns the hardware cursor
+/// (the focused text field's).
+fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
     // The selected column's values as things are now.
     let view = app.filter_dialog_list();
     let d = app.filter_dialog()?;
@@ -805,6 +821,18 @@ pub(crate) fn wrapped_byte_at(input: &TextInput, r: Rect, focused: bool, x: u16,
 
 /// The keys of the focused part of the dialog, at most five, in the hint line.
 fn draw_hints(app: &App, d: &FilterDialog, view: Option<&ValuesView>, x: u16, y: u16, w: usize, buf: &mut Buffer) {
+    let mut cx = x;
+    for (text, style) in hint_parts(app, d, view, w) {
+        cx += put(buf, cx, y, &text, width(&text), style);
+    }
+}
+
+/// The hint line of the focused part of the dialog in `w` columns, as parts and their styles:
+/// a condition waiting for its value said first, then the keys, at most five, as many as fit
+/// whole (a popup: those that apply and cancel last and kept, the focused part's before them
+/// as many as fit; no `Tab`, it has no other part to go to); a value that is not ticked says
+/// why instead.
+pub(crate) fn hint_parts(app: &App, d: &FilterDialog, view: Option<&ValuesView>, w: usize) -> Vec<(String, Style)> {
     let th = theme::cur();
     let i18n = &app.i18n;
     let l = |k: &str, label: Label| (k.to_string(), i18n.label(label).to_string());
@@ -852,8 +880,7 @@ fn draw_hints(app: &App, d: &FilterDialog, view: Option<&ValuesView>, x: u16, y:
             // A value that is not ticked says why instead.
             if let Some(Err(why)) = view.and_then(|v| v.items.get(i)).map(|it| &it.tick) {
                 let n = app.not_ticked_notice(why);
-                put(buf, x, y, &n.render(i18n), w, Style::new().fg(level_color(n.level)));
-                return;
+                return vec![(clip(&n.render(i18n), w), Style::new().fg(level_color(n.level)))];
             }
             vec![
                 l("Space", Label::TableDialogHintTick),
@@ -910,30 +937,50 @@ fn draw_hints(app: &App, d: &FilterDialog, view: Option<&ValuesView>, x: u16, y:
             l("Tab", Label::TableDialogHintNextArea),
         ],
     };
-    items.truncate(5);
-    let mut cx = x;
-    let end = x + w as u16;
-    if d.draft.where_.has_incomplete() {
-        let text = i18n.label(Label::TableDialogIncomplete).to_string();
-        let tw = width(&text) as u16;
-        if cx + tw + 3 > end {
-            return;
+    let incomplete = d.draft.where_.has_incomplete().then(|| i18n.label(Label::TableDialogIncomplete).to_string());
+    if d.is_popup() {
+        items.retain(|(k, _)| k != "Tab");
+        let ends = [
+            (apply, i18n.label(Label::TableDialogHintApply).to_string()),
+            (cancel, i18n.label(Label::TableDialogHintCancel).to_string()),
+        ];
+        let need = |items: &[(String, String)]| {
+            let keys: usize = items.iter().chain(&ends).map(|(k, l)| width(k) + 1 + width(l)).sum();
+            keys + 3 * (items.len() + 1) + incomplete.as_ref().map_or(0, |t| width(t) + 3)
+        };
+        while !items.is_empty() && need(&items) > w {
+            items.pop();
         }
-        cx += put(buf, cx, y, &text, usize::from(tw), Style::new().fg(th.warning)) + 3;
+        items.extend(ends);
+    } else {
+        items.truncate(5);
+    }
+    let mut parts = Vec::new();
+    let mut cx = 0;
+    if let Some(text) = incomplete {
+        let tw = width(&text);
+        if cx + tw + 3 > w {
+            return parts;
+        }
+        parts.push((text, Style::new().fg(th.warning)));
+        parts.push(("   ".to_string(), Style::new()));
+        cx += tw + 3;
     }
     let keyst = Style::new().fg(th.fg).add_modifier(Modifier::BOLD);
     let muted = Style::new().fg(th.fg_muted);
     for (i, (k, label)) in items.iter().enumerate() {
-        let need = (width(k) + 1 + width(label) + if i > 0 { 3 } else { 0 }) as u16;
-        if cx + need > end {
+        let need = width(k) + 1 + width(label) + if i > 0 { 3 } else { 0 };
+        if cx + need > w {
             break;
         }
         if i > 0 {
-            cx += put(buf, cx, y, " \u{00b7} ", 3, muted);
+            parts.push((" \u{00b7} ".to_string(), muted));
         }
-        cx += put(buf, cx, y, k, width(k), keyst);
-        cx += put(buf, cx, y, &format!(" {label}"), width(label) + 1, muted);
+        parts.push((k.clone(), keyst));
+        parts.push((format!(" {label}"), muted));
+        cx += need;
     }
+    parts
 }
 
 #[cfg(test)]

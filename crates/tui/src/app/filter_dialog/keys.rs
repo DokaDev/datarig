@@ -90,7 +90,9 @@ impl App {
         if d.picker.is_some() {
             return self.filter_dialog_picker_key(key);
         }
+        // A popup has no other part to go to.
         match key.code {
+            KeyCode::Tab | KeyCode::BackTab if d.confined() => return,
             KeyCode::Tab => return self.filter_dialog_area(true),
             KeyCode::BackTab => return self.filter_dialog_area(false),
             _ => {}
@@ -148,6 +150,9 @@ impl App {
     /// `Tab` (`forward`) or `Shift+Tab`: the next part of the dialog that has something to
     /// focus.
     fn filter_dialog_area(&mut self, forward: bool) {
+        if self.filter_dialog().is_some_and(FilterDialog::confined) {
+            return;
+        }
         self.filter_dialog_popup_close();
         // A field of the SQL section is read back as it is left; an order refused keeps it.
         if self.filter_dialog().is_some_and(|d| d.sql_field().is_some()) && !self.filter_dialog_read_back() {
@@ -342,9 +347,11 @@ impl App {
     }
 
     /// `↑`/`↓` in the right pane: the line above or below (a condition's operator, `+ add
-    /// condition`, the sort line); past the top, the column list.
+    /// condition`, the sort line); past the top (and `←`), the column list, which a popup does
+    /// not have: there they do nothing.
     fn filter_dialog_pane_key(&mut self, key: KeyEvent) {
         let Some(d) = self.filter_dialog_mut() else { return };
+        let confined = d.confined();
         let lines = d.pane_lines();
         let here = match d.focus {
             DialogFocus::Value(t, _) => DialogFocus::Op(t),
@@ -353,10 +360,10 @@ impl App {
         };
         let Some(at) = lines.iter().position(|l| *l == here) else { return };
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') if at == 0 => d.focus_on(DialogFocus::Columns),
-            KeyCode::Up | KeyCode::Char('k') => d.focus_on(lines[at - 1]),
+            KeyCode::Up | KeyCode::Char('k') if at == 0 && !confined => d.focus_on(DialogFocus::Columns),
+            KeyCode::Up | KeyCode::Char('k') if at > 0 => d.focus_on(lines[at - 1]),
             KeyCode::Down | KeyCode::Char('j') if at + 1 < lines.len() => d.focus_on(lines[at + 1]),
-            KeyCode::Left | KeyCode::Char('h') => d.focus_on(DialogFocus::Columns),
+            KeyCode::Left | KeyCode::Char('h') if !confined => d.focus_on(DialogFocus::Columns),
             _ => {}
         }
     }

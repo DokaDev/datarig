@@ -22,6 +22,8 @@ pub enum DialogAction {
     Sql,
     /// The server counts the selected column's values (`#`).
     Count,
+    /// A popup becomes the whole dialog, its draft, undo and apply waiting kept (`A`).
+    Advanced,
 }
 
 /// An order refused: what to say, and where in its text when that is known.
@@ -73,7 +75,22 @@ impl App {
             }),
             DialogAction::Sql => self.filter_dialog_toggle_sql(),
             DialogAction::Count => self.filter_dialog_count(),
+            DialogAction::Advanced => self.filter_dialog_advanced(),
         }
+    }
+
+    /// `A`, `⋯ Advanced`: the popup shown becomes the whole dialog, on what the popup was on (a
+    /// condition popup: its column, the keys where they were).
+    fn filter_dialog_advanced(&mut self) {
+        let Some(d) = self.filter_dialog_mut() else { return };
+        let Some(kind) = d.popup_kind() else { return };
+        let focus = match kind {
+            view::PopupKind::Condition { .. } => d.focus,
+            _ => DialogFocus::Columns,
+        };
+        d.set_view(View::Full);
+        d.focus_on(focus);
+        d.settle();
     }
 
     /// `Q`, or the `SQL` toggle: the SQL section opens with the draft's texts in its fields
@@ -349,6 +366,23 @@ impl App {
             self.filter_dialog_close_sql();
             return;
         }
+        self.filter_dialog_drop();
+    }
+
+    /// A press outside a popup: it closes as `Esc` closes the dialog, its picker and a count of
+    /// the values running with it.
+    pub(super) fn filter_dialog_dismiss(&mut self) {
+        if let Some(d) = self.filter_dialog_mut() {
+            d.picker = None;
+        }
+        self.filter_dialog_cancel_count();
+        self.filter_dialog_drop();
+    }
+
+    /// The dialog closes, its draft dropped (the tab's next run sends what is applied), the
+    /// query it applied and that waits cancelled.
+    fn filter_dialog_drop(&mut self) {
+        let Some(d) = self.filter_dialog_mut() else { return };
         let (tab, applying) = (d.tab, d.applying.take());
         self.filter_dialog_popup_close();
         self.overlays.close(OverlayKind::FilterDialog);

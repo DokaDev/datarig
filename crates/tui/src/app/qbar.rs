@@ -6,6 +6,7 @@
 
 use super::filter_dialog::DialogFocus;
 use super::filter_dialog::draft::{Draft, Where};
+use super::filter_dialog::view::{Anchor, PopupKind};
 use super::paging::Paging;
 use super::table_query::{Unapplied, filter_text};
 use super::tabs::ResultView;
@@ -435,6 +436,13 @@ impl App {
         }
     }
 
+    /// Where a popup opened on part `hit` of the bar is drawn from: that part, where it was
+    /// drawn last.
+    pub(super) fn bar_anchor(&self, hit: BarHit) -> Anchor {
+        let at = self.layout.qbar.iter().find(|(_, h)| *h == hit).map(|(r, _)| *r);
+        Anchor { seg: Some(hit), at: at.unwrap_or(self.layout.results) }
+    }
+
     /// What a part of the bar does when it is clicked, or opened by its keys.
     pub(super) fn bar_hit(&mut self, hit: BarHit) {
         match hit {
@@ -447,7 +455,13 @@ impl App {
                 let w = Draft::from_query(&applied, &target).where_;
                 let Some(t) = w.terms().get(term) else { return };
                 match &t.row {
-                    Some(row) => self.bar_dialog(Some(row.col.clone()), false, None),
+                    // A column's condition: the popup of that column's conditions under it.
+                    Some(row) => {
+                        let kind = PopupKind::Condition { col: row.col.clone() };
+                        let text = t.text.clone();
+                        let anchor = self.bar_anchor(hit);
+                        self.open_filter_popup(kind, anchor, text.as_deref());
+                    }
                     // An expression: its chip in the dialog's footer, among the chips of the
                     // draft the dialog opens with (found by its text; the first when it is not
                     // there).

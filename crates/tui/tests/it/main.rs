@@ -70,6 +70,7 @@ mod flows_plan;
 mod flows_plan_mysql;
 mod flows_presets;
 mod flows_query_bar;
+mod flows_query_popups;
 mod flows_queued;
 mod flows_result_tabs;
 mod flows_run_feedback;

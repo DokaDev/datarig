@@ -6,8 +6,10 @@
 //! ignored ([`crate::app::overlay::ARM_DELAY`]). A text field (a value, `Limit`, the SQL
 //! section's `WHERE` and `ORDER BY`) takes the focus and the cursor on the press. Leaving a
 //! field of the SQL section reads it back first, as `Tab` does. While the operator picker is
-//! open a press elsewhere closes it. The wheel moves through the column list, the value list
-//! and the picker. The pointer lights the part under it; the focus stays where it is.
+//! open a press elsewhere closes it; a press outside a popup closes the popup without
+//! applying (`⋯ Advanced` on its border turns it into the whole dialog). The wheel moves
+//! through the column list, the value list and the picker. The pointer lights the part under
+//! it; the focus stays where it is.
 
 use super::*;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -29,6 +31,19 @@ impl App {
             _ => {}
         }
         let Some(d) = self.filter_dialog_mut() else { return };
+        // A press outside a popup (and its picker) closes it without applying, and goes no
+        // further; one right after it came on top (a double click that opened it) does nothing.
+        let at = Position::new(x, y);
+        if d.is_popup()
+            && m.kind == MouseEventKind::Down(MouseButton::Left)
+            && !d.hits.frame.contains(at)
+            && !d.hits.picker_box.contains(at)
+        {
+            if d.press.ready(now) {
+                return self.filter_dialog_dismiss();
+            }
+            return d.press.disarm();
+        }
         let hit = d.hits.at(x, y);
         let act = match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
@@ -78,7 +93,12 @@ impl App {
         let stays = match h {
             DialogHit::SqlWhere => d.focus == DialogFocus::SqlWhere,
             DialogHit::SqlOrder => d.focus == DialogFocus::SqlOrder,
-            DialogHit::Undo | DialogHit::Apply | DialogHit::Cancel | DialogHit::Sql | DialogHit::OpenSql => true,
+            DialogHit::Undo
+            | DialogHit::Apply
+            | DialogHit::Cancel
+            | DialogHit::Sql
+            | DialogHit::OpenSql
+            | DialogHit::Advanced => true,
             _ => false,
         };
         if d.sql_field().is_some() && !stays {
@@ -144,6 +164,7 @@ impl App {
             DialogHit::OpenSql => self.filter_dialog_open_sql(),
             DialogHit::Apply => self.filter_dialog_action(DialogAction::Apply),
             DialogHit::Cancel => self.filter_dialog_action(DialogAction::Cancel),
+            DialogHit::Advanced => self.filter_dialog_action(DialogAction::Advanced),
             DialogHit::Limit => {
                 let was = d.focus == DialogFocus::Limit;
                 d.focus_on(DialogFocus::Limit);
