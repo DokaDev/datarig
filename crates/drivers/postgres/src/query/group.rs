@@ -338,8 +338,14 @@ pub(super) async fn group_counted_in(
         read => read,
     };
     let undo = |q: String| async move { txn.batch_execute(&q).await };
+    if read.is_ok() {
+        before_release(env).await;
+    }
     match read {
         Ok(counts) => match link.guard(None, txn.batch_execute(&format!("RELEASE SAVEPOINT {sp}"))).await? {
+            // One held back while the savepoint was released is honoured too: the count wrote
+            // nothing.
+            Ok(()) if held.on() && env.cancel.asked() => Ok((Err(DbError::Cancelled), false)),
             Ok(()) => Ok((Ok(counts), fixed)),
             Err(e) => {
                 let _ = undone(link, env, &count_undo(env), undo).await?;

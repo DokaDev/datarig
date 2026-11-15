@@ -1,6 +1,6 @@
 use crate::config::{SslMode, SslNegotiation};
 use crate::tls::TlsConnect;
-use crate::cancel_query_raw::Settle;
+use crate::cancel_query_raw::{Settle, Settled};
 use crate::{Error, cancel_query_raw};
 #[cfg(feature = "runtime")]
 use crate::{Socket, cancel_query, client::SocketConfig, tls::MakeTlsConnect};
@@ -46,12 +46,13 @@ impl CancelToken {
             None,
         )
         .await
+        .map(|_| ())
     }
 
     /// datarig: `cancel_query`, then the server given `settle.within` to close the connection
-    /// once the request is sent (`settle.sent` hears when).
+    /// once the request is sent (`settle.sent` hears when): whether it did.
     #[cfg(feature = "runtime")]
-    pub async fn cancel_query_settled<T>(&self, tls: T, settle: Settle) -> Result<(), Error>
+    pub async fn cancel_query_settled<T>(&self, tls: T, settle: Settle) -> Result<Settled, Error>
     where
         T: MakeTlsConnect<Socket>,
     {
@@ -85,11 +86,12 @@ impl CancelToken {
             None,
         )
         .await
+        .map(|_| ())
     }
 
     /// datarig: `cancel_query_raw`, then the server given `settle.within` to close the
-    /// connection once the request is sent (`settle.sent` hears when).
-    pub async fn cancel_query_raw_settled<S, T>(&self, stream: S, tls: T, settle: Settle) -> Result<(), Error>
+    /// connection once the request is sent (`settle.sent` hears when): whether it did.
+    pub async fn cancel_query_raw_settled<S, T>(&self, stream: S, tls: T, settle: Settle) -> Result<Settled, Error>
     where
         S: AsyncRead + AsyncWrite + Unpin,
         T: TlsConnect<S>,

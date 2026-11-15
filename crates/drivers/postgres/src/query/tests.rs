@@ -537,6 +537,8 @@ mod terminal {
             savepoint: "datarig_count_test",
             before_bind: None,
             undo_first: None,
+            undo_lost: false,
+            before_release: None,
         };
         assert!(!env.wraps());
         assert!(env.first_in_block().is_empty());
@@ -573,6 +575,8 @@ mod terminal {
             savepoint: "datarig_count_test",
             before_bind: None,
             undo_first: None,
+            undo_lost: false,
+            before_release: None,
         };
         let only = env(false);
         assert_eq!(only.begin(), ["BEGIN", "SET LOCAL lock_timeout = 5000"]);
@@ -676,6 +680,12 @@ mod terminal {
         paging: PagingMode,
         /// Sent in front of the first try of the session's undo of a read (`Env::undo_first`).
         undo_first: Option<&'static str>,
+        /// The first try of the session's undo of a read is taken as cancelled (`Env::undo_lost`).
+        undo_lost: bool,
+        /// Runs before a read in the user's block releases its savepoint (`Env::before_release`).
+        before_release: Option<&'static BeforeBind>,
+        /// Runs right before each row-returning statement of a command is bound (`Env::before_bind`).
+        before_bind: Option<&'static BeforeBind>,
     }
 
     impl Session {
@@ -711,6 +721,9 @@ mod terminal {
                 each_tx: Vec::new(),
                 paging: PagingMode::Hold,
                 undo_first: None,
+                undo_lost: false,
+                before_release: None,
+                before_bind: None,
             }
         }
 
@@ -735,6 +748,8 @@ mod terminal {
                 savepoint: "datarig_count_test",
                 before_bind: hook,
                 undo_first: None,
+                undo_lost: false,
+                before_release: None,
             };
             let mut s = State { tx: &mut self.tx, prepared: &mut self.prepared };
             let statements = statements.iter().map(|s| s.to_string()).collect();
@@ -767,6 +782,8 @@ mod terminal {
                 savepoint: "datarig_count_test",
                 before_bind: None,
                 undo_first: None,
+                undo_lost: false,
+                before_release: None,
             };
             let ended = end_tx(&self.client, &mut self.link, &env, &mut self.tx, self.id, commit);
             tokio::time::timeout(std::time::Duration::from_secs(20), ended).await.expect("it returns").ok();
@@ -799,6 +816,8 @@ mod terminal {
                 savepoint: "datarig_count_test",
                 before_bind: hook,
                 undo_first: None,
+                undo_lost: false,
+                before_release: None,
             };
             let mut s = State { tx: &mut self.tx, prepared: &mut self.prepared };
             let job = Job {
@@ -1445,6 +1464,8 @@ mod terminal {
                     savepoint: count_savepoint(),
                     before_bind: None,
                     undo_first: None,
+                    undo_lost: false,
+                    before_release: None,
                 };
                 let applied = apply(&self.client, &mut self.link, &env, &mut self.tx, self.id, steps, tx, false, hooks);
                 let ends = tokio::time::timeout(std::time::Duration::from_secs(20), applied)
@@ -1698,7 +1719,7 @@ mod terminal {
     // ── a read's start inside the user's block, a cancel asked while it runs ──────────────
 
     mod reads {
-        use super::super::super::{Env, command, count_savepoint};
+        use super::super::super::{Env, Stop, command, count_savepoint};
         use super::{Session, TableGuard, connect, manual, pg_url};
         use crate::link::Next;
         use datarig_core::driver::{DbCommand, DbError, DbEvent, ExportBatch, ExportGuard, PagingMode, TxStep};
@@ -1720,8 +1741,10 @@ mod terminal {
                     start_per_tx: 0,
                     lock_per_tx: false,
                     savepoint: count_savepoint(),
-                    before_bind: None,
+                    before_bind: $s.before_bind,
                     undo_first: $s.undo_first,
+                    undo_lost: $s.undo_lost,
+                    before_release: $s.before_release,
                 }
             };
         }
@@ -1730,18 +1753,40 @@ mod terminal {
             /// `cmd` (a run) as the session's loop handles it: every event it brought. The
             /// session must go on after it.
             async fn command(&mut self, cmd: DbCommand) -> Vec<DbEvent> {
+                let (events, stop) = self.command_stop(cmd).await;
+                assert!(stop.is_none(), "the session goes on");
+                events
+            }
+
+            /// [`Session::command`], and why the session stops after it, if it does.
+            async fn command_stop(&mut self, cmd: DbCommand) -> (Vec<DbEvent>, Option<Stop>) {
                 assert!(cmd.starts_run());
                 self.runs += 1;
                 let env = env!(self);
                 let next = Next::Command(cmd);
                 let handled = command(&mut self.client, &mut self.link, &env, &mut self.tx, &mut self.prepared, next);
-                let stop = tokio::time::timeout(std::time::Duration::from_secs(20), handled).await;
-                assert!(stop.expect("it returns").is_none(), "the session goes on");
+                let stop = tokio::time::timeout(std::time::Duration::from_secs(20), handled).await.expect("it returns");
                 let mut events = Vec::new();
                 while let Ok(ev) = self.rx.try_recv() {
                     events.push(ev);
                 }
-                events
+                (events, stop)
+            }
+
+            /// Tests: the user cancels run `run` (the way the user's goes) right before a read
+            /// releases its savepoint.
+            fn cancel_before_release(&mut self, run: u64) {
+                let (flag, token) = (self.cancel.clone(), self.token.clone());
+                let hook = move || -> futures::future::BoxFuture<'static, ()> {
+                    let (flag, token) = (flag.clone(), token.clone());
+                    Box::pin(async move {
+                        assert!(flag.ask(run), "the read is the run asked");
+                        let request = token.unsent.request();
+                        let mark = flag.clone();
+                        token.ask(request, move || mark.stands(run)).await;
+                    })
+                };
+                self.before_release = Some(Box::leak(Box::new(hook)));
             }
         }
 
@@ -2009,6 +2054,181 @@ mod terminal {
             let events = s.command(DbCommand::Count { id: 108, sql: count_of(&table), limit: None }).await;
             asker.await.expect("the cancel was asked");
             assert_eq!(counted(&events), Err(DbError::Cancelled));
+            block_as_it_was(&mut s, &table).await;
+        }
+
+        /// A cancel asked while an export's savepoint is released (the user's cancels held, so
+        /// it is not sent) is honoured: the export answers cancelled, once, and the block stands.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn a_cancel_asked_while_an_export_releases_its_savepoint_is_honoured() {
+            let name = "a_cancel_asked_while_an_export_releases_its_savepoint_is_honoured";
+            let Some(url) = pg_url(name) else { return };
+            let (table, _g) = table(&url, "export_release").await;
+            let mut s = Session::open(&url).await;
+            earlier_write(&mut s, &table).await;
+            s.cancel_before_release(s.runs + 1);
+            let (sink, mut written) = tokio::sync::mpsc::channel(16);
+            let sql = format!("SELECT v FROM {table} ORDER BY id");
+            let export = DbCommand::Export { id: 109, sql, guard: ExportGuard::Repeatable, sink, batch: 100 };
+            let events = s.command(export).await;
+            assert!(matches!(written.try_recv(), Ok(ExportBatch::Columns(_))), "it read");
+            assert_eq!(exported(&events), (Err(DbError::Cancelled), true));
+            block_as_it_was(&mut s, &table).await;
+        }
+
+        /// So for a count of a column's values while a result is held open in the user's block
+        /// (in the result's transaction, under a savepoint of its own): it answers cancelled,
+        /// once, and the result and the block stand.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn a_cancel_asked_while_a_value_count_beside_a_held_result_releases_is_honoured() {
+            let name = "a_cancel_asked_while_a_value_count_beside_a_held_result_releases_is_honoured";
+            let Some(url) = pg_url(name) else { return };
+            let (table, _g) = table(&url, "group_held").await;
+            let mut s = Session::open(&url).await;
+            earlier_write(&mut s, &table).await;
+            // The result (more rows than a page) is held, then counted, then closed.
+            s._cmds.send(DbCommand::GroupCount { id: 111, sql: values_of(&table), limit: None }).unwrap();
+            s._cmds.send(DbCommand::ClosePortal { id: 110 }).unwrap();
+            // The run, then the count, as the session numbers them.
+            s.cancel_before_release(s.runs + 2);
+            let statements = vec!["SELECT g FROM pg_catalog.generate_series(1, 50) g".to_string()];
+            let run = DbCommand::Execute {
+                id: 110,
+                statements,
+                paging: PagingMode::Hold,
+                tx: s.rule.clone(),
+                max_rows: None,
+            };
+            let events = s.command(run).await;
+            let answer = one(&events, |e| match e {
+                DbEvent::GroupCounted { id: 111, result, .. } => Some(result.clone().map(|_| ())),
+                _ => None,
+            });
+            assert_eq!(answer, Err(DbError::Cancelled));
+            assert!(
+                matches!(terminal(&events), DbEvent::Page { id: 110, columns: Some(_), .. }),
+                "the result stands: {events:?}"
+            );
+            block_as_it_was(&mut s, &table).await;
+        }
+
+        /// A `Resume` whose read fails in the user's block is undone under its savepoint, the
+        /// undo sent again when a cancel landed on it all the same: the block is not left
+        /// aborted.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn a_resumes_undo_after_its_read_a_cancel_landed_on_is_sent_again() {
+            let name = "a_resumes_undo_after_its_read_a_cancel_landed_on_is_sent_again";
+            let Some(url) = pg_url(name) else { return };
+            let (table, _g) = table(&url, "resume_undo").await;
+            let mut s = Session::open(&url).await;
+            earlier_write(&mut s, &table).await;
+            // The read's failure aborts the block until the undo: nothing raised in front of the
+            // undo could fail as a cancel would, so its first try is taken as cancelled unsent.
+            s.undo_lost = true;
+            // `v` holds no number: the read fails once it runs, under the savepoint.
+            let sql = format!("SELECT v::int FROM {table} ORDER BY id");
+            let resume = DbCommand::Resume { id: 112, sql, skip: 0, paging: PagingMode::Hold, max_rows: None };
+            let events = s.command(resume).await;
+            let end = terminal(&events);
+            assert!(matches!(end, DbEvent::Failed { cancelled: false, .. }), "{events:?}");
+            block_as_it_was(&mut s, &table).await;
+        }
+
+        /// A user's cancel that was sent but that the server was not seen to take in (its
+        /// connection not closed within the bound) may still land on whatever the session sends:
+        /// the session sends nothing more. The count it was held back for answers cancelled,
+        /// once, and the session ends saying a stop may still be carried out.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn a_cancel_the_server_was_not_seen_to_take_in_ends_the_session() {
+            let name = "a_cancel_the_server_was_not_seen_to_take_in_ends_the_session";
+            let Some(url) = pg_url(name) else { return };
+            let (table, _g) = table(&url, "unsettled").await;
+            let mut s = Session::open(&url).await;
+            earlier_write(&mut s, &table).await;
+            // Its cancels go through a stream that never lets the server's close through.
+            let dialer = gated(&mut s, &url);
+            s.token.settle = std::time::Duration::from_millis(300);
+            let token = s.token.clone();
+            let asked = tokio::spawn(async move { token.ask(token.unsent.request(), || true).await });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while dialer.wrote.load(std::sync::atomic::Ordering::SeqCst) < 16 {
+                assert!(std::time::Instant::now() < deadline, "the cancel was never written");
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            let (events, stop) = s.command_stop(DbCommand::Count { id: 113, sql: count_of(&table), limit: None }).await;
+            asked.await.expect("asked");
+            assert_eq!(counted(&events), Err(DbError::Cancelled));
+            use datarig_core::driver::CancelFailure;
+            assert!(
+                matches!(stop, Some(Stop::Lost(DbError::CancelNotTaken(CancelFailure::StopPending(_))))),
+                "the session ends"
+            );
+        }
+
+        /// The session's cancels from now on go through streams whose server's close is held
+        /// back until the dialer returned opens them.
+        fn gated(s: &mut Session, url: &str) -> crate::route::tests::GatedDialer {
+            let cfg: tokio_postgres::Config = url.parse().unwrap();
+            let dialer = crate::route::tests::GatedDialer::default();
+            let dial = datarig_core::transport::DialerRef(std::sync::Arc::new(dialer.clone()));
+            let tls = crate::tls::PgTls::new(datarig_core::tls::TlsSettings::plain());
+            let route = crate::route::route(&cfg, dial).unwrap();
+            let mut cancel = crate::route::Cancel::new(s.client.cancel_token(), Some(route), tls);
+            cancel.unsent = s.token.unsent.clone();
+            s.token = cancel;
+            dialer
+        }
+
+        /// A `Resume` whose read fails in the user's block undoes its savepoint only once no
+        /// cancel of the user's is on its way: one sent right before the read (whose server's
+        /// close is held back here) is waited for, so it cannot land on the undo. The block
+        /// stands.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn a_resumes_undo_after_its_read_waits_for_a_cancel_on_its_way() {
+            let name = "a_resumes_undo_after_its_read_waits_for_a_cancel_on_its_way";
+            let Some(url) = pg_url(name) else { return };
+            let (table, _g) = table(&url, "resume_wait").await;
+            let mut s = Session::open(&url).await;
+            earlier_write(&mut s, &table).await;
+            let dialer = gated(&mut s, &url);
+            // Right before the read, a cancel goes out (the server finds nothing running).
+            let (token, wrote) = (s.token.clone(), dialer.wrote.clone());
+            let sent = std::sync::Arc::new(tokio::sync::Notify::new());
+            let told = sent.clone();
+            let hook = move || -> futures::future::BoxFuture<'static, ()> {
+                let (token, wrote, told) = (token.clone(), wrote.clone(), told.clone());
+                Box::pin(async move {
+                    let asking = token.clone();
+                    tokio::spawn(async move { asking.ask(asking.unsent.request(), || true).await });
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    while wrote.load(std::sync::atomic::Ordering::SeqCst) < 16 {
+                        assert!(std::time::Instant::now() < deadline, "the cancel was never written");
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    told.notify_one();
+                })
+            };
+            s.before_bind = Some(Box::leak(Box::new(hook)));
+            let returned = std::sync::atomic::AtomicBool::new(false);
+            let sql = format!("SELECT v::int FROM {table} ORDER BY id");
+            let resume = DbCommand::Resume { id: 114, sql, skip: 0, paging: PagingMode::Hold, max_rows: None };
+            let run = async {
+                let events = s.command(resume).await;
+                returned.store(true, std::sync::atomic::Ordering::SeqCst);
+                events
+            };
+            let opener = async {
+                sent.notified().await;
+                // The read fails at once; its undo must wait for the cancel on its way.
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                let early = returned.load(std::sync::atomic::Ordering::SeqCst);
+                dialer.open();
+                early
+            };
+            let (events, early) = tokio::join!(run, opener);
+            assert!(!early, "the undo went out while a cancel was on its way");
+            // Failed by the cast, or by that cancel when it reached the read first.
+            assert!(matches!(terminal(&events), DbEvent::Failed { .. }), "{events:?}");
             block_as_it_was(&mut s, &table).await;
         }
 

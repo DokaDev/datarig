@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio_postgres::config::Host;
-use tokio_postgres::{CancelToken, Config};
+use tokio_postgres::{CancelToken, Config, Settled};
 
 /// Where a session reaches its server through a dialer: the dialer and the server's host and
 /// port (as the far end of the transport sees them).
@@ -76,10 +76,10 @@ pub const CANCEL_DIAL: Duration = Duration::from_secs(10);
 
 /// How long the server is given to close a user's cancel's connection once the request is sent
 /// (it does so once it has passed the cancel on to the session): until then [`Hold::hold`]
-/// waits, so a cancel on its way does not land on what the session runs next. Past it, the
-/// cancel is taken as arrived; a statement it still lands on is sent again where that matters
-/// (an undo of a savepoint of the session's own).
-pub(crate) const CANCEL_SETTLE: Duration = Duration::from_secs(3);
+/// waits, so a cancel on its way does not land on what the session runs next. One still not
+/// taken in by then (or whose connection failed) may land on anything the session sends later:
+/// the session sends nothing more and closes ([`Unsent::pending`]).
+pub(crate) const CANCEL_SETTLE: Duration = Duration::from_secs(10);
 
 /// What a session needs to ask the server to cancel its running statement.
 #[derive(Clone)]
@@ -92,6 +92,8 @@ pub(crate) struct Cancel {
     pub(crate) unsent: Unsent,
     /// While the session runs what a cancel must not land on, the user's cancels wait.
     pub(crate) hold: Arc<Hold>,
+    /// How long the server is given to take a user's cancel in ([`CANCEL_SETTLE`]).
+    pub(crate) settle: Duration,
 }
 
 /// Holds the user's cancels back while the session runs statements a cancel must not land on:
@@ -180,36 +182,37 @@ impl Drop for Held<'_> {
 
 impl Cancel {
     pub(crate) fn new(token: CancelToken, route: Option<Route>, tls: PgTls) -> Self {
-        Self { token, route, tls, unsent: Unsent::default(), hold: Arc::default() }
+        Self { token, route, tls, unsent: Unsent::default(), hold: Arc::default(), settle: CANCEL_SETTLE }
     }
 
     /// Send a cancel request (directly, or through the route), within [`CANCEL_DIAL`]; why it
     /// could not be sent.
     pub(crate) async fn send(&self) -> Result<(), DbError> {
-        self.send_if(|| true, false).await
+        self.send_if(|| true, false).await.map(|_| ())
     }
 
     /// [`Cancel::send`], unless `still` no longer holds once its stream is open. A cancel
     /// request names no statement, and a tunnel may take its time: by then another run may be
     /// at the server. `settle`: once sent, it returns only when the server closed the cancel's
-    /// connection, or after [`CANCEL_SETTLE`]: until then the server may not have passed it on,
-    /// and it may still land on what the session sends next.
-    async fn send_if(&self, still: impl Fn() -> bool, settle: bool) -> Result<(), DbError> {
+    /// connection, or after [`Cancel::settle`]: until then the server may not have passed it on,
+    /// and it may still land on what the session sends next. Whether the server was seen to take
+    /// it in (always, without `settle`).
+    async fn send_if(&self, still: impl Fn() -> bool, settle: bool) -> Result<Settled, DbError> {
         let (told, sent) = futures::channel::oneshot::channel();
-        let settle = settle.then_some(tokio_postgres::Settle { sent: told, within: CANCEL_SETTLE });
+        let settle = settle.then_some(tokio_postgres::Settle { sent: told, within: self.settle });
         let sending = async {
             let sent = match (&self.route, settle) {
-                (None, _) if !still() => return Ok(()),
-                (None, None) => self.token.cancel_query(self.tls.clone()).await,
+                (None, _) if !still() => return Ok(Settled::Closed),
+                (None, None) => self.token.cancel_query(self.tls.clone()).await.map(|()| Settled::Closed),
                 (None, Some(settle)) => self.token.cancel_query_settled(self.tls.clone(), settle).await,
                 (Some(route), settle) => {
                     let handshake = self.tls.to(route.name()).map_err(|e| DbError::Tls(e.0))?;
                     let stream = route.dial(CANCEL_DIAL).await?;
                     if !still() {
-                        return Ok(());
+                        return Ok(Settled::Closed);
                     }
                     match settle {
-                        None => self.token.cancel_query_raw(stream, handshake).await,
+                        None => self.token.cancel_query_raw(stream, handshake).await.map(|()| Settled::Closed),
                         Some(settle) => self.token.cancel_query_raw_settled(stream, handshake, settle).await,
                     }
                 }
@@ -235,7 +238,9 @@ impl Cancel {
 
     /// The user's cancel ([`Cancel::send`]), asked during the session's request `request`
     /// ([`Unsent::request`], taken when the user asked). One that could not be sent is noted for
-    /// that request ([`Unsent`]): the session must not wait for a statement it cannot stop.
+    /// that request ([`Unsent`]): the session must not wait for a statement it cannot stop. One
+    /// the server was not seen to take in ([`Cancel::settle`]) is noted for the session
+    /// ([`Unsent::pending`]): it may land on whatever the session sends next.
     /// `still`: whether the run it is for is still the one at the server.
     /// While cancels are held ([`Hold`]) it is not sent.
     pub(crate) async fn ask(&self, request: u64, still: impl Fn() -> bool) {
@@ -244,8 +249,13 @@ impl Cancel {
             return;
         }
         let hold = self.hold.clone();
-        if let Err(why) = self.send_if(|| still() && !hold.held(), true).await {
-            self.unsent.note(request, why);
+        match self.send_if(|| still() && !hold.held(), true).await {
+            Ok(Settled::Closed) => {}
+            // It may still land on anything: the session sends nothing more.
+            Ok(Settled::Unknown) => {
+                self.unsent.pending.send_replace(Some(self.settle));
+            }
+            Err(why) => self.unsent.note(request, why),
         }
     }
 }
@@ -258,11 +268,19 @@ impl Cancel {
 pub(crate) struct Unsent {
     request: Arc<AtomicU64>,
     noted: Arc<watch::Sender<Option<(u64, DbError)>>>,
+    /// A user's cancel was sent and the server was not seen to take it in within this time
+    /// ([`Cancel::settle`]): it may still land on anything the session sends, whatever request it
+    /// was asked during.
+    pub(crate) pending: Arc<watch::Sender<Option<Duration>>>,
 }
 
 impl Default for Unsent {
     fn default() -> Self {
-        Self { request: Arc::default(), noted: Arc::new(watch::channel(None).0) }
+        Self {
+            request: Arc::default(),
+            noted: Arc::new(watch::channel(None).0),
+            pending: Arc::new(watch::channel(None).0),
+        }
     }
 }
 
@@ -280,6 +298,21 @@ impl Unsent {
     /// A cancel asked during request `request` could not be sent (`why`).
     fn note(&self, request: u64, why: DbError) {
         self.noted.send_replace(Some((request, why)));
+    }
+
+    /// Resolves, with how long the server was given, once a cancel the server was not seen to take
+    /// in is noted ([`Unsent::pending`]).
+    pub(crate) async fn pending(&self) -> Duration {
+        let mut pending = self.pending.subscribe();
+        loop {
+            if let Some(bound) = *pending.borrow_and_update() {
+                return bound;
+            }
+            // The sender lives as long as `self`: this does not end.
+            if pending.changed().await.is_err() {
+                std::future::pending::<()>().await;
+            }
+        }
     }
 
     /// Resolves, with the reason, once a cancel asked during the current request could not be
@@ -301,7 +334,7 @@ impl Unsent {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// A cancel that failed is seen only by the request it was asked during: one asked before
@@ -319,8 +352,9 @@ mod tests {
         assert_eq!(now.ok(), Some(DbError::Closed));
     }
 
-    /// A stream to the server whose bytes from it are held back until `open`: what the server
-    /// answers a cancel request (it closes the connection) does not get through before.
+    /// A stream to the server whose bytes from it are held back, once a cancel request's 16 bytes
+    /// may have been written (a TLS negotiation's 8 before them still gets its answer), until
+    /// `open`: the server's close after a cancel request does not get through before.
     struct Gated {
         inner: tokio::net::TcpStream,
         /// Bytes written to the server so far.
@@ -335,7 +369,7 @@ mod tests {
             cx: &mut std::task::Context<'_>,
             buf: &mut tokio::io::ReadBuf<'_>,
         ) -> std::task::Poll<std::io::Result<()>> {
-            if !self.open.load(Ordering::SeqCst) {
+            if !self.open.load(Ordering::SeqCst) && self.wrote.load(Ordering::SeqCst) >= 16 {
                 *self.waker.lock().unwrap() = Some(cx.waker().clone());
                 if !self.open.load(Ordering::SeqCst) {
                     return std::task::Poll::Pending;
@@ -375,14 +409,14 @@ mod tests {
 
     /// Dials [`Gated`] streams that share one gate.
     #[derive(Clone, Default)]
-    struct GatedDialer {
-        wrote: Arc<AtomicU64>,
+    pub(crate) struct GatedDialer {
+        pub(crate) wrote: Arc<AtomicU64>,
         open: Arc<AtomicBool>,
         waker: Arc<std::sync::Mutex<Option<std::task::Waker>>>,
     }
 
     impl GatedDialer {
-        fn open(&self) {
+        pub(crate) fn open(&self) {
             self.open.store(true, Ordering::SeqCst);
             if let Some(w) = self.waker.lock().unwrap().take() {
                 w.wake();

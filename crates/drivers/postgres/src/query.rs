@@ -502,6 +502,14 @@ struct Env<'a> {
     /// statement that fails as a cancel that landed on the undo does).
     #[cfg(test)]
     undo_first: Option<&'a str>,
+    /// Tests: the first try of an undo ([`undone`]) is taken as stopped by a cancel, without
+    /// being sent (in an aborted block nothing but the undo can fail as a cancel does).
+    #[cfg(test)]
+    undo_lost: bool,
+    /// Tests: runs right before a read in the user's block releases its savepoint once it read
+    /// everything ([`before_release`]), its cancels held (e.g. the user cancels then).
+    #[cfg(test)]
+    before_release: Option<&'a BeforeBind>,
 }
 
 #[cfg(test)]
@@ -732,6 +740,7 @@ impl From<Closed> for Stop {
         match closed {
             Closed::Ui => Stop::Closed,
             Closed::CancelNotSent(why) => Stop::Lost(DbError::CancelNotTaken(CancelFailure::NotSent(Box::new(why)))),
+            Closed::CancelPending(bound) => Stop::Lost(DbError::CancelNotTaken(CancelFailure::StopPending(bound))),
         }
     }
 }
@@ -740,7 +749,7 @@ impl From<Closed> for Stop {
 /// cancel that could not be sent it still gets its one answer (`cancelled`) before the session
 /// is lost; a session the UI closed answers nothing.
 fn unanswered(events: &UnboundedSender<DbEvent>, closed: Closed, cancelled: DbEvent) -> Stop {
-    if matches!(closed, Closed::CancelNotSent(_)) {
+    if matches!(closed, Closed::CancelNotSent(_) | Closed::CancelPending(_)) {
         let _ = events.send(cancelled);
     }
     Stop::from(closed)
@@ -827,6 +836,10 @@ pub(crate) async fn query_loop(
         before_bind: None,
         #[cfg(test)]
         undo_first: None,
+        #[cfg(test)]
+        undo_lost: false,
+        #[cfg(test)]
+        before_release: None,
     };
     let mut tx = Tx::default();
     let mut prepared = Prepared { off: !settings.statement_cache, ..Prepared::default() };
@@ -1882,7 +1895,11 @@ async fn statement<'a>(
                             }
                         }
                         if step.resume && s.tx.block {
-                            let _ = halt!(link.guard(None, client.batch_execute(RESUME_UNDO)).await, Some(reply));
+                            let c = &*client;
+                            let _ = halt!(
+                                resume_undo(link, env, |q| async move { c.batch_execute(&q).await }).await,
+                                Some(reply)
+                            );
                         }
                         reply.fail_with(&e);
                         halt!(probe(client, link, env, s.tx).await, None);
@@ -2263,7 +2280,8 @@ async fn portal<'a>(
         Err(e) => {
             if savepoint {
                 // An aborted block refuses this too, and stays as it was.
-                let _ = halt!(link.guard(None, txn.batch_execute(RESUME_UNDO)).await, Some(reply));
+                let t = &txn;
+                let _ = halt!(resume_undo(link, env, |q| async move { t.batch_execute(&q).await }).await, Some(reply));
             }
             let _ = halt!(finish(txn, false, link).await, Some(reply));
             if stale(&e) && !tx.block {
@@ -2317,7 +2335,8 @@ async fn portal<'a>(
         if let Some(e) = failed {
             drop(portal);
             if savepoint {
-                let _ = halt!(link.guard(None, txn.batch_execute(RESUME_UNDO)).await, Some(reply));
+                let t = &txn;
+                let _ = halt!(resume_undo(link, env, |q| async move { t.batch_execute(&q).await }).await, Some(reply));
             }
             let _ = halt!(finish(txn, false, link).await, Some(reply));
             reply.fail_with(&e);
@@ -2432,7 +2451,7 @@ async fn portal<'a>(
                     Ok(fetched) => fetched,
                     Err(closed) => {
                         // The user's cancel could not be sent: the fetch ends cancelled.
-                        if matches!(closed, Closed::CancelNotSent(_)) {
+                        if matches!(closed, Closed::CancelNotSent(_) | Closed::CancelPending(_)) {
                             paged.fail(DbError::Cancelled, true);
                         }
                         return Err(Halted { stop: Stop::from(closed), reply: None });
@@ -2453,7 +2472,9 @@ async fn portal<'a>(
                     Err(e) => {
                         drop(portal);
                         if savepoint {
-                            let _ = halt!(link.guard(None, txn.batch_execute(RESUME_UNDO)).await, None);
+                            let t = &txn;
+                            let _ =
+                                halt!(resume_undo(link, env, |q| async move { t.batch_execute(&q).await }).await, None);
                         }
                         let _ = halt!(finish(txn, false, link).await, None);
                         paged.fail_with(&e);
@@ -2550,7 +2571,10 @@ async fn committed<'a>(
     tx: &mut Tx,
     paged: Paged<'_>,
 ) -> Result<After<'a>, Halted<'a>> {
-    if savepoint && let Err(e) = halt!(link.guard(None, txn.batch_execute(RESUME_RELEASE)).await, None) {
+    let t = &txn;
+    if savepoint
+        && let Err(e) = halt!(resume_release(link, env, |q| async move { t.batch_execute(&q).await }).await, None)
+    {
         paged.fail_with(&e);
         return Ok(After::Failed);
     }
@@ -2562,6 +2586,45 @@ async fn committed<'a>(
         Err(e) => {
             paged.fail_with(&e);
             Ok(After::Failed)
+        }
+    }
+}
+
+/// Back to before a `Resume`'s savepoint ([`RESUME_UNDO`]) with `send`, the user's cancels held
+/// meanwhile and the undo sent again once when a cancel landed on it all the same ([`undone`]):
+/// a cancel that stopped the statement, and another the user asked after it, never leave the
+/// user's block aborted.
+async fn resume_undo<F, Fut>(
+    link: &mut Link,
+    env: &Env<'_>,
+    send: F,
+) -> Result<Result<(), tokio_postgres::Error>, Closed>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<(), tokio_postgres::Error>>,
+{
+    let _held = Held::new(&env.token.hold).await;
+    undone(link, env, RESUME_UNDO, send).await
+}
+
+/// Leave a `Resume`'s savepoint ([`RESUME_RELEASE`]) with `send`, the user's cancels held
+/// meanwhile; a release that failed (a cancel landed on it all the same) falls back to the undo
+/// ([`undone`]), so the block is not left aborted. The release's failure, if it failed.
+async fn resume_release<F, Fut>(
+    link: &mut Link,
+    env: &Env<'_>,
+    send: F,
+) -> Result<Result<(), tokio_postgres::Error>, Closed>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<(), tokio_postgres::Error>>,
+{
+    let _held = Held::new(&env.token.hold).await;
+    match link.guard(None, send(RESUME_RELEASE.to_string())).await? {
+        Ok(()) => Ok(Ok(())),
+        Err(e) => {
+            let _ = undone(link, env, RESUME_UNDO, send).await?;
+            Ok(Err(e))
         }
     }
 }
@@ -3170,9 +3233,22 @@ where
     }
     #[cfg(not(test))]
     let _ = env;
+    #[cfg(test)]
+    if env.undo_lost {
+        return link.guard(None, send(sql.to_string())).await;
+    }
     match link.guard(None, send(first)).await? {
         Err(e) if again(&e) => link.guard(None, send(sql.to_string())).await,
         answer => Ok(answer),
+    }
+}
+
+/// Right before a read in the user's block releases its savepoint once it read everything (tests
+/// run [`Env::before_release`] here; nothing otherwise).
+async fn before_release(_env: &Env<'_>) {
+    #[cfg(test)]
+    if let Some(hook) = _env.before_release {
+        hook().await;
     }
 }
 

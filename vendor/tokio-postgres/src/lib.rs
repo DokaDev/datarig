@@ -124,7 +124,7 @@
 //! | `with-time-0_3` | Enable support for the 0.3 version of the `time` crate. | [time](https://crates.io/crates/time/0.3.0) 0.3 | no |
 #![warn(rust_2018_idioms, clippy::all, missing_docs)]
 
-pub use crate::cancel_query_raw::Settle;
+pub use crate::cancel_query_raw::{Settle, Settled};
 pub use crate::cancel_token::CancelToken;
 pub use crate::client::Client;
 pub use crate::config::Config;

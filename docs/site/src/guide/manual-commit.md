@@ -135,7 +135,10 @@ nothing was applied."), your transaction as it was. So do the reads datarig runs
 savepoint of its own: a row count, a count of a column's values, a statement run again to page
 on, an export and `EXPLAIN ANALYZE`. A cancel asked before the savepoint is set, or while it is
 released or undone, waits, and the read ends cancelled; one asked while the read itself runs
-stops it. A cancel already on its way is waited for until the server has taken it in.
+stops it. A cancel already on its way is waited for until the server has taken it in; when
+the server does not confirm it within 10 seconds (a slow tunnel), it could still stop whatever
+runs next, so datarig sends nothing more and closes the session, which rolls your transaction
+back, and says so.
 
 - The status line question says so: "Apply 1 change to shop.users (1 update)? Opens a
   transaction; nothing is committed.  y apply · any other key cancels".

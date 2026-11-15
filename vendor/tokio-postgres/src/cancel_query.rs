@@ -12,7 +12,7 @@ pub(crate) async fn cancel_query<T>(
     process_id: i32,
     secret_key: i32,
     settle: Option<cancel_query_raw::Settle>,
-) -> Result<(), Error>
+) -> Result<cancel_query_raw::Settled, Error>
 where
     T: MakeTlsConnect<Socket>,
 {

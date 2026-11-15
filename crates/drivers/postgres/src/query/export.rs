@@ -14,8 +14,8 @@
 //! While whether a block is open is not known (a probe failed) it is refused.
 
 use super::{
-    BEGIN_OWN_READ, Closed, Env, Link, State, check_text, checked, columns_of, copies_with_client, count_error,
-    count_undo, decode, end_own, finish, formats_of, held_set, held_start, own_check, probe, undone,
+    BEGIN_OWN_READ, Closed, Env, Link, State, before_release, check_text, checked, columns_of, copies_with_client,
+    count_error, count_undo, decode, end_own, finish, formats_of, held_set, held_start, own_check, probe, undone,
 };
 use crate::connect::{db_error, is_cancel};
 use datarig_core::driver::{Cell, DbError, EXPORT_BATCH_BYTES, ExportBatch, ExportGuard, ExportRead, ExportSink};
@@ -118,6 +118,9 @@ pub(super) async fn export(
         };
         let t = &txn;
         let undo = |q: String| async move { t.batch_execute(&q).await };
+        if out.is_ok() {
+            before_release(env).await;
+        }
         let answer = match out {
             Ok(read) => match link.guard(None, txn.batch_execute(&format!("RELEASE SAVEPOINT {sp}"))).await? {
                 Ok(()) => (Ok(read), false),
@@ -135,6 +138,12 @@ pub(super) async fn export(
         };
         drop(txn);
         probe(client, link, env, s.tx).await?;
+        // A cancel asked before the answer, one held back while the savepoint was released or
+        // the block probed too, is honoured: the read wrote nothing anywhere.
+        let answer = match answer {
+            (Ok(_), _) if env.cancel.asked() => (Err(DbError::Cancelled), true),
+            answer => answer,
+        };
         return Ok(answer);
     }
     if let Some(c) = &check

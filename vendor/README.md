@@ -56,8 +56,10 @@ Every change in the source is marked with a `datarig:` comment. These groups:
   `Settle` struct and `CancelToken::cancel_query_settled` / `cancel_query_raw_settled`: once the
   request is written and flushed the caller is told (`Settle::sent`), then the server is given
   `Settle::within` to close the connection, which it does once it has passed the cancel on to
-  the session. The driver holds a cancel as on its way until then, so it does not land on the
-  session's next statement. The upstream functions behave as before.
+  the session; they answer whether it did (`Settled::Closed`) or whether that is not known (no end
+  of file within the bound, or reading failed: `Settled::Unknown`). The driver holds a cancel as
+  on its way until then, so it does not land on the session's next statement, and closes the
+  session when it stays unknown. The upstream functions behave as before.
 
 **Names with their schema**:
 
