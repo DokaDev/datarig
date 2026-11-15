@@ -498,6 +498,10 @@ struct Env<'a> {
     /// connection, to make its prepared statement stale at will).
     #[cfg(test)]
     before_bind: Option<&'a BeforeBind>,
+    /// Tests: sent in front of the first try of an undo ([`undone`]), in its request (a
+    /// statement that fails as a cancel that landed on the undo does).
+    #[cfg(test)]
+    undo_first: Option<&'a str>,
 }
 
 #[cfg(test)]
@@ -821,153 +825,150 @@ pub(crate) async fn query_loop(
         savepoint: count_savepoint(),
         #[cfg(test)]
         before_bind: None,
+        #[cfg(test)]
+        undo_first: None,
     };
     let mut tx = Tx::default();
     let mut prepared = Prepared { off: !settings.statement_cache, ..Prepared::default() };
     loop {
         let next = link.next().await;
-        // Cancelled while it waited its turn: answered, never run.
-        if let Next::Command(cmd) = &next
-            && cmd.cancelled_before_start(&cancel, &events)
-        {
-            continue;
+        if let Some(stop) = command(&mut client, &mut link, &env, &mut tx, &mut prepared, next).await {
+            if let Stop::Lost(error) = stop {
+                let _ = events.send(DbEvent::Lost { error });
+            }
+            return;
         }
-        let stop = match next {
-            Next::Command(DbCommand::Execute { id, statements, paging, tx: rule, max_rows }) => {
-                let mut s = State { tx: &mut tx, prepared: &mut prepared };
-                let job = Job { statements, resume: None, paging, rule, max_rows };
-                match execute(&mut client, &mut link, &env, &mut s, id, job).await {
-                    Ok(()) => continue,
-                    Err(stop) => stop,
-                }
-            }
-            // Run again past `skip` rows: an `Execute` of one statement that drops them first.
-            Next::Command(DbCommand::Resume { id, sql, skip, paging, max_rows }) => {
-                let mut s = State { tx: &mut tx, prepared: &mut prepared };
-                let job = Job { statements: vec![sql], resume: Some(skip), paging, rule: TxRule::Auto, max_rows };
-                match execute(&mut client, &mut link, &env, &mut s, id, job).await {
-                    Ok(()) => continue,
-                    Err(stop) => stop,
-                }
-            }
-            // Answered once; a session the UI closed meanwhile answers nothing.
-            Next::Command(DbCommand::Count { id, sql, limit }) => {
-                match count(&client, &mut link, &env, &mut tx, &sql, limit).await {
-                    Ok((result, snapshot)) => {
-                        let _ = events.send(DbEvent::Counted { id, result, snapshot });
-                        continue;
-                    }
-                    Err(closed) => unanswered(&events, closed, cancelled_count(id)),
-                }
-            }
-            // Answered once; a session the UI closed meanwhile answers nothing.
-            Next::Command(DbCommand::GroupCount { id, sql, limit }) => {
-                match group::group_count(&mut client, &mut link, &env, &mut tx, &sql, limit).await {
-                    Ok((result, snapshot)) => {
-                        let _ = events.send(DbEvent::GroupCounted { id, result, snapshot });
-                        continue;
-                    }
-                    Err(closed) => unanswered(&events, closed, cancelled_group_count(id)),
-                }
-            }
-            // Answered once; a session the UI closed meanwhile answers nothing.
-            Next::Command(DbCommand::Estimate { id, sql }) => {
-                match estimate(&client, &mut link, &env, &mut tx, &sql).await {
-                    Ok(result) => {
-                        let _ = events.send(DbEvent::Estimated { id, result });
-                        continue;
-                    }
-                    Err(closed) => unanswered(&events, closed, cancelled_estimate(id)),
-                }
-            }
-            Next::Command(DbCommand::CheckRepeat { id, sql }) => {
-                match check_repeat(&client, &mut link, &env, &mut tx, &sql).await {
-                    Ok(result) => {
-                        let _ = events.send(DbEvent::RepeatChecked { id, result });
-                        continue;
-                    }
-                    Err(closed) => unanswered(&events, closed, cancelled_check(id)),
-                }
-            }
-            // Answered once, after its last batch; a session the UI closed meanwhile answers
-            // nothing.
-            Next::Command(DbCommand::Export { id, sql, guard, sink, batch }) => {
-                let mut s = State { tx: &mut tx, prepared: &mut prepared };
-                match export::export(&mut client, &mut link, &env, &mut s, &sql, guard, sink, batch).await {
-                    Ok((result, cancelled)) => {
-                        let _ = events.send(DbEvent::Exported { id, result, cancelled });
-                        continue;
-                    }
-                    Err(closed) => unanswered(&events, closed, cancelled_export(id)),
-                }
-            }
-            // Answered once; a session the UI closed meanwhile answers nothing.
-            Next::Command(DbCommand::EndTx { id, commit }) => {
-                match end_tx(&client, &mut link, &env, &mut tx, id, commit).await {
-                    Ok(()) => continue,
-                    Err(closed) => Stop::from(closed),
-                }
-            }
-            // Answered once; a session the UI closed meanwhile answers nothing.
-            Next::Command(DbCommand::ApplyEdits { id, steps, tx: rule }) => {
-                match apply::apply(
-                    &client,
-                    &mut link,
-                    &env,
-                    &mut tx,
-                    id,
-                    &steps,
-                    rule,
-                    prepared.off,
-                    &Default::default(),
-                )
-                .await
-                {
-                    Ok(None) => continue,
-                    // What it did could not be undone for sure: the connection closes as the
-                    // session ends, and the server rolls it back.
-                    Ok(Some(error)) => Stop::Lost(error),
-                    Err(closed) => unanswered(&events, closed, cancelled_apply(id)),
-                }
-            }
-            // A fetch for a result whose portal is gone (complete, failed or closed): answered
-            // with an empty last page, so the UI never waits for it.
-            Next::Command(DbCommand::FetchMore { id }) => {
-                let _ = events.send(DbEvent::Page {
-                    id,
-                    columns: None,
-                    rows: Vec::new(),
-                    more: false,
-                    elapsed: std::time::Duration::ZERO,
-                });
-                continue;
-            }
-            Next::Command(DbCommand::ServerSession { request }) => {
-                match own_session(&client, &mut link, &env, &tx, request).await {
-                    Ok(()) => continue,
-                    Err(closed) => Stop::from(closed),
-                }
-            }
-            // The monitor has a session of its own.
-            Next::Command(
-                cmd @ (DbCommand::MonitorTick { .. }
-                | DbCommand::MonitorQueryText { .. }
-                | DbCommand::MonitorReplication { .. }
-                | DbCommand::MonitorAction { .. }
-                | DbCommand::MonitorFollowUp { .. }),
-            ) => {
-                let _ = events.send(cmd.not_supported());
-                continue;
-            }
-            Next::Command(_) => continue,
-            Next::Closed => Stop::Closed,
-            Next::Lost(reason) => Stop::Lost(reason),
-        };
-        if let Stop::Lost(error) = stop {
-            let _ = events.send(DbEvent::Lost { error });
-        }
-        return;
     }
+}
+
+/// Handle `next`, what the session's loop took from its link: `Some` when the session stops
+/// there, why.
+async fn command(
+    client: &mut Client,
+    link: &mut Link,
+    env: &Env<'_>,
+    tx: &mut Tx,
+    prepared: &mut Prepared,
+    next: Next,
+) -> Option<Stop> {
+    // Cancelled while it waited its turn: answered, never run.
+    if let Next::Command(cmd) = &next
+        && cmd.cancelled_before_start(env.cancel, env.events)
+    {
+        return None;
+    }
+    let stop = match next {
+        Next::Command(DbCommand::Execute { id, statements, paging, tx: rule, max_rows }) => {
+            let mut s = State { tx, prepared };
+            let job = Job { statements, resume: None, paging, rule, max_rows };
+            match execute(client, link, env, &mut s, id, job).await {
+                Ok(()) => return None,
+                Err(stop) => stop,
+            }
+        }
+        // Run again past `skip` rows: an `Execute` of one statement that drops them first.
+        Next::Command(DbCommand::Resume { id, sql, skip, paging, max_rows }) => {
+            let mut s = State { tx, prepared };
+            let job = Job { statements: vec![sql], resume: Some(skip), paging, rule: TxRule::Auto, max_rows };
+            match execute(client, link, env, &mut s, id, job).await {
+                Ok(()) => return None,
+                Err(stop) => stop,
+            }
+        }
+        // Answered once; a session the UI closed meanwhile answers nothing.
+        Next::Command(DbCommand::Count { id, sql, limit }) => match count(&*client, link, env, tx, &sql, limit).await {
+            Ok((result, snapshot)) => {
+                let _ = env.events.send(DbEvent::Counted { id, result, snapshot });
+                return None;
+            }
+            Err(closed) => unanswered(env.events, closed, cancelled_count(id)),
+        },
+        // Answered once; a session the UI closed meanwhile answers nothing.
+        Next::Command(DbCommand::GroupCount { id, sql, limit }) => {
+            match group::group_count(client, link, env, tx, &sql, limit).await {
+                Ok((result, snapshot)) => {
+                    let _ = env.events.send(DbEvent::GroupCounted { id, result, snapshot });
+                    return None;
+                }
+                Err(closed) => unanswered(env.events, closed, cancelled_group_count(id)),
+            }
+        }
+        // Answered once; a session the UI closed meanwhile answers nothing.
+        Next::Command(DbCommand::Estimate { id, sql }) => match estimate(&*client, link, env, tx, &sql).await {
+            Ok(result) => {
+                let _ = env.events.send(DbEvent::Estimated { id, result });
+                return None;
+            }
+            Err(closed) => unanswered(env.events, closed, cancelled_estimate(id)),
+        },
+        Next::Command(DbCommand::CheckRepeat { id, sql }) => match check_repeat(&*client, link, env, tx, &sql).await {
+            Ok(result) => {
+                let _ = env.events.send(DbEvent::RepeatChecked { id, result });
+                return None;
+            }
+            Err(closed) => unanswered(env.events, closed, cancelled_check(id)),
+        },
+        // Answered once, after its last batch; a session the UI closed meanwhile answers
+        // nothing.
+        Next::Command(DbCommand::Export { id, sql, guard, sink, batch }) => {
+            let mut s = State { tx, prepared };
+            match export::export(client, link, env, &mut s, &sql, guard, sink, batch).await {
+                Ok((result, cancelled)) => {
+                    let _ = env.events.send(DbEvent::Exported { id, result, cancelled });
+                    return None;
+                }
+                Err(closed) => unanswered(env.events, closed, cancelled_export(id)),
+            }
+        }
+        // Answered once; a session the UI closed meanwhile answers nothing.
+        Next::Command(DbCommand::EndTx { id, commit }) => match end_tx(&*client, link, env, tx, id, commit).await {
+            Ok(()) => return None,
+            Err(closed) => Stop::from(closed),
+        },
+        // Answered once; a session the UI closed meanwhile answers nothing.
+        Next::Command(DbCommand::ApplyEdits { id, steps, tx: rule }) => {
+            match apply::apply(&*client, link, env, tx, id, &steps, rule, prepared.off, &Default::default()).await {
+                Ok(None) => return None,
+                // What it did could not be undone for sure: the connection closes as the
+                // session ends, and the server rolls it back.
+                Ok(Some(error)) => Stop::Lost(error),
+                Err(closed) => unanswered(env.events, closed, cancelled_apply(id)),
+            }
+        }
+        // A fetch for a result whose portal is gone (complete, failed or closed): answered
+        // with an empty last page, so the UI never waits for it.
+        Next::Command(DbCommand::FetchMore { id }) => {
+            let _ = env.events.send(DbEvent::Page {
+                id,
+                columns: None,
+                rows: Vec::new(),
+                more: false,
+                elapsed: std::time::Duration::ZERO,
+            });
+            return None;
+        }
+        Next::Command(DbCommand::ServerSession { request }) => {
+            match own_session(&*client, link, env, tx, request).await {
+                Ok(()) => return None,
+                Err(closed) => Stop::from(closed),
+            }
+        }
+        // The monitor has a session of its own.
+        Next::Command(
+            cmd @ (DbCommand::MonitorTick { .. }
+            | DbCommand::MonitorQueryText { .. }
+            | DbCommand::MonitorReplication { .. }
+            | DbCommand::MonitorAction { .. }
+            | DbCommand::MonitorFollowUp { .. }),
+        ) => {
+            let _ = env.events.send(cmd.not_supported());
+            return None;
+        }
+        Next::Command(_) => return None,
+        Next::Closed => Stop::Closed,
+        Next::Lost(reason) => Stop::Lost(reason),
+    };
+    Some(stop)
 }
 
 /// Whether a transaction block is open: its transaction began before this statement. The
@@ -1519,7 +1520,11 @@ async fn run<'a>(
             held.hold().await;
             if first.is_some() {
                 // An aborted block refuses this too, and stays as it was.
-                let _ = halt!(link.guard(None, client.batch_execute(RESUME_UNDO)).await, Some(reply));
+                let c = &*client;
+                let _ = halt!(
+                    undone(link, env, RESUME_UNDO, |q| async move { c.batch_execute(&q).await }).await,
+                    Some(reply)
+                );
             }
             let cancelled = why == DbError::Cancelled;
             reply.fail(why, cancelled);
@@ -1593,7 +1598,11 @@ async fn run<'a>(
                 if held_set(&mut held, env, Ok(())).is_err() {
                     held.hold().await;
                     let undo = format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}; RELEASE SAVEPOINT {SAVEPOINT}");
-                    let undone = halt!(link.guard(None, client.batch_execute(&undo)).await, Some(reply));
+                    let c = &*client;
+                    let undone = halt!(
+                        undone(link, env, &undo, |q| async move { c.batch_execute(&q).await }).await,
+                        Some(reply)
+                    );
                     if undone.is_err() {
                         halt!(probe(client, link, env, s.tx).await, Some(reply));
                     }
@@ -1606,7 +1615,9 @@ async fn run<'a>(
             if savepoint {
                 held.hold().await;
                 let undo = format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}; RELEASE SAVEPOINT {SAVEPOINT}");
-                let undone = halt!(link.guard(None, client.batch_execute(&undo)).await, answer.map(|(r, _)| r));
+                let c = &*client;
+                let sent = undone(link, env, &undo, |q| async move { c.batch_execute(&q).await }).await;
+                let undone = halt!(sent, answer.map(|(r, _)| r));
                 if let Err(e) = undone {
                     // Only a broken connection gets here; the failure aborts the block, so a later
                     // COMMIT cannot keep the statement's changes.
@@ -1619,6 +1630,14 @@ async fn run<'a>(
                 // Rolled back to before the statement: a failure of it no longer aborts the block.
                 s.tx.aborted = false;
                 env.report(s.tx, s.tx.block);
+                // A cancel asked before the statement's answer is honoured, one held back while
+                // the savepoint was undone too.
+                if env.cancel.asked() {
+                    if let Some((reply, _)) = answer {
+                        reply.fail(DbError::Cancelled, true);
+                    }
+                    break 'steps;
+                }
             }
             reply = match answer {
                 Some((reply, outcome)) => {
@@ -2687,7 +2706,7 @@ async fn count(
         held.hold().await;
         // Back to before the count (an aborted block refuses this too, and stays as it was);
         // the probe tells the block's state either way.
-        let _ = link.guard(None, client.batch_execute(&count_undo(env))).await?;
+        let _ = undone(link, env, &count_undo(env), |q| async move { client.batch_execute(&q).await }).await?;
         probe(client, link, env, tx).await?;
         return Ok((Err(counted), false));
     }
@@ -3037,7 +3056,7 @@ async fn counted_in(
         Err(why) => why,
     };
     held.hold().await;
-    let _ = link.guard(None, txn.batch_execute(&count_undo(env))).await?;
+    let _ = undone(link, env, &count_undo(env), |q| async move { txn.batch_execute(&q).await }).await?;
     Ok((Err(counted), false))
 }
 
@@ -3069,7 +3088,7 @@ async fn check_repeat(
         let first = tx.take_first_text(env);
         let asked = format!("{first}SAVEPOINT {sp}; {check}");
         let (_, answer) = checked(link, env, client.simple_query(&asked)).await?;
-        let undone = link.guard(None, client.batch_execute(&count_undo(env))).await?;
+        let undone = undone(link, env, &count_undo(env), |q| async move { client.batch_execute(&q).await }).await?;
         if answer.is_err() || undone.is_err() {
             probe(client, link, env, tx).await?;
         }
@@ -3099,7 +3118,7 @@ async fn checked_repeat_in(
     let sp = env.savepoint;
     let asked = format!("SAVEPOINT {sp}; {check}");
     let (_, answer) = checked(link, env, txn.simple_query(&asked)).await?;
-    let _ = link.guard(None, txn.batch_execute(&count_undo(env))).await?;
+    let _ = undone(link, env, &count_undo(env), |q| async move { txn.batch_execute(&q).await }).await?;
     let cut = held.on() && env.cancel.asked();
     Ok(answer.and(if cut { Err(DbError::Cancelled) } else { Ok(()) }))
 }
@@ -3126,6 +3145,41 @@ fn held_set(held: &mut Held<'_>, env: &Env<'_>, answer: Result<(), DbError>) -> 
         Ok(()) if held.on() && env.cancel.asked() => Err(DbError::Cancelled),
         answer => answer,
     }
+}
+
+/// Send `sql`, the session's undo (or release) of a savepoint of its own in the user's block,
+/// with `send` (on the session or the portal's transaction) while the user's cancels are held:
+/// again once when a cancel landed on it all the same (one sent before the hold, still on its way
+/// past [`crate::route::CANCEL_SETTLE`]), which a block it left aborted takes then. Its last
+/// answer.
+async fn undone<F, Fut>(
+    link: &mut Link,
+    env: &Env<'_>,
+    sql: &str,
+    send: F,
+) -> Result<Result<(), tokio_postgres::Error>, Closed>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<(), tokio_postgres::Error>>,
+{
+    #[cfg_attr(not(test), allow(unused_mut))]
+    let mut first = sql.to_string();
+    #[cfg(test)]
+    if let Some(pre) = env.undo_first {
+        first = format!("{pre}; {sql}");
+    }
+    #[cfg(not(test))]
+    let _ = env;
+    match link.guard(None, send(first)).await? {
+        Err(e) if again(&e) => link.guard(None, send(sql.to_string())).await,
+        answer => Ok(answer),
+    }
+}
+
+/// Whether an undo that failed with `e` is sent once more ([`undone`]): only when a cancel
+/// stopped it (`query_canceled`); any other failure would fail again.
+fn again(e: &tokio_postgres::Error) -> bool {
+    is_cancel(e)
 }
 
 /// Back to before the driver's count savepoint ([`Env::savepoint`]) when a count failed, was

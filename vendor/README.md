@@ -52,6 +52,12 @@ Every change in the source is marked with a `datarig:` comment. These groups:
   SSH channel the far end already closed, or whose end of file cannot be queued) and would
   otherwise fail or stall a cancel that was sent (the caller reports a cancel that was not
   sent).
+- `src/cancel_query_raw.rs`, `src/cancel_query.rs`, `src/cancel_token.rs`, `src/lib.rs`: the
+  `Settle` struct and `CancelToken::cancel_query_settled` / `cancel_query_raw_settled`: once the
+  request is written and flushed the caller is told (`Settle::sent`), then the server is given
+  `Settle::within` to close the connection, which it does once it has passed the cancel on to
+  the session. The driver holds a cancel as on its way until then, so it does not land on the
+  session's next statement. The upstream functions behave as before.
 
 **Names with their schema**:
 

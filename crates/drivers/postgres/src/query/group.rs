@@ -144,7 +144,8 @@ pub(super) async fn group_count(
             held.hold().await;
             // Back to before it (an aborted block refuses this too, and stays as it was); the
             // probe tells the block's state either way.
-            let _ = link.guard(None, client.batch_execute(&count_undo(env))).await?;
+            let c = &*client;
+            let _ = undone(link, env, &count_undo(env), |q| async move { c.batch_execute(&q).await }).await?;
             probe(client, link, env, tx).await?;
             return Ok((Err(why), false));
         }
@@ -329,18 +330,24 @@ pub(super) async fn group_counted_in(
         },
         Err(why) => Err(why),
     };
-    // Read: the release and the undo after it keep the block as it was.
+    // Read: the release and the undo after it keep the block as it was. A cancel asked before
+    // the answer is honoured, one held back meanwhile too: the read is undone instead.
     held.hold().await;
+    let read = match read {
+        Ok(_) if held.on() && env.cancel.asked() => Err(DbError::Cancelled),
+        read => read,
+    };
+    let undo = |q: String| async move { txn.batch_execute(&q).await };
     match read {
         Ok(counts) => match link.guard(None, txn.batch_execute(&format!("RELEASE SAVEPOINT {sp}"))).await? {
             Ok(()) => Ok((Ok(counts), fixed)),
             Err(e) => {
-                let _ = link.guard(None, txn.batch_execute(&count_undo(env))).await?;
+                let _ = undone(link, env, &count_undo(env), undo).await?;
                 Ok((Err(db_error(&e)), false))
             }
         },
         Err(why) => {
-            let _ = link.guard(None, txn.batch_execute(&count_undo(env))).await?;
+            let _ = undone(link, env, &count_undo(env), undo).await?;
             Ok((Err(why), false))
         }
     }

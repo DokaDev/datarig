@@ -15,7 +15,7 @@
 
 use super::{
     BEGIN_OWN_READ, Closed, Env, Link, State, check_text, checked, columns_of, copies_with_client, count_error,
-    count_undo, decode, end_own, finish, formats_of, held_set, held_start, own_check, probe,
+    count_undo, decode, end_own, finish, formats_of, held_set, held_start, own_check, probe, undone,
 };
 use crate::connect::{db_error, is_cancel};
 use datarig_core::driver::{Cell, DbError, EXPORT_BATCH_BYTES, ExportBatch, ExportGuard, ExportRead, ExportSink};
@@ -99,7 +99,8 @@ pub(super) async fn export(
             Err(why) => {
                 held.hold().await;
                 // An aborted block refuses this too, and stays as it was.
-                let _ = link.guard(None, client.batch_execute(&count_undo(env))).await?;
+                let c = &*client;
+                let _ = undone(link, env, &count_undo(env), |q| async move { c.batch_execute(&q).await }).await?;
                 probe(client, link, env, s.tx).await?;
                 let cancelled = why == DbError::Cancelled;
                 return Ok((Err(why), cancelled));
@@ -108,20 +109,27 @@ pub(super) async fn export(
         let txn = client.transaction_in_block();
         let out = stream(&txn, link, env, &stmt, &sink, max).await?;
         drop(sink);
-        // Read: the release and the undo after it keep the block as it was.
+        // Read: the release and the undo after it keep the block as it was. A cancel asked
+        // before the answer is honoured, one held back meanwhile too: the read is undone instead.
         held.hold().await;
+        let out = match out {
+            Ok(_) if env.cancel.asked() => Err((DbError::Cancelled, true)),
+            out => out,
+        };
+        let t = &txn;
+        let undo = |q: String| async move { t.batch_execute(&q).await };
         let answer = match out {
             Ok(read) => match link.guard(None, txn.batch_execute(&format!("RELEASE SAVEPOINT {sp}"))).await? {
                 Ok(()) => (Ok(read), false),
                 Err(e) => {
                     // Not released (a cancel that came late): back to before it, so the block
                     // is not left aborted.
-                    let _ = link.guard(None, txn.batch_execute(&count_undo(env))).await?;
+                    let _ = undone(link, env, &count_undo(env), undo).await?;
                     (Err(count_error(&e)), is_cancel(&e))
                 }
             },
             Err((error, cancelled)) => {
-                let _ = link.guard(None, txn.batch_execute(&count_undo(env))).await?;
+                let _ = undone(link, env, &count_undo(env), undo).await?;
                 (Err(error), cancelled)
             }
         };

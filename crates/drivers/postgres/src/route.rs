@@ -74,6 +74,13 @@ pub(crate) fn route(cfg: &Config, dialer: DialerRef) -> Result<Route, DbError> {
 /// included).
 pub const CANCEL_DIAL: Duration = Duration::from_secs(10);
 
+/// How long the server is given to close a user's cancel's connection once the request is sent
+/// (it does so once it has passed the cancel on to the session): until then [`Hold::hold`]
+/// waits, so a cancel on its way does not land on what the session runs next. Past it, the
+/// cancel is taken as arrived; a statement it still lands on is sent again where that matters
+/// (an undo of a savepoint of the session's own).
+pub(crate) const CANCEL_SETTLE: Duration = Duration::from_secs(3);
+
 /// What a session needs to ask the server to cancel its running statement.
 #[derive(Clone)]
 pub(crate) struct Cancel {
@@ -95,7 +102,8 @@ pub(crate) struct Cancel {
 #[derive(Default)]
 pub(crate) struct Hold {
     held: AtomicBool,
-    /// Taken by a cancel on its way to the server, so [`Hold::hold`] returns only once none is.
+    /// Taken by a cancel on its way to the server, until the server took it in
+    /// ([`CANCEL_SETTLE`]), so [`Hold::hold`] returns only once none is.
     sending: tokio::sync::RwLock<()>,
 }
 
@@ -178,28 +186,51 @@ impl Cancel {
     /// Send a cancel request (directly, or through the route), within [`CANCEL_DIAL`]; why it
     /// could not be sent.
     pub(crate) async fn send(&self) -> Result<(), DbError> {
-        self.send_if(|| true).await
+        self.send_if(|| true, false).await
     }
 
     /// [`Cancel::send`], unless `still` no longer holds once its stream is open. A cancel
     /// request names no statement, and a tunnel may take its time: by then another run may be
-    /// at the server.
-    async fn send_if(&self, still: impl Fn() -> bool) -> Result<(), DbError> {
-        let sent = async {
-            match &self.route {
-                None if !still() => Ok(()),
-                None => self.token.cancel_query(self.tls.clone()).await.map_err(|e| db_error(&e)),
-                Some(route) => {
+    /// at the server. `settle`: once sent, it returns only when the server closed the cancel's
+    /// connection, or after [`CANCEL_SETTLE`]: until then the server may not have passed it on,
+    /// and it may still land on what the session sends next.
+    async fn send_if(&self, still: impl Fn() -> bool, settle: bool) -> Result<(), DbError> {
+        let (told, sent) = futures::channel::oneshot::channel();
+        let settle = settle.then_some(tokio_postgres::Settle { sent: told, within: CANCEL_SETTLE });
+        let sending = async {
+            let sent = match (&self.route, settle) {
+                (None, _) if !still() => return Ok(()),
+                (None, None) => self.token.cancel_query(self.tls.clone()).await,
+                (None, Some(settle)) => self.token.cancel_query_settled(self.tls.clone(), settle).await,
+                (Some(route), settle) => {
                     let handshake = self.tls.to(route.name()).map_err(|e| DbError::Tls(e.0))?;
                     let stream = route.dial(CANCEL_DIAL).await?;
                     if !still() {
                         return Ok(());
                     }
-                    self.token.cancel_query_raw(stream, handshake).await.map_err(|e| db_error(&e))
+                    match settle {
+                        None => self.token.cancel_query_raw(stream, handshake).await,
+                        Some(settle) => self.token.cancel_query_raw_settled(stream, handshake, settle).await,
+                    }
                 }
+            };
+            sent.map_err(|e| db_error(&e))
+        };
+        tokio::pin!(sending);
+        // Within the bound until it is sent (or it failed); then, while the server takes it in,
+        // within the settle bound of its own.
+        let first = async {
+            tokio::select! {
+                biased;
+                done = &mut sending => Some(done),
+                _ = sent => None,
             }
         };
-        tokio::time::timeout(CANCEL_DIAL, sent).await.unwrap_or(Err(DbError::NoAnswer(CANCEL_DIAL)))
+        match tokio::time::timeout(CANCEL_DIAL, first).await {
+            Err(_) => Err(DbError::NoAnswer(CANCEL_DIAL)),
+            Ok(Some(done)) => done,
+            Ok(None) => sending.await,
+        }
     }
 
     /// The user's cancel ([`Cancel::send`]), asked during the session's request `request`
@@ -213,7 +244,7 @@ impl Cancel {
             return;
         }
         let hold = self.hold.clone();
-        if let Err(why) = self.send_if(|| still() && !hold.held()).await {
+        if let Err(why) = self.send_if(|| still() && !hold.held(), true).await {
             self.unsent.note(request, why);
         }
     }
@@ -286,5 +317,135 @@ mod tests {
         unsent.note(unsent.request(), DbError::Closed);
         let now = tokio::time::timeout(Duration::from_secs(1), unsent.current()).await;
         assert_eq!(now.ok(), Some(DbError::Closed));
+    }
+
+    /// A stream to the server whose bytes from it are held back until `open`: what the server
+    /// answers a cancel request (it closes the connection) does not get through before.
+    struct Gated {
+        inner: tokio::net::TcpStream,
+        /// Bytes written to the server so far.
+        wrote: Arc<AtomicU64>,
+        open: Arc<AtomicBool>,
+        waker: Arc<std::sync::Mutex<Option<std::task::Waker>>>,
+    }
+
+    impl tokio::io::AsyncRead for Gated {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            if !self.open.load(Ordering::SeqCst) {
+                *self.waker.lock().unwrap() = Some(cx.waker().clone());
+                if !self.open.load(Ordering::SeqCst) {
+                    return std::task::Poll::Pending;
+                }
+            }
+            std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+        }
+    }
+
+    impl tokio::io::AsyncWrite for Gated {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            let wrote = std::pin::Pin::new(&mut self.inner).poll_write(cx, buf);
+            if let std::task::Poll::Ready(Ok(n)) = &wrote {
+                self.wrote.fetch_add(*n as u64, Ordering::SeqCst);
+            }
+            wrote
+        }
+
+        fn poll_flush(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+        }
+
+        fn poll_shutdown(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+        }
+    }
+
+    /// Dials [`Gated`] streams that share one gate.
+    #[derive(Clone, Default)]
+    struct GatedDialer {
+        wrote: Arc<AtomicU64>,
+        open: Arc<AtomicBool>,
+        waker: Arc<std::sync::Mutex<Option<std::task::Waker>>>,
+    }
+
+    impl GatedDialer {
+        fn open(&self) {
+            self.open.store(true, Ordering::SeqCst);
+            if let Some(w) = self.waker.lock().unwrap().take() {
+                w.wake();
+            }
+        }
+    }
+
+    impl datarig_core::transport::Dialer for GatedDialer {
+        fn dial(&self, host: &str, port: u16) -> futures::future::BoxFuture<'static, Result<BoxedStream, DialError>> {
+            let (host, gate) = (host.to_string(), self.clone());
+            Box::pin(async move {
+                let inner = tokio::net::TcpStream::connect((host.as_str(), port))
+                    .await
+                    .map_err(|e| DialError::Failed(Fault::other(e.to_string())))?;
+                let stream = Gated { inner, wrote: gate.wrote, open: gate.open, waker: gate.waker };
+                Ok(Box::new(stream) as BoxedStream)
+            })
+        }
+    }
+
+    /// A user's cancel counts as on its way until the server has closed its connection, not only
+    /// until it is written: [`Hold::hold`] waits for that, so a cancel the server has not passed
+    /// on yet cannot land on what the session sends next. The server's close is held back here
+    /// (the cancel's stream gives nothing from the server until let through).
+    #[tokio::test]
+    async fn the_hold_waits_until_the_server_took_a_cancel_in() {
+        let url = match std::env::var("DATARIG_TEST_PG_URL") {
+            Ok(u) if !u.is_empty() => u,
+            _ => {
+                if std::env::var("DATARIG_REQUIRE_PG").is_ok_and(|v| v == "1") {
+                    panic!("DATARIG_TEST_PG_URL must be set when DATARIG_REQUIRE_PG=1");
+                }
+                eprintln!("SKIPPED the_hold_waits_until_the_server_took_a_cancel_in: set DATARIG_TEST_PG_URL");
+                return;
+            }
+        };
+        let mut cfg: Config = url.parse().expect("a test database URL");
+        cfg.ssl_mode(tokio_postgres::config::SslMode::Disable);
+        let (client, conn) = cfg.connect(tokio_postgres::NoTls).await.expect("connect");
+        let conn = tokio::spawn(conn);
+        let dialer = GatedDialer::default();
+        let route = route(&cfg, DialerRef(Arc::new(dialer.clone()))).expect("a route");
+        let tls = PgTls::new(datarig_core::tls::TlsSettings::plain());
+        let cancel = Cancel::new(client.cancel_token(), Some(route), tls);
+        let asking = cancel.clone();
+        let asked = tokio::spawn(async move { asking.ask(asking.unsent.request(), || true).await });
+        // A cancel request is 16 bytes.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while dialer.wrote.load(Ordering::SeqCst) < 16 {
+            assert!(std::time::Instant::now() < deadline, "the cancel was never written");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let early = tokio::time::timeout(Duration::from_millis(300), cancel.hold.hold()).await;
+        assert!(early.is_err(), "the hold came while the cancel was still on its way");
+        dialer.open();
+        tokio::time::timeout(Duration::from_secs(5), cancel.hold.hold()).await.expect("held once the server took it");
+        cancel.hold.release();
+        asked.await.expect("asked");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), cancel.unsent.current()).await.is_err(),
+            "it was sent"
+        );
+        drop(client);
+        let _ = conn.await;
     }
 }
