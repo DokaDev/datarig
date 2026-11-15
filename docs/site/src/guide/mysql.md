@@ -152,7 +152,12 @@ their results read-only ("this connection type can't edit data").
   (`sjis`, `cp932`, …) are not used.
 - **Identical rows.** In a table without a primary key or a `NOT NULL` unique key, when the
   result shows every column, each comparing exactly, rows the same in all of them can be changed all at once or just one
-  ("[1] just one", written with `LIMIT 1`).
+  ("[1] just one", written with `LIMIT 1`). Which of them `LIMIT 1` changes is the server's
+  pick, and a replica that replays the statement picks again, so "just one" is applied only while
+  the session's binary log keeps rows (`binlog_format` `ROW` or `MIXED`, which logs such a
+  statement as rows) or keeps nothing of the session (`log_bin` or `sql_log_bin` off). With
+  `binlog_format = STATEMENT`, or when it cannot be read, the Apply sends nothing and says why;
+  changing all of them is still possible.
 - **`FLOAT`** is sent rounded, so its cells are edited one at a time, and a row is not cloned
   with one. A typed value is refused while text is read in another character set than `utf8mb4`
   or a `TIMESTAMP` in a time zone that is not a fixed offset, as Copy as SQL refuses them.

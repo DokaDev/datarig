@@ -1205,7 +1205,7 @@ mod terminal {
         use datarig_core::edit::{Expect, Origin, Step};
 
         fn steps(table: &str) -> Vec<Step> {
-            let step = |sql: String, expect| Step { sql, expect, origin: Origin::Row(0) };
+            let step = |sql: String, expect| Step { sql, expect, origin: Origin::Row(0), one: false };
             vec![
                 step(format!("SELECT 1 FROM {table} WHERE id = 1 FOR UPDATE NOWAIT"), Expect::Rows(1)),
                 step(format!("UPDATE {table} SET v = 'applied' WHERE id = 1 AND v = 'a'"), Expect::Affected(1)),

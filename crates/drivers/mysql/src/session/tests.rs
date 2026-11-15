@@ -1373,7 +1373,7 @@ async fn an_explain_analyze_whose_kill_hangs_never_shows_its_transaction_open() 
 /// session sends, answered by the test.
 fn apply_command() -> datarig_core::driver::DbCommand {
     use datarig_core::edit::{Expect, Origin, Step};
-    let step = |sql: &str, expect| Step { sql: sql.into(), expect, origin: Origin::Row(0) };
+    let step = |sql: &str, expect| Step { sql: sql.into(), expect, origin: Origin::Row(0), one: false };
     datarig_core::driver::DbCommand::ApplyEdits {
         id: 1,
         steps: vec![

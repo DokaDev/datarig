@@ -64,8 +64,12 @@ async fn refuses_edits(url: &str, c: &mut Conn, t: &Table, test: &str) -> bool {
     assert_eq!(c.edit, None);
     let all = format!("SELECT * FROM {}", t.q());
     let before = c.rows(&all).await;
-    let step =
-        edit::Step { sql: format!("DELETE FROM {}", t.q()), expect: Expect::Affected(1), origin: edit::Origin::Row(0) };
+    let step = edit::Step {
+        sql: format!("DELETE FROM {}", t.q()),
+        expect: Expect::Affected(1),
+        origin: edit::Origin::Row(0),
+        one: false,
+    };
     let failure = c.apply(vec![step], ApplyTx::Commit).await.unwrap_err();
     assert_eq!(failure, ApplyFailure { step: None, why: ApplyError::Db(DbError::NotSupported) });
     assert_eq!(c.rows(&all).await, before, "nothing was written");
@@ -506,6 +510,54 @@ async fn identical_rows_of_a_keyless_table_change_one_or_all_and_text_compares_e
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn just_one_of_identical_rows_is_refused_while_the_binary_log_keeps_statements() {
+    const TEST: &str = "just_one_of_identical_rows_is_refused_while_the_binary_log_keeps_statements";
+    let Some(url) = url(TEST) else { return };
+    // Setting the session's binlog_format takes a privilege the test user has not.
+    let Some(admin) = std::env::var("DATARIG_TEST_MYSQL_ADMIN_URL").ok().filter(|u| !u.is_empty()) else {
+        let _ = writeln!(std::io::stderr(), "SKIPPED {TEST}: set DATARIG_TEST_MYSQL_ADMIN_URL");
+        return;
+    };
+    let admin = format!("{}/shop", admin.trim_end_matches('/'));
+    let t = Table::make(
+        &url,
+        "binlog",
+        &["CREATE TABLE {t} (k INT, v VARCHAR(10))", "INSERT INTO {t} VALUES (1, 'same'), (1, 'same')"],
+    )
+    .await;
+    let mut c = Conn::open(&admin, SessionRole::Query, false).await;
+    if refuses_edits(&admin, &mut c, &t, TEST).await {
+        return;
+    }
+    let (_, logging) = c.read("SELECT @@GLOBAL.log_bin").await;
+    if logging[0][0].as_deref() != Some("1") {
+        let _ = writeln!(std::io::stderr(), "SKIPPED {TEST}: the server keeps no binary log");
+        return;
+    }
+    let select = format!("SELECT k, v FROM {}", t.q());
+    let e = Editing::new(&admin, &mut c, &t, &select).await;
+    let mut b = EditBatch::new();
+    b.set(&[(0, 1)], &text("one"), e.orig());
+    let one = e.plan(&mut c, &b, &[(0, Choice::One)]).await;
+    assert!(one.steps.iter().any(|s| s.one), "{:?}", one.steps);
+    c.ok("SET SESSION binlog_format = 'STATEMENT'").await;
+    let got = c.apply(one.steps.clone(), ApplyTx::Commit).await;
+    let refused = |f: &ApplyFailure| {
+        f.step.is_none() && f.why == ApplyError::Db(DbError::StatementLogged(Some("STATEMENT".into())))
+    };
+    assert!(got.as_ref().is_err_and(refused), "{got:?}");
+    let sorted = format!("{select} ORDER BY v");
+    assert_eq!(cells(&c.rows(&sorted).await), [[Some("1"), Some("same")], [Some("1"), Some("same")]]);
+    // All of them is the same statement on every server: sent.
+    let all = e.plan(&mut c, &b, &[(0, Choice::All)]).await;
+    assert!(all.steps.iter().all(|s| !s.one), "{:?}", all.steps);
+    // MIXED logs a statement with LIMIT as rows: sent.
+    c.ok("SET SESSION binlog_format = 'MIXED'").await;
+    assert_eq!(counts(&c.apply(one.steps, ApplyTx::Commit).await.expect("applied")), [2, 1]);
+    assert_eq!(cells(&c.rows(&sorted).await), [[Some("1"), Some("one")], [Some("1"), Some("same")]]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn rows_that_differ_only_where_values_do_not_compare_are_refused() {
     let Some(url) = url("rows_that_differ_only_where_values_do_not_compare_are_refused") else { return };
     let t = Table::make(
@@ -637,6 +689,7 @@ async fn a_read_only_session_refuses_an_apply_unsent() {
             sql: format!("UPDATE {} SET v = 'mine' WHERE id = 1", t.q()),
             expect: Expect::Affected(1),
             origin: edit::Origin::Row(0),
+            one: false,
         }]
     } else {
         let e = Editing::new(&url, &mut c, &t, &select).await;

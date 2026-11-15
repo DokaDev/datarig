@@ -304,6 +304,11 @@ pub enum DbError {
     /// `schema.table (engine)`; none when the text could not be read for its names (an
     /// executable comment, a text too long).
     NotUndoable(Vec<String>),
+    /// MySQL: an Apply changes one of several rows the same in every column
+    /// ([`crate::edit::Step::one`], written with `LIMIT 1`) while the session's binary log takes
+    /// statements as they are written (`binlog_format` here; `None` when it could not be read):
+    /// a replica replaying the statement may change another of those rows. Nothing was sent.
+    StatementLogged(Option<String>),
     /// A statement sent as a plain read ([`TxStep::ReadOnly`]) asks for a read-write transaction
     /// or turns read-only off (`SET TRANSACTION READ WRITE`, `set_config()` of it, …), as the
     /// driver's own check reads it: it was not sent. Send it as [`TxStep::Open`] instead.
@@ -403,6 +408,7 @@ impl DbError {
             | DbError::ReservedSavepoint
             | DbError::ApplyNotUndone
             | DbError::NotUndoable(_)
+            | DbError::StatementLogged(_)
             | DbError::NotAPlainRead
             | DbError::NextTransactionSet
             | DbError::LockingRead
