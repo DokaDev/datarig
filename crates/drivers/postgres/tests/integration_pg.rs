@@ -1290,6 +1290,7 @@ async fn order_keys_are_read_without_a_lock() {
 #[tokio::test(flavor = "multi_thread")]
 async fn order_keys_never_run_a_types_own_modifier_output() {
     let Some(url) = pg_url("order_keys_never_run_a_types_own_modifier_output") else { return };
+    let (_database, url) = own_database(&url, "tmod");
     let schema = format!("zz_tmod_{}", std::process::id());
     let _guard = SchemaGuard::new(&url, &schema);
     let s = &schema;
@@ -4246,6 +4247,7 @@ async fn a_resumed_result_in_the_users_block_keeps_the_block() {
 async fn the_server_is_asked_before_a_statement_runs_again() {
     use datarig_core::sql::risk::repeat::NotRepeatable as N;
     let Some(url) = pg_url("the_server_is_asked_before_a_statement_runs_again") else { return };
+    let (_database, url) = own_database(&url, "rep");
     let schema = format!("zz_rep_{}", std::process::id());
     let _guard = SchemaGuard::new(&url, &schema);
     let setup = [
@@ -4526,6 +4528,23 @@ impl Drop for DatabaseGuard {
     }
 }
 
+/// A database of the test's own (`zz_<what>db_<pid>`, dropped when the test ends) and `url` with
+/// it in place of the shared one. For a test that adds an operator or a function named as the
+/// server's own, a cast between built-in types or a default operator class: the allowlist's and
+/// the planner's questions look for those in every schema of their database, so in the shared
+/// one they would refuse the counts and estimates of the tests running at the same time.
+fn own_database(url: &str, what: &str) -> (DatabaseGuard, String) {
+    let name = format!("zz_{what}db_{}", std::process::id());
+    let guard = DatabaseGuard { url: url.to_string(), name: name.clone() };
+    for sql in [format!("DROP DATABASE IF EXISTS {name} WITH (FORCE)"), format!("CREATE DATABASE {name}")] {
+        pg_clean::run_fresh(url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let host = url.rfind('@').map_or(url.find("//").unwrap() + 2, |i| i + 1);
+    let path = url[host..].find(['/', '?']).map_or(url.len(), |i| host + i);
+    let query = url[path..].find('?').map_or("", |i| &url[path + i..]);
+    (guard, format!("{}/{name}{query}", &url[..path]))
+}
+
 fn rows_of(ev: DbEvent) -> Vec<Vec<Option<String>>> {
     match ev {
         DbEvent::Page { rows, .. } => rows,
@@ -4626,6 +4645,7 @@ impl Drop for TableGuard {
 async fn public_follows_the_chosen_schema() {
     use datarig_core::driver::SessionContext;
     let Some(url) = pg_url("public_follows_the_chosen_schema") else { return };
+    let (_database, url) = own_database(&url, "pubctx");
     let pid = std::process::id();
     let schema = format!("zz_pubctx_{pid}");
     let function = format!("public.zz_pubfn_{pid}()");
@@ -6825,6 +6845,7 @@ async fn first_cell(c: &mut Conn, id: u64, sql: &str) -> Option<String> {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_schema_ahead_of_pg_catalog_does_not_answer_whether_a_block_is_open() {
     let Some(url) = pg_url("a_schema_ahead_of_pg_catalog_does_not_answer_whether_a_block_is_open") else { return };
+    let (_database, url) = own_database(&url, "pathblock");
     let (_schema_guard, _terminate, schema, _tag) = scratch(&url, "pathblock");
     shadow_operator(&url, &schema, "<>", "timestamptz", true);
     let mut c = Conn::open(&url, SessionRole::Query).await;
@@ -6850,6 +6871,7 @@ async fn a_schema_ahead_of_pg_catalog_does_not_answer_whether_a_block_is_open() 
 async fn a_catalog_read_puts_pg_catalog_first_on_the_path() {
     use datarig_driver_postgres::catalog_sql::BEGIN_READ;
     let Some(url) = pg_url("a_catalog_read_puts_pg_catalog_first_on_the_path") else { return };
+    let (_database, url) = own_database(&url, "pathread");
     let (_schema_guard, _terminate, schema, _tag) = scratch(&url, "pathread");
     shadow_operator(&url, &schema, "=", "int", false);
     let mut c = Conn::open(&url, SessionRole::Query).await;
@@ -7144,6 +7166,7 @@ async fn an_estimate_takes_no_lock_beyond_access_share() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_bounded_read_runs_nothing_the_search_path_can_shadow() {
     let Some(url) = pg_url("a_bounded_read_runs_nothing_the_search_path_can_shadow") else { return };
+    let (_database, url) = own_database(&url, "shadow");
     let pid = std::process::id();
     let schema = format!("zz_shadow_{pid}");
     let _schema = SchemaGuard::new(&url, &schema);
@@ -8134,11 +8157,13 @@ async fn an_estimate_of_what_cannot_be_locked_is_refused() {
 /// Planning compares values of a column's type by itself: on a server before 14 a range of the
 /// user's over a built-in subtype takes no function of the user's on its own type, yet its
 /// selectivity runs the comparison of its subtype's operator class. Only columns of types the
-/// server ships, compared with its own code, are planned; the function never runs.
+/// server ships, compared with its own code, are planned; the function never runs. In a database
+/// of its own ([`own_database`]): it adds a default operator class and a cast for built-in types.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_estimate_takes_only_columns_of_types_planning_is_known_to_handle() {
     use datarig_core::sql::risk::repeat::NotRepeatable;
     let Some(url) = pg_url("an_estimate_takes_only_columns_of_types_planning_is_known_to_handle") else { return };
+    let (_database, url) = own_database(&url, "plantype");
     let schema = format!("zz_plantype_{}", std::process::id());
     let _schema = SchemaGuard::new(&url, &schema);
     let s = &schema;
