@@ -554,6 +554,7 @@ fn every_refusal_of_a_sort_or_filter_by_value_fits_80_columns() {
             Label::TableClearAllNothing.into(),
             Label::TableColumnLineStale.into(),
             Label::TableColumnHideGone.into(),
+            Msg::TableColumnNotListed { column: column() },
         ];
         for m in all {
             h.app.transient = Some((Notice::new(m.clone(), Level::Warning), std::time::Instant::now()));

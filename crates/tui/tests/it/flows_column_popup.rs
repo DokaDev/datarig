@@ -529,3 +529,82 @@ fn advanced_from_the_popup_drops_the_lines() {
     assert!(lines(&h).is_empty());
     assert_eq!(h.app.focus, Focus::Results);
 }
+
+/// `shop.users` open, its key-only read answered with a catalogue that lists only `id` and
+/// `name` (read before `email` was added), the rows answered with all three columns.
+fn users_with_old_catalogue() -> Harness {
+    use datarig_core::driver::keys::{CatalogColumn, OrderKeys};
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    let ask = h.sent().iter().find_map(|c| match c {
+        DbCommand::LoadTableKeys { id, .. } => Some(*id),
+        _ => None,
+    });
+    let col = |name: &str, ty: &str| CatalogColumn {
+        name: name.into(),
+        type_name: ty.into(),
+        not_null: false,
+        primary_key: false,
+        foreign_key: false,
+        invisible: false,
+    };
+    let keys = OrderKeys { columns: Some(vec![col("id", "bigint"), col("name", "text")]), ..OrderKeys::default() };
+    h.meta_db("local-pg", DbEvent::TableKeys { id: ask.expect("the keys read"), result: Ok(keys) });
+    answer(&mut h);
+    h.key(KeyCode::Tab);
+    h.app.detail.visible = false;
+    h.draw(120, 34);
+    h.sent();
+    h
+}
+
+/// A column of the rows shown that the table's columns as read do not list opens no popup
+/// (it would be another column's): said, nothing sent. A column they list opens as ever.
+#[test]
+fn a_column_the_catalogue_does_not_list_opens_no_popup() {
+    let mut h = users_with_old_catalogue();
+    at(&mut h, 0, 2);
+    h.keys("F");
+    assert_eq!(popup(&h), None, "F on email");
+    assert!(flashed(&h).contains("\u{201c}email\u{201d}"), "{}", flashed(&h));
+    let at2 = head(&mut h, 2, false);
+    click(&mut h, at2);
+    assert_eq!(popup(&h), None, "a click on email's header");
+    at(&mut h, 0, 1);
+    h.keys("F");
+    assert_eq!(popup_on(&mut h).as_deref(), Some("name"));
+    assert!(runs(&mut h).is_empty());
+}
+
+/// A change between the press and the release that is undone before the release (the Chart
+/// shown and the rows again, the view scrolled sideways and back) still leaves the release
+/// doing nothing: the press is over at the first change.
+#[test]
+fn a_change_undone_before_the_release_still_opens_nothing() {
+    let mut h = users();
+    let at = head(&mut h, 1, false);
+    down(&mut h, at);
+    h.keys("L");
+    assert_ne!(h.app.tab().exec.view, datarig_tui::app::tabs::ResultView::Rows, "another view");
+    h.keys("H");
+    assert_eq!(h.app.tab().exec.view, datarig_tui::app::tabs::ResultView::Rows);
+    h.draw(120, 34);
+    up(&mut h, at);
+    assert_eq!(popup(&h), None, "a view away and back");
+    // Sideways and back.
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    answer_wide(&mut h, 200);
+    h.key(KeyCode::Tab);
+    h.app.detail.visible = false;
+    let at = head(&mut h, 1, false);
+    down(&mut h, at);
+    let before = h.app.tab().grid.x_off;
+    h.mouse(MouseEventKind::ScrollRight, at.0, at.1 + 3);
+    assert_ne!(h.app.tab().grid.x_off, before);
+    h.mouse(MouseEventKind::ScrollLeft, at.0, at.1 + 3);
+    assert_eq!(h.app.tab().grid.x_off, before, "back");
+    h.draw(120, 34);
+    up(&mut h, at);
+    assert_eq!(popup(&h), None, "sideways and back");
+}

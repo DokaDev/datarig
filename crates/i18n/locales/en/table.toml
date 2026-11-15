@@ -80,6 +80,7 @@
 "table.column.off.stale" = "grid changed"
 "table.column.line_stale" = "Not run: the cells changed since it was shown"
 "table.column.hide_gone" = "Not hidden: this column is not shown now"
+"table.column.not_listed" = "Not opened: no “{column}” in the columns read; refresh the explorer"
 "table.view.unavailable" = "Hidden columns kept for this session only: {error}"
 "table.view.save_failed" = "Hidden columns not saved: {error}"
 "table.clear_all.nothing" = "Nothing cleared: no condition and no order"

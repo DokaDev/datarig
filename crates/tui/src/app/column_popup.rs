@@ -100,6 +100,17 @@ impl App {
         true
     }
 
+    /// After every input and every frame: a press on a header whose grid is no longer the one
+    /// pressed (another view, result, scroll or columns shown) is over, even if what changed
+    /// comes back before the release.
+    pub(crate) fn header_press_settle(&mut self) {
+        if let Some(Drag::Header(p)) = self.pointer.drag
+            && self.header_press_on(p.col) != Some(p)
+        {
+            self.pointer.drag = None;
+        }
+    }
+
     /// A press on a header that has not moved is over: its release was lost (the pointer moved
     /// with no button held), or a dialog came over it.
     pub(super) fn header_press_drop(&mut self) {
@@ -144,7 +155,7 @@ impl App {
 
     /// The condition popup of the active table tab's cursor column, under its header: with
     /// `lines`, the lines above it (`Some(true)`: the filters by the cursor's value too). Why
-    /// not, said, when the tab shows no column.
+    /// not, said, when the tab shows no column or the table's columns as read do not list it.
     pub(super) fn open_column_popup(&mut self, lines: Option<bool>) {
         self.close_search_prompt();
         // The rows first: the popup is about the grid's column.
@@ -163,9 +174,17 @@ impl App {
         };
         let anchor = self.header_anchor();
         self.open_filter_popup(PopupKind::Condition { col: column.clone() }, anchor, None);
+        let id = self.tab().id;
+        let Some(d) = self.filter_dialog().filter(|d| d.tab == id && d.is_popup()) else { return };
+        // The dialog's columns are the table's as read (its catalogue): one of the rows shown
+        // they do not list (added since) would leave the popup on another column.
+        if d.column().is_none_or(|c| c.name != column) {
+            self.filter_dialog_dismiss();
+            let column = crate::text::escape_controls(&column);
+            return self.flash(Notice::new(Msg::TableColumnNotListed { column }, Level::Warning));
+        }
         let Some(cells) = lines else { return };
         let values = if cells { self.value_lines() } else { None };
-        let id = self.tab().id;
         let Some(d) = self.filter_dialog_mut().filter(|d| d.tab == id && d.is_popup()) else { return };
         if !matches!(d.popup_kind(), Some(PopupKind::Condition { col }) if *col == column) {
             return;
