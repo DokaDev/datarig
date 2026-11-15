@@ -13,7 +13,7 @@
 //! (split on blanks, no shell). Skipped without it, unless `DATARIG_REQUIRE_MYSQL=1`.
 
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
-use datarig_core::sql::risk::mysql::BUILTINS;
+use datarig_core::sql::risk::mysql::{BUILTINS, MARIADB_CONSTRUCTORS, NOT_ON_MARIADB};
 use datarig_core::sql::risk::{Class, Classifier};
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -21,8 +21,10 @@ use std::process::{Command, Stdio};
 
 include!("../src/sql/risk/mysql/corpus.rs");
 
-const MY: Language =
-    Language::Sql(Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false }));
+const MODE: MySqlMode =
+    MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false };
+
+const MY: Language = Language::Sql(Dialect::MySql(MODE));
 
 /// The error MySQL gives a write in a read-only transaction.
 const READ_ONLY: u32 = 1792;
@@ -242,16 +244,62 @@ fn every_built_in_is_a_function_of_the_server() {
     let errors = errors(&client, "", &refs);
     let unknown: Vec<&str> = errors.iter().filter(|&(_, &e)| e == 1305).map(|(i, _)| names[*i]).collect();
     eprintln!("built-ins this server does not have: {unknown:?}");
+    if mariadb(&client) {
+        functions_mariadb_does_not_provide(&unknown);
+        return geometry_constructors_on_mariadb(&client);
+    }
     // Functions only some supported versions have.
     const NOT_EVERYWHERE: &[&str] =
         &["MD5", "SHA1", "STRING_TO_VECTOR", "VECTOR_DIM", "VECTOR_TO_STRING", "WAIT_UNTIL_SQL_THREAD_AFTER_GTIDS"];
-    if mariadb(&client) {
-        on_mariadb(
-            "every_built_in_is_a_function_of_the_server",
-            "the built-in list is MySQL's; names MariaDB lacks are not checked here",
-        );
-        return;
-    }
     let missing: Vec<&&str> = unknown.iter().filter(|n| !NOT_EVERYWHERE.contains(n)).collect();
     assert!(missing.is_empty(), "not functions of this server: {missing:?}");
+    // MySQL's own functions are built-ins to the read check, whatever MariaDB has.
+    for name in NOT_ON_MARIADB.lines() {
+        let risk = Classifier::classify_once(MY, &format!("SELECT {name}()"));
+        assert!(!risk.unchecked_call, "{name}");
+    }
+}
+
+/// On MariaDB: the names of [`BUILTINS`] that `unknown` (this server looks them up as stored
+/// functions) are those of `NOT_ON_MARIADB`, less the functions MariaDB added after 10.6, which
+/// this server has; and the read check of a MariaDB session takes a call of each as an unchecked
+/// call, which a read-only profile refuses.
+fn functions_mariadb_does_not_provide(unknown: &[&str]) {
+    const ADDED_AFTER_10_6: &[&str] =
+        &["FORMAT_PICO_TIME", "JSON_OVERLAPS", "JSON_PRETTY", "JSON_SCHEMA_VALID", "RANDOM_BYTES"];
+    let listed: Vec<&str> = NOT_ON_MARIADB.lines().collect();
+    let not_listed: Vec<&&str> = unknown.iter().filter(|n| !listed.contains(n)).collect();
+    assert!(not_listed.is_empty(), "add to NOT_ON_MARIADB: {not_listed:?}");
+    let has: Vec<&&str> = listed.iter().filter(|n| !unknown.contains(n) && !ADDED_AFTER_10_6.contains(n)).collect();
+    assert!(has.is_empty(), "functions of this server, drop from NOT_ON_MARIADB: {has:?}");
+    let session = Language::Sql(Dialect::MySql(MySqlMode { mariadb: true, ..MODE }));
+    for name in &listed {
+        let risk = Classifier::classify_once(session, &format!("SELECT {name}()"));
+        assert!(risk.unchecked_call && risk.read_only().is_err(), "{name}");
+    }
+}
+
+/// On MariaDB: a geometry constructor given the arguments its grammar reads is MariaDB's own
+/// and a built-in to the read check of a MariaDB session; given others, the server looks it up
+/// as a stored function and the read check takes it as an unchecked call.
+fn geometry_constructors_on_mariadb(client: &[String]) {
+    let session = Language::Sql(Dialect::MySql(MySqlMode { mariadb: true, ..MODE }));
+    let mut texts = Vec::new();
+    for &(name, fewest, _) in MARIADB_CONSTRUCTORS {
+        let point = if name == "POINT" { "1" } else { "POINT(1, 1)" };
+        for n in [0, fewest, fewest + 1] {
+            let args = vec![point; n].join(", ");
+            texts.push((
+                format!("SELECT {name}({args}) IS NULL"),
+                MARIADB_CONSTRUCTORS.iter().any(|&(c, lo, hi)| c == name && (lo..=hi).contains(&n)),
+            ));
+        }
+    }
+    let statements: Vec<(usize, &str)> = texts.iter().enumerate().map(|(i, (sql, _))| (i, sql.as_str())).collect();
+    let errors = errors(client, "", &statements);
+    for (i, (sql, native)) in texts.iter().enumerate() {
+        assert_eq!(errors.get(&i) != Some(&1305), *native, "{sql}: {:?}", errors.get(&i));
+        let risk = Classifier::classify_once(session, sql);
+        assert_eq!(risk.unchecked_call, !native, "{sql}");
+    }
 }

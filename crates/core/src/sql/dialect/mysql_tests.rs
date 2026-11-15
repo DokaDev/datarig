@@ -11,10 +11,12 @@ use crate::sql::lexer::{Tok, changes_schema_in, lex_in};
 use crate::sql::risk::{Class, Classifier, Danger};
 use crate::sql::split::{split, split_in};
 
-const MY: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
+const MY: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
 const ANSI: Dialect =
-    Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: false, dollar_quotes: false });
-const NBE: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true, dollar_quotes: false });
+    Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
+const NBE: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true, dollar_quotes: false, mariadb: false });
 const PG: Dialect = Dialect::Postgres;
 
 fn kinds(src: &str, d: Dialect) -> Vec<(Tok, &str)> {

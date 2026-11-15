@@ -25,8 +25,8 @@ pub enum Dialect {
 }
 
 /// What of a MySQL session changes how its text is read and how strings are written: parts of
-/// its `sql_mode`, and whether its server reads dollar quotes. The default is a default MySQL
-/// 8.0 server's: `"x"` is a string, a backslash escapes the next character in a string, and
+/// its `sql_mode`, whether its server reads dollar quotes, and whether the server is MariaDB.
+/// The default is a default MySQL 8.0 server's: `"x"` is a string, a backslash escapes the next character in a string, and
 /// `$$` is no quote.
 ///
 /// Until a session says otherwise, text is read in the default mode. On a session whose mode
@@ -46,6 +46,12 @@ pub struct MySqlMode {
     /// `select $$` (a syntax error there means yes: MySQL 8.4 and 9.x; 8.0 reads `$$` as a name)
     /// and then does not end a statement inside one.
     pub dollar_quotes: bool,
+    /// The server is MariaDB. An unqualified call of a name MariaDB does not have as a function
+    /// of its own is a stored function of the current database there, so the risk classifier
+    /// counts as built-ins only the functions MariaDB provides
+    /// (`risk::mysql::NOT_ON_MARIADB`). The default (a MySQL server) is the driver's until a
+    /// session says which server it is on.
+    pub mariadb: bool,
 }
 
 impl Dialect {

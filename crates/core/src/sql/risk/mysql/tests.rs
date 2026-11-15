@@ -3,7 +3,9 @@ use crate::sql::risk::{Classifier, ReadOnlyBlock, TxStep};
 
 include!("corpus.rs");
 
-const MODE: MySqlMode = MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false };
+const MODE: MySqlMode =
+    MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false };
+const MARIADB: MySqlMode = MySqlMode { mariadb: true, ..MODE };
 
 fn risk(sql: &str) -> Risk {
     classify(sql, MODE)
@@ -347,14 +349,15 @@ fn a_routine_whose_blocks_cannot_be_followed_asks() {
 #[test]
 fn deep_nesting_is_read_in_linear_time() {
     let calls = format!("SELECT {}1{}", "abs(".repeat(MAX_DEPTH - 1), ")".repeat(MAX_DEPTH - 1));
+    let points = format!("SELECT {}1{}", "POINT(1, ".repeat(MAX_DEPTH - 1), ")".repeat(MAX_DEPTH - 1));
     let cond = format!("DELETE FROM t WHERE {}a = 1{}", "(".repeat(MAX_DEPTH - 1), ")".repeat(MAX_DEPTH - 1));
     let ctes = format!(
         "WITH {} SELECT 1",
         (0..5000).map(|i| format!("c{i} (x) AS (SELECT 1)")).collect::<Vec<_>>().join(", ")
     );
-    for text in [&calls, &cond, &ctes] {
+    for (text, mode) in [(&calls, MODE), (&cond, MODE), (&ctes, MODE), (&points, MARIADB)] {
         let start = std::time::Instant::now();
-        let r = risk(text);
+        let r = classify(text, mode);
         assert!(r.danger.is_none() || r.danger == Some(Danger::DeleteAll), "{:?}", r.danger);
         assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
     }
@@ -364,7 +367,8 @@ fn deep_nesting_is_read_in_linear_time() {
 /// guard (which would turn a panic into a verdict): no panic.
 #[test]
 fn no_text_makes_the_classifier_panic() {
-    let modes = [MODE, MySqlMode { ansi_quotes: true, no_backslash_escapes: true, dollar_quotes: true }];
+    let modes =
+        [MODE, MySqlMode { ansi_quotes: true, no_backslash_escapes: true, dollar_quotes: true, mariadb: false }];
     let mut texts: Vec<&str> = CORPUS.iter().map(|(sql, _)| *sql).collect();
     texts.extend([
         "SET CHARACTER",
@@ -403,6 +407,87 @@ fn the_built_in_lists_are_sorted_upper_case_and_known() {
     assert!(SAFE_SETTINGS.iter().all(|s| !RISKY_SETTINGS.contains(s) && !READ_ONLY_SETTINGS.contains(s)));
     for op in ["AND", "OR", "XOR", "IN", "IS", "LIKE", "REGEXP", "DIV", "EXISTS"] {
         assert!(!builtin(op), "{op} is an operator");
+    }
+}
+
+#[test]
+fn the_names_mariadb_does_not_provide_are_sorted_built_ins() {
+    let lines: Vec<&str> = NOT_ON_MARIADB.lines().collect();
+    assert!(lines.windows(2).all(|w| w[0] < w[1]), "sorted, no duplicates");
+    for name in &lines {
+        assert!(builtin(name), "{name}");
+    }
+    // What the read-only check refuses by name stays refused on MariaDB too.
+    for name in SERVER_FILES.iter().chain(SERVER_ACTIONS) {
+        assert!(builtin_in(name, MARIADB), "{name}");
+    }
+}
+
+/// On MariaDB an unqualified call of a function MariaDB does not provide names a stored
+/// function of the current database: it is an unchecked call there, as any function that is
+/// not a built-in, and stays a built-in on MySQL.
+#[test]
+fn functions_mariadb_does_not_provide_are_unchecked_calls_there() {
+    // Without arguments, as the server is asked about each (a geometry constructor given
+    // arguments may be MariaDB's own: see the test after this one).
+    for name in NOT_ON_MARIADB.lines() {
+        let sql = format!("SELECT {name}() FROM t");
+        let mysql = classify(&sql, MODE);
+        assert!(!mysql.unchecked_call && !mysql.runs_code && mysql.read_only().is_ok(), "{sql}");
+        let maria = classify(&sql, MARIADB);
+        assert!(maria.unchecked_call && maria.runs_code, "{sql}");
+        assert_eq!(maria.read_only(), Err(ReadOnlyBlock::UnknownFunction), "{sql}");
+    }
+    let quoted = classify("SELECT `ANY_VALUE`(a) FROM t GROUP BY b", MARIADB);
+    assert!(quoted.unchecked_call && quoted.read_only().is_err());
+    let r = classify("DO REGEXP_LIKE('a', 'b')", MARIADB);
+    assert_eq!((r.class, r.danger), (Class::Procedural, Some(Danger::Procedural)));
+    assert_eq!(render(&classify("DO REGEXP_LIKE('a', 'b')", MODE)), "read ro");
+    let r = classify("EXPLAIN ANALYZE SELECT ANY_VALUE(a) FROM t", MARIADB);
+    assert_eq!(r.danger, Some(Danger::AnalyzeRunsCode));
+    assert_eq!(repeatable("SELECT BIN_TO_UUID(a) FROM t", MARIADB), Err(NotRepeatable::UserFunction));
+    assert_eq!(repeatable("SELECT BIN_TO_UUID(a) FROM t", MODE), Ok(()));
+    // An event's body counts as on the server it is created on.
+    let event = "CREATE EVENT e ON SCHEDULE AT CURRENT_TIMESTAMP DO SELECT ANY_VALUE(a) FROM t";
+    assert_eq!(classify(event, MARIADB).danger, classify(event, MODE).danger);
+    // MariaDB's own functions stay built-ins there.
+    for sql in ["SELECT ABS(a), JSON_EXTRACT(j, '$.a'), REGEXP_SUBSTR(b, 'x') FROM t", "SELECT GROUP_CONCAT(b) FROM t"]
+    {
+        let r = classify(sql, MARIADB);
+        assert!(!r.unchecked_call && r.read_only().is_ok(), "{sql}");
+    }
+    assert_eq!(classify("SELECT GET_LOCK('a', 0)", MARIADB).danger, Some(Danger::ServerAction));
+}
+
+/// MariaDB's grammar reads its geometry constructors only with some numbers of arguments: so
+/// written they are built-ins there, otherwise the name is a stored function's.
+#[test]
+fn mariadb_geometry_constructors_are_built_ins_by_their_arguments() {
+    for sql in [
+        "SELECT POINT(1, 2)",
+        "SELECT `POINT`(ABS(a), COALESCE(b, 2)) FROM t",
+        "SELECT LINESTRING(POINT(1, 1), POINT(2, 2))",
+        "SELECT POLYGON(LINESTRING(POINT(0, 0), POINT(1, 0), POINT(0, 1), POINT(0, 0)))",
+        "SELECT MULTIPOINT(POINT(1, 1)), MULTILINESTRING(g), MULTIPOLYGON(g), GEOMETRYCOLLECTION(g) FROM t",
+    ] {
+        let r = classify(sql, MARIADB);
+        assert!(!r.unchecked_call && r.read_only().is_ok(), "{sql}");
+    }
+    for sql in [
+        "SELECT POINT()",
+        "SELECT POINT(1)",
+        "SELECT POINT(COALESCE(1, 2))",
+        "SELECT POINT(1, 2, 3)",
+        "SELECT LINESTRING()",
+        "SELECT GEOMETRYCOLLECTION()",
+        "SELECT GEOMCOLLECTION(POINT(1, 1))",
+    ] {
+        let r = classify(sql, MARIADB);
+        assert!(r.unchecked_call && r.read_only().is_err(), "{sql}");
+        assert!(!classify(sql, MODE).unchecked_call, "{sql}");
+    }
+    for (name, _, _) in MARIADB_CONSTRUCTORS {
+        assert!(NOT_ON_MARIADB.lines().any(|n| n == *name), "{name}");
     }
 }
 

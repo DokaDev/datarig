@@ -121,7 +121,7 @@ fn one_set_sets_the_session_up_by_role() {
 }
 
 #[test]
-fn the_mode_follows_the_sql_mode_and_the_version() {
+fn the_mode_follows_the_sql_mode_the_version_and_the_server() {
     let tracked = |mode: &str| Tracked { sql_mode: Some(mode.into()), ..Tracked::default() };
     assert_eq!(tracked("").mode(&MYSQL_84), MySqlMode { dollar_quotes: true, ..MySqlMode::default() });
     let ansi = tracked("REAL_AS_FLOAT,PIPES_AS_CONCAT,ANSI_QUOTES,IGNORE_SPACE,ONLY_FULL_GROUP_BY,ANSI");
@@ -132,7 +132,10 @@ fn the_mode_follows_the_sql_mode_and_the_version() {
     assert!(!tracked("NO_ANSI_QUOTES_X").mode(&MYSQL_84).ansi_quotes);
     let mysql80 = Server { version: (8, 0, 45), mariadb: false };
     assert!(!tracked("").mode(&mysql80).dollar_quotes);
-    assert!(!tracked("").mode(&Server { version: (11, 4, 2), mariadb: true }).dollar_quotes);
+    let maria = tracked("").mode(&Server { version: (11, 4, 2), mariadb: true });
+    assert!(!maria.dollar_quotes);
+    // Which server it is: the read check counts only the functions MariaDB provides as built-ins.
+    assert!(maria.mariadb && !tracked("").mode(&MYSQL_84).mariadb && !tracked("").mode(&mysql80).mariadb);
 }
 
 #[test]

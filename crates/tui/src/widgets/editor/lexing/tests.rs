@@ -203,7 +203,7 @@ fn right_after_a_semicolon_that_starts_its_line_is_the_statement_it_ends() {
 }
 
 const MYSQL: Dialect =
-    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
 
 /// MySQL-ish text: `DELIMITER` lines (also ones that are not commands: in a statement, or not at
 /// a line's start), terminators that are not `;`, executable comments, `#` and `-- ` comments,
@@ -257,8 +257,10 @@ fn mysqlish(rng: &mut Rng, pieces: usize) -> String {
 
 /// The MySQL modes the fuzz tests read text in: the default, and dollar quotes with
 /// `ANSI_QUOTES` and `NO_BACKSLASH_ESCAPES`.
-const MODES: [Dialect; 2] =
-    [MYSQL, Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: true, dollar_quotes: true })];
+const MODES: [Dialect; 2] = [
+    MYSQL,
+    Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: true, dollar_quotes: true, mariadb: false }),
+];
 
 /// The lexer state at every line start of text in dialect `d`, from a lex of the whole text.
 fn states_in(text: &str, d: Dialect) -> Vec<LineState> {

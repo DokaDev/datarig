@@ -306,3 +306,15 @@ fn an_allowed_statement_says_what_it_sets() {
     );
     assert_eq!(set(mysql("SET lock_wait_timeout = DEFAULT").unwrap()), pairs(&[("lock_wait_timeout", "DEFAULT")]));
 }
+
+/// The server is not known before the session opens: a start-up setting that calls a function
+/// MariaDB does not provide is read as on MariaDB too, where that name is a stored function's.
+#[test]
+fn mysql_start_up_settings_count_calls_as_on_mariadb_too() {
+    for sql in ["SET @x = ANY_VALUE(1)", "SET @x = BIN_TO_UUID(UUID_TO_BIN(UUID()))", "SET @p = POINT()"] {
+        assert_eq!(mysql(sql).err(), Some(SetProblem::Writes), "{sql}");
+    }
+    for sql in ["SET @x = ABS(-1)", "SET @x = UUID()", "SET @p = POINT(1, 2)"] {
+        assert!(mysql(sql).is_ok(), "{sql}");
+    }
+}

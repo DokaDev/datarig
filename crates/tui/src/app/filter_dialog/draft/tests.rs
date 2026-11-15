@@ -3,7 +3,8 @@ use datarig_core::query::{ColumnFacts, TableName};
 use datarig_core::sql::dialect::MySqlMode;
 
 const PG: Dialect = Dialect::Postgres;
-const MY: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
+const MY: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
 
 fn target(d: Dialect) -> Target {
     let mut name = ColumnFacts::new("name", ColumnKind::Text);

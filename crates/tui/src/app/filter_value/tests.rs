@@ -5,6 +5,7 @@ const MY: Dialect = Dialect::MySql(datarig_core::sql::dialect::MySqlMode {
     ansi_quotes: false,
     no_backslash_escapes: false,
     dollar_quotes: false,
+    mariadb: false,
 });
 
 fn meta(name: &str, ty: &str, kind: ValueKind) -> ColumnMeta {

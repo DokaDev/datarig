@@ -64,7 +64,8 @@
 //! ([`Risk::unchecked_call`]): an unqualified name may be a loadable function, code of the server's
 //! that a read-only transaction does not stop, and a stored function (`db.f()` too) may take user
 //! locks, sleep or read what the text does not show. Only the built-ins of [`BUILTINS`] are
-//! allowed, less [`SERVER_FILES`] and [`SERVER_ACTIONS`].
+//! allowed, less [`SERVER_FILES`] and [`SERVER_ACTIONS`], and on MariaDB less the functions it
+//! does not provide ([`NOT_ON_MARIADB`]: it looks a call of one up as a stored function).
 //!
 //! **Settings.** `SET` of a session variable on [`SAFE_SETTINGS`], of a user variable (`@x`), `SET
 //! NAMES`/`CHARACTER SET` of a UTF-8 character set and `SET ROLE` are safe; `SET` of one on
@@ -114,6 +115,37 @@ pub fn builtin(name: &str) -> bool {
     static SORTED: std::sync::OnceLock<Vec<&str>> = std::sync::OnceLock::new();
     SORTED.get_or_init(|| BUILTINS.lines().collect()).binary_search(&name).is_ok()
 }
+
+/// The names of [`BUILTINS`] that are no function of MariaDB's own in a version the driver
+/// connects to (10.6 on), upper case, one per line in byte order. MariaDB looks an unqualified
+/// call of one up as a stored function of the current database, so on MariaDB such a call is
+/// an unchecked call, as any function that is not a built-in. They are the names MariaDB 11.4
+/// does not know as functions, and those MariaDB added after 10.6 (`FORMAT_PICO_TIME`,
+/// `JSON_OVERLAPS`, `JSON_PRETTY`, `JSON_SCHEMA_VALID`, `RANDOM_BYTES`). A test runs each on
+/// MariaDB.
+pub const NOT_ON_MARIADB: &str = include_str!("mysql_builtins_not_mariadb.txt");
+
+/// Whether `name` (upper case) is a built-in function of the server `mode` is of, whatever its
+/// arguments: in [`BUILTINS`], and on MariaDB not in [`NOT_ON_MARIADB`]. A call of one of
+/// [`MARIADB_CONSTRUCTORS`] may be one there too, by its arguments ([`Call`]).
+pub fn builtin_in(name: &str, mode: MySqlMode) -> bool {
+    static SORTED: std::sync::OnceLock<Vec<&str>> = std::sync::OnceLock::new();
+    let missing = || SORTED.get_or_init(|| NOT_ON_MARIADB.lines().collect()).binary_search(&name).is_ok();
+    builtin(name) && !(mode.mariadb && missing())
+}
+
+/// MariaDB's geometry constructors of [`NOT_ON_MARIADB`], with the fewest and the most
+/// arguments its grammar reads them with: called with another number of arguments (`POINT()`),
+/// the name is a stored function's there.
+pub const MARIADB_CONSTRUCTORS: &[(&str, usize, usize)] = &[
+    ("GEOMETRYCOLLECTION", 1, usize::MAX),
+    ("LINESTRING", 1, usize::MAX),
+    ("MULTILINESTRING", 1, usize::MAX),
+    ("MULTIPOINT", 1, usize::MAX),
+    ("MULTIPOLYGON", 1, usize::MAX),
+    ("POINT", 2, 2),
+    ("POLYGON", 1, usize::MAX),
+];
 
 /// Built-ins that read a file of the server.
 pub const SERVER_FILES: &[&str] = &["LOAD_FILE"];
@@ -445,11 +477,20 @@ struct Call {
     name: String,
     /// Written with its database (`db.f()`): a stored function.
     qualified: bool,
+    /// How many arguments it is given (`None`: not known).
+    args: Option<usize>,
 }
 
 impl Call {
-    fn builtin(&self) -> bool {
-        !self.qualified && builtin(&self.name)
+    /// A built-in function of the server `mode` is of ([`builtin_in`]), or on MariaDB one of
+    /// [`MARIADB_CONSTRUCTORS`] given a number of arguments its grammar reads it with.
+    fn builtin(&self, mode: MySqlMode) -> bool {
+        let constructor = || {
+            MARIADB_CONSTRUCTORS.iter().any(|&(name, fewest, most)| {
+                name == self.name && self.args.is_some_and(|n| (fewest..=most).contains(&n))
+            })
+        };
+        !self.qualified && (builtin_in(&self.name, mode) || (mode.mariadb && constructor()))
     }
 }
 
@@ -515,7 +556,8 @@ fn guarded<T: Send>(fallback: impl FnOnce() -> T, f: impl FnOnce() -> T + Send) 
 fn classify_as(sql: &str, mode: MySqlMode) -> Option<Risk> {
     match statements(sql, mode) {
         Ok((stmts, hint)) => {
-            let risk = stmts.iter().map(|ws| statement(ws)).reduce(worse).unwrap_or_else(|| Risk::of(Class::Unknown));
+            let risk =
+                stmts.iter().map(|ws| statement(ws, mode)).reduce(worse).unwrap_or_else(|| Risk::of(Class::Unknown));
             Some(if hint { worse(risk, Risk::danger(Class::Read, Danger::Setting)) } else { risk })
         }
         Err(Unread::Syntax) => None,
@@ -838,6 +880,7 @@ fn find_top(ws: &[W], from: usize, words: &[&str]) -> Option<usize> {
 /// The function calls of `ws`.
 fn calls(ws: &[W]) -> Vec<Call> {
     let mut out = Vec::new();
+    let args = arguments(ws);
     // The procedure of a `CALL` (with its database or not).
     let procedure = ws.first().filter(|w| w.is("CALL")).and_then(|_| name_at(ws, 1)).map(|(_, next)| next - 1);
     for i in 0..ws.len().saturating_sub(1) {
@@ -871,7 +914,32 @@ fn calls(ws: &[W]) -> Vec<Call> {
         {
             continue;
         }
-        out.push(Call { name, qualified });
+        out.push(Call { name, qualified, args: args[i + 1] });
+    }
+    out
+}
+
+/// How many arguments each pair of parentheses of `ws` holds, by the index of its `(`: none,
+/// or one more than the commas directly inside it (`None`: it does not close). One pass.
+fn arguments(ws: &[W]) -> Vec<Option<usize>> {
+    let mut out = vec![None; ws.len()];
+    // The parentheses open at each token: where, and the commas directly inside so far.
+    let mut open: Vec<(usize, usize)> = Vec::new();
+    for (i, w) in ws.iter().enumerate() {
+        match w.kind {
+            Tok::LParen => open.push((i, 0)),
+            Tok::Comma => {
+                if let Some(top) = open.last_mut() {
+                    top.1 += 1;
+                }
+            }
+            Tok::RParen => {
+                if let Some((at, commas)) = open.pop() {
+                    out[at] = Some(if i == at + 1 { 0 } else { commas + 1 });
+                }
+            }
+            _ => {}
+        }
     }
     out
 }
@@ -918,10 +986,10 @@ fn unquote(text: &str) -> String {
 /// What the function calls of `ws` add to `risk`. In a statement that changes the schema, only
 /// the calls that act on the server count (a column definition or an index's key part looks
 /// like a call too, and such a statement is no read anyway).
-fn with_calls(mut risk: Risk, ws: &[W]) -> Risk {
+fn with_calls(mut risk: Risk, ws: &[W], mode: MySqlMode) -> Risk {
     let schema = risk.class == Class::Ddl;
     for c in calls(ws) {
-        if c.builtin() {
+        if c.builtin(mode) {
             let danger = if SERVER_FILES.contains(&c.name.as_str()) {
                 Some(Danger::ServerFile)
             } else if SERVER_ACTIONS.contains(&c.name.as_str()) {
@@ -943,15 +1011,15 @@ fn with_calls(mut risk: Risk, ws: &[W]) -> Risk {
     risk
 }
 
-/// The risk of one statement (its tokens).
-fn statement(ws: &[W]) -> Risk {
-    let mut risk = kind(ws);
+/// The risk of one statement (its tokens) on a server of `mode`.
+fn statement(ws: &[W], mode: MySqlMode) -> Risk {
+    let mut risk = kind(ws, mode);
     // A locking read anywhere (a subquery of a `SET`, a `SHOW … WHERE`, …) takes row locks; what
     // `EXPLAIN` only plans takes none.
     if risk.class < Class::Write && risk.explain != Explain::Plan && locks(ws) && !routine_body(ws) {
         risk.class = Class::Write;
     }
-    let risk = if routine_body(ws) { risk } else { with_calls(risk, ws) };
+    let risk = if routine_body(ws) { risk } else { with_calls(risk, ws, mode) };
     let harmless = matches!(risk.class, Class::Read | Class::Session | Class::Tx);
     if harmless && has_write_word(ws) { unrecognized() } else { risk }
 }
@@ -989,8 +1057,8 @@ fn has_write_word(ws: &[W]) -> bool {
     })
 }
 
-/// The risk of one statement by its form, before its calls.
-fn kind(ws: &[W]) -> Risk {
+/// The risk of one statement by its form, before its calls (on a server of `mode`).
+fn kind(ws: &[W], mode: MySqlMode) -> Risk {
     let Some(first) = ws.first() else { return Risk::of(Class::Unknown) };
     let word = |i: usize| ws.get(i).map_or("", |w| w.up.as_str());
     if first.kind == Tok::LParen {
@@ -1000,9 +1068,9 @@ fn kind(ws: &[W]) -> Risk {
         "SELECT" | "TABLE" | "VALUES" => query(ws),
         "WITH" => with(ws),
         "SHOW" | "HELP" => Risk::of(Class::Read),
-        "EXPLAIN" | "DESCRIBE" | "DESC" => explain(ws),
+        "EXPLAIN" | "DESCRIBE" | "DESC" => explain(ws, mode),
         "DO" => {
-            let code = calls(ws).iter().any(|c| !c.builtin());
+            let code = calls(ws).iter().any(|c| !c.builtin(mode));
             if code {
                 Risk { runs_code: true, ..Risk::danger(Class::Procedural, Danger::Procedural) }
             } else {
@@ -1014,8 +1082,8 @@ fn kind(ws: &[W]) -> Risk {
         "INSERT" | "REPLACE" => insert(ws),
         "UPDATE" => update(ws, 0),
         "DELETE" => delete(ws, 0),
-        "CREATE" => create(ws),
-        "ALTER" => alter(ws),
+        "CREATE" => create(ws, mode),
+        "ALTER" => alter(ws, mode),
         "DROP" => drop(ws),
         "RENAME" => {
             let mut r = ddl(Some(Danger::Rename));
@@ -1164,7 +1232,7 @@ fn with(ws: &[W]) -> Risk {
 }
 
 /// `EXPLAIN`, `DESCRIBE`, `DESC`: of a statement, of a table, or of another connection.
-fn explain(ws: &[W]) -> Risk {
+fn explain(ws: &[W], mode: MySqlMode) -> Risk {
     let mut i = 1;
     let mut analyze = false;
     let mut into = false;
@@ -1200,7 +1268,7 @@ fn explain(ws: &[W]) -> Risk {
             _ => unrecognized(),
         };
     }
-    let inner = kind(rest);
+    let inner = kind(rest, mode);
     let mut risk = if analyze {
         Risk { explain: Explain::Analyze, ..inner }
     } else {
@@ -1461,7 +1529,7 @@ fn same_sides(c: &[W]) -> bool {
 }
 
 /// `CREATE …`.
-fn create(ws: &[W]) -> Risk {
+fn create(ws: &[W], mode: MySqlMode) -> Risk {
     let Some(i) = object(ws) else { return unrecognized() };
     let temporary = ws[1..i].iter().any(|w| w.is("TEMPORARY"));
     let object = ws[i].up.as_str();
@@ -1472,7 +1540,7 @@ fn create(ws: &[W]) -> Risk {
     match object {
         "USER" | "ROLE" => ddl(Some(Danger::Privileges)),
         "INSTANCE" => unrecognized(),
-        "EVENT" => with_event_body(ddl(None), ws, i),
+        "EVENT" => with_event_body(ddl(None), ws, i, mode),
         "TABLE" => {
             let named = name_at(ws, i + 1 + if_not_exists(ws, i + 1));
             let after = named.as_ref().map_or(ws.len(), |(_, next)| *next);
@@ -1493,7 +1561,7 @@ fn create(ws: &[W]) -> Risk {
 /// An event's body (after its `DO`, from `from` on) runs later on its own, at once for one
 /// scheduled `AT CURRENT_TIMESTAMP`: a statement's danger is the event's, and a block
 /// (`BEGIN … END`) is code that is not read ([`Danger::Procedural`]).
-fn with_event_body(mut risk: Risk, ws: &[W], from: usize) -> Risk {
+fn with_event_body(mut risk: Risk, ws: &[W], from: usize, mode: MySqlMode) -> Risk {
     let Some(at) = find_top(ws, from, &["DO"]) else { return risk };
     let body = &ws[at + 1..];
     let first = body.first();
@@ -1505,7 +1573,7 @@ fn with_event_body(mut risk: Risk, ws: &[W], from: usize) -> Risk {
     } else if block {
         Risk::danger(Class::Procedural, Danger::Procedural)
     } else {
-        statement(body)
+        statement(body, mode)
     };
     // What the body does beats a name changed.
     if matches!(risk.danger, None | Some(Danger::Rename)) && inner.danger.is_some() {
@@ -1522,14 +1590,14 @@ fn if_not_exists(ws: &[W], i: usize) -> usize {
 }
 
 /// `ALTER …`.
-fn alter(ws: &[W]) -> Risk {
+fn alter(ws: &[W], mode: MySqlMode) -> Risk {
     let Some(object) = object(ws) else { return unrecognized() };
     match ws[object].up.as_str() {
         "USER" => ddl(Some(Danger::Privileges)),
         "EVENT" => {
             let head = find_top(ws, object, &["DO"]).map_or(ws, |at| &ws[..at]);
             let renames = head.iter().any(|w| w.is("RENAME"));
-            with_event_body(ddl(renames.then_some(Danger::Rename)), ws, object)
+            with_event_body(ddl(renames.then_some(Danger::Rename)), ws, object, mode)
         }
         "INSTANCE" => maintenance(Some(Danger::ServerCommand)),
         "TABLE" => {
@@ -1793,7 +1861,8 @@ fn owned(name: &str) -> Option<Owner> {
 /// Whether MySQL statement `sql` may be a session's start-up setting ([`super::session_set`]):
 /// one `SET` of session settings or user variables, or `SET SESSION TRANSACTION …`, read in
 /// every sql mode that changes how text is read (`ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`, both,
-/// neither: the session's mode is not known yet). What any reading refuses is refused, and so is
+/// neither: the session's mode is not known yet), as on MySQL and on MariaDB (nor is the
+/// server: [`NOT_ON_MARIADB`]). What any reading refuses is refused, and so is
 /// a text the readings take for different settings (`SET @x = 'a\', @@global.y = 1 -- '`).
 pub fn session_set(sql: &str) -> Result<SessionSet, SetProblem> {
     let d = MySqlMode::default();
@@ -1803,7 +1872,9 @@ pub fn session_set(sql: &str) -> Result<SessionSet, SetProblem> {
         MySqlMode { no_backslash_escapes: true, ..d },
         MySqlMode { ansi_quotes: true, no_backslash_escapes: true, ..d },
     ];
-    let risk = modes.iter().map(|m| classify(sql, *m)).reduce(worse).unwrap_or_else(unrecognized);
+    // Nor is the server: a call of a function MariaDB does not provide counts as on MariaDB.
+    let engines = modes.iter().flat_map(|m| [*m, MySqlMode { mariadb: true, ..*m }]);
+    let risk = engines.map(|m| classify(sql, m)).reduce(worse).unwrap_or_else(unrecognized);
     let shapes =
         guarded(|| vec![Err(SetProblem::Unread)], || modes.iter().map(|m| set_shape(sql, *m)).collect::<Vec<_>>());
     if let Some(Err(p)) = shapes.iter().find(|s| s.is_err()) {
@@ -1992,7 +2063,7 @@ pub fn named(sql: &str, mode: MySqlMode) -> Option<Vec<String>> {
 /// syntax error.
 fn names_as(sql: &str, mode: MySqlMode) -> Option<Result<Vec<String>, NotRepeatable>> {
     Some(match statements(sql, mode) {
-        Ok((stmts, hint)) => names_of(&stmts, hint),
+        Ok((stmts, hint)) => names_of(&stmts, hint, mode),
         Err(Unread::Syntax) => return None,
         Err(Unread::Risk(r)) if matches!(r.danger, Some(Danger::Unrecognized | Danger::TooComplex)) => {
             Err(NotRepeatable::Unreadable)
@@ -2002,7 +2073,7 @@ fn names_as(sql: &str, mode: MySqlMode) -> Option<Result<Vec<String>, NotRepeata
 }
 
 /// [`names_as`] of a text read into statements.
-fn names_of(stmts: &[Vec<W>], hint: bool) -> Result<Vec<String>, NotRepeatable> {
+fn names_of(stmts: &[Vec<W>], hint: bool, mode: MySqlMode) -> Result<Vec<String>, NotRepeatable> {
     let [ws] = stmts else { return Err(NotRepeatable::NotOne) };
     let top = ws.first().map(|w| (w.kind, w.up.as_str()));
     let query = starts_query(ws, 0)
@@ -2010,7 +2081,7 @@ fn names_of(stmts: &[Vec<W>], hint: bool) -> Result<Vec<String>, NotRepeatable> 
     if !query {
         return Err(NotRepeatable::NotSelect);
     }
-    let risk = statement(ws);
+    let risk = statement(ws, mode);
     match risk.danger {
         Some(Danger::Unrecognized | Danger::TooComplex) => return Err(NotRepeatable::Unreadable),
         Some(_) => return Err(NotRepeatable::Writes),

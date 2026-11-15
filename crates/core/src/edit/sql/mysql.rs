@@ -17,7 +17,8 @@ use crate::edit::target::{TableColumn, TableRef};
 use crate::export::{Kind, sql_value};
 use crate::sql::dialect::{Dialect, Language, MySqlMode};
 
-const D: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
+const D: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
 
 pub struct MySql(pub MySqlEdit);
 

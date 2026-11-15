@@ -14,7 +14,8 @@ fn col(not_null: bool, default: Option<&str>, fill: ColumnFill) -> StructureColu
 }
 
 const PG: Dialect = Dialect::Postgres;
-const MY: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
+const MY: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
 
 fn shown(d: Dialect, not_null: bool, default: Option<&str>) -> DefaultShown {
     default_shown(&col(not_null, default, ColumnFill::Default), d)

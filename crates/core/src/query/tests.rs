@@ -3,7 +3,8 @@ use crate::sql::dialect::Language;
 use crate::sql::dialect::MySqlMode;
 use crate::sql::risk::{Class, Classifier, Danger};
 
-const MY: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
+const MY: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
 
 fn users() -> TableName {
     TableName { database: None, schema: "shop".into(), name: "users".into() }
@@ -694,8 +695,15 @@ fn render_in_lists_keep_the_null_forms() {
 
 #[test]
 fn render_like_patterns_read_the_same_in_every_mysql_mode() {
-    let modes =
-        [MY, Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true, dollar_quotes: false })];
+    let modes = [
+        MY,
+        Dialect::MySql(MySqlMode {
+            ansi_quotes: false,
+            no_backslash_escapes: true,
+            dollar_quotes: false,
+            mariadb: false,
+        }),
+    ];
     let starts = |value: &str| Cond::Like {
         col: "name".into(),
         pattern: like_starts_with(value),
@@ -1274,8 +1282,11 @@ fn the_call_lists_are_sorted_disjoint_built_ins() {
         assert!(crate::sql::risk::builtin(f), "{f}");
         assert!(!PG_REFUSED_CALLS.contains(f), "{f}");
     }
+    let mariadb = MySqlMode { mariadb: true, ..MySqlMode::default() };
     for f in MYSQL_FILTER_CALLS {
         assert!(crate::sql::risk::mysql::builtin(f), "{f}");
+        // A filter's call taken without asking is one MariaDB provides too.
+        assert!(crate::sql::risk::mysql::builtin_in(f, mariadb), "{f}");
         assert!(!MYSQL_REFUSED_CALLS.contains(f), "{f}");
     }
 }

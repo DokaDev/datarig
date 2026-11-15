@@ -186,7 +186,7 @@ fn an_execute_opens_the_transaction() {
 
 #[test]
 fn where_statements_run_on_mysql() {
-    let mode = MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false };
+    let mode = MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false };
     let c = Classifier::new(Language::Sql(Dialect::MySql(mode)));
     for (sql, step) in [
         ("SELECT 1", R),
