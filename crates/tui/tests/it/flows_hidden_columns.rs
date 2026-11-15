@@ -151,7 +151,7 @@ fn flashed(h: &Harness) -> String {
 }
 
 /// `C` hides the cursor's column (nothing runs); the cursor and `h` `l` `0` `$` step over it;
-/// the border says how many are hidden; the header is gone.
+/// the query bar says how many are shown of how many; the header is gone.
 #[test]
 fn c_hides_the_cursor_column_and_the_cursor_steps_over_it() {
     let mut h = users(None);
@@ -175,7 +175,7 @@ fn c_hides_the_cursor_column_and_the_cursor_steps_over_it() {
     let g = h.app.tab().grid.clone();
     assert_eq!(g.hit_cols.iter().map(|c| c.2).collect::<Vec<_>>(), [0, 2], "only the shown columns drawn");
     let screen = h.screen(200, 40);
-    assert!(screen.contains("2 hidden"), "{screen}");
+    assert!(screen.contains("2/4 cols"), "{screen}");
     // `Space r C` is the same key.
     at(&mut h, 0, 0);
     h.keys(" rC");

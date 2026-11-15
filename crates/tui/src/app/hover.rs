@@ -1,6 +1,6 @@
 //! The pointer over the workspace's small clickable targets (no dialog open): the explorer
-//! rows' arrows, the document tab bar's tabs, their `×` and scroll marks, the result tab strip, the paging arrows, a table
-//! tab's filter and sort on the results' bottom border, the Plan
+//! rows' arrows, the document tab bar's tabs, their `×` and scroll marks, the result tab strip, the paging arrows, the
+//! parts of a table tab's query bar, the Plan
 //! tab's view names, the entries of the inspector's Row tab and the grid's cells. The one
 //! under the pointer is drawn highlighted (an inspector entry and the grid's cell of its column
 //! in the selected row light each other; a hover never moves the selection or the focus); it
@@ -23,8 +23,8 @@ pub enum PointerOn {
     /// The results' previous and next page arrows.
     PagePrev,
     PageNext,
-    /// A table tab's filter and sort on the results' bottom border.
-    TableStatus,
+    /// A part of a table tab's query bar.
+    Bar(super::qbar::BarHit),
     /// A view's name on the Plan tab's first line.
     PlanView(super::plan::PlanView),
     /// A kind or a column choice on the Chart tab's first lines.
@@ -54,10 +54,11 @@ impl App {
     /// The pointer moved over the workspace: `true` when another target (or none) is under it
     /// now, so the frame changes.
     pub(super) fn workspace_hover(&mut self, m: MouseEvent) -> bool {
-        let (x, l) = (m.column, self.layout);
+        let (x, l) = (m.column, self.layout.clone());
         let at = Position::new(m.column, m.row);
         // A move has no button held: a press it armed lost its release.
         self.pointer.detail_press.disarm();
+        self.qbar.press.disarm();
         let on = if l.too_small {
             None
         } else if l.tree.contains(at) {
@@ -72,8 +73,8 @@ impl App {
             Some(PointerOn::PagePrev)
         } else if !self.tabs.is_empty() && l.page_next.contains(at) {
             Some(PointerOn::PageNext)
-        } else if !self.tabs.is_empty() && l.table_status.contains(at) {
-            Some(PointerOn::TableStatus)
+        } else if let Some(h) = (!self.tabs.is_empty()).then(|| self.bar_hit_at(m.column, m.row)).flatten() {
+            Some(PointerOn::Bar(h))
         } else if !self.tabs.is_empty() && self.plan_shown() && l.results.contains(at) {
             let plan = self.tab().exec.plan.as_ref();
             plan.and_then(|p| p.view_hits.iter().find(|(r, _)| r.contains(at))).map(|h| PointerOn::PlanView(h.1))

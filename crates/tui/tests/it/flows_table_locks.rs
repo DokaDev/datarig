@@ -577,3 +577,56 @@ fn a_dialog_cancelled_while_its_read_waits_for_the_session_runs_nothing() {
     session(&mut h, DbEvent::Connected);
     assert!(runs(&mut h).is_empty(), "the read cancelled never goes");
 }
+
+/// A part of the query bar clicked (once the bar has been on screen long enough to take it).
+fn bar_click(h: &mut Harness, hit: datarig_tui::app::qbar::BarHit) {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    h.draw(160, 34);
+    let r = h.app.layout.qbar.iter().find(|(_, b)| *b == hit).map(|(r, _)| *r).expect("drawn");
+    h.advance(Duration::from_millis(500));
+    h.draw(160, 34);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), r.x, r.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), r.x, r.y);
+}
+
+/// A chip's `×` and a `LIMIT` typed in the query bar ask about reads that lock rows as any run
+/// does (`Enter` sends nothing); a yes given in a state that changed before it is asked again.
+#[test]
+fn bar_changes_ask_about_locking_reads_and_ask_again_when_the_state_moved() {
+    use datarig_tui::app::qbar::BarHit;
+    let mut h = users();
+    h.command("where id > 0 AND id < 9");
+    runs(&mut h);
+    answer(&mut h);
+    session(&mut h, DbEvent::Isolation(Some(Isolation::Serializable)));
+    session(&mut h, DbEvent::Autocommit(false));
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.app.detail.visible = false;
+    bar_click(&mut h, BarHit::Remove(0));
+    assert!(asks(&h));
+    assert!(runs(&mut h).is_empty(), "nothing sent while it asks");
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty());
+    // The level becomes unknown: asked too.
+    session(&mut h, DbEvent::Isolation(None));
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.keys(" rl5");
+    h.key(KeyCode::Enter);
+    assert!(asks(&h));
+    assert!(runs(&mut h).is_empty());
+    // The state moves again before the yes: asked again, nothing sent; the next yes sends.
+    session(&mut h, DbEvent::Isolation(Some(Isolation::Serializable)));
+    h.keys("y");
+    assert!(asks(&h), "asked again in the new state");
+    assert!(runs(&mut h).is_empty());
+    h.keys("y");
+    let sent: Vec<Option<u64>> = h
+        .sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::Execute { max_rows, .. } => Some(max_rows),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent, vec![Some(5)]);
+}

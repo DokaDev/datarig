@@ -1,11 +1,10 @@
 ---
 source: crates/tui/tests/it/flows_result_tabs.rs
-assertion_line: 169
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users ×                                                            "
-"│  ＋ New connection         │╭ Results · 8 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1             ││ [Result 1]  Chart  Messages  local-pg / shop.users ││ id: 1                            │"
+"│  ＋ New connection         │╭ [Result 1]  Chart  Messages  local-pg / shop.users ╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1             ││ WHERE + │ ORDER BY + │ LIMIT none │ 8 rows       ⋯ ││ id: 1                            │"
 "│  ▾ ●   local-pg            ││   │ id ^v│ name                 │ nickname    │ add││ name: 陳大文                     │" Hidden by multi-width symbols: [(93, " "), (95, " "), (97, " ")]
 "│    ▾ datarig default       ││   │ int8 │ text                 │ text        │ tex││ nickname: 大文🐘                 │" Hidden by multi-width symbols: [(97, " "), (99, " "), (101, " ")]
 "│      ▸ analytics           ││ 1 │    1 │ 陳大文               │ 大文🐘      │ 臺 ││ address: 臺北市信義區信義路五段7…│" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " "), (69, " "), (71, " "), (81, " "), (96, " "), (98, " "), (100, " "), (102, " "), (104, " "), (106, " "), (108, " "), (110, " "), (112, " "), (114, " "), (116, " ")]

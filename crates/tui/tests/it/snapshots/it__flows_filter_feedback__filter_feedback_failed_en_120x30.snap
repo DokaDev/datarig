@@ -1,11 +1,10 @@
 ---
 source: crates/tui/tests/it/flows_filter_feedback.rs
-assertion_line: 126
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users ×                                                            "
-"│  ＋ New connection         │╭ Results · 3 rows ──────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1             ││ [Result 1]  Chart  Messages  · earlier run          H/L  local-pg / datarig.shop.users │"
+"│  ＋ New connection         │╭ [Result 1]  Chart  Messages  · earlier run          H/L  local-pg / datarig.shop.users ╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1             ││ failed WHERE  idd > 1 ×  + │ ORDER BY + │ LIMIT none │ 2 cols │ 3 rows      ⋯ Advanced │"
 "│  ▾ ●   local-pg            ││   │ id ^v│ name                                                                        │"
 "│    ▾ datarig default       ││   │ int8 │ text                                                                        │"
 "│      ▸ analytics           ││ 1 │    0 │ n0                                                                          │"
@@ -31,5 +30,5 @@ expression: backend
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││ filter failed: showing previous rows                                                   │"
-"╰────────────────────────────╯╰ ▼ failed ──────────────────────────────────────────────────────────────────────────────╯"
+"╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯"
 " local-pg │ Error: ERROR: column "idd" does not exist            │ Enter view cell · n next page · y copy · v select EN "

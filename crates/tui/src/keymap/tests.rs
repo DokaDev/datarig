@@ -557,10 +557,23 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     assert_eq!(
         results,
         [
-            "!", "#", "+", "-", "=", "C", "F", "H", "I", "S", "X", "[", "]", "a", "c", "e", "f", "h", "i", "n", "o",
-            "p", "s", "v", "x", "y", "z"
+            "!", "#", "+", "-", "=", "A", "C", "F", "H", "I", "S", "X", "[", "]", "a", "c", "e", "f", "g", "h", "i",
+            "l", "n", "o", "p", "r", "s", "v", "w", "x", "y", "z"
         ]
     );
+    // The columns of the query bar took `Space r c`; the chart is `Space r g` (`c` in the grid).
+    let id = |ctx, keys: &str| match km.resolve_seq(ctx, &k(keys)).0 {
+        Some(Target::Action(a)) => action::spec(a).id,
+        other => panic!("{keys}: {other:?}"),
+    };
+    assert_eq!(id(Ctx::Grid, "space r c"), "table.bar.columns");
+    assert_eq!(id(Ctx::Grid, "space r g"), "results.chart");
+    assert_eq!(id(Ctx::Grid, "c"), "results.chart");
+    // The query bar's keys are a mode of the grid: the leader still works there, `Space` is not
+    // the bar's.
+    assert_eq!(id(Ctx::QueryBar, "space r l"), "table.bar.limit");
+    assert_eq!(id(Ctx::QueryBar, "enter"), "table.bar.open");
+    assert_eq!(km.resolve_seq(Ctx::QueryBar, &k("space")), (None, true));
     assert_eq!(km.group_label(Ctx::Explorer, &k("space r y")), Some(Label::GroupCopySelection));
     let formats: String = shown(Ctx::Grid, "space r a").into_iter().map(|(k, _)| k).collect();
     assert_eq!(formats, "JTchijlmntux", "every format, sorted by key");

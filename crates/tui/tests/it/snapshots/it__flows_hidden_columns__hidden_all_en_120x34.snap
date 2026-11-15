@@ -3,8 +3,8 @@ source: crates/tui/tests/it/flows_hidden_columns.rs
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users ×                                                            "
-"│  ＋ New connection         │╭ Results · 3 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1             ││ [Result 1]  Chart  Messages  local-pg / shop.users ││ id: 1                            │"
+"│  ＋ New connection         │╭ [Result 1]  Chart  Messages  local-pg / shop.users ╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1             ││ WHERE + │ ORDER + │ LIMIT none │ 0/4 cols        ⋯ ││ id: 1                            │"
 "│  ▾ ●   local-pg            ││ Every column is hidden from the grid: f, then C on ││ name: ann                        │"
 "│    ▾ datarig default       ││ a column shows it                                  ││ score: 1.5                       │"
 "│      ▸ analytics           ││                                                    ││ memo: x                          │"
@@ -34,5 +34,5 @@ expression: backend
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
-"╰────────────────────────────╯╰ 4 hidden ──────────────────────────────────────────╯╰──────────────────────────────────╯"
+"╰────────────────────────────╯╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯"
 " local-pg │ 3 rows · 0ms      │ Enter view cell · n next page · y copy · v select · i detail · I cell/row · Esc back EN "

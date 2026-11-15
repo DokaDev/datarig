@@ -1,11 +1,10 @@
 ---
 source: crates/tui/tests/it/flows_table_filter_keep.rs
-assertion_line: 341
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 shop.users ×                                                                           "
-"│  ＋ New connection         │╭ Results ───────────────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1             ││ [Result]  Chart  Messages          H/L  local-pg / datarig.shop.users  127.0.0.1:55432 │"
+"│  ＋ New connection         │╭ [Result]  Chart  Messages          H/L  local-pg / datarig.shop.users  127.0.0.1:55432 ╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1             ││ WHERE  status = 'done' ×   amount > 1500 ×  + │ ORDER BY ↓ id + │ LIMIT none         ⋯ │"
 "│  ▸ ○   local-pg            ││ Not loaded yet: Ctrl+E loads it                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
@@ -31,5 +30,5 @@ expression: backend
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
-"╰────────────────────────────╯╰ ▼ status = 'done' +1 · id ↓ ───────────────────────────────────────────────────────────╯"
+"╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯"
 " local-pg │                 │ Enter view cell · y copy · v select · i detail · Esc back · Tab next pane · : commands EN "

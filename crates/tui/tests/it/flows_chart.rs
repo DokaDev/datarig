@@ -130,14 +130,14 @@ fn c_draws_the_fetched_rows_without_asking_the_server() {
     let (x0, ..) = h.app.strip_hits().into_iter().find(|(.., v)| *v == ResultView::Chart).expect("Chart in the strip");
     h.mouse(MouseEventKind::Down(MouseButton::Left), x0 + 1, h.app.layout.strip.y);
     assert_eq!(view(&h), ResultView::Chart);
-    // From the results menu and `Space r c` too.
+    // From the results menu and `Space r g` too.
     h.keys("c");
     h.keys("  ");
     h.menu_pick("Results → show as a chart / as rows");
     assert_eq!(view(&h), ResultView::Chart);
     h.keys("c");
     h.app.focus = Focus::Editor;
-    h.keys(" rc");
+    h.keys(" rg");
     assert_eq!(view(&h), ResultView::Chart);
     assert!(h.sent().is_empty());
 }

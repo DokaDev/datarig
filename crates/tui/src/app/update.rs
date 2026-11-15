@@ -14,7 +14,11 @@ impl App {
         let now = self.now();
         self.tx_idle_tick(now);
         self.idle_tick(now);
+        // The query bar's keys leave with what they were for (another tab, the focus elsewhere,
+        // a field over the grid), whatever event moved it.
+        self.bar_settle();
         self.handle_event_here(ev);
+        self.bar_settle();
         self.tips_follow();
         self.sweep_cell_edit();
         self.sweep_as_plan();
@@ -56,6 +60,7 @@ impl App {
             self.pointer.drag = None;
             self.pointer.drag_at = None;
             self.pointer.detail_press.disarm();
+            self.qbar.press.disarm();
         }
         // A press of any button ends a tab's drag (it stays where it was).
         if let Event::Mouse(m) = ev
@@ -265,6 +270,8 @@ impl App {
             self.cell_edit_paste(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Results && self.grid_prompt_open() {
             self.grid_prompt_paste(text);
+        } else if self.overlays.is_empty() && self.bar_editing() {
+            self.bar_paste(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Results && !self.tabs.is_empty() {
             // A range into the grid's rows.
             self.grid_paste(text);
@@ -285,6 +292,7 @@ impl App {
     /// Resolve a key in the current context. `repeat`: terminal auto-repeat, which
     /// runs only repeatable actions (movement) but still types and edits in widgets.
     pub(super) fn handle_key(&mut self, key: KeyEvent, repeat: bool) {
+        self.bar_settle();
         let chord = KeyChord::from_event(&key);
         let ctx = self.key_context();
         // An answer waits for transactions to end: `Esc` (outside text input, no dialog open)
@@ -409,6 +417,7 @@ impl App {
             Ctx::Password => keys.iter().for_each(|k| self.prompt_key(k.to_event(), repeat)),
             Ctx::ExplorerFilter => keys.iter().for_each(|k| self.explorer_filter_key(k.to_event())),
             Ctx::GridSearch => keys.iter().for_each(|k| self.grid_prompt_key(k.to_event())),
+            Ctx::QueryBarText => keys.iter().for_each(|k| self.bar_text_key(k.to_event())),
             Ctx::MonitorFilter => keys.iter().for_each(|k| self.monitor_filter_key(k.to_event())),
             Ctx::CellEdit => keys.iter().for_each(|k| self.cell_edit_key(k.to_event())),
             Ctx::CellEditor => keys.iter().for_each(|k| self.cell_lines_key(k.to_event())),
@@ -878,7 +887,7 @@ impl App {
         }
         let (x, y) = (m.column, m.row);
         let inside = |r: Rect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
-        let l = self.layout;
+        let l = self.layout.clone();
         // The wheel over the grid closes the cell editor, changing nothing (as `Esc` does): it
         // would scroll off its cell. The editor of several lines closes on any wheel.
         let wheel = matches!(
@@ -997,6 +1006,7 @@ impl App {
                 self.pointer.drag = None;
                 self.pointer.drag_at = None;
                 self.detail_release(x, y);
+                self.bar_release(x, y);
             }
             _ => {}
         }
@@ -1076,7 +1086,7 @@ impl App {
     fn left_click(&mut self, m: MouseEvent, on_divider: bool) {
         let (x, y) = (m.column, m.row);
         let inside = |r: Rect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
-        let l = self.layout;
+        let l = self.layout.clone();
         if inside(l.tree) {
             self.focus = Focus::Tree;
             self.explorer_mouse(m);
@@ -1087,10 +1097,9 @@ impl App {
             self.focus = Focus::Results;
             return if inside(l.page_prev) { self.page_prev() } else { self.page_next() };
         }
-        // A table tab's filter and sort on the results' bottom border: the filter dialog.
-        if !self.tabs.is_empty() && inside(l.table_status) {
-            self.focus = Focus::Results;
-            return self.open_filter_dialog(false);
+        // A part of a table tab's query bar: it acts on the release over it.
+        if !self.tabs.is_empty() && self.bar_press(x, y) {
+            return;
         }
         // A second click on the same cell soon after the first: the cell viewer (a word
         // in the editor; a third click there: the line).

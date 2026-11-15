@@ -183,7 +183,11 @@ fn a_first_page_stops_at_a_limit_below_a_page() {
     assert_eq!(h.app.tab().exec.paging, Paging::None);
     let sent = h.sent();
     assert!(closed(&sent), "what the server holds past the cap is closed: {sent:?}");
-    assert!(h.screen(120, 30).contains("limit 2"), "{}", h.screen(120, 30));
+    // The query bar says the cap reached by the exact count beside `LIMIT` (no page after it),
+    // never a `limit` mark in place of the count.
+    let screen = h.screen(200, 30);
+    assert!(screen.contains("LIMIT 2 ") && screen.contains("\u{2502} 2 rows"), "{screen}");
+    assert!(!screen.contains("limit 2"), "{screen}");
     // Nothing is fetched past the cap.
     h.keys("n");
     assert_eq!(fetches(&h.sent()), 0);
@@ -226,8 +230,10 @@ fn later_pages_stop_at_a_limit_past_the_first() {
     let sent = h.sent();
     assert!(closed(&sent), "{sent:?}");
     assert_eq!(h.app.tab().exec.paging, Paging::None);
-    let said = format!("limit {}", datarig_i18n::fmt_count(size as u64 * 2 + 3));
-    assert!(h.screen(120, 30).contains(&said), "{}", h.screen(120, 30));
+    // The count exact at the cap, no `limit` mark, the next page's arrow dim.
+    let n = datarig_i18n::fmt_count(size as u64 * 2 + 3);
+    let screen = h.screen(200, 30);
+    assert!(screen.contains(&format!("of {n} rows")) && !screen.contains(&format!("limit {n}")), "{screen}");
     h.keys("nn");
     assert_eq!(fetches(&h.sent()), 0, "nothing past the cap");
     // A count asks nothing: every row up to the cap is there.
