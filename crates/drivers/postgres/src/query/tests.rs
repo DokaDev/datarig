@@ -471,6 +471,72 @@ mod terminal {
         TxRule::Manual { steps: steps.to_vec(), idle_timeout: None }
     }
 
+    /// The session's cancels from now on go through streams whose server's close is held back
+    /// until the dialer returned opens them.
+    fn gated(s: &mut Session, url: &str) -> crate::route::tests::GatedDialer {
+        let cfg: tokio_postgres::Config = url.parse().unwrap();
+        let dialer = crate::route::tests::GatedDialer::default();
+        let dial = datarig_core::transport::DialerRef(std::sync::Arc::new(dialer.clone()));
+        let tls = crate::tls::PgTls::new(datarig_core::tls::TlsSettings::plain());
+        let route = crate::route::route(&cfg, dial).unwrap();
+        let mut cancel = crate::route::Cancel::new(s.client.cancel_token(), Some(route), tls);
+        cancel.unsent = s.token.unsent.clone();
+        s.token = cancel;
+        dialer
+    }
+
+    /// The session's cancels from now on are taken as sent and never reach the server, which so
+    /// never takes them in: each is unconfirmed once `settle` ran out.
+    fn unconfirmed(s: &mut Session, url: &str, settle: std::time::Duration) {
+        let dialer = gated(s, url);
+        dialer.swallow.store(true, Ordering::SeqCst);
+        s.token.settle = settle;
+    }
+
+    /// A schema of the test's own (`zz_commit_{name}_{pid}`) holding table `t` (`id`, `v`; row
+    /// 1 is `a`) whose writes make a `COMMIT` wait on advisory lock `key` (a deferred
+    /// constraint trigger takes it), and the lock, held by a connection of its own (returned).
+    async fn commit_waits(url: &str, name: &str, key: i64) -> (String, SchemaGuard, Client) {
+        let schema = format!("zz_commit_{name}_{}", std::process::id());
+        let guard = SchemaGuard(url.to_string(), schema.clone());
+        let (c, ..) = connect(url).await;
+        c.batch_execute(&format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; \
+             CREATE TABLE {schema}.t (id int PRIMARY KEY, v text); INSERT INTO {schema}.t VALUES (1, 'a'); \
+             CREATE FUNCTION {schema}.wait() RETURNS trigger LANGUAGE plpgsql AS \
+             $$ BEGIN PERFORM pg_catalog.pg_advisory_xact_lock({key}); RETURN NULL; END $$; \
+             CREATE CONSTRAINT TRIGGER wait AFTER INSERT OR UPDATE ON {schema}.t \
+             DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION {schema}.wait()"
+        ))
+        .await
+        .unwrap();
+        let (side, ..) = connect(url).await;
+        side.query("SELECT pg_advisory_lock($1)", &[&key]).await.unwrap();
+        (schema, guard, side)
+    }
+
+    /// Once a `COMMIT` waits on advisory lock `key` (held by `side`), a cancel of the user's (of
+    /// run `run`, when it is one) goes out, unconfirmed once its settle ran out; then the lock
+    /// goes and the `COMMIT` ends.
+    fn cancel_while_committing(s: &Session, side: Client, key: i64, run: Option<u64>) -> tokio::task::JoinHandle<()> {
+        let (flag, token) = (s.cancel.clone(), s.token.clone());
+        tokio::spawn(async move {
+            let waits = "SELECT count(*) FROM pg_catalog.pg_locks WHERE locktype = 'advisory' AND NOT granted \
+                         AND classid = ($1::bigint >> 32)::oid AND objid = ($1::bigint & 4294967295)::oid";
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while side.query_one(waits, &[&key]).await.unwrap().get::<_, i64>(0) == 0 {
+                assert!(std::time::Instant::now() < deadline, "the commit never waited");
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            if let Some(run) = run {
+                assert!(flag.ask(run), "the run asked");
+            }
+            token.ask(token.unsent.request(), || true).await;
+            assert!(token.unsent.pending.borrow().is_some(), "the cancel is unconfirmed");
+            side.query("SELECT pg_advisory_unlock($1)", &[&key]).await.unwrap();
+        })
+    }
+
     /// Manual commit on a session whose search path is set in each transaction (as behind a
     /// pooler that drops the startup option): the path goes out with the opening `BEGIN`, so the
     /// write and the reads after it resolve names in it; a failed run is undone, and the commit
@@ -1419,7 +1485,7 @@ mod terminal {
 
     mod apply {
         use super::super::super::apply::{Hooks, apply};
-        use super::{Session, TableGuard, connect, manual, pg_url};
+        use super::{Session, TableGuard, cancel_while_committing, commit_waits, connect, manual, pg_url, unconfirmed};
         use datarig_core::driver::{ApplyError, ApplyFailure, ApplyTx, DbError, DbEvent, TxStep};
         use datarig_core::edit::{Expect, Origin, Step};
 
@@ -1714,13 +1780,35 @@ mod terminal {
             assert_eq!(rows[0].get::<_, String>(0), "a,earlier", "the earlier write stands");
             s.client.batch_execute("ROLLBACK").await.unwrap();
         }
+
+        /// An Apply whose `COMMIT` went out is answered as the server answers it, even when a
+        /// cancel of the user's goes unconfirmed meanwhile (the server never takes it in): the
+        /// `COMMIT` on its way is not cut off, so the Apply is not said cancelled and nothing
+        /// applied while it may have committed. Here it commits.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn an_apply_whose_commit_went_out_is_answered_as_the_server_answers_it() {
+            let name = "an_apply_whose_commit_went_out_is_answered_as_the_server_answers_it";
+            let Some(url) = pg_url(name) else { return };
+            let key = ((0x2369_0101_i64) << 32) + i64::from(std::process::id());
+            let (schema, _g, side) = commit_waits(&url, "apply", key).await;
+            let table = format!("{schema}.t");
+            let mut s = Session::open(&url).await;
+            unconfirmed(&mut s, &url, std::time::Duration::from_millis(300));
+            let asker = cancel_while_committing(&s, side, key, Some(s.runs + 1));
+            let events = s.apply(&steps(&table), ApplyTx::Commit, &Hooks::default()).await;
+            asker.await.expect("the cancel was asked");
+            assert_eq!(answer(&events), Ok(()));
+            assert_eq!(committed(&url, &table).await, "applied");
+        }
     }
 
     // ── a read's start inside the user's block, a cancel asked while it runs ──────────────
 
     mod reads {
         use super::super::super::{Env, Stop, command, count_savepoint};
-        use super::{Session, TableGuard, connect, manual, pg_url};
+        use super::{
+            Session, TableGuard, cancel_while_committing, commit_waits, connect, gated, manual, pg_url, unconfirmed,
+        };
         use crate::link::Next;
         use datarig_core::driver::{DbCommand, DbError, DbEvent, ExportBatch, ExportGuard, PagingMode, TxStep};
 
@@ -1760,8 +1848,9 @@ mod terminal {
 
             /// [`Session::command`], and why the session stops after it, if it does.
             async fn command_stop(&mut self, cmd: DbCommand) -> (Vec<DbEvent>, Option<Stop>) {
-                assert!(cmd.starts_run());
-                self.runs += 1;
+                if cmd.starts_run() {
+                    self.runs += 1;
+                }
                 let env = env!(self);
                 let next = Next::Command(cmd);
                 let handled = command(&mut self.client, &mut self.link, &env, &mut self.tx, &mut self.prepared, next);
@@ -2165,20 +2254,6 @@ mod terminal {
             );
         }
 
-        /// The session's cancels from now on go through streams whose server's close is held
-        /// back until the dialer returned opens them.
-        fn gated(s: &mut Session, url: &str) -> crate::route::tests::GatedDialer {
-            let cfg: tokio_postgres::Config = url.parse().unwrap();
-            let dialer = crate::route::tests::GatedDialer::default();
-            let dial = datarig_core::transport::DialerRef(std::sync::Arc::new(dialer.clone()));
-            let tls = crate::tls::PgTls::new(datarig_core::tls::TlsSettings::plain());
-            let route = crate::route::route(&cfg, dial).unwrap();
-            let mut cancel = crate::route::Cancel::new(s.client.cancel_token(), Some(route), tls);
-            cancel.unsent = s.token.unsent.clone();
-            s.token = cancel;
-            dialer
-        }
-
         /// A `Resume` whose read fails in the user's block undoes its savepoint only once no
         /// cancel of the user's is on its way: one sent right before the read (whose server's
         /// close is held back here) is waited for, so it cannot land on the undo. The block
@@ -2230,6 +2305,65 @@ mod terminal {
             // Failed by the cast, or by that cancel when it reached the read first.
             assert!(matches!(terminal(&events), DbEvent::Failed { .. }), "{events:?}");
             block_as_it_was(&mut s, &table).await;
+        }
+
+        /// The user's `COMMIT` that went out is answered as the server answers it, once, even
+        /// when an earlier cancel of the user's goes unconfirmed meanwhile: it is not cut off.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn a_commit_that_went_out_is_answered_as_the_server_answers_it() {
+            let name = "a_commit_that_went_out_is_answered_as_the_server_answers_it";
+            let Some(url) = pg_url(name) else { return };
+            let (schema, _g, side) = commit_waits(&url, "end", key(8)).await;
+            let mut s = Session::open(&url).await;
+            earlier_write(&mut s, &format!("{schema}.t")).await;
+            unconfirmed(&mut s, &url, std::time::Duration::from_millis(300));
+            let asker = cancel_while_committing(&s, side, key(8), None);
+            let (events, stop) = s.command_stop(DbCommand::EndTx { id: 115, commit: true }).await;
+            asker.await.expect("the cancel was asked");
+            let ended = one(&events, |e| match e {
+                DbEvent::TxEnded { outcome, .. } => Some(Ok(*outcome)),
+                DbEvent::Failed { error, .. } => Some(Err(error.clone())),
+                _ => None,
+            });
+            assert_eq!(ended, Ok(datarig_core::driver::TxOutcome::Committed));
+            assert!(stop.is_none(), "answered as it ended");
+            let (c, ..) = connect(&url).await;
+            let rows = c.query(&format!("SELECT count(*) FROM {schema}.t"), &[]).await.unwrap();
+            assert_eq!(rows[0].get::<_, i64>(0), 2, "committed");
+        }
+
+        /// A `COMMIT` of the user's that is not sent because a cancel of the user's is
+        /// unconfirmed (it could land on it) is still answered, once, before the session ends:
+        /// nothing was committed.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn a_commit_not_sent_for_an_unconfirmed_cancel_is_answered_once() {
+            let name = "a_commit_not_sent_for_an_unconfirmed_cancel_is_answered_once";
+            let Some(url) = pg_url(name) else { return };
+            let (table, _g) = table(&url, "end_unsent").await;
+            let mut s = Session::open(&url).await;
+            earlier_write(&mut s, &table).await;
+            unconfirmed(&mut s, &url, std::time::Duration::from_millis(300));
+            let token = s.token.clone();
+            token.ask(token.unsent.request(), || true).await;
+            assert!(token.unsent.pending.borrow().is_some(), "the cancel is unconfirmed");
+            let (events, stop) = s.command_stop(DbCommand::EndTx { id: 116, commit: true }).await;
+            use datarig_core::driver::CancelFailure;
+            let failed = one(&events, |e| match e {
+                DbEvent::TxEnded { .. } => Some(None),
+                DbEvent::Failed { error, cancelled, .. } => Some(Some((error.clone(), *cancelled))),
+                _ => None,
+            });
+            assert!(
+                matches!(failed, Some((DbError::CancelNotTaken(CancelFailure::StopPending(_)), false))),
+                "{events:?}"
+            );
+            assert!(
+                matches!(stop, Some(Stop::Lost(DbError::CancelNotTaken(CancelFailure::StopPending(_))))),
+                "the session ends"
+            );
+            let (c, ..) = connect(&url).await;
+            let rows = c.query(&format!("SELECT count(*) FROM {table}"), &[]).await.unwrap();
+            assert_eq!(rows[0].get::<_, i64>(0), 1, "nothing committed");
         }
 
         /// The app's count of the values of `v` in `table`.

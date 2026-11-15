@@ -78,7 +78,8 @@ pub const CANCEL_DIAL: Duration = Duration::from_secs(10);
 /// (it does so once it has passed the cancel on to the session): until then [`Hold::hold`]
 /// waits, so a cancel on its way does not land on what the session runs next. One still not
 /// taken in by then (or whose connection failed) may land on anything the session sends later:
-/// the session sends nothing more and closes ([`Unsent::pending`]).
+/// the session sends nothing more (a request on its way is still answered) and closes
+/// ([`Unsent::pending`]).
 pub(crate) const CANCEL_SETTLE: Duration = Duration::from_secs(10);
 
 /// What a session needs to ask the server to cancel its running statement.
@@ -300,21 +301,6 @@ impl Unsent {
         self.noted.send_replace(Some((request, why)));
     }
 
-    /// Resolves, with how long the server was given, once a cancel the server was not seen to take
-    /// in is noted ([`Unsent::pending`]).
-    pub(crate) async fn pending(&self) -> Duration {
-        let mut pending = self.pending.subscribe();
-        loop {
-            if let Some(bound) = *pending.borrow_and_update() {
-                return bound;
-            }
-            // The sender lives as long as `self`: this does not end.
-            if pending.changed().await.is_err() {
-                std::future::pending::<()>().await;
-            }
-        }
-    }
-
     /// Resolves, with the reason, once a cancel asked during the current request could not be
     /// sent.
     pub(crate) async fn current(&self) -> DbError {
@@ -361,6 +347,7 @@ pub(crate) mod tests {
         wrote: Arc<AtomicU64>,
         open: Arc<AtomicBool>,
         waker: Arc<std::sync::Mutex<Option<std::task::Waker>>>,
+        swallow: Arc<AtomicBool>,
     }
 
     impl tokio::io::AsyncRead for Gated {
@@ -385,6 +372,11 @@ pub(crate) mod tests {
             cx: &mut std::task::Context<'_>,
             buf: &[u8],
         ) -> std::task::Poll<std::io::Result<usize>> {
+            // A cancel request (16 bytes in one write) never reaches the server.
+            if self.swallow.load(Ordering::SeqCst) && buf.len() >= 16 {
+                self.wrote.fetch_add(buf.len() as u64, Ordering::SeqCst);
+                return std::task::Poll::Ready(Ok(buf.len()));
+            }
             let wrote = std::pin::Pin::new(&mut self.inner).poll_write(cx, buf);
             if let std::task::Poll::Ready(Ok(n)) = &wrote {
                 self.wrote.fetch_add(*n as u64, Ordering::SeqCst);
@@ -413,6 +405,8 @@ pub(crate) mod tests {
         pub(crate) wrote: Arc<AtomicU64>,
         open: Arc<AtomicBool>,
         waker: Arc<std::sync::Mutex<Option<std::task::Waker>>>,
+        /// Cancel requests are taken as written and never reach the server.
+        pub(crate) swallow: Arc<AtomicBool>,
     }
 
     impl GatedDialer {
@@ -431,7 +425,8 @@ pub(crate) mod tests {
                 let inner = tokio::net::TcpStream::connect((host.as_str(), port))
                     .await
                     .map_err(|e| DialError::Failed(Fault::other(e.to_string())))?;
-                let stream = Gated { inner, wrote: gate.wrote, open: gate.open, waker: gate.waker };
+                let stream =
+                    Gated { inner, wrote: gate.wrote, open: gate.open, waker: gate.waker, swallow: gate.swallow };
                 Ok(Box::new(stream) as BoxedStream)
             })
         }

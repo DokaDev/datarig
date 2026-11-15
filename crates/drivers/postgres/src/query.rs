@@ -755,6 +755,18 @@ fn unanswered(events: &UnboundedSender<DbEvent>, closed: Closed, cancelled: DbEv
     Stop::from(closed)
 }
 
+/// A command whose request was refused unsent by `closed` (a cancel the server was not seen to
+/// take in, [`Closed::CancelPending`]): still answered once, by `answer` with the session's
+/// reason, before the session is lost (an open transaction is rolled back with it, so a `COMMIT`
+/// not sent committed nothing). A session the UI closed answers nothing.
+fn answered(events: &UnboundedSender<DbEvent>, closed: Closed, answer: impl FnOnce(DbError) -> DbEvent) -> Stop {
+    let stop = Stop::from(closed);
+    if let Stop::Lost(error) = &stop {
+        let _ = events.send(answer(error.clone()));
+    }
+    stop
+}
+
 /// Count `id`'s answer when it was cancelled.
 fn cancelled_count(id: u64) -> DbEvent {
     DbEvent::Counted { id, result: Err(DbError::Cancelled), snapshot: false }
@@ -936,7 +948,7 @@ async fn command(
         // Answered once; a session the UI closed meanwhile answers nothing.
         Next::Command(DbCommand::EndTx { id, commit }) => match end_tx(&*client, link, env, tx, id, commit).await {
             Ok(()) => return None,
-            Err(closed) => Stop::from(closed),
+            Err(closed) => answered(env.events, closed, |error| DbEvent::Failed { id, error, cancelled: false }),
         },
         // Answered once; a session the UI closed meanwhile answers nothing.
         Next::Command(DbCommand::ApplyEdits { id, steps, tx: rule }) => {
@@ -963,7 +975,9 @@ async fn command(
         Next::Command(DbCommand::ServerSession { request }) => {
             match own_session(&*client, link, env, tx, request).await {
                 Ok(()) => return None,
-                Err(closed) => Stop::from(closed),
+                Err(closed) => {
+                    answered(env.events, closed, |_| DbEvent::ServerSession { request, own: env.own.answer() })
+                }
             }
         }
         // The monitor has a session of its own.
