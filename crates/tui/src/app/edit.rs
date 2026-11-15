@@ -181,7 +181,8 @@ fn cell_origin(at: RowAt) -> datarig_core::edit::Origin {
     }
 }
 
-/// Text pasted into a cell from a `styled` column, by action `step`.
+/// Text pasted into a cell by action `step`, with how it was written when copied from a `styled`
+/// column.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PastedStyle {
     pub step: u64,
@@ -192,32 +193,39 @@ pub struct PastedStyle {
     /// It may hold a time with a time zone (`ColumnMeta::zoned` of the column it was copied
     /// from).
     pub zoned: bool,
+    /// It was a `styled` column's text (else other text, pasted over it: no settings of its own).
+    pub styled: bool,
 }
 
 impl EditState {
-    /// How the pending value of the cell in column `col` of `at` was written, when an action
-    /// still done pasted it from a `styled` column and no later one changed it (a value typed,
-    /// another paste, a revert, an undo of the paste: then not this).
+    /// How the pending value of the cell in column `col` of `at` was written: the last paste
+    /// into the cell, of an action still done, made since the action that gave the cell its
+    /// value (or by it), when that paste was of a `styled` column's text. `None` when no such
+    /// paste is (a value typed since, a revert, an undo of the paste) or the last one was of
+    /// other text.
     pub fn pasted_style(&self, at: RowAt, col: usize) -> Option<&PastedStyle> {
-        let step = self.batch.setter(cell_origin(at), col)?;
-        self.styled.iter().find(|p| p.step == step && p.at == at && p.col == col)
+        let since = self.batch.setter(cell_origin(at), col)?;
+        let last = (self.styled.iter().rev())
+            .find(|p| p.at == at && p.col == col && p.step >= since && self.batch.done(p.step))?;
+        last.styled.then_some(last)
     }
 
-    /// A paste gave the cell in column `col` of `at` its pending value (or the same value
-    /// again): written in `written` (`None` for the settings: not known), it may hold a time with a
-    /// zone (`zoned`), when copied from a `styled` column (`from`); otherwise it is no
-    /// `styled` text. Kept for the action the value is from.
+    /// Action `step` (`None`: one that changed nothing, so none) pasted into the cell in
+    /// column `col` of `at` text written in `written` (`None` for the settings: not known)
+    /// that may hold a time with a zone (`zoned`), when copied from a `styled` column (`from`),
+    /// else other text. Kept under that action, never changing what an earlier one keeps: undone,
+    /// the earlier paste's is the cell's again. A paste that changed nothing at all is kept under
+    /// the action the cell's value is from, after what that action keeps.
     pub(super) fn pasted(
         &mut self,
+        step: Option<u64>,
         at: RowAt,
         col: usize,
         from: Option<(Option<datarig_core::driver::TextStyle>, bool)>,
     ) {
-        let Some(step) = self.batch.setter(cell_origin(at), col) else { return };
-        self.styled.retain(|p| !(p.step == step && p.at == at && p.col == col));
-        if let Some((written, zoned)) = from {
-            self.styled.push(PastedStyle { step, at, col, written, zoned });
-        }
+        let Some(step) = step.or_else(|| self.batch.setter(cell_origin(at), col)) else { return };
+        let (styled, (written, zoned)) = (from.is_some(), from.unwrap_or((None, false)));
+        self.styled.push(PastedStyle { step, at, col, written, zoned, styled });
     }
 
     /// The rows were read under `bound` (`None`: under no profile, so never edited).

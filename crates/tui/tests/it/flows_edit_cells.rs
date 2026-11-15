@@ -1930,3 +1930,58 @@ fn a_pg_value_pasted_again_keeps_the_settings_of_the_last_paste() {
     structure(&mut h, Ok(st()));
     assert!(said_text(&mut h).starts_with("Pasted the copied cells"));
 }
+
+/// A paste of the same text again, as part of a paste that changes another cell, is an action
+/// of its own: undone, the cell's value is the first paste's, written in the first paste's
+/// settings, whatever the later one said.
+#[test]
+fn a_pg_paste_undone_gives_back_the_settings_of_the_paste_before_it() {
+    use datarig_tui::app::edit::RowAt;
+    let st = || {
+        let mut st = users_structure();
+        st.columns[3].type_name = "daterange".into();
+        st
+    };
+    let copied = "[02/01/2026,05/01/2026)";
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    // Copied and pasted in `SQL, DMY` (a `SET LOCAL` of the user's block).
+    pg_again(&mut h, Some("SQL, DMY"), DATERANGE, copied);
+    h.keys("lly");
+    pg_again(&mut h, Some("SQL, DMY"), DATERANGE, "[2026-03-01,2026-03-02)");
+    h.keys("llgp");
+    structure(&mut h, Ok(st()));
+    assert!(said_text(&mut h).starts_with("Pasted the copied cells"));
+    let invalid = |h: &Harness| h.app.shown_invalid().is_some_and(|i| i.cells.contains_key(&(RowAt::Read(0), 2)));
+    // The block committed: the session reads `SQL, MDY` again.
+    h.db(DbEvent::TextStyle(Some(pg_style("SQL, MDY"))));
+    assert!(invalid(&h));
+    // The same text, with another email, copied as a row in a tab that reads `SQL, MDY`.
+    h.ctrl('t');
+    h.db(DbEvent::TextStyle(Some(pg_style("SQL, MDY"))));
+    let mut columns = users_columns();
+    columns[2] =
+        ColumnMeta { kind: ValueKind::Other, styled: true, ..meta_from("nickname", "daterange", false, USERS, 4) };
+    answer(&mut h, "SELECT id, email, nickname FROM shop.users", columns, vec![vec![s("1"), s("z@x"), s(copied)]]);
+    if let Some(id) = h.sent().into_iter().find_map(|c| match c {
+        DbCommand::CheckRepeat { id, .. } => Some(id),
+        _ => None,
+    }) {
+        h.db(DbEvent::RepeatChecked { id, result: Ok(()) });
+    }
+    h.keys("Y");
+    h.app.transient = None;
+    // Pasted over the first tab's row: the email changes, the range is the same text.
+    h.app.tabs.activate(0);
+    h.app.focus = Focus::Results;
+    h.app.tab_mut().grid.row = 0;
+    h.app.tab_mut().grid.col = 0;
+    h.keys("gp");
+    let said = said_text(&mut h);
+    assert!(said.starts_with("Pasted the copied cells"), "{said}");
+    assert!(!invalid(&h), "pasted again from where it reads the same");
+    // Undone: the first paste's value, written in `SQL, DMY`, which the session no longer reads.
+    h.keys("u");
+    assert_eq!(value(&h, 0, 2), Some(Value::Text(copied.into())), "the first paste's value");
+    assert!(invalid(&h), "the first paste's settings are kept as they were");
+}

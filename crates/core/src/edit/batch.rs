@@ -208,6 +208,11 @@ impl EditBatch {
         None
     }
 
+    /// Action `id` is done (not undone).
+    pub fn done(&self, id: u64) -> bool {
+        self.undo.iter().any(|s| s.id == id)
+    }
+
     /// The id of the action `redo` brings back next.
     pub fn next_redo(&self) -> Option<u64> {
         self.redo.last().map(|s| s.id)

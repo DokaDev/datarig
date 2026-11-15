@@ -841,7 +841,7 @@ impl App {
         // `styled` text.
         for &(at, col) in &pasted {
             let from = styled.iter().find(|(c, ..)| *c == col).map(|(_, w, z)| (w.clone(), *z));
-            rs.edit.pasted(at, col, from);
+            rs.edit.pasted(step, at, col, from);
         }
         // Cells copied in a grid are no text `space d V` reads again.
         self.last_paste = last.map(|l| LastPaste { revision, step, ..l });
