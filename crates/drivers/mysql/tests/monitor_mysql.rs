@@ -709,7 +709,16 @@ async fn kill_query_stops_only_the_statement_the_row_showed() {
     // The query session reads the server's 1317 as a cancel.
     let error = sleeper.answer(sleeping).await.expect_err("the statement was stopped");
     assert_eq!(error, "Cancelled");
-    let after = monitor.follow(&target).await;
+    // The server ends the statement's event, which writes the history row the follow-up reads,
+    // only after it has sent the error: until then the follow-up cannot tell.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let after = loop {
+        let after = monitor.follow(&target).await;
+        if after.interrupted.is_some() || Instant::now() > deadline {
+            break after;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
     assert_eq!(after.interrupted, Some(true), "{after:?}");
     assert_eq!(action::confirm(ActionKind::Cancel, &target, &after), Confirmation::Interrupted);
     sleeper.run("SELECT 1").await;

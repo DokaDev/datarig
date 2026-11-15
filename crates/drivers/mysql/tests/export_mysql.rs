@@ -219,22 +219,32 @@ async fn drain(rx: &mut Receiver<ExportBatch>) -> (Vec<ColumnMeta>, Vec<Vec<Cell
     (cols, rows, largest)
 }
 
-/// The metadata locks other client sessions hold on `table` (by name, in `shop`). Only client
-/// sessions count: a server's own background threads take short locks of their own on a table
-/// just written (MariaDB's InnoDB does, right after the rows the tests insert).
+/// The metadata locks other client sessions hold on `table` (by name, in `shop`), once there are
+/// none or after 10 s. Only client sessions count: a server's own background threads take short
+/// locks of their own on a table just written (MariaDB's InnoDB does, right after the rows the
+/// tests insert). Asked again while there are some: the server releases a statement's locks as
+/// it closes the statement, after the last of its answer went out.
 async fn metadata_locks(admin: &str, table: &str) -> u64 {
     let mut a = side(admin).await;
-    let n: Option<u64> = a
-        .exec_first(
-            "SELECT COUNT(*) FROM performance_schema.metadata_locks WHERE OBJECT_SCHEMA = 'shop' AND OBJECT_NAME = ? \
-             AND OWNER_THREAD_ID IN (SELECT THREAD_ID FROM performance_schema.threads \
-             WHERE TYPE = 'FOREGROUND' AND PROCESSLIST_ID <> CONNECTION_ID())",
-            (table,),
-        )
-        .await
-        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let n = loop {
+        let n: Option<u64> = a
+            .exec_first(
+                "SELECT COUNT(*) FROM performance_schema.metadata_locks WHERE OBJECT_SCHEMA = 'shop' AND OBJECT_NAME = ? \
+                 AND OWNER_THREAD_ID IN (SELECT THREAD_ID FROM performance_schema.threads \
+                 WHERE TYPE = 'FOREGROUND' AND PROCESSLIST_ID <> CONNECTION_ID())",
+                (table,),
+            )
+            .await
+            .unwrap();
+        let n = n.unwrap_or(0);
+        if n == 0 || Instant::now() > deadline {
+            break n;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
     a.disconnect().await.unwrap();
-    n.unwrap_or(0)
+    n
 }
 
 #[tokio::test(flavor = "multi_thread")]
