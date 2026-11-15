@@ -68,6 +68,7 @@ mod flows_paging;
 mod flows_password_sources;
 mod flows_plan;
 mod flows_plan_mysql;
+mod flows_popup_safety;
 mod flows_presets;
 mod flows_query_bar;
 mod flows_query_popups;
