@@ -234,6 +234,9 @@ fn conflict_check_catches_all_seven_kinds() {
     assert_eq!(km.resolve_seq(Ctx::FilterDialog, &k("u")).0, act("filter.undo"));
     assert_eq!(km.resolve_seq(Ctx::FilterDialog, &k("X")).0, act("filter.clear_all"));
     assert_eq!(km.resolve_seq(Ctx::FilterDialog, &k("Q")).0, act("filter.sql"));
+    // `A` turns a popup of the dialog into the whole dialog; in a field it is typed.
+    assert_eq!(km.resolve_seq(Ctx::FilterDialog, &k("A")).0, act("filter.advanced"));
+    assert_eq!(km.resolve_seq(Ctx::FilterDialogText, &k("A")).0, None);
     assert_eq!(km.resolve_seq(Ctx::FilterDialog, &k("space")).0, Some(Target::Reserved("filter dialog")));
     assert_eq!(km.resolve_seq(Ctx::FilterDialogText, &k("u")).0, None);
     // The run key is not the dialog's: it does not apply a draft behind the user's back.

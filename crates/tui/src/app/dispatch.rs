@@ -78,6 +78,14 @@ impl App {
         {
             return;
         }
+        // A popup of the filter dialog has no history of filters: that list is the whole
+        // dialog's.
+        if matches!(a, Action::Table(table_filter::TableAction::History))
+            && self.overlays.top().is_some_and(|o| o.kind() == OverlayKind::FilterDialog)
+            && self.filter_dialog().is_some_and(filter_dialog::FilterDialog::is_popup)
+        {
+            return;
+        }
         match a {
             // A DDL tab has nothing to run: the run key reads its DDL again.
             Action::RunStatement if self.tab().is_ddl() => self.load_ddl(self.tab().id),

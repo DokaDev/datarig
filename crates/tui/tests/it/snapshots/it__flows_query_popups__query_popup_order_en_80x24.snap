@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_query_popups.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users * ×                        "
+"│  ＋ New connection   │╭ [Result 1]  Chart  Messages    local-pg / shop.users ╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ WHERE  1 condition  + │ ORDER ↓1 │ LIMIT none      ⋯ │"
+"│  ▾ ●   local-pg      ││╭─ ORDER BY ─────────────────────────────────────────╮│"
+"│    ▾ datarig default │││▸ 1 ↓    name  text                                 ││"
+"│      ▸ analytics     │││ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ││"
+"│      ▸ public        │││      PK id    int8                                 ││"
+"│      ▾ shop          │││────────────────────────────────────────────────────││"
+"│        ▾ Tables      │││ ORDER BY "name" DESC, "id" ASC                     ││"
+"│          ▸ users     ││╰─ Space direction · J/K move · x drop ─ ⋯ Advanced ─╯│"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" local-pg │ 3 rows · 2ms                                                     EN "

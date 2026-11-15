@@ -479,6 +479,25 @@ fn filter_dialog(a: &App) -> bool {
     a.overlays.top().is_some_and(|o| o.kind() == super::overlay::OverlayKind::FilterDialog)
 }
 
+/// The whole filter dialog has the keyboard (not one of its popups).
+fn filter_full(a: &App) -> bool {
+    filter_dialog(a) && a.filter_dialog().is_some_and(|d| !d.is_popup())
+}
+
+/// The filter dialog has the keyboard and shows a column's values: the whole dialog or a
+/// condition popup.
+fn filter_values(a: &App) -> bool {
+    filter_dialog(a)
+        && a.filter_dialog().is_some_and(|d| {
+            matches!(d.popup_kind(), None | Some(super::filter_dialog::view::PopupKind::Condition { .. }))
+        })
+}
+
+/// A popup of the filter dialog has the keyboard.
+fn filter_popup(a: &App) -> bool {
+    filter_dialog(a) && a.filter_dialog().is_some_and(|d| d.is_popup())
+}
+
 /// The export dialog has the keyboard.
 fn export_dialog(a: &App) -> bool {
     a.overlays.top().is_some_and(|o| o.kind() == super::overlay::OverlayKind::Export)
@@ -539,7 +558,7 @@ fn table_tab(a: &App) -> bool {
     has_tab(a) && a.tab().is_table()
 }
 
-/// The active tab is a table tab showing its rows (`Space r r` counts them).
+/// The active tab is a table tab showing its rows (`Space r r` opens their popup).
 fn table_rows(a: &App) -> bool {
     table_tab(a) && rows_shown(a)
 }
@@ -1074,9 +1093,10 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::FilterDialog(FD::Apply), "filter.apply", Label::ActionFilterApply, filter_dialog),
     act(Action::FilterDialog(FD::Cancel), "filter.cancel", Label::ActionFilterCancel, filter_dialog),
     act(Action::FilterDialog(FD::Undo), "filter.undo", Label::ActionFilterUndo, filter_dialog),
-    act(Action::FilterDialog(FD::ClearAll), "filter.clear_all", Label::ActionFilterClearAll, filter_dialog),
-    act(Action::FilterDialog(FD::Sql), "filter.sql", Label::ActionFilterSql, filter_dialog),
-    act(Action::FilterDialog(FD::Count), "filter.count", Label::ActionFilterCount, filter_dialog),
+    act(Action::FilterDialog(FD::ClearAll), "filter.clear_all", Label::ActionFilterClearAll, filter_full),
+    act(Action::FilterDialog(FD::Sql), "filter.sql", Label::ActionFilterSql, filter_full),
+    act(Action::FilterDialog(FD::Count), "filter.count", Label::ActionFilterCount, filter_values),
+    act(Action::FilterDialog(FD::Advanced), "filter.advanced", Label::ActionFilterAdvanced, filter_popup),
     act(Action::ExplainAsPlan, "results.view_as_plan", Label::ActionResultsViewAsPlan, text_plan_shown),
     mv(Action::Plan(P::Down), "plan.down", Label::ActionPlanDown, plan_focused),
     mv(Action::Plan(P::Up), "plan.up", Label::ActionPlanUp, plan_focused),

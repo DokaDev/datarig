@@ -192,14 +192,29 @@ fn items(
         .collect()
 }
 
+impl FilterDialog {
+    /// Whether the pane drew the values: values not drawn are not reached by the keys, which
+    /// leave them for `+ add condition` when they were on them.
+    pub(crate) fn set_values_drawn(&mut self, drawn: bool) {
+        self.values_drawn = drawn;
+        if drawn {
+            return;
+        }
+        self.listed = 0;
+        if matches!(self.focus, DialogFocus::Values(_)) {
+            self.focus_on(DialogFocus::Add);
+        }
+    }
+}
+
 impl App {
     /// The open dialog's list made for its selected column as things are now (the count of the
     /// rows loaded made first when it is not); the dialog keeps how many values it lists.
     pub(crate) fn filter_dialog_list(&mut self) -> Option<ValuesView> {
         self.filter_dialog_tally();
-        let view = self.filter_dialog_view();
+        let view = self.filter_dialog_values_view();
         let d = self.filter_dialog_mut()?;
-        d.listed = view.as_ref().map_or(0, |v| v.items.len());
+        d.listed = view.as_ref().filter(|_| d.values_drawn).map_or(0, |v| v.items.len());
         view
     }
 
@@ -249,7 +264,7 @@ impl App {
     }
 
     /// The list of the open dialog's selected column ([`ValuesView`]), from what is held.
-    fn filter_dialog_view(&self) -> Option<ValuesView> {
+    fn filter_dialog_values_view(&self) -> Option<ValuesView> {
         let d = self.filter_dialog()?;
         let c = d.column()?;
         let t = self.tabs.get(d.tab)?;
@@ -386,6 +401,10 @@ impl App {
     /// the list gives way to the value. One undo step. A value not ticked says why.
     pub(crate) fn filter_dialog_tick(&mut self, i: usize) {
         let Some(view) = self.filter_dialog_list() else { return };
+        // Only a value of the list drawn.
+        if self.filter_dialog().is_none_or(|d| i >= d.listed) {
+            return;
+        }
         let Some(item) = view.items.get(i) else { return };
         let value = match &item.tick {
             Ok(v) => v.clone(),

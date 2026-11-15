@@ -22,6 +22,8 @@ pub enum DialogAction {
     Sql,
     /// The server counts the selected column's values (`#`).
     Count,
+    /// A popup becomes the whole dialog, its draft, undo and apply waiting kept (`A`).
+    Advanced,
 }
 
 /// An order refused: what to say, and where in its text when that is known.
@@ -63,6 +65,10 @@ pub(super) fn term_at(w: &Where, at: &Range<usize>) -> Option<usize> {
 impl App {
     /// An action of the filter dialog's keys.
     pub(crate) fn filter_dialog_action(&mut self, a: DialogAction) {
+        // Not drawn (the terminal too small): only `Esc` acts.
+        if self.layout.too_small && a != DialogAction::Cancel {
+            return;
+        }
         match a {
             DialogAction::Apply => self.filter_dialog_apply(),
             DialogAction::Cancel => self.filter_dialog_cancel(),
@@ -73,7 +79,33 @@ impl App {
             }),
             DialogAction::Sql => self.filter_dialog_toggle_sql(),
             DialogAction::Count => self.filter_dialog_count(),
+            DialogAction::Advanced => self.filter_dialog_advanced(),
         }
+    }
+
+    /// `A`, `⋯ Advanced`: the popup shown becomes the whole dialog, on what the popup was on (a
+    /// condition popup: its column, the keys where they were; the add popup and the columns
+    /// popup: its column; the WHERE list: the chip of its condition; the order popup: its key
+    /// in the footer's `Order` row, another column's sort line).
+    fn filter_dialog_advanced(&mut self) {
+        let Some(d) = self.filter_dialog_mut() else { return };
+        let Some(kind) = d.popup_kind().map(view::PopupKind::id) else { return };
+        let focus = match (kind, d.focus) {
+            (view::PopupKindId::Condition, f) => f,
+            (view::PopupKindId::WhereList, f @ DialogFocus::Chips(_)) => f,
+            (view::PopupKindId::Order, DialogFocus::Sorted(i)) if i < d.draft.order.len() => DialogFocus::Order(i),
+            (view::PopupKindId::Order, DialogFocus::Sorted(i)) => match d.sort_rows().get(i).cloned() {
+                Some(col) => {
+                    d.select_column(&col);
+                    DialogFocus::Sort
+                }
+                None => DialogFocus::Columns,
+            },
+            _ => DialogFocus::Columns,
+        };
+        d.set_view(View::Full);
+        d.focus_on(focus);
+        d.settle();
     }
 
     /// `Q`, or the `SQL` toggle: the SQL section opens with the draft's texts in its fields
@@ -192,6 +224,14 @@ impl App {
         if d.picker.is_some() {
             return self.filter_dialog_pick();
         }
+        // The add popup and the WHERE list send nothing: they pick a column, open a condition;
+        // the rows popup does its item.
+        match d.popup_kind() {
+            Some(view::PopupKind::AddPick) => return self.filter_add_pick(),
+            Some(view::PopupKind::WhereList) => return self.filter_where_list_open(),
+            Some(view::PopupKind::Rows) => return self.filter_rows_run(),
+            _ => {}
+        }
         if d.search.is_some() && d.focus == DialogFocus::Columns {
             let name = d.column().map(|c| c.name.clone());
             d.search = None;
@@ -200,7 +240,13 @@ impl App {
             }
             return;
         }
-        let tab = d.tab;
+        self.filter_dialog_send();
+    }
+
+    /// The draft runs as any run of the tab ([`App::table_run`]), as [`DialogAction::Apply`]
+    /// says.
+    pub(super) fn filter_dialog_send(&mut self) {
+        let Some(tab) = self.filter_dialog().map(|d| d.tab) else { return };
         self.filter_dialog_popup_close();
         if !self.filter_dialog_read_back() {
             return;
@@ -260,7 +306,7 @@ impl App {
     /// What table tab `tab` said to the draft it was given (a refusal, else a notice; nothing
     /// while a question is open above the dialog), in the dialog's hint line, the part refused
     /// underlined.
-    fn filter_dialog_told(&mut self, tab: TabId) {
+    pub(super) fn filter_dialog_told(&mut self, tab: TabId) {
         let refusal = self.table_query(tab).and_then(|tq| tq.refusal.clone());
         let said = refusal
             .as_ref()
@@ -349,6 +395,23 @@ impl App {
             self.filter_dialog_close_sql();
             return;
         }
+        self.filter_dialog_drop();
+    }
+
+    /// A press outside a popup: it closes as `Esc` closes the dialog, its picker and a count of
+    /// the values running with it.
+    pub(super) fn filter_dialog_dismiss(&mut self) {
+        if let Some(d) = self.filter_dialog_mut() {
+            d.picker = None;
+        }
+        self.filter_dialog_cancel_count();
+        self.filter_dialog_drop();
+    }
+
+    /// The dialog closes, its draft dropped (the tab's next run sends what is applied), the
+    /// query it applied and that waits cancelled.
+    fn filter_dialog_drop(&mut self) {
+        let Some(d) = self.filter_dialog_mut() else { return };
         let (tab, applying) = (d.tab, d.applying.take());
         self.filter_dialog_popup_close();
         self.overlays.close(OverlayKind::FilterDialog);
@@ -425,7 +488,9 @@ impl App {
             if let Ok(keys) = &keys {
                 q.order = keys.clone();
             }
-            self.open_filter_dialog_with(tab, &q, None, false);
+            if !self.open_filter_dialog_with(tab, &q, None, super::View::Full) {
+                return;
+            }
             if let Some(d) = self.filter_dialog_mut() {
                 // Picked, not applied: the title says so.
                 d.message = keys.err();

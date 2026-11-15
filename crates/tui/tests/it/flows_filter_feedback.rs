@@ -428,7 +428,9 @@ fn opening_a_table_reads_its_keys_so_the_first_order_is_total() {
     assert_eq!(run, vec![&vec![format!(r#"{ALL} ORDER BY "name" ASC, "id" ASC"#)]]);
     answer(&mut h);
     // The filter dialog's order row says what makes it total.
+    // `Space r o` opens the order popup; `A` the whole dialog on it.
     h.keys(" ro");
+    h.keys("A");
     let screen = h.screen(120, 34);
     let line = screen.lines().find(|l| l.contains("Order ")).unwrap_or_else(|| panic!("{screen}"));
     assert!(line.contains("name \u{2191}") && line.contains("+ id"), "{line}");
@@ -476,11 +478,13 @@ fn answer_with_column(h: &mut Harness, col: &str) {
     h.tab_db(index, DbEvent::Page { id, columns, rows, more: false, elapsed: Duration::from_millis(2) });
 }
 
-/// What the filter dialog's `Order` row says of the order (opened on it, then closed).
+/// What the filter dialog's `Order` row says of the order (its popup opened, then the whole
+/// dialog on it, then closed).
 fn order_said(h: &mut Harness) -> String {
     use datarig_tui::app::action::Action;
     use datarig_tui::app::table_filter::TableAction;
     h.app.dispatch(Action::Table(TableAction::EditOrder));
+    h.keys("A");
     let screen = h.screen(120, 34);
     h.key(KeyCode::Esc);
     order_line(&screen, Lang::En)
@@ -506,7 +510,9 @@ fn a_long_order_column_keeps_the_not_unique_note() {
         h.keys("i");
         h.command(&format!("orderby {COL}"));
         answer_with_column(&mut h, COL);
+        // `Space r o` opens the order popup; `A` the whole dialog on it.
         h.keys(" ro");
+        h.keys("A");
         let screen = h.screen(80, 24);
         let line = order_line(&screen, lang);
         assert!(line.contains(said), "{lang:?}: {line}");
@@ -521,7 +527,9 @@ fn an_order_not_known_total_says_so_at_any_width() {
     let mut h = users();
     h.command("orderby name");
     answer(&mut h);
+    // `Space r o` opens the order popup; `A` the whole dialog on it.
     h.keys(" ro");
+    h.keys("A");
     for (w, hh) in [(80, 24), (100, 30), (110, 30), (120, 30), (160, 40)] {
         let screen = h.screen(w, hh);
         let line = order_line(&screen, Lang::En);
@@ -630,7 +638,9 @@ fn the_not_unique_note_stays_at_the_explorers_widest() {
             h.command(&format!("orderby {col}"));
             answer_with_column(&mut h, col);
             h.app.explorer.width = Some(200);
+            // `Space r o` opens the order popup; `A` the whole dialog on it.
             h.keys(" ro");
+            h.keys("A");
             let screen = h.screen(80, 24);
             let line = order_line(&screen, lang);
             assert!(line.contains(said), "{lang:?} {col}: {line}");

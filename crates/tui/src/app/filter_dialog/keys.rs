@@ -16,12 +16,12 @@ const AREAS: usize = 9;
 /// The part of the dialog focus `f` is in ([`AREAS`]).
 fn area(f: DialogFocus) -> usize {
     match f {
-        DialogFocus::Columns => 0,
+        DialogFocus::Columns | DialogFocus::RowsItem(_) => 0,
         DialogFocus::Op(_) | DialogFocus::Value(..) | DialogFocus::Add | DialogFocus::Values(_) | DialogFocus::Sort => {
             1
         }
         DialogFocus::Chips(_) => 2,
-        DialogFocus::Order(_) => 3,
+        DialogFocus::Order(_) | DialogFocus::Sorted(_) => 3,
         DialogFocus::Limit => 4,
         DialogFocus::Sql => 5,
         DialogFocus::SqlWhere => 6,
@@ -84,16 +84,26 @@ impl App {
 
     /// A key of the open filter dialog that no action took.
     pub(crate) fn filter_dialog_key(&mut self, key: KeyEvent) {
+        // Not drawn (the terminal too small): nothing changes unseen.
+        if self.layout.too_small {
+            return;
+        }
         // The list as it is now: how many values the keys move through.
         self.filter_dialog_list();
         let Some(d) = self.filter_dialog() else { return };
         if d.picker.is_some() {
             return self.filter_dialog_picker_key(key);
         }
+        // A popup has no other part to go to.
         match key.code {
+            KeyCode::Tab | KeyCode::BackTab if d.confined() => return,
             KeyCode::Tab => return self.filter_dialog_area(true),
             KeyCode::BackTab => return self.filter_dialog_area(false),
             _ => {}
+        }
+        // The popups that are lists have keys of their own.
+        if d.popup_kind().is_some_and(|k| !matches!(k, view::PopupKind::Condition { .. })) {
+            return self.filter_list_key(key);
         }
         if d.typing() {
             return self.filter_dialog_text_key(key);
@@ -119,13 +129,21 @@ impl App {
                 KeyCode::Up | KeyCode::Char('k') => self.filter_dialog_sql_move(DialogFocus::SqlOrder),
                 _ => {}
             },
-            DialogFocus::Value(..) | DialogFocus::Limit | DialogFocus::SqlWhere | DialogFocus::SqlOrder => {}
+            DialogFocus::Value(..)
+            | DialogFocus::Limit
+            | DialogFocus::SqlWhere
+            | DialogFocus::SqlOrder
+            | DialogFocus::Sorted(_)
+            | DialogFocus::RowsItem(_) => {}
         }
     }
 
     /// Text pasted while the dialog is open: into the field that has the keys, on one line, the
     /// field holding at most [`table_query::FIELD_CAP`] bytes.
     pub(crate) fn filter_dialog_paste(&mut self, text: &str) {
+        if self.layout.too_small {
+            return;
+        }
         let Some(d) = self.filter_dialog_mut() else { return };
         if !d.typing() {
             return;
@@ -148,6 +166,9 @@ impl App {
     /// `Tab` (`forward`) or `Shift+Tab`: the next part of the dialog that has something to
     /// focus.
     fn filter_dialog_area(&mut self, forward: bool) {
+        if self.filter_dialog().is_some_and(FilterDialog::confined) {
+            return;
+        }
         self.filter_dialog_popup_close();
         // A field of the SQL section is read back as it is left; an order refused keeps it.
         if self.filter_dialog().is_some_and(|d| d.sql_field().is_some()) && !self.filter_dialog_read_back() {
@@ -190,7 +211,7 @@ impl App {
 
     /// A key while a text field has the keys: the column search, a value field, the `LIMIT`
     /// field.
-    fn filter_dialog_text_key(&mut self, key: KeyEvent) {
+    pub(super) fn filter_dialog_text_key(&mut self, key: KeyEvent) {
         let Some(d) = self.filter_dialog_mut() else { return };
         let focus = d.focus;
         let at_start = d.input_mut().is_some_and(|i| i.cursor() == 0);
@@ -342,9 +363,11 @@ impl App {
     }
 
     /// `↑`/`↓` in the right pane: the line above or below (a condition's operator, `+ add
-    /// condition`, the sort line); past the top, the column list.
+    /// condition`, the sort line); past the top (and `←`), the column list, which a popup does
+    /// not have: there they do nothing.
     fn filter_dialog_pane_key(&mut self, key: KeyEvent) {
         let Some(d) = self.filter_dialog_mut() else { return };
+        let confined = d.confined();
         let lines = d.pane_lines();
         let here = match d.focus {
             DialogFocus::Value(t, _) => DialogFocus::Op(t),
@@ -353,10 +376,10 @@ impl App {
         };
         let Some(at) = lines.iter().position(|l| *l == here) else { return };
         match key.code {
-            KeyCode::Up | KeyCode::Char('k') if at == 0 => d.focus_on(DialogFocus::Columns),
-            KeyCode::Up | KeyCode::Char('k') => d.focus_on(lines[at - 1]),
+            KeyCode::Up | KeyCode::Char('k') if at == 0 && !confined => d.focus_on(DialogFocus::Columns),
+            KeyCode::Up | KeyCode::Char('k') if at > 0 => d.focus_on(lines[at - 1]),
             KeyCode::Down | KeyCode::Char('j') if at + 1 < lines.len() => d.focus_on(lines[at + 1]),
-            KeyCode::Left | KeyCode::Char('h') => d.focus_on(DialogFocus::Columns),
+            KeyCode::Left | KeyCode::Char('h') if !confined => d.focus_on(DialogFocus::Columns),
             _ => {}
         }
     }
@@ -418,7 +441,7 @@ impl App {
         let why = |off: draft::OpOff| self.i18n.label(op_off_label(off)).to_string();
         Some(
             ops.into_iter()
-                .map(|(op, ok)| (crate::widgets::filter_dialog::op_label(self, op), ok.err().map(why)))
+                .map(|(op, ok)| (crate::widgets::condition_pane::op_label(self, op), ok.err().map(why)))
                 .collect(),
         )
     }
@@ -451,7 +474,7 @@ impl App {
 
     /// `+ add condition`: a condition of the selected column with the first operator it takes,
     /// waiting for its value (never sent before it has one).
-    fn filter_dialog_add(&mut self) {
+    pub(super) fn filter_dialog_add(&mut self) {
         let Some(d) = self.filter_dialog() else { return };
         let Some(c) = d.column().cloned() else { return };
         let Some(target) = self.table_target(d.tab) else { return };

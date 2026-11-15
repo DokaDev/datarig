@@ -1,13 +1,16 @@
 //! The mouse on the filter dialog: a click does what the key for the part clicked does there.
 //! A column, a value, an operator and the picker's entries, a sort choice, a chip, a key of
-//! the order, the `×` marks and the buttons (`undo`, `clear all`, `SQL`, `Open in editor`,
-//! `# count exactly`, `Enter apply`, `Esc cancel`) act as a dialog's buttons do: a press arms
+//! the order, a line of the order popup, an item of the rows popup (it runs), the `×` marks
+//! and the buttons (`undo`, `clear all`, `SQL`, `Open in editor`, `# count exactly`, `Enter
+//! apply`, `Esc cancel`) act as a dialog's buttons do: a press arms
 //! the part and the release over it acts, presses right after the dialog came on top are
 //! ignored ([`crate::app::overlay::ARM_DELAY`]). A text field (a value, `Limit`, the SQL
 //! section's `WHERE` and `ORDER BY`) takes the focus and the cursor on the press. Leaving a
 //! field of the SQL section reads it back first, as `Tab` does. While the operator picker is
-//! open a press elsewhere closes it. The wheel moves through the column list, the value list
-//! and the picker. The pointer lights the part under it; the focus stays where it is.
+//! open a press elsewhere closes it; a press outside a popup closes the popup without
+//! applying (`⋯ Advanced` on its border turns it into the whole dialog). The wheel moves
+//! through the column list, the value list and the picker. The pointer lights the part under
+//! it; the focus stays where it is.
 
 use super::*;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -29,6 +32,19 @@ impl App {
             _ => {}
         }
         let Some(d) = self.filter_dialog_mut() else { return };
+        // A press outside a popup (and its picker) closes it without applying, and goes no
+        // further; one right after it came on top (a double click that opened it) does nothing.
+        let at = Position::new(x, y);
+        if d.is_popup()
+            && m.kind == MouseEventKind::Down(MouseButton::Left)
+            && !d.hits.frame.contains(at)
+            && !d.hits.picker_box.contains(at)
+        {
+            if d.press.ready(now) {
+                return self.filter_dialog_dismiss();
+            }
+            return d.press.disarm();
+        }
         let hit = d.hits.at(x, y);
         let act = match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
@@ -78,7 +94,12 @@ impl App {
         let stays = match h {
             DialogHit::SqlWhere => d.focus == DialogFocus::SqlWhere,
             DialogHit::SqlOrder => d.focus == DialogFocus::SqlOrder,
-            DialogHit::Undo | DialogHit::Apply | DialogHit::Cancel | DialogHit::Sql | DialogHit::OpenSql => true,
+            DialogHit::Undo
+            | DialogHit::Apply
+            | DialogHit::Cancel
+            | DialogHit::Sql
+            | DialogHit::OpenSql
+            | DialogHit::Advanced => true,
             _ => false,
         };
         if d.sql_field().is_some() && !stays {
@@ -89,7 +110,20 @@ impl App {
         }
         let Some(d) = self.filter_dialog_mut() else { return };
         match h {
-            DialogHit::Column(i) => self.filter_dialog_select_column(i),
+            DialogHit::Column(i) => {
+                self.filter_dialog_select_column(i);
+                // The add popup picks the column clicked; the columns popup shows or hides it.
+                match self.filter_dialog().and_then(|d| d.popup_kind()) {
+                    Some(view::PopupKind::AddPick) => self.filter_add_pick(),
+                    Some(view::PopupKind::Columns) => self.filter_dialog_key(press(KeyCode::Char(' '))),
+                    _ => {}
+                }
+            }
+            DialogHit::Sorted(i) => d.focus_on(DialogFocus::Sorted(i)),
+            DialogHit::RowsItem(item) => {
+                d.focus_on(DialogFocus::RowsItem(item));
+                self.filter_rows_run();
+            }
             DialogHit::Op(t) => {
                 d.focus_on(DialogFocus::Op(t));
                 self.filter_dialog_key(press(KeyCode::Char(' ')));
@@ -144,6 +178,7 @@ impl App {
             DialogHit::OpenSql => self.filter_dialog_open_sql(),
             DialogHit::Apply => self.filter_dialog_action(DialogAction::Apply),
             DialogHit::Cancel => self.filter_dialog_action(DialogAction::Cancel),
+            DialogHit::Advanced => self.filter_dialog_action(DialogAction::Advanced),
             DialogHit::Limit => {
                 let was = d.focus == DialogFocus::Limit;
                 d.focus_on(DialogFocus::Limit);
@@ -182,7 +217,10 @@ impl App {
             return self.filter_dialog_key(press(code));
         }
         d.hover = None;
-        if DialogHits::span(&d.hits.columns).contains(at) {
+        if let Some(DialogFocus::Sorted(i)) = DialogHits::span(&d.hits.sorted).contains(at).then_some(d.focus) {
+            let last = d.sort_rows().len().saturating_sub(1);
+            d.focus_on(DialogFocus::Sorted(i.saturating_add_signed(delta).min(last)));
+        } else if DialogHits::span(&d.hits.columns).contains(at) {
             let i = d.cursor.saturating_add_signed(delta);
             self.filter_dialog_select_column(i);
         } else if DialogHits::span(&d.hits.items).contains(at) {

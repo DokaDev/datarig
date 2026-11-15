@@ -13,10 +13,10 @@ A query's rows have no such dialog: filter and sort them in the statement.
 
 ## The filter dialog
 
-`f` (or `Space r f`) opens the dialog on the cursor's column; `Space r o` opens it on the order.
-A click on a part of the [query bar](#the-query-bar-and-the-connection) (`⋯ Advanced`, a
-condition, `ORDER BY`, the columns), `Space r A`, or "Filter and sort…" in a column's
-[menu](#from-the-grid), opens it too. It covers the whole screen:
+`f` (or `Space r f`) opens the dialog on the cursor's column. `⋯ Advanced` on the
+[query bar](#the-query-bar-and-the-connection), `Space r A`, or "Filter and sort…" in a column's
+[menu](#from-the-grid), opens it too; a part of the bar opens a small popup under it, and `A` in
+the popup turns it into the dialog. It covers the whole screen:
 
 - the title names the table, says `edited` once what you changed differs from what is applied,
   and how many rows the tab holds;
@@ -409,10 +409,18 @@ only (`▼2 ↓2 L ◌1 ⋯`); what is applied always keeps a mark. A spinner
 goes first while the tab's query runs, and `failed`, `cancelled`, `unapplied` or `refused` when
 the last run brought no rows or was refused.
 
-Keys: `Space r w` puts the keys on the conditions (`←`/`→` move, `Enter` opens one in the dialog,
+Keys: `Space r w` puts the keys on the conditions (`←`/`→` move, `Enter` opens one in its popup,
 `x` takes it out and runs, `+` adds one, `Esc` goes back to the grid), `Space r l` types the
-limit (the cap opens selected: the first digit replaces it), `Space r c` opens the dialog on the columns, `Space r r` counts the rows (as `#`), and
-`Space r A` opens the dialog. A click on a part does the same.
+limit (the cap opens selected: the first digit replaces it), `Space r o` opens the order popup,
+`Space r c` the columns popup, `Space r r` the rows popup (its pages and its counts, the exact
+count as `#`), and `Space r A` opens the dialog.
+
+A click on a part opens a small popup under it: a condition opens its column's conditions,
+values and sort; `WHERE` and `+` the list of columns of a new condition; the count of conditions
+left out of the bar (`+2`, `4 conditions`) the list of them all (`x` there takes one out and
+runs, as the chip's `×` does); `ORDER BY` the order's keys; the columns those shown and hidden;
+the rows their pages and their counts. `Enter` applies, `Esc` or a click outside closes without
+applying, and `A` or `⋯ Advanced` turns the popup into the dialog, keeping what you changed.
 
 On a table tab the result strip (the result tabs and the connection,
 `local-pg / datarig.shop.orders  127.0.0.1:55432`, shorter as the window narrows) is on the

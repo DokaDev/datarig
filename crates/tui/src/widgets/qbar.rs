@@ -851,5 +851,25 @@ pub(crate) fn draw(app: &App, m: &Bar, area: Rect, buf: &mut Buffer) -> (Hits, O
     (hits, cursor, (l.level, l.cut))
 }
 
+/// Draw the open filter dialog's popup inside `bounds` (the results pane); returns the hardware
+/// cursor.
+pub(crate) fn draw_popup_view(app: &mut App, bounds: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    use crate::app::filter_dialog::view::PopupKind;
+    match app.filter_dialog().and_then(|d| d.popup_kind()) {
+        Some(PopupKind::AddPick) => lists::draw_add_pick(app, bounds, buf),
+        Some(PopupKind::WhereList) => lists::draw_where_list(app, bounds, buf),
+        Some(PopupKind::Columns) => lists::draw_columns(app, bounds, buf),
+        Some(PopupKind::Order) => order::draw_order(app, bounds, buf),
+        Some(PopupKind::Rows) => rows::draw_rows(app, bounds, buf),
+        Some(PopupKind::Condition { .. }) | None => condition::draw_condition_popup(app, bounds, buf),
+    }
+}
+
+pub(crate) mod condition;
+pub(crate) mod frame;
+pub(crate) mod lists;
+pub(crate) mod order;
+pub(crate) mod rows;
+
 #[cfg(test)]
 mod tests;

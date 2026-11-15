@@ -1461,39 +1461,8 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         sort_zone: app.tab().is_table(),
         all_hidden: &all_hidden,
     };
-    // The portal belongs to the last statement of the rows' run: only its rows page.
-    let answer = app.tab().exec.shown.is_some() && app.tab().exec.shown == app.tab().answer_index();
-    // `n` is the search's while one is on, and typed while its prompt is open: the next page's
-    // key there.
-    let searching = app.grid_prompt_open() || app.grid_search_on();
-    let next_key = app.next_page_key(if searching { Ctx::GridMatches } else { Ctx::Grid });
-    let run_again = app.can_run_again();
     let text_plan = app.text_plan_hint();
-    // A result whose portal was closed for being idle (or never held), or whose fetching
-    // stopped at its spill limit, keeps its rows and says so below them.
-    let paging_note = match &app.tab().results {
-        Results::Rows(rs)
-            if answer && ((rs.more && app.tab().exec.paging.closed()) || app.tab().exec.paging == Paging::Stopped) =>
-        {
-            let count = rs.rows.len() as u64;
-            let key = next_key.clone();
-            // With the results title's word for the state, where the whole note does not fit.
-            let (long, short) = match app.tab().exec.paging {
-                Paging::Stopped => (Msg::ResultsPagingStopped { count }, Label::ResultsTitlePagingStopped),
-                Paging::Released if run_again => {
-                    (Msg::ResultsPagingNoHold { count, key }, Label::ResultsTitlePagingNoHold)
-                }
-                Paging::Released => (Msg::ResultsPagingFirstPageOnly { count }, Label::ResultsTitleFirstPageOnly),
-                // The next page runs the statement again when it may.
-                _ if run_again => (Msg::ResultsPagingClosedRerun { count, key }, Label::ResultsTitlePagingClosed),
-                Paging::Replaced => (Msg::ResultsPagingReplaced { count }, Label::ResultsTitlePagingClosed),
-                Paging::Interrupted => (Msg::ResultsPagingInterrupted { count }, Label::ResultsTitlePagingClosed),
-                _ => (Msg::ResultsPagingClosed { count }, Label::ResultsTitlePagingClosed),
-            };
-            Some((app.i18n.msg(&long), app.i18n.label(short)))
-        }
-        _ => None,
-    };
+    let paging_note = app.paging_note();
     // A table tab whose query's run brought no rows (refused, cancelled, its session gone) holds
     // the rows of an earlier one: dimmed, and said in place of a note about the paging (never
     // shown as that query's answer).

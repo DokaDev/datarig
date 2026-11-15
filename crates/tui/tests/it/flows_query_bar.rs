@@ -9,6 +9,7 @@ use crate::common;
 use common::*;
 use datarig_core::driver::{DbCommand, DbError, DbEvent};
 use datarig_i18n::Lang;
+use datarig_tui::app::filter_dialog::view::PopupKindId;
 use datarig_tui::app::overlay::ConfirmAction;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::qbar::BarHit;
@@ -193,10 +194,10 @@ fn where_focus_moves_among_the_chips_removes_one_and_leaves() {
     answer(&mut h);
     h.draw(120, 34);
     assert_eq!(h.app.key_context(), Ctx::Grid, "another result: the keys leave the bar");
-    // Enter opens the condition the keys are on in the dialog; the bar lets the keys go.
+    // Enter opens the condition the keys are on in its popup; the bar lets the keys go.
     h.keys(" rw");
     h.key(KeyCode::Enter);
-    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog));
+    assert_eq!(h.app.filter_dialog_popup(), Some(PopupKindId::Condition));
     h.key(KeyCode::Esc);
     assert_eq!(h.app.key_context(), Ctx::Grid);
     // Another tab takes them for good: coming back finds the grid.
@@ -270,7 +271,8 @@ fn x_moves_the_keys_to_the_next_condition_and_enter_on_plus_adds() {
     h.keys("x");
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name = 'a' AND id < 9)")]]);
     assert_eq!(focused(&mut h), Some(BarHit::Chip(1)), "on the next one (`id < 9`, now the second)");
-    // The only condition taken out: the keys on `+`, and Enter opens the dialog to add one.
+    // The only condition taken out: the keys on `+`, and Enter opens the column list of a new
+    // condition.
     let mut h = users();
     filtered(&mut h, "name = 'a'");
     h.draw(160, 34);
@@ -278,7 +280,7 @@ fn x_moves_the_keys_to_the_next_condition_and_enter_on_plus_adds() {
     assert_eq!(runs(&mut h), vec![vec![ALL.to_string()]]);
     assert_eq!(focused(&mut h), Some(BarHit::Add));
     h.key(KeyCode::Enter);
-    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog));
+    assert_eq!(h.app.filter_dialog_popup(), Some(PopupKindId::AddPick));
 }
 
 /// A press armed on the bar does nothing when something else took the input before its release:
@@ -373,7 +375,7 @@ fn bar_parts_on_another_view_show_the_rows() {
     h.app.tab_mut().exec.view = ResultView::Messages;
     click(&mut h, BarHit::Rows);
     assert_eq!(h.app.tab().exec.view, ResultView::Rows);
-    assert!(h.status(160, 34).contains("Every row is fetched already"), "{}", h.status(160, 34));
+    assert_eq!(h.app.filter_dialog_popup(), Some(PopupKindId::Rows));
 }
 
 /// Over pending edits a chip's `×` and a new `LIMIT` ask first; `Enter` keeps the edits and
@@ -496,7 +498,7 @@ fn the_bar_has_no_keys_over_another_view() {
 }
 
 /// `x` takes out only a condition drawn in the bar; on the count of those left out it opens
-/// them (the dialog for now).
+/// them in the WHERE list.
 #[test]
 fn x_on_a_condition_left_out_opens_them() {
     let mut h = users();
@@ -512,7 +514,7 @@ fn x_on_a_condition_left_out_opens_them() {
     }
     h.key(KeyCode::Char('x'));
     assert!(runs(&mut h).is_empty(), "nothing taken out");
-    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog));
+    assert_eq!(h.app.filter_dialog_popup(), Some(PopupKindId::WhereList));
 }
 
 #[test]
@@ -577,8 +579,11 @@ fn the_page_arrows_page_and_say_when_they_do_nothing() {
     click(&mut h, BarHit::Prev);
     assert!(bar_line(&mut h).contains("501–1,000 of 1,200 rows"));
     assert!(runs(&mut h).is_empty(), "the pages were read");
-    // The rows: counted as `#` counts them (complete here: said so, nothing sent).
+    // The rows: their popup, whose exact count is `#`'s (complete here: said so, nothing sent).
     click(&mut h, BarHit::Rows);
+    assert_eq!(h.app.filter_dialog_popup(), Some(PopupKindId::Rows));
+    h.keys("jj");
+    h.key(KeyCode::Enter);
     assert!(runs(&mut h).is_empty());
     assert!(h.status(160, 34).contains("Every row is fetched already"), "{}", h.status(160, 34));
 }
@@ -602,19 +607,37 @@ fn the_next_arrow_follows_the_paging_state() {
     assert_eq!(fg_of(&mut h, BarHit::Next), th.accent);
 }
 
+/// The parts of the bar open the filter dialog: as the popup of a condition, the column list
+/// of a new one, the order's, the columns', the rows', or the whole dialog.
 #[test]
 fn bar_parts_open_the_dialog() {
-    for hit in [BarHit::Chip(0), BarHit::Add, BarHit::Order, BarHit::Cols, BarHit::Advanced] {
+    let kinds = [
+        (BarHit::Chip(0), Some(PopupKindId::Condition)),
+        (BarHit::Where, Some(PopupKindId::AddPick)),
+        (BarHit::Add, Some(PopupKindId::AddPick)),
+        (BarHit::Order, Some(PopupKindId::Order)),
+        (BarHit::Cols, Some(PopupKindId::Columns)),
+        (BarHit::Rows, Some(PopupKindId::Rows)),
+        (BarHit::Advanced, None),
+    ];
+    for (hit, kind) in kinds {
         let mut h = users();
         filtered(&mut h, "name = 'a'");
         click(&mut h, hit);
         assert!(h.app.overlays.is_open(OverlayKind::FilterDialog), "{hit:?}");
+        assert_eq!(h.app.filter_dialog_popup(), kind, "{hit:?}");
     }
-    // The keys: columns, Advanced.
-    for keys in [" rc", " rA"] {
+    // The keys: the order, the columns, the rows (their popups), Advanced.
+    for (keys, kind) in [
+        (" ro", Some(PopupKindId::Order)),
+        (" rc", Some(PopupKindId::Columns)),
+        (" rr", Some(PopupKindId::Rows)),
+        (" rA", None),
+    ] {
         let mut h = users();
         h.keys(keys);
         assert!(h.app.overlays.is_open(OverlayKind::FilterDialog), "{keys}");
+        assert_eq!(h.app.filter_dialog_popup(), kind, "{keys}");
     }
 }
 
@@ -869,7 +892,7 @@ fn the_bar_focus_in_the_terminal_theme_holds_under_the_pointer() {
     assert!(!text.modifier.contains(Modifier::REVERSED), "no block on the chip");
 }
 
-/// On a count of conditions the remove key opens them in the dialog, and the hint says so.
+/// On a count of conditions the remove key opens their list, and the hint says so.
 #[test]
 fn the_remove_key_on_a_count_is_said_to_open() {
     let mut h = users();
@@ -882,6 +905,7 @@ fn the_remove_key_on_a_count_is_said_to_open() {
     assert!(narrow.contains("x open") && !narrow.contains("x remove"), "{narrow}");
     h.key(KeyCode::Char('x'));
     assert!(h.app.overlays.is_open(OverlayKind::FilterDialog));
+    assert_eq!(h.app.filter_dialog_popup(), Some(datarig_tui::app::filter_dialog::view::PopupKindId::WhereList));
     assert!(runs(&mut h).is_empty());
 }
 

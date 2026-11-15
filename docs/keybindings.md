@@ -170,7 +170,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r #` | `results.count` | Results → count every row (runs a count query) |  |
 | `Space r e` | `results.export` | Results → export to a file… |  |
 | `Space r f` | `table.filter.edit` | Table → filter and sort (dialog, on this column) |  |
-| `Space r o` | `table.order.edit` | Table → filter and sort (dialog, on the order) |  |
+| `Space r o` | `table.order.edit` | Table → the order (popup) |  |
 | `Space r x` | `table.filter.clear` | Table → clear the filter, the order and the limit, and run it again |  |
 | `Space r v` | `table.filter.open_sql` | Table → open its statement in a new console |  |
 | `Space r s` | `table.sort.cycle` | Table → sort by this column only (up, down, off) |  |
@@ -183,8 +183,8 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r H` | `table.filter.history` | Table → earlier filters of this table |  |
 | `Space r w` | `table.bar.where` | Table → put the keys on the query bar's conditions |  |
 | `Space r l` | `table.bar.limit` | Table → type the limit in the query bar |  |
-| `Space r c` | `table.bar.columns` | Table → columns shown and hidden (dialog) |  |
-| `Space r r` | `table.bar.rows` | Table → count every row (as #) |  |
+| `Space r c` | `table.bar.columns` | Table → columns shown and hidden (popup) |  |
+| `Space r r` | `table.bar.rows` | Table → rows, their pages and their count (popup) |  |
 | `Space r A` | `table.filter.edit` | Table → filter and sort (dialog, on this column) |  |
 | `Space r ]` | `results.tab.next` | Result tabs → next |  |
 | `Space r [` | `results.tab.prev` | Result tabs → previous |  |
@@ -340,7 +340,7 @@ Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U`
 
 ## `grid.bar`
 
-A table tab's query bar with the keys on its conditions (`Space r w`): `←`/`→` (`h`/`l`) move between the conditions, the count of those left out and `+`, `Enter` opens the one the keys are on in the filter dialog, `x` (`Delete`) takes the condition out and runs the query again (the other conditions sent as they were written), `+` (`a`) adds a condition, `Esc` goes back to the grid. The keys leave the bar when the tab, the result or the view changes, or the focus moves. Inside `grid`.
+A table tab's query bar with the keys on its conditions (`Space r w`): `←`/`→` (`h`/`l`) move between the conditions, the count of those left out and `+`, `Enter` opens the one the keys are on in its popup (an expression in the filter dialog; the count, the list of the conditions), `x` (`Delete`) takes the condition out and runs the query again (the other conditions sent as they were written; on the count it opens their list, taking nothing out), `+` (`a`) opens the list of columns of a new condition, `Esc` goes back to the grid. The keys leave the bar when the tab, the result or the view changes, or the focus moves. Inside `grid`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|
@@ -348,11 +348,11 @@ A table tab's query bar with the keys on its conditions (`Space r w`): `←`/`�
 | `h` | `table.bar.prev` | Query bar → previous condition | ✓ |
 | `Right` | `table.bar.next` | Query bar → next condition | ✓ |
 | `l` | `table.bar.next` | Query bar → next condition | ✓ |
-| `Enter` | `table.bar.open` | Query bar → open this condition (dialog) |  |
-| `x` | `table.bar.remove` | Query bar → take this condition out, and run it again (on a count of conditions: open them in the dialog) |  |
-| `Delete` | `table.bar.remove` | Query bar → take this condition out, and run it again (on a count of conditions: open them in the dialog) |  |
-| `+` | `table.bar.add` | Query bar → add a condition (dialog) |  |
-| `a` | `table.bar.add` | Query bar → add a condition (dialog) |  |
+| `Enter` | `table.bar.open` | Query bar → open this condition |  |
+| `x` | `table.bar.remove` | Query bar → take this condition out, and run it again (on a count of conditions: open their list) |  |
+| `Delete` | `table.bar.remove` | Query bar → take this condition out, and run it again (on a count of conditions: open their list) |  |
+| `+` | `table.bar.add` | Query bar → add a condition |  |
+| `a` | `table.bar.add` | Query bar → add a condition |  |
 | `Esc` | `table.bar.leave` | Query bar → back to the grid |  |
 
 ## `grid.bar.limit` [text]
@@ -671,7 +671,7 @@ Reserved (text input): `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U`
 
 ## `overlay.filter`
 
-The filter and sort dialog of a table tab (`f` or `Space r f` on the grid's column, `Space r o` on the order), over the whole screen: the table's columns on the left (`↑`/`↓`, `j`/`k`, `g`/`G`; `/` narrows them by name, `s` cycles the column's sort, `→` goes to its conditions), the selected column's conditions on the right (`Space` on an operator opens the list of operators, those the column cannot take dimmed with why; `→` to its value; `x` or `Delete` takes it out; `+ add condition`, then the sort line: `←`/`→` none, up, down, `<`/`>` its place in the order), and under them the `Where` chips (every term of the condition, as sent; `x` takes one out, `Space` goes to its column), the `Order` keys, the `Limit` field and the `SQL` toggle. `Tab` and `Shift+Tab` move between these parts. `Enter` applies the draft and runs the table's query as any run of the tab (checked first; a refusal keeps the dialog open, says why and underlines the part refused; a question opens above it), `Esc` closes without applying (an open list or the search first), `Ctrl+Z` or `u` undoes a step (with none left: the change applied last), `X` clears every condition and the order, `Q` opens or closes the SQL section, `Ctrl+R` lists this table's earlier filters (picked: into the draft, nothing runs until `Enter`). Terms the dialog did not change are sent as they were written; a condition still waiting for its value is not sent. The SQL section shows the statement as it would be sent (the key the app adds to make the order total dimmed) above two fields, `WHERE` and `ORDER BY`, holding the draft's condition and order: what is typed there is read back when the field is left, the section closes (`Esc`) or the draft is applied (a condition typed is read again as terms, an `OR` or a function making an expression chip; an order that is not one keeps the section open, its error underlined). `Open in editor` (`Space` on it) puts the draft's statement, checked as `Space r v` checks it, in a new console without running it. Inside `root`.
+The filter and sort dialog of a table tab (`f` or `Space r f` on the grid's column), over the whole screen: the table's columns on the left (`↑`/`↓`, `j`/`k`, `g`/`G`; `/` narrows them by name, `s` cycles the column's sort, `→` goes to its conditions), the selected column's conditions on the right (`Space` on an operator opens the list of operators, those the column cannot take dimmed with why; `→` to its value; `x` or `Delete` takes it out; `+ add condition`, then the sort line: `←`/`→` none, up, down, `<`/`>` its place in the order), and under them the `Where` chips (every term of the condition, as sent; `x` takes one out, `Space` goes to its column), the `Order` keys, the `Limit` field and the `SQL` toggle. `Tab` and `Shift+Tab` move between these parts. `Enter` applies the draft and runs the table's query as any run of the tab (checked first; a refusal keeps the dialog open, says why and underlines the part refused; a question opens above it), `Esc` closes without applying (an open list or the search first), `Ctrl+Z` or `u` undoes a step (with none left: the change applied last), `X` clears every condition and the order, `Q` opens or closes the SQL section, `Ctrl+R` lists this table's earlier filters (picked: into the draft, nothing runs until `Enter`). Terms the dialog did not change are sent as they were written; a condition still waiting for its value is not sent. The SQL section shows the statement as it would be sent (the key the app adds to make the order total dimmed) above two fields, `WHERE` and `ORDER BY`, holding the draft's condition and order: what is typed there is read back when the field is left, the section closes (`Esc`) or the draft is applied (a condition typed is read again as terms, an `OR` or a function making an expression chip; an order that is not one keeps the section open, its error underlined). `Open in editor` (`Space` on it) puts the draft's statement, checked as `Space r v` checks it, in a new console without running it. A condition of the query bar opens the same dialog as a small popup under it, on that column alone: its conditions, values and sort line as above, the hint line on its border; `Tab`, `Shift+Tab`, `←` and `↑` past the top stay in it, `X`, `Q` and `Ctrl+R` are the whole dialog's; `Enter` applies, `Esc` or a click outside closes it without applying, and `A` or `⋯ Advanced` turns it into the whole dialog, the draft and its undo kept. `WHERE` and `+` of the bar open the column list of a new condition (`/` searches it): `Enter` picks the column, the popup becoming that column's with a new condition waiting for its value. The count of the conditions left out of the bar opens their list, one a line: `Enter` opens one in its column's popup (an expression in the whole dialog), `+` adds one, `x` takes it out and runs the query again as the bar's `×` does (the other conditions sent as they were written; the list closes once the statement is sent). `ORDER BY` (`Space r o`) opens the order: its keys first, then the other columns; `Space` turns a key's direction (another column becomes the last key), `J`/`K` move a key, `x` takes it out, the clause sent underneath with the key the app adds dimmed. The column count (`Space r c`) opens the columns: `Space` (`C`) hides one from the grid or shows it again, `a` shows them all (a hidden key column is still read); `Enter` applies, without a run when only the hidden columns changed. The rows (`Space r r`) open the page shown and the count: the previous and the next page, the planner's estimate and the exact count (as `#`, each dimmed with why when it would be refused), the last count with its kind and the paging's state; `Enter` does the item and the popup stays. Inside `root`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|
@@ -682,6 +682,7 @@ The filter and sort dialog of a table tab (`f` or `Space r f` on the grid's colu
 | `X` | `filter.clear_all` | Filter dialog → clear every condition and the order |  |
 | `Q` | `filter.sql` | Filter dialog → show or hide the statement |  |
 | `#` | `filter.count` | Filter dialog → count the column's values exactly |  |
+| `A` | `filter.advanced` | Filter popup → the whole filter dialog, the draft kept |  |
 | `Ctrl+R` | `table.filter.history` | Table → earlier filters of this table |  |
 
 Reserved (filter dialog): `Tab` `Shift+Tab` `Up` `Down` `Left` `Right` `Home` `End` `j` `k` `h` `l` `g` `G` `s` `/` `Space` `C` `x` `Delete` `<` `>`

@@ -98,6 +98,7 @@ fn f_opens_the_dialog_and_enter_sends_the_condition_built() {
     let mut h = users();
     h.keys("f");
     assert!(open(&h));
+    assert_eq!(h.app.filter_dialog_popup(), None, "`f` opens the whole dialog");
     assert_eq!(h.app.key_context(), Ctx::FilterDialog);
     // On the grid's column (`id`), a condition `= 1`.
     condition(&mut h, 0, "1");
@@ -749,8 +750,9 @@ fn the_columns_follow_the_catalogue_read_while_the_dialog_is_open() {
 #[test]
 fn the_sort_line_steps_through_none_ascending_and_descending_both_ways() {
     let mut h = users();
-    // `Space r o` with no order: the column's sort line.
+    // `Space r o` with no order, then `A`: the first column's sort line.
     h.keys(" ro");
+    h.keys("A");
     let order = |h: &Harness| h.app.filter_dialog_draft().unwrap().1;
     h.key(KeyCode::Right);
     assert_eq!(order(&h), "id ASC");

@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_query_popups.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
+"│  ＋ New connection   │╭ [Result 1]  Chart  Messages    local-pg / shop.users ╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ WHERE + │ ORDER + │ LIMIT none │ 500+ rows ‹ ›     ⋯ │"
+"│  ▾ ●   local-pg      ││    │ ╭─ rows 1–500 · page 1 of ? ───────────────────╮│"
+"│    ▾ datarig default ││    │ │  ‹ previous page                             ││"
+"│      ▸ analytics     ││  1 │ │▸ › next page                                 ││"
+"│      ▸ public        ││  2 │ │  Estimate (planner)  only with a filter      ││"
+"│      ▾ shop          ││  3 │ │  Exact count         stops after 30s         ││"
+"│        ▾ Tables      ││  4 │ │──────────────────────────────────────────────││"
+"│          ▸ users     ││  5 │ │ count: not known, 500 read                   ││"
+"│                      ││  6 │ │ Showing 500 rows · nothing is held open on   ││"
+"│                      ││  7 │ │ the server: n runs the SELECT again for the  ││"
+"│                      ││  8 │ │ next page                                    ││"
+"│                      ││  9 │ ╰─ Enter run · Esc close ───────── ⋯ Advanced ─╯│"
+"│                      ││ 10 │    9 │ n4                                       │"
+"│                      ││ 11 │   10 │ n0                                       │"
+"│                      ││ 12 │   11 │ n1                                       │"
+"│                      ││ 13 │   12 │ n2                                       │"
+"│                      ││ 14 │   13 │ n3                                       │"
+"│                      ││ 15 │   14 │ n4                                       │"
+"│                      ││ 16 │   15 │ n0                                       │"
+"│                      ││ Showing 500 rows · nothing is held open on the serve…│"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" local-pg │ 500+ rows (more pages) · 2ms                                     EN "

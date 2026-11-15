@@ -36,6 +36,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     f.buffer_mut().set_style(area, th.base());
     if area.width < MIN_W || area.height < MIN_H {
         app.layout = Layout { too_small: true, ..Layout::default() };
+        // Nothing of the filter dialog is drawn: its values are not either.
+        if let Some(d) = app.filter_dialog_mut() {
+            d.set_values_drawn(false);
+        }
         let msg = app.i18n.msg(&Msg::ScreenTooSmall { width: MIN_W.to_string(), height: MIN_H.to_string() });
         let msg = clip(&msg, area.width as usize);
         let x = area.x + (area.width.saturating_sub(width(&msg) as u16)) / 2;
@@ -105,8 +109,9 @@ pub fn draw_overlays(f: &mut Frame, app: &mut App, screen_cursor: Option<(u16, u
             OverlayKind::QuickConnect => draw_quick_connect(app, content, f.buffer_mut()),
             OverlayKind::Export => crate::widgets::export::draw_export_dialog(app, content, f.buffer_mut()),
             OverlayKind::TabList => crate::widgets::tab_list::draw_tab_list(app, content, f.buffer_mut()),
-            // Over the whole screen, the key bar included: it has a hint line of its own.
-            OverlayKind::FilterDialog => crate::widgets::filter_dialog::draw_filter_dialog(app, area, f.buffer_mut()),
+            // Over the whole screen, the key bar included: it has a hint line of its own (a
+            // popup of it: in the results pane, its hint line on its border).
+            OverlayKind::FilterDialog => crate::widgets::filter_dialog::draw(app, area, f.buffer_mut()),
             OverlayKind::NameInput => draw_name_input(app, content, f.buffer_mut()),
             OverlayKind::ScriptTree => crate::widgets::script_tree::draw_script_tree(app, content, f.buffer_mut()),
             OverlayKind::ContextMenu => draw_context_menu(app, content, f.buffer_mut()),

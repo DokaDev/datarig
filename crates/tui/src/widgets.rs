@@ -17,6 +17,7 @@ pub mod tree;
 pub(crate) mod changes;
 pub(crate) mod chooser;
 pub(crate) mod cmdline;
+pub(crate) mod condition_pane;
 pub(crate) mod dialog;
 pub(crate) mod explorer;
 pub(crate) mod export;

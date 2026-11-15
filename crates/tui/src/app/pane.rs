@@ -259,6 +259,7 @@ impl App {
     pub(super) fn cycle_result_tab(&mut self, delta: isize) {
         use super::tabs::ResultView;
         let t = self.tab_mut();
+        let id = t.id;
         let mut views: Vec<(ResultView, Option<usize>)> =
             t.result_tabs().into_iter().map(|i| (ResultView::Rows, Some(i))).collect();
         if views.is_empty() {
@@ -278,9 +279,13 @@ impl App {
             (view, _) => views.iter().position(|v| v.0 == view),
         };
         let next = (now.unwrap_or(0) as isize + delta).rem_euclid(n) as usize;
+        let moved = now != Some(next);
         match views[next] {
             (ResultView::Rows, Some(i)) => t.show_result(i),
             (view, _) => t.exec.view = view,
+        }
+        if moved {
+            self.filter_popup_leave(id);
         }
     }
 
