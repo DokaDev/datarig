@@ -350,6 +350,11 @@ fn the_statement_asks_only_for_what_the_server_has() {
     assert!(!maria.contains("x.EXPRESSION") && maria.contains("cc.TABLE_NAME = 't'"));
     let plain = statement(my((8, 4, 6)), MySqlMode { no_backslash_escapes: true, ..MY }, r"a\b", "t");
     assert!(plain.contains(r"t.TABLE_SCHEMA = 'a\b'"), "{plain}");
+    // A schema grant's pattern escapes with a backslash, written as the session reads it.
+    assert!(plain.contains(r"ESCAPE '\'") && sql.contains(r"ESCAPE '\\'"), "{plain}");
+    // `partial_revokes` is read where the server has it.
+    assert!(sql.contains("@@GLOBAL.partial_revokes") && !maria.contains("partial_revokes"));
+    assert!(!old.contains("partial_revokes"), "MySQL before 8.0.16 has none");
 }
 
 #[test]

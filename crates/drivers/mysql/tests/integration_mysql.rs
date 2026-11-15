@@ -4046,6 +4046,23 @@ async fn a_table_granted_column_by_column_has_its_columns_unknown() {
     let s = structure_of(&mut m, &t.name).await.unwrap();
     assert_eq!(s.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id"], "only the granted column");
     assert!(s.hidden.contains(&StructureGroup::Columns), "{:?}", s.hidden);
+    // A grant of a table whose name differs in case is another table's (names are compared as
+    // stored on a server that keeps their case).
+    let (lower,): (i64,) = a.query_first("SELECT @@lower_case_table_names").await.unwrap().unwrap();
+    if lower == 0 {
+        let upper = format!("shop.{}", t.name.to_uppercase());
+        let _upper = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {upper}") };
+        a.query_drop(format!("CREATE TABLE {upper} (id INT)")).await.unwrap();
+        a.query_drop(format!("GRANT SELECT ON {upper} TO '{name}'@'%'")).await.unwrap();
+        let s = structure_of(&mut m, &t.name).await.unwrap();
+        assert!(s.hidden.contains(&StructureGroup::Columns), "{:?} {:?}", s.hidden, s.columns);
+    }
+    // Of two schema patterns that name the schema the server takes one: the `SELECT` of the
+    // other may not hold, so it does not count.
+    a.query_drop(format!("GRANT DELETE ON `sho_`.* TO '{name}'@'%'")).await.unwrap();
+    a.query_drop(format!("GRANT SELECT ON `s%`.* TO '{name}'@'%'")).await.unwrap();
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    assert!(s.hidden.contains(&StructureGroup::Columns), "{:?} {:?}", s.hidden, s.columns);
     a.query_drop(format!("GRANT SELECT ON {} TO '{name}'@'%'", t.q())).await.unwrap();
     a.disconnect().await.unwrap();
     let s = structure_of(&mut m, &t.name).await.unwrap();

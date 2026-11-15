@@ -85,15 +85,38 @@ const SQL: &str = "SELECT JSON_OBJECT(
     OR EXISTS (SELECT 1 FROM information_schema.TABLE_PRIVILEGES p
       WHERE p.PRIVILEGE_TYPE = 'TRIGGER' AND p.GRANTEE = {grantee}
       AND p.TABLE_SCHEMA = {schema} AND p.TABLE_NAME = {table}),
-  'column_privilege', EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES p
-      WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND p.GRANTEE = {grantee})
-    OR EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES p
-      WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND p.GRANTEE = {grantee}
-      AND {schema} LIKE p.TABLE_SCHEMA)
+  'column_privilege', {columns_granted})
+FROM information_schema.TABLES t WHERE t.TABLE_SCHEMA = {schema} AND t.TABLE_NAME = {table}";
+
+/// Whether the user's own grants list every column of the table (`COLUMNS` lists a column to a
+/// user with `SELECT`, `INSERT`, `UPDATE` or `REFERENCES` on it): such a privilege on every
+/// schema, on the table's schema or on the table. Each is taken only where it surely holds,
+/// else the columns are unknown:
+///
+/// - on every schema, not while `partial_revokes` ({partial}) may take it back for a schema;
+/// - on the schema, a pattern (`_` and `%`) when `partial_revokes` is off, a name when it is on,
+///   and only when one pattern of the user's names the schema: of several, the server takes the
+///   first in its own order, which may grant less;
+/// - names are compared byte for byte: a grant of a name in another case does not count.
+///
+/// `{escape}` is a backslash as the session reads literals (`NO_BACKSLASH_ESCAPES`).
+const COLUMNS_GRANTED: &str = "(({partial} = 0 AND EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES p
+      WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND p.GRANTEE = {grantee}))
+    OR (EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES p
+        WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND p.GRANTEE = {grantee}
+        AND {schema_named})
+      AND (SELECT COUNT(DISTINCT CAST(p.TABLE_SCHEMA AS BINARY)) FROM information_schema.SCHEMA_PRIVILEGES p
+        WHERE p.GRANTEE = {grantee} AND {schema_named}) = 1)
     OR EXISTS (SELECT 1 FROM information_schema.TABLE_PRIVILEGES p
       WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND p.GRANTEE = {grantee}
-      AND p.TABLE_SCHEMA = {schema} AND p.TABLE_NAME = {table}))
-FROM information_schema.TABLES t WHERE t.TABLE_SCHEMA = {schema} AND t.TABLE_NAME = {table}";
+      AND CAST(p.TABLE_SCHEMA AS BINARY) = CAST({schema} AS BINARY)
+      AND CAST(p.TABLE_NAME AS BINARY) = CAST({table} AS BINARY)))";
+
+/// A schema grant `p` names the table's schema: as a pattern, or as a name while
+/// `partial_revokes` is on.
+const SCHEMA_NAMED: &str =
+    "IF({partial} = 0, CAST({schema} AS BINARY) LIKE CAST(p.TABLE_SCHEMA AS BINARY) ESCAPE {escape},
+        CAST(p.TABLE_SCHEMA AS BINARY) = CAST({schema} AS BINARY))";
 
 /// The user the session is, as the privilege tables name a grantee (`'user'@'host'`): the host
 /// is after the last `@` (a user name may hold one).
@@ -129,6 +152,14 @@ pub(crate) fn statement(server: Server, mode: MySqlMode, schema: &str, table: &s
     // The checks' subquery names the table too; it is filled first, as a value of the
     // statement is never read again for places.
     let checks = super::fill(checks, &names);
+    // `partial_revokes` is MySQL's from 8.0.16; MariaDB has none.
+    let partial = if !server.mariadb && server.version >= (8, 0, 16) { "@@GLOBAL.partial_revokes" } else { "0" };
+    let escape = d.quote_literal("\\");
+    let named = super::fill(SCHEMA_NAMED, &[("partial", partial), ("escape", &escape), names[0]]);
+    let granted = super::fill(
+        COLUMNS_GRANTED,
+        &[("partial", partial), ("schema_named", &named), ("grantee", GRANTEE), names[0], names[1]],
+    );
     // In one pass: a name is never read as a place for another value.
     super::fill(
         SQL,
@@ -136,6 +167,7 @@ pub(crate) fn statement(server: Server, mode: MySqlMode, schema: &str, table: &s
             ("expression", if functional { "x.EXPRESSION" } else { "NULL" }),
             ("visible", if server.mariadb { "NULL" } else { "x.IS_VISIBLE" }),
             ("checks", &checks),
+            ("columns_granted", &granted),
             ("grantee", GRANTEE),
             names[0],
             names[1],
