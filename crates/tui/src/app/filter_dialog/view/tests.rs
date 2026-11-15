@@ -3,7 +3,7 @@ use crate::app::filter_dialog::draft::{ColumnInfo, Draft, Undo};
 use crate::app::filter_dialog::{ColumnSource, DialogFocus, DialogHit};
 use crate::app::tabs::TabId;
 use crate::widgets::text_input::TextInput;
-use datarig_core::query::{ColumnFacts, ColumnKind, Query, TableName, Target};
+use datarig_core::query::{ColumnFacts, ColumnKind, Filter, Query, TableName, Target};
 use datarig_core::sql::dialect::Dialect;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -26,16 +26,21 @@ fn popup(kind: PopupKind) -> View {
     View::Popup { kind, anchor: Anchor { seg: Some(BarHit::Where), at: Rect::new(3, 1, 10, 1) } }
 }
 
-/// A dialog shown as the condition popup of `email`, mid-session: a draft changed once, an
-/// apply waiting to be sent, the column search open on `ma`, the operator picker open, the
-/// pointer over and pressing a part drawn.
-fn dialog() -> FilterDialog {
+/// A dialog shown as the condition popup of `email`, mid-session: a condition on `email`, a
+/// draft changed once, an apply waiting to be sent, the column search open on `ma`, the
+/// operator picker open, the pointer over and pressing a part drawn.
+pub(crate) fn dialog() -> FilterDialog {
     let target = Target::new(
         Dialect::Postgres,
         vec![ColumnFacts::new("id", ColumnKind::Number), ColumnFacts::new("email", ColumnKind::Text)],
     );
-    let q =
-        Query { limit: Some(5), ..Query::table(TableName { database: None, schema: "s".into(), name: "t".into() }) };
+    let text = "email = 'a'".to_string();
+    let filter = Some(Filter { recognised: datarig_core::query::recognise(&text, &target), text });
+    let q = Query {
+        filter,
+        limit: Some(5),
+        ..Query::table(TableName { database: None, schema: "s".into(), name: "t".into() })
+    };
     let draft = Draft::from_query(&q, &target);
     let mut undo = Undo::default();
     undo.record(&Draft::from_query(&Query { limit: None, ..q.clone() }, &target), None);

@@ -418,7 +418,7 @@ impl App {
         let why = |off: draft::OpOff| self.i18n.label(op_off_label(off)).to_string();
         Some(
             ops.into_iter()
-                .map(|(op, ok)| (crate::widgets::filter_dialog::op_label(self, op), ok.err().map(why)))
+                .map(|(op, ok)| (crate::widgets::condition_pane::op_label(self, op), ok.err().map(why)))
                 .collect(),
         )
     }
