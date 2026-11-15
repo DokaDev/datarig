@@ -236,7 +236,13 @@ impl App {
             }
             return;
         }
-        let tab = d.tab;
+        self.filter_dialog_send();
+    }
+
+    /// The draft runs as any run of the tab ([`App::table_run`]), as [`DialogAction::Apply`]
+    /// says.
+    pub(super) fn filter_dialog_send(&mut self) {
+        let Some(tab) = self.filter_dialog().map(|d| d.tab) else { return };
         self.filter_dialog_popup_close();
         if !self.filter_dialog_read_back() {
             return;

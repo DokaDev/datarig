@@ -1342,3 +1342,25 @@ fn a_narrow_between_keeps_room_for_both_values() {
     let line = screen.lines().find(|l| l.contains("between")).unwrap_or_else(|| panic!("{screen}"));
     assert!(line.contains("1234"), "the first value in view: {line}\n{screen}");
 }
+
+/// `x` in the WHERE list takes the condition out of the draft the list shows (here the query
+/// before the last change, undone to) and applies that draft: the query applied last is not
+/// what it starts from.
+#[test]
+fn the_where_list_removes_from_the_draft_it_shows() {
+    let long = "name <> 'a rather long text to leave out' AND (id < 9 OR  id = 20)";
+    let mut h = users_where(&format!("id > 0 AND name = 'a' AND {long}"));
+    h.command(&format!("where id > 0 AND name = 'b' AND {long}"));
+    runs(&mut h);
+    answer(&mut h);
+    h.app.focus = Focus::Results;
+    open_at(&mut h, BarHit::More, 120, 34);
+    assert_eq!(popup(&h), Some(PopupKindId::WhereList));
+    h.keys("u");
+    assert_eq!(draft_where(&h), format!("id > 0 AND name = 'a' AND {long}"));
+    h.keys("x");
+    let sent = runs(&mut h);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let s = &sent[0][0];
+    assert!(s.contains("name = 'a'") && !s.contains("name = 'b'") && !s.contains("id > 0"), "{s}");
+}

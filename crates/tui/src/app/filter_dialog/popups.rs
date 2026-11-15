@@ -9,7 +9,6 @@
 //! it); the rows popup's items do what the bar's arrows and `#` do, and it stays open. Every
 //! change of view is [`FilterDialog::set_view`]: the draft and its undo stay.
 
-use super::draft::Draft;
 use super::view::{PopupKind, View};
 use super::*;
 use crate::widgets::qbar::BarHit;
@@ -127,50 +126,20 @@ impl App {
         d.scroll = 0;
         d.focus_on(DialogFocus::Columns);
     }
-    /// `x` in the WHERE list on the condition of term `t`: as the bar's `×` on it, the query
-    /// applied runs without it, the other conditions sent as they were written; the list
-    /// waits for the statement to be sent and closes then, as an apply does (a refusal or a
-    /// question keeps it, saying why). The condition leaves the list's draft too (one undo
-    /// step). One the query applied does not have (its text is not among its conditions) only
-    /// leaves the draft.
+    /// `x` in the WHERE list on the condition of term `t`: the condition leaves the draft the
+    /// list shows (one undo step), and that draft is applied as `Enter` applies the condition
+    /// popup's, the other conditions sent as they are; the list waits for the statement to be
+    /// sent and closes then (a refusal or a question keeps it, saying why).
     fn filter_where_list_remove(&mut self, t: usize) {
-        let Some(d) = self.filter_dialog() else { return };
-        let tab = d.tab;
-        let text = d.draft.where_.terms().get(t).and_then(|x| x.text.clone());
+        let Some(tab) = self.filter_dialog().map(|d| d.tab) else { return };
         // A busy tab refuses it (said) and the draft stays.
         if self.tab_busy(tab) {
             return self.flash_busy();
         }
-        let applied = self.table_target(tab).zip(self.table_query(tab).map(|tq| tq.applied().clone()));
-        let at = applied.and_then(|(target, q)| {
-            let w = Draft::from_query(&q, &target).where_;
-            w.terms().iter().position(|x| x.text.is_some() && x.text == text)
-        });
-        let Some(at) = at else {
-            return self.filter_dialog_edit(None, |d, _| {
-                d.draft.where_.remove(t);
-            });
-        };
-        let Some((tab, q)) = self.bar_without(tab, at) else { return };
         self.filter_dialog_edit(None, |d, _| {
             d.draft.where_.remove(t);
         });
-        let Some(d) = self.filter_dialog_mut() else { return };
-        d.applying = Some(q.clone());
-        d.applying_hidden = None;
-        d.message = None;
-        d.mark = None;
-        if let Some(tq) = self.table_query_mut(tab) {
-            tq.draft = q.clone();
-            tq.refusal = None;
-        }
-        // What the run says while the list is open is said on its border.
-        self.status = None;
-        self.transient = None;
-        self.table_run(tab, q);
-        if self.filter_dialog().is_some_and(|d| d.tab == tab) {
-            self.filter_dialog_told(tab);
-        }
+        self.filter_dialog_send();
     }
 
     /// The order popup's keys: `↑`/`↓` (`k`/`j`, `g`/`G`) through its lines, `Space` turns a
