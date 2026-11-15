@@ -556,9 +556,12 @@ async fn run_session(
         let _ = events.send(DbEvent::SessionPerTransaction { refused: refused.clone() });
     }
     // How a query session writes dates and times as text, as it connected: known before any
-    // statement of it runs.
+    // statement of it runs. Not known at all while start-up statements go first in each
+    // transaction: one may set them for the request that reads a page and commits, which sets
+    // them back before the server reports anything.
+    let blind = per_tx.as_ref().is_some_and(|(each, _)| !each.is_empty());
     let text = (role == SessionRole::Query).then(|| {
-        let text = crate::query::Events::new(events.clone(), params);
+        let text = crate::query::Events::new(events.clone(), params, blind);
         text.report();
         text
     });

@@ -681,7 +681,7 @@ mod terminal {
             let (events, mut rx) = unbounded_channel();
             // The settings as the session connected: said once, as the session's loop does,
             // so a run's events show only a change.
-            let events = super::super::style::Events::new(events, params);
+            let events = super::super::style::Events::new(events, params, false);
             events.report();
             while rx.try_recv().is_ok() {}
             let token = crate::route::Cancel::new(
@@ -1220,6 +1220,28 @@ mod terminal {
         let events = s.run_all(&["SET DateStyle = 'ISO, MDY'"], None).await;
         assert_eq!(styles(&events), ["done"], "the same value: no change");
         s.run_all(&["RESET DateStyle", "RESET TimeZone"], None).await;
+    }
+
+    /// What the server never reports, so the session cannot see it: a setting changed within
+    /// one request and set back before its end (a `set_config(…, true)` of a result not held,
+    /// whose transaction ends in the request that reads it), with its rows written in the other
+    /// value. Only the app's allowlist keeps such rows from counting as written in the settings
+    /// around them. (Held, the transaction stays open past the request, and the change is
+    /// reported with the page.)
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_setting_changed_and_set_back_within_one_request_is_never_reported() {
+        let Some(url) = pg_url("a_setting_changed_and_set_back_within_one_request_is_never_reported") else { return };
+        let mut s = Session::open(&url).await;
+        s.paging = PagingMode::NoHold;
+        let sql = "SELECT set_config('DateStyle', 'SQL, DMY', true), '[2026-01-02,2026-01-05)'::daterange";
+        let events = s.run_all(&[sql], None).await;
+        assert!(!events.iter().any(|e| matches!(e, DbEvent::TextStyle(_))), "{events:?}");
+        assert!(
+            events.iter().any(
+                |e| matches!(e, DbEvent::Page { rows, .. } if rows[0][1].as_deref() == Some("[02/01/2026,05/01/2026)"))
+            ),
+            "{events:?}"
+        );
     }
 
     /// A run that ends without its terminal event (a bug) still answers: the dropped `Reply`

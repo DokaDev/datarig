@@ -18,9 +18,14 @@ impl Reported {
 }
 
 fn session(r: &Reported) -> (Events, tokio::sync::mpsc::UnboundedReceiver<DbEvent>) {
+    session_of(r, false)
+}
+
+/// [`session`], `blind` as a session whose start-up statements go in each transaction.
+fn session_of(r: &Reported, blind: bool) -> (Events, tokio::sync::mpsc::UnboundedReceiver<DbEvent>) {
     let (tx, rx) = unbounded_channel();
     let r = r.clone();
-    (Events::reading(tx, Box::new(move |name| r.0.lock().unwrap().get(name).cloned())), rx)
+    (Events::reading(tx, Box::new(move |name| r.0.lock().unwrap().get(name).cloned()), blind), rx)
 }
 
 fn iso() -> Reported {
@@ -88,17 +93,7 @@ fn a_page_read_while_the_settings_changed_is_read_in_settings_not_known() {
 }
 
 #[test]
-fn a_report_of_the_same_value_again_is_a_change_and_a_missing_setting_is_not_known() {
-    let r = iso();
-    let (events, mut rx) = session(&r);
-    events.report();
-    names(&mut rx);
-    // Set and set back within one request (`SET LOCAL` and its transaction's end): its rows
-    // may be written in the other.
-    r.set("DateStyle", "ISO, MDY");
-    events.send(page());
-    assert_eq!(names(&mut rx), ["style unknown", "page", "style ISO, MDY"]);
-
+fn a_missing_setting_is_not_known() {
     let r = Reported::default();
     r.set("DateStyle", "ISO, MDY");
     let (events, mut rx) = session(&r);
@@ -109,6 +104,20 @@ fn a_report_of_the_same_value_again_is_a_change_and_a_missing_setting_is_not_kno
     assert_eq!(style_of(&[Some(("ISO, MDY".into(), 0)), Some(("postgres".into(), 0)), None]), None);
     let all = [Some(("ISO, MDY".into(), 0)), Some(("postgres".into(), 2)), Some(("UTC".into(), 0))];
     assert_eq!(style_of(&all), style("ISO, MDY"));
+}
+
+/// Start-up statements sent first in each transaction may set the settings in the very request
+/// that reads a page and commits it, which sets them back unreported: such a session says they
+/// are not known, as it connects and after any report.
+#[test]
+fn a_session_with_start_up_statements_in_each_transaction_never_knows_its_settings() {
+    let r = iso();
+    let (events, mut rx) = session_of(&r, true);
+    events.report();
+    events.send(page());
+    r.set("TimeZone", "Asia/Seoul");
+    events.send(done());
+    assert_eq!(names(&mut rx), ["style unknown", "page", "style unknown", "done"]);
 }
 
 #[test]

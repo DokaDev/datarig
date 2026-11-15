@@ -39,6 +39,10 @@ pub(crate) struct Events {
 
 struct Watch {
     read: Read,
+    /// The session's statements may set the settings within a request without the server
+    /// reporting it (start-up statements sent first in each transaction): what it says of them
+    /// is always that they are not known.
+    blind: bool,
     /// What the app was last told (`None`: nothing yet).
     told: Mutex<Option<Snapshot>>,
 }
@@ -60,9 +64,10 @@ fn style_of(s: &Snapshot) -> Option<TextStyle> {
 }
 
 impl Events {
-    /// Events of a session whose connection keeps `params`.
-    pub(crate) fn new(tx: UnboundedSender<DbEvent>, params: SharedParameters) -> Self {
-        Self::reading(tx, Box::new(move |name| params.get(name)))
+    /// Events of a session whose connection keeps `params`; `blind`: its settings are never
+    /// known ([`Watch::blind`]).
+    pub(crate) fn new(tx: UnboundedSender<DbEvent>, params: SharedParameters, blind: bool) -> Self {
+        Self::reading(tx, Box::new(move |name| params.get(name)), blind)
     }
 
     /// Events of a session that says nothing of its settings (tests that drive one by hand).
@@ -72,8 +77,8 @@ impl Events {
     }
 
     /// Events of a session whose settings `read` reads.
-    fn reading(tx: UnboundedSender<DbEvent>, read: Read) -> Self {
-        Self { tx, watch: Some(Watch { read, told: Mutex::new(None) }) }
+    fn reading(tx: UnboundedSender<DbEvent>, read: Read, blind: bool) -> Self {
+        Self { tx, watch: Some(Watch { read, blind, told: Mutex::new(None) }) }
     }
 
     /// Tell the app the settings now, when they changed since it was last told (or it never
@@ -83,7 +88,8 @@ impl Events {
         let now = w.now();
         let mut told = w.told.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if told.as_ref() != Some(&now) {
-            let _ = self.tx.send(DbEvent::TextStyle(style_of(&now)));
+            let style = if w.blind { None } else { style_of(&now) };
+            let _ = self.tx.send(DbEvent::TextStyle(style));
             *told = Some(now);
         }
     }
