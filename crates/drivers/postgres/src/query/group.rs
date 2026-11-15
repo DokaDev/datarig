@@ -119,6 +119,11 @@ pub(super) async fn group_count(
         Ok(check) => check,
         Err(why) => return Ok((Err(why), false)),
     };
+    // Inside the user's block (or maybe in it) a cancel that landed before the savepoint exists
+    // would abort the block: the user's cancels wait until it does, and while it is undone.
+    let Some(mut held) = held_start(env, tx.block || tx.unsure).await else {
+        return Ok((Err(DbError::Cancelled), false));
+    };
     // Whether a block is open must be known before a transaction of its own begins.
     if tx.unsure {
         probe(client, link, env, tx).await?;
@@ -131,11 +136,12 @@ pub(super) async fn group_count(
         let first = tx.take_first_text(env);
         let asked = format!("{first}SAVEPOINT {sp}; {ISOLATION}; {check}");
         let (fixed, answer) = count_checked(link, env, client.simple_query(&asked)).await?;
-        let read = match answer {
+        let read = match held_set(&mut held, env, answer) {
             Ok(()) => in_block(client, link, env, sql).await?,
             Err(why) => Err(why),
         };
         if let Err(why) = read {
+            held.hold().await;
             // Back to before it (an aborted block refuses this too, and stays as it was); the
             // probe tells the block's state either way.
             let _ = link.guard(None, client.batch_execute(&count_undo(env))).await?;
@@ -144,6 +150,7 @@ pub(super) async fn group_count(
         }
         return Ok((read, fixed));
     }
+    held.end();
     Ok((own(client, link, env, limit, &check, sql).await?, false))
 }
 
@@ -288,6 +295,7 @@ pub(super) async fn group_counted_in(
     link: &mut Link,
     env: &Env<'_>,
     sql: &str,
+    block: bool,
 ) -> Result<(Result<GroupCounts, DbError>, bool), Closed> {
     if !countable(sql) {
         return Ok((Err(DbError::NotSupported), false));
@@ -296,10 +304,14 @@ pub(super) async fn group_counted_in(
         Ok(check) => check,
         Err(why) => return Ok((Err(why), false)),
     };
+    // In the user's block, its cancels wait while the savepoint is set and undone.
+    let Some(mut held) = held_start(env, block).await else {
+        return Ok((Err(DbError::Cancelled), false));
+    };
     let sp = env.savepoint;
     let asked = format!("SAVEPOINT {sp}; {ISOLATION}; {check}");
     let (fixed, answer) = count_checked(link, env, txn.simple_query(&asked)).await?;
-    let read = match answer {
+    let read = match held_set(&mut held, env, answer) {
         Ok(()) => match link.guard(Some(env.token), txn.prepare(sql)).await? {
             // A cancel that came while the server answered the preparation stopped nothing.
             Ok(_) if env.cancel.asked() => Err(DbError::Cancelled),
@@ -317,6 +329,8 @@ pub(super) async fn group_counted_in(
         },
         Err(why) => Err(why),
     };
+    // Read: the release and the undo after it keep the block as it was.
+    held.hold().await;
     match read {
         Ok(counts) => match link.guard(None, txn.batch_execute(&format!("RELEASE SAVEPOINT {sp}"))).await? {
             Ok(()) => Ok((Ok(counts), fixed)),

@@ -88,9 +88,10 @@ pub(crate) struct Cancel {
 }
 
 /// Holds the user's cancels back while the session runs statements a cancel must not land on:
-/// an Apply's start inside the user's block sets its savepoint, and a cancel landing before the
-/// savepoint exists would abort the block, the user's earlier work with it. A cancel asked
-/// meanwhile is not sent; the run sees it asked and stops itself at its next step.
+/// inside the user's block an Apply's start, a `Resume`'s, a count's, a count of a column's
+/// values', an export's and an `EXPLAIN ANALYZE`'s set their savepoint, and a cancel landing
+/// before the savepoint exists would abort the block, the user's earlier work with it. A cancel
+/// asked meanwhile is not sent; the run sees it asked and stops itself before its next step.
 #[derive(Default)]
 pub(crate) struct Hold {
     held: AtomicBool,
@@ -112,6 +113,60 @@ impl Hold {
 
     pub(crate) fn held(&self) -> bool {
         self.held.load(Ordering::SeqCst)
+    }
+}
+
+/// The user's cancels held back ([`Hold`]) while it lives, unless released for a while or
+/// ended.
+pub(crate) struct Held<'a> {
+    hold: &'a Hold,
+    /// Held at all: not once ended, nor when made off ([`Held::when`]).
+    on: bool,
+}
+
+impl<'a> Held<'a> {
+    /// Held from now on; returns once no cancel is on its way.
+    pub(crate) async fn new(hold: &'a Hold) -> Held<'a> {
+        Held::when(hold, true).await
+    }
+
+    /// Held only when `on`; otherwise it never holds anything.
+    pub(crate) async fn when(hold: &'a Hold, on: bool) -> Held<'a> {
+        if on {
+            hold.hold().await;
+        }
+        Held { hold, on }
+    }
+
+    /// Whether it holds at all (released for a while counts).
+    pub(crate) fn on(&self) -> bool {
+        self.on
+    }
+
+    /// Held again after [`Held::release`]; returns once no cancel is on its way.
+    pub(crate) async fn hold(&mut self) {
+        if self.on {
+            self.hold.hold().await;
+        }
+    }
+
+    /// Let the cancels through for a while.
+    pub(crate) fn release(&mut self) {
+        if self.on {
+            self.hold.release();
+        }
+    }
+
+    /// No longer held, for good.
+    pub(crate) fn end(&mut self) {
+        self.release();
+        self.on = false;
+    }
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        self.release();
     }
 }
 

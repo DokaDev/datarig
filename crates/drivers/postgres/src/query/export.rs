@@ -15,7 +15,7 @@
 
 use super::{
     BEGIN_OWN_READ, Closed, Env, Link, State, check_text, checked, columns_of, copies_with_client, count_error,
-    count_undo, decode, end_own, finish, formats_of, own_check, probe,
+    count_undo, decode, end_own, finish, formats_of, held_set, held_start, own_check, probe,
 };
 use crate::connect::{db_error, is_cancel};
 use datarig_core::driver::{Cell, DbError, EXPORT_BATCH_BYTES, ExportBatch, ExportGuard, ExportRead, ExportSink};
@@ -77,6 +77,11 @@ pub(super) async fn export(
     let max = i32::try_from(batch.max(1)).unwrap_or(i32::MAX);
     let sp = env.savepoint;
     if s.tx.block {
+        // A cancel that landed before the savepoint exists, or on its undo, would abort the
+        // block: the user's cancels wait meanwhile.
+        let Some(mut held) = held_start(env, true).await else {
+            return Ok((Err(DbError::Cancelled), true));
+        };
         // The savepoint (made read-only before it when that is due), and the allowlist's
         // question, in one request.
         let first = s.tx.take_first_text(env);
@@ -85,13 +90,14 @@ pub(super) async fn export(
             None => format!("{first}SAVEPOINT {sp}"),
         };
         let (_, answer) = checked(link, env, client.simple_query(&asked)).await?;
-        let stmt = match answer {
+        let stmt = match held_set(&mut held, env, answer) {
             Ok(()) => prepared(client, link, env, s, sql, &[]).await?,
             Err(why) => Err(why),
         };
         let stmt = match stmt {
             Ok(stmt) => stmt,
             Err(why) => {
+                held.hold().await;
                 // An aborted block refuses this too, and stays as it was.
                 let _ = link.guard(None, client.batch_execute(&count_undo(env))).await?;
                 probe(client, link, env, s.tx).await?;
@@ -102,6 +108,8 @@ pub(super) async fn export(
         let txn = client.transaction_in_block();
         let out = stream(&txn, link, env, &stmt, &sink, max).await?;
         drop(sink);
+        // Read: the release and the undo after it keep the block as it was.
+        held.hold().await;
         let answer = match out {
             Ok(read) => match link.guard(None, txn.batch_execute(&format!("RELEASE SAVEPOINT {sp}"))).await? {
                 Ok(()) => (Ok(read), false),
