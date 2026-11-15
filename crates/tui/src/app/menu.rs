@@ -1096,8 +1096,10 @@ impl App {
         if !self.overlays.is_open(OverlayKind::ContextMenu) {
             self.focus = back;
         }
-        // The copy of the rows fetched says, in a few words next to it, that they are not all.
-        if read && self.fetched_partial().is_some() {
+        // The copy of the rows fetched says, in a few words next to it, that they are not all:
+        // kept with the menu and shown while that holds (`menu_hint`), as the result may change
+        // either way while the menu is open.
+        if read {
             let hint = self.i18n.label(Label::MenuHintMoreOnServer);
             if let Some(m) = self.overlays.menu_mut() {
                 m.hints.push((MenuItem::Scope(MenuScope::Copy(CopyScope::Fetched)), hint));
