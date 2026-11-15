@@ -1399,6 +1399,32 @@ mod terminal {
             s.client.batch_execute("ROLLBACK").await.unwrap();
         }
 
+        /// Cancels are held only inside the user's block, and only off the steps: in a transaction
+        /// of the Apply's own a cancel may land anywhere (its commit too), and after the Apply
+        /// nothing is held.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn cancels_are_held_only_off_the_steps_of_an_apply_in_the_users_block() {
+            let name = "cancels_are_held_only_off_the_steps_of_an_apply_in_the_users_block";
+            let Some(url) = pg_url(name) else { return };
+            let (table, _g) = table(&url, "hold_where").await;
+            let mut s = Session::open(&url).await;
+            let seen = std::sync::Mutex::new(Vec::new());
+            let hold = s.token.hold.clone();
+            let note = |_: usize| seen.lock().unwrap().push(hold.held());
+            let hooks = Hooks { before_step: Some(&note), ..Hooks::default() };
+            assert_eq!(answer(&s.apply(&steps(&table), ApplyTx::Commit, &hooks).await), Ok(()));
+            assert_eq!(std::mem::take(&mut *seen.lock().unwrap()), [false, false, false], "its own transaction");
+            assert!(!s.token.hold.held());
+            s.rule = manual(&[TxStep::Open]);
+            s.run_all(&[&format!("INSERT INTO {table} VALUES (2, 'earlier')")], None).await;
+            let again = vec![steps(&table)[0].clone()];
+            let _ = s.apply(&again, ApplyTx::Commit, &hooks).await;
+            // Held between the steps (the hook runs before a step's own check), never after.
+            assert_eq!(std::mem::take(&mut *seen.lock().unwrap()), [true, true], "the user's block");
+            assert!(!s.token.hold.held(), "released once the Apply answered");
+            s.client.batch_execute("ROLLBACK").await.unwrap();
+        }
+
         /// Inside the user's block, a cancel the user asks while the Apply's start runs (its
         /// savepoint not set yet) is held back: the block and the user's earlier work in it stand,
         /// and the Apply stops before its first step. The start is kept waiting on an advisory

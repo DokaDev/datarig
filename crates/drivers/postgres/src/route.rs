@@ -110,7 +110,7 @@ impl Hold {
         self.held.store(false, Ordering::SeqCst);
     }
 
-    fn held(&self) -> bool {
+    pub(crate) fn held(&self) -> bool {
         self.held.load(Ordering::SeqCst)
     }
 }
