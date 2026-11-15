@@ -143,6 +143,11 @@ pub(crate) fn draw_condition_popup(app: &mut App, bounds: Rect, buf: &mut Buffer
         d.hits = hits;
         d.values_scroll = out.values_scroll;
         d.rows_scroll = out.rows_scroll;
+        // Values not drawn are not reached by the keys.
+        d.values_drawn = out.values_drawn;
+        if !out.values_drawn {
+            d.listed = 0;
+        }
         d.hover = lit.map(|(h, _)| h);
         d.press.drawn(top, now);
     }

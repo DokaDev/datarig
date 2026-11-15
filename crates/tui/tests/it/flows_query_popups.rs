@@ -1297,3 +1297,48 @@ fn the_where_list_closes_on_a_tab_switch_and_acts_on_its_own_tab() {
     let applied = h.app.tabs.get(orders).and_then(|t| t.doc.table_query.as_ref()).map(|q| q.applied().clone());
     assert!(format!("{applied:?}").contains("id <> 15"), "orders keeps its conditions: {applied:?}");
 }
+
+/// The values list a popup has no room to draw (many conditions on its column at 80x24) is
+/// not reached by the keys: nothing unseen is ticked.
+#[test]
+fn values_not_drawn_are_not_reached() {
+    let terms: Vec<String> = (1..=15).map(|i| format!("id > {i}")).collect();
+    let all = terms.join(" AND ");
+    for advanced in [false, true] {
+        let mut h = users_where(&all);
+        open_chip(&mut h, 0);
+        if advanced {
+            h.keys("A");
+        }
+        // To the last condition, then past `+ add condition`.
+        for _ in 0..16 {
+            h.draw(80, 24);
+            h.key(KeyCode::Down);
+        }
+        h.draw(80, 24);
+        h.key(KeyCode::Char(' '));
+        assert_eq!(draft_where(&h), all, "advanced: {advanced}: nothing unseen ticked");
+    }
+}
+
+/// An incomplete `between` in a narrow popup (the explorer widened, 80x24) keeps room for each
+/// of its two values: the one typed stays in view.
+#[test]
+fn a_narrow_between_keeps_room_for_both_values() {
+    let mut h = users_where("id BETWEEN 1234 AND 5678");
+    open_chip(&mut h, 0);
+    h.app.explorer.width = Some(36);
+    h.draw(80, 24);
+    // The second value emptied: incomplete.
+    h.key(KeyCode::Right);
+    h.key(KeyCode::End);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::End);
+    for _ in 0..4 {
+        h.key(KeyCode::Backspace);
+    }
+    assert!(draft_where(&h).is_empty() || !draft_where(&h).contains("5678"), "{}", draft_where(&h));
+    let screen = h.screen(80, 24);
+    let line = screen.lines().find(|l| l.contains("between")).unwrap_or_else(|| panic!("{screen}"));
+    assert!(line.contains("1234"), "the first value in view: {line}\n{screen}");
+}

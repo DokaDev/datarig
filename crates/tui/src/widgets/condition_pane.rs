@@ -23,6 +23,10 @@ use ratatui::widgets::{Block, BorderType, Widget};
 /// The width of an operator's box (`= ▾`, `≠ or NULL ▾`).
 const OP_BOX: u16 = 14;
 
+/// The width a value field keeps before the note on its row and the word between two fields
+/// give way: four characters of the value in view.
+const MIN_FIELD: u16 = 6;
+
 /// How the pane is drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PaneOpts {
@@ -43,6 +47,8 @@ pub(crate) struct PaneOut {
     pub(crate) picker_at: Option<(u16, u16)>,
     /// The first value of the list drawn.
     pub(crate) values_scroll: usize,
+    /// The values were drawn: there was room for their list.
+    pub(crate) values_drawn: bool,
     /// The first line of the conditions drawn.
     pub(crate) rows_scroll: usize,
     /// Where the conditions and `+ add condition` are when they do not fit, with no heading to
@@ -209,19 +215,30 @@ pub(crate) fn draw_condition_pane(
                 (Some(RenderError::NotInstant(_)), _) => i18n.label(Label::TableDialogProblemNotInstant).to_string(),
                 _ => i18n.label(Label::TableDialogIncomplete).to_string(),
             };
-            let note_w = if incomplete { width(&note) as u16 + 2 } else { 0 };
-            let vw = remove_x.saturating_sub(vx + 2 + note_w);
-            let n = match row.op.arity() {
+            let n: usize = match row.op.arity() {
                 Arity::Zero => 0,
                 Arity::Two => 2,
                 _ => 1,
             };
+            // Each field keeps its least width: the note goes first, then the word between
+            // two fields (a blank stays between them).
+            let room = remove_x.saturating_sub(vx + 2);
+            let mut and = format!(" {} ", i18n.label(Label::TableDialogAnd));
+            let joins = |and: &str| if n == 2 { width(and) as u16 } else { 0 };
+            let fits = |used: u16| n == 0 || room.saturating_sub(used) / n as u16 >= MIN_FIELD;
+            let mut note_w = if incomplete { width(&note) as u16 + 2 } else { 0 };
+            if !fits(note_w + joins(&and)) {
+                note_w = 0;
+            }
+            if !fits(joins(&and)) {
+                and = " ".to_string();
+            }
+            let vw = room.saturating_sub(note_w);
             let values = row.field_texts(d.dialect, &d.column_info(&row.col));
             // The condition the last refusal points into: its values underlined.
             let refused = d.mark.as_ref().is_some_and(|m| m.term(t));
             let text_style =
                 if refused { field.fg(th.error).add_modifier(Modifier::UNDERLINED | Modifier::BOLD) } else { field };
-            let and = format!(" {} ", i18n.label(Label::TableDialogAnd));
             let each = if n == 2 { vw.saturating_sub(width(&and) as u16) / 2 } else { vw };
             let mut fx = vx;
             for k in 0..n {
@@ -255,7 +272,7 @@ pub(crate) fn draw_condition_pane(
                     fx += put(buf, fx, y, &and, width(&and), muted);
                 }
             }
-            if incomplete {
+            if note_w > 0 {
                 put(buf, remove_x.saturating_sub(note_w), y, &note, usize::from(note_w), Style::new().fg(th.warning));
             }
             put(buf, remove_x, y, "\u{00d7}", 1, muted);
@@ -285,6 +302,7 @@ pub(crate) fn draw_condition_pane(
                 let area = Rect::new(px, y + 2, right - px, sort_y - 1 - (y + 2));
                 draw_values(app, d, v, area, opts.compact, buf, hits)
             };
+            out.values_drawn = true;
         }
         // The sort line, on the pane's last row.
         if d.focus == DialogFocus::Sort {

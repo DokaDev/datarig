@@ -199,7 +199,7 @@ impl App {
         self.filter_dialog_tally();
         let view = self.filter_dialog_values_view();
         let d = self.filter_dialog_mut()?;
-        d.listed = view.as_ref().map_or(0, |v| v.items.len());
+        d.listed = view.as_ref().filter(|_| d.values_drawn).map_or(0, |v| v.items.len());
         view
     }
 

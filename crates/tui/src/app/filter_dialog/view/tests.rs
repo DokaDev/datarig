@@ -82,6 +82,7 @@ pub(crate) fn dialog() -> FilterDialog {
         values_scroll: 0,
         rows_scroll: 0,
         listed: 0,
+        values_drawn: true,
         list_of: None,
         tally: None,
         counting: None,

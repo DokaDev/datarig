@@ -415,8 +415,12 @@ pub struct FilterDialog {
     /// The first line of the selected column's conditions drawn (they scroll when they do not
     /// fit).
     pub(crate) rows_scroll: usize,
-    /// How many values the list of the selected column shows now (kept as the list is made).
+    /// How many values the list of the selected column shows now (kept as the list is made;
+    /// none while the pane has no room to draw it).
     pub(crate) listed: usize,
+    /// The pane had room to draw the values when it was drawn last (in this view; taken as
+    /// drawn until then).
+    pub(crate) values_drawn: bool,
     /// The column the list was made for last: another one starts its list from the top.
     pub(crate) list_of: Option<String>,
     /// The selected column's values counted in the rows loaded, for those rows.
@@ -821,6 +825,7 @@ impl App {
             values_scroll: 0,
             rows_scroll: 0,
             listed: 0,
+            values_drawn: true,
             list_of: None,
             tally: None,
             counting: None,
