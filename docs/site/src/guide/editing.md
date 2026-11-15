@@ -437,6 +437,23 @@ A `TIMESTAMP` value pending in a result read in a zone without a fixed offset, i
 known, or in a session whose zone changed while its rows were read is not kept either. Into a column without a zone (`DATETIME`, `timestamp`, text) the text pastes as
 it was shown.
 
+A PostgreSQL value read as the server's text (a range or multirange of dates or times such as
+`daterange` or `tstzrange`, a composite or an array of such values, an extension's type or one
+the driver cannot tell) is written in the session's `DateStyle`, `IntervalStyle` and
+`TimeZone`: `[02/01/2026,05/01/2026)` starts on 2 January in `SQL, DMY` and on 1 February in
+`SQL, MDY`. Its cells keep the settings their result was read in, and `g p` pastes them into a
+column that reads dates, times or intervals only where they read back as the same values:
+written in ISO (`DateStyle` `ISO` and an `IntervalStyle` other than `sql_standard`), or in
+exactly the settings of the session the result is pasted in. Else it says why and pastes
+nothing ("Not pasted: column “period” was copied as text whose dates and times are written in
+DateStyle SQL, DMY, IntervalStyle postgres, TimeZone UTC; this session reads such text in
+DateStyle ISO, MDY, IntervalStyle postgres, TimeZone UTC, maybe as other values"), also when
+the copy's settings are not known (they changed while its rows were read): set the session's
+settings to the copy's (`SET DateStyle = 'SQL, DMY'`) or copy the rows again in ISO, and paste
+again. Dates, times and intervals of the plain types (`date`, `timestamptz`, `interval` and
+arrays of them) are read in ISO whatever the settings and paste as they are, as do text,
+numbers and JSON, and such text pastes as it was shown into a text column.
+
 ## Undo, revert, discard
 
 - `u` undoes the last change of the result and `Ctrl+R` redoes it. A change of several selected

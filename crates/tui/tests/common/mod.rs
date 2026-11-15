@@ -1140,7 +1140,7 @@ pub fn meta(name: &str, ty: &str, numeric: bool, json: bool) -> ColumnMeta {
         "text" => ValueKind::Text,
         _ => ValueKind::Other,
     };
-    ColumnMeta { name: name.into(), type_name: ty.into(), numeric, json, kind, origin: None }
+    ColumnMeta { name: name.into(), type_name: ty.into(), numeric, json, kind, origin: None, styled: false }
 }
 
 /// A result column that comes from column `column` of table `table` (see [`shop_keys`]).

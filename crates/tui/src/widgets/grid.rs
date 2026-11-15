@@ -61,6 +61,10 @@ pub struct ResultSet {
     /// What its values were read in (the session's time zone and character set when its first
     /// page came, and whether a later page came under others): what a copy as SQL judges it by.
     pub read_in: datarig_core::driver::ReadIn,
+    /// How its values read as text were written (a PostgreSQL session's `DateStyle`,
+    /// `IntervalStyle` and `TimeZone` when its first page came; `None`: not known, or a later
+    /// page came under others): where its `styled` columns' text reads back the same.
+    pub text_in: Option<datarig_core::driver::TextStyle>,
     /// The user's changes of its cells and what may change them: kept with the result, so a
     /// parked result keeps its own.
     pub edit: Box<crate::app::edit::EditState>,
@@ -92,6 +96,14 @@ pub enum TxMark {
 }
 
 impl ResultSet {
+    /// Another page came while its session wrote text in `now`: under other settings than the
+    /// first page's, its rows are not all written in one.
+    pub fn text_page(&mut self, now: Option<&datarig_core::driver::TextStyle>) {
+        if self.text_in.as_ref() != now {
+            self.text_in = None;
+        }
+    }
+
     /// Rows came while the user's transaction `epoch` is open (`in_block`): the result says so.
     pub fn mark_read(&mut self, in_block: bool, epoch: u64) {
         if in_block && !matches!(self.tx, Some(TxMark::InTx(e)) if e == epoch) {
@@ -163,6 +175,7 @@ impl ResultSet {
             pages_in: PagesIn::Nothing,
             tx: None,
             read_in: Default::default(),
+            text_in: None,
             edit: Default::default(),
         }
     }

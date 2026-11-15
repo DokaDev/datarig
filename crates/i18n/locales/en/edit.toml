@@ -225,6 +225,9 @@
 "edit.paste.zone_changed" = "a session whose time zone changed while its rows were read"
 "edit.paste.zone_server" = "the server's time zone, which is not known"
 "edit.paste.register_zone_other" = "column “{column}” was copied as times in time zone {from}, without an offset; this column reads them in its session's zone"
+"edit.paste.register_style" = "column “{column}” was copied as text whose dates and times are written in {from}; this session reads such text in {to}, maybe as other values"
+"edit.paste.style" = "DateStyle {date}, IntervalStyle {interval}, TimeZone {zone}"
+"edit.paste.style_unknown" = "settings not known"
 "edit.paste.rows" = { one = "{count} row", other = "{count} rows" }
 "edit.paste.columns" = { one = "{count} column", other = "{count} columns" }
 "edit.paste.cells" = { one = "{count} cell changed", other = "{count} cells changed" }

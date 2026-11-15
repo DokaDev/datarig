@@ -100,7 +100,7 @@
 use crate::connect::{db_error, is_cancel};
 use crate::link::{Closed, Link, Next};
 use crate::route::Cancel;
-use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display, value_kind};
+use crate::values::{Raw, format_code, format_value, is_json, is_numeric, styled, type_display, value_kind};
 use datarig_core::driver::{
     COUNT_LOCK_WAIT, CancelFailure, CancelMark, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent,
     ESTIMATE_LIMIT, Outcome, OwnSession, PagingMode, TxOutcome, TxRule, TxStep,
@@ -112,6 +112,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
+pub(crate) use style::Events;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Column, FirstPage, Row, SimpleQueryMessage, Statement, Transaction};
@@ -462,7 +463,7 @@ async fn own_session(client: &Client, link: &mut Link, env: &Env<'_>, tx: &Tx, r
 /// What a statement run needs besides the connection.
 #[derive(Clone, Copy)]
 struct Env<'a> {
-    events: &'a UnboundedSender<DbEvent>,
+    events: &'a Events,
     /// The connection's own server session ([`DbCommand::ServerSession`]).
     own: &'a Own,
     token: &'a Cancel,
@@ -600,7 +601,7 @@ impl Env<'_> {
 ///   [`DbError::NoResult`] and trips a debug assertion; the run of a session the UI closed
 ///   ([`Reply::closed`]) answers nothing, as the UI expects.
 struct Reply<'a> {
-    events: &'a UnboundedSender<DbEvent>,
+    events: &'a Events,
     /// Set when it answers with a failure ([`Env::failed`]).
     failed: &'a AtomicBool,
     id: u64,
@@ -613,7 +614,7 @@ struct Reply<'a> {
 }
 
 impl<'a> Reply<'a> {
-    fn new(events: &'a UnboundedSender<DbEvent>, failed: &'a AtomicBool, id: u64) -> Self {
+    fn new(events: &'a Events, failed: &'a AtomicBool, id: u64) -> Self {
         Self { events, failed, id, without_limit: false, answered: false }
     }
 
@@ -686,7 +687,7 @@ fn failure(e: &tokio_postgres::Error, path_tx: bool) -> (DbError, bool) {
 /// A run answered with its first page: one `Failed` may still replace the rows, and nothing
 /// else. Dropping it sends nothing (the page was the answer).
 struct Paged<'a> {
-    events: &'a UnboundedSender<DbEvent>,
+    events: &'a Events,
     failed: &'a AtomicBool,
     id: u64,
     /// As [`Reply::without_limit`].
@@ -794,7 +795,7 @@ pub(crate) async fn query_loop(
     mut link: Link,
     token: Cancel,
     cancel: Arc<CancelMark>,
-    events: UnboundedSender<DbEvent>,
+    events: Events,
     settings: Settings,
 ) {
     let failed = AtomicBool::new(false);
@@ -1150,7 +1151,10 @@ fn columns_of(columns: &[Column]) -> Vec<ColumnMeta> {
                 (Some(table), Some(column)) if table != 0 && column > 0 => Some(ColumnOrigin::Pg { table, column }),
                 _ => None,
             };
-            let meta = ColumnMeta::new(c.name().to_string(), type_display(c.type_()), value_kind(c.type_()), origin);
+            let meta = ColumnMeta {
+                styled: styled(c.type_()),
+                ..ColumnMeta::new(c.name().to_string(), type_display(c.type_()), value_kind(c.type_()), origin)
+            };
             debug_assert_eq!(
                 (meta.numeric, meta.json),
                 (is_numeric(c.type_()), is_json(c.type_())),
@@ -3167,6 +3171,7 @@ fn split_page<T>(carry: &mut Option<T>, fetched: Vec<T>, page_size: usize) -> (V
 mod apply;
 mod export;
 mod group;
+mod style;
 
 #[cfg(test)]
 mod tests;

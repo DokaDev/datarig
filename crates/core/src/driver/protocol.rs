@@ -1092,13 +1092,18 @@ pub struct ColumnMeta {
     /// The table column this result column comes from, when the driver knows it (a plain
     /// column of a table; `None` for an expression, a function result, a literal).
     pub origin: Option<ColumnOrigin>,
+    /// Its values are the server's text output, which may write dates, times or intervals in
+    /// the session's settings ([`super::TextStyle`]): PostgreSQL's ranges and composites of
+    /// them, and types the driver cannot tell. Such text reads back as the same values only
+    /// where [`super::text_style::reads_same`] says so.
+    pub styled: bool,
 }
 
 impl ColumnMeta {
     /// A result column whose `numeric` and `json` follow from `kind`, so they cannot disagree
-    /// with it (what a driver builds; a literal must keep them in step itself).
+    /// with it (what a driver builds; a literal must keep them in step itself), not `styled`.
     pub fn new(name: String, type_name: String, kind: ValueKind, origin: Option<ColumnOrigin>) -> Self {
-        Self { name, type_name, numeric: kind.is_number(), json: kind == ValueKind::Json, kind, origin }
+        Self { name, type_name, numeric: kind.is_number(), json: kind == ValueKind::Json, kind, origin, styled: false }
     }
 }
 
@@ -1297,6 +1302,11 @@ pub enum DbEvent {
     /// after `Connected` by a driver whose results depend on it (MySQL), and again when it
     /// changes (a `SET time_zone`, `SET NAMES` the user ran).
     SessionValues(SessionValues),
+    /// How a PostgreSQL query session writes dates, times and intervals as text from now on
+    /// ([`super::TextStyle`]; `None`: not known), as the server reported it: sent right before
+    /// `Encryption` and `Connected`, and again when it changes. A page read while it changed (rows that may be
+    /// written in two) comes between a `None` and the settings after it.
+    TextStyle(Option<super::TextStyle>),
     /// The language the query session's text is read in from now on, where it is the
     /// session's own and not the driver's ([`Capabilities::language`](super::Capabilities)):
     /// MySQL's sql mode (`ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`) and whether its server reads

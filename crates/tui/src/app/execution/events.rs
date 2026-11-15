@@ -24,6 +24,7 @@ impl App {
             | DbEvent::Explain(_)
             | DbEvent::Edit(_)
             | DbEvent::SessionValues(_)
+            | DbEvent::TextStyle(_)
             | DbEvent::ValuesNotKnown { .. }
             | DbEvent::Info { .. }
             | DbEvent::Released { .. }

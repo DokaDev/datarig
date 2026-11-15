@@ -114,6 +114,7 @@ pub fn run(joins: usize, partitions: usize, n: usize) -> Result<Value, String> {
         json: true,
         kind: ValueKind::Json,
         origin: None,
+        styled: false,
     }];
     app.on_db_event(DbEvent::Page {
         id: 0,

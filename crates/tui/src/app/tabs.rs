@@ -285,6 +285,10 @@ pub struct TabSession {
     /// zone and results character set); `None` until it says, and for a driver whose sessions
     /// do not.
     pub values: Option<datarig_core::driver::SessionValues>,
+    /// How `session` writes dates, times and intervals as text (`DbEvent::TextStyle`: a
+    /// PostgreSQL session's `DateStyle`, `IntervalStyle` and `TimeZone`); `None` until it says,
+    /// when it says it does not know, and for a driver whose sessions do not.
+    pub text: Option<datarig_core::driver::TextStyle>,
     /// What the statement running now does to the values its result is read in, as its session
     /// said (run `query_id`): server code runs (`DbEvent::ValuesNotKnown`, its next result is
     /// read in values not known), the values changed while it ran (`DbEvent::SessionValues`
@@ -404,6 +408,7 @@ impl TabSession {
             path_per_transaction: false,
             language: None,
             values: None,
+            text: None,
             reading: Reading::default(),
             tx: None,
             apply_tx: None,

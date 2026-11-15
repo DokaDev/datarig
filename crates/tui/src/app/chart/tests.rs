@@ -17,6 +17,7 @@ fn result(cols: &[(&str, &str, bool)], rows: &[&[&str]]) -> ResultSet {
                 _ => ValueKind::Other,
             },
             origin: None,
+            styled: false,
         })
         .collect();
     let rows = rows.iter().map(|r| r.iter().map(|c| Some(c.to_string())).collect()).collect();

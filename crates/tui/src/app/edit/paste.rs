@@ -72,6 +72,10 @@ pub struct GridCopy {
     pub source: Option<(ProfileId, Option<String>)>,
     pub columns: Vec<datarig_core::driver::ColumnMeta>,
     pub offsets: Vec<Option<String>>,
+    /// How the text of its `styled` columns was written (the result's
+    /// [`text_in`](crate::widgets::grid::ResultSet::text_in); `None`: not known): pasted only
+    /// where it reads back the same ([`datarig_core::driver::text_style::reads_same`]).
+    pub text_in: Option<datarig_core::driver::TextStyle>,
     pub rows: Vec<Vec<Value>>,
 }
 
@@ -654,7 +658,8 @@ impl App {
         let t = self.tab();
         let Some(rs) = rows_of(t) else { return };
         let (tab, result, revision) = (t.id, rs.id, rs.edit.batch.revision());
-        if let Some(reason) = copy.and_then(|c| self.copy_zone_refused(c, &plan)) {
+        let refused = copy.and_then(|c| self.copy_zone_refused(c, &plan).or_else(|| self.copy_style_refused(c, &plan)));
+        if let Some(reason) = refused {
             self.paste_not_done(last, again);
             return self.paste_refused((reason, None));
         }
@@ -928,6 +933,41 @@ impl App {
                 Ok(o) | Err(o) => o,
             };
             Some(self.i18n.msg(&Msg::EditPasteRegisterZone { column, from: from.clone(), to }).to_string())
+        })
+    }
+
+    /// Why cells copied in a grid are not pasted as `plan` lays them: text of a column read as
+    /// the server's text output in its session's date, interval and time zone settings
+    /// (`styled`: a PostgreSQL range of dates, a composite with a time, a type the driver cannot
+    /// tell), lands in a column that reads dates, times or intervals from text, of the active
+    /// tab's session, which may read it as other values: the copy's settings are not known, or
+    /// are not ISO and not the session's own (or the session's are not known).
+    fn copy_style_refused(&self, copy: &GridCopy, plan: &PastePlan) -> Option<String> {
+        use datarig_core::driver::text_style;
+        let t = self.tab();
+        let rs = rows_of(t)?;
+        if text_style::reads_same(copy.text_in.as_ref(), t.exec.text.as_ref()) {
+            return None;
+        }
+        let words = |s: Option<&datarig_core::driver::TextStyle>| match s {
+            Some(s) => self
+                .i18n
+                .msg(&Msg::EditPasteStyle {
+                    date: s.date_style.clone(),
+                    interval: s.interval_style.clone(),
+                    zone: s.time_zone.clone(),
+                })
+                .to_string(),
+            None => self.i18n.label(Label::EditPasteStyleUnknown).to_string(),
+        };
+        plan.map.iter().find_map(|&(j, c)| {
+            let from = copy.columns.get(j)?;
+            let valued = copy.rows.iter().any(|r| matches!(r.get(j), Some(Value::Text(_))));
+            if !from.styled || !valued || !reads_styled(&rs.columns.get(c)?.meta) {
+                return None;
+            }
+            let (column, from, to) = (from.name.clone(), words(copy.text_in.as_ref()), words(t.exec.text.as_ref()));
+            Some(self.i18n.msg(&Msg::EditPasteRegisterStyle { column, from, to }).to_string())
         })
     }
 
@@ -1445,4 +1485,18 @@ impl App {
             _ => 0,
         }
     }
+}
+
+/// Whether a column reads text in its session's date, interval and time zone settings: every
+/// kind but those whose text holds no date, time or interval (text, JSON, numbers, booleans,
+/// bytes, bits, arrays of those), and a type of no such kind the driver says is not `styled`.
+fn reads_styled(m: &datarig_core::driver::ColumnMeta) -> bool {
+    use datarig_core::driver::{ArrayElement as A, ValueKind as V};
+    let plain = match m.kind {
+        V::Text | V::Json | V::Integer | V::Decimal | V::Float | V::Bool | V::Bytes | V::Bit => true,
+        V::Array(A::Number | A::Bool | A::Json) => true,
+        V::Other => !m.styled,
+        V::Date | V::Time | V::Timestamp | V::TimestampTz | V::Interval | V::Array(A::Text) => false,
+    };
+    !plain
 }

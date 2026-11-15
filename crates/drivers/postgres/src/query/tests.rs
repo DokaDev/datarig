@@ -420,14 +420,17 @@ mod terminal {
         }
     }
 
-    async fn connect(url: &str) -> (Client, oneshot::Receiver<DbError>, tokio::task::AbortHandle) {
+    async fn connect(
+        url: &str,
+    ) -> (Client, oneshot::Receiver<DbError>, tokio::task::AbortHandle, tokio_postgres::SharedParameters) {
         let (client, conn) = tokio_postgres::connect(url, NoTls).await.expect("connect");
+        let params = conn.shared_parameters();
         let (done, ended) = oneshot::channel();
         let conn = tokio::spawn(async move {
             let _ = conn.await;
             let _ = done.send(DbError::Closed);
         });
-        (client, ended, conn.abort_handle())
+        (client, ended, conn.abort_handle(), params)
     }
 
     /// Drops the test's table on a fresh connection, also when an assertion fails.
@@ -653,7 +656,7 @@ mod terminal {
         client: Client,
         link: Link,
         token: crate::route::Cancel,
-        events: UnboundedSender<DbEvent>,
+        events: super::super::style::Events,
         rx: UnboundedReceiver<DbEvent>,
         _cmds: UnboundedSender<DbCommand>,
         tx: Tx,
@@ -673,9 +676,14 @@ mod terminal {
 
     impl Session {
         async fn open(url: &str) -> Self {
-            let (client, ended, conn) = connect(url).await;
+            let (client, ended, conn, params) = connect(url).await;
             let (cmds, cmd_rx) = unbounded_channel();
-            let (events, rx) = unbounded_channel();
+            let (events, mut rx) = unbounded_channel();
+            // The settings as the session connected: said once, as the session's loop does,
+            // so a run's events show only a change.
+            let events = super::super::style::Events::new(events, params);
+            events.report();
+            while rx.try_recv().is_ok() {}
             let token = crate::route::Cancel::new(
                 client.cancel_token(),
                 None,
@@ -1168,19 +1176,68 @@ mod terminal {
         assert!(events.iter().any(|e| matches!(e, DbEvent::Page { columns: Some(_), .. })));
     }
 
+    /// The session says how its server writes dates and times as text, as the server reported
+    /// it: a `SET` before the answer of its run (so the next result is read in it), a
+    /// `SET LOCAL` and the rollback that undoes it, and a page read while the settings changed
+    /// (a `set_config` in the statement itself) between `None` and the settings after it. A
+    /// statement that changes nothing says nothing. Leaves nothing behind.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_session_says_its_date_settings_as_the_server_reports_them() {
+        let Some(url) = pg_url("the_session_says_its_date_settings_as_the_server_reports_them") else { return };
+        let mut s = Session::open(&url).await;
+        let styles = |events: &[DbEvent]| -> Vec<String> {
+            events
+                .iter()
+                .filter_map(|e| match e {
+                    DbEvent::TextStyle(Some(t)) => {
+                        Some(format!("{} / {} / {}", t.date_style, t.interval_style, t.time_zone))
+                    }
+                    DbEvent::TextStyle(None) => Some("unknown".into()),
+                    DbEvent::Page { .. } => Some("page".into()),
+                    DbEvent::Done { .. } => Some("done".into()),
+                    _ => None,
+                })
+                .collect()
+        };
+        s.run_all(&["SET TimeZone = 'UTC'"], None).await;
+        let events = s.run_all(&["SET DateStyle = 'SQL, DMY'"], None).await;
+        assert_eq!(styles(&events), ["SQL, DMY / postgres / UTC", "done"]);
+        let events = s.run_all(&["SELECT '[2026-01-02,2026-01-05)'::daterange"], None).await;
+        assert_eq!(styles(&events), ["page"]);
+        assert!(
+            events.iter().any(
+                |e| matches!(e, DbEvent::Page { rows, .. } if rows[0][0].as_deref() == Some("[02/01/2026,05/01/2026)"))
+            ),
+            "{events:?}"
+        );
+        s.run_all(&["BEGIN"], None).await;
+        let events = s.run_all(&["SET LOCAL IntervalStyle = 'sql_standard'"], None).await;
+        assert_eq!(styles(&events), ["SQL, DMY / sql_standard / UTC", "done"]);
+        let events = s.run_all(&["ROLLBACK"], None).await;
+        assert_eq!(styles(&events), ["SQL, DMY / postgres / UTC", "done"]);
+        let events = s.run_all(&["SELECT set_config('DateStyle', 'ISO, MDY', false)"], None).await;
+        assert_eq!(styles(&events), ["unknown", "page", "ISO, MDY / postgres / UTC"]);
+        let events = s.run_all(&["SET DateStyle = 'ISO, MDY'"], None).await;
+        assert_eq!(styles(&events), ["done"], "the same value: no change");
+        s.run_all(&["RESET DateStyle", "RESET TimeZone"], None).await;
+    }
+
     /// A run that ends without its terminal event (a bug) still answers: the dropped `Reply`
     /// sends `NoResult`, and a debug build says so loudly.
     #[test]
     fn an_unanswered_run_answers_when_dropped() {
         let (events, mut rx) = unbounded_channel();
+        let events = super::super::style::Events::plain(events);
         let failed = AtomicBool::new(false);
-        let dropped = std::panic::catch_unwind(move || drop(Reply::new(&events, &failed, 7)));
+        let dropped =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || drop(Reply::new(&events, &failed, 7))));
         assert_eq!(dropped.is_err(), cfg!(debug_assertions), "the debug assertion");
         assert!(matches!(rx.try_recv(), Ok(DbEvent::Failed { id: 7, error: DbError::NoResult, cancelled: false })));
         assert!(rx.try_recv().is_err(), "once");
         // Answered, or closed by the UI: nothing more. (Each answer consumes the reply, so a
         // second one does not compile.)
         let (events, mut rx) = unbounded_channel();
+        let events = super::super::style::Events::plain(events);
         let failed = AtomicBool::new(false);
         Reply::new(&events, &failed, 8).fail(DbError::SchemaChanged, false);
         Reply::new(&events, &failed, 9).closed();

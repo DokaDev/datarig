@@ -54,6 +54,9 @@ enum State {
 pub struct Connection<S, T> {
     stream: Framed<MaybeTlsStream<S, T>, PostgresCodec>,
     parameters: HashMap<String, String>,
+    // datarig: the parameters, shared with handles the caller reads while the connection is
+    // polled in a task of its own (`shared_parameters`).
+    shared: crate::parameters::SharedParameters,
     receiver: mpsc::UnboundedReceiver<Request>,
     pending_request: Option<RequestMessages>,
     pending_responses: VecDeque<BackendMessage>,
@@ -72,9 +75,12 @@ where
         parameters: HashMap<String, String>,
         receiver: mpsc::UnboundedReceiver<Request>,
     ) -> Connection<S, T> {
+        // datarig: the parameters the server reported at startup, shared.
+        let shared = crate::parameters::SharedParameters::new(&parameters);
         Connection {
             stream,
             parameters,
+            shared,
             receiver,
             pending_request: None,
             pending_responses,
@@ -127,10 +133,11 @@ where
                     return Ok(Some(AsyncMessage::Notification(notification)));
                 }
                 BackendMessage::Async(Message::ParameterStatus(body)) => {
-                    self.parameters.insert(
-                        body.name().map_err(Error::parse)?.to_string(),
-                        body.value().map_err(Error::parse)?.to_string(),
-                    );
+                    let name = body.name().map_err(Error::parse)?.to_string();
+                    let value = body.value().map_err(Error::parse)?.to_string();
+                    // datarig: the shared handles see it before any message after it.
+                    self.shared.set(&name, &value);
+                    self.parameters.insert(name, value);
                     continue;
                 }
                 BackendMessage::Async(_) => unreachable!(),
@@ -310,6 +317,16 @@ where
     /// Returns the value of a runtime parameter for this connection.
     pub fn parameter(&self, name: &str) -> Option<&str> {
         self.parameters.get(name).map(|s| &**s)
+    }
+
+    // datarig: a handle on the runtime parameters that stays current while the connection is
+    // polled elsewhere.
+    /// Returns a handle on this connection's runtime parameters, kept current as the server
+    /// reports them (`ParameterStatus`): it can be read while the connection is polled in a
+    /// task of its own. A report is applied before any message the server sent after it is
+    /// handed to its request.
+    pub fn shared_parameters(&self) -> crate::parameters::SharedParameters {
+        self.shared.clone()
     }
 
     fn poll_message_inner(

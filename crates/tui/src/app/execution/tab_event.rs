@@ -124,6 +124,14 @@ impl App {
             }
             return;
         }
+        // How the session writes dates and times as text, from now on (a page read while it
+        // changed comes after `None`).
+        if let DbEvent::TextStyle(v) = ev {
+            if let Some(t) = self.tabs.get_mut(id) {
+                t.exec.text = v;
+            }
+            return;
+        }
         // Server code runs in the statement now running: its next result is read in values not
         // known.
         if let DbEvent::ValuesNotKnown { id: q } = ev {
@@ -141,6 +149,7 @@ impl App {
             if let Some(t) = self.tabs.get_mut(id) {
                 t.exec.language = None;
                 t.exec.values = None;
+                t.exec.text = None;
             }
             self.sync_tab_language(id);
         }
@@ -330,6 +339,7 @@ impl App {
             | DbEvent::Explain(_)
             | DbEvent::Edit(_)
             | DbEvent::SessionValues(_)
+            | DbEvent::TextStyle(_)
             | DbEvent::Stopping { .. }
             | DbEvent::CancelRefused { .. }
             | DbEvent::ValuesNotKnown { .. } => None,
@@ -735,6 +745,7 @@ impl App {
                         let store = datarig_core::results::RowStore::new(rows, spill, limits);
                         let mut rs = ResultSet::new(cols, store, more, &null);
                         rs.read_in = read_in(&mut t.exec);
+                        rs.text_in = t.exec.text.clone();
                         rs.edit.bind(bound);
                         let n = rs.rows.len();
                         let grid = GridState::paged(page_size, t.grid.page_rows);
@@ -744,6 +755,7 @@ impl App {
                     (None, Some(p)) => {
                         let rs = &mut p.rs;
                         rs.read_in.page(t.exec.values.as_ref());
+                        rs.text_page(t.exec.text.as_ref());
                         if rs.more {
                             let read = rs.rows.len();
                             rs.more = match rs.rows.append(rows) {
@@ -788,12 +800,14 @@ impl App {
                 // What was announced when it was sent stays in the status bar with its rows.
                 let announced = t.exec.run.notes.last().cloned();
                 let values = t.exec.values.clone();
+                let text = t.exec.text.clone();
                 let cap = shown_cap(t);
                 let qid = t.exec.query_id;
                 let answer = t.answer_rows_mut();
                 match (answer, r) {
                     (Some((rs, grid)), Some(r)) if same => {
                         rs.read_in.page(values.as_ref());
+                        rs.text_page(text.as_ref());
                         let read = rs.rows.len();
                         // A table tab's cap: the rows past it are left out, and nothing is
                         // read past it.
@@ -911,6 +925,7 @@ impl App {
                 let mut rs = ResultSet::new(cols, store, more, &null);
                 // Bound to the session's values now: a later `SET time_zone` is not this result's.
                 rs.read_in = read_in(&mut t.exec);
+                rs.text_in = t.exec.text.clone();
                 rs.edit.bind(bound);
                 let query = t.exec.query_id;
                 if t.exec.reading.query != query {
@@ -988,10 +1003,12 @@ impl App {
                 t.exec.paging = paging(more);
                 let want = t.exec.want_page.take();
                 let values = t.exec.values.clone();
+                let text = t.exec.text.clone();
                 let answer = t.answer_rows_mut();
                 let m = match answer {
                     Some((rs, grid)) => {
                         rs.read_in.page(values.as_ref());
+                        rs.text_page(text.as_ref());
                         let read = rs.rows.len();
                         let appended = rs.rows.append(rows);
                         grid.rows_came(read, rs.rows.len() - read);

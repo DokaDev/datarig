@@ -123,6 +123,94 @@ fn decodes_binary(ty: &Type) -> bool {
     }
 }
 
+/// Whether a column of type `ty` is read as text written in the session's date, interval and
+/// time zone settings ([`ColumnMeta::styled`](datarig_core::driver::ColumnMeta)): it is read in
+/// the server's text output ([`format_code`] `0`) and that text [may hold](styled_text) a date,
+/// a time or an interval. A type decoded from binary is written here in ISO whatever the
+/// session's settings.
+pub fn styled(ty: &Type) -> bool {
+    format_code(ty) == 0 && styled_text(ty)
+}
+
+/// Whether PostgreSQL's text output of `ty` may depend on `DateStyle`, `IntervalStyle` or
+/// `TimeZone`: a date, time, timestamp or interval, a range, multirange, array or domain of
+/// one, a composite with such a field. A built-in type known to hold none (numbers, text,
+/// geometry, network addresses, ranges of numbers), and an enum (its labels), do not; any other
+/// type (a pseudo-type such as an anonymous `record`, an extension's type, one not known here)
+/// may, as far as this code can tell.
+fn styled_text(ty: &Type) -> bool {
+    match ty.kind() {
+        Kind::Array(inner) | Kind::Range(inner) | Kind::Multirange(inner) | Kind::Domain(inner) => {
+            return styled_text(inner);
+        }
+        Kind::Composite(fields) => return fields.iter().any(|f| styled_text(f.type_())),
+        Kind::Enum(_) => return false,
+        _ => {}
+    }
+    !matches!(
+        *ty,
+        Type::BOOL
+            | Type::BYTEA
+            | Type::CHAR
+            | Type::NAME
+            | Type::INT8
+            | Type::INT2
+            | Type::INT2_VECTOR
+            | Type::INT4
+            | Type::REGPROC
+            | Type::TEXT
+            | Type::OID
+            | Type::TID
+            | Type::XID
+            | Type::CID
+            | Type::OID_VECTOR
+            | Type::JSON
+            | Type::XML
+            | Type::POINT
+            | Type::LSEG
+            | Type::PATH
+            | Type::BOX
+            | Type::POLYGON
+            | Type::LINE
+            | Type::CIDR
+            | Type::FLOAT4
+            | Type::FLOAT8
+            | Type::UNKNOWN
+            | Type::CIRCLE
+            | Type::MACADDR8
+            | Type::MONEY
+            | Type::MACADDR
+            | Type::INET
+            | Type::ACLITEM
+            | Type::BPCHAR
+            | Type::VARCHAR
+            | Type::BIT
+            | Type::VARBIT
+            | Type::NUMERIC
+            | Type::REGPROCEDURE
+            | Type::REGOPER
+            | Type::REGOPERATOR
+            | Type::REGCLASS
+            | Type::REGTYPE
+            | Type::VOID
+            | Type::UUID
+            | Type::TXID_SNAPSHOT
+            | Type::PG_LSN
+            | Type::TS_VECTOR
+            | Type::TSQUERY
+            | Type::GTS_VECTOR
+            | Type::REGCONFIG
+            | Type::REGDICTIONARY
+            | Type::JSONB
+            | Type::JSONPATH
+            | Type::REGNAMESPACE
+            | Type::REGROLE
+            | Type::REGCOLLATION
+            | Type::PG_SNAPSHOT
+            | Type::XID8
+    )
+}
+
 pub fn type_display(ty: &Type) -> String {
     match ty.kind() {
         Kind::Array(elem) => format!("{}[]", elem.name()),

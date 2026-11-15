@@ -304,7 +304,7 @@ impl App {
             // The edits its server takes.
             DbEvent::Edit(format) => self.conns.entry(id).edit = Some(format),
             // A query session's own (copying its values as SQL needs it).
-            DbEvent::SessionValues(_) | DbEvent::ValuesNotKnown { .. } => {}
+            DbEvent::SessionValues(_) | DbEvent::TextStyle(_) | DbEvent::ValuesNotKnown { .. } => {}
             // A monitor session's own.
             DbEvent::Monitor(_)
             | DbEvent::MonitorSnapshot { .. }

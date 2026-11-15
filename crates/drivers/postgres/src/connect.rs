@@ -144,7 +144,7 @@ impl Driver for PgDriver {
             let route = dialer.map(|d| route(&pgcfg, d)).transpose().map_err(PingError::Failed)?;
             let start = Instant::now();
             let attempt = async {
-                let (client, _, _) = open(&pgcfg, &tls, route.as_ref()).await.map_err(|(e, _)| e)?;
+                let (client, _, _, _) = open(&pgcfg, &tls, route.as_ref()).await.map_err(|(e, _)| e)?;
                 let row = client.query_typed_one("SHOW server_version", &[]).await.map_err(|e| db_error(&e))?;
                 Ok::<_, DbError>(row.get::<_, String>(0))
             };
@@ -446,16 +446,17 @@ fn is_auth_error(e: &tokio_postgres::Error) -> bool {
 
 /// A connection's client, the receiver that resolves when it ends (with the reason) and the
 /// handle that closes it (aborts the task that drives it).
-type Opened = (Client, oneshot::Receiver<DbError>, AbortHandle);
+type Opened = (Client, oneshot::Receiver<DbError>, AbortHandle, tokio_postgres::SharedParameters);
 
 /// Open a connection, directly or through `route`, with `tls`.
 async fn open(cfg: &Config, tls: &PgTls, route: Option<&Route>) -> Result<Opened, (DbError, bool)> {
     let (done_tx, done_rx) = oneshot::channel();
     let fail = |e: tokio_postgres::Error| (db_error(&e), is_auth_error(&e));
-    let (client, conn) = match route {
+    let (client, conn, params) = match route {
         None => {
             let (client, conn) = cfg.connect(tls.clone()).await.map_err(fail)?;
-            (client, tokio::spawn(watch(conn, done_tx)))
+            let params = conn.shared_parameters();
+            (client, tokio::spawn(watch(conn, done_tx)), params)
         }
         Some(route) => {
             // `connect_timeout` covers the socket of a direct connect; here, the dial.
@@ -464,10 +465,11 @@ async fn open(cfg: &Config, tls: &PgTls, route: Option<&Route>) -> Result<Opened
             let handshake = tls.to(route.name()).map_err(|e| (DbError::Tls(e.0), false))?;
             let stream = route.dial(timeout).await.map_err(|e| (e, false))?;
             let (client, conn) = cfg.connect_raw(stream, handshake).await.map_err(fail)?;
-            (client, tokio::spawn(watch(conn, done_tx)))
+            let params = conn.shared_parameters();
+            (client, tokio::spawn(watch(conn, done_tx)), params)
         }
     };
-    Ok((client, done_rx, conn.abort_handle()))
+    Ok((client, done_rx, conn.abort_handle(), params))
 }
 
 /// Drive a connection until it ends and send why.
@@ -501,7 +503,7 @@ async fn run_session(
         let _ = events.send(DbEvent::ConnectFailed { error: DbError::NoAnswer(CONNECT_GUARD), auth: false });
         return;
     };
-    let (client, ended, conn) = match opened {
+    let (client, ended, conn, params) = match opened {
         Ok(c) => c,
         Err((error, auth)) => {
             let _ = events.send(DbEvent::ConnectFailed { error, auth });
@@ -553,6 +555,13 @@ async fn run_session(
     if let Some((_, refused)) = &per_tx {
         let _ = events.send(DbEvent::SessionPerTransaction { refused: refused.clone() });
     }
+    // How a query session writes dates and times as text, as it connected: known before any
+    // statement of it runs.
+    let text = (role == SessionRole::Query).then(|| {
+        let text = crate::query::Events::new(events.clone(), params);
+        text.report();
+        text
+    });
     let _ = events.send(DbEvent::Encryption(tls.encryption()));
     let _ = events.send(DbEvent::Connected);
     if default_ignored {
@@ -572,6 +581,7 @@ async fn run_session(
         SessionRole::Meta => meta_loop(client, Link::new(rx, ended, conn, None), events).await,
         SessionRole::Monitor => monitor_loop(client, Link::new(rx, ended, conn, None), events, opts.read_only).await,
         SessionRole::Query => {
+            let Some(events) = text else { return };
             let cancel = Cancel::new(client.cancel_token(), route.clone(), tls.clone());
             let link = Link::new(rx, ended, conn, Some(cancel.unsent.clone()));
             if let Ok(mut g) = canceller.0.lock() {

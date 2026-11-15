@@ -29,7 +29,7 @@ format result support", open since 2023-11), has not been merged; see also
 
 ### What is changed
 
-Every change in the source is marked with a `datarig:` comment. Four groups:
+Every change in the source is marked with a `datarig:` comment. These groups:
 
 **Result formats**:
 
@@ -153,6 +153,19 @@ sending it, or, for `FROM STDIN`, waits with the server for data neither side se
   marks the request of `copy_out` (`src/copy_out.rs`); that of `copy_in` is `CopyIn` already.
 - `src/codec.rs`: `BackendMessages::starts_copy`, read from the message headers only, and
   `COPY_BOTH_RESPONSE_TAG` (postgres-protocol names no tag for CopyBothResponse).
+
+**Runtime parameters shared with the caller**: upstream keeps the parameters the server
+reports (`ParameterStatus`) in the `Connection`, which the caller polls in a task of its own,
+so they cannot be read while it runs. The query session needs the current `DateStyle`,
+`IntervalStyle` and `TimeZone` (all reported at startup and whenever they change), because the
+values it reads in text are written in them.
+
+- `src/parameters.rs` (new, all of it datarig's): `SharedParameters`, a cloneable handle on the
+  parameters as last reported, with the number of reports of each after startup (`get`).
+- `src/connection.rs`: `Connection::shared_parameters`, a new public method that hands out the
+  handle; the connection updates it as each `ParameterStatus` arrives, before any message the
+  server sent after it reaches its request.
+- `src/lib.rs`: `mod parameters` and `pub use parameters::SharedParameters`.
 
 **Warnings on Windows**: `src/client.rs` imports `PathBuf` only on Unix, where
 `Addr::Unix` uses it (upstream imports it on every platform, an unused import on Windows).

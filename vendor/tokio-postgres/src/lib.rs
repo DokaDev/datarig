@@ -128,6 +128,8 @@ pub use crate::cancel_token::CancelToken;
 pub use crate::client::Client;
 pub use crate::config::Config;
 pub use crate::connection::Connection;
+// datarig: runtime parameters shared with the caller (`parameters.rs`).
+pub use crate::parameters::SharedParameters;
 pub use crate::copy_in::CopyInSink;
 pub use crate::copy_out::CopyOutStream;
 use crate::error::DbError;
@@ -175,6 +177,8 @@ mod generic_client;
 #[cfg(not(target_arch = "wasm32"))]
 mod keepalive;
 mod maybe_tls_stream;
+// datarig: runtime parameters shared with the caller.
+mod parameters;
 // datarig: pipelined requests.
 mod pipeline;
 mod portal;

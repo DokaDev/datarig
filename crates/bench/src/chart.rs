@@ -14,7 +14,15 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
 fn column(name: &str, type_name: &str, numeric: bool, kind: ValueKind) -> ColumnMeta {
-    ColumnMeta { name: name.into(), type_name: type_name.into(), numeric, json: false, kind, origin: None }
+    ColumnMeta {
+        name: name.into(),
+        type_name: type_name.into(),
+        numeric,
+        json: false,
+        kind,
+        origin: None,
+        styled: false,
+    }
 }
 
 /// `n` rows: a minute each from 2026-01-01, orders and revenue.

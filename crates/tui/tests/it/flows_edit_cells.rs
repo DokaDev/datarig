@@ -1567,3 +1567,125 @@ fn a_mysql_timestamp_is_not_pasted_into_a_result_read_in_system_when_the_servers
     );
     assert!(edits(&h).batch.is_empty());
 }
+
+/// Settings a PostgreSQL session writes dates in: `DateStyle` `date`, `IntervalStyle`
+/// postgres, UTC.
+fn pg_style(date: &str) -> datarig_core::driver::TextStyle {
+    datarig_core::driver::TextStyle {
+        date_style: date.into(),
+        interval_style: "postgres".into(),
+        time_zone: "UTC".into(),
+    }
+}
+
+/// The PostgreSQL users' rows read again in a session that writes text in `style` (`None`: not
+/// known), the nickname of type `ty` (kind `kind`, read in the session's settings when
+/// `styled`) holding `value`; nothing said.
+fn pg_again(h: &mut Harness, style: Option<&str>, (ty, kind, styled): (&str, ValueKind, bool), value: &str) {
+    h.db(DbEvent::TextStyle(style.map(pg_style)));
+    let mut columns = users_columns();
+    columns[2] = ColumnMeta { kind, styled, ..meta_from("nickname", ty, false, USERS, 4) };
+    answer(h, "SELECT id, email, nickname FROM shop.users", columns, vec![vec![s("1"), s("a@x"), s(value)]]);
+    h.sent();
+    h.app.transient = None;
+}
+
+const DATERANGE: (&str, ValueKind, bool) = ("daterange", ValueKind::Other, true);
+
+/// A copy of the nickname as `from` (`style`, value) pasted with `g p` into one read as `to`:
+/// what the app said and the value pending in the nickname after it.
+fn pg_paste(
+    from: (Option<&str>, (&str, ValueKind, bool), &str),
+    to: (Option<&str>, (&str, ValueKind, bool), &str),
+) -> (String, Option<Value>) {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    pg_again(&mut h, from.0, from.1, from.2);
+    h.keys("lly");
+    let kept = said_text(&mut h);
+    assert!(!kept.starts_with("Not kept"), "{kept}");
+    pg_again(&mut h, to.0, to.1, to.2);
+    h.keys("llgp");
+    let mut st = users_structure();
+    st.columns[3].type_name = to.1.0.into();
+    structure(&mut h, Ok(st));
+    (said_text(&mut h), value(&h, 0, 2))
+}
+
+/// A PostgreSQL range of dates (read as the server's text, in the session's `DateStyle`) copied
+/// in `SQL, DMY` is the same dates only where it is read in the same settings: `g p` into a
+/// session that reads text in others, or whose settings or the copy's are not known, says why
+/// and pastes nothing. Text written in ISO reads the same anywhere.
+#[test]
+fn a_pg_range_copied_in_one_date_style_is_pasted_only_where_it_reads_the_same() {
+    let copied = "[02/01/2026,05/01/2026)";
+    let other = "[2026-03-01,2026-03-02)";
+    let (said, pending) = pg_paste((Some("SQL, DMY"), DATERANGE, copied), (Some("ISO, MDY"), DATERANGE, other));
+    assert_eq!(
+        said,
+        "Not pasted: column \u{201C}nickname\u{201D} was copied as text whose dates and times are written in DateStyle \
+         SQL, DMY, IntervalStyle postgres, TimeZone UTC; this session reads such text in DateStyle ISO, MDY, \
+         IntervalStyle postgres, TimeZone UTC, maybe as other values"
+    );
+    assert_eq!(pending, None);
+    // The same settings: pasted as shown.
+    let (said, pending) = pg_paste((Some("SQL, DMY"), DATERANGE, copied), (Some("SQL, DMY"), DATERANGE, other));
+    assert!(said.starts_with("Pasted the copied cells"), "{said}");
+    assert_eq!(pending, Some(Value::Text(copied.into())));
+    // Settings not known, of the copy or of the session: refused unless the copy is ISO.
+    let (said, pending) = pg_paste((None, DATERANGE, copied), (Some("ISO, MDY"), DATERANGE, other));
+    assert!(said.contains("written in settings not known; this session reads"), "{said}");
+    assert_eq!(pending, None);
+    let (said, pending) = pg_paste((Some("SQL, DMY"), DATERANGE, copied), (None, DATERANGE, other));
+    assert!(said.ends_with("this session reads such text in settings not known, maybe as other values"), "{said}");
+    assert_eq!(pending, None);
+    let iso = "[2026-01-02,2026-01-05)";
+    let (said, pending) = pg_paste((Some("ISO, DMY"), DATERANGE, iso), (None, DATERANGE, other));
+    assert!(said.starts_with("Pasted the copied cells"), "{said}");
+    assert_eq!(pending, Some(Value::Text(iso.into())));
+    let (said, _) = pg_paste((Some("ISO, DMY"), DATERANGE, iso), (Some("SQL, MDY"), DATERANGE, other));
+    assert!(said.starts_with("Pasted the copied cells"), "{said}");
+}
+
+/// What no setting writes is pasted as before: a plain `date` (read in binary, shown in ISO
+/// whatever the session's settings), a text, and a range's text pasted into a text column.
+#[test]
+fn a_pg_date_a_text_and_a_range_into_text_are_pasted_whatever_the_date_style() {
+    let date = ("date", ValueKind::Date, false);
+    let (said, pending) = pg_paste((Some("SQL, DMY"), date, "2026-01-02"), (Some("ISO, MDY"), date, "2026-03-01"));
+    assert!(said.starts_with("Pasted the copied cells"), "{said}");
+    assert_eq!(pending, Some(Value::Text("2026-01-02".into())));
+    let text = ("text", ValueKind::Text, false);
+    let (said, pending) = pg_paste((None, text, "02/01/2026"), (Some("ISO, MDY"), text, "x"));
+    assert!(said.starts_with("Pasted the copied cells"), "{said}");
+    assert_eq!(pending, Some(Value::Text("02/01/2026".into())));
+    let copied = "[02/01/2026,05/01/2026)";
+    let (said, pending) = pg_paste((Some("SQL, DMY"), DATERANGE, copied), (Some("ISO, MDY"), text, "x"));
+    assert!(said.starts_with("Pasted the copied cells"), "{said}");
+    assert_eq!(pending, Some(Value::Text(copied.into())));
+}
+
+/// A result keeps the settings its first page was read in; a later page read under others (or
+/// while they changed, which the session says as settings not known) leaves them not known.
+#[test]
+fn a_pg_result_read_across_a_change_of_its_date_settings_is_read_in_settings_not_known() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Keys(Ok(shop_keys())));
+    h.db(DbEvent::TextStyle(Some(pg_style("SQL, DMY"))));
+    h.app.run(vec!["SELECT id, email, nickname FROM shop.users".to_string()]);
+    let id = h.app.tab().exec.query_id;
+    let page = |rows| DbEvent::Page { id, columns: None, rows, more: true, elapsed: Duration::ZERO };
+    h.db(DbEvent::Page { id, columns: Some(users_columns()), rows: users_rows(), more: true, elapsed: Duration::ZERO });
+    let text_in = |h: &Harness| match &h.app.tab().results {
+        Results::Rows(rs) => rs.text_in.clone(),
+        _ => panic!("no row result"),
+    };
+    assert_eq!(text_in(&h), Some(pg_style("SQL, DMY")));
+    h.db(page(vec![vec![s("4"), s("d@x"), None]]));
+    assert_eq!(text_in(&h), Some(pg_style("SQL, DMY")), "the same settings");
+    h.db(DbEvent::TextStyle(None));
+    h.db(page(vec![vec![s("5"), s("e@x"), None]]));
+    h.db(DbEvent::TextStyle(Some(pg_style("SQL, DMY"))));
+    assert_eq!(text_in(&h), None);
+    assert_eq!(h.app.tab().exec.text, Some(pg_style("SQL, DMY")));
+}
