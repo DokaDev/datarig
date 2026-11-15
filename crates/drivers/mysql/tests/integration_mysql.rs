@@ -1568,9 +1568,15 @@ async fn metadata_locks_of(a: &mut mysql_async::Conn, id: u64) -> u64 {
     a.query_first::<u64, _>(sql).await.unwrap().unwrap()
 }
 
-/// What connection `other` waits for that connection `ours` holds: a metadata lock pending on
-/// an object `ours` has a granted lock on, or an InnoDB row lock `ours` blocks it with; each as a
-/// line that says what.
+/// The thread state of a session waiting for a metadata lock, as a `LIKE` pattern. The server
+/// lists every metadata lock request as `PENDING` for a moment before it grants it, even one
+/// nothing stands in the way of; only a request the session waits for shows this state (for as
+/// long as it waits), so a `PENDING` row counts as a wait only together with it.
+const METADATA_LOCK_WAIT: &str = "Waiting for % metadata lock";
+
+/// What connection `other` waits for that connection `ours` holds: a metadata lock it waits for
+/// ([`METADATA_LOCK_WAIT`]) on an object `ours` has a granted lock on, or an InnoDB row lock
+/// `ours` blocks it with; each as a line that says what.
 async fn waits_on(a: &mut mysql_async::Conn, other: u64, ours: u64) -> Vec<String> {
     let sql = format!(
         "SELECT CONCAT('metadata ', w.OBJECT_TYPE, ' ', IFNULL(w.OBJECT_SCHEMA, ''), '.', IFNULL(w.OBJECT_NAME, ''), \
@@ -1580,7 +1586,8 @@ async fn waits_on(a: &mut mysql_async::Conn, other: u64, ours: u64) -> Vec<Strin
          JOIN performance_schema.metadata_locks m ON m.OBJECT_TYPE = w.OBJECT_TYPE \
            AND m.OBJECT_SCHEMA <=> w.OBJECT_SCHEMA AND m.OBJECT_NAME <=> w.OBJECT_NAME \
          JOIN performance_schema.threads tm ON tm.THREAD_ID = m.OWNER_THREAD_ID \
-         WHERE tw.PROCESSLIST_ID = {other} AND w.LOCK_STATUS = 'PENDING' AND tm.PROCESSLIST_ID = {ours} \
+         WHERE tw.PROCESSLIST_ID = {other} AND w.LOCK_STATUS = 'PENDING' \
+           AND tw.PROCESSLIST_STATE LIKE '{METADATA_LOCK_WAIT}' AND tm.PROCESSLIST_ID = {ours} \
            AND m.LOCK_STATUS = 'GRANTED' \
          UNION ALL SELECT CONCAT('row lock of ', w.OBJECT_SCHEMA, '.', w.OBJECT_NAME) \
          FROM performance_schema.data_lock_waits l \
@@ -1608,14 +1615,16 @@ async fn waits_on(a: &mut mysql_async::Conn, other: u64, ours: u64) -> Vec<Strin
     a.query(sql).await.unwrap()
 }
 
-/// The metadata locks connection `id` waits for (pending) on table `shop.<table>`, each as a
-/// line that says what. Only the test's own table: DDL of other tests (or of anyone on the
-/// server) elsewhere, and server-wide locks (the privilege cache), are not the lookup's doing.
+/// The metadata locks connection `id` waits for ([`METADATA_LOCK_WAIT`]) on table
+/// `shop.<table>`, each as a line that says what. Only the test's own table: DDL of other tests
+/// (or of anyone on the server) elsewhere, and server-wide locks (the privilege cache), are not
+/// the lookup's doing.
 async fn queued(a: &mut mysql_async::Conn, id: u64, table: &str) -> Vec<String> {
     let sql = format!(
         "SELECT CONCAT(m.OBJECT_TYPE, ' ', IFNULL(m.OBJECT_SCHEMA, ''), '.', IFNULL(m.OBJECT_NAME, ''), ' ', m.LOCK_TYPE) \
          FROM performance_schema.metadata_locks m JOIN performance_schema.threads th \
          ON th.THREAD_ID = m.OWNER_THREAD_ID WHERE th.PROCESSLIST_ID = {id} AND m.LOCK_STATUS = 'PENDING' \
+         AND th.PROCESSLIST_STATE LIKE '{METADATA_LOCK_WAIT}' \
          AND m.OBJECT_TYPE = 'TABLE' AND m.OBJECT_SCHEMA = 'shop' AND m.OBJECT_NAME = '{table}'"
     );
     a.query(sql).await.unwrap()
