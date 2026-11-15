@@ -98,6 +98,7 @@ fn f_opens_the_dialog_and_enter_sends_the_condition_built() {
     let mut h = users();
     h.keys("f");
     assert!(open(&h));
+    assert_eq!(h.app.filter_dialog_popup(), None, "`f` opens the whole dialog");
     assert_eq!(h.app.key_context(), Ctx::FilterDialog);
     // On the grid's column (`id`), a condition `= 1`.
     condition(&mut h, 0, "1");

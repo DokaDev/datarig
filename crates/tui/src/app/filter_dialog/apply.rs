@@ -425,7 +425,7 @@ impl App {
             if let Ok(keys) = &keys {
                 q.order = keys.clone();
             }
-            self.open_filter_dialog_with(tab, &q, None, false);
+            self.open_filter_dialog_with(tab, &q, None, false, super::View::Full);
             if let Some(d) = self.filter_dialog_mut() {
                 // Picked, not applied: the title says so.
                 d.message = keys.err();

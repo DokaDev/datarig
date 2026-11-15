@@ -24,6 +24,7 @@ mod keys;
 pub(crate) mod list;
 mod mouse;
 pub(crate) mod values;
+pub mod view;
 
 pub use apply::DialogAction;
 pub(crate) use keys::op_off_label;
@@ -36,6 +37,7 @@ use crate::widgets::text_input::TextInput;
 use datarig_core::query::{Query, Target, order_text};
 use draft::{ColumnInfo, Draft, Undo, Where};
 use std::ops::Range;
+use view::View;
 
 /// A text field of the dialog typing coalesces in ([`Undo`]): a value field of a condition
 /// (term index, field) or the `LIMIT` field.
@@ -345,6 +347,10 @@ pub struct FilterDialog {
     pub(crate) applying: Option<Query>,
     /// The columns hidden from the grid once that query is sent, when they change with it.
     pub(crate) applying_hidden: Option<Vec<String>>,
+    /// What the dialog shows of the session; changed only by [`FilterDialog::set_view`].
+    pub(crate) view: View,
+    /// Bumped by every change of [`FilterDialog::view`].
+    pub(crate) view_gen: u64,
     pub(crate) hits: DialogHits,
     /// What a press of the pointer armed (it acts on the release over it).
     pub(crate) press: super::overlay::Press<DialogHit>,
@@ -643,6 +649,11 @@ impl App {
         Some((s.where_.input.text().to_string(), s.order.input.text().to_string()))
     }
 
+    /// The kind of popup the open filter dialog is shown as, when it is one.
+    pub fn filter_dialog_popup(&self) -> Option<view::PopupKindId> {
+        self.filter_dialog()?.popup_kind().map(view::PopupKind::id)
+    }
+
     pub(crate) fn filter_dialog_mut(&mut self) -> Option<&mut FilterDialog> {
         self.overlays.filter_dialog_mut()
     }
@@ -659,11 +670,19 @@ impl App {
             Results::Rows(rs) => rs.columns.get(self.tab().grid.col).map(|c| c.meta.name.clone()),
             _ => None,
         };
-        self.open_filter_dialog_with(id, &q, column.as_deref(), order);
+        self.open_filter_dialog_with(id, &q, column.as_deref(), order, View::Full);
     }
 
-    /// The filter dialog of table tab `id` with `q` as its draft, on column `column`.
-    pub(super) fn open_filter_dialog_with(&mut self, id: TabId, q: &Query, column: Option<&str>, order: bool) {
+    /// The filter dialog of table tab `id` with `q` as its draft, on column `column`, shown
+    /// as `view`.
+    pub(super) fn open_filter_dialog_with(
+        &mut self,
+        id: TabId,
+        q: &Query,
+        column: Option<&str>,
+        order: bool,
+        view: View,
+    ) {
         self.close_search_prompt();
         let (Some(target), Some(name)) = (self.table_target(id), self.table_name(id)) else { return };
         let Some(tq) = self.table_query(id) else { return };
@@ -709,6 +728,8 @@ impl App {
             sql: None,
             applying: None,
             applying_hidden: None,
+            view,
+            view_gen: 0,
             hits: DialogHits::default(),
             press: Default::default(),
             hover: None,

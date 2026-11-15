@@ -197,7 +197,7 @@ impl App {
     /// rows loaded made first when it is not); the dialog keeps how many values it lists.
     pub(crate) fn filter_dialog_list(&mut self) -> Option<ValuesView> {
         self.filter_dialog_tally();
-        let view = self.filter_dialog_view();
+        let view = self.filter_dialog_values_view();
         let d = self.filter_dialog_mut()?;
         d.listed = view.as_ref().map_or(0, |v| v.items.len());
         view
@@ -249,7 +249,7 @@ impl App {
     }
 
     /// The list of the open dialog's selected column ([`ValuesView`]), from what is held.
-    fn filter_dialog_view(&self) -> Option<ValuesView> {
+    fn filter_dialog_values_view(&self) -> Option<ValuesView> {
         let d = self.filter_dialog()?;
         let c = d.column()?;
         let t = self.tabs.get(d.tab)?;

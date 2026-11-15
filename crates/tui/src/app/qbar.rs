@@ -429,7 +429,7 @@ impl App {
             Results::Rows(rs) => rs.columns.get(self.tab().grid.col).map(|c| c.meta.name.clone()),
             _ => None,
         });
-        self.open_filter_dialog_with(id, &q, column.as_deref(), order);
+        self.open_filter_dialog_with(id, &q, column.as_deref(), order, super::filter_dialog::view::View::Full);
         if let (Some(f), Some(d)) = (focus, self.filter_dialog_mut()) {
             d.focus_on(f);
         }
