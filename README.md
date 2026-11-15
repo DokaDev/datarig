@@ -57,12 +57,15 @@ graph, a treemap, a timeline, the row flow and more.
 
 ![A plan as a tree, its summary, then as an icicle, a flame graph and a treemap](https://dokadev.github.io/datarig/demo/plans.gif)
 
-**Filter and sort a table on the server.** A dialog builds a table's WHERE, ORDER BY and LIMIT
-from its columns and their values, counted exactly on the server when you ask; keys on the grid
-keep or exclude a cell's value and hide columns, and what runs is the text you see, checked first.
+**Filter and sort a table on the server.** A query bar over a table's rows shows its WHERE as
+chips, its ORDER BY and its LIMIT; a click on a chip or on a column's header opens a small popup
+with the column's conditions and values, counted exactly on the server when you ask, and the
+bar's other parts open popups of their own.
+Advanced holds every part at once with its SQL, keys on the grid keep or exclude a cell's value
+and hide columns, and what runs is the text you see, checked first.
 [Filtering and sorting a table](https://dokadev.github.io/datarig/guide/filtering.html)
 
-![Filtering a table by ticking a value in the filter dialog, keeping only the value of a cell, hiding a column, clearing the filter and bringing it back](https://dokadev.github.io/datarig/demo/table-filter.gif)
+![Filtering a table from its query bar: ticking a value in a column's popup, sorting from the order popup, hiding a column and taking the condition out on the bar](https://dokadev.github.io/datarig/demo/table-filter.gif)
 
 **Search a result and move across wide tables.** Search every fetched row, jump from match to
 match, and move across columns while the row numbers stay in place.

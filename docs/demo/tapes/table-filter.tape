@@ -1,6 +1,6 @@
-# A table tab: a value ticked in the filter dialog, then only the value of a cell from the grid,
-# a column hidden, the filter cleared and brought back with the dialog's undo. Each filter is a
-# statement run on the server.
+# A table tab's query bar: a value ticked in the status column's popup, the order set in the
+# order popup, a column hidden in the columns popup, and the condition taken out on the bar.
+# Each change is a statement run on the server, and the bar says what is applied.
 Require datarig
 Source settings.tape
 
@@ -24,51 +24,60 @@ Sleep 300ms
 Show
 
 Sleep 1s
-# The dialog on the status column: its values, counted in the rows loaded.
+# The status column's popup (a click on its header opens it too): its conditions, its values
+# counted in the rows loaded, and its sort.
 Type "ll"
 Sleep 500ms
-Type "f"
-Wait+Screen /Filter and sort · store\.orders/
+Type "F"
+Wait+Screen /╭─ status +text/
 Sleep 1.5s
-Right
-Sleep 400ms
 Down
-Wait+Screen /Space tick/
+Wait+Screen /▸ \[ \] delivered/
 Sleep 1s
-# Tick a value: the condition it makes is what the server runs.
+# Tick a value, and Enter runs it: the chip on the bar is the text the server runs.
 Space
-Wait+Screen /status = 'delivered' ×/
+Wait+Screen /\[x\] delivered/
 Sleep 1.5s
 Enter
-Wait+Screen /╰ \S+ status = 'delivered' ─/
-Sleep 1.5s
+Wait+Screen /WHERE +status = 'delivered' ×/
+Sleep 2s
 
-# Only the carrier of the cell under the cursor.
-Type "llll"
+# The order popup: the clause it sends underneath.
+Space
+Type "ro"
+Wait+Screen /╭─ ORDER BY ─/
+Sleep 1s
+Type "jjj"
 Sleep 500ms
-Type "="
-Wait+Screen /status = 'delivered' \+1 ─/
-Sleep 1.5s
-
-# Hide a column from the grid: it is still read.
-Type "l"
-Sleep 400ms
-Type "C"
-Wait+Screen /status = 'delivered' \+1 · 1 hidden/
-Sleep 1.5s
-
-# Clear the conditions; the dialog's undo brings them back.
-Type "X"
-Wait+Screen /╰ 1 hidden ─/
-Sleep 1.5s
-Type "f"
-Wait+Screen /Filter and sort · store\.orders/
-Sleep 800ms
-Type "u"
-Wait+Screen /Where .*status = 'delivered' ×/
+Space
+Sleep 500ms
+Space
+Wait+Screen /ORDER BY .total. DESC/
 Sleep 1.5s
 Enter
-Wait+Screen /status = 'delivered' \+1 · 1 hidden/
+Wait+Screen /ORDER( BY)? ↓ total \+/
+Sleep 2s
+
+# Hide a column from the grid in the columns popup: it is still read.
+Space
+Type "rc"
+Wait+Screen /╭─ columns 14.14/
+Sleep 1s
+Type "j"
+Sleep 500ms
+Space
+Wait+Screen /╭─ columns 13.14/
+Sleep 1s
+Enter
+Wait+Screen /13.14 cols/
 Sleep 2s
 Screenshot table-filter.png
-Sleep 1s
+
+# The keys on the bar's conditions: x takes the chip out and runs the others.
+Space
+Type "rw"
+Wait+Screen /x remove/
+Sleep 1.5s
+Type "x"
+Wait+Screen /WHERE \+ │ ORDER( BY)? ↓ total/
+Sleep 2.5s
