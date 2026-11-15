@@ -644,3 +644,43 @@ fn a_focused_line_has_the_marker() {
     assert!(screen.contains("\u{2502} \u{25b8} Hide column"), "{screen}");
     assert!(screen.contains("\u{2502}   Only 'n0'"), "the others unmarked, in line: {screen}");
 }
+
+/// The table's columns read after the popup opened, without its column (the catalogue read
+/// before the column was added): the popup turns into the whole dialog in place, its draft and
+/// undo kept, saying why; its lines go, so nothing acts on a column the dialog does not show.
+#[test]
+fn a_catalogue_read_later_without_the_column_turns_the_popup_into_the_dialog() {
+    use datarig_core::driver::keys::{CatalogColumn, OrderKeys};
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    let ask = h.sent().iter().find_map(|c| match c {
+        DbCommand::LoadTableKeys { id, .. } => Some(*id),
+        _ => None,
+    });
+    answer(&mut h);
+    h.key(KeyCode::Tab);
+    h.app.detail.visible = false;
+    at(&mut h, 0, 2);
+    h.keys("F");
+    assert_eq!(popup_on(&mut h).as_deref(), Some("email"));
+    // An edit in the popup: a condition waiting for its value.
+    h.key(KeyCode::Char(' '));
+    let draft = h.app.filter_dialog_draft();
+    let col = |name: &str, ty: &str| CatalogColumn {
+        name: name.into(),
+        type_name: ty.into(),
+        not_null: false,
+        primary_key: false,
+        foreign_key: false,
+        invisible: false,
+    };
+    let keys = OrderKeys { columns: Some(vec![col("id", "bigint"), col("name", "text")]), ..OrderKeys::default() };
+    h.meta_db("local-pg", DbEvent::TableKeys { id: ask.expect("the keys read"), result: Ok(keys) });
+    assert!(h.app.overlays.is_open(OverlayKind::FilterDialog), "still open");
+    assert_eq!(popup(&h), None, "the whole dialog");
+    assert!(lines(&h).is_empty(), "no lines");
+    assert_eq!(h.app.filter_dialog_draft(), draft, "the draft kept");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("\u{201c}email\u{201d}"), "said: {screen}");
+    assert!(runs(&mut h).is_empty());
+}

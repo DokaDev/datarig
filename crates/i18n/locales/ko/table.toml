@@ -79,6 +79,7 @@
 "table.column.line_stale" = "실행 안 함: 보인 뒤 셀이 바뀜"
 "table.column.hide_gone" = "숨기지 않음: 이 열은 지금 보이지 않음"
 "table.column.not_listed" = "열지 않음: 읽은 열에 “{column}” 없음. 탐색기를 새로 고치세요"
+"table.column.popup_gone" = "읽은 테이블 열에 “{column}” 없음: 전체 대화 상자로 바꿈"
 "table.view.unavailable" = "숨긴 열은 이번 세션에만 유지: {error}"
 "table.view.save_failed" = "숨긴 열을 저장하지 못함: {error}"
 "table.clear_all.nothing" = "지울 것 없음: 조건도 정렬도 없음"

@@ -971,7 +971,9 @@ impl App {
 
     /// Table tab `id` read its table's catalogue (with its keys) or rows of its query: its open
     /// dialog's columns become those it would open with now, the selected one kept by its name
-    /// (the list's first when it is gone).
+    /// (the list's first when it is gone). A condition popup whose column is gone from them
+    /// would show another column: it turns into the whole dialog in place (its draft, undo and
+    /// apply waiting kept, the lines it had above it dropped), saying why.
     pub(crate) fn filter_dialog_columns_came(&mut self, id: TabId) {
         if self.filter_dialog().is_none_or(|d| d.tab != id) {
             return;
@@ -987,6 +989,16 @@ impl App {
         match selected {
             Some(name) if d.columns.iter().any(|c| c.name == name) => d.select_column(&name),
             _ => d.cursor = 0,
+        }
+        let gone = match d.popup_kind() {
+            Some(view::PopupKind::Condition { col }) if !d.columns.iter().any(|c| c.name == *col) => Some(col.clone()),
+            _ => None,
+        };
+        if let Some(col) = gone {
+            d.set_view(View::Full);
+            d.focus_on(DialogFocus::Columns);
+            let column = crate::text::escape_controls(&col);
+            d.message = Some(Notice::new(Msg::TableColumnPopupGone { column }, Level::Warning));
         }
         d.settle();
     }
