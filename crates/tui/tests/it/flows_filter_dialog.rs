@@ -750,8 +750,9 @@ fn the_columns_follow_the_catalogue_read_while_the_dialog_is_open() {
 #[test]
 fn the_sort_line_steps_through_none_ascending_and_descending_both_ways() {
     let mut h = users();
-    // `Space r o` with no order: the column's sort line.
+    // `Space r o` with no order, then `A`: the first column's sort line.
     h.keys(" ro");
+    h.keys("A");
     let order = |h: &Harness| h.app.filter_dialog_draft().unwrap().1;
     h.key(KeyCode::Right);
     assert_eq!(order(&h), "id ASC");

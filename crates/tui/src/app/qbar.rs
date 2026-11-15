@@ -13,9 +13,11 @@ use super::tabs::ResultView;
 use super::*;
 pub use crate::widgets::qbar::BarHit;
 use crate::widgets::qbar::{Bar, ChipM, ColsM, Glyphs, LimitM, RowsM, StateM};
-use datarig_core::query::KeyOrigin;
+use datarig_core::query::{KeyOrigin, Query};
 use datarig_i18n::fmt_count;
 use ratatui::layout::Position;
+
+pub(crate) mod rows;
 
 /// What the keys of the bar are on, and for which tab and view: they leave the bar when any of
 /// it changes (another tab, result or view, the focus elsewhere, a dialog opened).
@@ -295,15 +297,11 @@ impl App {
         })
     }
 
-    /// The rows of the result `rs` shown in tab `t`: the page shown and how many there are
-    /// (exact once complete or counted; else about as many as the explorer's statistics or the
-    /// planner say, both no more than the query's cap; else the rows read and more), the state of
-    /// its paging, and whether the previous and the next page can be shown.
-    fn bar_rows(&self, t: &Tab, rs: &crate::widgets::grid::ResultSet) -> RowsM {
-        let size = self.page_size.max(1);
+    /// How many rows the result `rs` shown in tab `t` has: exact once complete or counted; else
+    /// about as many as the explorer's statistics (the estimate, also returned) or the planner
+    /// say, both no more than the query's cap; else the rows read and more.
+    fn rows_total(&self, t: &Tab, rs: &crate::widgets::grid::ResultSet) -> (Total, Option<u64>) {
         let len = rs.rows.len();
-        let win = t.grid.window(len);
-        let paged = rs.more || len > size;
         let cap = self.table_query(t.id).and_then(|q| q.shown.as_ref()).and_then(|q| q.limit);
         let capped = |n: u64| cap.map_or(n, |c| n.min(c));
         let estimate = self.table_estimate(t).filter(|&n| n > 0 && n >= len as u64);
@@ -313,6 +311,19 @@ impl App {
             (None, Some(n)) => Total::About(n),
             (None, None) => Total::AtLeast(len as u64),
         };
+        (total, estimate)
+    }
+
+    /// The rows of the result `rs` shown in tab `t`: the page shown and how many there are
+    /// (exact once complete or counted; else about as many as the explorer's statistics or the
+    /// planner say, both no more than the query's cap; else the rows read and more), the state of
+    /// its paging, and whether the previous and the next page can be shown.
+    fn bar_rows(&self, t: &Tab, rs: &crate::widgets::grid::ResultSet) -> RowsM {
+        let size = self.page_size.max(1);
+        let len = rs.rows.len();
+        let win = t.grid.window(len);
+        let paged = rs.more || len > size;
+        let (total, estimate) = self.rows_total(t, rs);
         let (long, short) = match total {
             Total::Exact(n) => (fmt_count(n), crate::widgets::qbar::compact(n)),
             Total::About(n) => (format!("~{}", fmt_count(n)), format!("~{}", crate::widgets::qbar::compact(n))),
@@ -422,15 +433,15 @@ impl App {
     }
 
     /// The filter dialog of the active table tab on column `column` (else the grid's), with its
-    /// keys on `focus` when given; `order`: on the order.
-    fn bar_dialog(&mut self, column: Option<String>, order: bool, focus: Option<DialogFocus>) {
+    /// keys on `focus` when given.
+    fn bar_dialog(&mut self, column: Option<String>, focus: Option<DialogFocus>) {
         let id = self.tab().id;
         let Some(q) = self.table_query(id).map(|tq| tq.draft.clone()) else { return };
         let column = column.or_else(|| match &self.tab().results {
             Results::Rows(rs) => rs.columns.get(self.tab().grid.col).map(|c| c.meta.name.clone()),
             _ => None,
         });
-        self.open_filter_dialog_with(id, &q, column.as_deref(), order, super::filter_dialog::view::View::Full);
+        self.open_filter_dialog_with(id, &q, column.as_deref(), super::filter_dialog::view::View::Full);
         if let (Some(f), Some(d)) = (focus, self.filter_dialog_mut()) {
             d.focus_on(f);
         }
@@ -473,20 +484,21 @@ impl App {
                         let text = t.text.clone();
                         let dw = Draft::from_query(&draft, &target).where_;
                         let at = dw.chips().iter().position(|c| Some(c.text) == text.as_deref()).unwrap_or(0);
-                        self.bar_dialog(None, false, Some(DialogFocus::Chips(at)))
+                        self.bar_dialog(None, Some(DialogFocus::Chips(at)))
                     }
                 }
             }
             BarHit::Remove(term) => self.bar_remove(term),
             // The conditions, one a line.
             BarHit::More => self.open_filter_popup(PopupKind::WhereList, self.bar_anchor(hit), None),
-            BarHit::Order => self.bar_dialog(None, true, None),
-            BarHit::Cols => self.bar_dialog(None, false, Some(DialogFocus::Columns)),
-            BarHit::Advanced => self.bar_dialog(None, false, None),
+            // The order's keys, the columns shown, the rows and their pages: each its popup.
+            BarHit::Order => self.open_filter_popup(PopupKind::Order, self.bar_anchor(hit), None),
+            BarHit::Cols => self.open_filter_popup(PopupKind::Columns, self.bar_anchor(hit), None),
+            BarHit::Advanced => self.bar_dialog(None, None),
             BarHit::Limit => self.bar_limit(),
             BarHit::Rows => {
                 self.bar_to_rows();
-                self.count_rows()
+                self.open_filter_popup(PopupKind::Rows, self.bar_anchor(hit), None)
             }
             BarHit::Prev => {
                 self.bar_to_rows();
@@ -502,17 +514,27 @@ impl App {
     /// Term `term` of the active table tab's condition (as applied) taken out, and the query run:
     /// the other terms are sent as they were written.
     pub(super) fn bar_remove(&mut self, term: usize) {
+        let Some((id, q)) = self.bar_without(term) else { return };
+        let Some(tq) = self.table_query_mut(id) else { return };
+        tq.draft = q.clone();
+        tq.refusal = None;
+        self.table_run(id, q);
+    }
+
+    /// The active table tab and its query (as applied) without term `term` of its condition,
+    /// the other terms as they were written; `None` when there is no such term, or the tab is
+    /// busy (said). The bar's keys on the condition taken out move to the one after it.
+    pub(super) fn bar_without(&mut self, term: usize) -> Option<(TabId, Query)> {
         let id = self.tab().id;
         // Refused before the draft changes: a busy tab keeps what it would run next.
         if self.tab_busy(id) {
-            return self.flash_busy();
+            self.flash_busy();
+            return None;
         }
-        let Some(target) = self.table_target(id) else { return };
-        let Some(base) = self.table_query(id).map(|tq| tq.applied().clone()) else { return };
+        let target = self.table_target(id)?;
+        let base = self.table_query(id).map(|tq| tq.applied().clone())?;
         let mut d = Draft::from_query(&base, &target);
-        if d.where_.remove(term).is_none() {
-            return;
-        }
+        d.where_.remove(term)?;
         // The keys on the condition taken out move to the next one, else the one before, else
         // `+`.
         let left = d.where_.chips().len();
@@ -528,11 +550,7 @@ impl App {
                 h => h,
             };
         }
-        let Ok(q) = d.to_query(&base, &target) else { return };
-        let Some(tq) = self.table_query_mut(id) else { return };
-        tq.draft = q.clone();
-        tq.refusal = None;
-        self.table_run(id, q);
+        d.to_query(&base, &target).ok().map(|q| (id, q))
     }
 
     /// A key of the bar.

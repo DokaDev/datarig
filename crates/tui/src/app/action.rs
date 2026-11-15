@@ -558,7 +558,7 @@ fn table_tab(a: &App) -> bool {
     has_tab(a) && a.tab().is_table()
 }
 
-/// The active tab is a table tab showing its rows (`Space r r` counts them).
+/// The active tab is a table tab showing its rows (`Space r r` opens their popup).
 fn table_rows(a: &App) -> bool {
     table_tab(a) && rows_shown(a)
 }

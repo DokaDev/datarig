@@ -7,12 +7,18 @@
 //! `WHERE` and `+` open the column list of a new condition (the add popup): picking a column
 //! turns it into that column's condition popup with a new condition waiting for its value.
 //! The count of conditions left out of the bar (`+N`) opens the WHERE list: one condition a
-//! line, `Enter` opens one, `x` takes it out of the draft, `+` adds. Neither list sends
-//! anything.
+//! line, `Enter` opens one, `+` adds, `x` takes it out and runs the query as the bar's `×`
+//! does (the other conditions sent byte for byte), the list closing once it is sent.
+//!
+//! `ORDER BY`, the column count and the rows open their popups: the order's keys then the other
+//! columns (`Space` direction, `J`/`K` move, `x` drop, the clause sent underneath with its
+//! tie-breaker dimmed), the columns shown and hidden (`Space`, `a`), and the rows shown with
+//! their pages and counts (the bar's arrows and `#`, never a count of values).
 
 use crate::common;
 
 use common::*;
+use datarig_core::driver::keys::OrderKeys;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, ServerMessage};
 use datarig_i18n::Lang;
 use datarig_tui::app::Focus;
@@ -80,6 +86,28 @@ fn users_where_in(cfg: &datarig_core::config::Config, filter: &str) -> Harness {
     if h.app.overlays.is_open(OverlayKind::Confirm) {
         h.keys("y");
     }
+    runs(&mut h);
+    answer(&mut h);
+    h.app.focus = Focus::Results;
+    h
+}
+
+/// [`users_where`] with the table's keys read (`id` its primary key), which make an order
+/// total.
+fn users_keyed(filter: &str) -> Harness {
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    let sent = h.sent();
+    let ask = sent.iter().find_map(|c| match c {
+        DbCommand::LoadTableKeys { id, .. } => Some(*id),
+        _ => None,
+    });
+    answer(&mut h);
+    let keys = OrderKeys { primary_key: vec!["id".into()], ..OrderKeys::default() };
+    h.meta_db("local-pg", DbEvent::TableKeys { id: ask.expect("the keys read"), result: Ok(keys) });
+    h.key(KeyCode::Tab);
+    h.app.detail.visible = false;
+    h.command(&format!("where {filter}"));
     runs(&mut h);
     answer(&mut h);
     h.app.focus = Focus::Results;
@@ -647,18 +675,61 @@ fn plus_n_opens_the_where_list() {
     assert_eq!(popup(&h), Some(PopupKindId::WhereList));
 }
 
-/// In the WHERE list `x` takes the focused condition out of the draft (sent with the rest
-/// later, nothing now) and `Enter` opens a condition in its column's popup, which applies.
+/// In the WHERE list `x` takes the focused condition out and runs the query as the bar's `×`
+/// does: the other conditions sent byte for byte, the list closed once the statement is sent.
+/// `Enter` opens a condition in its column's popup, which applies.
 #[test]
 fn the_where_list_removes_and_opens() {
-    let mut h = users_where(MANY);
+    let spaced = "name = 'n1'  AND id>1 AND (id < 9 OR  id = 20) AND name <> 'a rather long text to leave out'";
+    let mut h = users_where(spaced);
     open_at(&mut h, BarHit::More, 120, 34);
     h.key(KeyCode::Down);
     h.keys("x");
-    assert!(runs(&mut h).is_empty());
-    assert_eq!(draft_where(&h), "name = 'n1' AND id < 9 AND name <> 'a rather long text to leave out of the bar'");
+    assert_eq!(
+        runs(&mut h),
+        vec![vec![format!(
+            "{ALL} WHERE (name = 'n1' AND (id < 9 OR  id = 20) AND name <> 'a rather long text to leave out')"
+        )]],
+        "the other terms as written"
+    );
+    assert!(!open(&h), "closed once sent");
+    answer(&mut h);
+    // The same through `Delete` and through the line's `×`, the bar's `×` sending the same.
+    let mut bar = users_where(spaced);
+    let r = hit_rect(&mut bar, BarHit::Remove(0), 120, 34);
+    bar.advance(Duration::from_millis(500));
+    click_at(&mut bar, r.x, r.y);
+    let by_bar = runs(&mut bar);
+    assert_eq!(by_bar.len(), 1);
+    let mut h = users_where(spaced);
+    open_at(&mut h, BarHit::More, 120, 34);
+    h.key(KeyCode::Delete);
+    assert_eq!(runs(&mut h), by_bar);
+    let mut h = users_where(spaced);
+    let more = hit_rect(&mut h, BarHit::More, 120, 34);
+    open_at(&mut h, BarHit::More, 120, 34);
+    // The list's first line, under its top border.
+    let y = more.y + 2;
+    let line = row_text(h.draw(120, 34).backend().buffer(), y);
+    assert!(line.contains("name = 'n1'"), "{line}");
+    let cross = line[..line.rfind('\u{00d7}').expect("its cross")].chars().count() as u16;
+    click_at(&mut h, cross, y);
+    assert_eq!(runs(&mut h), by_bar);
+    // A busy tab refuses it: nothing runs, the list and its draft stay.
+    let mut h = users_where(MANY);
+    open_at(&mut h, BarHit::More, 120, 34);
     assert_eq!(popup(&h), Some(PopupKindId::WhereList));
+    h.app.dispatch(datarig_tui::app::action::Action::Table(datarig_tui::app::table_filter::TableAction::Clear));
+    assert_eq!(runs(&mut h).len(), 1, "a run on its way");
+    h.keys("x");
+    assert!(runs(&mut h).is_empty());
+    assert_eq!(popup(&h), Some(PopupKindId::WhereList));
+    assert_eq!(draft_where(&h), MANY);
     // The focus on the next one (`id < 9`): opened, in the popup of `id`.
+    let mut h = users_where(MANY);
+    open_at(&mut h, BarHit::More, 120, 34);
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Down);
     h.key(KeyCode::Enter);
     assert!(runs(&mut h).is_empty(), "opening sends nothing");
     assert_eq!(popup(&h), Some(PopupKindId::Condition));
@@ -667,7 +738,7 @@ fn the_where_list_removes_and_opens() {
     h.key(KeyCode::Enter);
     let sent = runs(&mut h);
     assert_eq!(sent.len(), 1);
-    assert!(!sent[0][0].contains("id > 1") && sent[0][0].contains("id < 9"), "{sent:?}");
+    assert_eq!(sent, vec![vec![format!("{ALL} WHERE ({MANY})")]]);
     // `+` turns the list into the add popup; a click on a condition's line opens it.
     let mut h = users_where(MANY);
     open_at(&mut h, BarHit::More, 120, 34);
@@ -697,25 +768,24 @@ fn an_expression_in_the_where_list_opens_advanced() {
     assert!(screen.contains("go to its column"), "the keys on the expression's chip: {screen}");
 }
 
-/// The list's steps are one session: a condition taken out in the WHERE list, `+`, a column
-/// picked, then two undos give back the draft the list opened with.
+/// The list's steps are one session: `+`, a column picked, a condition added, then an undo
+/// gives back the draft the list opened with; `A` keeps it too.
 #[test]
 fn from_the_list_to_a_condition_keeps_the_draft_and_its_undo() {
     let mut h = users_where(MANY);
     open_at(&mut h, BarHit::More, 120, 34);
-    h.keys("x+");
+    h.keys("+");
     h.key(KeyCode::Enter);
     assert_eq!(popup(&h), Some(PopupKindId::Condition));
-    assert!(draft_where(&h).starts_with("id > 1 AND"), "{}", draft_where(&h));
-    h.key_mod(KeyCode::Char('z'), KeyModifiers::CONTROL);
+    assert!(draft_where(&h).starts_with(MANY), "{}", draft_where(&h));
     h.key_mod(KeyCode::Char('z'), KeyModifiers::CONTROL);
     assert_eq!(draft_where(&h), MANY);
     // `A` keeps it too.
     let mut h = users_where(MANY);
     open_at(&mut h, BarHit::More, 120, 34);
-    h.keys("xA");
+    h.keys("+A");
     assert_eq!(popup(&h), None);
-    assert!(!draft_where(&h).contains("name = 'n1'"), "{}", draft_where(&h));
+    assert!(open(&h));
     assert!(runs(&mut h).is_empty());
 }
 
@@ -752,5 +822,377 @@ fn the_add_and_where_list_screens() {
         open_at(&mut h, BarHit::More, w, hh);
         h.key(KeyCode::Down);
         assert_screen!(format!("query_popup_where_list_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
+    }
+}
+
+/// The order popup's keys: `Space` puts a column in the order (last, ascending) and turns a
+/// key's direction, `J`/`K` move a key, `x` takes it out, each one undo step; `Enter` runs the
+/// order and the popup closes once it is sent.
+#[test]
+fn the_order_popup_keys() {
+    let mut h = users_where("name = 'n1'");
+    h.keys(" ro");
+    assert_eq!(popup(&h), Some(PopupKindId::Order));
+    let order = |h: &Harness| h.app.filter_dialog_draft().map(|d| d.1).unwrap_or_default();
+    let screen = h.screen(120, 34);
+    assert!(screen.contains(" ORDER BY ") && screen.contains("ORDER BY none"), "{screen}");
+    assert!(screen.contains("Space sort"), "{screen}");
+    // On `id`: into the order; then `name`, turned descending.
+    h.keys(" ");
+    assert_eq!(order(&h), "id ASC");
+    h.keys("j ");
+    assert_eq!(order(&h), "id ASC, name ASC");
+    h.keys(" ");
+    assert_eq!(order(&h), "id ASC, name DESC");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("Space direction") && screen.contains("J/K move") && screen.contains("x drop"), "{screen}");
+    // `K`: `name` first, the keys on it still.
+    h.keys("K");
+    assert_eq!(order(&h), "name DESC, id ASC");
+    h.keys(" ");
+    assert_eq!(order(&h), "name ASC, id ASC", "the keys followed it");
+    h.keys("J");
+    assert_eq!(order(&h), "id ASC, name ASC");
+    // `x` on `name` (now second): out; `u` brings it back.
+    h.keys("x");
+    assert_eq!(order(&h), "id ASC");
+    h.keys("u");
+    assert_eq!(order(&h), "id ASC, name ASC");
+    assert!(runs(&mut h).is_empty(), "nothing runs before Enter");
+    h.key(KeyCode::Enter);
+    let sent = runs(&mut h);
+    assert_eq!(sent, vec![vec![format!(r#"{ALL} WHERE (name = 'n1') ORDER BY "id" ASC, "name" ASC"#)]]);
+    assert!(!open(&h), "closed once sent");
+    // `x` and `J` on a column not in the order do nothing; `Esc` drops the draft.
+    let mut h = users_where("name = 'n1'");
+    h.keys(" roxJK");
+    assert_eq!(order(&h), "");
+    h.key(KeyCode::Esc);
+    assert!(!open(&h));
+    assert!(runs(&mut h).is_empty());
+}
+
+/// `ORDER BY` of the bar opens the same popup under it; its last line is the clause sent, the
+/// key the app adds to make the order total dimmed; `A` turns it into the whole dialog on the
+/// key (another column: its sort line), the draft kept.
+#[test]
+fn the_order_popup_shows_the_clause_and_turns_into_advanced() {
+    let th = datarig_tui::theme::cur();
+    let mut h = users_keyed("name = 'n1'");
+    h.command("orderby name DESC");
+    runs(&mut h);
+    answer(&mut h);
+    h.app.focus = Focus::Results;
+    let seg = hit_rect(&mut h, BarHit::Order, 120, 34);
+    open_at(&mut h, BarHit::Order, 120, 34);
+    assert_eq!(popup(&h), Some(PopupKindId::Order));
+    let t = h.draw(120, 34);
+    let buf = t.backend().buffer();
+    assert_eq!(buf[(seg.x, seg.y + 1)].symbol(), "\u{256d}", "under `ORDER BY`, from its left edge");
+    let (x, y) = find(&mut h, 120, 34, r#"ORDER BY "name" DESC, "id" ASC"#).expect("the clause");
+    let t = h.draw(120, 34);
+    let buf = t.backend().buffer();
+    let tie = x + r#"ORDER BY "name" DESC, "#.len() as u16;
+    assert_eq!(buf[(tie, y)].fg, th.fg_dim, "the tie-breaker dimmed");
+    assert_ne!(buf[(x, y)].fg, th.fg_dim, "the keyword coloured");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains(" 1 \u{2193}") && screen.contains("name"), "{screen}");
+    // On the key: the whole dialog on it.
+    h.keys("A");
+    assert_eq!(popup(&h), None);
+    assert!(open(&h));
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("move in the order"), "the keys on the key: {screen}");
+    // Another column: its sort line; a change is kept.
+    let mut h = users_where("name = 'n1'");
+    h.keys(" roj");
+    h.keys("A");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("none / asc / desc"), "the keys on the sort line: {screen}");
+    let mut h = users_where("name = 'n1'");
+    h.keys(" ro ");
+    h.keys("A");
+    assert_eq!(h.app.filter_dialog_draft().map(|d| d.1).as_deref(), Some("id ASC"));
+    assert!(runs(&mut h).is_empty());
+}
+
+/// The columns popup: `Space` hides a column from the grid or shows it again, `a` shows them
+/// all; a hidden key column is said to be still read. Only the columns changed: `Enter` applies
+/// without a run.
+#[test]
+fn the_columns_popup_hides_restores_and_shows_all() {
+    let th = datarig_tui::theme::cur();
+    let mut h = users_keyed("name = 'n1'");
+    let seg = hit_rect(&mut h, BarHit::Cols, 120, 34);
+    open_at(&mut h, BarHit::Cols, 120, 34);
+    assert_eq!(popup(&h), Some(PopupKindId::Columns));
+    let top = row_text(h.draw(120, 34).backend().buffer(), seg.y + 1);
+    assert!(top.contains("\u{256d}\u{2500} columns 2/2 "), "under the count: {top}");
+    let screen = h.screen(120, 34);
+    assert!(
+        screen.contains(" columns 2/2 ") && screen.contains("Space hide/show") && screen.contains("a all"),
+        "{screen}"
+    );
+    // `id`, the key: hidden, crossed out, said still read.
+    h.keys(" ");
+    let screen = h.screen(120, 34);
+    assert!(
+        screen.contains(" columns 1/2 ") && screen.contains("hidden from the grid, still read (row key)"),
+        "{screen}"
+    );
+    assert!(screen.contains("\u{25cb}") && screen.contains("\u{25c9}"), "{screen}");
+    let (x, y) = find(&mut h, 120, 34, "\u{25cb}").expect("the hidden mark");
+    let buf = h.draw(120, 34).backend().buffer().clone();
+    let name = (x..x + 12).find(|&c| buf[(c, y)].symbol() == "i").expect("its name");
+    assert!(buf[(name, y)].modifier.contains(Modifier::CROSSED_OUT), "crossed out");
+    assert_eq!(buf[(name, y)].fg, th.fg_muted);
+    // `name` too, then `a` shows both again.
+    h.keys("j ");
+    assert!(h.screen(120, 34).contains(" columns 0/2 "));
+    h.keys("a");
+    assert!(h.screen(120, 34).contains(" columns 2/2 "));
+    // `name` hidden and applied: no run, the grid without it.
+    h.keys(" ");
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty(), "the columns alone: no run");
+    assert!(!open(&h));
+    assert!(bar_text(&mut h).contains("1/2 cols"), "{}", bar_text(&mut h));
+    // Opened again: `a` and `Enter` show it.
+    h.keys(" rc");
+    assert!(h.screen(120, 34).contains(" columns 1/2 "));
+    h.keys("a");
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty());
+    assert!(bar_text(&mut h).contains("2 cols"), "{}", bar_text(&mut h));
+    // A click on a column shows or hides it; `A` turns the popup into the whole dialog on the
+    // column list.
+    let mut h = users_where("name = 'n1'");
+    open_at(&mut h, BarHit::Cols, 120, 34);
+    let (x, y) = find(&mut h, 120, 34, "name  text").expect("listed");
+    click_at(&mut h, x, y);
+    assert!(h.screen(120, 34).contains(" columns 1/2 "));
+    h.keys("A");
+    assert_eq!(popup(&h), None);
+    assert!(h.screen(120, 34).contains("Columns 2 \u{b7} 1 hidden"), "{}", h.screen(120, 34));
+}
+
+/// The bar's row (the query bar).
+fn bar_text(h: &mut Harness) -> String {
+    let t = h.draw(120, 34);
+    row_text(t.backend().buffer(), h.app.layout.results.y + 1)
+}
+
+/// Answer the active tab's run with a full first page of `shop.users` and more past it,
+/// nothing held on the server.
+fn page_more(h: &mut Harness) {
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Released { id });
+    let columns = Some(vec![meta("id", "int8", true, false), meta("name", "text", false, false)]);
+    let rows = (0..h.app.page_size).map(|i| vec![Some(i.to_string()), Some(format!("n{}", i % 5))]).collect();
+    h.tab_db(index, DbEvent::Page { id, columns, rows, more: true, elapsed: Duration::from_millis(2) });
+}
+
+/// `shop.users` with a full first page and more past it (`filter`: filtered, answered the
+/// same), the grid focused, nothing sent since.
+fn users_paged(filter: Option<&str>) -> Harness {
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    page_more(&mut h);
+    h.key(KeyCode::Tab);
+    h.app.detail.visible = false;
+    if let Some(f) = filter {
+        h.command(&format!("where {f}"));
+        page_more(&mut h);
+    }
+    h.app.focus = Focus::Results;
+    h.sent();
+    h
+}
+
+/// The counts and estimates sent since the last look, and whether a count of values was.
+fn counts(h: &mut Harness) -> (Vec<String>, Vec<String>, bool) {
+    let sent = h.sent();
+    let counts =
+        sent.iter().filter_map(|c| if let DbCommand::Count { sql, .. } = c { Some(sql.clone()) } else { None });
+    let estimates =
+        sent.iter().filter_map(|c| if let DbCommand::Estimate { sql, .. } = c { Some(sql.clone()) } else { None });
+    let grouped = sent.iter().any(|c| matches!(c, DbCommand::GroupCount { .. }));
+    (counts.collect(), estimates.collect(), grouped)
+}
+
+/// The rows popup says the page shown of the rows shown, the paging's state in full and the
+/// last count; its items do what the bar's arrows and `#` do (the exact count with its time
+/// limit, never a count of values) and it stays open, showing what changed.
+#[test]
+fn the_rows_popup_pages_and_counts_as_the_bar_does() {
+    let mut h = users_paged(None);
+    let seg = hit_rect(&mut h, BarHit::Rows, 120, 34);
+    open_at(&mut h, BarHit::Rows, 120, 34);
+    assert_eq!(popup(&h), Some(PopupKindId::Rows));
+    let buf = h.draw(120, 34).backend().buffer().clone();
+    let top = row_text(&buf, seg.y + 1);
+    assert!(top.contains(" rows 1\u{2013}500 \u{b7} page 1 of ? "), "{top}");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("count: not known, 500 read"), "{screen}");
+    assert!(screen.contains("nothing is held open on the server"), "the paging state in full: {screen}");
+    assert!(screen.contains("Estimate (planner)  only with a filter"), "{screen}");
+    assert!(screen.contains("Enter run") && screen.contains("Esc close"), "{screen}");
+    // The exact count: the bar's `#`, its statement capped and timed as `#` sends it.
+    h.keys("jj");
+    h.key(KeyCode::Enter);
+    let (sent, estimates, grouped) = counts(&mut h);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(sent[0].contains("count(*)") && sent[0].contains(ALL), "{sent:?}");
+    assert!(estimates.is_empty() && !grouped);
+    assert_eq!(popup(&h), Some(PopupKindId::Rows), "it stays open");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("counting\u{2026}") && screen.contains("a query runs in the tab"), "{screen}");
+    // Counted (more than the rows read, apart from their pages): said, the pages known.
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Counted { id, result: Ok(1234), snapshot: false });
+    let screen = h.screen(120, 34);
+    assert!(
+        screen.contains("count: 1,234, exact, counted apart from the") && screen.contains("pages read"),
+        "{screen}"
+    );
+    assert!(screen.contains(" rows 1\u{2013}500 \u{b7} page 1 of 3 "), "{screen}");
+    // The next page: the bar's arrow, which runs the statement again past the rows read.
+    h.keys("kk");
+    h.key(KeyCode::Enter);
+    let sent = h.sent();
+    assert!(sent.iter().any(|c| matches!(c, DbCommand::Resume { .. })), "{sent:?}");
+    assert_eq!(popup(&h), Some(PopupKindId::Rows));
+    // The previous page on the first: said, nothing sent. A click on an item does it.
+    let (x, y) = find(&mut h, 120, 34, "previous page").expect("listed");
+    h.advance(Duration::from_millis(500));
+    click_at(&mut h, x, y);
+    assert!(h.sent().is_empty());
+}
+
+/// The rows popup's two count items: dimmed with why where `#` would refuse them now (every
+/// row read, a run on its way, no filter for the planner), the estimate sent on filtered rows,
+/// its answer said as the planner's and, with a cap, within it.
+#[test]
+fn the_rows_popup_count_items_say_why_they_are_dimmed() {
+    let th = datarig_tui::theme::cur();
+    // Every row read: both dimmed, said; `Enter` says so too, nothing sent.
+    let mut h = users_where("name = 'n1'");
+    h.keys(" rr");
+    let screen = h.screen(120, 34);
+    assert_eq!(screen.matches("every row is read").count(), 2, "{screen}");
+    assert!(screen.contains(" rows 1\u{2013}3 \u{b7} page 1 of 1 ") && screen.contains("count: 3, exact"), "{screen}");
+    let (x, y) = find(&mut h, 120, 34, "Exact count").expect("listed");
+    assert_eq!(h.draw(120, 34).backend().buffer()[(x, y)].fg, th.fg_dim);
+    h.keys("jj");
+    h.key(KeyCode::Enter);
+    assert!(h.status(120, 34).contains("Every row is fetched already"), "{}", h.status(120, 34));
+    assert_eq!(counts(&mut h), (Vec::new(), Vec::new(), false));
+    // Filtered, a page and more: the planner's estimate, then its answer within the cap.
+    let mut h = users_paged(Some("id > 1"));
+    h.keys(" rl");
+    h.type_text("1000");
+    h.key(KeyCode::Enter);
+    runs(&mut h);
+    page_more(&mut h);
+    h.app.focus = Focus::Results;
+    h.sent();
+    h.keys(" rr");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("nothing is read") && screen.contains("stops after 30s"), "{screen}");
+    h.keys("j");
+    h.key(KeyCode::Enter);
+    let (sent, estimates, grouped) = counts(&mut h);
+    assert!(sent.is_empty() && !grouped);
+    assert_eq!(estimates.len(), 1, "{estimates:?}");
+    assert!(estimates[0].contains("id > 1") && estimates[0].contains("LIMIT 1000"), "{estimates:?}");
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Estimated { id, result: Ok(50_000) });
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("count: ~1,000, the planner's estimate"), "capped: {screen}");
+    assert!(screen.contains(" rows 1\u{2013}500 \u{b7} page 1 of ~2 "), "{screen}");
+}
+
+/// The rows popup describes the rows shown within the cap: a cap below the page, equal to it,
+/// above it.
+#[test]
+fn the_rows_popup_follows_the_cap() {
+    // Below: two rows, the cap reached.
+    let mut h = users_where("name = 'n1'");
+    h.keys(" rl");
+    h.type_text("2");
+    h.key(KeyCode::Enter);
+    runs(&mut h);
+    answer_n(&mut h, 2);
+    h.app.focus = Focus::Results;
+    h.keys(" rr");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains(" rows 1\u{2013}2 \u{b7} page 1 of 1 ") && screen.contains("limit 2"), "{screen}");
+    // Equal: a page of the cap's rows, none past it.
+    let mut h = users_where("name = 'n1'");
+    let size = h.app.page_size;
+    h.keys(" rl");
+    h.type_text(&size.to_string());
+    h.key(KeyCode::Enter);
+    runs(&mut h);
+    answer_n(&mut h, size);
+    h.app.focus = Focus::Results;
+    h.keys(" rr");
+    let screen = h.screen(120, 34);
+    assert!(screen.contains(&format!(" rows 1\u{2013}{size} \u{b7} page 1 of 1 ")), "{screen}");
+    assert!(screen.contains(&format!("limit {size}")) && screen.contains("next page"), "{screen}");
+    // Above: a page and more, the pages counted within the cap.
+    let mut h = users_paged(None);
+    h.keys(" rl");
+    h.type_text("1200");
+    h.key(KeyCode::Enter);
+    runs(&mut h);
+    page_more(&mut h);
+    h.app.focus = Focus::Results;
+    h.sent();
+    h.keys(" rrjj");
+    h.key(KeyCode::Enter);
+    let (sent, _, _) = counts(&mut h);
+    assert!(sent.len() == 1 && sent[0].contains("LIMIT 1200"), "{sent:?}");
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Counted { id, result: Ok(1200), snapshot: false });
+    let screen = h.screen(120, 34);
+    assert!(screen.contains(" rows 1\u{2013}500 \u{b7} page 1 of 3 ") && screen.contains("count: 1,200"), "{screen}");
+}
+
+/// The order, columns and rows popups' screens: on the grid with the explorer open at 80x24,
+/// and at 120x34; the order and columns popups in the terminal theme.
+#[test]
+fn the_order_columns_and_rows_screens() {
+    for (w, hh) in [(80u16, 24u16), (120, 34)] {
+        let mut h = users_keyed("name = 'n1'");
+        h.command("orderby name DESC");
+        runs(&mut h);
+        answer(&mut h);
+        h.app.focus = Focus::Results;
+        assert!(h.app.explorer_shown());
+        open_at(&mut h, BarHit::Order, w, hh);
+        assert_eq!(popup(&h), Some(PopupKindId::Order));
+        assert_screen!(format!("query_popup_order_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
+        let theme = h.app.theme.clone();
+        h.app.theme = std::sync::Arc::new(datarig_tui::theme::TERMINAL.clone());
+        assert_screen!(format!("query_popup_order_terminal_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
+        h.app.theme = theme.clone();
+        h.key(KeyCode::Esc);
+        h.keys(" rc");
+        assert_eq!(popup(&h), Some(PopupKindId::Columns));
+        h.keys(" ");
+        assert_screen!(format!("query_popup_columns_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
+        h.app.theme = std::sync::Arc::new(datarig_tui::theme::TERMINAL.clone());
+        assert_screen!(format!("query_popup_columns_terminal_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
+        h.app.theme = theme;
+        let mut h = users_paged(None);
+        assert!(h.app.explorer_shown());
+        h.keys(" rr");
+        assert_eq!(popup(&h), Some(PopupKindId::Rows));
+        assert_screen!(format!("query_popup_rows_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
     }
 }

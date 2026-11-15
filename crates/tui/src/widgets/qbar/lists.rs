@@ -1,9 +1,10 @@
-//! The query bar's two list popups, in the frame of its popups ([`frame`]): the add popup
+//! The query bar's list popups, in the frame of its popups ([`frame`]): the add popup
 //! ([`draw_add_pick`]: the column of a new condition, one a line with its filter mark, its key
-//! icon in the key's colour and its short type, the search on top while it is open) and the
+//! icon in the key's colour and its short type, the search on top while it is open), the
 //! WHERE list ([`draw_where_list`]: the conditions one a line with their `×`, then `+ add
-//! condition`). Their borders hold the title, where the list is when it scrolls, the hint line
-//! and `⋯ Advanced`.
+//! condition`) and the columns popup ([`draw_columns`]: each column shown or hidden). Their
+//! borders hold the title, where the list is when it scrolls, the hint line and `⋯ Advanced`;
+//! the order and rows popups share the frame.
 
 use super::frame::{anchored, frame};
 use crate::app::App;
@@ -26,11 +27,11 @@ const MIN_W: u16 = 40;
 const MAX_W: u16 = 64;
 
 /// The most lines a list popup shows before it scrolls.
-const LINES_MAX: usize = 12;
+pub(super) const LINES_MAX: usize = 12;
 
-/// The most columns a column's name and its type take in the add popup.
-const NAME_MAX: usize = 28;
-const TYPE_MAX: usize = 20;
+/// The most columns a column's name and its type take in a list of columns.
+pub(super) const NAME_MAX: usize = 28;
+pub(super) const TYPE_MAX: usize = 20;
 
 /// Where the popup is placed by: the part of the bar it opened on where it is drawn now, else
 /// where it was.
@@ -38,16 +39,20 @@ fn anchor_at(app: &App, anchor: &Anchor) -> Rect {
     anchor.seg.and_then(|s| app.layout.qbar.iter().find(|(_, h)| *h == s)).map_or(anchor.at, |(r, _)| *r)
 }
 
-/// The popup's frame at `w` (wider when its hint line wants it) by `lines` inside `bounds`,
-/// its title `title` and its hint line (what the dialog says, else the keys) with `⋯ Advanced`
-/// on its right. Returns what is drawn for the pointer (the box and `⋯ Advanced`) and the
-/// cells inside the border; `None` when it does not fit.
-fn list_frame(
+/// The popup's frame at `w` (wider when its hint line wants it) by `lines` (at most
+/// [`LINES_MAX`] of them, then the rows `fixed` says it takes below them at the width of text
+/// inside the frame, a blank kept on both sides) inside `bounds`, its title `title` and its hint
+/// line (what the dialog says, else the keys) with `⋯ Advanced` on its right. Returns what is
+/// drawn for the pointer (the box and `⋯ Advanced`) and the cells inside the border; `None`
+/// when it does not fit.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn list_frame(
     app: &App,
     anchor: &Anchor,
     title: &[(String, Style)],
     w: usize,
     lines: usize,
+    fixed: &dyn Fn(usize) -> usize,
     bounds: Rect,
     buf: &mut Buffer,
 ) -> Option<(DialogHits, Rect)> {
@@ -56,10 +61,13 @@ fn list_frame(
     let i18n = &app.i18n;
     let advanced = format!(" \u{22ef} {} ", i18n.label(Label::TableBarAdvanced));
     let adv_w = width(&advanced) as u16;
-    let keys_w: usize = hint_parts(app, d, None, usize::MAX).iter().map(|(t, _)| width(t)).sum();
+    // As wide as the hint line the widest popup would keep (a long one keeps fewer keys).
+    let most = usize::from(MAX_W.saturating_sub(adv_w + 7));
+    let keys_w: usize = hint_parts(app, d, None, most).iter().map(|(t, _)| width(t)).sum();
     let title_w: usize = title.iter().map(|(t, _)| width(t)).sum();
     let w = (w as u16).max(keys_w as u16 + adv_w + 7).max(title_w as u16 + 4).clamp(MIN_W, MAX_W);
-    let rect = anchored(anchor_at(app, anchor), w, lines.min(LINES_MAX) as u16 + 2, bounds);
+    let below = fixed(usize::from(w.min(bounds.width).saturating_sub(4)));
+    let rect = anchored(anchor_at(app, anchor), w, (lines.min(LINES_MAX) + below) as u16 + 2, bounds);
     let adv_x = rect.right().saturating_sub(2 + adv_w);
     // A dash of the border kept between the hint line and `⋯ Advanced`.
     let hint_w = usize::from(adv_x.saturating_sub(rect.x + 5));
@@ -80,7 +88,7 @@ fn list_frame(
 }
 
 /// The first of `n` lines shown in `rows` with line `at` in view, from `scroll`.
-fn window(scroll: usize, at: usize, n: usize, rows: usize) -> usize {
+pub(super) fn window(scroll: usize, at: usize, n: usize, rows: usize) -> usize {
     let scroll = scroll.min(n.saturating_sub(rows));
     if at < scroll {
         at
@@ -92,7 +100,7 @@ fn window(scroll: usize, at: usize, n: usize, rows: usize) -> usize {
 }
 
 /// `i/n` on the top border's right, where the list is when it scrolls.
-fn scroll_cue(buf: &mut Buffer, rect: Rect, at: usize, n: usize) {
+pub(super) fn scroll_cue(buf: &mut Buffer, rect: Rect, at: usize, n: usize) {
     let cue = format!(" {}/{n} ", at + 1);
     let cw = width(&cue) as u16;
     put(
@@ -107,7 +115,7 @@ fn scroll_cue(buf: &mut Buffer, rect: Rect, at: usize, n: usize) {
 
 /// What was drawn kept for the pointer and the keys, what the pointer is over lit, and the
 /// hardware cursor (`cursor`) while the dialog is on top.
-fn finish(
+pub(super) fn finish(
     app: &mut App,
     hits: DialogHits,
     scroll: usize,
@@ -165,7 +173,7 @@ pub(crate) fn draw_add_pick(app: &mut App, bounds: Rect, buf: &mut Buffer) -> Op
     ];
     let search = d.search.is_some();
     let lines = shown.len().clamp(1, LINES_MAX) + usize::from(search);
-    let (mut hits, inner) = list_frame(app, anchor, &title, want, lines, bounds, buf)?;
+    let (mut hits, inner) = list_frame(app, anchor, &title, want, lines, &|_| 0, bounds, buf)?;
     let rect = hits.frame;
     let d = app.filter_dialog()?;
     let x0 = inner.x + 1;
@@ -256,7 +264,7 @@ pub(crate) fn draw_where_list(app: &mut App, bounds: Rect, buf: &mut Buffer) -> 
     let count = i18n.msg(&Msg::TableBarConditions { count: chips.len() as u64 }).to_string();
     let title = [(" ".to_string(), Style::new()), ("WHERE".to_string(), bold), (format!("  {count} "), muted)];
     let n = chips.len();
-    let (mut hits, inner) = list_frame(app, anchor, &title, want, n + 1, bounds, buf)?;
+    let (mut hits, inner) = list_frame(app, anchor, &title, want, n + 1, &|_| 0, bounds, buf)?;
     let rect = hits.frame;
     let d = app.filter_dialog()?;
     let chips = d.draft.where_.chips();
@@ -308,6 +316,96 @@ pub(crate) fn draw_where_list(app: &mut App, bounds: Rect, buf: &mut Buffer) -> 
     }
     let scroll_kept = d.scroll;
     finish(app, hits, scroll_kept, None, buf)
+}
+
+/// Draw the open filter dialog's columns popup inside `bounds`, under the part of the bar it
+/// opened on: the table's columns one a line (the selected one lit), `◉` shown or `○` hidden
+/// (its name crossed out), with its key icon and short type; under them, while a column of the
+/// primary key is hidden, that it is still read.
+pub(crate) fn draw_columns(app: &mut App, bounds: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    let d = app.filter_dialog()?;
+    let View::Popup { kind: PopupKind::Columns, anchor } = d.view() else { return None };
+    if bounds.width < 30 || bounds.height < 5 {
+        return None;
+    }
+    let th = theme::cur();
+    let i18n = &app.i18n;
+    let on = app.icons_on();
+    let muted = Style::new().fg(th.fg_muted);
+    let bold = Style::new().fg(th.fg).add_modifier(Modifier::BOLD);
+    let shown = d.shown_columns();
+    let hidden = |name: &str| d.draft.hidden.iter().any(|h| h == name);
+    let names: Vec<String> = shown.iter().map(|&i| escape_controls(&d.columns[i].name)).collect();
+    let types: Vec<String> = shown.iter().map(|&i| short_type(d.dialect, &d.columns[i].type_name)).collect();
+    let name_w = names.iter().map(|n| width(n)).max().unwrap_or(0).min(NAME_MAX);
+    let type_w = types.iter().map(|t| width(t)).max().unwrap_or(0).min(TYPE_MAX);
+    let off = d.columns.iter().filter(|c| hidden(&c.name)).count();
+    let total = d.columns.len();
+    // The primary key's columns, as the catalogue or the table's keys read say them.
+    let pk = app.table_target(d.tab).map(|t| t.primary_key).unwrap_or_default();
+    let in_pk = |c: &crate::app::filter_dialog::draft::ColumnInfo| c.primary_key || pk.contains(&c.name);
+    // A key column hidden is still read: the grid's edits find their rows by it.
+    let key_note = d.columns.iter().any(|c| in_pk(c) && hidden(&c.name));
+    let note = i18n.label(Label::TableDialogHiddenKey).to_string();
+    // The border, then a line: the marker, the mark, the key icon, the name, the type, a blank
+    // between each and on the right.
+    let want = 2 + (7 + name_w + 2 + type_w + 1).max(if key_note { width(&note) + 2 } else { 0 });
+    let count =
+        i18n.msg(&Msg::TableBarColumnsTitle { shown: (total - off).to_string(), total: total.to_string() }).to_string();
+    let title_style = if off > 0 { Style::new().fg(th.warning).add_modifier(Modifier::BOLD) } else { bold };
+    let title = [(" ".to_string(), Style::new()), (count, title_style), (" ".to_string(), Style::new())];
+    let (mut hits, inner) =
+        list_frame(app, anchor, &title, want, shown.len().max(1), &|_| usize::from(key_note), bounds, buf)?;
+    let rect = hits.frame;
+    let d = app.filter_dialog()?;
+    let hidden = |name: &str| d.draft.hidden.iter().any(|h| h == name);
+    let rows = usize::from(inner.height).saturating_sub(usize::from(key_note));
+    let scroll = window(d.scroll, d.cursor, shown.len(), rows);
+    let focus_style = Style::new().fg(th.fg).patch(th.selection);
+    let name_x = inner.x + 7;
+    let type_x = name_x + name_w as u16 + 2;
+    let end = inner.right().saturating_sub(1);
+    for (row, &ci) in shown.iter().enumerate().skip(scroll).take(rows) {
+        let c = &d.columns[ci];
+        let ly = inner.y + (row - scroll) as u16;
+        let line = Rect::new(inner.x, ly, inner.width, 1);
+        let selected = row == d.cursor;
+        if selected {
+            buf.set_style(line, focus_style);
+            put(buf, inner.x, ly, "\u{25b8}", 1, Style::new().fg(th.accent));
+        }
+        hits.columns.push((line, row));
+        let off = hidden(&c.name);
+        let (mark, mark_style) = match off {
+            true => ("\u{25cb}", muted),
+            false => ("\u{25c9}", Style::new().fg(th.accent)),
+        };
+        put(buf, inner.x + 2, ly, mark, 1, mark_style);
+        let key = if in_pk(c) {
+            Some((icons::KeyMark::Pk.text(on), th.key_pk))
+        } else if c.foreign_key {
+            Some((icons::KeyMark::Fk.text(on), th.key_fk))
+        } else {
+            None
+        };
+        if let Some((k, color)) = key {
+            put(buf, inner.x + 4, ly, k, 2, Style::new().fg(color));
+        }
+        let name_style = match (off, selected) {
+            (true, _) => muted.add_modifier(Modifier::CROSSED_OUT),
+            (false, true) => bold,
+            (false, false) => Style::new().fg(th.fg),
+        };
+        put(buf, name_x, ly, &names[row], name_w, name_style);
+        put(buf, type_x, ly, &types[row], usize::from(end.saturating_sub(type_x)), muted);
+    }
+    if key_note {
+        put(buf, inner.x + 1, inner.bottom() - 1, &note, usize::from(end.saturating_sub(inner.x + 1)), muted);
+    }
+    if shown.len() > rows {
+        scroll_cue(buf, rect, d.cursor, shown.len());
+    }
+    finish(app, hits, scroll, None, buf)
 }
 
 #[cfg(test)]

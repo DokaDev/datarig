@@ -375,7 +375,7 @@ fn bar_parts_on_another_view_show_the_rows() {
     h.app.tab_mut().exec.view = ResultView::Messages;
     click(&mut h, BarHit::Rows);
     assert_eq!(h.app.tab().exec.view, ResultView::Rows);
-    assert!(h.status(160, 34).contains("Every row is fetched already"), "{}", h.status(160, 34));
+    assert_eq!(h.app.filter_dialog_popup(), Some(PopupKindId::Rows));
 }
 
 /// Over pending edits a chip's `×` and a new `LIMIT` ask first; `Enter` keeps the edits and
@@ -579,8 +579,11 @@ fn the_page_arrows_page_and_say_when_they_do_nothing() {
     click(&mut h, BarHit::Prev);
     assert!(bar_line(&mut h).contains("501–1,000 of 1,200 rows"));
     assert!(runs(&mut h).is_empty(), "the pages were read");
-    // The rows: counted as `#` counts them (complete here: said so, nothing sent).
+    // The rows: their popup, whose exact count is `#`'s (complete here: said so, nothing sent).
     click(&mut h, BarHit::Rows);
+    assert_eq!(h.app.filter_dialog_popup(), Some(PopupKindId::Rows));
+    h.keys("jj");
+    h.key(KeyCode::Enter);
     assert!(runs(&mut h).is_empty());
     assert!(h.status(160, 34).contains("Every row is fetched already"), "{}", h.status(160, 34));
 }
@@ -605,15 +608,16 @@ fn the_next_arrow_follows_the_paging_state() {
 }
 
 /// The parts of the bar open the filter dialog: as the popup of a condition, the column list
-/// of a new one, or the whole dialog.
+/// of a new one, the order's, the columns', the rows', or the whole dialog.
 #[test]
 fn bar_parts_open_the_dialog() {
     let kinds = [
         (BarHit::Chip(0), Some(PopupKindId::Condition)),
         (BarHit::Where, Some(PopupKindId::AddPick)),
         (BarHit::Add, Some(PopupKindId::AddPick)),
-        (BarHit::Order, None),
-        (BarHit::Cols, None),
+        (BarHit::Order, Some(PopupKindId::Order)),
+        (BarHit::Cols, Some(PopupKindId::Columns)),
+        (BarHit::Rows, Some(PopupKindId::Rows)),
         (BarHit::Advanced, None),
     ];
     for (hit, kind) in kinds {
@@ -623,11 +627,17 @@ fn bar_parts_open_the_dialog() {
         assert!(h.app.overlays.is_open(OverlayKind::FilterDialog), "{hit:?}");
         assert_eq!(h.app.filter_dialog_popup(), kind, "{hit:?}");
     }
-    // The keys: columns, Advanced.
-    for keys in [" rc", " rA"] {
+    // The keys: the order, the columns, the rows (their popups), Advanced.
+    for (keys, kind) in [
+        (" ro", Some(PopupKindId::Order)),
+        (" rc", Some(PopupKindId::Columns)),
+        (" rr", Some(PopupKindId::Rows)),
+        (" rA", None),
+    ] {
         let mut h = users();
         h.keys(keys);
         assert!(h.app.overlays.is_open(OverlayKind::FilterDialog), "{keys}");
+        assert_eq!(h.app.filter_dialog_popup(), kind, "{keys}");
     }
 }
 

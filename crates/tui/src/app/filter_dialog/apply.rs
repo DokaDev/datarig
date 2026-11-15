@@ -80,14 +80,23 @@ impl App {
     }
 
     /// `A`, `⋯ Advanced`: the popup shown becomes the whole dialog, on what the popup was on (a
-    /// condition popup: its column, the keys where they were; the add popup: its column; the
-    /// WHERE list: the chip of its condition).
+    /// condition popup: its column, the keys where they were; the add popup and the columns
+    /// popup: its column; the WHERE list: the chip of its condition; the order popup: its key
+    /// in the footer's `Order` row, another column's sort line).
     fn filter_dialog_advanced(&mut self) {
         let Some(d) = self.filter_dialog_mut() else { return };
-        let Some(kind) = d.popup_kind() else { return };
+        let Some(kind) = d.popup_kind().map(view::PopupKind::id) else { return };
         let focus = match (kind, d.focus) {
-            (view::PopupKind::Condition { .. }, f) => f,
-            (view::PopupKind::WhereList, f @ DialogFocus::Chips(_)) => f,
+            (view::PopupKindId::Condition, f) => f,
+            (view::PopupKindId::WhereList, f @ DialogFocus::Chips(_)) => f,
+            (view::PopupKindId::Order, DialogFocus::Sorted(i)) if i < d.draft.order.len() => DialogFocus::Order(i),
+            (view::PopupKindId::Order, DialogFocus::Sorted(i)) => match d.sort_rows().get(i).cloned() {
+                Some(col) => {
+                    d.select_column(&col);
+                    DialogFocus::Sort
+                }
+                None => DialogFocus::Columns,
+            },
             _ => DialogFocus::Columns,
         };
         d.set_view(View::Full);
@@ -211,10 +220,12 @@ impl App {
         if d.picker.is_some() {
             return self.filter_dialog_pick();
         }
-        // The add popup and the WHERE list send nothing: they pick a column, open a condition.
+        // The add popup and the WHERE list send nothing: they pick a column, open a condition;
+        // the rows popup does its item.
         match d.popup_kind() {
             Some(view::PopupKind::AddPick) => return self.filter_add_pick(),
             Some(view::PopupKind::WhereList) => return self.filter_where_list_open(),
+            Some(view::PopupKind::Rows) => return self.filter_rows_run(),
             _ => {}
         }
         if d.search.is_some() && d.focus == DialogFocus::Columns {
@@ -285,7 +296,7 @@ impl App {
     /// What table tab `tab` said to the draft it was given (a refusal, else a notice; nothing
     /// while a question is open above the dialog), in the dialog's hint line, the part refused
     /// underlined.
-    fn filter_dialog_told(&mut self, tab: TabId) {
+    pub(super) fn filter_dialog_told(&mut self, tab: TabId) {
         let refusal = self.table_query(tab).and_then(|tq| tq.refusal.clone());
         let said = refusal
             .as_ref()
@@ -467,7 +478,7 @@ impl App {
             if let Ok(keys) = &keys {
                 q.order = keys.clone();
             }
-            self.open_filter_dialog_with(tab, &q, None, false, super::View::Full);
+            self.open_filter_dialog_with(tab, &q, None, super::View::Full);
             if let Some(d) = self.filter_dialog_mut() {
                 // Picked, not applied: the title says so.
                 d.message = keys.err();

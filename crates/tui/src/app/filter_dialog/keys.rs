@@ -16,12 +16,12 @@ const AREAS: usize = 9;
 /// The part of the dialog focus `f` is in ([`AREAS`]).
 fn area(f: DialogFocus) -> usize {
     match f {
-        DialogFocus::Columns => 0,
+        DialogFocus::Columns | DialogFocus::RowsItem(_) => 0,
         DialogFocus::Op(_) | DialogFocus::Value(..) | DialogFocus::Add | DialogFocus::Values(_) | DialogFocus::Sort => {
             1
         }
         DialogFocus::Chips(_) => 2,
-        DialogFocus::Order(_) => 3,
+        DialogFocus::Order(_) | DialogFocus::Sorted(_) => 3,
         DialogFocus::Limit => 4,
         DialogFocus::Sql => 5,
         DialogFocus::SqlWhere => 6,
@@ -97,8 +97,8 @@ impl App {
             KeyCode::BackTab => return self.filter_dialog_area(false),
             _ => {}
         }
-        // The add popup and the WHERE list have keys of their own.
-        if matches!(d.popup_kind(), Some(view::PopupKind::AddPick | view::PopupKind::WhereList)) {
+        // The popups that are lists have keys of their own.
+        if d.popup_kind().is_some_and(|k| !matches!(k, view::PopupKind::Condition { .. })) {
             return self.filter_list_key(key);
         }
         if d.typing() {
@@ -125,7 +125,12 @@ impl App {
                 KeyCode::Up | KeyCode::Char('k') => self.filter_dialog_sql_move(DialogFocus::SqlOrder),
                 _ => {}
             },
-            DialogFocus::Value(..) | DialogFocus::Limit | DialogFocus::SqlWhere | DialogFocus::SqlOrder => {}
+            DialogFocus::Value(..)
+            | DialogFocus::Limit
+            | DialogFocus::SqlWhere
+            | DialogFocus::SqlOrder
+            | DialogFocus::Sorted(_)
+            | DialogFocus::RowsItem(_) => {}
         }
     }
 

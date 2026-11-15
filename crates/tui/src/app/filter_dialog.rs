@@ -1,6 +1,7 @@
-//! The filter and sort dialog of a table tab (`f`, `Space r f`; `Space r o` on the order): the
-//! conditions, order and cap of the table's rows, built as chips and keys and applied as one
-//! query through the tab's run ([`App::table_run`]), every check and question included.
+//! The filter and sort dialog of a table tab (`f`, `Space r f`; small popups of it by the query
+//! bar, `Space r o` the order's): the conditions, order and cap of the table's rows, built as
+//! chips and keys and applied as one query through the tab's run ([`App::table_run`]), every
+//! check and question included.
 //!
 //! [`draft`] holds what the dialog edits, as data: no drawing, no keys, no app state. This
 //! module holds the dialog's state ([`FilterDialog`]): the table's columns, the draft and what
@@ -77,6 +78,27 @@ pub(crate) enum DialogFocus {
     SqlOpen,
     /// The value at this place of the selected column's value list ([`list::ValuesView`]).
     Values(usize),
+    /// The line at this place of the order popup ([`FilterDialog::sort_rows`]).
+    Sorted(usize),
+    /// An item of the rows popup.
+    RowsItem(RowsItem),
+}
+
+/// What an item of the rows popup does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RowsItem {
+    /// The previous and the next page.
+    Prev,
+    Next,
+    /// The planner's estimate of the rows.
+    Estimate,
+    /// The rows counted exactly.
+    Exact,
+}
+
+impl RowsItem {
+    /// The items, in their order in the popup.
+    pub(crate) const ALL: [RowsItem; 4] = [RowsItem::Prev, RowsItem::Next, RowsItem::Estimate, RowsItem::Exact];
 }
 
 /// Where the dialog's columns come from.
@@ -189,6 +211,10 @@ pub(crate) struct DialogHits {
     pub(crate) frame: Rect,
     /// A popup's `⋯ Advanced`.
     pub(crate) advanced: Rect,
+    /// The order popup's lines, by their place ([`FilterDialog::sort_rows`]).
+    pub(crate) sorted: Vec<(Rect, usize)>,
+    /// The rows popup's items.
+    pub(crate) rows_items: Vec<(Rect, RowsItem)>,
 }
 
 /// A part of the dialog the pointer can be over, as [`DialogHits`] keeps where it was drawn.
@@ -230,6 +256,10 @@ pub(crate) enum DialogHit {
     Cancel,
     /// A popup's `⋯ Advanced`.
     Advanced,
+    /// The line at this place of the order popup.
+    Sorted(usize),
+    /// An item of the rows popup.
+    RowsItem(RowsItem),
 }
 
 impl DialogHit {
@@ -242,7 +272,14 @@ impl DialogHit {
     /// A row of a list: lit as a list's row under the pointer (the other parts as small
     /// targets).
     pub(crate) fn row(self) -> bool {
-        matches!(self, DialogHit::Column(_) | DialogHit::Item(_) | DialogHit::Pick(_))
+        matches!(
+            self,
+            DialogHit::Column(_)
+                | DialogHit::Item(_)
+                | DialogHit::Pick(_)
+                | DialogHit::Sorted(_)
+                | DialogHit::RowsItem(_)
+        )
     }
 }
 
@@ -279,6 +316,8 @@ impl DialogHits {
             .or_else(|| self.sort.iter().find(|s| s.0.contains(p)).map(|s| DialogHit::Sort(s.1)))
             .or_else(|| find(&self.columns).map(DialogHit::Column))
             .or_else(|| find(&self.keys).map(DialogHit::Key))
+            .or_else(|| find(&self.sorted).map(DialogHit::Sorted))
+            .or_else(|| self.rows_items.iter().find(|r| r.0.contains(p)).map(|r| DialogHit::RowsItem(r.1)))
             .or_else(|| single.iter().find(|(r, _)| r.contains(p)).map(|s| s.1))
     }
 
@@ -309,6 +348,8 @@ impl DialogHits {
             DialogHit::Apply => drawn(self.apply),
             DialogHit::Cancel => drawn(self.cancel),
             DialogHit::Advanced => drawn(self.advanced),
+            DialogHit::Sorted(i) => find(&self.sorted, i),
+            DialogHit::RowsItem(item) => self.rows_items.iter().find(|r| r.1 == item).map(|r| r.0),
         }
     }
 
@@ -398,6 +439,14 @@ impl FilterDialog {
     /// The selected column, when there is one.
     pub(crate) fn column(&self) -> Option<&ColumnInfo> {
         self.shown_columns().get(self.cursor).map(|&i| &self.columns[i])
+    }
+
+    /// The lines of the order popup, by column: the order's keys in their order, then the
+    /// other columns in the table's order.
+    pub(crate) fn sort_rows(&self) -> Vec<String> {
+        let keys = self.draft.order.iter().map(|k| k.col.clone());
+        let others = self.columns.iter().map(|c| &c.name).filter(|n| self.draft.sort_of(n).is_none()).cloned();
+        keys.chain(others).collect()
     }
 
     /// The terms of the selected column's conditions.
@@ -613,6 +662,7 @@ impl FilterDialog {
             DialogFocus::Order(i) => DialogFocus::Order(i.min(keys - 1)),
             DialogFocus::Values(_) if self.listed == 0 => DialogFocus::Add,
             DialogFocus::Values(i) => DialogFocus::Values(i.min(self.listed - 1)),
+            DialogFocus::Sorted(i) => DialogFocus::Sorted(i.min(self.sort_rows().len().saturating_sub(1))),
             f => f,
         };
         if let DialogFocus::Op(t) = self.focus {
@@ -680,31 +730,22 @@ impl App {
         self.overlays.filter_dialog_mut()
     }
 
-    /// `f`, `Space r f` (`order`: `Space r o`): the filter dialog of the active table tab, on
-    /// the grid's column, with the query its next run sends as its draft (what is applied, or
-    /// what was asked for last and refused, declined or failed; a run the server refused: what
-    /// the server said); `order`: the keys on the footer's
-    /// `Order` row (the column's sort line while there is none).
-    pub(super) fn open_filter_dialog(&mut self, order: bool) {
+    /// `f`, `Space r f`: the filter dialog of the active table tab, on the grid's column, with
+    /// the query its next run sends as its draft (what is applied, or what was asked for last
+    /// and refused, declined or failed; a run the server refused: what the server said).
+    pub(super) fn open_filter_dialog(&mut self) {
         let id = self.tab().id;
         let Some(q) = self.table_query_mut(id).map(|tq| tq.draft.clone()) else { return };
         let column = match &self.tab().results {
             Results::Rows(rs) => rs.columns.get(self.tab().grid.col).map(|c| c.meta.name.clone()),
             _ => None,
         };
-        self.open_filter_dialog_with(id, &q, column.as_deref(), order, View::Full);
+        self.open_filter_dialog_with(id, &q, column.as_deref(), View::Full);
     }
 
     /// The filter dialog of table tab `id` with `q` as its draft, on column `column`, shown
     /// as `view`.
-    pub(super) fn open_filter_dialog_with(
-        &mut self,
-        id: TabId,
-        q: &Query,
-        column: Option<&str>,
-        order: bool,
-        view: View,
-    ) {
+    pub(super) fn open_filter_dialog_with(&mut self, id: TabId, q: &Query, column: Option<&str>, view: View) {
         self.close_search_prompt();
         let (Some(target), Some(name)) = (self.table_target(id), self.table_name(id)) else { return };
         let Some(tq) = self.table_query(id) else { return };
@@ -767,17 +808,15 @@ impl App {
         if let Some(c) = column {
             d.select_column(c);
         }
-        if order {
-            d.focus = if d.draft.order.is_empty() { DialogFocus::Sort } else { DialogFocus::Order(0) };
-        }
         self.overlays.push(Overlay::FilterDialog(Box::new(d)));
     }
 
     /// The filter dialog of the active table tab, with the query its next run sends as its
     /// draft, shown as popup `kind` by `anchor`. A condition popup is on its column, its keys
     /// on the condition whose text is `term` (the first of the column's when none is), else on
-    /// `+ add condition`; the add popup on the first column; the WHERE list on its first
-    /// condition, else on its `+ add condition`.
+    /// `+ add condition`; the add popup and the columns popup on the first column; the WHERE
+    /// list on its first condition, else on its `+ add condition`; the order popup on its first
+    /// line; the rows popup on its next page.
     pub(super) fn open_filter_popup(&mut self, kind: view::PopupKind, anchor: view::Anchor, term: Option<&str>) {
         let id = self.tab().id;
         let Some(q) = self.table_query(id).map(|tq| tq.draft.clone()) else { return };
@@ -785,15 +824,18 @@ impl App {
             view::PopupKind::Condition { col } => Some(col.clone()),
             _ => None,
         };
-        let list = kind == view::PopupKind::WhereList;
-        self.open_filter_dialog_with(id, &q, column.as_deref(), false, View::Popup { kind, anchor });
+        let id_of = kind.id();
+        self.open_filter_dialog_with(id, &q, column.as_deref(), View::Popup { kind, anchor });
         let Some(d) = self.filter_dialog_mut() else { return };
-        if list {
-            let f = if d.draft.where_.chips().is_empty() { DialogFocus::Add } else { DialogFocus::Chips(0) };
-            return d.focus_on(f);
-        }
-        if column.is_none() {
-            return;
+        match id_of {
+            view::PopupKindId::WhereList => {
+                let f = if d.draft.where_.chips().is_empty() { DialogFocus::Add } else { DialogFocus::Chips(0) };
+                return d.focus_on(f);
+            }
+            view::PopupKindId::Order => return d.focus_on(DialogFocus::Sorted(0)),
+            view::PopupKindId::Rows => return d.focus_on(DialogFocus::RowsItem(RowsItem::Next)),
+            view::PopupKindId::Condition => {}
+            view::PopupKindId::AddPick | view::PopupKindId::Columns => return,
         }
         let rows = d.rows();
         let same = rows.iter().copied().find(|&t| term.is_some() && d.draft.where_.terms()[t].text.as_deref() == term);

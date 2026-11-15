@@ -1,7 +1,8 @@
 //! The mouse on the filter dialog: a click does what the key for the part clicked does there.
 //! A column, a value, an operator and the picker's entries, a sort choice, a chip, a key of
-//! the order, the `×` marks and the buttons (`undo`, `clear all`, `SQL`, `Open in editor`,
-//! `# count exactly`, `Enter apply`, `Esc cancel`) act as a dialog's buttons do: a press arms
+//! the order, a line of the order popup, an item of the rows popup (it runs), the `×` marks
+//! and the buttons (`undo`, `clear all`, `SQL`, `Open in editor`, `# count exactly`, `Enter
+//! apply`, `Esc cancel`) act as a dialog's buttons do: a press arms
 //! the part and the release over it acts, presses right after the dialog came on top are
 //! ignored ([`crate::app::overlay::ARM_DELAY`]). A text field (a value, `Limit`, the SQL
 //! section's `WHERE` and `ORDER BY`) takes the focus and the cursor on the press. Leaving a
@@ -111,10 +112,17 @@ impl App {
         match h {
             DialogHit::Column(i) => {
                 self.filter_dialog_select_column(i);
-                // The add popup picks the column clicked.
-                if self.filter_dialog().is_some_and(|d| d.popup_kind() == Some(&view::PopupKind::AddPick)) {
-                    self.filter_add_pick();
+                // The add popup picks the column clicked; the columns popup shows or hides it.
+                match self.filter_dialog().and_then(|d| d.popup_kind()) {
+                    Some(view::PopupKind::AddPick) => self.filter_add_pick(),
+                    Some(view::PopupKind::Columns) => self.filter_dialog_key(press(KeyCode::Char(' '))),
+                    _ => {}
                 }
+            }
+            DialogHit::Sorted(i) => d.focus_on(DialogFocus::Sorted(i)),
+            DialogHit::RowsItem(item) => {
+                d.focus_on(DialogFocus::RowsItem(item));
+                self.filter_rows_run();
             }
             DialogHit::Op(t) => {
                 d.focus_on(DialogFocus::Op(t));
@@ -209,7 +217,10 @@ impl App {
             return self.filter_dialog_key(press(code));
         }
         d.hover = None;
-        if DialogHits::span(&d.hits.columns).contains(at) {
+        if let Some(DialogFocus::Sorted(i)) = DialogHits::span(&d.hits.sorted).contains(at).then_some(d.focus) {
+            let last = d.sort_rows().len().saturating_sub(1);
+            d.focus_on(DialogFocus::Sorted(i.saturating_add_signed(delta).min(last)));
+        } else if DialogHits::span(&d.hits.columns).contains(at) {
             let i = d.cursor.saturating_add_signed(delta);
             self.filter_dialog_select_column(i);
         } else if DialogHits::span(&d.hits.items).contains(at) {

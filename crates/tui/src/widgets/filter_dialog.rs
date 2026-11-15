@@ -39,7 +39,7 @@ const TYPES_MIN: u16 = 34;
 
 /// The highlight of `text` as the editor's: each token's byte range and style, after the part
 /// `mark` (bytes) underlined in the error colour, which wins over them.
-fn highlight(text: &str, d: Dialect, mark: Option<&Range<usize>>) -> Vec<(Range<usize>, Style)> {
+pub(crate) fn highlight(text: &str, d: Dialect, mark: Option<&Range<usize>>) -> Vec<(Range<usize>, Style)> {
     let th = theme::cur();
     let toks = lex_in(text, d);
     let error = Style::new().fg(th.error).add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
@@ -525,22 +525,47 @@ fn sql_preview(d: &FilterDialog, target: &query::Target, base: &query::Query) ->
     }
     let q = draft.to_query(base, target).map_err(|_| ())?;
     let c = query::compile(&q, target);
+    let tie = tie_breaker(&c, target.dialect);
+    Ok((c.sql, tie))
+}
+
+/// The bytes of statement `c`'s end that are the key the app appends to make its order total
+/// (the primary key's columns), when it appends one.
+fn tie_breaker(c: &query::Compiled, d: Dialect) -> Option<Range<usize>> {
     let ties: Vec<String> = c
         .order
         .iter()
         .filter(|k| k.origin == query::KeyOrigin::TieBreak)
-        .map(|k| format!("{} ASC", target.dialect.force_quote_ident(&k.col)))
+        .map(|k| format!("{} ASC", d.force_quote_ident(&k.col)))
         .collect();
     let suffix = ties.join(", ");
-    let tie =
-        (!ties.is_empty() && c.sql.ends_with(&format!(", {suffix}"))).then(|| c.sql.len() - suffix.len()..c.sql.len());
-    Ok((c.sql, tie))
+    (!ties.is_empty() && c.sql.ends_with(&format!(", {suffix}"))).then(|| c.sql.len() - suffix.len()..c.sql.len())
+}
+
+/// The `ORDER BY` clause draft `d` sends, as its statement writes it (the key the app appends
+/// to make the order total included, its bytes returned with it, to be dimmed as the SQL
+/// section dims it); `None` without keys, or while the draft is no query.
+pub(crate) fn order_clause(app: &App, d: &FilterDialog) -> Option<(String, Option<Range<usize>>)> {
+    let target = app.table_target(d.tab)?;
+    let base = app.table_query(d.tab)?.applied().clone();
+    let q = d.draft.to_query(&base, &target).ok()?;
+    // The statement without a condition, with and without the order: the clause is the rest.
+    let bare =
+        |order: Vec<query::OrderKey>| query::compile(&query::Query { filter: None, order, ..q.clone() }, &target);
+    let c = bare(q.order.clone());
+    let head = bare(Vec::new()).sql.len();
+    let start = head + c.sql.get(head..)?.len() - c.sql.get(head..)?.trim_start().len();
+    if start >= c.sql.len() {
+        return None;
+    }
+    let tie = tie_breaker(&c, d.dialect).map(|r| r.start - start..r.end - start);
+    Some((c.sql[start..].to_string(), tie))
 }
 
 /// The byte ranges of `text`'s lines when it is wrapped at `w` columns: a line ends after its
 /// last blank that fits (the blank kept on it), else where its next grapheme does not fit; one
 /// empty line for an empty text. Every byte is on one line, in order.
-fn wrap_at(text: &str, w: usize) -> Vec<Range<usize>> {
+pub(crate) fn wrap_at(text: &str, w: usize) -> Vec<Range<usize>> {
     use unicode_segmentation::UnicodeSegmentation;
     let w = w.max(1);
     let gs: Vec<(usize, usize, bool)> = text
@@ -854,6 +879,18 @@ pub(crate) fn hint_parts(app: &App, d: &FilterDialog, view: Option<&ValuesView>,
             vec![l("x", Label::TableDialogHintRemove), l("+", Label::HintAdd)]
         }
         _ if kind == Some(PopupKindId::WhereList) => Vec::new(),
+        // The order popup: a key's direction, its place, out; another column into the order.
+        DialogFocus::Sorted(i) if d.sort_rows().get(i).is_some_and(|c| d.draft.sort_of(c).is_some()) => vec![
+            l("Space", Label::TableDialogHintDirection),
+            l("J/K", Label::TableDialogHintMoveKey),
+            l("x", Label::TableDialogHintDrop),
+        ],
+        DialogFocus::Sorted(_) => vec![l("Space", Label::TableDialogHintSort)],
+        // The columns popup: shown or hidden, every one shown.
+        _ if kind == Some(PopupKindId::Columns) => {
+            vec![l("Space", Label::TableDialogHintHide), l("a", Label::TableDialogHintShowAll)]
+        }
+        DialogFocus::RowsItem(_) => Vec::new(),
         DialogFocus::Columns if d.search.is_some() => vec![
             l("\u{2191}\u{2193}", Label::TableDialogHintColumn),
             l(&apply, Label::TableDialogHintPick),
@@ -950,26 +987,38 @@ pub(crate) fn hint_parts(app: &App, d: &FilterDialog, view: Option<&ValuesView>,
     let incomplete = d.draft.where_.has_incomplete().then(|| i18n.label(Label::TableDialogIncomplete).to_string());
     if d.is_popup() {
         items.retain(|(k, _)| k != "Tab");
-        // What `Enter` does: the add popup picks, the WHERE list opens, the others apply;
-        // `Esc` closes the add popup's search before it cancels.
+        // What `Enter` does: the add popup picks, the WHERE list opens, the rows popup does its
+        // item, the others apply; `Esc` closes the add popup's search before it cancels, and
+        // the rows popup, which changes nothing, closes.
         let enter = match kind {
             Some(PopupKindId::AddPick) => Label::TableDialogHintPick,
             Some(PopupKindId::WhereList) => Label::HintOpen,
+            Some(PopupKindId::Rows) => Label::HintRun,
             _ => Label::TableDialogHintApply,
         };
         let esc = match kind {
             Some(PopupKindId::AddPick) if d.search.is_some() => Label::TableDialogHintClose,
+            Some(PopupKindId::Rows) => Label::TableDialogHintClose,
             _ => Label::TableDialogHintCancel,
         };
         let ends = [(apply, i18n.label(enter).to_string()), (cancel, i18n.label(esc).to_string())];
         let need = |items: &[(String, String)]| {
-            let keys: usize = items.iter().chain(&ends).map(|(k, l)| width(k) + 1 + width(l)).sum();
-            keys + 3 * (items.len() + 1) + incomplete.as_ref().map_or(0, |t| width(t) + 3)
+            let keys: usize = items.iter().map(|(k, l)| width(k) + 1 + width(l)).sum();
+            keys + 3 * items.len().saturating_sub(1) + incomplete.as_ref().map_or(0, |t| width(t) + 3)
         };
-        while !items.is_empty() && need(&items) > w {
-            items.pop();
+        // The order and columns popups keep their own keys first (what `Enter` and `Esc` do
+        // is the same in every popup); the others keep `Enter` and `Esc`.
+        if matches!(kind, Some(PopupKindId::Order | PopupKindId::Columns)) {
+            items.extend(ends);
+            while !items.is_empty() && need(&items) > w {
+                items.pop();
+            }
+        } else {
+            while !items.is_empty() && need(&[&items[..], &ends[..]].concat()) > w {
+                items.pop();
+            }
+            items.extend(ends);
         }
-        items.extend(ends);
     } else {
         items.truncate(5);
     }

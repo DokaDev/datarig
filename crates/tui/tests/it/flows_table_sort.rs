@@ -173,7 +173,9 @@ fn the_tie_breaker_keeps_working_and_is_not_marked() {
     assert_eq!(one_run(&mut h), format!(r#"{ALL} ORDER BY "name" ASC, "id" ASC"#));
     answer(&mut h);
     assert_eq!(heads(&h), vec![HeadMarks::default(), sorted(true, 1), HeadMarks::default()]);
+    // `Space r o` opens the order popup; `A` the whole dialog on it.
     h.keys(" ro");
+    h.keys("A");
     let screen = h.screen(200, 45);
     let line = screen.lines().find(|l| l.contains("Order ")).unwrap_or_else(|| panic!("{screen}"));
     assert!(line.contains("name \u{2191}") && line.contains("+ id"), "{line}");

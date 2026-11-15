@@ -1,5 +1,5 @@
 //! The table keys of a table tab's grid: `f` (or `Space r f`) opens the filter and sort dialog
-//! on the cursor's column, `Space r o` opens it on the order, `Space r x` clears the condition,
+//! on the cursor's column, `Space r o` its popup of the order, `Space r x` clears the condition,
 //! the order and the limit and runs the tab again, `X` clears the condition and the order (the
 //! limit kept), and `Space r v` opens the statement in a new console. `=` and `!` filter by the
 //! cursor's value ([`App::grid_pick`]), `F` opens the column's menu ([`App::open_column_menu`]). `s` and `S` (`Space r s`, `Space r S`) sort by the grid's column
@@ -24,7 +24,7 @@ use datarig_core::sql::lexer::{LexState, Tok, lex_in};
 pub enum TableAction {
     /// The filter and sort dialog on the cursor's column (`f`).
     EditFilter,
-    /// The filter and sort dialog on the order.
+    /// The order's popup by the query bar (`Space r o`).
     EditOrder,
     /// No condition, no order, and a run.
     Clear,
@@ -51,9 +51,9 @@ pub enum TableAction {
     BarWhere,
     /// The query bar's `LIMIT` typed in it (`Space r l`).
     BarLimit,
-    /// The columns, shown and hidden (`Space r c`): the filter dialog on its column list.
+    /// The columns, shown and hidden (`Space r c`): their popup by the query bar.
     BarColumns,
-    /// The rows counted (`Space r r`), as `#` counts them.
+    /// The rows, their pages and their count (`Space r r`): their popup by the query bar.
     BarRows,
     /// A key of the query bar while it has the keys.
     Bar(super::qbar::BarKey),
@@ -77,8 +77,8 @@ impl App {
             return;
         }
         match a {
-            TableAction::EditFilter => self.open_filter_dialog(false),
-            TableAction::EditOrder => self.open_filter_dialog(true),
+            TableAction::EditFilter => self.open_filter_dialog(),
+            TableAction::EditOrder => self.bar_hit(super::qbar::BarHit::Order),
             TableAction::Clear => {
                 // Refused before the draft changes: a busy tab keeps what it would run next.
                 if self.tab_busy(id) {
