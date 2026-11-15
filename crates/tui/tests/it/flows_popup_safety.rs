@@ -1,6 +1,6 @@
 //! The checks of a table tab's run hold whichever way its query is changed: in the whole filter
-//! dialog (Advanced), in a condition's popup, with a chip's `×` or with a `LIMIT` typed in the
-//! bar. Each way is driven through the same flows: a function the app cannot check is asked
+//! dialog (Advanced), in a condition's popup, with a chip's `×`, with a `LIMIT` typed in the
+//! bar or with a value line of a column's popup (`F`). Each way is driven through the same flows: a function the app cannot check is asked
 //! about, a MySQL read that may lock rows is asked about and asked again when the session's
 //! state moved before the yes, a run waiting for its session's state is cancelled and never
 //! sent, a read-only profile refuses, pending edits are asked about. The counts of a column's
@@ -43,9 +43,11 @@ enum Via {
     ChipX,
     /// `Space r l`, a cap typed in the bar.
     LimitInline,
+    /// `F` on the first row's `id`, its popup's `Exclude 0` line.
+    ValueLine,
 }
 
-const VIAS: [Via; 4] = [Via::Advanced, Via::ConditionPopup, Via::ChipX, Via::LimitInline];
+const VIAS: [Via; 5] = [Via::Advanced, Via::ConditionPopup, Via::ChipX, Via::LimitInline, Via::ValueLine];
 
 impl Via {
     /// The change is applied from a dialog view, which stays open until it is sent.
@@ -74,6 +76,26 @@ impl Via {
                 h.keys(" rl5");
                 h.key(KeyCode::Enter);
             }
+            Via::ValueLine => {
+                let g = &mut h.app.tab_mut().grid;
+                (g.row, g.col, g.anchor) = (0, 0, None);
+                h.draw(120, 34);
+                h.keys("F");
+                assert_eq!(popup(h), Some(PopupKindId::Condition));
+                for _ in 0..8 {
+                    if h.app.column_popup_focus().as_deref() == Some("Exclude 0") {
+                        break;
+                    }
+                    h.key(KeyCode::Up);
+                }
+                assert_eq!(
+                    h.app.column_popup_focus().as_deref(),
+                    Some("Exclude 0"),
+                    "{:?}",
+                    h.app.column_popup_lines()
+                );
+                h.key(KeyCode::Enter);
+            }
         }
     }
 
@@ -94,6 +116,8 @@ impl Via {
             Via::Advanced | Via::ConditionPopup => (format!("{all} WHERE (id > 0 AND id < 90{rest})"), None),
             Via::ChipX => (format!("{all} WHERE (id < 9{rest})"), None),
             Via::LimitInline => (format!("{all} WHERE ({BASE}{rest})"), Some(5)),
+            Via::ValueLine if all == MY => (format!("{all} WHERE ({BASE}{rest} AND NOT (id <=> 0))"), None),
+            Via::ValueLine => (format!("{all} WHERE ({BASE}{rest} AND id IS DISTINCT FROM 0)"), None),
         }
     }
 
@@ -102,7 +126,7 @@ impl Via {
         match self {
             Via::Advanced => assert!(open(h) && popup(h).is_none(), "{self:?}: the whole dialog stays"),
             Via::ConditionPopup => assert_eq!(popup(h), Some(PopupKindId::Condition), "{self:?}: the popup stays"),
-            Via::ChipX | Via::LimitInline => assert!(!open(h), "{self:?}: no dialog"),
+            Via::ChipX | Via::LimitInline | Via::ValueLine => assert!(!open(h), "{self:?}: no dialog"),
         }
         if self.dialog() {
             assert!(draft_where(h).contains("id < 90"), "{self:?}: the draft kept: {}", draft_where(h));

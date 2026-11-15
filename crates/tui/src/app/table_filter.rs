@@ -2,7 +2,7 @@
 //! on the cursor's column, `Space r o` its popup of the order, `Space r x` clears the condition,
 //! the order and the limit and runs the tab again, `X` clears the condition and the order (the
 //! limit kept), and `Space r v` opens the statement in a new console. `=` and `!` filter by the
-//! cursor's value ([`App::grid_pick`]), `F` opens the column's menu ([`App::open_column_menu`]). `s` and `S` (`Space r s`, `Space r S`) sort by the grid's column
+//! cursor's value ([`App::grid_pick`]), `F` opens the column's popup ([`App::open_column_menu`]). `s` and `S` (`Space r s`, `Space r S`) sort by the grid's column
 //! ([`App::table_sort`]). `Space r H` (`Ctrl+R` in the dialog) lists the filters this table ran
 //! before ([`App::open_filter_history`]): one picked goes into the dialog's draft, and runs only
 //! when the dialog applies it, checked as any text typed.
@@ -34,7 +34,8 @@ pub enum TableAction {
     SortCycle,
     /// Sort by the cursor's column as one more key, or turn it where it is (`S`).
     SortAdd,
-    /// The cursor's column's menu: its sort, its filter, hiding it (`F`).
+    /// The cursor's column's popup: its conditions and sort, filters by the cursor's value,
+    /// hiding it (`F`).
     ColumnMenu,
     /// Only the value of the cursor's cell or of the cells selected in one column (`=`).
     Only,

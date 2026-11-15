@@ -118,6 +118,7 @@ impl App {
             }
             Event::Mouse(m) if self.modal_open() => {
                 self.end_tab_drag();
+                self.header_press_drop();
                 self.overlay_mouse(m)
             }
             Event::Mouse(m) => self.handle_mouse(m),
@@ -340,12 +341,8 @@ impl App {
         // taken as it is typed. The register after `Ctrl+R` in Insert mode is a key too.
         let literal = matches!(ctx, Ctx::VimNormal | Ctx::VimVisual) && self.tab().editor.awaiting_char();
         let register = ctx == Ctx::VimInsert && self.tab().editor.awaiting_key();
-        // A menu nothing is typed in (the column menu) takes keys, not text.
-        let keys_only = ctx == Ctx::ContextMenu && self.overlays.menu().is_some_and(|m| !m.typing && m.sub.is_none());
         let mapped = match chord.code {
-            KeyCode::Char(c)
-                if chord.is_plain_char() && (!ctx.is_text_input() || register || keys_only) && !literal =>
-            {
+            KeyCode::Char(c) if chord.is_plain_char() && (!ctx.is_text_input() || register) && !literal => {
                 hangul::keys(c)
             }
             _ => None,
@@ -997,16 +994,25 @@ impl App {
                 self.left_click(m, inside(l.divider) && l.divider.height > 0);
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(Drag::Header(p)) = self.pointer.drag
+                    && !self.header_drag(p)
+                {
+                    return;
+                }
                 if !self.tab_drag_to(x, y) {
                     self.drag_to(x, y, true)
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                let pressed = self.pointer.drag;
                 self.tab_drag_release(x, y);
                 self.pointer.drag = None;
                 self.pointer.drag_at = None;
                 self.detail_release(x, y);
                 self.bar_release(x, y);
+                if let Some(Drag::Header(p)) = pressed {
+                    self.header_release(p, x, y);
+                }
             }
             _ => {}
         }
@@ -1181,6 +1187,15 @@ impl App {
             }
             // No cell shown (every column hidden): nothing to select or drag.
             if self.grid_no_cell() {
+                return;
+            }
+            // A table tab's header name or type: armed, the column's popup on the release over
+            // it, whole columns on a drag from it ([`App::header_drag`]). Shift extends the
+            // selection there is, below.
+            if !m.modifiers.contains(KeyModifiers::SHIFT)
+                && let Some(p) = self.header_press_at(x, y)
+            {
+                self.pointer.drag = Some(Drag::Header(p));
                 return;
             }
             let t = self.tabs.active_mut();

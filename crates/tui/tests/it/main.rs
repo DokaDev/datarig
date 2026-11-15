@@ -13,6 +13,7 @@ mod common;
 
 mod app_flows;
 mod flows_chart;
+mod flows_column_popup;
 mod flows_context;
 mod flows_ddl;
 mod flows_dialog_mouse;

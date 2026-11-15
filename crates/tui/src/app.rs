@@ -25,7 +25,7 @@ pub mod action;
 pub mod chart;
 pub mod chooser;
 pub mod cmdline;
-pub mod column_menu;
+pub mod column_popup;
 pub mod command;
 mod conn;
 mod conn_test;
@@ -412,6 +412,9 @@ enum Drag {
     /// In the grid, from this cell (row, column), selecting cells, whole rows (from the
     /// row-number gutter) or whole columns (from a header).
     Grid { anchor: (usize, usize), shape: crate::widgets::grid::Shape },
+    /// A press on a table tab's header, not moved yet: a move turns it into a drag selecting
+    /// whole columns from it, a release over the same header opens the column's popup.
+    Header(column_popup::HeaderPress),
     /// The divider between the editor and the results pane.
     Divider,
     /// The explorer's right border.

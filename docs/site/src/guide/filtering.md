@@ -336,7 +336,7 @@ the reason in place of its key. A right click on a cell opens the grid's menu, w
 "Table → this column's menu (sort, filter, hide)" opens it.
 
 ```text
-{{#include ../screens/column-menu.txt}}
+{{#include ../screens/column-popup.txt}}
 ```
 
 The headers of the columns with a condition of their own, or in the order, are tinted. A header

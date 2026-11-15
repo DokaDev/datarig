@@ -82,6 +82,61 @@ pub(crate) enum DialogFocus {
     Sorted(usize),
     /// An item of the rows popup.
     RowsItem(RowsItem),
+    /// A line above a column's condition popup ([`ColumnLines`]).
+    Line(ColumnLine),
+}
+
+/// A line above a column's condition popup opened on the column (`F`, a right click on its
+/// header): what the grid does to the column there, as one press.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ColumnLine {
+    /// Only the value of the grid's cell (or of the cells selected in the column), as `=`.
+    Only,
+    /// Everything but it, as `!`.
+    Exclude,
+    /// The column hidden from the grid, as `C`.
+    Hide,
+}
+
+/// The lines above a column's condition popup, written when it opened: hiding the column,
+/// and, opened on a cell, the filters by the cell's value with the text each sends (or why it
+/// cannot), for the grid as it was then ([`ValueLines::target`]). What runs is what the lines
+/// showed: a line pressed once anything they were written from changed runs nothing.
+#[derive(Clone, Debug)]
+pub(crate) struct ColumnLines {
+    /// The column the popup is on, by its name in the rows shown.
+    pub(crate) col: String,
+    /// The filters by value, when the popup was opened on a cell.
+    pub(crate) values: Option<ValueLines>,
+}
+
+/// The filters by the value of the grid's cells shown above a condition popup.
+#[derive(Clone, Debug)]
+pub(crate) struct ValueLines {
+    /// The grid and the result its cells were read from, when the lines were written, and
+    /// the columns it showed then ([`crate::widgets::grid::GridState::vis_rev`]).
+    pub(crate) target: super::menu::MenuTarget,
+    pub(crate) vis_rev: u64,
+    pub(crate) only: Result<super::filter_value::Picked, Box<super::menu::Off>>,
+    pub(crate) exclude: Result<super::filter_value::Picked, Box<super::menu::Off>>,
+}
+
+impl ColumnLines {
+    /// The lines, top to bottom.
+    pub(crate) fn lines(&self) -> Vec<ColumnLine> {
+        let values = self.values.is_some().then_some([ColumnLine::Only, ColumnLine::Exclude]);
+        values.into_iter().flatten().chain([ColumnLine::Hide]).collect()
+    }
+
+    /// Why line `l` cannot run, when it cannot.
+    pub(crate) fn off(&self, l: ColumnLine) -> Option<&super::menu::Off> {
+        let v = self.values.as_ref()?;
+        match l {
+            ColumnLine::Only => v.only.as_ref().err().map(|o| &**o),
+            ColumnLine::Exclude => v.exclude.as_ref().err().map(|o| &**o),
+            ColumnLine::Hide => None,
+        }
+    }
 }
 
 /// What an item of the rows popup does.
@@ -215,6 +270,8 @@ pub(crate) struct DialogHits {
     pub(crate) sorted: Vec<(Rect, usize)>,
     /// The rows popup's items.
     pub(crate) rows_items: Vec<(Rect, RowsItem)>,
+    /// The lines above a column's condition popup.
+    pub(crate) lines: Vec<(Rect, ColumnLine)>,
 }
 
 /// A part of the dialog the pointer can be over, as [`DialogHits`] keeps where it was drawn.
@@ -260,6 +317,8 @@ pub(crate) enum DialogHit {
     Sorted(usize),
     /// An item of the rows popup.
     RowsItem(RowsItem),
+    /// A line above a column's condition popup.
+    Line(ColumnLine),
 }
 
 impl DialogHit {
@@ -279,6 +338,7 @@ impl DialogHit {
                 | DialogHit::Pick(_)
                 | DialogHit::Sorted(_)
                 | DialogHit::RowsItem(_)
+                | DialogHit::Line(_)
         )
     }
 }
@@ -318,6 +378,7 @@ impl DialogHits {
             .or_else(|| find(&self.keys).map(DialogHit::Key))
             .or_else(|| find(&self.sorted).map(DialogHit::Sorted))
             .or_else(|| self.rows_items.iter().find(|r| r.0.contains(p)).map(|r| DialogHit::RowsItem(r.1)))
+            .or_else(|| self.lines.iter().find(|r| r.0.contains(p)).map(|r| DialogHit::Line(r.1)))
             .or_else(|| single.iter().find(|(r, _)| r.contains(p)).map(|s| s.1))
     }
 
@@ -350,6 +411,7 @@ impl DialogHits {
             DialogHit::Advanced => drawn(self.advanced),
             DialogHit::Sorted(i) => find(&self.sorted, i),
             DialogHit::RowsItem(item) => self.rows_items.iter().find(|r| r.1 == item).map(|r| r.0),
+            DialogHit::Line(l) => self.lines.iter().find(|r| r.1 == l).map(|r| r.0),
         }
     }
 
@@ -429,6 +491,9 @@ pub struct FilterDialog {
     pub(crate) counting: Option<count::Counting>,
     /// The counts of the server, by column.
     pub(crate) exact: HashMap<String, count::Exact>,
+    /// The lines above a column's condition popup opened on the column; none in any other
+    /// view (a change of view drops them).
+    pub(crate) column_lines: Option<ColumnLines>,
 }
 
 impl FilterDialog {
@@ -629,7 +694,9 @@ impl FilterDialog {
 
     /// The lines of the right pane the keys move through, top to bottom.
     pub(crate) fn pane_lines(&self) -> Vec<DialogFocus> {
-        let mut lines: Vec<DialogFocus> = self.rows().into_iter().map(DialogFocus::Op).collect();
+        let above = self.column_lines.as_ref().map(ColumnLines::lines).unwrap_or_default();
+        let mut lines: Vec<DialogFocus> = above.into_iter().map(DialogFocus::Line).collect();
+        lines.extend(self.rows().into_iter().map(DialogFocus::Op));
         if self.column().is_some() {
             lines.push(DialogFocus::Add);
             if self.listed > 0 {
@@ -667,6 +734,9 @@ impl FilterDialog {
             DialogFocus::Values(_) if self.listed == 0 => DialogFocus::Add,
             DialogFocus::Values(i) => DialogFocus::Values(i.min(self.listed - 1)),
             DialogFocus::Sorted(i) => DialogFocus::Sorted(i.min(self.sort_rows().len().saturating_sub(1))),
+            DialogFocus::Line(l) if !self.column_lines.as_ref().is_some_and(|c| c.lines().contains(&l)) => {
+                if self.column().is_some() { DialogFocus::Add } else { DialogFocus::Columns }
+            }
             f => f,
         };
         if let DialogFocus::Op(t) = self.focus {
@@ -830,6 +900,7 @@ impl App {
             tally: None,
             counting: None,
             exact: HashMap::new(),
+            column_lines: None,
         };
         if let Some(c) = column {
             d.select_column(c);

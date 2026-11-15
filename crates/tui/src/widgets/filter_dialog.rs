@@ -892,6 +892,14 @@ pub(crate) fn hint_parts(app: &App, d: &FilterDialog, view: Option<&ValuesView>,
             vec![l("Space", Label::TableDialogHintHide), l("a", Label::TableDialogHintShowAll)]
         }
         DialogFocus::RowsItem(_) => Vec::new(),
+        // A line above a column's popup: why it cannot run, else the lines (`Enter` runs it).
+        DialogFocus::Line(line) => {
+            if let Some(o) = d.column_lines.as_ref().and_then(|c| c.off(line)) {
+                let n = &o.notice;
+                return vec![(clip(&n.render(i18n), w), Style::new().fg(level_color(n.level)))];
+            }
+            vec![l("\u{2191}\u{2193}", Label::TableDialogHintLines)]
+        }
         DialogFocus::Columns if d.search.is_some() => vec![
             l("\u{2191}\u{2193}", Label::TableDialogHintColumn),
             l(&apply, Label::TableDialogHintPick),
@@ -992,6 +1000,7 @@ pub(crate) fn hint_parts(app: &App, d: &FilterDialog, view: Option<&ValuesView>,
         // item, the others apply; `Esc` closes the add popup's search before it cancels, and
         // the rows popup, which changes nothing, closes.
         let enter = match kind {
+            _ if matches!(d.focus, DialogFocus::Line(_)) => Label::HintRun,
             Some(PopupKindId::AddPick) => Label::TableDialogHintPick,
             Some(PopupKindId::WhereList) => Label::HintOpen,
             Some(PopupKindId::Rows) => Label::HintRun,

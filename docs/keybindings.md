@@ -175,7 +175,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r v` | `table.filter.open_sql` | Table → open its statement in a new console |  |
 | `Space r s` | `table.sort.cycle` | Table → sort by this column only (up, down, off) |  |
 | `Space r S` | `table.sort.add` | Table → sort by this column too (up, down, off) |  |
-| `Space r F` | `table.column.menu` | Table → this column's menu (sort, filter, hide) |  |
+| `Space r F` | `table.column.menu` | Table → this column's conditions, sort and hiding |  |
 | `Space r =` | `table.filter.only` | Table → only this value (in place of the column's conditions) |  |
 | `Space r !` | `table.filter.exclude` | Table → everything but this value (NULL rows kept) |  |
 | `Space r X` | `table.filter.clear_all` | Table → clear the conditions and the order (limit kept), and run it again |  |
@@ -310,7 +310,7 @@ The result grid. The wheel scrolls the rows; a sideways wheel (a trackpad) or Sh
 | `f` | `table.filter.edit` | Table → filter and sort (dialog, on this column) |  |
 | `s` | `table.sort.cycle` | Table → sort by this column only (up, down, off) |  |
 | `S` | `table.sort.add` | Table → sort by this column too (up, down, off) |  |
-| `F` | `table.column.menu` | Table → this column's menu (sort, filter, hide) |  |
+| `F` | `table.column.menu` | Table → this column's conditions, sort and hiding |  |
 | `=` | `table.filter.only` | Table → only this value (in place of the column's conditions) |  |
 | `!` | `table.filter.exclude` | Table → everything but this value (NULL rows kept) |  |
 | `X` | `table.filter.clear_all` | Table → clear the conditions and the order (limit kept), and run it again |  |

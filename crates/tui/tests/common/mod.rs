@@ -882,16 +882,9 @@ impl Harness {
     }
 
     /// Run the open menu's item `label`: type it (the menu's filter) and press Enter. The item
-    /// must be the one selected then. A menu without a filter: its line selected, then Enter.
+    /// must be the one selected then.
     pub fn menu_pick(&mut self, label: &str) {
-        if self.app.overlays.menu().is_some_and(|m| !m.typing) {
-            let lines = self.app.menu_lines();
-            let i = lines.iter().position(|(h, l, _)| !h && *l == label);
-            let i = i.unwrap_or_else(|| panic!("{label:?} not among {:?}", self.menu_labels()));
-            self.app.overlays.menu_mut().expect("a menu").selected = i;
-        } else {
-            self.type_text(label);
-        }
+        self.type_text(label);
         let m = self.app.overlays.menu().expect("a menu");
         let selected = self.app.menu_lines().get(m.selected).map(|(_, l, _)| l.to_string());
         assert_eq!(selected.as_deref(), Some(label), "{:?}", self.menu_labels());

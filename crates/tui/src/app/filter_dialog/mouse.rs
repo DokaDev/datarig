@@ -1,10 +1,10 @@
 //! The mouse on the filter dialog: a click does what the key for the part clicked does there.
 //! A column, a value, an operator and the picker's entries, a sort choice, a chip, a key of
-//! the order, a line of the order popup, an item of the rows popup (it runs), the `×` marks
-//! and the buttons (`undo`, `clear all`, `SQL`, `Open in editor`, `# count exactly`, `Enter
-//! apply`, `Esc cancel`) act as a dialog's buttons do: a press arms
-//! the part and the release over it acts, presses right after the dialog came on top are
-//! ignored ([`crate::app::overlay::ARM_DELAY`]). A text field (a value, `Limit`, the SQL
+//! the order, a line of the order popup, an item of the rows popup and a line above a column's
+//! popup (both run), the `×` marks and the buttons (`undo`, `clear all`, `SQL`, `Open in
+//! editor`, `# count exactly`, `Enter apply`, `Esc cancel`) act as a dialog's buttons do: a
+//! press arms the part and the release over it acts, presses right after the dialog came on
+//! top are ignored ([`crate::app::overlay::ARM_DELAY`]). A text field (a value, `Limit`, the SQL
 //! section's `WHERE` and `ORDER BY`) takes the focus and the cursor on the press. Leaving a
 //! field of the SQL section reads it back first, as `Tab` does. While the operator picker is
 //! open a press elsewhere closes it; a press outside a popup closes the popup without
@@ -123,6 +123,10 @@ impl App {
             DialogHit::RowsItem(item) => {
                 d.focus_on(DialogFocus::RowsItem(item));
                 self.filter_rows_run();
+            }
+            DialogHit::Line(l) => {
+                d.focus_on(DialogFocus::Line(l));
+                self.column_line_run(l);
             }
             DialogHit::Op(t) => {
                 d.focus_on(DialogFocus::Op(t));

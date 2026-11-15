@@ -381,9 +381,11 @@ fn rows_and_new_rows_selected_are_deleted_as_one_change() {
     assert!(edits(&h).batch.deleted(0) && edits(&h).batch.deleted(1));
     h.draw(120, 40);
     let g = h.app.tab().grid.clone();
+    // A drag from the header (a click opens the column's popup).
     let (x, y) = (g.hit_cols[1].0 + 1, g.header_y);
     h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
-    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), x + 1, y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x + 1, y);
     h.keys("D");
     assert_eq!(said(&mut h), Some(Label::EditDeleteColumns.into()));
 }
