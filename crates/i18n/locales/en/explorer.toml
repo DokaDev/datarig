@@ -26,6 +26,7 @@
 "tree.trigger.disabled" = "disabled"
 "tree.check.not_enforced" = "not enforced"
 "tree.group.hidden" = "unknown: listed only to a user with a privilege this one lacks"
+"tree.group.hidden_columns" = "some may not be listed: this user's own grants do not cover the whole table (a grant through a role is not seen)"
 "tree.reveal_missing" = "{name} is not in the explorer"
 "explorer.database_default" = "default"
 "explorer.databases_unreadable" = "The databases can't be read: {error}"

@@ -158,6 +158,12 @@ their results read-only ("this connection type can't edit data").
   statement as rows) or keeps nothing of the session (`log_bin` or `sql_log_bin` off). With
   `binlog_format = STATEMENT`, or when it cannot be read, the Apply sends nothing and says why;
   changing all of them is still possible.
+- **Grants by column.** The server lists a table's columns to a user only as far as the user's
+  grants go: one granted single columns sees just those, and rows that look the same may differ
+  in the others. Unless the user's own grants include `SELECT`, `INSERT`, `UPDATE` or
+  `REFERENCES` on the whole table (or its schema, or every schema), its Columns group says some
+  may not be listed, and identical-looking rows are refused, neither one nor all of them, saying
+  why. A grant through a role is not seen, so it counts as not covering the table.
 - **`FLOAT`** is sent rounded, so its cells are edited one at a time, and a row is not cloned
   with one. A typed value is refused while text is read in another character set than `utf8mb4`
   or a `TIMESTAMP` in a time zone that is not a fixed offset, as Copy as SQL refuses them.

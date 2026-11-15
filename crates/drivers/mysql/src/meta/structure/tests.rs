@@ -9,7 +9,7 @@ fn parse_my(json: &str) -> Result<TableStructure, DbError> {
 
 /// A table as MySQL 8.4 describes it: the document's lists in the server's own (unsorted)
 /// order.
-const ITEMS: &str = r#"{"kind":"BASE TABLE","rows":42,"bytes":131072,"trigger_privilege":true,
+const ITEMS: &str = r#"{"kind":"BASE TABLE","column_privilege":true,"rows":42,"bytes":131072,"trigger_privilege":true,
   "columns":[
     {"position":3,"name":"name","type":"varchar(100)","data_type":"varchar","nullable":"NO","default":"it's","extra":"","generation":""},
     {"position":1,"name":"id","type":"bigint unsigned","data_type":"bigint","nullable":"NO","default":null,"extra":"auto_increment","generation":""},
@@ -55,7 +55,7 @@ fn a_table_reads_as_the_model_in_the_servers_order() {
 
 #[test]
 fn columns_have_their_enum_labels_and_collation() {
-    let json = r#"{"kind":"BASE TABLE","trigger_privilege":true,"columns":[
+    let json = r#"{"kind":"BASE TABLE","column_privilege":true,"trigger_privilege":true,"columns":[
       {"position":1,"name":"st","type":"enum('new','it''s')","data_type":"enum","nullable":"YES","default":null,"extra":"","generation":"","charset":"utf8mb4","collation":"utf8mb4_0900_ai_ci"},
       {"position":2,"name":"code","type":"varchar(8)","data_type":"varchar","nullable":"YES","default":null,"extra":"","generation":"","charset":"latin1","collation":"latin1_bin"},
       {"position":3,"name":"raw","type":"varchar(8)","data_type":"varchar","nullable":"YES","default":null,"extra":"","generation":"","charset":"utf8mb4","collation":"utf8mb4_0900_bin"},
@@ -270,7 +270,7 @@ fn triggers_have_no_function_and_keep_their_statement() {
 
 #[test]
 fn triggers_the_user_may_not_see_are_unknown_not_none() {
-    let none = r#"{"kind":"BASE TABLE","rows":0,"bytes":16384,"trigger_privilege":0}"#;
+    let none = r#"{"kind":"BASE TABLE","column_privilege":true,"rows":0,"bytes":16384,"trigger_privilege":0}"#;
     let s = parse_my(none).unwrap();
     assert_eq!(s.hidden, [StructureGroup::Triggers]);
     assert!(s.triggers.is_empty() && s.columns.is_empty());
@@ -280,7 +280,7 @@ fn triggers_the_user_may_not_see_are_unknown_not_none() {
     let listed = ITEMS.replace(r#""trigger_privilege":true"#, r#""trigger_privilege":false"#);
     assert!(parse_my(&listed).unwrap().hidden.is_empty());
     // A view has no triggers on MySQL: nothing to hide.
-    let view = r#"{"kind":"VIEW","rows":null,"bytes":null,"trigger_privilege":false}"#;
+    let view = r#"{"kind":"VIEW","column_privilege":true,"rows":null,"bytes":null,"trigger_privilege":false}"#;
     let v = parse_my(view).unwrap();
     assert_eq!(
         (v.kind, v.estimated_rows, v.total_bytes, v.hidden.as_slice()),
@@ -289,8 +289,22 @@ fn triggers_the_user_may_not_see_are_unknown_not_none() {
 }
 
 #[test]
+fn columns_of_a_table_granted_by_column_only_are_unknown() {
+    let partial = ITEMS.replace(r#""column_privilege":true"#, r#""column_privilege":0"#);
+    let s = parse_my(&partial).unwrap();
+    assert_eq!(s.hidden, [StructureGroup::Columns], "a grant of single columns lists only those");
+    // The columns listed are still the table's.
+    assert_eq!(s.columns.len(), parse_my(ITEMS).unwrap().columns.len());
+    // A view is not edited: nothing to hide.
+    let view = r#"{"kind":"VIEW","column_privilege":false,"rows":null,"bytes":null,"trigger_privilege":false}"#;
+    assert!(parse_my(view).unwrap().hidden.is_empty());
+}
+
+#[test]
 fn kinds_of_tables_are_an_allowlist() {
-    let doc = |kind: &str| format!(r#"{{"kind":"{kind}","rows":5,"bytes":0,"trigger_privilege":true}}"#);
+    let doc = |kind: &str| {
+        format!(r#"{{"kind":"{kind}","column_privilege":true,"rows":5,"bytes":0,"trigger_privilege":true}}"#)
+    };
     assert_eq!(parse_my(&doc("BASE TABLE")).unwrap().kind, RelationKind::Table);
     assert_eq!(parse_my(&doc("SYSTEM VERSIONED")).unwrap().kind, RelationKind::Table);
     assert_eq!(parse_my(&doc("SYSTEM VIEW")), Err(DbError::NotSupported));
@@ -301,7 +315,7 @@ fn kinds_of_tables_are_an_allowlist() {
 #[test]
 fn names_are_quoted_as_mysql_reads_them() {
     let s = parse(
-        r#"{"kind":"BASE TABLE","rows":0,"bytes":0,"trigger_privilege":true,
+        r#"{"kind":"BASE TABLE","column_privilege":true,"rows":0,"bytes":0,"trigger_privilege":true,
         "indexes":[{"name":"by key","seq":1,"column":"select","expression":null,"sub_part":null,"collation":"A","non_unique":1,"type":"HASH"}]}"#,
         false,
         MY,
@@ -350,7 +364,7 @@ fn a_read_the_server_stopped_or_gave_up_says_so() {
 
 /// A document of one table with `parts` (`"columns": …` and so on) besides its kind.
 fn doc(parts: serde_json::Value) -> String {
-    let mut d = serde_json::json!({"kind": "BASE TABLE", "rows": 7, "bytes": 16384, "trigger_privilege": true});
+    let mut d = serde_json::json!({"kind": "BASE TABLE", "column_privilege": true, "rows": 7, "bytes": 16384, "trigger_privilege": true});
     if let (Some(d), Some(p)) = (d.as_object_mut(), parts.as_object()) {
         d.extend(p.clone());
     }

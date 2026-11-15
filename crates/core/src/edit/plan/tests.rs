@@ -246,6 +246,13 @@ fn identical_rows_change_one_or_all_as_chosen() {
     let no_one = Fake { one: false, ..ALL };
     assert_eq!(plan_with(&t, &b, &no_one, &[(3, 3)], &[(3, Choice::One)]), Err(PlanError::NoOneOfK { row: 3 }));
     assert!(plan_with(&t, &b, &no_one, &[(3, 3)], &[(3, Choice::All)]).is_ok());
+    // Rows that may differ in columns not listed: neither one nor all of them.
+    let t = by_values(Duplicates::Unseen);
+    for choice in [None, Some(Choice::One), Some(Choice::All)] {
+        let choices: Vec<(usize, Choice)> = choice.map(|c| (3, c)).into_iter().collect();
+        assert_eq!(plan_with(&t, &b, &ALL, &[(3, 3)], &choices), Err(PlanError::Unseen { row: 3, matches: 3 }));
+    }
+    assert!(plan_with(&t, &b, &ALL, &[(3, 1)], &[]).is_ok(), "one match is the row");
 }
 
 #[test]

@@ -14,8 +14,12 @@
 //! functional key's, an expression default) with one level of string escaping (`\'`, `\\`):
 //! it is unescaped once ([`unescaped`]) so that it is SQL again. MariaDB keeps it as it is.
 //!
-//! `COLUMNS` lists only the columns the user has a privilege on (a column-level grant shows a
-//! part of the table). MariaDB before 10.5 has no `JSON_ARRAYAGG`: the read fails there with the
+//! `COLUMNS` lists only the columns the user has a privilege on: a grant of single columns
+//! shows a part of the table, rows that look the same may differ in the others. Every column is
+//! listed to a user with `SELECT`, `INSERT`, `UPDATE` or `REFERENCES` on the table, its schema
+//! or every schema; without such a grant of the user's own (`information_schema`'s privilege
+//! tables, which do not show a role's) the table's columns are unknown
+//! ([`TableStructure::hidden`]), those listed shown all the same. MariaDB before 10.5 has no `JSON_ARRAYAGG`: the read fails there with the
 //! server's message. With `lower_case_table_names = 2` (macOS, Windows) the names are compared
 //! as the server stores them, which is not tested.
 //!
@@ -80,6 +84,14 @@ const SQL: &str = "SELECT JSON_OBJECT(
       WHERE p.PRIVILEGE_TYPE = 'TRIGGER' AND p.GRANTEE = {grantee} AND {schema} LIKE p.TABLE_SCHEMA)
     OR EXISTS (SELECT 1 FROM information_schema.TABLE_PRIVILEGES p
       WHERE p.PRIVILEGE_TYPE = 'TRIGGER' AND p.GRANTEE = {grantee}
+      AND p.TABLE_SCHEMA = {schema} AND p.TABLE_NAME = {table}),
+  'column_privilege', EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES p
+      WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND p.GRANTEE = {grantee})
+    OR EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES p
+      WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND p.GRANTEE = {grantee}
+      AND {schema} LIKE p.TABLE_SCHEMA)
+    OR EXISTS (SELECT 1 FROM information_schema.TABLE_PRIVILEGES p
+      WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND p.GRANTEE = {grantee}
       AND p.TABLE_SCHEMA = {schema} AND p.TABLE_NAME = {table}))
 FROM information_schema.TABLES t WHERE t.TABLE_SCHEMA = {schema} AND t.TABLE_NAME = {table}";
 
@@ -156,6 +168,7 @@ pub(crate) struct Raw {
     checks: Option<Vec<RawCheck>>,
     triggers: Option<Vec<RawTrigger>>,
     trigger_privilege: Flag,
+    column_privilege: Flag,
 }
 
 /// A boolean as a server writes it into JSON: `true`, or `1` (MariaDB).
@@ -472,6 +485,9 @@ pub(crate) fn model(
     }
     if kind == RelationKind::Table && s.triggers.is_empty() && !raw.trigger_privilege.on() {
         s.hidden.push(StructureGroup::Triggers);
+    }
+    if kind == RelationKind::Table && !raw.column_privilege.on() {
+        s.hidden.push(StructureGroup::Columns);
     }
     Ok(s)
 }

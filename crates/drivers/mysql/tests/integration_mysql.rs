@@ -4026,6 +4026,33 @@ async fn a_user_name_with_an_at_sign_finds_its_trigger_privilege() {
     assert!(s.hidden.is_empty(), "the privilege is the user's: {:?}", s.hidden);
 }
 
+/// A user granted single columns of a table is listed only those: the table's columns are
+/// unknown, not those few, so rows that look the same are not taken to be the same. A grant on
+/// the table lists them all.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_table_granted_column_by_column_has_its_columns_unknown() {
+    let test = "a_table_granted_column_by_column_has_its_columns_unknown";
+    use datarig_core::driver::structure::StructureGroup;
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "colgrant", 3).await;
+    let name = format!("zz_it_colgrant_{}", std::process::id());
+    let _drop = Cleanup { url: admin.clone(), sql: format!("DROP USER IF EXISTS '{name}'@'%'") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!("DROP USER IF EXISTS '{name}'@'%'")).await.unwrap();
+    a.query_drop(format!("CREATE USER '{name}'@'%' IDENTIFIED BY 'pw'")).await.unwrap();
+    a.query_drop(format!("GRANT SELECT (id), UPDATE (id) ON {} TO '{name}'@'%'", t.q())).await.unwrap();
+    let mut m = Conn::start(&as_user(&url, &name, "pw"), SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    assert_eq!(s.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id"], "only the granted column");
+    assert!(s.hidden.contains(&StructureGroup::Columns), "{:?}", s.hidden);
+    a.query_drop(format!("GRANT SELECT ON {} TO '{name}'@'%'", t.q())).await.unwrap();
+    a.disconnect().await.unwrap();
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    assert_eq!(s.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "v"]);
+    assert!(!s.hidden.contains(&StructureGroup::Columns), "{:?}", s.hidden);
+}
+
 // ── DDL ────────────────────────────────────────────────────────────────────
 
 /// The user of the tests' URL (`DATARIG_TEST_MYSQL_URL`) as a definer.

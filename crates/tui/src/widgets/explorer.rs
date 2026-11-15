@@ -477,7 +477,12 @@ fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
             let label = app.i18n.label(group_label(sg)).to_string();
             if st.hidden.contains(&sg) {
                 parts.push((label, dim));
-                let unknown = app.i18n.label(Label::TreeGroupHidden);
+                // Columns listed are the table's; others may not be.
+                let unknown = match sg {
+                    StructureGroup::Columns => Label::TreeGroupHiddenColumns,
+                    _ => Label::TreeGroupHidden,
+                };
+                let unknown = app.i18n.label(unknown);
                 parts.push((format!(" · {unknown}"), Style::new().fg(th.warning)));
             } else if count == 0 {
                 parts.push((label, dim));

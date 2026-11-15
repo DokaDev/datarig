@@ -185,6 +185,9 @@ pub enum Duplicates {
     /// The rows are the same in every column (the table has no key, the result shows every
     /// column, and every one compares exactly): the user may change one of them or all.
     Choose,
+    /// The rows would be [`Duplicates::Choose`], but the server may not list every column of
+    /// the table to this user (a grant of single columns): they may differ in the others.
+    Unseen,
 }
 
 /// How a row of the result is found in the table.
@@ -243,8 +246,9 @@ impl EditSource {
     /// A table others inherit from (legacy inheritance) is read with their rows, and its keys
     /// do not hold across them: its rows are found by their values only. Rows the same in every
     /// column are a choice only when the table surely may hold such rows (no key at all, none
-    /// that names a column not listed, no group the server would not list) and the result shows
-    /// every column, each exactly.
+    /// that names a column not listed, no key group the server would not list) and the result
+    /// shows every column, each exactly; with columns the server may not list
+    /// ([`Duplicates::Unseen`]) they are refused, saying why.
     pub fn target(&self, s: &TableStructure, f: &dyn EditSql) -> Result<EditTarget, ReadOnly> {
         use StructureGroup as G;
         if !matches!(s.kind, RelationKind::Table | RelationKind::PartitionedTable) {
@@ -262,10 +266,11 @@ impl EditSource {
             })
             .collect::<Result<Vec<Option<TableColumn>>, ReadOnly>>()?;
         // Groups whose being whole decides whether rows may be the same in every column.
-        let partial =
-            s.hidden.iter().any(|g| matches!(g, G::Columns | G::PrimaryKey | G::Indexes | G::UniqueConstraints));
+        let unseen = s.hidden.contains(&G::Columns);
+        let partial = s.hidden.iter().any(|g| matches!(g, G::PrimaryKey | G::Indexes | G::UniqueConstraints));
         let shown = |name: &str| columns.iter().flatten().any(|c| c.column.name == name);
-        let all_columns_shown = !s.hidden.contains(&G::Columns) && s.columns.iter().all(|c| shown(&c.name));
+        let listed_shown = s.columns.iter().all(|c| shown(&c.name));
+        let all_columns_shown = !unseen && listed_shown;
         // The result column of table column `name`, when it compares exactly (its first copy).
         let exact = |name: &str| {
             columns
@@ -309,10 +314,10 @@ impl EditSource {
                             return Err(ReadOnly::NoExactColumn);
                         }
                         let all_exact = columns.iter().flatten().all(|c| c.exact == Exactness::Exact);
-                        let duplicates = if may_repeat && all_columns_shown && all_exact {
-                            Duplicates::Choose
-                        } else {
-                            Duplicates::Refuse
+                        let duplicates = match may_repeat && listed_shown && all_exact {
+                            true if unseen => Duplicates::Unseen,
+                            true => Duplicates::Choose,
+                            false => Duplicates::Refuse,
                         };
                         return Ok(Identity::Values { columns: found, duplicates });
                     }

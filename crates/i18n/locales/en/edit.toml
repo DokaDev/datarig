@@ -102,6 +102,7 @@
 "edit.preview.no_one_of_k" = { one = "matches {count} identical row, and this database can't change just one", other = "matches {count} identical rows, and this database can't change just one" }
 "edit.preview.internal" = "A statement was not written as it must be; nothing can be applied"
 "edit.preview.choose" = { one = "matches {count} identical row", other = "matches {count} identical rows" }
+"edit.preview.unseen" = { one = "matches {count} row that looks the same, but the table may have columns this account is not shown (its own grants do not cover the whole table), so it may differ", other = "matches {count} rows that look the same, but the table may have columns this account is not shown (its own grants do not cover the whole table), so they may differ" }
 "edit.preview.at_row" = "{row} · {problem}"
 "edit.preview.choose_keys" = { one = "[1] just one   [a] all {count}", other = "[1] just one   [a] all {count}" }
 "edit.preview.tx_commit" = "Runs in one transaction; commits at the end."
