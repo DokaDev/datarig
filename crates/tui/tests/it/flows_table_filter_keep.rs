@@ -564,9 +564,10 @@ fn the_first_change_of_a_restored_filter_is_undone_to_it() {
         } else {
             h.keys("f");
             // Its chip out (no columns known yet: `Tab` goes from the list to the chips), then
-            // a condition of the SQL section's `WHERE`.
+            // a condition of the SQL view's `WHERE` field.
             h.key(KeyCode::Tab);
             h.key(KeyCode::Char('x'));
+            h.key(KeyCode::Char('Q'));
             h.key(KeyCode::Char('Q'));
             h.type_text("id > 2");
             h.key(KeyCode::Enter);
@@ -667,7 +668,7 @@ fn a_sql_field_with_a_line_break_in_a_string_is_not_read_back_once_edited() {
     let mut h = launch(&cfg, &state, Lang::En);
     h.key(KeyCode::Tab);
     h.keys("f");
-    h.keys("Q");
+    h.keys("QQ");
     h.key(KeyCode::End);
     h.type_text(" AND id > 1");
     h.key(KeyCode::Tab);
@@ -683,7 +684,7 @@ fn a_sql_field_with_a_line_break_in_a_string_is_not_read_back_once_edited() {
     let mut h = launch(&cfg, &state, Lang::En);
     h.key(KeyCode::Tab);
     h.keys("f");
-    h.keys("Q");
+    h.keys("QQ");
     h.key(KeyCode::End);
     h.type_text(" AND id < 9");
     h.key(KeyCode::Tab);

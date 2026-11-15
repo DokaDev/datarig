@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/flows_filter_sql.rs
+expression: backend
+---
+"╭─ Filter and sort · shop.users ─────────────────────────────── 3 rows loaded ─╮"
+"│ Columns 2       / search │ SQL  as text, read back when a field is left      │"
+"│ from the loaded result   │                                                   │"
+"│▸    id             =     │ WHERE      id > 1 AND (name = 'a' OR name = 'b')  │"
+"│     name             v   │                                                   │"
+"│                          │ ORDER BY   name DESC                              │"
+"│                          │                                                   │"
+"│                          │                                   Open in editor  │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"│                          │                                                   │"
+"├──────────────────────────┴───────────────────────────────────────────────────┤"
+"│ Where                                                      undo   clear all  │"
+"│ Order  name ↓   + id                               Limit              SQL ▾  │"
+"│ Ctrl+Space complete · Esc close (read back)        Enter apply   Esc cancel  │"
+"╰──────────────────────────────────────────────────────────────────────────────╯"

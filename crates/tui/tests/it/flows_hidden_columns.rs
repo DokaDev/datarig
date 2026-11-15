@@ -248,7 +248,7 @@ fn the_dialog_hides_and_its_undo_shows_again() {
     at(&mut h, 0, 3);
     h.keys("f");
     h.keys(" ");
-    h.keys("Q");
+    h.keys("QQ");
     h.type_text("id > 1");
     h.key(KeyCode::Enter);
     assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (id > 1)")]]);

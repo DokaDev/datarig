@@ -1,9 +1,10 @@
 //! The filter and sort dialog of a table tab ([`crate::app::filter_dialog`]), centred over the
-//! screen dimmed around it: the title with what is loaded, the table's columns on the left, the selected
-//! column's conditions and sort line on the right, and a footer of three rows: the `Where`
-//! chips with `undo` and `clear all`, the `Order` keys with the `Limit` field and the `SQL`
-//! toggle, and one hint line with `Enter apply` and `Esc cancel`. The operator picker is an
-//! opaque box over the right pane.
+//! screen dimmed around it: the title with what is loaded, the table's columns on the left, the
+//! selected column's conditions and sort line on the right (or the SQL view in their place: the
+//! statement as sent, or the `WHERE` and `ORDER BY` fields), and a footer of three rows: the
+//! `Where` chips (hidden while the SQL view is open) with `undo` and `clear all`, the `Order`
+//! keys with the `Limit` field and the `SQL` toggle, and one hint line with `Enter apply` and
+//! `Esc cancel`. The operator picker is an opaque box over the right pane.
 //!
 //! The accent marks only the focus and what is applied (filter and sort marks, chip glyphs);
 //! the warning colour only an expression chip and a condition still waiting for its value;
@@ -14,7 +15,9 @@ use crate::app::PopupOwner;
 use crate::app::action::Action;
 use crate::app::filter_dialog::list::ValuesView;
 use crate::app::filter_dialog::view::{PopupKind, PopupKindId};
-use crate::app::filter_dialog::{ColumnSource, DialogAction, DialogFocus, DialogHit, DialogHits, FilterDialog, Mark};
+use crate::app::filter_dialog::{
+    ColumnSource, DialogAction, DialogFocus, DialogHit, DialogHits, FilterDialog, Mark, SqlView,
+};
 use crate::icons;
 use crate::keymap::Ctx;
 use crate::screens::{MIN_H, MIN_W};
@@ -163,17 +166,9 @@ fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u1
         }
     }
 
-    // The footer: 3 rows, the SQL section between its second and its last while open.
-    let base_q = app.table_query(tab).map(|tq| tq.applied().clone());
-    let preview = match (d.sql.as_ref(), target.as_ref(), base_q.as_ref()) {
-        (Some(_), Some(t), Some(q)) => Some(sql_preview(d, t, q)),
-        _ => None,
-    };
-    let sql_lay =
-        preview.as_ref().map(|p| sql_layout(d, p.as_ref().ok().map(|p| p.0.as_str()), inner, x0, right, i18n));
-    let sql_rows = sql_lay.as_ref().map_or(0, |l| l.rows);
+    // The footer: 3 rows.
     let hy = inner.y + inner.height - 1;
-    let foot_y = hy - 2 - sql_rows;
+    let foot_y = hy - 2;
     let sep_y = foot_y - 1;
     let body = Rect::new(inner.x, inner.y, inner.width, sep_y - inner.y);
     for x in area.x..area.x + area.width {
@@ -318,10 +313,21 @@ fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u1
         put(buf, split.saturating_sub(w + 1), list_y + rows_h as u16, &cue, usize::from(w), muted);
     }
 
-    // Right: the selected column's conditions and sort line.
+    // Right: the selected column's conditions and sort line, or the SQL view in their place.
     let px = split + 2;
     let pane = Rect::new(px, body.y, right.saturating_sub(px), sep_y.saturating_sub(body.y));
-    let out = draw_condition_pane(app, d, view.as_ref(), pane, PaneOpts::default(), buf, &mut hits);
+    let out = match d.sql.as_ref() {
+        Some(_) => {
+            let base_q = app.table_query(tab).map(|tq| tq.applied().clone());
+            let preview = match (target.as_ref(), base_q.as_ref()) {
+                (Some(t), Some(q)) => sql_preview(d, t, q),
+                _ => Err(()),
+            };
+            let at = draw_sql(app, d, preview.as_ref(), pane, buf, &mut hits);
+            crate::widgets::condition_pane::PaneOut { cursor: at, values_scroll: d.values_scroll, ..Default::default() }
+        }
+        None => draw_condition_pane(app, d, view.as_ref(), pane, PaneOpts::default(), buf, &mut hits),
+    };
     cursor = out.cursor.or(cursor);
 
     // The footer: `Where` chips, `undo`, `clear all`.
@@ -342,7 +348,8 @@ fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u1
     put(buf, clear_x, wy, &clear, usize::from(cw), button);
     hits.undo = Rect::new(undo_x, wy, uw, 1);
     hits.clear_all = Rect::new(clear_x, wy, cw, 1);
-    let chips = d.draft.where_.chips();
+    // The SQL view edits the conditions as text: the chips are not shown meanwhile.
+    let chips = if d.sql.is_some() { Vec::new() } else { d.draft.where_.chips() };
     let mut cx = x0 + label_w;
     let room_end = undo_x.saturating_sub(2);
     let glyph = icons::column_filter(on);
@@ -456,12 +463,6 @@ fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u1
         put(buf, kx.min(names_end + 1), oy, &n, usize::from(keys_end.saturating_sub(kx.min(names_end + 1))), muted);
     }
 
-    // The SQL section, while open.
-    if let (Some(lay), Some(p)) = (sql_lay.as_ref(), preview.as_ref()) {
-        let at = draw_sql(app, d, lay, p.as_ref(), (x0, right, oy + 1), buf, &mut hits);
-        cursor = at.or(cursor);
-    }
-
     // The hint line: what the dialog says, else the keys of the focused part; then the
     // buttons.
     let apply = format!(" {} ", i18n.msg(&Msg::TableDialogApply { key: key(app, DialogAction::Apply) }));
@@ -507,7 +508,7 @@ fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u1
         d.hover = lit.map(|(h, _)| h);
         d.press.drawn(top, now);
     }
-    // The completion popup of the SQL section's field with the keys, at its cursor.
+    // The completion popup of the SQL view's field with the keys, at its cursor.
     let field = app.filter_dialog_sql_field();
     if let (Some(at), Some(f)) = (cursor, field)
         && app.tab().popup.as_ref().is_some_and(|p| p.owner == PopupOwner::Dialog(f))
@@ -517,11 +518,11 @@ fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u1
     cursor.filter(|_| top)
 }
 
-/// The SQL section's statement, as [`sql_preview`] writes it: `Err` when the `LIMIT` field is
-/// no cap.
+/// The SQL view's statement, as [`sql_preview`] writes it: `Err` when the `LIMIT` field is no
+/// cap.
 type Preview = Result<(String, Option<Range<usize>>), ()>;
 
-/// The statement the draft sends with what the SQL section's fields hold now (a field typed in
+/// The statement the draft sends with what the SQL view's fields hold now (a field typed in
 /// is taken as it would be read back; an order that does not read leaves the draft's keys), and
 /// the bytes of the key the app appends to make the order total (the primary key's columns).
 fn sql_preview(d: &FilterDialog, target: &query::Target, base: &query::Query) -> Preview {
@@ -556,8 +557,8 @@ fn tie_breaker(c: &query::Compiled, d: Dialect) -> Option<Range<usize>> {
 }
 
 /// The `ORDER BY` clause draft `d` sends, as its statement writes it (the key the app appends
-/// to make the order total included, its bytes returned with it, to be dimmed as the SQL
-/// section dims it); `None` without keys, or while the draft is no query.
+/// to make the order total included, its bytes returned with it, to be dimmed as the SQL view
+/// dims it); `None` without keys, or while the draft is no query.
 pub(crate) fn order_clause(app: &App, d: &FilterDialog) -> Option<(String, Option<Range<usize>>)> {
     let target = app.table_target(d.tab)?;
     let base = app.table_query(d.tab)?.applied().clone();
@@ -618,168 +619,142 @@ pub(crate) fn wrap_at(text: &str, w: usize) -> Vec<Range<usize>> {
     lines
 }
 
-/// How the SQL section is laid out: its rows, the statement's and the `WHERE` field's, the
-/// labels' width.
-struct SqlLayout {
-    rows: u16,
-    statement: u16,
-    where_: u16,
-    label: u16,
-}
-
-/// The rest of the dialog keeps at least these rows while the SQL section is open.
-const BODY_MIN: u16 = 8;
-
-/// The layout of the SQL section of `d` (statement `sql`, `None` when there is none) in
-/// `inner`: the statement up to 4 rows, a note, the `WHERE` field up to 3 rows, the `ORDER BY`
-/// field; the statement then the field given fewer rows where the dialog is short.
-fn sql_layout(
-    d: &FilterDialog,
-    sql: Option<&str>,
-    inner: Rect,
-    x0: u16,
-    right: u16,
-    i18n: &datarig_i18n::I18n,
-) -> SqlLayout {
-    let label = [Label::TableDialogSqlWhere, Label::TableDialogSqlOrder]
-        .iter()
-        .map(|l| width(&i18n.label(*l)))
-        .max()
-        .unwrap_or(8) as u16
-        + 2;
-    let statement_w = usize::from(right.saturating_sub(x0));
-    let field_w = usize::from(right.saturating_sub(x0 + label + 2));
-    let mut statement = sql.map_or(1, |s| wrap_at(s, statement_w).len()).clamp(1, 4) as u16;
-    let text = d.sql.as_ref().map_or("", |s| s.where_.input.text());
-    let mut where_ = wrap_at(text, field_w).len().clamp(1, 3) as u16;
-    let room = inner.height.saturating_sub(3 + 1 + BODY_MIN);
-    while statement + where_ + 2 > room && statement > 1 {
-        statement -= 1;
-    }
-    while statement + where_ + 2 > room && where_ > 1 {
-        where_ -= 1;
-    }
-    SqlLayout { rows: (statement + where_ + 2).min(room), statement, where_, label }
-}
-
-/// Draw the SQL section of `d` (laid out as `lay`, statement `p`) from row `at.2` between
-/// columns `at.0` and `at.1`: the statement (read-only, coloured as the editor colours SQL,
-/// the tie-breaker dimmed, wrapped), a note with `Open in editor` on its right, the `WHERE`
-/// field (wrapped) and the `ORDER BY` field, the part refused underlined. Returns the cursor
-/// of its field with the keys.
+/// Draw the SQL view of `d` (statement `p`) in the right pane `pane`: a heading naming the
+/// view, then either the statement (read only, coloured as the editor colours SQL, the
+/// tie-breaker dimmed, wrapped, cut where the pane ends) or the `WHERE` field (wrapped) and the
+/// `ORDER BY` field, the part refused underlined; under them `Open in editor`. Returns the
+/// cursor of its field with the keys.
 fn draw_sql(
     app: &App,
     d: &FilterDialog,
-    lay: &SqlLayout,
     p: Result<&(String, Option<Range<usize>>), &()>,
-    at: (u16, u16, u16),
+    pane: Rect,
     buf: &mut Buffer,
     hits: &mut DialogHits,
 ) -> Option<(u16, u16)> {
     let th = theme::cur();
     let i18n = &app.i18n;
-    let (x0, right, mut y) = at;
-    let end = y + lay.rows;
+    let s = d.sql.as_ref()?;
+    let (x0, right, end) = (pane.x, pane.x + pane.width, pane.y + pane.height);
+    if pane.height < 4 || pane.width < 12 {
+        return None;
+    }
     let base = th.base();
     let muted = Style::new().fg(th.fg_muted);
     let bold = Style::new().fg(th.fg).add_modifier(Modifier::BOLD);
     let field = Style::new().fg(th.fg).bg(th.surface_alt);
     let focus_style = Style::new().fg(th.fg).patch(th.selection);
     let error = Style::new().fg(th.error).add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
+    let w = usize::from(pane.width);
     let mut cursor = None;
-    let s = d.sql.as_ref()?;
-    // The statement.
-    let w = usize::from(right.saturating_sub(x0));
-    match p {
-        Ok((sql, tie)) => {
-            let mut spans = highlight(sql, d.dialect, None);
-            if let Some(t) = tie {
-                spans.insert(0, (t.clone(), Style::new().fg(th.fg_dim)));
-            }
-            let lines = wrap_at(sql, w);
-            let shown = usize::from(lay.statement).min(lines.len());
-            for (i, line) in lines.iter().take(shown).enumerate() {
-                let cut = i + 1 == shown && lines.len() > shown;
-                let mut x = x0;
-                for (b, g) in unicode_segmentation::UnicodeSegmentation::grapheme_indices(&sql[line.clone()], true) {
-                    let pos = line.start + b;
-                    let gw = crate::text::grapheme_width(g) as u16;
-                    if cut && x + gw + 1 > right {
-                        put(buf, x, y, "\u{2026}", 1, muted);
-                        break;
-                    }
-                    let style = spans.iter().find(|(r, _)| r.contains(&pos)).map_or(base, |(_, st)| base.patch(*st));
-                    buf.set_stringn(x, y, g, usize::from(gw.max(1)), style);
-                    x += gw;
+    // The heading: `SQL` and what the view shows.
+    let title = i18n.label(Label::TableDialogSql).to_string();
+    let tx = x0 + put(buf, x0, pane.y, &title, w, bold) + 2;
+    let what = match s.view {
+        SqlView::Statement => Label::TableDialogSqlStatement,
+        SqlView::Fields => Label::TableDialogSqlFields,
+    };
+    put(buf, tx, pane.y, &i18n.label(what), usize::from(right.saturating_sub(tx)), muted);
+    // The rows between the heading and the button's row (a blank row above it).
+    let mut y = pane.y + 2;
+    let last = end - 2;
+    match s.view {
+        SqlView::Statement => match p {
+            Ok((sql, tie)) => {
+                let mut spans = highlight(sql, d.dialect, None);
+                if let Some(t) = tie {
+                    spans.insert(0, (t.clone(), Style::new().fg(th.fg_dim)));
                 }
+                let lines = wrap_at(sql, w);
+                let shown = usize::from(last.saturating_sub(y)).min(lines.len());
+                for (i, line) in lines.iter().take(shown).enumerate() {
+                    let cut = i + 1 == shown && lines.len() > shown;
+                    let mut x = x0;
+                    for (b, g) in unicode_segmentation::UnicodeSegmentation::grapheme_indices(&sql[line.clone()], true)
+                    {
+                        let pos = line.start + b;
+                        let gw = crate::text::grapheme_width(g) as u16;
+                        if cut && x + gw + 1 > right {
+                            put(buf, x, y, "\u{2026}", 1, muted);
+                            break;
+                        }
+                        let style =
+                            spans.iter().find(|(r, _)| r.contains(&pos)).map_or(base, |(_, st)| base.patch(*st));
+                        buf.set_stringn(x, y, g, usize::from(gw.max(1)), style);
+                        x += gw;
+                    }
+                    y += 1;
+                }
+            }
+            Err(()) => {
+                put(buf, x0, y, &i18n.label(Label::TableDialogSqlLimit), w, Style::new().fg(th.warning));
                 y += 1;
             }
-            y += lay.statement - shown as u16;
-        }
-        Err(()) => {
-            put(buf, x0, y, &i18n.label(Label::TableDialogSqlLimit), w, Style::new().fg(th.warning));
-            y += lay.statement;
+        },
+        SqlView::Fields => {
+            let label = [Label::TableDialogSqlWhere, Label::TableDialogSqlOrder]
+                .iter()
+                .map(|l| width(&i18n.label(*l)))
+                .max()
+                .unwrap_or(8) as u16
+                + 2;
+            let fx = x0 + label;
+            let fw = right.saturating_sub(fx);
+            // The `WHERE` field, wrapped over as many rows as it takes (the `ORDER BY` field's
+            // row kept).
+            put(buf, x0, y, &i18n.label(Label::TableDialogSqlWhere), usize::from(label), bold);
+            let focused = d.focus == DialogFocus::SqlWhere && d.picker.is_none();
+            // Its lines, the cursor's own line past a full last one included.
+            let lines = wrapped_view(&s.where_.input, usize::from(fw.saturating_sub(2)), u16::MAX, focused).0;
+            let rows = (lines.len() as u16).clamp(1, last.saturating_sub(y + 1).max(1));
+            let r = Rect::new(fx, y, fw, rows);
+            fill(buf, r, field);
+            hits.sql_where = r;
+            let mut spans = highlight(s.where_.input.text(), d.dialect, None);
+            // Where the last refusal points in the text sent, while the field holds that text.
+            if let Some(Mark::Where { at, .. }) = &d.mark
+                && !s.where_.edited()
+            {
+                spans.insert(0, (at.clone(), error));
+            }
+            let c = draw_wrapped(
+                &s.where_.input,
+                Rect::new(fx + 1, y, fw.saturating_sub(2), r.height),
+                field,
+                &spans,
+                focused,
+                buf,
+            );
+            if focused {
+                cursor = c;
+            }
+            y += r.height;
+            // The `ORDER BY` field.
+            put(buf, x0, y, &i18n.label(Label::TableDialogSqlOrder), usize::from(label), bold);
+            let r = Rect::new(fx, y, fw, 1);
+            fill(buf, r, field);
+            hits.sql_order = r;
+            let focused = d.focus == DialogFocus::SqlOrder && d.picker.is_none();
+            let mut spans = highlight(s.order.input.text(), d.dialect, None);
+            if let Some(Mark::Order(at)) = &d.mark {
+                spans.insert(0, (at.clone(), error));
+            }
+            let mut input = s.order.input.clone();
+            let cx = input.render_spans(Rect::new(fx + 1, y, fw.saturating_sub(2), 1), buf, field, focused, &spans);
+            if focused {
+                cursor = Some((cx, y));
+            }
+            y += 1;
         }
     }
-    if y >= end {
-        return None;
-    }
-    // The note, `Open in editor` on its right.
+    // `Open in editor`, on the right, a blank row below what the view shows.
     let open = format!(" {} ", i18n.label(Label::TableDialogOpenEditor));
     let ow = width(&open) as u16;
     let open_x = right.saturating_sub(ow);
+    let oy = (y + 1).min(end - 1);
     let button = Style::new().fg(th.fg).bg(th.surface_alt);
-    put(buf, open_x, y, &open, usize::from(ow), if d.focus == DialogFocus::SqlOpen { focus_style } else { button });
-    hits.open_sql = Rect::new(open_x, y, ow, 1);
-    put(buf, x0, y, &i18n.label(Label::TableDialogSqlNote), usize::from(open_x.saturating_sub(x0 + 2)), muted);
-    y += 1;
-    // The `WHERE` field, wrapped over its rows.
-    let fx = x0 + lay.label;
-    let fw = right.saturating_sub(fx);
-    if y < end {
-        put(buf, x0, y, &i18n.label(Label::TableDialogSqlWhere), usize::from(lay.label), bold);
-        let rows = lay.where_.min(end - y - u16::from(end - y > 1));
-        let r = Rect::new(fx, y, fw, rows.max(1));
-        fill(buf, r, field);
-        hits.sql_where = r;
-        let focused = d.focus == DialogFocus::SqlWhere && d.picker.is_none();
-        let mut spans = highlight(s.where_.input.text(), d.dialect, None);
-        // Where the last refusal points in the text sent, while the field holds that text.
-        if let Some(Mark::Where { at, .. }) = &d.mark
-            && !s.where_.edited()
-        {
-            spans.insert(0, (at.clone(), error));
-        }
-        let c = draw_wrapped(
-            &s.where_.input,
-            Rect::new(fx + 1, y, fw.saturating_sub(2), r.height),
-            field,
-            &spans,
-            focused,
-            buf,
-        );
-        if focused {
-            cursor = c;
-        }
-        y += r.height;
-    }
-    // The `ORDER BY` field.
-    if y < end {
-        put(buf, x0, y, &i18n.label(Label::TableDialogSqlOrder), usize::from(lay.label), bold);
-        let r = Rect::new(fx, y, fw, 1);
-        fill(buf, r, field);
-        hits.sql_order = r;
-        let focused = d.focus == DialogFocus::SqlOrder && d.picker.is_none();
-        let mut spans = highlight(s.order.input.text(), d.dialect, None);
-        if let Some(Mark::Order(at)) = &d.mark {
-            spans.insert(0, (at.clone(), error));
-        }
-        let mut input = s.order.input.clone();
-        let cx = input.render_spans(Rect::new(fx + 1, y, fw.saturating_sub(2), 1), buf, field, focused, &spans);
-        if focused {
-            cursor = Some((cx, y));
-        }
-    }
+    put(buf, open_x, oy, &open, usize::from(ow), if d.focus == DialogFocus::SqlOpen { focus_style } else { button });
+    hits.open_sql = Rect::new(open_x, oy, ow, 1);
     cursor
 }
 
@@ -917,14 +892,18 @@ pub(crate) fn hint_parts(app: &App, d: &FilterDialog, view: Option<&ValuesView>,
             l(&apply, Label::TableDialogHintPick),
             l(&cancel, Label::TableDialogHintClose),
         ],
-        DialogFocus::Columns => vec![
-            l("\u{2191}\u{2193}", Label::TableDialogHintColumn),
-            l("\u{2192}", Label::TableDialogHintFilter),
-            l("Space", Label::TableDialogHintHide),
-            l("s", Label::TableDialogHintSort),
-            l("/", Label::TableDialogHintSearch),
-            l("Tab", Label::TableDialogHintNextArea),
-        ],
+        // `→` goes to the column's lines, which the SQL view hides while it is open.
+        DialogFocus::Columns => [
+            Some(l("\u{2191}\u{2193}", Label::TableDialogHintColumn)),
+            d.sql.is_none().then(|| l("\u{2192}", Label::TableDialogHintFilter)),
+            Some(l("Space", Label::TableDialogHintHide)),
+            Some(l("s", Label::TableDialogHintSort)),
+            Some(l("/", Label::TableDialogHintSearch)),
+            Some(l("Tab", Label::TableDialogHintNextArea)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
         DialogFocus::Op(_) => vec![
             l("Space", Label::TableDialogHintOperator),
             l("\u{2192}", Label::TableDialogHintValue),
@@ -983,7 +962,11 @@ pub(crate) fn hint_parts(app: &App, d: &FilterDialog, view: Option<&ValuesView>,
         ],
         DialogFocus::Limit => vec![l("0-9", Label::TableDialogHintLimit), l("Tab", Label::TableDialogHintNextArea)],
         DialogFocus::Sql => {
-            let what = if d.sql.is_some() { Label::TableDialogHintSqlClose } else { Label::TableDialogHintSql };
+            let what = match d.sql_view() {
+                None => Label::TableDialogHintSql,
+                Some(SqlView::Statement) => Label::TableDialogHintSqlFields,
+                Some(SqlView::Fields) => Label::TableDialogHintSqlClose,
+            };
             vec![
                 l("Space", what),
                 (key(app, DialogAction::Sql), i18n.label(what).to_string()),
@@ -999,9 +982,14 @@ pub(crate) fn hint_parts(app: &App, d: &FilterDialog, view: Option<&ValuesView>,
             l("\u{2191}\u{2193}", Label::TableDialogHintField),
             l("Tab", Label::TableDialogHintNextArea),
         ],
-        DialogFocus::SqlOpen => vec![
+        DialogFocus::SqlOpen if d.sql_fields().is_some() => vec![
             l("Space", Label::TableDialogHintOpenSql),
             l("\u{2191}", Label::TableDialogHintField),
+            l("Tab", Label::TableDialogHintNextArea),
+        ],
+        DialogFocus::SqlOpen => vec![
+            l("Space", Label::TableDialogHintOpenSql),
+            (key(app, DialogAction::Sql), i18n.label(Label::TableDialogHintSqlFields).to_string()),
             l("Tab", Label::TableDialogHintNextArea),
         ],
     };

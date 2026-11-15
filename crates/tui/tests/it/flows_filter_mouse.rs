@@ -291,11 +291,15 @@ fn the_sql_section_by_the_pointer() {
     h.key(KeyCode::Tab);
     h.keys("f");
     h.draw(W, H);
+    // A click shows the statement, a second the fields.
     click_on(&mut h, "SQL \u{25b8}", 0);
+    assert!(h.screen(W, H).contains("the statement as it is sent"));
+    assert!(h.app.filter_dialog_sql_fields().is_none());
+    click_on(&mut h, "SQL \u{25be}", 0);
     assert_eq!(h.app.filter_dialog_sql_fields().map(|f| f.0), Some(long.to_string()));
     // The `WHERE` field is wrapped: a click on its second row puts the cursor before what is
     // shown first there.
-    // The field's label, at the start of its row (the statement above names `WHERE` too).
+    // The field's label, at the start of its row in the right pane.
     let (wx, wy) = find(&mut h, "\u{2502} WHERE ");
     let t = h.draw(W, H);
     let second = row_text(t.backend().buffer(), wy + 1);
@@ -320,6 +324,7 @@ fn the_sql_section_by_the_pointer() {
     // `SQL ▾` closes it; `Open in editor` opens the statement in a console.
     click_on(&mut h, "SQL \u{25be}", 0);
     assert!(h.app.filter_dialog_sql_fields().is_none());
+    assert!(!h.screen(W, H).contains("Open in editor"), "closed");
     click_on(&mut h, "SQL \u{25b8}", 0);
     let tabs = h.app.tabs.len();
     click_on(&mut h, "Open in editor", 1);

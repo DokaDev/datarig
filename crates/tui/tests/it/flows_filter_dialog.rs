@@ -886,12 +886,17 @@ fn many_conditions_scroll_to_the_one_with_the_keys() {
     h.key(KeyCode::Char('j'));
     let s = h.screen(80, 24);
     assert!(focused_row(&s).is_some_and(|l| l.contains("+ add condition")), "{s}");
-    // With the SQL section open the pane is shorter: the line with the keys is still drawn.
+    // The SQL view takes the pane: its lines go out of reach (the keys to the `SQL` toggle), and
+    // are back once it closes.
+    h.key(KeyCode::Char('Q'));
+    let s = h.screen(80, 24);
+    assert!(!s.contains("+ add condition") && focused_row(&s).is_none(), "{s}");
+    h.key(KeyCode::Right);
     h.key(KeyCode::Char('Q'));
     assert!(h.app.filter_dialog_sql_fields().is_some());
-    for _ in 0..3 {
-        h.key(KeyCode::Tab);
-    }
+    h.key(KeyCode::Esc);
+    assert!(h.app.filter_dialog_sql_fields().is_none());
+    h.key(KeyCode::Tab);
     assert_eq!(h.app.key_context(), Ctx::FilterDialog);
     h.key(KeyCode::Right);
     for _ in 0..5 {
@@ -907,7 +912,7 @@ fn many_conditions_scroll_to_the_one_with_the_keys() {
     }
     let s = h.screen(80, 24);
     assert!(focused_row(&s).is_some_and(|l| l.contains("+ add condition")), "{s}");
-    assert_screen!("filter_dialog_many_sql_en_80x24", Lang::En, h.draw(80, 24));
+    assert_screen!("filter_dialog_many_end_en_80x24", Lang::En, h.draw(80, 24));
 }
 
 #[test]
