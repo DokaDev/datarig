@@ -744,11 +744,32 @@ impl App {
     }
 
     /// The filter dialog of table tab `id` with `q` as its draft, on column `column`, shown
-    /// as `view`.
-    pub(super) fn open_filter_dialog_with(&mut self, id: TabId, q: &Query, column: Option<&str>, view: View) {
+    /// as `view`; it returns whether the dialog shows `view` now. The tab's dialog already open
+    /// is the same editing session shown as `view` (its draft, undo and apply waiting kept, `q`
+    /// not taken), except that the whole dialog does not turn into a popup; another tab's
+    /// dialog waiting for its apply to be sent stays open, nothing else opened.
+    pub(super) fn open_filter_dialog_with(&mut self, id: TabId, q: &Query, column: Option<&str>, view: View) -> bool {
         self.close_search_prompt();
-        let (Some(target), Some(name)) = (self.table_target(id), self.table_name(id)) else { return };
-        let Some(tq) = self.table_query(id) else { return };
+        if let Some(d) = self.filter_dialog_mut() {
+            if d.tab == id {
+                if !d.is_popup() && matches!(view, View::Popup { .. }) {
+                    return false;
+                }
+                d.set_view(view);
+                if let Some(c) = column {
+                    d.select_column(c);
+                }
+                d.narrow = None;
+                d.values_scroll = 0;
+                d.settle();
+                return true;
+            }
+            if d.applying.is_some() {
+                return false;
+            }
+        }
+        let (Some(target), Some(name)) = (self.table_target(id), self.table_name(id)) else { return false };
+        let Some(tq) = self.table_query(id) else { return false };
         let hidden = tq.hidden.clone();
         let applied = Draft::from_query(tq.applied(), &target).with_hidden(&hidden);
         let before_last = tq
@@ -809,6 +830,7 @@ impl App {
             d.select_column(c);
         }
         self.overlays.push(Overlay::FilterDialog(Box::new(d)));
+        true
     }
 
     /// The filter dialog of the active table tab, with the query its next run sends as its
@@ -816,7 +838,8 @@ impl App {
     /// on the condition whose text is `term` (the first of the column's when none is), else on
     /// `+ add condition`; the add popup and the columns popup on the first column; the WHERE
     /// list on its first condition, else on its `+ add condition`; the order popup on its first
-    /// line; the rows popup on its next page.
+    /// line; the rows popup on its next page. The tab's dialog already open turns into the
+    /// popup (the whole dialog stays as it is).
     pub(super) fn open_filter_popup(&mut self, kind: view::PopupKind, anchor: view::Anchor, term: Option<&str>) {
         let id = self.tab().id;
         let Some(q) = self.table_query(id).map(|tq| tq.draft.clone()) else { return };
@@ -825,7 +848,9 @@ impl App {
             _ => None,
         };
         let id_of = kind.id();
-        self.open_filter_dialog_with(id, &q, column.as_deref(), View::Popup { kind, anchor });
+        if !self.open_filter_dialog_with(id, &q, column.as_deref(), View::Popup { kind, anchor }) {
+            return;
+        }
         let Some(d) = self.filter_dialog_mut() else { return };
         match id_of {
             view::PopupKindId::WhereList => {
@@ -835,12 +860,25 @@ impl App {
             view::PopupKindId::Order => return d.focus_on(DialogFocus::Sorted(0)),
             view::PopupKindId::Rows => return d.focus_on(DialogFocus::RowsItem(RowsItem::Next)),
             view::PopupKindId::Condition => {}
-            view::PopupKindId::AddPick | view::PopupKindId::Columns => return,
+            view::PopupKindId::AddPick | view::PopupKindId::Columns => {
+                d.cursor = 0;
+                d.scroll = 0;
+                return d.focus_on(DialogFocus::Columns);
+            }
         }
         let rows = d.rows();
         let same = rows.iter().copied().find(|&t| term.is_some() && d.draft.where_.terms()[t].text.as_deref() == term);
         let focus = same.or(rows.first().copied()).map_or(DialogFocus::Add, DialogFocus::Op);
         d.focus_on(focus);
+    }
+
+    /// What table tab `id`'s bar showed is gone (another tab active, another result shown, the
+    /// tab bound to another connection): a popup of the tab's dialog closes as `Esc` closes it.
+    /// The whole dialog stays.
+    pub(super) fn filter_popup_leave(&mut self, id: TabId) {
+        if self.filter_dialog().is_some_and(|d| d.tab == id && d.is_popup()) {
+            self.filter_dialog_dismiss();
+        }
     }
 
     /// How many rows table tab `id` holds of its query; `None` when it holds none.

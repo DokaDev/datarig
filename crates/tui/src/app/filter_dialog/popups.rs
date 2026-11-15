@@ -151,7 +151,7 @@ impl App {
                 d.draft.where_.remove(t);
             });
         };
-        let Some((tab, q)) = self.bar_without(at) else { return };
+        let Some((tab, q)) = self.bar_without(tab, at) else { return };
         self.filter_dialog_edit(None, |d, _| {
             d.draft.where_.remove(t);
         });
@@ -260,9 +260,11 @@ impl App {
     /// The rows popup's focused item done (`Enter`, a click), on the rows shown, by the same
     /// paths as the bar: its arrows (the previous and the next page) and `#` (the planner's
     /// estimate, the exact count with its time limit; each checked as `#` checks it, a refusal
-    /// said). The popup stays open and shows what changed.
+    /// said). The popup stays open and shows what changed. A popup of a tab that is not the
+    /// active one does nothing.
     pub(super) fn filter_rows_run(&mut self) {
-        let Some(DialogFocus::RowsItem(item)) = self.filter_dialog().map(|d| d.focus) else { return };
+        let Some(d) = self.filter_dialog().filter(|d| d.tab == self.tab().id) else { return };
+        let DialogFocus::RowsItem(item) = d.focus else { return };
         match item {
             RowsItem::Prev => self.bar_hit(BarHit::Prev),
             RowsItem::Next => self.bar_hit(BarHit::Next),

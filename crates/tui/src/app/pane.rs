@@ -258,6 +258,7 @@ impl App {
     /// wrapping around.
     pub(super) fn cycle_result_tab(&mut self, delta: isize) {
         use super::tabs::ResultView;
+        self.filter_popup_leave(self.tab().id);
         let t = self.tab_mut();
         let mut views: Vec<(ResultView, Option<usize>)> =
             t.result_tabs().into_iter().map(|i| (ResultView::Rows, Some(i))).collect();

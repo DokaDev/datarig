@@ -514,18 +514,17 @@ impl App {
     /// Term `term` of the active table tab's condition (as applied) taken out, and the query run:
     /// the other terms are sent as they were written.
     pub(super) fn bar_remove(&mut self, term: usize) {
-        let Some((id, q)) = self.bar_without(term) else { return };
+        let Some((id, q)) = self.bar_without(self.tab().id, term) else { return };
         let Some(tq) = self.table_query_mut(id) else { return };
         tq.draft = q.clone();
         tq.refusal = None;
         self.table_run(id, q);
     }
 
-    /// The active table tab and its query (as applied) without term `term` of its condition,
-    /// the other terms as they were written; `None` when there is no such term, or the tab is
-    /// busy (said). The bar's keys on the condition taken out move to the one after it.
-    pub(super) fn bar_without(&mut self, term: usize) -> Option<(TabId, Query)> {
-        let id = self.tab().id;
+    /// Table tab `id` and its query (as applied) without term `term` of its condition, the
+    /// other terms as they were written; `None` when there is no such term, or the tab is busy
+    /// (said). The keys of the tab's bar on the condition taken out move to the one after it.
+    pub(super) fn bar_without(&mut self, id: TabId, term: usize) -> Option<(TabId, Query)> {
         // Refused before the draft changes: a busy tab keeps what it would run next.
         if self.tab_busy(id) {
             self.flash_busy();
@@ -538,7 +537,7 @@ impl App {
         // The keys on the condition taken out move to the next one, else the one before, else
         // `+`.
         let left = d.where_.chips().len();
-        if let Some(f) = self.qbar.focus.as_mut() {
+        if let Some(f) = self.qbar.focus.as_mut().filter(|f| f.on.tab == id) {
             f.hit = match f.hit {
                 BarHit::Chip(k) if k == term => match left {
                     0 => BarHit::Add,

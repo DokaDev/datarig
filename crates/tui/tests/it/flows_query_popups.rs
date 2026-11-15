@@ -1196,3 +1196,104 @@ fn the_order_columns_and_rows_screens() {
         assert_screen!(format!("query_popup_rows_en_{w}x{hh}"), Lang::En, h.draw(w, hh));
     }
 }
+
+/// A popup opened again from the command line while an apply of the session waits for the
+/// connection: the same session in another view, its draft, its undo and the apply kept; `Esc`
+/// still cancels the apply and the session that comes runs nothing. The whole dialog does not
+/// turn into a popup: it stays as it was.
+#[test]
+fn a_popup_opened_again_keeps_the_session_and_its_waiting_apply() {
+    let mut cfg = test_db_config();
+    cfg.prefs.idle_disconnect = Some(Duration::from_secs(300));
+    let mut h = users_where_in(&cfg, "name = 'n1'");
+    h.advance(Duration::from_secs(300));
+    h.advance(Duration::from_secs(300));
+    assert!(h.session_closed(1), "the tab's session closed");
+    h.app.transient = None;
+    open_chip(&mut h, 0);
+    type_value(&mut h, "x");
+    h.key(KeyCode::Enter);
+    let tab = h.app.tab().id;
+    assert!(runs(&mut h).is_empty());
+    assert!(h.app.tab_busy(tab), "it waits for the connection");
+    // `Space r c` from the command line, over the popup.
+    h.ctrl('k');
+    h.type_text("columns shown and hidden");
+    h.key(KeyCode::Enter);
+    assert_eq!(popup(&h), Some(PopupKindId::Columns), "the same session as the columns popup");
+    assert!(draft_where(&h).contains("n1x"), "the draft kept: {}", draft_where(&h));
+    assert!(h.app.tab_busy(tab), "the apply still waits");
+    h.key(KeyCode::Esc);
+    assert!(!open(&h));
+    assert!(!h.app.tab_busy(tab), "cancelled with the session");
+    h.db(DbEvent::Connected);
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::Connected);
+    assert!(runs(&mut h).is_empty(), "the run cancelled never goes");
+    // The whole dialog, edited: the columns popup asked for keeps it whole, the draft kept.
+    let mut h = users_where("name = 'n1'");
+    open_chip(&mut h, 0);
+    h.keys("A");
+    type_value(&mut h, "y");
+    h.ctrl('k');
+    h.type_text("columns shown and hidden");
+    h.key(KeyCode::Enter);
+    assert!(open(&h));
+    assert_eq!(popup(&h), None, "the whole dialog stays whole");
+    assert!(draft_where(&h).contains("n1y"), "{}", draft_where(&h));
+}
+
+/// Open `shop.orders` from the explorer too: a second table tab, answered, filtered with
+/// `filter` and answered; nothing sent since.
+fn open_orders_where(h: &mut Harness, filter: &str) {
+    h.explore("local-pg");
+    h.goto("shop");
+    h.db(DbEvent::Objects {
+        schema: "shop".into(),
+        result: Ok((vec!["orders".into(), "users".into()], Vec::new()).into()),
+    });
+    h.goto("orders");
+    h.key(KeyCode::Enter);
+    assert!(h.app.tab().is_table());
+    answer(h);
+    h.key(KeyCode::Tab);
+    h.command(&format!("where {filter}"));
+    runs(h);
+    answer(h);
+    h.app.focus = Focus::Results;
+}
+
+/// The WHERE list of one tab is closed when another tab becomes active; and whatever it does
+/// is its own tab's: `x` never runs the active tab's query.
+#[test]
+fn the_where_list_closes_on_a_tab_switch_and_acts_on_its_own_tab() {
+    let mut h = users_where(MANY);
+    open_orders_where(&mut h, "id > 7 AND id < 70 AND id <> 9 AND id <> 11 AND id <> 13 AND id <> 15");
+    let orders = h.app.tab().id;
+    // Back on `users`: its WHERE list, then the next tab from the command line.
+    h.ctrl('k');
+    h.type_text("tab.prev");
+    h.key(KeyCode::Enter);
+    assert_ne!(h.app.tab().id, orders);
+    open_at(&mut h, BarHit::More, 120, 34);
+    assert_eq!(popup(&h), Some(PopupKindId::WhereList));
+    h.ctrl('k');
+    h.type_text("tab.next");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tab().id, orders);
+    assert!(!open(&h), "the list closed with its tab");
+    // Still open on `users` while `orders` is active (the tab switched by no action): `x`
+    // takes the condition out of `users`' query, never out of `orders`'.
+    h.ctrl('k');
+    h.type_text("tab.prev");
+    h.key(KeyCode::Enter);
+    open_at(&mut h, BarHit::More, 120, 34);
+    h.key(KeyCode::Down);
+    h.app.tabs.cycle(1);
+    assert_eq!(h.app.tab().id, orders);
+    h.keys("x");
+    let sent = runs(&mut h);
+    assert!(sent.iter().all(|s| s[0].contains(r#""shop"."users""#)), "{sent:?}");
+    let applied = h.app.tabs.get(orders).and_then(|t| t.doc.table_query.as_ref()).map(|q| q.applied().clone());
+    assert!(format!("{applied:?}").contains("id <> 15"), "orders keeps its conditions: {applied:?}");
+}

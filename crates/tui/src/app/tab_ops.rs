@@ -61,6 +61,7 @@ impl App {
             self.cancel_in(tab);
         }
         self.drop_queued(tab, |name| Msg::QueryQueuedDropped { name });
+        self.filter_popup_leave(tab);
         // A table tab's query waiting for its keys ends with the binding it waited in.
         if self.table_keys_cancel(tab) {
             self.tab_status(tab, Notice::new(Label::QueryCancelledRebound, Level::Warning));
@@ -180,6 +181,7 @@ impl App {
 
     /// The active tab is about to change: close what belongs to it on screen.
     pub(super) fn leave_tab(&mut self) {
+        self.filter_popup_leave(self.tab().id);
         let t = self.tab_mut();
         t.popup = None;
         t.completion_due = None;
