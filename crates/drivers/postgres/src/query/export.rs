@@ -241,7 +241,7 @@ async fn stream(
             Err(e) => return Ok(Err((count_error(&e), is_cancel(&e)))),
         };
     let mut read = ExportRead { rows: 0, last: None, complete: true };
-    if !send(link, sink, ExportBatch::Columns(columns_of(&columns))).await? {
+    if !send(link, sink, ExportBatch::Columns(columns_of(&columns, &formats))).await? {
         read.complete = false;
         return Ok(Ok(read));
     }

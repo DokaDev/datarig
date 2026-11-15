@@ -128,8 +128,16 @@ fn decodes_binary(ty: &Type) -> bool {
 /// the server's text output ([`format_code`] `0`) and that text [may hold](styled_text) a date,
 /// a time or an interval. A type decoded from binary is written here in ISO whatever the
 /// session's settings.
+#[cfg(test)]
 pub fn styled(ty: &Type) -> bool {
-    format_code(ty) == 0 && styled_text(ty)
+    styled_in(ty, format_code(ty))
+}
+
+/// [`styled`] for a column of type `ty` read in result format `format`: whatever its type's
+/// usual format, a column read as text (`0`) whose text may hold a date, a time or an interval
+/// is written in the session's settings (a scalar `date` read as text too).
+pub fn styled_in(ty: &Type, format: i16) -> bool {
+    format == 0 && styled_text(ty)
 }
 
 /// Whether PostgreSQL's text output of `ty` may depend on `DateStyle`, `IntervalStyle` or

@@ -275,7 +275,7 @@ pub(super) async fn apply(
                         unshown.push(c);
                     }
                 }
-                (Some((columns_of(stmt.columns()), rows)), unshown)
+                (Some((columns_of(stmt.columns(), &text), rows)), unshown)
             }
             _ => (None, Vec::new()),
         };

@@ -1353,6 +1353,29 @@ mod terminal {
             Err(ApplyFailure { step, why: ApplyError::Db(DbError::Cancelled) })
         }
 
+        /// The rows an Apply's step returns (`RETURNING`) are read as text, every column of
+        /// them: a `date` there is written in the session's `DateStyle`, so its column is
+        /// `styled`, whatever the format its type is read in elsewhere.
+        #[tokio::test(flavor = "multi_thread")]
+        async fn rows_an_apply_returns_are_read_as_text_in_the_sessions_settings() {
+            let Some(url) = pg_url("rows_an_apply_returns_are_read_as_text_in_the_sessions_settings") else { return };
+            let (table, _g) = table(&url, "returning_style").await;
+            let (c, ..) = connect(&url).await;
+            c.batch_execute(&format!("ALTER TABLE {table} ADD COLUMN d date DEFAULT '2026-01-02'")).await.unwrap();
+            let mut s = Session::open(&url).await;
+            s.run_all(&["SET DateStyle = 'SQL, DMY'"], None).await;
+            let sql = format!("UPDATE {table} SET v = 'b' WHERE id = 1 RETURNING id, d");
+            let step = Step { sql, expect: Expect::Affected(1), origin: Origin::Row(0), one: false };
+            let events = s.apply(&[step], ApplyTx::Commit, &Hooks::default()).await;
+            let returned = events.iter().find_map(|e| match e {
+                DbEvent::Applied { result: Ok(steps), .. } => steps.first().and_then(|s| s.returned.clone()),
+                _ => None,
+            });
+            let (cols, _) = returned.unwrap_or_else(|| panic!("nothing returned: {events:?}"));
+            assert!(cols[1].styled, "a date read as text is written in DateStyle");
+            assert!(!cols[0].styled);
+        }
+
         /// A cancel asked for before the first step: nothing is sent, nothing committed, no
         /// transaction left open.
         #[tokio::test(flavor = "multi_thread")]
