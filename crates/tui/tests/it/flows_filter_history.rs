@@ -47,6 +47,7 @@ impl State {
     /// [`State::entries`] once they are `want`, read again until then for up to [`WRITE_WAIT`]
     /// (a hang guard): a write handed to the writer when the app quits (which waits for it at
     /// most a second) may still be on its way to the disk. The last entries read.
+    #[cfg(unix)]
     fn entries_once(&self, k: &TableKey, want: &[(String, String)]) -> Vec<(String, String)> {
         let deadline = std::time::Instant::now() + WRITE_WAIT;
         loop {
