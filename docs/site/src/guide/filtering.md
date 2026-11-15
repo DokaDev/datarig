@@ -200,7 +200,7 @@ Once the column is sorted, the line also says where its NULLs go, when it fits: 
 its own.
 PostgreSQL puts NULLs last going up and first going down; MySQL and MariaDB put them first going
 up and last going down. On PostgreSQL you can ask for another place in the
-[`ORDER BY` field](#the-sql-section) (`total DESC NULLS LAST`), and the line says so; MySQL has no
+[`ORDER BY` field](#the-sql-view) (`total DESC NULLS LAST`), and the line says so; MySQL has no
 such syntax, and it is refused there.
 
 ### Where, Order, Limit
