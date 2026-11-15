@@ -513,29 +513,57 @@ async fn an_export_keeps_to_the_manual_transaction_and_never_chains_its_own() {
     assert_eq!(c.rows(&format!("SELECT COUNT(*) FROM {}", t.q())).await, [[Some("10".into())]]);
 }
 
+/// InnoDB's lists of transactions and locks (`information_schema.INNODB_TRX` and the like) come
+/// from a cache the server fills again only once nobody has read it for 100 ms: a read sooner
+/// returns the earlier snapshot, so a reader that polls, or tests that read at once, can see a
+/// transaction long after it began (or ended). Held while reading them, this makes the reads of
+/// this process go one at a time, each more than 100 ms after the last one ended, so each sees
+/// the server's lists as they are.
+struct InnodbLists(tokio::sync::MutexGuard<'static, Option<Instant>>);
+
+impl Drop for InnodbLists {
+    fn drop(&mut self) {
+        *self.0 = Some(Instant::now());
+    }
+}
+
+async fn innodb_lists() -> InnodbLists {
+    static LAST_READ: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
+    let last = LAST_READ.lock().await;
+    if let Some(at) = *last {
+        tokio::time::sleep_until((at + Duration::from_millis(150)).into()).await;
+    }
+    InnodbLists(last)
+}
+
 /// The InnoDB locks session `id` (its connection id) holds or waits for on `table` in `shop`.
 /// MariaDB lists only the locks of a wait: there, the rows its transaction locks (the tests'
-/// sessions touch no other table), read past the 100 ms its transaction list is kept for.
+/// sessions touch no other table).
 async fn data_locks(admin: &str, id: u64, table: &str) -> u64 {
+    if mariadb(admin).await {
+        let mut a = side(admin).await;
+        let fresh = innodb_lists().await;
+        let n: Option<u64> = a
+            .exec_first(
+                "SELECT IFNULL(SUM(trx_rows_locked), 0) FROM information_schema.INNODB_TRX WHERE trx_mysql_thread_id = ?",
+                (id,),
+            )
+            .await
+            .unwrap();
+        drop(fresh);
+        a.disconnect().await.unwrap();
+        return n.unwrap_or(0);
+    }
     let mut a = side(admin).await;
-    let n: Option<u64> = if mariadb(admin).await {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        a.exec_first(
-            "SELECT IFNULL(SUM(trx_rows_locked), 0) FROM information_schema.INNODB_TRX WHERE trx_mysql_thread_id = ?",
-            (id,),
-        )
-        .await
-        .unwrap()
-    } else {
-        a.exec_first(
+    let n: Option<u64> = a
+        .exec_first(
             "SELECT COUNT(*) FROM performance_schema.data_locks l JOIN performance_schema.threads t \
              ON t.THREAD_ID = l.THREAD_ID WHERE t.PROCESSLIST_ID = ? AND l.OBJECT_SCHEMA = 'shop' \
              AND l.OBJECT_NAME = ?",
             (id, table),
         )
         .await
-        .unwrap()
-    };
+        .unwrap();
     a.disconnect().await.unwrap();
     n.unwrap_or(0)
 }
@@ -606,10 +634,12 @@ async fn without_autocommit_the_users_uncommitted_work_is_never_ended() {
     let id: u64 = c.rows("SELECT CONNECTION_ID()").await[0][0].as_deref().unwrap().parse().unwrap();
     let open_trx = |admin: String| async move {
         let mut a = side(&admin).await;
+        let fresh = innodb_lists().await;
         let n: Option<u64> = a
             .exec_first("SELECT COUNT(*) FROM information_schema.INNODB_TRX WHERE trx_mysql_thread_id = ?", (id,))
             .await
             .unwrap();
+        drop(fresh);
         a.disconnect().await.unwrap();
         n.unwrap_or(0)
     };

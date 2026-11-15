@@ -243,9 +243,28 @@ async fn is_mariadb(c: &mut mysql_async::Conn) -> bool {
     *MARIADB.get_or_init(|| line.contains("MariaDB"))
 }
 
-/// How long InnoDB keeps its lists of transactions and locks (`information_schema.INNODB_*`)
-/// once read, with a margin: read again within it, they are the same, however old.
-const INNODB_LISTS_KEPT: Duration = Duration::from_millis(150);
+/// InnoDB's lists of transactions and locks (`information_schema.INNODB_TRX` and the like) come
+/// from a cache the server fills again only once nobody has read it for 100 ms: a read sooner
+/// returns the earlier snapshot, so a reader that polls, or tests that read at once, can see a
+/// transaction long after it began (or ended). Held while reading them, this makes the reads of
+/// this process go one at a time, each more than 100 ms after the last one ended, so each sees
+/// the server's lists as they are.
+struct InnodbLists(tokio::sync::MutexGuard<'static, Option<Instant>>);
+
+impl Drop for InnodbLists {
+    fn drop(&mut self) {
+        *self.0 = Some(Instant::now());
+    }
+}
+
+async fn innodb_lists() -> InnodbLists {
+    static LAST_READ: tokio::sync::Mutex<Option<Instant>> = tokio::sync::Mutex::const_new(None);
+    let last = LAST_READ.lock().await;
+    if let Some(at) = *last {
+        tokio::time::sleep_until((at + Duration::from_millis(150)).into()).await;
+    }
+    InnodbLists(last)
+}
 
 /// The collation of a text column in `datarig` that a column of `shop` references: none of its
 /// own on MySQL; on MariaDB, whose foreign keys need one collation and whose databases here have
@@ -1571,9 +1590,7 @@ async fn waits_on(a: &mut mysql_async::Conn, other: u64, ours: u64) -> Vec<Strin
          WHERE tw.PROCESSLIST_ID = {other} AND tb.PROCESSLIST_ID = {ours}"
     );
     if is_mariadb(a).await {
-        // MariaDB's row locks are InnoDB's own lists: the waits, by transaction, read past the
-        // 100 ms they are kept for.
-        tokio::time::sleep(INNODB_LISTS_KEPT).await;
+        // MariaDB's row locks are InnoDB's own lists: the waits, by transaction.
         let (metadata, _) = sql.split_once(" UNION ALL ").unwrap();
         let rows = format!(
             "{metadata} UNION ALL SELECT CONCAT('row lock of ', \
@@ -1585,6 +1602,7 @@ async fn waits_on(a: &mut mysql_async::Conn, other: u64, ours: u64) -> Vec<Strin
              JOIN information_schema.INNODB_LOCKS l ON l.lock_id = w.requested_lock_id \
              WHERE r.trx_mysql_thread_id = {other} AND b.trx_mysql_thread_id = {ours}"
         );
+        let _fresh = innodb_lists().await;
         return a.query(rows).await.unwrap();
     }
     a.query(sql).await.unwrap()
@@ -3163,10 +3181,10 @@ async fn counts_and_the_servers_question() {
 
 /// The InnoDB locks connection `id` holds or waits for on `table` in `shop`.
 /// MariaDB lists only the locks of a wait: there, the rows its transaction locks (the tests'
-/// sessions touch no other table), read past the 100 ms its transaction list is kept for.
+/// sessions touch no other table).
 async fn data_locks_of(admin: &mut mysql_async::Conn, id: u64, table: &str) -> u64 {
     if is_mariadb(admin).await {
-        tokio::time::sleep(INNODB_LISTS_KEPT).await;
+        let _fresh = innodb_lists().await;
         let n: Option<u64> = admin
             .exec_first(
                 "SELECT IFNULL(SUM(trx_rows_locked), 0) FROM information_schema.INNODB_TRX \
@@ -3216,10 +3234,12 @@ async fn a_count_locks_no_rows_when_the_session_is_serializable() {
             assert_eq!(variable_of(&mut a, id, "transaction_isolation").await.as_deref(), Some("SERIALIZABLE"));
             assert_eq!(variable_of(&mut a, id, "autocommit").await.as_deref(), Some(on_off));
         }
+        let fresh = innodb_lists().await;
         let open: Option<u64> = a
             .exec_first("SELECT COUNT(*) FROM information_schema.INNODB_TRX WHERE trx_mysql_thread_id = ?", (id,))
             .await
             .unwrap();
+        drop(fresh);
         assert_eq!(open, Some(0), "autocommit = {autocommit}: no transaction left open");
         if my {
             // MariaDB shows no session's variables to another: asked of the session itself, last.
@@ -5457,8 +5477,8 @@ fn tx_of(evs: &[DbEvent]) -> Vec<String> {
 /// server's own record of its current transaction (`performance_schema`, read live; InnoDB's
 /// `information_schema.innodb_trx` is a cache the server refreshes only when nobody read it for
 /// 100 ms, which the tests running at once keep from happening).
-/// MariaDB keeps no record of transactions there by default: there, InnoDB's list, each time
-/// read past the 100 ms it is kept for.
+/// MariaDB keeps no record of transactions there by default: there, InnoDB's list, read as
+/// `innodb_lists` says.
 async fn open_transactions(a: &mut mysql_async::Conn, id: u64, want: u64) -> u64 {
     let deadline = Instant::now() + Duration::from_secs(5);
     let my = is_mariadb(a).await;
@@ -5472,10 +5492,9 @@ async fn open_transactions(a: &mut mysql_async::Conn, id: u64, want: u64) -> u64
         )
     };
     loop {
-        if my {
-            tokio::time::sleep(INNODB_LISTS_KEPT).await;
-        }
+        let fresh = if my { Some(innodb_lists().await) } else { None };
         let n: u64 = a.query_first(sql.as_str()).await.unwrap().unwrap();
+        drop(fresh);
         if n == want || Instant::now() > deadline {
             return n;
         }
