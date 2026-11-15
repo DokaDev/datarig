@@ -102,8 +102,10 @@ pub(crate) fn short_type(d: Dialect, ty: &str) -> String {
 /// so the dialog is never laid out tighter than on that screen; on the smallest screen (and on
 /// a side not larger than it) the whole side.
 pub(crate) fn dialog_rect(area: Rect) -> Rect {
-    let w = (area.width * 92 / 100).max(MIN_W).min(area.width);
-    let h = (area.height * 90 / 100).max(MIN_H).min(area.height);
+    // In u32: a side of more than 712 cells times 92 does not fit a u16.
+    let pct = |side: u16, p: u32| u16::try_from(u32::from(side) * p / 100).unwrap_or(side);
+    let w = pct(area.width, 92).max(MIN_W).min(area.width);
+    let h = pct(area.height, 90).max(MIN_H).min(area.height);
     crate::widgets::dialog::centered(area, w, h)
 }
 
@@ -144,6 +146,8 @@ fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u1
     let accent = Style::new().fg(th.accent);
     let field = Style::new().fg(th.fg).bg(th.surface_alt);
     let focus_style = Style::new().fg(th.fg).patch(th.selection);
+    // A wide character of the grid behind would otherwise straddle the left border.
+    crate::widgets::popup::clear_overlay(area, buf);
     fill(buf, area, base);
     Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(th.border)).render(area, buf);
     let inner = Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2);
@@ -967,9 +971,9 @@ pub(crate) fn hint_parts(app: &App, d: &FilterDialog, view: Option<&ValuesView>,
                 Some(SqlView::Statement) => Label::TableDialogHintSqlFields,
                 Some(SqlView::Fields) => Label::TableDialogHintSqlClose,
             };
+            // One entry for both keys: `Space` on the button and the dialog's SQL key do the same.
             vec![
-                l("Space", what),
-                (key(app, DialogAction::Sql), i18n.label(what).to_string()),
+                (format!("Space/{}", key(app, DialogAction::Sql)), i18n.label(what).to_string()),
                 l("Tab", Label::TableDialogHintNextArea),
             ]
         }

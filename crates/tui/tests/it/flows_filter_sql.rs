@@ -729,3 +729,56 @@ fn open_in_editor_from_the_statement() {
     assert_eq!(h.app.tab().editor.text(), format!("{ALL} WHERE (id > 0)"));
     assert!(runs(&mut h).is_empty());
 }
+
+/// The completion popup of a SQL view field stays inside the centred dialog: on a screen a
+/// little larger than the smallest the dialog has a margin, and a popup placed as if the dialog
+/// began at the screen's corner would cover the tab line or the screen's left edge. Every
+/// cell outside the dialog is the same with the popup open and after `Esc` closed it.
+#[test]
+fn the_fields_completion_stays_inside_the_centred_dialog() {
+    let (w, hh) = (86, 26);
+    let mut h = users();
+    h.keys("f");
+    to_fields(&mut h);
+    let mut shown = 0;
+    for n in (1..=48).step_by(3) {
+        clear_field(&mut h);
+        h.type_text(&"id > 1 AND ".repeat(n));
+        ctrl_space(&mut h);
+        if h.popup().is_none() {
+            continue;
+        }
+        shown += 1;
+        let with = h.draw(w, hh).backend().buffer().clone();
+        h.key(KeyCode::Esc);
+        assert!(h.popup().is_none(), "Esc closes the popup first");
+        let without = h.draw(w, hh).backend().buffer().clone();
+        // The dialog at 86x26: 80x24 (its smallest size), centred.
+        let (x0, y0, x1, y1) = (3, 1, 82, 24);
+        assert_eq!(without[(x0, y0)].symbol(), "\u{256d}", "the dialog's corner");
+        assert_eq!(without[(x1, y1)].symbol(), "\u{256f}", "the dialog's other corner");
+        for y in 0..hh {
+            for x in 0..w {
+                if (x0..=x1).contains(&x) && (y0..=y1).contains(&y) {
+                    continue;
+                }
+                assert_eq!(
+                    with[(x, y)].symbol(),
+                    without[(x, y)].symbol(),
+                    "{n} terms: the popup drew outside the dialog at ({x}, {y})"
+                );
+            }
+        }
+    }
+    assert!(shown > 0, "no popup was shown");
+}
+
+/// A very wide screen (92% of more than 712 cells does not fit 16 bits) draws the dialog.
+#[test]
+fn a_very_wide_screen_draws_the_dialog() {
+    let mut h = users();
+    h.keys("f");
+    assert!(dialog_open(&h));
+    let screen = h.screen(800, 40);
+    assert!(screen.contains("Filter and sort"), "{screen}");
+}
