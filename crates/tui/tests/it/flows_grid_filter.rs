@@ -1,9 +1,9 @@
 //! The grid keys of a table tab: `=` only the cursor's value (the column's own conditions
 //! replaced, the other terms as written), `!` everything but it (rows whose value is NULL kept),
-//! `X` no condition and no order (the limit kept), and the column menu (`F`, a right click on a
-//! header): each sends exactly its statement through the tab's run (checks, questions, pending
-//! edits), the change before it kept for the dialog's undo; what cannot apply is said, or shown
-//! dimmed with why in the menu.
+//! `X` no condition and no order (the limit kept), and the lines of the column's popup (`F`, a
+//! right click on a header): each sends exactly its statement through the tab's run (checks,
+//! questions, pending edits), the change before it kept for the dialog's undo; what cannot
+//! apply is said, or shown dimmed with why in the popup.
 
 use crate::common;
 
@@ -117,23 +117,25 @@ fn users_from(mut h: Harness, keys: Option<datarig_core::driver::keys::OrderKeys
     h
 }
 
-/// The grid's cursor on (`row`, `col`), no selection.
+/// The grid's cursor on (`row`, `col`), no selection, drawn at 120x34 (a popup opens under its
+/// column's header).
 fn at(h: &mut Harness, row: usize, col: usize) {
     let g = &mut h.app.tab_mut().grid;
     (g.row, g.col, g.anchor) = (row, col, None);
+    h.draw(120, 34);
 }
 
-/// The open menu's lines: headings as `# text`, items as `label | keys or hint or why`.
-fn lines(h: &Harness) -> Vec<String> {
+/// The lines above the open column popup: `label | key or why`, dimmed ones marked `~`.
+fn popup_lines(h: &Harness) -> Vec<String> {
     h.app
-        .menu_lines()
+        .column_popup_lines()
         .into_iter()
-        .map(|(heading, label, keys)| if heading { format!("# {label}") } else { format!("{label} | {keys}") })
+        .map(|(l, k, dim)| format!("{}{l} | {k}", if dim { "~" } else { "" }))
         .collect()
 }
 
-fn menu_open(h: &Harness) -> bool {
-    h.overlay_kind() == Some(OverlayKind::ContextMenu)
+fn popup_open(h: &Harness) -> bool {
+    h.app.filter_dialog_popup().is_some()
 }
 
 /// The status bar's passing word.
@@ -154,13 +156,25 @@ fn key_on(h: &mut Harness, row: usize, col: usize, keys: &str) -> Vec<Vec<String
     runs(h)
 }
 
-/// `F` on (`row`, `col`), entry `label` picked: the statements sent.
-fn menu(h: &mut Harness, row: usize, col: usize, label: &str) -> Vec<Vec<String>> {
+/// Line `label` of the open column popup reached by `↑` from the pane and run (`Enter`): the
+/// statements sent.
+fn line_runs(h: &mut Harness, label: &str) -> Vec<Vec<String>> {
+    for _ in 0..8 {
+        if h.app.column_popup_focus().as_deref() == Some(label) {
+            h.key(KeyCode::Enter);
+            return runs(h);
+        }
+        h.key(KeyCode::Up);
+    }
+    panic!("{label} not reached: {:?}", popup_lines(h));
+}
+
+/// `F` on (`row`, `col`), line `label` of the popup run: the statements sent.
+fn line(h: &mut Harness, row: usize, col: usize, label: &str) -> Vec<Vec<String>> {
     at(h, row, col);
     h.keys("F");
-    assert!(menu_open(h), "{}", flashed(h));
-    h.menu_pick(label);
-    runs(h)
+    assert!(popup_open(h), "{}", flashed(h));
+    line_runs(h, label)
 }
 
 /// `cond` sent as the condition of `shop.users`.
@@ -194,10 +208,10 @@ fn a_filter_text_with_a_line_break_is_dimmed_as_one() {
     }
     at(&mut h, 0, 1);
     h.keys("F");
-    assert!(menu_open(&h), "{}", flashed(&h));
-    let dimmed = h.app.menu_dimmed_rows();
-    assert!(dimmed.iter().any(|(l, w)| *l == "Only this value" && w == "line break"), "{dimmed:?}");
-    assert!(!dimmed.iter().any(|(_, w)| w == "name not one line"), "{dimmed:?}");
+    assert!(popup_open(&h), "{}", flashed(&h));
+    let dimmed = popup_lines(&h);
+    assert!(dimmed.contains(&"~Only this value | line break".to_string()), "{dimmed:?}");
+    assert!(!dimmed.iter().any(|l| l.ends_with("name not one line")), "{dimmed:?}");
 }
 
 #[test]
@@ -323,7 +337,11 @@ fn selections_give_lists_with_null_apart() {
     h.key(KeyCode::Enter);
     assert_eq!(runs(&mut h), sent("(name NOT IN ('50%_off', 'b') OR name IS NULL)"));
     page_with(&mut h, columns(), four_rows());
-    assert_eq!(menu(&mut h, 0, 1, "Clear filter on this column"), vec![vec![ALL.to_string()]]);
+    // The popup's `×` (`x` on the condition) takes it out.
+    at(&mut h, 0, 1);
+    h.keys("Fx");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![ALL.to_string()]]);
 }
 
 #[test]
@@ -375,7 +393,7 @@ fn what_cannot_be_filtered_is_said_and_nothing_is_sent() {
     h.key(KeyCode::Tab);
     for key in ["=", "!", "X", "F"] {
         h.keys(key);
-        assert!(!menu_open(&h));
+        assert_eq!(h.overlay_kind(), None, "{key}");
         assert!(flashed(&h).contains("Only a table tab has a filter dialog"), "{key}: {}", flashed(&h));
     }
 }
@@ -512,111 +530,86 @@ fn the_dialog_undoes_a_grid_key() {
     assert_eq!(runs(&mut h), sent("id > 0"));
 }
 
-/// A sort with NULLs asked elsewhere than the server puts them is another order: the menu's
-/// sort of the column the same way (NULLs where the server puts them) is offered, not dimmed.
+/// The popup's sort line sorts by the column as the dialog's does: a key asked with NULLs
+/// elsewhere than the server puts them turned the other way keeps the other keys and its NULLs
+/// as asked; `s` in the grid sorts by the column alone.
 #[test]
-fn a_sort_with_nulls_asked_elsewhere_is_not_sorted_so() {
+fn the_popups_sort_line_sorts_the_column() {
     let mut h = users();
     h.command("orderby name ASC NULLS FIRST");
     assert_eq!(runs(&mut h), vec![vec![format!(r#"{ALL} ORDER BY "name" ASC NULLS FIRST"#)]]);
     page(&mut h);
     at(&mut h, 0, 1);
     h.keys("F");
-    let dimmed = h.app.menu_dimmed_rows();
-    assert!(!dimmed.iter().any(|(l, _)| *l == "↑ Sort ascending, NULLs last"), "{dimmed:?}");
-    h.key(KeyCode::Esc);
-    assert_eq!(menu(&mut h, 0, 1, "↑ Sort ascending, NULLs last"), vec![vec![format!(r#"{ALL} ORDER BY "name" ASC"#)]]);
-    page(&mut h);
-    // Sorted so now: dimmed.
-    at(&mut h, 0, 1);
-    h.keys("F");
-    assert!(h.app.menu_dimmed_rows().iter().any(|(l, w)| *l == "↑ Sort ascending, NULLs last" && w == "sorted so"));
+    // Its `↓ desc` clicked, once the popup takes clicks.
+    h.draw(120, 34);
+    h.advance(std::time::Duration::from_millis(500));
+    let screen = h.screen(120, 34);
+    let (y, row) = screen.lines().enumerate().find(|(_, l)| l.contains("\u{2193} desc")).expect("the sort line");
+    let x = row[..row.find("\u{2193} desc").unwrap()].chars().count() as u16;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y as u16);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y as u16);
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!(r#"{ALL} ORDER BY "name" DESC NULLS FIRST"#)]]);
 }
 
-/// The column menu: the column's sort, the dialog, only and exclude the cursor's value, the
-/// column's own conditions out; each runs what it showed.
+/// The column's popup opened on a cell (`F`): the cell's value lines and hiding above the
+/// column's conditions, values and sort; each runs what it shows; the conditions' `×` take the
+/// column's own conditions out, `A` opens the whole dialog on the column.
 #[test]
-fn the_column_menu_entries_run_what_they_show() {
+fn the_column_popup_lines_run_what_they_show() {
     let mut h = users();
     at(&mut h, 0, 1);
     h.keys("F");
-    assert_eq!(
-        lines(&h),
-        [
-            "# name",
-            "↑ Sort ascending, NULLs last | s",
-            "↓ Sort descending, NULLs first | ",
-            "Clear sort | not sorted",
-            "# ",
-            "Filter and sort… | f",
-            "Only 'it's' | =",
-            "Exclude 'it's' | !",
-            "Clear filter on this column | no condition",
-            "# ",
-            "Hide column | C",
-        ]
-    );
+    assert_eq!(popup_lines(&h), ["Only 'it's' | ", "Exclude 'it's' | ", "Hide column | C"]);
+    assert!(h.screen(120, 34).contains("\u{256d}\u{2500} name  text "), "{}", h.screen(120, 34));
     h.key(KeyCode::Esc);
-    assert_eq!(
-        menu(&mut h, 0, 1, "↓ Sort descending, NULLs first"),
-        vec![vec![format!(r#"{ALL} ORDER BY "name" DESC"#)]]
-    );
-    page(&mut h);
     at(&mut h, 0, 0);
     h.keys("S");
-    page(&mut h);
     assert_eq!(runs(&mut h).len(), 1);
-    // Out of the order: the other key stays.
-    assert_eq!(menu(&mut h, 0, 1, "Clear sort"), vec![vec![format!(r#"{ALL} ORDER BY "id" ASC"#)]]);
     page(&mut h);
-    // Sorted so already: dimmed, with why.
-    at(&mut h, 0, 0);
-    h.keys("F");
-    assert!(h.app.menu_dimmed_rows().iter().any(|(l, w)| *l == "↑ Sort ascending, NULLs last" && w == "sorted so"));
-    let why = h.app.menu_dimmed_notice("↑ Sort ascending, NULLs last").expect("dimmed").render(&h.app.i18n).to_string();
-    assert!(why.contains("sorted by this column alone already"), "{why}");
-    h.key(KeyCode::Esc);
     assert_eq!(
-        menu(&mut h, 0, 1, "Only 'it's'"),
+        line(&mut h, 0, 1, "Only 'it's'"),
         vec![vec![format!(r#"{ALL} WHERE (name = 'it''s') ORDER BY "id" ASC"#)]]
     );
     page(&mut h);
     assert_eq!(
-        menu(&mut h, 0, 0, "Exclude 1"),
+        line(&mut h, 0, 0, "Exclude 1"),
         vec![vec![format!(r#"{ALL} WHERE (name = 'it''s' AND id IS DISTINCT FROM 1) ORDER BY "id" ASC"#)]]
     );
     page(&mut h);
-    assert_eq!(
-        menu(&mut h, 0, 1, "Clear filter on this column"),
-        vec![vec![format!(r#"{ALL} WHERE (id IS DISTINCT FROM 1) ORDER BY "id" ASC"#)]]
-    );
+    // The column's own condition out: its `×` (`x` on it), then `Enter`.
+    at(&mut h, 0, 1);
+    h.keys("F");
+    h.keys("x");
+    h.key(KeyCode::Enter);
+    assert_eq!(runs(&mut h), vec![vec![format!(r#"{ALL} WHERE (id IS DISTINCT FROM 1) ORDER BY "id" ASC"#)]]);
     page(&mut h);
     // The dialog on the column.
     at(&mut h, 0, 2);
     h.keys("F");
-    h.menu_pick("Filter and sort…");
+    h.keys("A");
     assert!(h.app.overlays.is_open(OverlayKind::FilterDialog));
+    assert_eq!(h.app.filter_dialog_popup(), None);
 }
 
-/// Entries that cannot apply are dimmed with why; picking one says it and sends nothing.
+/// Value lines that cannot apply are dimmed with why; pressed, they say it and send nothing.
 #[test]
-fn the_column_menu_dims_what_cannot_apply() {
+fn the_column_popup_dims_what_cannot_apply() {
     let mut h = users();
     at(&mut h, 0, 4);
     h.keys("F");
-    let dimmed = h.app.menu_dimmed_rows();
-    let why: Vec<(String, String)> = dimmed.iter().map(|(l, w)| (l.to_string(), w.clone())).collect();
-    assert!(why.contains(&("Only this value".to_string(), "type not compared".to_string())), "{why:?}");
-    assert!(why.contains(&("Exclude this value".to_string(), "type not compared".to_string())), "{why:?}");
-    let notice = h.app.menu_dimmed_notice("Only this value").expect("dimmed").render(&h.app.i18n).to_string();
+    let shown = popup_lines(&h);
+    assert!(shown.contains(&"~Only this value | type not compared".to_string()), "{shown:?}");
+    assert!(shown.contains(&"~Exclude this value | type not compared".to_string()), "{shown:?}");
+    let notice = h.app.column_popup_line_notice("Only this value").expect("dimmed").render(&h.app.i18n).to_string();
     assert!(notice.contains("how json compares is not known"), "{notice}");
     h.key(KeyCode::Esc);
-    // Two columns selected, a new row, an edited cell: said on the value entries.
+    // Two columns selected, an edited cell: said on the value lines.
     at(&mut h, 0, 0);
     h.app.tab_mut().grid.anchor = Some((0, 1));
     h.keys("F");
-    assert!(h.app.menu_dimmed_rows().iter().any(|(l, w)| *l == "Only this value" && w == "several columns"));
-    h.key(KeyCode::Esc);
+    assert!(popup_lines(&h).contains(&"~Only this value | several columns".to_string()), "{:?}", popup_lines(&h));
     h.key(KeyCode::Esc);
     if let Results::Rows(rs) = &mut h.app.tab_mut().results {
         let orig = rows()[0].clone();
@@ -624,67 +617,51 @@ fn the_column_menu_dims_what_cannot_apply() {
     }
     at(&mut h, 0, 1);
     h.keys("F");
-    assert!(h.app.menu_dimmed_rows().iter().any(|(l, w)| *l == "Exclude this value" && w == "edited"));
-    let why = h.app.menu_dimmed_notice("Only this value").expect("dimmed").render(&h.app.i18n).to_string();
+    assert!(popup_lines(&h).contains(&"~Exclude this value | edited".to_string()), "{:?}", popup_lines(&h));
+    let why = h.app.column_popup_line_notice("Only this value").expect("dimmed").render(&h.app.i18n).to_string();
     assert!(why.contains("a selected cell shows an edit"), "{why}");
-    h.type_text("Only");
-    h.key(KeyCode::Enter);
-    assert!(runs(&mut h).is_empty(), "a dimmed entry runs nothing");
+    assert!(line_runs(&mut h, "Only this value").is_empty(), "a dimmed line runs nothing");
+    assert!(flashed(&h).contains("a selected cell shows an edit"), "{}", flashed(&h));
 }
 
-/// A right click on a table tab's header opens that column's menu (the cursor goes there); on
-/// a cell, the grid's menu, whose entry opens the column menu.
+/// A right click on a table tab's header opens that column's popup with its hiding line (the
+/// cursor goes there); on a cell, the grid's menu, whose entry opens the popup with the cell's
+/// value lines.
 #[test]
-fn a_right_click_on_a_header_opens_its_column_menu() {
+fn a_right_click_on_a_header_opens_its_column_popup() {
     let mut h = users();
     h.draw(120, 30);
     let g = h.app.tab().grid.clone();
     let x = g.hit_cols.iter().find(|c| c.2 == 1).unwrap().0 + 1;
     h.mouse(MouseEventKind::Down(MouseButton::Right), x, g.header_y);
-    assert!(menu_open(&h));
-    assert_eq!(lines(&h)[0], "# name");
+    assert!(popup_open(&h));
+    assert_eq!(popup_lines(&h), ["Hide column | C"]);
     assert_eq!(h.app.tab().grid.col, 1);
-    h.menu_pick("Only 'it's'");
-    assert_eq!(runs(&mut h), sent("name = 'it''s'"));
-    page(&mut h);
+    h.key(KeyCode::Esc);
     h.draw(120, 30);
     let g = h.app.tab().grid.clone();
     let x = g.hit_cols.iter().find(|c| c.2 == 0).unwrap().0 + 1;
     h.mouse(MouseEventKind::Down(MouseButton::Right), x, g.data_y);
-    assert!(lines(&h).contains(&"Table → this column's menu (sort, filter, hide) | F".to_string()), "{:?}", lines(&h));
-    h.menu_pick("Table → this column's menu (sort, filter, hide)");
-    assert_eq!(lines(&h)[0], "# id");
+    let entry = "Table → this column's conditions, sort and hiding";
+    assert!(h.app.menu_rows().iter().any(|(l, k)| *l == entry && k == "F"), "{:?}", h.menu_labels());
+    h.menu_pick(entry);
+    assert_eq!(popup_lines(&h)[0], "Only 1 | ");
+    assert_eq!(line_runs(&mut h, "Only 1"), sent("id = 1"));
 }
 
-/// The value entry picked runs the condition the menu showed, for the cells it was opened on.
+/// A value line runs the condition it showed, for the cells it was opened on: over rows read
+/// again it sends nothing and is written again.
 #[test]
-fn a_menu_over_rows_read_again_runs_nothing() {
+fn a_popup_over_rows_read_again_runs_nothing() {
     let mut h = users();
     at(&mut h, 0, 0);
     h.keys("F");
     if let Results::Rows(rs) = &mut h.app.tab_mut().results {
         rs.id += 1_000_000;
     }
-    h.menu_pick("Only 1");
-    assert!(runs(&mut h).is_empty(), "nothing runs");
+    assert!(line_runs(&mut h, "Only 1").is_empty(), "nothing runs");
     assert!(flashed(&h).contains("changed"), "{}", flashed(&h));
     assert_eq!(where_text(&h), "");
-}
-
-#[test]
-fn the_column_menu_screens() {
-    let shot = |h: &mut Harness, name: &str| {
-        assert_screen!(format!("column_menu_{name}_en_80x24"), Lang::En, h.draw(80, 24));
-        assert_screen!(format!("column_menu_{name}_en_120x34"), Lang::En, h.draw(120, 34));
-        h.key(KeyCode::Esc);
-    };
-    let mut h = users();
-    at(&mut h, 0, 1);
-    h.keys("F");
-    shot(&mut h, "cell");
-    at(&mut h, 0, 4);
-    h.keys("F");
-    shot(&mut h, "refused");
 }
 
 /// A value with a line break goes into the filter as a literal on one line: `=` sends it, and
@@ -788,13 +765,6 @@ fn mysql_literals_follow_the_session() {
     clear_with(&mut h, cols(), rows());
     // A MySQL FLOAT is sent rounded: not taken.
     assert!(key_on(&mut h, 0, 3, "=").is_empty());
-    // The column menu's sorts say where this server puts NULLs: first going up.
-    at(&mut h, 0, 1);
-    h.keys("F");
-    let shown = lines(&h);
-    assert!(shown.contains(&"↑ Sort ascending, NULLs first | s".to_string()), "{shown:?}");
-    assert!(shown.contains(&"↓ Sort descending, NULLs last | ".to_string()), "{shown:?}");
-    h.key(KeyCode::Esc);
     assert!(flashed(&h).contains("column “w”"), "{}", flashed(&h));
     // Text read in another character set than utf8mb4: not taken.
     let mut h = mysql("latin1", cols(), rows());
@@ -919,139 +889,75 @@ fn a_row_selection_over_one_shown_column_filters_by_it() {
 }
 
 /// `F` on a cell, and the grid menu's entry after a right click on a cell (the cursor on
-/// another column before), open the column menu of that cell's column.
+/// another column before), open the popup of that cell's column.
 #[test]
-fn the_column_menu_from_a_cell_is_of_that_cells_column() {
+fn the_column_popup_from_a_cell_is_of_that_cells_column() {
     let mut h = users();
     at(&mut h, 1, 2);
     h.keys("F");
-    assert!(menu_open(&h));
-    assert_eq!(lines(&h)[0], "# score");
+    assert!(popup_open(&h));
+    assert!(h.screen(120, 34).contains("\u{256d}\u{2500} score  float8 "), "{}", h.screen(120, 34));
     h.key(KeyCode::Esc);
     at(&mut h, 0, 0);
     h.draw(120, 30);
     let g = h.app.tab().grid.clone();
     let x = g.hit_cols.iter().find(|c| c.2 == 3).unwrap().0 + 1;
     h.mouse(MouseEventKind::Down(MouseButton::Right), x, g.data_y + 2);
-    h.menu_pick("Table → this column's menu (sort, filter, hide)");
-    assert_eq!(lines(&h)[0], "# data");
+    h.menu_pick("Table → this column's conditions, sort and hiding");
+    assert!(h.screen(120, 34).contains("\u{256d}\u{2500} data  bytea "), "{}", h.screen(120, 34));
     assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (2, 3));
 }
 
-/// The column menu has no filter line (its few entries need none): `j`/`k` and the arrows
-/// move, `Enter` runs the entry, and the keys shown next to the entries run them.
+/// The popup's lines are reached by the keys: `↑` (`k`) from the first line of the pane, `↓`
+/// (`j`) back; `Enter` and `Space` run the line, `C` hides the column from anywhere in the
+/// popup but a field.
 #[test]
-fn the_column_menu_moves_by_keys_without_a_filter() {
+fn the_column_popups_lines_by_keys() {
     let mut h = users();
     at(&mut h, 0, 1);
     h.keys("F");
-    let screen = h.screen(120, 34);
-    assert!(!screen.contains("type to filter"), "{screen}");
-    // `↓ Sort descending, NULLs first`, then back up and down again: `Enter` runs it.
-    h.keys("jkj");
+    assert_eq!(h.app.column_popup_focus(), None);
+    h.keys("k");
+    assert_eq!(h.app.column_popup_focus().as_deref(), Some("Hide column"));
+    h.keys("kk");
+    assert_eq!(h.app.column_popup_focus().as_deref(), Some("Only 'it's'"));
     h.key(KeyCode::Up);
-    h.key(KeyCode::Down);
-    h.key(KeyCode::Enter);
-    assert!(!menu_open(&h));
-    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} ORDER BY \"name\" DESC")]]);
-    page(&mut h);
-    // `=` runs `Only`, as its key shows.
-    at(&mut h, 0, 1);
-    h.keys("F");
-    h.keys("=");
-    assert!(!menu_open(&h));
-    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} WHERE (name = 'it''s') ORDER BY \"name\" DESC")]]);
-}
-
-/// The keys the column menu shows are the keys it runs: one key each, never one that moves
-/// through the menu, none for an entry no single key runs (sorting descending). On a column
-/// sorted ascending its entry is dimmed and its key says why, the menu staying open.
-#[test]
-fn the_column_menu_shows_only_keys_it_runs() {
-    let keys_of = |h: &Harness| -> Vec<String> { lines(h).into_iter().filter(|l| !l.starts_with('#')).collect() };
-    let mut h = users();
-    at(&mut h, 0, 1);
-    h.keys("s");
-    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} ORDER BY \"name\" ASC")]]);
-    page(&mut h);
-    at(&mut h, 0, 1);
-    h.keys("F");
-    let shown = keys_of(&h);
-    assert!(shown.contains(&"↑ Sort ascending, NULLs last | sorted so".to_string()), "{shown:?}");
-    assert!(shown.contains(&"↓ Sort descending, NULLs first | ".to_string()), "no key runs it: {shown:?}");
-    h.keys("s");
-    assert!(menu_open(&h), "the dimmed entry says why, the menu stays");
-    assert!(runs(&mut h).is_empty());
-    h.key(KeyCode::Esc);
-    // Keys moved: `C` off, hiding on `j` (which moves in the menu), `=` on two keys.
-    let mut cfg = test_db_config();
-    cfg.keymap = datarig_core::config::parse(
-        "[keymap.grid]\n\"C\" = \"none\"\n\"j\" = \"table.column.hide\"\n\"=\" = \"none\"\n\"g o\" = \"table.filter.only\"\n",
-    )
-    .unwrap()
-    .keymap;
-    let mut h = users_from(Harness::connected_with(&cfg, Lang::En), Some(collations(Some(true))));
-    at(&mut h, 0, 1);
-    h.keys("F");
-    let shown = keys_of(&h);
-    assert!(shown.contains(&"Hide column | ".to_string()), "{shown:?}");
-    assert!(shown.contains(&"Only 'it's' | ".to_string()), "{shown:?}");
-    let selected = h.app.overlays.menu().unwrap().selected;
+    assert_eq!(h.app.column_popup_focus().as_deref(), Some("Only 'it's'"), "the first line");
     h.keys("j");
-    assert!(menu_open(&h), "j moves");
-    assert_ne!(h.app.overlays.menu().unwrap().selected, selected);
-    assert_eq!(hidden_cols(&h), 0, "nothing hidden");
-    h.keys("g");
-    h.keys("o");
-    assert!(menu_open(&h));
-    assert!(runs(&mut h).is_empty(), "no two-key entries in the menu");
+    assert_eq!(h.app.column_popup_focus().as_deref(), Some("Exclude 'it's'"));
+    h.keys(" ");
+    assert!(!popup_open(&h));
+    assert_eq!(runs(&mut h), sent("name IS DISTINCT FROM 'it''s'"));
+    page(&mut h);
+    at(&mut h, 0, 1);
+    h.keys("F");
+    h.keys("C");
+    assert!(!popup_open(&h));
+    assert_eq!(hidden_cols(&h), 1);
+    assert!(runs(&mut h).is_empty(), "hiding runs nothing");
 }
 
 fn hidden_cols(h: &Harness) -> usize {
     h.app.tab().grid.hidden.iter().filter(|x| **x).count()
 }
 
-/// With a Korean input source the column menu's keys are the QWERTY keys at the same places
-/// (the jamo at `j` moves as `j`, the one at `s` sorts as `s`); a menu that filters as it is typed in keeps the
-/// Hangul typed.
+/// With a Korean input source the popup's keys are the QWERTY keys at the same places (the
+/// jamo at `k` moves up as `k`, the one at `j` down); the grid's menu, which filters as it is
+/// typed in, keeps the Hangul typed.
 #[test]
-fn the_column_menu_takes_keys_typed_with_a_korean_input_source() {
+fn the_column_popup_takes_keys_typed_with_a_korean_input_source() {
     let mut h = users();
     at(&mut h, 0, 1);
     h.keys("F");
-    let selected = h.app.overlays.menu().unwrap().selected;
-    h.key(KeyCode::Char('\u{3153}'));
-    assert!(menu_open(&h));
-    assert_ne!(h.app.overlays.menu().unwrap().selected, selected, "moved down");
     h.key(KeyCode::Char('\u{314F}'));
-    assert_eq!(h.app.overlays.menu().unwrap().selected, selected, "and up");
-    h.key(KeyCode::Char('\u{3134}'));
-    assert!(!menu_open(&h));
-    assert_eq!(runs(&mut h), vec![vec![format!("{ALL} ORDER BY \"name\" ASC")]]);
-    page(&mut h);
+    assert_eq!(h.app.column_popup_focus().as_deref(), Some("Hide column"), "moved up");
+    h.key(KeyCode::Char('\u{314F}'));
+    h.key(KeyCode::Char('\u{3153}'));
+    assert_eq!(h.app.column_popup_focus().as_deref(), Some("Hide column"), "and down");
+    h.key(KeyCode::Esc);
     // The grid's menu filters: the jamo is typed into its filter.
     h.app.dispatch(datarig_tui::app::action::Action::OpenMenu);
-    assert!(menu_open(&h));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
     h.key(KeyCode::Char('\u{3153}'));
     assert_eq!(h.app.overlays.menu().unwrap().filter.text(), "\u{3153}");
-}
-
-/// An entry's grid key that the menu's own keys take first (a key of the menu, or the start of
-/// one) is neither shown nor run as the entry's: the menu's key keeps its meaning.
-#[test]
-fn the_column_menu_shows_no_key_its_own_keys_take() {
-    for menu_keys in ["\"f2\" = \"help.context\"", "\"f2 f3\" = \"help.context\""] {
-        let mut cfg = test_db_config();
-        let text = format!(
-            "[keymap.grid]\n\"f2\" = \"table.column.hide\"\n\n[keymap.\"overlay.context_menu\"]\n{menu_keys}\n"
-        );
-        cfg.keymap = datarig_core::config::parse(&text).unwrap().keymap;
-        let mut h = users_from(Harness::connected_with(&cfg, Lang::En), Some(collations(Some(true))));
-        at(&mut h, 0, 1);
-        h.keys("F");
-        let shown: Vec<String> = lines(&h).into_iter().filter(|l| l.starts_with("Hide")).collect();
-        assert_eq!(shown, ["Hide column | C"], "{menu_keys}: the grid's other key, which the menu runs");
-        h.key(KeyCode::F(2));
-        assert_eq!(hidden_cols(&h), 0, "{menu_keys}: F2 is the menu's");
-    }
 }

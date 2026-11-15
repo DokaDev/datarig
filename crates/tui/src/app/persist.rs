@@ -611,6 +611,8 @@ impl App {
     fn after_input_here(&mut self) {
         // A search of a grid that no longer shows its result goes.
         self.sweep_grid_search();
+        // A press on a header of a grid that changed is over.
+        self.header_press_settle();
         // The input moved the focus itself (not one of the corrections below).
         let moved = self.focus != self.last_focus;
         // Without a tab only the explorer can have the focus (the welcome panel stands in for

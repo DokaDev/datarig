@@ -38,11 +38,14 @@ pub enum PointerOn {
 impl App {
     /// Every frame, also one too small to draw: a dialog that came on top since the last one
     /// (opened, or uncovered by one that closed) starts its arming clock over, even when no
-    /// frame showed it covered.
+    /// frame showed it covered; a press on a header waiting for its release is over, and so is
+    /// one whose grid changed since.
     pub fn note_top(&mut self) {
+        self.header_press_settle();
         let top = self.overlays.top().map(|o| o.kind());
         if std::mem::replace(&mut self.pointer.last_top, top) != top {
             self.overlays.rearm_top();
+            self.header_press_drop();
         }
     }
 
@@ -59,6 +62,7 @@ impl App {
         // A move has no button held: a press it armed lost its release.
         self.pointer.detail_press.disarm();
         self.qbar.press.disarm();
+        self.header_press_drop();
         let on = if l.too_small {
             None
         } else if l.tree.contains(at) {

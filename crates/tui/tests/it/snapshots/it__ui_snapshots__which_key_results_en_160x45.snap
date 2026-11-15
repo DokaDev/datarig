@@ -41,7 +41,7 @@ expression: backend
 "│ =  Table → only this value (in place of the colum…  c  Table → columns shown and hidden (popup)         s  Table → sort by this column only (up, down, of…   │"
 "│ A  Table → filter and sort (dialog, on this colum…  e  Results → export to a file…                      v  Table → open its statement in a new console       │"
 "│ C  Table → hide this column from the grid (still …  f  Table → filter and sort (dialog, on this colum…  w  Table → put the keys on the query bar's condit…   │"
-"│ F  Table → this column's menu (sort, filter, hide)  g  Results → show as a chart / as rows              x  Table → clear the filter, the order and the li…   │"
+"│ F  Table → this column's conditions, sort and hid…  g  Results → show as a chart / as rows              x  Table → clear the filter, the order and the li…   │"
 "│ H  Table → earlier filters of this table            h  Results pane → hide / show                       y  +Copy selection                                   │"
 "│ I  Result detail → Cell / Row                       i  Result detail → show / hide                      z  Results pane → zoom (maximise) / restore          │"
 "│ S  Table → sort by this column too (up, down, off)  l  Table → type the limit in the query bar                                                               │"

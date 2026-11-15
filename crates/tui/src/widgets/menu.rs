@@ -31,12 +31,9 @@ pub(crate) fn draw_context_menu(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let label_w =
         lines.iter().map(|(h, l, _)| width(l) + usize::from(!*h)).max().unwrap_or(0).max(label_w + 1).max(heading_w);
     let key_w = lines.iter().map(|(_, _, k)| width(k)).max().unwrap_or(0).max(key_w);
-    // The filter's line, when typing filters.
-    let top = u16::from(m.typing);
-    let inner_w = match m.typing {
-        true => (label_w + key_w + 4).max(width(PROMPT) + width(&hint) + 2).max(width(m.filter.text()) + 4),
-        false => label_w + key_w + 4,
-    };
+    // The filter's line.
+    let top = 1;
+    let inner_w = (label_w + key_w + 4).max(width(PROMPT) + width(&hint) + 2).max(width(m.filter.text()) + 4);
     let w = (inner_w as u16 + 2).min(area.width);
     let h = (lines.len() as u16 + 2 + top).min(area.height);
     // Below the row it was opened on, moved in to stay on the screen.
@@ -57,15 +54,11 @@ pub(crate) fn draw_context_menu(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     // The filter, or what typing does.
     let iw = inner.width as usize;
     let base = Style::new().bg(th.surface);
-    if m.typing {
-        put(buf, inner.x + 1, inner.y, PROMPT, iw - 1, base.fg(th.accent));
-    }
+    put(buf, inner.x + 1, inner.y, PROMPT, iw - 1, base.fg(th.accent));
     let fx = inner.x + 1 + width(PROMPT) as u16;
     let room = Rect::new(fx, inner.y, inner.width.saturating_sub(fx - inner.x + 1), 1);
     let typing = m.sub.is_none();
-    let cursor = if !m.typing {
-        None
-    } else if m.filter.text().is_empty() {
+    let cursor = if m.filter.text().is_empty() {
         put(buf, fx, inner.y, &hint, room.width as usize, base.fg(th.fg_dim));
         typing.then_some((fx, inner.y))
     } else {

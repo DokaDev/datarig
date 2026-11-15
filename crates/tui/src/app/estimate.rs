@@ -124,7 +124,7 @@ impl App {
         let title = self.i18n.label(Label::ResultsCountMenuTitle).to_string();
         let at = self.menu_at_cell();
         let target = MenuTarget::Filter { grid: Box::new(grid), result };
-        self.push_filter_menu(target, title, (vec![estimate, exact], off, names, hints, Vec::new()), at);
+        self.push_filter_menu(target, title, (vec![estimate, exact], off, names, hints), at);
         // Enter does not pick a dimmed entry: what a count would be told is said now.
         if let Some(why) = refused {
             self.flash(why);

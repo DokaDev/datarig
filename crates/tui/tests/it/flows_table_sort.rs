@@ -17,7 +17,7 @@ use datarig_tui::app::Results;
 use datarig_tui::app::overlay::ConfirmAction;
 use datarig_tui::app::table_query::Field;
 use datarig_tui::keymap::Ctx;
-use datarig_tui::widgets::grid::{HeadMarks, Shape};
+use datarig_tui::widgets::grid::HeadMarks;
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 use std::time::Duration;
 
@@ -206,23 +206,28 @@ fn zone(h: &mut Harness, col: usize) -> (u16, u16) {
 }
 
 #[test]
-fn a_click_in_the_sort_zone_sorts_and_elsewhere_selects_the_column() {
+fn a_click_in_the_sort_zone_sorts_and_elsewhere_opens_the_columns_popup() {
     let mut h = users(Lang::En);
     h.draw(120, 30);
     let g = h.app.tab().grid.clone();
     assert_eq!(g.sort_zones.len(), 3, "{:?}", g.sort_zones);
-    // A plain header click selects the column: nothing runs.
+    // A plain header click opens the column's popup: nothing runs, nothing is selected.
     let (a, _, c) = g.hit_cols[1];
     h.mouse(MouseEventKind::Down(MouseButton::Left), a + 2, g.header_y);
     h.mouse(MouseEventKind::Up(MouseButton::Left), a + 2, g.header_y);
     assert!(runs(&mut h).is_empty());
+    assert_eq!(h.app.filter_dialog_popup(), Some(datarig_tui::app::filter_dialog::view::PopupKindId::Condition));
     let g2 = h.app.tab().grid.clone();
-    assert_eq!((g2.col, g2.shape, g2.anchor.is_some()), (c, Shape::Cols, true));
-    // The type row under the zone selects the column too.
+    assert_eq!((g2.col, g2.anchor), (c, None));
+    h.key(KeyCode::Esc);
+    // The type row under the zone opens it too.
     let (za, _, zc) = g.sort_zones.iter().copied().find(|z| z.2 == 2).unwrap();
     h.mouse(MouseEventKind::Down(MouseButton::Left), za, g.header_y + 1);
     h.mouse(MouseEventKind::Up(MouseButton::Left), za, g.header_y + 1);
     assert!(runs(&mut h).is_empty());
+    assert_eq!(h.app.filter_dialog_popup(), Some(datarig_tui::app::filter_dialog::view::PopupKindId::Condition));
+    assert_eq!(h.app.tab().grid.col, zc);
+    h.key(KeyCode::Esc);
     // The zone of another column (not marked there) sorts by that column, which becomes the
     // cursor's; the range selected goes.
     h.draw(120, 30);
@@ -453,11 +458,12 @@ fn grid_actions_over_a_query_that_did_not_land_are_refused() {
             assert!(heads(&h).iter().all(|m| m.sort.is_none()), "{case} {how}");
         }
     }
-    // An entry picked from a column menu opened over the rows shown, once the query applied
-    // is one whose rows are not shown (as a run that did not land leaves it): refused too.
+    // A line of a column's popup opened over the rows shown, once the query applied is one
+    // whose rows are not shown (as a run that did not land leaves it): it sends nothing, and
+    // written again it says why.
     let mut h = users(Lang::En);
     h.keys("F");
-    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::FilterDialog));
     let qid = h.app.tab().exec.query_id;
     let tq = h.app.tab_mut().doc.table_query.as_mut().unwrap();
     let other = datarig_core::query::Query {
@@ -465,8 +471,14 @@ fn grid_actions_over_a_query_that_did_not_land_are_refused() {
         ..tq.shown.clone().unwrap()
     };
     tq.requested = Some((qid, other));
-    h.menu_pick("Only 0");
-    assert!(runs(&mut h).is_empty(), "the entry sends nothing");
+    while h.app.column_popup_focus().as_deref() != Some("Only 0") {
+        h.key(KeyCode::Up);
+    }
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty(), "the line sends nothing");
+    assert!(h.status(120, 30).contains("the cells changed"), "{}", h.status(120, 30));
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty(), "the line written again sends nothing");
     let status = h.status(120, 30);
     assert!(status.contains("Not filtered: showing previous rows"), "{status}");
 }
@@ -540,9 +552,9 @@ fn every_refusal_of_a_sort_or_filter_by_value_fits_80_columns() {
             Msg::TableFilterByValueLikeRefused { column: column() },
             Msg::TableFilterByValueLikeUnknown { column: column() },
             Label::TableClearAllNothing.into(),
-            Label::TableColumnSorted.into(),
-            Label::TableColumnNotSorted.into(),
-            Label::TableColumnNoCondition.into(),
+            Label::TableColumnLineStale.into(),
+            Label::TableColumnHideGone.into(),
+            Msg::TableColumnNotListed { column: column() },
         ];
         for m in all {
             h.app.transient = Some((Notice::new(m.clone(), Level::Warning), std::time::Instant::now()));

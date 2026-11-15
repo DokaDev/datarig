@@ -20,7 +20,7 @@ expression: backend
 "│ =  Table → only this value (in place of the column's conditions)             │"
 "│ A  Table → filter and sort (dialog, on this column)                          │"
 "│ C  Table → hide this column from the grid (still read)                       │"
-"│ F  Table → this column's menu (sort, filter, hide)                           │"
+"│ F  Table → this column's conditions, sort and hiding                         │"
 "│ H  Table → earlier filters of this table                                     │"
 "│ I  Result detail → Cell / Row                                                │"
 "│ …                                                                            │"

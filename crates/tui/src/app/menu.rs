@@ -24,7 +24,6 @@
 //! tree was reloaded, the result was replaced, the tab went), nothing runs.
 
 use super::action::{ChartAction, MonitorAction, PanelAction, PlanAction, PlanView};
-use super::column_menu::ColumnItem;
 use super::copy::{CopyFormat, CopyScope};
 use super::edit::{EditAction, NotOffered};
 use super::monitor::MonitorView;
@@ -210,15 +209,10 @@ const OPENS_MENU: &[Action] = &[Action::OpenMenu, Action::TabMenu, Action::Explo
 /// A menu's items: the target's, the pane's, and those of them shown dimmed with why.
 type Items = (Vec<MenuItem>, Vec<MenuItem>, Vec<(MenuItem, Off)>);
 
-/// The filter menu's items, those of them shown dimmed with why, their labels, the hints
-/// shown with them, and the filter text each one that can run sends.
-pub(super) type FilterItems = (
-    Vec<MenuItem>,
-    Vec<(MenuItem, Off)>,
-    Vec<(MenuItem, Localized)>,
-    Vec<(MenuItem, Localized)>,
-    Vec<(MenuItem, String)>,
-);
+/// The filter menu's items, those of them shown dimmed with why, their labels, and the hints
+/// shown with them.
+pub(super) type FilterItems =
+    (Vec<MenuItem>, Vec<(MenuItem, Off)>, Vec<(MenuItem, Localized)>, Vec<(MenuItem, Localized)>);
 
 /// What a copy of the grid's menu takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -238,8 +232,6 @@ pub enum MenuItem {
     Scope(MenuScope),
     /// A format of a scope's submenu.
     Copy(MenuScope, CopyFormat),
-    /// An entry of the column menu (on the grid's target, as the count choice's).
-    Column(ColumnItem),
     /// An entry of the choice `#` opens on a filtered table tab (on the grid's target as the
     /// filter menu's are).
     Count(super::estimate::CountChoice),
@@ -319,8 +311,6 @@ pub enum MenuLine {
     Item(MenuItem),
     /// Nothing matches the filter, not even among every action.
     NoMatch,
-    /// A rule between groups of the target's items (the column menu's), while nothing is typed.
-    Rule,
 }
 
 /// The second level of a menu: the formats of a copy scope, next to its row.
@@ -347,18 +337,12 @@ pub struct ContextMenu {
     /// A few words shown with an item that can run, where its keys would be (a filter's
     /// caveat).
     hints: Vec<(MenuItem, Localized)>,
-    /// The filter text each filter item that can run sends, as written when the
-    /// menu opened: what runs is what the menu showed, never written again from the cells.
-    filters: Vec<(MenuItem, String)>,
     /// The explorer row's or the tab's name as shown when the menu opened (its heading).
     title: String,
     /// The focus to give back when the menu closes without running anything.
     back: Focus,
     /// What was typed to filter the items.
     pub filter: TextInput,
-    /// Typing filters the items (a filter line on top); without, letters move and run the
-    /// keys shown (a menu of a few entries).
-    pub typing: bool,
     /// The lines shown: headings and the items that match the filter.
     pub lines: Vec<MenuLine>,
     /// The selected line (an item, when there is one).
@@ -665,7 +649,7 @@ impl App {
     }
 
     /// The target of the kind of `like` as it is now, if there is one.
-    fn menu_target_now(&self, like: &MenuTarget) -> Option<MenuTarget> {
+    pub(super) fn menu_target_now(&self, like: &MenuTarget) -> Option<MenuTarget> {
         match like {
             MenuTarget::Explorer(..) => {
                 let row = self.explorer_row().filter(|_| self.focus == Focus::Tree)?;
@@ -874,11 +858,9 @@ impl App {
             off,
             names,
             hints: Vec::new(),
-            filters: Vec::new(),
             title,
             back,
             filter: TextInput::default(),
-            typing: true,
             lines: Vec::new(),
             selected: 0,
             scroll: 0,
@@ -954,7 +936,8 @@ impl App {
         }
         let table = self.tab().is_table();
         let t = self.tabs.active_mut();
-        // A table tab's header: that column's menu (the cursor goes to its column).
+        // A table tab's header: that column's popup with the line that hides it (the cursor
+        // goes to its column).
         if table
             && t.exec.view == ResultView::Rows
             && let Some(c) = t.grid.header_col(x, y)
@@ -962,7 +945,7 @@ impl App {
             t.grid.go_to(t.grid.row, c);
             t.grid.anchor = None;
             t.grid.detached = false;
-            return self.open_column_menu_at((x, y));
+            return self.open_column_popup(Some(false));
         }
         if let (ResultView::Rows, Results::Rows(rs)) = (t.exec.view, &t.results) {
             let (total, ncols) = (rs.rows.len(), rs.columns.len());
@@ -1093,7 +1076,7 @@ impl App {
         &mut self,
         target: MenuTarget,
         title: String,
-        (items, off, names, hints, filters): FilterItems,
+        (items, off, names, hints): FilterItems,
         at: (u16, u16),
     ) {
         if items.is_empty() {
@@ -1107,7 +1090,6 @@ impl App {
             m.title = title;
             m.names = names;
             m.hints = hints;
-            m.filters = filters;
         }
         self.menu_refilter();
     }
@@ -1285,16 +1267,7 @@ impl App {
             }
             ranked.sort_by_key(|&(r, i, _)| (r, i));
             lines.push(MenuLine::Heading(heading));
-            let mut group = None;
             for (r, _, item) in ranked {
-                let g = match item {
-                    MenuItem::Column(c) if query.is_empty() => Some(c.group()),
-                    _ => None,
-                };
-                if group.is_some() && g.is_some() && g != group {
-                    lines.push(MenuLine::Rule);
-                }
-                group = g;
                 if !off.contains(&item) && best.is_none_or(|(b, _)| r < b) {
                     best = Some((r, lines.len()));
                 }
@@ -1396,12 +1369,6 @@ impl App {
                     self.apply_setting(super::command::Setting::CopyFormat(s));
                 }
             }
-            MenuItem::Column(c) => {
-                let text =
-                    self.overlays.menu().and_then(|m| m.filters.iter().find(|(i, _)| *i == item)).map(|f| f.1.clone());
-                self.overlays.close(OverlayKind::ContextMenu);
-                self.column_item(c, text);
-            }
             MenuItem::Count(choice) => {
                 self.overlays.close(OverlayKind::ContextMenu);
                 self.count_choice(choice);
@@ -1472,14 +1439,6 @@ impl App {
                 let i = m.selected;
                 self.open_sub(i);
             }
-            KeyCode::Char('j') if !m.typing && k.mods.is_empty() => m.step(1),
-            KeyCode::Char('k') if !m.typing && k.mods.is_empty() => m.step(-1),
-            // No filter: a key shown next to an entry runs it.
-            _ if !m.typing => {
-                if !repeat && let Some(item) = self.menu_item_of_key(k) {
-                    self.menu_pick(item);
-                }
-            }
             _ => match m.filter.handle_key(&k.to_event()) {
                 InputResult::Changed => self.menu_refilter(),
                 InputResult::Moved => {}
@@ -1505,7 +1464,7 @@ impl App {
     /// Text pasted while the menu has the keyboard: into its filter.
     pub(super) fn menu_paste(&mut self, text: &str) {
         let Some(m) = self.overlays.menu_mut() else { return };
-        if m.sub.is_none() && m.typing {
+        if m.sub.is_none() {
             m.filter.insert_str(text);
             self.menu_refilter();
         }
@@ -1597,7 +1556,6 @@ impl App {
         let own = names.iter().find(|(x, _)| *x == item).map(|(_, l)| l.clone());
         match item {
             MenuItem::Action(a) => (own.unwrap_or_else(|| self.i18n.label(action::spec(a).label)), keys(a)),
-            MenuItem::Column(c) => (own.unwrap_or_else(|| Localized::verbatim("")), self.column_item_keys(c)),
             MenuItem::Count(_) => (own.unwrap_or_else(|| Localized::verbatim("")), String::new()),
             MenuItem::Scope(scope) => {
                 let label = match scope {
@@ -1708,8 +1666,6 @@ impl App {
                     (false, label, keys)
                 }
                 MenuLine::NoMatch => (true, self.i18n.label(Label::MenuNoMatch), String::new()),
-                // A heading with no text: drawn as a rule.
-                MenuLine::Rule => (true, Localized::verbatim(""), String::new()),
             })
             .collect()
     }

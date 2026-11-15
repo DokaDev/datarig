@@ -240,6 +240,10 @@ impl App {
             }
             return;
         }
+        // A line above a column's popup does what it says, not the draft.
+        if let DialogFocus::Line(l) = d.focus {
+            return self.column_line_run(l);
+        }
         self.filter_dialog_send();
     }
 
@@ -400,7 +404,7 @@ impl App {
 
     /// A press outside a popup: it closes as `Esc` closes the dialog, its picker and a count of
     /// the values running with it.
-    pub(super) fn filter_dialog_dismiss(&mut self) {
+    pub(crate) fn filter_dialog_dismiss(&mut self) {
         if let Some(d) = self.filter_dialog_mut() {
             d.picker = None;
         }

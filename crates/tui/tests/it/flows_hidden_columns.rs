@@ -1,4 +1,4 @@
-//! Columns hidden from a table tab's grid: `C` (and the column menu, and `Space` / `C` in the
+//! Columns hidden from a table tab's grid: `C` (and the column's popup, and `Space` / `C` in the
 //! filter dialog's column list) hides one, a view only: nothing runs, the query stays
 //! `SELECT *`. The grid steps over hidden columns (`h`, `l`, `0`, `$`), copies and searches
 //! the shown ones, says how many are hidden on its border, and with every column hidden says
@@ -263,13 +263,14 @@ fn the_dialog_hides_and_its_undo_shows_again() {
     assert_eq!(hidden(&h), [false, false, false, false]);
 }
 
-/// The column menu's entry hides it; with every column hidden the grid says how to show one.
+/// `C` in the column's popup hides it; with every column hidden the grid says how to show one.
 #[test]
 fn every_column_hidden_says_how_to_show_one() {
     let mut h = users(None);
     at(&mut h, 0, 0);
     h.keys("F");
-    h.menu_pick("Hide column");
+    h.keys("C");
+    assert_eq!(h.overlay_kind(), None, "the popup closes");
     assert_eq!(hidden(&h), [true, false, false, false]);
     for _ in 0..3 {
         h.keys("C");

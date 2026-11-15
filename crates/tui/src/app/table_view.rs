@@ -219,10 +219,8 @@ impl App {
         true
     }
 
-    /// `C` (and the column menu's entry): the cursor's column hidden from the grid; the cursor
-    /// goes to the next column shown.
+    /// `C`: the cursor's column hidden from the grid; the cursor goes to the next column shown.
     pub(super) fn table_hide_column(&mut self) {
-        let id = self.tab().id;
         let column = match &self.tab().results {
             Results::Rows(rs) => rs.columns.get(self.tab().grid.col).map(|c| c.meta.name.clone()),
             _ => None,
@@ -230,10 +228,16 @@ impl App {
         let Some(column) = column else {
             return self.flash(Notice::new(Label::TableSortNoColumns, Level::Info));
         };
+        self.table_hide(&column);
+    }
+
+    /// Column `column` of the active tab's rows hidden from its grid.
+    pub(super) fn table_hide(&mut self, column: &str) {
+        let id = self.tab().id;
         self.close_search_prompt();
         let mut names = self.hidden_columns(id);
-        if !names.contains(&column) {
-            names.push(column);
+        if !names.iter().any(|n| n == column) {
+            names.push(column.to_string());
         }
         self.set_hidden_columns(id, &names, true);
     }

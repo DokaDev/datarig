@@ -1,15 +1,17 @@
 //! The condition popup of the query bar: one column's conditions, values and sort, as the
 //! filter dialog's pane draws them ([`draw_condition_pane`]), in a small box under the
-//! condition it opened on ([`frame`]). Its border names the column (and its type, muted), says
+//! condition it opened on, or under the column's header ([`frame`]). Its border names the column (and its type, muted), says
 //! where the conditions are when they scroll, and holds the hint line: what the dialog says,
 //! else the keys of the focused line, with `⋯ Advanced` on its right, which turns the popup
-//! into the whole dialog (as `A` does).
+//! into the whole dialog (as `A` does). Opened on the column from the grid (`F`, a right click
+//! on its header) it has lines above the pane, a rule under them: hiding the column, and on a
+//! cell only its value or everything but it, each dimmed with why when it cannot run.
 
 use super::frame::{anchored, frame};
 use crate::app::App;
 use crate::app::filter_dialog::list::ValuesView;
 use crate::app::filter_dialog::view::{PopupKind, View};
-use crate::app::filter_dialog::{DialogHit, DialogHits};
+use crate::app::filter_dialog::{DialogFocus, DialogHit, DialogHits};
 use crate::app::overlay::OverlayKind;
 use crate::text::width;
 use crate::theme;
@@ -49,15 +51,21 @@ fn notes(v: &ValuesView) -> usize {
 }
 
 /// Draw the open filter dialog's condition popup inside `bounds`, under the part of the query
-/// bar it opened on (where it is drawn now, else where it was). Returns the hardware cursor.
+/// bar or the column's header it opened on (where it is drawn now, else where it was). Returns
+/// the hardware cursor.
 pub(crate) fn draw_condition_popup(app: &mut App, bounds: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
     let view = app.filter_dialog_list();
     let d = app.filter_dialog()?;
-    let View::Popup { kind: PopupKind::Condition { .. }, anchor } = d.view() else { return None };
+    let View::Popup { kind: PopupKind::Condition { col }, anchor } = d.view() else { return None };
     if bounds.width < 30 || bounds.height < 6 {
         return None;
     }
-    let at = anchor.seg.and_then(|s| app.layout.qbar.iter().find(|(_, h)| *h == s)).map_or(anchor.at, |(r, _)| *r);
+    // Under its part of the bar, or under its column's header (one opened there has no part).
+    let at = match anchor.seg {
+        Some(s) => app.layout.qbar.iter().find(|(_, h)| *h == s).map(|(r, _)| *r),
+        None => app.popup_header(d.tab, col),
+    };
+    let at = at.unwrap_or(anchor.at);
     let th = theme::cur();
     let i18n = &app.i18n;
     let muted = Style::new().fg(th.fg_muted);
@@ -75,19 +83,25 @@ pub(crate) fn draw_condition_popup(app: &mut App, bounds: Rect, buf: &mut Buffer
         .max()
         .unwrap_or(0)
         .max(14);
-    let want = [SORT_W, CONDITION_W + field, view.as_ref().map_or(0, values_width), width(&name) + width(&ty) + 4]
-        .into_iter()
-        .max()
-        .unwrap_or(0);
+    // The lines above the pane: label, and the key that runs it or (dimmed) why it cannot.
+    let above = app.column_lines_shown();
+    let lines_w = above.iter().map(|(_, a, b, _)| width(a) + width(b) + 6).max().unwrap_or(0);
+    let want =
+        [SORT_W, CONDITION_W + field, view.as_ref().map_or(0, values_width), width(&name) + width(&ty) + 4, lines_w]
+            .into_iter()
+            .max()
+            .unwrap_or(0);
     // The hint line: what the dialog says, else the keys; `⋯ Advanced` on its right, a blank on
     // each side (the keys of the hint line widen the popup as its parts do).
     let advanced = format!(" \u{22ef} {} ", i18n.label(Label::TableBarAdvanced));
     let adv_w = width(&advanced) as u16;
     let keys_w: usize = hint_parts(app, d, view.as_ref(), usize::MAX).iter().map(|(t, _)| width(t)).sum();
-    let w = (want as u16 + 4).max(keys_w as u16 + adv_w + 5).clamp(MIN_W, MAX_W);
+    // Never narrower than it was drawn in this view: the hint line changes with the keys.
+    let w = (want as u16 + 4).max(keys_w as u16 + adv_w + 5).clamp(MIN_W, MAX_W).max(d.popup_w);
     let lines = d.rows().len() + 1;
     let values = view.as_ref().map_or(0, |v| 1 + v.items.len().min(VALUES_MAX) + notes(v));
-    let inner_h = lines + if values > 0 { 1 + values } else { 0 } + 2;
+    let top_h = if above.is_empty() { 0 } else { above.len() + 1 };
+    let inner_h = top_h + lines + if values > 0 { 1 + values } else { 0 } + 2;
     let rect = anchored(at, w, inner_h as u16 + 2, bounds);
     let adv_x = rect.right().saturating_sub(2 + adv_w);
     let hint_w = usize::from(adv_x.saturating_sub(rect.x + 3));
@@ -109,8 +123,31 @@ pub(crate) fn draw_condition_popup(app: &mut App, bounds: Rect, buf: &mut Buffer
     put(buf, adv_x, by, &advanced, usize::from(adv_w), Style::new().fg(th.fg));
     hits.advanced = Rect::new(adv_x, by, adv_w, 1);
 
+    // The lines above the pane, the focused one lit, a rule under them.
+    let top_h = (top_h as u16).min(inner.height.saturating_sub(1));
+    for (i, (l, label, right, dim)) in above.iter().enumerate().take(usize::from(top_h.saturating_sub(1))) {
+        let y = inner.y + i as u16;
+        let row = Rect::new(inner.x, y, inner.width, 1);
+        let base =
+            if d.focus == DialogFocus::Line(*l) { Style::new().fg(th.fg).patch(th.selection) } else { th.base() };
+        crate::widgets::condition_pane::fill(buf, row, base);
+        let fg = if *dim { muted } else { Style::new().fg(th.fg) };
+        // The marker of the focused line, where the pane's lines have theirs.
+        if d.focus == DialogFocus::Line(*l) {
+            put(buf, inner.x + 1, y, "\u{25b8}", 1, base.patch(Style::new().fg(th.accent)));
+        }
+        let rw = width(right) as u16;
+        let room = usize::from(inner.width.saturating_sub(rw + 5));
+        put(buf, inner.x + 3, y, label, room, base.patch(fg));
+        put(buf, inner.right().saturating_sub(rw + 1), y, right, usize::from(rw), base.patch(muted));
+        hits.lines.push((row, *l));
+    }
+    if top_h > 0 {
+        let rule = "\u{2500}".repeat(usize::from(inner.width));
+        put(buf, inner.x, inner.y + top_h - 1, &rule, usize::from(inner.width), Style::new().fg(th.border));
+    }
     // The pane, a blank column on each side.
-    let pane = Rect::new(inner.x + 1, inner.y, inner.width - 2, inner.height);
+    let pane = Rect::new(inner.x + 1, inner.y + top_h, inner.width - 2, inner.height - top_h);
     let out = draw_condition_pane(
         app,
         d,
@@ -146,6 +183,7 @@ pub(crate) fn draw_condition_popup(app: &mut App, bounds: Rect, buf: &mut Buffer
         d.set_values_drawn(out.values_drawn);
         d.hover = lit.map(|(h, _)| h);
         d.press.drawn(top, now);
+        d.popup_w = w;
     }
     out.cursor.filter(|_| top)
 }

@@ -17,9 +17,12 @@ const AREAS: usize = 9;
 fn area(f: DialogFocus) -> usize {
     match f {
         DialogFocus::Columns | DialogFocus::RowsItem(_) => 0,
-        DialogFocus::Op(_) | DialogFocus::Value(..) | DialogFocus::Add | DialogFocus::Values(_) | DialogFocus::Sort => {
-            1
-        }
+        DialogFocus::Op(_)
+        | DialogFocus::Value(..)
+        | DialogFocus::Add
+        | DialogFocus::Values(_)
+        | DialogFocus::Sort
+        | DialogFocus::Line(_) => 1,
         DialogFocus::Chips(_) => 2,
         DialogFocus::Order(_) | DialogFocus::Sorted(_) => 3,
         DialogFocus::Limit => 4,
@@ -108,7 +111,12 @@ impl App {
         if d.typing() {
             return self.filter_dialog_text_key(key);
         }
-        match d.focus {
+        // A column's popup opened on the column: `C` hides it, as in the grid.
+        let focus = d.focus;
+        if key.code == KeyCode::Char('C') && self.column_line_key(ColumnLine::Hide) {
+            return;
+        }
+        match focus {
             DialogFocus::Columns => self.filter_dialog_columns_key(key),
             DialogFocus::Op(t) => self.filter_dialog_op_key(t, key),
             DialogFocus::Add => match key.code {
@@ -116,6 +124,10 @@ impl App {
                 _ => self.filter_dialog_pane_key(key),
             },
             DialogFocus::Sort => self.filter_dialog_sort_key(key),
+            DialogFocus::Line(l) => match key.code {
+                KeyCode::Char(' ') | KeyCode::Right | KeyCode::Char('l') => self.column_line_run(l),
+                _ => self.filter_dialog_pane_key(key),
+            },
             DialogFocus::Values(i) => self.filter_dialog_values_key(i, key),
             DialogFocus::Chips(i) => self.filter_dialog_chips_key(i, key),
             DialogFocus::Order(i) => self.filter_dialog_order_key(i, key),

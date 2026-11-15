@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::filter_dialog::draft::{ColumnInfo, Draft, Undo};
-use crate::app::filter_dialog::{ColumnSource, DialogFocus, DialogHit};
+use crate::app::filter_dialog::{ColumnLine, ColumnLines, ColumnSource, DialogFocus, DialogHit};
 use crate::app::tabs::TabId;
 use crate::widgets::text_input::TextInput;
 use datarig_core::query::{ColumnFacts, ColumnKind, Filter, Query, TableName, Target};
@@ -87,6 +87,8 @@ pub(crate) fn dialog() -> FilterDialog {
         tally: None,
         counting: None,
         exact: HashMap::new(),
+        column_lines: Some(ColumnLines { col: "email".into(), values: None }),
+        popup_w: 50,
     }
 }
 
@@ -102,6 +104,9 @@ fn dropped(d: &FilterDialog) {
     assert_eq!(d.press.armed, None);
     assert_eq!(d.press.shown_at, None, "a press waits again before it arms");
     assert_eq!(d.picker, None);
+    assert!(d.column_lines.is_none(), "the lines a column's popup had above it go");
+    assert_eq!(d.popup_w, 0, "and the width it was drawn in");
+    assert!(!d.pane_lines().iter().any(|l| matches!(l, DialogFocus::Line(_))));
 }
 
 #[test]
@@ -109,6 +114,7 @@ fn a_change_of_view_keeps_the_session_and_drops_what_was_drawn() {
     let mut d = dialog();
     let kept = session(&d);
     assert!(d.is_popup() && d.confined());
+    assert_eq!(d.pane_lines().first(), Some(&DialogFocus::Line(ColumnLine::Hide)), "the line above the pane");
     assert_eq!(d.popup_kind().map(PopupKind::id), Some(PopupKindId::Condition));
     assert_eq!(d.column().map(|c| c.name.as_str()), Some("email"));
 
