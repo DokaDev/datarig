@@ -1390,3 +1390,20 @@ fn values_hidden_by_a_resize_are_left() {
         assert_eq!(draft_where(&h), all, "{n}, advanced: {advanced}: nothing unseen ticked");
     }
 }
+
+/// A switch to the tab already active (`tab.goto.N` from the command line) leaves it as it is: its popup, the draft
+/// and its undo stay.
+#[test]
+fn a_tab_switch_that_stays_keeps_the_popup() {
+    let mut h = users_where("name = 'n1'");
+    open_chip(&mut h, 0);
+    type_value(&mut h, "x");
+    let n = h.app.tabs.active_index() + 1;
+    h.ctrl('k');
+    h.type_text(&format!("tab.goto.{n}"));
+    h.key(KeyCode::Enter);
+    assert_eq!(popup(&h), Some(PopupKindId::Condition), "the popup stays");
+    assert!(draft_where(&h).contains("n1x"), "{}", draft_where(&h));
+    h.key_mod(KeyCode::Char('z'), KeyModifiers::CONTROL);
+    assert_eq!(draft_where(&h), "name = 'n1'", "its undo kept");
+}

@@ -61,7 +61,10 @@ impl App {
             self.cancel_in(tab);
         }
         self.drop_queued(tab, |name| Msg::QueryQueuedDropped { name });
-        self.filter_popup_leave(tab);
+        // The same connection again keeps what the tab's bar shows.
+        if self.tabs.get(tab).is_none_or(|t| t.profile != Some(id) || t.context != context) {
+            self.filter_popup_leave(tab);
+        }
         // A table tab's query waiting for its keys ends with the binding it waited in.
         if self.table_keys_cancel(tab) {
             self.tab_status(tab, Notice::new(Label::QueryCancelledRebound, Level::Warning));
@@ -173,8 +176,9 @@ impl App {
     /// Switch tabs with `f` (it returns whether the active tab changed).
     pub(super) fn switch_tab(&mut self, f: impl FnOnce(&mut TabManager) -> bool) {
         let before = self.tab().id;
-        self.leave_tab();
+        self.leave_tab_but_popup();
         if f(&mut self.tabs) && self.tab().id != before {
+            self.filter_popup_leave(before);
             self.entered_tab();
         }
     }
@@ -182,6 +186,12 @@ impl App {
     /// The active tab is about to change: close what belongs to it on screen.
     pub(super) fn leave_tab(&mut self) {
         self.filter_popup_leave(self.tab().id);
+        self.leave_tab_but_popup();
+    }
+
+    /// [`App::leave_tab`] but for a popup of the tab's filter dialog, which closes only once
+    /// another tab is active.
+    fn leave_tab_but_popup(&mut self) {
         let t = self.tab_mut();
         t.popup = None;
         t.completion_due = None;
