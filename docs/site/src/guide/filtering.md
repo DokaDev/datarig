@@ -301,7 +301,7 @@ On a table tab's grid:
   columns. With neither, it says so and runs nothing.
 - `C` (or `Space r C`) [hides](#hidden-columns) the column.
 - `s` and `S` [sort](#sort-from-the-grid).
-- `F` (or `Space r F`, or a right click on a header) opens the column's menu.
+- `F` (or `Space r F`, or a right click on a header) opens the column's popup with its lines.
 
 | Cells | `=` sends | `!` sends |
 |---|---|---|
@@ -324,16 +324,17 @@ own), is in a new row or a cell with an edit on it, or when the cells are of sev
 than 1000. A column whose name holds a line break is neither filtered by value nor sorted from the
 grid.
 
-The column's menu (`F`) sorts it ascending or descending or takes it out of the order, opens the
-dialog on it ("Filter and sort…"), keeps only or excludes the cursor's value (`=`, `!`), clears its
-own conditions, or hides it. Its sorts say where the server puts NULLs in them ("Sort ascending,
-NULLs last" on PostgreSQL, "NULLs first" on MySQL and MariaDB; see [Sort](#sort)). `j`, `k` and
-the arrows move through it, `Enter` runs the selected entry and `Esc` closes it. An entry with a
-key shown next to it runs with that key too: the grid's key for the same action, `s` for "Sort
-ascending", `f`, `=`, `!` and `C` with the default keys. "Sort descending", "Clear sort" and
-"Clear filter on this column" have no key of their own. An entry that cannot apply is dimmed, with
-the reason in place of its key. A right click on a cell opens the grid's menu, whose entry
-"Table → this column's menu (sort, filter, hide)" opens it.
+A click on a column's header (its name or its type) opens the column's condition popup under the
+header: its conditions, each with its `×`, its values and its sort (none, up, down), `⋯ Advanced`
+(`A`) the whole dialog on it. A drag from a header selects whole columns, and Shift+click extends the
+selection. `F` (or a right click on a header) opens the same popup with
+lines above it: "Hide column" (`C`), and on a cell "Only 'value'" and "Exclude 'value'", which keep
+only or exclude the cursor's value as `=` and `!` do. `↑` from the popup's first line reaches
+them, `Enter` or a click runs one; a line that cannot apply is dimmed, with the reason in place of
+its key, and says it in full when pressed. A value line runs the condition it showed: if the rows
+or the selection changed since the popup opened, it sends nothing and shows what it would do now.
+A right click on a cell opens the grid's menu, whose entry "Table → this column's conditions, sort
+and hiding" opens the popup.
 
 ```text
 {{#include ../screens/column-popup.txt}}
@@ -354,7 +355,7 @@ going down, it takes the whole order away). `S` (or `Space r S`) adds the column
 after the others; pressed again on a key it turns that key, then takes it out, and the other keys
 stay where they are. A click on the last two columns of the first row of a column's header (the
 cursor's column shows `^v` there, a glyph with icons on) sorts as `s` does; a click elsewhere on a
-header selects the column, as on any grid.
+header opens the column's popup.
 
 ```text
 {{#include ../screens/table-sort.txt}}
@@ -366,7 +367,7 @@ yet it asks first, as any run does.
 
 ## Hidden columns
 
-`C` on the grid, "Hide column" in the column's menu, or `Space` or `C` on a column in the dialog
+`C` on the grid, "Hide column" in the column's popup, or `Space` or `C` on a column in the dialog
 hides a column from the grid; `Space` or `C` in the dialog shows it again, and the dialog's undo
 takes a hide back. Hiding is a view only: the statement still reads every column, and nothing runs.
 
@@ -520,9 +521,9 @@ the session's level is set again.
 - On MySQL and MariaDB, a condition with an `INTERVAL` outside parentheses stays one `expr` chip:
   the interval's value runs up to its unit and may hold an `AND` of its own
   (`d + INTERVAL 1 AND 1 DAY`). Put the interval's term in parentheses to keep the others apart.
-- A right click on a cell opens the grid's menu, not the column's: its entry "Table → this
-  column's menu (sort, filter, hide)" (`F`) opens that one. A right click on a header opens the
-  column's menu at once.
+- A right click on a cell opens the grid's menu, not the column's popup: its entry "Table → this
+  column's conditions, sort and hiding" (`F`) opens that one. A right click on a header opens the
+  column's popup at once.
 
 ## History
 
