@@ -35,6 +35,22 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
+/// How long a test waits for the writer of the filter history or of the hidden columns: a hang
+/// guard, never a measure. The app waits at most a second for them when it quits; a test that
+/// waited as long would read a write still going on a busy machine (each one syncs the file to
+/// disk) as one that never happened.
+pub const WRITE_WAIT: Duration = Duration::from_secs(60);
+
+/// Write the filter history held back now and wait until its writer is done ([`WRITE_WAIT`]).
+pub fn flush_filter_history(app: &mut App) {
+    assert!(app.flush_filter_history_within(WRITE_WAIT), "the filter history's writer never answered");
+}
+
+/// Write the hidden columns held back now and wait until their writer is done ([`WRITE_WAIT`]).
+pub fn flush_table_view(app: &mut App) {
+    assert!(app.flush_table_view_within(WRITE_WAIT), "the hidden columns' writer never answered");
+}
+
 /// Records a cancel request on the session's own flag and on the harness-wide one.
 pub struct FakeCancel {
     pub own: Arc<AtomicBool>,
