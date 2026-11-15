@@ -312,7 +312,7 @@ fn hidden_columns_are_kept_across_a_restart() {
         let mut h = users_on(&cfg, Some(&state));
         at(&mut h, 0, 1);
         h.keys("C");
-        h.app.flush_table_view();
+        flush_table_view(&mut h.app);
         let v = tv::load(&state.file()).expect("the file reads");
         assert_eq!(v.hidden(&key(&h)), ["name"]);
     }
@@ -337,7 +337,7 @@ fn an_unreadable_file_is_never_written_over() {
     at(&mut h, 0, 1);
     h.keys("C");
     assert_eq!(hidden(&h), [false, true, false, false], "hidden for the session");
-    h.app.flush_table_view();
+    flush_table_view(&mut h.app);
     assert_eq!(std::fs::read_to_string(state.file()).unwrap(), junk, "never written over");
 }
 

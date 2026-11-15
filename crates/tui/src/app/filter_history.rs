@@ -500,15 +500,26 @@ impl App {
     }
 
     /// Write what changed now and wait (at most [`QUIT_FLUSH`]) until the writer is done
-    /// (quitting; the tests). Headless, its answers are handed to the app.
+    /// (quitting). Headless, its answers are handed to the app.
     pub fn flush_filter_history(&mut self) {
+        self.flush_filter_history_within(QUIT_FLUSH);
+    }
+
+    /// [`App::flush_filter_history`], waiting at most `wait`: whether the writer was done in
+    /// time (always, without a writer). The tests wait as long as a write takes, so that a slow
+    /// disk is never read as a write that did not happen.
+    pub fn flush_filter_history_within(&mut self, wait: Duration) -> bool {
         self.filter_history_send();
-        if let Some(w) = &self.filter_history.writer {
-            let (tx, rx) = mpsc::channel();
-            w.flush(tx);
-            let _ = rx.recv_timeout(QUIT_FLUSH);
-        }
+        let done = match &self.filter_history.writer {
+            Some(w) => {
+                let (tx, rx) = mpsc::channel();
+                w.flush(tx);
+                rx.recv_timeout(wait).is_ok()
+            }
+            None => true,
+        };
         self.pump_filter_history(Duration::ZERO);
+        done
     }
 
     /// Wait at most `wait` until the error log's thread wrote every line the history handed it

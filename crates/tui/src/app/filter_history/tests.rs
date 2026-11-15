@@ -89,7 +89,7 @@ fn repeated_clears_behind_a_stuck_write_keep_one_thing_to_say() {
     let said = |app: &mut App| app.status_line().map(|(m, _, _)| m.to_string()).unwrap_or_default();
     assert!(!said(&mut app).contains("cleared"), "said before the write is done: {}", said(&mut app));
     drop(held);
-    app.flush_filter_history();
+    assert!(app.flush_filter_history_within(Duration::from_secs(60)), "the writer never answered");
     assert!(said(&mut app).contains("cleared (0 entries)"), "{}", said(&mut app));
     assert!(app.filter_history.announce.is_empty(), "said once");
     assert_eq!(written.lock().unwrap().len(), 1, "one write");

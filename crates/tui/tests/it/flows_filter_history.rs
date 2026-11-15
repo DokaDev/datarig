@@ -43,6 +43,21 @@ impl State {
         let h = fh::load(&self.file()).expect("the file reads");
         h.entries(k).iter().map(|e| (e.filter.clone(), e.order.clone())).collect()
     }
+
+    /// [`State::entries`] once they are `want`, read again until then for up to [`WRITE_WAIT`]
+    /// (a hang guard): a write handed to the writer when the app quits (which waits for it at
+    /// most a second) may still be on its way to the disk. The last entries read.
+    #[cfg(unix)]
+    fn entries_once(&self, k: &TableKey, want: &[(String, String)]) -> Vec<(String, String)> {
+        let deadline = std::time::Instant::now() + WRITE_WAIT;
+        loop {
+            let got = self.entries(k);
+            if got == want || std::time::Instant::now() >= deadline {
+                return got;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 }
 
 impl Drop for State {
@@ -136,9 +151,9 @@ fn ran(h: &mut Harness, text: &str) {
     answer(h);
 }
 
-/// Write what is held back now (the debounce) and wait for the writer.
+/// Write what is held back now (the debounce) and wait for the writer ([`WRITE_WAIT`]).
 fn flush(h: &mut Harness) {
-    h.app.flush_filter_history();
+    flush_filter_history(&mut h.app);
 }
 
 /// The status line's text.
@@ -507,7 +522,8 @@ fn a_stuck_error_log_never_holds_up_a_write() {
     let start = std::time::Instant::now();
     h.app.dispatch(datarig_tui::app::action::Action::Quit);
     assert!(start.elapsed() < Duration::from_secs(3), "quitting took {:?}", start.elapsed());
-    assert_eq!(state.entries(&key(&cfg)), [("id > 1".to_string(), String::new())], "written on quitting");
+    let want = [("id > 1".to_string(), String::new())];
+    assert_eq!(state.entries_once(&key(&cfg), &want), want, "written on quitting");
     // Waiting for the error log's thread to catch up is bounded too.
     let start = std::time::Instant::now();
     assert!(!h.app.drain_filter_history_log(Duration::from_secs(1)), "never written");
@@ -616,7 +632,7 @@ fn a_clear_that_could_not_be_written_is_written_again() {
     assert_eq!(state.entries(&key(&cfg)).len(), 1);
     lock(0o700);
     h.app.dispatch(datarig_tui::app::action::Action::Quit);
-    assert!(state.entries(&key(&cfg)).is_empty(), "written on quitting");
+    assert!(state.entries_once(&key(&cfg), &[]).is_empty(), "written on quitting");
 }
 
 /// A clear asked again while the first one's write is still on its way is said cleared only

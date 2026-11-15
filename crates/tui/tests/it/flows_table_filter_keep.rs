@@ -541,7 +541,7 @@ fn a_restored_filter_of_more_lines_is_not_kept_in_the_history() {
     h.ctrl('e');
     assert_eq!(runs(&mut h).len(), 1, "{}", status(&h));
     answer(&mut h);
-    h.app.flush_filter_history();
+    flush_filter_history(&mut h.app);
     let file = state.0.join(datarig_core::filter_history::FILE);
     let kept = datarig_core::filter_history::load(&file).expect("the file reads").table_count();
     assert_eq!(kept, 0, "not kept");

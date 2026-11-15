@@ -315,19 +315,33 @@ impl App {
     }
 
     /// Write what changed now and wait (at most [`QUIT_FLUSH`]) until the writer is done
-    /// (quitting; the tests). Headless, its answers are handed to the app.
+    /// (quitting). Headless, its answers are handed to the app.
     pub fn flush_table_view(&mut self) {
+        self.flush_table_view_within(QUIT_FLUSH);
+    }
+
+    /// [`App::flush_table_view`], waiting at most `wait` for the writer and for each of its
+    /// answers: whether they all came in time (always, without a writer). The tests wait as long
+    /// as a write takes, so that a slow disk is never read as a write that did not happen.
+    pub fn flush_table_view_within(&mut self, wait: Duration) -> bool {
         self.table_view_send();
-        if let Some(w) = &self.table_view.writer {
-            let (tx, rx) = mpsc::channel();
-            w.flush(tx);
-            let _ = rx.recv_timeout(QUIT_FLUSH);
-        }
+        let mut done = match &self.table_view.writer {
+            Some(w) => {
+                let (tx, rx) = mpsc::channel();
+                w.flush(tx);
+                rx.recv_timeout(wait).is_ok()
+            }
+            None => true,
+        };
         while self.table_view.pending.load(Ordering::SeqCst) > 0 {
             let Some((_, rx)) = &self.table_view.local else { break };
-            let Ok(ev) = rx.recv_timeout(QUIT_FLUSH) else { break };
+            let Ok(ev) = rx.recv_timeout(wait) else {
+                done = false;
+                break;
+            };
             self.table_view.pending.fetch_sub(1, Ordering::SeqCst);
             self.on_app_event(ev);
         }
+        done
     }
 }
