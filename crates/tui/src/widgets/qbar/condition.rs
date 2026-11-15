@@ -85,7 +85,7 @@ pub(crate) fn draw_condition_popup(app: &mut App, bounds: Rect, buf: &mut Buffer
         .max(14);
     // The lines above the pane: label, and the key that runs it or (dimmed) why it cannot.
     let above = app.column_lines_shown();
-    let lines_w = above.iter().map(|(_, a, b, _)| width(a) + width(b) + 4).max().unwrap_or(0);
+    let lines_w = above.iter().map(|(_, a, b, _)| width(a) + width(b) + 6).max().unwrap_or(0);
     let want =
         [SORT_W, CONDITION_W + field, view.as_ref().map_or(0, values_width), width(&name) + width(&ty) + 4, lines_w]
             .into_iter()
@@ -96,7 +96,8 @@ pub(crate) fn draw_condition_popup(app: &mut App, bounds: Rect, buf: &mut Buffer
     let advanced = format!(" \u{22ef} {} ", i18n.label(Label::TableBarAdvanced));
     let adv_w = width(&advanced) as u16;
     let keys_w: usize = hint_parts(app, d, view.as_ref(), usize::MAX).iter().map(|(t, _)| width(t)).sum();
-    let w = (want as u16 + 4).max(keys_w as u16 + adv_w + 5).clamp(MIN_W, MAX_W);
+    // Never narrower than it was drawn in this view: the hint line changes with the keys.
+    let w = (want as u16 + 4).max(keys_w as u16 + adv_w + 5).clamp(MIN_W, MAX_W).max(d.popup_w);
     let lines = d.rows().len() + 1;
     let values = view.as_ref().map_or(0, |v| 1 + v.items.len().min(VALUES_MAX) + notes(v));
     let top_h = if above.is_empty() { 0 } else { above.len() + 1 };
@@ -131,9 +132,13 @@ pub(crate) fn draw_condition_popup(app: &mut App, bounds: Rect, buf: &mut Buffer
             if d.focus == DialogFocus::Line(*l) { Style::new().fg(th.fg).patch(th.selection) } else { th.base() };
         crate::widgets::condition_pane::fill(buf, row, base);
         let fg = if *dim { muted } else { Style::new().fg(th.fg) };
+        // The marker of the focused line, where the pane's lines have theirs.
+        if d.focus == DialogFocus::Line(*l) {
+            put(buf, inner.x + 1, y, "\u{25b8}", 1, base.patch(Style::new().fg(th.accent)));
+        }
         let rw = width(right) as u16;
-        let room = usize::from(inner.width.saturating_sub(rw + 3));
-        put(buf, inner.x + 1, y, label, room, base.patch(fg));
+        let room = usize::from(inner.width.saturating_sub(rw + 5));
+        put(buf, inner.x + 3, y, label, room, base.patch(fg));
         put(buf, inner.right().saturating_sub(rw + 1), y, right, usize::from(rw), base.patch(muted));
         hits.lines.push((row, *l));
     }
@@ -178,6 +183,7 @@ pub(crate) fn draw_condition_popup(app: &mut App, bounds: Rect, buf: &mut Buffer
         d.set_values_drawn(out.values_drawn);
         d.hover = lit.map(|(h, _)| h);
         d.press.drawn(top, now);
+        d.popup_w = w;
     }
     out.cursor.filter(|_| top)
 }

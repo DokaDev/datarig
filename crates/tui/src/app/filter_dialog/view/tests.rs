@@ -88,6 +88,7 @@ pub(crate) fn dialog() -> FilterDialog {
         counting: None,
         exact: HashMap::new(),
         column_lines: Some(ColumnLines { col: "email".into(), values: None }),
+        popup_w: 50,
     }
 }
 
@@ -104,6 +105,7 @@ fn dropped(d: &FilterDialog) {
     assert_eq!(d.press.shown_at, None, "a press waits again before it arms");
     assert_eq!(d.picker, None);
     assert!(d.column_lines.is_none(), "the lines a column's popup had above it go");
+    assert_eq!(d.popup_w, 0, "and the width it was drawn in");
     assert!(!d.pane_lines().iter().any(|l| matches!(l, DialogFocus::Line(_))));
 }
 

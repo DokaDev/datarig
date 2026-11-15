@@ -608,3 +608,39 @@ fn a_change_undone_before_the_release_still_opens_nothing() {
     up(&mut h, at);
     assert_eq!(popup(&h), None, "sideways and back");
 }
+
+/// The popup's box (its top border from corner to corner) at 120x34.
+fn popup_box(h: &mut Harness) -> (usize, usize) {
+    let screen = h.screen(120, 34);
+    let line = screen.lines().find(|l| l.contains("\u{256d}\u{2500} ")).expect("the popup").to_string();
+    let from = line[..line.find("\u{256d}\u{2500} ").unwrap()].chars().count();
+    let to = line.chars().skip(from + 1).position(|c| c == '\u{256e}').expect("its corner") + from + 1;
+    (from, to)
+}
+
+/// The popup keeps its width while the keys move onto its lines and back (its hint line
+/// changes with them).
+#[test]
+fn the_popup_keeps_its_width_while_the_keys_move() {
+    let mut h = users();
+    at(&mut h, 0, 1);
+    h.keys("F");
+    let first = popup_box(&mut h);
+    h.key(KeyCode::Up);
+    assert_eq!(h.app.column_popup_focus().as_deref(), Some("Hide column"));
+    assert_eq!(popup_box(&mut h), first, "on a line");
+    h.key(KeyCode::Down);
+    assert_eq!(popup_box(&mut h), first, "back on the pane");
+}
+
+/// A focused line has the marker every focused line of a popup has.
+#[test]
+fn a_focused_line_has_the_marker() {
+    let mut h = users();
+    at(&mut h, 0, 1);
+    h.keys("F");
+    h.key(KeyCode::Up);
+    let screen = h.screen(120, 34);
+    assert!(screen.contains("\u{2502} \u{25b8} Hide column"), "{screen}");
+    assert!(screen.contains("\u{2502}   Only 'n0'"), "the others unmarked, in line: {screen}");
+}

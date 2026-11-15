@@ -494,6 +494,8 @@ pub struct FilterDialog {
     /// The lines above a column's condition popup opened on the column; none in any other
     /// view (a change of view drops them).
     pub(crate) column_lines: Option<ColumnLines>,
+    /// The width a popup was drawn last in this view: it does not shrink while open.
+    pub(crate) popup_w: u16,
 }
 
 impl FilterDialog {
@@ -901,6 +903,7 @@ impl App {
             counting: None,
             exact: HashMap::new(),
             column_lines: None,
+            popup_w: 0,
         };
         if let Some(c) = column {
             d.select_column(c);

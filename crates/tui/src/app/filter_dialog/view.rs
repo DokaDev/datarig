@@ -100,8 +100,8 @@ impl FilterDialog {
     /// an apply waiting to be sent (with the columns it hides), the count of values sent and
     /// those counted, and the query before the last change are kept; where things were drawn
     /// (and whether the values had room), what the pointer is over or pressed (the press waits
-    /// again before it arms), the operator picker and the lines a column's popup had above it
-    /// are dropped, and so is the column search unless the popup picks a column. The whole
+    /// again before it arms), the operator picker, the lines a column's popup had above it and
+    /// the width it was drawn in are dropped, and so is the column search unless the popup picks a column. The whole
     /// dialog never turns into a popup.
     pub fn set_view(&mut self, view: View) {
         if !self.is_popup() && matches!(view, View::Popup { .. }) {
@@ -116,6 +116,7 @@ impl FilterDialog {
         self.press = Default::default();
         self.picker = None;
         self.column_lines = None;
+        self.popup_w = 0;
         self.values_drawn = true;
         if !picks && self.search.is_some() {
             let name = self.column().map(|c| c.name.clone());
