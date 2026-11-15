@@ -128,9 +128,9 @@ transaction open, it opens one and leaves it open ("Opens a transaction; nothing
 committed."). Inside an open transaction, yours or one opened for manual commit, it runs under
 the savepoint `datarig_apply` and commits nothing ("Runs inside the open transaction; nothing is
 committed.").
-A cancel (`Ctrl+C`) reaches the server only while one of the Apply's statements runs: on
-PostgreSQL one that landed before the savepoint was set would abort your transaction, so a
-cancel asked then waits, and the Apply stops before its first statement ("Apply cancelled;
+On PostgreSQL a cancel (`Ctrl+C`) there reaches the server only while one of the Apply's
+statements runs: one that landed before the savepoint was set would abort your transaction, so
+a cancel asked then waits, and the Apply stops before its next statement ("Apply cancelled;
 nothing was applied."), your transaction as it was.
 
 - The status line question says so: "Apply 1 change to shop.users (1 update)? Opens a
