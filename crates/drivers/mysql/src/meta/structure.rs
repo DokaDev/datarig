@@ -97,18 +97,19 @@ FROM information_schema.TABLES t WHERE t.TABLE_SCHEMA = {schema} AND t.TABLE_NAM
 /// - on the schema, a pattern (`_` and `%`) when `partial_revokes` is off, a name when it is on,
 ///   and only when one pattern of the user's names the schema: of several, the server takes the
 ///   first in its own order, which may grant less;
-/// - names are compared byte for byte: a grant of a name in another case does not count.
+/// - names are compared byte for byte: a grant of a name in another case does not count, nor
+///   the grant of an account whose name differs in case (listed to a user who may read `mysql`).
 ///
 /// `{escape}` is a backslash as the session reads literals (`NO_BACKSLASH_ESCAPES`).
 const COLUMNS_GRANTED: &str = "(({partial} = 0 AND EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES p
-      WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND p.GRANTEE = {grantee}))
+      WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND CAST(p.GRANTEE AS BINARY) = CAST({grantee} AS BINARY)))
     OR (EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES p
-        WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND p.GRANTEE = {grantee}
+        WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND CAST(p.GRANTEE AS BINARY) = CAST({grantee} AS BINARY)
         AND {schema_named})
       AND (SELECT COUNT(DISTINCT CAST(p.TABLE_SCHEMA AS BINARY)) FROM information_schema.SCHEMA_PRIVILEGES p
-        WHERE p.GRANTEE = {grantee} AND {schema_named}) = 1)
+        WHERE CAST(p.GRANTEE AS BINARY) = CAST({grantee} AS BINARY) AND {schema_named}) = 1)
     OR EXISTS (SELECT 1 FROM information_schema.TABLE_PRIVILEGES p
-      WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND p.GRANTEE = {grantee}
+      WHERE p.PRIVILEGE_TYPE IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES') AND CAST(p.GRANTEE AS BINARY) = CAST({grantee} AS BINARY)
       AND CAST(p.TABLE_SCHEMA AS BINARY) = CAST({schema} AS BINARY)
       AND CAST(p.TABLE_NAME AS BINARY) = CAST({table} AS BINARY)))";
 

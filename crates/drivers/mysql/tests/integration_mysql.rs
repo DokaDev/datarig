@@ -4057,6 +4057,15 @@ async fn a_table_granted_column_by_column_has_its_columns_unknown() {
         let s = structure_of(&mut m, &t.name).await.unwrap();
         assert!(s.hidden.contains(&StructureGroup::Columns), "{:?} {:?}", s.hidden, s.columns);
     }
+    // An account whose name differs only in case is another account: its grants, listed to a
+    // user who may read `mysql`, are not this user's.
+    let twin = name.to_uppercase();
+    let _twin = Cleanup { url: admin.clone(), sql: format!("DROP USER IF EXISTS '{twin}'@'%'") };
+    a.query_drop(format!("CREATE USER '{twin}'@'%' IDENTIFIED BY 'pw'")).await.unwrap();
+    a.query_drop(format!("GRANT SELECT ON {} TO '{twin}'@'%'", t.q())).await.unwrap();
+    a.query_drop(format!("GRANT SELECT ON mysql.* TO '{name}'@'%'")).await.unwrap();
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    assert!(s.hidden.contains(&StructureGroup::Columns), "{:?} {:?}", s.hidden, s.columns);
     // Of two schema patterns that name the schema the server takes one: the `SELECT` of the
     // other may not hold, so it does not count.
     a.query_drop(format!("GRANT DELETE ON `sho_`.* TO '{name}'@'%'")).await.unwrap();
