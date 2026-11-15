@@ -96,8 +96,8 @@
 "copy.menu.update" = "SQL UPDATE"
 "copy.scope.selection" = "Copy selection"
 "copy.scope.fetched" = "Copy all fetched rows"
-"copy.scope.fetched_partial" = { one = "Copy the {count} fetched row (the server has more)", other = "Copy the {count} fetched rows (the server has more)" }
-"copy.scope.fetch_first" = "Fetch every row, then copy"
+"copy.scope.fetched_partial" = { one = "Copy {count} fetched row", other = "Copy {count} fetched rows" }
+"copy.scope.fetch_first" = "Fetch all, then copy"
 "copy.scope.default" = "Default format for y and Y"
 "copy.in.several_columns" = "Not copied as an IN list: it takes one column (select cells of one column, or run a query of one column)"
 "copy.in.no_values" = "Not copied as an IN list: there is no value to list (NULL is left out)"

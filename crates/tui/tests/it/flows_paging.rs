@@ -955,8 +955,8 @@ fn a_result_not_held_pages_by_running_its_select_again() {
     let (x, y) = (h.app.tab().grid.hit_cols[0].0 + 2, h.app.tab().grid.data_y);
     h.mouse(MouseEventKind::Down(MouseButton::Right), x, y);
     let screen = h.screen(160, 45);
-    assert!(screen.contains("(the server has more)"), "{screen}");
-    let fetch = "Fetch every row, then copy ▸";
+    assert!(screen.contains("more on the server"), "{screen}");
+    let fetch = "Fetch all, then copy ▸";
     assert!(!h.menu_labels().iter().any(|l| l == fetch), "{:?}", h.menu_labels());
     let dimmed: Vec<(String, String)> =
         h.app.menu_dimmed_rows().into_iter().map(|(l, why)| (l.to_string(), why)).filter(|(l, _)| l == fetch).collect();

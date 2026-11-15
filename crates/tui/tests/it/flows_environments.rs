@@ -468,8 +468,8 @@ fn an_environment_lists_its_profiles_and_has_its_menu() {
             "New environment",
             "Edit environment",
             "Duplicate environment",
-            "Delete environment",
-            "Rename environment"
+            "Rename environment",
+            "Delete environment"
         ]
     );
     h.key(KeyCode::Esc);

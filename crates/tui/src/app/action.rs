@@ -728,8 +728,10 @@ pub const REGISTRY: &[ActionSpec] = &[
         .short(Label::MenuShortEditorCommentToggle),
     act(Action::QuickConnect, "conn.quick_connect", Label::ActionConnQuickConnect, in_workspace),
     act(Action::NewProfile, "conn.new", Label::ActionConnNew, anywhere),
-    act(Action::EditProfile, "conn.edit", Label::ActionConnEdit, explorer_profile_or_tunnel),
-    act(Action::DuplicateProfile, "conn.duplicate", Label::ActionConnDuplicate, explorer_profile_or_tunnel),
+    act(Action::EditProfile, "conn.edit", Label::ActionConnEdit, explorer_profile_or_tunnel)
+        .short(Label::MenuShortConnEdit),
+    act(Action::DuplicateProfile, "conn.duplicate", Label::ActionConnDuplicate, explorer_profile_or_tunnel)
+        .short(Label::MenuShortConnDuplicate),
     act(Action::NewTunnel, "tunnel.new", Label::ActionTunnelNew, presets_writable).short(Label::MenuShortTunnelNew),
     act(Action::NewEnvironment, "env.new", Label::ActionEnvNew, environments_writable).short(Label::MenuShortEnvNew),
     act(Action::NewSession, "session.new", Label::ActionSessionNew, sessions_writable)
@@ -1223,7 +1225,8 @@ pub const REGISTRY: &[ActionSpec] = &[
         .short(Label::MenuShortChartCopyText),
     act(Action::Chart(C::GotoRow), "chart.goto_row", Label::ActionChartGotoRow, chart_focused)
         .short(Label::MenuShortChartGotoRow),
-    act(Action::Monitor(M::Open), "monitor.open", Label::ActionMonitorOpen, monitor_profile),
+    act(Action::Monitor(M::Open), "monitor.open", Label::ActionMonitorOpen, monitor_profile)
+        .short(Label::MenuShortMonitorOpen),
     act(
         Action::Monitor(M::View(MonitorView::Overview)),
         "monitor.overview",

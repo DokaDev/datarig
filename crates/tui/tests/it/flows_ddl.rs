@@ -325,6 +325,9 @@ fn the_menu_shows_the_ddl() {
     for l in ["Reload DDL", "Open in a console", "Copy DDL"] {
         assert!(labels.contains(&l.to_string()), "{l}: {labels:?}");
     }
+    // Under the DDL's name, not the statement's heading: they are about the whole text.
+    let heading = h.app.menu_lines()[0].1.to_string();
+    assert_eq!(heading, "DDL · shop.users");
     assert!(!labels.iter().any(|l| l.starts_with("Format")), "{labels:?}");
 }
 

@@ -116,6 +116,18 @@ pub(crate) fn draw_context_menu(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         put(buf, kx, ry, keys, key_w, style);
     }
     m.list = Rect::new(list.x, list.y, list.width, list.height.min((lines.len() - m.scroll) as u16));
+    // Items scrolled out of sight: how many, on the border above and below.
+    let items = |ls: &[(bool, Localized, String)]| ls.iter().filter(|l| !l.0).count();
+    let end = (m.scroll + visible).min(lines.len());
+    for (n, arrow, y) in
+        [(items(&lines[..m.scroll]), '\u{2191}', rect.y), (items(&lines[end..]), '\u{2193}', rect.y + rect.height - 1)]
+    {
+        let mark = format!(" {arrow} {n} ");
+        if n > 0 && usize::from(rect.width) > width(&mark) + 2 {
+            let x = rect.x + rect.width - 2 - width(&mark) as u16;
+            put(buf, x, y, &mark, width(&mark), Style::new().fg(th.fg_muted).bg(th.surface));
+        }
+    }
     // The open submenu: next to its row, on the right (on the left when there is no room).
     let (selected, scroll) = (m.selected, m.scroll);
     let Some(sub_selected) = m.sub.as_ref().map(|s| s.selected) else { return cursor };

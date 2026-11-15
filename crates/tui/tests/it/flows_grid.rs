@@ -705,8 +705,8 @@ fn fetch_every_row_then_copy() {
         h.screen(160, 45)
     };
     let screen = open_menu(&mut h);
-    assert!(screen.contains("Copy the 600 fetched rows (the server has more) ▸"), "{screen}");
-    assert!(screen.contains("Fetch every row, then copy ▸"), "{screen}");
+    assert!(screen.contains("Copy 600 fetched rows ▸"), "{screen}");
+    assert!(screen.contains("Fetch all, then copy ▸"), "{screen}");
     // The last scope: its formats, then CSV.
     (0..6).for_each(|_| h.key(KeyCode::Down));
     h.key(KeyCode::Enter);

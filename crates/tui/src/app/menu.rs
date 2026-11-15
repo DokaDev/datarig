@@ -54,9 +54,9 @@ const NOT_IN_MENU: &[Action] = &[
 const EXPLORER_PANE: &[Action] =
     &[Action::NewProfile, Action::Explorer(ExplorerAction::NewFolder), Action::Explorer(ExplorerAction::Filter)];
 
-/// The kinds of the explorer's actions for a row: opening it, managing it, its connection, its
-/// consoles and DDL. Listed in the key map's order, a rule goes between two actions of different
-/// kinds (any other action is a kind of its own).
+/// The kinds of the explorer's actions for a row: opening it, managing it, its connection and
+/// its server, its consoles and DDL. A row's actions are listed in this order, each kind a group
+/// with a rule between two (any other action is a kind of its own, after these).
 const EXPLORER_GROUPS: &[&[Action]] = &[
     &[Action::Explorer(ExplorerAction::Activate), Action::Explorer(ExplorerAction::Refresh)],
     &[
@@ -71,7 +71,7 @@ const EXPLORER_GROUPS: &[&[Action]] = &[
         Action::Explorer(ExplorerAction::Rename),
         Action::Explorer(ExplorerAction::Delete),
     ],
-    &[Action::TestConnection, Action::Disconnect],
+    &[Action::TestConnection, Action::Disconnect, Action::Monitor(MonitorAction::Open)],
     &[
         Action::OpenConsole,
         Action::Explorer(ExplorerAction::ConsoleHere),
@@ -953,10 +953,13 @@ impl App {
         self.focus = Focus::Tree;
         self.explorer.filtering = false;
         let Some(row) = self.explorer_row() else { return };
-        let (own, pane) = self.explorer_sections(&row);
+        let (mut own, pane) = self.explorer_sections(&row);
         let key = crate::widgets::explorer::row_key(self, &row);
-        // The row's in the key map's order, a new group where the kind changes; the pane's in one.
+        // The row's in the order of their kinds, a new group where the kind changes (an action
+        // of no kind after them, in the key map's order); the pane's in one.
         let kind = |a: &Action| EXPLORER_GROUPS.iter().position(|g| g.contains(a));
+        let order = |a: &Action| EXPLORER_GROUPS.iter().flat_map(|g| g.iter()).position(|x| x == a);
+        own.sort_by_key(|a| order(a).unwrap_or(usize::MAX));
         let mut groups: Groups = Vec::new();
         let mut last = None;
         for a in &own {
@@ -1092,6 +1095,21 @@ impl App {
         self.push_menu_from(back, Ctx::Grid, target, (own, pane, off), at);
         if !self.overlays.is_open(OverlayKind::ContextMenu) {
             self.focus = back;
+        }
+        // The copy of the rows fetched says, in a few words next to it, that they are not all.
+        if read && self.fetched_partial().is_some() {
+            let hint = self.i18n.label(Label::MenuHintMoreOnServer);
+            if let Some(m) = self.overlays.menu_mut() {
+                m.hints.push((MenuItem::Scope(MenuScope::Copy(CopyScope::Fetched)), hint));
+            }
+        }
+    }
+
+    /// How many rows the active tab's result fetched, when the server has more.
+    fn fetched_partial(&self) -> Option<usize> {
+        match &self.tab().results {
+            Results::Rows(rs) if rs.more || !matches!(self.tab().exec.paging, Paging::None) => Some(rs.rows.len()),
+            _ => None,
         }
     }
 
@@ -1640,11 +1658,9 @@ impl App {
             MenuItem::Scope(scope) => {
                 let label = match scope {
                     MenuScope::Copy(CopyScope::Selection) => self.i18n.label(Label::CopyScopeSelection),
-                    MenuScope::Copy(CopyScope::Fetched) => match &self.tab().results {
-                        Results::Rows(rs) if rs.more || !matches!(self.tab().exec.paging, Paging::None) => {
-                            self.i18n.msg(&Msg::CopyScopeFetchedPartial { count: rs.rows.len() as u64 })
-                        }
-                        _ => self.i18n.label(Label::CopyScopeFetched),
+                    MenuScope::Copy(CopyScope::Fetched) => match self.fetched_partial() {
+                        Some(count) => self.i18n.msg(&Msg::CopyScopeFetchedPartial { count: count as u64 }),
+                        None => self.i18n.label(Label::CopyScopeFetched),
                     },
                     MenuScope::FetchFirst => self.i18n.label(Label::CopyScopeFetchFirst),
                     MenuScope::Default => self.i18n.label(Label::CopyScopeDefault),
@@ -1688,6 +1704,12 @@ impl App {
                     return self.i18n.msg(&Msg::MenuHeadingNewCell { column });
                 }
                 self.i18n.msg(&Msg::MenuHeadingCell { column, row: (row + 1).to_string() })
+            }
+            // A DDL tab's are about its text as a whole: named as its pane is.
+            (Heading::Target, MenuTarget::Editor { tab, .. }) if self.tabs.get(*tab).is_some_and(|t| t.is_ddl()) => {
+                let name =
+                    self.tabs.get(*tab).map(|t| crate::widgets::tabbar::document_name(self, t)).unwrap_or_default();
+                self.i18n.msg(&Msg::PaneEditorDdl { name })
             }
             (Heading::Target, MenuTarget::Editor { mode: Mode::Visual, .. }) => {
                 self.i18n.label(Label::MenuHeadingSelection)
