@@ -131,7 +131,8 @@ impl Classifier {
     /// Whether `sql` in `lang` may be a statement a query session starts with (a session
     /// preset's, a profile's own): one statement that sets the session's settings and nothing
     /// else ([`super::session_set`]). MySQL text is read in the default sql mode and with
-    /// `ANSI_QUOTES` (the server's mode is not known before the session opens): the worse counts.
+    /// `ANSI_QUOTES`, as on MySQL and on MariaDB (the server and its mode are not known before
+    /// the session opens): the worse counts.
     pub fn session_set(lang: Language, sql: &str) -> Result<super::SessionSet, super::SetProblem> {
         match lang {
             Language::Sql(Dialect::Postgres) => super::session_set::session_set_pg(sql),

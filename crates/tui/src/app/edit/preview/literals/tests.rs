@@ -1,7 +1,8 @@
 use super::*;
 use datarig_core::sql::dialect::MySqlMode;
 
-const MY: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
+const MY: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
 
 fn text(part: Part, c: &str, v: &str) -> (Part, String, Decoded) {
     (part, c.to_string(), Decoded::Text(v.to_string()))

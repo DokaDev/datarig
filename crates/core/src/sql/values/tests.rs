@@ -16,7 +16,7 @@ fn pg(expression: &str, column: &str) -> Option<Vec<String>> {
 }
 
 const MYSQL: Dialect =
-    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
 
 fn my(expression: &str, column: &str) -> Option<Vec<String>> {
     let found = check_values(MYSQL, &[check(expression, &[column])]);
@@ -91,7 +91,12 @@ fn mysql_clauses() {
     assert_eq!(my("`s` in (1,2)", "s"), None);
     assert_eq!(my("`s` not in ('a')", "s"), None);
     // Whatever the session's mode: the server writes the condition in its default one.
-    let ansi = Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: true, dollar_quotes: true });
+    let ansi = Dialect::MySql(MySqlMode {
+        ansi_quotes: true,
+        no_backslash_escapes: true,
+        dollar_quotes: true,
+        mariadb: false,
+    });
     let found = check_values(ansi, &[check("`s` in (_utf8mb4'it\\'s')", &["s"])]);
     assert_eq!(found, vec![CheckValues { column: "s".into(), values: vec!["it's".into()] }]);
 }

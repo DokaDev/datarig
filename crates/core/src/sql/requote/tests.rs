@@ -2,9 +2,11 @@ use super::*;
 use crate::sql::dialect::MySqlMode;
 
 const ESC: Dialect =
-    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
-const NBE: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true, dollar_quotes: false });
-const ANSI: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: true, dollar_quotes: false });
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
+const NBE: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true, dollar_quotes: false, mariadb: false });
+const ANSI: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: true, dollar_quotes: false, mariadb: false });
 
 /// Every string goes over as the same value; names, comments, client commands and strings
 /// without escapes stay as they are.

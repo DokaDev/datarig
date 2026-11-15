@@ -1,10 +1,12 @@
 use super::super::{LexState, Tok, lex_from, lex_in};
 use crate::sql::dialect::{Dialect, MySqlMode};
 
-const MY: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
+const MY: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
 const ANSI: Dialect =
-    Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: false, dollar_quotes: false });
-const NBE: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true, dollar_quotes: false });
+    Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
+const NBE: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true, dollar_quotes: false, mariadb: false });
 
 fn kinds_in(src: &str, d: Dialect) -> Vec<(Tok, &str)> {
     lex_in(src, d).into_iter().filter(|t| !t.is_trivia()).map(|t| (t.kind, t.text(src))).collect()

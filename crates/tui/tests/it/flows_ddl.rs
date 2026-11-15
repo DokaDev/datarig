@@ -567,10 +567,10 @@ fn a_typed_name_and_the_explorer_find_the_same_tab() {
 
 /// MySQL text written with backslash escapes (a default server's mode).
 const ESCAPES: Dialect =
-    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false, mariadb: false });
 /// And without them (`NO_BACKSLASH_ESCAPES`).
 const NO_ESCAPES: Dialect =
-    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true, dollar_quotes: false });
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true, dollar_quotes: false, mariadb: false });
 
 /// The server's own text of `name` in `database`, written with backslash escapes.
 fn verbatim(name: &str, text: &str, database: &str) -> DdlSource {

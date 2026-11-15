@@ -465,6 +465,7 @@ impl Tracked {
             ansi_quotes: flags.contains(&"ANSI_QUOTES"),
             no_backslash_escapes: flags.contains(&"NO_BACKSLASH_ESCAPES"),
             dollar_quotes: server.dollar_quotes(),
+            mariadb: server.mariadb,
         }
     }
 }

@@ -370,8 +370,10 @@ async fn a_query_session_says_how_its_text_is_read() {
     let (major, minor) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
     // `select $$` is a syntax error from MySQL 8.1 on (MySQL's client then reads dollar quotes);
     // MariaDB reads `$$` as a name.
-    let dollar_quotes = !version.contains("MariaDB") && (major, minor) >= (8, 1);
-    assert_eq!(mode, MySqlMode { dollar_quotes, ..MySqlMode::default() }, "{version}");
+    let mariadb = version.contains("MariaDB");
+    let dollar_quotes = !mariadb && (major, minor) >= (8, 1);
+    // Which server it is: the read check counts only the functions MariaDB provides as built-ins.
+    assert_eq!(mode, MySqlMode { dollar_quotes, mariadb, ..MySqlMode::default() }, "{version}");
     probe.disconnect().await.unwrap();
 }
 
