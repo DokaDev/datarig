@@ -10,7 +10,7 @@ use datarig_core::driver::DbError;
 use datarig_core::fault::Fault;
 use datarig_core::transport::{BoxedStream, DialError, DialerRef};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio_postgres::config::Host;
@@ -83,11 +83,41 @@ pub(crate) struct Cancel {
     pub(crate) tls: PgTls,
     /// The user's cancels that could not be sent, for the session task to see.
     pub(crate) unsent: Unsent,
+    /// While the session runs what a cancel must not land on, the user's cancels wait.
+    pub(crate) hold: Arc<Hold>,
+}
+
+/// Holds the user's cancels back while the session runs statements a cancel must not land on:
+/// an Apply's start inside the user's block sets its savepoint, and a cancel landing before the
+/// savepoint exists would abort the block, the user's earlier work with it. A cancel asked
+/// meanwhile is not sent; the run sees it asked and stops itself at its next step.
+#[derive(Default)]
+pub(crate) struct Hold {
+    held: AtomicBool,
+    /// Taken by a cancel on its way to the server, so [`Hold::hold`] returns only once none is.
+    sending: tokio::sync::RwLock<()>,
+}
+
+impl Hold {
+    /// Hold the cancels from now on; returns once no cancel is on its way.
+    pub(crate) async fn hold(&self) {
+        self.held.store(true, Ordering::SeqCst);
+        drop(self.sending.write().await);
+    }
+
+    /// Let the cancels through again.
+    pub(crate) fn release(&self) {
+        self.held.store(false, Ordering::SeqCst);
+    }
+
+    fn held(&self) -> bool {
+        self.held.load(Ordering::SeqCst)
+    }
 }
 
 impl Cancel {
     pub(crate) fn new(token: CancelToken, route: Option<Route>, tls: PgTls) -> Self {
-        Self { token, route, tls, unsent: Unsent::default() }
+        Self { token, route, tls, unsent: Unsent::default(), hold: Arc::default() }
     }
 
     /// Send a cancel request (directly, or through the route), within [`CANCEL_DIAL`]; why it
@@ -102,6 +132,7 @@ impl Cancel {
     async fn send_if(&self, still: impl Fn() -> bool) -> Result<(), DbError> {
         let sent = async {
             match &self.route {
+                None if !still() => Ok(()),
                 None => self.token.cancel_query(self.tls.clone()).await.map_err(|e| db_error(&e)),
                 Some(route) => {
                     let handshake = self.tls.to(route.name()).map_err(|e| DbError::Tls(e.0))?;
@@ -120,8 +151,14 @@ impl Cancel {
     /// ([`Unsent::request`], taken when the user asked). One that could not be sent is noted for
     /// that request ([`Unsent`]): the session must not wait for a statement it cannot stop.
     /// `still`: whether the run it is for is still the one at the server.
+    /// While cancels are held ([`Hold`]) it is not sent.
     pub(crate) async fn ask(&self, request: u64, still: impl Fn() -> bool) {
-        if let Err(why) = self.send_if(still).await {
+        let _sending = self.hold.sending.read().await;
+        if self.hold.held() {
+            return;
+        }
+        let hold = self.hold.clone();
+        if let Err(why) = self.send_if(|| still() && !hold.held()).await {
             self.unsent.note(request, why);
         }
     }

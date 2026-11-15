@@ -100,6 +100,31 @@ async fn undo(client: &Client, link: &mut Link, sql: &str, _hooks: &Hooks<'_>) -
 /// for the caller to answer. `Some` when the session must end now, for that reason: what the
 /// steps did could not be undone for sure, and closing the connection makes the server roll it
 /// back (a later `COMMIT` could keep changes said not to be applied).
+/// The user's cancels held back ([`crate::route::Hold`]) while it lives, unless released
+/// for a while.
+struct Held<'a>(&'a crate::route::Hold);
+
+impl<'a> Held<'a> {
+    async fn new(hold: &'a crate::route::Hold) -> Held<'a> {
+        hold.hold().await;
+        Held(hold)
+    }
+
+    async fn hold(&mut self) {
+        self.0.hold().await;
+    }
+
+    fn release(&mut self) {
+        self.0.release();
+    }
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn apply(
     client: &Client,
@@ -120,6 +145,11 @@ pub(super) async fn apply(
         answer(Err(fail(None, DbError::ReadWriteRefused)));
         return Ok(None);
     }
+    // A cancel lands only on a step: inside the user's block one that lands on the probe, the
+    // start (before the savepoint exists), an undo or the release would abort the block, and the
+    // user's earlier work in it would be lost. One asked meanwhile stops the steps before the
+    // next.
+    let mut held = Held::new(&env.token.hold).await;
     if tx.unsure {
         probe(client, link, env, tx).await?;
     }
@@ -176,7 +206,10 @@ pub(super) async fn apply(
             break;
         }
         // Every row it matches (0: no limit), so a check locks them all.
-        let ran = link.guard(Some(env.token), client.execute_pipelined_wrapped(&step.sql, 0, &[], None)).await?;
+        held.release();
+        let ran = link.guard(Some(env.token), client.execute_pipelined_wrapped(&step.sql, 0, &[], None)).await;
+        held.hold().await;
+        let ran = ran?;
         if cache_off {
             // A type lookup's statements go with the transaction too.
             client.forget_typeinfo_statements();
