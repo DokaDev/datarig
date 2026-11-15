@@ -773,12 +773,13 @@ fn the_fields_completion_stays_inside_the_centred_dialog() {
     assert!(shown > 0, "no popup was shown");
 }
 
-/// A very wide screen (92% of more than 712 cells does not fit 16 bits) draws the dialog.
+/// A very wide screen draws the dialog: 92% of more than 712 cells, or 34% of its inner
+/// width past 1927 cells, does not fit 16 bits.
 #[test]
 fn a_very_wide_screen_draws_the_dialog() {
     let mut h = users();
     h.keys("f");
     assert!(dialog_open(&h));
-    let screen = h.screen(800, 40);
+    let screen = h.screen(2100, 40);
     assert!(screen.contains("Filter and sort"), "{screen}");
 }

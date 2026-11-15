@@ -182,7 +182,7 @@ fn draw_filter_dialog(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u1
     buf[(area.x + area.width - 1, sep_y)].set_symbol("\u{2524}");
 
     // The panes.
-    let left_w = (inner.width * 34 / 100).clamp(22, 44);
+    let left_w = (u32::from(inner.width) * 34 / 100).clamp(22, 44) as u16;
     let split = inner.x + left_w;
     for y in body.y..sep_y {
         buf[(split, y)].set_symbol("\u{2502}").set_style(Style::new().fg(th.border));
