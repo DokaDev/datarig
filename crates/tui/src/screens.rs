@@ -36,6 +36,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     f.buffer_mut().set_style(area, th.base());
     if area.width < MIN_W || area.height < MIN_H {
         app.layout = Layout { too_small: true, ..Layout::default() };
+        // Nothing of the filter dialog is drawn: its values are not either.
+        if let Some(d) = app.filter_dialog_mut() {
+            d.set_values_drawn(false);
+        }
         let msg = app.i18n.msg(&Msg::ScreenTooSmall { width: MIN_W.to_string(), height: MIN_H.to_string() });
         let msg = clip(&msg, area.width as usize);
         let x = area.x + (area.width.saturating_sub(width(&msg) as u16)) / 2;

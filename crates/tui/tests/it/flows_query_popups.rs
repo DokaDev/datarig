@@ -1407,3 +1407,31 @@ fn a_tab_switch_that_stays_keeps_the_popup() {
     h.key_mod(KeyCode::Char('z'), KeyModifiers::CONTROL);
     assert_eq!(draft_where(&h), "name = 'n1'", "its undo kept");
 }
+
+/// A value of the list focused, then the terminal made smaller than the app draws (80x23,
+/// 79x24): with only the size warning on screen, `Space` ticks nothing and `Enter` sends
+/// nothing, in the popup and in the whole dialog; `Esc` still closes it.
+#[test]
+fn a_terminal_too_small_changes_and_sends_nothing() {
+    for (w, hh, advanced) in [(80, 23, false), (79, 24, false), (80, 23, true), (79, 24, true)] {
+        let mut h = users_where("name = 'n1'");
+        open_chip(&mut h, 0);
+        if advanced {
+            h.keys("A");
+        }
+        // Past `+ add condition`, onto the list's first value.
+        for _ in 0..2 {
+            h.draw(120, 34);
+            h.key(KeyCode::Down);
+        }
+        let screen = h.screen(120, 34);
+        assert!(screen.contains("\u{25b8} [ ] n0"), "on the list's first value: {screen}");
+        h.draw(w, hh);
+        h.key(KeyCode::Char(' '));
+        h.key(KeyCode::Enter);
+        assert_eq!(draft_where(&h), "name = 'n1'", "{w}x{hh}, advanced: {advanced}: nothing ticked");
+        assert!(runs(&mut h).is_empty(), "{w}x{hh}, advanced: {advanced}: nothing sent");
+        h.key(KeyCode::Esc);
+        assert!(!open(&h), "{w}x{hh}, advanced: {advanced}: Esc closes it");
+    }
+}

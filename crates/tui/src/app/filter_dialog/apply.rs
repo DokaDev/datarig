@@ -65,6 +65,10 @@ pub(super) fn term_at(w: &Where, at: &Range<usize>) -> Option<usize> {
 impl App {
     /// An action of the filter dialog's keys.
     pub(crate) fn filter_dialog_action(&mut self, a: DialogAction) {
+        // Not drawn (the terminal too small): only `Esc` acts.
+        if self.layout.too_small && a != DialogAction::Cancel {
+            return;
+        }
         match a {
             DialogAction::Apply => self.filter_dialog_apply(),
             DialogAction::Cancel => self.filter_dialog_cancel(),

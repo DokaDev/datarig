@@ -84,6 +84,10 @@ impl App {
 
     /// A key of the open filter dialog that no action took.
     pub(crate) fn filter_dialog_key(&mut self, key: KeyEvent) {
+        // Not drawn (the terminal too small): nothing changes unseen.
+        if self.layout.too_small {
+            return;
+        }
         // The list as it is now: how many values the keys move through.
         self.filter_dialog_list();
         let Some(d) = self.filter_dialog() else { return };
@@ -137,6 +141,9 @@ impl App {
     /// Text pasted while the dialog is open: into the field that has the keys, on one line, the
     /// field holding at most [`table_query::FIELD_CAP`] bytes.
     pub(crate) fn filter_dialog_paste(&mut self, text: &str) {
+        if self.layout.too_small {
+            return;
+        }
         let Some(d) = self.filter_dialog_mut() else { return };
         if !d.typing() {
             return;
