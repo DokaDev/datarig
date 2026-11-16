@@ -99,14 +99,21 @@ fn backslash_strings_end_where_a_non_conforming_server_ends_them() {
     assert_eq!((semis(lex(national)), semis(lex_backslash_strings(national))), (2, 0));
 }
 
-/// Only a plain or national string (or a piece continuing one) with a backslash reads by
-/// `standard_conforming_strings`.
+/// A backslash anywhere, or `U&` in any case, may read by `standard_conforming_strings`.
 #[test]
-fn strings_that_read_by_standard_conforming_strings() {
-    for src in [r"SELECT '\n'", r"SELECT n'\'", "SELECT 'a'\n'\\'", r"SELECT 'x' || N'a\b'"] {
+fn texts_that_read_by_standard_conforming_strings() {
+    for src in [
+        r"SELECT '\n'",
+        r"SELECT n'\'",
+        r"SELECT E'\n'",
+        r"SELECT $$\$$",
+        r"SELECT 1 -- \",
+        "SELECT U&'abc'",
+        "SELECT \u{1f600}U&'a\\b'",
+    ] {
         assert!(reads_by_setting(src), "{src}");
     }
-    for src in [r"SELECT E'\n'", r"SELECT $$\$$", r"SELECT U&'\0041'", r#"SELECT 1 AS "\" -- \"#, "SELECT 'a'"] {
+    for src in ["SELECT 'a'", "SELECT N'a', E'b', $$c$$", "SELECT u & 1"] {
         assert!(!reads_by_setting(src), "{src}");
     }
 }

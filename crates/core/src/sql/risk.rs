@@ -1100,24 +1100,35 @@ fn depth_of(sql: &str, tokens: &[super::lexer::Token]) -> usize {
 }
 
 /// `sql` as a server with `standard_conforming_strings = off` reads it, spelled for one with
-/// it on (each plain `'…'` string, which such a server ends at an unescaped quote, becomes an
-/// `E'…'` string), when a plain string holds a backslash; `None` otherwise (both read the
-/// same).
+/// it on (each plain `'…'` or national `N'…'` string, which such a server ends at an unescaped
+/// quote, becomes an `E'…'` string), when such a string holds a backslash; `None` otherwise
+/// (both read the same).
 fn non_conforming(sql: &str) -> Option<String> {
-    let plain = |t: &super::lexer::Token| t.kind == Tok::Str && t.text(sql).starts_with('\'');
-    if !lex(sql).iter().any(|t| plain(t) && t.text(sql).contains('\\')) {
+    // The quote of a plain or national string token: 0 or 1 (after its `N`).
+    let quote_at = |t: &super::lexer::Token| {
+        let s = t.text(sql);
+        match s.as_bytes() {
+            _ if t.kind != Tok::Str => None,
+            [b'\'', ..] => Some(0),
+            [b'N' | b'n', b'\'', ..] => Some(1),
+            _ => None,
+        }
+    };
+    if !lex(sql).iter().any(|t| quote_at(t).is_some() && t.text(sql).contains('\\')) {
         return None;
     }
     let mut out = String::with_capacity(sql.len() + 8);
     for t in lex_backslash_strings(sql) {
-        if plain(&t) {
+        let mut s = t.text(sql);
+        if let Some(at) = quote_at(&t) {
             // `E` glued to an identifier before it would extend the identifier.
             if out.chars().last().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$') {
                 out.push(' ');
             }
             out.push('E');
+            s = &s[at..];
         }
-        out.push_str(t.text(sql));
+        out.push_str(s);
     }
     Some(out)
 }

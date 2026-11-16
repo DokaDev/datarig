@@ -45,9 +45,9 @@ pub enum SetProblem {
     Asks,
     /// MySQL: it reads as other settings in another sql mode (a backslash or a quote it has).
     ModeDependent,
-    /// PostgreSQL: a plain or national string in it holds a backslash, which reads as an escape
-    /// with `standard_conforming_strings` off and as itself with it on: it may read as other
-    /// statements or values ([`crate::sql::lexer::reads_by_setting`]).
+    /// PostgreSQL: it holds a backslash or a `U&` string, which may read as other statements or
+    /// values with `standard_conforming_strings` off than on
+    /// ([`crate::sql::lexer::reads_by_setting`]).
     Backslash,
     /// A setting of the next (or current) transaction only (`transaction_isolation`,
     /// `transaction_deferrable`, MySQL's `@@transaction_isolation` without a scope): the session's
@@ -86,7 +86,8 @@ pub enum Owner {
     Encoding,
     /// How the server writes values as text: the app reads them as its defaults write them.
     TextFormat,
-    /// How the app writes string literals (`''`, never a backslash escape) depends on it.
+    /// How the app reads and writes string literals for its own statements assumes the
+    /// server's default.
     Literals,
     /// The app names its sessions to tell them apart.
     SessionName,

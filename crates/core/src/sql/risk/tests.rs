@@ -580,6 +580,11 @@ fn adversarial_texts_do_not_hide_or_invent_statements() {
     let r = classify(sneaky);
     assert_eq!((r.class, r.danger), (Class::Ddl, Some(Danger::Drop)));
     assert_eq!(class("SELECT 'C:\\path'"), Class::Read);
+    // A national string reads a backslash as a plain one does: with the setting off this is a
+    // call, not two constants.
+    let national = r"SELECT N'\', N' || pg_read_file($p$f$p$) --'";
+    assert_eq!(Prepared::default().read(national).danger, None, "a standard server reads two strings");
+    assert_eq!(classify(national).read_only(), Err(ReadOnlyBlock::ServerFile));
     // Several statements: the worst counts.
     assert_eq!(class("SELECT 1; INSERT INTO t VALUES (1)"), Class::Write);
     assert_eq!(danger("select 1;\n\ntruncate t;"), Some(Danger::Truncate));

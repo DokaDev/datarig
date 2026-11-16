@@ -386,18 +386,14 @@ pub fn lex_backslash_strings(src: &str) -> Vec<Token> {
     lex_with(src, Dialect::Postgres, true)
 }
 
-/// Whether PostgreSQL text `src` reads differently with `standard_conforming_strings` off than
-/// on: a plain or national string (`'…'`, `N'…'`, a piece continuing one) holds a backslash.
-/// Only those strings read a backslash by the setting (`E'…'`, dollar quoted and `U&'…'`
-/// strings, comments and names read it the same either way), so without one the two readings
-/// are the same tokens with the same values.
+/// Whether PostgreSQL text `src` may read differently with `standard_conforming_strings` off
+/// than on: it has a backslash anywhere, or `U&` (a Unicode escape string, which a server with
+/// the setting off rejects). A plain or national string with a backslash reads it as an escape
+/// with the setting off; without a backslash or `U&` the two readings are the same. Simple on
+/// purpose, and wider than it needs to be (a backslash in `E'…'`, a comment or a dollar-quoted
+/// string counts too): no lexing to get wrong.
 pub fn reads_by_setting(src: &str) -> bool {
-    lex(src).iter().any(|t| {
-        let s = t.text(src);
-        t.kind == Tok::Str
-            && s.contains('\\')
-            && Dialect::Postgres.literal_open(&src[..t.start], s).is_some_and(|o| !o.backslash)
-    })
+    src.contains('\\') || src.as_bytes().windows(2).any(|w| w[0].eq_ignore_ascii_case(&b'u') && w[1] == b'&')
 }
 
 /// PostgreSQL's scanner, its words told apart by `d`'s keywords.

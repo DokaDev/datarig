@@ -42,7 +42,8 @@ fn pg_refuses_a_set_read_otherwise_with_backslash_escapes() {
     assert_eq!(pg(hidden).map(|_| ()), Err(SetProblem::Backslash));
     assert_eq!(pg(r"SET app.note = N'a\b'").map(|_| ()), Err(SetProblem::Backslash));
     assert!(pg("SET work_mem = '64MB'").is_ok());
-    assert!(pg(r"SET app.note = E'a\\b'").is_ok(), "E'…' reads the same either way");
+    assert_eq!(pg(r"SET app.note = E'a\\b'").map(|_| ()), Err(SetProblem::Backslash), "any backslash");
+    assert_eq!(pg("SET app.note = U&'a'").map(|_| ()), Err(SetProblem::Backslash), "U&");
 }
 
 #[test]
