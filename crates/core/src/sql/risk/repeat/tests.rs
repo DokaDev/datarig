@@ -83,15 +83,18 @@ fn the_volatile_list_is_sorted_and_knows_the_usual_ones() {
 fn the_count_wraps_the_statement_on_lines_of_its_own() {
     assert_eq!(
         count_query("SELECT * FROM shop.users;").as_deref(),
-        Ok("SELECT count(*) FROM (\nSELECT * FROM shop.users\n) AS datarig_count")
+        Ok("SELECT pg_catalog.count(*) FROM (\nSELECT * FROM shop.users\n) AS datarig_count")
     );
     // A trailing comment ends before the parenthesis; several `;` and blanks go.
     assert_eq!(
         count_query("SELECT 1 -- the end ; \n ; ;").as_deref(),
-        Ok("SELECT count(*) FROM (\nSELECT 1 -- the end ;\n) AS datarig_count")
+        Ok("SELECT pg_catalog.count(*) FROM (\nSELECT 1 -- the end ;\n) AS datarig_count")
     );
     assert_eq!(count_query("SELECT nextval('s')"), Err(NotRepeatable::Volatile("nextval".into())));
     assert_eq!(count_query("SHOW all"), Err(NotRepeatable::NotSelect));
+    // The count of its own is the server's, whatever the search path holds.
+    let counted = count_query("SELECT * FROM shop.users").unwrap();
+    assert_eq!(crate::sql::risk::path_names::path_names(&counted), Some(Vec::new()), "{counted}");
 }
 
 #[test]

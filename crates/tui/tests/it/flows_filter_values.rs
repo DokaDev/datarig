@@ -300,7 +300,7 @@ fn count_exactly_sends_the_columns_count_under_the_other_conditions_only() {
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert_eq!(
         sent[0].1,
-        r#"SELECT CASE WHEN octet_length("status") <= 4096 THEN "status" END, octet_length("status"), count(*) FROM "shop"."users" WHERE (id > 0) GROUP BY "status" ORDER BY count(*) DESC LIMIT 201"#
+        r#"SELECT CASE WHEN pg_catalog.octet_length("status") OPERATOR(pg_catalog.<=) 4096 THEN "status" END, pg_catalog.octet_length("status"), pg_catalog.count(*) FROM "shop"."users" WHERE (id > 0) GROUP BY "status" ORDER BY pg_catalog.count(*) DESC LIMIT 201"#
     );
     assert!(sent[0].2.is_some(), "an idle session's count has a time limit");
     assert!(h.screen(120, 34).contains("counting…"));
@@ -332,7 +332,7 @@ fn count_exactly_sends_the_columns_count_under_the_other_conditions_only() {
     let sent = counts(&mut h);
     assert_eq!(
         sent[0].1,
-        r#"SELECT "id", NULL, count(*) FROM "shop"."users" GROUP BY "id" ORDER BY count(*) DESC LIMIT 201"#
+        r#"SELECT "id", NULL, pg_catalog.count(*) FROM "shop"."users" GROUP BY "id" ORDER BY pg_catalog.count(*) DESC LIMIT 201"#
     );
 }
 

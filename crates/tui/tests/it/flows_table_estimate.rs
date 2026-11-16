@@ -141,7 +141,10 @@ fn unfiltered_rows_are_counted_at_once_with_the_time_limit() {
     let mut h = pg(None);
     h.keys("#");
     assert!(!menu_open(&h), "no choice without a filter");
-    assert_eq!(counts(&h.sent()), vec![(format!("SELECT count(*) FROM (\n{PG_ALL}\n) AS datarig_count"), LIMIT)]);
+    assert_eq!(
+        counts(&h.sent()),
+        vec![(format!("SELECT pg_catalog.count(*) FROM (\n{PG_ALL}\n) AS datarig_count"), LIMIT)]
+    );
     assert!(status(&h).starts_with("Counting rows, sent for you: "), "{}", status(&h));
     // The limit off: none.
     let mut h = pg(None);
@@ -169,7 +172,7 @@ fn filtered_rows_offer_the_estimate_or_the_exact_count() {
     let sent = h.sent();
     assert_eq!(
         counts(&sent),
-        vec![(format!("SELECT count(*) FROM (\n{PG_ALL} WHERE (id > 5)\n) AS datarig_count"), LIMIT)]
+        vec![(format!("SELECT pg_catalog.count(*) FROM (\n{PG_ALL} WHERE (id > 5)\n) AS datarig_count"), LIMIT)]
     );
     assert!(estimates(&sent).is_empty());
     // The estimate: the statement itself, the driver plans it.

@@ -5,7 +5,7 @@
 //! held, the policy's `paging = "no_hold"`; the policy's `paging_idle_timeout`; another statement
 //! run in the tab). The app then fetches the
 //! next page only by running the same statement again and skipping the rows it has, and it
-//! counts a result's rows only when the user asks, with `SELECT count(*) FROM (<statement>)`.
+//! counts a result's rows only when the user asks, with `SELECT pg_catalog.count(*) FROM (<statement>)`.
 //! Both run the user's statement again, so both are allowed only for a statement that cannot
 //! change anything when it runs, and whose rows do not depend on when it runs beyond the data
 //! itself:
@@ -660,14 +660,14 @@ fn without_semicolons(sql: &str) -> &str {
     }
 }
 
-/// The query that counts the rows of `sql` when the user asks: `SELECT count(*) FROM (<sql>)
-/// AS datarig_count`, for a statement on the allowlist ([`repeatable`]). The statement goes
+/// The query that counts the rows of `sql` when the user asks: `SELECT pg_catalog.count(*) FROM
+/// (<sql>) AS datarig_count` (the server's own `count`, whatever the search path holds), for a statement on the allowlist ([`repeatable`]). The statement goes
 /// on lines of its own, so a trailing `--` comment ends before the closing parenthesis, and a
 /// trailing `;` is left out. The text is read again and must itself be one plain query on the
 /// allowlist.
 pub fn count_query(sql: &str) -> Result<String, NotRepeatable> {
     repeatable(sql)?;
-    let text = format!("SELECT count(*) FROM (\n{}\n) AS datarig_count", without_semicolons(sql));
+    let text = format!("SELECT pg_catalog.count(*) FROM (\n{}\n) AS datarig_count", without_semicolons(sql));
     repeatable(&text)?;
     Ok(text)
 }
