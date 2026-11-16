@@ -193,8 +193,8 @@ fn danger_03_copied_strings_keep_their_backslashes() {
         let lit = MY.quote_literal(s);
         assert_eq!(kinds(&lit, MY), [(Tok::Str, lit.as_str())], "{s:?}");
     }
-    // PostgreSQL: a backslash is an ordinary character there, as before.
-    assert_eq!(PG.quote_literal("C:\\new"), "'C:\\new'");
+    // PostgreSQL: `E'…'`, read the same whatever standard_conforming_strings is.
+    assert_eq!(PG.quote_literal("C:\\new"), "E'C:\\\\new'");
 }
 
 /// 4. `#` comments and backslash-escaped quotes split statements where MySQL does (its client,

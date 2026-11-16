@@ -29,6 +29,9 @@
 //!   type or domain refuses it, since a domain's `CHECK` and a user type's input function are
 //!   code). Both lists are generated from the server and pinned to it by integration tests;
 //! * no `TABLESAMPLE` (its rows are chosen at random on every run);
+//! * it reads the same whatever `standard_conforming_strings` is: a plain or national string
+//!   holding a backslash (`'\n'`, `N'\', '`) refuses it, as the allowlist reads the text with
+//!   the setting on only (`E'…'` and dollar-quoted strings read the same either way);
 //! * not over the classifier's caps, and a text the parser rejects is refused.
 //!
 //! **What only the server can tell** is asked right before the app runs the statement again or
@@ -57,7 +60,7 @@
 //! skipped rows again too (every expression of the select list, for every row skipped).
 
 use super::{Class, Danger, Explain, MAX_BYTES, MAX_DEPTH, STACK, THREAD, calls, depth, has, node, parse, walk};
-use crate::sql::lexer::{Tok, lex};
+use crate::sql::lexer::{Tok, lex, reads_by_setting};
 use serde_json::Value;
 
 /// Why the app may not run a statement again or count its rows.
@@ -106,6 +109,10 @@ pub enum NotRepeatable {
     Unreadable,
     /// MySQL: it reads or sets a variable (`@x`, `@@x`): its value may differ on the next run.
     Variable(String),
+    /// PostgreSQL: a plain or national string in it holds a backslash, which reads as an escape
+    /// with `standard_conforming_strings` off and as itself with it on, the only way the
+    /// allowlist reads it ([`crate::sql::lexer::reads_by_setting`]).
+    Backslash,
 }
 
 impl NotRepeatable {
@@ -338,6 +345,9 @@ pub fn repeatable(sql: &str) -> Result<(), NotRepeatable> {
 pub fn names(sql: &str) -> Result<Names, NotRepeatable> {
     if sql.len() > MAX_BYTES || depth(sql) > MAX_DEPTH {
         return Err(NotRepeatable::Unreadable);
+    }
+    if reads_by_setting(sql) {
+        return Err(NotRepeatable::Backslash);
     }
     let shape = shape(sql).ok_or(NotRepeatable::Unreadable)?;
     if shape.statements != 1 {

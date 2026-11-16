@@ -105,7 +105,7 @@ fn postgres_chunks_compare_the_key_as_a_row_in_index_order() {
     let last = [Some("9007199254740993".into()), Some("O'Neil \\ x".into()), None, None];
     assert_eq!(
         k.after(&last).unwrap(),
-        "SELECT * FROM \"s\".\"t\" WHERE (\"name\", \"id\") OPERATOR(pg_catalog.>) ('O''Neil \\ x', 9007199254740993) ORDER BY \"name\", \"id\" LIMIT 10000",
+        "SELECT * FROM \"s\".\"t\" WHERE (\"name\", \"id\") OPERATOR(pg_catalog.>) (E'O''Neil \\\\ x', 9007199254740993) ORDER BY \"name\", \"id\" LIMIT 10000",
         "numbers bare (every digit), text a literal"
     );
     let one = Keyset::new(PG, "s", "t", &["id".to_string()], &c, &names(&c), true).unwrap();
@@ -118,8 +118,21 @@ fn postgres_chunks_compare_the_key_as_a_row_in_index_order() {
         bytes
             .after(&[None, None, None, Some("\\x00ff".into())])
             .unwrap()
-            .contains("\"data\" OPERATOR(pg_catalog.>) '\\x00ff'")
+            .contains("\"data\" OPERATOR(pg_catalog.>) E'\\\\x00ff'")
     );
+}
+
+/// A key value ending in a backslash reads the same with `standard_conforming_strings` off: the
+/// chunk's text is the same tokens either way, the next key value still its own.
+#[test]
+fn postgres_chunk_literals_read_the_same_whatever_standard_conforming_strings_is() {
+    use crate::sql::lexer::{lex, lex_backslash_strings};
+    let c = cols();
+    let key = ["name".to_string(), "id".to_string()];
+    let k = Keyset::new(PG, "s", "t", &key, &c, &names(&c), true).unwrap();
+    let sql = k.after(&[Some("7".into()), Some("C:\\dir\\".into()), None, None]).unwrap();
+    assert!(sql.contains("(E'C:\\\\dir\\\\', 7)"), "{sql}");
+    assert_eq!(lex(&sql), lex_backslash_strings(&sql), "{sql}");
 }
 
 #[test]

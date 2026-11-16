@@ -92,7 +92,10 @@ fn where_statements_run_on_postgres() {
         ("SHOW search_path", R),
         ("EXPLAIN SELECT 1", R),
         ("EXPLAIN (COSTS OFF) DELETE FROM t", R),
-        ("SELECT 'a\\b'", R),
+        // The allowlist refuses a plain string with a backslash (it reads by
+        // standard_conforming_strings); `E'…'` reads the same either way.
+        ("SELECT 'a\\b'", X),
+        ("SELECT E'a\\\\b'", R),
         ("SELECT nextval('s')", X),
         ("SELECT random()", X),
         ("SELECT pg_advisory_xact_lock(1)", X),

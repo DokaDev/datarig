@@ -386,6 +386,20 @@ pub fn lex_backslash_strings(src: &str) -> Vec<Token> {
     lex_with(src, Dialect::Postgres, true)
 }
 
+/// Whether PostgreSQL text `src` reads differently with `standard_conforming_strings` off than
+/// on: a plain or national string (`'…'`, `N'…'`, a piece continuing one) holds a backslash.
+/// Only those strings read a backslash by the setting (`E'…'`, dollar quoted and `U&'…'`
+/// strings, comments and names read it the same either way), so without one the two readings
+/// are the same tokens with the same values.
+pub fn reads_by_setting(src: &str) -> bool {
+    lex(src).iter().any(|t| {
+        let s = t.text(src);
+        t.kind == Tok::Str
+            && s.contains('\\')
+            && Dialect::Postgres.literal_open(&src[..t.start], s).is_some_and(|o| !o.backslash)
+    })
+}
+
 /// PostgreSQL's scanner, its words told apart by `d`'s keywords.
 fn lex_with(src: &str, d: Dialect, backslash_strings: bool) -> Vec<Token> {
     let mut out = Vec::new();
@@ -464,7 +478,9 @@ fn lex_with(src: &str, d: Dialect, backslash_strings: bool) -> Vec<Token> {
             // E'..', B'..', X'..', N'..' string prefixes
             if matches!(c, 'e' | 'E' | 'b' | 'B' | 'x' | 'X' | 'n' | 'N') && cur.peek_at(1) == Some('\'') {
                 cur.pos += 2;
-                cur.quoted('\'', matches!(c, 'e' | 'E'));
+                // A national string escapes as a plain one does.
+                let national = backslash_strings && matches!(c, 'n' | 'N');
+                cur.quoted('\'', national || matches!(c, 'e' | 'E'));
                 Tok::Str
             } else {
                 cur.eat_while(is_ident_continue);

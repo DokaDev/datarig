@@ -64,6 +64,20 @@ fn anything_else_is_refused_with_its_reason() {
     assert_eq!(refused(&format!("SELECT {}", "1 + ".repeat(20_000) + "1")), NotRepeatable::Unreadable);
 }
 
+/// A plain or national string holding a backslash reads by `standard_conforming_strings`, and
+/// is refused: with it off, `f()` in the first two is outside any string, and `'\n'` is a line
+/// break. `E'…'`, dollar-quoted strings and strings without a backslash read the same either
+/// way.
+#[test]
+fn a_string_read_by_standard_conforming_strings_is_refused() {
+    for sql in [r"SELECT '\', ', f(), '''", r"SELECT N'\', N' || f() --'", r"SELECT '\n'", "SELECT 'a'\n'b\\'"] {
+        assert_eq!(refused(sql), NotRepeatable::Backslash, "{sql}");
+    }
+    for sql in [r"SELECT E'\\x'", r"SELECT E'\\n'", r"SELECT $$\$$", "SELECT 'a'", r"SELECT 1 -- \"] {
+        assert_eq!(repeatable(sql), Ok(()), "{sql}");
+    }
+}
+
 #[test]
 fn the_volatile_list_is_sorted_and_knows_the_usual_ones() {
     let names: Vec<&str> = VOLATILE.lines().collect();

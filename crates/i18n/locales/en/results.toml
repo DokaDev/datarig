@@ -171,6 +171,7 @@
 "repeat.planner_type" = "a column it reads has type {name}, and datarig cannot check what planning would run for it"
 "repeat.tx_unknown" = "the session could not tell whether a transaction is open (try again)"
 "repeat.unreadable" = "it cannot be read"
+"repeat.backslash" = "a string in it holds a backslash, which the server reads differently depending on standard_conforming_strings: run it again yourself"
 "repeat.variable" = "it uses the variable {name}, whose value may change"
 "repeat.zone_changed" = "it reads the session's time zone, which is not known to be the one its rows were read in"
 "repeat.user_operator" = "it uses the operator {name}, which is not a built-in"

@@ -82,6 +82,7 @@
 "set.reason.paging" = "{setting}: datarig pages results with it"
 "set.reason.reports" = "{setting}: datarig reads what the server reports"
 "set.mode_dependent" = "it reads as other settings in another sql mode (a backslash or a quote)"
+"set.backslash" = "a string in it holds a backslash, which the server reads differently depending on standard_conforming_strings: write it as E'…'"
 "set.idle_value" = "wait_timeout takes a whole number of seconds here, from 1 (datarig's idle timer follows it, and the server counts it inside a transaction too)"
 "set.transaction_only" = "{setting} holds for one transaction only: set default_{setting} or SET SESSION CHARACTERISTICS AS TRANSACTION (MySQL: SET SESSION TRANSACTION)"
 "command.monitor" = "Open the server monitor of the explorer's or the active tab's connection, or of one by name (:monitor [connection])"

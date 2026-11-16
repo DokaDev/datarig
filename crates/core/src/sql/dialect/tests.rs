@@ -25,7 +25,9 @@ fn postgres_quotes_names_and_strings() {
     assert_eq!(d.force_quote_ident("users"), "\"users\"");
     assert_eq!(d.force_quote_ident("Order \"Items\""), "\"Order \"\"Items\"\"\"");
     assert_eq!(d.quote_literal("it's"), "'it''s'");
-    assert_eq!(d.quote_literal("back\\slash"), "'back\\slash'", "standard conforming strings");
+    // A backslash reads the same whatever standard_conforming_strings is only in `E'…'`.
+    assert_eq!(d.quote_literal("a\\b"), "E'a\\\\b'");
+    assert_eq!(d.quote_literal("it's \\"), "E'it''s \\\\'");
     assert_eq!(d.fold("Shop_\u{c9}"), "shop_\u{c9}", "ASCII letters only");
 }
 
@@ -98,7 +100,7 @@ fn literals_open_by_dialect() {
 
 /// A value written into a literal ([`Dialect::literal_body`]) reads back as itself
 /// ([`Dialect::unescape_literal_body`], [`Dialect::unquote_literal`]) in every dialect, mode
-/// and opening; `quote_literal` is the plain literal's.
+/// and opening; `quote_literal` is the plain literal's (PostgreSQL's `E'…'` one for a backslash).
 #[test]
 fn literal_bodies_round_trip() {
     let values = [
@@ -150,7 +152,9 @@ fn literal_bodies_round_trip() {
                         (crate::sql::lexer::Tok::Str, token.len()),
                         "{d:?} {token:?}"
                     );
-                    if prefix.is_empty() && quote == '\'' {
+                    // PostgreSQL writes a value with a backslash as `E'…'`.
+                    let e = d == Dialect::Postgres && v.contains('\\');
+                    if quote == '\'' && prefix == if e { "E" } else { "" } {
                         assert_eq!(d.quote_literal(v), token, "{d:?} {v:?}");
                     }
                 }

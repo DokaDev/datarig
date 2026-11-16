@@ -93,6 +93,22 @@ fn backslash_strings_end_where_a_non_conforming_server_ends_them() {
     assert_eq!(semis(lex_backslash_strings(src)), 2);
     // E'' strings escape the same way in both.
     assert_eq!(lex(r"E'\''").len(), lex_backslash_strings(r"E'\''").len());
+    // A national string escapes as a plain one does: there `\'` is the quote, and the
+    // statements after it are inside the string.
+    let national = r"SELECT N'x\'; DROP TABLE t; --'";
+    assert_eq!((semis(lex(national)), semis(lex_backslash_strings(national))), (2, 0));
+}
+
+/// Only a plain or national string (or a piece continuing one) with a backslash reads by
+/// `standard_conforming_strings`.
+#[test]
+fn strings_that_read_by_standard_conforming_strings() {
+    for src in [r"SELECT '\n'", r"SELECT n'\'", "SELECT 'a'\n'\\'", r"SELECT 'x' || N'a\b'"] {
+        assert!(reads_by_setting(src), "{src}");
+    }
+    for src in [r"SELECT E'\n'", r"SELECT $$\$$", r"SELECT U&'\0041'", r#"SELECT 1 AS "\" -- \"#, "SELECT 'a'"] {
+        assert!(!reads_by_setting(src), "{src}");
+    }
 }
 
 /// A lone carriage return ends a `--` comment, as in PostgreSQL's scanner: what follows it is

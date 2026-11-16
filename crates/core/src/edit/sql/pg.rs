@@ -47,15 +47,6 @@ const EXACT: &[&str] = &[
     "bit varying",
 ];
 
-/// `s` as a string literal that reads the same whatever `standard_conforming_strings` is.
-fn literal(s: &str) -> String {
-    if s.contains('\\') {
-        format!("E'{}'", s.replace('\\', "\\\\").replace('\'', "''"))
-    } else {
-        format!("'{}'", s.replace('\'', "''"))
-    }
-}
-
 impl Postgres {
     /// `w`, or the one row it picks among several the same.
     fn scoped(&self, t: &TableRef, w: &Where, scope: Scope) -> String {
@@ -113,7 +104,7 @@ impl EditSql for Postgres {
 
     fn value(&self, _: &TableColumn, v: &Value) -> String {
         match v {
-            Value::Text(s) => literal(s),
+            Value::Text(s) => D.quote_literal(s),
             Value::Null => "NULL".into(),
             Value::Default => "DEFAULT".into(),
         }
@@ -125,7 +116,7 @@ impl EditSql for Postgres {
     fn eq_exact(&self, c: &TableColumn, v: Option<&str>) -> String {
         let col = self.column(&c.column.name);
         let Some(v) = v else { return format!("{col} IS NULL") };
-        let lit = literal(v);
+        let lit = D.quote_literal(v);
         if c.column.collation.as_ref().is_some_and(|k| !k.deterministic) {
             format!("{col} {EQ} {lit} AND {col} COLLATE pg_catalog.\"C\" {EQ} {lit}")
         } else {

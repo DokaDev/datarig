@@ -157,6 +157,9 @@ an error shows the words its connect would refuse with.
   not in a statement that also sets one of those.
 - **MySQL in every sql mode.** A statement is read with and without `ANSI_QUOTES` and
   `NO_BACKSLASH_ESCAPES`; what any reading refuses is refused.
+- **PostgreSQL whatever `standard_conforming_strings` is.** A plain or national string with a
+  backslash (`'a\b'`, `N'a\b'`) reads differently with the setting off than on, and is
+  refused: write such a string as `E'…'` (or dollar quoted).
 - **Who the session is.** `SET ROLE` is allowed in a read-only environment (every transaction
   stays `READ ONLY` whatever the role); `SET SESSION AUTHORIZATION` is not. Behind a
   transaction pooler either one keeps the profile from connecting (see

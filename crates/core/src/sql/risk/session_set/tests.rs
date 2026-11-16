@@ -34,6 +34,17 @@ fn pg_allows_session_sets_with_their_transaction_form() {
     }
 }
 
+/// A statement that reads as other statements with `standard_conforming_strings` off is refused:
+/// there the first string ends at `\'`, and a second `SET` runs.
+#[test]
+fn pg_refuses_a_set_read_otherwise_with_backslash_escapes() {
+    let hidden = r"SET temp_tablespaces = 'a\' , ' , b; SET client_encoding = LATIN1; --'";
+    assert_eq!(pg(hidden).map(|_| ()), Err(SetProblem::Backslash));
+    assert_eq!(pg(r"SET app.note = N'a\b'").map(|_| ()), Err(SetProblem::Backslash));
+    assert!(pg("SET work_mem = '64MB'").is_ok());
+    assert!(pg(r"SET app.note = E'a\\b'").is_ok(), "E'…' reads the same either way");
+}
+
 #[test]
 fn pg_refuses_what_is_not_a_session_set() {
     let cases = [

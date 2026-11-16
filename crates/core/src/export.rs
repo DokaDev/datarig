@@ -400,8 +400,8 @@ pub fn quote_ident(s: &str) -> String {
     Dialect::Postgres.force_quote_ident(s)
 }
 
-/// A PostgreSQL string literal (`'` doubled). Written for `standard_conforming_strings = on`
-/// (the default since 9.1), where a backslash is an ordinary character.
+/// A PostgreSQL string literal (`'` doubled; `E'…'` with the backslash doubled too when it holds
+/// one, so that it reads the same whatever `standard_conforming_strings` is).
 /// [`Dialect::quote_literal`] of [`Dialect::Postgres`], for the PostgreSQL-only renderers.
 pub fn quote_literal(s: &str) -> String {
     Dialect::Postgres.quote_literal(s)

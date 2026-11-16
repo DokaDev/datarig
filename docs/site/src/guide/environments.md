@@ -153,7 +153,7 @@ same: the result's cursor lives in your transaction and ends with it.
 | After the first page | The cursor and its transaction end in the same round trip | The cursor stays open in a transaction of its own |
 | Held on the server while you read | Nothing: no transaction, no lock, no snapshot | The transaction, its snapshot, and an `ACCESS SHARE` lock on every table the statement read |
 | Next page (`n`) | Runs the statement again and skips the rows you have, only for a plain `SELECT` that is safe to repeat (said each time; the rows may differ if the data changed) | Read from the open cursor |
-| A statement not safe to repeat (a write, a volatile function, a view, …) | You see the first page, and why; page it yourself with `LIMIT`/`OFFSET`, or use `"hold"` | Read from the open cursor |
+| A statement not safe to repeat (a write, a volatile function, a view, a string whose backslash reads differently by `standard_conforming_strings`, …) | You see the first page, and why; page it yourself with `LIMIT`/`OFFSET`, or use `"hold"` | Read from the open cursor |
 | Held until | Nothing is held | The result is read to its end, another statement runs in the tab, or `paging_idle_timeout` passes without a page |
 
 Why nothing is held by default: an `ACCESS SHARE` lock held by an idle result makes a deploy's
