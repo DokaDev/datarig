@@ -3,6 +3,149 @@
 What changed in each release, newest first. For 0.36.0 and earlier, see the release notes on
 [GitHub Releases](https://github.com/DokaDev/datarig/releases).
 
+## 0.41.1 (2026-11-16)
+
+Table tabs get a query bar with small popups for the conditions, the order, the columns and the rows. On PostgreSQL, date, time and interval text typed or pasted into the grid is now applied only in a form that reads the same under any `DateStyle`, `TimeZone` and `IntervalStyle` (ISO dates, timestamps with an explicit offset or `Z`, ISO 8601 intervals) and is otherwise refused with the reason; columns of composite types and of multiranges the database defines take no typed or pasted values from the grid for now (only NULL or DEFAULT); and a cancel the server does not confirm now shows a warning in Messages. MariaDB, now tested in CI, gets a series of fixes.
+
+### Added
+
+- A table tab has a query bar on the first line of its results: `WHERE` with each condition as a
+  chip of the text that is sent, `ORDER BY`, `LIMIT`, how many columns are shown, and the rows of
+  the result with its page arrows. A chip's `×` takes that condition out and runs the others as
+  they were written. A click on a part opens a small popup under it: a condition opens its
+  column's conditions, values and sort; `WHERE` and `+` the list of columns of a new condition;
+  the count of conditions left out of the bar the list of them all; `ORDER BY` the order's keys;
+  the columns those shown and hidden; the rows their pages and their counts. `Enter` applies,
+  `Esc` or a click outside closes without applying, and `A` or `⋯ Advanced` turns the popup into
+  Advanced, the whole filter dialog, keeping what you changed. `Space r w` puts the keys on the
+  conditions (`x` takes one out), `Space r o` opens the order popup, `Space r l` types the limit
+  in the bar, `Space r c` opens the columns popup, `Space r r` the rows popup and `Space r A`
+  Advanced. The bar says less as the window narrows but always marks what is applied, and it
+  says when the last run failed, was cancelled or was refused.
+
+### Changed
+
+- Advanced, the filter dialog (`⋯ Advanced` on the query bar, `A` in its popups, `f` on the
+  grid), opens centred over the screen, the screen dimmed around it (on an 80 x 24 terminal it
+  still takes the whole screen).
+- `Q` (or `SQL ▸`) in Advanced shows the SQL in its right pane, in place of the column's
+  conditions: first the statement as it is sent, read only; again, the `WHERE` and `ORDER BY`
+  texts to edit; again, it closes. The footer keeps its three rows; the condition chips are
+  hidden while the SQL is shown.
+- The action menus (right click, `Space Space`) list their entries in groups with a rule between
+  them, under short names without the area in front ("View value", "Export…", "Next result"
+  in place of "Results: view cell value", "Results → export to a file…", "Result tabs → next").
+  Typing still finds an entry by its long name too, which the key help and the command line
+  keep. The cell menu's column entry is "Column…" (`F`).
+- On a table tab a click on a column's header (its name or its type) opens that column's popup
+  under the header: its conditions, values and sort. Whole columns are selected by dragging from
+  the header; the sort zone at the header's right still sorts.
+- `F` and a right click on a header open the same popup in place of the column menu, with "Hide
+  column" and, on a cell, "Only" and "Exclude" the cell's value above it.
+- On a table tab `Space r o` opens the order in a small popup under the query bar, as a click on
+  the bar's `ORDER BY` does: its keys first, then the other columns (`Space` turns a key's
+  direction or adds the column, `J`/`K` move a key, `x` takes it out), the clause that is sent
+  underneath. `A` there opens Advanced on the order, as `Space r o` did before.
+- On a table tab the result tabs and the connection are on the results pane's top border, and
+  the filter and sort no longer show on its bottom border (the query bar says them); the grid
+  shows as many rows as before.
+- `Space r g` shows the chart (was `Space r c`, which now opens a table's columns in a popup);
+  `c` in the grid is unchanged.
+
+### Fixed
+
+- Saving an environment under a name that profiles already use while no environment has it (a
+  rename, a copy, a new one, a preset picked in a profile's form, or the presets) now asks
+  first, naming those profiles and the rules they would take, instead of giving them its rules
+  silently.
+- A lock wait error no longer names the planned limit once you set the lock wait limit yourself
+  in that tab (`SET lock_timeout`, `SET innodb_lock_wait_timeout`, a `RESET ALL`, a procedure).
+- MariaDB: `EXPLAIN ANALYZE` of a write no longer fails with "Unknown system variable
+  'partial_revokes'" from datarig's own check before it; MariaDB now answers the statement
+  itself (it has no `EXPLAIN ANALYZE`; its `ANALYZE` statement is the equivalent).
+- MariaDB: column attributes it lists after a comma are read. A column with `ON UPDATE
+  CURRENT_TIMESTAMP` that is also `INVISIBLE` no longer gets a stray comma in its default (a
+  table's definition built from its structure ran into a syntax error), and an invisible
+  generated column (a system-versioned table's row start and end, too) shows as generated
+  instead of as a plain column.
+- MariaDB: asking for a statement's plan right after a session connected no longer sends MySQL's
+  `EXPLAIN FORMAT=TREE` (which MariaDB refuses); the session says it has no plan format before
+  it says it is connected.
+- MariaDB: the read check knows which functions the server provides. A call of a function
+  that MySQL has but MariaDB does not (`ANY_VALUE`, `REGEXP_LIKE`, `BIN_TO_UUID`, ...) names a
+  stored function of the current database on MariaDB, so it is now treated as any unchecked
+  function call there: a read-only profile refuses it, and a query that calls one is not run
+  again for the next page. MySQL is unchanged, except for Startup SQL, which is checked before
+  the server is known: there a call of one of these functions now counts as an unchecked
+  function call on MySQL too, so such a Startup SQL is refused.
+- MariaDB: reading a table's structure no longer opens every table of the server to find that
+  table's foreign keys, which was slow on servers with many tables and could wait behind another
+  table's lock.
+- MariaDB: system-versioned tables are tables again. The explorer lists them with the tables
+  (not with the views) and their estimates, and their table tabs read past the first page,
+  count, filter and export as other tables do; a `FOR SYSTEM_TIME` read of one pages too.
+- The Monitor tab on a MariaDB server now says the monitor does not read MariaDB, instead of
+  calling the server an unsupported MySQL that needs MySQL 8.0.17 or newer.
+- MySQL: for a user granted only some columns of a table, rows that look the same are no longer
+  offered as identical ("just one" or all of them), since they may differ in columns the server
+  does not list to that user; the change is refused, saying why, and the table's Columns group
+  says some may not be listed.
+- MySQL: a cancel that lands while the server looks up the definer of a `SQL SECURITY DEFINER`
+  routine now ends the run as cancelled, instead of with error 1449 (the definer does not exist).
+- MySQL: when a cancel sent again for a statement got no answer, a result whose rows were held
+  for paging was cut after its first page and the run ended as a lost connection. Its rows and
+  its end are now read as you page, and the session closes after that.
+- MySQL: "just one" of identical rows is no longer applied while the session's binary log keeps
+  statements (`binlog_format = STATEMENT`), where a replica could change a different one of the
+  rows; the Apply sends nothing and says why. `ROW` and `MIXED` work as before.
+- PostgreSQL: cancelling an Apply inside an open transaction no longer aborts the transaction
+  when the cancel arrives before the Apply's savepoint is set; the Apply stops before its first
+  statement and the transaction keeps what it held.
+- PostgreSQL: the DDL shown for a view runs as written on PostgreSQL 17.12 and later. It no longer
+  sets column options on the view's columns, which the server refuses, nor writes out options the
+  server keeps for itself on any relation's columns.
+- PostgreSQL: a statement that cannot run inside a transaction (`VACUUM`, `CREATE DATABASE`, …)
+  and failed in one the app opened is blamed on the tab's schema only when the schema is what
+  needed the transaction; otherwise the message says the app opened one for it.
+- PostgreSQL: values the server sends as text and that hold dates, times or intervals (a range,
+  a multirange, an array or a domain over one) are no longer pasted or applied as other dates
+  when the session's `DateStyle`, `IntervalStyle` or `TimeZone` differs from the one they were
+  read in (`[02/01/2026,05/01/2026)` copied in `SQL, DMY` and applied in `ISO, MDY` stored
+  1 February for 2 January). `g p` into such a column is refused while the result was read in
+  other settings than the session's now, and a copy of values still pending counts as of
+  settings not known.
+- PostgreSQL: text given to a column of dates, times or intervals, typed, pasted or cloned, is
+  applied only in a form read the same in any `DateStyle`, `TimeZone` and `IntervalStyle` (ISO
+  dates, times and timestamps with a zone written with an explicit offset or `Z`, ISO 8601
+  intervals such as `P1DT2H`), since a trigger may change them while the changes are applied;
+  other text is refused, saying which form to use.
+- PostgreSQL: columns of a composite type, a pseudo-type or a multirange type the database
+  defines take no typed, pasted or cloned text from the grid for now (NULL and DEFAULT still
+  can be set), since datarig cannot tell the dates in them.
+  Base types of extensions that hold no dates (`citext`, `hstore`, `ltree`, geometry) stay
+  editable once the server has said what kind of type they are, which it is asked when their
+  result comes.
+- PostgreSQL: an `interval` copied in the grid or cloned with its row is written in ISO 8601
+  from its exact value and applied, and a NULL pasted into a date column is never refused for
+  the session's settings.
+- PostgreSQL: cancelling a row count, a count of a column's values, a statement run again to
+  page on, an export or an `EXPLAIN ANALYZE` inside an open transaction no longer aborts the
+  transaction when the cancel arrives before the read's savepoint is set; the read ends
+  cancelled and the transaction keeps what it held.
+- PostgreSQL: a cancel the server does not confirm within 10 seconds (a slow tunnel) now shows a
+  warning in Messages: it may still stop what runs next in the session, an open transaction
+  included.
+- Quitting or disconnecting with transactions open in several tabs, one of which failed, offered
+  only to roll back every one. `c` now commits the healthy ones and rolls back the failed ones,
+  which the question names.
+- A lost metadata session, the metadata sessions of other databases and a Monitor tab's session
+  now open only after the same checks as a connect (the profile's environment, its tunnel
+  setting, its Startup SQL), so a profile changed since it connected no longer opens new
+  sessions behind them.
+- A Startup SQL that sets the server's idle limit (`idle_session_timeout`, `wait_timeout`) no
+  longer races the server: datarig ends those sessions a little earlier than the server would
+  (a tenth of the limit, from 1 to 30 seconds) and says why.
+
 ## 0.41.0 (2026-11-13)
 
 Table tabs get a filter and sort dialog: pick conditions, tick values (counted exactly on the server if you like), sort, hide columns, and see the exact SQL before it runs; the grid filters with `=` and `!`, and a filtered count can be the planner's estimate. On PostgreSQL, the counts, exports and catalogue reads datarig runs on its own now read at READ COMMITTED, so a SERIALIZABLE default no longer drags them into other sessions' conflicts.
